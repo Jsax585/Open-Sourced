@@ -309,6 +309,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		customDirectories = [],
 		ignoredSkills = [],
 		includeSkills = [],
+		optInSkills = [],
 		disabledExtensions = [],
 		extensionRoots,
 	} = options;
@@ -364,6 +365,12 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	function matchesIgnorePatterns(name: string): boolean {
 		if (ignoredSkills.length === 0) return false;
 		return ignoredSkills.some(pattern => new Bun.Glob(pattern).match(name));
+	}
+
+	// Check if skill name matches any of the opt-in patterns
+	function matchesOptInPatterns(name: string): boolean {
+		if (optInSkills.length === 0) return false;
+		return optInSkills.some(pattern => new Bun.Glob(pattern).match(name));
 	}
 
 	const disabledSkillNames = new Set(
@@ -602,6 +609,9 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	}
 
 	const skills = Array.from(skillMap.values()).filter(skill => matchesIncludePatterns(skill.name));
+	for (const skill of skills) {
+		if (matchesOptInPatterns(skill.name)) skill.hide = true;
+	}
 	// Deterministic ordering for prompt stability (case-insensitive, then exact name, then path).
 	skills.sort((a, b) => compareSkillOrder(a.name, a.filePath, b.name, b.filePath));
 	return {
