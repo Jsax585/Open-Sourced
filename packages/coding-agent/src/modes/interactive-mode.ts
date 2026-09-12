@@ -234,6 +234,7 @@ import {
 	setTerminalSessionSource,
 	setTerminalTitlePullRequest,
 	setTerminalTitleSpinnerStyle,
+	setAgentStateFileEnabled,
 	setTerminalTitleStateEnabled,
 } from "../utils/title-generator";
 import {
@@ -403,6 +404,7 @@ import {
 	cfgTuiTight,
 	cfgTuiTitleSpinner,
 	cfgTuiTitleState,
+	cfgTuiStateFile,
 	cfgTuiVimMode,
 	cfgTuiVimModeDisplay,
 } from "./settings";
@@ -471,6 +473,7 @@ const cfgLiveUiSettings = combine({
 	"tui.tight": cfgTuiTight,
 	"tui.hyperlinks": cfgTuiHyperlinks,
 	"tui.titleState": cfgTuiTitleState,
+	"tui.stateFile": cfgTuiStateFile,
 	"tui.titleSpinner": cfgTuiTitleSpinner,
 	"statusLine.preset": cfgStatusLinePreset,
 	"statusLine.leftSegments": cfgStatusLineLeftSegments,
@@ -2459,6 +2462,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			file: () => this.sessionManager.getSessionFile(),
 			cwd: () => this.sessionManager.getCwd(),
 		});
+		setAgentStateFileEnabled(cfgTuiStateFile.get(this.settings));
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 		// Seeds the border, the status-line `vim` segment, and the cursor shape in one call.
 		// Deliberately here rather than beside #applyVimMode in the constructor: that runs before
@@ -3787,6 +3791,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.invalidate();
 			this.ui.requestRender();
 		}
+		if (any("tui.stateFile")) setAgentStateFileEnabled(cfgTuiStateFile.get(this.settings));
 		if (any("tui.titleState")) setTerminalTitleStateEnabled(cfgTuiTitleState.get(this.settings));
 		if (any("tui.titleSpinner")) setTerminalTitleSpinnerStyle(cfgTuiTitleSpinner.get(this.settings));
 		if (any("terminal.programStatus")) setProgramStatusEnabled(cfgTerminalProgramStatus.get(this.settings));

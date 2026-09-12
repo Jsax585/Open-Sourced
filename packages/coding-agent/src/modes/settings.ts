@@ -532,6 +532,19 @@ export const cfgTuiTitleState = register({
 	},
 });
 
+export const cfgTuiStateFile = register({
+	id: "tui.stateFile",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Terminal State File",
+		description:
+			"Also write the agent run state to ~/.omp/agent/terminal-sessions/<terminal>.state.json, so a program that is not the terminal can read whether omp is working, idle, or waiting on you",
+	},
+});
+
 export const cfgTuiTitleSpinner = register({
 	id: "tui.titleSpinner",
 	type: "enum",
