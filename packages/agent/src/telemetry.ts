@@ -1893,7 +1893,7 @@ export async function instrumentedCompleteSimple<TApi extends Api>(
 				// Clear first so a previous attempt's `retry-after` can never be
 				// reused for a later failure that arrived without headers.
 				capturedHeaders = undefined;
-				return complete(model, ctx, { ...options, onResponse: captureOnResponse });
+				return complete(model, ctx, { ...options, cacheBreakDiagnostics: false, onResponse: captureOnResponse });
 			};
 			const message = span.retry
 				? await retryTransientCompletion(runOnce, {

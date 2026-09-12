@@ -370,6 +370,7 @@ type ForwardedOptions = Pick<
 	| "credentialId"
 	| "cacheRetention"
 	| "providerSessionState"
+	| "cacheBreakDiagnostics"
 	| "onPayload"
 	| "onResponse"
 	| "onSseEvent"
@@ -701,6 +702,7 @@ export const streamFactoryDroid: StreamFunction<"factory-droid-agent"> = (
 					credentialId: options?.credentialId,
 					cacheRetention: options?.cacheRetention,
 					providerSessionState: options?.providerSessionState,
+					cacheBreakDiagnostics: options?.cacheBreakDiagnostics,
 					onPayload: options?.onPayload,
 					onResponse: options?.onResponse,
 					onSseEvent: options?.onSseEvent,

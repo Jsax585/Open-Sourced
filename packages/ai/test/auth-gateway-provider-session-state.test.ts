@@ -23,7 +23,8 @@ import type { AuthGatewayServerHandle, AuthGatewaySessionStateRequest } from "@o
 import { AuthStorage } from "@oh-my-pi/pi-ai/auth-storage";
 import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
 import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
-import type { Api, Context, Model, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
+import { completeSimple } from "@oh-my-pi/pi-ai/stream";
+import type { Api, Context, Model, ProviderSessionState, SimpleStreamOptions } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { withOfficialAnthropicEndpoint } from "./helpers";
 import { captureFetch, type CapturedRequest, completionsChunks, kimiK3 } from "./helpers/factory-droid";
@@ -203,6 +204,69 @@ async function priorityTurn(
 	});
 	return { status: response.status, body: await response.json() };
 }
+
+it.each([undefined, true])(
+	"keeps plain judge requests outside gateway cache diagnostics (main opt-in: %s)",
+	async cacheBreakDiagnostics => {
+		const upstream = startUpstream();
+		const model = makeAnthropicModel(upstream.url);
+		const gateway = await startGateway(model, model.provider);
+		const clientModel: Model<"anthropic-messages"> = {
+			...model,
+			baseUrl: gateway.handle.url,
+			transport: "pi-native",
+		};
+		const identity = { apiKey: "test-token", sessionId: "gateway-cache-diagnostics" };
+		const options: SimpleStreamOptions = {
+			...identity,
+			...(cacheBreakDiagnostics === true ? { cacheBreakDiagnostics } : {}),
+		};
+		const main: Context = {
+			...CONTEXT,
+			tools: [{ name: "lookup", description: "Look up a record", parameters: { type: "object", properties: {} } }],
+		};
+		try {
+			const first = await completeSimple(clientModel, main, options);
+			// Like chatTextBackend: same model/session, its own system and messages,
+			// no diagnostic flag and no Map. The server supplies the shared Map.
+			const judge = await completeSimple(
+				clientModel,
+				{
+					systemPrompt: ["Classify the supplied text."],
+					messages: [{ role: "user", content: "Is this a question?", timestamp: 2 }],
+				},
+				identity,
+			);
+			const continued: Context = {
+				...main,
+				messages: [...main.messages, first, { role: "user", content: "Continue", timestamp: 3 }],
+			};
+			const next = await completeSimple(clientModel, continued, options);
+			const systemChanged = { ...continued, systemPrompt: ["Stay concise. Be precise."] };
+			const system = await completeSimple(clientModel, systemChanged, options);
+			const tools = await completeSimple(clientModel, { ...systemChanged, tools: undefined }, options);
+
+			expect([first, judge, next, system, tools].map(message => message.stopReason)).toEqual([
+				"stop",
+				"stop",
+				"stop",
+				"stop",
+				"stop",
+			]);
+			expect(first.cacheBreakReason).toBeUndefined();
+			expect(judge.cacheBreakReason).toBeUndefined();
+			expect(next.cacheBreakReason).toBeUndefined();
+			expect(system.cacheBreakReason).toEqual(
+				cacheBreakDiagnostics ? { kind: "system_prompt", charDelta: 12 } : undefined,
+			);
+			expect(tools.cacheBreakReason).toEqual(cacheBreakDiagnostics ? { kind: "tools" } : undefined);
+			expect(upstream.payloads).toHaveLength(5);
+		} finally {
+			await gateway.cleanup();
+			upstream.stop();
+		}
+	},
+);
 
 it.each(["/v1/pi/stream", "/v1/chat/completions"])(
 	"keeps the selected Factory identity after a concurrent token replacement through %s",

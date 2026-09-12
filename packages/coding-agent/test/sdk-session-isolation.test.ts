@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn, vi } from 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, Context, FetchImpl, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
@@ -118,6 +118,79 @@ describe("createAgentSession session storage isolation", () => {
 		LocalProtocolHandler.resetOverrideForTests();
 		for (const tempDir of tempDirs.splice(0)) {
 			removeSyncWithRetries(tempDir);
+		}
+	});
+
+	it("reports system and tool changes from main SDK streams", async () => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sdk-cache-diagnostics-"));
+		tempDirs.push(cwd);
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected Anthropic test model");
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir: cwd,
+			modelRegistry: sharedModelRegistry,
+			sessionManager: SessionManager.inMemory(cwd),
+			model,
+			settings: Settings.isolated(),
+			cacheWarming: false,
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			rules: [],
+			toolNames: [],
+			enableMCP: false,
+			enableLsp: false,
+			workspaceTree: { rootPath: cwd, rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] },
+		});
+		const fetch: FetchImpl = async () => {
+			const events = [
+				{ type: "message_start", message: { id: "msg_sdk_cache", usage: { input_tokens: 4, output_tokens: 0 } } },
+				{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+				{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+				{ type: "content_block_stop", index: 0 },
+				{ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+				{ type: "message_stop" },
+			];
+			return new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), {
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
+		const options: SimpleStreamOptions = {
+			apiKey: "sk-ant-api-test",
+			sessionId: session.sessionId,
+			providerSessionState: session.providerSessionState,
+			fetch,
+		};
+		const main: Context = {
+			systemPrompt: ["Stable instructions"],
+			messages: [{ role: "user", content: "Opening turn", timestamp: 1 }],
+		};
+		try {
+			const first = await (await session.agent.streamFn(model, main, options)).result();
+			const second = await (
+				await session.agent.streamFn(model, { ...main, systemPrompt: ["Stable instructions\u{1f680}"] }, options)
+			).result();
+			const third = await (
+				await session.agent.streamFn(
+					model,
+					{
+						...main,
+						systemPrompt: ["Stable instructions\u{1f680}"],
+						tools: [{ name: "lookup", description: "Look up a record", parameters: { type: "object" } }],
+					},
+					options,
+				)
+			).result();
+
+			expect([first, second, third].map(message => message.stopReason)).toEqual(["stop", "stop", "stop"]);
+			expect(first.cacheBreakReason).toBeUndefined();
+			expect(second.cacheBreakReason).toEqual({ kind: "system_prompt", charDelta: 1 });
+			expect(third.cacheBreakReason).toEqual({ kind: "tools" });
+		} finally {
+			await session.dispose();
 		}
 	});
 

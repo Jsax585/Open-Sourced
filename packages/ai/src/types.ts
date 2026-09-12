@@ -614,6 +614,12 @@ export interface StreamOptions {
 	 */
 	providerSessionState?: Map<string, ProviderSessionState>;
 	/**
+	 * @internal Opt in to system/tool cache diagnostics for main conversation requests.
+	 * Defaults off, including when a gateway supplies provider session state.
+	 * One-shot wrappers force false when inheriting main-request options.
+	 */
+	cacheBreakDiagnostics?: boolean;
+	/**
 	 * Session a side request branches from, so it can read the parent's cached
 	 * prefix. Providers that keep per-conversation request controls (OpenAI
 	 * `configuration_update` effort baselines) plan the request against a copy
@@ -1185,6 +1191,15 @@ export interface ProviderInputTransformation {
 	[key: string]: unknown;
 }
 
+/**
+ * A locally detected change to the prepared request's cached prompt prefix,
+ * not a server-reported cause of a cache miss. `charDelta` is the signed change
+ * in system-prompt Unicode code points, excluding the cache-neutral billing
+ * header. `tool` names the changed definition when it can be identified, and
+ * is absent when only the tool array as a whole differs.
+ */
+export type CacheBreakReason = { kind: "system_prompt"; charDelta: number } | { kind: "tools"; tool?: string };
+
 export interface UserMessage {
 	role: "user";
 	content: string | (TextContent | ImageContent)[];
@@ -1344,6 +1359,12 @@ export interface AssistantMessage {
 	 * requests over the same transcript replay a byte-identical prefix.
 	 */
 	requestControls?: AnthropicRequestControls;
+	/**
+	 * Locally detected Anthropic request changes relative to the last accepted
+	 * request. Independent of usage: the consumer decides whether a cold turn
+	 * warrants displaying them.
+	 */
+	cacheBreakReason?: CacheBreakReason;
 	/** Provider-specific opaque payload used to reconstruct transport-native history. */
 	providerPayload?: ProviderPayload;
 	/** In-memory fallback credit handle attached when a refusal response carries a fallback credit token. */

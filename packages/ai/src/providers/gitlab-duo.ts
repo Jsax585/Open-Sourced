@@ -164,6 +164,7 @@ export function streamGitLabDuo(
 								sessionId: options.sessionId,
 								promptCacheKey: options.promptCacheKey,
 								providerSessionState: options.providerSessionState,
+								cacheBreakDiagnostics: options.cacheBreakDiagnostics,
 								onPayload: options.onPayload,
 								onResponse: options.onResponse,
 								onSseEvent: options.onSseEvent,

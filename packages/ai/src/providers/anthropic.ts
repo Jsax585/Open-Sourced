@@ -45,6 +45,7 @@ import type {
 	Api,
 	AssistantMessage,
 	AssistantMessageEvent,
+	CacheBreakReason,
 	CacheRetention,
 	Context,
 	DeveloperMessage,
@@ -566,6 +567,128 @@ type AnthropicOutputConfig = NonNullable<MessageCreateParamsStreaming["output_co
 const ANTHROPIC_STOP_SEQUENCES_MAX = 4;
 let warnedStopSequencesTrim = false;
 
+/** Accepted request fingerprints, bounded per endpoint/model. Never changes request shaping. */
+type AnthropicCachePrefixSnapshot = {
+	systemFingerprint: string;
+	systemTextLength: number;
+	toolsFingerprint: string;
+	/** Per-tool hashes name schema rewrites without retaining definitions. */
+	toolDefinitions: { name: string; key: bigint }[];
+	toolsPresent: boolean;
+	toolsPlanned: boolean;
+	toolsStrictDropped: boolean;
+};
+
+const MAX_ANTHROPIC_CACHE_PREFIX_SNAPSHOTS = 16;
+
+function anthropicControlMessageProjection(message: MessageParam): MessageParam {
+	const { content } = message;
+	if (typeof content === "string") return { ...message, content: [{ type: "text", text: content }] };
+	const dropThinking = message.role === "assistant";
+	const projected: ContentBlockParam[] = [];
+	let changed = false;
+	for (const block of content) {
+		if (dropThinking && (block.type === "thinking" || block.type === "redacted_thinking")) {
+			changed = true;
+			continue;
+		}
+		if ("cache_control" in block) {
+			projected.push({ ...block, cache_control: undefined });
+			changed = true;
+			continue;
+		}
+		projected.push(block);
+	}
+	return changed ? { ...message, content: projected } : message;
+}
+
+function anthropicToolPrefixKey(tool: AnthropicWireTool): string {
+	const stable = { ...tool };
+	delete stable.cache_control;
+	return JSON.stringify(stable);
+}
+
+function anthropicToolsPrefixFingerprint(tools: readonly AnthropicWireTool[] | undefined): string {
+	return String(Bun.hash(JSON.stringify(tools?.map(anthropicToolPrefixKey) ?? [])));
+}
+
+type AnthropicCacheBreakDetection = {
+	reason: CacheBreakReason | undefined;
+	commit?: () => void;
+};
+
+const NO_CACHE_BREAK_DETECTION: AnthropicCacheBreakDetection = { reason: undefined };
+
+function detectAnthropicCacheBreak(
+	state: AnthropicProviderSessionState | undefined,
+	conversationKey: string,
+	params: MessageCreateParamsStreaming,
+	plannedToolsFingerprint: string | undefined,
+	strictToolsDropped: boolean,
+): AnthropicCacheBreakDetection {
+	if (!state) return NO_CACHE_BREAK_DETECTION;
+	const { system, tools } = params;
+	const texts = (typeof system === "string" ? [system] : (system?.map(block => block.text) ?? [])).filter(
+		text => !text.startsWith(CLAUDE_BILLING_HEADER_PREFIX),
+	);
+	const systemFingerprint = String(Bun.hash(JSON.stringify(texts)));
+	let systemTextLength = 0;
+	for (const text of texts) {
+		for (let index = 0; index < text.length; index++) {
+			systemTextLength++;
+			if (text.codePointAt(index)! > 0xffff) index++;
+		}
+	}
+	const toolsFingerprint = anthropicToolsPrefixFingerprint(tools);
+	const toolsPlanned = plannedToolsFingerprint === toolsFingerprint;
+	const previous = state.cachePrefixDiagnostics.get(conversationKey);
+	const snapshot: AnthropicCachePrefixSnapshot = {
+		systemFingerprint,
+		systemTextLength,
+		toolsFingerprint,
+		toolDefinitions:
+			tools?.map(tool => ({ name: tool.name, key: Bun.hash.wyhash(anthropicToolPrefixKey(tool)) })) ?? [],
+		toolsPresent: tools !== undefined,
+		toolsPlanned,
+		toolsStrictDropped: strictToolsDropped,
+	};
+	const commit = (): void => {
+		state.cachePrefixDiagnostics.delete(conversationKey);
+		state.cachePrefixDiagnostics.set(conversationKey, snapshot);
+		if (state.cachePrefixDiagnostics.size > MAX_ANTHROPIC_CACHE_PREFIX_SNAPSHOTS) {
+			const oldest = state.cachePrefixDiagnostics.keys().next().value;
+			if (oldest !== undefined) state.cachePrefixDiagnostics.delete(oldest);
+		}
+	};
+	if (!previous) return { reason: undefined, commit };
+
+	// Anthropic caches tools before system text, so report tool changes first.
+	// The persisted planner permits deferred appends, not rewrites of previously
+	// declared definitions. Compare accepted bytes directly, so retries need no
+	// mutable control-reason latch and hooks restoring the old array stay silent.
+	const toolsExempt = toolsPlanned && previous.toolsPlanned && previous.toolsStrictDropped === strictToolsDropped;
+	if (toolsExempt) {
+		for (let index = 0; index < previous.toolDefinitions.length; index++) {
+			const old = previous.toolDefinitions[index];
+			const current = snapshot.toolDefinitions[index];
+			if (!current || current.name !== old.name) return { reason: { kind: "tools" }, commit };
+			if (current.key !== old.key) return { reason: { kind: "tools", tool: current.name }, commit };
+		}
+	}
+	if (
+		previous.toolsPresent !== snapshot.toolsPresent ||
+		(!toolsExempt && previous.toolsFingerprint !== toolsFingerprint)
+	) {
+		return { reason: { kind: "tools" }, commit };
+	}
+	if (previous.systemFingerprint !== systemFingerprint) {
+		return {
+			reason: { kind: "system_prompt", charDelta: systemTextLength - previous.systemTextLength },
+			commit,
+		};
+	}
+	return { reason: undefined, commit };
+}
 type AnthropicProviderSessionState = ProviderSessionState & {
 	strictToolsDisabled: boolean;
 	fastModeDisabled: boolean;
@@ -624,6 +747,7 @@ type AnthropicProviderSessionState = ProviderSessionState & {
 	 * them again on every later request; only newly dropped blocks warn.
 	 */
 	reportedPrefixDroppedThinking: Set<string>;
+	cachePrefixDiagnostics: Map<string, AnthropicCachePrefixSnapshot>;
 };
 
 function createAnthropicProviderSessionState(): AnthropicProviderSessionState {
@@ -637,6 +761,7 @@ function createAnthropicProviderSessionState(): AnthropicProviderSessionState {
 		cacheControlOptionsUnsupported: false,
 		prefixDroppedThinkingBlocks: new Set(),
 		reportedPrefixDroppedThinking: new Set(),
+		cachePrefixDiagnostics: new Map(),
 		close: () => {
 			state.strictToolsDisabled = false;
 			state.fastModeDisabled = false;
@@ -646,6 +771,7 @@ function createAnthropicProviderSessionState(): AnthropicProviderSessionState {
 			state.cacheControlOptionsUnsupported = false;
 			state.prefixDroppedThinkingBlocks.clear();
 			state.reportedPrefixDroppedThinking.clear();
+			state.cachePrefixDiagnostics.clear();
 		},
 	};
 	return state;
@@ -739,6 +865,7 @@ function getAnthropicProviderSessionState(
 	const state = existing ?? createAnthropicProviderSessionState();
 	if (existing) {
 		existing.prefixDroppedThinkingBlocks ??= new Set();
+		existing.cachePrefixDiagnostics ??= new Map();
 		existing.reportedPrefixDroppedThinking ??= new Set();
 		existing.cacheControlUnsupported ??= false;
 		existing.cacheControlOptionsUnsupported ??= false;
@@ -2681,8 +2808,18 @@ const streamAnthropicOnce = (
 			};
 			let { client, isOAuthToken } = resolveClient();
 			const preparedContext = await prepareAnthropicImageContext(context, model);
+			let commitCacheBreakSnapshot: (() => void) | undefined;
+			// Only main conversation requests opt in. Bedrock hooks see a different
+			// wire shape; summaries share routing state, not the conversation baseline.
+			const cacheDiagnosticsState =
+				options?.cacheBreakDiagnostics === true && !transport && !options?.anthropicCompaction
+					? providerSessionState
+					: undefined;
+			const cacheIdentity =
+				options?.sessionId ?? extractClaudeMetadataSessionId(options?.metadata?.user_id) ?? options?.promptCacheKey;
 			const prepareParams = async (): Promise<MessageCreateParamsStreaming> => {
 				if (transport) rawRequestDump = undefined;
+				output.cacheBreakReason = undefined;
 				const built = buildParams(model, preparedContext, isOAuthToken, options, {
 					compactionSupported,
 					forceThinkingOff: transport?.forceThinkingOff,
@@ -2732,6 +2869,22 @@ const streamAnthropicOnce = (
 				if (dropFastMode) {
 					dropAnthropicFastMode(nextParams);
 				}
+				const root = nextParams.messages[0];
+				const conversationKey = cacheDiagnosticsState
+					? String(
+							Bun.hash(
+								JSON.stringify(
+									cacheIdentity === undefined
+										? [null, root ? anthropicControlMessageProjection(root) : null]
+										: [cacheIdentity],
+								),
+							),
+						)
+					: "";
+				const plannedToolsFingerprint =
+					cacheDiagnosticsState && model.compat.supportsMidConversationToolChanges
+						? anthropicToolsPrefixFingerprint(toWellFormedDeep(nextParams.tools) as typeof nextParams.tools)
+						: undefined;
 				const replacementPayload = transport ? undefined : await options?.onPayload?.(nextParams, model);
 				if (replacementPayload !== undefined) {
 					nextParams = replacementPayload as typeof nextParams;
@@ -2759,6 +2912,22 @@ const streamAnthropicOnce = (
 					];
 				}
 				nextParams = toWellFormedDeep(nextParams) as typeof nextParams;
+				const cacheBreak = detectAnthropicCacheBreak(
+					cacheDiagnosticsState,
+					conversationKey,
+					nextParams,
+					plannedToolsFingerprint,
+					disableStrictTools,
+				);
+				commitCacheBreakSnapshot = cacheBreak.commit;
+				output.cacheBreakReason = cacheBreak.reason;
+				if (output.cacheBreakReason?.kind === "tools" && output.cacheBreakReason.tool) {
+					output.cacheBreakReason.tool = decodeAnthropicToolName(
+						output.cacheBreakReason.tool,
+						isOAuthToken,
+						model.compat.escapeBuiltinToolNames,
+					);
+				}
 				if (transport) {
 					const preparedRequest = await transport.prepareRequest(nextParams, requestExtraBetas);
 					transportPayload = preparedRequest.payload;
@@ -3198,6 +3367,8 @@ const streamAnthropicOnce = (
 								continue;
 							}
 							sawMessageStart = true;
+							// Acceptance, not successful completion, establishes the cached prefix.
+							commitCacheBreakSnapshot?.();
 							const startMessage = event.message;
 							if (startMessage?.id) output.responseId = startMessage.id;
 							applyReportedInputTransformations(
