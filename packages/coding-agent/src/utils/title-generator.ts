@@ -958,6 +958,12 @@ let agentStateFileWork: Promise<void> = Promise.resolve();
 let agentStateFileGeneration = 0;
 
 /**
+ * Whether a removal was queued and has not landed. Teardown and a signal exit still owe it: the
+ * process may end before the queue gets its turn, and the setting is already off by then.
+ */
+let agentStateFileRemovalPending = false;
+
+/**
  * Offer the run state as a file beside this terminal's breadcrumb, so a program that is not the
  * terminal can read it.
  *
@@ -1029,6 +1035,7 @@ function removeAgentStateFile(): void {
 	try {
 		fs.rmSync(file, { force: true });
 		fs.rmSync(`${file}.${process.pid}.tmp`, { force: true });
+		agentStateFileRemovalPending = false;
 	} catch (err) {
 		logger.debug("Agent state file removal failed", { err });
 	}
@@ -1044,10 +1051,19 @@ function removeAgentStateFile(): void {
 function queueAgentStateFileRemoval(): void {
 	const file = invalidateAgentStateFile();
 	if (!file) return;
+	const generation = agentStateFileGeneration;
+	agentStateFileRemovalPending = true;
 	agentStateFileWork = agentStateFileWork
 		.then(async () => {
 			await fs.promises.rm(file, { force: true });
 			await fs.promises.rm(`${file}.${process.pid}.tmp`, { force: true });
+			// Only after it landed, and only if no newer removal took over: until then exit still owes it.
+			if (generation !== agentStateFileGeneration) return;
+			agentStateFileRemovalPending = false;
+			if (!agentStateFileEnabled) {
+				agentStateFileCleanupCancel?.();
+				agentStateFileCleanupCancel = undefined;
+			}
 		})
 		.catch(err => {
 			logger.debug("Agent state file removal failed", { err });
@@ -1092,8 +1108,8 @@ export function setAgentStateFileEnabled(enabled: boolean): void {
 		});
 		writeAgentStateFile(terminalTitleRuntime.state);
 	} else {
-		agentStateFileCleanupCancel?.();
-		agentStateFileCleanupCancel = undefined;
+		// The exit registration stays until the queued removal has landed, which cancels it: a signal
+		// in between would otherwise leave the last state behind.
 		queueAgentStateFileRemoval();
 	}
 }
@@ -1177,8 +1193,9 @@ export function disposeTerminalTitleState(): void {
 	stopTerminalTitleSpinner();
 	disposeWindowsConsoleTitleApi();
 	lastTerminalTitle = undefined;
-	// A state file that outlives its process would report "waiting" forever.
-	if (agentStateFileEnabled) {
+	// A state file that outlives its process would report "waiting" forever - including one whose
+	// removal was queued by switching the setting off and has not landed when the process ends.
+	if (agentStateFileEnabled || agentStateFileRemovalPending) {
 		agentStateFileCleanupCancel?.();
 		agentStateFileCleanupCancel = undefined;
 		removeAgentStateFile();
