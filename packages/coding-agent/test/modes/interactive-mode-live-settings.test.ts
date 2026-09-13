@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -7,13 +8,21 @@ import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mod
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { getTerminalId } from "@oh-my-pi/pi-tui";
+import {
+	__agentStateFileSettledForTests,
+	setAgentStateFileEnabled,
+	setTerminalTitleState,
+} from "@oh-my-pi/pi-coding-agent/utils/title-generator";
+import { restoreEnvValue } from "../helpers/settings-test-state";
 import * as theme from "@oh-my-pi/pi-tui/theme";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { __resetDirsFromEnvForTests, getTerminalSessionsDir, TempDir } from "@oh-my-pi/pi-utils";
 
 import {
 	cfgStatusLineContextLine,
 	cfgStatusLineLeftSegments,
 	cfgSymbolPreset,
+	cfgTuiStateFile,
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { cfgHideThinkingBlock } from "@oh-my-pi/pi-coding-agent/session/settings";
 
@@ -61,6 +70,35 @@ describe("InteractiveMode live settings", () => {
 		resetSettingsForTest();
 		await theme.setSymbolPreset("unicode");
 		vi.restoreAllMocks();
+	});
+
+	it("publishes and removes the state file when the setting changes during a session", async () => {
+		const keys = ["TMUX_PANE", "PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE"] as const;
+		const originalEnv = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+		process.env.TMUX_PANE = "%omp-state-file-live-setting-test";
+		process.env.PI_CODING_AGENT_DIR = path.join(tempDir.path(), "agent");
+		restoreEnvValue("OMP_PROFILE", undefined);
+		restoreEnvValue("PI_PROFILE", undefined);
+		__resetDirsFromEnvForTests();
+		const file = path.join(getTerminalSessionsDir(), `${getTerminalId()}.state.json`);
+		try {
+			setTerminalTitleState("attention");
+			cfgTuiStateFile.set(session.settings, true);
+			await Promise.resolve();
+			await __agentStateFileSettledForTests();
+			expect((await Bun.file(file).json()).state).toBe("attention");
+
+			cfgTuiStateFile.set(session.settings, false);
+			await Promise.resolve();
+			await __agentStateFileSettledForTests();
+			expect(await Bun.file(file).exists()).toBe(false);
+		} finally {
+			setAgentStateFileEnabled(false);
+			await __agentStateFileSettledForTests();
+			await fs.rm(file, { force: true });
+			for (const key of keys) restoreEnvValue(key, originalEnv[key]);
+			__resetDirsFromEnvForTests();
+		}
 	});
 
 	it("applies status-line and thinking-visibility changes made outside the settings panel", async () => {

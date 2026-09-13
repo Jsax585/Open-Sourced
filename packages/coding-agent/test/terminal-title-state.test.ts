@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import {
@@ -8,14 +7,14 @@ import {
 	disposeTerminalTitleState,
 	setTerminalTitle,
 	initTerminalTitleState,
-	agentStateFileSettled,
+	__agentStateFileSettledForTests,
 	setAgentStateFileEnabled,
 	setSessionTerminalTitle,
 	setTerminalSessionSource,
 	setTerminalTitleSpinnerStyle,
 	setTerminalTitleState,
 } from "@oh-my-pi/pi-coding-agent/utils/title-generator";
-import { getTerminalId, isConPTYHosted } from "@oh-my-pi/pi-tui";
+import { getTerminalId } from "@oh-my-pi/pi-tui";
 import {
 	__resetDirsFromEnvForTests,
 	getTerminalSessionsDir,
@@ -451,7 +450,7 @@ describe("agent state file", () => {
 		// Its own agent directory, so this never writes into the caller's real terminal-sessions
 		// directory and two suites cannot race for one filename. Through the environment rather
 		// than setAgentDir(), because that is what the resolver reads back.
-		agentRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-state-file-test-"));
+		agentRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-state-file-test-"));
 		process.env.TMUX_PANE = PANE;
 		process.env.PI_CODING_AGENT_DIR = path.join(agentRoot, "agent");
 		restoreEnvValue("OMP_PROFILE", undefined);
@@ -465,19 +464,19 @@ describe("agent state file", () => {
 		vi.restoreAllMocks();
 
 		setAgentStateFileEnabled(false);
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 
 		for (const key of ENV_KEYS) restoreEnvValue(key, originalEnv[key]);
 		__resetDirsFromEnvForTests();
 
-		if (agentRoot) await fs.rm(agentRoot, { recursive: true, force: true });
+		if (agentRoot) await fs.promises.rm(agentRoot, { recursive: true, force: true });
 		agentRoot = undefined;
 	});
 
 	it("writes nothing while the setting is off", async () => {
 		setAgentStateFileEnabled(false);
 		setTerminalTitleState("attention");
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 		expect(await Bun.file(stateFile()).exists()).toBe(false);
 	});
 
@@ -485,18 +484,18 @@ describe("agent state file", () => {
 		setAgentStateFileEnabled(true);
 
 		setTerminalTitleState("working");
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 		expect((await Bun.file(stateFile()).json()).state).toBe("working");
 
 		// The one that matters: nothing else can distinguish this from a long think.
 		setTerminalTitleState("attention");
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 		const written = await Bun.file(stateFile()).json();
 		expect(written.state).toBe("attention");
 		expect(written.pid).toBe(process.pid);
 
 		setAgentStateFileEnabled(false);
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 		expect(await Bun.file(stateFile()).exists()).toBe(false);
 	});
 
@@ -508,7 +507,7 @@ describe("agent state file", () => {
 		// behind it, a synchronous one would have removed the file before the call returned.
 		setAgentStateFileEnabled(true);
 		setTerminalTitleState("attention");
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 		expect(await Bun.file(stateFile()).exists()).toBe(true);
 
 		const entered = Promise.withResolvers<void>();
@@ -527,7 +526,7 @@ describe("agent state file", () => {
 			// Released whatever the assertion did: a write left held stalls every test after this one.
 			held.resolve(0);
 		}
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 		expect(await Bun.file(stateFile()).exists()).toBe(false);
 	});
 
@@ -536,7 +535,7 @@ describe("agent state file", () => {
 		// so teardown owes the removal that the setting change only queued.
 		setAgentStateFileEnabled(true);
 		setTerminalTitleState("attention");
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 
 		const entered = Promise.withResolvers<void>();
 		const held = Promise.withResolvers<number>();
@@ -554,17 +553,20 @@ describe("agent state file", () => {
 		} finally {
 			held.resolve(0);
 		}
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 	});
 
 	it("keeps the exit registration until a queued removal has landed", async () => {
 		// A signal exit runs the postmortem callbacks and leaves. Cancelling the registration as soon
 		// as the setting goes off, before its removal lands, would leave the last state behind.
+		//
+		// Mocked rather than run: a real exit pass would end postmortem for this whole test process,
+		// and calling the captured callback directly would bypass the cancellation this is about.
 		const cancel = vi.fn();
 		spyOn(postmortem, "register").mockReturnValue(cancel);
 		setAgentStateFileEnabled(true);
 		setTerminalTitleState("attention");
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 
 		const entered = Promise.withResolvers<void>();
 		const held = Promise.withResolvers<number>();
@@ -581,7 +583,7 @@ describe("agent state file", () => {
 		} finally {
 			held.resolve(0);
 		}
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 		expect(cancel).toHaveBeenCalledTimes(1);
 		expect(await Bun.file(stateFile()).exists()).toBe(false);
 	});
@@ -598,7 +600,7 @@ describe("agent state file", () => {
 
 		setAgentStateFileEnabled(true);
 		setTerminalTitleState("attention");
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 		expect(await Bun.file(stateFile()).exists()).toBe(true);
 
 		const registration = register.mock.calls.find(call => call[0] === "agent-state-file");
@@ -615,7 +617,7 @@ describe("agent state file", () => {
 		const register = spyOn(postmortem, "register");
 		setAgentStateFileEnabled(true);
 		setTerminalTitleState("attention");
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 		const published = stateFile();
 		expect(await Bun.file(published).exists()).toBe(true);
 
@@ -627,6 +629,32 @@ describe("agent state file", () => {
 		expect(await Bun.file(published).exists()).toBe(false);
 	});
 
+	it("leaves a state file alone that this process never published", async () => {
+		// The setting is applied at every start, off by default. A file under this terminal's name that
+		// this process did not write may belong to another omp sharing the terminal id.
+		const foreign = stateFile();
+		await Bun.write(foreign, `${JSON.stringify({ state: "working", pid: process.pid + 1 })}\n`);
+
+		setAgentStateFileEnabled(false);
+		await __agentStateFileSettledForTests();
+
+		expect(await Bun.file(foreign).exists()).toBe(true);
+	});
+
+	it("publishes nothing once the runtime is disposed", async () => {
+		// Teardown cancels the exit registration, so a state update arriving after it would leave a
+		// file that nothing removes.
+		setAgentStateFileEnabled(true);
+		setTerminalTitleState("attention");
+		await __agentStateFileSettledForTests();
+		disposeTerminalTitleState();
+
+		setTerminalTitleState("working");
+		await __agentStateFileSettledForTests();
+
+		expect(await Bun.file(stateFile()).exists()).toBe(false);
+	});
+
 	it("does not publish an update that a removal overtook mid-flight", async () => {
 		// The update yields at every await, and the teardown and exit removal is synchronous, so it
 		// can land between the last check and the rename completing - finding nothing to delete,
@@ -636,7 +664,7 @@ describe("agent state file", () => {
 		// The stand-in mimics exactly that: the removal happens first, and the rename lands
 		// anyway. A mock that let the rename fail would pass without the guard and prove nothing.
 		setAgentStateFileEnabled(true);
-		const rename = spyOn(fs, "rename");
+		const rename = spyOn(fs.promises, "rename");
 		rename.mockImplementationOnce(async (from, to) => {
 			const body = await Bun.file(from as string).text();
 			disposeTerminalTitleState();
@@ -644,7 +672,7 @@ describe("agent state file", () => {
 		});
 
 		setTerminalTitleState("attention");
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 
 		expect(rename).toHaveBeenCalledTimes(1);
 		expect(await Bun.file(stateFile()).exists()).toBe(false);
@@ -660,11 +688,11 @@ describe("agent state file", () => {
 		// the removal runs just before the pending file is moved, and the real renames do the rest.
 		setAgentStateFileEnabled(true);
 		setTerminalTitleState("working");
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 		expect(await Bun.file(stateFile()).exists()).toBe(true);
 
-		const realRename = fs.rename;
-		const rename = spyOn(fs, "rename");
+		const realRename = fs.promises.rename;
+		const rename = spyOn(fs.promises, "rename");
 		rename
 			.mockImplementationOnce(async () => {
 				throw Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" });
@@ -676,12 +704,12 @@ describe("agent state file", () => {
 			});
 
 		setTerminalTitleState("attention");
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 
 		// Failed replace, target to backup, pending to target (gone), backup rolled back.
 		expect(rename).toHaveBeenCalledTimes(4);
 		expect(await Bun.file(stateFile()).exists()).toBe(false);
-		const leftovers = (await fs.readdir(path.dirname(stateFile()))).filter(name =>
+		const leftovers = (await fs.promises.readdir(path.dirname(stateFile()))).filter(name =>
 			name.startsWith(path.basename(stateFile())),
 		);
 		expect(leftovers).toEqual([]);
@@ -690,7 +718,7 @@ describe("agent state file", () => {
 	it("leaves no file behind when the runtime is disposed", async () => {
 		setAgentStateFileEnabled(true);
 		setTerminalTitleState("attention");
-		await agentStateFileSettled();
+		await __agentStateFileSettledForTests();
 		expect(await Bun.file(stateFile()).exists()).toBe(true);
 
 		// A state file outliving its process would report "waiting on you" for ever.

@@ -20,7 +20,15 @@ import { getTerminalId, writeTerminalSequence } from "@oh-my-pi/pi-tui";
 import { isNativeRendering, onNativeRenderingChange } from "@oh-my-pi/pi-tui/native/state";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { SPINNER_FRAMES } from "@oh-my-pi/pi-tui/theme/symbols";
-import { $env, getTerminalSessionsDir, isTerminalHeadless, isWsl, logger, postmortem, prompt } from "@oh-my-pi/pi-utils";
+import {
+	$env,
+	getTerminalSessionsDir,
+	isTerminalHeadless,
+	isWsl,
+	logger,
+	postmortem,
+	prompt,
+} from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 
 import { roleCandidatePool } from "../config/model-roles";
@@ -1021,15 +1029,16 @@ function writeAgentStateFile(state: TerminalTitleState): void {
 }
 
 /**
- * Invalidate every update still in flight, and return this terminal's state file path.
+ * Invalidate every update still in flight, and return the path this process published under, if any.
  *
  * The generation moves at once, whichever way the file is then removed: an update that yields
  * after this must not publish a state for an agent that has been switched off or is exiting.
  */
 function invalidateAgentStateFile(): string | null {
 	agentStateFileGeneration += 1;
-	// Recomputed only when nothing was published, which is also when a different name costs nothing.
-	return agentStateFileTarget ?? agentStateFilePath();
+	// Only what this process published. A file under this terminal's name that it never wrote may
+	// belong to another omp sharing the terminal id, and is not this process's to remove.
+	return agentStateFileTarget;
 }
 
 /**
@@ -1082,15 +1091,14 @@ function queueAgentStateFileRemoval(): void {
 }
 
 /** Resolves once every queued state-file update has landed. For tests. */
-export function agentStateFileSettled(): Promise<void> {
+export function __agentStateFileSettledForTests(): Promise<void> {
 	return agentStateFileWork;
 }
 
 /**
  * Reflect the agent run state in the terminal title's separator: `working`
- * animates outside Windows and stays `:` on Windows, `idle` shows `>` (your
- * turn), and `attention` shows `!` (agent blocked on you). Gated off by
- * `tui.titleState`.
+ * animates (static `:` under WSL), `idle` shows `>` (your turn), and
+ * `attention` shows `!` (agent blocked on you). Gated off by `tui.titleState`.
  */
 export function setTerminalTitleState(state: TerminalTitleState): void {
 	terminalTitleRuntime.state = state;
@@ -1207,6 +1215,9 @@ export function disposeTerminalTitleState(): void {
 	// A state file that outlives its process would report "waiting" forever - including one whose
 	// removal was queued by switching the setting off and has not landed when the process ends.
 	if (agentStateFileEnabled || agentStateFileRemovalPending) {
+		// Off for good: teardown also cancels the exit registration, so an update arriving after it
+		// would publish a file that nothing removes.
+		agentStateFileEnabled = false;
 		agentStateFileCleanupCancel?.();
 		agentStateFileCleanupCancel = undefined;
 		removeAgentStateFile();
