@@ -945,6 +945,13 @@ function agentStateFilePath(): string | null {
 }
 
 /**
+ * The path this process published its state under, kept rather than recomputed. At exit the terminal
+ * may no longer read the same - a closed bare PTY resolves as "/dev/pts/N (deleted)" - and a removal
+ * under a recomputed name would leave the published file behind.
+ */
+let agentStateFileTarget: string | null = null;
+
+/**
  * Serializes state-file work so two updates cannot land out of order, and so a caller never waits
  * on the disk. Every update chains onto this; nothing awaits it except a test.
  */
@@ -977,7 +984,8 @@ let agentStateFileRemovalPending = false;
  */
 function writeAgentStateFile(state: TerminalTitleState): void {
 	if (!agentStateFileEnabled) return;
-	const file = agentStateFilePath();
+	agentStateFileTarget ??= agentStateFilePath();
+	const file = agentStateFileTarget;
 	if (!file) return;
 	const body = `${JSON.stringify({ state, pid: process.pid, at: new Date().toISOString() })}\n`;
 	const pending = `${file}.${process.pid}.tmp`;
@@ -1020,7 +1028,8 @@ function writeAgentStateFile(state: TerminalTitleState): void {
  */
 function invalidateAgentStateFile(): string | null {
 	agentStateFileGeneration += 1;
-	return agentStateFilePath();
+	// Recomputed only when nothing was published, which is also when a different name costs nothing.
+	return agentStateFileTarget ?? agentStateFilePath();
 }
 
 /**
@@ -1036,6 +1045,7 @@ function removeAgentStateFile(): void {
 		fs.rmSync(file, { force: true });
 		fs.rmSync(`${file}.${process.pid}.tmp`, { force: true });
 		agentStateFileRemovalPending = false;
+		if (!agentStateFileEnabled) agentStateFileTarget = null;
 	} catch (err) {
 		logger.debug("Agent state file removal failed", { err });
 	}
@@ -1063,6 +1073,7 @@ function queueAgentStateFileRemoval(): void {
 			if (!agentStateFileEnabled) {
 				agentStateFileCleanupCancel?.();
 				agentStateFileCleanupCancel = undefined;
+				agentStateFileTarget = null;
 			}
 		})
 		.catch(err => {
