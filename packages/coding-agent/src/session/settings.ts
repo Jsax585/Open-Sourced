@@ -784,6 +784,30 @@ export const cfgRetryFallbackOn = register({
 	},
 });
 
+export const cfgRetryTransientSameModelAttempts = register({
+	id: "retry.transientSameModelAttempts",
+	type: "number",
+	default: 0,
+	ui: {
+		tab: "model",
+		group: "Retry & Fallback",
+		label: "Transient Same-Model Retries",
+		description:
+			"Retries per active model before fallback on transient failures such as overload, 5xx, or transport resets. Default 0 preserves built-in recovery exceptions without extra deferral. Counts retries, not the initial request; socket and Codex steering retries count, but thinking-loop resamples and credential recovery do not. Existing retry and wait limits still apply. Quota, auth, and account-policy recovery are unchanged.",
+		options: [
+			{
+				value: "0",
+				label: "Built-in recovery only",
+				description: "Default: no extra same-model retries before fallback",
+			},
+			{ value: "1", label: "1 retry" },
+			{ value: "2", label: "2 retries" },
+			{ value: "3", label: "3 retries" },
+			{ value: "5", label: "5 retries" },
+		],
+	},
+});
+
 export const cfgRetryUsageAwareFallback = register({
 	id: "retry.usageAwareFallback",
 	type: "boolean",
@@ -892,6 +916,7 @@ export const cfgRetry = combine({
 	waitForUsageReset: cfgRetryWaitForUsageReset,
 	modelFallback: cfgRetryModelFallback,
 	fallbackOn: cfgRetryFallbackOn,
+	transientSameModelAttempts: cfgRetryTransientSameModelAttempts,
 	usageAwareFallback: cfgRetryUsageAwareFallback,
 	usageReservePct: cfgRetryUsageReservePct,
 	usageReservePolicy: cfgRetryUsageReservePolicy,

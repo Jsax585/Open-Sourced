@@ -8747,4 +8747,424 @@ describe("AgentSession retry fallback", () => {
 		expect(requestedModels).toContain("openrouter/z-ai/glm-4.7@chutes");
 		expect(getLastAssistantMessage(session).stopReason).not.toBe("error");
 	});
+
+	it("spends retry.transientSameModelAttempts on the same model before walking the chain", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		if (!primaryModel || !fallbackModel) throw new Error("Expected bundled test models to exist");
+
+		const requestedModels: string[] = [];
+		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+		let primaryAttempts = 0;
+		const mock = createMockModel();
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (model, context, options) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				if (model.provider === primaryModel.provider && model.id === primaryModel.id) {
+					primaryAttempts += 1;
+					// Overload twice, then clear — the shape of a capacity blip.
+					if (primaryAttempts <= 2) {
+						mock.push({ throw: "overloaded_error: provider returned error 503" });
+					} else {
+						mock.push({ content: ["Recovered on the primary model."] });
+					}
+				} else {
+					mock.push({ content: ["Served by the fallback."] });
+				}
+				return mock.stream(model, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.transientSameModelAttempts": 2,
+			"retry.fallbackChains": { default: [`${fallbackModel.provider}/${fallbackModel.id}`] },
+		});
+		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+
+		session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+		session.subscribe(event => {
+			if (event.type === "retry_fallback_applied") fallbackAppliedEvents.push(event);
+		});
+
+		await session.prompt("Ride out a capacity blip");
+		await session.waitForIdle();
+
+		const primarySelector = `${primaryModel.provider}/${primaryModel.id}`;
+		expect(requestedModels).toEqual([primarySelector, primarySelector, primarySelector]);
+		expect(fallbackAppliedEvents).toEqual([]);
+		expect(session.model?.id).toBe(primaryModel.id);
+		const finalAssistant = getLastAssistantMessage(session);
+		expect(finalAssistant.content).toEqual([{ type: "text", text: "Recovered on the primary model." }]);
+	});
+
+	it.each(["thinking-loop resample", "usage-limit credential rotation"] as const)(
+		"preserves the transient allowance after a %s",
+		async recovery => {
+			const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+			const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+			const primary = `${primaryModel.provider}/${primaryModel.id}`;
+			const fallback = `${fallbackModel.provider}/${fallbackModel.id}`;
+			const requestedModels: string[] = [];
+			const markReached = vi
+				.spyOn(modelRegistry.authStorage.limits, "markReached")
+				.mockClear()
+				.mockResolvedValue({ switched: true });
+			const mock = createMockModel();
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					requestedModels.push(`${model.provider}/${model.id}`);
+					if (requestedModels.length === 1) {
+						if (recovery === "thinking-loop resample") return thinkingLoopErrorStream(model);
+						mock.push({ throw: "usage limit reached for this account" });
+					} else if (model.provider === primaryModel.provider && model.id === primaryModel.id) {
+						mock.push({ throw: "503 overloaded_error" });
+					} else {
+						mock.push({ content: ["Recovered on fallback."] });
+					}
+					return mock.stream(model, context, options);
+				},
+			});
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				"retry.transientSameModelAttempts": 1,
+				"retry.fallbackChains": { default: [fallback] },
+			});
+			settings.setModelRole("default", primary);
+			session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+			const { retryStartEvents } = trackRetryEvents(session);
+			mockSchedulerWaitWithClock();
+
+			await session.prompt("Recover before a capacity failure");
+			await session.waitForIdle();
+
+			expect(markReached).toHaveBeenCalledTimes(recovery === "usage-limit credential rotation" ? 1 : 0);
+			expect(requestedModels).toEqual([primary, primary, primary, fallback]);
+			expect(retryStartEvents.map(event => event.attempt)).toEqual([1, 2, 3]);
+			expect(getLastAssistantMessage(session).content).toEqual([{ type: "text", text: "Recovered on fallback." }]);
+		},
+	);
+
+	it.each([
+		["quota", "usage limit reached for this account"],
+		["auth", "401 unauthorized: invalid API key"],
+		["account policy", "403 account suspended by organization policy"],
+		["terminal 4xx", "HTTP 400 invalid request: server_error timeout transport failure"],
+	])("does not defer %s recovery for transient same-model retries", async (_name, firstError) => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		const requestedModels: string[] = [];
+		const agent = createFallbackAgent(primaryModel, requestedModels, { firstError });
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.transientSameModelAttempts": 5,
+			"retry.fallbackChains": { default: [`${fallbackModel.provider}/${fallbackModel.id}`] },
+		});
+		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+		mockSchedulerWaitWithClock();
+
+		await session.prompt("Recover the provider request");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+		]);
+		expect(getLastAssistantMessage(session).stopReason).toBe("stop");
+	});
+
+	it.each([
+		{
+			name: "provider hint exceeds cap",
+			error: "429 rate limit reached; retry-after-ms=600000",
+			base: 5,
+			cap: 300_000,
+			same: false,
+			delay: 0,
+		},
+		{
+			name: "provider hint equals cap",
+			error: "429 rate limit reached; retry-after-ms=600000",
+			base: 5,
+			cap: 600_000,
+			same: true,
+			delay: 600_000,
+		},
+		{
+			name: "provider hint is uncapped",
+			error: "429 rate limit reached; retry-after-ms=600000",
+			base: 5,
+			cap: 0,
+			same: true,
+			delay: 600_000,
+		},
+		{ name: "backoff exceeds cap", error: "503 overloaded_error", base: 5_000, cap: 1_000, same: false, delay: 0 },
+		{
+			name: "reason-adjusted wait exceeds cap",
+			error: "429 CONCURRENT_LIMIT",
+			base: 5,
+			cap: 1_000,
+			same: false,
+			delay: 0,
+		},
+	])("keeps fallback available when $name", async ({ error, base, cap, same, delay }) => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		const primary = `${primaryModel.provider}/${primaryModel.id}`;
+		const fallback = `${fallbackModel.provider}/${fallbackModel.id}`;
+		const requestedModels: string[] = [];
+		const agent = createFallbackAgent(primaryModel, requestedModels, { firstError: error });
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": base,
+			"retry.maxDelayMs": cap,
+			"retry.transientSameModelAttempts": 2,
+			"retry.fallbackChains": { default: [fallback] },
+		});
+		settings.setModelRole("default", primary);
+		session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+		const { retryStartEvents } = trackRetryEvents(session);
+		mockSchedulerWaitWithClock();
+
+		await session.prompt("Honor provider pacing or use the fallback");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([primary, same ? primary : fallback]);
+		expect(retryStartEvents.map(event => event.delayMs)).toEqual([delay]);
+		expect(getLastAssistantMessage(session).stopReason).toBe("stop");
+	});
+
+	it.each([
+		{
+			name: "per-model allowance",
+			allowance: 2,
+			maxRetries: 10,
+			requests: [0, 0, 0, 1, 1, 1, 2],
+			attempts: [1, 2, 3, 4, 5, 6],
+		},
+		{
+			name: "exhausted budget",
+			allowance: 12,
+			maxRetries: 2,
+			requests: [0, 0, 0, 1, 1, 2],
+			attempts: [1, 2, 1, 2, 1],
+		},
+		{ name: "zero budget", allowance: 5, maxRetries: 0, requests: [0, 1, 2], attempts: [1, 1] },
+	])(
+		"preserves retry accounting across three models with $name",
+		async ({ allowance, maxRetries, requests, attempts }) => {
+			const models = [
+				getBundledModel("anthropic", "claude-sonnet-4-5"),
+				getBundledModel("openai", "gpt-4o-mini"),
+				getBundledModel("openai", "gpt-4o"),
+			];
+			const selectors = models.map(model => `${model.provider}/${model.id}`);
+			const requestedModels: string[] = [];
+			const mock = createMockModel();
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: models[0], systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					const selector = `${model.provider}/${model.id}`;
+					requestedModels.push(selector);
+					mock.push(selector === selectors[2] ? { content: ["Recovered"] } : { throw: "503 overloaded_error" });
+					return mock.stream(model, context, options);
+				},
+			});
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				"retry.maxRetries": maxRetries,
+				"retry.transientSameModelAttempts": allowance,
+				"retry.fallbackChains": { default: selectors.slice(1) },
+			});
+			settings.setModelRole("default", selectors[0]);
+			session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+			const { retryStartEvents } = trackRetryEvents(session);
+			mockSchedulerWaitWithClock();
+
+			await session.prompt("Recover across the configured models");
+			await session.waitForIdle();
+
+			expect(requestedModels).toEqual(requests.map(index => selectors[index]));
+			expect(retryStartEvents.map(event => event.attempt)).toEqual([...attempts]);
+			expect(getLastAssistantMessage(session).stopReason).toBe("stop");
+		},
+	);
+
+	it("bounds transient same-model retries when no fallback is available", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const mock = createMockModel();
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (requestedModel, context, options) => {
+				mock.push({ throw: "503 overloaded_error" });
+				return mock.stream(requestedModel, context, options);
+			},
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 2,
+			"retry.transientSameModelAttempts": 12,
+			"retry.modelFallback": false,
+		});
+		session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
+		mockSchedulerWaitWithClock();
+
+		await session.prompt("Bound a failing provider");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(3);
+		expect(retryStartEvents.map(event => event.attempt)).toEqual([1, 2]);
+		expect(retryEndEvents).toMatchObject([{ success: false, attempt: 2 }]);
+		expect(getLastAssistantMessage(session).errorMessage).toContain("Retry budget exhausted");
+	});
+
+	it("renews the transient allowance after a completed retry saga", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		const requestedModels: string[] = [];
+		const mock = createMockModel({
+			responses: [
+				{ throw: "503 overloaded_error" },
+				{ content: ["First recovery"] },
+				{ throw: "503 overloaded_error" },
+				{ content: ["Second recovery"] },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (model, context, options) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				return mock.stream(model, context, options);
+			},
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.transientSameModelAttempts": 1,
+			"retry.fallbackChains": { default: [`${fallbackModel.provider}/${fallbackModel.id}`] },
+		});
+		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+		const { retryStartEvents } = trackRetryEvents(session);
+		mockSchedulerWaitWithClock();
+
+		await session.prompt("Recover the first request");
+		await session.waitForIdle();
+		await session.prompt("Recover a new request");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual(Array.from({ length: 4 }, () => `${primaryModel.provider}/${primaryModel.id}`));
+		expect(retryStartEvents.map(event => event.attempt)).toEqual([1, 1]);
+	});
+
+	it("renews the transient allowance after a real upstream route change", async () => {
+		const first = "openrouter/z-ai/glm-4.7@cerebras:low";
+		const next = "openrouter/z-ai/glm-4.7@chutes:low";
+		const model = getBundledModel("openrouter", "z-ai/glm-4.7");
+		const primary = parseModelPattern(first, [model]).model;
+		if (!primary) throw new Error("Expected primary model selector to resolve");
+		const requestedModels: string[] = [];
+		const mock = createMockModel();
+		const agent = new Agent({
+			getApiKey: requestedModel => `${requestedModel.provider}-test-key`,
+			initialState: { model: primary, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (requestedModel, context, options) => {
+				const route = (requestedModel.compat as { openRouterRouting?: { only?: string[] } } | undefined)
+					?.openRouterRouting?.only?.[0];
+				requestedModels.push(
+					`${requestedModel.provider}/${requestedModel.id}${route ? `@${route}` : ""}:${session?.thinkingLevel}`,
+				);
+				mock.push(
+					requestedModel.provider === "openai" ? { content: ["Recovered"] } : { throw: "503 overloaded_error" },
+				);
+				return mock.stream(requestedModel, context, options);
+			},
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.transientSameModelAttempts": 1,
+			"retry.fallbackChains": { default: [next, "openai/gpt-4o-mini"] },
+		});
+		settings.setModelRole("default", first);
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+			thinkingLevel: Effort.Low,
+		});
+		const { retryStartEvents } = trackRetryEvents(session);
+		mockSchedulerWaitWithClock();
+
+		await session.prompt("Recover after changing the effective request");
+		await session.waitForIdle();
+
+		expect(requestedModels.slice(0, 4)).toEqual([first, first, next, next]);
+		expect(requestedModels).toHaveLength(5);
+		expect(retryStartEvents.map(event => event.attempt)).toEqual([1, 2, 3, 4]);
+		expect(getLastAssistantMessage(session).stopReason).toBe("stop");
+	});
+
+	it("renews the transient allowance after the active effective effort changes", async () => {
+		const model = getBundledModel("openrouter", "z-ai/glm-4.7");
+		const requestedModels: string[] = [];
+		const mock = createMockModel();
+		const agent = new Agent({
+			getApiKey: requestedModel => `${requestedModel.provider}-test-key`,
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (requestedModel, context, options) => {
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}:${session?.thinkingLevel}`);
+				mock.push(
+					requestedModel.provider === "openai" ? { content: ["Recovered"] } : { throw: "503 overloaded_error" },
+				);
+				return mock.stream(requestedModel, context, options);
+			},
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.transientSameModelAttempts": 1,
+			"retry.fallbackChains": { default: ["openai/gpt-4o-mini"] },
+		});
+		settings.setModelRole("default", "openrouter/z-ai/glm-4.7:low");
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+			thinkingLevel: Effort.Low,
+		});
+		session.subscribe(event => {
+			if (event.type === "auto_retry_start" && event.attempt === 1) session?.setThinkingLevel(Effort.High);
+		});
+		const { retryStartEvents } = trackRetryEvents(session);
+		mockSchedulerWaitWithClock();
+
+		await session.prompt("Recover after an effort change");
+		await session.waitForIdle();
+
+		expect(requestedModels.slice(0, 3)).toEqual([
+			"openrouter/z-ai/glm-4.7:low",
+			"openrouter/z-ai/glm-4.7:high",
+			"openrouter/z-ai/glm-4.7:high",
+		]);
+		expect(requestedModels).toHaveLength(4);
+		expect(retryStartEvents.map(event => event.attempt)).toEqual([1, 2, 3]);
+		expect(getLastAssistantMessage(session).stopReason).toBe("stop");
+	});
 });

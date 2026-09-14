@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `retry.transientSameModelAttempts` to retry each active model on transient failures before fallback, within existing retry and wait limits; default `0` preserves built-in recovery ([#12061](https://github.com/can1357/oh-my-pi/pull/12061) by [@camjac251](https://github.com/camjac251)).
+
 ## [18.13.2] - 2026-10-27
 
 ### Added

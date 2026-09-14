@@ -562,6 +562,7 @@ describe("AgentSession retry recovery", () => {
 			primary: getBundledModel("anthropic", "claude-sonnet-4-5"),
 			fallback: getBundledModel("openai", "gpt-5.5"),
 		},
+		transientSameModelAttempts = 0,
 	): Promise<{
 		primary: string;
 		fallback: string;
@@ -593,6 +594,7 @@ describe("AgentSession retry recovery", () => {
 			"retry.baseDelayMs": 5,
 			"retry.maxDelayMs": 100,
 			"retry.maxRetries": maxRetries,
+			"retry.transientSameModelAttempts": transientSameModelAttempts,
 			"retry.modelFallback": true,
 			"retry.fallbackChains": { default: [fallback] },
 		});
@@ -647,6 +649,21 @@ describe("AgentSession retry recovery", () => {
 		]);
 
 		expect(requestedModels).toEqual([primary, primary, fallback]);
+		expect(fallbackEvents).toHaveLength(1);
+	});
+
+	it.each([1, 2])("counts the automatic socket retry toward a %i-retry transient allowance", async allowance => {
+		const { primary, fallback, requestedModels, fallbackEvents } = await runFallbackChainRecovery(
+			[
+				...Array.from({ length: allowance + 1 }, () => droppedAfterThinking),
+				{ content: ["recovered on fallback"], stopReason: "stop" },
+			],
+			10,
+			undefined,
+			allowance,
+		);
+
+		expect(requestedModels).toEqual([...Array.from({ length: allowance + 1 }, () => primary), fallback]);
 		expect(fallbackEvents).toHaveLength(1);
 	});
 
@@ -715,6 +732,23 @@ describe("AgentSession retry recovery", () => {
 		);
 
 		expect(requestedModels).toEqual([primary, fallback]);
+		expect(fallbackEvents).toHaveLength(1);
+	});
+
+	it("keeps Codex steer recovery independent of a zero transient allowance until the retry budget is spent", async () => {
+		const { primary, fallback, requestedModels, fallbackEvents } = await runFallbackChainRecovery(
+			[
+				steerRejectedAfterThinking,
+				steerRejectedAfterThinking,
+				steerRejectedAfterThinking,
+				{ content: ["recovered on fallback"], stopReason: "stop" },
+			],
+			2,
+			codexModels,
+			0,
+		);
+
+		expect(requestedModels).toEqual([primary, primary, primary, fallback]);
 		expect(fallbackEvents).toHaveLength(1);
 	});
 
