@@ -87,9 +87,16 @@ function getExclusionReason(path: string): string | undefined {
 /**
  * Parse unified diff output into per-file stats.
  * Splits on file boundaries, counts +/- lines, and filters excluded files.
+ *
+ * A path can appear more than once: mode 2 concatenates the unstaged and staged
+ * diffs, and a file with both staged and unstaged edits shows up in each. Such
+ * entries are merged so the file count stays truthful — it is the denominator
+ * for the coverage accounting the reviewers are held to.
  */
-function parseDiff(diffOutput: string): DiffStats {
+export function parseDiff(diffOutput: string): DiffStats {
 	const files: FileDiff[] = [];
+	const filesByPath = new Map<string, FileDiff>();
+	const excludedByPath = new Map<string, DiffStats["excluded"][number]>();
 	const excluded: DiffStats["excluded"] = [];
 	let totalAdded = 0;
 	let totalRemoved = 0;
@@ -119,14 +126,33 @@ function parseDiff(diffOutput: string): DiffStats {
 
 		const exclusionReason = getExclusionReason(path);
 		if (exclusionReason) {
-			excluded.push({ path, reason: exclusionReason, linesAdded, linesRemoved });
+			const seen = excludedByPath.get(path);
+			if (seen) {
+				seen.linesAdded += linesAdded;
+				seen.linesRemoved += linesRemoved;
+			} else {
+				const entry = { path, reason: exclusionReason, linesAdded, linesRemoved };
+				excludedByPath.set(path, entry);
+				excluded.push(entry);
+			}
 		} else {
-			files.push({
-				path,
-				linesAdded,
-				linesRemoved,
-				hunks: `diff --git ${chunk}`,
-			});
+			const seen = filesByPath.get(path);
+			if (seen) {
+				// Same file staged and unstaged. Keep both hunk sets — the reviewer
+				// needs to see every change to the file, not just the last one.
+				seen.linesAdded += linesAdded;
+				seen.linesRemoved += linesRemoved;
+				seen.hunks = `${seen.hunks}\ndiff --git ${chunk}`;
+			} else {
+				const entry = {
+					path,
+					linesAdded,
+					linesRemoved,
+					hunks: `diff --git ${chunk}`,
+				};
+				filesByPath.set(path, entry);
+				files.push(entry);
+			}
 			totalAdded += linesAdded;
 			totalRemoved += linesRemoved;
 		}

@@ -35,4 +35,20 @@ describe("review request prompt", () => {
 		expect(template).toContain("keep all of its findings");
 		expect(template).toContain("MUST NOT** drop findings silently");
 	});
+
+	it("requires every changed file to be accounted for", async () => {
+		const template = await Bun.file(new URL("../../src/prompts/review-request.md", import.meta.url)).text();
+
+		expect(template).toContain("### Coverage");
+		expect(template).toContain("N/M files reviewed");
+		// The denominator has to come from the rendered file list, not a model guess.
+		expect(template).toContain("{{len files}} files above");
+	});
+
+	it("blocks the 'covered by a related file' shortcut", async () => {
+		const template = await Bun.file(new URL("../../src/prompts/review-request.md", import.meta.url)).text();
+
+		expect(template).toContain("does not cover its");
+		expect(template).toContain("is not a reason to skip it");
+	});
 });

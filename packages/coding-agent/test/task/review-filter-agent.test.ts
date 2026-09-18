@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import Ajv from "ajv";
 import { loadBundledAgents } from "../../src/task/agents";
+import { jtdToJsonSchema, normalizeSchema } from "../../src/tools/jtd-to-json-schema";
 
 async function getFilterAgent() {
 	const agents = await loadBundledAgents();
@@ -27,24 +29,19 @@ describe("review_filter agent", () => {
 		expect(agent.model).toContain("pi/smol");
 	});
 
-	it("declares a removals output with ground and evidence", async () => {
+	it("enforces the removal shape through the real output validator", async () => {
 		const agent = await getFilterAgent();
-		const output = agent.output as {
-			properties?: { removals?: { elements?: { properties?: Record<string, unknown> } } };
-		};
-		const element = output.properties?.removals?.elements?.properties;
-		expect(element).toBeDefined();
-		expect(Object.keys(element ?? {}).sort()).toEqual(["evidence", "finding_id", "ground"]);
-	});
+		const { normalized, error } = normalizeSchema(agent.output);
+		expect(error).toBeUndefined();
+		const validate = new Ajv({ strict: false }).compile(jtdToJsonSchema(normalized) as object);
 
-	it("requires evidence rather than making it optional", async () => {
-		const agent = await getFilterAgent();
-		const output = agent.output as {
-			properties?: { removals?: { elements?: { optionalProperties?: Record<string, unknown> } } };
-		};
-		// Evidence being optional would let the model remove findings on vibes.
-		const optional = output.properties?.removals?.elements?.optionalProperties ?? {};
-		expect(Object.keys(optional)).not.toContain("evidence");
+		expect(validate({ removals: [] })).toBe(true);
+		expect(validate({ removals: [{ finding_id: "1.1", ground: "A", evidence: "+ foo()" }] })).toBe(true);
+
+		// Evidence being droppable would let the model remove findings on vibes.
+		expect(validate({ removals: [{ finding_id: "1.1", ground: "A" }] })).toBe(false);
+		// Grounds are a closed set; an invented one is not a licence to remove.
+		expect(validate({ removals: [{ finding_id: "1.1", ground: "C", evidence: "x" }] })).toBe(false);
 	});
 
 	it("keeps the asymmetric-cost framing and protected-subject veto", async () => {
