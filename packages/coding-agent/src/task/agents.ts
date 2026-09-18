@@ -13,6 +13,7 @@ import agentFrontmatterTemplate from "../prompts/agents/frontmatter.md" with { t
 import librarianMd from "../prompts/agents/librarian.md" with { type: "text" };
 
 import planMd from "../prompts/agents/plan.md" with { type: "text" };
+import reviewFilterMd from "../prompts/agents/review-filter.md" with { type: "text" };
 import reviewerMd from "../prompts/agents/reviewer.md" with { type: "text" };
 import taskMd from "../prompts/agents/task.md" with { type: "text" };
 
@@ -45,6 +46,7 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	{ fileName: "plan.md", template: planMd },
 	{ fileName: "designer.md", template: designerMd },
 	{ fileName: "reviewer.md", template: reviewerMd },
+	{ fileName: "review-filter.md", template: reviewFilterMd },
 	{ fileName: "librarian.md", template: librarianMd },
 	{
 		fileName: "task.md",

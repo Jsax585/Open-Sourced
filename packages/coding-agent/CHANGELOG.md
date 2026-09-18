@@ -12,6 +12,7 @@
 - Added machine-readable JSON output to `omp worktree list` for scripted inspection
 - Added the config-toggled `ponytail` ruleset extension: `ponytail.enabled` (default `false`) gates injecting the lazy-senior-dev ruleset into the system prompt, `ponytail.defaultMode` (`off`/`lite`/`full`/`ultra`, default `full`) sets the starting intensity, and `/ponytail [lite|full|ultra|off]` switches/reports the per-session mode (persisted and restored on session start). The extension self-gates when disabled and returns the correct `string[]` system prompt. The upstream `@dietrichgebert/ponytail` npm plugin stays disabled (its own extension is incompatible with omp and is not executed)
 - Added global `ponytail-review`, `ponytail-audit`, `ponytail-debt`, `ponytail-gain`, and `ponytail-help` native skills under `.omp/skills/` (vendored from ponytail, MIT)
+- Added a fact-check pass to `/review`: when a review produces 3 or more findings, a cheap `review_filter` agent re-checks each one against the diff and removes only those it can prove wrong, quoting the contradicting line. Findings on memory safety, concurrency, declaration consistency, behavioral changes, and unused parameters are never removed, and any filter failure keeps every finding. The number removed is reported rather than dropped silently
 
 ### Changed
 

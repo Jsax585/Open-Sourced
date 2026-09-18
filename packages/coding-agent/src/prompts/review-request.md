@@ -42,6 +42,22 @@ Reviewer **MUST**:
 4. Call `report_finding` per issue
 5. Call `yield` with verdict when done
 
+### After Reviews Return
+
+Findings are unfiltered. Reviewers report on limited context and some findings will be
+factually wrong about the diff.
+
+If **3 or more findings** were reported in total, run a fact-check pass before presenting them:
+
+1. Use the Task tool with `agent: "review_filter"`, one task per reviewer batch.
+2. Give each filter task that batch's diff and its findings, each with a stable id (`<batch>.<n>`).
+3. Remove findings whose id comes back in `removals`. Keep everything else.
+4. State the number removed in your summary. You **MUST NOT** drop findings silently.
+
+Skip the pass entirely below 3 findings — it is not worth the round trip.
+
+If a filter task fails, times out, or returns nothing usable, **keep all of its findings**.
+
 {{#if skipDiff}}
 ### Diff Previews
 
