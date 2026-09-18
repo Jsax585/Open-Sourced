@@ -134,7 +134,7 @@ Each `report_finding` requires:
 - `priority`: 0-3
 - `confidence`: 0.0-1.0
 - `file_path`: Path to affected file
-- `line_start`, `line_end`: Range ≤10 lines, must overlap diff
+- `line_start`, `line_end`: Range ≤10 lines, **MUST** overlap the diff. A range outside the patch is rejected with the file's changed lines; re-anchor and call again. To report a problem in unchanged code, anchor it to the changed line that exposes it.
 
 Final `yield` call (payload under `result.data`):
 - `result.data.overall_correctness`: "correct" (no bugs/blockers) or "incorrect"

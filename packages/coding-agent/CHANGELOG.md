@@ -14,6 +14,7 @@
 - Added global `ponytail-review`, `ponytail-audit`, `ponytail-debt`, `ponytail-gain`, and `ponytail-help` native skills under `.omp/skills/` (vendored from ponytail, MIT)
 - Added a fact-check pass to `/review`: when a review produces 3 or more findings, a cheap `review_filter` agent re-checks each one against the diff and removes only those it can prove wrong, quoting the contradicting line. Findings on memory safety, concurrency, declaration consistency, behavioral changes, and unused parameters are never removed, and any filter failure keeps every finding. The number removed is reported rather than dropped silently
 - Added coverage accounting to `/review`: every changed file must end the review either reviewed or skipped with a concrete reason, and the summary now reports `N/M files reviewed` along with any skipped files. Reviewing a file no longer counts as covering its header, interface, schema, or config counterpart
+- Added anchor validation to review findings: a finding whose line range does not touch the patch is now rejected with the file's actual changed lines so the reviewer can re-anchor and retry, instead of being filed against unrelated code. Validation is advisory — untracked files, non-repo directories, and git failures all accept the finding
 
 ### Changed
 

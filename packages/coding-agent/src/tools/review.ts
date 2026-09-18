@@ -17,6 +17,7 @@ import { isRecord } from "@oh-my-pi/pi-utils";
 import { Type } from "@sinclair/typebox";
 import type { Theme, ThemeColor } from "../modes/theme/theme";
 import { subprocessToolRegistry } from "../task/subprocess-tool-registry";
+import { checkAnchor } from "./review-anchor";
 
 export type FindingPriority = "P0" | "P1" | "P2" | "P3";
 
@@ -136,9 +137,15 @@ export const reportFindingTool: AgentTool<typeof ReportFindingParams, ReportFind
 	description: "Report a code review finding. Use this for each issue found. Call yield when done.",
 	parameters: ReportFindingParams,
 	intent: "omit",
-	async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		const { title, body, priority, confidence, file_path, line_start, line_end } = params;
 		const location = `${file_path}:${line_start}${line_end !== line_start ? `-${line_end}` : ""}`;
+
+		// A finding anchored outside the patch renders against unrelated code and
+		// cannot be acted on. Rejecting lets the model re-anchor and retry; the
+		// check accepts whenever it cannot prove the anchor wrong.
+		const anchor = await checkAnchor(ctx?.sessionManager?.getCwd(), file_path, line_start, line_end, signal);
+		if (!anchor.ok) throw new Error(anchor.message);
 
 		return {
 			content: [
