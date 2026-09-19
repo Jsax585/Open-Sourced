@@ -43,7 +43,7 @@ import { rewriteGitWorktreeAdd } from "./bash-worktree-rewrite";
 import { canUseInteractiveBashPty } from "./bash-pty-selection";
 import { resolveEvalBackends } from "./eval-backends";
 import { invalidateGithubCacheForBashCommand } from "./gh-cache-invalidation";
-import { serviceLogs, startService, type ServiceReady } from "../launch/services";
+import { type ServiceProgress, type ServiceReady, serviceLogs, startService } from "../launch/services";
 import { isFindEnabled } from "./jfind";
 import { formatArtifactErrorNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
 import { formatOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
@@ -357,6 +357,9 @@ const bashSchemaWithService = type({
 		"host?": "string",
 		"timeout?": "number",
 	}),
+	"progress?": type("'wake' | 'ambient' | 'off'").describe(
+		"service live output: wake starts a turn when idle; ambient rides active turns; off (default) none",
+	),
 });
 
 const bashSchemaWithAsyncAndService = type({
@@ -372,6 +375,9 @@ const bashSchemaWithAsyncAndService = type({
 		"host?": "string",
 		"timeout?": "number",
 	}),
+	"progress?": type("'wake' | 'ambient' | 'off'").describe(
+		"service live output: wake starts a turn when idle; ambient rides active turns; off (default) none",
+	),
 });
 
 type BashToolSchema =
@@ -386,6 +392,7 @@ export interface BashToolInput {
 	cwd?: string;
 	name?: string;
 	ready?: ServiceReady;
+	progress?: ServiceProgress;
 	async?: boolean;
 	pty?: boolean;
 }
@@ -1003,6 +1010,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			cwd,
 			name: rawName,
 			ready: rawReady,
+			progress,
 			async: rawAsync,
 			pty,
 		}: BashToolInput,
@@ -1044,6 +1052,8 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				pendingNotices.push("Ignored timeout: service-only; readiness follows ready.timeout.");
 			if (asyncRequested)
 				pendingNotices.push("Ignored async: service-only; a service start is asynchronous already.");
+		} else if (progress !== undefined) {
+			throw new ToolError("progress requires a service name.");
 		} else if (ready !== undefined && (ready.log !== undefined || (ready.port !== undefined && ready.port !== 0))) {
 			// Host/timeout only configure a readiness condition; neither requests one,
 			// and tool-call layers may materialize an unset port as zero. Keep service
@@ -1135,11 +1145,13 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					pty: pty ?? true,
 					ready,
 					env: sessionEnv,
+					progress,
 				},
 				signal,
 				ready === undefined ? undefined : ctx?.toolCall?.steeringSignal,
 			);
 			const daemon = service.daemon;
+			const monitored = progress === "wake" || progress === "ambient" ? progress : undefined;
 			if (service.readyInterrupted) {
 				// A queued message arrived mid-wait: return so it injects promptly.
 				// The broker keeps starting the service, inspectable via proc://.
@@ -1150,7 +1162,16 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 							text: `${name}: starting${daemon.pid === undefined ? "" : ` pid=${daemon.pid}`}\nReadiness wait interrupted early to handle an incoming message; the service is still starting and keeps running. Read proc://${name} for status.`,
 						},
 					],
-					details: { service: { name, state: daemon.state, ready: false, timedOut: false, pid: daemon.pid } },
+					details: {
+						service: {
+							name,
+							state: daemon.state,
+							ready: false,
+							timedOut: false,
+							pid: daemon.pid,
+							...(monitored ? { progress: monitored } : {}),
+						},
+					},
 				};
 			}
 			const lines = [
@@ -1162,6 +1183,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				);
 			if (daemon.exitReason) lines.push(`Reason: ${daemon.exitReason}`);
 			lines.push(...pendingNotices);
+			if (monitored)
+				lines.push(
+					`Live progress: ${monitored}; retune or detach with write proc://${daemon.name}/progress (wake, ambient, off).`,
+				);
 			const log = await serviceLogs(this.session, name, signal);
 			if (log) lines.push(log);
 			return {
@@ -1173,6 +1198,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						ready: daemon.readyAt !== undefined || daemon.state === "running",
 						timedOut: service.readyTimedOut,
 						pid: daemon.pid,
+						...(monitored ? { progress: monitored } : {}),
 					},
 				},
 			};
