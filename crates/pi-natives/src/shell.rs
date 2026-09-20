@@ -1480,7 +1480,15 @@ mod tests {
 		assert!(host_sid > 0, "getsid(0) failed: {}", std::io::Error::last_os_error());
 
 		// Build the same kind of session pi-natives uses in production.
-		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let config = ShellConfig {
+			session_env:               None,
+			snapshot_path:             None,
+			minimizer:                 None,
+			#[cfg(unix)]
+			sandbox_caps:              None,
+			#[cfg(unix)]
+			sandbox_env:               None,
+		};
 		let mut session = create_session(&config).await.expect("create_session");
 
 		// Output pipe shared between the brush child and a concurrent reader. The
