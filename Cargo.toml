@@ -24,6 +24,7 @@ pi-diff = { path = "crates/pi-diff" }
 pi-walker = { path = "crates/pi-walker" }
 
 anyhow = "1.0"
+flume = "0.11"
 async-trait = "0.1"
 dashmap = "6.1"
 globset = "0.4"
