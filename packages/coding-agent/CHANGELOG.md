@@ -39,6 +39,14 @@
 
 - Added the `_session/steering` ACP extension (advertised as `_meta.steering.supported`), so clients such as agent-shell can steer a running turn; a steer sent while a permission dialog is open cancels that dialog, and `_meta.steering.queue: "followUp"` queues a follow-up instead ([#15885](https://github.com/can1357/oh-my-pi/pull/15885) by [@marcintustin](https://github.com/marcintustin))
 - `/mcp reauth <name>` now works over ACP, RPC, and print mode (`omp -p '/mcp reauth <name>'`): it opens the browser, prints the authorization URL, reconnects the server in the running session, and print mode exits 1 when reauthorization fails ([#16046](https://github.com/can1357/oh-my-pi/pull/16046) by [@marcintustin](https://github.com/marcintustin))
+- Added batch evaluation with judge_batch(states, questions) / judgeBatch(...), including bounded background execution, incremental result and status access, per-item failure reporting, and the ability to wait for or reattach to jobs across turns or after a reset.
+- Added the jevify magic keyword to have the agent establish an evaluation rubric before classifying bulk items and inspect only items flagged by the judge.
+- Added omp web-search as an alias for omp search.
+- Added tui.titleSpinner configuration to select the terminal-title working-state spinner (braille, dots, or line).
+- Added Handlebars-based system prompt templates through SYSTEM_TEMPLATE.md, --system-prompt-template, and the SDK, with access to live settings and tool data.
+- Added configurable image, web, speech, dictation, judge, and memory model roles with ordered fallbacks, legacy backend-setting migration, and omp models --kind filtering.
+- Added native OpenRouter image generation, model-selected web-plugin search, and live discovery of TypeSafe judge models.
+- Added OMP Code Model to the standalone extension list, with direct GitHub installation and graphical configuration ([#12586](https://github.com/can1357/oh-my-pi/pull/12586) by [@cyriusweng](https://github.com/cyriusweng)).
 
 ### Changed
 
@@ -52,8 +60,6 @@
 - Updated sloppy edit tool syntax to use plain text headers instead of XML tags
 - Improved startup performance by validating provider-qualified model selectors against only the relevant provider catalog.
 - Reduced launch time for npm and compiled builds by embedding the model catalog more efficiently.
-- Added `Target.getTargets` to the browser relay's CDP surface so clients can enumerate eligible pages without attaching to or claiming them.
-- Added OMP Code Model to the standalone extension list, with direct GitHub installation and graphical configuration ([#12586](https://github.com/can1357/oh-my-pi/pull/12586) by [@cyriusweng](https://github.com/cyriusweng)).
 
 ### Fixed
 
