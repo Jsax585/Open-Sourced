@@ -18,6 +18,11 @@ brush-builtins = { path = "crates/brush-builtins-vendored" }
 # (pi-diff, pi-walker, pi-ast, pi-edit) declare `dep.workspace = true`, so the
 # versions they resolve against live here rather than in each crate manifest.
 [workspace.dependencies]
+# Intra-workspace crates vendored from upstream.
+pi-ast = { path = "crates/pi-ast" }
+pi-diff = { path = "crates/pi-diff" }
+pi-walker = { path = "crates/pi-walker" }
+
 anyhow = "1.0"
 async-trait = "0.1"
 dashmap = "6.1"
