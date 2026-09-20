@@ -331,6 +331,19 @@ mod tests {
 		assert!(out.text.contains("file changed"));
 	}
 
+	/// The minimizer's fail-safe paths (`catch_unwind` in [`apply`]) only work
+	/// when the build unwinds on panic. Under `panic = "abort"` the process
+	/// dies at the panic site and those fallbacks are unreachable, so assert
+	/// the panic strategy holds for every profile this crate ships in.
+	#[test]
+	fn panics_unwind_so_minimizer_fallbacks_stay_reachable() {
+		let caught = catch_unwind(AssertUnwindSafe(|| panic!("minimizer filter blew up")));
+		assert!(
+			caught.is_err(),
+			"panic = \"abort\" makes minimizer catch_unwind fallbacks dead code"
+		);
+	}
+
 	#[test]
 	fn enabled_config_does_not_minimize_git_status() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
