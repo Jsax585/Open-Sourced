@@ -6,6 +6,10 @@
 
 - Added `task.agentSoftRequestBudget` to give named subagents their own soft request budget, so a long-running agent can get more requests (or `0` for no guard) while scout, sonic and other agents keep theirs ([#15419](https://github.com/can1357/oh-my-pi/pull/15419) by [@will-bogusz](https://github.com/will-bogusz))
 
+### Fixed
+
+- Added `plan.executeAfterCompactionFailure` to preserve best-effort plan execution by default while allowing operators to halt after failed approval compaction ([#12765](https://github.com/can1357/oh-my-pi/pull/12765) by [@gabrielrinaldi](https://github.com/gabrielrinaldi)).
+
 ## [18.10.2] - 2026-10-12
 
 ### Added
