@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- The `tui.showLinkUrl` setting and `/link-url` command let users hide named-link URL suffixes when terminal hyperlinks keep the destination accessible ([#13162](https://github.com/can1357/oh-my-pi/pull/13162) by [@pavel-kalmykov](https://github.com/pavel-kalmykov))
+
 ### Fixed
 
 - Fixed `tool.apply_patch(...)` being rejected as an unknown tool in JavaScript eval when apply-patch editing is enabled ([#17178](https://github.com/can1357/oh-my-pi/pull/17178) by [@alphastorm](https://github.com/alphastorm))
