@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `task.agentCatalogDescriptionBudgetChars` to bound how many characters of agent descriptions reach the task tool prompt ([#10115](https://github.com/can1357/oh-my-pi/pull/10115) by [@listellm](https://github.com/listellm)).
+
 ## [18.13.3] - 2026-10-28
 
 ### Added
