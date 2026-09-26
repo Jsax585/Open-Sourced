@@ -463,6 +463,9 @@ behavior {
 		model "openrouter/google/gemini-3-pro-image"
 		model "google/gemini-3-pro-image"
 		model "deepinfra/black-forest-labs/FLUX-2-pro"
+		model "minimax-code/image-01"
+		model "minimax-code-cn/image-01"
+		model "minimax/image-01"
 	}
 	role-defaults "web" {
 		model "web/parallel"

@@ -55,6 +55,7 @@ export const RUNNER_APIS = [
 	"workers-ai-systemone",
 	"openai-images",
 	"openrouter-images",
+	"minimax-images",
 	"xai-tts",
 	"openai-speech",
 	"openai-embeddings",
@@ -71,6 +72,7 @@ export const RUNNER_API_KINDS: Record<Exclude<(typeof RUNNER_APIS)[number], "loc
 	"workers-ai-systemone": "judge",
 	"openai-images": "image",
 	"openrouter-images": "image",
+	"minimax-images": "image",
 	"xai-tts": "tts",
 	"openai-speech": "tts",
 	"openai-embeddings": "embedding",
@@ -90,6 +92,7 @@ export function runnerApiKind(api: Api): ModelKind | undefined {
 export const IMAGE_GENERATION_APIS = [
 	"openai-images",
 	"openrouter-images",
+	"minimax-images",
 	"google-generative-ai",
 	"google-gemini-cli",
 	"openai-responses",
