@@ -8506,6 +8506,7 @@ export class AgentSession implements SettingsScope {
 				onPromptQueued: options?.onPromptQueued,
 			});
 			outcome.sessionClaimed = true;
+			options?.onAccepted?.();
 			return true;
 		}
 		outcome.sessionClaimed = await this.#promptWithMessage(preparedMessage, textContent, {
