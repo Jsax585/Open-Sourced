@@ -121,7 +121,6 @@ export class SignInScene implements SetupSceneController {
 		this.#selector = this.#createSelector();
 	}
 
-
 	dispose(): void {
 		this.#disposed = true;
 		this.#customProvider?.dispose();
