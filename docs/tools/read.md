@@ -1,6 +1,6 @@
 # read
 
-> Read files, directories, archives, SQLite databases, internal resources, images, documents, and URLs through one `path` string.
+> Read files, directories, archives, SQLite databases, internal resources, images, documents, audio/video, and URLs through one `path` string.
 
 ## Source
 
@@ -103,6 +103,7 @@ Literal filesystem paths take precedence over selector interpretation, so an exi
    - A resolved target that is neither a regular file nor a directory (character or block device, FIFO, socket) is rejected with a `ToolError` naming its kind. Reads run in-process, so reading `/dev/stdin` or a FIFO would block, and `/dev/zero` would never finish, on a native thread that no timeout or abort can cancel.
 8. Directories go through `#readDirectory()`.
 9. Non-directories branch by content type:
+   - audio/video (preview grid, frame, or timestamped transcript)
    - image metadata / inline image
    - summarized macOS `sample` or V8 `.cpuprofile` report
    - editable notebook text
@@ -247,6 +248,18 @@ Literal filesystem paths take precedence over selector interpretation, so an exi
 - `images.questionTimeoutMs` limits each delegated image question; `0` disables the timeout.
 - Unsupported/undecodable image formats throw a `ToolError`.
 
+### Audio and video
+
+- Both go through system `ffmpeg`/`ffprobe`; a missing binary throws a `ToolError` with an install hint.
+- Video: a bare read returns metadata plus a 6-frame preview grid (metadata only for text-only models); `:N` extracts frame `N`, and `:1h5m42s` / `:90s` / `:1:23` extract the frame at a time.
+- Transcripts are opt-in: `stt.transcribeFiles` (default `false`, `/settings` > Interaction > Speech). Off, audio files get the ordinary binary-file notice, `:transcript` is not a selector (so `clip.mp4:transcript` is a missing path), no ffmpeg or speech work runs, and the read tool prompt omits transcripts. On, audio files (`.mp3`, `.wav`, `.m4a`, `.aac`, `.flac`, `.ogg`, `.oga`, `.opus`, `.wma`, `.aif`, `.aiff`, `.caf`) read as a timestamped transcript, and `clip.mp4:transcript` does the same for a video's first audio stream. `transcribeMediaFile()` (`packages/coding-agent/src/stt/media-transcript.ts`) decodes the track in one ffmpeg pass to 16 kHz mono, cuts it into windows of at most 30 s at the quietest point in each window's last 8 s, transcribes each window on the on-device speech worker, and shifts segment times by the window's start.
+- Each line is `[m:ss.s-m:ss.s] text` (`h:mm:ss.s` from an hour). The time format is also a video frame selector, so `clip.mp4:1:05.3` shows the frame where a line starts.
+- Line selectors page the transcript like a converted document: `talk.mp3:40-80`, `clip.mp4:transcript:40-80`, `clip.mp4:transcript:40-80:raw`.
+- The model is the first local model in the `dictation` role's chain, the one `omp setup speech` downloads (Parakeet TDT 0.6B v3 by default). Reads never download it: a missing model throws a `ToolError` that names `omp setup speech`. The source language follows `stt.language`.
+- Parakeet segments are grouped from token timestamps: they close at sentence punctuation once they span 2 s, before a 1 s pause, and at the first word boundary past 12 s. Whisper tiers use the model's own segment timestamps. Every segment is then trimmed to the voiced audio inside it (`trimSegmentsToSpeech()`, the dictation endpointer's energy test against the window's quiet level), because Whisper segments span the silence around speech and Parakeet's token times run early; a segment never grows.
+- Transcripts are memoized per path, size, mtime, model, and language (16 entries), so paging a long transcript does not rerun recognition.
+- A file without an audio stream throws `'<name>' has no audio stream to transcribe.`
+
 ### Internal URLs
 
 - `read` delegates internal and MCP-advertised schemes to `InternalUrlRouter`; the built-in registry currently includes `agent://`, `artifact://`, `attachment://`, `cfg://`, `conflict://`, `history://`, `issue://`, `local://`, `mcp://`, `memory://`, `omp://`, `pr://`, `proc://`, `rule://`, `security://`, `skill://`, `ssh://`, `vault://`, and `xd://`.
@@ -311,6 +324,7 @@ Notes: ...
 - Network
    - URL mode performs HTTP fetches, binary refetches, and alternate-endpoint probes.
 - Subprocesses / native bindings
+   - Runs system `ffmpeg`/`ffprobe` for audio and video; transcripts run on the on-device speech worker subprocess.
    - Uses Bun SQLite for `.db`/`.sqlite*`.
    - Reads archives through the unified `@oh-my-pi/pi-utils/ar` registry; ZIP is framed in `packages/utils/src/ar/zip.ts` over the `node:zlib` DEFLATE codec.
    - URL HTML rendering can delegate into site handlers and HTML-to-text backends from `packages/coding-agent/src/tools/fetch.ts`.
