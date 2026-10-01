@@ -5,7 +5,7 @@
 ### Added
 
 - Added `ApprovalDialogComponent` and the `app.approval.approve` keybinding (default `Ctrl+Enter`, `Ctrl+Q`) ([#15548](https://github.com/can1357/oh-my-pi/pull/15548) by [@H4vC](https://github.com/H4vC))
-- Markdown links render as their clickable text alone, with no appended destination, when the host turns off link URLs (`MarkdownTheme.showLinkUrls`, `setMarkdownShowLinkUrls`).
+- Markdown links render as their clickable text alone, with no appended destination, when the host turns off link URLs (`MarkdownTheme.showLinkUrls`, `setMarkdownShowLinkUrls`) ([#13960](https://github.com/can1357/oh-my-pi/pull/13960) by [@pbondoer](https://github.com/pbondoer)).
 
 ### Removed
 
