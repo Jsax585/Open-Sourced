@@ -320,6 +320,7 @@ import {
 	onTerminalAppearanceChange,
 	onThemeChange,
 	setMarkdownMermaidRendering,
+	setMarkdownShowLinkUrls,
 	setSymbolPreset,
 	startMacOSAppearanceReprobeFallback,
 	theme,
@@ -385,6 +386,7 @@ import {
 	cfgTuiRenderMermaid,
 	cfgTuiRenderSvg,
 	cfgTuiResizeScrollback,
+	cfgTuiShowLinkUrls,
 	cfgTuiTextSizing,
 	cfgTuiTight,
 	cfgTuiTitleSpinner,
@@ -452,6 +454,7 @@ const cfgLiveUiSettings = combine({
 	"tui.renderMermaid": cfgTuiRenderMermaid,
 	"tui.renderSvg": cfgTuiRenderSvg,
 	"tui.autoGraph": cfgTuiAutoGraph,
+	"tui.showLinkUrls": cfgTuiShowLinkUrls,
 	"tui.textSizing": cfgTuiTextSizing,
 	"tui.tight": cfgTuiTight,
 	"tui.hyperlinks": cfgTuiHyperlinks,
@@ -1820,6 +1823,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		setMarkdownMermaidRendering(cfgTuiRenderMermaid.get(settings));
 		setSvgFigureRendering(cfgTuiRenderSvg.get(settings));
 		this.#applyAutoGraphSetting();
+		setMarkdownShowLinkUrls(cfgTuiShowLinkUrls.get(settings));
 		this.#applyTextSizingSetting();
 		// Keep generic pi-tui renderers aligned with the coding-agent setting.
 		applyHyperlinkSetting();
@@ -3579,8 +3583,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		) {
 			rebuildChat = true;
 		}
-		if (any("tui.renderMermaid")) {
+		if (any("tui.renderMermaid", "tui.showLinkUrls")) {
 			setMarkdownMermaidRendering(cfgTuiRenderMermaid.get(this.settings));
+			setMarkdownShowLinkUrls(cfgTuiShowLinkUrls.get(this.settings));
 			rebuildChat = true;
 		}
 		if (any("tui.renderSvg")) {

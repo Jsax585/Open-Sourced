@@ -5,6 +5,7 @@
 ### Added
 
 - Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
+- Added `tui.showLinkUrls` (default on). Turning it off renders a Markdown link as its text alone, without the trailing destination; links with nothing clickable keep their suffix.
 
 ### Changed
 
