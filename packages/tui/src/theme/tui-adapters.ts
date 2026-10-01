@@ -258,6 +258,15 @@ export function setMarkdownMermaidRendering(enabled: boolean): void {
 	cachedMarkdownTheme = undefined;
 }
 
+let markdownLinkUrlsShown = true;
+
+/** Drop the ` (href)` suffix after clickable Markdown link text when disabled. */
+export function setMarkdownShowLinkUrls(show: boolean): void {
+	if (markdownLinkUrlsShown === show) return;
+	markdownLinkUrlsShown = show;
+	cachedMarkdownTheme = undefined;
+}
+
 export function getMarkdownTheme(): MarkdownTheme {
 	ensureThemeSync();
 	if (cachedMarkdownTheme !== undefined && cachedMarkdownThemeRef === theme) {
@@ -284,6 +293,7 @@ export function getMarkdownTheme(): MarkdownTheme {
 		heading: (text: string) => theme.fg("mdHeading", text),
 		link: (text: string) => theme.fg("mdLink", text),
 		linkUrl: (text: string) => theme.fg("mdLinkUrl", text),
+		showLinkUrls: markdownLinkUrlsShown,
 		code: (text: string) => theme.fg("mdCode", text),
 		codeBlock: (text: string) => theme.fg("mdCodeBlock", text),
 		codeBlockBorder: (text: string) => theme.fg("mdCodeBlockBorder", text),

@@ -41,6 +41,7 @@ export {
 	getSymbolTheme,
 	highlightCode,
 	setMarkdownMermaidRendering,
+	setMarkdownShowLinkUrls,
 	warmHighlighter,
 } from "./tui-adapters";
 
