@@ -772,6 +772,7 @@ export class ModelControls {
 				sessionModel: current,
 				sessionId: this.#host.sessionId(),
 				metadataResolver: provider => this.#host.agent.metadataForProvider(provider),
+				purpose: "routing",
 			});
 			if (!judge) return; // no TypeSafe auth -> no router -> keep current
 			try {
