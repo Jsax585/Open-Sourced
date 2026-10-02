@@ -3256,6 +3256,7 @@ export class ModelRegistry {
 			baseUrl: model.baseUrl,
 			modelId: model.id,
 			accountIds: model.accountAccess && Object.keys(model.accountAccess),
+			usageFunding: model.usageFunding,
 			signal: options?.signal,
 		});
 	}
@@ -3319,6 +3320,7 @@ export class ModelRegistry {
 			baseUrl: options?.baseUrl,
 			modelId: options?.modelId,
 			accountIds: accountAccess && Object.keys(accountAccess),
+			usageFunding: options?.usageFunding,
 			forceRefresh: options?.forceRefresh,
 			refreshReason: options?.refreshReason,
 			signal: options?.signal,
@@ -3343,6 +3345,7 @@ export class ModelRegistry {
 			...options,
 			baseUrl: target.baseUrl,
 			modelId: target.id,
+			usageFunding: target.usageFunding,
 		});
 	}
 

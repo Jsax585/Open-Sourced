@@ -3047,6 +3047,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							modelId: primary.model.id,
 							baseUrl: primary.model.baseUrl,
 							reserveFraction: cfgRetryUsageReservePct.get(settings) / 100,
+							usageFunding: primary.model.usageFunding,
 						});
 					} catch (error) {
 						logger.debug("Usage-aware model preflight failed open", {
@@ -3073,7 +3074,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							continue;
 						}
 					}
-					if (usageHealth?.state === "reserve") {
+					// An allowance rung whose accounts only serve on paid credits yields
+					// like reserve, so later rungs (and an explicit `@credits` rung) run first.
+					if (usageHealth?.state === "reserve" || usageHealth?.state === "credits") {
 						if (usageReservePolicy === "fail-closed") {
 							throw new Error(
 								`Usage reserve reached for ${primary.model.provider}/${primary.model.id}; reserve policy is fail-closed.`,
