@@ -60,6 +60,7 @@ export {
 	resolveCredentialIdentityKey,
 	SqliteAuthCredentialStore,
 } from "./auth/sqlite-credential-store";
+export * from "./auth/reserve";
 export * from "./auth/store";
 export * from "./auth/types";
 
@@ -94,7 +95,11 @@ export class AuthStorage {
 	constructor(store: AuthCredentialStore, options: AuthStorageOptions = {}) {
 		this.#options = options;
 		this.#overrides = new KeyOverrides(options.configValueResolver);
-		this.#policies = new AccountPolicies(options.accountPolicies ?? [], options.defaultReservePct);
+		this.#policies = new AccountPolicies(
+			options.accountPolicies ?? [],
+			options.defaultReservePct,
+			options.defaultReserveTaperHours,
+		);
 		this.#modules = this.#compose(store, options.sourceLabel);
 		if (options.onCredentialDisabled) this.#modules.pool.onDisabled(options.onCredentialDisabled);
 	}
@@ -138,16 +143,21 @@ export class AuthStorage {
 
 	/**
 	 * Apply new account routing policy (live `auth.accountPolicies` /
-	 * `retry.usageReservePct` change). Throws a configuration error, leaving the
-	 * active policy untouched, when a policy is malformed, a selector matches
-	 * several stored OAuth accounts, or two policies claim the same account; a
-	 * policy naming an absent account stays inactive and logs a warning.
+	 * `retry.usageReservePct` / `retry.usageReserveTaperHours` change). Throws a
+	 * configuration error, leaving the active policy untouched, when a policy is
+	 * malformed, a selector matches several stored OAuth accounts, or two policies
+	 * claim the same account; a policy naming an absent account stays inactive and
+	 * logs a warning.
 	 */
-	setAccountPolicies(config: { accountPolicies: AuthAccountPolicies; defaultReservePct: number }): void {
+	setAccountPolicies(config: {
+		accountPolicies: AuthAccountPolicies;
+		defaultReservePct: number;
+		defaultReserveTaperHours: number;
+	}): void {
 		const pool = this.#modules.pool;
 		const stored = new Map<string, AuthCredential[]>();
 		for (const provider of pool.providers()) stored.set(provider, pool.credentials(provider));
-		this.#policies.replace(config.accountPolicies, config.defaultReservePct, stored);
+		this.#policies.replace(config.accountPolicies, config.defaultReservePct, config.defaultReserveTaperHours, stored);
 	}
 
 	/**

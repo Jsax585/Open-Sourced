@@ -347,7 +347,8 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	// in sdk.ts. The gateway never touches local SQLite.
 	const accountPool = await loadAuthBrokerAccountPool();
 	const settings = await resolveEffectiveSettings();
-	const { accountPolicies, defaultReservePct } = await loadEffectiveAuthAccountPolicyConfig({ settings });
+	const { accountPolicies, defaultReservePct, defaultReserveTaperHours } =
+		await loadEffectiveAuthAccountPolicyConfig({ settings });
 	const client = createBrokerClient(brokerConfig);
 	const initialSnapshot = await fetchBrokerSnapshot(client);
 	const store = new RemoteAuthCredentialStore({
@@ -363,6 +364,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		sourceLabel: `broker ${brokerConfig.url}`,
 		accountPolicies,
 		defaultReservePct,
+		defaultReserveTaperHours,
 	});
 	await storage.credentials.reload();
 
@@ -834,7 +836,8 @@ async function runCheck(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 
 	const accountPool = await loadAuthBrokerAccountPool();
 	const settings = await resolveEffectiveSettings();
-	const { accountPolicies, defaultReservePct } = await loadEffectiveAuthAccountPolicyConfig({ settings });
+	const { accountPolicies, defaultReservePct, defaultReserveTaperHours } =
+		await loadEffectiveAuthAccountPolicyConfig({ settings });
 	const client = createBrokerClient(brokerConfig);
 	const initialSnapshot = await fetchBrokerSnapshot(client);
 	const store = new RemoteAuthCredentialStore({
@@ -846,6 +849,7 @@ async function runCheck(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		sourceLabel: `broker ${brokerConfig.url}`,
 		accountPolicies,
 		defaultReservePct,
+		defaultReserveTaperHours,
 	});
 	try {
 		await storage.credentials.reload();
