@@ -21,7 +21,7 @@ import { CliUsageError } from "./usage-error";
 
 export { getExtraHelpText };
 
-export type Mode = "text" | "json" | "rpc" | "acp" | "rpc-ui";
+export type Mode = "text" | "json" | "rpc" | "acp" | "rpc-ui" | "host";
 
 export interface Args {
 	cwd?: string;
@@ -91,6 +91,13 @@ export interface Args {
 	noTitle?: boolean;
 	/** RPC modes only: run extensions without a UI; `rpc-ui` tool UI remains enabled. */
 	noUi?: boolean;
+	/** `--mode host`: this host's registry id, 16 lowercase hex digits (`--host-id`). */
+	hostId?: string;
+	/**
+	 * `--mode host`: the absolute registry directory to publish in (`--host-registry-dir`, set by
+	 * `spawnSessionHost`). A flag, not an environment variable: the host's children must not inherit it.
+	 */
+	hostRegistryDir?: string;
 	autoApprove?: boolean;
 	approvalMode?: ApprovalMode;
 	messages: string[];
