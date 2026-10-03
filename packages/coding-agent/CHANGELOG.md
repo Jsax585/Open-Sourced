@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `skills.compressDescriptions` (default `true`). Set it to `false` to render skill descriptions in the system prompt exactly as authored, without the 100-character preview, the `skill-descriptions.db` cache, or background compression calls to the smol model ([#13291](https://github.com/can1357/oh-my-pi/issues/13291), [#13385](https://github.com/can1357/oh-my-pi/pull/13385) by [@mttzzz](https://github.com/mttzzz))
 - Added DeepSeek as a web search engine (`web/deepseek`), using DeepSeek's new Search API with your existing `DEEPSEEK_API_KEY` or stored `deepseek` credential
 - Added `el.selectText(text, { prefix?, suffix?, select? })` to the macOS `computer` tool: it selects text (or places a caret) in a background app's text field without taking focus, moving the pointer or sending keys, so typing into that field replaces it ([#15175](https://github.com/can1357/oh-my-pi/pull/15175) by [@will-bogusz](https://github.com/will-bogusz))
 - Added `{ takeover: true }` to computer-use `win.move`, so a hover that a window refuses in the background can be retried in the foreground ([#15173](https://github.com/can1357/oh-my-pi/pull/15173) by [@will-bogusz](https://github.com/will-bogusz))
