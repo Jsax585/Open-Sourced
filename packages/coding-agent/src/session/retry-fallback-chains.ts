@@ -13,7 +13,12 @@ import {
 import { resolveConfiguredModelPatterns, resolveModelRoleValue } from "../config/model-resolver";
 import { getRoleInfo, isKindRole } from "../config/model-roles";
 
-import { cfgRetryFallbackChains, cfgRetryFallbackRevertPolicy, type RetrySettings } from "./settings";
+import {
+	cfgRetryFallbackChains,
+	cfgRetryFallbackRevertPolicies,
+	cfgRetryFallbackRevertPolicy,
+	type RetrySettings,
+} from "./settings";
 
 /** Configured fallback chains keyed by role or model selector. */
 export type RetryFallbackChains = Record<string, string[]>;
@@ -342,9 +347,11 @@ export function validateRetryFallbackChains(
 	}
 }
 
-/** Returns the configured fallback-primary restoration policy. */
-export function getRetryFallbackRevertPolicy(settings: Settings): RetryFallbackRevertPolicy {
-	return cfgRetryFallbackRevertPolicy.get(settings) === "never" ? "never" : "cooldown-expiry";
+/** Returns the owning chain's policy, falling back to the global restoration policy. */
+export function getRetryFallbackRevertPolicy(settings: Settings, chainKey?: string): RetryFallbackRevertPolicy {
+	const policies = cfgRetryFallbackRevertPolicies.get(settings);
+	if (chainKey !== undefined && Object.hasOwn(policies, chainKey)) return policies[chainKey];
+	return cfgRetryFallbackRevertPolicy.get(settings);
 }
 
 /** Whether `retry.fallbackOn` lets a failure walk the fallback chain. */
