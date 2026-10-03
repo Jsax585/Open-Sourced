@@ -121,6 +121,7 @@ Plain provider credential names come from `env` entries in `packages/catalog/src
 | `INCEPTION_API_KEY`             | Inception Mercury API auth                      | Using `inception` provider                                     | Also available via `/login inception`, which validates the key with a one-token Mercury 3 request (`/v1/models` is public) |
 | `SINGULARITYAPI_DEV_API_KEY`    | SingularityAPI universal gateway auth            | Using `singularityapi-dev` provider                            | Pay-as-you-go, 300+ models; validated against `https://api.singularityapi.dev/v1/models`    |
 | `SINGULARITYAPI_TECH_API_KEY`   | SingularityAPI reserved lanes auth               | Using `singularityapi-tech` provider                           | Slot-reserved DeepSeek lanes; validated against `https://api.singularityapi.tech/v1/models` |
+| `LITHOSAI_API_KEY`              | LithosAI inference engine auth                   | Using `lithosai` provider                                      | Organization-scoped roster; validated against `https://api.lithosai.cloud/v1/models`        |
 
 ### GitHub/Copilot tokens
 

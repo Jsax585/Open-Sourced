@@ -353,6 +353,7 @@
 - Fixed Google Antigravity listing models the signed-in account cannot use, such as Claude Opus 5.5 and Sonnet 5.5 on plans without them, which failed every request with `404 Requested entity was not found`. After a successful model refresh and on subsequent restarts, only models in the account's own Antigravity model list are offered ([#14328](https://github.com/can1357/oh-my-pi/issues/14328)).
 
 ## [18.6.0] - 2026-10-03
+- Added the `lithosai` provider for LithosAI's hosted inference engine (`https://api.lithosai.cloud/v1`). The organization-scoped `/v1/models` roster is discovered at runtime and keyed on both the credential and the endpoint, so no rows are frozen into the catalog ([#14206](https://github.com/can1357/oh-my-pi/pull/14206) by [@iacore](https://github.com/iacore))
 
 ### Fixed
 
