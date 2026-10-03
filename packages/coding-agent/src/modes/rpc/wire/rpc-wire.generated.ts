@@ -424,6 +424,12 @@ export interface QueuedMessagesState {
 	liveSteered?: number;
 }
 
+/** Which queued chips carry an attachment (an image, or its source or description) their text does not; entry `i` describes chip `i`. */
+export interface QueueAttachments {
+	steering: boolean[];
+	followUp: boolean[];
+}
+
 export interface ToolDescriptor {
 	name: string;
 	description: string;
@@ -580,6 +586,8 @@ export interface RemoveQueuedMessageResult {
 	images?: ImageContent[];
 	/** Only ever `true`: the images exceeded the transport limit and were omitted; the removal still happened. */
 	imagesDropped?: boolean;
+	/** Nothing was removed: `refuseAttachments` was set and the prompt carries one. */
+	refused?: "attachments";
 }
 
 export interface PromoteQueuedMessageResult {
@@ -994,6 +1002,8 @@ export interface QueueUpdateEvent {
 	followUp: string[];
 	/** Leading `steering` entries are live steering already sent into the streaming response; `remove_queued_message` cannot reach them. */
 	liveSteered?: number;
+	/** Session-host socket clients only; absent means unknown, not that no chip carries one. */
+	attachments?: QueueAttachments;
 }
 
 /** A session event, discriminated by `type`; `set_event_filter` selects which are sent. */
@@ -1208,6 +1218,8 @@ export interface SessionSnapshot {
 	pendingUi: ExtensionUiRequest[];
 	clients: ClientInfo[];
 	streaming?: StreamingMessage;
+	/** Parallel to `state.queuedMessages`. */
+	queueAttachments?: QueueAttachments;
 	origin?: SessionOrigin;
 }
 
@@ -1623,6 +1635,10 @@ export interface FollowUpParams {
 export interface RemoveQueuedMessageParams {
 	message: string;
 	queue: QueuedMessageQueue;
+	/** `last`: the newest prompt whose chip text is `message`; default `first` (raw text, then chip text). */
+	match?: "first" | "last";
+	/** Remove nothing, answering `refused: "attachments"`, when the prompt carries an attachment. */
+	refuseAttachments?: boolean;
 }
 
 export interface PromoteQueuedMessageParams {
