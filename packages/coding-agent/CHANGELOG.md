@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `startup.scratchDir` and `/scratch` to choose the directory omp starts in when launched from your home directory, instead of the system temp directory
+
 ## [18.11.0] - 2026-10-14
 
 ### Added
