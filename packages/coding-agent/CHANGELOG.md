@@ -338,6 +338,9 @@
 ### Changed
 
 - Tool approval prompts list Approve, Approve `<tool>` for this session, and Deny again: with an empty composer, pick with the arrow keys and Enter; typing in the composer denies and steers instead, and the Deny row reads "Deny and send message" while you do
+### Added
+
+- Added experimental `advisor.judgeGate`: the `judge` model role (e.g. TypeSafe Jev) screens each in-progress advisor update, and low-risk updates wait for the next review instead of costing a full advisor turn
 
 ### Fixed
 
