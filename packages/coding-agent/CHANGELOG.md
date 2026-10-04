@@ -14,7 +14,7 @@
 - Added `/seance` and the task `seance` agent: consult a saved session read-only, in place, without resuming it or copying its artifacts; pick the source and an optional model from pickers, and send follow-ups to the consultant ([#15036](https://github.com/can1357/oh-my-pi/pull/15036) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy))
 ### Added
 
-- Added per-chain fallback revert policies so worker chains can retry their primary after cooldown while other sessions stay on their fallback ([#14193](https://github.com/can1357/oh-my-pi/pull/14193) by [@schickling-assistant](https://github.com/schickling-assistant)).
+- Added per-chain fallback revert policies so worker chains can retry their primary after cooldown while other sessions stay on their fallback, including role policy inheritance across task spawning and cold revival and warnings for orphan policy keys ([#14193](https://github.com/can1357/oh-my-pi/pull/14193) by [@schickling-assistant](https://github.com/schickling-assistant)).
 
 ### Changed
 
