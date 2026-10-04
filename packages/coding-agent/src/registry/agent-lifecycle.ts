@@ -150,6 +150,7 @@ export class AgentLifecycleManager {
 		this.#revivals.clear();
 		this.#reopens.clear();
 		this.#parks.clear();
+		this.#held.clear();
 		this.#persistedReviverFactory = undefined;
 	}
 
@@ -166,6 +167,13 @@ export class AgentLifecycleManager {
 	/** In-flight reopens of killed refs, bound to the killed ref, so concurrent {@link ensureLive} calls coalesce. */
 	readonly #reopens = new Map<string, ReopeningAgent>();
 	#unsubscribe: (() => void) | undefined;
+	/**
+	 * Ids the view layer currently displays. A held agent's idle-TTL park is
+	 * deferred so a finished agent the user is reading is never disposed (and
+	 * the view yanked back to main) while it is on screen; the timer re-arms on
+	 * unhold, so parking still happens once the view moves away.
+	 */
+	readonly #held = new Set<string>();
 	#persistedReviverFactory: PersistedSubagentReviverFactory | undefined;
 	/** Resolves the TTL applied when a cold-revived ref is adopted on demand (read per revive). */
 	#persistedReviveTtlMs: () => number = () => 0;
@@ -211,6 +219,30 @@ export class AgentLifecycleManager {
 			onRelease: opts.onRelease,
 		};
 		this.#adopted.set(id, adopted);
+		// A held (currently viewed) agent must not arm its park timer; unhold re-arms.
+		if (!this.#held.has(id)) this.#armTimer(id, adopted);
+	}
+
+	/**
+	 * Pin a viewed agent: defer its idle-TTL park so a finished agent the user is
+	 * reading stays live instead of being disposed under the view. Idempotent.
+	 */
+	hold(id: string): void {
+		if (this.#held.has(id)) return;
+		this.#held.add(id);
+		const adopted = this.#adopted.get(id);
+		if (adopted?.timer) {
+			clearTimeout(adopted.timer);
+			adopted.timer = undefined;
+		}
+	}
+
+	/** Release a hold; re-arms the idle-TTL park when the agent is still live and idle. */
+	unhold(id: string): void {
+		if (!this.#held.delete(id)) return;
+		const adopted = this.#adopted.get(id);
+		const ref = this.#registry.get(id);
+		if (!adopted || adopted.ref !== ref || !ref || ref.status !== "idle" || !ref.session) return;
 		this.#armTimer(id, adopted);
 	}
 
@@ -291,6 +323,8 @@ export class AgentLifecycleManager {
 	async park(id: string): Promise<void> {
 		const existing = this.#parks.get(id);
 		if (existing) return existing.promise;
+		// A held (viewed) agent is never parked: disposing it would blank the view.
+		if (this.#held.has(id)) return;
 
 		const adopted = this.#adopted.get(id);
 		if (!adopted) return;
@@ -538,6 +572,7 @@ export class AgentLifecycleManager {
 		const ref = currentMatches ? current : adoptedMatches ? adopted.ref : undefined;
 		const onRelease = adopted && adopted.ref === ref ? adopted.onRelease : undefined;
 		if (!ref) return false;
+		this.#held.delete(id);
 		if (adopted?.ref === ref) {
 			clearTimeout(adopted.timer);
 			this.#adopted.delete(id);
@@ -617,6 +652,7 @@ export class AgentLifecycleManager {
 		);
 		this.#revivals.clear();
 		this.#parks.clear();
+		this.#held.clear();
 		this.#persistedReviverFactory = undefined;
 		if (AgentLifecycleManager.#global === this) AgentLifecycleManager.#global = undefined;
 	}
@@ -665,6 +701,7 @@ export class AgentLifecycleManager {
 
 	#armTimer(id: string, adopted: AdoptedAgent): void {
 		if (adopted.idleTtlMs <= 0) return;
+		if (this.#held.has(id)) return;
 		clearTimeout(adopted.timer);
 		const timer = setTimeout(() => {
 			adopted.timer = undefined;
@@ -676,10 +713,14 @@ export class AgentLifecycleManager {
 
 	#onRegistryEvent(event: RegistryEvent): void {
 		const adopted = this.#adopted.get(event.ref.id);
-		if (!adopted || adopted.ref !== event.ref) return;
+		if (!adopted || adopted.ref !== event.ref) {
+			if (event.type === "removed") this.#held.delete(event.ref.id);
+			return;
+		}
 		if (event.type === "removed") {
 			clearTimeout(adopted.timer);
 			this.#adopted.delete(event.ref.id);
+			this.#held.delete(event.ref.id);
 			return;
 		}
 		if (event.type !== "status_changed") return;
@@ -691,6 +732,8 @@ export class AgentLifecycleManager {
 		} else if (event.ref.status === "idle") {
 			// Don't re-arm while a park is in flight — the park owns the transition.
 			if (this.#parks.has(event.ref.id)) return;
+			// A held (viewed) agent stays live until the view moves away.
+			if (this.#held.has(event.ref.id)) return;
 			this.#armTimer(event.ref.id, adopted);
 		}
 	}
