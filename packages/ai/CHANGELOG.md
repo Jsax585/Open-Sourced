@@ -6,12 +6,17 @@
 
 - Added `PI_ANTHROPIC_API_VERSION=2026-10-21` to send Anthropic API version 2026-10-21 to the official Anthropic API; sampling parameters are omitted under that version, which rejects them ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 
+### Changed
+
+- Claude Pro/Max (OAuth) requests now identify as Claude Code 2.1.289 and its bundled Anthropic SDK 0.128.0 ([#14366](https://github.com/can1357/oh-my-pi/pull/14366) by [@apoc](https://github.com/apoc)).
+
 ### Fixed
 
 - Fixed Xiaomi MiMo API-key login failing with `Unsupported model mimo-v2.5` after the V2.5 retirement ([#16727](https://github.com/can1357/oh-my-pi/pull/16727) by [@LiPu-jpg](https://github.com/LiPu-jpg))
 - Fixed non-streaming requests reporting a missing API key when the credential resolver actually failed, hiding auth broker, OAuth and network outages behind "No API key" ([#16655](https://github.com/can1357/oh-my-pi/pull/16655) by [@adi-IL](https://github.com/adi-IL))
 - Fixed auth-gateway requests failing when a client requests an unsupported thinking effort; the gateway now uses the nearest supported tier ([#16671](https://github.com/can1357/oh-my-pi/pull/16671) by [@codyw912](https://github.com/codyw912))
 - Fixed Anthropic tools whose parameters are a root `anyOf`/`oneOf`/`allOf` of objects being sent as an empty closed object that only accepts `{}`; variant properties now fold into the root `input_schema` ([#16630](https://github.com/can1357/oh-my-pi/issues/16630))
+- Fixed Claude Pro/Max (OAuth) requests carrying a billing-header `cch` value that no longer matched current Claude Code, which computes it without the model, `max_tokens` and fallback fields ([#14366](https://github.com/can1357/oh-my-pi/pull/14366) by [@apoc](https://github.com/apoc)).
 
 ## [18.12.5] - 2026-10-21
 
@@ -438,13 +443,6 @@
 - Fixed the auth broker exiting when a background OAuth refresh sweep cannot read the credential store; the failure is now logged and the next sweep retries ([#14538](https://github.com/can1357/oh-my-pi/issues/14538))
 - Fixed Anthropic OAuth billing headers changing during developer-first sessions and side turns, preserving the prompt-cache prefix ([#14495](https://github.com/can1357/oh-my-pi/issues/14495)).
 - Fixed OpenAI-compatible chat-completions gateways recording completed turns as client-cancelled because the connection closed before their `[DONE]` sentinel arrived ([#14481](https://github.com/can1357/oh-my-pi/issues/14481)).
-### Changed
-
-- Claude Pro/Max (OAuth) requests now identify as Claude Code 2.1.289 and its bundled Anthropic SDK 0.128.0.
-
-### Fixed
-
-- Fixed Claude Pro/Max (OAuth) requests carrying a billing-header `cch` value that no longer matched current Claude Code, which computes it without the model, `max_tokens` and fallback fields.
 
 ## [18.6.1] - 2026-10-04
 
