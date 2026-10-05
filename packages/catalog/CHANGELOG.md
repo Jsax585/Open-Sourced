@@ -194,6 +194,7 @@
 - Added 15 Snowflake Cortex models with account-specific endpoints, Cortex compatibility rules, and estimated account-billed pricing ([#14507](https://github.com/can1357/oh-my-pi/pull/14507) by [@jorgoose](https://github.com/jorgoose)).
 - Added the `image-tokenization` axis, which declares how GPT-5.2+, Claude and Gemini 3 lines bill input images on every host, with wire-API fallback rules for other models, plus `imageTokens()` to price one image ([#14286](https://github.com/can1357/oh-my-pi/pull/14286) by [@will-bogusz](https://github.com/will-bogusz)).
 - Added the `exllama3` provider for TabbyAPI, the official ExLlamaV3 server. Discovery takes the context window the server is actually running (`meta.n_ctx`, then `parameters.max_seq_len`, then trained context, then `/props`) rather than a per-model guess, and Qwen thinking rides `chat_template_kwargs`, the one dialect TabbyAPI guarantees reaches the chat template.
+- Added the `exllama3` provider for TabbyAPI, the official ExLlamaV3 server. Discovery takes the context window the server is actually running (`meta.n_ctx`, then `parameters.max_seq_len`, then trained context, then `/props`) rather than a per-model guess, and Qwen thinking rides `chat_template_kwargs`, the one dialect TabbyAPI guarantees reaches the chat template ([#14489](https://github.com/can1357/oh-my-pi/pull/14489) by [@tapstoop](https://github.com/tapstoop)).
 
 ### Changed
 
