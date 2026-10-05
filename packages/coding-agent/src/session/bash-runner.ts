@@ -11,6 +11,8 @@ import {
 import type { ExtensionRunner } from "../extensibility/extensions";
 import { outputMeta } from "../tools/output-meta";
 import { clampTimeout } from "../tools/tool-timeouts";
+import type { AgentSession } from "./agent-session";
+import { messagingEnvFor } from "./messaging-host";
 import type { BashExecutionMessage } from "./messages";
 import type { SessionManager } from "./session-manager";
 
@@ -49,6 +51,7 @@ export interface BashSessionTransition {
 
 /** Capabilities the bash runner borrows from its owning session. */
 export interface BashRunnerHost {
+	session: AgentSession;
 	agent: Agent;
 	sessionManager: SessionManager;
 	settings: Settings;
@@ -113,6 +116,7 @@ export class BashRunner {
 							?.getRegisteredTool("bash")
 							?.definition.shellEnv?.({ command, cwd, env: { ...this.#host.settings.getShellConfig().env } })
 					: undefined;
+			const messagingEnv = messagingEnvFor(this.#host.session);
 
 			const abortController = new AbortController();
 			this.#abortControllers.add(abortController);
@@ -128,7 +132,8 @@ export class BashRunner {
 					cwd,
 					timeout: clampTimeout("bash", undefined, cfgToolsMaxTimeout.get(this.#host.settings)) * 1000,
 					onMinimizedSave: originalText => this.#saveOriginalArtifact(target, originalText),
-					env: shellEnv,
+					env: { ...shellEnv, ...messagingEnv.set },
+					stripEnv: this.#host.session.messaging ? undefined : messagingEnv.strip,
 					useUserShell: options?.useUserShell,
 					pty: options?.pty,
 				});
