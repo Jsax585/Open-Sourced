@@ -549,6 +549,7 @@ import { cfgSteeringMode } from "../modes/settings";
 import { cfgDisabledProviders, cfgModelRoles } from "../config/model-settings";
 import { cfgEvalJs, cfgEvalPy, cfgEvalToolsEnabled, cfgEvalWorkpoolFreshAgents } from "../eval/settings";
 import { cfgExtensions, type SkillsSettings } from "../extensibility/settings";
+import { cfgUserResourceExclusions } from "../extensibility/resource-settings";
 import {
 	cfgImagesAutoResize,
 	cfgMagicKeyword,
@@ -1946,6 +1947,7 @@ export class AgentSession implements SettingsScope {
 				mode: config.disableExtensionDiscovery ? "explicit-only" : "merge",
 				configured: cfgExtensions.get(this.settings),
 				configuredLevel: this.settings.extensionsSourceLevel(),
+				resourceExclusions: cfgUserResourceExclusions.get(this.settings),
 			}));
 		this.#preparedExtensions = config.preparedExtensions;
 		this.#extensionPaths = config.extensionPaths;
