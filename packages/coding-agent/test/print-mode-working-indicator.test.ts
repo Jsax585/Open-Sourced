@@ -193,6 +193,7 @@ function createExtensionCommandSession(
 	});
 	vi.spyOn(messagingHost, "bindSessionMessaging").mockResolvedValue({
 		ready: () => {},
+		stopReceiving: () => {},
 		dispose: async () => {},
 	});
 	return delayed;

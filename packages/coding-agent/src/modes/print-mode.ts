@@ -129,17 +129,15 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 	let signalReason: postmortem.Reason | undefined;
 	const messaging = await bindSessionMessaging(session, {
 		directPrint: options.name === undefined,
-		exportProcessEnv: true,
 		claimNames: false,
 	});
-	let receivingClosed: Promise<void> | undefined;
-	const stopReceiving = (): void => {
-		receivingClosed ??= messaging.dispose();
-	};
+	let disposedMessaging: Promise<void> | undefined;
+	const stopReceiving = () => messaging.stopReceiving();
+	const disposeMessaging = () => (disposedMessaging ??= messaging.dispose());
 	const cancelSignalTeardown = postmortem.register("print-mode-session", reason => {
 		signalReason = reason;
 		stopReceiving();
-		return receivingClosed!.then(() =>
+		return disposeMessaging().then(() =>
 			session.dispose({ reason, mnemopiConsolidateTimeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS }),
 		);
 	});
@@ -151,12 +149,12 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 			() => signalReason !== undefined,
 			messaging.ready,
 			stopReceiving,
-			() => receivingClosed ?? Promise.resolve(),
+			disposeMessaging,
 		);
 	} finally {
 		cancelSignalTeardown();
 		stopReceiving();
-		await receivingClosed;
+		await disposeMessaging();
 	}
 }
 
@@ -166,7 +164,7 @@ async function runPrintModeCore(
 	signalTeardownActive: () => boolean,
 	messagingReady: () => void,
 	stopReceiving: () => void,
-	receivingClosed: () => Promise<void>,
+	disposeMessaging: () => Promise<void>,
 ): Promise<number> {
 	const { mode, messages = [], initialMessage, initialImages, printThoughts, planYolo = false } = options;
 	session.disableStopTimeTodoReminders();
@@ -379,7 +377,7 @@ async function runPrintModeCore(
 	}
 	stopReceiving();
 	if (receivingEnabled) await session.waitForIdle();
-	await receivingClosed();
+	await disposeMessaging();
 	if (!receivingEnabled || !dispatched) assistantMsg = session.getLastAssistantMessage();
 
 	// From this point onward a late blocker must be recorded without starting a
