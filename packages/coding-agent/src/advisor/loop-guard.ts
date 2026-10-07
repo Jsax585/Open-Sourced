@@ -1,9 +1,9 @@
 import type { AgentMessage, AgentTurnEndContext } from "@oh-my-pi/pi-agent-core";
 import type { UserMessage } from "@oh-my-pi/pi-ai";
-import { ToolCallLoopGuard } from "@oh-my-pi/pi-ai/utils/tool-call-loop-guard";
+import type { ToolCallLoopGuard } from "@oh-my-pi/pi-ai/utils/tool-call-loop-guard";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
-import { renderToolCallLoopRedirect } from "../session/tool-call-loop-redirect";
+import { CumulativeToolCallLoopGuard, renderAdvisorToolCallLoopRedirect } from "./cumulative-loop-guard";
 
 import {
 	cfgModelToolCallLoopGuardEnabled,
@@ -83,7 +83,7 @@ export class AdvisorLoopGuard {
 		// message would be dropped before the request and correct nothing.
 		const redirect: UserMessage = {
 			role: "user",
-			content: [{ type: "text", text: renderToolCallLoopRedirect(detection) }],
+			content: [{ type: "text", text: renderAdvisorToolCallLoopRedirect(detection) }],
 			synthetic: true,
 			attribution: "agent",
 			timestamp: Date.now(),
@@ -105,7 +105,7 @@ export class AdvisorLoopGuard {
 			.filter((tool): tool is string => typeof tool === "string" && tool.length > 0);
 		const settingsKey = `${threshold}:${JSON.stringify(exemptTools)}`;
 		if (!this.#guard || this.#guardSettingsKey !== settingsKey) {
-			this.#guard = new ToolCallLoopGuard({ threshold, exemptTools });
+			this.#guard = new CumulativeToolCallLoopGuard({ threshold, exemptTools });
 			this.#guardSettingsKey = settingsKey;
 		}
 		return this.#guard;

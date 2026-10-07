@@ -806,4 +806,58 @@ describe("advisor tool-call loop guard", () => {
 		// Nine requests: eight repeated tool-call turns plus the final stop.
 		expect(contexts).toHaveLength(9);
 	});
+
+	it("bounds an advisor alternating two identical calls: one corrective, then abort", () => {
+		const settings = Settings.isolated({
+			"model.toolCallLoopGuard.enabled": true,
+			"model.toolCallLoopGuard.threshold": 3,
+		});
+		const messages: AgentMessage[] = [];
+		const aborts: Error[] = [];
+		const guard = new AdvisorLoopGuard({
+			settings,
+			name: "test",
+			liveMessages: () => messages,
+			appendMessage: message => messages.push(message),
+			abort: reason => aborts.push(reason),
+		});
+		let turns = 0;
+		const alternate = (): void => {
+			const id = `tc-${turns}`;
+			const path = turns % 2 === 0 ? "a.ts" : "b.ts";
+			turns++;
+			const message: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "toolCall", id, name: "read", arguments: { path } }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "test",
+				usage: zeroUsage,
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			};
+			const result: ToolResultMessage = {
+				role: "toolResult",
+				toolCallId: id,
+				toolName: "read",
+				content: [{ type: "text", text: "ENOENT" }],
+				isError: true,
+				timestamp: Date.now(),
+			};
+			guard.recordTurn(messages, { message, toolResults: [result], willContinue: true });
+		};
+
+		// A/B alternation never forms a consecutive run; the cumulative tally
+		// trips once one call reaches five times the threshold.
+		while (messages.length === 0 && turns < 100) alternate();
+		expect(turns).toBe(29);
+		expect(aborts).toHaveLength(0);
+		const corrective = JSON.stringify(messages);
+		expect(corrective).toContain("You called `read` 15 times with identical arguments");
+		expect(corrective).not.toContain("consecutive");
+
+		while (aborts.length === 0 && turns < 200) alternate();
+		expect(turns).toBe(58);
+		expect(messages).toHaveLength(1);
+	});
 });
