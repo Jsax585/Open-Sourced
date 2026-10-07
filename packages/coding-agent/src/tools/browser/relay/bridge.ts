@@ -755,6 +755,22 @@ export class RelayBridge {
 			this.#replyError(conn, msg, "relay extension is not connected");
 			return false;
 		}
+		// Forwarded raw, createTarget honors `newWindow` and opens a window apart
+		// from the user's; create the tab through the page's own browser instead.
+		if (msg.method === "Target.createTarget") {
+			await this.#createTab(conn, msg, inst);
+			return true;
+		}
+		// Relay-minted target ids (e.g. from the createTarget above) mean nothing
+		// to Chrome; resolve them through the relay's own handlers.
+		if (
+			(msg.method === "Target.closeTarget" || msg.method === "Target.activateTarget") &&
+			typeof msg.params?.targetId === "string" &&
+			parseTargetId(msg.params.targetId)
+		) {
+			await this.#handleBrowserCommand(conn, msg);
+			return true;
+		}
 		try {
 			const result = await this.#rpc(
 				{
@@ -773,6 +789,18 @@ export class RelayBridge {
 			this.#replyError(conn, msg, err instanceof Error ? err.message : String(err));
 			return false;
 		}
+	}
+
+	/** Open a tab in `inst`'s browser and claim it: creating a tab is an explicit act of driving it. */
+	async #createTab(conn: CdpConnection, msg: CdpCommand, inst: ExtInstance): Promise<void> {
+		const url = typeof msg.params?.url === "string" && msg.params.url.length > 0 ? msg.params.url : "about:blank";
+		// CDP `background: true` creates the tab without selecting it; an extension that predates `active` ignores it.
+		const active = msg.params?.background === true ? false : undefined;
+		const result = (await this.#rpc({ op: "createTab", url, active }, inst)) as { tab: TabSnapshot };
+		this.#onTabUpsert(result.tab, inst.instanceId);
+		const createdKey = tabKeyOf(inst.code, result.tab.tabId);
+		this.#claimTab(conn, createdKey);
+		this.#reply(conn, msg, { targetId: pageTargetIdFromKey(createdKey) });
 	}
 
 	/**
@@ -924,21 +952,12 @@ export class RelayBridge {
 				return;
 			}
 			case "Target.createTarget": {
-				const url =
-					typeof msg.params?.url === "string" && msg.params.url.length > 0 ? msg.params.url : "about:blank";
 				const inst = this.#lastHello();
 				if (!inst || !inst.socket) {
 					this.#replyError(conn, msg, "relay extension is not connected");
 					return;
 				}
-				// CDP `background: true` creates the tab without selecting it; an extension that predates `active` ignores it.
-				const active = msg.params?.background === true ? false : undefined;
-				const result = (await this.#rpc({ op: "createTab", url, active }, inst)) as { tab: TabSnapshot };
-				this.#onTabUpsert(result.tab, inst.instanceId);
-				// Creating a tab is an explicit act of driving it.
-				const createdKey = tabKeyOf(inst.code, result.tab.tabId);
-				this.#claimTab(conn, createdKey);
-				this.#reply(conn, msg, { targetId: pageTargetIdFromKey(createdKey) });
+				await this.#createTab(conn, msg, inst);
 				return;
 			}
 			case "Target.closeTarget": {

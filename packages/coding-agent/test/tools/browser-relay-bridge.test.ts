@@ -1277,6 +1277,131 @@ describe("RelayBridge multiple extension instances", () => {
 		expect(chromeSends).toEqual([1]);
 		expect(edgeSends).toEqual([1]);
 	});
+
+	it("routes page-requested target lifecycle commands through the page's own browser", async () => {
+		const bridge = new RelayBridge({});
+		const chrome = new FakeExtSocket();
+		const edge = new FakeExtSocket();
+		connectInstance(bridge, chrome, "chrome", [
+			tab({ tabId: 1, title: "Chrome tab", url: "https://chrome.example/" }),
+		]);
+		// Edge helloes last, so browser-wide requests route there.
+		connectInstance(bridge, edge, "edge", [tab({ tabId: 1, title: "Edge tab", url: "https://edge.example/" })]);
+		const cdp = new FakeCdpSocket();
+		const connId = bridge.cdpConnected(cdp);
+		const session = await attachPage(bridge, chrome, cdp, connId, 1, "chrome");
+
+		const createId = ++msgSeq;
+		bridge.cdpMessage(
+			connId,
+			JSON.stringify({
+				id: createId,
+				sessionId: session,
+				method: "Target.createTarget",
+				params: { url: "https://example.com/", newWindow: true },
+			}),
+		);
+		await flush();
+		expect(chrome.rpcs("send").filter(rpc => rpc.method === "Target.createTarget")).toHaveLength(0);
+		expect(edge.rpcs("createTab")).toHaveLength(0);
+		expect(chrome.rpcs("createTab").map(rpc => rpc.url)).toEqual(["https://example.com/"]);
+		ack(bridge, chrome, "createTab", {
+			tab: tab({ tabId: 9, title: "Created", url: "https://example.com/" }),
+		});
+		await flush();
+		expect(cdp.messages.find(message => message.id === createId)?.result).toEqual({
+			targetId: `PAGE${instanceCode("chrome")}.9`,
+		});
+
+		const activateId = ++msgSeq;
+		bridge.cdpMessage(
+			connId,
+			JSON.stringify({
+				id: activateId,
+				sessionId: session,
+				method: "Target.activateTarget",
+				params: { targetId: `PAGE${instanceCode("chrome")}.9` },
+			}),
+		);
+		await flush();
+		expect(chrome.rpcs("activateTab").map(rpc => rpc.tabId)).toEqual([9]);
+		ack(bridge, chrome, "activateTab");
+		await flush();
+		expect(cdp.messages.find(message => message.id === activateId)?.result).toEqual({});
+
+		const closeId = ++msgSeq;
+		bridge.cdpMessage(
+			connId,
+			JSON.stringify({
+				id: closeId,
+				sessionId: session,
+				method: "Target.closeTarget",
+				params: { targetId: `PAGE${instanceCode("chrome")}.9` },
+			}),
+		);
+		await flush();
+		expect(chrome.rpcs("removeTab").map(rpc => rpc.tabId)).toEqual([9]);
+		ack(bridge, chrome, "removeTab");
+		await flush();
+		expect(cdp.messages.find(message => message.id === closeId)?.result).toEqual({ success: true });
+
+		const rawId = ++msgSeq;
+		bridge.cdpMessage(
+			connId,
+			JSON.stringify({
+				id: rawId,
+				sessionId: session,
+				method: "Target.activateTarget",
+				params: { targetId: "chrome-target-id" },
+			}),
+		);
+		await flush();
+		expect(chrome.pending("send").map(rpc => [rpc.method, rpc.params])).toEqual([
+			["Target.activateTarget", { targetId: "chrome-target-id" }],
+		]);
+		ack(bridge, chrome, "send", {});
+		await flush();
+		expect(cdp.messages.find(message => message.id === rawId)?.result).toEqual({});
+
+		const rawCloseId = ++msgSeq;
+		bridge.cdpMessage(
+			connId,
+			JSON.stringify({
+				id: rawCloseId,
+				sessionId: session,
+				method: "Target.closeTarget",
+				params: { targetId: "chrome-target-id" },
+			}),
+		);
+		await flush();
+		expect(chrome.pending("send").map(rpc => [rpc.method, rpc.params])).toEqual([
+			["Target.closeTarget", { targetId: "chrome-target-id" }],
+		]);
+		ack(bridge, chrome, "send", { success: true });
+		await flush();
+		expect(cdp.messages.find(message => message.id === rawCloseId)?.result).toEqual({ success: true });
+	});
+
+	it("keeps browser-level target creation on the last hello instance", async () => {
+		const bridge = new RelayBridge({});
+		const chrome = new FakeExtSocket();
+		const edge = new FakeExtSocket();
+		connectInstance(bridge, chrome, "chrome", []);
+		connectInstance(bridge, edge, "edge", []);
+		const cdp = new FakeCdpSocket();
+		const connId = bridge.cdpConnected(cdp);
+		bridge.cdpMessage(
+			connId,
+			JSON.stringify({
+				id: ++msgSeq,
+				method: "Target.createTarget",
+				params: { url: "https://example.com/", newWindow: true },
+			}),
+		);
+		await flush();
+		expect(chrome.rpcs("createTab")).toHaveLength(0);
+		expect(edge.rpcs("createTab").map(rpc => rpc.url)).toEqual(["https://example.com/"]);
+	});
 });
 
 describe("RelayBridge last-hello fallback and offline instance pruning", () => {
