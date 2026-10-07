@@ -391,32 +391,58 @@ export async function fillViaHandle(
 	await untilAborted(signal, () => type(value));
 }
 
-/** Resolve text-query matches to the first visible clickable candidate in document order. */
+/**
+ * Resolve text-query matches to the first visible clickable candidate in document order.
+ *
+ * Off-screen candidates are scrolled into view before the actionability check, and positions are
+ * compared in document coordinates; `isIntersectingViewport` is avoided because it waits on an
+ * `IntersectionObserver` callback that background tabs never deliver.
+ */
 export async function resolveActionableQueryHandlerClickTarget(
 	handles: ElementHandle[],
+	signal?: AbortSignal,
 ): Promise<ElementHandle | null> {
 	const candidates: Array<{ handle: ElementHandle; x: number; y: number; owned: boolean }> = [];
 	for (const handle of handles) {
 		let candidate = handle;
 		let owned = false;
 		try {
-			const proxy = await handle.evaluateHandle(el =>
-				(el as Element).closest('a,button,[role="button"],[role="link"],input[type="button"],input[type="submit"]'),
+			const proxy = await untilAborted(signal, () =>
+				handle.evaluateHandle(el =>
+					(el as Element).closest(
+						'a,button,[role="button"],[role="link"],input[type="button"],input[type="submit"]',
+					),
+				),
 			);
 			const element = proxy.asElement();
 			if (element) {
 				candidate = element;
 				owned = candidate !== handle;
 			} else await proxy.dispose();
-			const rect = (await candidate.evaluate(el => {
-				const box = (el as Element).getBoundingClientRect();
-				return { x: box.left, y: box.top, width: box.width, height: box.height };
-			})) as { x: number; y: number; width: number; height: number };
-			if (rect.width >= 1 && rect.height >= 1 && (await candidate.isIntersectingViewport())) {
+			const rect = (await untilAborted(signal, () =>
+				candidate.evaluate(el => {
+					const element = el as unknown as PageElement;
+					const page = globalThis as unknown as PageGlobals & { scrollX: number; scrollY: number };
+					let box = element.getBoundingClientRect();
+					if (box.bottom <= 0 || box.right <= 0 || box.top >= page.innerHeight || box.left >= page.innerWidth) {
+						element.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
+						box = element.getBoundingClientRect();
+					}
+					return { x: box.left + page.scrollX, y: box.top + page.scrollY };
+				}),
+			)) as { x: number; y: number };
+			const actionable = await isClickActionable(candidate, signal);
+			if (actionable.ok || actionable.coveredBy) {
 				candidates.push({ handle: candidate, x: rect.x, y: rect.y, owned });
 			} else if (owned) await candidate.dispose().catch(() => undefined);
-		} catch {
+		} catch (error) {
 			if (owned) await candidate.dispose().catch(() => undefined);
+			if (signal?.aborted || (signal !== undefined && error === signal.reason)) {
+				for (const kept of candidates) {
+					if (kept.owned) await kept.handle.dispose().catch(() => undefined);
+				}
+				throw error;
+			}
 		}
 	}
 	candidates.sort((a, b) => a.y - b.y || a.x - b.x);
@@ -442,7 +468,7 @@ export async function clickQueryHandlerText(
 		const handles = (await untilAborted(clickSignal, () => page.$$(selector))) as ElementHandle[];
 		let target: ElementHandle | null = null;
 		try {
-			target = await resolveActionableQueryHandlerClickTarget(handles);
+			target = await resolveActionableQueryHandlerClickTarget(handles, clickSignal);
 			if (!target) {
 				await untilAborted(clickSignal, () => Bun.sleep(50));
 				continue;
