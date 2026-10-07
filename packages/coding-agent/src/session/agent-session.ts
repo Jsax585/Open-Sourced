@@ -122,6 +122,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import {
 	DEFAULT_PREWALK_TARGET,
 	disabledProviderIds,
+	formatModelStringWithRouting,
 	getModelMatchPreferences,
 	type ResolvedModelRoleValue,
 	resolveCliModel,
@@ -11858,7 +11859,7 @@ export class AgentSession implements SettingsScope {
 						? resolveSessionModelSelector(this.#modelRegistry, targetModelStrings[0])?.model
 						: undefined;
 				if (explicitModel && !(savedModel && modelsAreEqual(savedModel, targetModel))) {
-					this.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`);
+					this.sessionManager.appendModelChange(formatModelStringWithRouting(targetModel));
 				}
 			}
 
