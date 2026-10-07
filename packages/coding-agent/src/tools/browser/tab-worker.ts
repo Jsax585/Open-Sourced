@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -884,20 +885,40 @@ class RendererCrashedError extends ToolError {}
 
 interface RunPageScope {
 	page: Page;
+	/** Run user code in this scope's async context; the listeners it registers become run-owned. */
+	enter<T>(fn: () => T): T;
 	/** Restore the page's own listener methods and remove every handler this run registered. */
 	detach(): void;
 	/** Return request interception to the tab's persistent route/allowlist state. */
 	restoreInterception(): Promise<void>;
 }
 
+/** A run-owned registration: `listener` is what the emitter holds, `handler` what the run passed. */
+interface OwnedListener {
+	handler: unknown;
+	listener: unknown;
+}
+
+/** Async context of one run's user code; the store is the owning run page scope's token. */
+const runPageContext = new AsyncLocalStorage<object>();
+
 /**
  * Expose the tab page while retaining every event handler created by this run.
  * The facade removes only run-owned listeners, preserving worker-level routing,
  * request logging, dialogs, and console capture. Raw interception is restored
  * to the tab's persistent route/allowlist state after a run that changed it.
+ *
+ * A registration is run-owned only when it is made from this run's async context
+ * (`enter`). Puppeteer's internal subscriptions are made from the CDP socket
+ * callback, outside that context (in-flight request tracking subscribes on every
+ * `request` event), so they pass through untracked and outlive the run; removing
+ * them left `waitForNetworkIdle` waiting on a request an earlier run started.
+ * Owned handlers are registered wrapped so they run in that context too, keeping a
+ * listener added from inside a run-owned handler run-owned.
  */
 function createRunPageScope(page: Page, restoreInterception: () => Promise<void>): RunPageScope {
-	const handlers = new Map<unknown, unknown[]>();
+	const handlers = new Map<unknown, OwnedListener[]>();
+	const owner = {};
 	const on = page.on;
 	const off = page.off;
 	const once = page.once;
@@ -909,55 +930,74 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 	const interceptionDescriptor = Object.getOwnPropertyDescriptor(page, "setRequestInterception");
 	let interceptionChanged = false;
 
-	const remember = (type: unknown, handler: unknown): void => {
+	const remember = (type: unknown, handler: unknown, invoke: unknown = handler): OwnedListener => {
+		const entry: OwnedListener = {
+			handler,
+			listener:
+				typeof invoke === "function"
+					? // The result is kept: puppeteer awaits a `request` handler's promise before resolving
+						// cooperative interception.
+						(event: unknown): unknown =>
+							runPageContext.run(owner, () => Reflect.apply(invoke, undefined, [event]))
+					: invoke,
+		};
 		const owned = handlers.get(type);
-		if (owned) owned.push(handler);
-		else handlers.set(type, [handler]);
+		if (owned) owned.push(entry);
+		else handlers.set(type, [entry]);
+		Reflect.apply(on, page, [type, entry.listener]);
+		return entry;
 	};
-	const forget = (type: unknown, handler?: unknown): void => {
+	const drop = (type: unknown, entry: OwnedListener): void => {
 		const owned = handlers.get(type);
-		if (!owned) return;
-		if (handler === undefined) {
-			for (const registered of owned) Reflect.apply(off, page, [type, registered]);
-			handlers.delete(type);
-			return;
-		}
-		const index = owned.lastIndexOf(handler);
-		if (index < 0) return;
-		Reflect.apply(off, page, [type, handler]);
+		const index = owned?.indexOf(entry) ?? -1;
+		if (!owned || index < 0) return;
+		Reflect.apply(off, page, [type, entry.listener]);
 		owned.splice(index, 1);
 		if (owned.length === 0) handlers.delete(type);
+	};
+	/** Remove run-owned registrations; reports whether any matched. */
+	const forget = (type: unknown, handler?: unknown): boolean => {
+		const owned = handlers.get(type);
+		if (!owned) return false;
+		if (handler === undefined) {
+			for (const entry of owned) Reflect.apply(off, page, [type, entry.listener]);
+			handlers.delete(type);
+			return true;
+		}
+		const entry = owned.findLast(registered => registered.handler === handler);
+		if (!entry) return false;
+		drop(type, entry);
+		return true;
 	};
 
 	Object.defineProperties(page, {
 		on: {
 			configurable: true,
 			value: (type: unknown, handler: unknown): Page => {
-				Reflect.apply(on, page, [type, handler]);
-				remember(type, handler);
+				if (runPageContext.getStore() === owner) remember(type, handler);
+				else Reflect.apply(on, page, [type, handler]);
 				return page;
 			},
 		},
 		once: {
 			configurable: true,
 			value: (type: unknown, handler: unknown): Page => {
-				if (typeof handler !== "function") {
+				if (runPageContext.getStore() !== owner || typeof handler !== "function") {
 					Reflect.apply(once, page, [type, handler]);
 					return page;
 				}
-				const wrapper = (event: unknown): void => {
-					forget(type, wrapper);
-					Reflect.apply(handler, page, [event]);
-				};
-				remember(type, wrapper);
-				Reflect.apply(on, page, [type, wrapper]);
+				const entry = remember(type, handler, (event: unknown): unknown => {
+					drop(type, entry);
+					return Reflect.apply(handler, page, [event]);
+				});
 				return page;
 			},
 		},
 		off: {
 			configurable: true,
 			value: (type: unknown, handler?: unknown): Page => {
-				forget(type, handler);
+				// Puppeteer's `once` and rxjs teardown remove the untracked listeners they added.
+				if (!forget(type, handler) && handler !== undefined) Reflect.apply(off, page, [type, handler]);
 				return page;
 			},
 		},
@@ -983,6 +1023,9 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 
 	return {
 		page,
+		enter<T>(fn: () => T): T {
+			return runPageContext.run(owner, fn);
+		},
 		detach() {
 			if (onDescriptor) Object.defineProperty(page, "on", onDescriptor);
 			else Reflect.deleteProperty(page, "on");
@@ -995,7 +1038,7 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 			if (interceptionDescriptor) Object.defineProperty(page, "setRequestInterception", interceptionDescriptor);
 			else Reflect.deleteProperty(page, "setRequestInterception");
 			for (const [type, owned] of handlers) {
-				for (const handler of owned) Reflect.apply(off, page, [type, handler]);
+				for (const entry of owned) Reflect.apply(off, page, [type, entry.listener]);
 			}
 			handlers.clear();
 		},
@@ -1773,14 +1816,15 @@ export class WorkerCore {
 		try {
 			throwIfAborted(signal);
 			await untilAborted(signal, () => this.#emulation?.reapply() ?? Promise.resolve());
-			runPage = createRunPageScope(this.#requirePage(), () => this.#requireNetwork().restoreInterception());
+			const pageScope = createRunPageScope(this.#requirePage(), () => this.#requireNetwork().restoreInterception());
+			runPage = pageScope;
 			const browser = this.#requireBrowser();
 			const tabApi = this.#createTabApi(msg.name, msg.timeoutMs, signal, msg.session, output, screenshots, active);
 			const runtime = this.#ensureRuntime(msg.session);
 			runtime.setCwd(msg.session.cwd);
 			const onFloatingRejection = (reason: unknown): void => this.#recordFloatingRejection(active, reason);
 			runtime.setRunScope({
-				page: bindRunFacade(runPage.page, signal, active.rejectionOwner, onFloatingRejection),
+				page: bindRunFacade(runPage.page, signal, active.rejectionOwner, onFloatingRejection, pageScope.enter),
 				browser: bindRunFacade(browser, signal, active.rejectionOwner, onFloatingRejection),
 				tab: bindRunFacade(tabApi, signal, active.rejectionOwner, onFloatingRejection),
 				assert: (cond: unknown, text?: string): void => {
@@ -1845,10 +1889,12 @@ export class WorkerCore {
 					onFloatingRejection,
 					async () =>
 						await Promise.race([
-							runtime.run(msg.code, `browser-run-${msg.id}.js`, hooks, {
-								runId: msg.id,
-								cwd: msg.session.cwd,
-							}),
+							pageScope.enter(() =>
+								runtime.run(msg.code, `browser-run-${msg.id}.js`, hooks, {
+									runId: msg.id,
+									cwd: msg.session.cwd,
+								}),
+							),
 							cancelRejection,
 							floatingFailure.promise,
 						]),

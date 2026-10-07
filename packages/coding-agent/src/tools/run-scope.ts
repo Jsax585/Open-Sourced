@@ -374,15 +374,21 @@ export function waitForRun(
 	return trackBrowserRunPromise(promise);
 }
 
-/** Binds a long-lived scope facade (page/tab/desktop objects) to one evaluated run's abort signal. */
+/**
+ * Binds a long-lived scope facade (page/tab/desktop objects) to one evaluated run's abort signal.
+ * `enter`, when given, runs every method call through the facade inside it — the run's own
+ * async context — even when the call comes from a callback another emitter fired. A method
+ * that returns its own target (`page.on(...)`) returns the facade, so chained calls stay on it.
+ */
 export function bindRunFacade<T extends object>(
 	target: T,
 	signal: AbortSignal,
 	rejectionOwner?: object,
 	onFloatingRejection?: FloatingRejectionHandler,
+	enter?: <R>(fn: () => R) => R,
 ): T {
 	const cache = new Map<PropertyKey, unknown>();
-	return new Proxy(target, {
+	const facade: T = new Proxy(target, {
 		get(current, prop) {
 			throwIfAborted(signal);
 			const cached = cache.get(prop);
@@ -391,7 +397,9 @@ export function bindRunFacade<T extends object>(
 			if (typeof value === "function") {
 				const wrapped = (...args: unknown[]): unknown => {
 					throwIfAborted(signal);
-					const result = Reflect.apply(value, current, args);
+					const result = enter
+						? enter(() => Reflect.apply(value, current, args))
+						: Reflect.apply(value, current, args);
 					if (result && typeof result === "object") {
 						const then = Reflect.get(result, "then");
 						if (typeof then === "function") {
@@ -425,7 +433,7 @@ export function bindRunFacade<T extends object>(
 						}
 					}
 					throwIfAborted(signal);
-					return result;
+					return result === current ? facade : result;
 				};
 				cache.set(prop, wrapped);
 				return wrapped;
@@ -435,11 +443,12 @@ export function bindRunFacade<T extends object>(
 				// brand-check internal slots that a Proxy cannot forward, and reading a
 				// signal needs no abort gating anyway.
 				if (value instanceof AbortSignal) return value;
-				const wrapped = bindRunFacade(value, signal, rejectionOwner, onFloatingRejection);
+				const wrapped = bindRunFacade(value, signal, rejectionOwner, onFloatingRejection, enter);
 				cache.set(prop, wrapped);
 				return wrapped;
 			}
 			return value;
 		},
 	});
+	return facade;
 }
