@@ -894,6 +894,9 @@
 ### Removed
 
 - Removed the `PI_SUBPROCESS_CMD` environment variable; subagents run in-process and never read it ([#14632](https://github.com/can1357/oh-my-pi/pull/14632) by [@jorgoose](https://github.com/jorgoose))
+### Fixed
+
+- Fixed subagent-specific fallback chains (`task.agentModelOverrides`) being shadowed by inherited model-selector and wildcard chains matching the primary selector ([#13550](https://github.com/can1357/oh-my-pi/issues/13550))
 
 ## [18.8.4] - 2026-10-08
 
