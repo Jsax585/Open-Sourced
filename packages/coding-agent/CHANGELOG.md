@@ -210,6 +210,7 @@
 - Added `speech.speed` and `tts.localSpeed` settings (0.5–2.5, default 1) to speed up or slow down local Kokoro speech for live vocalization and the `tts` tool / `omp say`, plus an `omp say --speed` flag; ACP voice clients find both settings and their presets in `speech.models.list` ([#5868](https://github.com/can1357/oh-my-pi/issues/5868))
 - `omp update` and the startup update notice leave an omp installed by another app (Tern) to that app instead of replacing its files.
 - The startup update notice no longer appears when omp runs from a source checkout.
+- Rewinding from `/tree` or Esc-Esc, resuming, and changing display settings on long sessions now redraw only the most recent ~600 messages under an "N earlier messages not shown" note; set `display.transcriptReplayLimit` to `0` to redraw the full history ([#14988](https://github.com/can1357/oh-my-pi/pull/14988) by [@azain47](https://github.com/azain47)).
 
 ### Fixed
 
