@@ -2092,7 +2092,11 @@ describe("ACP agent", () => {
 
 	it("runs a built-in an extension sends through sendUserInput with the hooks ACP gives typed input", async () => {
 		let actions: ExtensionActions | undefined;
+		const bootstrapped = Promise.withResolvers<void>();
 		const harness = await createHarness({
+			sessionUpdateHook: notification => {
+				if (notification.update.sessionUpdate === "session_info_update") bootstrapped.resolve();
+			},
 			decorateSession: session => {
 				Object.assign(session, {
 					titleGenerationSignal: new AbortController().signal,
@@ -2107,8 +2111,14 @@ describe("ACP agent", () => {
 				});
 			},
 		});
+		vi.useFakeTimers();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		if (!actions?.sendUserInput) throw new Error("expected ACP to wire the extension sendUserInput action");
+		// Once the bootstrap updates have gone out the client has the session id; input sent
+		// before that is the next test's case.
+		await advanceBootstrapGuard();
+		await bootstrapped.promise;
+		vi.useRealTimers();
 
 		const result = await actions.sendUserInput("/rename Bridge title");
 
@@ -2123,6 +2133,51 @@ describe("ACP agent", () => {
 				content: { type: "text", text: "Session renamed to Bridge title." },
 			}),
 		);
+
+		harness.abortController.abort();
+	});
+
+	it("reports nothing to the client for a built-in a session_start handler sends before the session/new response", async () => {
+		// A client drops notifications for a session id it has not received yet, which is why
+		// `#scheduleBootstrapUpdates` defers the first ones. `session_start` runs inside
+		// `newSession`, so input an extension sends from it must not report around that guard.
+		let actions: ExtensionActions | undefined;
+		let startResult: unknown;
+		let responded = false;
+		const bootstrapTitle = Promise.withResolvers<string | null | undefined>();
+		const harness = await createHarness({
+			sessionUpdateHook: notification => {
+				if (responded && notification.update.sessionUpdate === "session_info_update") {
+					bootstrapTitle.resolve(notification.update.title);
+				}
+			},
+			decorateSession: session => {
+				Object.assign(session, {
+					titleGenerationSignal: new AbortController().signal,
+					extensionRunner: {
+						initialize: (extensionActions: ExtensionActions) => {
+							actions = extensionActions;
+						},
+						emit: async (event: { type: string }) => {
+							if (event.type === "session_start") {
+								startResult = await actions?.sendUserInput?.("/rename Early title");
+							}
+						},
+						hasHandlers: () => false,
+						getRegisteredCommands: () => [],
+					},
+				});
+			},
+		});
+		vi.useFakeTimers();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		responded = true;
+
+		expect(startResult).toEqual({ handled: "command", output: "Session renamed to Early title." });
+		expect(harness.updates.filter(n => n.sessionId === created.sessionId)).toEqual([]);
+		// The rename still reaches the client, in the first updates after the guard.
+		await advanceBootstrapGuard();
+		expect(await bootstrapTitle.promise).toBe("Early title");
 
 		harness.abortController.abort();
 	});
