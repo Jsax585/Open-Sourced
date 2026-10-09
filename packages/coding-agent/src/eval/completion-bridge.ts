@@ -41,7 +41,7 @@ import {
 	resolveRetryFallbackChainKey,
 } from "../session/retry-fallback-chains";
 import {
-	AUTO_THINKING,
+	isAutoThinking,
 	type ConfiguredThinkingLevel,
 	shouldDisableReasoning,
 	toReasoningEffort,
@@ -147,7 +147,7 @@ function reasoningForCandidate(
 ): Pick<CompletionCandidate, "reasoning" | "disableReasoning"> {
 	// "auto" is a session-level selector; completion() has no per-prompt
 	// classifier, so it follows the tier default just like an omitted suffix.
-	const normalizedLevel = level === AUTO_THINKING ? undefined : level;
+	const normalizedLevel = isAutoThinking(level) ? undefined : level;
 	if (shouldDisableReasoning(normalizedLevel)) return { reasoning: undefined, disableReasoning: true };
 	const explicit = toReasoningEffort(normalizedLevel);
 	if (explicit !== undefined) {
@@ -282,7 +282,7 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 	];
 	const retry = cfgRetry.get(session.settings);
 	if (!retry.enabled || !retry.modelFallback) return candidates;
-	const primaryLevel = primary.configuredEffort === AUTO_THINKING ? undefined : primary.configuredEffort;
+	const primaryLevel = isAutoThinking(primary.configuredEffort) ? undefined : primary.configuredEffort;
 	const inheritPrimary = shouldDisableReasoning(primaryLevel) || toReasoningEffort(primaryLevel) !== undefined;
 
 	appendFallbackCandidates(
