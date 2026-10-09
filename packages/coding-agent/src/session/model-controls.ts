@@ -250,6 +250,8 @@ export class ModelControls {
 			options && "fastMode" in options ? options.fastMode : this.#host.settings.getModelRoleFast(role);
 		if (targetFastMode !== undefined) {
 			this.setFastMode(targetFastMode);
+		} else if (Object.keys(this.#host.settings.getModelRolesFast()).length > 0) {
+			this.setFastMode(false);
 		}
 		if (options?.persist) {
 			this.#host.settings.setModelRole(
@@ -465,6 +467,7 @@ export class ModelControls {
 		// Apply model
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(next.model));
 		this.#host.clearActiveRetryFallback();
+		this.#activeRole = undefined;
 		await this.#host.setModelWithProviderSessionReset(next.model);
 		this.#host.sessionManager.appendModelChange(`${next.model.provider}/${next.model.id}`);
 		this.#host.settings.getStorage()?.recordModelUsage(`${next.model.provider}/${next.model.id}`);
@@ -496,6 +499,7 @@ export class ModelControls {
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(nextModel));
 		this.#host.clearActiveRetryFallback();
+		this.#activeRole = undefined;
 		await this.#host.setModelWithProviderSessionReset(nextModel);
 		this.#host.sessionManager.appendModelChange(`${nextModel.provider}/${nextModel.id}`);
 		this.#host.settings.getStorage()?.recordModelUsage(`${nextModel.provider}/${nextModel.id}`);
