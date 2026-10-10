@@ -170,6 +170,50 @@ return null;`,
 		expect(after).toBe(baseline);
 	}, 30_000);
 
+	test("removes page listeners a browser event callback adds through raw page references", async () => {
+		const invoke = createHost();
+		await invoke({ action: "open", name: "raw-callback", url: `${baseUrl}/` });
+		const count = `return page.listenerCount("console");`;
+		const baseline = valueOf(await invoke({ action: "run", name: "raw-callback", code: count }));
+		// A captured `tab.page` and `mainFrame().page()` bypass the run facade's async context.
+		const register = `const captured = tab.page;
+const fired = Promise.withResolvers();
+browser.once("targetcreated", () => {
+	captured.on("console", () => {});
+	page.mainFrame().page().on("console", () => {}).once("console", () => {});
+	fired.resolve();
+});
+const extra = await browser.newPage();
+await fired.promise;
+await extra.close();
+return null;`;
+		const counts: unknown[] = [];
+		for (let run = 0; run < 3; run++) {
+			await invoke({ action: "run", name: "raw-callback", code: register });
+			counts.push(valueOf(await invoke({ action: "run", name: "raw-callback", code: count })));
+		}
+		expect(counts).toEqual([baseline, baseline, baseline]);
+	}, 30_000);
+
+	test("wildcard listeners receive the event type and payload", async () => {
+		const invoke = createHost();
+		await invoke({ action: "open", name: "wildcard", url: `${baseUrl}/` });
+		const url = `${baseUrl}/`;
+		const seen = valueOf(
+			await invoke({
+				action: "run",
+				name: "wildcard",
+				code: `const viaOn = Promise.withResolvers();
+const viaOnce = Promise.withResolvers();
+page.on("*", (type, payload) => { if (type === "request") viaOn.resolve(payload?.url()); });
+page.once("*", (type, payload) => viaOnce.resolve(payload !== undefined));
+await page.evaluate(url => fetch(url).then(response => response.text()), ${JSON.stringify(url)});
+return [await viaOn.promise, await viaOnce.promise];`,
+			}),
+		);
+		expect(seen).toEqual([url, true]);
+	}, 30_000);
+
 	test("a request finishing after its run does not stall network idle in the next run", async () => {
 		const invoke = createHost();
 		await invoke({ action: "open", name: "idle", url: `${baseUrl}/` });

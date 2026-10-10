@@ -21,6 +21,7 @@ import type {
 	SerializedAXNode,
 	Target,
 } from "puppeteer-core";
+import { EventEmitter } from "puppeteer-core";
 import { JsRuntime, type RuntimeHooks } from "../../eval/js/shared/runtime";
 import { formatScreenshot, resizeImage } from "../../utils/image-resize";
 import { resolveToCwd } from "../path-utils";
@@ -902,6 +903,61 @@ interface OwnedListener {
 /** Async context of one run's user code; the store is the owning run page scope's token. */
 const runPageContext = new AsyncLocalStorage<object>();
 
+/** Per handler, the listener that runs it inside each run context it was registered from. */
+const runBoundListeners = new WeakMap<object, Map<object, (...args: unknown[]) => unknown>>();
+
+/**
+ * Every puppeteer emitter (browser, target, frame, session, page) runs a handler registered
+ * from inside a run in that run's async context. Events arrive on the CDP socket, outside any
+ * run, so otherwise a run's `browser.once("targetcreated", …)` callback that reaches the page
+ * through a captured `tab.page` or `page.mainFrame().page()` registers listeners the run does
+ * not own, and they outlive it. Registrations made outside a run are left untouched.
+ */
+function bindEmitterHandlersToRuns(): void {
+	const proto = EventEmitter.prototype;
+	const on = proto.on;
+	const off = proto.off;
+	Object.defineProperties(proto, {
+		on: {
+			configurable: true,
+			writable: true,
+			value(this: EventEmitter<Record<string, unknown>>, type: unknown, handler: unknown) {
+				const store = runPageContext.getStore();
+				if (!store || typeof handler !== "function") return Reflect.apply(on, this, [type, handler]);
+				let bound = runBoundListeners.get(handler);
+				if (!bound) {
+					bound = new Map();
+					runBoundListeners.set(handler, bound);
+				}
+				let listener = bound.get(store);
+				if (!listener) {
+					listener = (...args: unknown[]): unknown =>
+						runPageContext.run(store, () => Reflect.apply(handler, undefined, args));
+					bound.set(store, listener);
+				}
+				return Reflect.apply(on, this, [type, listener]);
+			},
+		},
+		off: {
+			configurable: true,
+			writable: true,
+			value(this: EventEmitter<Record<string, unknown>>, type: unknown, handler?: unknown) {
+				const bound = typeof handler === "function" ? runBoundListeners.get(handler) : undefined;
+				if (bound) {
+					const before = Reflect.apply(proto.listenerCount, this, [type]);
+					for (const listener of bound.values()) {
+						Reflect.apply(off, this, [type, listener]);
+						if (Reflect.apply(proto.listenerCount, this, [type]) < before) return this;
+					}
+				}
+				return Reflect.apply(off, this, [type, handler]);
+			},
+		},
+	});
+}
+
+bindEmitterHandlersToRuns();
+
 /**
  * Expose the tab page while retaining every event handler created by this run.
  * The facade removes only run-owned listeners, preserving worker-level routing,
@@ -937,8 +993,8 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 				typeof invoke === "function"
 					? // The result is kept: puppeteer awaits a `request` handler's promise before resolving
 						// cooperative interception.
-						(event: unknown): unknown =>
-							runPageContext.run(owner, () => Reflect.apply(invoke, undefined, [event]))
+						(...args: unknown[]): unknown =>
+							runPageContext.run(owner, () => Reflect.apply(invoke, undefined, args))
 					: invoke,
 		};
 		const owned = handlers.get(type);
@@ -986,9 +1042,9 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 					Reflect.apply(once, page, [type, handler]);
 					return page;
 				}
-				const entry = remember(type, handler, (event: unknown): unknown => {
+				const entry = remember(type, handler, (...args: unknown[]): unknown => {
 					drop(type, entry);
-					return Reflect.apply(handler, page, [event]);
+					return Reflect.apply(handler, page, args);
 				});
 				return page;
 			},
