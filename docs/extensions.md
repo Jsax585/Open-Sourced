@@ -300,7 +300,7 @@ Handlers and tool `execute` receive `ctx` with:
 - `models` (read-only model query — see below)
 - `localProtocolOptions` (optional calling-session `local://` root mapping for external tool bridges)
 - `getContextUsage()`
-- `getAsyncJobSnapshot()` returns the current session's read-only async-job snapshot, or `null` when no session owns the context
+- `getAsyncJobSnapshot()` returns the current session's read-only async-job snapshot, or `null` when no session owns the context; a running task job carries `completionPercent` (0–100) once its subagent has reported a completion estimate
 - `compact(instructionsOrOptions?)`: accepts summary focus text or `CompactOptions`, including one-off `mode: "soft" | "remote" | "snapcompact"`, `onComplete`, `onError`, and `suppressContinuation`
 - `isIdle()`, `hasPendingMessages()`, `abort()`
 - `shutdown()`

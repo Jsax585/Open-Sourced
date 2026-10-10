@@ -171,6 +171,55 @@ describe("AgentSession owner-routed async delivery", () => {
 		expect(recent.find(job => job.id === "proc-job")?.command).toBe(command);
 	});
 
+	it("exposes a running task job's own completion estimate in the async job snapshot", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			convertToLlm,
+			streamFn: mock.stream,
+		});
+		const authStorage = await AuthStorage.create(":memory:");
+		authStorages.push(authStorage);
+		const manager = new AsyncJobManager({});
+		AsyncJobManager.setInstance(manager);
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated(),
+			modelRegistry: new ModelRegistry(authStorage),
+			agentId: "Owner",
+			asyncJobManager: manager,
+		});
+
+		const reported = Promise.withResolvers<void>();
+		const gate = Promise.withResolvers<string>();
+		manager.register(
+			"task",
+			"subagent work",
+			async ({ reportProgress }) => {
+				// A batch reports every member's progress; only this job's own entry counts.
+				await reportProgress("working", {
+					progress: [
+						{ id: "sibling-job", completionPercent: 90 },
+						{ id: "task-job", completionPercent: 40 },
+					],
+				});
+				reported.resolve();
+				return gate.promise;
+			},
+			{ id: "task-job", ownerId: "Owner", agentId: "Worker" },
+		);
+		await reported.promise;
+
+		const running = session.getAsyncJobSnapshot()?.running ?? [];
+		expect(running.find(job => job.id === "task-job")?.completionPercent).toBe(40);
+
+		gate.resolve("done");
+		await session.settleAsyncWork();
+	});
+
 	it("does not spill an incomplete background capture as full output during follow-up delivery", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
