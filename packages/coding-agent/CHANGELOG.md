@@ -746,6 +746,9 @@
 - Fixed `grep` hiding matches that appeared beyond the first 512 bytes of a long line.
 - Fixed snapcompaction leaving too little context room after compaction.
 - Fixed usage-limited account pools redeeming saved resets for accounts outside the configured pool.
+### Changed
+
+- Managed skill names may now use letters and digits of any script rather than ASCII only: `manage_skill` and `learn` accept a name such as `般若理趣分`, and managed-skill discovery keeps such a skill instead of dropping it from the catalog; `/`, `\`, whitespace, a leading dot, and the prompt-listing metacharacters `<`, `>`, and backtick stay rejected ([#15251](https://github.com/can1357/oh-my-pi/pull/15251) by [@iacore](https://github.com/iacore))
 
 ## [18.8.9] - 2026-10-10
 
