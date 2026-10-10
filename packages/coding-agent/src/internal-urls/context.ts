@@ -51,6 +51,7 @@ export function sessionResolveContext(
 		agentRegistry: session.agentRegistry,
 		localProtocolOptions: contextLocalProtocolOptions(session),
 		skills: session.skills,
+		reloadSkills: session.reloadSkills,
 		rules: session.activeRules,
 		session,
 		skipDirectoryListing: options.skipDirectoryListing,

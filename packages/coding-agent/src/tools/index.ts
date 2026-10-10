@@ -251,6 +251,15 @@ export interface ToolSession {
 	skillHintVisible?: boolean;
 	/** Rediscover live session skills after a tool mutates their backing files. */
 	refreshSkills?: () => Promise<void>;
+	/**
+	 * Re-discover this session's skills from disk and return the fresh snapshot
+	 * without rebuilding the system prompt. `skill://` calls it once when a
+	 * lookup misses {@link skills}, then retries against the result — so a skill
+	 * added, renamed, moved, or deleted mid-session resolves without a restart.
+	 * Absent (or unchanged, when the session's skills are not reloadable) keeps
+	 * the miss fatal.
+	 */
+	reloadSkills?: () => Promise<readonly Skill[]>;
 	/** Pre-loaded prompt templates */
 	promptTemplates?: PromptTemplate[];
 	/** Pre-loaded rules (forwarded to subagents to skip re-discovery). */

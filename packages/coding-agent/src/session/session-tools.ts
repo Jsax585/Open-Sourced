@@ -451,6 +451,8 @@ export class SessionTools {
 	#skillWarnings: SkillWarning[];
 	#skillsSettings: SkillsSettings | undefined;
 	#skillsReloadable: boolean;
+	/** In-flight just-in-time rediscovery, shared by every concurrent miss. */
+	#skillsReload: Promise<readonly Skill[]> | undefined;
 	/**
 	 * Prompt surface committed by the last system-prompt rebuild. The
 	 * provider-visible system prompt is deliberately byte-stable across
@@ -1925,25 +1927,54 @@ export class SessionTools {
 
 	/** Rediscovers reloadable skills and refreshes prompt metadata. */
 	async refreshSkills(): Promise<void> {
-		resetCapabilities();
 		if (this.#skillsReloadable) {
-			const skillsSettings = cfgSkills.get(this.#host.settings);
-			const discovered = await loadSkills({
-				...skillsSettings,
-				cwd: this.#host.sessionManager.getCwd(),
-				disabledExtensions: cfgDisabledExtensions.get(this.#host.settings),
-				extensionRoots: this.#host.effectiveExtensionRoots(),
-			});
-			this.#skills = discovered.skills;
-			this.#skillWarnings = discovered.warnings;
-			this.#skillsSettings = skillsSettings;
-
-			if (this.#host.agentKind() === "main") {
-				setActiveSkills(this.#skills);
-			}
+			await this.reloadSkills();
+		} else {
+			resetCapabilities();
 		}
 		await this.refreshBaseSystemPrompt();
 		this.#host.notifyCommandMetadataChanged();
+	}
+
+	/**
+	 * Re-discovers skills from disk for a just-in-time `skill://` lookup. Unlike
+	 * {@link refreshSkills} it skips the system-prompt rebuild, so a miss costs
+	 * one discovery pass and no prompt churn. Returns the refreshed snapshot —
+	 * the same array when skills are not reloadable.
+	 *
+	 * Concurrent misses share one in-flight pass: the discovery rewrites the
+	 * capability cache and `#skills`, so overlapping runs would race and let the
+	 * slowest, not the newest, snapshot win.
+	 */
+	async reloadSkills(): Promise<readonly Skill[]> {
+		if (!this.#skillsReloadable) return this.#skills;
+		const pending = this.#skillsReload ?? this.#discoverSkills();
+		this.#skillsReload = pending;
+		try {
+			return await pending;
+		} finally {
+			if (this.#skillsReload === pending) this.#skillsReload = undefined;
+		}
+	}
+
+	/** One discovery pass over the session's skill roots; see {@link reloadSkills}. */
+	async #discoverSkills(): Promise<readonly Skill[]> {
+		resetCapabilities();
+		const skillsSettings = cfgSkills.get(this.#host.settings);
+		const discovered = await loadSkills({
+			...skillsSettings,
+			cwd: this.#host.sessionManager.getCwd(),
+			disabledExtensions: cfgDisabledExtensions.get(this.#host.settings),
+			extensionRoots: this.#host.effectiveExtensionRoots(),
+		});
+		this.#skills = discovered.skills;
+		this.#skillWarnings = discovered.warnings;
+		this.#skillsSettings = skillsSettings;
+
+		if (this.#host.agentKind() === "main") {
+			setActiveSkills(this.#skills);
+		}
+		return this.#skills;
 	}
 
 	/** Selects enabled tools, ignoring names absent from the registry. */
