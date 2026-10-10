@@ -779,12 +779,13 @@ return await tab.evaluate(() => ({
 #text-overlay { position: absolute; inset: 0; background: white }
 </style>
 <div id="covered-wrap"><button>Covered match</button><div id="text-overlay"></div></div>
+<button id="sliver" style="position: absolute; left: 0; top: calc(100vh - .5px)" onclick="window.clicks.sliver++">Sliver match</button>
 <div style="height: 4000px">Tall content</div>
 <button id="snippets" onclick="window.clicks.snippets++">View Snippets</button>
 <div style="height: 2000px"></div>
 <s-button id="save"></s-button>
 <script>
-window.clicks = { snippets: 0, save: 0 };
+window.clicks = { sliver: 0, snippets: 0, save: 0 };
 customElements.define("s-button", class extends HTMLElement {
   constructor() {
     super();
@@ -809,6 +810,8 @@ try {
 } catch (error) {
 	blocked = error instanceof Error ? error.message : String(error);
 }
+await tab.click("text/Sliver match");
+await tab.evaluate(() => window.scrollTo(0, 0));
 await tab.click("text/View Snippets");
 const afterSnippets = await tab.evaluate(() => ({ ...window.clicks }));
 await tab.evaluate(() => window.scrollTo(0, 0));
@@ -822,8 +825,8 @@ return { blocked, afterSnippets, final: await tab.evaluate(() => window.clicks) 
 			);
 			expect(valueFrom<unknown>(result)).toEqual({
 				blocked: 'tab.click("text/Covered match") blocked: covered by <div#text-overlay>',
-				afterSnippets: { snippets: 1, save: 0 },
-				final: { snippets: 1, save: 2 },
+				afterSnippets: { sliver: 1, snippets: 1, save: 0 },
+				final: { sliver: 1, snippets: 1, save: 2 },
 			});
 		} finally {
 			await prelude.invoke({ action: "close", name: TEXT_TAB_NAME, kill: true }, context).catch(() => undefined);

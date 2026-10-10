@@ -424,7 +424,13 @@ export async function resolveActionableQueryHandlerClickTarget(
 					const element = el as unknown as PageElement;
 					const page = globalThis as unknown as PageGlobals & { scrollX: number; scrollY: number };
 					let box = element.getBoundingClientRect();
-					if (box.bottom <= 0 || box.right <= 0 || box.top >= page.innerHeight || box.left >= page.innerWidth) {
+					// Match the actionability check: scroll unless some fragment shows at least 1px on both axes.
+					const visible = Array.from(element.getClientRects()).some(
+						r =>
+							Math.min(page.innerWidth, r.right) - Math.max(0, r.left) >= 1 &&
+							Math.min(page.innerHeight, r.bottom) - Math.max(0, r.top) >= 1,
+					);
+					if (!visible) {
 						element.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
 						box = element.getBoundingClientRect();
 					}
