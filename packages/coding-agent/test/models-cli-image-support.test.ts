@@ -117,6 +117,42 @@ describe("omp models kind filtering", () => {
 		expect(allOutput).toContain('"kind":"image"');
 		expect(requested).toEqual(["chat", "image", "all"]);
 	});
+	it("lists a native judgment capability in judge kind while preserving chat kind", () => {
+		const luna = {
+			...makeModel({ id: "gpt-6-luna", api: "openai-responses" }),
+			judgment: {
+				api: "openai-decisions",
+				cost: { input: 0.05, output: 0, cacheRead: 0.005, cacheWrite: 0 },
+			},
+		} as Model<Api>;
+		const chat = makeModel({ id: "chat-model", api: "openai-completions" });
+		const models = [chat, luna];
+		const source = {
+			getAvailable(kind: ModelKind | "all" = "chat") {
+				return kind === "all" ? models : models.filter(model => modelKind(model) === kind);
+			},
+			getError: () => undefined,
+		};
+		const render = (kind: ModelKind | "all") => {
+			const output: string[] = [];
+			spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+				output.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+				return true;
+			});
+			renderProviderModels(source, "ls", undefined, true, kind);
+			vi.restoreAllMocks();
+			return JSON.parse(output.join("")) as {
+				models: { id: string; provider: string; kind: string; cost: { input: number } }[];
+			};
+		};
+
+		expect(render("judge").models).toContainEqual(
+			expect.objectContaining({ id: luna.id, kind: "judge", cost: expect.objectContaining({ input: 0.05 }) }),
+		);
+		expect(render("chat").models).toContainEqual(
+			expect.objectContaining({ id: luna.id, kind: "chat", cost: expect.objectContaining({ input: 0 }) }),
+		);
+	});
 });
 
 describe("omp models image support column", () => {

@@ -798,15 +798,16 @@ function canonicalizeModelCompat(model: ModelSpec<Api>): void {
 }
 
 /**
- * Materialize one bundled row. Prompt-cache lifetimes are rule-owned output,
- * not snapshot input: stale lifetimes and configuration provenance from a
- * previous snapshot (or a copied reference row) are dropped so `buildModel`
- * reapplies only the current KDL policy. A tokenizer the row's own id resolves
- * is policy output too; a copied one survives only for ids policy cannot
- * classify (e.g. GitLab Duo aliases of Claude models).
+ * Materialize one bundled row. Prompt-cache lifetimes and judgment capabilities
+ * are rule-owned output, not snapshot input: stale values and configuration
+ * provenance from a prior snapshot are cleared so `buildModel` reapplies the
+ * current KDL policy. A tokenizer the row's own id resolves is policy output
+ * too; a copied one survives only for ids policy cannot classify (e.g. GitLab
+ * Duo aliases of Claude models).
  */
 export function buildGeneratedModel(model: ModelSpec<Api>): Model<Api> {
 	const spec = { ...model };
+	delete spec.judgment;
 	if (resolveModelTokenizer(spec.requestModelId ?? spec.id, spec.provider) !== undefined) delete spec.tokenizer;
 	delete spec.promptCache;
 	delete spec.promptCacheConfig;

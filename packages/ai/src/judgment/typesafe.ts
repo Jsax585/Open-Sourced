@@ -32,17 +32,25 @@ import {
 export const TYPESAFE_PROVIDER = "typesafe";
 export const TYPESAFE_DEFAULT_MODEL = "jev-latest";
 
-/** Judgment `POST` path under a model's base URL, per System One–compatible API. */
+/** Judgment `POST` paths under a model's base URL, per System One wire contract. */
 export const JUDGMENT_ROUTES = {
 	typesafe: "/v1/systemone",
 	"openrouter-decisions": "/decisions",
 } as const satisfies Partial<Record<Api, string>>;
 
-/** APIs {@link TypeSafeJudge} can serve. */
-export type JudgmentApi = keyof typeof JUDGMENT_ROUTES;
+/** APIs that use TypeSafe's System One-compatible wire contract. */
+export type SystemOneJudgmentApi = keyof typeof JUDGMENT_ROUTES;
 
-/** Whether a catalog API answers System One judgments natively. */
+/** Native judgment APIs, including providers with a distinct wire contract. */
+export type JudgmentApi = SystemOneJudgmentApi | "openai-decisions";
+
+/** Whether a catalog API serves judgments natively. */
 export function isJudgmentApi(api: Api): api is JudgmentApi {
+	return api === "openai-decisions" || isSystemOneJudgmentApi(api);
+}
+
+/** Whether a catalog API uses the System One-compatible wire contract. */
+export function isSystemOneJudgmentApi(api: Api): api is SystemOneJudgmentApi {
 	return Object.hasOwn(JUDGMENT_ROUTES, api);
 }
 
@@ -59,7 +67,7 @@ export function typesafeModel(): string {
 export interface TypeSafeJudgeOptions {
 	apiKey: ApiKey;
 	/** Wire route; defaults to TypeSafe's own API. */
-	api?: JudgmentApi;
+	api?: SystemOneJudgmentApi;
 	/** Catalog provider reported on results; defaults to {@link TYPESAFE_PROVIDER}. */
 	provider?: string;
 	/** Defaults to {@link typesafeBaseUrl}. */
@@ -99,7 +107,7 @@ function backoffMs(attempt: number, headers: Headers | undefined): number {
 
 export class TypeSafeJudge implements Judge {
 	readonly label: string;
-	readonly api: JudgmentApi;
+	readonly api: SystemOneJudgmentApi;
 	readonly provider: string;
 	readonly model: string;
 	readonly baseUrl: string;

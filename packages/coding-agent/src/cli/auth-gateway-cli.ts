@@ -149,7 +149,7 @@ const CREDENTIAL_SYNC_INTERVAL_MS = 10 * 1000;
 
 /**
  * Catalog kinds the gateway has a route for: chat (`/v1/chat/completions`,
- * `/v1/messages`, `/v1/responses`, `/v1/pi/stream`), judge (`/v1/systemone`),
+ * `/v1/messages`, `/v1/responses`, `/v1/pi/stream`), judge (`/v1/systemone`, `/v1/decisions`),
  * image (`/v1/images/*`), tts (`/v1/audio/speech`), stt
  * (`/v1/audio/transcriptions`), embedding (`/v1/embeddings`), rerank
  * (`/v1/rerank`), video (`/v1/videos/*`). Other kinds (tiny, search) have no

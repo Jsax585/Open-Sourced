@@ -76,6 +76,54 @@ function isInputModalities(value: unknown): value is ("text" | "image")[] {
 function applyCatalogAssignments<TApi extends Api>(model: Model<TApi>, catalog: Record<string, unknown>): void {
 	const kind = MODEL_KINDS.find(value => value === catalog.kind);
 	if (kind !== undefined) model.kind = kind;
+	const judgment = objectPayload(catalog.judgment);
+	if (judgment !== undefined && Reflect.get(judgment, "api") === "openai-decisions") {
+		const cost = objectPayload(Reflect.get(judgment, "cost"));
+		if (cost !== undefined) {
+			const input = numberField(cost, "input");
+			const output = numberField(cost, "output");
+			const cacheRead = numberField(cost, "cacheRead");
+			const cacheWrite = numberField(cost, "cacheWrite");
+			if (input !== undefined && output !== undefined && cacheRead !== undefined && cacheWrite !== undefined) {
+				const longContextAxis = objectPayload(Reflect.get(cost, "longContext"));
+				const inputThreshold =
+					longContextAxis === undefined ? undefined : numberField(longContextAxis, "inputThreshold");
+				const longInput = longContextAxis === undefined ? undefined : numberField(longContextAxis, "input");
+				const longOutput = longContextAxis === undefined ? undefined : numberField(longContextAxis, "output");
+				const longCacheRead = longContextAxis === undefined ? undefined : numberField(longContextAxis, "cacheRead");
+				const longCacheWrite =
+					longContextAxis === undefined ? undefined : numberField(longContextAxis, "cacheWrite");
+				const longContext =
+					longContextAxis !== undefined &&
+					inputThreshold !== undefined &&
+					longInput !== undefined &&
+					longOutput !== undefined &&
+					longCacheRead !== undefined &&
+					longCacheWrite !== undefined
+						? {
+								inputThreshold,
+								...(Reflect.get(longContextAxis, "inputThresholdInclusive") === true && {
+									inputThresholdInclusive: true,
+								}),
+								input: longInput,
+								output: longOutput,
+								cacheRead: longCacheRead,
+								cacheWrite: longCacheWrite,
+							}
+						: undefined;
+				model.judgment = {
+					api: "openai-decisions",
+					cost: {
+						input,
+						output,
+						cacheRead,
+						cacheWrite,
+						...(longContext !== undefined && { longContext }),
+					},
+				};
+			}
+		}
+	}
 	if (catalog.contextWindowAuthoritative === true) {
 		model.contextWindowAuthoritative = true;
 	} else {

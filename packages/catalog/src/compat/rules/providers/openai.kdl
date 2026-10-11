@@ -98,6 +98,33 @@ provider "openai" {
 	// Replaces both OpenAI tool-call id-limit baselines.
 	uses-openai-tool-call-id-limit #true
 	thinking-mode "effort"
+
+	// OpenAI documents GPT-6 Luna as the only Decisions model. This separate
+	// runner capability keeps the ordinary Responses API and price card intact.
+	// Decisions charges input only; the long-context input multiplier applies
+	// above 272K input tokens. Bedrock's model card lists Responses and Chat
+	// Completions, not Decisions; live probes on 2026-10-11 returned an
+	// unsupported-model error on Mantle and UnknownOperationException on Runtime.
+	// https://developers.openai.com/api/docs/guides/decisions
+	// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html
+	models "gpt-6-luna" {
+		judgment {
+			api "openai-decisions"
+			cost {
+				input 0.1
+				output 0
+				cache-read 0
+				cache-write 0
+				long-context {
+					input-threshold 272000
+					input 0.2
+					output 0
+					cache-read 0
+					cache-write 0
+				}
+			}
+		}
+	}
 	class "unknown" {
 		revision ">=5.6 <5.7" {
 			reasoning-disable-mode "none-effort"

@@ -393,6 +393,8 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"edit-prompt-variant": { key: "editPromptVariant", set: "catalog", shape: "scalar", values: ["full", "compact"] },
 	"edit-revision": { key: "editRevision", set: "catalog", shape: "scalar" },
 	"input-modalities": { key: "inputModalities", set: "catalog", shape: "array", values: ["text", "image"] },
+	/** Separate role-specific endpoint and pricing, without replacing the model's chat transport or cost. */
+	judgment: { key: "judgment", set: "catalog", shape: "object" },
 	kind: { key: "kind", set: "catalog", shape: "scalar", values: MODEL_KINDS },
 	"web-search": {
 		key: "webSearch",

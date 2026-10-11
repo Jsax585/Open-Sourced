@@ -13,7 +13,7 @@
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { logger } from "@oh-my-pi/pi-utils";
 import { classifyGatewayError } from "../../error/gateway";
-import { isJudgmentApi, TypeSafeJudge } from "../../judgment/typesafe";
+import { isSystemOneJudgmentApi, TypeSafeJudge } from "../../judgment/typesafe";
 import * as systemOne from "../../providers/systemone-server";
 import { deterministicUuid } from "../../utils/deterministic-id";
 import {
@@ -58,7 +58,7 @@ export async function handleSystemOne(
 	if (!model) {
 		return systemOne.formatError(404, "invalid_request_error", `Unknown model: ${parsed.modelId}`);
 	}
-	if (!isJudgmentApi(model.api)) {
+	if (!isSystemOneJudgmentApi(model.api)) {
 		return systemOne.formatError(
 			422,
 			"invalid_request_error",

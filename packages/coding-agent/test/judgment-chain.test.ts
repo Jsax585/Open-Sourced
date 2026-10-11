@@ -29,9 +29,12 @@ const JEV_PREVIEW = {
 	maxTokens: 4096,
 } as Model<Api>;
 
+const JEV_LATEST = getBundledModel("typesafe", "jev-latest");
 const LOCAL = getBundledModel("local", "qwen2.5-1.5b");
 const ONLINE = getBundledModel("anthropic", "claude-sonnet-4-6");
-if (!LOCAL || !ONLINE) throw new Error("Expected bundled local and online judge models");
+if (!JEV_LATEST || !LOCAL || !ONLINE) {
+	throw new Error("Expected bundled TypeSafe, local, and online judge models");
+}
 
 const ONLINE_BACKUP = { ...ONLINE, id: "claude-sonnet-judge-backup", name: "Judge Backup" } as Model<Api>;
 
@@ -41,6 +44,18 @@ const DECISIONS = {
 	api: "openrouter-decisions",
 	provider: "openrouter",
 	baseUrl: "https://decisions.example.test",
+} as Model<Api>;
+const OPENAI_LUNA = {
+	...ONLINE,
+	id: "gpt-6-luna",
+	name: "GPT-6 Luna",
+	api: "openai-responses",
+	provider: "openai",
+	baseUrl: "https://api.openai.com/v1",
+	judgment: {
+		api: "openai-decisions",
+		cost: { input: 2, output: 0, cacheRead: 1, cacheWrite: 0 },
+	},
 } as Model<Api>;
 
 const BUCKET_QUESTION: ChoiceQuestion<"trivial" | "moderate" | "hard"> = {
@@ -166,6 +181,185 @@ describe("ChainJudge", () => {
 		expect(result.model).toBe("jev-1.13.0");
 		expect(onUsage).toHaveBeenCalledWith(
 			expect.objectContaining({ role: "typesafe", provider: "typesafe", model: "jev-preview" }),
+		);
+	});
+
+	it("prioritizes existing native judges, then direct Luna before chat fallbacks", () => {
+		const settings = Settings.isolated();
+		const nativeOrder = [JEV_LATEST, DECISIONS, OPENAI_LUNA, LOCAL, ONLINE];
+		expect(
+			new ChainJudge({
+				settings,
+				registry: makeRegistry(nativeOrder),
+				purpose: "test",
+			}).primaryModel(),
+		).toMatchObject({ provider: "typesafe", id: JEV_LATEST.id });
+		expect(
+			new ChainJudge({
+				settings,
+				registry: makeRegistry([DECISIONS, OPENAI_LUNA, LOCAL, ONLINE]),
+				purpose: "test",
+			}).primaryModel(),
+		).toMatchObject({ provider: "openrouter", id: DECISIONS.id });
+
+		const lunaRegistry = makeRegistry([OPENAI_LUNA, LOCAL, ONLINE]);
+		expect(new ChainJudge({ settings, registry: lunaRegistry, purpose: "test" }).primaryModel()).toMatchObject({
+			provider: "openai",
+			id: "gpt-6-luna",
+			api: "openai-responses",
+		});
+		expect(hasNativeJudge(settings, lunaRegistry)).toBe(true);
+	});
+
+	it("projects direct Luna to Decisions natively while preserving its chat row and pricing", async () => {
+		const settings = Settings.isolated({
+			modelRoles: { judge: "openai/gpt-6-luna" },
+			"retry.fallbackChains": { judge: [] },
+		});
+		const luna = {
+			...OPENAI_LUNA,
+			resolveHeaders: async () => ({ "x-openai-route": "project-a" }),
+		} as Model<Api>;
+		const registry = makeRegistry([luna], { openai: "openai-key" });
+		const recordedHeaders: { authorization: string; route: string }[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(
+			asGlobalFetch(async (url, init) => {
+				expect(String(url)).toBe("https://api.openai.com/v1/decisions");
+				const body = JSON.parse(String(init?.body)) as { model: string };
+				expect(body.model).toBe("gpt-6-luna");
+				const headers = new Headers(init?.headers);
+				recordedHeaders.push({
+					authorization: headers.get("authorization") ?? "",
+					route: headers.get("x-openai-route") ?? "",
+				});
+				return Response.json({
+					model: "gpt-6-luna",
+					answers: [
+						{ name: "claim", type: "predicate", probability: 0.9 },
+						{
+							name: "effort",
+							type: "choice",
+							choice: "low",
+							confidence: 0.8,
+							probabilities: [
+								{ value: "low", probability: 0.8 },
+								{ value: "high", probability: 0.2 },
+							],
+						},
+						{
+							name: "severity",
+							type: "score",
+							score: 0.8,
+							confidence: 0.7,
+							probabilities: [
+								{ value: 0, label: "low", probability: 0.2 },
+								{ value: 1, label: "high", probability: 0.8 },
+							],
+						},
+					],
+					usage: {
+						input_tokens: 12,
+						input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+						output_tokens: 3,
+						output_tokens_details: { reasoning_tokens: 1 },
+						total_tokens: 15,
+					},
+				});
+			}),
+		);
+		const onUsage = vi.fn();
+		const judge = new ChainJudge({ settings, registry, purpose: "test", onUsage });
+		expect(judge.primaryModel()).toMatchObject({
+			api: "openai-responses",
+			provider: "openai",
+			id: "gpt-6-luna",
+		});
+
+		const kinds: string[] = [];
+		const result = await judge.withCandidate(async (candidate, kind) => {
+			kinds.push(kind);
+			return candidate.judge({
+				state: "The arithmetic claim is 2 + 2 = 4.",
+				questions: {
+					claim: { type: "noul", instructions: "Is the arithmetic claim true?" },
+					effort: {
+						type: "choice",
+						instructions: "Classify the effort needed.",
+						criteria: { low: "Simple arithmetic", high: "Difficult reasoning" },
+					},
+					severity: {
+						type: "score",
+						instructions: "Rate the task difficulty.",
+						criteria: ["low", "high"] as const,
+					},
+				},
+			});
+		});
+
+		expect(kinds).toEqual(["native"]);
+		expect(result).toMatchObject({
+			api: "openai-decisions",
+			provider: "openai",
+			model: "gpt-6-luna",
+			answers: {
+				claim: { type: "noul", noul: 0.9 },
+				effort: { type: "choice", choice: "low" },
+				severity: { type: "score", score: 0.8 },
+			},
+			usage: { input: 12, output: 3 },
+		});
+		expect(result.usage.cost.input).toBeCloseTo(0.000024, 10);
+		expect(result.usage.cost.output).toBe(0);
+		expect(recordedHeaders).toEqual([{ authorization: "Bearer openai-key", route: "project-a" }]);
+		expect(onUsage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				role: "openai",
+				api: "openai-decisions",
+				provider: "openai",
+				model: "gpt-6-luna",
+				usage: expect.objectContaining({
+					cost: expect.objectContaining({ input: 0.000024, output: 0 }),
+				}),
+			}),
+		);
+	});
+
+	it("never sends a failed capability-backed Luna judgment through Responses chat", async () => {
+		const settings = Settings.isolated({
+			modelRoles: { judge: "openai/gpt-6-luna" },
+			"retry.fallbackChains": { judge: [`${ONLINE.provider}/${ONLINE.id}`] },
+		});
+		const registry = makeRegistry([OPENAI_LUNA, ONLINE], {
+			openai: "openai-key",
+			[ONLINE.provider]: "chat-key",
+		});
+		const urls: string[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(
+			asGlobalFetch(async url => {
+				urls.push(String(url));
+				return new Response("unsupported", { status: 400 });
+			}),
+		);
+		const chat = vi.spyOn(ai, "completeSimple");
+		const onUsage = vi.fn();
+
+		await expect(
+			new ChainJudge({ settings, registry, purpose: "test", onUsage }).judge({
+				state: "Classify one claim.",
+				questions: { claim: { type: "noul", instructions: "Is it true?" } },
+			}),
+		).rejects.toThrow();
+
+		expect(urls.length).toBeGreaterThan(0);
+		expect(urls.every(url => url === "https://api.openai.com/v1/decisions")).toBe(true);
+		expect(chat).not.toHaveBeenCalled();
+		expect(onUsage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				role: "openai",
+				api: "openai-decisions",
+				provider: "openai",
+				stopReason: "error",
+			}),
 		);
 	});
 

@@ -17,7 +17,8 @@
  *   POST /v1/messages                      → Anthropic messages in/out
  *   POST /v1/responses                     → OpenAI Responses in/out
  *   POST /v1/pi/stream                     → native pi-ai stream in/out
- *   POST /v1/systemone | /alpha/decisions  → TypeSafe System One judgments (routes/systemone)
+ *   POST /v1/systemone | /alpha/decisions → TypeSafe System One judgments (routes/systemone)
+ *   POST /v1/decisions                   → native OpenAI Decisions (routes/openai-decisions)
  *   POST /v1/images[/generations|/edits]   → image generation, OpenAI/OpenRouter wire (routes/images)
  *   POST /v1/audio/speech                  → text-to-speech, raw audio out (routes/speech)
  *   POST /v1/audio/transcriptions          → speech-to-text, multipart or JSON base64 in (routes/transcriptions)
@@ -66,6 +67,7 @@ import { handleImageEdits, handleImageGenerations } from "./routes/images";
 import { handleRerank } from "./routes/rerank";
 import { handleSpeech } from "./routes/speech";
 import { handleSystemOne } from "./routes/systemone";
+import { handleOpenAIDecisions } from "./routes/openai-decisions";
 import { handleTranscriptions } from "./routes/transcriptions";
 import { handleVideoContent, handleVideoPoll, handleVideoSubmit } from "./routes/video";
 import { AuthGatewaySessionStateStore } from "./session-state";
@@ -253,7 +255,10 @@ const KIND_ROUTES: Partial<Record<ModelKind, string>> = {
 /** Chat routes cannot drive a non-chat model; name the route that does, or `undefined` for chat models. */
 function chatRouteRejection(model: Model<Api>): string | undefined {
 	const kind = modelKind(model);
-	const route = KIND_ROUTES[kind];
+	const route =
+		kind === "judge" && (model.api === "openai-decisions" || model.judgment?.api === "openai-decisions")
+			? "POST /v1/decisions"
+			: KIND_ROUTES[kind];
 	return route && `Model ${model.provider}/${model.id} is a ${kind} model; use ${route}`;
 }
 
@@ -792,6 +797,7 @@ const LOGGABLE_PATHS: Record<string, true> = {
 	"/v1/credentials/check": true,
 	"/v1/pi/stream": true,
 	"/v1/systemone": true,
+	"/v1/decisions": true,
 	"/alpha/decisions": true,
 	"/v1/images/generations": true,
 	"/v1/images": true,
@@ -858,6 +864,12 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 			// TypeSafe System One judgments (jev). TypeSafe SDKs and omp's own
 			// judge point `TYPESAFE_BASE_URL` at the gateway; OpenRouter SDKs
 			// reach the same handler through their Decisions path.
+			// OpenAI's native Decisions wire is distinct from the System One
+			// contract served at `/v1/systemone` and OpenRouter's `/alpha/decisions`.
+			if (req.method === "POST" && pathname === "/v1/decisions") {
+				return await handleOpenAIDecisions(opts, req, peer);
+			}
+
 			if (req.method === "POST" && (pathname === "/v1/systemone" || pathname === "/alpha/decisions")) {
 				return await handleSystemOne(opts, req, peer);
 			}

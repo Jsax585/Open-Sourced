@@ -50,6 +50,37 @@ provider "bedrock-mantle" {
 		}
 	}
 
+	// The account-discovered Luna row omits its public capabilities and price.
+	// Apply AWS's documented limits, thinking, modalities, and in-Region price.
+	// Decisions is not available on either Bedrock endpoint.
+	// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html
+	models "openai.gpt-6-luna" {
+		limits-patch {
+			context-window 1050000
+			max-tokens 128000
+		}
+		input-modalities "text" "image"
+		// AWS's Luna discovery row is neutral despite advertising reasoning;
+		// repair this exact row only, alongside its reviewed effort ladder.
+		thinking-upgrade-neutral #true
+		reasoning-disable-mode "none-effort"
+		thinking-mode "effort"
+		thinking-efforts "low" "medium" "high" "xhigh" "max"
+		cost-fallback {
+			input 0.11
+			output 0.55
+			cache-read 0.011
+			cache-write 0.1375
+		}
+		long-context-cost {
+			input-threshold 272000
+			input 0.22
+			output 0.825
+			cache-read 0.022
+			cache-write 0.275
+		}
+	}
+
 	class "unknown" {
 		thinking-mode "effort"
 	}

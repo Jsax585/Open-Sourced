@@ -6,10 +6,9 @@
  * yes/no condition holds), {@link ScoreQuestion} (position on ordered levels)
  * — about one {@link JudgmentState}. Every question in a request sees the same
  * state and is answered independently, so callers batch independent questions
- * into one call. The shape mirrors TypeSafe's System One API so the native
- * backend ({@link TypeSafeJudge}) forwards requests verbatim, while the text
- * bridge ({@link TextJudge}) renders the same questions into keyword prompts
- * for an ordinary chat model.
+ * into one call. The shared protocol is implemented by native adapters with
+ * provider-specific wire conversion, while the text bridge ({@link TextJudge})
+ * renders the same questions into keyword prompts for an ordinary chat model.
  */
 import type { Usage } from "../types";
 

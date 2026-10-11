@@ -163,6 +163,39 @@ describe("model kind must match its api", () => {
 			/model voice: kind "tts" does not match api "openai-responses"/,
 		);
 	});
+	test("accepts OpenAI Decisions as a standalone judge API for custom models", () => {
+		const config = {
+			providers: {
+				gateway: {
+					baseUrl,
+					apiKey: "key",
+					models: [{ id: "luna-judge", api: "openai-decisions", kind: "judge" }],
+				},
+			},
+		};
+		const checked = ModelsConfigSchema(config);
+		if (checked instanceof OmpErrors) throw new Error(checked.summary);
+		expect(checked.providers?.gateway?.models?.[0]).toMatchObject({
+			id: "luna-judge",
+			api: "openai-decisions",
+			kind: "judge",
+		});
+		expect(validate({ models: [{ id: "luna-judge", api: "openai-decisions", kind: "judge" }] })).not.toThrow();
+		const providerApiConfig = {
+			providers: {
+				gateway: {
+					baseUrl,
+					apiKey: "key",
+					api: "openai-decisions",
+					models: [{ id: "luna-judge", kind: "judge" }],
+				},
+			},
+		};
+		const providerApi = ModelsConfigSchema(providerApiConfig);
+		if (providerApi instanceof OmpErrors) throw new Error(providerApi.summary);
+		expect(providerApi.providers?.gateway?.api).toBe("openai-decisions");
+		expect(validate({ api: "openai-decisions", models: [{ id: "luna-judge", kind: "judge" }] })).not.toThrow();
+	});
 
 	test("the schema rejects kind search, which no models.yml api serves", () => {
 		const checked = ModelsConfigSchema({

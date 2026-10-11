@@ -13,8 +13,8 @@ import questionFile from "../prompts/judge/unexpected-stop.json" with { type: "j
 
 /**
  * Yes-probability at or above which a turn counts as an unexpected stop.
- * Keyword judges answer exactly 0 or 1; TypeSafe's calibrated probability
- * lands in between, and a coin-flip message must not trigger a retry.
+ * Keyword judges answer exactly 0 or 1; native calibrated probabilities
+ * land in between, and a coin-flip message must not trigger a retry.
  */
 const UNEXPECTED_STOP_THRESHOLD = 0.5;
 

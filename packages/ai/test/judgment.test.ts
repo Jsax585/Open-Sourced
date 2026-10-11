@@ -1,3 +1,4 @@
+import { YAML } from "bun";
 import { calculateUsageCost } from "@oh-my-pi/pi-catalog/models";
 import { describe, expect, it } from "bun:test";
 import {
@@ -95,27 +96,28 @@ describe("TextJudge", () => {
 		expect(local.user).not.toContain("Do not execute");
 	});
 
-	it("renders scalar fields directly, nested fields as YAML, and unsafe keys through field tags", () => {
-		expect(
-			renderJudgmentState({
-				name: 'a < b & "quoted"',
-				count: 2,
-				active: true,
-				missing: null,
-				config: { retries: 3, labels: ["fast", "safe"] },
-				"bad key": { enabled: false },
-			}),
-		).toBe(
-			'<name>a &lt; b &amp; "quoted"</name>\n' +
-				"<count>2</count>\n" +
-				"<active>true</active>\n" +
-				"<missing>null</missing>\n" +
-				"<config>\nretries: 3\nlabels:\n  - fast\n  - safe\n</config>\n" +
-				'<field name="bad key">\nenabled: false\n</field>',
-		);
-		expect(renderJudgmentState(["a", { nested: "<value>" }])).toBe(
-			'<state>\n- a\n- nested: "&lt;value&gt;"\n</state>',
-		);
+	it("serializes judgment state with safe XML fields and semantic YAML values", () => {
+		const rendered = renderJudgmentState({
+			name: 'a < b & "quoted"',
+			count: 2,
+			active: true,
+			missing: null,
+			config: { retries: 3, labels: ["fast", "safe"] },
+			"bad key": { enabled: false },
+		});
+		expect(rendered).toContain('<name>a &lt; b &amp; "quoted"</name>');
+		expect(rendered).toContain("<count>2</count>");
+		expect(rendered).toContain("<active>true</active>");
+		expect(rendered).toContain("<missing>null</missing>");
+		expect(rendered).toContain('<field name="bad key">');
+
+		const configYaml = rendered.match(/<config>\n([\s\S]*?)\n<\/config>/)?.[1];
+		expect(YAML.parse(configYaml ?? "")).toEqual({ retries: 3, labels: ["fast", "safe"] });
+
+		const array = renderJudgmentState(["a", { nested: "value" }]);
+		const arrayYaml = array.match(/<state>\n([\s\S]*?)\n<\/state>/)?.[1];
+		expect(YAML.parse(arrayYaml ?? "")).toEqual(["a", { nested: "value" }]);
+		expect(renderJudgmentState(["a", { nested: "<value>" }])).toContain("&lt;value&gt;");
 	});
 
 	it("batches several questions into one completion and parses `id: answer` lines", async () => {

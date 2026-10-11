@@ -2860,7 +2860,7 @@ export class Settings {
 
 		// find.enabled: boolean -> enum (auto | on | off). Preserve an explicit
 		// choice; unset installs get `auto`, which enables `find` only when the
-		// judge role resolves to a native System One model.
+		// judge role resolves to a native judgment model.
 		const findObj = isRecord(raw.find) ? raw.find : undefined;
 		if (findObj && typeof findObj.enabled === "boolean") {
 			findObj.enabled = findObj.enabled ? "on" : "off";

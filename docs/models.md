@@ -143,8 +143,9 @@ override matching model tags. These fields do not configure the Anthropic Messag
 - `google-vertex`
 - `typesafe`
 - `openrouter-decisions`
+- `openai-decisions`
 
-`typesafe` and `openrouter-decisions` are judgment APIs, not chat transports: a model declared with one answers System One judgment requests (`{baseUrl}/v1/systemone` and `{baseUrl}/decisions` respectively) and is selected by the `judge` model role. Its `headers` carry gateway routing or custom authentication headers for that traffic.
+`typesafe`, `openrouter-decisions`, and `openai-decisions` are native judgment APIs, not chat transports. They use `{baseUrl}/v1/systemone`, `{baseUrl}/decisions`, and `{baseUrl}/decisions` respectively; direct OpenAI's base URL includes `/v1`, yielding `POST /v1/decisions`. Models with one of these API values are selected by the `judge` role; their `headers` carry gateway routing or custom authentication headers for that traffic.
 
 A model or `modelOverrides` entry may also use a runner API, which serves one model `kind`; `RUNNER_API_KINDS` in `packages/catalog/src/types.ts` lists them (for example `openai-images` serves `image`, `openai-embeddings` serves `embedding`, `openai-speech` serves `tts`). `web-search` is built in and cannot be named here, so neither can `kind: search`. `kind` defaults to the api's kind (`chat` for chat transports), and an explicit `kind` must be one its api serves. Chat transports serve `chat` and `tiny` (small models for the `tiny`, `memory`, and `judge` roles); those that `generate_image` runs (`openai-responses`, `openai-codex-responses`, `google-generative-ai`, `google-gemini-cli`) also serve `image`: on `openai-responses`, the image is generated through the Responses `image_generation` tool, carried by a GPT-5+ chat model on the same provider, instead of `/images/generations`. This moves discovered gateway models to the image role:
 
@@ -164,6 +165,21 @@ providers:
 A configured `kind`, explicit or implied by a runner API, outranks the bundled catalog's classification of the same id and survives `modelOverrides` and refreshes.
 
 Loading models.yml checks a `modelOverrides` `kind` only against an api the file names: the override's own `api`, or that of a `models` entry with the same id. A built-in or discovered model gets its api later, so its override `kind` is checked against that api when the override applies; a kind the api does not serve is ignored and logged. An `api` override without `kind` takes a runner API's kind, keeps a kind the new api still serves, and otherwise makes the model `chat`. A `models` entry that redefines a built-in id on a different api follows the same rule, so redefining an image row on `openai-completions` makes it `chat`.
+
+### Native OpenAI Decisions judging
+
+The bundled direct OpenAI model `openai/gpt-6-luna` has a native OpenAI Decisions capability alongside its ordinary `openai-responses` chat capability. Assigning it to the `judge` role does not change chat routing. This is per-model capability metadata, not an API override: leave the bundled model on `api: openai-responses`; it is visible in `omp models --kind judge` and remains in ordinary chat listings.
+
+This built-in capability is advertised for direct OpenAI `openai/gpt-6-luna` only. Do not infer support for `openai-codex`, Amazon Bedrock, or Bedrock Mantle from matching model IDs or Responses support. A live `us-east-1` check with existing Bedrock auth found Mantle `/openai/v1/decisions` returned HTTP 400 `validation_error` (`The requested model is not supported in the Decisions API.`) for `openai.gpt-6-luna`, while Bedrock Runtime returned `UnknownOperationException` inside HTTP 200 for `us.openai.gpt-6-luna`; both `/responses` paths returned `READY`.
+
+The default judge priority tries direct Luna after TypeSafe and OpenRouter Decisions, before local/tiny/chat fallbacks. To assign it explicitly:
+
+```yaml
+modelRoles:
+  judge: openai/gpt-6-luna
+```
+
+For a live smoke without persistent settings changes, use a throwaway project directory with only this role in `.omp/config.yml` and `openStandaloneJudge(tempDir, "openai-decisions-smoke")`, or apply the role and empty judge fallback chain as in-memory settings overrides before constructing `discoverAuthStorage`/`ModelRegistry`/`resolveJudge`. Both use existing OpenAI auth; submit one small, non-sensitive question and close the auth store. Never place credentials in the temporary config or command line, or print secrets, environment contents, or authorization headers. The request uses normal OpenAI billing.
 
 ### Allowed auth/discovery values
 

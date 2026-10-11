@@ -5,8 +5,8 @@
  * fallback all take effect without recreating feature consumers, while bulk
  * callers (`judge_batch`) do not re-scan the whole catalog per item.
  *
- * Every provider attempt is attributed exactly once: native System One
- * requests by {@link nativeJudge}, prompted chat attempts by the chat
+ * Every provider attempt is attributed exactly once: native judgments (System One
+ * and OpenAI Decisions) by {@link nativeJudge}, prompted chat attempts by the chat
  * backend's `onAttempt`. Each report reaches both {@link JudgeDeps.onUsage}
  * (the session ledger) and one `judgment` telemetry span, so a judgment backed
  * by a chat model is never billed again from its aggregated result.
@@ -32,7 +32,7 @@ import {
 	type TextCompletion,
 	type TextPrompt,
 	TextJudge,
-	TYPESAFE_PROVIDER,
+	OpenAIDecisionsJudge,
 	TypeSafeJudge,
 	tokenUsage,
 	type Usage,
@@ -56,7 +56,7 @@ export * from "./cache";
 export interface JudgmentUsage {
 	/** Why the judgment ran; see {@link JudgeDeps.purpose}. */
 	purpose: string;
-	/** Model role the call resolved through, or `typesafe` for native judgments. */
+	/** Model role the call resolved through, or provider id for native judgments. */
 	role: string;
 	api: string;
 	provider: string;
@@ -178,15 +178,15 @@ function withSessionFallback(candidates: RoleChainCandidate[], sessionModel: Mod
 	return [...candidates, { model: sessionModel, explicit: false }];
 }
 
-/** Which backend a judge-role candidate routes to: native System One decisions, on-device keywords, or a chat model. */
+/** Which backend a judge-role candidate routes to: native decisions, on-device keywords, or a chat model. */
 export type JudgeKind = "native" | "local" | "online";
 
-/** Classify a role candidate by model API, never by provider identity. */
+/** Classify a judge-role candidate by model API or native judgment capability, never by provider identity. */
 export function kindOf(candidate: RoleChainCandidate): JudgeKind;
 export function kindOf(model: Model): JudgeKind;
 export function kindOf(value: RoleChainCandidate | Model): JudgeKind {
 	const model = "model" in value ? value.model : value;
-	if (isJudgmentApi(model.api)) return "native";
+	if (model.judgment !== undefined || isJudgmentApi(model.api)) return "native";
 	if (model.api === "local-inference") return "local";
 	return "online";
 }
@@ -205,8 +205,8 @@ function judgeRoleChain(settings: Settings, registry: ModelRegistry): RoleChainC
 }
 
 /**
- * Whether the `judge` role resolves first to a native System One backend
- * (TypeSafe jev, directly or through OpenRouter) rather than a prompted
+ * Whether the `judge` role resolves first to a native judgment backend
+ * (TypeSafe, OpenRouter Decisions, or direct OpenAI Decisions) rather than a prompted
  * on-device or chat model. Judge-heavy features gate on it, e.g. the `find`
  * tool under `find.enabled: auto`.
  */
@@ -336,11 +336,26 @@ export class ChainJudge implements Judge {
 		if (model.api === "local-inference") return new TextJudge(new LocalTextBackend(model.id));
 		if (!(await this.#deps.registry.getApiKey(model, this.#deps.sessionId, { signal }))) return undefined;
 		const apiKey = this.#deps.registry.resolver(model, this.#deps.sessionId);
-		if (isJudgmentApi(model.api)) {
+		const judgmentModel = model.judgment
+			? ({ ...model, api: model.judgment.api, cost: model.judgment.cost } as Model)
+			: model;
+		if (judgmentModel.api === "openai-decisions") {
+			const headers = await this.#deps.registry.resolveModelHeaders(model, signal);
+			const judge = new OpenAIDecisionsJudge({
+				apiKey,
+				model: judgmentModel.id,
+				cost: judgmentModel.cost,
+				provider: judgmentModel.provider,
+				baseUrl: judgmentModel.baseUrl,
+				headers,
+			});
+			return nativeJudge(judge, judgmentModel, this.#deps.cache, attempt => this.#report(attempt));
+		}
+		if (model.api === "typesafe" || model.api === "openrouter-decisions") {
 			const headers = await this.#deps.registry.resolveModelHeaders(model, signal);
 			const judge = new TypeSafeJudge({
 				apiKey,
-				api: model.api,
+				api: model.api as "typesafe" | "openrouter-decisions",
 				provider: model.provider,
 				model: model.id,
 				baseUrl: model.baseUrl,
@@ -402,15 +417,15 @@ class LocalTextBackend implements TextBackend {
 }
 
 /**
- * Native System One judge. Questions already answered about the same state
+ * Native judgment adapter. Questions already answered about the same state
  * under this model come from `cache`; only the rest reach the provider (none
  * when every answer is cached). Each call reports exactly one attempt — failed
- * requests included so the ledger shows why a judgment errored. TypeSafe
- * reports tokens only, so a response without a billed amount is priced from
- * the catalog model; a route that bills (OpenRouter) keeps its reported cost.
+ * requests included so the ledger shows why a judgment errored. When a provider
+ * does not report billed cost, usage is priced from the projected judgment model;
+ * explicitly billed native routes keep their reported cost.
  */
 function nativeJudge(
-	judge: TypeSafeJudge,
+	judge: TypeSafeJudge | OpenAIDecisionsJudge,
 	model: Model,
 	cache: JudgmentCache | undefined,
 	report: (attempt: JudgmentAttempt) => void,
@@ -435,7 +450,7 @@ function nativeJudge(
 				pendingCount++;
 			}
 			const attempt = {
-				role: TYPESAFE_PROVIDER,
+				role: model.provider,
 				api: judge.api,
 				provider: judge.provider,
 				model: judge.model,
@@ -470,7 +485,7 @@ function nativeJudge(
 				api: judge.api,
 				provider: judge.provider,
 				model: fresh?.model ?? judge.model,
-				// Every id was answered by the cache or by `fresh`, which TypeSafeJudge validated per question type.
+				// Native adapters validate one typed answer per question before returning.
 				answers: answers as JudgmentResult<Q>["answers"],
 				usage,
 			};

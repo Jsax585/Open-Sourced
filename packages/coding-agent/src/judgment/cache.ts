@@ -1,6 +1,6 @@
 /**
- * Local answer cache for native System One judgments (TypeSafe jev, directly
- * or through OpenRouter).
+ * Local answer cache for native judgment backends: TypeSafe jev (directly or
+ * through OpenRouter) and direct OpenAI Decisions.
  *
  * Every request decomposes into its parts: the state it evaluated, one oracle
  * row per question answered about that state, and one usage row per billed

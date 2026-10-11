@@ -19,6 +19,7 @@ Both grammars are KDL v2. Unknown nodes/directives and malformed value shapes ar
 ```sh
 cd packages/catalog
 bun run gen:compat        # compiles rules/ → src/compat/rules.json (committed)
+bun run gen:models --provider openai  # regenerate only OpenAI's bundled models.json rows
 bun test test/compat-compile.test.ts test/compat-conformance.test.ts \
          test/compat-taxonomy.test.ts test/compat-cascade.test.ts test/compat-parity.test.ts
 ```
@@ -214,6 +215,8 @@ The three value shapes are:
 
 A rule cannot assign the same resolved axis twice in one block.
 One object axis carries a computed form: `long-context-cost` accepts either the absolute rates (`input-threshold` + `input`/`output`/`cache-read`/`cache-write`) or `input-threshold` + `multiplier` (with optional `input-threshold-inclusive`), which derives the tier from the row's base price at build time, after `cost-patch` and `cost-fallback`, so the rule tracks upstream list-price updates (xAI's SuperGrok 200K tier). Rows without a token price carry no tier. An empty `long-context-cost {}` adds no tier; a more specific rule uses it to opt a host out of a broader rule's band (GitHub Copilot's Haiku 5.5 rows, whose long tier is the `-1m` sibling).
+
+The catalog `judgment` object axis materializes to `Model.judgment`, a separate runner API and price card. It never replaces the model's ordinary `api` or `cost`; only declare it for providers with a supported judgment endpoint. After changing provider/model metadata, use `gen:models --provider <id>` to rewrite only that provider's `models.json` section. This narrows generated output but still loads shared model references.
 
 `context-window-authoritative #true` preserves a host's supplied context window through runtime model selection instead of applying inferred expansion or reference-price-tier caps. Explicit user context overrides still apply afterward. It applies to rows materialized through `buildModel` (discovery and regenerated bundles). See [`providers/factory-droid.kdl`](providers/factory-droid.kdl).
 

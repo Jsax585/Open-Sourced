@@ -51,6 +51,7 @@ export const RUNNER_APIS = [
 	"web-search",
 	"typesafe",
 	"openrouter-decisions",
+	"openai-decisions",
 	"openai-images",
 	"openrouter-images",
 	"xai-tts",
@@ -65,6 +66,7 @@ export const RUNNER_API_KINDS: Record<Exclude<(typeof RUNNER_APIS)[number], "loc
 	"web-search": "search",
 	typesafe: "judge",
 	"openrouter-decisions": "judge",
+	"openai-decisions": "judge",
 	"openai-images": "image",
 	"openrouter-images": "image",
 	"xai-tts": "tts",
@@ -1404,6 +1406,12 @@ export interface ModelCost extends TokenCost {
 	timeBased?: TimeBasedCost;
 }
 
+/** A role-specific endpoint and price card separate from the model's chat transport. */
+export interface ModelJudgment {
+	api: "openai-decisions";
+	cost: ModelCost;
+}
+
 /**
  * Exact local content tokenizer family for a model.
  *
@@ -1449,6 +1457,8 @@ export interface Model<TApi extends Api = Api> {
 	id: string;
 	/** Role-specific runner capability; omitted for ordinary chat models. */
 	kind?: ModelKind;
+	/** Separate native-judgment endpoint and pricing; the model retains its ordinary chat API. */
+	judgment?: ModelJudgment;
 	/**
 	 * Verbatim configured kind (models.yml, `modelOverrides`, runtime
 	 * registrations). `buildModel` applies it over catalog `kind` rules on every

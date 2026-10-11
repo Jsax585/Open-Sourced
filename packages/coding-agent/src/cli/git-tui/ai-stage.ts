@@ -3,7 +3,7 @@
  *
  * Every unit of unstaged change — each hunk of a tracked text file, each
  * untracked file, each binary file — is one independent judgment for the
- * `judge` role (TypeSafe jev when credentialed), scored against the full list
+ * `judge` role, backed by a native judgment model when available, scored against the full list
  * of changed paths for contrast and fanned out as a single concurrency-capped
  * wave. Accepted hunks are staged via `git apply --cached`; accepted untracked
  * and binary files are staged whole.

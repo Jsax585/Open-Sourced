@@ -113,10 +113,14 @@ function byProviderThenId(left: Model<Api>, right: Model<Api>): number {
 	return left.id.localeCompare(right.id);
 }
 
-function toModelJson(model: Model<Api>): ModelJson {
+function toModelJson(model: Model<Api>, requestedKind: ModelKind | "all"): ModelJson {
+	const judgment = requestedKind === "judge" ? model.judgment : undefined;
+	const pricingStatus = judgment
+		? getModelPricingStatus({ cost: judgment.cost, pricingStatus: model.pricingStatus })
+		: getModelPricingStatus(model);
 	return {
 		provider: model.provider,
-		kind: modelKind(model),
+		kind: judgment ? "judge" : modelKind(model),
 		id: model.id,
 		selector: `${model.provider}/${model.id}`,
 		name: model.name,
@@ -125,8 +129,8 @@ function toModelJson(model: Model<Api>): ModelJson {
 		reasoning: model.reasoning,
 		thinking: model.thinking ? getSupportedEfforts(model) : null,
 		input: model.input,
-		cost: model.cost,
-		pricingStatus: getModelPricingStatus(model),
+		cost: judgment?.cost ?? model.cost,
+		pricingStatus,
 	};
 }
 
@@ -198,7 +202,17 @@ export function renderProviderModels(
 	json: boolean,
 	kind: ModelKind | "all" = "chat",
 ): void {
-	const available = source.getAvailable(kind);
+	const available = source.getAvailable(kind).slice();
+	if (kind === "judge") {
+		const seen = new Set(available.map(model => `${model.provider}/${model.id}`));
+		for (const model of source.getAvailable("chat")) {
+			if (model.judgment === undefined) continue;
+			const identity = `${model.provider}/${model.id}`;
+			if (seen.has(identity)) continue;
+			seen.add(identity);
+			available.push(model);
+		}
+	}
 	const needle = pattern?.toLowerCase();
 	let filtered = available;
 
@@ -230,7 +244,12 @@ export function renderProviderModels(
 				`Warning: models.yml validation failed — custom providers disabled\n${configError.message}\n`,
 			);
 		}
-		const output: ModelsJson = { models: filtered.slice().sort(byProviderThenId).map(toModelJson) };
+		const output: ModelsJson = {
+			models: filtered
+				.slice()
+				.sort(byProviderThenId)
+				.map(model => toModelJson(model, kind)),
+		};
 		writeLine(JSON.stringify(output));
 		return;
 	}

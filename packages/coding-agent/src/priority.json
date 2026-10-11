@@ -103,6 +103,7 @@
 	"judge": [
 		"typesafe/jev-latest",
 		"openrouter/~typesafe/jev-latest",
+		"openai/gpt-6-luna",
 		"@tiny",
 		"@smol",
 		"@default"

@@ -39,7 +39,7 @@ const FIND_TIMEOUT_MS = 20_000;
 
 /**
  * Resolve `find.enabled` for a session: `auto` enables `find` only when the
- * judge role is backed by a native System One model ({@link hasNativeJudge})
+ * judge role is backed by a native judgment model ({@link hasNativeJudge})
  * rather than a prompted small model. Gates tool creation and the `find` hints
  * in sibling tool prompts.
  */
