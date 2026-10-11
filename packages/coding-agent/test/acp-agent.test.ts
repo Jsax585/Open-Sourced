@@ -2127,6 +2127,8 @@ describe("ACP agent", () => {
 			decorateSession: session => {
 				Object.assign(session, {
 					titleGenerationSignal: new AbortController().signal,
+					// `/rename` asks the session for the title; a typed one passes through uncarded.
+					renameTitle: async (title?: string) => title || null,
 					extensionRunner: {
 						initialize: (extensionActions: ExtensionActions) => {
 							actions = extensionActions;
@@ -2181,6 +2183,8 @@ describe("ACP agent", () => {
 			decorateSession: session => {
 				Object.assign(session, {
 					titleGenerationSignal: new AbortController().signal,
+					// `/rename` asks the session for the title; a typed one passes through uncarded.
+					renameTitle: async (title?: string) => title || null,
 					extensionRunner: {
 						initialize: (extensionActions: ExtensionActions) => {
 							actions = extensionActions;
