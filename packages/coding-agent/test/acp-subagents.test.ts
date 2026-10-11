@@ -474,6 +474,16 @@ describe("ACP session messages for agent IRC traffic", () => {
 			sessionMessages,
 		});
 		expect(failed).toEqual([]);
+		// `write` dispatches these accepted forms to `agent://Scout` too.
+		for (const path of ["agent://Scout:raw", "[agent://Scout#ABCD]"]) {
+			const wrapped = mapAgentSessionEventToAcpSessionUpdates(end, "root", {
+				getToolArgs: () => ({ path, content: "Also check Windows." }),
+				sessionMessages,
+			});
+			expect(wrapped.map(n => n.update)).toEqual([
+				expect.objectContaining({ sessionUpdate: "session_message", recipientSessionId: "child-scout" }),
+			]);
+		}
 	});
 
 	it("reports an incoming IRC message once whether it arrives live or as a wake-turn record", () => {
