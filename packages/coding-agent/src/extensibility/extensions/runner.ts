@@ -26,7 +26,7 @@ import {
 	setContextHistoryIndex,
 } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import type { KeyId } from "@oh-my-pi/pi-tui";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, MAX_TIMER_DELAY_MS } from "@oh-my-pi/pi-utils";
 import { refreshShellConfigCache } from "@oh-my-pi/pi-utils/procmgr";
 import { MAIN_AGENT_RULE_NAME } from "../../capability/rule";
 import type { ModelRegistry } from "../../config/model-registry";
@@ -130,8 +130,6 @@ export interface ToolCallPreflight {
 }
 
 export const EXTENSION_HANDLER_TIMEOUT_MS = 30_000;
-/** Signed 32-bit `setTimeout` limit; larger delays overflow to 1 ms under Bun. */
-export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 let extensionHandlerTimeoutMs = EXTENSION_HANDLER_TIMEOUT_MS;
 
 function throwUnsupportedServiceTierAction(): never {

@@ -1426,10 +1426,14 @@ export async function createAgentSession(
 		// the loader's instance, and re-running factories under different settings
 		// would double-fire their load-time side effects on the shared event bus.
 		// The mismatch is a caller bug; make it loud instead of silently reporting
-		// one budget while enforcing another.
+		// one budget while enforcing another. Extension-free loaders have no
+		// factory binding to diverge, so an override is harmless there.
 		const overrideSettings = rest.settings ?? rest.settingsManager;
+		const loaderHasExtensions =
+			state.extensionsResult.extensions.length > 0 || (state.extensionsResult.preparedExtensions?.length ?? 0) > 0;
 		if (
 			overrideSettings !== undefined &&
+			loaderHasExtensions &&
 			loader instanceof DefaultResourceLoader &&
 			state.settingsPromise !== undefined
 		) {

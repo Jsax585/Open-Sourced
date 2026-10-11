@@ -37,10 +37,10 @@ import { resolveExtensionDirectory } from "./directory-resolution";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "../plugins/legacy-pi-compat";
 import { getAllPluginExtensionPaths } from "../plugins/loader";
 
+import { MAX_TIMER_DELAY_MS } from "@oh-my-pi/pi-utils";
 import { resolvePath, withHostGuard } from "../utils";
 import type { Settings } from "../../config/settings";
 import {
-	MAX_TIMER_DELAY_MS,
 	baseHandlerTimeoutForEvent,
 	configuredHandlerTimeoutCeiling,
 	fallbackHandlerTimeout,
