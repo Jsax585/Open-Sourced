@@ -4346,7 +4346,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			model => modelRegistry.getApiKey(model, providerSessionId),
 		);
 		disposeCallbacks.add(() => blobBroker.dispose());
-		const dateCwdReminder = new DateCwdReminderInjector();
+		const dateCwdReminder = new DateCwdReminderInjector(sessionManager);
+		const advisorDateCwdReminder = new DateCwdReminderInjector();
 		// Always installed; the getter-backed options are snapshotted per request,
 		// so `snapcompact.*` changes apply on the next call (a no-op while both are off).
 		const snapcompactInline = new SnapcompactInlineTransformer(
@@ -4368,29 +4369,33 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// only when a provider fetches them, never held as pixels here.
 			blobBroker,
 		);
-		const transformProviderContext = async (context: Context, transformModel: Model): Promise<Context> => {
-			let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
-			// The archive was sized for the model active at the last context build; a model switch may have lowered the budget.
-			transformed = capArchiveFrameBytes(transformed, transformModel);
-			transformed = await snapcompactInline.transform(transformed, transformModel);
-			transformed = clampProviderContextImages(transformed, transformModel);
-			transformed = await normalizeProviderContextImagesForModel(transformed, transformModel);
-			// After the model-specific normalizers: they carry better wording for the
-			// cases they own (STB WebP), so this stays the backstop for everything
-			// else, and it runs before the blob broker uploads any of these bytes.
-			transformed = await dropUnreadableContextImages(transformed, transformModel);
-			transformed = await blobBroker.decorateContext(transformed, transformModel);
-			// Byte budget after decoration: URL/file-referenced images carry no inline bytes.
-			transformed = clampProviderContextImageBytes(transformed, transformModel);
-			// Keep per-request volatility out of the system prompt: the date/cwd
-			// reminder rides on the first user turn so open-weight providers keep
-			// their tool-schema prefix cache (#7404).
-			return dateCwdReminder.transform(
-				transformed,
-				formatLocalCalendarDate(),
-				normalizePromptPath(sessionManager.getCwd()),
-			);
+		const createTransformProviderContext = (reminder: DateCwdReminderInjector) => {
+			return async (context: Context, transformModel: Model): Promise<Context> => {
+				let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
+				// The archive was sized for the model active at the last context build; a model switch may have lowered the budget.
+				transformed = capArchiveFrameBytes(transformed, transformModel);
+				transformed = await snapcompactInline.transform(transformed, transformModel);
+				transformed = clampProviderContextImages(transformed, transformModel);
+				transformed = await normalizeProviderContextImagesForModel(transformed, transformModel);
+				// After the model-specific normalizers: they carry better wording for the
+				// cases they own (STB WebP), so this stays the backstop for everything
+				// else, and it runs before the blob broker uploads any of these bytes.
+				transformed = await dropUnreadableContextImages(transformed, transformModel);
+				transformed = await blobBroker.decorateContext(transformed, transformModel);
+				// Byte budget after decoration: URL/file-referenced images carry no inline bytes.
+				transformed = clampProviderContextImageBytes(transformed, transformModel);
+				// Keep per-request volatility out of the system prompt: the date/cwd
+				// reminder rides on the first user turn so open-weight providers keep
+				// their tool-schema prefix cache (#7404).
+				return reminder.transform(
+					transformed,
+					formatLocalCalendarDate(),
+					normalizePromptPath(sessionManager.getCwd()),
+				);
+			};
 		};
+		const transformProviderContext = createTransformProviderContext(dateCwdReminder);
+		const advisorTransformProviderContext = createTransformProviderContext(advisorDateCwdReminder);
 		const onPayload = async (payload: unknown, model?: Model, signal?: AbortSignal) => {
 			return await extensionRunner.emitBeforeProviderRequest(payload, model, signal);
 		};
@@ -4797,6 +4802,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			mcpManagerToolNames: initialMcpManagerToolNames,
 			transformContext,
 			transformProviderContext,
+			advisorTransformProviderContext,
 			onPayload,
 			onResponse,
 			sideStreamFn: settingsAwareStreamFn,
@@ -4864,7 +4870,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// otherwise surface as "issued in this session" in mismatch diagnostics
 		// after a reset (#13370). The tools snapshot into THIS store, not the
 		// AgentSession's own lazy field.
-		session.registerSessionChangeCallback(() => toolSession.editStore?.clear());
+		session.registerSessionChangeCallback(() => {
+			toolSession.editStore?.clear();
+			dateCwdReminder.rebuild();
+		});
 		if (ownedSkillDescriptionStore) {
 			// Let in-flight compressions land before releasing the file.
 			session.addDisposer(

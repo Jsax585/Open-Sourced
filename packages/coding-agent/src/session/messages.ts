@@ -53,6 +53,7 @@ import {
 import { convertMessageToLlm } from "@oh-my-pi/pi-agent-core/compaction/messages";
 import type { AssistantMessage, ImageContent, Message, TextContent, UserMessage } from "@oh-my-pi/pi-ai";
 import { copyPerCallContextMessage } from "@oh-my-pi/pi-ai/utils/block-symbols";
+import { copyPersistedSessionEntryId } from "./session-entries";
 import { isRecord, logger, prompt } from "@oh-my-pi/pi-utils";
 import { COLLAB_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-wire";
 import userInterjectionTemplate from "../prompts/steering/user-interjection.md" with { type: "text" };
@@ -713,6 +714,7 @@ function wrapSteeringUserMessage(message: SteeringUserMessage): UserMessage {
 					timestamp: message.timestamp,
 				};
 	copyPerCallContextMessage(userMessage, message);
+	copyPersistedSessionEntryId(userMessage, message);
 	if (typeof message.content === "string") {
 		if (message.content.length === 0) return message.role === "user" ? message : userMessage;
 		return { ...userMessage, content: renderSteeringEnvelope(message.content) };
@@ -1194,7 +1196,10 @@ function convertOneCached(m: AgentMessage, interruptedNext: boolean): Message[] 
 	const cached = convertCache.get(m);
 	if (cached !== undefined && cached.interruptedNext === interruptedNext) return cached.fragment;
 	const fragment = convertOne(m, interruptedNext);
-	for (const message of fragment) copyPerCallContextMessage(message, m);
+	for (const message of fragment) {
+		copyPerCallContextMessage(message, m);
+		copyPersistedSessionEntryId(message, m);
+	}
 	convertCache.set(m, { interruptedNext, fragment });
 	return fragment;
 }

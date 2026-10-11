@@ -50,6 +50,7 @@ import {
 	snapcompactHistoryBlockOptions,
 } from "./session-context";
 import {
+	setPersistedSessionEntryId,
 	type BranchSummaryEntry,
 	type CompactionEntry,
 	type CredentialPinEntry,
@@ -3418,6 +3419,7 @@ export class SessionManager {
 			| FileMentionMessage,
 	): string {
 		const entry: SessionMessageEntry = { type: "message", ...this.#freshEntryFields(), message };
+		setPersistedSessionEntryId(message, entry.id);
 		this.#recordEntry(entry);
 		return entry.id;
 	}
@@ -3453,6 +3455,7 @@ export class SessionManager {
 			message,
 			...(options?.preserveActiveLeaf === false ? {} : { activeLeafId }),
 		};
+		setPersistedSessionEntryId(message, entry.id);
 		// The entry never joins the active branch; keep it out of any branch view
 		// already handed out. Recording `activeLeafId` leaves the index's leaf on
 		// the active branch, as the in-memory contract requires.
