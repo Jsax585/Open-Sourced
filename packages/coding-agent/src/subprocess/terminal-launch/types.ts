@@ -6,6 +6,8 @@ export interface PlacementCapabilities {
 	execution?: readonly string[];
 	/** Descriptive noun for the accepted target, or `false` when the placement rejects one. */
 	target?: string | false;
+	/** Ambient target marker(s) required without an explicit target; any listed marker suffices. */
+	defaultTargetEnvs?: readonly string[];
 	direction?: readonly string[];
 	floating?: true;
 	floatingDirectionExclusive?: true;
@@ -43,6 +45,8 @@ export interface TerminalLaunchPlacementInfo {
 	multiplexer: TerminalLaunchMultiplexer;
 	displayName: string;
 	placementLabel: string;
+	/** Provider-default target environment marker(s); if multiple are listed, any one is sufficient. */
+	defaultTargetEnvs?: readonly string[];
 	shellGrammar?: "posix";
 }
 

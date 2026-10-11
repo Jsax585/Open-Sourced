@@ -10,6 +10,7 @@ const capabilities = {
 		displayName: "pane",
 		execution: ["shell-input"],
 		target: "pane",
+		defaultTargetEnvs: ["HERDR_PANE_ID"],
 		direction: ["right", "down"],
 		focus: true,
 		shellGrammar: "posix",

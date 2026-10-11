@@ -1,8 +1,9 @@
 import type { BunFile } from "bun";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import type { OverlayHandle, TUI } from "@oh-my-pi/pi-tui";
 import { AnnotationOverlay } from "@oh-my-pi/pi-tui/overlays/annotation-overlay";
+import { classifyTerminalMultiplexer, hasTerminalMultiplexerSession } from "@oh-my-pi/pi-tui/terminal-multiplexer";
 import type {
 	CodeReviewOverlayResult,
 	TextReviewOverlayResult,
@@ -18,7 +19,13 @@ import {
 } from "@oh-my-pi/pi-tui/render/render-utils";
 import { isEnoent, pathIsWithin } from "@oh-my-pi/pi-utils";
 import type { CustomCommandContext } from "../../../../extensibility/custom-commands/types";
-import { getEditorCommand, openEditorOnPath, openInEditor } from "../../../../utils/external-editor";
+import { createDefaultTerminalLaunchRequest, getTerminalLaunchPlacement } from "../../../../subprocess/terminal-launch";
+import {
+	getEditorCommand,
+	openEditorOnPath,
+	openInEditor,
+	resolveEditorSpawnCommand,
+} from "../../../../utils/external-editor";
 import type { ResolvedReviewTarget } from "../review/target";
 
 /** What the overlay host reads: the UI surface plus the live session cwd for editor paths. */
@@ -48,6 +55,86 @@ function requireEditor(): string {
 	const editor = getEditorCommand();
 	if (!editor) throw new Error(MISSING_EDITOR);
 	return editor;
+}
+
+// Pane launches are detached, so keep the overlay live and the captured source unchanged.
+type PaneEditorLaunch = "opened" | "fallback" | "cancelled";
+
+async function openFileInPane(
+	ctx: AnnotationOverlayContext,
+	editor: string,
+	filePath: string,
+	label: string,
+	sourceNotice: string,
+	overlayHandle?: OverlayHandle,
+): Promise<PaneEditorLaunch> {
+	const openTerminal = ctx.ui.openTerminal;
+	if (!openTerminal) return "fallback";
+	const safeLabel = displayPathLabel(label);
+
+	const multiplexer = classifyTerminalMultiplexer(process.env);
+	const placementInfo = getTerminalLaunchPlacement(multiplexer, "pane");
+	if ("error" in placementInfo) return "fallback";
+	// Classification may survive a stripped environment; provider-owned target
+	// metadata distinguishes a runnable default launch from a local-editor fallback.
+	const defaultTargetEnvs = placementInfo.defaultTargetEnvs;
+	if (
+		defaultTargetEnvs &&
+		(!hasTerminalMultiplexerSession(placementInfo.multiplexer, process.env) ||
+			!defaultTargetEnvs.some(key => Boolean(process.env[key]?.trim())))
+	) {
+		return "fallback";
+	}
+
+	if (placementInfo.shellGrammar === "posix") {
+		const wasHidden = overlayHandle?.isHidden() ?? false;
+		let confirmed: boolean;
+		try {
+			if (!wasHidden) overlayHandle?.setHidden(true);
+			confirmed = await ctx.ui.confirm(
+				"Confirm destination shell compatibility",
+				"This editor command uses POSIX shell syntax. Continue only if the destination's configured interactive shell accepts POSIX syntax; this cannot be inferred from the current terminal.",
+			);
+		} finally {
+			if (overlayHandle && !wasHidden) overlayHandle.setHidden(false);
+		}
+		if (!confirmed) {
+			ctx.ui.notify(
+				notificationText(
+					"Editor launch cancelled: POSIX shell compatibility was not confirmed for the destination.",
+				),
+				"warning",
+			);
+			return "cancelled";
+		}
+	}
+
+	const spawnCommand = resolveEditorSpawnCommand(editor, filePath);
+	const cwd = ctx.sessionManager.getCwd?.() ?? ctx.cwd;
+	const launchPlan = createDefaultTerminalLaunchRequest(
+		multiplexer,
+		"pane",
+		spawnCommand.cmd,
+		cwd,
+		placementInfo.shellGrammar,
+	);
+	if ("error" in launchPlan) throw new Error(launchPlan.error);
+
+	const result = await openTerminal.call(ctx.ui, launchPlan.request);
+	if (result.warning) {
+		ctx.ui.notify(
+			notificationText(`Opened ${safeLabel} in ${placementInfo.displayName}, but ${result.warning} ${sourceNotice}`),
+			"warning",
+		);
+	} else {
+		ctx.ui.notify(
+			notificationText(
+				`Opened ${safeLabel} in a new ${placementInfo.placementLabel} in ${placementInfo.displayName}. ${sourceNotice}`,
+			),
+			"info",
+		);
+	}
+	return "opened";
 }
 
 async function requireRegularFile(filePath: string, label: string, context = ""): Promise<BunFile> {
@@ -100,10 +187,22 @@ async function editTextSource(
 	ctx: AnnotationOverlayContext,
 	overlay: AnnotationOverlay,
 	provenance: EditableProvenance,
+	overlayHandle?: OverlayHandle,
 ): Promise<void> {
 	const editor = requireEditor();
 	const current = overlay.textSourceText() ?? "";
-	if (provenance.kind === "file") await requireRegularFile(provenance.path, provenance.path);
+	if (provenance.kind === "file") {
+		await requireRegularFile(provenance.path, provenance.path);
+		const paneLaunch = await openFileInPane(
+			ctx,
+			editor,
+			provenance.path,
+			provenance.path,
+			"The file-backed annotation source stays at this snapshot until you press r to reread it.",
+			overlayHandle,
+		);
+		if (paneLaunch !== "fallback") return;
+	}
 
 	tui.stop();
 	let next: string | null;
@@ -130,10 +229,13 @@ async function openAssociatedFile(
 	ctx: AnnotationOverlayContext,
 	filePath: string,
 	label: string,
+	overlayHandle?: OverlayHandle,
 ): Promise<void> {
 	const editor = requireEditor();
 	await requireRegularFile(filePath, label);
 	const sourceNotice = "The selected source stays at this snapshot until you press r to reread its associated file.";
+	const paneLaunch = await openFileInPane(ctx, editor, filePath, label, sourceNotice, overlayHandle);
+	if (paneLaunch !== "fallback") return;
 
 	tui.stop();
 	let exitCode: number;
@@ -152,6 +254,7 @@ async function editReviewedFile(
 	ctx: AnnotationOverlayContext,
 	overlay: AnnotationOverlay,
 	target: ResolvedReviewTarget,
+	overlayHandle?: OverlayHandle,
 ): Promise<void> {
 	const relative = overlay.reviewFilePath();
 	if (!relative) throw new Error("No file to open.");
@@ -179,6 +282,9 @@ async function editReviewedFile(
 		ctx.ui.notify(notificationText(`${detail} ${sourceNotice}`), "warning");
 		return;
 	}
+	const paneLaunch = await openFileInPane(ctx, editor, absolute, relative, sourceNotice, overlayHandle);
+	if (paneLaunch !== "fallback") return;
+
 	tui.stop();
 	let exitCode: number;
 	try {
@@ -196,6 +302,7 @@ export function showCodeReviewOverlay(
 	ctx: AnnotationOverlayContext,
 	target: ResolvedReviewTarget,
 ): Promise<CodeReviewOverlayResult | undefined> {
+	let overlayHandle: OverlayHandle | undefined;
 	const refreshTarget = target.refresh;
 	return ctx.ui.custom<CodeReviewOverlayResult | undefined>(
 		(tui, theme, keybindings, done) => {
@@ -216,12 +323,18 @@ export function showCodeReviewOverlay(
 						: undefined,
 					onAnnotationExternalEditor: (draft, commit) => editAnnotationDraft(tui, draft, commit),
 					// The fetched/supplied diff remains the review source; Ctrl+G only opens its local counterpart.
-					onExternalEditor: () => editReviewedFile(tui, ctx, overlay, target),
+					onExternalEditor: () => editReviewedFile(tui, ctx, overlay, target, overlayHandle),
 				},
 			);
 			return overlay;
 		},
-		{ overlay: true, overlayOptions: ANNOTATION_OVERLAY_OPTIONS },
+		{
+			overlay: true,
+			overlayOptions: ANNOTATION_OVERLAY_OPTIONS,
+			onHandle: handle => {
+				overlayHandle = handle;
+			},
+		},
 	);
 }
 
@@ -230,6 +343,7 @@ export function showTextReviewOverlay(
 	ctx: AnnotationOverlayContext,
 	source: TextReviewSource,
 ): Promise<TextReviewOverlayResult | undefined> {
+	let overlayHandle: OverlayHandle | undefined;
 	return ctx.ui.custom<TextReviewOverlayResult | undefined>(
 		(tui, theme, keybindings, done) => {
 			let currentSource: TextReviewSource = { ...source };
@@ -248,10 +362,10 @@ export function showTextReviewOverlay(
 				? () => {
 						const provenance = currentSource.provenance;
 						if (provenance?.kind === "file" || provenance?.kind === "prompt") {
-							return editTextSource(tui, ctx, overlay, provenance);
+							return editTextSource(tui, ctx, overlay, provenance, overlayHandle);
 						}
 						const filePath = currentSource.editorFilePath;
-						if (filePath) return openAssociatedFile(tui, ctx, filePath, filePath);
+						if (filePath) return openAssociatedFile(tui, ctx, filePath, filePath, overlayHandle);
 					}
 				: undefined;
 			const overlay: AnnotationOverlay = new AnnotationOverlay(tui, theme, keybindings, source, {
@@ -263,6 +377,12 @@ export function showTextReviewOverlay(
 			});
 			return overlay;
 		},
-		{ overlay: true, overlayOptions: ANNOTATION_OVERLAY_OPTIONS },
+		{
+			overlay: true,
+			overlayOptions: ANNOTATION_OVERLAY_OPTIONS,
+			onHandle: handle => {
+				overlayHandle = handle;
+			},
+		},
 	);
 }
