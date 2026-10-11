@@ -5,6 +5,7 @@
 ### Added
 
 - Added hiding a pending `ask` question without answering it: `Alt+H` (`app.ask.hide`) or the Hide button in Tern collapses the dialog to one line; the same key, `Enter`, or Show brings it back ([#15400](https://github.com/can1357/oh-my-pi/pull/15400) by [@H4vC](https://github.com/H4vC))
+- Extensions can run text as if the user typed it with `pi.sendUserInput(text, { deliverAs?, tag? })`: `/skill:<name>`, headless built-in slash commands, extension and custom commands, file slash commands and prompt templates run as they do in RPC mode, and the call reports how the text was handled (`prompt`, `command` with any output, `skill`, `terminal-only`, or `unavailable`). `tag` is recorded on the message the input submits, so a bridge can match it on `message_start` ([#14323](https://github.com/can1357/oh-my-pi/pull/14323) by [@sjawhar](https://github.com/sjawhar)).
 
 ### Changed
 
