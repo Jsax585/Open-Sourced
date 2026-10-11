@@ -31,6 +31,9 @@ const RUNTIME_ONLY_PROVIDERS = new Set([
 	// lanes), so no rows are frozen into models.json.
 	"singularityapi-dev",
 	"singularityapi-tech",
+	// Experiential Labs' roster is live and key-scoped (keys can carry model
+	// allowlists); experientialModelManagerOptions maps it at runtime.
+	"experiential",
 	// Clef judges are a `bundle="always"` KDL seed that
 	// cloudflareWorkersAiModelManagerOptions serves at runtime; models.json
 	// gains the rows at the next regeneration.

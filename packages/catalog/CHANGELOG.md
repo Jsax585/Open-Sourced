@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added built-in Experiential Labs support with `/login`, live per-key model discovery, gateway pricing, and per-model reasoning levels. ([#15179](https://github.com/can1357/oh-my-pi/pull/15179) by [@dbk216](https://github.com/dbk216))
 - Added the `judgment-questions-max` catalog axis and `resolveJudgmentQuestionsMax`: self-hosted OpenJEV judges are capped at 16 questions per System One request, razorback16/openjev's `openjev-latest`, Laya, Verdict and JevK5 at 256, and hosted jev stays uncapped ([#15368](https://github.com/can1357/oh-my-pi/pull/15368) by [@H4vC](https://github.com/H4vC))
 - Added the OpenAI Decisions judge `openai/gpt-6-luna-decisions` (GPT-6 Luna, $0.10 per 1M input tokens, text and image input) on the new `openai-decisions` judge API; it appears after OpenAI model discovery succeeds
 - Added the `cloudflare-workers-ai` provider with Cloudflare's Clef and Clef Flash judges on the new `workers-ai-systemone` judge API, authenticated by `/login cloudflare-workers-ai` or `CLOUDFLARE_API_TOKEN` with `CLOUDFLARE_ACCOUNT_ID`
