@@ -385,6 +385,17 @@ export function collectIrcPeerRoster(
 	return { peers, parkedCount, omittedCount };
 }
 
+/**
+ * Context files a subagent starts with: the parent's, minus root `AGENTS.md`
+ * files, plus the nested files the parent loaded on touch and still holds.
+ * Undefined when the parent has none resolved, so the child discovers its own.
+ */
+export function inheritedContextFiles(session: ToolSession): ContextFileEntry[] | undefined {
+	const inherited = session.contextFiles?.filter(file => path.basename(file.path).toLowerCase() !== "agents.md");
+	if (!inherited) return undefined;
+	return [...inherited, ...(session.getNestedContextFiles?.() ?? [])];
+}
+
 /** Options for subagent execution */
 export interface ExecutorOptions {
 	cwd: string;

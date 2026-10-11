@@ -43,6 +43,7 @@ import {
 	TERMINAL_TOOL_RESULT_ABORT_REASON,
 	type ThinkingLevel,
 	type ToolChoiceDirective,
+	joinAdditionalContext,
 } from "@oh-my-pi/pi-agent-core";
 import {
 	type CompactionPreparation,
@@ -218,7 +219,7 @@ import {
 	toReasoningEffort,
 } from "@oh-my-pi/pi-tui/thinking";
 import { isAttachmentOnlyTitleInput, isLowSignalTitleInput } from "../tiny/text";
-import type { ImageAttachmentEntry, ToolSession } from "../tools";
+import type { ContextFileEntry, ImageAttachmentEntry, ToolSession } from "../tools";
 import { resolveApproval } from "../tools/approval";
 import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 import { type AskToolInput, recoverAskQuestions } from "../tools/ask";
@@ -461,6 +462,7 @@ const TITLE_FORK_TIMEOUT_MS = 15_000;
 
 import { LoopGuards, type StreamGuardsHost, StreamingEditGuard } from "./stream-guards";
 import { TodoTracker, type TodoTrackerHost } from "./todo-tracker";
+import { NestedContextInjector } from "./nested-context";
 import { TtsrCoordinator, type TtsrCoordinatorHost } from "./ttsr-coordinator";
 
 import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
@@ -1044,6 +1046,7 @@ export class AgentSession implements SettingsScope {
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
 
 	readonly #ttsr: TtsrCoordinator;
+	readonly #nestedContext: NestedContextInjector;
 	readonly #stats: SessionStatsTracker;
 
 	/** One-shot flag for expected internal plan-mode aborts. Approval actions may
@@ -2108,6 +2111,12 @@ export class AgentSession implements SettingsScope {
 			sessionGeneration: () => this.#sessionGeneration,
 		};
 		this.#ttsr = new TtsrCoordinator(ttsrHost, config.ttsrManager);
+		this.#nestedContext = new NestedContextInjector({
+			settings: this.settings,
+			cwd: () => this.sessionManager.getCwd(),
+			additionalDirectories: () => this.sessionManager.getAdditionalDirectories(),
+			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
+		});
 		this.#extensionRunner?.setToolCallPreflight?.({
 			before: (toolCallId, tool, args) => this.#ttsr.beforeBridgedToolCall(toolCallId, tool, args),
 			after: (toolCallId, result, context) => this.#ttsr.afterBridgedToolCall(toolCallId, result, context),
@@ -4906,7 +4915,9 @@ export class AgentSession implements SettingsScope {
 		}
 	}
 
-	#afterToolCall(ctx: AfterToolCallContext): AfterToolCallResult | undefined {
+	#afterToolCall(
+		ctx: AfterToolCallContext,
+	): Promise<AfterToolCallResult | undefined> | AfterToolCallResult | undefined {
 		if (
 			this.#isTerminalYieldToolResult({
 				toolName: ctx.toolCall.name,
@@ -4919,7 +4930,13 @@ export class AgentSession implements SettingsScope {
 			this.#synchronouslyTerminatedYieldToolCallIds.add(ctx.toolCall.id);
 			this.agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
 		}
-		return this.#ttsr.afterToolCall(ctx);
+		const ttsr = this.#ttsr.afterToolCall(ctx);
+		const nested = this.#nestedContext.afterToolCall(ctx);
+		if (!nested) return ttsr;
+		return nested.then(text => {
+			const additionalContext = joinAdditionalContext([ttsr?.additionalContext, text]);
+			return additionalContext ? { ...ttsr, additionalContext } : ttsr;
+		});
 	}
 	/**
 	 * Emits the extension `tool_call` event for a loop-dispatched call at
@@ -9227,6 +9244,11 @@ export class AgentSession implements SettingsScope {
 	/** Session-local general-purpose agents pinned to user-tagged models. */
 	getSessionAgents(): AgentDefinition[] {
 		return this.#modelMentions.sessionAgents();
+	}
+
+	/** Nested context files loaded on touch and still in context, for subagents to inherit. */
+	getNestedContextFiles(): ContextFileEntry[] {
+		return this.#nestedContext.carried(this.agent.state.messages);
 	}
 
 	/** Registered model pseudonyms on the active branch. */
