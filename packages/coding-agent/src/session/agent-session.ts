@@ -977,7 +977,7 @@ export class AgentSession implements SettingsScope {
 	#turnIndex = 0;
 	#messageEndPersistenceTail: Promise<void> = Promise.resolve();
 	#pendingMessageEndPersistence = new Map<string, Promise<void>>();
-	#assistantResponseSettlements = new WeakMap<AssistantMessage, Promise<void>>();
+	#assistantResponseSettlements = new Map<string, Promise<void>>();
 	#persistedMessageKeys: { anchor: string; keys: Set<string> } | undefined;
 
 	// Custom commands (TypeScript slash commands)
@@ -3466,13 +3466,21 @@ export class AgentSession implements SettingsScope {
 		persistence: Promise<void>,
 		promptGeneration: number,
 	): Promise<void> {
-		const existing = this.#assistantResponseSettlements.get(message);
+		// Event snapshots and turn-end originals share a persistence key, not identity.
+		const key = sessionMessagePersistenceKey(message);
+		const existing = key !== undefined ? this.#assistantResponseSettlements.get(key) : undefined;
 		if (existing) return existing;
-		const settlement = persistence.then(async () => {
-			if (this.#promptGeneration !== promptGeneration) return;
-			await this.#settleAssistantResponse(message);
-		});
-		this.#assistantResponseSettlements.set(message, settlement);
+		const settlement = persistence
+			.then(async () => {
+				if (this.#promptGeneration !== promptGeneration) return;
+				await this.#settleAssistantResponse(message);
+			})
+			.finally(() => {
+				if (key !== undefined && this.#assistantResponseSettlements.get(key) === settlement) {
+					this.#assistantResponseSettlements.delete(key);
+				}
+			});
+		if (key !== undefined) this.#assistantResponseSettlements.set(key, settlement);
 		void settlement.catch(error => {
 			logger.warn("Failed to settle assistant response", { error: String(error) });
 		});
@@ -3480,7 +3488,8 @@ export class AgentSession implements SettingsScope {
 	}
 
 	async #waitForAssistantResponseSettlement(message: AssistantMessage): Promise<void> {
-		await this.#assistantResponseSettlements.get(message);
+		const key = sessionMessagePersistenceKey(message);
+		if (key !== undefined) await this.#assistantResponseSettlements.get(key);
 	}
 
 	async #settleAssistantResponse(assistantMsg: AssistantMessage): Promise<void> {

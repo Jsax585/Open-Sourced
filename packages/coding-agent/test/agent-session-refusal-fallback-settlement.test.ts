@@ -360,6 +360,18 @@ describe("AgentSession refusal fallback response settlement", () => {
 			// Release bookkeeping only after turn-end reaches its restoration
 			// decision: skipping the matching-response wait must invoke the fallback again.
 			await restorationBoundary.promise;
+			// Let turn-end progress while bookkeeping is held. It must not
+			// sample a tool-result continuation on the fallback before settlement.
+			const checkpoint = Promise.withResolvers<void>();
+			const channel = new MessageChannel();
+			channel.port1.onmessage = () => checkpoint.resolve();
+			try {
+				channel.port2.postMessage(null);
+				await checkpoint.promise;
+			} finally {
+				channel.port1.close();
+				channel.port2.close();
+			}
 			expect(requestedModels).toEqual([primary, fallback]);
 			expect(session.model?.id).toBe(fallbackModel.id);
 			release.resolve();

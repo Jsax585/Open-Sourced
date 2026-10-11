@@ -5,12 +5,13 @@ import { Effort, type Model } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { formatModelStringWithRouting } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { formatModelStringWithRouting, parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { cfgRetryRefusalFallbackRevertPolicy } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -338,20 +339,27 @@ describe("AgentSession /new fallback persistence", () => {
 		expect(resumed.thinkingLevel).toBe(Effort.Medium);
 	});
 
-	it("keeps a pinned refusal fallback as the legacy selected model", async () => {
+	it("adopts a pinned refusal fallback as /new primary and uses its own chain", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const fallbackModel = getBundledModel("anthropic", "claude-opus-4-1")!;
+		const ownChainModel = getBundledModel("openai", "gpt-4o-mini")!;
+		const oldChainModel = getBundledModel("openai", "gpt-4o")!;
 		const primary = formatModelStringWithRouting(primaryModel);
 		const fallback = formatModelStringWithRouting(fallbackModel);
+		const ownChain = formatModelStringWithRouting(ownChainModel);
+		const oldChain = formatModelStringWithRouting(oldChainModel);
 		const requestedModels: string[] = [];
 		const agent = createScriptedAgent(primaryModel, requestedModels, [
 			{ stopReason: "error", stopDetails: { type: "refusal" }, errorMessage: "Classifier declined" },
 			{ content: [], stopReason: "aborted", errorMessage: "Cancelled" },
+			{ content: ["The new primary answered"] },
+			{ stopReason: "error", stopDetails: { type: "refusal" }, errorMessage: "New primary declined" },
+			{ content: ["The new primary's own chain answered"] },
 		]);
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
 			"retry.maxRetries": 1,
-			"retry.fallbackChains": { [primary]: [`${fallback}:low`] },
+			"retry.fallbackChains": { [primary]: [`${fallback}:low`, oldChain], [fallback]: [ownChain] },
 			"retry.refusalFallbackRevertPolicy": "default",
 		});
 		settings.setModelRole("default", `${primary}:high`);
@@ -377,11 +385,128 @@ describe("AgentSession /new fallback persistence", () => {
 		await session.flushToDisk();
 		const sessionFile = session.sessionFile;
 		if (!sessionFile) throw new Error("Expected /new session to persist");
+		const snapshotFile = tempDir.join("pinned-new-boundary.jsonl");
+		await Bun.write(snapshotFile, await Bun.file(sessionFile).text());
+		const succeeded: string[] = [];
+		session.subscribe(event => {
+			if (event.type === "retry_fallback_succeeded") succeeded.push(event.model);
+		});
+
+		await session.prompt("Answer on the new primary");
+		await session.waitForIdle();
+		expect(requestedModels).toEqual([primary, fallback, fallback]);
+		expect(session.servingModel).toMatchObject({ modelIdentity: fallback, isFallback: false });
+		expect(succeeded).toEqual([]);
+
+		await session.prompt("Reject on the new primary");
+		await session.waitForIdle();
+		expect(requestedModels).toEqual([primary, fallback, fallback, fallback, ownChain]);
+		expect(session.servingModel).toMatchObject({ modelIdentity: ownChain, isFallback: true });
+		expect(succeeded.map(selector => parseModelPattern(selector, [ownChainModel, oldChainModel])?.model?.id)).toEqual(
+			[ownChainModel.id],
+		);
 		await closeSession(session);
 
-		const resumed = await coldResume(sessionFile, settings);
+		const resumed = await coldResume(snapshotFile, settings);
 		expect(resumed.model?.id).toBe(fallbackModel.id);
 		expect(resumed.configuredThinkingLevel()).toBe(Effort.Low);
 		expect(resumed.thinkingLevel).toBe(Effort.Low);
 	});
+
+	it.each([false, true])(
+		"drops pinned ownership beneath an unfinished /new detour (reject baseline: %s)",
+		async rejectBaseline => {
+			const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+			const pinnedModel = getBundledModel("anthropic", "claude-opus-4-1")!;
+			const detourModel = getBundledModel("openai", "gpt-4o")!;
+			const ownChainModel = getBundledModel("openai", "gpt-4o-mini")!;
+			const primary = formatModelStringWithRouting(primaryModel);
+			const pinned = formatModelStringWithRouting(pinnedModel);
+			const detour = formatModelStringWithRouting(detourModel);
+			const ownChain = formatModelStringWithRouting(ownChainModel);
+			const refusal: MockResponse = {
+				stopReason: "error",
+				stopDetails: { type: "refusal" },
+				errorMessage: "Classifier declined",
+			};
+			const aborted: MockResponse = { content: [], stopReason: "aborted", errorMessage: "Cancelled" };
+			const requestedModels: string[] = [];
+			const agent = createScriptedAgent(primaryModel, requestedModels, [
+				refusal,
+				aborted,
+				refusal,
+				aborted,
+				{ content: ["The unfinished detour completed"] },
+				...(rejectBaseline ? [refusal, { content: ["The adopted primary's own chain answered"] }] : []),
+				{ content: ["The adopted primary answered"] },
+			]);
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.maxRetries": 2,
+				"retry.fallbackChains": { [primary]: [`${pinned}:low`, detour], [pinned]: [ownChain] },
+				"retry.refusalFallbackRevertPolicy": "default",
+			});
+			settings.setModelRole("default", `${primary}:high`);
+			const manager = SessionManager.create(tempDir.path(), tempDir.join(`pinned-detour-${rejectBaseline}`));
+			manager.appendModelChange(`${primary}:high`);
+			const session = trackSession(
+				new AgentSession({ agent, sessionManager: manager, settings, modelRegistry, thinkingLevel: Effort.High }),
+			);
+			const succeeded: string[] = [];
+			session.subscribe(event => {
+				if (event.type === "retry_fallback_succeeded") succeeded.push(event.model);
+			});
+
+			await session.prompt("Enter the pinned fallback");
+			await session.waitForIdle();
+			settings.writeValue(cfgRetryRefusalFallbackRevertPolicy, "after-success", "override");
+			await session.prompt("Leave an unfinished request-scoped detour");
+			await session.waitForIdle();
+			expect(requestedModels).toEqual([primary, pinned, pinned, detour]);
+			expect(await session.newSession()).toBe(true);
+			expect(session.servingModel).toMatchObject({ modelIdentity: detour, isFallback: true });
+			await session.flushToDisk();
+			const file = session.sessionFile;
+			if (!file) throw new Error("Expected /new detour to persist");
+			const snapshotFile = tempDir.join(`pinned-detour-boundary-${rejectBaseline}.jsonl`);
+			await Bun.write(snapshotFile, await Bun.file(file).text());
+
+			await session.prompt("Finish the carried detour");
+			await session.waitForIdle();
+			expect(requestedModels).toEqual([primary, pinned, pinned, detour, detour]);
+			expect(session.model?.id).toBe(pinnedModel.id);
+			expect(session.configuredThinkingLevel()).toBe(Effort.Low);
+			expect(session.servingModel).toMatchObject({ modelIdentity: detour, isFallback: true });
+
+			await session.prompt(rejectBaseline ? "Reject on the adopted primary" : "Answer on the adopted primary");
+			await session.waitForIdle();
+			if (rejectBaseline) {
+				expect(requestedModels).toEqual([primary, pinned, pinned, detour, detour, pinned, ownChain]);
+				expect(session.model?.id).toBe(pinnedModel.id);
+				expect(session.servingModel).toMatchObject({ modelIdentity: ownChain, isFallback: true });
+				await session.prompt("Answer after the new primary's own detour");
+				await session.waitForIdle();
+			}
+			expect(requestedModels).toEqual([
+				primary,
+				pinned,
+				pinned,
+				detour,
+				detour,
+				...(rejectBaseline ? [pinned, ownChain] : []),
+				pinned,
+			]);
+			expect(session.servingModel).toMatchObject({ modelIdentity: pinned, isFallback: false });
+			expect(
+				succeeded.map(
+					selector => parseModelPattern(selector, [detourModel, ownChainModel, pinnedModel])?.model?.id,
+				),
+			).toEqual([detourModel.id, ...(rejectBaseline ? [ownChainModel.id] : [])]);
+			await closeSession(session);
+			const resumed = await coldResume(snapshotFile, settings);
+			expect(resumed.model?.id).toBe(pinnedModel.id);
+			expect(resumed.configuredThinkingLevel()).toBe(Effort.Low);
+			expect(resumed.servingModel?.isFallback).toBe(false);
+		},
+	);
 });

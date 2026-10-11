@@ -15,6 +15,8 @@
 - Fixed interrupted fallback swaps leaving the active model, saved model, and thinking level inconsistent ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
 - Fixed pending refusal restoration being cancelled by policy changes or delayed by unrelated extension handlers ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
 - Fixed reloading the active transcript reporting primary replies as refusal-fallback successes ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
+- Fixed refusal-fallback tool continuations staying on the fallback instead of restoring the primary ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
+- Fixed `/new` retaining fallback attribution and old retry chains when a pinned fallback becomes the new primary ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
 
 ## [18.8.9] - 2026-10-10
 

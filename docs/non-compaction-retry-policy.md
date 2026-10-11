@@ -224,6 +224,8 @@ create an availability cooldown for the model it restores.
 
 Restoration waits for that assistant response's transcript persistence and
 success bookkeeping, not unrelated message, tool, or turn-end extension handlers.
+The emitted message snapshot and the original turn-end response are matched by
+their stable persistence key, so a tool-result continuation cannot bypass that wait.
 Sessions without a request-scoped refusal fallback do not acquire this wait.
 
 The previous model must still be available and outside any existing cooldown.
@@ -243,6 +245,11 @@ An ordinary abort finishes that restoration; an explicit model selection still w
 layer, including an availability fallback beneath an unfinished refusal detour.
 A fallback answer must not become the new transcript's selected model just because
 it answered last.
+
+When a pinned fallback becomes the `/new` baseline, its old fallback ownership is
+dropped. An unfinished detour above it retains its captured route and restoration
+policy, then restores the adopted baseline as a primary. Later failures on that
+baseline use its own configured fallback chain.
 
 The baseline includes the primary's configured thinking level (`auto` included)
 instead of the fallback's temporary effort. A fallback model's automatic effort-floor

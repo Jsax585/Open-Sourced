@@ -739,6 +739,7 @@ export class TurnRecovery {
 		let selectedConcreteThinkingLevel = this.#host.thinkingLevel();
 		let selectedModel = model ? formatModelStringWithRouting(model) : undefined;
 		let fallback = this.#activeRetryFallback;
+		let carriedFallbackRoot: ActiveRetryFallbackState | undefined;
 		let carriesFallbackRoute = false;
 		let restoredFallbackThinking = false;
 		let restoreFallbackThinking = true;
@@ -759,7 +760,19 @@ export class TurnRecovery {
 				// reinterpret it as an automatic effort from an older layer.
 				restoreFallbackThinking = false;
 			}
+			carriedFallbackRoot = fallback;
 			fallback = fallback.previousFallback;
+		}
+
+		// A pinned model becomes this transcript's primary, not a retained fallback.
+		// Keep only unfinished detours above it, without re-marking it on restoration.
+		if (fallback) {
+			if (carriedFallbackRoot) {
+				carriedFallbackRoot.previousFallback = undefined;
+				carriedFallbackRoot.originalWasFallback = false;
+			} else {
+				this.clearActiveRetryFallback();
+			}
 		}
 
 		if (carriesFallbackRoute && selectedModel) {
