@@ -146,7 +146,7 @@ async function run(
 			contexts,
 			developerTexts: developerTexts(session.agent.state.messages),
 			notices,
-			carried: session.getNestedContextFiles(),
+			carried: await session.getNestedContextFiles(),
 		};
 	} finally {
 		await session.dispose();
@@ -292,6 +292,49 @@ describe("contextFiles.onTouch", () => {
 		);
 	});
 
+	it.each([
+		{ name: "a tail read", selector: ":-2" },
+		{ name: "a range read", selector: ":1-2" },
+	])("still loads the context file after $name of it", async ({ selector }) => {
+		// Guards the full-read dedupe: a read that skipped lines did not put the file in context.
+		const rules = Array.from({ length: 400 }, (_, i) => `rule ${i + 1}`).join("\n");
+		setup({ "pkg/AGENTS.md": `PKG-CANARY\n${rules}`, "pkg/a.ts": "a" });
+		const result = await run(
+			tempDir,
+			repo,
+			[
+				[{ name: "read", arguments: { path: `pkg/AGENTS.md${selector}` } }],
+				[{ name: "read", arguments: { path: "pkg/a.ts" } }],
+			],
+			ON,
+		);
+		expect(blockPaths(result.developerTexts)).toEqual(["pkg/AGENTS.md"]);
+	});
+
+	it("loads the context file of every directory a grouped read touches", async () => {
+		// Guards multi-path reads, whose result has no single path.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "a", "lib/AGENTS.md": "LIB-CANARY", "lib/b.ts": "b" });
+		const result = await run(tempDir, repo, [[{ name: "read", arguments: { path: "pkg/a.ts;lib/b.ts" } }]], ON);
+		expect(blockPaths(result.developerTexts).sort()).toEqual(["lib/AGENTS.md", "pkg/AGENTS.md"]);
+	});
+
+	it("sees a context file written after an earlier touch of its directory found none", async () => {
+		// Guards the discovery cache: the first touch caches the directory listing without the file.
+		setup({ "pkg/a.ts": "a", "pkg/b.ts": "b" });
+		const result = await run(
+			tempDir,
+			repo,
+			[
+				[{ name: "read", arguments: { path: "pkg/a.ts" } }],
+				[{ name: "write", arguments: { path: "pkg/AGENTS.md", content: "NEW-CANARY" } }],
+				[{ name: "read", arguments: { path: "pkg/b.ts" } }],
+			],
+			ON,
+		);
+		expect(blockPaths(result.developerTexts)).toEqual(["pkg/AGENTS.md"]);
+		expect(result.developerTexts.join("\n")).toContain("NEW-CANARY");
+	});
+
 	it("hands loaded files to subagents, and a session already holding a file does not load it again", async () => {
 		// Guards subagent inheritance: the parent's loaded files reach the child's system prompt
 		// with their content, and the child does not inject them a second time on its own touch.
@@ -303,25 +346,46 @@ describe("contextFiles.onTouch", () => {
 		expect(child.contexts[0]?.systemPrompt?.join("\n")).toContain("PKG-CANARY");
 		expect(child.developerTexts).toEqual([]);
 	});
+
+	it("hands a fully read context file to subagents with the file's content", async () => {
+		// Guards inheritance of the read-instead-of-injected path: the child must get the file,
+		// without the line prefixes of the parent's read output.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "a" });
+		const parent = await run(tempDir, repo, [[{ name: "read", arguments: { path: "pkg/AGENTS.md" } }]], ON);
+		expect(parent.developerTexts).toEqual([]);
+		expect(parent.carried).toEqual([{ path: path.join(repo, "pkg/AGENTS.md"), content: "PKG-CANARY" }]);
+	});
 });
 
 describe("inheritedContextFiles", () => {
 	const nested = { path: "/repo/pkg/AGENTS.md", content: "PKG" };
-
-	it("drops root AGENTS.md files and appends the parent's nested files", () => {
+	it("drops the AGENTS.md files of cwd and its ancestors and appends the parent's nested files", async () => {
 		const session = {
+			cwd: "/repo",
 			contextFiles: [
+				{ path: "/AGENTS.md", content: "ABOVE" },
 				{ path: "/repo/AGENTS.md", content: "ROOT" },
 				{ path: "/repo/CLAUDE.md", content: "CLAUDE" },
 			],
-			getNestedContextFiles: () => [nested],
+			getNestedContextFiles: async () => [nested],
 		} as unknown as ToolSession;
-		expect(inheritedContextFiles(session)).toEqual([{ path: "/repo/CLAUDE.md", content: "CLAUDE" }, nested]);
+		expect(await inheritedContextFiles(session)).toEqual([{ path: "/repo/CLAUDE.md", content: "CLAUDE" }, nested]);
 	});
 
-	it("stays undefined when the parent has no resolved context files, so the child discovers its own", () => {
+	it("keeps a nested AGENTS.md the parent inherited, so grandchildren get it too", async () => {
+		// Guards multi-level delegation: a child holds the file in its system prompt, not in its
+		// window, so only its own context files can pass it on.
+		const session = {
+			cwd: "/repo",
+			contextFiles: [{ path: "/repo/AGENTS.md", content: "ROOT" }, nested],
+			getNestedContextFiles: async () => [],
+		} as unknown as ToolSession;
+		expect(await inheritedContextFiles(session)).toEqual([nested]);
+	});
+
+	it("stays undefined when the parent has no resolved context files, so the child discovers its own", async () => {
 		// Guards child discovery: an empty array would disable it.
-		const session = { getNestedContextFiles: () => [nested] } as unknown as ToolSession;
-		expect(inheritedContextFiles(session)).toBeUndefined();
+		const session = { cwd: "/repo", getNestedContextFiles: async () => [nested] } as unknown as ToolSession;
+		expect(await inheritedContextFiles(session)).toBeUndefined();
 	});
 });

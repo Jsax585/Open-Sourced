@@ -10,13 +10,16 @@
  * Dedupe state is the conversation itself: a file is loaded when the system
  * prompt lists it, or the live context still holds its `<nested-context path="…">`
  * block or a full read of it. Compaction that drops the block re-arms the file
- * without bookkeeping. Subagents inherit the parent's loaded blocks through
- * {@link NestedContextInjector.carried}, which lands them in the child's system prompt.
+ * without bookkeeping. Subagents inherit the parent's loaded files, delivered
+ * or fully read, through {@link NestedContextInjector.carried}, which lands
+ * them in the child's system prompt.
  */
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AfterToolCallContext, AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { isRecord, logger, prompt } from "@oh-my-pi/pi-utils";
+import { invalidate as invalidateCapabilityCache } from "../capability";
 import { type ContextFile, contextFileCapability } from "../capability/context-file";
 import type { Settings } from "../config/settings";
 import { loadCapability } from "../discovery";
@@ -80,7 +83,11 @@ export class NestedContextInjector {
 		if (!cfgContextFilesOnTouch.get(this.#host.settings)) return undefined;
 		if (ctx.isError || TRIGGER_TOOLS[ctx.toolCall.name] !== true) return undefined;
 		const cwd = path.resolve(this.#host.cwd());
-		const directories = touchedDirectories(ctx, cwd).filter(dir => isStrictlyBelow(cwd, dir));
+		const edited = editedFiles(ctx, cwd);
+		// Discovery reads through the capability fs cache, which would still hold
+		// the directory listing and content from before this edit.
+		for (const file of edited) invalidateCapabilityCache(file);
+		const directories = touchedDirectories(ctx, cwd, edited).filter(dir => isStrictlyBelow(cwd, dir));
 		if (directories.length === 0) return undefined;
 		return this.#load(ctx, cwd, directories);
 	}
@@ -111,14 +118,10 @@ export class NestedContextInjector {
 			if (loadedInWindow.has(display) || batch.claimed.has(file.path)) continue;
 			if (inSystemPrompt(ctx.context.systemPrompt, file.path)) continue;
 			batch.claimed.add(file.path);
-			const content =
-				file.content.length > NESTED_CONTEXT_FILE_MAX_CHARS
-					? `${file.content.slice(0, NESTED_CONTEXT_FILE_MAX_CHARS)}\n[truncated at ${NESTED_CONTEXT_FILE_MAX_CHARS} characters; read ${display} for the rest]`
-					: file.content;
 			const block = prompt.render(nestedContextFileTemplate, {
 				path: display,
 				dir: `${displayPath(cwd, file.owner)}/`,
-				content,
+				content: capContent(file.content, display),
 			});
 			blocks.push(block);
 			loaded.push(display);
@@ -161,19 +164,48 @@ export class NestedContextInjector {
 
 	/**
 	 * Nested context files the live window holds, as system-prompt context file
-	 * entries for a subagent: absolute path and the content as delivered.
+	 * entries for a subagent: delivered blocks with the content as delivered, and
+	 * full reads of a nested context file with the content discovery loads (the
+	 * read result itself carries line prefixes).
 	 */
-	carried(messages: readonly AgentMessage[]): ContextFileEntry[] {
+	async carried(messages: readonly AgentMessage[]): Promise<ContextFileEntry[]> {
 		const cwd = path.resolve(this.#host.cwd());
 		const byPath = new Map<string, string>();
+		const fullReads = new Set<string>();
 		for (const message of messages) {
-			if (message.role !== "developer") continue;
-			for (const match of messageText(message.content).matchAll(BLOCK_RE)) {
-				byPath.set(path.resolve(cwd, match[1]), match[2]);
+			if (message.role === "developer") {
+				for (const match of messageText(message.content).matchAll(BLOCK_RE)) {
+					byPath.set(path.resolve(cwd, match[1]), match[2]);
+				}
+			} else if (message.role === "toolResult" && message.toolName === "read" && !message.isError) {
+				const readPath = fullReadPath(message.details);
+				if (readPath && isStrictlyBelow(cwd, path.dirname(readPath))) fullReads.add(readPath);
+			}
+		}
+		const unread = [...fullReads].filter(filePath => !byPath.has(filePath));
+		if (unread.length > 0) {
+			try {
+				// Discovery decides which read files are context files, as it does for touches.
+				const files = await this.#discover(
+					unread.map(filePath => path.dirname(filePath)),
+					cwd,
+				);
+				for (const file of files) {
+					if (!fullReads.has(file.path) || byPath.has(file.path)) continue;
+					byPath.set(file.path, capContent(file.content, displayPath(cwd, file.path)));
+				}
+			} catch (error) {
+				logger.warn("Nested context discovery failed", { error: String(error) });
 			}
 		}
 		return [...byPath].map(([filePath, content]) => ({ path: filePath, content }));
 	}
+}
+
+/** The per-file cost bound: content past the cap is cut, with a pointer to the rest. */
+function capContent(content: string, display: string): string {
+	if (content.length <= NESTED_CONTEXT_FILE_MAX_CHARS) return content;
+	return `${content.slice(0, NESTED_CONTEXT_FILE_MAX_CHARS)}\n[truncated at ${NESTED_CONTEXT_FILE_MAX_CHARS} characters; read ${display} for the rest]`;
 }
 
 /** Context files the live window already holds, by cwd-relative path. */
@@ -219,47 +251,66 @@ function readDetailsPath(details: Record<string, unknown>): string | undefined {
 }
 
 /**
- * Absolute path of a read that covered the whole file: it started at line 1,
- * reached EOF with an exact line count, and neither truncated nor elided anything.
+ * Absolute path of a read that showed the whole file: every line from 1 to the
+ * end, in order, with nothing truncated, elided, summarised or cut at a column.
+ * A tail or range read can start at line 1 and still skip the middle, so the
+ * displayed line numbers are the proof.
  */
 function fullReadPath(details: unknown): string | undefined {
-	if (!isRecord(details) || details.isDirectory === true || details.truncation !== undefined) return undefined;
-	if (typeof details.totalLines !== "number") return undefined;
+	if (!isRecord(details) || details.isDirectory === true) return undefined;
+	if (details.truncation !== undefined || details.summary !== undefined) return undefined;
+	const meta = isRecord(details.meta) ? details.meta : {};
+	if (meta.truncation !== undefined) return undefined;
+	if (isRecord(meta.limits) && meta.limits.columnTruncated !== undefined) return undefined;
 	const display = details.displayContent;
-	if (!isRecord(display) || display.startLine !== 1) return undefined;
-	const summary = details.summary;
-	if (isRecord(summary) && typeof summary.elidedLines === "number" && summary.elidedLines > 0) return undefined;
+	if (typeof details.totalLines !== "number" || !isRecord(display)) return undefined;
+	const lines = display.lineNumbers;
+	if (!Array.isArray(lines) || lines.length !== details.totalLines) return undefined;
+	if (lines.some((line, index) => line !== index + 1)) return undefined;
 	return readDetailsPath(details);
 }
 
-/** Directories the call touched, from the tool's own resolved paths where it reports them. */
-function touchedDirectories(ctx: AfterToolCallContext, cwd: string): string[] {
+/** Absolute paths a write, edit or ast_edit changed, from the tool's own resolved paths where it reports them. */
+function editedFiles(ctx: AfterToolCallContext, cwd: string): string[] {
 	const details = isRecord(ctx.result.details) ? ctx.result.details : {};
 	const args = isRecord(ctx.args) ? ctx.args : {};
-	const dirs = new Set<string>();
-	const addFile = (filePath: unknown, base = cwd): void => {
+	const files = new Set<string>();
+	const add = (filePath: unknown, base = cwd): void => {
 		if (typeof filePath !== "string" || filePath.length === 0 || filePath.includes("://")) return;
-		dirs.add(path.dirname(path.resolve(base, filePath)));
+		files.add(path.resolve(base, filePath));
 	};
 	switch (ctx.toolCall.name) {
-		case "read": {
-			const resolved = readDetailsPath(details);
-			if (resolved) dirs.add(details.isDirectory === true ? resolved : path.dirname(resolved));
-			break;
-		}
 		case "write":
-			addFile(details.resolvedPath ?? args.path);
+			add(details.resolvedPath ?? args.path);
 			break;
 		case "edit":
-			addFile(details.path);
+			add(details.path);
 			if (Array.isArray(details.perFileResults)) {
-				for (const entry of details.perFileResults) if (isRecord(entry)) addFile(entry.path);
+				for (const entry of details.perFileResults) if (isRecord(entry)) add(entry.path);
 			}
 			break;
 		case "ast_edit": {
 			const base = typeof details.cwd === "string" ? details.cwd : cwd;
-			if (Array.isArray(details.files)) for (const file of details.files) addFile(file, base);
+			if (Array.isArray(details.files)) for (const file of details.files) add(file, base);
 			break;
+		}
+	}
+	return [...files];
+}
+
+/** Directories the call touched: a read's targets, or the parents of the files it edited. */
+function touchedDirectories(ctx: AfterToolCallContext, cwd: string, edited: readonly string[]): string[] {
+	if (ctx.toolCall.name !== "read") return [...new Set(edited.map(file => path.dirname(file)))];
+	const details = isRecord(ctx.result.details) ? ctx.result.details : {};
+	const dirs = new Set<string>();
+	const resolved = readDetailsPath(details);
+	if (resolved) dirs.add(details.isDirectory === true ? resolved : path.dirname(resolved));
+	// A grouped read (`a.ts;b/c.ts`) reports each target only as a link.
+	if (Array.isArray(details.displayReadTargetLinks)) {
+		for (const link of details.displayReadTargetLinks) {
+			if (typeof link !== "string" || link.length === 0 || link.includes("://")) continue;
+			const target = path.resolve(cwd, link);
+			dirs.add(fs.statSync(target, { throwIfNoEntry: false })?.isDirectory() ? target : path.dirname(target));
 		}
 	}
 	return [...dirs];

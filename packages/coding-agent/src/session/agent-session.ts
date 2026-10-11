@@ -9246,8 +9246,8 @@ export class AgentSession implements SettingsScope {
 		return this.#modelMentions.sessionAgents();
 	}
 
-	/** Nested context files loaded on touch and still in context, for subagents to inherit. */
-	getNestedContextFiles(): ContextFileEntry[] {
+	/** Nested context files loaded on touch or fully read and still in context, for subagents to inherit. */
+	getNestedContextFiles(): Promise<ContextFileEntry[]> {
 		return this.#nestedContext.carried(this.agent.state.messages);
 	}
 

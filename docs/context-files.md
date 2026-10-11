@@ -195,11 +195,11 @@ Project context for `packages/api/`, loaded automatically because a tool touched
 ```
 
 - Discovery is the same as at startup: provider priority, one file per directory, `contextFiles.extra`, and `@` imports all apply.
-- Each file loads once per context window. A whole-file `read` of the context file itself counts as loaded. When compaction drops the block, the next touch loads the file again.
+- Each file loads once per context window. A `read` that showed the whole context file counts as loaded; a range, tail, or truncated page does not. When compaction drops the block, the next touch loads the file again.
 - Each file is capped at 16,384 characters; a longer file is truncated with a note telling the agent to read the rest.
 - Files under hidden directories (`.git/`, `.venv/`, …) and `node_modules/` never load. Neither do files at or above the current directory or an additional workspace root, because those are already in the system prompt.
 - Search and shell tools (`grep`, `glob`, `bash`) do not trigger loading.
-- Subagents start with the nested files their parent has loaded and still holds, in their system prompt, and load further files on their own touches.
+- Subagents start with the nested files their parent has loaded or read in full and still holds, plus any nested files the parent itself inherited, in their system prompt, and load further files on their own touches.
 
 The setting is off by default.
 

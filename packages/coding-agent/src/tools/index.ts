@@ -403,7 +403,7 @@ export interface ToolSession {
 	/** Session-scoped agent definitions (user-tagged model pseudonyms) merged after discovered agents. */
 	getSessionAgents?: () => readonly AgentDefinition[];
 	/** Nested context files the session loaded on touch and still holds; subagents inherit them. */
-	getNestedContextFiles?: () => ContextFileEntry[];
+	getNestedContextFiles?: () => Promise<ContextFileEntry[]>;
 	/**
 	 * Session agents baked into the current base prompt surface. The task
 	 * description lists these instead of the live set so tagging a model
