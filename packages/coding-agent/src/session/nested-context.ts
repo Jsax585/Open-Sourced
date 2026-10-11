@@ -18,7 +18,15 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { AfterToolCallContext, AgentMessage, AgentToolContext, AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import {
+	ASIDE_MESSAGE_DISCARD,
+	type AfterToolCallContext,
+	type AgentMessage,
+	type AgentToolContext,
+	type AgentToolResult,
+	type CommittableAsideMessage,
+	createAdditionalContextMessage,
+} from "@oh-my-pi/pi-agent-core";
 import { isRecord, logger, prompt } from "@oh-my-pi/pi-utils";
 import { invalidate as invalidateCapabilityCache } from "../capability";
 import { type ContextFile, contextFileCapability } from "../capability/context-file";
@@ -192,6 +200,31 @@ export class NestedContextInjector {
 		this.#bridged.delete(toolCallId);
 	}
 
+	/**
+	 * Blocks a finished batch never handed over, as a developer message for the
+	 * step boundary after it. A call the loop skipped or aborted (a steered-past
+	 * `wait`) never reaches {@link afterToolCall}, so its batch never settles;
+	 * the boundary poll runs once every call has finished, before the next
+	 * request. A message the loop drops unsent puts its blocks back in the queue.
+	 */
+	takeStranded(): CommittableAsideMessage | null {
+		const batch = this.#batch;
+		if (!batch || batch.queue.length === 0) return null;
+		batch.outstanding.clear();
+		const queued = [...batch.queue];
+		const text = this.#drain(batch);
+		if (text === undefined) return null;
+		return {
+			...createAdditionalContextMessage(text),
+			[ASIDE_MESSAGE_DISCARD]: () => {
+				const current = this.#batch;
+				if (!current) return;
+				for (const block of queued) current.claimed.add(block.path);
+				current.queue.unshift(...queued);
+			},
+		};
+	}
+
 	#batchFor(message: AgentMessage | undefined): BatchState {
 		const ids =
 			message?.role === "assistant"
@@ -270,8 +303,8 @@ export class NestedContextInjector {
 			batch.claimed.add(file.path);
 			const display = displayPath(cwd, file.path);
 			const block = prompt.render(nestedContextFileTemplate, {
-				path: file.path,
-				dir: `${displayPath(cwd, file.owner)}/`,
+				path: escapeAttribute(file.path),
+				dir: escapeAttribute(`${displayPath(cwd, file.owner)}/`),
 				content: escapeBlockTags(capContent(file.content, display)),
 			});
 			batch.queue.push({ path: file.path, block, display, depth: file.owner.split(path.sep).length, plain });
@@ -395,6 +428,22 @@ function escapeBlockTags(content: string): string {
 	return content.replace(/<(\/?)nested-context/g, "&lt;$1nested-context");
 }
 
+const ATTRIBUTE_ESCAPES: Record<string, string> = { "&": "&amp;", '"': "&quot;", "\n": "&#10;" };
+const ATTRIBUTE_UNESCAPES: Record<string, string> = { "&amp;": "&", "&quot;": '"', "&#10;": "\n" };
+
+/**
+ * A path made safe for a block's header, reversibly: a quote would end the
+ * `path` attribute and a newline the header line, so the block would never
+ * parse back as delivered.
+ */
+function escapeAttribute(value: string): string {
+	return value.replace(/[&"\n]/g, char => ATTRIBUTE_ESCAPES[char]);
+}
+
+function unescapeAttribute(value: string): string {
+	return value.replace(/&(?:amp|quot|#10);/g, entity => ATTRIBUTE_UNESCAPES[entity]);
+}
+
 /** The per-file cost bound: content past the cap is cut, with a pointer to the rest. */
 function capContent(content: string, display: string): string {
 	if (content.length <= NESTED_CONTEXT_FILE_MAX_CHARS) return content;
@@ -417,7 +466,8 @@ function scanWindow(messages: readonly AgentMessage[]): { blocks: Map<string, st
 	for (const message of messages) {
 		if (message.role === "developer") {
 			for (const match of messageText(message.content).matchAll(BLOCK_RE)) {
-				if (path.isAbsolute(match[1])) blocks.set(match[1], match[2]);
+				const blockPath = unescapeAttribute(match[1]);
+				if (path.isAbsolute(blockPath)) blocks.set(blockPath, match[2]);
 			}
 		} else if (message.role === "toolResult" && message.toolName === "read" && !message.isError) {
 			const readPath = fullReadPath(message.details);

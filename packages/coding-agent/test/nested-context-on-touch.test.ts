@@ -26,7 +26,7 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 interface ScriptedCall {
-	name: "read" | "write" | "edit" | "ast_edit" | "eval";
+	name: "read" | "write" | "edit" | "ast_edit" | "eval" | "wait";
 	arguments: Record<string, unknown>;
 }
 
@@ -88,11 +88,15 @@ async function run(
 	settings: Record<string, unknown>,
 	contextFiles: ContextFileEntry[] = [],
 	followUp?: FollowUp,
+	/** Index of a turn whose tool calls a user steer arrives behind, before any executes. */
+	steerOnTurn?: number,
 ): Promise<RunResult> {
 	const api = `test-nested-context-${++apiCounter}`;
 	const contexts: Context[] = [];
 	let script = turns;
 	let cursor = 0;
+	/** The session, once created, for a scripted turn to steer. */
+	const live: { session?: AgentSession } = {};
 	registerCustomApi(api, (_model, context) => {
 		const stream = new AssistantMessageEventStream();
 		if (!context.tools?.length) {
@@ -118,6 +122,7 @@ async function run(
 			}));
 			message.content = calls;
 			message.stopReason = "toolUse";
+			if (cursor - 1 === steerOnTurn) void live.session?.steer("steer");
 			calls.forEach((toolCall, contentIndex) => {
 				stream.push({ type: "toolcall_start", contentIndex, partial: message });
 				stream.push({
@@ -162,8 +167,9 @@ async function run(
 		enableMCP: false,
 		enableLsp: false,
 		skipPythonPreflight: true,
-		toolNames: ["read", "write", "edit", "ast_edit", "eval"],
+		toolNames: ["read", "write", "edit", "ast_edit", "eval", "wait"],
 	});
+	live.session = session;
 	const notices: string[] = [];
 	session.subscribe(event => {
 		if (event.type === "notice" && event.source === "context-files") notices.push(event.message);
@@ -491,6 +497,41 @@ describe("contextFiles.onTouch", () => {
 		const carried = Object.fromEntries(result.carried.map(file => [path.relative(repo, file.path), file.content]));
 		expect(carried[path.join("app", "AGENTS.md")]).toBe("APP-CANARY");
 		expect(carried[path.join("pkg", "AGENTS.md")]).toEndWith("PKG-END");
+	});
+
+	it("delivers context on the next request when a steer skips another call of the batch", async () => {
+		// Guards batch settlement: a not-yet-started `wait` the steer skips never reaches
+		// afterToolCall, so the read's rules would wait for a later batch the model may never make.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "a" });
+		const result = await run(
+			tempDir,
+			repo,
+			[
+				[
+					{ name: "read", arguments: { path: "pkg/a.ts" } },
+					{ name: "wait", arguments: {} },
+				],
+			],
+			ON,
+			[],
+			undefined,
+			0,
+		);
+		expect(blockPaths(developerTexts(result.contexts[1]?.messages ?? []), repo)).toEqual(["pkg/AGENTS.md"]);
+	});
+
+	it.skipIf(process.platform === "win32")("recognises a delivered file whose path holds a quote", async () => {
+		// Guards the block header: an unescaped quote ends the path attribute, so the block would
+		// never parse back as delivered and every later touch would inject the file again.
+		setup({ 'q"b/AGENTS.md': "Q-CANARY", 'q"b/a.ts': "a", 'q"b/c.ts': "c" });
+		const result = await run(
+			tempDir,
+			repo,
+			[[{ name: "read", arguments: { path: 'q"b/a.ts' } }], [{ name: "read", arguments: { path: 'q"b/c.ts' } }]],
+			ON,
+		);
+		expect(result.developerTexts.join("\n").match(/Q-CANARY/g)).toEqual(["Q-CANARY"]);
+		expect(result.carried).toEqual([{ path: path.join(repo, 'q"b/AGENTS.md'), content: "Q-CANARY" }]);
 	});
 
 	it("triggers on an edit", async () => {
