@@ -131,6 +131,8 @@
 - Fixed `grep` hiding matches that appeared beyond the first 512 bytes of a long line.
 - Fixed snapcompaction leaving too little context room after compaction.
 - Fixed usage-limited account pools redeeming saved resets for accounts outside the configured pool.
+- Fixed whole-session forks reporting retained availability fallback replies as primary after interrupted refusal swaps ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
+- Fixed whole-session forks continuing with fallback prompt policy after restoring the primary ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
 
 ## [18.8.9] - 2026-10-10
 

@@ -28,7 +28,6 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { parseModelString } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { editVariantForModel } from "@oh-my-pi/pi-coding-agent/utils/edit-mode";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -400,77 +399,6 @@ describe("AgentSession retry fallback", () => {
 				role: "default",
 			},
 		]);
-	});
-
-	it("re-syncs the edit-mode system prompt after a retry-fallback model swap", async () => {
-		// A session that starts on a default-hashline model and auto-falls-back to a
-		// variant-pinned model must rebuild its base prompt so the edit-mode policy
-		// tracks the model actually serving the turn (issue #11983).
-		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
-		if (!primaryModel || !fallbackModel) {
-			throw new Error("Expected bundled test models to exist");
-		}
-
-		const mock = createMockModel();
-		const agent = new Agent({
-			getApiKey: model => `${model.provider}-test-key`,
-			initialState: {
-				model: primaryModel,
-				systemPrompt: ["Test"],
-				tools: [],
-				messages: [],
-			},
-			streamFn: (model, context, options) => {
-				if (model.provider === primaryModel.provider && model.id === primaryModel.id) {
-					mock.push({ throw: "overloaded_error: provider returned error 503" });
-				} else if (model.provider === fallbackModel.provider && model.id === fallbackModel.id) {
-					mock.push({ content: ["Recovered on the pinned-variant fallback"] });
-				} else {
-					throw new Error(
-						`Unexpected model requested during edit-variant fallback test: ${model.provider}/${model.id}`,
-					);
-				}
-				return mock.stream(model, context, options);
-			},
-		});
-
-		const settings = Settings.isolated({
-			"compaction.enabled": false,
-			"retry.baseDelayMs": 5,
-			"retry.fallbackChains": {
-				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
-			},
-			"edit.modelVariants": { [fallbackModel.id]: "replace" },
-		});
-		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
-
-		const renderEditMode = (): string => {
-			const active = session?.model;
-			const selector = active ? `${active.provider}/${active.id}` : "";
-			return editVariantForModel(settings, selector) ?? "hashline";
-		};
-
-		session = new AgentSession({
-			agent,
-			sessionManager: SessionManager.inMemory(),
-			settings,
-			modelRegistry,
-			toolRegistry: new Map(),
-			rebuildSystemPrompt: async () => ({ systemPrompt: [`edit:${renderEditMode()}`] }),
-		});
-
-		// Baseline: the non-variant primary resolves to the default hashline mode.
-		await session.refreshBaseSystemPrompt();
-		expect(session.agent.state.systemPrompt).toEqual(["edit:hashline"]);
-
-		await session.prompt("Force a fallback onto the pinned-variant model");
-		await session.waitForIdle();
-
-		expect(session.model?.provider).toBe(fallbackModel.provider);
-		expect(session.model?.id).toBe(fallbackModel.id);
-		// Without the post-swap re-sync the base prompt stays `edit:hashline`.
-		expect(session.agent.state.systemPrompt).toEqual(["edit:replace"]);
 	});
 
 	it("hops to the chain owned by a fallback that is the last entry of the chain it came from", async () => {
@@ -4692,6 +4620,164 @@ describe("AgentSession retry fallback", () => {
 			await activeSession.prompt("Continue after the interruption");
 			await activeSession.waitForIdle();
 			expect(requestedModels).toEqual([...beforeContinuation, expected]);
+		},
+	);
+
+	it.each(["fallback rollback", "primary restoration"] as const)(
+		"keeps busy whole-session forks coherent during %s",
+		async phase => {
+			const restoring = phase === "primary restoration";
+			const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+			const outerModel = getBundledModel("anthropic", "claude-opus-4-1")!;
+			const innerModel = getBundledModel("openai", "gpt-4o-mini")!;
+			const primary = `${primaryModel.provider}/${primaryModel.id}`;
+			const outer = `${outerModel.provider}/${outerModel.id}`;
+			const inner = `${innerModel.provider}/${innerModel.id}`;
+			const refusal: MockResponse = {
+				stopReason: "error",
+				stopDetails: { type: "refusal" },
+				errorMessage: "Classifier declined",
+			};
+			const responses: MockResponse[] = restoring
+				? [
+						refusal,
+						{
+							content: [
+								{
+									type: "toolCall",
+									id: "read-1",
+									name: "read",
+									arguments: { path: "busy-fork-read.txt", i: "Reading fork fixture" },
+								},
+							],
+						},
+						{ content: ["The primary continued after the read"] },
+					]
+				: [
+						{ throw: "overloaded_error: provider returned error 503 retry-after-ms=60000" },
+						{ content: [], stopReason: "aborted", errorMessage: "Cancelled" },
+						refusal,
+						{ content: ["The retained outer fallback answered in the fork"] },
+					];
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.maxRetries": 2,
+				"retry.baseDelayMs": 1,
+				"retry.fallbackRevertPolicy": "cooldown-expiry",
+				"retry.refusalFallbackRevertPolicy": "after-success",
+				"retry.fallbackChains": { [primary]: restoring ? [`${outer}:low`] : [`${outer}:low`, inner] },
+				"edit.modelVariants": { [primaryModel.id]: "hashline", [outerModel.id]: "replace" },
+			});
+			settings.setModelRole("default", `${primary}:high`);
+			const manager = SessionManager.create(tempDir.path(), tempDir.join(`busy-fork-${restoring}`));
+			manager.appendModelChange(`${primary}:high`);
+			manager.appendThinkingLevelChange(Effort.High, Effort.High);
+			if (restoring) await Bun.write(tempDir.join("busy-fork-read.txt"), "fork-fixture-payload\n");
+			const created = await createAgentSession({
+				cwd: tempDir.path(),
+				agentDir: tempDir.path(),
+				authStorage,
+				modelRegistry,
+				model: primaryModel,
+				thinkingLevel: Effort.High,
+				sessionManager: manager,
+				settings,
+				disableExtensionDiscovery: true,
+				skills: [],
+				rules: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+				enableIrc: false,
+				skipPythonPreflight: true,
+				toolNames: ["read", "edit"],
+				restrictToolNames: false,
+				bindProcessState: false,
+				cacheWarming: false,
+			});
+			session = created.session;
+			const activeSession = session;
+			const requestedModels: string[] = [];
+			const systemPrompts: string[][] = [];
+			let readSucceeded = false;
+			activeSession.agent.streamFn = (model, context, options) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				systemPrompts.push(context.systemPrompt ?? []);
+				readSucceeded ||= context.messages.some(
+					message =>
+						message.role === "toolResult" &&
+						message.toolName === "read" &&
+						!message.isError &&
+						message.content.some(block => block.type === "text" && block.text.includes("fork-fixture-payload")),
+				);
+				const response = responses.shift();
+				if (!response) throw new Error(`Unexpected busy-fork model request: ${model.provider}/${model.id}`);
+				return createMockModel({ provider: model.provider, id: model.id, responses: [response] }).stream(
+					model,
+					context,
+					options,
+				);
+			};
+			if (!restoring) {
+				await activeSession.prompt("Leave an unserved availability fallback");
+				await activeSession.waitForIdle();
+			}
+
+			const reconciliationStarted = Promise.withResolvers<void>();
+			const releaseReconciliation = Promise.withResolvers<void>();
+			const reconcileThinkTool = SessionTools.prototype.reconcileThinkTool;
+			let pauseReconciliation = true;
+			vi.spyOn(SessionTools.prototype, "reconcileThinkTool").mockImplementation(async function (this: SessionTools) {
+				if (
+					pauseReconciliation &&
+					activeSession.model?.id === (restoring ? primaryModel.id : innerModel.id) &&
+					requestedModels.length === (restoring ? 2 : 3)
+				) {
+					pauseReconciliation = false;
+					reconciliationStarted.resolve();
+					await releaseReconciliation.promise;
+				}
+				return reconcileThinkTool.call(this);
+			});
+			const prompt = activeSession.prompt("Recover and continue in the fork");
+			try {
+				await reconciliationStarted.promise;
+				const originalId = manager.getSessionId();
+				expect(await activeSession.fork()).toBe(true);
+				const firstForkId = manager.getSessionId();
+				expect(firstForkId).not.toBe(originalId);
+				if (restoring) {
+					expect(await activeSession.fork()).toBe(true);
+					expect(manager.getSessionId()).not.toBe(firstForkId);
+					expect(manager.getSessionId()).not.toBe(originalId);
+				}
+				releaseReconciliation.resolve();
+				await prompt;
+				await activeSession.waitForIdle();
+			} finally {
+				releaseReconciliation.resolve();
+				await prompt;
+			}
+
+			if (restoring) {
+				expect(requestedModels).toEqual([primary, outer, primary]);
+				expect(systemPrompts[1]).not.toEqual(systemPrompts[0]);
+				expect(systemPrompts[2]).toEqual(systemPrompts[0]);
+				expect(readSucceeded).toBe(true);
+				expect(activeSession.configuredThinkingLevel()).toBe(Effort.High);
+			} else {
+				expect(activeSession.servingModel).toMatchObject({ modelIdentity: outer, isFallback: true });
+				await activeSession.prompt("Answer on the retained outer fallback");
+				await activeSession.waitForIdle();
+				expect(requestedModels).toEqual([primary, outer, outer, outer]);
+				expect(activeSession.servingModel).toMatchObject({
+					modelIdentity: outer,
+					thinkingLevel: Effort.Low,
+					isFallback: true,
+				});
+			}
 		},
 	);
 

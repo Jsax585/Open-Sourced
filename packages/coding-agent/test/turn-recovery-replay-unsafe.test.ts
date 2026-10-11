@@ -95,6 +95,7 @@ function createHost(
 		streamingEditAbortTriggered: () => false,
 		promptGeneration: () => 0,
 		promptSequence: () => 0,
+		sessionGeneration: () => 0,
 		sessionId: () => "test-session",
 		emitSessionEvent: async () => {},
 		scheduleAgentContinue: () => {},

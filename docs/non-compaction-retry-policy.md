@@ -243,6 +243,12 @@ uncommitted candidate. Once primary restoration installs its model, its transcri
 and thinking selection commit before asynchronous model-dependent reconciliation.
 An ordinary abort finishes that restoration; an explicit model selection still wins.
 
+Whole-session forks preserve the running conversation. Rolling back an unfinished
+refusal swap keeps an outer availability fallback routed to the fork. A primary
+restoration committed before the fork finishes its prompt synchronization before
+the next model invocation. `/new` and session switches invalidate that pending
+synchronization when they replace the conversation.
+
 `/new` saves the selected-model baseline for resume beneath every unpinned fallback
 layer, including an availability fallback beneath an unfinished refusal detour.
 A fallback answer must not become the new transcript's selected model just because

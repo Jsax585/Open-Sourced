@@ -1825,6 +1825,7 @@ export class AgentSession implements SettingsScope {
 			promptGeneration: () => this.#promptGeneration,
 			promptSequence: () => this.#promptSequence,
 			unexpectedStopAbortSignal: () => this.#postPromptTasksAbortController.signal,
+			sessionGeneration: () => this.#sessionGeneration,
 			sessionId: () => this.sessionId,
 			emitSessionEvent: (event, options) => this.#emitSessionEvent(event, options),
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),

@@ -248,6 +248,8 @@ export interface TurnRecoveryHost {
 	 * the judge path need not provide it.
 	 */
 	unexpectedStopAbortSignal?(): AbortSignal;
+	/** Conversation generation; preserved by whole-session forks. */
+	sessionGeneration(): number;
 	sessionId(): string;
 	emitSessionEvent(event: AgentSessionEvent, options?: { detachExtensions?: boolean }): Promise<void>;
 	scheduleAgentContinue(options: {
@@ -2257,6 +2259,7 @@ export class TurnRecovery {
 		// candidate as fallback-routed. Attribution itself is safe regardless — it
 		// names the last model that served, which this swap has not changed.
 		const routedBeforeSwap = this.#fallbackRoutedFor;
+		const sessionIdBeforeSwap = this.#host.sessionManager.getSessionId();
 		const startRequestScopedFallback =
 			options?.restoreAfterSuccess === true && !previousFallback?.restoreAfterSuccess;
 		const servedBeforeSwap = this.#activeRetryFallback?.served;
@@ -2270,6 +2273,7 @@ export class TurnRecovery {
 		}
 		if (this.#host.model() !== candidate) {
 			this.#fallbackRoutedFor = routedBeforeSwap;
+			this.#reanchorFallbackRouting(sessionIdBeforeSwap);
 			if (this.#activeRetryFallback) this.#activeRetryFallback.served = servedBeforeSwap;
 			return false;
 		}
@@ -2282,6 +2286,7 @@ export class TurnRecovery {
 			// Lifecycle cancellation does not transfer ownership. Undo the already
 			// installed candidate before abort/new-session callers capture their baseline.
 			this.#fallbackRoutedFor = routedBeforeSwap;
+			this.#reanchorFallbackRouting(sessionIdBeforeSwap);
 			if (this.#activeRetryFallback) this.#activeRetryFallback.served = servedBeforeSwap;
 			if (previousModel) {
 				await this.#host.setModelWithProviderSessionReset(previousModel);
@@ -2613,6 +2618,7 @@ export class TurnRecovery {
 		this.#activeRetryFallback = fallback.previousFallback;
 		if (fallback.originalWasFallback) this.#markFallbackRouted();
 		const fallbackGeneration = this.#retryFallbackGeneration;
+		const sessionGeneration = this.#host.sessionGeneration();
 		const sessionId = this.#host.sessionManager.getSessionId();
 		const reconciliation = this.#host.setModelWithProviderSessionReset(primaryModel);
 		// The host installs the model before yielding. Commit its transcript and
@@ -2632,15 +2638,15 @@ export class TurnRecovery {
 			);
 		}
 		await reconciliation;
-		// Explicit selections still win, including same-model reselection. An
-		// ordinary abort may change prompt generation without changing this owned
-		// restore; finish its prompt synchronization before teardown proceeds.
+		// Explicit selections still win, including same-model reselection. Aborts
+		// and whole-session forks keep this conversation; finish prompt sync for
+		// the owned restore unless /new or a session switch replaced it.
 		if (
 			!committed ||
 			this.#retryFallbackGeneration !== fallbackGeneration ||
 			this.#activeRetryFallback !== fallback.previousFallback ||
 			this.#host.model() !== primaryModel ||
-			this.#host.sessionManager.getSessionId() !== sessionId ||
+			this.#host.sessionGeneration() !== sessionGeneration ||
 			this.#host.isDisposed()
 		) {
 			return false;
