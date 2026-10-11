@@ -64,7 +64,7 @@
 - Fixed resumed OpenAI Responses sessions (xAI, Factory Droid, OpenAI and other hosts) dropping all earlier encrypted reasoning on their first request; GitHub Copilot still rebuilds history until its first response ([#15148](https://github.com/can1357/oh-my-pi/pull/15148) by [@will-bogusz](https://github.com/will-bogusz))
 ### Added
 
-- Added native OpenAI Decisions judging for OpenAI models, including the auth-gateway `/v1/decisions` endpoint.
+- Added native OpenAI Decisions judging for OpenAI models, including the auth-gateway `/v1/decisions` endpoint ([#15359](https://github.com/can1357/oh-my-pi/pull/15359) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
 
 ## [18.8.7] - 2026-10-09
 
