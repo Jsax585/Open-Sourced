@@ -193,12 +193,6 @@ export interface VerifiedBinaryDownloadOptions {
 	retryDelayMs?: number;
 }
 
-function delay(ms: number): Promise<void> {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	setTimeout(resolve, ms);
-	return promise;
-}
-
 function isTransientDownloadError(err: unknown): boolean {
 	if (!err || typeof err !== "object") return false;
 	if (isTimeoutError(err) || isUnsupportedProxyError(err)) return false;
@@ -223,6 +217,9 @@ function isTransientDownloadError(err: unknown): boolean {
 		message.includes("premature close")
 	) {
 		return true;
+	}
+	if ("cause" in err && err.cause && typeof err.cause === "object") {
+		return isTransientDownloadError(err.cause);
 	}
 	return false;
 }
@@ -254,7 +251,7 @@ export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOpti
 			lastError = err;
 			if (attempt < maxRetries && isTransientDownloadError(err)) {
 				if (retryDelayMs > 0) {
-					await delay(retryDelayMs * 2 ** attempt);
+					await Bun.sleep(retryDelayMs * 2 ** attempt);
 				}
 				continue;
 			}
@@ -262,11 +259,14 @@ export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOpti
 		}
 
 		if (!response.ok || !response.body) {
+			if (response.body) {
+				await response.body.cancel().catch(() => {});
+			}
 			const isTransientStatus = response.status === 429 || response.status >= 500;
 			lastError = new Error(`Download failed: ${response.statusText} (${response.status})`);
 			if (attempt < maxRetries && isTransientStatus) {
 				if (retryDelayMs > 0) {
-					await delay(retryDelayMs * 2 ** attempt);
+					await Bun.sleep(retryDelayMs * 2 ** attempt);
 				}
 				continue;
 			}
@@ -293,8 +293,10 @@ export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOpti
 			},
 		});
 
+		let pipelineCompleted = false;
 		try {
 			await pipeline(response.body, verifier, fs.createWriteStream(options.targetPath, { mode: 0o600 }));
+			pipelineCompleted = true;
 			const digest = `sha256:${hash.digest("hex")}`;
 			if (size !== options.expectedSize) {
 				throw new Error(
@@ -310,6 +312,9 @@ export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOpti
 			return;
 		} catch (err) {
 			await unlinkIfExists(options.targetPath);
+			if (response.body) {
+				await response.body.cancel().catch(() => {});
+			}
 			if (isTimeoutError(err)) {
 				throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
 			}
@@ -320,10 +325,10 @@ export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOpti
 				throw err;
 			}
 			lastError = err;
-			const isTruncated = size < options.expectedSize;
-			if (attempt < maxRetries && (isTransientDownloadError(err) || isTruncated)) {
+			const isCleanShortEof = pipelineCompleted && size < options.expectedSize;
+			if (attempt < maxRetries && (isTransientDownloadError(err) || isCleanShortEof)) {
 				if (retryDelayMs > 0) {
-					await delay(retryDelayMs * 2 ** attempt);
+					await Bun.sleep(retryDelayMs * 2 ** attempt);
 				}
 				continue;
 			}

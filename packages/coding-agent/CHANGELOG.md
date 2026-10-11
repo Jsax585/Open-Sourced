@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Made `omp update` binary downloads resilient against transient socket drops, network resets, and truncated streams by adding automatic retries with exponential backoff.
+- Made `omp update` binary downloads resilient against transient socket drops, network resets, and truncated streams by adding automatic retries with exponential backoff ([#15362](https://github.com/can1357/oh-my-pi/pull/15362) by [@TalexDreamSoul](https://github.com/TalexDreamSoul)).
 
 ## [18.9.1] - 2026-10-11
 
