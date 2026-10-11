@@ -165,6 +165,13 @@ describe("Settings", () => {
 				path.join(getProjectAgentDir(projectDir), "config.yml"),
 				path.join(getProjectAgentDir(projectDir), "settings.json"),
 				path.join(projectDir, ".claude", "settings.json"),
+				path.join(projectDir, ".cursor", "settings.json"),
+				path.join(projectDir, ".gemini", "settings.json"),
+				path.join(projectDir, ".codex", "config.toml"),
+				path.join(projectDir, "opencode.json"),
+				path.join(projectDir, "opencode.jsonc"),
+				path.join(projectDir, ".opencode", "opencode.json"),
+				path.join(projectDir, ".opencode", "opencode.jsonc"),
 			]);
 		});
 

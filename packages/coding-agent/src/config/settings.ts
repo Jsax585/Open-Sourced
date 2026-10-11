@@ -71,6 +71,24 @@ export function settingCacheScope(provenance: SettingProvenance): "global" | "pr
 	return undefined;
 }
 
+/** Every project settings file that can become authoritative, including files not created yet. */
+function prospectiveProjectSettingsSourcePaths(cwd: string): string[] {
+	const projectCwd = path.resolve(cwd);
+	const projectConfigDir = getProjectAgentDir(projectCwd);
+	return [
+		path.join(projectConfigDir, "config.yml"),
+		path.join(projectConfigDir, "settings.json"),
+		path.join(projectCwd, ".claude", "settings.json"),
+		path.join(projectCwd, ".cursor", "settings.json"),
+		path.join(projectCwd, ".gemini", "settings.json"),
+		path.join(projectCwd, ".codex", "config.toml"),
+		path.join(projectCwd, "opencode.json"),
+		path.join(projectCwd, "opencode.jsonc"),
+		path.join(projectCwd, ".opencode", "opencode.json"),
+		path.join(projectCwd, ".opencode", "opencode.jsonc"),
+	];
+}
+
 /** Raw settings object as stored in YAML */
 export interface RawSettings {
 	[key: string]: unknown;
@@ -1244,11 +1262,7 @@ export class Settings {
 			}
 		};
 		for (const filename of MAIN_CONFIG_FILENAMES) addFile(path.join(this.#agentDir, filename));
-		const projectCwd = path.resolve(this.#cwd);
-		const projectConfigDir = getProjectAgentDir(projectCwd);
-		addFile(path.join(projectConfigDir, "config.yml"));
-		addFile(path.join(projectConfigDir, "settings.json"));
-		addFile(path.join(projectCwd, ".claude", "settings.json"));
+		for (const file of prospectiveProjectSettingsSourcePaths(this.#cwd)) addFile(file);
 		for (const file of this.#projectSourcePaths) addFile(file);
 		for (const file of this.#configFiles) addFile(file);
 		return targets;
@@ -1626,14 +1640,7 @@ export class Settings {
 			const own = MAIN_CONFIG_FILENAMES.map(filename => path.join(this.#agentDir, filename));
 			return this.#parent ? [...new Set([...this.#parent.settingCacheSourcePaths(scope), ...own])] : own;
 		}
-		const projectCwd = path.resolve(this.#cwd);
-		const projectConfigDir = getProjectAgentDir(projectCwd);
-		const own = [
-			path.join(projectConfigDir, "config.yml"),
-			path.join(projectConfigDir, "settings.json"),
-			path.join(projectCwd, ".claude", "settings.json"),
-			...this.#projectSourcePaths,
-		];
+		const own = [...prospectiveProjectSettingsSourcePaths(this.#cwd), ...this.#projectSourcePaths];
 		return this.#parent ? [...new Set([...this.#parent.settingCacheSourcePaths(scope), ...own])] : [...new Set(own)];
 	}
 
@@ -2508,9 +2515,9 @@ export class Settings {
 		const discoveryCwd = path.resolve(cwd);
 		const projectConfigDir = getProjectAgentDir(cwd);
 		const projectConfigPath = path.join(projectConfigDir, "config.yml");
-		invalidateCapabilityFsCache(projectConfigPath);
-		invalidateCapabilityFsCache(path.join(projectConfigDir, "settings.json"));
-		invalidateCapabilityFsCache(path.join(discoveryCwd, ".claude", "settings.json"));
+		for (const sourcePath of prospectiveProjectSettingsSourcePaths(discoveryCwd)) {
+			invalidateCapabilityFsCache(sourcePath);
+		}
 		for (const sourcePath of this.#projectSourcePaths) invalidateCapabilityFsCache(sourcePath);
 		let shellPathSource: string | undefined;
 		let merged: RawSettings = {};

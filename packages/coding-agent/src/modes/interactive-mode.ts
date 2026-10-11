@@ -3465,15 +3465,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		let resetDisplay = false;
 
 		if (any("autoResume")) {
-			const cacheScope = settingCacheScope(cfgAutoResume.provenance(this.settings));
-			if (cacheScope) {
-				sharedComposerCache()?.writeAutoResume(
-					this.sessionManager.getCwd(),
-					cfgAutoResume.get(this.settings),
-					cacheScope === "project",
-					this.settings.settingCacheSourcePaths(cacheScope),
-				);
-			}
+			this.#syncAutoResumeCache();
 		}
 
 		if (
