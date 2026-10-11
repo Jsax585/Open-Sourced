@@ -46,11 +46,14 @@ export function getTerminalLaunchPlacement(
 	}
 
 	const shellGrammar = "shellGrammar" in placementCapabilities ? placementCapabilities.shellGrammar : undefined;
+	const defaultTargetEnvs =
+		"defaultTargetEnvs" in placementCapabilities ? placementCapabilities.defaultTargetEnvs : undefined;
 	return {
 		multiplexer,
 		displayName: provider.displayName,
 		placementLabel: placementCapabilities.displayName,
 		...(shellGrammar === "posix" ? { shellGrammar } : {}),
+		...(defaultTargetEnvs ? { defaultTargetEnvs } : {}),
 	};
 }
 

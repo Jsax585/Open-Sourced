@@ -51,6 +51,7 @@ function createContext(
 ) {
 	const pasteToEditor = vi.fn((_text: string) => undefined);
 	const sendUserMessage = vi.fn((_text: string, _options?: SendUserMessageOptions) => undefined);
+	const notify = vi.fn();
 	const cwd = options.cwd ?? "/workspace";
 	const ctx = {
 		mode: options.mode ?? "tui",
@@ -59,9 +60,9 @@ function createContext(
 		cwd: "/stale",
 		isIdle: () => options.idle ?? true,
 		sessionManager: { getBranch: () => options.branch ?? [], getCwd: () => cwd, getSessionId: () => "session-1" },
-		ui: { supportsEditor: options.supportsEditor ?? true, pasteToEditor, notify: vi.fn() },
+		ui: { supportsEditor: options.supportsEditor ?? true, pasteToEditor, notify },
 	} as unknown as AnnotationContext;
-	return { api: createAnnotationsAPI(() => ctx, sendUserMessage), pasteToEditor, sendUserMessage };
+	return { api: createAnnotationsAPI(() => ctx, sendUserMessage), pasteToEditor, sendUserMessage, notify };
 }
 
 beforeAll(async () => {
@@ -295,6 +296,35 @@ describe("annotations API: open", () => {
 		expect(pasteToEditor).toHaveBeenCalledWith(result!.text!);
 	});
 
+	it("applies edited text on top of refreshed file source metadata", async () => {
+		const refreshedSource = {
+			id: "file:current.txt",
+			kind: "file" as const,
+			label: "current-file.txt",
+			text: "refreshed before edit",
+			provenance: { kind: "file" as const, path: "current.txt" },
+		};
+		spyOn(fullscreen, "showTextReviewOverlay").mockResolvedValue({
+			action: "paste",
+			annotations: [{ scope: "line", line: 1, quote: "edited line", note: "check latest file" }],
+			refreshedSource,
+			editedText: "edited line\ncurrent file tail",
+		});
+		const { api, pasteToEditor } = createContext({
+			branch: [assistantEntry("assistant", "historical reply excerpt")],
+		});
+
+		const result = await api.open({ source: { kind: "last" } });
+
+		if (result?.kind !== "text") throw new Error("expected text feedback");
+		expect(result.text).toContain("current-file.txt");
+		expect(result.text).toContain("current file tail");
+		expect(result.text).not.toContain("historical reply excerpt");
+		expect(result.text).not.toContain("refreshed before edit");
+		expect(result.editedText).toBe("edited line\ncurrent file tail");
+		expect(pasteToEditor).toHaveBeenCalledWith(result.text);
+	});
+
 	it("returns undefined and delivers nothing when the operator dismisses the overlay", async () => {
 		spyOn(fullscreen, "showCodeReviewOverlay").mockResolvedValue(undefined);
 		const { api, pasteToEditor, sendUserMessage } = createContext();
@@ -317,6 +347,94 @@ describe("annotations API: open", () => {
 		expect(result?.delivered).toBe("send");
 		expect(sendUserMessage).toHaveBeenCalledTimes(1);
 		expect(result?.text).toContain("be strict");
+	});
+
+	it("uses refreshed PR patches and anchors when the extension opens a review", async () => {
+		const refreshedDiff = `diff --git a/src/refreshed.ts b/src/refreshed.ts
+--- a/src/refreshed.ts
++++ b/src/refreshed.ts
+@@ -3 +9 @@
+-const value = old;
++const value = fresh;
+`;
+		const contextInstruction = "MUST use remote PR diff context";
+		const diffInstruction = "MUST read the refreshed PR patch";
+		const target = createResolvedReviewTarget("pr", "PR acme/project#42", DIFF, "PR is empty", {
+			contextInstruction,
+			diffInstruction,
+			refresh: async () =>
+				createResolvedReviewTarget("pr", "PR acme/project#42", refreshedDiff, "PR is empty", {
+					contextInstruction,
+					diffInstruction,
+				}),
+		});
+		spyOn(review, "fetchPrReviewTarget").mockResolvedValue(target);
+		spyOn(fullscreen, "showCodeReviewOverlay").mockResolvedValue({
+			action: "review",
+			annotations: [
+				{
+					scope: "line",
+					path: "src/refreshed.ts",
+					occurrence: 1,
+					hunkHeader: "@@ -3 +9 @@",
+					oldLine: 3,
+					newLine: 9,
+					rawLine: "+const value = fresh;",
+					note: "review the updated value",
+				},
+			],
+			refreshedDiff,
+		});
+		const originalSnapshot = target.snapshot;
+		const { api, pasteToEditor, sendUserMessage } = createContext();
+
+		const result = await api.open({
+			source: { kind: "pr", ref: "https://github.com/acme/project/pull/42" },
+			focus: "inspect refreshed changes",
+		});
+
+		if (result?.kind !== "diff") throw new Error("expected diff feedback");
+		expect(result.review).toBe(true);
+		expect(result.delivered).toBe("send");
+		expect(result.text).toContain(refreshedDiff.trim());
+		expect(result.text).not.toContain(DIFF.trim());
+		expect(result.text).toContain("src/refreshed.ts — old 3, new 9");
+		expect(result.text).toContain(contextInstruction);
+		expect(result.text).toContain("inspect refreshed changes");
+		expect(result.annotations[0]).toMatchObject({
+			path: "src/refreshed.ts",
+			newLine: 9,
+			rawLine: "+const value = fresh;",
+		});
+		expect(target.rawDiff).toBe(DIFF);
+		expect(target.snapshot).toBe(originalSnapshot);
+		expect(sendUserMessage).toHaveBeenCalled();
+		expect(pasteToEditor).not.toHaveBeenCalled();
+	});
+
+	it("does not deliver stale notes when an extension-open refresh leaves no diff", async () => {
+		const target = createResolvedReviewTarget("pr", "PR acme/project#42", DIFF, "PR is now empty", {
+			refresh: async () => createResolvedReviewTarget("pr", "PR acme/project#42", "", "PR is now empty"),
+		});
+		spyOn(review, "fetchPrReviewTarget").mockResolvedValue(target);
+		spyOn(fullscreen, "showCodeReviewOverlay").mockResolvedValue({
+			action: "paste",
+			annotations: [{ scope: "file", path: "src/value.ts", occurrence: 1, note: "stale note" }],
+			refreshedDiff: "",
+		});
+		const originalSnapshot = target.snapshot;
+		const { api, notify, pasteToEditor, sendUserMessage } = createContext();
+
+		const result = await api.open({
+			source: { kind: "pr", ref: "https://github.com/acme/project/pull/42" },
+		});
+
+		expect(result).toBeUndefined();
+		expect(notify.mock.calls.some(([, type]) => type === "warning")).toBe(true);
+		expect(pasteToEditor).not.toHaveBeenCalled();
+		expect(sendUserMessage).not.toHaveBeenCalled();
+		expect(target.rawDiff).toBe(DIFF);
+		expect(target.snapshot).toBe(originalSnapshot);
 	});
 
 	it("rejects an oversized supplied patch before the operator can annotate it", async () => {

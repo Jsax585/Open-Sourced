@@ -5,6 +5,9 @@
 ### Added
 
 - Added hiding a pending `ask` question without answering it: `Alt+H` (`app.ask.hide`) or the Hide button in Tern collapses the dialog to one line; the same key, `Enter`, or Show brings it back ([#15400](https://github.com/can1357/oh-my-pi/pull/15400) by [@H4vC](https://github.com/H4vC))
+- Added explicit `r` refresh for live files and trusted file-associated excerpts, uncommitted/base-comparison diffs, and GitHub PR reviews; refreshed feedback uses the current snapshot and notes are reconciled conservatively ([#15398](https://github.com/can1357/oh-my-pi/pull/15398) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+- Extended `/annotate` Ctrl+G to open full files associated with selected tool-file excerpts and best-effort repository-local counterparts for PR and supplied-patch reviews, while keeping the excerpt and review diff as the feedback source ([#15399](https://github.com/can1357/oh-my-pi/pull/15399) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+- Added multiplexer-first Ctrl+G editing for `/annotate`: the annotation stays active while its source opens in a new pane, with the external-editor flow as a fallback when no usable pane is available ([#15268](https://github.com/can1357/oh-my-pi/pull/15268) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
 
 ## [18.9.2] - 2026-10-11
 

@@ -23,6 +23,7 @@ import {
 	getReviewTargetIssue,
 	type ResolvedReviewTarget,
 	readUncommittedReviewTarget,
+	withRefreshedReviewDiff,
 } from "../review/target";
 import { promptTextReviewSource, readFileTextReviewSource } from "./direct-source";
 import { showCodeReviewOverlay, showTextReviewOverlay } from "./fullscreen";
@@ -223,6 +224,7 @@ export function createAnnotationsAPI(
 				let source = await resolveTextSource(ctx, request.source);
 				const result = await showTextReviewOverlay(ctx, source);
 				if (!result) return undefined;
+				if (result.refreshedSource !== undefined) source = result.refreshedSource;
 				if (result.editedText !== undefined) source = { ...source, text: result.editedText };
 				const text = buildTextReviewPrompt(source, result.annotations);
 				return {
@@ -239,8 +241,15 @@ export function createAnnotationsAPI(
 			assertReviewablePatchSize(target);
 			const result = await showCodeReviewOverlay(ctx, target);
 			if (!result) return undefined;
+			const completedTarget =
+				result.refreshedDiff === undefined ? target : withRefreshedReviewDiff(target, result.refreshedDiff);
+			const refreshedIssue = getReviewTargetIssue(completedTarget);
+			if (refreshedIssue) {
+				ctx.ui.notify(refreshedIssue, "warning");
+				return undefined;
+			}
 			const review = result.action === "review";
-			const text = buildCodeReviewFeedback(target, result.annotations, review, request.focus);
+			const text = buildCodeReviewFeedback(completedTarget, result.annotations, review, request.focus);
 			return {
 				kind: "diff",
 				text,

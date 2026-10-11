@@ -10,6 +10,7 @@ const capabilities = {
 		displayName: "pane",
 		execution: ["direct", "shell"],
 		target: "pane",
+		defaultTargetEnvs: ["TMUX_PANE"],
 		direction: ["right", "down"],
 		focus: true,
 	},

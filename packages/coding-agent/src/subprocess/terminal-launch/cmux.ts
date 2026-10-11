@@ -9,6 +9,7 @@ const capabilities = {
 		displayName: "pane",
 		execution: ["shell-input"],
 		target: "surface",
+		defaultTargetEnvs: ["CMUX_WORKSPACE_ID", "CMUX_SURFACE_ID"],
 		direction: ["right", "left", "up", "down"],
 		focus: true,
 		shellGrammar: "posix",
