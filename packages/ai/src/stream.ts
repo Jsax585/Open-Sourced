@@ -927,9 +927,11 @@ function streamDispatch<TApi extends Api>(
 		withTransportFetch(model, (options || {}) as StreamOptions),
 	) as OptionsForApi<TApi>;
 	assertExplicitOpenAIResponsesPromptCacheSupport(model, requestOptions);
-	// OpenCode's gate requires at least two OpenCode core tool names in
-	// tools[] (schemas ignored) on every request, so tool-less auxiliary calls
-	// (advisors, one-shot helpers) are refused with 403 FreeTierError even when
+	// OpenCode's gate requires the bash and read tool names in
+	// tools[] (schemas ignored) on every request, so calls missing either
+	// name — tool-less auxiliary calls (advisors, one-shot helpers) as well
+	// as rosters carrying other tool names but no bash, like the default
+	// advisor roster — are refused with 403 FreeTierError even when
 	// the client-identity headers are correct (#12306). Pad with stub entries
 	// here — the single dispatch funnel for stream/complete/streamSimple — and
 	// never expose them to the caller's tool registry: they are wire-shape

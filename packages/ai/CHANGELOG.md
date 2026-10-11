@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenCode free-tier 403 on advisor turns: the gateway mandatorily requires the `bash` and `read` tool names, so requests missing either (including rosters that carry other tool names but no `bash`) are now padded with stubs for the missing pair ([#12556](https://github.com/can1357/oh-my-pi/pull/12556) by [@palprateek](https://github.com/palprateek)).
+
 ## [18.8.0] - 2026-10-07
 
 ### Breaking Changes

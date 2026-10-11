@@ -94,7 +94,7 @@ async function captureRequestTools(model: Model<"openai-completions">): Promise<
 }
 
 describe("withOpenCodeGateTools", () => {
-	it("pads a single gate name up to the two-name threshold", () => {
+	it("pads a lone read with the missing bash", () => {
 		const padded = withOpenCodeGateTools([{ name: "read", description: "r", parameters: {} }]);
 		expect(padded.map(tool => tool.name).sort()).toEqual(["bash", "read"]);
 	});
@@ -117,15 +117,25 @@ describe("withOpenCodeGateTools", () => {
 		expect(padded.map(tool => tool.name).sort()).toEqual(["bash", "custom", "read"]);
 	});
 
-	it("returns the same array identity when the roster already satisfies the gate", () => {
+	it("returns the same array identity when both bash and read are present", () => {
 		const full = OPENCODE_GATE_TOOL_NAMES.map(name => ({ name, description: "", parameters: {} }));
 		expect(withOpenCodeGateTools(full)).toBe(full);
-		// Any two of the five satisfy the gate — no padding needed.
+		// The pair alone satisfies the gate — no padding needed.
 		const pair = [
-			{ name: "edit", description: "", parameters: {} },
-			{ name: "glob", description: "", parameters: {} },
+			{ name: "bash", description: "", parameters: {} },
+			{ name: "read", description: "", parameters: {} },
 		];
 		expect(withOpenCodeGateTools(pair)).toBe(pair);
+	});
+
+	it("pads the advisor roster with the missing bash", () => {
+		// Regression: the default advisor roster (advise/read/grep/glob)
+		// carries three of the five known names but no bash, and the gateway
+		// still answers 403 — the gate mandatorily requires bash.
+		const roster = ["advise", "read", "grep", "glob"].map(name => ({ name, description: "", parameters: {} }));
+		const padded = withOpenCodeGateTools(roster);
+		expect(padded.map(tool => tool.name).sort()).toEqual(["advise", "bash", "glob", "grep", "read"]);
+		expect(roster).toHaveLength(4);
 	});
 
 	it("does not mutate the caller's array", () => {
@@ -176,6 +186,18 @@ describe("OpenCode free-tier body gate", () => {
 			{ name: "read", description: "r", parameters: { type: "object" } },
 		]);
 		expect(body.tools?.map(tool => tool.function.name).sort()).toEqual(["bash", "read"]);
+		expect(body.tool_choice).toBeUndefined();
+	});
+
+	it("advisor roster reaches the wire with bash without a tool_choice pin", async () => {
+		// End to end for the reported advisor 403: read/grep/glob without
+		// bash is refused, so the missing bash is padded — but the turn owns
+		// real tools, so the model must remain free to call them.
+		const { body } = await captureRequestBody(
+			makeOpenCodeGoCompletionsModel(),
+			["advise", "read", "grep", "glob"].map(name => ({ name, description: "", parameters: { type: "object" } })),
+		);
+		expect(body.tools?.map(tool => tool.function.name).sort()).toEqual(["advise", "bash", "glob", "grep", "read"]);
 		expect(body.tool_choice).toBeUndefined();
 	});
 });

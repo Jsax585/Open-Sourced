@@ -20,34 +20,29 @@ export function isOpenCodeProvider(provider: string): boolean {
 }
 
 /**
- * The gate additionally requires at least two of these OpenCode core tool
- * NAMES in `tools[]` (schemas are ignored, extra non-OpenCode tools are fine,
- * and the count is over distinct names). The check was weakened from all five
- * to any two ([#12306](https://github.com/can1357/oh-my-pi/issues/12306)).
+ * OpenCode core tool NAMES the gateway knows. The body gate does not accept
+ * any two of these: live-gateway evidence shows it mandatorily requires the
+ * `bash` + `read` pair — a roster carrying `read`/`grep`/`glob` without `bash`
+ * (the default advisor roster) is still refused with 403 FreeTierError
+ * ([#12306](https://github.com/can1357/oh-my-pi/issues/12306)).
  * Agent harnesses carrying a normal tool roster satisfy this natively;
- * tool-less auxiliary calls must pad.
+ * calls missing either name must pad.
  */
 export const OPENCODE_GATE_TOOL_NAMES = ["bash", "edit", "glob", "grep", "read"] as const;
 
-/** Minimum distinct gate tool names the gateway requires in `tools[]`. */
-export const OPENCODE_GATE_MIN_TOOL_NAMES = 2;
-
 /**
- * Gate tool names injected when padding. Any two of the five satisfy the
- * gate; `bash` + `read` are the pair the live-gateway bisection confirmed.
+ * Gate tool names injected when padding. `bash` + `read` are the pair the
+ * live-gateway bisection confirmed.
  */
 export const OPENCODE_GATE_PAD_TOOL_NAMES = ["bash", "read"] as const;
 
 /**
  * Gate tool names missing from `names` (exact-match — the gate compares names
- * only). Returns empty when at least {@link OPENCODE_GATE_MIN_TOOL_NAMES} of
- * the five are already present; otherwise returns the `bash`/`read` names not
- * already present, i.e. just enough stubs to reach the two-name threshold.
+ * only). Returns the `bash`/`read` names not already present; empty when both
+ * are present and no padding is needed.
  */
 export function missingOpenCodeGateToolNames(names: Iterable<string>): string[] {
 	const present = new Set(names);
-	const presentCount = OPENCODE_GATE_TOOL_NAMES.filter(name => present.has(name)).length;
-	if (presentCount >= OPENCODE_GATE_MIN_TOOL_NAMES) return [];
 	return OPENCODE_GATE_PAD_TOOL_NAMES.filter(name => !present.has(name));
 }
 
