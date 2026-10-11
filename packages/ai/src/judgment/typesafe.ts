@@ -9,7 +9,8 @@
  * like chat providers; transient 429/5xx responses retry with bounded,
  * `retry-after`-aware backoff. Endpoints that cap the `questions` map (the
  * catalog's `judgment-questions-max`, e.g. OpenJEV at 16) get oversized
- * requests split into parallel chunks under `maxQuestions`.
+ * requests split into chunks under `maxQuestions`, at most
+ * {@link CHUNK_PARALLEL} in flight at once.
  *
  * Environment (mirrors the official SDK): `TYPESAFE_API_KEY` is resolved by
  * the auth registry (`rules/auth/typesafe.kdl`), `TYPESAFE_BASE_URL`
@@ -20,6 +21,7 @@ import type { Api, FetchImpl } from "@oh-my-pi/pi-catalog/types";
 import { $env } from "@oh-my-pi/pi-utils";
 import { type ApiKey, withAuth } from "../auth-retry";
 import * as AIError from "../error";
+import type { Usage } from "../types";
 import { getRetryAfterMsFromHeaders } from "../utils/retry-after";
 import {
 	type Answer,
@@ -73,8 +75,21 @@ export interface TypeSafeJudgeOptions {
 	fetch?: FetchImpl;
 	/** Per-attempt timeout; defaults to {@link DEFAULT_TIMEOUT_MS}. */
 	timeoutMs?: number;
-	/** Most questions per request the endpoint accepts; larger requests are split. Unset: no cap. */
+	/**
+	 * Most questions per request the endpoint accepts, a positive integer; larger
+	 * requests are split. Unset: no cap.
+	 */
 	maxQuestions?: number;
+}
+
+/** Per-call options for {@link TypeSafeJudge.judge}. */
+export interface TypeSafeJudgeCallOptions extends JudgeOptions {
+	/**
+	 * Called before a split judgment rejects, with the summed usage of the chunks that had already
+	 * succeeded: billed upstream, but their answers are discarded with the failure. Not called when
+	 * no chunk succeeded or the request was not split.
+	 */
+	onPartialUsage?: (usage: Usage) => void;
 }
 
 /** Non-2xx response from the TypeSafe API. */
@@ -86,6 +101,8 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_ATTEMPTS = 3;
 const BACKOFF_BASE_MS = 500;
 const BACKOFF_MAX_MS = 5_000;
+/** Chunks of one split judgment in flight at once, so a split never bursts the endpoint unboundedly. */
+const CHUNK_PARALLEL = 4;
 
 interface SystemOneResponse {
 	model: string;
@@ -122,11 +139,17 @@ export class TypeSafeJudge implements Judge {
 		this.#headers = options.headers;
 		this.#fetch = options.fetch ?? fetch;
 		this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+		if (options.maxQuestions !== undefined && !(Number.isInteger(options.maxQuestions) && options.maxQuestions > 0)) {
+			throw new RangeError(`TypeSafeJudge maxQuestions must be a positive integer, got ${options.maxQuestions}`);
+		}
 		this.#maxQuestions = options.maxQuestions;
 		this.label = `${this.provider}/${this.model}`;
 	}
 
-	async judge<Q extends Questions>(request: JudgmentRequest<Q>, options?: JudgeOptions): Promise<JudgmentResult<Q>> {
+	async judge<Q extends Questions>(
+		request: JudgmentRequest<Q>,
+		options?: TypeSafeJudgeCallOptions,
+	): Promise<JudgmentResult<Q>> {
 		const ids = Object.keys(request.questions);
 		const cap = this.#maxQuestions;
 		if (cap !== undefined && ids.length > cap) return this.#judgeChunked(request, ids, cap, options);
@@ -134,38 +157,58 @@ export class TypeSafeJudge implements Judge {
 	}
 
 	/**
-	 * Answer `request` in requests of at most `cap` questions each; answers merge and usage sums.
-	 * The first failing chunk aborts its in-flight siblings so a doomed judgment stops spending.
+	 * Answer `request` in requests of at most `cap` questions each, {@link CHUNK_PARALLEL} at a time;
+	 * answers merge and usage sums. The first failing chunk aborts its in-flight siblings and stops
+	 * dispatch, so a doomed judgment stops spending; once every chunk settles, the usage of those that
+	 * succeeded goes to `onPartialUsage` before the judgment rejects.
 	 */
 	async #judgeChunked<Q extends Questions>(
 		request: JudgmentRequest<Q>,
 		ids: string[],
 		cap: number,
-		options: JudgeOptions | undefined,
+		options: TypeSafeJudgeCallOptions | undefined,
 	): Promise<JudgmentResult<Q>> {
-		const failed = new AbortController();
-		const signal = options?.signal ? AbortSignal.any([options.signal, failed.signal]) : failed.signal;
-		const parts: Promise<JudgmentResult>[] = [];
+		const chunks: Questions[] = [];
 		for (let start = 0; start < ids.length; start += cap) {
 			const questions: Questions = {};
 			for (const id of ids.slice(start, start + cap)) questions[id] = request.questions[id];
-			parts.push(
-				this.#judgeOnce({ state: request.state, questions }, { ...options, signal }).catch(error => {
+			chunks.push(questions);
+		}
+		const failed = new AbortController();
+		const signal = options?.signal ? AbortSignal.any([options.signal, failed.signal]) : failed.signal;
+		const chunkOptions = { signal };
+		const results: JudgmentResult[] = [];
+		let next = 0;
+		const drain = async (): Promise<void> => {
+			while (next < chunks.length && !signal.aborted) {
+				const index = next++;
+				try {
+					results[index] = await this.#judgeOnce({ state: request.state, questions: chunks[index] }, chunkOptions);
+				} catch (error) {
 					failed.abort(error);
 					throw error;
-				}),
-			);
-		}
-		const results = await Promise.all(parts);
+				}
+			}
+		};
+		// Settle every worker, not just the first failure, so no sibling's billed result goes uncounted.
+		await Promise.allSettled(Array.from({ length: Math.min(CHUNK_PARALLEL, chunks.length) }, drain));
 		const answers: Record<string, Answer> = {};
+		let settled = 0;
 		let input = 0;
 		let output = 0;
 		let cost = 0;
 		for (const result of results) {
+			if (result === undefined) continue;
+			settled++;
 			Object.assign(answers, result.answers);
 			input += result.usage.input;
 			output += result.usage.output;
 			cost += result.usage.cost.total;
+		}
+		// Every chunk failure aborts `failed`, so `signal` carries the first failure or the caller's abort.
+		if (signal.aborted) {
+			if (settled > 0) options?.onPartialUsage?.(tokenUsage(input, output, cost));
+			throw signal.reason;
 		}
 		return {
 			api: this.api,
