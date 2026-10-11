@@ -27,6 +27,7 @@ import type {
 import { resolveApiKeyOnce } from "@oh-my-pi/pi-ai/auth-retry";
 import type { DiscoverAuthStorageOptions } from "@oh-my-pi/pi-ai/auth-broker/discover";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { prewarmOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { isOpenAICodexWebSocketPreferred } from "@oh-my-pi/pi-ai/providers/openai-codex-transport";
 import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
@@ -118,6 +119,7 @@ import {
 	ExtensionToolWrapper,
 	type ExtensionUIContext,
 	extensionToolSourceInfo,
+	isProviderRequestRejection,
 	type LoadExtensionsResult,
 	loadExtensionFromFactory,
 	loadExtensions,
@@ -4238,7 +4240,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			);
 		};
 		const onPayload = async (payload: unknown, model?: Model, signal?: AbortSignal) => {
-			return await extensionRunner.emitBeforeProviderRequest(payload, model, signal);
+			const result = await extensionRunner.emitBeforeProviderRequest(payload, model, signal);
+			if (isProviderRequestRejection(result)) {
+				throw AIError.attach(new Error(result.message), AIError.create(AIError.Flag.RequestRejected));
+			}
+			return result;
 		};
 		const onResponse: SimpleStreamOptions["onResponse"] = async (response, model, signal) => {
 			await extensionRunner.emitAfterProviderResponse(response, model, signal);

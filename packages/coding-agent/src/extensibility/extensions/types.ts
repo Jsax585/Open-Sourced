@@ -1404,7 +1404,36 @@ export interface AssistantMessageRewriteResult {
 	content?: AssistantMessage["content"];
 }
 
-export type BeforeProviderRequestEventResult = unknown;
+export type ProviderRequestRejectionCode = "policy" | "handler_failure";
+
+/** A local veto, never a provider payload. Diagnostics cannot include request content. */
+export class ProviderRequestRejection {
+	constructor(public readonly code: ProviderRequestRejectionCode) {
+		Object.freeze(this);
+	}
+
+	get message(): string {
+		return this.code === "policy"
+			? "Provider request rejected by extension policy."
+			: "Provider request rejected because a fail-closed handler failed.";
+	}
+}
+
+export function rejectProviderRequest(code: ProviderRequestRejectionCode): ProviderRequestRejection {
+	return new ProviderRequestRejection(code);
+}
+
+export function isProviderRequestRejection(value: unknown): value is ProviderRequestRejection {
+	return value instanceof ProviderRequestRejection;
+}
+
+/** Return a rejection to veto the request, or any replacement payload (undefined leaves it unchanged). */
+export type BeforeProviderRequestEventResult = ProviderRequestRejection | unknown;
+
+export interface BeforeProviderRequestHandlerOptions {
+	/** Reject on a throw or timeout, using only fixed, non-sensitive diagnostics. Defaults to false. */
+	failClosed?: boolean;
+}
 
 export type { ToolCallEventResult } from "../shared-events";
 
@@ -1547,6 +1576,7 @@ export interface ExtensionAPI {
 	on(
 		event: "before_provider_request",
 		handler: ExtensionHandler<BeforeProviderRequestEvent, BeforeProviderRequestEventResult>,
+		options?: BeforeProviderRequestHandlerOptions,
 	): void;
 	on(event: "after_provider_response", handler: ExtensionHandler<AfterProviderResponseEvent>): void;
 	on(event: "before_agent_start", handler: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>): void;
@@ -2069,6 +2099,7 @@ export interface Extension {
 	resolvedPath: string;
 	label?: string;
 	handlers: Map<string, HandlerFn[]>;
+	failClosedProviderRequestHandlers?: Set<HandlerFn>;
 	tools: Map<string, RegisteredTool<any, any>>;
 	toolRegistrationListeners?: Set<ToolRegistrationListener>;
 	assistantThinkingRenderers: AssistantThinkingRenderer[];

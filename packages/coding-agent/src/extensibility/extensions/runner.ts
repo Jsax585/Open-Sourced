@@ -43,6 +43,7 @@ import { accumulateToolCallResult, buildAggregatedToolCallResult } from "../shar
 import { ManagedTimers } from "./managed-timers";
 import { createExtensionModelQuery } from "./model-api";
 import type { ComposerShapeDefinition } from "@oh-my-pi/pi-tui/overlays/composer-shape-registry";
+import { isProviderRequestRejection, rejectProviderRequest } from "./types";
 import type {
 	AfterProviderResponseEvent,
 	AssistantMessageRewriteEvent,
@@ -1513,6 +1514,7 @@ export class ExtensionRunner {
 		timeoutMs: number,
 		onFailure?: (kind: "timeout" | "error", message: string) => R,
 		outerSignal?: AbortSignal,
+		fixedFailureMessage?: string,
 	): Promise<R | undefined> {
 		// `session_stop` carries its own signal on the event; `tool_call` receives
 		// the outer dispatch signal (loop request or wrapper execute) so an abort
@@ -1566,7 +1568,7 @@ export class ExtensionRunner {
 		}
 		if (handlerResult === EXTENSION_HANDLER_ABORTED) return undefined;
 		if (handlerResult === EXTENSION_HANDLER_TIMEOUT) {
-			const error = `handler timed out after ${timeoutMs}ms`;
+			const error = fixedFailureMessage ?? `handler timed out after ${timeoutMs}ms`;
 			logger.warn("Extension handler timed out", {
 				extensionPath: ext.path,
 				event: event.type,
@@ -1581,8 +1583,12 @@ export class ExtensionRunner {
 		}
 		if (handlerFailure) {
 			const message =
-				handlerFailure.error instanceof Error ? handlerFailure.error.message : String(handlerFailure.error);
-			const stack = handlerFailure.error instanceof Error ? handlerFailure.error.stack : undefined;
+				fixedFailureMessage ??
+				(handlerFailure.error instanceof Error ? handlerFailure.error.message : String(handlerFailure.error));
+			const stack =
+				fixedFailureMessage === undefined && handlerFailure.error instanceof Error
+					? handlerFailure.error.stack
+					: undefined;
 			this.emitError({
 				extensionPath: ext.path,
 				event: event.type,
@@ -2070,6 +2076,9 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
+				const failureRejection = ext.failClosedProviderRequestHandlers?.has(handler)
+					? rejectProviderRequest("handler_failure")
+					: undefined;
 				const event: BeforeProviderRequestEvent = {
 					type: "before_provider_request",
 					payload: currentPayload,
@@ -2080,9 +2089,11 @@ export class ExtensionRunner {
 					ctx,
 					ext,
 					extensionHandlerTimeoutMs,
-					undefined,
+					failureRejection ? () => failureRejection : undefined,
 					signal,
+					failureRejection?.message,
 				);
+				if (isProviderRequestRejection(handlerResult)) return handlerResult;
 				if (handlerResult !== undefined) {
 					currentPayload = handlerResult;
 				}

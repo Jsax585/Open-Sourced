@@ -1,7 +1,7 @@
 import type { Api } from "../types";
 import type { AbortSourceTracker } from "../utils/abort";
 import type { CapturedHttpErrorResponse, RawHttpRequestDump } from "../utils/http-inspector";
-import { classify, classifyMessage, status } from "./flags";
+import { classify, classifyMessage, create, Flag, is, status } from "./flags";
 import { formatMessage } from "./format";
 
 /** Context a provider catch block hands to {@link finalize}. */
@@ -44,6 +44,22 @@ export interface FinalizeResult {
  * wrapped so a formatter throw can never skip the caller's `stream.end()`.
  */
 export async function finalize(error: unknown, opts: FinalizeOptions = {}): Promise<FinalizeResult> {
+	// A local veto has no transport diagnostics, even if an earlier retry
+	// captured a response or the caller concurrently aborted.
+	if (
+		typeof error === "object" &&
+		error !== null &&
+		"errorId" in error &&
+		typeof error.errorId === "number" &&
+		is(error.errorId, Flag.RequestRejected)
+	) {
+		return {
+			id: create(Flag.RequestRejected),
+			status: undefined,
+			stopReason: "error",
+			message: error instanceof Error ? error.message : "Provider request rejected by extension policy.",
+		};
+	}
 	const aborted = opts.abortTracker ? opts.abortTracker.wasCallerAbort() : opts.signal?.aborted === true;
 	const errorStatus = status(error);
 	const currentStatus = errorStatus ?? opts.capturedErrorResponse?.status;

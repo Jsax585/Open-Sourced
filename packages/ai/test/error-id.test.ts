@@ -24,6 +24,26 @@ function message(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
 }
 
 describe("error-id classification", () => {
+	it("keeps local request rejection terminal and distinct from every raw HTTP status", async () => {
+		for (let status = 100; status <= 599; status++) {
+			expect(AIError.is(status, AIError.Flag.RequestRejected)).toBe(false);
+			expect(AIError.is(AIError.classify({ errorId: status }), AIError.Flag.RequestRejected)).toBe(false);
+			expect(AIError.is(AIError.classifyMessage({ errorId: status }), AIError.Flag.RequestRejected)).toBe(false);
+		}
+		const id = AIError.create(AIError.Flag.RequestRejected);
+		const error = AIError.attach(new Error("Provider request rejected by extension policy."), id);
+		expect(AIError.classify(error)).toBe(id);
+		expect(AIError.retriable(AIError.create(AIError.Flag.RequestRejected, AIError.Flag.Transient))).toBe(false);
+		expect(AIError.isContextOverflow(message({ errorId: id, errorMessage: "prompt is too long" }))).toBe(false);
+		const finalized = await AIError.finalize(error, { signal: AbortSignal.abort() });
+		expect(finalized).toEqual({
+			id,
+			status: undefined,
+			stopReason: "error",
+			message: error.message,
+		});
+	});
+
 	it("composes timeout with transient", () => {
 		const id = AIError.classify(new Error("provider stream stall timeout"), "anthropic-messages");
 		expect(AIError.is(id, AIError.Flag.Transient)).toBe(true);

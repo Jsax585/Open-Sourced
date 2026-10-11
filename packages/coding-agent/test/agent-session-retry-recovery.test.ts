@@ -4,6 +4,9 @@ import { Agent, AgentBusyError } from "@oh-my-pi/pi-agent-core";
 import type { ApiKey, AssistantMessage, AssistantRetryRecovery, Model, Usage } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import * as envApiKey from "@oh-my-pi/pi-ai/env-api-key";
+import * as AIError from "@oh-my-pi/pi-ai/error";
+import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
+import { AnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic-client";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -14,6 +17,10 @@ import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages"
 import type { SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { ExtensionRunner, EXTENSION_HANDLER_TIMEOUT_MS, testSetExtensionHandlerTimeoutMs } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import { isProviderRequestRejection, rejectProviderRequest } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { mockSchedulerWaitWithClock } from "./helpers/mock-scheduler-clock";
 
 type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
@@ -146,6 +153,7 @@ describe("AgentSession retry recovery", () => {
 	});
 
 	afterEach(async () => {
+		testSetExtensionHandlerTimeoutMs(EXTENSION_HANDLER_TIMEOUT_MS);
 		for (const activeSession of sessions.splice(0).reverse()) {
 			await activeSession.dispose();
 		}
@@ -159,6 +167,160 @@ describe("AgentSession retry recovery", () => {
 	afterAll(() => {
 		authStorage.close();
 		fixtureDir.removeSync();
+	});
+
+	it.each(["policy", "throw", "timeout"] as const)("ends %s veto without client calls or recovery", async mode => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected bundled Anthropic model");
+		const runtime = new ExtensionRuntime();
+		const manager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "sessions"));
+		managers.push(manager);
+		const extension = await loadExtensionFromFactory(pi => {
+			pi.on("before_provider_request", () => {
+				if (mode === "throw") throw new Error("secret payload stack sentinel");
+				if (mode === "timeout") return new Promise<never>(() => {});
+				return rejectProviderRequest("policy");
+			}, { failClosed: true });
+		}, tempDir.path(), new EventBus(), runtime);
+		const runner = new ExtensionRunner([extension], runtime, tempDir.path(), manager, modelRegistry);
+		const errors: unknown[] = [];
+		runner.onError(error => errors.push(error));
+		if (mode === "timeout") testSetExtensionHandlerTimeoutMs(5);
+		const client = vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() => {
+			throw new Error("Rejected requests must never reach the client");
+		});
+		let streams = 0;
+		let keys = 0;
+		const agent = new Agent({
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+			getApiKey: () => { keys++; return "test-key"; },
+			onPayload: async (payload, requestModel, signal) => {
+				const result = await runner.emitBeforeProviderRequest(payload, requestModel, signal);
+				if (isProviderRequestRejection(result)) {
+					throw AIError.attach(new Error(result.message), AIError.create(AIError.Flag.RequestRejected));
+				}
+				return result;
+			},
+			streamFn: (requestModel, context, options) => {
+				streams++;
+				if (requestModel.id !== model.id) throw new Error("Unexpected fallback");
+				return streamAnthropic(model, context, options);
+			},
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": true,
+			"retry.enabled": true,
+			"retry.modelFallback": true,
+			"retry.maxRetries": 3,
+			"retry.fallbackChains": { default: ["anthropic/claude-haiku-4-5"] },
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		const session = new AgentSession({ agent, sessionManager: manager, settings, modelRegistry });
+		sessions.push(session);
+		const events: AgentSessionEvent[] = [];
+		session.subscribe(event => events.push(event));
+		await session.prompt("Synthetic policy input");
+		await session.waitForIdle();
+		await manager.flush();
+		expect(client).not.toHaveBeenCalled();
+		expect(streams).toBe(1);
+		expect(keys).toBe(1);
+		expect(events.some(event => event.type === "auto_retry_start" || event.type === "auto_compaction_start")).toBe(false);
+		const terminal = assistantEntries(manager).at(-1)?.message;
+		expect(terminal?.stopReason).toBe("error");
+		expect(AIError.is(terminal?.errorId, AIError.Flag.RequestRejected)).toBe(true);
+		expect(terminal?.errorMessage).toBe(rejectProviderRequest(mode === "policy" ? "policy" : "handler_failure").message);
+		expect(JSON.stringify(errors)).not.toContain("secret payload stack sentinel");
+	});
+
+	it.each([true, false])("observes frozen signed redemption without rewriting it (reject=%s)", async reject => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected bundled Anthropic model");
+		const frozen = {
+			model: "original-model",
+			stream: true,
+			max_tokens: 64,
+			messages: [
+				{ role: "assistant", content: [{ type: "thinking", thinking: "signed plan", signature: "signed-bytes" }] },
+				{ role: "user", content: "continue" },
+			],
+		};
+		const original = JSON.stringify(frozen);
+		const runtime = new ExtensionRuntime();
+		const manager = SessionManager.inMemory();
+		managers.push(manager);
+		let observed: unknown;
+		const extension = await loadExtensionFromFactory(pi => {
+			pi.on("before_provider_request", event => {
+				observed = structuredClone(event.payload);
+				if (reject) return rejectProviderRequest("policy");
+				// Frozen replay hooks may observe and veto, but cannot replace
+				// signed content, including through in-place mutation.
+				if (event.payload && typeof event.payload === "object" && "messages" in event.payload) {
+					event.payload.messages = [];
+				}
+				return { messages: [], model: "replacement" };
+			});
+		}, tempDir.path(), new EventBus(), runtime);
+		const runner = new ExtensionRunner([extension], runtime, tempDir.path(), manager, modelRegistry);
+		let sent: unknown;
+		const client = vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(params => {
+			sent = structuredClone(params);
+			throw new Error("synthetic terminal client response");
+		});
+		const stream = streamAnthropic(model, { messages: [{ role: "user", content: "unused", timestamp: 0 }] }, {
+			apiKey: "test-key",
+			fallbackCreditRedemption: { token: "credit-token", params: frozen, expiresAt: Date.now() + 60_000, prefillClaim: false },
+			onPayload: async (payload, requestModel) => {
+				const result = await runner.emitBeforeProviderRequest(payload, requestModel);
+				if (isProviderRequestRejection(result)) {
+					throw AIError.attach(new Error(result.message), AIError.create(AIError.Flag.RequestRejected));
+				}
+				return result;
+			},
+		});
+		for await (const _event of stream) { /* drain */ }
+		const result = await stream.result();
+		const expected = { ...frozen, model: model.id, fallback_credit_token: "credit-token" };
+		expect(observed).toEqual(expected);
+		expect(JSON.stringify(frozen)).toBe(original);
+		if (reject) {
+			expect(client).not.toHaveBeenCalled();
+			expect(AIError.is(result.errorId, AIError.Flag.RequestRejected)).toBe(true);
+			expect(result.errorMessage).toBe(rejectProviderRequest("policy").message);
+		} else {
+			expect(client).toHaveBeenCalledTimes(1);
+			expect(sent).toEqual(expected);
+		}
+	});
+
+	it("keeps ordinary provider payload replacements working with a real runner", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected bundled Anthropic model");
+		const runtime = new ExtensionRuntime();
+		const manager = SessionManager.inMemory();
+		managers.push(manager);
+		const extension = await loadExtensionFromFactory(pi => {
+			pi.on("before_provider_request", event => {
+				if (!event.payload || typeof event.payload !== "object") throw new Error("Expected provider body");
+				return { ...event.payload, max_tokens: 37 };
+			});
+		}, tempDir.path(), new EventBus(), runtime);
+		const runner = new ExtensionRunner([extension], runtime, tempDir.path(), manager, modelRegistry);
+		const client = vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(params => {
+			expect(params.max_tokens).toBe(37);
+			throw new Error("synthetic terminal client response");
+		});
+		const context = { messages: [{ role: "user" as const, content: "unchanged input", timestamp: 0 }] };
+		const original = JSON.stringify(context);
+		const stream = streamAnthropic(model, context, {
+			apiKey: "test-key",
+			onPayload: (payload, requestModel) => runner.emitBeforeProviderRequest(payload, requestModel),
+		});
+		for await (const _event of stream) { /* drain */ }
+		await stream.result();
+		expect(client).toHaveBeenCalledTimes(1);
+		expect(JSON.stringify(context)).toBe(original);
 	});
 
 	async function runCredentialRecovery(): Promise<RecoveryRun> {
