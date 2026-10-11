@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed OpenCode free-tier 403 on advisor turns: the gateway mandatorily requires the `bash` and `read` tool names, so requests missing either (including rosters that carry other tool names but no `bash`) are now padded with stubs for the missing pair ([#12556](https://github.com/can1357/oh-my-pi/pull/12556) by [@palprateek](https://github.com/palprateek)).
+- Fixed OpenCode free-tier 403 on advisor turns: the gateway mandatorily requires the `bash` and `read` tool names, so requests missing either (including rosters that carry other tool names but no `bash`) are now padded with stubs for the missing pair — on both dispatch funnels, with the `tool_choice: none` pin kept off `openai-responses` ([#12556](https://github.com/can1357/oh-my-pi/pull/12556) by [@palprateek](https://github.com/palprateek), with funnel coverage contributed by [@NoelJacob](https://github.com/NoelJacob)).
 ## [18.9.0] - 2026-10-11
 
 ### Breaking Changes

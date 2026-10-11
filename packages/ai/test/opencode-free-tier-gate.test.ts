@@ -1,13 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { formatMessage } from "@oh-my-pi/pi-ai/error";
+import { withOpenCodeGateShape } from "@oh-my-pi/pi-ai/utils/opencode-gate";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
 	withOpenCodeGateTools,
 	OPENCODE_GATE_TOOL_NAMES,
 	OPENCODE_SESSION_TOKEN_PATTERN,
 } from "@oh-my-pi/pi-catalog/wire/opencode";
-import type { Model } from "@oh-my-pi/pi-ai/types";
+import type { Context, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai/types";
 
 const OPENCODE_GO_COMPLETIONS_MODEL = {
 	provider: "opencode-go",
@@ -199,6 +200,36 @@ describe("OpenCode free-tier body gate", () => {
 		);
 		expect(body.tools?.map(tool => tool.function.name).sort()).toEqual(["advise", "bash", "glob", "grep", "read"]);
 		expect(body.tool_choice).toBeUndefined();
+	});
+});
+
+describe("withOpenCodeGateShape funnel coverage", () => {
+	it("pads tool-less streamSimple calls and pins none on completions", () => {
+		const context: Context = { systemPrompt: ["s"], messages: [] };
+		const options: SimpleStreamOptions = { apiKey: "key", toolChoice: undefined };
+		const shaped = withOpenCodeGateShape(makeOpenCodeGoCompletionsModel(), context, options);
+		expect(shaped.context.tools?.map(tool => tool.name).sort()).toEqual(["bash", "read"]);
+		if (!("toolChoice" in shaped.requestOptions) || shaped.requestOptions.toolChoice === undefined) {
+			throw new Error("Expected pinned toolChoice");
+		}
+		expect(shaped.requestOptions.toolChoice).toBe("none");
+	});
+
+	it("pads tools but leaves tool_choice alone on responses (none 400s there)", () => {
+		const responsesModel = buildModel({
+			...OPENCODE_GO_COMPLETIONS_MODEL,
+			name: "Kimi K2.7 Code",
+			api: "openai-responses",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 262_144,
+			maxTokens: 8192,
+		});
+		const context: Context = { systemPrompt: ["s"], messages: [] };
+		const shaped = withOpenCodeGateShape(responsesModel, context, { apiKey: "key" });
+		expect(shaped.context.tools?.map(tool => tool.name).sort()).toEqual(["bash", "read"]);
+		expect("toolChoice" in shaped.requestOptions ? shaped.requestOptions.toolChoice : undefined).toBeUndefined();
 	});
 });
 

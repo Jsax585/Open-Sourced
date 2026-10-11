@@ -14,7 +14,6 @@ import {
 	resolveWireModelId,
 } from "@oh-my-pi/pi-catalog/model-thinking";
 import { CODEX_BASE_URL } from "@oh-my-pi/pi-catalog/wire/codex";
-import { isOpenCodeProvider, withOpenCodeGateTools } from "@oh-my-pi/pi-catalog/wire/opencode";
 import { $env, getProviderInFlightRoot, isEnoent, logger, untilAborted } from "@oh-my-pi/pi-utils";
 import { getCustomApi } from "./api-registry";
 import { createAuthRetryKeyState, isApiKeyResolver, resolvedApiKeyBearer, resolveNextAuthRetryKey } from "./auth-retry";
@@ -74,6 +73,7 @@ import { AssistantMessageEventStream } from "./utils/event-stream";
 import { isFoundryEnabled } from "./utils/foundry";
 import { applyGlyphCodec } from "./utils/glyph-codec";
 import { wrapLeakedThinkingStream } from "./utils/leaked-thinking-stream";
+import { withOpenCodeGateShape } from "./utils/opencode-gate";
 import { withThinkingLoopGuard } from "./utils/thinking-loop";
 import { withTransportFetch } from "./utils/transport-fetch";
 
@@ -927,30 +927,7 @@ function streamDispatch<TApi extends Api>(
 		withTransportFetch(model, (options || {}) as StreamOptions),
 	) as OptionsForApi<TApi>;
 	assertExplicitOpenAIResponsesPromptCacheSupport(model, requestOptions);
-	// OpenCode's gate requires the bash and read tool names in
-	// tools[] (schemas ignored) on every request, so calls missing either
-	// name — tool-less auxiliary calls (advisors, one-shot helpers) as well
-	// as rosters carrying other tool names but no bash, like the default
-	// advisor roster — are refused with 403 FreeTierError even when
-	// the client-identity headers are correct (#12306). Pad with stub entries
-	// here — the single dispatch funnel for stream/complete/streamSimple — and
-	// never expose them to the caller's tool registry: they are wire-shape
-	// filler, not executable work. A padded tool-less call additionally pins
-	// toolChoice to "none" (unless the caller set one): the caller expects text
-	// and has no exec handler, so a phantom call to a stub would surface as
-	// empty text. The gate reads tools[], not tool_choice, so the pin is
-	// gate-neutral.
-	if (isOpenCodeProvider(model.provider)) {
-		const originalTools = context.tools;
-		const paddedTools = withOpenCodeGateTools(originalTools);
-		if (paddedTools !== originalTools) {
-			context = { ...context, tools: paddedTools };
-			const existingChoice = (requestOptions as { toolChoice?: ToolChoice }).toolChoice;
-			if ((originalTools ?? []).length === 0 && existingChoice === undefined) {
-				requestOptions = { ...requestOptions, toolChoice: "none" } as OptionsForApi<TApi>;
-			}
-		}
-	}
+	({ context, requestOptions } = withOpenCodeGateShape(model, context, requestOptions));
 
 	// Check custom API registry first (extension-provided APIs like "vertex-claude-api")
 	const customApiProvider = getCustomApi(model.api);
@@ -1312,10 +1289,11 @@ function streamSimpleRequest<TApi extends Api>(
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
-	const requestOptions = withSupportedSamplingParams(
+	let requestOptions = withSupportedSamplingParams(
 		model,
 		withTransportFetch(model, (options || {}) as SimpleStreamOptions),
 	);
+	({ context, requestOptions } = withOpenCodeGateShape(model, context, requestOptions));
 
 	const apiKeyResolver = isApiKeyResolver(requestOptions?.apiKey) ? requestOptions.apiKey : undefined;
 	if (apiKeyResolver) {

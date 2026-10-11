@@ -23,8 +23,10 @@ export function isOpenCodeProvider(provider: string): boolean {
  * OpenCode core tool NAMES the gateway knows. The body gate does not accept
  * any two of these: live-gateway evidence shows it mandatorily requires the
  * `bash` + `read` pair — a roster carrying `read`/`grep`/`glob` without `bash`
- * (the default advisor roster) is still refused with 403 FreeTierError
- * ([#12306](https://github.com/can1357/oh-my-pi/issues/12306)).
+ * (the default advisor roster) is still refused with 403 FreeTierError, and an
+ * Oct 2026 bisection found every other partial combination (`edit`+`read`,
+ * `bash`+`grep`, …) 403s while only rosters containing both `bash` and `read`
+ * pass ([#12306](https://github.com/can1357/oh-my-pi/issues/12306)).
  * Agent harnesses carrying a normal tool roster satisfy this natively;
  * calls missing either name must pad.
  */
