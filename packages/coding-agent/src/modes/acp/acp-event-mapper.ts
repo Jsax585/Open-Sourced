@@ -278,6 +278,9 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 			if (planUpdate) {
 				notifications.push(toSessionNotification(sessionId, planUpdate));
 			}
+			if (options.sessionMessages && !event.isError && event.toolName === "wait") {
+				notifications.push(...mapWaitedAgentMessage(event.result, sessionId, options.sessionMessages));
+			}
 			return notifications;
 		}
 		case "todo_reminder": {
@@ -321,6 +324,31 @@ function mapOutgoingAgentMessage(
 			content: [{ type: "text", text }],
 		}),
 	];
+}
+
+/**
+ * Incoming view of an IRC message consumed by a pending `wait`: the bus hands it
+ * to the waiter instead of `deliverIrcMessage`, so no `irc_message` event reports it.
+ */
+function mapWaitedAgentMessage(
+	result: unknown,
+	sessionId: string,
+	sessionMessages: NonNullable<AcpEventMapperOptions["sessionMessages"]>,
+): SessionNotification[] {
+	if (typeof result !== "object" || result === null || !("details" in result)) return [];
+	const details = result.details;
+	if (typeof details !== "object" || details === null || !("op" in details) || details.op !== "wait") return [];
+	if (!("waited" in details)) return [];
+	const waited = details.waited;
+	if (typeof waited !== "object" || waited === null || !("id" in waited) || !("body" in waited)) return [];
+	return mapIncomingAgentMessage(
+		{
+			customType: "irc:incoming",
+			details: { id: waited.id, from: "from" in waited ? waited.from : undefined, message: waited.body },
+		},
+		sessionId,
+		sessionMessages,
+	);
 }
 
 /**

@@ -509,4 +509,34 @@ describe("ACP session messages for agent IRC traffic", () => {
 		]);
 		expect(mapAgentSessionEventToAcpSessionUpdates({ type: "irc_message", message: record }, "root")).toEqual([]);
 	});
+
+	it("reports an IRC message consumed by a pending wait as the same incoming message", () => {
+		const waited = { id: "m-7", from: "Scout", to: "main", body: "pong", ts: 1 };
+		const end: AgentSessionEvent = {
+			type: "tool_execution_end",
+			toolCallId: "tc-wait",
+			toolName: "wait",
+			isError: false,
+			result: {
+				content: [{ type: "text", text: "[m-7] Scout: pong" }],
+				details: { op: "wait", from: "main", waited },
+			},
+		};
+		const updates = mapAgentSessionEventToAcpSessionUpdates(end, "root", { sessionMessages });
+		expect(updates.map(n => n.update.sessionUpdate)).toEqual(["tool_call_update", "session_message"]);
+		expect(updates[1]!.update).toEqual({
+			sessionUpdate: "session_message",
+			messageId: "irc-in:m-7",
+			senderSessionId: "child-scout",
+			recipientSessionId: "root",
+			content: [{ type: "text", text: "pong" }],
+		});
+		const plain = mapAgentSessionEventToAcpSessionUpdates(end, "root");
+		expect(plain.map(n => n.update.sessionUpdate)).toEqual(["tool_call_update"]);
+		// Another tool's look-alike metadata is not a consumed IRC message.
+		const lookalike = mapAgentSessionEventToAcpSessionUpdates({ ...end, toolName: "mcp_lookup" }, "root", {
+			sessionMessages,
+		});
+		expect(lookalike.map(n => n.update.sessionUpdate)).toEqual(["tool_call_update"]);
+	});
 });
