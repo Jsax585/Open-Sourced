@@ -4,6 +4,7 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { Model, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { SessionAccountPoolScope } from "@oh-my-pi/pi-coding-agent/config/account-pools";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -14,7 +15,7 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 
 type ScriptedReport = { status: "exhausted" | "healthy"; fetchedAt?: number };
 
-const scriptedReports: Record<string, ScriptedReport | undefined> = {};
+let scriptedReports: Record<string, ScriptedReport | undefined> = {};
 const usageFetches: Array<{ provider: string; fetchedAt: number }> = [];
 let fetchGate: { promise: Promise<void>; open: () => void; started: () => void } | undefined;
 
@@ -62,8 +63,8 @@ function codexReport(scripted: ScriptedReport): UsageReport {
 function scriptedUsageProvider(provider: string): UsageProvider {
 	return {
 		id: provider,
-		fetchUsage: async () => {
-			const scripted = scriptedReports[provider];
+		fetchUsage: async params => {
+			const scripted = scriptedReports[params.credential.accountId ?? provider] ?? scriptedReports[provider];
 			const fetchedAt = scripted?.fetchedAt ?? Date.now();
 			usageFetches.push({ provider, fetchedAt });
 			if (fetchGate) {
@@ -193,8 +194,7 @@ describe("early quota reset recovery", () => {
 	});
 
 	afterEach(async () => {
-		scriptedReports.anthropic = undefined;
-		scriptedReports["openai-codex"] = undefined;
+		scriptedReports = {};
 		usageFetches.length = 0;
 		fetchGate = undefined;
 		if (env) {
@@ -236,7 +236,6 @@ describe("early quota reset recovery", () => {
 
 		expect(requested).toEqual([PRIMARY_SELECTOR, FALLBACK_SELECTOR, FALLBACK_SELECTOR, PRIMARY_SELECTOR]);
 		expect(`${session.model?.provider}/${session.model?.id}`).toBe(PRIMARY_SELECTOR);
-		expect(env.registry.isSelectorSuppressed(PRIMARY_SELECTOR)).toBe(false);
 		await session.dispose();
 	});
 
@@ -325,7 +324,6 @@ describe("early quota reset recovery", () => {
 
 		expect(requested).toEqual([codexSelector, FALLBACK_SELECTOR, FALLBACK_SELECTOR, codexSelector]);
 		expect(`${session.model?.provider}/${session.model?.id}`).toBe(codexSelector);
-		expect(env.registry.isSelectorSuppressed(codexSelector)).toBe(false);
 		await session.dispose();
 	});
 
@@ -362,7 +360,59 @@ describe("early quota reset recovery", () => {
 		await session.dispose();
 	});
 
-	it("retires only a healthy-evidenced quota suppression and preserves it otherwise", async () => {
+	it("keeps quota recovery scoped to disjoint session account pools", async () => {
+		env = await createEnv();
+		const { registry, authStorage } = env;
+		const clock = useMockClock();
+		await authStorage.credentials.set("anthropic", [
+			{
+				type: "oauth",
+				access: "depleted-access",
+				refresh: "depleted-refresh",
+				expires: clock.now() + 3_600_000,
+				accountId: "acct-depleted",
+			},
+			{
+				type: "oauth",
+				access: "healthy-access",
+				refresh: "healthy-refresh",
+				expires: clock.now() + 3_600_000,
+				accountId: "acct-healthy",
+			},
+		]);
+		scriptedReports["acct-depleted"] = { status: "exhausted" };
+		scriptedReports["acct-healthy"] = { status: "healthy" };
+		const depletedScope = new SessionAccountPoolScope(
+			authStorage,
+			{ anthropic: ["account:acct-depleted"] },
+			"depleted-session",
+		);
+		const healthyScope = new SessionAccountPoolScope(
+			authStorage,
+			{ anthropic: ["account:acct-healthy"] },
+			"healthy-session",
+		);
+		const depletedRegistry = depletedScope.registry(registry);
+		const healthyRegistry = healthyScope.registry(registry);
+		const depletedOptions = { sessionId: "depleted-session", reserveFraction: 0.1 };
+		const healthyOptions = { sessionId: "healthy-session", reserveFraction: 0.1 };
+		depletedRegistry.suppressSelector(PRIMARY_SELECTOR, clock.now() + 30 * 60_000, clock.now());
+		clock.advance(100);
+		try {
+			expect(await depletedRegistry.isSelectorSuppressedWithRecovery(PRIMARY_SELECTOR, depletedOptions)).toBe(true);
+			expect(await healthyRegistry.isSelectorSuppressedWithRecovery(PRIMARY_SELECTOR, healthyOptions)).toBe(false);
+			expect(await depletedRegistry.isSelectorSuppressedWithRecovery(PRIMARY_SELECTOR, depletedOptions)).toBe(true);
+			expect(await healthyRegistry.isSelectorSuppressedWithRecovery(PRIMARY_SELECTOR, healthyOptions)).toBe(false);
+			scriptedReports["acct-depleted"] = { status: "healthy" };
+			clock.advance(7 * 60_000);
+			expect(await depletedRegistry.isSelectorSuppressedWithRecovery(PRIMARY_SELECTOR, depletedOptions)).toBe(false);
+		} finally {
+			depletedScope.release();
+			healthyScope.release();
+		}
+	});
+
+	it("bypasses a quota cooldown only while recovery evidence stays fresh", async () => {
 		env = await createEnv();
 		const { registry } = env;
 		const options = { sessionId: "session-a", reserveFraction: 0.1 };
@@ -378,9 +428,7 @@ describe("early quota reset recovery", () => {
 		scriptedReports.anthropic = { status: "healthy" };
 		clock.advance(7 * 60_000);
 		expect(await registry.isSelectorSuppressedWithRecovery(PRIMARY_SELECTOR, options)).toBe(false);
-		expect(registry.isSelectorSuppressed(PRIMARY_SELECTOR)).toBe(false);
 
-		registry.suppressSelector(PRIMARY_SELECTOR, clock.now() + 30 * 60_000, failureTime);
 		scriptedReports.anthropic = { status: "healthy", fetchedAt: failureTime - 1 };
 		clock.advance(7 * 60_000);
 		expect(await registry.isSelectorSuppressedWithRecovery(PRIMARY_SELECTOR, options)).toBe(true);
@@ -463,10 +511,9 @@ describe("early quota reset recovery", () => {
 
 		clock.advance(7 * 60_000);
 		expect(await registry.isSelectorSuppressedWithRecovery(PRIMARY_SELECTOR, options)).toBe(false);
-		expect(registry.isSelectorSuppressed(PRIMARY_SELECTOR)).toBe(false);
 	});
 
-	it("resolves concurrent probes independently so the peer of a retired suppression reports unsuppressed", async () => {
+	it("lets concurrent healthy probes bypass the same quota cooldown", async () => {
 		env = await createEnv();
 		const { registry } = env;
 		const options = { sessionId: "session-a", reserveFraction: 0.1 };
@@ -490,7 +537,6 @@ describe("early quota reset recovery", () => {
 
 		expect(await first).toBe(false);
 		expect(await second).toBe(false);
-		expect(registry.isSelectorSuppressed(PRIMARY_SELECTOR)).toBe(false);
 	});
 
 	it("preserves the quota suppression when the recovery probe aborts", async () => {
