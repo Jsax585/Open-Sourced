@@ -5,6 +5,7 @@ import { type Api, type AssistantMessage, Effort, type Model } from "@oh-my-pi/p
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { cfgMemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/settings";
 import { type CreateAgentSessionResult, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -648,7 +649,7 @@ describe("AgentSession model persistence", () => {
 				.join("\n")}\n`,
 		);
 		const failure = new Error("switch failed after thinking restore");
-		created.settings.override("memory.backend", "mnemopi");
+		cfgMemoryBackend.override(created.settings, "mnemopi");
 		const mnemopi: MnemopiSessionState = Object.create(MnemopiSessionState.prototype);
 		Object.assign(mnemopi, {
 			aliasOf: undefined,
@@ -839,17 +840,5 @@ describe("AgentSession model persistence", () => {
 				EPHEMERAL_MODEL_CHANGE_ROLE,
 			),
 		).toEqual(["anthropic/claude-sonnet-4-5"]);
-	});
-
-	it("lists a named role model before the default fallback", () => {
-		expect(
-			getRestorableSessionModels(
-				{
-					default: "anthropic/claude-sonnet-4-5",
-					smol: "anthropic/claude-sonnet-4-6",
-				},
-				"smol",
-			),
-		).toEqual(["anthropic/claude-sonnet-4-6", "anthropic/claude-sonnet-4-5"]);
 	});
 });

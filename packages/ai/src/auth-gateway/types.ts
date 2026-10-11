@@ -112,6 +112,8 @@ export interface AuthGatewayParsedRequestOptions {
 	 * free-form bag. The gateway forwards as-is.
 	 */
 	metadata?: Record<string, unknown>;
+	/** Anthropic User Profile attribution from the inbound request header. */
+	userProfileId?: string;
 	/**
 	 * Captured allow-listed passthrough headers (anthropic-beta,
 	 * anthropic-version, openai-organization, openai-project, openai-beta,
@@ -161,6 +163,8 @@ export interface AuthGatewayServerOptions {
 	bind?: string;
 	/** Accept any of these bearer tokens. Empty allows unauthenticated calls. */
 	bearerTokens: string[];
+	/** Honor forwarded peer headers only when the connecting proxy is trusted. Default false. */
+	trustProxyHeaders?: boolean;
 	/** Version surfaced on `/healthz`. */
 	version?: string;
 }

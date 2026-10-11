@@ -36,16 +36,15 @@ import type { Args } from "./args";
 import { CliUsageError } from "./usage-error";
 
 /**
- * Runtime dependencies injected into setters that need to validate input or
- * warn about bad values. `args.ts` constructs one object at module load and
- * passes it to each {@link STRING_SETTERS} call.
+ * Runtime dependencies injected into setters that need to validate input.
+ * `args.ts` constructs one object at module load and passes it to each
+ * {@link STRING_SETTERS} call.
  *
  * Keeping these out of the setter closures means this module stays free of
  * runtime imports from `@oh-my-pi/pi-utils`, which is the whole reason it can
  * be safely imported by `profile-bootstrap.ts` before `setProfile` runs.
  */
 export interface ParseDeps {
-	logger: { warn: (message: string, meta?: Record<string, unknown>) => void };
 	parseThinkingMode: (value: string | null | undefined) => ConfiguredThinkingMode | undefined;
 	parseEffort: (value: string | null | undefined) => ConfiguredThinkingLevel | undefined;
 	normalizeToolNames: (values: Iterable<string>) => string[];
@@ -136,6 +135,10 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--mode": (result, value) => {
 		if (value === "text" || value === "json" || value === "rpc" || value === "acp" || value === "rpc-ui") {
 			result.mode = value;
+		} else {
+			result.invalidFlagValues.push(
+				`Invalid --mode value: ${JSON.stringify(value)}. Expected one of: text, json, rpc, rpc-ui, acp.`,
+			);
 		}
 	},
 	"--fork": (result, value) => {
@@ -152,6 +155,10 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	},
 	"--slow": (result, value) => {
 		result.slow = value;
+	},
+	"--goal": (result, value) => {
+		if (!value.trim()) throw new CliUsageError("--goal requires a non-empty objective.");
+		result.goal = value.trim();
 	},
 	"--plan": (result, value) => {
 		result.plan = value;
@@ -228,16 +235,17 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 			);
 			return;
 		}
-		throw new CliUsageError(
+		result.invalidFlagValues.push(
 			`Invalid --thinking value: ${JSON.stringify(value)}. Expected one of: ${deps.thinkingModes.join(", ")}, or an effort level (${deps.effortLevels.join(", ")}) which routes to --effort.`,
 		);
 	},
 	"--effort": (result, value, deps, state) => {
 		const effort = deps.parseEffort(value);
 		if (effort === undefined) {
-			throw new CliUsageError(
+			result.invalidFlagValues.push(
 				`Invalid --effort value: ${JSON.stringify(value)}. Expected one of: ${deps.effortLevels.join(", ")}.`,
 			);
+			return;
 		}
 		result.effort = effort;
 		state.explicitEffort = true;
@@ -262,15 +270,14 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--skills": (result, value) => {
 		result.skills = value.split(",").map(s => s.trim());
 	},
-	"--approval-mode": (result, value, deps) => {
-		if (value === "always-ask" || value === "write" || value === "yolo") {
-			result.approvalMode = value;
-		} else {
-			deps.logger.warn("Invalid value passed to --approval-mode", {
-				value,
-				validValues: ["always-ask", "write", "yolo"],
-			});
+	"--approval-mode": (result, value) => {
+		if (value !== "always-ask" && value !== "write" && value !== "yolo") {
+			result.invalidFlagValues.push(
+				`Invalid --approval-mode value: ${JSON.stringify(value)}. Expected one of: always-ask, write, yolo.`,
+			);
+			return;
 		}
+		result.approvalMode = value;
 	},
 };
 
@@ -352,6 +359,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
 	"--no-skills",
 	"--no-rules",
 	"--no-title",
+	"--no-ui",
 	"--auto-approve",
 	"--yolo",
 ]);
@@ -399,27 +407,32 @@ export function flagConsumesValue(flag: string, next: string | undefined): boole
 }
 
 /**
- * Session-source launch flags dropped when relaunching into an existing
- * session: the restart supplies its own `--resume`, and replaying a stale
- * continue/fork/import selector would re-run its one-shot session choice.
+ * One-shot launch selectors dropped when relaunching into an existing
+ * session: the relaunch supplies its own session source, and replaying a
+ * stale continue/fork/import selector would re-run its one-shot session
+ * choice. `--goal` belongs here too: it seeds a fresh session only, and
+ * `validateGoalLaunch` rejects it beside any resume/fork selector.
  */
-const SESSION_SOURCE_FLAGS: ReadonlySet<string> = new Set([
-	"--resume",
-	"-r",
-	"--session",
-	"--continue",
-	"-c",
-	"--fork",
-	"--from-claude",
-	"--from-codex",
-]);
+const ONE_SHOT_LAUNCH_FLAGS: Readonly<Record<string, true>> = {
+	"--resume": true,
+	"-r": true,
+	"--session": true,
+	"--continue": true,
+	"-c": true,
+	"--fork": true,
+	"--from-claude": true,
+	"--from-codex": true,
+	"--goal": true,
+};
 
 /**
- * Rewrite the launch argv for an in-place self-restart (`/restart`).
+ * Rewrite the launch argv for a relaunch of this session (`/restart`, and
+ * `/fork pane|window` with `resumeSessionId` undefined).
  *
  * Keeps every configuration flag as launched, but drops:
- * - session-source flags ({@link SESSION_SOURCE_FLAGS}, including inline
+ * - one-shot selectors ({@link ONE_SHOT_LAUNCH_FLAGS}, including inline
  *   `--resume=<id>` forms) — the relaunch resumes `resumeSessionId` instead;
+ * - flags in `drop`, which the caller re-supplies with current values;
  * - positionals (prompt messages, `@file` args, subcommand tokens) — their
  *   effect is already in the resumed transcript, so replaying them would
  *   duplicate the initial prompt.
@@ -429,7 +442,11 @@ const SESSION_SOURCE_FLAGS: ReadonlySet<string> = new Set([
  * `resumeSessionId` is omitted for a session that never materialized on disk;
  * the relaunch then starts fresh with the same configuration.
  */
-export function restartArgv(argv: string[], resumeSessionId: string | undefined): string[] {
+export function restartArgv(
+	argv: string[],
+	resumeSessionId: string | undefined,
+	drop?: Readonly<Record<string, true>>,
+): string[] {
 	const kept: string[] = [];
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
@@ -437,7 +454,7 @@ export function restartArgv(argv: string[], resumeSessionId: string | undefined)
 		if (!arg.startsWith("-")) continue; // positional: prompt message, @file, or subcommand
 		const consumesNext = flagConsumesValue(arg, argv[i + 1]);
 		const flag = arg.startsWith("--") ? arg.split("=", 1)[0] : arg;
-		if (SESSION_SOURCE_FLAGS.has(flag)) {
+		if (Object.hasOwn(ONE_SHOT_LAUNCH_FLAGS, flag) || (drop !== undefined && Object.hasOwn(drop, flag))) {
 			if (consumesNext) i++;
 			continue;
 		}

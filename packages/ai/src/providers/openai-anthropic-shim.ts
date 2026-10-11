@@ -172,7 +172,8 @@ export function streamOpenAIAnthropicShim(
 					reasoning: explicitThinkingOff ? undefined : reasoningEffort,
 					toolChoice: options?.toolChoice,
 					serviceTier: options?.serviceTier,
-					disableReasoning: explicitThinkingOff ? true : options?.disableReasoning,
+					disableReasoning: explicitThinkingOff,
+					waitForTerminalDrain: options?.waitForTerminalDrain,
 				});
 
 				for await (const event of innerStream) {

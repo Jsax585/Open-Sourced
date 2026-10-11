@@ -6,7 +6,7 @@ import { clampThinkingLevelForModel, getSupportedEfforts } from "@oh-my-pi/pi-ca
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import type { Model, ThinkingMode } from "@oh-my-pi/pi-catalog/types";
 /** Thinking selectors accepted by CLI inputs, in display order. */
-export const CLI_THINKING_LEVELS: readonly string[] = ["off", ...THINKING_EFFORTS, "auto"];
+export const CLI_THINKING_LEVELS: readonly ConfiguredThinkingLevel[] = ["off", ...THINKING_EFFORTS, "auto"];
 
 /**
  * Metadata used to render thinking selector values in the coding-agent UI.
@@ -56,6 +56,7 @@ const EFFORT_BY_SELECTOR: Readonly<Record<string, Effort>> = {
 	[Effort.XHigh]: Effort.XHigh,
 	[Effort.Max]: Effort.Max,
 };
+
 export const DEFAULT_THINKING_MODE = "default" as const;
 
 export type ConfiguredThinkingMode = ThinkingMode | typeof DEFAULT_THINKING_MODE;
@@ -250,31 +251,28 @@ export const CLI_THINKING_MODES: readonly string[] = ["adaptive", DEFAULT_THINKI
 
 /**
  * Parses a `--thinking` CLI value as a mode selector. Effort values (including
- * `off`) return `undefined` here; {@link parseCliEffort} owns them, and the CLI
- * flag routes them to `--effort` with a deprecation warning.
+ * `off`) return `undefined` here; {@link parseCliThinkingLevel} owns them, and
+ * the CLI flag routes them to `--effort` with a deprecation warning.
  */
 export function parseCliThinkingMode(value: string | null | undefined): ConfiguredThinkingMode | undefined {
 	return getOwnSelector(THINKING_MODE_BY_SELECTOR, value);
 }
 
-/**
- * Effort selectors accepted by the `--effort` CLI flag, in display order:
- * `off`, every concrete effort (`minimal`..`max`), then `auto`.
- */
-export const CLI_EFFORT_LEVELS: readonly string[] = [ThinkingLevel.Off, ...THINKING_EFFORTS, AUTO_THINKING];
-
-const CLI_EFFORT_BY_SELECTOR: Readonly<Record<string, ConfiguredThinkingLevel>> = {
+const CLI_THINKING_LEVEL_BY_SELECTOR: Readonly<Record<string, ConfiguredThinkingLevel>> = {
 	...EFFORT_BY_SELECTOR,
 	[ThinkingLevel.Off]: ThinkingLevel.Off,
 	[AUTO_THINKING]: AUTO_THINKING,
 };
 
 /**
- * Parses a `--effort` CLI value. Accepts unambiguous abbreviations for every
- * selector, `off` and `auto` included, matching `--thinking`'s legacy domain.
+ * Parses an `--effort` CLI or `/effort` value: `off`, `auto`, or `minimal`..`max`,
+ * each with unambiguous abbreviations. Rejects `inherit`: an explicit `inherit` on
+ * the command line would suppress the settings/scoped-model fallback during
+ * startup resolution only to resolve back to the provider default, which is
+ * never what the user means.
  */
-export function parseCliEffort(value: string | null | undefined): ConfiguredThinkingLevel | undefined {
-	return getOwnSelector(CLI_EFFORT_BY_SELECTOR, value);
+export function parseCliThinkingLevel(value: string | null | undefined): ConfiguredThinkingLevel | undefined {
+	return getOwnSelector(CLI_THINKING_LEVEL_BY_SELECTOR, value);
 }
 
 /** Maps a configured thinking mode to the provider-neutral request mode. */
