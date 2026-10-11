@@ -5436,6 +5436,150 @@ describe("AgentSession retry fallback", () => {
 		expect(session.model?.provider).toBe(fallbackModel.provider);
 		expect(session.model?.id).toBe(fallbackModel.id);
 	});
+	describe("next-turn fallback restoration", () => {
+		const primary = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const fallback = getBundledModel("openai-codex", "gpt-5.6-sol")!;
+		const primaryId = `${primary.provider}/${primary.id}`;
+		const fallbackId = `${fallback.provider}/${fallback.id}`;
+
+		const setup = (options: { responses?: MockResponse[]; pinned?: boolean; initial?: boolean; tools?: AgentTool[] } = {}) => {
+			const requested: string[] = [];
+			const mock = createMockModel({ responses: options.responses });
+			const agent = options.responses
+				? new Agent({
+						getApiKey: model => `${model.provider}-test-key`,
+						initialState: {
+							model: options.initial ? fallback : primary,
+							systemPrompt: ["Test"],
+							tools: options.tools ?? [],
+							messages: [],
+						},
+						streamFn: (model, context, streamOptions) => {
+							requested.push(`${model.provider}/${model.id}`);
+							return mock.stream(model, context, streamOptions);
+						},
+					})
+				: createFallbackAgent(primary, requested);
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				"retry.fallbackChains": { default: [`${fallbackId}:low`] },
+				"retry.fallbackRevertPolicy": "next-turn",
+			});
+			settings.setModelRole("default", `${primaryId}:high`);
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+				thinkingLevel: options.initial ? Effort.Low : Effort.High,
+				initialRetryFallback: options.initial
+					? { role: "default", originalSelector: `${primaryId}:high`, originalThinkingLevel: Effort.High, pinned: options.pinned }
+					: undefined,
+			});
+			return { requested, agent };
+		};
+
+		it("restores on the next admitted prompt inside the cooldown window", async () => {
+			const { requested } = setup();
+			await session!.prompt("Trigger fallback");
+			await session!.waitForIdle();
+			expect(session!.model?.id).toBe(fallback.id);
+			expect(modelRegistry.isSelectorSuppressed(primaryId)).toBe(true);
+			await session!.prompt("New parent assignment");
+			await session!.waitForIdle();
+			expect(requested).toEqual([primaryId, fallbackId, primaryId]);
+		});
+
+		it("does not restore for queued steer and follow-up drains or delayed continuation", async () => {
+			const { requested } = setup();
+			await session!.prompt("Trigger fallback");
+			await session!.waitForIdle();
+			await session!.steer("Queued steering");
+			await session!.followUp("Queued follow-up");
+			await session!.waitForIdle();
+			await scheduler.wait(20);
+			await session!.followUp("Delayed asynchronous continuation");
+			await session!.waitForIdle();
+			expect(requested.slice(1).every(id => id === fallbackId)).toBe(true);
+			expect(requested.length).toBeGreaterThan(2);
+		});
+
+		it("keeps a same-turn tool loop and empty-response continuation on the fallback", async () => {
+			const schema = type({ value: "string" });
+			const tool: AgentTool<typeof schema, { value: string }> = {
+				name: "echo", label: "Echo", description: "Echo", parameters: schema,
+				async execute(_id, params) {
+					return { content: [{ type: "text", text: params.value }], details: params };
+				},
+			};
+			const { requested } = setup({
+				tools: [tool],
+				responses: [
+					{ throw: `rate limit exceeded retry-after-ms=${FALLBACK_TEST_RETRY_AFTER_MS}` },
+					{ content: [{ type: "toolCall", id: "echo-1", name: "echo", arguments: { value: "ok" } }] },
+					{ content: [], stopReason: "stop" },
+					{ content: ["Done"] },
+				],
+			});
+			await session!.prompt("Run the tool");
+			await session!.waitForIdle();
+			expect(requested).toEqual([primaryId, fallbackId, fallbackId, fallbackId]);
+		});
+
+		it("does not restore on an automatic retry of the fallback", async () => {
+			const { requested } = setup({
+				responses: [
+					{ throw: `rate limit exceeded retry-after-ms=${FALLBACK_TEST_RETRY_AFTER_MS}` },
+					{ throw: "service unavailable: 503 overloaded" },
+					{ content: ["Recovered"] },
+				],
+			});
+			await session!.prompt("Retry");
+			await session!.waitForIdle();
+			expect(requested).toEqual([primaryId, fallbackId, fallbackId]);
+		});
+
+		it("restores after a cancelled turn when a new prompt is admitted", async () => {
+			const { requested } = setup();
+			await session!.prompt("Trigger fallback");
+			await session!.waitForIdle();
+			await session!.abort();
+			await session!.prompt("New prompt after cancellation");
+			await session!.waitForIdle();
+			expect(requested.at(-1)).toBe(primaryId);
+		});
+
+		it("does not restore a pinned fallback", async () => {
+			const { requested } = setup({ initial: true, pinned: true, responses: [{ content: ["Pinned"] }] });
+			await session!.prompt("New prompt");
+			await session!.waitForIdle();
+			expect(requested).toEqual([fallbackId]);
+		});
+
+		it("does not restore after explicit same-selector model selection", async () => {
+			const { requested } = setup();
+			await session!.prompt("Trigger fallback");
+			await session!.waitForIdle();
+			await session!.setModel(session!.model!);
+			await session!.prompt("Keep my selection");
+			await session!.waitForIdle();
+			expect(requested.at(-1)).toBe(fallbackId);
+		});
+
+		it("preserves explicit same-value effort when restoring the primary", async () => {
+			setup();
+			await session!.prompt("Trigger fallback");
+			await session!.waitForIdle();
+			expect(session!.configuredThinkingLevel()).toBe(Effort.Low);
+			session!.setThinkingLevel(Effort.Low);
+			await session!.prompt("Restore model, keep effort");
+			await session!.waitForIdle();
+			expect(session!.model?.id).toBe(primary.id);
+			expect(session!.configuredThinkingLevel()).toBe(Effort.Low);
+		});
+	});
+
 	it("suppresses cooled selectors and lazily reverts to the role primary after cooldown expiry", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");

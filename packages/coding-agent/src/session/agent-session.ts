@@ -4832,6 +4832,7 @@ export class AgentSession implements SettingsScope {
 					synthetic: true,
 				},
 				autoContinuePrompt,
+				"continuation",
 				{
 					skipPostPromptRecoveryWait: true,
 					prependMessages: eagerNudges.length > 0 ? eagerNudges : undefined,
@@ -7510,7 +7511,7 @@ export class AgentSession implements SettingsScope {
 		let turnError: unknown;
 		let dispatched = false;
 		try {
-			dispatched = await this.#promptWithMessage(message, expandedText, {
+			dispatched = await this.#promptWithMessage(message, expandedText, "new-turn", {
 				...options,
 				images: normalizedImages,
 				prependMessages:
@@ -7681,7 +7682,7 @@ export class AgentSession implements SettingsScope {
 			outcome.sessionClaimed = true;
 			return true;
 		}
-		outcome.sessionClaimed = await this.#promptWithMessage(preparedMessage, textContent, {
+		outcome.sessionClaimed = await this.#promptWithMessage(preparedMessage, textContent, "new-turn", {
 			...options,
 			prependMessages:
 				keywordNotices.length > 0 || descriptionNotice
@@ -7850,6 +7851,7 @@ export class AgentSession implements SettingsScope {
 	async #promptWithMessage(
 		message: AgentMessage,
 		expandedText: string,
+		origin: "new-turn" | "continuation",
 		options?: Pick<
 			PromptOptions,
 			"toolChoice" | "images" | "skipCompactionCheck" | "solutionSpace" | "onPromptAdmitted"
@@ -7870,7 +7872,7 @@ export class AgentSession implements SettingsScope {
 		this.#promptSetupAbortController = setupAbort;
 		try {
 			options?.onPromptAdmitted?.();
-			await this.#recovery.maybeRestoreRetryFallbackPrimary();
+			await this.#recovery.maybeRestoreRetryFallbackPrimary(origin);
 			if (!(await this.#runUsageAwarePreflightForNextModelCall())) return false;
 			// Flush any pending bash messages before the new prompt
 			await this.#bash.flushPending();
@@ -8592,7 +8594,7 @@ export class AgentSession implements SettingsScope {
 		const prependMessages = queuedMessages.slice(0, -1);
 		const textContent = this.#getCustomMessageTextContent(message);
 		try {
-			await this.#promptWithMessage(message, textContent, {
+			await this.#promptWithMessage(message, textContent, "continuation", {
 				prependMessages,
 				skipPostPromptRecoveryWait: true,
 			});
@@ -10171,12 +10173,14 @@ export class AgentSession implements SettingsScope {
 	/** Selects the session thinking level and optionally persists it as the default. */
 	setThinkingLevel(level: ConfiguredThinkingLevel | undefined, persist: boolean = false): void {
 		this.#prewalk.releaseHandoff();
+		this.#recovery.onThinkingLevelSelected();
 		this.#models.setThinkingLevel(level, persist);
 	}
 
 	/** Advances through the thinking selectors supported by the active model. */
 	cycleThinkingLevel(): ConfiguredThinkingLevel | undefined {
 		this.#prewalk.releaseHandoff();
+		this.#recovery.onThinkingLevelSelected();
 		return this.#models.cycleThinkingLevel();
 	}
 

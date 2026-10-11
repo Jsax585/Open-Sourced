@@ -350,6 +350,7 @@ export class TurnRecovery {
 	#retryPromise: Promise<void> | undefined;
 	#retryResolve: (() => void) | undefined;
 	#activeRetryFallback: ActiveRetryFallbackState | undefined;
+	#retryFallbackRestoreTriedThisTurn = false;
 	#activeFallbackCreditRedemption?: {
 		targetSelector: string;
 		handle: AnthropicFallbackCreditHandle;
@@ -745,13 +746,19 @@ export class TurnRecovery {
 	}
 
 	/**
-	 * Restores the configured primary after fallback cooldown expiry.
+	 * Restores the configured primary according to the fallback revert policy.
 	 * @returns true when the active model was actually switched back to the
 	 * primary, so callers can re-run the pre-send context-fit check against the
 	 * reverted (possibly smaller) window before issuing the next request.
 	 */
-	maybeRestoreRetryFallbackPrimary(): Promise<boolean> {
-		return this.#maybeRestoreRetryFallbackPrimary();
+	maybeRestoreRetryFallbackPrimary(origin: "new-turn" | "continuation" = "continuation"): Promise<boolean> {
+		if (origin === "new-turn") this.#retryFallbackRestoreTriedThisTurn = false;
+		return this.#maybeRestoreRetryFallbackPrimary(origin);
+	}
+
+	/** Records an explicit effort selection, including a same-value re-selection. */
+	onThinkingLevelSelected(): void {
+		if (this.#activeRetryFallback) this.#activeRetryFallback.effortTouchedSinceFallback = true;
 	}
 
 	/** Applies model fallback policy from live usage health before a turn starts. */
@@ -2385,15 +2392,21 @@ export class TurnRecovery {
 		return true;
 	}
 
-	async #maybeRestoreRetryFallbackPrimary(): Promise<boolean> {
+	async #maybeRestoreRetryFallbackPrimary(origin: "new-turn" | "continuation"): Promise<boolean> {
 		if (!this.#activeRetryFallback) return false;
 		if (this.#activeRetryFallback.pinned) return false;
-		if (this.#getRetryFallbackRevertPolicy() !== "cooldown-expiry") return false;
+		const policy = this.#getRetryFallbackRevertPolicy();
+		if (policy === "never") return false;
+		if (policy === "next-turn") {
+			if (origin !== "new-turn" || this.#retryFallbackRestoreTriedThisTurn) return false;
+			this.#retryFallbackRestoreTriedThisTurn = true;
+		}
 
 		const {
 			originalSelector: originalSelectorRaw,
 			originalThinkingLevel,
 			lastAppliedFallbackThinkingLevel,
+			effortTouchedSinceFallback,
 		} = this.#activeRetryFallback;
 		const originalSelector = parseRetryFallbackSelector(originalSelectorRaw, this.#host.modelRegistry);
 		if (!originalSelector) {
@@ -2410,12 +2423,12 @@ export class TurnRecovery {
 		if (!currentModel) return false;
 		const currentSelector = formatRetryFallbackSelector(currentModel, this.#host.thinkingLevel());
 		if (currentSelector === originalSelector.raw) {
-			if (!this.isRetryFallbackSelectorSuppressed(originalSelector)) {
+			if (policy === "next-turn" || !this.isRetryFallbackSelectorSuppressed(originalSelector)) {
 				this.clearActiveRetryFallback();
 			}
 			return false;
 		}
-		if (this.isRetryFallbackSelectorSuppressed(originalSelector)) return false;
+		if (policy === "cooldown-expiry" && this.isRetryFallbackSelectorSuppressed(originalSelector)) return false;
 
 		const resolvedPrimary = resolveModelOverride(
 			[originalSelector.raw],
@@ -2430,7 +2443,9 @@ export class TurnRecovery {
 
 		const currentThinkingLevel = this.#host.configuredThinkingLevel();
 		const thinkingToApply =
-			currentThinkingLevel === lastAppliedFallbackThinkingLevel ? originalThinkingLevel : currentThinkingLevel;
+			!effortTouchedSinceFallback && currentThinkingLevel === lastAppliedFallbackThinkingLevel
+				? originalThinkingLevel
+				: currentThinkingLevel;
 		const primarySelector = formatModelStringWithRouting(primaryModel);
 		const previousEditMode = this.#host.resolveActiveEditMode();
 		// Clear before the swap: `setModelWithProviderSessionReset` and
