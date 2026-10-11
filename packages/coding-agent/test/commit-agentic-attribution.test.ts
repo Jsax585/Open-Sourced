@@ -121,7 +121,11 @@ describe("commit agent prompt attribution", () => {
 					expect(requestedModels).toEqual([primaryId, fallbackId, fallbackId, fallbackId, fallbackId]);
 					expect(activeSession.model?.id).toBe(fallback.id);
 					const userMessages = activeSession.messages.filter(message => message.role === "user");
-					expect(userMessages).toHaveLength(4);
+					expect(userMessages).toHaveLength(1);
+					const reminders = activeSession.messages.filter(
+						message => message.role === "developer" && message.synthetic === true,
+					);
+					expect(reminders).toHaveLength(3);
 					// A genuine new request still restores the primary model.
 					await activeSession.prompt("Start a separate commit request");
 					await activeSession.waitForIdle();
