@@ -15,6 +15,7 @@ import {
 	type TUIOptions,
 	type ViewportSize,
 } from "../tui";
+import type { SgrMouseEvent } from "../mouse";
 import { wrapLiteralLine } from "../utils";
 import type { NativeChild, NativeSurface, NativeSurfaceProvider } from "../native/node";
 import { sameItems } from "../native/memo";
@@ -143,6 +144,10 @@ export interface ViewportClickSpan {
 	end: number;
 	/** Candidate subagent ids for a span-local row. */
 	candidates: (local: number) => string[];
+	/** Component receiving decoded pointer events for this span, if any. */
+	mouseTarget?: Component;
+	/** Component-local row offset when the viewport clips the span's head. */
+	mouseRowOffset?: number;
 }
 
 /**
@@ -459,7 +464,13 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				// A clipped head must offset the callback: without the skew the
 				// first visible row would hit-test as span-local row 0.
 				const skew = clamped - start;
-				spans.push({ start: clamped, end, candidates: (local: number) => span.candidates(local + skew) });
+				spans.push({
+					start: clamped,
+					end,
+					candidates: (local: number) => span.candidates(local + skew),
+					mouseTarget: span.mouseTarget,
+					mouseRowOffset: (span.mouseRowOffset ?? 0) + skew,
+				});
 			}
 		};
 		for (const span of activeSpans) shift(span, topPadding + before.length - drop);
@@ -508,24 +519,19 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	}
 
 	/**
-	 * Append one below-transcript root's rows to `after`, recording click spans
-	 * for its row targets in `after` coordinates.
-	 *
-	 * Row targets usually nest one level down: chrome roots are plain
-	 * containers (the HUD lives inside `subagentContainer`), and
-	 * `Container.render` is a pure concatenation, so child spans tile the root
-	 * span exactly. Render those children once and share the rows for
-	 * composition and measurement — a second render per frame would duplicate
-	 * render-time side effects (image placement registration). Roots with a
-	 * custom render keep the composed output as the source of truth and measure
-	 * up to the last target.
+	 * Append one below-transcript root's rows to `after`, recording click and
+	 * mouse targets in `after` coordinates.
 	 */
 	#renderBelowRoot(root: Component, width: number, after: string[], spans: ViewportClickSpan[]): void {
 		const start = after.length;
 		const plainContainer = root instanceof Container && root.render === Container.prototype.render;
 		const targets = root instanceof Container ? root.children : [root];
 		const resolves = targets.map(rowTargetCandidates);
-		const lastTarget = resolves.findLastIndex(resolve => resolve !== undefined);
+		const mouseTargets = targets.map(target => (typeof target.handleMouse === "function" ? target : undefined));
+		const lastTarget = Math.max(
+			resolves.findLastIndex(resolve => resolve !== undefined),
+			mouseTargets.findLastIndex(target => target !== undefined),
+		);
 		if (plainContainer) {
 			let offset = start;
 			for (let index = 0; index < targets.length; index++) {
@@ -533,8 +539,14 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				after.push(...childLines);
 				if (index > lastTarget) continue;
 				const resolve = resolves[index];
-				if (resolve !== undefined && childLines.length > 0) {
-					spans.push({ start: offset, end: offset + childLines.length, candidates: resolve });
+				const mouseTarget = mouseTargets[index];
+				if ((resolve !== undefined || mouseTarget !== undefined) && childLines.length > 0) {
+					spans.push({
+						start: offset,
+						end: offset + childLines.length,
+						candidates: resolve ?? (() => []),
+						mouseTarget,
+					});
 				}
 				offset += childLines.length;
 			}
@@ -546,11 +558,28 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		for (let index = 0; index <= lastTarget; index++) {
 			const childLines = targets[index] === root ? after.length - start : targets[index]!.render(width).length;
 			const resolve = resolves[index];
-			if (resolve !== undefined && childLines > 0) {
-				spans.push({ start: offset, end: offset + childLines, candidates: resolve });
+			const mouseTarget = mouseTargets[index];
+			if ((resolve !== undefined || mouseTarget !== undefined) && childLines > 0) {
+				spans.push({ start: offset, end: offset + childLines, candidates: resolve ?? (() => []), mouseTarget });
 			}
 			offset += childLines;
 		}
+	}
+
+	/**
+	 * Dispatch mouse input to a component rendered in the mutable viewport.
+	 * The event row passed to the component is relative to its own row span.
+	 */
+	dispatchViewportMouse(event: SgrMouseEvent): boolean {
+		if (!Number.isInteger(event.row) || event.row < 0) return false;
+		for (const span of this.#lastClickSpans) {
+			if (!span.mouseTarget || event.row < span.start || event.row >= span.end) continue;
+			return (
+				span.mouseTarget.handleMouse?.({ ...event, row: event.row - span.start + (span.mouseRowOffset ?? 0) }) ===
+				true
+			);
+		}
+		return false;
 	}
 
 	/**

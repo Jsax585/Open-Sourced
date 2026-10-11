@@ -302,9 +302,10 @@ export interface Component {
 	 */
 	capturesInput?(data: string): boolean;
 
-	/**
-	 * Optional handler for keyboard input when component has focus
-	 */
+	/** Receive mouse input for this component's rendered rows. The row is span-local; return true to consume. */
+	handleMouse?(event: import("./mouse").SgrMouseEvent): boolean | void;
+
+	/** Optional handler for keyboard input when component has focus */
 	handleInput?(data: string): void;
 
 	/**

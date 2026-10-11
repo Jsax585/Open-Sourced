@@ -220,3 +220,73 @@ describe("composer chrome span recording", () => {
 		}
 	});
 });
+
+class MouseTarget implements Component {
+	events: Array<{ col: number; row: number }> = [];
+	render(): readonly string[] {
+		return ["mouse target"];
+	}
+	handleMouse(event: { col: number; row: number; leftClick: boolean }): boolean {
+		if (!event.leftClick) return false;
+		this.events.push({ col: event.col, row: event.row });
+		return true;
+	}
+}
+
+describe("composer mouse dispatch", () => {
+	beforeAll(() => {
+		initTheme();
+	});
+
+	it("routes left-clicks to the rendered widget with local row and terminal column", () => {
+		const term = new VirtualTerminal(80, 24);
+		const composer = new Composer({ terminal: term, preferences: { ...COMPOSER_DEFAULTS, quiet: true } });
+		const target = new MouseTarget();
+		composer.start();
+		try {
+			const transcript = new TranscriptContainer();
+			const chrome = new Container();
+			chrome.addChild(target);
+			composer.setRuntimeChildren([transcript, chrome]);
+			const frame = composer.renderFrame({ columns: 80, rows: 24 });
+			const row = frame.viewport.findIndex(line => line.includes("mouse target"));
+			expect(row).toBeGreaterThanOrEqual(0);
+			expect(
+				composer.dispatchViewportMouse({
+					button: 0,
+					col: 7,
+					row,
+					release: false,
+					wheel: null,
+					motion: false,
+					leftClick: true,
+				}),
+			).toBe(true);
+			expect(target.events).toEqual([{ col: 7, row: 0 }]);
+			expect(
+				composer.dispatchViewportMouse({
+					button: 0,
+					col: 7,
+					row: -1,
+					release: false,
+					wheel: null,
+					motion: false,
+					leftClick: true,
+				}),
+			).toBe(false);
+			expect(
+				composer.dispatchViewportMouse({
+					button: 0,
+					col: 7,
+					row,
+					release: false,
+					wheel: null,
+					motion: false,
+					leftClick: false,
+				}),
+			).toBe(false);
+		} finally {
+			composer.stop();
+		}
+	});
+});
