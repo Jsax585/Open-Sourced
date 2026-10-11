@@ -15,7 +15,6 @@ import {
 	APP_NAME,
 	compareVersions,
 	formatBytes,
-	formatDuration,
 	getProjectDir,
 	isCompiledBinary,
 	isEnoent,
@@ -27,13 +26,13 @@ import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { $ } from "bun";
 import { Settings, settings } from "../config/settings";
 import { theme } from "@oh-my-pi/pi-tui/theme";
-import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
 import {
 	isTimeoutError,
 	isUnsupportedProxyError,
 	unsupportedProxyMessage,
 	withTimeoutSignal,
 } from "../utils/fetch-timeout";
+import { createDownloadProgressReporter } from "./progress-reporter";
 import { type BuildAnswer, type BuildPatch, type Fetch, fetchBuild, type UpdateChannel } from "./build-service";
 import {
 	DEFAULT_NPM_REGISTRY,
@@ -53,7 +52,6 @@ const RELEASE_METADATA_TIMEOUT_MS = 30_000;
 const BINARY_DOWNLOAD_STALL_TIMEOUT_MS = 60_000;
 /** Age after which a `.new`/`.patch` temp file whose updater has exited is treated as abandoned. */
 const STALE_UPDATE_TEMP_AGE_MS = 15 * 60_000;
-const DOWNLOAD_PROGRESS_INTERVAL_MS = 250;
 
 /**
  * Core native addon package. Bumped in lock-step with {@link PACKAGE} so the
@@ -196,34 +194,6 @@ export interface VerifiedBinaryDownloadOptions {
 }
 
 /**
- * Rewrite one terminal line with received bytes, percentage, rate, and time
- * left, cut to the terminal width so it never wraps. Prints nothing when
- * stdout is not a TTY.
- */
-function createDownloadProgress(total: number): { update(received: number): void; finish(): void } {
-	if (!process.stdout.isTTY) return { update() {}, finish() {} };
-	const startedAt = Date.now();
-	let renderedAt = 0;
-	return {
-		update(received) {
-			const now = Date.now();
-			if (received < total && now - renderedAt < DOWNLOAD_PROGRESS_INTERVAL_MS) return;
-			renderedAt = now;
-			const bytesPerSecond = (received * 1000) / Math.max(now - startedAt, 1);
-			const percent = Math.floor((received / total) * 100);
-			const left = received < total ? `, ${formatDuration(((total - received) / bytesPerSecond) * 1000)} left` : "";
-			const line = `  ${formatBytes(received)} / ${formatBytes(total)} (${percent}%), ${formatBytes(bytesPerSecond)}/s${left}`;
-			// One column short of the width: a line ending in the last column wraps on some terminals.
-			const width = (process.stdout.columns || 80) - 1;
-			process.stdout.write(`\r${chalk.dim(truncateToWidth(line, width))}\x1b[K`);
-		},
-		finish() {
-			if (renderedAt) process.stdout.write("\n");
-		},
-	};
-}
-
-/**
  * Download a file and verify its build-service-reported size and SHA-256
  * digest (`sha256:<hex>`), leaving it executable. Nothing is left at
  * `targetPath` when the download fails or does not match.
@@ -237,7 +207,7 @@ export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOpti
 
 	const stall = new AbortController();
 	const stallTimer = setTimeout(() => stall.abort(), BINARY_DOWNLOAD_STALL_TIMEOUT_MS);
-	const progress = createDownloadProgress(options.expectedSize);
+	const progress = createDownloadProgressReporter(options.expectedSize);
 	try {
 		const response = await fetchImpl(options.url, { redirect: "follow", signal: stall.signal });
 		if (!response.ok || !response.body) {
