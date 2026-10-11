@@ -5449,6 +5449,9 @@ describe("AgentSession retry fallback", () => {
 				initial?: boolean;
 				tools?: AgentTool[];
 				onRequest?: (model: Model) => void;
+				compaction?: boolean;
+				extensionRunner?: ExtensionRunner;
+				sessionManager?: SessionManager;
 			} = {},
 		) => {
 			const requested: string[] = [];
@@ -5470,7 +5473,11 @@ describe("AgentSession retry fallback", () => {
 					})
 				: createFallbackAgent(primary, requested);
 			const settings = Settings.isolated({
-				"compaction.enabled": false,
+				"compaction.enabled": options.compaction ?? false,
+				"compaction.thresholdTokens": 1_000,
+				"compaction.keepRecentTokens": 1,
+				"compaction.methodOrder": ["soft"],
+				"compaction.autoContinue": true,
 				"retry.baseDelayMs": 5,
 				"retry.fallbackChains": { default: [`${fallbackId}:low`] },
 				"retry.fallbackRevertPolicy": "next-turn",
@@ -5478,9 +5485,10 @@ describe("AgentSession retry fallback", () => {
 			settings.setModelRole("default", `${primaryId}:high`);
 			session = new AgentSession({
 				agent,
-				sessionManager: SessionManager.inMemory(),
+				sessionManager: options.sessionManager ?? SessionManager.inMemory(),
 				settings,
 				modelRegistry,
+				extensionRunner: options.extensionRunner,
 				thinkingLevel: options.initial ? Effort.Low : Effort.High,
 				initialRetryFallback: options.initial
 					? {
@@ -5616,6 +5624,47 @@ describe("AgentSession retry fallback", () => {
 			await session!.waitForIdle();
 			expect(session!.model?.id).toBe(primary.id);
 			expect(session!.configuredThinkingLevel()).toBe(Effort.Low);
+		});
+
+		it("does not restore for post-compaction continuation", async () => {
+			const manager = SessionManager.inMemory();
+			const runtime = new ExtensionRuntime();
+			let compactions = 0;
+			const extension = await loadExtensionFromFactory(
+				pi => {
+					pi.on("session_before_compact", async event => {
+						compactions++;
+						return {
+							compaction: {
+								summary: "Compacted fallback history",
+								firstKeptEntryId: event.preparation.firstKeptEntryId,
+								tokensBefore: event.preparation.tokensBefore,
+								details: {},
+							},
+						};
+					});
+				},
+				tempDir.path(),
+				new EventBus(),
+				runtime,
+				"next-turn-compaction",
+			);
+			const runner = new ExtensionRunner([extension], runtime, tempDir.path(), manager, modelRegistry);
+			const { requested } = setup({
+				compaction: true,
+				extensionRunner: runner,
+				sessionManager: manager,
+				responses: [
+					{ throw: `rate limit exceeded retry-after-ms=${FALLBACK_TEST_RETRY_AFTER_MS}` },
+					{ content: ["Fallback history ".repeat(2_000)] },
+					{ content: ["Done after compaction"] },
+				],
+			});
+			await session!.prompt("Trigger fallback and compaction");
+			await session!.waitForIdle();
+			expect(compactions).toBeGreaterThan(0);
+			expect(requested.length).toBeGreaterThan(2);
+			expect(requested.slice(1).every(id => id === fallbackId)).toBe(true);
 		});
 	});
 
