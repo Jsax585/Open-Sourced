@@ -3,8 +3,8 @@ mod capture;
 mod date;
 mod input;
 mod process;
-mod settle;
 mod session;
+mod settle;
 mod skylight;
 mod spaces;
 
