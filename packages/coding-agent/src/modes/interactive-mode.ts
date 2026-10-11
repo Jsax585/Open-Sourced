@@ -1626,10 +1626,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	resolveViewportClickCandidates(index: number): string[] {
 		return this.composer.viewportClickCandidates(index);
 	}
-	dispatchViewportMouse(event: SgrMouseEvent): boolean {
+	dispatchViewportMouse(event: SgrMouseEvent): "none" | "delivered" | "consumed" {
 		const viewport = this.ui.getMutableViewport();
 		const local = event.row - viewport.top;
-		if (viewport.length === 0 || local < 0 || local >= viewport.length) return false;
+		if (viewport.length === 0 || local < 0 || local >= viewport.length) return "none";
 		return this.composer.dispatchViewportMouse({ ...event, row: local });
 	}
 

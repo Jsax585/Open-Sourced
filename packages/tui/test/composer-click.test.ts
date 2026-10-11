@@ -4,6 +4,7 @@ import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-containe
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { Container, type Component } from "@oh-my-pi/pi-tui";
 import { Box } from "@oh-my-pi/pi-tui/components/box";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { VirtualTerminal } from "./virtual-terminal";
 import { routeViewportClick, type ViewportClickSpan } from "@oh-my-pi/pi-tui/prompt/composer";
 
@@ -225,14 +226,16 @@ describe("composer chrome span recording", () => {
 class MouseTarget implements Component {
 	events: Array<{ col: number; row: number }> = [];
 	clicked = false;
+	consume = true;
+	rows: readonly string[] = ["mouse target"];
 	render(): readonly string[] {
-		return [`mouse ${this.clicked ? "clicked" : "target"}`];
+		return this.clicked ? ["mouse clicked"] : this.rows;
 	}
-	handleMouse(event: { col: number; row: number; leftClick: boolean }): boolean {
+	handleMouse(event: { col: number; row: number; leftClick: boolean }): boolean | void {
 		if (!event.leftClick) return false;
 		this.events.push({ col: event.col, row: event.row });
 		this.clicked = true;
-		return true;
+		if (this.consume) return true;
 	}
 }
 
@@ -264,7 +267,7 @@ describe("composer mouse dispatch", () => {
 					motion: false,
 					leftClick: true,
 				}),
-			).toBe(true);
+			).toBe("consumed");
 			expect(target.events).toEqual([{ col: 7, row: 0 }]);
 			expect(composer.renderFrame({ columns: 80, rows: 24 }).viewport.join("\n")).toContain("mouse clicked");
 			expect(
@@ -277,7 +280,7 @@ describe("composer mouse dispatch", () => {
 					motion: false,
 					leftClick: true,
 				}),
-			).toBe(false);
+			).toBe("none");
 			expect(
 				composer.dispatchViewportMouse({
 					button: 0,
@@ -288,7 +291,7 @@ describe("composer mouse dispatch", () => {
 					motion: false,
 					leftClick: false,
 				}),
-			).toBe(false);
+			).toBe("none");
 		} finally {
 			composer.stop();
 		}
@@ -297,6 +300,7 @@ describe("composer mouse dispatch", () => {
 		const term = new VirtualTerminal(80, 24);
 		const composer = new Composer({ terminal: term, preferences: { ...COMPOSER_DEFAULTS, quiet: true } });
 		const target = new MouseTarget();
+		target.rows = ["", "mouse target", ""];
 		composer.start();
 		try {
 			const transcript = new TranscriptContainer();
@@ -315,8 +319,8 @@ describe("composer mouse dispatch", () => {
 					motion: false,
 					leftClick: true,
 				}),
-			).toBe(true);
-			expect(target.events).toEqual([{ col: 7, row: 0 }]);
+			).toBe("consumed");
+			expect(target.events).toEqual([{ col: 7, row: 1 }]);
 			expect(composer.renderFrame({ columns: 80, rows: 24 }).viewport.join("\n")).toContain("mouse clicked");
 		} finally {
 			composer.stop();
@@ -348,7 +352,7 @@ describe("composer mouse dispatch", () => {
 					motion: false,
 					leftClick: true,
 				}),
-			).toBe(true);
+			).toBe("consumed");
 			expect(target.events).toEqual([{ col: 7, row: 0 }]);
 			expect(
 				composer.dispatchViewportMouse({
@@ -360,10 +364,68 @@ describe("composer mouse dispatch", () => {
 					motion: false,
 					leftClick: true,
 				}),
-			).toBe(false);
+			).toBe("delivered");
 			expect(target.events).toEqual([{ col: 7, row: 0 }]);
 		} finally {
 			composer.stop();
 		}
+	});
+	it("reports delivery without consumption when a handler returns void", () => {
+		const term = new VirtualTerminal(80, 24);
+		const composer = new Composer({ terminal: term, preferences: { ...COMPOSER_DEFAULTS, quiet: true } });
+		const target = new MouseTarget();
+		target.consume = false;
+		composer.start();
+		try {
+			const transcript = new TranscriptContainer();
+			const chrome = new Container();
+			chrome.addChild(target);
+			composer.setRuntimeChildren([transcript, chrome]);
+			const frame = composer.renderFrame({ columns: 80, rows: 24 });
+			const row = frame.viewport.findIndex(line => line.includes("mouse target"));
+			expect(row).toBeGreaterThanOrEqual(0);
+			expect(
+				composer.dispatchViewportMouse({
+					button: 0,
+					col: 7,
+					row,
+					release: false,
+					wheel: null,
+					motion: false,
+					leftClick: true,
+				}),
+			).toBe("delivered");
+			expect(target.events).toEqual([{ col: 7, row: 0 }]);
+		} finally {
+			composer.stop();
+		}
+	});
+	it("does not dispatch mouse events to a tool renderer hidden by its fallback", () => {
+		const target = new MouseTarget();
+		target.render = () => {
+			throw new Error("renderer failed");
+		};
+		const tool = { label: "custom", renderCall: () => target };
+		const component = new ToolExecutionComponent(
+			"custom",
+			{},
+			{ useBuiltInRenderer: false },
+			tool as never,
+			{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} } as never,
+		);
+		component.render(80);
+
+		expect(
+			component.handleMouse({
+				button: 0,
+				col: 2,
+				row: 1,
+				release: false,
+				wheel: null,
+				motion: false,
+				leftClick: true,
+			}),
+		).toBe(false);
+		expect(target.events).toEqual([]);
 	});
 });

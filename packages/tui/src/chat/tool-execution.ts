@@ -132,6 +132,7 @@ class SafeToolRendererComponent implements Component {
 	#component: Component;
 	#fallback: () => Component | undefined;
 	#warned = false;
+	#renderedPrimary = false;
 	readonly wantsKeyRelease: boolean | undefined;
 
 	constructor(
@@ -152,8 +153,11 @@ class SafeToolRendererComponent implements Component {
 
 	render(width: number): readonly string[] {
 		try {
-			return this.#component.render(width);
+			const rows = this.#component.render(width);
+			this.#renderedPrimary = true;
+			return rows;
 		} catch (err) {
+			this.#renderedPrimary = false;
 			if (!this.#warned) {
 				this.#warned = true;
 				logger.warn("Tool renderer failed", { tool: this.#toolName, stage: this.#stage, error: String(err) });
@@ -163,6 +167,7 @@ class SafeToolRendererComponent implements Component {
 	}
 
 	handleMouse(event: SgrMouseEvent): boolean {
+		if (!this.#renderedPrimary) return false;
 		try {
 			return this.#component.handleMouse?.call(this.#component, event) === true;
 		} catch (err) {

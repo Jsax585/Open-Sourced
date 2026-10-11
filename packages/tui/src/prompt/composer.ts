@@ -138,7 +138,7 @@ class StatusHost implements Component {
 	}
 }
 
-/** One click target's row span within the mutable viewport (half-open `[start, end)`). */
+/** One click target's row span in the mutable viewport (half-open `[start, end)`). */
 export interface ViewportClickSpan {
 	start: number;
 	end: number;
@@ -149,6 +149,8 @@ export interface ViewportClickSpan {
 	/** Component-local row offset when the viewport clips the span's head. */
 	mouseRowOffset?: number;
 }
+
+export type ViewportMouseDispatch = "none" | "delivered" | "consumed";
 
 /**
  * Row-level click target: maps rendered rows to subagent ids. Implemented by
@@ -450,6 +452,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				end: span.end,
 				candidates: ids && ids.length > 0 ? () => ids : () => [],
 				mouseTarget,
+				mouseRowOffset: span.componentRowOffset,
 			});
 		}
 		const drop = Math.max(0, before.length + active.length + after.length - rows);
@@ -577,16 +580,16 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	 * Dispatch mouse input to a component rendered in the mutable viewport.
 	 * The event row passed to the component is relative to its own row span.
 	 */
-	dispatchViewportMouse(event: SgrMouseEvent): boolean {
-		if (!Number.isInteger(event.row) || event.row < 0) return false;
+	dispatchViewportMouse(event: SgrMouseEvent): ViewportMouseDispatch {
+		if (!event.leftClick || !Number.isInteger(event.row) || event.row < 0) return "none";
 		for (const span of this.#lastClickSpans) {
 			if (!span.mouseTarget || event.row < span.start || event.row >= span.end) continue;
-			return (
+			const consumed =
 				span.mouseTarget.handleMouse?.({ ...event, row: event.row - span.start + (span.mouseRowOffset ?? 0) }) ===
-				true
-			);
+				true;
+			return consumed ? "consumed" : "delivered";
 		}
-		return false;
+		return "none";
 	}
 
 	/**

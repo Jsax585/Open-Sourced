@@ -159,8 +159,7 @@ export interface InteractiveModeContext {
 	invalidatePendingFocus(): void;
 	/** Candidate subagent ids under a mutable-viewport line, for click-to-focus. Empty when the line has no target. */
 	resolveViewportClickCandidates(index: number): string[];
-	/** Route mouse input to a component rendered in the mutable viewport. */
-	dispatchViewportMouse(event: SgrMouseEvent): boolean;
+	dispatchViewportMouse(event: SgrMouseEvent): "none" | "delivered" | "consumed";
 	/** Flip the pinned jump list between its collapsed few and the full list. */
 	togglePinnedHudExpanded(): void;
 	/** Point the inline hover band at a click-candidate id (or clear it). */
