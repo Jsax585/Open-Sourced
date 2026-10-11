@@ -2,10 +2,27 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Moved frustration analysis judge questions to `src/prompts/judge/frustration.json` for centralized schema management
+
 ### Fixed
 
-- Fixed Ultrafast turns not counting toward the Premium Reqs stat: each message now records the service tier its provider reported serving, and the backfill counts it without needing discovery metadata ([#14471](https://github.com/can1357/oh-my-pi/pull/14471) by [@eggpeat](https://github.com/eggpeat)).
-- Fixed the stats dashboard menu button showing on desktop, where clicking it dimmed the page without opening navigation ([#14406](https://github.com/can1357/oh-my-pi/pull/14406) by [@lin-snow](https://github.com/lin-snow)).
+- Fixed the stats dashboard serving index.html at /favicon.ico; it now returns the omp icon (image/x-icon), so dashboard tabs and bookmarks show a real icon ([#15162](https://github.com/can1357/oh-my-pi/pull/15162) by [@yuzu-octopus](https://github.com/yuzu-octopus)).
+
+## [18.8.0] - 2026-10-07
+
+### Changed
+
+- Improved dashboard responsiveness and efficiency by reducing unnecessary data refreshes and re-rendering, speeding up session synchronization, database access, package imports, and usage, model, and time-series requests, and avoiding repeated downloads of unchanged traces.
+- Dashboard requests are now cancelled when no longer needed, improving responsiveness when switching sessions or closing trace views during loading.
+
+## [18.7.0] - 2026-10-06
+
+### Fixed
+
+- Fixed Ultrafast turns not being counted toward the Premium Requests statistic.
+- Fixed the desktop stats dashboard menu button so it no longer appears unnecessarily or dims the page without opening navigation.
 
 ## [18.6.0] - 2026-10-03
 
