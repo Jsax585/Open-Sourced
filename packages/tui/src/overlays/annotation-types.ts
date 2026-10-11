@@ -26,6 +26,11 @@ export interface ReviewDiffFile {
 	isBinary: boolean;
 }
 
+export interface ReviewDiffSource {
+	rawDiff: string;
+	files: ReviewDiffFile[];
+}
+
 export interface CodeReviewAnnotationBase {
 	path: string;
 	oldPath?: string;
@@ -49,6 +54,8 @@ export type CodeReviewAnnotation =
 export interface CodeReviewOverlayResult {
 	action: "review" | "paste";
 	annotations: CodeReviewAnnotation[];
+	/** Complete patch after an explicit diff refresh. */
+	refreshedDiff?: string;
 }
 
 export type TextReviewSourceProvenance =
@@ -66,6 +73,8 @@ export interface TextReviewSource {
 	/** Identifies the active session entry that supplied this source, when applicable. */
 	provenance?: TextReviewSourceProvenance;
 	sessionId?: string;
+	/** Absolute filesystem path unambiguously associated with a selected transcript tool result. */
+	editorFilePath?: string;
 }
 
 export type TextReviewAnnotation =
@@ -75,6 +84,8 @@ export type TextReviewAnnotation =
 export interface TextReviewOverlayResult {
 	action: "paste";
 	annotations: TextReviewAnnotation[];
-	/** Source text after an external-editor edit; absent when the source was not edited. */
+	/** Source text after an external edit or refresh; absent when it was not changed in the overlay. */
 	editedText?: string;
+	/** Current source after an explicit file refresh, preserving the selected source identity. */
+	refreshedSource?: TextReviewSource;
 }

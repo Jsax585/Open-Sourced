@@ -5,6 +5,7 @@ import type { HookCommandContext } from "../../../../extensibility/hooks/types";
 import reviewCustomRequestTemplate from "../../../../prompts/review-custom-request.md" with { type: "text" };
 import reviewHeadlessRequestTemplate from "../../../../prompts/review-headless-request.md" with { type: "text" };
 import * as gh from "../../../../tools/gh";
+import * as ghPrDiff from "../../../../tools/gh-pr-diff";
 import { github } from "../../../../utils/github";
 import { buildReviewPrompt } from "./prompt";
 import {
@@ -122,25 +123,33 @@ function buildPrContextInstruction(ref: ReviewPrRef): string {
 	return `MUST NOT read local workspace files for PR file context; use the fetched PR diff and \`${prDiffUrl}/all\` or per-file \`${prDiffUrl}/<index>\` only`;
 }
 
-/** Fetch one PR patch and freeze it before any overlay or LLM prompt is built; throws on fetch failure. */
-export async function fetchPrReviewTarget(cwd: string, ref: ReviewPrRef): Promise<ResolvedReviewTarget> {
+/** Fetch one PR patch; explicit refresh uses the central fresh fetcher to bypass cached rows. */
+async function createPrReviewTarget(cwd: string, ref: ReviewPrRef, forceFresh: boolean): Promise<ResolvedReviewTarget> {
 	try {
-		const lookup = await gh.getOrFetchPrDiff({ cwd, repo: ref.repo, number: ref.number });
-		return createResolvedReviewTarget(
-			"pr",
-			`PR ${ref.repo}#${ref.number}`,
-			lookup.payload.unified,
-			`PR ${ref.repo}#${ref.number} has no diff content available`,
-			{
-				diffInstruction: buildPrLargeDiffInstruction(ref),
-				contextInstruction: buildPrContextInstruction(ref),
-			},
-		);
+		let rawDiff: string;
+		if (forceFresh) {
+			rawDiff = (await ghPrDiff.fetchPrDiffFresh(cwd, ref.repo, ref.number, undefined)).rendered;
+		} else {
+			const lookup = await gh.getOrFetchPrDiff({ cwd, repo: ref.repo, number: ref.number });
+			rawDiff = lookup.payload.unified;
+		}
+		const mode = `PR ${ref.repo}#${ref.number}`;
+		const emptyMessage = `PR ${ref.repo}#${ref.number} has no diff content available`;
+		return createResolvedReviewTarget("pr", mode, rawDiff, emptyMessage, {
+			diffInstruction: buildPrLargeDiffInstruction(ref),
+			contextInstruction: buildPrContextInstruction(ref),
+			refresh: () => createPrReviewTarget(cwd, ref, true),
+		});
 	} catch (error) {
 		throw new Error(
 			`Failed to fetch PR diff for ${ref.repo}#${ref.number}: ${error instanceof Error ? error.message : String(error)}`,
 		);
 	}
+}
+
+/** Resolve a PR patch; the returned target can explicitly fetch a current snapshot. */
+export async function fetchPrReviewTarget(cwd: string, ref: ReviewPrRef): Promise<ResolvedReviewTarget> {
+	return createPrReviewTarget(cwd, ref, false);
 }
 
 /** Interactive wrapper: notifies instead of throwing when a UI is available. */

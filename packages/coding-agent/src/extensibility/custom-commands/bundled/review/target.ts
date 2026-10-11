@@ -3,9 +3,9 @@ import { parseReviewDiffSnapshot, type ReviewDiffSnapshot } from "./diff";
 
 export type LocalReviewKind = "base-branch" | "uncommitted" | "commit";
 
-/** One frozen diff: the annotation view and the reviewer prompt both read this snapshot. */
+/** One resolved diff snapshot shared by the annotation view and reviewer prompt until explicit refresh. */
 export interface ResolvedReviewTarget {
-	/** `patch` is a caller-supplied diff (annotations API); `pr` never maps to the local checkout. */
+	/** `patch` is caller-supplied; `pr` keeps the remote diff as its review source. */
 	kind: LocalReviewKind | "pr" | "patch";
 	mode: string;
 	rawDiff: string;
@@ -14,6 +14,8 @@ export interface ResolvedReviewTarget {
 	filteredMessage?: string;
 	diffInstruction?: string;
 	contextInstruction?: string;
+	/** Reacquire a live source; immutable commit/patch targets omit this capability. */
+	refresh?: () => Promise<ResolvedReviewTarget>;
 }
 
 export interface ReviewTargetUI {
@@ -36,7 +38,7 @@ export function createResolvedReviewTarget(
 	mode: string,
 	rawDiff: string,
 	emptyMessage: string,
-	options: Pick<ResolvedReviewTarget, "filteredMessage" | "diffInstruction" | "contextInstruction"> = {},
+	options: Pick<ResolvedReviewTarget, "filteredMessage" | "diffInstruction" | "contextInstruction" | "refresh"> = {},
 ): ResolvedReviewTarget {
 	return {
 		kind,
@@ -45,6 +47,15 @@ export function createResolvedReviewTarget(
 		snapshot: parseReviewDiffSnapshot(rawDiff),
 		emptyMessage,
 		...options,
+	};
+}
+
+/** Rebuild a target from an explicit refreshed patch without mutating its source snapshot. */
+export function withRefreshedReviewDiff(target: ResolvedReviewTarget, rawDiff: string): ResolvedReviewTarget {
+	return {
+		...target,
+		rawDiff,
+		snapshot: parseReviewDiffSnapshot(rawDiff),
 	};
 }
 
@@ -70,7 +81,10 @@ export async function readUncommittedReviewTarget(cwd: string): Promise<Resolved
 		isJj ? "Reviewing JJ working-copy changes" : "Reviewing uncommitted changes (staged + unstaged)",
 		diffText,
 		isJj || !diffText.trim() ? "No uncommitted changes found" : "No diff content found",
-		{ diffInstruction: isJj ? JJ_UNCOMMITTED_DIFF_INSTRUCTION : GIT_UNCOMMITTED_DIFF_INSTRUCTION },
+		{
+			diffInstruction: isJj ? JJ_UNCOMMITTED_DIFF_INSTRUCTION : GIT_UNCOMMITTED_DIFF_INSTRUCTION,
+			refresh: () => readUncommittedReviewTarget(cwd),
+		},
 	);
 }
 
@@ -98,6 +112,13 @@ async function recentCommits(cwd: string, count: number): Promise<string[]> {
 	}
 }
 
+async function readBaseBranchDiff(cwd: string, baseBranch: string, headBranch: string): Promise<string | undefined> {
+	const repository = vcs.requireGit(cwd);
+	const mergeBase = await repository.mergeBase(baseBranch, headBranch);
+	if (!mergeBase) return undefined;
+	return await repository.diffText({ base: mergeBase, head: headBranch });
+}
+
 export async function resolveLocalReviewTarget(
 	kind: LocalReviewKind,
 	cwd: string,
@@ -113,29 +134,27 @@ export async function resolveLocalReviewTarget(
 			const baseBranch = await ui.select("Select base branch to compare against", branches);
 			if (!baseBranch) return undefined;
 			const currentBranch = await currentGitBranch(cwd);
-			let diffText: string;
+			let diffText: string | undefined;
 			try {
-				const repository = vcs.requireGit(cwd);
-				// PR-style review compares the merge base against the current
-				// branch (`base...head`), so base-only commits are excluded.
-				const mergeBase = await repository.mergeBase(baseBranch, currentBranch);
-				if (!mergeBase) {
-					// No common ancestor: `git diff base...head` aborts here
-					// rather than comparing unrelated trees tip-to-tip.
-					ui.notify(`No common history between ${baseBranch} and ${currentBranch}`, "error");
-					return undefined;
-				}
-				diffText = await repository.diffText({ base: mergeBase, head: currentBranch });
+				diffText = await readBaseBranchDiff(cwd, baseBranch, currentBranch);
 			} catch (error) {
 				ui.notify(`Failed to get diff: ${errorMessage(error)}`, "error");
 				return undefined;
 			}
-			return createResolvedReviewTarget(
-				"base-branch",
-				`Reviewing changes between \`${baseBranch}\` and \`${currentBranch}\` (PR-style)`,
-				diffText,
-				`No changes between ${baseBranch} and ${currentBranch}`,
-			);
+			if (diffText === undefined) {
+				ui.notify(`No common history between ${baseBranch} and ${currentBranch}`, "error");
+				return undefined;
+			}
+			const mode = `Reviewing changes between \`${baseBranch}\` and \`${currentBranch}\` (PR-style)`;
+			const emptyMessage = `No changes between ${baseBranch} and ${currentBranch}`;
+			const refresh = async (): Promise<ResolvedReviewTarget> => {
+				const refreshedDiff = await readBaseBranchDiff(cwd, baseBranch, currentBranch);
+				if (refreshedDiff === undefined) {
+					throw new Error(`No common history between ${baseBranch} and ${currentBranch}`);
+				}
+				return createResolvedReviewTarget("base-branch", mode, refreshedDiff, emptyMessage, { refresh });
+			};
+			return createResolvedReviewTarget("base-branch", mode, diffText, emptyMessage, { refresh });
 		}
 		case "uncommitted":
 			try {
