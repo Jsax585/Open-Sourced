@@ -5442,7 +5442,15 @@ describe("AgentSession retry fallback", () => {
 		const primaryId = `${primary.provider}/${primary.id}`;
 		const fallbackId = `${fallback.provider}/${fallback.id}`;
 
-		const setup = (options: { responses?: MockResponse[]; pinned?: boolean; initial?: boolean; tools?: AgentTool[] } = {}) => {
+		const setup = (
+			options: {
+				responses?: MockResponse[];
+				pinned?: boolean;
+				initial?: boolean;
+				tools?: AgentTool[];
+				onRequest?: (model: Model) => void;
+			} = {},
+		) => {
 			const requested: string[] = [];
 			const mock = createMockModel({ responses: options.responses });
 			const agent = options.responses
@@ -5456,6 +5464,7 @@ describe("AgentSession retry fallback", () => {
 						},
 						streamFn: (model, context, streamOptions) => {
 							requested.push(`${model.provider}/${model.id}`);
+							options.onRequest?.(model);
 							return mock.stream(model, context, streamOptions);
 						},
 					})
@@ -5474,7 +5483,12 @@ describe("AgentSession retry fallback", () => {
 				modelRegistry,
 				thinkingLevel: options.initial ? Effort.Low : Effort.High,
 				initialRetryFallback: options.initial
-					? { role: "default", originalSelector: `${primaryId}:high`, originalThinkingLevel: Effort.High, pinned: options.pinned }
+					? {
+							role: "default",
+							originalSelector: `${primaryId}:high`,
+							originalThinkingLevel: Effort.High,
+							pinned: options.pinned,
+						}
 					: undefined,
 			});
 			return { requested, agent };
@@ -5492,11 +5506,22 @@ describe("AgentSession retry fallback", () => {
 		});
 
 		it("does not restore for queued steer and follow-up drains or delayed continuation", async () => {
-			const { requested } = setup();
+			let queued = false;
+			const { requested } = setup({
+				responses: [
+					{ throw: `rate limit exceeded retry-after-ms=${FALLBACK_TEST_RETRY_AFTER_MS}` },
+					{ content: ["Fallback response"], delayMs: 30 },
+					{ content: ["Drained response"] },
+					{ content: ["Delayed response"] },
+				],
+				onRequest: model => {
+					if (model.id !== fallback.id || queued) return;
+					queued = true;
+					void session!.steer("Queued steering");
+					void session!.followUp("Queued follow-up");
+				},
+			});
 			await session!.prompt("Trigger fallback");
-			await session!.waitForIdle();
-			await session!.steer("Queued steering");
-			await session!.followUp("Queued follow-up");
 			await session!.waitForIdle();
 			await scheduler.wait(20);
 			await session!.followUp("Delayed asynchronous continuation");
@@ -5508,7 +5533,10 @@ describe("AgentSession retry fallback", () => {
 		it("keeps a same-turn tool loop and empty-response continuation on the fallback", async () => {
 			const schema = type({ value: "string" });
 			const tool: AgentTool<typeof schema, { value: string }> = {
-				name: "echo", label: "Echo", description: "Echo", parameters: schema,
+				name: "echo",
+				label: "Echo",
+				description: "Echo",
+				parameters: schema,
 				async execute(_id, params) {
 					return { content: [{ type: "text", text: params.value }], details: params };
 				},
@@ -5541,10 +5569,21 @@ describe("AgentSession retry fallback", () => {
 		});
 
 		it("restores after a cancelled turn when a new prompt is admitted", async () => {
-			const { requested } = setup();
-			await session!.prompt("Trigger fallback");
-			await session!.waitForIdle();
+			const started = Promise.withResolvers<void>();
+			const { requested } = setup({
+				responses: [
+					{ throw: `rate limit exceeded retry-after-ms=${FALLBACK_TEST_RETRY_AFTER_MS}` },
+					{ content: ["Interrupted fallback"], delayMs: 10_000 },
+					{ content: ["New primary response"] },
+				],
+				onRequest: model => {
+					if (model.id === fallback.id) started.resolve();
+				},
+			});
+			const prompt = session!.prompt("Trigger fallback");
+			await started.promise;
 			await session!.abort();
+			await prompt;
 			await session!.prompt("New prompt after cancellation");
 			await session!.waitForIdle();
 			expect(requested.at(-1)).toBe(primaryId);
