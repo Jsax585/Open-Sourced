@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added ClinePass free model Step 5 Preview with multimodal input and reasoning effort levels ([#15170](https://github.com/can1357/oh-my-pi/pull/15170) by [@hanumanji198586](https://github.com/hanumanji198586)).
+
 ## [18.9.1] - 2026-10-11
 
 ### Added
