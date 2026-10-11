@@ -6,6 +6,16 @@ export interface SessionResumabilityFacts {
 	readonly firstMessage?: string;
 }
 
+/** Header fields needed by both live session listing and synchronous startup prepaint. */
+export interface SessionResumabilityHeader {
+	readonly type: "session";
+	readonly id: string;
+	readonly cwd?: string;
+	readonly title?: string;
+	readonly parentSession?: string;
+	readonly timestamp?: string;
+}
+
 /** Prefix window the live recent-session scan uses for displayable resume intent. */
 export const SESSION_RESUMABILITY_PREFIX_BYTES = 4096;
 
@@ -60,6 +70,38 @@ export function extractSessionStringProperty(source: string, name: string, start
 	}
 
 	return decodeJsonStringFragment(source.slice(valueStart));
+}
+
+function normalizeTitleOverride(title: string | undefined): string | null | undefined {
+	if (title === undefined) return undefined;
+	return title.trim() ? title : null;
+}
+
+/** Extract the session header accepted by the live selector, including a prefix-truncated header line. */
+export function extractSessionHeaderFromPrefix(content: string): SessionResumabilityHeader | undefined {
+	let titleOverride: string | null | undefined;
+	let firstNonEmpty = true;
+	for (const rawLine of content.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line) continue;
+		if (firstNonEmpty && extractSessionStringProperty(line, "type") === "title") {
+			titleOverride = normalizeTitleOverride(extractSessionStringProperty(line, "title"));
+			firstNonEmpty = false;
+			continue;
+		}
+		if (extractSessionStringProperty(line, "type") !== "session") return undefined;
+		const id = extractSessionStringProperty(line, "id");
+		if (!id) return undefined;
+		return {
+			type: "session",
+			id,
+			cwd: extractSessionStringProperty(line, "cwd"),
+			title: titleOverride === null ? undefined : (titleOverride ?? extractSessionStringProperty(line, "title")),
+			parentSession: extractSessionStringProperty(line, "parentSession"),
+			timestamp: extractSessionStringProperty(line, "timestamp"),
+		};
+	}
+	return undefined;
 }
 
 /** First displayable message text wholly visible inside the shared prefix window. */

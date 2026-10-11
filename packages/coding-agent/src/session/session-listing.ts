@@ -12,9 +12,11 @@ import { computeDefaultSessionDir } from "./session-paths";
 import { compareSessionRecency } from "./recent-session-sync";
 import {
 	extractFirstDisplayMessageFromPrefix,
+	extractSessionHeaderFromPrefix,
 	extractSessionStringProperty,
 	isSessionResumabilityEmpty,
 	sanitizeSessionName,
+	type SessionResumabilityHeader,
 	SESSION_RESUMABILITY_PREFIX_BYTES,
 } from "./session-resumability";
 import { FileSessionStorage, type SessionStorage, type SessionStorageStat } from "./session-storage";
@@ -245,15 +247,6 @@ function countAssistantMarkers(content: string): number {
 	return countRoleMarkers(content, "assistant");
 }
 
-interface SessionListHeader {
-	type: "session";
-	id: string;
-	cwd?: string;
-	title?: string;
-	parentSession?: string;
-	timestamp?: string;
-}
-
 function normalizeTitleOverride(title: string | undefined): string | null | undefined {
 	if (title === undefined) return undefined;
 	return title.trim() ? title : null;
@@ -262,7 +255,7 @@ function normalizeTitleOverride(title: string | undefined): string | null | unde
 function sessionListHeaderFromRecord(
 	record: Record<string, unknown> | undefined,
 	titleOverride?: string | null,
-): SessionListHeader | undefined {
+): SessionResumabilityHeader | undefined {
 	if (record?.type !== "session" || typeof record.id !== "string") return undefined;
 	return {
 		type: "session",
@@ -277,24 +270,10 @@ function sessionListHeaderFromRecord(
 	};
 }
 
-function parseSessionListHeaderLine(line: string, titleOverride?: string | null): SessionListHeader | undefined {
-	if (extractSessionStringProperty(line, "type") !== "session") return undefined;
-	const id = extractSessionStringProperty(line, "id");
-	if (!id) return undefined;
-	return {
-		type: "session",
-		id,
-		cwd: extractSessionStringProperty(line, "cwd"),
-		title: titleOverride === null ? undefined : (titleOverride ?? extractSessionStringProperty(line, "title")),
-		parentSession: extractSessionStringProperty(line, "parentSession"),
-		timestamp: extractSessionStringProperty(line, "timestamp"),
-	};
-}
-
 function parseSessionListHeader(
 	content: string,
 	entries: Array<Record<string, unknown>>,
-): SessionListHeader | undefined {
+): SessionResumabilityHeader | undefined {
 	const firstEntry = entries[0];
 	const parsedSlotTitle = normalizeTitleOverride(
 		firstEntry?.type === "title" && typeof firstEntry.title === "string" ? firstEntry.title : undefined,
@@ -302,19 +281,7 @@ function parseSessionListHeader(
 	const parsedHeader = sessionListHeaderFromRecord(entries[firstEntry?.type === "title" ? 1 : 0], parsedSlotTitle);
 	if (parsedHeader) return parsedHeader;
 
-	let slotTitle: string | null | undefined;
-	let firstNonEmpty = true;
-	for (const rawLine of content.split(/\r?\n/)) {
-		const line = rawLine.trim();
-		if (!line) continue;
-		if (firstNonEmpty && extractSessionStringProperty(line, "type") === "title") {
-			slotTitle = normalizeTitleOverride(extractSessionStringProperty(line, "title"));
-			firstNonEmpty = false;
-			continue;
-		}
-		return parseSessionListHeaderLine(line, slotTitle);
-	}
-	return undefined;
+	return extractSessionHeaderFromPrefix(content);
 }
 
 function getSessionListWorkerCount(fileCount: number): number {

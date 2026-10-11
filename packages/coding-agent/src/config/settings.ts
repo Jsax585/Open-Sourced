@@ -1626,8 +1626,14 @@ export class Settings {
 			const own = MAIN_CONFIG_FILENAMES.map(filename => path.join(this.#agentDir, filename));
 			return this.#parent ? [...new Set([...this.#parent.settingCacheSourcePaths(scope), ...own])] : own;
 		}
-		const nativeProjectConfig = path.join(getProjectAgentDir(this.#cwd), "config.yml");
-		const own = [nativeProjectConfig, ...this.#projectSourcePaths];
+		const projectCwd = path.resolve(this.#cwd);
+		const projectConfigDir = getProjectAgentDir(projectCwd);
+		const own = [
+			path.join(projectConfigDir, "config.yml"),
+			path.join(projectConfigDir, "settings.json"),
+			path.join(projectCwd, ".claude", "settings.json"),
+			...this.#projectSourcePaths,
+		];
 		return this.#parent ? [...new Set([...this.#parent.settingCacheSourcePaths(scope), ...own])] : [...new Set(own)];
 	}
 

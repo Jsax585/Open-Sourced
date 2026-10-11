@@ -151,6 +151,47 @@ describe("startup composer terminal session identity", () => {
 		}
 	});
 
+	it("accepts a prefix-truncated header parsed by the live recent-session selector", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-startup-long-header-"));
+		const agentDir = path.join(root, "agent");
+		const project = path.join(root, "project");
+		const originalAgentDir = getAgentDir();
+		const originalTmuxPane = process.env.TMUX_PANE;
+		fs.mkdirSync(project);
+		process.env.TMUX_PANE = "%startup-long-header";
+		setAgentDir(agentDir);
+		const sessions = sessionDirForCwd(project);
+		const sessionFile = path.join(sessions, "long-header.jsonl");
+		fs.mkdirSync(sessions, { recursive: true });
+		fs.writeFileSync(
+			sessionFile,
+			`${JSON.stringify({
+				type: "session",
+				id: "long-header",
+				timestamp: "2026-01-02T00:00:00Z",
+				cwd: project,
+				directories: ["x".repeat(SESSION_RESUMABILITY_PREFIX_BYTES)],
+			})}\n${JSON.stringify({
+				type: "message",
+				message: { role: "assistant", content: "persisted response" },
+			})}\n`,
+		);
+		try {
+			expect(resolveTerminalSessionPrepaint(project)?.sessionFile).toBe(sessionFile);
+			const live = await SessionManager.continueRecent(project);
+			try {
+				expect(live.getSessionFile()).toBe(sessionFile);
+			} finally {
+				await live.close();
+			}
+		} finally {
+			setAgentDir(originalAgentDir);
+			if (originalTmuxPane === undefined) delete process.env.TMUX_PANE;
+			else process.env.TMUX_PANE = originalTmuxPane;
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("reads past a fixed title slot before ranking equal-mtime sessions", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-startup-slotted-created-"));
 		const agentDir = path.join(root, "agent");

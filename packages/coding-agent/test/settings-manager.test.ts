@@ -158,6 +158,16 @@ describe("Settings", () => {
 	});
 
 	describe("effective values", () => {
+		it("tracks every prospective project settings file for speculative cache validation", async () => {
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.settingCacheSourcePaths("project")).toEqual([
+				path.join(getProjectAgentDir(projectDir), "config.yml"),
+				path.join(getProjectAgentDir(projectDir), "settings.json"),
+				path.join(projectDir, ".claude", "settings.json"),
+			]);
+		});
+
 		it("bumps the effective revision when cwd re-resolves scoped arrays", async () => {
 			const otherProject = tempDir.join("other-project");
 			fs.mkdirSync(otherProject);
