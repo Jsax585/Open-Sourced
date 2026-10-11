@@ -236,10 +236,11 @@ async function driveEditorOverlay<T>(
 	uiOverrides: Partial<Pick<ExtensionUIContext, "notify">> = {},
 	onComponent?: (component: ExtensionUiComponent) => void,
 	afterInput?: (key: string, component: ExtensionUiComponent) => void | Promise<void>,
+	tuiLifecycle: Partial<Pick<TUI, "stop" | "start" | "requestRender">> = {},
 ): Promise<T | undefined> {
 	const previous = getKeybindings();
 	setKeybindings(KeybindingsManager.inMemory({ "app.editor.external": "ctrl+e" }));
-	const tui = { terminal: { rows: 40 }, requestRender() {}, stop() {}, start() {} } as unknown as TUI;
+	const tui = { terminal: { rows: 40 }, requestRender() {}, stop() {}, start() {}, ...tuiLifecycle } as unknown as TUI;
 	const ctx = {
 		cwd,
 		sessionManager: { getCwd: () => cwd },
@@ -277,24 +278,19 @@ function overlayText(component: ExtensionUiComponent): string | undefined {
 	const text = component.textSourceText();
 	return typeof text === "string" ? text : undefined;
 }
-
-async function waitForOverlayText(component: ExtensionUiComponent, expected: string): Promise<void> {
-	for (let attempt = 0; attempt < 50; attempt++) {
-		if (overlayText(component) === expected) return;
-		const nextImmediate = Promise.withResolvers<void>();
-		setImmediate(() => nextImmediate.resolve());
-		await nextImmediate.promise;
-		component.render(120);
-	}
-	expect(overlayText(component)).toBe(expected);
+async function settleExternalAction(action: Promise<unknown>): Promise<void> {
+	await action;
+	const nextImmediate = Promise.withResolvers<void>();
+	setImmediate(() => nextImmediate.resolve());
+	await nextImmediate.promise;
 }
 
 function countOccurrences(text: string, value: string): number {
 	return value ? text.split(value).length - 1 : 0;
 }
 
-async function withTempDir<T>(callback: (directory: string) => Promise<T>): Promise<T> {
-	const directory = await mkdtemp(join(tmpdir(), "annotate-contract-"));
+async function withTempDir<T>(callback: (directory: string) => Promise<T>, root = tmpdir()): Promise<T> {
+	const directory = await mkdtemp(join(root, "annotate-contract-"));
 	try {
 		return await callback(directory);
 	} finally {
@@ -935,13 +931,44 @@ describe("/annotate contracts", () => {
 
 		expect(openInEditor).not.toHaveBeenCalled();
 	});
-	it("refreshes an associated transcript excerpt and keeps follow-up file refreshes current", async () => {
+	it("refreshes an associated transcript excerpt and keeps follow-up file edits refreshable", async () => {
 		await withTempDir(async directory => {
 			const filePath = join(directory, "associated source.txt");
 			const fileContents = "Full current file contents, not the selected transcript excerpt.";
-			const refreshedContents = "Changed after the first refresh; the next r must reread this file.";
+			const editedContents = "Saved through Ctrl+G after the excerpt became a file source.";
+			const refreshedContents = "Changed after Ctrl+G; the next r must reread this file.";
 			await writeFile(filePath, fileContents, "utf8");
-			const source = { ...messageWithEditorFile(filePath), sessionId: "session-1" };
+			spyOn(externalEditor, "getEditorCommand").mockReturnValue("vim");
+			const openEditorOnPath = spyOn(externalEditor, "openEditorOnPath").mockImplementation(
+				async (_editor, editorPath) => {
+					await writeFile(editorPath, editedContents, "utf8");
+					return 0;
+				},
+			);
+			const firstRefresh = Promise.withResolvers<void>();
+			const editorRefresh = Promise.withResolvers<void>();
+			const secondRefresh = Promise.withResolvers<void>();
+			const replaceTextSource = AnnotationOverlay.prototype.replaceTextSource;
+			spyOn(AnnotationOverlay.prototype, "replaceTextSource").mockImplementation(function (
+				this: AnnotationOverlay,
+				text: string,
+				sourceUpdate?: Pick<TextReviewSource, "kind" | "label" | "provenance" | "editorFilePath">,
+			) {
+				const dropped = replaceTextSource.call(this, text, sourceUpdate);
+				if (text === fileContents) firstRefresh.resolve();
+				if (text === editedContents) editorRefresh.resolve();
+				if (text === refreshedContents) secondRefresh.resolve();
+				return dropped;
+			});
+			const source: TextReviewSource = {
+				id: "session-excerpt:entry-1:quote-2",
+				kind: "quote",
+				label: "Selected transcript excerpt",
+				text: "frozen selected excerpt",
+				provenance: { kind: "session", entryId: "entry-1" },
+				sessionId: "session-1",
+				editorFilePath: filePath,
+			};
 			const { ctx, pasteToEditor } = createContext();
 			const generateTextReviewContextSummary = vi.fn(async () => "summary should not be requested");
 			let completed: TextReviewOverlayResult | undefined;
@@ -953,17 +980,18 @@ describe("/annotate contracts", () => {
 				showTextReviewOverlay: async (_ctx, selectedSource) => {
 					completed = await driveEditorOverlay(
 						directory,
-						["A", "source note", ENTER, "r", "r", "\t", ENTER],
+						["A", "source note", ENTER, "r", CTRL_E, "r", "\t", ENTER],
 						editorCtx => showTextReviewOverlay(editorCtx, selectedSource),
 						{},
 						undefined,
 						async (key, component) => {
-							if (key !== "r") return;
-							refreshCount++;
-							const expected = refreshCount === 1 ? fileContents : refreshedContents;
-							await waitForOverlayText(component, expected);
-							if (refreshCount === 1) {
-								textAfterFirstRefresh = overlayText(component);
+							if (key === "r") {
+								refreshCount++;
+								await settleExternalAction(refreshCount === 1 ? firstRefresh.promise : secondRefresh.promise);
+								if (refreshCount === 1) textAfterFirstRefresh = overlayText(component);
+							} else if (key === CTRL_E) {
+								await settleExternalAction(editorRefresh.promise);
+								expect(overlayText(component)).toBe(editedContents);
 								await writeFile(filePath, refreshedContents, "utf8");
 							}
 						},
@@ -974,12 +1002,14 @@ describe("/annotate contracts", () => {
 
 			const pasted = pasteToEditor.mock.calls[0]?.[0] as string | undefined;
 			expect(textAfterFirstRefresh).toBe(fileContents);
+			expect(openEditorOnPath).toHaveBeenCalledWith("vim", filePath);
 			expect(pasted).toContain(refreshedContents);
-			expect(countOccurrences(pasted ?? "", "source note")).toBe(1);
+			expect(pasted).toContain("source note");
 			expect(pasted).not.toContain(homedir());
+			expect(pasted).not.toContain(editedContents);
 			expect(pasted).not.toContain(fileContents);
 			expect(pasted).not.toContain("frozen selected excerpt");
-			expect(pasted).not.toContain("Selected session message");
+			expect(pasted).not.toContain("Selected transcript excerpt");
 			expect(generateTextReviewContextSummary).not.toHaveBeenCalled();
 			expect(completed?.refreshedSource?.label).not.toContain(homedir());
 			expect(completed?.refreshedSource).toMatchObject({
@@ -989,12 +1019,12 @@ describe("/annotate contracts", () => {
 				sessionId: source.sessionId,
 			});
 			expect(source).toMatchObject({
-				id: "session-message",
-				kind: "message",
+				id: "session-excerpt:entry-1:quote-2",
+				kind: "quote",
 				text: "frozen selected excerpt",
-				provenance: { kind: "session", entryId: "session-message" },
+				provenance: { kind: "session", entryId: "entry-1" },
 			});
-		});
+		}, homedir());
 	});
 
 	it("leaves source and notes unchanged when the associated file is deleted before refresh", async () => {
@@ -1063,16 +1093,144 @@ describe("/annotate contracts", () => {
 		expect(overlayText(overlay)).toBe(source.text);
 	});
 
-	it("does not open the local checkout for a PR review", async () => {
+	it.each([
+		{ kind: "pr" as const, label: "PR" },
+		{ kind: "patch" as const, label: "caller-supplied patch" },
+	])("opens the local counterpart and preserves source refresh capability for $label diffs", async ({ kind }) => {
 		spyOn(externalEditor, "getEditorCommand").mockReturnValue("vim");
-		const openEditorOnPath = spyOn(externalEditor, "openEditorOnPath").mockResolvedValue(0);
-		const target = createResolvedReviewTarget("pr", "PR #1", SAMPLE_DIFF, "No changes");
+		const editorCompleted = Promise.withResolvers<void>();
+		const openEditorOnPath = spyOn(externalEditor, "openEditorOnPath").mockImplementation(
+			async (_editor, filePath) => {
+				try {
+					await writeFile(filePath, "local checkout changed by editor\n", "utf8");
+				} finally {
+					editorCompleted.resolve();
+				}
+				return 0;
+			},
+		);
+		await withTempDir(async directory => {
+			const root = await realpath(directory);
+			const filePath = join(root, "src/value.ts");
+			await Bun.$`git init -q ${root}`.quiet();
+			await mkdir(join(root, "src"), { recursive: true });
+			await writeFile(filePath, "unrelated local checkout content\n", "utf8");
+			const targetOptions =
+				kind === "pr"
+					? {
+							refresh: async () => createResolvedReviewTarget("pr", "PR #1", REFRESHED_DIFF, "No changes"),
+						}
+					: {};
+			const target = createResolvedReviewTarget(kind, `${kind} review`, SAMPLE_DIFF, "No changes", targetOptions);
+			const originalSnapshot = target.snapshot;
+			const notify = vi.fn();
+			const stop = vi.fn();
+			const start = vi.fn();
+			let overlayComponent: ExtensionUiComponent | undefined;
+			let filePathAfterEditor: string | undefined;
+			let renderedAfterEditor: string | undefined;
 
-		await driveEditorOverlay("/tmp", ["\t", CTRL_E], editorCtx => showCodeReviewOverlay(editorCtx, target));
+			const result = await driveEditorOverlay(
+				root,
+				["\t", CTRL_E, "r", "\t", ENTER],
+				ctx => showCodeReviewOverlay(ctx, target),
+				{ notify },
+				component => {
+					overlayComponent = component;
+				},
+				async key => {
+					if (key === CTRL_E) {
+						await settleExternalAction(editorCompleted.promise);
+						if (overlayComponent instanceof AnnotationOverlay) {
+							filePathAfterEditor = overlayComponent.reviewFilePath();
+							renderedAfterEditor = overlayComponent.render(120).join("\n");
+						}
+					}
+				},
+				{ stop, start },
+			);
 
-		expect(openEditorOnPath).not.toHaveBeenCalled();
+			expect(openEditorOnPath.mock.calls[0]?.[1]).toBe(filePath);
+			expect(filePathAfterEditor).toBe("src/value.ts");
+			expect(renderedAfterEditor).toContain("const value = 2;");
+			expect(renderedAfterEditor).not.toContain("local checkout changed by editor");
+			expect(stop).toHaveBeenCalledTimes(1);
+			expect(start).toHaveBeenCalledTimes(1);
+			expect(stop.mock.invocationCallOrder[0]).toBeLessThan(openEditorOnPath.mock.invocationCallOrder[0]!);
+			expect(start.mock.invocationCallOrder[0]).toBeGreaterThan(openEditorOnPath.mock.invocationCallOrder[0]!);
+			expect(target.rawDiff).toBe(SAMPLE_DIFF);
+			expect(target.snapshot).toBe(originalSnapshot);
+			expect(overlayComponent).toBeInstanceOf(AnnotationOverlay);
+			if (kind === "pr") {
+				expect(result).toMatchObject({ action: "review", refreshedDiff: REFRESHED_DIFF });
+				expect((overlayComponent as AnnotationOverlay).reviewFilePath()).toBe("src/refreshed.ts");
+			} else {
+				expect(result).toMatchObject({ action: "review", annotations: [] });
+				expect(result).not.toHaveProperty("refreshedDiff");
+				expect((overlayComponent as AnnotationOverlay).reviewFilePath()).toBe("src/value.ts");
+			}
+		});
 	});
 
+	it("notifies cleanly when a PR diff file has no local counterpart", async () => {
+		spyOn(externalEditor, "getEditorCommand").mockReturnValue("vim");
+		const openEditorOnPath = spyOn(externalEditor, "openEditorOnPath").mockResolvedValue(0);
+		await withTempDir(async directory => {
+			const root = await realpath(directory);
+			await Bun.$`git init -q ${root}`.quiet();
+			const warningShown = Promise.withResolvers<void>();
+			const notify = vi.fn((_message: string, type?: "info" | "warning" | "error") => {
+				if (type === "warning") warningShown.resolve();
+			});
+			const target = createResolvedReviewTarget("pr", "PR #1", SAMPLE_DIFF, "No changes");
+			const originalSnapshot = target.snapshot;
+
+			await driveEditorOverlay(root, ["\t", CTRL_E], ctx => showCodeReviewOverlay(ctx, target), { notify });
+			await settleExternalAction(warningShown.promise);
+
+			expect(openEditorOnPath).not.toHaveBeenCalled();
+			expect(notify.mock.calls.some(([, type]) => type === "warning")).toBe(true);
+			expect(target.rawDiff).toBe(SAMPLE_DIFF);
+			expect(target.snapshot).toBe(originalSnapshot);
+		});
+	});
+
+	it("refuses absolute and escaping patch paths without launching the editor", async () => {
+		spyOn(externalEditor, "getEditorCommand").mockReturnValue("vim");
+		const openEditorOnPath = spyOn(externalEditor, "openEditorOnPath").mockResolvedValue(0);
+		await withTempDir(async directory => {
+			const root = await realpath(directory);
+			const localFilePath = join(root, "src/value.ts");
+			await Bun.$`git init -q ${root}`.quiet();
+			await mkdir(join(root, "src"), { recursive: true });
+			await writeFile(localFilePath, "const value = 2;\n", "utf8");
+
+			for (const diffPath of ["../outside.ts", localFilePath]) {
+				const diff = `diff --git a/${diffPath} b/${diffPath}
+--- a/${diffPath}
++++ b/${diffPath}
+@@ -1 +1 @@
+-const value = 1;
++const value = 2;
+`;
+				const target = createResolvedReviewTarget("patch", "Supplied patch", diff, "No changes");
+				const originalSnapshot = target.snapshot;
+				const warningShown = Promise.withResolvers<void>();
+				const notify = vi.fn((_message: string, type?: "info" | "warning" | "error") => {
+					if (type === "warning") warningShown.resolve();
+				});
+
+				await driveEditorOverlay(root, ["\t", CTRL_E], ctx => showCodeReviewOverlay(ctx, target), { notify });
+				await settleExternalAction(warningShown.promise);
+
+				expect(notify.mock.calls.some(([, type]) => type === "warning")).toBe(true);
+				expect(target.rawDiff).toBe(diff);
+				expect(target.snapshot).toBe(originalSnapshot);
+			}
+
+			expect(openEditorOnPath).not.toHaveBeenCalled();
+		});
+	});
 	it("opens the current diff file from the repository root when the session cwd is a subdirectory", async () => {
 		spyOn(externalEditor, "getEditorCommand").mockReturnValue("vim");
 		const opened = Promise.withResolvers<string>();
@@ -1092,6 +1250,55 @@ describe("/annotate contracts", () => {
 
 			// The open follows a real filesystem check, so wait for the call rather than the key loop.
 			expect(await opened.promise).toBe(join(dir, "src/value.ts"));
+		});
+	});
+	it("opens an associated file in the current terminal and preserves the session excerpt", async () => {
+		const editor = "vim";
+		spyOn(externalEditor, "getEditorCommand").mockReturnValue(editor);
+		const editorCompleted = Promise.withResolvers<void>();
+		const openEditorOnPath = spyOn(externalEditor, "openEditorOnPath").mockImplementation(
+			async (_editor, filePath) => {
+				try {
+					await writeFile(filePath, "edited associated file", "utf8");
+				} finally {
+					editorCompleted.resolve();
+				}
+				return 0;
+			},
+		);
+		const notify = vi.fn();
+		const stop = vi.fn();
+		const start = vi.fn();
+		const requestRender = vi.fn();
+
+		await withTempDir(async directory => {
+			const filePath = join(directory, "associated source.txt");
+			await writeFile(filePath, "original associated file", "utf8");
+			const source = messageWithEditorFile(filePath);
+			let overlayComponent: ExtensionUiComponent | undefined;
+
+			await driveEditorOverlay(
+				directory,
+				[CTRL_E],
+				ctx => showTextReviewOverlay(ctx, source),
+				{ notify },
+				component => {
+					overlayComponent = component;
+				},
+				undefined,
+				{ stop, start, requestRender },
+			);
+			await settleExternalAction(editorCompleted.promise);
+
+			expect(openEditorOnPath).toHaveBeenCalledWith(editor, filePath);
+			expect(await Bun.file(filePath).text()).toBe("edited associated file");
+			expect(overlayText(overlayComponent!)).toBe("frozen selected excerpt");
+			expect(source.text).toBe("frozen selected excerpt");
+			expect(stop).toHaveBeenCalledTimes(1);
+			expect(start).toHaveBeenCalledTimes(1);
+			expect(requestRender).toHaveBeenCalledWith(true);
+			expect(stop.mock.invocationCallOrder[0]).toBeLessThan(openEditorOnPath.mock.invocationCallOrder[0]!);
+			expect(start.mock.invocationCallOrder[0]).toBeGreaterThan(openEditorOnPath.mock.invocationCallOrder[0]!);
 		});
 	});
 });

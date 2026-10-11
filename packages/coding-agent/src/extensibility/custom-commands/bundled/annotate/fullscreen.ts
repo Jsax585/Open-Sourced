@@ -16,7 +16,7 @@ import {
 	TRUNCATE_LENGTHS,
 	truncateToWidth,
 } from "@oh-my-pi/pi-tui/render/render-utils";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent, pathIsWithin } from "@oh-my-pi/pi-utils";
 import type { CustomCommandContext } from "../../../../extensibility/custom-commands/types";
 import { getEditorCommand, openEditorOnPath, openInEditor } from "../../../../utils/external-editor";
 import type { ResolvedReviewTarget } from "../review/target";
@@ -125,6 +125,28 @@ async function editTextSource(
 	if (next !== null && next !== current) overlay.replaceTextSource(next);
 }
 
+async function openAssociatedFile(
+	tui: TUI,
+	ctx: AnnotationOverlayContext,
+	filePath: string,
+	label: string,
+): Promise<void> {
+	const editor = requireEditor();
+	await requireRegularFile(filePath, label);
+	const sourceNotice = "The selected source stays at this snapshot until you press r to reread its associated file.";
+
+	tui.stop();
+	let exitCode: number;
+	try {
+		exitCode = await openEditorOnPath(editor, filePath);
+	} finally {
+		tui.start();
+		tui.requestRender(true);
+	}
+	if (exitCode !== 0) ctx.ui.notify(notificationText(`Editor exited with code ${exitCode}.`), "warning");
+	ctx.ui.notify(notificationText(`Opened ${displayPathLabel(label)}. ${sourceNotice}`), "info");
+}
+
 async function editReviewedFile(
 	tui: TUI,
 	ctx: AnnotationOverlayContext,
@@ -134,14 +156,28 @@ async function editReviewedFile(
 	const relative = overlay.reviewFilePath();
 	if (!relative) throw new Error("No file to open.");
 	const editor = requireEditor();
-	// Diff paths are repository-relative and exact, so resolve them from the repo root, not the session cwd.
+	// External diff paths are only opened when they identify a repository-relative local counterpart.
 	const cwd = ctx.sessionManager.getCwd?.() ?? ctx.cwd;
-	const absolute = path.resolve(vcs.repo(cwd)?.root() ?? cwd, relative);
+	const repositoryRoot = path.resolve(vcs.repo(cwd)?.root() ?? cwd);
 	const sourceNotice = target.refresh
 		? "The review diff stays at this snapshot until you press r to refresh it."
 		: "The captured review diff remains unchanged.";
-	if (!(await Bun.file(absolute).exists())) {
-		throw new Error(`${displayPathLabel(relative)} is not on disk. ${sourceNotice}`);
+	const absolute = path.resolve(repositoryRoot, relative);
+	if (path.isAbsolute(relative) || !pathIsWithin(repositoryRoot, absolute)) {
+		ctx.ui.notify(
+			notificationText(
+				`${displayPathLabel(relative)} is not a repository-relative path inside the local checkout. ${sourceNotice}`,
+			),
+			"warning",
+		);
+		return;
+	}
+	try {
+		await requireRegularFile(absolute, relative);
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		ctx.ui.notify(notificationText(`${detail} ${sourceNotice}`), "warning");
+		return;
 	}
 	tui.stop();
 	let exitCode: number;
@@ -179,11 +215,8 @@ export function showCodeReviewOverlay(
 							}
 						: undefined,
 					onAnnotationExternalEditor: (draft, commit) => editAnnotationDraft(tui, draft, commit),
-					// PR and caller-supplied diffs need not match the local checkout, so only local reviews open the working-tree file.
-					onExternalEditor:
-						target.kind === "pr" || target.kind === "patch"
-							? undefined
-							: () => editReviewedFile(tui, ctx, overlay, target),
+					// The fetched/supplied diff remains the review source; Ctrl+G only opens its local counterpart.
+					onExternalEditor: () => editReviewedFile(tui, ctx, overlay, target),
 				},
 			);
 			return overlay;
@@ -203,8 +236,7 @@ export function showTextReviewOverlay(
 			const hasFileSource = Boolean(
 				source.provenance?.kind === "file" ? source.provenance.path : source.editorFilePath,
 			);
-			// Ctrl+G eligibility is fixed to the original prompt/file source; associated-file provenance enables only `r`.
-			const canOpenSourceEditor = source.provenance?.kind === "file" || source.provenance?.kind === "prompt";
+			const canOpenSourceEditor = hasFileSource || source.provenance?.kind === "prompt";
 			const refreshSource = hasFileSource
 				? async () => {
 						const refreshed = await refreshFileSource(currentSource);
@@ -218,6 +250,8 @@ export function showTextReviewOverlay(
 						if (provenance?.kind === "file" || provenance?.kind === "prompt") {
 							return editTextSource(tui, ctx, overlay, provenance);
 						}
+						const filePath = currentSource.editorFilePath;
+						if (filePath) return openAssociatedFile(tui, ctx, filePath, filePath);
 					}
 				: undefined;
 			const overlay: AnnotationOverlay = new AnnotationOverlay(tui, theme, keybindings, source, {
