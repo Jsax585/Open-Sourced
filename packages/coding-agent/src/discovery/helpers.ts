@@ -655,26 +655,46 @@ function expandEnvVars(value: string, extraEnv?: Record<string, string>): string
 
 /**
  * Recursively expand environment variables in an object.
+ *
+ * `exclude` names server-config fields (tool filters) that stay literal:
+ * both callers pass the `mcpServers` map, so each child object is expanded
+ * as a server config with only its direct excluded fields skipped. A server
+ * _named_ `enabledTools`, or a nested `headers`/`env` key of that name,
+ * keeps its documented expansion — the exclusion never applies below the
+ * server-config level.
  */
 export function expandEnvVarsDeep<T>(obj: T, extraEnv?: Record<string, string>, exclude?: ReadonlySet<string>): T {
 	if (typeof obj === "string") {
 		return expandEnvVars(obj, extraEnv) as T;
 	}
 	if (Array.isArray(obj)) {
-		return obj.map(item => expandEnvVarsDeep(item, extraEnv, exclude)) as T;
+		return obj.map(item => expandEnvVarsDeep(item, extraEnv)) as T;
 	}
 	if (obj !== null && typeof obj === "object") {
 		const result: Record<string, unknown> = {};
 		for (const [key, value] of Object.entries(obj)) {
-			if (exclude?.has(key)) {
-				result[key] = value;
+			if (exclude && value !== null && typeof value === "object" && !Array.isArray(value)) {
+				result[key] = expandServerConfig(value as Record<string, unknown>, extraEnv, exclude);
 			} else {
-				result[key] = expandEnvVarsDeep(value, extraEnv, exclude);
+				result[key] = expandEnvVarsDeep(value, extraEnv);
 			}
 		}
 		return result as T;
 	}
 	return obj;
+}
+
+/** Expand one server config, leaving excluded fields (tool filters) literal. */
+function expandServerConfig(
+	config: Record<string, unknown>,
+	extraEnv: Record<string, string> | undefined,
+	exclude: ReadonlySet<string>,
+): Record<string, unknown> {
+	const result: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(config)) {
+		result[key] = exclude.has(key) ? value : expandEnvVarsDeep(value, extraEnv);
+	}
+	return result;
 }
 
 /**
