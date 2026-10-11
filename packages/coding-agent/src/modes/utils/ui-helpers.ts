@@ -1257,6 +1257,7 @@ export class UiHelpers {
 			const forwarded = await this.ctx.session.prompt(builtin, {
 				streamingBehavior: message.mode,
 				images: message.images,
+				admissionOrigin: "continuation",
 			});
 			this.#parkLoopOnLocalConsume(message.text, forwarded);
 			return;
@@ -1271,7 +1272,7 @@ export class UiHelpers {
 			return;
 		}
 		if (this.ctx.isKnownSlashCommand(message.text)) {
-			const forwarded = await this.ctx.session.prompt(message.text);
+			const forwarded = await this.ctx.session.prompt(message.text, { admissionOrigin: "continuation" });
 			this.#parkLoopOnLocalConsume(message.text, forwarded);
 			return;
 		}
@@ -1375,7 +1376,9 @@ export class UiHelpers {
 					firstPrompt.images,
 				);
 				promptPromise = built
-					? this.ctx.session.promptCustomMessage(built.message, built.options).catch(restoreQueue)
+					? this.ctx.session
+							.promptCustomMessage(built.message, { ...built.options, admissionOrigin: "continuation" })
+							.catch(restoreQueue)
 					: Promise.resolve();
 			} else {
 				const disposeFirstPrompt = this.ctx.recordLocalSubmission(
@@ -1386,6 +1389,7 @@ export class UiHelpers {
 					.prompt(firstPrompt.text, {
 						streamingBehavior: firstPrompt.mode === "followUp" ? "followUp" : "steer",
 						images: firstPrompt.images,
+						admissionOrigin: "continuation",
 					})
 					.catch((error: unknown) => {
 						disposeFirstPrompt();

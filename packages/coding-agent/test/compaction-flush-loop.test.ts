@@ -113,6 +113,11 @@ test("a queued builtin's inline prompt starts a turn without sending the slash t
 	await helpers.flushCompactionQueue({ willRetry: false });
 
 	expect(requests).toEqual(["investigate"]);
+	expect(ctx.session.prompt).toHaveBeenCalledWith("investigate", {
+		streamingBehavior: "followUp",
+		images: undefined,
+		admissionOrigin: "continuation",
+	});
 });
 
 describe("flushCompactionQueue loop parking", () => {
@@ -122,7 +127,7 @@ describe("flushCompactionQueue loop parking", () => {
 
 		await new UiHelpers(ctx).flushCompactionQueue({ willRetry: false });
 
-		expect(prompt).toHaveBeenCalledWith("/void-cmd");
+		expect(prompt).toHaveBeenCalledWith("/void-cmd", { admissionOrigin: "continuation" });
 		expect(pauseLoop).toHaveBeenCalledTimes(1);
 		expect(getLoopPrompt()).toBeUndefined();
 	});

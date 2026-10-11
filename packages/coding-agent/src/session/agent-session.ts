@@ -1830,6 +1830,7 @@ export class AgentSession implements SettingsScope {
 			unexpectedStopAbortSignal: () => this.#postPromptTasksAbortController.signal,
 			sessionId: () => this.sessionId,
 			emitSessionEvent: event => this.#emitSessionEvent(event),
+			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 			waitForSessionMessagePersistence: message => this.#waitForSessionMessagePersistence(message),
 			appendSessionMessage: message => this.#appendSessionMessage(message),
@@ -7511,7 +7512,7 @@ export class AgentSession implements SettingsScope {
 		let turnError: unknown;
 		let dispatched = false;
 		try {
-			dispatched = await this.#promptWithMessage(message, expandedText, "new-turn", {
+			dispatched = await this.#promptWithMessage(message, expandedText, options?.admissionOrigin ?? "new-turn", {
 				...options,
 				images: normalizedImages,
 				prependMessages:
@@ -7562,7 +7563,7 @@ export class AgentSession implements SettingsScope {
 	 */
 	async promptCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "onPromptAdmitted"> & {
+		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "onPromptAdmitted" | "admissionOrigin"> & {
 			queueChipText?: string;
 			queueOnly?: boolean;
 		},
@@ -7572,7 +7573,7 @@ export class AgentSession implements SettingsScope {
 
 	async #promptCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "onPromptAdmitted"> & {
+		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "onPromptAdmitted" | "admissionOrigin"> & {
 			queueChipText?: string;
 			queueOnly?: boolean;
 		},
@@ -7593,7 +7594,7 @@ export class AgentSession implements SettingsScope {
 	async #dispatchCustomPrompt<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
 		options:
-			| (Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "onPromptAdmitted"> & {
+			| (Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "onPromptAdmitted" | "admissionOrigin"> & {
 					queueChipText?: string;
 					queueOnly?: boolean;
 			  })
@@ -7682,13 +7683,18 @@ export class AgentSession implements SettingsScope {
 			outcome.sessionClaimed = true;
 			return true;
 		}
-		outcome.sessionClaimed = await this.#promptWithMessage(preparedMessage, textContent, "new-turn", {
-			...options,
-			prependMessages:
-				keywordNotices.length > 0 || descriptionNotice
-					? [...keywordNotices, ...(descriptionNotice ? [descriptionNotice] : [])]
-					: undefined,
-		});
+		outcome.sessionClaimed = await this.#promptWithMessage(
+			preparedMessage,
+			textContent,
+			options?.admissionOrigin ?? "new-turn",
+			{
+				...options,
+				prependMessages:
+					keywordNotices.length > 0 || descriptionNotice
+						? [...keywordNotices, ...(descriptionNotice ? [descriptionNotice] : [])]
+						: undefined,
+			},
+		);
 		return outcome.sessionClaimed;
 	}
 

@@ -247,6 +247,7 @@ export interface TurnRecoveryHost {
 	unexpectedStopAbortSignal?(): AbortSignal;
 	sessionId(): string;
 	emitSessionEvent(event: AgentSessionEvent): Promise<void>;
+	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
 	scheduleAgentContinue(options: {
 		source: string;
 		delayMs?: number;
@@ -2402,12 +2403,12 @@ export class TurnRecovery {
 			this.#retryFallbackRestoreTriedThisTurn = true;
 		}
 
+		const activeFallback = this.#activeRetryFallback;
 		const {
 			originalSelector: originalSelectorRaw,
 			originalThinkingLevel,
 			lastAppliedFallbackThinkingLevel,
-			effortTouchedSinceFallback,
-		} = this.#activeRetryFallback;
+		} = activeFallback;
 		const originalSelector = parseRetryFallbackSelector(originalSelectorRaw, this.#host.modelRegistry);
 		if (!originalSelector) {
 			// Defensive: the stored selector is always produced by
@@ -2437,13 +2438,33 @@ export class TurnRecovery {
 		);
 		const primaryModel =
 			resolvedPrimary.model ?? this.#host.modelRegistry.find(originalSelector.provider, originalSelector.id);
-		if (!primaryModel) return false;
+		if (!primaryModel) {
+			if (policy === "next-turn") {
+				this.#host.emitNotice(
+					"warning",
+					`Cannot restore primary ${originalSelectorRaw}: model is unavailable. Continuing on the fallback.`,
+					"retry-fallback",
+				);
+			}
+			return false;
+		}
 		const apiKey = await this.#host.modelRegistry.getApiKey(primaryModel, this.#host.sessionId());
-		if (!apiKey) return false;
+		if (this.#activeRetryFallback !== activeFallback) return false;
+		if (!apiKey) {
+			if (policy === "next-turn") {
+				this.#host.emitNotice(
+					"warning",
+					`Cannot restore primary ${originalSelectorRaw}: credentials are unavailable. Continuing on the fallback.`,
+					"retry-fallback",
+				);
+			}
+			return false;
+		}
 
 		const currentThinkingLevel = this.#host.configuredThinkingLevel();
 		const thinkingToApply =
-			!effortTouchedSinceFallback && currentThinkingLevel === lastAppliedFallbackThinkingLevel
+			(policy !== "next-turn" || !activeFallback.effortTouchedSinceFallback) &&
+			currentThinkingLevel === lastAppliedFallbackThinkingLevel
 				? originalThinkingLevel
 				: currentThinkingLevel;
 		const primarySelector = formatModelStringWithRouting(primaryModel);

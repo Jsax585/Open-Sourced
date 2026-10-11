@@ -13,7 +13,7 @@ import {
 	PromptDroppedError,
 	type PromptOptions,
 } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
+import { runSubagentFollowUpTurn, runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -253,6 +253,7 @@ describe("runSubprocess incremental yield loops", () => {
 			"inventory the api surface",
 			"inventory the api surface",
 		]);
+		expect(handle.prompts.map(({ options }) => options?.admissionOrigin)).toEqual(["new-turn", "continuation"]);
 		expect(result.exitCode).toBe(0);
 		expect(result.output).toContain("DELIVERED");
 	});
@@ -282,6 +283,12 @@ describe("runSubprocess incremental yield loops", () => {
 		const result = await runSubprocess(baseOptions(id, 0));
 
 		expect(handle.prompts.map(({ text }) => text)).toEqual(Array(4).fill("inventory the api surface"));
+		expect(handle.prompts.map(({ options }) => options?.admissionOrigin)).toEqual([
+			"new-turn",
+			"continuation",
+			"continuation",
+			"continuation",
+		]);
 		expect(result.exitCode).toBe(0);
 		expect(result.output).toContain("RECOVERED");
 	});
@@ -299,6 +306,59 @@ describe("runSubprocess incremental yield loops", () => {
 		expect(result.exitCode).toBe(1);
 		expect(result.error).toContain("initial prompt dropped before provider dispatch; session did not become idle");
 	}, 10_000);
+
+	it("keeps an async-pending notice and its dropped retry inside the admitted assignment", async () => {
+		const id = "PendingNoticeScout";
+		const handle = createMockSession(({ promptIndex, emit, pushMessage }) => {
+			if (promptIndex === 1) {
+				emitTerminalYieldTurn("PENDING", emit, pushMessage);
+				return;
+			}
+			if (promptIndex === 2) return "dropped";
+			handle.asyncPending.value = false;
+			emitTerminalYieldTurn("SETTLED", emit, pushMessage);
+		});
+		handle.asyncPending.value = true;
+		mockCreateAgentSession(handle.session);
+		registerRunning(id, handle.session);
+
+		const result = await runSubprocess(baseOptions(id, 0));
+
+		expect(handle.prompts).toHaveLength(3);
+		expect(handle.prompts[1]?.text).toContain("bg_1");
+		expect(handle.prompts[2]?.text).toBe(handle.prompts[1]?.text);
+		expect(handle.prompts.map(({ options }) => options?.admissionOrigin)).toEqual([
+			"new-turn",
+			"continuation",
+			"continuation",
+		]);
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain("SETTLED");
+	});
+
+	it("admits a new parent follow-up once and preserves its origin across a dropped retry", async () => {
+		const id = "FollowUpScout";
+		const handle = createMockSession(({ promptIndex, emit, pushMessage }) => {
+			if (promptIndex === 1) return "dropped";
+			emitTerminalYieldTurn("FOLLOW-UP", emit, pushMessage);
+		});
+		handle.session.setWorkPoolYieldItems = async () => {};
+		registerRunning(id, handle.session);
+
+		const result = await runSubagentFollowUpTurn({
+			id,
+			agent: baseAgent,
+			message: "inspect the remaining endpoints",
+		});
+
+		expect(handle.prompts.map(({ text }) => text)).toEqual([
+			"inspect the remaining endpoints",
+			"inspect the remaining endpoints",
+		]);
+		expect(handle.prompts.map(({ options }) => options?.admissionOrigin)).toEqual(["new-turn", "continuation"]);
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain("FOLLOW-UP");
+	});
 
 	it("retries a dropped yield reminder without consuming another reminder", async () => {
 		const id = "ReminderScout";
@@ -322,6 +382,11 @@ describe("runSubprocess incremental yield loops", () => {
 		const result = await runSubprocess(baseOptions(id, 0));
 
 		expect(handle.prompts[1]?.text).toBe(handle.prompts[2]?.text);
+		expect(handle.prompts.map(({ options }) => options?.admissionOrigin)).toEqual([
+			"new-turn",
+			"continuation",
+			"continuation",
+		]);
 		expect(result.exitCode).toBe(0);
 		expect(result.output).toContain("REMINDER");
 	});
@@ -385,6 +450,13 @@ describe("runSubprocess incremental yield loops", () => {
 
 		expect(handle.prompts).toHaveLength(5);
 		expect(handle.prompts[4]?.text).toBe(handle.prompts[3]?.text);
+		expect(handle.prompts.map(({ options }) => options?.admissionOrigin)).toEqual([
+			"new-turn",
+			"continuation",
+			"continuation",
+			"continuation",
+			"continuation",
+		]);
 		expect(result.exitCode).toBe(0);
 		expect(result.output).toContain("FINAL");
 	});
