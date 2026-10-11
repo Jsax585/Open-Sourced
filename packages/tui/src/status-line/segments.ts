@@ -827,6 +827,16 @@ const costSegment: StatusLineSegment = {
 	},
 };
 
+function contextUsageText(ctx: SegmentContext): string {
+	const pct = ctx.contextPercent;
+	const window = ctx.contextWindow;
+	if (pct === null && window > 0) return formatNumber(window);
+	if (window > 0 && ctx.options.context_pct?.showTokens === true) {
+		return `${formatNumber(ctx.contextTokens)}/${formatNumber(window)}`;
+	}
+	return formatContextUsage(pct, window, ctx.contextTokens);
+}
+
 const contextPctSegment: StatusLineSegment = {
 	id: "context_pct",
 	render(ctx) {
@@ -851,10 +861,7 @@ const contextPctSegment: StatusLineSegment = {
 			}`;
 		}
 		// A known window with unknown usage (startup prepaint) shows the window alone.
-		const text = theme.fg(
-			color,
-			pct === null && window > 0 ? formatNumber(window) : formatContextUsage(pct, window, ctx.contextTokens),
-		);
+		const text = theme.fg(color, contextUsageText(ctx));
 		const content = withIcon(theme.icon.context, `${text}${autoIcon}`);
 
 		return { content, visible: true };
@@ -864,12 +871,7 @@ const contextPctSegment: StatusLineSegment = {
 		const window = ctx.contextWindow;
 		const level = getContextUsageLevel(pct ?? 0, window);
 		const color = getContextUsageThemeColor(level);
-		const spans: TspSpan[] = [
-			span(
-				pct === null && window > 0 ? formatNumber(window) : formatContextUsage(pct, window, ctx.contextTokens),
-				color,
-			),
-		];
+		const spans: TspSpan[] = [span(contextUsageText(ctx), color)];
 		if (ctx.autoCompactEnabled && theme.icon.auto) {
 			// Async-compaction indicator: the terminal pulses the auto icon while a
 			// background speculation runs; an armed result holds it in accent.
