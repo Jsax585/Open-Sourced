@@ -216,9 +216,6 @@ function restoreRecoverableState(target, storedIds, mutatedTabIds) {
       target.add(id);
   }
 }
-function extensionOwnedAttachedTabIds(targets, recoverableTabIds) {
-  return targets.filter((target) => target.attached && target.tabId !== undefined && recoverableTabIds.has(target.tabId)).map((target) => target.tabId);
-}
 function recoverableHelloTabIds(recoverableTabIds, attachedTabIds) {
   return [...new Set([...recoverableTabIds, ...attachedTabIds])];
 }
@@ -419,10 +416,6 @@ async function ownedDebuggerTabs(targets, probe) {
     }
   }));
   return owned.filter((tabId) => tabId !== undefined);
-}
-async function extensionOwnedDebuggerTabs(targets, knownOwnedTabIds, probe) {
-  const probedOwnedTabIds = await ownedDebuggerTabs(targets, probe);
-  return extensionOwnedAttachedTabIds(targets, new Set([...knownOwnedTabIds, ...probedOwnedTabIds]));
 }
 
 // extension/background.ts
@@ -971,7 +964,7 @@ async function buildHello() {
     if (snap)
       snapshots.push(snap);
   }
-  const attachedTabIds = await extensionOwnedDebuggerTabs(targets, liveOwnedTabIds, (tabId) => chrome.debugger.sendCommand({ tabId }, "Target.getTargetInfo"));
+  const attachedTabIds = await ownedDebuggerTabs(targets, (tabId) => chrome.debugger.sendCommand({ tabId }, "Target.getTargetInfo"));
   await flushRecoverableUpdates();
   const versionMatch = /Chrome\/[\d.]+/.exec(navigator.userAgent);
   const hardwareConcurrency = Number.isInteger(navigator.hardwareConcurrency) && navigator.hardwareConcurrency > 0 ? navigator.hardwareConcurrency : undefined;
@@ -1158,7 +1151,7 @@ async function reconcileOrphans() {
     ...attachmentStateEpochs.keys()
   ]);
   const targets = await chrome.debugger.getTargets();
-  const attachedTabIds = await extensionOwnedDebuggerTabs(targets, liveOwnedTabIds, (tabId) => chrome.debugger.sendCommand({ tabId }, "Target.getTargetInfo"));
+  const attachedTabIds = await ownedDebuggerTabs(targets, (tabId) => chrome.debugger.sendCommand({ tabId }, "Target.getTargetInfo"));
   await trackAttachments(attachedTabIds, () => true, attachmentState, true);
   orphanAttachmentReconciliationPending = false;
   if (attachedTabIds.length > 0 && orphanSweepSeesRelayDisconnected({

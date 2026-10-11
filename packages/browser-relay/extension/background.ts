@@ -67,7 +67,7 @@ import {
 	invalidatesHelloReconciliation,
 	shouldSuppressHelloSnapshot,
 } from "./hello-refresh";
-import { extensionOwnedDebuggerTabs } from "./debugger-ownership";
+import { ownedDebuggerTabs } from "./debugger-ownership";
 
 const DEFAULT_PORT = 9224;
 const PING_INTERVAL_MS = 20_000;
@@ -1096,14 +1096,11 @@ async function buildHello(): Promise<
 		if (snap) snapshots.push(snap);
 	}
 	// chrome.debugger.getTargets reports attachments owned by DevTools and other
-	// debuggers too. Only persisted extension-owned ids are safe to advertise as
-	// relay attachments; promoting every attached target would resurrect a user
-	// takeover that onDetach deliberately removed from recovery state.
-	// Probe ownership as well so a service-worker restart can recover an attachment
-	// whose in-memory live marker was lost without claiming DevTools-owned tabs.
-	const attachedTabIds = await extensionOwnedDebuggerTabs(
+	// debuggers too. Probe every attached target so a service-worker restart can
+	// recover this extension's attachment without letting stale persisted ownership
+	// resurrect a user takeover that onDetach should have removed from recovery state.
+	const attachedTabIds = await ownedDebuggerTabs(
 		targets,
-		liveOwnedTabIds,
 		tabId => chrome.debugger.sendCommand({ tabId }, "Target.getTargetInfo"),
 	);
 	await flushRecoverableUpdates();
@@ -1418,13 +1415,11 @@ async function reconcileOrphans(): Promise<void> {
 	// could then strand the debugging infobar until a later successful pass.
 	// Leave any existing deadline intact and let the next alarm/startup retry.
 	const targets = await chrome.debugger.getTargets();
-	// getTargets includes DevTools and other debugger owners. Persisted ids cover
-	// normal restarts, while a live probe recovers the crash window after attach
-	// succeeded but before the ownership write committed. Commands still fail for
-	// DevTools/other-extension attachments, so those tabs remain excluded.
-	const attachedTabIds = await extensionOwnedDebuggerTabs(
+	// getTargets includes DevTools and other debugger owners. A live probe both
+	// recovers the crash window after attach succeeded but before its ownership write
+	// committed and rejects stale persisted ids after a user takeover.
+	const attachedTabIds = await ownedDebuggerTabs(
 		targets,
-		liveOwnedTabIds,
 		tabId => chrome.debugger.sendCommand({ tabId }, "Target.getTargetInfo"),
 	);
 	await trackAttachments(attachedTabIds, () => true, attachmentState, true);
