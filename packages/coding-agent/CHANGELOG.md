@@ -18,6 +18,9 @@
 - Fixed refusal-fallback tool continuations staying on the fallback instead of restoring the primary ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
 - Fixed `/new` retaining fallback attribution and old retry chains when a pinned fallback becomes the new primary ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
 - Fixed request-scoped refusal fallbacks stopping before all configured models were tried ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
+- Added OpenAI's Decisions API as a native judge: with an OpenAI key, set the `judge` role to `openai/gpt-6-luna-decisions`
+- Added Cloudflare Workers AI's Clef decision models as native judges (`cloudflare-workers-ai/@cf/cloudflare/clef` and `…/clef-flash`): log in with `/login cloudflare-workers-ai` (API token and account ID) or set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, then pick one for the `judge` role
+- `models.yml` accepts `openai-decisions` and `workers-ai-systemone` as judge APIs for custom providers
 - `computer` elements gain `doubleClick()`, and using an element method or field on the array `win.find(…)` returns, in JavaScript, Python or `computer.run`, says to pick one element first instead of failing with "is not a function" or reading `undefined` ([#15312](https://github.com/can1357/oh-my-pi/pull/15312) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Changed
