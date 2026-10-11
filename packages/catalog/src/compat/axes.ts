@@ -231,7 +231,13 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"allow-anthropic-header-overrides": wire("allowAnthropicHeaderOverrides", ["anthropic"]),
 	"disable-adaptive-thinking": wire("disableAdaptiveThinking", ["anthropic"]),
 	"disable-strict-tools": wire("disableStrictTools", ["anthropic"]),
-	"disabled-thinking": wire("disabledThinking", ["anthropic", "bedrock"], "scalar", ["omit", "disabled", "adaptive"]),
+	"between-tools-effort": wire("betweenToolsEffort", ["anthropic"], "scalar", ["low", "medium", "high"]),
+	"disabled-thinking": wire("disabledThinking", ["anthropic", "bedrock"], "scalar", [
+		"omit",
+		"disabled",
+		"adaptive",
+		"between-tools",
+	]),
 	"effort-beta": wire("effortBeta", ["anthropic"]),
 	"escape-builtin-tool-names": wire("escapeBuiltinToolNames", ["anthropic"]),
 	"fast-mode": wire("fastMode", ["anthropic"]),
@@ -254,7 +260,7 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"supports-per-message-effort": wire("supportsPerMessageEffort", ["anthropic"]),
 	"supports-server-compaction": wire("supportsServerCompaction", ["anthropic"]),
 	"supports-between-tools-thinking": wire("supportsBetweenToolsThinking", ["anthropic"]),
-	"supports-thinking-binding-controls": wire("supportsThinkingBindingControls", ["anthropic"]),
+	"supports-thinking-binding-controls": wire("supportsThinkingBindingControls", ["anthropic", "bedrock"]),
 	"supports-turn-scoped-system": wire("supportsTurnScopedSystem", ["anthropic"]),
 
 	// ── wire: bedrock-converse-stream ──
@@ -400,6 +406,11 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"image-tokenization": { key: "imageTokenization", set: "catalog", shape: "object" },
 	"image-model": { key: "imageModel", set: "catalog", shape: "scalar" },
 	"inline-image-byte-budget": { key: "inlineImageByteBudget", set: "catalog", shape: "scalar" },
+	/**
+	 * Most questions one System One judgment request may carry; the judge
+	 * splits larger requests. Unassigned: the endpoint takes any batch size.
+	 */
+	"judgment-questions-max": { key: "judgmentQuestionsMax", set: "catalog", shape: "scalar" },
 	"limits-patch": { key: "limitsPatch", set: "catalog", shape: "object" },
 	"long-context-cost": { key: "longContext", set: "catalog", shape: "object" },
 	"prompt-cache": { key: "promptCache", set: "catalog", shape: "object" },
@@ -411,6 +422,18 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"prompt-cache-lookback": { key: "promptCacheLookback", set: "catalog", shape: "scalar" },
 	"long-usage-limit-fallback": { key: "longUsageLimitFallback", set: "catalog", shape: "scalar" },
 	"max-context-window": { key: "maxContextWindow", set: "catalog", shape: "scalar" },
+	/**
+	 * Every host of the model returns its full plaintext trace wherever the
+	 * wire does not mark reasoning as a summary (`ThinkingContent.summary ===
+	 * false` vouches for nothing more), and its identity (class + family +
+	 * revision) pins one set of weights, so a turn's reasoning may replay
+	 * natively on another host serving the same model. Marked summaries never
+	 * carry; do not declare it where a host serves summaries unmarked.
+	 * Declared per family in `classes/*.kdl`; a host whose reasoning must not be
+	 * carried in or out sets `#false` in its `providers/*.kdl`. Read through
+	 * `compat/reasoning-carry.ts`.
+	 */
+	"portable-reasoning": { key: "portableReasoning", set: "catalog", shape: "scalar", values: [true, false] },
 	"pricing-status": {
 		key: "pricingStatus",
 		set: "catalog",
