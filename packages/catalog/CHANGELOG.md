@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a separate `Model.judgment` runner capability and price card for direct OpenAI GPT-6 Luna without replacing its Responses API route or pricing; corrected account-discovered GPT-6 Luna metadata for Bedrock Mantle ([#15359](https://github.com/can1357/oh-my-pi/pull/15359) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+
 ## [18.9.1] - 2026-10-11
 
 ### Added
@@ -26,9 +30,6 @@
 ### Fixed
 
 - Fixed Devin's discovered models not marking the account's default model, the one Devin's own CLI starts the account on (SWE-2 High on Pro, SWE-1.6 Slow on Free); when it is an effort lane of a family, the family starts at that effort. Cursor's discovered models no longer carry that marker, so Cursor keeps its existing startup selection ([#15115](https://github.com/can1357/oh-my-pi/pull/15115) by [@will-bogusz](https://github.com/will-bogusz))
-### Added
-
-- Added a separate `Model.judgment` runner capability and price card for direct OpenAI GPT-6 Luna without replacing its Responses API route or pricing; corrected account-discovered GPT-6 Luna metadata for Bedrock Mantle ([#15359](https://github.com/can1357/oh-my-pi/pull/15359) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
 
 ## [18.8.7] - 2026-10-09
 

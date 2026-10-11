@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added native OpenAI Decisions judging for OpenAI models, including the auth-gateway `/v1/decisions` endpoint ([#15359](https://github.com/can1357/oh-my-pi/pull/15359) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+
 ## [18.9.1] - 2026-10-11
 
 ### Added
@@ -62,9 +66,6 @@
 - Fixed truncated Factory Droid Gemini responses ending as a hard error or a half-received tool call instead of being retried ([#15103](https://github.com/can1357/oh-my-pi/pull/15103) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed Factory Droid Gemini ignoring an error the server reports mid-response, which hid its status and retried errors that cannot succeed ([#15103](https://github.com/can1357/oh-my-pi/pull/15103) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed resumed OpenAI Responses sessions (xAI, Factory Droid, OpenAI and other hosts) dropping all earlier encrypted reasoning on their first request; GitHub Copilot still rebuilds history until its first response ([#15148](https://github.com/can1357/oh-my-pi/pull/15148) by [@will-bogusz](https://github.com/will-bogusz))
-### Added
-
-- Added native OpenAI Decisions judging for OpenAI models, including the auth-gateway `/v1/decisions` endpoint ([#15359](https://github.com/can1357/oh-my-pi/pull/15359) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
 
 ## [18.8.7] - 2026-10-09
 
