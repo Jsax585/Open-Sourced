@@ -3,10 +3,11 @@ import { stripVTControlCharacters } from "node:util";
 import { formatKeyHint, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { getKeybindings, setKeybindings, type TUI } from "@oh-my-pi/pi-tui";
 import { getThemeByName, setThemeInstance, type Theme } from "@oh-my-pi/pi-tui/theme";
-import { AnnotationOverlay, type AnnotationOverlayCallbacks } from "@oh-my-pi/pi-tui/overlays/annotation-overlay";
+import { AnnotationOverlay, type CodeReviewOverlayCallbacks } from "@oh-my-pi/pi-tui/overlays/annotation-overlay";
 import type {
 	CodeReviewOverlayResult,
 	ReviewDiffFile,
+	ReviewDiffSource,
 	TextReviewOverlayResult,
 	TextReviewSource,
 } from "@oh-my-pi/pi-tui/overlays/annotation-types";
@@ -23,7 +24,11 @@ const PAGE_DOWN = "\x1b[6~";
 const CTRL_E = "\x05";
 let darkTheme: Theme | undefined;
 let previousKeybindings: KeybindingsManager;
-
+async function waitForRefresh(): Promise<void> {
+	const immediate = Promise.withResolvers<void>();
+	setImmediate(() => immediate.resolve());
+	await immediate.promise;
+}
 function render(overlay: AnnotationOverlay, width = 90): string {
 	return overlay.render(width).map(stripVTControlCharacters).join("\n");
 }
@@ -77,7 +82,7 @@ function expectAsciiSource(actual: PhysicalSourceRows, source: string): void {
 	expectLiteralRows(actual, expected.length ? expected : [""]);
 }
 
-type DiffOverlayOptions = Omit<AnnotationOverlayCallbacks, "onComplete"> & {
+type DiffOverlayOptions = Omit<CodeReviewOverlayCallbacks, "onComplete"> & {
 	onComplete?: (result: CodeReviewOverlayResult | undefined) => void;
 	rows?: number;
 };
@@ -94,6 +99,18 @@ function makeDiffOverlay(files: readonly ReviewDiffFile[], options: DiffOverlayO
 	);
 	overlay.focused = true;
 	return overlay;
+}
+
+function addLineNote(overlay: AnnotationOverlay, note: string): void {
+	overlay.handleInput("a");
+	overlay.handleInput(note);
+	overlay.handleInput(ENTER);
+}
+
+function addFileNote(overlay: AnnotationOverlay, note: string): void {
+	overlay.handleInput("A");
+	overlay.handleInput(note);
+	overlay.handleInput(ENTER);
 }
 
 function makeTextOverlay(
@@ -392,20 +409,26 @@ describe("AnnotationOverlay", () => {
 		expect(overlay.reviewFilePath()).toBe("src/value.ts");
 	});
 
-	it("keeps a note chooser from opening the source editor", () => {
+	it("keeps a note chooser from opening editors or refreshing the source", () => {
 		const opened: string[] = [];
-		const overlay = new AnnotationOverlay(
-			makeTui(),
-			darkTheme!,
-			getKeybindings() as KeybindingsManager,
-			{ id: "reply", kind: "message", label: "Reply", text: "same line\nsame line" },
-			{
-				onExternalEditor: () => {
-					opened.push("source");
-				},
-				onComplete: () => {},
+		let refreshCalls = 0;
+		const source: TextReviewSource = {
+			id: "file:/workspace/source.txt",
+			kind: "file",
+			label: "/workspace/source.txt",
+			text: "same line\nsame line",
+			provenance: { kind: "file", path: "/workspace/source.txt" },
+		};
+		const overlay = new AnnotationOverlay(makeTui(), darkTheme!, getKeybindings() as KeybindingsManager, source, {
+			onExternalEditor: () => {
+				opened.push("source");
 			},
-		);
+			onRefreshSource: async () => {
+				refreshCalls++;
+				return source;
+			},
+			onComplete: () => {},
+		});
 		overlay.focused = true;
 		render(overlay);
 		overlay.handleInput("a");
@@ -415,9 +438,11 @@ describe("AnnotationOverlay", () => {
 		overlay.handleInput("whole");
 		overlay.handleInput(ENTER);
 		overlay.handleInput("e");
+		overlay.handleInput("r");
 		overlay.handleInput(CTRL_E);
 		expect(render(overlay)).toContain("choose");
 		expect(opened).toEqual([]);
+		expect(refreshCalls).toBe(0);
 		expect(overlay.getTextAnnotations()).toHaveLength(2);
 	});
 
@@ -445,6 +470,441 @@ describe("AnnotationOverlay", () => {
 				editedText: "beta\nalpha\nalpha",
 			},
 		]);
+	});
+	it("serializes refresh and reconciles kept, moved, and dropped line notes", async () => {
+		const source: TextReviewSource = {
+			id: "selection-id",
+			kind: "file",
+			label: "/workspace/source.txt",
+			text: "keep\nmove\nstale",
+			provenance: { kind: "file", path: "/workspace/source.txt" },
+		};
+		const refreshedSource: TextReviewSource = {
+			...source,
+			text: "keep\nbefore\nmiddle\nmove\nstale\nstale",
+		};
+		const completed: Array<TextReviewOverlayResult | undefined> = [];
+		const warnings: string[] = [];
+		let refreshCalls = 0;
+		const refreshResult = Promise.withResolvers<TextReviewSource>();
+		const overlay = new AnnotationOverlay(makeTui(), darkTheme!, getKeybindings() as KeybindingsManager, source, {
+			onComplete: result => completed.push(result),
+			onWarning: message => warnings.push(message),
+			onRefreshSource: () => {
+				refreshCalls++;
+				return refreshResult.promise;
+			},
+		});
+		overlay.focused = true;
+		overlay.handleInput("a");
+		overlay.handleInput("keep note");
+		overlay.handleInput(ENTER);
+		overlay.handleInput(DOWN);
+		overlay.handleInput("a");
+		overlay.handleInput("move note");
+		overlay.handleInput(ENTER);
+		overlay.handleInput(DOWN);
+		overlay.handleInput("a");
+		overlay.handleInput("stale note");
+		overlay.handleInput(ENTER);
+
+		overlay.handleInput("r");
+		overlay.handleInput("r");
+		expect(refreshCalls).toBe(1);
+		refreshResult.resolve(refreshedSource);
+		const nextImmediate = Promise.withResolvers<void>();
+		setImmediate(() => nextImmediate.resolve());
+		await nextImmediate.promise;
+
+		expect(overlay.getTextAnnotations()).toEqual([
+			{ scope: "line", line: 1, quote: "keep", note: "keep note" },
+			{ scope: "line", line: 4, quote: "move", note: "move note" },
+		]);
+		expect(warnings).toHaveLength(1);
+		overlay.handleInput(TAB);
+		overlay.handleInput(ENTER);
+		expect(completed[0]).toMatchObject({
+			action: "paste",
+			annotations: [
+				{ scope: "line", line: 1, quote: "keep", note: "keep note" },
+				{ scope: "line", line: 4, quote: "move", note: "move note" },
+			],
+			editedText: refreshedSource.text,
+			refreshedSource,
+		});
+		expect(source.text).toBe("keep\nmove\nstale");
+	});
+
+	it("keeps r in a note draft instead of starting a refresh", () => {
+		const source: TextReviewSource = {
+			id: "file:/workspace/source.txt",
+			kind: "file",
+			label: "/workspace/source.txt",
+			text: "line",
+			provenance: { kind: "file", path: "/workspace/source.txt" },
+		};
+		let refreshCalls = 0;
+		const overlay = new AnnotationOverlay(makeTui(), darkTheme!, getKeybindings() as KeybindingsManager, source, {
+			onComplete: () => {},
+			onRefreshSource: async () => {
+				refreshCalls++;
+				return { ...source, text: "refreshed" };
+			},
+		});
+		overlay.focused = true;
+		render(overlay);
+		overlay.handleInput("a");
+		expect(render(overlay)).not.toContain("refresh");
+		overlay.handleInput("r");
+		overlay.handleInput(ENTER);
+		expect(refreshCalls).toBe(0);
+		expect(overlay.getTextAnnotations()).toEqual([{ scope: "line", line: 1, quote: "line", note: "r" }]);
+		expect(overlay.textSourceText()).toBe("line");
+	});
+
+	it("retargets moved diff rows across reordered files and preserves the focused row", async () => {
+		const beforeHeader = "@@ -1,2 +1,2 @@";
+		const afterHeader = "@@ -80,2 +130,2 @@";
+		const fileA = {
+			...diffFile("src/a.ts", beforeHeader, [
+				{ kind: "removed" as const, raw: "-target", content: "target", oldLine: 2, hunkHeader: beforeHeader },
+			]),
+			oldPath: "src/a-old.ts",
+			newPath: "src/a.ts",
+		};
+		const fileB = diffFile("src/b.ts", beforeHeader, [
+			{ kind: "added", raw: "+first", content: "first", newLine: 1, hunkHeader: beforeHeader },
+			{ kind: "added", raw: "+focused", content: "focused", newLine: 2, hunkHeader: beforeHeader },
+		]);
+		const refreshedA = {
+			...diffFile("src/a-refreshed.ts", afterHeader, [
+				{ kind: "removed" as const, raw: "-prefix", content: "prefix", oldLine: 79, hunkHeader: afterHeader },
+				{ kind: "removed" as const, raw: "-target", content: "target", oldLine: 80, hunkHeader: afterHeader },
+			]),
+			oldPath: "src/a-old.ts",
+			newPath: "src/a.ts",
+			occurrence: 8,
+		};
+		const refreshedB = {
+			...diffFile("src/b.ts", afterHeader, [
+				{ kind: "added", raw: "+before", content: "before", newLine: 20, hunkHeader: afterHeader },
+				{ kind: "added", raw: "+first", content: "first", newLine: 21, hunkHeader: afterHeader },
+				{ kind: "added", raw: "+focused", content: "focused", newLine: 22, hunkHeader: afterHeader },
+			]),
+			occurrence: 4,
+		};
+		const overlay = makeDiffOverlay([fileA, fileB], {
+			onRefreshDiff: async () => ({ rawDiff: "fresh patch", files: [refreshedB, refreshedA] }),
+		});
+		render(overlay);
+		overlay.handleInput(TAB);
+		addLineNote(overlay, "moved with A");
+		overlay.handleInput("]");
+		overlay.handleInput(DOWN);
+
+		overlay.handleInput("r");
+		await waitForRefresh();
+
+		expect(overlay.reviewFilePath()).toBe("src/b.ts");
+		expect(overlay.getAnnotations()).toEqual([
+			expect.objectContaining({
+				path: "src/a-refreshed.ts",
+				oldPath: "src/a-old.ts",
+				newPath: "src/a.ts",
+				occurrence: 8,
+				scope: "line",
+				oldLine: 80,
+				hunkHeader: afterHeader,
+				rawLine: "-target",
+				note: "moved with A",
+			}),
+		]);
+		addLineNote(overlay, "focused row survived reorder");
+		expect(overlay.getAnnotations()).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					path: "src/b.ts",
+					newLine: 22,
+					rawLine: "+focused",
+					note: "focused row survived reorder",
+				}),
+			]),
+		);
+	});
+
+	it("drops notes when files disappear or duplicate rows change coordinates ambiguously", async () => {
+		const header = "@@ -1 +1 @@";
+		const ambiguousFile = diffFile("src/ambiguous.ts", header, [
+			{ kind: "added", raw: "+same", content: "same", newLine: 1, hunkHeader: header },
+		]);
+		const disappearingFile = diffFile("src/gone.ts", header, [
+			{ kind: "added", raw: "+gone", content: "gone", newLine: 1, hunkHeader: header },
+		]);
+		const duplicateOne = {
+			...diffFile("src/repeated.ts", header, [
+				{ kind: "added", raw: "+same", content: "same", newLine: 1, hunkHeader: header },
+			]),
+			occurrence: 1,
+		};
+		const duplicateTwo = { ...duplicateOne, occurrence: 2 };
+		const warnings: string[] = [];
+		const overlay = makeDiffOverlay([ambiguousFile, disappearingFile, duplicateOne, duplicateTwo], {
+			onWarning: message => warnings.push(message),
+			onRefreshDiff: async () => ({
+				rawDiff: "changed patch",
+				files: [
+					diffFile("src/ambiguous.ts", header, [
+						{ kind: "added", raw: "+same", content: "same", newLine: 10, hunkHeader: header },
+						{ kind: "added", raw: "+other", content: "other", newLine: 11, hunkHeader: header },
+						{ kind: "added", raw: "+same", content: "same", newLine: 12, hunkHeader: header },
+					]),
+					{ ...duplicateOne, occurrence: 3 },
+					{ ...duplicateTwo, occurrence: 4 },
+				],
+			}),
+		});
+		render(overlay);
+		overlay.handleInput(TAB);
+		addLineNote(overlay, "ambiguous row");
+		overlay.handleInput("]");
+		addLineNote(overlay, "disappeared file");
+		overlay.handleInput("]");
+		addFileNote(overlay, "ambiguous duplicate one");
+		overlay.handleInput("]");
+		addFileNote(overlay, "ambiguous duplicate two");
+		expect(overlay.getAnnotations()).toHaveLength(4);
+
+		overlay.handleInput("r");
+		await waitForRefresh();
+
+		expect(overlay.getAnnotations()).toEqual([]);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("Dropped 4 annotations");
+	});
+
+	it("matches reordered duplicate-path patches by unique exact raw diff", async () => {
+		const header = "@@ -1 +1 @@";
+		const duplicateOne = {
+			...diffFile("src/repeated.ts", header, [
+				{ kind: "added", raw: "+left", content: "left", newLine: 1, hunkHeader: header },
+			]),
+			occurrence: 1,
+		};
+		const duplicateTwo = {
+			...diffFile("src/repeated.ts", header, [
+				{ kind: "added", raw: "+right", content: "right", newLine: 2, hunkHeader: header },
+			]),
+			occurrence: 2,
+		};
+		const refreshedOne = { ...duplicateOne, occurrence: 8 };
+		const refreshedTwo = { ...duplicateTwo, occurrence: 9 };
+		const overlay = makeDiffOverlay([duplicateOne, duplicateTwo], {
+			onRefreshDiff: async () => ({
+				rawDiff: "reordered repeated-path patch",
+				files: [refreshedTwo, refreshedOne],
+			}),
+		});
+		render(overlay);
+		overlay.handleInput(TAB);
+		addLineNote(overlay, "left occurrence");
+		overlay.handleInput("]");
+		addLineNote(overlay, "right occurrence");
+
+		overlay.handleInput("r");
+		await waitForRefresh();
+
+		expect(overlay.getAnnotations()).toEqual([
+			expect.objectContaining({ occurrence: 8, rawLine: "+left", note: "left occurrence" }),
+			expect.objectContaining({ occurrence: 9, rawLine: "+right", note: "right occurrence" }),
+		]);
+	});
+
+	it("preserves whole-file notes only with a unique stable file identity", async () => {
+		const header = "@@ -1 +1 @@";
+		const original = {
+			...diffFile("display/before.ts", header, [
+				{ kind: "added", raw: "+line", content: "line", newLine: 1, hunkHeader: header },
+			]),
+			oldPath: "src/old.ts",
+			newPath: "src/current.ts",
+		};
+		const refreshed = {
+			...diffFile("display/after.ts", "@@ -4 +9 @@", [
+				{ kind: "added", raw: "+line", content: "line", newLine: 9, hunkHeader: "@@ -4 +9 @@" },
+			]),
+			oldPath: "src/old.ts",
+			newPath: "src/current.ts",
+			occurrence: 7,
+		};
+		const overlay = makeDiffOverlay([original], {
+			onRefreshDiff: async () => ({ rawDiff: "latest patch", files: [refreshed] }),
+		});
+		render(overlay);
+		addFileNote(overlay, "whole file note");
+		overlay.handleInput("r");
+		await waitForRefresh();
+		overlay.handleInput("u");
+
+		expect(overlay.getAnnotations()).toEqual([
+			expect.objectContaining({
+				scope: "file",
+				path: "display/after.ts",
+				oldPath: "src/old.ts",
+				newPath: "src/current.ts",
+				occurrence: 7,
+				note: "whole file note",
+			}),
+		]);
+	});
+
+	it("keeps refresh usable when the diff becomes empty and later repopulates", async () => {
+		let refreshCalls = 0;
+		const populated = diffFile("src/restored.ts", ONE_LINE_HUNK, [
+			{ kind: "added", raw: "+restored", content: "restored", newLine: 1, hunkHeader: ONE_LINE_HUNK },
+		]);
+		const overlay = makeDiffOverlay(oneLineFiles, {
+			onRefreshDiff: async () =>
+				++refreshCalls === 1 ? { rawDiff: "", files: [] } : { rawDiff: "restored patch", files: [populated] },
+		});
+		render(overlay);
+		overlay.handleInput("r");
+		await waitForRefresh();
+		expect(overlay.reviewFilePath()).toBeUndefined();
+		expect(render(overlay)).toContain("refresh");
+
+		overlay.handleInput("r");
+		await waitForRefresh();
+		expect(refreshCalls).toBe(2);
+		expect(overlay.reviewFilePath()).toBe("src/restored.ts");
+		addFileNote(overlay, "usable after repopulation");
+		expect(overlay.getAnnotations()).toEqual([
+			expect.objectContaining({ scope: "file", path: "src/restored.ts", note: "usable after repopulation" }),
+		]);
+	});
+
+	it("leaves notes, undo, and focus intact when reading a refreshed diff fails", async () => {
+		const warnings: string[] = [];
+		const file = diffFile("src/unchanged.ts", ONE_LINE_HUNK, [
+			{ kind: "added", raw: "+first", content: "first", newLine: 1, hunkHeader: ONE_LINE_HUNK },
+			{ kind: "added", raw: "+second", content: "second", newLine: 2, hunkHeader: ONE_LINE_HUNK },
+		]);
+		const overlay = makeDiffOverlay([file], {
+			onWarning: message => warnings.push(message),
+			onRefreshDiff: async () => {
+				throw new Error("read denied");
+			},
+		});
+		render(overlay);
+		overlay.handleInput(TAB);
+		addLineNote(overlay, "first note");
+		overlay.handleInput(DOWN);
+		addLineNote(overlay, "second note");
+		overlay.handleInput("r");
+		await waitForRefresh();
+
+		expect(overlay.reviewFilePath()).toBe("src/unchanged.ts");
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("Failed to refresh diff");
+		overlay.handleInput("u");
+		expect(overlay.getAnnotations().map(annotation => annotation.note)).toEqual(["first note"]);
+		addLineNote(overlay, "focus survived failure");
+		expect(overlay.getAnnotations()).toEqual(
+			expect.arrayContaining([expect.objectContaining({ rawLine: "+second", note: "focus survived failure" })]),
+		);
+	});
+
+	it("returns refreshed raw patch together with refreshed annotations on paste", async () => {
+		const oldHeader = "@@ -1 +1 @@";
+		const newHeader = "@@ -20 +30 @@";
+		const original = diffFile("src/paste.ts", oldHeader, [
+			{ kind: "added", raw: "+line", content: "line", newLine: 1, hunkHeader: oldHeader },
+		]);
+		const refreshed = diffFile("src/paste.ts", newHeader, [
+			{ kind: "added", raw: "+line", content: "line", newLine: 30, hunkHeader: newHeader },
+		]);
+		const completed: Array<CodeReviewOverlayResult | undefined> = [];
+		const rawDiff = "diff --git a/src/paste.ts b/src/paste.ts\nfresh complete patch";
+		const overlay = makeDiffOverlay([original], {
+			onComplete: result => completed.push(result),
+			onRefreshDiff: async () => ({ rawDiff, files: [refreshed] }),
+		});
+		render(overlay);
+		overlay.handleInput(TAB);
+		addLineNote(overlay, "paste this");
+		overlay.handleInput("r");
+		await waitForRefresh();
+		overlay.handleInput(TAB);
+		overlay.handleInput(DOWN);
+		overlay.handleInput(ENTER);
+
+		expect(completed).toEqual([
+			{
+				action: "paste",
+				annotations: [
+					expect.objectContaining({
+						path: "src/paste.ts",
+						newLine: 30,
+						hunkHeader: newHeader,
+						rawLine: "+line",
+						note: "paste this",
+					}),
+				],
+				refreshedDiff: rawDiff,
+			},
+		]);
+	});
+
+	it("gates refresh hints and the r key for immutable patch sources", () => {
+		const overlay = makeDiffOverlay(oneLineFiles);
+		expect(render(overlay)).not.toContain("refresh");
+		expect(JSON.stringify(overlay.describe())).not.toContain("refresh");
+		overlay.handleInput("r");
+		expect(overlay.reviewFilePath()).toBe("src/value.ts");
+	});
+
+	it("serializes diff refresh with editor work and keeps r in drafts and choosers", async () => {
+		const pending = Promise.withResolvers<ReviewDiffSource>();
+		let refreshCalls = 0;
+		let editorCalls = 0;
+		const overlay = makeDiffOverlay(oneLineFiles, {
+			onExternalEditor: () => {
+				editorCalls++;
+			},
+			onRefreshDiff: () => {
+				refreshCalls++;
+				return pending.promise;
+			},
+		});
+		render(overlay);
+		overlay.handleInput(TAB);
+		addLineNote(overlay, "first");
+		addLineNote(overlay, "second");
+		expect(render(overlay)).toContain("refresh");
+		expect(JSON.stringify(overlay.describe())).toContain("refresh");
+		overlay.handleInput("e");
+		overlay.handleInput("r");
+		expect(refreshCalls).toBe(0);
+		overlay.handleInput(CANCEL);
+
+		overlay.handleInput("r");
+		overlay.handleInput("r");
+		overlay.handleInput(CTRL_E);
+		expect(refreshCalls).toBe(1);
+		expect(editorCalls).toBe(0);
+		pending.resolve({ rawDiff: "serialized patch", files: oneLineFiles });
+		await waitForRefresh();
+
+		overlay.handleInput("e");
+		overlay.handleInput("r");
+		expect(refreshCalls).toBe(1);
+		overlay.handleInput(CANCEL);
+		overlay.handleInput("a");
+		overlay.handleInput("r");
+		overlay.handleInput(ENTER);
+		expect(refreshCalls).toBe(1);
+		expect(overlay.getAnnotations()).toEqual(
+			expect.arrayContaining([expect.objectContaining({ note: "r", rawLine: "-old" })]),
+		);
 	});
 
 	it("does not resurrect a dropped line note when undoing after the source was replaced", () => {

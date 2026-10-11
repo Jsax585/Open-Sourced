@@ -2,15 +2,24 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn, vi } from 
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ReviewCommand } from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/bundled/review";
+import {
+	fetchPrReviewTarget,
+	ReviewCommand,
+} from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/bundled/review";
 import type { CustomCommandAPI } from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/types";
 import type { HookCommandContext } from "@oh-my-pi/pi-coding-agent/extensibility/hooks/types";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import type { PrDiffPayload, ViewLookupResult } from "@oh-my-pi/pi-coding-agent/tools/gh";
+import { buildReviewPrompt } from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/bundled/review/prompt";
 import * as gh from "@oh-my-pi/pi-coding-agent/tools/gh";
+import * as ghPrDiff from "@oh-my-pi/pi-coding-agent/tools/gh-pr-diff";
 import { github } from "@oh-my-pi/pi-coding-agent/utils/github";
 import type { VcsGitRepo, VcsRepo } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import {
+	createResolvedReviewTarget,
+	resolveLocalReviewTarget,
+} from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/bundled/review/target";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 
@@ -736,6 +745,198 @@ describe("ReviewCommand", () => {
 		} finally {
 			await removeWithRetries(dir);
 		}
+	});
+
+	it("refreshes base-branch reviews against moved refs while excluding worktree and base-only changes", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-review-refresh-base-"));
+		try {
+			await $`git init -q -b main`.cwd(dir).quiet();
+			await $`git config user.email test@example.com`.cwd(dir).quiet();
+			await $`git config user.name Test`.cwd(dir).quiet();
+			await fs.mkdir(path.join(dir, "src"));
+			await Bun.write(path.join(dir, "src/value.ts"), "export const value = 1;\n");
+			await $`git add src/value.ts`.cwd(dir).quiet();
+			await $`git commit -q -m init`.cwd(dir).quiet();
+
+			await $`git checkout -q -b feature`.cwd(dir).quiet();
+			await Bun.write(path.join(dir, "src/value.ts"), "export const value = 2;\n");
+			await $`git commit -q -am feature-initial`.cwd(dir).quiet();
+			await $`git checkout -q main`.cwd(dir).quiet();
+			await Bun.write(path.join(dir, "base-before.txt"), "base before selection\n");
+			await $`git add base-before.txt`.cwd(dir).quiet();
+			await $`git commit -q -m base-before-selection`.cwd(dir).quiet();
+			await $`git checkout -q feature`.cwd(dir).quiet();
+
+			let selectCalls = 0;
+			const target = await resolveLocalReviewTarget("base-branch", dir, {
+				select: async () => {
+					selectCalls++;
+					return "main";
+				},
+				notify: () => {},
+			});
+			if (!target) throw new Error("failed to acquire base-branch target");
+			const refresh = target.refresh;
+			if (!refresh) throw new Error("base-branch target is not refreshable");
+			const originalDiff = target.rawDiff;
+			expect(originalDiff).toContain("+export const value = 2;");
+			expect(originalDiff).not.toContain("base-before.txt");
+
+			await Bun.write(path.join(dir, "src/value.ts"), "export const value = 3;\n");
+			await $`git commit -q -am feature-refresh`.cwd(dir).quiet();
+			await $`git checkout -q main`.cwd(dir).quiet();
+			await Bun.write(path.join(dir, "base-after.txt"), "base after selection\n");
+			await $`git add base-after.txt`.cwd(dir).quiet();
+			await $`git commit -q -m base-after-selection`.cwd(dir).quiet();
+			await Bun.write(path.join(dir, "src/value.ts"), "export const value = 'worktree-only';\n");
+
+			const refreshed = await refresh();
+
+			expect(selectCalls).toBe(1);
+			expect(refreshed.rawDiff).toContain("+export const value = 3;");
+			expect(refreshed.rawDiff).not.toContain("base-before.txt");
+			expect(refreshed.rawDiff).not.toContain("base-after.txt");
+			expect(refreshed.rawDiff).not.toContain("worktree-only");
+			expect(target.rawDiff).toBe(originalDiff);
+			expect(refreshed.snapshot.files.map(file => file.path)).toEqual(["src/value.ts"]);
+		} finally {
+			await removeWithRetries(dir);
+		}
+	});
+
+	it("throws when a captured base ref disappears during refresh without changing its snapshot", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-review-refresh-missing-ref-"));
+		try {
+			await $`git init -q -b main`.cwd(dir).quiet();
+			await $`git config user.email test@example.com`.cwd(dir).quiet();
+			await $`git config user.name Test`.cwd(dir).quiet();
+			await Bun.write(path.join(dir, "value.txt"), "base\n");
+			await $`git add value.txt`.cwd(dir).quiet();
+			await $`git commit -q -m init`.cwd(dir).quiet();
+			await $`git checkout -q -b feature`.cwd(dir).quiet();
+			await Bun.write(path.join(dir, "value.txt"), "head\n");
+			await $`git commit -q -am feature`.cwd(dir).quiet();
+
+			let selectCalls = 0;
+			const target = await resolveLocalReviewTarget("base-branch", dir, {
+				select: async () => {
+					selectCalls++;
+					return "main";
+				},
+				notify: () => {},
+			});
+			if (!target) throw new Error("failed to acquire base-branch target");
+			const refresh = target.refresh;
+			if (!refresh) throw new Error("base-branch target is not refreshable");
+			const originalDiff = target.rawDiff;
+			await $`git branch -D main`.cwd(dir).quiet();
+
+			await expect(refresh()).rejects.toThrow();
+
+			expect(selectCalls).toBe(1);
+			expect(target.rawDiff).toBe(originalDiff);
+		} finally {
+			await removeWithRetries(dir);
+		}
+	});
+
+	it("refreshes staged and unstaged uncommitted state from the native VCS source", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-review-refresh-worktree-"));
+		try {
+			await $`git init -q -b main`.cwd(dir).quiet();
+			await $`git config user.email test@example.com`.cwd(dir).quiet();
+			await $`git config user.name Test`.cwd(dir).quiet();
+			await Bun.write(path.join(dir, "unstaged.txt"), "base\n");
+			await Bun.write(path.join(dir, "staged.txt"), "base\n");
+			await $`git add unstaged.txt staged.txt`.cwd(dir).quiet();
+			await $`git commit -q -m init`.cwd(dir).quiet();
+			await Bun.write(path.join(dir, "unstaged.txt"), "initial edit\n");
+
+			const target = await resolveLocalReviewTarget("uncommitted", dir, {
+				select: async () => undefined,
+				notify: () => {},
+			});
+			if (!target) throw new Error("failed to acquire uncommitted target");
+			const refresh = target.refresh;
+			if (!refresh) throw new Error("uncommitted target is not refreshable");
+			const originalDiff = target.rawDiff;
+			expect(originalDiff).toContain("+initial edit");
+
+			await Bun.write(path.join(dir, "unstaged.txt"), "latest edit\n");
+			await Bun.write(path.join(dir, "staged.txt"), "staged latest\n");
+			await $`git add staged.txt`.cwd(dir).quiet();
+
+			const refreshed = await refresh();
+
+			expect(refreshed.rawDiff).toContain("+latest edit");
+			expect(refreshed.rawDiff).toContain("+staged latest");
+			expect(refreshed.rawDiff).not.toContain("+initial edit");
+			expect(target.rawDiff).toBe(originalDiff);
+		} finally {
+			await removeWithRetries(dir);
+		}
+	});
+
+	it("keeps commit and caller-supplied patch review targets immutable", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-review-immutable-"));
+		try {
+			await $`git init -q -b main`.cwd(dir).quiet();
+			await $`git config user.email test@example.com`.cwd(dir).quiet();
+			await $`git config user.name Test`.cwd(dir).quiet();
+			await Bun.write(path.join(dir, "file.txt"), "committed\n");
+			await $`git add file.txt`.cwd(dir).quiet();
+			await $`git commit -q -m init`.cwd(dir).quiet();
+			const commit = await resolveLocalReviewTarget("commit", dir, {
+				select: async (_title, options) => options[0],
+				notify: () => {},
+			});
+			const patch = createResolvedReviewTarget("patch", "Supplied patch", SAMPLE_PR_DIFF, "empty");
+
+			expect(commit?.refresh).toBeUndefined();
+			expect(patch.refresh).toBeUndefined();
+		} finally {
+			await removeWithRetries(dir);
+		}
+	});
+
+	it("uses the central fresh PR patch fetcher to rebuild the reviewer snapshot", async () => {
+		const dir = await createTempDir();
+		const refreshedDiff = `diff --git a/src/latest-pr.ts b/src/latest-pr.ts
+--- a/src/latest-pr.ts
++++ b/src/latest-pr.ts
+@@ -4 +9 @@
+-export const pr = false;
++export const pr = refreshed;
+`;
+		spyOn(gh, "getOrFetchPrDiff").mockResolvedValue(makePrDiffLookup(SAMPLE_PR_DIFF));
+		spyOn(ghPrDiff, "fetchPrDiffFresh").mockResolvedValue({
+			rendered: refreshedDiff,
+			sourceUrl: undefined,
+			payload: { unified: "", files: [] },
+		});
+		const target = await fetchPrReviewTarget(dir, {
+			repo: "owner/repo",
+			number: 123,
+			raw: "pr://owner/repo/123",
+			kind: "pr-url",
+		});
+		const originalSnapshot = target.snapshot;
+		const refresh = target.refresh;
+		if (!refresh) throw new Error("PR target is not refreshable");
+
+		const refreshed = await refresh();
+		const file = refreshed.snapshot.files[0];
+		const prompt = buildReviewPrompt(refreshed);
+
+		expect(refreshed.rawDiff).toBe(refreshedDiff);
+		expect(file).toMatchObject({ path: "src/latest-pr.ts", linesAdded: 1 });
+		expect(file?.rows).toContainEqual(
+			expect.objectContaining({ kind: "added", raw: "+export const pr = refreshed;" }),
+		);
+		expect(prompt).toContain(refreshedDiff.trim());
+		expect(prompt).not.toContain(SAMPLE_PR_DIFF.trim());
+		expect(target.rawDiff).toBe(SAMPLE_PR_DIFF);
+		expect(target.snapshot).toBe(originalSnapshot);
 	});
 
 	it("rejects base-branch review when histories share no merge base", async () => {

@@ -51,6 +51,7 @@ describe("read tool raw range exactness", () => {
 		const output = getTextOutput(result);
 
 		expect(output.trimEnd()).toBe("L31");
+		expect(result.details?.editableFilePath).toBe(filePath);
 	});
 
 	it("returns exactly the requested raw range at the start of the file", async () => {
@@ -74,6 +75,7 @@ describe("read tool raw range exactness", () => {
 
 		expect(output).toContain("L31");
 		expect(output).toContain("L30");
+		expect(result.details?.editableFilePath).toBe(filePath);
 		expect(output).toContain("L32");
 	});
 
