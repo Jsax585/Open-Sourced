@@ -1924,6 +1924,7 @@ async function openCodexWebSocketTransport(
 			transformedBody,
 			websocketState,
 			websocketState.lastUnhookedRequest ?? websocketState.lastRequest,
+			websocketState.lastUnhookedRequest ? websocketState.lastRequest : undefined,
 		);
 	} else {
 		chainedBody = buildCodexChainedRequestBody(transformedBody, websocketState);
@@ -2126,9 +2127,7 @@ async function openCodexWebSocketTransport(
 		const preHookHadTurnState =
 			preHookHadClientMetadata && Object.hasOwn(preHookClientMetadata, X_CODEX_TURN_STATE_HEADER);
 		const preHookTurnState = preHookClientMetadata?.[X_CODEX_TURN_STATE_HEADER];
-		const unhookedRequestBody = { ...transformedBody };
-		delete unhookedRequestBody.input;
-		const unhookedBody = cloneJsonTree(unhookedRequestBody) as RequestBody;
+		const unhookedBody = cloneJsonTree(transformedBody) as RequestBody;
 		const hookRequestCandidate = { ...websocketRequestCandidate };
 		if (Object.hasOwn(transformedBody, "input")) {
 			hookRequestCandidate.input = transformedBody.input;
@@ -2158,7 +2157,6 @@ async function openCodexWebSocketTransport(
 			? (cloneJsonTree({ type: finalHookRequest.type }) as { readonly type?: unknown })
 			: {};
 		const preparedBody = buildCodexEffectiveRequestBody(finalHookRequest);
-		if (Object.hasOwn(preparedBody, "input")) unhookedBody.input = preparedBody.input;
 		effectiveRequestBody = preparedBody;
 		const pendingPayloadRecord: CodexPendingWebSocketPayload = {
 			body: preparedBody,
@@ -4317,11 +4315,12 @@ function buildCodexChainedRequestBody(
 	requestBody: RequestBody,
 	state: CodexWebSocketSessionState | undefined,
 	comparisonRequest: RequestBody | undefined = state?.lastRequest,
+	fallbackInputSource?: RequestBody,
 ): RequestBody {
 	const chainable =
 		state?.canAppend === true &&
 		(comparisonRequest?.service_tier === "ultrafast") === (requestBody.service_tier === "ultrafast");
-	const appendInput = chainable
+	let appendInput = chainable
 		? buildResponsesDeltaInput(
 				comparisonRequest,
 				state.lastResponseItems,
@@ -4329,6 +4328,23 @@ function buildCodexChainedRequestBody(
 				CODEX_CHAIN_TOP_LEVEL_EXCLUDE_MAP,
 			)
 		: null;
+	if (
+		chainable &&
+		appendInput === null &&
+		comparisonRequest !== undefined &&
+		fallbackInputSource !== undefined &&
+		fallbackInputSource !== comparisonRequest
+	) {
+		const fallbackComparison = { ...comparisonRequest };
+		if (Object.hasOwn(fallbackInputSource, "input")) fallbackComparison.input = fallbackInputSource.input;
+		else delete fallbackComparison.input;
+		appendInput = buildResponsesDeltaInput(
+			fallbackComparison,
+			state.lastResponseItems,
+			requestBody,
+			CODEX_CHAIN_TOP_LEVEL_EXCLUDE_MAP,
+		);
+	}
 	if (appendInput && appendInput.length > 0 && state?.lastResponseId) {
 		return { ...requestBody, previous_response_id: state.lastResponseId, input: appendInput };
 	}
