@@ -54,6 +54,8 @@ export interface ReadToolDetails {
 	truncation?: ReadTruncationStats;
 	isDirectory?: boolean;
 	resolvedPath?: string;
+	/** Absolute path for plain text read directly from an editable local file. */
+	editableFilePath?: string;
 	suffixResolution?: { from: string; to: string };
 	url?: string;
 	finalUrl?: string;

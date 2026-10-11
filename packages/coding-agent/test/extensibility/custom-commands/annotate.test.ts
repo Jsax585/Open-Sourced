@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, spyOn, vi } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
@@ -23,6 +23,7 @@ import {
 	showCodeReviewOverlay,
 	showTextReviewOverlay,
 } from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/bundled/annotate/fullscreen";
+import { AnnotationOverlay } from "@oh-my-pi/pi-tui/overlays/annotation-overlay";
 import * as externalEditor from "@oh-my-pi/pi-coding-agent/utils/external-editor";
 import type {
 	CustomCommandAPI,
@@ -40,6 +41,7 @@ import type {
 	CodeReviewAnnotation,
 	TextReviewAnnotation,
 	TextReviewSource,
+	TextReviewOverlayResult,
 } from "@oh-my-pi/pi-tui/overlays/annotation-types";
 import * as gh from "@oh-my-pi/pi-coding-agent/tools/gh";
 import { github } from "@oh-my-pi/pi-coding-agent/utils/github";
@@ -56,6 +58,22 @@ const SAMPLE_DIFF = `diff --git a/src/value.ts b/src/value.ts
 @@ -1 +1 @@
 -const value = 1;
 +const value = 2;
+`;
+
+const REFRESHED_DIFF = `diff --git a/src/refreshed.ts b/src/refreshed.ts
+--- a/src/refreshed.ts
++++ b/src/refreshed.ts
+@@ -10 +20 @@
+-const refreshed = false;
++const refreshed = true;
+`;
+
+const FILTERED_DIFF = `diff --git a/package-lock.json b/package-lock.json
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1 +1 @@
+-old
++new
 `;
 
 const API = { cwd: "/workspace" } as unknown as CustomCommandAPI;
@@ -179,19 +197,45 @@ function makeAssistantEntry(
 	};
 }
 
-function localTarget(): ResolvedReviewTarget {
-	return createResolvedReviewTarget("uncommitted", "Uncommitted changes", SAMPLE_DIFF, "No uncommitted changes");
+function localTarget(refreshable = false): ResolvedReviewTarget {
+	const options = refreshable
+		? {
+				refresh: async () =>
+					createResolvedReviewTarget("uncommitted", "Uncommitted changes", SAMPLE_DIFF, "No uncommitted changes"),
+			}
+		: {};
+	return createResolvedReviewTarget(
+		"uncommitted",
+		"Uncommitted changes",
+		SAMPLE_DIFF,
+		"No uncommitted changes",
+		options,
+	);
+}
+
+function messageWithEditorFile(filePath: string, text = "frozen selected excerpt"): TextReviewSource {
+	return {
+		id: "session-message",
+		kind: "message",
+		label: "Selected session message",
+		text,
+		provenance: { kind: "session", entryId: "session-message" },
+		editorFilePath: filePath,
+	};
 }
 
 /**
  * Mounts a real annotation overlay with the external-editor key remapped to Ctrl+E, feeds
  * `keys`, and resolves with whatever it completed. After each key it yields one macrotask so
- * the microtask chain of an already-resolved mocked editor finishes before the next key.
+ * asynchronous overlay work can settle before an optional assertion or the next key.
  */
 async function driveEditorOverlay<T>(
 	cwd: string,
 	keys: readonly string[],
 	show: (ctx: CustomCommandContext) => Promise<T | undefined>,
+	uiOverrides: Partial<Pick<ExtensionUIContext, "notify">> = {},
+	onComponent?: (component: ExtensionUiComponent) => void,
+	afterInput?: (key: string, component: ExtensionUiComponent) => void | Promise<void>,
 ): Promise<T | undefined> {
 	const previous = getKeybindings();
 	setKeybindings(KeybindingsManager.inMemory({ "app.editor.external": "ctrl+e" }));
@@ -209,11 +253,16 @@ async function driveEditorOverlay<T>(
 				component.render(120);
 				for (const key of keys) {
 					component.handleInput?.(key);
-					await new Promise<void>(resolve => setImmediate(resolve));
+					const nextImmediate = Promise.withResolvers<void>();
+					setImmediate(() => nextImmediate.resolve());
+					await nextImmediate.promise;
 					component.render(120);
+					onComponent?.(component);
+					await afterInput?.(key, component);
 				}
 				return result;
 			},
+			...uiOverrides,
 		},
 	} as unknown as CustomCommandContext;
 	try {
@@ -221,6 +270,23 @@ async function driveEditorOverlay<T>(
 	} finally {
 		setKeybindings(previous);
 	}
+}
+
+function overlayText(component: ExtensionUiComponent): string | undefined {
+	if (!("textSourceText" in component) || typeof component.textSourceText !== "function") return undefined;
+	const text = component.textSourceText();
+	return typeof text === "string" ? text : undefined;
+}
+
+async function waitForOverlayText(component: ExtensionUiComponent, expected: string): Promise<void> {
+	for (let attempt = 0; attempt < 50; attempt++) {
+		if (overlayText(component) === expected) return;
+		const nextImmediate = Promise.withResolvers<void>();
+		setImmediate(() => nextImmediate.resolve());
+		await nextImmediate.promise;
+		component.render(120);
+	}
+	expect(overlayText(component)).toBe(expected);
 }
 
 function countOccurrences(text: string, value: string): number {
@@ -355,6 +421,104 @@ describe("/annotate contracts", () => {
 		expect(countOccurrences(prompt!, exactNote)).toBe(1);
 		expect(prompt).toContain(SAMPLE_DIFF.trim());
 		expect(pasteToEditor).not.toHaveBeenCalled();
+	});
+	it("builds reviewer feedback from the refreshed patch and line anchors", async () => {
+		const { ctx, pasteToEditor } = createContext();
+		const target = createResolvedReviewTarget("pr", "PR acme/project#42", SAMPLE_DIFF, "PR has no diff", {
+			refresh: async () => createResolvedReviewTarget("pr", "PR acme/project#42", REFRESHED_DIFF, "PR has no diff"),
+		});
+		const annotation: CodeReviewAnnotation = {
+			scope: "line",
+			path: "src/refreshed.ts",
+			occurrence: 1,
+			hunkHeader: "@@ -10 +20 @@",
+			oldLine: 10,
+			newLine: 20,
+			rawLine: "+const refreshed = true;",
+			note: "review the refreshed implementation",
+		};
+		const resolvePrReviewTarget = vi.fn(async () => target);
+		const showCodeReviewOverlay = vi.fn(async () => ({
+			action: "review" as const,
+			annotations: [annotation],
+			refreshedDiff: REFRESHED_DIFF,
+		}));
+
+		const prompt = await runAnnotateCommand(API, "code-review https://github.com/acme/project/pull/42", ctx, {
+			resolvePrReviewTarget,
+			showCodeReviewOverlay,
+		});
+
+		expect(prompt).toContain(REFRESHED_DIFF.trim());
+		expect(prompt).not.toContain(SAMPLE_DIFF.trim());
+		expect(prompt).toContain("src/refreshed.ts — old 10, new 20");
+		expect(target.rawDiff).toBe(SAMPLE_DIFF);
+		expect(target.snapshot.files[0]?.path).toBe("src/value.ts");
+		expect(pasteToEditor).not.toHaveBeenCalled();
+	});
+
+	it("pastes annotations with refreshed line anchors without mutating the original source", async () => {
+		const { ctx, pasteToEditor } = createContext({
+			selectResults: ["Code review", "2. Review uncommitted changes"],
+		});
+		const target = localTarget(true);
+		const annotation: CodeReviewAnnotation = {
+			scope: "line",
+			path: "src/refreshed.ts",
+			occurrence: 1,
+			hunkHeader: "@@ -10 +20 @@",
+			oldLine: 10,
+			newLine: 20,
+			rawLine: "+const refreshed = true;",
+			note: "paste the refreshed note",
+		};
+		const resolveLocalReviewTarget = vi.fn(async () => target);
+		const showCodeReviewOverlay = vi.fn(async () => ({
+			action: "paste" as const,
+			annotations: [annotation],
+			refreshedDiff: REFRESHED_DIFF,
+		}));
+
+		const result = await runAnnotateCommand(API, "", ctx, {
+			resolveLocalReviewTarget,
+			showCodeReviewOverlay,
+		});
+
+		const pasted = pasteToEditor.mock.calls[0]?.[0];
+		expect(result).toBeUndefined();
+		expect(pasted).toContain("src/refreshed.ts — old 10, new 20");
+		expect(pasted).toContain("+const refreshed = true;");
+		expect(pasted).not.toContain("src/value.ts");
+		expect(target.rawDiff).toBe(SAMPLE_DIFF);
+		expect(target.snapshot.files[0]?.path).toBe("src/value.ts");
+	});
+
+	it.each([
+		{ label: "empty", refreshedDiff: "" },
+		{ label: "fully filtered", refreshedDiff: FILTERED_DIFF },
+	])("does not use stale annotations when the refreshed source is $label", async ({ refreshedDiff }) => {
+		const { ctx, notify, pasteToEditor } = createContext({
+			selectResults: ["Code review", "2. Review uncommitted changes"],
+		});
+		const target = localTarget(true);
+		const originalSnapshot = target.snapshot;
+		const resolveLocalReviewTarget = vi.fn(async () => target);
+		const showCodeReviewOverlay = vi.fn(async () => ({
+			action: "paste" as const,
+			annotations: [{ scope: "file" as const, path: "src/value.ts", occurrence: 1, note: "stale note" }],
+			refreshedDiff,
+		}));
+
+		const result = await runAnnotateCommand(API, "", ctx, {
+			resolveLocalReviewTarget,
+			showCodeReviewOverlay,
+		});
+
+		expect(result).toBeUndefined();
+		expect(pasteToEditor).not.toHaveBeenCalled();
+		expect(notify.mock.calls.some(([, type]) => type === "warning")).toBe(true);
+		expect(target.rawDiff).toBe(SAMPLE_DIFF);
+		expect(target.snapshot).toBe(originalSnapshot);
 	});
 
 	it("pastes the latest reply as a text annotation and never auto-submits it", async () => {
@@ -770,6 +934,133 @@ describe("/annotate contracts", () => {
 		await driveEditorOverlay("/tmp", [CTRL_E], editorCtx => showTextReviewOverlay(editorCtx, source));
 
 		expect(openInEditor).not.toHaveBeenCalled();
+	});
+	it("refreshes an associated transcript excerpt and keeps follow-up file refreshes current", async () => {
+		await withTempDir(async directory => {
+			const filePath = join(directory, "associated source.txt");
+			const fileContents = "Full current file contents, not the selected transcript excerpt.";
+			const refreshedContents = "Changed after the first refresh; the next r must reread this file.";
+			await writeFile(filePath, fileContents, "utf8");
+			const source = { ...messageWithEditorFile(filePath), sessionId: "session-1" };
+			const { ctx, pasteToEditor } = createContext();
+			const generateTextReviewContextSummary = vi.fn(async () => "summary should not be requested");
+			let completed: TextReviewOverlayResult | undefined;
+			let refreshCount = 0;
+			let textAfterFirstRefresh: string | undefined;
+			await runAnnotateCommand(API, "last", ctx, {
+				selectSessionTextReviewSource: vi.fn(async () => source),
+				generateTextReviewContextSummary,
+				showTextReviewOverlay: async (_ctx, selectedSource) => {
+					completed = await driveEditorOverlay(
+						directory,
+						["A", "source note", ENTER, "r", "r", "\t", ENTER],
+						editorCtx => showTextReviewOverlay(editorCtx, selectedSource),
+						{},
+						undefined,
+						async (key, component) => {
+							if (key !== "r") return;
+							refreshCount++;
+							const expected = refreshCount === 1 ? fileContents : refreshedContents;
+							await waitForOverlayText(component, expected);
+							if (refreshCount === 1) {
+								textAfterFirstRefresh = overlayText(component);
+								await writeFile(filePath, refreshedContents, "utf8");
+							}
+						},
+					);
+					return completed;
+				},
+			});
+
+			const pasted = pasteToEditor.mock.calls[0]?.[0] as string | undefined;
+			expect(textAfterFirstRefresh).toBe(fileContents);
+			expect(pasted).toContain(refreshedContents);
+			expect(countOccurrences(pasted ?? "", "source note")).toBe(1);
+			expect(pasted).not.toContain(homedir());
+			expect(pasted).not.toContain(fileContents);
+			expect(pasted).not.toContain("frozen selected excerpt");
+			expect(pasted).not.toContain("Selected session message");
+			expect(generateTextReviewContextSummary).not.toHaveBeenCalled();
+			expect(completed?.refreshedSource?.label).not.toContain(homedir());
+			expect(completed?.refreshedSource).toMatchObject({
+				kind: "file",
+				text: refreshedContents,
+				provenance: { kind: "file", path: filePath },
+				sessionId: source.sessionId,
+			});
+			expect(source).toMatchObject({
+				id: "session-message",
+				kind: "message",
+				text: "frozen selected excerpt",
+				provenance: { kind: "session", entryId: "session-message" },
+			});
+		});
+	});
+
+	it("leaves source and notes unchanged when the associated file is deleted before refresh", async () => {
+		await withTempDir(async directory => {
+			const filePath = join(directory, "deleted source.txt");
+			await writeFile(filePath, "source line", "utf8");
+			const source: TextReviewSource = {
+				id: `file:${filePath}`,
+				kind: "file",
+				label: filePath,
+				text: "source line",
+				provenance: { kind: "file", path: filePath },
+			};
+			const warningShown = Promise.withResolvers<string>();
+			const notify = vi.fn((message: string) => {
+				if (message.startsWith("Failed to refresh source:")) warningShown.resolve(message);
+			});
+			let overlay: AnnotationOverlay | undefined;
+			await driveEditorOverlay(
+				directory,
+				["a", "keep this note", ENTER, "r"],
+				ctx => showTextReviewOverlay(ctx, source),
+				{ notify },
+				component => {
+					if (component instanceof AnnotationOverlay) overlay = component;
+				},
+				async key => {
+					if (key === ENTER) await rm(filePath);
+				},
+			);
+			await warningShown.promise;
+
+			if (!overlay) throw new Error("expected the annotation overlay to remain open");
+			expect(overlayText(overlay)).toBe("source line");
+			expect(overlay.getTextAnnotations()).toEqual([
+				{ scope: "line", line: 1, quote: "source line", note: "keep this note" },
+			]);
+			expect(source.text).toBe("source line");
+			expect(source.provenance).toEqual({ kind: "file", path: filePath });
+		});
+	});
+
+	it("sanitizes, shortens, and bounds refresh path warnings", async () => {
+		const filePath = join(homedir(), `${"s".repeat(180)}\u001b[31m.txt`);
+		const source = messageWithEditorFile(filePath);
+		const warningShown = Promise.withResolvers<string>();
+		const notify = vi.fn((message: string) => {
+			if (message.startsWith("Failed to refresh source:")) warningShown.resolve(message);
+		});
+		let overlay: ExtensionUiComponent | undefined;
+		await driveEditorOverlay(
+			"/tmp",
+			["r"],
+			ctx => showTextReviewOverlay(ctx, source),
+			{ notify },
+			component => {
+				overlay = component;
+			},
+		);
+		const warning = await warningShown.promise;
+		expect(warning).toContain("~/");
+		expect(warning).not.toContain(homedir());
+		expect(warning).not.toContain("\u001b");
+		expect(warning.length).toBeLessThanOrEqual(110);
+		if (!overlay) throw new Error("expected the annotation overlay to remain open");
+		expect(overlayText(overlay)).toBe(source.text);
 	});
 
 	it("does not open the local checkout for a PR review", async () => {

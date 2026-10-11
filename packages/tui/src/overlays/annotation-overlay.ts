@@ -18,11 +18,13 @@ import { formatKeyHint, formatKeyHints, type KeybindingsManager } from "../app-k
 import type { Keybinding } from "../keybindings";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { type Theme } from "../theme/theme";
+import { sanitizeDisplayWarning, TRUNCATE_LENGTHS } from "../render/render-utils";
 import type {
 	CodeReviewAnnotation,
 	CodeReviewOverlayResult,
 	ReviewDiffFile,
 	ReviewDiffRow,
+	ReviewDiffSource,
 	ReviewSourceRow,
 	TextReviewAnnotation,
 	TextReviewOverlayResult,
@@ -76,10 +78,14 @@ export interface AnnotationOverlayCallbacks {
 
 export interface CodeReviewOverlayCallbacks extends AnnotationOverlayCallbacks {
 	onComplete(result: CodeReviewOverlayResult | undefined): void;
+	/** Read the current live diff; immutable patch sources omit this capability. */
+	onRefreshDiff?(): Promise<ReviewDiffSource | undefined>;
 }
 
 export interface TextReviewOverlayCallbacks extends AnnotationOverlayCallbacks {
 	onComplete(result: TextReviewOverlayResult | undefined): void;
+	/** Read and return the current associated file as a full-file source. */
+	onRefreshSource?(): Promise<TextReviewSource | undefined>;
 }
 
 type OverlayCallbacks = CodeReviewOverlayCallbacks | TextReviewOverlayCallbacks;
@@ -139,6 +145,96 @@ function isSourceRow(row: ReviewDiffRow): row is ReviewSourceRow {
 	return row.kind === "context" || row.kind === "added" || row.kind === "removed";
 }
 
+function sourceRows(file: ReviewDiffFile): ReviewSourceRow[] {
+	return file.rows.filter(isSourceRow);
+}
+
+function diffFileIdentity(file: ReviewDiffFile): string {
+	return JSON.stringify([file.oldPath ?? file.path, file.newPath ?? file.path]);
+}
+
+function uniqueFileMatches(
+	previous: readonly ReviewDiffFile[],
+	refreshed: readonly ReviewDiffFile[],
+): Map<number, number> {
+	const previousByIdentity = new Map<string, number[]>();
+	const refreshedByIdentity = new Map<string, number[]>();
+	for (const [index, file] of previous.entries()) {
+		const identity = diffFileIdentity(file);
+		const indexes = previousByIdentity.get(identity);
+		if (indexes) indexes.push(index);
+		else previousByIdentity.set(identity, [index]);
+	}
+	for (const [index, file] of refreshed.entries()) {
+		const identity = diffFileIdentity(file);
+		const indexes = refreshedByIdentity.get(identity);
+		if (indexes) indexes.push(index);
+		else refreshedByIdentity.set(identity, [index]);
+	}
+	const matches = new Map<number, number>();
+	for (const [identity, previousIndexes] of previousByIdentity) {
+		const refreshedIndexes = refreshedByIdentity.get(identity);
+		if (!refreshedIndexes) continue;
+		if (previousIndexes.length === 1 && refreshedIndexes.length === 1) {
+			matches.set(previousIndexes[0]!, refreshedIndexes[0]!);
+			continue;
+		}
+		const previousByPatch = new Map<string, number[]>();
+		const refreshedByPatch = new Map<string, number[]>();
+		for (const index of previousIndexes) {
+			const rawDiff = previous[index]!.rawDiff;
+			const patchIndexes = previousByPatch.get(rawDiff);
+			if (patchIndexes) patchIndexes.push(index);
+			else previousByPatch.set(rawDiff, [index]);
+		}
+		for (const index of refreshedIndexes) {
+			const rawDiff = refreshed[index]!.rawDiff;
+			const patchIndexes = refreshedByPatch.get(rawDiff);
+			if (patchIndexes) patchIndexes.push(index);
+			else refreshedByPatch.set(rawDiff, [index]);
+		}
+		for (const [rawDiff, patchIndexes] of previousByPatch) {
+			const refreshedPatchIndexes = refreshedByPatch.get(rawDiff);
+			if (patchIndexes.length === 1 && refreshedPatchIndexes?.length === 1) {
+				matches.set(patchIndexes[0]!, refreshedPatchIndexes[0]!);
+			}
+		}
+	}
+	return matches;
+}
+
+function matchSourceRow(
+	rows: readonly ReviewSourceRow[],
+	anchorIndex: number,
+	anchor: ReviewSourceRow,
+): { row: ReviewSourceRow; index: number } | undefined {
+	const anchored = rows[anchorIndex];
+	const hasCoordinates = anchor.oldLine !== undefined || anchor.newLine !== undefined;
+	if (
+		hasCoordinates &&
+		anchored?.kind === anchor.kind &&
+		anchored.raw === anchor.raw &&
+		(anchor.oldLine === undefined || anchored.oldLine === anchor.oldLine) &&
+		(anchor.newLine === undefined || anchored.newLine === anchor.newLine)
+	) {
+		return { row: anchored, index: anchorIndex };
+	}
+	const matches = rows.flatMap((row, index) =>
+		row.kind === anchor.kind && row.raw === anchor.raw ? [{ row, index }] : [],
+	);
+	return matches.length === 1 ? matches[0] : undefined;
+}
+
+function diffAnnotationFileFields(file: ReviewDiffFile, note: string) {
+	return {
+		path: file.path,
+		...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),
+		...(file.newPath === undefined ? {} : { newPath: file.newPath }),
+		occurrence: file.occurrence,
+		note,
+	};
+}
+
 function displayFileLabel(file: ReviewDiffFile): string {
 	return file.occurrence > 1 ? `${file.path} (${file.occurrence})` : file.path;
 }
@@ -147,6 +243,10 @@ function sanitizeStatusText(text: string): string {
 		.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
 		.replace(/ +/g, " ")
 		.trim();
+}
+
+function sanitizeWarningText(text: string): string {
+	return truncateToWidth(sanitizeDisplayWarning(text), TRUNCATE_LENGTHS.LINE);
 }
 
 /** Splits a text source into the overlay's 1-based annotatable lines. */
@@ -174,8 +274,10 @@ export class AnnotationOverlay implements Focusable {
 	#editingAnnotationIndex: number | undefined;
 	#annotationChooser: AnnotationChooser | undefined;
 	#externalOperation = false;
-	/** Set once {@link replaceTextSource} runs; the paste result then carries the edited text. */
+	/** Set once {@link replaceTextSource} runs; the paste result then carries the updated text. */
 	#textSourceEdited = false;
+	#textSourceRefreshed = false;
+	#refreshedDiff: string | undefined;
 	#finished = false;
 	#annotations: CommittedAnnotation[] = [];
 	#textAnnotations: CommittedTextAnnotation[] = [];
@@ -200,7 +302,7 @@ export class AnnotationOverlay implements Focusable {
 	readonly #tui: TUI;
 	readonly #theme: Theme;
 	readonly #keybindings: KeybindingsManager;
-	readonly #files: readonly ReviewDiffFile[];
+	#files: readonly ReviewDiffFile[];
 	readonly #mode: string;
 	readonly #callbacks: OverlayCallbacks;
 
@@ -328,10 +430,24 @@ export class AnnotationOverlay implements Focusable {
 	 * same row stay; a quote that moved to exactly one row is retargeted;
 	 * every other line note is dropped. Returns how many were dropped.
 	 */
-	replaceTextSource(text: string): number {
+	replaceTextSource(
+		text: string,
+		sourceUpdate?: Pick<TextReviewSource, "kind" | "label" | "provenance" | "editorFilePath">,
+	): number {
 		if (!this.#textSource) return 0;
-		this.#textSource = { ...this.#textSource, text };
+		const currentSource = this.#textSource;
+		this.#textSource = sourceUpdate
+			? {
+					...currentSource,
+					kind: sourceUpdate.kind,
+					label: sourceUpdate.label,
+					provenance: sourceUpdate.provenance,
+					...(sourceUpdate.editorFilePath === undefined ? {} : { editorFilePath: sourceUpdate.editorFilePath }),
+					text,
+				}
+			: { ...currentSource, text };
 		this.#textSourceEdited = true;
+		this.#textSourceRefreshed ||= sourceUpdate !== undefined;
 		this.#textLines = splitTextLines(text);
 		this.#viewportDriven = false;
 		this.#sourceIndex = Math.min(this.#sourceIndex, Math.max(0, this.#textLines.length - 1));
@@ -363,6 +479,13 @@ export class AnnotationOverlay implements Focusable {
 		this.#undoStack = [];
 		this.#annotationRev++;
 		this.#nativeBody = undefined;
+		if (dropped > 0) {
+			this.#callbacks.onWarning?.(
+				dropped === 1
+					? "Dropped 1 line note that no longer matches the updated text."
+					: `Dropped ${dropped} line notes that no longer match the updated text.`,
+			);
+		}
 		return dropped;
 	}
 
@@ -386,6 +509,11 @@ export class AnnotationOverlay implements Focusable {
 		}
 		if (this.#keybindings.matches(data, "tui.select.cancel")) {
 			this.#escape();
+			return;
+		}
+		if (this.#canRefresh() && data === "r") {
+			if (this.#textSource) void this.#refreshTextSource();
+			else void this.#refreshDiff();
 			return;
 		}
 		if (this.#callbacks.onExternalEditor && matchesAppExternalEditor(data)) {
@@ -429,6 +557,139 @@ export class AnnotationOverlay implements Focusable {
 	#key(action: Keybinding): string {
 		const [key] = this.#keybindings.getKeys(action);
 		return key ? formatKeyHint(key) : "";
+	}
+
+	#canRefreshTextSource(): boolean {
+		const source = this.#textSource;
+		const callbacks = this.#callbacks as TextReviewOverlayCallbacks;
+		const filePath = source?.provenance?.kind === "file" ? source.provenance.path : source?.editorFilePath;
+		return Boolean(source && callbacks.onRefreshSource && filePath);
+	}
+
+	#canRefresh(): boolean {
+		if (this.#textSource) return this.#canRefreshTextSource();
+		return Boolean((this.#callbacks as CodeReviewOverlayCallbacks).onRefreshDiff);
+	}
+
+	async #refreshDiff(): Promise<void> {
+		const callbacks = this.#callbacks as CodeReviewOverlayCallbacks;
+		const refresh = callbacks.onRefreshDiff;
+		if (this.#externalOperation || !this.#canRefresh() || !refresh) return;
+		this.#externalOperation = true;
+		try {
+			let refreshed: ReviewDiffSource | undefined;
+			try {
+				refreshed = await refresh();
+			} catch (error) {
+				const detail = error instanceof Error ? error.message : String(error);
+				callbacks.onWarning?.(sanitizeWarningText(`Failed to refresh diff: ${detail}`));
+				return;
+			}
+			if (!refreshed || this.#finished) return;
+			this.#replaceDiffSource(refreshed);
+		} finally {
+			this.#externalOperation = false;
+			this.#tui.requestRender(true);
+		}
+	}
+
+	#replaceDiffSource(refreshed: ReviewDiffSource): void {
+		const callbacks = this.#callbacks as CodeReviewOverlayCallbacks;
+		const previousFiles = this.#files;
+		const fileMatches = uniqueFileMatches(previousFiles, refreshed.files);
+		const oldFocusedFile = previousFiles[this.#fileIndex];
+		const oldFocusedRows = oldFocusedFile ? sourceRows(oldFocusedFile) : [];
+		const oldFocusedRow = oldFocusedRows[this.#sourceIndex];
+		let nextFileIndex = refreshed.files.length > 0 ? Math.min(this.#fileIndex, refreshed.files.length - 1) : 0;
+		const matchedFocusedFile = fileMatches.get(this.#fileIndex);
+		if (matchedFocusedFile !== undefined) nextFileIndex = matchedFocusedFile;
+		const nextFocusedFile = refreshed.files[nextFileIndex];
+		const nextFocusedRows = nextFocusedFile ? sourceRows(nextFocusedFile) : [];
+		let nextSourceIndex = Math.min(this.#sourceIndex, Math.max(0, nextFocusedRows.length - 1));
+		if (matchedFocusedFile !== undefined && oldFocusedRow) {
+			const matchedFocusedRow = matchSourceRow(nextFocusedRows, this.#sourceIndex, oldFocusedRow);
+			if (matchedFocusedRow) nextSourceIndex = matchedFocusedRow.index;
+		}
+
+		let dropped = 0;
+		const annotations: CommittedAnnotation[] = [];
+		for (const entry of this.#annotations) {
+			const previousFile = previousFiles[entry.fileIndex];
+			const nextIndex = fileMatches.get(entry.fileIndex);
+			const nextFile = nextIndex === undefined ? undefined : refreshed.files[nextIndex];
+			if (!previousFile || nextIndex === undefined || !nextFile) {
+				dropped++;
+				continue;
+			}
+			if (entry.annotation.scope === "file") {
+				annotations.push({
+					fileIndex: nextIndex,
+					sourceIndex: -1,
+					annotation: { ...diffAnnotationFileFields(nextFile, entry.annotation.note), scope: "file" },
+				});
+				continue;
+			}
+			const previousRow = sourceRows(previousFile)[entry.sourceIndex];
+			if (!previousRow || previousRow.raw !== entry.annotation.rawLine) {
+				dropped++;
+				continue;
+			}
+			const matchedRow = matchSourceRow(sourceRows(nextFile), entry.sourceIndex, previousRow);
+			if (!matchedRow) {
+				dropped++;
+				continue;
+			}
+			annotations.push({
+				fileIndex: nextIndex,
+				sourceIndex: matchedRow.index,
+				annotation: {
+					...diffAnnotationFileFields(nextFile, entry.annotation.note),
+					scope: "line",
+					hunkHeader: matchedRow.row.hunkHeader,
+					...(matchedRow.row.oldLine === undefined ? {} : { oldLine: matchedRow.row.oldLine }),
+					...(matchedRow.row.newLine === undefined ? {} : { newLine: matchedRow.row.newLine }),
+					rawLine: matchedRow.row.raw,
+				},
+			});
+		}
+
+		this.#files = refreshed.files;
+		this.#annotations = annotations;
+		this.#fileIndex = nextFileIndex;
+		this.#sourceIndex = nextSourceIndex;
+		this.#viewportDriven = false;
+		this.#viewportTowardEnd = false;
+		this.#scrollView.scrollToTop();
+		this.#refreshedDiff = refreshed.rawDiff;
+		this.#undoStack = [];
+		this.#annotationRev++;
+		this.#nativeBody = undefined;
+		this.#staticRenderedDiffBodies = new WeakMap();
+		if (dropped > 0) {
+			callbacks.onWarning?.(
+				sanitizeWarningText(
+					`Dropped ${dropped} annotation${dropped === 1 ? "" : "s"} that could not be matched to the refreshed diff.`,
+				),
+			);
+		}
+	}
+
+	async #refreshTextSource(): Promise<void> {
+		const callbacks = this.#callbacks as TextReviewOverlayCallbacks;
+		const refresh = callbacks.onRefreshSource;
+		if (this.#externalOperation || !this.#canRefreshTextSource() || !refresh) return;
+		this.#externalOperation = true;
+		try {
+			const refreshedSource = await refresh();
+			if (!refreshedSource || this.#finished) return;
+			this.replaceTextSource(refreshedSource.text, refreshedSource);
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			callbacks.onWarning?.(sanitizeWarningText(`Failed to refresh source: ${detail}`));
+		} finally {
+			this.#externalOperation = false;
+			this.#tui.requestRender(true);
+		}
 	}
 
 	#finish(result: CodeReviewOverlayResult | TextReviewOverlayResult | undefined): void {
@@ -579,11 +840,13 @@ export class AnnotationOverlay implements Focusable {
 				action: "paste",
 				annotations: this.getTextAnnotations(),
 				...(this.#textSourceEdited ? { editedText: this.#textSource.text } : {}),
+				...(this.#textSourceRefreshed ? { refreshedSource: { ...this.#textSource } } : {}),
 			});
 		} else {
 			this.#finish({
 				action: this.#actionIndex === 0 ? "review" : "paste",
 				annotations: this.getAnnotations(),
+				...(this.#refreshedDiff === undefined ? {} : { refreshedDiff: this.#refreshedDiff }),
 			});
 		}
 	}
@@ -889,7 +1152,9 @@ export class AnnotationOverlay implements Focusable {
 			});
 		} catch (error) {
 			this.#callbacks.onWarning?.(
-				`Failed to open external editor: ${error instanceof Error ? error.message : String(error)}`,
+				sanitizeWarningText(
+					`Failed to open external editor: ${error instanceof Error ? error.message : String(error)}`,
+				),
 			);
 		} finally {
 			this.#externalOperation = false;
@@ -905,7 +1170,9 @@ export class AnnotationOverlay implements Focusable {
 			await openEditor();
 		} catch (error) {
 			this.#callbacks.onWarning?.(
-				`Failed to open external editor: ${error instanceof Error ? error.message : String(error)}`,
+				sanitizeWarningText(
+					`Failed to open external editor: ${error instanceof Error ? error.message : String(error)}`,
+				),
 			);
 		} finally {
 			this.#externalOperation = false;
@@ -1224,7 +1491,8 @@ export class AnnotationOverlay implements Focusable {
 					? `${upDown} line · ${formatKeyHint("shift")} faster · ${this.#key("tui.select.pageUp")}/${this.#key("tui.select.pageDown")} · ${formatKeyHints(["g", "shift+g"])} ends · ${formatKeyHint("a")} line note · ${formatKeyHint("shift+a")} ${this.#textSource ? "text" : "file"} note · ${editNote}`
 					: `${upDown} select · ${confirm} confirm`;
 		const editorHint = this.#callbacks.onExternalEditor ? ` · ${formatKeyHint(appExternalEditorKey())} editor` : "";
-		return `${focusHelp} · ${formatKeyHint("u")} undo · ${formatKeyHint("tab")} regions${editorHint} · ${this.#key("tui.select.cancel")} cancel`;
+		const refreshHint = this.#canRefresh() ? `${formatKeyHint("r")} refresh · ` : "";
+		return `${refreshHint}${focusHelp} · ${formatKeyHint("u")} undo · ${formatKeyHint("tab")} regions${editorHint} · ${this.#key("tui.select.cancel")} cancel`;
 	}
 
 	#ensureCursorVisible(renderedRowBySource: readonly number[]): boolean {
@@ -1630,6 +1898,7 @@ export class AnnotationOverlay implements Focusable {
 							editNote,
 						]
 					: [upDown("select"), this.#hint("tui.select.confirm", "confirm")];
+		if (this.#canRefresh()) hints.unshift(key("r", "refresh"));
 		if (this.#callbacks.onExternalEditor) hints.push({ keys: [appExternalEditorKey()], label: "editor" });
 		hints.push(key("u", "undo"), key("tab", "regions"), this.#hint("tui.select.cancel", "cancel"));
 		return [hintsRow(hints)];

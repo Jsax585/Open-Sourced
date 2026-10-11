@@ -2020,6 +2020,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		let content: Array<TextContent | ImageContent> | undefined;
 		let details: ReadToolDetails = {};
 		let sourcePath: string | undefined;
+		let editableFilePath: string | undefined;
 		let pagedSource = false;
 		let columnCut: ColumnCut | undefined;
 		let truncationInfo:
@@ -2155,6 +2156,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					immutable,
 				});
 			}
+
+			// Raw mode can read binary bytes intentionally. Keep its result editable only
+			// when the source still classifies as text; this does not change raw output.
+			const rawFileLooksBinary =
+				isRawSelector(parsed) &&
+				(wholeFileBytes
+					? isProbablyBinaryHeader(wholeFileBytes.subarray(0, BINARY_SNIFF_BYTES))
+					: await isProbablyBinary(absolutePath));
+			if (!located && !immutable && !rawFileLooksBinary) editableFilePath = absolutePath;
 
 			if (
 				parsed.kind === "none" &&
@@ -2642,6 +2652,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		}
 
 		details.fileSize = fileSize;
+		if (editableFilePath && details.summary === undefined) details.editableFilePath = editableFilePath;
 		markMarkdownContentType(this.session, details, renderAbsolutePath);
 		if (suffixResolution) {
 			details.suffixResolution = suffixResolution;
