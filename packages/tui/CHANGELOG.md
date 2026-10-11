@@ -5,6 +5,7 @@
 ### Added
 
 - Added `Component.handleMouse()` for decoded left-clicks on inline components in the mutable viewport, including live transcript components.
+- Added native TSP rendering inside tmux when the hosting Tern terminal marks the session with `@tern-tsp`: the hello goes out without the DA1 sentinel and waits up to 1 s for a reply, and the pane's `allow-set-title` is turned off while TSP runs and restored when it ends. tmux sessions without `@tern-tsp` never probe, even with `PI_TUI_NATIVE=1`.
 
 ### Fixed
 
