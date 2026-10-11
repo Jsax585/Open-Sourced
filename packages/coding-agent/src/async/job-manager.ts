@@ -137,20 +137,23 @@ export interface AsyncJob {
 
 /**
  * The subagent progress record a task job last reported: the `progress` entry
- * whose `id` matches the job, else the first entry. Undefined for non-task jobs
- * and for task jobs that have not reported progress yet.
+ * whose `id` names the job's subagent, else the first entry. Progress entries
+ * carry the subagent's `agentId`, which differs from the job id when
+ * `register()` suffixed a colliding id. Undefined for non-task jobs and for
+ * task jobs that have not reported progress yet.
  */
 export function taskJobProgressRecord(
-	job: Pick<AsyncJob, "id" | "type" | "latestDetails">,
+	job: Pick<AsyncJob, "id" | "type" | "latestDetails" | "agentId">,
 ): Record<string, unknown> | undefined {
 	if (job.type !== "task") return undefined;
 	const progress = job.latestDetails?.progress;
 	if (!Array.isArray(progress)) return undefined;
+	const ownId = job.agentId ?? job.id;
 	let record: Record<string, unknown> | undefined;
 	for (const item of progress) {
 		if (!item || typeof item !== "object") continue;
 		const candidate = item as Record<string, unknown>;
-		if (candidate.id === job.id) return candidate;
+		if (candidate.id === ownId) return candidate;
 		record ??= candidate;
 	}
 	return record;
@@ -158,7 +161,7 @@ export function taskJobProgressRecord(
 
 /** A running task job's latest completion self-estimate (0–100), if the subagent reported one. */
 export function taskJobCompletionPercent(
-	job: Pick<AsyncJob, "id" | "type" | "latestDetails"> & { status: string },
+	job: Pick<AsyncJob, "id" | "type" | "latestDetails" | "agentId"> & { status: string },
 ): number | undefined {
 	if (job.status !== "running") return undefined;
 	const value = taskJobProgressRecord(job)?.completionPercent;

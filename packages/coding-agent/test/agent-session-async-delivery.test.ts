@@ -195,26 +195,32 @@ describe("AgentSession owner-routed async delivery", () => {
 
 		const reported = Promise.withResolvers<void>();
 		const gate = Promise.withResolvers<string>();
-		manager.register(
+		// A live job already holds the subagent's id, so the task job's id is suffixed.
+		manager.register("bash", "occupies the id", async () => gate.promise, { id: "Worker", ownerId: "Owner" });
+		const taskJobId = manager.register(
 			"task",
 			"subagent work",
 			async ({ reportProgress }) => {
-				// A batch reports every member's progress; only this job's own entry counts.
+				// A batch reports every member's progress, keyed by subagent id; only this job's own entry counts.
 				await reportProgress("working", {
 					progress: [
-						{ id: "sibling-job", completionPercent: 90 },
-						{ id: "task-job", completionPercent: 40 },
+						{ id: "Sibling", completionPercent: 90 },
+						{ id: "Worker", completionPercent: 40 },
 					],
 				});
 				reported.resolve();
 				return gate.promise;
 			},
-			{ id: "task-job", ownerId: "Owner", agentId: "Worker" },
+			{ id: "Worker", ownerId: "Owner", agentId: "Worker" },
 		);
 		await reported.promise;
+		expect(taskJobId).toBe("Worker-2");
 
 		const running = session.getAsyncJobSnapshot()?.running ?? [];
-		expect(running.find(job => job.id === "task-job")?.completionPercent).toBe(40);
+		expect(running.find(job => job.id === "Worker-2")?.completionPercent).toBe(40);
+		const bashJob = running.find(job => job.id === "Worker");
+		expect(bashJob).toBeDefined();
+		expect(Object.hasOwn(bashJob!, "completionPercent")).toBe(false);
 
 		gate.resolve("done");
 		await session.settleAsyncWork();

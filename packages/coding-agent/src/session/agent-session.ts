@@ -2829,16 +2829,19 @@ export class AgentSession implements SettingsScope {
 		const manager = this.#asyncJobManager;
 		if (!manager) return null;
 		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
-		const running = manager.getRunningJobs(ownerFilter).map(job => ({
-			id: job.id,
-			type: job.type,
-			status: job.status,
-			label: job.label,
-			command: job.process?.command,
-			startTime: job.startTime,
-			agentId: job.agentId,
-			completionPercent: taskJobCompletionPercent(job),
-		}));
+		const running = manager.getRunningJobs(ownerFilter).map(job => {
+			const completionPercent = taskJobCompletionPercent(job);
+			return {
+				id: job.id,
+				type: job.type,
+				status: job.status,
+				label: job.label,
+				command: job.process?.command,
+				startTime: job.startTime,
+				agentId: job.agentId,
+				...(completionPercent !== undefined ? { completionPercent } : {}),
+			};
+		});
 		const recent = manager.getRecentJobs(options?.recentLimit ?? 5, ownerFilter).map(job => ({
 			id: job.id,
 			type: job.type,

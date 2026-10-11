@@ -160,6 +160,7 @@ interface TrackedJobLike {
 	startTime: number;
 	endTime?: number;
 	latestDetails?: AsyncJobDetails;
+	agentId?: string;
 	resultText?: string;
 	errorText?: string;
 	structured?: StructuredSubagentOutput;
