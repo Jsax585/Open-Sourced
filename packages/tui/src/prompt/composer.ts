@@ -441,9 +441,16 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const active = transcript.renderViewport(width, Math.max(0, rows - before.length - belowFloor), frame);
 		const activeSpans: ViewportClickSpan[] = [];
 		for (const span of transcript.getLastViewportSpans()) {
-			const ids = (span.component as Partial<{ getClickFocusAgentIds(): string[] }>).getClickFocusAgentIds?.();
-			if (!ids || ids.length === 0) continue;
-			activeSpans.push({ start: span.start, end: span.end, candidates: () => ids });
+			const component = span.component;
+			const ids = (component as Partial<{ getClickFocusAgentIds(): string[] }>).getClickFocusAgentIds?.();
+			const mouseTarget = typeof component.handleMouse === "function" ? component : undefined;
+			if ((!ids || ids.length === 0) && !mouseTarget) continue;
+			activeSpans.push({
+				start: span.start,
+				end: span.end,
+				candidates: ids && ids.length > 0 ? () => ids : () => [],
+				mouseTarget,
+			});
 		}
 		const drop = Math.max(0, before.length + active.length + after.length - rows);
 		const mutable = [...before, ...active, ...after].slice(drop);

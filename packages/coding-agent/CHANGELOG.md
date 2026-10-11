@@ -5,6 +5,7 @@
 ### Added
 
 - `computer` elements gain `doubleClick()`, and using an element method or field on the array `win.find(…)` returns, in JavaScript, Python or `computer.run`, says to pick one element first instead of failing with "is not a function" or reading `undefined` ([#15312](https://github.com/can1357/oh-my-pi/pull/15312) by [@will-bogusz](https://github.com/will-bogusz))
+- Inline widgets can handle left-clicks across the mutable viewport through `Component.handleMouse()`.
 
 ### Changed
 

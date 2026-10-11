@@ -12,6 +12,8 @@
  * provider paint their composed children as a bounded viewport and never
  * touch history. See `docs/tui-core-renderer.md`.
  */
+import type { SgrMouseEvent } from "./mouse";
+
 import * as fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { getDebugLogPath } from "@oh-my-pi/pi-utils/dirs";
@@ -302,8 +304,8 @@ export interface Component {
 	 */
 	capturesInput?(data: string): boolean;
 
-	/** Receive mouse input for this component's rendered rows. The row is span-local; return true to consume. */
-	handleMouse?(event: import("./mouse").SgrMouseEvent): boolean | void;
+	/** Receive decoded left-clicks on this component's rendered rows. The row is span-local; return true to consume. */
+	handleMouse?(event: SgrMouseEvent): boolean | void;
 
 	/** Optional handler for keyboard input when component has focus */
 	handleInput?(data: string): void;

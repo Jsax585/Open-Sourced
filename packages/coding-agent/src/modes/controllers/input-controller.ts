@@ -769,7 +769,10 @@ export class InputController {
 		if (this.ctx.ui.hasOverlay()) return undefined;
 		const event = parseSgrMouse(data);
 		if (!event) return undefined;
-		if (event.leftClick && this.ctx.dispatchViewportMouse(event)) return { consume: true };
+		if (event.leftClick && this.ctx.dispatchViewportMouse(event)) {
+			this.ctx.ui.requestRender();
+			return { consume: true };
+		}
 		if (event.motion) this.#updateHoverHighlight(event.row);
 		else if (event.leftClick) this.#focusClickedAgent(event.row);
 		return { consume: true };

@@ -24,6 +24,7 @@ import type {
 	LoaderMessageColorFn,
 	OverlayHandle,
 	SlashCommand,
+	SgrMouseEvent,
 } from "@oh-my-pi/pi-tui";
 import {
 	Container,
@@ -1625,7 +1626,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	resolveViewportClickCandidates(index: number): string[] {
 		return this.composer.viewportClickCandidates(index);
 	}
-	dispatchViewportMouse(event: import("@oh-my-pi/pi-tui").SgrMouseEvent): boolean {
+	dispatchViewportMouse(event: SgrMouseEvent): boolean {
 		const viewport = this.ui.getMutableViewport();
 		const local = event.row - viewport.top;
 		if (viewport.length === 0 || local < 0 || local >= viewport.length) return false;
