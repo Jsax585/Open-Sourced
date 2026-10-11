@@ -8,6 +8,7 @@
 - Compacted Read directory listings by replacing alignment padding with single-space separators while retaining file sizes and relative modification times ([#9062](https://github.com/can1357/oh-my-pi/pull/9062) by [@MikeeI](https://github.com/MikeeI), [#15352](https://github.com/can1357/oh-my-pi/pull/15352) by [@iliaal](https://github.com/iliaal)).
 ### Fixed
 
+- Made `omp update` binary downloads resilient against transient socket drops, network resets, and truncated streams by adding automatic retries with exponential backoff ([#15362](https://github.com/can1357/oh-my-pi/pull/15362) by [@TalexDreamSoul](https://github.com/TalexDreamSoul)).
 - Improved responsiveness when placing assistant text after tool calls in long transcripts ([#12178](https://github.com/can1357/oh-my-pi/issues/12178), [#14344](https://github.com/can1357/oh-my-pi/pull/14344) by [@F0Rextasy](https://github.com/F0Rextasy), [#15353](https://github.com/can1357/oh-my-pi/pull/15353) by [@iliaal](https://github.com/iliaal)).
 - Fixed `apply_patch` rejecting a hunk without context lines when its text occurs more than once ("Found 2 occurrences"); like Codex, each hunk now takes the first exact or whitespace-insensitive match at or after the previous hunk, while fuzzy matches must still be unique ([#15340](https://github.com/can1357/oh-my-pi/pull/15340) by [@Ikaleio](https://github.com/Ikaleio))
 

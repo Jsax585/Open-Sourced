@@ -3,6 +3,7 @@ import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { PassThrough } from "node:stream";
 import type { BuildAnswer, BuildPatch, Fetch } from "@oh-my-pi/pi-coding-agent/cli/build-service";
 import * as pluginCli from "@oh-my-pi/pi-coding-agent/cli/plugin-cli";
 import * as updateCli from "@oh-my-pi/pi-coding-agent/cli/update-cli";
@@ -1062,6 +1063,176 @@ describe("update-cli release binary integrity", () => {
 		if (process.platform !== "win32") expect((await fs.stat(targetPath)).mode & 0o777).toBe(0o755);
 		const newResidue = (await fs.readdir(dir)).filter(name => name.endsWith(".new"));
 		expect(newResidue).toEqual([]);
+	});
+
+	it("retries and succeeds when transient connection error occurs during download", async () => {
+		const dir = await makeTempDir();
+		const targetPath = path.join(dir, binaryName);
+		let attempts = 0;
+		const fetchImpl = async () => {
+			attempts++;
+			if (attempts === 1) {
+				throw new TypeError("The socket connection was closed unexpectedly.");
+			}
+			return new Response(content);
+		};
+
+		await downloadVerifiedBinary({
+			url,
+			targetPath,
+			expectedSize: Buffer.byteLength(content),
+			expectedDigest: digest,
+			fetchImpl,
+			retryDelayMs: 0,
+		});
+
+		expect(attempts).toBe(2);
+		expect(await Bun.file(targetPath).text()).toBe(content);
+	});
+
+	it("retries and succeeds when stream body encounters socket connection reset", async () => {
+		const dir = await makeTempDir();
+		const targetPath = path.join(dir, binaryName);
+		let attempts = 0;
+		const fetchImpl = async () => {
+			attempts++;
+			if (attempts === 1) {
+				const body = new ReadableStream<Uint8Array>({
+					pull(controller) {
+						controller.error(Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }));
+					},
+				});
+				return new Response(body);
+			}
+			return new Response(content);
+		};
+
+		await downloadVerifiedBinary({
+			url,
+			targetPath,
+			expectedSize: Buffer.byteLength(content),
+			expectedDigest: digest,
+			fetchImpl,
+			retryDelayMs: 0,
+		});
+
+		expect(attempts).toBe(2);
+		expect(await Bun.file(targetPath).text()).toBe(content);
+	});
+
+	it("retries and succeeds when initial response is transient 502/503 and cancels streaming response body", async () => {
+		const dir = await makeTempDir();
+		const targetPath = path.join(dir, binaryName);
+		let attempts = 0;
+		let canceled = false;
+		const fetchImpl = async () => {
+			attempts++;
+			if (attempts === 1) {
+				const stream = new ReadableStream({
+					cancel() {
+						canceled = true;
+					},
+				});
+				return new Response(stream, { status: 502, statusText: "Bad Gateway" });
+			}
+			return new Response(content);
+		};
+
+		await downloadVerifiedBinary({
+			url,
+			targetPath,
+			expectedSize: Buffer.byteLength(content),
+			expectedDigest: digest,
+			fetchImpl,
+			retryDelayMs: 0,
+		});
+
+		expect(attempts).toBe(2);
+		expect(canceled).toBe(true);
+		expect(await Bun.file(targetPath).text()).toBe(content);
+	});
+
+	it("cancels rejected response body on terminal failure", async () => {
+		const dir = await makeTempDir();
+		const targetPath = path.join(dir, binaryName);
+		let canceled = false;
+		const stream = new ReadableStream({
+			cancel() {
+				canceled = true;
+			},
+		});
+		const fetchImpl = async () => new Response(stream, { status: 404, statusText: "Not Found" });
+
+		await expect(
+			downloadVerifiedBinary({
+				url,
+				targetPath,
+				expectedSize: Buffer.byteLength(content),
+				expectedDigest: digest,
+				fetchImpl,
+				maxRetries: 0,
+			}),
+		).rejects.toThrow("Download failed: Not Found (404)");
+
+		expect(canceled).toBe(true);
+	});
+
+	it("retries and succeeds when stream body ends prematurely with short EOF", async () => {
+		const dir = await makeTempDir();
+		const targetPath = path.join(dir, binaryName);
+		let attempts = 0;
+		const fetchImpl = async () => {
+			attempts++;
+			if (attempts === 1) {
+				return new Response(content.slice(0, 3));
+			}
+			return new Response(content);
+		};
+
+		await downloadVerifiedBinary({
+			url,
+			targetPath,
+			expectedSize: Buffer.byteLength(content),
+			expectedDigest: digest,
+			fetchImpl,
+			retryDelayMs: 0,
+		});
+
+		expect(attempts).toBe(2);
+		expect(await Bun.file(targetPath).text()).toBe(content);
+	});
+
+	it("does not retry permanent filesystem errors such as ENOSPC", async () => {
+		const dir = await makeTempDir();
+		const targetPath = path.join(dir, binaryName);
+		let attempts = 0;
+		const fetchImpl = async () => {
+			attempts++;
+			return new Response(content);
+		};
+
+		const enospc = Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+		const spy = vi.spyOn(nodeFs, "createWriteStream").mockImplementationOnce(() => {
+			const ws = new PassThrough();
+			process.nextTick(() => ws.emit("error", enospc));
+			return ws as unknown as nodeFs.WriteStream;
+		});
+
+		try {
+			await expect(
+				downloadVerifiedBinary({
+					url,
+					targetPath,
+					expectedSize: Buffer.byteLength(content),
+					expectedDigest: digest,
+					fetchImpl,
+					retryDelayMs: 0,
+				}),
+			).rejects.toThrow("ENOSPC");
+			expect(attempts).toBe(1);
+		} finally {
+			spy.mockRestore();
+		}
 	});
 });
 
