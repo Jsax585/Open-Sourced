@@ -1,5 +1,6 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { SgrMouseEvent } from "../mouse";
 import { Box } from "../components/box";
 import { SPINNER_ADVANCE_MS } from "../components/loader";
 import { Image } from "../components/image";
@@ -161,6 +162,22 @@ class SafeToolRendererComponent implements Component {
 		}
 	}
 
+	handleMouse(event: SgrMouseEvent): boolean {
+		try {
+			return this.#component.handleMouse?.call(this.#component, event) === true;
+		} catch (err) {
+			if (!this.#warned) {
+				this.#warned = true;
+				logger.warn("Tool renderer failed", {
+					tool: this.#toolName,
+					stage: this.#stage,
+					phase: "handleMouse",
+					error: String(err),
+				});
+			}
+			return false;
+		}
+	}
 	handleInput(data: string): void {
 		const handleInput = this.#component.handleInput;
 		if (handleInput === undefined) return;

@@ -3,6 +3,7 @@ import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { Container, type Component } from "@oh-my-pi/pi-tui";
+import { Box } from "@oh-my-pi/pi-tui/components/box";
 import { VirtualTerminal } from "./virtual-terminal";
 import { routeViewportClick, type ViewportClickSpan } from "@oh-my-pi/pi-tui/prompt/composer";
 
@@ -317,6 +318,50 @@ describe("composer mouse dispatch", () => {
 			).toBe(true);
 			expect(target.events).toEqual([{ col: 7, row: 0 }]);
 			expect(composer.renderFrame({ columns: 80, rows: 24 }).viewport.join("\n")).toContain("mouse clicked");
+		} finally {
+			composer.stop();
+		}
+	});
+	it("routes clicks through nested containers and padded boxes to transcript children", () => {
+		const term = new VirtualTerminal(80, 24);
+		const composer = new Composer({ terminal: term, preferences: { ...COMPOSER_DEFAULTS, quiet: true } });
+		const target = new MouseTarget();
+		composer.start();
+		try {
+			const transcript = new TranscriptContainer();
+			const box = new Box(0, 1, text => `\x1b[34m${text}\x1b[0m`);
+			const nested = new Container();
+			nested.addChild(target);
+			box.addChild(nested);
+			transcript.addChild(box);
+			composer.setRuntimeChildren([transcript]);
+			const frame = composer.renderFrame({ columns: 80, rows: 24 });
+			const row = frame.viewport.findIndex(line => line.includes("mouse target"));
+			expect(row).toBeGreaterThanOrEqual(0);
+			expect(
+				composer.dispatchViewportMouse({
+					button: 0,
+					col: 7,
+					row,
+					release: false,
+					wheel: null,
+					motion: false,
+					leftClick: true,
+				}),
+			).toBe(true);
+			expect(target.events).toEqual([{ col: 7, row: 0 }]);
+			expect(
+				composer.dispatchViewportMouse({
+					button: 0,
+					col: 7,
+					row: row - 1,
+					release: false,
+					wheel: null,
+					motion: false,
+					leftClick: true,
+				}),
+			).toBe(false);
+			expect(target.events).toEqual([{ col: 7, row: 0 }]);
 		} finally {
 			composer.stop();
 		}

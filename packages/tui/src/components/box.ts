@@ -3,6 +3,7 @@ import { sameItems } from "../native/memo";
 import { card, col } from "../native/describe";
 import type { DescribeContext, NativeNode } from "../native/node";
 import type { Component } from "../tui";
+import type { SgrMouseEvent } from "../mouse";
 import {
 	getPaddingX,
 	getPublishedLineWidths,
@@ -20,6 +21,7 @@ type Cache = {
 	childLines: (readonly string[])[];
 	childWidths: (readonly number[] | undefined)[];
 	childSnapshots: (readonly string[] | undefined)[];
+	childStartRow: number;
 	result: string[];
 };
 
@@ -126,6 +128,20 @@ export class Box implements Component {
 
 	#invalidateCache(): void {
 		this.#cached = undefined;
+	}
+	handleMouse(event: SgrMouseEvent): boolean {
+		const cached = this.#cached;
+		if (!cached) return false;
+		let row = event.row - cached.childStartRow;
+		if (row < 0) return false;
+		for (let index = 0; index < cached.childLines.length; index++) {
+			const childLines = cached.childLines[index]!;
+			if (row < childLines.length) {
+				return this.children[index]?.handleMouse?.({ ...event, row }) === true;
+			}
+			row -= childLines.length;
+		}
+		return false;
 	}
 
 	invalidate(): void {
@@ -295,6 +311,7 @@ export class Box implements Component {
 			childLines,
 			childWidths,
 			childSnapshots,
+			childStartRow: (border ? 1 : 0) + this.#paddingY,
 			result,
 		};
 		return result;

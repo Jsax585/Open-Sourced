@@ -627,6 +627,18 @@ export class Container implements Component {
 		this.#memoLines = lines;
 		return lines;
 	}
+	handleMouse(event: SgrMouseEvent): boolean {
+		let row = event.row;
+		if (row < 0) return false;
+		for (let index = 0; index < this.#memoChildLines.length; index++) {
+			const childLines = this.#memoChildLines[index]!;
+			if (row < childLines.length) {
+				return this.children[index]?.handleMouse?.({ ...event, row }) === true;
+			}
+			row -= childLines.length;
+		}
+		return false;
+	}
 
 	describe(_cx: DescribeContext): NativeNode | null {
 		const children = this.children;
