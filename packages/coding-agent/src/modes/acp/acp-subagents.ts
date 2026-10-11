@@ -182,12 +182,15 @@ export class AcpSubagentStreams {
 			// IRC wake turns, follow-up assignments and revivals restart work in the same child conversation.
 			if (payload.status === "started") {
 				existing.runs++;
+				// A late `message_end` from the previous run may never have arrived; a new
+				// run must not append its text to that run's message. An older run still
+				// active owns the streaming message, and the new run's `message_start` resets it.
+				if (existing.activeRuns === 0) {
+					existing.liveMessageId = undefined;
+					existing.liveMessageProgress = undefined;
+				}
 				existing.activeRuns++;
 				existing.awaitingAssignment = true;
-				// A late `message_end` from the previous run may never have arrived; a new
-				// run must not append its text to that run's message.
-				existing.liveMessageId = undefined;
-				existing.liveMessageProgress = undefined;
 				existing.state = { state: "running" };
 			} else {
 				existing.activeRuns = Math.max(0, existing.activeRuns - 1);

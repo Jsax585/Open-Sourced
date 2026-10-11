@@ -352,6 +352,33 @@ describe("AcpSubagentStreams", () => {
 		expect(chunks[1]!.messageId).not.toBe(chunks[0]!.messageId);
 	});
 
+	it("keeps an active run's streaming message when an overlapping run starts", async () => {
+		registerAgent("Worker", ROOT_AGENT_ID);
+		const emit = (event: Record<string, unknown>) =>
+			bus.emit(TASK_SUBAGENT_EVENT_CHANNEL, { id: "Worker", event: event as AgentSessionEvent });
+		const partial = { role: "assistant", content: [{ type: "text", text: "Hel" }], stopReason: "stop", timestamp: 1 };
+		const answer = { ...partial, content: [{ type: "text", text: "Hello" }] };
+		// An IRC wake run streams; a follow-up run starts before it ends.
+		bus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, lifecycle("Worker", "started"));
+		emit({ type: "agent_start" });
+		emit({ type: "message_start", message: partial });
+		emit({ type: "message_update", message: partial, assistantMessageEvent: { type: "text_delta", delta: "Hel" } });
+		bus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, lifecycle("Worker", "started"));
+		emit({ type: "message_update", message: answer, assistantMessageEvent: { type: "text_delta", delta: "lo" } });
+		emit({ type: "message_end", message: answer });
+		emit({ type: "agent_end", messages: [answer] });
+
+		const chunks = (await delivered(4)).flatMap(n =>
+			n.update.sessionUpdate === "agent_message_chunk" && n.update.content.type === "text"
+				? [{ text: n.update.content.text, messageId: n.update.messageId }]
+				: [],
+		);
+		await Promise.resolve();
+		expect(chunks.map(chunk => chunk.text)).toEqual(["Hel", "lo"]);
+		expect(chunks[1]!.messageId).toBe(chunks[0]!.messageId);
+		expect(sent.filter(n => n.update.sessionUpdate === "agent_message_chunk")).toHaveLength(2);
+	});
+
 	it("drops every late event of turns already settled by the fallback, not just the latest", async () => {
 		registerAgent("Worker", ROOT_AGENT_ID);
 		const emit = (event: Record<string, unknown>) =>
