@@ -9,15 +9,15 @@
  *
  * Dedupe state is the conversation itself: a file is loaded when the system
  * prompt lists it, or the live context still holds its `<nested-context path="…">`
- * block or a full read of it. Compaction that drops the block re-arms the file
- * without bookkeeping. Subagents inherit the parent's loaded files, delivered
- * or fully read, through {@link NestedContextInjector.carried}, which lands
- * them in the child's system prompt.
+ * block (keyed by absolute path, so a cwd change cannot alias it) or a full
+ * read of it without `@` imports. Compaction that drops the block re-arms the
+ * file without bookkeeping. Subagents inherit the parent's loaded files,
+ * delivered or fully read, through {@link NestedContextInjector.carried}, which
+ * lands them in the child's system prompt.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AfterToolCallContext, AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import type { AfterToolCallContext, AgentMessage, AgentToolContext, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { isRecord, logger, prompt } from "@oh-my-pi/pi-utils";
 import { invalidate as invalidateCapabilityCache } from "../capability";
 import { type ContextFile, contextFileCapability } from "../capability/context-file";
@@ -49,6 +49,8 @@ export interface NestedContextHost {
 	cwd(): string;
 	/** Additional workspace roots, whose context files are also in the system prompt. */
 	additionalDirectories(): readonly string[];
+	/** The live window, for calls that run outside the agent loop. */
+	window(): { messages: readonly AgentMessage[]; systemPrompt: readonly string[] };
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
 }
 
@@ -57,90 +59,214 @@ interface NestedContextFile {
 	path: string;
 	/** Directory the file governs, strictly below cwd. */
 	owner: string;
+	/** The file as stored, before `@` imports expand. */
+	raw: string;
+	/** The file with `@` imports expanded. */
 	content: string;
 }
 
+/** One settled call that may touch a nested directory. */
+interface Touch {
+	toolName: string;
+	args: unknown;
+	details: unknown;
+	/** The batch whose developer message the call's blocks join. */
+	batch: BatchState;
+	messages: readonly AgentMessage[];
+	systemPrompt: readonly string[];
+}
+
+/** A claimed block awaiting delivery. */
+interface QueuedBlock {
+	path: string;
+	block: string;
+}
+
+/**
+ * The tool calls of one assistant message. The loop joins each call's context
+ * in call order once all have settled, but calls settle in any order. Blocks
+ * queue when claimed, so the queue keeps every file after its ancestors, and a
+ * call hands the queue over only once no earlier call can still add to it, so
+ * nothing a later call returns lands ahead of an earlier claim.
+ */
 interface BatchState {
-	message: AssistantMessage;
-	/** Files claimed by earlier calls of this batch: their block lands only after the batch settles. */
+	key: string;
+	/** Tool call ids, in call order. */
+	ids: readonly string[];
+	/** Calls past `beforeToolCall` whose `afterToolCall` has not run. */
+	outstanding: Set<string>;
+	/** Files claimed for delivery. */
 	claimed: Set<string>;
+	/** Context files a read of this batch showed whole. */
+	fullReads: Set<string>;
+	queue: QueuedBlock[];
 }
 
 /** Delivers subdirectory context files the first time a tool touches their directory. */
 export class NestedContextInjector {
 	readonly #host: NestedContextHost;
 	#batch: BatchState | undefined;
+	/** Bridged calls between their preflight and postflight: tool name and final arguments. */
+	readonly #bridged = new Map<string, { toolName: string; args: unknown }>();
 
 	constructor(host: NestedContextHost) {
 		this.#host = host;
 	}
 
 	/**
-	 * Passive context for a settled tool call. Returns undefined synchronously when
-	 * the call cannot touch a nested directory, so most calls never await.
+	 * Registers a loop call that will settle through {@link afterToolCall}. The
+	 * loop runs this for every call that passed validation before any executes.
+	 */
+	beforeToolCall(assistantMessage: AgentMessage, toolCallId: string): void {
+		if (!cfgContextFilesOnTouch.get(this.#host.settings)) return;
+		this.#batchFor(assistantMessage).outstanding.add(toolCallId);
+	}
+
+	/**
+	 * Passive context for a settled tool call: the batch's queued blocks, once no
+	 * earlier call is outstanding. Returns undefined synchronously when the call
+	 * cannot touch a nested directory and has nothing to hand over, so most calls
+	 * never await.
 	 */
 	afterToolCall(ctx: AfterToolCallContext): Promise<string | undefined> | undefined {
 		if (!cfgContextFilesOnTouch.get(this.#host.settings)) return undefined;
-		if (ctx.isError || TRIGGER_TOOLS[ctx.toolCall.name] !== true) return undefined;
+		const batch = this.#batchFor(ctx.assistantMessage);
+		const id = ctx.toolCall.id;
+		const own = ctx.isError
+			? undefined
+			: this.#touch({
+					toolName: ctx.toolCall.name,
+					args: ctx.args,
+					details: ctx.result.details,
+					batch,
+					messages: ctx.context.messages,
+					systemPrompt: ctx.context.systemPrompt,
+				});
+		if (own) return own.then(() => settle(batch, id));
+		const text = settle(batch, id);
+		return text === undefined ? undefined : Promise.resolve(text);
+	}
+
+	/** Records a call issued outside the agent loop (eval's `tool.*`, Cursor exec) once its arguments are final. */
+	beforeBridgedToolCall(toolCallId: string, toolName: string, args: unknown): void {
+		if (!cfgContextFilesOnTouch.get(this.#host.settings) || TRIGGER_TOOLS[toolName] !== true) return;
+		this.#bridged.set(toolCallId, { toolName, args });
+	}
+
+	/**
+	 * Loads context for a settled bridged call. Inside a running batch (eval's
+	 * `tool.*`) its blocks queue for the loop call that issued it, so they arrive
+	 * as a developer message rather than inside a script's return value. With no
+	 * batch running (Cursor exec), the call's own context sink delivers them.
+	 */
+	async afterBridgedToolCall(
+		toolCallId: string,
+		result: AgentToolResult,
+		isError: boolean,
+		context?: AgentToolContext,
+	): Promise<void> {
+		const call = this.#bridged.get(toolCallId);
+		this.#bridged.delete(toolCallId);
+		if (!call || isError) return;
+		const { messages, systemPrompt } = this.#host.window();
+		const batch = this.#batchFor(messages.findLast(message => message.role === "assistant"));
+		await this.#touch({ ...call, details: result.details, batch, messages, systemPrompt });
+		if (batch.outstanding.size > 0 || !context?.addAdditionalContext) return;
+		const text = drain(batch);
+		if (text) context.addAdditionalContext(text);
+	}
+
+	cancelBridgedToolCall(toolCallId: string): void {
+		this.#bridged.delete(toolCallId);
+	}
+
+	#batchFor(message: AgentMessage | undefined): BatchState {
+		const ids =
+			message?.role === "assistant"
+				? message.content.flatMap(part => (part.type === "toolCall" ? [part.id] : []))
+				: [];
+		// The loop and the session's message list can hold different copies of the message.
+		const key = ids.join("\n");
+		if (this.#batch?.key === key) return this.#batch;
+		// Blocks a batch could not hand over (an earlier call never settled) move on with their claims.
+		const queue = this.#batch?.queue ?? [];
+		this.#batch = {
+			key,
+			ids,
+			outstanding: new Set(),
+			claimed: new Set(queue.map(queued => queued.path)),
+			fullReads: new Set(),
+			queue,
+		};
+		return this.#batch;
+	}
+
+	#touch(touch: Touch): Promise<void> | undefined {
+		if (TRIGGER_TOOLS[touch.toolName] !== true) return undefined;
 		const cwd = path.resolve(this.#host.cwd());
-		const edited = editedFiles(ctx, cwd);
+		const edited = editedFiles(touch, cwd);
 		// Discovery reads through the capability fs cache, which would still hold
 		// the directory listing and content from before this edit.
 		for (const file of edited) invalidateCapabilityCache(file);
-		const directories = touchedDirectories(ctx, cwd, edited).filter(dir => isStrictlyBelow(cwd, dir));
+		const directories = touchedDirectories(touch, cwd, edited).filter(dir => isStrictlyBelow(cwd, dir));
 		if (directories.length === 0) return undefined;
-		return this.#load(ctx, cwd, directories);
+		return this.#load(touch, cwd, directories);
 	}
 
-	async #load(ctx: AfterToolCallContext, cwd: string, directories: readonly string[]): Promise<string | undefined> {
+	async #load(touch: Touch, cwd: string, directories: readonly string[]): Promise<void> {
 		let files: NestedContextFile[];
 		try {
 			files = await this.#discover(directories, cwd);
 		} catch (error) {
 			logger.warn("Nested context discovery failed", { error: String(error) });
-			return undefined;
+			return;
 		}
-		if (files.length === 0) return undefined;
+		if (files.length === 0) return;
 
-		if (this.#batch?.message !== ctx.assistantMessage) {
-			this.#batch = { message: ctx.assistantMessage, claimed: new Set() };
-		}
-		const batch = this.#batch;
-		const loadedInWindow = scanWindow(ctx.context.messages, cwd);
-		// A whole read of the context file itself already put it in context.
-		const fullRead = ctx.toolCall.name === "read" ? fullReadPath(ctx.result.details) : undefined;
-		if (fullRead) batch.claimed.add(fullRead);
+		const { batch } = touch;
+		const window = scanWindow(touch.messages);
+		// A whole read of the context file itself puts it in context: tool results
+		// precede the batch's developer message.
+		const fullRead = touch.toolName === "read" ? fullReadPath(touch.details) : undefined;
+		if (fullRead) batch.fullReads.add(fullRead);
 
-		const blocks: string[] = [];
+		// Claims and queueing stay synchronous, so the queue is in claim order.
 		const loaded: string[] = [];
 		for (const file of files) {
-			const display = displayPath(cwd, file.path);
-			if (loadedInWindow.has(display) || batch.claimed.has(file.path)) continue;
-			if (inSystemPrompt(ctx.context.systemPrompt, file.path)) continue;
+			if (batch.claimed.has(file.path) || window.blocks.has(file.path)) continue;
+			// A raw read shows `@` imports unexpanded, so it only stands in for a file without them.
+			const read = window.fullReads.has(file.path) || batch.fullReads.has(file.path);
+			if (read && file.content === file.raw) continue;
+			if (inSystemPrompt(touch.systemPrompt, file.path)) continue;
 			batch.claimed.add(file.path);
+			const display = displayPath(cwd, file.path);
 			const block = prompt.render(nestedContextFileTemplate, {
-				path: display,
+				path: file.path,
 				dir: `${displayPath(cwd, file.owner)}/`,
 				content: capContent(file.content, display),
 			});
-			blocks.push(block);
+			batch.queue.push({ path: file.path, block });
 			loaded.push(display);
 		}
-		if (blocks.length === 0) return undefined;
-		this.#host.emitNotice("info", `Loaded ${loaded.join(", ")}`, NOTICE_SOURCE);
-		return blocks.join("\n\n");
+		if (loaded.length > 0) this.#host.emitNotice("info", `Loaded ${loaded.join(", ")}`, NOTICE_SOURCE);
 	}
 
 	/**
 	 * Context files governing `directories`, farthest from cwd first, each once.
-	 * Discovery is the context-file capability itself, walked up from the touched
-	 * directory, so provider priority, one-file-per-directory shadowing and
-	 * `contextFiles.extra` behave exactly as they do for the system prompt.
+	 * Discovery is the context-file capability itself, run from each touched
+	 * directory and every ancestor below cwd (some providers only look in the
+	 * directory they are given), so provider priority, one-file-per-directory
+	 * shadowing and `contextFiles.extra` behave exactly as they do for the
+	 * system prompt.
 	 */
 	async #discover(directories: readonly string[], cwd: string): Promise<NestedContextFile[]> {
 		const additional = this.#host.additionalDirectories().map(dir => path.resolve(dir));
-		const byPath = new Map<string, NestedContextFile>();
+		const probes = new Set<string>();
 		for (const dir of directories) {
+			for (let current = dir; isStrictlyBelow(cwd, current); current = path.dirname(current)) probes.add(current);
+		}
+		const byPath = new Map<string, Omit<NestedContextFile, "content">>();
+		for (const dir of probes) {
 			const result = await loadCapability<ContextFile>(contextFileCapability.id, { cwd: dir });
 			for (const item of result.items) {
 				if (item.level !== "project" || byPath.has(item.path)) continue;
@@ -151,38 +277,29 @@ export class NestedContextInjector {
 				if (segments.some(segment => segment.startsWith(".") || EXCLUDED_SEGMENTS[segment] === true)) continue;
 				// An additional workspace root and its ancestors are already in the system prompt.
 				if (additional.some(root => root === owner || isStrictlyBelow(owner, root))) continue;
-				byPath.set(item.path, { path: item.path, owner, content: item.content });
+				byPath.set(item.path, { path: item.path, owner, raw: item.content });
 			}
 		}
 		const files = [...byPath.values()].sort(
 			(a, b) => a.owner.split(path.sep).length - b.owner.split(path.sep).length || a.path.localeCompare(b.path),
 		);
-		return Promise.all(
-			files.map(async file => ({ ...file, content: await expandAtImports(file.content, file.path) })),
-		);
+		return Promise.all(files.map(async file => ({ ...file, content: await expandAtImports(file.raw, file.path) })));
 	}
 
 	/**
 	 * Nested context files the live window holds, as system-prompt context file
 	 * entries for a subagent: delivered blocks with the content as delivered, and
 	 * full reads of a nested context file with the content discovery loads (the
-	 * read result itself carries line prefixes).
+	 * read result itself carries line prefixes). Empty with the setting off.
 	 */
 	async carried(messages: readonly AgentMessage[]): Promise<ContextFileEntry[]> {
+		if (!cfgContextFilesOnTouch.get(this.#host.settings)) return [];
 		const cwd = path.resolve(this.#host.cwd());
-		const byPath = new Map<string, string>();
-		const fullReads = new Set<string>();
-		for (const message of messages) {
-			if (message.role === "developer") {
-				for (const match of messageText(message.content).matchAll(BLOCK_RE)) {
-					byPath.set(path.resolve(cwd, match[1]), match[2]);
-				}
-			} else if (message.role === "toolResult" && message.toolName === "read" && !message.isError) {
-				const readPath = fullReadPath(message.details);
-				if (readPath && isStrictlyBelow(cwd, path.dirname(readPath))) fullReads.add(readPath);
-			}
-		}
-		const unread = [...fullReads].filter(filePath => !byPath.has(filePath));
+		const window = scanWindow(messages);
+		const byPath = new Map(window.blocks);
+		const unread = [...window.fullReads].filter(
+			filePath => !byPath.has(filePath) && isStrictlyBelow(cwd, path.dirname(filePath)),
+		);
 		if (unread.length > 0) {
 			try {
 				// Discovery decides which read files are context files, as it does for touches.
@@ -191,7 +308,7 @@ export class NestedContextInjector {
 					cwd,
 				);
 				for (const file of files) {
-					if (!fullReads.has(file.path) || byPath.has(file.path)) continue;
+					if (!unread.includes(file.path)) continue;
 					byPath.set(file.path, capContent(file.content, displayPath(cwd, file.path)));
 				}
 			} catch (error) {
@@ -202,24 +319,47 @@ export class NestedContextInjector {
 	}
 }
 
+/** Marks `id` settled; hands over the queue unless an earlier call of the batch is still outstanding. */
+function settle(batch: BatchState, id: string): string | undefined {
+	batch.outstanding.delete(id);
+	const index = batch.ids.indexOf(id);
+	for (let i = 0; i < index; i++) if (batch.outstanding.has(batch.ids[i])) return undefined;
+	return drain(batch);
+}
+
+function drain(batch: BatchState): string | undefined {
+	if (batch.queue.length === 0) return undefined;
+	return batch.queue
+		.splice(0)
+		.map(queued => queued.block)
+		.join("\n\n");
+}
+
 /** The per-file cost bound: content past the cap is cut, with a pointer to the rest. */
 function capContent(content: string, display: string): string {
 	if (content.length <= NESTED_CONTEXT_FILE_MAX_CHARS) return content;
 	return `${content.slice(0, NESTED_CONTEXT_FILE_MAX_CHARS)}\n[truncated at ${NESTED_CONTEXT_FILE_MAX_CHARS} characters; read ${display} for the rest]`;
 }
 
-/** Context files the live window already holds, by cwd-relative path. */
-function scanWindow(messages: readonly AgentMessage[], cwd: string): Set<string> {
-	const loaded = new Set<string>();
+/**
+ * Context files the live window already holds, by absolute path: delivered
+ * blocks (as developer messages, or folded into a bridged call's result) with
+ * their delivered content, and files read in full.
+ */
+function scanWindow(messages: readonly AgentMessage[]): { blocks: Map<string, string>; fullReads: Set<string> } {
+	const blocks = new Map<string, string>();
+	const fullReads = new Set<string>();
 	for (const message of messages) {
-		if (message.role === "developer") {
-			for (const match of messageText(message.content).matchAll(BLOCK_RE)) loaded.add(match[1]);
+		if (message.role === "developer" || (message.role === "toolResult" && message.toolName !== "read")) {
+			for (const match of messageText(message.content).matchAll(BLOCK_RE)) {
+				if (path.isAbsolute(match[1])) blocks.set(match[1], match[2]);
+			}
 		} else if (message.role === "toolResult" && message.toolName === "read" && !message.isError) {
 			const readPath = fullReadPath(message.details);
-			if (readPath) loaded.add(displayPath(cwd, readPath));
+			if (readPath) fullReads.add(readPath);
 		}
 	}
-	return loaded;
+	return { blocks, fullReads };
 }
 
 /** Whether the system prompt's `<repo-rules>` already carries `filePath`. */
@@ -271,22 +411,28 @@ function fullReadPath(details: unknown): string | undefined {
 }
 
 /** Absolute paths a write, edit or ast_edit changed, from the tool's own resolved paths where it reports them. */
-function editedFiles(ctx: AfterToolCallContext, cwd: string): string[] {
-	const details = isRecord(ctx.result.details) ? ctx.result.details : {};
-	const args = isRecord(ctx.args) ? ctx.args : {};
+function editedFiles(touch: Touch, cwd: string): string[] {
+	const details = isRecord(touch.details) ? touch.details : {};
+	const args = isRecord(touch.args) ? touch.args : {};
 	const files = new Set<string>();
 	const add = (filePath: unknown, base = cwd): void => {
 		if (typeof filePath !== "string" || filePath.length === 0 || filePath.includes("://")) return;
 		files.add(path.resolve(base, filePath));
 	};
-	switch (ctx.toolCall.name) {
+	switch (touch.toolName) {
 		case "write":
 			add(details.resolvedPath ?? args.path);
 			break;
 		case "edit":
+			// A move reports its destination as `path` and its origin as `sourcePath`.
 			add(details.path);
+			add(details.sourcePath);
 			if (Array.isArray(details.perFileResults)) {
-				for (const entry of details.perFileResults) if (isRecord(entry)) add(entry.path);
+				for (const entry of details.perFileResults) {
+					if (!isRecord(entry)) continue;
+					add(entry.path);
+					add(entry.sourcePath);
+				}
 			}
 			break;
 		case "ast_edit": {
@@ -299,9 +445,9 @@ function editedFiles(ctx: AfterToolCallContext, cwd: string): string[] {
 }
 
 /** Directories the call touched: a read's targets, or the parents of the files it edited. */
-function touchedDirectories(ctx: AfterToolCallContext, cwd: string, edited: readonly string[]): string[] {
-	if (ctx.toolCall.name !== "read") return [...new Set(edited.map(file => path.dirname(file)))];
-	const details = isRecord(ctx.result.details) ? ctx.result.details : {};
+function touchedDirectories(touch: Touch, cwd: string, edited: readonly string[]): string[] {
+	if (touch.toolName !== "read") return [...new Set(edited.map(file => path.dirname(file)))];
+	const details = isRecord(touch.details) ? touch.details : {};
 	const dirs = new Set<string>();
 	const resolved = readDetailsPath(details);
 	if (resolved) dirs.add(details.isDirectory === true ? resolved : path.dirname(resolved));

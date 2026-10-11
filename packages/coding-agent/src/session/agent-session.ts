@@ -2115,12 +2115,23 @@ export class AgentSession implements SettingsScope {
 			settings: this.settings,
 			cwd: () => this.sessionManager.getCwd(),
 			additionalDirectories: () => this.sessionManager.getAdditionalDirectories(),
+			window: () => ({ messages: this.agent.state.messages, systemPrompt: this.agent.state.systemPrompt }),
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 		});
 		this.#extensionRunner?.setToolCallPreflight?.({
-			before: (toolCallId, tool, args) => this.#ttsr.beforeBridgedToolCall(toolCallId, tool, args),
-			after: (toolCallId, result, context) => this.#ttsr.afterBridgedToolCall(toolCallId, result, context),
-			cancel: toolCallId => this.#ttsr.cancelBridgedToolCall(toolCallId),
+			before: async (toolCallId, tool, args) => {
+				const verdict = await this.#ttsr.beforeBridgedToolCall(toolCallId, tool, args);
+				if (!verdict?.block) this.#nestedContext.beforeBridgedToolCall(toolCallId, tool.name, args);
+				return verdict;
+			},
+			after: async (toolCallId, result, context, isError) => {
+				await this.#nestedContext.afterBridgedToolCall(toolCallId, result, isError === true, context);
+				return this.#ttsr.afterBridgedToolCall(toolCallId, result, context);
+			},
+			cancel: toolCallId => {
+				this.#ttsr.cancelBridgedToolCall(toolCallId);
+				this.#nestedContext.cancelBridgedToolCall(toolCallId);
+			},
 		});
 		this.agent.setOnBeforeYield(() => this.#ttsr.settleJudgments());
 		this.agent.setOnModelCallSystemPrompt(prompt => {
@@ -4949,6 +4960,7 @@ export class AgentSession implements SettingsScope {
 	 * execution still emit there).
 	 */
 	async #beforeToolCall(ctx: BeforeToolCallContext, signal?: AbortSignal): Promise<BeforeToolCallResult | undefined> {
+		this.#nestedContext.beforeToolCall(ctx.assistantMessage, ctx.toolCall.id);
 		const runner = this.#extensionRunner;
 		runner?.markLoopToolCall?.(ctx.toolCall.id, ctx.tool.name);
 		const ttsrResult = await this.#ttsr.beforeToolCall(ctx);

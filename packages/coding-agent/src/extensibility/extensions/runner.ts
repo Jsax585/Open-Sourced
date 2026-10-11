@@ -125,6 +125,7 @@ export interface ToolCallPreflight {
 		toolCallId: string,
 		result: AgentToolResult,
 		context?: AgentToolContext,
+		isError?: boolean,
 	) => Promise<AgentToolResult | undefined> | AgentToolResult | undefined;
 	cancel?: (toolCallId: string) => void;
 }
@@ -663,8 +664,9 @@ export class ExtensionRunner {
 		toolCallId: string,
 		result: AgentToolResult,
 		context?: AgentToolContext,
+		isError?: boolean,
 	): Promise<AgentToolResult | undefined> {
-		return this.#toolCallPreflight?.after?.(toolCallId, result, context);
+		return this.#toolCallPreflight?.after?.(toolCallId, result, context, isError);
 	}
 
 	cancelToolCallPreflight(toolCallId: string): void {

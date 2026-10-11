@@ -386,24 +386,18 @@ export function collectIrcPeerRoster(
 }
 
 /**
- * Context files a subagent starts with: the parent's, minus the `AGENTS.md`
- * files of cwd and its ancestors, plus the nested files the parent loaded on
- * touch and still holds. A nested `AGENTS.md` the parent itself inherited sits
- * below cwd and is kept, so it reaches every generation. Undefined when the
- * parent has none resolved, so the child discovers its own.
+ * Context files a subagent starts with: the parent's plus the nested files it
+ * loaded on touch and still holds, minus every `AGENTS.md`. Those carry the
+ * parent agent's own instructions, which subagents do not inherit (#233); the
+ * child's own touches still load the nested ones it works under. Undefined
+ * when the parent has none resolved, so the child discovers its own.
  */
 export async function inheritedContextFiles(session: ToolSession): Promise<ContextFileEntry[] | undefined> {
 	if (!session.contextFiles) return undefined;
-	const cwd = path.resolve(session.cwd);
 	const byPath = new Map<string, ContextFileEntry>();
-	for (const file of session.contextFiles) {
-		const relative = path.relative(cwd, path.dirname(file.path));
-		const nested = relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
-		if (!nested && path.basename(file.path).toLowerCase() === "agents.md") continue;
+	for (const file of [...session.contextFiles, ...((await session.getNestedContextFiles?.()) ?? [])]) {
+		if (path.basename(file.path).toLowerCase() === "agents.md" || byPath.has(file.path)) continue;
 		byPath.set(file.path, file);
-	}
-	for (const file of (await session.getNestedContextFiles?.()) ?? []) {
-		if (!byPath.has(file.path)) byPath.set(file.path, file);
 	}
 	return [...byPath.values()];
 }

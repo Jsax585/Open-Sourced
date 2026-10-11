@@ -16,8 +16,9 @@ import { reset as resetCapabilityCache } from "@oh-my-pi/pi-coding-agent/capabil
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { NESTED_CONTEXT_FILE_MAX_CHARS } from "@oh-my-pi/pi-coding-agent/session/nested-context";
+import { NESTED_CONTEXT_FILE_MAX_CHARS, NestedContextInjector } from "@oh-my-pi/pi-coding-agent/session/nested-context";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { inheritedContextFiles } from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { ContextFileEntry, ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -25,7 +26,7 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 interface ScriptedCall {
-	name: "read" | "write";
+	name: "read" | "write" | "edit" | "ast_edit" | "eval";
 	arguments: Record<string, unknown>;
 }
 
@@ -41,8 +42,11 @@ interface RunResult {
 
 const BLOCK_PATHS_RE = /<nested-context path="([^"]+)">/g;
 
-function blockPaths(texts: readonly string[]): string[] {
-	return texts.flatMap(text => [...text.matchAll(BLOCK_PATHS_RE)].map(match => match[1]));
+/** Delivered block paths, relative to `root`. */
+function blockPaths(texts: readonly string[], root: string): string[] {
+	return texts.flatMap(text =>
+		[...text.matchAll(BLOCK_PATHS_RE)].map(match => path.relative(root, match[1]).split(path.sep).join("/")),
+	);
 }
 
 function developerTexts(messages: readonly AgentMessage[]): string[] {
@@ -64,10 +68,18 @@ function writeTree(root: string, files: Record<string, string>): void {
 
 let apiCounter = 0;
 
+/** A second user prompt, after `before` runs against the session. */
+interface FollowUp {
+	before: (session: AgentSession) => Promise<unknown>;
+	turns: ScriptedCall[][];
+}
+
 /**
  * Runs one user prompt against a scripted model: request N issues `turns[N]`
  * as parallel tool calls in one assistant message; the request after the last
- * turn ends the run.
+ * turn ends the prompt. A follow-up prompt replays the same way with its own
+ * turns. Requests without tools (compaction summaries) answer with text and
+ * are not recorded.
  */
 async function run(
 	tempDir: TempDir,
@@ -75,13 +87,22 @@ async function run(
 	turns: ScriptedCall[][],
 	settings: Record<string, unknown>,
 	contextFiles: ContextFileEntry[] = [],
+	followUp?: FollowUp,
 ): Promise<RunResult> {
 	const api = `test-nested-context-${++apiCounter}`;
 	const contexts: Context[] = [];
+	let script = turns;
+	let cursor = 0;
 	registerCustomApi(api, (_model, context) => {
-		contexts.push(context);
 		const stream = new AssistantMessageEventStream();
-		const turn = turns[contexts.length - 1];
+		if (!context.tools?.length) {
+			queueMicrotask(() =>
+				stream.push({ type: "done", reason: "stop", message: createAssistantMessage("summary") }),
+			);
+			return stream;
+		}
+		contexts.push(context);
+		const turn = script[cursor++];
 		queueMicrotask(() => {
 			if (!turn) {
 				stream.push({ type: "done", reason: "stop", message: createAssistantMessage("done") });
@@ -98,6 +119,12 @@ async function run(
 			message.stopReason = "toolUse";
 			calls.forEach((toolCall, contentIndex) => {
 				stream.push({ type: "toolcall_start", contentIndex, partial: message });
+				stream.push({
+					type: "toolcall_delta",
+					contentIndex,
+					delta: JSON.stringify(toolCall.arguments),
+					partial: message,
+				});
 				stream.push({ type: "toolcall_end", contentIndex, toolCall: toolCall as never, partial: message });
 			});
 			stream.push({ type: "done", reason: "toolUse", message });
@@ -134,7 +161,7 @@ async function run(
 		enableMCP: false,
 		enableLsp: false,
 		skipPythonPreflight: true,
-		toolNames: ["read", "write"],
+		toolNames: ["read", "write", "edit", "ast_edit", "eval"],
 	});
 	const notices: string[] = [];
 	session.subscribe(event => {
@@ -142,6 +169,12 @@ async function run(
 	});
 	try {
 		await session.sendUserMessage("go");
+		if (followUp) {
+			await followUp.before(session);
+			script = followUp.turns;
+			cursor = 0;
+			await session.sendUserMessage("again");
+		}
 		return {
 			contexts,
 			developerTexts: developerTexts(session.agent.state.messages),
@@ -194,10 +227,10 @@ describe("contextFiles.onTouch", () => {
 		);
 
 		const secondRequest = developerTexts(result.contexts[1]?.messages as AgentMessage[]);
-		expect(blockPaths(secondRequest)).toEqual(["pkg/AGENTS.md"]);
+		expect(blockPaths(secondRequest, repo)).toEqual(["pkg/AGENTS.md"]);
 		expect(secondRequest.join("\n")).toContain("PKG-CANARY");
 		expect(secondRequest.join("\n")).not.toContain("ROOT-CANARY");
-		expect(blockPaths(result.developerTexts)).toEqual(["pkg/AGENTS.md"]);
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
 		expect(result.notices).toEqual(["Loaded pkg/AGENTS.md"]);
 	});
 
@@ -216,7 +249,7 @@ describe("contextFiles.onTouch", () => {
 			],
 			ON,
 		);
-		expect(blockPaths(result.developerTexts)).toEqual(["pkg/AGENTS.md"]);
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
 	});
 
 	it("loads every level between cwd and the touched file, shallowest first", async () => {
@@ -227,7 +260,7 @@ describe("contextFiles.onTouch", () => {
 			"pkg/sub/deep/x.ts": "x",
 		});
 		const result = await run(tempDir, repo, [[{ name: "read", arguments: { path: "pkg/sub/deep/x.ts" } }]], ON);
-		expect(blockPaths(result.developerTexts)).toEqual(["pkg/AGENTS.md", "pkg/sub/CLAUDE.md"]);
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md", "pkg/sub/CLAUDE.md"]);
 	});
 
 	it("triggers on a write that creates a new subdirectory", async () => {
@@ -239,7 +272,7 @@ describe("contextFiles.onTouch", () => {
 			[[{ name: "write", arguments: { path: "pkg/fresh/new.ts", content: "export {};\n" } }]],
 			ON,
 		);
-		expect(blockPaths(result.developerTexts)).toEqual(["pkg/AGENTS.md"]);
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
 	});
 
 	it("ignores context files in hidden directories and node_modules", async () => {
@@ -308,14 +341,14 @@ describe("contextFiles.onTouch", () => {
 			],
 			ON,
 		);
-		expect(blockPaths(result.developerTexts)).toEqual(["pkg/AGENTS.md"]);
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
 	});
 
 	it("loads the context file of every directory a grouped read touches", async () => {
 		// Guards multi-path reads, whose result has no single path.
 		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "a", "lib/AGENTS.md": "LIB-CANARY", "lib/b.ts": "b" });
 		const result = await run(tempDir, repo, [[{ name: "read", arguments: { path: "pkg/a.ts;lib/b.ts" } }]], ON);
-		expect(blockPaths(result.developerTexts).sort()).toEqual(["lib/AGENTS.md", "pkg/AGENTS.md"]);
+		expect(blockPaths(result.developerTexts, repo).sort()).toEqual(["lib/AGENTS.md", "pkg/AGENTS.md"]);
 	});
 
 	it("sees a context file written after an earlier touch of its directory found none", async () => {
@@ -331,7 +364,7 @@ describe("contextFiles.onTouch", () => {
 			],
 			ON,
 		);
-		expect(blockPaths(result.developerTexts)).toEqual(["pkg/AGENTS.md"]);
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
 		expect(result.developerTexts.join("\n")).toContain("NEW-CANARY");
 	});
 
@@ -355,24 +388,179 @@ describe("contextFiles.onTouch", () => {
 		expect(parent.developerTexts).toEqual([]);
 		expect(parent.carried).toEqual([{ path: path.join(repo, "pkg/AGENTS.md"), content: "PKG-CANARY" }]);
 	});
+
+	it("hands nothing to subagents when the setting is off, even after a full read", async () => {
+		// Guards the opt-in: with the setting off, subagent context must match the default.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY" });
+		const parent = await run(tempDir, repo, [[{ name: "read", arguments: { path: "pkg/AGENTS.md" } }]], {});
+		expect(parent.carried).toEqual([]);
+	});
+
+	it("still delivers a context file a full read showed with its @ imports unexpanded", async () => {
+		// Guards the read dedupe: a raw read never showed the imported files the system prompt would.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY\n@notes.md", "pkg/notes.md": "IMPORTED-CANARY" });
+		const result = await run(tempDir, repo, [[{ name: "read", arguments: { path: "pkg/AGENTS.md" } }]], ON);
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
+		expect(result.developerTexts.join("\n")).toContain("IMPORTED-CANARY");
+		expect(result.carried).toEqual([
+			{ path: path.join(repo, "pkg/AGENTS.md"), content: "PKG-CANARY\nIMPORTED-CANARY" },
+		]);
+	});
+
+	it("loads a context file only providers checking the exact directory find, from a deeper touch", async () => {
+		// Guards ancestor probing: .github/copilot-instructions.md is only found when discovery runs
+		// from its own directory, not when it walks up from a subdirectory.
+		setup({ "pkg/.github/copilot-instructions.md": "COPILOT-CANARY", "pkg/sub/x.ts": "x" });
+		const result = await run(tempDir, repo, [[{ name: "read", arguments: { path: "pkg/sub/x.ts" } }]], ON);
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/.github/copilot-instructions.md"]);
+	});
+
+	it("triggers on an edit", async () => {
+		// Guards the edit trigger, whose result reports paths differently from write.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "old\n" });
+		const input = "*** Begin Patch\n*** Update File: pkg/a.ts\n@@\n-old\n+new\n*** End Patch\n";
+		const result = await run(tempDir, repo, [[{ name: "edit", arguments: { input } }]], {
+			...ON,
+			"edit.mode": "apply_patch",
+		});
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
+	});
+
+	it("loads the context files of both directories an edit moves a file between", async () => {
+		// Guards moves: the result's path is the destination; the origin is only its source path.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "lib/AGENTS.md": "LIB-CANARY", "pkg/a.ts": "old\n" });
+		const input =
+			"*** Begin Patch\n*** Update File: pkg/a.ts\n*** Move to: lib/a.ts\n@@\n-old\n+new\n*** End Patch\n";
+		const result = await run(tempDir, repo, [[{ name: "edit", arguments: { input } }]], {
+			...ON,
+			"edit.mode": "apply_patch",
+		});
+		expect(blockPaths(result.developerTexts, repo).sort()).toEqual(["lib/AGENTS.md", "pkg/AGENTS.md"]);
+	});
+
+	it("triggers on an ast_edit", async () => {
+		// Guards the ast_edit trigger, whose result lists files relative to its own cwd.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "legacyWrap(x, y);\n" });
+		const result = await run(
+			tempDir,
+			repo,
+			[
+				[
+					{
+						name: "ast_edit",
+						arguments: { ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }], paths: ["pkg/a.ts"] },
+					},
+				],
+			],
+			{ ...ON, "astEdit.enabled": true },
+		);
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
+	});
+
+	it("delivers context for files an eval script reads through the tool bridge", async () => {
+		// Guards bridged calls: they bypass the loop's after-tool hook, so without the preflight
+		// wiring a script could read anywhere and never load the directory's rules.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "a" });
+		const result = await run(
+			tempDir,
+			repo,
+			[[{ name: "eval", arguments: { language: "js", code: 'await tool.read({ path: "pkg/a.ts" });' } }]],
+			ON,
+		);
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
+	});
+
+	it("loads a file again once compaction drops it from the window", async () => {
+		// Guards the window-as-state design: dedupe must not outlive the block it relies on.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "a", "pkg/b.ts": "b" });
+		const result = await run(
+			tempDir,
+			repo,
+			[[{ name: "read", arguments: { path: "pkg/a.ts" } }]],
+			{ ...ON, "compaction.keepRecentTokens": 1 },
+			[],
+			{ before: session => session.compact(), turns: [[{ name: "read", arguments: { path: "pkg/b.ts" } }]] },
+		);
+		expect(result.notices).toEqual(["Loaded pkg/AGENTS.md", "Loaded pkg/AGENTS.md"]);
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
+	});
+
+	it("keeps recognising delivered files after the session moves to another cwd", async () => {
+		// Guards block keys: a cwd-relative path would point elsewhere after the move, so the
+		// file would load twice and subagents would get a wrong path.
+		setup({ "pkg/sub/AGENTS.md": "SUB-CANARY", "pkg/sub/a.ts": "a", "pkg/sub/b.ts": "b" });
+		const result = await run(tempDir, repo, [[{ name: "read", arguments: { path: "pkg/sub/a.ts" } }]], ON, [], {
+			before: session => session.moveSession(path.join(repo, "pkg")),
+			turns: [[{ name: "read", arguments: { path: "sub/b.ts" } }]],
+		});
+		expect(result.notices).toEqual(["Loaded pkg/sub/AGENTS.md"]);
+		expect(result.carried).toEqual([{ path: path.join(repo, "pkg/sub/AGENTS.md"), content: "SUB-CANARY" }]);
+	});
+});
+
+describe("NestedContextInjector batch order", () => {
+	let tempDir: TempDir;
+	afterEach(() => tempDir?.removeSync());
+
+	it("delivers a shared parent once, before its child, however parallel calls settle", async () => {
+		// Guards precedence across a batch: the loop joins context in call order, so a parent
+		// claimed by a later call would land after the child of an earlier one, or twice.
+		tempDir = TempDir.createSync("@pi-nested-order-");
+		const repo = fs.realpathSync(tempDir.path());
+		writeTree(repo, { "pkg/AGENTS.md": "PKG", "pkg/sub/AGENTS.md": "SUB", "pkg/sub/x.ts": "x", "pkg/y.ts": "y" });
+		resetCapabilityCache();
+		const injector = new NestedContextInjector({
+			settings: Settings.isolated(ON),
+			cwd: () => repo,
+			additionalDirectories: () => [],
+			window: () => ({ messages: [], systemPrompt: [] }),
+			emitNotice: () => {},
+		});
+		const toolCalls = ["pkg/sub/x.ts", "pkg/y.ts"].map((file, index) => ({
+			type: "toolCall" as const,
+			id: `call-${index}`,
+			name: "read",
+			arguments: { path: file },
+		}));
+		const assistantMessage = createAssistantMessage("");
+		assistantMessage.content = toolCalls;
+		const settle = (index: number) =>
+			injector.afterToolCall({
+				assistantMessage,
+				toolCall: toolCalls[index],
+				args: toolCalls[index].arguments,
+				result: { content: [], details: { resolvedPath: path.join(repo, toolCalls[index].arguments.path) } },
+				isError: false,
+				context: { systemPrompt: [], messages: [] },
+			} as never);
+		for (const toolCall of toolCalls) injector.beforeToolCall(assistantMessage, toolCall.id);
+		// The shallow call settles first, as it can when the deep one is slower.
+		const second = await settle(1);
+		const first = await settle(0);
+		const joined = [first, second].filter(Boolean) as string[];
+		expect(blockPaths(joined, repo)).toEqual(["pkg/AGENTS.md", "pkg/sub/AGENTS.md"]);
+	});
 });
 
 describe("inheritedContextFiles", () => {
-	const nested = { path: "/repo/pkg/AGENTS.md", content: "PKG" };
-	it("drops the AGENTS.md files of cwd and its ancestors and appends the parent's nested files", async () => {
+	const nested = { path: "/repo/pkg/CLAUDE.md", content: "PKG" };
+	it("drops every AGENTS.md and keeps other context files, the parent's nested ones included", async () => {
+		// Guards #233: AGENTS.md carries the parent agent's own instructions, which subagents do not
+		// inherit, wherever it sits; other context files and on-touch loads still pass on.
 		const session = {
 			cwd: "/repo",
 			contextFiles: [
 				{ path: "/AGENTS.md", content: "ABOVE" },
 				{ path: "/repo/AGENTS.md", content: "ROOT" },
 				{ path: "/repo/CLAUDE.md", content: "CLAUDE" },
+				{ path: "/repo/lib/AGENTS.md", content: "INHERITED" },
 			],
-			getNestedContextFiles: async () => [nested],
+			getNestedContextFiles: async () => [nested, { path: "/repo/pkg/sub/AGENTS.md", content: "LOADED" }],
 		} as unknown as ToolSession;
 		expect(await inheritedContextFiles(session)).toEqual([{ path: "/repo/CLAUDE.md", content: "CLAUDE" }, nested]);
 	});
 
-	it("keeps a nested AGENTS.md the parent inherited, so grandchildren get it too", async () => {
+	it("passes on a nested file the parent itself inherited, so grandchildren get it too", async () => {
 		// Guards multi-level delegation: a child holds the file in its system prompt, not in its
 		// window, so only its own context files can pass it on.
 		const session = {
