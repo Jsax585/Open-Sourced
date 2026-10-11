@@ -4,10 +4,8 @@
 
 ### Added
 
-- Added a report to `computer` Eval cells that send desktop input: once the apps go quiet, the cell ends with what changed in each touched window since the model's last tree of it, the window that took the focus when a touched one closed, new windows of the apps the input reached, or of any app after input to a window (whole), and the opened app's window after `apps.open` ([#15280](https://github.com/can1357/oh-my-pi/pull/15280) by [@will-bogusz](https://github.com/will-bogusz))
-- Added `ctx.annotations` so extensions can submit or collect `/annotate` feedback on text and diffs ([#15260](https://github.com/can1357/oh-my-pi/pull/15260) by [@Shadorain](https://github.com/Shadorain)).
-- Added **Extra Context Files** to `/settings` → **Context** so custom instruction filenames can be configured without editing YAML ([#15252](https://github.com/can1357/oh-my-pi/pull/15252) by [@Shadorain](https://github.com/Shadorain)).
 - Added hiding a pending `ask` question without answering it: `Alt+H` (`app.ask.hide`) or the Hide button in Tern collapses the dialog to one line; the same key, `Enter`, or Show brings it back ([#15400](https://github.com/can1357/oh-my-pi/pull/15400) by [@H4vC](https://github.com/H4vC))
+- Added a report to `computer` Eval cells that send desktop input: once the apps go quiet, the cell ends with what changed in each touched window since the model's last tree of it, the window that took the focus when a touched one closed, new windows of the apps the input reached, or of any app after input to a window (whole), and the opened app's window after `apps.open` ([#15280](https://github.com/can1357/oh-my-pi/pull/15280) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.9.2] - 2026-10-11
 
