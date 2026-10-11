@@ -27,6 +27,7 @@ import { parseModelString } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgGoalContinuationModes } from "@oh-my-pi/pi-coding-agent/goals/settings";
+import { submitInteractiveInput } from "@oh-my-pi/pi-coding-agent/main";
 import { editVariantForModel } from "@oh-my-pi/pi-coding-agent/utils/edit-mode";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
@@ -5506,6 +5507,38 @@ describe("AgentSession retry fallback", () => {
 			});
 			return { requested, agent };
 		};
+
+		it("keeps an interactive goal continuation on the fallback through input dispatch", async () => {
+			const { requested } = setup({
+				initial: true,
+				responses: [{ content: ["Goal continuation"] }, { content: ["New host turn"] }],
+			});
+			const mode = {
+				markPendingSubmissionStarted: () => true,
+				finishPendingSubmission: () => {},
+				showError: (error: string) => {
+					throw new Error(error);
+				},
+				checkShutdownRequested: async () => {},
+				skillCommands: new Map(),
+				optimisticSkillMessagePending: false,
+				renderOptimisticSkillMessage: () => {},
+				clearOptimisticSkillMessage: () => {},
+			};
+			await submitInteractiveInput(mode, session!, {
+				text: "Advance the active goal",
+				customType: "goal-continuation",
+				admissionOrigin: "continuation",
+				display: false,
+				cancelled: false,
+				started: false,
+			});
+			await session!.waitForIdle();
+			expect(requested).toEqual([fallbackId]);
+			await session!.prompt("New host turn");
+			await session!.waitForIdle();
+			expect(requested).toEqual([fallbackId, primaryId]);
+		});
 
 		it("retains legacy cooldown-expiry effort after explicitly reselecting fallback effort", async () => {
 			setup({ initial: true, policy: "cooldown-expiry", responses: [{ content: ["Restored"] }] });

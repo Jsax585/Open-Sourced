@@ -179,6 +179,7 @@ export async function runCommitAgentSession(input: CommitAgentInput): Promise<Co
 				attribution: "agent",
 				expandPromptTemplates: false,
 				synthetic: true,
+				admissionOrigin: "continuation",
 			});
 		}
 

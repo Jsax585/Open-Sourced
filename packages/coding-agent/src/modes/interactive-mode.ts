@@ -2883,6 +2883,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.startPendingSubmission({
 					text: prompt,
 					customType: "goal-continuation",
+					admissionOrigin: "continuation",
 					display: false,
 				}),
 			);
@@ -3261,6 +3262,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			images?: ImageContent[];
 			imageLinks?: (string | undefined)[];
 			customType?: string;
+			admissionOrigin?: "new-turn" | "continuation";
 			display?: boolean;
 			streamingBehavior?: "steer" | "followUp";
 		},
@@ -3271,6 +3273,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			images: input.images,
 			imageLinks: input.imageLinks,
 			customType: input.customType,
+			admissionOrigin: input.admissionOrigin,
 			display: input.display,
 			streamingBehavior: input.streamingBehavior,
 			cancelled: false,
