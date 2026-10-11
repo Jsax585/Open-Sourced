@@ -24,6 +24,7 @@ import {
 import { type EditMode, getEditInputPaths } from "@oh-my-pi/pi-tui/tools/edit";
 import {
 	formatModelStringWithRouting,
+	resolveAgentAdvisorRolePattern,
 	resolveAgentAdvisorSelection,
 	resolveAgentPrewalkPattern,
 	resolveConfiguredModelPatterns,
@@ -391,6 +392,8 @@ export interface ExecutorOptions {
 	additionalDirectories?: string[];
 	/** Exact provider credential resolver inherited from the parent session. */
 	getApiKey?: CreateAgentSessionOptions["getApiKey"];
+	/** Parent session's manager; the child and its revived turns use this exact delivery scope. */
+	asyncJobManager?: AsyncJobManager;
 	/** Parent session whose stored credential affinities seed the child session. */
 	credentialSourceSessionId?: string;
 	worktree?: string;
@@ -3917,12 +3920,17 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	// `task.agentAdvisor` settings override (agent name → "on"/"off"/model
 	// pattern) pairs the spawned session with an advisor. Subagents default to
 	// no advisor (createSubagentSettings forces `advisor.enabled` off); an
-	// explicit model pattern lands on the child's `modelRoles.advisor` so role
-	// aliases and `:level` suffixes resolve inside the spawned session.
+	// explicit model pattern is expanded against this owner's roles (a nested
+	// spawn's owner is its parent subagent) and lands on the child's
+	// `modelRoles.advisor`. The expanded pattern is also what the session
+	// contract persists, so cold revival under root settings reuses it.
 	const advisorSelection = resolveAgentAdvisorSelection({
 		settingsOverride: cfgTaskAgentAdvisor.get(settings)[agent.name],
 		agentAdvisor: agent.advisor,
 	});
+	const advisorRolePattern = advisorSelection?.model
+		? resolveAgentAdvisorRolePattern(advisorSelection.model, settings)
+		: undefined;
 	const subagentSettings = createSubagentSettings(
 		settings,
 		{
@@ -3931,8 +3939,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// Isolated runs must not expose roots outside the worktree.
 			...(worktree !== undefined ? { "workspace.additionalDirectories": [] } : undefined),
 			...(advisorSelection ? { "advisor.enabled": true } : undefined),
-			...(advisorSelection?.model
-				? { modelRoles: { ...settings.getModelRoles(), advisor: advisorSelection.model } }
+			...(advisorRolePattern
+				? { modelRoles: { ...settings.getModelRoles(), advisor: advisorRolePattern } }
 				: undefined),
 		},
 		options.parentServiceTier,
@@ -4341,6 +4349,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					parentHindsightSessionState: options.parentHindsightSessionState,
 					parentMnemopiSessionState: options.parentMnemopiSessionState,
 					parentTaskPrefix: id,
+					asyncJobManager: options.asyncJobManager,
 					parentAgentId: options.parentAgentId,
 					agentId: id,
 					agentDisplayName: agent.name,
@@ -4505,7 +4514,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				readOnly: isReadOnlyAgent(agent),
 				spawns: spawnsEnv,
 				readSummarize: agent.readSummarize,
-				advisor: advisorSelection ? (advisorSelection.model ?? "on") : undefined,
+				advisor: advisorSelection ? (advisorRolePattern ?? "on") : undefined,
 				compactionThreshold: options.compactionThresholdOverride,
 				outputSchema,
 				outputSchemaMode: options.outputSchemaMode,
@@ -4644,7 +4653,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 				unsubscribe = null;
 			}
-			const jobManager = AsyncJobManager.instance();
+			const jobManager = options.asyncJobManager;
 			if (jobManager) {
 				const reap = await jobManager.cancelAndReapOwnerJobs(id, cleanupDeadlineAt);
 				if (!reap.settled) {
