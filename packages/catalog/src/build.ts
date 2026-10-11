@@ -78,7 +78,11 @@ function applyCatalogAssignments<TApi extends Api>(model: Model<TApi>, catalog: 
 	if (kind !== undefined) model.kind = kind;
 	const judgment = objectPayload(catalog.judgment);
 	if (judgment !== undefined && Reflect.get(judgment, "api") === "openai-decisions") {
-		const cost = objectPayload(Reflect.get(judgment, "cost"));
+		const judgmentAllowed =
+			Reflect.get(judgment, "requiresOfficialEndpoint") !== true ||
+			(model.compat !== undefined && "officialEndpoint" in model.compat && model.compat.officialEndpoint === true);
+		if (!judgmentAllowed) delete model.judgment;
+		const cost = judgmentAllowed ? objectPayload(Reflect.get(judgment, "cost")) : undefined;
 		if (cost !== undefined) {
 			const input = numberField(cost, "input");
 			const output = numberField(cost, "output");

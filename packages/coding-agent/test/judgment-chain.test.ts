@@ -4,7 +4,9 @@ import * as path from "node:path";
 import type { ChatUsageEvent } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, ChoiceQuestion, Model, NoulQuestion } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
 import { cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -322,6 +324,55 @@ describe("ChainJudge", () => {
 				}),
 			}),
 		);
+	});
+
+	it("uses redirected catalog Luna as prompted chat and retains its online fallback", async () => {
+		const bundledLuna = getBundledModel("openai", "gpt-6-luna");
+		if (!bundledLuna) throw new Error("Expected bundled openai/gpt-6-luna");
+		const redirectedLuna = buildModel({
+			...toModelSpec(bundledLuna),
+			baseUrl: "https://my-proxy.example/v1",
+		});
+		const settings = Settings.isolated({
+			modelRoles: { judge: "openai/gpt-6-luna" },
+			"retry.fallbackChains": { judge: [`${ONLINE.provider}/${ONLINE.id}`] },
+		});
+		const registry = makeRegistry([redirectedLuna, ONLINE], {
+			openai: "openai-key",
+			[ONLINE.provider]: "chat-key",
+		});
+		const decisionsUrls: string[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(
+			asGlobalFetch(async url => {
+				decisionsUrls.push(String(url));
+				return new Response("unsupported", { status: 400 });
+			}),
+		);
+		const attemptedModels: string[] = [];
+		vi.spyOn(ai, "completeSimple").mockImplementation(async (model, _context, options) => {
+			attemptedModels.push(`${model.provider}/${model.id}`);
+			if (model.id === redirectedLuna.id) throw new Error("proxy rejected the chat request");
+			const response = reply(model, "level: high");
+			options?.onAttempt?.(response);
+			return response;
+		});
+		const judge = new ChainJudge({ settings, registry, purpose: "test" });
+		const kinds: string[] = [];
+
+		const answer = await judge.withCandidate(async (candidate, kind) => {
+			kinds.push(kind);
+			const result = await candidate.judge({
+				state: "refactor the scheduler",
+				questions: { level: TIER_QUESTION },
+			});
+			return result.answers.level.choice;
+		});
+
+		expect(answer).toBe("high");
+		expect(hasNativeJudge(settings, registry)).toBe(false);
+		expect(kinds).toEqual(["online", "online"]);
+		expect(attemptedModels).toEqual([`openai/${redirectedLuna.id}`, `${ONLINE.provider}/${ONLINE.id}`]);
+		expect(decisionsUrls).toEqual([]);
 	});
 
 	it("never sends a failed capability-backed Luna judgment through Responses chat", async () => {

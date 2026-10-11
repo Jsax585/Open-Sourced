@@ -110,6 +110,7 @@ provider "openai" {
 	models "gpt-6-luna" {
 		judgment {
 			api "openai-decisions"
+			requires-official-endpoint #true
 			cost {
 				input 0.1
 				output 0
