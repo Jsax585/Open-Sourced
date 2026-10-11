@@ -1224,8 +1224,24 @@ export function groqModelManagerOptions(config?: GroqModelManagerConfig): ModelM
 		config,
 		requireApiKey: true,
 		dynamicModelsAuthoritative: true,
+		filterModel: isGroqChatModel,
 		mapModel: mapWithBundledReference,
 	});
+}
+
+/**
+ * Groq's /models also lists speech (Orpheus: `output_modalities: ["speech"]`),
+ * transcription (Whisper: `["transcription"]`) and classifier models (Prompt
+ * Guard, which answers chat requests with 400 "text classification"). Only
+ * text-out models whose `supported_features` include `tools` take a chat turn.
+ * Prompt Guard 2 22M carries no `supported_features`, hence the id rule.
+ */
+function isGroqChatModel(entry: OpenAICompatibleModelRecord): boolean {
+	const output = entry.output_modalities;
+	if (Array.isArray(output) && !output.includes("text")) return false;
+	const features = entry.supported_features;
+	if (Array.isArray(features) && !features.includes("tools")) return false;
+	return !String(entry.id).includes("prompt-guard");
 }
 
 // ---------------------------------------------------------------------------
