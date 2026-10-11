@@ -58,6 +58,7 @@ import {
 	type ActiveRetryFallbackState,
 	calculateRetryBackoffDelayMs,
 	findRetryFallbackCandidates,
+	formatRetryFallbackBaseSelector,
 	formatRetryFallbackSelector,
 	getRetryFallbackChains,
 	getRetryFallbackRevertPolicy,
@@ -67,6 +68,7 @@ import {
 	type RetryFallbackRevertPolicy,
 	type RetryFallbackSelector,
 	resolveRetryFallbackChainKey,
+	retryFallbackAdmits,
 	type ServingModel,
 	validateRetryFallbackChains,
 } from "./retry-fallback-chains";
@@ -92,7 +94,11 @@ import {
 
 const THINKING_LOOP_REDIRECT_TYPE = "thinking-loop-redirect";
 const UNEXPECTED_STOP_MAX_RETRIES = 3;
-const UNEXPECTED_STOP_TIMEOUT_MS = 4000;
+// Gateway-routed judges can take ~12s (observed: bifrost judge YES at 12.2s
+// while the client aborted at 4s, dropping the verdict and skipping the nudge).
+// Matches the 15s judgment-adjacent budgets (auth-gateway strict probe,
+// auto-graph pick) so a slow-but-healthy verdict still lands.
+const UNEXPECTED_STOP_TIMEOUT_MS = 15_000;
 const EMPTY_STOP_MAX_RETRIES = 3;
 const MALFORMED_FUNCTION_CALL_MAX_RETRIES = 3;
 const STREAM_STALL_CONTINUE_MAX_RETRIES = 3;
@@ -234,6 +240,14 @@ export interface TurnRecoveryHost {
 	streamingEditAbortTriggered(): boolean;
 	promptGeneration(): number;
 	promptSequence(): number;
+	/**
+	 * Live post-prompt abort signal; aborted when the user interrupts (Esc),
+	 * the turn is superseded, or the session is torn down. The unexpected-stop
+	 * judge wait links its timeout to this signal so a slow verdict never
+	 * blocks the abort drain. Optional so partial test stubs that never reach
+	 * the judge path need not provide it.
+	 */
+	unexpectedStopAbortSignal?(): AbortSignal;
 	sessionId(): string;
 	emitSessionEvent(event: AgentSessionEvent, options?: { detachExtensions?: boolean }): Promise<void>;
 	scheduleAgentContinue(options: {
@@ -284,6 +298,12 @@ export interface TurnRecoveryOptions {
 	initialRetryFallback?: InitialRetryFallbackState;
 	/** Skip construction-time fallback-chain validation; the owner runs {@link TurnRecovery.validateRetryFallbackChains}. */
 	deferFallbackChainValidation?: boolean;
+	/**
+	 * Override for the unexpected-stop judge verdict budget (default 15s).
+	 * Test seam so the slow-verdict boundary runs in milliseconds instead of
+	 * seconds; production never sets it.
+	 */
+	unexpectedStopJudgeTimeoutMs?: number;
 }
 
 type PendingRetryError = {
@@ -292,6 +312,20 @@ type PendingRetryError = {
 	recovery: AssistantRetryRecoveryKind;
 	attempt: number;
 	note: string;
+};
+
+/** How a retry saga's pending error entries are annotated when it closes. */
+type RetryErrorCompletion = { status: "recovered"; supersedingMessage: AssistantMessage } | { status: "superseded" };
+
+/** The `auto_retry_end` a closing retry saga publishes; its `retryErrors` come from the close itself. */
+type RetrySagaEnd = Omit<Extract<AgentSessionEvent, { type: "auto_retry_end" }>, "type" | "retryErrors">;
+
+/** How {@link TurnRecovery.handleRetryableError} may recover a failed turn. */
+type RetryPolicyOptions = {
+	allowModelFallback?: boolean;
+	fireworksFastFallback?: boolean;
+	hardErrorFallback?: boolean;
+	preserveFailedTurn?: boolean;
 };
 
 type UsageLimitOutcome = {
@@ -307,8 +341,15 @@ type UsageLimitOutcome = {
 /** Owns terminal-stop recovery, automatic retries, and fallback routing. */
 export class TurnRecovery {
 	readonly #host: TurnRecoveryHost;
+	readonly #unexpectedStopJudgeTimeoutMs: number;
 	#retryAbortController: AbortController | undefined;
 	#retryAttempt = 0;
+	/**
+	 * Selectors a classifier refusal has already moved off in the current retry saga; see the walk
+	 * bound below. Cleared in `resolveRetry()`, which every end of a saga goes through (an answer,
+	 * the exhausted budget, a cancelled wait, an abort), so no turn inherits another turn's walk.
+	 */
+	readonly #refusalWalkTried = new Set<string>();
 	#requestBodyReadTimeoutRecoveryPromptSequence: number | undefined;
 	#retryPromise: Promise<void> | undefined;
 	#retryResolve: (() => void) | undefined;
@@ -367,6 +408,7 @@ export class TurnRecovery {
 
 	constructor(host: TurnRecoveryHost, options: TurnRecoveryOptions = {}) {
 		this.#host = host;
+		this.#unexpectedStopJudgeTimeoutMs = options.unexpectedStopJudgeTimeoutMs ?? UNEXPECTED_STOP_TIMEOUT_MS;
 		if (options.initialRetryFallback) {
 			this.#activeRetryFallback = {
 				...options.initialRetryFallback,
@@ -496,15 +538,21 @@ export class TurnRecovery {
 	}
 
 	/**
-	 * Records which model produced this turn, marks an active fallback as having
-	 * served, then closes a successful retry saga and annotates recovered
-	 * persisted errors.
+	 * Records which model produced this turn, re-arms the one-shot Responses
+	 * request-body-timeout recovery, marks an active fallback as having served,
+	 * then closes a successful retry saga and annotates recovered persisted
+	 * errors.
 	 */
 	async onAssistantSettledSuccessfully(message: AssistantMessage): Promise<void> {
 		if (!assistantTurnProducedOutput(message) || this.#settledAssistantResponses.has(message)) {
 			return;
 		}
 		this.#settledAssistantResponses.add(message);
+		// A turn that produced output is forward progress: later history growth is
+		// new, so the next exact full-replay body-read timeout gets its own single
+		// shake-and-retry. Back-to-back timeouts never reach this point, so the
+		// one-shot bound on an unchanged-request loop is unaffected.
+		this.#requestBodyReadTimeoutRecoveryPromptSequence = undefined;
 		const model = this.#host.model();
 		if (model) {
 			const level = this.#host.thinkingLevel();
@@ -539,22 +587,10 @@ export class TurnRecovery {
 		if (this.#retryAttempt === 0) {
 			return;
 		}
-		const retryErrors = await this.#markPendingRetryErrors({
-			status: "recovered",
-			supersedingMessage: message,
-		});
-		await this.#host.emitSessionEvent(
-			{
-				type: "auto_retry_end",
-				success: true,
-				attempt: this.#retryAttempt,
-				retryErrors,
-			},
-			{ detachExtensions: true },
+		await this.#closeRetrySaga(
+			{ success: true, attempt: this.#retryAttempt },
+			{ retryErrors: { status: "recovered", supersedingMessage: message } },
 		);
-		this.#clearPendingRetryErrors();
-		this.#retryAttempt = 0;
-		this.resolveRetry();
 	}
 
 	/** Closes a failed retry saga when no compaction continuation took ownership. */
@@ -823,15 +859,7 @@ export class TurnRecovery {
 	}
 
 	/** Applies automatic retry, credential rotation, and model fallback policy. */
-	handleRetryableError(
-		message: AssistantMessage,
-		options?: {
-			allowModelFallback?: boolean;
-			fireworksFastFallback?: boolean;
-			hardErrorFallback?: boolean;
-			preserveFailedTurn?: boolean;
-		},
-	): Promise<boolean> {
+	handleRetryableError(message: AssistantMessage, options?: RetryPolicyOptions): Promise<boolean> {
 		return this.#handleRetryableError(message, options);
 	}
 
@@ -889,12 +917,58 @@ export class TurnRecovery {
 		return this.#parseRetryAfterMsFromError(errorMessage);
 	}
 
-	/** Resolve the pending retry promise */
+	/**
+	 * The model a refusal walk records: `provider/id` without the thinking level, so the current
+	 * selector (`…:high`) and the bare chain entries naming the same model match.
+	 */
+	#refusalWalkKey(selector: string): string {
+		const parsed = parseRetryFallbackSelector(selector, this.#host.modelRegistry);
+		return parsed ? formatRetryFallbackBaseSelector(parsed) : selector;
+	}
+
+	/** Resolve the pending retry promise; the saga is over, and so is its refusal walk. */
 	resolveRetry(): void {
+		this.#refusalWalkTried.clear();
 		if (this.#retryResolve) {
 			this.#retryResolve();
 			this.#retryResolve = undefined;
 			this.#retryPromise = undefined;
+		}
+	}
+
+	/**
+	 * Ends a retry saga: records its outcome in the session (the terminal empty
+	 * error turn, the annotations on the attempts it retried), publishes
+	 * `auto_retry_end`, then resets the saga and resolves `retryPromise`.
+	 * Publishing and releasing run in `finally`, so a session write that throws
+	 * (a full disk, an unwritable transcript) still ends the saga before its
+	 * error propagates. Left pending, `retryPromise` keeps the in-flight prompt
+	 * waiting for a retry that never runs: the session reports streaming for
+	 * good and queues every later message as a steer that never drains.
+	 */
+	async #closeRetrySaga(
+		end: RetrySagaEnd,
+		record: { terminalTurn?: AssistantMessage; retryErrors?: RetryErrorCompletion },
+	): Promise<void> {
+		let retryErrors: RetryErrorUpdate[] | undefined;
+		try {
+			if (record.terminalTurn) await this.persistTerminalEmptyErrorTurn(record.terminalTurn);
+			if (record.retryErrors) retryErrors = await this.#markPendingRetryErrors(record.retryErrors);
+		} finally {
+			try {
+				await this.#host.emitSessionEvent(
+					{
+						type: "auto_retry_end",
+						...end,
+						...(retryErrors ? { retryErrors } : {}),
+					},
+					end.success ? { detachExtensions: true } : undefined,
+				);
+			} finally {
+				this.#clearPendingRetryErrors();
+				this.#retryAttempt = 0;
+				this.resolveRetry();
+			}
 		}
 	}
 
@@ -979,9 +1053,7 @@ export class TurnRecovery {
 		});
 	}
 
-	async #markPendingRetryErrors(
-		completion: { status: "recovered"; supersedingMessage: AssistantMessage } | { status: "superseded" },
-	): Promise<RetryErrorUpdate[]> {
+	async #markPendingRetryErrors(completion: RetryErrorCompletion): Promise<RetryErrorUpdate[]> {
 		if (this.#pendingRetryErrors.length === 0) return [];
 		const branch = this.#host.sessionManager.getBranchView();
 		const branchById = new Map<string, SessionEntry>();
@@ -1168,7 +1240,13 @@ export class TurnRecovery {
 			return false;
 		} else {
 			const controller = new AbortController();
-			const timeout = setTimeout(() => controller.abort(), UNEXPECTED_STOP_TIMEOUT_MS);
+			const timeout = setTimeout(() => controller.abort(), this.#unexpectedStopJudgeTimeoutMs);
+			// Esc/session teardown must interrupt the extended judge wait: link the
+			// live session abort so abort() drains agent_end maintenance instead of
+			// blocking on a verdict the user no longer wants.
+			const sessionSignal = this.#host.unexpectedStopAbortSignal?.();
+			const onSessionAbort = (): void => controller.abort();
+			sessionSignal?.addEventListener("abort", onSessionAbort, { once: true });
 			let classification: boolean | undefined;
 			try {
 				classification = await classifyUnexpectedStop(text, {
@@ -1183,9 +1261,12 @@ export class TurnRecovery {
 				});
 			} finally {
 				clearTimeout(timeout);
+				sessionSignal?.removeEventListener("abort", onSessionAbort);
 			}
 
-			if (classification !== true) {
+			// The classifier maps aborts to undefined (no-retry); a session abort
+			// during the wait must also skip the retry counter and the nudge.
+			if (classification !== true || sessionSignal?.aborted === true) {
 				this.#unexpectedStopRetryCount = 0;
 				return false;
 			}
@@ -2246,6 +2327,8 @@ export class TurnRecovery {
 			restoreAfterSuccess?: boolean;
 			preserveFailedTurn?: boolean;
 			wrapAround?: boolean;
+			/** This hop is a classifier-refusal walk, which visits each model at most once per turn. */
+			refusalWalk?: boolean;
 		},
 	): Promise<boolean> {
 		const fallbackGeneration = this.#retryFallbackGeneration;
@@ -2264,6 +2347,10 @@ export class TurnRecovery {
 		for (const role of this.retryFallbackChainKeys(currentSelector)) {
 			for (const selector of this.findRetryFallbackCandidates(role, currentSelector, undefined, options)) {
 				if (this.isRetryFallbackSelectorSuppressed(selector)) continue;
+				// A refusal walk visits any one model at most once per turn. Without this a
+				// pair of chains naming each other alternates: each hop is a model the walk
+				// has already been refused on, and the budget no longer stops it.
+				if (options?.refusalWalk && this.#refusalWalkTried.has(formatRetryFallbackBaseSelector(selector))) continue;
 				const resolved = resolveModelOverride([selector.raw], this.#host.modelRegistry, this.#host.settings);
 				const candidate = resolved.model ?? this.#host.modelRegistry.find(selector.provider, selector.id);
 				if (!candidate) continue;
@@ -2407,6 +2494,7 @@ export class TurnRecovery {
 		if (this.isClassifierRefusal(message)) return false;
 		const id = this.#classifyRetryMessage(message);
 		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return false;
+		if (!retryFallbackAdmits(retrySettings.fallbackOn, AIError.is(id, AIError.Flag.UsageLimit))) return false;
 		// Text-ambiguous overflows waive the veto; usage-backed do not — see AIError.isTextAmbiguousContextOverflow (#9235).
 		const contextWindow = model.contextWindow ?? 0;
 		const textAmbiguousOverflow = AIError.isTextAmbiguousContextOverflow(id, message, contextWindow);
@@ -2577,15 +2665,30 @@ export class TurnRecovery {
 	 * the error without a same-model backoff retry.
 	 * @returns true if retry was initiated, false if max retries exceeded or disabled
 	 */
-	async #handleRetryableError(
-		message: AssistantMessage,
-		options?: {
-			allowModelFallback?: boolean;
-			fireworksFastFallback?: boolean;
-			hardErrorFallback?: boolean;
-			preserveFailedTurn?: boolean;
-		},
-	): Promise<boolean> {
+	async #handleRetryableError(message: AssistantMessage, options?: RetryPolicyOptions): Promise<boolean> {
+		try {
+			return await this.#applyRetryPolicy(message, options);
+		} catch (error) {
+			// The policy's dead ends close their own saga through
+			// #closeRetrySaga, so a write that throws there has already closed
+			// it. A throw anywhere else on the way, such as recording an attempt
+			// before its retry is scheduled, leaves the saga open, and nothing
+			// else would close it.
+			if (this.#retryPromise) {
+				await this.#closeRetrySaga(
+					{ success: false, attempt: this.#retryAttempt, finalError: message.errorMessage },
+					{},
+				);
+			}
+			throw error;
+		}
+	}
+
+	/**
+	 * The retry policy {@link #handleRetryableError} applies. A throw outside
+	 * its dead ends leaves the saga for the caller to close.
+	 */
+	async #applyRetryPolicy(message: AssistantMessage, options?: RetryPolicyOptions): Promise<boolean> {
 		const retrySettings = cfgRetry.get(this.#host.settings);
 		if (this.#host.abortInProgress() || this.#host.isDisposed()) return false;
 		// The Fireworks Fast→base degrade is an intrinsic model-selection safety net,
@@ -2834,25 +2937,33 @@ export class TurnRecovery {
 			(classifierRefusal || AIError.is(id, AIError.Flag.ContentBlocked)) &&
 			cfgRetryRefusalFallbackRevertPolicy.get(this.#host.settings) === "after-success";
 		// Account rotations may spend the budget before any model fallback runs.
-		// Allow that first request-scoped hop, but keep subsequent refusal hops bounded.
+		// Allow that first request-scoped hop; non-classifier content blocks remain
+		// retry-budget bounded instead of joining the classifier-refusal walk.
 		const exhaustedRefusalChain =
 			retryBudgetExhausted &&
-			(classifierRefusal || restoreAfterSuccess) &&
+			restoreAfterSuccess &&
+			!classifierRefusal &&
 			(!accountPolicyDenial || this.#activeRetryFallback?.restoreAfterSuccess === true);
 
 		if (!staleOpenAIResponsesReplayError && !switchedCredential && currentSelector) {
-			// Classifier loops stop at the budget; exhausted account rotations still
-			// get their first configured model fallback.
+			// Classifier-refusal walks visit each model at most once instead
+			// of using the same-model retry budget as their bound.
+			const refusalWalkKey = this.#refusalWalkKey(currentSelector);
+			const refusalWalkRepeats = classifierRefusal && this.#refusalWalkTried.has(refusalWalkKey);
 			if (
 				allowModelFallback &&
 				retrySettings.modelFallback &&
+				retryFallbackAdmits(retrySettings.fallbackOn, AIError.is(id, AIError.Flag.UsageLimit)) &&
 				!thinkingLoop &&
 				!sameModelSteerReplay &&
 				!waitForSiblingCredential &&
 				!exhaustedRefusalChain &&
+				!refusalWalkRepeats &&
 				!this.#isFirstAttemptMidStreamSocketDrop(message, id, retryBudgetExhausted)
 			) {
-				if (!classifierRefusal && !restoreAfterSuccess) {
+				if (classifierRefusal) {
+					this.#refusalWalkTried.add(refusalWalkKey);
+				} else if (!restoreAfterSuccess) {
 					// A usage-limit wait already knows when this provider can serve
 					// the session again (report reset, merged credential block,
 					// sibling unblock); cooling down for less sends the revert back
@@ -2865,6 +2976,7 @@ export class TurnRecovery {
 					excludeProvider: longUsageLimitFallback ? currentModel.provider : undefined,
 					pinFallback: classifierRefusal && !restoreAfterSuccess,
 					restoreAfterSuccess,
+					refusalWalk: classifierRefusal,
 					preserveFailedTurn,
 					wrapAround: longUsageLimitFallback,
 				});
@@ -2887,18 +2999,10 @@ export class TurnRecovery {
 			if (!switchedModel && !switchedCredential) {
 				const attempt = this.#retryAttempt - 1;
 				message.errorMessage = `Retry budget exhausted after ${attempt} ${attempt === 1 ? "retry" : "retries"}: ${errorMessage}`;
-				await this.persistTerminalEmptyErrorTurn(message);
-				const retryErrors = await this.#markPendingRetryErrors({ status: "superseded" });
-				await this.#host.emitSessionEvent({
-					type: "auto_retry_end",
-					success: false,
-					attempt,
-					finalError: errorMessage,
-					retryErrors,
-				});
-				this.#clearPendingRetryErrors();
-				this.#retryAttempt = 0;
-				this.resolveRetry(); // Resolve so waitForRetry() completes
+				await this.#closeRetrySaga(
+					{ success: false, attempt, finalError: errorMessage },
+					{ terminalTurn: message, retryErrors: { status: "superseded" } },
+				);
 				return false;
 			}
 			// A fallback model gets a fresh retry budget. Credential rotation
@@ -2915,14 +3019,10 @@ export class TurnRecovery {
 			// (e.g. suppressing a duplicate error toast) don't stay latched on
 			// an announcement that never resolves.
 			if (this.#retryAttempt > 1) {
-				await this.persistTerminalEmptyErrorTurn(message);
-				await this.#host.emitSessionEvent({
-					type: "auto_retry_end",
-					success: false,
-					attempt: this.#retryAttempt - 1,
-					finalError: errorMessage,
-				});
-				this.#clearPendingRetryErrors();
+				await this.#closeRetrySaga(
+					{ success: false, attempt: this.#retryAttempt - 1, finalError: errorMessage },
+					{ terminalTurn: message },
+				);
 			}
 			this.#retryAttempt = 0;
 			this.resolveRetry();
@@ -2940,14 +3040,10 @@ export class TurnRecovery {
 		) {
 			// Same auto_retry_end backstop as the classifier-refusal branch above.
 			if (this.#retryAttempt > 1) {
-				await this.persistTerminalEmptyErrorTurn(message);
-				await this.#host.emitSessionEvent({
-					type: "auto_retry_end",
-					success: false,
-					attempt: this.#retryAttempt - 1,
-					finalError: errorMessage,
-				});
-				this.#clearPendingRetryErrors();
+				await this.#closeRetrySaga(
+					{ success: false, attempt: this.#retryAttempt - 1, finalError: errorMessage },
+					{ terminalTurn: message },
+				);
 			}
 			this.#retryAttempt = 0;
 			this.resolveRetry();
@@ -2980,17 +3076,16 @@ export class TurnRecovery {
 			effectiveUsageLimitWaitMs !== undefined &&
 			delayMs <= effectiveUsageLimitWaitMs;
 		if (maxDelayMs > 0 && delayMs > maxDelayMs && !switchedCredential && !switchedModel && !waitForUsageReset) {
-			await this.persistTerminalEmptyErrorTurn(message);
 			const attempt = this.#retryAttempt;
 			this.#retryAttempt = 0;
-			await this.#host.emitSessionEvent({
-				type: "auto_retry_end",
-				success: false,
-				attempt,
-				finalError: `Provider requested ${Math.ceil(delayMs)}ms wait, exceeds retry.maxDelayMs (${maxDelayMs}ms). Original error: ${errorMessage}`,
-			});
-			this.#clearPendingRetryErrors();
-			this.resolveRetry();
+			await this.#closeRetrySaga(
+				{
+					success: false,
+					attempt,
+					finalError: `Provider requested ${Math.ceil(delayMs)}ms wait, exceeds retry.maxDelayMs (${maxDelayMs}ms). Original error: ${errorMessage}`,
+				},
+				{ terminalTurn: message },
+			);
 			return false;
 		}
 
@@ -3062,7 +3157,12 @@ export class TurnRecovery {
 			delayMs: 1,
 			generation,
 			shouldContinue: () => this.#retryAttempt > 0,
-			onError: error => void this.#failRetryAfterLocalContinueError(message, error),
+			onError: error =>
+				void this.#failRetryAfterLocalContinueError(message, error).catch(failure =>
+					logger.error("Closing a retry saga after a failed local continuation threw", {
+						error: failure instanceof Error ? failure.message : String(failure),
+					}),
+				),
 		});
 
 		return true;
@@ -3115,15 +3215,14 @@ export class TurnRecovery {
 		const attempt = this.#retryAttempt;
 		this.#retryAttempt = 0;
 		const localError = error instanceof Error ? error.message : String(error);
-		await this.persistTerminalEmptyErrorTurn(message);
-		await this.#host.emitSessionEvent({
-			type: "auto_retry_end",
-			success: false,
-			attempt,
-			finalError: `Retry continuation failed locally: ${localError}. Original error: ${message.errorMessage ?? "Unknown error"}`,
-		});
-		this.#clearPendingRetryErrors();
-		this.resolveRetry();
+		await this.#closeRetrySaga(
+			{
+				success: false,
+				attempt,
+				finalError: `Retry continuation failed locally: ${localError}. Original error: ${message.errorMessage ?? "Unknown error"}`,
+			},
+			{ terminalTurn: message },
+		);
 	}
 
 	/**
