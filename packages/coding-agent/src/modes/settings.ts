@@ -1123,6 +1123,19 @@ export const cfgUpdateChannel = register({
 	},
 });
 
+export const cfgUpdateAutoInstall = register({
+	id: "update.autoInstall",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "interaction",
+		group: "Startup & Updates",
+		label: "Auto-Install Updates",
+		description:
+			"On startup, install a newer omp before the session opens and relaunch into it. Requires Check for Updates; failures fall back to the running version",
+	},
+});
+
 export const cfgMarketplaceAutoUpdate = register({
 	id: "marketplace.autoUpdate",
 	type: "enum",

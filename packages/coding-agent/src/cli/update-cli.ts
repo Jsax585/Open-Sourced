@@ -1071,7 +1071,7 @@ export function parseReportedVersion(output: string): string | undefined {
 	return output.slice(APP_NAME.length + 1).match(/^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/)?.[1];
 }
 
-async function reportedVersionAtPath(binaryPath: string): Promise<string | undefined> {
+export async function reportedVersionAtPath(binaryPath: string): Promise<string | undefined> {
 	try {
 		const result = await $`${binaryPath} --version`.quiet().nothrow();
 		if (result.exitCode !== 0) return undefined;
@@ -1701,6 +1701,43 @@ export async function updateViaManager(
 			`This install is no longer managed by ${steps.manager}. Removing the old global package may delete this launcher; if it does, reinstall with: ${installerHint()}`,
 		),
 	);
+}
+
+/** Injectable steps for {@link autoInstallStartupUpdate}. */
+export interface StartupAutoUpdateSteps {
+	/** Run `omp update` against the PATH launcher; resolves to its exit code. */
+	runUpdate(): Promise<number>;
+	/** Version the PATH launcher reports after the update; undefined when it cannot run. */
+	installedVersion(): Promise<string | undefined>;
+}
+
+/**
+ * `update.autoInstall` startup step. Runs the update and reports whether the PATH
+ * launcher now runs a build newer than this process. Never throws: false means the
+ * caller keeps starting the running version.
+ */
+export async function autoInstallStartupUpdate(newVersion: string, steps: StartupAutoUpdateSteps): Promise<boolean> {
+	let exitCode: number;
+	try {
+		exitCode = await steps.runUpdate();
+	} catch (err) {
+		process.stderr.write(`${chalk.yellow(`Auto-update to ${newVersion} failed: ${err}. Starting ${VERSION}.`)}\n`);
+		return false;
+	}
+	if (exitCode !== 0) {
+		process.stderr.write(
+			`${chalk.yellow(`Auto-update to ${newVersion} failed (${APP_NAME} update exited ${exitCode}). Starting ${VERSION}.`)}\n`,
+		);
+		return false;
+	}
+	const installed = await steps.installedVersion().catch(() => undefined);
+	if (!installed || compareVersions(installed, VERSION) <= 0) {
+		process.stderr.write(
+			`${chalk.yellow(`${APP_NAME} update finished but the launcher reports ${installed ?? "no version"}. Starting ${VERSION}.`)}\n`,
+		);
+		return false;
+	}
+	return true;
 }
 
 async function updateViaHomebrew(expectedVersion: string, force: boolean): Promise<void> {

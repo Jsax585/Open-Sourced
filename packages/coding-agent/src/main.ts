@@ -10,7 +10,7 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core/utils/yield";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
-import { isEnoent, isEnotdir } from "@oh-my-pi/pi-utils";
+import { $which, isEnoent, isEnotdir } from "@oh-my-pi/pi-utils";
 import {
 	APP_NAME,
 	directoryIsMissing,
@@ -41,7 +41,13 @@ import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker";
 import { fetchBuild } from "./cli/build-service";
 import { applyStartupCwd } from "./cli/startup-cwd";
-import { getLatestRelease, isSourceCheckout, managedInstallName } from "./cli/update-cli";
+import {
+	autoInstallStartupUpdate,
+	getLatestRelease,
+	isSourceCheckout,
+	managedInstallName,
+	reportedVersionAtPath,
+} from "./cli/update-cli";
 import { findConfigFile } from "./config";
 import { ModelRegistry } from "./config/model-registry";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
@@ -165,6 +171,7 @@ import {
 	cfgTuiImeSafeCursor,
 	cfgTuiMaxInlineImages,
 	cfgTuiResizeScrollback,
+	cfgUpdateAutoInstall,
 	cfgUpdateChannel,
 } from "./modes/settings";
 import {
@@ -249,6 +256,55 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 		return Bun.semver.order(version, currentVersion) > 0 ? version : undefined;
 	} catch {
 		return undefined;
+	}
+}
+
+/**
+ * `update.autoInstall`: install `newVersion` before the TUI opens, then exec into the
+ * updated launcher with the same argv. Returns only when nothing was installed;
+ * startup then continues on the running version and the "Update Available"
+ * banner still shows.
+ */
+async function autoInstallAndRelaunch(newVersion: string): Promise<void> {
+	const ompPath = $which(APP_NAME);
+	if (!ompPath) return;
+
+	stopPendingStartupComposer();
+	pauseStartupWatchdog();
+	process.stdout.write(`${chalk.cyan(`Updating ${APP_NAME} ${VERSION} → ${newVersion}…`)}\n`);
+	const updated = await autoInstallStartupUpdate(newVersion, {
+		runUpdate: () =>
+			Bun.spawn([ompPath, "update"], {
+				stdin: "inherit",
+				stdout: "inherit",
+				stderr: "inherit",
+			}).exited,
+		installedVersion: () => reportedVersionAtPath(ompPath),
+	});
+	resumeStartupWatchdog();
+	if (!updated) return;
+
+	const cmd = [ompPath, ...process.argv.slice(2)];
+	await postmortem.cleanup();
+	await postmortem.drainStdout();
+	if (process.platform !== "win32") {
+		try {
+			// Keep the platform-specific native addon off the cold-start path.
+			(await import("@oh-my-pi/pi-natives")).execReplace(cmd);
+		} catch (err) {
+			process.stderr.write(`${chalk.red(`Relaunch exec failed: ${err instanceof Error ? err.message : err}`)}\n`);
+		}
+	}
+	try {
+		const child = Bun.spawn(cmd, {
+			stdin: "inherit",
+			stdout: "inherit",
+			stderr: "inherit",
+		});
+		await postmortem.quit(await child.exited);
+	} catch (err) {
+		process.stderr.write(`${chalk.red(`Relaunch failed: ${err instanceof Error ? err.message : err}`)}\n`);
+		await postmortem.quit(1);
 	}
 }
 
@@ -1866,6 +1922,13 @@ export async function runRootCommand(
 		}
 
 		const settingsInstance = await settingsPromise;
+		const versionCheckPromise = isInteractive
+			? checkForNewVersion(VERSION).catch(() => undefined)
+			: Promise.resolve(undefined);
+		if (isInteractive && cfgUpdateAutoInstall.get(settingsInstance)) {
+			const newVersion = await versionCheckPromise;
+			if (newVersion) await autoInstallAndRelaunch(newVersion);
+		}
 		// Process-lifetime: broker/account-policy edits reconfigure the shared credential store.
 		createAuthStorageSettingsSync(settingsInstance, authStorage);
 		if (parsedArgs.approvalMode) {
@@ -2566,7 +2629,6 @@ export async function runRootCommand(
 					input: rpcInput,
 				});
 			} else if (isInteractive) {
-				const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
 				const startupChangelog = await startupChangelogPromise;
 
 				const modelScopeNotification = buildModelScopeNotification(
