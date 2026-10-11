@@ -448,7 +448,7 @@ export class EventController {
 				}
 				if (this.ctx.streamingComponent && this.ctx.streamingMessage) {
 					this.ctx.streamingComponent.setHideThinkingBlock(hideThinking);
-					this.#streamingReveal.resyncVisibility();
+					this.resyncStreamingRevealVisibility();
 				}
 				this.ctx.ui.requestRender(true);
 			},
@@ -467,6 +467,19 @@ export class EventController {
 	presentIdleRecap(reply: string): void {
 		const recap = previewLine(reply, TRUNCATE_LENGTHS.RECAP);
 		if (recap) this.ctx.present(new RecapNotice(recap));
+	}
+
+	/**
+	 * Re-read the cached hide-thinking/prose-only flags into the streaming reveal
+	 * controller and re-render the live message through its truncating view.
+	 * Public entry point for mid-stream display toggles (Ctrl+T, /settings):
+	 * the caller must have already applied `setHideThinkingBlock` to the
+	 * streaming component. Pushing the raw cumulative message through
+	 * `updateContent` here would bypass the reveal view (text snapping to 100%
+	 * then re-typing), so the toggle must use this instead.
+	 */
+	resyncStreamingRevealVisibility(): void {
+		this.#streamingReveal.resyncVisibility();
 	}
 
 	dispose(): void {
@@ -1504,7 +1517,7 @@ export class EventController {
 			const unlockedThinkingVisibility = this.ctx.noteDisplayableThinkingContent(event.message);
 			if (unlockedThinkingVisibility) {
 				this.ctx.streamingComponent.setHideThinkingBlock(this.ctx.effectiveHideThinkingBlock);
-				this.#streamingReveal.resyncVisibility();
+				this.resyncStreamingRevealVisibility();
 			}
 			this.ctx.streamingMessage = event.message;
 			const timeline = splitAssistantMessageToolTimeline(this.ctx.streamingMessage);
@@ -1708,7 +1721,7 @@ export class EventController {
 			event.message.role === "assistant" && this.ctx.noteDisplayableThinkingContent(event.message);
 		if (unlockedThinkingVisibility && this.ctx.streamingComponent) {
 			this.ctx.streamingComponent.setHideThinkingBlock(this.ctx.effectiveHideThinkingBlock);
-			this.#streamingReveal.resyncVisibility();
+			this.resyncStreamingRevealVisibility();
 		}
 		if (event.message.role === "assistant" && cfgSpeechEnabled.get(settings)) {
 			if (event.message.stopReason === "aborted") {
