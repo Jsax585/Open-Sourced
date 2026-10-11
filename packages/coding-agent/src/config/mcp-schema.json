@@ -165,24 +165,12 @@
           "additionalProperties": false,
           "required": ["command"],
           "properties": {
-            "enabled": {
-              "$ref": "#/$defs/serverBase/properties/enabled"
-            },
-            "timeout": {
-              "$ref": "#/$defs/serverBase/properties/timeout"
-            },
-            "requestIdFormat": {
-              "$ref": "#/$defs/serverBase/properties/requestIdFormat"
-            },
-            "instructions": {
-              "$ref": "#/$defs/serverBase/properties/instructions"
-            },
-            "auth": {
-              "$ref": "#/$defs/serverBase/properties/auth"
-            },
-            "oauth": {
-              "$ref": "#/$defs/serverBase/properties/oauth"
-            },
+            "enabled": {},
+            "timeout": {},
+            "requestIdFormat": {},
+            "instructions": {},
+            "auth": {},
+            "oauth": {},
             "enabledTools": {
               "$ref": "#/$defs/serverBase/properties/enabledTools"
             },
@@ -231,24 +219,12 @@
           "additionalProperties": false,
           "required": ["type", "url"],
           "properties": {
-            "enabled": {
-              "$ref": "#/$defs/serverBase/properties/enabled"
-            },
-            "timeout": {
-              "$ref": "#/$defs/serverBase/properties/timeout"
-            },
-            "requestIdFormat": {
-              "$ref": "#/$defs/serverBase/properties/requestIdFormat"
-            },
-            "instructions": {
-              "$ref": "#/$defs/serverBase/properties/instructions"
-            },
-            "auth": {
-              "$ref": "#/$defs/serverBase/properties/auth"
-            },
-            "oauth": {
-              "$ref": "#/$defs/serverBase/properties/oauth"
-            },
+            "enabled": {},
+            "timeout": {},
+            "requestIdFormat": {},
+            "instructions": {},
+            "auth": {},
+            "oauth": {},
             "type": {
               "type": "string",
               "enum": ["http"],
@@ -286,24 +262,12 @@
           "additionalProperties": false,
           "required": ["type", "url"],
           "properties": {
-            "enabled": {
-              "$ref": "#/$defs/serverBase/properties/enabled"
-            },
-            "timeout": {
-              "$ref": "#/$defs/serverBase/properties/timeout"
-            },
-            "requestIdFormat": {
-              "$ref": "#/$defs/serverBase/properties/requestIdFormat"
-            },
-            "instructions": {
-              "$ref": "#/$defs/serverBase/properties/instructions"
-            },
-            "auth": {
-              "$ref": "#/$defs/serverBase/properties/auth"
-            },
-            "oauth": {
-              "$ref": "#/$defs/serverBase/properties/oauth"
-            },
+            "enabled": {},
+            "timeout": {},
+            "requestIdFormat": {},
+            "instructions": {},
+            "auth": {},
+            "oauth": {},
             "type": {
               "type": "string",
               "enum": ["sse"],

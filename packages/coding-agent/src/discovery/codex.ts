@@ -36,7 +36,6 @@ import {
 	createSourceMeta,
 	discoverExtensionModulePaths,
 	loadFilesFromDir,
-	parseMCPToolFilters,
 	SOURCE_PATHS,
 	scanSkillsFromDir,
 } from "./helpers";
@@ -170,8 +169,8 @@ interface CodexMCPConfig {
 	cwd?: string;
 	startup_timeout_sec?: number;
 	tool_timeout_sec?: number;
-	enabled_tools?: unknown;
-	disabled_tools?: unknown;
+	enabled_tools?: string[];
+	disabled_tools?: string[];
 }
 
 function extractMCPServersFromToml(
@@ -204,10 +203,6 @@ function extractMCPServersFromToml(
 			args: config.args,
 			url: config.url,
 			...(rooted.cwd !== undefined && { cwd: rooted.cwd }),
-			...parseMCPToolFilters(name, {
-				enabledTools: config.enabled_tools,
-				disabledTools: config.disabled_tools,
-			}),
 		};
 
 		// Build env by merging explicit env and forwarded env_vars

@@ -29,6 +29,7 @@ import {
 	createSourceMeta,
 	discoverExtensionModulePaths,
 	expandEnvVarsDeep,
+	FILTER_KEYS,
 	getExtensionNameFromPath,
 	loadFilesFromDir,
 	parseMCPEnabled,
@@ -120,28 +121,14 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 		const data = tryParseJson<{ mcpServers?: Record<string, unknown> }>(content);
 		if (!data?.mcpServers) return result;
 
-		for (const [serverName, config] of Object.entries(data.mcpServers)) {
+		const expanded = expandEnvVarsDeep(data.mcpServers, undefined, FILTER_KEYS);
+		for (const [serverName, config] of Object.entries(expanded)) {
 			const serverConfig = config as Record<string, unknown>;
 
-			// Validate enabled: expand `${VAR}` first, then coerce through the shared
-			// accept-set (see parseMCPEnabled). Filters stay literal (never expanded):
-			// a filter entry is a tool-name pattern, so expanding `${TOOL}` there
-			// would make the same config select a different tool depending on which
-			// file it came from.
-			const enabled = parseMCPEnabled(serverName, serverConfig.enabled, expandEnvVarsDeep(serverConfig.enabled));
+			const enabled = parseMCPEnabled(serverName, serverConfig.enabled);
+			const timeout = parseMCPTimeout(serverName, serverConfig.timeout);
 
-			// Validate timeout: expand `${VAR}` first, then coerce through the shared
-			// accept-set (see parseMCPTimeout). A non-numeric expansion (`${UNSET}`)
-			// stays literal, fails the coerce, and warns — same as a bad literal.
-			const timeout = parseMCPTimeout(serverName, serverConfig.timeout, expandEnvVarsDeep(serverConfig.timeout));
-
-			// Validate requestIdFormat: only the two documented encodings. The
-			// expanded value passes through the same parser the raw value does,
-			// so the expansion only injects `${VAR}` resolution a whole-object
-			// pass would have produced.
-			const requestIdFormat = parseRequestIdFormat(
-				serverConfig.requestIdFormat === undefined ? undefined : expandEnvVarsDeep(serverConfig.requestIdFormat),
-			);
+			const requestIdFormat = parseRequestIdFormat(serverConfig.requestIdFormat);
 			if (requestIdFormat === undefined && serverConfig.requestIdFormat != null) {
 				logger.warn(
 					`MCP server "${serverName}": invalid requestIdFormat ${JSON.stringify(serverConfig.requestIdFormat)}, ignoring`,
@@ -161,13 +148,13 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 				requestIdFormat,
 				instructions,
 				...parseMCPToolFilters(serverName, serverConfig),
-				command: expandEnvVarsDeep(serverConfig.command) as string | undefined,
-				args: expandEnvVarsDeep(serverConfig.args) as string[] | undefined,
-				env: expandEnvVarsDeep(serverConfig.env) as Record<string, string> | undefined,
-				cwd: expandEnvVarsDeep(serverConfig.cwd) as string | undefined,
-				url: expandEnvVarsDeep(serverConfig.url) as string | undefined,
-				headers: expandEnvVarsDeep(serverConfig.headers) as Record<string, string> | undefined,
-				auth: expandEnvVarsDeep(serverConfig.auth) as
+				command: serverConfig.command as string | undefined,
+				args: serverConfig.args as string[] | undefined,
+				env: serverConfig.env as Record<string, string> | undefined,
+				cwd: serverConfig.cwd as string | undefined,
+				url: serverConfig.url as string | undefined,
+				headers: serverConfig.headers as Record<string, string> | undefined,
+				auth: serverConfig.auth as
 					| {
 							type: "oauth" | "apikey";
 							credentialId?: string;
@@ -176,7 +163,7 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 							clientSecret?: string;
 					  }
 					| undefined,
-				oauth: expandEnvVarsDeep(serverConfig.oauth) as
+				oauth: serverConfig.oauth as
 					| {
 							clientId?: string;
 							clientSecret?: string;

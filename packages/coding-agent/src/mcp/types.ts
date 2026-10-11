@@ -360,7 +360,7 @@ export interface MCPServerConnection {
 	/** Cached tools (populated on demand) */
 	tools?: MCPToolDefinition[];
 	/** Last reception filter diagnostics (populated by `listTools` when filters are configured). */
-	lastFilterDiagnostics?: { unmatched: string[]; unmatchedDisabled: string[]; excluded: number };
+	lastFilterDiagnostics?: { unmatched: string[]; excluded: number };
 	/** Source metadata (for display) */
 	_source?: SourceMeta;
 	/** Cached resources (populated on demand) */

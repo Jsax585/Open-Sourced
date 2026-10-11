@@ -247,44 +247,14 @@ export function extractExaApiKey(config: MCPServerConfig): string | undefined {
 	return undefined;
 }
 
-/**
- * Exa MCP tools already covered by the native Exa integration.
- *
- * A `Set` rather than an object literal: a lookup on an ordinary object answers
- * `Object.prototype`'s members too, so a tool the server really advertises as
- * `constructor` or `__proto__` would read as native and drop the server.
- */
-const NATIVE_EXA_MCP_TOOLS = new Set(["web_search_exa"]);
+/** Exa MCP tools already covered by the native Exa integration. */
+const NATIVE_EXA_MCP_TOOLS: Record<string, true> = { web_search_exa: true };
 
-/**
- * Whether a name is one the native Exa integration provides.
- *
- * Compared WITHOUT case folding: MCP tool names are case-sensitive, so
- * `WEB_SEARCH_EXA` is a different tool from the native `web_search_exa`, and
- * reading them as equal drops a server the allowlist explicitly selected.
- */
+// Case-sensitive: MCP tool names are case-sensitive and the native integration
+// provides only the lowercase spelling, so `WEB_SEARCH_EXA` is a distinct,
+// non-native tool and keeps the server mounted.
 function isNativeExaMcpTool(toolName: string): boolean {
-	return NATIVE_EXA_MCP_TOOLS.has(toolName);
-}
-
-/**
- * Decode a raw `tools=` value before splitting it.
- *
- * The endpoint decodes its own query string, so a stdio wrapper passing the
- * URL-encoded list (`?tools=web_search_exa%2Cweb_fetch_exa`) advertises two
- * tools. Splitting the still-encoded value yields one synthetic name matching
- * no `enabledTools` entry, which would drop a server whose selected tool the
- * endpoint really does serve. A malformed escape is left verbatim rather than
- * throwing: the config is user-authored, and the raw spelling is the best
- * available answer.
- */
-function decodeExaToolList(raw: string | undefined): string | undefined {
-	if (raw === undefined) return undefined;
-	try {
-		return decodeURIComponent(raw);
-	} catch {
-		return raw;
-	}
+	return NATIVE_EXA_MCP_TOOLS[toolName] === true;
 }
 
 /**
@@ -306,20 +276,9 @@ function getRequestedExaMcpTools(config: MCPServerConfig): string[] | null {
 			const stdioConfig = config as { args?: string[] };
 			const args = stdioConfig.args ?? [];
 			for (let i = 0; i < args.length; i++) {
-				if (/^--?tools$/i.test(args[i])) return decodeExaToolList(args[i + 1]);
-				// A stdio wrapper often forwards the endpoint URL verbatim
-				// (`mcp-remote https://mcp.exa.ai/mcp?tools=…`). Parse URL-shaped
-				// arguments with the same semantics as the HTTP branch: a `#fragment`
-				// is never sent to the endpoint, and `+` decodes to a space.
-				try {
-					const fromQuery = new URL(args[i]).searchParams.get("tools");
-					if (fromQuery) return fromQuery;
-				} catch {
-					// Not URL-shaped (bare argv value, relative path) — fall through
-					// to the argv regexes below.
-				}
+				if (/^--?tools$/i.test(args[i])) return args[i + 1];
 				const match = args[i].match(/(?:^|[\s?&])tools=([^&\s]+)/i) ?? args[i].match(/--?tools[=\s]([^\s]+)/i);
-				if (match) return decodeExaToolList(match[1]);
+				if (match) return match[1];
 			}
 		}
 		return undefined;
@@ -333,46 +292,16 @@ function getRequestedExaMcpTools(config: MCPServerConfig): string[] | null {
 }
 
 /**
- * Does this denylist entry deny every name the server could advertise?
- *
- * Recognized structurally rather than by probing one candidate name: `*` and `?`
- * match any number and exactly one character, so an entry built only from them,
- * containing at least one `*` and at most one `?`, matches every non-empty name
- * — `*`, `**`, `?*`, `*?`. The `?` limit matters because a name may be a single
- * character: `??*` denies only names of two or more, leaving one-character tools
- * reachable. A probe name would answer a different question (does the entry
- * match *this* name?), so `*probe` would look like deny-all and drop a server
- * whose non-native tools survive. Patterns outside this shape fall back to the
- * filtering path below, which errs toward keeping the server.
- */
-function deniesEveryName(entry: string): boolean {
-	// At most one `?`: a second one demands a second character, and names may be
-	// a single character long, so `??*` denies only names of two or more.
-	return entry.includes("*") && /^[*?]{2,}$|^\*+$/.test(entry) && (entry.match(/\?/g)?.length ?? 0) <= 1;
-}
-
-/**
  * Does this Exa server still contribute a tool the native integration lacks?
  *
  * The server is mounted for the tools native Exa does not provide, so it is
  * kept exactly when the configured filters leave at least one of them
- * reachable. `tools=` in the URL/argv enumerates what the server advertises, so
- * an allowlist selects from within that set — the two intersect rather than
- * union — and a denylist then subtracts from the result. A configuration that
- * explicitly selects only native tools contributes nothing new and is dropped.
- *
- * With no explicit selection the server is unrestricted: a denylist leaves the
- * complement of what it denies, which includes the non-native tools, so the
- * server stays mounted — unless the denylist denies every name, in which case
- * nothing is left to contribute.
+ * reachable.
  */
 function keepsExaMCPServer(config: MCPServerConfig): boolean {
 	const requested = getRequestedExaMcpTools(config);
 	const allowlist = config.enabledTools ?? [];
 	if (requested) {
-		// `tools=` enumerates what the server advertises, so the selection is
-		// FROM that set: whatever the filters leave that is not the one native
-		// tool decides whether the server is mounted.
 		const effective = filterMCPTools({
 			toolNames: requested,
 			enabledTools: allowlist,
@@ -381,40 +310,11 @@ function keepsExaMCPServer(config: MCPServerConfig): boolean {
 		return effective.some(tool => !isNativeExaMcpTool(tool));
 	}
 	if (allowlist.length === 0) {
-		// Unrestricted: a denylist leaves the complement of what it denies,
-		// which includes the non-native tools, unless it denies every name.
 		const denylist = config.disabledTools ?? [];
 		if (denylist.length === 0) return false;
-		return !denylist.some(deniesEveryName);
+		return true;
 	}
-	// An entry is a glob over the sanitized names the server may advertise, and
-	// I don't enumerate it: the practical spelling is the entry itself, and a
-	// glob that reaches past the one native tool keeps the server. A literal
-	// entry (`web_search_exa`, `web_fetch_ex[a]`) is judged by whether the
-	// native integration provides the name it spells — the only case a drop is
-	// provable. A pattern entry is judged the same way, with the safe bias
-	// that a glob addressing the native name keeps the server mounted.
-	// A deny that excludes every name leaves nothing to contribute whatever the
-	// allowlist names, so it is decided first.
-	if ((config.disabledTools ?? []).some(deniesEveryName)) return false;
-	const pool = [...NATIVE_EXA_MCP_TOOLS, ...allowlist];
-	const { allowed: effective, unmatched } = filterMCPTools({
-		toolNames: pool,
-		enabledTools: allowlist,
-		disabledTools: config.disabledTools,
-	});
-	// An entry that matched NO pool name cannot be judged: `web_fetch_ex[a]`
-	// denotes `web_fetch_exa`, which is not in the pool, so its selection is
-	// unknown here and the conservative direction keeps the server. This holds
-	// however many other entries DID match — `[web_search_exa, web_fetch_ex[a]]`
-	// still names a fetch tool. Grouping/alternation entries ({a,b}, (a|b),
-	// a|b) are likewise unresolvable: one branch may match the native name in
-	// the pool while another selects a non-native tool the pool never
-	// enumerates, so they keep the server too. Only when every entry resolved
-	// to the native tool alone is the drop provable, as with `web_search_ex[a]`.
-	if (unmatched.length > 0) return true;
-	if (allowlist.some(entry => /[{}\(\)|]/.test(entry))) return true;
-	return effective.some(tool => !isNativeExaMcpTool(tool));
+	return allowlist.some(entry => !isNativeExaMcpTool(entry));
 }
 
 /** Result of filtering Exa MCP servers */

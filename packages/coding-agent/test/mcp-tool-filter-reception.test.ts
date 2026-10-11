@@ -4,6 +4,7 @@
  * Contracts defended here:
  * - `listTools` filters tools immediately upon receiving them from `tools/list`.
  * - `connection.tools` contains ONLY the allowed tools.
+ * - `connection.lastFilterDiagnostics` records `{ unmatched, excluded }` without `unmatchedDisabled`.
  * - Tool definitions, descriptions, and input schemas survive filtering untouched.
  * - Second call to `listTools` returns the cached filtered tools.
  * - An all-excluding filter returns [] without throwing or disconnecting the transport.
@@ -54,6 +55,7 @@ describe("MCP tool filtering at reception boundary (listTools)", () => {
 
 		expect(tools.map(t => t.name)).toEqual(["read_file", "admin/delete"]);
 		expect(conn.tools?.map(t => t.name)).toEqual(["read_file", "admin/delete"]);
+		expect(conn.lastFilterDiagnostics).toEqual({ unmatched: [], excluded: 2 });
 		// Definition schemas are preserved
 		expect(tools[0]).toEqual(FIXTURE_TOOLS[1]);
 		expect(tools[1]).toEqual(FIXTURE_TOOLS[3]);
@@ -68,6 +70,7 @@ describe("MCP tool filtering at reception boundary (listTools)", () => {
 
 		expect(tools.map(t => t.name)).toEqual(["read_file"]);
 		expect(conn.tools?.map(t => t.name)).toEqual(["read_file"]);
+		expect(conn.lastFilterDiagnostics).toEqual({ unmatched: [], excluded: 3 });
 	});
 
 	it("caches filtered tools on connection for subsequent calls", async () => {
@@ -87,6 +90,29 @@ describe("MCP tool filtering at reception boundary (listTools)", () => {
 
 		expect(tools).toEqual([]);
 		expect(conn.tools).toEqual([]);
+		expect(conn.lastFilterDiagnostics).toEqual({ unmatched: ["nonexistent_*"], excluded: 4 });
 		expect(conn.transport.connected).toBe(true);
+	});
+
+	it("records unmatched allowlist entries and excluded count in lastFilterDiagnostics", async () => {
+		const conn = createConnectionWithTools({
+			enabledTools: ["read_*", "missing_*", "typo_*"],
+			disabledTools: ["admin/*"],
+		});
+		const tools = await listTools(conn);
+
+		expect(tools.map(t => t.name)).toEqual(["read_file"]);
+		expect(conn.lastFilterDiagnostics).toEqual({
+			unmatched: ["missing_*", "typo_*"],
+			excluded: 3,
+		});
+	});
+
+	it("leaves lastFilterDiagnostics undefined when no filter is configured", async () => {
+		const conn = createConnectionWithTools({});
+		const tools = await listTools(conn);
+
+		expect(tools).toHaveLength(4);
+		expect(conn.lastFilterDiagnostics).toBeUndefined();
 	});
 });

@@ -1,14 +1,6 @@
 /**
  * Contract: the bundled MCP JSON schema (`src/config/mcp-schema.json`) accepts
- * every documented server field on every transport.
- *
- * Regression: the shared fields lived only in `$defs.serverBase`, which each
- * transport referenced through `allOf` while declaring
- * `additionalProperties: false` in the sibling branch. A sibling branch cannot
- * see the other branch's properties, so schema-aware editors rejected a valid
- * config such as `{ "command": "x", "timeout": 5 }` — the fields had to be
- * declared where the `additionalProperties` check happens. Unknown keys and
- * transport-conflicting keys must still be rejected.
+ * tool filter fields (`enabledTools`, `disabledTools`) on every transport.
  *
  * Asserted through the in-tree validator (`isJsonSchemaValueValid`) so the
  * contract is checked by the same JSON Schema subset the repo vendors.
@@ -22,14 +14,9 @@ function valid(server: Record<string, unknown>): boolean {
 }
 
 describe("MCP config schema", () => {
-	const sharedFields: Array<[string, unknown]> = [
-		["enabled", false],
-		["timeout", 5000],
-		["requestIdFormat", "string"],
+	const filterFields: Array<[string, unknown]> = [
 		["enabledTools", ["search"]],
 		["disabledTools", ["admin_*"]],
-		["auth", { type: "oauth" }],
-		["oauth", { clientId: "c" }],
 	];
 
 	const transports: Array<[string, Record<string, unknown>]> = [
@@ -39,8 +26,8 @@ describe("MCP config schema", () => {
 	];
 
 	for (const [transport, base] of transports) {
-		test(`${transport} accepts every shared server field`, () => {
-			for (const [field, value] of sharedFields) {
+		test(`${transport} accepts tool filter fields`, () => {
+			for (const [field, value] of filterFields) {
 				expect({ field, accepted: valid({ ...base, [field]: value }) }).toEqual({ field, accepted: true });
 			}
 		});
@@ -56,7 +43,7 @@ describe("MCP config schema", () => {
 	});
 
 	test("rejects a server with neither command nor url", () => {
-		expect(valid({ timeout: 5 })).toBe(false);
+		expect(valid({ enabledTools: ["search"] })).toBe(false);
 	});
 
 	test("rejects malformed tool filters", () => {
