@@ -115,6 +115,8 @@ export interface PendingSettle {
 	 * listed window was under the pointer). They are shown on the focused window.
 	 */
 	unattributed: number;
+	/** Whether the cell sent input to a window, not only `apps.open`. */
+	windowInput: boolean;
 	/** Roster captured before the cell's first input; absent when it could not be read. */
 	rosterBefore?: DesktopWindow[];
 	/** How the waits for the cell's input ended; absent when none ran. */
@@ -381,6 +383,8 @@ interface CellState {
 	opened: Set<number>;
 	unattributed: number;
 	inputs: number;
+	/** Whether any of the inputs went to a window (not only `apps.open`), even one whose tree the cell printed since. */
+	windowInput: boolean;
 	rosterBefore?: DesktopWindow[];
 	rosterClaimed: boolean;
 	outcome?: CellOutcome;
@@ -411,6 +415,7 @@ export class ObservationLedger {
 				opened: new Set(),
 				unattributed: 0,
 				inputs: 0,
+				windowInput: false,
 				rosterClaimed: false,
 			};
 			this.#cells.set(cell, state);
@@ -546,6 +551,7 @@ export class ObservationLedger {
 	noteInput(cell: CellKey, window: InputWindow | undefined): number | undefined {
 		const state = this.#cell(cell);
 		state.inputs++;
+		state.windowInput = true;
 		if (!window) {
 			state.unattributed++;
 			return undefined;
@@ -651,6 +657,7 @@ export class ObservationLedger {
 			pids: state.pids,
 			opened: state.opened,
 			unattributed: state.unattributed,
+			windowInput: state.windowInput,
 			rosterBefore: state.rosterBefore,
 			outcome: state.outcome,
 		};
@@ -736,7 +743,8 @@ export function readBackName(readBack: ReadBack): string {
 /**
  * The post-input section for one window: what changed since the model's last
  * tree of it, a one-line verdict when nothing did, or the whole tree when the
- * model has none or the changes would not be shorter.
+ * model has none or the changes would take half its length or more: a diff
+ * that large reads worse than the tree, and models re-read the tree after it.
  */
 export function renderReadBack(readBack: ReadBack): string {
 	const { change, text } = readBack;
@@ -751,17 +759,17 @@ export function renderReadBack(readBack: ReadBack): string {
 		return `${name}: no change since your last tree${after}`;
 	}
 	const diff = lines.join("\n");
-	if (diff.length >= text.length) return `${name}:\n${text}`;
+	if (diff.length * 2 >= text.length) return `${name}:\n${text}`;
 	const count = change.lines.length + change.removed.length;
 	return `${name}: ${count} ${count === 1 ? "change" : "changes"} since your last tree\n${diff}`;
 }
 
-/** The heading of a window the cell's input opened and focused: `new window "43" Code "Save" 30×12 (focused)`. */
+/** A window that appeared while the cell's input ran: `new window "43" Code "Save" 30×12 (focused)`. */
 export function newWindowName(window: DesktopWindow): string {
-	return `new window ${windowLabel(window)} ${Math.round(window.width)}×${Math.round(window.height)} (focused)`;
+	return `new window ${windowLabel(window)} ${Math.round(window.width)}×${Math.round(window.height)}${window.focused ? " (focused)" : ""}`;
 }
 
-/** A window the cell's input opened and focused: the model has no tree of it, so it gets all of it. */
+/** A window that appeared while the cell's input ran: the model has no tree of it, so it gets all of it. */
 export function renderNewWindow(window: DesktopWindow, text: string): string {
 	return `${newWindowName(window)}:\n${text}`;
 }
@@ -820,9 +828,7 @@ export function describeRosterChanges(
 	const lines: string[] = [];
 	for (const window of after) {
 		if (beforeIds.has(window.id) || reported.has(window.id) || !(acted(window) || window.focused)) continue;
-		lines.push(
-			`new window ${windowLabel(window)} ${Math.round(window.width)}×${Math.round(window.height)}${window.focused ? " (focused)" : ""}`,
-		);
+		lines.push(newWindowName(window));
 	}
 	for (const window of before) {
 		if (afterIds.has(window.id) || reported.has(window.id) || !acted(window)) continue;
