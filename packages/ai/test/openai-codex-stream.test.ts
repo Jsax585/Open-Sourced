@@ -4676,6 +4676,795 @@ describe("openai-codex streaming", () => {
 		expect(continuationMetadata["x-codex-turn-metadata"]).toBe(continuationHeaders.get("x-codex-turn-metadata"));
 	});
 
+	it.each([
+		[false, false],
+		[true, false],
+		[false, true],
+		[true, true],
+	] as const)(
+		"resets append state only after a held compaction send (Responses Lite: %s, abort after send: %s)",
+		async (responsesLite, abortAfterSend) => {
+			const model = createCodexTestModel("https://chatgpt.com/backend-api");
+			const token = createCodexTestToken();
+			const sessionId = `ws-held-compaction-${responsesLite ? "lite" : "full"}-${abortAfterSend ? "cancel" : "complete"}`;
+			const providerSessionState = new Map<string, ProviderSessionState>();
+			const fetchMock = vi.fn<FetchImpl>(() => {
+				throw new Error("held compaction must not use SSE");
+			});
+			const sentRequests: Array<Record<string, unknown>> = [];
+			const compactionSent = Promise.withResolvers<Record<string, unknown>>();
+			const releaseCompaction = Promise.withResolvers<void>();
+			const compactionAbort = new AbortController();
+			let normalResponseCount = 0;
+
+			class HeldCompactionWebSocket extends MockWebSocket {
+				constructor(url: string, options?: { headers?: WsHeaders }) {
+					super(url, options);
+					this.scheduleOpen();
+				}
+
+				override send(data: string): void {
+					const request = requireRecord(JSON.parse(data), "Codex websocket request");
+					sentRequests.push(request);
+					const input = request.input;
+					const isCompaction =
+						Array.isArray(input) && input.some(item => isRecord(item) && item.type === "compaction_trigger");
+					if (isCompaction) {
+						compactionSent.resolve(request);
+						void releaseCompaction.promise.then(() => {
+							this.sendJson({
+								type: "response.output_item.done",
+								item: { type: "compaction", encrypted_content: "enc-lazy" },
+							});
+							this.sendJson({
+								type: "response.done",
+								response: {
+									id: "resp-compaction",
+									status: "completed",
+									usage: { input_tokens: 17, output_tokens: 2, total_tokens: 19 },
+								},
+							});
+						});
+						return;
+					}
+					normalResponseCount += 1;
+					this.emitCodexResponse({
+						messageId: normalResponseCount === 1 ? "msg-live" : "msg-followup",
+						responseId: normalResponseCount === 1 ? "resp-live" : "resp-followup",
+						text: normalResponseCount === 1 ? "live response" : "followup response",
+					});
+				}
+			}
+
+			global.WebSocket = HeldCompactionWebSocket as unknown as typeof WebSocket;
+			const firstUser = { role: "user" as const, content: "First question", timestamp: Date.now() };
+			const firstContext: Context = {
+				systemPrompt: ["You are a helpful assistant."],
+				messages: [firstUser],
+			};
+			const transportOptions = {
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+				preferWebsockets: true,
+				responsesLite,
+			};
+			const compactionOptions = { ...transportOptions, signal: compactionAbort.signal };
+			try {
+				const first = await streamOpenAICodexResponses(model, firstContext, transportOptions).result();
+				const liveBody = await buildTransformedCodexRequestBody(model, firstContext, {
+					sessionId,
+					responsesLite,
+				});
+				const sanitizedAssistantItem = {
+					type: "message",
+					role: "assistant",
+					content: [{ type: "output_text", text: "live response" }],
+				};
+				const compactionBody: typeof liveBody & Record<string, unknown> = {
+					...liveBody,
+					input: [...(liveBody.input ?? []), sanitizedAssistantItem, { type: "compaction_trigger" }],
+				};
+				expect(compactionBody.type).toBeUndefined();
+				expect(compactionBody.input?.slice(-2)).toEqual([sanitizedAssistantItem, { type: "compaction_trigger" }]);
+				for (const [key, value] of Object.entries(liveBody)) {
+					if (key !== "input") expect(compactionBody[key]).toEqual(value);
+				}
+				const compaction: CodexCompactionRequestContext = {
+					operationId: `held-compaction-${responsesLite ? "lite" : "full"}`,
+					trigger: "auto",
+					reason: "context_limit",
+					implementation: "responses",
+					phase: "mid_turn",
+					strategy: "memento",
+				};
+				const compactionEvents = await openCodexCompactionEventStream(model, compactionBody, {
+					...compactionOptions,
+					codexCompaction: compaction,
+				});
+				expect(sentRequests).toHaveLength(1);
+				expect(getOpenAICodexTransportDetails(model, { sessionId, providerSessionState })).toMatchObject({
+					lastTransport: "websocket",
+					canAppend: true,
+				});
+
+				const collectedPromise = (async () => {
+					const collected: Array<Record<string, unknown>> = [];
+					for await (const event of compactionEvents) collected.push(event);
+					return collected;
+				})();
+				const compactionRequest = await compactionSent.promise;
+				expect(compactionRequest.type).toBe("response.create");
+				expect(compactionRequest.previous_response_id).toBe("resp-live");
+				expect(compactionRequest.input).toEqual([{ type: "compaction_trigger" }]);
+				expect(fetchMock).not.toHaveBeenCalled();
+				expect(getOpenAICodexTransportDetails(model, { sessionId, providerSessionState })).toMatchObject({
+					lastTransport: "websocket",
+					canAppend: false,
+				});
+				if (abortAfterSend) {
+					compactionAbort.abort();
+					releaseCompaction.resolve();
+					const cancellation = await collectedPromise.then(
+						() => undefined,
+						(error: unknown) => error,
+					);
+					expect(cancellation).toBeDefined();
+					expect(AIError.is(AIError.classify(cancellation), AIError.Flag.Timeout)).toBe(false);
+					expect(getOpenAICodexTransportDetails(model, { sessionId, providerSessionState })).toMatchObject({
+						canAppend: false,
+					});
+				} else {
+					releaseCompaction.resolve();
+					expect(await collectedPromise).toEqual([
+						{
+							type: "response.output_item.done",
+							item: { type: "compaction", encrypted_content: "enc-lazy" },
+						},
+						{
+							type: "response.done",
+							response: {
+								id: "resp-compaction",
+								status: "completed",
+								usage: { input_tokens: 17, output_tokens: 2, total_tokens: 19 },
+							},
+						},
+					]);
+				}
+
+				await streamOpenAICodexResponses(
+					model,
+					{
+						systemPrompt: firstContext.systemPrompt,
+						messages: [firstUser, first, { role: "user", content: "After compaction", timestamp: Date.now() }],
+					},
+					transportOptions,
+				).result();
+				expect(sentRequests).toHaveLength(3);
+				const followupRequest = sentRequests[2];
+				expect(followupRequest?.previous_response_id).toBeUndefined();
+				if (!Array.isArray(followupRequest?.input)) throw new Error("expected full follow-up input");
+				expect(followupRequest.input.length).toBeGreaterThan(1);
+				expect(JSON.stringify(followupRequest.input)).toContain("First question");
+				expect(JSON.stringify(followupRequest.input)).toContain("live response");
+				expect(JSON.stringify(followupRequest.input)).toContain("After compaction");
+				expect(JSON.stringify(followupRequest.input)).not.toContain("compaction_trigger");
+				expect(JSON.stringify(followupRequest)).not.toContain("resp-live");
+				expect(JSON.stringify(followupRequest)).not.toContain("resp-compaction");
+			} finally {
+				for (const state of providerSessionState.values()) state.close();
+				providerSessionState.clear();
+			}
+		},
+	);
+
+	it.each([
+		[false, false],
+		[true, false],
+		[false, true],
+		[true, true],
+	] as const)(
+		"does not send a compaction frame before compaction iteration (Responses Lite: %s, abort before iteration: %s)",
+		async (responsesLite, abortBeforeIteration) => {
+			const model = createCodexTestModel("https://chatgpt.com/backend-api");
+			const token = createCodexTestToken();
+			const sessionId = `ws-never-iterated-compaction-${responsesLite ? "lite" : "full"}-${abortBeforeIteration ? "abort" : "return"}`;
+			const providerSessionState = new Map<string, ProviderSessionState>();
+			const compactionAbort = new AbortController();
+			const fetchMock = vi.fn<FetchImpl>(() => {
+				throw new Error("never-iterated compaction must not use SSE");
+			});
+			const sentRequests: Array<Record<string, unknown>> = [];
+
+			class NeverIteratedCompactionWebSocket extends MockWebSocket {
+				constructor(url: string, options?: { headers?: WsHeaders }) {
+					super(url, options);
+					this.scheduleOpen();
+				}
+
+				override send(data: string): void {
+					const request = requireRecord(JSON.parse(data), "Codex websocket request");
+					sentRequests.push(request);
+					this.emitCodexResponse({
+						messageId: "msg-live",
+						responseId: "resp-live",
+						text: "live response",
+					});
+				}
+			}
+
+			global.WebSocket = NeverIteratedCompactionWebSocket as unknown as typeof WebSocket;
+			const firstUser = { role: "user" as const, content: "First question", timestamp: Date.now() };
+			const firstContext: Context = {
+				systemPrompt: ["You are a helpful assistant."],
+				messages: [firstUser],
+			};
+			const transportOptions = {
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+				preferWebsockets: true,
+				responsesLite,
+			};
+			const compactionOptions = { ...transportOptions, signal: compactionAbort.signal };
+			let compactionStream: AsyncGenerator<Record<string, unknown>> | undefined;
+			try {
+				await streamOpenAICodexResponses(model, firstContext, transportOptions).result();
+				const liveBody = await buildTransformedCodexRequestBody(model, firstContext, {
+					sessionId,
+					responsesLite,
+				});
+				compactionStream = await openCodexCompactionEventStream(
+					model,
+					{
+						...liveBody,
+						input: [
+							...(liveBody.input ?? []),
+							{
+								type: "message",
+								role: "assistant",
+								content: [{ type: "output_text", text: "live response" }],
+							},
+							{ type: "compaction_trigger" },
+						],
+					},
+					{
+						...compactionOptions,
+						codexCompaction: {
+							operationId: `never-iterated-${responsesLite ? "lite" : "full"}`,
+							trigger: "auto",
+							reason: "context_limit",
+							implementation: "responses",
+							phase: "mid_turn",
+							strategy: "memento",
+						},
+					},
+				);
+				if (!compactionStream) throw new Error("expected the compaction stream");
+				expect(sentRequests).toHaveLength(1);
+				expect(getOpenAICodexTransportDetails(model, { sessionId, providerSessionState })).toMatchObject({
+					lastTransport: "websocket",
+					canAppend: true,
+				});
+				if (abortBeforeIteration) {
+					compactionAbort.abort();
+					const cancellation = await compactionStream.next().then(
+						() => undefined,
+						(error: unknown) => error,
+					);
+					expect(cancellation).toBeDefined();
+					expect(AIError.is(AIError.classify(cancellation), AIError.Flag.Timeout)).toBe(false);
+					try {
+						await compactionStream.return(undefined);
+					} catch {
+						// The aborted generator may already have completed its cleanup.
+					}
+				} else {
+					await compactionStream.return(undefined);
+					expect(getOpenAICodexTransportDetails(model, { sessionId, providerSessionState })).toMatchObject({
+						lastTransport: "websocket",
+						canAppend: true,
+					});
+				}
+				expect(sentRequests).toHaveLength(1);
+				expect(fetchMock).not.toHaveBeenCalled();
+			} finally {
+				if (compactionStream) {
+					try {
+						await compactionStream.return(undefined);
+					} catch {
+						// The fixture is already closing the provider state.
+					}
+				}
+				for (const state of providerSessionState.values()) state.close();
+				providerSessionState.clear();
+			}
+		},
+	);
+
+	it.each(["between acquisition and iteration", "between guards"] as const)(
+		"revalidates a compaction after a %s append reset",
+		async resetPhase => {
+			const model = createCodexTestModel("https://chatgpt.com/backend-api");
+			const token = createCodexTestToken();
+			const sessionId = `ws-compaction-reset-${resetPhase === "between guards" ? "observer" : "external"}`;
+			const providerSessionState = new Map<string, ProviderSessionState>();
+			const fetchMock = vi.fn<FetchImpl>(() => {
+				throw new Error("Compaction reset recovery must not use SSE");
+			});
+			const sentRequests: Array<Record<string, unknown>> = [];
+			const observedOutbound: Array<Record<string, unknown>> = [];
+			const resetCompaction: CodexCompactionRequestContext = {
+				operationId: `compaction-reset-${resetPhase}`,
+				trigger: "auto",
+				reason: "context_limit",
+				implementation: "responses",
+				phase: "mid_turn",
+				strategy: "memento",
+			};
+			let observerReset = false;
+			const rawHistory = "PRIVATE_COMPACTION_RESET_HISTORY";
+			const publicHistory = "PUBLIC_COMPACTION_RESET_HISTORY";
+			const hookPreviousResponseIds: unknown[] = [];
+			let hookCalls = 0;
+			const redactInput = (input: unknown[]): unknown[] =>
+				input.map(item => {
+					if (!isRecord(item) || !Array.isArray(item.content)) return item;
+					return {
+						...item,
+						content: item.content.map(part =>
+							isRecord(part) && part.type === "input_text" && part.text === rawHistory
+								? { ...part, text: publicHistory }
+								: part,
+						),
+					};
+				});
+
+			class CompactionResetWebSocket extends MockWebSocket {
+				constructor(url: string, options?: { headers?: WsHeaders }) {
+					super(url, options);
+					this.scheduleOpen();
+				}
+
+				override send(data: string): void {
+					const request = JSON.parse(data) as Record<string, unknown>;
+					sentRequests.push(request);
+					const input = request.input;
+					if (Array.isArray(input) && input.some(item => isRecord(item) && item.type === "compaction_trigger")) {
+						this.sendJson({
+							type: "response.output_item.done",
+							item: { type: "compaction", encrypted_content: "enc-reset" },
+						});
+						this.sendJson({
+							type: "response.done",
+							response: { id: "resp-reset-compaction", status: "completed", usage: DEFAULT_USAGE },
+						});
+						return;
+					}
+					this.emitCodexResponse({
+						messageId: "msg-reset-live",
+						responseId: "resp-live",
+						text: "live response",
+						includeCreated: true,
+					});
+				}
+			}
+
+			global.WebSocket = CompactionResetWebSocket as unknown as typeof WebSocket;
+			const firstUser = { role: "user" as const, content: rawHistory, timestamp: Date.now() };
+			const firstContext: Context = {
+				systemPrompt: ["You are a helpful assistant."],
+				messages: [firstUser],
+			};
+			const options = {
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+				preferWebsockets: true,
+				onPayload: (payload: unknown): unknown => {
+					hookCalls += 1;
+					const request = requireRecord(payload, "compaction reset payload");
+					hookPreviousResponseIds.push(request.previous_response_id);
+					const input = request.input;
+					if (!Array.isArray(input)) throw new Error("expected the redaction hook input");
+					expect(JSON.stringify(input)).toContain(rawHistory);
+					return { ...request, input: redactInput(input) };
+				},
+			};
+			try {
+				await streamOpenAICodexResponses(model, firstContext, options).result();
+				const liveBody = await buildTransformedCodexRequestBody(model, firstContext, { sessionId });
+				const compactionBody = {
+					...liveBody,
+					input: [
+						...(liveBody.input ?? []),
+						{
+							type: "message",
+							role: "assistant",
+							content: [{ type: "output_text", text: "live response" }],
+						},
+						{ type: "compaction_trigger" },
+					],
+				};
+				const expectedCompactionInput = [
+					{ role: "user", content: [{ type: "input_text", text: publicHistory }] },
+					{
+						type: "message",
+						role: "assistant",
+						content: [{ type: "output_text", text: "live response" }],
+					},
+					{ type: "compaction_trigger" },
+				];
+				const compactionStream = await openCodexCompactionEventStream(model, compactionBody, {
+					...options,
+					codexCompaction: resetCompaction,
+					onSseEvent: event => {
+						if (!event.raw[0]?.startsWith(": ws →")) return;
+						const outbound = JSON.parse(event.data) as Record<string, unknown>;
+						observedOutbound.push(outbound);
+						if (resetPhase !== "between guards" || observerReset) return;
+						expect(outbound.previous_response_id).toBe("resp-live");
+						expect(outbound.input).toEqual([{ type: "compaction_trigger" }]);
+						expect(JSON.stringify(outbound)).not.toContain(rawHistory);
+						observerReset = true;
+						resetOpenAICodexHistoryAfterCompaction({
+							providerSessionState,
+							sessionId,
+							compaction: resetCompaction,
+						});
+					},
+				});
+				expect(hookCalls).toBe(2);
+				expect(hookPreviousResponseIds).toEqual([undefined, "resp-live"]);
+				expect(sentRequests[0]?.input).toEqual([
+					{ role: "user", content: [{ type: "input_text", text: publicHistory }] },
+				]);
+				expect(JSON.stringify(sentRequests[0])).not.toContain(rawHistory);
+				expect(sentRequests).toHaveLength(1);
+				if (resetPhase === "between acquisition and iteration") {
+					resetOpenAICodexHistoryAfterCompaction({
+						providerSessionState,
+						sessionId,
+						compaction: resetCompaction,
+					});
+				}
+
+				const collected: Array<Record<string, unknown>> = [];
+				for await (const event of compactionStream) collected.push(event);
+
+				expect(fetchMock).not.toHaveBeenCalled();
+				expect(sentRequests).toHaveLength(2);
+				const compactionRequest = sentRequests[1];
+				if (!compactionRequest) throw new Error("expected the recovered compaction request");
+				expect(compactionRequest.type).toBe("response.create");
+				expect(compactionRequest.previous_response_id).toBeUndefined();
+				expect(compactionRequest.input).toEqual(expectedCompactionInput);
+				expect(JSON.stringify(compactionRequest)).not.toContain(rawHistory);
+				expect(JSON.stringify(compactionRequest)).not.toContain("resp-live");
+				expect(hookCalls).toBe(2);
+				expect(hookPreviousResponseIds).toEqual([undefined, "resp-live"]);
+				expect(observedOutbound).toHaveLength(resetPhase === "between guards" ? 2 : 1);
+				expect(resetPhase === "between guards" ? observerReset : true).toBe(true);
+				expect(collected).toEqual([
+					{
+						type: "response.output_item.done",
+						item: { type: "compaction", encrypted_content: "enc-reset" },
+					},
+					{
+						type: "response.done",
+						response: { id: "resp-reset-compaction", status: "completed", usage: DEFAULT_USAGE },
+					},
+				]);
+				expect(getOpenAICodexTransportDetails(model, { sessionId, providerSessionState })).toMatchObject({
+					canAppend: false,
+				});
+			} finally {
+				for (const state of providerSessionState.values()) state.close();
+				providerSessionState.clear();
+			}
+		},
+	);
+
+	it("reuses one prepared redacted compaction body through send-throw SSE recovery", async () => {
+		const model = createCodexTestModel("https://chatgpt.com/backend-api");
+		const token = createCodexTestToken();
+		const sessionId = "ws-compaction-redacted-fallback";
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const rawSentinel = "PRIVATE_COMPACTION_HISTORY";
+		const publicInput = [
+			{ role: "user", content: [{ type: "input_text", text: "PUBLIC_COMPACTION_HISTORY" }] },
+			{ type: "compaction_trigger" },
+		];
+		const sse = `${[
+			`data: ${JSON.stringify({ type: "response.output_item.done", item: { type: "compaction", encrypted_content: "enc-sse-redacted" } })}`,
+			`data: ${JSON.stringify({ type: "response.done", response: { id: "resp-sse-redacted", usage: DEFAULT_USAGE } })}`,
+		].join("\n\n")}\n\n`;
+		let capturedSseBody: Record<string, unknown> | undefined;
+		const fetchMock = vi.fn<FetchImpl>(async (_input, init) => {
+			capturedSseBody = requireRecord(JSON.parse(decodeCodexRequestBody(init?.body)), "SSE compaction body");
+			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+		});
+		const sentRequests: Array<Record<string, unknown>> = [];
+		let hookCalls = 0;
+
+		class RedactedCompactionWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
+			}
+
+			override send(data: string): void {
+				const request = JSON.parse(data) as Record<string, unknown>;
+				sentRequests.push(request);
+				const input = request.input;
+				if (Array.isArray(input) && input.some(item => isRecord(item) && item.type === "compaction_trigger")) {
+					throw new Error("prepared compaction send failed");
+				}
+				this.emitCodexResponse({
+					messageId: "msg-redacted-live",
+					responseId: "resp-live",
+					text: "live response",
+					includeCreated: true,
+				});
+			}
+		}
+
+		global.WebSocket = RedactedCompactionWebSocket as unknown as typeof WebSocket;
+		const firstUser = { role: "user" as const, content: rawSentinel, timestamp: Date.now() };
+		const firstContext: Context = {
+			systemPrompt: ["You are a helpful assistant."],
+			messages: [firstUser],
+		};
+		try {
+			await streamOpenAICodexResponses(model, firstContext, {
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+				preferWebsockets: true,
+			}).result();
+			const liveBody = await buildTransformedCodexRequestBody(model, firstContext, { sessionId });
+			const compactionBody = {
+				...liveBody,
+				input: [
+					...(liveBody.input ?? []),
+					{
+						type: "message",
+						role: "assistant",
+						content: [{ type: "output_text", text: "live response" }],
+					},
+					{ type: "compaction_trigger" },
+				],
+			};
+			const compactionStream = await openCodexCompactionEventStream(model, compactionBody, {
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+				preferWebsockets: true,
+				codexCompaction: {
+					operationId: "compaction-redacted-fallback",
+					trigger: "auto",
+					reason: "context_limit",
+					implementation: "responses",
+					phase: "mid_turn",
+					strategy: "memento",
+				},
+				onPayload: payload => {
+					hookCalls += 1;
+					const request = requireRecord(payload, "compaction payload");
+					expect(request.previous_response_id).toBe("resp-live");
+					expect(JSON.stringify(request.input)).toContain(rawSentinel);
+					return { ...request, type: "proxy.compaction", input: publicInput };
+				},
+			});
+			expect(sentRequests).toHaveLength(1);
+			expect(hookCalls).toBe(1);
+
+			const collected: Array<Record<string, unknown>> = [];
+			for await (const event of compactionStream) collected.push(event);
+
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(hookCalls).toBe(1);
+			expect(sentRequests).toHaveLength(2);
+			expect(sentRequests[1]?.previous_response_id).toBeUndefined();
+			expect(sentRequests[1]?.type).toBe("proxy.compaction");
+			expect(sentRequests[1]?.input).toEqual(publicInput);
+			expect(JSON.stringify(sentRequests[1])).not.toContain(rawSentinel);
+			if (!capturedSseBody) throw new Error("expected captured SSE compaction body");
+			expect(capturedSseBody.type).toBeUndefined();
+			expect(capturedSseBody.previous_response_id).toBeUndefined();
+			expect(capturedSseBody.input).toEqual(publicInput);
+			expect(JSON.stringify(capturedSseBody)).not.toContain(rawSentinel);
+			expect(collected).toEqual([
+				{
+					type: "response.output_item.done",
+					item: { type: "compaction", encrypted_content: "enc-sse-redacted" },
+				},
+				{
+					type: "response.done",
+					response: { id: "resp-sse-redacted", usage: DEFAULT_USAGE },
+				},
+			]);
+			expect(getOpenAICodexTransportDetails(model, { sessionId, providerSessionState })).toMatchObject({
+				lastTransport: "sse",
+				websocketDisabled: true,
+				canAppend: false,
+			});
+			expect(compactionBody.input).toEqual([
+				...(liveBody.input ?? []),
+				{
+					type: "message",
+					role: "assistant",
+					content: [{ type: "output_text", text: "live response" }],
+				},
+				{ type: "compaction_trigger" },
+			]);
+		} finally {
+			for (const state of providerSessionState.values()) state.close();
+			providerSessionState.clear();
+		}
+	});
+
+	it("replays a full compaction create when accepted steering precedes the final trigger", async () => {
+		const model = createCodexSteeringTestModel("https://chatgpt.com/backend-api");
+		const token = createCodexTestToken();
+		const sessionId = "ws-steering-compaction-session";
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const fetchMock = vi.fn<FetchImpl>(() => {
+			throw new Error("Steering compaction must not use SSE");
+		});
+		const compactionFrames: Array<Record<string, unknown>> = [];
+		const sockets: MockWebSocket[] = [];
+		const steering = createOneShotCodexSteering("continue automatically");
+		let firstRequest = true;
+
+		class SteeringCompactionWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				sockets.push(this);
+				this.scheduleOpen();
+			}
+
+			override send(data: string): void {
+				const frame = JSON.parse(data) as Record<string, unknown>;
+				const input = frame.input;
+				if (Array.isArray(input) && input.some(item => isRecord(item) && item.type === "compaction_trigger")) {
+					compactionFrames.push(frame);
+					this.sendJson({
+						type: "response.output_item.done",
+						item: { type: "compaction", encrypted_content: "enc-steering" },
+					});
+					this.sendJson({
+						type: "response.done",
+						response: { id: "resp-steering-compaction", status: "completed", usage: DEFAULT_USAGE },
+					});
+					return;
+				}
+				if (frame.type === "response.steer") {
+					this.sendJson({
+						type: "response.steer.accepted",
+						steer: { id: "steer_compaction", previous_response_id: "resp-live" },
+					});
+					this.sendJson({
+						type: "response.incomplete",
+						response: {
+							id: "resp-live",
+							status: "incomplete",
+							incomplete_details: { reason: "steered" },
+							usage: DEFAULT_USAGE,
+						},
+					});
+					this.emitCodexResponse({
+						messageId: "msg-steered",
+						responseId: "resp-steered",
+						text: "Steered",
+						includeCreated: true,
+					});
+					return;
+				}
+				if (!firstRequest) throw new Error("unexpected non-compaction websocket request");
+				firstRequest = false;
+				this.sendJson({ type: "response.created", response: { id: "resp-live" } });
+				this.sendJson({
+					type: "response.output_item.added",
+					item: { type: "message", id: "msg-live", role: "assistant", status: "in_progress", content: [] },
+				});
+				this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+				this.sendJson({ type: "response.output_text.delta", delta: "Live" });
+				this.sendJson({
+					type: "response.output_item.done",
+					item: {
+						type: "message",
+						id: "msg-live",
+						role: "assistant",
+						status: "completed",
+						content: [{ type: "output_text", text: "Live" }],
+					},
+				});
+			}
+		}
+
+		global.WebSocket = SteeringCompactionWebSocket as unknown as typeof WebSocket;
+		const firstUser = { role: "user" as const, content: "First question", timestamp: Date.now() };
+		const firstContext: Context = {
+			systemPrompt: ["You are a helpful assistant."],
+			messages: [firstUser],
+		};
+		try {
+			const first = await streamOpenAICodexResponses(model, firstContext, {
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+				preferWebsockets: true,
+				liveSteering: steering.source,
+			}).result();
+			expect(first.responseId).toBe("resp-live");
+			expect(steering.settled()).toBe("accepted");
+
+			const liveBody = await buildTransformedCodexRequestBody(model, firstContext, { sessionId });
+			const compactionBody = {
+				...liveBody,
+				input: [
+					...(liveBody.input ?? []),
+					{ type: "message", role: "assistant", content: [{ type: "output_text", text: "Live" }] },
+					{
+						type: "message",
+						role: "user",
+						content: [{ type: "input_text", text: "continue automatically" }],
+					},
+					{ type: "compaction_trigger" },
+				],
+			};
+			const compactionEvents = await openCodexCompactionEventStream(model, compactionBody, {
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+				preferWebsockets: true,
+				codexCompaction: {
+					operationId: "steering-compaction",
+					trigger: "auto",
+					reason: "context_limit",
+					implementation: "responses",
+					phase: "mid_turn",
+					strategy: "memento",
+				},
+			});
+			const collected: Array<Record<string, unknown>> = [];
+			for await (const event of compactionEvents) collected.push(event);
+
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(sockets).toHaveLength(2);
+			expect(compactionFrames).toHaveLength(1);
+			expect(compactionFrames[0]?.type).toBe("response.create");
+			expect(compactionFrames[0]?.previous_response_id).toBeUndefined();
+			expect(compactionFrames[0]?.input).toEqual(compactionBody.input);
+			const compactionInput = compactionFrames[0]?.input;
+			if (!Array.isArray(compactionInput)) throw new Error("expected full compaction input");
+			expect(compactionInput.at(-1)).toEqual({
+				type: "compaction_trigger",
+			});
+			expect(collected).toEqual([
+				{
+					type: "response.output_item.done",
+					item: { type: "compaction", encrypted_content: "enc-steering" },
+				},
+				{
+					type: "response.done",
+					response: { id: "resp-steering-compaction", status: "completed", usage: DEFAULT_USAGE },
+				},
+			]);
+		} finally {
+			for (const state of providerSessionState.values()) state.close();
+			providerSessionState.clear();
+		}
+	});
+
 	it("seeds the first sample from pre-turn compaction turn-state", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());

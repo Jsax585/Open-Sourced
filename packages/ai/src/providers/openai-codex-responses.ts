@@ -799,6 +799,7 @@ interface CodexRequestContext {
 	transformedBody: RequestBody;
 	unhookedRequestBodyForState?: RequestBody;
 	pendingWebSocketPayload?: CodexPendingWebSocketPayload;
+	resetAppendStateAfterSend?: boolean;
 	rawRequestDump: RawHttpRequestDump;
 }
 
@@ -1763,6 +1764,7 @@ export async function openCodexCompactionEventStream(
 		requestContext = createCodexRequestContext(model, toCodexRequestBody(body), options, {
 			isolateCompactionTransport: false,
 		});
+		requestContext.resetAppendStateAfterSend = true;
 		initial = await openInitialCodexEventStream(model, options, requestSetup, requestContext);
 	} catch (error) {
 		requestSetup.requestAbortController.abort();
@@ -1771,9 +1773,14 @@ export async function openCodexCompactionEventStream(
 
 	if (requestContext.websocketState) {
 		requestContext.websocketState.lastTransport = initial.transport;
-		// The compaction request may use the existing append baseline, but the
-		// replacement history makes that baseline stale for the next normal turn.
-		resetCodexWebSocketAppendState(requestContext.websocketState);
+	}
+	// Initial SSE has already opened its HTTP request, so the append baseline
+	// must be invalidated before the lazy stream is returned.
+	if (initial.transport === "sse") {
+		requestContext.resetAppendStateAfterSend = undefined;
+		if (requestContext.websocketState) {
+			resetCodexWebSocketAppendState(requestContext.websocketState);
+		}
 	}
 	return streamCodexCompactionEvents(model, options, requestSetup, requestContext, initial);
 }
@@ -2374,6 +2381,10 @@ async function openCodexWebSocketTransport(
 			const afterSend = (): void => {
 				if (pendingPayloadForRequest && requestContext.pendingWebSocketPayload === pendingPayloadForRequest) {
 					requestContext.pendingWebSocketPayload = undefined;
+				}
+				if (requestContext.resetAppendStateAfterSend) {
+					requestContext.resetAppendStateAfterSend = undefined;
+					resetCodexWebSocketAppendState(websocketState);
 				}
 				recordCodexTurnRequestDiagnostics(websocketState, request, "websocket", usesContinuation);
 			};
