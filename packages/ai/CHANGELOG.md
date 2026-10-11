@@ -4,10 +4,19 @@
 
 ### Fixed
 
-
 - Fixed Codex WebSocket reconnects across authentication or routing changes, including pooled sockets that fail the 30-second idle health gate, hook deletes or replacements that require immutable full replay, and lazy steering attaches whose ownership changes before consumption, so effective hook-adjusted tool history is replayed in order without an obsolete `previous_response_id` before same-route chaining resumes; unchanged hook-owned `client_metadata` now receives the live transport turn-state just before send, while explicit turn-state edits or deletion remain respected; prepared hook payloads are reused across pre-send retries and handshake-to-SSE fallback without repeating hook side effects, while post-send retries retain their existing hook behavior; stable hook-adjusted options retain chaining without permitting incompatible steering attaches, and hook-owned WebSocket frame types survive preparation and retries without leaking into SSE bodies; requestless steering attaches clear the prior turn's request/usage diagnostic pair without incrementing request counters or changing returned usage; this overlaps the scope discussed in [#12131](https://github.com/can1357/oh-my-pi/issues/12131) without claiming coordination or supersession ([#15024](https://github.com/can1357/oh-my-pi/pull/15024) by [@xiangnan0811](https://github.com/xiangnan0811)).
 - Fixed Codex payload hooks receiving only a chained input suffix: hooks now inspect the complete logical input, and empty or redacted replacements are sent without restoring old history or inheriting its continuation; safe wire deltas are derived after hook approval, including conservative accepted-steering handling ([#15024](https://github.com/can1357/oh-my-pi/pull/15024) by [@xiangnan0811](https://github.com/xiangnan0811)).
 - Fixed stable Codex history-rewriting hooks losing WebSocket delta chaining when callers retain raw transcripts, while preserving sanitized-history callers, effective-only replay, and public-option invalidation ([#15024](https://github.com/can1357/oh-my-pi/pull/15024) by [@xiangnan0811](https://github.com/xiangnan0811)).
+
+## [18.9.1] - 2026-10-11
+
+### Added
+
+- Added `compat.supportsThinkingBindingControls` for Bedrock Converse: setting it to `false` stops prefix-bound Claude requests from sending `thinking.block_binding`, the `thinking-binding-controls-2026-08-01` beta and the `/input_transformations` response path, for gateways or regions that reject them ([#15316](https://github.com/can1357/oh-my-pi/pull/15316) by [@harshaygadekar](https://github.com/harshaygadekar))
+
+### Fixed
+
+- Fixed Bedrock Claude Fable 5.1 requests with thinking off and a forced tool choice sending the forced choice next to adaptive thinking; the choice now falls back to `auto` ([#15316](https://github.com/can1357/oh-my-pi/pull/15316) by [@harshaygadekar](https://github.com/harshaygadekar))
 
 ## [18.9.0] - 2026-10-11
 
