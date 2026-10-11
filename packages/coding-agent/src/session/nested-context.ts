@@ -84,6 +84,8 @@ interface QueuedBlock {
 	block: string;
 	/** Path relative to cwd, for the notice. */
 	display: string;
+	/** Path segments of the owning directory: shallower files are delivered first. */
+	depth: number;
 	/** Whether a full read of the file shows what the block would: it has no `@` imports. */
 	plain: boolean;
 }
@@ -228,22 +230,28 @@ export class NestedContextInjector {
 		// the directory listing and content from before this edit.
 		for (const file of edited) invalidateCapabilityCache(file);
 		const targets = touchedTargets(touch, cwd, edited);
+		const roots = this.#roots(cwd);
 		// A known file only touches its parent; an unknown target may be a directory itself.
-		const reachable = targets.some(target =>
-			isStrictlyBelow(cwd, target.isDirectory === false ? path.dirname(target.path) : target.path),
+		const reachable = targets.some(
+			target => rootOf(roots, target.isDirectory === false ? path.dirname(target.path) : target.path) !== undefined,
 		);
 		if (!reachable) return undefined;
-		return this.#load(touch, cwd, targets);
+		return this.#load(touch, cwd, roots, targets);
 	}
 
-	async #load(touch: Touch, cwd: string, targets: readonly TouchedTarget[]): Promise<void> {
+	/** Workspace roots: cwd and the additional directories, whose own context files are in the system prompt. */
+	#roots(cwd: string): string[] {
+		return [cwd, ...this.#host.additionalDirectories().map(dir => path.resolve(dir))];
+	}
+
+	async #load(touch: Touch, cwd: string, roots: readonly string[], targets: readonly TouchedTarget[]): Promise<void> {
 		let files: NestedContextFile[];
 		try {
-			const directories = (await Promise.all(targets.map(touchedDirectory))).filter(dir =>
-				isStrictlyBelow(cwd, dir),
+			const directories = (await Promise.all(targets.map(touchedDirectory))).filter(
+				dir => rootOf(roots, dir) !== undefined,
 			);
 			if (directories.length === 0) return;
-			files = await this.#discover(directories, cwd);
+			files = await this.#discover(directories, roots);
 		} catch (error) {
 			logger.warn("Nested context discovery failed", { error: String(error) });
 			return;
@@ -264,9 +272,9 @@ export class NestedContextInjector {
 			const block = prompt.render(nestedContextFileTemplate, {
 				path: file.path,
 				dir: `${displayPath(cwd, file.owner)}/`,
-				content: capContent(file.content, display),
+				content: escapeBlockTags(capContent(file.content, display)),
 			});
-			batch.queue.push({ path: file.path, block, display, plain });
+			batch.queue.push({ path: file.path, block, display, depth: file.owner.split(path.sep).length, plain });
 		}
 	}
 
@@ -276,36 +284,48 @@ export class NestedContextInjector {
 		return batch.outstanding.size > 0 ? undefined : this.#drain(batch);
 	}
 
-	/** The queued blocks, less files a call of the batch read whole after another claimed them. */
+	/**
+	 * The queued blocks, shallowest first, less files a call of the batch read
+	 * whole after another claimed them. Calls on disjoint branches claim in I/O
+	 * order, so claim order alone can put a deep file ahead of a shallow one. The
+	 * sort is stable: within a directory, files keep capability order.
+	 */
 	#drain(batch: BatchState): string | undefined {
-		const delivered = batch.queue.splice(0).filter(queued => !(queued.plain && batch.fullReads.has(queued.path)));
+		const delivered = batch.queue
+			.splice(0)
+			.filter(queued => !(queued.plain && batch.fullReads.has(queued.path)))
+			.sort((a, b) => a.depth - b.depth);
 		if (delivered.length === 0) return undefined;
 		this.#host.emitNotice("info", `Loaded ${delivered.map(queued => queued.display).join(", ")}`, NOTICE_SOURCE);
 		return delivered.map(queued => queued.block).join("\n\n");
 	}
 
 	/**
-	 * Context files governing `directories`, farthest from cwd first, each once.
+	 * Context files governing `directories`, shallowest first, each once.
 	 * Discovery is the context-file capability itself, run from each touched
-	 * directory and every ancestor below cwd. Each probe contributes only the
+	 * directory and every ancestor below its workspace root. Each probe contributes only the
 	 * files of its own directory: some providers look nowhere else, so only the
 	 * exact probe sees every candidate. Provider priority, one-file-per-directory
 	 * shadowing and `contextFiles.extra` ordering are then exactly as the system
 	 * prompt has them for that directory.
 	 */
-	async #discover(directories: readonly string[], cwd: string): Promise<NestedContextFile[]> {
-		const additional = this.#host.additionalDirectories().map(dir => path.resolve(dir));
-		const probes = new Set<string>();
+	async #discover(directories: readonly string[], roots: readonly string[]): Promise<NestedContextFile[]> {
+		// Each probe, with the workspace root it sits below.
+		const probes = new Map<string, string>();
 		for (const dir of directories) {
-			for (let current = dir; isStrictlyBelow(cwd, current); current = path.dirname(current)) probes.add(current);
+			const root = rootOf(roots, dir);
+			if (root === undefined) continue;
+			for (let current = dir; isStrictlyBelow(root, current); current = path.dirname(current)) {
+				probes.set(current, root);
+			}
 		}
 		const files: Omit<NestedContextFile, "content">[] = [];
-		for (const owner of probes) {
+		for (const [owner, root] of probes) {
 			// Hidden directories and dependency trees are not project context.
-			const segments = path.relative(cwd, owner).split(path.sep);
+			const segments = path.relative(root, owner).split(path.sep);
 			if (segments.some(segment => segment.startsWith(".") || EXCLUDED_SEGMENTS[segment] === true)) continue;
-			// An additional workspace root and its ancestors are already in the system prompt.
-			if (additional.some(root => root === owner || isStrictlyBelow(owner, root))) continue;
+			// A workspace root nested below this one, and its ancestors, are already in the system prompt.
+			if (roots.some(other => isStrictlyBelow(owner, other))) continue;
 			const result = await loadCapability<ContextFile>(contextFileCapability.id, { cwd: owner });
 			for (const item of result.items) {
 				// Depth counts levels above the probe; files in its own config folders report -1.
@@ -329,17 +349,18 @@ export class NestedContextInjector {
 	async carried(messages: readonly AgentMessage[]): Promise<ContextFileEntry[]> {
 		if (!cfgContextFilesOnTouch.get(this.#host.settings)) return [];
 		const cwd = path.resolve(this.#host.cwd());
+		const roots = this.#roots(cwd);
 		const window = scanWindow(messages);
 		const byPath = new Map(window.blocks);
 		const unread = [...window.fullReads].filter(
-			filePath => !byPath.has(filePath) && isStrictlyBelow(cwd, path.dirname(filePath)),
+			filePath => !byPath.has(filePath) && rootOf(roots, path.dirname(filePath)) !== undefined,
 		);
 		if (unread.length > 0) {
 			try {
 				// Discovery decides which read files are context files, as it does for touches.
 				const files = await this.#discover(
 					unread.map(filePath => path.dirname(filePath)),
-					cwd,
+					roots,
 				);
 				for (const file of files) {
 					if (!unread.includes(file.path)) continue;
@@ -351,6 +372,27 @@ export class NestedContextInjector {
 		}
 		return [...byPath].map(([filePath, content]) => ({ path: filePath, content }));
 	}
+}
+
+/**
+ * The deepest workspace root `dir` is strictly below, which bounds discovery
+ * for it; undefined when it is below none.
+ */
+function rootOf(roots: readonly string[], dir: string): string | undefined {
+	let deepest: string | undefined;
+	for (const root of roots) {
+		if (isStrictlyBelow(root, dir) && (deepest === undefined || isStrictlyBelow(deepest, root))) deepest = root;
+	}
+	return deepest;
+}
+
+/**
+ * A file's own `<nested-context` tags, neutralised: the window is parsed back
+ * from delivered blocks, so a body must not be able to end its block early or
+ * add one of its own.
+ */
+function escapeBlockTags(content: string): string {
+	return content.replace(/<(\/?)nested-context/g, "&lt;$1nested-context");
 }
 
 /** The per-file cost bound: content past the cap is cut, with a pointer to the rest. */

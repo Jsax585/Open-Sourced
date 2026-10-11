@@ -185,7 +185,7 @@ When workspace-tree scanning is enabled (`includeWorkspaceTree`), deeper-directo
 
 ### Loading nested files on touch
 
-Set `contextFiles.onTouch: true` (or `/settings` → **Context** → **Load Nested Context Files**) to deliver those deeper files automatically instead. The first time a successful `read`, `write`, `edit`, or `ast_edit` touches a file below the current directory (including calls an `eval` script makes through its tool bridge), every context file between the current directory and that file that is not already in context is injected as a developer message after the tool batch, shallowest first so deeper rules come last:
+Set `contextFiles.onTouch: true` (or `/settings` → **Context** → **Load Nested Context Files**) to deliver those deeper files automatically instead. The first time a successful `read`, `write`, `edit`, or `ast_edit` touches a file below the current directory or an additional workspace root (including calls an `eval` script makes through its tool bridge), every context file between that root and the file that is not already in context is injected as a developer message after the tool batch, shallowest first so deeper rules come last:
 
 ```xml
 <nested-context path="/home/me/repo/packages/api/AGENTS.md">
@@ -195,7 +195,7 @@ Project context for `packages/api/`, loaded automatically because a tool touched
 ```
 
 - Discovery is the same as at startup: provider priority, one file per directory, `contextFiles.extra`, and `@` imports all apply.
-- Each file loads once per context window, keyed by its absolute path so a change of working directory does not load it twice. A `read` that showed the whole context file counts as loaded, unless the file has `@` imports the read did not expand; a range, tail, or truncated page does not. When compaction drops the block, the next touch loads the file again.
+- Each file loads once per context window, keyed by its absolute path so a change of working directory does not load it twice. A single-path `read` that showed the whole context file counts as loaded, unless the file has `@` imports the read did not expand; a range, tail, or truncated page does not. When compaction drops the block, the next touch loads the file again.
 - Each file is capped at 16,384 characters; a longer file is truncated with a note telling the agent to read the rest.
 - Files under hidden directories (`.git/`, `.venv/`, …) and `node_modules/` never load. Neither do files at or above the current directory or an additional workspace root, because those are already in the system prompt.
 - Search and shell tools (`grep`, `glob`, `bash`) do not trigger loading.
