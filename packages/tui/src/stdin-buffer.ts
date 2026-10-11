@@ -81,16 +81,39 @@ const SGR_MOUSE_COMPLETE = /^<\d+;\d+;\d+[Mm]$/;
 // Enter latency and candidate memory remain bounded even under a continuous
 // stream. Ten milliseconds spans adjacent PTY reads without becoming perceptible.
 const RAW_PASTE_CLASSIFICATION_TIMEOUT_MS = 10;
+// An ESC- and control-free read this long is a paste, not typing: typing and
+// key repeat deliver a few characters per read, while a terminal writes a paste
+// in chunks of hundreds of bytes (iTerm2: 768). Without this, an unmarked
+// one-line paste reaches the editor one character per event, and each event
+// costs work proportional to the line.
+const RAW_PASTE_MIN_CHARS = 256;
 
 /**
- * Whether `text` has two completed logical line breaks (three line segments).
+ * Index of the first character that cannot be unmarked pasted text: ESC or
+ * another C0/C1 control except TAB, CR and LF, or DEL. `-1` when there is none.
+ * Those bytes are keys (Ctrl+C, Backspace, arrows), so they never join a paste.
+ */
+function rawPasteTextEnd(text: string): number {
+	for (let i = 0; i < text.length; i++) {
+		const code = text.charCodeAt(i);
+		if (code === 0x09 || code === 0x0a || code === 0x0d) continue;
+		if (code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f)) return i;
+	}
+	return -1;
+}
+
+/**
+ * Whether `text` is an unmarked paste: at least `RAW_PASTE_MIN_CHARS`
+ * characters with no key byte (see `rawPasteTextEnd`), or two completed
+ * logical line breaks (three line segments).
  *
  * A single Enter may be batched with surrounding keystrokes in one stdin read,
  * so one break is ambiguous and must stay on the key path. CRLF counts as one
  * logical break. Content after the second break completes the third segment;
  * until then the classification window keeps buffering.
  */
-function isRawMultilineBurst(text: string): boolean {
+function isRawPasteBurst(text: string): boolean {
+	if (text.length >= RAW_PASTE_MIN_CHARS && rawPasteTextEnd(text) === -1) return true;
 	let breaks = 0;
 	for (let i = 0; i < text.length; i++) {
 		const code = text.charCodeAt(i);
@@ -423,6 +446,14 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	#escapeSearchOffset = 0;
 	#rawPasteCandidate = "";
 	#rawPasteTimer?: NodeJS.Timeout;
+	// A classified raw paste still collecting adjacent reads (see `process`).
+	#rawPasteBurst = false;
+	#rawPasteBytes = 0;
+	// A timeout flush delivered the head of an unterminated OSC/DCS/APC reply;
+	// its tail is still in flight until an ESC (`ST`) or BEL arrives. The
+	// terminal reassembles that tail from data events, so it is never a paste.
+	#tornStringTail = false;
+	#tornStringTailAtMs = 0;
 	// Unbracketed raw-paste classification is a fallback for terminals that do
 	// not wrap pastes in DECSET 2004 markers. Once the terminal confirms mode
 	// 2004, Terminal installs this probe: an unmarked multiline burst is then
@@ -462,6 +493,19 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 			str = this.#consumeStringDiscard(str);
 			if (str.length === 0) return;
 		}
+		if (this.#tornStringTail) {
+			// Same bound as torn-string discard: a tail that stopped arriving is gone.
+			const now = Date.now();
+			if (
+				str.includes(ESC) ||
+				str.includes("\x07") ||
+				now - this.#tornStringTailAtMs > STRING_DISCARD_INACTIVITY_MS
+			) {
+				this.#tornStringTail = false;
+			} else {
+				this.#tornStringTailAtMs = now;
+			}
+		}
 
 		if (this.#flushDeferral && this.#isFreshEscapeAfterDeferredFlush(str)) {
 			// The buffered partial already hit its flush timeout. A new escape is
@@ -483,6 +527,28 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 			return;
 		}
 
+		if (this.#rawPasteBurst) {
+			// A classified unmarked paste keeps collecting until input goes quiet,
+			// so a paste the terminal writes in several chunks arrives whole. A
+			// key byte ends it; the bytes from there on are parsed as keys, except
+			// an Enter right at the end, which travels with the paste as it does
+			// after a bracketed paste (kitty encodes it as CSI 13 u).
+			const end = rawPasteTextEnd(str);
+			const text = end === -1 ? str : str.slice(0, end);
+			this.#rawPasteCandidate += text;
+			this.#rawPasteBytes += Buffer.byteLength(text);
+			if (end === -1 && this.#rawPasteBytes < this.#pasteByteLimit) {
+				this.#armRawPasteBurstTimer();
+				return;
+			}
+			const rest = end === -1 ? "" : str.slice(end);
+			const enter = leadingEnter(rest);
+			this.#emitRawPasteBurst(enter);
+			const after = enter === undefined ? rest : rest.slice(enter.length);
+			if (after.length > 0) this.process(after);
+			return;
+		}
+
 		if (this.#rawPasteCandidate.length > 0) {
 			if (str.indexOf(ESC) !== -1) {
 				// Escape-bearing input cannot belong to an unmarked raw paste.
@@ -490,7 +556,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 				this.#flushRawPasteCandidate();
 			} else {
 				this.#rawPasteCandidate += str;
-				if (isRawMultilineBurst(this.#rawPasteCandidate)) {
+				if (isRawPasteBurst(this.#rawPasteCandidate)) {
 					this.#classifyRawPasteCandidate();
 				}
 				return;
@@ -500,13 +566,14 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		if (
 			this.#buffer.length === 0 &&
 			str.indexOf(ESC) === -1 &&
-			(str.indexOf("\r") !== -1 || str.indexOf("\n") !== -1)
+			(str.indexOf("\r") !== -1 || str.indexOf("\n") !== -1 || isRawPasteBurst(str))
 		) {
 			// Hold the first break-bearing read briefly. A split raw paste can
 			// then accumulate enough logical lines to classify; an ordinary
-			// Enter is replayed unchanged when the fixed window expires.
+			// Enter is replayed unchanged when the fixed window expires. A long
+			// text read classifies at once.
 			this.#rawPasteCandidate = str;
-			if (isRawMultilineBurst(str)) {
+			if (isRawPasteBurst(str)) {
 				this.#classifyRawPasteCandidate();
 			} else {
 				this.#armRawPasteTimer();
@@ -578,7 +645,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		const probe = this.#pasteOverlap + chunk;
 		if (probe.indexOf(BRACKETED_PASTE_END) === -1) {
 			this.#pasteChunks.push(chunk);
-			this.#pasteBytes += chunk.length;
+			this.#pasteBytes += Buffer.byteLength(chunk);
 			const keep = BRACKETED_PASTE_END.length - 1;
 			this.#pasteOverlap = probe.length > keep ? probe.slice(probe.length - keep) : probe;
 			if (this.#pasteBytes > this.#pasteByteLimit) {
@@ -671,6 +738,24 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		}, RAW_PASTE_CLASSIFICATION_TIMEOUT_MS);
 	}
 
+	/**
+	 * Restart the quiet window that ends a classified raw paste. It is the
+	 * split-escape flush timeout, not the 10ms classification window: terminals
+	 * pace paste chunks about 10ms apart (iTerm2), so a shorter quiet window
+	 * would cut one paste into several. As in `#armFlushTimer`, expiry is
+	 * deferred one timers pass so a chunk already queued behind an event-loop
+	 * stall is read (and re-arms the window) before the paste is delivered.
+	 */
+	#armRawPasteBurstTimer(): void {
+		this.#clearRawPasteTimer();
+		this.#rawPasteTimer = setTimeout(() => {
+			this.#rawPasteTimer = setTimeout(() => {
+				this.#rawPasteTimer = undefined;
+				this.#emitRawPasteBurst();
+			});
+		}, this.#timeoutMs);
+	}
+
 	#clearRawPasteTimer(): void {
 		if (this.#rawPasteTimer) {
 			clearTimeout(this.#rawPasteTimer);
@@ -680,23 +765,52 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 
 	#takeRawPasteCandidate(): string {
 		this.#clearRawPasteTimer();
+		this.#rawPasteBurst = false;
+		this.#rawPasteBytes = 0;
 		const content = this.#rawPasteCandidate;
 		this.#rawPasteCandidate = "";
 		return content;
 	}
 
 	/**
-	 * Deliver a classified raw multiline burst: one paste, or the original
-	 * keys when the stall probe says a blocked loop batched typed input.
+	 * Start collecting a classified raw burst as one paste, or replay the
+	 * original keys when the stall probe says a blocked loop batched typed
+	 * input, or when the input is the tail of a torn terminal reply. The probe
+	 * is read here, as the input arrives: by the time the paste is delivered
+	 * the stall is usually over (#12540). A multi-line candidate that already
+	 * holds a key byte is delivered at once, as before collection existed, so
+	 * input after that key never joins it.
 	 */
 	#classifyRawPasteCandidate(): void {
-		if (this.#rawPasteStallProbe?.()) {
+		if (this.#tornStringTail || this.#rawPasteStallProbe?.()) {
 			this.#flushRawPasteCandidate();
 			return;
 		}
-		const content = this.#takeRawPasteCandidate();
+		this.#rawPasteBurst = true;
+		this.#rawPasteBytes = Buffer.byteLength(this.#rawPasteCandidate);
+		if (this.#rawPasteBytes >= this.#pasteByteLimit || rawPasteTextEnd(this.#rawPasteCandidate) !== -1) {
+			this.#emitRawPasteBurst();
+		} else {
+			this.#armRawPasteBurstTimer();
+		}
+	}
+
+	/**
+	 * Deliver a collected raw burst as one paste. Without an explicit `enter`,
+	 * a final line break that is the burst's only one (a long line typed and
+	 * submitted by automation) stays a submit: CR, LF, or CRLF as one Enter.
+	 */
+	#emitRawPasteBurst(enter?: string): void {
+		let content = this.#takeRawPasteCandidate();
 		this.#pendingKittyPrintableCodepoint = undefined;
-		this.emit("paste", content);
+		if (enter === undefined) {
+			const lastBreak = content.endsWith("\r\n") ? content.length - 2 : content.length - 1;
+			if (content.search(/[\r\n]/) === lastBreak) {
+				enter = content[lastBreak];
+				content = content.slice(0, lastBreak);
+			}
+		}
+		this.emit("paste", content, enter);
 	}
 
 	/** Replay an ambiguous raw candidate as the original per-key data events. */
@@ -813,6 +927,8 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 
 	#drainBuffered(discardTornString: boolean): string[] {
 		this.#clearFlushTimer();
+		// A classified raw paste is complete as far as it got: deliver it whole.
+		if (this.#rawPasteBurst) this.#emitRawPasteBurst();
 
 		const rawCandidate = this.#takeRawPasteCandidate();
 		const sequences = rawCandidate.length > 0 ? extractCompleteSequences(rawCandidate, 0).sequences : [];
@@ -844,6 +960,12 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 			if (discardTornString) this.#enterStringDiscard();
 		} else {
 			sequences.push(buffered);
+			// A bare two-byte introducer is a legacy Alt chord (Alt+], Alt+Shift+P,
+			// Alt+_), and no reply reassembler can claim a tail without its prefix.
+			if (buffered.length > 2 && STRING_SEQ_PARTIAL.test(buffered)) {
+				this.#tornStringTail = true;
+				this.#tornStringTailAtMs = Date.now();
+			}
 		}
 		return sequences;
 	}
@@ -922,6 +1044,9 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		this.#exitStringDiscard();
 		this.#buffer = "";
 		this.#rawPasteCandidate = "";
+		this.#rawPasteBurst = false;
+		this.#rawPasteBytes = 0;
+		this.#tornStringTail = false;
 		this.#pasteMode = false;
 		this.#pasteChunks = [];
 		this.#pasteOverlap = "";

@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed pastes that arrive without bracketed-paste markers freezing the TUI (a long single line was inserted one keystroke at a time) or losing lines (a multi-line paste written in several chunks became several pastes, and the large-paste menu swallowed the rest); such a paste is now delivered as one paste ([#15328](https://github.com/can1357/oh-my-pi/pull/15328) by [@DrFaustus-vic](https://github.com/DrFaustus-vic))
 - Improved responsiveness when placing assistant text after tool calls in long transcripts ([#12178](https://github.com/can1357/oh-my-pi/issues/12178), [#14344](https://github.com/can1357/oh-my-pi/pull/14344) by [@F0Rextasy](https://github.com/F0Rextasy), [#15353](https://github.com/can1357/oh-my-pi/pull/15353) by [@iliaal](https://github.com/iliaal)).
 
 ## [18.9.1] - 2026-10-11

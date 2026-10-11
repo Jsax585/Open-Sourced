@@ -5,9 +5,11 @@
  * MIT License - Copyright (c) 2025 opentui
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs";
 import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import { StdinBuffer } from "@oh-my-pi/pi-tui/stdin-buffer";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
 describe("StdinBuffer", () => {
 	let buffer: StdinBuffer;
@@ -337,11 +339,13 @@ describe("StdinBuffer", () => {
 	describe("Large Plain-Text Bursts", () => {
 		it("splits a large non-bracketed burst into per-character events quickly", () => {
 			// Pins the O(n) scan: the prior per-iteration slice/Array.from made
-			// this O(n²) — a 64KB burst would blow the test timeout.
+			// this O(n²) — a 64KB burst would blow the test timeout. The leading
+			// arrow key keeps the read on the escape parser instead of the raw-paste
+			// path a long plain-text read takes.
 			const content = "0123456789abcdef".repeat(4096); // 64 KB
-			processInput(content);
-			expect(emittedSequences.length).toBe(content.length);
-			expect(emittedSequences[0]).toBe("0");
+			processInput(`\x1b[A${content}`);
+			expect(emittedSequences.length).toBe(content.length + 1);
+			expect(emittedSequences[1]).toBe("0");
 			expect(emittedSequences[emittedSequences.length - 1]).toBe("f");
 		});
 
@@ -565,40 +569,45 @@ describe("StdinBuffer", () => {
 			});
 		});
 
-		it("coalesces an unbracketed CR-delimited burst into one paste instead of per-line submits", () => {
+		it("coalesces an unbracketed CR-delimited burst into one paste instead of per-line submits", async () => {
 			// Codex desktop delivers Cmd+V without \x1b[200~…\x1b[201~ markers, so
 			// each interior CR would otherwise fire a submit and split the block.
 			processInput("line 1\rline 2\rline 3");
+			await waitUntil(() => emittedPaste.length > 0);
 			expect(emittedPaste).toEqual(["line 1\rline 2\rline 3"]);
 			expect(emittedSequences).toEqual([]);
 		});
 
-		it("coalesces an unbracketed LF-delimited burst too", () => {
+		it("coalesces an unbracketed LF-delimited burst too", async () => {
 			processInput("line 1\nline 2\nline 3");
+			await waitUntil(() => emittedPaste.length > 0);
 			expect(emittedPaste).toEqual(["line 1\nline 2\nline 3"]);
 			expect(emittedSequences).toEqual([]);
 		});
 
-		it("coalesces a CRLF-delimited three-line burst", () => {
+		it("coalesces a CRLF-delimited three-line burst", async () => {
 			processInput("line 1\r\nline 2\r\nline 3");
+			await waitUntil(() => emittedPaste.length > 0);
 			expect(emittedPaste).toEqual(["line 1\r\nline 2\r\nline 3"]);
 			expect(emittedSequences).toEqual([]);
 		});
 
-		it("coalesces one raw paste split across adjacent stdin reads", () => {
+		it("coalesces one raw paste split across adjacent stdin reads", async () => {
 			processInput("line 1\r");
 			expect(emittedPaste).toEqual([]);
 			expect(emittedSequences).toEqual([]);
 
 			processInput("line 2\rline 3");
+			await waitUntil(() => emittedPaste.length > 0);
 			expect(emittedPaste).toEqual(["line 1\rline 2\rline 3"]);
 			expect(emittedSequences).toEqual([]);
 		});
 
-		it("coalesces a paste whose first line was already delivered before a break-only read", () => {
+		it("coalesces a paste whose first line was already delivered before a break-only read", async () => {
 			processInput("line 1");
 			processInput("\r");
 			processInput("line 2\rline 3");
+			await waitUntil(() => emittedPaste.length > 0);
 
 			expect(emittedSequences.join("")).toBe("line 1");
 			expect(emittedPaste).toEqual(["\rline 2\rline 3"]);
@@ -676,6 +685,269 @@ describe("StdinBuffer", () => {
 		});
 	});
 
+	describe("Unbracketed long and chunked pastes", () => {
+		// ProcessTerminal's split-escape timeout, which is also the quiet window
+		// that ends a classified raw paste. Tests step one past it so the
+		// zero-delay deferral that follows the window runs too.
+		const QUIET_MS = 50;
+		type Event = ["data", string] | ["paste", string, string | undefined];
+		let events: Event[] = [];
+
+		function createBuffer(options: { pasteByteLimit?: number } = {}): void {
+			buffer = new StdinBuffer({ timeout: QUIET_MS, ...options });
+			events = [];
+			buffer.on("data", sequence => events.push(["data", sequence]));
+			buffer.on("paste", (content, enter) => events.push(["paste", content, enter]));
+		}
+
+		const keys = (text: string): Event[] => [...text].map(char => ["data", char]);
+
+		beforeEach(() => {
+			vi.useFakeTimers();
+			createBuffer();
+		});
+
+		afterEach(() => {
+			buffer.destroy();
+			vi.useRealTimers();
+		});
+
+		it("keeps a 255-character read on the key path", () => {
+			processInput("x".repeat(255));
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events).toEqual(keys("x".repeat(255)));
+		});
+
+		it("delivers a 256-character plain read as one paste once input goes quiet", () => {
+			processInput("x".repeat(256));
+			expect(events).toEqual([]);
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events).toEqual([["paste", "x".repeat(256), undefined]]);
+		});
+
+		it("joins chunks a terminal paces 15ms apart into one paste", () => {
+			// iTerm2 writes an unmarked paste 768 bytes at a time, ~10ms apart (#13315).
+			for (let i = 0; i < 4; i++) {
+				processInput("x".repeat(768));
+				vi.advanceTimersByTime(15);
+			}
+			processInput("tail");
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events).toEqual([["paste", `${"x".repeat(3072)}tail`, undefined]]);
+		});
+
+		it("joins a long break-free tail to a paste classified by its line breaks", () => {
+			processInput("line 1\rline 2\rline 3 ");
+			processInput("x".repeat(4096));
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events).toEqual([["paste", `line 1\rline 2\rline 3 ${"x".repeat(4096)}`, undefined]]);
+		});
+
+		it("ends a paste at an escape sequence and parses the rest as keys", () => {
+			processInput("x".repeat(300));
+			processInput("tail\x1b[Aab");
+			expect(events).toEqual([["paste", `${"x".repeat(300)}tail`, undefined], ["data", "\x1b[A"], ...keys("ab")]);
+		});
+
+		it("keeps Ctrl+C at the end of a long read as a key", () => {
+			processInput(`${"x".repeat(256)}\x03`);
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events).toEqual(keys(`${"x".repeat(256)}\x03`));
+		});
+
+		it("keeps Ctrl+C after a long line and its Enter as a key", () => {
+			processInput(`${"x".repeat(256)}\r\x03`);
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events).toEqual(keys(`${"x".repeat(256)}\r\x03`));
+		});
+
+		it("parses the input after a control byte that ends a paste as keys", () => {
+			processInput("x".repeat(300));
+			processInput(`\x03${"y".repeat(300)}\rtail`);
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events).toEqual([["paste", "x".repeat(300), undefined], ...keys(`\x03${"y".repeat(300)}\rtail`)]);
+		});
+
+		it("does not collect input after a multi-line read that holds a key byte", () => {
+			processInput("a\rb\rc\x03");
+			processInput("d");
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events.filter(([kind]) => kind === "paste")).toHaveLength(1);
+			expect(events.at(-1)).toEqual(["data", "d"]);
+		});
+
+		it("keeps the Enter of a long typed line a submit", () => {
+			// Automation typing a prompt and pressing Enter in one write.
+			processInput(`${"x".repeat(300)}\r`);
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events).toEqual([["paste", "x".repeat(300), "\r"]]);
+		});
+
+		it("treats a trailing CRLF split across reads as one Enter", () => {
+			processInput(`${"x".repeat(300)}\r`);
+			processInput("\n");
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events).toEqual([["paste", "x".repeat(300), "\r"]]);
+		});
+
+		it("carries a kitty Enter that ends a paste with the paste", () => {
+			// Dispatching it after the paste would hand it to an overlay the paste
+			// opened (the large-paste menu) instead of submitting.
+			processInput("x".repeat(300));
+			processInput("\x1b[13u");
+			expect(events).toEqual([["paste", "x".repeat(300), "\x1b[13u"]]);
+		});
+
+		it("decides by the stall probe when the input arrives, not when the paste ends", () => {
+			let stalled = true;
+			buffer.setRawPasteStallProbe(() => stalled);
+			processInput("x".repeat(300));
+			stalled = false;
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events).toEqual(keys("x".repeat(300)));
+		});
+
+		it("ends a paste at the paste byte limit and starts a new one", () => {
+			buffer.destroy();
+			createBuffer({ pasteByteLimit: 1024 });
+			for (let i = 0; i < 3; i++) processInput("x".repeat(512));
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events).toEqual([
+				["paste", "x".repeat(1024), undefined],
+				["paste", "x".repeat(512), undefined],
+			]);
+		});
+
+		it("counts the paste byte limit in UTF-8 bytes", () => {
+			// "é" is two bytes: 300 of them fill a 600-byte limit on the first read,
+			// and 150 appended to 300 ASCII characters fill it on a later read.
+			buffer.destroy();
+			createBuffer({ pasteByteLimit: 600 });
+			processInput("é".repeat(300));
+			processInput("x".repeat(300));
+			processInput("é".repeat(150));
+			processInput("y".repeat(300));
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events).toEqual([
+				["paste", "é".repeat(300), undefined],
+				["paste", `${"x".repeat(300)}${"é".repeat(150)}`, undefined],
+				["paste", "y".repeat(300), undefined],
+			]);
+		});
+
+		it("delivers a pending paste on flush", () => {
+			processInput("x".repeat(300));
+			buffer.flush();
+			expect(events).toEqual([["paste", "x".repeat(300), undefined]]);
+		});
+
+		it("drops a pending paste on clear so later short input stays keys", () => {
+			processInput("x".repeat(300));
+			buffer.clear();
+			processInput("a\rb");
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events).toEqual(keys("a\rb"));
+		});
+
+		it("keeps the tail of a torn terminal reply off the paste path", () => {
+			// The reply's head waited past the timeout and was delivered; the
+			// terminal reassembles the rest from data events.
+			processInput('\x1b_tsp;{"a":"');
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			processInput("a".repeat(300));
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events).toEqual([["data", '\x1b_tsp;{"a":"'], ...keys("a".repeat(300))]);
+		});
+
+		it("classifies pastes again once a torn terminal reply is terminated", () => {
+			processInput('\x1b_tsp;{"a":"');
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			processInput('"}\x1b\\');
+			processInput("x".repeat(300));
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events.at(-1)).toEqual(["paste", "x".repeat(300), undefined]);
+		});
+
+		it("treats a lone Alt+Shift+P as a key, not the head of a terminal reply", () => {
+			// Legacy terminals send Alt+Shift+P (the plan-mode toggle) as `ESC P`,
+			// the same bytes that open a DCS reply.
+			processInput("\x1bP");
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			processInput("a\rb\rc");
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events.at(-1)).toEqual(["paste", "a\rb\rc", undefined]);
+		});
+
+		it("keeps a torn terminal reply's tail off the paste path while it keeps arriving", () => {
+			processInput('\x1b_tsp;{"a":"');
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			for (let i = 0; i < 3; i++) {
+				vi.advanceTimersByTime(600);
+				processInput("a".repeat(300));
+			}
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events.some(([kind]) => kind === "paste")).toBe(false);
+		});
+
+		it("classifies pastes again once a torn terminal reply's tail stops arriving", () => {
+			processInput('\x1b_tsp;{"a":"');
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			vi.advanceTimersByTime(1001);
+			processInput("x".repeat(300));
+			vi.advanceTimersByTime(QUIET_MS + 1);
+			expect(events.at(-1)).toEqual(["paste", "x".repeat(300), undefined]);
+		});
+	});
+
+	describe("Unbracketed paste across an event-loop stall", () => {
+		it("keeps a chunk queued behind a stall in the same paste", async () => {
+			// The writer sends the second chunk only once the parent has processed
+			// the first and is blocked past the quiet window, so that chunk is
+			// already waiting when the window's timer expires. Marker files carry
+			// the handshake because the blocked parent cannot run I/O callbacks.
+			// Real time and a real pipe: the bug is the order of the timers and I/O
+			// phases after a stall, which fake timers cannot reproduce.
+			await using dir = await TempDir.create("@omp-stdin-stall-");
+			const ack = dir.join("ack");
+			const written = dir.join("written");
+			buffer = new StdinBuffer({ timeout: 50 });
+			const pastes: string[] = [];
+			buffer.on("paste", content => pastes.push(content));
+			const writer = Bun.spawn({
+				cmd: [
+					process.execPath,
+					"--eval",
+					[
+						'const fs = require("node:fs");',
+						'fs.writeSync(1, "x".repeat(300));',
+						"while (!fs.existsSync(process.env.ACK)) await Bun.sleep(1);",
+						'fs.writeSync(1, "y".repeat(300));',
+						'fs.writeFileSync(process.env.WRITTEN, "");',
+					].join("\n"),
+				],
+				env: { ...process.env, ACK: ack, WRITTEN: written },
+				stdout: "pipe",
+				timeout: 10_000,
+				killSignal: "SIGKILL",
+			});
+			const reads: number[] = [];
+			for await (const chunk of writer.stdout) {
+				reads.push(chunk.length);
+				buffer.process(Buffer.from(chunk));
+				if (reads.length === 1) {
+					fs.writeFileSync(ack, "");
+					const stallStart = performance.now();
+					while (!fs.existsSync(written) && performance.now() - stallStart < 5000) {}
+					while (performance.now() - stallStart < 100) {}
+				}
+			}
+			// Two reads: the second chunk really was queued behind the stall.
+			expect(reads).toEqual([300, 300]);
+			await waitUntil(() => pastes.length > 0);
+			expect(pastes).toEqual([`${"x".repeat(300)}${"y".repeat(300)}`]);
+		}, 15_000);
+	});
+
 	describe("Paste Recovery", () => {
 		it("recovers from a lost end marker via the inactivity watchdog", async () => {
 			buffer = new StdinBuffer({ timeout: 10, pasteTimeout: 20 });
@@ -723,6 +995,16 @@ describe("StdinBuffer", () => {
 			buffer.process("x");
 			expect(data).toEqual(["x"]);
 		});
+
+		it("counts the paste byte cap in UTF-8 bytes", () => {
+			buffer = new StdinBuffer({ timeout: 10, pasteByteLimit: 8 });
+			const pastes: string[] = [];
+			buffer.on("paste", d => pastes.push(d));
+
+			// Five two-byte characters: 10 bytes, over the cap, though only 5 UTF-16 units.
+			buffer.process("\x1b[200~ééééé");
+			expect(pastes).toEqual(["ééééé"]);
+		});
 	});
 
 	describe("Malformed Escape Bounds (issue #4073 case A)", () => {
@@ -761,9 +1043,10 @@ describe("StdinBuffer", () => {
 			// cumulative work. After the cap fires, the buffer resets so
 			// subsequent chunks are re-scanned fresh.
 			processInput("\x1b[");
-			// Ten 8 KiB chunks — first two exceed MAX_CSI_BYTES (4 KiB) and
-			// force a cap-flush; the buffer must not retain the full run.
-			for (let i = 0; i < 10; i++) processInput(";".repeat(8192));
+			// Small chunks (under the raw-paste length) of a ~80 KiB run: they
+			// exceed MAX_CSI_BYTES (4 KiB) and force a cap-flush; the buffer
+			// must not retain the full run.
+			for (let i = 0; i < 330; i++) processInput(";".repeat(250));
 			expect(buffer.getBuffer().length).toBeLessThan(8192);
 		});
 

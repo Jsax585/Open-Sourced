@@ -796,14 +796,17 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 	});
 
 	it("decides each unbracketed multiline burst by the stall probe once DECRQM confirms 2004 (#13344, #12540)", () => {
+		vi.useFakeTimers();
 		let stalled = false;
 		const { terminal, received } = setup({ isLoopStalled: () => stalled });
 		process.stdin.emit("data", "\x1b[?2004;1$y");
 		received.length = 0;
 
 		// IME/dictation commits are typed input, never bracketed: on a responsive
-		// loop the block lands as one paste instead of one submit per line.
+		// loop the block lands as one paste instead of one submit per line, once
+		// input goes quiet.
 		process.stdin.emit("data", "1. do xxx\r2. do yyy\r3. do zzz");
+		vi.advanceTimersByTime(51); // quiet window plus its zero-delay deferral
 		expect(received).toEqual(["\x1b[200~1. do xxx\r2. do yyy\r3. do zzz\x1b[201~"]);
 
 		// The same shape drained after an event-loop stall is batched typing:
@@ -855,14 +858,51 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 	});
 
 	it("coalesces an unbracketed multiline burst when bracketed paste is unconfirmed (#12540)", () => {
+		vi.useFakeTimers();
 		const { terminal, received } = setup();
 
 		// No DECRQM 2004 confirmation: the terminal may not bracket pastes, so the
 		// raw-burst heuristic stays on and re-wraps the burst with paste markers.
 		received.length = 0;
 		process.stdin.emit("data", "aaa\rbbb\rccc");
+		vi.advanceTimersByTime(51); // quiet window plus its zero-delay deferral
 
 		expect(received).toEqual(["\x1b[200~aaa\rbbb\rccc\x1b[201~"]);
+		terminal.stop();
+	});
+
+	it("delivers a paced unbracketed paste and the Enter after it as one input", () => {
+		vi.useFakeTimers();
+		const { terminal, received } = setup();
+		received.length = 0;
+
+		// One input lets the focused editor stage the whole paste and submit it
+		// before a paste-opened overlay (the large-paste menu) can take the Enter.
+		const chunk = "x".repeat(768);
+		for (let i = 0; i < 3; i++) {
+			process.stdin.emit("data", chunk);
+			vi.advanceTimersByTime(15);
+		}
+		process.stdin.emit("data", "\x1b[13u");
+
+		expect(received).toEqual([`\x1b[200~${chunk.repeat(3)}\x1b[201~\x1b[13u`]);
+		terminal.stop();
+	});
+
+	it("keeps a long torn terminal reply out of the input", () => {
+		vi.useFakeTimers();
+		const { terminal, received } = setup();
+		received.length = 0;
+
+		// A slow link stalls past the flush timeout after the reply's head: the
+		// terminal reassembles the rest, and nothing reaches the input handler.
+		process.stdin.emit("data", "\x1b_25a1;r;");
+		vi.advanceTimersByTime(51);
+		process.stdin.emit("data", "a".repeat(300));
+		vi.advanceTimersByTime(51);
+		process.stdin.emit("data", "\x1b\\");
+
+		expect(received).toEqual([]);
 		terminal.stop();
 	});
 
