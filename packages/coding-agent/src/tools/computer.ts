@@ -10,7 +10,12 @@ import computerUsePrompt from "../prompts/system/computer-use.md" with { type: "
 import { enforceInlineByteCap } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { type ComputerCallStep, isReadOnlyComputerCall, renderComputerCall } from "./computer/call";
 import { reportNote } from "./computer/observation";
-import type { ComputerScreenshot, ComputerSessionSnapshot, SettleReport } from "./computer/protocol";
+import {
+	type ComputerScreenshot,
+	type ComputerSessionSnapshot,
+	type SettleReport,
+	screenStateNotice,
+} from "./computer/protocol";
 import { type ComputerController, ComputerSupervisor, registerComputerController } from "./computer/supervisor";
 import type { ToolSession } from "./index";
 import { renderCallChain, renderFunctionRun } from "./run-code";
@@ -350,6 +355,8 @@ async function runComputer(
 		saveArtifact: full => saveComputerOutputArtifact(session, full),
 	});
 	const content: AgentToolResult<ComputerPreludeDetails>["content"] = [];
+	const notice = screenStateNotice(run.capabilities);
+	if (notice) content.push({ type: "text", text: notice });
 	if (cappedText) content.push({ type: "text", text: cappedText });
 	for (const image of run.displays) {
 		if (image.type === "image") content.push({ ...image, detail: "original" });

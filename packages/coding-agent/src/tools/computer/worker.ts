@@ -19,6 +19,7 @@ import type {
 	DesktopCapture,
 	DesktopDisplay,
 	DesktopPoint,
+	DesktopScreenState,
 	DesktopSessionOptions,
 	DesktopWindow,
 	PointerOptions,
@@ -62,19 +63,24 @@ import {
 	WEB_AREA_ROW,
 	windowAt,
 } from "./observation";
-import type {
-	ComputerScreenshot,
-	ComputerSessionSnapshot,
-	ComputerWorkerInbound,
-	ComputerWorkerTransport,
-	RunErrorPayload,
-	SettleReport,
-	ToolReply,
+import {
+	type ComputerScreenshot,
+	type ComputerSessionSnapshot,
+	type ComputerWorkerInbound,
+	type ComputerWorkerTransport,
+	type RunErrorPayload,
+	SCREEN_LOCKED_CAPTURE_NOTE,
+	type SettleReport,
+	screenStateNotice,
+	type ToolReply,
 } from "./protocol";
+import { describeWindowMiss } from "./window-miss";
 
 /** Native desktop operations consumed by the script runtime. */
 export interface NativeDesktopSession {
 	readonly capabilities: DesktopCapabilities;
+	/** Lock and display-sleep state, read without waiting behind queued native work. */
+	readonly screenState: DesktopScreenState;
 	listDisplays(): Promise<DesktopDisplay[]>;
 	listWindows(): Promise<DesktopWindow[]>;
 	capture(target: string, caps?: { maxWidth?: number; maxHeight?: number } | null): Promise<DesktopCapture>;
@@ -156,11 +162,13 @@ const SETTLE_FIXED_MS = 500;
  * so far returns before the request times out.
  */
 const SETTLE_HEADROOM_MS = 2_000;
+/** Window listings are session-transcript payload; `window()` lookups search the whole native list. */
+const MAX_LISTED_WINDOWS = 48;
 type InputOptions = { takeover?: boolean };
 type ScreenshotOptions = { silent?: boolean };
 type ScreenshotResult = Pick<
 	ComputerScreenshot,
-	"path" | "width" | "height" | "coordinateWidth" | "coordinateHeight" | "region"
+	"path" | "width" | "height" | "coordinateWidth" | "coordinateHeight" | "region" | "screenLocked"
 >;
 type ClickOptions = InputOptions & { button?: string; count?: number; modifiers?: string[] };
 type DragOptions = InputOptions & { modifiers?: string[]; keys?: string[] };
@@ -267,14 +275,48 @@ function chordKeys(chord: string | string[]): string[] {
 		: chord;
 }
 
-function validateKeys(value: unknown, label: string, options?: { allowEmpty?: boolean }): asserts value is string[] {
-	if (
-		!Array.isArray(value) ||
-		(!options?.allowEmpty && value.length === 0) ||
-		value.some(key => typeof key !== "string" || !key.trim())
-	) {
+/** Keys and menu titles share one rule: an array of strings, none blank. */
+function isStringList(value: unknown): value is string[] {
+	return Array.isArray(value) && value.every(item => typeof item === "string" && item.trim() !== "");
+}
+
+function validateKeys(value: unknown, label: string): asserts value is string[] {
+	if (!isStringList(value) || value.length === 0) {
 		throw new ToolError(`${label} requires a non-empty array of non-empty strings`);
 	}
+}
+
+function describeArgument(value: unknown): string {
+	if (value === null) return "null";
+	if (Array.isArray(value)) return "an array";
+	return typeof value === "string" ? JSON.stringify(value) : typeof value;
+}
+
+/** Names the helper and parameter in place of the native addon's conversion error, which names neither. */
+function validateString(value: unknown, call: string, options?: { nonEmpty?: boolean }): asserts value is string {
+	if (typeof value === "string" && (!options?.nonEmpty || value.trim())) return;
+	throw new ToolError(
+		`${call} requires ${options?.nonEmpty ? "a non-empty string" : "a string"}, got ${describeArgument(value)}`,
+	);
+}
+
+/** A menu path is one title, an array of titles, or the titles as separate arguments. */
+function menuPath(method: string, args: unknown[], options?: { allowEmpty?: boolean }): string[] {
+	const path: unknown[] = args.length === 1 && Array.isArray(args[0]) ? args[0] : args;
+	if (isStringList(path) && (options?.allowEmpty || path.length > 0)) return path;
+	let got = "no path";
+	if (args.length > 0) {
+		const shown = args.length === 1 ? args[0] : args;
+		try {
+			got = JSON.stringify(shown) ?? describeArgument(shown);
+		} catch {
+			// BigInt and cyclic values do not serialize; the type still tells the caller what it passed.
+			got = describeArgument(shown);
+		}
+	}
+	throw new ToolError(
+		`${method} requires a menu path of non-empty titles: one title ("File"), an array (["File", "Export…"]), or separate titles ("File", "Export…"); got ${got}`,
+	);
 }
 
 function validateHold(options: HoldOptions): void {
@@ -353,6 +395,7 @@ async function emitScreenshot(
 		coordinateHeight: frame.coordinateHeight,
 		...(frame.region ? { region: frame.region } : {}),
 	};
+	if (frame.screenLocked) result.screenLocked = true;
 	const scaled = frame.width !== frame.sourceWidth || frame.height !== frame.sourceHeight;
 	context.screenshots.push({
 		...result,
@@ -363,11 +406,12 @@ async function emitScreenshot(
 	if (!options?.silent) {
 		const dimensions = `${frame.width}×${frame.height}${scaled ? ` (scaled from ${frame.sourceWidth}×${frame.sourceHeight})` : ""}`;
 		const coordinates = `coordinateWidth=${frame.coordinateWidth} coordinateHeight=${frame.coordinateHeight}`;
+		const captured = frame.region
+			? `zoom ${frame.target} ${dimensions}; region=${JSON.stringify(frame.region)}; ${coordinates}; use the base full screenshot coordinates for input, not zoom pixels → ${destination}`
+			: `screenshot ${frame.target} ${dimensions}; ${coordinates} → ${destination}`;
 		context.output.push({
 			type: "text",
-			text: frame.region
-				? `zoom ${frame.target} ${dimensions}; region=${JSON.stringify(frame.region)}; ${coordinates}; use the base full screenshot coordinates for input, not zoom pixels → ${destination}`
-				: `screenshot ${frame.target} ${dimensions}; ${coordinates} → ${destination}`,
+			text: frame.screenLocked ? `${captured}\n${SCREEN_LOCKED_CAPTURE_NOTE}` : captured,
 		});
 		context.output.push({
 			type: "image",
@@ -425,6 +469,7 @@ class El {
 	}
 
 	setValue(value: string): Promise<void> {
+		validateString(value, "setValue(value)");
 		return this.#input("setValue", () => this.#session.axSetValue(this.ref, value));
 	}
 
@@ -444,6 +489,7 @@ class El {
 	}
 
 	perform(action: string): Promise<void> {
+		validateString(action, "perform(action)", { nonEmpty: true });
 		return this.#input("perform", () => this.#session.axPerform(this.ref, action));
 	}
 
@@ -451,8 +497,14 @@ class El {
 		return this.#input("press", () => this.#session.axPerform(this.ref, "press"));
 	}
 
-	click(options?: InputOptions): Promise<void> {
+	click(options?: ClickOptions): Promise<void> {
 		return this.#input("click", () => this.#session.axClick(this.ref, pointerOptions(options)));
+	}
+
+	doubleClick(options?: Omit<ClickOptions, "count">): Promise<void> {
+		return this.#input("doubleClick", () =>
+			this.#session.axClick(this.ref, pointerOptions({ ...options, count: 2 })),
+		);
 	}
 
 	focus(): Promise<void> {
@@ -468,6 +520,120 @@ class El {
 		return (await this.#read(() => this.#session.axChildren(this.ref))).map(node =>
 			this.#observer.element(this.#getContext, node, this.#observer.windowOf(this.ref)),
 		);
+	}
+}
+
+const ELEMENT_FIELDS = ["ref", "role", "nativeRole", "title", "description", "enabled", "focused", "childCount"];
+
+/** `find()`'s array answers element field reads and calls with how to pick one, instead of `undefined` or "is not a function". */
+function foundElements(elements: El[]): El[] {
+	const pickOne = (member: string): TypeError =>
+		new TypeError(
+			`find() returns an array (length ${elements.length}), not one element, so it has no ${member}; pick one first: const [el] = await win.find(query)`,
+		);
+	for (const method of Object.getOwnPropertyNames(El.prototype)) {
+		if (method === "constructor") continue;
+		Object.defineProperty(elements, method, {
+			value: () => {
+				throw pickOne(`${method}()`);
+			},
+		});
+	}
+	for (const field of ELEMENT_FIELDS) {
+		Object.defineProperty(elements, field, {
+			get: () => {
+				throw pickOne(field);
+			},
+		});
+	}
+	return elements;
+}
+
+/** `await ref("e5")` resolves the element; its methods chain on the handle and await the lookup first. */
+class ElRef implements PromiseLike<El> {
+	readonly ref: string;
+	readonly #getContext: RunContextAccessor;
+	readonly #lookup: () => Promise<El>;
+	#element?: Promise<El>;
+
+	constructor(ref: string, getContext: RunContextAccessor, lookup: () => Promise<El>) {
+		this.ref = ref;
+		this.#getContext = getContext;
+		this.#lookup = lookup;
+	}
+
+	#resolve(): Promise<El> {
+		this.#element ??= this.#lookup();
+		return this.#element;
+	}
+
+	// oxlint-disable-next-line unicorn/no-thenable -- the handle is awaitable by design: `await ref("e5")` resolves the element.
+	then<A = El, B = never>(
+		onFulfilled?: ((element: El) => A | PromiseLike<A>) | null,
+		onRejected?: ((reason: unknown) => B | PromiseLike<B>) | null,
+	): Promise<A | B> {
+		return this.#resolve().then(onFulfilled, onRejected);
+	}
+
+	catch<B = never>(onRejected?: ((reason: unknown) => B | PromiseLike<B>) | null): Promise<El | B> {
+		return this.#resolve().catch(onRejected);
+	}
+
+	finally(onFinally?: (() => void) | null): Promise<El> {
+		return this.#resolve().finally(onFinally);
+	}
+
+	async value(): Promise<string | undefined> {
+		return (await this.#resolve()).value();
+	}
+
+	async setValue(value: string): Promise<void> {
+		// Reject a read-only run or a bad argument before the ref lookup reaches the native addon.
+		guardRun(this.#getContext(), "setValue");
+		validateString(value, "setValue(value)");
+		await (await this.#resolve()).setValue(value);
+	}
+
+	async bounds(): Promise<{ x: number; y: number; width: number; height: number } | null> {
+		return (await this.#resolve()).bounds();
+	}
+
+	async attributes(): Promise<Record<string, string>> {
+		return (await this.#resolve()).attributes();
+	}
+
+	async actions(): Promise<string[]> {
+		return (await this.#resolve()).actions();
+	}
+
+	async perform(action: string): Promise<void> {
+		guardRun(this.#getContext(), "perform");
+		validateString(action, "perform(action)", { nonEmpty: true });
+		await (await this.#resolve()).perform(action);
+	}
+
+	async press(): Promise<void> {
+		await (await this.#resolve()).press();
+	}
+
+	async click(options?: ClickOptions): Promise<void> {
+		await (await this.#resolve()).click(options);
+	}
+
+	async doubleClick(options?: Omit<ClickOptions, "count">): Promise<void> {
+		await (await this.#resolve()).doubleClick(options);
+	}
+
+	async focus(): Promise<void> {
+		await (await this.#resolve()).focus();
+	}
+
+	async parent(): Promise<El | null> {
+		return (await this.#resolve()).parent();
+	}
+
+	async children(): Promise<El[]> {
+		return (await this.#resolve()).children();
 	}
 }
 
@@ -578,12 +744,19 @@ class Win {
 
 	async type(text: string, options?: InputOptions): Promise<void> {
 		const context = this.#guard("type");
+		validateString(text, "type(text)");
 		return this.#input(context, () => this.#session.typeText(this.id, text, pointerOptions(options)));
 	}
 
 	async press(chord: string | string[], options?: InputOptions): Promise<void> {
 		const context = this.#guard("press");
-		return this.#input(context, () => this.#session.keyChord(this.id, chordKeys(chord), pointerOptions(options)));
+		const keys = chordKeys(chord);
+		if (!isStringList(keys) || keys.length === 0) {
+			throw new ToolError(
+				`press(chord) requires a key chord such as "cmd+shift+p" or ["cmd", "shift", "p"], got ${describeArgument(chord)}`,
+			);
+		}
+		return this.#input(context, () => this.#session.keyChord(this.id, keys, pointerOptions(options)));
 	}
 
 	async holdKeys(keys: string[], options: HoldOptions): Promise<void> {
@@ -636,17 +809,20 @@ class Win {
 
 	get menu() {
 		return {
-			items: async (path?: string | string[]): Promise<MenuItem[]> => {
+			items: async (...path: string[] | [path?: string | string[]]): Promise<MenuItem[]> => {
 				const context = this.#getContext();
-				const segments = path === undefined ? undefined : typeof path === "string" ? [path] : path;
-				if (segments !== undefined) validateKeys(segments, "menu path", { allowEmpty: true });
+				// An omitted path, or one passed on as `undefined`, lists the top-level menus.
+				const segments =
+					path.length <= 1 && path[0] === undefined
+						? undefined
+						: menuPath("menu.items", path, { allowEmpty: true });
 				await this.#observer.settle(context.signal);
 				return await nativeCall(context.signal, () => this.#session.menuItems(this.id, segments));
 			},
-			select: async (path: string[]): Promise<void> => {
+			select: async (...path: [string, ...string[]] | [string[]]): Promise<void> => {
 				const context = this.#guard("menu.select");
-				validateKeys(path, "menu path");
-				return this.#input(context, () => this.#session.menuSelect(this.id, path));
+				const segments = menuPath("menu.select", path);
+				return this.#input(context, () => this.#session.menuSelect(this.id, segments));
 			},
 		};
 	}
@@ -674,14 +850,19 @@ class Win {
 		const { signal } = this.#getContext();
 		await this.#observer.settle(signal);
 		const window = { id: this.id, pid: this.pid };
-		return (await nativeCall(signal, () => this.#session.axQuery(this.id, query))).map(node =>
-			this.#observer.element(this.#getContext, node, window),
+		return foundElements(
+			(await nativeCall(signal, () => this.#session.axQuery(this.id, query))).map(node =>
+				this.#observer.element(this.#getContext, node, window),
+			),
 		);
 	}
 
-	async ref(ref: string): Promise<El> {
-		const node = await this.#observer.read(this.#getContext(), ref, () => this.#session.axNode(ref));
-		return this.#observer.element(this.#getContext, node, this.#observer.windowOf(ref));
+	ref(ref: string): ElRef {
+		validateString(ref, "ref(ref)", { nonEmpty: true });
+		return new ElRef(ref, this.#getContext, async () => {
+			const node = await this.#observer.read(this.#getContext(), ref, () => this.#session.axNode(ref));
+			return this.#observer.element(this.#getContext, node, this.#observer.windowOf(ref));
+		});
 	}
 }
 
@@ -1123,7 +1304,12 @@ export class ComputerWorkerCore {
 			ended.resolve();
 		}
 		if (failure !== undefined) {
-			this.#transport.send({ type: "result", id: message.id, ok: false, error: errorPayload(failure.error) });
+			this.#transport.send({
+				type: "result",
+				id: message.id,
+				ok: false,
+				error: this.#withScreenState(errorPayload(failure.error)),
+			});
 			return;
 		}
 		if (completed) {
@@ -1340,6 +1526,22 @@ export class ComputerWorkerCore {
 	}
 
 	/**
+	 * A run that fails while the macOS screen is locked or the display asleep
+	 * says so after its own message, which stays first and intact. Aborts and
+	 * sessions that never started are returned unchanged. The state is read
+	 * without queuing, since the failure may be a native request that hangs.
+	 */
+	#withScreenState(payload: RunErrorPayload): RunErrorPayload {
+		if (payload.isAbort || !this.#session) return payload;
+		const notice = screenStateNotice(this.#session.screenState);
+		if (!notice) return payload;
+		const message = payload.message ? `${payload.message}\n${notice}` : notice;
+		const stack =
+			payload.stack && payload.message ? payload.stack.replace(payload.message, () => message) : payload.stack;
+		return { ...payload, message, stack };
+	}
+
+	/**
 	 * Answers a direct capabilities request without executing a script. Unlike a
 	 * run, this never touches `#active`, so it resolves even while a run is in
 	 * flight and always reports the session's current permission/backend state.
@@ -1484,6 +1686,7 @@ export class ComputerWorkerCore {
 				open: async (id: string, options?: ApplicationOpenOptions): Promise<Application> => {
 					const context = getContext();
 					guardRun(context, "apps.open");
+					validateString(id, "apps.open(id)", { nonEmpty: true });
 					return await observer.input(context, undefined, () => session.openApplication(id, options), {
 						opens: application => ({ pid: application.pid ?? undefined }),
 					});
@@ -1515,9 +1718,9 @@ export class ComputerWorkerCore {
 			windows: async (filter?: WindowFilter): Promise<DesktopWindow[]> => {
 				const { signal } = getContext();
 				await observer.settle(signal);
-				return (await nativeCall(signal, () => session.listWindows())).filter(window =>
-					matchesFilter(window, filter),
-				);
+				return (await nativeCall(signal, () => session.listWindows()))
+					.filter(window => matchesFilter(window, filter))
+					.slice(0, MAX_LISTED_WINDOWS);
 			},
 			window: async (selector: string | number | WindowFilter): Promise<Win> => {
 				const { signal } = getContext();
@@ -1527,12 +1730,21 @@ export class ComputerWorkerCore {
 					typeof selector === "string" || typeof selector === "number"
 						? windows.filter(window => window.id === String(selector))
 						: windows.filter(window => matchesFilter(window, selector));
-				if (matches.length === 0) throw new ToolError(`no window matches ${JSON.stringify(selector)}`);
+				if (matches.length === 0) {
+					// Untyped scripts may pass `null`, which `matchesFilter` accepts as no filter.
+					const app = typeof selector === "object" ? selector?.app : undefined;
+					throw new ToolError(
+						`no window matches ${JSON.stringify(selector)}\n${describeWindowMiss(windows, app)}`,
+					);
+				}
 				if (matches.length > 1) {
 					const candidates = matches
+						.slice(0, MAX_LISTED_WINDOWS)
 						.map(window => `${window.id} ${window.app} ${JSON.stringify(window.title)}`)
 						.join("\n");
-					throw new ToolError(`multiple windows match ${JSON.stringify(selector)}:\n${candidates}`);
+					const omitted = matches.length - MAX_LISTED_WINDOWS;
+					const more = omitted > 0 ? `\n… ${omitted} more` : "";
+					throw new ToolError(`multiple windows match ${JSON.stringify(selector)}:\n${candidates}${more}`);
 				}
 				return makeWin(matches[0]!);
 			},
@@ -1566,9 +1778,12 @@ export class ComputerWorkerCore {
 				const node = await nativeCall(signal, () => session.axFocused());
 				return node ? observer.element(getContext, node, await observer.windowReached(signal)) : null;
 			},
-			ref: async (ref: string): Promise<El> => {
-				const node = await observer.read(getContext(), ref, () => session.axNode(ref));
-				return observer.element(getContext, node, observer.windowOf(ref));
+			ref: (ref: string): ElRef => {
+				validateString(ref, "ref(ref)", { nonEmpty: true });
+				return new ElRef(ref, getContext, async () => {
+					const node = await observer.read(getContext(), ref, () => session.axNode(ref));
+					return observer.element(getContext, node, observer.windowOf(ref));
+				});
 			},
 			clipboard: {
 				read: async (): Promise<string> => {
@@ -1584,6 +1799,7 @@ export class ComputerWorkerCore {
 				write: async (text: string): Promise<void> => {
 					const context = getContext();
 					guardRun(context, "clipboard.write");
+					validateString(text, "clipboard.write(text)");
 					// Clipboard access is part of the native desktop surface and remains
 					// outside the worker's readiness-only import graph.
 					const { copyToClipboard } = await import("../../utils/clipboard");

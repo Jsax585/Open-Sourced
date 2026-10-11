@@ -6,6 +6,18 @@
 
 - Added `Agent.historyRevision`, which counts conversation rewrites that drop or replace a tool result (`replaceMessages` takes `toolResultsRewritten` for in-place rewrites), so tools can tell when output the model saw may be gone ([#15280](https://github.com/can1357/oh-my-pi/pull/15280) by [@will-bogusz](https://github.com/will-bogusz))
 
+## [18.9.2] - 2026-10-11
+
+### Changed
+
+- Improved context caching for repeat turns, reducing redundant prompt processing and making subsequent turns faster when the system prompt is unchanged.
+
+## [18.9.0] - 2026-10-11
+
+### Fixed
+
+- Fixed stale queue updates when queued steering is adopted, withdrawn, or added to the transcript, ensuring queue listeners consistently receive the latest state.
+
 ## [18.8.8] - 2026-10-10
 
 ### Added
