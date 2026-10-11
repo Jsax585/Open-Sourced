@@ -1430,7 +1430,10 @@ export async function createAgentSession(
 		// factory binding to diverge, so an override is harmless there.
 		const overrideSettings = rest.settings ?? rest.settingsManager;
 		const loaderHasExtensions =
-			state.extensionsResult.extensions.length > 0 || (state.extensionsResult.preparedExtensions?.length ?? 0) > 0;
+			state.extensionsResult.extensions.length > 0 ||
+			// Failed imports are preserved with `factory: null` for error
+			// reporting; they bind nothing, so they cannot diverge either.
+			(state.extensionsResult.preparedExtensions?.some(prepared => prepared.factory !== null) ?? false);
 		if (
 			overrideSettings !== undefined &&
 			loaderHasExtensions &&
