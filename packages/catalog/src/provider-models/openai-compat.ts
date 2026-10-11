@@ -1215,7 +1215,17 @@ export interface GroqModelManagerConfig {
 }
 
 export function groqModelManagerOptions(config?: GroqModelManagerConfig): ModelManagerOptions<"openai-completions"> {
-	return createSimpleOpenAICompletionsOptions("groq", "https://api.groq.com/openai/v1", config);
+	// Groq's /models lists exactly what the account can call; bundled ids it
+	// retired answer 400 `model_decommissioned`.
+	return createOpenAICompatibleModelManagerOptions({
+		api: "openai-completions",
+		providerId: "groq",
+		defaultBaseUrl: "https://api.groq.com/openai/v1",
+		config,
+		requireApiKey: true,
+		dynamicModelsAuthoritative: true,
+		mapModel: mapWithBundledReference,
+	});
 }
 
 // ---------------------------------------------------------------------------

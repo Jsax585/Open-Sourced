@@ -3,6 +3,9 @@
 provider "groq" {
 	default-model "openai/gpt-oss-120b"
 	env "GROQ_API_KEY"
+	// Groq's /models is the account's whole catalog: bundled ids it retired
+	// (llama3-70b-8192, gemma2-9b-it, …) answer 400 `model_decommissioned`.
+	dynamic-models-authoritative #true
 
 	thinking-mode "effort"
 	class "unknown" {
