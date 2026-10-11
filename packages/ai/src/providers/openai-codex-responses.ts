@@ -1914,6 +1914,7 @@ async function openCodexWebSocketTransport(
 	let steeringSource = pendingPayload ? undefined : steered?.connection;
 	let liveSteers: CodexAcceptedSteer[] = [];
 	let steeringPlan: { kind: "attach" } | { kind: "create"; input: InputItem[] } | { kind: "discard" } | undefined;
+	let hookSteeringPrefixLength: number | undefined;
 
 	const steeringOwnerIsCurrent =
 		steeringSource !== undefined &&
@@ -2039,10 +2040,8 @@ async function openCodexWebSocketTransport(
 			steeringPrefixLength >= 0 &&
 			steeringInput.every((item, index) => fullInput[steeringPrefixLength + index] === item);
 		if (hasPayloadHook && !steeringInputIsSuffix) {
-			// The planner can remove an accepted steer from the middle of the
-			// delta. Such an input cannot be represented as a hidden prefix plus
-			// one suffix for hook reconstruction, so discard the socket before
-			// exposing the request to a hook.
+			// A hooked request may omit the accepted steer only when its original
+			// suffix position is proven; otherwise retire the owner for full replay.
 			closeCodexSteeringOwner(websocketState, steeringSource);
 			steeringSource = undefined;
 			liveSteers = [];
@@ -2053,6 +2052,9 @@ async function openCodexWebSocketTransport(
 			candidateResponseId = websocketState.lastResponseId;
 		} else {
 			chainedBody = { ...chainedBody, input: steeringInput };
+			if (hasPayloadHook && steeringInputIsSuffix) {
+				hookSteeringPrefixLength = steeringPrefixLength;
+			}
 		}
 	}
 
@@ -2090,19 +2092,10 @@ async function openCodexWebSocketTransport(
 			: undefined;
 	let effectiveRequestBody: RequestBody | undefined = pendingPayload?.body;
 	let websocketRequest: Record<string, unknown>;
-	let prefixLength = 0;
 	let hookRequestsContinuation = false;
 	// Capture hook ownership once; later handoff refreshes must not mistake a
 	// provider-injected turn-state value for a hook edit.
 	let hookMayRefreshTurnState = pendingPayload?.hookMayRefreshTurnState ?? false;
-	if (
-		!pendingPayload &&
-		Array.isArray(fullInput) &&
-		Array.isArray(chainedBody.input) &&
-		chainedBody.previous_response_id
-	) {
-		prefixLength = Math.max(0, fullInput.length - chainedBody.input.length);
-	}
 	if (pendingPayload) {
 		delete websocketRequestCandidate.previous_response_id;
 		websocketRequest = websocketRequestCandidate;
@@ -2116,7 +2109,13 @@ async function openCodexWebSocketTransport(
 		const unhookedRequestBody = { ...transformedBody };
 		delete unhookedRequestBody.input;
 		const unhookedBody = cloneJsonTree(unhookedRequestBody) as RequestBody;
-		const hookRequest = cloneJsonTree(websocketRequestCandidate);
+		const hookRequestCandidate = { ...websocketRequestCandidate };
+		if (Object.hasOwn(transformedBody, "input")) {
+			hookRequestCandidate.input = transformedBody.input;
+		} else {
+			delete hookRequestCandidate.input;
+		}
+		const hookRequest = cloneJsonTree(hookRequestCandidate);
 		const replacementWebsocketRequest = await payloadHook(hookRequest, model);
 		const finalHookRequest =
 			replacementWebsocketRequest === undefined
@@ -2138,7 +2137,7 @@ async function openCodexWebSocketTransport(
 		const websocketEnvelope = Object.prototype.propertyIsEnumerable.call(finalHookRequest, "type")
 			? (cloneJsonTree({ type: finalHookRequest.type }) as { readonly type?: unknown })
 			: {};
-		const preparedBody = buildCodexEffectiveRequestBody(fullInput, prefixLength, finalHookRequest);
+		const preparedBody = buildCodexEffectiveRequestBody(finalHookRequest);
 		if (Object.hasOwn(preparedBody, "input")) unhookedBody.input = preparedBody.input;
 		effectiveRequestBody = preparedBody;
 		const pendingPayloadRecord: CodexPendingWebSocketPayload = {
@@ -2155,11 +2154,6 @@ async function openCodexWebSocketTransport(
 			...effectiveRequestBody,
 			...websocketEnvelope,
 		};
-		const ownedInput = effectiveRequestBody.input;
-		websocketRequest.input =
-			Array.isArray(ownedInput) && prefixLength > 0
-				? ownedInput.slice(Math.min(prefixLength, ownedInput.length))
-				: ownedInput;
 	} else {
 		websocketRequest = websocketRequestCandidate;
 	}
@@ -2222,11 +2216,44 @@ async function openCodexWebSocketTransport(
 		const reconciledBody = hookRequestsContinuation
 			? buildCodexChainedRequestBody(effectiveRequestBody, websocketState)
 			: undefined;
-		if (reconciledBody?.previous_response_id && prefixLength > 0) {
-			// Keep the hook-adjusted suffix from an originally chained preview.
-			// Running the steering planner again here would erase a newly added
-			// item equal to an accepted steer.
+		let canUseContinuation = reconciledBody?.previous_response_id !== undefined;
+		let steeringSuffixInput: InputItem[] | undefined;
+		if (canUseContinuation && steeringPlan?.kind === "create") {
+			const prefixLength = hookSteeringPrefixLength;
+			const effectiveInput = effectiveRequestBody.input;
+			const originalFullInput = fullInput;
+			let steeringPrefixMatches = false;
+			if (
+				prefixLength !== undefined &&
+				originalFullInput !== undefined &&
+				Array.isArray(effectiveInput) &&
+				effectiveInput.length >= prefixLength
+			) {
+				steeringPrefixMatches = true;
+				for (let index = 0; index < prefixLength; index += 1) {
+					if (!Bun.deepEquals(effectiveInput[index], originalFullInput[index])) {
+						steeringPrefixMatches = false;
+						break;
+					}
+				}
+				if (steeringPrefixMatches) {
+					let hasToolOutput = false;
+					for (let index = prefixLength; index < effectiveInput.length; index += 1) {
+						const type = effectiveInput[index]?.type;
+						if (typeof type === "string" && type.endsWith("_output")) {
+							hasToolOutput = true;
+							break;
+						}
+					}
+					if (hasToolOutput) steeringSuffixInput = effectiveInput.slice(prefixLength);
+					else steeringPrefixMatches = false;
+				}
+			}
+			canUseContinuation = steeringPrefixMatches;
+		}
+		if (canUseContinuation && reconciledBody) {
 			websocketRequest.previous_response_id = reconciledBody.previous_response_id;
+			websocketRequest.input = steeringSuffixInput ?? reconciledBody.input;
 		} else {
 			if (steeringSource && steeringPlan?.kind === "create" && websocketState.connection === steeringSource) {
 				closeCodexSteeringOwner(websocketState, steeringSource);
@@ -4297,21 +4324,12 @@ function buildCodexChainedRequestBody(
 }
 
 /**
- * Reconstruct the logical full request after `onPayload` rewrites a chained
- * websocket delta. The hook sees only the visible suffix, while append state
- * must retain the complete history for recovery and future comparisons.
+ * Build the hook-approved logical request body without transport-only fields.
  */
-function buildCodexEffectiveRequestBody(
-	fullInput: InputItem[] | undefined,
-	prefixLength: number,
-	request: Record<string, unknown>,
-): RequestBody {
+function buildCodexEffectiveRequestBody(request: Record<string, unknown>): RequestBody {
 	const body: Record<string, unknown> = { ...request };
 	delete body.type;
 	delete body.previous_response_id;
-	if (Array.isArray(request.input) && fullInput && prefixLength > 0) {
-		body.input = [...fullInput.slice(0, Math.min(prefixLength, fullInput.length)), ...request.input];
-	}
 	return cloneJsonTree(body) as RequestBody;
 }
 
