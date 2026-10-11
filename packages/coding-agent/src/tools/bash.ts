@@ -900,9 +900,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				};
 				const { path: artifactPath, id: artifactId } = (await this.session.allocateOutputArtifact?.("bash")) ?? {};
 				const wallTimeStart = performance.now();
-				const messagingEnv = this.session.messagingSession
-					? messagingEnvFor(this.session.messagingSession)
-					: { set: {}, strip: ["OMP_MESSAGING_SOCKET", "OMP_MESSAGING_TOKEN"] as const };
+				const messagingEnv = messagingEnvFor(this.session.messagingSession);
 				try {
 					const result = await executeBash(options.command, {
 						cwd: options.commandCwd,
@@ -1294,9 +1292,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				notices,
 			});
 		}
-		const messagingEnv = this.session.messagingSession
-			? messagingEnvFor(this.session.messagingSession)
-			: { set: {}, strip: ["OMP_MESSAGING_SOCKET", "OMP_MESSAGING_TOKEN"] as const };
+		const messagingEnv = messagingEnvFor(this.session.messagingSession);
 		const stripEnv = this.session.messagingSession?.messaging ? undefined : messagingEnv.strip;
 
 		// Fold direnv/devenv env into (command, env) ONCE for the two backends
