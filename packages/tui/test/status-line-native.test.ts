@@ -2,12 +2,13 @@ import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { getProjectDir, removeSyncWithRetries, setProjectDir } from "@oh-my-pi/pi-utils";
 import type { TspProps } from "@oh-my-pi/pi-wire";
 import type { NativeChild, NativeNode } from "../src/native/node";
 import { setNativeRendering } from "../src/native/state";
 import type { StatusLineComponent } from "../src/status-line/component";
-import { describeSegment, type SegmentContext } from "../src/status-line/segments";
+import { describeSegment, renderSegment, type SegmentContext } from "../src/status-line/segments";
 import { createStartupStatusLine } from "../src/status-line/startup";
 import type { StatusLineSettings } from "../src/status-line/types";
 import { initTheme } from "../src/theme";
@@ -135,5 +136,36 @@ describe("native composer facts", () => {
 		line.setPlanModeStatus({ enabled: true, paused: false });
 		expect(line.describeComposerFacts()).not.toBe(first);
 		expect(facts(line).map(seg => seg.key)).toEqual(["mode"]);
+	});
+});
+
+describe("context_pct segment text", () => {
+	const usage = (contextPercent: number | null, options: SegmentContext["options"] = {}) =>
+		({
+			contextPercent,
+			contextTokens: 114_240,
+			contextWindow: 272_000,
+			autoCompactEnabled: false,
+			options,
+		}) as unknown as SegmentContext;
+	const rendered = (ctx: SegmentContext) => stripVTControlCharacters(renderSegment("context_pct", ctx).content);
+	const described = (ctx: SegmentContext) =>
+		describeSegment("context_pct", ctx)
+			?.spans.map(part => part.t)
+			.join("");
+
+	it("shows tokens over the window only when showTokens is on, and window alone while usage is unknown", () => {
+		const tokens = usage(42, { context_pct: { showTokens: true } });
+		expect(rendered(tokens)).toContain("114K/272K");
+		expect(described(tokens)).toBe("114K/272K");
+
+		const defaults = usage(42);
+		expect(rendered(defaults)).toContain("42.0%/272K");
+		expect(described(defaults)).toBe("42.0%/272K");
+
+		const unknown = usage(null, { context_pct: { showTokens: true } });
+		expect(rendered(unknown)).toContain("272K");
+		expect(rendered(unknown)).not.toMatch(/[%/]/);
+		expect(described(unknown)).toBe("272K");
 	});
 });
