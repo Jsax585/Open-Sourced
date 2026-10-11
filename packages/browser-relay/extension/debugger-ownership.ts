@@ -19,4 +19,3 @@ export async function ownedDebuggerTabs(
 	);
 	return owned.filter((tabId): tabId is number => tabId !== undefined);
 }
-
