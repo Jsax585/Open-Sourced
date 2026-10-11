@@ -8,6 +8,14 @@
 - Fixed Codex payload hooks receiving only a chained input suffix: hooks now inspect the complete logical input, and empty or redacted replacements are sent without restoring old history or inheriting its continuation; safe wire deltas are derived after hook approval, including conservative accepted-steering handling ([#15024](https://github.com/can1357/oh-my-pi/pull/15024) by [@xiangnan0811](https://github.com/xiangnan0811)).
 - Fixed stable Codex history-rewriting hooks losing WebSocket delta chaining when callers retain raw transcripts, while preserving sanitized-history callers, effective-only replay, and public-option invalidation ([#15024](https://github.com/can1357/oh-my-pi/pull/15024) by [@xiangnan0811](https://github.com/xiangnan0811)).
 
+### Changed
+
+- Improved Anthropic prompt-cache breakpoint selection in long conversations to pick cache anchors in a single backward walk, removing the per-request index arrays that grew with conversation length ([#15219](https://github.com/can1357/oh-my-pi/pull/15219) by [@yuzu-octopus](https://github.com/yuzu-octopus))
+
+### Added
+
+- Added `maxQuestions` to `TypeSafeJudge`: requests with more questions are split into chunks, at most 4 in flight at once, and their answers and usage merged, for System One endpoints that cap the `questions` map; the auth-gateway System One route applies the catalog's cap too ([#15368](https://github.com/can1357/oh-my-pi/pull/15368), [#15373](https://github.com/can1357/oh-my-pi/pull/15373) by [@H4vC](https://github.com/H4vC))
+
 ## [18.9.1] - 2026-10-11
 
 ### Added
