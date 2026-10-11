@@ -3659,7 +3659,14 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 					? { parts: [{ value: speculationAt }, { value: used - speculationAt, token: "accent" }] }
 					: {}),
 				...(marks.length > 0 ? { marks } : {}),
-				...(pct === null ? {} : { label: `${Math.round(pct)}%` }),
+				...(pct === null
+					? {}
+					: {
+							label:
+								window > 0 && ctx.options.context_pct?.showTokens === true
+									? formatNumber(ctx.contextTokens)
+									: `${Math.round(pct)}%`,
+						}),
 				...(window > 0 ? { total: formatNumber(window) } : {}),
 				title: lines.join("\n"),
 				actions: { click: "status.context" },
