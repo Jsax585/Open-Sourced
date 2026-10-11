@@ -48,6 +48,8 @@ const MISE_TOOL = "github:can1357/oh-my-pi";
 const NIX_STORE_DIR = "/nix/store";
 const RELEASE_METADATA_TIMEOUT_MS = 30_000;
 const BINARY_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
+const MAX_BINARY_DOWNLOAD_RETRIES = 3;
+const BINARY_DOWNLOAD_RETRY_DELAY_MS = process.env.NODE_ENV === "test" || process.env.VITEST ? 0 : 1_000;
 
 /**
  * Core native addon package. Bumped in lock-step with {@link PACKAGE} so the
@@ -187,6 +189,42 @@ export interface VerifiedBinaryDownloadOptions {
 	expectedSize: number;
 	expectedDigest: string;
 	fetchImpl?: Fetch;
+	maxRetries?: number;
+	retryDelayMs?: number;
+}
+
+function delay(ms: number): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	setTimeout(resolve, ms);
+	return promise;
+}
+
+function isTransientDownloadError(err: unknown): boolean {
+	if (!err || typeof err !== "object") return false;
+	if (isTimeoutError(err) || isUnsupportedProxyError(err)) return false;
+	const code = "code" in err && typeof err.code === "string" ? err.code : undefined;
+	const name = "name" in err && typeof err.name === "string" ? err.name : undefined;
+	const message = "message" in err && typeof err.message === "string" ? err.message : String(err);
+	if (
+		code === "ECONNRESET" ||
+		code === "ETIMEDOUT" ||
+		code === "EPIPE" ||
+		code === "ERR_STREAM_PREMATURE_CLOSE" ||
+		code === "UND_ERR_SOCKET"
+	) {
+		return true;
+	}
+	if (name === "TypeError" && (message.includes("closed unexpectedly") || message.includes("fetch failed"))) {
+		return true;
+	}
+	if (
+		message.includes("socket connection was closed") ||
+		message.includes("Premature close") ||
+		message.includes("premature close")
+	) {
+		return true;
+	}
+	return false;
 }
 
 /**
@@ -196,61 +234,103 @@ export interface VerifiedBinaryDownloadOptions {
  */
 export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOptions): Promise<void> {
 	const fetchImpl = options.fetchImpl ?? fetch;
-	await unlinkIfExists(options.targetPath);
+	const maxRetries = options.maxRetries ?? MAX_BINARY_DOWNLOAD_RETRIES;
+	const retryDelayMs = options.retryDelayMs ?? BINARY_DOWNLOAD_RETRY_DELAY_MS;
 
-	let response: Response;
-	try {
-		response = await fetchImpl(options.url, {
-			redirect: "follow",
-			signal: withTimeoutSignal(BINARY_DOWNLOAD_TIMEOUT_MS),
-		});
-	} catch (err) {
-		if (isTimeoutError(err)) {
-			throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
-		}
-		if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
-		throw err;
-	}
-	if (!response.ok || !response.body) {
-		throw new Error(`Download failed: ${response.statusText}`);
-	}
-
-	const hash = new Bun.SHA256();
-	let size = 0;
-	const verifier = new Transform({
-		transform(chunk, _encoding, callback) {
-			size += chunk.byteLength;
-			if (size > options.expectedSize) {
-				callback(
-					new Error(
-						`Downloaded binary size mismatch: expected ${options.expectedSize} bytes, received at least ${size}`,
-					),
-				);
-				return;
-			}
-			hash.update(chunk);
-			callback(null, chunk);
-		},
-	});
-
-	try {
-		await pipeline(response.body, verifier, fs.createWriteStream(options.targetPath, { mode: 0o600 }));
-		const digest = `sha256:${hash.digest("hex")}`;
-		if (size !== options.expectedSize) {
-			throw new Error(`Downloaded binary size mismatch: expected ${options.expectedSize} bytes, received ${size}`);
-		}
-		if (digest !== options.expectedDigest) {
-			throw new Error(`Downloaded binary digest mismatch: expected ${options.expectedDigest}, received ${digest}`);
-		}
-		await fs.promises.chmod(options.targetPath, 0o755);
-	} catch (err) {
+	let lastError: unknown;
+	for (let attempt = 0; attempt <= maxRetries; attempt++) {
 		await unlinkIfExists(options.targetPath);
-		if (isTimeoutError(err)) {
-			throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
+		let response: Response;
+		try {
+			response = await fetchImpl(options.url, {
+				redirect: "follow",
+				signal: withTimeoutSignal(BINARY_DOWNLOAD_TIMEOUT_MS),
+			});
+		} catch (err) {
+			if (isTimeoutError(err)) {
+				throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
+			}
+			if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
+			lastError = err;
+			if (attempt < maxRetries && isTransientDownloadError(err)) {
+				if (retryDelayMs > 0) {
+					await delay(retryDelayMs * 2 ** attempt);
+				}
+				continue;
+			}
+			throw err;
 		}
-		if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
-		throw err;
+
+		if (!response.ok || !response.body) {
+			const isTransientStatus = response.status === 429 || response.status >= 500;
+			lastError = new Error(`Download failed: ${response.statusText} (${response.status})`);
+			if (attempt < maxRetries && isTransientStatus) {
+				if (retryDelayMs > 0) {
+					await delay(retryDelayMs * 2 ** attempt);
+				}
+				continue;
+			}
+			throw lastError;
+		}
+
+		const hash = new Bun.SHA256();
+		let size = 0;
+		let sizeExceeded = false;
+		const verifier = new Transform({
+			transform(chunk, _encoding, callback) {
+				size += chunk.byteLength;
+				if (size > options.expectedSize) {
+					sizeExceeded = true;
+					callback(
+						new Error(
+							`Downloaded binary size mismatch: expected ${options.expectedSize} bytes, received at least ${size}`,
+						),
+					);
+					return;
+				}
+				hash.update(chunk);
+				callback(null, chunk);
+			},
+		});
+
+		try {
+			await pipeline(response.body, verifier, fs.createWriteStream(options.targetPath, { mode: 0o600 }));
+			const digest = `sha256:${hash.digest("hex")}`;
+			if (size !== options.expectedSize) {
+				throw new Error(
+					`Downloaded binary size mismatch: expected ${options.expectedSize} bytes, received ${size}`,
+				);
+			}
+			if (digest !== options.expectedDigest) {
+				throw new Error(
+					`Downloaded binary digest mismatch: expected ${options.expectedDigest}, received ${digest}`,
+				);
+			}
+			await fs.promises.chmod(options.targetPath, 0o755);
+			return;
+		} catch (err) {
+			await unlinkIfExists(options.targetPath);
+			if (isTimeoutError(err)) {
+				throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
+			}
+			if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
+			const message =
+				err && typeof err === "object" && "message" in err && typeof err.message === "string" ? err.message : "";
+			if (sizeExceeded || message.includes("digest mismatch")) {
+				throw err;
+			}
+			lastError = err;
+			const isTruncated = size < options.expectedSize;
+			if (attempt < maxRetries && (isTransientDownloadError(err) || isTruncated)) {
+				if (retryDelayMs > 0) {
+					await delay(retryDelayMs * 2 ** attempt);
+				}
+				continue;
+			}
+			throw err;
+		}
 	}
+	if (lastError) throw lastError;
 }
 
 /** Result from running the installed binary and parsing its reported version. */

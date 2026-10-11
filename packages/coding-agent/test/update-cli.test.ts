@@ -1063,6 +1063,81 @@ describe("update-cli release binary integrity", () => {
 		const newResidue = (await fs.readdir(dir)).filter(name => name.endsWith(".new"));
 		expect(newResidue).toEqual([]);
 	});
+
+	it("retries and succeeds when transient connection error occurs during download", async () => {
+		const dir = await makeTempDir();
+		const targetPath = path.join(dir, binaryName);
+		let attempts = 0;
+		const fetchImpl = async () => {
+			attempts++;
+			if (attempts === 1) {
+				throw new TypeError("The socket connection was closed unexpectedly.");
+			}
+			return new Response(content);
+		};
+
+		await downloadVerifiedBinary({
+			url,
+			targetPath,
+			expectedSize: Buffer.byteLength(content),
+			expectedDigest: digest,
+			fetchImpl,
+			retryDelayMs: 0,
+		});
+
+		expect(attempts).toBe(2);
+		expect(await Bun.file(targetPath).text()).toBe(content);
+	});
+
+	it("retries and succeeds when initial response is transient 502/503", async () => {
+		const dir = await makeTempDir();
+		const targetPath = path.join(dir, binaryName);
+		let attempts = 0;
+		const fetchImpl = async () => {
+			attempts++;
+			if (attempts === 1) {
+				return new Response(null, { status: 502, statusText: "Bad Gateway" });
+			}
+			return new Response(content);
+		};
+
+		await downloadVerifiedBinary({
+			url,
+			targetPath,
+			expectedSize: Buffer.byteLength(content),
+			expectedDigest: digest,
+			fetchImpl,
+			retryDelayMs: 0,
+		});
+
+		expect(attempts).toBe(2);
+		expect(await Bun.file(targetPath).text()).toBe(content);
+	});
+
+	it("retries and succeeds when stream body is truncated prematurely", async () => {
+		const dir = await makeTempDir();
+		const targetPath = path.join(dir, binaryName);
+		let attempts = 0;
+		const fetchImpl = async () => {
+			attempts++;
+			if (attempts === 1) {
+				return new Response(content.slice(0, 3));
+			}
+			return new Response(content);
+		};
+
+		await downloadVerifiedBinary({
+			url,
+			targetPath,
+			expectedSize: Buffer.byteLength(content),
+			expectedDigest: digest,
+			fetchImpl,
+			retryDelayMs: 0,
+		});
+
+		expect(attempts).toBe(2);
+		expect(await Bun.file(targetPath).text()).toBe(content);
+	});
 });
 
 describe("update-cli build patches", () => {

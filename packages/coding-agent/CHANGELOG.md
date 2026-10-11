@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Made `omp update` binary downloads resilient against transient socket drops, network resets, and truncated streams by adding automatic retries with exponential backoff.
+
 ## [18.9.1] - 2026-10-11
 
 ### Added
