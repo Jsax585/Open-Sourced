@@ -350,6 +350,7 @@ export class TurnRecovery {
 	#retryPromise: Promise<void> | undefined;
 	#retryResolve: (() => void) | undefined;
 	#activeRetryFallback: ActiveRetryFallbackState | undefined;
+	#fallbackGeneration = 0;
 	#activeFallbackCreditRedemption?: {
 		targetSelector: string;
 		handle: AnthropicFallbackCreditHandle;
@@ -1802,6 +1803,7 @@ export class TurnRecovery {
 
 	/** Clears fallback ownership after an explicit model change or a restore. */
 	clearActiveRetryFallback(): void {
+		this.#fallbackGeneration += 1;
 		this.#activeRetryFallback = undefined;
 		this.#fallbackRoutedFor = undefined;
 	}
@@ -2106,6 +2108,7 @@ export class TurnRecovery {
 		currentSelector: string,
 		options?: { pinFallback?: boolean; apiKey?: string; signal?: AbortSignal; reason?: string },
 	): Promise<boolean> {
+		const generation = this.#fallbackGeneration;
 		const resolved = resolveModelOverride([selector.raw], this.#host.modelRegistry, this.#host.settings);
 		const candidate = resolved.model ?? this.#host.modelRegistry.find(selector.provider, selector.id);
 		if (!candidate) {
@@ -2114,10 +2117,10 @@ export class TurnRecovery {
 		const apiKey =
 			options?.apiKey ??
 			(await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId(), { signal: options?.signal }));
+		if (options?.signal?.aborted || generation !== this.#fallbackGeneration) return false;
 		if (!apiKey) {
 			throw new Error(`No API key for retry fallback ${selector.raw}`);
 		}
-		if (options?.signal?.aborted) return false;
 
 		// Capture the configured selector (auto-aware) so a fallback chain preserves
 		// `auto` instead of collapsing it to the level it resolved to this turn.
@@ -2147,6 +2150,7 @@ export class TurnRecovery {
 		this.#markFallbackRouted();
 		if (this.#activeRetryFallback) this.#activeRetryFallback.served = false;
 		await this.#host.setModelWithProviderSessionReset(candidate);
+		if (generation !== this.#fallbackGeneration) return false;
 		if (options?.signal?.aborted) {
 			this.#fallbackRoutedFor = routedBeforeSwap;
 			if (this.#activeRetryFallback) this.#activeRetryFallback.served = servedBeforeSwap;
@@ -2200,6 +2204,7 @@ export class TurnRecovery {
 		},
 	): Promise<boolean> {
 		signal.throwIfAborted();
+		const generation = this.#fallbackGeneration;
 		const ceiling = this.#host.thinkingLevelCeiling();
 		const latestAssistant = options?.preserveFailedTurn
 			? failedMessage
@@ -2215,6 +2220,7 @@ export class TurnRecovery {
 			for (const selector of this.findRetryFallbackCandidates(role, currentSelector, undefined, options)) {
 				const suppressed = await this.isRetryFallbackSelectorSuppressed(selector, signal);
 				signal.throwIfAborted();
+				if (generation !== this.#fallbackGeneration) return false;
 				if (suppressed) continue;
 				if (options?.refusalWalk && this.#refusalWalkTried.has(formatRetryFallbackBaseSelector(selector))) continue;
 				const resolved = resolveModelOverride([selector.raw], this.#host.modelRegistry, this.#host.settings);
@@ -2268,6 +2274,7 @@ export class TurnRecovery {
 				}
 				const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId(), { signal });
 				signal.throwIfAborted();
+				if (generation !== this.#fallbackGeneration) return false;
 				if (!apiKey) continue;
 				const previousEditMode = this.#host.resolveActiveEditMode();
 				const applied = await this.applyRetryFallbackCandidate(role, selector, currentSelector, {
@@ -2465,8 +2472,17 @@ export class TurnRecovery {
 		// `setThinkingLevel` both notify subscribers, and an observer reading
 		// attribution in that window would see the restored primary still tagged
 		// as fallback-served.
+		const routedBeforeSwap = this.#fallbackRoutedFor;
 		this.clearActiveRetryFallback();
+		const generation = this.#fallbackGeneration;
 		await this.#host.setModelWithProviderSessionReset(primaryModel);
+		if (generation !== this.#fallbackGeneration || this.#host.model() !== primaryModel) return false;
+		if (signal?.aborted) {
+			this.#activeRetryFallback = activeFallback;
+			this.#fallbackRoutedFor = routedBeforeSwap;
+			await this.#host.setModelWithProviderSessionReset(currentModel);
+			return false;
+		}
 		this.#host.sessionManager.appendModelChange(primarySelector, EPHEMERAL_MODEL_CHANGE_ROLE);
 		this.#host.settings.getStorage()?.recordModelUsage(primarySelector);
 		this.#host.setThinkingLevel(thinkingToApply);
