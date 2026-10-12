@@ -117,6 +117,7 @@ describe("TUI screen selection", () => {
 			[20, 4],
 			[20, 8],
 			[30, 6],
+			[10, 6],
 		] as const) {
 			const terminal = new VirtualTerminal(20, 6);
 			const scheduler = new VirtualRenderScheduler();
@@ -126,7 +127,7 @@ describe("TUI screen selection", () => {
 			tui.start();
 			await scheduler.settle(terminal);
 			provider.plan = {
-				history: { id: 1, rows: ["h0", "h1", "h2", "h3", "h4", "h5"], kind: "append" },
+				history: { id: 1, rows: ["h0", "h1", "h2", "h3 wraps past ten", "h4", "h5"], kind: "append" },
 				viewport: ["v0", "editor"],
 			};
 			tui.requestRender();
@@ -136,9 +137,11 @@ describe("TUI screen selection", () => {
 			expect(terminal.getViewportRowReverseColumns(2)).toEqual([0, 1]);
 
 			// Shrink pushes rows into scrollback, grow pulls them back, a width
-			// change leaves them in place: each keeps history rows above the repaint.
+			// grow leaves them in place, and a width shrink wraps the long row:
+			// each keeps history rows above the repaint.
 			terminal.resize(columns, rows);
-			await scheduler.advance(terminal, 200);
+			// Past the settle delay and the CPR probe timeout.
+			await scheduler.advance(terminal, 1000);
 			await scheduler.settle(terminal);
 			const viewport = terminal.getViewport();
 			expect(viewport.slice(-2).map(row => row.trimEnd())).toEqual(["v0", "editor"]);
@@ -235,6 +238,26 @@ describe("TUI screen selection", () => {
 		// stays in screen columns instead of the span's unscaled width.
 		tui.setScreenSelection({ anchor: { row: 1, col: 2 }, focus: { row: 1, col: 5 } });
 		expect(tui.getScreenSelectionText()).toBe("ea");
+		tui.stop();
+	});
+
+	it("keeps a scaled wide glyph when the drag starts on one of its later cells", async () => {
+		const terminal = new VirtualTerminal(30, 6);
+		const scheduler = new VirtualRenderScheduler();
+		// "ab" fills cells 0-1; the scale-2 "界" cells 2-5; the scale-2 "X" cells 6-7.
+		const heading = `ab${encodeTextSized("界X", { scale: 2, widthCells: 3 })}`;
+		const provider = new Provider([heading, "", "editor"]);
+		const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		tui.start();
+		await scheduler.settle(terminal);
+
+		for (const col of [2, 3, 4, 5]) {
+			tui.setScreenSelection({ anchor: { row: 0, col }, focus: { row: 0, col: 7 } });
+			expect(tui.getScreenSelectionText()).toBe("界X");
+		}
+		tui.setScreenSelection({ anchor: { row: 0, col: 7 }, focus: { row: 0, col: 9 } });
+		expect(tui.getScreenSelectionText()).toBe("X");
 		tui.stop();
 	});
 });

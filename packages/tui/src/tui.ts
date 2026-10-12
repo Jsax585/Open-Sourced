@@ -51,6 +51,7 @@ import {
 	getWidthConfigEpoch,
 	isOsc66Line,
 	normalizeTerminalOutput,
+	osc66GlyphStart,
 	osc66MaxScale,
 	sliceByColumn,
 	sliceWithWidth,
@@ -1454,10 +1455,12 @@ export class TUI extends Container {
 			}
 			const line = prepared.line.replaceAll(CURSOR_MARKER, "");
 			// Snap a start on a wide glyph's continuation cell back to the glyph.
-			// Sized (OSC 66) rows skip it: a partial scaled span measures in
-			// unscaled cells, and `sliceByColumn` already snaps to scaled glyphs.
+			// Sized (OSC 66) rows snap in screen cells: a partial scaled span
+			// measures in unscaled cells, so the plain-row prefix width undercounts.
 			let start = 0;
-			if (row === from.row) start = isOsc66Line(line) ? from.col : sliceWithWidth(line, 0, from.col, true).width;
+			if (row === from.row) {
+				start = isOsc66Line(line) ? osc66GlyphStart(line, from.col) : sliceWithWidth(line, 0, from.col, true).width;
+			}
 			const end = row === to.row ? to.col : this.#previousWidth - 1;
 			lines.push(Bun.stripANSI(unwrapOsc66(sliceByColumn(line, start, end - start + 1))).trimEnd());
 		}
@@ -1574,21 +1577,35 @@ export class TUI extends Container {
 	 * Repaint the selected history rows a resize left above the next paint,
 	 * which rewrites only from the new viewport top `top` down: without this
 	 * they keep the reverse video into scrollback. The terminal moved the old
-	 * viewport top to `top`, and rows above it reflowed to `width`. A row wider
-	 * than `width` wrapped and cannot be rewritten in place, so it is skipped.
+	 * viewport top to `top`, and rows above it reflowed to `width`; a row now
+	 * wider than `width` is rewritten piece by piece onto the rows it wrapped
+	 * into, each piece ending before a glyph that would not fit.
 	 */
 	#resizedSelectionRestoreSequence(width: number, top: number): string {
 		const bounds = this.#selectionBounds();
 		if (!bounds) return "";
 		const [from, to] = bounds;
+		const widthEpoch = getWidthConfigEpoch();
 		let sequence = "";
 		let row = top;
 		for (let index = this.#paintedViewportTop - 1; index >= from.row && row > 0; index--) {
 			const prepared = this.#screenRows[index];
 			const spans = this.#reflowedRowCount([prepared?.line ?? ""], 0, 1, width);
 			row -= spans;
-			if (index > to.row || row < 0 || spans > 1 || !this.#highlightableRow(prepared)) continue;
-			sequence += `\x1b[${row + 1};1H${this.#lineRewriteSequence(prepared, width, row)}`;
+			if (index > to.row || !this.#highlightableRow(prepared)) continue;
+			if (spans === 1) {
+				if (row >= 0) sequence += `\x1b[${row + 1};1H${this.#lineRewriteSequence(prepared, width, row)}`;
+				continue;
+			}
+			let col = 0;
+			for (let piece = 0; piece < spans; piece++) {
+				const slice = sliceWithWidth(prepared.line, col, width, true);
+				if (slice.width === 0) break;
+				col += slice.width;
+				if (row + piece < 0) continue;
+				const line = this.#prepareLine(slice.text, width, widthEpoch, prepared.imageProtocol);
+				sequence += `\x1b[${row + piece + 1};1H${this.#lineRewriteSequence(line, width, row + piece)}`;
+			}
 		}
 		return sequence;
 	}

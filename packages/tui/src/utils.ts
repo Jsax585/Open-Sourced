@@ -514,6 +514,33 @@ export function osc66MaxScale(line: string): number {
 	return max;
 }
 
+/**
+ * First screen column of the glyph covering screen column `col` in an OSC 66
+ * line, where a scaled glyph spans its width times its span's `s=` cells.
+ * Columns past the line's end come back unchanged.
+ */
+export function osc66GlyphStart(line: string, col: number): number {
+	const runs: [text: string, scale: number][] = [];
+	let plainStart = 0;
+	for (const match of line.matchAll(OSC66_SPAN_REGEX)) {
+		runs.push([stripTerminalSequences(line.slice(plainStart, match.index)), 1]);
+		const scalePart = match[1].split(":").find(part => part.startsWith("s="));
+		const scale = scalePart === undefined ? 1 : Number.parseInt(scalePart.slice(2), 10);
+		runs.push([match[2], scale >= 1 && scale <= 7 ? scale : 1]);
+		plainStart = match.index + match[0].length;
+	}
+	runs.push([stripTerminalSequences(line.slice(plainStart)), 1]);
+	let cell = 0;
+	for (const [text, scale] of runs) {
+		for (const { segment } of segmenter.segment(text)) {
+			const cells = visibleWidth(segment) * scale;
+			if (col < cell + cells) return cell;
+			cell += cells;
+		}
+	}
+	return col;
+}
+
 const THAI_LAO_AM_GLOBAL_REGEX = /[\u0e33\u0eb3]/g;
 
 /**
