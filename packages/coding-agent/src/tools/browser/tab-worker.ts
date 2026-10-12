@@ -1331,6 +1331,8 @@ interface ActiveRun {
 	/** Helper invocations currently awaiting the page/network, keyed by op id. */
 	inflight: Map<number, InflightOp>;
 	opCounter: number;
+	/** The run's code started, so input it sent may have reached the page. */
+	codeStarted: boolean;
 }
 
 /** Human-readable label for a screenshot op, used in op tracking + timeout errors. */
@@ -1443,7 +1445,7 @@ export class WorkerCore {
 		if (!run) return;
 		this.#unanswered = null;
 		run.ac.abort(postmortem.markExpectedCleanupError(new ToolAbortError("Chrome detached omp from this tab")));
-		const error = new DebuggerDetachedError(reason, "during");
+		const error = new DebuggerDetachedError(reason, run.codeStarted ? "during" : "before");
 		this.#transport.send({ type: "result", id: run.id, ok: false, error: errorPayload(error) });
 	};
 
@@ -1802,6 +1804,7 @@ export class WorkerCore {
 			floatingFailure,
 			inflight: new Map(),
 			opCounter: 0,
+			codeStarted: false,
 		};
 		this.#active = active;
 		this.#unanswered = active;
@@ -1880,6 +1883,7 @@ export class WorkerCore {
 			try {
 				const hooks = this.#hooksForActiveRun();
 				if (!hooks) throw new ToolError("Browser runtime started without an active run");
+				active.codeStarted = true;
 				returnValue = await withBrowserPromiseCombinatorTracking(
 					active.rejectionOwner,
 					onFloatingRejection,
