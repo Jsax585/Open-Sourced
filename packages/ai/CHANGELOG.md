@@ -45,8 +45,7 @@
 ### Fixed
 
 - Fixed Devin-routed OpenAI models returning `invalid_argument` on every turn after an existing session was switched from `openai-codex`.
-- Added `maxQuestions` to `TypeSafeJudge`: requests with more questions are split into chunks, at most 4 in flight at once, and their answers and usage merged, for System One endpoints that cap the `questions` map; when a split fails, the usage already billed for its successful chunks still reaches `onPartialUsage`, the session ledger and the auth-gateway usage ledger. The auth-gateway System One route applies the catalog's cap too ([#15368](https://github.com/can1357/oh-my-pi/pull/15368), [#15373](https://github.com/can1357/oh-my-pi/pull/15373) by [@H4vC](https://github.com/H4vC))
-- Added terminal `AIError.Flag.RequestRejected` for extension policy vetoes before provider requests, including frozen Anthropic fallback-credit replays; rejected requests preserve signed content and do not enter request recovery ([#15378](https://github.com/can1357/oh-my-pi/issues/15378)).
+- Added terminal `AIError.Flag.RequestRejected` for extension policy vetoes before provider requests, including frozen Anthropic fallback-credit replays; rejected requests preserve signed content and do not enter request recovery ([#15378](https://github.com/can1357/oh-my-pi/issues/15378), [#15537](https://github.com/can1357/oh-my-pi/pull/15537) by [@schickling-assistant](https://github.com/schickling-assistant)).
 
 ## [18.9.1] - 2026-10-11
 
