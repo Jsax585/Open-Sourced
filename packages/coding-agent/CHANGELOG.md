@@ -2,23 +2,24 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed `read.renderMarkdown` having no effect on plain-file reads: inline read previews now render Markdown files as formatted Markdown instead of numbered source ([#15007](https://github.com/can1357/oh-my-pi/issues/15007)).
-
-### Removed
-
-- Removed Codex Code Mode and its `providers.openai-codex.codeMode` / `providers.openai-codex.codeModeDirectTools` settings; Codex models always use the full direct tool surface.
-
-## [18.10.3] - 2026-10-12
-
 ### Added
 
 - Added a `steps` field to agent frontmatter that sets that agent's request budget: the subagent gets a wrap-up notice at `steps` requests and is driven to a final `yield` at 1.5x. Bundled scout and sonic now declare `steps: 100` instead of a name-keyed table, so a custom agent of the same name no longer inherits the cap.
 
 ### Fixed
 
+- Fixed `read.renderMarkdown` having no effect on plain-file reads: inline read previews now render Markdown files as formatted Markdown instead of numbered source ([#15007](https://github.com/can1357/oh-my-pi/issues/15007)).
 - Failed subagent results now include a `<resume>` line with the `agent://<id>` to message, so the parent can continue the same child instead of redoing the work. Cancelled results use the same single `<resume>` line instead of a suffix on the abort reason. The hint is omitted when the caller cannot message peers, and `omp agents unpack` keeps a bundled agent's `steps`.
+
+### Removed
+
+- Removed Codex Code Mode and its `providers.openai-codex.codeMode` / `providers.openai-codex.codeModeDirectTools` settings; Codex models always use the full direct tool surface.
+- Removed the exported `SOFT_REQUEST_BUDGET` table. Bundled scout and sonic caps are now their agent definitions' `steps`, and `resolveSoftRequestBudget` takes `(agentName, configuredBudget, agentBudgets, agentSteps)`.
+
+## [18.10.3] - 2026-10-12
+
+### Added
+
 - Added `task.agentSoftRequestBudget` to give named subagents their own soft request budget, so a long-running agent can get more requests (or `0` for no guard) while scout, sonic and other agents keep theirs ([#15419](https://github.com/can1357/oh-my-pi/pull/15419) by [@will-bogusz](https://github.com/will-bogusz))
 - Added `o200k` as a `tokenizer` value for custom models and overrides in `models.yml` ([#15447](https://github.com/can1357/oh-my-pi/pull/15447) by [@will-bogusz](https://github.com/will-bogusz))
 
@@ -40,10 +41,6 @@
 ### Fixed
 
 - Kept private prompt-cache routing keys out of shared sessions and HTML exports ([#15467](https://github.com/can1357/oh-my-pi/pull/15467) by [@iliaal](https://github.com/iliaal))
-
-### Removed
-
-- Removed the exported `SOFT_REQUEST_BUDGET` table. Bundled scout and sonic caps are now their agent definitions' `steps`, and `resolveSoftRequestBudget` takes `(agentName, configuredBudget, agentBudgets, agentSteps)`.
 
 ## [18.10.2] - 2026-10-12
 
