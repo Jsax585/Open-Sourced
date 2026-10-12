@@ -22,7 +22,6 @@ import { resolveMemoryBackend } from "../memory-backend/resolve";
 import { MEMORY_BACKEND_TOOL_NAMES } from "../memory-backend/tool-names";
 import { invalidateToolSchemaMetadata } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import type { MemoryBackendStartOptions, MemoryPromptPreparation } from "../memory-backend/types";
-import { TaskTool } from "../task";
 import type { AgentDefinition } from "../task/types";
 import evalPreludeNoticePrompt from "../prompts/system/eval-prelude-notice.md" with { type: "text" };
 import sessionAgentNoticePrompt from "../prompts/system/session-agent-notice.md" with { type: "text" };
@@ -293,6 +292,16 @@ interface XdevMountNoticeProjection {
 }
 
 /** Owns tool registration, presentation, prompt rebuilding, skills, and permissions. */
+/**
+ * The registry holds the task tool behind extension wrappers that forward `filterSessionAgents`, so the
+ * capability is detected on the object instead of with `instanceof TaskTool`.
+ */
+function hasSessionAgentFilter(
+	tool: AgentTool | undefined,
+): tool is AgentTool & { filterSessionAgents(agents: readonly AgentDefinition[]): AgentDefinition[] } {
+	return tool !== undefined && "filterSessionAgents" in tool && typeof tool.filterSessionAgents === "function";
+}
+
 export class SessionTools {
 	readonly #host: SessionToolsHost;
 	#autoApprove: boolean;
@@ -587,7 +596,7 @@ export class SessionTools {
 		if (!enabled.includes("task") && !enabled.includes("eval")) return [];
 		const agents = this.#host.sessionAgents();
 		const task = this.#toolRegistry.get("task");
-		return task instanceof TaskTool ? task.filterSessionAgents(agents) : agents;
+		return hasSessionAgentFilter(task) ? task.filterSessionAgents(agents) : agents;
 	}
 	/** Drops cached per-session ACP `allow_always`/`reject_always` decisions. */
 	clearAcpPermissionDecisions(): void {
