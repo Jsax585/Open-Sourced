@@ -203,3 +203,31 @@ describe("thinking.requiresEffort clamping", () => {
 		expect(off.reasoning).toEqual({ effort: "minimal" });
 	});
 });
+
+describe("unverified thinking", () => {
+	it("sends thinkingMode off with a kept effort exactly like a request without an effort", async () => {
+		// An unknown Meta id gets an opt-in ladder; only a chosen effort may add reasoning fields.
+		const model = buildModel({
+			id: "muse-unreleased",
+			name: "Muse Unreleased",
+			api: "openai-responses",
+			provider: "meta",
+			baseUrl: "https://api.meta.ai/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200_000,
+			maxTokens: 8_000,
+		} satisfies ModelSpec<"openai-responses">);
+		const withoutCacheKey = ({ prompt_cache_key: _key, ...body }: CapturedBody & { prompt_cache_key?: string }) =>
+			body;
+		const baseline = withoutCacheKey(await captureBody(model, {}));
+
+		expect(baseline).not.toHaveProperty("reasoning");
+		// The ladder exists: a chosen effort opts in.
+		expect((await captureBody(model, { reasoning: Effort.High })).reasoning).toMatchObject({ effort: "high" });
+		expect(withoutCacheKey(await captureBody(model, { reasoning: Effort.High, thinkingMode: "off" }))).toEqual(
+			baseline,
+		);
+	});
+});
