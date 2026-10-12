@@ -5,6 +5,7 @@
 ### Added
 
 - Added `modelHub.quickPick` (Settings → Model → One-Step Model Picker): in `/model`, Enter on a model sets it as the `default` role and the hub closes after the thinking choice, instead of walking the role strip and staying open ([#14479](https://github.com/can1357/oh-my-pi/pull/14479) by [@lockwo](https://github.com/lockwo)).
+- Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
 
 ### Fixed
 
