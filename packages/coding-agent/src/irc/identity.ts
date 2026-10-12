@@ -25,4 +25,3 @@ export function ircSource(message: IrcMessage, fromParent = false): IrcSource {
 		...(fromParent ? { fromParent: true } : {}),
 	};
 }
-
