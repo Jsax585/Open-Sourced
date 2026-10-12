@@ -1438,7 +1438,10 @@ export class TUI extends Container {
 			}
 			const line = prepared.line.replaceAll(CURSOR_MARKER, "");
 			// Snap a start on a wide glyph's continuation cell back to the glyph.
-			const start = row === from.row ? sliceWithWidth(line, 0, from.col, true).width : 0;
+			// Sized (OSC 66) rows skip it: a partial scaled span measures in
+			// unscaled cells, and `sliceByColumn` already snaps to scaled glyphs.
+			let start = 0;
+			if (row === from.row) start = isOsc66Line(line) ? from.col : sliceWithWidth(line, 0, from.col, true).width;
 			const end = row === to.row ? to.col : this.#previousWidth - 1;
 			lines.push(Bun.stripANSI(unwrapOsc66(sliceByColumn(line, start, end - start + 1))).trimEnd());
 		}
@@ -1456,15 +1459,13 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Row shift that carries the selection to where a paint moved its rows.
-	 * `block` is the raw content of the selected rows plus one context row on
-	 * each side, captured before the paint from screen row `blockTop`. The
-	 * block must match as a whole, so a blank or separator row repeated
-	 * elsewhere cannot capture the selection; among matches the one nearest
-	 * a plain scroll (`-scrolled`) wins. No match (rows rewritten or gone)
-	 * falls back to the plain scroll.
+	 * Row shift that carries `block` (raw row content captured before the
+	 * paint from screen row `blockTop`) to where the paint moved it, or
+	 * `undefined` when it matches nowhere (rows rewritten or gone). The block
+	 * must match as a whole; among matches the one nearest a plain scroll
+	 * (`-scrolled`) wins.
 	 */
-	#selectionShift(block: readonly (string | undefined)[], blockTop: number, scrolled: number): number {
+	#selectionShift(block: readonly (string | undefined)[], blockTop: number, scrolled: number): number | undefined {
 		const screen = this.#screenRows;
 		const reach = screen.length + block.length + scrolled;
 		for (let distance = 0; distance <= reach; distance++) {
@@ -1478,7 +1479,7 @@ export class TUI extends Container {
 				if (matches) return shift;
 			}
 		}
-		return -scrolled;
+		return undefined;
 	}
 
 	/** Move a selection end by `shift` rows; an end shifted off the top pins to the top-left cell. */
@@ -3781,11 +3782,15 @@ export class TUI extends Container {
 			screen.length = 0;
 			this.#screenSelection = undefined;
 		}
+		// The selection follows its rows plus one context row on each side, so a
+		// blank or separator row repeated elsewhere cannot capture it. A changed
+		// context row (the line streaming in below) retries with the selected
+		// rows alone; only when those are gone too does it ride the plain scroll.
 		const selection = this.#screenSelection;
-		const blockTop = selection ? Math.max(0, Math.min(selection.anchor.row, selection.focus.row) - 1) : 0;
-		const block = selection
-			? screen.slice(blockTop, Math.max(selection.anchor.row, selection.focus.row) + 2).map(row => row?.raw)
-			: undefined;
+		const selectedTop = selection ? Math.min(selection.anchor.row, selection.focus.row) : 0;
+		const selectedBottom = selection ? Math.max(selection.anchor.row, selection.focus.row) : 0;
+		const blockTop = Math.max(0, selectedTop - 1);
+		const block = selection ? screen.slice(blockTop, selectedBottom + 2).map(row => row?.raw) : undefined;
 		if (screen.length > startTop) screen.length = startTop;
 		while (screen.length < startTop) screen.push(undefined);
 		for (const row of preparedHistory.rows) screen.push(row);
@@ -3793,7 +3798,11 @@ export class TUI extends Container {
 		if (scrolled > 0) screen.splice(0, scrolled);
 		for (const row of prepared.rows) screen.push(row);
 		if (selection !== undefined && block !== undefined) {
-			const shift = this.#selectionShift(block, blockTop, scrolled);
+			const selected = block.slice(selectedTop - blockTop, selectedBottom - blockTop + 1);
+			const shift =
+				this.#selectionShift(block, blockTop, scrolled) ??
+				this.#selectionShift(selected, selectedTop, scrolled) ??
+				-scrolled;
 			this.#shiftSelectionPoint(selection.anchor, shift);
 			this.#shiftSelectionPoint(selection.focus, shift);
 		}

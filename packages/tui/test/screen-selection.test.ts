@@ -48,6 +48,26 @@ describe("TUI screen selection", () => {
 		tui.stop();
 	});
 
+	it("follows its rows when content above them grows while the row below changes", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const scheduler = new VirtualRenderScheduler();
+		const provider = new Provider(["intro", "target row", "streaming", "editor"]);
+		const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		tui.start();
+		await scheduler.settle(terminal);
+
+		tui.setScreenSelection({ anchor: { row: 1, col: 0 }, focus: { row: 1, col: 5 } });
+		expect(tui.getScreenSelectionText()).toBe("target");
+
+		// Two rows land above the selection while the line below it keeps streaming.
+		provider.plan = { viewport: ["intro", "new one", "new two", "target row", "streaming more", "editor"] };
+		tui.requestRender();
+		await scheduler.settle(terminal);
+		expect(tui.getScreenSelectionText()).toBe("target");
+		tui.stop();
+	});
+
 	it("keeps the selected text when its rows commit to history and scroll up", async () => {
 		const terminal = new VirtualTerminal(20, 6);
 		const scheduler = new VirtualRenderScheduler();
@@ -110,7 +130,7 @@ describe("TUI screen selection", () => {
 		tui.stop();
 	});
 
-	it("reads the text of a fully selected OSC 66 sized heading", async () => {
+	it("reads the text of an OSC 66 sized heading, whole or from inside the span", async () => {
 		const terminal = new VirtualTerminal(30, 6);
 		const scheduler = new VirtualRenderScheduler();
 		const heading = encodeTextSized("Heading One", { scale: 2, widthCells: 11 });
@@ -122,6 +142,11 @@ describe("TUI screen selection", () => {
 
 		tui.setScreenSelection({ anchor: { row: 0, col: 0 }, focus: { row: 3, col: 4 } });
 		expect(tui.getScreenSelectionText()).toBe("intro\nHeading One\n\nafter");
+
+		// Cells 2–5 of the scale-2 heading hold "ea": a start inside the span
+		// stays in screen columns instead of the span's unscaled width.
+		tui.setScreenSelection({ anchor: { row: 1, col: 2 }, focus: { row: 1, col: 5 } });
+		expect(tui.getScreenSelectionText()).toBe("ea");
 		tui.stop();
 	});
 });
