@@ -14,6 +14,7 @@ import type { UsageReport } from "../src/usage";
 
 function report(overrides: Partial<UsageReport>): UsageReport {
 	return {
+		provider: "anthropic",
 		fetchedAt: Date.now(),
 		limits: [
 			{
