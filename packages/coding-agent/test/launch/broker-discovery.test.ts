@@ -1,9 +1,10 @@
-// Real private broker, socket requests, child exits, and production wait consumers.
-// Only project resolution and response delivery gates are substituted.
+// Real private broker, native IPC requests, child exits, and production wait consumers.
+// Only project resolution and connection/response/callback delivery gates are substituted.
 import { describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { IpcConnection } from "@oh-my-pi/pi-natives";
 import * as clients from "../../src/launch/client";
 import type { DaemonBrokerClient } from "../../src/launch/client";
 import type { ToolSession } from "../../src/tools";
@@ -134,6 +135,24 @@ function holdResponse(client: DaemonBrokerClient, op: "list" | "start") {
 		},
 	};
 }
+/** Hold the real native connection before the production client can bind it. */
+function holdConnection() {
+	const connected = Promise.withResolvers<IpcConnection>();
+	const release = Promise.withResolvers<void>();
+	const connect = IpcConnection.connect.bind(IpcConnection);
+	vi.spyOn(IpcConnection, "connect").mockImplementationOnce(async (endpoint, options) => {
+		try {
+			const connection = await connect(endpoint, options);
+			connected.resolve(connection);
+			await release.promise;
+			return connection;
+		} catch (error) {
+			connected.reject(error);
+			throw error;
+		}
+	});
+	return { connected: connected.promise, release: release.resolve };
+}
 
 // Event-driven success; a bounded watchdog releases gates even on pristine failure.
 async function beforeRelease<T>(release: () => void, result: Promise<T>): Promise<T> {
@@ -245,6 +264,7 @@ describe("broker discovery and session generations", () => {
 		withBroker(f => terminalListBeforeCompletion(f, true)));
 	test("connection-cancel-sends-nothing-and-shared-connect-survives", () =>
 		withBroker(async f => {
+			const gate = holdConnection();
 			const controller = new AbortController();
 			const added = vi.spyOn(controller.signal, "addEventListener");
 			const removed = vi.spyOn(controller.signal, "removeEventListener");
@@ -265,15 +285,338 @@ describe("broker discovery and session generations", () => {
 				},
 				controller.signal,
 			);
+			const outcome = cancelled.catch((error: unknown) => error);
 			const sibling = f.client.request({ op: "list" });
-			controller.abort();
-			await expect(cancelled).rejects.toThrow("request aborted");
-			const listed = await sibling;
-			if (listed.op !== "list") throw new Error("Expected real list");
-			expect(listed.daemons.some(d => d.name === "must-not-start")).toBe(false);
-			for (const [event, listener] of added.mock.calls)
-				expect(removed.mock.calls.some(([name, callback]) => name === event && callback === listener)).toBe(true);
-			expect((await f.client.request({ op: "ping" })).op).toBe("ping");
+			void sibling.catch(() => undefined);
+			try {
+				const connection = await gate.connected;
+				controller.abort();
+				const error = await beforeRelease(gate.release, outcome);
+				expect(error).toBeInstanceOf(Error);
+				if (!(error instanceof Error)) throw new Error("Expected cancellation");
+				expect(error.message).toContain("request aborted");
+				expect(connection.closed).toBe(false);
+				const listed = await sibling;
+				if (listed.op !== "list") throw new Error("Expected real list");
+				expect(listed.daemons.some(d => d.name === "must-not-start")).toBe(false);
+				for (const [event, listener] of added.mock.calls)
+					expect(removed.mock.calls.some(([name, callback]) => name === event && callback === listener)).toBe(
+						true,
+					);
+				expect((await f.client.request({ op: "ping" })).op).toBe("ping");
+			} finally {
+				gate.release();
+				await Promise.allSettled([cancelled, sibling]);
+			}
+		}));
+	test("client close destroys a late native connection without sending its request", () =>
+		withBroker(async f => {
+			// A separate client keeps fixture shutdown independent of the closed consumer.
+			const closing = await clients.createDaemonBrokerClient(f.projectDir, { runtimeDir: f.runtimeDir });
+			const gate = holdConnection();
+			const request = closing.request({ op: "list" });
+			const outcome = request.catch((error: unknown) => error);
+			try {
+				const connection = await gate.connected;
+				closing.close();
+				gate.release();
+				const error = await outcome;
+				expect(error).toBeInstanceOf(Error);
+				if (!(error instanceof Error)) throw new Error("Expected closed client");
+				expect(error.message).toContain("client is closed");
+				expect(connection.closed).toBe(true);
+				expect((await f.client.request({ op: "ping" })).op).toBe("ping");
+			} finally {
+				closing.close();
+				gate.release();
+				await request.catch(() => undefined);
+			}
+		}));
+	test("cancelled pending native request leaves its service and sibling requests usable", () =>
+		withBroker(async f => {
+			await startOwned(f, "pending-cancel");
+			const controller = new AbortController();
+			const connect = IpcConnection.connect.bind(IpcConnection);
+			const connected = Promise.withResolvers<IpcConnection>();
+			vi.spyOn(IpcConnection, "connect").mockImplementationOnce(async (endpoint, options) => {
+				const connection = await connect(endpoint, options);
+				connected.resolve(connection);
+				return connection;
+			});
+			const consumer = await clients.createDaemonBrokerClient(f.projectDir, { runtimeDir: f.runtimeDir });
+			try {
+				await consumer.request({ op: "ping" });
+				const connection = await connected.promise;
+				const sent = Promise.withResolvers<void>();
+				const send = connection.send.bind(connection);
+				vi.spyOn(connection, "send").mockImplementation(frame => {
+					const result = send(frame);
+					if (typeof frame === "string" && JSON.parse(frame).operation.op === "wait") sent.resolve();
+					return result;
+				});
+				const waiting = consumer.request(
+					{ op: "wait", name: "pending-cancel", for: "exit", timeoutMs: 5000 },
+					controller.signal,
+				);
+				const outcome = waiting.catch((error: unknown) => error);
+				await sent.promise;
+				controller.abort();
+				await expect(outcome).resolves.toBeInstanceOf(Error);
+				expect(connection.closed).toBe(false);
+				expect((await consumer.request({ op: "ping" })).op).toBe("ping");
+				await consumer.request({ op: "send", name: "pending-cancel", data: "finish\n" });
+				const exited = await consumer.request({ op: "wait", name: "pending-cancel", for: "exit", timeoutMs: 5000 });
+				if (exited.op !== "wait") throw new Error("Expected real wait");
+				expect(exited.timedOut).toBe(false);
+				expect(exited.daemon.state).toBe("exited");
+			} finally {
+				controller.abort();
+				consumer.close();
+			}
+		}));
+	test("late native close cannot reject requests on the replacement connection", () =>
+		withBroker(async f => {
+			const gate = holdConnection();
+			const first = f.client.request({ op: "ping" });
+			void first.catch(() => undefined);
+			const old = await gate.connected;
+			const closeReceived = Promise.withResolvers<void>();
+			const closeRelease = Promise.withResolvers<void>();
+			const closeDelivered = Promise.withResolvers<void>();
+			const start = old.start.bind(old);
+			vi.spyOn(old, "start").mockImplementation((onLine, onClose) =>
+				start(onLine, reason => {
+					closeReceived.resolve();
+					void closeRelease.promise.then(() => {
+						onClose(reason);
+						closeDelivered.resolve();
+					});
+				}),
+			);
+			try {
+				gate.release();
+				await first;
+				await startOwned(f, "replacement-survivor");
+				const sent = Promise.withResolvers<void>();
+				const send = old.send.bind(old);
+				vi.spyOn(old, "send").mockImplementation(frame => {
+					const result = send(frame);
+					if (typeof frame === "string" && JSON.parse(frame).operation.op === "wait") sent.resolve();
+					return result;
+				});
+				const stale = f.client.request({ op: "wait", name: "replacement-survivor", for: "exit", timeoutMs: 5000 });
+				const staleOutcome = stale.catch((error: unknown) => error);
+				await sent.promise;
+				old.destroy();
+				await closeReceived.promise;
+				expect((await f.client.request({ op: "ping" })).op).toBe("ping");
+				expect(await staleOutcome).toBeInstanceOf(Error);
+				const current = f.client.request({
+					op: "wait",
+					name: "replacement-survivor",
+					for: "exit",
+					timeoutMs: 5000,
+				});
+				void current.catch(() => undefined);
+				closeRelease.resolve();
+				await closeDelivered.promise;
+				await f.client.request({ op: "send", name: "replacement-survivor", data: "finish\n" });
+				const result = await current;
+				if (result.op !== "wait") throw new Error("Expected replacement wait");
+				expect(result.timedOut).toBe(false);
+				expect(result.daemon.state).toBe("exited");
+			} finally {
+				gate.release();
+				closeRelease.resolve();
+				await first.catch(() => undefined);
+			}
+		}));
+	test.each(["abort", "close"] as const)("%s after native binding sends no operation", boundary =>
+		withBroker(async f => {
+			const consumer = await clients.createDaemonBrokerClient(f.projectDir, { runtimeDir: f.runtimeDir });
+			const gate = holdConnection();
+			const controller = new AbortController();
+			const cancelled = consumer.request({ op: "list" }, controller.signal);
+			const outcome = cancelled.catch((error: unknown) => error);
+			const connection = await gate.connected;
+			const start = connection.start.bind(connection);
+			vi.spyOn(connection, "start").mockImplementation((onLine, onClose) => {
+				start(onLine, onClose);
+				if (boundary === "abort") controller.abort();
+				else consumer.close();
+			});
+			const frames: string[] = [];
+			const send = connection.send.bind(connection);
+			vi.spyOn(connection, "send").mockImplementation(frame => {
+				if (typeof frame === "string") frames.push(frame);
+				return send(frame);
+			});
+			try {
+				gate.release();
+				const error = await outcome;
+				expect(error).toBeInstanceOf(Error);
+				if (!(error instanceof Error)) throw new Error("Expected cancellation or close after binding");
+				expect(error.message).toContain(boundary === "abort" ? "request aborted" : "client is closed");
+				expect(frames).toEqual([]);
+				expect(connection.closed).toBe(boundary === "close");
+				if (boundary === "abort") expect((await consumer.request({ op: "ping" })).op).toBe("ping");
+				else await expect(consumer.request({ op: "ping" })).rejects.toThrow("client is closed");
+				expect((await f.client.request({ op: "ping" })).op).toBe("ping");
+			} finally {
+				controller.abort();
+				consumer.close();
+				gate.release();
+				await cancelled.catch(() => undefined);
+			}
+		}),
+	);
+	test("a native send dropped at close rejects before the delayed close callback", () =>
+		withBroker(async f => {
+			const gate = holdConnection();
+			const first = f.client.request({ op: "ping" });
+			void first.catch(() => undefined);
+			const connection = await gate.connected;
+			const closeRelease = Promise.withResolvers<void>();
+			const start = connection.start.bind(connection);
+			vi.spyOn(connection, "start").mockImplementation((onLine, onClose) =>
+				start(onLine, reason => {
+					void closeRelease.promise.then(() => onClose(reason));
+				}),
+			);
+			try {
+				gate.release();
+				await first;
+				const send = connection.send.bind(connection);
+				let dropped: boolean | undefined;
+				vi.spyOn(connection, "send").mockImplementationOnce(frame => {
+					connection.destroy();
+					dropped = send(frame);
+					return dropped;
+				});
+				const request = f.client.request({ op: "list" });
+				const outcome = request.catch((error: unknown) => error);
+				const error = await beforeRelease(closeRelease.resolve, outcome);
+				expect(dropped).toBe(false);
+				expect(error).toBeInstanceOf(Error);
+				if (!(error instanceof Error)) throw new Error("Expected dropped request failure");
+				expect(error.message).toContain("connection closed");
+				expect((await f.client.request({ op: "ping" })).op).toBe("ping");
+			} finally {
+				gate.release();
+				closeRelease.resolve();
+				await first.catch(() => undefined);
+			}
+		}));
+	test("native backpressure still delivers a large service input exactly once", () =>
+		withBroker(async f => {
+			const gate = holdConnection();
+			const first = f.client.request({ op: "ping" });
+			void first.catch(() => undefined);
+			const connection = await gate.connected;
+			try {
+				gate.release();
+				await first;
+				await f.client.request({
+					op: "start",
+					owner: f.owner,
+					spec: {
+						name: "large-input",
+						application: process.execPath,
+						args: [
+							"-e",
+							"let input = ''; console.log('ready'); process.stdin.on('data', chunk => { input += chunk; if (input.endsWith('finish\\n')) { console.log('received:' + (input.length - 7)); process.exit(0); } });",
+						],
+						env: {},
+						cwd: f.projectDir,
+						pty: false,
+						ready: { log: "ready", timeoutMs: 5000 },
+						restart: "no",
+						persist: false,
+						detached: false,
+					},
+				});
+				const payload = "x".repeat(600 * 1024);
+				const secondPayload = "y".repeat(600 * 1024);
+				const backpressure: boolean[] = [];
+				const send = connection.send.bind(connection);
+				vi.spyOn(connection, "send").mockImplementation(frame => {
+					const accepted = send(frame);
+					if (typeof frame === "string") {
+						const data = JSON.parse(frame).operation.data;
+						if (data === payload || data === secondPayload) backpressure.push(accepted);
+					}
+					return accepted;
+				});
+				// A small ping corks this batch so large frames cannot take native's
+				// direct-write path. Each stays below the broker's 1 MiB request cap,
+				// while both resume before uncork and queue over 1 MiB.
+				const [ping, firstSent, secondSent] = await Promise.all([
+					f.client.request({ op: "ping" }),
+					f.client.request({ op: "send", name: "large-input", data: payload }),
+					f.client.request({ op: "send", name: "large-input", data: secondPayload }),
+				]);
+				expect(ping.op).toBe("ping");
+				expect(firstSent.op).toBe("send");
+				expect(secondSent.op).toBe("send");
+				expect(backpressure).toEqual([true, false]);
+				await f.client.request({ op: "send", name: "large-input", data: "finish\n" });
+				const exited = await f.client.request({ op: "wait", name: "large-input", for: "exit", timeoutMs: 5000 });
+				if (exited.op !== "wait") throw new Error("Expected real exit");
+				expect(exited.timedOut).toBe(false);
+				const logs = await f.client.request({
+					op: "logs",
+					name: "large-input",
+					lines: 10,
+					head: false,
+					follow: false,
+					timeoutMs: 0,
+				});
+				if (logs.op !== "logs") throw new Error("Expected real child output");
+				expect(logs.text).toContain(`received:${payload.length + secondPayload.length}`);
+			} finally {
+				gate.release();
+				await first.catch(() => undefined);
+			}
+		}));
+	test("late completion sink failure cannot close the replacement native connection", () =>
+		withBroker(async f => {
+			const gate = holdConnection();
+			const first = f.client.request({ op: "ping" });
+			void first.catch(() => undefined);
+			const old = await gate.connected;
+			const received = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const unregister = f.client.onCompletion(f.owner, async () => {
+				received.resolve();
+				await release.promise;
+				throw new Error("Delayed completion delivery failed");
+			});
+			try {
+				gate.release();
+				await first;
+				await startOwned(f, "old-sink");
+				await f.client.request({ op: "send", name: "old-sink", data: "finish\n" });
+				await received.promise;
+				old.destroy();
+				expect((await f.client.request({ op: "ping" })).op).toBe("ping");
+				unregister();
+				await startOwned(f, "new-sink");
+				const current = f.client.request({ op: "wait", name: "new-sink", for: "exit", timeoutMs: 5000 });
+				void current.catch(() => undefined);
+				await f.client.request({ op: "ping" });
+				release.resolve();
+				expect((await f.client.request({ op: "ping" })).op).toBe("ping");
+				await f.client.request({ op: "send", name: "new-sink", data: "finish\n" });
+				const exited = await current;
+				if (exited.op !== "wait") throw new Error("Expected real replacement wait");
+				expect(exited.timedOut).toBe(false);
+				expect(exited.daemon.state).toBe("exited");
+			} finally {
+				unregister();
+				gate.release();
+				release.resolve();
+				await first.catch(() => undefined);
+			}
 		}));
 	test("hung-discovery-does-not-block-local-job", () =>
 		withBroker(async f => {
