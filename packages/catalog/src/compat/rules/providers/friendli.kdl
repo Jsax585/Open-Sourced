@@ -1,0 +1,37 @@
+// Wire-only contract; catalog discovery and authentication are separate.
+provider "friendli" {
+	on-api "openai-completions" {
+		thinking-format "qwen-chat-template"
+		// Unknown sparse specs expose no invented effort ladder. Explicit
+		// discovery/custom metadata remains authoritative in the model builder.
+		thinking-efforts
+		when-thinking {
+			thinking-format "openai"
+			extra-body {
+				chat_template_kwargs {
+					enable_thinking #true
+				}
+			}
+		}
+	}
+}
+
+class "glm" {
+	on "friendli" {
+		on-api "openai-completions" {
+			revision ">=5.2 <5.3" {
+				thinking-efforts "high" "max"
+				supports-reasoning-effort #true
+			}
+			revision ">=5.3" {
+				thinking-efforts "low" "high" "max"
+				supports-reasoning-effort #true
+				thinking-requires-effort #true
+				reasoning-disable-mode "lowest-effort"
+				when-thinking {
+					thinking-format "openai"
+				}
+			}
+		}
+	}
+}
