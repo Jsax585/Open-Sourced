@@ -44,7 +44,10 @@ async function allowedRoots(
 	surface: "skills" | "mcp" | "other",
 ): Promise<{ roots: ClaudePluginRoot[]; warnings: string[] }> {
 	const { roots, warnings } = await listClaudePluginRoots(ctx.home, ctx.cwd);
-	const userEnabled = isUserSourceEnabled("claude-plugins", ctx) || isUserSourceEnabled("claude", ctx);
+	// A skills-only opt-in (`skills.enableClaudeUser`) admits ~/.claude/skills, not the plugin tree, so the
+	// per-session opt-ins must not satisfy the provider-level gate here.
+	const providerCtx: LoadContext = { ...ctx, optedInUserSources: undefined };
+	const userEnabled = isUserSourceEnabled("claude-plugins", providerCtx) || isUserSourceEnabled("claude", providerCtx);
 	const scopedRoots = userEnabled ? roots : roots.filter(root => root.scope === "project" || root.origin !== "claude");
 	const flags = await Promise.all(scopedRoots.map(root => legacyProviderAllowed(root.path, surface)));
 	return { roots: scopedRoots.filter((_, i) => flags[i]), warnings };
