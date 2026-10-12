@@ -5,6 +5,7 @@
 ### Added
 
 - Added `todo.sticky` setting (default on). Turn it off to stop pinning the todo list above the editor so it scrolls away with the transcript ([#14981](https://github.com/can1357/oh-my-pi/pull/14981) by [@lockwo](https://github.com/lockwo))
+- Added a Copy button that leads the turn footer under an answer in Tern (`⧉ · 2m13s · 71K tok · $0.85 this turn`, in place of the clock), which copies that answer
 
 ## [18.10.0] - 2026-10-12
 
