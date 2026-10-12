@@ -9,6 +9,7 @@
 ### Fixed
 
 - Failed subagent results now include a `<resume>` line with the `agent://<id>` to message, so the parent can continue the same child instead of redoing the work. Cancelled results use the same single `<resume>` line instead of a suffix on the abort reason. The hint is omitted when the caller cannot message peers, and `omp agents unpack` keeps a bundled agent's `steps`.
+- Added a Copy button that leads the turn footer under an answer in Tern (`⧉ · 2m13s · 71K tok · $0.85 this turn`, in place of the clock), which copies that answer
 
 ## [18.10.0] - 2026-10-12
 
