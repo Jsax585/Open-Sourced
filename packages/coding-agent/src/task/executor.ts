@@ -577,6 +577,8 @@ export interface ExecutorOptions {
 	 * passes its own `getAgentId()`).
 	 */
 	parentAgentId?: string;
+	/** Same-type siblings share a cache route without sharing conversation state. */
+	parentPromptCacheKey?: string;
 	/**
 	 * Keep the finished subagent addressable in the registry for IRC/revival.
 	 * Defaults to true. Eval bridge agents are programmatic one-shot helpers and
@@ -2347,7 +2349,9 @@ const PROMPT_DISPATCH_IDLE_TIMEOUT_MS = 5_000;
 class PromptDispatchError extends Error {}
 
 /**
- * Drive one assignment through a live session: send the prompt, wait for idle,
+ * Drive one assignment through a live session: send the prompt (with `restore`,
+ * go on with the turn the previous process left unfinished instead:
+ * {@link AgentSession.restoreInterruptedTurn}), wait for idle,
  * remind the agent to `yield` (up to {@link MAX_YIELD_RETRIES} times), then
  * classify the terminal assistant state. A soft-budget stop short-circuits the
  * reminder ladder into a single forced final yield so partial findings still
@@ -2370,9 +2374,11 @@ async function driveSessionToResult(
 		 * while backing off. Absent, the busy error keeps the old path.
 		 */
 		onPromptBusy?: () => Promise<void>;
+		/** Go on with the interrupted turn instead of sending `task`, which only labels the run. */
+		restore?: boolean;
 	} = {},
 ): Promise<DriveOutcome> {
-	const { solutionSpace, onPromptBusy } = options;
+	const { solutionSpace, onPromptBusy, restore } = options;
 	const structured = options.structured !== false;
 	using _keepalive = new EventLoopKeepalive();
 	const abortSignal = monitor.abortSignal;
@@ -2455,7 +2461,8 @@ async function driveSessionToResult(
 			let promptAttempts = 0;
 			for (;;) {
 				try {
-					await dispatchPrompt(task, { attribution: "agent", solutionSpace }, "initial prompt");
+					if (restore) await awaitAbortable(session.restoreInterruptedTurn());
+					else await dispatchPrompt(task, { attribution: "agent", solutionSpace }, "initial prompt");
 					break;
 				} catch (error) {
 					promptAttempts++;
@@ -3504,8 +3511,13 @@ export interface FollowUpTurnOptions {
 	id: string;
 	/** Agent definition the session was originally spawned with (drives progress labels + finalize). */
 	agent: AgentDefinition;
-	/** The follow-up message; sent as the turn's user prompt. */
+	/** The follow-up message; sent as the turn's user prompt (with {@link restore}, only the run's label). */
 	message: string;
+	/**
+	 * Go on with the turn the previous process left unfinished instead of sending
+	 * `message` (`omp --restore`: {@link AgentSession.restoreInterruptedTurn}).
+	 */
+	restore?: boolean;
 	index?: number;
 	description?: string;
 	/** Explicit pre-expansion model role alias retained from the original run. */
@@ -3536,7 +3548,8 @@ export interface FollowUpTurnOptions {
 
 /**
  * Continue a previously spawned (keep-alive) subagent with one more monitored
- * turn: revive it if parked, send `message` as a real prompt, drive it to
+ * turn: revive it if parked, send `message` as a real prompt (or, with
+ * `restore`, go on with its interrupted turn), drive it to
  * `yield`, and finalize a {@link SingleResult} exactly like a first run.
  *
  * The session's full conversation history is retained (live session, or JSONL
@@ -3648,6 +3661,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 	try {
 		outcome = await driveSessionToResult(session, monitor, message, {
 			structured,
+			restore: options.restore,
 			onPromptBusy: async () => {
 				attemptUnsubscribe();
 				logger.debug("Subagent follow-up lost the prompt race to an IRC wake; backing off", { id });
@@ -3764,6 +3778,7 @@ function buildSubagentSessionOptions(
 	const customTools = spec.options.customTools ?? [];
 	return {
 		...spec.options,
+		taskPromptCacheKey: launch ? spec.options.taskPromptCacheKey : undefined,
 		mcpTools: mcpTools.length > 0 ? mcpTools : undefined,
 		customTools: customTools.length > 0 ? customTools : undefined,
 		settings,
@@ -4378,6 +4393,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// prompt, artifacts dir) — only the SessionManager and settings differ.
 			const sessionSpec: SubagentSessionSpec = {
 				options: {
+					taskPromptCacheKey:
+						options.parentPromptCacheKey === undefined
+							? undefined
+							: `${options.parentPromptCacheKey}:${agent.name}`,
 					cwd: worktree ?? cwd,
 					additionalDirectories: worktree !== undefined ? undefined : options.additionalDirectories,
 					authStorage,
