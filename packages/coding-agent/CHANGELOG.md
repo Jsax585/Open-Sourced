@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an opt-in `live_delegation` extension hook and Jev-backed live voice shortcut example for bounded agent-status, model and cancel commands ([#15429](https://github.com/can1357/oh-my-pi/pull/15429) by [@kvnloo](https://github.com/kvnloo)).
+
 ## [18.10.0] - 2026-10-12
 
 ### Added
