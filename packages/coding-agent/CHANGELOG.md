@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Model presets now save and switch role fallback chains, so switching to a preset no longer keeps the previous setup's fallbacks
+
 ## [18.10.1] - 2026-10-12
 
 ### Added
