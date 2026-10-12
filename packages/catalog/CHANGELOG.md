@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+## [18.10.0] - 2026-10-12
+
+### Changed
+
+- Raised the default context window for `openai-codex/gpt-6.1-sol` and `gpt-6.1-sol-wm` from 272K to 500K, matching OpenAI's new Codex default; extended context still opens 922K ([#15421](https://github.com/can1357/oh-my-pi/issues/15421))
+
+## [18.9.2] - 2026-10-11
+
+### Removed
+
+- Removed `parseCloudflareAiGatewayCredential`, `serializeCloudflareAiGatewayCredential`, and `CloudflareAiGatewayCredential` from `@oh-my-pi/pi-catalog/wire/cloudflare-ai-gateway`. Use the equivalents from `@oh-my-pi/pi-catalog/wire/cloudflare` instead.
+
+## [18.9.1] - 2026-10-11
+
+### Added
+
+- Added the `supports-thinking-binding-controls` axis to Bedrock Converse models (on by default) so a rule or `models.yml` override can turn off Claude thinking-binding controls on hosts that reject them ([#15316](https://github.com/can1357/oh-my-pi/pull/15316) by [@harshaygadekar](https://github.com/harshaygadekar))
+
+## [18.9.0] - 2026-10-11
+
+### Fixed
+
+- Fixed GLM-5.3-FlashX on Zhipu Coding Plan so bundled context, image, and reasoning-level capabilities are reported correctly.
+- Fixed OpenRouter Decisions endpoint derivation when the chat base URL has a trailing slash.
+- Fixed GPT-6.1 Sol Ultrafast usage pricing to apply OpenAI's published premium rates for the OpenAI API and Codex included usage.
+- Fixed GPT-6 Sol, GPT-6.1 Sol, and GPT-6 Luna so changing reasoning effort preserves prompt caching.
+
+## [18.8.8] - 2026-10-10
+
+### Added
+
+- Added the `connection-bound-native-history` rule axis for Responses hosts that reject native history items from an earlier connection, set for GitHub Copilot ([#15148](https://github.com/can1357/oh-my-pi/pull/15148) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Fixed
+
+- Fixed Devin's discovered models not marking the account's default model, the one Devin's own CLI starts the account on (SWE-2 High on Pro, SWE-1.6 Slow on Free); when it is an effort lane of a family, the family starts at that effort. Cursor's discovered models no longer carry that marker, so Cursor keeps its existing startup selection ([#15115](https://github.com/can1357/oh-my-pi/pull/15115) by [@will-bogusz](https://github.com/will-bogusz))
+
+## [18.8.7] - 2026-10-09
+
+### Added
+
+- Added built-in CoralBricks support with `/login`, live model discovery, per-model reasoning levels and off controls, and bundled offline fallbacks. ([#14146](https://github.com/can1357/oh-my-pi/pull/14146) by [@ryan-brosas](https://github.com/ryan-brosas))
+- Added `gen:models --provider <id>` to update one provider without changing other providers' catalog snapshots. ([#14146](https://github.com/can1357/oh-my-pi/pull/14146) by [@ryan-brosas](https://github.com/ryan-brosas))
+
 ### Fixed
 
 - Fixed Claude Haiku 5.5 thinking Off to request explicitly disabled thinking on every host serving its adaptive thinking ([#14996](https://github.com/can1357/oh-my-pi/pull/14996) by [@bse-ai](https://github.com/bse-ai)).
