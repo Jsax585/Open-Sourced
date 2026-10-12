@@ -12678,13 +12678,16 @@ export class AgentSession implements SettingsScope {
 		coordinator: CodexAutoRedeemCoordinator,
 	): Promise<ApprovedResetAction[]> {
 		const asked = actions.filter(action => shouldPromptCodexAutoRedeem(action.autoRedeem));
-		const providerMode = (provider === "anthropic" ? cfgClaudeResetsAutoRedeem : cfgCodexResetsAutoRedeem).get(
-			this.settings,
-		);
-		// Plan order, with each `unset` action replaced by its approved spend or dropped.
-		const approve = (spends: readonly (CodexResetAction | ClaudeResetAction)[]): ApprovedResetAction[] =>
+		const autoRedeemSetting = provider === "anthropic" ? cfgClaudeResetsAutoRedeem : cfgCodexResetsAutoRedeem;
+		const providerMode = autoRedeemSetting.get(this.settings);
+		// Plan order: an action whose account resolves to `yes` spends without asking, an
+		// `unset` one is replaced by its approved spend or dropped.
+		const approve = (
+			spends: readonly (CodexResetAction | ClaudeResetAction)[],
+			enabled: readonly (CodexResetAction | ClaudeResetAction)[] = [],
+		): ApprovedResetAction[] =>
 			actions.flatMap((action): ApprovedResetAction[] => {
-				if (!shouldPromptCodexAutoRedeem(action.autoRedeem))
+				if (!shouldPromptCodexAutoRedeem(action.autoRedeem) || enabled.includes(action))
 					return [{ action, approvedUnder: "yes", providerMode }];
 				const spend = spends.find(candidate => candidate.attemptKey === action.attemptKey);
 				return spend ? [{ action: spend, approvedUnder: "unset", providerMode }] : [];
@@ -12758,7 +12761,12 @@ export class AgentSession implements SettingsScope {
 		} catch (error) {
 			logger.warn(`${source} prompt failed`, { error: String(error) });
 		}
-		return approve([]);
+		// Without a Yes, a listed account whose policy turned auto-redeem on while the prompt
+		// waited still spends without asking.
+		return approve(
+			[],
+			asked.filter(action => this.#resetAccountPolicy(provider, action.target)?.autoRedeem === true),
+		);
 	}
 
 	/** Spend every planned action whose account resolves to `yes`, and the confirmed `unset` ones. */

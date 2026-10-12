@@ -1173,6 +1173,32 @@ describe("Claude saved-reset trigger integration", () => {
 		},
 	);
 
+	it.each([
+		{ outcome: "answered No", answer: "No", saved: "no" },
+		{ outcome: "dismissed", answer: undefined, saved: "unset" },
+	] as const)(
+		"spends a listed account whose policy turns auto-redeem on while the prompt waits ($outcome)",
+		async ({ answer, saved }) => {
+			const { session, coordinator, targets } = buildSession({
+				...salvageCase(),
+				autoRedeem: null,
+				consent: async () => {
+					authStorage.setAccountPolicies(accountPolicies(true));
+					return answer;
+				},
+			});
+			try {
+				await session.fetchUsageReports();
+				await coordinator.sweepPromise;
+			} finally {
+				authStorage.setAccountPolicies({ accountPolicies: [], defaultReservePct: DEFAULT_USAGE_RESERVE_PCT });
+			}
+
+			expect(cfgClaudeResetsAutoRedeem.get(session.settings)).toBe(saved);
+			expect(targets).toMatchObject([{ credentialId: CREDENTIAL_ID }]);
+		},
+	);
+
 	it("does not restore a stored organization whose policy turns auto-redeem off when its listing spells the email differently", async () => {
 		const { session, targets } = buildSession({ report: null, status: claudeStatus(true), streamErrorFirst: true });
 		mockSchedulerWaitWithClock();
