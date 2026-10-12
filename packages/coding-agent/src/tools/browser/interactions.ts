@@ -640,9 +640,9 @@ export async function uploadFilesToElement(
 		}),
 	)) as { tag: string; type: string };
 	if (inputType.tag === "INPUT" && inputType.type.toLowerCase() === "file") {
-		await untilAborted(signal, () =>
-			(handle as unknown as { uploadFile: (...paths: string[]) => Promise<void> }).uploadFile(...absolutePaths),
-		);
+		// Puppeteer's own method: an actionable handle's `uploadFile` routes back here.
+		const setInputFiles = Object.getPrototypeOf(handle).uploadFile as (...paths: string[]) => Promise<void>;
+		await untilAborted(signal, () => setInputFiles.call(handle, ...absolutePaths));
 		return;
 	}
 

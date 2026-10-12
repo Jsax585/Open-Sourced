@@ -683,6 +683,7 @@ export function toActionableHandle(
 	handle: ElementHandle,
 	guard?: HandleOpGuard,
 	invalidate?: () => Promise<void>,
+	uploadFiles?: (filePaths: string[], signal: AbortSignal) => Promise<void>,
 ): ActionableHandle {
 	const enriched = handle as HandleWithRawMethods;
 	const methods = enriched as unknown as Partial<Record<GuardedHandleMethod, RawHandleMethod>>;
@@ -838,6 +839,20 @@ export function toActionableHandle(
 				invalidate,
 			),
 		);
+	if (uploadFiles) {
+		// Same chooser and drop-zone handling as `tab.uploadFile()`, not Puppeteer's input-only method.
+		enriched.uploadFile = (...filePaths: string[]) =>
+			guard<void>("handle.uploadFile()", signal =>
+				runGuardedHandleAction(
+					enriched,
+					originals,
+					"handle.uploadFile()",
+					signal,
+					() => uploadFiles(filePaths, signal),
+					invalidate,
+				),
+			);
+	}
 	return enrichElementQueries(enriched, guard);
 }
 
@@ -2120,6 +2135,16 @@ export class WorkerCore {
 					// cached handle and stop navigation before reporting a recoverable timeout.
 					this.#clearElementCache();
 					await this.#stopLoading();
+				},
+				async (filePaths, sig) => {
+					if (!filePaths.length) throw new ToolError("handle.uploadFile() requires at least one file path");
+					await uploadFilesToElement(
+						page,
+						handle,
+						filePaths.map(filePath => resolveToCwd(filePath, session.cwd)),
+						"handle.uploadFile()",
+						sig,
+					);
 				},
 			);
 		return {
