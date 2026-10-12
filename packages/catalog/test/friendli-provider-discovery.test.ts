@@ -99,6 +99,20 @@ describe("Friendli discovery deployment contract", () => {
 		expect(live.cost.cacheRead).toBe(0);
 	});
 
+	test("sparse custom Friendli deployments do not collide with DeepSeek or MiniMax lineage ladders", () => {
+		for (const id of ["deepseek-ai/DeepSeek-V3.2", "MiniMaxAI/MiniMax-M2.5"]) {
+			for (const thinking of [undefined, { mode: "effort" as const, efforts: [Effort.High] }]) {
+				const model = buildModel({
+					...seedModels<"openai-completions">("friendli")[0],
+					id,
+					provider: "custom-friendli",
+					thinking,
+				});
+				expect(getSupportedEfforts(model)).toEqual(thinking?.efforts ?? []);
+			}
+		}
+	});
+
 	test("the generated fallback agrees with its authored seed and leaves other provider seeds present", () => {
 		const entry = providerEntry("friendli");
 		if (!entry) throw new Error("Missing Friendli provider");

@@ -20,7 +20,10 @@ provider "friendli" {
 	thinking-format "qwen-chat-template"
 	reasoning-disable-mode "qwen-template-false"
 	thinking-mode "effort"
-	thinking-efforts
+	// Override lineage-only ladders without raising the priority of wire policy.
+	on-api "openai-completions" priority=1 {
+		thinking-efforts
+	}
 	class "glm" {
 		revision ">=5.2 <5.3" {
 			supports-reasoning-effort #true
