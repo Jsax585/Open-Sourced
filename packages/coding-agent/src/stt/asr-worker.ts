@@ -30,9 +30,11 @@ import type { SttTransport, SttWorkerInbound } from "./asr-protocol";
 import { type EndpointerEvent, StreamEndpointer } from "./endpointer";
 import {
 	getSttModelSpec,
+	isSherpaModelFilePresent,
 	type SherpaSttModelSpec,
 	type SttModel,
 	type SttModelKey,
+	sherpaModelFilePath,
 	type TransformersSttModelSpec,
 } from "./models";
 import { loadSourceSherpaRuntime, type SherpaOfflineRecognizer, type SherpaRuntime } from "./sherpa-runtime";
@@ -320,19 +322,13 @@ async function ensureSherpaModelFiles(
 	transport: SttTransport,
 	requestId: string,
 ): Promise<{ encoder: string; decoder: string; joiner: string; tokens: string }> {
-	const dir = path.join(getTinyModelsCacheDir(), spec.repo);
 	const resolved = {} as { encoder: string; decoder: string; joiner: string; tokens: string };
 	for (const role in spec.files) {
 		const key = role as keyof typeof spec.files;
-		const filename = spec.files[key];
-		const dest = path.join(dir, filename);
-		const present = await fs
-			.stat(dest)
-			.then(stats => stats.size > 0)
-			.catch(() => false);
-		if (!present) {
+		const dest = sherpaModelFilePath(spec, key);
+		if (!(await isSherpaModelFilePresent(dest))) {
 			await fs.mkdir(path.dirname(dest), { recursive: true });
-			await downloadSherpaFile(spec.repo, filename, dest, modelKey, transport, requestId);
+			await downloadSherpaFile(spec.repo, spec.files[key], dest, modelKey, transport, requestId);
 		}
 		resolved[key] = dest;
 	}

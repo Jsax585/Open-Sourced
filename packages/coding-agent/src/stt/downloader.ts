@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { getTinyModelsCacheDir } from "@oh-my-pi/pi-utils";
 import { sttClient } from "./asr-client";
 import type { SttProgressStatus } from "./asr-protocol";
-import { resolveSttModelSpec } from "./models";
+import { isSherpaModelFilePresent, resolveSttModelSpec, sherpaModelFilePath } from "./models";
 
 export interface DownloadProgress {
 	stage: string;
@@ -48,18 +48,14 @@ export interface SttDownloadProgress {
  */
 export async function isSttModelCached(key: string): Promise<boolean> {
 	const spec = resolveSttModelSpec(key);
-	const repoDir = path.join(getTinyModelsCacheDir(), spec.repo);
 	if (spec.engine === "sherpa") {
 		for (const role in spec.files) {
-			const file = path.join(repoDir, spec.files[role as keyof typeof spec.files]);
-			const present = await fs
-				.stat(file)
-				.then(stats => stats.size > 0)
-				.catch(() => false);
-			if (!present) return false;
+			const file = sherpaModelFilePath(spec, role as keyof typeof spec.files);
+			if (!(await isSherpaModelFilePresent(file))) return false;
 		}
 		return true;
 	}
+	const repoDir = path.join(getTinyModelsCacheDir(), spec.repo);
 	try {
 		const root = await fs.readdir(repoDir);
 		if (!root.includes("config.json")) return false;

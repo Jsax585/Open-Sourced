@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added Orukeet (`local/orukeet`), a fine-tuned Parakeet TDT v3, as a local dictation model; select it in `/model` → Roles → dictation or `omp setup speech`
+- Added Orukeet (`local/orukeet`), a fine-tuned Parakeet TDT v3, as a local dictation model; select it in `/model` → Roles → dictation or `omp setup speech` ([#15450](https://github.com/can1357/oh-my-pi/pull/15450) by [@roberts-pumpurs](https://github.com/roberts-pumpurs))
 
 ## [18.10.1] - 2026-10-12
 

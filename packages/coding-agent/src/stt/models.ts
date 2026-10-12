@@ -1,3 +1,6 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { getTinyModelsCacheDir } from "@oh-my-pi/pi-utils";
 import type { TinyModelDtype } from "../tiny/dtype";
 
 /**
@@ -115,8 +118,7 @@ export const STT_MODELS = [
 		},
 		englishOnly: false,
 		label: "Orukeet (Parakeet fine-tune)",
-		description:
-			"Oruk's fine-tune of Parakeet TDT 0.6B v3, same 25 languages. Lower word error rate than Parakeet on 61 of 74 published test splits.",
+		description: "Oruk's fine-tune of Parakeet TDT 0.6B v3, same 25 languages.",
 		sizeHint: "~670 MB",
 	},
 ] as const satisfies readonly SttModelSpec[];
@@ -166,4 +168,21 @@ export function getSttModelSpec(key: string): SttModel | undefined {
 /** Resolve a catalog model id, falling back to the SoTA default when unknown. */
 export function resolveSttModelSpec(key: string | undefined): SttModel {
 	return (key !== undefined ? getSttModelSpec(key) : undefined) ?? getSttModelSpec(DEFAULT_STT_MODEL_KEY)!;
+}
+
+/** Cache path of one sherpa model file; the cache mirrors the file's repo-relative path. */
+export function sherpaModelFilePath(spec: SherpaSttModelSpec, role: keyof SherpaSttModelSpec["files"]): string {
+	return path.join(getTinyModelsCacheDir(), spec.repo, spec.files[role]);
+}
+
+/**
+ * Whether a sherpa model file is ready to load: present and non-empty. Shared by
+ * the preflight cache check and the worker so both agree on "downloaded"; the
+ * `.part` sidecar of an interrupted fetch never matches.
+ */
+export function isSherpaModelFilePresent(file: string): Promise<boolean> {
+	return fs
+		.stat(file)
+		.then(stats => stats.size > 0)
+		.catch(() => false);
 }
