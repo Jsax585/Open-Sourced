@@ -10,10 +10,10 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { IsoBackendKind } from "@oh-my-pi/pi-natives";
+import type { IsoBackendKind, VcsGitRepo } from "@oh-my-pi/pi-natives";
 import type { VcsWorktreeAddResult } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { getWorktreeDir, hashPath, logger } from "@oh-my-pi/pi-utils";
+import { getWorktreeDir, hashPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { Settings } from "../config/settings";
 import { formatIsolationBackend, parseIsolationBackend } from "../task/worktree";
@@ -176,7 +176,7 @@ export async function createSessionWorktree(
 			await fs.rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
 			// The removal can leave its admin entry behind when the checkout was reached through another
 			// spelling of the path (/tmp vs /private/tmp); that stale entry would keep the branch checked out.
-			await removeWorktreeAdminDir(adminDir);
+			await removeWorktreeAdminDir(repository, adminDir).catch(() => undefined);
 			await repository.deleteBranch(branch, true).catch(() => false);
 		}
 		throw error;
@@ -206,10 +206,20 @@ export async function readWorktreeAdminDir(worktreePath: string): Promise<string
 /**
  * Delete one linked-worktree admin entry. Used instead of a repository-wide `git worktree prune`, which would
  * also drop unrelated entries whose checkout is temporarily absent (for example a locked portable worktree).
+ * Only a direct child of this repository's own `<commonDir>/worktrees` is removed, so a tampered `.git`
+ * pointer cannot make this delete another repository's registration. Removal failures propagate.
  */
-export async function removeWorktreeAdminDir(adminDir: string | undefined): Promise<void> {
-	if (!adminDir || path.basename(path.dirname(adminDir)) !== "worktrees") return;
-	await fs.rm(adminDir, { recursive: true, force: true }).catch(() => undefined);
+export async function removeWorktreeAdminDir(repository: VcsGitRepo, adminDir: string | undefined): Promise<void> {
+	if (!adminDir) return;
+	let owned: boolean;
+	try {
+		const worktreesDir = path.join(await fs.realpath(repository.info().commonDir), "worktrees");
+		owned = path.dirname(await fs.realpath(adminDir)) === worktreesDir;
+	} catch (error) {
+		if (isEnoent(error)) return; // Already gone.
+		throw error;
+	}
+	if (owned) await fs.rm(adminDir, { recursive: true, force: true });
 }
 
 /** State of `wt` plus a fingerprint that changes whenever any file, ref, or `HEAD` in it changes. */

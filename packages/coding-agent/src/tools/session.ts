@@ -279,7 +279,13 @@ export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolD
 		if (!removed) throw new ToolError(`Git did not remove worktree ${target}.`);
 		// The native removal deletes the checkout, then its admin entry only when both paths share one spelling
 		// (/tmp vs /private/tmp, or a symlinked repo path). Remove just this entry, never the whole repository's.
-		await removeWorktreeAdminDir(adminDir);
+		try {
+			await removeWorktreeAdminDir(repository, adminDir);
+		} catch (error) {
+			throw new ToolError(
+				`Removed the checkout ${target}, but its git registration could not be deleted: ${error instanceof Error ? error.message : String(error)}. Run \`git worktree prune\`.`,
+			);
+		}
 		return toolResult<SessionToolDetails>({ op: "worktree_remove", path: target })
 			.text(`Removed worktree ${target}. Its branch was kept.`)
 			.done();
