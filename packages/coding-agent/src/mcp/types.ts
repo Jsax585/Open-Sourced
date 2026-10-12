@@ -70,7 +70,7 @@ interface MCPServerConfigBase {
 	enabled?: boolean;
 	/**
 	 * MCP deadlines in milliseconds (default: 30000, 0 to disable). A number applies to every
-	 * phase. An object sets `startup` (connect + initialize), `catalog` (tools/prompts/resources
+	 * phase. An object sets `connect` (connect + initialize), `catalog` (tools/prompts/resources
 	 * listing) and `execution` (tool calls, prompt gets, resource reads) individually; omitted
 	 * phases fall back to the `mcp.timeout.*` settings, then 30000. OMP-specific object form:
 	 * only OMP-owned providers parse it; other providers read a plain number.

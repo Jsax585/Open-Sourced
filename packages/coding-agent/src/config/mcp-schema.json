@@ -117,7 +117,7 @@
           "description": "Whether OMP should try to connect this server."
         },
         "timeout": {
-          "description": "MCP deadlines in milliseconds. A number applies to every phase; an object sets `startup` (connect + initialize), `catalog` (listing tools, prompts, resources) and `execution` (tool calls, prompt gets, resource reads) individually, with omitted phases falling back to the `mcp.timeout.*` settings and then 30000. 0 disables a deadline.",
+          "description": "MCP deadlines in milliseconds. A number applies to every phase; an object sets `connect` (connect + initialize), `catalog` (listing tools, prompts, resources) and `execution` (tool calls, prompt gets, resource reads) individually, with omitted phases falling back to the `mcp.timeout.*` settings and then 30000. 0 disables a deadline.",
           "oneOf": [
             {
               "type": "integer",
@@ -127,7 +127,7 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "startup": {
+                "connect": {
                   "type": "integer",
                   "minimum": 0,
                   "description": "Transport connect and initialize handshake, in milliseconds."

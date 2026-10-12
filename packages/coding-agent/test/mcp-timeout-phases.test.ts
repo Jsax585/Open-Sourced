@@ -1,5 +1,5 @@
 /**
- * Each MCP phase must be bounded by its own deadline: `initialize` by `startup`, `*\/list` by
+ * Each MCP phase must be bounded by its own deadline: `initialize` by `connect`, `*\/list` by
  * `catalog`, everything else by `execution`. A fake server answers instantly except for the
  * methods listed in `stall`, which never reply, so the deadline that fires (and the phase it
  * names) identifies which timeout was applied.
@@ -69,7 +69,7 @@ async function outcome<T>(promise: Promise<T>): Promise<{ error?: Error; ms: num
 describe("MCP per-phase timeouts over Streamable HTTP", () => {
 	it("applies catalog to tools/list and execution to tools/call independently", async () => {
 		const url = startServer(new Set(["tools/list", "tools/call"]));
-		const config: MCPServerConfig = { type: "http", url, timeout: { startup: 2_000, catalog: 60, execution: 250 } };
+		const config: MCPServerConfig = { type: "http", url, timeout: { connect: 2_000, catalog: 60, execution: 250 } };
 		const connection = await connectToServer("fixture", config);
 		try {
 			const list = await outcome(listTools(connection));
@@ -85,14 +85,14 @@ describe("MCP per-phase timeouts over Streamable HTTP", () => {
 		}
 	});
 
-	it("applies startup to initialize without touching the other phases", async () => {
+	it("applies connect to initialize without touching the other phases", async () => {
 		const url = startServer(new Set(["initialize"]));
 		const result = await outcome(
-			connectToServer("fixture", { type: "http", url, timeout: { startup: 60, catalog: 2_000, execution: 2_000 } }),
+			connectToServer("fixture", { type: "http", url, timeout: { connect: 60, catalog: 2_000, execution: 2_000 } }),
 		);
 
 		expect(result.error).toBeInstanceOf(MCPConnectionTimeoutError);
-		expect(result.error?.message).toBe('Connection to MCP server "fixture" timed out after 60ms (startup timeout)');
+		expect(result.error?.message).toBe('Connection to MCP server "fixture" timed out after 60ms (connect timeout)');
 		expect(result.ms).toBeLessThan(1_000);
 	});
 
@@ -162,7 +162,7 @@ describe.skipIf(process.platform === "win32")("MCP per-phase timeouts over stdio
 		const transport = new StdioTransport({
 			command: process.execPath,
 			args: ["-e", script],
-			timeout: { startup: 2_000, catalog: 60, execution: 200 },
+			timeout: { connect: 2_000, catalog: 60, execution: 200 },
 		});
 		await transport.connect();
 		try {

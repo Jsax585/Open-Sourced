@@ -1,5 +1,5 @@
 /**
- * `timeout` accepts a bare number (every phase) or a `{ startup, catalog, execution }`
+ * `timeout` accepts a bare number (every phase) or a `{ connect, catalog, execution }`
  * object in the OMP-owned loaders. A bad value must warn with the offending key and
  * fall back, never reach a transport as NaN or a negative deadline.
  */
@@ -63,7 +63,7 @@ for (const [provider, file] of [
 					phased: {
 						command: "/bin/echo",
 						args: ["phased"],
-						timeout: { startup: 100, catalog: 200, execution: 0, connect: 5 },
+						timeout: { connect: 100, catalog: 200, execution: 0, startup: 5 },
 					},
 					negative: { command: "/bin/echo", args: ["negative"], timeout: { catalog: -1, execution: 40 } },
 					junk: { command: "/bin/echo", args: ["junk"], timeout: "soon" },
@@ -80,11 +80,11 @@ for (const [provider, file] of [
 		});
 
 		expect(configs.bare?.timeout).toBe(1500);
-		expect(configs.phased?.timeout).toEqual({ startup: 100, catalog: 200, execution: 0 });
+		expect(configs.phased?.timeout).toEqual({ connect: 100, catalog: 200, execution: 0 });
 		expect(configs.negative?.timeout).toEqual({ execution: 40 });
 		expect(configs.junk?.timeout).toBeUndefined();
 		const messages = warn.mock.calls.map(call => String(call[0]));
-		expect(messages.some(m => m.includes('unknown timeout key "connect"'))).toBe(true);
+		expect(messages.some(m => m.includes('unknown timeout key "startup"'))).toBe(true);
 		expect(messages.some(m => m.includes("invalid timeout.catalog -1"))).toBe(true);
 		expect(messages.some(m => m.includes('invalid timeout "soon"'))).toBe(true);
 	});
@@ -100,7 +100,7 @@ for (const server of [
 			validateJsonSchemaValue(mcpSchema, { mcpServers: { fixture: { ...server, timeout } } }).success;
 		expect(valid(1000)).toBe(true);
 		expect(valid({ catalog: 10, execution: 0 })).toBe(true);
-		expect(valid({ connect: 10 })).toBe(false);
+		expect(valid({ startup: 10 })).toBe(false);
 		expect(valid({ catalog: -1 })).toBe(false);
 		expect(valid({ catalog: 1.5 })).toBe(false);
 		expect(valid(-1)).toBe(false);

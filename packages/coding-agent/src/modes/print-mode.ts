@@ -241,7 +241,10 @@ async function runPrintModeCore(
 		}
 	});
 
-	const timeoutMs = resolveMCPReadinessTimeoutMs();
+	const mcpManager = options.mcpManager;
+	const timeoutMs = resolveMCPReadinessTimeoutMs(
+		mcpManager ? mcpManager.getAllServerNames().map(name => mcpManager.getServerConfig(name)?.timeout) : [],
+	);
 	let strictMCPFailure = false;
 	if (options.mcpManager) {
 		const readiness = await options.mcpManager.waitForStartup(timeoutMs);

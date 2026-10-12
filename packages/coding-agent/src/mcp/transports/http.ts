@@ -70,13 +70,13 @@ async function waitForSSERetry(ms: number, signal: AbortSignal): Promise<void> {
 /**
  * Best-effort startup deadline for the optional Streamable HTTP GET SSE listener.
  *
- * Returns `0` (disabled) when the operator has explicitly disabled the `startup`
- * timeout via `timeout: 0`, `timeout.startup: 0` or `OMP_MCP_TIMEOUT_MS=0`.
- * Otherwise caps the wait at one second and scales below short startup
- * timeouts so connect-time never exceeds the startup budget.
+ * Returns `0` (disabled) when the operator has explicitly disabled the `connect`
+ * timeout via `timeout: 0`, `timeout.connect: 0` or `OMP_MCP_TIMEOUT_MS=0`.
+ * Otherwise caps the wait at one second and scales below short connect
+ * timeouts so connect-time never exceeds the connect budget.
  */
 export function resolveSSEConnectTimeoutMs(configTimeout?: MCPTimeoutConfig): number {
-	const requestTimeout = resolveMCPTimeoutMs(configTimeout, "startup");
+	const requestTimeout = resolveMCPTimeoutMs(configTimeout, "connect");
 	if (!isMCPTimeoutEnabled(requestTimeout)) return 0;
 	const boundedTimeout = Math.min(HTTP_SSE_CONNECT_TIMEOUT_MS, Math.floor(requestTimeout / 4));
 	return Math.max(1, boundedTimeout);
@@ -900,9 +900,9 @@ export class HttpTransport implements MCPTransport {
 		}
 
 		if (this.#sessionId) {
-			// Session teardown is bounded by the startup deadline, not the (possibly
+			// Session teardown is bounded by the connect deadline, not the (possibly
 			// hours-long) execution deadline, so a dead server cannot stall close().
-			const timeout = resolveMCPTimeoutMs(this.config.timeout, "startup");
+			const timeout = resolveMCPTimeoutMs(this.config.timeout, "connect");
 			const operation = createMCPTimeout(timeout);
 			try {
 				const response = await this.#fetch(

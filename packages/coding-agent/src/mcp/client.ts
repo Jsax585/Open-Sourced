@@ -136,7 +136,7 @@ export class MCPConnectionTimeoutError extends Error {
 
 	constructor(serverName: string, timeoutMs: number) {
 		super(
-			`Connection to MCP server "${serverName}" timed out after ${describeMCPTimeout(timeoutMs)} (startup timeout)`,
+			`Connection to MCP server "${serverName}" timed out after ${describeMCPTimeout(timeoutMs)} (connect timeout)`,
 		);
 		this.name = "MCPConnectionTimeoutError";
 		this.serverName = serverName;
@@ -146,7 +146,7 @@ export class MCPConnectionTimeoutError extends Error {
 
 /**
  * Connect to an MCP server.
- * Bounded by the `startup` timeout (30 seconds by default) covering transport
+ * Bounded by the `connect` timeout (30 seconds by default) covering transport
  * connect and `initialize`. Set OMP_MCP_TIMEOUT_MS=0 to disable MCP client-side timeouts.
  */
 export async function connectToServer(
@@ -160,7 +160,7 @@ export async function connectToServer(
 ): Promise<MCPServerConnection> {
 	// `withTimeout` rejects a pre-aborted signal without observing `connect()`; never start one.
 	options?.signal?.throwIfAborted();
-	const timeoutMs = resolveMCPTimeoutMs(config.timeout, "startup");
+	const timeoutMs = resolveMCPTimeoutMs(config.timeout, "connect");
 	const timeoutError = new MCPConnectionTimeoutError(name, timeoutMs);
 	let transport: MCPTransport | undefined;
 

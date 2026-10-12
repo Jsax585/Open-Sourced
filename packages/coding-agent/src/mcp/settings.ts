@@ -5,7 +5,7 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import { setMcpRenderMarkdownResults } from "@oh-my-pi/pi-tui/tools/mcp";
 import { combine, effect, register } from "../config/registry";
-import { type MCPTimeoutPhases, setMCPGlobalTimeouts } from "./timeout";
+import { isValidTimeoutMs, MCP_TIMEOUT_PHASES, type MCPTimeoutPhases, setMCPGlobalTimeouts } from "./timeout";
 
 // MCP
 export const cfgMcpEnableProjectConfig = register({
@@ -32,8 +32,8 @@ export const cfgMcpStartupTimeoutMs = register({
 	},
 });
 
-export const cfgMcpTimeoutStartupMs = register({
-	id: "mcp.timeout.startupMs",
+export const cfgMcpTimeoutConnectMs = register({
+	id: "mcp.timeout.connectMs",
 	type: "number",
 	default: 30_000,
 	ui: {
@@ -41,7 +41,7 @@ export const cfgMcpTimeoutStartupMs = register({
 		group: "Discovery & MCP",
 		label: "MCP Connect Timeout",
 		description:
-			"Milliseconds allowed for an MCP server to connect and finish initialize; 0 disables. A server's mcp.json timeout (number or { startup }) overrides it",
+			"Milliseconds allowed for an MCP server to connect and finish initialize; 0 disables. A server's mcp.json timeout (number or { connect }) overrides it",
 	},
 });
 
@@ -71,11 +71,12 @@ export const cfgMcpTimeoutExecutionMs = register({
 	},
 });
 effect(
-	combine({ startup: cfgMcpTimeoutStartupMs, catalog: cfgMcpTimeoutCatalogMs, execution: cfgMcpTimeoutExecutionMs }),
+	combine({ connect: cfgMcpTimeoutConnectMs, catalog: cfgMcpTimeoutCatalogMs, execution: cfgMcpTimeoutExecutionMs }),
 	timeouts => {
 		const valid: MCPTimeoutPhases = {};
-		for (const [phase, value] of Object.entries(timeouts) as [keyof MCPTimeoutPhases, unknown][]) {
-			if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) valid[phase] = value;
+		for (const phase of MCP_TIMEOUT_PHASES) {
+			const value = timeouts[phase];
+			if (isValidTimeoutMs(value)) valid[phase] = value;
 			else
 				logger.warn(`Ignoring invalid mcp.timeout.${phase}Ms setting; expected a non-negative integer`, { value });
 		}

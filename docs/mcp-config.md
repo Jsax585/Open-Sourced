@@ -103,7 +103,7 @@ The config writer accepts names up to 100 characters containing letters, numbers
 Shared fields for every transport:
 
 - `enabled?: boolean` — skip this server when `false`, unless the active-profile user `enabledServers` allowlist names it
-- `timeout?: number | { startup?, catalog?, execution? }` — MCP deadlines in milliseconds; `0` disables a deadline. A number applies to every phase. The object form sets phases individually (see below). The object form is OMP-specific: configs translated from other tools read only a plain number.
+- `timeout?: number | { connect?, catalog?, execution? }` — MCP deadlines in milliseconds; `0` disables a deadline. A number applies to every phase. The object form sets phases individually (see below). The object form is OMP-specific: configs translated from other tools read only a plain number.
 - `requestIdFormat?: "number" | "string"` — outgoing JSON-RPC request-id encoding; defaults to per-transport integers. `"string"` uses collision-resistant snowflake IDs. This OMP-specific field is read only from OMP-native files, root `mcp.json` / `.mcp.json`, and OMP extension packages; configs translated from other tools ignore it.
 - `instructions?: boolean` — include server-provided instructions in the system prompt (default: `true`). Set `false` to omit that server's instructions without disabling its tools. Like `requestIdFormat`, this is OMP-specific and is ignored in configs translated from other tools.
 - `auth?: { ... }` — stored-credential metadata; managed credential injection is implemented for OAuth
@@ -117,7 +117,7 @@ Three deadlines guard different parts of the MCP lifecycle:
 
 | Phase       | `mcp.json` key | Global setting          | Guards                                                                                               |
 | ----------- | -------------- | ----------------------- | ---------------------------------------------------------------------------------------------------- |
-| `startup`   | `startup`      | `mcp.timeout.startupMs`   | Transport connect, the `initialize` request and the `initialized` notification                       |
+| `connect`   | `connect`      | `mcp.timeout.connectMs`   | Transport connect, the `initialize` request and the `initialized` notification                       |
 | `catalog`   | `catalog`      | `mcp.timeout.catalogMs`   | `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`                           |
 | `execution` | `execution`    | `mcp.timeout.executionMs` | `tools/call`, `prompts/get`, `resources/read`, subscriptions and every other request                 |
 
@@ -126,7 +126,7 @@ Three deadlines guard different parts of the MCP lifecycle:
   "mcpServers": {
     "slow-index": {
       "command": "slow-index-mcp",
-      "timeout": { "startup": 60000, "execution": 600000 }
+      "timeout": { "connect": 60000, "execution": 600000 }
     },
     "quick": { "command": "quick-mcp", "timeout": 10000 }
   }
@@ -135,7 +135,7 @@ Three deadlines guard different parts of the MCP lifecycle:
 
 Each phase resolves, highest precedence first: `OMP_MCP_TIMEOUT_MS` (every phase, every server), the server's `timeout` (a number, or that phase's key), the `mcp.timeout.*Ms` setting, then 30 seconds. Values must be non-negative integers; `0` disables that deadline. An invalid value is logged with the offending key and ignored, and unknown keys inside a `timeout` object are logged and ignored, so one typo never changes the other phases.
 
-A timeout error names the phase and method that expired, for example `Request timeout after 60ms (catalog timeout, tools/list)`, so you know which key to raise. Closing an HTTP session (the `DELETE` sent on disconnect) uses the `startup` deadline, so a very long `execution` deadline cannot stall shutdown. Set `OMP_MCP_TIMEOUT_MS=0` to disable every client-side deadline, or to a positive millisecond value such as `120000`; invalid values are logged and ignored.
+A timeout error names the phase and method that expired, for example `Request timeout after 60ms (catalog timeout, tools/list)`, so you know which key to raise. Closing an HTTP session (the `DELETE` sent on disconnect) uses the `connect` deadline, so a very long `execution` deadline cannot stall shutdown. Set `OMP_MCP_TIMEOUT_MS=0` to disable every client-side deadline, or to a positive millisecond value such as `120000`; invalid values are logged and ignored.
 
 These request deadlines also govern subagent MCP calls over borrowed parent connections. The proxy adds no independent timeout; caller cancellation still stops the subagent's wait.
 

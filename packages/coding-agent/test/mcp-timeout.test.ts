@@ -27,19 +27,19 @@ describe("MCP timeout configuration", () => {
 	test("uses the default timeout when no config or env override is set", () => {
 		delete process.env.OMP_MCP_TIMEOUT_MS;
 
-		expect(resolveMCPTimeoutMs()).toBe(30_000);
+		expect(resolveMCPTimeoutMs(undefined, "execution")).toBe(30_000);
 	});
 
 	test("uses per-server timeout when env override is unset", () => {
 		delete process.env.OMP_MCP_TIMEOUT_MS;
 
-		expect(resolveMCPTimeoutMs(120_000)).toBe(120_000);
+		expect(resolveMCPTimeoutMs(120_000, "execution")).toBe(120_000);
 	});
 
 	test("allows the env override to disable MCP client-side timeouts", () => {
 		process.env.OMP_MCP_TIMEOUT_MS = "0";
 
-		const timeout = resolveMCPTimeoutMs(30_000);
+		const timeout = resolveMCPTimeoutMs(30_000, "execution");
 		expect(timeout).toBe(0);
 		expect(isMCPTimeoutEnabled(timeout)).toBe(false);
 	});
@@ -47,7 +47,7 @@ describe("MCP timeout configuration", () => {
 	test("allows the env override to set one timeout for every server", () => {
 		process.env.OMP_MCP_TIMEOUT_MS = "180000";
 
-		expect(resolveMCPTimeoutMs(30_000)).toBe(180_000);
+		expect(resolveMCPTimeoutMs(30_000, "execution")).toBe(180_000);
 	});
 
 	test("rejects negative env values and warns, falling back to the default", () => {
@@ -55,7 +55,7 @@ describe("MCP timeout configuration", () => {
 		const warn = spyOn(logger, "warn").mockImplementation(() => {});
 
 		try {
-			expect(resolveMCPTimeoutMs(120_000)).toBe(120_000);
+			expect(resolveMCPTimeoutMs(120_000, "execution")).toBe(120_000);
 			expect(warn).toHaveBeenCalledTimes(1);
 			expect(warn.mock.calls[0]?.[0]).toContain("OMP_MCP_TIMEOUT_MS");
 		} finally {
@@ -68,7 +68,7 @@ describe("MCP timeout configuration", () => {
 		const warn = spyOn(logger, "warn").mockImplementation(() => {});
 
 		try {
-			expect(resolveMCPTimeoutMs()).toBe(30_000);
+			expect(resolveMCPTimeoutMs(undefined, "execution")).toBe(30_000);
 			expect(warn).toHaveBeenCalledTimes(1);
 		} finally {
 			warn.mockRestore();
@@ -165,8 +165,8 @@ describe("createMCPTimeout abort-source tracking", () => {
 
 describe("MCP phase timeouts", () => {
 	test("routes each JSON-RPC method to the phase that guards it", () => {
-		expect(mcpTimeoutPhaseForMethod("initialize")).toBe("startup");
-		expect(mcpTimeoutPhaseForMethod("notifications/initialized")).toBe("startup");
+		expect(mcpTimeoutPhaseForMethod("initialize")).toBe("connect");
+		expect(mcpTimeoutPhaseForMethod("notifications/initialized")).toBe("connect");
 		for (const method of ["tools/list", "prompts/list", "resources/list", "resources/templates/list"]) {
 			expect(mcpTimeoutPhaseForMethod(method)).toBe("catalog");
 		}
@@ -182,14 +182,14 @@ describe("MCP phase timeouts", () => {
 		const server = { catalog: 500 };
 		expect(resolveMCPTimeoutMs(server, "catalog")).toBe(500);
 		expect(resolveMCPTimeoutMs(server, "execution")).toBe(3_000);
-		expect(resolveMCPTimeoutMs(server, "startup")).toBe(30_000);
+		expect(resolveMCPTimeoutMs(server, "connect")).toBe(30_000);
 	});
 
 	test("a bare per-server number applies to every phase and beats globals", () => {
 		delete process.env.OMP_MCP_TIMEOUT_MS;
-		setMCPGlobalTimeouts({ startup: 1, catalog: 2, execution: 3 });
+		setMCPGlobalTimeouts({ connect: 1, catalog: 2, execution: 3 });
 
-		for (const phase of ["startup", "catalog", "execution"] as const) {
+		for (const phase of ["connect", "catalog", "execution"] as const) {
 			expect(resolveMCPTimeoutMs(750, phase)).toBe(750);
 		}
 	});
@@ -215,7 +215,7 @@ describe("MCP phase timeouts", () => {
 		try {
 			expect(resolveMCPTimeoutMs(undefined, "catalog")).toBe(77);
 			expect(resolveMCPTimeoutMs(undefined, "execution")).toBe(0);
-			expect(resolveMCPTimeoutMs(undefined, "startup")).toBe(30_000);
+			expect(resolveMCPTimeoutMs(undefined, "connect")).toBe(30_000);
 		} finally {
 			release();
 		}
@@ -224,26 +224,31 @@ describe("MCP phase timeouts", () => {
 	test("invalid mcp.timeout.* settings warn with the key and fall back to the default", () => {
 		delete process.env.OMP_MCP_TIMEOUT_MS;
 		const warn = spyOn(logger, "warn").mockImplementation(() => {});
-		const release = bindEffects(Settings.isolated({ "mcp.timeout.catalogMs": -5, "mcp.timeout.startupMs": 1.5 }));
+		const release = bindEffects(Settings.isolated({ "mcp.timeout.catalogMs": -5, "mcp.timeout.connectMs": 1.5 }));
 		try {
 			expect(resolveMCPTimeoutMs(undefined, "catalog")).toBe(30_000);
-			expect(resolveMCPTimeoutMs(undefined, "startup")).toBe(30_000);
+			expect(resolveMCPTimeoutMs(undefined, "connect")).toBe(30_000);
 			const messages = warn.mock.calls.map(call => String(call[0]));
 			expect(messages.some(m => m.includes("mcp.timeout.catalogMs"))).toBe(true);
-			expect(messages.some(m => m.includes("mcp.timeout.startupMs"))).toBe(true);
+			expect(messages.some(m => m.includes("mcp.timeout.connectMs"))).toBe(true);
 		} finally {
 			release();
 			warn.mockRestore();
 		}
 	});
 
-	test("readiness barrier waits for the longer of startup and catalog, and is unbounded if either is disabled", () => {
+	test("readiness barrier covers connect then catalog, per server, and is unbounded if either is disabled", () => {
 		delete process.env.OMP_MCP_TIMEOUT_MS;
-		setMCPGlobalTimeouts({ startup: 5_000, catalog: 9_000 });
-		expect(resolveMCPReadinessTimeoutMs()).toBe(9_000);
+		setMCPGlobalTimeouts({ connect: 50_000, catalog: 20_000 });
+		expect(resolveMCPReadinessTimeoutMs([])).toBe(70_000);
+		expect(resolveMCPReadinessTimeoutMs([undefined])).toBe(70_000);
 
-		setMCPGlobalTimeouts({ startup: 0, catalog: 9_000 });
-		expect(resolveMCPReadinessTimeoutMs()).toBe(0);
+		// A larger per-server deadline is not cut off by the global ones; the slowest server sets the budget.
+		expect(resolveMCPReadinessTimeoutMs([undefined, { connect: 100_000 }, 5_000])).toBe(120_000);
+
+		setMCPGlobalTimeouts({ connect: 0, catalog: 9_000 });
+		expect(resolveMCPReadinessTimeoutMs([])).toBe(0);
+		expect(resolveMCPReadinessTimeoutMs([{ connect: 1_000 }, undefined])).toBe(0);
 	});
 });
 
@@ -263,11 +268,11 @@ describe("parseMCPTimeoutConfig", () => {
 			parseMCPTimeoutConfig(1500, "s"),
 			parseMCPTimeoutConfig("2500", "s"),
 			parseMCPTimeoutConfig(0, "s"),
-			parseMCPTimeoutConfig({ startup: 10, catalog: "20", execution: 0 }, "s"),
+			parseMCPTimeoutConfig({ connect: 10, catalog: "20", execution: 0 }, "s"),
 			parseMCPTimeoutConfig(undefined, "s"),
 		]);
 
-		expect(result).toEqual([1500, 2500, 0, { startup: 10, catalog: 20, execution: 0 }, undefined]);
+		expect(result).toEqual([1500, 2500, 0, { connect: 10, catalog: 20, execution: 0 }, undefined]);
 		expect(warnings).toEqual([]);
 	});
 
@@ -283,22 +288,22 @@ describe("parseMCPTimeoutConfig", () => {
 
 	test("drops only the bad phase key and names it in the warning", () => {
 		const { result, warnings } = withWarnings(() =>
-			parseMCPTimeoutConfig({ startup: 100, catalog: -1, execution: "forever" }, 'MCP server "x"'),
+			parseMCPTimeoutConfig({ connect: 100, catalog: -1, execution: "forever" }, 'MCP server "x"'),
 		);
 
-		expect(result).toEqual({ startup: 100 });
+		expect(result).toEqual({ connect: 100 });
 		expect(warnings).toHaveLength(2);
 		expect(warnings[0]).toContain("timeout.catalog");
 		expect(warnings[1]).toContain("timeout.execution");
 	});
 
 	test("ignores unknown phase keys with a warning that lists the valid ones", () => {
-		const { result, warnings } = withWarnings(() => parseMCPTimeoutConfig({ catalog: 5, connect: 9 }, "s"));
+		const { result, warnings } = withWarnings(() => parseMCPTimeoutConfig({ catalog: 5, startup: 9 }, "s"));
 
 		expect(result).toEqual({ catalog: 5 });
 		expect(warnings).toHaveLength(1);
-		expect(warnings[0]).toContain('"connect"');
-		expect(warnings[0]).toContain("startup, catalog, execution");
+		expect(warnings[0]).toContain('"startup"');
+		expect(warnings[0]).toContain("connect, catalog, execution");
 	});
 
 	test("an object with no usable key yields undefined so the global default applies", () => {

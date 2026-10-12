@@ -18,7 +18,7 @@ export interface MCPServer {
 	name: string;
 	/** Whether this server is enabled (default: true) */
 	enabled?: boolean;
-	/** Deadline in milliseconds for every phase, or per-phase (`startup`/`catalog`/`execution`) deadlines */
+	/** Deadline in milliseconds for every phase, or per-phase (`connect`/`catalog`/`execution`) deadlines */
 	timeout?: MCPTimeoutConfig;
 	/** Encoding for outgoing JSON-RPC request ids (default: `"number"`) */
 	requestIdFormat?: MCPRequestIdFormat;

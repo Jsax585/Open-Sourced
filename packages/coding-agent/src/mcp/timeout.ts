@@ -8,12 +8,12 @@ const MCP_STARTUP_TIMEOUT_ENV = "OMP_MCP_STARTUP_TIMEOUT_MS";
 let neverAbortController: AbortController | undefined;
 
 /** Which part of the MCP lifecycle a deadline guards. */
-export type MCPTimeoutPhase = "startup" | "catalog" | "execution";
+export type MCPTimeoutPhase = "connect" | "catalog" | "execution";
 
 /** Per-phase deadlines in milliseconds; `0` disables that phase's deadline. */
 export interface MCPTimeoutPhases {
 	/** Transport connect and `initialize` handshake. */
-	startup?: number;
+	connect?: number;
 	/** Listing tools, prompts, resources and resource templates. */
 	catalog?: number;
 	/** Tool calls, prompt retrieval, resource reads and every other request. */
@@ -23,7 +23,7 @@ export interface MCPTimeoutPhases {
 /** A bare number applies to every phase; an object sets phases individually. */
 export type MCPTimeoutConfig = number | MCPTimeoutPhases;
 
-export const MCP_TIMEOUT_PHASES: readonly MCPTimeoutPhase[] = ["startup", "catalog", "execution"];
+export const MCP_TIMEOUT_PHASES: readonly MCPTimeoutPhase[] = ["connect", "catalog", "execution"];
 
 /** Process-wide defaults from the `mcp.timeout.*` settings; a server's own `timeout` wins. */
 let globalTimeouts: MCPTimeoutPhases = {};
@@ -34,18 +34,18 @@ export function setMCPGlobalTimeouts(timeouts: MCPTimeoutPhases): void {
 
 /** Phase whose deadline guards a JSON-RPC request or notification. */
 export function mcpTimeoutPhaseForMethod(method: string): MCPTimeoutPhase {
-	if (method === "initialize" || method === "notifications/initialized") return "startup";
+	if (method === "initialize" || method === "notifications/initialized") return "connect";
 	if (method.endsWith("/list")) return "catalog";
 	return "execution";
 }
 
-function isValidTimeoutMs(value: unknown): value is number {
+export function isValidTimeoutMs(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 /**
  * Parse an MCP `timeout` config value: a non-negative integer (ms, `0` disables) or an object with
- * `startup`/`catalog`/`execution` integers. Invalid values and unknown keys are dropped with a
+ * `connect`/`catalog`/`execution` integers. Invalid values and unknown keys are dropped with a
  * warning that names the key; numeric strings are accepted because env expansion yields strings.
  * `label` prefixes warnings (for example `MCP server "foo"`).
  */
@@ -82,7 +82,7 @@ export function parseMCPTimeoutConfig(value: unknown, label: string): MCPTimeout
  * Resolve one phase's deadline. Precedence: `OMP_MCP_TIMEOUT_MS` (every phase), the server's
  * `timeout` (bare number or its phase key), the `mcp.timeout.*` global for that phase, then 30s.
  */
-export function resolveMCPTimeoutMs(configTimeout?: MCPTimeoutConfig, phase: MCPTimeoutPhase = "execution"): number {
+export function resolveMCPTimeoutMs(configTimeout: MCPTimeoutConfig | undefined, phase: MCPTimeoutPhase): number {
 	const raw = Bun.env[MCP_TIMEOUT_ENV]?.trim();
 	if (raw) {
 		const value = Number(raw);
@@ -115,13 +115,20 @@ export function describeMCPRequestTimeout(timeout: MCPRequestTimeout, method: st
 }
 
 /**
- * Print-mode readiness barrier: covers connect plus tool listing, so it waits for the longer of
- * the two phases and is unbounded when either is disabled.
+ * Print-mode readiness barrier. A server connects and then lists its catalog one after the other,
+ * so its worst case is `connect + catalog`; the barrier waits for the slowest server, using each
+ * server's own `timeout` when it has one. It is unbounded (`0`) when any server disables either
+ * phase. With no servers it falls back to the global deadlines.
  */
-export function resolveMCPReadinessTimeoutMs(): number {
-	const startup = resolveMCPTimeoutMs(undefined, "startup");
-	const catalog = resolveMCPTimeoutMs(undefined, "catalog");
-	return startup === 0 || catalog === 0 ? 0 : Math.max(startup, catalog);
+export function resolveMCPReadinessTimeoutMs(serverTimeouts: readonly (MCPTimeoutConfig | undefined)[]): number {
+	let budget = 0;
+	for (const config of serverTimeouts.length > 0 ? serverTimeouts : [undefined]) {
+		const connect = resolveMCPTimeoutMs(config, "connect");
+		const catalog = resolveMCPTimeoutMs(config, "catalog");
+		if (connect === 0 || catalog === 0) return 0;
+		budget = Math.max(budget, connect + catalog);
+	}
+	return budget;
 }
 
 /** Resolve the non-blocking discovery window; zero waits for initial connections to settle. */

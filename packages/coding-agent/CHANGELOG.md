@@ -4,7 +4,7 @@
 
 ### Added
 
-- MCP servers take separate `startup`, `catalog` and `execution` timeouts (`"timeout": { "catalog": 10000, "execution": 600000 }` in `mcp.json`), with `mcp.timeout.startupMs`, `catalogMs` and `executionMs` as global defaults; a plain number still sets every phase, and timeout errors now name the phase that expired.
+- MCP servers take separate `connect`, `catalog` and `execution` timeouts (`"timeout": { "catalog": 10000, "execution": 600000 }` in `mcp.json`), with `mcp.timeout.connectMs`, `catalogMs` and `executionMs` as global defaults; a plain number still sets every phase, and timeout errors now name the phase that expired. A Codex `tool_timeout_sec` sets only the execution timeout, and print mode waits for the slowest server's connect plus catalog deadlines.
 
 ## [18.10.0] - 2026-10-12
 

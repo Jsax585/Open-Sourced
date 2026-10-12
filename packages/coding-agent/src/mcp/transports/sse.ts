@@ -102,7 +102,7 @@ export class LegacySseTransport implements MCPTransport {
 		const connection = new AbortController();
 		const onAbort = () => connection.abort(signal?.reason);
 		signal?.addEventListener("abort", onAbort, { once: true });
-		const timeout = resolveMCPTimeoutMs(this.#config.timeout, "startup");
+		const timeout = resolveMCPTimeoutMs(this.#config.timeout, "connect");
 		const operation = createMCPTimeout(timeout, this.#operationSignal(connection.signal));
 		const endpointReady = Promise.withResolvers<void>();
 		this.#sseConnection = connection;

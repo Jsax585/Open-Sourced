@@ -141,7 +141,7 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 				enabled = undefined;
 			}
 
-			// Validate timeout: number or { startup, catalog, execution }; warns per bad key
+			// Validate timeout: number or { connect, catalog, execution }; warns per bad key
 			const timeout = parseMCPTimeoutConfig(serverConfig.timeout, `MCP server "${serverName}"`);
 
 			// Validate requestIdFormat: only the two documented encodings
