@@ -196,6 +196,7 @@ export class ContextFileTracker {
 	reset(): void {
 		this.#generation++;
 		this.#pending.clear();
+		this.#inflight.clear();
 	}
 
 	/** Start nested discovery for a finished `read` call. Returns immediately; {@link takeAsides} awaits it. */
@@ -321,18 +322,20 @@ export class ContextFileTracker {
 			const raw = await readInstructionFile(filePath);
 			if (raw === undefined || raw.trim() === "") continue;
 			const content = boundContent(await expandAtImports(raw, filePath, { uncached: true }));
+			// Each notice repeats the file, directory and target paths, so budget the rendered text.
+			const rendered = prompt.render(nestedContextPrompt, {
+				path: filePath,
+				directory: dir,
+				target,
+				content,
+			});
 			return {
 				path: filePath,
-				bytes: Buffer.byteLength(content),
+				bytes: Buffer.byteLength(rendered),
 				message: {
 					role: "custom",
 					customType: NESTED_CONTEXT_MESSAGE_TYPE,
-					content: prompt.render(nestedContextPrompt, {
-						path: filePath,
-						directory: dir,
-						target,
-						content,
-					}),
+					content: rendered,
 					details: { path: filePath },
 					attribution: "agent",
 					display: false,
@@ -414,7 +417,7 @@ export class ContextFileTracker {
 			// The step-boundary path appends this message without a size check, so one update shares a
 			// single read-sized budget. Files that do not fit stay undelivered and follow in the next update.
 			const content = boundContent(tracked.content ?? "");
-			const bytes = Buffer.byteLength(content);
+			const bytes = Buffer.byteLength(content) + Buffer.byteLength(filePath);
 			if (updated.length > 0 && updatedBytes + bytes > DEFAULT_MAX_BYTES) continue;
 			updatedBytes += bytes;
 			files.push({ path: filePath, hash: tracked.hash });

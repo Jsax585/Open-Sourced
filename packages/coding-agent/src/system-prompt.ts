@@ -641,7 +641,8 @@ export function composeAppendPrompt(appendParts: readonly string[], appendSystem
 /** Build the system prompt with tools, guidelines, and context */
 export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<BuildSystemPromptResult> {
 	if ($env.NULL_PROMPT === "true") {
-		return { systemPrompt: [] };
+		// The empty prompt carries no context files, so none may be watched for live updates either.
+		return { systemPrompt: [], contextFiles: [] };
 	}
 
 	const {

@@ -8014,9 +8014,7 @@ export class AgentSession implements SettingsScope {
 			// A changed context file adds up to a read-sized message per file. Build the
 			// update before maintenance (it consumes no state: delivery is read back from
 			// the messages in context) so the size check sees the request's true size.
-			const contextFileUpdate = isUserQueuedMessage(message)
-				? await this.#contextFiles.takePromptUpdate()
-				: undefined;
+			let contextFileUpdate = isUserQueuedMessage(message) ? await this.#contextFiles.takePromptUpdate() : undefined;
 			if (this.#promptGeneration !== generation) {
 				return false;
 			}
@@ -8031,6 +8029,14 @@ export class AgentSession implements SettingsScope {
 			await this.#maintenance.runPrePromptCompactionIfNeeded(maintenanceMessages);
 			if (this.#promptGeneration !== generation) {
 				return false;
+			}
+			// Compaction may have rewritten history and dropped an earlier update that had suppressed this one,
+			// so the pending update is derived again from what is actually in context now.
+			if (isUserQueuedMessage(message)) {
+				contextFileUpdate = await this.#contextFiles.takePromptUpdate();
+				if (this.#promptGeneration !== generation) {
+					return false;
+				}
 			}
 			// Consume the xd:// notice only when its previewed revision still holds.
 			// A mount delta or catalog rebuild during the await invalidates it: any
