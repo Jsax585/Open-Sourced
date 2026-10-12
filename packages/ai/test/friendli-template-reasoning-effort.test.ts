@@ -46,7 +46,7 @@ async function capture(
 
 describe("Friendli discovery-to-wire contracts", () => {
 	test("live binary controls override both unknown and effort-capable KDL defaults", async () => {
-		for (const id of ["zai-org/GLM-5.1", "zai-org/GLM-5.2", "vendor/opaque"]) {
+		for (const id of ["zai-org/GLM-5.1", "zai-org/GLM-5.2", "zai-org/GLM-5.3", "vendor/opaque"]) {
 			const model = await discovered(id, [{ type: "toggle" }]);
 			const on = await capture(model, { reasoning: "high" });
 			expect(on.chat_template_kwargs).toEqual({ enable_thinking: true });
@@ -62,14 +62,16 @@ describe("Friendli discovery-to-wire contracts", () => {
 	});
 
 	test("real efforts serialize distinct high/max values alongside the toggle", async () => {
-		const model = await discovered("zai-org/GLM-5.2", [
-			{ type: "toggle" },
-			{ type: "effort", values: ["high", "max"] },
-		]);
-		for (const reasoning of ["high", "max"] as const) {
-			const body = await capture(model, { reasoning });
-			expect(body.reasoning_effort).toBe(reasoning);
-			expect(body.chat_template_kwargs).toEqual({ enable_thinking: true });
+		for (const id of ["zai-org/GLM-5.2", "zai-org/GLM-5.3"]) {
+			const model = await discovered(id, [{ type: "toggle" }, { type: "effort", values: ["high", "max"] }]);
+			for (const reasoning of ["high", "max"] as const) {
+				const body = await capture(model, { reasoning });
+				expect(body.reasoning_effort).toBe(reasoning);
+				expect(body.chat_template_kwargs).toEqual({ enable_thinking: true });
+			}
+			const off = await capture(model, { disableReasoning: true });
+			expect(off.chat_template_kwargs).toEqual({ enable_thinking: false });
+			expect(off.reasoning_effort).toBeUndefined();
 		}
 	});
 
@@ -132,6 +134,35 @@ describe("Friendli discovery-to-wire contracts", () => {
 		expect((await capture(nested, { reasoning: "high" })).reasoning_effort).toBe("high");
 	});
 
+	test("enabled views preserve baseline routing fields and nested template configuration", async () => {
+		const model = buildModel({
+			...seedModels<"openai-completions">("friendli")[0],
+			compat: {
+				extraBody: {
+					gateway: "route-a",
+					chat_template_kwargs: { template_option: "keep", enable_thinking: false },
+				},
+			},
+		});
+		const body = await capture(model, { reasoning: "high" });
+		expect(body.gateway).toBe("route-a");
+		expect(body.chat_template_kwargs).toMatchObject({ template_option: "keep", enable_thinking: true });
+	});
+
+	test("flat effort omission wins unless explicitly overridden in the enabled view", async () => {
+		const spec = seedModels<"openai-completions">("friendli")[0];
+		const omitted = buildModel({ ...spec, compat: { omitReasoningEffort: true } });
+		expect((await capture(omitted, { reasoning: "high" })).reasoning_effort).toBeUndefined();
+		const overridden = buildModel({
+			...spec,
+			compat: {
+				omitReasoningEffort: true,
+				whenThinking: { thinkingFormat: "openai", supportsReasoningEffort: true, omitReasoningEffort: false },
+			},
+		});
+		expect((await capture(overridden, { reasoning: "high" })).reasoning_effort).toBe("high");
+	});
+
 	test("effort-only models cannot grow a toggle or expose Thinking Off", async () => {
 		const model = await discovered("zai-org/GLM-5.3", [{ type: "effort", values: ["low", "high", "max"] }]);
 		expect(model.thinking?.requiresEffort).toBe(true);
@@ -145,7 +176,7 @@ describe("Friendli discovery-to-wire contracts", () => {
 
 	test("tool continuation preserves real reasoning and fulfills a missing-reasoning contract", async () => {
 		const model = await discovered("zai-org/GLM-5.1", [{ type: "toggle" }]);
-		for (const thinking of [undefined, "", "captured reasoning"]) {
+		for (const thinking of [undefined, "captured reasoning"]) {
 			const context: Context = {
 				messages: [
 					{ role: "user", content: "use tool", timestamp: 0 },

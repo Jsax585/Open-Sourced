@@ -2835,18 +2835,33 @@ export function friendliModelManagerOptions(
 								trustExplicitThinkingOnly: true,
 								supportsReasoningEffort: effortSurface,
 								omitReasoningEffort: !effortSurface,
-								...(thinking?.requiresEffort
+								...(thinking?.requiresEffort === false
 									? {
-											thinkingFormat: "openai",
-											reasoningDisableMode: "lowest-effort",
+											thinkingFormat: "qwen-chat-template",
+											reasoningDisableMode: "qwen-template-false",
 											whenThinking: {
 												thinkingFormat: "openai",
 												requiresReasoningContentForToolCalls: true,
 												allowsSyntheticReasoningContentForToolCalls: false,
-												extraBody: { parse_reasoning: true, include_reasoning: true },
+												extraBody: {
+													chat_template_kwargs: { enable_thinking: true },
+													parse_reasoning: true,
+													include_reasoning: true,
+												},
 											},
 										}
-									: {}),
+									: thinking?.requiresEffort
+										? {
+												thinkingFormat: "openai",
+												reasoningDisableMode: "lowest-effort",
+												whenThinking: {
+													thinkingFormat: "openai",
+													requiresReasoningContentForToolCalls: true,
+													allowsSyntheticReasoningContentForToolCalls: false,
+													extraBody: { parse_reasoning: true, include_reasoning: true },
+												},
+											}
+										: {}),
 								...(interleaved ? { reasoningContentField: "reasoning_content" } : {}),
 							},
 						};
