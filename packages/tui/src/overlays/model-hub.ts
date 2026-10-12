@@ -170,6 +170,8 @@ export interface ModelHubCallbacks {
 	onSwitchPreset?: (name: string) => void | Promise<void>;
 	/** Persist a new quick-switch cycle order (the ctrl+p role cycle). */
 	onCycleOrderChange?: (order: string[]) => void;
+	/** Drop `selector` from the recently-used list; using the model again re-adds it. */
+	onForgetRecent?: (selector: string) => void;
 	/**
 	 * Persist typed text as `model`'s own compaction limit: a token base the
 	 * policy scales (`400k`), a fixed trigger (`f400k`), a percentage (`80%`), or
@@ -988,6 +990,34 @@ export class ModelHubComponent implements Component {
 	#refreshAfterMutation(): void {
 		this.#syncFromRegistryState();
 		this.#requestRender();
+	}
+
+	/**
+	 * The selected row when ctrl+d can drop it from the recent list (plain browsing, list focus, no strip).
+	 * The session's model and role-assigned models stay pinned above the separator, so they are never offered.
+	 */
+	#forgettableSelection(): ModelBrowserItem | undefined {
+		if (!this.#callbacks.onForgetRecent || this.#strip || this.#assigning !== null || this.#focus !== "list") {
+			return undefined;
+		}
+		if (!this.#isBrowserView(this.#activeEntry())) return undefined;
+		const item = this.#browser.getSelected();
+		if (!item || item.selector === this.#currentSelector || !this.#settings.mruOrder.includes(item.selector)) {
+			return undefined;
+		}
+		for (const role in this.#roles) {
+			const model = this.#roles[role]?.model;
+			if (model && `${model.provider}/${model.id}` === item.selector) return undefined;
+		}
+		return item;
+	}
+
+	/** Drop the selected `item` from the recent list, keeping the cursor on the row that took its place. */
+	#forgetRecent(item: ModelBrowserItem): void {
+		const neighbor = this.#browser.adjacentSelector(1) ?? this.#browser.adjacentSelector(-1);
+		this.#callbacks.onForgetRecent?.(item.selector);
+		this.#refreshAfterMutation();
+		if (neighbor) this.#browser.selectSelector(neighbor);
 	}
 
 	/** Re-sync after an asynchronous callback finishes mutating settings. */
@@ -2081,6 +2111,11 @@ export class ModelHubComponent implements Component {
 			this.#focus = "list";
 			return;
 		}
+		const forgettable = matchesKey(data, "ctrl+d") ? this.#forgettableSelection() : undefined;
+		if (forgettable) {
+			this.#forgetRecent(forgettable);
+			return;
+		}
 
 		const beforeQuery = this.#browser.query;
 		const isPrintable = extractPrintableText(data) !== undefined;
@@ -2849,7 +2884,8 @@ export class ModelHubComponent implements Component {
 		if (this.#focus === "scope") {
 			return `${enterRight} models · ${upDown} providers · type to search · ${altLeftRight} kind${refresh} · ${cancel} close`;
 		}
-		return `${enter} assign roles · ${upDown} models · ${left} providers · type to search · ${altLeftRight} kind${refresh} · ${cancel} close`;
+		const forget = this.#forgettableSelection() ? ` · ${formatKeyHint("ctrl+d")} remove from recent` : "";
+		return `${enter} assign roles · ${upDown} models · ${left} providers · type to search · ${altLeftRight} kind${refresh}${forget} · ${cancel} close`;
 	}
 
 	#renderFooter(width: number): string {
@@ -3637,6 +3673,7 @@ export class ModelHubComponent implements Component {
 				this.#browser.pickerSelected ? { primary: true } : { primary: true, disabled: "No model selected" },
 			),
 			refresh,
+			this.#forgettableSelection() ? pickerAction("forgetRecent", "Remove from recent", "ctrl+d") : undefined,
 			this.#browser.query.length > 0 ? cancel("Clear search") : CLOSE_ACTION,
 		]);
 	}
@@ -3994,6 +4031,11 @@ export class ModelHubComponent implements Component {
 				this.#browser.routePickerItem(selected, true);
 				return;
 			}
+			case "forgetRecent": {
+				const item = this.#forgettableSelection();
+				if (item) this.#forgetRecent(item);
+				return;
+			}
 			case "refresh":
 				if (entry.kind === "provider" && !entry.locked) {
 					this.#scheduleProviderRefresh(entry.providerId ?? "", { force: true });
@@ -4209,6 +4251,7 @@ export class ModelHubComponent implements Component {
 			search,
 			kind,
 			refresh,
+			this.#forgettableSelection() ? keys("remove from recent", "ctrl+d") : undefined,
 			cancel("close"),
 		];
 	}
