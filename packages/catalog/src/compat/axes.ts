@@ -329,6 +329,8 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"thinking-suppress-when-off": { key: "suppressWhenOff", set: "thinking", shape: "scalar" },
 	"thinking-supports-display": { key: "supportsDisplay", set: "thinking", shape: "scalar" },
 	"thinking-upgrade-neutral": { key: "upgradeNeutral", set: "thinking", shape: "scalar" },
+	/** Unclassified neutral ids here are capability-unknown: offer the ladder as opt-in. */
+	"thinking-unverified": { key: "unverified", set: "thinking", shape: "scalar" },
 
 	// ── catalog metadata ──
 	"apply-patch-tool-type": {
@@ -448,6 +450,12 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"limits-patch": { key: "limitsPatch", set: "catalog", shape: "object" },
 	"long-context-cost": { key: "longContext", set: "catalog", shape: "object" },
 	"prompt-cache": { key: "promptCache", set: "catalog", shape: "object" },
+	"task-sibling-prompt-cache": {
+		key: "taskSiblingPromptCache",
+		set: "catalog",
+		shape: "scalar",
+		values: [true, false],
+	},
 	/**
 	 * Prompt-cache lookback in block positions: how far back from a cache
 	 * breakpoint the provider looks for an earlier request's cache entry.
