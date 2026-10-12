@@ -485,7 +485,6 @@ const cfgWorkspacePromptInputs = combine({
 	autoqaConsent: cfgDevAutoqaConsent,
 });
 
-
 const PLAN_MODE_REMINDER_MAX = 3;
 const POST_PROMPT_DRAIN_TIMEOUT_MS = 5_000;
 const AGENT_START_POLICY_MAX_ATTEMPTS = 3;
