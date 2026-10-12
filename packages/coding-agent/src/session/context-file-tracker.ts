@@ -437,6 +437,10 @@ export class ContextFileTracker {
 			if (tracked.hash !== null) remaining++;
 			if (tracked.hash === effective) continue;
 			if (tracked.hash === null) {
+				// Removal notices repeat the path, so they share the same budget as updated bodies.
+				const removalBytes = Buffer.byteLength(filePath);
+				if (files.length > 0 && updatedBytes + removalBytes > DEFAULT_MAX_BYTES) continue;
+				updatedBytes += removalBytes;
 				files.push({ path: filePath, hash: null });
 				removed.push(filePath);
 				continue;
@@ -445,7 +449,7 @@ export class ContextFileTracker {
 			// single read-sized budget. Files that do not fit stay undelivered and follow in the next update.
 			const content = boundContent(tracked.content ?? "");
 			const bytes = Buffer.byteLength(content) + Buffer.byteLength(filePath);
-			if (updated.length > 0 && updatedBytes + bytes > DEFAULT_MAX_BYTES) continue;
+			if (files.length > 0 && updatedBytes + bytes > DEFAULT_MAX_BYTES) continue;
 			updatedBytes += bytes;
 			files.push({ path: filePath, hash: tracked.hash });
 			updated.push({ path: filePath, content });

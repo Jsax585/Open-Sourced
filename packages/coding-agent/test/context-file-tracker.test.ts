@@ -317,6 +317,21 @@ describe("live updates of loaded context files", () => {
 		expect(message?.details).toEqual({ files: [{ path: gone, hash: null }] });
 	});
 
+	it("defers removal notices that do not fit one update's budget", async () => {
+		tmp = TempDir.createSync("@omp-ambient-ctx-");
+		const root = fs.realpathSync(tmp.path());
+		const files = Array.from({ length: 600 }, (_, index) => ({
+			path: path.join(root, `${"d".repeat(150)}${index}`, "AGENTS.md"),
+			content: "rules",
+		}));
+		const r = rig(root);
+		await r.tracker.setAmbientFiles(files, { diskBacked: true });
+		const message = await update(r);
+		const listed = message?.details?.files.length ?? 0;
+		expect(listed).toBeGreaterThan(0);
+		expect(listed).toBeLessThan(files.length);
+	});
+
 	it("says nothing while loaded files are unchanged, even when only the mtime moves", async () => {
 		const { r, files } = await setup({ "AGENTS.md": "same" });
 		expect(await update(r)).toBeUndefined();
