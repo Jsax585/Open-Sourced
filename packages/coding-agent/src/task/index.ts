@@ -40,7 +40,7 @@ import { truncateForPrompt } from "../tools/approval";
 import { hasWaitTool } from "../tools/wait";
 import { isIrcEnabled } from "../irc/messaging";
 import { isReadOnlyAgent } from "./read-only-policy";
-import { formatTaskResultSummary } from "./result-summary";
+import { formatTaskResultSummary, isResumableTaskResult } from "./result-summary";
 import { isScoutSpawnable, resolveSpawnPolicy } from "./spawn-policy";
 import { type AgentDefinition, canSpawnAtDepth, getTaskSchema, type TaskToolSchemaInstance } from "./types";
 import {
@@ -922,7 +922,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			cfgTaskMaxRecursionDepth.get(this.session.settings),
 			this.session.taskDepth ?? 0,
 		);
-		const ircEnabled = isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0);
+		const ircEnabled =
+			this.session.enableIrc !== false && isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0);
 
 		if (!manager || asyncItems.length === 0) {
 			// Sync fallback: async execution disabled, orphaned host that never
@@ -1418,7 +1419,10 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						? `Background task ${agentId} failed.`
 						: `Background task ${agentId} complete.`;
 					await reportProgress(statusText, buildDetails() as unknown as Record<string, unknown>);
-					const deliveryText = `${finalText}${await buildFollowUpHint(singleResult?.aborted === true, finalText.includes("<resume>"))}`;
+					const deliveryText = `${finalText}${await buildFollowUpHint(
+						singleResult?.aborted === true,
+						singleResult !== undefined && isResumableTaskResult(singleResult, ircEnabled),
+					)}`;
 					const structured = singleResult?.structuredOutput;
 					if (resultFailed) {
 						// Mark the job itself failed; the failed agent stays interrogable.

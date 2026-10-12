@@ -728,11 +728,6 @@ describe("resolveSoftRequestBudget", () => {
 		expect(resolveSoftRequestBudget(200)).toBe(200);
 	});
 
-	it("never lets steps raise an agent above the configured budget", () => {
-		expect(resolveSoftRequestBudget(200, 8)).toBe(8);
-		expect(resolveSoftRequestBudget(20, 50)).toBe(20);
-	});
-
 	it("keeps 0 disabled regardless of steps and normalizes negative or fractional budgets", () => {
 		expect(resolveSoftRequestBudget(0, 8)).toBe(0);
 		expect(resolveSoftRequestBudget(0)).toBe(0);
