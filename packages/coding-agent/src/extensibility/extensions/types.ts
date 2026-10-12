@@ -1185,6 +1185,8 @@ export interface InputEvent {
 export interface LiveDelegationEvent {
 	type: "live_delegation";
 	text: string;
+	/** Aborted when the owning live call stops or the shortcut deadline expires. */
+	signal: AbortSignal;
 }
 
 /** A short reply confirms that an extension fully handled a live delegation. */
