@@ -53,6 +53,7 @@ import {
 	normalizeTerminalOutput,
 	osc66MaxScale,
 	sliceByColumn,
+	sliceWithWidth,
 	truncateToWidth,
 	visibleWidth,
 } from "./utils";
@@ -1434,9 +1435,10 @@ export class TUI extends Container {
 				lines.push("");
 				continue;
 			}
-			const start = row === from.row ? from.col : 0;
-			const end = row === to.row ? to.col : this.#previousWidth - 1;
 			const line = prepared.line.replaceAll(CURSOR_MARKER, "");
+			// Snap a start on a wide glyph's continuation cell back to the glyph.
+			const start = row === from.row ? sliceWithWidth(line, 0, from.col, true).width : 0;
+			const end = row === to.row ? to.col : this.#previousWidth - 1;
 			lines.push(Bun.stripANSI(sliceByColumn(line, start, end - start + 1)).trimEnd());
 		}
 		return lines.join("\n");
@@ -1504,7 +1506,9 @@ export class TUI extends Container {
 			const prepared = this.#screenRows[row];
 			if (!this.#highlightableRow(prepared)) continue;
 			const line = prepared.line.replaceAll(CURSOR_MARKER, "");
-			const start = row === from.row ? from.col : 0;
+			// Snap a start on a wide glyph's continuation cell back to the glyph,
+			// so the rewrite begins on its first cell instead of splitting it.
+			const start = row === from.row ? sliceWithWidth(line, 0, from.col, true).width : 0;
 			const end = Math.min(row === to.row ? to.col : Number.MAX_SAFE_INTEGER, visibleWidth(line) - 1);
 			if (start > end) continue;
 			const text = Bun.stripANSI(sliceByColumn(line, start, end - start + 1));

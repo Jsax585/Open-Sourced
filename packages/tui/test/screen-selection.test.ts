@@ -91,4 +91,22 @@ describe("TUI screen selection", () => {
 		expect(tui.getScreenSelectionText()).toBe("");
 		tui.stop();
 	});
+
+	it("snaps a start on a wide glyph's second cell back to the glyph", async () => {
+		const terminal = new VirtualTerminal(20, 4);
+		const scheduler = new VirtualRenderScheduler();
+		const provider = new Provider(["界X界Y", "editor"]);
+		const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		tui.start();
+		await scheduler.settle(terminal);
+
+		// Column 1 is the continuation cell of the first 界.
+		tui.setScreenSelection({ anchor: { row: 0, col: 1 }, focus: { row: 0, col: 2 } });
+		await terminal.flush();
+		expect(tui.getScreenSelectionText()).toBe("界X");
+		// The highlight rewrite must not split the glyph.
+		expect(terminal.getViewport()[0]?.trimEnd()).toBe("界X界Y");
+		tui.stop();
+	});
 });
