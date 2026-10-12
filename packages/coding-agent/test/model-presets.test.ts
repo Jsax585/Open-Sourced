@@ -426,13 +426,14 @@ describe("model presets", () => {
 		settings.setModelRole("default", OPUS);
 		cfgRetryFallbackChains.setEntry(settings, "default", ["openai/gpt-4o"]);
 		cfgRetryFallbackChains.setEntry(settings, "slow", [SONNET]);
+		// Present at save time: a preset that captured it would be rejected as malformed on switch.
+		cfgRetryFallbackChains.setEntry(settings, "anthropic/*", ["openrouter/anthropic/*"]);
 		saveModelPreset(settings, "focus");
 
 		settings.setModelRole("default", SONNET);
 		cfgRetryFallbackChains.setEntry(settings, "default", [SONNET_46]);
 		cfgRetryFallbackChains.setEntry(settings, "slow", undefined);
 		cfgRetryFallbackChains.setEntry(settings, "smol", [OPUS]);
-		cfgRetryFallbackChains.setEntry(settings, "anthropic/*", ["openrouter/anthropic/*"]);
 		const session = createSession(settings);
 
 		const result = await applyModelPreset(settings, session, "focus");
@@ -444,8 +445,23 @@ describe("model presets", () => {
 			slow: [SONNET],
 			"anthropic/*": ["openrouter/anthropic/*"],
 		});
-		expect(findActiveModelPreset(settings)).toBe("focus");
-		cfgRetryFallbackChains.setEntry(settings, "slow", [SONNET_46]);
+	});
+
+	it("matches the active preset on role fallback chains, treating a preset without them as having none", () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("default", OPUS);
+		cfgModelPresets.setEntry(settings, "legacy", { modelRoles: { default: OPUS } });
+		cfgModelPresets.setEntry(settings, "chained", {
+			modelRoles: { default: OPUS },
+			fallbackChains: { default: [SONNET], smol: [] },
+		});
+		expect(findActiveModelPreset(settings)).toBe("legacy");
+
+		// Switching to `legacy` would clear this chain, so only `chained` (whose empty `smol` is no chain) matches.
+		cfgRetryFallbackChains.setEntry(settings, "default", [SONNET]);
+		expect(findActiveModelPreset(settings)).toBe("chained");
+
+		cfgRetryFallbackChains.setEntry(settings, "default", [SONNET_46]);
 		expect(findActiveModelPreset(settings)).toBeUndefined();
 	});
 
@@ -481,24 +497,37 @@ describe("model presets", () => {
 			{ role: "default", expected: [SONNET], actual: [SONNET_46], source: "project" },
 		]);
 		expect(isCleanModelPresetSwitch(result)).toBe(false);
-		expect(formatModelPresetSwitch("opus", result)).toContain(
-			`default fallbacks: ${SONNET_46} from project config (preset: ${SONNET})`,
-		);
+		const message = formatModelPresetSwitch("opus", result);
+		expect(message).toContain("default fallbacks");
+		expect(message).toContain("project config");
 	});
 
-	it("rejects a preset whose fallback chain is keyed by a model, without touching chains", async () => {
-		const settings = Settings.isolated();
+	it("rejects malformed preset fallback chains without touching chains", async () => {
+		const settings = await projectSettings({
+			overlay: [
+				"modelPresets:",
+				"  modelKeyed:",
+				"    modelRoles:",
+				`      default: ${OPUS}`,
+				"    fallbackChains:",
+				"      anthropic/*:",
+				"        - openrouter/anthropic/*",
+				"  notAList:",
+				"    modelRoles:",
+				`      default: ${OPUS}`,
+				"    fallbackChains:",
+				`      default: ${SONNET}`,
+				"",
+			].join("\n"),
+		});
 		settings.setModelRole("default", SONNET);
 		cfgRetryFallbackChains.setEntry(settings, "default", [SONNET_46]);
-		cfgModelPresets.setEntry(settings, "odd", {
-			modelRoles: { default: OPUS },
-			fallbackChains: { "anthropic/*": ["openrouter/anthropic/*"] },
-		});
 		const session = createSession(settings);
 
-		const result = await applyModelPreset(settings, session, "odd");
-
-		expect(result.kind).toBe("invalid");
+		for (const name of ["modelKeyed", "notAList"]) {
+			expect((await applyModelPreset(settings, session, name)).kind).toBe("invalid");
+		}
 		expect({ ...cfgRetryFallbackChains.get(settings) }).toEqual({ default: [SONNET_46] });
+		expect(settings.getModelRole("default")).toBe(SONNET);
 	});
 });

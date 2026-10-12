@@ -64,7 +64,8 @@ function parseModelPreset(raw: unknown): ModelPreset | string {
 			if (!Array.isArray(chain) || !chain.every(entry => typeof entry === "string" && entry.trim() !== "")) {
 				return `fallback chain \`${role}\` is not a list of model selectors`;
 			}
-			fallbackChains[role] = [...chain];
+			// An empty chain means "no chain", as in the model hub; keep it out so matching stays exact.
+			if (chain.length > 0) fallbackChains[role] = [...chain];
 		}
 		preset.fallbackChains = fallbackChains;
 	}
@@ -117,8 +118,9 @@ export function getModelPresetNames(settings: Settings): string[] {
 
 /**
  * First saved preset (by name) the current setup matches: identical effective
- * role assignments and, when the preset records them, the same default thinking
- * level and role fallback chains. Undefined when the roles were edited past every preset.
+ * role assignments and role fallback chains (none for a preset saved without
+ * them, as applying it clears them) and, when the preset records one, the same
+ * default thinking level. Undefined when the setup was edited past every preset.
  */
 export function findActiveModelPreset(settings: Settings): string | undefined {
 	const roles = settings.getModelRoles();
@@ -131,7 +133,7 @@ export function findActiveModelPreset(settings: Settings): string | undefined {
 		if (lookup.kind !== "found") return false;
 		const { modelRoles, defaultThinkingLevel, fallbackChains } = lookup.preset;
 		if (defaultThinkingLevel !== undefined && defaultThinkingLevel !== thinking) return false;
-		if (fallbackChains !== undefined && !sameChains(fallbackChains, chains)) return false;
+		if (!sameChains(fallbackChains ?? {}, chains)) return false;
 		const presetIds = Object.keys(modelRoles);
 		return (
 			presetIds.length === roleIds.length &&
