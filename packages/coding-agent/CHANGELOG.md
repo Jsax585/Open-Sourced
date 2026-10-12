@@ -614,6 +614,7 @@
 - Fails unstructured task runs that conclude without a final message
 - Background task cards no longer stop updating once the agent ends its turn while the task is still running
 - Transparent images the model receives (small icons, oversized screenshots) keep their transparency instead of turning into a black square, and resized edges no longer pick up a dark fringe
+- Auto-Learn now runs a session-settle scribe: when a session goes idle, a small model (`autolearn.model`, empty = the `smol` role) re-reads the transcript and mints or enhances managed skills for its reusable procedures, while the standing guidance and the capture nudge gained a concrete trigger list (user correction, tool-verified claim, non-obvious behaviour, recurring procedure) ([#15460](https://github.com/can1357/oh-my-pi/pull/15460) by [@iacore](https://github.com/iacore)).
 
 ## [18.10.1] - 2026-10-12
 
