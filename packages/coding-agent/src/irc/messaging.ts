@@ -6,7 +6,6 @@ import { IrcBus } from "./bus";
 import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { ensurePersistedRoster } from "../registry/persisted-agents";
 import { canSpawnAtDepth } from "../task/types";
-import type { SessionManager } from "../session/session-manager";
 
 import { cfgTaskMaxRecursionDepth } from "../task/settings";
 
@@ -35,13 +34,7 @@ export function drainPendingInbox(registry: AgentRegistry, senderId: string, fro
 }
 
 /** `wait` result carrying a consumed message. */
-export function messageResult(
-	manager: SessionManager | undefined,
-	senderId: string,
-	waited: IrcMessage,
-	boundary: object | undefined,
-): AgentToolResult<CoordinationDetails> {
-	if (manager && boundary !== undefined) manager.recordConsumedIrcMessage(waited, boundary);
+export function messageResult(senderId: string, waited: IrcMessage): AgentToolResult<CoordinationDetails> {
 	return {
 		content: [{ type: "text", text: formatIncoming(waited) }],
 		details: { op: "wait", from: senderId, waited },
