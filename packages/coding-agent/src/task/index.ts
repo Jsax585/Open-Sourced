@@ -40,7 +40,7 @@ import { truncateForPrompt } from "../tools/approval";
 import { hasWaitTool } from "../tools/wait";
 import { isIrcEnabled } from "../irc/messaging";
 import { isReadOnlyAgent } from "./read-only-policy";
-import { formatTaskResultSummary } from "./result-summary";
+import { formatTaskResultSummary, isResumableTaskResult } from "./result-summary";
 import { isScoutSpawnable, resolveSpawnPolicy } from "./spawn-policy";
 import { type AgentDefinition, canSpawnAtDepth, getTaskSchema, type TaskToolSchemaInstance } from "./types";
 import {
@@ -839,6 +839,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			blockedAgent: this.#blockedAgent,
 			enableLsp: (this.session.enableLsp ?? true) && cfgTaskEnableLsp.get(this.session.settings),
 			enableIrc: isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0),
+			ownerCanResume: this.#canOfferResume(),
 			maxRuntimeMs: cfgTaskMaxRuntimeMs.get(this.session.settings),
 		});
 	}
@@ -948,7 +949,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			cfgTaskMaxRecursionDepth.get(this.session.settings),
 			this.session.taskDepth ?? 0,
 		);
-		const ircEnabled = isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0);
+		const ircEnabled = this.#canOfferResume();
 
 		if (!manager || asyncItems.length === 0) {
 			// Sync fallback: async execution disabled, orphaned host that never
@@ -1300,7 +1301,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			onUpdate,
 			onSettled,
 		} = options;
-		const buildFollowUpHint = async (aborted: boolean): Promise<string> => {
+		const buildFollowUpHint = async (aborted: boolean, summaryHasResume: boolean): Promise<string> => {
 			// Isolated runs are parked without a reviver once the run ends
 			// (`finalizeSubagentLifecycle`), so "message it" would point the
 			// caller at a follow-up path that no longer exists. The template says
@@ -1312,7 +1313,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				agentId,
 				aborted,
 				isolated,
-				ircEnabled,
+				ircEnabled: ircEnabled && !summaryHasResume,
 				resumable: !isolated && (ref?.status === "idle" || ref?.status === "parked"),
 				transcriptAvailable: aborted ? await hasResolvableTranscript(agentId) : true,
 			})}`;
@@ -1440,11 +1441,14 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						delete progress.resolvedModelIsFallback;
 					}
 					onSettled?.(resultFailed);
+					// Decided once, next to the summary it must agree with: an idle timer can park the child
+					// while the progress report below is awaited.
+					const summaryHasResume = singleResult !== undefined && isResumableTaskResult(singleResult, ircEnabled);
 					const statusText = resultFailed
 						? `Background task ${agentId} failed.`
 						: `Background task ${agentId} complete.`;
 					await reportProgress(statusText, buildDetails() as unknown as Record<string, unknown>);
-					const deliveryText = `${finalText}${await buildFollowUpHint(singleResult?.aborted === true)}`;
+					const deliveryText = `${finalText}${await buildFollowUpHint(singleResult?.aborted === true, summaryHasResume)}`;
 					const structured = singleResult?.structuredOutput;
 					if (resultFailed) {
 						// Mark the job itself failed; the failed agent stays interrogable.
@@ -1461,7 +1465,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					const statusText = `Background task ${agentId} failed.`;
 					await reportProgress(statusText, buildDetails() as unknown as Record<string, unknown>);
 					const message = error instanceof Error ? error.message : String(error);
-					const hint = AgentRegistry.global().get(agentId) ? await buildFollowUpHint(false) : "";
+					const hint = AgentRegistry.global().get(agentId) ? await buildFollowUpHint(false, false) : "";
 					throw new TaskJobError(`${message}${hint}`);
 				}
 			},
@@ -1674,6 +1678,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				blockedAgent: this.#blockedAgent,
 				enableLsp: (this.session.enableLsp ?? true) && cfgTaskEnableLsp.get(this.session.settings),
 				enableIrc: isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0),
+				ownerCanResume: this.#canOfferResume(),
 				maxRuntimeMs: cfgTaskMaxRuntimeMs.get(this.session.settings),
 				signal,
 				onProgress: progress => {
@@ -1720,6 +1725,15 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		}
 	}
 
+	/** A `<resume>` follow-up is only actionable when the caller can message the child: IRC on and the `write` tool present. */
+	#canOfferResume(): boolean {
+		return (
+			this.session.enableIrc !== false &&
+			isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0) &&
+			this.session.isToolActive?.("write") === true
+		);
+	}
+
 	/** Build the tool result (summary text + details) for a settled run. */
 	#buildResultPayload(
 		result: SingleResult,
@@ -1727,7 +1741,11 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		totalDurationMs: number,
 		mergeSummary: string,
 	): AgentToolResult<TaskToolDetails> {
-		const summary = formatTaskResultSummary(result, { totalDurationMs, mergeSummary });
+		const summary = formatTaskResultSummary(result, {
+			totalDurationMs,
+			mergeSummary,
+			ircEnabled: this.#canOfferResume(),
+		});
 
 		return {
 			content: [{ type: "text", text: summary }],

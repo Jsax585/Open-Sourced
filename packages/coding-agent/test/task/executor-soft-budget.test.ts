@@ -296,6 +296,57 @@ describe("runSubprocess soft request budget", () => {
 		expect(handle.disposeCalls()).toBe(0);
 	});
 
+	it("an agent's steps sets its own budget: steer at N, forced tool-pinned yield at 1.5N", async () => {
+		const id = "StepsAgent";
+		const handle = createMockSession(({ promptIndex, emit, pushMessage }) => {
+			if (promptIndex === 1) {
+				for (let i = 1; i <= 3; i++) {
+					const message = assistantText(`step ${i}`, i === 3 ? "aborted" : "stop");
+					pushMessage(message);
+					emit({ type: "message_end", message } as unknown as AgentSessionEvent);
+				}
+				return;
+			}
+			const yieldMessage = {
+				role: "assistant" as const,
+				content: [
+					{ type: "toolCall" as const, id: "y1", name: "yield", arguments: { data: { report: "summary" } } },
+				],
+				stopReason: "toolUse" as const,
+			};
+			pushMessage(yieldMessage);
+			emit({ type: "message_end", message: yieldMessage } as unknown as AgentSessionEvent);
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "y1",
+				toolName: "yield",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { report: "summary" } },
+				},
+				isError: false,
+			} as AgentSessionEvent);
+		});
+		mockCreateAgentSession(handle.session);
+		registerRunning(id, handle.session);
+
+		// Setting is the 200 default; only the agent's own steps: 2 can trigger the stop at 3 requests.
+		const result = await runSubprocess({
+			...baseOptions(id),
+			agent: { ...baseAgent, name: "custom", steps: 2 },
+			settings: Settings.isolated({}),
+		});
+
+		expect(handle.sentUserMessages).toContainEqual({
+			content: buildBudgetNotice(2, 2),
+			options: { deliverAs: "steer", attribution: "agent" },
+		});
+		expect(handle.prompts).toHaveLength(2);
+		expect(handle.prompts[1]?.options?.toolChoice).toEqual({ type: "tool", name: "yield" });
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.output)).toEqual({ report: "summary" });
+	});
+
 	it("a budget hard-abort keeps the kept-alive agent adopted and messageable via irc", async () => {
 		const id = "StubbornScout";
 		const eventBus = new EventBus();
@@ -666,24 +717,20 @@ describe("runSubprocess soft request budget", () => {
 });
 
 describe("resolveSoftRequestBudget", () => {
-	it("lets a configured budget lower a bundled agent's ceiling", () => {
-		expect(resolveSoftRequestBudget("scout", 20)).toBe(20);
-		expect(resolveSoftRequestBudget("sonic", 20)).toBe(20);
+	it("lets a configured budget lower an agent's steps", () => {
+		expect(resolveSoftRequestBudget("task", 20, {}, 100)).toBe(20);
 	});
 
-	it("keeps the bundled ceiling when the configured budget is higher", () => {
-		expect(resolveSoftRequestBudget("scout", 200)).toBe(100);
-		expect(resolveSoftRequestBudget("sonic", 200)).toBe(100);
+	it("ignores invalid steps from SDK-supplied agent definitions", () => {
+		for (const steps of [0, Number.NaN]) {
+			expect(resolveSoftRequestBudget("task", 20, {}, steps)).toBe(20);
+		}
 	});
 
-	it("uses the configured budget for agents without a bundled entry", () => {
-		expect(resolveSoftRequestBudget("task", 20)).toBe(20);
-	});
-
-	it("keeps 0 disabled and normalizes negative or fractional budgets", () => {
-		expect(resolveSoftRequestBudget("scout", 0)).toBe(0);
-		expect(resolveSoftRequestBudget("scout", -5)).toBe(0);
-		expect(resolveSoftRequestBudget("scout", 20.9)).toBe(20);
+	it("keeps 0 disabled regardless of steps and normalizes negative or fractional budgets", () => {
+		expect(resolveSoftRequestBudget("task", 0, {}, 8)).toBe(0);
+		expect(resolveSoftRequestBudget("task", -5)).toBe(0);
+		expect(resolveSoftRequestBudget("task", 20.9)).toBe(20);
 	});
 
 	it("lets an agent's own entry replace the configured budget and the bundled ceiling", () => {
@@ -692,11 +739,9 @@ describe("resolveSoftRequestBudget", () => {
 		expect(resolveSoftRequestBudget("task", 200, { task: 50 })).toBe(50);
 	});
 
-	it("keeps agents without an entry on the configured budget and bundled ceilings", () => {
+	it("keeps agents without an entry on the configured budget and their own steps", () => {
 		const agentBudgets = { lead: 400 };
 		expect(resolveSoftRequestBudget("task", 200, agentBudgets)).toBe(200);
-		expect(resolveSoftRequestBudget("scout", 200, agentBudgets)).toBe(100);
-		expect(resolveSoftRequestBudget("sonic", 200, agentBudgets)).toBe(100);
 	});
 
 	it("disables only the named agent's guard with an entry of 0", () => {
@@ -738,7 +783,7 @@ describe("task.agentSoftRequestBudget", () => {
 		try {
 			const settings = await Settings.loadReadOnly({ agentDir, cwd: tempDir.path(), configFiles: [overlay] });
 			const agentBudgets = cfgTaskAgentSoftRequestBudget.get(settings);
-			expect(resolveSoftRequestBudget("scout", 200, agentBudgets)).toBe(100);
+			expect(resolveSoftRequestBudget("scout", 200, agentBudgets, 100)).toBe(100);
 			expect(resolveSoftRequestBudget("lead", 200, agentBudgets)).toBe(400);
 		} finally {
 			if (previousConfigFiles === undefined) delete process.env.PI_CONFIG_FILES;

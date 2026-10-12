@@ -158,18 +158,6 @@ export function parsePullRequestUrl(value: string | undefined): { repo?: string;
 	};
 }
 
-/**
- * Parse a digit-only decimal positive integer or return undefined. Rejects
- * `1e2`, `0x10`, `12.0`, leading +/-, or any other shape `Number()` would
- * accept — those would otherwise key the cache against the wrong row.
- */
-export function parsePositiveDecimalInt(value: string | undefined): number | undefined {
-	if (!value || !/^\d+$/.test(value)) return undefined;
-	const num = Number(value);
-	if (!Number.isSafeInteger(num) || num <= 0) return undefined;
-	return num;
-}
-
 export function parseIssueUrl(value: string | undefined): { repo?: string; issueNumber?: number } {
 	const normalized = normalizeOptionalString(value);
 	if (!normalized) return {};

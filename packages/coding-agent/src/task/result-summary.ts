@@ -7,6 +7,7 @@
  */
 import { prompt } from "@oh-my-pi/pi-utils";
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
+import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry } from "../registry/agent-registry";
 import { escapeHarnessTags } from "../session/harness-tags";
 import { formatBytes, formatDuration } from "@oh-my-pi/pi-tui/render/render-utils";
@@ -38,10 +39,25 @@ function previewHead(output: string): string {
 	return lastNewline >= FULL_OUTPUT_THRESHOLD / 2 ? slice.slice(0, lastNewline) : slice;
 }
 
+/**
+ * A stopped-but-adopted agent (soft-budget stop) or a failed one (provider error, missing yield)
+ * stays messageable; the parent is told so it can resume via irc instead of redoing the work.
+ * Isolated runs are parked without a reviver (their worktree is gone), so their "parked" status
+ * must not read as resumable, and `write agent://` is rejected when the caller cannot message
+ * peers, so no hint is offered then.
+ */
+export function isResumableTaskResult(result: SingleResult, ircEnabled: boolean): boolean {
+	const refStatus = AgentRegistry.global().get(result.id)?.status;
+	const settledNonSuccess = result.aborted || result.exitCode !== 0;
+	if (!ircEnabled || !settledNonSuccess || result.isolated) return false;
+	// A parked agent is only messageable when something can reopen it (in-memory parents have no session file).
+	return refStatus === "idle" || (refStatus === "parked" && AgentLifecycleManager.global().canRevive(result.id));
+}
+
 /** Render the `<task-result>` envelope for a settled run. */
 export function formatTaskResultSummary(
 	result: SingleResult,
-	options: { totalDurationMs: number; mergeSummary?: string },
+	options: { totalDurationMs: number; mergeSummary?: string; ircEnabled: boolean },
 ): string {
 	const status = result.aborted
 		? "cancelled"
@@ -59,12 +75,7 @@ export function formatTaskResultSummary(
 	const outputCharCount = result.outputMeta?.charCount ?? output.length;
 	const truncated = outputCharCount > FULL_OUTPUT_THRESHOLD && result.outputPath !== undefined;
 	const preview = truncated ? previewHead(output) : output;
-	// A stopped-but-adopted agent (soft-budget stop) stays messageable; tell
-	// the parent so it can resume via irc instead of redoing the work. Isolated
-	// runs are parked without a reviver (their worktree is gone), so their
-	// "parked" status must not read as resumable.
-	const refStatus = AgentRegistry.global().get(result.id)?.status;
-	const resumable = result.aborted && !result.isolated && (refStatus === "idle" || refStatus === "parked");
+	const resumable = isResumableTaskResult(result, options.ircEnabled);
 	return prompt.render(taskSummaryTemplate, {
 		agentName: result.agent,
 		id: result.id,

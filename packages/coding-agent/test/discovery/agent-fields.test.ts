@@ -200,4 +200,15 @@ describe("parseAgentFields", () => {
 		expect(parseAgentFields({ name: "worker", description: "desc", advisor: "  " })?.advisor).toBeUndefined();
 		expect(parseAgentFields({ name: "worker", description: "desc" })?.advisor).toBeUndefined();
 	});
+
+	test("parses steps as a positive integer from numbers and numeric strings", () => {
+		expect(parseAgentFields({ name: "worker", description: "desc", steps: 12 })?.steps).toBe(12);
+		expect(parseAgentFields({ name: "worker", description: "desc", steps: " 7 " })?.steps).toBe(7);
+	});
+
+	test("drops steps values that are not positive integers", () => {
+		for (const steps of [0, "many", true]) {
+			expect(parseAgentFields({ name: "worker", description: "desc", steps })?.steps).toBeUndefined();
+		}
+	});
 });

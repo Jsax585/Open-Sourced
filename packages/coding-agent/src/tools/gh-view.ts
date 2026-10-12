@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { parsePositiveDecimalInt } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import { type GhCommandOptions, github } from "../utils/github";
 import type { ToolSession } from ".";
@@ -12,7 +13,6 @@ import {
 	normalizeOptionalString,
 	normalizeText,
 	parseIssueUrl,
-	parsePositiveDecimalInt,
 	parseRepoRef,
 	requireNonEmpty,
 	resolveDefaultRepoMemoized,

@@ -4,15 +4,18 @@
 
 ### Added
 
+- Added a `steps` field to agent frontmatter that sets that agent's request budget: the subagent gets a wrap-up notice at `steps` requests and is driven to one forced final report at 1.5x (a `yield` call for structured and eval runs, a text reply otherwise). Bundled scout and sonic now declare `steps: 100` instead of a name-keyed table, so a custom agent of the same name no longer inherits the cap.
 - Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
 
 ### Fixed
 
 - Fixed `read.renderMarkdown` having no effect on plain-file reads: inline read previews now render Markdown files as formatted Markdown instead of numbered source ([#15007](https://github.com/can1357/oh-my-pi/issues/15007)).
+- Failed subagent results now include a `<resume>` line with the `agent://<id>` to message, so the parent can continue the same child instead of redoing the work. Cancelled results use the same single `<resume>` line instead of a suffix on the abort reason. The hint is omitted when the caller cannot message peers, and `omp agents unpack` keeps a bundled agent's `steps`.
 
 ### Removed
 
 - Removed Codex Code Mode and its `providers.openai-codex.codeMode` / `providers.openai-codex.codeModeDirectTools` settings; Codex models always use the full direct tool surface.
+- Removed the exported `SOFT_REQUEST_BUDGET` table. Bundled scout and sonic caps are now their agent definitions' `steps`, and `resolveSoftRequestBudget` takes `(agentName, configuredBudget, agentBudgets, agentSteps)`.
 
 ## [18.10.3] - 2026-10-12
 

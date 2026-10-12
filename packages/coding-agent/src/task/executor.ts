@@ -159,41 +159,36 @@ export type { YieldItem } from "@oh-my-pi/pi-tui/tools/task";
 const TASK_ABORT_CLEANUP_GRACE_MS = 10_000;
 
 /**
- * Soft per-agent request budgets (assistant requests per run). Crossing the
- * budget injects a wrap-up steering notice (`task.softRequestBudgetNotice`,
- * on by default). At 1.5x the budget the free-running turn is stopped and the
- * agent is driven to one forced final `yield` so partial findings come back
- * as a real report; only if it still refuses to yield within
- * {@link BUDGET_STOP_GRACE_REQUESTS} more requests is the run hard-aborted.
- * Entries are ceilings, not fixed values: the `default` key applies to agents
- * without an explicit entry, and the `task.softRequestBudget` setting can only
- * lower an agent's budget, never raise it above its bundled entry (0 disables
- * the guard entirely). An agent's `task.agentSoftRequestBudget` entry replaces
- * both.
- */
-export const SOFT_REQUEST_BUDGET: Record<string, number> = {
-	scout: 100,
-	sonic: 100,
-	default: 200,
-};
-
-/**
- * Resolves the effective soft request budget for an agent. Its exact-name
- * `task.agentSoftRequestBudget` entry wins as given (0 disables its guard).
- * Otherwise the configured `task.softRequestBudget` and the agent's bundled
- * entry are both upper bounds, so the tighter one wins; a configured budget of
- * 0 disables the guard regardless of the bundled entry.
+ * Resolves the effective soft request budget (assistant requests per run) for
+ * a subagent. Crossing the budget injects a wrap-up steering notice
+ * (`task.softRequestBudgetNotice`, on by default). At 1.5x the budget the
+ * free-running turn is stopped and the agent is driven to one forced final
+ * `yield` so partial findings come back as a real report; only if it still
+ * refuses to yield within {@link BUDGET_STOP_GRACE_REQUESTS} more requests is
+ * the run hard-aborted.
+ *
+ * The agent's exact-name `task.agentSoftRequestBudget` entry wins as given (0
+ * disables its guard). Otherwise the `task.softRequestBudget` setting is the
+ * global ceiling and an agent definition's frontmatter `steps` (`agentSteps`)
+ * is that agent's own budget. The tighter one wins, so `steps` can lower an
+ * agent's budget but never raise it above the setting. A configured budget of 0
+ * disables the guard regardless of `steps`. Bundled agents that need a lower
+ * budget (scout, sonic) declare it as `steps` in their definitions.
  */
 export function resolveSoftRequestBudget(
 	agentName: string,
 	configuredBudget: number,
 	agentBudgets: Readonly<Record<string, number | null>> = {},
+	agentSteps?: number,
 ): number {
 	const agentBudget = agentBudgets[agentName];
 	if (typeof agentBudget === "number") return agentBudget;
 	const normalized = Math.max(0, Math.trunc(configuredBudget));
 	if (normalized === 0) return 0;
-	return Math.min(normalized, SOFT_REQUEST_BUDGET[agentName] ?? normalized);
+	// Steps from an SDK-supplied definition bypass frontmatter parsing, so invalid values fall back here too.
+	const steps =
+		agentSteps !== undefined && Number.isSafeInteger(agentSteps) && agentSteps > 0 ? agentSteps : normalized;
+	return Math.min(normalized, steps);
 }
 
 /** Extra requests allowed after a budget stop for the forced yield to land before the run is hard-aborted. */
@@ -472,6 +467,8 @@ export interface ExecutorOptions {
 	maxRuntimeMs?: number;
 	/** Include IRC only when the invocation policy permits collaboration. */
 	enableIrc?: boolean;
+	/** `true` only when the spawning owner can message peers (IRC on and `write` active); otherwise wake results carry no resume hint. */
+	ownerCanResume?: boolean;
 	enableLsp?: boolean;
 	/**
 	 * Enable MCP capabilities for this child. `false` suppresses both inherited
@@ -2974,6 +2971,8 @@ export interface IrcWakeTurnMonitorOptions {
 	outputSchemaMode?: StructuredSubagentSchemaMode;
 	outputSchemaSource?: StructuredSubagentSchemaSource;
 	artifactsDir?: string;
+	/** Set only when the owner that receives wake results can message peers; otherwise no resume hint is offered. */
+	ownerIrcEnabled?: boolean;
 }
 
 /** Sender + message id of one `irc:incoming` record that woke a turn. */
@@ -3085,10 +3084,11 @@ export function buildWakeRelayBody(args: {
 }): string {
 	const transcript = `See history://${args.id} for details.`;
 	// Computed once, above the completed/failed split: a turn that yielded an
-	// artifact before failing must be reported, never contradicted.
+	// artifact before failing must be reported, never contradicted. A wake exists
+	// only because a peer messaged this agent, so messaging works.
 	const summary =
 		args.yielded && args.result?.outputPath
-			? formatTaskResultSummary(args.result, { totalDurationMs: args.result.durationMs })
+			? formatTaskResultSummary(args.result, { totalDurationMs: args.result.durationMs, ircEnabled: true })
 			: undefined;
 
 	const headline = args.error
@@ -3325,7 +3325,11 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				// superseded it, or, for a turn that never yielded, the answer a
 				// relay would have carried.
 				if (wakeJob && yielded && result) {
-					const text = formatTaskResultSummary(result, { totalDurationMs: result.durationMs });
+					const text = formatTaskResultSummary(result, {
+						totalDurationMs: result.durationMs,
+						// The owner receives this, so its own messaging capability decides whether a resume is actionable.
+						ircEnabled: options.ownerIrcEnabled === true,
+					});
 					const structured = result.structuredOutput;
 					if (result.aborted || result.exitCode !== 0 || result.error !== undefined) {
 						wakeJob.outcome.reject(new AsyncJobError(text, structured));
@@ -4032,6 +4036,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		agent.name,
 		configuredDefaultBudget,
 		cfgTaskAgentSoftRequestBudget.get(settings),
+		agent.steps,
 	);
 	const softRequestBudgetNotice = cfgTaskSoftRequestBudgetNotice.get(settings);
 	const parentDepth = options.taskDepth ?? 0;
@@ -4119,6 +4124,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	let registryAbortUnsubscribe: (() => void) | null = null;
 	let reviveSession: AgentReviver | null = null;
 	const wakeOptions: IrcWakeTurnMonitorOptions = {
+		ownerIrcEnabled: options.ownerCanResume === true,
 		id,
 		index,
 		agent,

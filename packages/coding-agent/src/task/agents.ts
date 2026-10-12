@@ -27,6 +27,7 @@ interface AgentFrontmatter {
 	blocking?: boolean;
 	prewalk?: boolean | string;
 	advisor?: boolean | string;
+	steps?: number;
 }
 
 interface EmbeddedAgentDef {
@@ -67,6 +68,7 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 			description: "Low-reasoning agent for strictly mechanical updates or data collection only",
 			model: "@smol",
 			thinkingLevel: Effort.Medium,
+			steps: 100,
 		},
 		template: taskMd,
 	},

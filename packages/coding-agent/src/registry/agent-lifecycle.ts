@@ -190,6 +190,15 @@ export class AgentLifecycleManager {
 		this.#armTimer(id, adopted);
 	}
 
+	/** Whether a parked agent could be revived: it carries its own reviver or a persisted session the factory can reopen. */
+	canRevive(id: string): boolean {
+		const ref = this.#registry.get(id);
+		if (!ref) return false;
+		const adopted = this.#adopted.get(id);
+		if (adopted?.ref === ref && adopted.revive) return true;
+		return Boolean(ref.sessionFile) && this.#persistedReviverFactory !== undefined;
+	}
+
 	/** True if the id is adopted (parked or live) — and, when `expected` is given, still bound to that ref. */
 	has(id: string, expected?: AgentRefExpectation): boolean {
 		const adopted = this.#adopted.get(id);
