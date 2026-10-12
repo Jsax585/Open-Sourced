@@ -490,6 +490,53 @@ describe("Shared models.dev catalog fallback", () => {
 });
 
 describe("OpenCode provider discovery", () => {
+	test("discovers the Zen Jev judge seed beside the served roster", async () => {
+		const fetchMock: FetchImpl = async () =>
+			Response.json({ data: [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", context_length: 400_000 }] });
+		const options = opencodeZenModelManagerOptions({ apiKey: "user_test", fetch: fetchMock });
+		const models = ((await options.fetchDynamicModels?.()) ?? []).map(spec => buildModel(spec));
+
+		const jevRows = models.filter(model => model.id === "jev-1.13");
+		expect(jevRows).toHaveLength(1);
+		expect(jevRows[0]).toMatchObject({
+			name: "Jev 1.13",
+			api: "typesafe",
+			baseUrl: "https://opencode.ai/zen",
+			kind: "judge",
+			cost: { input: 0.042, output: 0 },
+		});
+
+		const proxied = opencodeZenModelManagerOptions({
+			apiKey: "user_test",
+			baseUrl: "https://proxy.example/zen/v1",
+			fetch: fetchMock,
+		});
+		const proxiedModels = ((await proxied.fetchDynamicModels?.()) ?? []).map(spec => buildModel(spec));
+		expect(proxiedModels.find(model => model.id === "jev-1.13")?.baseUrl).toBe("https://proxy.example/zen");
+	});
+
+	test("keeps one Zen System One jev row when the models route also lists it", async () => {
+		const fetchMock: FetchImpl = async () =>
+			Response.json({
+				data: [
+					{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", context_length: 400_000 },
+					{ id: "jev-1.13", name: "Jev 1.13", context_length: 32_000 },
+				],
+			});
+		const options = opencodeZenModelManagerOptions({ apiKey: "user_test", fetch: fetchMock });
+		const models = ((await options.fetchDynamicModels?.()) ?? []).map(spec => buildModel(spec));
+
+		const jevRows = models.filter(model => model.id === "jev-1.13");
+		expect(jevRows).toHaveLength(1);
+		expect(jevRows[0]).toMatchObject({ api: "typesafe", kind: "judge" });
+	});
+
+	test("returns null from a failed Zen discovery instead of the jev seed alone", async () => {
+		const fetchMock: FetchImpl = async () => new Response("unavailable", { status: 503 });
+		const options = opencodeZenModelManagerOptions({ apiKey: "user_test", fetch: fetchMock });
+		expect(await options.fetchDynamicModels?.()).toBeNull();
+	});
+
 	test("invalidates cached GLM-5.3 Flash effort metadata on upgrade (issue #9960)", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-opencode-glm53-flash-cache-"));
 		const cacheDbPath = path.join(tempDir, "models.db");
@@ -954,47 +1001,6 @@ describe("OpenCode provider discovery", () => {
 		const plain = discovered("deepseek-v4-flash");
 		expect(plain.input).toEqual(["text"]);
 		expect(sendsImageInputOnWire(plain)).toBe(false);
-	});
-	test("discovers the jev-1.13 judge seed beside the served roster", async () => {
-		const options = opencodeZenModelManagerOptions({
-			apiKey: "test-key",
-			fetch: async () => modelListResponse(["gpt-5.5"]),
-		});
-		const models = await options.fetchDynamicModels?.();
-		const built = (models ?? []).map(model => buildModel(model));
-		expect(built.find(model => model.id === "jev-1.13")).toMatchObject({
-			api: "typesafe",
-			kind: "judge",
-			cost: { input: 0.042, output: 0 },
-		});
-		expect(built.filter(model => model.kind !== "judge").map(model => model.id)).toContain("gpt-5.5");
-
-		const proxied = opencodeZenModelManagerOptions({
-			apiKey: "test-key",
-			baseUrl: "https://proxy.example/zen/v1",
-			fetch: async () => modelListResponse(["gpt-5.5"]),
-		});
-		const proxiedModels = ((await proxied.fetchDynamicModels?.()) ?? []).map(spec => buildModel(spec));
-		expect(proxiedModels.find(model => model.id === "jev-1.13")?.baseUrl).toBe("https://proxy.example/zen");
-	});
-
-	test("keeps one jev row when the models route also lists it", async () => {
-		const options = opencodeZenModelManagerOptions({
-			apiKey: "test-key",
-			fetch: async () => modelListResponse(["gpt-5.5", "jev-1.13"]),
-		});
-		const models = ((await options.fetchDynamicModels?.()) ?? []).map(spec => buildModel(spec));
-		const jevRows = models.filter(model => model.id === "jev-1.13");
-		expect(jevRows).toHaveLength(1);
-		expect(jevRows[0]).toMatchObject({ api: "typesafe", kind: "judge" });
-	});
-
-	test("returns null from a failed discovery instead of the jev seed alone", async () => {
-		const options = opencodeZenModelManagerOptions({
-			apiKey: "test-key",
-			fetch: async () => new Response("unavailable", { status: 503 }),
-		});
-		expect(await options.fetchDynamicModels?.()).toBeNull();
 	});
 });
 

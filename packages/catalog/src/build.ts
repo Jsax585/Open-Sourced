@@ -11,7 +11,7 @@ import { resolveDiscoveryApi, resolveModelPolicy } from "./compat/resolve";
 import type { ModelIdentity } from "./compat/types";
 import { resolveModelTokenizer } from "./model-tokenizer";
 import { materializeTimeBasedCost } from "./pricing";
-import { type Api, MODEL_KINDS, type JudgmentConfig, type JudgmentUsageMap, type Model, type ModelSpec } from "./types";
+import { type Api, MODEL_KINDS, type JudgmentConfig, type Model, type ModelSpec } from "./types";
 import { cleanModelName } from "./utils";
 
 function numberField(source: object, key: string): number | undefined {
@@ -65,14 +65,21 @@ function isInputModalities(value: unknown): value is ("text" | "image")[] {
 }
 
 /** Narrow an unknown compiled-axis payload to a string→string record. */
-function stringRecord(value: unknown): Record<string, string> | undefined {
+function stringRecord<K extends string = string>(value: unknown, allow?: readonly K[]): Record<K, string> | undefined {
 	const payload = objectPayload(value);
 	if (payload === undefined) return undefined;
-	const record: Record<string, string> = {};
+	const record = {} as Record<K, string>;
+	const allowSet = allow !== undefined ? new Set<string>(allow) : undefined;
 	for (const [key, entry] of Object.entries(payload)) {
-		// Per-entry skip: one non-string entry must not drop the good ones.
-		if (typeof entry !== "string" || entry === "") continue;
-		record[key] = entry;
+		if (allowSet !== undefined && !allowSet.has(key)) {
+			throw new Error(`judgment map entry for unknown key ${JSON.stringify(key)} is not allowed`);
+		}
+		if (typeof entry !== "string" || entry === "") {
+			throw new Error(
+				`judgment map entry for ${JSON.stringify(key)} must be a non-empty string: ${JSON.stringify(entry)}`,
+			);
+		}
+		record[key as K] = entry;
 	}
 	return Object.keys(record).length > 0 ? record : undefined;
 }
@@ -95,19 +102,12 @@ function judgmentConfig(value: unknown): JudgmentConfig | undefined {
 	}
 	const typeField = Reflect.get(payload, "typeField");
 	if (typeof typeField === "string" && typeField !== "") config.typeField = typeField;
-	const typeMap = stringRecord(Reflect.get(payload, "typeMap"));
+	const typeMap = stringRecord(Reflect.get(payload, "typeMap"), ["noul", "choice", "score"]);
 	if (typeMap !== undefined) config.typeMap = typeMap;
-	const valueMap = stringRecord(Reflect.get(payload, "valueMap"));
+	const valueMap = stringRecord(Reflect.get(payload, "valueMap"), ["noul", "choice", "score"]);
 	if (valueMap !== undefined) config.valueMap = valueMap;
-	const usagePayload = objectPayload(Reflect.get(payload, "usageMap"));
-	if (usagePayload !== undefined) {
-		const usage: JudgmentUsageMap = {};
-		for (const key of ["input", "output", "cost"] as const) {
-			const entry = Reflect.get(usagePayload, key);
-			if (typeof entry === "string" && entry !== "") usage[key] = entry;
-		}
-		if (Object.keys(usage).length > 0) config.usageMap = usage;
-	}
+	const usageMap = stringRecord(Reflect.get(payload, "usageMap"), ["input", "output"]);
+	if (usageMap !== undefined) config.usageMap = usageMap;
 	return Object.keys(config).length > 0 ? config : undefined;
 }
 
@@ -123,18 +123,13 @@ function judgmentConfig(value: unknown): JudgmentConfig | undefined {
 function applyCatalogAssignments<TApi extends Api>(model: Model<TApi>, catalog: Record<string, unknown>): void {
 	const kind = MODEL_KINDS.find(value => value === catalog.kind);
 	if (kind !== undefined) model.kind = kind;
-	// Catalog judgment wire facts are the baseline; spec values (discovery and
-	// user modelOverrides, merged before this rebuild) win key-wise.
+	// Catalog judgment wire facts are the baseline; spec keys win per-key, while
+	// map values replace wholesale (discovery and user modelOverrides, merged
+	// before this rebuild; no producer today).
 	const judgment = judgmentConfig(catalog.judgment);
 	if (judgment !== undefined) {
 		const prior = model.judgment;
-		model.judgment = {
-			...judgment,
-			...prior,
-			...((judgment.typeMap ?? prior?.typeMap) ? { typeMap: { ...judgment.typeMap, ...prior?.typeMap } } : {}),
-			...((judgment.valueMap ?? prior?.valueMap) ? { valueMap: { ...judgment.valueMap, ...prior?.valueMap } } : {}),
-			...((judgment.usageMap ?? prior?.usageMap) ? { usageMap: { ...judgment.usageMap, ...prior?.usageMap } } : {}),
-		};
+		model.judgment = { ...judgment, ...prior };
 	}
 	if (catalog.contextWindowAuthoritative === true) {
 		model.contextWindowAuthoritative = true;

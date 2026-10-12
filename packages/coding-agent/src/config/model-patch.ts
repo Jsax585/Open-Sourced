@@ -1,15 +1,9 @@
-import type {
-	Api,
-	JudgmentConfig,
-	Model,
-	ModelSpec,
-	RemoteCompactionConfig,
-	ThinkingConfig,
-} from "@oh-my-pi/pi-ai/types";
+import type { Api, Model, ModelSpec, RemoteCompactionConfig, ThinkingConfig } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { isVertexExpressOpenAIUrl } from "@oh-my-pi/pi-catalog/hosts";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { PROVIDER_DESCRIPTORS } from "@oh-my-pi/pi-catalog/provider-models";
+import { openrouterDecisionsBaseUrl } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
 import { apiServesKind, modelKind, type ModelKind, runnerApiKind } from "@oh-my-pi/pi-catalog/types";
 import { isRecord } from "@oh-my-pi/pi-utils";
@@ -28,7 +22,6 @@ export interface ProviderOverride {
 	authHeader?: boolean;
 	compat?: ModelSpec<Api>["compat"];
 	remoteCompaction?: RemoteCompactionConfig<Api>;
-	judgment?: JudgmentConfig;
 	transport?: Model<Api>["transport"];
 	guardrailIdentifier?: Model<Api>["guardrailIdentifier"];
 	guardrailVersion?: Model<Api>["guardrailVersion"];
@@ -45,7 +38,8 @@ export interface ProviderOverride {
  * (docs/models.md): every model under the provider rides the auth-gateway,
  * so the gateway `baseUrl` follows the transport regardless of the model's
  * own API — a model must never end up pi-native on a catalog upstream host
- * (#2555).
+ * (#2555). An unscoped override names the OpenRouter `/api/v1` chat root, so
+ * Decisions models move to its `/api/alpha` sibling on the same host.
  */
 export function resolveProviderBaseUrl<TApi extends Api>(
 	modelApi: TApi,
@@ -55,6 +49,9 @@ export function resolveProviderBaseUrl<TApi extends Api>(
 	if (override?.baseUrl === undefined) return modelBaseUrl;
 	if (override.transport === "pi-native") return override.baseUrl;
 	if (override.baseUrlApis !== undefined && !override.baseUrlApis.includes(modelApi)) return modelBaseUrl;
+	if (override.baseUrlApis === undefined && modelApi === "openrouter-decisions") {
+		return openrouterDecisionsBaseUrl(override.baseUrl);
+	}
 	return override.baseUrl;
 }
 
@@ -93,15 +90,7 @@ export function mergeDiscoveredModel<TApi extends Api>(
 	existing: Model<Api> | undefined,
 	providerOverride?: Pick<
 		ProviderOverride,
-		| "baseUrl"
-		| "baseUrlApis"
-		| "compat"
-		| "headers"
-		| "remoteCompaction"
-		| "judgment"
-		| "transport"
-		| "authHeader"
-		| "apiKey"
+		"baseUrl" | "baseUrlApis" | "compat" | "headers" | "remoteCompaction" | "transport" | "authHeader" | "apiKey"
 	>,
 ): Model<TApi> {
 	if (existing) {
@@ -126,10 +115,6 @@ export function mergeDiscoveredModel<TApi extends Api>(
 				mergeRemoteCompactionConfig(existing.remoteCompaction, model.remoteCompaction),
 				providerOverride?.remoteCompaction,
 			),
-			judgment: mergeProviderJudgmentConfig(
-				mergeJudgmentConfig(existing.judgment, model.judgment),
-				providerOverride?.judgment,
-			),
 			...(supportsTools !== undefined ? { supportsTools } : {}),
 			compat: mergeCompat(model.compatConfig, providerOverride?.compat),
 		} as ModelSpec<TApi>);
@@ -149,7 +134,6 @@ export function mergeDiscoveredModel<TApi extends Api>(
 				model.remoteCompaction,
 				providerOverride.remoteCompaction,
 			),
-			judgment: mergeProviderJudgmentConfig(model.judgment, providerOverride.judgment),
 			compat: mergeCompat(model.compatConfig, providerOverride.compat),
 		} as ModelSpec<TApi>);
 		return Bun.deepEquals(merged, model) ? model : merged;
@@ -253,37 +237,6 @@ export function mergeProviderRemoteCompactionConfig(
 }
 
 /**
- * Merge per-model judgment overrides over a provider baseline (or base model
- * value). `undefined` + `undefined` is `undefined`; otherwise a shallow
- * spread with key-wise merges of `typeMap`, `valueMap`, and `usageMap` so a per-model
- * `route` does not discard provider `typeMap` entries. Per-model wins.
- */
-export function mergeJudgmentConfig(
-	base: JudgmentConfig | undefined,
-	override: JudgmentConfig | undefined,
-): JudgmentConfig | undefined {
-	// Clone on the pass-through paths too: every model's maps must own their
-	// objects, or a future in-place mutation corrupts siblings sharing the
-	// provider baseline.
-	if (!base) return override ? { ...override, ...(override.typeMap ? { typeMap: { ...override.typeMap } } : {}), ...(override.valueMap ? { valueMap: { ...override.valueMap } } : {}), ...(override.usageMap ? { usageMap: { ...override.usageMap } } : {}) } : undefined;
-	if (!override) return { ...base, ...(base.typeMap ? { typeMap: { ...base.typeMap } } : {}), ...(base.valueMap ? { valueMap: { ...base.valueMap } } : {}), ...(base.usageMap ? { usageMap: { ...base.usageMap } } : {}) };
-	return {
-		...base,
-		...override,
-		...(base.typeMap || override.typeMap ? { typeMap: { ...base.typeMap, ...override.typeMap } } : {}),
-		...(base.valueMap || override.valueMap ? { valueMap: { ...base.valueMap, ...override.valueMap } } : {}),
-		...(base.usageMap || override.usageMap ? { usageMap: { ...base.usageMap, ...override.usageMap } } : {}),
-	};
-}
-
-export function mergeProviderJudgmentConfig(
-	modelConfig: JudgmentConfig | undefined,
-	providerConfig: JudgmentConfig | undefined,
-): JudgmentConfig | undefined {
-	return mergeJudgmentConfig(providerConfig, modelConfig);
-}
-
-/**
  * The patchable subset of `Model` fields shared by `modelOverrides` entries,
  * custom model definitions, and parsed custom-model overlays. `undefined`
  * always means "leave the base value alone".
@@ -313,7 +266,6 @@ export interface ModelPatch {
 	contextPromotionTarget?: string;
 	compactionModel?: string;
 	remoteCompaction?: RemoteCompactionConfig<Api>;
-	judgment?: JudgmentConfig;
 	premiumMultiplier?: number;
 }
 
@@ -351,9 +303,6 @@ export function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: 
 	if (patch.compactionModel !== undefined) result.compactionModel = patch.compactionModel;
 	if (patch.remoteCompaction !== undefined) {
 		result.remoteCompaction = mergeRemoteCompactionConfig(base.remoteCompaction, patch.remoteCompaction);
-	}
-	if (patch.judgment !== undefined) {
-		result.judgment = mergeJudgmentConfig(base.judgment, patch.judgment);
 	}
 	if (patch.premiumMultiplier !== undefined) result.premiumMultiplier = patch.premiumMultiplier;
 	if (patch.cost) {

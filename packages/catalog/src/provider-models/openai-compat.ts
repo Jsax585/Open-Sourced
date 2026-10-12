@@ -1071,8 +1071,8 @@ export interface OpenAIModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
-export function openaiModelManagerOptions(config?: OpenAIModelManagerConfig): ModelManagerOptions<"openai-responses"> {
-	return createOpenAICompatibleModelManagerOptions({
+export function openaiModelManagerOptions(config?: OpenAIModelManagerConfig): ModelManagerOptions<Api> {
+	const options = createOpenAICompatibleModelManagerOptions({
 		api: "openai-responses",
 		providerId: "openai",
 		defaultBaseUrl: OPENAI_API_BASE_URL,
@@ -1081,6 +1081,30 @@ export function openaiModelManagerOptions(config?: OpenAIModelManagerConfig): Mo
 		filterModel: (_entry, model, references) => isLikelyOpenAIResponsesModelId(model.id, references),
 		mapModel: mapWithBundledReference,
 	});
+	const fetchDiscovered = options.fetchDynamicModels;
+	if (!fetchDiscovered) return options;
+	return {
+		...options,
+		fetchDynamicModels: async () => appendUnbundledSeedModels("openai", await fetchDiscovered()),
+	};
+}
+
+/**
+ * Append the authored seed rows that neither discovery nor the bundled catalog
+ * carries yet: a seed added since the last models.json regeneration (the
+ * Decisions judge row) reaches runtime through a successful discovery. Seeds
+ * already bundled keep resolving through the bundled slice, and the static
+ * catalog (and with it the cache fingerprint) stays the bundled one.
+ */
+function appendUnbundledSeedModels(
+	providerId: GeneratedProvider,
+	discovered: readonly ModelSpec<Api>[] | null,
+): readonly ModelSpec<Api>[] | null {
+	if (!discovered) return null;
+	const known = new Set(getBundledModels(providerId).map(model => model.id));
+	for (const model of discovered) known.add(model.id);
+	const seeds = seedModels(providerId).filter(seed => !known.has(seed.id));
+	return seeds.length === 0 ? discovered : [...discovered, ...seeds.map(seed => ({ ...seed }))];
 }
 
 /**
@@ -3455,8 +3479,9 @@ export interface OpenRouterModelManagerConfig {
  * OpenRouter's Decisions API lives at `/api/alpha`, a sibling of the `/api/v1`
  * chat root; derive it so a custom gateway base URL keeps both aligned.
  */
-function openrouterDecisionsBaseUrl(chatBaseUrl: string): string {
-	return chatBaseUrl.endsWith("/v1") ? `${chatBaseUrl.slice(0, -"/v1".length)}/alpha` : `${chatBaseUrl}/alpha`;
+export function openrouterDecisionsBaseUrl(chatBaseUrl: string): string {
+	const base = chatBaseUrl.replace(/\/+$/g, "");
+	return base.endsWith("/v1") ? `${base.slice(0, -"/v1".length)}/alpha` : `${base}/alpha`;
 }
 
 function mapOpenRouterThinking(entry: OpenAICompatibleModelRecord): ThinkingConfig | undefined {
@@ -3994,6 +4019,13 @@ function normalizeVercelAiGatewayBaseUrls(rawBaseUrl: string | undefined): { bas
 	};
 }
 
+const VERCEL_AI_GATEWAY_STATIC_MODEL_IDS = [
+	"typesafe-ai/jev",
+	"microsoft/microsoft-decision-1",
+	"liquid/d1",
+	"openai/gpt-6-luna-decisions",
+] as const;
+
 export function vercelAiGatewayModelManagerOptions(
 	config?: VercelAiGatewayModelManagerConfig,
 ): ModelManagerOptions<Api> {
@@ -4001,6 +4033,7 @@ export function vercelAiGatewayModelManagerOptions(
 	const { baseUrl, catalogBaseUrl } = normalizeVercelAiGatewayBaseUrls(config?.baseUrl);
 	return {
 		providerId: "vercel-ai-gateway",
+		dropCachedModelIdsOnStaticMismatch: VERCEL_AI_GATEWAY_STATIC_MODEL_IDS,
 		fetchDynamicModels: () =>
 			fetchOpenAICompatibleModels<Api>({
 				api: "anthropic-messages",
@@ -4012,13 +4045,18 @@ export function vercelAiGatewayModelManagerOptions(
 					const tags = entry.tags;
 					return Array.isArray(tags) && tags.includes("tool-use");
 				},
-				mapModel: (
-					entry: OpenAICompatibleModelRecord,
-					defaults: ModelSpec<Api>,
-					_context: OpenAICompatibleModelMapperContext<Api>,
-				): ModelSpec<Api> => {
+				mapModel: (entry: OpenAICompatibleModelRecord, defaults: ModelSpec<Api>): ModelSpec<Api> => {
+					const pricing = entry.pricing as Record<string, unknown> | undefined;
+					const cost = {
+						input: (toNumber(pricing?.input) ?? 0) * 1_000_000,
+						output: (toNumber(pricing?.output) ?? 0) * 1_000_000,
+						cacheRead: (toNumber(pricing?.input_cache_read) ?? 0) * 1_000_000,
+						cacheWrite: (toNumber(pricing?.input_cache_write) ?? 0) * 1_000_000,
+					};
+					const contextWindow = toPositiveNumber(entry.context_window, defaults.contextWindow);
+					const tags = Array.isArray(entry.tags) ? (entry.tags as string[]) : [];
+
 					if (entry.type === "evaluation") {
-						const pricing = entry.pricing as Record<string, unknown> | undefined;
 						const modalities = entry.modalities as { input?: unknown } | undefined;
 						const inputModalities = Array.isArray(modalities?.input) ? modalities.input : [];
 						return {
@@ -4027,21 +4065,14 @@ export function vercelAiGatewayModelManagerOptions(
 							baseUrl,
 							kind: "judge",
 							reasoning: false,
-							input: inputModalities.includes("image") ? ["text", "image"] : ["text"],
+							input: inputModalities.includes("image") || tags.includes("vision") ? ["text", "image"] : ["text"],
 							supportsTools: false,
-							cost: {
-								input: (toNumber(pricing?.input) ?? 0) * 1_000_000,
-								output: (toNumber(pricing?.output) ?? 0) * 1_000_000,
-								cacheRead: (toNumber(pricing?.input_cache_read) ?? 0) * 1_000_000,
-								cacheWrite: (toNumber(pricing?.input_cache_write) ?? 0) * 1_000_000,
-							},
-							contextWindow:
-								typeof entry.context_window === "number" ? entry.context_window : defaults.contextWindow,
-							maxTokens: typeof entry.max_tokens === "number" ? entry.max_tokens : defaults.maxTokens,
+							cost,
+							contextWindow,
+							maxTokens: toPositiveNumber(entry.max_tokens, defaults.maxTokens),
 						};
 					}
-					const pricing = entry.pricing as Record<string, unknown> | undefined;
-					const tags = Array.isArray(entry.tags) ? (entry.tags as string[]) : [];
+
 					const reportedMaxTokens = typeof entry.max_tokens === "number" ? entry.max_tokens : defaults.maxTokens;
 					const modelId = typeof entry.id === "string" ? entry.id : defaults.id;
 					const maxTokens =
@@ -4054,14 +4085,8 @@ export function vercelAiGatewayModelManagerOptions(
 						baseUrl,
 						reasoning: tags.includes("reasoning"),
 						input: tags.includes("vision") ? ["text", "image"] : ["text"],
-						cost: {
-							input: (toNumber(pricing?.input) ?? 0) * 1_000_000,
-							output: (toNumber(pricing?.output) ?? 0) * 1_000_000,
-							cacheRead: (toNumber(pricing?.input_cache_read) ?? 0) * 1_000_000,
-							cacheWrite: (toNumber(pricing?.input_cache_write) ?? 0) * 1_000_000,
-						},
-						contextWindow:
-							typeof entry.context_window === "number" ? entry.context_window : defaults.contextWindow,
+						cost,
+						contextWindow,
 						maxTokens,
 					};
 				},
