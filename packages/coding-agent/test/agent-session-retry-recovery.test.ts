@@ -40,6 +40,10 @@ const RETRIABLE_SERVER_ERROR = "503 service unavailable: overloaded_error";
 const CODEX_STEER_REJECTION =
 	"Codex error event: The experimental native turn lane cannot accept stateful WebSocket messages while a native turn is running. Start a new independent response.create turn instead. (code=unsupported_native_inflight_message)";
 
+function isAnthropicModel(model: Model | undefined): model is Model<"anthropic-messages"> {
+	return model?.api === "anthropic-messages";
+}
+
 function emptyUsage(): Usage {
 	return {
 		input: 0,
@@ -171,7 +175,7 @@ describe("AgentSession retry recovery", () => {
 
 	it.each(["policy", "throw", "timeout"] as const)("ends %s veto without client calls or recovery", async mode => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model || model.api !== "anthropic-messages") throw new Error("Expected bundled Anthropic model");
+		if (!isAnthropicModel(model)) throw new Error("Expected bundled Anthropic model");
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const runtime = new ExtensionRuntime();
 		const manager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "sessions"));
@@ -204,8 +208,8 @@ describe("AgentSession retry recovery", () => {
 			},
 			streamFn: (requestModel, context, options) => {
 				streams++;
-				if (requestModel.id !== model.id || requestModel.api !== "anthropic-messages") throw new Error("Unexpected fallback");
-				return streamAnthropic({ ...requestModel, api: "anthropic-messages" }, context, options);
+				if (!isAnthropicModel(requestModel) || requestModel.id !== model.id) throw new Error("Unexpected fallback");
+				return streamAnthropic(requestModel, context, options);
 			},
 		});
 		const settings = Settings.isolated({
@@ -236,7 +240,7 @@ describe("AgentSession retry recovery", () => {
 
 	it.each([true, false])("observes frozen signed redemption without rewriting it (reject=%s)", async reject => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model || model.api !== "anthropic-messages") throw new Error("Expected bundled Anthropic model");
+		if (!isAnthropicModel(model)) throw new Error("Expected bundled Anthropic model");
 		const frozen = {
 			model: "original-model",
 			stream: true,
@@ -269,7 +273,7 @@ describe("AgentSession retry recovery", () => {
 			sent = structuredClone(params);
 			throw new Error("synthetic terminal client response");
 		});
-		const stream = streamAnthropic({ ...model, api: "anthropic-messages" }, { messages: [{ role: "user", content: "unused", timestamp: 0 }] }, {
+		const stream = streamAnthropic(model, { messages: [{ role: "user", content: "unused", timestamp: 0 }] }, {
 			apiKey: "test-key",
 			fallbackCreditRedemption: { token: "credit-token", params: frozen, expiresAt: Date.now() + 60_000, prefillClaim: false },
 			onPayload: async (payload, requestModel) => {
@@ -297,7 +301,7 @@ describe("AgentSession retry recovery", () => {
 
 	it("keeps ordinary provider payload replacements working with a real runner", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model || model.api !== "anthropic-messages") throw new Error("Expected bundled Anthropic model");
+		if (!isAnthropicModel(model)) throw new Error("Expected bundled Anthropic model");
 		const runtime = new ExtensionRuntime();
 		const manager = SessionManager.inMemory();
 		managers.push(manager);
@@ -314,7 +318,7 @@ describe("AgentSession retry recovery", () => {
 		});
 		const context = { messages: [{ role: "user" as const, content: "unchanged input", timestamp: 0 }] };
 		const original = JSON.stringify(context);
-		const stream = streamAnthropic({ ...model, api: "anthropic-messages" }, context, {
+		const stream = streamAnthropic(model, context, {
 			apiKey: "test-key",
 			onPayload: (payload, requestModel) => runner.emitBeforeProviderRequest(payload, requestModel),
 		});
