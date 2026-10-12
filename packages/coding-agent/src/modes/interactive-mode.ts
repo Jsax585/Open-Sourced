@@ -8238,11 +8238,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	setTodoExpanded(expanded: boolean): void {
-		this.todoExpanded = expanded;
 		if (expanded && !cfgTodoSticky.get((this.#todoPhasesOwner ?? this.session).settings)) {
 			this.showWarning("Todo HUD is unpinned (todo.sticky is off); expand has nothing to show.");
 			return;
 		}
+		this.todoExpanded = expanded;
 		if (expanded) {
 			const owner = this.#todoPhasesOwner ?? this.viewSession;
 			this.#cancelTodoAutoClearTimer();
