@@ -981,12 +981,12 @@ export class TurnRecovery {
 				});
 				const modelAfterFallback = this.#host.model();
 				// Effort-only selector changes (provider/model:high → :low) resolve the
-				// same model and must not count as takeover — otherwise the empty-stop
+				// same route and must not count as takeover — otherwise the empty-stop
 				// counter resets and the same dead route gets another full cycle.
 				const modelIdentityChanged =
 					modelBeforeFallback !== undefined &&
 					modelAfterFallback !== undefined &&
-					!modelsAreEqual(modelBeforeFallback, modelAfterFallback);
+					formatModelStringWithRouting(modelBeforeFallback) !== formatModelStringWithRouting(modelAfterFallback);
 				if (didRetry && modelIdentityChanged) {
 					this.#emptyStopRetryCount = 0;
 					this.#emptyStopCycleHadBilling = false;
@@ -2013,7 +2013,7 @@ export class TurnRecovery {
 		if (
 			options?.requireModelIdentityChange &&
 			previousModel !== undefined &&
-			modelsAreEqual(previousModel, candidate)
+			formatModelStringWithRouting(previousModel) === formatModelStringWithRouting(candidate)
 		) {
 			return false;
 		}
@@ -2130,12 +2130,12 @@ export class TurnRecovery {
 				// failure — an unbounded retry loop against a model that cannot work.
 				if (this.#isNoOpRetryFallback(candidate, selector)) continue;
 				if (options?.excludeProvider === candidate.provider) continue;
-				// Empty-stop / hard-error takeover requires a different provider/model.
+				// Empty-stop / hard-error takeover requires a different routed model.
 				// Effort-only chain entries (provider/model:high → :low) must not count.
 				if (
 					options?.requireModelIdentityChange &&
 					currentModel !== undefined &&
-					modelsAreEqual(currentModel, candidate)
+					formatModelStringWithRouting(currentModel) === formatModelStringWithRouting(candidate)
 				) {
 					continue;
 				}

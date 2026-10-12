@@ -5,6 +5,7 @@ import * as AIError from "@oh-my-pi/pi-ai/error";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { Model, Usage } from "@oh-my-pi/pi-catalog/types";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { formatModelStringWithRouting, parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { TurnRecovery, type TurnRecoveryHost } from "@oh-my-pi/pi-coding-agent/session/turn-recovery";
@@ -120,6 +121,7 @@ describe("TurnRecovery zero-billed empty-stop fallback", () => {
 		authStorage = await AuthStorage.create(tempDir.join("testauth.db"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		authStorage.keys.setRuntime("openai", "test-key");
+		authStorage.keys.setRuntime("openrouter", "test-key");
 		modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
 	});
 
@@ -351,6 +353,40 @@ describe("TurnRecovery zero-billed empty-stop fallback", () => {
 		expect(currentModel.id).toBe(model.id);
 		expect(events.some(e => e.type === "retry_fallback_applied")).toBe(false);
 		expect(events.filter(e => e.type === "auto_retry_end" && e.success === false).length).toBe(1);
+	});
+
+	it("a zero-billed cap escapes to another upstream route of the same model", async () => {
+		const bundled = getBundledModel("openrouter", "z-ai/glm-4.7");
+		if (!bundled) throw new Error("Expected bundled OpenRouter model");
+		const primarySelector = "openrouter/z-ai/glm-4.7@cerebras";
+		const fallbackSelector = "openrouter/z-ai/glm-4.7@chutes";
+		const primary = parseModelPattern(primarySelector, [bundled]).model;
+		if (!primary) throw new Error("Expected routed primary to resolve");
+		const host = createHost(primary, modelRegistry);
+		let currentModel: Model = primary;
+		host.model = () => currentModel;
+		host.setModelWithProviderSessionReset = async next => {
+			currentModel = next;
+		};
+		host.settings = Settings.isolated({
+			"retry.baseDelayMs": 0,
+			"retry.fallbackChains": { default: [fallbackSelector] },
+		});
+		host.settings.setModelRole("default", primarySelector);
+		const events: Array<{ type: string; success?: boolean }> = [];
+		host.emitSessionEvent = async event => {
+			events.push(event);
+		};
+		const recovery = new TurnRecovery(host);
+		const msg = makeMessage([], primary);
+		for (let attempt = 0; attempt < 4; attempt++) {
+			expect(await recovery.handleEmptyAssistantStop(msg)).toBe("continue");
+		}
+		expect(formatModelStringWithRouting(currentModel)).toBe(fallbackSelector);
+		expect(events.filter(event => event.type === "retry_fallback_applied")).toHaveLength(1);
+		expect(events.filter(event => event.type === "auto_retry_end" && event.success === false)).toEqual([]);
+		expect(await settle(recovery, makeMessage([], currentModel))).toEqual(LEGACY_CAP);
+		expect(msg.stopReason).toBe("stop");
 	});
 
 	it("10. counter resets after a non-empty turn between empties", async () => {
