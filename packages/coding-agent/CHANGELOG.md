@@ -3,8 +3,8 @@
 ## [Unreleased]
 ### Fixed
 
-- Zero-billed empty-stop promotion treats Devin-style `usage.credits` (`cost` / `committedCost` / `acuCost`) as billed usage so committed credit charges are not replayed as never-dispatched.
-- Zero-billed empty stops that exhaust the retry cap now consult `retry.modelFallback` / `retry.fallbackChains` instead of surfacing a retry-cap error. Turns that billed any usage bucket, including provider-side orchestration tokens, still settle terminal ([#9480](https://github.com/can1357/oh-my-pi/issues/9480)). Same-model effort-only chain entries no longer count as a model takeover.
+- Empty-stop recovery preserves provider credit charges and only promotes an entirely unbilled retry cycle ([#9487](https://github.com/can1357/oh-my-pi/pull/9487) by [@jroth1111](https://github.com/jroth1111)).
+- Entirely unbilled empty stops can use configured model fallbacks after the retry cap; effort-only changes do not count as switching models ([#9480](https://github.com/can1357/oh-my-pi/issues/9480), [#9487](https://github.com/can1357/oh-my-pi/pull/9487) by [@jroth1111](https://github.com/jroth1111)).
 
 ## [18.3.1] - 2026-09-25
 
