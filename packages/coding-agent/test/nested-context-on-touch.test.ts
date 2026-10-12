@@ -534,6 +534,40 @@ describe("contextFiles.onTouch", () => {
 		expect(result.carried).toEqual([{ path: path.join(repo, 'q"b/AGENTS.md'), content: "Q-CANARY" }]);
 	});
 
+	it.skipIf(process.platform === "win32")(
+		"loads no context file whose real path is outside the workspace",
+		async () => {
+			// Guards the trust boundary: a symlinked directory or file can point at a third-party
+			// AGENTS.md, which must not be raised to instructions just because its link sits in the repo.
+			// A link to a file inside the repo still loads.
+			setup({ "vendor-src/AGENTS.md": "SHARED-CANARY", "pkg/a.ts": "a", "lib/b.ts": "b" });
+			const outside = TempDir.createSync("@pi-nested-context-outside-");
+			try {
+				const outsideDir = fs.realpathSync(outside.path());
+				writeTree(outsideDir, { "dep/AGENTS.md": "DEP-CANARY", "dep/c.ts": "c", "rules.md": "LINKED-CANARY" });
+				fs.symlinkSync(path.join(outsideDir, "dep"), path.join(repo, "dep"));
+				fs.symlinkSync(path.join(outsideDir, "rules.md"), path.join(repo, "pkg/AGENTS.md"));
+				fs.symlinkSync(path.join(repo, "vendor-src/AGENTS.md"), path.join(repo, "lib/AGENTS.md"));
+				const result = await run(
+					tempDir,
+					repo,
+					[
+						[
+							{ name: "read", arguments: { path: "dep/c.ts" } },
+							{ name: "read", arguments: { path: "pkg/a.ts" } },
+							{ name: "read", arguments: { path: "lib/b.ts" } },
+						],
+					],
+					ON,
+				);
+				expect(blockPaths(result.developerTexts, repo)).toEqual(["lib/AGENTS.md"]);
+				expect(result.developerTexts.join("\n")).toContain("SHARED-CANARY");
+			} finally {
+				outside.removeSync();
+			}
+		},
+	);
+
 	it("triggers on an edit", async () => {
 		// Guards the edit trigger, whose result reports paths differently from write.
 		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "old\n" });

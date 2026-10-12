@@ -352,7 +352,7 @@ export class NestedContextInjector {
 				probes.set(current, root);
 			}
 		}
-		const files: Omit<NestedContextFile, "content">[] = [];
+		let files: Omit<NestedContextFile, "content">[] = [];
 		for (const [owner, root] of probes) {
 			// Hidden directories and dependency trees are not project context.
 			const segments = path.relative(root, owner).split(path.sep);
@@ -366,6 +366,9 @@ export class NestedContextInjector {
 				files.push({ path: item.path, owner, raw: item.content });
 			}
 		}
+		const realRoots = await Promise.all(roots.map(root => fs.realpath(root).catch(() => root)));
+		const inside = await Promise.all(files.map(file => isInsideRoots(file.path, realRoots)));
+		files = files.filter((_, index) => inside[index]);
 		// Stable: within a directory, capability order (the winner, then additive extras).
 		files.sort(
 			(a, b) => a.owner.split(path.sep).length - b.owner.split(path.sep).length || a.owner.localeCompare(b.owner),
@@ -595,7 +598,23 @@ async function touchedDirectory(target: TouchedTarget): Promise<string> {
 
 function isStrictlyBelow(parent: string, child: string): boolean {
 	const relative = path.relative(parent, child);
-	return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+	// `..draft` is a child; only `..` itself or a `../` prefix leaves `parent`.
+	return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+/**
+ * Whether the file a context path resolves to lies below a workspace root. A
+ * symlinked directory or file in the repository can point at a third-party
+ * `AGENTS.md`; the link's location does not make its target project context.
+ * A file that cannot be resolved is not loaded.
+ */
+async function isInsideRoots(filePath: string, realRoots: readonly string[]): Promise<boolean> {
+	try {
+		const real = await fs.realpath(filePath);
+		return realRoots.some(root => isStrictlyBelow(root, real));
+	} catch {
+		return false;
+	}
 }
 
 function displayPath(cwd: string, target: string): string {
