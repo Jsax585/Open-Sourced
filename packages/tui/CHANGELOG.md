@@ -2,13 +2,24 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed `fuzzy.ts` (`FuzzyQuery`, `FuzzyText`, `FuzzyCorpus`, `fuzzyRank`, `resetFuzzyIndexCache`, `FuzzyMatch`, `FuzzyFilterResult`); use `matchText`, `MatchTarget`, `MatchCorpus` and `rankByText` from `text-match.ts`, while `fuzzyFilter` and `fuzzyMatch` remain ([#15579](https://github.com/can1357/oh-my-pi/pull/15579) by [@azain47](https://github.com/azain47))
+- Renamed `MenuSelectionAdapter.getSearchText(item)` to `getMatchFields(item)` and `getSettingItemFilterText` to `settingItemMatchFields` ([#15579](https://github.com/can1357/oh-my-pi/pull/15579) by [@azain47](https://github.com/azain47))
+
 ### Added
 
 - `ApprovalDialogComponent` takes a `draft` option that routes typing to the composer beneath it, so a message can be written while a tool call waits ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
 - `ApprovalDialogComponent` takes a `fullPrompt` option that the expand key (`app.tools.expand`) or a Details button swaps in for the summarized prompt; it replaces `wrapDetails` ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+- Added `text-match.ts`, one typed-text matcher for every picker and popup that tolerates typos across punctuation (`gtp5` → `gpt-5`, `dabl` → `claude-fable-5-1`), abbreviations (`mrs` → Model Role Storage) and accents (`cafe` → `café`) ([#15579](https://github.com/can1357/oh-my-pi/pull/15579) by [@azain47](https://github.com/azain47))
+
+### Changed
+
+- Settings search, the model picker and hub, `/resume`, `/tree`, the agents hubs, the extensions dashboard and list filters now find mistyped names and no longer match random input through scattered letters in descriptions ([#15579](https://github.com/can1357/oh-my-pi/pull/15579) by [@azain47](https://github.com/azain47))
 
 ### Fixed
 
+- Fixed `/`, `#` and internal-URL (`cfg://`, `skill://`, …) autocomplete suggesting unrelated entries for mistyped or random input, such as `/jub` running `/cleanse` ([#15579](https://github.com/can1357/oh-my-pi/pull/15579) by [@azain47](https://github.com/azain47))
 - Fixed clipboard-image and image-path pastes being dropped while the composer draft is edited beneath an ask or approval dialog ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
 
 ## [18.10.4] - 2026-10-13
