@@ -80,6 +80,7 @@ import {
 } from "./openai-compat";
 import { openzooModelManagerOptions } from "./openzoo";
 import {
+	cloudflareWorkersAiModelManagerOptions,
 	cursorModelManagerOptions,
 	devinModelManagerOptions,
 	factoryDroidModelManagerOptions,
@@ -106,6 +107,7 @@ const MODEL_MANAGER_FACTORIES: Readonly<Partial<Record<KnownProvider, ModelManag
 	cerebras: config => cerebrasModelManagerOptions(config),
 	"charm-hyper": config => charmHyperModelManagerOptions(config),
 	"cloudflare-ai-gateway": config => cloudflareAiGatewayModelManagerOptions(config),
+	"cloudflare-workers-ai": () => cloudflareWorkersAiModelManagerOptions(),
 	commandcode: config => commandCodeModelManagerOptions(config),
 	coralbricks: config => coralbricksModelManagerOptions(config),
 	cursor: config => cursorModelManagerOptions(config),
