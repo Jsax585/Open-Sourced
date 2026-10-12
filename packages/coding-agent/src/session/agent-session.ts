@@ -8005,9 +8005,22 @@ export class AgentSession implements SettingsScope {
 			const previewXdevMountNotice = isUserQueuedMessage(message)
 				? this.#tools.peekPendingXdevMountNotice({ baseCatalogDelivered: baseXdevCatalogDelivered })
 				: undefined;
-			const maintenanceMessages = previewXdevMountNotice?.notice ? [...messages] : messages;
-			if (maintenanceMessages !== messages && previewXdevMountNotice?.notice) {
-				maintenanceMessages.splice(xdevMountNoticeIndex, 0, previewXdevMountNotice.notice);
+			// A changed context file adds up to a read-sized message per file. Build the
+			// update before maintenance (it consumes no state: delivery is read back from
+			// the messages in context) so the size check sees the request's true size.
+			const contextFileUpdate = isUserQueuedMessage(message)
+				? await this.#contextFiles.takePromptUpdate()
+				: undefined;
+			if (this.#promptGeneration !== generation) {
+				return false;
+			}
+			const previewNotices = [
+				...(previewXdevMountNotice?.notice ? [previewXdevMountNotice.notice] : []),
+				...(contextFileUpdate ? [contextFileUpdate] : []),
+			];
+			const maintenanceMessages = previewNotices.length > 0 ? [...messages] : messages;
+			if (maintenanceMessages !== messages) {
+				maintenanceMessages.splice(xdevMountNoticeIndex, 0, ...previewNotices);
 			}
 			await this.#maintenance.runPrePromptCompactionIfNeeded(maintenanceMessages);
 			if (this.#promptGeneration !== generation) {
@@ -8031,9 +8044,6 @@ export class AgentSession implements SettingsScope {
 				: undefined;
 			const evalPreludeNotice = isUserQueuedMessage(message) ? this.#tools.takeEvalPreludeNotice() : undefined;
 			const sessionAgentNotice = isUserQueuedMessage(message) ? this.#tools.takeSessionAgentNotice() : undefined;
-			const contextFileUpdate = isUserQueuedMessage(message)
-				? await this.#contextFiles.takePromptUpdate()
-				: undefined;
 			if (this.#promptGeneration !== generation) {
 				return false;
 			}
@@ -13556,8 +13566,8 @@ export class AgentSession implements SettingsScope {
 	 * Declare the context files the system prompt was just built with. Edits and
 	 * deletions of these files are announced to the model before its next request.
 	 */
-	setAmbientContextFiles(files: readonly ContextFileEntry[]): void {
-		this.#contextFiles.setAmbientFiles(files);
+	async setAmbientContextFiles(files: readonly ContextFileEntry[]): Promise<void> {
+		await this.#contextFiles.setAmbientFiles(files);
 	}
 
 	/**

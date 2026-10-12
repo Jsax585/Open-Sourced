@@ -28,7 +28,9 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateHead } from "@oh-my-pi/pi
 import { isProviderEnabled } from "../capability";
 import type { Settings } from "../config/settings";
 import { expandAtImports } from "../discovery/at-imports";
+import { isWithin } from "../discovery/helpers";
 import { cfgDisabledExtensions } from "../extensibility/settings";
+import contextFileTruncatedPrompt from "../prompts/system/context-file-truncated.md" with { type: "text" };
 import contextFileUpdatePrompt from "../prompts/system/context-file-update.md" with { type: "text" };
 import nestedContextPrompt from "../prompts/system/nested-context.md" with { type: "text" };
 import type { ContextFileEntry } from "../tools";
@@ -89,11 +91,9 @@ function hashContent(content: string): string {
 	return Bun.hash(content).toString(36);
 }
 
-/** True when `target` is strictly below `root`. A leading `..` only means "outside" as a whole path component. */
-function isWithin(root: string, target: string): boolean {
-	const relative = path.relative(root, target);
-	if (relative === "" || relative === ".." || path.isAbsolute(relative)) return false;
-	return !relative.startsWith(`..${path.sep}`);
+/** True when `target` is strictly below `root`: the root itself is not a nested directory. */
+function isBelow(root: string, target: string): boolean {
+	return path.resolve(root) !== path.resolve(target) && isWithin(root, target);
 }
 
 /**
@@ -121,7 +121,7 @@ async function resolvesInsideWorkspace(realRoot: string, candidate: string, isDi
 		return false;
 	}
 	const directory = isDirectory ? physical : path.dirname(physical);
-	return isWithin(realRoot, directory) && !hasExcludedSegment(realRoot, directory);
+	return isBelow(realRoot, directory) && !hasExcludedSegment(realRoot, directory);
 }
 
 function signature(stat: fs.Stats): string {
@@ -132,7 +132,7 @@ function signature(stat: fs.Stats): string {
 function boundContent(content: string): string {
 	const truncated = truncateHead(content, { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES });
 	if (!truncated.truncated) return content;
-	return `${truncated.content}\n[Truncated: this file is larger than the ${DEFAULT_MAX_BYTES} byte context limit. Read it directly for the rest.]`;
+	return prompt.render(contextFileTruncatedPrompt, { content: truncated.content, maxBytes: DEFAULT_MAX_BYTES });
 }
 
 function isCustom(message: AgentMessage, customType: string): message is CustomMessage {
@@ -145,34 +145,47 @@ export class ContextFileTracker {
 	#pending = new Map<string, PendingNested>();
 	#inflight = new Set<Promise<void>>();
 	#generation = 0;
+	/** Loaded entries with no backing file (SDK-supplied content): never watched, but still in force. */
+	#unwatched = 0;
+	#ambientSeq = 0;
 
 	constructor(host: ContextFileTrackerHost) {
 		this.#host = host;
 	}
 
 	/** Declare the context files the system prompt was just built with; drops earlier tracking. */
-	setAmbientFiles(files: readonly ContextFileEntry[]): void {
+	async setAmbientFiles(files: readonly ContextFileEntry[]): Promise<void> {
 		const registeredAt = Date.now();
+		const seq = ++this.#ambientSeq;
+		const stats = await Promise.all(
+			files.map(async file => {
+				try {
+					return await fs.promises.stat(path.resolve(file.path));
+				} catch {
+					return undefined; // Not backed by a file on disk, so there is nothing to watch.
+				}
+			}),
+		);
+		if (seq !== this.#ambientSeq) return; // A newer declaration superseded this one while it was statting.
 		const next = new Map<string, TrackedFile>();
-		for (const file of files) {
-			const filePath = path.resolve(file.path);
-			let stat: fs.Stats;
-			try {
-				stat = fs.statSync(filePath);
-			} catch {
-				continue; // Not backed by a file on disk, so there is nothing to watch.
+		let unwatched = 0;
+		files.forEach((file, index) => {
+			const stat = stats[index];
+			if (!stat?.isFile()) {
+				if (file.content.trim() !== "") unwatched++;
+				return;
 			}
-			if (!stat.isFile()) continue;
 			const loadedHash = hashContent(file.content);
-			next.set(filePath, {
+			next.set(path.resolve(file.path), {
 				loadedHash,
 				sig: signature(stat),
 				hash: loadedHash,
 				content: file.content,
 				registeredAt,
 			});
-		}
+		});
 		this.#ambient = next;
+		this.#unwatched = unwatched;
 	}
 
 	/** Forget queued nested files and in-flight discovery, e.g. when the conversation is replaced. */
@@ -242,7 +255,7 @@ export class ContextFileTracker {
 		const disabledIds = new Set(cfgDisabledExtensions.get(this.#host.settings));
 		for (const target of targets) {
 			const absolute = path.resolve(target);
-			const root = roots.filter(candidate => isWithin(candidate, absolute)).sort((a, b) => b.length - a.length)[0];
+			const root = roots.filter(candidate => isBelow(candidate, absolute)).sort((a, b) => b.length - a.length)[0];
 			if (!root) continue;
 			let realRoot: string;
 			try {
@@ -257,7 +270,7 @@ export class ContextFileTracker {
 				continue;
 			}
 			const found: PendingNested[] = [];
-			for (let dir = directory; isWithin(root, dir); dir = path.dirname(dir)) {
+			for (let dir = directory; isBelow(root, dir); dir = path.dirname(dir)) {
 				const loaded = await this.#loadDirectory(dir, root, realRoot, absolute, disabledIds);
 				if (loaded) found.push(loaded);
 			}
@@ -354,7 +367,7 @@ export class ContextFileTracker {
 		} catch {
 			return; // Keep the last known state and retry on the next check.
 		}
-		const content = await expandAtImports(raw, filePath);
+		const content = await expandAtImports(raw, filePath, { uncached: true });
 		tracked.sig = sig;
 		tracked.hash = content.trim() === "" ? null : hashContent(content);
 		tracked.content = content;
@@ -383,7 +396,7 @@ export class ContextFileTracker {
 			content: prompt.render(contextFileUpdatePrompt, {
 				updated,
 				removed,
-				allRemoved: remaining === 0,
+				allRemoved: remaining + this.#unwatched === 0,
 			}),
 			details: { files },
 			attribution: "agent",

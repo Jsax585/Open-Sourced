@@ -9,6 +9,7 @@ import {
 	NESTED_CONTEXT_MESSAGE_TYPE,
 } from "@oh-my-pi/pi-coding-agent/session/context-file-tracker";
 import type { CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { expandAtImports } from "@oh-my-pi/pi-coding-agent/discovery/at-imports";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
 
 const READ_RESULT = (target: string) => ({ details: { resolvedPath: target } });
@@ -220,7 +221,7 @@ describe("live updates of loaded context files", () => {
 		tmp = undefined;
 	});
 
-	function setup(initial: Record<string, string>, overrides: Record<string, unknown> = {}) {
+	async function setup(initial: Record<string, string>, overrides: Record<string, unknown> = {}) {
 		tmp = TempDir.createSync("@omp-ambient-ctx-");
 		const root = fs.realpathSync(tmp.path());
 		const files: Array<{ path: string; content: string }> = [];
@@ -230,7 +231,7 @@ describe("live updates of loaded context files", () => {
 			files.push({ path: abs, content });
 		}
 		const r = rig(root, overrides);
-		r.tracker.setAmbientFiles(files);
+		await r.tracker.setAmbientFiles(files);
 		return { r, root, files };
 	}
 
@@ -249,14 +250,14 @@ describe("live updates of loaded context files", () => {
 	}
 
 	it("says nothing while loaded files are unchanged, even when only the mtime moves", async () => {
-		const { r, files } = setup({ "AGENTS.md": "same" });
+		const { r, files } = await setup({ "AGENTS.md": "same" });
 		expect(await update(r)).toBeUndefined();
 		rewrite(files[0]!.path, "same");
 		expect(await update(r)).toBeUndefined();
 	});
 
 	it("sends the new content once after an edit and nothing further", async () => {
-		const { r, files } = setup({ "AGENTS.md": "old rules" });
+		const { r, files } = await setup({ "AGENTS.md": "old rules" });
 		rewrite(files[0]!.path, "new rules");
 		const message = await update(r);
 		expect(message?.customType).toBe(CONTEXT_FILE_UPDATE_MESSAGE_TYPE);
@@ -266,7 +267,7 @@ describe("live updates of loaded context files", () => {
 	});
 
 	it("sends the update again once compaction dropped the earlier one", async () => {
-		const { r, files } = setup({ "AGENTS.md": "old rules" });
+		const { r, files } = await setup({ "AGENTS.md": "old rules" });
 		rewrite(files[0]!.path, "new rules");
 		await update(r);
 		r.messages.splice(0, r.messages.length, toolResult);
@@ -274,7 +275,7 @@ describe("live updates of loaded context files", () => {
 	});
 
 	it("tells the model when an edit puts the original content back", async () => {
-		const { r, files } = setup({ "AGENTS.md": "old rules" });
+		const { r, files } = await setup({ "AGENTS.md": "old rules" });
 		rewrite(files[0]!.path, "new rules");
 		await update(r);
 		rewrite(files[0]!.path, "old rules");
@@ -282,7 +283,7 @@ describe("live updates of loaded context files", () => {
 	});
 
 	it("reports a deleted file, and that no instructions remain when it was the only one", async () => {
-		const { r, files } = setup({ "AGENTS.md": "rules" });
+		const { r, files } = await setup({ "AGENTS.md": "rules" });
 		fs.rmSync(files[0]!.path);
 		const message = await update(r);
 		expect(text(message!)).toContain("was removed");
@@ -291,7 +292,7 @@ describe("live updates of loaded context files", () => {
 	});
 
 	it("keeps the rest in force when only one of several files is deleted", async () => {
-		const { r, files } = setup({ "AGENTS.md": "rules", "CLAUDE.md": "claude rules" });
+		const { r, files } = await setup({ "AGENTS.md": "rules", "CLAUDE.md": "claude rules" });
 		fs.rmSync(files[0]!.path);
 		const message = await update(r);
 		expect(text(message!)).toContain("was removed");
@@ -299,7 +300,7 @@ describe("live updates of loaded context files", () => {
 	});
 
 	it("restores a deleted file that comes back", async () => {
-		const { r, files } = setup({ "AGENTS.md": "rules" });
+		const { r, files } = await setup({ "AGENTS.md": "rules" });
 		fs.rmSync(files[0]!.path);
 		await update(r);
 		fs.writeFileSync(files[0]!.path, "rules again");
@@ -308,7 +309,7 @@ describe("live updates of loaded context files", () => {
 
 	it("treats a transient stat failure as no news rather than a deletion", async () => {
 		if (process.getuid?.() === 0) return; // root ignores directory permissions
-		const { r, root, files } = setup({ "AGENTS.md": "rules" });
+		const { r, root, files } = await setup({ "AGENTS.md": "rules" });
 		fs.chmodSync(root, 0o000);
 		try {
 			expect(await update(r)).toBeUndefined();
@@ -321,7 +322,7 @@ describe("live updates of loaded context files", () => {
 
 	it("retries an unreadable edit on the next check instead of giving up on it", async () => {
 		if (process.getuid?.() === 0) return;
-		const { r, files } = setup({ "AGENTS.md": "rules" });
+		const { r, files } = await setup({ "AGENTS.md": "rules" });
 		rewrite(files[0]!.path, "edited");
 		fs.chmodSync(files[0]!.path, 0o000);
 		try {
@@ -333,29 +334,55 @@ describe("live updates of loaded context files", () => {
 	});
 
 	it("ignores update messages from before the prompt was last rebuilt", async () => {
-		const { r, files } = setup({ "AGENTS.md": "old rules" });
+		const { r, files } = await setup({ "AGENTS.md": "old rules" });
 		rewrite(files[0]!.path, "new rules");
 		const delivered = await update(r);
 		// Delivered before the rebuild; /reload-plugins style rebuild then bakes the new content into the prompt.
 		delivered!.timestamp -= 1_000;
-		r.tracker.setAmbientFiles([{ path: files[0]!.path, content: "new rules" }]);
+		await r.tracker.setAmbientFiles([{ path: files[0]!.path, content: "new rules" }]);
 		expect(await update(r)).toBeUndefined();
 	});
 
 	it("does not watch files with no backing file on disk", async () => {
-		const { r } = setup({});
-		r.tracker.setAmbientFiles([{ path: path.join(r.root, "virtual/AGENTS.md"), content: "sdk-supplied" }]);
+		const { r } = await setup({});
+		await r.tracker.setAmbientFiles([{ path: path.join(r.root, "virtual/AGENTS.md"), content: "sdk-supplied" }]);
 		expect(await update(r)).toBeUndefined();
 	});
 
+	it("does not claim no context remains while SDK-supplied files are still in force", async () => {
+		const { r, files } = await setup({ "AGENTS.md": "disk rules" });
+		await r.tracker.setAmbientFiles([
+			files[0]!,
+			{ path: path.join(r.root, "virtual/AGENTS.md"), content: "sdk-supplied" },
+		]);
+		fs.rmSync(files[0]!.path);
+		const message = await update(r);
+		expect(text(message!)).toContain("was removed");
+		expect(text(message!)).not.toContain("No context files remain");
+	});
+
+	it("notices a changed @-import when its importer is touched, despite the startup read cache", async () => {
+		const { r, root } = await setup({});
+		const rules = path.join(root, "rules.md");
+		const agents = path.join(root, "AGENTS.md");
+		fs.writeFileSync(rules, "imported v1");
+		fs.writeFileSync(agents, "see @rules.md");
+		const loaded = await expandAtImports("see @rules.md", agents); // fills the discovery cache like startup does
+		await r.tracker.setAmbientFiles([{ path: agents, content: loaded }]);
+		fs.writeFileSync(rules, "imported v2");
+		rewrite(agents, "see @rules.md");
+		const message = await update(r);
+		expect(text(message!)).toContain("imported v2");
+	});
+
 	it("is off when contextFiles.liveUpdates is false", async () => {
-		const { r, files } = setup({ "AGENTS.md": "old" }, { "contextFiles.liveUpdates": false });
+		const { r, files } = await setup({ "AGENTS.md": "old" }, { "contextFiles.liveUpdates": false });
 		rewrite(files[0]!.path, "new");
 		expect(await update(r)).toBeUndefined();
 	});
 
 	it("also delivers the update at a mid-work step boundary", async () => {
-		const { r, files } = setup({ "AGENTS.md": "old" });
+		const { r, files } = await setup({ "AGENTS.md": "old" });
 		rewrite(files[0]!.path, "new");
 		const injected = resolveAsides(await r.tracker.takeAsides());
 		expect(injected.map(message => message.customType)).toEqual([CONTEXT_FILE_UPDATE_MESSAGE_TYPE]);

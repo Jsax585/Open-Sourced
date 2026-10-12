@@ -690,7 +690,7 @@ function samePath(left: string, right: string): boolean {
 /**
  * Return whether `child` is at or below `parent`.
  */
-function isWithin(parent: string, child: string): boolean {
+export function isWithin(parent: string, child: string): boolean {
 	const normalizedParent = path.resolve(parent);
 	const normalizedChild = path.resolve(child);
 	const relative = path.relative(

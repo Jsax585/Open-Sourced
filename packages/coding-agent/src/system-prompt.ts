@@ -612,6 +612,11 @@ export interface BuildSystemPromptResult {
 	 * a catalog the prompt already carries (issue #7139).
 	 */
 	xdevCatalogNames?: readonly string[];
+	/**
+	 * Context files the prompt was built from, including those discovered for additional
+	 * workspace roots. Lets the session watch every file the model was told about.
+	 */
+	contextFiles?: ReadonlyArray<{ path: string; content: string; depth?: number }>;
 }
 
 /** Static wrapper; compiled (not rendered) so user-authored Markdown passes through byte-for-byte. */
@@ -1056,5 +1061,5 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		!resolvedCustomPrompt && xdevTools.length > 0 && rendered.includes("xd://")
 			? xdevTools.map(mounted => mounted.name)
 			: undefined;
-	return { systemPrompt, xdevCatalogNames };
+	return { systemPrompt, xdevCatalogNames, contextFiles };
 }

@@ -5,7 +5,7 @@
 ### Added
 
 - Added lazy nested context files: reading a file or directory below the working directory loads the `AGENTS.md` (or `CLAUDE.md`) files in between into context once, nearest first, and loads them again only after compaction or a revert removed them. `contextFiles.nestedDiscovery` (default on) turns it off. Symlinks into `node_modules` or outside the workspace, and dot directories at any depth, never contribute instructions.
-- Added live context file updates: edits to or deletion of the context files loaded at startup are announced to the agent before its next request. `contextFiles.liveUpdates` (default on) turns it off.
+- Added live context file updates: edits to or deletion of the context files loaded at startup are announced to the agent before its next request. `contextFiles.liveUpdates` (default on) turns it off. Files from additional workspace roots are watched too, changed `@`-imports are re-read, and a pending update counts toward pre-prompt compaction.
 
 ## [18.10.0] - 2026-10-12
 

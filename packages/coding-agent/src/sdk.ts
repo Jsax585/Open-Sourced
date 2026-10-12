@@ -258,6 +258,7 @@ import {
 	createTools,
 	createVibeTools,
 	createXdevState,
+	type ContextFileEntry,
 	type DeferredDiagnosticsEntry,
 	defaultLoadModeForToolName,
 	discoverStartupLspServers,
@@ -2180,6 +2181,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			advisorConfigsPromise,
 		]);
 	let contextFiles = initialContextFiles;
+	// What the latest prompt was actually built from: `contextFiles` plus any additional-root files.
+	let promptContextFiles: ReadonlyArray<ContextFileEntry> | undefined;
 
 	let agent: Agent;
 	const effectiveGetApiKey =
@@ -3759,7 +3762,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				]);
 				toolSession.contextFiles = contextFiles;
 				session.setAdvisorContextPrompt(formatAdvisorContextPrompt(contextFiles));
-				session.setAmbientContextFiles(contextFiles);
 			}
 			// Re-discover rules from disk on every session-scoped rebuild, mirroring the
 			// context-file refresh above. The rule buckets are otherwise frozen at
@@ -3959,6 +3961,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				reactions: agentKind === "main" && options.hasUI === true && cfgTuiReactions.get(settings),
 				activeRepoContext,
 			});
+
+			promptContextFiles = defaultPrompt.contextFiles ?? contextFiles;
+			if (hasSession && options.contextFiles === undefined) await session.setAmbientContextFiles(promptContextFiles);
 
 			if (typeof options.systemPrompt !== "function") {
 				return defaultPrompt;
@@ -4676,7 +4681,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		});
 		hasSession = true;
 		credentialNoticeSession = session;
-		session.setAmbientContextFiles(contextFiles);
+		await session.setAmbientContextFiles(promptContextFiles ?? contextFiles);
 		// Hashline snapshots are session-scoped: /new and switchSession fire the
 		// change callbacks, so clear the tool-side store there — stale tags would
 		// otherwise surface as "issued in this session" in mismatch diagnostics
