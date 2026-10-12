@@ -3902,6 +3902,9 @@ export async function prewarmOpenAICodexResponses(
 		attestation,
 		routedRequest,
 	);
+	// Prewarm is best effort: never replace a request or handshake owned by another caller.
+	// Check after attestation's await, immediately before synchronous acquisition starts.
+	if (state.connection?.isBusy()) return;
 	await logger.time(
 		"prewarmCodex:establishWs",
 		getOrCreateCodexWebSocketConnection,

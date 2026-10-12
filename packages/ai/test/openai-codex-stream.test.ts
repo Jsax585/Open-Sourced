@@ -8441,6 +8441,391 @@ describe("openai-codex streaming", () => {
 		});
 	});
 
+	it.each([
+		["service-tier route", "serviceTier"],
+		["request-model route", "requestModel"],
+		["rotated bearer", "bearer"],
+		["stale health", "staleHealth"],
+	] as const)("skips late prewarm while an active tool call owns the socket (%s)", async (_label, kind) => {
+		const tempDir = TempDir.createSync("@pi-codex-busy-prewarm-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const rotatedToken = `${token.slice(0, -3)}ccc`;
+		const sessionId = `ws-busy-prewarm-${kind}`;
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run while the active tool call is held");
+		});
+		const sentRequests: Array<Record<string, unknown>> = [];
+		const sockets: BusyPrewarmWebSocket[] = [];
+		let constructorCount = 0;
+		let sendCount = 0;
+		let closeCount = 0;
+		let hookCalls = 0;
+		let releaseTerminal = (): void => {};
+		const terminalGate = Promise.withResolvers<void>();
+		const pendingPromises: Promise<unknown>[] = [];
+		const start = Date.now();
+		const clock = kind === "staleHealth" ? vi.spyOn(Date, "now").mockReturnValue(start) : undefined;
+		let clockRestored = false;
+
+		class BusyPrewarmWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				constructorCount += 1;
+				sockets.push(this);
+				this.scheduleOpen();
+			}
+
+			override close(): void {
+				const wasOpenOrConnecting =
+					this.readyState === MockWebSocket.OPEN || this.readyState === MockWebSocket.CONNECTING;
+				if (wasOpenOrConnecting) closeCount += 1;
+				super.close();
+				if (wasOpenOrConnecting) this.emit("close", { code: 1000 } as unknown as Event);
+			}
+
+			override send(data: string): void {
+				sendCount += 1;
+				sentRequests.push(JSON.parse(data) as Record<string, unknown>);
+				if (sendCount === 1) {
+					this.sendJson({
+						type: "response.output_item.added",
+						item: { type: "function_call", id: "fc_busy", call_id: "call_busy", name: "echo", arguments: "" },
+					});
+					this.sendJson({
+						type: "response.output_item.done",
+						item: {
+							type: "function_call",
+							id: "fc_busy",
+							call_id: "call_busy",
+							name: "echo",
+							arguments: '{"value":"busy"}',
+						},
+					});
+					releaseTerminal = () => {
+						terminalGate.resolve();
+					};
+					void terminalGate.promise.then(() => {
+						this.sendJson({
+							type: "response.completed",
+							response: { id: "resp_busy", status: "completed", usage: DEFAULT_USAGE },
+						});
+					});
+					return;
+				}
+				this.emitCodexResponse({
+					messageId: `msg_followup_${sendCount}`,
+					responseId: `resp_followup_${sendCount}`,
+					text: "Follow-up",
+					includeCreated: true,
+				});
+			}
+		}
+
+		global.WebSocket = BusyPrewarmWebSocket as unknown as typeof WebSocket;
+		const model =
+			kind === "serviceTier"
+				? buildModel({
+						...createCodexTestModel("https://chatgpt.com/backend-api"),
+						serviceTiers: ["priority"],
+					} as ModelSpec<"openai-codex-responses">)
+				: createCodexTestModel("https://chatgpt.com/backend-api");
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const firstContext = createCodexTestContext();
+		const prewarmApiKey = kind === "bearer" ? rotatedToken : token;
+		const baseRoute = `model=${model.requestModelId ?? model.id}`;
+		const activeRoute =
+			kind === "serviceTier"
+				? `${baseRoute};tier=priority`
+				: kind === "requestModel"
+					? "model=hooked-model"
+					: baseRoute;
+		const prewarmOptions = {
+			apiKey: prewarmApiKey,
+			sessionId,
+			providerSessionState,
+		};
+
+		try {
+			const toolcallReached = Promise.withResolvers<void>();
+			const deliveredToolCalls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+			const activeStream = streamOpenAICodexResponses(model, firstContext, {
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+				onPayload: payload => {
+					hookCalls += 1;
+					const request = payload as Record<string, unknown>;
+					if (kind === "serviceTier") request.service_tier = "priority";
+					if (kind === "requestModel") request.model = "hooked-model";
+					return undefined;
+				},
+			});
+			const firstResultPromise = activeStream.result();
+			pendingPromises.push(firstResultPromise);
+			const consumerPromise = (async () => {
+				for await (const event of activeStream) {
+					if (event.type !== "toolcall_end") continue;
+					deliveredToolCalls.push({ name: event.toolCall.name, arguments: event.toolCall.arguments });
+					toolcallReached.resolve();
+				}
+			})();
+			pendingPromises.push(consumerPromise);
+
+			await toolcallReached.promise;
+			expect(sockets).toHaveLength(1);
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.OPEN);
+			expect(sockets[0]?.options?.headers?.["x-codex-routing-hint"]).toBe(activeRoute);
+			expect(sockets[0]?.options?.headers?.authorization).toBe(`Bearer ${token}`);
+			expect(hookCalls).toBe(1);
+
+			if (kind === "staleHealth") clock?.mockReturnValue(start + 30_001);
+			const constructorCountBeforePrewarm = constructorCount;
+			const sendCountBeforePrewarm = sendCount;
+			const closeCountBeforePrewarm = closeCount;
+			const firstPrewarm = prewarmOpenAICodexResponses(model, prewarmOptions);
+			pendingPromises.push(firstPrewarm);
+			await firstPrewarm;
+
+			expect(constructorCount).toBe(constructorCountBeforePrewarm);
+			expect(sendCount).toBe(sendCountBeforePrewarm);
+			expect(closeCount).toBe(closeCountBeforePrewarm);
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.OPEN);
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(
+				getOpenAICodexTransportDetails(model, {
+					sessionId,
+					providerSessionState,
+				}).prewarmed,
+			).toBe(false);
+			expect(hookCalls).toBe(1);
+
+			if (clock && !clockRestored) {
+				clock.mockRestore();
+				clockRestored = true;
+			}
+			releaseTerminal();
+			const firstResponse = await firstResultPromise;
+			expect(firstResponse.stopReason).toBe("toolUse");
+			expect(firstResponse.errorMessage).toBeUndefined();
+			const toolCalls = firstResponse.content.filter(
+				(block): block is Extract<(typeof firstResponse.content)[number], { type: "toolCall" }> =>
+					block.type === "toolCall",
+			);
+			expect(toolCalls).toHaveLength(1);
+			expect(toolCalls[0]).toMatchObject({ name: "echo", arguments: { value: "busy" } });
+			expect(deliveredToolCalls).toEqual([{ name: "echo", arguments: { value: "busy" } }]);
+
+			const toolCall = toolCalls[0];
+			if (!toolCall) throw new Error("expected the active request tool call");
+			const toolResult: ToolResultMessage = {
+				role: "toolResult",
+				toolCallId: toolCall.id,
+				toolName: toolCall.name,
+				content: [{ type: "text", text: "busy result" }],
+				isError: false,
+				timestamp: Date.now(),
+			};
+			const followupContext: Context = {
+				systemPrompt: firstContext.systemPrompt,
+				messages: [
+					...firstContext.messages,
+					firstResponse,
+					toolResult,
+					{ role: "user", content: "Follow up", timestamp: Date.now() },
+				],
+			};
+
+			if (kind !== "staleHealth") {
+				const replacementConstructorCount = constructorCount;
+				const replacementSendCount = sendCount;
+				const replacementCloseCount = closeCount;
+				await prewarmOpenAICodexResponses(model, prewarmOptions);
+				expect(constructorCount).toBe(replacementConstructorCount + 1);
+				expect(sendCount).toBe(replacementSendCount);
+				expect(closeCount).toBe(replacementCloseCount + 1);
+				expect(sockets[0]?.readyState).toBe(MockWebSocket.CLOSED);
+				expect(sockets[1]?.readyState).toBe(MockWebSocket.OPEN);
+				if (kind === "bearer") {
+					expect(sockets[1]?.options?.headers?.authorization).toBe(`Bearer ${rotatedToken}`);
+				} else {
+					expect(sockets[1]?.options?.headers?.["x-codex-routing-hint"]).toBe(baseRoute);
+				}
+				expect(
+					getOpenAICodexTransportDetails(model, {
+						sessionId,
+						providerSessionState,
+					}).prewarmed,
+				).toBe(true);
+				expect(sentRequests).toHaveLength(1);
+
+				const followup = await streamOpenAICodexResponses(model, followupContext, {
+					fetch: fetchMock as FetchImpl,
+					apiKey: prewarmApiKey,
+					sessionId,
+					providerSessionState,
+				}).result();
+				expect(followup.stopReason).toBe("stop");
+				expect(followup.errorMessage).toBeUndefined();
+				expect(constructorCount).toBe(replacementConstructorCount + 1);
+				expect(sockets[1]?.readyState).toBe(MockWebSocket.OPEN);
+				expect(sentRequests[1]?.previous_response_id).toBeUndefined();
+				const replacementInput = sentRequests[1]?.input;
+				if (!Array.isArray(replacementInput)) throw new Error("expected full replacement input");
+				const toolOutputs = replacementInput.filter(
+					item => isRecord(item) && item.type === "function_call_output" && item.output === "busy result",
+				);
+				expect(toolOutputs).toHaveLength(1);
+				const initialInput = sentRequests[0]?.input;
+				if (!Array.isArray(initialInput)) throw new Error("expected initial request input");
+				expect(replacementInput.slice(0, initialInput.length)).toEqual(initialInput);
+				expect(fetchMock).not.toHaveBeenCalled();
+			} else {
+				const followup = await streamOpenAICodexResponses(model, followupContext, {
+					fetch: fetchMock as FetchImpl,
+					apiKey: token,
+					sessionId,
+					providerSessionState,
+				}).result();
+				expect(followup.stopReason).toBe("stop");
+				expect(followup.errorMessage).toBeUndefined();
+				expect(constructorCount).toBe(1);
+				expect(sendCount).toBe(2);
+				expect(closeCount).toBe(0);
+				expect(sockets[0]?.readyState).toBe(MockWebSocket.OPEN);
+				expect(fetchMock).not.toHaveBeenCalled();
+			}
+		} finally {
+			if (clock && !clockRestored) {
+				clock.mockRestore();
+				clockRestored = true;
+			}
+			terminalGate.resolve();
+			await Promise.allSettled(pendingPromises);
+			for (const state of providerSessionState.values()) state.close();
+		}
+	});
+
+	it("skips a differently routed prewarm while another request owns a pending handshake", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-pending-busy-prewarm-");
+		setAgentDir(tempDir.path());
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run while the request handshake is pending");
+		});
+		const sockets: PendingBusyPrewarmWebSocket[] = [];
+		const sentRequests: Array<Record<string, unknown>> = [];
+		let constructorCount = 0;
+		let sendCount = 0;
+		let closeCount = 0;
+		let prewarmSettled = false;
+		const pendingPromises: Promise<unknown>[] = [];
+
+		class PendingBusyPrewarmWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				constructorCount += 1;
+				sockets.push(this);
+			}
+
+			open(): void {
+				if (this.readyState !== MockWebSocket.CONNECTING) return;
+				this.readyState = MockWebSocket.OPEN;
+				this.emit("open", new Event("open"));
+			}
+
+			override close(): void {
+				const wasPending = this.readyState === MockWebSocket.CONNECTING;
+				if (wasPending || this.readyState === MockWebSocket.OPEN) closeCount += 1;
+				super.close();
+				if (wasPending) this.emit("close", { code: 1000 } as unknown as Event);
+			}
+
+			override send(data: string): void {
+				sendCount += 1;
+				sentRequests.push(JSON.parse(data) as Record<string, unknown>);
+				this.emitCodexResponse({
+					messageId: "msg_pending_busy",
+					responseId: "resp_pending_busy",
+					text: "Pending handshake completed",
+					includeCreated: true,
+				});
+			}
+		}
+
+		global.WebSocket = PendingBusyPrewarmWebSocket as unknown as typeof WebSocket;
+		const model = buildModel({
+			...createCodexTestModel("https://chatgpt.com/backend-api"),
+			serviceTiers: ["priority"],
+		} as ModelSpec<"openai-codex-responses">);
+		const sessionId = "ws-pending-busy-prewarm-session";
+		const providerSessionState = new Map<string, ProviderSessionState>();
+
+		try {
+			const requestStream = streamOpenAICodexResponses(model, createCodexTestContext(), {
+				fetch: fetchMock as FetchImpl,
+				apiKey: createCodexTestToken(),
+				sessionId,
+				providerSessionState,
+			});
+			const requestResult = requestStream.result();
+			pendingPromises.push(requestResult);
+			for (let attempt = 0; attempt < 20 && sockets.length < 1; attempt += 1) await Promise.resolve();
+			expect(sockets).toHaveLength(1);
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.CONNECTING);
+
+			const prewarmPromise = prewarmOpenAICodexResponses(model, {
+				apiKey: createCodexTestToken(),
+				sessionId,
+				providerSessionState,
+				serviceTier: "priority",
+			}).then(() => {
+				prewarmSettled = true;
+			});
+			pendingPromises.push(prewarmPromise);
+			for (let attempt = 0; attempt < 20 && !prewarmSettled; attempt += 1) await Promise.resolve();
+
+			expect(prewarmSettled).toBe(true);
+			expect(constructorCount).toBe(1);
+			expect(closeCount).toBe(0);
+			expect(sendCount).toBe(0);
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.CONNECTING);
+			expect(
+				getOpenAICodexTransportDetails(model, {
+					sessionId,
+					providerSessionState,
+				}).prewarmed,
+			).toBe(false);
+
+			sockets[0]?.open();
+			const result = await requestResult;
+			expect(result.stopReason).toBe("stop");
+			expect(result.errorMessage).toBeUndefined();
+			expect(constructorCount).toBe(1);
+			expect(closeCount).toBe(0);
+			expect(sendCount).toBe(1);
+			expect(sentRequests[0]?.previous_response_id).toBeUndefined();
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.OPEN);
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(
+				getOpenAICodexTransportDetails(model, {
+					sessionId,
+					providerSessionState,
+				}).prewarmed,
+			).toBe(false);
+		} finally {
+			for (let attempt = 0; attempt < 20; attempt += 1) {
+				for (const socket of sockets) {
+					if (socket.readyState === MockWebSocket.CONNECTING) socket.open();
+				}
+				await Promise.resolve();
+				if (!sockets.some(socket => socket.readyState === MockWebSocket.CONNECTING)) break;
+			}
+			await Promise.allSettled(pendingPromises);
+			for (const state of providerSessionState.values()) state.close();
+		}
+	});
+
 	it("replays full tool history after pooled websocket idle health expiry", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-idle-health-");
 		setAgentDir(tempDir.path());
