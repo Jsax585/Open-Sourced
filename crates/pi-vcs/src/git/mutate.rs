@@ -775,10 +775,14 @@ impl GitRepo {
 		// secret-shaped files below the top level cannot be skipped during
 		// the clone. Prune them from the fresh clone instead: cheap on CoW
 		// filesystems, and the source checkout is untouched. Tracked files
-		// are never pruned, whatever the patterns say.
+		// are never pruned, whatever the patterns say. An empty pattern
+		// list is the historical "clone everything" behavior: nothing can
+		// match, so the index load and the walk are skipped entirely.
 		let matcher = CloneExcludeMatcher::resolve(clone_exclude)?;
-		let index = load_index_or_empty(&repo, "git worktree add")?;
-		prune_clone_excludes(path, &index, &matcher)?;
+		if !matcher.is_empty() {
+			let index = load_index_or_empty(&repo, "git worktree add")?;
+			prune_clone_excludes(path, &index, &matcher)?;
+		}
 		let admin = register_worktree(path, &self.info().common_dir, head)?;
 		fs::copy(&source_index, admin.join("index"))?;
 
@@ -2947,6 +2951,52 @@ mod tests {
 			assert!(!clone.join("apps/web/.env").exists(), "symlinked secret must be unlinked");
 			assert!(clone.join("shared.env").exists(), "symlink target must be untouched");
 		}
+	}
+
+	/// A matched directory holding tracked files must be pruned file-by-file,
+	/// never `remove_dir_all`'d: deleting the directory whole would also
+	/// delete its tracked files, leaving the new worktree's index claiming
+	/// files that are not on disk. A matched directory with no tracked files
+	/// is still removed whole. Deterministic on any filesystem, like the
+	/// test above. Regression test for review feedback on #15521.
+	#[test]
+	fn prune_clone_excludes_descends_into_matched_dirs_with_tracked_files() {
+		let (temp, repo) = fixture();
+		let root = temp.path();
+		// Matched directory with a tracked file inside: the directory and
+		// the tracked file must survive the prune.
+		fs::create_dir_all(root.join("secrets/old")).unwrap();
+		fs::write(root.join("secrets/old/token.pem"), "SECRET=1\n").unwrap();
+		fs::write(root.join("secrets/old/committed.txt"), "tracked\n").unwrap();
+		// Matched directory with no tracked files: removed whole.
+		fs::create_dir_all(root.join("secrets/scratch")).unwrap();
+		fs::write(root.join("secrets/scratch/junk.pem"), "SECRET=2\n").unwrap();
+		git(root, &["add", "-f", "secrets/old/committed.txt"]);
+		git(root, &["commit", "-qm", "track file inside matched dir"]);
+
+		let clone = root.join("prune-clone-dirs");
+		copy_tree_except_git(root, &clone);
+
+		let gix = repo.gix().unwrap();
+		let index = load_index_or_empty(&gix, "git worktree add").unwrap();
+		let matcher = CloneExcludeMatcher::new(&["secrets/**".to_string()]).unwrap();
+		prune_clone_excludes(&clone, &index, &matcher).unwrap();
+
+		// Untracked secret files are pruned...
+		assert!(!clone.join("secrets/old/token.pem").exists(), "matched secret must be pruned");
+		// ...a matched directory with no tracked files is removed whole...
+		assert!(!clone.join("secrets/scratch").exists(), "tracked-free matched dir is removed whole");
+		// ...but tracked files survive, so their directory must not be
+		// deleted whole.
+		assert!(
+			clone.join("secrets/old").is_dir(),
+			"matched dir with tracked files is pruned file-by-file, not removed"
+		);
+		assert!(
+			clone.join("secrets/old/committed.txt").exists(),
+			"tracked files inside matched dirs must survive"
+		);
+		let _ = fs::remove_dir_all(&clone);
 	}
 
 	#[test]

@@ -83,6 +83,12 @@ impl CloneExcludeMatcher {
 		}
 	}
 
+	/// Whether the pattern list is empty: the historical "clone everything"
+	/// behavior. Callers skip the prune walk entirely in this case.
+	pub(crate) const fn is_empty(&self) -> bool {
+		self.empty
+	}
+
 	/// Whether `relative_path` (a `/`-separated path relative to the
 	/// worktree root) is excluded.
 	pub(crate) fn is_excluded(&self, relative_path: &str) -> bool {
@@ -100,12 +106,18 @@ impl CloneExcludeMatcher {
 /// the secret-sprawl population this removes.
 ///
 /// Symlinks are deleted as links (never followed); a directory that itself
-/// matches is removed whole, otherwise the walk descends into it.
+/// matches is removed whole when it holds no tracked files, otherwise the
+/// walk descends into it and prunes file-by-file.
 pub(crate) fn prune_clone_excludes(
 	root: &Path,
 	source_index: &gix::index::File,
 	matcher: &CloneExcludeMatcher,
 ) -> Result<()> {
+	// An empty pattern list is the historical "clone everything" behavior:
+	// nothing can match, so skip the walk entirely.
+	if matcher.is_empty() {
+		return Ok(());
+	}
 	let mut stack = vec![root.to_path_buf()];
 	while let Some(dir) = stack.pop() {
 		let entries = std::fs::read_dir(&dir).map_err(|err| {
@@ -127,12 +139,20 @@ pub(crate) fn prune_clone_excludes(
 			// only sees real directories.
 			if file_type.is_dir() {
 				if matcher.is_excluded(&rel_str) {
-					std::fs::remove_dir_all(&path).map_err(|err| {
-						Error::backend(
-							"git worktree add",
-							format!("remove_dir_all {}: {err}", path.display()),
-						)
-					})?;
+					if dir_has_tracked_entries(source_index, &rel_str) {
+						// A matched directory can still hold tracked files
+						// (e.g. a committed file under a `secrets/**` match):
+						// deleting it whole would also delete those tracked
+						// files, so prune it file-by-file instead.
+						stack.push(path);
+					} else {
+						std::fs::remove_dir_all(&path).map_err(|err| {
+							Error::backend(
+								"git worktree add",
+								format!("remove_dir_all {}: {err}", path.display()),
+							)
+						})?;
+					}
 				} else {
 					stack.push(path);
 				}
@@ -153,6 +173,19 @@ pub(crate) fn prune_clone_excludes(
 		}
 	}
 	Ok(())
+}
+
+/// Whether any tracked index entry lives under `dir_rel` (a `/`-separated
+/// path relative to the worktree root). Index paths are `/`-separated too,
+/// so testing a trailing-`/` prefix is exact: looking under `secrets` never
+/// matches a sibling like `secrets-old`.
+fn dir_has_tracked_entries(source_index: &gix::index::File, dir_rel: &str) -> bool {
+	let mut prefix: Vec<u8> = dir_rel.as_bytes().to_vec();
+	prefix.push(b'/');
+	source_index
+		.entries()
+		.iter()
+		.any(|entry| entry.path(source_index).starts_with(prefix.as_slice()))
 }
 
 #[cfg(test)]
