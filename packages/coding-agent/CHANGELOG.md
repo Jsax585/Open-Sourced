@@ -17,6 +17,7 @@
 - `PI_INTENT_PROMPT` replaces the system-prompt guidance for the `i` intent field; `PI_INTENT_DESC` replaces its tool-schema description
 - Eval shows printed JSON text (`print(json.dumps(…))`, `console.log(JSON.stringify(…))`) as a collapsible JSON tree, like printed dicts and objects
 - The warning that a saved Codex or Claude rate-limit reset is about to expire now shows once per reset across all conversations and omp windows, and only in its final 6 hours instead of from 24 hours out; the status line keeps counting it down meanwhile
+- When several Codex or Claude accounts are blocked, auto-redeem now spends the saved reset that buys the most time instead of always the session's own: for Claude and for Codex weekly walls the account with the longest wait; for a Codex 5h wall, whose reset restarts the weekly window, the weekly time it brings forward less the weekly allowance it discards. The session's account still wins within an hour of the best ([#15128](https://github.com/can1357/oh-my-pi/pull/15128) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Changed
 
@@ -47,6 +48,7 @@
 - Fixed post-edit diagnostics showing "OK" or "no issues" when one of several language servers, or one file of a batched edit, had not reported yet ([#17293](https://github.com/can1357/oh-my-pi/pull/17293))
 - Fixed `lsp code_actions` passing diagnostics from an earlier version of a reopened file to quick-fix providers ([#17293](https://github.com/can1357/oh-my-pi/pull/17293))
 - Fixed `lsp diagnostics` getting no report from language servers that check files only on save ([#17293](https://github.com/can1357/oh-my-pi/pull/17293))
+- When two sessions on different accounts planned the same blocked-account reset (both waiting for consent, say), the one that asked second now shares the reset the first spent instead of failing on its old limit ([#15128](https://github.com/can1357/oh-my-pi/pull/15128) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.13.3] - 2026-10-28
 
@@ -977,10 +979,6 @@
 ### Fixed
 
 - Fixed `grep` on a single file showing in Tern as separate boxed snippets with no file row or syntax colors; it now looks the same as a `grep` over a directory
-
-### Changed
-
-- When several Codex or Claude accounts are blocked, auto-redeem now spends the saved reset that buys the most time instead of always the session's own: for Claude and for Codex weekly walls the account with the longest wait; for a Codex 5h wall, whose reset restarts the weekly window, the weekly time it brings forward less the weekly allowance it discards. The session's account still wins within an hour of the best ([#15128](https://github.com/can1357/oh-my-pi/pull/15128) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.10.0] - 2026-10-12
 
