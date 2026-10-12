@@ -9,6 +9,7 @@
 ### Removed
 
 - Removed the unused `app.tree.foldOrUp` / `app.tree.unfoldOrDown` keybinding ids, which no longer did anything.
+- `ModelHubCallbacks.onForgetRecent(selector)`: `ModelHubComponent` binds `ctrl+d` on a recently used model row, with a footer hint and a native `forgetRecent` action; `ModelBrowser.adjacentSelector(direction)` gives the neighbouring selectable row
 
 ## [18.10.1] - 2026-10-12
 

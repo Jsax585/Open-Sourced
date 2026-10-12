@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added removing a model from the recently used models in `/model`: press `Ctrl+D` on a recently used model. The model in use and models assigned to a role can't be removed. Using a removed model again puts it back
+
 ## [18.10.1] - 2026-10-12
 
 ### Added
