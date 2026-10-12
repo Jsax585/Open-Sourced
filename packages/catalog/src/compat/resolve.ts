@@ -666,8 +666,16 @@ function fixupOpenAICompat(
 	if (whenThinkingPolicy) {
 		const variant: ResolvedOpenAICompat = { ...compat, whenThinking: undefined };
 		applyCompatOverrides(variant, whenThinkingPolicy);
+		if (
+			spec.compat?.supportsReasoningEffort !== undefined &&
+			spec.compat.whenThinking?.supportsReasoningEffort === undefined
+		) {
+			variant.supportsReasoningEffort = spec.compat.supportsReasoningEffort;
+		}
 		// An enabled capability view cannot invent an effort dial explicitly removed by KDL.
 		if (
+			spec.compat?.whenThinking === undefined &&
+			spec.compat?.supportsReasoningEffort === undefined &&
 			!spec.thinking?.efforts?.length &&
 			Array.isArray(axes.thinking.efforts) &&
 			axes.thinking.efforts.length === 0

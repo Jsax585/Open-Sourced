@@ -75,6 +75,38 @@ describe("Friendli reasoning wire contract", () => {
 		}
 	});
 
+	it("preserves authored flat and enabled-view capability overrides on the wire", async () => {
+		for (const supportsReasoningEffort of [false, true]) {
+			const declared = model({
+				id: "future-reasoner",
+				thinking: { mode: "effort", efforts: [Effort.High, Effort.Max] },
+				compat: { supportsReasoningEffort },
+			});
+			for (const effort of [Effort.High, Effort.Max]) {
+				const body = await capture(declared, effort);
+				expect(body.reasoning_effort).toBe(supportsReasoningEffort ? effort : undefined);
+			}
+			const flat = model({ id: "unknown-reasoner", compat: { supportsReasoningEffort } });
+			expect(flat.thinking).toBeUndefined();
+			const flatBody = await capture(flat, Effort.High, false, false);
+			expect(flatBody.reasoning_effort).toBe(supportsReasoningEffort ? "high" : undefined);
+			const authored = model({
+				id: "unknown-reasoner",
+				compat: {
+					supportsReasoningEffort: !supportsReasoningEffort,
+					whenThinking: {
+						thinkingFormat: "openai",
+						supportsReasoningEffort,
+						omitReasoningEffort: !supportsReasoningEffort,
+					},
+				},
+			});
+			expect(authored.thinking).toBeUndefined();
+			const body = await capture(authored, Effort.High, false, false);
+			expect(body.reasoning_effort).toBe(supportsReasoningEffort ? "high" : undefined);
+		}
+	});
+
 	it("preserves endpoint defaults for sparse specs and distinguishes explicit disable", async () => {
 		for (const provider of ["friendli", "custom-friendli"]) {
 			for (const id of ["unknown-reasoner", "zai-org/GLM-4.5"]) {
