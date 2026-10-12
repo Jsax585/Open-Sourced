@@ -563,11 +563,25 @@ export const cfgTuiMouse = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: "Mouse Click-to-Focus",
+		label: "Mouse Capture",
 		get description() {
 			const shift = formatKeyHint("shift");
-			return `Capture mouse clicks in the main session so live subagent cards and HUD rows focus on click, with a hover highlight on the target. Native text selection becomes ${shift}+drag and wheel scroll becomes ${shift}+wheel while on`;
+			return `Capture the mouse in the main session: click live subagent cards and HUD rows to focus them (with a hover highlight). Native text selection becomes ${shift}+drag and wheel scroll becomes ${shift}+wheel while on`;
 		},
+	},
+});
+
+export const cfgTuiMouseQuoteOnSelect = register({
+	id: "tui.mouseQuoteOnSelect",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Quote on Select",
+		description:
+			"While mouse capture is on, drag over text on screen to highlight it and quote it into the prompt as '<text>' - on release",
+		condition: "mouseCaptureEnabled",
 	},
 });
 

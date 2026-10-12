@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a "Quote on Select" setting (`tui.mouseQuoteOnSelect`, off by default), shown under "Mouse Capture" (`tui.mouse`, formerly "Mouse Click-to-Focus") while capture is on: dragging over text in the main session highlights it and, on release, quotes it into the prompt as `'<text>' - ` with the cursor after it
+
 ## [18.10.1] - 2026-10-12
 
 ### Added

@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Text } from "@oh-my-pi/pi-tui";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
@@ -16,7 +17,7 @@ import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 
-import { cfgTuiMouse } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgTuiMouse, cfgTuiMouseQuoteOnSelect } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
 function plainRows(rows: readonly string[]): string[] {
 	return rows.map(row => Bun.stripANSI(row).trimEnd());
@@ -251,6 +252,7 @@ describe("inline click-to-focus geometry", () => {
 			const screenRow = viewport.findIndex(row => row.includes(marker));
 			expect(screenRow).toBeGreaterThanOrEqual(0);
 			term.sendInput(`\x1b[<0;5;${screenRow + 1}M`);
+			term.sendInput(`\x1b[<0;5;${screenRow + 1}m`);
 		};
 
 		// Collapsed by default: three rows plus the expander.
@@ -265,5 +267,38 @@ describe("inline click-to-focus geometry", () => {
 		await clickRow("show less");
 		await term.waitForRender(() => plainRows(term.getViewport()).some(row => row.includes("more — expand")));
 		expect(plainRows(term.getViewport()).some(row => row.includes("ToggleAgent3"))).toBe(false);
+	});
+
+	it("quotes text dragged over in the transcript into the prompt", async () => {
+		cfgTuiMouse.set(mode.settings, true);
+		cfgTuiMouseQuoteOnSelect.set(mode.settings, true);
+		await mode.init({ suppressWelcomeIntro: true });
+		void mode.getUserInput();
+		mode.chatContainer.addChild(new Text("alpha bravo charlie\nsecond quoted row", 1, 0));
+		mode.ui.requestRender();
+		await term.waitForRender(() => plainRows(term.getViewport()).some(row => row.includes("second quoted row")));
+
+		const viewport = plainRows(term.getViewport());
+		const startRow = viewport.findIndex(row => row.includes("alpha bravo"));
+		const startCol = viewport[startRow]!.indexOf("bravo");
+		const endCol = viewport[startRow + 1]!.indexOf("row") + 2;
+		mode.editor.setText("see");
+		// SGR is 1-based: press on "bravo", drag (button 32) across, release on "row"'s last cell.
+		term.sendInput(`\x1b[<0;${startCol + 1};${startRow + 1}M`);
+		term.sendInput(`\x1b[<32;${startCol + 4};${startRow + 1}M`);
+		term.sendInput(`\x1b[<32;${endCol + 1};${startRow + 2}M`);
+		term.sendInput(`\x1b[<0;${endCol + 1};${startRow + 2}m`);
+
+		expect(mode.editor.getText()).toBe("see 'bravo charlie\nsecond quoted row' - ");
+		mode.editor.insertText("why?");
+		expect(mode.editor.getText()).toBe("see 'bravo charlie\nsecond quoted row' - why?");
+
+		// Quote on Select off: the same drag leaves the prompt untouched.
+		cfgTuiMouseQuoteOnSelect.set(mode.settings, false);
+		mode.editor.setText("");
+		term.sendInput(`\x1b[<0;${startCol + 1};${startRow + 1}M`);
+		term.sendInput(`\x1b[<32;${endCol + 1};${startRow + 2}M`);
+		term.sendInput(`\x1b[<0;${endCol + 1};${startRow + 2}m`);
+		expect(mode.editor.getText()).toBe("");
 	});
 });

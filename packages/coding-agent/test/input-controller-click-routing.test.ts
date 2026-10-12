@@ -11,9 +11,10 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { cfgTuiMouse } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
 const ESC = String.fromCharCode(27);
-// SGR click on viewport row 2 (1-based y=3): the pinned expander row when the
-// candidates below resolve it to the toggle sentinel.
-const EXPANDER_CLICK = `${ESC}[<0;5;3M`;
+// SGR click (press + release) on viewport row 2 (1-based y=3): the pinned
+// expander row when the candidates below resolve it to the toggle sentinel.
+const EXPANDER_PRESS = `${ESC}[<0;5;3M`;
+const EXPANDER_RELEASE = `${ESC}[<0;5;3m`;
 
 function makeHarness() {
 	const listeners: Array<(data: string) => { consume?: boolean; data?: string } | undefined> = [];
@@ -29,6 +30,9 @@ function makeHarness() {
 			requestRender: () => {},
 			addStartListener: () => {},
 			getFocused: () => undefined,
+			setScreenSelection: () => {},
+			extendScreenSelection: () => {},
+			getScreenSelectionText: () => "",
 		},
 		handlesBtwBranchKey: () => false,
 		editor: {
@@ -59,7 +63,9 @@ function makeHarness() {
 	controller.setupKeyHandlers();
 	return {
 		click: () => {
-			for (const listener of listeners) listener(EXPANDER_CLICK);
+			for (const data of [EXPANDER_PRESS, EXPANDER_RELEASE]) {
+				for (const listener of listeners) listener(data);
+			}
 		},
 		focused,
 		toggled: () => toggled,

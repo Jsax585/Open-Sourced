@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `TUI.setScreenSelection`, `extendScreenSelection` and `getScreenSelectionText` select text on the normal-buffer screen: the selected cells show in reverse video, the selection moves with rows that scroll into history, and the plain text is read back from the last paint
+
 ## [18.10.1] - 2026-10-12
 
 ### Added

@@ -81,6 +81,7 @@ import {
 	cfgImagesAutoResize,
 	cfgPasteLargeMenuThreshold,
 	cfgTuiMouse,
+	cfgTuiMouseQuoteOnSelect,
 } from "../settings";
 import { cfgHideThinkingBlock } from "../../session/settings";
 
@@ -282,6 +283,8 @@ export class InputController {
 
 	/** Click-candidate id the hover band currently tracks; repaint only on change. */
 	#lastHoverClickId: string | undefined;
+	/** Left-button press that opened the current pointer gesture; `dragged` once it moved to another cell. */
+	#press: { row: number; col: number; dragged: boolean } | undefined;
 
 	/** Return the last full editor snapshot delivered by its change contract. */
 	getDraftText(): string {
@@ -757,21 +760,72 @@ export class InputController {
 	}
 
 	/**
-	 * Inline click-to-focus (`tui.mouse`): left-clicks on live subagent cards
-	 * and HUD rows focus that agent in one action, and pointer motion lights up
-	 * the hover band on the target under the cursor. Every SGR report is consumed
-	 * while inline tracking owns the terminal so button/wheel bytes never reach
-	 * the editor as typed input; clicks on chrome simply swallow.
+	 * Inline mouse capture (`tui.mouse`): left-clicks on live subagent cards
+	 * and HUD rows focus that agent in one action, pointer motion lights up
+	 * the hover band on the target under the cursor, and (with
+	 * `tui.mouseQuoteOnSelect`) a left-drag selects screen text that is quoted
+	 * into the prompt as `'<text>' - ` on release; clicks then act on release.
+	 * Every SGR report is consumed while inline tracking owns the terminal so
+	 * button/wheel bytes never reach the editor as typed input; clicks on
+	 * chrome simply swallow.
 	 */
 	#handleInlineMouse(data: string): { consume?: boolean; data?: string } | undefined {
 		if (!data.startsWith("\x1b[<")) return undefined;
 		if (!cfgTuiMouse.get(this.ctx.settings)) return undefined;
-		if (this.ctx.ui.hasOverlay()) return undefined;
+		if (this.ctx.ui.hasOverlay()) {
+			this.#press = undefined;
+			return undefined;
+		}
 		const event = parseSgrMouse(data);
 		if (!event) return undefined;
-		if (event.motion) this.#updateHoverHighlight(event.row);
-		else if (event.leftClick) this.#focusClickedAgent(event.row);
+		const point = { row: event.row, col: event.col };
+		const press = this.#press;
+		if (!cfgTuiMouseQuoteOnSelect.get(this.ctx.settings)) {
+			if (press) {
+				this.#press = undefined;
+				this.ctx.ui.setScreenSelection(undefined);
+			}
+			if (event.motion) this.#updateHoverHighlight(event.row);
+			else if (event.leftClick) this.#focusClickedAgent(event.row);
+		} else if (event.leftClick) {
+			this.#press = { ...point, dragged: false };
+			this.ctx.ui.setScreenSelection({ anchor: point, focus: point });
+		} else if (press && event.motion && (event.button & 3) === 0) {
+			press.dragged ||= point.row !== press.row || point.col !== press.col;
+			this.ctx.ui.extendScreenSelection(point);
+		} else if (press && event.release) {
+			this.#press = undefined;
+			this.ctx.ui.extendScreenSelection(point);
+			const text = press.dragged ? this.ctx.ui.getScreenSelectionText() : "";
+			this.ctx.ui.setScreenSelection(undefined);
+			if (!press.dragged) this.#focusClickedAgent(press.row);
+			else if (/\S/.test(text)) this.#quoteSelection(text);
+		} else if (event.motion) {
+			this.#updateHoverHighlight(event.row);
+		}
 		return { consume: true };
+	}
+
+	/**
+	 * Insert `'<text>' - ` at the prompt caret, leaving the caret after it.
+	 * Surrounding blank rows drop; continuation rows lose their shared
+	 * indentation (transcript gutters), the first row its leading blanks.
+	 */
+	#quoteSelection(text: string): void {
+		const lines = text.split("\n");
+		while (!/\S/.test(lines[0]!)) lines.shift();
+		while (!/\S/.test(lines[lines.length - 1]!)) lines.pop();
+		let indent = Number.MAX_SAFE_INTEGER;
+		for (const line of lines.slice(1)) {
+			if (/\S/.test(line)) indent = Math.min(indent, line.length - line.trimStart().length);
+		}
+		const quoted = [lines[0]!.trimStart(), ...lines.slice(1).map(line => line.slice(indent))].join("\n");
+		const editor = this.ctx.editor;
+		const cursor = editor.getCursor();
+		const before = editor.getLines()[cursor.line]?.slice(0, cursor.col) ?? "";
+		const space = before === "" || /\s$/.test(before) ? "" : " ";
+		editor.insertText(`${space}'${quoted}' - `);
+		this.ctx.ui.requestRender();
 	}
 
 	/**

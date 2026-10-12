@@ -148,6 +148,18 @@ export interface TuiPaint {
 /** Observer of completed terminal paints; see {@link TUI.addPaintListener}. */
 export type PaintListener = (paint: TuiPaint) => void;
 
+/** A cell of the physical normal-buffer screen, 0-based. */
+export interface ScreenPoint {
+	row: number;
+	col: number;
+}
+
+/** Pointer-driven text selection over the normal-buffer screen; `focus` follows the drag. */
+export interface ScreenSelection {
+	anchor: ScreenPoint;
+	focus: ScreenPoint;
+}
+
 export interface TUIOptions {
 	renderScheduler?: RenderScheduler;
 	onPaint?: PaintListener;
@@ -888,6 +900,12 @@ export class TUI extends Container {
 	// the established differential comparison and resize accounting.
 	#providerWindow: string[] = [];
 	#providerPreparedRows: PreparedLine[] = [];
+	// Physical normal-buffer rows as the last provider paint left them: history
+	// rows still on screen above the viewport, then the viewport. `undefined`
+	// marks a row whose content is unknown (reflowed by a resize). Backs
+	// in-app text selection, which hit-tests and repaints these rows.
+	#screenRows: (PreparedLine | undefined)[] = [];
+	#screenSelection: ScreenSelection | undefined;
 	// Rows of the last marker-stripping prepare pass keyed by their stripped
 	// raw line, so rows that only moved (a scroll or a history commit shifts
 	// every row under the positional sidecar) reuse their preparation. Swapped
@@ -1353,16 +1371,148 @@ export class TUI extends Container {
 	 * the painted top is backed out by that net pad.
 	 */
 	getMutableViewport(): { top: number; length: number } {
-		if (
+		if (!this.#normalScreenSettled()) return { top: 0, length: 0 };
+		return { top: this.#providerViewportTop - this.#providerViewportPadTop, length: this.#providerWindow.length };
+	}
+
+	/** Whether the normal-buffer rows on screen match the last provider paint. */
+	#normalScreenSettled(): boolean {
+		return !(
 			this.#altActive ||
 			this.#resizeAltActive ||
 			this.#resizeProbe !== undefined ||
 			this.#resizeInPlaceActive ||
 			this.#ghosttyInitialImageDelayTimer !== undefined
-		) {
-			return { top: 0, length: 0 };
+		);
+	}
+
+	/**
+	 * Show (or clear, with `undefined`) an in-app text selection over the
+	 * normal-buffer screen. Selected cells paint in reverse video and are
+	 * restored from the last paint when the selection changes; later paints
+	 * keep the highlight and shift it with rows that scroll into history.
+	 * Ignored while the normal screen is not settled (alt screen, resize).
+	 */
+	setScreenSelection(selection: ScreenSelection | undefined): void {
+		const usable = this.#normalScreenSettled() && this.#screenRows.length > 0;
+		const width = this.#previousWidth;
+		let sequence = usable ? this.#selectionRestoreSequence(width) : "";
+		this.#screenSelection =
+			usable && selection ? { anchor: { ...selection.anchor }, focus: { ...selection.focus } } : undefined;
+		sequence += this.#selectionHighlightSequence();
+		if (sequence === "") return;
+		const showCursor = this.#hardwareCursorState?.visible === true ? "\x1b[?25h" : "";
+		this.terminal.write(`${this.#paintBeginSequence}\x1b7${sequence}\x1b8${this.#paintEndSequence}${showCursor}`);
+	}
+
+	/**
+	 * Move the focus end of the active selection, keeping its anchor where
+	 * paints since {@link setScreenSelection} have scrolled it. No-op without
+	 * an active selection.
+	 */
+	extendScreenSelection(focus: ScreenPoint): void {
+		const selection = this.#screenSelection;
+		if (selection) this.setScreenSelection({ anchor: selection.anchor, focus });
+	}
+
+	/**
+	 * Plain text under the current screen selection: one line per screen row,
+	 * trailing spaces trimmed. Image rows and rows of unknown content read as
+	 * empty lines. Empty when nothing is selected.
+	 */
+	getScreenSelectionText(): string {
+		const bounds = this.#selectionBounds();
+		if (!bounds) return "";
+		const [from, to] = bounds;
+		const lines: string[] = [];
+		for (let row = from.row; row <= to.row; row++) {
+			const prepared = this.#screenRows[row];
+			if (prepared === undefined || prepared.isImage) {
+				lines.push("");
+				continue;
+			}
+			const start = row === from.row ? from.col : 0;
+			const end = row === to.row ? to.col : this.#previousWidth - 1;
+			const line = prepared.line.replaceAll(CURSOR_MARKER, "");
+			lines.push(Bun.stripANSI(sliceByColumn(line, start, end - start + 1)).trimEnd());
 		}
-		return { top: this.#providerViewportTop - this.#providerViewportPadTop, length: this.#providerWindow.length };
+		return lines.join("\n");
+	}
+
+	/** Ordered selection ends, or `undefined` when nothing (or a single point) is selected. */
+	#selectionBounds(): [ScreenPoint, ScreenPoint] | undefined {
+		const selection = this.#screenSelection;
+		if (!selection) return undefined;
+		const { anchor, focus } = selection;
+		if (anchor.row === focus.row && anchor.col === focus.col) return undefined;
+		const anchorFirst = anchor.row < focus.row || (anchor.row === focus.row && anchor.col < focus.col);
+		return anchorFirst ? [anchor, focus] : [focus, anchor];
+	}
+
+	/**
+	 * Move a selection end to the repainted row holding the content it sat
+	 * on (`raw`), searching outward from where a plain scroll would have put
+	 * it. Content that left the screen pins the end to the top-left cell.
+	 */
+	#relocateSelectionPoint(point: ScreenPoint, raw: string | undefined, scrolled: number): void {
+		const screen = this.#screenRows;
+		const guess = point.row - scrolled;
+		if (raw !== undefined) {
+			const reach = screen.length + Math.abs(guess);
+			for (let distance = 0; distance < reach; distance++) {
+				const below = guess + distance;
+				const above = guess - distance;
+				const row = screen[below]?.raw === raw ? below : screen[above]?.raw === raw ? above : -1;
+				if (row >= 0) {
+					point.row = row;
+					return;
+				}
+			}
+		}
+		if (guess < 0) {
+			point.row = 0;
+			point.col = 0;
+		} else {
+			point.row = Math.min(guess, Math.max(0, screen.length - 1));
+		}
+	}
+
+	/** Rows the highlight may repaint: text rows only, never images, OSC 66 glyphs, or their spacer rows. */
+	#highlightableRow(row: PreparedLine | undefined): row is PreparedLine {
+		return row !== undefined && !row.isImage && row.line !== "" && !isOsc66Line(row.line);
+	}
+
+	/** Reverse-video the selected cells that hold text, cursor-addressed. */
+	#selectionHighlightSequence(): string {
+		const bounds = this.#selectionBounds();
+		if (!bounds) return "";
+		const [from, to] = bounds;
+		let sequence = "";
+		for (let row = from.row; row <= to.row && row < this.#screenRows.length; row++) {
+			const prepared = this.#screenRows[row];
+			if (!this.#highlightableRow(prepared)) continue;
+			const line = prepared.line.replaceAll(CURSOR_MARKER, "");
+			const start = row === from.row ? from.col : 0;
+			const end = Math.min(row === to.row ? to.col : Number.MAX_SAFE_INTEGER, visibleWidth(line) - 1);
+			if (start > end) continue;
+			const text = Bun.stripANSI(sliceByColumn(line, start, end - start + 1));
+			sequence += `\x1b[${row + 1};${start + 1}H${SEGMENT_RESET}\x1b[7m${text}${SEGMENT_RESET}`;
+		}
+		return sequence;
+	}
+
+	/** Repaint the rows under the current selection from the last paint, erasing its highlight. */
+	#selectionRestoreSequence(width: number): string {
+		const bounds = this.#selectionBounds();
+		if (!bounds) return "";
+		const [from, to] = bounds;
+		let sequence = "";
+		for (let row = from.row; row <= to.row && row < this.#screenRows.length; row++) {
+			const prepared = this.#screenRows[row];
+			if (!this.#highlightableRow(prepared)) continue;
+			sequence += `\x1b[${row + 1};1H${this.#lineRewriteSequence(prepared, width, row)}`;
+		}
+		return sequence;
 	}
 
 	/**
@@ -1758,6 +1908,8 @@ export class TUI extends Container {
 			this.#previousFrameLength = 0;
 			this.#providerWindow = [];
 			this.#providerPreparedRows = [];
+			this.#screenRows = [];
+			this.#screenSelection = undefined;
 		}
 		this.terminal.hideCursor();
 		this.#forgetHardwareCursorState();
@@ -3522,6 +3674,9 @@ export class TUI extends Container {
 		// image the terminal no longer had and every inline image vanished
 		// after a settled width resize.
 		if (destructiveReset) buffer += `${LINE_TERMINATOR}\x1b[H\x1b[2J\x1b[3J`;
+		// Erase the selection highlight at its old cells before rows move: the
+		// paint below may scroll highlighted rows or leave them unrewritten.
+		if (!destructiveReset && geometryStable) buffer += this.#selectionRestoreSequence(width);
 		const diffable =
 			geometryStable &&
 			historyRows.length === 0 &&
@@ -3600,6 +3755,29 @@ export class TUI extends Container {
 			}
 			if (newTop + rows < height) buffer += `\x1b[${newTop + rows + 1};1H\x1b[J`;
 		}
+		// Mirror the physical rows: history rows left above the old viewport
+		// survive, unless a reset erased them or a resize reflowed them out of
+		// recognition; rows scrolled off the top drop. Selection ends follow
+		// their row's content, since a paint may re-lay the viewport as history.
+		const screen = this.#screenRows;
+		if (destructiveReset || !geometryStable) {
+			screen.length = 0;
+			this.#screenSelection = undefined;
+		}
+		const selection = this.#screenSelection;
+		const anchorRaw = selection && screen[selection.anchor.row]?.raw;
+		const focusRaw = selection && screen[selection.focus.row]?.raw;
+		if (screen.length > startTop) screen.length = startTop;
+		while (screen.length < startTop) screen.push(undefined);
+		for (const row of preparedHistory.rows) screen.push(row);
+		const scrolled = Math.max(0, screen.length - newTop);
+		if (scrolled > 0) screen.splice(0, scrolled);
+		for (const row of prepared.rows) screen.push(row);
+		if (selection !== undefined) {
+			this.#relocateSelectionPoint(selection.anchor, anchorRaw, scrolled);
+			this.#relocateSelectionPoint(selection.focus, focusRaw, scrolled);
+		}
+		buffer += this.#selectionHighlightSequence();
 		const mutableTop = newTop + replayViewportRows;
 		const mutablePreparedLines = replayViewportRows > 0 ? prepared.lines.slice(replayViewportRows) : prepared.lines;
 		const mutablePreparedRows = replayViewportRows > 0 ? prepared.rows.slice(replayViewportRows) : prepared.rows;
