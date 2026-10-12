@@ -196,7 +196,7 @@ export class AgentLifecycleManager {
 		if (!ref) return false;
 		const adopted = this.#adopted.get(id);
 		if (adopted?.ref === ref && adopted.revive) return true;
-		return ref.sessionFile !== undefined && this.#persistedReviverFactory !== undefined;
+		return Boolean(ref.sessionFile) && this.#persistedReviverFactory !== undefined;
 	}
 
 	/** True if the id is adopted (parked or live) — and, when `expected` is given, still bound to that ref. */

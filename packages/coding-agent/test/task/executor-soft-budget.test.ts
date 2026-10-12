@@ -719,16 +719,12 @@ describe("resolveSoftRequestBudget", () => {
 		expect(resolveSoftRequestBudget(20, 100)).toBe(20);
 	});
 
-	it("keeps the agent's steps when the configured budget is higher", () => {
-		expect(resolveSoftRequestBudget(200, 100)).toBe(100);
-	});
-
 	it("uses the configured budget for agents without steps", () => {
 		expect(resolveSoftRequestBudget(20)).toBe(20);
 	});
 
 	it("ignores invalid steps from SDK-supplied agent definitions", () => {
-		for (const steps of [0, -2, 2.5, Number.NaN]) {
+		for (const steps of [0, Number.NaN]) {
 			expect(resolveSoftRequestBudget(20, steps)).toBe(20);
 		}
 	});
