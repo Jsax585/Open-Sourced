@@ -521,6 +521,8 @@ export class Container implements Component {
 	// byte-identical. Cleared on any child-list change and on invalidate().
 	#memoLines: string[] | undefined;
 	#memoChildLines: (readonly string[])[] = [];
+	#memoChildComponents: Component[] = [];
+	#mouseRoutingValid = false;
 	#memoWidth = -1;
 	// Memoized native description: rebuilt only when the child list changes, so
 	// the reconciler can skip an unchanged container by reference.
@@ -544,6 +546,7 @@ export class Container implements Component {
 			component.setIgnoreTight?.(true);
 		}
 		this.#memoLines = undefined;
+		this.#mouseRoutingValid = false;
 	}
 
 	removeChild(component: Component): void {
@@ -551,6 +554,7 @@ export class Container implements Component {
 		if (index !== -1) {
 			this.children.splice(index, 1);
 			this.#memoLines = undefined;
+			this.#mouseRoutingValid = false;
 		}
 	}
 
@@ -558,6 +562,7 @@ export class Container implements Component {
 		this.children = [];
 		this.#memoLines = undefined;
 		this.#memoChildLines = [];
+		this.#mouseRoutingValid = false;
 	}
 
 	/** Dispose every child, then detach it from this container. */
@@ -571,6 +576,7 @@ export class Container implements Component {
 		// only the concatenation would keep all of them reachable.
 		this.#memoLines = undefined;
 		this.#memoChildLines = [];
+		this.#mouseRoutingValid = false;
 		for (const child of this.children) {
 			child.invalidate?.();
 		}
@@ -600,20 +606,32 @@ export class Container implements Component {
 		const children = this.children;
 		const count = children.length;
 		let refs = this.#memoChildLines;
-		let unchanged = this.#memoLines !== undefined && this.#memoWidth === width && refs.length === count;
+		let childrenChanged = this.#memoChildComponents.length !== count;
+		let unchanged =
+			this.#memoLines !== undefined &&
+			this.#memoWidth === width &&
+			refs.length === count &&
+			this.#memoChildComponents.length === count;
 		if (refs.length !== count) {
 			// oxlint-disable-next-line unicorn/no-new-array -- render-frame length preallocation
 			refs = new Array(count);
 			this.#memoChildLines = refs;
 		}
 		for (let i = 0; i < count; i++) {
-			const childLines = children[i]!.render(width);
+			const child = children[i]!;
+			if (this.#memoChildComponents[i] !== child) {
+				unchanged = false;
+				childrenChanged = true;
+			}
+			const childLines = child.render(width);
 			if (refs[i] !== childLines) {
 				unchanged = false;
 				refs[i] = childLines;
 			}
 		}
 		this.#memoWidth = width;
+		if (childrenChanged) this.#memoChildComponents = children.slice();
+		this.#mouseRoutingValid = true;
 		if (unchanged) return this.#memoLines!;
 		const lines: string[] = [];
 		for (let i = 0; i < count; i++) {
@@ -624,12 +642,16 @@ export class Container implements Component {
 		return lines;
 	}
 	handleMouse(event: SgrMouseEvent): boolean {
+		if (!this.#mouseRoutingValid || event.row < 0 || this.#memoChildComponents.length !== this.children.length) {
+			return false;
+		}
 		let row = event.row;
-		if (row < 0) return false;
 		for (let index = 0; index < this.#memoChildLines.length; index++) {
 			const childLines = this.#memoChildLines[index]!;
 			if (row < childLines.length) {
-				return this.children[index]?.handleMouse?.({ ...event, row }) === true;
+				const child = this.#memoChildComponents[index];
+				if (!child || child !== this.children[index]) return false;
+				return child.handleMouse?.({ ...event, row }) === true;
 			}
 			row -= childLines.length;
 		}

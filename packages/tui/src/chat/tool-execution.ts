@@ -353,6 +353,7 @@ export class ToolExecutionComponent extends Container {
 	#args: unknown;
 	#expanded = false;
 	#allocation = Number.POSITIVE_INFINITY;
+	#mouseRoutingEnabled = false;
 	#presentationFrame: AnimationFrame = { tick: 0, now: 0 };
 	#toolActivityVisible = true;
 	#showImages: boolean;
@@ -1309,6 +1310,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override render(width: number): readonly string[] {
+		this.#mouseRoutingEnabled = false;
 		if (!this.#toolActivityVisible || this.#allocation === 0 || (this.#toolName === "wait" && this.#isBenignSkip())) {
 			return [];
 		}
@@ -1323,9 +1325,13 @@ export class ToolExecutionComponent extends Container {
 			if (trimmed.length > this.#allocation) return this.#renderCompact(width);
 			lines = trimmed;
 		}
+		this.#mouseRoutingEnabled = true;
 		this.#firstResultViewportRepaintShapePainted = this.#needsFirstResultViewportRepaintAtRender();
 		this.#partialResultShapePainted = this.#result !== undefined && this.#isPartial;
 		return lines;
+	}
+	override handleMouse(event: SgrMouseEvent): boolean {
+		return this.#mouseRoutingEnabled && super.handleMouse(event);
 	}
 
 	#renderCompact(width: number): readonly string[] {

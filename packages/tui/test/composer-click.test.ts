@@ -428,4 +428,56 @@ describe("composer mouse dispatch", () => {
 		).toBe(false);
 		expect(target.events).toEqual([]);
 	});
+	it("does not route compact custom-tool rows to hidden renderer controls", () => {
+		const target = new MouseTarget();
+		target.rows = ["row 0", "row 1", "row 2", "row 3"];
+		const tool = { label: "custom", renderCall: () => target };
+		const component = new ToolExecutionComponent(
+			"custom",
+			{},
+			{ useBuiltInRenderer: false },
+			tool as never,
+			{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} } as never,
+		);
+		component.setTranscriptAllocation(2, { tick: 0, now: 0 });
+		expect(component.render(80)).toHaveLength(2);
+
+		expect(
+			component.handleMouse({
+				button: 0,
+				col: 2,
+				row: 1,
+				release: false,
+				wheel: null,
+				motion: false,
+				leftClick: true,
+			}),
+		).toBe(false);
+		expect(target.events).toEqual([]);
+	});
+
+	it("does not reuse a container hit map after removing a child", () => {
+		const container = new Container();
+		const removed = new MouseTarget();
+		const remaining = new MouseTarget();
+		container.addChild(removed);
+		container.addChild(remaining);
+		container.render(80);
+		container.removeChild(removed);
+		const event = {
+			button: 0,
+			col: 3,
+			row: 0,
+			release: false,
+			wheel: null,
+			motion: false,
+			leftClick: true,
+		};
+		expect(container.handleMouse(event)).toBe(false);
+		expect(remaining.events).toEqual([]);
+
+		container.render(80);
+		expect(container.handleMouse(event)).toBe(true);
+		expect(remaining.events).toEqual([{ col: 3, row: 0 }]);
+	});
 });
