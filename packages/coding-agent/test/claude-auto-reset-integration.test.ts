@@ -212,7 +212,10 @@ describe("Claude saved-reset trigger integration", () => {
 		]);
 		vi.spyOn(authStorage.usage, "reports").mockImplementation(
 			async () =>
-				options.report && [options.report, ...siblings.flatMap(sibling => (sibling.report ? [sibling.report] : []))],
+				options.report && [
+					options.report,
+					...siblings.flatMap(sibling => (sibling.report ? [sibling.report] : [])),
+				],
 		);
 		let listAttempts = 0;
 		vi.spyOn(authStorage.resets, "list").mockImplementation(async request => {

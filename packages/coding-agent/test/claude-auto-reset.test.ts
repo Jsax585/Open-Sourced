@@ -281,7 +281,7 @@ describe("planClaudeResetRedemptions: blocked recovery", () => {
 		});
 		const plan = planClaudeResetRedemptions(
 			input({
-				settings: { enabled: true, minBlockedMinutes: 60, keepCredits: 1, salvageHorizonMs: 12 * HOUR },
+				settings: { autoRedeem: "yes", minBlockedMinutes: 60, keepCredits: 1, salvageHorizonMs: 12 * HOUR },
 				reports: [report(), report({ orgId: "org-b" })],
 				statuses: [status(), excluded],
 				permitsCredential: credentialId => credentialId === 11,
