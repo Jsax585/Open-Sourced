@@ -110,8 +110,10 @@ export async function cleanSourceCheckoutIfConfigured(
 	}
 }
 /**
- * Create the worktree for `/wt`. Throws with a user-facing message when `cwd`
- * is not a git checkout, `branch` already exists, or git refuses.
+ * Create the worktree for `/wt` and the `session` tool. Throws with a user-facing
+ * message when `cwd` is not a git checkout, `branch` already exists, or git
+ * refuses. `/wt` carries the checkout's uncommitted changes along (the default);
+ * pass `keepChanges: false` for a clean checkout of `HEAD`.
  */
 export async function createSessionWorktree(
 	cwd: string,

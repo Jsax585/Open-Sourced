@@ -90,7 +90,7 @@ async function reportFailedRollback(runtime: SlashCommandRuntime, rollbackError:
  * on failure. Returns a result when the move did not complete; `undefined`
  * on success so the caller can report its own confirmation.
  */
-async function relocateHeadlessSession(
+export async function relocateHeadlessSession(
 	runtime: SlashCommandRuntime,
 	resolvedPath: string,
 ): Promise<SlashCommandResult | undefined> {

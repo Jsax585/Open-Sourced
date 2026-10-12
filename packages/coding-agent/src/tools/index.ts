@@ -55,6 +55,7 @@ import { cfgIdaAvailable } from "../ida/install";
 import { EvalTool } from "./eval";
 import { resolveEvalBackends } from "./eval-backends";
 import { GithubTool } from "./gh";
+import { type SessionControl, SessionTool } from "./session";
 import { GlobTool } from "./glob";
 import { GrepTool } from "./grep";
 import { IdaTool } from "./ida";
@@ -86,6 +87,7 @@ import {
 	cfgCheckpointEnabled,
 	cfgDebugEnabled,
 	cfgGithubEnabled,
+	cfgSessionToolEnabled,
 	cfgGlobEnabled,
 	cfgGrepEnabled,
 	cfgLaunchEnabled,
@@ -122,6 +124,7 @@ export type {
 } from "@oh-my-pi/pi-tui/tools/bash";
 export * from "./browser";
 export * from "./checkpoint";
+export * from "./session";
 export * from "./computer";
 export * from "./computer/supervisor";
 export * from "./context-notes";
@@ -325,6 +328,11 @@ export interface ToolSession {
 	taskDepth?: number;
 	/** Get this agent's eval executor session ID; keys its retained JS/Python/Ruby/Julia state. */
 	getEvalSessionId?: () => string | null;
+	/**
+	 * Session mutations behind the `session` tool. Set for top-level sessions
+	 * only, so subagents and advisors never see the tool.
+	 */
+	sessionControl?: SessionControl;
 	/** Get session file */
 	getSessionFile: () => string | null;
 	/**
@@ -561,6 +569,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	ida: IdaTool.createIf,
 	eval: s => new EvalTool(s),
 	github: GithubTool.createIf,
+	session: SessionTool.createIf,
 	glob: s => new GlobTool(s, { rootPathAlias: true }),
 	grep: s => new GrepTool(s),
 	find: s => new FindTool(s),
@@ -748,6 +757,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		if (name === "grep") return cfgGrepEnabled.get(session.settings);
 		if (name === "find") return isFindEnabled(session);
 		if (name === "github") return cfgGithubEnabled.get(session.settings);
+		if (name === "session") return cfgSessionToolEnabled.get(session.settings);
 		if (name === "ast_grep") return cfgAstGrepEnabled.get(session.settings);
 		if (name === "ast_edit") return cfgAstEditEnabled.get(session.settings);
 		if (name === "web_search") return cfgWebSearchEnabled.get(session.settings);

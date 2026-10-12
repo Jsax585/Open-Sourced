@@ -220,6 +220,7 @@ import {
 	projectMountedMCPXdevGuidance,
 	type SettingsGatedToolDelta,
 } from "./session/session-tools";
+import { createHeadlessWorkspaceRelocator } from "./session/workspace-relocation";
 import { anthropicSlowModeHasNoSiblingHeadroom } from "./session/anthropic-slow-mode";
 import { CacheWarmer } from "./session/cache-warmer";
 import { createSettingsAwareStreamFn, resolveOpenAIWebsocketPreference } from "./session/settings-stream-fn";
@@ -2367,6 +2368,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getCheckpointState: () => session.getCheckpointState(),
 			setCheckpointState: state => session.setCheckpointState(state ?? undefined),
 			getLastCompletedRewind: () => session.getLastCompletedRewind(),
+			sessionControl: isSubagentSession
+				? undefined
+				: {
+						rename: title => sessionManager.setSessionName(title, "user", "session-tool"),
+						requestMove: directory => session.requestWorkspaceMove(directory),
+						pendingMove: () => session.pendingWorkspaceMove,
+					},
 			getToolChoiceQueue: () => session.toolChoiceQueue,
 			buildToolChoice: name => {
 				const m = session.model;
@@ -4483,6 +4491,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// The primary may carry a dormant xd:// write transport. Advisors use
 			// their own configured tool slate, so a selected write is always full.
 			deviceOnlyWrite: undefined,
+			sessionControl: undefined,
 			pendingFullWriteDescription: undefined,
 			get cwd() {
 				return sessionManager.getCwd();
@@ -4674,6 +4683,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			autoTitle: options.autoTitle === true && !isSubagentSession,
 		});
 		hasSession = true;
+		if (!isSubagentSession) session.setWorkspaceRelocator(createHeadlessWorkspaceRelocator(session));
 		credentialNoticeSession = session;
 		// Hashline snapshots are session-scoped: /new and switchSession fire the
 		// change callbacks, so clear the tool-side store there — stale tags would

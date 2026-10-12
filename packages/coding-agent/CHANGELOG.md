@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an opt-in `session` tool (`session.enabled`) so the agent can rename the session, move it to another directory between steps, and create, list, or remove git worktrees; removing refuses the directory the session works in and uncommitted changes unless `force` is set.
+
 ## [18.10.0] - 2026-10-12
 
 ### Added

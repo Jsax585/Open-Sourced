@@ -735,6 +735,19 @@ export const cfgGithubEnabled = register({
 	},
 });
 
+export const cfgSessionToolEnabled = register({
+	id: "session.enabled",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "tools",
+		group: "Available Tools",
+		label: "Session Tool",
+		description:
+			"Enable the session tool so the agent can rename the session, move it to another directory between steps, and create, list, or remove git worktrees",
+	},
+});
+
 export const cfgGithubCacheEnabled = register({
 	id: "github.cache.enabled",
 	type: "boolean",
@@ -1032,6 +1045,7 @@ export const cfgBuiltinToolGates = combine({
 	launch: cfgLaunchEnabled,
 	lsp: cfgLspEnabled,
 	security: cfgSecurityEnabled,
+	sessionTool: cfgSessionToolEnabled,
 	taskMaxRecursionDepth: cfgTaskMaxRecursionDepth,
 	todo: cfgTodoEnabled,
 	webSearch: cfgWebSearchEnabled,
