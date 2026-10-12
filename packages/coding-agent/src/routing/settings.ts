@@ -56,7 +56,8 @@ export const cfgJevRoutingMaxComplexityForDegrade = register({
 		tab: "model",
 		group: "Routing",
 		label: "Degrade Complexity Ceiling",
-		description: "Complexity score at or below which routing down is allowed.",
+		description:
+			"Complexity score, normalized 0..1, at or below which routing down is allowed. Decision scores arrive as weighted level indices (0..2 measured) and are normalized before this threshold.",
 		condition: "jevRoutingActive",
 	},
 });
