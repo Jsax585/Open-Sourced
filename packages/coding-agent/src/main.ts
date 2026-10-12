@@ -20,7 +20,7 @@ import {
 	setProjectDir,
 	VERSION,
 } from "@oh-my-pi/pi-utils/dirs";
-import { $env, isBunTestRuntime, setInteractiveHost } from "@oh-my-pi/pi-utils/env";
+import { $env, isBunTestRuntime, isCompiledBinary, setInteractiveHost } from "@oh-my-pi/pi-utils/env";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
@@ -39,6 +39,7 @@ import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker";
+import { fetchBuild } from "./cli/build-service";
 import { applyStartupCwd } from "./cli/startup-cwd";
 import { getLatestRelease, isSourceCheckout, managedInstallName } from "./cli/update-cli";
 import { findConfigFile } from "./config";
@@ -113,6 +114,7 @@ import {
 import type { ForeignSessionInfo, ForeignSessionSource, ForeignSessionStore } from "./session/foreign-session-store";
 import { resolveResumableSession, type SessionInfo } from "./session/session-listing";
 import { ForkSourceNotFoundError, SessionManager, SessionMoveRefusedError } from "./session/session-manager";
+import { forkIfMovedAway } from "./session/session-transfer";
 import { shouldShowStartupSplash } from "./startup-splash";
 import {
 	discoverSystemPromptOverride,
@@ -240,8 +242,12 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 		// "run omp update" would be wrong advice for both.
 		if (isSourceCheckout() || (await managedInstallName(process.execPath))) return;
 		const channel = cfgUpdateChannel.get(settings);
-		const release = await getLatestRelease({ timeoutMs: 5_000, channel });
-		return Bun.semver.order(release.version, currentVersion) > 0 ? release.version : undefined;
+		// A compiled binary updates from the build service; naming the running
+		// version lets the service prepare the patch `omp update` will then use.
+		const { version } = isCompiledBinary()
+			? await fetchBuild({ channel }, { timeoutMs: 5_000, fromVersion: currentVersion })
+			: await getLatestRelease({ timeoutMs: 5_000, channel });
+		return Bun.semver.order(version, currentVersion) > 0 ? version : undefined;
 	} catch {
 		return undefined;
 	}
@@ -1185,7 +1191,9 @@ export async function createSessionManager(
 		const forkSource = parsed.fork;
 		if (forkSource.includes("/") || forkSource.includes("\\") || forkSource.endsWith(".jsonl")) {
 			try {
-				return await SessionManager.forkFrom(forkSource, cwd, parsed.sessionDir);
+				return await SessionManager.forkFrom(forkSource, cwd, parsed.sessionDir, undefined, {
+					repairInterruptedTail: true,
+				});
 			} catch (err) {
 				if (err instanceof ForkSourceNotFoundError) {
 					throw new SessionResolutionError(err.message, SESSION_NOT_FOUND_HINT);
@@ -1198,7 +1206,9 @@ export async function createSessionManager(
 			throw new SessionResolutionError(`Session "${forkSource}" not found.`, SESSION_NOT_FOUND_HINT);
 		}
 		try {
-			return await SessionManager.forkFrom(match.session.path, cwd, parsed.sessionDir);
+			return await SessionManager.forkFrom(match.session.path, cwd, parsed.sessionDir, undefined, {
+				repairInterruptedTail: true,
+			});
 		} catch (err) {
 			if (err instanceof ForkSourceNotFoundError) {
 				throw new SessionResolutionError(`Session "${forkSource}" not found.`, SESSION_NOT_FOUND_HINT);
@@ -1219,14 +1229,17 @@ export async function createSessionManager(
 	if (typeof parsed.resume === "string") {
 		const sessionArg = parsed.resume;
 		if (sessionArg.includes("/") || sessionArg.includes("\\") || sessionArg.endsWith(".jsonl")) {
+			let manager: SessionManager;
 			try {
-				return await SessionManager.open(sessionArg, parsed.sessionDir, undefined, { throwIfMissing: true });
+				manager = await SessionManager.open(sessionArg, parsed.sessionDir, undefined, { throwIfMissing: true });
 			} catch (err) {
 				if (isEnoent(err) || isEnotdir(err)) {
 					throw new SessionResolutionError(`Session "${sessionArg}" not found.`, SESSION_NOT_FOUND_HINT);
 				}
 				throw err;
 			}
+			// A copy whose conversation moved to another machine continues as a fork.
+			return await forkIfMovedAway(manager, parsed.sessionDir);
 		}
 		const match = await resolveResumableSession(sessionArg, cwd, parsed.sessionDir);
 		if (!match) {
@@ -1241,7 +1254,7 @@ export async function createSessionManager(
 				askToMoveSession,
 			);
 			if (moveResult.status === "moved") {
-				return moveResult.manager;
+				return await forkIfMovedAway(moveResult.manager, parsed.sessionDir);
 			}
 			if (moveResult.status === "declined") {
 				return undefined;
@@ -1256,16 +1269,16 @@ export async function createSessionManager(
 				askToMoveSession,
 			);
 			if (moveResult.status === "moved") {
-				return moveResult.manager;
+				return await forkIfMovedAway(moveResult.manager, parsed.sessionDir);
 			}
 			if (moveResult.status === "declined") {
 				return undefined;
 			}
 		}
-		return await SessionManager.open(match.session.path, parsed.sessionDir);
+		return await forkIfMovedAway(await SessionManager.open(match.session.path, parsed.sessionDir), parsed.sessionDir);
 	}
 	if (parsed.continue) {
-		return await SessionManager.continueRecent(cwd, parsed.sessionDir);
+		return await forkIfMovedAway(await SessionManager.continueRecent(cwd, parsed.sessionDir), parsed.sessionDir);
 	}
 	// --resume without value is handled separately (needs picker UI)
 	// If --session-dir provided without --continue/--resume, create new session there
@@ -1278,7 +1291,10 @@ export async function createSessionManager(
 	// overriding them with CLI defaults.
 	// An explicit startup goal starts fresh even when implicit auto-resume is configured.
 	if (parsed.goal === undefined && cfgAutoResume.get(activeSettings)) {
-		const manager = await SessionManager.continueRecent(cwd, parsed.sessionDir);
+		const manager = await forkIfMovedAway(
+			await SessionManager.continueRecent(cwd, parsed.sessionDir),
+			parsed.sessionDir,
+		);
 		if (manager.getEntries().length > 0) {
 			parsed.continue = true;
 		}
@@ -2137,9 +2153,12 @@ export async function runRootCommand(
 				process.exit(0);
 			}
 			try {
-				sessionManager = (await SessionManager.isFromRemovedWorktree(selected, cwd, parsedArgs.sessionDir))
-					? await openRelocatedSession(selected, cwd, parsedArgs.sessionDir)
-					: await SessionManager.open(selected.path);
+				sessionManager = await forkIfMovedAway(
+					(await SessionManager.isFromRemovedWorktree(selected, cwd, parsedArgs.sessionDir))
+						? await openRelocatedSession(selected, cwd, parsedArgs.sessionDir)
+						: await SessionManager.open(selected.path),
+					parsedArgs.sessionDir,
+				);
 			} catch (error: unknown) {
 				if (error instanceof SessionResolutionError) exitForSessionResolutionError(error);
 				throw error;

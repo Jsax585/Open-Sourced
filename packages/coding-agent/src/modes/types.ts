@@ -454,7 +454,7 @@ export interface InteractiveModeContext {
 	handleFreshCommand(): Promise<void>;
 	handleResetContextCommand(): Promise<void>;
 	handleDeleteCommand(): Promise<void>;
-	handleForkCommand(): Promise<void>;
+	handleForkCommand(placement?: "pane" | "window"): Promise<void>;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void>;
 	handleMCPCommand(text: string): Promise<void>;
@@ -577,10 +577,6 @@ export interface InteractiveModeContext {
 	dismissCommandReport(): boolean;
 	/** Screen rows a report above the editor may take (all of them but the editor and the chrome under it). */
 	commandReportRows(): number | undefined;
-	/** Whether the last frame put the editor on the bottom row of the screen. */
-	composerInputAtBottom(): boolean;
-	/** Keep the editor on the bottom row while the live rows cannot fill the screen (after a tall report closed). */
-	pinComposerToBottom(): void;
 	cycleThinkingLevel(): void;
 	cycleRoleModel(direction?: "forward" | "backward"): Promise<void>;
 	toggleToolOutputExpansion(): void;
