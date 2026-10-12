@@ -130,7 +130,8 @@ async function resolvesInsideWorkspace(realRoot: string, candidate: string, isDi
 }
 
 function signature(stat: fs.Stats): string {
-	return `${stat.mtimeMs}:${stat.size}`;
+	// ctime and inode change even when a copy or checkout preserves mtime, so a same-size edit is still seen.
+	return `${stat.mtimeMs}:${stat.ctimeMs}:${stat.ino}:${stat.size}`;
 }
 
 /** Fits injected content in the same budget a `read` result gets. */

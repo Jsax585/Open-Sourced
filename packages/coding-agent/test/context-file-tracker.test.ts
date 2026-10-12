@@ -356,6 +356,15 @@ describe("live updates of loaded context files", () => {
 		expect(await update(r)).toBeUndefined();
 	});
 
+	it("announces a same-size edit that preserves the file's mtime", async () => {
+		const { r, files } = await setup({ "AGENTS.md": "rules A" });
+		expect(await update(r)).toBeUndefined(); // records the file's signature
+		const before = fs.statSync(files[0]!.path);
+		fs.writeFileSync(files[0]!.path, "rules B");
+		fs.utimesSync(files[0]!.path, before.atime, before.mtime);
+		expect(text((await update(r))!)).toContain("rules B");
+	});
+
 	it("sends the new content once after an edit and nothing further", async () => {
 		const { r, files } = await setup({ "AGENTS.md": "old rules" });
 		rewrite(files[0]!.path, "new rules");
