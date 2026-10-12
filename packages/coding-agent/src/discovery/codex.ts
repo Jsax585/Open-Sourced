@@ -22,6 +22,7 @@ import { promptCapability } from "../capability/prompt";
 import type { Settings } from "../capability/settings";
 import { settingsCapability } from "../capability/settings";
 import { settings as activeSettings } from "../config/settings";
+import { isValidTimeoutMs } from "../mcp/timeout";
 import type { Skill } from "../capability/skill";
 import { skillCapability } from "../capability/skill";
 import { type SlashCommand, slashCommandCapability } from "../capability/slash-command";
@@ -249,6 +250,7 @@ function extractMCPServersFromToml(
 
 		// Map Codex startup_timeout_sec and tool_timeout_sec (seconds) to the connect and execution
 		// deadlines (milliseconds).
+		// Out-of-range values are dropped, as the shared validator drops them elsewhere.
 		const connect =
 			typeof config.startup_timeout_sec === "number" && config.startup_timeout_sec > 0
 				? config.startup_timeout_sec * 1000
@@ -257,9 +259,11 @@ function extractMCPServersFromToml(
 			typeof config.tool_timeout_sec === "number" && config.tool_timeout_sec > 0
 				? config.tool_timeout_sec * 1000
 				: undefined;
-		if (connect !== undefined || execution !== undefined) {
-			server.timeout = { ...(connect !== undefined && { connect }), ...(execution !== undefined && { execution }) };
-		}
+		const timeout = {
+			...(isValidTimeoutMs(connect) && { connect }),
+			...(isValidTimeoutMs(execution) && { execution }),
+		};
+		if (Object.keys(timeout).length > 0) server.timeout = timeout;
 		result[name] = server;
 	}
 
