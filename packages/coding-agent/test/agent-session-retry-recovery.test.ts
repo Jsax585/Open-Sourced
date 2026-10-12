@@ -209,7 +209,7 @@ describe("AgentSession retry recovery", () => {
 			streamFn: (requestModel, context, options) => {
 				streams++;
 				if (!isAnthropicModel(requestModel) || requestModel.id !== model.id) throw new Error("Unexpected fallback");
-				return streamAnthropic(requestModel, context, options);
+				return streamAnthropic(requestModel, context, options ?? {});
 			},
 		});
 		const settings = Settings.isolated({
