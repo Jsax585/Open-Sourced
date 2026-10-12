@@ -39,7 +39,8 @@ import * as openaiChat from "../providers/openai-chat-server";
 import * as openaiResponses from "../providers/openai-responses-server";
 import * as piNative from "../providers/pi-native-server";
 import { completeSimple, streamSimple } from "../stream";
-import type { Api, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
+import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
+import { hasBillableUsage } from "../utils/billable-usage";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { parseBind } from "../utils/parse-bind";
 import { resolvePeer } from "../utils/resolve-peer";
@@ -72,6 +73,12 @@ import { handleTranscriptions } from "./routes/transcriptions";
 import { handleVideoContent, handleVideoPoll, handleVideoSubmit } from "./routes/video";
 import { AuthGatewaySessionStateStore } from "./session-state";
 import { GatewayResponseOwnership, type GatewayResponseOwner, responseEndpointIdentity } from "./response-ownership";
+import {
+	commitGateObservesDownstreamSse,
+	holdSseUntilCommit,
+	pumpHeldSseAttempts,
+	StreamCommitGate,
+} from "./stream-commit-gate";
 import type {
 	AuthGatewayParsedRequestOptions,
 	AuthGatewayServerHandle,
@@ -232,6 +239,34 @@ export function applyParsedGatewayOptions(opts: SimpleStreamOptions, options: Au
 	if (options.responseFormat !== undefined) opts.responseFormat = options.responseFormat;
 }
 
+/** Total pre-commit attempts (initial + retries) for held Responses preludes. */
+const MAX_HELD_PRECOMMIT_ATTEMPTS = 3;
+
+/**
+ * Terminal `response.failed` frame for a held-prelude stream whose retry could
+ * not even be opened (e.g. `streamSimple` threw while still probing). Nothing
+ * has reached the client yet, so the honest terminal is synthesized in the
+ * Responses envelope shape the encoder emits for stream failures.
+ */
+function encodeResponsesFailedFrame(modelId: string, message: string): Uint8Array {
+	const frame = {
+		type: "response.failed",
+		sequence_number: 0,
+		response: {
+			id: `resp_${crypto.randomUUID().replaceAll("-", "")}`,
+			object: "response",
+			created_at: Math.floor(Date.now() / 1000),
+			status: "failed",
+			model: modelId,
+			output: [],
+			usage: null,
+			error: { message },
+			incomplete_details: null,
+		},
+	};
+	return new TextEncoder().encode(`event: response.failed\ndata: ${JSON.stringify(frame)}\n\n`);
+}
+
 function clientClosedResponse(route: { module: FormatModule }): Response {
 	return route.module.formatError(499, "request_aborted", "client closed request");
 }
@@ -384,8 +419,24 @@ async function handleFormatEndpoint(
 		);
 	}
 
+	// `openai-codex-responses` cannot honour a caller-owned
+	// `previous_response_id`: its chaining lives in websocket session state and
+	// the SSE transport cannot carry the field at all. Silently dropping it
+	// would answer from only the new input — reject loudly instead.
+	if (model.api === "openai-codex-responses" && parsed.options.previousResponseId !== undefined) {
+		return route.module.formatError(
+			400,
+			"invalid_request_error",
+			"previous_response_id is not supported for openai-codex-responses models",
+		);
+	}
+
 	// Sticky credential id: honour the client's `prompt_cache_key` when
-	// supplied (so external session ids align), otherwise derive from
+	// supplied (so external session ids align), then a remembered
+	// `previous_response_id` chain key (a continuation's context holds only the
+	// new input, so content derivation cannot reproduce the original session —
+	// without this lookup each hop can land on a different account whose store
+	// does not know the referenced response), otherwise derive from
 	// modelId + system + tools + first message. Mirrored into
 	// streamOpts.sessionId / promptCacheKey by `buildStreamOptions`.
 	const clientKey = normalizeClientSessionKey(parsed.options.promptCacheKey);
@@ -448,6 +499,15 @@ async function handleFormatEndpoint(
 					lease.updateAccount(owner.account);
 				},
 			);
+	const commitGate = new StreamCommitGate();
+	if (parsed.stream && !commitGateObservesDownstreamSse(route.label)) {
+		const previousSse = streamOpts.onSseEvent;
+		streamOpts.onSseEvent = (event, sseModel) => {
+			const bytes = new TextEncoder().encode(event.raw.join("\n")).byteLength;
+			commitGate.classifyAndObserve(event.event ?? "", bytes);
+			previousSse?.(event, sseModel);
+		};
+	}
 
 	logger.info("auth-gateway request", {
 		requestId,
@@ -506,35 +566,106 @@ async function handleFormatEndpoint(
 	// happens, the `finally` below owns it.
 	let streamOwnsLease = false;
 	try {
-		let events: AssistantMessageEventStream;
-		try {
-			if (controller.signal.aborted) return clientClosedResponse(route);
-			events = streamSimple(model, parsed.context, streamOpts);
-		} catch (error) {
-			const classified = classifyGatewayError(error);
-			logger.warn("auth-gateway streamSimple threw", { format: route.label, error: classified.message, peer });
-			return finalizedErrorResponse(route.module, error);
-		}
-		if (controller.signal.aborted) return clientClosedResponse(route);
-		void events
-			.result()
-			.then(message => {
-				recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
-				if (message.stopReason !== "error" && message.stopReason !== "aborted")
-					responseOwners.record(message.responseId, owner);
-			})
-			.catch(() => {})
-			.finally(() => lease.release());
-		streamOwnsLease = true;
+		const holdsPrelude = commitGateObservesDownstreamSse(route.label);
+		const recordUsage = (events: AssistantMessageEventStream) => {
+			void events
+				.result()
+				.then(message => {
+					recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
+					if (message.stopReason !== "error" && message.stopReason !== "aborted")
+						responseOwners.record(message.responseId, owner);
+				})
+				.catch(() => {});
+		};
 
-		const sseStream = route.module.encodeStream(events, parsed.modelId, parsed.options, {
-			signal: controller.signal,
-			onCancel: reason => {
-				if (!controller.signal.aborted) {
-					controller.abort(reason instanceof Error ? reason : new Error("client closed request"));
-				}
-			},
-		});
+		let sseStream: ReadableStream<Uint8Array>;
+		if (holdsPrelude) {
+			let lastAttempt: Promise<AssistantMessage> | undefined;
+			// Held-prelude failover: the gate buffers metadata frames until first
+			// output so a pre-commit retryable terminal can be retried without the
+			// dead attempt's frames reaching the client. Each attempt gets its own
+			// abort scope — cancelling a dead attempt's encoder must not poison the
+			// shared request signal that a replacement attempt still needs.
+			const openHeldAttempt = (): ReadableStream<Uint8Array> => {
+				const attemptCtl = new AbortController();
+				const onParentAbort = () => attemptCtl.abort(controller.signal.reason);
+				if (controller.signal.aborted) attemptCtl.abort(controller.signal.reason);
+				else controller.signal.addEventListener("abort", onParentAbort, { once: true });
+				const attemptEvents = streamSimple(model, parsed.context, { ...streamOpts, signal: attemptCtl.signal });
+				lastAttempt = attemptEvents.result();
+				recordUsage(attemptEvents);
+				void attemptEvents
+					.result()
+					.catch(() => {})
+					.finally(() => controller.signal.removeEventListener("abort", onParentAbort));
+				return holdSseUntilCommit(
+					route.module.encodeStream(attemptEvents, parsed.modelId, parsed.options, {
+						signal: attemptCtl.signal,
+						onCancel: reason =>
+							attemptCtl.abort(reason instanceof Error ? reason : new Error("attempt stream cancelled")),
+					}),
+					commitGate,
+				);
+			};
+			let firstSse: ReadableStream<Uint8Array>;
+			try {
+				firstSse = openHeldAttempt();
+			} catch (error) {
+				const classified = classifyGatewayError(error);
+				logger.warn("auth-gateway streamSimple threw", { format: route.label, error: classified.message, peer });
+				return route.module.formatError(classified.status, classified.type, classified.message);
+			}
+			streamOwnsLease = true;
+			sseStream = pumpHeldSseAttempts(firstSse, openHeldAttempt, commitGate, {
+				maxAttempts: MAX_HELD_PRECOMMIT_ATTEMPTS,
+				shouldRetry: async () => {
+					if (previousId || controller.signal.aborted || !lastAttempt) return false;
+					const message = await lastAttempt;
+					if (hasBillableUsage(message.usage)) return false;
+					const classified = classifyGatewayError(message);
+					return (
+						classified.disposition === "provider_transient" || classified.disposition === "provider_unavailable"
+					);
+				},
+				onAbort: (error, attempt) =>
+					logger.info("auth-gateway held prelude ended pre-commit; retrying", {
+						route: route.label,
+						event: error.eventType,
+						attempt,
+						peer,
+					}),
+				synthesizeFailure: error => {
+					const classified = classifyGatewayError(error);
+					return encodeResponsesFailedFrame(parsed.modelId, classified.message);
+				},
+				onSettle: () => lease.release(),
+			});
+		} else {
+			let events: AssistantMessageEventStream;
+			try {
+				if (controller.signal.aborted) return clientClosedResponse(route);
+				events = streamSimple(model, parsed.context, streamOpts);
+			} catch (error) {
+				const classified = classifyGatewayError(error);
+				logger.warn("auth-gateway streamSimple threw", { format: route.label, error: classified.message, peer });
+				return route.module.formatError(classified.status, classified.type, classified.message);
+			}
+			if (controller.signal.aborted) return clientClosedResponse(route);
+			recordUsage(events);
+			void events
+				.result()
+				.catch(() => {})
+				.finally(() => lease.release());
+			streamOwnsLease = true;
+			sseStream = route.module.encodeStream(events, parsed.modelId, parsed.options, {
+				signal: controller.signal,
+				onCancel: reason => {
+					if (!controller.signal.aborted) {
+						controller.abort(reason instanceof Error ? reason : new Error("client closed request"));
+					}
+				},
+			});
+		}
 		return new Response(sseStream, {
 			status: 200,
 			headers: {
@@ -604,6 +735,16 @@ async function handlePiNative(
 	}
 	const kindRejection = chatRouteRejection(model);
 	if (kindRejection) return piNative.formatError(400, "invalid_request_error", kindRejection);
+	// Mirror of the format-endpoint guard: Codex continuation is websocket
+	// session state, so a caller-owned `previous_response_id` can never reach
+	// the wire — dropping it would answer from only the new input.
+	if (model.api === "openai-codex-responses" && parsed.options.previousResponseId !== undefined) {
+		return piNative.formatError(
+			400,
+			"invalid_request_error",
+			"previous_response_id is not supported for openai-codex-responses models",
+		);
+	}
 	const client = resolveClientIdentity(req.headers);
 	// Pi-native already parsed `streamOpts.sessionId` (when set by the
 	// client); fall back to the derived key so credential-stickiness lines
@@ -1045,11 +1186,13 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 				return withCors(json(400, { error: "gateway bearer token outside Authorization" }), req);
 			}
 			const peer = resolvePeer(req, socketPeer, opts.trustProxyHeaders);
-			return withCors(await router.route(req, peer), req);
+			const response = await router.route(req, peer);
+			if (response.headers.get("content-type")?.startsWith("text/event-stream")) server.timeout(req, 0);
+			return withCors(response, req);
 		},
 		// Max-out Bun's idle timeout. Long thinking-budget calls can sit idle
 		// for minutes before the first token arrives; the default kills them.
-		idleTimeout: 255,
+		idleTimeout: opts.idleTimeout ?? 255,
 	});
 
 	const boundHost = server.hostname ?? bind.hostname;

@@ -148,6 +148,8 @@ export interface AuthGatewayFormatModule {
 }
 
 export interface AuthGatewayServerOptions {
+	/** Default transport idle limit in seconds; active SSE streams override it. Default 255. */
+	idleTimeout?: number;
 	/** Listen address. Default `127.0.0.1:4000`. */
 	bind?: string;
 	/** Accept any of these bearer tokens. Empty allows unauthenticated calls. */

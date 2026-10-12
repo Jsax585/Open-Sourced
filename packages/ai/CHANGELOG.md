@@ -4,6 +4,7 @@
 
 ### Added
 
+- Gateway Responses streams hold metadata before output and preserve terminal failures without replaying committed content ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
 - Added gateway failure ownership and retry dispositions for credential, model, provider, and terminal errors ([#10133](https://github.com/can1357/oh-my-pi/pull/10133) by [@jroth1111](https://github.com/jroth1111)).
 
 ### Changed
@@ -12,6 +13,7 @@
 
 ### Fixed
 
+- Active gateway SSE inference survives the HTTP idle limit; failures with reported usage or explicit no-retry intent are not transparently replayed ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway errors retain authoritative provider statuses, structural cancellation, and Anthropic retry directives ([#10133](https://github.com/can1357/oh-my-pi/pull/10133) by [@jroth1111](https://github.com/jroth1111)).
 - Responses continuation IDs stay with the serving account and deployment instead of crossing account replacements ([#10134](https://github.com/can1357/oh-my-pi/pull/10134) by [@jroth1111](https://github.com/jroth1111)).
 - Responses replies retain upstream IDs, and caller-owned continuation input is not mixed with internal deltas ([#10134](https://github.com/can1357/oh-my-pi/pull/10134) by [@jroth1111](https://github.com/jroth1111)).
