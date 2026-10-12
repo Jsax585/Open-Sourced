@@ -75,7 +75,6 @@ export function formatTaskResultSummary(
 		abortReason: result.aborted ? escapeHarnessTags(result.abortReason ?? "") || undefined : undefined,
 		error: error === undefined ? undefined : escapeHarnessTags(error),
 		resumable,
-		resumeAfterFailure: resumable && !result.aborted,
 		preview: escapeHarnessTags(preview),
 		truncated,
 		meta: result.outputMeta

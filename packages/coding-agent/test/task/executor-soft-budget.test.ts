@@ -307,7 +307,9 @@ describe("runSubprocess soft request budget", () => {
 			}
 			const yieldMessage = {
 				role: "assistant" as const,
-				content: [{ type: "toolCall" as const, id: "y1", name: "yield", arguments: { data: { report: "summary" } } }],
+				content: [
+					{ type: "toolCall" as const, id: "y1", name: "yield", arguments: { data: { report: "summary" } } },
+				],
 				stopReason: "toolUse" as const,
 			};
 			pushMessage(yieldMessage);
@@ -713,30 +715,28 @@ describe("runSubprocess soft request budget", () => {
 });
 
 describe("resolveSoftRequestBudget", () => {
-	it("lets a configured budget lower a bundled agent's ceiling", () => {
-		expect(resolveSoftRequestBudget("scout", 20)).toBe(20);
-		expect(resolveSoftRequestBudget("sonic", 20)).toBe(20);
+	it("lets a configured budget lower an agent's steps", () => {
+		expect(resolveSoftRequestBudget(20, 100)).toBe(20);
 	});
 
-	it("keeps the bundled ceiling when the configured budget is higher", () => {
-		expect(resolveSoftRequestBudget("scout", 200)).toBe(100);
-		expect(resolveSoftRequestBudget("sonic", 200)).toBe(100);
+	it("keeps the agent's steps when the configured budget is higher", () => {
+		expect(resolveSoftRequestBudget(200, 100)).toBe(100);
 	});
 
-	it("uses the configured budget for agents without a bundled entry", () => {
-		expect(resolveSoftRequestBudget("task", 20)).toBe(20);
+	it("uses the configured budget for agents without steps", () => {
+		expect(resolveSoftRequestBudget(20)).toBe(20);
+		expect(resolveSoftRequestBudget(200)).toBe(200);
 	});
 
-	it("lets an agent's steps replace its bundled entry, capped by the configured budget", () => {
-		expect(resolveSoftRequestBudget("scout", 200, 150)).toBe(150);
-		expect(resolveSoftRequestBudget("task", 200, 8)).toBe(8);
-		expect(resolveSoftRequestBudget("task", 20, 50)).toBe(20);
-		expect(resolveSoftRequestBudget("scout", 0, 8)).toBe(0);
+	it("never lets steps raise an agent above the configured budget", () => {
+		expect(resolveSoftRequestBudget(200, 8)).toBe(8);
+		expect(resolveSoftRequestBudget(20, 50)).toBe(20);
 	});
 
-	it("keeps 0 disabled and normalizes negative or fractional budgets", () => {
-		expect(resolveSoftRequestBudget("scout", 0)).toBe(0);
-		expect(resolveSoftRequestBudget("scout", -5)).toBe(0);
-		expect(resolveSoftRequestBudget("scout", 20.9)).toBe(20);
+	it("keeps 0 disabled regardless of steps and normalizes negative or fractional budgets", () => {
+		expect(resolveSoftRequestBudget(0, 8)).toBe(0);
+		expect(resolveSoftRequestBudget(0)).toBe(0);
+		expect(resolveSoftRequestBudget(-5)).toBe(0);
+		expect(resolveSoftRequestBudget(20.9)).toBe(20);
 	});
 });

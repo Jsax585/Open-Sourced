@@ -5,6 +5,7 @@ tools: read, find, grep, glob, web_search
 model: "@smol"
 thinking-level: medium
 read-summarize: false
+steps: 100
 output:
   properties:
     summary:

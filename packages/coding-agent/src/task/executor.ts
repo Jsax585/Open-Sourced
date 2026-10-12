@@ -158,34 +158,25 @@ export type { YieldItem } from "@oh-my-pi/pi-tui/tools/task";
 const TASK_ABORT_CLEANUP_GRACE_MS = 10_000;
 
 /**
- * Soft per-agent request budgets (assistant requests per run). Crossing the
- * budget injects a wrap-up steering notice (`task.softRequestBudgetNotice`,
- * on by default). At 1.5x the budget the free-running turn is stopped and the
- * agent is driven to one forced final `yield` so partial findings come back
- * as a real report; only if it still refuses to yield within
- * {@link BUDGET_STOP_GRACE_REQUESTS} more requests is the run hard-aborted.
- * Entries are ceilings, not fixed values: the `default` key applies to agents
- * without an explicit entry, and the `task.softRequestBudget` setting can only
- * lower an agent's budget, never raise it above its bundled entry (0 disables
- * the guard entirely). An agent definition's frontmatter `steps` replaces the
- * bundled entry for that agent (still capped by the setting).
+ * Resolves the effective soft request budget (assistant requests per run) for
+ * a subagent. Crossing the budget injects a wrap-up steering notice
+ * (`task.softRequestBudgetNotice`, on by default). At 1.5x the budget the
+ * free-running turn is stopped and the agent is driven to one forced final
+ * `yield` so partial findings come back as a real report; only if it still
+ * refuses to yield within {@link BUDGET_STOP_GRACE_REQUESTS} more requests is
+ * the run hard-aborted.
+ *
+ * The `task.softRequestBudget` setting is the global ceiling and an agent
+ * definition's frontmatter `steps` (`agentSteps`) is that agent's own budget.
+ * The tighter one wins, so `steps` can lower an agent's budget but never raise
+ * it above the setting. A configured budget of 0 disables the guard regardless
+ * of `steps`. Bundled agents that need a lower budget (scout, sonic) declare it
+ * as `steps` in their definitions.
  */
-export const SOFT_REQUEST_BUDGET: Record<string, number> = {
-	scout: 100,
-	sonic: 100,
-	default: 200,
-};
-
-/**
- * Resolves the effective soft request budget for an agent. The configured
- * `task.softRequestBudget` and the agent's bundled entry are both upper
- * bounds, so the tighter one wins; a configured budget of 0 disables the
- * guard regardless of the bundled entry.
- */
-export function resolveSoftRequestBudget(agentName: string, configuredBudget: number, agentSteps?: number): number {
+export function resolveSoftRequestBudget(configuredBudget: number, agentSteps?: number): number {
 	const normalized = Math.max(0, Math.trunc(configuredBudget));
 	if (normalized === 0) return 0;
-	return Math.min(normalized, agentSteps ?? SOFT_REQUEST_BUDGET[agentName] ?? normalized);
+	return Math.min(normalized, agentSteps ?? normalized);
 }
 
 /** Extra requests allowed after a budget stop for the forced yield to land before the run is hard-aborted. */
@@ -3952,7 +3943,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	// <= 0 disables parking (the session stays live until process teardown).
 	const agentIdleTtlMs = Math.trunc(Number(cfgTaskAgentIdleTtlMs.get(settings)) || 0);
 	const configuredDefaultBudget = Math.max(0, Math.trunc(Number(cfgTaskSoftRequestBudget.get(settings)) || 0));
-	const softRequestBudget = resolveSoftRequestBudget(agent.name, configuredDefaultBudget, agent.steps);
+	const softRequestBudget = resolveSoftRequestBudget(configuredDefaultBudget, agent.steps);
 	const softRequestBudgetNotice = cfgTaskSoftRequestBudgetNotice.get(settings);
 	const parentDepth = options.taskDepth ?? 0;
 	const childDepth = parentDepth + 1;

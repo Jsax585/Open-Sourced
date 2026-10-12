@@ -4,11 +4,11 @@
 
 ### Added
 
-- Added a `steps` field to agent frontmatter that sets that agent's request budget: the subagent gets a wrap-up notice at `steps` requests and is driven to a final `yield` at 1.5x, instead of the built-in default.
+- Added a `steps` field to agent frontmatter that sets that agent's request budget: the subagent gets a wrap-up notice at `steps` requests and is driven to a final `yield` at 1.5x. Bundled scout and sonic now declare `steps: 100` instead of a name-keyed table, so a custom agent of the same name no longer inherits the cap.
 
 ### Fixed
 
-- Failed subagent results now include a `<resume>` line with the `agent://<id>` to message, like cancelled ones already did, so the parent can continue the same child instead of redoing the work.
+- Failed subagent results now include a `<resume>` line with the `agent://<id>` to message, so the parent can continue the same child instead of redoing the work. Cancelled results use the same single `<resume>` line instead of a suffix on the abort reason.
 
 ## [18.10.0] - 2026-10-12
 

@@ -25,4 +25,12 @@ describe("task agent capability descriptions", () => {
 		expect(isReadOnlyAgent({ ...scout, tools: ["read", "grep", "wait", "yield"] })).toBe(true);
 		expect(isReadOnlyAgent({ ...scout, tools: ["read", "grep", "wait", "bash"] })).toBe(false);
 	});
+
+	it("declares the lower request budget of scout and sonic in their definitions", () => {
+		const agents = loadBundledAgents();
+
+		expect(agentByName(agents, "scout").steps).toBe(100);
+		expect(agentByName(agents, "sonic").steps).toBe(100);
+		expect(agentByName(agents, "task").steps).toBeUndefined();
+	});
 });

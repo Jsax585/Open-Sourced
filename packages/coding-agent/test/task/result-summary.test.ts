@@ -117,7 +117,7 @@ describe("formatTaskResultSummary", () => {
 				id,
 				displayName: id,
 				kind: "sub",
-				session: null as never,
+				session: null,
 				sessionFile: null,
 				status,
 			});
@@ -150,13 +150,14 @@ describe("formatTaskResultSummary", () => {
 			expect(formatTaskResultSummary(settledResult("done"), { totalDurationMs: 5 })).not.toContain("<resume>");
 		});
 
-		it("keeps the abort-reason hint for aborted runs without a duplicate resume element", () => {
+		it("emits exactly one resume element for aborted runs, not repeated in the abort reason", () => {
 			registerAs("Scout", "idle");
 			const summary = formatTaskResultSummary(failed({ aborted: true, abortReason: "budget" }), {
 				totalDurationMs: 5,
 			});
-			expect(summary).toContain("message it via `write agent://Scout` to resume");
-			expect(summary).not.toContain("<resume>");
+			expect(summary).toContain("<abort-reason>budget</abort-reason>");
+			expect(summary.split("<resume>")).toHaveLength(2);
+			expect(summary.split("`write agent://Scout`")).toHaveLength(2);
 		});
 	});
 });
