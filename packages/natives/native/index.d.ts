@@ -1783,14 +1783,17 @@ export interface EnclosingBoundaryOptions {
  * The image is scaled to `target_width_px` with its aspect ratio kept
  * (squashed if it would be taller than `rows` × `row_height_px`), then cut
  * into `rows` strips of `row_height_px`; rows past the image bottom are
- * transparent. A terminal that draws each strip into exactly one cell row
- * (such as iTerm2 inline images) shows the image row by row, so any subset
- * of rows can be repainted, clipped, or scrolled without the others. Prefer
+ * transparent. Geometry beyond the decode limits is scaled down with its
+ * shape kept, so the strips can be smaller than requested. A terminal that
+ * draws each strip into exactly one cell row (such as iTerm2 inline images)
+ * shows the image row by row, so any subset of rows can be repainted,
+ * clipped, or scrolled without the others. Prefer
  * [`encode_image_rows_async`] unless the caller cannot wait.
  *
  * # Errors
- * Returns an error if the geometry exceeds the decode limit, or if decoding,
- * resizing, or PNG encoding fails.
+ * Returns an error if a dimension is zero, if `rows` cannot fit the decode
+ * limit even at one pixel each, or if decoding, resizing, or PNG encoding
+ * fails.
  */
 export declare function encodeImageRows(bytes: Uint8Array, targetWidthPx: number, rowHeightPx: number, rows: number): Array<string>
 
@@ -1800,8 +1803,8 @@ export declare function encodeImageRows(bytes: Uint8Array, targetWidthPx: number
  * loop.
  *
  * # Errors
- * Rejects if the geometry exceeds the decode limit, or if decoding,
- * resizing, or PNG encoding fails.
+ * Rejects if a dimension is zero, if `rows` cannot fit the decode limit
+ * even at one pixel each, or if decoding, resizing, or PNG encoding fails.
  */
 export declare function encodeImageRowsAsync(bytes: Uint8Array, targetWidthPx: number, rowHeightPx: number, rows: number): Promise<Array<string>>
 

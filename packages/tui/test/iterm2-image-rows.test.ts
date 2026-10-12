@@ -13,8 +13,10 @@ import {
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import {
 	type CellDimensions,
+	encodeImageRowsNow,
 	getCellDimensions,
 	ImageProtocol,
+	renderImage,
 	setCellDimensions,
 	TERMINAL,
 } from "@oh-my-pi/pi-tui/terminal-capabilities";
@@ -208,5 +210,27 @@ describe("iTerm2 inline images", () => {
 		expect(laidOut.frames[0]).toContain(label(0));
 		expect(shown.frames).toEqual(laidOut.frames);
 		expect(shown.history).toEqual(laidOut.history);
+	});
+
+	it("stay per-row strips when the image is larger than the native decode limits", () => {
+		// 500x750 cells at 16 px per column asks for 8000x12000 px of strips,
+		// past the encoder's 8192 px edge and 4,194,304-pixel limits. Falling
+		// back to the single anchored image would bring the viewport-top bug back.
+		info.imageProtocol = ImageProtocol.Iterm2;
+		const result = renderImage(
+			BANDED_PNG,
+			{ widthPx: 8000, heightPx: 12000 },
+			{
+				maxWidthCells: 500,
+				maxHeightCells: 750,
+				iterm2Rows: (widthPx, rowHeightPx, rows) => encodeImageRowsNow(BANDED_PNG, widthPx, rowHeightPx, rows),
+			},
+		);
+		expect(result?.sequence).toBeUndefined();
+		expect(result?.lines).toHaveLength(750);
+		const strip = Buffer.from(result!.lines![0]!.match(OSC_1337.source)![2]!, "base64");
+		const { width, height } = pngPixel(strip, 0, 0);
+		expect(width * height * 750).toBeLessThanOrEqual(4 * 1024 * 1024);
+		expect(height * 750).toBeLessThanOrEqual(8192);
 	});
 });

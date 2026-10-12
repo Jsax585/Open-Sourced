@@ -235,14 +235,17 @@ fn encode_image(bytes: &[u8], target_width_px: u32, target_height_px: u32) -> Re
 /// The image is scaled to `target_width_px` with its aspect ratio kept
 /// (squashed if it would be taller than `rows` × `row_height_px`), then cut
 /// into `rows` strips of `row_height_px`; rows past the image bottom are
-/// transparent. A terminal that draws each strip into exactly one cell row
-/// (such as iTerm2 inline images) shows the image row by row, so any subset
-/// of rows can be repainted, clipped, or scrolled without the others. Prefer
+/// transparent. Geometry beyond the decode limits is scaled down with its
+/// shape kept, so the strips can be smaller than requested. A terminal that
+/// draws each strip into exactly one cell row (such as iTerm2 inline images)
+/// shows the image row by row, so any subset of rows can be repainted,
+/// clipped, or scrolled without the others. Prefer
 /// [`encode_image_rows_async`] unless the caller cannot wait.
 ///
 /// # Errors
-/// Returns an error if the geometry exceeds the decode limit, or if decoding,
-/// resizing, or PNG encoding fails.
+/// Returns an error if a dimension is zero, if `rows` cannot fit the decode
+/// limit even at one pixel each, or if decoding, resizing, or PNG encoding
+/// fails.
 #[napi]
 pub fn encode_image_rows(
 	bytes: Uint8Array,
@@ -258,8 +261,8 @@ pub fn encode_image_rows(
 /// loop.
 ///
 /// # Errors
-/// Rejects if the geometry exceeds the decode limit, or if decoding,
-/// resizing, or PNG encoding fails.
+/// Rejects if a dimension is zero, if `rows` cannot fit the decode limit
+/// even at one pixel each, or if decoding, resizing, or PNG encoding fails.
 #[napi]
 pub fn encode_image_rows_async(
 	bytes: Uint8Array,
@@ -279,6 +282,7 @@ fn encode_rows(
 	row_height_px: u32,
 	rows: u32,
 ) -> Result<Vec<String>> {
+	let (target_width_px, row_height_px) = fit_row_geometry(target_width_px, row_height_px, rows);
 	let total_height_px = row_height_px.saturating_mul(rows);
 	guard_dimensions(target_width_px as usize, total_height_px as usize)?;
 
@@ -314,6 +318,23 @@ fn encode_rows(
 		strips.push(STANDARD.encode(&png));
 	}
 	Ok(strips)
+}
+
+/// Scales the strip width and row height down by one factor until the whole
+/// strip stack fits `MAX_IMAGE_EDGE` and `MAX_DECODED_PIXELS`. Zero
+/// dimensions pass through unchanged for `guard_dimensions` to reject.
+fn fit_row_geometry(width: u32, row_height: u32, rows: u32) -> (u32, u32) {
+	let width_px = f64::from(width);
+	let height_px = f64::from(row_height) * f64::from(rows);
+	let scale = (MAX_DECODED_PIXELS as f64 / (width_px * height_px))
+		.sqrt()
+		.min(MAX_IMAGE_EDGE as f64 / width_px)
+		.min(MAX_IMAGE_EDGE as f64 / height_px);
+	if scale >= 1.0 {
+		return (width, row_height);
+	}
+	let shrink = |px: u32| ((f64::from(px) * scale).floor() as u32).max(1);
+	(shrink(width), shrink(row_height))
 }
 
 fn decode_image_from_bytes(bytes: &[u8]) -> Result<DynamicImage> {

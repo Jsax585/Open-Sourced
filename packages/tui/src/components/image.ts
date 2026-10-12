@@ -638,6 +638,11 @@ function normalizeCap(cap: number): number {
 	return Math.max(0, Math.trunc(cap));
 }
 
+/** Newest native encode of one kind: its target key and, once settled, the result (`null` on failure). */
+interface EncodeSlot<T> {
+	current?: { key: string; result?: T | null };
+}
+
 export class Image implements Component {
 	#base64Data: string;
 	#mimeType: string;
@@ -659,11 +664,8 @@ export class Image implements Component {
 	// (its rows may already be committed to native scrollback).
 	#renderedGraphicRows = 0;
 	#native?: NativeNode;
-	/**
-	 * Newest native encode for the active protocol (a SIXEL sequence or iTerm2
-	 * row strips): its target key and, once settled, the result (`null` on failure).
-	 */
-	#encode?: { key: string; result?: string | readonly string[] | null };
+	readonly #sixel: EncodeSlot<string> = {};
+	readonly #iterm2Rows: EncodeSlot<readonly string[]> = {};
 
 	constructor(
 		base64Data: string,
@@ -703,32 +705,32 @@ export class Image implements Component {
 	}
 
 	/**
-	 * Native encode for `key`. A new key starts the encode off the JS thread and
-	 * answers `undefined` until it settles; the settled encode invalidates the
-	 * cached lines and requests a repaint. A render bound for scrollback cannot
-	 * wait, so it encodes synchronously.
+	 * Native encode for `key` in `slot`. A new key starts the encode off the JS
+	 * thread and answers `undefined` until it settles; the settled encode
+	 * invalidates the cached lines and requests a repaint. A render bound for
+	 * scrollback cannot wait, so it encodes synchronously.
 	 */
-	#encoded<T extends string | readonly string[]>(
+	#encoded<T>(
+		slot: EncodeSlot<T>,
 		key: string,
 		encodeNow: () => T | null,
 		encodeLater: () => Promise<T>,
 	): T | null | undefined {
-		const current = this.#encode;
+		const current = slot.current;
 		const sameKey = current?.key === key;
-		// The key names the encoder, so a matching entry holds that encoder's result type.
-		if (sameKey && current.result !== undefined) return current.result as T | null;
+		if (sameKey && current.result !== undefined) return current.result;
 		if (scrollbackRenderDepth > 0) {
 			// Replacing the entry makes a still-pending async encode settle as stale.
 			const result = encodeNow();
-			this.#encode = { key, result };
+			slot.current = { key, result };
 			return result;
 		}
 		if (sameKey) return undefined;
 		const request: { key: string; result?: T | null } = { key };
-		this.#encode = request;
+		slot.current = request;
 		const settle = (result: T | null): void => {
 			request.result = result;
-			if (this.#encode !== request) return;
+			if (slot.current !== request) return;
 			this.invalidate();
 			if (this.#options.requestRender) this.#options.requestRender();
 			else this.#budget?.requestRender();
@@ -789,7 +791,12 @@ export class Image implements Component {
 			this.#cachedKittyUnicodePlaceholders === kittyUnicodePlaceholders &&
 			(!transmitsSeparately || this.#budget?.shouldTransmit(imageId) !== true) &&
 			// Cached rows reserved for a pending native encode must not reach scrollback.
-			!(scrollbackRenderDepth > 0 && this.#encode !== undefined && this.#encode.result === undefined)
+			!(
+				scrollbackRenderDepth > 0 &&
+				[this.#sixel, this.#iterm2Rows].some(
+					slot => slot.current !== undefined && slot.current.result === undefined,
+				)
+			)
 		) {
 			return this.#cachedLines;
 		}
@@ -810,7 +817,8 @@ export class Image implements Component {
 				includeTransmit: needsTransmit,
 				sixel: (widthPx, heightPx) =>
 					this.#encoded(
-						`sixel:${widthPx}x${heightPx}`,
+						this.#sixel,
+						`${widthPx}x${heightPx}`,
 						() => encodeSixelNow(this.#base64Data, widthPx, heightPx),
 						() => encodeSixelAsync(new Uint8Array(Buffer.from(this.#base64Data, "base64")), widthPx, heightPx),
 					),
@@ -820,7 +828,8 @@ export class Image implements Component {
 						? undefined
 						: (widthPx, rowHeightPx, rows) =>
 								this.#encoded(
-									`iterm2:${widthPx}x${rowHeightPx}x${rows}`,
+									this.#iterm2Rows,
+									`${widthPx}x${rowHeightPx}x${rows}`,
 									() => encodeImageRowsNow(this.#base64Data, widthPx, rowHeightPx, rows),
 									() =>
 										encodeImageRowsAsync(

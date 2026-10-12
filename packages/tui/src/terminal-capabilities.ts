@@ -838,9 +838,6 @@ export interface ImageRenderOptions {
 // payload, and iTerm2 sometimes shows freshly repainted wide strips as smeared
 // bands for a moment.
 const ITERM2_ROW_MAX_PX_PER_COLUMN = 16;
-// The native row encoder's decode limits (`MAX_DECODED_PIXELS`, `MAX_IMAGE_EDGE`).
-const ITERM2_ROW_MAX_PIXELS = 4 * 1024 * 1024;
-const ITERM2_ROW_MAX_EDGE = 8192;
 
 // Default cell dimensions - updated by TUI when terminal responds to query
 let cellDimensions: CellDimensions = { widthPx: 9, heightPx: 18 };
@@ -1363,16 +1360,9 @@ export function renderImage(
 				Math.max(imageDimensions.widthPx, Math.ceil(1 / rowHeightPerWidth)),
 				columns * ITERM2_ROW_MAX_PX_PER_COLUMN,
 			);
-			const heightPx = widthPx * rowHeightPerWidth * fit.rows;
-			const shrink = Math.min(
-				1,
-				Math.sqrt(ITERM2_ROW_MAX_PIXELS / (widthPx * heightPx)),
-				ITERM2_ROW_MAX_EDGE / widthPx,
-				ITERM2_ROW_MAX_EDGE / heightPx,
-			);
-			const stripWidthPx = Math.max(1, Math.floor(widthPx * shrink));
-			const rowHeightPx = Math.max(1, Math.floor(stripWidthPx * rowHeightPerWidth));
-			const strips = options.iterm2Rows(stripWidthPx, rowHeightPx, fit.rows);
+			// The native encoder scales geometry past its decode limits down itself.
+			const rowHeightPx = Math.max(1, Math.floor(widthPx * rowHeightPerWidth));
+			const strips = options.iterm2Rows(widthPx, rowHeightPx, fit.rows);
 			// Undefined while the provider's encode is pending: the rows stay reserved.
 			if (strips === undefined) return { rows: fit.rows };
 			if (strips !== null) {

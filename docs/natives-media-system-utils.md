@@ -70,7 +70,7 @@ The configured `image` features enable PNG, JPEG, WebP, GIF, and BMP decoding. I
 
 #### Per-row PNG strips
 
-`encodeImageRows(bytes, targetWidthPx, rowHeightPx, rows)` scales the image to `targetWidthPx` with its aspect ratio kept (squashed if it would be taller than `rows` × `rowHeightPx`) and returns `rows` base64 PNG strips of `targetWidthPx`×`rowHeightPx`, top to bottom; rows past the image bottom are transparent. The TUI draws each strip into one iTerm2 cell row, so any subset of an image's rows can be repainted, clipped at the viewport top, or committed to scrollback. The total strip area is held to the same 8192-pixel edge and 4,194,304-pixel limits; larger geometry throws. `encodeImageRowsAsync` returns the same strips from the native blocking pool.
+`encodeImageRows(bytes, targetWidthPx, rowHeightPx, rows)` scales the image to `targetWidthPx` with its aspect ratio kept (squashed if it would be taller than `rows` × `rowHeightPx`) and returns `rows` base64 PNG strips of `targetWidthPx`×`rowHeightPx`, top to bottom; rows past the image bottom are transparent. The TUI draws each strip into one iTerm2 cell row, so any subset of an image's rows can be repainted, clipped at the viewport top, or committed to scrollback. Geometry past the same 8192-pixel edge and 4,194,304-pixel limits is scaled down with its shape kept, so the strips can be smaller than requested; a zero dimension, or more rows than fit at one pixel each, throws. `encodeImageRowsAsync` returns the same strips from the native blocking pool.
 
 ### SVG rasterization
 
