@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed corrupted-store recovery dropping every provider login: the credentials a preserved `agent.db.corrupt-*` copy still holds are now restored into the replacement store, and quarantine waits briefly for another connection's write transaction before it swaps the store ([#15519](https://github.com/can1357/oh-my-pi/pull/15519) by [@shtse8](https://github.com/shtse8))
+
 ## [18.10.3] - 2026-10-12
 
 ### Added
