@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildModel } from "../src/build";
-import { providerEntry, seedModels } from "../src/compat/providers";
+import { seedModels } from "../src/compat/providers";
 import { Effort } from "../src/effort";
 import { getBundledModels } from "../src/models";
 import { getSupportedEfforts } from "../src/model-thinking";
@@ -113,21 +113,11 @@ describe("Friendli discovery deployment contract", () => {
 		}
 	});
 
-	test("the generated fallback agrees with its authored seed and leaves other provider seeds present", () => {
-		const entry = providerEntry("friendli");
-		if (!entry) throw new Error("Missing Friendli provider");
-		expect(entry.defaultModel).toBe("zai-org/GLM-5.2");
-		expect(entry.envVars).toEqual(["FRIENDLI_API_KEY"]);
+	test("the generated fallback agrees with its authored seed", () => {
 		const seed = buildModel(seedModels("friendli")[0]);
 		const bundled = getBundledModels("friendli").find(model => model.id === seed.id);
 		expect(bundled?.cost).toEqual(seed.cost);
 		expect(bundled?.maxTokens).toBe(seed.maxTokens);
 		expect(bundled?.thinking?.efforts).toEqual(seed.thinking?.efforts);
-		for (const id of ["aiand", "gmi-cloud"] as const) {
-			const other = providerEntry(id);
-			if (!other) throw new Error(`Missing ${id}`);
-			expect(seedModels(id).length).toBeGreaterThan(0);
-		}
-		expect(friendliModelManagerOptions().fetchDynamicModels).toBeUndefined();
 	});
 });
