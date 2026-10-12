@@ -67,3 +67,15 @@ it("preserves trailing title and blocker whitespace through compaction", () => {
 		phases,
 	);
 });
+
+it("keeps Unicode separators and literal escape sequences intact in durable task rows", () => {
+	const phases: TodoPhase[] = [
+		{
+			name: "phase\u2028name",
+			tasks: [{ content: "task\u2029name \\u2028", status: "blocked", blocker: "owner\u2028name  " }],
+		},
+	];
+	expect(parseIncompleteTodosFromSummary(formatIncompleteTodosSection(collectIncompleteTodoRows(phases)))).toEqual(
+		phases,
+	);
+});
