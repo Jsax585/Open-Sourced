@@ -5,6 +5,11 @@
 ### Added
 
 - `TUI.setScreenSelection`, `extendScreenSelection` and `getScreenSelectionText` select text on the normal-buffer screen: the selected cells show in reverse video, the selection moves with rows that scroll into history, and the plain text is read back from the last paint ([#15451](https://github.com/can1357/oh-my-pi/pull/15451) by [@ravshansbox](https://github.com/ravshansbox))
+- Added opt-in `/tree` branch navigation across visible branches and nested fork depths; bind `app.tree.previousBranch` / `app.tree.nextBranch` (e.g. to `Shift+Left` / `Shift+Right`) in `keybindings.yml` ([#12623](https://github.com/can1357/oh-my-pi/pull/12623) by [@azain47](https://github.com/azain47)).
+
+### Removed
+
+- Removed the unused `app.tree.foldOrUp` / `app.tree.unfoldOrDown` keybinding ids, which no longer did anything.
 
 ## [18.10.1] - 2026-10-12
 
