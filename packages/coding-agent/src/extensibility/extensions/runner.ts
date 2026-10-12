@@ -77,6 +77,8 @@ import type {
 	ExtensionUIDialogOptions,
 	InputEvent,
 	InputEventResult,
+	type LiveDelegationEvent,
+	type LiveDelegationResult,
 	CacheWarmingAction,
 	CacheWarmingDecisionEvent,
 	CacheWarmingDecisionEventResult,
@@ -1956,6 +1958,31 @@ export class ExtensionRunner {
 		}
 
 		return { skillPaths, promptPaths, themePaths };
+	}
+
+	/** Give opt-in extensions a bounded chance to finish a live delegation without a coding-model turn. */
+	async emitLiveDelegation(text: string): Promise<LiveDelegationResult | undefined> {
+		if (!this.hasHandlers("live_delegation")) return undefined;
+		const deadline = performance.now() + 750;
+		const ctx = this.createContext();
+		const event: LiveDelegationEvent = { type: "live_delegation", text };
+		for (const ext of this.extensions) {
+			for (const handler of ext.handlers.get("live_delegation") ?? []) {
+				const remainingMs = Math.ceil(deadline - performance.now());
+				if (remainingMs <= 0) return undefined;
+				const result = (await this.#runHandlerWithTimeout(
+					handler,
+					event,
+					ctx,
+					ext,
+					remainingMs,
+				)) as LiveDelegationResult | undefined;
+				if (typeof result?.reply === "string" && result.reply.trim() && result.reply.length <= 512) {
+					return { reply: result.reply.trim() };
+				}
+			}
+		}
+		return undefined;
 	}
 
 	/** Emit input event. Transforms chain, "handled" short-circuits. */
