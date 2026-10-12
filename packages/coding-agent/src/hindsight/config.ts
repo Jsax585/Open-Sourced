@@ -13,6 +13,7 @@ import {
 	cfgHindsightAutoRetain,
 	cfgHindsightBankId,
 	cfgHindsightBankIdPrefix,
+	cfgHindsightBankIdTemplate,
 	cfgHindsightBankMission,
 	cfgHindsightDebug,
 	cfgHindsightMentalModelAutoSeed,
@@ -43,6 +44,8 @@ export interface HindsightConfig {
 
 	bankId: string | null;
 	bankIdPrefix: string;
+	/** Full bank-id template; when set it supersedes `bankId`/`bankIdPrefix` and the per-project suffix. */
+	bankIdTemplate: string | null;
 	scoping: HindsightScoping;
 	bankMission: string;
 	retainMission: string | null;
@@ -93,6 +96,7 @@ export function loadHindsightConfig(settings: Settings): HindsightConfig {
 
 		bankId: cfgHindsightBankId.get(settings) ?? null,
 		bankIdPrefix: cfgHindsightBankIdPrefix.get(settings) ?? "",
+		bankIdTemplate: cfgHindsightBankIdTemplate.get(settings) ?? null,
 		scoping: cfgHindsightScoping.get(settings),
 		bankMission: cfgHindsightBankMission.get(settings) ?? "",
 		retainMission: cfgHindsightRetainMission.get(settings) ?? null,

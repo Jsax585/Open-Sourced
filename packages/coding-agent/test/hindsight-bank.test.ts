@@ -44,6 +44,7 @@ const baseConfig = (overrides: Partial<HindsightConfig> = {}): HindsightConfig =
 	hindsightApiToken: null,
 	bankId: null,
 	bankIdPrefix: "",
+	bankIdTemplate: null,
 	scoping: "global",
 	bankMission: "",
 	retainMission: null,
@@ -140,6 +141,92 @@ describe("computeBankScope", () => {
 		});
 	});
 
+	// `hindsight.bankIdTemplate` is how one omp session addresses the same memory bank as the
+	// other coding agents (`coding-agent::{gitProject}`): the id must therefore come out exactly
+	// as their runtime derives it, not merely similar.
+	describe("bankIdTemplate", () => {
+		it("addresses the coding-agents bank for the working directory", () => {
+			expect(computeBankScope(baseConfig({ bankIdTemplate: "coding-agent::{gitProject}" }), "/work/proj")).toEqual({
+				bankId: "coding-agent::proj",
+			});
+		});
+
+		it("substitutes {project} and {harness}", () => {
+			expect(computeBankScope(baseConfig({ bankIdTemplate: "{harness}:{project}" }), "/work/proj")).toEqual({
+				bankId: "omp:proj",
+			});
+		});
+
+		it("keeps the project's case, because bank ids are matched literally", () => {
+			expect(
+				computeBankScope(baseConfig({ bankIdTemplate: "coding-agent::{gitProject}" }), "/work/General"),
+			).toEqual({
+				bankId: "coding-agent::General",
+			});
+		});
+
+		it("supersedes bankId, the prefix, and the per-project suffix", () => {
+			const scope = computeBankScope(
+				baseConfig({
+					bankIdTemplate: "coding-agent::{gitProject}",
+					bankId: "team",
+					bankIdPrefix: "prod",
+					scoping: "per-project",
+				}),
+				"/work/proj",
+			);
+			expect(scope).toEqual({ bankId: "coding-agent::proj" });
+		});
+
+		// `per-project` documents one bank per project. A template with no project placeholder
+		// cannot keep that promise — it would put every project on one untagged bank — so the
+		// mode refuses the template instead of silently dropping the isolation.
+		it("refuses a project-less template under per-project scoping", () => {
+			expect(
+				computeBankScope(baseConfig({ bankIdTemplate: "team-a", scoping: "per-project" }), "/work/proj"),
+			).toEqual({ bankId: "omp-proj" });
+			expect(
+				computeBankScope(baseConfig({ bankIdTemplate: "{harness}", scoping: "per-project" }), "/work/proj"),
+			).toEqual({ bankId: "omp-proj" });
+		});
+
+		it("honors a project-less template where there is no per-project contract to break", () => {
+			expect(computeBankScope(baseConfig({ bankIdTemplate: "team-a" }), "/work/proj")).toEqual({ bankId: "team-a" });
+			expect(
+				computeBankScope(baseConfig({ bankIdTemplate: "team-a", scoping: "per-project-tagged" }), "/work/proj"),
+			).toEqual({
+				bankId: "team-a",
+				retainTags: ["project:proj"],
+				recallTags: ["project:proj"],
+				recallTagsMatch: "any",
+			});
+		});
+
+		it("still tags retains and recalls under per-project-tagged scoping", () => {
+			expect(
+				computeBankScope(
+					baseConfig({ bankIdTemplate: "coding-agent::{gitProject}", scoping: "per-project-tagged" }),
+					"/work/proj",
+				),
+			).toEqual({
+				bankId: "coding-agent::proj",
+				retainTags: ["project:proj"],
+				recallTags: ["project:proj"],
+				recallTagsMatch: "any",
+			});
+		});
+
+		it("resolves an unknown placeholder to `unknown` instead of an empty segment", () => {
+			expect(computeBankScope(baseConfig({ bankIdTemplate: "{typo}::{gitProject}" }), "/work/proj")).toEqual({
+				bankId: "unknown::proj",
+			});
+		});
+
+		it("ignores a blank template", () => {
+			expect(computeBankScope(baseConfig({ bankIdTemplate: "   " }), "/work/proj")).toEqual({ bankId: "omp" });
+		});
+	});
+
 	// Regression for #2232: linked git worktrees used to silo memory into
 	// distinct `project:<basename>` tags. The fix resolves the primary
 	// checkout root via `git.repo.primaryRootSync`, so every worktree of one
@@ -208,6 +295,17 @@ describe("computeBankScope", () => {
 			expect(computeBankScope(baseConfig({ scoping: "per-project-tagged" }), baseDir).retainTags).toEqual([
 				`project:${path.basename(baseDir).toLowerCase()}`,
 			]);
+		});
+
+		// This is the shared-memory case: the coding-agents runtime resolves `{gitProject}` off
+		// the main worktree, so a template that named the worktree instead would retain into a
+		// bank CodeBuddy never reads.
+		it("resolves {gitProject} to the repository, so worktrees share the coding-agents bank", () => {
+			const template = "coding-agent::{gitProject}";
+			const fromPrimary = computeBankScope(baseConfig({ bankIdTemplate: template }), primaryRoot);
+			const fromWorktree = computeBankScope(baseConfig({ bankIdTemplate: template }), worktreeRoot);
+			expect(fromPrimary).toEqual({ bankId: "coding-agent::myrepo" });
+			expect(fromWorktree).toEqual(fromPrimary);
 		});
 	});
 

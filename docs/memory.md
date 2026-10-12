@@ -143,9 +143,22 @@ hindsight:
   apiToken: ${HINDSIGHT_API_TOKEN}
 ```
 
-`HINDSIGHT_*` environment variables override `hindsight.*` settings, which override built-in defaults. See the [complete Hindsight environment-variable table](./environment-variables.md#hindsight-memory-backend) for all 18 supported overrides, accepted values, parsing rules, precedence, and defaults.
+`HINDSIGHT_*` environment variables override `hindsight.*` settings, which override built-in defaults. See the [complete Hindsight environment-variable table](./environment-variables.md#hindsight-memory-backend) for all 19 supported overrides, accepted values, parsing rules, precedence, and defaults.
 
-By default, Hindsight uses `per-project-tagged` scoping: writes go to a shared bank with a project tag, while recall includes project-tagged and untagged global memories. `per-project` isolates each working-directory project in its own bank; `global` uses one shared bank. An explicit `hindsight.bankId` selects the bank base. Changes to the bank ID, prefix, or scoping rebuild the primary session state so later operations use the new scope.
+By default, Hindsight uses `per-project-tagged` scoping: writes go to a shared bank with a project tag, while recall includes project-tagged and untagged global memories. `per-project` isolates each working-directory project in its own bank; `global` uses one shared bank. An explicit `hindsight.bankId` selects the bank base. Changes to the bank ID, prefix, template, or scoping rebuild the primary session state so later operations use the new scope.
+
+`hindsight.bankIdTemplate` composes the bank id from placeholders and, when set, **is** the bank id: it supersedes `bankId`, `bankIdPrefix`, and the per-project bank suffix, because a template like `coding-agent::{gitProject}` already names the project itself. Scoping then selects only the tags. Placeholders are `{gitProject}` (worktree-aware repository name, case preserved), `{project}` (working-directory basename), and `{harness}` (`omp`); an unknown placeholder resolves to `unknown` and is reported once. The names match the [coding-agents runtime](https://hindsight.vectorize.io/), so `coding-agent::{gitProject}` with `hindsight.scoping: global` points omp at the very bank the other coding agents already read and write for that repository:
+
+```yaml
+hindsight:
+  bankIdTemplate: coding-agent::{gitProject}
+  scoping: global
+```
+
+Two consequences of addressing a bank omp does not own:
+
+- `per-project` scoping **ignores** a template without a `{gitProject}` or `{project}` placeholder (and says so in the log). A project-less template cannot keep that mode's one-bank-per-project isolation, so it would silently turn every project into one shared, untagged bank; omp keeps the legacy per-project id instead. Without the template, `per-project` behaves exactly as before. Under `global` (one bank by definition) and `per-project-tagged` (partitioned by tags) a project-less template is used as written.
+- **Mental-model auto-seeding never runs on a templated bank.** `hindsight.mentalModelAutoSeed` writes omp's curated models (`user-preferences`, `project-conventions`, `project-decisions`); a templated bank belongs to the integration the template points at, so omp does not publish its models there. Reading that bank's models is unaffected (`hindsight.mentalModelsEnabled`), and `/memory mm seed` still writes on explicit request.
 
 Both project-scoped modes name the project the same way: take the repository's primary checkout root (so every linked worktree of one repository resolves to the same directory), then lowercase its basename. A checkout at `~/code/General` therefore tags `project:general`. Tags are matched literally, so this fold is what keeps one repository in one memory scope no matter how the path is capitalised.
 
