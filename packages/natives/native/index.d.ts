@@ -1792,8 +1792,9 @@ export interface EnclosingBoundaryOptions {
  *
  * # Errors
  * Returns an error if a dimension is zero, if `rows` cannot fit the decode
- * limit even at one pixel each, or if decoding, resizing, or PNG encoding
- * fails.
+ * limit even at one pixel each, if the image carries an EXIF orientation
+ * other than none (the strips could not honour it), or if decoding,
+ * resizing, or PNG encoding fails.
  */
 export declare function encodeImageRows(bytes: Uint8Array, targetWidthPx: number, rowHeightPx: number, rows: number): Array<string>
 
@@ -1804,7 +1805,8 @@ export declare function encodeImageRows(bytes: Uint8Array, targetWidthPx: number
  *
  * # Errors
  * Rejects if a dimension is zero, if `rows` cannot fit the decode limit
- * even at one pixel each, or if decoding, resizing, or PNG encoding fails.
+ * even at one pixel each, if the image carries an EXIF orientation other
+ * than none, or if decoding, resizing, or PNG encoding fails.
  */
 export declare function encodeImageRowsAsync(bytes: Uint8Array, targetWidthPx: number, rowHeightPx: number, rows: number): Promise<Array<string>>
 

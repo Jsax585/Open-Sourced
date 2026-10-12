@@ -32,6 +32,9 @@ withoutTerminalMultiplexer();
 const BANDED_PNG =
 	"iVBORw0KGgoAAAANSUhEUgAAACgAAAA8CAIAAACb22+3AAAASklEQVR42u3NMREAIRAEsBOBnJeDHOQg58XgYZttMpM+s2YqRiwWi+P4KxGLxeI83iVisVicx6dELBaL8/iWiMVicR7/JWKxWBx7cgdlPdozFvUAAAAASUVORK5CYII=";
 const IMAGE_COLUMNS = 4;
+// 8x4 px JPEG whose EXIF Orientation (6) asks viewers to rotate it 90°.
+const EXIF_ROTATED_JPEG =
+	"/9j/4AAQSkZJRgABAQAAAQABAAD/4QAiRXhpZgAATU0AKgAAAAgAAQESAAMAAAABAAYAAAAAAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAAEAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDHooorhPqD/9k=";
 
 const OSC_1337 = /\x1b\]1337;File=([^:\x07]*):([A-Za-z0-9+/=]*)\x07/g;
 
@@ -255,5 +258,22 @@ describe("iTerm2 inline images", () => {
 		} finally {
 			stub.mockRestore();
 		}
+	});
+
+	it("leave EXIF-rotated photos to iTerm2, which honours the orientation", async () => {
+		// Strips are plain PNGs, so a rotated photo cut into them would show sideways.
+		info.imageProtocol = ImageProtocol.Iterm2;
+		const settled = Promise.withResolvers<void>();
+		const image = new Image(
+			EXIF_ROTATED_JPEG,
+			"image/jpeg",
+			{ fallbackColor: text => text },
+			{ maxWidthCells: IMAGE_COLUMNS, requestRender: settled.resolve },
+		);
+		image.render(40);
+		await settled.promise;
+		const rendered = image.render(40).join("");
+		expect(rendered).toContain(`:${EXIF_ROTATED_JPEG}\x07`);
+		expect(rendered).toContain(`width=${IMAGE_COLUMNS};height=auto`);
 	});
 });

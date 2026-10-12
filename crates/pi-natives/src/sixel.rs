@@ -13,8 +13,9 @@ use std::io::Cursor;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use icy_sixel::{EncodeOptions, SixelImage, sixel_encode};
 use image::{
-	DynamicImage, ImageFormat, ImageReader, RgbaImage,
+	DynamicImage, ImageDecoder, ImageFormat, ImageReader, RgbaImage,
 	imageops::{self, FilterType},
+	metadata::Orientation,
 };
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -244,8 +245,9 @@ fn encode_image(bytes: &[u8], target_width_px: u32, target_height_px: u32) -> Re
 ///
 /// # Errors
 /// Returns an error if a dimension is zero, if `rows` cannot fit the decode
-/// limit even at one pixel each, or if decoding, resizing, or PNG encoding
-/// fails.
+/// limit even at one pixel each, if the image carries an EXIF orientation
+/// other than none (the strips could not honour it), or if decoding,
+/// resizing, or PNG encoding fails.
 #[napi]
 pub fn encode_image_rows(
 	bytes: Uint8Array,
@@ -262,7 +264,8 @@ pub fn encode_image_rows(
 ///
 /// # Errors
 /// Rejects if a dimension is zero, if `rows` cannot fit the decode limit
-/// even at one pixel each, or if decoding, resizing, or PNG encoding fails.
+/// even at one pixel each, if the image carries an EXIF orientation other
+/// than none, or if decoding, resizing, or PNG encoding fails.
 #[napi]
 pub fn encode_image_rows_async(
 	bytes: Uint8Array,
@@ -282,10 +285,23 @@ fn encode_rows(
 	row_height_px: u32,
 	rows: u32,
 ) -> Result<Vec<String>> {
+	if target_width_px == 0 || row_height_px == 0 || rows == 0 {
+		return Err(Error::from_reason("Image row geometry must be greater than zero"));
+	}
 	let (target_width_px, row_height_px) = fit_row_geometry(target_width_px, row_height_px, rows);
 	let total_height_px = row_height_px.saturating_mul(rows);
 	guard_dimensions(target_width_px as usize, total_height_px as usize)?;
 
+	// Strips carry no EXIF and the caller sized the rows from the stored raster,
+	// so an image that needs reorienting is left to a viewer of the original.
+	let orientation = ImageReader::new(Cursor::new(bytes))
+		.with_guessed_format()
+		.ok()
+		.and_then(|reader| reader.into_decoder().ok())
+		.and_then(|mut decoder| decoder.orientation().ok());
+	if orientation.is_some_and(|orientation| orientation != Orientation::NoTransforms) {
+		return Err(Error::from_reason("Image needs EXIF reorientation"));
+	}
 	let source = decode_image_from_bytes(bytes)?;
 	if source.width() == 0 || source.height() == 0 {
 		return Err(Error::from_reason("Image has no pixels"));
@@ -321,8 +337,7 @@ fn encode_rows(
 }
 
 /// Scales the strip width and row height down by one factor until the whole
-/// strip stack fits `MAX_IMAGE_EDGE` and `MAX_DECODED_PIXELS`. Zero
-/// dimensions pass through unchanged for `guard_dimensions` to reject.
+/// strip stack fits `MAX_IMAGE_EDGE` and `MAX_DECODED_PIXELS`.
 fn fit_row_geometry(width: u32, row_height: u32, rows: u32) -> (u32, u32) {
 	let width_px = f64::from(width);
 	let height_px = f64::from(row_height) * f64::from(rows);
