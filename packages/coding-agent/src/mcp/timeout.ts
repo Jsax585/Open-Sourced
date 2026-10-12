@@ -32,10 +32,17 @@ export function setMCPGlobalTimeouts(timeouts: MCPTimeoutPhases): void {
 	globalTimeouts = timeouts;
 }
 
+const CATALOG_METHODS: ReadonlySet<string> = new Set([
+	"tools/list",
+	"prompts/list",
+	"resources/list",
+	"resources/templates/list",
+]);
+
 /** Phase whose deadline guards a JSON-RPC request or notification. */
 export function mcpTimeoutPhaseForMethod(method: string): MCPTimeoutPhase {
 	if (method === "initialize" || method === "notifications/initialized") return "connect";
-	if (method.endsWith("/list")) return "catalog";
+	if (CATALOG_METHODS.has(method)) return "catalog";
 	return "execution";
 }
 
@@ -95,7 +102,9 @@ export function resolveMCPTimeoutMs(configTimeout: MCPTimeoutConfig | undefined,
 			},
 		);
 	}
-	const serverValue = typeof configTimeout === "number" ? configTimeout : configTimeout?.[phase];
+	const candidate = typeof configTimeout === "number" ? configTimeout : configTimeout?.[phase];
+	// SDK callers can pass a typed config that never went through parseMCPTimeoutConfig.
+	const serverValue = isValidTimeoutMs(candidate) ? candidate : undefined;
 	return serverValue ?? globalTimeouts[phase] ?? DEFAULT_MCP_TIMEOUT_MS;
 }
 

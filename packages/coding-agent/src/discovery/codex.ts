@@ -253,11 +253,11 @@ function extractMCPServersFromToml(
 		// Out-of-range values are dropped, as the shared validator drops them elsewhere.
 		const connect =
 			typeof config.startup_timeout_sec === "number" && config.startup_timeout_sec > 0
-				? config.startup_timeout_sec * 1000
+				? Math.round(config.startup_timeout_sec * 1000)
 				: undefined;
 		const execution =
 			typeof config.tool_timeout_sec === "number" && config.tool_timeout_sec > 0
-				? config.tool_timeout_sec * 1000
+				? Math.round(config.tool_timeout_sec * 1000)
 				: undefined;
 		const timeout = {
 			...(isValidTimeoutMs(connect) && { connect }),

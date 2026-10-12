@@ -170,7 +170,14 @@ describe("MCP phase timeouts", () => {
 		for (const method of ["tools/list", "prompts/list", "resources/list", "resources/templates/list"]) {
 			expect(mcpTimeoutPhaseForMethod(method)).toBe("catalog");
 		}
-		for (const method of ["tools/call", "prompts/get", "resources/read", "resources/subscribe", "ping"]) {
+		for (const method of [
+			"tools/call",
+			"prompts/get",
+			"resources/read",
+			"resources/subscribe",
+			"ping",
+			"jobs/list",
+		]) {
 			expect(mcpTimeoutPhaseForMethod(method)).toBe("execution");
 		}
 	});
@@ -183,6 +190,13 @@ describe("MCP phase timeouts", () => {
 		expect(resolveMCPTimeoutMs(server, "catalog")).toBe(500);
 		expect(resolveMCPTimeoutMs(server, "execution")).toBe(3_000);
 		expect(resolveMCPTimeoutMs(server, "connect")).toBe(30_000);
+	});
+
+	test("an out-of-range server timeout from a typed SDK config falls back to the global value", () => {
+		delete process.env.OMP_MCP_TIMEOUT_MS;
+		setMCPGlobalTimeouts({ execution: 3_000 });
+		expect(resolveMCPTimeoutMs({ execution: 3_000_000_000 }, "execution")).toBe(3_000);
+		expect(resolveMCPTimeoutMs(3_000_000_000, "connect")).toBe(30_000);
 	});
 
 	test("a bare per-server number applies to every phase and beats globals", () => {
