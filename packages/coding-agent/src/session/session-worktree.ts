@@ -10,9 +10,10 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { IsoBackendKind } from "@oh-my-pi/pi-natives";
+import type { IsoBackendKind, VcsGitRepo } from "@oh-my-pi/pi-natives";
+import type { VcsWorktreeAddResult } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { getWorktreeDir, hashPath, logger } from "@oh-my-pi/pi-utils";
+import { getWorktreeDir, hashPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { Settings } from "../config/settings";
 import { formatIsolationBackend, parseIsolationBackend } from "../task/worktree";
@@ -110,16 +111,19 @@ export async function cleanSourceCheckoutIfConfigured(
 	}
 }
 /**
- * Create the worktree for `/wt`. Throws with a user-facing message when `cwd`
- * is not a git checkout, `branch` already exists, or git refuses.
+ * Create the worktree for `/wt` and the `session` tool. Throws with a user-facing
+ * message when `cwd` is not a git checkout, `branch` already exists, or git
+ * refuses. `/wt` carries the checkout's uncommitted changes along (the default);
+ * pass `keepChanges: false` for a clean checkout of `HEAD`.
  */
 export async function createSessionWorktree(
 	cwd: string,
 	settings: Settings,
 	branch: string,
-	options: { keepChanges?: boolean } = {},
+	options: { keepChanges?: boolean; signal?: AbortSignal } = {},
 ): Promise<SessionWorktree> {
 	const keepChanges = options.keepChanges ?? true;
+	const signal = options.signal;
 	try {
 		await settings.flush();
 	} catch (err) {
@@ -146,13 +150,37 @@ export async function createSessionWorktree(
 	const worktreePath = await resolveAvailableWorktreePath(basePath, await repository.worktrees());
 	await fs.mkdir(path.dirname(worktreePath), { recursive: true });
 
-	await repository.createBranch(branch, baseCommit, false);
-	const result = await repository.worktreeAdd(worktreePath, branch, {
-		detach: false,
-		clone: cfgWorktreeClone.get(settings),
-		backend: parseIsolationBackend(cfgIsolationBackend.get(settings)),
-		keepChanges,
-	});
+	signal?.throwIfAborted();
+	let result: VcsWorktreeAddResult;
+	try {
+		await repository.createBranch(branch, baseCommit, false, signal);
+		result = await repository.worktreeAdd(
+			worktreePath,
+			branchRef,
+			{
+				detach: false,
+				clone: cfgWorktreeClone.get(settings),
+				backend: parseIsolationBackend(cfgIsolationBackend.get(settings)),
+				keepChanges,
+			},
+			signal,
+		);
+		signal?.throwIfAborted();
+	} catch (error) {
+		// A canceled or failed creation must not leave the branch or a half-built checkout behind. Branch
+		// creation is inside the guard because a cancel can land after the ref is written but before the
+		// native call settles.
+		if (signal?.aborted) {
+			const adminDir = await readWorktreeAdminDir(worktreePath);
+			await repository.worktreeRemove(worktreePath, true).catch(() => false);
+			await fs.rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
+			// The removal can leave its admin entry behind when the checkout was reached through another
+			// spelling of the path (/tmp vs /private/tmp); that stale entry would keep the branch checked out.
+			await removeWorktreeAdminDir(repository, adminDir).catch(() => undefined);
+			await repository.deleteBranch(branch, true).catch(() => false);
+		}
+		throw error;
+	}
 	return {
 		path: await fs.realpath(worktreePath),
 		branch,
@@ -162,6 +190,47 @@ export async function createSessionWorktree(
 		baseCommit,
 		keptChanges: keepChanges,
 	};
+}
+
+/** Admin directory (`<common>/worktrees/<name>`) that a linked checkout's `.git` file points at, if any. */
+export async function readWorktreeAdminDir(worktreePath: string): Promise<string | undefined> {
+	try {
+		const pointer = (await fs.readFile(path.join(worktreePath, ".git"), "utf8")).trim();
+		if (!pointer.startsWith("gitdir:")) return undefined;
+		return path.resolve(worktreePath, pointer.slice("gitdir:".length).trim());
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Delete one linked-worktree admin entry. Used instead of a repository-wide `git worktree prune`, which would
+ * also drop unrelated entries whose checkout is temporarily absent (for example a locked portable worktree).
+ * Only a direct child of this repository's own `<commonDir>/worktrees` is removed, so a tampered `.git`
+ * pointer cannot make this delete another repository's registration. Removal failures propagate.
+ */
+export async function removeWorktreeAdminDir(repository: VcsGitRepo, adminDir: string | undefined): Promise<void> {
+	if (!adminDir) return;
+	let owned: boolean;
+	try {
+		owned = await isOwnedWorktreeAdminDir(repository, adminDir);
+	} catch (error) {
+		if (isEnoent(error)) return; // Already gone.
+		throw error;
+	}
+	if (owned) await fs.rm(adminDir, { recursive: true, force: true });
+}
+
+/** Whether `adminDir` is a direct child of this repository's own `<commonDir>/worktrees`. */
+export async function isOwnedWorktreeAdminDir(repository: VcsGitRepo, adminDir: string | undefined): Promise<boolean> {
+	if (!adminDir) return false;
+	try {
+		const worktreesDir = path.join(await fs.realpath(repository.info().commonDir), "worktrees");
+		return path.dirname(await fs.realpath(adminDir)) === worktreesDir;
+	} catch (error) {
+		if (isEnoent(error)) return false;
+		throw error;
+	}
 }
 
 /** State of `wt` plus a fingerprint that changes whenever any file, ref, or `HEAD` in it changes. */

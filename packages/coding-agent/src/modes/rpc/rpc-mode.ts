@@ -1681,6 +1681,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			persistenceFailure = error;
 		},
 	);
+	// A title set by the model through the `session` tool never passes a slash command's
+	// notify callback, so the client learns of any rename from the session manager.
+	session.sessionManager.onSessionNameChanged(() => {
+		output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
+	});
 
 	/**
 	 * Dispose the session, then end the process. A store failure still latched

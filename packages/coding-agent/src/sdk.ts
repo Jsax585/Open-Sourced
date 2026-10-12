@@ -2387,6 +2387,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getCheckpointState: () => session.getCheckpointState(),
 			setCheckpointState: state => session.setCheckpointState(state ?? undefined),
 			getLastCompletedRewind: () => session.getLastCompletedRewind(),
+			sessionControl: isSubagentSession
+				? undefined
+				: {
+						rename: title => sessionManager.setSessionName(title, "user", "session-tool"),
+						canMove: () => session.canMoveWorkspace,
+						requestMove: directory => session.requestWorkspaceMove(directory),
+						pendingMove: () => session.pendingWorkspaceMove,
+					},
 			getToolChoiceQueue: () => session.toolChoiceQueue,
 			buildToolChoice: name => {
 				const m = session.model;
@@ -4510,6 +4518,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// The primary may carry a dormant xd:// write transport. Advisors use
 			// their own configured tool slate, so a selected write is always full.
 			deviceOnlyWrite: undefined,
+			sessionControl: undefined,
 			pendingFullWriteDescription: undefined,
 			get cwd() {
 				return sessionManager.getCwd();

@@ -190,6 +190,8 @@ import anthropicUsageWrapUpPrompt from "../prompts/system/anthropic-usage-wrap-u
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import checkpointActiveNoticeTemplate from "../prompts/system/checkpoint-active-notice.md" with { type: "text" };
 import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
+import workspaceMoveFailedPrompt from "../prompts/system/workspace-move-failed.md" with { type: "text" };
+import workspaceMoveSucceededPrompt from "../prompts/system/workspace-move-succeeded.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
 import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with { type: "text" };
@@ -884,6 +886,12 @@ export class AgentSession implements SettingsScope {
 	#queuedMessageDrainScheduled = false;
 	/** A single model-only notebook reminder queued for the current prompt generation. */
 	#experimentalContextNotesReminder: { prompt: string; generation: number } | undefined;
+	/** Host-installed relocation of this session's workspace; absent until a mode registers one. */
+	#workspaceRelocator: ((directory: string) => Promise<void>) | undefined;
+	/** Directory the `session` tool asked to move to; applied at the next step boundary. */
+	#pendingWorkspaceMove: string | undefined;
+	/** Model-only note about a just-applied (or failed) move, delivered with the next step. */
+	#workspaceMoveNotice: string | undefined;
 	#planModeState: PlanModeState | undefined;
 	#vibeModeState: VibeModeState | undefined;
 	#goalModeState: GoalModeState | undefined;
@@ -1949,7 +1957,11 @@ export class AgentSession implements SettingsScope {
 		this.agent.setProviderResponseInterceptor(this.#onResponse);
 		this.agent.setRawSseEventInterceptor(this.#onSseEvent);
 		this.agent.setOnTurnEnd(async (messages, signal, context) => {
-			if (signal?.aborted) return;
+			if (signal?.aborted) {
+				this.#pendingWorkspaceMove = undefined;
+				return;
+			}
+			await this.#applyPendingWorkspaceMove(context, signal);
 			const rewindReport = this.#extractRewindReport(messages);
 			if (rewindReport) {
 				this.#pendingRewindReport = undefined;
@@ -2026,6 +2038,17 @@ export class AgentSession implements SettingsScope {
 			// Mid-run todo reconciliation — evaluated at injection time so a turn
 			// that flips a todo just before this poll suppresses the nudge.
 			thunks.push(() => this.#todo.takeMidRunNudge());
+			const workspaceMoveNotice = this.#workspaceMoveNotice;
+			if (workspaceMoveNotice) {
+				this.#workspaceMoveNotice = undefined;
+				thunks.push(() => ({
+					role: "custom",
+					customType: "workspace-move",
+					content: workspaceMoveNotice,
+					display: false,
+					timestamp: Date.now(),
+				}));
+			}
 			const contextNotesReminder = this.#experimentalContextNotesReminder;
 			if (contextNotesReminder) {
 				this.#experimentalContextNotesReminder = undefined;
@@ -3793,6 +3816,8 @@ export class AgentSession implements SettingsScope {
 		// A fresh run supersedes the previously settled (and pruned) refusal
 		// turn: state-based lookups take over again.
 		if (event.type === "agent_start") {
+			this.#pendingWorkspaceMove = undefined;
+			this.#workspaceMoveNotice = undefined;
 			this.#activeAgentPromptGeneration = eventPromptGeneration;
 			this.#prunedTerminalFailure = undefined;
 			this.#advisors.onPrimaryAgentStart();
@@ -10065,6 +10090,65 @@ export class AgentSession implements SettingsScope {
 	async moveSession(newCwd: string, targetSessionDir?: string): Promise<void> {
 		this.#assertVibeSessionTransitionAllowed("move the session");
 		await this.sessionManager.moveTo(newCwd, targetSessionDir);
+	}
+
+	/**
+	 * Register how the host relocates the whole workspace (session file, process
+	 * cwd, project settings and caches). The `session` tool's `move` op depends
+	 * on it. Only a host that owns the process cwd installs one (the interactive
+	 * mode): relocating changes `process.cwd()` for every session in the process.
+	 */
+	setWorkspaceRelocator(relocator: ((directory: string) => Promise<void>) | undefined): void {
+		this.#workspaceRelocator = relocator;
+	}
+
+	/** Whether the host registered a relocator, so a `session` tool `move` can take effect. */
+	get canMoveWorkspace(): boolean {
+		return this.#workspaceRelocator !== undefined;
+	}
+
+	/** Directory a `session` tool call queued, not yet applied. */
+	get pendingWorkspaceMove(): string | undefined {
+		return this.#pendingWorkspaceMove;
+	}
+
+	/**
+	 * Queue a workspace move for the next step boundary: the model's current tool
+	 * batch finishes in the old directory, the move runs after its results are
+	 * persisted, and the next provider request sees the new directory. A later
+	 * request in the same run replaces an earlier one.
+	 */
+	requestWorkspaceMove(directory: string): void {
+		if (!this.#workspaceRelocator) throw new Error("This host cannot move the session workspace.");
+		this.#pendingWorkspaceMove = directory;
+	}
+
+	async #applyPendingWorkspaceMove(
+		context: AgentTurnEndContext | undefined,
+		signal: AbortSignal | undefined,
+	): Promise<void> {
+		const directory = this.#pendingWorkspaceMove;
+		const relocator = this.#workspaceRelocator;
+		if (!directory || !relocator || this.#isDisposed) return;
+		this.#pendingWorkspaceMove = undefined;
+		await this.#persistTurnMessagesForMidRunCompaction(context);
+		// An abort that landed while the turn was being persisted drops the queued move.
+		if (signal?.aborted) return;
+		let note: string;
+		try {
+			await relocator(directory);
+			note = prompt.render(workspaceMoveSucceededPrompt, { directory: this.sessionManager.getCwd() });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.emitNotice("warning", `Session move to ${directory} failed: ${message}`, "session-move");
+			note = prompt.render(workspaceMoveFailedPrompt, {
+				requested: directory,
+				error: message,
+				directory: this.sessionManager.getCwd(),
+			});
+		}
+		// A final turn has no next step to inform; an aside there would only force an extra model turn.
+		if (context?.willContinue) this.#workspaceMoveNotice = note;
 	}
 
 	// =========================================================================

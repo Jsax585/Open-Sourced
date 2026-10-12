@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `pathIsWithin` and `relativePathWithinRoot` now treat a child directory named like `..notes` as inside the root; only the `..` path component means outside.
+
 ## [18.10.0] - 2026-10-12
 
 ### Added

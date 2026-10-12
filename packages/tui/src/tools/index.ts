@@ -21,6 +21,7 @@ import { recallToolRenderer, reflectToolRenderer, retainToolRenderer } from "./m
 import { readToolRenderer } from "./read";
 import type { ToolRenderer } from "./renderer";
 import { resolveRenderer } from "./resolve";
+import { sessionToolRenderer } from "./session";
 import { taskToolRenderer } from "./task";
 import { thinkToolRenderer } from "./think";
 import { todoToolRenderer } from "./todo";
@@ -56,6 +57,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	retain: retainToolRenderer,
 	recall: recallToolRenderer,
 	reflect: reflectToolRenderer,
+	session: sessionToolRenderer,
 	task: taskToolRenderer,
 	think: thinkToolRenderer,
 	todo: todoToolRenderer,

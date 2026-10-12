@@ -160,6 +160,7 @@ import { type DictationTarget, MicCursor, type SttCallbacks, STTController, type
 import type { SpaceHoldHandler } from "@oh-my-pi/pi-tui/space-hold";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
+import { refreshAgentDiscovery } from "../task";
 import { labelEchoesHandle } from "../task/label";
 import { agentTypeBadge, formatTaskId } from "@oh-my-pi/pi-tui/tools/task";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
@@ -1964,6 +1965,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#extensionUiController = new ExtensionUiController(this);
 		this.#eventController = new EventController(this);
 		this.#commandController = new CommandController(this);
+		session.setWorkspaceRelocator(directory => this.#commandController.relocateForAgent(directory));
 		this.#todoCommandController = new TodoCommandController(this);
 		this.#liveCommandController = new LiveCommandController(this);
 		this.#selectorController = new SelectorController(this);
@@ -2773,6 +2775,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			// the next prompt sees everything scoped to the new project directory.
 			clearClaudePluginRootsCache();
 			await this.refreshTitleSystemPrompt(newCwd);
+			// The task tool describes project agents from this cache; without it the next step still
+			// lists the source project's definitions.
+			await refreshAgentDiscovery(newCwd, this.session.effectiveExtensionRoots);
 			await this.session.refreshSkillsAndCommands();
 		} catch (error) {
 			// Undo the whole transition: the process cwd, Settings scope, and

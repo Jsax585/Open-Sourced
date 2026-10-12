@@ -508,4 +508,51 @@ describe("CommandController /move", () => {
 			await fs.rm(targetDir, { recursive: true, force: true });
 		}
 	});
+
+	it("relocates for the agent through the same gated move as /move, without prompting", async () => {
+		const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-agent-move-source-"));
+		const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-agent-move-target-"));
+		try {
+			const { ctx, state, withBtwSessionMove } = createMoveContext(sourceDir);
+			ctx.showStatus = vi.fn();
+
+			await new CommandController(ctx).relocateForAgent(targetDir);
+
+			expect(await withBtwSessionMove.mock.results[0]?.value).toBe(true);
+			expect(state.cwd).toBe(targetDir);
+			expect(ctx.applyCwdChange).toHaveBeenCalledWith(targetDir);
+			expect(ctx.showHookConfirm).not.toHaveBeenCalled();
+			expect(ctx.showHookCustom).not.toHaveBeenCalled();
+			expect(ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining(targetDir));
+		} finally {
+			await fs.rm(sourceDir, { recursive: true, force: true });
+			await fs.rm(targetDir, { recursive: true, force: true });
+		}
+	});
+
+	it("throws for the agent when the BTW gate or the session move refuses, leaving the session in place", async () => {
+		const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-agent-move-refused-"));
+		const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-agent-move-refused-target-"));
+		try {
+			const gated = createMoveContext(sourceDir);
+			gated.ctx.withBtwSessionMove = vi.fn(async () => false);
+			await expect(new CommandController(gated.ctx).relocateForAgent(targetDir)).rejects.toThrow(
+				"refused or failed",
+			);
+			expect(gated.ctx.session.moveSession).not.toHaveBeenCalled();
+
+			const failing = createMoveContext(sourceDir);
+			failing.ctx.session.moveSession = vi.fn(async () => {
+				throw new Error("session move denied");
+			});
+			await expect(new CommandController(failing.ctx).relocateForAgent(targetDir)).rejects.toThrow(
+				"refused or failed",
+			);
+			expect(failing.state.cwd).toBe(sourceDir);
+			expect(failing.ctx.applyCwdChange).not.toHaveBeenCalled();
+		} finally {
+			await fs.rm(sourceDir, { recursive: true, force: true });
+			await fs.rm(targetDir, { recursive: true, force: true });
+		}
+	});
 });

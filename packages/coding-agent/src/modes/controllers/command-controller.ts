@@ -1766,6 +1766,18 @@ export class CommandController {
 		return true;
 	}
 
+	/**
+	 * Relocate on behalf of the `session` tool, at a step boundary: the same
+	 * BTW-gated move `/move` performs, minus the prompts. Throws so the session
+	 * can tell the model when the move did not happen.
+	 */
+	async relocateForAgent(directory: string): Promise<void> {
+		if (!(await this.#withSessionMove(() => this.#relocateSession(directory)))) {
+			throw new Error("the move was refused or failed; see the notice above");
+		}
+		this.ctx.showStatus(`Moved to ${directory}`);
+	}
+
 	async handleRenameCommand(title: string): Promise<void> {
 		const session = this.ctx.session;
 		const sessionManager = this.ctx.sessionManager;

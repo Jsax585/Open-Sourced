@@ -9,6 +9,7 @@ import {
 	getLogPath,
 	getProjectDir,
 	localDay,
+	pathIsWithin,
 	relativePathWithinRoot,
 	setProjectDir,
 } from "@oh-my-pi/pi-utils/dirs";
@@ -70,6 +71,22 @@ describe("project directory state", () => {
 		try {
 			expect(relativePathWithinRoot(root, candidate)).toBe("child");
 			expect(realpath).toHaveBeenCalledTimes(2);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("treats a child directory whose name starts with two dots as inside, and only the parent component as outside", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-dirs-dotdot-"));
+		try {
+			fs.mkdirSync(path.join(root, "..notes"));
+			fs.writeFileSync(path.join(root, "..notes", "file.txt"), "x");
+			expect(pathIsWithin(root, path.join(root, "..notes"))).toBe(true);
+			expect(relativePathWithinRoot(root, path.join(root, "..notes", "file.txt"))).toBe(
+				path.join("..notes", "file.txt"),
+			);
+			expect(pathIsWithin(root, path.dirname(root))).toBe(false);
+			expect(pathIsWithin(root, path.join(path.dirname(root), "sibling"))).toBe(false);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

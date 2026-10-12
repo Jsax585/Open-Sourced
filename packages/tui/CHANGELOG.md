@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a transcript renderer for the `session` tool that shows home-relative paths.
+
 ### Removed
 
 - Removed `tools/eval-format/code-mode-declarations` (`generateCodeModeDeclarations`), which only served Codex Code Mode.
