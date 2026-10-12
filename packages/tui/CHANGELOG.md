@@ -4,8 +4,8 @@
 
 ### Added
 
-- Added a metric order to the `/models` hub: `ctrl+alt+s` cycles the rows through intelligence, output speed, and blended price (each direction), persisting the choice as the `modelSort` setting ([#11149](https://github.com/can1357/oh-my-pi/issues/11149))
-- Added `ctrl+alt+g` in the `/models` hub to rank the active metric inside each provider instead of across all of them, persisted as `modelSortGrouped`
+- Added a metric order to the `/models` hub: `ctrl+alt+s` cycles the rows through intelligence, output speed, and blended price (each direction), persisting the choice as the `modelSort` setting ([#15541](https://github.com/can1357/oh-my-pi/pull/15541) by [@omerdikyol](https://github.com/omerdikyol))
+- Added `ctrl+alt+g` in the `/models` hub to rank the active metric inside each provider instead of across all of them, persisted as `modelSortGrouped` ([#15541](https://github.com/can1357/oh-my-pi/pull/15541) by [@omerdikyol](https://github.com/omerdikyol))
 
 ### Removed
 
