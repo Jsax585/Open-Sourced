@@ -20,7 +20,7 @@
 
 ### Fixed
 
-- Fixed iTerm2 inline images drawing over the wrong rows once they scroll past the top of the window, which left the wrong part of the image on screen and stacked copies of its top rows in scrollback until a resize redrew the transcript
+- Fixed iTerm2 inline images drawing over the wrong rows once they scroll past the top of the window, which left the wrong part of the image on screen and stacked copies of its top rows in scrollback until a resize redrew the transcript ([#15483](https://github.com/can1357/oh-my-pi/pull/15483) by [@saulcapital](https://github.com/saulcapital))
 
 ## [18.10.1] - 2026-10-12
 
