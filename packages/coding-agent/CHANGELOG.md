@@ -8,18 +8,6 @@
 
 ### Fixed
 
-- Fixed resumed `/new` conversations staying on a refusal fallback, and unfinished refusal fallbacks overriding another session's selected model ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
-- Fixed refusal fallback being skipped after Codex account rotations and overriding explicit same-model selections during fallback application ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
-- Fixed `/new` losing refusal-fallback attribution or resuming the primary with the fallback's thinking effort instead of its saved level or `auto` configuration ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
-- Fixed `/new` losing the availability primary beneath nested refusal fallbacks, including its thinking level when a detour cannot support that effort ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
-- Fixed interrupted fallback swaps leaving the active model, saved model, and thinking level inconsistent ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
-- Fixed pending refusal restoration being cancelled by policy changes or delayed by unrelated extension handlers ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
-- Fixed reloading the active transcript reporting primary replies as refusal-fallback successes ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
-- Fixed refusal-fallback tool continuations staying on the fallback instead of restoring the primary ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
-- Fixed `/new` retaining fallback attribution and old retry chains when a pinned fallback becomes the new primary ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
-- Fixed request-scoped refusal fallbacks stopping before all configured models were tried ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
-- Fixed request-scoped content-filter fallbacks being skipped when `retry.maxRetries` is `0` ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
-- Fixed prewalk returning to a refusal fallback instead of the original planning model and thinking level on `/new` ([#12239](https://github.com/can1357/oh-my-pi/pull/12239) by [@endophysics](https://github.com/endophysics)).
 - Added OpenAI's Decisions API as a native judge: with an OpenAI key, set the `judge` role to `openai/gpt-6-luna-decisions`
 - Added Cloudflare Workers AI's Clef decision models as native judges (`cloudflare-workers-ai/@cf/cloudflare/clef` and `…/clef-flash`): log in with `/login cloudflare-workers-ai` (API token and account ID) or set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, then pick one for the `judge` role
 - `models.yml` accepts `openai-decisions` and `workers-ai-systemone` as judge APIs for custom providers
