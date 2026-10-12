@@ -396,6 +396,49 @@ describe("contextFiles.onTouch", () => {
 		expect(parent.carried).toEqual([{ path: path.join(repo, "pkg/AGENTS.md"), content: "PKG-CANARY" }]);
 	});
 
+	it("hands files to subagents shallowest first, in capability order within a directory", async () => {
+		// Guards precedence in the child's system prompt: a parent file read in full before a deeper
+		// file was delivered must still come first, and a directory's extra after its main file.
+		setup({
+			"pkg/AGENTS.md": "PKG-CANARY",
+			"pkg/AAA.md": "EXTRA-CANARY",
+			"pkg/sub/AGENTS.md": "SUB",
+			"pkg/sub/x.ts": "x",
+		});
+		const parent = await run(
+			tempDir,
+			repo,
+			[
+				[{ name: "read", arguments: { path: "pkg/AGENTS.md" } }],
+				[{ name: "read", arguments: { path: "pkg/sub/x.ts" } }],
+			],
+			{ ...ON, "contextFiles.extra": ["AAA.md"] },
+		);
+		expect(blockPaths(parent.developerTexts, repo)).toEqual(["pkg/AAA.md", "pkg/sub/AGENTS.md"]);
+		expect(parent.carried.map(entry => path.relative(repo, entry.path))).toEqual([
+			"pkg/AGENTS.md",
+			"pkg/AAA.md",
+			"pkg/sub/AGENTS.md",
+		]);
+	});
+
+	it("keeps a delivered file in depth order once it is deleted", async () => {
+		// Guards the fallback rank: discovery no longer finds a deleted file, but the child still
+		// gets its delivered content, and it must not drop below a deeper file's rules.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/sub/AGENTS.md": "SUB", "pkg/sub/x.ts": "x" });
+		const parent = await run(tempDir, repo, [[{ name: "read", arguments: { path: "pkg/sub/x.ts" } }]], ON, [], {
+			before: async () => {
+				fs.rmSync(path.join(repo, "pkg/AGENTS.md"));
+				resetCapabilityCache();
+			},
+			turns: [],
+		});
+		expect(parent.carried.map(entry => path.relative(repo, entry.path))).toEqual([
+			"pkg/AGENTS.md",
+			"pkg/sub/AGENTS.md",
+		]);
+	});
+
 	it("hands nothing to subagents when the setting is off, even after a full read", async () => {
 		// Guards the opt-in: with the setting off, subagent context must match the default.
 		setup({ "pkg/AGENTS.md": "PKG-CANARY" });
@@ -618,6 +661,19 @@ describe("contextFiles.onTouch", () => {
 			tempDir,
 			repo,
 			[[{ name: "eval", arguments: { language: "js", code: 'await tool.read({ path: "pkg/a.ts" });' } }]],
+			ON,
+		);
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
+	});
+
+	it("delivers a context file an eval script read without showing it", async () => {
+		// Guards full-read dedupe: a bridged read's result stays inside the script, so the model
+		// never saw the file and the block is the only way its rules reach the conversation.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "a" });
+		const result = await run(
+			tempDir,
+			repo,
+			[[{ name: "eval", arguments: { language: "js", code: 'await tool.read({ path: "pkg/AGENTS.md" });' } }]],
 			ON,
 		);
 		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);

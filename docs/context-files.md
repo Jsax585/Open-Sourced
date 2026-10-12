@@ -195,7 +195,7 @@ Project context for `packages/api/`, loaded automatically because a tool touched
 ```
 
 - Discovery is the same as at startup: provider priority, one file per directory, `contextFiles.extra`, and `@` imports all apply.
-- Each file loads once per context window, keyed by its absolute path so a change of working directory does not load it twice. A single-path `read` that showed the whole context file counts as loaded, unless the file has `@` imports the read did not expand; a range, tail, or truncated page does not. When compaction drops the block, the next touch loads the file again.
+- Each file loads once per context window, keyed by its absolute path so a change of working directory does not load it twice. A single-path `read` that showed the whole context file counts as loaded (a read inside an `eval` script does not, since its result stays in the script), unless the file has `@` imports the read did not expand; a range, tail, or truncated page does not. When compaction drops the block, the next touch loads the file again.
 - Each file is capped at 16,384 characters; a longer file is truncated with a note telling the agent to read the rest.
 - Files under hidden directories (`.git/`, `.venv/`, …) and `node_modules/` never load. Neither do files at or above the current directory or an additional workspace root, because those are already in the system prompt.
 - A context file whose real path, after symlinks, is outside every workspace root never loads, so a symlinked directory or file cannot pull in a third-party `AGENTS.md`.

@@ -84,6 +84,8 @@ interface Touch {
 	batch: BatchState;
 	messages: readonly AgentMessage[];
 	systemPrompt: readonly string[];
+	/** An eval script's call: its result stays in the script unless the script prints it. */
+	bridged?: true;
 }
 
 /** A claimed block awaiting delivery. */
@@ -190,7 +192,7 @@ export class NestedContextInjector {
 		if (!call || isError) return;
 		const { messages, systemPrompt } = this.#host.window();
 		const batch = this.#batchFor(messages.findLast(message => message.role === "assistant"));
-		await this.#touch({ ...call, details: result.details, batch, messages, systemPrompt });
+		await this.#touch({ ...call, details: result.details, batch, messages, systemPrompt, bridged: true });
 		if (batch.outstanding.size > 0 || !context?.addAdditionalContext) return;
 		const text = this.#drain(batch);
 		if (text) context.addAdditionalContext(text);
@@ -254,8 +256,9 @@ export class NestedContextInjector {
 		// A whole read of a context file puts it in context: tool results precede
 		// the batch's developer message. Recorded before any await, and checked
 		// again when the queue is handed over, so a parallel call cannot claim the
-		// file first.
-		const fullRead = touch.toolName === "read" ? fullReadPath(touch.details) : undefined;
+		// file first. A bridged read's result reaches the model only if the script
+		// prints it, so it does not count.
+		const fullRead = touch.toolName === "read" && !touch.bridged ? fullReadPath(touch.details) : undefined;
 		if (fullRead) touch.batch.fullReads.add(fullRead);
 		const cwd = path.resolve(this.#host.cwd());
 		const edited = editedFiles(touch, cwd);
@@ -307,7 +310,7 @@ export class NestedContextInjector {
 				dir: escapeAttribute(`${displayPath(cwd, file.owner)}/`),
 				content: escapeBlockTags(capContent(file.content, display)),
 			});
-			batch.queue.push({ path: file.path, block, display, depth: file.owner.split(path.sep).length, plain });
+			batch.queue.push({ path: file.path, block, display, depth: segmentCount(file.owner), plain });
 		}
 	}
 
@@ -370,9 +373,7 @@ export class NestedContextInjector {
 		const inside = await Promise.all(files.map(file => isInsideRoots(file.path, realRoots)));
 		files = files.filter((_, index) => inside[index]);
 		// Stable: within a directory, capability order (the winner, then additive extras).
-		files.sort(
-			(a, b) => a.owner.split(path.sep).length - b.owner.split(path.sep).length || a.owner.localeCompare(b.owner),
-		);
+		files.sort((a, b) => segmentCount(a.owner) - segmentCount(b.owner) || a.owner.localeCompare(b.owner));
 		return Promise.all(files.map(async file => ({ ...file, content: await expandAtImports(file.raw, file.path) })));
 	}
 
@@ -380,7 +381,9 @@ export class NestedContextInjector {
 	 * Nested context files the live window holds, as system-prompt context file
 	 * entries for a subagent: delivered blocks with the content as delivered, and
 	 * full reads of a nested context file with the content discovery loads (the
-	 * read result itself carries line prefixes). Empty with the setting off.
+	 * read result itself carries line prefixes). Shallowest first and in
+	 * capability order within a directory, as the system prompt keeps them, not
+	 * in the order the window gained them. Empty with the setting off.
 	 */
 	async carried(messages: readonly AgentMessage[]): Promise<ContextFileEntry[]> {
 		if (!cfgContextFilesOnTouch.get(this.#host.settings)) return [];
@@ -389,24 +392,28 @@ export class NestedContextInjector {
 		const window = scanWindow(messages);
 		const byPath = new Map(window.blocks);
 		const unread = [...window.fullReads].filter(
-			filePath => !byPath.has(filePath) && rootOf(roots, path.dirname(filePath)) !== undefined,
+			filePath => !byPath.has(filePath) && rootOf(roots, ownerDirectory(filePath)) !== undefined,
 		);
-		if (unread.length > 0) {
-			try {
-				// Discovery decides which read files are context files, as it does for touches.
-				const files = await this.#discover(
-					unread.map(filePath => path.dirname(filePath)),
-					roots,
-				);
-				for (const file of files) {
-					if (!unread.includes(file.path)) continue;
-					byPath.set(file.path, capContent(file.content, displayPath(cwd, file.path)));
-				}
-			} catch (error) {
-				logger.warn("Nested context discovery failed", { error: String(error) });
-			}
+		if (byPath.size === 0 && unread.length === 0) return [];
+		// Discovery decides which read files are context files, as it does for
+		// touches, and gives every file its owner and capability rank.
+		let files: NestedContextFile[] = [];
+		try {
+			files = await this.#discover([...new Set([...byPath.keys(), ...unread].map(ownerDirectory))], roots);
+		} catch (error) {
+			logger.warn("Nested context discovery failed", { error: String(error) });
 		}
-		return [...byPath].map(([filePath, content]) => ({ path: filePath, content }));
+		for (const file of files) {
+			if (unread.includes(file.path)) byPath.set(file.path, capContent(file.content, displayPath(cwd, file.path)));
+		}
+		const ranks = new Map(files.map((file, index) => [file.path, { depth: segmentCount(file.owner), index }]));
+		// A delivered file discovery no longer finds keeps its place among its directory's files.
+		const rank = (filePath: string) =>
+			ranks.get(filePath) ?? { depth: segmentCount(ownerDirectory(filePath)), index: Number.MAX_SAFE_INTEGER };
+		return [...byPath]
+			.map(([filePath, content]) => ({ path: filePath, content, rank: rank(filePath) }))
+			.sort((a, b) => a.rank.depth - b.rank.depth || a.rank.index - b.rank.index)
+			.map(({ path: filePath, content }) => ({ path: filePath, content }));
 	}
 }
 
@@ -594,6 +601,22 @@ async function touchedDirectory(target: TouchedTarget): Promise<string> {
 			() => false,
 		));
 	return isDirectory ? target.path : path.dirname(target.path);
+}
+
+function segmentCount(dir: string): number {
+	return dir.split(path.sep).length;
+}
+
+/**
+ * The directory a nested context file governs: its own, or for a file in a
+ * config folder (`.github/copilot-instructions.md`) the folder's parent.
+ * Discovery skips hidden directories, so a hidden segment at the end can only
+ * be such a folder.
+ */
+function ownerDirectory(filePath: string): string {
+	let dir = path.dirname(filePath);
+	while (path.basename(dir).startsWith(".") && path.dirname(dir) !== dir) dir = path.dirname(dir);
+	return dir;
 }
 
 function isStrictlyBelow(parent: string, child: string): boolean {
