@@ -91,15 +91,11 @@ describe("applyOpenAIExtraBody reasoningDisabled", () => {
 		}
 	});
 
-	it("does not treat inherited Object.prototype members as reasoning keys", () => {
-		// A plain-object index (`REASONING_ONLY_EXTRA_BODY_KEYS[key]`) would read
-		// `constructor`/`toString` off the prototype chain as truthy and silently
-		// drop them even though they are not reasoning controls; the Set-backed
-		// lookup must only match the explicit reasoning-control key list.
+	it("preserves own prototype-named keys without changing the request prototype", () => {
 		const params: Record<string, unknown> = {};
 		applyOpenAIExtraBody(
 			params,
-			{ constructor: "keep-me", toString: "also-keep", thinking: { type: "enabled" } },
+			JSON.parse('{"constructor":"keep-me","toString":"also-keep","__proto__":{"route":"keep"},"thinking":true}'),
 			{
 				reasoningDisabled: true,
 			},
@@ -107,6 +103,24 @@ describe("applyOpenAIExtraBody reasoningDisabled", () => {
 
 		expect(Object.getOwnPropertyDescriptor(params, "constructor")?.value).toBe("keep-me");
 		expect(Object.getOwnPropertyDescriptor(params, "toString")?.value).toBe("also-keep");
+		expect(Object.getOwnPropertyDescriptor(params, "__proto__")?.value).toEqual({ route: "keep" });
+		expect(Object.getPrototypeOf(params)).toBe(Object.prototype);
 		expect(params.thinking).toBeUndefined();
+	});
+
+	it("strips nested chat-template thinking controls and preserves prototype-named kwargs", () => {
+		const params: Record<string, unknown> = { chat_template_kwargs: { thinking: false } };
+		applyOpenAIExtraBody(
+			params,
+			{
+				chat_template_kwargs: JSON.parse(
+					'{"thinking":true,"enable_thinking":true,"reasoning_effort":"high","constructor":"keep","__proto__":"keep"}',
+				),
+			},
+			{ reasoningDisabled: true },
+		);
+		expect(params.chat_template_kwargs).toEqual(
+			JSON.parse('{"thinking":false,"constructor":"keep","__proto__":"keep"}'),
+		);
 	});
 });

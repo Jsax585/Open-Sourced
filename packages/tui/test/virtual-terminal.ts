@@ -1,5 +1,5 @@
 import type { Terminal, TerminalAppearance } from "@oh-my-pi/pi-tui/terminal";
-import { CELL_U32, CellFlags, KittyTerminal, loadModuleSync } from "kitty-vt-wasm";
+import { CELL_U32, CellFlags, type GraphicsPlacement, KittyTerminal, loadModuleSync } from "kitty-vt-wasm";
 
 // ---------------------------------------------------------------------------
 // Shared kitty VT engine
@@ -24,12 +24,29 @@ import { CELL_U32, CellFlags, KittyTerminal, loadModuleSync } from "kitty-vt-was
 // allocator and grid state stay isolated across tests.
 const kittyModule = loadModuleSync(Bun.resolveSync("kitty-vt-wasm/kitty-vt.wasm", import.meta.dir));
 
-function createEngine(columns: number, rows: number, scrollback: number): KittyTerminal {
+function createEngine(
+	columns: number,
+	rows: number,
+	scrollback: number,
+	onReply?: (data: string) => void,
+): KittyTerminal {
 	return KittyTerminal.createSync({
 		columns,
 		rows,
 		scrollback,
 		wasm: kittyModule,
+		// Forward cursor-position reports (CSI row;col R) to the application like
+		// a real terminal answering DSR 6n; TUI's post-resize anchor probe relies
+		// on the round trip. Other query replies stay swallowed: tests assert on
+		// grid state, and unsolicited capability responses would leak into the
+		// focused component as junk keystrokes.
+		onOutput: onReply
+			? bytes => {
+					const reply = new TextDecoder().decode(bytes);
+					const match = reply.match(/\x1b\[\d+;\d+R/);
+					if (match) onReply(match[0]);
+				}
+			: undefined,
 		// Swallow host events (title, bell, engine log lines); tests read the
 		// grid, and the default log fallback would console.error into test
 		// output.
@@ -89,7 +106,11 @@ export class VirtualTerminal implements Terminal {
 		this.#columns = columns;
 		this.#rows = rows;
 		this.#scrollbackCap = scrollback ?? DEFAULT_SCROLLBACK_LINES;
-		this.#term = createEngine(columns, rows, this.#scrollbackCap);
+		this.#term = createEngine(columns, rows, this.#scrollbackCap, reply => {
+			// Deliver asynchronously like a real PTY read loop; a synchronous
+			// callback would re-enter the TUI mid-write.
+			queueMicrotask(() => this.#inputHandler?.(reply));
+		});
 	}
 
 	// --- Terminal interface --------------------------------------------------
@@ -287,6 +308,20 @@ export class VirtualTerminal implements Terminal {
 	}
 
 	/**
+	 * Raw background color words of a viewport row, for tests that assert a
+	 * repaint recolored a row rather than reworded it (e.g. a hover band over
+	 * an already-tinted row, where column coverage alone cannot observe the
+	 * change). Compare snapshots opaquely; values are engine cell words.
+	 */
+	getViewportRowBackgroundValues(row: number): number[] {
+		const words = this.#presentedRowCells(row);
+		if (!words) return [];
+		const values: number[] = [];
+		for (let col = 0; col * CELL_U32 < words.length; col++) values.push(words[col * CELL_U32 + CELL_BG] ?? 0);
+		return values;
+	}
+
+	/**
 	 * Columns in a viewport row whose cells carry a non-default foreground color.
 	 * Used with unreset-SGR regressions to ensure per-line resets confine
 	 * foreground attributes to the row that emitted them.
@@ -323,6 +358,17 @@ export class VirtualTerminal implements Terminal {
 	getCursor(): { row: number; col: number } {
 		const cursor = this.#term.cursor;
 		return { row: cursor.y, col: cursor.x };
+	}
+
+	/**
+	 * Kitty-graphics placements the engine currently tracks on the active
+	 * screen (positions only; pixels are host-side). The engine keeps main and
+	 * alternate screen image stores apart exactly as kitty does, so a
+	 * placement that only ever reached the alternate buffer is absent here
+	 * once the normal screen is back.
+	 */
+	graphicsPlacements(): GraphicsPlacement[] {
+		return this.#term.graphicsPlacements();
 	}
 
 	/** Clear the buffer to a blank slate (fresh engine terminal). */
@@ -398,7 +444,9 @@ export class VirtualTerminal implements Terminal {
 
 	#recreate(): void {
 		this.#term.dispose();
-		this.#term = createEngine(this.#columns, this.#rows, this.#scrollbackCap);
+		this.#term = createEngine(this.#columns, this.#rows, this.#scrollbackCap, reply => {
+			queueMicrotask(() => this.#inputHandler?.(reply));
+		});
 		this.#pendingEngineResize = false;
 		this.#viewportY = 0;
 		this.#historyTextCache.length = 0; // fresh engine: prior scrollback is gone
