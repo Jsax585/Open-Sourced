@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `compaction.methodOrder` skipping native compaction on explicitly opted-in Anthropic gateway endpoints ([#14839](https://github.com/can1357/oh-my-pi/issues/14839)).
+
 ## [18.10.0] - 2026-10-12
 
 ### Added

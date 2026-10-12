@@ -188,8 +188,10 @@ function hasPathPrefix(pathname: string, prefix: string): boolean {
 }
 
 /**
- * Amazon Bedrock API route on a bedrock-runtime or bedrock-mantle endpoint
- * (public, FIPS, or PrivateLink hostname):
+ * Amazon Bedrock API endpoint on a bedrock-runtime or bedrock-mantle host
+ * (public, FIPS, or PrivateLink). Without a route, matches the host regardless
+ * of path; with a route, matches only that protocol's path.
+ *
  * - `anthropic`: the Anthropic Messages API under `/anthropic`.
  * - `openai`: the OpenAI-compatible APIs under `/openai`, plus Mantle's
  *   documented `/v1` base (`https://bedrock-mantle.<region>.api.aws/v1`).
@@ -197,7 +199,7 @@ function hasPathPrefix(pathname: string, prefix: string): boolean {
  * Hostnames are parsed strictly so proxies that embed these hosts in a path
  * do not match.
  */
-export function isBedrockRouteUrl(baseUrl: string | undefined, route: "openai" | "anthropic"): boolean {
+export function isBedrockRouteUrl(baseUrl: string | undefined, route?: "openai" | "anthropic"): boolean {
 	if (!baseUrl) return false;
 	let url: URL;
 	try {
@@ -208,6 +210,7 @@ export function isBedrockRouteUrl(baseUrl: string | undefined, route: "openai" |
 	if (url.protocol !== "https:") return false;
 	const host = BEDROCK_PUBLIC_HOST.exec(url.hostname) ?? BEDROCK_PRIVATELINK_HOST.exec(url.hostname);
 	if (!host) return false;
+	if (route === undefined) return true;
 	if (route === "anthropic") return hasPathPrefix(url.pathname, "/anthropic");
 	const isMantle = host.groups?.runtime === undefined;
 	return hasPathPrefix(url.pathname, "/openai") || (isMantle && hasPathPrefix(url.pathname, "/v1"));

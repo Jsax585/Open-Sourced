@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Anthropic native compaction being skipped for personal gateways with `remoteCompaction.enabled: true`, while keeping unsupported Bedrock routes excluded ([#14839](https://github.com/can1357/oh-my-pi/issues/14839)).
+
 ## [18.9.2] - 2026-10-11
 
 ### Breaking Changes

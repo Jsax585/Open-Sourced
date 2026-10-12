@@ -259,10 +259,22 @@ describe("Anthropic on-demand compaction requests", () => {
 		expect(supportsAnthropicCompaction(model, "https://bedrock-runtime.us-west-2.amazonaws.com")).toBe(false);
 		const optedIn = buildModel({ ...spec, remoteCompaction: { enabled: true } });
 		expect(supportsAnthropicCompaction(optedIn, "https://bedrock-mantle.us-west-2.api.aws")).toBe(false);
+		expect(supportsAnthropicCompaction(optedIn, "https://bedrock-mantle.us-west-2.api.aws/anthropic")).toBe(false);
 		await withEnv({ ANTHROPIC_BASE_URL: "https://gateway.example.test" }, async () => {
 			const response = await captureRequest(model, { anthropicCompaction: {} });
 			expect(response.payload.compaction).toBeUndefined();
 		});
+	});
+
+	it("sends on-demand compaction to an explicitly opted-in personal gateway", async () => {
+		const gateway = buildModel({
+			...spec,
+			baseUrl: "https://gateway.example.com",
+			remoteCompaction: { enabled: true },
+		});
+		const response = await captureRequest(gateway, { anthropicCompaction: {} });
+		expect(response.payload.compaction).toEqual({ type: "summarize" });
+		expect(response.beta).toContain("compact-2026-09-04");
 	});
 
 	it.each([

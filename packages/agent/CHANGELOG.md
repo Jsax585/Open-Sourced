@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the Anthropic native compaction lane being excluded for explicitly opted-in personal gateways ([#14839](https://github.com/can1357/oh-my-pi/issues/14839)).
+
 ## [18.9.2] - 2026-10-11
 
 ### Changed

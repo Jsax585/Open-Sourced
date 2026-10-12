@@ -1,4 +1,5 @@
 import { isBedrockAnthropicRoute, isOfficialAnthropicApiUrl } from "@oh-my-pi/pi-catalog/compat/anthropic";
+import { isBedrockRouteUrl } from "@oh-my-pi/pi-catalog/hosts";
 import type { Model } from "../types";
 import type { AnthropicMessagesClientLike } from "./anthropic-client";
 import { normalizeAnthropicBaseUrl, resolveDirectAnthropicBaseUrl } from "./anthropic-state";
@@ -55,11 +56,12 @@ export function supportsAnthropicCompaction(model: Model<"anthropic-messages">, 
 	) {
 		return true;
 	}
+	// Explicit opt-in also covers personal gateways, but a Bedrock host must use
+	// its `/anthropic` route and the Bedrock Messages compatibility flag above.
+	if (model.remoteCompaction?.enabled === true && !isBedrockRouteUrl(route)) return true;
 	return (
 		isSupportedCompactionEndpoint(route) &&
-		(model.compat.firstPartyProvider === true ||
-			model.provider === "google-vertex" ||
-			model.remoteCompaction?.enabled === true)
+		(model.compat.firstPartyProvider === true || model.provider === "google-vertex")
 	);
 }
 
