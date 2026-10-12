@@ -661,27 +661,47 @@ export async function uploadFilesToElement(
 		const data = Buffer.from(await file.arrayBuffer()).toString("base64");
 		files.push({ name: path.basename(absolute), type: file.type || "application/octet-stream", data });
 	}
+	// The page's listeners see main-world wrappers, so the drop runs there for the read below to be observed.
+	const realm = handle.frame.mainRealm();
+	const target = handle.realm === realm ? handle : await untilAborted(signal, () => realm.adoptHandle(handle));
 	const accepted = await untilAborted(signal, () =>
-		handle.evaluate((el, payloads) => {
-			const element = el as unknown as PageElement;
-			const page = globalThis as unknown as PageGlobals;
-			const transfer = new page.DataTransfer();
-			for (const payload of payloads) {
-				const bytes = Uint8Array.from(atob(payload.data), character => character.charCodeAt(0));
-				transfer.items.add(new page.File([bytes], payload.name, { type: payload.type }));
-			}
-			// A drop zone cancels dragover or drop; dispatchEvent returns false once a listener did.
-			let canceled = false;
-			for (const type of ["dragenter", "dragover", "drop"]) {
-				const event = new page.DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer });
-				if (!element.dispatchEvent(event) && type !== "dragenter") canceled = true;
-			}
-			return canceled;
-		}, files),
-	);
+		realm.evaluate(
+			(el, payloads) => {
+				const element = el as unknown as PageElement;
+				const page = globalThis as unknown as PageGlobals;
+				const transfer = new page.DataTransfer();
+				for (const payload of payloads) {
+					const bytes = Uint8Array.from(atob(payload.data), character => character.charCodeAt(0));
+					transfer.items.add(new page.File([bytes], payload.name, { type: payload.type }));
+				}
+				// A drop zone reads the dropped files while handling drop. Canceling proves nothing: pages cancel
+				// dragover and drop document-wide only to stop the browser navigating to a dropped file.
+				let dropping = false;
+				let taken = false;
+				for (const key of ["files", "items"]) {
+					const read = Object.getOwnPropertyDescriptor(page.DataTransfer.prototype, key)?.get;
+					Object.defineProperty(transfer, key, {
+						get() {
+							if (dropping) taken = true;
+							return read?.call(transfer);
+						},
+					});
+				}
+				for (const type of ["dragenter", "dragover", "drop"]) {
+					dropping = type === "drop";
+					element.dispatchEvent(
+						new page.DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }),
+					);
+				}
+				return taken;
+			},
+			target,
+			files,
+		),
+	).finally(() => (target === handle ? undefined : target.dispose().catch(() => undefined)));
 	if (!accepted) {
 		throw new ToolError(
-			`${label} opened no file chooser and did not accept a file drop; target the page's <input type=file>, the control that opens the chooser, or its drop zone`,
+			`${label} opened no file chooser and nothing on the page took the dropped files; target the page's <input type=file>, the control that opens the chooser, or its drop zone`,
 		);
 	}
 }
