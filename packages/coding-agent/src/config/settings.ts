@@ -890,6 +890,21 @@ export class Settings {
 	}
 
 	/**
+	 * Layer supplying one entry of record `setting`, with the precedence of {@link getProvenance}.
+	 * An unset record (including a `null` that masks it) reports `"default"`. A `null` entry under a
+	 * set record still counts as owned: it shadows lower layers and retry reads it.
+	 */
+	getRecordEntryProvenance(setting: AnySetting, key: string): SettingProvenance {
+		if (!this.isConfigured(setting)) return "default";
+		const segments = [...setting.segments, key];
+		if (getByPath(this.#overrides, segments) !== undefined) return "runtime";
+		if (getByPath(this.#configOverlay, segments) !== undefined) return "overlay";
+		if (getByPath(projectLayerForMerge(this.#project), segments) !== undefined) return "project";
+		if (getByPath(this.#global, segments) !== undefined) return "global";
+		return this.#parent?.getRecordEntryProvenance(setting, key) ?? "default";
+	}
+
+	/**
 	 * Registry plumbing behind `Setting.set` / `Setting.override`: writes `value` for `setting` to the
 	 * global layer (persisted in the background; releases a soft pin, see {@link pinDefaultValue}) or
 	 * the runtime-override layer, then notifies change listeners (process-wide effects apply

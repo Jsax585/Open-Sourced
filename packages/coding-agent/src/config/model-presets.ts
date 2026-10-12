@@ -106,9 +106,9 @@ function sanitizeFallbackChains(raw: Record<string, unknown>): Record<string, st
 	return chains;
 }
 
-/** Order-sensitive equality for two selector lists; `undefined` matches only `undefined`. */
-function sameSelectorList(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
-	if (a === undefined || b === undefined) return a === b;
+/** Order-sensitive equality for two selector lists; anything else (`undefined`, a malformed `null` or string) matches only itself. */
+function sameSelectorList(a: unknown, b: unknown): boolean {
+	if (!isSelectorList(a) || !isSelectorList(b)) return a === b;
 	return a.length === b.length && a.every((sel, i) => sel === b[i]);
 }
 
@@ -120,7 +120,7 @@ const KEY_ORDER_LABEL = "(key order)";
  * `resolveRetryFallbackChainKey` takes the first matching key at equal precedence, so a record
  * whose keys are merely reordered is a different configuration, not the same one.
  */
-function sameFallbackChains(a: Record<string, string[]>, b: Record<string, string[]>): boolean {
+function sameFallbackChains(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
 	const aKeys = Object.keys(a);
 	const bKeys = Object.keys(b);
 	if (aKeys.length !== bKeys.length) return false;
@@ -138,7 +138,8 @@ export function findActiveModelPreset(settings: Settings): string | undefined {
 	// Same filter as `saveModelPreset`: empty selectors are never stored.
 	const roleIds = Object.keys(roles).filter(role => roles[role]);
 	const thinking = cfgDefaultThinkingLevel.get(settings);
-	const liveChains = sanitizeFallbackChains(cfgRetryFallbackChains.get(settings));
+	// Raw, not sanitized: a malformed entry in any layer still steers retry, so it must block the match.
+	const liveChains = cfgRetryFallbackChains.get(settings);
 	return getModelPresetNames(settings).find(name => {
 		const lookup = getModelPreset(settings, name);
 		if (lookup.kind !== "found") return false;
@@ -261,8 +262,8 @@ export interface ModelPresetShadowedChain {
 	key: string;
 	/** The preset's chain for `key`, or its key sequence for the `"(key order)"` entry. */
 	expected: readonly string[] | undefined;
-	/** The chain — or key sequence — effectively in force instead. */
-	actual: readonly string[] | undefined;
+	/** The chain in force instead: its selectors, the key sequence for `(key order)`, or a malformed value (`null`, a bare string) that retry still reads. */
+	actual: unknown;
 	source: SettingProvenance;
 }
 
@@ -342,7 +343,7 @@ function resolveLiveDefault(
 	};
 }
 
-/** Write the preset's roles, thinking level and fallback chains, clearing what it leaves out. */
+/** Write the preset's roles and thinking level, clearing roles it leaves out. Chains are written only when the preset records them. */
 function writePresetRoles(settings: Settings, preset: ModelPreset): void {
 	const project = cfgModelRoleStorage.get(settings) === "project";
 	const roles = new Set([...Object.keys(settings.getModelRoles()), ...Object.keys(preset.modelRoles)]);
@@ -406,19 +407,26 @@ function shadowedRoles(settings: Settings, preset: ModelPreset): ModelPresetShad
 function shadowedChains(settings: Settings, preset: ModelPreset): ModelPresetShadowedChain[] {
 	const expected = preset.fallbackChains;
 	if (expected === undefined) return [];
-	const effective = sanitizeFallbackChains(cfgRetryFallbackChains.get(settings));
+	const effective = cfgRetryFallbackChains.get(settings);
 	if (sameFallbackChains(effective, expected)) return [];
-	const source = cfgRetryFallbackChains.provenance(settings);
 	const shadowed: ModelPresetShadowedChain[] = [];
 	for (const key of new Set([...Object.keys(effective), ...Object.keys(expected)])) {
 		const want = Object.hasOwn(expected, key) ? expected[key] : undefined;
-		const got = Object.hasOwn(effective, key) ? effective[key] : undefined;
-		if (!sameSelectorList(want, got)) shadowed.push({ key, expected: want, actual: got, source });
+		const got: unknown = Object.hasOwn(effective, key) ? effective[key] : undefined;
+		if (!sameSelectorList(want, got)) {
+			const source = settings.getRecordEntryProvenance(cfgRetryFallbackChains, key);
+			shadowed.push({ key, expected: want, actual: got, source });
+		}
 	}
 	// Same keys and values in a different order: still not the preset's configuration, because
-	// chain resolution takes the first matching key.
+	// chain resolution takes the first matching key. Key order is a record-level fact.
 	if (shadowed.length === 0) {
-		shadowed.push({ key: KEY_ORDER_LABEL, expected: Object.keys(expected), actual: Object.keys(effective), source });
+		shadowed.push({
+			key: KEY_ORDER_LABEL,
+			expected: Object.keys(expected),
+			actual: Object.keys(effective),
+			source: cfgRetryFallbackChains.provenance(settings),
+		});
 	}
 	return shadowed;
 }
@@ -516,8 +524,9 @@ function describeRoleValue(value: string | undefined): string {
 	return value ?? "(unset)";
 }
 
-function describeChainValue(value: readonly string[] | undefined): string {
+function describeChainValue(value: unknown): string {
 	if (value === undefined) return "(unset)";
+	if (!isSelectorList(value)) return `${JSON.stringify(value)} (malformed)`;
 	return value.length > 0 ? value.join(", ") : "(empty)";
 }
 
