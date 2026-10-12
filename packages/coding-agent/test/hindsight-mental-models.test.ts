@@ -5,6 +5,7 @@ import {
 	HindsightApi as HindsightApiCtor,
 	type MentalModelSummary,
 } from "@oh-my-pi/pi-coding-agent/hindsight/client";
+import type { HindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config";
 import {
 	diffMentalModelContent,
 	ensureMentalModels,
@@ -13,6 +14,7 @@ import {
 	renderMentalModelsBlock,
 	resolveSeedsForScope,
 } from "@oh-my-pi/pi-coding-agent/hindsight/mental-models";
+import { HindsightSessionState } from "@oh-my-pi/pi-coding-agent/hindsight/state";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -332,5 +334,89 @@ describe("diffMentalModelContent", () => {
 		expect(out).toContain("input capped at 1000 lines per side before diff");
 		// Sanity: cap kicks in well below 1s on any sane CI box.
 		expect(elapsedMs).toBeLessThan(2_000);
+	});
+});
+
+/* -------------------------------------------------------------------------- */
+/* auto-seed gating on a `bankIdTemplate` bank                                 */
+/* -------------------------------------------------------------------------- */
+
+// Seeding WRITES curated content, and `hindsight.bankIdTemplate` addresses a bank omp does not
+// own (sharing it with the coding-agents integration is the setting's purpose). Auto-seeding
+// there would publish omp's models into another tool's bank, so the bootstrap path skips it —
+// while still READS the bank's models. `/memory mm seed` remains the explicit-write entry point.
+describe("mental-model auto-seed on a templated bank", () => {
+	function makeConfig(overrides: Partial<HindsightConfig> = {}): HindsightConfig {
+		return {
+			hindsightApiUrl: "http://localhost:8888",
+			hindsightApiToken: null,
+			bankId: null,
+			bankIdPrefix: "",
+			bankIdTemplate: null,
+			scoping: "global",
+			bankMission: "",
+			retainMission: null,
+			autoRecall: false,
+			autoRetain: false,
+			retainMode: "full-session",
+			retainEveryNTurns: 3,
+			retainOverlapTurns: 2,
+			retainContext: "omp",
+			recallBudget: "mid",
+			recallMaxTokens: 1024,
+			recallTypes: [],
+			recallContextTurns: 1,
+			recallMaxQueryChars: 800,
+			recallPromptPreamble: "preamble",
+			debug: false,
+			requestTimeoutMs: 30_000,
+			reflectTimeoutMs: 120_000,
+			recallTimeoutMs: 30_000,
+			retainTimeoutMs: 60_000,
+			mentalModelsEnabled: true,
+			mentalModelAutoSeed: true,
+			mentalModelMaxRenderChars: 16_000,
+			...overrides,
+		};
+	}
+
+	function makeState(config: HindsightConfig) {
+		const createMentalModel = vi.fn(async () => ({ operation_id: "op" }));
+		const listMentalModels = vi.fn(async () => ({ items: [] }));
+		const client = { createMentalModel, listMentalModels } as unknown as HindsightApi;
+		const state = new HindsightSessionState({
+			sessionId: "s",
+			client,
+			bankId: "coding-agent::proj",
+			config,
+			session: {
+				subscribe: () => () => {},
+				refreshBaseSystemPrompt: async () => {},
+				sessionManager: { getEntries: () => [] },
+			} as never,
+			banksSet: new Set(["coding-agent::proj"]),
+			lastRetainedTurn: 0,
+			hasRecalledForFirstTurn: false,
+		});
+		return { state, createMentalModel, listMentalModels };
+	}
+
+	it("does not write omp's seed models into a templated bank, but still reads it", async () => {
+		const { state, createMentalModel, listMentalModels } = makeState(
+			makeConfig({ bankIdTemplate: "coding-agent::{gitProject}" }),
+		);
+
+		await state.runMentalModelLoad({ bankId: "coding-agent::proj" });
+
+		expect(createMentalModel).not.toHaveBeenCalled();
+		expect(listMentalModels).toHaveBeenCalled();
+	});
+
+	it("seeds an untemplated bank, so the suppression above is the template's doing", async () => {
+		const { state, createMentalModel } = makeState(makeConfig());
+
+		await state.runMentalModelLoad({ bankId: "coding-agent::proj" });
+
+		expect(createMentalModel).toHaveBeenCalled();
 	});
 });

@@ -178,6 +178,30 @@ describe("computeBankScope", () => {
 			expect(scope).toEqual({ bankId: "coding-agent::proj" });
 		});
 
+		// `per-project` documents one bank per project. A template with no project placeholder
+		// cannot keep that promise — it would put every project on one untagged bank — so the
+		// mode refuses the template instead of silently dropping the isolation.
+		it("refuses a project-less template under per-project scoping", () => {
+			expect(
+				computeBankScope(baseConfig({ bankIdTemplate: "team-a", scoping: "per-project" }), "/work/proj"),
+			).toEqual({ bankId: "omp-proj" });
+			expect(
+				computeBankScope(baseConfig({ bankIdTemplate: "{harness}", scoping: "per-project" }), "/work/proj"),
+			).toEqual({ bankId: "omp-proj" });
+		});
+
+		it("honors a project-less template where there is no per-project contract to break", () => {
+			expect(computeBankScope(baseConfig({ bankIdTemplate: "team-a" }), "/work/proj")).toEqual({ bankId: "team-a" });
+			expect(
+				computeBankScope(baseConfig({ bankIdTemplate: "team-a", scoping: "per-project-tagged" }), "/work/proj"),
+			).toEqual({
+				bankId: "team-a",
+				retainTags: ["project:proj"],
+				recallTags: ["project:proj"],
+				recallTagsMatch: "any",
+			});
+		});
+
 		it("still tags retains and recalls under per-project-tagged scoping", () => {
 			expect(
 				computeBankScope(

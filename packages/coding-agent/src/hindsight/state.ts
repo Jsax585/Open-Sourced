@@ -519,11 +519,20 @@ export class HindsightSessionState {
 			// read-only: we surface whatever models the operator has curated on the
 			// bank, but we do NOT POST to create new ones unless they explicitly
 			// asked. `/memory mm seed` remains the explicit-write entry point.
-			if (this.config.mentalModelAutoSeed) {
+			//
+			// `hindsight.bankIdTemplate` marks a bank omp does not own — the setting
+			// exists to address another coding-agent integration's bank — so omp never
+			// curates it automatically either. The operator can still seed by hand.
+			if (this.config.mentalModelAutoSeed && !this.config.bankIdTemplate?.trim()) {
 				const seeds = resolveSeedsForScope(scope, this.config.scoping);
 				if (seeds.length > 0) {
 					await ensureMentalModels(this.client, this.bankId, seeds, this.config.debug);
 				}
+			} else if (this.config.mentalModelAutoSeed && this.config.debug) {
+				logger.debug("Hindsight: skipped mental-model auto-seed for a bankIdTemplate bank", {
+					bankId: this.bankId,
+					template: this.config.bankIdTemplate,
+				});
 			}
 
 			await this.#loadAndPublishMentalModels(generation, previousSnippet, "MM load");

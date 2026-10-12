@@ -68,7 +68,7 @@ export const cfgHindsightBankIdTemplate = register({
 		group: "Hindsight",
 		label: "Hindsight Bank ID Template",
 		description:
-			"Full bank id template, overriding bankId/prefix and the per-project bank suffix. Placeholders: {gitProject} (worktree-aware repo name), {project} (cwd basename), {harness} (omp). Use coding-agent::{gitProject} to share one bank per repository with the other coding agents",
+			"Full bank id template, overriding bankId/prefix and the per-project bank suffix. Placeholders: {gitProject} (worktree-aware repo name), {project} (cwd basename), {harness} (omp). Use coding-agent::{gitProject} to share one bank per repository with the other coding agents. per-project scoping ignores a template with no {gitProject}/{project} placeholder (it cannot keep that mode's per-project isolation), and omp never auto-seeds mental models into a templated bank — it does not own that bank",
 		condition: "hindsightActive",
 	},
 });
@@ -279,7 +279,7 @@ export const cfgHindsightMentalModelAutoSeed = register({
 		group: "Hindsight",
 		label: "Hindsight Mental Model Auto-Seed",
 		description:
-			"At session start, create any built-in mental models (project-conventions, project-decisions, user-preferences) that do not yet exist on the bank.",
+			"At session start, create any built-in mental models (project-conventions, project-decisions, user-preferences) that do not yet exist on the bank. Never runs on a bank addressed by hindsight.bankIdTemplate: that bank belongs to the integration the template points at, so `/memory mm seed` is the explicit way to write omp's models there.",
 		condition: "hindsightActive",
 	},
 });

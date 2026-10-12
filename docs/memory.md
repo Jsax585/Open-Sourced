@@ -155,6 +155,11 @@ hindsight:
   scoping: global
 ```
 
+Two consequences of addressing a bank omp does not own:
+
+- `per-project` scoping **ignores** a template without a `{gitProject}` or `{project}` placeholder (and says so in the log). A project-less template cannot keep that mode's one-bank-per-project isolation, so it would silently turn every project into one shared, untagged bank; omp keeps the legacy per-project id instead. Without the template, `per-project` behaves exactly as before. Under `global` (one bank by definition) and `per-project-tagged` (partitioned by tags) a project-less template is used as written.
+- **Mental-model auto-seeding never runs on a templated bank.** `hindsight.mentalModelAutoSeed` writes omp's curated models (`user-preferences`, `project-conventions`, `project-decisions`); a templated bank belongs to the integration the template points at, so omp does not publish its models there. Reading that bank's models is unaffected (`hindsight.mentalModelsEnabled`), and `/memory mm seed` still writes on explicit request.
+
 Both project-scoped modes name the project the same way: take the repository's primary checkout root (so every linked worktree of one repository resolves to the same directory), then lowercase its basename. A checkout at `~/code/General` therefore tags `project:general`. Tags are matched literally, so this fold is what keeps one repository in one memory scope no matter how the path is capitalised.
 
 The primary session recalls on its first model turn (`hindsight.autoRecall: true`) and automatically retains completed conversation turns every three user turns by default. `/memory enqueue` flushes queued tool retains and forces retention of the current session. At agent end, the primary state schedules cadence-based retention and flushes the retain queue; session disposal drains that queue before releasing the state. Request failures and configured timeouts are logged and leave the coding session usable. Subagents alias the parent's client, bank, and scope for explicit `recall`, `retain`, and `reflect` calls, but do not run their own automatic recall or retention.

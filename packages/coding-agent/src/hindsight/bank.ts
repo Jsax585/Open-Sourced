@@ -59,6 +59,9 @@ function baseBankId(config: HindsightConfig): string {
 /** Placeholder syntax shared with the coding-agents runtime (`core/template.ts`). */
 const TEMPLATE_PLACEHOLDER = /\{([a-zA-Z_]+)\}/g;
 
+/** A template carrying one of these has a project axis; without one its bank is shared by design. */
+const PROJECT_PLACEHOLDER = /\{(?:gitProject|project)\}/;
+
 /** Repo basename (case preserved) for `{gitProject}`, or null when nothing is nameable. */
 function gitProjectName(directory: string): string | null {
 	if (!directory) return null;
@@ -78,8 +81,15 @@ const TEMPLATE_RESOLVERS: Record<string, (directory: string) => string> = {
 	harness: () => HARNESS_NAME,
 };
 
-/** Placeholders already reported, so a typo'd template warns once per process, not per turn. */
-const reportedTemplatePlaceholders = new Set<string>();
+/** Misconfigurations already reported, so a bad setting warns once per process, not per turn. */
+const reportedMisconfigurations = new Set<string>();
+
+/** Report a misconfiguration once per process: `computeBankScope` sits on the session hot path. */
+function warnOnce(key: string, message: string): void {
+	if (reportedMisconfigurations.has(key)) return;
+	reportedMisconfigurations.add(key);
+	logger.warn(message);
+}
 
 /**
  * Expand a `hindsight.bankIdTemplate` so an omp session can address the bank another coding
@@ -94,13 +104,13 @@ function applyBankIdTemplate(template: string, directory: string): string {
 	return template.replace(TEMPLATE_PLACEHOLDER, (token, name: string) => {
 		const resolve = TEMPLATE_RESOLVERS[name];
 		if (resolve) return resolve(directory);
-		if (!reportedTemplatePlaceholders.has(name)) {
-			reportedTemplatePlaceholders.add(name);
-			const valid = Object.keys(TEMPLATE_RESOLVERS)
-				.map(key => `{${key}}`)
-				.join(", ");
-			logger.warn(`Hindsight: unknown hindsight.bankIdTemplate placeholder "${token}" — valid: ${valid}`);
-		}
+		const valid = Object.keys(TEMPLATE_RESOLVERS)
+			.map(key => `{${key}}`)
+			.join(", ");
+		warnOnce(
+			`unknown-placeholder:${name}`,
+			`Hindsight: unknown hindsight.bankIdTemplate placeholder "${token}" — valid: ${valid}`,
+		);
 		return UNKNOWN_PROJECT;
 	});
 }
@@ -146,8 +156,16 @@ function projectTagScope(directory: string): Pick<BankScope, "retainTags" | "rec
  * `per-project-tagged`.
  */
 export function computeBankScope(config: HindsightConfig, directory: string): BankScope {
-	const template = config.bankIdTemplate?.trim();
-	if (template) {
+	const template = config.bankIdTemplate?.trim() || undefined;
+	if (template !== undefined && config.scoping === "per-project" && !PROJECT_PLACEHOLDER.test(template)) {
+		// `per-project` promises one bank per project, and a template without a project
+		// placeholder cannot keep that promise — it would put every project on one untagged
+		// bank. Refuse the template for this mode instead of silently dropping the isolation.
+		warnOnce(
+			`per-project-template:${template}`,
+			`Hindsight: hindsight.bankIdTemplate "${template}" has no {gitProject}/{project} placeholder, so per-project scoping ignores it and keeps one bank per project`,
+		);
+	} else if (template !== undefined) {
 		// A template IS the bank id: it supersedes `bankId`/`bankIdPrefix` and the per-project
 		// suffix, because it names the project itself — `coding-agent::{gitProject}` with a
 		// second segment appended would address a bank that no other agent shares.
