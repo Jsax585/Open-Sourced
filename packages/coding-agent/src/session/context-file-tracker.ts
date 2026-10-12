@@ -41,6 +41,9 @@ import type { CustomMessage } from "./messages";
 export const NESTED_CONTEXT_MESSAGE_TYPE = "nested-context";
 export const CONTEXT_FILE_UPDATE_MESSAGE_TYPE = "context-file-update";
 
+/** Template wrapper (`<file>` tags or a removal sentence) each entry adds to the rendered update, counted against its budget. */
+const NOTICE_ENTRY_OVERHEAD_BYTES = 160;
+
 /**
  * Standalone project context files, in the order the directory's winner is chosen.
  * These are exactly the names the `agents-md` and `claude-md` discovery providers load.
@@ -432,14 +435,18 @@ export class ContextFileTracker {
 		const files: ContextFileUpdateDetails["files"] = [];
 		let remaining = 0;
 		let updatedBytes = 0;
+		let deferred = false;
 		for (const [filePath, tracked] of this.#ambient) {
 			const effective = delivered.has(filePath) ? (delivered.get(filePath) ?? null) : tracked.loadedHash;
 			if (tracked.hash !== null) remaining++;
 			if (tracked.hash === effective) continue;
 			if (tracked.hash === null) {
 				// Removal notices repeat the path, so they share the same budget as updated bodies.
-				const removalBytes = Buffer.byteLength(filePath);
-				if (files.length > 0 && updatedBytes + removalBytes > DEFAULT_MAX_BYTES) continue;
+				const removalBytes = Buffer.byteLength(filePath) + NOTICE_ENTRY_OVERHEAD_BYTES;
+				if (files.length > 0 && updatedBytes + removalBytes > DEFAULT_MAX_BYTES) {
+					deferred = true;
+					continue;
+				}
 				updatedBytes += removalBytes;
 				files.push({ path: filePath, hash: null });
 				removed.push(filePath);
@@ -448,8 +455,11 @@ export class ContextFileTracker {
 			// The step-boundary path appends this message without a size check, so one update shares a
 			// single read-sized budget. Files that do not fit stay undelivered and follow in the next update.
 			const content = boundContent(tracked.content ?? "");
-			const bytes = Buffer.byteLength(content) + Buffer.byteLength(filePath);
-			if (files.length > 0 && updatedBytes + bytes > DEFAULT_MAX_BYTES) continue;
+			const bytes = Buffer.byteLength(content) + Buffer.byteLength(filePath) + NOTICE_ENTRY_OVERHEAD_BYTES;
+			if (files.length > 0 && updatedBytes + bytes > DEFAULT_MAX_BYTES) {
+				deferred = true;
+				continue;
+			}
 			updatedBytes += bytes;
 			files.push({ path: filePath, hash: tracked.hash });
 			updated.push({ path: filePath, content });
@@ -461,7 +471,7 @@ export class ContextFileTracker {
 			content: prompt.render(contextFileUpdatePrompt, {
 				updated,
 				removed,
-				allRemoved: remaining + this.#unwatched === 0 && !this.#hasNestedContext(),
+				allRemoved: remaining + this.#unwatched === 0 && !this.#hasNestedContext() && !deferred,
 			}),
 			details: { files },
 			attribution: "agent",
