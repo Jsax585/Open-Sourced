@@ -177,7 +177,7 @@ let cancelExitCleanup: (() => void) | undefined;
  */
 export class AgentStorage {
 	#db: Database;
-	#authStore: AuthCredentialStore;
+	#authStore: SqliteAuthCredentialStore;
 
 	#listSettingsStmt: Statement;
 	#upsertModelUsageStmt: Statement;
@@ -422,7 +422,8 @@ FROM model_usage_legacy
 	 * Returns singleton instance for the given database path, creating if needed.
 	 * Retries on the `SQLITE_BUSY` family (including `SQLITE_BUSY_RECOVERY`) with
 	 * exponential backoff. Corrupt stores are quarantined and initialized once
-	 * from an empty replacement. See issue #2421.
+	 * from an empty replacement, and the credentials the preserved copy still
+	 * yields are restored into it. See issue #2421.
 	 * @param dbPath - Path to the SQLite database file (defaults to config path)
 	 * @returns AgentStorage instance for the given path
 	 */
@@ -431,18 +432,29 @@ FROM model_usage_legacy
 		if (existing) return existing;
 
 		fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
-		return openSqliteDatabase(
+		// Corruption recovery replaces the store with an empty one, and the preserved
+		// copy is then the only place its credentials exist. Capture where that copy
+		// landed and read the credentials back out of it.
+		const preserved: { backupPath?: string } = {};
+		const storage = await openSqliteDatabase(
 			dbPath,
 			db => {
-				const storage = new AgentStorage(db, dbPath);
+				const opened = new AgentStorage(db, dbPath);
 				// Publish synchronously: concurrent opens must reuse this handle before the helper yields.
 				// Exit-only cleanup keeps the connection valid for continuing sessions.
 				cancelExitCleanup ??= postmortem.register("agent-storage", () => AgentStorage.close(), { exitOnly: true });
-				instances.set(dbPath, storage);
-				return storage;
+				instances.set(dbPath, opened);
+				return opened;
 			},
-			{ recoverCorruption: true },
+			{
+				recoverCorruption: true,
+				onCorruptionPreserved: backupPath => {
+					preserved.backupPath = backupPath;
+				},
+			},
 		);
+		if (preserved.backupPath !== undefined) await storage.#authStore.recoverCredentialsFrom(preserved.backupPath);
+		return storage;
 	}
 
 	/** Flushes deferred writes, closes every process-wide database, and permits reopening them. */

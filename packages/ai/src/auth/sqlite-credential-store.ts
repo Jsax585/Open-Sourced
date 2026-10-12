@@ -4,7 +4,7 @@
  * The AuthCredentialStore contract lives in ./store so local and remote stores
  * share the same interface.
  */
-import type { Database, Statement } from "bun:sqlite";
+import { Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { authPolicyFor } from "@oh-my-pi/pi-catalog/compat/auth";
@@ -587,7 +587,11 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			await fs.mkdir(dir, { recursive: true, mode: 0o700 });
 		}
 
-		return openSqliteDatabase(
+		// Corruption recovery replaces the store with an empty one, and the
+		// preserved copy is then the only place its credentials exist. Capture
+		// where that copy landed and read the credentials back out of it.
+		const preserved: { backupPath?: string } = {};
+		const store = await openSqliteDatabase(
 			dbPath,
 			async db => {
 				try {
@@ -598,8 +602,15 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				SqliteAuthCredentialStore.#ensureAuthCredentialRefreshLeasesTable(db);
 				return new SqliteAuthCredentialStore(db);
 			},
-			{ recoverCorruption: true },
+			{
+				recoverCorruption: true,
+				onCorruptionPreserved: backupPath => {
+					preserved.backupPath = backupPath;
+				},
+			},
 		);
+		if (preserved.backupPath !== undefined) await store.recoverCredentialsFrom(preserved.backupPath);
+		return store;
 	}
 
 	static #ensureAuthCredentialRefreshLeasesTable(db: Database): void {
@@ -1293,6 +1304,89 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			results.push(toStoredAuthCredential(row, credential));
 		}
 		return results;
+	}
+
+	/**
+	 * Imports the active credentials a quarantined store still yields, so a
+	 * corrupted store no longer costs every provider login it held.
+	 *
+	 * Best-effort by design: the preserved copy is opened read-only and never
+	 * written, a copy whose schema page or credential table is itself unreadable
+	 * yields nothing, a credential the live store already holds is left alone so
+	 * the live row keeps winning, and no failure here can fail the caller's open.
+	 *
+	 * @param backupPath - Path of the quarantined copy (`<db>.corrupt-<ts>-<uuid>`).
+	 * @returns Number of credentials imported.
+	 */
+	async recoverCredentialsFrom(backupPath: string): Promise<number> {
+		let backup: Database | undefined;
+		try {
+			backup = new Database(backupPath, { readonly: true });
+			backup.run("PRAGMA busy_timeout = 250");
+		} catch (error) {
+			logger.warn("Could not open the preserved SQLite store to restore credentials", {
+				backupPath,
+				error: String(error),
+			});
+			return 0;
+		}
+		try {
+			const rows = backup
+				.query<AuthRow, []>(
+					"SELECT id, provider, credential_type, data, disabled_cause, identity_key FROM auth_credentials WHERE disabled_cause IS NULL ORDER BY id ASC",
+				)
+				.all();
+			let restored = 0;
+			let skipped = 0;
+			for (const row of rows) {
+				const credential = deserializeCredential(row);
+				if (!credential) {
+					skipped += 1;
+					continue;
+				}
+				// A credential the live store already holds outranks the preserved copy.
+				const active = (this.#listActiveByProviderStmt.all(row.provider) as AuthRow[]) ?? [];
+				const alreadyHeld = active.some(activeRow =>
+					matchesReplacementCredential(
+						row.provider,
+						deserializeCredential(activeRow),
+						resolveRowCredentialIdentityKey(row.provider, activeRow),
+						credential,
+					),
+				);
+				if (alreadyHeld) {
+					skipped += 1;
+					continue;
+				}
+				try {
+					await this.upsertAuthCredential(row.provider, credential);
+					restored += 1;
+				} catch (error) {
+					skipped += 1;
+					logger.warn("Could not restore a credential from the preserved SQLite store", {
+						backupPath,
+						provider: row.provider,
+						error: String(error),
+					});
+				}
+			}
+			if (restored > 0) {
+				logger.warn("Restored credentials from the preserved SQLite store", { backupPath, restored, skipped });
+			}
+			return restored;
+		} catch (error) {
+			// The credential table may be the damaged part; that copy then simply has
+			// nothing to give, and the replacement stays as it was initialized.
+			logger.warn("Could not read credentials from the preserved SQLite store", {
+				backupPath,
+				error: String(error),
+			});
+			return 0;
+		} finally {
+			try {
+				backup.close();
+			} catch {}
+		}
 	}
 
 	async listDisabledCredentials(provider?: string): Promise<DisabledCredentialSummary[]> {
