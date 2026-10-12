@@ -402,7 +402,7 @@ export const cfgTaskSoftRequestBudget = register({
 		group: "Subagents",
 		label: "Soft Subagent Request Budget",
 		description:
-			"Soft per-subagent request budget (assistant requests per run). Crossing it injects a wrap-up steering notice (see task.softRequestBudgetNotice); at 1.5x the budget the run is force-stopped and the agent must yield its partial findings. 0 disables the guard. An agent definition's `steps` can set a lower budget for that agent (bundled scout and sonic use 100), so a value below it still applies. A task.agentSoftRequestBudget entry replaces this budget for the agent it names.",
+			"Soft per-subagent request budget (assistant requests per run). Crossing it injects a wrap-up steering notice (see task.softRequestBudgetNotice); at 1.5x the budget the run is force-stopped and the agent must hand back its partial findings (through `yield` for structured runs, as a text report otherwise). 0 disables the guard. An agent definition's `steps` can set a lower budget for that agent (bundled scout and sonic use 100), so a value below it still applies. A task.agentSoftRequestBudget entry replaces this budget for the agent it names.",
 		options: [
 			{ value: "0", label: "Disabled" },
 			{ value: "90", label: "90 requests" },
