@@ -6544,7 +6544,7 @@ export class AgentSession implements SettingsScope {
 		return prompt.render(goalTodoContextPrompt, {
 			canCallTodoTool,
 			closed: String(closed),
-			dropped: dropped > 0 ? String(dropped) : "",
+			dropped: dropped > 0 ? String(dropped) : undefined,
 			open: String(open),
 			phases: promptPhases,
 			total: String(total),

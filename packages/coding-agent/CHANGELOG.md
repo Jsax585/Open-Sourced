@@ -11,6 +11,13 @@
 - Unverified merges no longer settle after read-only, status-masked, backgrounded, or out-of-tree checks ([#10054](https://github.com/can1357/oh-my-pi/pull/10054) by [@jroth1111](https://github.com/jroth1111)).
 - Verification results are matched to their merge and async job, so stale or duplicated completions cannot approve newer work ([#10054](https://github.com/can1357/oh-my-pi/pull/10054) by [@jroth1111](https://github.com/jroth1111)).
 
+### Fixed
+
+- Reintroduced TODOs remain completable after phase moves, and durable snapshots survive earlier prose headings ([#10053](https://github.com/can1357/oh-my-pi/pull/10053) by [@jroth1111](https://github.com/jroth1111)).
+- Keep user-cancelled TODOs out of remaining work and preserve task whitespace through compaction ([#10053](https://github.com/can1357/oh-my-pi/pull/10053) by [@jroth1111](https://github.com/jroth1111)).
+
+- Durable incomplete-todo snapshots round-trip empty fields and Unicode separators and preserve cancellation provenance across phase renames ([#10053](https://github.com/can1357/oh-my-pi/pull/10053) by [@jroth1111](https://github.com/jroth1111)).
+- Incomplete-todo durable snapshots preserve blocked tasks and encode CRLF/CR/LF distinctly ([#10053](https://github.com/can1357/oh-my-pi/pull/10053) by [@jroth1111](https://github.com/jroth1111)).
 ## [18.3.1] - 2026-09-25
 
 ### Added
@@ -1438,6 +1445,16 @@
 - Fixed `lsp diagnostics` incorrectly reporting success for project-aware pull-diagnostic servers when diagnostics time out or fail.
 - Corrected labels under `Settings > Context > Compaction Token Limit`.
 - Fixed orphaned pages, iframes, and workers accumulating in the shared headless browser after abnormal OMP session termination.
+### Fixed
+
+- Compaction’s durable `## Incomplete Todos` section is uncapped and includes model-abandoned items (not user drops), with newline-safe titles, so reconstruction after compact cannot permanently drop overflow or model abandons; summarizer/nudge prompts stay capped. Compaction no longer reloads todos from the branch before writing leftovers, so a live RPC `set_todos` cache stays authoritative.
+- Compaction summaries keep a capped `## Incomplete Todos` section (and summarizer extra-context) so pending/in_progress items survive the cut and can be reconstructed after the latest todo tool result is summarized away (ported from [#8875](https://github.com/can1357/oh-my-pi/pull/8875) / [#8874](https://github.com/can1357/oh-my-pi/issues/8874)).
+
+- `/todo` slash and TUI mutations always use the live session todo cache (including an explicit empty list after RPC `set_todos([])`), so a host clear is not resurrected from a stale branch snapshot.
+- Model-facing `todo` docs state that model `rm` abandons in place (like `drop`); only user `/todo rm` deletes.
+- Dropped todos (`todo drop` / `abandoned`) no longer count as done for the stop-time reminder or the todo summary. Settle stays incomplete until those items are completed, blocked, or the user forces stop. User-issued `/todo drop` is stamped as user-authored and does not schedule a continue reminder. Newly abandoned checklist items from `/todo edit` or a fresh markdown import are stamped as user drops; a no-op edit of model-abandoned items stays incomplete for settle. Imports stamp every `[-]`/`[~]` as a user cancel even when replacing a list that already held a model drop with the same content. Later model broad drops no longer clear an existing user `droppedBy` stamp, and no longer reopen completed or blocked tasks; an explicit targeted `todo({ op: "drop", task })` can still abandon blocked or completed work. Model `todo rm` abandons open tasks in place (not completed/blocked/user-dropped), so it cannot silence the same gate; user `/todo rm` still deletes. User-authored drops also count as settled for HUD auto-clear. RPC `set_todos` stamps abandoned provenance against the prior list without stripping phase/task ids, notes, or details. Markdown export escapes literal `<!--`/`-->` in task text (ampersand-first so pre-escaped `&lt;!--`/`--&gt;` round-trip) so content cannot fake provenance comments; edit and Cursor sync match provenance by phase/occurrence FIFO for every status (not only abandoned lookups) so a leading non-abandoned duplicate cannot turn a later model drop into a user cancel on a no-op save. ACP plan updates from todo tool results map user-canceled abandons to completed while model drops stay pending.
+- `AgentStorage.close()` is idempotent: a second process-wide close no longer throws `Database has closed` when tests (or overlapping sessions) race the singleton map, and storage can be reopened for read/write afterward. A failed mid-close (e.g. real `SQLITE_IOERR_WRITE` from checkpoint) resets the closing guard so a retry can finish cleanup. Compile-backed tests skip only when `OMP_SKIP_COMPILED_BINARY_TESTS` marks the env unsupported; CI no longer auto-skips on a failed compile probe.
+- Dropped todos (`todo drop` / `abandoned`) no longer count as done for the stop-time reminder or the todo summary. Settle stays incomplete until those items are completed, blocked, or the user forces stop. User-issued `/todo drop` is stamped as user-authored and does not schedule a continue reminder. Checklist `[-]`/`[~]` items from `/todo edit` or markdown import are also treated as user drops. Later model broad drops no longer clear an existing user `droppedBy` stamp. Model `todo rm` abandons in place instead of deleting, so it cannot silence the same gate; user `/todo rm` still deletes.
 
 ## [18.0.10] - 2026-08-28
 
