@@ -16,6 +16,7 @@ import {
 	buildNpmInstallArgs,
 	buildRenameCleanupPackages,
 	downloadVerifiedBinary,
+	isSameInstall,
 	type InstalledVersionVerification,
 	managedInstallName,
 	type ManagerUpdateSteps,
@@ -37,8 +38,8 @@ import {
 	updateViaManager,
 	updateViaShimTakeover,
 } from "@oh-my-pi/pi-coding-agent/cli/update-cli";
+import { TempDir, VERSION, $which, removeWithRetries } from "@oh-my-pi/pi-utils";
 import Update from "@oh-my-pi/pi-coding-agent/commands/update";
-import { VERSION, $which, removeWithRetries } from "@oh-my-pi/pi-utils";
 import type { CliConfig } from "@oh-my-pi/pi-utils/cli";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 
@@ -1847,6 +1848,21 @@ describe("update-cli manager update recovery", () => {
 	});
 });
 
+describe("isSameInstall", () => {
+	it("matches launcher symlinks to the running entry and rejects other or missing paths", async () => {
+		using tempDir = TempDir.createSync("@omp-same-install-");
+		const entry = tempDir.join("cli.ts");
+		const launcher = tempDir.join("omp");
+		const other = tempDir.join("other");
+		await Bun.write(entry, "");
+		await Bun.write(other, "");
+		nodeFs.symlinkSync(entry, launcher);
+
+		expect(isSameInstall(launcher, entry)).toBe(true);
+		expect(isSameInstall(other, entry)).toBe(false);
+		expect(isSameInstall(tempDir.join("missing"), entry)).toBe(false);
+	});
+});
 describe("autoInstallStartupUpdate", () => {
 	it("falls back when the update command rejects", async () => {
 		const installedVersion = vi.fn(async () => "999.0.0");

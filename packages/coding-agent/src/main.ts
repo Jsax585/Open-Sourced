@@ -5,6 +5,7 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 import * as fsSync from "node:fs";
+import * as path from "node:path";
 import * as os from "node:os";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core/utils/yield";
@@ -34,6 +35,7 @@ import {
 	validateGoalStartup,
 	validateToolNames,
 } from "./cli/args";
+import { withAbsoluteCwd } from "./cli/flag-tables";
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
@@ -44,10 +46,12 @@ import { applyStartupCwd } from "./cli/startup-cwd";
 import {
 	autoInstallStartupUpdate,
 	getLatestRelease,
+	isSameInstall,
 	isSourceCheckout,
 	managedInstallName,
 	reportedVersionAtPath,
 } from "./cli/update-cli";
+import { relaunch } from "./cli/relaunch";
 import { findConfigFile } from "./config";
 import { ModelRegistry } from "./config/model-registry";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
@@ -261,13 +265,13 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 
 /**
  * `update.autoInstall`: install `newVersion` before the TUI opens, then exec into the
- * updated launcher with the same argv. Returns only when nothing was installed;
- * startup then continues on the running version and the "Update Available"
- * banner still shows.
+ * updated launcher only when `omp` on PATH resolves to this running install. Returns
+ * when nothing was installed; startup then continues on the running version and the
+ * "Update Available" banner still shows.
  */
 async function autoInstallAndRelaunch(newVersion: string): Promise<void> {
 	const ompPath = $which(APP_NAME);
-	if (!ompPath) return;
+	if (!ompPath || !isSameInstall(ompPath, isCompiledBinary() ? process.execPath : Bun.main)) return;
 
 	stopPendingStartupComposer();
 	pauseStartupWatchdog();
@@ -278,34 +282,18 @@ async function autoInstallAndRelaunch(newVersion: string): Promise<void> {
 				stdin: "inherit",
 				stdout: "inherit",
 				stderr: "inherit",
+				env: { ...process.env, PI_CONFIG_FILES: settings.getConfigFiles().join(path.delimiter) },
 			}).exited,
 		installedVersion: () => reportedVersionAtPath(ompPath),
 	});
-	resumeStartupWatchdog();
-	if (!updated) return;
+	if (!updated) {
+		resumeStartupWatchdog();
+		return;
+	}
+	stopStartupWatchdog();
 
-	const cmd = [ompPath, ...process.argv.slice(2)];
-	await postmortem.cleanup();
-	await postmortem.drainStdout();
-	if (process.platform !== "win32") {
-		try {
-			// Keep the platform-specific native addon off the cold-start path.
-			(await import("@oh-my-pi/pi-natives")).execReplace(cmd);
-		} catch (err) {
-			process.stderr.write(`${chalk.red(`Relaunch exec failed: ${err instanceof Error ? err.message : err}`)}\n`);
-		}
-	}
-	try {
-		const child = Bun.spawn(cmd, {
-			stdin: "inherit",
-			stdout: "inherit",
-			stderr: "inherit",
-		});
-		await postmortem.quit(await child.exited);
-	} catch (err) {
-		process.stderr.write(`${chalk.red(`Relaunch failed: ${err instanceof Error ? err.message : err}`)}\n`);
-		await postmortem.quit(1);
-	}
+	const cmd = [ompPath, ...withAbsoluteCwd(process.argv.slice(2), getProjectDir())];
+	await relaunch(cmd, "Relaunch");
 }
 
 // Protocol hosts inherit OMP's neutral defaults for settings declaring `protocolDefault`
@@ -1926,7 +1914,7 @@ export async function runRootCommand(
 			? checkForNewVersion(VERSION).catch(() => undefined)
 			: Promise.resolve(undefined);
 		if (isInteractive && cfgUpdateAutoInstall.get(settingsInstance)) {
-			const newVersion = await versionCheckPromise;
+			const newVersion = await logger.time("autoInstall:updateCheck", () => versionCheckPromise);
 			if (newVersion) await autoInstallAndRelaunch(newVersion);
 		}
 		// Process-lifetime: broker/account-policy edits reconfigure the shared credential store.

@@ -426,3 +426,28 @@ export function restartArgv(
 	if (resumeSessionId !== undefined) kept.push("--resume", resumeSessionId);
 	return kept;
 }
+
+/**
+ * Replace launch `--cwd` options before `--` with one absolute `--cwd`.
+ * The startup chdir has already applied a relative value, so replaying it would
+ * resolve that value again from the changed directory.
+ */
+export function withAbsoluteCwd(argv: string[], cwd: string): string[] {
+	const kept: string[] = [];
+	let found = false;
+	for (let i = 0; i < argv.length; i++) {
+		const arg = argv[i];
+		if (arg === "--") {
+			kept.push(...argv.slice(i));
+			break;
+		}
+		if (arg === "--cwd" || arg.startsWith("--cwd=")) {
+			found = true;
+			if (arg === "--cwd") i++;
+			continue;
+		}
+		kept.push(arg);
+		if (arg.startsWith("-") && flagConsumesValue(arg, argv[i + 1])) kept.push(argv[++i]);
+	}
+	return found ? ["--cwd", cwd, ...kept] : argv;
+}

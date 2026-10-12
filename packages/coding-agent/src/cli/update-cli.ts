@@ -371,6 +371,12 @@ function tryRealpath(p: string): string | undefined {
 	}
 }
 
+/** Whether `launcherPath` resolves to the same file as `runningEntry`. */
+export function isSameInstall(launcherPath: string, runningEntry: string): boolean {
+	const real = tryRealpath(launcherPath);
+	return real !== undefined && real === tryRealpath(runningEntry);
+}
+
 /**
  * Whether this omp runs from a source checkout (the dev launcher or a `bun link` of
  * `src/cli.ts`) rather than a compiled binary or a package-manager install, which

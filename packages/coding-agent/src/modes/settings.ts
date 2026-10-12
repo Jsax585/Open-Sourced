@@ -1132,7 +1132,7 @@ export const cfgUpdateAutoInstall = register({
 		group: "Startup & Updates",
 		label: "Auto-Install Updates",
 		description:
-			"On startup, install a newer omp before the session opens and relaunch into it. Requires Check for Updates; failures fall back to the running version",
+			"On startup, wait for the update check (up to 5s), install a newer omp before the session opens, and relaunch into it. Requires Check for Updates and that the omp on PATH is this install; failures fall back to the running version",
 	},
 });
 

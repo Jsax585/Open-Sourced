@@ -15,7 +15,7 @@ import {
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
-import { execReplace } from "@oh-my-pi/pi-natives";
+import { relaunch } from "../cli/relaunch";
 import type {
 	AutocompleteProvider,
 	Component,
@@ -6945,26 +6945,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		const cmd = [...resolveCliEntryCmd(), ...restartArgv(process.argv.slice(2), this.#resumableSessionId())];
-		await postmortem.cleanup();
-		await postmortem.drainStdout();
-		if (process.platform !== "win32") {
-			try {
-				execReplace(cmd); // never returns on success
-			} catch (err) {
-				process.stderr.write(`${chalk.red(`Restart exec failed: ${err instanceof Error ? err.message : err}`)}\n`);
-			}
-		}
-		try {
-			const child = Bun.spawn(cmd, {
-				stdin: "inherit",
-				stdout: "inherit",
-				stderr: "inherit",
-			});
-			await postmortem.quit(await child.exited);
-		} catch (err) {
-			process.stderr.write(`${chalk.red(`Restart spawn failed: ${err instanceof Error ? err.message : err}`)}\n`);
-			await postmortem.quit(1);
-		}
+		await relaunch(cmd, "Restart");
 	}
 
 	/**
