@@ -7120,6 +7120,7 @@ dependencies = [
  "futures",
  "gix",
  "gix-utils",
+ "globset",
  "jj-lib",
  "libc",
  "pi-iso",

@@ -6,6 +6,10 @@
 
 - Added `task.agentSoftRequestBudget` to give named subagents their own soft request budget, so a long-running agent can get more requests (or `0` for no guard) while scout, sonic and other agents keep theirs ([#15419](https://github.com/can1357/oh-my-pi/pull/15419) by [@will-bogusz](https://github.com/will-bogusz))
 
+### Fixed
+
+- Fixed clone-first `git worktree add` copying secret-shaped files (`.env`, `*.pem`, `*.p12`, `*.jks`, `*.keystore`, `key.properties`, `*.mobileprovision`) into every new worktree. They are now pruned from the fresh clone; customize with the new `worktree.cloneExclude` setting (or `PI_WORKTREE_CLONE_EXCLUDE` for the shell builtin), set it to `[]` for the old behavior. Tracked files are never pruned ([#15476](https://github.com/can1357/oh-my-pi/issues/15476))
+
 ## [18.10.2] - 2026-10-12
 
 ### Added

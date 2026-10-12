@@ -8,6 +8,11 @@
 //! - `PI_GIT_GUARD`: commands that discard or move work in a shared checkout
 //!   are refused before git runs; see [`guard`].
 //!
+//! - `PI_WORKTREE_CLONE_EXCLUDE`: comma-separated glob patterns for files the
+//!   clone-first `git worktree add` must not carry into the new worktree.
+//!   Unset selects the default secret-shaped excludes; empty disables
+//!   exclusion entirely.
+//!
 //! `git worktree add` checks out every file of the target commit. pi-vcs
 //! instead copy-on-write clones the source checkout (APFS `clonefile`, Linux
 //! reflinks, Windows block cloning), registers the worktree metadata, and
@@ -453,6 +458,23 @@ fn long_option(spelled: &str) -> Option<(&'static str, bool)> {
 	prefixed.next().is_none().then_some((option, negated))
 }
 
+/// Reads `PI_WORKTREE_CLONE_EXCLUDE` for the clone-first `git worktree add`
+/// path: unset selects the default secret-shaped excludes, empty disables
+/// exclusion, otherwise a comma-separated list of glob patterns.
+fn clone_exclude_from_env() -> Option<Vec<String>> {
+	match std::env::var("PI_WORKTREE_CLONE_EXCLUDE") {
+		Err(_) => None,
+		Ok(value) if value.trim().is_empty() => Some(Vec::new()),
+		Ok(value) => Some(
+			value
+				.split(',')
+				.map(|pattern| pattern.trim().to_string())
+				.filter(|pattern| !pattern.is_empty())
+				.collect(),
+		),
+	}
+}
+
 /// What the builtin did with a `worktree add` request.
 enum Outcome {
 	/// Not reproducible in-process; the git binary runs instead.
@@ -488,9 +510,10 @@ impl Plan {
 		self
 			.repo
 			.worktree_add(&self.path, &self.target, WorktreeAddOptions {
-				detach:       self.detach,
-				clone:        WorktreeClone::Auto,
-				keep_changes: false,
+				detach:        self.detach,
+				clone:         WorktreeClone::Auto,
+				keep_changes:  false,
+				clone_exclude: clone_exclude_from_env(),
 			})?;
 		let linked = GitRepo::require(&self.path)?;
 		if let Some(reason) = &self.lock {
@@ -913,6 +936,52 @@ mod tests {
 			.expect("post-checkout ran");
 		assert_eq!(hook_log.trim(), format!("{} {head} 1 {}", "0".repeat(head.len()), wt.display()));
 		assert_cloned(&wt);
+	}
+
+	/// Clone-first `git worktree add` through the shell must not duplicate
+	/// secret-shaped files into the new worktree, while ignored build caches
+	/// still carry over and tracked files matching an exclude pattern survive.
+	/// Regression test for <https://github.com/can1357/oh-my-pi/issues/15476>.
+	///
+	/// Needs a copy-on-write-capable filesystem for the temp dir (APFS on
+	/// macOS; on Linux a reflink-capable `TMPDIR` such as btrfs) — otherwise
+	/// the clone falls back to a plain checkout and there is no clone-first
+	/// path to assert on.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn worktree_add_clone_prunes_secrets() {
+		let (_temp, repo) = fixture();
+		std::fs::write(repo.join(".gitignore"), "cache/\n**/.env*\n").expect("write gitignore");
+		std::fs::write(repo.join(".env"), "SECRET=1\n").expect("write .env");
+		std::fs::create_dir_all(repo.join("apps/web")).expect("create apps/web");
+		std::fs::write(repo.join("apps/web/.env.production"), "SECRET=2\n").expect("write nested secret");
+		std::fs::write(repo.join(".env.example"), "EXAMPLE=1\n").expect("write .env.example");
+		git(&repo, &["add", "-f", ".env.example"]);
+		git(&repo, &["commit", "-q", "-m", "track .env.example"]);
+
+		let (code, output) = run(&repo, "git worktree add ../wt-secrets").await;
+		assert_eq!(code, Some(0), "{output}");
+		let wt = repo.parent().expect("parent").join("wt-secrets");
+		if !wt.join("cache/blob").exists() {
+			eprintln!(
+				"SKIP: no working clone backend for the temp dir; clone fell back to plain checkout"
+			);
+			return;
+		}
+		// The clone path ran: ignored build cache carried over...
+		assert_eq!(
+			std::fs::read_to_string(wt.join("cache/blob")).expect("cloned cache"),
+			"warm"
+		);
+		// ...but secret-shaped files were pruned from the fresh clone.
+		assert!(!wt.join(".env").exists(), "clone must not copy .env");
+		assert!(
+			!wt.join("apps/web/.env.production").exists(),
+			"clone must not copy nested secrets"
+		);
+		// Tracked files matching an exclude pattern are never pruned.
+		assert!(wt.join(".env.example").exists(), "tracked exclude matches must survive");
+		assert_eq!(git(&wt, &["status", "--porcelain"]), "");
 	}
 
 	/// Detaching at a tag, checking out an existing branch, resetting one with

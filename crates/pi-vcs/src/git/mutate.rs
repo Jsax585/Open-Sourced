@@ -19,6 +19,7 @@ use super::{
 	read::literal_pathspec,
 };
 use crate::{
+	clone_exclude::{CloneExcludeMatcher, prune_clone_excludes},
 	error::{Error, Result},
 	types::{
 		CleanOptions, CommitAuthor, CommitOptions, DetachGitDirResult, ResetMode, RestoreOptions,
@@ -648,7 +649,7 @@ impl GitRepo {
 		let mut clone_error = None;
 		if let Some(preferred) = preferred {
 			for kind in pi_iso::clone_candidates(preferred) {
-				match self.worktree_add_cloned(path, id, &head, kind, options.keep_changes) {
+				match self.worktree_add_cloned(path, id, &head, kind, options.keep_changes, options.clone_exclude.clone()) {
 					Ok(()) => {
 						return Ok(WorktreeAddResult { cloned_with: Some(kind), clone_error });
 					},
@@ -752,6 +753,7 @@ impl GitRepo {
 		head: &str,
 		kind: pi_iso::BackendKind,
 		keep_changes: bool,
+		clone_exclude: Option<Vec<String>>,
 	) -> Result<()> {
 		let repo = self.gix()?;
 		for key in ["core.sparseCheckout", "core.splitIndex"] {
@@ -769,6 +771,14 @@ impl GitRepo {
 		pi_iso::backend(kind)
 			.clone_tree(self.root(), path, &[OsStr::new(".git")])
 			.map_err(|err| Error::backend("git worktree add", err))?;
+		// Copy-on-write backends clone whole directory trees atomically, so
+		// secret-shaped files below the top level cannot be skipped during
+		// the clone. Prune them from the fresh clone instead: cheap on CoW
+		// filesystems, and the source checkout is untouched. Tracked files
+		// are never pruned, whatever the patterns say.
+		let matcher = CloneExcludeMatcher::resolve(clone_exclude)?;
+		let index = load_index_or_empty(&repo, "git worktree add")?;
+		prune_clone_excludes(path, &index, &matcher)?;
 		let admin = register_worktree(path, &self.info().common_dir, head)?;
 		fs::copy(&source_index, admin.join("index"))?;
 
@@ -2397,6 +2407,7 @@ mod tests {
 				detach:       true,
 				clone:        WorktreeClone::Off,
 				keep_changes: false,
+				clone_exclude: None,
 			})
 			.unwrap();
 		assert_eq!(fs::read_to_string(linked.join("a")).unwrap(), "main\r\n");
@@ -2647,6 +2658,7 @@ mod tests {
 				detach:       true,
 				clone:        WorktreeClone::Off,
 				keep_changes: false,
+				clone_exclude: None,
 			})
 			.unwrap();
 		let common = fs::canonicalize(repo.info().common_dir.clone()).unwrap();
@@ -2677,6 +2689,7 @@ mod tests {
 				detach:       true,
 				clone:        WorktreeClone::Off,
 				keep_changes: false,
+				clone_exclude: None,
 			})
 			.unwrap();
 
@@ -2721,6 +2734,7 @@ mod tests {
 				detach:       false,
 				clone:        WorktreeClone::Auto,
 				keep_changes: false,
+				clone_exclude: None,
 			})
 			.unwrap();
 
@@ -2758,6 +2772,7 @@ mod tests {
 		let _ = repo.worktree_remove(&linked, true);
 	}
 
+
 	/// Whether any host-available clone backend can actually clone a tree
 	/// on `dir`'s filesystem. `pi_iso::clone_candidates` is a host-level
 	/// probe only: Linux reports reflink support even when the temp dir
@@ -2778,6 +2793,162 @@ mod tests {
 		works
 	}
 
+	/// Clone-first `git worktree add` must not duplicate secret-shaped files
+	/// into the new worktree, while ignored build caches still carry over and
+	/// tracked files matching an exclude pattern survive. Regression test
+	/// for <https://github.com/can1357/oh-my-pi/issues/15476>.
+	#[test]
+	fn clone_first_worktree_prunes_secret_shaped_files() {
+		let (temp, repo) = fixture();
+		if !clone_works_on(temp.path()) {
+			eprintln!("SKIP: no working clone backend on the temp dir's filesystem");
+			return;
+		}
+		let root = temp.path();
+		// Ignored secrets: top-level and nested. The nested one is the case
+		// the top-level-only `clone_tree` skip list cannot express.
+		fs::write(root.join(".gitignore"), "build/\n**/.env*\n").unwrap();
+		fs::write(root.join(".env"), "SECRET=1\n").unwrap();
+		fs::create_dir_all(root.join("apps/web")).unwrap();
+		fs::write(root.join("apps/web/.env.production"), "SECRET=2\n").unwrap();
+		fs::create_dir_all(root.join("build")).unwrap();
+		fs::write(root.join("build/out.txt"), "ignored\n").unwrap();
+		// Tracked file matching an exclude pattern: the prune must not touch
+		// it, or the new worktree's index would claim a file not on disk.
+		fs::write(root.join(".env.example"), "EXAMPLE=1\n").unwrap();
+		git(root, &["add", "-f", ".env.example", ".gitignore"]);
+		git(root, &["commit", "-qm", "track example"]);
+
+		let linked = root.join("../linked-clone-prune");
+		let _ = fs::remove_dir_all(&linked);
+		let result = repo
+			.worktree_add(&linked, "main", WorktreeAddOptions {
+				detach:        false,
+				clone:         WorktreeClone::Auto,
+				keep_changes:  false,
+				clone_exclude: None,
+			})
+			.unwrap();
+		assert!(result.cloned_with.is_some(), "clone_works_on said the clone would engage");
+
+		// Ignored build caches still carry over...
+		assert_eq!(fs::read_to_string(linked.join("build/out.txt")).unwrap(), "ignored\n");
+		// ...but secret-shaped files are pruned from the fresh clone.
+		assert!(!linked.join(".env").exists(), "clone must not copy .env");
+		assert!(
+			!linked.join("apps/web/.env.production").exists(),
+			"clone must not copy nested secrets"
+		);
+		// Tracked files matching an exclude pattern are never pruned.
+		assert!(linked.join(".env.example").exists(), "tracked exclude matches must survive");
+		// The new worktree is otherwise exactly the target tree.
+		let linked_repo = GitRepo::require(&linked).unwrap();
+		let gix = linked_repo.gix().unwrap();
+		let mut status = status_with_fresh_index(&gix, "git status")
+			.unwrap()
+			.untracked_files(gix::status::UntrackedFiles::Files)
+			.into_iter(std::iter::empty::<BString>())
+			.unwrap();
+		assert!(status.next().is_none(), "worktree must be clean");
+		let _ = repo.worktree_remove(&linked, true);
+	}
+
+	/// Plain recursive copy of `src` into `dst`, skipping `.git` and `dst`
+	/// itself: what the copy-on-write clone leaves behind for the prune to
+	/// process.
+	#[cfg(test)]
+	fn copy_tree_except_git(src: &Path, dst: &Path) {
+		fs::create_dir_all(dst).unwrap();
+		for entry in fs::read_dir(src).unwrap() {
+			let entry = entry.unwrap();
+			let name = entry.file_name();
+			if name == ".git" {
+				continue;
+			}
+			let from = entry.path();
+			// Don't recurse into the destination when it lives under src.
+			if from == *dst {
+				continue;
+			}
+			let to = dst.join(&name);
+			let file_type = entry.file_type().unwrap();
+			if file_type.is_dir() {
+				copy_tree_except_git(&from, &to);
+			} else if file_type.is_symlink() {
+				let target = fs::read_link(&from).unwrap();
+				#[cfg(unix)]
+				std::os::unix::fs::symlink(&target, &to).unwrap();
+				#[cfg(windows)]
+				if from.is_dir() {
+					std::os::windows::fs::symlink_dir(&target, &to).unwrap();
+				} else {
+					std::os::windows::fs::symlink_file(&target, &to).unwrap();
+				}
+			} else {
+				fs::copy(&from, &to).unwrap();
+			}
+		}
+	}
+
+	/// `prune_clone_excludes` deletes secret-shaped files from a cloned tree
+	/// while keeping build caches and tracked files that match an exclude
+	/// pattern. Deterministic on any filesystem, unlike the end-to-end test
+	/// above: the clone mechanism itself is orthogonal to the prune.
+	#[test]
+	fn prune_clone_excludes_keeps_caches_and_tracked_matches() {
+		let (temp, repo) = fixture();
+		let root = temp.path();
+		fs::write(root.join(".gitignore"), "build/\n**/.env*\n").unwrap();
+		fs::write(root.join(".env"), "SECRET=1\n").unwrap();
+		fs::create_dir_all(root.join("apps/web")).unwrap();
+		fs::write(root.join("apps/web/.env.production"), "SECRET=2\n").unwrap();
+		fs::create_dir_all(root.join("build")).unwrap();
+		fs::write(root.join("build/out.txt"), "ignored\n").unwrap();
+		fs::write(root.join(".env.example"), "EXAMPLE=1\n").unwrap();
+		#[cfg(unix)]
+		{
+			// A symlinked secret: the link itself must go, the target must
+			// never be followed.
+			fs::write(root.join("shared.env"), "SHARED=1\n").unwrap();
+			std::os::unix::fs::symlink("shared.env", root.join("apps/web/.env")).unwrap();
+		}
+		git(root, &["add", "-f", ".env.example", ".gitignore"]);
+		git(root, &["commit", "-qm", "track example"]);
+
+		let clone = root.join("prune-clone");
+		copy_tree_except_git(root, &clone);
+
+		let gix = repo.gix().unwrap();
+		let index = load_index_or_empty(&gix, "git worktree add").unwrap();
+		let matcher = CloneExcludeMatcher::resolve(None).unwrap();
+		prune_clone_excludes(&clone, &index, &matcher).unwrap();
+
+		// Ignored secrets are pruned, top-level and nested...
+		assert!(!clone.join(".env").exists(), "ignored .env must be pruned");
+		assert!(
+			!clone.join("apps/web/.env.production").exists(),
+			"nested ignored secret must be pruned"
+		);
+		// ...ignored build caches are kept...
+		assert_eq!(
+			fs::read_to_string(clone.join("build/out.txt")).unwrap(),
+			"ignored\n",
+			"caches are kept"
+		);
+		// ...tracked files matching an exclude pattern are never pruned...
+		assert!(
+			clone.join(".env.example").exists(),
+			"tracked exclude matches must survive"
+		);
+		assert!(clone.join("a").exists(), "tracked files are kept");
+		#[cfg(unix)]
+		{
+			// ...and symlinks are unlinked, never followed.
+			assert!(!clone.join("apps/web/.env").exists(), "symlinked secret must be unlinked");
+			assert!(clone.join("shared.env").exists(), "symlink target must be untouched");
+		}
+	}
+
 	#[test]
 	fn clone_first_worktree_at_source_head_needs_no_checkout() {
 		let (temp, repo) = fixture();
@@ -2790,6 +2961,7 @@ mod tests {
 				detach:       false,
 				clone:        WorktreeClone::Auto,
 				keep_changes: false,
+				clone_exclude: None,
 			})
 			.unwrap();
 		if clone_works {
@@ -2833,6 +3005,7 @@ mod tests {
 					detach: false,
 					clone,
 					keep_changes: true,
+					clone_exclude: None,
 				})
 				.unwrap();
 			if clone == WorktreeClone::Off {
@@ -2860,7 +3033,7 @@ mod tests {
 			let rejected = repo.worktree_add(
 				&temp.path().join("../linked-keep-rejected"),
 				"HEAD~1",
-				WorktreeAddOptions { detach: true, clone, keep_changes: true },
+				WorktreeAddOptions { detach: true, clone, keep_changes: true, clone_exclude: None },
 			);
 			assert!(rejected.is_err(), "keep_changes must require the source HEAD as target");
 			let _ = repo.worktree_remove(&linked, true);
@@ -2893,6 +3066,7 @@ mod tests {
 					detach: false,
 					clone,
 					keep_changes: true,
+					clone_exclude: None,
 				})
 				.unwrap();
 			if clone == WorktreeClone::Off {
@@ -2921,6 +3095,7 @@ mod tests {
 				detach:       true,
 				clone:        WorktreeClone::Off,
 				keep_changes: false,
+				clone_exclude: None,
 			})
 			.unwrap();
 		assert!(
@@ -2936,6 +3111,7 @@ mod tests {
 				detach:       true,
 				clone:        WorktreeClone::Off,
 				keep_changes: false,
+				clone_exclude: None,
 			})
 			.unwrap();
 		let common = fs::canonicalize(repo.info().common_dir.clone()).unwrap();
