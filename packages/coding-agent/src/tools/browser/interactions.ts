@@ -661,7 +661,7 @@ export async function uploadFilesToElement(
 		const data = Buffer.from(await file.arrayBuffer()).toString("base64");
 		files.push({ name: path.basename(absolute), type: file.type || "application/octet-stream", data });
 	}
-	await untilAborted(signal, () =>
+	const accepted = await untilAborted(signal, () =>
 		handle.evaluate((el, payloads) => {
 			const element = el as unknown as PageElement;
 			const page = globalThis as unknown as PageGlobals;
@@ -670,13 +670,20 @@ export async function uploadFilesToElement(
 				const bytes = Uint8Array.from(atob(payload.data), character => character.charCodeAt(0));
 				transfer.items.add(new page.File([bytes], payload.name, { type: payload.type }));
 			}
+			// A drop zone cancels dragover or drop; dispatchEvent returns false once a listener did.
+			let canceled = false;
 			for (const type of ["dragenter", "dragover", "drop"]) {
-				element.dispatchEvent(
-					new page.DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }),
-				);
+				const event = new page.DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer });
+				if (!element.dispatchEvent(event) && type !== "dragenter") canceled = true;
 			}
+			return canceled;
 		}, files),
 	);
+	if (!accepted) {
+		throw new ToolError(
+			`${label} opened no file chooser and did not accept a file drop; target the page's <input type=file>, the control that opens the chooser, or its drop zone`,
+		);
+	}
 }
 
 /** Press a keyboard key without releasing it. */

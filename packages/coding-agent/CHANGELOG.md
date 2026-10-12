@@ -6,6 +6,10 @@
 
 - Added `task.agentSoftRequestBudget` to give named subagents their own soft request budget, so a long-running agent can get more requests (or `0` for no guard) while scout, sonic and other agents keep theirs ([#15419](https://github.com/can1357/oh-my-pi/pull/15419) by [@will-bogusz](https://github.com/will-bogusz))
 
+### Fixed
+
+- Browser `uploadFile` in Chrome fails on an element that neither opens a file chooser nor accepts a drop, instead of reporting success with no file attached
+
 ## [18.10.2] - 2026-10-12
 
 ### Added
