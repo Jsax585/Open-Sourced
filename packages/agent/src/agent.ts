@@ -1338,9 +1338,9 @@ export class Agent {
 		try {
 			listener();
 		} catch (err) {
-				logger.warn("Agent history-replaced listener threw", {
-					error: err instanceof Error ? err.message : String(err),
-				});
+			logger.warn("Agent history-replaced listener threw", {
+				error: err instanceof Error ? err.message : String(err),
+			});
 		}
 	}
 
@@ -1351,7 +1351,7 @@ export class Agent {
 		this.#cancelQueuedMessagePreparation("followUp");
 		this.#notifySteeringWaiters();
 		this.#emitQueueChanged();
-			this.#emitHistoryReplaced();
+		this.#emitHistoryReplaced();
 	}
 
 	/**
@@ -1583,6 +1583,7 @@ export class Agent {
 
 	clearMessages() {
 		this.#state.messages.length = 0;
+		this.#emitHistoryReplaced();
 	}
 
 	abort(reason?: unknown) {
@@ -1630,6 +1631,7 @@ export class Agent {
 		this.#state.pendingToolCalls.clear();
 		this.#state.error = undefined;
 		this.clearAllQueues();
+		this.#emitHistoryReplaced();
 	}
 
 	/** Send a prompt with an AgentMessage */
