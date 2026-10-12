@@ -13592,7 +13592,7 @@ export class AgentSession implements SettingsScope {
 	 */
 	async setAmbientContextFiles(
 		files: readonly ContextFileEntry[],
-		options?: { diskBacked?: boolean; nestedDiscovery?: boolean },
+		options?: { diskBacked?: boolean; virtualPaths?: ReadonlySet<string>; nestedDiscovery?: boolean },
 	): Promise<void> {
 		await this.#contextFiles.setAmbientFiles(files, options);
 	}

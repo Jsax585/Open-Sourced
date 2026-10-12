@@ -4700,7 +4700,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			(options.systemPrompt !== undefined && typeof options.systemPrompt !== "function") ||
 			$env.NULL_PROMPT === "true";
 		await session.setAmbientContextFiles(promptIsFixed ? [] : (promptContextFiles ?? contextFiles), {
-			diskBacked: options.contextFiles === undefined,
+			// Only entries the caller supplied may lack a file; anything else came from disk discovery.
+			diskBacked: true,
+			virtualPaths: new Set((options.contextFiles ?? []).map(file => path.resolve(file.path))),
 			nestedDiscovery: !promptIsFixed,
 		});
 		// Hashline snapshots are session-scoped: /new and switchSession fire the

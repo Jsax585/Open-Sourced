@@ -117,6 +117,13 @@ describe("nested context discovery", () => {
 		expect(paths(await read(r2, path.join(root, "a/b/AGENTS.md")))).toEqual([path.join(root, "a/AGENTS.md")]);
 	});
 
+	it("still injects when a hook appended a developer message after the read result", async () => {
+		const root = project({ "a/AGENTS.md": "A rules", "a/f.ts": "x" });
+		const r = rig(root);
+		r.messages.push({ role: "developer" } as unknown as AgentMessage);
+		expect(paths(await read(r, path.join(root, "a/f.ts")))).toEqual([path.join(root, "a/AGENTS.md")]);
+	});
+
 	it("injects nothing once the prompt is declared to carry no project context", async () => {
 		const root = project({ "a/AGENTS.md": "A rules", "a/f.ts": "x" });
 		const r = rig(root);
@@ -293,14 +300,21 @@ describe("live updates of loaded context files", () => {
 		expect(message?.details).toEqual({ files: [{ path: gone, hash: null }] });
 	});
 
-	it("does not treat an SDK-supplied path with no file as deleted", async () => {
+	it("tracks a vanished discovered file but not an SDK-supplied path with no file in the same list", async () => {
 		tmp = TempDir.createSync("@omp-ambient-ctx-");
 		const root = fs.realpathSync(tmp.path());
+		const virtual = path.join(root, "virtual/AGENTS.md");
+		const gone = path.join(root, "extra/AGENTS.md");
 		const r = rig(root);
-		await r.tracker.setAmbientFiles([{ path: path.join(root, "virtual/AGENTS.md"), content: "sdk" }], {
-			diskBacked: false,
-		});
-		expect(await update(r)).toBeUndefined();
+		await r.tracker.setAmbientFiles(
+			[
+				{ path: virtual, content: "sdk" },
+				{ path: gone, content: "discovered" },
+			],
+			{ diskBacked: true, virtualPaths: new Set([virtual]) },
+		);
+		const message = await update(r);
+		expect(message?.details).toEqual({ files: [{ path: gone, hash: null }] });
 	});
 
 	it("says nothing while loaded files are unchanged, even when only the mtime moves", async () => {

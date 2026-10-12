@@ -150,6 +150,7 @@ export class ContextFileTracker {
 	/** Loaded entries with no backing file (SDK-supplied content): never watched, but still in force. */
 	#unwatched = 0;
 	#diskBacked = false;
+	#virtualPaths: ReadonlySet<string> = new Set();
 	#nestedDiscovery = true;
 	#ambientSeq = 0;
 
@@ -160,35 +161,40 @@ export class ContextFileTracker {
 	/**
 	 * Declare the context files the system prompt was just built with; drops earlier tracking.
 	 *
-	 * `diskBacked` says the entries were discovered on disk (not supplied by the SDK caller), so every one is
-	 * tracked even when it cannot be statted right now, and the swap happens synchronously: a deletion or an
+	 * `diskBacked` says the entries were discovered on disk, except the `virtualPaths` the SDK caller supplied,
+	 * so every disk entry is tracked even when it cannot be statted right now, and the swap happens synchronously: a deletion or an
 	 * edit is announced rather than lost. `nestedDiscovery: false` marks a prompt that carries no project
 	 * context, so reads must not inject nested instructions either. Both options persist until changed.
 	 */
 	async setAmbientFiles(
 		files: readonly ContextFileEntry[],
-		options: { diskBacked?: boolean; nestedDiscovery?: boolean } = {},
+		options: { diskBacked?: boolean; virtualPaths?: ReadonlySet<string>; nestedDiscovery?: boolean } = {},
 	): Promise<void> {
 		if (options.diskBacked !== undefined) this.#diskBacked = options.diskBacked;
+		if (options.virtualPaths !== undefined) this.#virtualPaths = options.virtualPaths;
 		if (options.nestedDiscovery !== undefined) this.#nestedDiscovery = options.nestedDiscovery;
 		const registeredAt = Date.now();
 		const seq = ++this.#ambientSeq;
-		const stats = this.#diskBacked
-			? undefined
-			: await Promise.all(
-					files.map(async file => {
+		// Entries known to come from disk need no stat (the swap stays synchronous); only SDK-supplied
+		// entries, which may name a file that does not exist, are checked. `null` marks "not checked".
+		const checked = files.map(file => !this.#diskBacked || this.#virtualPaths.has(path.resolve(file.path)));
+		const stats = checked.some(Boolean)
+			? await Promise.all(
+					files.map(async (file, index) => {
+						if (!checked[index]) return null;
 						try {
 							return await fs.promises.stat(path.resolve(file.path));
 						} catch {
 							return undefined; // Not backed by a file on disk, so there is nothing to watch.
 						}
 					}),
-				);
+				)
+			: undefined;
 		if (seq !== this.#ambientSeq) return; // A newer declaration superseded this one while it was statting.
 		const next = new Map<string, TrackedFile>();
 		let unwatched = 0;
 		files.forEach((file, index) => {
-			if (stats && !stats[index]?.isFile()) {
+			if (stats && stats[index] !== null && !stats[index]?.isFile()) {
 				if (file.content.trim() !== "") unwatched++;
 				return;
 			}
@@ -234,7 +240,8 @@ export class ContextFileTracker {
 	async takeAsides(): Promise<AsideMessage[]> {
 		while (this.#inflight.size > 0) await Promise.allSettled(this.#inflight);
 		const messages = this.#host.messages();
-		if (messages.at(-1)?.role !== "toolResult") {
+		// Hook-supplied developer messages can follow the tool result before the next request.
+		if (messages.findLast(message => message.role !== "developer")?.role !== "toolResult") {
 			this.#pending.clear();
 			return [];
 		}
