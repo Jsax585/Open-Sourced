@@ -1796,8 +1796,8 @@ export interface EnclosingBoundaryOptions {
  * limit even at one pixel each, if the source is wider or taller than the
  * 8192 px decode edge or would decode to more than 128 MiB, if the image
  * carries an EXIF orientation other than none or a non-RGB ICC profile (the
- * strips could not honour either), or if decoding, resizing, or PNG
- * encoding fails.
+ * strips could not honour either), if its ICC profile repeated on every row
+ * would exceed 16 MiB, or if decoding, resizing, or PNG encoding fails.
  */
 export declare function encodeImageRows(bytes: Uint8Array, targetWidthPx: number, rowHeightPx: number, rows: number): Array<string>
 
@@ -1810,8 +1810,9 @@ export declare function encodeImageRows(bytes: Uint8Array, targetWidthPx: number
  * Rejects if a dimension is zero, if `rows` cannot fit the decode limit
  * even at one pixel each, if the source is wider or taller than the 8192 px
  * decode edge or would decode to more than 128 MiB, if the image carries an
- * EXIF orientation other than none or a non-RGB ICC profile, or if
- * decoding, resizing, or PNG encoding fails.
+ * EXIF orientation other than none or a non-RGB ICC profile, if its ICC
+ * profile repeated on every row would exceed 16 MiB, or if decoding,
+ * resizing, or PNG encoding fails.
  */
 export declare function encodeImageRowsAsync(bytes: Uint8Array, targetWidthPx: number, rowHeightPx: number, rows: number): Promise<Array<string>>
 

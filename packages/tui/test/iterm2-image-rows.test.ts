@@ -237,6 +237,24 @@ describe("iTerm2 inline images", () => {
 		expect(height * 750).toBeLessThanOrEqual(8192);
 	});
 
+	it("keep strip rows recognisable as images when their blank-cell prefix outgrows the marker scan window", () => {
+		// Unrecognised rows are fitted as text, which drops the OSC and leaves
+		// only the blank cells.
+		info.imageProtocol = ImageProtocol.Iterm2;
+		const result = renderImage(
+			BANDED_PNG,
+			{ widthPx: 8000, heightPx: 64 },
+			{
+				maxWidthCells: 600,
+				iterm2Rows: (widthPx, rowHeightPx, rows) => encodeImageRowsNow(BANDED_PNG, widthPx, rowHeightPx, rows),
+			},
+		);
+		expect(result?.lines?.length).toBeGreaterThan(0);
+		for (const line of result!.lines!) expect(TERMINAL.isImageLine(line)).toBe(true);
+		// The prefix shape alone is not an image row.
+		expect(TERMINAL.isImageLine(`${" ".repeat(600)}\x1b[600Dtext`)).toBe(false);
+	});
+
 	it("fall back to the single image when the loaded addon lacks the row encoder", async () => {
 		// A stale addon's missing export throws synchronously instead of rejecting.
 		info.imageProtocol = ImageProtocol.Iterm2;

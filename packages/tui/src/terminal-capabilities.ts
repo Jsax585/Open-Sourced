@@ -55,6 +55,23 @@ const SIXEL_MARKER_SCAN_LIMIT = 128;
 const KITTY_PLACEHOLDER_HIGH_SURROGATE = KITTY_PLACEHOLDER.charCodeAt(0);
 const KITTY_PLACEHOLDER_LOW_SURROGATE = KITTY_PLACEHOLDER.charCodeAt(1);
 
+/**
+ * Whether `start` directly follows an iTerm2 strip row's blank-cell prefix:
+ * spaces from the row start, then one cursor-back (`ESC [ n D`). A wide
+ * strip's prefix pushes its marker past the scan window.
+ */
+function followsITerm2StripPrefix(line: string, start: number): boolean {
+	let i = start - 1;
+	if (line.charCodeAt(i) !== 0x44) return false;
+	const lastDigit = --i;
+	while (i >= 0 && line.charCodeAt(i) >= 0x30 && line.charCodeAt(i) <= 0x39) i--;
+	if (i === lastDigit || line.charCodeAt(i) !== 0x5b || line.charCodeAt(i - 1) !== 0x1b) return false;
+	for (i -= 2; i >= 0; i--) {
+		if (line.charCodeAt(i) !== 0x20) return false;
+	}
+	return true;
+}
+
 /** Terminal capability details used for rendering and protocol selection. */
 export class TerminalInfo {
 	constructor(
@@ -111,7 +128,11 @@ export class TerminalInfo {
 		}
 
 		const limit = Math.min(line.length, IMAGE_MARKER_SCAN_LIMIT);
-		let protocolMatches = start + protocol.length <= limit;
+		let protocolMatches =
+			start + protocol.length <= limit ||
+			(protocol === ImageProtocol.Iterm2 &&
+				start + protocol.length <= line.length &&
+				followsITerm2StripPrefix(line, start));
 		for (let offset = 0; protocolMatches && offset < protocol.length; offset++) {
 			protocolMatches = line.charCodeAt(start + offset) === protocol.charCodeAt(offset);
 		}
@@ -133,6 +154,15 @@ export class TerminalInfo {
 			const code = line.charCodeAt(i);
 			if (code !== 0x1b && code !== KITTY_PLACEHOLDER_HIGH_SURROGATE) continue;
 			if (this.hasImageMarkerAt(line, i)) return true;
+		}
+		// A wide iTerm2 strip row: its marker follows the blank-cell prefix.
+		if (this.imageProtocol === ImageProtocol.Iterm2 && line.length > limit && line.charCodeAt(0) === 0x20) {
+			let i = 1;
+			while (line.charCodeAt(i) === 0x20) i++;
+			if (line.charCodeAt(i) !== 0x1b || line.charCodeAt(i + 1) !== 0x5b) return false;
+			i += 2;
+			while (line.charCodeAt(i) >= 0x30 && line.charCodeAt(i) <= 0x39) i++;
+			return this.hasImageMarkerAt(line, i + 1);
 		}
 		return false;
 	}
@@ -1368,7 +1398,8 @@ export function renderImage(
 			if (strips !== null) {
 				// Blank cells first, so layout measures the row as `columns` wide; the
 				// strip then paints over them from the row start and iTerm2 advances
-				// the cursor past it.
+				// the cursor past it. TerminalInfo.hasImageMarkerAt recognises this
+				// prefix, which can push the marker past its scan window.
 				const blank = `${" ".repeat(columns)}\x1b[${columns}D`;
 				const lines = strips.map(
 					strip => blank + encodeITerm2(strip, { width: columns, height: 1, preserveAspectRatio: false }),

@@ -31,6 +31,10 @@ const MAX_PNG_BYTES: usize = 20 * 1024 * 1024;
 /// Largest decoded source `encode_image_rows` inflates: a 6K RGBA8 screenshot
 /// (about 81 MiB) fits, an 8192×8192 RGBA8 raster (256 MiB) does not.
 const MAX_ROW_SOURCE_BYTES: u64 = 128 * 1024 * 1024;
+/// Largest total of ICC profile bytes `encode_image_rows` repeats across its
+/// strips: a Display P3 profile (about 0.5 KiB) on hundreds of rows fits,
+/// a 1 MiB profile on 1,000 rows (1 GiB of strips) does not.
+const MAX_ROW_PROFILE_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Decode one complete SIXEL control string into a PNG on the calling thread.
 ///
@@ -254,8 +258,8 @@ fn encode_image(bytes: &[u8], target_width_px: u32, target_height_px: u32) -> Re
 /// limit even at one pixel each, if the source is wider or taller than the
 /// 8192 px decode edge or would decode to more than 128 MiB, if the image
 /// carries an EXIF orientation other than none or a non-RGB ICC profile (the
-/// strips could not honour either), or if decoding, resizing, or PNG
-/// encoding fails.
+/// strips could not honour either), if its ICC profile repeated on every row
+/// would exceed 16 MiB, or if decoding, resizing, or PNG encoding fails.
 #[napi]
 pub fn encode_image_rows(
 	bytes: Uint8Array,
@@ -274,8 +278,9 @@ pub fn encode_image_rows(
 /// Rejects if a dimension is zero, if `rows` cannot fit the decode limit
 /// even at one pixel each, if the source is wider or taller than the 8192 px
 /// decode edge or would decode to more than 128 MiB, if the image carries an
-/// EXIF orientation other than none or a non-RGB ICC profile, or if
-/// decoding, resizing, or PNG encoding fails.
+/// EXIF orientation other than none or a non-RGB ICC profile, if its ICC
+/// profile repeated on every row would exceed 16 MiB, or if decoding,
+/// resizing, or PNG encoding fails.
 #[napi]
 pub fn encode_image_rows_async(
 	bytes: Uint8Array,
@@ -305,8 +310,9 @@ fn encode_rows(
 	// Header probe before the full decode. A source too large to inflate in the
 	// worker, one needing EXIF reorientation (strips carry no EXIF, and the
 	// caller sized the rows from the stored raster), or one whose colour profile
-	// cannot describe RGB strips (CMYK, grey) is left to a viewer of the
-	// original. An RGB profile is copied into every strip.
+	// cannot describe RGB strips (CMYK, grey) or is too large to repeat per row
+	// is left to a viewer of the original. An RGB profile is copied into every
+	// strip.
 	let mut header = ImageReader::new(Cursor::new(bytes))
 		.with_guessed_format()
 		.map_err(|e| Error::from_reason(format!("Failed to detect image format: {e}")))?
@@ -332,6 +338,12 @@ fn encode_rows(
 		.is_some_and(|profile| profile.get(16..20) != Some(&b"RGB "[..]))
 	{
 		return Err(Error::from_reason("Image has a non-RGB colour profile"));
+	}
+	if icc_profile
+		.as_ref()
+		.is_some_and(|profile| profile.len() as u64 * u64::from(rows) > MAX_ROW_PROFILE_BYTES)
+	{
+		return Err(Error::from_reason("Image colour profile is too large to repeat per row"));
 	}
 	let source = decode_image_from_bytes(bytes)?;
 	if source.width() == 0 || source.height() == 0 {
