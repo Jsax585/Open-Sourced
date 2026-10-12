@@ -922,8 +922,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			cfgTaskMaxRecursionDepth.get(this.session.settings),
 			this.session.taskDepth ?? 0,
 		);
-		const ircEnabled =
-			this.session.enableIrc !== false && isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0);
+		const ircEnabled = this.#canOfferResume();
 
 		if (!manager || asyncItems.length === 0) {
 			// Sync fallback: async execution disabled, orphaned host that never
@@ -1699,6 +1698,15 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		}
 	}
 
+	/** A `<resume>` follow-up is only actionable when the caller can message the child: IRC on and the `write` tool present. */
+	#canOfferResume(): boolean {
+		return (
+			this.session.enableIrc !== false &&
+			isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0) &&
+			(this.session.getToolByName === undefined || this.session.getToolByName("write") !== undefined)
+		);
+	}
+
 	/** Build the tool result (summary text + details) for a settled run. */
 	#buildResultPayload(
 		result: SingleResult,
@@ -1709,8 +1717,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const summary = formatTaskResultSummary(result, {
 			totalDurationMs,
 			mergeSummary,
-			ircEnabled:
-				this.session.enableIrc !== false && isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0),
+			ircEnabled: this.#canOfferResume(),
 		});
 
 		return {
