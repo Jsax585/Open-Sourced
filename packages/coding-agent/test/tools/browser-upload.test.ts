@@ -17,17 +17,19 @@ const html = `<!doctype html>
 <style>button, div { display: block; margin: 8px; padding: 8px; }</style>
 <input id="direct" type="file" multiple>
 <button id="trigger" type="button">Upload</button><input id="trigger-input" type="file" hidden>
+<button id="other" type="button">Upload another</button><input id="other-input" type="file" hidden>
 <button id="picker" type="button">Open</button>
 <div id="drop">Drop files here</div>
 <script>
 window.log = [];
 const record = (id, event, files) => log.push({ id, event, names: [...(files || [])].map(file => file.name) });
-for (const id of ["direct", "trigger-input"]) {
+for (const id of ["direct", "trigger-input", "other-input"]) {
   const input = document.getElementById(id);
   input.addEventListener("change", () => record(id, "change", input.files));
   input.addEventListener("cancel", () => record(id, "cancel"));
 }
-document.getElementById("trigger").addEventListener("click", () => document.getElementById("trigger-input").click());
+for (const id of ["trigger", "other"])
+  document.getElementById(id).addEventListener("click", () => document.getElementById(id + "-input").click());
 document.getElementById("picker").addEventListener("click", () =>
   showOpenFilePicker().then(() => record("picker", "picked"), error => record("picker", error.name)));
 const drop = document.getElementById("drop");
@@ -79,7 +81,7 @@ async function openFixture() {
 				code: `await tab.goto(${JSON.stringify(url)});
 let error = undefined;
 try { ${code} } catch (e) { error = e instanceof Error ? e.message : String(e); }
-await new Promise(resolve => setTimeout(resolve, 300));
+await Bun.sleep(300);
 return { error, log: await tab.evaluate(() => window.log) };`,
 			},
 			context,
@@ -121,6 +123,23 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser uploadFile", () => {
 			});
 			const multiple = await attempt(`await tab.uploadFile("#trigger", "alpha.txt", "beta.txt");`);
 			expect(multiple.error).toContain("Multiple file uploads only work with <input type=file multiple>");
+		} finally {
+			await close();
+		}
+	}, 60_000);
+
+	test("refuses a second chooser upload while the first waits for its chooser", async () => {
+		const { attempt, close } = await openFixture();
+		try {
+			// Each upload listens for the page's next chooser, so overlapping ones would both take the first chooser.
+			const result = await attempt(`const outcomes = await Promise.allSettled([
+	tab.uploadFile("#trigger", "alpha.txt"),
+	tab.uploadFile("#other", "beta.txt"),
+]);
+error = outcomes.map(outcome => outcome.status === "rejected" ? outcome.reason.message : "ok").join(" | ");`);
+			expect(result.error).toStartWith("ok | ");
+			expect(result.error).toContain("waits for its file chooser");
+			expect(result.log).toEqual([{ id: "trigger-input", event: "change", names: ["alpha.txt"] }]);
 		} finally {
 			await close();
 		}

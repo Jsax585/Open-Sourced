@@ -629,6 +629,8 @@ export async function selectElementOptions(
 /** How long a click has to open a file chooser before the target counts as a drop zone. */
 const FILE_CHOOSER_WAIT_MS = 400;
 
+/** Pages with a chooser-trigger upload in flight: a second one would catch the first one's chooser. */
+const pagesAwaitingChooser = new WeakSet<Page>();
 /**
  * Click `handle` and fill the file chooser it opens; false when no chooser opened. The chooser is caught on a CDP
  * session of our own so interception ends with this call: Puppeteer's `waitForFileChooser` leaves it on, which
@@ -641,15 +643,24 @@ async function fillClickedFileChooser(
 	label: string,
 	signal: AbortSignal | undefined,
 ): Promise<boolean> {
-	const session = await untilAborted(signal, () => page.createCDPSession());
+	if (pagesAwaitingChooser.has(page)) {
+		throw new ToolError(`${label} cannot run while another uploadFile on this tab waits for its file chooser`);
+	}
+	pagesAwaitingChooser.add(page);
+	let timer: NodeJS.Timeout | undefined;
+	const session = await untilAborted(signal, () => page.createCDPSession()).catch(error => {
+		pagesAwaitingChooser.delete(page);
+		throw error;
+	});
 	try {
 		const { promise: opened, resolve } = Promise.withResolvers<Protocol.Page.FileChooserOpenedEvent | null>();
 		session.once("Page.fileChooserOpened", resolve);
 		await untilAborted(signal, () => session.send("Page.enable"));
 		await untilAborted(signal, () => session.send("Page.setInterceptFileChooserDialog", { enabled: true }));
+		// The wait covers the click, so a target that only becomes clickable later counts as a drop zone.
+		timer = setTimeout(() => resolve(null), FILE_CHOOSER_WAIT_MS);
 		await clickElement(handle, label, signal);
-		const timer = setTimeout(() => resolve(null), FILE_CHOOSER_WAIT_MS);
-		const chooser = await untilAborted(signal, () => opened).finally(() => clearTimeout(timer));
+		const chooser = await untilAborted(signal, () => opened);
 		if (!chooser) return false;
 		if (chooser.backendNodeId === undefined) {
 			throw new ToolError(
@@ -664,9 +675,11 @@ async function fillClickedFileChooser(
 		);
 		return true;
 	} finally {
+		clearTimeout(timer);
 		// The relay serves every session of a tab from one debugger attachment, so detaching alone leaves it on.
 		await session.send("Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => undefined);
 		await session.detach().catch(() => undefined);
+		pagesAwaitingChooser.delete(page);
 	}
 }
 
