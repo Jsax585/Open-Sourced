@@ -6,6 +6,7 @@ import eagerTaskPrompt from "../prompts/system/eager-task.md" with { type: "text
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import midRunTodoNudgePrompt from "../prompts/system/mid-run-todo-nudge.md" with { type: "text" };
 import postCompactionIncompleteTodosPrompt from "../prompts/system/post-compaction-incomplete-todos.md" with { type: "text" };
+import incompleteTodosCompactionContext from "../prompts/system/incomplete-todos-compaction-context.md" with { type: "text" };
 import { getLatestTodoPhasesFromEntries, isTodoPhase } from "../tools/todo";
 import { type TodoItem, type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { buildNamedToolChoice } from "../utils/tool-choice";
@@ -210,10 +211,7 @@ export class TodoTracker {
 	buildIncompleteTodosCompactionContext(): string[] {
 		const rows = collectIncompleteTodoRows(this.#phases);
 		if (rows.length === 0) return [];
-		return [
-			"Incomplete todos that MUST survive compaction (pending/in_progress/model-abandoned; a text-only stop is not completion):",
-			...formatIncompleteTodoSnapshotLines(rows),
-		];
+		return [prompt.render(incompleteTodosCompactionContext, { rows: formatIncompleteTodoSnapshotLines(rows) })];
 	}
 
 	/**

@@ -48,7 +48,7 @@ export function encodeIncompleteTodoTitle(title: string): string {
 		.replace(/\n/g, "\\n")
 		.replace(/\u2028/g, "\\u2028")
 		.replace(/\u2029/g, "\\u2029")
-		.replace(/[ \t]+$/g, whitespace => whitespace.replace(/ /g, "\\s").replace(/\t/g, "\\t"));
+		.replace(/^[ \t]+|[ \t]+$/g, whitespace => whitespace.replace(/ /g, "\\s").replace(/\t/g, "\\t"));
 }
 
 /** Inverse of {@link encodeIncompleteTodoTitle}. */
@@ -189,7 +189,6 @@ export function formatIncompleteTodosSection(rows: readonly IncompleteTodoRow[])
 	const lines = [
 		INCOMPLETE_TODOS_HEADING,
 		INCOMPLETE_TODOS_MARKER,
-		"These incomplete items remain after compaction; continue them. A text-only stop is not completion.",
 		...phases.flatMap(phase => [
 			`- ${encodeIncompleteTodoTitle(phase.name)}`,
 			...phase.tasks.map(task => {
