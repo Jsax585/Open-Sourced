@@ -244,8 +244,8 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"first-party-provider": wire("firstPartyProvider", ["anthropic"]),
 	"honors-claude-code-beta-kill-switch": wire("honorsClaudeCodeBetaKillSwitch", ["anthropic"]),
 	"inject-claude-code-instruction": wire("injectClaudeCodeInstruction", ["anthropic"]),
-	"max-image-dimension": wire("maxImageDimension", ["anthropic"]),
-	"max-image-payload-bytes": wire("maxImagePayloadBytes", ["anthropic"]),
+	"max-image-dimension": wire("maxImageDimension", ["anthropic", "google"]),
+	"max-image-payload-bytes": wire("maxImagePayloadBytes", ["anthropic", "google"]),
 	"official-endpoint": wire("officialEndpoint", ["anthropic", "openai-responses"]),
 	"replay-unsigned-thinking": wire("replayUnsignedThinking", ["anthropic"]),
 	"requires-thinking-enabled": wire("requiresThinkingEnabled", ["anthropic"]),
@@ -389,6 +389,18 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 		shape: "scalar",
 		values: [true, false],
 	},
+	/**
+	 * How the model line bills a replayed signed thinking block as input:
+	 * `output` bills the reasoning its signature carries, at the size the turn
+	 * billed as output, and not the signature's bytes. Unassigned: estimated
+	 * from the signature's bytes. Read through `./thinking-replay`.
+	 */
+	"thinking-replay-tokens": {
+		key: "thinkingReplayTokens",
+		set: "catalog",
+		shape: "scalar",
+		values: ["output", "signature"],
+	},
 	"delegation-bias": { key: "delegationBias", set: "catalog", shape: "scalar", values: DELEGATION_BIASES },
 	"discovery-api": { key: "discoveryApi", set: "catalog", shape: "scalar" },
 	"edit-prompt-variant": { key: "editPromptVariant", set: "catalog", shape: "scalar", values: ["full", "compact"] },
@@ -418,6 +430,8 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	 */
 	"official-image-count-budget": { key: "officialImageCountBudget", set: "catalog", shape: "scalar" },
 	"image-model": { key: "imageModel", set: "catalog", shape: "scalar" },
+	/** Longest image edge the host passes to the model: it downscales larger images to fit first. */
+	"image-max-edge": { key: "imageMaxEdge", set: "catalog", shape: "scalar" },
 	"inline-image-byte-budget": { key: "inlineImageByteBudget", set: "catalog", shape: "scalar" },
 	/**
 	 * Most questions one System One judgment request may carry; the judge
