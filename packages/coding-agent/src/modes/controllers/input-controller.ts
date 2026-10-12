@@ -773,7 +773,10 @@ export class InputController {
 		if (!data.startsWith("\x1b[<")) return undefined;
 		if (!cfgTuiMouse.get(this.ctx.settings)) return undefined;
 		if (this.ctx.ui.hasOverlay()) {
-			this.#press = undefined;
+			if (this.#press) {
+				this.#press = undefined;
+				this.ctx.ui.setScreenSelection(undefined);
+			}
 			return undefined;
 		}
 		const event = parseSgrMouse(data);

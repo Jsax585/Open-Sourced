@@ -1293,6 +1293,9 @@ export class TUI extends Container {
 	 */
 	showOverlay(component: Component, options?: OverlayOptions): OverlayHandle {
 		component.setIgnoreTight?.(true);
+		// An overlay paints over the normal screen; a live selection highlight
+		// would be re-applied over its rows and outlive it.
+		this.setScreenSelection(undefined);
 		const entry = { component, options, preFocus: this.#focusedComponent, hidden: false, released: false };
 		this.overlayStack.push(entry);
 		// Only focus if overlay is actually visible
@@ -1450,30 +1453,39 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Move a selection end to the repainted row holding the content it sat
-	 * on (`raw`), searching outward from where a plain scroll would have put
-	 * it. Content that left the screen pins the end to the top-left cell.
+	 * Row shift that carries the selection to where a paint moved its rows.
+	 * `block` is the raw content of the selected rows plus one context row on
+	 * each side, captured before the paint from screen row `blockTop`. The
+	 * block must match as a whole, so a blank or separator row repeated
+	 * elsewhere cannot capture the selection; among matches the one nearest
+	 * a plain scroll (`-scrolled`) wins. No match (rows rewritten or gone)
+	 * falls back to the plain scroll.
 	 */
-	#relocateSelectionPoint(point: ScreenPoint, raw: string | undefined, scrolled: number): void {
+	#selectionShift(block: readonly (string | undefined)[], blockTop: number, scrolled: number): number {
 		const screen = this.#screenRows;
-		const guess = point.row - scrolled;
-		if (raw !== undefined) {
-			const reach = screen.length + Math.abs(guess);
-			for (let distance = 0; distance < reach; distance++) {
-				const below = guess + distance;
-				const above = guess - distance;
-				const row = screen[below]?.raw === raw ? below : screen[above]?.raw === raw ? above : -1;
-				if (row >= 0) {
-					point.row = row;
-					return;
+		const reach = screen.length + block.length + scrolled;
+		for (let distance = 0; distance <= reach; distance++) {
+			for (let side = 0; side < (distance === 0 ? 1 : 2); side++) {
+				const shift = side === 0 ? distance - scrolled : -distance - scrolled;
+				let matches = true;
+				for (let index = 0; index < block.length && matches; index++) {
+					const raw = block[index];
+					if (raw !== undefined && screen[blockTop + index + shift]?.raw !== raw) matches = false;
 				}
+				if (matches) return shift;
 			}
 		}
-		if (guess < 0) {
+		return -scrolled;
+	}
+
+	/** Move a selection end by `shift` rows; an end shifted off the top pins to the top-left cell. */
+	#shiftSelectionPoint(point: ScreenPoint, shift: number): void {
+		point.row += shift;
+		if (point.row < 0) {
 			point.row = 0;
 			point.col = 0;
 		} else {
-			point.row = Math.min(guess, Math.max(0, screen.length - 1));
+			point.row = Math.min(point.row, Math.max(0, this.#screenRows.length - 1));
 		}
 	}
 
@@ -3757,25 +3769,28 @@ export class TUI extends Container {
 		}
 		// Mirror the physical rows: history rows left above the old viewport
 		// survive, unless a reset erased them or a resize reflowed them out of
-		// recognition; rows scrolled off the top drop. Selection ends follow
-		// their row's content, since a paint may re-lay the viewport as history.
+		// recognition; rows scrolled off the top drop. The selection follows its
+		// rows' content, since a paint may re-lay the viewport as history.
 		const screen = this.#screenRows;
 		if (destructiveReset || !geometryStable) {
 			screen.length = 0;
 			this.#screenSelection = undefined;
 		}
 		const selection = this.#screenSelection;
-		const anchorRaw = selection && screen[selection.anchor.row]?.raw;
-		const focusRaw = selection && screen[selection.focus.row]?.raw;
+		const blockTop = selection ? Math.max(0, Math.min(selection.anchor.row, selection.focus.row) - 1) : 0;
+		const block = selection
+			? screen.slice(blockTop, Math.max(selection.anchor.row, selection.focus.row) + 2).map(row => row?.raw)
+			: undefined;
 		if (screen.length > startTop) screen.length = startTop;
 		while (screen.length < startTop) screen.push(undefined);
 		for (const row of preparedHistory.rows) screen.push(row);
 		const scrolled = Math.max(0, screen.length - newTop);
 		if (scrolled > 0) screen.splice(0, scrolled);
 		for (const row of prepared.rows) screen.push(row);
-		if (selection !== undefined) {
-			this.#relocateSelectionPoint(selection.anchor, anchorRaw, scrolled);
-			this.#relocateSelectionPoint(selection.focus, focusRaw, scrolled);
+		if (selection !== undefined && block !== undefined) {
+			const shift = this.#selectionShift(block, blockTop, scrolled);
+			this.#shiftSelectionPoint(selection.anchor, shift);
+			this.#shiftSelectionPoint(selection.focus, shift);
 		}
 		buffer += this.#selectionHighlightSequence();
 		const mutableTop = newTop + replayViewportRows;
