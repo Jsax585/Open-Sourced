@@ -641,10 +641,61 @@ export class Container implements Component {
 		this.#memoLines = lines;
 		return lines;
 	}
-	handleMouse(event: SgrMouseEvent): boolean {
-		if (!this.#mouseRoutingValid || event.row < 0 || this.#memoChildComponents.length !== this.children.length) {
+	/**
+	 * Visit direct children from this exact, unmodified container render.
+	 * Custom renderers that omit or transform rows do not expose this layout.
+	 */
+	forEachRenderedChild(
+		renderedRows: readonly string[],
+		visit: (child: Component, rows: readonly string[], index: number, startRow: number) => void,
+	): boolean {
+		if (!this.#hasCurrentMouseLayout() || !this.#matchesChildRender(renderedRows)) return false;
+		let startRow = 0;
+		for (let index = 0; index < this.#memoChildLines.length; index++) {
+			const childRows = this.#memoChildLines[index]!;
+			visit(this.#memoChildComponents[index]!, childRows, index, startRow);
+			startRow += childRows.length;
+		}
+		return true;
+	}
+
+	/** Whether a child span still belongs to this container's painted layout. */
+	isRenderedChild(renderedRows: readonly string[], index: number, child: Component): boolean {
+		return (
+			this.#hasCurrentMouseLayout() &&
+			this.#matchesChildRender(renderedRows) &&
+			this.#memoChildComponents[index] === child &&
+			this.children[index] === child
+		);
+	}
+
+	#matchesChildRender(renderedRows: readonly string[]): boolean {
+		let rowIndex = 0;
+		for (const childRows of this.#memoChildLines) {
+			for (const childRow of childRows) {
+				if (renderedRows[rowIndex] !== childRow) return false;
+				rowIndex++;
+			}
+		}
+		return rowIndex === renderedRows.length;
+	}
+
+	#hasCurrentMouseLayout(): boolean {
+		if (
+			!this.#mouseRoutingValid ||
+			this.#memoChildComponents.length !== this.children.length ||
+			this.#memoChildLines.length !== this.children.length
+		) {
 			return false;
 		}
+		for (let index = 0; index < this.children.length; index++) {
+			if (this.#memoChildComponents[index] !== this.children[index]) return false;
+		}
+		return true;
+	}
+
+	handleMouse(event: SgrMouseEvent): boolean {
+		if (!this.#hasCurrentMouseLayout() || event.row < 0) return false;
 		let row = event.row;
 		for (let index = 0; index < this.#memoChildLines.length; index++) {
 			const childLines = this.#memoChildLines[index]!;

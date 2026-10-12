@@ -354,6 +354,7 @@ export class ToolExecutionComponent extends Container {
 	#expanded = false;
 	#allocation = Number.POSITIVE_INFINITY;
 	#mouseRoutingEnabled = false;
+	#mouseRowOffset = 0;
 	#presentationFrame: AnimationFrame = { tick: 0, now: 0 };
 	#toolActivityVisible = true;
 	#showImages: boolean;
@@ -1311,6 +1312,7 @@ export class ToolExecutionComponent extends Container {
 
 	override render(width: number): readonly string[] {
 		this.#mouseRoutingEnabled = false;
+		this.#mouseRowOffset = 0;
 		if (!this.#toolActivityVisible || this.#allocation === 0 || (this.#toolName === "wait" && this.#isBenignSkip())) {
 			return [];
 		}
@@ -1321,8 +1323,11 @@ export class ToolExecutionComponent extends Container {
 			// below that, so inline tools whose real content is 1-2 rows (wait
 			// results, one-line receipts) keep that content instead of an equally
 			// tall but contentless frame.
+			let leadingRows = 0;
+			while (leadingRows < lines.length && !/\S/.test(lines[leadingRows]!)) leadingRows++;
 			const trimmed = trimBlankEdges(lines);
 			if (trimmed.length > this.#allocation) return this.#renderCompact(width);
+			this.#mouseRowOffset = leadingRows;
 			lines = trimmed;
 		}
 		this.#mouseRoutingEnabled = true;
@@ -1331,7 +1336,10 @@ export class ToolExecutionComponent extends Container {
 		return lines;
 	}
 	override handleMouse(event: SgrMouseEvent): boolean {
-		return this.#mouseRoutingEnabled && super.handleMouse(event);
+		if (!this.#mouseRoutingEnabled) return false;
+		return super.handleMouse(
+			this.#mouseRowOffset === 0 ? event : { ...event, row: event.row + this.#mouseRowOffset },
+		);
 	}
 
 	#renderCompact(width: number): readonly string[] {

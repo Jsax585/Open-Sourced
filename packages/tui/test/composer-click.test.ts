@@ -5,6 +5,7 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { Container, type Component } from "@oh-my-pi/pi-tui";
 import { Box } from "@oh-my-pi/pi-tui/components/box";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import { markFramedBlockComponent } from "@oh-my-pi/pi-tui/render";
 import { VirtualTerminal } from "./virtual-terminal";
 import { routeViewportClick, type ViewportClickSpan } from "@oh-my-pi/pi-tui/prompt/composer";
 
@@ -227,8 +228,10 @@ class MouseTarget implements Component {
 	events: Array<{ col: number; row: number }> = [];
 	clicked = false;
 	consume = true;
+	renders = 0;
 	rows: readonly string[] = ["mouse target"];
 	render(): readonly string[] {
+		this.renders++;
 		return this.clicked ? ["mouse clicked"] : this.rows;
 	}
 	handleMouse(event: { col: number; row: number; leftClick: boolean }): boolean | void {
@@ -428,6 +431,40 @@ describe("composer mouse dispatch", () => {
 		).toBe(false);
 		expect(target.events).toEqual([]);
 	});
+	it("restores the row offset when a tight tool allocation trims leading blank rows", () => {
+		const target = markFramedBlockComponent(new MouseTarget());
+		target.rows = ["", "visible row 1", "visible row 2"];
+		const tool = { label: "custom", renderCall: () => target };
+		const component = new ToolExecutionComponent(
+			"custom",
+			{},
+			{ useBuiltInRenderer: false },
+			tool as never,
+			{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} } as never,
+		);
+		component.setTranscriptAllocation(2, { tick: 0, now: 0 });
+		const rows = component.render(80);
+		expect(rows).toHaveLength(2);
+		expect(Bun.stripANSI(rows.join("\n"))).toContain("visible row 1");
+		expect(Bun.stripANSI(rows.join("\n"))).toContain("visible row 2");
+
+		const event = {
+			button: 0,
+			col: 2,
+			row: 0,
+			release: false,
+			wheel: null,
+			motion: false,
+			leftClick: true,
+		};
+		expect(component.handleMouse(event)).toBe(true);
+		event.row = 1;
+		expect(component.handleMouse(event)).toBe(true);
+		expect(target.events).toEqual([
+			{ col: 2, row: 1 },
+			{ col: 2, row: 2 },
+		]);
+	});
 	it("does not route compact custom-tool rows to hidden renderer controls", () => {
 		const target = new MouseTarget();
 		target.rows = ["row 0", "row 1", "row 2", "row 3"];
@@ -479,5 +516,108 @@ describe("composer mouse dispatch", () => {
 		container.render(80);
 		expect(container.handleMouse(event)).toBe(true);
 		expect(remaining.events).toEqual([{ col: 3, row: 0 }]);
+	});
+	it("does not route docked children omitted by a custom root render", () => {
+		const term = new VirtualTerminal(80, 24);
+		const composer = new Composer({ terminal: term, preferences: { ...COMPOSER_DEFAULTS, quiet: true } });
+		const hiddenTarget = new MouseTarget();
+		hiddenTarget.rows = ["hidden child"];
+		const hiddenRoot = new (class extends Container {
+			override render(width: number): readonly string[] {
+				super.render(width);
+				return [];
+			}
+		})();
+		hiddenRoot.addChild(hiddenTarget);
+		const visibleTarget = new MouseTarget();
+		visibleTarget.rows = ["visible widget"];
+		const visibleRoot = new Container();
+		visibleRoot.addChild(visibleTarget);
+		composer.start();
+		try {
+			composer.setRuntimeChildren([new TranscriptContainer(), hiddenRoot, visibleRoot]);
+			const frame = composer.renderFrame({ columns: 80, rows: 24 });
+			const visibleRow = frame.viewport.findIndex(line => line.includes("visible widget"));
+			expect(visibleRow).toBeGreaterThanOrEqual(0);
+			expect(hiddenTarget.renders).toBe(1);
+
+			expect(
+				composer.dispatchViewportMouse({
+					button: 0,
+					col: 7,
+					row: visibleRow,
+					release: false,
+					wheel: null,
+					motion: false,
+					leftClick: true,
+				}),
+			).toBe("consumed");
+			expect(hiddenTarget.events).toEqual([]);
+			expect(visibleTarget.events).toEqual([{ col: 7, row: 0 }]);
+		} finally {
+			composer.stop();
+		}
+	});
+
+	it("fails closed for docked children removed after paint and before repaint", () => {
+		const term = new VirtualTerminal(80, 24);
+		const composer = new Composer({ terminal: term, preferences: { ...COMPOSER_DEFAULTS, quiet: true } });
+		const target = new MouseTarget();
+		const chrome = new Container();
+		chrome.addChild(target);
+		composer.start();
+		try {
+			composer.setRuntimeChildren([new TranscriptContainer(), chrome]);
+			const frame = composer.renderFrame({ columns: 80, rows: 24 });
+			const row = frame.viewport.findIndex(line => line.includes("mouse target"));
+			expect(row).toBeGreaterThanOrEqual(0);
+
+			chrome.removeChild(target);
+			expect(
+				composer.dispatchViewportMouse({
+					button: 0,
+					col: 7,
+					row,
+					release: false,
+					wheel: null,
+					motion: false,
+					leftClick: true,
+				}),
+			).toBe("none");
+			expect(target.events).toEqual([]);
+		} finally {
+			composer.stop();
+		}
+	});
+
+	it("rejects stale Box mouse layouts after direct child replacement or reorder", () => {
+		const event = {
+			button: 0,
+			col: 7,
+			row: 0,
+			release: false,
+			wheel: null,
+			motion: false,
+			leftClick: true,
+		};
+		const original = new MouseTarget();
+		const replacement = new MouseTarget();
+		const replacedBox = new Box(0, 0);
+		replacedBox.addChild(original);
+		replacedBox.render(80);
+		replacedBox.children[0] = replacement;
+		expect(replacedBox.handleMouse(event)).toBe(false);
+		expect(replacement.events).toEqual([]);
+
+		const first = new MouseTarget();
+		const second = new MouseTarget();
+		const reorderedBox = new Box(0, 0);
+		reorderedBox.addChild(first);
+		reorderedBox.addChild(second);
+		reorderedBox.render(80);
+		reorderedBox.children.reverse();
+		expect(reorderedBox.handleMouse(event)).toBe(false);
+		expect(first.events).toEqual([]);
+		expect(second.events).toEqual([]);
 	});
 });
