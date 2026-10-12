@@ -30,7 +30,7 @@ import { create, fromBinary, toBinary } from "@oh-my-pi/pi-catalog/discovery/pro
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { DEVIN_DEFAULT_BASE_URL, devinCliMetadata, normalizeDevinSessionToken } from "@oh-my-pi/pi-catalog/wire/devin";
 import { decodeDevinUnaryMessage } from "@oh-my-pi/pi-catalog/wire/devin-proto";
-import { getInstallId, isRecord, logger, parseStreamingJson, parseStreamingJsonThrottled, sanitizeText } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, parseStreamingJson, parseStreamingJsonThrottled, sanitizeText } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 
 import type {
@@ -629,30 +629,19 @@ function buildRouterPrompt(messages: Message[]): ChatMessagePrompt | undefined {
 }
 
 /**
- * Resolve the device attestation blob for Metadata field 31 (`f`).
- *
- * The Devin CLI sends a 366-byte hex-encoded blob in this field. It is not
- * stored on disk — it is derived from machine properties at runtime. We
- * cannot reproduce the exact generation algorithm, so we support an
- * override via the `DEVIN_F_FIELD` env var (hex string). When unset, we
- * generate a stable 366-byte hash from the omp install id so the value is
- * deterministic per-machine without being hardcoded.
+ * Forward the caller's opaque Metadata field 31 (`f`) when explicitly supplied.
+ * Its generation and verification rules are unknown; an install-id hash is
+ * not a substitute for a valid client-provided value.
  */
-function resolveAttestationF(): string {
+function resolveDeviceFieldF(): string | undefined {
 	const envOverride = Bun.env.DEVIN_F_FIELD;
-	if (envOverride && envOverride.length > 0) return envOverride;
-	// Generate a deterministic 366-byte hex string (732 chars) from the
-	// persistent omp install id (~/.omp/install-id).
-	const installId = getInstallId();
-	let hash = Bun.hash(`devin-fingerprint${installId}`).toString(16);
-	while (hash.length < 732) hash += Bun.hash(hash).toString(16);
-	return hash.slice(0, 732);
+	return envOverride && envOverride.length > 0 ? envOverride : undefined;
 }
 
 /**
  * Build a {@link GetChatMessageRequest} for one Cascade turn. Auth rides inside
  * `Metadata.apiKey` (plus `Metadata.userJwt` from GetUserJwt) and field 31 (`f`)
- * carries the device attestation blob; the system prompt is the flattened
+ * forwards an optional caller-provided opaque value; the system prompt is the flattened
  * `prompt` string and the conversation history maps to `chatMessagePrompts`.
  * `assignment` is present only for router models and supplies both the resolved
  * uid and its JWT.
@@ -691,7 +680,7 @@ function buildDevinChatRequest(
 	return create(GetChatMessageRequestSchema, {
 		metadata: create(MetadataSchema, {
 			...devinCliMetadata(turn.apiKey, turn.userJwt),
-			f: resolveAttestationF(),
+			f: resolveDeviceFieldF(),
 		}),
 		prompt: normalizeSystemPrompts(context.systemPrompt).join("\n\n"),
 		chatMessagePrompts: buildChatMessagePrompts(turn.messages, turn.cascadeId, model),
