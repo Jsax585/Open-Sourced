@@ -6,7 +6,7 @@ interface ComputerInputOptions {
 
 /** Item path in a menu that a call opens, matched like `win.menu.select`, e.g. `["Add to", "Fonts"]`. */
 interface ComputerMenuOptions {
-	/** The call opens the menu, presses this item and returns with the menu closed; without it, a macOS background menu is closed and the call throws `InputFailed` listing its items. */
+	/** The call opens the menu, presses this item and returns with the menu closed; without it, a macOS background menu is closed and the call throws `InputFailed` listing its items. On macOS the user's `refuse` setting refuses this option, right-clicks, Control-clicks and `AXShowMenu`. */
 	menu?: string[];
 }
 
