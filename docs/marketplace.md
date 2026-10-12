@@ -81,6 +81,8 @@ TUI marketplace mutations (explicit commands and the selector) update disk state
 
 CLI `--dry-run` install validates the cached catalog, scope, existing install, and locally checkable source constraints without fetching plugin repositories or writing plugin state. Uninstall previews retain installed-scope ambiguity checks without removing anything. TUI/ACP/RPC slash commands do not accept `--dry-run`.
 
+Unlike npm and git plugin installs, marketplace installs never shell out to `bun`: they keep their own catalog cache and symlink the cached plugin into the plugins directory, so they work without Bun installed. npm and git plugin operations require the [`bun`](https://bun.sh) CLI in `$PATH`; see the [CLI reference](./cli-reference.md).
+
 ## Marketplace sources
 
 When you run `/marketplace add <source>`, the system classifies the source:

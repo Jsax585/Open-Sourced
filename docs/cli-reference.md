@@ -262,7 +262,7 @@ Run `omp <command> --help` for each command's own flags and examples.
 | `grievances` | View, clean, or push reported tool issues (auto-QA grievances). | |
 | `if-bench` | Benchmark instruction following and working memory: one cached thread of glyph array actions with a cat-sound directive that moves through the prompt. | |
 | `images`, `img` | Inspect, diagnose, probe, and purge image publication backends. | |
-| `install` | Install or link an extension package (alias of `plugin install` / `plugin link`). | [extensions](./extensions.md) |
+| `install` | Install or link an extension package (alias of `plugin install` / `plugin link`). npm and git targets require the [`bun`](https://bun.sh) CLI in `$PATH`; local paths do not. | [extensions](./extensions.md) |
 | `join` | Join a shared collab session (same as `/join`). | [collab](./collab.md) |
 | `login` | Log in to a model provider from the terminal (counterpart of `/login`). | |
 | `models` | List, search, and refresh available models. | [models](./models.md) |

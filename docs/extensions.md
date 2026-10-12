@@ -14,6 +14,18 @@ For discovery paths and filesystem loading rules, see [`extension-loading.md`](.
 
 For packaged user-facing extension CLIs/features, see [`user-facing-packages.md`](./user-facing-packages.md).
 
+## Installing extension packages
+
+`omp install <target>` (alias of `omp plugin install` / `omp plugin link`) accepts:
+
+- npm specs — `pkg`, `pkg@1.2.3`, feature selection as `pkg[feat1,feat2]`
+- git specs — `github:user/repo[#ref]`, `gitlab:`, `bitbucket:`, `codeberg:`, `sourcehut:` shorthands, or a full git URL
+- local paths — `./my-ext`, symlinked into the user plugins directory by `plugin link`
+
+> **Prerequisite:** npm and git installs run `bun install` in the user plugins directory (`~/.omp/plugins` by default) and require the [`bun`](https://bun.sh) CLI in `$PATH`; without it they fail with `Executable not found in $PATH: "bun"`. `plugin upgrade` and `plugin uninstall` of npm/git plugins need it too. Local `link` installs and marketplace (`name@marketplace`) installs do not use bun.
+
+For the on-disk plugin model and runtime discovery rules, see [`plugin-manager-installer-plumbing.md`](./plugin-manager-installer-plumbing.md) and [`extension-loading.md`](./extension-loading.md).
+
 ## What an extension is
 
 An extension is a TS/JS module exporting a default factory. Factories may initialize synchronously or return a promise:
