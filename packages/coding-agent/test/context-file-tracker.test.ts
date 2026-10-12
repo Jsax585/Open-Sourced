@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentMessage, AsideMessage } from "@oh-my-pi/pi-agent-core";
+import {
+	type AgentMessage,
+	ASIDE_MESSAGE_COMMIT,
+	type AsideMessage,
+	type CommittableAsideMessage,
+} from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	CONTEXT_FILE_UPDATE_MESSAGE_TYPE,
@@ -36,11 +41,14 @@ function rig(root: string, overrides: Record<string, unknown> = {}): Rig {
 	return { tracker, messages, root, settings };
 }
 
+/** Evaluates asides the way the agent loop does, running each message's commit hook once it is "inserted". */
 function resolveAsides(asides: AsideMessage[]): CustomMessage[] {
 	const out: CustomMessage[] = [];
 	for (const aside of asides) {
 		const message = typeof aside === "function" ? aside() : aside;
-		if (message?.role === "custom") out.push(message);
+		if (message?.role !== "custom") continue;
+		out.push(message);
+		(message as CommittableAsideMessage)[ASIDE_MESSAGE_COMMIT]?.();
 	}
 	return out;
 }
@@ -122,6 +130,15 @@ describe("nested context discovery", () => {
 		const r = rig(root);
 		r.messages.push({ role: "developer" } as unknown as AgentMessage);
 		expect(paths(await read(r, path.join(root, "a/f.ts")))).toEqual([path.join(root, "a/AGENTS.md")]);
+	});
+
+	it("keeps a nested file queued when the loop ends before inserting it", async () => {
+		const root = project({ "a/AGENTS.md": "A rules", "a/f.ts": "x" });
+		const r = rig(root);
+		r.tracker.noteReadResult(READ_RESULT(path.join(root, "a/f.ts")));
+		const drained = await r.tracker.takeAsides(); // evaluated but never committed: the loop stopped first
+		for (const aside of drained) if (typeof aside === "function") aside();
+		expect(paths(resolveAsides(await r.tracker.takeAsides()))).toEqual([path.join(root, "a/AGENTS.md")]);
 	});
 
 	it("injects nothing once the prompt is declared to carry no project context", async () => {

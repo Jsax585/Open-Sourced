@@ -4715,7 +4715,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// Only entries the caller supplied may lack a file; anything else came from disk discovery.
 			diskBacked: true,
 			virtualPaths: new Set((options.contextFiles ?? []).map(file => path.resolve(file.path))),
-			nestedDiscovery: !promptIsFixed,
+			// An explicit empty list means the caller wants no project context, nested or otherwise.
+			nestedDiscovery: !promptIsFixed && options.contextFiles?.length !== 0,
 		});
 		// Hashline snapshots are session-scoped: /new and switchSession fire the
 		// change callbacks, so clear the tool-side store there — stale tags would

@@ -22,7 +22,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentMessage, AsideMessage } from "@oh-my-pi/pi-agent-core";
+import { type AgentMessage, ASIDE_MESSAGE_COMMIT, type AsideMessage } from "@oh-my-pi/pi-agent-core";
 import { isEnoent, isEnotdir, isRecord, logger, prompt } from "@oh-my-pi/pi-utils";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateHead } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { isProviderEnabled } from "../capability";
@@ -250,13 +250,26 @@ export class ContextFileTracker {
 		}
 		const asides: AsideMessage[] = [];
 		// Map order is insertion order: nearest directory first within each read.
+		let nestedBytes = 0;
 		for (const pending of this.#pending.values()) {
+			nestedBytes += pending.bytes;
 			asides.push(() => {
-				this.#pending.delete(pending.path);
-				return this.#nestedInContext(pending.path) ? null : pending.message;
+				if (this.#nestedInContext(pending.path)) {
+					this.#pending.delete(pending.path);
+					return null;
+				}
+				// Forget the entry only once the loop inserts it: a loop that ends first discards the aside,
+				// and the entry then stays queued for the next boundary.
+				const message = { ...pending.message };
+				Object.defineProperty(message, ASIDE_MESSAGE_COMMIT, {
+					configurable: true,
+					value: () => this.#pending.delete(pending.path),
+				});
+				return message;
 			});
 		}
-		const update = await this.#buildUpdate();
+		// Both channels land in the same request, so they share one read-sized budget.
+		const update = await this.#buildUpdate(Math.max(0, DEFAULT_MAX_BYTES - nestedBytes));
 		if (update) asides.push(update);
 		return asides;
 	}
@@ -426,7 +439,7 @@ export class ContextFileTracker {
 		tracked.content = content;
 	}
 
-	async #buildUpdate(): Promise<CustomMessage<ContextFileUpdateDetails> | undefined> {
+	async #buildUpdate(budgetBytes = DEFAULT_MAX_BYTES): Promise<CustomMessage<ContextFileUpdateDetails> | undefined> {
 		if (this.#ambient.size === 0 || !cfgContextFilesLiveUpdates.get(this.#host.settings)) return undefined;
 		await Promise.all([...this.#ambient].map(([filePath, tracked]) => this.#refreshDisk(filePath, tracked)));
 		const delivered = this.#deliveredHashes();
@@ -443,7 +456,7 @@ export class ContextFileTracker {
 			if (tracked.hash === null) {
 				// Removal notices repeat the path, so they share the same budget as updated bodies.
 				const removalBytes = Buffer.byteLength(filePath) + NOTICE_ENTRY_OVERHEAD_BYTES;
-				if (files.length > 0 && updatedBytes + removalBytes > DEFAULT_MAX_BYTES) {
+				if (files.length > 0 && updatedBytes + removalBytes > budgetBytes) {
 					deferred = true;
 					continue;
 				}
@@ -456,7 +469,7 @@ export class ContextFileTracker {
 			// single read-sized budget. Files that do not fit stay undelivered and follow in the next update.
 			const content = boundContent(tracked.content ?? "");
 			const bytes = Buffer.byteLength(content) + Buffer.byteLength(filePath) + NOTICE_ENTRY_OVERHEAD_BYTES;
-			if (files.length > 0 && updatedBytes + bytes > DEFAULT_MAX_BYTES) {
+			if (files.length > 0 && updatedBytes + bytes > budgetBytes) {
 				deferred = true;
 				continue;
 			}
