@@ -6,6 +6,17 @@
 
 - Fixed resuming a session saved on `openzoo/auto` when the OpenZoo model cache is empty.
 - Explicit CLI model selection now discovers a requested live-only provider when its cache is empty.
+### Added
+
+- Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
+
+### Fixed
+
+- Fixed `read.renderMarkdown` having no effect on plain-file reads: inline read previews now render Markdown files as formatted Markdown instead of numbered source ([#15007](https://github.com/can1357/oh-my-pi/issues/15007)).
+
+### Removed
+
+- Removed Codex Code Mode and its `providers.openai-codex.codeMode` / `providers.openai-codex.codeModeDirectTools` settings; Codex models always use the full direct tool surface.
 
 ## [18.10.3] - 2026-10-12
 
