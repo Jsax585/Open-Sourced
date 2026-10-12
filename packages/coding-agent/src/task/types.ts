@@ -241,6 +241,8 @@ export interface AgentDefinition {
 	prewalk?: boolean | string;
 	/** Advisor for spawned sessions of this agent: `true` = advise with the default advisor-role model, string = advise with that model pattern (optional `:level` suffix). Absent/`false` = no advisor. */
 	advisor?: boolean | string;
+	/** Soft request budget for this agent (assistant requests per run). Wrap-up notice at N, forced final `yield` at 1.5N. Absent uses the built-in/default budget. */
+	steps?: number;
 	source: AgentSource;
 	filePath?: string;
 }

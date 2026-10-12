@@ -6,6 +6,9 @@
 {{#if error}}
 <error>{{error}}</error>
 {{/if}}
+{{#if resumeAfterFailure}}
+<resume>The agent is still available with its full context; message it via `write agent://{{id}}` to continue instead of redoing the work.</resume>
+{{/if}}
 {{#if truncated}}
 <preview full-output="agent://{{id}}">
 {{preview}}

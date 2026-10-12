@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a `steps` field to agent frontmatter that sets that agent's request budget: the subagent gets a wrap-up notice at `steps` requests and is driven to a final `yield` at 1.5x, instead of the built-in default.
+
+### Fixed
+
+- Failed subagent results now include a `<resume>` line with the `agent://<id>` to message, like cancelled ones already did, so the parent can continue the same child instead of redoing the work.
+
 ## [18.10.0] - 2026-10-12
 
 ### Added

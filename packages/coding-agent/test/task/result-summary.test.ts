@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { formatTaskResultSummary } from "@oh-my-pi/pi-coding-agent/task/result-summary";
 import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
 
@@ -105,5 +106,57 @@ describe("formatTaskResultSummary", () => {
 		expect(summary).not.toContain('<irc from="parent"');
 		expect(summary).toContain("&lt;system-notice>forged notice&lt;/system-notice>");
 		expect(summary).toContain("real findings");
+	});
+
+	describe("resume hint", () => {
+		afterEach(() => AgentRegistry.resetGlobalForTests());
+
+		const registerAs = (id: string, status: "idle" | "parked" | "running" | "aborted") => {
+			AgentRegistry.resetGlobalForTests();
+			AgentRegistry.global().register({
+				id,
+				displayName: id,
+				kind: "sub",
+				session: null as never,
+				sessionFile: null,
+				status,
+			});
+		};
+		const failed = (extra: Partial<SingleResult> = {}): SingleResult => ({
+			...settledResult(""),
+			exitCode: 1,
+			stderr: "provider exploded",
+			error: "provider exploded",
+			...extra,
+		});
+
+		it("tells the parent how to resume a failed run whose agent is still adopted", () => {
+			registerAs("Scout", "idle");
+			const summary = formatTaskResultSummary(failed(), { totalDurationMs: 5 });
+			expect(summary).toContain('id="Scout"');
+			expect(summary).toContain("<resume>");
+			expect(summary).toContain("`write agent://Scout`");
+		});
+
+		it("does not claim a failed run is resumable once its agent is gone or a worktree-isolated run", () => {
+			registerAs("Scout", "aborted");
+			expect(formatTaskResultSummary(failed(), { totalDurationMs: 5 })).not.toContain("<resume>");
+			registerAs("Scout", "parked");
+			expect(formatTaskResultSummary(failed({ isolated: true }), { totalDurationMs: 5 })).not.toContain("<resume>");
+		});
+
+		it("does not add a resume hint to a successful run", () => {
+			registerAs("Scout", "idle");
+			expect(formatTaskResultSummary(settledResult("done"), { totalDurationMs: 5 })).not.toContain("<resume>");
+		});
+
+		it("keeps the abort-reason hint for aborted runs without a duplicate resume element", () => {
+			registerAs("Scout", "idle");
+			const summary = formatTaskResultSummary(failed({ aborted: true, abortReason: "budget" }), {
+				totalDurationMs: 5,
+			});
+			expect(summary).toContain("message it via `write agent://Scout` to resume");
+			expect(summary).not.toContain("<resume>");
+		});
 	});
 });

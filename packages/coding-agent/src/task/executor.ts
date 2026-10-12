@@ -167,7 +167,8 @@ const TASK_ABORT_CLEANUP_GRACE_MS = 10_000;
  * Entries are ceilings, not fixed values: the `default` key applies to agents
  * without an explicit entry, and the `task.softRequestBudget` setting can only
  * lower an agent's budget, never raise it above its bundled entry (0 disables
- * the guard entirely).
+ * the guard entirely). An agent definition's frontmatter `steps` replaces the
+ * bundled entry for that agent (still capped by the setting).
  */
 export const SOFT_REQUEST_BUDGET: Record<string, number> = {
 	scout: 100,
@@ -181,10 +182,10 @@ export const SOFT_REQUEST_BUDGET: Record<string, number> = {
  * bounds, so the tighter one wins; a configured budget of 0 disables the
  * guard regardless of the bundled entry.
  */
-export function resolveSoftRequestBudget(agentName: string, configuredBudget: number): number {
+export function resolveSoftRequestBudget(agentName: string, configuredBudget: number, agentSteps?: number): number {
 	const normalized = Math.max(0, Math.trunc(configuredBudget));
 	if (normalized === 0) return 0;
-	return Math.min(normalized, SOFT_REQUEST_BUDGET[agentName] ?? normalized);
+	return Math.min(normalized, agentSteps ?? SOFT_REQUEST_BUDGET[agentName] ?? normalized);
 }
 
 /** Extra requests allowed after a budget stop for the forced yield to land before the run is hard-aborted. */
@@ -3951,7 +3952,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	// <= 0 disables parking (the session stays live until process teardown).
 	const agentIdleTtlMs = Math.trunc(Number(cfgTaskAgentIdleTtlMs.get(settings)) || 0);
 	const configuredDefaultBudget = Math.max(0, Math.trunc(Number(cfgTaskSoftRequestBudget.get(settings)) || 0));
-	const softRequestBudget = resolveSoftRequestBudget(agent.name, configuredDefaultBudget);
+	const softRequestBudget = resolveSoftRequestBudget(agent.name, configuredDefaultBudget, agent.steps);
 	const softRequestBudgetNotice = cfgTaskSoftRequestBudgetNotice.get(settings);
 	const parentDepth = options.taskDepth ?? 0;
 	const childDepth = parentDepth + 1;

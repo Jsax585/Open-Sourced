@@ -59,12 +59,14 @@ export function formatTaskResultSummary(
 	const outputCharCount = result.outputMeta?.charCount ?? output.length;
 	const truncated = outputCharCount > FULL_OUTPUT_THRESHOLD && result.outputPath !== undefined;
 	const preview = truncated ? previewHead(output) : output;
-	// A stopped-but-adopted agent (soft-budget stop) stays messageable; tell
-	// the parent so it can resume via irc instead of redoing the work. Isolated
-	// runs are parked without a reviver (their worktree is gone), so their
-	// "parked" status must not read as resumable.
+	// A stopped-but-adopted agent (soft-budget stop) or a failed one (provider
+	// error, missing yield) stays messageable; tell the parent so it can resume
+	// via irc instead of redoing the work. Isolated runs are parked without a
+	// reviver (their worktree is gone), so their "parked" status must not read
+	// as resumable.
 	const refStatus = AgentRegistry.global().get(result.id)?.status;
-	const resumable = result.aborted && !result.isolated && (refStatus === "idle" || refStatus === "parked");
+	const settledNonSuccess = result.aborted || result.exitCode !== 0;
+	const resumable = settledNonSuccess && !result.isolated && (refStatus === "idle" || refStatus === "parked");
 	return prompt.render(taskSummaryTemplate, {
 		agentName: result.agent,
 		id: result.id,
@@ -73,6 +75,7 @@ export function formatTaskResultSummary(
 		abortReason: result.aborted ? escapeHarnessTags(result.abortReason ?? "") || undefined : undefined,
 		error: error === undefined ? undefined : escapeHarnessTags(error),
 		resumable,
+		resumeAfterFailure: resumable && !result.aborted,
 		preview: escapeHarnessTags(preview),
 		truncated,
 		meta: result.outputMeta

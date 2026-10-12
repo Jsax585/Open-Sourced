@@ -173,6 +173,12 @@ export function parseBoolean(value: unknown): boolean | undefined {
 	return undefined;
 }
 
+/** Parse a positive integer given as a number or numeric string; anything else (0, negatives, fractions, text) is dropped. */
+export function parsePositiveInteger(value: unknown): number | undefined {
+	const parsed = typeof value === "string" && /^\s*\d+\s*$/.test(value) ? Number(value) : value;
+	return typeof parsed === "number" && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 /**
  * Parse an MCP `requestIdFormat` value. Unrecognized values are dropped so a typo
  * degrades to the default integer ids rather than reaching a transport.
@@ -304,6 +310,8 @@ export interface ParsedAgentFields {
 	prewalk?: boolean | string;
 	/** `true` = advise with the default advisor-role model; string = advise with that model pattern. */
 	advisor?: boolean | string;
+	/** Per-agent soft request budget (assistant requests per run); see `resolveSoftRequestBudget`. */
+	steps?: number;
 }
 
 /**
@@ -381,6 +389,7 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 		const trimmed = frontmatter.advisor.trim();
 		if (trimmed) advisor = trimmed;
 	}
+	const steps = parsePositiveInteger(frontmatter.steps);
 	const autoloadSkills = parseArrayOrCSV(frontmatter.autoloadSkills)
 		?.map(s => s.trim())
 		.filter(Boolean);
@@ -397,6 +406,7 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 		readSummarize,
 		prewalk,
 		advisor,
+		steps,
 	};
 }
 
