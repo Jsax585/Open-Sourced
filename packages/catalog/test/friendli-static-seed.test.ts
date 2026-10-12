@@ -6,6 +6,7 @@ import { buildModel } from "../src/build";
 import { seedModels } from "../src/compat/providers";
 import { Effort } from "../src/effort";
 import { resolveProviderModels } from "../src/model-manager";
+import { getBundledModel } from "../src/models";
 import type { Model } from "../src/types";
 
 const tempDirs: string[] = [];
@@ -44,5 +45,19 @@ describe("Friendli provider bundle", () => {
 		expect(model.thinking?.defaultLevel).toBe(Effort.Max);
 		expect(model.compat.supportsReasoningEffort).toBe(true);
 		expect(model.compat.thinkingFormat).toBe("openai");
+	});
+
+	it("offers only deployment-advertised efforts instead of upstream-inferred tiers", () => {
+		expect(getBundledModel("friendli", "zai-org/GLM-5.2").thinking?.efforts).toEqual([Effort.High, Effort.Max]);
+		for (const id of [
+			"deepseek-ai/DeepSeek-V3.2",
+			"google/gemma-4-31B-it",
+			"zai-org/GLM-5.1",
+			"MiniMaxAI/MiniMax-M2.5",
+		]) {
+			const model = getBundledModel<"openai-completions">("friendli", id);
+			expect(model.thinking).toBeUndefined();
+			expect(model.compat.supportsReasoningEffort).toBe(false);
+		}
 	});
 });

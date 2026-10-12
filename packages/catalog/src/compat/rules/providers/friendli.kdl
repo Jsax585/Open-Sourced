@@ -20,4 +20,21 @@ provider "friendli" {
 			max-tokens 1048576
 		}
 	}
+
+	// models.dev does not advertise Friendli's per-model effort controls.
+	// Do not fabricate selectable tiers from the upstream model's ladder.
+	on-api "openai-completions" priority=1 {
+		thinking-efforts
+		supports-reasoning-effort #false
+	}
+	class "glm" {
+		revision ">=5.2 <5.3" {
+			thinking-efforts "high" "max"
+			supports-reasoning-effort #true
+		}
+		revision ">=5.3" {
+			thinking-efforts "low" "high" "max"
+			supports-reasoning-effort #true
+		}
+	}
 }
