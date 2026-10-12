@@ -1,11 +1,10 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { runAgentsCommand } from "@oh-my-pi/pi-coding-agent/cli/agents-cli";
 import { isReadOnlyAgent } from "@oh-my-pi/pi-coding-agent/task";
 import { loadBundledAgents, parseAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
 function agentByName(agents: AgentDefinition[], name: string): AgentDefinition {
 	const agent = agents.find(candidate => candidate.name === name);
@@ -31,7 +30,8 @@ describe("task agent capability descriptions", () => {
 	});
 
 	it("keeps the bundled request budget of scout and sonic when the agents are unpacked", async () => {
-		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-agents-unpack-"));
+		using tmp = TempDir.createSync("@omp-agents-unpack-");
+		const dir = tmp.path();
 		const stdout = spyOn(process.stdout, "write").mockImplementation(() => true);
 		try {
 			await runAgentsCommand({ action: "unpack", flags: { dir, json: true } });
@@ -44,7 +44,6 @@ describe("task agent capability descriptions", () => {
 			expect(parseAgent(task, await Bun.file(task).text(), "user").steps).toBeUndefined();
 		} finally {
 			stdout.mockRestore();
-			await fs.rm(dir, { recursive: true, force: true });
 		}
 	});
 });
