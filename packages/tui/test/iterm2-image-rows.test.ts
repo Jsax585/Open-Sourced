@@ -233,4 +233,27 @@ describe("iTerm2 inline images", () => {
 		expect(width * height * 750).toBeLessThanOrEqual(4 * 1024 * 1024);
 		expect(height * 750).toBeLessThanOrEqual(8192);
 	});
+
+	it("fall back to the single image when the loaded addon lacks the row encoder", async () => {
+		// A stale addon's missing export throws synchronously instead of rejecting.
+		info.imageProtocol = ImageProtocol.Iterm2;
+		const stub = spyOn(natives, "encodeImageRowsAsync").mockImplementation(() => {
+			throw new Error("missing native export");
+		});
+		try {
+			// The failed encode settles by requesting a repaint.
+			const settled = Promise.withResolvers<void>();
+			const image = new Image(
+				BANDED_PNG,
+				"image/png",
+				{ fallbackColor: text => text },
+				{ maxWidthCells: IMAGE_COLUMNS, requestRender: settled.resolve },
+			);
+			image.render(40);
+			await settled.promise;
+			expect(image.render(40).join("")).toContain(`width=${IMAGE_COLUMNS};height=auto`);
+		} finally {
+			stub.mockRestore();
+		}
+	});
 });

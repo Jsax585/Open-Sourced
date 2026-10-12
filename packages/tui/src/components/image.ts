@@ -735,7 +735,14 @@ export class Image implements Component {
 			if (this.#options.requestRender) this.#options.requestRender();
 			else this.#budget?.requestRender();
 		};
-		encodeLater().then(settle, () => settle(null));
+		// A missing native export (stale addon) throws instead of rejecting.
+		let encoding: Promise<T>;
+		try {
+			encoding = encodeLater();
+		} catch (error) {
+			encoding = Promise.reject(error);
+		}
+		encoding.then(settle, () => settle(null));
 		return undefined;
 	}
 
