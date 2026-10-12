@@ -11,6 +11,7 @@
 - Added `/update`: checks for a new omp, asks `y`/`n` before installing it in place with the same installer as `omp update`, then asks `y`/`n` whether to restart onto it and resume the session. From a source checkout it offers to restart into the installed omp instead ([#15153](https://github.com/can1357/oh-my-pi/pull/15153) by [](https://github.com/Shadorain))
 - Added `contextFiles.extra` to load extra instruction files, such as `AGENTS.local.md`, beside the usual context file ([#15147](https://github.com/can1357/oh-my-pi/pull/15147) by [@Shadorain](https://github.com/Shadorain)).
 - `/annotate` opens the note you are writing, a file or typed-prompt source, or (for local diff reviews) the current working-tree file in `$VISUAL` or `$EDITOR` with the external-editor key (Ctrl+G by default); a file source is saved back and its notes follow the edited text ([#15151](https://github.com/can1357/oh-my-pi/pull/15151) by [@Shadorain](https://github.com/Shadorain))
+- Added `/update`: checks for a new omp, asks `y`/`n` before installing it in place with the same installer as `omp update`, then asks `y`/`n` whether to restart onto it and resume the session. From a source checkout it offers to restart into the installed omp instead. Hidden and disabled in Tern, which manages omp updates automatically ([#15153](https://github.com/can1357/oh-my-pi/pull/15153) by [@Shadorain](https://github.com/Shadorain))
 
 ### Changed
 

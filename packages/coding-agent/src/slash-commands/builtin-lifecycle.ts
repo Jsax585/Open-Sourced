@@ -22,7 +22,13 @@ import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
 import { resolveToCwd } from "../tools/path-utils";
 import { commandConsumed, errorMessage, usage } from "./helpers/parse";
-import { parseSessionUpdateArgs, runSessionUpdate, YES_NO_PROMPT } from "./helpers/self-update";
+import {
+	isSessionUpdateManagedByTern,
+	parseSessionUpdateArgs,
+	runSessionUpdate,
+	TERN_UPDATE_DISABLED,
+	YES_NO_PROMPT,
+} from "./helpers/self-update";
 import { handleSshAcp } from "./helpers/ssh";
 import type {
 	ParsedSlashCommand,
@@ -844,6 +850,10 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		handleTui: async (command, runtime) => {
 			clearSubmittedText(runtime);
 			const { ctx } = runtime;
+			if (isSessionUpdateManagedByTern()) {
+				ctx.showStatus(TERN_UPDATE_DISABLED);
+				return;
+			}
 			if (ctx.session.isStreaming) {
 				ctx.showStatus("Wait for the current response to finish before updating.");
 				return;

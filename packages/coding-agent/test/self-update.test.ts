@@ -22,6 +22,7 @@ function harness(options: {
 	check?: UpdateSpawnResult;
 	install?: UpdateSpawnResult;
 	busyAfterInstall?: boolean;
+	env?: Record<string, string | undefined>;
 }) {
 	const calls: string[][] = [];
 	const status: string[] = [];
@@ -47,9 +48,36 @@ function harness(options: {
 		installRan = true;
 		return options.install ?? { exitCode: 0, output: INSTALL_OUTPUT };
 	};
-	const run = (flags: string[] = []) => runSessionUpdate({ flags, ui, identity: options.identity, spawn });
+	const run = (flags: string[] = []) =>
+		runSessionUpdate({ flags, ui, env: options.env ?? {}, identity: options.identity, spawn });
 	return { run, calls, status, prompts, restarts };
 }
+
+describe("Tern-managed updates", () => {
+	for (const marker of [
+		"TERN_ACP",
+		"TERN_BLOB_DIR",
+		"TERN_COMPLETE",
+		"TERN_IDENTITY",
+		"TERN_LENSES",
+		"TERN_PANE",
+		"TERN_PANE_SOCKET",
+		"TERN_WINDOW_KEY",
+		"TERN_WINDOW_SOCKET",
+	]) {
+		it(`blocks checking, installing, and restarting when ${marker} is present, even empty`, async () => {
+			const h = harness({ identity: installed, answers: [true, true], env: { [marker]: "" } });
+			await h.run();
+			await h.run(["--check"]);
+			await h.run(["--force", "--canary"]);
+			expect(h.calls).toEqual([]);
+			expect(h.prompts).toEqual([]);
+			expect(h.restarts).toEqual([]);
+			expect(h.status).toHaveLength(3);
+			for (const status of h.status) expect(status).toContain("Tern");
+		});
+	}
+});
 
 describe("parseSessionUpdateArgs", () => {
 	it("rejects an unknown option instead of installing", () => {

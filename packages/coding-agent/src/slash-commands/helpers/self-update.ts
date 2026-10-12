@@ -39,6 +39,22 @@ const FAILURE_PREFIX = /^Update failed: /;
 
 export const SESSION_UPDATE_USAGE = "Usage: /update [--check] [--force] [--canary|--stable]";
 
+export const TERN_UPDATE_DISABLED = "/update is disabled in Tern; Tern manages omp updates automatically.";
+
+export function isSessionUpdateManagedByTern(env: Record<string, string | undefined> = process.env): boolean {
+	return (
+		env.TERN_ACP !== undefined ||
+		env.TERN_BLOB_DIR !== undefined ||
+		env.TERN_COMPLETE !== undefined ||
+		env.TERN_IDENTITY !== undefined ||
+		env.TERN_LENSES !== undefined ||
+		env.TERN_PANE !== undefined ||
+		env.TERN_PANE_SOCKET !== undefined ||
+		env.TERN_WINDOW_KEY !== undefined ||
+		env.TERN_WINDOW_SOCKET !== undefined
+	);
+}
+
 /** Single-key answers for a Yes/No dialog. */
 export const YES_NO_PROMPT = {
 	hotkeys: { y: "Yes", n: "No" },
@@ -158,10 +174,15 @@ function summarize(output: string): string {
 export async function runSessionUpdate(options: {
 	flags: readonly string[];
 	ui: SessionUpdateUi;
+	env?: Record<string, string | undefined>;
 	identity?: InstallIdentity;
 	spawn?: (cmd: string[]) => Promise<UpdateSpawnResult>;
 }): Promise<void> {
 	const { ui } = options;
+	if (isSessionUpdateManagedByTern(options.env)) {
+		ui.status(TERN_UPDATE_DISABLED);
+		return;
+	}
 	const spawn = options.spawn ?? spawnInstalledUpdate;
 	const checkOnly = options.flags.includes("--check") || options.flags.includes("-c");
 	const installFlags = options.flags.filter(flag => flag !== "--check" && flag !== "-c");

@@ -419,6 +419,8 @@ falls back to spawning the replacement with inherited terminal streams.
 
 ## In-session update
 
+Inside Tern, `/update` is hidden from command suggestions and disabled even when typed manually: Tern manages omp updates automatically. Presence of any of `TERN_ACP`, `TERN_BLOB_DIR`, `TERN_COMPLETE`, `TERN_IDENTITY`, `TERN_LENSES`, `TERN_PANE`, `TERN_PANE_SOCKET`, `TERN_WINDOW_KEY`, or `TERN_WINDOW_SOCKET` disables it, including when the variable is empty. No update check, install, or restart prompt runs.
+
 `/update` is TUI-only. It runs `omp update --check` in a child process and asks `Update omp 18.8.7 → 18.9.0?` as a single-keypress prompt (`y` / `n`; Esc cancels). On `y` it runs the same in-place installer as `omp update`, again in a child so a failure cannot exit the session. It replaces the `omp` currently selected on `PATH` (binary, bun, npm, Homebrew, or mise). An already-current or externally managed install is reported from the check and never prompts. Refusals the updater only detects while installing (Nix, canary on Homebrew or mise) are reported after the first `y` and do not offer a restart.
 
 Flags: `--check` (report only, no prompt), `--force`, and `--canary` / `--stable`. `--plugins` is not accepted; use `/plugins`.
