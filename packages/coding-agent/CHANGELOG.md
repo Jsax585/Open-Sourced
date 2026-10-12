@@ -5,6 +5,7 @@
 ### Added
 
 - Added three opt-in status-line formatting features for custom presets: a `profile` segment that shows the active named profile as `p:<name>` and hides for the default profile, `segmentOptions.token_total.breakdown` to render labeled traffic totals like `in:25K out:5`, and `segmentOptions.context_pct.compact` to render percentage-only context labels such as `ctx:9.1%` ([#9096](https://github.com/can1357/oh-my-pi/issues/9096))
+- Added `task.agentSoftRequestBudget` to give named subagents their own soft request budget, so a long-running agent can get more requests (or `0` for no guard) while scout, sonic and other agents keep theirs ([#15419](https://github.com/can1357/oh-my-pi/pull/15419) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.10.2] - 2026-10-12
 
@@ -24,6 +25,9 @@
 - Fails unstructured task runs that conclude without a final message
 - Background task cards no longer stop updating once the agent ends its turn while the task is still running
 - Transparent images the model receives (small icons, oversized screenshots) keep their transparency instead of turning into a black square, and resized edges no longer pick up a dark fringe
+### Changed
+
+- Sized snapcompact archives for Claude 4.7+ and GPT-5.5 to 6.1 (gpt-6-astra included) at each frame's measured price instead of at least 5,024 tokens, so Codex archives can hold up to 1.7× as many frames when the room under the compaction trigger is the limit ([#15442](https://github.com/can1357/oh-my-pi/pull/15442) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.10.1] - 2026-10-12
 
@@ -40,6 +44,10 @@
 ### Fixed
 
 - Fixed `grep` on a single file showing in Tern as separate boxed snippets with no file row or syntax colors; it now looks the same as a `grep` over a directory
+### Changed
+
+- On the official Anthropic and Codex endpoints, snapcompact archives may carry up to 12 MB of frames instead of 3 MB, Anthropic requests keep up to 600 images (100 on 200k-window models) instead of 90, and Codex requests up to 2,000 instead of 200; custom base URLs, including Anthropic requests rerouted by `ANTHROPIC_BASE_URL` or Foundry's `FOUNDRY_BASE_URL`, keep the previous limits and no longer get Anthropic's 24 MB inline image byte limit ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+- Sized snapcompact archives for Claude 4.7+, GPT-5.5+ and gpt-6-astra at each frame's measured price instead of at least 5,024 tokens, so Codex archives can hold up to 1.7× as many frames when the room under the compaction trigger is the limit
 
 ## [18.10.0] - 2026-10-12
 
