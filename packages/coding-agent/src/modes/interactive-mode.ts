@@ -361,6 +361,7 @@ import {
 	cfgDisplayCacheMissMarker,
 	cfgDisplayCollapseCompacted,
 	cfgDisplayHideToolActivity,
+	cfgDisplayHideToolOutputDetails,
 	cfgDisplayPinnedAgents,
 	cfgDisplayShowTokenUsage,
 	cfgDisplayShowTurnTime,
@@ -455,6 +456,7 @@ const cfgLiveUiSettings = combine({
 	"compaction.enabled": cfgCompactionEnabled,
 	"compaction.methodOrder": cfgCompactionMethodOrder,
 	"display.hideToolActivity": cfgDisplayHideToolActivity,
+	"display.hideToolOutputDetails": cfgDisplayHideToolOutputDetails,
 	"terminal.showImages": cfgTerminalShowImages,
 	"terminal.programStatus": cfgTerminalProgramStatus,
 	hideThinkingBlock: cfgHideThinkingBlock,
@@ -1320,6 +1322,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	isBashMode = false;
 	toolOutputExpanded = false;
 	hideToolActivity = false;
+	hideToolOutputDetails = false;
 	todoExpanded = false;
 	planModeEnabled = false;
 	planModePaused = false;
@@ -2085,6 +2088,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.hideToolActivity = cfgDisplayHideToolActivity.get(settings);
 		this.chatContainer.setToolActivityVisible(!this.hideToolActivity);
+		this.hideToolOutputDetails = cfgDisplayHideToolOutputDetails.get(settings);
+		this.chatContainer.setToolOutputDetailsHidden(this.hideToolOutputDetails);
 		this.hideThinkingBlock = cfgHideThinkingBlock.get(settings);
 		this.proseOnlyThinking = cfgProseOnlyThinking.get(settings);
 		this.expandThinkingBlocks = cfgExpandThinkingBlocks.get(settings);
@@ -3695,6 +3700,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		// Field comparisons skip effects the keybinding toggles already applied.
+		const hideToolOutputDetails = cfgDisplayHideToolOutputDetails.get(this.settings);
+		if (any("display.hideToolOutputDetails") && hideToolOutputDetails !== this.hideToolOutputDetails) {
+			this.hideToolOutputDetails = hideToolOutputDetails;
+			this.chatContainer.setToolOutputDetailsHidden(hideToolOutputDetails);
+		}
 		const hideToolActivity = cfgDisplayHideToolActivity.get(this.settings);
 		if (any("display.hideToolActivity") && hideToolActivity !== this.hideToolActivity) {
 			this.hideToolActivity = hideToolActivity;
@@ -8702,6 +8712,14 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	toggleThinkingBlockVisibility(): void {
 		this.#inputController.toggleThinkingBlockVisibility();
+	}
+
+	toggleToolOutputDetailsVisibility(): void {
+		this.#inputController.toggleToolOutputDetailsVisibility();
+	}
+
+	toggleDetailVisibility(): void {
+		this.#inputController.toggleDetailVisibility();
 	}
 
 	toggleTodoExpansion(): void {
