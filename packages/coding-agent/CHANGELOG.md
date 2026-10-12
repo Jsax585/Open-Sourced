@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a Copy button that leads the turn footer under an answer in Tern (`⧉ · 2m13s · 71K tok · $0.85 this turn`, in place of the clock), which copies that answer
+
 ### Fixed
 
 - Fixed `wait` so delayed or unavailable broker discovery does not block local completions, messages, service exits, or cancellation ([#14860](https://github.com/can1357/oh-my-pi/pull/14860) by [@vavilonska](https://github.com/vavilonska))
