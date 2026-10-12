@@ -337,7 +337,7 @@ type ToolChoice =
 
 Several backends reject thinking + forced tool choice together:
 
-- **Anthropic**: `disableThinkingIfToolChoiceForced` deletes `params.thinking`; adaptive-only models pin `output_config.effort = "low"` so default adaptive thinking doesn't kick back in.
+- **Anthropic**: `disableThinkingIfToolChoiceForced` deletes `params.thinking`; adaptive-only models pin `output_config.effort = "low"` so default adaptive thinking doesn't kick back in. Models flagged `thinking.supportsDisabledThinking` (Opus 5, Sonnet 5) send `thinking: {type: "disabled"}` with the effort clamped to `disabledThinkingMaxEffort` instead, unless the request carries per-message effort controls.
 - **Bedrock**: forced `any`/`tool` clears `additionalModelRequestFields` (where thinking config lives), unless prefix-bound thinking must be kept; then tool choice downgrades to `auto`.
 - **OpenAI compat**: `resolveOpenAICompatPolicy` honors `disableReasoningOnForcedToolChoice` / `disableReasoningOnToolChoice`. Exception: Kimi K3 keeps reasoning effort with forced `"required"` (`hasActiveNativeKimiK3Reasoning` in `openai-completions.ts`).
 

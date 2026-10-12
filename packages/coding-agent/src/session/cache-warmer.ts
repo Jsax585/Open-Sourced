@@ -150,7 +150,8 @@ export function observedPromptCacheTier(usage: Usage): PromptCacheTier | undefin
  */
 export function isReplayable(model: Model<Api>, options: SimpleStreamOptions | undefined): boolean {
 	if (model.api === "anthropic-messages") {
-		const reasoningRequested = model.reasoning && options?.reasoning !== undefined && !options.forceReasoningOff;
+		const reasoningRequested =
+			model.reasoning && options?.reasoning !== undefined && !options.disableReasoning && !options.forceReasoningOff;
 		return !reasoningRequested || model.thinking?.mode === "anthropic-adaptive";
 	}
 	if (model.api === "bedrock-converse-stream") {

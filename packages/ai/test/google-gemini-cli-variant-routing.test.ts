@@ -216,7 +216,7 @@ describe("google-gemini-cli effort-tier variant routing", () => {
 		});
 	});
 
-	it("routes claude pairs to the bare id when off without wire suppression", async () => {
+	it("routes claude pairs to the bare id with a zero budget when off", async () => {
 		const off = await captureRequest(collapsedClaudeModel(), undefined);
 		expect(off.body.model).toBe("claude-sonnet-4-6");
 		// Even on a bare/non-thinking backing id, Gemini CLI needs explicit thinkingConfig
@@ -234,7 +234,7 @@ describe("google-gemini-cli effort-tier variant routing", () => {
 		expect(high.body.request?.generationConfig?.thinkingConfig?.thinkingBudget).toBeGreaterThan(0);
 	});
 
-	it("keeps the status quo for un-routed models", async () => {
+	it("keeps un-routed models on their id and sends a zero budget when off", async () => {
 		const off = await captureRequest(unroutedModel(), undefined);
 		expect(off.body.model).toBe("gemini-2.5-flash");
 		expect(off.body.request?.generationConfig?.thinkingConfig).toEqual({

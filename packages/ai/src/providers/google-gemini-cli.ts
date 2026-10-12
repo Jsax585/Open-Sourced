@@ -260,8 +260,9 @@ export interface GoogleGeminiCliOptions extends StreamOptions {
 		/**
 		 * Explicit wire suppression when `enabled` is false. Cloud Code Assist
 		 * re-applies the per-id baked server default when thinkingConfig is
-		 * omitted, so models with `thinking.suppressWhenOff` must send
-		 * `includeThoughts: false` plus a MINIMAL level (or zero budget).
+		 * omitted, so models that can turn thinking off send
+		 * `includeThoughts: false` plus a zero budget, or a MINIMAL level for
+		 * `thinking.suppressWhenOff` level models.
 		 */
 		suppress?: { level: GoogleThinkingLevel } | { budget: number };
 	};

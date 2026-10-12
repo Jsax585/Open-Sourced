@@ -69,7 +69,7 @@ export interface AuthGatewayParsedRequestOptions {
 	/**
 	 * Anthropic `thinking.type` when it is independent from `output_config.effort`.
 	 * Currently only `adaptive` needs preservation; disabled maps to
-	 * `thinkingMode: "off"` and enabled carries `explicitThinkingBudgetTokens`.
+	 * `disableReasoning` and enabled carries `explicitThinkingBudgetTokens`.
 	 */
 	anthropicThinkingMode?: "adaptive";
 	/**

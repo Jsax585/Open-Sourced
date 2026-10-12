@@ -38,7 +38,7 @@ import {
 import { canReuseCachedPr, createPrCacheContext, isSamePrCacheContext, type PrCacheContext } from "./git-utils";
 import { summarizeUsageResetCredits } from "../overlays/usage-display";
 import { getPreset } from "./presets";
-import { describeSegment, renderSegment, type SegmentContext } from "./segments";
+import { describeSegment, displayedThinkingLevel, renderSegment, type SegmentContext } from "./segments";
 import type { TspMeterMark, TspProps } from "@oh-my-pi/pi-wire";
 import type { NativeNode, NativeUiEvent } from "../native/node";
 import { col, node, span } from "../native/describe";
@@ -2705,7 +2705,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		target.modelProvider = model?.provider;
 		target.modelContextWindow = model?.contextWindow;
 		target.modelThinking = model?.thinking;
-		target.thinkingLevel = state.thinkingLevel;
+		target.thinkingLevel = displayedThinkingLevel(state);
 		target.modelCostRef = model?.cost;
 		target.contextUsageRevision = this.session.contextUsageRevision ?? 0;
 		target.systemPromptRef = systemPrompt;

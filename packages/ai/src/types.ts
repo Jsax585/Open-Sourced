@@ -786,8 +786,8 @@ export interface SimpleStreamOptions extends Omit<StreamOptions, "apiKey"> {
 	 * transports honor supported modes directly; other transports should prefer
 	 * {@link disableReasoning} for generic off/lowest-effort behavior.
 	 *
-	 * `"off"` is accepted for compatibility and normalized to
-	 * {@link disableReasoning} before provider dispatch; it is not a mode.
+	 * `"off"` is accepted for compatibility and treated like
+	 * {@link disableReasoning}; it is not a mode.
 	 */
 	thinkingMode?: ThinkingMode | "off";
 	/**

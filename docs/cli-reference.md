@@ -117,7 +117,8 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 
 | Flag | Description |
 | --- | --- |
-| `--thinking <level>` | Set the thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `auto`. |
+| `--effort <level>` | Set the effort level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `auto`. |
+| `--thinking <mode>` | Set the thinking mode: `adaptive` or `default`. Effort values are still accepted with a deprecation warning and act as `--effort`. |
 | `--hide-thinking` | Hide thinking blocks in TUI output (display only; does not disable model thinking). |
 | `--print-thoughts` | Include thinking blocks in print-mode text output. |
 | `--external-thinking` | Use a private scratchpad while disabling supported GPT/Claude/Gemini reasoning. Use at your own risk: providers have flagged this request shape as abuse. |

@@ -1617,9 +1617,7 @@ export function createAutoLearnCaptureRunner(
 				systemPrompt: [...options.sourceAgent.state.systemPrompt],
 				model: captureModel,
 				thinkingLevel: options.sourceAgent.state.thinkingLevel,
-				// Additive modes only: `off` belongs to the effort axis and is already
-				// carried by `disableReasoning` below.
-				thinkingMode: options.sourceAgent.state.thinkingMode === "adaptive" ? "adaptive" : undefined,
+				thinkingMode: options.sourceAgent.state.thinkingMode,
 				disableReasoning: options.sourceAgent.state.disableReasoning,
 				tools: captureTools,
 				messages: captureMessages,
@@ -2075,18 +2073,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		}
 		return level;
 	};
-	// `off` is intensity, not mode. SDK callers and pre-split session files may
-	// still carry `thinkingMode: "off"`; fold those into the effort axis so the
-	// mode axis stays purely additive and cannot latch thinking off.
-	// A legacy `thinkingMode: "off"` only folds onto the effort axis when the
-	// caller did not state that axis directly -- matching `--effort` beating a
-	// deprecated `--thinking off` on the CLI, in either order.
+	// `off` is intensity, not mode: a `thinkingMode: "off"` from SDK callers or
+	// session files folds onto the effort axis unless `thinkingLevel` is explicit
+	// (as `--effort` beats a deprecated `--thinking off`), and never reaches the
+	// mode axis.
 	const thinkingModeIsOff =
 		options.thinkingLevel === undefined &&
 		(options.thinkingMode === ThinkingLevel.Off ||
 			(options.thinkingMode === undefined && existingSession.thinkingMode === ThinkingLevel.Off));
-	// `off` never reaches the mode axis: it is either folded onto the effort axis
-	// above, or dropped when an explicit `thinkingLevel` already owns intensity.
 	const requestedThinkingMode =
 		options.thinkingMode !== undefined ? options.thinkingMode : parseCliThinkingMode(existingSession.thinkingMode);
 	const initialThinkingMode =

@@ -136,13 +136,14 @@ interface ForkTerminalDependencies {
 
 /**
  * Startup flags the fork child re-supplies from the parent's live state
- * (`--profile`, `--model`, `--thinking`, `--prompt-cache-key`) or that would
+ * (`--profile`, `--model`, `--thinking`, `--effort`, `--prompt-cache-key`) or that would
  * re-point it at a stale scope (`--config`/`--cwd`/`--provider`; the child
  * gets the effective overlays via `PI_CONFIG_FILES` and the session cwd).
  */
 const FORK_LAUNCH_OVERRIDES: Readonly<Record<string, true>> = {
 	"--config": true,
 	"--cwd": true,
+	"--effort": true,
 	"--model": true,
 	"--profile": true,
 	"--prompt-cache-key": true,
@@ -1469,8 +1470,9 @@ export class CommandController {
 			if (activeProfile) childArgs.push("--profile", activeProfile);
 			if (activeModel) childArgs.push("--model", `${activeModel.provider}/${activeModel.id}`);
 			const activeThinkingLevel = this.ctx.session.configuredThinkingLevel();
-			if (activeThinkingLevel !== undefined) childArgs.push("--thinking", activeThinkingLevel);
-			// Forcing --model/--thinking marks the fork's cache shape as changed, which would
+			if (activeThinkingLevel !== undefined) childArgs.push("--effort", activeThinkingLevel);
+			if (this.ctx.session.thinkingMode !== undefined) childArgs.push("--thinking", this.ctx.session.thinkingMode);
+			// Forcing --model/--effort marks the fork's cache shape as changed, which would
 			// drop the inherited key; pin what the parent's requests populated the cache under.
 			childArgs.push("--prompt-cache-key", this.ctx.session.agent.promptCacheKey ?? this.ctx.session.sessionId);
 			childArgs.push("--fork", sourceSessionFile);

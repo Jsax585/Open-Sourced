@@ -221,7 +221,7 @@ export function streamGitLabDuo(
 									onSseEvent: options.onSseEvent,
 									fetch: options.fetch,
 									reasoning: explicitThinkingOff ? undefined : reasoningEffort,
-									disableReasoning: explicitThinkingOff ? true : options.disableReasoning,
+									disableReasoning: explicitThinkingOff,
 									forceReasoningOff: options.forceReasoningOff,
 									toolChoice: options.toolChoice,
 								} satisfies OpenAIResponsesOptions,

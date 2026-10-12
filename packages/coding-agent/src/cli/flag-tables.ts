@@ -52,6 +52,10 @@ export interface ParseDeps {
 	effortLevels: readonly string[];
 }
 
+/**
+ * Per-parse state: whether `--effort` has been seen, so deprecated
+ * `--thinking <effort>` aliases never overwrite an explicit effort.
+ */
 export interface ParseState {
 	explicitEffort: boolean;
 }
@@ -112,9 +116,6 @@ function parseMaxTimeSeconds(value: string): number {
 		`Invalid --max-time value: ${JSON.stringify(value)}. Expected a positive number of seconds or duration like "5s", "10m", "1h".`,
 	);
 }
-
-// Per-parse state tracks whether `--effort` has been seen, so deprecated
-// `--thinking <effort>` aliases never overwrite an explicit effort.
 
 /**
  * Setters for flags with string values. Most built-ins consume the next argv

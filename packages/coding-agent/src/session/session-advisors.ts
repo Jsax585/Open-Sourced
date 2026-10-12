@@ -3060,7 +3060,8 @@ export class SessionAdvisors {
 						messages: a.agent.state.messages,
 						systemPrompt: a.agent.state.systemPrompt,
 						model: a.agent.state.model,
-						thinkingLevel: a.agent.state.thinkingLevel,
+						// The agent keeps its last effort while thinking is off.
+						thinkingLevel: a.agent.state.disableReasoning ? ThinkingLevel.Off : a.agent.state.thinkingLevel,
 						tools: a.agent.state.tools,
 					});
 		if (this.#advisors.length === 1) return dump(this.#advisors[0]);

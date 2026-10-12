@@ -4359,6 +4359,21 @@ function stripCompactionIncompatibleParams(params: MessageCreateParamsStreaming)
 	}
 }
 
+/**
+ * Whether a built request rules out `thinking: {type: "disabled"}`: its
+ * per-message effort controls stay on the wire, and Anthropic rejects them
+ * with thinking off.
+ */
+function requestBlocksDisabledThinking(
+	params: MessageCreateParamsStreaming,
+	model: Model<"anthropic-messages">,
+): boolean {
+	return (
+		model.compat.supportsPerMessageEffort === true &&
+		params.messages.some(message => message.output_config?.effort !== undefined)
+	);
+}
+
 function disableThinkingIfToolChoiceForced(
 	params: MessageCreateParamsStreaming,
 	model: Model<"anthropic-messages">,
@@ -4376,7 +4391,12 @@ function disableThinkingIfToolChoiceForced(
 		delete params.context_management;
 	}
 
-	if (isAdaptiveOnlyThinking(model) && model.thinking?.supportsDisabledThinking && model.compat.supportsOutputEffort) {
+	if (
+		isAdaptiveOnlyThinking(model) &&
+		model.thinking?.supportsDisabledThinking &&
+		model.compat.supportsOutputEffort &&
+		!requestBlocksDisabledThinking(params, model)
+	) {
 		params.thinking = { type: "disabled" };
 		const outputConfig = params.output_config as AnthropicOutputConfig | undefined;
 		if (outputConfig?.effort) {
@@ -5411,16 +5431,21 @@ function buildParams(
 				// Omit the thinking field (the API defaults to adaptive) and pin the
 				// lowest effort so "thinking off" calls stay cheap instead of failing
 				// the request with a 400 (a hidden-thinking toggle must never break it).
-				// Models flagged `supportsDisabledThinking` send `disabled` below with the
-				// caller's effort, unless earlier effort controls rule it out.
+				// Models flagged `supportsDisabledThinking` send `disabled` below, unless
+				// earlier effort controls rule it out.
 				// The effort field requires the `effort-2025-11-24` beta; it is attached
 				// at the request site, including per-request for injected SDK clients.
 				outputConfigEffort = "low";
 			} else {
 				thinking = { type: "disabled" };
-				const disabledEffort = isAdaptiveOnlyThinking(model)
-					? resolveAnthropicAdaptiveEffort(model, options ?? {})
-					: undefined;
+				// Once an earlier request recorded an effort, a new one would go out as
+				// a per-message control, which `disabled` rejects: keep the one in force.
+				const effortInForce =
+					model.compat.supportsPerMessageEffort === true && records.some(record => record.controls.effort);
+				const disabledEffort =
+					isAdaptiveOnlyThinking(model) && !effortInForce
+						? resolveAnthropicAdaptiveEffort(model, options ?? {})
+						: undefined;
 				if (disabledEffort && disabledEffort !== "adaptive") {
 					outputConfigEffort = clampDisabledThinkingEffort(model, disabledEffort);
 				}

@@ -1471,7 +1471,13 @@ function streamSimpleRequest<TApi extends Api>(
 	if (customApiProvider) {
 		return withThinkingLoopGuard(model, requestOptions, opts =>
 			withProviderInFlightLimit(model, opts, limited =>
-				customApiProvider.streamSimple(model, context, { ...opts, waitForTerminalDrain: limited }),
+				customApiProvider.streamSimple(model, context, {
+					...opts,
+					// Thinking off keeps the session's last effort on the request; an
+					// extension that reads only `reasoning` must not turn it back on.
+					...(opts?.thinkingMode === "off" || opts?.disableReasoning === true ? { reasoning: undefined } : {}),
+					waitForTerminalDrain: limited,
+				}),
 			),
 		);
 	}
@@ -1835,7 +1841,6 @@ function mapOptionsForApi<TApi extends Api>(
 	const options = normalizeMandatoryReasoningOptions(model, rawOptions);
 	const explicitThinkingOff = options?.thinkingMode === "off" || options?.disableReasoning === true;
 	const forceReasoningOff = options?.forceReasoningOff === true;
-	const openAiDisableReasoning = explicitThinkingOff ? true : options?.disableReasoning;
 	const simpleProviderOptions = getProviderDefinition(model.provider)?.mapSimpleOptions?.(options ?? {});
 	const base = {
 		temperature: options?.temperature,
@@ -2105,7 +2110,7 @@ function mapOptionsForApi<TApi extends Api>(
 					reasoningSummary: options?.hideThinkingSummary ? null : undefined,
 					openrouterVariant: options?.openrouterVariant,
 					maxTokensExplicit: rawOptions?.maxTokens !== undefined,
-					disableReasoning: openAiDisableReasoning,
+					disableReasoning: explicitThinkingOff,
 					// Forwarded, not folded: the Responses record reads both flags
 					// itself (`applyResponsesCompatPolicy`).
 					forceReasoningOff: options?.forceReasoningOff,
@@ -2118,7 +2123,7 @@ function mapOptionsForApi<TApi extends Api>(
 				...base,
 				reasoning: openAiReasoning,
 				// `OpenAICompletionsOptions` carries no forceReasoningOff; fold it.
-				disableReasoning: openAiDisableReasoning || options?.forceReasoningOff,
+				disableReasoning: explicitThinkingOff || options?.forceReasoningOff,
 				toolChoice: mapOpenAiToolChoice(options?.toolChoice),
 				serviceTier: options?.serviceTier,
 				openrouterVariant: options?.openrouterVariant,
@@ -2133,7 +2138,7 @@ function mapOptionsForApi<TApi extends Api>(
 				...base,
 				reasoning: openAiReasoning,
 				// `OpenAICompletionsOptions` carries no forceReasoningOff; fold it.
-				disableReasoning: openAiDisableReasoning || options?.forceReasoningOff,
+				disableReasoning: explicitThinkingOff || options?.forceReasoningOff,
 				toolChoice: mapOpenAiToolChoice(options?.toolChoice),
 				serviceTier: options?.serviceTier,
 				openrouterVariant: options?.openrouterVariant,
@@ -2152,7 +2157,7 @@ function mapOptionsForApi<TApi extends Api>(
 				reasoningSummary: options?.hideThinkingSummary ? null : undefined,
 				openrouterVariant: options?.openrouterVariant,
 				maxTokensExplicit: rawOptions?.maxTokens !== undefined,
-				disableReasoning: openAiDisableReasoning,
+				disableReasoning: explicitThinkingOff,
 				forceReasoningOff: options?.forceReasoningOff,
 				textVerbosity: options?.textVerbosity,
 				promptCache: options?.promptCache,
@@ -2171,16 +2176,15 @@ function mapOptionsForApi<TApi extends Api>(
 				reasoningSummary: options?.hideThinkingSummary ? null : undefined,
 				promptCache: options?.promptCache,
 				statefulResponses: options?.statefulResponses,
-				disableReasoning: openAiDisableReasoning || options?.forceReasoningOff,
+				disableReasoning: explicitThinkingOff || options?.forceReasoningOff,
 				forceReasoningOff: options?.forceReasoningOff,
 			});
 		}
 
 		case "openai-codex-responses": {
-			const openAiReasoning = explicitThinkingOff ? undefined : resolveOpenAiReasoningEffort(model, options);
 			return castApi<"openai-codex-responses">({
 				...base,
-				reasoning: explicitThinkingOff ? "none" : openAiReasoning,
+				reasoning: explicitThinkingOff ? "none" : resolveOpenAiReasoningEffort(model, options),
 				toolChoice: mapOpenAiToolChoice(options?.toolChoice),
 				serviceTier: options?.serviceTier,
 				preferWebsockets: options?.preferWebsockets,
@@ -2192,8 +2196,8 @@ function mapOptionsForApi<TApi extends Api>(
 		}
 
 		case "google-generative-ai": {
-			// Gemini defaults thinking on, so every off signal must produce an
-			// explicit provider-specific suppression shape.
+			// Explicitly disable thinking when reasoning is absent, unsupported, or
+			// replaced by the caller's external scratchpad. Gemini defaults thinking on.
 			const reasoning = options?.reasoning;
 			if (!reasoning || !model.reasoning || explicitThinkingOff || forceReasoningOff) {
 				return castApi<"google-generative-ai">({
@@ -2283,10 +2287,12 @@ function mapOptionsForApi<TApi extends Api>(
 				// Budget clamped to zero — fall through to the thinking-off path.
 			}
 
+			// CCA re-applies the per-id baked server default when the config is
+			// omitted; suppression must be explicit on the wire.
+			const thinkingOff = resolveGoogleThinkingOff(model);
 			const thinking: GoogleGeminiCliOptions["thinking"] = { enabled: false };
-			if (model.reasoning && model.thinking) {
-				thinking.suppress = model.thinking.mode === "google-level" ? { level: "MINIMAL" } : { budget: 0 };
-			}
+			if (thinkingOff.budgetTokens !== undefined) thinking.suppress = { budget: thinkingOff.budgetTokens };
+			else if (thinkingOff.level !== undefined) thinking.suppress = { level: thinkingOff.level };
 			return castApi<"google-gemini-cli">({
 				...base,
 				requestModelId: resolveWireModelId(model, undefined),
@@ -2297,6 +2303,8 @@ function mapOptionsForApi<TApi extends Api>(
 		}
 
 		case "google-vertex": {
+			// Explicitly disable thinking when reasoning is absent, unsupported, or
+			// replaced by the caller's external scratchpad.
 			const reasoning = options?.reasoning;
 			if (!reasoning || !model.reasoning || explicitThinkingOff || forceReasoningOff) {
 				return castApi<"google-vertex">({
@@ -2343,7 +2351,7 @@ function mapOptionsForApi<TApi extends Api>(
 			return castApi<"ollama-chat">({
 				...base,
 				reasoning: explicitThinkingOff ? undefined : resolveOpenAiReasoningEffort(model, options),
-				disableReasoning: openAiDisableReasoning,
+				disableReasoning: explicitThinkingOff,
 				toolChoice: options?.toolChoice,
 			});
 
@@ -2367,7 +2375,7 @@ function mapOptionsForApi<TApi extends Api>(
 		case "factory-droid-agent": {
 			const factoryModel = model as Model<"factory-droid-agent">;
 			const reasoning =
-				options?.reasoning && !options.disableReasoning && !options.forceReasoningOff
+				options?.reasoning && !explicitThinkingOff && !options.forceReasoningOff
 					? requireSupportedEffort(factoryModel, options.reasoning)
 					: undefined;
 			return castApi<"factory-droid-agent">({
@@ -2376,7 +2384,7 @@ function mapOptionsForApi<TApi extends Api>(
 				// account; do not turn the discovery scope's cap into a caller cap.
 				maxTokens: options?.maxTokens,
 				reasoning,
-				disableReasoning: options?.disableReasoning || options?.forceReasoningOff,
+				disableReasoning: explicitThinkingOff || options?.forceReasoningOff,
 				hideThinkingSummary: options?.hideThinkingSummary,
 				textVerbosity: options?.textVerbosity,
 				serviceTier: options?.serviceTier,

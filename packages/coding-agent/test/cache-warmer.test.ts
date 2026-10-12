@@ -253,6 +253,8 @@ describe("cache warming scheduling math", () => {
 		const model = makeModel();
 		model.thinking = { mode: "anthropic-budget-effort", efforts: [Effort.High] };
 		expect(isReplayable(model, { reasoning: Effort.High })).toBe(false);
+		// Thinking off keeps the session's effort on the request but derives no budget.
+		expect(isReplayable(model, { reasoning: Effort.High, disableReasoning: true })).toBe(true);
 		model.thinking = { mode: "anthropic-adaptive", efforts: [Effort.High] };
 		expect(isReplayable(model, { reasoning: Effort.High })).toBe(true);
 		expect(isReplayable(model, { reasoning: Effort.High, forceReasoningOff: true })).toBe(true);

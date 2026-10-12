@@ -20,7 +20,12 @@ export interface ActiveRepoContext {
 }
 
 export interface StatusLineSession {
-	state: { model?: Model; thinkingLevel?: ThinkingLevel; messages: readonly AgentMessage[] };
+	state: {
+		model?: Model;
+		thinkingLevel?: ThinkingLevel;
+		disableReasoning?: boolean;
+		messages: readonly AgentMessage[];
+	};
 	model?: Model;
 	messages?: readonly AgentMessage[];
 	sessionFile?: string;
@@ -66,7 +71,7 @@ export interface StatusLineSession {
 }
 
 export interface FooterSession {
-	state: Pick<StatusLineSession["state"], "model" | "thinkingLevel">;
+	state: Pick<StatusLineSession["state"], "model" | "thinkingLevel" | "disableReasoning">;
 	isAutoThinking: boolean;
 	autoResolvedThinkingLevel(): string | undefined;
 	getContextUsage: StatusLineSession["getContextUsage"];

@@ -1,10 +1,10 @@
 import { stripVTControlCharacters } from "node:util";
-import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { type Component, padding, truncateToWidth, visibleWidth } from "../index";
 import { formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
 import { theme } from "../theme";
 import type { FooterHost, FooterSession } from "./host";
+import { displayedThinkingLevel } from "./segments";
 import { shortenPath } from "../render/render-utils";
 import { sanitizeStatusText } from "../chrome/shared";
 import { formatMetric } from "../components/metric";
@@ -232,7 +232,7 @@ export class FooterComponent implements Component {
 		if (state.model?.thinking) {
 			const level = this.session.isAutoThinking
 				? (this.session.autoResolvedThinkingLevel() ?? `${theme.thinking.autoPending} auto`)
-				: (state.thinkingLevel ?? ThinkingLevel.Off);
+				: displayedThinkingLevel(state);
 			model += ` • ${level}`;
 		}
 		seg("model", { side: "right", priority: 5, icon: "model", spans: [span(model, "dim")] });
@@ -353,7 +353,7 @@ export class FooterComponent implements Component {
 				const resolved = this.session.autoResolvedThinkingLevel();
 				rightSide = `${modelName} • ${resolved ? resolved : `${theme.thinking.autoPending} auto`}`;
 			} else {
-				const thinkingLevel = state.thinkingLevel ?? ThinkingLevel.Off;
+				const thinkingLevel = displayedThinkingLevel(state);
 				rightSide = `${modelName} • ${thinkingLevel}`;
 			}
 		}

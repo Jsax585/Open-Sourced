@@ -510,6 +510,107 @@ describe("Anthropic adaptive thinking mode", () => {
 		expect(payload.output_config?.effort).toBe("max");
 	});
 
+	it("keeps the effort in force when Opus 5 turns thinking off after an earlier request recorded one", async () => {
+		const model = bundledAnthropicModel("claude-opus-5");
+		const first = await captureTurn(model, { thinkingEnabled: true, reasoning: Effort.High });
+		const context: Context = {
+			...CONTEXT,
+			messages: [
+				...CONTEXT.messages,
+				answered("sunny", first),
+				{ role: "user", content: "continue", timestamp: Date.now() },
+			],
+		};
+		for (const opts of [
+			{ thinkingEnabled: false, reasoning: Effort.Low },
+			{ thinkingEnabled: false, reasoning: Effort.High, minimizeEffort: true },
+		]) {
+			const payload = await capturePayload(model, opts, context);
+			// Anthropic rejects a per-message effort control with thinking disabled.
+			expect(payload.thinking).toEqual({ type: "disabled" });
+			expect(payload.output_config?.effort).toBe("high");
+			expect(payload.messages?.some(message => message.output_config)).toBe(false);
+		}
+	});
+
+	it("disables thinking at the clamped effort on a first forced-tool Opus 5 turn at max", async () => {
+		const payload = await capturePayload(bundledAnthropicModel("claude-opus-5"), {
+			thinkingEnabled: true,
+			reasoning: Effort.Max,
+			toolChoice: "any",
+		});
+
+		expect(payload.thinking).toEqual({ type: "disabled" });
+		expect(payload.output_config?.effort).toBe("high");
+	});
+
+	it("disables thinking on a forced-tool Opus 5 turn after max was recorded, then returns to max", async () => {
+		const model = bundledAnthropicModel("claude-opus-5");
+		const first = await captureTurn(model, { thinkingEnabled: true, reasoning: Effort.Max });
+		const forcedContext: Context = {
+			...CONTEXT,
+			messages: [
+				...CONTEXT.messages,
+				answered("sunny", first),
+				{ role: "user", content: "call a tool", timestamp: Date.now() },
+			],
+		};
+		const forced = await captureTurn(
+			model,
+			{ thinkingEnabled: true, reasoning: Effort.Max, toolChoice: "any" },
+			forcedContext,
+		);
+		const next = await capturePayload(
+			model,
+			{ thinkingEnabled: true, reasoning: Effort.Max },
+			{
+				...forcedContext,
+				messages: [
+					...forcedContext.messages,
+					answered("done", forced),
+					{ role: "user", content: "continue", timestamp: Date.now() },
+				],
+			},
+		);
+
+		expect(forced.payload.thinking).toEqual({ type: "disabled" });
+		expect(forced.payload.output_config?.effort).toBe("high");
+		expect(forced.payload.messages?.some(message => message.output_config)).toBe(false);
+		expect(next.output_config?.effort).toBe("max");
+		expect(next.messages?.some(message => message.output_config)).toBe(false);
+	});
+
+	it("keeps adaptive thinking on a forced-tool Opus 5 turn that replays per-message effort controls", async () => {
+		const model = bundledAnthropicModel("claude-opus-5");
+		const first = await captureTurn(model, { thinkingEnabled: true, reasoning: Effort.Medium });
+		const second: Context = {
+			...CONTEXT,
+			messages: [
+				...CONTEXT.messages,
+				answered("sunny", first),
+				{ role: "user", content: "continue", timestamp: Date.now() },
+			],
+		};
+		const changed = await captureTurn(model, { thinkingEnabled: true, reasoning: Effort.High }, second);
+		const payload = await capturePayload(
+			model,
+			{ thinkingEnabled: false, reasoning: Effort.High, toolChoice: "any" },
+			{
+				...second,
+				messages: [
+					...second.messages,
+					answered("done", changed),
+					{ role: "user", content: "call a tool", timestamp: Date.now() },
+				],
+			},
+		);
+
+		expect(payload.tool_choice?.type).toBe("any");
+		expect(payload.messages?.some(message => message.output_config?.effort === "high")).toBe(true);
+		expect(payload.thinking).toBeUndefined();
+		expect(payload.output_config?.effort).toBe("low");
+	});
+
 	it("direct provider options preserve adaptive thinking mode without effort", async () => {
 		const payload = await capturePayload(adaptiveModel("claude-opus-4-8"), {
 			anthropicThinkingMode: "adaptive",

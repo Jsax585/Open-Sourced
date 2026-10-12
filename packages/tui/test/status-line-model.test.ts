@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { SegmentContext } from "../src/status-line/segments";
-import { renderSegment } from "../src/status-line/segments";
+import { renderSegment, thinkingLevelWord } from "../src/status-line/segments";
 import { initTheme, theme } from "../src/theme";
 
 beforeAll(async () => {
@@ -171,5 +171,15 @@ describe("status line model segment compact thinking level", () => {
 		const rendered = renderSegment("model", createThinkingContext(true));
 		expect(Bun.stripANSI(rendered.content)).toBe(`${glyph} Test Model`);
 		expect(Bun.stripANSI(rendered.content)).not.toContain(theme.sep.dot);
+	});
+
+	it("shows off while thinking is off, not the effort the agent keeps for re-enabling", () => {
+		const ctx = createThinkingContext(false);
+		Object.assign(ctx.session.state, { disableReasoning: true });
+		const modelPrefix = theme.icon.model ? `${theme.icon.model} ` : "";
+		expect(Bun.stripANSI(renderSegment("model", ctx).content)).toBe(
+			`${modelPrefix}Test Model${theme.sep.dot}${Bun.stripANSI(`${theme.status.disabled} off`)}`,
+		);
+		expect(thinkingLevelWord(ctx.session)).toBe(ThinkingLevel.Off);
 	});
 });

@@ -290,7 +290,14 @@ export function thinkingLevelWord(
 	const state = session.state;
 	if (!state.model?.thinking) return undefined;
 	if (session.isAutoThinking) return session.autoResolvedThinkingLevel() ?? "auto";
-	return state.thinkingLevel ?? ThinkingLevel.Off;
+	return displayedThinkingLevel(state);
+}
+
+/** The level to show: the agent keeps its last effort while thinking is off. */
+export function displayedThinkingLevel(
+	state: Pick<StatusLineSession["state"], "thinkingLevel" | "disableReasoning">,
+): ThinkingLevel {
+	return state.disableReasoning ? ThinkingLevel.Off : (state.thinkingLevel ?? ThinkingLevel.Off);
 }
 
 /** Thinking-level display ("◉ xhigh", "⟳ auto", …), or "" when hidden or unsupported. */
@@ -306,7 +313,7 @@ function modelThinkingDisplay(ctx: SegmentContext): string {
 			? (theme.thinking[resolved as keyof Theme["thinking"]] ?? resolved)
 			: `${theme.thinking.autoPending} auto`;
 	}
-	const level = state.thinkingLevel ?? ThinkingLevel.Off;
+	const level = displayedThinkingLevel(state);
 	return level === ThinkingLevel.Off
 		? `${theme.status.disabled} off`
 		: (theme.thinking[level as keyof Theme["thinking"]] ?? level);

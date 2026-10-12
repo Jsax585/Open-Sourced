@@ -853,7 +853,7 @@ Custom models and overrides may define `thinking` with required `mode` and `effo
 configured backend has been verified to accept an explicit reasoning-off
 request. This keeps the `:off` selector from being clamped to the lowest effort.
 
-For a custom model with the default `thinkingFormat: openai`, `--thinking off`
+For a custom model with the default `thinkingFormat: openai`, `--effort off`
 has no explicit off payload on `openai-completions`: when `reasoning_effort` is
 sent, it requests the first effort listed in `efforts`, even with
 `requiresEffort: false` (for example, `efforts: [low, medium, high]` sends

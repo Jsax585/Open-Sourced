@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Effort } from "@oh-my-pi/pi-ai";
 import { classifyTerminalMultiplexer, type TerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-multiplexer";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { CommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/command-controller";
@@ -44,6 +45,7 @@ function createContext(
 		settings?: Pick<Settings, "getAgentDir" | "getConfigFiles">;
 		cwd?: string;
 		thinkingLevel?: ConfiguredThinkingLevel;
+		thinkingMode?: "adaptive";
 		argv?: string[];
 		promptCacheKey?: string;
 		launchWarning?: string;
@@ -58,6 +60,7 @@ function createContext(
 		agent: { promptCacheKey: options.promptCacheKey },
 		model: options.activeModel ?? { provider: "provider", id: "model" },
 		configuredThinkingLevel: () => options.thinkingLevel,
+		thinkingMode: options.thinkingMode,
 	};
 	const flush = vi.fn(async () => undefined);
 	const sessionManager = {
@@ -337,7 +340,7 @@ describe("/fork terminal placement", () => {
 					PI_CONFIG_FILES: staleConfigPath,
 					OPENAI_API_KEY: secret,
 				}) as NodeJS.ProcessEnv,
-			argv: ["--cwd", oldCwd, "--config", "./stale-startup-overlay.yml", "--thinking", "low", "prompt"],
+			argv: ["--cwd", oldCwd, "--config", "./stale-startup-overlay.yml", "--effort", "low", "prompt"],
 		});
 
 		await controller.handleForkCommand("pane");
@@ -355,9 +358,30 @@ describe("/fork terminal placement", () => {
 		expect(appArgs).not.toContain(oldCwd);
 		expect(appArgs).not.toContain("--config");
 		expect(appArgs).not.toContain("./stale-startup-overlay.yml");
-		expect(appArgs.filter(arg => arg === "--thinking")).toHaveLength(1);
-		expect(appArgs[appArgs.indexOf("--thinking") + 1]).toBe("auto");
+		expect(appArgs.filter(arg => arg === "--effort")).toHaveLength(1);
+		expect(appArgs[appArgs.indexOf("--effort") + 1]).toBe("auto");
 		expect(appArgs).not.toContain("low");
+		expect(appArgs).not.toContain("--thinking");
+	});
+
+	it("replaces startup thinking flags with the live effort and thinking mode", async () => {
+		const { controller, launchTerminal } = createContext({
+			activeProfile: null,
+			thinkingLevel: Effort.Low,
+			thinkingMode: "adaptive",
+			argv: ["--effort", "high", "--thinking", "medium", "prompt"],
+		});
+
+		await controller.handleForkCommand("pane");
+
+		const command = launchTerminal.mock.calls[0]?.[0]?.command ?? [];
+		const appArgs = command.slice(command.indexOf("omp-entry") + 1);
+		expect(appArgs.filter(arg => arg === "--effort")).toHaveLength(1);
+		expect(appArgs[appArgs.indexOf("--effort") + 1]).toBe("low");
+		expect(appArgs.filter(arg => arg === "--thinking")).toHaveLength(1);
+		expect(appArgs[appArgs.indexOf("--thinking") + 1]).toBe("adaptive");
+		expect(appArgs).not.toContain("high");
+		expect(appArgs).not.toContain("medium");
 	});
 
 	it("refuses to expose a startup API key in the multiplexer command", async () => {

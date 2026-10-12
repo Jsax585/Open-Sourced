@@ -168,6 +168,26 @@ describe("google-gemini-cli Gemini 3.x thinking mapping", () => {
 		});
 	});
 
+	it("leaves the server default for a level model that cannot turn thinking off", async () => {
+		let requestBody: string | undefined;
+		const fetchMock = createFetchMock(body => {
+			requestBody = body;
+		});
+		const model = buildModel({
+			...createModel("level-only-preview"),
+			thinking: { mode: "google-level", efforts: [Effort.Low, Effort.High] },
+		});
+
+		const stream = streamSimple(model, context, {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			fetch: fetchMock,
+			disableReasoning: true,
+		});
+		await stream.result();
+
+		expect(extractThinking(requestBody)).toBeUndefined();
+	});
+
 	it("sends LOW not MINIMAL when gemini-3.7-flash minimal aliases the -low SKU", async () => {
 		let requestBody: string | undefined;
 		const fetchMock = createFetchMock(body => {
