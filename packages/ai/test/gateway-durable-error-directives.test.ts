@@ -1,8 +1,60 @@
 import { expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { startAuthGateway } from "../src/auth-gateway";
+import { AuthStorage } from "../src/auth-storage";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { classifyGatewayError } from "../src/error/gateway";
 import { streamAnthropic } from "../src/providers/anthropic";
 import { streamOpenAICompletions } from "../src/providers/openai-completions";
+
+it("retains an explicit no-retry directive on the gateway's actual HTTP error", async () => {
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-retry-directive-"));
+	const storage = await AuthStorage.create(path.join(directory, "auth.db"));
+	storage.keys.setRuntime("anthropic", "fixture-key");
+	const model = buildModel({
+		id: "claude-sonnet-4-6",
+		name: "Fixture",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1000,
+		maxTokens: 100,
+	});
+	let requests = 0;
+	const gateway = startAuthGateway({
+		storage,
+		bind: "127.0.0.1:0",
+		bearerTokens: ["client"],
+		resolveModel: () => model,
+		fetch: async () => {
+			requests++;
+			return Response.json(
+				{ type: "error", error: { type: "api_error", message: "fixture upstream failure" } },
+				{ status: 503, headers: { "x-should-retry": "false" } },
+			);
+		},
+	});
+	try {
+		const response = await fetch(`${gateway.url}/v1/chat/completions`, {
+			method: "POST",
+			headers: { Authorization: "Bearer client", "Content-Type": "application/json" },
+			body: JSON.stringify({ model: model.id, messages: [{ role: "user", content: "fixture" }], stream: false }),
+		});
+		expect(response.status).toBe(503);
+		expect(response.headers.get("x-should-retry")).toBe("false");
+		expect(requests).toBe(1);
+		await response.text();
+	} finally {
+		await gateway.close();
+		storage.close();
+		await fs.rm(directory, { recursive: true, force: true });
+	}
+});
 
 it("retains parenthesized provider failure statuses through the gateway classifier", () => {
 	expect(classifyGatewayError("Factory Gemini generate failed (400): Unknown error")).toMatchObject({

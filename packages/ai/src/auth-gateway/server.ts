@@ -419,7 +419,10 @@ async function handleFormatEndpoint(
 					return route.module.formatError(499, "request_aborted", errorMessage);
 				}
 				const classified = classifyGatewayError(message);
-				return route.module.formatError(classified.status, classified.type, errorMessage);
+				const response = route.module.formatError(classified.status, classified.type, errorMessage);
+				if (message.errorRetryable !== undefined)
+					response.headers.set("x-should-retry", String(message.errorRetryable));
+				return response;
 			}
 			return json(
 				200,
@@ -636,7 +639,10 @@ async function handlePiNative(
 					return piNative.formatError(499, "request_aborted", errorMessage);
 				}
 				const classified = classifyGatewayError(message);
-				return piNative.formatError(classified.status, classified.type, errorMessage);
+				const response = piNative.formatError(classified.status, classified.type, errorMessage);
+				if (message.errorRetryable !== undefined)
+					response.headers.set("x-should-retry", String(message.errorRetryable));
+				return response;
 			}
 			return json(
 				200,
