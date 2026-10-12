@@ -5508,6 +5508,49 @@ describe("AgentSession retry fallback", () => {
 			return { requested, agent };
 		};
 
+		it.each([
+			"OpenRouter/z-ai/glm-4.7@cerebras",
+			"openrouter/z-ai/glm-4-7@cerebras",
+		])("restores a canonical routed primary from saved reference %s", async originalSelector => {
+			const routedPrimary = getBundledModel("openrouter", "z-ai/glm-4.7");
+			if (!routedPrimary) throw new Error("Expected bundled routed primary");
+			const requested: string[] = [];
+			const mock = createMockModel({ responses: [{ content: ["Restored routed primary"] }] });
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: fallback, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					requested.push(formatModelStringWithRouting(model));
+					return mock.stream(model, context, options);
+				},
+			});
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.fallbackRevertPolicy": "next-turn",
+			});
+			settings.setModelRole("default", originalSelector);
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+				initialRetryFallback: {
+					role: "default",
+					originalSelector,
+					originalThinkingLevel: undefined,
+				},
+			});
+			const notices: string[] = [];
+			session.subscribe(event => {
+				if (event.type === "notice") notices.push(event.message);
+			});
+			await session.prompt("Restore the exact routed primary");
+			await session.waitForIdle();
+			expect(requested).toEqual(["openrouter/z-ai/glm-4.7@cerebras"]);
+			expect(session.model?.id).toBe(routedPrimary.id);
+			expect(notices).toEqual([]);
+		});
+
 		it("keeps an interactive goal continuation on the fallback through input dispatch", async () => {
 			const { requested } = setup({
 				initial: true,

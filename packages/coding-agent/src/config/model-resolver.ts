@@ -336,6 +336,24 @@ function applyUpstreamRouting(model: Model<Api>, upstream: string): Model<Api> {
 	} as ModelSpec<Api>);
 }
 
+/** Resolve a saved concrete reference without fuzzy matching, retaining supported upstream routing. */
+export function resolveExactModelReference(
+	reference: string,
+	modelRegistry: Pick<ModelRegistry, "find">,
+): Model<Api> | undefined {
+	const slash = reference.indexOf("/");
+	if (slash < 0) return undefined;
+	const provider = reference.slice(0, slash);
+	const id = reference.slice(slash + 1);
+	// Literal @-suffixed IDs take precedence over upstream routing syntax.
+	const literal = modelRegistry.find(provider, id);
+	if (literal) return literal;
+	const routing = splitUpstreamRouting(reference);
+	if (!routing) return undefined;
+	const model = modelRegistry.find(provider, routing.base.slice(slash + 1));
+	return model && supportsUpstreamRouting(model) ? applyUpstreamRouting(model, routing.upstream) : undefined;
+}
+
 const kProviderModelIndex = Symbol("model-resolver.providerIndex");
 const kProviderSpellingIndex = Symbol("model-resolver.providerSpellingIndex");
 type ModelsWithProviderIndex = readonly Model<Api>[] & {

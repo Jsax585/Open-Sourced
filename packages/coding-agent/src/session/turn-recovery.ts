@@ -27,7 +27,7 @@ import { isFireworksFastModelId, toFireworksBaseModelId } from "@oh-my-pi/pi-cat
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { isUnexpectedSocketCloseMessage, logger, prompt, sleepLong } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
-import { formatModelStringWithRouting, resolveModelOverride } from "../config/model-resolver";
+import { formatModelStringWithRouting, resolveExactModelReference, resolveModelOverride } from "../config/model-resolver";
 
 import type { Settings } from "../config/settings";
 import type { RetryErrorUpdate } from "../extensibility/shared-events";
@@ -2431,19 +2431,10 @@ export class TurnRecovery {
 		}
 		if (policy === "cooldown-expiry" && this.isRetryFallbackSelectorSuppressed(originalSelector)) return false;
 
-		const resolvedPrimary = resolveModelOverride(
-			[originalSelector.raw],
+		const primaryModel = resolveExactModelReference(
+			formatRetryFallbackBaseSelector(originalSelector),
 			this.#host.modelRegistry,
-			this.#host.settings,
 		);
-		// A saved primary is an exact identity, not a fuzzy model preference.
-		// Keep routed resolution, but never restore a different model when the
-		// original has disappeared from the registry.
-		const primaryModel =
-			resolvedPrimary.model &&
-			formatModelStringWithRouting(resolvedPrimary.model) === formatRetryFallbackBaseSelector(originalSelector)
-				? resolvedPrimary.model
-				: this.#host.modelRegistry.find(originalSelector.provider, originalSelector.id);
 		if (!primaryModel) {
 			if (policy === "next-turn") {
 				this.#host.emitNotice(
