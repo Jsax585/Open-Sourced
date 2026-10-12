@@ -3,6 +3,7 @@ import { sameItems } from "../native/memo";
 import { card, col } from "../native/describe";
 import type { DescribeContext, NativeNode } from "../native/node";
 import type { Component } from "../tui";
+import type { SgrMouseEvent } from "../mouse";
 import {
 	getPaddingX,
 	getPublishedLineWidths,
@@ -17,9 +18,11 @@ type Cache = {
 	widthEpoch: number;
 	bgSample: string | undefined;
 	borderSample: string | undefined;
+	childComponents: readonly Component[];
 	childLines: (readonly string[])[];
 	childWidths: (readonly number[] | undefined)[];
 	childSnapshots: (readonly string[] | undefined)[];
+	childStartRow: number;
 	result: string[];
 };
 
@@ -127,6 +130,23 @@ export class Box implements Component {
 	#invalidateCache(): void {
 		this.#cached = undefined;
 	}
+	handleMouse(event: SgrMouseEvent): boolean {
+		const cached = this.#cached;
+		if (!cached || cached.childComponents.length !== this.children.length) return false;
+		for (let index = 0; index < this.children.length; index++) {
+			if (cached.childComponents[index] !== this.children[index]) return false;
+		}
+		let row = event.row - cached.childStartRow;
+		if (row < 0) return false;
+		for (let index = 0; index < cached.childLines.length; index++) {
+			const childLines = cached.childLines[index]!;
+			if (row < childLines.length) {
+				return cached.childComponents[index]?.handleMouse?.({ ...event, row }) === true;
+			}
+			row -= childLines.length;
+		}
+		return false;
+	}
 
 	invalidate(): void {
 		this.#invalidateCache();
@@ -215,6 +235,8 @@ export class Box implements Component {
 			cached.widthEpoch === getWidthConfigEpoch() &&
 			cached.bgSample === bgSample &&
 			cached.borderSample === borderSample &&
+			cached.childComponents.length === count &&
+			children.every((child, index) => cached.childComponents[index] === child) &&
 			cached.childLines.length === count &&
 			childLines.every((lines, i) => {
 				if (cached.childLines[i] !== lines) return false;
@@ -292,9 +314,11 @@ export class Box implements Component {
 			widthEpoch: finalWidthEpoch,
 			bgSample,
 			borderSample,
+			childComponents: children.slice(),
 			childLines,
 			childWidths,
 			childSnapshots,
+			childStartRow: (border ? 1 : 0) + this.#paddingY,
 			result,
 		};
 		return result;

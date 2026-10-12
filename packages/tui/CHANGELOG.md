@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `Component.handleMouse()` for decoded left-clicks on inline components in the mutable viewport, including live transcript components.
+
 ## [18.10.0] - 2026-10-12
 
 ### Breaking Changes

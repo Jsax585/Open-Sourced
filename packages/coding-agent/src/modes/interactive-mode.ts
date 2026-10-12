@@ -24,6 +24,7 @@ import type {
 	LoaderMessageColorFn,
 	OverlayHandle,
 	SlashCommand,
+	SgrMouseEvent,
 } from "@oh-my-pi/pi-tui";
 import {
 	Container,
@@ -1624,6 +1625,12 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	resolveViewportClickCandidates(index: number): string[] {
 		return this.composer.viewportClickCandidates(index);
+	}
+	dispatchViewportMouse(event: SgrMouseEvent): "none" | "delivered" | "consumed" {
+		const viewport = this.ui.getMutableViewport();
+		const local = event.row - viewport.top;
+		if (viewport.length === 0 || local < 0 || local >= viewport.length) return "none";
+		return this.composer.dispatchViewportMouse({ ...event, row: local });
 	}
 
 	/** Flip the pinned jump list between its collapsed few and the full list, overriding the setting. */

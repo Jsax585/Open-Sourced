@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
-import type { Component, Container, EditorTheme, KeyId, Loader, TUI } from "@oh-my-pi/pi-tui";
+import type { Component, Container, EditorTheme, KeyId, Loader, SgrMouseEvent, TUI } from "@oh-my-pi/pi-tui";
 import type { TspText } from "@oh-my-pi/pi-wire";
 import type { StatusNotice } from "@oh-my-pi/pi-tui/chrome/status-notice";
 import type { CollabController } from "../collab/controller";
@@ -159,6 +159,7 @@ export interface InteractiveModeContext {
 	invalidatePendingFocus(): void;
 	/** Candidate subagent ids under a mutable-viewport line, for click-to-focus. Empty when the line has no target. */
 	resolveViewportClickCandidates(index: number): string[];
+	dispatchViewportMouse(event: SgrMouseEvent): "none" | "delivered" | "consumed";
 	/** Flip the pinned jump list between its collapsed few and the full list. */
 	togglePinnedHudExpanded(): void;
 	/** Point the inline hover band at a click-candidate id (or clear it). */

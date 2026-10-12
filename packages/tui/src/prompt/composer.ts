@@ -15,6 +15,7 @@ import {
 	type TUIOptions,
 	type ViewportSize,
 } from "../tui";
+import type { SgrMouseEvent } from "../mouse";
 import { wrapLiteralLine } from "../utils";
 import type { NativeChild, NativeSurface, NativeSurfaceProvider } from "../native/node";
 import { sameItems } from "../native/memo";
@@ -127,13 +128,21 @@ class StatusHost implements Component {
 	}
 }
 
-/** One click target's row span within the mutable viewport (half-open `[start, end)`). */
+/** One click target's row span in the mutable viewport (half-open `[start, end)`). */
 export interface ViewportClickSpan {
 	start: number;
 	end: number;
 	/** Candidate subagent ids for a span-local row. */
 	candidates: (local: number) => string[];
+	/** Component receiving decoded pointer events for this span, if any. */
+	mouseTarget?: Component;
+	/** Component-local row offset when the viewport clips the span's head. */
+	mouseRowOffset?: number;
+	/** Reject spans whose owning container no longer has this rendered child map. */
+	isCurrent?: () => boolean;
 }
+
+export type ViewportMouseDispatch = "none" | "delivered" | "consumed";
 
 /**
  * Row-level click target: maps rendered rows to subagent ids. Implemented by
@@ -151,7 +160,7 @@ export interface ViewportClickRowTarget {
 export function routeViewportClick(spans: readonly ViewportClickSpan[], index: number): string[] {
 	if (!Number.isInteger(index) || index < 0) return [];
 	for (const span of spans) {
-		if (index < span.start || index >= span.end) continue;
+		if (index < span.start || index >= span.end || span.isCurrent?.() === false) continue;
 		return span.candidates(index - span.start);
 	}
 	return [];
@@ -389,9 +398,17 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const active = transcript.renderViewport(width, Math.max(0, rows - before.length - belowFloor), frame);
 		const activeSpans: ViewportClickSpan[] = [];
 		for (const span of transcript.getLastViewportSpans()) {
-			const ids = (span.component as Partial<{ getClickFocusAgentIds(): string[] }>).getClickFocusAgentIds?.();
-			if (!ids || ids.length === 0) continue;
-			activeSpans.push({ start: span.start, end: span.end, candidates: () => ids });
+			const component = span.component;
+			const ids = (component as Partial<{ getClickFocusAgentIds(): string[] }>).getClickFocusAgentIds?.();
+			const mouseTarget = typeof component.handleMouse === "function" ? component : undefined;
+			if ((!ids || ids.length === 0) && !mouseTarget) continue;
+			activeSpans.push({
+				start: span.start,
+				end: span.end,
+				candidates: ids && ids.length > 0 ? () => ids : () => [],
+				mouseTarget,
+				mouseRowOffset: span.componentRowOffset,
+			});
 		}
 		const drop = Math.max(0, before.length + active.length + after.length - rows);
 		const mutable = [...before, ...active, ...after].slice(drop);
@@ -424,7 +441,14 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				// A clipped head must offset the callback: without the skew the
 				// first visible row would hit-test as span-local row 0.
 				const skew = clamped - start;
-				spans.push({ start: clamped, end, candidates: (local: number) => span.candidates(local + skew) });
+				spans.push({
+					start: clamped,
+					end,
+					candidates: (local: number) => span.candidates(local + skew),
+					mouseTarget: span.mouseTarget,
+					mouseRowOffset: (span.mouseRowOffset ?? 0) + skew,
+					isCurrent: span.isCurrent,
+				});
 			}
 		};
 		for (const span of activeSpans) shift(span, topPadding + before.length - drop);
@@ -473,49 +497,68 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	}
 
 	/**
-	 * Append one below-transcript root's rows to `after`, recording click spans
-	 * for its row targets in `after` coordinates.
-	 *
-	 * Row targets usually nest one level down: chrome roots are plain
-	 * containers (the HUD lives inside `subagentContainer`), and
-	 * `Container.render` is a pure concatenation, so child spans tile the root
-	 * span exactly. Render those children once and share the rows for
-	 * composition and measurement — a second render per frame would duplicate
-	 * render-time side effects (image placement registration). Roots with a
-	 * custom render keep the composed output as the source of truth and measure
-	 * up to the last target.
+	 * Append one below-transcript root's rows to `after`, recording click and
+	 * mouse targets in `after` coordinates.
 	 */
 	#renderBelowRoot(root: Component, width: number, after: string[], spans: ViewportClickSpan[]): void {
 		const start = after.length;
-		const plainContainer = root instanceof Container && root.render === Container.prototype.render;
-		const targets = root instanceof Container ? root.children : [root];
-		const resolves = targets.map(rowTargetCandidates);
-		const lastTarget = resolves.findLastIndex(resolve => resolve !== undefined);
-		if (plainContainer) {
-			let offset = start;
-			for (let index = 0; index < targets.length; index++) {
-				const childLines = targets[index]!.render(width);
-				after.push(...childLines);
-				if (index > lastTarget) continue;
-				const resolve = resolves[index];
-				if (resolve !== undefined && childLines.length > 0) {
-					spans.push({ start: offset, end: offset + childLines.length, candidates: resolve });
-				}
-				offset += childLines.length;
-			}
-			return;
+		const renderedRows = root.render(width);
+		after.push(...renderedRows);
+		if (root instanceof Container) {
+			const container = root;
+			const mapped = container.forEachRenderedChild(renderedRows, (child, childRows, index, childStartRow) => {
+				const resolve = rowTargetCandidates(child);
+				const mouseTarget = typeof child.handleMouse === "function" ? child : undefined;
+				if ((!resolve && !mouseTarget) || childRows.length === 0) return;
+				const isCurrent = () => container.isRenderedChild(renderedRows, index, child);
+				spans.push({
+					start: start + childStartRow,
+					end: start + childStartRow + childRows.length,
+					candidates: resolve ? local => (isCurrent() ? resolve(local) : []) : () => [],
+					mouseTarget,
+					isCurrent,
+				});
+			});
+			if (mapped) return;
 		}
-		after.push(...root.render(width));
-		if (lastTarget === -1) return;
-		let offset = start;
-		for (let index = 0; index <= lastTarget; index++) {
-			const childLines = targets[index] === root ? after.length - start : targets[index]!.render(width).length;
-			const resolve = resolves[index];
-			if (resolve !== undefined && childLines > 0) {
-				spans.push({ start: offset, end: offset + childLines, candidates: resolve });
-			}
-			offset += childLines;
+
+		// A custom container may suppress or reshape its children. Its actual
+		// rows are still eligible, but only its own explicit targets can describe
+		// how those rows map back to input.
+		const resolve = rowTargetCandidates(root);
+		const mouseTarget =
+			typeof root.handleMouse === "function" &&
+			(!(root instanceof Container) || root.handleMouse !== Container.prototype.handleMouse)
+				? root
+				: undefined;
+		const focusIds = (root as Partial<{ getClickFocusAgentIds(): string[] }>).getClickFocusAgentIds?.();
+		const candidates = resolve ?? (focusIds && focusIds.length > 0 ? () => focusIds : undefined);
+		if ((candidates || mouseTarget) && renderedRows.length > 0) {
+			spans.push({
+				start,
+				end: start + renderedRows.length,
+				candidates: candidates ?? (() => []),
+				mouseTarget,
+			});
 		}
+	}
+
+	/**
+	 * Dispatch mouse input to a component rendered in the mutable viewport.
+	 * The event row passed to the component is relative to its own row span.
+	 */
+	dispatchViewportMouse(event: SgrMouseEvent): ViewportMouseDispatch {
+		if (!event.leftClick || !Number.isInteger(event.row) || event.row < 0) return "none";
+		for (const span of this.#lastClickSpans) {
+			if (!span.mouseTarget || event.row < span.start || event.row >= span.end || span.isCurrent?.() === false) {
+				continue;
+			}
+			const consumed =
+				span.mouseTarget.handleMouse?.({ ...event, row: event.row - span.start + (span.mouseRowOffset ?? 0) }) ===
+				true;
+			return consumed ? "consumed" : "delivered";
+		}
+		return "none";
 	}
 
 	/**
@@ -530,7 +573,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		let banded = false;
 		const painted = viewport.map((line, index) => {
 			for (const span of spans) {
-				if (index < span.start || index >= span.end) continue;
+				if (index < span.start || index >= span.end || span.isCurrent?.() === false) continue;
 				if (!span.candidates(index - span.start).includes(hovered)) continue;
 				banded = true;
 				// A wrapping band loses to background opens nested inside the row

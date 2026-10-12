@@ -19,6 +19,8 @@ function makeHarness() {
 	const listeners: Array<(data: string) => { consume?: boolean; data?: string } | undefined> = [];
 	const focused: string[] = [];
 	let toggled = 0;
+	let renders = 0;
+	let mouseDispatch: "none" | "delivered" | "consumed" = "none";
 	const ctx = {
 		ui: {
 			addInputListener: (fn: (data: string) => { consume?: boolean; data?: string } | undefined) => {
@@ -26,7 +28,9 @@ function makeHarness() {
 			},
 			getMutableViewport: () => ({ top: 0, length: 5 }),
 			hasOverlay: () => false,
-			requestRender: () => {},
+			requestRender: () => {
+				renders++;
+			},
 			addStartListener: () => {},
 			getFocused: () => undefined,
 		},
@@ -44,6 +48,7 @@ function makeHarness() {
 		session: {
 			extensionRunner: undefined,
 		},
+		dispatchViewportMouse: () => mouseDispatch,
 		resolveViewportClickCandidates: (index: number) => (index === 2 ? [PINNED_HUD_TOGGLE_ID] : []),
 		focusedAgentId: undefined,
 		focusAgentSession: async (id: string) => {
@@ -63,6 +68,10 @@ function makeHarness() {
 		},
 		focused,
 		toggled: () => toggled,
+		renders: () => renders,
+		setMouseDispatch: (result: "none" | "delivered" | "consumed") => {
+			mouseDispatch = result;
+		},
 	};
 }
 
@@ -97,5 +106,11 @@ describe("InputController click routing", () => {
 		h.click();
 		expect(h.toggled()).toBe(1);
 		expect(h.focused).toEqual([]);
+	});
+	it("requests a render when a component receives a non-consuming click", () => {
+		const h = makeHarness();
+		h.setMouseDispatch("delivered");
+		h.click();
+		expect(h.renders()).toBe(1);
 	});
 });

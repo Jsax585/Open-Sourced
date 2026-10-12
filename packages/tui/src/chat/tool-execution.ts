@@ -1,5 +1,6 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { SgrMouseEvent } from "../mouse";
 import { Box } from "../components/box";
 import { SPINNER_ADVANCE_MS } from "../components/loader";
 import { Image } from "../components/image";
@@ -131,6 +132,7 @@ class SafeToolRendererComponent implements Component {
 	#component: Component;
 	#fallback: () => Component | undefined;
 	#warned = false;
+	#renderedPrimary = false;
 	readonly wantsKeyRelease: boolean | undefined;
 
 	constructor(
@@ -151,8 +153,11 @@ class SafeToolRendererComponent implements Component {
 
 	render(width: number): readonly string[] {
 		try {
-			return this.#component.render(width);
+			const rows = this.#component.render(width);
+			this.#renderedPrimary = true;
+			return rows;
 		} catch (err) {
+			this.#renderedPrimary = false;
 			if (!this.#warned) {
 				this.#warned = true;
 				logger.warn("Tool renderer failed", { tool: this.#toolName, stage: this.#stage, error: String(err) });
@@ -161,6 +166,23 @@ class SafeToolRendererComponent implements Component {
 		}
 	}
 
+	handleMouse(event: SgrMouseEvent): boolean {
+		if (!this.#renderedPrimary) return false;
+		try {
+			return this.#component.handleMouse?.call(this.#component, event) === true;
+		} catch (err) {
+			if (!this.#warned) {
+				this.#warned = true;
+				logger.warn("Tool renderer failed", {
+					tool: this.#toolName,
+					stage: this.#stage,
+					phase: "handleMouse",
+					error: String(err),
+				});
+			}
+			return false;
+		}
+	}
 	handleInput(data: string): void {
 		const handleInput = this.#component.handleInput;
 		if (handleInput === undefined) return;
@@ -331,6 +353,8 @@ export class ToolExecutionComponent extends Container {
 	#args: unknown;
 	#expanded = false;
 	#allocation = Number.POSITIVE_INFINITY;
+	#mouseRoutingEnabled = false;
+	#mouseRowOffset = 0;
 	#presentationFrame: AnimationFrame = { tick: 0, now: 0 };
 	#toolActivityVisible = true;
 	#showImages: boolean;
@@ -1287,6 +1311,8 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override render(width: number): readonly string[] {
+		this.#mouseRoutingEnabled = false;
+		this.#mouseRowOffset = 0;
 		if (!this.#toolActivityVisible || this.#allocation === 0 || (this.#toolName === "wait" && this.#isBenignSkip())) {
 			return [];
 		}
@@ -1297,13 +1323,23 @@ export class ToolExecutionComponent extends Container {
 			// below that, so inline tools whose real content is 1-2 rows (wait
 			// results, one-line receipts) keep that content instead of an equally
 			// tall but contentless frame.
+			let leadingRows = 0;
+			while (leadingRows < lines.length && !/\S/.test(lines[leadingRows]!)) leadingRows++;
 			const trimmed = trimBlankEdges(lines);
 			if (trimmed.length > this.#allocation) return this.#renderCompact(width);
+			this.#mouseRowOffset = leadingRows;
 			lines = trimmed;
 		}
+		this.#mouseRoutingEnabled = true;
 		this.#firstResultViewportRepaintShapePainted = this.#needsFirstResultViewportRepaintAtRender();
 		this.#partialResultShapePainted = this.#result !== undefined && this.#isPartial;
 		return lines;
+	}
+	override handleMouse(event: SgrMouseEvent): boolean {
+		if (!this.#mouseRoutingEnabled) return false;
+		return super.handleMouse(
+			this.#mouseRowOffset === 0 ? event : { ...event, row: event.row + this.#mouseRowOffset },
+		);
 	}
 
 	#renderCompact(width: number): readonly string[] {

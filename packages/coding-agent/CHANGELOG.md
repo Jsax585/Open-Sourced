@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Inline widgets can handle left-clicks across the mutable viewport through `Component.handleMouse()`.
+
 ## [18.10.0] - 2026-10-12
 
 ### Added

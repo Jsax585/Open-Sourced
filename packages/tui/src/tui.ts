@@ -12,6 +12,8 @@
  * provider paint their composed children as a bounded viewport and never
  * touch history. See `docs/tui-core-renderer.md`.
  */
+import type { SgrMouseEvent } from "./mouse";
+
 import * as fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { getDebugLogPath } from "@oh-my-pi/pi-utils/dirs";
@@ -298,9 +300,10 @@ export interface Component {
 	 */
 	capturesInput?(data: string): boolean;
 
-	/**
-	 * Optional handler for keyboard input when component has focus
-	 */
+	/** Receive decoded left-clicks on this component's rendered rows. The row is span-local; return true to consume. */
+	handleMouse?(event: SgrMouseEvent): boolean | void;
+
+	/** Optional handler for keyboard input when component has focus */
 	handleInput?(data: string): void;
 
 	/**
@@ -518,6 +521,8 @@ export class Container implements Component {
 	// byte-identical. Cleared on any child-list change and on invalidate().
 	#memoLines: string[] | undefined;
 	#memoChildLines: (readonly string[])[] = [];
+	#memoChildComponents: Component[] = [];
+	#mouseRoutingValid = false;
 	#memoWidth = -1;
 	// Memoized native description: rebuilt only when the child list changes, so
 	// the reconciler can skip an unchanged container by reference.
@@ -541,6 +546,7 @@ export class Container implements Component {
 			component.setIgnoreTight?.(true);
 		}
 		this.#memoLines = undefined;
+		this.#mouseRoutingValid = false;
 	}
 
 	removeChild(component: Component): void {
@@ -548,6 +554,7 @@ export class Container implements Component {
 		if (index !== -1) {
 			this.children.splice(index, 1);
 			this.#memoLines = undefined;
+			this.#mouseRoutingValid = false;
 		}
 	}
 
@@ -555,6 +562,7 @@ export class Container implements Component {
 		this.children = [];
 		this.#memoLines = undefined;
 		this.#memoChildLines = [];
+		this.#mouseRoutingValid = false;
 	}
 
 	/** Dispose every child, then detach it from this container. */
@@ -568,6 +576,7 @@ export class Container implements Component {
 		// only the concatenation would keep all of them reachable.
 		this.#memoLines = undefined;
 		this.#memoChildLines = [];
+		this.#mouseRoutingValid = false;
 		for (const child of this.children) {
 			child.invalidate?.();
 		}
@@ -597,20 +606,32 @@ export class Container implements Component {
 		const children = this.children;
 		const count = children.length;
 		let refs = this.#memoChildLines;
-		let unchanged = this.#memoLines !== undefined && this.#memoWidth === width && refs.length === count;
+		let childrenChanged = this.#memoChildComponents.length !== count;
+		let unchanged =
+			this.#memoLines !== undefined &&
+			this.#memoWidth === width &&
+			refs.length === count &&
+			this.#memoChildComponents.length === count;
 		if (refs.length !== count) {
 			// oxlint-disable-next-line unicorn/no-new-array -- render-frame length preallocation
 			refs = new Array(count);
 			this.#memoChildLines = refs;
 		}
 		for (let i = 0; i < count; i++) {
-			const childLines = children[i]!.render(width);
+			const child = children[i]!;
+			if (this.#memoChildComponents[i] !== child) {
+				unchanged = false;
+				childrenChanged = true;
+			}
+			const childLines = child.render(width);
 			if (refs[i] !== childLines) {
 				unchanged = false;
 				refs[i] = childLines;
 			}
 		}
 		this.#memoWidth = width;
+		if (childrenChanged) this.#memoChildComponents = children.slice();
+		this.#mouseRoutingValid = true;
 		if (unchanged) return this.#memoLines!;
 		const lines: string[] = [];
 		for (let i = 0; i < count; i++) {
@@ -619,6 +640,73 @@ export class Container implements Component {
 		}
 		this.#memoLines = lines;
 		return lines;
+	}
+	/**
+	 * Visit direct children from this exact, unmodified container render.
+	 * Custom renderers that omit or transform rows do not expose this layout.
+	 */
+	forEachRenderedChild(
+		renderedRows: readonly string[],
+		visit: (child: Component, rows: readonly string[], index: number, startRow: number) => void,
+	): boolean {
+		if (!this.#hasCurrentMouseLayout() || !this.#matchesChildRender(renderedRows)) return false;
+		let startRow = 0;
+		for (let index = 0; index < this.#memoChildLines.length; index++) {
+			const childRows = this.#memoChildLines[index]!;
+			visit(this.#memoChildComponents[index]!, childRows, index, startRow);
+			startRow += childRows.length;
+		}
+		return true;
+	}
+
+	/** Whether a child span still belongs to this container's painted layout. */
+	isRenderedChild(renderedRows: readonly string[], index: number, child: Component): boolean {
+		return (
+			this.#hasCurrentMouseLayout() &&
+			this.#matchesChildRender(renderedRows) &&
+			this.#memoChildComponents[index] === child &&
+			this.children[index] === child
+		);
+	}
+
+	#matchesChildRender(renderedRows: readonly string[]): boolean {
+		let rowIndex = 0;
+		for (const childRows of this.#memoChildLines) {
+			for (const childRow of childRows) {
+				if (renderedRows[rowIndex] !== childRow) return false;
+				rowIndex++;
+			}
+		}
+		return rowIndex === renderedRows.length;
+	}
+
+	#hasCurrentMouseLayout(): boolean {
+		if (
+			!this.#mouseRoutingValid ||
+			this.#memoChildComponents.length !== this.children.length ||
+			this.#memoChildLines.length !== this.children.length
+		) {
+			return false;
+		}
+		for (let index = 0; index < this.children.length; index++) {
+			if (this.#memoChildComponents[index] !== this.children[index]) return false;
+		}
+		return true;
+	}
+
+	handleMouse(event: SgrMouseEvent): boolean {
+		if (!this.#hasCurrentMouseLayout() || event.row < 0) return false;
+		let row = event.row;
+		for (let index = 0; index < this.#memoChildLines.length; index++) {
+			const childLines = this.#memoChildLines[index]!;
+			if (row < childLines.length) {
+				const child = this.#memoChildComponents[index];
+				if (!child || child !== this.children[index]) return false;
+				return child.handleMouse?.({ ...event, row }) === true;
+			}
+			row -= childLines.length;
+		}
+		return false;
 	}
 
 	describe(_cx: DescribeContext): NativeNode | null {

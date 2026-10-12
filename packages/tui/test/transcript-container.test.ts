@@ -1043,8 +1043,8 @@ describe("TranscriptContainer viewport click spans", () => {
 
 		expect(transcript.renderViewport(80, 10, frame)).toEqual(["a1", "a2", "", "b1"]);
 		expect(transcript.getLastViewportSpans()).toEqual([
-			{ component: first, start: 0, end: 2 },
-			{ component: second, start: 3, end: 4 },
+			{ component: first, start: 0, end: 2, componentRowOffset: 0 },
+			{ component: second, start: 3, end: 4, componentRowOffset: 0 },
 		]);
 	});
 
@@ -1057,8 +1057,18 @@ describe("TranscriptContainer viewport click spans", () => {
 
 		expect(transcript.renderViewport(80, 5, frame)).toEqual(["a4", "b1", "b2", "b3", "b4"]);
 		expect(transcript.getLastViewportSpans()).toEqual([
-			{ component: first, start: 0, end: 1 },
-			{ component: second, start: 1, end: 5 },
+			{ component: first, start: 0, end: 1, componentRowOffset: 3 },
+			{ component: second, start: 1, end: 5, componentRowOffset: 0 },
+		]);
+	});
+	it("retains source-row offsets through trimming and tail clipping", () => {
+		const transcript = new TranscriptContainer();
+		const block = new Block(["", "row 0", "row 1", "row 2", ""], false);
+		transcript.addChild(block);
+
+		expect(transcript.renderViewport(80, 2, frame)).toEqual(["row 1", "row 2"]);
+		expect(transcript.getLastViewportSpans()).toEqual([
+			{ component: block, start: 0, end: 2, componentRowOffset: 2 },
 		]);
 	});
 
