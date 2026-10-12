@@ -2436,8 +2436,14 @@ export class TurnRecovery {
 			this.#host.modelRegistry,
 			this.#host.settings,
 		);
+		// A saved primary is an exact identity, not a fuzzy model preference.
+		// Keep routed resolution, but never restore a different model when the
+		// original has disappeared from the registry.
 		const primaryModel =
-			resolvedPrimary.model ?? this.#host.modelRegistry.find(originalSelector.provider, originalSelector.id);
+			resolvedPrimary.model &&
+			formatModelStringWithRouting(resolvedPrimary.model) === formatRetryFallbackBaseSelector(originalSelector)
+				? resolvedPrimary.model
+				: this.#host.modelRegistry.find(originalSelector.provider, originalSelector.id);
 		if (!primaryModel) {
 			if (policy === "next-turn") {
 				this.#host.emitNotice(

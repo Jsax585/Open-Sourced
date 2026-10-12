@@ -5888,15 +5888,16 @@ describe("AgentSession retry fallback", () => {
 				sessionManager: manager,
 				responses: [
 					{ throw: `rate limit exceeded retry-after-ms=${FALLBACK_TEST_RETRY_AFTER_MS}` },
-					{ content: ["Fallback history ".repeat(2_000)] },
+					// A truncated answer requires post-compaction retry. A complete
+					// text answer is intentionally terminal even with autoContinue.
+					{ content: ["Fallback history ".repeat(2_000)], stopReason: "length" },
 					{ content: ["Done after compaction"] },
 				],
 			});
 			await session!.prompt("Trigger fallback and compaction");
 			await session!.waitForIdle();
 			expect(compactions).toBeGreaterThan(0);
-			expect(requested.length).toBeGreaterThan(2);
-			expect(requested.slice(1).every(id => id === fallbackId)).toBe(true);
+			expect(requested).toEqual([primaryId, fallbackId, fallbackId]);
 		});
 	});
 

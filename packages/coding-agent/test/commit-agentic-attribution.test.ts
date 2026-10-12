@@ -108,6 +108,7 @@ describe("commit agent prompt attribution", () => {
 			vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue({
 				session: activeSession,
 			} as unknown as CreateAgentSessionResult);
+			vi.spyOn(toolsModule, "createCommitTools").mockReturnValue([]);
 
 			const state = await runCommitAgentSession({
 				cwd: tempDir.path(),
