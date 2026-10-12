@@ -721,6 +721,9 @@ function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
 	);
 }
 
+/** Applied when the host wires the review gate without naming its own bound. */
+const DEFAULT_FINAL_ANSWER_REVIEW_TIMEOUT_MS = 5000;
+
 function isToolEvent(event: AgentEvent): boolean {
 	return (
 		event.type === "tool_stream_update" ||
@@ -732,23 +735,61 @@ function isToolEvent(event: AgentEvent): boolean {
 }
 
 /**
+ * Replay a buffered message's text and thinking blocks as the start/delta/end
+ * sequence consumers expect. One synthetic `*_delta` per block would skip the
+ * `*_end` matches TTSR rules use and the `text_start` session-title trigger.
+ */
+function replayStreamedBlocks(
+	target: EventStream<AgentEvent, AgentMessage[]>,
+	message: AssistantMessage | undefined,
+): void {
+	if (!message) return;
+	for (let contentIndex = 0; contentIndex < message.content.length; contentIndex++) {
+		const part = message.content[contentIndex]!;
+		const events: AssistantMessageEvent[] =
+			part.type === "text" && part.text.length > 0
+				? [
+						{ type: "text_start", contentIndex, partial: message },
+						{ type: "text_delta", contentIndex, delta: part.text, partial: message },
+						{ type: "text_end", contentIndex, content: part.text, partial: message },
+					]
+				: part.type === "thinking" && part.thinking.length > 0
+					? [
+							{ type: "thinking_start", contentIndex, partial: message },
+							{ type: "thinking_delta", contentIndex, delta: part.thinking, partial: message },
+							{ type: "thinking_end", contentIndex, content: part.thinking, partial: message },
+						]
+					: [];
+		for (const assistantMessageEvent of events) {
+			target.push({ type: "message_update", assistantMessageEvent, message });
+		}
+	}
+}
+
+/**
  * Buffering wrapper for candidate final answers.
  * Holds events until the configured advisor approves the final answer
  * or a tool call indicates an intermediate turn.
  *
  * It retains only the initial and latest immutable snapshots. Final approval
  * publishes one complete message; a tool turn receives the accumulated prefix.
+ * Both paths replay the same block shape the unbuffered stream would have
+ * produced, so rule engines and speech consumers keep working.
  */
 class FinalAnswerBufferingStream extends EventStream<AgentEvent, AgentMessage[]> {
 	readonly #target: EventStream<AgentEvent, AgentMessage[]>;
 	#finalSnapshot: AssistantMessage | undefined;
 	#startMessage: AssistantMessage | undefined;
-	#hasStart = false;
 	#passthrough = false;
 
 	constructor(target: EventStream<AgentEvent, AgentMessage[]>) {
 		super(target.isComplete, target.extractResult);
 		this.#target = target;
+	}
+
+	/** True once the buffer released to consumers: a tool turn, a flush, or a discard. */
+	get released(): boolean {
+		return this.#passthrough;
 	}
 
 	override push(event: AgentEvent): void {
@@ -762,20 +803,15 @@ class FinalAnswerBufferingStream extends EventStream<AgentEvent, AgentMessage[]>
 			return;
 		}
 
-		if (event.type === "message_start") {
-			this.#hasStart = true;
-			this.#startMessage = event.message as AssistantMessage;
-			this.#finalSnapshot = event.message as AssistantMessage;
-			return;
-		}
-
-		if (event.type === "message_end") {
-			this.#finalSnapshot = event.message as AssistantMessage;
-			return;
-		}
-
-		if (event.type === "message_update") {
-			this.#finalSnapshot = event.message as AssistantMessage;
+		if (event.type === "message_start" || event.type === "message_end" || event.type === "message_update") {
+			// Only assistant messages are candidates; anything else belongs to the
+			// surrounding turn and must not become the buffered snapshot.
+			if (event.message.role !== "assistant") {
+				this.#target.push(event);
+				return;
+			}
+			if (event.type === "message_start") this.#startMessage = event.message;
+			this.#finalSnapshot = event.message;
 			return;
 		}
 
@@ -784,34 +820,23 @@ class FinalAnswerBufferingStream extends EventStream<AgentEvent, AgentMessage[]>
 
 	#flushToolTurn(toolEvent: AgentEvent): void {
 		this.#passthrough = true;
-		if (this.#hasStart && this.#startMessage) {
-			this.#target.push({ type: "message_start", message: this.#startMessage });
-		}
-		const snapshot = this.#finalSnapshot;
-		if (snapshot) {
-			for (let contentIndex = 0; contentIndex < snapshot.content.length; contentIndex++) {
-				const part = snapshot.content[contentIndex]!;
-				if (part.type !== "text" && part.type !== "thinking") continue;
-				const assistantMessageEvent: AssistantMessageEvent =
-					part.type === "text"
-						? { type: "text_delta", contentIndex, delta: part.text, partial: snapshot }
-						: { type: "thinking_delta", contentIndex, delta: part.thinking, partial: snapshot };
-				this.#target.push({ type: "message_update", assistantMessageEvent, message: snapshot });
-			}
-		}
+		if (this.#startMessage) this.#target.push({ type: "message_start", message: this.#startMessage });
+		replayStreamedBlocks(this.#target, this.#finalSnapshot);
 		this.#startMessage = undefined;
 		this.#finalSnapshot = undefined;
 		this.#target.push(toolEvent);
 	}
 
+	/** Release the buffered answer to consumers as one complete message. */
 	flush(): void {
 		this.#passthrough = true;
 		this.#startMessage = undefined;
-		if (this.#finalSnapshot) {
-			this.#target.push({ type: "message_start", message: this.#finalSnapshot });
-			this.#target.push({ type: "message_end", message: this.#finalSnapshot });
-			this.#finalSnapshot = undefined;
-		}
+		const message = this.#finalSnapshot;
+		this.#finalSnapshot = undefined;
+		if (!message) return;
+		this.#target.push({ type: "message_start", message });
+		replayStreamedBlocks(this.#target, message);
+		this.#target.push({ type: "message_end", message });
 	}
 
 	discard(): void {
@@ -1367,6 +1392,10 @@ async function runLoopBody(
 		let pausedTurnContinuations = 0;
 		let dsmlLeakNudges = 0;
 		let finalAnswerReviewed = false;
+		// Messages this run injected as review advice. Compared by identity so the
+		// latch cannot be reopened by our own steering, whatever role a reviewer
+		// chose for it.
+		let reviewAdvice: readonly AgentMessage[] = [];
 
 		// Soft tool requirement lifecycle (reminder then escalation; see SoftToolRequirement).
 		// The host-owned state survives only a gate stop between Agent.prompt calls.
@@ -1556,10 +1585,14 @@ async function runLoopBody(
 				let message: AssistantMessage;
 				let approvedAdvice: AgentMessage[] | undefined;
 				// A queued operator message starts a new request within the same run.
-				// Advisor corrections use attributed custom messages, so they keep the latch.
+				// Advisor corrections are excluded by identity, so a reviewer that
+				// steers its advice back as a plain user message cannot reopen the
+				// gate and pay for a second correction.
 				if (
 					config.reviewFinalAnswer &&
-					turnMessages.some(input => input.role === "user" && input.attribution !== "agent")
+					turnMessages.some(
+						input => input.role === "user" && input.attribution !== "agent" && !reviewAdvice.includes(input),
+					)
 				)
 					finalAnswerReviewed = false;
 				const shouldBufferCandidate =
@@ -1607,7 +1640,14 @@ async function runLoopBody(
 					harmonyRetryAttempt = 0;
 					harmonyTruncateResumeCount = 0;
 				} catch (err) {
-					if (!(err instanceof HarmonyLeakInterruption)) throw err;
+					if (!(err instanceof HarmonyLeakInterruption)) {
+						// The provider streamed content and then threw. Release the buffered
+						// partial so the run keeps the streamed text, exactly as it would
+						// with the gate off; otherwise the caller synthesizes an empty,
+						// zero-usage error message.
+						if (candidateStream instanceof FinalAnswerBufferingStream) candidateStream.flush();
+						throw err;
+					}
 					if (err.recovered) {
 						if (harmonyTruncateResumeCount >= 2) {
 							await emitHarmonyAudit(config, err, "escalated", harmonyRetryAttempt);
@@ -1658,10 +1698,20 @@ async function runLoopBody(
 				}
 
 				const isCandidateFinalAnswer =
-					shouldBufferCandidate && !signal?.aborted && isTerminalTextCandidate(message);
+					shouldBufferCandidate &&
+					!signal?.aborted &&
+					// A buffer that already released (a tool event reached the target)
+					// forwarded this message's lifecycle; reviewing it now could only
+					// hide an answer listeners and the transcript already have.
+					!(candidateStream instanceof FinalAnswerBufferingStream && candidateStream.released) &&
+					isTerminalTextCandidate(message);
 
 				if (isCandidateFinalAnswer) {
-					const timeoutMs = config.finalAnswerReviewTimeoutMs ?? 5000;
+					const resolvedTimeout = config.finalAnswerReviewTimeoutMs;
+					const timeoutMs =
+						typeof resolvedTimeout === "function"
+							? resolvedTimeout()
+							: (resolvedTimeout ?? DEFAULT_FINAL_ANSWER_REVIEW_TIMEOUT_MS);
 					const timeoutSignal = timeoutMs > 0 && timeoutMs < Infinity ? AbortSignal.timeout(timeoutMs) : undefined;
 					const reviewSignal =
 						signal && timeoutSignal ? AbortSignal.any([signal, timeoutSignal]) : (signal ?? timeoutSignal);
@@ -1674,12 +1724,10 @@ async function runLoopBody(
 						decision = await raceWithSignal(reviewPromise, reviewSignal);
 					} catch (error) {
 						if (signal?.aborted) {
-							if (candidateStream instanceof FinalAnswerBufferingStream) {
-								candidateStream.discard();
-							}
-							if (currentContext.messages[currentContext.messages.length - 1] === message) {
-								currentContext.messages.pop();
-							}
+							// A user abort while the review wait was open. The provider already
+							// finished, so release the completed answer like the gate-off path
+							// and cancel only the review.
+							if (candidateStream instanceof FinalAnswerBufferingStream) candidateStream.flush();
 							throw signal.reason ?? error;
 						}
 						logger.warn("Final answer review failed or timed out; releasing answer", { error });
@@ -1687,12 +1735,7 @@ async function runLoopBody(
 					}
 
 					if (signal?.aborted) {
-						if (candidateStream instanceof FinalAnswerBufferingStream) {
-							candidateStream.discard();
-						}
-						if (currentContext.messages[currentContext.messages.length - 1] === message) {
-							currentContext.messages.pop();
-						}
+						if (candidateStream instanceof FinalAnswerBufferingStream) candidateStream.flush();
 						throw signal.reason ?? new Error("Aborted");
 					}
 
@@ -1705,9 +1748,13 @@ async function runLoopBody(
 						if (candidateStream instanceof FinalAnswerBufferingStream) {
 							candidateStream.discard();
 						}
+						// The draft is hidden, but the provider billed for it. Its usage
+						// never reaches `message_end`, so report it before it is dropped.
+						await config.onFinalAnswerReviewRejected?.(message);
 						if (currentContext.messages[currentContext.messages.length - 1] === message) {
 							currentContext.messages.pop();
 						}
+						reviewAdvice = adviceList;
 						finalAnswerReviewed = true;
 						pendingMessages = [...adviceList];
 						hasMoreToolCalls = true;

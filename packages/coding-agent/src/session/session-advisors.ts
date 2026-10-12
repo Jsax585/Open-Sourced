@@ -123,6 +123,8 @@ import { buildSessionMetadata } from "./session-metadata";
 import type { YieldQueue } from "./yield-queue";
 
 import {
+	ADVISOR_FINAL_REVIEW_TIMEOUT_DEFAULT_MS,
+	ADVISOR_FINAL_REVIEW_TIMEOUT_MAX_MS,
 	cfgAdvisorEvictStaleResults,
 	cfgAdvisorFinalReviewTimeoutMs,
 	cfgAdvisorImmuneTurns,
@@ -535,6 +537,18 @@ export interface AdvisorStatusOverviewEntry {
 	yielded: boolean;
 }
 
+/**
+ * One open final-answer review window. While it is set, every note the advisors
+ * emit for the covered turns collects here instead of routing to the primary.
+ */
+interface FinalAnswerReviewGate {
+	/** Primary turn the reviewed draft belongs to. */
+	turn: number;
+	/** First primary turn of the reviewed user request. */
+	firstTurn: number;
+	notes: AdvisorNote[];
+}
+
 /** Owns advisor runtimes, delivery policy, context maintenance, and status reporting. */
 export class SessionAdvisors {
 	readonly #host: SessionAdvisorsHost;
@@ -608,7 +622,7 @@ export class SessionAdvisors {
 	#advisorInterruptImmuneTurnStart: number | undefined;
 	#pendingAdvisorCardEvents = new Set<Promise<void>>();
 	#advisorYieldQueueUnsubscribe: (() => void) | undefined;
-	#finalAnswerReview: { turn: number; firstTurn: number; notes: AdvisorNote[] } | undefined;
+	#finalAnswerReview: FinalAnswerReviewGate | undefined;
 	#reviewedFinalAnswer: AssistantMessage | undefined;
 	#discardFinalReviewThroughTurn = 0;
 	#finalReviewUserMessage: AgentMessage | undefined;
@@ -636,13 +650,18 @@ export class SessionAdvisors {
 
 	/** Queues eligible primary updates for each live advisor. */
 	async onPrimaryTurnEnd(
-		messages: AgentMessage[],
+		messages: readonly AgentMessage[],
 		willContinue: boolean | undefined,
 		signal?: AbortSignal,
 	): Promise<void> {
 		let terminalIndex = messages.length - 1;
 		while (terminalIndex >= 0 && isAdvisorCard(messages[terminalIndex]!)) terminalIndex--;
-		if (!this.#finalAnswerReview && willContinue !== true && messages[terminalIndex] === this.#reviewedFinalAnswer) {
+		if (
+			!this.#finalAnswerReview &&
+			this.#reviewedFinalAnswer !== undefined &&
+			willContinue !== true &&
+			messages[terminalIndex] === this.#reviewedFinalAnswer
+		) {
 			this.#reviewedFinalAnswer = undefined;
 			this.#terminalUnwindActive = true;
 			return;
@@ -753,11 +772,17 @@ export class SessionAdvisors {
 		);
 	}
 
+	/**
+	 * Bounded wait for one final-answer review, in milliseconds: the configured
+	 * `advisor.finalReviewTimeoutMs`, clamped, or the default when the value is
+	 * unusable. The agent loop's own bound is derived from this so the two cannot
+	 * drift apart.
+	 */
 	finalReviewTimeoutMs(): number {
 		const configured = cfgAdvisorFinalReviewTimeoutMs.get(this.#host.settings);
 		return Number.isFinite(configured) && configured > 0
-			? Math.max(1, Math.min(30_000, Math.trunc(configured)))
-			: 5_000;
+			? Math.max(1, Math.min(ADVISOR_FINAL_REVIEW_TIMEOUT_MAX_MS, Math.trunc(configured)))
+			: ADVISOR_FINAL_REVIEW_TIMEOUT_DEFAULT_MS;
 	}
 
 	/** Reviews the candidate once while its message events remain withheld. */
@@ -771,11 +796,11 @@ export class SessionAdvisors {
 			lastPrimaryUserMessage(context.messages) === this.#finalReviewUserMessage
 				? this.#finalReviewRequestFirstTurn || turn
 				: turn;
-		const gate = { turn, firstTurn, notes: [] as AdvisorNote[] };
+		const gate: FinalAnswerReviewGate = { turn, firstTurn, notes: [] };
 		this.#finalAnswerReview = gate;
 		this.#reviewedFinalAnswer = context.message;
 		try {
-			await this.onPrimaryTurnEnd(context.messages as AgentMessage[], false, signal);
+			await this.onPrimaryTurnEnd(context.messages, false, signal);
 			await Promise.all(
 				this.#advisors.map(advisor => advisor.runtime.waitForCatchup(this.finalReviewTimeoutMs(), 1, signal)),
 			);
@@ -1802,7 +1827,17 @@ export class SessionAdvisors {
 		// The implicit single ("default") advisor stamps no source name, so its
 		// agent-facing `<advisory>` bytes stay identical to the pre-multi-advisor path.
 		const source = advisor.slug ? advisor.name : undefined;
-		if (turn !== undefined && turn <= this.#discardFinalReviewThroughTurn) return;
+		// A note the final-answer gate has already closed over must not change a
+		// request that a newer primary user message started. Until that happens the
+		// gate suppresses nothing: a late blocker still routes like any post-turn
+		// note, so a review that timed out cannot silently cost the turn its advice.
+		if (
+			turn !== undefined &&
+			turn <= this.#discardFinalReviewThroughTurn &&
+			lastPrimaryUserMessage(this.#host.agent.state.messages) !== this.#finalReviewUserMessage
+		) {
+			return;
+		}
 		const gate = this.#finalAnswerReview;
 		if (gate) {
 			if (turn === undefined || (turn >= gate.firstTurn && turn <= gate.turn))

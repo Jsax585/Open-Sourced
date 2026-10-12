@@ -112,6 +112,31 @@ export interface FinalAnswerReviewContext {
 }
 
 /**
+ * Host wiring for the opt-in final-answer gate, passed to
+ * {@link Agent.setReviewFinalAnswer} as one object so the parts cannot drift.
+ */
+export interface FinalAnswerReviewConfig {
+	/** Reviews a candidate terminal answer before its message events are released. */
+	review: (
+		context: FinalAnswerReviewContext,
+		signal?: AbortSignal,
+	) => Promise<FinalAnswerReviewDecision | undefined> | FinalAnswerReviewDecision | undefined;
+	/**
+	 * Bound for the review in milliseconds, resolved per candidate so a live
+	 * settings change applies without rebuilding the agent.
+	 */
+	timeoutMs?: number | (() => number);
+	/** Live predicate; while it returns false the gate stays off and streaming is untouched. */
+	enabled?: () => boolean;
+	/**
+	 * Called once when a blocking decision hides the candidate. The draft never
+	 * reaches `message_end` consumers, so accounting that derives from the
+	 * assistant message lifecycle (usage, cost, perf) must run here.
+	 */
+	onRejected?: (message: AssistantMessage) => void | Promise<void>;
+}
+
+/**
  * A soft tool requirement: the host wants `toolName` called before the loop
  * runs other tools or yields, but WITHOUT paying the forced-`toolChoice` cost
  * up front (changing `tool_choice` invalidates the provider message cache).
@@ -624,8 +649,18 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	/** Optional live predicate so hosts can disable buffering when no reviewer is active. */
 	shouldReviewFinalAnswer?: () => boolean;
 
-	/** Bounded timeout for reviewFinalAnswer in milliseconds. Defaults to 5000. */
-	finalAnswerReviewTimeoutMs?: number;
+	/**
+	 * Bounded timeout for reviewFinalAnswer in milliseconds, or a live resolver.
+	 * Defaults to 5000.
+	 */
+	finalAnswerReviewTimeoutMs?: number | (() => number);
+
+	/**
+	 * Called once when a blocking review hides a candidate final answer. The draft
+	 * is removed from the transcript before any `message_end`, so usage and cost
+	 * accounting that normally rides the assistant message lifecycle must run here.
+	 */
+	onFinalAnswerReviewRejected?: (message: AssistantMessage) => void | Promise<void>;
 
 	/**
 	 * Called once an assistant message is finalized from the model stream, before

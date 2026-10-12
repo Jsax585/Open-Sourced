@@ -969,7 +969,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(card.content).toContain("critical flaw in logic");
 	});
 
-	it("discards late blocker emitted after final review timeout without altering next prompt", async () => {
+	it("routes a blocker emitted after the final review timeout instead of dropping it", async () => {
 		const delayFinished = Promise.withResolvers<void>();
 		let reviewAttempts = 0;
 		const { session, mock } = await createCompletedAdvisorSession("blocker", undefined, {
@@ -978,6 +978,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			primaryResponses: [
 				{ content: ["FIRST TIMEOUT ANSWER"], stopReason: "stop" },
 				{ content: ["SECOND ANSWER"], stopReason: "stop" },
+				{ content: ["THIRD ANSWER"], stopReason: "stop" },
 			],
 			advisorResponses: [
 				async () => {
@@ -1009,20 +1010,23 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		const firstAssistant = session.agent.state.messages.filter(m => m.role === "assistant").at(-1);
 		expect(JSON.stringify(firstAssistant)).toContain("FIRST TIMEOUT ANSWER");
 
-		// Advisor finishes late and emits blocker to a closed window
+		// Advisor finishes late, after the gate closed without a decision
 		delayFinished.resolve();
 		await session.waitForAdvisorCatchup(1000);
 		expect(reviewAttempts).toBe(1);
 
-		// Late blocker was discarded because the final review window was closed
-		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(0);
+		// A gate that closed on a timeout covered nothing, so the late blocker still
+		// reaches the primary — as a continuation or a visible card. Dropping it
+		// would leave the request with strictly less coverage than the gate off.
+		await session.waitForIdle();
+		const callsAfterLateBlocker = mock.calls.length;
+		expect(callsAfterLateBlocker > 1 || session.agent.state.messages.filter(isAdvisorCard).length > 0).toBe(true);
 
-		// Next unrelated prompt runs cleanly without extra calls or alterations from late blocker
+		// The gate's suppression still holds once a newer request starts: the
+		// superseded request's blocker must not reach the next prompt.
 		await session.prompt("second unrelated prompt");
 		await session.waitForIdle();
-
-		expect(mock.calls).toHaveLength(2);
-		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(0);
+		expect(mock.calls.length).toBe(callsAfterLateBlocker + 1);
 	});
 
 	it("approves empty or silent advisor review with single primary call and correct cadence", async () => {

@@ -59,8 +59,7 @@ import type {
 	AgentToolContext,
 	AgentTurnEndContext,
 	AsideMessage,
-	FinalAnswerReviewContext,
-	FinalAnswerReviewDecision,
+	FinalAnswerReviewConfig,
 	PrepareQueuedMessages,
 	SpeculativeToolExecutionConfig,
 	StreamFn,
@@ -446,12 +445,7 @@ export class Agent {
 	#withdrawnMessages = new WeakMap<AgentMessage, AbortController>();
 	#steeringWaiters = new Set<() => void>();
 	#queuedMessageGrouping?: (previous: AgentMessage, next: AgentMessage) => boolean;
-	#reviewFinalAnswer?: (
-		context: FinalAnswerReviewContext,
-		signal?: AbortSignal,
-	) => Promise<FinalAnswerReviewDecision | undefined> | FinalAnswerReviewDecision | undefined;
-	#finalAnswerReviewTimeoutMs?: number;
-	#shouldReviewFinalAnswer?: () => boolean;
+	#reviewFinalAnswer?: FinalAnswerReviewConfig;
 
 	#steeringMode: "all" | "one-at-a-time";
 	#followUpMode: "all" | "one-at-a-time";
@@ -1169,19 +1163,8 @@ export class Agent {
 		this.#onTurnEnd = fn;
 	}
 
-	setReviewFinalAnswer(
-		fn:
-			| ((
-					context: FinalAnswerReviewContext,
-					signal?: AbortSignal,
-			  ) => Promise<FinalAnswerReviewDecision | undefined> | FinalAnswerReviewDecision | undefined)
-			| undefined,
-		timeoutMs?: number,
-		shouldReview?: () => boolean,
-	): void {
-		this.#reviewFinalAnswer = fn;
-		this.#finalAnswerReviewTimeoutMs = timeoutMs;
-		this.#shouldReviewFinalAnswer = shouldReview;
+	setReviewFinalAnswer(config: FinalAnswerReviewConfig | undefined): void {
+		this.#reviewFinalAnswer = config;
 	}
 
 	/** Called with the exact system prompt each model call is built from, after before-model-call hooks. */
@@ -1973,9 +1956,10 @@ export class Agent {
 			getFollowUpMessages: signal => this.#dequeueFollowUpMessagesAfterHooks(signal ?? loopSignal),
 			getAsideMessages: async () => (await this.#asideMessageProvider?.()) ?? [],
 			onBeforeYield: () => this.#onBeforeYield?.(),
-			reviewFinalAnswer: this.#reviewFinalAnswer,
-			finalAnswerReviewTimeoutMs: this.#finalAnswerReviewTimeoutMs,
-			shouldReviewFinalAnswer: this.#shouldReviewFinalAnswer,
+			reviewFinalAnswer: this.#reviewFinalAnswer?.review,
+			finalAnswerReviewTimeoutMs: this.#reviewFinalAnswer?.timeoutMs,
+			shouldReviewFinalAnswer: this.#reviewFinalAnswer?.enabled,
+			onFinalAnswerReviewRejected: this.#reviewFinalAnswer?.onRejected,
 			telemetry: this.#telemetry,
 		};
 
