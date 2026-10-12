@@ -467,6 +467,8 @@ export interface ExecutorOptions {
 	maxRuntimeMs?: number;
 	/** Include IRC only when the invocation policy permits collaboration. */
 	enableIrc?: boolean;
+	/** `false` when the spawning owner cannot message peers (IRC off or `write` inactive): wake results then carry no resume hint. */
+	ownerCanResume?: boolean;
 	enableLsp?: boolean;
 	/**
 	 * Enable MCP capabilities for this child. `false` suppresses both inherited
@@ -4107,7 +4109,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	let registryAbortUnsubscribe: (() => void) | null = null;
 	let reviveSession: AgentReviver | null = null;
 	const wakeOptions: IrcWakeTurnMonitorOptions = {
-		ownerIrcEnabled: options.enableIrc !== false,
+		ownerIrcEnabled: options.ownerCanResume !== false,
 		id,
 		index,
 		agent,

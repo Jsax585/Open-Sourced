@@ -392,6 +392,7 @@ export class WorkPool {
 							keepAlive: true,
 							retainArtifacts: true,
 							enableIrc: isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0),
+							ownerCanResume: this.session.isToolActive?.("write") ?? true,
 							signal,
 							onProgress,
 						});

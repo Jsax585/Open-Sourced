@@ -147,6 +147,8 @@ export interface StructuredSubagentRequest {
 	enableLsp?: boolean;
 	/** Explicitly pass false for plan mode or invocation kinds that must not use IRC. */
 	enableIrc?: boolean;
+	/** Whether the spawning owner can act on a resume hint; see `ExecutorOptions.ownerCanResume`. */
+	ownerCanResume?: boolean;
 	/** `0` disables executor wall-clock timeout. Undefined inherits settings. */
 	maxRuntimeMs?: number;
 	/** Kernel-defined tools explicitly exposed to this child. */
@@ -579,6 +581,7 @@ function buildExecutorOptions(
 		artifactsDir: lease.artifactsDir,
 		enableLsp: policy.enableLsp,
 		enableIrc: policy.enableIrc,
+		ownerCanResume: request.ownerCanResume,
 		maxRuntimeMs: request.maxRuntimeMs,
 		restrictToolNames,
 		keepAlive: request.keepAlive,

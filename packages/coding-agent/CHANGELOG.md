@@ -11,6 +11,10 @@
 - Failed subagent results now include a `<resume>` line with the `agent://<id>` to message, so the parent can continue the same child instead of redoing the work. Cancelled results use the same single `<resume>` line instead of a suffix on the abort reason. The hint is omitted when the caller cannot message peers, and `omp agents unpack` keeps a bundled agent's `steps`.
 - Added `task.agentSoftRequestBudget` to give named subagents their own soft request budget, so a long-running agent can get more requests (or `0` for no guard) while scout, sonic and other agents keep theirs ([#15419](https://github.com/can1357/oh-my-pi/pull/15419) by [@will-bogusz](https://github.com/will-bogusz))
 
+### Removed
+
+- Removed the exported `SOFT_REQUEST_BUDGET` table. Bundled scout and sonic caps are now their agent definitions' `steps`, and `resolveSoftRequestBudget` takes `(agentName, configuredBudget, agentBudgets, agentSteps)`.
+
 ## [18.10.2] - 2026-10-12
 
 ### Added
