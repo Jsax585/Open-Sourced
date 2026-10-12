@@ -251,6 +251,7 @@ function createBridgeToolContext(options: CursorExecBridgeOptions): {
 	return {
 		context: base && {
 			...base,
+			bridgedResultShown: true,
 			addAdditionalContext: (value: string) => {
 				reported.push(value);
 			},

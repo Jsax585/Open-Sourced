@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import {
+	type AgentMessage,
+	type AgentToolContext,
+	TOOL_RESULT_ADDITIONAL_CONTEXT,
+	type ToolResultWithAdditionalContext,
+} from "@oh-my-pi/pi-agent-core";
 import {
 	type Api,
 	type Context,
@@ -15,6 +20,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { reset as resetCapabilityCache } from "@oh-my-pi/pi-coding-agent/capability";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { CursorExecHandlers } from "@oh-my-pi/pi-coding-agent/cursor";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -22,7 +28,7 @@ import { NESTED_CONTEXT_FILE_MAX_CHARS, NestedContextInjector } from "@oh-my-pi/
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { inheritedContextFiles } from "@oh-my-pi/pi-coding-agent/task/executor";
 import { rebaseContextFiles } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
-import type { ContextFileEntry, ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import type { ContextFileEntry, Tool, ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
@@ -381,11 +387,36 @@ describe("contextFiles.onTouch", () => {
 		// with their content, and the child does not inject them a second time on its own touch.
 		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "a" });
 		const parent = await run(tempDir, repo, [[{ name: "read", arguments: { path: "pkg/a.ts" } }]], ON);
-		expect(parent.carried).toEqual([{ path: path.join(repo, "pkg/AGENTS.md"), content: "PKG-CANARY" }]);
+		expect(parent.carried).toEqual([{ path: path.join(repo, "pkg/AGENTS.md"), content: "PKG-CANARY", depth: -1 }]);
 
 		const child = await run(tempDir, repo, [[{ name: "read", arguments: { path: "pkg/a.ts" } }]], ON, parent.carried);
 		expect(child.contexts[0]?.systemPrompt?.join("\n")).toContain("PKG-CANARY");
 		expect(child.developerTexts).toEqual([]);
+	});
+
+	it("ranks a carried file after the parent's root context files in a child's prompt", async () => {
+		// Guards precedence across inheritance: the child's prompt orders files by depth, and a
+		// carried nested file without one sorted as the farthest, ahead of the root's own rules.
+		setup({
+			"CLAUDE.md": "ROOT-CLAUDE",
+			"pkg/CLAUDE.md": "PKG-CANARY",
+			"pkg/sub/CLAUDE.md": "SUB-CANARY",
+			"pkg/sub/a.ts": "a",
+		});
+		const parent = await run(tempDir, repo, [[{ name: "read", arguments: { path: "pkg/sub/a.ts" } }]], ON);
+		expect(parent.carried.map(entry => entry.depth)).toEqual([-1, -2]);
+		const session = {
+			cwd: repo,
+			contextFiles: [{ path: path.join(repo, "CLAUDE.md"), content: "ROOT-CLAUDE", depth: 0 }],
+			getNestedContextFiles: async () => parent.carried,
+		} as unknown as ToolSession;
+		const inherited = await inheritedContextFiles(session);
+
+		const child = await run(tempDir, repo, [], ON, inherited);
+		const prompt = child.contexts[0]?.systemPrompt?.join("\n") ?? "";
+		const order = ["ROOT-CLAUDE", "PKG-CANARY", "SUB-CANARY"].map(canary => prompt.indexOf(canary));
+		expect(order.every(index => index >= 0)).toBe(true);
+		expect(order).toEqual([...order].sort((a, b) => a - b));
 	});
 
 	it("loads a nested file whose path a system-prompt context file only mentions", async () => {
@@ -410,7 +441,7 @@ describe("contextFiles.onTouch", () => {
 			"copy/pkg/a.ts": "a",
 		});
 		const parent = await run(tempDir, repo, [[{ name: "read", arguments: { path: "pkg/a.ts" } }]], ON);
-		expect(parent.carried).toEqual([{ path: path.join(repo, "pkg/CLAUDE.md"), content: "PKG-CANARY" }]);
+		expect(parent.carried).toEqual([{ path: path.join(repo, "pkg/CLAUDE.md"), content: "PKG-CANARY", depth: -1 }]);
 
 		const copy = path.join(repo, "copy");
 		const inherited = rebaseContextFiles(parent.carried, repo, copy);
@@ -425,7 +456,7 @@ describe("contextFiles.onTouch", () => {
 		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "a" });
 		const parent = await run(tempDir, repo, [[{ name: "read", arguments: { path: "pkg/AGENTS.md" } }]], ON);
 		expect(parent.developerTexts).toEqual([]);
-		expect(parent.carried).toEqual([{ path: path.join(repo, "pkg/AGENTS.md"), content: "PKG-CANARY" }]);
+		expect(parent.carried).toEqual([{ path: path.join(repo, "pkg/AGENTS.md"), content: "PKG-CANARY", depth: -1 }]);
 	});
 
 	it("hands files to subagents shallowest first, in capability order within a directory", async () => {
@@ -485,7 +516,7 @@ describe("contextFiles.onTouch", () => {
 		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
 		expect(result.developerTexts.join("\n")).toContain("IMPORTED-CANARY");
 		expect(result.carried).toEqual([
-			{ path: path.join(repo, "pkg/AGENTS.md"), content: "PKG-CANARY\nIMPORTED-CANARY" },
+			{ path: path.join(repo, "pkg/AGENTS.md"), content: "PKG-CANARY\nIMPORTED-CANARY", depth: -1 },
 		]);
 	});
 
@@ -606,7 +637,7 @@ describe("contextFiles.onTouch", () => {
 			ON,
 		);
 		expect(result.developerTexts.join("\n").match(/Q-CANARY/g)).toEqual(["Q-CANARY"]);
-		expect(result.carried).toEqual([{ path: path.join(repo, 'q"b/AGENTS.md'), content: "Q-CANARY" }]);
+		expect(result.carried).toEqual([{ path: path.join(repo, 'q"b/AGENTS.md'), content: "Q-CANARY", depth: -1 }]);
 	});
 
 	it.skipIf(process.platform === "win32")(
@@ -711,6 +742,34 @@ describe("contextFiles.onTouch", () => {
 		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
 	});
 
+	it("counts a Cursor exec read of a context file as the model seeing it", async () => {
+		// Guards full-read dedupe on the Cursor bridge: unlike an eval script's read, its result is
+		// persisted ahead of its passive context, so a block for the same file would be a duplicate.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "other/AGENTS.md": "OTHER-CANARY", "other/b.ts": "b" });
+		const delivered: Array<string | undefined> = [];
+		await run(tempDir, repo, [], ON, [], {
+			before: async session => {
+				const handlers = new CursorExecHandlers({
+					cwd: repo,
+					tools: new Map([["read", session.getToolByName("read") as unknown as Tool]]),
+					getToolContext: () => ({ settings: session.settings, autoApprove: true }) as unknown as AgentToolContext,
+				});
+				for (const [index, file] of ["pkg/AGENTS.md", "other/b.ts"].entries()) {
+					const message = (await handlers.piRead({
+						toolCallId: `cursor-read-${index}`,
+						args: { path: path.join(repo, file) },
+					} as never)) as ToolResultWithAdditionalContext;
+					expect(message.isError).toBe(false);
+					delivered.push(message[TOOL_RESULT_ADDITIONAL_CONTEXT]);
+				}
+			},
+			turns: [],
+		});
+		// The second read shows the bridge does deliver context; the first, a full read, needs none.
+		expect(delivered[0]).toBeUndefined();
+		expect(blockPaths([delivered[1] ?? ""], repo)).toEqual(["other/AGENTS.md"]);
+	});
+
 	it("loads a file again once compaction drops it from the window", async () => {
 		// Guards the window-as-state design: dedupe must not outlive the block it relies on,
 		// including through batch state when the follow-up's tool-call ids repeat the first prompt's.
@@ -736,7 +795,10 @@ describe("contextFiles.onTouch", () => {
 			turns: [[{ name: "read", arguments: { path: "sub/b.ts" } }]],
 		});
 		expect(result.notices).toEqual(["Loaded pkg/sub/AGENTS.md"]);
-		expect(result.carried).toEqual([{ path: path.join(repo, "pkg/sub/AGENTS.md"), content: "SUB-CANARY" }]);
+		// The depth counts from the new cwd, which the file now sits one level below.
+		expect(result.carried).toEqual([
+			{ path: path.join(repo, "pkg/sub/AGENTS.md"), content: "SUB-CANARY", depth: -1 },
+		]);
 	});
 });
 
@@ -786,7 +848,7 @@ describe("NestedContextInjector batch order", () => {
 				isError: false,
 				context: { systemPrompt: [], messages: [] },
 			} as never);
-		return { repo, settle };
+		return { repo, settle, injector };
 	};
 
 	it("delivers a shared parent once, before its child, however parallel calls settle", async () => {
@@ -825,6 +887,56 @@ describe("NestedContextInjector batch order", () => {
 			{ cwd: "main", additional: ["other"] },
 		);
 		expect(blockPaths([(await settle(0)) ?? ""], repo)).toEqual(["other/pkg/AGENTS.md"]);
+	});
+
+	it("loads an exact-directory file above a workspace root nested below cwd", async () => {
+		// Guards nested roots: the system prompt walks up from the nested root, so it holds the
+		// ancestors' walking-up files, but a provider that reads only its own directory's
+		// `.github/` never reached them, and a touch beside the root must still load that file.
+		const { repo, settle } = batch(
+			{
+				"packages/AGENTS.md": "PACKAGES",
+				"packages/.github/copilot-instructions.md": "COPILOT",
+				"packages/foo/AGENTS.md": "FOO",
+				"packages/bar/a.ts": "a",
+			},
+			["packages/bar/a.ts"],
+			{ additional: ["packages/foo"] },
+		);
+		expect(blockPaths([(await settle(0)) ?? ""], repo)).toEqual(["packages/.github/copilot-instructions.md"]);
+	});
+
+	it("does not load a file the system prompt reached walking up from a nested workspace root", async () => {
+		// Guards the duplicate the old skip prevented: the prompt loads each additional root's
+		// ancestors' files, which a touch beside that root now probes too.
+		const { settle } = batch(
+			{ "packages/AGENTS.md": "PACKAGES", "packages/foo/AGENTS.md": "FOO", "packages/bar/a.ts": "a" },
+			["packages/bar/a.ts"],
+			{ additional: ["packages/foo"] },
+		);
+		expect(await settle(0)).toBeUndefined();
+	});
+
+	it("gives carried files a depth below the workspace root each sits under", async () => {
+		// Guards precedence in a child's prompt across roots: a file below an additional root ranks
+		// after that root's own files, which the prompt counts from that root, not from cwd.
+		const { repo, settle, injector } = batch(
+			{
+				"main/pkg/sub/AGENTS.md": "SUB",
+				"main/pkg/sub/x.ts": "x",
+				"other/pkg/AGENTS.md": "OTHER-PKG",
+				"other/pkg/y.ts": "y",
+			},
+			["main/pkg/sub/x.ts", "other/pkg/y.ts"],
+			{ cwd: "main", additional: ["other"] },
+		);
+		const texts = [await settle(0), await settle(1)].filter(Boolean) as string[];
+		const window = [{ role: "developer", content: texts.map(text => ({ type: "text", text })) }] as AgentMessage[];
+		const carried = await injector.carried(window);
+		expect(carried.map(entry => [path.relative(repo, entry.path), entry.depth])).toEqual([
+			["other/pkg/AGENTS.md", -1],
+			["main/pkg/sub/AGENTS.md", -2],
+		]);
 	});
 
 	it("drops a claimed file that a later-settling call of the batch read in full", async () => {

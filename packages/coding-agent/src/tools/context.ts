@@ -21,6 +21,10 @@ declare module "@oh-my-pi/pi-agent-core" {
 		xdevTierResolved?(tier: "read" | "write" | "exec"): void;
 		/** Set only after an interactive prompt approves provider computer safety checks. */
 		providerSafetyApproved?: boolean;
+		/** Set by a non-loop executor whose call result the model sees as a tool
+		 *  result of its own (the Cursor exec bridge). Unset for a script bridge
+		 *  (eval's `tool.*`), whose results stay inside the script. */
+		bridgedResultShown?: boolean;
 	}
 }
 

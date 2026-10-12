@@ -89,8 +89,8 @@ interface Touch {
 	/** The batch whose developer message the call's blocks join. */
 	batch: BatchState;
 	messages: readonly AgentMessage[];
-	/** An eval script's call: its result stays in the script unless the script prints it. */
-	bridged?: true;
+	/** A script's call (eval's `tool.*`): its result stays in the script unless the script prints it. */
+	hidden?: boolean;
 }
 
 /** A claimed block awaiting delivery. */
@@ -183,7 +183,9 @@ export class NestedContextInjector {
 	 * Loads context for a settled bridged call. Inside a running batch (eval's
 	 * `tool.*`) its blocks queue for the loop call that issued it, so they arrive
 	 * as a developer message rather than inside a script's return value. With no
-	 * batch running (Cursor exec), the call's own context sink delivers them.
+	 * batch running (Cursor exec), the call's own context sink delivers them. Only
+	 * a bridge that marks its context `bridgedResultShown` puts the call's result
+	 * in front of the model; any other bridge's result is hidden.
 	 */
 	async afterBridgedToolCall(
 		toolCallId: string,
@@ -196,7 +198,13 @@ export class NestedContextInjector {
 		if (!call || isError) return;
 		const messages = this.#host.window();
 		const batch = this.#batchFor(messages.findLast(message => message.role === "assistant"));
-		await this.#touch({ ...call, details: result.details, batch, messages, bridged: true });
+		await this.#touch({
+			...call,
+			details: result.details,
+			batch,
+			messages,
+			hidden: context?.bridgedResultShown !== true,
+		});
 		if (batch.outstanding.size > 0 || !context?.addAdditionalContext) return;
 		const text = this.#drain(batch);
 		if (text) context.addAdditionalContext(text);
@@ -260,9 +268,9 @@ export class NestedContextInjector {
 		// A whole read of a context file puts it in context: tool results precede
 		// the batch's developer message. Recorded before any await, and checked
 		// again when the queue is handed over, so a parallel call cannot claim the
-		// file first. A bridged read's result reaches the model only if the script
-		// prints it, so it does not count.
-		const fullRead = touch.toolName === "read" && !touch.bridged ? fullReadPath(touch.details) : undefined;
+		// file first. A script's read reaches the model only if the script prints
+		// it, so it does not count.
+		const fullRead = touch.toolName === "read" && !touch.hidden ? fullReadPath(touch.details) : undefined;
 		if (fullRead) touch.batch.fullReads.add(fullRead);
 		const cwd = path.resolve(this.#host.cwd());
 		const edited = editedFiles(touch, cwd);
@@ -286,21 +294,22 @@ export class NestedContextInjector {
 
 	async #load(touch: Touch, cwd: string, roots: readonly string[], targets: readonly TouchedTarget[]): Promise<void> {
 		let files: NestedContextFile[];
+		let inPrompt: Set<string>;
 		try {
 			const directories = (await Promise.all(targets.map(touchedDirectory))).filter(
 				dir => rootOf(roots, dir) !== undefined,
 			);
 			if (directories.length === 0) return;
 			files = await this.#discover(directories, roots);
+			if (files.length === 0) return;
+			inPrompt = await this.#promptPaths(cwd, roots);
 		} catch (error) {
 			logger.warn("Nested context discovery failed", { error: String(error) });
 			return;
 		}
-		if (files.length === 0) return;
 
 		const { batch } = touch;
 		const window = scanWindow(touch.messages);
-		const inPrompt = new Set(this.#host.promptContextFiles());
 		// Claims and queueing stay synchronous, so the queue is in claim order.
 		for (const file of files) {
 			if (batch.claimed.has(file.path) || window.blocks.has(file.path)) continue;
@@ -317,6 +326,22 @@ export class NestedContextInjector {
 			});
 			batch.queue.push({ path: file.path, block, display, depth: segmentCount(file.owner), plain });
 		}
+	}
+
+	/**
+	 * Context files the system prompt holds: the host's, and what the prompt
+	 * loads walking up from each additional root, as `buildSystemPrompt` does.
+	 * Those reach the ancestors of a root nested below cwd, which a touch beside
+	 * that root still probes for files only an exact-directory provider finds.
+	 */
+	async #promptPaths(cwd: string, roots: readonly string[]): Promise<Set<string>> {
+		const paths = new Set(this.#host.promptContextFiles());
+		for (const root of roots) {
+			if (root === cwd) continue;
+			const result = await loadCapability<ContextFile>(contextFileCapability.id, { cwd: root });
+			for (const item of result.items) paths.add(item.path);
+		}
+		return paths;
 	}
 
 	/** Marks `id` settled; hands over the queue once no call of the batch is outstanding. */
@@ -365,8 +390,6 @@ export class NestedContextInjector {
 			// Hidden directories and dependency trees are not project context.
 			const segments = path.relative(root, owner).split(path.sep);
 			if (segments.some(segment => segment.startsWith(".") || EXCLUDED_SEGMENTS[segment] === true)) continue;
-			// A workspace root nested below this one, and its ancestors, are already in the system prompt.
-			if (roots.some(other => isStrictlyBelow(owner, other))) continue;
 			const result = await loadCapability<ContextFile>(contextFileCapability.id, { cwd: owner });
 			for (const item of result.items) {
 				// Depth counts levels above the probe; files in its own config folders report -1.
@@ -388,7 +411,9 @@ export class NestedContextInjector {
 	 * full reads of a nested context file with the content discovery loads (the
 	 * read result itself carries line prefixes). Shallowest first and in
 	 * capability order within a directory, as the system prompt keeps them, not
-	 * in the order the window gained them. Empty with the setting off.
+	 * in the order the window gained them. Each carries a negative depth, levels
+	 * below the root it sits under, so the child's prompt ranks it after every
+	 * file at or above that root. Empty with the setting off.
 	 */
 	async carried(messages: readonly AgentMessage[]): Promise<ContextFileEntry[]> {
 		if (!cfgContextFilesOnTouch.get(this.#host.settings)) return [];
@@ -418,7 +443,11 @@ export class NestedContextInjector {
 		return [...byPath]
 			.map(([filePath, content]) => ({ path: filePath, content, rank: rank(filePath) }))
 			.sort((a, b) => a.rank.depth - b.rank.depth || a.rank.index - b.rank.index)
-			.map(({ path: filePath, content }) => ({ path: filePath, content }));
+			.map(({ path: filePath, content }) => ({
+				path: filePath,
+				content,
+				depth: nestedDepth(cwd, roots, ownerDirectory(filePath)),
+			}));
 	}
 }
 
@@ -432,6 +461,18 @@ function rootOf(roots: readonly string[], dir: string): string | undefined {
 		if (isStrictlyBelow(root, dir) && (deepest === undefined || isStrictlyBelow(deepest, root))) deepest = root;
 	}
 	return deepest;
+}
+
+/**
+ * Context-file depth of a nested file owned by `owner`: levels below cwd as a
+ * negative number, since `ContextFile.depth` counts levels above it, so a
+ * system prompt ranks it after every file it loaded itself. Owners outside cwd
+ * count from the workspace root they sit under, as that root's own files count
+ * from it; one outside every root (the session moved since) ranks just below cwd.
+ */
+function nestedDepth(cwd: string, roots: readonly string[], owner: string): number {
+	const base = isStrictlyBelow(cwd, owner) ? cwd : rootOf(roots, owner);
+	return base === undefined ? -1 : segmentCount(base) - segmentCount(owner);
 }
 
 /**
