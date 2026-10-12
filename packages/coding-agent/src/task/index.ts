@@ -1414,14 +1414,14 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						delete progress.resolvedModelIsFallback;
 					}
 					onSettled?.(resultFailed);
+					// Decided once, next to the summary it must agree with: an idle timer can park the child
+					// while the progress report below is awaited.
+					const summaryHasResume = singleResult !== undefined && isResumableTaskResult(singleResult, ircEnabled);
 					const statusText = resultFailed
 						? `Background task ${agentId} failed.`
 						: `Background task ${agentId} complete.`;
 					await reportProgress(statusText, buildDetails() as unknown as Record<string, unknown>);
-					const deliveryText = `${finalText}${await buildFollowUpHint(
-						singleResult?.aborted === true,
-						singleResult !== undefined && isResumableTaskResult(singleResult, ircEnabled),
-					)}`;
+					const deliveryText = `${finalText}${await buildFollowUpHint(singleResult?.aborted === true, summaryHasResume)}`;
 					const structured = singleResult?.structuredOutput;
 					if (resultFailed) {
 						// Mark the job itself failed; the failed agent stays interrogable.

@@ -29,9 +29,9 @@ import {
 	getOrFetchPrDiff,
 	githubIssueJsonWithStateReasonFallback,
 	type PrDiffFile,
-	parsePositiveDecimalInt,
 	resolveDefaultRepoMemoized,
 } from "../tools/gh";
+import { parsePositiveDecimalInt } from "@oh-my-pi/pi-utils";
 import { type CacheStatus, formatFreshnessNote } from "../tools/github-cache";
 import { github } from "../utils/github";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, SchemeSpec } from "./types";

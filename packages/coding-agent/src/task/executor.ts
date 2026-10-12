@@ -176,7 +176,10 @@ const TASK_ABORT_CLEANUP_GRACE_MS = 10_000;
 export function resolveSoftRequestBudget(configuredBudget: number, agentSteps?: number): number {
 	const normalized = Math.max(0, Math.trunc(configuredBudget));
 	if (normalized === 0) return 0;
-	return Math.min(normalized, agentSteps ?? normalized);
+	// Steps from an SDK-supplied definition bypass frontmatter parsing, so invalid values fall back here too.
+	const steps =
+		agentSteps !== undefined && Number.isSafeInteger(agentSteps) && agentSteps > 0 ? agentSteps : normalized;
+	return Math.min(normalized, steps);
 }
 
 /** Extra requests allowed after a budget stop for the forced yield to land before the run is hard-aborted. */

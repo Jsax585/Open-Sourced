@@ -136,3 +136,13 @@ export function formatPercent(ratio: number): string {
 export function normalizePremiumRequests(value: number): number {
 	return Math.round((value + Number.EPSILON) * 100) / 100;
 }
+
+/**
+ * Parse a digit-only decimal positive integer or return undefined. Rejects `1e2`, `0x10`, `12.0`,
+ * leading +/-, or any other shape `Number()` would accept, and values beyond the safe-integer range.
+ */
+export function parsePositiveDecimalInt(value: string | undefined): number | undefined {
+	if (!value || !/^\d+$/.test(value)) return undefined;
+	const num = Number(value);
+	return Number.isSafeInteger(num) && num > 0 ? num : undefined;
+}

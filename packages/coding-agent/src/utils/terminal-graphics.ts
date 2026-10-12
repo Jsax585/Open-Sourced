@@ -2,6 +2,7 @@ import { inflateSync } from "node:zlib";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { decodeSixelToPngAsync } from "@oh-my-pi/pi-natives";
 import { MAX_IMAGE_INPUT_BYTES, convertImageToPng } from "@oh-my-pi/pi-tui/chat/image-loading";
+import { parsePositiveDecimalInt } from "@oh-my-pi/pi-utils";
 import { encodeRawPng, PNG_SIGNATURE } from "./png-encode";
 
 const ESC = "\x1b";
@@ -253,12 +254,12 @@ export class TerminalGraphicsDecoder {
 
 		const beginsTransfer = !this.#kittyTransfer || ["f", "s", "v", "o", "t", "a"].some(key => controls.has(key));
 		if (beginsTransfer) {
-			const format = parsePositiveInteger(controls.get("f")) ?? 32;
+			const format = parsePositiveDecimalInt(controls.get("f")) ?? 32;
 			this.#kittyTransfer = {
 				accepted: true,
 				format,
-				width: parsePositiveInteger(controls.get("s")),
-				height: parsePositiveInteger(controls.get("v")),
+				width: parsePositiveDecimalInt(controls.get("s")),
+				height: parsePositiveDecimalInt(controls.get("v")),
 				compression: controls.get("o"),
 				parts: [],
 				base64Chars: 0,
@@ -414,12 +415,6 @@ function dimensionsAllowed(width: number, height: number): boolean {
 		height <= MAX_IMAGE_EDGE &&
 		width * height <= MAX_IMAGE_PIXELS
 	);
-}
-
-function parsePositiveInteger(value: string | undefined): number | undefined {
-	if (!value || !/^\d+$/u.test(value)) return undefined;
-	const parsed = Number(value);
-	return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function isStrictBase64(value: string): boolean {

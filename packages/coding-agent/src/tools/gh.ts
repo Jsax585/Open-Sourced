@@ -46,7 +46,7 @@ import { toolResult } from "./tool-result";
 
 import { cfgImagesAutoResize } from "../modes/settings";
 
-export { formatRepoRef, parsePositiveDecimalInt, resolveDefaultRepoMemoized } from "./gh-common";
+export { formatRepoRef, resolveDefaultRepoMemoized } from "./gh-common";
 export {
 	getOrFetchPrDiff,
 	type PrDiffFile,

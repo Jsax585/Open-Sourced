@@ -727,9 +727,14 @@ describe("resolveSoftRequestBudget", () => {
 		expect(resolveSoftRequestBudget(20)).toBe(20);
 	});
 
+	it("ignores invalid steps from SDK-supplied agent definitions", () => {
+		for (const steps of [0, -2, 2.5, Number.NaN]) {
+			expect(resolveSoftRequestBudget(20, steps)).toBe(20);
+		}
+	});
+
 	it("keeps 0 disabled regardless of steps and normalizes negative or fractional budgets", () => {
 		expect(resolveSoftRequestBudget(0, 8)).toBe(0);
-		expect(resolveSoftRequestBudget(0)).toBe(0);
 		expect(resolveSoftRequestBudget(-5)).toBe(0);
 		expect(resolveSoftRequestBudget(20.9)).toBe(20);
 	});

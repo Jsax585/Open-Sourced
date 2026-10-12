@@ -11,6 +11,7 @@ import {
 	logger,
 	normalizePathForComparison,
 	parseFrontmatter,
+	parsePositiveDecimalInt,
 	tryParseJson,
 } from "@oh-my-pi/pi-utils";
 import { isUserSourceEnabled } from "../capability";
@@ -175,8 +176,8 @@ export function parseBoolean(value: unknown): boolean | undefined {
 
 /** Parse a positive integer given as a number or numeric string; anything else (0, negatives, fractions, text) is dropped. */
 export function parsePositiveInteger(value: unknown): number | undefined {
-	const parsed = typeof value === "string" && /^\s*\d+\s*$/.test(value) ? Number(value) : value;
-	return typeof parsed === "number" && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+	if (typeof value === "string") return parsePositiveDecimalInt(value.trim());
+	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 /**
