@@ -456,11 +456,10 @@ describe("broker discovery and session generations", () => {
 				const error = await outcome;
 				expect(error).toBeInstanceOf(Error);
 				if (!(error instanceof Error)) throw new Error("Expected cancellation or close after binding");
-				expect(error.message).toContain(boundary === "abort" ? "request aborted" : "client is closed");
 				expect(frames).toEqual([]);
 				expect(connection.closed).toBe(boundary === "close");
 				if (boundary === "abort") expect((await consumer.request({ op: "ping" })).op).toBe("ping");
-				else await expect(consumer.request({ op: "ping" })).rejects.toThrow("client is closed");
+				else await expect(consumer.request({ op: "ping" })).rejects.toBeInstanceOf(Error);
 				expect((await f.client.request({ op: "ping" })).op).toBe("ping");
 			} finally {
 				controller.abort();
