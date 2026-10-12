@@ -1961,22 +1961,25 @@ export class ExtensionRunner {
 	}
 
 	/** Give opt-in extensions a bounded chance to finish a live delegation without a coding-model turn. */
-	async emitLiveDelegation(text: string): Promise<LiveDelegationResult | undefined> {
+	async emitLiveDelegation(text: string, signal: AbortSignal): Promise<LiveDelegationResult | undefined> {
 		if (!this.hasHandlers("live_delegation")) return undefined;
 		const deadline = performance.now() + 750;
 		const ctx = this.createContext();
-		const event: LiveDelegationEvent = { type: "live_delegation", text };
+		const event: LiveDelegationEvent = { type: "live_delegation", text, signal };
 		for (const ext of this.extensions) {
 			for (const handler of ext.handlers.get("live_delegation") ?? []) {
 				const remainingMs = Math.ceil(deadline - performance.now());
-				if (remainingMs <= 0) return undefined;
+				if (remainingMs <= 0 || signal.aborted) return undefined;
 				const result = (await this.#runHandlerWithTimeout(
 					handler,
 					event,
 					ctx,
 					ext,
 					remainingMs,
+					undefined,
+					signal,
 				)) as LiveDelegationResult | undefined;
+				if (signal.aborted) return undefined;
 				if (typeof result?.reply === "string" && result.reply.trim() && result.reply.length <= 512) {
 					return { reply: result.reply.trim() };
 				}
