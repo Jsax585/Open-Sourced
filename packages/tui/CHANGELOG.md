@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the `context_tok` status-line segment, which shows used/window context tokens (for example `114K/272K`) next to the percentage-based `context_pct` ([#15396](https://github.com/can1357/oh-my-pi/pull/15396) by [@nszceta](https://github.com/nszceta)).
 ### Removed
 
 - Removed `tools/eval-format/code-mode-declarations` (`generateCodeModeDeclarations`), which only served Codex Code Mode.

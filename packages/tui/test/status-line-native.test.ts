@@ -117,6 +117,24 @@ describe("native composer facts", () => {
 		expect(text("main", false)).toBe("*3 +2 ?1");
 	});
 
+	it("shows used/window tokens in context_tok while context_pct keeps the percentage", () => {
+		const text = (id: "context_pct" | "context_tok", contextPercent: number | null) =>
+			describeSegment(id, {
+				contextPercent,
+				contextTokens: 114_240,
+				contextWindow: 272_000,
+				autoCompactEnabled: false,
+				options: {},
+			} as unknown as SegmentContext)
+				?.spans.map(part => part.t)
+				.join("");
+		expect(text("context_tok", 42)).toBe("114K/272K");
+		expect(text("context_pct", 42)).toBe("42.0%/272K");
+		// Unknown usage (startup prepaint) shows the window alone in both.
+		expect(text("context_tok", null)).toBe("272K");
+		expect(text("context_pct", null)).toBe("272K");
+	});
+
 	it("describes spans without ANSI escapes or separator glyphs", () => {
 		setNativeRendering(true);
 		const line = statusLine({ preset: "full", separator: "powerline" });

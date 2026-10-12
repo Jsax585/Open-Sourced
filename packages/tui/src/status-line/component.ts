@@ -66,6 +66,7 @@ export type StatusLineNativeAction = "status.model" | "status.context" | "status
 const NATIVE_SEGMENT_ACTIONS: Partial<Record<string, StatusLineNativeAction>> = {
 	model: "status.model",
 	context_pct: "status.context",
+	context_tok: "status.context",
 	context_total: "status.context",
 	git: "status.git",
 	cost: "status.cost",
@@ -76,6 +77,7 @@ const NATIVE_SEGMENT_ACTIONS: Partial<Record<string, StatusLineNativeAction>> = 
 const PINNED_NATIVE_SEGMENTS: Partial<Record<string, true>> = {
 	model: true,
 	context_pct: true,
+	context_tok: true,
 	context_total: true,
 	git: true,
 };
