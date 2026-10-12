@@ -306,6 +306,13 @@ describe("parseMCPTimeoutConfig", () => {
 		expect(warnings[0]).toContain("connect, catalog, execution");
 	});
 
+	test("rejects an all-digit string that overflows to a non-finite number", () => {
+		const { result, warnings } = withWarnings(() => parseMCPTimeoutConfig("9".repeat(400), "s"));
+
+		expect(result).toBeUndefined();
+		expect(warnings).toHaveLength(1);
+	});
+
 	test("an object with no usable key yields undefined so the global default applies", () => {
 		const { result } = withWarnings(() => parseMCPTimeoutConfig({ catalog: -3 }, "s"));
 		expect(result).toBeUndefined();

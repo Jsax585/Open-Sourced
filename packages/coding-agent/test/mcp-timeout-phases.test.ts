@@ -33,7 +33,9 @@ function startServer(stall: Set<string>, delayMs: Record<string, number> = {}): 
 			const body = (await request.json()) as { id?: number; method: string };
 			if (stall.has(body.method)) {
 				// Hold the socket open until the client gives up.
-				await new Promise<void>(resolve => request.signal.addEventListener("abort", () => resolve()));
+				const aborted = Promise.withResolvers<void>();
+				request.signal.addEventListener("abort", () => aborted.resolve());
+				await aborted.promise;
 				return new Response(null, { status: 499 });
 			}
 			if (body.id === undefined) return new Response(null, { status: 202 });

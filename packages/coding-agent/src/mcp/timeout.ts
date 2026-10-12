@@ -52,8 +52,8 @@ export function isValidTimeoutMs(value: unknown): value is number {
 export function parseMCPTimeoutConfig(value: unknown, label: string): MCPTimeoutConfig | undefined {
 	if (value === undefined || value === null) return undefined;
 	const coerce = (raw: unknown): number | undefined => {
-		if (typeof raw === "string" && /^\d+$/.test(raw.trim())) return Number(raw.trim());
-		return isValidTimeoutMs(raw) ? raw : undefined;
+		const candidate = typeof raw === "string" && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : raw;
+		return isValidTimeoutMs(candidate) ? candidate : undefined;
 	};
 	const expected = "expected a non-negative integer number of milliseconds (0 disables)";
 	if (typeof value !== "object" || Array.isArray(value)) {
