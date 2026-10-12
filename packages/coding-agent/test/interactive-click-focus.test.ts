@@ -300,5 +300,16 @@ describe("inline click-to-focus geometry", () => {
 		term.sendInput(`\x1b[<32;${endCol + 1};${startRow + 2}M`);
 		term.sendInput(`\x1b[<0;${endCol + 1};${startRow + 2}m`);
 		expect(mode.editor.getText()).toBe("");
+
+		// A dialog in the editor slot holds focus: the detached prompt stays untouched.
+		cfgTuiMouseQuoteOnSelect.set(mode.settings, true);
+		const dialog = new Text("slot dialog", 0, 0);
+		mode.editorContainer.clear();
+		mode.editorContainer.addChild(dialog);
+		mode.ui.setFocus(dialog);
+		term.sendInput(`\x1b[<0;${startCol + 1};${startRow + 1}M`);
+		term.sendInput(`\x1b[<32;${endCol + 1};${startRow + 2}M`);
+		term.sendInput(`\x1b[<0;${endCol + 1};${startRow + 2}m`);
+		expect(mode.editor.getText()).toBe("");
 	});
 });

@@ -783,7 +783,11 @@ export class InputController {
 		if (!event) return undefined;
 		const point = { row: event.row, col: event.col };
 		const press = this.#press;
-		if (!cfgTuiMouseQuoteOnSelect.get(this.ctx.settings)) {
+		// Quote only into the visible prompt: a dialog mounted in the editor
+		// slot (ask, hook input, selector) holds focus while the main editor
+		// sits detached, so a quote there would surface only after it closes.
+		const quoting = cfgTuiMouseQuoteOnSelect.get(this.ctx.settings) && this.ctx.ui.getFocused() === this.ctx.editor;
+		if (!quoting) {
 			if (press) {
 				this.#press = undefined;
 				this.ctx.ui.setScreenSelection(undefined);
