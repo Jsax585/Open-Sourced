@@ -49,7 +49,7 @@ export function parseJevLiveDecision(payload: unknown): JevLiveAction | undefine
 		: undefined;
 }
 
-async function classify(text: string, key: string): Promise<JevLiveAction | undefined> {
+async function classify(text: string, key: string, signal: AbortSignal): Promise<JevLiveAction | undefined> {
 	try {
 		const response = await fetch("https://api.typesafe.ai/v1/systemone", {
 			method: "POST",
@@ -63,7 +63,7 @@ async function classify(text: string, key: string): Promise<JevLiveAction | unde
 				state: { utterance: text },
 				questions,
 			}),
-			signal: AbortSignal.timeout(JEV_TIMEOUT_MS),
+			signal: AbortSignal.any([signal, AbortSignal.timeout(JEV_TIMEOUT_MS)]),
 		});
 		if (!response.ok) return undefined;
 		const body: unknown = await response.json();
@@ -111,14 +111,14 @@ export default function jevLive(pi: ExtensionAPI): void {
 		if (!enabled || !isJevLiveCandidate(event.text)) return;
 		const key = process.env.TYPESAFE_API_KEY?.trim();
 		if (!key) return;
-		const action = await classify(event.text, key);
-		if (!action) return;
+		const action = await classify(event.text, key, event.signal);
+		if (!enabled || event.signal.aborted || !action) return;
 
-		if (action === "model") {
+		if (action === "model" && /\bmodel\b/i.test(event.text)) {
 			const model = ctx.models.current();
 			return { reply: model ? `Current coding model: ${model.name || model.id}.` : "No coding model selected." };
 		}
-		if (action === "status") {
+		if (action === "status" && /\b(status|working|running)\b/i.test(event.text)) {
 			const status = ctx.isIdle() ? "idle" : "working";
 			return { reply: `The coding agent is ${status}.` };
 		}
