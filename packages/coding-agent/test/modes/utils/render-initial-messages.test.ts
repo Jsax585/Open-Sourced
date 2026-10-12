@@ -884,9 +884,12 @@ describe("UiHelpers.renderInitialMessages — redraw window", () => {
 		expect(text).toContain("question 0");
 	});
 
-	it("draws a focused subagent's full history, which /tree cannot browse", async () => {
+	it.each([
+		["a focused subagent", { focusedAgentId: "Scout" }],
+		["a collab guest", { collabGuest: {} }],
+	])("draws the full history for %s, which /tree cannot browse", async (_view, fields) => {
 		const rendered = makeRenderCtx(transcriptWith(turns(4)), true, false, { "display.transcriptReplayLimit": 3 });
-		Object.assign(rendered.ctx, { focusedAgentId: "Scout" });
+		Object.assign(rendered.ctx, fields);
 		await new UiHelpers(rendered.ctx).renderInitialMessages({ clearTerminalHistory: true });
 		const text = Bun.stripANSI(rendered.chatContainer.render(120).join("\n"));
 
