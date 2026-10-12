@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- MCP servers take separate `connect`, `catalog` and `execution` timeouts (`"timeout": { "catalog": 10000, "execution": 600000 }` in `mcp.json`), with `mcp.timeout.connectMs`, `catalogMs` and `executionMs` as global defaults; a plain number still sets every phase, and timeout errors now name the phase that expired. A Codex `tool_timeout_sec` sets only the execution timeout, and print mode waits for the slowest server's connect plus catalog deadlines.
+
 ### Fixed
 
 - Fixed `read.renderMarkdown` having no effect on plain-file reads: inline read previews now render Markdown files as formatted Markdown instead of numbered source ([#15007](https://github.com/can1357/oh-my-pi/issues/15007)).
@@ -14,7 +18,6 @@
 
 ### Added
 
-- MCP servers take separate `connect`, `catalog` and `execution` timeouts (`"timeout": { "catalog": 10000, "execution": 600000 }` in `mcp.json`), with `mcp.timeout.connectMs`, `catalogMs` and `executionMs` as global defaults; a plain number still sets every phase, and timeout errors now name the phase that expired. A Codex `tool_timeout_sec` sets only the execution timeout, and print mode waits for the slowest server's connect plus catalog deadlines.
 - Added `task.agentSoftRequestBudget` to give named subagents their own soft request budget, so a long-running agent can get more requests (or `0` for no guard) while scout, sonic and other agents keep theirs ([#15419](https://github.com/can1357/oh-my-pi/pull/15419) by [@will-bogusz](https://github.com/will-bogusz))
 - Added `o200k` as a `tokenizer` value for custom models and overrides in `models.yml` ([#15447](https://github.com/can1357/oh-my-pi/pull/15447) by [@will-bogusz](https://github.com/will-bogusz))
 
