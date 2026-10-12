@@ -7,6 +7,7 @@ import * as envApiKey from "@oh-my-pi/pi-ai/env-api-key";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { AnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic-client";
+import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -209,7 +210,7 @@ describe("AgentSession retry recovery", () => {
 			streamFn: (requestModel, context, options) => {
 				streams++;
 				if (!isAnthropicModel(requestModel) || requestModel.id !== model.id) throw new Error("Unexpected fallback");
-				return streamAnthropic(requestModel, context, options ?? {});
+				return streamSimple(requestModel, context, options);
 			},
 		});
 		const settings = Settings.isolated({
