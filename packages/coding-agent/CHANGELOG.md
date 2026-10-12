@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- MCP servers take separate `startup`, `catalog` and `execution` timeouts (`"timeout": { "catalog": 10000, "execution": 600000 }` in `mcp.json`), with `mcp.timeout.startupMs`, `catalogMs` and `executionMs` as global defaults; a plain number still sets every phase, and timeout errors now name the phase that expired.
+
 ## [18.10.0] - 2026-10-12
 
 ### Added

@@ -15,6 +15,7 @@ import { readDirEntries, readFile } from "../capability/fs";
 import { type Hook, hookCapability } from "../capability/hook";
 import { type Instruction, instructionCapability } from "../capability/instruction";
 import { type MCPServer, mcpCapability } from "../capability/mcp";
+import { parseMCPTimeoutConfig } from "../mcp/timeout";
 import { type Prompt, promptCapability } from "../capability/prompt";
 import { type Rule, ruleCapability } from "../capability/rule";
 import { type Settings, settingsCapability } from "../capability/settings";
@@ -140,29 +141,8 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 				enabled = undefined;
 			}
 
-			// Validate timeout: coerce numeric strings, warn on invalid
-			let timeout: number | undefined;
-			if (serverConfig.timeout === undefined || serverConfig.timeout === null) {
-				timeout = undefined;
-			} else if (typeof serverConfig.timeout === "number") {
-				if (Number.isFinite(serverConfig.timeout) && serverConfig.timeout >= 0) {
-					timeout = serverConfig.timeout;
-				} else {
-					logger.warn(`MCP server "${serverName}": invalid timeout ${serverConfig.timeout}, ignoring`);
-					timeout = undefined;
-				}
-			} else if (typeof serverConfig.timeout === "string") {
-				const parsed = Number(serverConfig.timeout);
-				if (Number.isFinite(parsed) && parsed >= 0) {
-					timeout = parsed;
-				} else {
-					logger.warn(`MCP server "${serverName}": invalid timeout "${serverConfig.timeout}", ignoring`);
-					timeout = undefined;
-				}
-			} else {
-				logger.warn(`MCP server "${serverName}": invalid timeout type ${typeof serverConfig.timeout}, ignoring`);
-				timeout = undefined;
-			}
+			// Validate timeout: number or { startup, catalog, execution }; warns per bad key
+			const timeout = parseMCPTimeoutConfig(serverConfig.timeout, `MCP server "${serverName}"`);
 
 			// Validate requestIdFormat: only the two documented encodings
 			const requestIdFormat = parseRequestIdFormat(serverConfig.requestIdFormat);

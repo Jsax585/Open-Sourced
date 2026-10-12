@@ -11,7 +11,13 @@ import type {
 } from "../../mcp/types";
 import { toJsonRpcError } from "../../mcp/types";
 import { RequestIdAllocator } from "../request-id";
-import { createMCPTimeout, getNeverAbortSignal, resolveMCPTimeoutMs } from "../timeout";
+import {
+	createMCPTimeout,
+	describeMCPRequestTimeout,
+	getNeverAbortSignal,
+	resolveMCPRequestTimeout,
+	resolveMCPTimeoutMs,
+} from "../timeout";
 import { type MCPFetchInit, mcpFetch } from "./header-policy";
 
 interface MCPTimeoutOperation {
@@ -96,7 +102,7 @@ export class LegacySseTransport implements MCPTransport {
 		const connection = new AbortController();
 		const onAbort = () => connection.abort(signal?.reason);
 		signal?.addEventListener("abort", onAbort, { once: true });
-		const timeout = resolveMCPTimeoutMs(this.#config.timeout);
+		const timeout = resolveMCPTimeoutMs(this.#config.timeout, "startup");
 		const operation = createMCPTimeout(timeout, this.#operationSignal(connection.signal));
 		const endpointReady = Promise.withResolvers<void>();
 		this.#sseConnection = connection;
@@ -239,7 +245,8 @@ export class LegacySseTransport implements MCPTransport {
 			method,
 			params: params ?? {},
 		};
-		const timeout = resolveMCPTimeoutMs(this.#config.timeout);
+		const requestTimeout = resolveMCPRequestTimeout(this.#config.timeout, method);
+		const timeout = requestTimeout.ms;
 		const operation = createMCPTimeout(timeout, this.#operationSignal(options?.signal));
 		const deferred = Promise.withResolvers<unknown>();
 		// Observe the response promise synchronously so a stream-close rejection
@@ -264,7 +271,9 @@ export class LegacySseTransport implements MCPTransport {
 						? this.#lifecycleController.signal.reason
 						: undefined;
 				deferred.reject(
-					aborted instanceof Error ? aborted : new Error(`Legacy SSE response timeout after ${timeout}ms`),
+					aborted instanceof Error
+						? aborted
+						: new Error(`Legacy SSE response timeout after ${describeMCPRequestTimeout(requestTimeout, method)}`),
 				);
 			};
 			operation.signal.addEventListener("abort", pending.abortHandler, { once: true });
@@ -284,7 +293,7 @@ export class LegacySseTransport implements MCPTransport {
 			operation.clear();
 			if (pending.abortHandler) operation.signal?.removeEventListener("abort", pending.abortHandler);
 			if (operation.isTimeoutAbort(error)) {
-				throw new Error(`Request timeout after ${timeout}ms`);
+				throw new Error(`Request timeout after ${describeMCPRequestTimeout(requestTimeout, method)}`);
 			}
 			throw error;
 		}
@@ -295,8 +304,8 @@ export class LegacySseTransport implements MCPTransport {
 			throw new Error("Transport not connected");
 		}
 
-		const timeout = resolveMCPTimeoutMs(this.#config.timeout);
-		const operation = createMCPTimeout(timeout, this.#operationSignal());
+		const notifyTimeout = resolveMCPRequestTimeout(this.#config.timeout, method);
+		const operation = createMCPTimeout(notifyTimeout.ms, this.#operationSignal());
 		try {
 			const response = await this.#postJson(
 				{
@@ -315,7 +324,7 @@ export class LegacySseTransport implements MCPTransport {
 		} catch (error) {
 			operation.clear();
 			if (operation.isTimeoutAbort(error)) {
-				throw new Error(`Notify timeout after ${timeout}ms`);
+				throw new Error(`Notify timeout after ${describeMCPRequestTimeout(notifyTimeout, method)}`);
 			}
 			throw error;
 		}
@@ -359,7 +368,7 @@ export class LegacySseTransport implements MCPTransport {
 
 	async #sendServerResponse(id: string | number, result?: unknown, error?: JsonRpcError): Promise<void> {
 		if (!this.#connected) return;
-		const timeout = resolveMCPTimeoutMs(this.#config.timeout);
+		const timeout = resolveMCPTimeoutMs(this.#config.timeout, "execution");
 		const operation = createMCPTimeout(timeout, this.#operationSignal());
 		try {
 			const response = await this.#postJson(

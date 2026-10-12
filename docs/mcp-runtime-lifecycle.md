@@ -102,7 +102,7 @@ For each discovered server in `connectServers()`:
 - answers server-to-client `ping` and `roots/list` requests; unsupported request methods return JSON-RPC `-32601`,
 - sends `notifications/initialized` before any further session traffic,
 - for Streamable HTTP, starts the background SSE listener only after `notifications/initialized`,
-- uses timeout precedence `OMP_MCP_TIMEOUT_MS`, then `config.timeout`, then 30s; `0` disables the client-side timeout,
+- bounds connect plus `initialize` by the `startup` deadline: `OMP_MCP_TIMEOUT_MS`, then the server's `timeout` (number or `timeout.startup`), then `mcp.timeout.startupMs`, then 30s; `0` disables it. List requests use the `catalog` deadline and every other request the `execution` deadline, resolved the same way (`mcp-config.md`, Timeouts),
 - records the server's negotiated protocol revision; Streamable HTTP carries it on subsequent requests in `MCP-Protocol-Version`,
 - closes transport on init failure.
 

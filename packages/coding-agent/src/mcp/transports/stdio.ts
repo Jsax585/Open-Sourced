@@ -22,7 +22,7 @@ import type {
 import { toJsonRpcError } from "../../mcp/types";
 import { createMCPJsonRpcError, MCPTransportError, normalizeMCPTransportError } from "../errors";
 import { RequestIdAllocator } from "../request-id";
-import { isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
+import { describeMCPRequestTimeout, isMCPTimeoutEnabled, resolveMCPRequestTimeout } from "../timeout";
 import { isThenable } from "../../utils/ipc";
 
 /** Subprocess argv and platform-derived spawn flags for an MCP stdio server. */
@@ -784,7 +784,8 @@ export class StdioTransport implements MCPTransport {
 			params: params ?? {},
 		};
 
-		const timeout = resolveMCPTimeoutMs(this.config.timeout);
+		const requestTimeout = resolveMCPRequestTimeout(this.config.timeout, method);
+		const timeout = requestTimeout.ms;
 		const signal = options?.signal;
 
 		if (signal?.aborted) {
@@ -838,7 +839,7 @@ export class StdioTransport implements MCPTransport {
 						transport: "stdio",
 						stage: "receive",
 						failure: "timeout",
-						message: `Request timeout after ${timeout}ms`,
+						message: `Request timeout after ${describeMCPRequestTimeout(requestTimeout, method)}`,
 						retryable: false,
 					}),
 				);
