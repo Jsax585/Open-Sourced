@@ -21,6 +21,18 @@ function taxonomySources(text: string) {
 }
 
 describe("compat compiler grammar", () => {
+	test("backend mappings reject unknown hosts, malformed leaves, and ambiguous host/API pairs", () => {
+		for (const text of [
+			'backend-provider provider="friendli" host="unknown" api="openai-completions"',
+			'backend-provider provider="" host="friendli" api="openai-completions"',
+			'backend-provider "extra" provider="friendli" host="friendli" api="openai-completions"',
+			'backend-provider provider="friendli" host="friendli" api="openai-completions" {}',
+			'backend-provider provider="friendli" host="friendli" api="openai-completions"\nbackend-provider provider="other" host="friendli" api="openai-completions"',
+		]) {
+			expect(() => compileBehavior({ file: "runtime/behavior.kdl", text: `behavior {\n${text}\n}` })).toThrow();
+		}
+	});
+
 	test("unknown axis directive is rejected with file:line", () => {
 		expect(() =>
 			compileCascade([{ file: "classes/test.kdl", text: 'class "openai" {\n\tnot-an-axis #true\n}' }]),

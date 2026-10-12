@@ -4,6 +4,7 @@
  * identity/resolve types the runtime engine (`taxonomy.ts`, `cascade.ts`,
  * `behavior.ts`, `resolve.ts`) exposes to consumers.
  */
+import type { KnownHost } from "../hosts";
 import type { Effort } from "../effort";
 import type { Api, KindApiKind, ThinkingControlMode, TokenCost } from "../types";
 import type { RevisionOp } from "./revision";
@@ -337,6 +338,7 @@ export interface CompiledRetryResetTimezone {
 
 /** Compiled runtime behavior vocabulary (`runtime/behavior.kdl`). */
 export interface CompiledBehavior {
+	backendProviders?: { provider: string; host: KnownHost; api: Api }[];
 	openaiResponsesHeuristic?: CompiledResponsesHeuristic;
 	modelOperations: CompiledModelOperations[];
 	cursorEffort?: CompiledCursorEffort;

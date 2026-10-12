@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import { streamSimple } from "@oh-my-pi/pi-ai/stream";
-import type { Context, FetchImpl } from "@oh-my-pi/pi-ai/types";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import type { Model, ModelSpec } from "@oh-my-pi/pi-catalog/types";
+import { buildModel } from "../../catalog/src/build";
+import { Effort } from "../../catalog/src/effort";
+import type { Model, ModelSpec } from "../../catalog/src/types";
+import { streamOpenAICompletions } from "../src/providers/openai-completions";
+import { streamSimple } from "../src/stream";
+import type { Context, FetchImpl } from "../src/types";
 
 const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 0 }] };
 
@@ -48,6 +48,64 @@ async function capture(
 }
 
 describe("Friendli reasoning wire contract", () => {
+	it("streams rebuilt custom backend metadata through a real HTTP endpoint", async () => {
+		const bodies: Record<string, unknown>[] = [];
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				bodies.push((await request.json()) as Record<string, unknown>);
+				return new Response(
+					'data: {"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+					{ headers: { "content-type": "text/event-stream" } },
+				);
+			},
+		});
+		try {
+			const cached: Model<"openai-completions"> = JSON.parse(JSON.stringify(model({ provider: "private-alias" })));
+			const rebuilt = buildModel({
+				...cached,
+				baseUrl: `${server.url}v1`,
+				compat: cached.compatConfig,
+			});
+			for (const reasoning of [Effort.High, Effort.Max]) {
+				const result = await streamSimple(rebuilt, context, { apiKey: "test", reasoning }).result();
+				expect(result.stopReason).toBe("stop");
+				expect(result.content).toEqual([{ type: "text", text: "ok" }]);
+			}
+			expect(bodies.map(body => body.reasoning_effort)).toEqual(["high", "max"]);
+			for (const body of bodies) expect(body.chat_template_kwargs).toEqual({ enable_thinking: true });
+		} finally {
+			server.stop(true);
+		}
+	});
+
+	it("persists custom endpoint policy across cache rebuilds and honors explicit backend overrides", async () => {
+		const inferred = model({ provider: "private-alias" });
+		expect(inferred.provider).toBe("private-alias");
+		expect(inferred.providerType).toBe("friendli");
+		const cached: Model<"openai-completions"> = JSON.parse(JSON.stringify(inferred));
+		const rebuilt = buildModel({
+			...cached,
+			baseUrl: "https://proxy.example/v1",
+			compat: cached.compatConfig,
+		});
+		for (const effort of [Effort.High, Effort.Max]) {
+			const body = await capture(rebuilt, effort);
+			expect(body.reasoning_effort).toBe(effort);
+			expect(body.chat_template_kwargs).toEqual({ enable_thinking: true });
+		}
+		for (const providerType of ["nvidia", "custombackend"]) {
+			const explicit = model({ provider: "private-alias", providerType });
+			expect(explicit.providerType).toBe(providerType);
+			const body = await capture(explicit, Effort.High);
+			expect(body.reasoning_effort).toBe("high");
+			expect(body.chat_template_kwargs).toBeUndefined();
+		}
+		const unrelated = model({ provider: "private-alias", baseUrl: "https://example.com/v1" });
+		expect(unrelated.providerType).toBeUndefined();
+	});
+
 	it("keeps identity-derived high/max distinct and disables the toggle without sending effort", async () => {
 		const glm = model();
 		expect(glm.thinking?.efforts).toEqual([Effort.High, Effort.Max]);
