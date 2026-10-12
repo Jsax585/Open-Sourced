@@ -13580,8 +13580,11 @@ export class AgentSession implements SettingsScope {
 	 * Declare the context files the system prompt was just built with. Edits and
 	 * deletions of these files are announced to the model before its next request.
 	 */
-	async setAmbientContextFiles(files: readonly ContextFileEntry[]): Promise<void> {
-		await this.#contextFiles.setAmbientFiles(files);
+	async setAmbientContextFiles(
+		files: readonly ContextFileEntry[],
+		options?: { diskBacked?: boolean; nestedDiscovery?: boolean },
+	): Promise<void> {
+		await this.#contextFiles.setAmbientFiles(files, options);
 	}
 
 	/**

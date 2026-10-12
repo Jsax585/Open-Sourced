@@ -4682,8 +4682,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		hasSession = true;
 		credentialNoticeSession = session;
 		// A fixed system prompt replaces the project context block, so nothing in it is watchable.
-		const promptIsFixed = options.systemPrompt !== undefined && typeof options.systemPrompt !== "function";
-		await session.setAmbientContextFiles(promptIsFixed ? [] : (promptContextFiles ?? contextFiles));
+		const promptIsFixed =
+			(options.systemPrompt !== undefined && typeof options.systemPrompt !== "function") ||
+			$env.NULL_PROMPT === "true";
+		await session.setAmbientContextFiles(promptIsFixed ? [] : (promptContextFiles ?? contextFiles), {
+			diskBacked: options.contextFiles === undefined,
+			nestedDiscovery: !promptIsFixed,
+		});
 		// Hashline snapshots are session-scoped: /new and switchSession fire the
 		// change callbacks, so clear the tool-side store there — stale tags would
 		// otherwise surface as "issued in this session" in mismatch diagnostics

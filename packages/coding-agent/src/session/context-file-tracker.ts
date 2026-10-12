@@ -149,31 +149,46 @@ export class ContextFileTracker {
 	#generation = 0;
 	/** Loaded entries with no backing file (SDK-supplied content): never watched, but still in force. */
 	#unwatched = 0;
+	#diskBacked = false;
+	#nestedDiscovery = true;
 	#ambientSeq = 0;
 
 	constructor(host: ContextFileTrackerHost) {
 		this.#host = host;
 	}
 
-	/** Declare the context files the system prompt was just built with; drops earlier tracking. */
-	async setAmbientFiles(files: readonly ContextFileEntry[]): Promise<void> {
+	/**
+	 * Declare the context files the system prompt was just built with; drops earlier tracking.
+	 *
+	 * `diskBacked` says the entries were discovered on disk (not supplied by the SDK caller), so every one is
+	 * tracked even when it cannot be statted right now, and the swap happens synchronously: a deletion or an
+	 * edit is announced rather than lost. `nestedDiscovery: false` marks a prompt that carries no project
+	 * context, so reads must not inject nested instructions either. Both options persist until changed.
+	 */
+	async setAmbientFiles(
+		files: readonly ContextFileEntry[],
+		options: { diskBacked?: boolean; nestedDiscovery?: boolean } = {},
+	): Promise<void> {
+		if (options.diskBacked !== undefined) this.#diskBacked = options.diskBacked;
+		if (options.nestedDiscovery !== undefined) this.#nestedDiscovery = options.nestedDiscovery;
 		const registeredAt = Date.now();
 		const seq = ++this.#ambientSeq;
-		const stats = await Promise.all(
-			files.map(async file => {
-				try {
-					return await fs.promises.stat(path.resolve(file.path));
-				} catch {
-					return undefined; // Not backed by a file on disk, so there is nothing to watch.
-				}
-			}),
-		);
+		const stats = this.#diskBacked
+			? undefined
+			: await Promise.all(
+					files.map(async file => {
+						try {
+							return await fs.promises.stat(path.resolve(file.path));
+						} catch {
+							return undefined; // Not backed by a file on disk, so there is nothing to watch.
+						}
+					}),
+				);
 		if (seq !== this.#ambientSeq) return; // A newer declaration superseded this one while it was statting.
 		const next = new Map<string, TrackedFile>();
 		let unwatched = 0;
 		files.forEach((file, index) => {
-			const stat = stats[index];
-			if (!stat?.isFile()) {
+			if (stats && !stats[index]?.isFile()) {
 				if (file.content.trim() !== "") unwatched++;
 				return;
 			}
@@ -201,7 +216,7 @@ export class ContextFileTracker {
 
 	/** Start nested discovery for a finished `read` call. Returns immediately; {@link takeAsides} awaits it. */
 	noteReadResult(result: { details?: unknown } | undefined): void {
-		if (!cfgContextFilesNestedDiscovery.get(this.#host.settings)) return;
+		if (!this.#nestedDiscovery || !cfgContextFilesNestedDiscovery.get(this.#host.settings)) return;
 		const targets = readTargets(result?.details);
 		if (targets.length === 0) return;
 		const generation = this.#generation;
@@ -276,11 +291,16 @@ export class ContextFileTracker {
 				continue;
 			}
 			let directory = absolute;
+			let isDirectory: boolean;
 			try {
-				if (!(await fs.promises.stat(absolute)).isDirectory()) directory = path.dirname(absolute);
+				isDirectory = (await fs.promises.stat(absolute)).isDirectory();
 			} catch {
 				continue;
 			}
+			if (!isDirectory) directory = path.dirname(absolute);
+			// A linked target whose real location is outside the workspace or under an excluded directory
+			// contributes no context, whatever its lexical path says.
+			if (!(await resolvesInsideWorkspace(realRoot, absolute, isDirectory))) continue;
 			const found: PendingNested[] = [];
 			for (let dir = directory; isBelow(root, dir); dir = path.dirname(dir)) {
 				const loaded = await this.#loadDirectory(dir, root, realRoot, absolute, disabledIds);

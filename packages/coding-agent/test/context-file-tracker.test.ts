@@ -117,6 +117,27 @@ describe("nested context discovery", () => {
 		expect(paths(await read(r2, path.join(root, "a/b/AGENTS.md")))).toEqual([path.join(root, "a/AGENTS.md")]);
 	});
 
+	it("injects nothing once the prompt is declared to carry no project context", async () => {
+		const root = project({ "a/AGENTS.md": "A rules", "a/f.ts": "x" });
+		const r = rig(root);
+		await r.tracker.setAmbientFiles([], { nestedDiscovery: false });
+		expect(await read(r, path.join(root, "a/f.ts"))).toHaveLength(0);
+	});
+
+	it("ignores a target that is a link to a file outside the workspace", async () => {
+		const root = project({ "sub/AGENTS.md": "SUB rules" });
+		const outside = TempDir.createSync("@omp-nested-outside-");
+		try {
+			const real = path.join(fs.realpathSync(outside.path()), "real.ts");
+			fs.writeFileSync(real, "x");
+			fs.symlinkSync(real, path.join(root, "sub/link.ts"));
+			const r = rig(root);
+			expect(await read(r, path.join(root, "sub/link.ts"))).toHaveLength(0);
+		} finally {
+			outside.removeSync();
+		}
+	});
+
 	it("falls back to CLAUDE.md per directory and prefers AGENTS.md when both exist", async () => {
 		const root = project({
 			"a/CLAUDE.md": "claude rules",
@@ -258,6 +279,29 @@ describe("live updates of loaded context files", () => {
 		if (message) r.messages.push(message);
 		return message;
 	}
+
+	it("announces the deletion of a discovered file that vanished before registration finished", async () => {
+		tmp = TempDir.createSync("@omp-ambient-ctx-");
+		const root = fs.realpathSync(tmp.path());
+		const gone = path.join(root, "AGENTS.md");
+		const r = rig(root);
+		await r.tracker.setAmbientFiles([{ path: gone, content: "rules the prompt was built with" }], {
+			diskBacked: true,
+		});
+		const message = await update(r);
+		expect(text(message!)).toContain(gone);
+		expect(message?.details).toEqual({ files: [{ path: gone, hash: null }] });
+	});
+
+	it("does not treat an SDK-supplied path with no file as deleted", async () => {
+		tmp = TempDir.createSync("@omp-ambient-ctx-");
+		const root = fs.realpathSync(tmp.path());
+		const r = rig(root);
+		await r.tracker.setAmbientFiles([{ path: path.join(root, "virtual/AGENTS.md"), content: "sdk" }], {
+			diskBacked: false,
+		});
+		expect(await update(r)).toBeUndefined();
+	});
 
 	it("says nothing while loaded files are unchanged, even when only the mtime moves", async () => {
 		const { r, files } = await setup({ "AGENTS.md": "same" });
