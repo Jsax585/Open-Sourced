@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added lazy nested context files: reading a file or directory below the working directory loads the `AGENTS.md` (or `CLAUDE.md`) files in between into context once, nearest first, and loads them again only after compaction or a revert removed them. `contextFiles.nestedDiscovery` (default on) turns it off. Symlinks into `node_modules` or outside the workspace, and dot directories at any depth, never contribute instructions.
+- Added live context file updates: edits to or deletion of the context files loaded at startup are announced to the agent before its next request. `contextFiles.liveUpdates` (default on) turns it off. Files from additional workspace roots are watched too, changed `@`-imports are re-read, and a pending update counts toward pre-prompt compaction.
+
 ### Fixed
 
 - Fixed `read.renderMarkdown` having no effect on plain-file reads: inline read previews now render Markdown files as formatted Markdown instead of numbered source ([#15007](https://github.com/can1357/oh-my-pi/issues/15007)).
@@ -14,8 +19,6 @@
 
 ### Added
 
-- Added lazy nested context files: reading a file or directory below the working directory loads the `AGENTS.md` (or `CLAUDE.md`) files in between into context once, nearest first, and loads them again only after compaction or a revert removed them. `contextFiles.nestedDiscovery` (default on) turns it off. Symlinks into `node_modules` or outside the workspace, and dot directories at any depth, never contribute instructions.
-- Added live context file updates: edits to or deletion of the context files loaded at startup are announced to the agent before its next request. `contextFiles.liveUpdates` (default on) turns it off. Files from additional workspace roots are watched too, changed `@`-imports are re-read, and a pending update counts toward pre-prompt compaction.
 - Added `task.agentSoftRequestBudget` to give named subagents their own soft request budget, so a long-running agent can get more requests (or `0` for no guard) while scout, sonic and other agents keep theirs ([#15419](https://github.com/can1357/oh-my-pi/pull/15419) by [@will-bogusz](https://github.com/will-bogusz))
 - Added `o200k` as a `tokenizer` value for custom models and overrides in `models.yml` ([#15447](https://github.com/can1357/oh-my-pi/pull/15447) by [@will-bogusz](https://github.com/will-bogusz))
 
