@@ -83,4 +83,15 @@ describe("session tool renderer", () => {
 		expect(JSON.stringify(list).length).toBeLessThan(2000);
 		expect(JSON.stringify(error).length).toBeLessThan(10000);
 	});
+
+	it("renders a malformed streamed operation without control sequences, overflow or a throw", () => {
+		const hostile = { op: `bad\u001b[2J${"z".repeat(5000)}` } as unknown as Parameters<
+			typeof sessionToolRenderer.describeCall
+		>[0];
+		const rendered = JSON.stringify(sessionToolRenderer.describeCall(hostile));
+		expect(rendered).not.toContain("\u001b");
+		expect(rendered.length).toBeLessThan(1000);
+		const notAString = { op: 7 } as unknown as Parameters<typeof sessionToolRenderer.describeCall>[0];
+		expect(JSON.stringify(sessionToolRenderer.describeCall(notAString))).toContain("?");
+	});
 });

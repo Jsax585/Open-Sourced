@@ -213,13 +213,24 @@ export async function removeWorktreeAdminDir(repository: VcsGitRepo, adminDir: s
 	if (!adminDir) return;
 	let owned: boolean;
 	try {
-		const worktreesDir = path.join(await fs.realpath(repository.info().commonDir), "worktrees");
-		owned = path.dirname(await fs.realpath(adminDir)) === worktreesDir;
+		owned = await isOwnedWorktreeAdminDir(repository, adminDir);
 	} catch (error) {
 		if (isEnoent(error)) return; // Already gone.
 		throw error;
 	}
 	if (owned) await fs.rm(adminDir, { recursive: true, force: true });
+}
+
+/** Whether `adminDir` is a direct child of this repository's own `<commonDir>/worktrees`. */
+export async function isOwnedWorktreeAdminDir(repository: VcsGitRepo, adminDir: string | undefined): Promise<boolean> {
+	if (!adminDir) return false;
+	try {
+		const worktreesDir = path.join(await fs.realpath(repository.info().commonDir), "worktrees");
+		return path.dirname(await fs.realpath(adminDir)) === worktreesDir;
+	} catch (error) {
+		if (isEnoent(error)) return false;
+		throw error;
+	}
 }
 
 /** State of `wt` plus a fingerprint that changes whenever any file, ref, or `HEAD` in it changes. */

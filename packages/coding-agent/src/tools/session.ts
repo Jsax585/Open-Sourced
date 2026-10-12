@@ -17,6 +17,7 @@ import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import sessionDescription from "../prompts/tools/session.md" with { type: "text" };
 import {
 	createSessionWorktree,
+	isOwnedWorktreeAdminDir,
 	readWorktreeAdminDir,
 	removeWorktreeAdminDir,
 	type SessionWorktree,
@@ -185,7 +186,9 @@ export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolD
 				: (entry.branch?.replace(/^refs\/heads\//, "") ?? "(no branch)");
 			let state = "";
 			try {
-				state = (await vcs.git(root)?.isDirty()) ? ", uncommitted changes" : "";
+				const checkout = vcs.git(root);
+				if (!checkout) state = ", status unavailable";
+				else if (await checkout.isDirty()) state = ", uncommitted changes";
 			} catch {
 				state = ", status unavailable";
 			}
@@ -280,6 +283,11 @@ export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolD
 			);
 		}
 		const adminDir = await readWorktreeAdminDir(match.entry.path);
+		// A stale registration can point at a path another repository now occupies; the native removal would
+		// delete that checkout before any ownership check, so verify it belongs to this repository first.
+		if (!(await isOwnedWorktreeAdminDir(repository, adminDir))) {
+			throw new ToolError(`Refusing to remove ${target}: it is not a linked worktree of this repository.`);
+		}
 		signal?.throwIfAborted();
 		let removed: boolean;
 		try {

@@ -1961,7 +1961,7 @@ export class AgentSession implements SettingsScope {
 				this.#pendingWorkspaceMove = undefined;
 				return;
 			}
-			await this.#applyPendingWorkspaceMove(context);
+			await this.#applyPendingWorkspaceMove(context, signal);
 			const rewindReport = this.#extractRewindReport(messages);
 			if (rewindReport) {
 				this.#pendingRewindReport = undefined;
@@ -10123,12 +10123,17 @@ export class AgentSession implements SettingsScope {
 		this.#pendingWorkspaceMove = directory;
 	}
 
-	async #applyPendingWorkspaceMove(context: AgentTurnEndContext | undefined): Promise<void> {
+	async #applyPendingWorkspaceMove(
+		context: AgentTurnEndContext | undefined,
+		signal: AbortSignal | undefined,
+	): Promise<void> {
 		const directory = this.#pendingWorkspaceMove;
 		const relocator = this.#workspaceRelocator;
 		if (!directory || !relocator || this.#isDisposed) return;
 		this.#pendingWorkspaceMove = undefined;
 		await this.#persistTurnMessagesForMidRunCompaction(context);
+		// An abort that landed while the turn was being persisted drops the queued move.
+		if (signal?.aborted) return;
 		let note: string;
 		try {
 			await relocator(directory);

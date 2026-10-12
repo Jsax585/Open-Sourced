@@ -41,7 +41,9 @@ function displayText(value: string): string {
 }
 
 function describeOp(op: SessionOp | undefined): string {
-	return op?.replaceAll("_", " ") ?? "?";
+	// `op` arrives from streamed, possibly malformed arguments, so it is type-checked, sanitized and bounded.
+	if (typeof op !== "string") return "?";
+	return truncateToWidth(displayText(op).replaceAll("_", " "), TRUNCATE_LENGTHS.TITLE);
 }
 
 function callDetail(args: SessionRenderArgs): string | undefined {
