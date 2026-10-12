@@ -2942,14 +2942,14 @@ export class TurnRecovery {
 		const restoreAfterSuccess =
 			(classifierRefusal || AIError.is(id, AIError.Flag.ContentBlocked)) &&
 			cfgRetryRefusalFallbackRevertPolicy.get(this.#host.settings) === "after-success";
-		// Account rotations may spend the budget before any model fallback runs.
-		// Allow that first request-scoped hop; non-classifier content blocks remain
-		// retry-budget bounded instead of joining the classifier-refusal walk.
+		// A request-scoped fallback gets its first hop even after the primary spent
+		// the retry budget. Once armed, non-classifier content blocks cannot spend
+		// another detour; classifier refusals keep their separate model-visit bound.
 		const exhaustedRefusalChain =
 			retryBudgetExhausted &&
 			restoreAfterSuccess &&
 			!classifierRefusal &&
-			(!accountPolicyDenial || this.#activeRetryFallback?.restoreAfterSuccess === true);
+			this.#activeRetryFallback?.restoreAfterSuccess === true;
 
 		if (!staleOpenAIResponsesReplayError && !switchedCredential && currentSelector) {
 			// Classifier-refusal walks visit each model at most once instead

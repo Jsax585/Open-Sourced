@@ -215,9 +215,11 @@ This uses the existing `retry.fallbackChains`, structured `refusal` / `sensitive
 stop metadata, and the normalized `AIError.Flag.ContentBlocked` classification
 (including Codex `cyber_policy` errors). It does not match ordinary assistant
 refusal prose. Account-policy errors still try sibling credentials before selecting
-a fallback model. Exhausted credential rotations still permit the first
-request-scoped model hop. Classifier-refusal walks visit each model at most once
-per retry saga, even after the same-model retry budget is spent.
+a fallback model. The first request-scoped model hop remains available even when
+`retry.maxRetries` is `0` or credential rotation has exhausted the retry budget.
+Further non-classifier content-block detours remain budget-bounded.
+Classifier-refusal walks visit each model at most once per retry saga, even after
+the same-model retry budget is spent.
 Restoration happens after the first successful fallback response
 and its tool execution, before the next model invocation—even within the same user
 turn. Failed, aborted, and empty responses do not restore the model. Same-model
@@ -237,6 +239,11 @@ Explicit model changes take precedence, including re-selecting the incoming mode
 while an automatic swap is pending. Response attribution stays with the model
 that produced it. The restored model receives the continued conversation, so a
 later invocation can trigger another refusal and fallback.
+
+If the successful fallback response also starts prewalk, restoration settles
+before prewalk captures its planning source. The configured prewalk target still
+handles continuation; `/new` restores the planning model and its saved thinking
+configuration instead of adopting the request-scoped fallback.
 
 An abort or session transition during fallback application rolls back an
 uncommitted candidate. Once primary restoration installs its model, its transcript

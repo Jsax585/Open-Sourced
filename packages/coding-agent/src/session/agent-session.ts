@@ -1958,9 +1958,6 @@ export class AgentSession implements SettingsScope {
 				await this.#applyRewind(rewindReport, messages, context);
 			}
 			this.#loopGuards.recordTurn(messages, context);
-			await this.#prewalk.advanceAtTurnEnd(messages, context);
-			if (context?.willContinue) this.#steerAnthropicWrapUp();
-			await this.#advisors.onPrimaryTurnEnd(messages, context?.willContinue, signal);
 			const response = context?.message;
 			if (response?.role === "assistant" && this.#recovery.hasRequestScopedRetryFallback()) {
 				// The fallback captures its restore policy when installed. Its
@@ -1971,6 +1968,9 @@ export class AgentSession implements SettingsScope {
 				if (signal?.aborted) return;
 				await this.#recovery.maybeRestoreRetryFallbackPrimary({ afterSuccessOnly: true });
 			}
+			await this.#prewalk.advanceAtTurnEnd(messages, context);
+			if (context?.willContinue) this.#steerAnthropicWrapUp();
+			await this.#advisors.onPrimaryTurnEnd(messages, context?.willContinue, signal);
 			await this.#maintenance.maintainContextMidRun(messages, signal, context);
 		});
 		this.yieldQueue = new YieldQueue({
