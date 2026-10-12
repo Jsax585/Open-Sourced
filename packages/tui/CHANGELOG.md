@@ -2,12 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `statusLine.segmentOptions.context_pct.showTokens` to show context usage as used/window tokens (for example `114K/272K`) instead of a percentage, in the terminal segment and the native composer context meter ([#15396](https://github.com/can1357/oh-my-pi/pull/15396) by [@nszceta](https://github.com/nszceta)).
+
 ## [18.9.2] - 2026-10-11
 
 ### Added
 
-- Added `statusLine.segmentOptions.context_pct.showTokens` to show context usage as used/window tokens (for example `114K/272K`) instead of a percentage, in the terminal segment and the native composer context meter ([#15396](https://github.com/can1357/oh-my-pi/pull/15396) by [@nszceta](https://github.com/nszceta)).
-- Added native TSP rendering inside tmux when the hosting Tern terminal marks the session with `@tern-tsp`: the hello goes out without the DA1 sentinel and waits up to 1 s for a reply, and the pane's `allow-set-title` is turned off while TSP runs and restored when it ends. tmux sessions without `@tern-tsp` never probe, even with `PI_TUI_NATIVE=1`.
 - Added native TSP rendering support for Tern terminal sessions running inside tmux, with automatic session detection and safe title-setting behavior.
 
 ### Fixed
