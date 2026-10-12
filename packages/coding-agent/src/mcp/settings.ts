@@ -2,7 +2,7 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, MAX_TIMER_DELAY_MS } from "@oh-my-pi/pi-utils";
 import { setMcpRenderMarkdownResults } from "@oh-my-pi/pi-tui/tools/mcp";
 import { combine, effect, register } from "../config/registry";
 import { isValidTimeoutMs, MCP_TIMEOUT_PHASES, type MCPTimeoutPhases, setMCPGlobalTimeouts } from "./timeout";
@@ -78,7 +78,10 @@ effect(
 			const value = timeouts[phase];
 			if (isValidTimeoutMs(value)) valid[phase] = value;
 			else
-				logger.warn(`Ignoring invalid mcp.timeout.${phase}Ms setting; expected a non-negative integer`, { value });
+				logger.warn(
+					`Ignoring invalid mcp.timeout.${phase}Ms setting; expected a non-negative integer of at most ${MAX_TIMER_DELAY_MS} ms`,
+					{ value },
+				);
 		}
 		setMCPGlobalTimeouts(valid);
 	},
