@@ -32,17 +32,17 @@ export function setMCPGlobalTimeouts(timeouts: MCPTimeoutPhases): void {
 	globalTimeouts = timeouts;
 }
 
-const CATALOG_METHODS: ReadonlySet<string> = new Set([
-	"tools/list",
-	"prompts/list",
-	"resources/list",
-	"resources/templates/list",
-]);
+const CATALOG_METHODS: Record<string, true> = {
+	"tools/list": true,
+	"prompts/list": true,
+	"resources/list": true,
+	"resources/templates/list": true,
+};
 
 /** Phase whose deadline guards a JSON-RPC request or notification. */
 export function mcpTimeoutPhaseForMethod(method: string): MCPTimeoutPhase {
 	if (method === "initialize" || method === "notifications/initialized") return "connect";
-	if (CATALOG_METHODS.has(method)) return "catalog";
+	if (Object.hasOwn(CATALOG_METHODS, method)) return "catalog";
 	return "execution";
 }
 
