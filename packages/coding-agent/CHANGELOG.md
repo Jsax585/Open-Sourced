@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `todo.sticky` setting (default on). Turn it off to stop pinning the todo list above the editor so it scrolls away with the transcript ([#14981](https://github.com/can1357/oh-my-pi/pull/14981) by [@lockwo](https://github.com/lockwo))
+
 ### Fixed
 
 - Fixed `read.renderMarkdown` having no effect on plain-file reads: inline read previews now render Markdown files as formatted Markdown instead of numbered source ([#15007](https://github.com/can1357/oh-my-pi/issues/15007)).
@@ -14,7 +18,6 @@
 
 ### Added
 
-- Added `todo.sticky` setting (default on). Turn it off to stop pinning the todo list above the editor so it scrolls away with the transcript ([#14981](https://github.com/can1357/oh-my-pi/pull/14981) by [@lockwo](https://github.com/lockwo))
 - Added `task.agentSoftRequestBudget` to give named subagents their own soft request budget, so a long-running agent can get more requests (or `0` for no guard) while scout, sonic and other agents keep theirs ([#15419](https://github.com/can1357/oh-my-pi/pull/15419) by [@will-bogusz](https://github.com/will-bogusz))
 - Added `o200k` as a `tokenizer` value for custom models and overrides in `models.yml` ([#15447](https://github.com/can1357/oh-my-pi/pull/15447) by [@will-bogusz](https://github.com/will-bogusz))
 
