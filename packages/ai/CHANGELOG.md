@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added support for `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` on the `anthropic` provider: when set, requests omit pre-release fields (`context_management`, beta tool fields such as `strict` and `defer_loading`, task budgets, structured-output format, `thinking.block_binding`, and Anthropic server compaction) along with their beta headers, so `ANTHROPIC_BASE_URL` gateways that reject them keep working ([#15458](https://github.com/can1357/oh-my-pi/pull/15458) by [@H4vC](https://github.com/H4vC))
+
 ### Fixed
 
 - Fixed Codex WebSocket reconnects across authentication or routing changes, including pooled sockets that fail the 30-second idle health gate, hook deletes or replacements that require immutable full replay, and lazy steering attaches whose ownership changes before consumption, so effective hook-adjusted tool history is replayed in order without an obsolete `previous_response_id` before same-route chaining resumes; unchanged hook-owned `client_metadata` now receives the live transport turn-state just before send, while explicit turn-state edits or deletion remain respected; prepared hook payloads are reused across pre-send retries and handshake-to-SSE fallback without repeating hook side effects, while post-send retries retain their existing hook behavior; stable hook-adjusted options retain chaining without permitting incompatible steering attaches, and hook-owned WebSocket frame types survive preparation and retries without leaking into SSE bodies; requestless steering attaches clear the prior turn's request/usage diagnostic pair without incrementing request counters or changing returned usage; this overlaps the scope discussed in [#12131](https://github.com/can1357/oh-my-pi/issues/12131) without claiming coordination or supersession ([#15024](https://github.com/can1357/oh-my-pi/pull/15024) by [@xiangnan0811](https://github.com/xiangnan0811)).
