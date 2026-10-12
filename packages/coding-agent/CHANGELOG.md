@@ -2,16 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed browser-relay tabs becoming detached, duplicated, or undrivable after relay outages and extension restarts ([#8930](https://github.com/can1357/oh-my-pi/issues/8930)).
+- Fixed recovered tabs losing their active sessions or remaining attached after the last client disconnects ([#8930](https://github.com/can1357/oh-my-pi/issues/8930)).
+
 ## [18.10.1] - 2026-10-12
 
 ### Added
 
 - Added a Copy button that leads the turn footer under an answer in Tern (`⧉ · 2m13s · 71K tok · $0.85 this turn`, in place of the clock), which copies that answer
 
-### Fixed
-
-- Fixed browser-relay tabs becoming detached, duplicated, or undrivable after relay outages and extension restarts ([#8930](https://github.com/can1357/oh-my-pi/issues/8930)).
-- Fixed recovered tabs losing their active sessions or remaining attached after the last client disconnects ([#8930](https://github.com/can1357/oh-my-pi/issues/8930)).
 ### Changed
 
 - Running agents and background jobs in Tern now share one compact counter over the composer (an icon and a count each, the words on hover) instead of two "N running" pills; each count still opens its own sheet
