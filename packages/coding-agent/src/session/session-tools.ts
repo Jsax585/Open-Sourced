@@ -21,7 +21,7 @@ import { deduplicateMCPToolsByName, resolveMCPToolAlias } from "../mcp/tool-brid
 import { resolveMemoryBackend } from "../memory-backend/resolve";
 import { MEMORY_BACKEND_TOOL_NAMES } from "../memory-backend/tool-names";
 import { invalidateToolSchemaMetadata } from "@oh-my-pi/pi-tui/status-line/context-usage";
-import type { MemoryBackendStartOptions } from "../memory-backend/types";
+import type { MemoryBackendStartOptions, MemoryPromptPreparation } from "../memory-backend/types";
 import { TaskTool } from "../task";
 import type { AgentDefinition } from "../task/types";
 import evalPreludeNoticePrompt from "../prompts/system/eval-prelude-notice.md" with { type: "text" };
@@ -143,6 +143,8 @@ interface SessionToolsOptions {
 
 interface SystemPromptPreparation {
 	systemPrompt: string[];
+	/** Memory backend note to deliver with the turn ({@link MemoryPromptPreparation.notice}). */
+	memoryNotice?: MemoryPromptPreparation["notice"];
 	/** Publish staged state at validated delivery; false declines the prepared turn without mutation. */
 	commit?(): boolean;
 }
@@ -2202,6 +2204,7 @@ export class SessionTools {
 			if (!injected) {
 				return {
 					systemPrompt: this.#baseSystemPrompt,
+					memoryNotice: memory.notice,
 					commit: () => isCurrent() && memory.commit(),
 				};
 			}
@@ -2221,6 +2224,7 @@ export class SessionTools {
 			const stablePrompt = [...preparedBase, injected];
 			return {
 				systemPrompt: stablePrompt,
+				memoryNotice: memory.notice,
 				commit: () => {
 					if (!isCurrent() || !memory.commit()) return false;
 					refreshed?.commit?.();
