@@ -82,6 +82,20 @@ describe("Friendli reasoning wire contract", () => {
 		}
 	});
 
+	it("resolves DeepSeek and MiniMax custom hosts without conflicting lineage ladders", async () => {
+		for (const id of ["deepseek-ai/DeepSeek-V3.2", "MiniMaxAI/MiniMax-M2.5"]) {
+			const declared = model({
+				id,
+				provider: "custom-friendli",
+				thinking: { mode: "effort", efforts: [Effort.High] },
+			});
+			const body = await capture(declared, Effort.High);
+			expect(body.reasoning_effort).toBe("high");
+			expect(body.chat_template_kwargs).toEqual({ enable_thinking: true });
+			expect(model({ id, provider: "custom-friendli" }).thinking).toBeUndefined();
+		}
+	});
+
 	it("keeps GLM-5.3 always on and uses its low/high/max ladder", async () => {
 		const glm = model({ id: "zai-org/GLM-5.3" });
 		expect(glm.thinking?.efforts).toEqual([Effort.Low, Effort.High, Effort.Max]);
