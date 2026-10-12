@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a transcript renderer for the `session` tool that shows home-relative paths.
+
 ### Removed
 
 - Removed `tools/eval-format/code-mode-declarations` (`generateCodeModeDeclarations`), which only served Codex Code Mode.
@@ -39,7 +43,6 @@
 
 ### Added
 
-- Added a transcript renderer for the `session` tool that shows home-relative paths.
 - `AssistantMessageComponent`'s native turn footer leads with a Copy icon (`omp.turn.copy`) and a dot instead of the clock icon; it copies the answer's text and shows when the host handles transcript actions
 
 ### Changed
