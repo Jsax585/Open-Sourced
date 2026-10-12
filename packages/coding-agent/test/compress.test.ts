@@ -102,8 +102,8 @@ describe("compress targets", () => {
 describe("compress command", () => {
 	test("keeps fallback across actual automatic draft-review rounds", async () => {
 		const tempDir = TempDir.createSync("@pi-compress-fallback-");
-		const sourcePath = tempDir.path("source.txt");
-		const outputPath = tempDir.path("compressed.txt");
+		const sourcePath = tempDir.join("source.txt");
+		const outputPath = tempDir.join("compressed.txt");
 		const primary = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const fallback = getBundledModel("openai-codex", "gpt-5.6-sol")!;
 		const primaryId = `${primary.provider}/${primary.id}`;
@@ -127,7 +127,7 @@ describe("compress command", () => {
 		const authStorage = await AuthStorage.create(":memory:");
 		authStorage.keys.setRuntime(primary.provider, "primary-test-key");
 		authStorage.keys.setRuntime(fallback.provider, "fallback-test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.path("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
 			"retry.baseDelayMs": 5,
