@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, MAX_TIMER_DELAY_MS } from "@oh-my-pi/pi-utils";
 
 const DEFAULT_MCP_TIMEOUT_MS = 30_000;
 const MCP_TIMEOUT_ENV = "OMP_MCP_TIMEOUT_MS";
@@ -39,8 +39,9 @@ export function mcpTimeoutPhaseForMethod(method: string): MCPTimeoutPhase {
 	return "execution";
 }
 
+/** A non-negative integer of milliseconds that a timer can represent: larger delays overflow to ~1 ms in Bun. */
 export function isValidTimeoutMs(value: unknown): value is number {
-	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= MAX_TIMER_DELAY_MS;
 }
 
 /**
@@ -86,10 +87,13 @@ export function resolveMCPTimeoutMs(configTimeout: MCPTimeoutConfig | undefined,
 	const raw = Bun.env[MCP_TIMEOUT_ENV]?.trim();
 	if (raw) {
 		const value = Number(raw);
-		if (Number.isFinite(value) && value >= 0) return value;
-		logger.warn("Ignoring invalid OMP_MCP_TIMEOUT_MS env value; expected a non-negative number", {
-			value: raw,
-		});
+		if (Number.isFinite(value) && value >= 0 && value <= MAX_TIMER_DELAY_MS) return value;
+		logger.warn(
+			"Ignoring invalid OMP_MCP_TIMEOUT_MS env value; expected a non-negative number within the timer range",
+			{
+				value: raw,
+			},
+		);
 	}
 	const serverValue = typeof configTimeout === "number" ? configTimeout : configTimeout?.[phase];
 	return serverValue ?? globalTimeouts[phase] ?? DEFAULT_MCP_TIMEOUT_MS;
@@ -126,7 +130,7 @@ export function resolveMCPReadinessTimeoutMs(serverTimeouts: readonly (MCPTimeou
 		const connect = resolveMCPTimeoutMs(config, "connect");
 		const catalog = resolveMCPTimeoutMs(config, "catalog");
 		if (connect === 0 || catalog === 0) return 0;
-		budget = Math.max(budget, connect + catalog);
+		budget = Math.max(budget, Math.min(connect + catalog, MAX_TIMER_DELAY_MS));
 	}
 	return budget;
 }

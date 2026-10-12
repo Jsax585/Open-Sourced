@@ -306,6 +306,16 @@ describe("parseMCPTimeoutConfig", () => {
 		expect(warnings[0]).toContain("connect, catalog, execution");
 	});
 
+	test("rejects a timeout above the timer range instead of letting it fire immediately", () => {
+		const { result, warnings } = withWarnings(() =>
+			parseMCPTimeoutConfig({ execution: 3_000_000_000, catalog: 5 }, "s"),
+		);
+
+		expect(result).toEqual({ catalog: 5 });
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("timeout.execution");
+	});
+
 	test("rejects an all-digit string that overflows to a non-finite number", () => {
 		const { result, warnings } = withWarnings(() => parseMCPTimeoutConfig("9".repeat(400), "s"));
 
