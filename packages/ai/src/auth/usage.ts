@@ -49,7 +49,18 @@ import {
 
 /** Reject stale evidence before block reconciliation can remove a cooldown. */
 export function reportPassesUsageCutoff(report: UsageReport, usageAfter: number | undefined): boolean {
-	return usageAfter === undefined || (Number.isFinite(report.fetchedAt) && report.fetchedAt > usageAfter);
+	if (usageAfter === undefined) return true;
+	if (!(Number.isFinite(report.fetchedAt) && report.fetchedAt > usageAfter)) return false;
+	// A merged report can carry limits retained from an older snapshot even though
+	// the report-wide `fetchedAt` reflects only the newest overlay. Require the
+	// retained data itself to be newer than the cutoff before it can heal blocks,
+	// otherwise a stale healthy row can reconcile a block whose quota never reset.
+	for (const limit of report.limits) {
+		if (typeof limit.fetchedAt === "number" && Number.isFinite(limit.fetchedAt) && limit.fetchedAt <= usageAfter) {
+			return false;
+		}
+	}
+	return true;
 }
 
 /** Convert an OAuth usage credential into a refreshable stored shape; used by probes and health. */
@@ -551,14 +562,16 @@ export class UsageService implements UsageApi {
 			for (const limit of prior.limits) {
 				const replacement = headerLimitsById.get(limit.id);
 				if (replacement) {
-					limits.push(replacement);
+					limits.push({ ...replacement, fetchedAt: now });
 					headerLimitsById.delete(limit.id);
 				} else {
-					limits.push(limit);
+					// Retained from the older full snapshot: keep its own fetch time so
+					// cutoff checks cannot treat it as fresh via the report-wide stamp.
+					limits.push({ ...limit, fetchedAt: prior.fetchedAt });
 				}
 			}
 			for (const limit of headerLimitsById.values()) {
-				limits.push(limit);
+				limits.push({ ...limit, fetchedAt: now });
 			}
 			merged = {
 				...prior,

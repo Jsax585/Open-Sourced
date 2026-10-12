@@ -538,6 +538,36 @@ describe("early quota reset recovery", () => {
 		expect(await registry.isSelectorSuppressedWithRecovery(PRIMARY_SELECTOR, options)).toBe(false);
 	});
 
+	it("drops an expired concurrent replacement instead of keeping the fallback", async () => {
+		env = await createEnv();
+		const { registry } = env;
+		const options = { sessionId: "session-a", reserveFraction: 0.1 };
+		const clock = useMockClock();
+		registry.suppressSelector(PRIMARY_SELECTOR, clock.now() + 30 * 60_000, clock.now());
+		scriptedReports.anthropic = { status: "healthy" };
+		const withResolvers = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
+		fetchGate = {
+			promise: withResolvers.promise,
+			open: () => withResolvers.resolve(),
+			started: () => started.resolve(),
+		};
+		const gate = fetchGate;
+
+		const probe = registry.isSelectorSuppressedWithRecovery(PRIMARY_SELECTOR, options);
+		await started.promise;
+		// A concurrent clear + short re-suppression replaces the record with a
+		// deadline that expires before the healthy probe resolves; the probe must
+		// not treat the raw map presence of that expired replacement as active.
+		registry.clearSuppressedSelector(PRIMARY_SELECTOR);
+		registry.suppressSelector(PRIMARY_SELECTOR, clock.now() + 1_000, clock.now());
+		clock.advance(2_000);
+		gate.open();
+
+		expect(await probe).toBe(false);
+		expect(registry.isSelectorSuppressed(PRIMARY_SELECTOR)).toBe(false);
+	});
+
 	it("lets concurrent healthy probes bypass the same quota cooldown", async () => {
 		env = await createEnv();
 		const { registry } = env;

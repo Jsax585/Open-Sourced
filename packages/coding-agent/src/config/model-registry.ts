@@ -3760,8 +3760,20 @@ export class ModelRegistry {
 				// (also covering a concurrent replacement) before keeping the suppression.
 				return this.#activeSuppressedRecord(normalizedSelector) !== undefined;
 			}
-			const current = this.#suppressedSelectors.get(normalizedSelector);
-			if (current !== record) return current !== undefined;
+			const replacement = this.#activeSuppressedRecord(normalizedSelector);
+			if (replacement !== undefined && replacement.record !== record) return true;
+			// Fresh healthy evidence recovered this selector. If the session's pinned
+			// account only recovered into reserve while a sibling is healthy, release
+			// the warm pin (as the usage preflight does) so the restored request uses
+			// the healthy sibling instead of consuming the protected reserve.
+			const selectedAccount = health.accounts.find(account => account.selected);
+			if (
+				options.sessionId &&
+				selectedAccount?.state === "reserve" &&
+				health.accounts.some(account => account.state === "healthy")
+			) {
+				this.authStorage.sessions.release(provider, options.sessionId);
+			}
 			return false;
 		} catch (error) {
 			if (options.signal?.aborted) return true;

@@ -199,13 +199,17 @@ function mergeUsageReports(base: UsageReport, overlay: UsageReport): UsageReport
 	for (const limit of base.limits) {
 		const replacement = overlayLimitsById.get(limit.id);
 		if (replacement) {
-			limits.push(replacement);
+			limits.push({ ...replacement, fetchedAt: overlay.fetchedAt });
 			overlayLimitsById.delete(limit.id);
 		} else {
-			limits.push(limit);
+			// Retained from the older base snapshot: keep its own fetch time so
+			// cutoff checks cannot treat it as fresh via the merged maximum.
+			limits.push({ ...limit, fetchedAt: base.fetchedAt });
 		}
 	}
-	for (const limit of overlayLimitsById.values()) limits.push(limit);
+	for (const limit of overlayLimitsById.values()) {
+		limits.push({ ...limit, fetchedAt: overlay.fetchedAt });
+	}
 	const overlayMetadata = (overlay.metadata ?? {}) as Record<string, unknown>;
 	return {
 		...base,
