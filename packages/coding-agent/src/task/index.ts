@@ -1730,7 +1730,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		return (
 			this.session.enableIrc !== false &&
 			isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0) &&
-			(this.session.isToolActive?.("write") ?? true)
+			this.session.isToolActive?.("write") === true
 		);
 	}
 

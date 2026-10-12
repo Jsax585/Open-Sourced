@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added a `steps` field to agent frontmatter that sets that agent's request budget: the subagent gets a wrap-up notice at `steps` requests and is driven to a final `yield` at 1.5x. Bundled scout and sonic now declare `steps: 100` instead of a name-keyed table, so a custom agent of the same name no longer inherits the cap.
+- Added a `steps` field to agent frontmatter that sets that agent's request budget: the subagent gets a wrap-up notice at `steps` requests and is driven to one forced final report at 1.5x (a `yield` call for structured and eval runs, a text reply otherwise). Bundled scout and sonic now declare `steps: 100` instead of a name-keyed table, so a custom agent of the same name no longer inherits the cap.
 - Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
 
 ### Fixed

@@ -395,7 +395,7 @@ export class WorkPool {
 							ownerCanResume:
 								this.session.enableIrc !== false &&
 								isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0) &&
-								(this.session.isToolActive?.("write") ?? true),
+								this.session.isToolActive?.("write") === true,
 							signal,
 							onProgress,
 						});

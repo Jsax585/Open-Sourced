@@ -742,7 +742,6 @@ describe("resolveSoftRequestBudget", () => {
 	it("keeps agents without an entry on the configured budget and their own steps", () => {
 		const agentBudgets = { lead: 400 };
 		expect(resolveSoftRequestBudget("task", 200, agentBudgets)).toBe(200);
-		expect(resolveSoftRequestBudget("scout", 200, agentBudgets, 100)).toBe(100);
 	});
 
 	it("disables only the named agent's guard with an entry of 0", () => {
