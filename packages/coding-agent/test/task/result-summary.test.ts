@@ -150,6 +150,11 @@ describe("formatTaskResultSummary", () => {
 			).not.toContain("<resume>");
 		});
 
+		it("does not advertise a parked failure that has no reviver to reopen it", () => {
+			registerAs("Scout", "parked");
+			expect(formatTaskResultSummary(failed(), { totalDurationMs: 5, ircEnabled: true })).not.toContain("<resume>");
+		});
+
 		it("offers no resume hint when the caller cannot message peers", () => {
 			registerAs("Scout", "idle");
 			expect(formatTaskResultSummary(failed(), { totalDurationMs: 5, ircEnabled: false })).not.toContain("<resume>");
