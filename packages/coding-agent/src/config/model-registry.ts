@@ -3755,7 +3755,11 @@ export class ModelRegistry {
 				signal: options.signal,
 			});
 			if (options.signal?.aborted) return true;
-			if (health.state !== "healthy") return true;
+			if (health.state !== "healthy") {
+				// A short cooldown can expire while the probe is in flight; revalidate
+				// (also covering a concurrent replacement) before keeping the suppression.
+				return this.#activeSuppressedRecord(normalizedSelector) !== undefined;
+			}
 			const current = this.#suppressedSelectors.get(normalizedSelector);
 			if (current !== record) return current !== undefined;
 			return false;

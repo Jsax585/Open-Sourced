@@ -6387,7 +6387,7 @@ describe("AgentSession retry fallback", () => {
 			expect(session.model?.id).toBe(fallbackModel.id);
 			vi.spyOn(authStorage.health, "model").mockResolvedValue({ state: "healthy", accounts: [] });
 			let aborted: Promise<void> | undefined;
-			let selected: ReturnType<AgentSession["setModel"]> | undefined;
+			let selected: Promise<{ switched: boolean }> | undefined;
 			const activeSession = session;
 			activeSession.subscribe(event => {
 				if (event.type !== "model_changed" || activeSession.model?.id !== primaryModel.id || aborted) return;
