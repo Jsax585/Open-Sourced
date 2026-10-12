@@ -946,8 +946,7 @@ export class TurnRecovery {
 					"Assistant returned empty stop after retry cap; try switching models or `/shake images` to remove archived frames";
 			}
 			const zeroBilled =
-				this.#isZeroBilledEmptyStop(assistantMessage, providerEmptyOutput) &&
-				!this.#emptyStopCycleHadBilling;
+				this.#isZeroBilledEmptyStop(assistantMessage, providerEmptyOutput) && !this.#emptyStopCycleHadBilling;
 
 			// Zero-billed empty stops are upstream dispatch failures laundered into a
 			// clean HTTP-200 stop (#9415): nothing was ever dispatched, so no usage
