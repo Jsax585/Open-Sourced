@@ -176,7 +176,10 @@ describe("IRC identity through AgentSession", () => {
 			using temp = TempDir.createSync("@omp-irc-interrupt-");
 			const auth = await AuthStorage.create(path.join(temp.path(), "auth.db"));
 			auth.keys.setRuntime("openai", "synthetic-irc-fixture-key");
-			const manager = SessionManager.inMemory(temp.path());
+			const file = path.join(temp.path(), "session.jsonl");
+			const seed = SessionManager.inMemory(temp.path());
+			await Bun.write(file, `${JSON.stringify(seed.captureState().header)}\n`);
+			const manager = await SessionManager.open(file, temp.path(), undefined, { suppressBreadcrumb: true });
 			const recipient = `IrcInterrupt-${delivery}`;
 			const parent = "IrcInterruptParent";
 			const message: IrcMessage = {
@@ -262,6 +265,8 @@ describe("IRC identity through AgentSession", () => {
 					await run;
 					expect(agent.hasQueuedMessages()).toBe(false);
 					expect(manager.buildSessionContext().messages.filter(message => "ircSource" in message)).toEqual([]);
+					await manager.flush();
+					expect(await Bun.file(file).text()).not.toContain('"ircSource"');
 					retry = true;
 					const resumed = session.prompt("synthetic retry request");
 					await retryReady.promise;
@@ -273,6 +278,17 @@ describe("IRC identity through AgentSession", () => {
 					expect(manager.buildSessionContext().messages.filter(message => "ircSource" in message)).toMatchObject([
 						{ role: "user", attribution: "agent", ircSource: { id: message.id, from: parent, to: recipient } },
 					]);
+					await manager.close();
+					const reopened = await SessionManager.open(file, temp.path(), undefined, { suppressBreadcrumb: true });
+					try {
+						expect(
+							reopened.buildSessionContext().messages.filter(message => "ircSource" in message),
+						).toMatchObject([
+							{ role: "user", attribution: "agent", ircSource: { id: message.id, from: parent, to: recipient } },
+						]);
+					} finally {
+						await reopened.close();
+					}
 				} finally {
 					registry.unregister(recipient, ref);
 				}
@@ -282,6 +298,7 @@ describe("IRC identity through AgentSession", () => {
 				removeGate();
 				await session?.abort();
 				await session?.dispose();
+				await manager.close();
 				auth.close();
 			}
 		});
