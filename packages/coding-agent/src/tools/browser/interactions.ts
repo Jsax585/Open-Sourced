@@ -625,13 +625,17 @@ export async function selectElementOptions(
 	return outcome.selected;
 }
 
-/** Upload files through an input, native chooser trigger, or synthetic drop-zone event sequence. */
+/**
+ * Upload files through an input, native chooser trigger, or synthetic drop-zone event sequence. `setInputFiles` fills
+ * a file input; an actionable handle passes Puppeteer's own method, since its `uploadFile` routes back here.
+ */
 export async function uploadFilesToElement(
 	page: Page,
 	handle: ElementHandle,
 	absolutePaths: string[],
 	label: string,
 	signal?: AbortSignal,
+	setInputFiles?: (...paths: string[]) => Promise<unknown>,
 ): Promise<void> {
 	const inputType = (await untilAborted(signal, () =>
 		handle.evaluate(el => {
@@ -640,9 +644,11 @@ export async function uploadFilesToElement(
 		}),
 	)) as { tag: string; type: string };
 	if (inputType.tag === "INPUT" && inputType.type.toLowerCase() === "file") {
-		// Puppeteer's own method: an actionable handle's `uploadFile` routes back here.
-		const setInputFiles = Object.getPrototypeOf(handle).uploadFile as (...paths: string[]) => Promise<void>;
-		await untilAborted(signal, () => setInputFiles.call(handle, ...absolutePaths));
+		// Puppeteer types `uploadFile` on `ElementHandle<HTMLInputElement>` only; the tag check above proves it.
+		const input = handle as unknown as { uploadFile: (...paths: string[]) => Promise<void> };
+		await untilAborted(signal, () =>
+			setInputFiles ? setInputFiles(...absolutePaths) : input.uploadFile(...absolutePaths),
+		);
 		return;
 	}
 

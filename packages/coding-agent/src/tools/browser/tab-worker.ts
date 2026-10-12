@@ -683,7 +683,7 @@ export function toActionableHandle(
 	handle: ElementHandle,
 	guard?: HandleOpGuard,
 	invalidate?: () => Promise<void>,
-	uploadFiles?: (filePaths: string[], signal: AbortSignal) => Promise<void>,
+	uploadFiles?: (filePaths: string[], signal: AbortSignal, setInputFiles: RawHandleMethod) => Promise<void>,
 ): ActionableHandle {
 	const enriched = handle as HandleWithRawMethods;
 	const methods = enriched as unknown as Partial<Record<GuardedHandleMethod, RawHandleMethod>>;
@@ -839,10 +839,10 @@ export function toActionableHandle(
 				invalidate,
 			),
 		);
-	const clearFiles = originals.interactive.uploadFile;
-	if (uploadFiles && clearFiles) {
-		// Same chooser and drop-zone handling as `tab.uploadFile()`, not Puppeteer's input-only method. With no
-		// paths, Puppeteer's method clears a file input.
+	const setInputFiles = originals.interactive.uploadFile;
+	if (uploadFiles && setInputFiles) {
+		// Same chooser and drop-zone handling as `tab.uploadFile()`, not Puppeteer's input-only method, which fills a
+		// file input on that path and clears it when called with no paths.
 		enriched.uploadFile = (...filePaths: string[]) =>
 			guard<void>("handle.uploadFile()", signal =>
 				runGuardedHandleAction(
@@ -851,8 +851,8 @@ export function toActionableHandle(
 					"handle.uploadFile()",
 					signal,
 					async () => {
-						if (filePaths.length) await uploadFiles(filePaths, signal);
-						else await clearFiles();
+						if (filePaths.length) await uploadFiles(filePaths, signal, setInputFiles);
+						else await setInputFiles();
 					},
 					invalidate,
 				),
@@ -2141,13 +2141,14 @@ export class WorkerCore {
 					this.#clearElementCache();
 					await this.#stopLoading();
 				},
-				async (filePaths, sig) => {
+				async (filePaths, sig, setInputFiles) => {
 					await uploadFilesToElement(
 						page,
 						handle,
 						filePaths.map(filePath => resolveToCwd(filePath, session.cwd)),
 						"handle.uploadFile()",
 						sig,
+						setInputFiles,
 					);
 				},
 			);
