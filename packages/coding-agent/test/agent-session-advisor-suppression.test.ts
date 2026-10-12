@@ -30,6 +30,7 @@ import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { MemorySessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { Snowflake, TempDir } from "@oh-my-pi/pi-utils";
 
 interface MockYieldDetails {
@@ -70,6 +71,9 @@ interface CompletedAdvisorOptions {
 	primaryTools?: AgentTool[];
 	syncBacklog?: "off" | "1";
 	advisorHandler?: () => MockResponse | Promise<MockResponse>;
+	/** When set, the session persists into this storage so a reload can re-read it. */
+	sessionStorage?: MemorySessionStorage;
+	sessionPath?: string;
 }
 
 interface AdvisorTestExtensionRunner {
@@ -211,7 +215,12 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			initialState: { model, systemPrompt: ["Test"], tools: options.primaryTools ?? [] },
 			streamFn: mock.stream,
 		});
-		const sessionManager = SessionManager.inMemory();
+		const sessionManager =
+			options.sessionStorage && options.sessionPath
+				? await SessionManager.open(options.sessionPath, tempDir.path(), options.sessionStorage, {
+						initialCwd: tempDir.path(),
+					})
+				: SessionManager.inMemory();
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
 			"retry.enabled": false,
@@ -967,6 +976,53 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		);
 		expect(card.content).toContain("minor stylistic suggestion");
 		expect(card.content).toContain("critical flaw in logic");
+	});
+
+	it("counts a rejected final-answer draft in session totals and after reload", async () => {
+		const storage = new MemorySessionStorage();
+		const sessionPath = tempDir.join("final-review-session.jsonl");
+		const { session, sessionManager } = await createCompletedAdvisorSession("blocker", undefined, {
+			reviewFinalAnswer: true,
+			sessionStorage: storage,
+			sessionPath,
+			primaryResponses: [
+				{ content: ["REJECTED DRAFT"], stopReason: "stop", usage: { input: 100, output: 10, cacheRead: 5 } },
+				{ content: ["CORRECTED ANSWER"], stopReason: "stop", usage: { input: 200, output: 20, cacheRead: 7 } },
+			],
+		});
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("answer me");
+		await session.waitForIdle();
+
+		// The draft is hidden, so it earns no assistant entry. The off-transcript
+		// ledger entry is the only thing that keeps a billed response in totals.
+		const ledger = sessionManager.getEntries().filter(entry => entry.type === "model_usage");
+		expect(ledger).toHaveLength(1);
+		expect(ledger[0]).toMatchObject({
+			purpose: "final-answer-review-rejected",
+			usage: { input: 100, output: 10, cacheRead: 5 },
+		});
+
+		const totals = sessionManager.getUsageStatistics();
+		expect({ input: totals.input, output: totals.output, cacheRead: totals.cacheRead }).toEqual({
+			input: 300,
+			output: 30,
+			cacheRead: 12,
+		});
+
+		// A reload rebuilds totals from the durable entries alone; the rejected
+		// draft must still be in them.
+		await sessionManager.close();
+		const reloaded = await SessionManager.open(sessionPath, tempDir.path(), storage, {
+			initialCwd: tempDir.path(),
+		});
+		const reloadedTotals = reloaded.getUsageStatistics();
+		expect({
+			input: reloadedTotals.input,
+			output: reloadedTotals.output,
+			cacheRead: reloadedTotals.cacheRead,
+		}).toEqual({ input: 300, output: 30, cacheRead: 12 });
+		await reloaded.close();
 	});
 
 	it("routes a blocker emitted after the final review timeout instead of dropping it", async () => {

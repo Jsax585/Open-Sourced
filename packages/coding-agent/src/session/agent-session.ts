@@ -543,6 +543,8 @@ const cfgWorkspacePromptInputs = combine({
 });
 
 const PLAN_MODE_REMINDER_MAX = 3;
+/** Ledger purpose for a candidate answer the final-answer gate hid. */
+const REJECTED_FINAL_ANSWER_USAGE_PURPOSE = "final-answer-review-rejected";
 const POST_PROMPT_DRAIN_TIMEOUT_MS = 5_000;
 const AGENT_START_POLICY_MAX_ATTEMPTS = 3;
 /**
@@ -1157,10 +1159,11 @@ export class AgentSession implements SettingsScope {
 
 	/**
 	 * Accounting for a candidate answer the final-answer gate hid. The draft never
-	 * reaches `message_end`, so the usage/broker-burn/perf bookkeeping that
-	 * normally rides that handler would otherwise omit a response the provider
-	 * billed for. Only accounting runs here: the draft stays out of the
-	 * transcript, TTSR, and recovery.
+	 * reaches `message_end`, so it earns no durable assistant entry and the
+	 * off-transcript ledger stays empty unless it is written here. Without both a
+	 * perf sample and a `model_usage` entry the request under-counts its tokens and
+	 * cost in the session totals and in every later resume. Only accounting runs
+	 * here: the draft stays out of the transcript, TTSR, and recovery.
 	 */
 	async #observeRejectedFinalAnswer(assistantMsg: AssistantMessage): Promise<void> {
 		if (assistantMsg.stopReason !== "error" && assistantMsg.duration !== undefined) {
@@ -1174,6 +1177,18 @@ export class AgentSession implements SettingsScope {
 				assistantMsg.serviceTier,
 			);
 		}
+		this.sessionManager.appendModelUsage(
+			{
+				purpose: REJECTED_FINAL_ANSWER_USAGE_PURPOSE,
+				api: assistantMsg.api,
+				provider: assistantMsg.provider,
+				model: assistantMsg.model,
+				usage: assistantMsg.usage,
+				stopReason: assistantMsg.stopReason,
+				errorMessage: assistantMsg.errorMessage,
+			},
+			{ sessionId: this.sessionId, parentId: this.sessionManager.getLeafId() },
+		);
 		this.#modelRegistry.authStorage.usage.observe({
 			provider: assistantMsg.provider,
 			model: assistantMsg.model,
