@@ -282,8 +282,6 @@ export const modelDefs = {
 		"effortMap?": "Record<string, string>",
 		"supportsDisplay?": "boolean",
 		"prefixBinding?": "boolean",
-		"supportsDisabledThinking?": "boolean",
-		"disabledThinkingMaxEffort?": "Effort",
 		"effortRouting?": "Record<string, string>",
 		"effortBudgets?": "Record<string, number>",
 		"suppressWhenOff?": "boolean",

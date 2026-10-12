@@ -4,8 +4,7 @@
 
 ### Added
 
-- Added `thinking.supportsDisabledThinking`, marking adaptive Claude models that accept an explicit `thinking.type: "disabled"` request instead of the legacy low-effort fallback. Claude Opus 5 and Sonnet 5 are marked; older adaptive Claude models and the 5.5 revisions keep their existing thinking-off behavior.
-- Added `thinking.disabledThinkingMaxEffort`, the highest effort that may accompany `thinking.type: "disabled"`. Claude Opus 5 rejects that combination above `high` with a 400, so requests are clamped instead of dropping the caller's effort.
+- Added the `disabled-thinking-max-effort` compat axis (`compat.disabledThinkingMaxEffort`), the highest effort a `thinking.type: "disabled"` turn keeps; set to `high` for Claude Opus 5 and `max` for Sonnet 5 on the `anthropic` provider, which now use the explicit `disabled` form for thinking off.
 
 ## [18.9.2] - 2026-10-11
 

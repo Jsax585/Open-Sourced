@@ -238,6 +238,13 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 		"adaptive",
 		"between-tools",
 	]),
+	"disabled-thinking-max-effort": wire("disabledThinkingMaxEffort", ["anthropic"], "scalar", [
+		"low",
+		"medium",
+		"high",
+		"xhigh",
+		"max",
+	]),
 	"effort-beta": wire("effortBeta", ["anthropic"]),
 	"escape-builtin-tool-names": wire("escapeBuiltinToolNames", ["anthropic"]),
 	"fast-mode": wire("fastMode", ["anthropic"]),

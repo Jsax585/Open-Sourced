@@ -2535,10 +2535,6 @@ pub struct ThinkingConfig {
 	pub supports_display: Option<bool>,
 	#[serde(rename = "prefixBinding", default, skip_serializing_if = "Option::is_none")]
 	pub prefix_binding: Option<bool>,
-	#[serde(rename = "supportsDisabledThinking", default, skip_serializing_if = "Option::is_none")]
-	pub supports_disabled_thinking: Option<bool>,
-	#[serde(rename = "disabledThinkingMaxEffort", default, skip_serializing_if = "Option::is_none")]
-	pub disabled_thinking_max_effort: Option<Effort>,
 	#[serde(rename = "effortRouting", default, skip_serializing_if = "Option::is_none")]
 	pub effort_routing: Option<BTreeMap<String, String>>,
 	#[serde(rename = "effortBudgets", default, skip_serializing_if = "Option::is_none")]

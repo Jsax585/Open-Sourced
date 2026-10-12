@@ -244,71 +244,23 @@ describe("model thinking derivation", () => {
 		});
 	});
 
-	it("derives disabled-thinking support only for official Anthropic Messages Opus 5 models", () => {
-		const messagesOpus5 = createModel({
-			id: "claude-opus-5",
-			api: "anthropic-messages",
-			provider: "anthropic",
-			baseUrl: "https://api.anthropic.com",
-		});
-		const proxyOpus5 = createModel({
-			id: "github-copilot/claude-opus-5",
-			api: "anthropic-messages",
-			provider: "github-copilot",
-			baseUrl: "https://api.githubcopilot.com/chat/completions",
-		});
-		const bedrockOpus5 = createModel({
-			id: "global.anthropic.claude-opus-5",
-			api: "bedrock-converse-stream",
-			provider: "amazon-bedrock",
-		});
-		const cachedMessagesOpus5 = createModel({
-			id: "claude-opus-5",
-			api: "anthropic-messages",
-			provider: "anthropic",
-			baseUrl: "https://api.anthropic.com",
-			thinking: {
-				mode: "anthropic-adaptive",
-				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
-			},
-		});
-		const explicitUnsupportedOpus5 = createModel({
-			id: "claude-opus-5",
-			api: "anthropic-messages",
-			provider: "anthropic",
-			baseUrl: "https://api.anthropic.com",
-			thinking: {
-				mode: "anthropic-adaptive",
-				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
-				supportsDisabledThinking: false,
-				disabledThinkingMaxEffort: Effort.High,
-			},
-		});
-		const cachedBedrockOpus5 = createModel({
-			id: "global.anthropic.claude-opus-5",
-			api: "bedrock-converse-stream",
-			provider: "amazon-bedrock",
-			thinking: {
-				mode: "anthropic-adaptive",
-				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.Max],
-			},
-		});
+	it("assigns disabled thinking with an effort ceiling only to Opus 5 and Sonnet 5 on the anthropic provider", () => {
+		const offCompat = (provider: Provider, id: string) => {
+			const compat = createModel({ id, api: "anthropic-messages", provider }).compat;
+			return [compat.disabledThinking, compat.disabledThinkingMaxEffort];
+		};
 
-		// Accepting `thinking.type: "disabled"` is documented for the native
-		// Anthropic Messages API. Anthropic-compatible proxy rows share the wire
-		// dialect but not necessarily that capability.
-		expect(messagesOpus5.thinking?.supportsDisabledThinking).toBe(true);
-		expect(messagesOpus5.thinking?.disabledThinkingMaxEffort).toBe(Effort.High);
-		expect(proxyOpus5.thinking?.supportsDisabledThinking).toBeUndefined();
-		expect(proxyOpus5.thinking?.disabledThinkingMaxEffort).toBeUndefined();
-		expect(bedrockOpus5.thinking?.supportsDisabledThinking).toBeUndefined();
-		// Backfilled onto explicit thinking when it is absent; explicit false wins
-		// and must not leave a contradictory ceiling behind.
-		expect(cachedMessagesOpus5.thinking?.supportsDisabledThinking).toBe(true);
-		expect(cachedMessagesOpus5.thinking?.disabledThinkingMaxEffort).toBe(Effort.High);
-		expect(explicitUnsupportedOpus5.thinking?.supportsDisabledThinking).toBe(false);
-		expect(explicitUnsupportedOpus5.thinking?.disabledThinkingMaxEffort).toBeUndefined();
-		expect(cachedBedrockOpus5.thinking?.supportsDisabledThinking).toBeUndefined();
+		// Opus 5 rejects `disabled` above `high` with a 400; Sonnet 5 accepts `max`.
+		expect(offCompat("anthropic", "claude-opus-5")).toEqual(["disabled", "high"]);
+		expect(offCompat("anthropic", "claude-sonnet-5")).toEqual(["disabled", "max"]);
+		// The 5.5 revisions reject `disabled`; Opus 4.8 keeps the adaptive-only fallback.
+		expect(offCompat("anthropic", "claude-opus-5-5")).toEqual([undefined, undefined]);
+		expect(offCompat("anthropic", "claude-opus-4-8")).toEqual([undefined, undefined]);
+		// Proxies share the dialect, not the verified capability.
+		expect(offCompat("github-copilot", "claude-opus-5")).toEqual([undefined, undefined]);
+		// Bedrock Converse reads `disabledThinking` too; the Messages-only rule must not reach it.
+		const bedrock = createModel({ id: "claude-opus-5", api: "bedrock-converse-stream", provider: "anthropic" });
+		expect(bedrock.compat.disabledThinking).toBeUndefined();
 	});
 
 	it("maps GLM-5.2 reasoning effort per host dialect", () => {

@@ -515,8 +515,6 @@ class ThinkingConfig:
     effort_map: dict[str, str] | None = None
     supports_display: bool | None = None
     prefix_binding: bool | None = None
-    supports_disabled_thinking: bool | None = None
-    disabled_thinking_max_effort: Effort | None = None
     effort_routing: dict[str, str] | None = None
     effort_budgets: dict[str, float] | None = None
     suppress_when_off: bool | None = None
@@ -1791,8 +1789,6 @@ def parse_thinking_config(value: object, path: str = "ThinkingConfig") -> Thinki
         effort_map=optional(payload, "effortMap", record(decode_str), path),
         supports_display=optional(payload, "supportsDisplay", decode_bool, path),
         prefix_binding=optional(payload, "prefixBinding", decode_bool, path),
-        supports_disabled_thinking=optional(payload, "supportsDisabledThinking", decode_bool, path),
-        disabled_thinking_max_effort=optional(payload, "disabledThinkingMaxEffort", _decode_effort, path),
         effort_routing=optional(payload, "effortRouting", record(decode_str), path),
         effort_budgets=optional(payload, "effortBudgets", record(decode_float), path),
         suppress_when_off=optional(payload, "suppressWhenOff", decode_bool, path),

@@ -317,6 +317,29 @@ class "anthropic" {
 			}
 		}
 	}
+	// Opus 5 and Sonnet 5 accept `disabled` with an output effort, so Off keeps
+	// the caller's effort instead of the adaptive-only low-effort fallback.
+	// Opus 5 rejects the pair above `high` with a 400; Sonnet 5 accepts `max`.
+	// Fable/Mythos and Opus/Sonnet 5.5 reject `disabled`. Scoped like the Haiku
+	// 5.5 rule: the `anthropic` provider's Messages adapter, custom baseUrl
+	// included; other providers and APIs fronting these ids keep their own off
+	// form.
+	on "anthropic" {
+		on-api "anthropic-messages" {
+			family "opus" {
+				revision ">=5 <5.5" {
+					disabled-thinking "disabled"
+					disabled-thinking-max-effort "high"
+				}
+			}
+			family "sonnet" {
+				revision ">=5 <5.5" {
+					disabled-thinking "disabled"
+					disabled-thinking-max-effort "max"
+				}
+			}
+		}
+	}
 	on "amazon-bedrock" "anthropic" "cloudflare-ai-gateway" "github-copilot" "gitlab-duo" \
 		"google-vertex" "opencode-zen" "snowflake" "vercel-ai-gateway" "zenmux" {
 		family "opus" {

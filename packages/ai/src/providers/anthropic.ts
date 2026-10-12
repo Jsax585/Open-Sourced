@@ -1283,8 +1283,8 @@ function clampDisabledThinkingEffort(
 	// ceiling with a 400. The comparison runs in the wire domain:
 	// `AnthropicOutputEffort` has no `minimal`, so the catalog ladder would not
 	// index it.
-	const ceiling = model.thinking?.disabledThinkingMaxEffort;
-	const ceilingIndex = ceiling ? ANTHROPIC_OUTPUT_EFFORTS.indexOf(ceiling as AnthropicOutputEffort) : -1;
+	const ceiling = model.compat.disabledThinkingMaxEffort;
+	const ceilingIndex = ceiling ? ANTHROPIC_OUTPUT_EFFORTS.indexOf(ceiling) : -1;
 	const effortIndex = ANTHROPIC_OUTPUT_EFFORTS.indexOf(effort);
 	return ceilingIndex >= 0 && effortIndex > ceilingIndex ? ANTHROPIC_OUTPUT_EFFORTS[ceilingIndex] : effort;
 }
@@ -4393,8 +4393,8 @@ function disableThinkingIfToolChoiceForced(
 
 	if (
 		isAdaptiveOnlyThinking(model) &&
-		model.thinking?.supportsDisabledThinking &&
-		model.compat.supportsOutputEffort &&
+		model.compat.disabledThinking === "disabled" &&
+		model.compat.disabledThinkingMaxEffort !== undefined &&
 		!requestBlocksDisabledThinking(params, model)
 	) {
 		params.thinking = { type: "disabled" };
@@ -5105,9 +5105,10 @@ export function resolveAnthropicCompactionEffort(
 /**
  * Whether effort controls earlier requests left in `messages` rule out
  * `thinking: {type: "disabled"}`: Anthropic rejects a per-message effort
- * control with thinking off, and `disabled` above `high` effort. Both stay in
- * force across a thinking toggle, so such a request falls back to the
- * adaptive-only off path (lowest effort) instead of a 400.
+ * control with thinking off, and `disabled` above the route's ceiling
+ * (`disabledThinkingMaxEffort`, else `high`). Both stay in force across a
+ * thinking toggle, so such a request falls back to the adaptive-only off path
+ * (lowest effort) instead of a 400.
  */
 function effortControlsBlockDisabledThinking(
 	model: Model<"anthropic-messages">,
@@ -5116,7 +5117,30 @@ function effortControlsBlockDisabledThinking(
 ): boolean {
 	if (model.compat.supportsPerMessageEffort !== true) return false;
 	const plan = planAnthropicEffortControls(undefined, messages, records, true, undefined, false);
-	return plan.inserts.length > 0 || plan.topLevel === "xhigh" || plan.topLevel === "max";
+	const ceiling = ANTHROPIC_OUTPUT_EFFORTS.indexOf(model.compat.disabledThinkingMaxEffort ?? "high");
+	return (
+		plan.inserts.length > 0 ||
+		(plan.topLevel !== undefined && ANTHROPIC_OUTPUT_EFFORTS.indexOf(plan.topLevel) > ceiling)
+	);
+}
+
+/**
+ * `output_config.effort` for a `disabled` turn: the caller's effort capped at
+ * `disabledThinkingMaxEffort`; models without that ceiling drop it. Once an
+ * earlier request recorded an effort, a new one would go out as a per-message
+ * control, which `disabled` rejects, so the effort in force stays.
+ */
+function resolveDisabledThinkingEffort(
+	model: Model<"anthropic-messages">,
+	options: AnthropicOptions,
+	records: readonly AnthropicControlRecord[],
+): AnthropicOutputEffort | undefined {
+	if (!isAdaptiveOnlyThinking(model) || model.compat.disabledThinkingMaxEffort === undefined) return undefined;
+	if (model.compat.supportsPerMessageEffort === true && records.some(record => record.controls.effort)) {
+		return undefined;
+	}
+	const effort = resolveAnthropicAdaptiveEffort(model, options);
+	return effort && effort !== "adaptive" ? clampDisabledThinkingEffort(model, effort) : undefined;
 }
 
 /**
@@ -5363,6 +5387,7 @@ function buildParams(
 		const disabledThinking = model.compat.disabledThinking;
 		if (
 			options?.thinkingEnabled === false &&
+			options.anthropicThinkingMode !== "adaptive" &&
 			disabledThinking !== undefined &&
 			!(disabledThinking === "disabled" && effortControlsBlockDisabledThinking(model, context.messages, records))
 		) {
@@ -5379,6 +5404,9 @@ function buildParams(
 									: {}),
 							}
 						: { type: "disabled" };
+				if (disabledThinking === "disabled") {
+					outputConfigEffort = resolveDisabledThinkingEffort(model, options, records);
+				}
 			}
 		} else if (
 			options?.thinkingEnabled ||
@@ -5421,34 +5449,17 @@ function buildParams(
 				// turn's quality, not only thinking.
 				thinking = { type: "between_tools" };
 				outputConfigEffort = model.compat.betweenToolsEffort;
-			} else if (
-				isAdaptiveOnlyThinking(model) &&
-				(!model.thinking?.supportsDisabledThinking ||
-					effortControlsBlockDisabledThinking(model, context.messages, records))
-			) {
+			} else if (isAdaptiveOnlyThinking(model)) {
 				// Adaptive-only Claude models (Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5) reject
 				// `thinking.type: "disabled"` — adaptive thinking cannot be switched off.
 				// Omit the thinking field (the API defaults to adaptive) and pin the
 				// lowest effort so "thinking off" calls stay cheap instead of failing
 				// the request with a 400 (a hidden-thinking toggle must never break it).
-				// Models flagged `supportsDisabledThinking` send `disabled` below, unless
-				// earlier effort controls rule it out.
 				// The effort field requires the `effort-2025-11-24` beta; it is attached
 				// at the request site, including per-request for injected SDK clients.
 				outputConfigEffort = "low";
 			} else {
 				thinking = { type: "disabled" };
-				// Once an earlier request recorded an effort, a new one would go out as
-				// a per-message control, which `disabled` rejects: keep the one in force.
-				const effortInForce =
-					model.compat.supportsPerMessageEffort === true && records.some(record => record.controls.effort);
-				const disabledEffort =
-					isAdaptiveOnlyThinking(model) && !effortInForce
-						? resolveAnthropicAdaptiveEffort(model, options ?? {})
-						: undefined;
-				if (disabledEffort && disabledEffort !== "adaptive") {
-					outputConfigEffort = clampDisabledThinkingEffort(model, disabledEffort);
-				}
 			}
 		}
 	}

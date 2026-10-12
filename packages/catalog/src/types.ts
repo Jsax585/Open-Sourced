@@ -148,18 +148,6 @@ export interface ThinkingConfig {
 	 * `thinking: undefined` instead of an empty list.
 	 */
 	efforts: readonly Effort[];
-	/**
-	 * Adaptive-thinking models that accept an explicit `thinking.type: "disabled"`
-	 * request. Older adaptive Claude models reject it and need the legacy
-	 * low-effort fallback instead.
-	 */
-	supportsDisabledThinking?: boolean;
-	/**
-	 * Highest effort that may accompany `thinking.type: "disabled"`. Opus 5+
-	 * rejects that combination above `high` with a 400, enforced per request;
-	 * absent means the model imposes no ceiling.
-	 */
-	disabledThinkingMaxEffort?: Effort;
 	/** Optional default effort applied when this model is selected. Falls back to global default if absent. */
 	defaultLevel?: Effort;
 	/**
@@ -802,6 +790,16 @@ export interface AnthropicCompat {
 	 */
 	disabledThinking?: "omit" | "disabled" | "adaptive" | "between-tools";
 	/**
+	 * Highest `output_config.effort` a `{ type: "disabled" }` turn may carry
+	 * (Opus 5 rejects the pair above `high` with a 400). Set: the caller's
+	 * effort is kept, capped here, and forced-tool turns clamp the top-level
+	 * effort to it. Unset: the caller's effort is dropped, and forced-tool turns
+	 * omit thinking at `low` effort. On other turns an effort already in force
+	 * from earlier requests stays, or the turn falls back to adaptive thinking at
+	 * low effort when it exceeds the ceiling (`high` when unset).
+	 */
+	disabledThinkingMaxEffort?: "low" | "medium" | "high" | "xhigh" | "max";
+	/**
 	 * `output_config.effort` pinned on a `between_tools` turn. Unset leaves
 	 * the turn's effort untouched.
 	 */
@@ -1175,6 +1173,7 @@ export type ResolvedAnthropicCompat = Required<
 		| "bedrockMessagesApi"
 		| "effortBeta"
 		| "disabledThinking"
+		| "disabledThinkingMaxEffort"
 		| "betweenToolsEffort"
 		| "stripThinkingHistory"
 		| "fastMode"
@@ -1186,6 +1185,8 @@ export type ResolvedAnthropicCompat = Required<
 	effortBeta?: AnthropicCompat["effortBeta"];
 	/** Disabled-thinking wire form; undefined keeps the direct-provider behavior. */
 	disabledThinking?: AnthropicCompat["disabledThinking"];
+	/** Effort ceiling on `disabled` turns; undefined drops the caller's effort there. */
+	disabledThinkingMaxEffort?: AnthropicCompat["disabledThinkingMaxEffort"];
 	/** Effort pinned on `between_tools` turns; undefined leaves effort untouched. */
 	betweenToolsEffort?: AnthropicCompat["betweenToolsEffort"];
 	/** Strip thinking history on non-thinking-led and disabled-thinking turns; undefined behaves as false. */

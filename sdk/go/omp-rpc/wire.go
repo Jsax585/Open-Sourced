@@ -1757,18 +1757,16 @@ func (v *ModelCost) decodeFrom(raw map[string]json.RawMessage) error {
 }
 
 type ThinkingConfig struct {
-	Mode                      string             `json:"mode"`
-	Efforts                   []Effort           `json:"efforts"`
-	DefaultLevel              *Effort            `json:"defaultLevel,omitempty"`
-	EffortMap                 map[string]string  `json:"effortMap,omitempty"`
-	SupportsDisplay           *bool              `json:"supportsDisplay,omitempty"`
-	PrefixBinding             *bool              `json:"prefixBinding,omitempty"`
-	SupportsDisabledThinking  *bool              `json:"supportsDisabledThinking,omitempty"`
-	DisabledThinkingMaxEffort *Effort            `json:"disabledThinkingMaxEffort,omitempty"`
-	EffortRouting             map[string]string  `json:"effortRouting,omitempty"`
-	EffortBudgets             map[string]float64 `json:"effortBudgets,omitempty"`
-	SuppressWhenOff           *bool              `json:"suppressWhenOff,omitempty"`
-	RequiresEffort            *bool              `json:"requiresEffort,omitempty"`
+	Mode            string             `json:"mode"`
+	Efforts         []Effort           `json:"efforts"`
+	DefaultLevel    *Effort            `json:"defaultLevel,omitempty"`
+	EffortMap       map[string]string  `json:"effortMap,omitempty"`
+	SupportsDisplay *bool              `json:"supportsDisplay,omitempty"`
+	PrefixBinding   *bool              `json:"prefixBinding,omitempty"`
+	EffortRouting   map[string]string  `json:"effortRouting,omitempty"`
+	EffortBudgets   map[string]float64 `json:"effortBudgets,omitempty"`
+	SuppressWhenOff *bool              `json:"suppressWhenOff,omitempty"`
+	RequiresEffort  *bool              `json:"requiresEffort,omitempty"`
 }
 
 func (v *ThinkingConfig) UnmarshalJSON(data []byte) error {
@@ -1784,8 +1782,6 @@ func (v *ThinkingConfig) decodeFrom(raw map[string]json.RawMessage) error {
 	d.optional("effortMap", &out.EffortMap)
 	d.optional("supportsDisplay", &out.SupportsDisplay)
 	d.optional("prefixBinding", &out.PrefixBinding)
-	d.optional("supportsDisabledThinking", &out.SupportsDisabledThinking)
-	d.optional("disabledThinkingMaxEffort", &out.DisabledThinkingMaxEffort)
 	d.optional("effortRouting", &out.EffortRouting)
 	d.optional("effortBudgets", &out.EffortBudgets)
 	d.optional("suppressWhenOff", &out.SuppressWhenOff)

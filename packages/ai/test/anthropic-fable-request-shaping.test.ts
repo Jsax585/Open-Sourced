@@ -460,7 +460,7 @@ describe("Anthropic adaptive thinking mode", () => {
 	});
 
 	it("routes thinking-off requests to the off SKU while preserving effort", async () => {
-		const routed = buildModel({
+		const built = buildModel({
 			...makeAnthropicModel("claude-routed"),
 			thinking: {
 				mode: "anthropic-adaptive",
@@ -469,9 +469,13 @@ describe("Anthropic adaptive thinking mode", () => {
 					off: "claude-routed",
 					[Effort.High]: "claude-routed-thinking",
 				},
-				supportsDisabledThinking: true,
 			},
 		} as ModelSpec<"anthropic-messages">);
+		// The disabled-thinking axes are rule-only, so they layer onto the resolved compat.
+		const routed: Model<"anthropic-messages"> = {
+			...built,
+			compat: { ...built.compat, disabledThinking: "disabled", disabledThinkingMaxEffort: "max" },
+		};
 
 		for (const opts of [{ thinkingMode: "off" as const }, { disableReasoning: true }] as const) {
 			const payload = await captureSimplePayload(routed, { ...opts, reasoning: Effort.High });
@@ -508,6 +512,71 @@ describe("Anthropic adaptive thinking mode", () => {
 
 		expect(payload.thinking).toEqual({ type: "disabled" });
 		expect(payload.output_config?.effort).toBe("max");
+	});
+
+	it("drops the caller's effort on a disabled route without a ceiling (bundled Haiku 5.5)", async () => {
+		// Haiku 5.5 rejects `disabled` above `high`; without a declared ceiling the
+		// caller's effort is not sent, on plain or forced-tool turns.
+		const model = bundledAnthropicModel("claude-haiku-5-5");
+		const plain = await captureSimplePayload(model, { thinkingMode: "off", reasoning: Effort.Max });
+		expect(plain.thinking).toEqual({ type: "disabled" });
+		expect(plain.output_config?.effort).toBeUndefined();
+
+		const forced = await captureSimplePayload(model, {
+			thinkingMode: "off",
+			reasoning: Effort.Max,
+			toolChoice: "any",
+		});
+		expect(forced.thinking).toBeUndefined();
+		expect(forced.output_config?.effort).toBe("low");
+	});
+
+	it("sends no disabled-turn effort when a route turns adaptive thinking off (Opus 5 + disableAdaptiveThinking)", async () => {
+		// Without adaptive thinking the effort beta is not attached, so an output
+		// effort on the disabled turn would be rejected.
+		const bundled = bundledAnthropicModel("claude-opus-5");
+		const model: Model<"anthropic-messages"> = {
+			...bundled,
+			compat: { ...bundled.compat, disableAdaptiveThinking: true },
+		};
+		const payload = await capturePayload(model, { thinkingEnabled: false, reasoning: Effort.High });
+
+		expect(payload.thinking).toEqual({ type: "disabled" });
+		expect(payload.output_config?.effort).toBeUndefined();
+	});
+
+	it("keeps an explicit adaptive thinking mode over the route's off form on bundled Opus 5", async () => {
+		const payload = await capturePayload(bundledAnthropicModel("claude-opus-5"), {
+			thinkingEnabled: false,
+			anthropicThinkingMode: "adaptive",
+		});
+
+		expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+	});
+
+	it("falls back from disabled when the effort in force exceeds a lowered ceiling", async () => {
+		const bundled = bundledAnthropicModel("claude-opus-5");
+		const model: Model<"anthropic-messages"> = {
+			...bundled,
+			compat: { ...bundled.compat, disabledThinkingMaxEffort: "medium" },
+		};
+		const first = await captureTurn(model, { thinkingEnabled: true, reasoning: Effort.High });
+		const payload = await capturePayload(
+			model,
+			{ thinkingEnabled: false, reasoning: Effort.Low },
+			{
+				...CONTEXT,
+				messages: [
+					...CONTEXT.messages,
+					answered("sunny", first),
+					{ role: "user", content: "continue", timestamp: Date.now() },
+				],
+			},
+		);
+
+		expect(first.payload.output_config?.effort).toBe("high");
+		// `disabled` with the in-force `high` would exceed the `medium` ceiling.
+		expect(payload.thinking).toBeUndefined();
 	});
 
 	it("keeps the effort in force when Opus 5 turns thinking off after an earlier request recorded one", async () => {

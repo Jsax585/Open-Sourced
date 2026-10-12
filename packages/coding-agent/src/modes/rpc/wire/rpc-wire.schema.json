@@ -2023,12 +2023,6 @@
 				"prefixBinding": {
 					"type": "boolean"
 				},
-				"supportsDisabledThinking": {
-					"type": "boolean"
-				},
-				"disabledThinkingMaxEffort": {
-					"$ref": "#/$defs/Effort"
-				},
 				"effortRouting": {
 					"type": "object",
 					"properties": {},
