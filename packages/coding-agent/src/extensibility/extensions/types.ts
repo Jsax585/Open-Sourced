@@ -36,6 +36,7 @@ import type {
 	ToolLoadMode,
 } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
+import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { ContextUsage } from "@oh-my-pi/pi-tui/status-line/types";
 import type {
 	Api,
@@ -1760,8 +1761,11 @@ export interface ExtensionAPI {
 	/** Set the current model. Returns false if no API key available. */
 	setModel(model: Model): Promise<boolean>;
 
-	/** Get current thinking level. */
+	/** Get the current resolved thinking level. */
 	getThinkingLevel(): ThinkingLevel | undefined;
+
+	/** Get the user-selected effort (including "auto") before model or session ceilings clamp it. */
+	getConfiguredThinkingLevel(): ConfiguredThinkingLevel | undefined;
 
 	/** Set thinking level for the current session. */
 	setThinkingLevel(level: ThinkingLevel): void;
@@ -1993,6 +1997,8 @@ export type SetModelHandler = (model: Model) => Promise<boolean>;
 
 export type GetThinkingLevelHandler = () => ThinkingLevel | undefined;
 
+export type GetConfiguredThinkingLevelHandler = () => ConfiguredThinkingLevel | undefined;
+
 export type SetThinkingLevelHandler = (level: ThinkingLevel, persist?: boolean) => void;
 
 export type GetServiceTiersHandler = () => ServiceTierByFamily;
@@ -2022,6 +2028,7 @@ export interface ExtensionActions {
 	getCommands: GetCommandsHandler;
 	setModel: SetModelHandler;
 	getThinkingLevel: GetThinkingLevelHandler;
+	getConfiguredThinkingLevel?: GetConfiguredThinkingLevelHandler;
 	setThinkingLevel: SetThinkingLevelHandler;
 	getServiceTiers?: GetServiceTiersHandler;
 	setServiceTier?: SetServiceTierHandler;
