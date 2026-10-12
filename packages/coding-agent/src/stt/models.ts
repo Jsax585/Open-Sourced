@@ -8,7 +8,7 @@ import type { TinyModelDtype } from "../tiny/dtype";
  *   `@huggingface/transformers` `automatic-speech-recognition` pipeline.
  * - `sherpa` — a sherpa-onnx (Next-gen Kaldi) offline model, loaded by the
  *   native `sherpa-onnx-node` addon. Used for NVIDIA Parakeet, the Open ASR
- *   Leaderboard accuracy/speed leader.
+ *   Leaderboard accuracy/speed leader, and Orukeet, a Parakeet fine-tune.
  *
  * The worker resolves the spec by key and loads the model lazily (kept warm
  * afterwards). Both engines run inside the hard-killed subprocess worker.
@@ -43,7 +43,7 @@ export interface SherpaSttModelSpec extends SttModelBase {
 	engine: "sherpa";
 	/** sherpa-onnx offline model family (e.g. `nemo_transducer`). */
 	modelType: string;
-	/** Model files (relative to the repo root) fetched into the local cache. */
+	/** Model files (paths relative to the repo root) fetched into the local cache at the same relative paths. */
 	files: { encoder: string; decoder: string; joiner: string; tokens: string };
 }
 
@@ -52,7 +52,7 @@ export type SttModelSpec = TransformersSttModelSpec | SherpaSttModelSpec;
 /**
  * Speech models, ordered light → SoTA. Defaults to {@link DEFAULT_STT_MODEL_KEY}.
  * The Whisper checkpoints run on transformers.js; NVIDIA Parakeet TDT 0.6B v3
- * runs on sherpa-onnx and leads the Open ASR Leaderboard on accuracy and speed.
+ * and its Orukeet fine-tune run on sherpa-onnx.
  */
 export const STT_MODELS = [
 	{
@@ -102,6 +102,23 @@ export const STT_MODELS = [
 			"NVIDIA Parakeet TDT 0.6B v3, 25 languages. Open ASR Leaderboard leader — best accuracy and far fastest decoding. Default.",
 		sizeHint: "~680 MB",
 	},
+	{
+		key: "orukeet",
+		engine: "sherpa",
+		repo: "oruk/orukeet",
+		modelType: "nemo_transducer",
+		files: {
+			encoder: "onnx/sherpa-v0.1.0-int8/encoder.int8.onnx",
+			decoder: "onnx/sherpa-v0.1.0-int8/decoder.int8.onnx",
+			joiner: "onnx/sherpa-v0.1.0-int8/joiner.int8.onnx",
+			tokens: "onnx/sherpa-v0.1.0-int8/tokens.txt",
+		},
+		englishOnly: false,
+		label: "Orukeet (Parakeet fine-tune)",
+		description:
+			"Oruk's fine-tune of Parakeet TDT 0.6B v3, same 25 languages. Lower word error rate than Parakeet on 61 of 74 published test splits.",
+		sizeHint: "~670 MB",
+	},
 ] as const satisfies readonly SttModelSpec[];
 
 /**
@@ -120,6 +137,7 @@ export const STT_MODEL_VALUES = [
 	"whisper-small",
 	"whisper-large-v3-turbo",
 	"parakeet-tdt-0.6b-v3",
+	"orukeet",
 ] as const satisfies readonly SttModelKey[];
 
 type MissingSttModelValue = Exclude<SttModelKey, (typeof STT_MODEL_VALUES)[number]>;

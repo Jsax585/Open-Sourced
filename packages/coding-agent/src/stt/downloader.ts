@@ -43,21 +43,22 @@ export interface SttDownloadProgress {
  * matching `encoder*.onnx` and `decoder*.onnx` shards under `onnx/` (a partial
  * fetch with only one shard, or a bare `config.json`, reads as not-cached); for
  * sherpa-onnx tiers every model file (encoder/decoder/joiner + tokens) must be
- * present (`.part` sidecars from an interrupted fetch are ignored).
+ * present and non-empty at its repo-relative path (`.part` sidecars from an
+ * interrupted fetch are ignored).
  */
 export async function isSttModelCached(key: string): Promise<boolean> {
 	const spec = resolveSttModelSpec(key);
 	const repoDir = path.join(getTinyModelsCacheDir(), spec.repo);
 	if (spec.engine === "sherpa") {
-		try {
-			const root = new Set(await fs.readdir(repoDir));
-			for (const role in spec.files) {
-				if (!root.has(spec.files[role as keyof typeof spec.files])) return false;
-			}
-			return true;
-		} catch {
-			return false;
+		for (const role in spec.files) {
+			const file = path.join(repoDir, spec.files[role as keyof typeof spec.files]);
+			const present = await fs
+				.stat(file)
+				.then(stats => stats.size > 0)
+				.catch(() => false);
+			if (!present) return false;
 		}
+		return true;
 	}
 	try {
 		const root = await fs.readdir(repoDir);

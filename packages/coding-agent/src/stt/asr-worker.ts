@@ -321,7 +321,6 @@ async function ensureSherpaModelFiles(
 	requestId: string,
 ): Promise<{ encoder: string; decoder: string; joiner: string; tokens: string }> {
 	const dir = path.join(getTinyModelsCacheDir(), spec.repo);
-	await fs.mkdir(dir, { recursive: true });
 	const resolved = {} as { encoder: string; decoder: string; joiner: string; tokens: string };
 	for (const role in spec.files) {
 		const key = role as keyof typeof spec.files;
@@ -331,7 +330,10 @@ async function ensureSherpaModelFiles(
 			.stat(dest)
 			.then(stats => stats.size > 0)
 			.catch(() => false);
-		if (!present) await downloadSherpaFile(spec.repo, filename, dest, modelKey, transport, requestId);
+		if (!present) {
+			await fs.mkdir(path.dirname(dest), { recursive: true });
+			await downloadSherpaFile(spec.repo, filename, dest, modelKey, transport, requestId);
+		}
 		resolved[key] = dest;
 	}
 	return resolved;
