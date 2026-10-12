@@ -208,6 +208,31 @@ describe("auth-gateway classifyGatewayError", () => {
 		expect(c.owner).toBe("provider");
 		expect(c.disposition).toBe("provider_unavailable");
 	});
+
+	it("routes status-less cyber_policy wording through the credential lane before synthetic 502", () => {
+		const result = classifyGatewayError(
+			"Codex error event: This content was flagged for possible cybersecurity risk. Join Trusted Access for Cyber. (code=cyber_policy)",
+		);
+		expect(result.status).toBe(403);
+		expect(result.owner).toBe("credential");
+		expect(result.disposition).toBe("credential_transient");
+	});
+
+	it("maps model-does-not-exist wording to model_unavailable", () => {
+		const result = classifyGatewayError(
+			Object.assign(new Error("The model does not exist or you do not have access to it."), { status: 404 }),
+		);
+		expect(result.disposition).toBe("model_unavailable");
+		expect(result.owner).toBe("model");
+	});
+
+	it("maps 400 model-not-supported wording to model_unavailable", () => {
+		const result = classifyGatewayError(
+			Object.assign(new Error("The requested model is not supported"), { status: 400 }),
+		);
+		expect(result.disposition).toBe("model_unavailable");
+		expect(result.owner).toBe("model");
+	});
 });
 
 describe("classifyGatewayError authoritative-status precedence", () => {
@@ -364,5 +389,27 @@ describe("classifyGatewayError authoritative-status precedence", () => {
 		);
 		expect(c.owner).toBe("provider");
 		expect(c.disposition).toBe("provider_transient");
+	});
+
+	it("routes a statusless cyber_policy denial through the credential lane, not a synthetic 502", () => {
+		const c = classifyGatewayError(new Error("cyber_policy"));
+		expect(c.status).toBe(403);
+		expect(c.owner).toBe("credential");
+		expect(c.disposition).toBe("credential_transient");
+		expect(isRetryableGatewayDisposition(c.disposition)).toBe(true);
+	});
+
+	it("routes a statusless structured policy error through the credential lane", () => {
+		const c = classifyGatewayError(Object.assign(new Error("request denied"), { code: "cyber_policy" }));
+		expect(c.status).toBe(403);
+		expect(c.owner).toBe("credential");
+		expect(c.disposition).toBe("credential_transient");
+	});
+
+	it("treats statusless OAuth-expiry wording as a permanent credential failure", () => {
+		const c = classifyGatewayError(new Error("refresh token expired"));
+		expect(c.status).toBe(401);
+		expect(c.owner).toBe("credential");
+		expect(c.disposition).toBe("credential_permanent");
 	});
 });

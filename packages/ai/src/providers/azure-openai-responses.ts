@@ -420,9 +420,7 @@ function buildParams(
 				format: {
 					type: "json_schema",
 					name: format.json_schema.name ?? "response",
-					...(format.json_schema.description !== undefined
-						? { description: format.json_schema.description }
-						: {}),
+					...(format.json_schema.description !== undefined ? { description: format.json_schema.description } : {}),
 					schema: format.json_schema.schema,
 					...(format.json_schema.strict !== undefined ? { strict: format.json_schema.strict } : {}),
 				} as never,

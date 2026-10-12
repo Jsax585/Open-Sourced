@@ -3549,6 +3549,7 @@ const streamAnthropicOnce = (
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;
 			output.errorId = result.id;
+			output.errorRetryable = result.retryable;
 			output.errorMessage = maybeAddReplayUnsignedThinkingHint(model, result.message);
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;

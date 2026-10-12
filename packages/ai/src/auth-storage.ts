@@ -22,6 +22,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { SessionAffinity } from "./auth/affinity";
 import { BlockStoreHealth, CredentialBlocks } from "./auth/blocks";
 import { KeyCascade, KeyOverrides } from "./auth/cascade";
+import { extractStructuredApiKeyToken } from "./auth/credential-key";
 import { CredentialHealth } from "./auth/health";
 import { OAuthAccounts } from "./auth/oauth";
 import { AccountPolicies } from "./auth/policy";
@@ -30,7 +31,7 @@ import { OAuthRefresher } from "./auth/refresh";
 import { ResetCredits } from "./auth/resets";
 import { RateLimits } from "./auth/rotation";
 import { CredentialSelector } from "./auth/select";
-import { SqliteAuthCredentialStore } from "./auth/sqlite-credential-store";
+import { resolveCredentialStateScopeKey, SqliteAuthCredentialStore } from "./auth/sqlite-credential-store";
 import type { AuthCredentialStore } from "./auth/store";
 import type {
 	AuthAccountPolicies,
@@ -257,6 +258,21 @@ export class AuthStorage {
 	/** Close the underlying credential store; the instance must not be reused. */
 	close(): void {
 		this.#modules.pool.close();
+	}
+
+	/** Return configured key overrides without resolving or selecting a stored account. */
+	peekApiKeyOverrides(provider: string): string | undefined {
+		return this.#overrides.runtimeKey(provider) ?? this.#overrides.configKey(provider);
+	}
+
+	/** Attribute a resolved OAuth bearer to its stored physical account, not a mutable session cursor. */
+	getCredentialIdentityMatchingApiKey(provider: string, apiKey: string): string | undefined {
+		if (this.peekApiKeyOverrides(provider) !== undefined) return undefined;
+		const bearer = extractStructuredApiKeyToken(apiKey) ?? apiKey;
+		const row = this.#modules.pool
+			.entries(provider)
+			.find(entry => entry.credential.type === "oauth" && entry.credential.access === bearer);
+		return row ? (resolveCredentialStateScopeKey(provider, row.credential) ?? undefined) : undefined;
 	}
 
 	/**

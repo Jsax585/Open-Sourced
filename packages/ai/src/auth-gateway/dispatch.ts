@@ -59,17 +59,12 @@ export function normalizeClientSessionKey(clientKey: string | undefined): string
 export function resolveGatewayAccount(
 	storage: AuthStorage,
 	provider: string,
-	sessionId: string,
+	_sessionId: string,
 	apiKey: string,
 ): string {
-	const identity = storage.oauth.identity(provider, sessionId);
+	const identity = storage.getCredentialIdentityMatchingApiKey(provider, apiKey);
 	if (identity) {
-		return `oauth:${JSON.stringify([
-			identity.accountId ?? "",
-			identity.email ?? "",
-			identity.projectId ?? "",
-			identity.orgId ?? "",
-		])}`;
+		return `oauth:${identity}`;
 	}
 	return `key:${Bun.hash(apiKey).toString(36)}`;
 }

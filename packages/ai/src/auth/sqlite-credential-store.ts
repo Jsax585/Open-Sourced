@@ -199,6 +199,19 @@ export function resolveCredentialIdentityKey(provider: string, credential: AuthC
 	return resolveProviderCredentialIdentityKey(provider, extractOAuthCredentialIdentifiers(credential));
 }
 
+/** Stateful provider objects also belong to a project/workspace, not only a login identity. */
+export function resolveCredentialStateScopeKey(provider: string, credential: AuthCredential): string | null {
+	if (credential.type !== "oauth") return null;
+	const identity = resolveCredentialIdentityKey(provider, credential);
+	if (identity === null) return null;
+	const identifiers = extractOAuthCredentialIdentifiers(credential);
+	return JSON.stringify([
+		identity,
+		identifiers.find(id => id.startsWith("project:")) ?? "",
+		identifiers.find(id => id.startsWith("org:")) ?? "",
+	]);
+}
+
 function resolveRowCredentialIdentityKey(provider: string, row: AuthRow): string | null {
 	const identityKey = normalizeStoredIdentityKey(row.identity_key);
 	if (identityKey) return identityKey;

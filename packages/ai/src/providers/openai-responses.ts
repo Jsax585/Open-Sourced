@@ -554,14 +554,15 @@ const streamOpenAIResponsesOnce = (
 			// validation rather than silently continuing a different stored chain.
 			const clientPreviousResponseId = options?.previousResponseId;
 			let chainedInternal = false;
-			let chained: OpenAIResponsesChainedParams = clientPreviousResponseId !== undefined
-				? {
-						params: { ...params, previous_response_id: clientPreviousResponseId },
-						previousResponseId: clientPreviousResponseId,
-					}
-				: chainState && !chainState.disabled
-					? buildOpenAIResponsesChainedParams(params, trailingScaffoldingItems, chainState)
-					: { params };
+			let chained: OpenAIResponsesChainedParams =
+				clientPreviousResponseId !== undefined
+					? {
+							params: { ...params, previous_response_id: clientPreviousResponseId },
+							previousResponseId: clientPreviousResponseId,
+						}
+					: chainState && !chainState.disabled
+						? buildOpenAIResponsesChainedParams(params, trailingScaffoldingItems, chainState)
+						: { params };
 			chainedInternal = chained.previousResponseId !== undefined && clientPreviousResponseId === undefined;
 			sentPreviousResponseId = chained.previousResponseId;
 			const idleTimeoutMs =
@@ -722,21 +723,22 @@ const streamOpenAIResponsesOnce = (
 							// subsequent previous_response_id continuations.
 							else if (activeParams.store === true) fallbackParams.store = true;
 							const fallbackClientPreviousResponseId = options?.previousResponseId;
-							let fallbackChained: OpenAIResponsesChainedParams = fallbackClientPreviousResponseId !== undefined
-								? {
-										params: {
-											...fallbackParams,
-											previous_response_id: fallbackClientPreviousResponseId,
-										},
-										previousResponseId: fallbackClientPreviousResponseId,
-									}
-								: chainState && !chainState.disabled
-									? buildOpenAIResponsesChainedParams(
-											fallbackParams,
-											fallbackBuilt.trailingScaffoldingItems,
-											chainState,
-										)
-									: { params: fallbackParams };
+							let fallbackChained: OpenAIResponsesChainedParams =
+								fallbackClientPreviousResponseId !== undefined
+									? {
+											params: {
+												...fallbackParams,
+												previous_response_id: fallbackClientPreviousResponseId,
+											},
+											previousResponseId: fallbackClientPreviousResponseId,
+										}
+									: chainState && !chainState.disabled
+										? buildOpenAIResponsesChainedParams(
+												fallbackParams,
+												fallbackBuilt.trailingScaffoldingItems,
+												chainState,
+											)
+										: { params: fallbackParams };
 							chainedInternal =
 								fallbackChained.previousResponseId !== undefined &&
 								fallbackClientPreviousResponseId === undefined;
@@ -1321,9 +1323,7 @@ export function buildParams(
 				format: {
 					type: "json_schema",
 					name: format.json_schema.name ?? "response",
-					...(format.json_schema.description !== undefined
-						? { description: format.json_schema.description }
-						: {}),
+					...(format.json_schema.description !== undefined ? { description: format.json_schema.description } : {}),
 					schema: format.json_schema.schema,
 					...(format.json_schema.strict !== undefined ? { strict: format.json_schema.strict } : {}),
 				} as never,

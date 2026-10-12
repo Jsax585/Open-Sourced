@@ -1160,6 +1160,8 @@ export interface AssistantMessage {
 	errorMessage?: string;
 	/** Stable recovery-classification text when errorMessage includes display-only diagnostics. */
 	errorClassificationMessage?: string;
+	/** Explicit provider retry intent retained through serialization. */
+	errorRetryable?: boolean;
 	/** True only when an exact request-body-read timeout failed on a full Responses replay, not a previous-response delta. */
 	requestBodyReadTimeoutFullReplay?: boolean;
 	/** Per-tool abort messages used when an aborted assistant turn needs different placeholder results per tool call. */
