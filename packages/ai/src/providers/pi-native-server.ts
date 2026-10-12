@@ -73,6 +73,7 @@ const ALLOWED_OPTION_KEYS: ReadonlySet<keyof SimpleStreamOptions> = new Set([
 	"logitBias",
 	"user",
 	"responseFormat",
+	"storeResponses",
 	"streamFirstEventTimeoutMs",
 	"streamIdleTimeoutMs",
 	"reasoning",

@@ -86,7 +86,7 @@ for (const mode of ["chat", "chat-no-sampling", "responses"] as const) {
 		if (mode === "chat-no-sampling") model.compat = { ...model.compat, supportsSamplingParams: false };
 		const gateway = startAuthGateway({
 			bind: "127.0.0.1:0",
-			bearerTokens: ["t"],
+			bearerTokens: ["gateway-options-fixture-token"],
 			storage,
 			resolveModel: () => model,
 			version: "test",
@@ -95,7 +95,7 @@ for (const mode of ["chat", "chat-no-sampling", "responses"] as const) {
 		try {
 			const response = await fetch(`${gateway.url}/v1/chat/completions`, {
 				method: "POST",
-				headers: { Authorization: "Bearer t", "Content-Type": "application/json" },
+				headers: { Authorization: "Bearer gateway-options-fixture-token", "Content-Type": "application/json" },
 				body: JSON.stringify({
 					model: model.id,
 					messages: [{ role: "user", content: "hello" }],

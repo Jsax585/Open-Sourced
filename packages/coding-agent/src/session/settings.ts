@@ -23,8 +23,10 @@ import {
 } from "../tiny/dtype";
 import { DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS, MAX_WEB_SEARCH_TIMEOUT_SECONDS } from "../web/search/types";
 import { DEFAULT_USAGE_RESERVE_PCT } from "@oh-my-pi/pi-ai/auth-storage";
+import { configureProviderStoreResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import { configureProviderMaxInFlightRequests } from "@oh-my-pi/pi-ai/stream";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
+import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "@oh-my-pi/pi-tui/thinking";
 
 const EMPTY_STRING_ARRAY: string[] = [];
@@ -215,6 +217,19 @@ export const cfgHideThinkingBlock = register({
 		group: "Thinking",
 		label: "Hide Thinking Blocks",
 		description: "Hide thinking blocks in assistant responses",
+	},
+});
+
+export const cfgExpandThinkingBlocks = register({
+	id: "expandThinkingBlocks",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "model",
+		group: "Thinking",
+		label: "Expand Thinking Blocks",
+		description: "Keep finished thinking blocks expanded instead of collapsing them when the turn ends",
+		condition: "nativeRendering",
 	},
 });
 
@@ -706,8 +721,9 @@ export const cfgRetryWaitForUsageReset = register({
 		tab: "model",
 		group: "Retry & Fallback",
 		label: "Wait For Usage Reset",
-		description:
-			"When a provider reports usage-limit exhaustion with a reset time (5-hour or weekly quota windows on any provider), sleep until the reset instead of failing fast past retry.maxDelayMs. Waits are abortable (Esc) but also hold subagents, so leave off for unattended runs.",
+		get description() {
+			return `When a provider reports usage-limit exhaustion with a reset time (5-hour or weekly quota windows on any provider), sleep until the reset instead of failing fast past retry.maxDelayMs. Waits are abortable (${formatKeyHint("escape")}) but also hold subagents, so leave off for unattended runs.`;
+		},
 	},
 });
 
@@ -720,6 +736,32 @@ export const cfgRetryModelFallback = register({
 		group: "Retry & Fallback",
 		label: "Retry Model Fallback",
 		description: "Allow retry recovery to switch to configured fallback models",
+	},
+});
+
+export const cfgRetryFallbackOn = register({
+	id: "retry.fallbackOn",
+	type: "enum",
+	values: ["any", "usage-limit", "except-usage-limit"] as const,
+	default: "any",
+	ui: {
+		tab: "model",
+		group: "Retry & Fallback",
+		label: "Fallback Trigger",
+		description: "Which failed requests may switch to a configured fallback model",
+		options: [
+			{ value: "any", label: "Any error", description: "Every provider error may switch models" },
+			{
+				value: "usage-limit",
+				label: "Usage limits only",
+				description: "Switch only on a usage limit; retry other errors on the same model, then surface them",
+			},
+			{
+				value: "except-usage-limit",
+				label: "All but usage limits",
+				description: "Wait out or surface a usage limit; switch on other errors",
+			},
+		],
 	},
 });
 
@@ -830,6 +872,7 @@ export const cfgRetry = combine({
 	maxDelayMs: cfgRetryMaxDelayMs,
 	waitForUsageReset: cfgRetryWaitForUsageReset,
 	modelFallback: cfgRetryModelFallback,
+	fallbackOn: cfgRetryFallbackOn,
 	usageAwareFallback: cfgRetryUsageAwareFallback,
 	usageReservePct: cfgRetryUsageReservePct,
 	usageReservePolicy: cfgRetryUsageReservePolicy,
@@ -854,8 +897,9 @@ export const cfgProvidersAnthropicServerSideFallback = register({
 /**
  * Anthropic subscription slow mode (`off` | `auto`). Deliberately has no
  * `/settings` UI: `/slow on|off` on an Anthropic model is the only switch.
- * `auto` switches to lower-priority service automatically when a Claude
- * subscription hits its 5-hour limit and Anthropic offers it.
+ * `auto` switches to low priority automatically when a Claude subscription
+ * hits its 5-hour limit and Anthropic offers it. Wrap-up allowance tracking
+ * runs either way; this only gates the low-priority lane.
  */
 export const cfgProvidersAnthropicSlowMode = register({
 	id: "providers.anthropic.slowMode",
@@ -1081,6 +1125,23 @@ export const cfgProvidersOpenaiLiveSteering = register({
 	},
 });
 
+export const cfgProvidersMuseCodeStoreResponses = register({
+	id: "providers.muse-code.storeResponses",
+	type: "boolean",
+	default: false,
+	env: "PI_MUSE_STORE_RESPONSES",
+	ui: {
+		tab: "providers",
+		group: "Protocol",
+		label: "Muse Code Stored Responses",
+		description:
+			"Store Muse Code results on Meta's servers so a turn whose connection drops is recovered instead of re-run. Stored runs keep prompts and outputs on Meta's side.",
+	},
+});
+// Process-wide too, so side requests that call `completeSimple`/`streamSimple`
+// directly (titles, commit messages, memories) follow the setting.
+effect(cfgProvidersMuseCodeStoreResponses, enabled => configureProviderStoreResponses({ "muse-code": enabled }));
+
 export const cfgProvidersCacheRetention = register({
 	id: "providers.cacheRetention",
 	type: "enum",
@@ -1097,20 +1158,47 @@ export const cfgProvidersCacheRetention = register({
 				value: "auto",
 				label: "Auto",
 				description:
-					"Provider default — Anthropic OAuth subscriber sessions default to 1h, API keys use 5m kept warm by idle keep-alive refreshes; PI_CACHE_RETENTION still applies",
+					"Provider default — Anthropic OAuth subscriber sessions default to 1h, API keys use 5m; PI_CACHE_RETENTION still applies",
 			},
 			{
 				value: "short",
 				label: "Short (5m)",
-				description:
-					"Cheapest cache writes; Anthropic keeps the entry warm with bounded keep-alive refreshes while idle",
+				description: "Cheapest cache writes; pair with cache warming to keep short entries alive while idle",
 			},
 			{
 				value: "long",
 				label: "Long (1h)",
-				description: "1h TTL where the provider supports it; pricier writes, no keep-alive refresh requests",
+				description: "1h TTL where the provider supports it; pricier writes, only warmed during active runs",
 			},
 			{ value: "none", label: "Off", description: "Disable prompt caching and cache-affinity routing" },
+		],
+	},
+});
+
+export const cfgProvidersCacheWarming = register({
+	id: "providers.cacheWarming",
+	type: "enum",
+	values: ["off", "streaming", "idle"] as const,
+	default: "idle",
+	ui: {
+		tab: "providers",
+		group: "Protocol",
+		label: "Cache Warming",
+		description:
+			"Re-send the last request with a one-token output budget shortly before its prompt-cache entry expires",
+		options: [
+			{ value: "off", label: "Off", description: "Disable cache warming" },
+			{
+				value: "streaming",
+				label: "Streaming",
+				description: "Protect expensive prefixes during long tool executions; stops when the agent settles",
+			},
+			{
+				value: "idle",
+				label: "Idle",
+				description:
+					"Also refresh 5-minute entries between runs while the expected savings stay above the cost floor",
+			},
 		],
 	},
 });
@@ -1217,12 +1305,13 @@ export const cfgCodexResetsAutoRedeem = register({
 		group: "Services",
 		label: "Codex Auto-Redeem Saved Resets",
 		description:
-			"Spend saved Codex rate-limit resets automatically: restore an account blocked by an exhausted 5h or weekly window when a turn is stuck and no other account can take over, and salvage credits that are about to expire. unset asks before the first spend, yes spends without prompting, and no disables both checks.",
+			"Spend saved Codex rate-limit resets automatically: restore an account blocked by an exhausted 5h or weekly window when a turn is stuck and no other account can take over, and salvage credits that are about to expire. unset asks before the first spend (with no prompt UI, it spends only a reset expiring within 5 minutes), yes spends without prompting, and no disables both checks.",
 		options: [
 			{
 				value: "unset",
 				label: "Unset",
-				description: "Check eligibility, then ask before spending the first saved reset.",
+				description:
+					"Check eligibility, then ask before spending the first saved reset. With no prompt UI, spend only a reset expiring within 5 minutes.",
 			},
 			{ value: "yes", label: "Yes", description: "Spend eligible saved resets without prompting." },
 			{ value: "no", label: "No", description: "Do not run the saved-reset auto-redeem check." },
@@ -1265,7 +1354,7 @@ export const cfgCodexResetsSalvageHorizonHours = register({
 		group: "Services",
 		label: "Codex Reset Salvage Horizon",
 		description:
-			"Spend a saved Codex reset automatically when it would otherwise expire within this many hours and either chat window (5h or weekly) has meaningful usage to restore (0 disables expiry salvage).",
+			"With auto-redeem enabled, spend a saved Codex reset within this many hours of expiry when either chat window has meaningful usage. 0 disables early salvage; credits expiring within 5 minutes are still attempted regardless of usage.",
 	},
 });
 
@@ -1291,12 +1380,13 @@ export const cfgClaudeResetsAutoRedeem = register({
 		group: "Services",
 		label: "Claude Auto-Redeem Resets",
 		description:
-			"Spend eligible Claude Cedar or Juniper resets automatically. Cedar is spent only for covered limits; Juniper can only recover a sole 5-hour block. unset asks before the first spend, yes spends without prompting, and no disables blocked recovery and expiry salvage.",
+			"Spend eligible Claude Cedar or Juniper resets automatically. Cedar is spent only for covered limits; Juniper can only recover a sole 5-hour block. unset asks before the first spend (with no prompt UI, it spends only a reset expiring within 5 minutes), yes spends without prompting, and no disables blocked recovery and expiry salvage.",
 		options: [
 			{
 				value: "unset",
 				label: "Unset",
-				description: "Check live eligibility, then ask before spending the first Claude reset.",
+				description:
+					"Check live eligibility, then ask before spending the first Claude reset. With no prompt UI, spend only a reset expiring within 5 minutes.",
 			},
 			{ value: "yes", label: "Yes", description: "Spend eligible Claude resets without prompting." },
 			{ value: "no", label: "No", description: "Do not run Claude reset auto-redeem checks." },
@@ -1326,7 +1416,7 @@ export const cfgClaudeResetsKeepCredits = register({
 		group: "Services",
 		label: "Claude Auto-Redeem Reserve",
 		description:
-			"Keep at least this many Claude resets banked (0 allows the last eligible reset to be spent automatically). The reserve also applies to expiry salvage.",
+			"Keep at least this many Claude resets banked (0 allows the last eligible reset to be spent automatically). The reserve applies to early salvage, but not to eligible resets expiring within 5 minutes.",
 	},
 });
 
@@ -1339,7 +1429,7 @@ export const cfgClaudeResetsSalvageHorizonHours = register({
 		group: "Services",
 		label: "Claude Reset Salvage Horizon",
 		description:
-			"Use a server-selected Cedar reset within this many hours of expiry only when its covered windows have meaningful usage to restore and the grant permits early use or a covered window is exhausted (0 disables salvage).",
+			"With auto-redeem enabled, use a server-selected Cedar reset within this many hours of expiry when its covered windows have meaningful usage. 0 disables early salvage; eligible Cedar or Juniper resets expiring within 5 minutes are still attempted regardless of usage or reserve. Provider limit requirements still apply.",
 	},
 });
 
@@ -1382,7 +1472,7 @@ export const cfgThinkingBudgetsXhigh = register({ id: "thinkingBudgets.xhigh", t
 
 export const cfgThinkingBudgetsMax = register({ id: "thinkingBudgets.max", type: "number", default: 32768 });
 
-/** Token budget per thinking level (`thinkingBudgets.*`), passed to providers on every request. */
+/** Token budget per thinking level (`thinkingBudgets.*`) on transports that accept reasoning token budgets. */
 export const cfgThinkingBudgets = combine({
 	minimal: cfgThinkingBudgetsMinimal,
 	low: cfgThinkingBudgetsLow,

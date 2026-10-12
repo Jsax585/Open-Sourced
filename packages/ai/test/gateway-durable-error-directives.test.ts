@@ -1,5 +1,4 @@
-import { afterEach, expect, it, vi } from "bun:test";
-import { scheduler } from "node:timers/promises";
+import { expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,8 +8,6 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { classifyGatewayError } from "../src/error/gateway";
 import { streamAnthropic } from "../src/providers/anthropic";
 import { streamOpenAICompletions } from "../src/providers/openai-completions";
-
-afterEach(() => vi.restoreAllMocks());
 
 it("retains an explicit no-retry directive on the gateway's actual HTTP error", async () => {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-retry-directive-"));
@@ -109,7 +106,6 @@ for (const [status, directive, disposition] of [
 	[409, undefined, "provider_transient"],
 ] as const) {
 	it(`preserves ${status}/${directive ?? "default"} retry intent after a real provider stream is finalized and serialized`, async () => {
-		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
 		const model = buildModel({
 			id: "claude-sonnet-4-6",
 			name: "Fixture",
@@ -127,6 +123,7 @@ for (const [status, directive, disposition] of [
 			{ messages: [{ role: "user", content: "fixture", timestamp: 0 }] },
 			{
 				apiKey: "fixture-key",
+				providerRetryWait: async () => {},
 				fetch: async () =>
 					Response.json(
 						{ type: "error", error: { type: "api_error", message: "fixture upstream failure" } },
