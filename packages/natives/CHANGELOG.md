@@ -34,6 +34,7 @@
 - Fixed a macOS background `press()`, `perform("AXShowMenu")`, click, mouse hold or drag on a menu button or popup button leaving its menu open, which took every key from the user's app; the menu now closes and the call throws `InputFailed` listing its items ([#15185](https://github.com/can1357/oh-my-pi/pull/15185) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed a macOS `menu` path or background `press()` on a popup in a system Open or Save panel, such as Automator's Save sheet Where: popup, failing with "its items could not be read" or "opened no menu", because the menu opens in `openAndSavePanelService` ([#15185](https://github.com/can1357/oh-my-pi/pull/15185) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed macOS `setValue` on a background popup button typing the user's keys into the target app: the menu it opens now ends with `AXCancel` right after the item is pressed, instead of flashing the item and fading out for about a third of a second while it holds the keyboard ([#15185](https://github.com/can1357/oh-my-pi/pull/15185) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed a macOS background AX action that reports an error yet brings its app forward, such as `AXOpen` on a file in Chrome's Open panel, leaving that app in front of the user's for good; the focus guard now keeps watching after a failed action and sends the app back ([#15184](https://github.com/can1357/oh-my-pi/pull/15184) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.9.2] - 2026-10-11
 
