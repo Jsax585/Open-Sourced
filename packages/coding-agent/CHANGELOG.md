@@ -6,6 +6,10 @@
 
 - Fixed incremental subagent results rejecting legal array batches or open-union values, mixing values from multiple labels, dropping required nulls in combined output schemas, and misclassifying positional array prefixes or valid mixed scalar values ([#14925](https://github.com/can1357/oh-my-pi/pull/14925) by [@vavilonska](https://github.com/vavilonska))
 
+### Added
+
+- Added a Copy button that leads the turn footer under an answer in Tern (`⧉ · 2m13s · 71K tok · $0.85 this turn`, in place of the clock), which copies that answer
+
 ## [18.10.0] - 2026-10-12
 
 ### Added
