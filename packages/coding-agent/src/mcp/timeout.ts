@@ -139,7 +139,7 @@ export function resolveMCPReadinessTimeoutMs(serverTimeouts: readonly (MCPTimeou
 		const connect = resolveMCPTimeoutMs(config, "connect");
 		const catalog = resolveMCPTimeoutMs(config, "catalog");
 		if (connect === 0 || catalog === 0) return 0;
-		budget = Math.max(budget, Math.min(connect + catalog, MAX_TIMER_DELAY_MS));
+		budget = Math.max(budget, connect + catalog);
 	}
 	return budget;
 }

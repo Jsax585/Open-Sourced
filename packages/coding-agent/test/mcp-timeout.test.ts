@@ -259,6 +259,8 @@ describe("MCP phase timeouts", () => {
 
 		// A larger per-server deadline is not cut off by the global ones; the slowest server sets the budget.
 		expect(resolveMCPReadinessTimeoutMs([undefined, { connect: 100_000 }, 5_000])).toBe(120_000);
+		// The sum is not clamped to the timer range: the barrier waits in chunks.
+		expect(resolveMCPReadinessTimeoutMs([{ connect: 1_500_000_000, catalog: 1_500_000_000 }])).toBe(3_000_000_000);
 
 		setMCPGlobalTimeouts({ connect: 0, catalog: 9_000 });
 		expect(resolveMCPReadinessTimeoutMs([])).toBe(0);
