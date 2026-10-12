@@ -4577,6 +4577,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			extensionRunner,
 			getEvalPreludes,
 			evalToolSession: toolSession,
+			getContextFiles: () => toolSession.contextFiles,
 			customCommands: customCommandsResult.commands,
 			skills,
 			skillDescriptions,

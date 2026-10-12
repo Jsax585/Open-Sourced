@@ -21,6 +21,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { NESTED_CONTEXT_FILE_MAX_CHARS, NestedContextInjector } from "@oh-my-pi/pi-coding-agent/session/nested-context";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { inheritedContextFiles } from "@oh-my-pi/pi-coding-agent/task/executor";
+import { rebaseContextFiles } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
 import type { ContextFileEntry, ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
@@ -387,6 +388,37 @@ describe("contextFiles.onTouch", () => {
 		expect(child.developerTexts).toEqual([]);
 	});
 
+	it("loads a nested file whose path a system-prompt context file only mentions", async () => {
+		// Guards the system-prompt dedupe: context file bodies render unescaped, so a doc example
+		// of the repo-rules markup naming the nested file must not stand in for its rules.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "a" });
+		const mention = {
+			path: path.join(repo, "AGENTS.md"),
+			content: `Example: <file path="${path.join(repo, "pkg/AGENTS.md")}">rules</file>`,
+		};
+		const result = await run(tempDir, repo, [[{ name: "read", arguments: { path: "pkg/a.ts" } }]], ON, [mention]);
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
+	});
+
+	it("does not load an inherited file again in an isolated child's copy of the repo", async () => {
+		// Guards isolated subagents: the child runs in a worktree copy and discovers the file at
+		// the copy's path, so an inherited entry still naming the original would load it twice.
+		setup({
+			"pkg/CLAUDE.md": "PKG-CANARY",
+			"pkg/a.ts": "a",
+			"copy/pkg/CLAUDE.md": "PKG-CANARY",
+			"copy/pkg/a.ts": "a",
+		});
+		const parent = await run(tempDir, repo, [[{ name: "read", arguments: { path: "pkg/a.ts" } }]], ON);
+		expect(parent.carried).toEqual([{ path: path.join(repo, "pkg/CLAUDE.md"), content: "PKG-CANARY" }]);
+
+		const copy = path.join(repo, "copy");
+		const inherited = rebaseContextFiles(parent.carried, repo, copy);
+		const child = await run(tempDir, copy, [[{ name: "read", arguments: { path: "pkg/a.ts" } }]], ON, inherited);
+		expect(child.contexts[0]?.systemPrompt?.join("\n")).toContain("PKG-CANARY");
+		expect(child.developerTexts).toEqual([]);
+	});
+
 	it("hands a fully read context file to subagents with the file's content", async () => {
 		// Guards inheritance of the read-instead-of-injected path: the child must get the file,
 		// without the line prefixes of the parent's read output.
@@ -729,7 +761,8 @@ describe("NestedContextInjector batch order", () => {
 			settings: Settings.isolated(ON),
 			cwd: () => path.join(repo, roots.cwd ?? ""),
 			additionalDirectories: () => (roots.additional ?? []).map(dir => path.join(repo, dir)),
-			window: () => ({ messages: [], systemPrompt: [] }),
+			promptContextFiles: () => [],
+			window: () => [],
 			emitNotice: () => {},
 		});
 		const toolCalls = files.map((file, index) => ({

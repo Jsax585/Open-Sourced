@@ -2117,7 +2117,8 @@ export class AgentSession implements SettingsScope {
 			settings: this.settings,
 			cwd: () => this.sessionManager.getCwd(),
 			additionalDirectories: () => this.sessionManager.getAdditionalDirectories(),
-			window: () => ({ messages: this.agent.state.messages, systemPrompt: this.agent.state.systemPrompt }),
+			promptContextFiles: () => config.getContextFiles?.()?.map(file => file.path) ?? [],
+			window: () => this.agent.state.messages,
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 		});
 		this.#extensionRunner?.setToolCallPreflight?.({

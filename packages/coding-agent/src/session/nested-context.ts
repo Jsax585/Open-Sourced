@@ -7,14 +7,15 @@
  * such a directory delivers that file as trusted passive context: a developer
  * message after the tool batch, never part of the tool result.
  *
- * Dedupe state is the conversation itself: a file is loaded when the system
- * prompt lists it, or the live context still holds its `<nested-context path="…">`
- * block in a developer message (keyed by absolute path, so a cwd change cannot
- * alias it; tool output is never trusted to carry one) or a full read of it
- * without `@` imports. Compaction that drops the block re-arms the
- * file without bookkeeping. Subagents inherit the parent's loaded files,
- * delivered or fully read, through {@link NestedContextInjector.carried}, which
- * lands them in the child's system prompt.
+ * Dedupe state is the conversation itself: a file is loaded when it is one of
+ * the context files the session's system prompt is built from, or the live
+ * context still holds its `<nested-context path="…">` block in a developer
+ * message (keyed by absolute path, so a cwd change cannot alias it; tool output
+ * is never trusted to carry one) or a full read of it without `@` imports.
+ * Compaction that drops the block re-arms the file without bookkeeping.
+ * Subagents inherit the parent's loaded files, delivered or fully read, through
+ * {@link NestedContextInjector.carried}, which lands them in the child's system
+ * prompt and so in its context files.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -59,8 +60,13 @@ export interface NestedContextHost {
 	cwd(): string;
 	/** Additional workspace roots, whose context files are also in the system prompt. */
 	additionalDirectories(): readonly string[];
+	/**
+	 * Absolute paths of the context files the system prompt is built from. Read
+	 * structurally, never from the prompt text, which file bodies can spoof.
+	 */
+	promptContextFiles(): readonly string[];
 	/** The live window, for calls that run outside the agent loop. */
-	window(): { messages: readonly AgentMessage[]; systemPrompt: readonly string[] };
+	window(): readonly AgentMessage[];
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
 }
 
@@ -83,7 +89,6 @@ interface Touch {
 	/** The batch whose developer message the call's blocks join. */
 	batch: BatchState;
 	messages: readonly AgentMessage[];
-	systemPrompt: readonly string[];
 	/** An eval script's call: its result stays in the script unless the script prints it. */
 	bridged?: true;
 }
@@ -162,7 +167,6 @@ export class NestedContextInjector {
 					details: ctx.result.details,
 					batch,
 					messages: ctx.context.messages,
-					systemPrompt: ctx.context.systemPrompt,
 				});
 		if (own) return own.then(() => this.#settle(batch, id));
 		const text = this.#settle(batch, id);
@@ -190,9 +194,9 @@ export class NestedContextInjector {
 		const call = this.#bridged.get(toolCallId);
 		this.#bridged.delete(toolCallId);
 		if (!call || isError) return;
-		const { messages, systemPrompt } = this.#host.window();
+		const messages = this.#host.window();
 		const batch = this.#batchFor(messages.findLast(message => message.role === "assistant"));
-		await this.#touch({ ...call, details: result.details, batch, messages, systemPrompt, bridged: true });
+		await this.#touch({ ...call, details: result.details, batch, messages, bridged: true });
 		if (batch.outstanding.size > 0 || !context?.addAdditionalContext) return;
 		const text = this.#drain(batch);
 		if (text) context.addAdditionalContext(text);
@@ -296,13 +300,14 @@ export class NestedContextInjector {
 
 		const { batch } = touch;
 		const window = scanWindow(touch.messages);
+		const inPrompt = new Set(this.#host.promptContextFiles());
 		// Claims and queueing stay synchronous, so the queue is in claim order.
 		for (const file of files) {
 			if (batch.claimed.has(file.path) || window.blocks.has(file.path)) continue;
 			// A raw read shows `@` imports unexpanded, so it only stands in for a file without them.
 			const plain = file.content === file.raw;
 			if (plain && (window.fullReads.has(file.path) || batch.fullReads.has(file.path))) continue;
-			if (inSystemPrompt(touch.systemPrompt, file.path)) continue;
+			if (inPrompt.has(file.path)) continue;
 			batch.claimed.add(file.path);
 			const display = displayPath(cwd, file.path);
 			const block = prompt.render(nestedContextFileTemplate, {
@@ -487,12 +492,6 @@ function scanWindow(messages: readonly AgentMessage[]): { blocks: Map<string, st
 	return { blocks, fullReads };
 }
 
-/** Whether the system prompt's `<repo-rules>` already carries `filePath`. */
-function inSystemPrompt(systemPrompt: readonly string[], filePath: string): boolean {
-	const marker = `<file path="${filePath}">`;
-	return systemPrompt.some(part => part.includes(marker));
-}
-
 function messageText(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
@@ -619,7 +618,8 @@ function ownerDirectory(filePath: string): string {
 	return dir;
 }
 
-function isStrictlyBelow(parent: string, child: string): boolean {
+/** Whether `child` lies strictly below `parent`, lexically. */
+export function isStrictlyBelow(parent: string, child: string): boolean {
 	const relative = path.relative(parent, child);
 	// `..draft` is a child; only `..` itself or a `../` prefix leaves `parent`.
 	return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);

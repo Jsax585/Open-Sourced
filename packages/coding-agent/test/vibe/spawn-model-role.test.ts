@@ -1,5 +1,5 @@
 /**
- * Contract: a vibe worker's spawn options carry the pre-expansion model role.
+ * Contract: a vibe worker's spawn options carry what the child inherits from its parent.
  *
  * `#resolveWorker` expands the bundled worker's role alias (`good` -> `task` ->
  * `@task`, `fast` -> `sonic` -> `@smol`) into concrete patterns, so the role
@@ -19,7 +19,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import type { VibeCli } from "@oh-my-pi/pi-tui/tools/vibe";
 import { VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
 
-function makeParentSession(settings: Settings): ToolSession {
+function makeParentSession(settings: Settings, overrides: Partial<ToolSession>): ToolSession {
 	return {
 		cwd: "/tmp",
 		settings,
@@ -30,11 +30,16 @@ function makeParentSession(settings: Settings): ToolSession {
 		getArtifactsDir: () => null,
 		taskDepth: 0,
 		enableLsp: false,
+		...overrides,
 	} as unknown as ToolSession;
 }
 
 /** Spawn one worker and capture the ExecutorOptions the vibe path hands the executor. */
-async function spawnAndCaptureOptions(cli: VibeCli, settings: Settings): Promise<ExecutorOptions> {
+async function spawnAndCaptureOptions(
+	cli: VibeCli,
+	settings: Settings,
+	overrides: Partial<ToolSession> = {},
+): Promise<ExecutorOptions> {
 	const captured = Promise.withResolvers<ExecutorOptions>();
 	vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 		captured.resolve(options);
@@ -55,11 +60,11 @@ async function spawnAndCaptureOptions(cli: VibeCli, settings: Settings): Promise
 	});
 
 	const registry = VibeSessionRegistry.global();
-	await registry.spawn(makeParentSession(settings), { cli, prompt: "work" });
+	await registry.spawn(makeParentSession(settings, overrides), { cli, prompt: "work" });
 	return captured.promise;
 }
 
-describe("vibe worker spawn model role", () => {
+describe("vibe worker spawn options", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		VibeSessionRegistry.resetGlobalForTests();
@@ -120,5 +125,16 @@ describe("vibe worker spawn model role", () => {
 		);
 
 		expect(options.oauthAccountPools).toEqual({ anthropic: ["email:a@example.com|org:org-a"] });
+	});
+
+	it("forwards the parent's additional workspace roots", async () => {
+		// Without them the child neither lists the roots nor loads context files below them on touch.
+		const options = await spawnAndCaptureOptions(
+			"good",
+			Settings.isolated({ modelRoles: { default: "anthropic/opus", task: "anthropic/sonnet" } }),
+			{ additionalDirectories: ["/other"] },
+		);
+
+		expect(options.additionalDirectories).toEqual(["/other"]);
 	});
 });

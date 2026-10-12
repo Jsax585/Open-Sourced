@@ -200,7 +200,7 @@ Project context for `packages/api/`, loaded automatically because a tool touched
 - Files under hidden directories (`.git/`, `.venv/`, …) and `node_modules/` never load. Neither do files at or above the current directory or an additional workspace root, because those are already in the system prompt.
 - A context file whose real path, after symlinks, is outside every workspace root never loads, so a symlinked directory or file cannot pull in a third-party `AGENTS.md`.
 - Search and shell tools (`grep`, `glob`, `bash`) do not trigger loading.
-- Subagents start with the nested files their parent has loaded or read in full and still holds, plus any nested files the parent itself inherited, in their system prompt, and load further files on their own touches. As with the startup files, `AGENTS.md` files are not passed on; a subagent loads the ones it needs when it touches their directories.
+- Subagents start with the nested files their parent has loaded or read in full and still holds, plus any nested files the parent itself inherited, in their system prompt, and load further files on their own touches. An isolated subagent sees those files at their paths in its copy of the repository. As with the startup files, `AGENTS.md` files are not passed on; a subagent loads the ones it needs when it touches their directories.
 
 The setting is off by default.
 

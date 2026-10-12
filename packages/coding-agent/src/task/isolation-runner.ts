@@ -27,7 +27,8 @@ import isolationErrorTemplate from "../prompts/tools/isolation-error.md" with { 
 import isolationSummaryTemplate from "../prompts/tools/isolation-summary.md" with { type: "text" };
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry } from "../registry/agent-registry";
-import type { ToolSession } from "../tools";
+import { isStrictlyBelow } from "../session/nested-context";
+import type { ContextFileEntry, ToolSession } from "../tools";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import { trackLateCleanup } from "../utils/late-cleanup";
 import type { ExecutorOptions } from "./executor";
@@ -93,6 +94,24 @@ function rememberAgentArtifacts(result: SingleResult): SingleResult {
 		nestedPatchPaths: result.nestedPatchPaths,
 	});
 	return { ...result, isolated: true };
+}
+
+/**
+ * Rebase inherited context files from the repo onto its isolated copy, where
+ * the child runs. The child's on-touch loading finds a nested file at its
+ * copy's path, so an entry still naming the original would load it again.
+ * Files outside the repo keep their paths.
+ */
+export function rebaseContextFiles(
+	files: ContextFileEntry[] | undefined,
+	repoRoot: string,
+	isolationDir: string,
+): ContextFileEntry[] | undefined {
+	return files?.map(file =>
+		isStrictlyBelow(repoRoot, file.path)
+			? { ...file, path: path.join(isolationDir, path.relative(repoRoot, file.path)) }
+			: file,
+	);
 }
 
 /**
@@ -458,6 +477,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		const result = await runSubprocess({
 			...opts.baseOptions,
 			worktree: isolationDir,
+			contextFiles: rebaseContextFiles(opts.baseOptions.contextFiles, opts.context.repoRoot, isolationDir),
 			preloadedExtensionPaths: undefined,
 			preloadedPreparedExtensions: undefined,
 			preloadedCustomToolPaths: undefined,

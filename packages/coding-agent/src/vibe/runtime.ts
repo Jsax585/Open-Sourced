@@ -1286,6 +1286,7 @@ export class VibeSessionRegistry {
 		const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(session.settings));
 		return {
 			cwd: session.cwd,
+			additionalDirectories: session.additionalDirectories,
 			agent: record.agent,
 			task: message,
 			assignment: message,
