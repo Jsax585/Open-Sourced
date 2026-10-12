@@ -4,11 +4,12 @@
 
 ### Added
 
-- Added agent-loop forwarding for thinking mode independently from reasoning effort.
+- Added agent-loop forwarding for thinking mode independently from reasoning effort ([#7380](https://github.com/can1357/oh-my-pi/pull/7380) by [@kapral18](https://github.com/kapral18))
 
 ### Fixed
 
-- Fixed the proxy transport dropping `thinkingMode` and `disableReasoning`, so proxied agents ignored a requested thinking-off.
+- Fixed the proxy transport dropping `thinkingMode` and `disableReasoning`, so proxied agents ignored a requested thinking-off ([#7380](https://github.com/can1357/oh-my-pi/pull/7380) by [@kapral18](https://github.com/kapral18))
+
 ## [18.10.3] - 2026-10-12
 
 ### Breaking Changes

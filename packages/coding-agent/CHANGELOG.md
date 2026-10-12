@@ -5,10 +5,19 @@
 ### Added
 
 - Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
+- Added `--effort <off|minimal|low|medium|high|xhigh|max|auto>` as the universal reasoning-intensity flag, and `--thinking <adaptive|default>` as an additive provider thinking-mode selector for models that advertise it (Claude 4.6+/5). Both flags accept unambiguous abbreviations (`--effort xhi`, `--thinking ad`) ([#7380](https://github.com/can1357/oh-my-pi/pull/7380) by [@kapral18](https://github.com/kapral18))
+
+### Changed
+
+- `--thinking` now selects a thinking *mode*; reasoning intensity moved to `--effort`. Effort values passed to `--thinking` (e.g. `--thinking high`, `--thinking off`) still work and are routed to `--effort` with a deprecation warning on stderr. Invalid `--effort` values are reported as usage errors, like invalid `--thinking` values ([#7380](https://github.com/can1357/oh-my-pi/pull/7380) by [@kapral18](https://github.com/kapral18))
+- Thinking-off session state now keeps the last supported reasoning effort available for providers that separate thinking mode from effort ([#7380](https://github.com/can1357/oh-my-pi/pull/7380) by [@kapral18](https://github.com/kapral18))
 
 ### Fixed
 
 - Fixed `read.renderMarkdown` having no effect on plain-file reads: inline read previews now render Markdown files as formatted Markdown instead of numbered source ([#15007](https://github.com/can1357/oh-my-pi/issues/15007)).
+- Fixed `--thinking off` being ignored by Google (Generative AI, Gemini CLI, Vertex), Ollama, Devin, and OpenAI/Anthropic shim OpenAI-format requests ([#7380](https://github.com/can1357/oh-my-pi/pull/7380) by [@kapral18](https://github.com/kapral18))
+- Fixed the thinking selector, RPC, ACP, and extension paths being unable to re-enable thinking after it had been turned off ([#7380](https://github.com/can1357/oh-my-pi/pull/7380) by [@kapral18](https://github.com/kapral18))
+- Fixed thinking state not reaching collab guests, RPC clients, and proxied agents, which showed stale or wrong thinking status ([#7380](https://github.com/can1357/oh-my-pi/pull/7380) by [@kapral18](https://github.com/kapral18))
 
 ### Removed
 
@@ -83,14 +92,11 @@
 - Added `omp session pack`, `omp session unpack` and `omp session moved` to move a session with its artifacts to another machine and continue it there; resuming the copy left behind forks it instead of continuing it
 - Added `omp auth export` and `omp auth import` to carry model sign-ins to another machine
 - Added hiding a pending `ask` question without answering it: `Alt+H` (`app.ask.hide`) or the Hide button in Tern collapses the dialog to one line; the same key, `Enter`, or Show brings it back ([#15400](https://github.com/can1357/oh-my-pi/pull/15400) by [@H4vC](https://github.com/H4vC))
-- Added `--effort <off|minimal|low|medium|high|xhigh|max|auto>` as the universal reasoning-intensity flag, and `--thinking <adaptive|default>` as an additive provider thinking-mode selector for models that advertise it (Claude 4.6+/5). Both flags accept unambiguous abbreviations (`--effort xhi`, `--thinking ad`).
 
 ### Changed
 
 - Local IPC endpoints (daemon broker, LSP mux, IDA hosts, text prediction, `omp stream`, Collab discovery, local model workers) now run on a native transport: owner-only on every platform, including Windows named pipes; on Windows, daemons started by an older omp are not reused, so close older sessions after upgrading.
 - Output hidden behind an open `ask` dialog, command report or todo list now reaches terminal scrollback once it closes, rather than while it is still open ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
-- `--thinking` now selects a thinking *mode*; reasoning intensity moved to `--effort`. Effort values passed to `--thinking` (e.g. `--thinking high`, `--thinking off`) still work and are routed to `--effort` with a deprecation warning on stderr. Invalid `--effort` values are reported as usage errors, like invalid `--thinking` values.
-- Thinking-off session state now keeps the last supported reasoning effort available for providers that separate thinking mode from effort.
 
 ### Fixed
 
@@ -99,9 +105,6 @@
 - Fixed `RpcClient.stop()` occasionally waiting forever because the agent process was never signaled.
 - Fixed blank rows opening under the input after an `ask` dialog, command report or todo list closed in a session that had filled the screen; the transcript now refills the screen ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
 - Fixed blank rows appearing between the last paragraphs of a streamed answer when the turn ended ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
-- Fixed `--thinking off` being ignored by Google (Generative AI, Gemini CLI, Vertex), Ollama, Devin, and OpenAI/Anthropic shim OpenAI-format requests.
-- Fixed the thinking selector, RPC, ACP, and extension paths being unable to re-enable thinking after it had been turned off.
-- Fixed thinking state not reaching collab guests, RPC clients, and proxied agents, which showed stale or wrong thinking status.
 
 ## [18.9.2] - 2026-10-11
 

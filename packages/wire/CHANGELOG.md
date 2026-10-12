@@ -4,8 +4,9 @@
 
 ### Added
 
-- Added an optional `thinkingMode` field to the collab `SessionState` so hosts can broadcast an additive provider thinking mode alongside `thinkingLevel`.
-- Added optional `configured` and `thinkingMode` fields to `ThinkingLevelChangeEntry` for persisted transcript consumers.
+- Added an optional `thinkingMode` field to the collab `SessionState` so hosts can broadcast an additive provider thinking mode alongside `thinkingLevel` ([#7380](https://github.com/can1357/oh-my-pi/pull/7380) by [@kapral18](https://github.com/kapral18))
+- Added optional `configured` and `thinkingMode` fields to `ThinkingLevelChangeEntry` for persisted transcript consumers ([#7380](https://github.com/can1357/oh-my-pi/pull/7380) by [@kapral18](https://github.com/kapral18))
+
 ## [18.10.2] - 2026-10-12
 
 ### Added

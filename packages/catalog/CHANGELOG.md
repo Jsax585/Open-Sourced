@@ -4,7 +4,8 @@
 
 ### Added
 
-- Added the `disabled-thinking-max-effort` compat axis (`compat.disabledThinkingMaxEffort`), the highest effort a `thinking.type: "disabled"` turn keeps; set to `high` for Claude Opus 5 and `max` for Sonnet 5 on the `anthropic` provider, which now use the explicit `disabled` form for thinking off.
+- Added the `disabled-thinking-max-effort` compat axis (`compat.disabledThinkingMaxEffort`), the highest effort a `thinking.type: "disabled"` turn keeps; set to `high` for Claude Opus 5 and `max` for Sonnet 5 on the `anthropic` provider, which now use the explicit `disabled` form for thinking off ([#7380](https://github.com/can1357/oh-my-pi/pull/7380) by [@kapral18](https://github.com/kapral18))
+
 ### Removed
 
 - Removed the Codex `toolMode` model field (`code_mode_only`); Codex discovery no longer maps `tool_mode`
