@@ -121,7 +121,8 @@
           "oneOf": [
             {
               "type": "integer",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 2147483647
             },
             {
               "type": "object",
@@ -130,16 +131,19 @@
                 "connect": {
                   "type": "integer",
                   "minimum": 0,
+                  "maximum": 2147483647,
                   "description": "Transport connect and initialize handshake, in milliseconds."
                 },
                 "catalog": {
                   "type": "integer",
                   "minimum": 0,
+                  "maximum": 2147483647,
                   "description": "Listing tools, prompts, resources and resource templates, in milliseconds."
                 },
                 "execution": {
                   "type": "integer",
                   "minimum": 0,
+                  "maximum": 2147483647,
                   "description": "Tool calls, prompt retrieval and resource reads, in milliseconds."
                 }
               }

@@ -104,5 +104,7 @@ for (const server of [
 		expect(valid({ catalog: -1 })).toBe(false);
 		expect(valid({ catalog: 1.5 })).toBe(false);
 		expect(valid(-1)).toBe(false);
+		expect(valid(3_000_000_000)).toBe(false);
+		expect(valid({ execution: 3_000_000_000 })).toBe(false);
 	});
 }
