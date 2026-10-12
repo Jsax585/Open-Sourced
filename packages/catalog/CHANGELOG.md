@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `local/orukeet`, Oruk's fine-tune of Parakeet TDT 0.6B v3, to the bundled local models as a speech-to-text (`stt`) model ([#15450](https://github.com/can1357/oh-my-pi/pull/15450) by [@roberts-pumpurs](https://github.com/roberts-pumpurs))
+
 ## [18.10.0] - 2026-10-12
 
 ### Changed

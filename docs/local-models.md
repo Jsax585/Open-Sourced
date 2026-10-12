@@ -224,8 +224,9 @@ Use these canonical catalog model ids:
 | `local/whisper-small`            | `onnx-community/whisper-small`                                | transformers.js q8  | ~190 MB  | Balanced multilingual Whisper option       |
 | `local/whisper-large-v3-turbo`   | `onnx-community/whisper-large-v3-turbo`                       | transformers.js q4  | ~600 MB  | Whisper large-v3-turbo, 99 languages       |
 | `local/parakeet-tdt-0.6b-v3`     | `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8`      | sherpa-onnx int8    | ~680 MB  | Default; fast multilingual Parakeet TDT v3 |
+| `local/orukeet`                  | `oruk/orukeet` (`onnx/sherpa-v0.1.0-int8/`)                   | sherpa-onnx int8    | ~670 MB  | Fine-tuned Parakeet TDT v3, 25 languages   |
 
-Kokoro and the transformers.js Whisper models read `providers.tinyModelDevice` / `PI_TINY_DEVICE` and `providers.tinyModelDtype` / `PI_TINY_DTYPE`; the default precision comes from each speech model's spec, not the text models' q4 default. Kokoro maps the device preference to its narrower CPU/WASM/WebGPU set. MLX is a text-model backend, so selecting it leaves speech inference on CPU. Parakeet uses its shipped sherpa-onnx int8 files. Keep `stt.language`, `stt.submitTrigger`, `tts.localVoice`, and the other speech/live settings for behavior; only model selection moved into roles.
+Kokoro and the transformers.js Whisper models read `providers.tinyModelDevice` / `PI_TINY_DEVICE` and `providers.tinyModelDtype` / `PI_TINY_DTYPE`; the default precision comes from each speech model's spec, not the text models' q4 default. Kokoro maps the device preference to its narrower CPU/WASM/WebGPU set. MLX is a text-model backend, so selecting it leaves speech inference on CPU. Parakeet and Orukeet use their shipped sherpa-onnx int8 files. Keep `stt.language`, `stt.submitTrigger`, `tts.localVoice`, and the other speech/live settings for behavior; only model selection moved into roles.
 
 ## Integration notes
 

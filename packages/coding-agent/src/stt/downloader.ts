@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { getTinyModelsCacheDir } from "@oh-my-pi/pi-utils";
 import { sttClient } from "./asr-client";
 import type { SttProgressStatus } from "./asr-protocol";
-import { resolveSttModelSpec } from "./models";
+import { isSherpaModelFilePresent, resolveSttModelSpec, sherpaModelFilePath } from "./models";
 
 export interface DownloadProgress {
 	stage: string;
@@ -43,22 +43,19 @@ export interface SttDownloadProgress {
  * matching `encoder*.onnx` and `decoder*.onnx` shards under `onnx/` (a partial
  * fetch with only one shard, or a bare `config.json`, reads as not-cached); for
  * sherpa-onnx tiers every model file (encoder/decoder/joiner + tokens) must be
- * present (`.part` sidecars from an interrupted fetch are ignored).
+ * present and non-empty at its repo-relative path (`.part` sidecars from an
+ * interrupted fetch are ignored).
  */
 export async function isSttModelCached(key: string): Promise<boolean> {
 	const spec = resolveSttModelSpec(key);
-	const repoDir = path.join(getTinyModelsCacheDir(), spec.repo);
 	if (spec.engine === "sherpa") {
-		try {
-			const root = new Set(await fs.readdir(repoDir));
-			for (const role in spec.files) {
-				if (!root.has(spec.files[role as keyof typeof spec.files])) return false;
-			}
-			return true;
-		} catch {
-			return false;
+		for (const role in spec.files) {
+			const file = sherpaModelFilePath(spec, role as keyof typeof spec.files);
+			if (!(await isSherpaModelFilePresent(file))) return false;
 		}
+		return true;
 	}
+	const repoDir = path.join(getTinyModelsCacheDir(), spec.repo);
 	try {
 		const root = await fs.readdir(repoDir);
 		if (!root.includes("config.json")) return false;

@@ -69,6 +69,17 @@ describe("isSttModelCached completeness", () => {
 		await touch(path.join(repoDir, "tokens.txt"));
 		expect(await downloader.isSttModelCached("parakeet-tdt-0.6b-v3")).toBe(true);
 	});
+
+	it("finds sherpa model files stored under a repo subfolder", async () => {
+		const modelDir = path.join(cacheDir, "oruk/orukeet", "onnx", "sherpa-v0.1.0-int8");
+		await touch(path.join(modelDir, "encoder.int8.onnx"));
+		await touch(path.join(modelDir, "decoder.int8.onnx"));
+		await touch(path.join(modelDir, "joiner.int8.onnx"));
+		expect(await downloader.isSttModelCached("orukeet")).toBe(false);
+
+		await touch(path.join(modelDir, "tokens.txt"));
+		expect(await downloader.isSttModelCached("orukeet")).toBe(true);
+	});
 });
 
 describe("STTController preflight", () => {
