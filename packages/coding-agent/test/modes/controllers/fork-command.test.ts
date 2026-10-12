@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { classifyTerminalMultiplexer, type TerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-multiplexer";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { CommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/command-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { Settings } from "../../../src/config/settings";
@@ -16,6 +17,7 @@ import {
 	type TerminalLaunchRequest,
 	type TerminalLaunchResult,
 } from "../../../src/subprocess/terminal-launch";
+import { type FakeAnswer, type FakeDaemon, startFakeDaemon } from "../../tools/tern-fake-daemon";
 
 let tempDirectory: string;
 let sourceSessionFile: string;
@@ -55,6 +57,7 @@ function createContext(
 	const session = {
 		isStreaming: options.streaming ?? false,
 		fork: vi.fn(async () => true),
+		flushToDisk: vi.fn(async () => undefined),
 		sessionFile,
 		sessionId: "parent-session-id",
 		agent: { promptCacheKey: options.promptCacheKey },
@@ -64,8 +67,10 @@ function createContext(
 	};
 	const flush = vi.fn(async () => undefined);
 	const sessionManager = {
+		getHeader: vi.fn(() => undefined),
 		getCwd: vi.fn(() => options.cwd ?? "/workspace/project"),
 		getSessionFile: vi.fn(() => sessionFile),
+		isSessionOnDisk: vi.fn(() => sessionFile !== undefined),
 		flush,
 	};
 	const launchTerminal = vi.fn(async (request: TerminalLaunchRequest): Promise<TerminalLaunchResult> => ({
@@ -434,5 +439,51 @@ describe("/fork terminal placement", () => {
 		});
 		await controller.handleForkCommand("pane");
 		expect(ctx.showError).toHaveBeenCalledWith(expect.stringContaining("TMUX_PANE"));
+	});
+});
+
+describe("/fork inside Tern", () => {
+	const TERN_ENV_KEYS = ["TERN_PANE_SOCKET", "TERN_PANE"] as const;
+	const savedEnv = new Map(TERN_ENV_KEYS.map(key => [key, process.env[key]]));
+	let daemon: FakeDaemon | undefined;
+
+	beforeAll(async () => {
+		await initTheme(false);
+	});
+
+	afterEach(async () => {
+		await daemon?.close();
+		daemon = undefined;
+		for (const [key, value] of savedEnv) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	});
+
+	async function startTern(fork: () => FakeAnswer): Promise<FakeDaemon> {
+		daemon = await startFakeDaemon(() => ({ ok: {} }), { welcome: { ops: ["browser", "fork"] }, fork });
+		process.env.TERN_PANE_SOCKET = daemon.socketPath;
+		process.env.TERN_PANE = "5";
+		return daemon;
+	}
+
+	it("forks into a new pane while a turn is running, leaving the running session in place", async () => {
+		const tern = await startTern(() => ({ ok: { block: 9 } }));
+		const { controller, ctx, session } = createContext({ streaming: true });
+		await controller.handleForkCommand();
+		expect(tern.forks).toEqual([{ id: 1, op: { block: 5 } }]);
+		expect(session.flushToDisk).toHaveBeenCalledTimes(1);
+		expect(session.fork).not.toHaveBeenCalled();
+		expect(ctx.showWarning).not.toHaveBeenCalled();
+		expect(ctx.present).toHaveBeenCalledTimes(1);
+	});
+
+	it("refuses the in-place fallback mid-turn when Tern declines the fork", async () => {
+		const tern = await startTern(() => ({ error: { kind: "not_agent", message: "no session file" } }));
+		const { controller, ctx, session } = createContext({ streaming: true });
+		await controller.handleForkCommand();
+		expect(tern.forks).toHaveLength(1);
+		expect(session.fork).not.toHaveBeenCalled();
+		expect(ctx.showWarning).toHaveBeenCalledTimes(1);
 	});
 });
