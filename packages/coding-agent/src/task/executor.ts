@@ -467,7 +467,7 @@ export interface ExecutorOptions {
 	maxRuntimeMs?: number;
 	/** Include IRC only when the invocation policy permits collaboration. */
 	enableIrc?: boolean;
-	/** `false` when the spawning owner cannot message peers (IRC off or `write` inactive): wake results then carry no resume hint. */
+	/** `true` only when the spawning owner can message peers (IRC on and `write` active); otherwise wake results carry no resume hint. */
 	ownerCanResume?: boolean;
 	enableLsp?: boolean;
 	/**
@@ -2964,7 +2964,7 @@ export interface IrcWakeTurnMonitorOptions {
 	outputSchemaMode?: StructuredSubagentSchemaMode;
 	outputSchemaSource?: StructuredSubagentSchemaSource;
 	artifactsDir?: string;
-	/** `false` when the owner that receives wake results cannot message peers, so no resume hint is offered. */
+	/** Set only when the owner that receives wake results can message peers; otherwise no resume hint is offered. */
 	ownerIrcEnabled?: boolean;
 }
 
@@ -3321,7 +3321,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					const text = formatTaskResultSummary(result, {
 						totalDurationMs: result.durationMs,
 						// The owner receives this, so its own messaging capability decides whether a resume is actionable.
-						ircEnabled: options.ownerIrcEnabled !== false,
+						ircEnabled: options.ownerIrcEnabled === true,
 					});
 					const structured = result.structuredOutput;
 					if (result.aborted || result.exitCode !== 0 || result.error !== undefined) {
@@ -4109,7 +4109,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	let registryAbortUnsubscribe: (() => void) | null = null;
 	let reviveSession: AgentReviver | null = null;
 	const wakeOptions: IrcWakeTurnMonitorOptions = {
-		ownerIrcEnabled: options.ownerCanResume !== false,
+		ownerIrcEnabled: options.ownerCanResume === true,
 		id,
 		index,
 		agent,
