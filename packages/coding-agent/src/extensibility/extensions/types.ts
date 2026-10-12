@@ -1181,6 +1181,17 @@ export interface InputEvent {
 	source: "interactive" | "rpc" | "extension";
 }
 
+/** Called for completed live voice delegations before they start an agent turn. */
+export interface LiveDelegationEvent {
+	type: "live_delegation";
+	text: string;
+}
+
+/** A short reply confirms that an extension fully handled a live delegation. */
+export interface LiveDelegationResult {
+	reply: string;
+}
+
 // ============================================================================
 // Tool Events
 // ============================================================================
@@ -1376,6 +1387,7 @@ export type ExtensionEvent =
 	| UserBashEvent
 	| UserPythonEvent
 	| InputEvent
+	| LiveDelegationEvent
 	| ToolCallEvent
 	| ToolResultEvent
 	| ToolApprovalRequestedEvent
@@ -1580,6 +1592,7 @@ export interface ExtensionAPI {
 	on(event: "goal_updated", handler: ExtensionHandler<GoalUpdatedEvent>): void;
 	on(event: "credential_disabled", handler: ExtensionHandler<CredentialDisabledEvent>): void;
 	on(event: "input", handler: ExtensionHandler<InputEvent, InputEventResult>): void;
+	on(event: "live_delegation", handler: ExtensionHandler<LiveDelegationEvent, LiveDelegationResult>): void;
 	on(event: "tool_approval_requested", handler: ExtensionHandler<ToolApprovalRequestedEvent>): void;
 	on(event: "tool_approval_resolved", handler: ExtensionHandler<ToolApprovalResolvedEvent>): void;
 	on(event: "tool_call", handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): void;
