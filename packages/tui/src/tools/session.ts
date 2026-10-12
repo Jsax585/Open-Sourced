@@ -1,7 +1,8 @@
 import type { Component } from "../tui";
 import { Text } from "../components/text";
 import type { Theme } from "../theme/theme";
-import { formatErrorDetail, replaceTabs, shortenPath, TRUNCATE_LENGTHS } from "../render/render-utils";
+import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { formatErrorDetail, replaceTabs, shortenEmbeddedPaths, TRUNCATE_LENGTHS } from "../render/render-utils";
 import { renderStatusLine, truncateToWidth } from "../render/index";
 import { framedToolCard } from "../render/tool-card";
 import { compact, span, text } from "../native/describe";
@@ -27,16 +28,9 @@ export interface SessionRenderArgs {
 	branch?: string;
 }
 
-/** Shortens the home directory in every absolute path a result line mentions. */
-function displayLine(line: string): string {
-	const whole = shortenPath(line);
-	if (whole !== line) return replaceTabs(whole);
-	return replaceTabs(
-		line
-			.split(" ")
-			.map(token => shortenPath(token))
-			.join(" "),
-	);
+/** Strips terminal control sequences, shortens home-directory paths wherever they appear, and replaces tabs. */
+function displayText(value: string): string {
+	return replaceTabs(shortenEmbeddedPaths(sanitizeText(value)));
 }
 
 function describeOp(op: SessionOp | undefined): string {
@@ -44,9 +38,9 @@ function describeOp(op: SessionOp | undefined): string {
 }
 
 function callDetail(args: SessionRenderArgs): string | undefined {
-	if (args.op === "rename" && args.title) return truncateToWidth(replaceTabs(args.title), TRUNCATE_LENGTHS.TITLE);
-	if (args.op === "worktree_create" && args.branch) return args.branch;
-	if ((args.op === "move" || args.op === "worktree_remove") && args.path) return displayLine(args.path);
+	if (args.op === "rename" && args.title) return truncateToWidth(displayText(args.title), TRUNCATE_LENGTHS.TITLE);
+	if (args.op === "worktree_create" && args.branch) return displayText(args.branch);
+	if ((args.op === "move" || args.op === "worktree_remove") && args.path) return displayText(args.path);
 	return undefined;
 }
 
@@ -54,7 +48,7 @@ function resultLines(result: ToolRenderResult<SessionRenderDetails>): string[] {
 	return resultText(result)
 		.split("\n")
 		.filter(line => line.trim() !== "")
-		.map(line => truncateToWidth(displayLine(line), TRUNCATE_LENGTHS.LONG));
+		.map(line => truncateToWidth(displayText(line), TRUNCATE_LENGTHS.LONG));
 }
 
 const sessionResultMemo = new OwnerMemo<NativeToolView | undefined>();
@@ -64,7 +58,8 @@ function describeSessionResult(
 	args?: SessionRenderArgs,
 ): NativeToolView {
 	const op = result.details?.op ?? args?.op;
-	if (result.isError) return errorView("Session", resultText(result) || "Session tool failed", describeOp(op));
+	if (result.isError)
+		return errorView("Session", displayText(resultText(result)) || "Session tool failed", describeOp(op));
 	return {
 		head: toolHead("Session", describeOp(op)),
 		body: compact(resultLines(result).map(line => text([span(line, "muted")], { wrap: "word" }))),
@@ -96,7 +91,11 @@ export const sessionToolRenderer = {
 			return framedToolCard(uiTheme, () => ({
 				header,
 				sections: [
-					{ content: formatErrorDetail(resultText(result) || "Session tool failed", uiTheme).split("\n") },
+					{
+						content: formatErrorDetail(displayText(resultText(result)) || "Session tool failed", uiTheme).split(
+							"\n",
+						),
+					},
 				],
 				phase: "error",
 				borderColor: "error",

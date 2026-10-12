@@ -64,6 +64,19 @@ function requireText(value: string | undefined, field: string, op: string): stri
 	return text;
 }
 
+/** Whether `git worktree lock` protects the checkout: its admin directory holds a `locked` file. */
+async function isWorktreeLocked(worktreePath: string): Promise<boolean> {
+	try {
+		const pointer = (await fs.readFile(path.join(worktreePath, ".git"), "utf8")).trim();
+		const gitdir = pointer.startsWith("gitdir:") ? pointer.slice("gitdir:".length).trim() : undefined;
+		if (!gitdir) return false;
+		await fs.stat(path.join(path.resolve(worktreePath, gitdir), "locked"));
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 async function realpathOrSelf(target: string): Promise<string> {
 	try {
 		return await fs.realpath(target);
@@ -85,6 +98,10 @@ export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolD
 	readonly description = prompt.render(sessionDescription);
 	readonly parameters = sessionSchema;
 	readonly strict = true;
+	// Mutating ops race on the pending move and on the worktree registry (a removal reads the pending
+	// move before a concurrent `move` queues it), so only the read-only listing may overlap.
+	readonly concurrency = (args: Partial<SessionParams>): "shared" | "exclusive" =>
+		args.op === "worktree_list" ? "shared" : "exclusive";
 	readonly intent = (args: Partial<SessionParams>): string => (args.op ? `session ${args.op}` : "session");
 
 	constructor(private readonly session: ToolSession) {}
@@ -236,6 +253,11 @@ export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolD
 					`Refusing to remove ${target}: this session works in ${directory}. Move the session elsewhere first.`,
 				);
 			}
+		}
+		if (params.force !== true && (await isWorktreeLocked(match.entry.path))) {
+			throw new ToolError(
+				`Refusing to remove ${target}: it is locked (git worktree lock). Unlock it first, or pass force: true.`,
+			);
 		}
 		if (params.force !== true && (await vcs.git(target)?.isDirty())) {
 			throw new ToolError(

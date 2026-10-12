@@ -171,6 +171,9 @@ export async function createSessionWorktree(
 		if (signal?.aborted) {
 			await repository.worktreeRemove(worktreePath, true).catch(() => false);
 			await fs.rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
+			// The removal can leave its admin entry behind when the checkout was reached through another
+			// spelling of the path (/tmp vs /private/tmp); that stale entry would keep the branch checked out.
+			await repository.worktreePrune().catch(() => undefined);
 			await repository.deleteBranch(branch, true).catch(() => false);
 		}
 		throw error;

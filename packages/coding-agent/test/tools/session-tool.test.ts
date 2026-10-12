@@ -280,6 +280,24 @@ describe("session tool: worktrees", () => {
 		expect(await git(fixture.repo, "branch", "--list", "alias")).toContain("alias");
 	});
 
+	it("refuses to remove a locked worktree unless forced", async () => {
+		const created = (await fixture.tool.execute("1", { op: "worktree_create", branch: "locked" })).details!.path!;
+		await git(fixture.repo, "worktree", "lock", created);
+		await expect(fixture.tool.execute("2", { op: "worktree_remove", path: created })).rejects.toThrow("locked");
+		expect(await Bun.file(path.join(created, "tracked.txt")).exists()).toBe(true);
+
+		await fixture.tool.execute("3", { op: "worktree_remove", path: created, force: true });
+		expect(await fs.stat(created).catch(() => undefined)).toBeUndefined();
+	});
+
+	it("lets only the listing overlap with other session calls", () => {
+		const concurrency = fixture.tool.concurrency as (args: { op: string }) => string;
+		expect(concurrency({ op: "worktree_list" })).toBe("shared");
+		for (const op of ["rename", "move", "worktree_create", "worktree_remove"]) {
+			expect(concurrency({ op })).toBe("exclusive");
+		}
+	});
+
 	it("treats an untracked file as uncommitted work", async () => {
 		const created = (await fixture.tool.execute("1", { op: "worktree_create", branch: "wip" })).details!.path!;
 		await Bun.write(path.join(created, "notes.txt"), "keep me\n");

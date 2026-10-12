@@ -40,6 +40,8 @@ A queued move is dropped when the run is aborted or a new run starts. If the mov
 - The primary checkout is refused.
 - A path containing the session's working directory, any additional workspace directory, or a pending move target is refused.
 - A worktree with uncommitted changes (staged, unstaged, or untracked) is refused unless `force: true`.
+- A worktree locked with `git worktree lock` is refused unless `force: true`.
+- Mutating ops run exclusively (never overlapping another `session` call in the same batch). Only `worktree_list` may overlap.
 - The branch is kept.
 
 ## Limits
