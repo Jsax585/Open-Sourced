@@ -87,7 +87,8 @@ export function resolveGatewayAccount(
  * and its OAuth identity together (refreshing through the broker when needed).
  * Keep this selection snapshot intact even if another request replaces the
  * stored token before dispatch. Storage failures map through
- * {@link classifyGatewayError}; a provider without any credential is a 401.
+ * {@link classifyGatewayError}; a provider without a usable credential is
+ * unavailable, not proof that the client's gateway bearer was rejected.
  */
 export async function resolveGatewayApiKey(
 	storage: AuthStorage,
@@ -106,9 +107,11 @@ export async function resolveGatewayApiKey(
 	}
 	if (apiKey) return apiKey;
 	return {
-		status: 401,
-		type: "authentication_error",
+		status: 503,
+		type: "upstream_error",
 		message: `No credential available for provider ${model.provider}`,
+		owner: "provider",
+		disposition: "provider_unavailable",
 	};
 }
 

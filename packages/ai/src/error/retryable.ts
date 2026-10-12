@@ -17,9 +17,7 @@ import {
  * {@link classify}, which inspects a whole error (including message text) and
  * may match more. Use this when you only have a `status: number`.
  */
-export function isTransientStatus(status: number | undefined): boolean {
-	return status !== undefined && (status === 408 || status === 429 || status >= 500);
-}
+export { isTransientStatus, shouldRetryAnthropicResponse } from "./http-retry";
 
 // Provider-stream transient phrasings not covered by the shared
 // TRANSIENT_TRANSPORT_PATTERN (TLS record corruption, HTTP/2 peer stream
