@@ -371,6 +371,50 @@ describe("live updates of loaded context files", () => {
 		expect(text(message!)).not.toContain("No context files remain");
 	});
 
+	it("does not claim no context remains while nested instructions are still in the conversation", async () => {
+		const { r, files } = await setup({ "AGENTS.md": "root rules" });
+		fs.mkdirSync(path.join(r.root, "sub"));
+		fs.writeFileSync(path.join(r.root, "sub/AGENTS.md"), "nested rules");
+		fs.writeFileSync(path.join(r.root, "sub/f.ts"), "x");
+		await read(r, path.join(r.root, "sub/f.ts"));
+		fs.rmSync(files[0]!.path);
+		const message = await update(r);
+		expect(text(message!)).toContain("was removed");
+		expect(text(message!)).not.toContain("No context files remain");
+	});
+
+	it("shares one read-sized budget between files changed together and delivers the rest next", async () => {
+		const big = "y".repeat(40_000);
+		const { r, files } = await setup({ "AGENTS.md": "a", "CLAUDE.md": "b" });
+		rewrite(files[0]!.path, `a${big}`);
+		rewrite(files[1]!.path, `b${big}`);
+		const first = await update(r);
+		expect(first && (first.details as { files: unknown[] }).files).toHaveLength(1);
+		const second = await update(r);
+		expect(second && (second.details as { files: unknown[] }).files).toHaveLength(1);
+		expect(await update(r)).toBeUndefined();
+	});
+
+	it("announces an edit made between prompt discovery and registration", async () => {
+		const { r, root } = await setup({});
+		const file = path.join(root, "AGENTS.md");
+		fs.writeFileSync(file, "edited after discovery");
+		await r.tracker.setAmbientFiles([{ path: file, content: "content the prompt was built with" }]);
+		const message = await update(r);
+		expect(text(message!)).toContain("edited after discovery");
+	});
+
+	it("loads a nested file through the current content of its @-imports, not the startup cache", async () => {
+		const { r, root } = await setup({});
+		fs.mkdirSync(path.join(root, "a"));
+		fs.writeFileSync(path.join(root, "shared.md"), "shared v1");
+		fs.writeFileSync(path.join(root, "a/AGENTS.md"), "see @../shared.md");
+		fs.writeFileSync(path.join(root, "a/f.ts"), "x");
+		await expandAtImports("see @shared.md", path.join(root, "AGENTS.md")); // startup fills the cache
+		fs.writeFileSync(path.join(root, "shared.md"), "shared v2");
+		expect(text((await read(r, path.join(root, "a/f.ts")))[0]!)).toContain("shared v2");
+	});
+
 	it("notices a changed @-import when its importer is touched, despite the startup read cache", async () => {
 		const { r, root } = await setup({});
 		const rules = path.join(root, "rules.md");

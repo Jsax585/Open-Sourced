@@ -2073,6 +2073,11 @@ export class AgentSession implements SettingsScope {
 			memoryBackendSession: () => this,
 			clearInheritedProviderPromptCacheKey: () => this.#clearInheritedProviderPromptCacheKey(),
 			clearMemoryPromotionSnapshot: () => this.#memory.clearPromotionSnapshot(),
+			setAmbientContextFiles: files => {
+				this.setAmbientContextFiles(files).catch(error =>
+					logger.warn("Failed to watch context files", { error: String(error) }),
+				);
+			},
 			captureMemoryPromotionSnapshot: prompt => this.#memory.capturePromotionSnapshot(prompt),
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			notifyCommandMetadataChanged: () => this.#notifyCommandMetadataChanged(),

@@ -180,7 +180,9 @@ export class ContextFileTracker {
 			const loadedHash = hashContent(file.content);
 			next.set(path.resolve(file.path), {
 				loadedHash,
-				sig: signature(stat),
+				// Unknown until the first refresh reads the file: an edit between prompt discovery and
+				// this stat would otherwise be recorded as already loaded and never announced.
+				sig: null,
 				hash: loadedHash,
 				content: file.content,
 				registeredAt,
@@ -248,6 +250,13 @@ export class ContextFileTracker {
 		});
 	}
 
+	/** Whether nested instructions are in the conversation or about to be injected: they still apply. */
+	#hasNestedContext(): boolean {
+		return (
+			this.#pending.size > 0 || this.#host.messages().some(message => isCustom(message, NESTED_CONTEXT_MESSAGE_TYPE))
+		);
+	}
+
 	#roots(): string[] {
 		return [this.#host.cwd(), ...this.#host.additionalDirectories()].map(root => path.resolve(root));
 	}
@@ -311,7 +320,7 @@ export class ContextFileTracker {
 			if (!(await resolvesInsideWorkspace(realRoot, filePath, false))) continue;
 			const raw = await readInstructionFile(filePath);
 			if (raw === undefined || raw.trim() === "") continue;
-			const content = boundContent(await expandAtImports(raw, filePath));
+			const content = boundContent(await expandAtImports(raw, filePath, { uncached: true }));
 			return {
 				path: filePath,
 				bytes: Buffer.byteLength(content),
@@ -392,13 +401,24 @@ export class ContextFileTracker {
 		const removed: string[] = [];
 		const files: ContextFileUpdateDetails["files"] = [];
 		let remaining = 0;
+		let updatedBytes = 0;
 		for (const [filePath, tracked] of this.#ambient) {
 			const effective = delivered.has(filePath) ? (delivered.get(filePath) ?? null) : tracked.loadedHash;
 			if (tracked.hash !== null) remaining++;
 			if (tracked.hash === effective) continue;
+			if (tracked.hash === null) {
+				files.push({ path: filePath, hash: null });
+				removed.push(filePath);
+				continue;
+			}
+			// The step-boundary path appends this message without a size check, so one update shares a
+			// single read-sized budget. Files that do not fit stay undelivered and follow in the next update.
+			const content = boundContent(tracked.content ?? "");
+			const bytes = Buffer.byteLength(content);
+			if (updated.length > 0 && updatedBytes + bytes > DEFAULT_MAX_BYTES) continue;
+			updatedBytes += bytes;
 			files.push({ path: filePath, hash: tracked.hash });
-			if (tracked.hash === null) removed.push(filePath);
-			else updated.push({ path: filePath, content: boundContent(tracked.content ?? "") });
+			updated.push({ path: filePath, content });
 		}
 		if (files.length === 0) return undefined;
 		return {
@@ -407,7 +427,7 @@ export class ContextFileTracker {
 			content: prompt.render(contextFileUpdatePrompt, {
 				updated,
 				removed,
-				allRemoved: remaining + this.#unwatched === 0,
+				allRemoved: remaining + this.#unwatched === 0 && !this.#hasNestedContext(),
 			}),
 			details: { files },
 			attribution: "agent",

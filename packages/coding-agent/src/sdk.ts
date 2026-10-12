@@ -3963,7 +3963,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			});
 
 			promptContextFiles = defaultPrompt.contextFiles ?? contextFiles;
-			if (hasSession && options.contextFiles === undefined) await session.setAmbientContextFiles(promptContextFiles);
 
 			if (typeof options.systemPrompt !== "function") {
 				return defaultPrompt;
@@ -3971,6 +3970,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			const customPrompt = options.systemPrompt(defaultPrompt.systemPrompt);
 			return {
 				systemPrompt: typeof customPrompt === "string" ? [customPrompt] : customPrompt,
+				contextFiles: defaultPrompt.contextFiles,
 			};
 		};
 
