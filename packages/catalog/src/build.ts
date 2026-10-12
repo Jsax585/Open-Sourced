@@ -7,6 +7,7 @@
  * compat per request.
  */
 
+import { resolveBackendProvider } from "./compat/behavior";
 import { resolveDiscoveryApi, resolveModelPolicy } from "./compat/resolve";
 import type { ModelIdentity } from "./compat/types";
 import { resolveModelTokenizer } from "./model-tokenizer";
@@ -364,6 +365,8 @@ export function buildModel<TApi extends Api>(spec: ModelSpec<TApi>): Model<TApi>
 		compat: policy.compat,
 		compatConfig: spec.compat,
 	};
+	const providerType = resolveBackendProvider(spec);
+	if (providerType !== spec.provider) model.providerType = providerType;
 	applyCatalogAssignments(model, policy.catalog);
 	applyCatalogCorrections(model, policy.catalog);
 	// Configured kinds and lifetimes replace catalog values rather than merging with them.

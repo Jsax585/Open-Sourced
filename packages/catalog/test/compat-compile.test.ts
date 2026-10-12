@@ -188,6 +188,23 @@ describe("compat compiler grammar", () => {
 		).toThrow(/malformed value/);
 	});
 
+	test("backend-provider rejects unknown hosts, malformed leaves, and conflicting endpoint mappings", () => {
+		for (const node of [
+			'backend-provider provider="friendli" host="unregistered" api="openai-completions"',
+			'backend-provider provider="" host="friendli" api="openai-completions"',
+			'backend-provider provider="friendli" host="friendli" api=""',
+			'backend-provider provider="friendli" host="friendli"',
+			'backend-provider "extra" provider="friendli" host="friendli" api="openai-completions"',
+			'backend-provider provider="friendli" provider="nvidia" host="friendli" api="openai-completions"',
+			'backend-provider provider="friendli" host="friendli" api="openai-completions" {}',
+			'backend-provider provider="friendli" host="friendli" api="openai-completions"\nbackend-provider provider="nvidia" host="friendli" api="openai-completions"',
+		]) {
+			expect(() => compileBehavior({ file: "runtime/behavior.kdl", text: `behavior {\n${node}\n}` })).toThrow(
+				/malformed value/,
+			);
+		}
+	});
+
 	test("exclude-discovery-modes compiles exact provider mode exclusions", () => {
 		const compiled = compileBehavior({
 			file: "runtime/behavior.kdl",

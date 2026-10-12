@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildModel } from "../src/build";
 import { seedModels } from "../src/compat/providers";
+import { resolveModelPolicy } from "../src/compat/resolve";
 import { Effort } from "../src/effort";
 import { getSupportedEfforts } from "../src/model-thinking";
 import { friendliModelManagerOptions } from "../src/provider-models/openai-compat";
@@ -109,5 +110,32 @@ describe("Friendli discovery deployment contract", () => {
 				expect(getSupportedEfforts(model)).toEqual(thinking?.efforts ?? []);
 			}
 		}
+	});
+
+	test("explicit backends beat Friendli URL inference without remapping unrelated endpoints or APIs", () => {
+		const spec = {
+			...seedModels<"openai-completions">("friendli")[0],
+			id: "vendor/opaque",
+			provider: "custom-friendli",
+		};
+		const nvidia = buildModel({ ...spec, providerType: "nvidia" });
+		expect(nvidia.providerType).toBe("nvidia");
+		expect(getSupportedEfforts(nvidia)).toEqual([
+			Effort.Minimal,
+			Effort.Low,
+			Effort.Medium,
+			Effort.High,
+			Effort.XHigh,
+		]);
+		const custom = { ...spec, providerType: "custombackend" };
+		expect(buildModel(custom).providerType).toBe("custombackend");
+		expect(resolveModelPolicy(custom).compat.thinkingFormat).toBe("openai");
+		expect(resolveModelPolicy(spec).compat.thinkingFormat).toBe("qwen-chat-template");
+		const unrelated = buildModel({ ...spec, baseUrl: "https://other.example/v1" });
+		expect(unrelated.providerType).toBeUndefined();
+		expect(unrelated.compat.thinkingFormat).toBe("openai");
+		const responses = buildModel({ ...spec, api: "openai-responses" });
+		expect(responses.providerType).toBeUndefined();
+		expect(responses.api).toBe("openai-responses");
 	});
 });

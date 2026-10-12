@@ -39,6 +39,7 @@ import {
 } from "./anthropic";
 import { applyCompatOverrides } from "./apply";
 import { API_COMPAT_RECORDS, AXES, type CompatRecordName } from "./axes";
+import { resolveBackendProvider } from "./behavior";
 import { hasModelScopedEffortsRule, resolveCascade } from "./cascade";
 import { compareRevision, parseRevision, type Revision } from "./revision";
 import { classifyModel, stripThinkingVariantSuffix } from "./taxonomy";
@@ -336,7 +337,7 @@ function detectOpenAI(
 	reasoningCapable: boolean,
 ): OpenAIDetection {
 	const provider = spec.provider;
-	const backendProvider = spec.providerType ?? provider;
+	const backendProvider = resolveBackendProvider(spec);
 	const baseUrl = spec.baseUrl;
 	const hostModel = { provider, baseUrl };
 	const isZai = modelMatchesHost(hostModel, "zai");
@@ -722,7 +723,7 @@ function resolveOpenAIResponsesPolicy(
 ): ResolvedOpenAIResponsesCompat {
 	const baseUrl = spec.baseUrl ?? "";
 	const provider = spec.provider;
-	const backendProvider = spec.providerType ?? provider;
+	const backendProvider = resolveBackendProvider(spec);
 	const hostModel = { provider, baseUrl };
 	const isAzure = modelMatchesHost(hostModel, "azureOpenAI");
 	const isOpenRouter = modelMatchesHost(hostModel, "openrouter");
@@ -1292,10 +1293,10 @@ function fillExplicitThinking<TApi extends Api>(
 function buildResolveTarget<TApi extends Api>(
 	spec: ModelSpec<TApi>,
 	identity: ModelIdentity,
-	providerType = spec.providerType ?? spec.provider,
+	providerType?: string,
 ): ResolveTarget {
 	const target: ResolveTarget = {
-		provider: spec.api === "openai-completions" && modelMatchesHost(spec, "friendli") ? "friendli" : providerType,
+		provider: resolveBackendProvider(spec, providerType),
 		api: spec.api,
 		class: identity.class,
 		model: spec.id,

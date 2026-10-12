@@ -5,6 +5,7 @@
  * `behavior.ts`, `resolve.ts`) exposes to consumers.
  */
 import type { Effort } from "../effort";
+import type { KnownHost } from "../hosts";
 import type { Api, KindApiKind, ThinkingControlMode, TokenCost } from "../types";
 import type { RevisionOp } from "./revision";
 
@@ -338,6 +339,7 @@ export interface CompiledRetryResetTimezone {
 /** Compiled runtime behavior vocabulary (`runtime/behavior.kdl`). */
 export interface CompiledBehavior {
 	openaiResponsesHeuristic?: CompiledResponsesHeuristic;
+	backendProviders?: { provider: string; host: KnownHost; api: Api }[];
 	modelOperations: CompiledModelOperations[];
 	cursorEffort?: CompiledCursorEffort;
 	cursorParameters: CompiledCursorParameter[];

@@ -3,7 +3,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { friendliModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
-import type { Model } from "@oh-my-pi/pi-catalog/types";
+import type { Model, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import { type OpenAICompletionsOptions, streamOpenAICompletions } from "../src/providers/openai-completions";
 import { getProviderDefinition } from "../src/registry/registry";
 import type { Context } from "../src/types";
@@ -228,7 +228,7 @@ describe("Friendli discovery-to-wire contracts", () => {
 		).rejects.toThrow("FriendliAI API key validation failed (401)");
 	});
 
-	test("custom Friendli endpoints reuse KDL without changing the caller's provider identity", async () => {
+	test("custom Friendli backend metadata survives a JSON rebuild and streams high/max over a proxy", async () => {
 		const discoveredModel = await discovered("zai-org/GLM-5.2", [
 			{ type: "toggle" },
 			{ type: "effort", values: ["high", "max"] },
@@ -241,8 +241,43 @@ describe("Friendli discovery-to-wire contracts", () => {
 		});
 		expect(model.provider).toBe("custom-friendli");
 		expect(model.identity?.class).toBe("glm");
-		const body = await capture(model, { reasoning: "max" });
-		expect(body.reasoning_effort).toBe("max");
-		expect(body.chat_template_kwargs).toEqual({ enable_thinking: true });
+		expect(model.providerType).toBe("friendli");
+		const bodies: Record<string, unknown>[] = [];
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: async request => {
+				bodies.push((await request.json()) as Record<string, unknown>);
+				return new Response(
+					'data: {"id":"x","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}\n\ndata: {"id":"x","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+					{ headers: { "content-type": "text/event-stream" } },
+				);
+			},
+		});
+		try {
+			const cached: ModelSpec<"openai-completions"> = JSON.parse(JSON.stringify(model));
+			const rebuilt = buildModel({
+				...cached,
+				baseUrl: `${server.url}v1`,
+				compat: undefined,
+				thinking: undefined,
+			});
+			expect(rebuilt.provider).toBe("custom-friendli");
+			expect(rebuilt.providerType).toBe("friendli");
+			for (const reasoning of ["high", "max"] as const) {
+				const stream = streamOpenAICompletions(
+					rebuilt,
+					{ messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+					{ apiKey: "test-key", reasoning },
+				);
+				for await (const event of stream) {
+					if (event.type === "error") throw new Error(event.error.errorMessage);
+				}
+			}
+			expect(bodies.map(body => body.reasoning_effort)).toEqual(["high", "max"]);
+			for (const body of bodies) expect(body.chat_template_kwargs).toEqual({ enable_thinking: true });
+		} finally {
+			await server.stop(true);
+		}
 	});
 });

@@ -5,11 +5,13 @@
  * quota tiers, plan requirements, model limits, roster and discovery-mode
  * exclusions, hosted defaults, and pricing peers.
  */
+import { hostMatchesUrl } from "../hosts";
+import type { Api, ModelSpec } from "../types";
 import { globMatch } from "./cascade";
 import rules from "./rules.json";
-import type { CompiledMatchList } from "./types";
+import type { CompiledBehavior, CompiledMatchList } from "./types";
 
-const behavior = rules.behavior;
+const behavior = rules.behavior as CompiledBehavior;
 
 function matchesList(match: CompiledMatchList, model: string, modelLower: string): boolean {
 	if (match.exact?.some(candidate => candidate === model)) return true;
@@ -21,6 +23,17 @@ function matchesList(match: CompiledMatchList, model: string, modelLower: string
 	}
 	if (match.glob?.some(pattern => globMatch(pattern, modelLower))) return true;
 	return false;
+}
+
+/** Explicit backend identity wins over catalog-declared endpoint inference. */
+export function resolveBackendProvider(spec: ModelSpec<Api>, providerType?: string): string {
+	const explicit = providerType ?? spec.providerType;
+	if (explicit !== undefined) return explicit;
+	if (behavior.backendProviders === undefined) return spec.provider;
+	for (const rule of behavior.backendProviders) {
+		if (rule.api === spec.api && hostMatchesUrl(spec.baseUrl, rule.host)) return rule.provider;
+	}
+	return spec.provider;
 }
 
 /**

@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added FriendliAI model discovery with authoritative live reasoning controls, endpoint defaults for models without a thinking dial, and a GLM-5.2 fallback seed ([#8204](https://github.com/can1357/oh-my-pi/pull/8204) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
+- Added FriendliAI model discovery with authoritative live reasoning controls, endpoint defaults for models without a thinking dial, a GLM-5.2 fallback seed, and persisted backend policy for custom endpoints with explicit backend overrides preserved ([#8204](https://github.com/can1357/oh-my-pi/pull/8204) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
 
 ## [18.10.2] - 2026-10-12
 
