@@ -1,15 +1,21 @@
-//! SIXEL terminal-image encoding and bounded decoding.
+//! Terminal-image encoding: SIXEL sequences, per-row image strips, and bounded
+//! SIXEL decoding.
 //!
 //! Encodes PNG/JPEG/WebP/GIF images for terminal display and decodes captured
 //! SIXEL control strings back to bounded PNG attachments.
 //!
 //! General-purpose image processing stays in `Bun.Image`; the native boundary
-//! exists because SIXEL has no equivalent decoder there.
+//! exists because SIXEL has no equivalent decoder there, and `Bun.Image` can
+//! neither crop nor run synchronously for output that cannot wait.
 
 use std::io::Cursor;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use icy_sixel::{EncodeOptions, SixelImage, sixel_encode};
-use image::{DynamicImage, ImageFormat, ImageReader, RgbaImage, imageops::FilterType};
+use image::{
+	DynamicImage, ImageFormat, ImageReader, RgbaImage,
+	imageops::{self, FilterType},
+};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
@@ -77,7 +83,7 @@ fn guard_dimensions(width: usize, height: usize) -> Result<()> {
 		|| height > MAX_IMAGE_EDGE
 		|| width.saturating_mul(height) > MAX_DECODED_PIXELS
 	{
-		return Err(Error::from_reason("SIXEL image dimensions exceed the decode limit"));
+		return Err(Error::from_reason("Image dimensions exceed the decode limit"));
 	}
 	Ok(())
 }
@@ -221,6 +227,93 @@ fn encode_image(bytes: &[u8], target_width_px: u32, target_height_px: u32) -> Re
 	let options = EncodeOptions::default();
 	sixel_encode(rgba.as_raw(), target_width_px as usize, target_height_px as usize, &options)
 		.map_err(|err| Error::from_reason(format!("Failed to encode SIXEL: {err}")))
+}
+
+/// Encode image bytes as one base64 PNG per terminal row, on the calling
+/// thread.
+///
+/// The image is scaled to `target_width_px` with its aspect ratio kept
+/// (squashed if it would be taller than `rows` × `row_height_px`), then cut
+/// into `rows` strips of `row_height_px`; rows past the image bottom are
+/// transparent. A terminal that draws each strip into exactly one cell row
+/// (such as iTerm2 inline images) shows the image row by row, so any subset
+/// of rows can be repainted, clipped, or scrolled without the others. Prefer
+/// [`encode_image_rows_async`] unless the caller cannot wait.
+///
+/// # Errors
+/// Returns an error if the geometry exceeds the decode limit, or if decoding,
+/// resizing, or PNG encoding fails.
+#[napi]
+pub fn encode_image_rows(
+	bytes: Uint8Array,
+	target_width_px: u32,
+	row_height_px: u32,
+	rows: u32,
+) -> Result<Vec<String>> {
+	encode_rows(bytes.as_ref(), target_width_px, row_height_px, rows)
+}
+
+/// Same result as [`encode_image_rows`], but the decode, resize and encodes
+/// run on the native blocking pool, so they never stall the JavaScript event
+/// loop.
+///
+/// # Errors
+/// Rejects if the geometry exceeds the decode limit, or if decoding,
+/// resizing, or PNG encoding fails.
+#[napi]
+pub fn encode_image_rows_async(
+	bytes: Uint8Array,
+	target_width_px: u32,
+	row_height_px: u32,
+	rows: u32,
+) -> task::Promise<Vec<String>> {
+	let bytes = bytes.to_vec();
+	task::blocking("image.rows", (), move |_| {
+		encode_rows(&bytes, target_width_px, row_height_px, rows)
+	})
+}
+
+fn encode_rows(
+	bytes: &[u8],
+	target_width_px: u32,
+	row_height_px: u32,
+	rows: u32,
+) -> Result<Vec<String>> {
+	let total_height_px = row_height_px.saturating_mul(rows);
+	guard_dimensions(target_width_px as usize, total_height_px as usize)?;
+
+	let source = decode_image_from_bytes(bytes)?;
+	if source.width() == 0 || source.height() == 0 {
+		return Err(Error::from_reason("Image has no pixels"));
+	}
+	let scaled_height = (u64::from(source.height()) * u64::from(target_width_px))
+		.div_ceil(u64::from(source.width()))
+		.clamp(1, u64::from(total_height_px)) as u32;
+	let scaled = if source.width() == target_width_px && source.height() == scaled_height {
+		source.into_rgba8()
+	} else {
+		source
+			.resize_exact(target_width_px, scaled_height, FilterType::Lanczos3)
+			.into_rgba8()
+	};
+
+	let mut strips = Vec::with_capacity(rows as usize);
+	let mut png = Vec::new();
+	for row in 0..rows {
+		let mut strip = RgbaImage::new(target_width_px, row_height_px);
+		let top = row * row_height_px;
+		if top < scaled_height {
+			let height = row_height_px.min(scaled_height - top);
+			let source_rows = imageops::crop_imm(&scaled, 0, top, target_width_px, height);
+			imageops::replace(&mut strip, &*source_rows, 0, 0);
+		}
+		png.clear();
+		DynamicImage::ImageRgba8(strip)
+			.write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+			.map_err(|err| Error::from_reason(format!("Failed to encode image row as PNG: {err}")))?;
+		strips.push(STANDARD.encode(&png));
+	}
+	Ok(strips)
 }
 
 fn decode_image_from_bytes(bytes: &[u8]) -> Result<DynamicImage> {

@@ -1777,6 +1777,35 @@ export interface EnclosingBoundaryOptions {
 }
 
 /**
+ * Encode image bytes as one base64 PNG per terminal row, on the calling
+ * thread.
+ *
+ * The image is scaled to `target_width_px` with its aspect ratio kept
+ * (squashed if it would be taller than `rows` × `row_height_px`), then cut
+ * into `rows` strips of `row_height_px`; rows past the image bottom are
+ * transparent. A terminal that draws each strip into exactly one cell row
+ * (such as iTerm2 inline images) shows the image row by row, so any subset
+ * of rows can be repainted, clipped, or scrolled without the others. Prefer
+ * [`encode_image_rows_async`] unless the caller cannot wait.
+ *
+ * # Errors
+ * Returns an error if the geometry exceeds the decode limit, or if decoding,
+ * resizing, or PNG encoding fails.
+ */
+export declare function encodeImageRows(bytes: Uint8Array, targetWidthPx: number, rowHeightPx: number, rows: number): Array<string>
+
+/**
+ * Same result as [`encode_image_rows`], but the decode, resize and encodes
+ * run on the native blocking pool, so they never stall the JavaScript event
+ * loop.
+ *
+ * # Errors
+ * Rejects if the geometry exceeds the decode limit, or if decoding,
+ * resizing, or PNG encoding fails.
+ */
+export declare function encodeImageRowsAsync(bytes: Uint8Array, targetWidthPx: number, rowHeightPx: number, rows: number): Promise<Array<string>>
+
+/**
  * Encode image bytes into a SIXEL escape sequence for terminal rendering, on
  * the calling thread.
  *

@@ -1,4 +1,4 @@
-import { encodeSixel } from "@oh-my-pi/pi-natives";
+import { encodeImageRows, encodeSixel } from "@oh-my-pi/pi-natives";
 import { $env, isBunTestRuntime, isTerminalHeadless, isWsl } from "@oh-my-pi/pi-utils/env";
 import { writeTerminalSequence } from "./active-terminal";
 import { sendDesktopNotification, shouldDeliverDesktopNotification } from "./desktop-notify";
@@ -824,7 +824,23 @@ export interface ImageRenderOptions {
 	 * Without a provider, renderImage encodes synchronously.
 	 */
 	sixel?: (widthPx: number, heightPx: number) => string | null | undefined;
+	/**
+	 * iTerm2 image rows: base64 PNG strips of `rowHeightPx` covering the image
+	 * at `widthPx`, one per terminal row; `undefined` while an encode is
+	 * pending, `null` when it failed. With a provider, iTerm2 images render as
+	 * `lines`, one self-contained image row per line; without one, or when the
+	 * encode failed, they keep the single cursor-anchored sequence.
+	 */
+	iterm2Rows?: (widthPx: number, rowHeightPx: number, rows: number) => readonly string[] | null | undefined;
 }
+
+// Strip resolution cap, about a cell's width on a 2x display. Wider strips add
+// payload, and iTerm2 sometimes shows freshly repainted wide strips as smeared
+// bands for a moment.
+const ITERM2_ROW_MAX_PX_PER_COLUMN = 16;
+// The native row encoder's decode limits (`MAX_DECODED_PIXELS`, `MAX_IMAGE_EDGE`).
+const ITERM2_ROW_MAX_PIXELS = 4 * 1024 * 1024;
+const ITERM2_ROW_MAX_EDGE = 8192;
 
 // Default cell dimensions - updated by TUI when terminal responds to query
 let cellDimensions: CellDimensions = { widthPx: 9, heightPx: 18 };
@@ -1239,6 +1255,23 @@ export function encodeSixelNow(base64Data: string, widthPx: number, heightPx: nu
 	}
 }
 
+/**
+ * Base64 PNG row strips for `base64Data`, encoded on the JS thread; `null`
+ * when the encode fails. For output that cannot wait for an off-thread encode.
+ */
+export function encodeImageRowsNow(
+	base64Data: string,
+	widthPx: number,
+	rowHeightPx: number,
+	rows: number,
+): string[] | null {
+	try {
+		return encodeImageRows(new Uint8Array(Buffer.from(base64Data, "base64")), widthPx, rowHeightPx, rows);
+	} catch {
+		return null;
+	}
+}
+
 export function renderImage(
 	base64Data: string,
 	imageDimensions: ImageDimensions,
@@ -1316,6 +1349,40 @@ export function renderImage(
 		return { sequence, rows };
 	}
 	if (TERMINAL.imageProtocol === ImageProtocol.Iterm2) {
+		if (options.iterm2Rows) {
+			// A cursor-anchored image is emitted on its block's last row and moves
+			// the cursor up to its origin, so whenever the rows above are not its
+			// own (the block straddles the viewport top, or its head was committed
+			// to scrollback) it lands on other content. One strip per row has no
+			// anchor: every row draws exactly its slice in place.
+			const columns = fit.columns;
+			const rowHeightPerWidth = cellDims.heightPx / cellDims.widthPx / columns;
+			// At least one pixel per strip row: a narrower strip would round its
+			// row height up and leave the bottom of a small, upscaled image empty.
+			const widthPx = Math.min(
+				Math.max(imageDimensions.widthPx, Math.ceil(1 / rowHeightPerWidth)),
+				columns * ITERM2_ROW_MAX_PX_PER_COLUMN,
+			);
+			const heightPx = widthPx * rowHeightPerWidth * fit.rows;
+			const shrink = Math.min(
+				1,
+				Math.sqrt(ITERM2_ROW_MAX_PIXELS / (widthPx * heightPx)),
+				ITERM2_ROW_MAX_EDGE / widthPx,
+				ITERM2_ROW_MAX_EDGE / heightPx,
+			);
+			const stripWidthPx = Math.max(1, Math.floor(widthPx * shrink));
+			const rowHeightPx = Math.max(1, Math.floor(stripWidthPx * rowHeightPerWidth));
+			const strips = options.iterm2Rows(stripWidthPx, rowHeightPx, fit.rows);
+			// Undefined while the provider's encode is pending: the rows stay reserved.
+			if (strips === undefined) return { rows: fit.rows };
+			if (strips !== null) {
+				const lines = strips.map(strip =>
+					encodeITerm2(strip, { width: columns, height: 1, preserveAspectRatio: false }),
+				);
+				return { lines, rows: fit.rows };
+			}
+			// The native decoder cannot read this image; iTerm2 decodes the original.
+		}
 		const sequence = encodeITerm2(base64Data, {
 			width: fit.columns,
 			height: "auto",
