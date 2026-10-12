@@ -9075,6 +9075,38 @@ describe("final answer review gate", () => {
 		expect(ended.usage.output).toBe(9);
 	});
 
+	it("replays an image block when a buffered response is released", async () => {
+		const context: AgentContext = { systemPrompt: ["Test"], messages: [], tools: [] };
+		const image = { type: "image" as const, data: "aGk=", mimeType: "image/png" };
+		const answer = createAssistantMessage([image], "stop");
+		const streamFn = () => {
+			const response = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				response.push({ type: "start", partial: answer });
+				response.push({ type: "image_end", contentIndex: 0, content: image, partial: answer });
+				response.push({ type: "done", reason: "stop", message: answer });
+			});
+			return response;
+		};
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			reviewFinalAnswer: () => ({ action: "approve" }),
+		};
+		const events: AgentEvent[] = [];
+		for await (const event of agentLoop([createUserMessage("Draw")], context, config, undefined, streamFn)) {
+			events.push(event);
+		}
+
+		// An image-only answer is never a text candidate, so it is released through
+		// the flush path. Dropping `image_end` there costs ACP clients the image.
+		const images = events.filter(
+			(event): event is Extract<AgentEvent, { type: "message_update" }> =>
+				event.type === "message_update" && event.assistantMessageEvent.type === "image_end",
+		);
+		expect(images).toHaveLength(1);
+	});
+
 	it("replays an approved answer as a well-formed block sequence", async () => {
 		const context: AgentContext = { systemPrompt: ["Test"], messages: [], tools: [] };
 		const answer = createAssistantMessage([{ type: "text", text: "Approved answer" }], "stop");
@@ -9221,6 +9253,61 @@ describe("final answer review gate", () => {
 
 		expect(reviews).toBe(1);
 		expect(events.filter(event => event.type === "turn_start")).toHaveLength(1);
+	});
+
+	it("reviews again when an operator prompt arrives as a user-attributed custom message", async () => {
+		const context: AgentContext = { systemPrompt: ["Test"], messages: [], tools: [] };
+		const answers = ["first answer", "second answer"];
+		let turn = 0;
+		const streamFn = () => {
+			const response = new AssistantMessageEventStream();
+			const text = answers[Math.min(turn++, answers.length - 1)]!;
+			queueMicrotask(() => {
+				const answer = createAssistantMessage([{ type: "text", text }], "stop");
+				response.push({ type: "start", partial: answer });
+				response.push({ type: "text_start", contentIndex: 0, partial: answer });
+				response.push({ type: "text_delta", contentIndex: 0, delta: text, partial: answer });
+				response.push({ type: "text_end", contentIndex: 0, content: text, partial: answer });
+				response.push({ type: "done", reason: "stop", message: answer });
+			});
+			return response;
+		};
+		const skillPrompt: AgentMessage = {
+			role: "custom",
+			customType: "skill",
+			content: "run the skill",
+			display: true,
+			attribution: "user",
+			timestamp: Date.now(),
+		};
+		let followUpSent = false;
+		const reviewed: string[] = [];
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			getFollowUpMessages: async () => {
+				if (followUpSent) return [];
+				followUpSent = true;
+				return [skillPrompt];
+			},
+			reviewFinalAnswer: ({ message }) => {
+				reviewed.push(message.content.find(part => part.type === "text")?.text ?? "");
+				return { action: "approve" };
+			},
+		};
+		for await (const _event of agentLoop(
+			[createUserMessage("first request")],
+			context,
+			config,
+			undefined,
+			streamFn,
+		)) {
+			// drain
+		}
+
+		// A `/skill:` invocation is a custom message attributed to the user, not a
+		// `role: "user"` one; it opens its own request, so its answer is reviewed.
+		expect({ turn, reviewed }).toEqual({ turn: 2, reviewed: ["first answer", "second answer"] });
 	});
 
 	it("reports a rejected draft to the host before hiding it", async () => {

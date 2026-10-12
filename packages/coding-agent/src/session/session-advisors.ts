@@ -823,7 +823,9 @@ export class SessionAdvisors {
 			advice.content = [finalAnswerGuidance.trim(), advice.content].join("\n\n");
 			return { action: "block", advice };
 		} finally {
-			// Late notes from the now-closed window must not change a later user request.
+			// Late notes from the now-closed window must not change a later user
+			// request; `#routeAdvice` compares the note's turn with the request
+			// boundary this records.
 			this.#discardFinalReviewThroughTurn = gate.turn;
 			this.#finalAnswerReview = undefined;
 		}
@@ -1831,10 +1833,13 @@ export class SessionAdvisors {
 		// request that a newer primary user message started. Until that happens the
 		// gate suppresses nothing: a late blocker still routes like any post-turn
 		// note, so a review that timed out cannot silently cost the turn its advice.
+		// "Newer request" compares the note's turn with the request's first turn, not
+		// with a live user marker: that marker is replaced per request, including by
+		// this session's own later gate, so it can never identify a stale note.
 		if (
 			turn !== undefined &&
 			turn <= this.#discardFinalReviewThroughTurn &&
-			lastPrimaryUserMessage(this.#host.agent.state.messages) !== this.#finalReviewUserMessage
+			turn < this.#finalReviewRequestFirstTurn
 		) {
 			return;
 		}

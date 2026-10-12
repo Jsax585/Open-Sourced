@@ -735,9 +735,10 @@ function isToolEvent(event: AgentEvent): boolean {
 }
 
 /**
- * Replay a buffered message's text and thinking blocks as the start/delta/end
+ * Replay a buffered message's text, thinking, and image blocks as the event
  * sequence consumers expect. One synthetic `*_delta` per block would skip the
- * `*_end` matches TTSR rules use and the `text_start` session-title trigger.
+ * `*_end` matches TTSR rules use and the `text_start` session-title trigger,
+ * and a dropped `image_end` costs ACP clients the whole generated image.
  */
 function replayStreamedBlocks(
 	target: EventStream<AgentEvent, AgentMessage[]>,
@@ -759,7 +760,9 @@ function replayStreamedBlocks(
 							{ type: "thinking_delta", contentIndex, delta: part.thinking, partial: message },
 							{ type: "thinking_end", contentIndex, content: part.thinking, partial: message },
 						]
-					: [];
+					: part.type === "image"
+						? [{ type: "image_end", contentIndex, content: part, partial: message }]
+						: [];
 		for (const assistantMessageEvent of events) {
 			target.push({ type: "message_update", assistantMessageEvent, message });
 		}
@@ -1585,14 +1588,18 @@ async function runLoopBody(
 				let message: AssistantMessage;
 				let approvedAdvice: AgentMessage[] | undefined;
 				// A queued operator message starts a new request within the same run.
-				// Advisor corrections are excluded by identity, so a reviewer that
-				// steers its advice back as a plain user message cannot reopen the
-				// gate and pay for a second correction.
+				// Operator prompts arrive either as `role: "user"` or as a host custom
+				// message attributed to the user (`/skill:` invocations, collab
+				// prompts); agent attributions continue the reviewed request. Our own
+				// review advice is excluded by identity, so a reviewer that steers it
+				// back cannot reopen the gate and pay for a second correction.
 				if (
 					config.reviewFinalAnswer &&
-					turnMessages.some(
-						input => input.role === "user" && input.attribution !== "agent" && !reviewAdvice.includes(input),
-					)
+					turnMessages.some(input => {
+						if (reviewAdvice.includes(input)) return false;
+						if (input.role === "user") return input.attribution !== "agent";
+						return "attribution" in input && input.attribution === "user";
+					})
 				)
 					finalAnswerReviewed = false;
 				const shouldBufferCandidate =

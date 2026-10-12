@@ -978,6 +978,54 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(card.content).toContain("critical flaw in logic");
 	});
 
+	it("drops a note from a superseded request without altering the newer prompt", async () => {
+		const staleNote = Promise.withResolvers<void>();
+		let reviewAttempts = 0;
+		const { session, mock } = await createCompletedAdvisorSession("blocker", undefined, {
+			reviewFinalAnswer: true,
+			finalReviewTimeoutMs: 25,
+			primaryResponses: [
+				{ content: ["FIRST ANSWER"], stopReason: "stop" },
+				{ content: ["SECOND ANSWER"], stopReason: "stop" },
+			],
+			advisorResponses: [
+				async () => {
+					reviewAttempts++;
+					await staleNote.promise;
+					return {
+						content: [
+							{
+								type: "toolCall",
+								name: "advise",
+								arguments: { note: "stale blocker from the first request", severity: "blocker" },
+							},
+						],
+					};
+				},
+			],
+		});
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const firstPrompt = session.prompt("first prompt with slow advisor");
+		await session.waitForIdle();
+		await firstPrompt;
+		expect(reviewAttempts).toBe(1);
+
+		// A newer request starts and finishes before the old review lands.
+		await session.prompt("second unrelated prompt");
+		await session.waitForIdle();
+		const callsAfterSecondRequest = mock.calls.length;
+
+		// The note belongs to the superseded request, so it must not steer the
+		// newer one. Comparing against the live request marker would miss this,
+		// because that marker has already moved on to the second prompt.
+		staleNote.resolve();
+		await session.waitForAdvisorCatchup(1000);
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(callsAfterSecondRequest);
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(0);
+	});
+
 	it("counts a rejected final-answer draft in session totals and after reload", async () => {
 		const storage = new MemorySessionStorage();
 		const sessionPath = tempDir.join("final-review-session.jsonl");
