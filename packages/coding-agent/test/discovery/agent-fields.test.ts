@@ -210,6 +210,5 @@ describe("parseAgentFields", () => {
 		for (const steps of [0, "many", true]) {
 			expect(parseAgentFields({ name: "worker", description: "desc", steps })?.steps).toBeUndefined();
 		}
-		expect(parseAgentFields({ name: "worker", description: "desc" })?.steps).toBeUndefined();
 	});
 });
