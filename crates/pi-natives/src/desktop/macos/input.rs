@@ -1319,7 +1319,11 @@ pub(super) fn refuse_menu_press(
 		return Ok(());
 	};
 	if presses_menu_control(event, pid, owner) {
-		let verb = if matches!(event, PointerEvent::Click { .. }) { "lands" } else { "starts" };
+		let verb = if matches!(event, PointerEvent::Click { .. }) {
+			"lands"
+		} else {
+			"starts"
+		};
 		return Err(DesktopError::background_unavailable(format!(
 			"the {} on window {} ({}), which {verb} on a menu button or popup button, would open its \
 			 menu; nothing was sent",
