@@ -1,4 +1,5 @@
 export * from "./dispatch";
+export * from "./decision-trace";
 export * from "./http";
 export * from "./route-graph";
 export * from "./session-state";

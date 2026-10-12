@@ -73,6 +73,7 @@ import { handleTranscriptions } from "./routes/transcriptions";
 import { handleVideoContent, handleVideoPoll, handleVideoSubmit } from "./routes/video";
 import { AuthGatewaySessionStateStore } from "./session-state";
 import { RouteRegistry } from "./route-graph";
+import { RouteDecisionTraceLog, redactedDecisionSummary } from "./decision-trace";
 import { GatewayResponseOwnership, type GatewayResponseOwner, responseEndpointIdentity } from "./response-ownership";
 import {
 	commitGateObservesDownstreamSse,
@@ -460,7 +461,27 @@ async function handleFormatEndpoint(
 	// broker override on AuthStorage when needed).
 	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
 	if (controller.signal.aborted) return clientClosedResponse(route);
-	if ("status" in apiKey) return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
+	const traces = bootOpts.decisionTraces;
+	if ("status" in apiKey) {
+		if (traces)
+			logger.debug(
+				"auth-gateway route decision",
+				redactedDecisionSummary(
+					traces.record({
+						requestId,
+						routeId: compiled.id,
+						generation: compiled.generation,
+						selectedTarget: compiled.root.model,
+						disposition: "skipped",
+						reason: apiKey.credentialLookupFailed ? "credential_lookup_failed" : "credential_unavailable",
+					}),
+				),
+			);
+		const response = route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
+		for (const [name, value] of Object.entries(gatewayResponseHeaders(model, { requestId })))
+			response.headers.set(name, value);
+		return response;
+	}
 	const owner: GatewayResponseOwner = {
 		sessionId,
 		target: `${model.provider}/${model.id}`,
@@ -472,6 +493,19 @@ async function handleFormatEndpoint(
 	if (previousOwner && previousOwner.account !== owner.account) {
 		return route.module.formatError(400, "invalid_request_error", "previous_response_id belongs to another account");
 	}
+	if (traces)
+		logger.debug(
+			"auth-gateway route decision",
+			redactedDecisionSummary(
+				traces.record({
+					requestId,
+					routeId: compiled.id,
+					generation: compiled.generation,
+					selectedTarget: compiled.root.model,
+					disposition: "dispatched",
+				}),
+			),
+		);
 
 	const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
 	if (bootOpts.fetch) streamOpts.fetch = bootOpts.fetch;
@@ -774,7 +808,27 @@ async function handlePiNative(
 
 	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
 	if (controller.signal.aborted) return aborted();
-	if ("status" in apiKey) return piNative.formatError(apiKey.status, apiKey.type, apiKey.message);
+	const traces = bootOpts.decisionTraces;
+	if ("status" in apiKey) {
+		if (traces)
+			logger.debug(
+				"auth-gateway route decision",
+				redactedDecisionSummary(
+					traces.record({
+						requestId,
+						routeId: compiled.id,
+						generation: compiled.generation,
+						selectedTarget: compiled.root.model,
+						disposition: "skipped",
+						reason: apiKey.credentialLookupFailed ? "credential_lookup_failed" : "credential_unavailable",
+					}),
+				),
+			);
+		const response = piNative.formatError(apiKey.status, apiKey.type, apiKey.message);
+		for (const [name, value] of Object.entries(gatewayResponseHeaders(model, { requestId })))
+			response.headers.set(name, value);
+		return response;
+	}
 	const owner: GatewayResponseOwner = {
 		sessionId,
 		target: `${model.provider}/${model.id}`,
@@ -786,6 +840,19 @@ async function handlePiNative(
 	if (previousOwner && previousOwner.account !== owner.account) {
 		return piNative.formatError(400, "invalid_request_error", "previous_response_id belongs to another account");
 	}
+	if (traces)
+		logger.debug(
+			"auth-gateway route decision",
+			redactedDecisionSummary(
+				traces.record({
+					requestId,
+					routeId: compiled.id,
+					generation: compiled.generation,
+					selectedTarget: compiled.root.model,
+					disposition: "dispatched",
+				}),
+			),
+		);
 
 	// Per-session provider learning, owned by this gateway instance. The map is
 	// non-serializable, so `parseRequest` cannot accept one from the wire and
@@ -1064,6 +1131,7 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 	const boot: AuthGatewayRouteOptions = {
 		...opts,
 		routeRegistry: opts.routeRegistry ?? new RouteRegistry(opts.resolveModel),
+		decisionTraces: opts.decisionTraces ?? new RouteDecisionTraceLog(),
 	};
 	const sessionStates = new AuthGatewaySessionStateStore();
 	const responseOwners = new GatewayResponseOwnership();
@@ -1148,6 +1216,11 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 			// Model catalog.
 			if (req.method === "GET" && pathname === "/v1/models") {
 				return handleModelsList(opts);
+			}
+			if (req.method === "GET" && pathname.startsWith("/v1/executions/")) {
+				const requestId = pathname.slice("/v1/executions/".length);
+				const trace = boot.decisionTraces?.list().find(entry => entry.requestId === requestId);
+				return trace ? json(200, trace) : json(404, { error: "unknown execution" });
 			}
 
 			// Route-table miss: no format module to defer to, so we emit a

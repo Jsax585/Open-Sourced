@@ -17,6 +17,7 @@ import type { Api, FetchImpl, Model, Usage } from "../types";
 import type { ClientUsageIdentity } from "../usage";
 import { extractProviderRetryHint } from "../utils/retry-after";
 import type { RouteRegistry } from "./route-graph";
+import type { RouteDecisionTraceLog } from "./decision-trace";
 import type { AuthGatewayServerOptions } from "./types";
 
 export type ModelResolver = (modelId: string) => Model<Api> | undefined;
@@ -39,6 +40,8 @@ export interface AuthGatewayRouteOptions {
 	fetch?: FetchImpl;
 	/** Wave A compiled-route shim. Constructed by {@link startAuthGateway} when omitted. */
 	routeRegistry?: RouteRegistry;
+	/** Shared bounded request-decision history, owned by the router when omitted. */
+	decisionTraces?: RouteDecisionTraceLog;
 }
 
 /** The HTTP server's options: the routes' plus its listener and inbound auth. */
@@ -88,20 +91,24 @@ export function resolveGatewayAccount(
  * {@link classifyGatewayError}; a provider without a usable credential is
  * unavailable, not proof that the client's gateway bearer was rejected.
  */
+export interface GatewayCredentialFailure extends GatewayErrorClassification {
+	credentialLookupFailed?: true;
+}
+
 export async function resolveGatewayApiKey(
 	storage: AuthStorage,
 	model: Model<Api>,
 	sessionId: string,
 	signal: AbortSignal,
 	peer: string,
-): Promise<ResolvedApiKey | GatewayErrorClassification> {
+): Promise<ResolvedApiKey | GatewayCredentialFailure> {
 	let apiKey: ResolvedApiKey | undefined;
 	try {
 		apiKey = await storage.keys.getWithCredential(model.provider, sessionId, modelKeyOptions(model, signal));
 	} catch (error) {
 		const classified = classifyGatewayError(error);
 		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: classified.message });
-		return classified;
+		return { ...classified, credentialLookupFailed: true };
 	}
 	if (apiKey) return apiKey;
 	return {
