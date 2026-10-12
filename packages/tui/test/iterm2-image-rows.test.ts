@@ -276,4 +276,13 @@ describe("iTerm2 inline images", () => {
 		expect(rendered).toContain(`:${EXIF_ROTATED_JPEG}\x07`);
 		expect(rendered).toContain(`width=${IMAGE_COLUMNS};height=auto`);
 	});
+
+	it("leave GIFs to iTerm2 so they keep animating, whatever the media type says", () => {
+		info.imageProtocol = ImageProtocol.Iterm2;
+		const gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+		for (const mimeType of ["image/gif", "IMAGE/GIF", "image/gif; charset=binary"]) {
+			const image = new Image(gif, mimeType, { fallbackColor: text => text }, { maxWidthCells: IMAGE_COLUMNS });
+			expect(image.render(40).join("")).toContain(`:${gif}\x07`);
+		}
+	});
 });

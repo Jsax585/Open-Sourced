@@ -830,22 +830,22 @@ export class Image implements Component {
 						() => encodeSixelAsync(new Uint8Array(Buffer.from(this.#base64Data, "base64")), widthPx, heightPx),
 					),
 				// iTerm2 animates GIFs itself; strips would freeze them on frame one.
-				iterm2Rows:
-					this.#mimeType === "image/gif"
-						? undefined
-						: (widthPx, rowHeightPx, rows) =>
-								this.#encoded(
-									this.#iterm2Rows,
-									`${widthPx}x${rowHeightPx}x${rows}`,
-									() => encodeImageRowsNow(this.#base64Data, widthPx, rowHeightPx, rows),
-									() =>
-										encodeImageRowsAsync(
-											new Uint8Array(Buffer.from(this.#base64Data, "base64")),
-											widthPx,
-											rowHeightPx,
-											rows,
-										),
-								),
+				// Sniff the `GIF8` magic (base64 `R0lGOD`): MIME strings vary in case and parameters.
+				iterm2Rows: this.#base64Data.startsWith("R0lGOD")
+					? undefined
+					: (widthPx, rowHeightPx, rows) =>
+							this.#encoded(
+								this.#iterm2Rows,
+								`${widthPx}x${rowHeightPx}x${rows}`,
+								() => encodeImageRowsNow(this.#base64Data, widthPx, rowHeightPx, rows),
+								() =>
+									encodeImageRowsAsync(
+										new Uint8Array(Buffer.from(this.#base64Data, "base64")),
+										widthPx,
+										rowHeightPx,
+										rows,
+									),
+							),
 			});
 
 			if (result?.transmit && this.#imageId != null && this.#budget !== undefined) {

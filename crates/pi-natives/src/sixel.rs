@@ -13,7 +13,9 @@ use std::io::Cursor;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use icy_sixel::{EncodeOptions, SixelImage, sixel_encode};
 use image::{
-	DynamicImage, ImageDecoder, ImageFormat, ImageReader, RgbaImage,
+	DynamicImage, ExtendedColorType, ImageDecoder, ImageEncoder, ImageFormat, ImageReader,
+	RgbaImage,
+	codecs::png::PngEncoder,
 	imageops::{self, FilterType},
 	metadata::Orientation,
 };
@@ -237,17 +239,19 @@ fn encode_image(bytes: &[u8], target_width_px: u32, target_height_px: u32) -> Re
 /// (squashed if it would be taller than `rows` × `row_height_px`), then cut
 /// into `rows` strips of `row_height_px`; rows past the image bottom are
 /// transparent. Geometry beyond the decode limits is scaled down with its
-/// shape kept, so the strips can be smaller than requested. A terminal that
-/// draws each strip into exactly one cell row (such as iTerm2 inline images)
-/// shows the image row by row, so any subset of rows can be repainted,
-/// clipped, or scrolled without the others. Prefer
-/// [`encode_image_rows_async`] unless the caller cannot wait.
+/// shape kept, so the strips can be smaller than requested. Each strip
+/// carries the source's embedded ICC profile, if any. A terminal that draws
+/// each strip into exactly one cell row (such as iTerm2 inline images) shows
+/// the image row by row, so any subset of rows can be repainted, clipped, or
+/// scrolled without the others. Prefer [`encode_image_rows_async`] unless the
+/// caller cannot wait.
 ///
 /// # Errors
 /// Returns an error if a dimension is zero, if `rows` cannot fit the decode
-/// limit even at one pixel each, if the image carries an EXIF orientation
-/// other than none (the strips could not honour it), or if decoding,
-/// resizing, or PNG encoding fails.
+/// limit even at one pixel each, if the source is wider or taller than the
+/// 8192 px decode edge, if the image carries an EXIF orientation other than
+/// none (the strips could not honour it), or if decoding, resizing, or PNG
+/// encoding fails.
 #[napi]
 pub fn encode_image_rows(
 	bytes: Uint8Array,
@@ -264,8 +268,9 @@ pub fn encode_image_rows(
 ///
 /// # Errors
 /// Rejects if a dimension is zero, if `rows` cannot fit the decode limit
-/// even at one pixel each, if the image carries an EXIF orientation other
-/// than none, or if decoding, resizing, or PNG encoding fails.
+/// even at one pixel each, if the source is wider or taller than the 8192 px
+/// decode edge, if the image carries an EXIF orientation other than none, or
+/// if decoding, resizing, or PNG encoding fails.
 #[napi]
 pub fn encode_image_rows_async(
 	bytes: Uint8Array,
@@ -292,16 +297,26 @@ fn encode_rows(
 	let total_height_px = row_height_px.saturating_mul(rows);
 	guard_dimensions(target_width_px as usize, total_height_px as usize)?;
 
-	// Strips carry no EXIF and the caller sized the rows from the stored raster,
-	// so an image that needs reorienting is left to a viewer of the original.
-	let orientation = ImageReader::new(Cursor::new(bytes))
+	// Header probe before the full decode. A source too large to inflate in the
+	// worker, or one needing EXIF reorientation (strips carry no EXIF, and the
+	// caller sized the rows from the stored raster), is left to a viewer of the
+	// original. An embedded colour profile is copied into every strip.
+	let mut header = ImageReader::new(Cursor::new(bytes))
 		.with_guessed_format()
-		.ok()
-		.and_then(|reader| reader.into_decoder().ok())
-		.and_then(|mut decoder| decoder.orientation().ok());
-	if orientation.is_some_and(|orientation| orientation != Orientation::NoTransforms) {
+		.map_err(|e| Error::from_reason(format!("Failed to detect image format: {e}")))?
+		.into_decoder()
+		.map_err(|e| Error::from_reason(format!("Failed to decode image: {e}")))?;
+	let (source_width, source_height) = header.dimensions();
+	if source_width as usize > MAX_IMAGE_EDGE || source_height as usize > MAX_IMAGE_EDGE {
+		return Err(Error::from_reason("Image dimensions exceed the decode limit"));
+	}
+	if header
+		.orientation()
+		.is_ok_and(|orientation| orientation != Orientation::NoTransforms)
+	{
 		return Err(Error::from_reason("Image needs EXIF reorientation"));
 	}
+	let icc_profile = header.icc_profile().ok().flatten();
 	let source = decode_image_from_bytes(bytes)?;
 	if source.width() == 0 || source.height() == 0 {
 		return Err(Error::from_reason("Image has no pixels"));
@@ -328,8 +343,14 @@ fn encode_rows(
 			imageops::replace(&mut strip, &*source_rows, 0, 0);
 		}
 		png.clear();
-		DynamicImage::ImageRgba8(strip)
-			.write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+		let mut encoder = PngEncoder::new(&mut png);
+		if let Some(profile) = &icc_profile {
+			encoder
+				.set_icc_profile(profile.clone())
+				.map_err(|err| Error::from_reason(format!("Failed to embed ICC profile: {err}")))?;
+		}
+		encoder
+			.write_image(strip.as_raw(), target_width_px, row_height_px, ExtendedColorType::Rgba8)
 			.map_err(|err| Error::from_reason(format!("Failed to encode image row as PNG: {err}")))?;
 		strips.push(STANDARD.encode(&png));
 	}

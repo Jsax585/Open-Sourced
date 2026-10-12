@@ -262,7 +262,8 @@ go straight to scrollback) instead of one image anchored at its block's last
 row. Each row then shows exactly its slice of the image wherever the frame puts
 it: clipped at the viewport top, split across a history commit, or repainted
 alone. GIFs, which iTerm2 animates, EXIF-oriented photos, which iTerm2 rotates,
-and images the native decoder cannot read keep the single anchored image.
+sources past the encoder's 8192 px edge, and images the native decoder cannot
+read keep the single anchored image.
 
 ## 7. Core invariants
 
