@@ -561,12 +561,7 @@ describe("unverified isolated merge latch", () => {
 			cwd: "/repo",
 			command: "cd /tmp && bun test",
 		});
-		tracker.onToolResult(
-			"bash",
-			false,
-			{ cwd: "/repo", async: { state: "running", jobId: "bg_out" } },
-			"call-async",
-		);
+		tracker.onToolResult("bash", false, { cwd: "/repo", async: { state: "running", jobId: "bg_out" } }, "call-async");
 		expect(latch.latched).toBe(true);
 		tracker.onAsyncJobTerminal("bg_out", "bash", "completed");
 		expect(latch.latched).toBe(true);
@@ -646,6 +641,22 @@ describe("unverified isolated merge latch", () => {
 			expect(latch.latched).toBe(true);
 		}
 	});
+
+	for (const [name, command, clears] of [
+		["grouped command/login flags around a no-op", "bash -cl 'pwd'", false],
+		["grouped command/login flags around a masked failure", "bash -cl 'bun test || true'", false],
+		["grouped command/login flags around an out-of-tree check", "bash -cl 'cd /tmp && bun test'", false],
+		["grouped command/login flags around an in-tree check", "bash -cl 'bun test'", true],
+	] as const) {
+		it(`requires real parent acceptance for ${name}`, () => {
+			const latch = new UnverifiedMergeLatch();
+			latch.mark();
+			const tracker = new TodoTracker(host(latch).host);
+			tracker.onToolExecutionStart("bash", "clustered-check", { command, cwd: "/repo" });
+			tracker.onToolResult("bash", false, { cwd: "/repo" }, "clustered-check");
+			expect(latch.latched).toBe(!clears);
+		});
+	}
 
 	it("does not clear on shell-backgrounded verification", async () => {
 		const latch = new UnverifiedMergeLatch();
