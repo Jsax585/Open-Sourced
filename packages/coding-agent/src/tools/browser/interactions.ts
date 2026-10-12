@@ -1,3 +1,4 @@
+import type { Protocol } from "devtools-protocol";
 import * as path from "node:path";
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
@@ -625,6 +626,50 @@ export async function selectElementOptions(
 	return outcome.selected;
 }
 
+/** How long a click has to open a file chooser before the target counts as a drop zone. */
+const FILE_CHOOSER_WAIT_MS = 400;
+
+/**
+ * Click `handle` and fill the file chooser it opens; false when no chooser opened. The chooser is caught on a CDP
+ * session of our own so interception ends with this call: Puppeteer's `waitForFileChooser` leaves it on, which
+ * swallows every later chooser on the page, and its listener throws on a File System Access picker.
+ */
+async function fillClickedFileChooser(
+	page: Page,
+	handle: ElementHandle,
+	absolutePaths: string[],
+	label: string,
+	signal: AbortSignal | undefined,
+): Promise<boolean> {
+	const session = await untilAborted(signal, () => page.createCDPSession());
+	try {
+		const { promise: opened, resolve } = Promise.withResolvers<Protocol.Page.FileChooserOpenedEvent | null>();
+		session.once("Page.fileChooserOpened", resolve);
+		await untilAborted(signal, () => session.send("Page.enable"));
+		await untilAborted(signal, () => session.send("Page.setInterceptFileChooserDialog", { enabled: true }));
+		await clickElement(handle, label, signal);
+		const timer = setTimeout(() => resolve(null), FILE_CHOOSER_WAIT_MS);
+		const chooser = await untilAborted(signal, () => opened).finally(() => clearTimeout(timer));
+		if (!chooser) return false;
+		if (chooser.backendNodeId === undefined) {
+			throw new ToolError(
+				`${label} opened a File System Access picker (showOpenFilePicker), which automation cannot fill; upload through the page's <input type=file> or drop zone instead`,
+			);
+		}
+		if (absolutePaths.length > 1 && chooser.mode === "selectSingle") {
+			throw new ToolError("Multiple file uploads only work with <input type=file multiple>");
+		}
+		await untilAborted(signal, () =>
+			session.send("DOM.setFileInputFiles", { backendNodeId: chooser.backendNodeId, files: absolutePaths }),
+		);
+		return true;
+	} finally {
+		// The relay serves every session of a tab from one debugger attachment, so detaching alone leaves it on.
+		await session.send("Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => undefined);
+		await session.detach().catch(() => undefined);
+	}
+}
+
 /** Upload files through an input, native chooser trigger, or synthetic drop-zone event sequence. */
 export async function uploadFilesToElement(
 	page: Page,
@@ -646,13 +691,7 @@ export async function uploadFilesToElement(
 		return;
 	}
 
-	const chooserPromise = page.waitForFileChooser({ timeout: 400 }).catch(() => null);
-	await clickElement(handle, label, signal);
-	const chooser = await untilAborted(signal, () => chooserPromise);
-	if (chooser) {
-		await untilAborted(signal, () => chooser.accept(absolutePaths));
-		return;
-	}
+	if (await fillClickedFileChooser(page, handle, absolutePaths, label, signal)) return;
 
 	const files: FilePayload[] = [];
 	for (const absolute of absolutePaths) {

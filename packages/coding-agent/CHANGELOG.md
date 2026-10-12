@@ -28,6 +28,11 @@
 
 - Kept private prompt-cache routing keys out of shared sessions and HTML exports ([#15467](https://github.com/can1357/oh-my-pi/pull/15467) by [@iliaal](https://github.com/iliaal))
 
+### Fixed
+
+- Browser `uploadFile` on a control that opens `showOpenFilePicker()` fails at once with a named error instead of hanging the cell until the tab is killed
+- After browser `uploadFile` clicked a chooser trigger or drop zone, later file choosers on that page open again; before, every later chooser, the user's own clicks in a relay tab included, did nothing
+
 ## [18.10.2] - 2026-10-12
 
 ### Added
