@@ -269,6 +269,40 @@ describe("inline click-to-focus geometry", () => {
 		expect(plainRows(term.getViewport()).some(row => row.includes("ToggleAgent3"))).toBe(false);
 	});
 
+	it("acts on the row under the press when a repaint moves it before release", async () => {
+		cfgTuiMouse.set(mode.settings, true);
+		cfgTuiMouseQuoteOnSelect.set(mode.settings, true);
+		await mode.init({ suppressWelcomeIntro: true });
+		void mode.getUserInput();
+		await term.waitForRender();
+
+		for (let index = 0; index < 5; index++) {
+			eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+				id: `MovedAgent${index}`,
+				index,
+				agent: "task",
+				agentSource: "bundled",
+				description: `moved job ${index}`,
+				status: "started",
+				parentToolCallId: "tool-call",
+				detached: true,
+			});
+		}
+		const rowOf = (marker: string): number => plainRows(term.getViewport()).findIndex(row => row.includes(marker));
+		await term.waitForRender(() => rowOf("more — expand") >= 0);
+		const pressRow = rowOf("more — expand");
+		term.sendInput(`\x1b[<0;5;${pressRow + 1}M`);
+
+		// Output streams in while the button is held, pushing the expander down.
+		mode.chatContainer.addChild(new Text("streamed one\nstreamed two\nstreamed three", 1, 0));
+		mode.ui.requestRender();
+		await term.waitForRender(() => rowOf("more — expand") > pressRow);
+
+		term.sendInput(`\x1b[<0;5;${pressRow + 1}m`);
+		await term.waitForRender(() => rowOf("show less") >= 0);
+		expect(rowOf("more — expand")).toBe(-1);
+	});
+
 	it("quotes text dragged over in the transcript into the prompt", async () => {
 		cfgTuiMouse.set(mode.settings, true);
 		cfgTuiMouseQuoteOnSelect.set(mode.settings, true);

@@ -283,8 +283,12 @@ export class InputController {
 
 	/** Click-candidate id the hover band currently tracks; repaint only on change. */
 	#lastHoverClickId: string | undefined;
-	/** Left-button press that opened the current pointer gesture; `dragged` once it moved to another cell. */
-	#press: { row: number; col: number; dragged: boolean } | undefined;
+	/**
+	 * Left-button press that opened the current pointer gesture; `dragged` once
+	 * it moved to another cell. `targets` are the click candidates under the
+	 * press, resolved then: repaints while the button is held may move rows.
+	 */
+	#press: { row: number; col: number; dragged: boolean; targets: string[] } | undefined;
 
 	/** Return the last full editor snapshot delivered by its change contract. */
 	getDraftText(): string {
@@ -793,9 +797,9 @@ export class InputController {
 				this.ctx.ui.setScreenSelection(undefined);
 			}
 			if (event.motion) this.#updateHoverHighlight(event.row);
-			else if (event.leftClick) this.#focusClickedAgent(event.row);
+			else if (event.leftClick) this.#focusClickedAgent(this.#viewportCandidates(event.row));
 		} else if (event.leftClick) {
-			this.#press = { ...point, dragged: false };
+			this.#press = { ...point, dragged: false, targets: this.#viewportCandidates(event.row) };
 			this.ctx.ui.setScreenSelection({ anchor: point, focus: point });
 		} else if (press && event.motion && (event.button & 3) === 0) {
 			press.dragged ||= point.row !== press.row || point.col !== press.col;
@@ -805,7 +809,7 @@ export class InputController {
 			this.ctx.ui.extendScreenSelection(point);
 			const text = press.dragged ? this.ctx.ui.getScreenSelectionText() : "";
 			this.ctx.ui.setScreenSelection(undefined);
-			if (!press.dragged) this.#focusClickedAgent(press.row);
+			if (!press.dragged) this.#focusClickedAgent(press.targets);
 			else if (/\S/.test(text)) this.#quoteSelection(text);
 		} else if (event.motion) {
 			this.#updateHoverHighlight(event.row);
@@ -868,8 +872,7 @@ export class InputController {
 		this.#lastHoverClickId = undefined;
 	}
 
-	#focusClickedAgent(screenRow: number): void {
-		const candidates = this.#viewportCandidates(screenRow);
+	#focusClickedAgent(candidates: string[]): void {
 		if (candidates.length === 0) return;
 		const refs = AgentRegistry.global().list();
 		const scoped = refs.filter(ref => candidates.includes(ref.id));
