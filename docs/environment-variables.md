@@ -521,6 +521,7 @@ are ignored.
 | `HINDSIGHT_API_URL`                | `hindsight.apiUrl`              | Non-empty string; default `http://localhost:8888`                                 |
 | `HINDSIGHT_API_TOKEN`              | `hindsight.apiToken`            | Non-empty string; unset by default                                                |
 | `HINDSIGHT_BANK_ID`                | `hindsight.bankId`              | Non-empty string; unset by default, so the selected scoping mode derives the bank |
+| `HINDSIGHT_BANK_ID_TEMPLATE`       | `hindsight.bankIdTemplate`      | Non-empty string; unset by default. Placeholders: `{gitProject}`, `{project}`, `{harness}` |
 | `HINDSIGHT_BANK_MISSION`           | `hindsight.bankMission`         | Non-empty string; default empty string                                            |
 | `HINDSIGHT_RETAIN_MODE`            | `hindsight.retainMode`          | `full-session` or `last-turn`; default `full-session`                             |
 | `HINDSIGHT_RECALL_BUDGET`          | `hindsight.recallBudget`        | `low`, `mid`, or `high`; default `mid`                                            |

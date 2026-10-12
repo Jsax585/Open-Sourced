@@ -441,6 +441,7 @@ describe("Hindsight recall across a resume", () => {
 		hindsightApiToken: null,
 		bankId: null,
 		bankIdPrefix: "",
+		bankIdTemplate: null,
 		scoping: "global",
 		bankMission: "",
 		retainMission: null,

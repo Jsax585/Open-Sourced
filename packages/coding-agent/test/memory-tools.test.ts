@@ -52,6 +52,7 @@ function makeConfig(overrides: Partial<HindsightConfig> = {}): HindsightConfig {
 		hindsightApiToken: null,
 		bankId: null,
 		bankIdPrefix: "",
+		bankIdTemplate: null,
 		scoping: "global",
 		bankMission: "",
 		retainMission: null,

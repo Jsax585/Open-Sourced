@@ -27,6 +27,8 @@ import type { HindsightApi } from "./client";
 import type { HindsightConfig } from "./config";
 
 const DEFAULT_BANK_NAME = "omp";
+/** `{harness}` value: this runtime, matching the coding-agents harness id convention. */
+const HARNESS_NAME = "omp";
 const PROJECT_TAG_PREFIX = "project:";
 const UNKNOWN_PROJECT = "unknown";
 const MISSION_SET_CAP = 10_000;
@@ -54,6 +56,55 @@ function baseBankId(config: HindsightConfig): string {
 	return prefix ? `${prefix}-${base}` : base;
 }
 
+/** Placeholder syntax shared with the coding-agents runtime (`core/template.ts`). */
+const TEMPLATE_PLACEHOLDER = /\{([a-zA-Z_]+)\}/g;
+
+/** Repo basename (case preserved) for `{gitProject}`, or null when nothing is nameable. */
+function gitProjectName(directory: string): string | null {
+	if (!directory) return null;
+	const primary = vcs.repo(directory)?.primaryRoot() ?? null;
+	return path.basename(primary ?? directory) || null;
+}
+
+/**
+ * Placeholders `hindsight.bankIdTemplate` understands — the same names the coding-agents
+ * runtime resolves, so a template copied from there means the same bank here.
+ */
+const TEMPLATE_RESOLVERS: Record<string, (directory: string) => string> = {
+	/** Worktree-aware repository name: every linked worktree shares one bank. */
+	gitProject: directory => gitProjectName(directory) ?? UNKNOWN_PROJECT,
+	/** Working-directory basename, no git involved. */
+	project: directory => (directory ? path.basename(directory) : "") || UNKNOWN_PROJECT,
+	harness: () => HARNESS_NAME,
+};
+
+/** Placeholders already reported, so a typo'd template warns once per process, not per turn. */
+const reportedTemplatePlaceholders = new Set<string>();
+
+/**
+ * Expand a `hindsight.bankIdTemplate` so an omp session can address the bank another coding
+ * agent already reads — nobody shares memory by guessing a name.
+ *
+ * `{gitProject}` keeps the name's case: bank ids are matched literally, so lowercasing here
+ * would silently fork `General` from `general`. An unknown placeholder resolves to `unknown`
+ * and is reported once, because a silent empty string points the session at a bank nobody
+ * reads and says nothing about why.
+ */
+function applyBankIdTemplate(template: string, directory: string): string {
+	return template.replace(TEMPLATE_PLACEHOLDER, (token, name: string) => {
+		const resolve = TEMPLATE_RESOLVERS[name];
+		if (resolve) return resolve(directory);
+		if (!reportedTemplatePlaceholders.has(name)) {
+			reportedTemplatePlaceholders.add(name);
+			const valid = Object.keys(TEMPLATE_RESOLVERS)
+				.map(key => `{${key}}`)
+				.join(", ");
+			logger.warn(`Hindsight: unknown hindsight.bankIdTemplate placeholder "${token}" — valid: ${valid}`);
+		}
+		return UNKNOWN_PROJECT;
+	});
+}
+
 /**
  * Best-effort project label from a working-directory path.
  *
@@ -73,9 +124,19 @@ function baseBankId(config: HindsightConfig): string {
  * Native repository discovery never launches a subprocess.
  */
 function projectLabel(directory: string): string {
-	if (!directory) return UNKNOWN_PROJECT;
-	const primary = vcs.repo(directory)?.primaryRoot() ?? null;
-	return path.basename(primary ?? directory).toLowerCase() || UNKNOWN_PROJECT;
+	return gitProjectName(directory)?.toLowerCase() ?? UNKNOWN_PROJECT;
+}
+
+/** The tag triple every `per-project-tagged` session retains and recalls with. */
+function projectTagScope(directory: string): Pick<BankScope, "retainTags" | "recallTags" | "recallTagsMatch"> {
+	const tag = `${PROJECT_TAG_PREFIX}${projectLabel(directory)}`;
+	return {
+		retainTags: [tag],
+		recallTags: [tag],
+		// `any` keeps untagged "global" memories visible alongside the
+		// project-tagged ones; flip to `*_strict` to harden isolation.
+		recallTagsMatch: "any",
+	};
 }
 
 /**
@@ -85,23 +146,22 @@ function projectLabel(directory: string): string {
  * `per-project-tagged`.
  */
 export function computeBankScope(config: HindsightConfig, directory: string): BankScope {
+	const template = config.bankIdTemplate?.trim();
+	if (template) {
+		// A template IS the bank id: it supersedes `bankId`/`bankIdPrefix` and the per-project
+		// suffix, because it names the project itself — `coding-agent::{gitProject}` with a
+		// second segment appended would address a bank that no other agent shares.
+		const bankId = applyBankIdTemplate(template, directory);
+		return config.scoping === "per-project-tagged" ? { bankId, ...projectTagScope(directory) } : { bankId };
+	}
 	const base = baseBankId(config);
 	switch (config.scoping) {
 		case "global":
 			return { bankId: base };
 		case "per-project":
 			return { bankId: `${base}-${projectLabel(directory)}` };
-		case "per-project-tagged": {
-			const tag = `${PROJECT_TAG_PREFIX}${projectLabel(directory)}`;
-			return {
-				bankId: base,
-				retainTags: [tag],
-				recallTags: [tag],
-				// `any` keeps untagged "global" memories visible alongside the
-				// project-tagged ones; flip to `*_strict` to harden isolation.
-				recallTagsMatch: "any",
-			};
-		}
+		case "per-project-tagged":
+			return { bankId: base, ...projectTagScope(directory) };
 	}
 }
 

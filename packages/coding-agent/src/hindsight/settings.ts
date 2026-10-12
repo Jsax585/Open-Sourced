@@ -58,6 +58,21 @@ export const cfgHindsightBankId = register({
 
 export const cfgHindsightBankIdPrefix = register({ id: "hindsight.bankIdPrefix", type: "string", default: undefined });
 
+export const cfgHindsightBankIdTemplate = register({
+	id: "hindsight.bankIdTemplate",
+	env: "HINDSIGHT_BANK_ID_TEMPLATE",
+	type: "string",
+	default: undefined,
+	ui: {
+		tab: "memory",
+		group: "Hindsight",
+		label: "Hindsight Bank ID Template",
+		description:
+			"Full bank id template, overriding bankId/prefix and the per-project bank suffix. Placeholders: {gitProject} (worktree-aware repo name), {project} (cwd basename), {harness} (omp). Use coding-agent::{gitProject} to share one bank per repository with the other coding agents",
+		condition: "hindsightActive",
+	},
+});
+
 export const cfgHindsightScoping = register({
 	id: "hindsight.scoping",
 	env: "HINDSIGHT_SCOPING",

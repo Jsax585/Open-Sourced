@@ -5,6 +5,7 @@
 ### Added
 
 - Added `task.agentSoftRequestBudget` to give named subagents their own soft request budget, so a long-running agent can get more requests (or `0` for no guard) while scout, sonic and other agents keep theirs ([#15419](https://github.com/can1357/oh-my-pi/pull/15419) by [@will-bogusz](https://github.com/will-bogusz))
+- Added the `hindsight.bankIdTemplate` setting (`HINDSIGHT_BANK_ID_TEMPLATE`): with placeholders `{gitProject}`, `{project}`, and `{harness}`, a template like `coding-agent::{gitProject}` points omp at the same memory bank the other coding agents use for that repository ([#15487](https://github.com/can1357/oh-my-pi/pull/15487) by [@studyzy](https://github.com/studyzy))
 
 ## [18.10.2] - 2026-10-12
 
