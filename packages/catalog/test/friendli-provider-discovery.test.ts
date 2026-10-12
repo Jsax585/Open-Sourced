@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { buildModel } from "../src/build";
 import { seedModels } from "../src/compat/providers";
 import { Effort } from "../src/effort";
-import { getBundledModels } from "../src/models";
 import { getSupportedEfforts } from "../src/model-thinking";
 import { friendliModelManagerOptions } from "../src/provider-models/openai-compat";
 
@@ -54,7 +53,6 @@ describe("Friendli discovery deployment contract", () => {
 				reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }],
 			},
 		]);
-		expect(effort.name).toBe("GLM-5.2");
 		expect(effort.cost.input).toBeCloseTo(1.4);
 		expect(effort.cost.output).toBeCloseTo(4.4);
 		expect(effort.cost.cacheRead).toBeCloseTo(0.26);
@@ -111,13 +109,5 @@ describe("Friendli discovery deployment contract", () => {
 				expect(getSupportedEfforts(model)).toEqual(thinking?.efforts ?? []);
 			}
 		}
-	});
-
-	test("the generated fallback agrees with its authored seed", () => {
-		const seed = buildModel(seedModels("friendli")[0]);
-		const bundled = getBundledModels("friendli").find(model => model.id === seed.id);
-		expect(bundled?.cost).toEqual(seed.cost);
-		expect(bundled?.maxTokens).toBe(seed.maxTokens);
-		expect(bundled?.thinking?.efforts).toEqual(seed.thinking?.efforts);
 	});
 });

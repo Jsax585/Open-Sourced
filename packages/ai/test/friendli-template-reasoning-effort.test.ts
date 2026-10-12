@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { friendliModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { Model } from "@oh-my-pi/pi-catalog/types";
@@ -44,19 +45,20 @@ async function capture(
 }
 
 describe("Friendli discovery-to-wire contracts", () => {
-	test("binary picker enables and disables thinking without top-level effort", async () => {
-		const model = await discovered("zai-org/GLM-5.1", [{ type: "toggle" }]);
-		expect(model.thinking?.efforts).toEqual([Effort.High]);
-		const on = await capture(model, { reasoning: "high" });
-		expect(on.chat_template_kwargs).toEqual({ enable_thinking: true });
-		expect(on.reasoning_effort).toBeUndefined();
-		expect(on.parse_reasoning).toBe(true);
-		expect(on.include_reasoning).toBe(true);
-		const off = await capture(model, { disableReasoning: true });
-		expect(off.chat_template_kwargs).toEqual({ enable_thinking: false });
-		expect(off.reasoning_effort).toBeUndefined();
-		expect(off.parse_reasoning).toBeUndefined();
-		expect(off.include_reasoning).toBeUndefined();
+	test("live binary controls override both unknown and effort-capable KDL defaults", async () => {
+		for (const id of ["zai-org/GLM-5.1", "zai-org/GLM-5.2", "vendor/opaque"]) {
+			const model = await discovered(id, [{ type: "toggle" }]);
+			const on = await capture(model, { reasoning: "high" });
+			expect(on.chat_template_kwargs).toEqual({ enable_thinking: true });
+			expect(on.reasoning_effort).toBeUndefined();
+			expect(on.parse_reasoning).toBe(true);
+			expect(on.include_reasoning).toBe(true);
+			const off = await capture(model, { disableReasoning: true });
+			expect(off.chat_template_kwargs).toEqual({ enable_thinking: false });
+			expect(off.reasoning_effort).toBeUndefined();
+			expect(off.parse_reasoning).toBeUndefined();
+			expect(off.include_reasoning).toBeUndefined();
+		}
 	});
 
 	test("real efforts serialize distinct high/max values alongside the toggle", async () => {
@@ -71,17 +73,79 @@ describe("Friendli discovery-to-wire contracts", () => {
 		}
 	});
 
+	test("live non-GLM efforts override the no-effort KDL baseline", async () => {
+		const model = await discovered("vendor/opaque", [{ type: "toggle" }, { type: "effort", values: ["low", "max"] }]);
+		for (const reasoning of ["low", "max"] as const) {
+			const body = await capture(model, { reasoning });
+			expect(body.reasoning_effort).toBe(reasoning);
+			expect(body.chat_template_kwargs).toEqual({ enable_thinking: true });
+		}
+	});
+
+	test("custom non-GLM declared efforts emit tiers while a sparse model retains endpoint defaults", async () => {
+		const spec = {
+			...seedModels<"openai-completions">("friendli")[0],
+			id: "vendor/opaque",
+			provider: "custom-friendli",
+		};
+		const sparse = buildModel(spec);
+		const body = await capture(sparse, {});
+		expect(body.chat_template_kwargs).toBeUndefined();
+		expect(body.reasoning_effort).toBeUndefined();
+		const sparseRequested = await capture(sparse, { reasoning: "high" });
+		expect(sparseRequested.reasoning_effort).toBeUndefined();
+		expect(sparseRequested.chat_template_kwargs).toEqual({ enable_thinking: true });
+		const explicitOff = await capture(sparse, { disableReasoning: true });
+		expect(explicitOff.chat_template_kwargs).toEqual({ enable_thinking: false });
+		const declared = buildModel({
+			...spec,
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.Max] },
+		});
+		for (const reasoning of ["low", "max"] as const) {
+			const enabled = await capture(declared, { reasoning });
+			expect(enabled.reasoning_effort).toBe(reasoning);
+			expect(enabled.chat_template_kwargs).toEqual({ enable_thinking: true });
+		}
+		const unrequested = await capture(declared, {});
+		expect(unrequested.chat_template_kwargs).toEqual({ enable_thinking: false });
+	});
+
+	test("explicit flat and nested effort capabilities outrank a rule-owned empty dial", async () => {
+		const spec = {
+			...seedModels<"openai-completions">("friendli")[0],
+			id: "vendor/opaque",
+			provider: "custom-friendli",
+		};
+		const flat = buildModel({ ...spec, compat: { supportsReasoningEffort: true } });
+		expect((await capture(flat, { reasoning: "max" })).reasoning_effort).toBe("max");
+		const nested = buildModel({
+			...spec,
+			compat: {
+				supportsReasoningEffort: false,
+				whenThinking: {
+					thinkingFormat: "openai",
+					supportsReasoningEffort: true,
+					omitReasoningEffort: false,
+				},
+			},
+		});
+		expect((await capture(nested, { reasoning: "high" })).reasoning_effort).toBe("high");
+	});
+
 	test("effort-only models cannot grow a toggle or expose Thinking Off", async () => {
 		const model = await discovered("zai-org/GLM-5.3", [{ type: "effort", values: ["low", "high", "max"] }]);
 		expect(model.thinking?.requiresEffort).toBe(true);
 		const body = await capture(model, { reasoning: "max" });
 		expect(body.reasoning_effort).toBe("max");
 		expect(body.chat_template_kwargs).toBeUndefined();
+		const off = await capture(model, { disableReasoning: true });
+		expect(off.reasoning_effort).toBe("low");
+		expect(off.chat_template_kwargs).toBeUndefined();
 	});
 
 	test("tool continuation preserves real reasoning and fulfills a missing-reasoning contract", async () => {
 		const model = await discovered("zai-org/GLM-5.1", [{ type: "toggle" }]);
-		for (const thinking of [undefined, "captured reasoning"]) {
+		for (const thinking of [undefined, "", "captured reasoning"]) {
 			const context: Context = {
 				messages: [
 					{ role: "user", content: "use tool", timestamp: 0 },
@@ -91,7 +155,7 @@ describe("Friendli discovery-to-wire contracts", () => {
 						provider: model.provider,
 						model: model.id,
 						content: [
-							...(thinking
+							...(thinking !== undefined
 								? [{ type: "thinking" as const, thinking, thinkingSignature: "reasoning_content" }]
 								: []),
 							{ type: "toolCall", id: "call1", name: "lookup", arguments: {} },

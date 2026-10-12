@@ -16,6 +16,7 @@ provider "friendli" {
 	}
 	supports-store #false
 	supports-developer-role #false
+	supports-reasoning-effort #false
 	max-tokens-field "max_tokens"
 	thinking-format "qwen-chat-template"
 	reasoning-disable-mode "qwen-template-false"
@@ -50,6 +51,8 @@ provider "friendli" {
 	// baseline template dialect remains responsible for explicit Thinking Off.
 	when-thinking {
 		thinking-format "openai"
+		supports-reasoning-effort #true
+		omit-reasoning-effort #false
 		requires-reasoning-content-for-tool-calls #true
 		allows-synthetic-reasoning-content-for-tool-calls #false
 		extra-body {
