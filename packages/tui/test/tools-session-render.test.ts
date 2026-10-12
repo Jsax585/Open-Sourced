@@ -52,4 +52,15 @@ describe("session tool renderer", () => {
 		expect(rendered).not.toContain(os.homedir());
 		expect(rendered).not.toContain("\u001b");
 	});
+
+	it("bounds the call preview for very long branch and path arguments", () => {
+		const long = "x".repeat(5000);
+		for (const args of [
+			{ op: "worktree_create", branch: long },
+			{ op: "worktree_remove", path: long },
+			{ op: "move", path: long },
+		] as const) {
+			expect(JSON.stringify(sessionToolRenderer.describeCall(args)).length).toBeLessThan(1000);
+		}
+	});
 });

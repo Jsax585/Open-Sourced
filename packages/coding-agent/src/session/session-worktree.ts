@@ -151,9 +151,9 @@ export async function createSessionWorktree(
 	await fs.mkdir(path.dirname(worktreePath), { recursive: true });
 
 	signal?.throwIfAborted();
-	await repository.createBranch(branch, baseCommit, false, signal);
 	let result: VcsWorktreeAddResult;
 	try {
+		await repository.createBranch(branch, baseCommit, false, signal);
 		result = await repository.worktreeAdd(
 			worktreePath,
 			branch,
@@ -167,13 +167,16 @@ export async function createSessionWorktree(
 		);
 		signal?.throwIfAborted();
 	} catch (error) {
-		// A canceled or failed creation must not leave the branch or a half-built checkout behind.
+		// A canceled or failed creation must not leave the branch or a half-built checkout behind. Branch
+		// creation is inside the guard because a cancel can land after the ref is written but before the
+		// native call settles.
 		if (signal?.aborted) {
+			const adminDir = await readWorktreeAdminDir(worktreePath);
 			await repository.worktreeRemove(worktreePath, true).catch(() => false);
 			await fs.rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
 			// The removal can leave its admin entry behind when the checkout was reached through another
 			// spelling of the path (/tmp vs /private/tmp); that stale entry would keep the branch checked out.
-			await repository.worktreePrune().catch(() => undefined);
+			await removeWorktreeAdminDir(adminDir);
 			await repository.deleteBranch(branch, true).catch(() => false);
 		}
 		throw error;
@@ -187,6 +190,26 @@ export async function createSessionWorktree(
 		baseCommit,
 		keptChanges: keepChanges,
 	};
+}
+
+/** Admin directory (`<common>/worktrees/<name>`) that a linked checkout's `.git` file points at, if any. */
+export async function readWorktreeAdminDir(worktreePath: string): Promise<string | undefined> {
+	try {
+		const pointer = (await fs.readFile(path.join(worktreePath, ".git"), "utf8")).trim();
+		if (!pointer.startsWith("gitdir:")) return undefined;
+		return path.resolve(worktreePath, pointer.slice("gitdir:".length).trim());
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Delete one linked-worktree admin entry. Used instead of a repository-wide `git worktree prune`, which would
+ * also drop unrelated entries whose checkout is temporarily absent (for example a locked portable worktree).
+ */
+export async function removeWorktreeAdminDir(adminDir: string | undefined): Promise<void> {
+	if (!adminDir || path.basename(path.dirname(adminDir)) !== "worktrees") return;
+	await fs.rm(adminDir, { recursive: true, force: true }).catch(() => undefined);
 }
 
 /** State of `wt` plus a fingerprint that changes whenever any file, ref, or `HEAD` in it changes. */

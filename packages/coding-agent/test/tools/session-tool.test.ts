@@ -280,6 +280,22 @@ describe("session tool: worktrees", () => {
 		expect(await git(fixture.repo, "branch", "--list", "alias")).toContain("alias");
 	});
 
+	it("keeps an unrelated locked worktree whose checkout is temporarily absent", async () => {
+		const alias = path.join(fixture.root, "repo-alias");
+		await fs.symlink(fixture.repo, alias);
+		const portable = (await fixture.tool.execute("1", { op: "worktree_create", branch: "portable" })).details!.path!;
+		await git(fixture.repo, "worktree", "lock", portable);
+		await fs.rename(portable, `${portable}-offline`);
+		const created = (await fixture.toolIn(alias).execute("2", { op: "worktree_create", branch: "other" })).details!
+			.path!;
+
+		await fixture.tool.execute("3", { op: "worktree_remove", path: created });
+
+		const listing = await git(fixture.repo, "worktree", "list", "--porcelain");
+		expect(listing).toContain("branch refs/heads/portable\nlocked");
+		expect(listing).not.toContain("refs/heads/other");
+	});
+
 	it("refuses to remove a locked worktree unless forced", async () => {
 		const created = (await fixture.tool.execute("1", { op: "worktree_create", branch: "locked" })).details!.path!;
 		await git(fixture.repo, "worktree", "lock", created);

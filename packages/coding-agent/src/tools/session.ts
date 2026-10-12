@@ -15,7 +15,12 @@ import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { pathIsWithin, prompt } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import sessionDescription from "../prompts/tools/session.md" with { type: "text" };
-import { createSessionWorktree, type SessionWorktree } from "../session/session-worktree";
+import {
+	createSessionWorktree,
+	readWorktreeAdminDir,
+	removeWorktreeAdminDir,
+	type SessionWorktree,
+} from "../session/session-worktree";
 import type { ToolSession } from ".";
 import { resolveToCwd } from "./path-utils";
 import { throwIfAborted } from "./tool-errors";
@@ -264,6 +269,7 @@ export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolD
 				`Refusing to remove ${target}: it has uncommitted changes. Commit or discard them, or pass force: true to delete them.`,
 			);
 		}
+		const adminDir = await readWorktreeAdminDir(match.entry.path);
 		let removed: boolean;
 		try {
 			removed = await repository.worktreeRemove(match.entry.path, params.force === true);
@@ -272,10 +278,8 @@ export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolD
 		}
 		if (!removed) throw new ToolError(`Git did not remove worktree ${target}.`);
 		// The native removal deletes the checkout, then its admin entry only when both paths share one spelling
-		// (/tmp vs /private/tmp, or a symlinked repo path). Prune clears the entry it left behind.
-		if ((await repository.worktrees()).some(entry => entry.path === match.entry.path)) {
-			await repository.worktreePrune();
-		}
+		// (/tmp vs /private/tmp, or a symlinked repo path). Remove just this entry, never the whole repository's.
+		await removeWorktreeAdminDir(adminDir);
 		return toolResult<SessionToolDetails>({ op: "worktree_remove", path: target })
 			.text(`Removed worktree ${target}. Its branch was kept.`)
 			.done();

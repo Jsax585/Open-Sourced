@@ -39,8 +39,11 @@ function describeOp(op: SessionOp | undefined): string {
 
 function callDetail(args: SessionRenderArgs): string | undefined {
 	if (args.op === "rename" && args.title) return truncateToWidth(displayText(args.title), TRUNCATE_LENGTHS.TITLE);
-	if (args.op === "worktree_create" && args.branch) return displayText(args.branch);
-	if ((args.op === "move" || args.op === "worktree_remove") && args.path) return displayText(args.path);
+	if (args.op === "worktree_create" && args.branch)
+		return truncateToWidth(displayText(args.branch), TRUNCATE_LENGTHS.TITLE);
+	if ((args.op === "move" || args.op === "worktree_remove") && args.path) {
+		return truncateToWidth(displayText(args.path), TRUNCATE_LENGTHS.TITLE);
+	}
 	return undefined;
 }
 
