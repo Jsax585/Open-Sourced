@@ -3314,7 +3314,11 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				// superseded it, or, for a turn that never yielded, the answer a
 				// relay would have carried.
 				if (wakeJob && yielded && result) {
-					const text = formatTaskResultSummary(result, { totalDurationMs: result.durationMs, ircEnabled: true });
+					const text = formatTaskResultSummary(result, {
+						totalDurationMs: result.durationMs,
+						// The owner receives this, so its own messaging capability decides whether a resume is actionable.
+						ircEnabled: options.enableIrc !== false,
+					});
 					const structured = result.structuredOutput;
 					if (result.aborted || result.exitCode !== 0 || result.error !== undefined) {
 						wakeJob.outcome.reject(new AsyncJobError(text, structured));
