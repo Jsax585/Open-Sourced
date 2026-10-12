@@ -5,8 +5,11 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { disposeAllVmContexts } from "@oh-my-pi/pi-coding-agent/eval/js/context-manager";
 import { createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
+import { uploadFilesToElement } from "@oh-my-pi/pi-coding-agent/tools/browser/interactions";
 import { releaseAllTabs } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
+import type { ElementHandle, Page } from "puppeteer-core";
+import { rejectionOf } from "../helpers/rejection";
 import { chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
@@ -149,12 +152,13 @@ error = outcomes.map(outcome => outcome.status === "rejected" ? outcome.reason.m
 		const { attempt, close } = await openFixture();
 		try {
 			// Puppeteer's chooser listener threw on the picker's node-less event, killing the tab worker;
-			// the cell then hung until the supervisor killed the tab.
-			const picker = await attempt(`await tab.uploadFile("#picker", "alpha.txt");`);
+			// the cell then hung until the supervisor killed the tab. The later trigger click proves the error
+			// path also switched interception off: a `cancel` means its chooser reached the browser.
+			const picker = await attempt(
+				`try { await tab.uploadFile("#picker", "alpha.txt"); } finally { await tab.click("#trigger"); }`,
+			);
 			expect(picker.error).toContain("File System Access picker");
-			expect(await attempt(`await tab.uploadFile("#direct", "alpha.txt");`)).toEqual({
-				log: [{ id: "direct", event: "change", names: ["alpha.txt"] }],
-			});
+			expect(picker.log).toContainEqual({ id: "trigger-input", event: "cancel", names: [] });
 		} finally {
 			await close();
 		}
@@ -174,4 +178,27 @@ await tab.click("#trigger");`);
 			await close();
 		}
 	}, 60_000);
+});
+
+test("detaches a chooser session that attaches after the upload was cancelled", async () => {
+	const { promise: attached, resolve: attach } = Promise.withResolvers<{ detach: () => Promise<void> }>();
+	let detached = false;
+	const controller = new AbortController();
+	// Only what the chooser route touches before its session exists: the target's tag and session creation,
+	// which the cancel interrupts.
+	const page = {
+		createCDPSession: () => {
+			controller.abort();
+			return attached;
+		},
+	} as unknown as Page;
+	const handle = { evaluate: async () => ({ tag: "BUTTON", type: "" }) } as unknown as ElementHandle;
+	await rejectionOf(uploadFilesToElement(page, handle, ["/missing.txt"], "upload", controller.signal));
+	attach({
+		detach: async () => {
+			detached = true;
+		},
+	});
+	for (let turn = 0; turn < 5; turn++) await Promise.resolve();
+	expect(detached).toBe(true);
 });
