@@ -667,11 +667,25 @@ function fixupOpenAICompat(
 	if (whenThinkingPolicy) {
 		const variant: ResolvedOpenAICompat = { ...compat, whenThinking: undefined };
 		applyCompatOverrides(variant, whenThinkingPolicy);
+		if (compat.extraBody && variant.extraBody && variant.extraBody !== compat.extraBody) {
+			const baselineKwargs = objectPayload(compat.extraBody.chat_template_kwargs);
+			const enabledKwargs = objectPayload(variant.extraBody.chat_template_kwargs);
+			variant.extraBody = { ...compat.extraBody, ...variant.extraBody };
+			if (baselineKwargs && enabledKwargs) {
+				variant.extraBody.chat_template_kwargs = { ...baselineKwargs, ...enabledKwargs };
+			}
+		}
 		if (
 			spec.compat?.supportsReasoningEffort !== undefined &&
 			spec.compat.whenThinking?.supportsReasoningEffort === undefined
 		) {
 			variant.supportsReasoningEffort = spec.compat.supportsReasoningEffort;
+		}
+		if (
+			spec.compat?.omitReasoningEffort !== undefined &&
+			spec.compat.whenThinking?.omitReasoningEffort === undefined
+		) {
+			variant.omitReasoningEffort = spec.compat.omitReasoningEffort;
 		}
 		// An enabled capability view cannot invent an effort dial explicitly removed by KDL.
 		if (
@@ -688,7 +702,11 @@ function fixupOpenAICompat(
 				? "venice-disable-thinking"
 				: resolveReasoningDisableMode(variant.thinkingFormat);
 		}
-		if (Reflect.get(whenThinkingPolicy, "omitReasoningEffort") === undefined && !variant.supportsReasoningEffort) {
+		if (
+			spec.compat?.omitReasoningEffort === undefined &&
+			Reflect.get(whenThinkingPolicy, "omitReasoningEffort") === undefined &&
+			!variant.supportsReasoningEffort
+		) {
 			variant.omitReasoningEffort = true;
 		}
 		compat.whenThinking = variant;

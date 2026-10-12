@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { buildModel } from "../../catalog/src/build";
-import { Effort } from "../../catalog/src/effort";
-import type { Model, ModelSpec } from "../../catalog/src/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import type { Model, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import { streamOpenAICompletions } from "../src/providers/openai-completions";
 import { streamSimple } from "../src/stream";
 import type { Context, FetchImpl } from "../src/types";
@@ -131,6 +131,37 @@ describe("Friendli reasoning wire contract", () => {
 			expect(body.reasoning_effort).toBe("low");
 			expect(body.chat_template_kwargs).toEqual({ enable_thinking: true });
 		}
+	});
+
+	it("merges enabled toggles with baseline routing fields and template configuration", async () => {
+		const glm = model({
+			compat: {
+				extraBody: {
+					gateway: "route-a",
+					chat_template_kwargs: { template_option: "keep", enable_thinking: false },
+				},
+			},
+		});
+		const body = await capture(glm, Effort.High);
+		expect(body.gateway).toBe("route-a");
+		expect(body.chat_template_kwargs).toEqual({ template_option: "keep", enable_thinking: true });
+		expect(body.reasoning_effort).toBe("high");
+	});
+
+	it("honors flat effort omission unless the authored enabled view overrides it", async () => {
+		const omitted = model({ compat: { omitReasoningEffort: true } });
+		expect((await capture(omitted, Effort.High)).reasoning_effort).toBeUndefined();
+		const overridden = model({
+			compat: {
+				omitReasoningEffort: true,
+				whenThinking: {
+					thinkingFormat: "openai",
+					supportsReasoningEffort: true,
+					omitReasoningEffort: false,
+				},
+			},
+		});
+		expect((await capture(overridden, Effort.High)).reasoning_effort).toBe("high");
 	});
 
 	it("preserves authored flat and enabled-view capability overrides on the wire", async () => {

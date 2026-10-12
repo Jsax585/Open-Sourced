@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Friendli reasoning requests preserve distinct effort tiers alongside the thinking toggle, retain endpoint defaults for dialless models, and honor explicit reasoning disable ([#9413](https://github.com/can1357/oh-my-pi/pull/9413) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
+- Friendli reasoning requests preserve distinct effort tiers and baseline routing/template settings, honor effort-omission overrides, retain endpoint defaults for dialless models, and honor explicit reasoning disable ([#9413](https://github.com/can1357/oh-my-pi/pull/9413) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
 
 ## [18.10.2] - 2026-10-12
 
