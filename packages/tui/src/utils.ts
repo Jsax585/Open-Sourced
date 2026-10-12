@@ -490,6 +490,11 @@ export function isOsc66Line(line: string): boolean {
 	return line.includes(OSC66_PREFIX);
 }
 
+/** Replace each OSC 66 span with its payload, so ANSI stripping keeps the visible text. */
+export function unwrapOsc66(line: string): string {
+	return line.includes(OSC66_PREFIX) ? line.replace(OSC66_SPAN_REGEX, "$2") : line;
+}
+
 /**
  * Largest `s=` scale among the OSC 66 spans in a line (1 when none is scaled).
  * A scale-`s` heading occupies `s` terminal rows, so the `s - 1` blank rows

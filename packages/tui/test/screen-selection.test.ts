@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { type TerminalFramePlan, type TerminalFrameProvider, TUI } from "@oh-my-pi/pi-tui";
+import { encodeTextSized, type TerminalFramePlan, type TerminalFrameProvider, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualRenderScheduler } from "./virtual-render-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -107,6 +107,21 @@ describe("TUI screen selection", () => {
 		expect(tui.getScreenSelectionText()).toBe("界X");
 		// The highlight rewrite must not split the glyph.
 		expect(terminal.getViewport()[0]?.trimEnd()).toBe("界X界Y");
+		tui.stop();
+	});
+
+	it("reads the text of a fully selected OSC 66 sized heading", async () => {
+		const terminal = new VirtualTerminal(30, 6);
+		const scheduler = new VirtualRenderScheduler();
+		const heading = encodeTextSized("Heading One", { scale: 2, widthCells: 11 });
+		const provider = new Provider(["intro", heading, "", "after text", "editor"]);
+		const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		tui.start();
+		await scheduler.settle(terminal);
+
+		tui.setScreenSelection({ anchor: { row: 0, col: 0 }, focus: { row: 3, col: 4 } });
+		expect(tui.getScreenSelectionText()).toBe("intro\nHeading One\n\nafter");
 		tui.stop();
 	});
 });

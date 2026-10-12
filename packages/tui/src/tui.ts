@@ -55,6 +55,7 @@ import {
 	sliceByColumn,
 	sliceWithWidth,
 	truncateToWidth,
+	unwrapOsc66,
 	visibleWidth,
 } from "./utils";
 
@@ -1439,7 +1440,7 @@ export class TUI extends Container {
 			// Snap a start on a wide glyph's continuation cell back to the glyph.
 			const start = row === from.row ? sliceWithWidth(line, 0, from.col, true).width : 0;
 			const end = row === to.row ? to.col : this.#previousWidth - 1;
-			lines.push(Bun.stripANSI(sliceByColumn(line, start, end - start + 1)).trimEnd());
+			lines.push(Bun.stripANSI(unwrapOsc66(sliceByColumn(line, start, end - start + 1))).trimEnd());
 		}
 		return lines.join("\n");
 	}
