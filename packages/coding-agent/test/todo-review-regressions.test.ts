@@ -79,3 +79,12 @@ it("keeps Unicode separators and literal escape sequences intact in durable task
 		phases,
 	);
 });
+
+it("preserves leading whitespace in a blocker across durable compaction", () => {
+	const phases: TodoPhase[] = [
+		{ name: "Work", tasks: [{ content: "wait", status: "blocked", blocker: " \t owner  " }] },
+	];
+	expect(parseIncompleteTodosFromSummary(formatIncompleteTodosSection(collectIncompleteTodoRows(phases)))).toEqual(
+		phases,
+	);
+});
