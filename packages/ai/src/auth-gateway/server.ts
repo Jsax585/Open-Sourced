@@ -418,7 +418,7 @@ async function handleFormatEndpoint(
 				if (message.stopReason === "aborted") {
 					return route.module.formatError(499, "request_aborted", errorMessage);
 				}
-				const classified = classifyGatewayError(message.errorClassificationMessage ?? errorMessage);
+				const classified = classifyGatewayError(message);
 				return route.module.formatError(classified.status, classified.type, errorMessage);
 			}
 			return json(
@@ -635,7 +635,7 @@ async function handlePiNative(
 				if (message.stopReason === "aborted") {
 					return piNative.formatError(499, "request_aborted", errorMessage);
 				}
-				const classified = classifyGatewayError(message.errorClassificationMessage ?? errorMessage);
+				const classified = classifyGatewayError(message);
 				return piNative.formatError(classified.status, classified.type, errorMessage);
 			}
 			return json(

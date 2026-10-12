@@ -1,4 +1,5 @@
 import { isRetryableError, isUnexpectedSocketCloseMessage } from "@oh-my-pi/pi-utils";
+import { AnthropicApiError } from "./classes";
 import {
 	CODEX_HTTP_BODY_READ_ERROR_PATTERN,
 	isRetryableStreamEnvelopeError,
@@ -18,6 +19,20 @@ import {
  * may match more. Use this when you only have a `status: number`.
  */
 export { isTransientStatus, shouldRetryAnthropicResponse } from "./http-retry";
+
+/** Explicit transport intent, retained on finalized/serialized assistant errors. */
+export function providerRetryDirective(error: unknown): boolean | undefined {
+	if (
+		typeof error === "object" &&
+		error !== null &&
+		"errorRetryable" in error &&
+		typeof error.errorRetryable === "boolean"
+	)
+		return error.errorRetryable;
+	if (!(error instanceof AnthropicApiError)) return undefined;
+	const directive = error.headers.get("x-should-retry");
+	return directive === "true" || directive === "false" || error.status === 409 ? error.retryable : undefined;
+}
 
 // Provider-stream transient phrasings not covered by the shared
 // TRANSIENT_TRANSPORT_PATTERN (TLS record corruption, HTTP/2 peer stream
@@ -42,6 +57,8 @@ function isTransientTransportMessage(message: string): boolean {
 export function isProviderRetryableError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
 	if (isUsageLimit(error)) return false;
+	const directive = providerRetryDirective(error);
+	if (directive !== undefined) return directive;
 	const httpStatus = status(error);
 	if (httpStatus !== undefined && httpStatus >= 400 && httpStatus < 500 && httpStatus !== 408 && httpStatus !== 429) {
 		return false;

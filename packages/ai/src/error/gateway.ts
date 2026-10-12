@@ -1,4 +1,5 @@
-import { AnthropicApiError } from "./classes";
+import { stringProperty } from "@oh-my-pi/pi-utils";
+import { providerRetryDirective } from "./retryable";
 import {
 	Flag,
 	is,
@@ -111,8 +112,11 @@ const GATEWAY_INVARIANT_PATTERN = /\bgateway_terminal\b|\binternal invariant\b/i
  */
 export function classifyGatewayError(err: unknown): GatewayErrorClassification {
 	const message =
-		typeof err === "object" && err !== null && "message" in err && typeof err.message === "string"
-			? err.message
+		typeof err === "object" && err !== null
+			? (stringProperty(err, "errorClassificationMessage") ??
+				stringProperty(err, "errorMessage") ??
+				stringProperty(err, "message") ??
+				String(err))
 			: String(err);
 
 	const errorId =
@@ -257,12 +261,9 @@ function classifyOwnerDisposition(
 	if (status === 403 && isClinePassSurfaceGateMessage(message)) {
 		return { owner: "model", disposition: "model_unavailable" };
 	}
-	if (err instanceof AnthropicApiError) {
-		const directive = err.headers.get("x-should-retry");
-		if (directive === "true" || directive === "false" || status === 409) {
-			return { owner: "provider", disposition: err.retryable ? "provider_transient" : "request_terminal" };
-		}
-	}
+	const directive = providerRetryDirective(err);
+	if (directive !== undefined)
+		return { owner: "provider", disposition: directive ? "provider_transient" : "request_terminal" };
 
 	// Authoritative HTTP buckets first: message heuristics never rebrand a
 	// status the provider already chose. A 5xx means what the provider said —
@@ -298,7 +299,7 @@ function classifyOwnerDisposition(
 		// Only opaque / billing-worded 402s are rotatable quota; informative
 		// bodies like "A subscription is required for this endpoint" stay out
 		// of the credential-quota lane (mirrors isUsageLimitOutcome).
-		if (is402BillingCapBody(message)) {
+		if (isUsageLimit(err) || is402BillingCapBody(message)) {
 			return { owner: "quota", disposition: "credential_quota" };
 		}
 		return { owner: "provider", disposition: "provider_transient" };
