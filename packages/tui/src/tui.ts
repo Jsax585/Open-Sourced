@@ -1400,11 +1400,24 @@ export class TUI extends Container {
 	 */
 	setScreenSelection(selection: ScreenSelection | undefined): void {
 		const usable = this.#normalScreenSettled() && this.#screenRows.length > 0;
-		const width = this.#previousWidth;
-		let sequence = usable ? this.#selectionRestoreSequence(width) : "";
+		const previous = usable ? this.#selectionBounds() : undefined;
 		this.#screenSelection =
 			usable && selection ? { anchor: { ...selection.anchor }, focus: { ...selection.focus } } : undefined;
-		sequence += this.#selectionHighlightSequence();
+		const next = this.#selectionBounds();
+		// Repaint only rows whose highlighted cells changed. A drag reports every
+		// pointer move, and each move touches a row or two at the focus end;
+		// rewriting the whole selection per report grows with its size.
+		const first = Math.min(previous?.[0].row ?? Number.POSITIVE_INFINITY, next?.[0].row ?? Number.POSITIVE_INFINITY);
+		const last = Math.min(Math.max(previous?.[1].row ?? -1, next?.[1].row ?? -1), this.#screenRows.length - 1);
+		const width = this.#previousWidth;
+		let sequence = "";
+		for (let row = first; row <= last; row++) {
+			const before = this.#selectionRowSpan(previous, row);
+			const after = this.#selectionRowSpan(next, row);
+			if (before?.start === after?.start && before?.end === after?.end) continue;
+			if (before) sequence += `\x1b[${row + 1};1H${this.#lineRewriteSequence(before.prepared, width, row)}`;
+			sequence += this.#selectionRowHighlight(row, after);
+		}
 		if (sequence === "") return;
 		const showCursor = this.#hardwareCursorState?.visible === true ? "\x1b[?25h" : "";
 		this.terminal.write(`${this.#paintBeginSequence}\x1b7${sequence}\x1b8${this.#paintEndSequence}${showCursor}`);
@@ -1498,23 +1511,44 @@ export class TUI extends Container {
 		return row !== undefined && !row.isImage && row.line !== "" && !isOsc66Line(row.line);
 	}
 
+	/**
+	 * Cells `[start, end]` the selection `bounds` highlight on screen `row`, or
+	 * `undefined` when it paints nothing there.
+	 */
+	#selectionRowSpan(
+		bounds: [ScreenPoint, ScreenPoint] | undefined,
+		row: number,
+	): { prepared: PreparedLine; line: string; start: number; end: number } | undefined {
+		if (!bounds) return undefined;
+		const [from, to] = bounds;
+		if (row < from.row || row > to.row) return undefined;
+		const prepared = this.#screenRows[row];
+		if (!this.#highlightableRow(prepared)) return undefined;
+		const line = prepared.line.replaceAll(CURSOR_MARKER, "");
+		// Snap a start on a wide glyph's continuation cell back to the glyph,
+		// so the rewrite begins on its first cell instead of splitting it.
+		const start = row === from.row ? sliceWithWidth(line, 0, from.col, true).width : 0;
+		const end = Math.min(row === to.row ? to.col : Number.MAX_SAFE_INTEGER, visibleWidth(line) - 1);
+		return start > end ? undefined : { prepared, line, start, end };
+	}
+
+	/** Reverse-video the cells of one row's span, cursor-addressed. */
+	#selectionRowHighlight(row: number, span: { line: string; start: number; end: number } | undefined): string {
+		if (!span) return "";
+		const text = Bun.stripANSI(sliceByColumn(span.line, span.start, span.end - span.start + 1));
+		// End at column zero like `#lineRewriteSequence`: a highlight through the
+		// last cell leaves a pending wrap that ConPTY can turn into an untracked
+		// scroll on the next cursor move (#9783).
+		return `\x1b[${row + 1};${span.start + 1}H${SEGMENT_RESET}\x1b[7m${text}${SEGMENT_RESET}\r`;
+	}
+
 	/** Reverse-video the selected cells that hold text, cursor-addressed. */
 	#selectionHighlightSequence(): string {
 		const bounds = this.#selectionBounds();
 		if (!bounds) return "";
-		const [from, to] = bounds;
 		let sequence = "";
-		for (let row = from.row; row <= to.row && row < this.#screenRows.length; row++) {
-			const prepared = this.#screenRows[row];
-			if (!this.#highlightableRow(prepared)) continue;
-			const line = prepared.line.replaceAll(CURSOR_MARKER, "");
-			// Snap a start on a wide glyph's continuation cell back to the glyph,
-			// so the rewrite begins on its first cell instead of splitting it.
-			const start = row === from.row ? sliceWithWidth(line, 0, from.col, true).width : 0;
-			const end = Math.min(row === to.row ? to.col : Number.MAX_SAFE_INTEGER, visibleWidth(line) - 1);
-			if (start > end) continue;
-			const text = Bun.stripANSI(sliceByColumn(line, start, end - start + 1));
-			sequence += `\x1b[${row + 1};${start + 1}H${SEGMENT_RESET}\x1b[7m${text}${SEGMENT_RESET}`;
+		for (let row = bounds[0].row; row <= bounds[1].row && row < this.#screenRows.length; row++) {
+			sequence += this.#selectionRowHighlight(row, this.#selectionRowSpan(bounds, row));
 		}
 		return sequence;
 	}

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { encodeTextSized, type TerminalFramePlan, type TerminalFrameProvider, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualRenderScheduler } from "./virtual-render-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
@@ -127,6 +127,39 @@ describe("TUI screen selection", () => {
 		expect(tui.getScreenSelectionText()).toBe("界X");
 		// The highlight rewrite must not split the glyph.
 		expect(terminal.getViewport()[0]?.trimEnd()).toBe("界X界Y");
+		tui.stop();
+	});
+
+	it("repaints only the rows whose highlight a drag changes", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const scheduler = new VirtualRenderScheduler();
+		const provider = new Provider(["row a", "row b", "row c", "row d", "row e", "editor"]);
+		const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		tui.start();
+		await scheduler.settle(terminal);
+
+		tui.setScreenSelection({ anchor: { row: 0, col: 0 }, focus: { row: 3, col: 2 } });
+		const write = spyOn(terminal, "write");
+		try {
+			// Rows 0-2 stay fully selected; only the old and new focus rows change.
+			tui.extendScreenSelection({ row: 4, col: 1 });
+			const addressed = write.mock.calls.flatMap(([data]) =>
+				[...data.matchAll(/\x1b\[(\d+);\d+H/g)].map(match => Number(match[1]) - 1),
+			);
+			expect([...new Set(addressed)].sort((a, b) => a - b)).toEqual([3, 4]);
+		} finally {
+			write.mockRestore();
+		}
+		expect(terminal.getViewportRowReverseColumns(0)).toEqual([0, 1, 2, 3, 4]);
+		expect(terminal.getViewportRowReverseColumns(3)).toEqual([0, 1, 2, 3, 4]);
+		expect(terminal.getViewportRowReverseColumns(4)).toEqual([0, 1]);
+
+		// Dragging back up restores every row the selection left.
+		tui.extendScreenSelection({ row: 1, col: 2 });
+		expect(terminal.getViewportRowReverseColumns(1)).toEqual([0, 1, 2]);
+		for (const row of [2, 3, 4]) expect(terminal.getViewportRowReverseColumns(row)).toEqual([]);
+		expect(tui.getScreenSelectionText()).toBe("row a\nrow");
 		tui.stop();
 	});
 
