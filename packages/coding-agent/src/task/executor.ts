@@ -2962,6 +2962,8 @@ export interface IrcWakeTurnMonitorOptions {
 	outputSchemaMode?: StructuredSubagentSchemaMode;
 	outputSchemaSource?: StructuredSubagentSchemaSource;
 	artifactsDir?: string;
+	/** `false` when the owner that receives wake results cannot message peers, so no resume hint is offered. */
+	ownerIrcEnabled?: boolean;
 }
 
 /** Sender + message id of one `irc:incoming` record that woke a turn. */
@@ -3317,7 +3319,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					const text = formatTaskResultSummary(result, {
 						totalDurationMs: result.durationMs,
 						// The owner receives this, so its own messaging capability decides whether a resume is actionable.
-						ircEnabled: options.enableIrc !== false,
+						ircEnabled: options.ownerIrcEnabled !== false,
 					});
 					const structured = result.structuredOutput;
 					if (result.aborted || result.exitCode !== 0 || result.error !== undefined) {
@@ -4105,6 +4107,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	let registryAbortUnsubscribe: (() => void) | null = null;
 	let reviveSession: AgentReviver | null = null;
 	const wakeOptions: IrcWakeTurnMonitorOptions = {
+		ownerIrcEnabled: options.enableIrc !== false,
 		id,
 		index,
 		agent,
