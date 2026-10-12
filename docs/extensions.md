@@ -554,7 +554,8 @@ pi.on("live_delegation", async (event, ctx) => {
 ```
 
 This hook receives delegated text, not raw microphone samples or partial
-transcripts. It is separate from the `input` hook for typed submissions.
+transcripts. Its `signal` is aborted when the live session ends. It is
+separate from the `input` hook for typed submissions.
 A nonempty `reply` of at most 512 characters means the request is complete;
 OMP returns it to the existing live session without sending a coding-model
 request. Otherwise the original text is delegated unchanged. All extension
