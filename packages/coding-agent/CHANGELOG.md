@@ -5,6 +5,7 @@
 ### Added
 
 - Added `todo.sticky` setting (default on). Turn it off to stop pinning the todo list above the editor so it scrolls away with the transcript ([#14981](https://github.com/can1357/oh-my-pi/pull/14981) by [@lockwo](https://github.com/lockwo))
+- Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
 
 ### Fixed
 
