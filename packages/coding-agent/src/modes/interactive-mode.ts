@@ -4412,6 +4412,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	renderCompactStatusLine(width: number, childLines: readonly string[]): readonly string[] {
+		// The compact one-line HUD is the pinned HUD on short terminals, so the pin setting governs it too.
+		if (!cfgTodoSticky.get((this.#todoPhasesOwner ?? this.session).settings)) return childLines;
 		const phases = this.todoPhases.filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) return childLines;
 
