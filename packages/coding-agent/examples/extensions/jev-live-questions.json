@@ -1,0 +1,12 @@
+{
+  "action": {
+    "type": "choice",
+    "instructions": "Classify a short, direct voice command addressed to the OMP coding session. Answer none for coding questions, discussion, instructions that are not one of these direct controls, negation, or ambiguity. Do not infer an action that was not clearly requested.",
+    "criteria": {
+      "status": "The user explicitly asks whether the coding agent is currently running or idle.",
+      "model": "The user explicitly asks what coding model is selected.",
+      "cancel": "The user explicitly orders the current agent task to stop, abort, interrupt, or cancel.",
+      "none": "Not one of these exact coding-session control intents, or unclear."
+    }
+  }
+}

@@ -44,6 +44,15 @@ cp permission-gate.ts ~/.omp/agent/extensions/
 | `thinking-note.ts` | Adds display-only supplemental UI below assistant thinking blocks              |
 | `snake.ts`         | Snake game with custom UI, keyboard handling, and session persistence          |
 
+### Jev live-voice shortcuts
+
+Copy `jev-live.ts` and `jev-live-questions.json` together into an extension
+directory, set `TYPESAFE_API_KEY`, start OMP, run `/jev-live on` and then
+`/live`. Jev may answer current model/status queries or stop the running
+coding task. Other utterances, low-confidence answers, missing credentials,
+and timed-out requests use ordinary live delegation. The opt-in resets on
+session start/switch. Only delegated text, never raw audio, is sent to Jev.
+
 ### Git Integration
 
 | Extension                | Description                                                               |
