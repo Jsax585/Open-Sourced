@@ -1,9 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { inflateSync } from "node:zlib";
 import * as natives from "@oh-my-pi/pi-natives";
-import { Container, Text } from "@oh-my-pi/pi-tui";
+import { Box, Container, Text } from "@oh-my-pi/pi-tui";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
-import { Image } from "@oh-my-pi/pi-tui/components/image";
+import { Image, renderForScrollback } from "@oh-my-pi/pi-tui/components/image";
 import {
 	encodeKittyPlaceholderGrid,
 	getKittyGraphics,
@@ -284,5 +284,36 @@ describe("iTerm2 inline images", () => {
 			const image = new Image(gif, mimeType, { fallbackColor: text => text }, { maxWidthCells: IMAGE_COLUMNS });
 			expect(image.render(40).join("")).toContain(`:${gif}\x07`);
 		}
+	});
+
+	it("leave images of unknown size to iTerm2, which sizes the original itself", () => {
+		// An unparsed media type leaves only an 800x600 stand-in size, which
+		// would squash strips cut to it.
+		info.imageProtocol = ImageProtocol.Iterm2;
+		const image = new Image(
+			BANDED_PNG,
+			"IMAGE/PNG",
+			{ fallbackColor: text => text },
+			{ maxWidthCells: IMAGE_COLUMNS },
+		);
+		expect(image.render(40).join("")).toContain(`:${BANDED_PNG}\x07`);
+	});
+
+	it("keep a padded Box's border in place around strip rows", async () => {
+		// Box pads each row by its measured width, so a strip row must measure
+		// as the cells iTerm2 paints, or the padding pushes the border out.
+		info.imageProtocol = ImageProtocol.Iterm2;
+		const vertical = "│";
+		const box = new Box(2, 0, undefined, {
+			chars: { topLeft: "┌", topRight: "┐", bottomLeft: "└", bottomRight: "┘", horizontal: "─", vertical },
+		});
+		box.addChild(
+			new Image(BANDED_PNG, "image/png", { fallbackColor: text => text }, { maxWidthCells: IMAGE_COLUMNS }),
+		);
+		const term = new ITerm2CellTerminal(40, 12);
+		term.write(renderForScrollback(() => box.render(20)).join("\r\n"));
+		const rows = (await term.flushAndGetViewport()).slice(0, 8).map(row => Bun.stripANSI(row).trimEnd());
+		expect(rows[1]).toBe(`${vertical}  ${label(0)}${" ".repeat(14 - IMAGE_COLUMNS)}  ${vertical}`);
+		for (const row of rows) expect(row).toHaveLength(20);
 	});
 });

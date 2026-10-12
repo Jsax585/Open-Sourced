@@ -1785,17 +1785,18 @@ export interface EnclosingBoundaryOptions {
  * into `rows` strips of `row_height_px`; rows past the image bottom are
  * transparent. Geometry beyond the decode limits is scaled down with its
  * shape kept, so the strips can be smaller than requested. Each strip
- * carries the source's embedded ICC profile, if any. A terminal that draws
- * each strip into exactly one cell row (such as iTerm2 inline images) shows
- * the image row by row, so any subset of rows can be repainted, clipped, or
- * scrolled without the others. Prefer [`encode_image_rows_async`] unless the
- * caller cannot wait.
+ * carries the source's embedded RGB ICC profile, if any. A terminal that
+ * draws each strip into exactly one cell row (such as iTerm2 inline images)
+ * shows the image row by row, so any subset of rows can be repainted,
+ * clipped, or scrolled without the others. Prefer
+ * [`encode_image_rows_async`] unless the caller cannot wait.
  *
  * # Errors
  * Returns an error if a dimension is zero, if `rows` cannot fit the decode
  * limit even at one pixel each, if the source is wider or taller than the
- * 8192 px decode edge, if the image carries an EXIF orientation other than
- * none (the strips could not honour it), or if decoding, resizing, or PNG
+ * 8192 px decode edge or would decode to more than 128 MiB, if the image
+ * carries an EXIF orientation other than none or a non-RGB ICC profile (the
+ * strips could not honour either), or if decoding, resizing, or PNG
  * encoding fails.
  */
 export declare function encodeImageRows(bytes: Uint8Array, targetWidthPx: number, rowHeightPx: number, rows: number): Array<string>
@@ -1808,8 +1809,9 @@ export declare function encodeImageRows(bytes: Uint8Array, targetWidthPx: number
  * # Errors
  * Rejects if a dimension is zero, if `rows` cannot fit the decode limit
  * even at one pixel each, if the source is wider or taller than the 8192 px
- * decode edge, if the image carries an EXIF orientation other than none, or
- * if decoding, resizing, or PNG encoding fails.
+ * decode edge or would decode to more than 128 MiB, if the image carries an
+ * EXIF orientation other than none or a non-RGB ICC profile, or if
+ * decoding, resizing, or PNG encoding fails.
  */
 export declare function encodeImageRowsAsync(bytes: Uint8Array, targetWidthPx: number, rowHeightPx: number, rows: number): Promise<Array<string>>
 

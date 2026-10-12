@@ -1366,8 +1366,12 @@ export function renderImage(
 			// Undefined while the provider's encode is pending: the rows stay reserved.
 			if (strips === undefined) return { rows: fit.rows };
 			if (strips !== null) {
-				const lines = strips.map(strip =>
-					encodeITerm2(strip, { width: columns, height: 1, preserveAspectRatio: false }),
+				// Blank cells first, so layout measures the row as `columns` wide; the
+				// strip then paints over them from the row start and iTerm2 advances
+				// the cursor past it.
+				const blank = `${" ".repeat(columns)}\x1b[${columns}D`;
+				const lines = strips.map(
+					strip => blank + encodeITerm2(strip, { width: columns, height: 1, preserveAspectRatio: false }),
 				);
 				return { lines, rows: fit.rows };
 			}

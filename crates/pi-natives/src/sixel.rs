@@ -28,6 +28,9 @@ const MAX_DECODED_PIXELS: usize = 4 * 1024 * 1024;
 const MAX_IMAGE_EDGE: usize = 8192;
 const MAX_SIXEL_BYTES: usize = 20 * 1024 * 1024;
 const MAX_PNG_BYTES: usize = 20 * 1024 * 1024;
+/// Largest decoded source `encode_image_rows` inflates: a 6K RGBA8 screenshot
+/// (about 81 MiB) fits, an 8192×8192 RGBA8 raster (256 MiB) does not.
+const MAX_ROW_SOURCE_BYTES: u64 = 128 * 1024 * 1024;
 
 /// Decode one complete SIXEL control string into a PNG on the calling thread.
 ///
@@ -240,17 +243,18 @@ fn encode_image(bytes: &[u8], target_width_px: u32, target_height_px: u32) -> Re
 /// into `rows` strips of `row_height_px`; rows past the image bottom are
 /// transparent. Geometry beyond the decode limits is scaled down with its
 /// shape kept, so the strips can be smaller than requested. Each strip
-/// carries the source's embedded ICC profile, if any. A terminal that draws
-/// each strip into exactly one cell row (such as iTerm2 inline images) shows
-/// the image row by row, so any subset of rows can be repainted, clipped, or
-/// scrolled without the others. Prefer [`encode_image_rows_async`] unless the
-/// caller cannot wait.
+/// carries the source's embedded RGB ICC profile, if any. A terminal that
+/// draws each strip into exactly one cell row (such as iTerm2 inline images)
+/// shows the image row by row, so any subset of rows can be repainted,
+/// clipped, or scrolled without the others. Prefer
+/// [`encode_image_rows_async`] unless the caller cannot wait.
 ///
 /// # Errors
 /// Returns an error if a dimension is zero, if `rows` cannot fit the decode
 /// limit even at one pixel each, if the source is wider or taller than the
-/// 8192 px decode edge, if the image carries an EXIF orientation other than
-/// none (the strips could not honour it), or if decoding, resizing, or PNG
+/// 8192 px decode edge or would decode to more than 128 MiB, if the image
+/// carries an EXIF orientation other than none or a non-RGB ICC profile (the
+/// strips could not honour either), or if decoding, resizing, or PNG
 /// encoding fails.
 #[napi]
 pub fn encode_image_rows(
@@ -269,8 +273,9 @@ pub fn encode_image_rows(
 /// # Errors
 /// Rejects if a dimension is zero, if `rows` cannot fit the decode limit
 /// even at one pixel each, if the source is wider or taller than the 8192 px
-/// decode edge, if the image carries an EXIF orientation other than none, or
-/// if decoding, resizing, or PNG encoding fails.
+/// decode edge or would decode to more than 128 MiB, if the image carries an
+/// EXIF orientation other than none or a non-RGB ICC profile, or if
+/// decoding, resizing, or PNG encoding fails.
 #[napi]
 pub fn encode_image_rows_async(
 	bytes: Uint8Array,
@@ -298,16 +303,20 @@ fn encode_rows(
 	guard_dimensions(target_width_px as usize, total_height_px as usize)?;
 
 	// Header probe before the full decode. A source too large to inflate in the
-	// worker, or one needing EXIF reorientation (strips carry no EXIF, and the
-	// caller sized the rows from the stored raster), is left to a viewer of the
-	// original. An embedded colour profile is copied into every strip.
+	// worker, one needing EXIF reorientation (strips carry no EXIF, and the
+	// caller sized the rows from the stored raster), or one whose colour profile
+	// cannot describe RGB strips (CMYK, grey) is left to a viewer of the
+	// original. An RGB profile is copied into every strip.
 	let mut header = ImageReader::new(Cursor::new(bytes))
 		.with_guessed_format()
 		.map_err(|e| Error::from_reason(format!("Failed to detect image format: {e}")))?
 		.into_decoder()
 		.map_err(|e| Error::from_reason(format!("Failed to decode image: {e}")))?;
 	let (source_width, source_height) = header.dimensions();
-	if source_width as usize > MAX_IMAGE_EDGE || source_height as usize > MAX_IMAGE_EDGE {
+	if source_width as usize > MAX_IMAGE_EDGE
+		|| source_height as usize > MAX_IMAGE_EDGE
+		|| header.total_bytes() > MAX_ROW_SOURCE_BYTES
+	{
 		return Err(Error::from_reason("Image dimensions exceed the decode limit"));
 	}
 	if header
@@ -317,6 +326,13 @@ fn encode_rows(
 		return Err(Error::from_reason("Image needs EXIF reorientation"));
 	}
 	let icc_profile = header.icc_profile().ok().flatten();
+	// The ICC header names the profile's colour space at bytes 16..20.
+	if icc_profile
+		.as_deref()
+		.is_some_and(|profile| profile.get(16..20) != Some(&b"RGB "[..]))
+	{
+		return Err(Error::from_reason("Image has a non-RGB colour profile"));
+	}
 	let source = decode_image_from_bytes(bytes)?;
 	if source.width() == 0 || source.height() == 0 {
 		return Err(Error::from_reason("Image has no pixels"));

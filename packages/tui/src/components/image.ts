@@ -647,6 +647,8 @@ export class Image implements Component {
 	#base64Data: string;
 	#mimeType: string;
 	#dimensions: ImageDimensions;
+	/** False when `#dimensions` is the 800x600 stand-in for an unreadable header. */
+	#sizeKnown: boolean;
 	#theme: ImageTheme;
 	#options: ImageOptions;
 	#budget?: ImageBudget;
@@ -678,7 +680,9 @@ export class Image implements Component {
 		this.#mimeType = mimeType;
 		this.#theme = theme;
 		this.#options = options;
-		this.#dimensions = dimensions || getImageDimensions(base64Data, mimeType) || { widthPx: 800, heightPx: 600 };
+		const known = dimensions || getImageDimensions(base64Data, mimeType);
+		this.#dimensions = known || { widthPx: 800, heightPx: 600 };
+		this.#sizeKnown = known != null;
 		this.#budget = options.budget;
 		this.#imageId = options.budget ? options.budget.acquireId(options.imageKey) : undefined;
 	}
@@ -829,23 +833,26 @@ export class Image implements Component {
 						() => encodeSixelNow(this.#base64Data, widthPx, heightPx),
 						() => encodeSixelAsync(new Uint8Array(Buffer.from(this.#base64Data, "base64")), widthPx, heightPx),
 					),
-				// iTerm2 animates GIFs itself; strips would freeze them on frame one.
-				// Sniff the `GIF8` magic (base64 `R0lGOD`): MIME strings vary in case and parameters.
-				iterm2Rows: this.#base64Data.startsWith("R0lGOD")
-					? undefined
-					: (widthPx, rowHeightPx, rows) =>
-							this.#encoded(
-								this.#iterm2Rows,
-								`${widthPx}x${rowHeightPx}x${rows}`,
-								() => encodeImageRowsNow(this.#base64Data, widthPx, rowHeightPx, rows),
-								() =>
-									encodeImageRowsAsync(
-										new Uint8Array(Buffer.from(this.#base64Data, "base64")),
-										widthPx,
-										rowHeightPx,
-										rows,
-									),
-							),
+				// Strips are cut to the measured size, so an unknown size would squash
+				// them; iTerm2 sizes the original itself. It also animates GIFs, which
+				// strips would freeze: sniff the `GIF8` magic (base64 `R0lGOD`), since
+				// MIME strings vary in case and parameters.
+				iterm2Rows:
+					!this.#sizeKnown || this.#base64Data.startsWith("R0lGOD")
+						? undefined
+						: (widthPx, rowHeightPx, rows) =>
+								this.#encoded(
+									this.#iterm2Rows,
+									`${widthPx}x${rowHeightPx}x${rows}`,
+									() => encodeImageRowsNow(this.#base64Data, widthPx, rowHeightPx, rows),
+									() =>
+										encodeImageRowsAsync(
+											new Uint8Array(Buffer.from(this.#base64Data, "base64")),
+											widthPx,
+											rowHeightPx,
+											rows,
+										),
+								),
 			});
 
 			if (result?.transmit && this.#imageId != null && this.#budget !== undefined) {
