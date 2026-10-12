@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Model presets now save and switch role fallback chains, so switching to a preset no longer keeps the previous setup's fallbacks
+- Model presets now save and switch role fallback chains, so switching to a preset no longer keeps the previous setup's fallbacks ([#15464](https://github.com/can1357/oh-my-pi/pull/15464) by [@sapran](https://github.com/sapran))
 
 ## [18.10.1] - 2026-10-12
 
