@@ -2,22 +2,46 @@
 
 ## [Unreleased]
 
+## [18.10.2] - 2026-10-12
+
 ### Added
 
-- Added the `judgment-questions-max` catalog axis and `resolveJudgmentQuestionsMax`: self-hosted OpenJEV judges are capped at 16 questions per System One request, razorback16/openjev's `openjev-latest`, Laya, Verdict and JevK5 at 256, and hosted jev stays uncapped ([#15368](https://github.com/can1357/oh-my-pi/pull/15368) by [@H4vC](https://github.com/H4vC))
-- Added the OpenAI Decisions judge `openai/gpt-6-luna-decisions` (GPT-6 Luna, $0.10 per 1M input tokens, text and image input) on the new `openai-decisions` judge API; it appears after OpenAI model discovery succeeds
-- Added the `cloudflare-workers-ai` provider with Cloudflare's Clef and Clef Flash judges on the new `workers-ai-systemone` judge API, authenticated by `/login cloudflare-workers-ai` or `CLOUDFLARE_API_TOKEN` with `CLOUDFLARE_ACCOUNT_ID`
-- Capped Clef judges at 64 questions per request, on Workers AI and through OpenRouter Decisions (`cloudflare/clef*`)
-- Added the seed-row `request-model-id` directive so an authored row can request a wire model id different from its own id
-- Added `@oh-my-pi/pi-catalog/wire/cloudflare` (`parseCloudflareCredential`, `serializeCloudflareCredential`), shared by the AI Gateway and Workers AI logins
+- Added the `honors-claude-code-beta-kill-switch` axis (`compat.honorsClaudeCodeBetaKillSwitch`), on for the `anthropic` provider, so a rule or `models.yml` override decides which providers honor `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` ([#15458](https://github.com/can1357/oh-my-pi/pull/15458) by [@H4vC](https://github.com/H4vC))
+### Breaking Changes
 
+- `resolveInlineImageByteBudget(model, officialEndpoint)` and `resolveImageCountBudget(model, officialEndpoint)` take whether the request reaches the official endpoint instead of reading `compat.officialEndpoint`, which misses request-time reroutes such as `ANTHROPIC_BASE_URL`; pass pi-ai's `reachesOfficialEndpoint(model)` ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Added
+
+- Added the `image-count-budget` rule for how many images one request may carry (Anthropic 90, Codex 200, other hosts unchanged) and the `official-image-count-budget` override that applies only on the official endpoint: Anthropic 600 (100 on 200k-window Claude models), Codex 2,000 ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+- Added a 24 MB inline-image byte budget for the Codex backend, which now counts as its official endpoint at its default URL and at paths under it such as `/codex/responses` ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+- Added `isOfficialCodexApiUrl` to `wire/codex`, moved from pi-ai ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+### Added
+
+- Added `verified` to `image-tokenization` rules, marking the Claude 4.7+ high-res tier and the GPT-5.5 to 6.1 and gpt-6-astra rules as matching measured provider billing ([#15442](https://github.com/can1357/oh-my-pi/pull/15442) by [@will-bogusz](https://github.com/will-bogusz))
 ### Fixed
 
-- Fixed Groq rejecting requests omp built for it: Kimi tool-call turns no longer carry `reasoning_content` (400 "property 'reasoning_content' is unsupported"), and Qwen is driven by `reasoning_effort` with `none` as its off value instead of `enable_thinking` (400 "property 'enable_thinking' is unsupported"); Groq Qwen models offer only the effort levels Groq accepts (low/medium/high, or on for Qwen 3.6) ([#15322](https://github.com/can1357/oh-my-pi/pull/15322) by [@Robinbinu](https://github.com/Robinbinu))
+- Applied `max-image-dimension` and `max-image-payload-bytes` to Google API models, and declared the 5 MiB per-image limit of Claude on Google Antigravity ([#15444](https://github.com/can1357/oh-my-pi/pull/15444) by [@will-bogusz](https://github.com/will-bogusz))
+### Added
+
+- Added the `image-max-edge` axis and `resolveImageMaxEdge()` for hosts that shrink images before the model reads them; Cursor's Claude and GPT models and its `default` (Auto) route fit 1024×1024 ([#15448](https://github.com/can1357/oh-my-pi/pull/15448) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Changed
+
+- Google Antigravity, xAI and Cursor requests keep up to 60 images, 20 for Claude on Antigravity and Cursor, up from 5; this counts snapcompact frames and live screenshots together ([#15449](https://github.com/can1357/oh-my-pi/pull/15449) by [@will-bogusz](https://github.com/will-bogusz))
+- Snapcompact sizes archives at the frame prices measured for Antigravity Gemini (a fixed 1,089 tokens), Grok 4.6 to 4.20, and Claude Sonnet's standard tier ([#15449](https://github.com/can1357/oh-my-pi/pull/15449) by [@will-bogusz](https://github.com/will-bogusz))
+
+## [18.10.0] - 2026-10-12
+
+### Changed
+
+- Raised the default context window for `openai-codex/gpt-6.1-sol` and `gpt-6.1-sol-wm` from 272K to 500K, matching OpenAI's new Codex default; extended context still opens 922K ([#15421](https://github.com/can1357/oh-my-pi/issues/15421))
+
+## [18.9.2] - 2026-10-11
 
 ### Removed
 
-- Removed `parseCloudflareAiGatewayCredential`, `serializeCloudflareAiGatewayCredential` and `CloudflareAiGatewayCredential` from `@oh-my-pi/pi-catalog/wire/cloudflare-ai-gateway`; use the `wire/cloudflare` equivalents
+- Removed `parseCloudflareAiGatewayCredential`, `serializeCloudflareAiGatewayCredential`, and `CloudflareAiGatewayCredential` from `@oh-my-pi/pi-catalog/wire/cloudflare-ai-gateway`. Use the equivalents from `@oh-my-pi/pi-catalog/wire/cloudflare` instead.
 
 ## [18.9.1] - 2026-10-11
 

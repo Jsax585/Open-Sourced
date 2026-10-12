@@ -16,8 +16,10 @@
 // https://platform.claude.com/docs/en/build-with-claude/prompt-caching
 class "anthropic" {
 	prompt-cache-lookback 20
+	// verified: billing matched this formula on Opus 4.7+ and Fable 5.1.
 	image-tokenization {
 		regime "anthropic-patch"
+		verified #true
 		max-edge 2576
 		max-tokens 4784
 	}
@@ -37,10 +39,12 @@ class "anthropic" {
 			}
 		}
 	}
+	// verified: billing matched the standard tier on Sonnet 4.6.
 	family "sonnet" {
 		revision "<4.7" {
 			image-tokenization {
 				regime "anthropic-patch"
+				verified #true
 				max-edge 1568
 				max-tokens 1568
 			}
@@ -48,6 +52,7 @@ class "anthropic" {
 		revision ">=10 <47" {
 			image-tokenization {
 				regime "anthropic-patch"
+				verified #true
 				max-edge 1568
 				max-tokens 1568
 			}
