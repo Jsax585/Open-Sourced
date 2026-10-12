@@ -97,8 +97,28 @@ describe("IRC identity through AgentSession", () => {
 				const restored = saved.buildSessionContext().messages;
 				const parents = restored.filter(message => message.role === "user" && "ircSource" in message);
 				expect(parents).toMatchObject([
-					{ ircSource: { id: first.id, from: parent, to: recipient, ts: 42, replyTo: first.replyTo, wakeRelay: true, fromParent: true } },
-					{ ircSource: { id: "second-id", from: parent, to: recipient, ts: 42, replyTo: first.replyTo, wakeRelay: true, fromParent: true } },
+					{
+						ircSource: {
+							id: first.id,
+							from: parent,
+							to: recipient,
+							ts: 42,
+							replyTo: first.replyTo,
+							wakeRelay: true,
+							fromParent: true,
+						},
+					},
+					{
+						ircSource: {
+							id: "second-id",
+							from: parent,
+							to: recipient,
+							ts: 42,
+							replyTo: first.replyTo,
+							wakeRelay: true,
+							fromParent: true,
+						},
+					},
 				]);
 				const incoming = saved
 					.getEntries()
