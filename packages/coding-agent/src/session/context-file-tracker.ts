@@ -89,9 +89,39 @@ function hashContent(content: string): string {
 	return Bun.hash(content).toString(36);
 }
 
+/** True when `target` is strictly below `root`. A leading `..` only means "outside" as a whole path component. */
 function isWithin(root: string, target: string): boolean {
 	const relative = path.relative(root, target);
-	return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+	if (relative === "" || relative === ".." || path.isAbsolute(relative)) return false;
+	return !relative.startsWith(`..${path.sep}`);
+}
+
+/**
+ * True when any directory component of `dir` below `root` is a third-party tree or a dot
+ * directory (the standalone providers ignore files whose parent is one). `..draft` is an
+ * ordinary name, not a dot directory.
+ */
+function hasExcludedSegment(root: string, dir: string): boolean {
+	return path
+		.relative(root, dir)
+		.split(path.sep)
+		.some(segment => SKIPPED_DIRECTORY_NAMES.has(segment) || (segment.startsWith(".") && !segment.startsWith("..")));
+}
+
+/**
+ * Resolves symlinks and accepts the result only if it is strictly inside `realRoot` and no
+ * physical directory on the way is excluded. A link must not smuggle in files from
+ * `node_modules` or from outside the workspace.
+ */
+async function resolvesInsideWorkspace(realRoot: string, candidate: string, isDirectory: boolean): Promise<boolean> {
+	let physical: string;
+	try {
+		physical = await fs.promises.realpath(candidate);
+	} catch {
+		return false;
+	}
+	const directory = isDirectory ? physical : path.dirname(physical);
+	return isWithin(realRoot, directory) && !hasExcludedSegment(realRoot, directory);
 }
 
 function signature(stat: fs.Stats): string {
@@ -214,6 +244,12 @@ export class ContextFileTracker {
 			const absolute = path.resolve(target);
 			const root = roots.filter(candidate => isWithin(candidate, absolute)).sort((a, b) => b.length - a.length)[0];
 			if (!root) continue;
+			let realRoot: string;
+			try {
+				realRoot = await fs.promises.realpath(root);
+			} catch {
+				continue;
+			}
 			let directory = absolute;
 			try {
 				if (!(await fs.promises.stat(absolute)).isDirectory()) directory = path.dirname(absolute);
@@ -222,7 +258,7 @@ export class ContextFileTracker {
 			}
 			const found: PendingNested[] = [];
 			for (let dir = directory; isWithin(root, dir); dir = path.dirname(dir)) {
-				const loaded = await this.#loadDirectory(dir, root, absolute, disabledIds);
+				const loaded = await this.#loadDirectory(dir, root, realRoot, absolute, disabledIds);
 				if (loaded) found.push(loaded);
 			}
 			if (this.#generation !== generation) return;
@@ -235,13 +271,12 @@ export class ContextFileTracker {
 	async #loadDirectory(
 		dir: string,
 		root: string,
+		realRoot: string,
 		target: string,
 		disabledIds: ReadonlySet<string>,
 	): Promise<PendingNested | undefined> {
-		const relative = path.relative(root, dir).split(path.sep);
-		if (relative.some(segment => SKIPPED_DIRECTORY_NAMES.has(segment))) return undefined;
-		// The standalone providers ignore files whose parent directory is a dot directory.
-		if (path.basename(dir).startsWith(".")) return undefined;
+		if (hasExcludedSegment(root, dir)) return undefined;
+		if (!(await resolvesInsideWorkspace(realRoot, dir, true))) return undefined;
 		for (const candidate of NESTED_CONTEXT_FILES) {
 			if (!isProviderEnabled(candidate.provider)) continue;
 			if (disabledIds.has(`context-file:project:${candidate.name}`)) continue;
@@ -250,6 +285,7 @@ export class ContextFileTracker {
 			if (this.#ambient.has(filePath) || this.#pending.has(filePath) || this.#nestedInContext(filePath)) {
 				return undefined;
 			}
+			if (!(await resolvesInsideWorkspace(realRoot, filePath, false))) continue;
 			const raw = await readInstructionFile(filePath);
 			if (raw === undefined || raw.trim() === "") continue;
 			const content = boundContent(await expandAtImports(raw, filePath));

@@ -146,6 +146,41 @@ describe("nested context discovery", () => {
 		expect(await read(r, path.join(outside, "f.ts"))).toEqual([]);
 	});
 
+	it("excludes a dot directory anywhere on the path, not only the target's own directory", async () => {
+		const root = project({ ".hidden/child/AGENTS.md": "hidden child", ".hidden/child/f.ts": "x" });
+		expect(await read(rig(root), path.join(root, ".hidden/child/f.ts"))).toEqual([]);
+	});
+
+	it("loads instructions from a directory whose name merely begins with two dots", async () => {
+		const root = project({ "..draft/AGENTS.md": "draft rules", "..draft/f.ts": "x" });
+		expect(paths(await read(rig(root), path.join(root, "..draft/f.ts")))).toEqual([
+			path.join(root, "..draft/AGENTS.md"),
+		]);
+	});
+
+	it("does not follow a symlinked directory into node_modules or out of the workspace", async () => {
+		const root = project({ "node_modules/pkg/AGENTS.md": "third party", "node_modules/pkg/f.ts": "x" });
+		const outside = project({ "AGENTS.md": "elsewhere", "f.ts": "x" });
+		fs.symlinkSync(path.join(root, "node_modules/pkg"), path.join(root, "alias"));
+		fs.symlinkSync(outside, path.join(root, "away"));
+		const r = rig(root);
+		expect(await read(r, path.join(root, "alias/f.ts"))).toEqual([]);
+		expect(await read(r, path.join(root, "away/f.ts"))).toEqual([]);
+	});
+
+	it("does not read an AGENTS.md symlinked from outside the workspace", async () => {
+		const root = project({ "a/f.ts": "x" });
+		const outside = project({ "AGENTS.md": "elsewhere" });
+		fs.symlinkSync(path.join(outside, "AGENTS.md"), path.join(root, "a/AGENTS.md"));
+		expect(await read(rig(root), path.join(root, "a/f.ts"))).toEqual([]);
+	});
+
+	it("still loads a symlinked directory that resolves to an ordinary place inside the workspace", async () => {
+		const root = project({ "real/AGENTS.md": "real rules", "real/f.ts": "x" });
+		fs.symlinkSync(path.join(root, "real"), path.join(root, "link"));
+		expect(await read(rig(root), path.join(root, "link/f.ts"))).toHaveLength(1);
+	});
+
 	it("honors disabledExtensions for project AGENTS.md", async () => {
 		const root = project({ "a/AGENTS.md": "A rules", "a/f.ts": "x" });
 		const r = rig(root, { disabledExtensions: ["context-file:project:AGENTS.md"] });
