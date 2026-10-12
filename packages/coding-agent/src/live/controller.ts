@@ -118,6 +118,7 @@ export class LiveSessionController {
 	#emittedOutputLevel = -1;
 	#activeDelegationId: string | undefined;
 	#delegationShortcutChain: Promise<void> = Promise.resolve();
+	#delegationShortcutAbort = new AbortController();
 	#userTranscript = "";
 	#assistantTranscript = "";
 	#userTranscriptFinal = false;
@@ -232,6 +233,7 @@ export class LiveSessionController {
 
 	async #stop(): Promise<void> {
 		this.#stopped = true;
+		this.#delegationShortcutAbort.abort();
 		this.#unsubscribeSession?.();
 		this.#unsubscribeSession = undefined;
 		let cleanupError: Error | undefined;
@@ -324,7 +326,7 @@ export class LiveSessionController {
 			if (this.#stopped) return;
 			let reply: string | undefined;
 			try {
-				reply = (await runner.emitLiveDelegation(request))?.reply;
+				reply = (await runner.emitLiveDelegation(request, this.#delegationShortcutAbort.signal))?.reply;
 			} catch {
 				// Extension errors fall back to the normal agent, never stop voice.
 			}
