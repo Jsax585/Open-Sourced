@@ -540,6 +540,31 @@ the established interactive input-handler chain cancellable by Esc.
 Builtin submission cleanup also preserves the newer draft, including `/clear`
 and `/new`. Commands retain their explicit prefill and session-transition actions.
 
+### Live voice delegation shortcuts
+
+The built-in `/live` mode can offer delegated requests to opt-in extension
+handlers **before** starting a coding-model turn:
+
+```ts
+pi.on("live_delegation", async (event, ctx) => {
+  if (event.text === "is the agent busy?") {
+    return { reply: ctx.isIdle() ? "Idle." : "Working." };
+  }
+});
+```
+
+This hook receives delegated text, not raw microphone samples or partial
+transcripts. It is separate from the `input` hook for typed submissions.
+A nonempty `reply` of at most 512 characters means the request is complete;
+OMP returns it to the existing live session without sending a coding-model
+request. Otherwise the original text is delegated unchanged. All extension
+handlers together have at most **750 ms**; timeouts, errors, and missing
+handlers fall through to normal execution. The hook does not change tool
+permissions or enable voice by default.
+
+For an optional Jev-backed example, see
+[`jev-live.ts`](../packages/coding-agent/examples/extensions/jev-live.ts).
+
 ### Tool lifecycle
 
 - `tool_call` (pre-exec, may block, revise the tool's execution `input`, or return passive `additionalContext`; for model-issued calls it fires at arg-prep time in the agent loop, so a revision is revalidated and seen by concurrency scheduling, execution events, the persisted assistant message, and the approval gate alike; passive context from non-blocking handlers is delivered after the batch's tool results in assistant call order, before the next provider request)
