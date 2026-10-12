@@ -72,6 +72,7 @@ import { handleSystemOne } from "./routes/systemone";
 import { handleTranscriptions } from "./routes/transcriptions";
 import { handleVideoContent, handleVideoPoll, handleVideoSubmit } from "./routes/video";
 import { AuthGatewaySessionStateStore } from "./session-state";
+import { RouteRegistry } from "./route-graph";
 import { GatewayResponseOwnership, type GatewayResponseOwner, responseEndpointIdentity } from "./response-ownership";
 import {
 	commitGateObservesDownstreamSse,
@@ -364,8 +365,12 @@ async function handleFormatEndpoint(
 	if (!modelId) {
 		return route.module.formatError(400, "invalid_request_error", "Missing top-level `model` field");
 	}
-
-	const model = bootOpts.resolveModel(modelId);
+	const registry = bootOpts.routeRegistry ?? new RouteRegistry(bootOpts.resolveModel);
+	const compiled = registry.resolve(modelId);
+	if (!compiled) {
+		return route.module.formatError(404, "invalid_request_error", `Unknown model: ${modelId}`);
+	}
+	const model = registry.getModel(compiled);
 	if (!model) {
 		return route.module.formatError(404, "invalid_request_error", `Unknown model: ${modelId}`);
 	}
@@ -729,7 +734,12 @@ async function handlePiNative(
 		return piNative.formatError(400, "invalid_request_error", message);
 	}
 
-	const model = bootOpts.resolveModel(parsed.modelId);
+	const registry = bootOpts.routeRegistry ?? new RouteRegistry(bootOpts.resolveModel);
+	const compiled = registry.resolve(parsed.modelId);
+	if (!compiled) {
+		return piNative.formatError(404, "invalid_request_error", `Unknown model: ${parsed.modelId}`);
+	}
+	const model = registry.getModel(compiled);
 	if (!model) {
 		return piNative.formatError(404, "invalid_request_error", `Unknown model: ${parsed.modelId}`);
 	}
@@ -1051,6 +1061,10 @@ export interface AuthGatewayRouter {
  * two routers in one process never share (or tear down) each other's.
  */
 export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGatewayRouter {
+	const boot: AuthGatewayRouteOptions = {
+		...opts,
+		routeRegistry: opts.routeRegistry ?? new RouteRegistry(opts.resolveModel),
+	};
 	const sessionStates = new AuthGatewaySessionStateStore();
 	const responseOwners = new GatewayResponseOwnership();
 	const route = async (req: Request, peer: string): Promise<Response> => {
@@ -1073,13 +1087,13 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 			// Provider-format dispatch.
 			const formatRoute = FORMAT_ROUTES[pathname];
 			if (formatRoute && req.method === "POST") {
-				return await handleFormatEndpoint(formatRoute, opts, req, peer, sessionStates, responseOwners);
+				return await handleFormatEndpoint(formatRoute, boot, req, peer, sessionStates, responseOwners);
 			}
 
 			// Pi-native fast path. Same auth + provider plumbing as the
 			// foreign-wire routes, just without the wire-format translation.
 			if (req.method === "POST" && pathname === "/v1/pi/stream") {
-				return await handlePiNative(opts, req, peer, sessionStates, responseOwners);
+				return await handlePiNative(boot, req, peer, sessionStates, responseOwners);
 			}
 
 			// TypeSafe System One judgments (jev). TypeSafe SDKs and omp's own

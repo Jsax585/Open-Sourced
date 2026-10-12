@@ -16,6 +16,7 @@ import { isUsageLimitOutcome } from "../error/rate-limit";
 import type { Api, FetchImpl, Model, Usage } from "../types";
 import type { ClientUsageIdentity } from "../usage";
 import { extractProviderRetryHint } from "../utils/retry-after";
+import type { RouteRegistry } from "./route-graph";
 import type { AuthGatewayServerOptions } from "./types";
 
 export type ModelResolver = (modelId: string) => Model<Api> | undefined;
@@ -36,6 +37,8 @@ export interface AuthGatewayRouteOptions {
 	excludeProviders?: ReadonlySet<string>;
 	/** Upstream transport for every provider call; defaults to global `fetch`. Test seam. */
 	fetch?: FetchImpl;
+	/** Wave A compiled-route shim. Constructed by {@link startAuthGateway} when omitted. */
+	routeRegistry?: RouteRegistry;
 }
 
 /** The HTTP server's options: the routes' plus its listener and inbound auth. */
