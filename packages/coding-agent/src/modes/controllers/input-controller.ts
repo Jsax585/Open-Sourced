@@ -806,10 +806,12 @@ export class InputController {
 			this.ctx.ui.extendScreenSelection(point);
 		} else if (press && event.release) {
 			this.#press = undefined;
+			// A fast drag can arrive as press and release with no motion between.
+			const dragged = press.dragged || point.row !== press.row || point.col !== press.col;
 			this.ctx.ui.extendScreenSelection(point);
-			const text = press.dragged ? this.ctx.ui.getScreenSelectionText() : "";
+			const text = dragged ? this.ctx.ui.getScreenSelectionText() : "";
 			this.ctx.ui.setScreenSelection(undefined);
-			if (!press.dragged) this.#focusClickedAgent(press.targets);
+			if (!dragged) this.#focusClickedAgent(press.targets);
 			else if (/\S/.test(text)) this.#quoteSelection(text);
 		} else if (event.motion) {
 			this.#updateHoverHighlight(event.row);

@@ -112,6 +112,61 @@ describe("TUI screen selection", () => {
 		tui.stop();
 	});
 
+	it("erases the highlight from history rows a resize leaves above the repaint", async () => {
+		for (const [columns, rows] of [
+			[20, 4],
+			[20, 8],
+			[30, 6],
+		] as const) {
+			const terminal = new VirtualTerminal(20, 6);
+			const scheduler = new VirtualRenderScheduler();
+			const provider = new Provider(["v0", "editor"]);
+			const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
+			tui.setFrameProvider(provider);
+			tui.start();
+			await scheduler.settle(terminal);
+			provider.plan = {
+				history: { id: 1, rows: ["h0", "h1", "h2", "h3", "h4", "h5"], kind: "append" },
+				viewport: ["v0", "editor"],
+			};
+			tui.requestRender();
+			await scheduler.settle(terminal);
+			tui.setScreenSelection({ anchor: { row: 1, col: 0 }, focus: { row: 3, col: 1 } });
+			await terminal.flush();
+			expect(terminal.getViewportRowReverseColumns(2)).toEqual([0, 1]);
+
+			// Shrink pushes rows into scrollback, grow pulls them back, a width
+			// change leaves them in place: each keeps history rows above the repaint.
+			terminal.resize(columns, rows);
+			await scheduler.advance(terminal, 200);
+			await scheduler.settle(terminal);
+			const viewport = terminal.getViewport();
+			expect(viewport.slice(-2).map(row => row.trimEnd())).toEqual(["v0", "editor"]);
+			for (let row = 0; row < viewport.length; row++) {
+				expect(terminal.getViewportRowReverseColumns(row)).toEqual([]);
+			}
+			tui.stop();
+		}
+	});
+
+	it("erases the highlight when the TUI stops mid-selection", async () => {
+		const terminal = new VirtualTerminal(20, 6);
+		const scheduler = new VirtualRenderScheduler();
+		const provider = new Provider(["alpha one", "editor"]);
+		const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		tui.start();
+		await scheduler.settle(terminal);
+
+		tui.setScreenSelection({ anchor: { row: 0, col: 0 }, focus: { row: 0, col: 4 } });
+		await terminal.flush();
+		expect(terminal.getViewportRowReverseColumns(0)).toEqual([0, 1, 2, 3, 4]);
+		tui.stop();
+		await terminal.flush();
+		expect(terminal.getViewportRowReverseColumns(0)).toEqual([]);
+		expect(tui.getScreenSelectionText()).toBe("");
+	});
+
 	it("snaps a start on a wide glyph's second cell back to the glyph", async () => {
 		const terminal = new VirtualTerminal(20, 4);
 		const scheduler = new VirtualRenderScheduler();

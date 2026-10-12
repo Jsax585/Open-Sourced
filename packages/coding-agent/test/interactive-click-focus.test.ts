@@ -327,6 +327,12 @@ describe("inline click-to-focus geometry", () => {
 		mode.editor.insertText("why?");
 		expect(mode.editor.getText()).toBe("see 'bravo charlie\nsecond quoted row' - why?");
 
+		// A fast drag can arrive as a press and a release on another cell with no motion between.
+		mode.editor.setText("see");
+		term.sendInput(`\x1b[<0;${startCol + 1};${startRow + 1}M`);
+		term.sendInput(`\x1b[<0;${endCol + 1};${startRow + 2}m`);
+		expect(mode.editor.getText()).toBe("see 'bravo charlie\nsecond quoted row' - ");
+
 		// Quote on Select off: the same drag leaves the prompt untouched.
 		cfgTuiMouseQuoteOnSelect.set(mode.settings, false);
 		mode.editor.setText("");

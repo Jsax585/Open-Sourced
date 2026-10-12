@@ -908,6 +908,9 @@ export class TUI extends Container {
 	// in-app text selection, which hit-tests and repaints these rows.
 	#screenRows: (PreparedLine | undefined)[] = [];
 	#screenSelection: ScreenSelection | undefined;
+	// Mutable viewport top the last paint left, kept apart from
+	// `#providerViewportTop`, which a resize anchor moves to the new geometry.
+	#paintedViewportTop = 0;
 	// Rows of the last marker-stripping prepare pass keyed by their stripped
 	// raw line, so rows that only moved (a scroll or a history commit shifts
 	// every row under the positional sidecar) reuse their preparation. Swapped
@@ -1562,6 +1565,29 @@ export class TUI extends Container {
 		for (let row = from.row; row <= to.row && row < this.#screenRows.length; row++) {
 			const prepared = this.#screenRows[row];
 			if (!this.#highlightableRow(prepared)) continue;
+			sequence += `\x1b[${row + 1};1H${this.#lineRewriteSequence(prepared, width, row)}`;
+		}
+		return sequence;
+	}
+
+	/**
+	 * Repaint the selected history rows a resize left above the next paint,
+	 * which rewrites only from the new viewport top `top` down: without this
+	 * they keep the reverse video into scrollback. The terminal moved the old
+	 * viewport top to `top`, and rows above it reflowed to `width`. A row wider
+	 * than `width` wrapped and cannot be rewritten in place, so it is skipped.
+	 */
+	#resizedSelectionRestoreSequence(width: number, top: number): string {
+		const bounds = this.#selectionBounds();
+		if (!bounds) return "";
+		const [from, to] = bounds;
+		let sequence = "";
+		let row = top;
+		for (let index = this.#paintedViewportTop - 1; index >= from.row && row > 0; index--) {
+			const prepared = this.#screenRows[index];
+			const spans = this.#reflowedRowCount([prepared?.line ?? ""], 0, 1, width);
+			row -= spans;
+			if (index > to.row || row < 0 || spans > 1 || !this.#highlightableRow(prepared)) continue;
 			sequence += `\x1b[${row + 1};1H${this.#lineRewriteSequence(prepared, width, row)}`;
 		}
 		return sequence;
@@ -2765,6 +2791,9 @@ export class TUI extends Container {
 		this.#cancelPostmortemRestore = undefined;
 		this.#debugServer?.stop();
 		this.#debugServer = undefined;
+		// Erase the selection highlight while the rows it covers are still
+		// ours: the shell handoff below would keep it on screen and in history.
+		this.setScreenSelection(undefined);
 		this.#nativeHoldTimer?.cancel();
 		this.#nativeHoldTimer = undefined;
 		this.#clearNativeConfirm();
@@ -3728,7 +3757,11 @@ export class TUI extends Container {
 		if (destructiveReset) buffer += `${LINE_TERMINATOR}\x1b[H\x1b[2J\x1b[3J`;
 		// Erase the selection highlight at its old cells before rows move: the
 		// paint below may scroll highlighted rows or leave them unrewritten.
-		if (!destructiveReset && geometryStable) buffer += this.#selectionRestoreSequence(width);
+		if (!destructiveReset) {
+			buffer += geometryStable
+				? this.#selectionRestoreSequence(width)
+				: this.#resizedSelectionRestoreSequence(width, startTop);
+		}
 		const diffable =
 			geometryStable &&
 			historyRows.length === 0 &&
@@ -3886,6 +3919,7 @@ export class TUI extends Container {
 		this.#providerWindow = mutablePreparedLines;
 		this.#providerPreparedRows = mutablePreparedRows;
 		this.#providerViewportTop = mutableTop;
+		this.#paintedViewportTop = mutableTop;
 		this.#providerViewportPadTop = replayViewportRows - replayPrependedBlanks;
 		this.#previousWidth = width;
 		this.#previousHeight = height;
