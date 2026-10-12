@@ -205,7 +205,7 @@ describe("AgentSession retry recovery", () => {
 			streamFn: (requestModel, context, options) => {
 				streams++;
 				if (requestModel.id !== model.id || requestModel.api !== "anthropic-messages") throw new Error("Unexpected fallback");
-				return streamAnthropic({ ...requestModel, api: requestModel.api }, context, options);
+				return streamAnthropic({ ...requestModel, api: "anthropic-messages" }, context, options);
 			},
 		});
 		const settings = Settings.isolated({
@@ -269,7 +269,7 @@ describe("AgentSession retry recovery", () => {
 			sent = structuredClone(params);
 			throw new Error("synthetic terminal client response");
 		});
-		const stream = streamAnthropic({ ...model, api: model.api }, { messages: [{ role: "user", content: "unused", timestamp: 0 }] }, {
+		const stream = streamAnthropic({ ...model, api: "anthropic-messages" }, { messages: [{ role: "user", content: "unused", timestamp: 0 }] }, {
 			apiKey: "test-key",
 			fallbackCreditRedemption: { token: "credit-token", params: frozen, expiresAt: Date.now() + 60_000, prefillClaim: false },
 			onPayload: async (payload, requestModel) => {
@@ -314,7 +314,7 @@ describe("AgentSession retry recovery", () => {
 		});
 		const context = { messages: [{ role: "user" as const, content: "unchanged input", timestamp: 0 }] };
 		const original = JSON.stringify(context);
-		const stream = streamAnthropic({ ...model, api: model.api }, context, {
+		const stream = streamAnthropic({ ...model, api: "anthropic-messages" }, context, {
 			apiKey: "test-key",
 			onPayload: (payload, requestModel) => runner.emitBeforeProviderRequest(payload, requestModel),
 		});
