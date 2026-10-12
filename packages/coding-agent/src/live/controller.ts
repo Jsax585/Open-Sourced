@@ -341,6 +341,9 @@ export class LiveSessionController {
 				this.#activeDelegationId = undefined;
 				this.#refreshAudioPhase();
 			}
+		}).catch(() => {
+			// A broken shortcut integration must not poison subsequent delegations.
+			this.#sendDelegatedTurn(request);
 		});
 	}
 
