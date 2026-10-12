@@ -24,7 +24,7 @@ import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { parseModelString } from "@oh-my-pi/pi-tui/overlays/model-selector";
-import { parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { formatModelStringWithRouting, parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgGoalContinuationModes } from "@oh-my-pi/pi-coding-agent/goals/settings";
 import { submitInteractiveInput } from "@oh-my-pi/pi-coding-agent/main";
@@ -5450,6 +5450,7 @@ describe("AgentSession retry fallback", () => {
 		const setup = (
 			options: {
 				responses?: MockResponse[];
+				responseModel?: Model;
 				pinned?: boolean;
 				initial?: boolean;
 				tools?: AgentTool[];
@@ -5461,7 +5462,11 @@ describe("AgentSession retry fallback", () => {
 			} = {},
 		) => {
 			const requested: string[] = [];
-			const mock = createMockModel({ responses: options.responses });
+			const mock = createMockModel({
+				responses: options.responses,
+				provider: options.responseModel?.provider,
+				id: options.responseModel?.id,
+			});
 			const agent = options.responses
 				? new Agent({
 						getApiKey: model => `${model.provider}-test-key`,
@@ -5927,13 +5932,18 @@ describe("AgentSession retry fallback", () => {
 			const runner = new ExtensionRunner([extension], runtime, tempDir.path(), manager, modelRegistry);
 			const { requested } = setup({
 				compaction: true,
+				responseModel: fallback,
 				extensionRunner: runner,
 				sessionManager: manager,
 				responses: [
 					{ throw: `rate limit exceeded retry-after-ms=${FALLBACK_TEST_RETRY_AFTER_MS}` },
-					// A truncated answer requires post-compaction retry. A complete
-					// text answer is intentionally terminal even with autoContinue.
-					{ content: ["Fallback history ".repeat(2_000)], stopReason: "length" },
+					// A truncated response with billed context over the threshold
+					// requires compaction retry, rather than output-cap recovery.
+					{
+						content: ["Fallback history ".repeat(2_000)],
+						stopReason: "length",
+						usage: { input: 2_000, totalTokens: 2_000 },
+					},
 					{ content: ["Done after compaction"] },
 				],
 			});
