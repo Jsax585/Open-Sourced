@@ -13,7 +13,6 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/incomplete-todos";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 
-
 function phase(
 	name: string,
 	...tasks: Array<{ content: string; status: TodoPhase["tasks"][number]["status"]; droppedBy?: "user" }>

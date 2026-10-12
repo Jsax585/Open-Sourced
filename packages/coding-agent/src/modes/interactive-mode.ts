@@ -3731,7 +3731,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		const activeTask = nextActionableTask(phases);
 
 		const header = `${theme.bold(theme.fg("accent", "TODO"))} ${theme.fg("dim", `${closedTasks}/${totalTasks}`)}`;
-		const droppedTasks = phases.reduce((sum, phase) => sum + phase.tasks.filter(t => t.status === "abandoned").length, 0);
+		const droppedTasks = phases.reduce(
+			(sum, phase) => sum + phase.tasks.filter(t => t.status === "abandoned").length,
+			0,
+		);
 		const taskStr = activeTask
 			? this.#formatTodoLine(activeTask, "", isMatched(activeTask))
 			: droppedTasks > 0
