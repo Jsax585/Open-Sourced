@@ -1,0 +1,10 @@
+// /models is public: validate keys against authenticated inference instead.
+auth "friendli" {
+	name "FriendliAI"
+	login "api-key" {
+		auth-url "https://friendli.ai/suite/~/setting/keys"
+		instructions "Copy your Personal API key from Friendli Suite"
+		prompt "Paste your FriendliAI API key" placeholder="flp_..."
+		validate "chat-completions" label="FriendliAI" base-url="https://api.friendli.ai/serverless/v1" model="zai-org/GLM-5.2"
+	}
+}
