@@ -186,8 +186,11 @@ export interface CodexResetPlanInput {
 	};
 	/** Active account (marks the preferred restore candidate); may be undefined. */
 	identity: OAuthAccountIdentity | undefined;
-	/** Account policy lookup; a policy's `autoRedeem` overrides `settings.autoRedeem` for that account. */
-	accountPolicy: (identity: OAuthAccountIdentity) => AuthAccountPolicy | undefined;
+	/**
+	 * Account policy lookup by stored credential; a policy's `autoRedeem` overrides
+	 * `settings.autoRedeem` for that account.
+	 */
+	accountPolicy: (account: OAuthAccountIdentity & { credentialId: number }) => AuthAccountPolicy | undefined;
 	/** `blocked-account`: whether a stored credential may serve the blocked session; absent allows every account. */
 	permitsCredential?: (credentialId: number) => boolean;
 	/** Usage reports for ALL stored accounts (one per account for Codex). */
@@ -390,7 +393,10 @@ export function planCodexResetRedemptions(input: CodexResetPlanInput): CodexRese
 			continue;
 		}
 		const accountKey = `openai-codex|${orgId?.trim().toLowerCase() ?? "-"}|${credentialId}`;
-		const autoRedeem = effectiveAutoRedeemMode(settings.autoRedeem, input.accountPolicy({ accountId, email, orgId }));
+		const autoRedeem = effectiveAutoRedeemMode(
+			settings.autoRedeem,
+			input.accountPolicy({ credentialId, accountId, email, orgId }),
+		);
 		if (autoRedeem === "no") {
 			skipped.push({ accountKey, rule: "account", reason: "auto-redeem-off" });
 			continue;

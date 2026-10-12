@@ -747,6 +747,34 @@ describe("formatUsageBreakdown", () => {
 		it("titles the banner as lost when an account turned off holds the only expiring reset", () => {
 			expect(banner("yes", ["off@example.test"])).toContain("▲ 1 saved reset expires within 24h and will be lost");
 		});
+
+		it("reads the policy of the stored account that owns a report whose email is spelled differently", () => {
+			const storedEmail = "Off@Example.test";
+			const exactOptions: UsagePolicyDiagnosticsOptions = {
+				globalReservePct: 10,
+				getAccountPolicy: (_provider, identity) =>
+					identity.email === storedEmail
+						? { provider: "openai-codex", account: { email: storedEmail }, autoRedeem: false }
+						: undefined,
+			};
+			const text = stripVTControlCharacters(
+				formatUsageBreakdown(
+					[expiringReport("off@example.test")],
+					[{ provider: "openai-codex", type: "oauth", email: storedEmail }],
+					Date.now(),
+					undefined,
+					[],
+					exactOptions,
+					{
+						settings: Settings.isolated({ "codexResets.autoRedeem": "yes" }),
+						accounts: () => [{ position: 0, credentialId: 4, email: storedEmail, active: false }],
+					},
+				),
+			);
+			expect(text).toContain("▲ 1 saved reset expires within 24h and will be lost");
+			expect(text).toContain("→ not spent automatically  (auth.accountPolicies autoRedeem: false)");
+			expect(text).toContain("reserve 10% (global) · auto-redeem off · eligible");
+		});
 	});
 
 	it("reports an account sitting exactly on its reserve as inside reserve", () => {

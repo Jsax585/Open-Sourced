@@ -71,8 +71,11 @@ export interface ClaudeResetPlanInput {
 		keepCredits: number;
 		salvageHorizonMs: number;
 	};
-	/** Account policy lookup; a policy's `autoRedeem` overrides `settings.autoRedeem` for that account. */
-	accountPolicy: (identity: OAuthAccountIdentity) => AuthAccountPolicy | undefined;
+	/**
+	 * Account policy lookup by stored credential; a policy's `autoRedeem` overrides
+	 * `settings.autoRedeem` for that account.
+	 */
+	accountPolicy: (account: OAuthAccountIdentity & { credentialId: number }) => AuthAccountPolicy | undefined;
 	/** Fresh usage for every stored Claude account. */
 	reports: UsageReport[] | null;
 	/**

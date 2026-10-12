@@ -55,6 +55,7 @@ import {
 import type {
 	AnthropicFallbackCreditHandle,
 	AssistantMessage,
+	AuthAccountPolicy,
 	CodexCompactionContext,
 	Context,
 	ImageContent,
@@ -489,6 +490,7 @@ import {
 	cfgTierGoogle,
 	cfgTierOpenai,
 	cfgProvidersAnthropicSlowMode,
+	type ResetAutoRedeemMode,
 } from "./settings";
 import { type AnthropicSlowModeController, anthropicSlowModeLanes, formatUsageLimitLabel } from "./anthropic-slow-mode";
 import type { UsageLimitState } from "./usage-limit";
@@ -705,11 +707,13 @@ interface TitleInput {
 	tried: boolean;
 }
 
-/** A planned saved-reset spend cleared to run, and the auto-redeem mode it was cleared under. */
+/** A planned saved-reset spend cleared to run, and the consent it was cleared under. */
 interface ApprovedResetAction {
 	action: CodexResetAction | ClaudeResetAction;
 	/** `yes`: the account spends without asking. `unset`: a Yes to the prompt, or a headless last-chance spend. */
 	approvedUnder: "yes" | "unset";
+	/** The provider's `autoRedeem` when cleared; a later widening (a prompt's Yes for other accounts) does not reach this action. */
+	providerMode: ResetAutoRedeemMode;
 }
 
 /** Why a cleared spend was dropped before its redeem call. */
@@ -12674,12 +12678,16 @@ export class AgentSession implements SettingsScope {
 		coordinator: CodexAutoRedeemCoordinator,
 	): Promise<ApprovedResetAction[]> {
 		const asked = actions.filter(action => shouldPromptCodexAutoRedeem(action.autoRedeem));
+		const providerMode = (provider === "anthropic" ? cfgClaudeResetsAutoRedeem : cfgCodexResetsAutoRedeem).get(
+			this.settings,
+		);
 		// Plan order, with each `unset` action replaced by its approved spend or dropped.
 		const approve = (spends: readonly (CodexResetAction | ClaudeResetAction)[]): ApprovedResetAction[] =>
 			actions.flatMap((action): ApprovedResetAction[] => {
-				if (!shouldPromptCodexAutoRedeem(action.autoRedeem)) return [{ action, approvedUnder: "yes" }];
+				if (!shouldPromptCodexAutoRedeem(action.autoRedeem))
+					return [{ action, approvedUnder: "yes", providerMode }];
 				const spend = spends.find(candidate => candidate.attemptKey === action.attemptKey);
-				return spend ? [{ action: spend, approvedUnder: "unset" }] : [];
+				return spend ? [{ action: spend, approvedUnder: "unset", providerMode }] : [];
 			});
 		if (asked.length === 0) return approve([]);
 		const providerLabel = provider === "anthropic" ? "Claude" : "Codex";
@@ -12763,6 +12771,19 @@ export class AgentSession implements SettingsScope {
 		return this.#executeResetActions(provider, approved, coordinator);
 	}
 
+	/**
+	 * The account policy of a stored credential, matched on the identity stored with it;
+	 * the usage report or listing that named the account may spell it differently.
+	 */
+	#resetAccountPolicy(
+		provider: "openai-codex" | "anthropic",
+		account: OAuthAccountIdentity & { credentialId: number },
+	): AuthAccountPolicy | undefined {
+		const oauth = this.#modelRegistry.authStorage.oauth;
+		const stored = oauth.accounts(provider).find(candidate => candidate.credentialId === account.credentialId);
+		return oauth.policy(provider, stored ?? account);
+	}
+
 	#planCodexResets(
 		trigger: CodexResetTrigger,
 		reports: UsageReport[] | null,
@@ -12779,7 +12800,7 @@ export class AgentSession implements SettingsScope {
 			modelId: model?.id ?? "",
 			settings: resetPlanSettings(cfg),
 			identity,
-			accountPolicy: account => this.#modelRegistry.authStorage.oauth.policy("openai-codex", account),
+			accountPolicy: account => this.#resetAccountPolicy("openai-codex", account),
 			permitsCredential: credentialId =>
 				this.#modelRegistry.authStorage.sessions.permits("openai-codex", this.sessionId, credentialId),
 			reports,
@@ -12811,7 +12832,7 @@ export class AgentSession implements SettingsScope {
 			settings: resetPlanSettings(cfg),
 			reports,
 			statuses,
-			accountPolicy: account => this.#modelRegistry.authStorage.oauth.policy("anthropic", account),
+			accountPolicy: account => this.#resetAccountPolicy("anthropic", account),
 			permitsCredential: credentialId =>
 				this.#modelRegistry.authStorage.sessions.permits("anthropic", this.sessionId, credentialId),
 			attemptedKeys: coordinator.attemptedKeys,
@@ -12885,18 +12906,28 @@ export class AgentSession implements SettingsScope {
 		// all wait after planning: a restore the session's account pool no longer
 		// allows is dropped, and so is a spend the account's current auto-redeem mode
 		// no longer allows (`no` always; under `unset`, one approved only for `yes`).
+		// Consent only narrows after approval: a provider mode that widened since
+		// (a prompt's Yes for other accounts) counts as the mode the action was cleared under.
 		// Checked with no await before the redeem call.
-		const dropReason = ({ action, approvedUnder }: ApprovedResetAction): ResetSpendDropReason | undefined => {
+		const dropReason = ({
+			action,
+			approvedUnder,
+			providerMode,
+		}: ApprovedResetAction): ResetSpendDropReason | undefined => {
 			if (
 				action.reason === "blocked-account" &&
 				!authStorage.sessions.permits(provider, this.sessionId, action.target.credentialId)
 			) {
 				return "left-pool";
 			}
-			const mode = effectiveAutoRedeemMode(
-				autoRedeemSetting.get(this.settings),
-				authStorage.oauth.policy(provider, action.target),
-			);
+			const current = autoRedeemSetting.get(this.settings);
+			const narrowed =
+				current === "no" || providerMode === "no"
+					? "no"
+					: current === "unset" || providerMode === "unset"
+						? "unset"
+						: "yes";
+			const mode = effectiveAutoRedeemMode(narrowed, this.#resetAccountPolicy(provider, action.target));
 			return mode === "no" || (mode === "unset" && approvedUnder === "yes") ? "consent-withdrawn" : undefined;
 		};
 		const restored: number[] = [];
@@ -13099,7 +13130,7 @@ export class AgentSession implements SettingsScope {
 						if (!status.error || status.retryAfterMs === undefined || !Number.isFinite(status.retryAfterMs))
 							continue;
 						// Only an account that spends without asking is worth waiting to re-read.
-						if (effectiveAutoRedeemMode(cfg.autoRedeem, authStorage.oauth.policy(provider, status)) !== "yes") {
+						if (effectiveAutoRedeemMode(cfg.autoRedeem, this.#resetAccountPolicy(provider, status)) !== "yes") {
 							continue;
 						}
 						const delay = Math.max(0, status.retryAfterMs);

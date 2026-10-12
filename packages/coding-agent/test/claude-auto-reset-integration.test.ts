@@ -176,7 +176,8 @@ describe("Claude saved-reset trigger integration", () => {
 		listFailures?: number;
 		maxDelayMs?: number;
 		quota?: { restored: boolean };
-		autoRedeem?: "unset" | "yes" | "no";
+		/** The provider's mode as a settings override; `null` leaves the default `unset`, which a prompt's answer can change. */
+		autoRedeem?: "unset" | "yes" | "no" | null;
 		salvageHorizonHours?: number;
 		keepCredits?: number;
 		/** Answers the auto-redeem consent prompt; without it the session has no prompt UI. */
@@ -266,7 +267,7 @@ describe("Claude saved-reset trigger integration", () => {
 			"retry.maxDelayMs": options.maxDelayMs ?? 100,
 			"retry.maxRetries": 1,
 			"codexResets.autoRedeem": "no",
-			"claudeResets.autoRedeem": options.autoRedeem ?? "yes",
+			...(options.autoRedeem !== null && { "claudeResets.autoRedeem": options.autoRedeem ?? "yes" }),
 			"claudeResets.salvageHorizonHours": options.salvageHorizonHours ?? 12,
 			"claudeResets.keepCredits": options.keepCredits ?? 0,
 		});
@@ -1139,31 +1140,69 @@ describe("Claude saved-reset trigger integration", () => {
 		expect(targets).toMatchObject([{ credentialId: CREDENTIAL_ID }, { credentialId: SIBLING_CREDENTIAL_ID }]);
 	});
 
-	it("does not carry a Yes for the prompted account to one whose true policy is removed while the prompt is open", async () => {
-		const questions: string[] = [];
-		const { session, coordinator, targets } = buildSession({
-			...salvageCase(),
-			siblings: [siblingStatus()],
-			autoRedeem: "unset",
-			consent: async question => {
-				questions.push(question);
+	it.each([
+		{ layer: "a higher settings layer keeps auto-redeem unset", autoRedeem: "unset", saved: "unset" },
+		{ layer: "the Yes saves claudeResets.autoRedeem as yes", autoRedeem: null, saved: "yes" },
+	] as const)(
+		"does not carry a Yes for the prompted account to one whose true policy is removed while the prompt is open ($layer)",
+		async ({ autoRedeem, saved }) => {
+			const questions: string[] = [];
+			const { session, coordinator, targets } = buildSession({
+				...salvageCase(),
+				siblings: [siblingStatus()],
+				autoRedeem,
+				consent: async question => {
+					questions.push(question);
+					authStorage.setAccountPolicies({ accountPolicies: [], defaultReservePct: DEFAULT_USAGE_RESERVE_PCT });
+					return "Yes";
+				},
+			});
+			authStorage.setAccountPolicies(accountPolicies(true));
+			try {
+				await session.fetchUsageReports();
+				await coordinator.sweepPromise;
+			} finally {
 				authStorage.setAccountPolicies({ accountPolicies: [], defaultReservePct: DEFAULT_USAGE_RESERVE_PCT });
-				return "Yes";
+			}
+
+			expect(questions).toHaveLength(1);
+			expect(questions[0]).not.toContain(ORG_ID);
+			expect(cfgClaudeResetsAutoRedeem.get(session.settings)).toBe(saved);
+			expect(targets).toMatchObject([{ credentialId: SIBLING_CREDENTIAL_ID }]);
+			expect(targets).toHaveLength(1);
+		},
+	);
+
+	it("does not restore a stored organization whose policy turns auto-redeem off when its listing spells the email differently", async () => {
+		const { session, targets } = buildSession({ report: null, status: claudeStatus(true), streamErrorFirst: true });
+		mockSchedulerWaitWithClock();
+		// The live listing carries the email lowercased; the stored credential keeps its case.
+		const storedEmail = "Claude@Example.com";
+		vi.spyOn(authStorage.oauth, "accounts").mockReturnValue([
+			{
+				position: 0,
+				credentialId: CREDENTIAL_ID,
+				accountId: ACCOUNT_ID,
+				email: storedEmail,
+				orgId: ORG_ID,
+				active: true,
 			},
+		]);
+		authStorage.setAccountPolicies({
+			accountPolicies: [
+				{ provider: "anthropic", account: { email: storedEmail, orgId: ORG_ID }, autoRedeem: false },
+			],
+			defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
 		});
-		authStorage.setAccountPolicies(accountPolicies(true));
 		try {
-			await session.fetchUsageReports();
-			await coordinator.sweepPromise;
+			await session.prompt("hit the limit on an opted-out organization");
+			await session.waitForIdle();
 		} finally {
 			authStorage.setAccountPolicies({ accountPolicies: [], defaultReservePct: DEFAULT_USAGE_RESERVE_PCT });
 		}
 
-		expect(questions).toHaveLength(1);
-		expect(questions[0]).not.toContain(ORG_ID);
-		expect(cfgClaudeResetsAutoRedeem.get(session.settings)).toBe("unset");
-		expect(targets).toMatchObject([{ credentialId: SIBLING_CREDENTIAL_ID }]);
-		expect(targets).toHaveLength(1);
+		expect(targets).toEqual([]);
+		expect(session.agent.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "error" });
 	});
 
 	it.each(["yes", "no", "unset"] as const)(

@@ -1,6 +1,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { ResetCreditAccountStatus, ResetCreditTarget, UsageReport } from "@oh-my-pi/pi-ai";
+import {
+	DEFAULT_USAGE_RESERVE_PCT,
+	type ResetCreditAccountStatus,
+	type ResetCreditTarget,
+	type UsageReport,
+} from "@oh-my-pi/pi-ai";
 import * as envApiKey from "@oh-my-pi/pi-ai/env-api-key";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -274,6 +279,35 @@ describe("Codex saved-reset consent without a prompt UI", () => {
 		]);
 		expect(notices).toContainEqual(expect.stringContaining("auto-redeem is unset and no prompt UI is available"));
 		expect([...coordinator.attemptedKeys]).toEqual([expect.stringContaining("openai-codex|-|1|")]);
+	});
+
+	it("leaves a stored account whose policy turns auto-redeem off even when its usage report spells the email differently", async () => {
+		const account = {
+			accountId: "acct-a",
+			credentialId: 1,
+			weeklyUsed: 0.1,
+			limitReached: false,
+			creditExpiresInMs: 4 * MINUTE,
+		};
+		const { session, coordinator, targets } = buildSession({ accounts: [account] });
+		// The usage report and live listing carry the email lowercased; the stored credential keeps its case.
+		const storedEmail = "User@Example.com";
+		vi.spyOn(authStorage.oauth, "accounts").mockReturnValue([
+			{ position: 0, credentialId: 1, accountId: "acct-a", email: storedEmail, active: true },
+		]);
+		authStorage.setAccountPolicies({
+			accountPolicies: [{ provider: "openai-codex", account: { email: storedEmail }, autoRedeem: false }],
+			defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+		});
+		try {
+			await session.fetchUsageReports();
+			await coordinator.sweepPromise;
+		} finally {
+			authStorage.setAccountPolicies({ accountPolicies: [], defaultReservePct: DEFAULT_USAGE_RESERVE_PCT });
+		}
+
+		expect(targets).toEqual([]);
+		expect(coordinator.attemptedKeys.size).toBe(0);
 	});
 
 	it("spends a reset about to expire for an ACP client without form elicitation", async () => {

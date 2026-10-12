@@ -645,6 +645,23 @@ function accountOAuthIdentity(account: UsageAccountIdentity): OAuthAccountIdenti
 	};
 }
 
+/**
+ * The identity a report's account policy matches: the stored account's when exactly one
+ * stored account owns the report, as the reset planners and routing see it, else the
+ * report's own (its `/usage` payload may spell or update the identity differently).
+ */
+function reportPolicyIdentity(
+	report: UsageReport,
+	resetOptions: UsageResetExpiryOptions | undefined,
+): OAuthAccountIdentity {
+	const stored = resetOptions
+		?.accounts(report.provider)
+		.filter(account => reportMatchesStatus(report, { ...account, provider: report.provider }));
+	if (stored?.length !== 1) return usageReportIdentity(report);
+	const { email, accountId, projectId, orgId, orgName } = stored[0]!;
+	return { email, accountId, projectId, orgId, orgName };
+}
+
 function policyEnabledProviders(
 	reports: UsageReport[],
 	accounts: UsageAccountIdentity[],
@@ -735,7 +752,7 @@ function formatResetExpiryBanner(
 			warning,
 			options.settings,
 			nowMs,
-			policyOptions?.getAccountPolicy(report.provider, usageReportIdentity(report)),
+			policyOptions?.getAccountPolicy(report.provider, reportPolicyIdentity(report, options)),
 		),
 	);
 	const count = expiring.reduce((sum, { warning }) => sum + warning.count, 0);
@@ -851,7 +868,7 @@ export function formatUsageBreakdown(
 			lines.push(`  ${formatAccountHeader(report, providerReports, index, nowMs, redaction)}`);
 			if (policyOptions && policyProviders.has(provider)) {
 				lines.push(
-					`      ${chalk.dim(formatPolicyLine(provider, usageReportIdentity(report), report.limits, policyOptions))}`,
+					`      ${chalk.dim(formatPolicyLine(provider, reportPolicyIdentity(report, resetOptions), report.limits, policyOptions))}`,
 				);
 			}
 			if (report.limits.length === 0) {
