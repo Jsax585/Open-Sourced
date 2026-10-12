@@ -117,6 +117,7 @@ export class LiveSessionController {
 	#emittedInputLevel = -1;
 	#emittedOutputLevel = -1;
 	#activeDelegationId: string | undefined;
+	#delegationShortcutChain: Promise<void> = Promise.resolve();
 	#userTranscript = "";
 	#assistantTranscript = "";
 	#userTranscriptFinal = false;
@@ -309,8 +310,42 @@ export class LiveSessionController {
 		}
 		request = request.trim();
 		if (!request) return;
-		this.#activeDelegationId = event.item.id;
+		const delegationId = event.item.id;
+		this.#activeDelegationId = delegationId;
 		this.#emitPhase("working");
+		const runner = this.#session.extensionRunner;
+		if (!runner?.hasHandlers("live_delegation")) {
+			this.#sendDelegatedTurn(request);
+			return;
+		}
+
+		// Keep consecutive shortcut attempts in voice order; they never block audio callbacks.
+		this.#delegationShortcutChain = this.#delegationShortcutChain.then(async () => {
+			if (this.#stopped) return;
+			let reply: string | undefined;
+			try {
+				reply = (await runner.emitLiveDelegation(request))?.reply;
+			} catch {
+				// Extension errors fall back to the normal agent, never stop voice.
+			}
+			if (this.#stopped) return;
+			if (!reply) {
+				this.#sendDelegatedTurn(request);
+				return;
+			}
+			const finalContext = prompt.render(agentFinalMessageTemplate, { message: reply });
+			for (const chunk of chunkLiveContext(finalContext)) {
+				this.#queueSend(buildDelegationContextAppend(delegationId, chunk));
+			}
+			if (this.#activeDelegationId === delegationId) {
+				this.#activeDelegationId = undefined;
+				this.#refreshAudioPhase();
+			}
+		});
+	}
+
+	#sendDelegatedTurn(request: string): void {
+		if (this.#stopped) return;
 		void this.#session
 			.sendCustomMessage(
 				{
