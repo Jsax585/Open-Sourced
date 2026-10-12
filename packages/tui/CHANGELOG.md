@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a metric order to the `/models` hub: `ctrl+alt+s` cycles the rows through intelligence, output speed, and blended price (each direction), persisting the choice as the `modelSort` setting ([#11149](https://github.com/can1357/oh-my-pi/issues/11149))
+- Added `ctrl+alt+g` in the `/models` hub to rank the active metric inside each provider instead of across all of them, persisted as `modelSortGrouped`
+
 ### Removed
 
 - Removed `tools/eval-format/code-mode-declarations` (`generateCodeModeDeclarations`), which only served Codex Code Mode.

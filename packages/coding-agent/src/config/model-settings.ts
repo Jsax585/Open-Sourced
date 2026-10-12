@@ -119,4 +119,27 @@ export const cfgModelTags = register({ id: "modelTags", type: "record", default:
 
 export const cfgModelProviderOrder = register({ id: "modelProviderOrder", type: "array", default: EMPTY_STRING_ARRAY });
 
+/**
+ * Metric the `/models` hub lists rows by: `int` (intelligence), `tps` (output
+ * speed), or `cost` (blended input/output price), each with a direction. The
+ * hub's `app.model.cycleSort` key walks `default` → these; the value here is
+ * the starting point.
+ */
+export const cfgModelSort = register({
+	id: "modelSort",
+	type: "string",
+	default: "default",
+});
+
+/**
+ * Rank the `modelSort` metric inside each provider's block instead of across
+ * all providers. Off by default: the cross-provider order reads as one league
+ * table, which is what "sort by intelligence" usually means.
+ */
+export const cfgModelSortGrouped = register({
+	id: "modelSortGrouped",
+	type: "boolean",
+	default: false,
+});
+
 export const cfgCycleOrder = register({ id: "cycleOrder", type: "array", default: DEFAULT_CYCLE_ORDER });

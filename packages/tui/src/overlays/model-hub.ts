@@ -30,6 +30,7 @@ import { extractPrintableText, matchesKey } from "../keys";
 import { FuzzyCorpus } from "../fuzzy";
 import { formatKeyHint, formatKeyHints } from "../app-keybindings";
 import { boundKeys, editorKey, editorKeys } from "../chrome/keybinding-hints";
+import type { KeyId } from "../keybindings";
 import type { KeyName } from "../key-hint-format";
 import { col, compact, kbd, md, node, span, text } from "../native/describe";
 import { CLOSE_ACTION, type PickerEvent, picker, pickerAction, pickerEvent } from "../native/picker";
@@ -55,9 +56,14 @@ import {
 	MODEL_PICKER_COLUMNS,
 	ModelBrowser,
 	type ModelBrowserItem,
+	describeModelSort,
+	formatModelSort,
 	modelSearchText,
+	nextModelSort,
+	parseModelSort,
 	providerMark,
 	thinkingDotToken,
+	type ModelSort,
 	type RoleAssignments,
 	resolveRoleAssignments,
 	scopedRolePool,
@@ -107,6 +113,32 @@ export interface ModelHubSource extends ModelBrowserSource {
 	readonly fallbackChains: Record<string, string[]>;
 	readonly modelRoleStorage: "global" | "project";
 	readonly cycleOrder: readonly string[];
+	/**
+	 * Persisted metric order for the model rows, as the `modelSort` setting
+	 * spells it (`default`, `int:desc`, `cost:asc`, …). The hub's sort key
+	 * overwrites it, so the choice survives the overlay closing.
+	 */
+	readonly modelSort?: string;
+	/** Persist a new metric order. Absent hosts keep the order for this session only. */
+	onModelSortChange?(value: string): void;
+	/**
+	 * Keys that cycle the metric order, overriding the `app.model.cycleSort`
+	 * binding. Hosts with no key registry pass their own; absent, the global
+	 * binding decides.
+	 */
+	readonly sortKeys?: readonly KeyId[];
+	/**
+	 * Keys that switch the metric order between ranking across every provider
+	 * and ranking inside each provider's block. Same fallback as `sortKeys`.
+	 */
+	readonly sortGroupingKeys?: readonly KeyId[];
+	/**
+	 * Whether the metric ranks within provider blocks. Persisted by the hub;
+	 * absent means the cross-provider league table.
+	 */
+	readonly modelSortGrouped?: boolean;
+	/** Persist the grouping choice. Absent hosts keep it for this session only. */
+	onModelSortGroupingChange?(grouped: boolean): void;
 	getProjectModelRole(role: string): string | undefined;
 	getGlobalModelRole(role: string): string | undefined;
 	getModelRoleSource(role: string): "global" | "project" | "default";
@@ -442,6 +474,12 @@ export class ModelHubComponent implements Component {
 	#rolesVisibleCount = 0;
 
 	#assigning: AssignTarget | null = null;
+	/** Metric order the model rows are listed by; undefined keeps the default role/MRU/provider order. */
+	#sort: ModelSort | undefined;
+	/** Whether the metric ranks inside each provider block rather than across all of them. */
+	#sortGrouped = false;
+	/** Set once the persisted `modelSort` has been read, so a later settings change is not overwritten. */
+	#sortAdopted = false;
 	#strip: StripState | null = null;
 	#assignmentPending = false;
 	/**
@@ -636,10 +674,17 @@ export class ModelHubComponent implements Component {
 		this.#buildRolesRows();
 
 		const mruOrder = this.#settings.mruOrder;
+		this.#adoptPersistedSort();
 		this.#availableItems = buildBrowserItems(availableModels);
-		sortModelItems(this.#availableItems, { roles: this.#roles, mruOrder });
+		sortModelItems(this.#availableItems, {
+			roles: this.#roles,
+			mruOrder,
+			sort: this.#sort,
+			grouped: this.#sortGrouped,
+		});
 		this.#browser.setRoles(this.#roles);
 		this.#browser.setMruOrder(mruOrder);
+		this.#browser.setSort(this.#sort, this.#sortGrouped);
 		this.#browser.setPerfStats(this.#settings.modelPerf);
 
 		const bySelector = new Map(this.#availableItems.map(item => [item.selector, item]));
@@ -842,7 +887,57 @@ export class ModelHubComponent implements Component {
 		this.#cancelScheduledRefreshesExcept(entry.kind === "provider" ? entry.providerId : undefined);
 	}
 
-	/** Push the active scope's items into the browser. */
+	/**
+	 * Step to the next metric order and re-sort the rows. The browser keeps the
+	 * selection by selector across `setItems`, so the row the user was on stays
+	 * under the cursor instead of jumping to the top of the new order.
+	 */
+	#cycleSort(): void {
+		this.#sort = nextModelSort(this.#sort);
+		this.#sortAdopted = true;
+		this.#settings.onModelSortChange?.(formatModelSort(this.#sort));
+		this.#reapplySort();
+	}
+
+	/**
+	 * Switch between ranking across every provider and ranking inside each block.
+	 * A no-op without an active metric order: the rows are already grouped by
+	 * provider then, and neither the footer nor the picker action advertises the
+	 * toggle — changing a hidden preference would be silent.
+	 */
+	#toggleSortGrouping(): void {
+		if (!this.#sort) return;
+		this.#sortGrouped = !this.#sortGrouped;
+		this.#settings.onModelSortGroupingChange?.(this.#sortGrouped);
+		this.#reapplySort();
+	}
+
+	#reapplySort(): void {
+		this.#browser.setSort(this.#sort, this.#sortGrouped);
+		sortModelItems(this.#availableItems, {
+			roles: this.#roles,
+			mruOrder: this.#settings.mruOrder,
+			sort: this.#sort,
+			grouped: this.#sortGrouped,
+		});
+		// Recent rows are MRU-ordered by construction; re-seating them here would
+		// silently redefine what the Recent scope means.
+		this.#applyScope();
+	}
+
+	/**
+	 * Adopt the persisted `modelSort` on the first registry sync. Later syncs keep
+	 * the live order: a sync triggered by our own write would otherwise read the
+	 * new value back mid-cycle and the ring would never leave its first state.
+	 * Grouping is adopted here too, but is only reachable once a sort is set.
+	 */
+	#adoptPersistedSort(): void {
+		if (this.#sortAdopted) return;
+		this.#sortAdopted = true;
+		this.#sort = parseModelSort(this.#settings.modelSort);
+		this.#sortGrouped = this.#settings.modelSortGrouped === true;
+	}
+
 	#applyScope(): void {
 		const entry = this.#activeEntry();
 		switch (entry.kind) {
@@ -1991,6 +2086,18 @@ export class ModelHubComponent implements Component {
 			}
 			return;
 		}
+		// Cycle the metric order (IQ / speed / price, each direction) in the
+		// model-row views. The bound keys are chords, not letters: this picker
+		// keeps a live search field, so a printable key belongs to the query.
+		// The Roles view has its own letter commands and is left out.
+		if (this.#isBrowserView(entry) && this.#sortKeys.some(key => matchesKey(data, key))) {
+			this.#cycleSort();
+			return;
+		}
+		if (this.#isBrowserView(entry) && this.#sortGroupingKeys.some(key => matchesKey(data, key))) {
+			this.#toggleSortGrouping();
+			return;
+		}
 		// Ctrl+←/→ in the Roles view steps through saved model presets, wrapping.
 		if (rolesView && (matchesKey(data, "ctrl+left") || matchesKey(data, "ctrl+right"))) {
 			this.#switchPreset(matchesKey(data, "ctrl+left") ? -1 : 1);
@@ -2784,9 +2891,9 @@ export class ModelHubComponent implements Component {
 		}
 		if (this.#assigning !== null) {
 			if (this.#focus === "scope") {
-				return `${enterRight} models · ${upDown} providers · type to search · ${altLeftRight} kind · ${cancel} cancel`;
+				return `${enterRight} models · ${upDown} providers · type to search · ${altLeftRight} kind${this.#sortHint()}${this.#sortGroupingHint()} · ${cancel} cancel`;
 			}
-			const browse = `${upDown} models · ${left} providers · type to search · ${altLeftRight} kind · ${cancel} cancel`;
+			const browse = `${upDown} models · ${left} providers · type to search · ${altLeftRight} kind${this.#sortHint()}${this.#sortGroupingHint()} · ${cancel} cancel`;
 			switch (this.#assigning.kind) {
 				case "fallback":
 					return `${enter} pick fallback · ${browse}`;
@@ -2841,9 +2948,38 @@ export class ModelHubComponent implements Component {
 		}
 		const refresh = entry.kind === "provider" ? ` · ${formatKeyHint("f5")} refresh` : "";
 		if (this.#focus === "scope") {
-			return `${enterRight} models · ${upDown} providers · type to search · ${altLeftRight} kind${refresh} · ${cancel} close`;
+			return `${enterRight} models · ${upDown} providers · type to search · ${altLeftRight} kind${refresh}${this.#sortHint()}${this.#sortGroupingHint()} · ${cancel} close`;
 		}
-		return `${enter} assign roles · ${upDown} models · ${left} providers · type to search · ${altLeftRight} kind${refresh} · ${cancel} close`;
+		return `${enter} assign roles · ${upDown} models · ${left} providers · type to search · ${altLeftRight} kind${refresh}${this.#sortHint()}${this.#sortGroupingHint()} · ${cancel} close`;
+	}
+
+	/** The active metric order as a footer chip; always shown so the key stays discoverable. */
+	#sortHint(): string {
+		const [primary] = this.#sortKeys;
+		if (!primary) return "";
+		return ` · ${formatKeyHint(primary)} sort: ${describeModelSort(this.#sort)}`;
+	}
+
+	/** The grouping toggle as a footer chip, shown only while a metric order is active. */
+	#sortGroupingHint(): string {
+		const [primary] = this.#sortGroupingKeys;
+		// Grouping is only a question once something is being sorted.
+		if (!primary || !this.#sort) return "";
+		return ` · ${formatKeyHint(primary)} ${this.#sortGrouped ? "per provider" : "all providers"}`;
+	}
+
+	/**
+	 * Keys bound to {@link app.model.cycleSort}; empty when unbound. Every one of
+	 * them cycles the order, but only the first is advertised — a picker action
+	 * shows one keycap.
+	 */
+	get #sortKeys(): readonly KeyId[] {
+		return this.#settings.sortKeys ?? boundKeys("app.model.cycleSort", []);
+	}
+
+	/** Keys bound to {@link app.model.toggleSortGrouping}; empty when unbound. */
+	get #sortGroupingKeys(): readonly KeyId[] {
+		return this.#settings.sortGroupingKeys ?? boundKeys("app.model.toggleSortGrouping", []);
 	}
 
 	#renderFooter(width: number): string {
@@ -3559,7 +3695,15 @@ export class ModelHubComponent implements Component {
 					: this.#assigning.kind === "fallbackKey"
 						? "Pick protected model"
 						: "Assign";
-			return compact([pickerAction("assign", label, "enter", { primary: true }), refresh, cancel("Cancel")]);
+			return compact([
+				pickerAction("assign", label, "enter", { primary: true }),
+				refresh,
+				this.#sortKeys[0]
+					? pickerAction("sort", `Sort: ${describeModelSort(this.#sort)}`, this.#sortKeys[0])
+					: undefined,
+				...this.#sortGroupingActions(),
+				cancel("Cancel"),
+			]);
 		}
 		if (rolesView) {
 			const row = this.#rolesRows[this.#roleIndex];
@@ -3631,8 +3775,28 @@ export class ModelHubComponent implements Component {
 				this.#browser.pickerSelected ? { primary: true } : { primary: true, disabled: "No model selected" },
 			),
 			refresh,
+			// Declared so Tern draws the keycap and routes the key back as an
+			// `action`; the fallback `handleInput` path never sees picker keys.
+			this.#sortKeys[0]
+				? pickerAction("sort", `Sort: ${describeModelSort(this.#sort)}`, this.#sortKeys[0])
+				: undefined,
+			...this.#sortGroupingActions(),
 			this.#browser.query.length > 0 ? cancel("Clear search") : CLOSE_ACTION,
 		]);
+	}
+
+	/**
+	 * The grouping toggle as a picker action. Hidden until a metric order is
+	 * active, since "rank within provider" is meaningless over the default order.
+	 */
+	#sortGroupingActions(): (TspPickerAction | undefined)[] {
+		const [primary] = this.#sortGroupingKeys;
+		if (!primary || !this.#sort) return [];
+		return [
+			pickerAction("sort-grouping", this.#sortGrouped ? "Per provider" : "All providers", primary, {
+				on: this.#sortGrouped,
+			}),
+		];
 	}
 
 	/** The open strip as the picker's chip strip (role assignment, save scope, thinking level, new role name). */
@@ -3992,6 +4156,12 @@ export class ModelHubComponent implements Component {
 				if (entry.kind === "provider" && !entry.locked) {
 					this.#scheduleProviderRefresh(entry.providerId ?? "", { force: true });
 				}
+				return;
+			case "sort":
+				if (this.#isBrowserView(entry)) this.#cycleSort();
+				return;
+			case "sort-grouping":
+				if (this.#isBrowserView(entry)) this.#toggleSortGrouping();
 				return;
 			case "login":
 				if (entry.kind === "provider" && entry.locked && this.#assigning === null) this.#requestLogin(entry);

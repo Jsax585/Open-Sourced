@@ -323,6 +323,98 @@ function computeModelRank(model: Model, roles: RoleAssignments): number {
 	return i;
 }
 
+/** Catalog metric a browser list can be ordered by. */
+export type ModelSortMetric = "int" | "tps" | "cost";
+
+/** An explicit metric order layered on top of the default role/MRU/provider order. */
+export interface ModelSort {
+	metric: ModelSortMetric;
+	/** `desc` puts the larger value first (best IQ, fastest); `asc` the smaller (cheapest). */
+	direction: "asc" | "desc";
+}
+
+/**
+ * The per-million price the `cost` order ranks on. Rows print separate input and
+ * output legs, so a single scalar needs a ratio; 3:1 matches the input-heavy mix
+ * a session sends and keeps a model ahead only while both legs stay cheap.
+ */
+const COST_INPUT_WEIGHT = 0.75;
+const COST_OUTPUT_WEIGHT = 0.25;
+
+/** The value `model` sorts on, or `undefined` when the catalog never scored it. */
+function sortMetricValue(model: Model, metric: ModelSortMetric): number | undefined {
+	switch (metric) {
+		case "int": {
+			const int = model.int;
+			return int != null && Number.isFinite(int) ? int : undefined;
+		}
+		case "tps": {
+			const tps = model.tps;
+			return tps != null && Number.isFinite(tps) && tps > 0 ? tps : undefined;
+		}
+		case "cost": {
+			const cost = model.cost;
+			if (!cost) return undefined;
+			const input = Number.isFinite(cost.input) ? cost.input : undefined;
+			const output = Number.isFinite(cost.output) ? cost.output : undefined;
+			if (input === undefined && output === undefined) return undefined;
+			return (input ?? 0) * COST_INPUT_WEIGHT + (output ?? 0) * COST_OUTPUT_WEIGHT;
+		}
+	}
+}
+
+/** The sort states the browser cycles through, in ring order. */
+const MODEL_SORT_RING: readonly (ModelSort | undefined)[] = [
+	undefined,
+	{ metric: "int", direction: "desc" },
+	{ metric: "int", direction: "asc" },
+	{ metric: "tps", direction: "desc" },
+	{ metric: "tps", direction: "asc" },
+	{ metric: "cost", direction: "asc" },
+	{ metric: "cost", direction: "desc" },
+];
+
+/**
+ * The persisted `modelSort` value: `default`, or `<metric>[:<direction>]`.
+ * A bare metric uses the direction that puts the best model first (highest
+ * intelligence, fastest, cheapest). Anything unrecognised keeps the default
+ * order rather than failing — a typo in a config file must not break the hub.
+ */
+export function parseModelSort(value: string | undefined): ModelSort | undefined {
+	const raw = value?.trim().toLowerCase();
+	if (!raw || raw === "default") return undefined;
+	const [metric, direction] = raw.split(":");
+	if (metric !== "int" && metric !== "tps" && metric !== "cost") return undefined;
+	if (direction === undefined) return { metric, direction: metric === "cost" ? "asc" : "desc" };
+	if (direction !== "asc" && direction !== "desc") return undefined;
+	return { metric, direction };
+}
+
+/** The `modelSort` string for a sort state; `default` for the unsorted list. */
+export function formatModelSort(sort: ModelSort | undefined): string {
+	if (!sort) return "default";
+	return `${sort.metric}:${sort.direction}`;
+}
+
+function sameModelSort(left: ModelSort | undefined, right: ModelSort | undefined): boolean {
+	if (left === right) return true;
+	if (!left || !right) return false;
+	return left.metric === right.metric && left.direction === right.direction;
+}
+
+/** The sort state after `current`, wrapping at the end of the ring. */
+export function nextModelSort(current: ModelSort | undefined): ModelSort | undefined {
+	const index = MODEL_SORT_RING.findIndex(sort => sameModelSort(sort, current));
+	return MODEL_SORT_RING[(index + 1) % MODEL_SORT_RING.length];
+}
+
+/** Footer-length label for a sort state: `default`, `IQ ↓`, `price ↑`. */
+export function describeModelSort(sort: ModelSort | undefined): string {
+	if (!sort) return "default";
+	const label = sort.metric === "int" ? "IQ" : sort.metric === "tps" ? "speed" : "price";
+	return `${label} ${sort.direction === "asc" ? "↑" : "↓"}`;
+}
+
 /** Options for {@link sortModelItems}. */
 export interface SortModelItemsOptions {
 	roles?: RoleAssignments;
@@ -333,6 +425,18 @@ export interface SortModelItemsOptions {
 	 * defer to MRU/version instead so user affinity drives the order.
 	 */
 	skipRoleRank?: boolean;
+	/**
+	 * Explicit metric order. It leads, and the role/MRU/provider chain below it
+	 * becomes the tie-breaker, so equal scores keep the familiar grouping.
+	 */
+	sort?: ModelSort;
+	/**
+	 * Keep the role/MRU/provider blocks and rank by `sort` inside each one
+	 * instead of ranking across all providers. Off by default: "sort by
+	 * intelligence" reads as one league table, and grouping turns it into a
+	 * per-provider ranking the user has to read across.
+	 */
+	grouped?: boolean;
 }
 
 /**
@@ -344,13 +448,32 @@ export function sortModelItems(items: ModelBrowserItem[], options: SortModelItem
 }
 
 function modelItemComparator(options: SortModelItemsOptions): (a: ModelBrowserItem, b: ModelBrowserItem) => number {
-	const { roles = {}, mruOrder = [], skipRoleRank = false } = options;
+	const { roles = {}, mruOrder = [], skipRoleRank = false, sort, grouped } = options;
 	const mruIndex = new Map(mruOrder.map((key, i) => [key, i]));
 
 	const dateRe = /-(\d{8})$/;
 	const latestRe = /-latest$/;
 
+	/** Metric comparison, or 0 when both rows score the same (or there is no metric). */
+	const byMetric = (a: ModelBrowserItem, b: ModelBrowserItem): number => {
+		if (!sort) return 0;
+		const aMetric = sortMetricValue(a.model, sort.metric);
+		const bMetric = sortMetricValue(b.model, sort.metric);
+		// An unscored row sinks in both directions: a missing value is not a low one.
+		if (aMetric === bMetric) return 0;
+		if (aMetric === undefined) return 1;
+		if (bMetric === undefined) return -1;
+		return sort.direction === "asc" ? aMetric - bMetric : bMetric - aMetric;
+	};
+
 	return (a, b) => {
+		// Grouped ordering keeps the role/MRU/provider blocks and ranks inside
+		// each one; otherwise the metric leads and the blocks become tie-breaks.
+		if (!grouped) {
+			const metricCmp = byMetric(a, b);
+			if (metricCmp !== 0) return metricCmp;
+		}
+
 		if (!skipRoleRank) {
 			const aRank = computeModelRank(a.model, roles);
 			const bRank = computeModelRank(b.model, roles);
@@ -365,6 +488,11 @@ function modelItemComparator(options: SortModelItemsOptions): (a: ModelBrowserIt
 		// By provider, then recency within provider
 		const providerCmp = a.provider.localeCompare(b.provider);
 		if (providerCmp !== 0) return providerCmp;
+
+		if (grouped) {
+			const metricCmp = byMetric(a, b);
+			if (metricCmp !== 0) return metricCmp;
+		}
 
 		// Priority field (lower = better, e.g. Codex priority values)
 		const aPri = a.model.priority ?? Number.MAX_SAFE_INTEGER;
@@ -610,6 +738,14 @@ export interface ModelRankOptions {
 	roles: RoleAssignments;
 	mruOrder: ReadonlyArray<string>;
 	affinity: SearchAffinity;
+	/**
+	 * Explicit metric order, applied after text relevance and user affinity.
+	 * A search for a model name must keep its best match on top, so the metric
+	 * only orders rows the query already ranked equally.
+	 */
+	sort?: ModelSort;
+	/** Rank within provider blocks rather than across all of them. */
+	grouped?: boolean;
 }
 
 /** Query-independent sort keys of one candidate, computed once per ranker. */
@@ -638,7 +774,13 @@ export class ModelItemRanker {
 		this.items = items;
 		this.options = options;
 		this.#corpus = new FuzzyCorpus(items, modelSearchText);
-		const compare = modelItemComparator({ roles: options.roles, mruOrder: options.mruOrder, skipRoleRank: true });
+		const compare = modelItemComparator({
+			roles: options.roles,
+			mruOrder: options.mruOrder,
+			skipRoleRank: true,
+			sort: options.sort,
+			grouped: options.grouped,
+		});
 		const ordered = [...items].sort(compare);
 		let group = 0;
 		for (let i = 0; i < ordered.length; i++) {
@@ -992,6 +1134,10 @@ export class ModelBrowser implements Component {
 	});
 	#roles: RoleAssignments = {};
 	#mruOrder: ReadonlyArray<string> = [];
+	/** Explicit metric order applied to the base list; undefined keeps the default order. */
+	#sort: ModelSort | undefined;
+	/** Rank the metric within provider blocks instead of across all of them. */
+	#grouped = false;
 	#affinity: SearchAffinity = { models: new Map(), providers: new Map() };
 	/** Ranker for the menu's current item array; rebuilt when items or affinity change. */
 	#ranker?: { source: readonly ModelBrowserItem[]; ranker: ModelItemRanker };
@@ -1111,6 +1257,21 @@ export class ModelBrowser implements Component {
 		this.#syncAffinity();
 	}
 
+	/**
+	 * The metric order the base list and the search ranker use. Hosts own the
+	 * items themselves, so they re-sort and call {@link setItems} afterwards;
+	 * this only tells the ranker how to break equally-relevant matches.
+	 */
+	setSort(sort: ModelSort | undefined, grouped?: boolean): void {
+		const nextGrouped = grouped ?? this.#grouped;
+		if (sameModelSort(sort, this.#sort) && nextGrouped === this.#grouped) return;
+		this.#sort = sort;
+		this.#grouped = nextGrouped;
+		this.#ranker = undefined;
+		this.#bumpNativeEpoch();
+		this.#bumpPickerEpoch();
+	}
+
 	#syncAffinity(): void {
 		this.#affinity = buildSearchAffinity(this.#settings.modelProviderOrder, this.#roles, this.#mruOrder);
 	}
@@ -1220,7 +1381,13 @@ export class ModelBrowser implements Component {
 				source: items,
 				ranker: new ModelItemRanker(
 					items.filter(item => !this.#isDisabled(item)),
-					{ roles: this.#roles, mruOrder: this.#mruOrder, affinity: this.#affinity },
+					{
+						roles: this.#roles,
+						mruOrder: this.#mruOrder,
+						affinity: this.#affinity,
+						sort: this.#sort,
+						grouped: this.#grouped,
+					},
 				),
 			};
 			this.#ranker = cached;
