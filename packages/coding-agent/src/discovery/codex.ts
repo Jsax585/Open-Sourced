@@ -247,9 +247,18 @@ function extractMCPServersFromToml(
 		}
 		// Note: validation of transport vs endpoint is handled by mcpCapability.validate()
 
-		// Map Codex tool_timeout_sec (seconds) to MCPServer timeout (milliseconds)
-		if (typeof config.tool_timeout_sec === "number" && config.tool_timeout_sec > 0) {
-			server.timeout = { execution: config.tool_timeout_sec * 1000 };
+		// Map Codex startup_timeout_sec and tool_timeout_sec (seconds) to the connect and execution
+		// deadlines (milliseconds).
+		const connect =
+			typeof config.startup_timeout_sec === "number" && config.startup_timeout_sec > 0
+				? config.startup_timeout_sec * 1000
+				: undefined;
+		const execution =
+			typeof config.tool_timeout_sec === "number" && config.tool_timeout_sec > 0
+				? config.tool_timeout_sec * 1000
+				: undefined;
+		if (connect !== undefined || execution !== undefined) {
+			server.timeout = { ...(connect !== undefined && { connect }), ...(execution !== undefined && { execution }) };
 		}
 		result[name] = server;
 	}
