@@ -4,11 +4,11 @@
 
 ### Fixed
 
-- Reintroduced TODOs remain completable after phase moves, and durable snapshots survive earlier prose headings.
-- Keep reintroduced dropped tasks completable and preserve user cancellations and task whitespace through compaction.
+- Reintroduced TODOs remain completable after phase moves, and durable snapshots survive earlier prose headings ([#10053](https://github.com/can1357/oh-my-pi/pull/10053) by [@jroth1111](https://github.com/jroth1111)).
+- Keep user-cancelled TODOs out of remaining work and preserve task whitespace through compaction ([#10053](https://github.com/can1357/oh-my-pi/pull/10053) by [@jroth1111](https://github.com/jroth1111)).
 
-- Durable incomplete-todo snapshots round-trip empty phase/title fields, keep overflow-shaped phase names, and reserve exact-phase provenance before rename fallback.
-- Incomplete-todo durable snapshots preserve blocked tasks, encode CRLF/CR/LF distinctly, and keep model-drop provenance across `/todo edit` phase renames.
+- Durable incomplete-todo snapshots round-trip empty fields and Unicode separators and preserve cancellation provenance across phase renames ([#10053](https://github.com/can1357/oh-my-pi/pull/10053) by [@jroth1111](https://github.com/jroth1111)).
+- Incomplete-todo durable snapshots preserve blocked tasks and encode CRLF/CR/LF distinctly ([#10053](https://github.com/can1357/oh-my-pi/pull/10053) by [@jroth1111](https://github.com/jroth1111)).
 ## [18.3.1] - 2026-09-25
 
 ### Added
