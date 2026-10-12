@@ -29,7 +29,8 @@ const CONDITIONS: Record<string, () => boolean> = {
 	nativeRendering: () => isNativeRendering(),
 	advisorEnabled: whenSettings(s => cfgAdvisorEnabled.get(s) === true),
 	vimModeEnabled: whenSettings(s => cfgTuiVimMode.get(s) === true),
-	mouseCaptureEnabled: whenSettings(s => cfgTuiMouse.get(s) === true),
+	// Tern's native surface turns mouse reporting off, so row-renderer mouse features never fire there.
+	rowMouseCaptureEnabled: whenSettings(s => cfgTuiMouse.get(s) === true && !isNativeRendering()),
 	hindsightActive: whenSettings(s => cfgMemoryBackend.get(s) === "hindsight"),
 	mnemopiActive: whenSettings(s => cfgMemoryBackend.get(s) === "mnemopi"),
 	autolearnActive: whenSettings(s => cfgAutolearnEnabled.get(s) === true),

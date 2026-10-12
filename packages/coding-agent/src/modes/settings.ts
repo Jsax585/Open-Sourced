@@ -581,7 +581,7 @@ export const cfgTuiMouseQuoteOnSelect = register({
 		label: "Quote on Select",
 		description:
 			"While mouse capture is on, drag over text on screen to highlight it and quote it into the prompt as '<text>' - on release",
-		condition: "mouseCaptureEnabled",
+		condition: "rowMouseCaptureEnabled",
 	},
 });
 
