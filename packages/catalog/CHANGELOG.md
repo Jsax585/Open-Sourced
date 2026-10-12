@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Collapsed toggle-only chat-template thinking ladders, including stale bundled metadata, while preserving real effort fields and distinct effort-routed model IDs ([#9411](https://github.com/can1357/oh-my-pi/pull/9411) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
+- Collapsed toggle-only chat-template thinking ladders, including thinking-enabled overrides and stale bundled metadata, while preserving real effort fields and distinct effort-routed model IDs ([#9411](https://github.com/can1357/oh-my-pi/pull/9411) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
 
 ## [18.10.2] - 2026-10-12
 

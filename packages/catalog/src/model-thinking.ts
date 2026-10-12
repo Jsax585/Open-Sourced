@@ -28,12 +28,15 @@ export function normalizeChatTemplateThinking<TApi extends Api>(
 	if (spec.api !== "openai-completions" && spec.api !== "openrouter") return thinking;
 	const baseCompat = compat as ResolvedOpenAICompat | undefined;
 	const enabledCompat = baseCompat?.whenThinking ?? baseCompat;
-	if (
-		enabledCompat?.reasoningDisableMode !== "qwen-template-false" ||
-		enabledCompat.qwenTemplateReasoningEffort === true
-	) {
-		return thinking;
-	}
+	const binaryTemplate =
+		enabledCompat?.reasoningDisableMode === "qwen-template-false" &&
+		enabledCompat.qwenTemplateReasoningEffort !== true;
+	const binaryEnabledView =
+		baseCompat?.reasoningDisableMode === "qwen-template-false" &&
+		(enabledCompat?.reasoningDisableMode === "lowest-effort" ||
+			enabledCompat?.reasoningDisableMode === "none-effort") &&
+		(enabledCompat.supportsReasoningEffort === false || enabledCompat.omitReasoningEffort === true);
+	if (!binaryTemplate && !binaryEnabledView) return thinking;
 	const wireId = thinking.effortRouting?.[thinking.efforts[0]] ?? spec.requestModelId ?? spec.id;
 	for (const effort of thinking.efforts) {
 		if ((thinking.effortRouting?.[effort] ?? spec.requestModelId ?? spec.id) !== wireId) return thinking;

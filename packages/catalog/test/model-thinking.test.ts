@@ -1805,4 +1805,24 @@ describe("qwen-chat-template binary thinking toggle collapse", () => {
 		});
 		expect(model.thinking?.efforts).toEqual([Effort.Low, Effort.High]);
 	});
+
+	it("collapses enabled views whose top-level effort field is unsupported or omitted", () => {
+		for (const capability of [
+			{ supportsReasoningEffort: false, omitReasoningEffort: false },
+			{ supportsReasoningEffort: true, omitReasoningEffort: true },
+		]) {
+			const model = createModel({
+				id: "custom-toggle",
+				api: "openai-completions",
+				provider: "custom",
+				baseUrl: "https://gateway.example.com/v1",
+				compat: {
+					thinkingFormat: "qwen-chat-template",
+					whenThinking: { thinkingFormat: "openai", ...capability },
+				},
+				thinking: { mode: "effort", efforts: [Effort.Low, Effort.High] },
+			});
+			expect(model.thinking?.efforts).toEqual([Effort.High]);
+		}
+	});
 });
