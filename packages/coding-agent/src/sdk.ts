@@ -3759,6 +3759,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				]);
 				toolSession.contextFiles = contextFiles;
 				session.setAdvisorContextPrompt(formatAdvisorContextPrompt(contextFiles));
+				session.setAmbientContextFiles(contextFiles);
 			}
 			// Re-discover rules from disk on every session-scoped rebuild, mirroring the
 			// context-file refresh above. The rule buckets are otherwise frozen at
@@ -4675,6 +4676,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		});
 		hasSession = true;
 		credentialNoticeSession = session;
+		session.setAmbientContextFiles(contextFiles);
 		// Hashline snapshots are session-scoped: /new and switchSession fire the
 		// change callbacks, so clear the tool-side store there — stale tags would
 		// otherwise surface as "issued in this session" in mismatch diagnostics

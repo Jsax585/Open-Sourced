@@ -68,6 +68,32 @@ export const cfgContextFilesExtra = register({
 	},
 });
 
+export const cfgContextFilesNestedDiscovery = register({
+	id: "contextFiles.nestedDiscovery",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "context",
+		group: "General",
+		label: "Nested Context Files",
+		description:
+			"When the agent reads a file or directory below the working directory, load the AGENTS.md (or CLAUDE.md) files in the directories between it and the working directory into context once, nearest first",
+	},
+});
+
+export const cfgContextFilesLiveUpdates = register({
+	id: "contextFiles.liveUpdates",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "context",
+		group: "General",
+		label: "Live Context File Updates",
+		description:
+			"Notice edits and deletions of loaded context files (AGENTS.md and friends) during a session and send the agent an update before its next request",
+	},
+});
+
 // ────────────────────────────────────────────────────────────────────────
 // Context
 // ────────────────────────────────────────────────────────────────────────

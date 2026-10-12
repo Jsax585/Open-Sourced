@@ -218,7 +218,7 @@ import {
 	toReasoningEffort,
 } from "@oh-my-pi/pi-tui/thinking";
 import { isAttachmentOnlyTitleInput, isLowSignalTitleInput } from "../tiny/text";
-import type { ImageAttachmentEntry, ToolSession } from "../tools";
+import type { ContextFileEntry, ImageAttachmentEntry, ToolSession } from "../tools";
 import { resolveApproval } from "../tools/approval";
 import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 import { type AskToolInput, recoverAskQuestions } from "../tools/ask";
@@ -441,6 +441,7 @@ import { SessionMemory, type SessionMemoryHost } from "./session-memory";
 import { buildSessionMetadata } from "./session-metadata";
 import { SessionProviderBoundary, type SessionProviderBoundaryHost } from "./session-provider-boundary";
 import { SessionStatsTracker, type SessionStatsTrackerHost } from "./session-stats";
+import { ContextFileTracker } from "./context-file-tracker";
 import { SessionTools, type SessionToolsHost } from "./session-tools";
 import { resolveOpenAIWebsocketPreference } from "./settings-stream-fn";
 import type { ShakeMode, ShakeResult } from "./shake-types";
@@ -829,6 +830,8 @@ export class AgentSession implements SettingsScope {
 
 	readonly #models: ModelControls;
 	readonly #tools: SessionTools;
+	/** Nested AGENTS.md discovery on `read` and live updates of the loaded context files. */
+	readonly #contextFiles: ContextFileTracker;
 	readonly #prewalk: PrewalkCoordinator;
 
 	readonly #providerBoundary: SessionProviderBoundary;
@@ -1648,6 +1651,12 @@ export class AgentSession implements SettingsScope {
 		this.#codeModeState = config.codeModeState ?? {};
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
+		this.#contextFiles = new ContextFileTracker({
+			settings: config.settings,
+			cwd: () => this.sessionManager.getCwd(),
+			additionalDirectories: () => this.sessionManager.getAdditionalDirectories(),
+			messages: () => this.agent.state.messages,
+		});
 		this.#skillDescriptions = config.skillDescriptions ?? new SkillDescriptionCatalog();
 		this.memoryEnabled = config.memoryEnabled ?? true;
 		this.#modelRegistry = config.modelRegistry;
@@ -2020,8 +2029,9 @@ export class AgentSession implements SettingsScope {
 		// instead of sitting behind it. Deferred wakes are not peeked: no
 		// boundary injection would drain them. Foreground tools are unaffected.
 		this.agent.hasQueuedAsides = () => this.#irc.hasAsides();
-		this.agent.setAsideMessageProvider(() => {
+		this.agent.setAsideMessageProvider(async () => {
 			const thunks: AsideMessage[] = this.#irc.drainPending().map(record => () => record);
+			thunks.push(...(await this.#contextFiles.takeAsides()));
 			thunks.push(...this.yieldQueue.drainLazy());
 			// Mid-run todo reconciliation — evaluated at injection time so a turn
 			// that flips a todo just before this poll suppresses the nudge.
@@ -3429,6 +3439,11 @@ export class AgentSession implements SettingsScope {
 		// never revoke a foreground-control grant acquired by a later prompt.
 		const computerControlRevocation =
 			event.type === "agent_end" ? revokeComputerControlForOwner(this.#eval.getKernelOwnerId()) : undefined;
+		// Before any await: nested discovery must be registered by the time the loop
+		// polls asides after this tool batch.
+		if (event.type === "tool_execution_end" && event.toolName === "read" && !event.isError) {
+			this.#contextFiles.noteReadResult(event.result);
+		}
 		if (event.type === "tool_execution_end" && this.#isTerminalYieldToolResult(event)) {
 			const alreadyTerminated = this.#synchronouslyTerminatedYieldToolCallIds.delete(event.toolCallId);
 			if (!alreadyTerminated) {
@@ -8016,7 +8031,13 @@ export class AgentSession implements SettingsScope {
 				: undefined;
 			const evalPreludeNotice = isUserQueuedMessage(message) ? this.#tools.takeEvalPreludeNotice() : undefined;
 			const sessionAgentNotice = isUserQueuedMessage(message) ? this.#tools.takeSessionAgentNotice() : undefined;
-			if (xdevMountNotice || toolRosterNotice || evalPreludeNotice || sessionAgentNotice) {
+			const contextFileUpdate = isUserQueuedMessage(message)
+				? await this.#contextFiles.takePromptUpdate()
+				: undefined;
+			if (this.#promptGeneration !== generation) {
+				return false;
+			}
+			if (xdevMountNotice || toolRosterNotice || evalPreludeNotice || sessionAgentNotice || contextFileUpdate) {
 				messages.splice(
 					xdevMountNoticeIndex,
 					0,
@@ -8024,6 +8045,7 @@ export class AgentSession implements SettingsScope {
 					...(toolRosterNotice ? [toolRosterNotice] : []),
 					...(evalPreludeNotice ? [evalPreludeNotice] : []),
 					...(sessionAgentNotice ? [sessionAgentNotice] : []),
+					...(contextFileUpdate ? [contextFileUpdate] : []),
 				);
 			}
 
@@ -9878,6 +9900,7 @@ export class AgentSession implements SettingsScope {
 			// outgoing session also drops its record instead of landing in this new one.
 			this.#irc.clearPending();
 			this.#sessionGeneration++;
+			this.#contextFiles.reset();
 			this.#scheduledHiddenNextTurnGeneration = undefined;
 			this.#queuedMessageDrainBlocked = false;
 			this.#usagePreflightReadyForNextModelCall = false;
@@ -13527,6 +13550,14 @@ export class AgentSession implements SettingsScope {
 		sharedMaxNotesPerUpdate?: number,
 	): number {
 		return this.#advisors.applyAdvisorConfigs(advisors, sharedInstructions, sharedMaxNotesPerUpdate);
+	}
+
+	/**
+	 * Declare the context files the system prompt was just built with. Edits and
+	 * deletions of these files are announced to the model before its next request.
+	 */
+	setAmbientContextFiles(files: readonly ContextFileEntry[]): void {
+		this.#contextFiles.setAmbientFiles(files);
 	}
 
 	/**
