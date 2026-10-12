@@ -2882,7 +2882,7 @@ export class ModelHubComponent implements Component {
 		if (this.#focus === "scope") {
 			return `${enterRight} models · ${upDown} providers · type to search · ${altLeftRight} kind${refresh} · ${cancel} close`;
 		}
-		return `${enter} assign roles · ${upDown} models · ${left} providers · type to search · ${altLeftRight} kind${refresh} · ${cancel} close`;
+		return `${enter} ${this.#quickPick ? "set default" : "assign roles"} · ${upDown} models · ${left} providers · type to search · ${altLeftRight} kind${refresh} · ${cancel} close`;
 	}
 
 	#renderFooter(width: number): string {
@@ -3665,7 +3665,7 @@ export class ModelHubComponent implements Component {
 		return compact([
 			pickerAction(
 				"assign",
-				"Assign role",
+				this.#quickPick ? "Set default" : "Assign role",
 				"enter",
 				this.#browser.pickerSelected ? { primary: true } : { primary: true, disabled: "No model selected" },
 			),
@@ -4236,7 +4236,7 @@ export class ModelHubComponent implements Component {
 			return [keys("models", "enter", "right"), upDown("providers"), search, kind, refresh, cancel("close")];
 		}
 		return [
-			keys("assign roles", "enter"),
+			keys(this.#quickPick ? "set default" : "assign roles", "enter"),
 			upDown("models"),
 			keys("providers", "left"),
 			search,
