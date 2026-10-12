@@ -5,11 +5,11 @@
 ### Added
 
 - Added `Shift+Left` / `Shift+Right` navigation across visible `/tree` branches and nested fork depths, rebindable as `app.tree.previousBranch` / `app.tree.nextBranch` ([#12623](https://github.com/can1357/oh-my-pi/pull/12623) by [@azain47](https://github.com/azain47)).
+- Added `Ctrl+D` in the model hub to remove a recently used model from its recent section, with a footer hint shown only on rows it can remove ([#15461](https://github.com/can1357/oh-my-pi/pull/15461) by [@TheDiscoScript](https://github.com/TheDiscoScript))
 
 ### Removed
 
 - Removed the unused `app.tree.foldOrUp` / `app.tree.unfoldOrDown` keybinding ids, which no longer did anything.
-- `ModelHubCallbacks.onForgetRecent(selector)`: `ModelHubComponent` binds `ctrl+d` on a recently used model row, with a footer hint and a native `forgetRecent` action; `ModelBrowser.adjacentSelector(direction)` gives the neighbouring selectable row
 
 ## [18.10.1] - 2026-10-12
 
