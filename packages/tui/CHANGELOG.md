@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `ModelHubOptions.quickPick`: Enter on a model assigns it to the `default` role without the role strip, and the hub closes once the thinking choice is confirmed or kept ([#14479](https://github.com/can1357/oh-my-pi/pull/14479) by [@lockwo](https://github.com/lockwo)).
+
 ### Removed
 
 - Removed `tools/eval-format/code-mode-declarations` (`generateCodeModeDeclarations`), which only served Codex Code Mode.
@@ -39,7 +43,6 @@
 
 ### Added
 
-- Added `ModelHubOptions.quickPick`: Enter on a model assigns it to the `default` role without the role strip, and the hub closes once the thinking choice is confirmed or kept ([#14479](https://github.com/can1357/oh-my-pi/pull/14479) by [@lockwo](https://github.com/lockwo)).
 - `AssistantMessageComponent`'s native turn footer leads with a Copy icon (`omp.turn.copy`) and a dot instead of the clock icon; it copies the answer's text and shows when the host handles transcript actions
 
 ### Changed
