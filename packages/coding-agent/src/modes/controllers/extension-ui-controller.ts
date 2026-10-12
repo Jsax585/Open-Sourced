@@ -138,6 +138,7 @@ export class ExtensionUiController {
 		// Create and set hook & tool UI context
 		const uiContext: ExtensionUIContext = {
 			timeoutStartsOnPresentation: true,
+			supportsEditor: true,
 			select: (title, options, dialogOptions) => this.showCollabAwareSelector(title, options, dialogOptions),
 			confirm: (title, message, dialogOptions) => this.showHookConfirm(title, message, dialogOptions),
 			input: (title, placeholder, dialogOptions) => this.showHookInput(title, placeholder, dialogOptions),
@@ -232,6 +233,8 @@ export class ExtensionUiController {
 			abort: () => this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL }),
 			hasPendingMessages: () => this.ctx.session.queuedMessageCount > 0,
 			shutdown: () => this.ctx.requestShutdown(),
+			resolvePlanReview: (reviewId, choice, input) => this.ctx.resolvePlanReview(reviewId, choice, input),
+			getPendingPlanReview: () => this.ctx.getPendingPlanReview(),
 			getContextUsage: () => this.ctx.session.getContextUsage(),
 			compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
 			getSystemPrompt: () => this.ctx.session.systemPrompt,
@@ -460,6 +463,8 @@ export class ExtensionUiController {
 			abort: () => this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL }),
 			hasPendingMessages: () => this.ctx.session.queuedMessageCount > 0,
 			shutdown: () => this.ctx.requestShutdown(),
+			resolvePlanReview: (reviewId, choice, input) => this.ctx.resolvePlanReview(reviewId, choice, input),
+			getPendingPlanReview: () => this.ctx.getPendingPlanReview(),
 			getContextUsage: () => this.ctx.session.getContextUsage(),
 			compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
 			getSystemPrompt: () => this.ctx.session.systemPrompt,

@@ -2,6 +2,195 @@
 
 ## [Unreleased]
 
+### Added
+
+- Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
+
+### Fixed
+
+- Fixed `read.renderMarkdown` having no effect on plain-file reads: inline read previews now render Markdown files as formatted Markdown instead of numbered source ([#15007](https://github.com/can1357/oh-my-pi/issues/15007)).
+
+### Removed
+
+- Removed Codex Code Mode and its `providers.openai-codex.codeMode` / `providers.openai-codex.codeModeDirectTools` settings; Codex models always use the full direct tool surface.
+
+## [18.10.3] - 2026-10-12
+
+### Added
+
+- Added `task.agentSoftRequestBudget` to give named subagents their own soft request budget, so a long-running agent can get more requests (or `0` for no guard) while scout, sonic and other agents keep theirs ([#15419](https://github.com/can1357/oh-my-pi/pull/15419) by [@will-bogusz](https://github.com/will-bogusz))
+- Added `o200k` as a `tokenizer` value for custom models and overrides in `models.yml` ([#15447](https://github.com/can1357/oh-my-pi/pull/15447) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Changed
+
+- Sized snapcompact archives for Claude 4.7+ and GPT-5.5 to 6.1 (gpt-6-astra included) at each frame's measured price instead of at least 5,024 tokens, so Codex archives can hold up to 1.7× as many frames when the room under the compaction trigger is the limit ([#15442](https://github.com/can1357/oh-my-pi/pull/15442) by [@will-bogusz](https://github.com/will-bogusz))
+- Enabled sibling subagent prompt-cache sharing for Muse Code's Spark 1.3, Wonder 1.0, and Wonder Full 1.0 variants while keeping their conversations separate ([#15467](https://github.com/can1357/oh-my-pi/pull/15467) by [@iliaal](https://github.com/iliaal), based on [#15285](https://github.com/can1357/oh-my-pi/pull/15285) by [@YueyuHoshizora](https://github.com/YueyuHoshizora))
+- Reduced tool-result tokens by omitting subsecond bash timing and redundant task size metadata ([#15468](https://github.com/can1357/oh-my-pi/pull/15468) by [@iliaal](https://github.com/iliaal); [#15265](https://github.com/can1357/oh-my-pi/issues/15265); based on [#15284](https://github.com/can1357/oh-my-pi/pull/15284) by [@YueyuHoshizora](https://github.com/YueyuHoshizora))
+- On the official Anthropic and Codex endpoints, snapcompact archives may carry up to 12 MB of frames instead of 3 MB, Anthropic requests keep up to 600 images (100 on 200k-window models) instead of 90, and Codex requests up to 2,000 instead of 200; custom base URLs, including Anthropic requests rerouted by `ANTHROPIC_BASE_URL` or Foundry's `FOUNDRY_BASE_URL`, keep the previous limits and no longer get Anthropic's 24 MB inline image byte limit ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Fixed
+
+- Fixed `snapcompact.toolResults` re-sending each large tool result as images a turn after it went out as text, which broke the prompt cache and Anthropic signed thinking every turn; results are now imaged from their first send, and `read` results stay text unless the model is known to edit exactly from images (Opus 5.5+) ([#14249](https://github.com/can1357/oh-my-pi/pull/14249) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed compaction on Claude sessions with thinking sometimes keeping about half the recent history `compaction.keepRecentTokens` asks for, because each kept turn was counted at its signature's size ([#15446](https://github.com/can1357/oh-my-pi/pull/15446) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed retry fallback rejecting a model with a smaller window by charging it the reasoning the active model's provider usage replayed, and the output cap charging reasoning a cold Responses session leaves out of its first request ([#15447](https://github.com/can1357/oh-my-pi/pull/15447) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed anonymized session exports losing whether bash timing was shown ([#15468](https://github.com/can1357/oh-my-pi/pull/15468) by [@iliaal](https://github.com/iliaal))
+- Added `omp --restore <session>`: resumes a session like `--resume`, then goes on with what its last process left unfinished when it crashed or was killed, both the interrupted turn and the subagents it was running (their results reach the parent as usual); Tern's session daemon now restarts omp with it after a crash
+
+### Fixed
+
+- Kept private prompt-cache routing keys out of shared sessions and HTML exports ([#15467](https://github.com/can1357/oh-my-pi/pull/15467) by [@iliaal](https://github.com/iliaal))
+
+## [18.10.2] - 2026-10-12
+
+### Added
+
+- Added `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` support: set it to stop Anthropic requests sending experimental beta fields that a company `ANTHROPIC_BASE_URL` gateway rejects, such as the Sonnet 5.5 `thinking.adaptive.block_binding` 400 ([#15458](https://github.com/can1357/oh-my-pi/pull/15458) by [@H4vC](https://github.com/H4vC))
+- Added the `task.structured` setting (default off) for structured task results: when on, the task tool accepts `outputSchema`/`schemaMode` and subagents return results through `yield` as before
+
+### Changed
+
+- Subagents spawned by the task tool now return their final message as plain text, with no `yield` tool, output schemas, or "Submit Result" fields; eval `agent()`/workpool spawns still return structured results
+- In Tern, a backgrounded `bash` command or `eval` cell keeps filling its own card with live output (In background, with a running clock) and settles it with the job's outcome, Cancelled when the job is killed; `wait` lists each job on one line (type, id, label, duration) instead of repeating its output
+- ACP clients now see a backgrounded call's job output stream into its tool call, which settles completed or failed with the job
+
+### Fixed
+
+- Fails unstructured task runs that conclude without a final message
+- Background task cards no longer stop updating once the agent ends its turn while the task is still running
+- Transparent images the model receives (small icons, oversized screenshots) keep their transparency instead of turning into a black square, and resized edges no longer pick up a dark fringe
+
+## [18.10.1] - 2026-10-12
+
+### Added
+
+- Added a Copy button that leads the turn footer under an answer in Tern (`⧉ · 2m13s · 71K tok · $0.85 this turn`, in place of the clock), which copies that answer
+
+### Changed
+
+- Running agents and background jobs in Tern now share one compact counter over the composer (an icon and a count each, the words on hover) instead of two "N running" pills; each count still opens its own sheet
+- In Tern, `/session pin` and `/usage reset` open the same picker sheet as the other small selectors (the active account checked, a confirm strip before a reset is spent, unusable accounts dimmed with the reason); the thinking level picker shows each level's depth as a meter, the plugin and queue mode pickers use badges (version, installed, scope, recommended) and plain-language names instead of bracketed text, and the theme picker no longer repeats "(current)" beside its check
+- In Tern, the text editor an extension opens (and the ask tool's custom answer and note) is now a sheet in the composer's place: the title over its details, the text written straight on the sheet, and Open in editor, Cancel and Submit buttons whose keys show in their tooltips instead of a keycap hint row
+
+### Fixed
+
+- Fixed `grep` on a single file showing in Tern as separate boxed snippets with no file row or syntax colors; it now looks the same as a `grep` over a directory
+
+## [18.10.0] - 2026-10-12
+
+### Added
+
+- Added `/fork` support for creating a new Tern pane while a turn is streaming, preserving the original session
+- Added `omp session pack`, `omp session unpack` and `omp session moved` to move a session with its artifacts to another machine and continue it there; resuming the copy left behind forks it instead of continuing it
+- Added `omp auth export` and `omp auth import` to carry model sign-ins to another machine
+- Added hiding a pending `ask` question without answering it: `Alt+H` (`app.ask.hide`) or the Hide button in Tern collapses the dialog to one line; the same key, `Enter`, or Show brings it back ([#15400](https://github.com/can1357/oh-my-pi/pull/15400) by [@H4vC](https://github.com/H4vC))
+
+### Changed
+
+- Local IPC endpoints (daemon broker, LSP mux, IDA hosts, text prediction, `omp stream`, Collab discovery, local model workers) now run on a native transport: owner-only on every platform, including Windows named pipes; on Windows, daemons started by an older omp are not reused, so close older sessions after upgrading.
+- Output hidden behind an open `ask` dialog, command report or todo list now reaches terminal scrollback once it closes, rather than while it is still open ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
+
+### Fixed
+
+- Fixed every session loading its own copy of the local mnemopi embedding model and keeping it in memory until exit; one server per model is shared across sessions and exits after 15 idle minutes ([#9908](https://github.com/can1357/oh-my-pi/issues/9908))
+- Fixed the first-use mnemopi embedding-model download never completing for sessions shorter than the download; it now finishes in the shared embedding server after the session exits ([#10240](https://github.com/can1357/oh-my-pi/issues/10240))
+- Fixed `RpcClient.stop()` occasionally waiting forever because the agent process was never signaled.
+- Fixed blank rows opening under the input after an `ask` dialog, command report or todo list closed in a session that had filled the screen; the transcript now refills the screen ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
+- Fixed blank rows appearing between the last paragraphs of a streamed answer when the turn ended ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
+
+## [18.9.2] - 2026-10-11
+
+### Fixed
+
+- Improved responsiveness when adding assistant text after tool calls in long transcripts.
+- Fixed `apply_patch` handling of context-free hunks when the target text appears multiple times.
+- Fixed `find` filename ranking and sketch scoring with judge endpoints that limit the number of questions per request.
+- Fixed `omp gc --apply` leaving temporary session files after an interrupted save.
+- Fixed `omp auth-gateway serve` handling of OpenRouter routing variants such as `:floor` and `:nitro`.
+- Improved validation errors for `computer` helpers with missing or non-string text arguments by identifying the helper and argument involved.
+- Fixed `/tan` forks incorrectly inheriting the parent task's subagent spending while preserving token counts.
+- Fixed `omp://` documentation links so they open the corresponding files in source checkouts.
+- Fixed bare model IDs in `models.yml` incorrectly resolving to auto-discovered Ollama, llama.cpp, or LM Studio providers.
+- Added warnings when configured Ollama, llama.cpp, or LM Studio endpoints cannot be reached, identifying the relevant environment variable.
+
+## [18.9.1] - 2026-10-11
+
+### Added
+
+- Added `supportsThinkingBindingControls` to Bedrock `compat` in `models.yml`, so a Bedrock gateway or region that rejects Claude thinking-binding controls can turn them off ([#15316](https://github.com/can1357/oh-my-pi/pull/15316) by [@harshaygadekar](https://github.com/harshaygadekar))
+
+## [18.9.0] - 2026-10-11
+
+### Added
+
+- Added browser target discovery and control, allowing agents to list the user's available pages and operate an already-open Tern browser block instead of opening a new view.
+- Added the `ctx.annotations` extension API for submitting and collecting `/annotate` feedback on text and diffs.
+- Added configurable Extra Context Files under `/settings` → Context, allowing custom instruction filenames without editing YAML.
+- Added optional composer predictions via `composer.predictions`, which suggest the user's next message as ghost text after each turn and support Tab or Right to accept the suggestion. Predictions use an additional model request and are included in session usage and `/stats`.
+- Added structured async job metadata exposing native job status and child-agent identity alongside the job ID.
+- Enhanced `tui.autoGraph: smart` with data-aware chart recommendations, including labels, grouping, ordering, shading, reference rows, measure direction, and suitable chart types.
+- Added `retry.fallbackOn` to restrict model fallback to quota errors (`usage-limit`) or to non-quota errors (`except-usage-limit`), while retaining `any` as the default.
+- Added `omp usage reset` commands to list saved Codex and Claude rate-limit resets and redeem a selected reset from the CLI, scripts, or auth-broker clients.
+- Added warnings for saved Codex and Claude resets that are nearing expiry, including affected accounts and redemption targets; interactive sessions also show a one-time conversation warning.
+- On macOS, the `computer` tool now keeps the display awake while operating and reports when the screen is locked or asleep.
+- Tern browser open results now indicate when a page is not currently visible, helping agents direct users to hidden picture-in-picture or omp-tab views.
+
+### Changed
+
+- Improved `computer.window()` failure messages by listing open windows grouped by application, with the requested application shown first.
+- Standalone binary updates and installers now use Stencil's build service with SHA-256 verification; recent updates use substantially smaller verified patches, and `--binary --ref` accepts release tags.
+- After an omp upgrade, an unused older browser relay started by omp is automatically replaced on the next browser call so relay fixes take effect without manual shutdown.
+- Saved Codex and Claude resets in non-interactive sessions are now automatically redeemed when they are about to expire, unless `autoRedeem: no` is configured.
+- Background Claude reset salvage now checks only accounts with eligible usage, reducing unnecessary usage-limit traffic.
+- Reasoning provenance is preserved when `/btw` answers are promoted or turns are moved, preventing provider summaries from being sent as model-generated reasoning.
+
+### Fixed
+
+- Fixed unconfigured judge roles incorrectly falling back to a Google Vertex Claude model instead of the configured `tiny`, `smol`, or `default` models.
+- Fixed `omp --resume -p` continuing stale todos instead of printing the answer and exiting.
+- Fixed `/btw`, IRC, and composer-prediction requests losing the conversation prompt cache on Codex and after thinking-level changes on GPT-6 models.
+- Fixed Tern browser operations on `about:blank` and no-op navigations hanging until timeout.
+- Fixed SDK and RPC sessions using stale MCP tool lists when servers changed during extension loading.
+- Fixed installing plugins from non-GitHub Git URLs and prevented inline credentials from being persisted in plugin metadata or lockfiles.
+- Improved recovery from repeated OpenAI Responses request timeouts during productive long-running sessions.
+- Fixed JavaScript eval syntax errors lacking source location and a useful code frame.
+- Fixed Collab sessions failing to reconnect after network interruptions or device sleep.
+- Fixed ACP and browser diagnostics and SSH listings using default paths instead of configured paths.
+- Fixed advisors repeatedly returning to models that refused reviewed content; they now remain on the fallback until the conversation changes state.
+- Plugin registry discovery warnings are now reported instead of silently ignored.
+- Fixed OpenRouter Decisions judge requests through custom provider base URLs returning 404 errors.
+- Fixed Codex configuration files being rejected and prevented supported settings from being ignored.
+- Fixed secrets appearing in advisor previews when a preview was truncated.
+- Restored public compatibility exports required by tools, legacy Pi extensions, and plugins.
+- Fixed slow completions ignoring explicitly configured thinking levels, including `:max` and `:off`.
+- Fixed session writes failing on Windows FSLogix profile disks.
+- Limited persisted eval status history so long-running eval cells do not excessively enlarge session files or slow resume.
+- Fixed Codex session prewarming from using a different model or service tier than the resolved session.
+- Fixed subagent completion-probe usage disappearing after parking or restarting.
+- Fixed Python eval processes hanging while waiting on the kernel control channel.
+- Corrected the custom-tool quickstart to use the supported discovery flow and shipped example.
+- Fixed browser screenshots providing incorrect coordinate-scaling guidance on high-device-scale displays.
+- Fixed browser calls hanging when a tab renderer crashed; they now fail promptly and reload or close the affected tab as appropriate.
+- Fixed sessions becoming permanently busy when retry-related session writes failed.
+- Fixed collapsed todo lists wasting a row on the hidden-item indicator.
+- Fixed concurrent SDK sessions interfering with one another's async jobs and subagent follow-up results.
+- Fixed duplicate accessibility-tree output from computer-use eval cells.
+- Fixed chained element actions such as `win.ref("e5").click()` throwing errors; element interaction options are now supported and documented.
+- Fixed JavaScript and Python `read("artifact://N")` calls returning a capped preview instead of the artifact's selected text.
+- Improved guidance for retrieving complete lines when `read`, `eval`, or `bash` output is truncated by the column limit.
+- Fixed resumed, switched, and forked sessions losing the prompt cache when Mnemopi or Hindsight auto-recall was enabled.
+- Fixed the first prompt losing provider prompt-cache coverage while MCP servers were still starting.
+- Fixed coordinate clicks being dropped after password-form submission in omp-launched Chromium.
+- Fixed classifier refusals ending fallback chains prematurely when the retry budget was exhausted.
+- Fixed reading MCP-advertised `skill://` resources and other MCP resources, including discovery order, loading state, and clean shutdown of stalled servers.
+- Fixed smart unexpected-stop detection missing slow judge results, allowing premature stops to recover correctly.
+- The `cfg://` settings approval prompt now honors `ask.timeout` rather than always expiring after ten seconds.
+- Fixed custom LiteLLM providers not receiving the built-in provider behavior and model/session handling.
+- Fixed resumed Cursor sessions losing earlier reasoning after transcript truncation.
+- Fixed `computer.window()` failing to find windows by ID or application when many windows were open.
+- Fixed `grep` hiding matches that appeared beyond the first 512 bytes of a long line.
+- Fixed snapcompaction leaving too little context room after compaction.
+- Fixed usage-limited account pools redeeming saved resets for accounts outside the configured pool.
+
 ## [18.8.9] - 2026-10-10
 
 ### Added

@@ -109,6 +109,7 @@ const FIELD_RULES: Record<string, Rule> = {
 		"promptTokens",
 		"nonMessageTokens",
 		"historyRewriteTokensRemoved",
+		"elidedOutputTokens",
 		"compactionEpoch",
 		"lastMessageTimestamp",
 		"historyRewriteAt",
@@ -138,6 +139,7 @@ const FIELD_RULES: Record<string, Rule> = {
 		"count",
 		"timeoutSeconds",
 		"wallTimeMs",
+		"wallTimeNoticeEmitted",
 		"maxBytes",
 		"maxColumn",
 		"firstChangedLine",
@@ -387,6 +389,7 @@ const FIELD_RULES: Record<string, Rule> = {
 		"retryFallback",
 		"workPoolYieldItems",
 		"providerPromptCacheKey",
+		"taskPromptCacheKey",
 		"providerFile",
 		"providerMetadata",
 		"toolCallAbortMessages",
@@ -647,7 +650,7 @@ const TOOL_CALL_TYPES: Record<string, true> = {
 const CONTENT_BLOCK_KEYS: Record<string, ReadonlySet<string>> = {
 	text: new Set(["type", "text", "textSignature"]),
 	image: new Set(["type", "data", "mimeType", "detail", "providerFile", "url"]),
-	thinking: new Set(["type", "thinking", "thinkingSignature", "itemId"]),
+	thinking: new Set(["type", "thinking", "thinkingSignature", "itemId", "summary"]),
 	redactedThinking: new Set(["type", "data"]),
 	toolCall: new Set([
 		"type",
