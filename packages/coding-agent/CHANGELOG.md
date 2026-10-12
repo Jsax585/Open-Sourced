@@ -4,7 +4,8 @@
 
 ### Added
 
-- Added `todo.sticky` setting (default on). Turn it off to stop pinning the todo list above the editor so it scrolls away with the transcript.
+- Added `todo.sticky` setting (default on). Turn it off to stop pinning the todo list above the editor so it scrolls away with the transcript ([#14981](https://github.com/can1357/oh-my-pi/pull/14981) by [@lockwo](https://github.com/lockwo))
+
 ## [18.10.0] - 2026-10-12
 
 ### Added
