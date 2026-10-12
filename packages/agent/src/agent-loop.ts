@@ -34,6 +34,7 @@ import {
 } from "@oh-my-pi/pi-ai/dialect";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { appendDuplicateSuffix, MAX_TOOL_CALL_ID_LENGTH } from "@oh-my-pi/pi-ai/providers/transform-messages";
+import { raceWithSignal } from "@oh-my-pi/pi-ai/utils/abort";
 import {
 	type CursorExecResolvedCarrier,
 	copyCursorExecResolved,
@@ -90,9 +91,9 @@ import type {
 	AgentToolResult,
 	AgentTurnEndContext,
 	AsideMessage,
-	FinalAnswerReviewDecision,
 	BeforeToolCallResult,
 	CommittableAsideMessage,
+	FinalAnswerReviewDecision,
 	SoftToolRequirement,
 	SteeringInterruptSource,
 	SteeringQueueState,
@@ -105,7 +106,7 @@ import {
 	SPECULATIVE_STREAM_SESSION,
 } from "./types";
 import { yieldIfDue } from "./utils/yield";
-import { raceWithSignal } from "@oh-my-pi/pi-ai/utils/abort";
+
 /** Stop-details marker for a provider error after assistant content/tool args already streamed. */
 export const STREAM_INTERRUPTED_AFTER_CONTENT_STOP_DETAIL = "stream_interrupted_after_content";
 

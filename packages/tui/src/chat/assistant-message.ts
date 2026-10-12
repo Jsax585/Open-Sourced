@@ -2,7 +2,12 @@ import type { AssistantMessage, ImageContent, TextContent } from "@oh-my-pi/pi-a
 import { type Component, Container } from "../tui";
 import { Image, type ImageBudget } from "../components/image";
 import { ImageProtocol, TERMINAL } from "../terminal-capabilities";
-import { Markdown, type MarkdownTheme, rewriteMarkdownLinkDestinations } from "../components/markdown";
+import {
+	type DefaultTextStyle,
+	Markdown,
+	type MarkdownTheme,
+	rewriteMarkdownLinkDestinations,
+} from "../components/markdown";
 import { Spacer } from "../components/spacer";
 import { Text } from "../components/text";
 import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
@@ -390,6 +395,26 @@ export class AssistantMessageComponent extends Container {
 		this.#textColorTransform = transform;
 	}
 
+	/**
+	 * Default text style for assistant paragraph Markdown. An explicitly
+	 * installed transform (live-command output) always wins and keeps its
+	 * historical paint-everything contract; otherwise the optional
+	 * `assistantMessageText` theme token paints prose, flagged `proseFg` so
+	 * markdown sub-elements keep their own `md*` tokens (docs/theme.md).
+	 * Returns undefined when the token is unset or empty so the terminal
+	 * default foreground is used byte-for-byte, exactly as before the token
+	 * existed.
+	 *
+	 * The token is re-derived on every rebuild (the theme-change path calls
+	 * `invalidate()` and rebuilds through the teardown path, which re-consults
+	 * the active theme), so prose follows theme switches both ways.
+	 */
+	#getProseTextStyle(): DefaultTextStyle | undefined {
+		if (this.#textColorTransform) return { color: this.#textColorTransform };
+		if (typeof theme === "undefined" || !theme.hasColor("assistantMessageText")) return undefined;
+		return { color: (text: string) => theme.fg("assistantMessageText", text), proseFg: true };
+	}
+
 	#getProseTheme(): MarkdownTheme {
 		if (this.#markdownTheme) return this.#markdownTheme;
 		const base = getMarkdownTheme();
@@ -573,6 +598,12 @@ export class AssistantMessageComponent extends Container {
 		if (this.#lastMessage) {
 			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
 		}
+	}
+
+	override releaseRenderCaches(): void {
+		super.releaseRenderCaches();
+		this.#dropStableRenders();
+		this.#emergencyText?.releaseRenderCaches();
 	}
 
 	setHideThinkingBlock(hide: boolean): void {
@@ -797,10 +828,10 @@ export class AssistantMessageComponent extends Container {
 		this.#nativeViewVersion++;
 	}
 
-	/** Mirrors a thinking section collapsed or expanded in the terminal. */
+	/** Mirrors a thinking section collapsed or expanded in the terminal; runs its controls' clicks. */
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type === "action") {
-			this.#handleErrorAction(event.act);
+			this.#handleAction(event.act);
 			return;
 		}
 		if (event.type !== "toggle" || !event.key.startsWith("k")) return;
@@ -829,6 +860,7 @@ export class AssistantMessageComponent extends Container {
 			return entry.node;
 		};
 		const children: NativeChild[] = [];
+		let answered = false;
 		if (message) {
 			const live = !this.#transcriptBlockFinalized && this.#lastUpdateTransient;
 			let tailIndex = -1;
@@ -845,6 +877,7 @@ export class AssistantMessageComponent extends Container {
 				const content = message.content[index]!;
 				const streaming = live && index === tailIndex;
 				if (content.type === "text" && canonicalizeMessage(content.text)) {
+					answered = true;
 					const source = content.text.trim();
 					// The terminal renders this source itself and would resolve a relative
 					// link against its own idea of the cwd: hand it the session-resolved
@@ -952,16 +985,29 @@ export class AssistantMessageComponent extends Container {
 		}
 		if (this.#turnUsage) {
 			const usage = formatTurnUsage(this.#turnUsage);
+			const line: NativeChild[] = [];
+			// Led by Copy and a dot: `⧉ · 12.4s · 19K tok this turn`.
+			if (answered && hasTranscriptActions()) {
+				line.push(
+					// `copy-answer`, not Tern's local `copy` (that would copy the icon's empty label).
+					node(
+						"icon",
+						{
+							name: "copy",
+							role: "omp.turn.copy",
+							title: "Copy answer",
+							aria: "Copy answer",
+							actions: { click: "copy-answer" },
+						},
+						undefined,
+						"copy",
+					),
+					node("text", { text: "·" }, undefined, "dot"),
+				);
+			}
+			line.push(node("text", { text: usage.text }, undefined, "text"));
 			children.push(
-				node(
-					"row",
-					{ role: "omp.turn.usage", gap: "xs", align: "center", title: usage.title },
-					[
-						node("icon", { name: "time" }, undefined, "icon"),
-						node("text", { text: usage.text }, undefined, "text"),
-					],
-					"turn-usage",
-				),
+				node("row", { role: "omp.turn.usage", gap: "xs", align: "center", title: usage.title }, line, "turn-usage"),
 			);
 		}
 		return col(children, { role: this.#rewound ? "omp.assistant.rewound" : "omp.assistant" });
@@ -1050,11 +1096,24 @@ export class AssistantMessageComponent extends Container {
 		return card({ role: "omp.error", tone: "error", key: "error" }, children);
 	}
 
-	/** Error frame action clicks: omp's own retry, clipboard and model-picker paths. */
-	#handleErrorAction(act: string): void {
+	/** Control clicks (the error frame's actions, the turn footer's Copy): omp's own retry, clipboard and model-picker paths. */
+	#handleAction(act: string): void {
 		if (act === "retry") runTranscriptAction({ act: "retry" });
 		else if (act === "switch-model") runTranscriptAction({ act: "switch-model" });
 		else if (act === "copy-error" && this.#errorText) runTranscriptAction({ act: "copy", text: this.#errorText });
+		else if (act === "copy-answer") {
+			const text = this.#answerText();
+			if (text) runTranscriptAction({ act: "copy", text });
+		}
+	}
+
+	/** The answer as the transcript shows it: its text blocks' markdown, a blank line apart, without thinking or tool calls. */
+	#answerText(): string {
+		const blocks: string[] = [];
+		for (const content of this.#displayedMessage?.content ?? []) {
+			if (content.type === "text" && canonicalizeMessage(content.text)) blocks.push(content.text.trim());
+		}
+		return blocks.join("\n\n");
 	}
 
 	/** Width-independent stable identities for the streamed leading thinking run. */
@@ -1263,14 +1322,7 @@ export class AssistantMessageComponent extends Container {
 	/** Markdown for a text or thinking block; live children and stable-row renders share it so stable rows prefix the block render. */
 	#createMarkdown(kind: StablePartKind, text: string): Markdown {
 		return kind === "text"
-			? new Markdown(
-					text,
-					1,
-					0,
-					this.#getProseTheme(),
-					this.#textColorTransform ? { color: this.#textColorTransform } : undefined,
-					0,
-				)
+			? new Markdown(text, 1, 0, this.#getProseTheme(), this.#getProseTextStyle(), 0)
 			: new Markdown(text, 1, 0, getMarkdownTheme(), {
 					color: (value: string) => theme.fg("thinkingText", value),
 					italic: true,
