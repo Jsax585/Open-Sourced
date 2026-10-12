@@ -675,7 +675,10 @@ export async function uploadFilesToElement(
 					transfer.items.add(new page.File([bytes], payload.name, { type: payload.type }));
 				}
 				// A drop zone reads the dropped files while handling drop. Canceling proves nothing: pages cancel
-				// dragover and drop document-wide only to stop the browser navigating to a dropped file.
+				// dragover and drop document-wide only to stop the browser navigating to a dropped file. A read is
+				// the strongest signal there is, not proof of acceptance: a document guard that checks
+				// `files.length` counts too, and counting element-level reads only would fail delegated drop zones,
+				// which read at the document (React 16 and older, jQuery `.on("drop", selector)`).
 				let dropping = false;
 				let taken = false;
 				for (const key of ["files", "items"]) {
