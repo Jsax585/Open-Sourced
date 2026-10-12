@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { BunPlugin } from "bun";
 import { resolveBundledChangelogPath } from "../../src/utils/changelog";
-import { COMPILED_BINARIES_WORK } from "../helpers/compiled-binaries";
 
 interface HeapProbeResult {
 	retainedChangelogStrings: number;
@@ -122,7 +121,7 @@ describe("changelog static import resources", () => {
 		}
 	}, 30_000);
 
-	test.skipIf(!COMPILED_BINARIES_WORK)("reads the emitted changelog asset from a compiled binary", async () => {
+	test("reads the emitted changelog asset from a compiled binary", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-changelog-compiled-"));
 		try {
 			const binaryPath = path.join(tempDir, "changelog-probe");
