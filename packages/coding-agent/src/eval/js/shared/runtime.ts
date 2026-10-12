@@ -532,7 +532,12 @@ export class JsRuntime {
 		code: string,
 		filename: string | undefined,
 		hooks: RuntimeHooks,
-		options: { runId?: string; cwd?: string } = {},
+		options: {
+			runId?: string;
+			cwd?: string;
+			/** Called right before the cell's code is evaluated, after compiling it (which may load Babel) finished. */
+			beforeEvaluate?: () => void;
+		} = {},
 	): Promise<unknown> {
 		this.#activateGlobals("run code");
 		this.#namespaceRevision++;
@@ -550,6 +555,7 @@ export class JsRuntime {
 			return await this.#als.run(context, async () => {
 				const wrapped = await wrapCode(code);
 				let value: unknown;
+				options.beforeEvaluate?.();
 				try {
 					value = indirectEval(wrapped.source, filename);
 				} catch (error) {
