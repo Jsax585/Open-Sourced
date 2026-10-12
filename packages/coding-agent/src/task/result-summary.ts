@@ -41,7 +41,7 @@ function previewHead(output: string): string {
 /** Render the `<task-result>` envelope for a settled run. */
 export function formatTaskResultSummary(
 	result: SingleResult,
-	options: { totalDurationMs: number; mergeSummary?: string },
+	options: { totalDurationMs: number; mergeSummary?: string; ircEnabled: boolean },
 ): string {
 	const status = result.aborted
 		? "cancelled"
@@ -66,7 +66,9 @@ export function formatTaskResultSummary(
 	// as resumable.
 	const refStatus = AgentRegistry.global().get(result.id)?.status;
 	const settledNonSuccess = result.aborted || result.exitCode !== 0;
-	const resumable = settledNonSuccess && !result.isolated && (refStatus === "idle" || refStatus === "parked");
+	// `write agent://` is rejected when the caller cannot message peers, so no hint is offered then.
+	const resumable =
+		options.ircEnabled && settledNonSuccess && !result.isolated && (refStatus === "idle" || refStatus === "parked");
 	return prompt.render(taskSummaryTemplate, {
 		agentName: result.agent,
 		id: result.id,

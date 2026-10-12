@@ -3017,10 +3017,11 @@ export function buildWakeRelayBody(args: {
 }): string {
 	const transcript = `See history://${args.id} for details.`;
 	// Computed once, above the completed/failed split: a turn that yielded an
-	// artifact before failing must be reported, never contradicted.
+	// artifact before failing must be reported, never contradicted. A wake exists
+	// only because a peer messaged this agent, so messaging works.
 	const summary =
 		args.yielded && args.result?.outputPath
-			? formatTaskResultSummary(args.result, { totalDurationMs: args.result.durationMs })
+			? formatTaskResultSummary(args.result, { totalDurationMs: args.result.durationMs, ircEnabled: true })
 			: undefined;
 
 	const headline = args.error
@@ -3256,7 +3257,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				// superseded it, or, for a turn that never yielded, the answer a
 				// relay would have carried.
 				if (wakeJob && yielded && result) {
-					const text = formatTaskResultSummary(result, { totalDurationMs: result.durationMs });
+					const text = formatTaskResultSummary(result, { totalDurationMs: result.durationMs, ircEnabled: true });
 					const structured = result.structuredOutput;
 					if (result.aborted || result.exitCode !== 0 || result.error !== undefined) {
 						wakeJob.outcome.reject(new AsyncJobError(text, structured));

@@ -1274,7 +1274,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			onUpdate,
 			onSettled,
 		} = options;
-		const buildFollowUpHint = async (aborted: boolean): Promise<string> => {
+		const buildFollowUpHint = async (aborted: boolean, summaryHasResume: boolean): Promise<string> => {
 			// Isolated runs are parked without a reviver once the run ends
 			// (`finalizeSubagentLifecycle`), so "message it" would point the
 			// caller at a follow-up path that no longer exists. The template says
@@ -1286,7 +1286,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				agentId,
 				aborted,
 				isolated,
-				ircEnabled,
+				ircEnabled: ircEnabled && !summaryHasResume,
 				resumable: !isolated && (ref?.status === "idle" || ref?.status === "parked"),
 				transcriptAvailable: aborted ? await hasResolvableTranscript(agentId) : true,
 			})}`;
@@ -1418,7 +1418,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						? `Background task ${agentId} failed.`
 						: `Background task ${agentId} complete.`;
 					await reportProgress(statusText, buildDetails() as unknown as Record<string, unknown>);
-					const deliveryText = `${finalText}${await buildFollowUpHint(singleResult?.aborted === true)}`;
+					const deliveryText = `${finalText}${await buildFollowUpHint(singleResult?.aborted === true, finalText.includes("<resume>"))}`;
 					const structured = singleResult?.structuredOutput;
 					if (resultFailed) {
 						// Mark the job itself failed; the failed agent stays interrogable.
@@ -1435,7 +1435,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					const statusText = `Background task ${agentId} failed.`;
 					await reportProgress(statusText, buildDetails() as unknown as Record<string, unknown>);
 					const message = error instanceof Error ? error.message : String(error);
-					const hint = AgentRegistry.global().get(agentId) ? await buildFollowUpHint(false) : "";
+					const hint = AgentRegistry.global().get(agentId) ? await buildFollowUpHint(false, false) : "";
 					throw new TaskJobError(`${message}${hint}`);
 				}
 			},
@@ -1702,7 +1702,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		totalDurationMs: number,
 		mergeSummary: string,
 	): AgentToolResult<TaskToolDetails> {
-		const summary = formatTaskResultSummary(result, { totalDurationMs, mergeSummary });
+		const summary = formatTaskResultSummary(result, {
+			totalDurationMs,
+			mergeSummary,
+			ircEnabled:
+				this.session.enableIrc !== false && isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0),
+		});
 
 		return {
 			content: [{ type: "text", text: summary }],
