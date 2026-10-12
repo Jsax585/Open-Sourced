@@ -9,6 +9,7 @@ import {
 	parseModelSort,
 	type ModelSort,
 	rankModelItems,
+	type RoleAssignments,
 	type SearchAffinity,
 	sortModelItems,
 } from "../src/overlays/model-browser";
@@ -17,12 +18,13 @@ import { ensureThemeSync } from "../src/theme";
 ensureThemeSync();
 
 type Score = { int?: number; tps?: number; input?: number; output?: number };
+type PricingStatus = "free" | "unknown" | "variable" | "included";
 
 function makeModel(id: string, score: Score = {}): Model {
 	return providerModel("demo", id, score);
 }
 
-function providerModel(provider: string, id: string, score: Score = {}): Model {
+function providerModel(provider: string, id: string, score: Score = {}, pricingStatus?: PricingStatus): Model {
 	return buildModel({
 		id,
 		name: id,
@@ -41,6 +43,7 @@ function providerModel(provider: string, id: string, score: Score = {}): Model {
 		maxTokens: 1024,
 		...(score.int !== undefined ? { int: score.int } : {}),
 		...(score.tps !== undefined ? { tps: score.tps } : {}),
+		...(pricingStatus !== undefined ? { pricingStatus } : {}),
 	});
 }
 
@@ -87,6 +90,33 @@ describe("sortModelItems metric order", () => {
 		expect(order(scores, { metric: "cost", direction: "desc" })).toEqual(["cheapInputOnly", "cheapInput"]);
 	});
 
+	it("never ranks an unpublished price as free", () => {
+		// A zero rate card whose pricing status is not `free` is not a $0 price:
+		// the row displays `unknown`, so sorting must not float it to the front
+		// of a cheapest-first order ahead of a model with a real rate.
+		const items = buildBrowserItems([
+			providerModel("beta", "unknown", {}, "unknown"),
+			providerModel("alpha", "priced", { input: 1, output: 1 }),
+		]);
+
+		sortModelItems(items, { sort: { metric: "cost", direction: "asc" } });
+		expect(items.map(item => `${item.provider}/${item.id}`)).toEqual(["alpha/priced", "beta/unknown"]);
+
+		sortModelItems(items, { sort: { metric: "cost", direction: "desc" } });
+		// Descending sinks the unknown row too — a missing price is not a low one.
+		expect(items.map(item => `${item.provider}/${item.id}`)).toEqual(["alpha/priced", "beta/unknown"]);
+	});
+
+	it("ranks a genuinely free row at zero", () => {
+		const items = buildBrowserItems([
+			providerModel("alpha", "priced", { input: 1, output: 1 }),
+			providerModel("beta", "free", {}, "free"),
+		]);
+
+		sortModelItems(items, { sort: { metric: "cost", direction: "asc" } });
+		expect(items.map(item => item.id)).toEqual(["free", "priced"]);
+	});
+
 	it("falls back to the default order for rows the metric cannot separate", () => {
 		const items = buildBrowserItems([makeModel("zeta", { int: 50 }), makeModel("alpha", { int: 50 })]);
 		sortModelItems(items, { sort: { metric: "int", direction: "desc" } });
@@ -120,6 +150,47 @@ describe("sortModelItems metric order", () => {
 
 		sortModelItems(items, { sort, grouped: true });
 		// Blocks stay whole, ranked within: beta's 80 cannot outrank alpha's 20.
+		expect(items.map(item => `${item.provider}/${item.id}`)).toEqual([
+			"alpha/high",
+			"alpha/low",
+			"beta/top",
+			"beta/mid",
+		]);
+	});
+
+	it("keeps provider blocks whole when a model is recent", () => {
+		const items = buildBrowserItems([
+			providerModel("alpha", "low", { int: 20 }),
+			providerModel("alpha", "high", { int: 95 }),
+			providerModel("beta", "mid", { int: 60 }),
+			providerModel("beta", "top", { int: 80 }),
+		]);
+		const sort = { metric: "int", direction: "desc" } as const;
+
+		// MRU is a cross-provider rank: without provider precedence it would
+		// float beta/mid above alpha and split the alpha block.
+		sortModelItems(items, { sort, grouped: true, mruOrder: ["beta/mid"] });
+		expect(items.map(item => `${item.provider}/${item.id}`)).toEqual([
+			"alpha/high",
+			"alpha/low",
+			"beta/top",
+			"beta/mid",
+		]);
+	});
+
+	it("keeps provider blocks whole when a model holds a role", () => {
+		const items = buildBrowserItems([
+			providerModel("alpha", "low", { int: 20 }),
+			providerModel("alpha", "high", { int: 95 }),
+			providerModel("beta", "mid", { int: 60 }),
+			providerModel("beta", "top", { int: 80 }),
+		]);
+		const sort = { metric: "int", direction: "desc" } as const;
+		const roles: RoleAssignments = {
+			default: { model: items[2]!.model, thinkingLevel: "off", autoSelected: false },
+		};
+
+		sortModelItems(items, { sort, grouped: true, roles });
 		expect(items.map(item => `${item.provider}/${item.id}`)).toEqual([
 			"alpha/high",
 			"alpha/low",
@@ -167,7 +238,17 @@ describe("sort persistence", () => {
 	});
 
 	it("keeps the default order for an unrecognised or malformed value", () => {
-		for (const value of [undefined, "", "default", "nonsense", "int:sideways", "latency:desc"]) {
+		for (const value of [
+			undefined,
+			"",
+			"default",
+			"nonsense",
+			"int:sideways",
+			"latency:desc",
+			// A trailing segment is a typo, not a value to ignore.
+			"int:desc:junk",
+			"cost:asc:extra",
+		]) {
 			expect(parseModelSort(value)).toBeUndefined();
 		}
 	});

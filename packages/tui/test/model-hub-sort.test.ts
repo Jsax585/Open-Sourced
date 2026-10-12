@@ -72,8 +72,8 @@ function createSource(overrides: Partial<ModelHubSource> = {}): ModelHubSource {
 		cycleOrder: [],
 		// The TUI-only test registry carries no `app.*` bindings, so the host
 		// supplies the keys the way a real one would.
-		sortKeys: ["ctrl+alt+s", "alt+s"],
-		sortGroupingKeys: ["ctrl+alt+g", "alt+g"],
+		sortKeys: ["ctrl+alt+s"],
+		sortGroupingKeys: ["ctrl+alt+g"],
 		getProjectModelRole: () => undefined,
 		getGlobalModelRole: () => undefined,
 		getModelRoleSource: () => "default",
@@ -184,7 +184,6 @@ function focusRows(key: (data: string) => void): void {
 // A control chord: macOS sends Option as a text modifier, so `⌥S` arrives as
 // `ß` (no key at all) and cannot be the only binding.
 const CTRL_ALT_S = "\x1b\x13";
-const ALT_S = "\x1bs";
 const CTRL_ALT_G = "\x1b\x07";
 
 beforeAll(async () => {
@@ -199,19 +198,19 @@ describe("model hub metric order", () => {
 		// Default: the catalog's own role/MRU/provider order.
 		expect(rowOrder(rows())).toEqual(["demo/dim", "demo/mid", "demo/top", "demo/unscored"]);
 
-		key(ALT_S);
+		key(CTRL_ALT_S);
 		expect(rowOrder(rows())).toEqual(["demo/top", "demo/mid", "demo/dim", "demo/unscored"]);
 
-		key(ALT_S);
+		key(CTRL_ALT_S);
 		expect(rowOrder(rows())).toEqual(["demo/dim", "demo/mid", "demo/top", "demo/unscored"]);
 
-		key(ALT_S); // speed, fastest first
+		key(CTRL_ALT_S); // speed, fastest first
 		expect(rowOrder(rows())).toEqual(["demo/top", "demo/mid", "demo/dim", "demo/unscored"]);
 
-		key(ALT_S);
+		key(CTRL_ALT_S);
 		expect(rowOrder(rows())).toEqual(["demo/dim", "demo/mid", "demo/top", "demo/unscored"]);
 
-		key(ALT_S); // price, cheapest first on the blended input/output leg
+		key(CTRL_ALT_S); // price, cheapest first on the blended input/output leg
 		expect(rowOrder(rows())).toEqual(["demo/unscored", "demo/top", "demo/dim", "demo/mid"]);
 
 		// Every step is written back so the choice survives the overlay closing.
@@ -225,7 +224,7 @@ describe("model hub metric order", () => {
 		expect(rowOrder(rows())).toEqual(["demo/top", "demo/mid", "demo/dim", "demo/unscored"]);
 
 		// Cycling continues from the persisted state rather than the default.
-		key(ALT_S);
+		key(CTRL_ALT_S);
 		expect(sortWrites).toEqual(["int:asc"]);
 	});
 
@@ -240,7 +239,7 @@ describe("model hub metric order", () => {
 		focusRows(key);
 		expect(rows()).toContain("sort: default");
 
-		key(ALT_S);
+		key(CTRL_ALT_S);
 		expect(rows()).toContain("sort: IQ ↓");
 	});
 
@@ -255,13 +254,16 @@ describe("model hub metric order", () => {
 		expect(rowOrder(rows())[0]).toBe("demo/dim");
 	});
 
-	test("every bound chord cycles, so a rebind or a second key both work", () => {
-		const { hub, sortWrites } = createHub();
+	test("every bound chord cycles, so a user rebind to several keys still works", () => {
+		// A Tern picker can only advertise one key, but the input path honours
+		// all of them, so a multi-key rebind must not silently drop keys.
+		const { hub, sortWrites } = createHub({ sortKeys: ["ctrl+alt+s", "f2"] });
 
 		hub.handleInput(CTRL_ALT_S);
-		hub.handleInput(ALT_S);
+		hub.handleInput("\x1bOQ"); // f2
+		hub.handleInput("\x1bOQ");
 
-		expect(sortWrites).toEqual(["int:desc", "int:asc"]);
+		expect(sortWrites).toEqual(["int:desc", "int:asc", "tps:desc"]);
 	});
 
 	test("sorting never steals a printable key from the search query", () => {
@@ -291,7 +293,7 @@ describe("model hub metric order on the native picker path", () => {
 
 	test("relabels the action after the order changes", () => {
 		const { hub, key } = createHub();
-		key(ALT_S);
+		key(CTRL_ALT_S);
 
 		expect(pickerActions(hub).find(action => action.id === "sort")?.label).toBe("Sort: IQ ↓");
 	});
@@ -313,6 +315,17 @@ describe("model hub metric order on the native picker path", () => {
 	test("offers no sort action when the key is unbound", () => {
 		const { hub } = createHub({ sortKeys: [] });
 		expect(pickerActions(hub).some(action => action.id === "sort")).toBe(false);
+	});
+
+	test("advertises exactly the keys a Tern picker can route", () => {
+		// A picker action carries one keycap, so a second binding would exist
+		// only on the fallback input path. Declaring only the first keeps the
+		// two paths honest about what the key does.
+		const { hub } = createHub();
+		const sort = pickerActions(hub).find(action => action.id === "sort");
+
+		expect(sort?.keys).toHaveLength(3);
+		expect(sort?.keys?.join("+")).toBe("ctrl+alt+s");
 	});
 });
 
@@ -354,7 +367,7 @@ describe("model hub metric order within provider blocks", () => {
 		expect(rowOrder(rows())).toEqual(["alpha/hi", "alpha/lo", "beta/top", "beta/mid"]);
 
 		// Ascending intelligence inside the same blocks: lo before hi per provider.
-		key(ALT_S);
+		key(CTRL_ALT_S);
 		expect(rowOrder(rows())).toEqual(["alpha/lo", "alpha/hi", "beta/mid", "beta/top"]);
 	});
 

@@ -137,15 +137,16 @@ export const KEYBINDINGS = {
 		// A control chord, never a letter: the `/models` hub's picker keeps a
 		// live search field, so a printable key belongs to the query. Option is
 		// also unusable as the modifier on macOS, where terminals send it as a
-		// text modifier (`⌥S` arrives as `ß`, which is not a key at all) unless
-		// the user turns on Option-as-Esc. A control chord is delivered as a
-		// control byte either way; `alt+s` stays as a fallback for the
-		// terminals configured to send Option as Esc.
-		defaultKeys: ["ctrl+alt+s", "alt+s"],
+		// text modifier (`alt+s` arrives as `ß`, which is not a key at all)
+		// unless the user turns on Option-as-Esc. A control chord is delivered
+		// as a control byte either way, so it needs no second binding — and a
+		// second binding would only exist on the fallback input path, since a
+		// Tern picker action advertises one key.
+		defaultKeys: "ctrl+alt+s",
 		description: "Cycle the /models list order (intelligence, speed, price)",
 	},
 	"app.model.toggleSortGrouping": {
-		defaultKeys: ["ctrl+alt+g", "alt+g"],
+		defaultKeys: "ctrl+alt+g",
 		description: "Rank /models by the active metric within each provider instead of across all",
 	},
 	"app.tools.expand": {

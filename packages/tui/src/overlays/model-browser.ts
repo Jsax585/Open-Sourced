@@ -358,7 +358,16 @@ function sortMetricValue(model: Model, metric: ModelSortMetric): number | undefi
 			const input = Number.isFinite(cost.input) ? cost.input : undefined;
 			const output = Number.isFinite(cost.output) ? cost.output : undefined;
 			if (input === undefined && output === undefined) return undefined;
-			return (input ?? 0) * COST_INPUT_WEIGHT + (output ?? 0) * COST_OUTPUT_WEIGHT;
+			const blended = (input ?? 0) * COST_INPUT_WEIGHT + (output ?? 0) * COST_OUTPUT_WEIGHT;
+			// A zero rate card is a $0 price only when the row really is free. A
+			// rule declaring `unknown`/`variable`/`included` is saying the rate
+			// is unpublished, so the row is unscored — otherwise an unknown-price
+			// model would sort ahead of a known $1 one and contradict the
+			// `unknown` the row itself displays. Mirrors `isFreeModel`, minus the
+			// credit case: a credits-backed row really is $0 per token.
+			const declared = declaredPricingStatus(model);
+			if (blended === 0 && declared !== undefined && declared !== "free") return undefined;
+			return blended;
 		}
 	}
 }
@@ -383,7 +392,11 @@ const MODEL_SORT_RING: readonly (ModelSort | undefined)[] = [
 export function parseModelSort(value: string | undefined): ModelSort | undefined {
 	const raw = value?.trim().toLowerCase();
 	if (!raw || raw === "default") return undefined;
-	const [metric, direction] = raw.split(":");
+	const parts = raw.split(":");
+	// A third segment is a typo, not a value to ignore: accepting `int:desc:junk`
+	// would silently run a different order than the setting spells out.
+	if (parts.length > 2) return undefined;
+	const [metric, direction] = parts;
 	if (metric !== "int" && metric !== "tps" && metric !== "cost") return undefined;
 	if (direction === undefined) return { metric, direction: metric === "cost" ? "asc" : "desc" };
 	if (direction !== "asc" && direction !== "desc") return undefined;
@@ -467,9 +480,18 @@ function modelItemComparator(options: SortModelItemsOptions): (a: ModelBrowserIt
 	};
 
 	return (a, b) => {
-		// Grouped ordering keeps the role/MRU/provider blocks and ranks inside
-		// each one; otherwise the metric leads and the blocks become tie-breaks.
-		if (!grouped) {
+		// Grouped ordering pins each provider's block and ranks the metric
+		// inside it. The metric still leads within a block and the role/MRU
+		// chain below stays the tie-breaker, so both orders read the same way;
+		// only the provider comparison moves ahead of them. Without this a
+		// recent or role-assigned model would float above another provider and
+		// split the block the mode promises to keep whole.
+		if (grouped) {
+			const providerCmp = a.provider.localeCompare(b.provider);
+			if (providerCmp !== 0) return providerCmp;
+			const metricCmp = byMetric(a, b);
+			if (metricCmp !== 0) return metricCmp;
+		} else {
 			const metricCmp = byMetric(a, b);
 			if (metricCmp !== 0) return metricCmp;
 		}
@@ -486,12 +508,9 @@ function modelItemComparator(options: SortModelItemsOptions): (a: ModelBrowserIt
 		if (aMru !== bMru) return aMru - bMru;
 
 		// By provider, then recency within provider
-		const providerCmp = a.provider.localeCompare(b.provider);
-		if (providerCmp !== 0) return providerCmp;
-
-		if (grouped) {
-			const metricCmp = byMetric(a, b);
-			if (metricCmp !== 0) return metricCmp;
+		if (!grouped) {
+			const providerCmp = a.provider.localeCompare(b.provider);
+			if (providerCmp !== 0) return providerCmp;
 		}
 
 		// Priority field (lower = better, e.g. Codex priority values)

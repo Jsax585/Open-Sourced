@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the `modelSort` and `modelSortGrouped` settings, which order the `/models` list by intelligence, output speed, or price, and by provider or across all providers ([#15541](https://github.com/can1357/oh-my-pi/pull/15541) by [@omerdikyol](https://github.com/omerdikyol))
 - Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
 
 ### Fixed

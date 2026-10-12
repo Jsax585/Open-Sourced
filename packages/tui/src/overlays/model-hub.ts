@@ -2969,9 +2969,11 @@ export class ModelHubComponent implements Component {
 	}
 
 	/**
-	 * Keys bound to {@link app.model.cycleSort}; empty when unbound. Every one of
-	 * them cycles the order, but only the first is advertised — a picker action
-	 * shows one keycap.
+	 * Keys bound to {@link app.model.cycleSort}; empty when unbound. Every one
+	 * of them cycles the order on the input path, but only the first reaches
+	 * Tern: a picker action carries a single keycap, so a user who binds a
+	 * second key gets it on every terminal except a native picker. Same
+	 * one-keycap limit as every other picker action in the hub.
 	 */
 	get #sortKeys(): readonly KeyId[] {
 		return this.#settings.sortKeys ?? boundKeys("app.model.cycleSort", []);
