@@ -72,6 +72,8 @@ export interface ContextFileTrackerHost {
 
 interface PendingNested {
 	path: string;
+	/** Size of the injected instruction text, counted against the batch budget. */
+	bytes: number;
 	message: CustomMessage<NestedContextDetails>;
 }
 
@@ -275,8 +277,16 @@ export class ContextFileTracker {
 				if (loaded) found.push(loaded);
 			}
 			if (this.#generation !== generation) return;
+			// One read can surface several ancestor files, and the step-boundary path appends the whole
+			// batch without a size check. Keep the batch within one read's budget, nearest first;
+			// files that do not fit stay undiscovered and load on a later read.
+			let queuedBytes = 0;
+			for (const queued of this.#pending.values()) queuedBytes += queued.bytes;
 			for (const entry of found) {
-				if (!this.#pending.has(entry.path)) this.#pending.set(entry.path, entry);
+				if (this.#pending.has(entry.path)) continue;
+				if (queuedBytes > 0 && queuedBytes + entry.bytes > DEFAULT_MAX_BYTES) break;
+				queuedBytes += entry.bytes;
+				this.#pending.set(entry.path, entry);
 			}
 		}
 	}
@@ -304,6 +314,7 @@ export class ContextFileTracker {
 			const content = boundContent(await expandAtImports(raw, filePath));
 			return {
 				path: filePath,
+				bytes: Buffer.byteLength(content),
 				message: {
 					role: "custom",
 					customType: NESTED_CONTEXT_MESSAGE_TYPE,

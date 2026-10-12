@@ -194,6 +194,16 @@ describe("nested context discovery", () => {
 		expect(await read(r, path.join(root, "a/f.ts"))).toEqual([]);
 	});
 
+	it("keeps one read's batch within a single read-sized budget and loads the rest on a later read", async () => {
+		const big = "x".repeat(40_000);
+		const root = project({ "a/AGENTS.md": big, "a/b/AGENTS.md": big, "a/b/f.ts": "x" });
+		const r = rig(root);
+
+		expect(paths(await read(r, path.join(root, "a/b/f.ts")))).toEqual([path.join(root, "a/b/AGENTS.md")]);
+		r.messages.push(toolResult); // the next step's read result
+		expect(paths(await read(r, path.join(root, "a/b/f.ts")))).toEqual([path.join(root, "a/AGENTS.md")]);
+	});
+
 	it("bounds injected content to the read size limit", async () => {
 		const root = project({ "a/AGENTS.md": `${"rule line\n".repeat(20_000)}TAIL_MARKER`, "a/f.ts": "x" });
 		const r = rig(root);
