@@ -1,10 +1,14 @@
 import { describe, expect, test, vi } from "bun:test";
-import { loginFriendli } from "@oh-my-pi/pi-ai/registry/friendli";
+import { getProviderDefinition } from "@oh-my-pi/pi-ai/registry";
+import type { OAuthController } from "@oh-my-pi/pi-ai/registry/oauth/types";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
+
+const loginFriendli = getProviderDefinition("friendli")?.login;
+if (!loginFriendli) throw new Error("FriendliAI login is not registered");
 
 const CHAT_COMPLETIONS_URL = "https://api.friendli.ai/serverless/v1/chat/completions";
 
-function createController(fetch: FetchImpl): Parameters<typeof loginFriendli>[0] {
+function createController(fetch: FetchImpl): OAuthController {
 	return {
 		fetch,
 		onPrompt: async () => "invalid-friendli-key",

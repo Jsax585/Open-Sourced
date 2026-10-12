@@ -5,6 +5,10 @@ class "gemini" {
 	// the four-tier scale, Gemini 3+ Pro exposes only low/high, and the 3+
 	// Flash/Lite lines keep the four-tier scale.
 	family "pro" {
+		// Replaces the Gemini 2.5+ Pro mandatory-reasoning fallback.
+		revision ">=2.5 <3" {
+			thinking-requires-effort #true
+		}
 		revision "<3" {
 			thinking-efforts "minimal" "low" "medium" "high"
 		}
@@ -62,13 +66,35 @@ class "gemini" {
 			}
 		}
 	}
-
-	// Gemini 3 tool calls require the sentinel signature on unsigned replay.
-	revision ">=3" {
-		requires-skip-thought-signature #true
+	// Gemini 3.7+ Flash native thinkingLevel does not accept `minimal`
+	// (400 THINKING_LEVEL_MINIMAL; observed on 3.7 and 3.8). Only the direct
+	// google-level transports emit `thinkingLevel` on the wire, so the tier is
+	// dropped there; budget (anthropic-messages) and reasoning_effort resellers
+	// never send the rejected value and keep the four-tier ladder. The collapsed
+	// google-antigravity / google-gemini-cli variants remap minimal -> LOW and
+	// carry their own explicit ladder, so they are unaffected.
+	// https://ai.google.dev/gemini-api/docs/generate-content/thinking#thinking-levels
+	on "google" "google-vertex" "opencode-zen" {
+		family "flash" {
+			revision ">=3.7" {
+				thinking-efforts "low" "medium" "high"
+			}
+		}
 	}
-	on "google" "opencode-zen" {
+
+	revision ">=3" {
+		// Replaces the Google multimodal function-response baseline.
+		multimodal-function-response #true
+		// Replaces the Gemini 3+ mandatory-reasoning fallback.
+		thinking-requires-effort #true
+	}
+	// Public Gemini requires the bypass sentinel on every unsigned call and
+	// supports function-part ids. Scope by adapter so custom providers using
+	// the same wire protocol inherit both contracts. The Cloud Code Assist
+	// first-call variant is a host contract in providers/.
+	on-api "google-generative-ai" {
 		revision ">=3" {
+			requires-skip-thought-signature #true
 			supports-function-part-id #true
 		}
 	}
@@ -80,4 +106,27 @@ class "gemini" {
 	}
 
 	thinking-loop-guard "gemini"
+}
+
+// Google Search grounding is a Gemini 2+ lineage capability on every Gemini transport.
+class "gemini" {
+	on-api "google-generative-ai" "google-gemini-cli" {
+		revision ">=2" {
+			web-search "gemini"
+			web-search-model "gemini-2.5-flash"
+			image-model "gemini-3-pro-image"
+		}
+	}
+}
+
+// Gemini 3+ bills a fixed `media_resolution` budget per image regardless of
+// pixels; the default for images is HIGH, 1,120 tokens.
+// https://ai.google.dev/gemini-api/docs/media-resolution
+class "gemini" {
+	revision ">=3" {
+		image-tokenization {
+			regime "fixed"
+			tokens 1120
+		}
+	}
 }

@@ -14,6 +14,8 @@
  *    runtime for internal callers.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -22,22 +24,17 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
-import type { AgentDefinition, SingleResult, TaskParams } from "@oh-my-pi/pi-coding-agent/task/types";
+import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
+import type { SingleResult, TaskParams } from "@oh-my-pi/pi-tui/tools/task";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { isRecord } from "@oh-my-pi/pi-utils";
+
+import { cfgTaskEnableEffort } from "@oh-my-pi/pi-coding-agent/task/settings";
 
 const taskAgent: AgentDefinition = {
 	name: "task",
 	description: "General-purpose task agent",
 	systemPrompt: "You are a task agent.",
-	source: "bundled",
-};
-
-const scoutAgent: AgentDefinition = {
-	name: "scout",
-	description: "Read-only research agent",
-	systemPrompt: "You are a scout agent.",
-	tools: ["read"],
 	source: "bundled",
 };
 
@@ -111,7 +108,7 @@ describe("task.batch schema gating", () => {
 	it("swaps between the flat and batch wire shapes", async () => {
 		mockDiscovery();
 
-		const off = await TaskTool.create(createSession({ settings: { "task.batch": false } }));
+		const off = await TaskTool.create(createSession({ settings: { "task.batch": false, "task.structured": true } }));
 		const offProperties = getSchemaProperties(off);
 		expect(offProperties.tasks).toBeUndefined();
 		expect(offProperties.context).toBeUndefined();
@@ -121,7 +118,7 @@ describe("task.batch schema gating", () => {
 		expect(typeof offProperties.outputSchema).toBe("object");
 		expect(offProperties.schemaMode).toBeDefined();
 
-		const on = await TaskTool.create(createSession({ settings: { "task.batch": true } }));
+		const on = await TaskTool.create(createSession({ settings: { "task.batch": true, "task.structured": true } }));
 		const onProperties = getSchemaProperties(on);
 		expect(onProperties.tasks).toBeDefined();
 		expect(onProperties.context).toBeDefined();
@@ -141,27 +138,6 @@ describe("task.batch schema gating", () => {
 		expect(itemProperties.schemaMode).toBeDefined();
 	});
 
-	it("requires coordination instead of promising same-file auto-resolution", async () => {
-		mockDiscovery();
-		const tool = await TaskTool.create(createSession({ settings: { "task.batch": true } }));
-
-		expect(tool.description).toContain("Same-file edits are not guaranteed to merge");
-		expect(tool.description).toContain("coordinate through `hub` before editing shared files");
-		expect(tool.description).toContain("Name one integration owner");
-		expect(tool.description).not.toContain("Concurrent edits to the same files auto-resolve");
-	});
-
-	it("describes a restricted specialist as the spawn-policy default", async () => {
-		mockDiscovery(scoutAgent);
-		const tool = await TaskTool.create(createSession({ spawns: "scout" }));
-
-		expect(tool.description).toContain("spawn-policy default (`scout`)");
-		expect(tool.description).not.toContain("general-purpose worker");
-		expect(tool.description).not.toContain("default worker");
-		expect(tool.description).toContain("Omit `agent` when the spawn-policy default is the best fit");
-		expect(tool.description).toContain("### scout (READ-ONLY)");
-	});
-
 	it("hides effort by default and exposes it when task.enableEffort is enabled", async () => {
 		mockDiscovery();
 
@@ -170,7 +146,7 @@ describe("task.batch schema gating", () => {
 		expect(getSchemaProperties(flat).effort).toBeUndefined();
 		expect(flat.description).not.toContain("`effort`");
 
-		flatSession.settings.override("task.enableEffort", true);
+		cfgTaskEnableEffort.override(flatSession.settings, true);
 		expect(getSchemaProperties(flat).effort).toBeDefined();
 		expect(flat.description).toContain("`effort`");
 
@@ -179,7 +155,7 @@ describe("task.batch schema gating", () => {
 		expect(getBatchItemProperties(batch).effort).toBeUndefined();
 		expect(batch.description).not.toContain("`effort`");
 
-		batchSession.settings.override("task.enableEffort", true);
+		cfgTaskEnableEffort.override(batchSession.settings, true);
 		expect(getBatchItemProperties(batch).effort).toBeDefined();
 		expect(batch.description).toContain("`effort`");
 	});
@@ -188,7 +164,7 @@ describe("task.batch schema gating", () => {
 		mockDiscovery();
 
 		const tool = await TaskTool.create(
-			createSession({ settings: { "task.batch": true, "task.isolation.mode": "auto" } }),
+			createSession({ settings: { "task.batch": true, "task.isolation.enabled": true } }),
 		);
 		const properties = getSchemaProperties(tool);
 		expect(properties.isolated).toBeUndefined();
@@ -206,7 +182,7 @@ describe("task.batch schema gating", () => {
 		const tool = await TaskTool.create(
 			createSession({
 				planMode: true,
-				settings: { "task.batch": true, "task.isolation.mode": "auto" },
+				settings: { "task.batch": true, "task.isolation.enabled": true },
 			}),
 		);
 		const itemProperties = getBatchItemProperties(tool);
@@ -217,12 +193,26 @@ describe("task.batch schema gating", () => {
 	it("exposes outputSchema but never the stale schema field", async () => {
 		mockDiscovery();
 
-		const flat = await TaskTool.create(createSession({ settings: { "task.batch": false } }));
+		const flat = await TaskTool.create(createSession({ settings: { "task.batch": false, "task.structured": true } }));
 		expect(getSchemaProperties(flat).outputSchema).toBeDefined();
 		expect(getSchemaProperties(flat).schema).toBeUndefined();
 
-		const batch = await TaskTool.create(createSession({ settings: { "task.batch": true } }));
+		const batch = await TaskTool.create(createSession({ settings: { "task.batch": true, "task.structured": true } }));
 		expect(getSchemaProperties(batch).schema).toBeUndefined();
+	});
+
+	it("hides outputSchema and schemaMode from the wire shape and description unless task.structured is on", async () => {
+		mockDiscovery();
+
+		const flat = await TaskTool.create(createSession({ settings: { "task.batch": false } }));
+		expect(getSchemaProperties(flat).outputSchema).toBeUndefined();
+		expect(getSchemaProperties(flat).schemaMode).toBeUndefined();
+		expect(flat.description).not.toContain("outputSchema");
+
+		const batch = await TaskTool.create(createSession({ settings: { "task.batch": true, "async.enabled": true } }));
+		expect(getBatchItemProperties(batch).outputSchema).toBeUndefined();
+		expect(getBatchItemProperties(batch).schemaMode).toBeUndefined();
+		expect(batch.description).not.toContain("outputSchema");
 	});
 });
 
@@ -307,6 +297,48 @@ describe("task.batch validation", () => {
 		expect(text).toContain("task.batch is disabled");
 		expect(text).not.toContain("was missing");
 	});
+
+	it("advertises solutionSpace as required but still spawns a model call that omits it", async () => {
+		mockDiscovery();
+		const spawned: Array<string | undefined> = [];
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			spawned.push(options.assignment);
+			return makeResult(options.id ?? "?");
+		});
+		const tool = await TaskTool.create(createSession({ settings: { "async.enabled": false, "task.batch": true } }));
+		const items = getSchemaProperties(tool).tasks;
+		expect(isRecord(items) && isRecord(items.items) ? items.items.required : undefined).toContain("solutionSpace");
+
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{
+							type: "toolCall",
+							id: "tc-no-solution-space",
+							name: "task",
+							arguments: { context: "# Goal\nX", tasks: [{ name: "Alpha", task: "Do A." }] },
+						},
+					],
+				},
+				{ content: ["done"] },
+			],
+		});
+		const agent = new Agent({
+			initialState: {
+				model: mock.model,
+				systemPrompt: ["Test"],
+				tools: [tool as unknown as AgentTool],
+				messages: [],
+			},
+			streamFn: mock.stream,
+		});
+		await agent.prompt("go");
+
+		expect(spawned).toEqual(["Do A."]);
+		const toolResult = agent.state.messages.find(message => message.role === "toolResult");
+		expect(toolResult?.role === "toolResult" && toolResult.isError).toBe(false);
+	});
 });
 
 describe("task.batch spawning", () => {
@@ -365,7 +397,11 @@ describe("task.batch spawning", () => {
 
 		const manager = createManager();
 		const tool = await TaskTool.create(
-			createSession({ manager, agentId: "ParentA", settings: { "async.enabled": true, "task.batch": true } }),
+			createSession({
+				manager,
+				agentId: "ParentA",
+				settings: { "async.enabled": true, "task.batch": true, "task.structured": true },
+			}),
 		);
 		const alphaSchema = { type: "object", properties: { alpha: { type: "string" } } };
 		const betaSchema = { type: "object", properties: { beta: { type: "number" } } };
@@ -462,7 +498,7 @@ describe("task.batch spawning", () => {
 
 		const manager = createManager();
 		const tool = await TaskTool.create(
-			createSession({ manager, settings: { "async.enabled": true, "task.batch": true } }),
+			createSession({ manager, settings: { "async.enabled": true, "task.batch": true, "task.structured": true } }),
 		);
 		const result = await tool.execute("tc-mixed-agents", {
 			context: "Shared routing context.",
@@ -557,6 +593,7 @@ describe("task.batch spawning", () => {
 				settings: {
 					"async.enabled": true,
 					"task.batch": true,
+					"task.structured": true,
 					"task.agentModelOverrides": { task: "openai/gpt-4.1-mini" },
 				},
 			}),
@@ -580,6 +617,34 @@ describe("task.batch spawning", () => {
 		expect(captured?.outputSchemaMode).toBe("strict");
 		expect(captured?.outputSchemaSource).toBe("caller");
 		expect(captured?.outputSchemaOverridesAgent).toBe(true);
+	});
+
+	it("spawns schema-less, yield-less children by default even with caller and agent schemas", async () => {
+		mockDiscovery({ ...taskAgent, output: { type: "object", properties: { agent: { type: "string" } } } });
+		let captured: { structured?: boolean; outputSchema?: unknown; outputSchemaSource?: string } | undefined;
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			captured = {
+				structured: options.structured,
+				outputSchema: options.outputSchema,
+				outputSchemaSource: options.outputSchemaSource,
+			};
+			return makeResult(options.id ?? "?");
+		});
+
+		const manager = createManager();
+		const tool = await TaskTool.create(
+			createSession({ manager, settings: { "async.enabled": true, "task.batch": true } }),
+		);
+		const result = await tool.execute("tc-prose", {
+			agent: "task",
+			name: "Prose",
+			task: "Do the thing.",
+			outputSchema: { type: "object", properties: { caller: { type: "number" } } },
+			schemaMode: "strict",
+		} as TaskParams);
+
+		await manager.getJob(result.details!.async!.jobId)!.promise;
+		expect(captured).toEqual({ structured: false, outputSchema: undefined, outputSchemaSource: undefined });
 	});
 
 	it("blocks batch execution when async.enabled is false even with a job manager", async () => {

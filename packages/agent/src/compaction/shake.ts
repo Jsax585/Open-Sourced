@@ -18,6 +18,7 @@ import type { CustomMessageEntry, SessionEntry, SessionMessageEntry } from "./en
 import { invalidateMessageCache } from "./message-cache";
 import {
 	collectToolCallsById,
+	getToolResultMessage,
 	isArtifactRecoveryToolResult,
 	isProtectedToolResult,
 	isSkillReadToolResult,
@@ -108,13 +109,6 @@ export type ShakeRegion = ToolResultShakeRegion | BlockShakeRegion;
 // conservative by design (uppercase / mixed-case tags are ignored).
 const OPENING_XML = /^<([a-z_-]+)(?:\s+[^>]*)?>$/;
 const CLOSING_XML = /^<\/([a-z_-]+)>$/;
-
-function getToolResultMessage(entry: SessionEntry): ToolResultMessage | undefined {
-	if (entry.type !== "message") return undefined;
-	const message = entry.message as AgentMessage;
-	if (message.role !== "toolResult") return undefined;
-	return message as ToolResultMessage;
-}
 
 function toolResultText(
 	message: ToolResultMessage,
@@ -318,6 +312,7 @@ export function collectShakeRegions(entries: SessionEntry[], tokenizer: Tokenize
 	if (n === 0) return [];
 
 	// Tokens of all entries strictly more recent than index i.
+	// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 	const accumulatedAfter = new Array<number>(n);
 	let acc = 0;
 	for (let i = n - 1; i >= 0; i--) {

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type { Context, FetchImpl, Model, ModelSpec } from "@oh-my-pi/pi-ai/types";
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 
 /**
@@ -32,18 +33,7 @@ async function captureBody(reasoning: Effort | undefined): Promise<Record<string
 		body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
 		return chatSse();
 	});
-	const model = buildModel({
-		id: "zai-org/GLM-5.3",
-		name: "GLM-5.3",
-		api: "openai-completions",
-		provider: "friendli",
-		baseUrl: "https://api.friendli.ai/serverless/v1",
-		reasoning: true,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 1048576,
-		maxTokens: 1048576,
-	} as ModelSpec<"openai-completions">) as Model<"openai-completions">;
+	const model = buildModel(seedModels<"openai-completions">("friendli")[0]) as Model<"openai-completions">;
 	for await (const event of streamOpenAICompletions(model, context, { apiKey: "k", fetch: fetchMock, reasoning })) {
 		if (event.type === "done" || event.type === "error") break;
 	}
