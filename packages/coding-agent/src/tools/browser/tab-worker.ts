@@ -839,8 +839,10 @@ export function toActionableHandle(
 				invalidate,
 			),
 		);
-	if (uploadFiles) {
-		// Same chooser and drop-zone handling as `tab.uploadFile()`, not Puppeteer's input-only method.
+	const clearFiles = originals.interactive.uploadFile;
+	if (uploadFiles && clearFiles) {
+		// Same chooser and drop-zone handling as `tab.uploadFile()`, not Puppeteer's input-only method. With no
+		// paths, Puppeteer's method clears a file input.
 		enriched.uploadFile = (...filePaths: string[]) =>
 			guard<void>("handle.uploadFile()", signal =>
 				runGuardedHandleAction(
@@ -848,7 +850,10 @@ export function toActionableHandle(
 					originals,
 					"handle.uploadFile()",
 					signal,
-					() => uploadFiles(filePaths, signal),
+					async () => {
+						if (filePaths.length) await uploadFiles(filePaths, signal);
+						else await clearFiles();
+					},
 					invalidate,
 				),
 			);
@@ -2137,7 +2142,6 @@ export class WorkerCore {
 					await this.#stopLoading();
 				},
 				async (filePaths, sig) => {
-					if (!filePaths.length) throw new ToolError("handle.uploadFile() requires at least one file path");
 					await uploadFilesToElement(
 						page,
 						handle,

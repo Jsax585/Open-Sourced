@@ -79,8 +79,8 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser uploadFile", () => {
 		const name = `upload-${crypto.randomUUID()}`;
 		await prelude.invoke({ action: "open", name, url }, context);
 		try {
-			// Relative paths name files in the session directory, which is not the process cwd. The change
-			// listeners read contents asynchronously, so the cell waits for all four entries.
+			// Relative paths name files in the session directory, which is not the process cwd. No paths clears the
+			// input. The change listeners read contents asynchronously, so the cell waits for all five entries.
 			const result = await prelude.invoke(
 				{
 					action: "run",
@@ -92,6 +92,8 @@ for (const [selector, files] of [["#direct", ["alpha.txt"]], ["#styled", ["alpha
 	catch (error) { errors.push(selector + ": " + (error instanceof Error ? error.message : String(error))); }
 }
 await tab.page.waitForFunction(() => window.log.length >= 4, { timeout: 5000 }).catch(() => undefined);
+await (await tab.waitFor("#direct")).uploadFile();
+await tab.page.waitForFunction(() => window.log.length >= 5, { timeout: 5000 }).catch(() => undefined);
 return { errors, log: await tab.evaluate(() => window.log) };`,
 				},
 				context,
@@ -105,6 +107,7 @@ return { errors, log: await tab.evaluate(() => window.log) };`,
 					{ id: "hidden-input", files: ["alpha.txt:alpha"] },
 					{ id: "trigger-input", files: ["beta.txt:beta"] },
 					{ id: "drop", files: ["alpha.txt:alpha", "beta.txt:beta"] },
+					{ id: "direct", files: [] },
 				],
 			});
 		} finally {
