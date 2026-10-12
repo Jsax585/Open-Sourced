@@ -188,6 +188,8 @@ import anthropicUsageWrapUpPrompt from "../prompts/system/anthropic-usage-wrap-u
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import checkpointActiveNoticeTemplate from "../prompts/system/checkpoint-active-notice.md" with { type: "text" };
 import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
+import workspaceMoveFailedPrompt from "../prompts/system/workspace-move-failed.md" with { type: "text" };
+import workspaceMoveSucceededPrompt from "../prompts/system/workspace-move-succeeded.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
 import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with { type: "text" };
@@ -10116,10 +10118,16 @@ export class AgentSession implements SettingsScope {
 	/**
 	 * Register how the host relocates the whole workspace (session file, process
 	 * cwd, project settings and caches). The `session` tool's `move` op depends
-	 * on it: the interactive mode and the headless default both install one.
+	 * on it. Only a host that owns the process cwd installs one (the interactive
+	 * mode): relocating changes `process.cwd()` for every session in the process.
 	 */
 	setWorkspaceRelocator(relocator: ((directory: string) => Promise<void>) | undefined): void {
 		this.#workspaceRelocator = relocator;
+	}
+
+	/** Whether the host registered a relocator, so a `session` tool `move` can take effect. */
+	get canMoveWorkspace(): boolean {
+		return this.#workspaceRelocator !== undefined;
 	}
 
 	/** Directory a `session` tool call queued, not yet applied. */
@@ -10147,11 +10155,15 @@ export class AgentSession implements SettingsScope {
 		let note: string;
 		try {
 			await relocator(directory);
-			note = `The session workspace moved to ${this.sessionManager.getCwd()}. Tools now run there.`;
+			note = prompt.render(workspaceMoveSucceededPrompt, { directory: this.sessionManager.getCwd() });
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			this.emitNotice("warning", `Session move to ${directory} failed: ${message}`, "session-move");
-			note = `The requested session move to ${directory} failed (${message}). Tools still run in ${this.sessionManager.getCwd()}.`;
+			note = prompt.render(workspaceMoveFailedPrompt, {
+				requested: directory,
+				error: message,
+				directory: this.sessionManager.getCwd(),
+			});
 		}
 		// A final turn has no next step to inform; an aside there would only force an extra model turn.
 		if (context?.willContinue) this.#workspaceMoveNotice = note;

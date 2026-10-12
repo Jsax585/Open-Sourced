@@ -11,6 +11,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { IsoBackendKind } from "@oh-my-pi/pi-natives";
+import type { VcsWorktreeAddResult } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { getWorktreeDir, hashPath, logger } from "@oh-my-pi/pi-utils";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
@@ -119,9 +120,10 @@ export async function createSessionWorktree(
 	cwd: string,
 	settings: Settings,
 	branch: string,
-	options: { keepChanges?: boolean } = {},
+	options: { keepChanges?: boolean; signal?: AbortSignal } = {},
 ): Promise<SessionWorktree> {
 	const keepChanges = options.keepChanges ?? true;
+	const signal = options.signal;
 	try {
 		await settings.flush();
 	} catch (err) {
@@ -148,13 +150,31 @@ export async function createSessionWorktree(
 	const worktreePath = await resolveAvailableWorktreePath(basePath, await repository.worktrees());
 	await fs.mkdir(path.dirname(worktreePath), { recursive: true });
 
-	await repository.createBranch(branch, baseCommit, false);
-	const result = await repository.worktreeAdd(worktreePath, branch, {
-		detach: false,
-		clone: cfgWorktreeClone.get(settings),
-		backend: parseIsolationBackend(cfgIsolationBackend.get(settings)),
-		keepChanges,
-	});
+	signal?.throwIfAborted();
+	await repository.createBranch(branch, baseCommit, false, signal);
+	let result: VcsWorktreeAddResult;
+	try {
+		result = await repository.worktreeAdd(
+			worktreePath,
+			branch,
+			{
+				detach: false,
+				clone: cfgWorktreeClone.get(settings),
+				backend: parseIsolationBackend(cfgIsolationBackend.get(settings)),
+				keepChanges,
+			},
+			signal,
+		);
+		signal?.throwIfAborted();
+	} catch (error) {
+		// A canceled or failed creation must not leave the branch or a half-built checkout behind.
+		if (signal?.aborted) {
+			await repository.worktreeRemove(worktreePath, true).catch(() => false);
+			await fs.rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
+			await repository.deleteBranch(branch, true).catch(() => false);
+		}
+		throw error;
+	}
 	return {
 		path: await fs.realpath(worktreePath),
 		branch,

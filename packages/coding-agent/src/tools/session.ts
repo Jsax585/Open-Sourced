@@ -12,7 +12,7 @@ import type {
 import type { VcsGitRepo } from "@oh-my-pi/pi-natives";
 import type { OutputMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { pathIsWithin, prompt } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import sessionDescription from "../prompts/tools/session.md" with { type: "text" };
 import { createSessionWorktree, type SessionWorktree } from "../session/session-worktree";
@@ -25,6 +25,8 @@ import { toolResult } from "./tool-result";
 export interface SessionControl {
 	/** Retitle the session. Resolves false when the title is empty or the session is released. */
 	rename(title: string): Promise<boolean>;
+	/** Whether this host can relocate the session workspace. Only hosts that own the process cwd can. */
+	canMove(): boolean;
 	/** Queue a workspace move for the next step boundary. Throws when the host cannot relocate. */
 	requestMove(directory: string): void;
 	/** Directory of a queued, not yet applied move. */
@@ -54,6 +56,8 @@ export interface SessionToolDetails {
 	meta?: OutputMeta;
 }
 
+const MOVE_UNSUPPORTED = "This host cannot move the session workspace. Ask the user to run /move.";
+
 function requireText(value: string | undefined, field: string, op: string): string {
 	const text = value?.trim();
 	if (!text) throw new ToolError(`session ${op} requires \`${field}\`.`);
@@ -66,11 +70,6 @@ async function realpathOrSelf(target: string): Promise<string> {
 	} catch {
 		return path.resolve(target);
 	}
-}
-
-function isInside(parent: string, child: string): boolean {
-	const relative = path.relative(parent, child);
-	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolDetails> {
@@ -111,6 +110,7 @@ export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolD
 				return toolResult<SessionToolDetails>({ op: "rename" }).text(`Session renamed to "${title}".`).done();
 			}
 			case "move": {
+				if (!control.canMove()) throw new ToolError(MOVE_UNSUPPORTED);
 				const target = await this.#resolveMoveTarget(requireText(params.path, "path", "move"));
 				control.requestMove(target);
 				return toolResult<SessionToolDetails>({ op: "move", path: target, moveQueued: true })
@@ -120,7 +120,7 @@ export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolD
 			case "worktree_list":
 				return await this.#list();
 			case "worktree_create":
-				return await this.#create(control, params);
+				return await this.#create(control, params, signal);
 			case "worktree_remove":
 				return await this.#remove(control, params);
 		}
@@ -167,7 +167,7 @@ export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolD
 			} catch {
 				state = ", status unavailable";
 			}
-			const marker = isInside(root, cwd) ? " (this session)" : "";
+			const marker = pathIsWithin(root, cwd) ? " (this session)" : "";
 			lines.push(`${root}  [${label}${state}]${marker}`);
 		}
 		return toolResult<SessionToolDetails>({ op: "worktree_list" })
@@ -175,12 +175,19 @@ export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolD
 			.done();
 	}
 
-	async #create(control: SessionControl, params: SessionParams): Promise<AgentToolResult<SessionToolDetails>> {
+	async #create(
+		control: SessionControl,
+		params: SessionParams,
+		signal: AbortSignal | undefined,
+	): Promise<AgentToolResult<SessionToolDetails>> {
 		const branch = requireText(params.branch, "branch", "worktree_create");
+		// Fail before creating anything: a worktree the session cannot move into would be left behind.
+		if (params.move === true && !control.canMove()) throw new ToolError(MOVE_UNSUPPORTED);
 		let worktree: SessionWorktree;
 		try {
 			worktree = await createSessionWorktree(this.session.cwd, this.session.settings, branch, {
 				keepChanges: params.carryChanges === true,
+				signal,
 			});
 		} catch (error) {
 			throw new ToolError(`Worktree creation failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -224,7 +231,7 @@ export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolD
 		}
 		const inUse = [this.session.cwd, ...(this.session.additionalDirectories ?? []), control.pendingMove()];
 		for (const directory of inUse) {
-			if (directory !== undefined && isInside(target, await realpathOrSelf(directory))) {
+			if (directory !== undefined && pathIsWithin(target, await realpathOrSelf(directory))) {
 				throw new ToolError(
 					`Refusing to remove ${target}: this session works in ${directory}. Move the session elsewhere first.`,
 				);

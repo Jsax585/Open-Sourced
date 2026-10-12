@@ -7,7 +7,6 @@
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/session.md`
 - Key collaborators:
   - `packages/coding-agent/src/session/agent-session.ts` — queues a requested move and applies it from the `onTurnEnd` hook (`requestWorkspaceMove`, `setWorkspaceRelocator`).
-  - `packages/coding-agent/src/session/workspace-relocation.ts` — headless relocator, reusing `relocateHeadlessSession` from `/move`.
   - `packages/coding-agent/src/modes/controllers/command-controller.ts` — interactive relocator (`relocateForAgent`), reusing the `/move` relocation.
   - `packages/coding-agent/src/session/session-worktree.ts` — `createSessionWorktree`, shared with `/wt`.
   - `packages/coding-agent/src/sdk.ts` — builds `ToolSession.sessionControl` for top-level sessions.
@@ -32,7 +31,7 @@
 ## Move timing
 `move` does not relocate immediately. It queues the directory, and `AgentSession` applies it at the next turn boundary: the current tool batch has finished in the old directory, its messages are persisted, and the next provider request runs in the new one. Tool calls issued in the same step as `move` still run in the old directory.
 
-The relocation is the one `/move` performs. In the interactive mode that includes the BTW gate, the process cwd, project settings, skills, commands, and todos. In RPC, ACP, print, and SDK hosts it is `relocateHeadlessSession` without a command-list refresh. A host that registers no relocator makes `move` fail with `This host cannot move the session workspace.`
+The relocation is the one `/move` performs. In the interactive mode that includes the BTW gate, the process cwd, project settings, skills, commands, and todos. Only the interactive mode registers a relocator, because moving changes `process.cwd()` for every session in the process. In RPC, ACP, print, and SDK hosts `move` and `worktree_create` with `move: true` fail up front with `This host cannot move the session workspace. Ask the user to run /move.` (nothing is created), and the user can still run `/move`.
 
 A queued move is dropped when the run is aborted or a new run starts. If the move fails, a warning notice is shown and the next step gets a hidden note saying so.
 

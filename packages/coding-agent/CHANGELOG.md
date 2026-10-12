@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added an opt-in `session` tool (`session.enabled`) so the agent can rename the session, move it to another directory between steps, and create, list, or remove git worktrees; removing refuses the directory the session works in and uncommitted changes unless `force` is set.
+- Added an opt-in `session` tool (`session.enabled`) so the agent can rename the session, move it to another directory between steps, and create, list, or remove git worktrees; removing refuses the directory the session works in and uncommitted changes unless `force` is set. Only the interactive mode can move the session (moving changes the process-wide cwd), so other hosts tell the model to ask for `/move` before anything is created.
 
 ## [18.10.0] - 2026-10-12
 

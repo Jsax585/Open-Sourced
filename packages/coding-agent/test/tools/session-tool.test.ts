@@ -56,6 +56,7 @@ async function createFixture(): Promise<Fixture> {
 			titles.push(title);
 			return title.trim().length > 0;
 		},
+		canMove: () => true,
 		requestMove: directory => {
 			moves.push(directory);
 			pending = directory;
@@ -160,6 +161,17 @@ describe("session tool: rename and move", () => {
 			},
 		});
 		await expect(tool.execute("1", { op: "move", path: "pkg" })).rejects.toThrow("cannot move");
+	});
+
+	it("refuses move and worktree_create with move before creating anything when the host cannot relocate", async () => {
+		await fs.mkdir(path.join(fixture.repo, "pkg"));
+		const tool = fixture.toolIn(fixture.repo, { sessionControl: { ...fixture.control, canMove: () => false } });
+		await expect(tool.execute("1", { op: "move", path: "pkg" })).rejects.toThrow("cannot move");
+		await expect(tool.execute("2", { op: "worktree_create", branch: "stuck", move: true })).rejects.toThrow(
+			"cannot move",
+		);
+		expect(await git(fixture.repo, "branch", "--list", "stuck")).toBe("");
+		expect(fixture.moves).toEqual([]);
 	});
 });
 
@@ -292,6 +304,13 @@ describe("session tool: worktrees", () => {
 			fixture
 				.toolIn(fixture.repo, { additionalDirectories: [nested] })
 				.execute("4", { op: "worktree_remove", path: created, force: true }),
+		).rejects.toThrow("this session works in");
+
+		// A directory merely named like a parent reference is still inside the worktree.
+		const dotted = path.join(created, "..notes");
+		await fs.mkdir(dotted);
+		await expect(
+			fixture.toolIn(dotted).execute("2b", { op: "worktree_remove", path: created, force: true }),
 		).rejects.toThrow("this session works in");
 
 		// A move already queued into it counts as in use.

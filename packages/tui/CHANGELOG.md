@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a transcript renderer for the `session` tool that shows home-relative paths.
+
 ## [18.10.0] - 2026-10-12
 
 ### Breaking Changes

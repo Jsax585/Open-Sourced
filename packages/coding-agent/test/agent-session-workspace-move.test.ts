@@ -77,6 +77,7 @@ async function createHarness(
 		settings,
 		sessionControl: {
 			rename: title => sessionManager.setSessionName(title, "user", "session-tool"),
+			canMove: () => live.session!.canMoveWorkspace,
 			requestMove: directory => live.session!.requestWorkspaceMove(directory),
 			pendingMove: () => live.session!.pendingWorkspaceMove,
 		},

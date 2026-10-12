@@ -220,7 +220,6 @@ import {
 	projectMountedMCPXdevGuidance,
 	type SettingsGatedToolDelta,
 } from "./session/session-tools";
-import { createHeadlessWorkspaceRelocator } from "./session/workspace-relocation";
 import { anthropicSlowModeHasNoSiblingHeadroom } from "./session/anthropic-slow-mode";
 import { CacheWarmer } from "./session/cache-warmer";
 import { createSettingsAwareStreamFn, resolveOpenAIWebsocketPreference } from "./session/settings-stream-fn";
@@ -2372,6 +2371,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				? undefined
 				: {
 						rename: title => sessionManager.setSessionName(title, "user", "session-tool"),
+						canMove: () => session.canMoveWorkspace,
 						requestMove: directory => session.requestWorkspaceMove(directory),
 						pendingMove: () => session.pendingWorkspaceMove,
 					},
@@ -4683,7 +4683,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			autoTitle: options.autoTitle === true && !isSubagentSession,
 		});
 		hasSession = true;
-		if (!isSubagentSession) session.setWorkspaceRelocator(createHeadlessWorkspaceRelocator(session));
 		credentialNoticeSession = session;
 		// Hashline snapshots are session-scoped: /new and switchSession fire the
 		// change callbacks, so clear the tool-side store there — stale tags would
