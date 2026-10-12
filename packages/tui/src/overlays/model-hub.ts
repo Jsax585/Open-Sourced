@@ -681,6 +681,7 @@ export class ModelHubComponent implements Component {
 			mruOrder,
 			sort: this.#sort,
 			grouped: this.#sortGrouped,
+			effectiveTps: item => this.#browser.measuredTps(item),
 		});
 		this.#browser.setRoles(this.#roles);
 		this.#browser.setMruOrder(mruOrder);
@@ -919,6 +920,7 @@ export class ModelHubComponent implements Component {
 			mruOrder: this.#settings.mruOrder,
 			sort: this.#sort,
 			grouped: this.#sortGrouped,
+			effectiveTps: item => this.#browser.measuredTps(item),
 		});
 		// Recent rows are MRU-ordered by construction; re-seating them here would
 		// silently redefine what the Recent scope means.

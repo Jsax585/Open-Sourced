@@ -107,6 +107,18 @@ describe("sortModelItems metric order", () => {
 		expect(items.map(item => `${item.provider}/${item.id}`)).toEqual(["alpha/priced", "beta/unknown"]);
 	});
 
+	it("never treats a negative rate sentinel as the cheapest price", () => {
+		// The bundled `openrouter/auto` rows carry -1e6 on both legs, which
+		// `formatCostLeg` prints as `?`. Sorting must not read that as a price.
+		const items = buildBrowserItems([
+			providerModel("beta", "sentinel", { input: -1_000_000, output: -1_000_000 }),
+			providerModel("alpha", "priced", { input: 1, output: 1 }),
+		]);
+
+		sortModelItems(items, { sort: { metric: "cost", direction: "asc" } });
+		expect(items.map(item => item.id)).toEqual(["priced", "sentinel"]);
+	});
+
 	it("ranks a genuinely free row at zero", () => {
 		const items = buildBrowserItems([
 			providerModel("alpha", "priced", { input: 1, output: 1 }),
@@ -123,6 +135,39 @@ describe("sortModelItems metric order", () => {
 
 		// Equal scores must not flip between runs: the id order breaks the tie.
 		expect(items.map(item => item.id)).toEqual(["alpha", "zeta"]);
+	});
+
+	it("orders by the measured speed the row displays, not the catalog estimate", () => {
+		const items = buildBrowserItems([
+			// Catalog says 200, but the session measured 30 — the row prints 30.
+			providerModel("alpha", "measured-slow", { tps: 200 }),
+			// No catalog estimate at all; measured 100 is all the row has.
+			providerModel("beta", "measured-only", {}),
+			providerModel("gamma", "estimate-only", { tps: 60 }),
+		]);
+		const bySelector = new Map(items.map(item => [item.selector, item]));
+		const measured = new Map([
+			[bySelector.get("alpha/measured-slow")!.selector, 30],
+			[bySelector.get("beta/measured-only")!.selector, 100],
+		]);
+
+		sortModelItems(items, {
+			sort: { metric: "tps", direction: "desc" },
+			effectiveTps: item => measured.get(item.selector),
+		});
+
+		// Order follows the printed numbers: 100 measured, 60 estimated, 30 measured.
+		// On the catalog estimate alone this would have been 200, 60, unscored.
+		expect(items.map(item => item.id)).toEqual(["measured-only", "estimate-only", "measured-slow"]);
+	});
+
+	it("falls back to the catalog estimate when nothing is measured", () => {
+		const items = buildBrowserItems([
+			providerModel("alpha", "slow", { tps: 30 }),
+			providerModel("beta", "fast", { tps: 200 }),
+		]);
+		sortModelItems(items, { sort: { metric: "tps", direction: "desc" } });
+		expect(items.map(item => item.id)).toEqual(["fast", "slow"]);
 	});
 
 	it("leaves the default order untouched when no metric is selected", () => {

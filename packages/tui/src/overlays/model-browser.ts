@@ -341,22 +341,39 @@ export interface ModelSort {
 const COST_INPUT_WEIGHT = 0.75;
 const COST_OUTPUT_WEIGHT = 0.25;
 
-/** The value `model` sorts on, or `undefined` when the catalog never scored it. */
-function sortMetricValue(model: Model, metric: ModelSortMetric): number | undefined {
+/**
+ * The value `item` sorts on, or `undefined` when the catalog never scored it.
+ * `effectiveTps` resolves the session's measured speed, so a row never sorts
+ * against the number it displays.
+ */
+function sortMetricValue(
+	item: ModelBrowserItem,
+	metric: ModelSortMetric,
+	effectiveTps?: (item: ModelBrowserItem) => number | undefined,
+): number | undefined {
+	const model = item.model;
 	switch (metric) {
 		case "int": {
 			const int = model.int;
 			return int != null && Number.isFinite(int) ? int : undefined;
 		}
 		case "tps": {
+			// Measured first, exactly as the row's perf cell prints it: a model
+			// with a recorded speed outranks one carrying only the `~` estimate,
+			// and a measured model with no catalog estimate is not unscored.
+			const measured = effectiveTps?.(item);
+			if (measured !== undefined) return measured;
 			const tps = model.tps;
 			return tps != null && Number.isFinite(tps) && tps > 0 ? tps : undefined;
 		}
 		case "cost": {
 			const cost = model.cost;
 			if (!cost) return undefined;
-			const input = Number.isFinite(cost.input) ? cost.input : undefined;
-			const output = Number.isFinite(cost.output) ? cost.output : undefined;
+			// A negative leg is a sentinel, not a price: the bundled
+			// `openrouter/auto` rows carry -1e6 and `formatCostLeg` prints them
+			// as `?`, so the order must not treat them as the cheapest models.
+			const input = Number.isFinite(cost.input) && cost.input >= 0 ? cost.input : undefined;
+			const output = Number.isFinite(cost.output) && cost.output >= 0 ? cost.output : undefined;
 			if (input === undefined && output === undefined) return undefined;
 			const blended = (input ?? 0) * COST_INPUT_WEIGHT + (output ?? 0) * COST_OUTPUT_WEIGHT;
 			// A zero rate card is a $0 price only when the row really is free. A
@@ -450,6 +467,12 @@ export interface SortModelItemsOptions {
 	 * per-provider ranking the user has to read across.
 	 */
 	grouped?: boolean;
+	/**
+	 * The session's measured speed for a row, used by the `tps` order in place
+	 * of the catalog estimate. Supplied by the host so the order matches the
+	 * number the row prints; without it the order falls back to the estimate.
+	 */
+	effectiveTps?: (item: ModelBrowserItem) => number | undefined;
 }
 
 /**
@@ -470,8 +493,8 @@ function modelItemComparator(options: SortModelItemsOptions): (a: ModelBrowserIt
 	/** Metric comparison, or 0 when both rows score the same (or there is no metric). */
 	const byMetric = (a: ModelBrowserItem, b: ModelBrowserItem): number => {
 		if (!sort) return 0;
-		const aMetric = sortMetricValue(a.model, sort.metric);
-		const bMetric = sortMetricValue(b.model, sort.metric);
+		const aMetric = sortMetricValue(a, sort.metric, options.effectiveTps);
+		const bMetric = sortMetricValue(b, sort.metric, options.effectiveTps);
 		// An unscored row sinks in both directions: a missing value is not a low one.
 		if (aMetric === bMetric) return 0;
 		if (aMetric === undefined) return 1;
@@ -765,6 +788,8 @@ export interface ModelRankOptions {
 	sort?: ModelSort;
 	/** Rank within provider blocks rather than across all of them. */
 	grouped?: boolean;
+	/** Measured speed per row, so the search ranker orders like the list does. */
+	effectiveTps?: (item: ModelBrowserItem) => number | undefined;
 }
 
 /** Query-independent sort keys of one candidate, computed once per ranker. */
@@ -799,6 +824,7 @@ export class ModelItemRanker {
 			skipRoleRank: true,
 			sort: options.sort,
 			grouped: options.grouped,
+			effectiveTps: options.effectiveTps,
 		});
 		const ordered = [...items].sort(compare);
 		let group = 0;
@@ -1295,6 +1321,16 @@ export class ModelBrowser implements Component {
 		this.#affinity = buildSearchAffinity(this.#settings.modelProviderOrder, this.#roles, this.#mruOrder);
 	}
 
+	/**
+	 * The measured TPS a row's perf cell prints, or undefined when none is
+	 * recorded. The `tps` order reads this so a row never sorts against the
+	 * number it displays.
+	 */
+	measuredTps(item: ModelBrowserItem): number | undefined {
+		const tps = this.#perfFor(item)?.perf.tps;
+		return tps != null && Number.isFinite(tps) && tps > 0 ? tps : undefined;
+	}
+
 	/** Measured TPS/TTFT averages keyed by `provider/id` selector (see AgentStorage.getModelPerf). */
 	setPerfStats(perf: ReadonlyMap<string, ModelBrowserPerf>): void {
 		if (perf !== this.#perf) this.#bumpPickerEpoch();
@@ -1406,6 +1442,7 @@ export class ModelBrowser implements Component {
 						affinity: this.#affinity,
 						sort: this.#sort,
 						grouped: this.#grouped,
+						effectiveTps: item => this.measuredTps(item),
 					},
 				),
 			};
