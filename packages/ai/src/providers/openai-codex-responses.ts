@@ -3902,9 +3902,11 @@ export async function prewarmOpenAICodexResponses(
 		attestation,
 		routedRequest,
 	);
-	// Prewarm is best effort: never replace a request or handshake owned by another caller.
+	// Prewarm is best effort: never replace an active request, connecting handshake,
+	// or open socket with outstanding steering ownership.
 	// Check after attestation's await, immediately before synchronous acquisition starts.
-	if (state.connection?.isBusy()) return;
+	const connection = state.connection;
+	if (connection?.isBusy() || connection?.hasPendingSteering()) return;
 	await logger.time(
 		"prewarmCodex:establishWs",
 		getOrCreateCodexWebSocketConnection,
@@ -3959,6 +3961,7 @@ function getCodexWebSocketSessionState(
 }
 
 function resetCodexWebSocketAppendState(state: CodexWebSocketSessionState): void {
+	state.connection?.clearPendingSteering();
 	state.canAppend = false;
 	state.lastRequest = undefined;
 	state.lastUnhookedRequest = undefined;
@@ -4499,6 +4502,8 @@ class CodexWebSocketConnection {
 	#acceptedSteers = new Set<string>();
 	/** Accepted steering the server later failed to commit to a successor. */
 	#failedSteers = new Set<string>();
+	/** Accepted steering whose automatic successor is still pending consumption. */
+	#pendingSteeringSuccessors?: Set<string>;
 	/** Steering whose automatic successor the active attach request is reading. */
 	#attachSteerIds?: ReadonlySet<string>;
 
@@ -4521,6 +4526,16 @@ class CodexWebSocketConnection {
 	/** True while a handshake or a request stream is in flight on this socket. */
 	isBusy(): boolean {
 		return this.#activeRequest || this.#connectPromise !== undefined;
+	}
+
+	/** True while this open socket owns unacknowledged or queued steering. */
+	hasPendingSteering(): boolean {
+		return this.isOpen() && (this.#steerWaiters.length > 0 || (this.#pendingSteeringSuccessors?.size ?? 0) > 0);
+	}
+
+	/** Retire queued steering ownership without altering historical ids or waiters. */
+	clearPendingSteering(): void {
+		this.#pendingSteeringSuccessors = undefined;
 	}
 
 	/**
@@ -4555,6 +4570,7 @@ class CodexWebSocketConnection {
 	}
 
 	close(reason = "done"): void {
+		this.clearPendingSteering();
 		const socket = this.#socket;
 		this.#socket = null;
 		this.#stopHeartbeat();
@@ -4721,6 +4737,7 @@ class CodexWebSocketConnection {
 			throw new CodexWebSocketTransportError(`request was aborted`, { cause: signal.reason });
 		}
 		this.#activeRequest = true;
+		this.clearPendingSteering();
 		this.#streamObserver = onSseEvent;
 		// Drain any non-error frames left over from a prior request before sending.
 		// An attach reads exactly those frames: the successor the server started
@@ -4977,7 +4994,9 @@ class CodexWebSocketConnection {
 		const previousResponseId = typeof steer?.previous_response_id === "string" ? steer.previous_response_id : "";
 		if (event.type === "response.steer.accepted") {
 			if (!id) return;
+			const newlyAccepted = !this.#acceptedSteers.has(id);
 			this.#acceptedSteers.add(id);
+			if (newlyAccepted) (this.#pendingSteeringSuccessors ??= new Set()).add(id);
 			this.#takeSteerWaiter(previousResponseId)?.resolve({ accepted: true, id });
 			return;
 		}
@@ -4986,6 +5005,7 @@ class CodexWebSocketConnection {
 			const code = typeof error?.code === "string" ? error.code : undefined;
 			const message = typeof error?.message === "string" ? error.message : undefined;
 			if (id && this.#acceptedSteers.has(id)) {
+				this.#pendingSteeringSuccessors?.delete(id);
 				// Accepted input that never reached a successor response.
 				this.#failedSteers.add(id);
 				if (this.#attachSteerIds?.has(id)) {

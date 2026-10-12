@@ -11214,6 +11214,1842 @@ describe("openai-codex streaming", () => {
 		});
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
+	it.each([
+		["service tier", "serviceTier"],
+		["request model", "requestModel"],
+		["bearer", "bearer"],
+		["stale health", "staleHealth"],
+	] as const)("prewarm steering ownership preserves queued successor for %s", async (_label, kind) => {
+		const tempDir = TempDir.createSync(`@pi-codex-prewarm-steering-ownership-${kind}-`);
+		setAgentDir(tempDir.path());
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run while steering ownership is pending");
+		});
+		const createFrames: Array<Record<string, unknown>> = [];
+		const steerFrames: Array<Record<string, unknown>> = [];
+		const sockets: AttachHookWebSocket[] = [];
+		let constructorCount = 0;
+		let sendCount = 0;
+		let createSendCount = 0;
+		let steerSendCount = 0;
+		let closeCount = 0;
+		let hookCalls = 0;
+		const token = createCodexTestToken();
+		const replacementToken = kind === "bearer" ? `${token.slice(0, -3)}ccc` : token;
+		const sessionId = `ws-prewarm-steering-ownership-${kind}`;
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const steering = createOneShotCodexSteering("continue automatically");
+		const priorUsage: CodexTestUsage = {
+			input_tokens: 17,
+			output_tokens: 4,
+			total_tokens: 21,
+			input_tokens_details: { cached_tokens: 3 },
+		};
+		const successorUsage: CodexTestUsage = {
+			input_tokens: 23,
+			output_tokens: 7,
+			total_tokens: 30,
+			input_tokens_details: { cached_tokens: 5 },
+		};
+		const followUpUsage: CodexTestUsage = {
+			input_tokens: 31,
+			output_tokens: 8,
+			total_tokens: 39,
+			input_tokens_details: { cached_tokens: 6 },
+		};
+		const replacementUsage: CodexTestUsage = {
+			input_tokens: 37,
+			output_tokens: 9,
+			total_tokens: 46,
+			input_tokens_details: { cached_tokens: 7 },
+		};
+
+		class AttachHookWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				constructorCount += 1;
+				sockets.push(this);
+				queueMicrotask(() => {
+					this.readyState = MockWebSocket.OPEN;
+					this.emit("open", new Event("open"));
+				});
+			}
+
+			override close(): void {
+				const wasOpenOrConnecting =
+					this.readyState === MockWebSocket.OPEN || this.readyState === MockWebSocket.CONNECTING;
+				if (wasOpenOrConnecting) closeCount += 1;
+				super.close();
+				if (wasOpenOrConnecting) this.emit("close", { code: 1000 } as unknown as Event);
+			}
+
+			override send(data: string): void {
+				const frame = JSON.parse(data) as Record<string, unknown>;
+				sendCount += 1;
+				if (frame.type === "response.steer") {
+					steerSendCount += 1;
+					steerFrames.push(frame);
+					this.sendJson({
+						type: "response.steer.accepted",
+						steer: { id: "steer_pre_warm_owner", previous_response_id: "resp_pre_warm_1" },
+					});
+					this.sendJson({
+						type: "response.incomplete",
+						response: {
+							id: "resp_pre_warm_1",
+							status: "incomplete",
+							incomplete_details: { reason: "steered" },
+							usage: priorUsage,
+						},
+					});
+					this.sendJson({ type: "response.created", response: { id: "resp_pre_warm_2" } });
+					this.sendJson({
+						type: "response.output_item.added",
+						item: {
+							type: "message",
+							id: "msg_pre_warm_2",
+							role: "assistant",
+							status: "in_progress",
+							content: [],
+						},
+					});
+					this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+					this.sendJson({ type: "response.output_text.delta", delta: "Protected successor" });
+					this.sendJson({
+						type: "response.output_item.done",
+						item: {
+							type: "message",
+							id: "msg_pre_warm_2",
+							role: "assistant",
+							status: "completed",
+							content: [{ type: "output_text", text: "Protected successor" }],
+						},
+					});
+					this.sendJson({
+						type: "response.completed",
+						response: { id: "resp_pre_warm_2", status: "completed", usage: successorUsage },
+					});
+					return;
+				}
+
+				createSendCount += 1;
+				createFrames.push(frame);
+				const socketIndex = sockets.indexOf(this);
+				if (socketIndex === 0 && createFrames.length === 1) {
+					this.sendJson({ type: "response.created", response: { id: "resp_pre_warm_1" } });
+					this.sendJson({
+						type: "response.output_item.added",
+						item: {
+							type: "message",
+							id: "msg_pre_warm_1",
+							role: "assistant",
+							status: "in_progress",
+							content: [],
+						},
+					});
+					this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+					this.sendJson({ type: "response.output_text.delta", delta: "Initial" });
+					this.sendJson({
+						type: "response.output_item.done",
+						item: {
+							type: "message",
+							id: "msg_pre_warm_1",
+							role: "assistant",
+							status: "completed",
+							content: [{ type: "output_text", text: "Initial" }],
+						},
+					});
+					return;
+				}
+				if (socketIndex === 0) {
+					this.emitCodexResponse({
+						messageId: "msg_pre_warm_3",
+						responseId: "resp_pre_warm_3",
+						text: "Follow-up",
+						includeCreated: true,
+						usage: followUpUsage,
+						terminalType: "response.completed",
+					});
+					return;
+				}
+				this.emitCodexResponse({
+					messageId: "msg_pre_warm_replacement",
+					responseId: "resp_pre_warm_replacement",
+					text: "Replacement",
+					includeCreated: true,
+					usage: replacementUsage,
+					terminalType: "response.completed",
+				});
+			}
+		}
+		global.WebSocket = AttachHookWebSocket as unknown as typeof WebSocket;
+
+		const ownerModel = buildModel({
+			...createCodexSteeringTestModel("https://chatgpt.com/backend-api"),
+			serviceTiers: ["priority"],
+			...(kind === "requestModel" ? { requestModelId: "gpt-6-sol-owner" } : {}),
+		} as ModelSpec<"openai-codex-responses">);
+		const replacementModel =
+			kind === "requestModel"
+				? buildModel({
+						...createCodexSteeringTestModel("https://chatgpt.com/backend-api"),
+						serviceTiers: ["priority"],
+						requestModelId: "gpt-6-sol-prewarm",
+					} as ModelSpec<"openai-codex-responses">)
+				: ownerModel;
+		const ownerOptions = {
+			apiKey: token,
+			sessionId,
+			providerSessionState,
+			serviceTier: "priority" as const,
+		};
+		const prewarmOptions = {
+			apiKey: replacementToken,
+			sessionId,
+			providerSessionState,
+			...(kind === "serviceTier" ? {} : { serviceTier: "priority" as const }),
+		};
+		const ownerRoute = `model=${ownerModel.requestModelId ?? ownerModel.id};tier=priority`;
+		const replacementRoute = `model=${replacementModel.requestModelId ?? replacementModel.id}${
+			kind === "serviceTier" ? "" : ";tier=priority"
+		}`;
+		const start = Date.now();
+		const clock = kind === "staleHealth" ? vi.spyOn(Date, "now").mockReturnValue(start) : undefined;
+		let clockRestored = false;
+
+		try {
+			const user = { role: "user" as const, content: "Initial", timestamp: Date.now() };
+			const first = await streamOpenAICodexResponses(
+				ownerModel,
+				{ systemPrompt: ["You are a helpful assistant."], messages: [user] },
+				{
+					fetch: fetchMock as FetchImpl,
+					...ownerOptions,
+					liveSteering: steering.source,
+				},
+			).result();
+			expect(steering.settled()).toBe("accepted");
+			expect(first.responseId).toBe("resp_pre_warm_1");
+			expect(JSON.stringify(first.content)).toContain("Initial");
+			expect(sockets).toHaveLength(1);
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.OPEN);
+			expect(sockets[0]?.options?.headers?.["x-codex-routing-hint"]).toBe(ownerRoute);
+			expect(sockets[0]?.options?.headers?.authorization).toBe(`Bearer ${token}`);
+
+			if (kind === "staleHealth") clock?.mockReturnValue(start + 30_001);
+			const constructorCountBeforePrewarm = constructorCount;
+			const sendCountBeforePrewarm = sendCount;
+			const closeCountBeforePrewarm = closeCount;
+			await prewarmOpenAICodexResponses(replacementModel, prewarmOptions);
+
+			expect(constructorCount).toBe(constructorCountBeforePrewarm);
+			expect(sendCount).toBe(sendCountBeforePrewarm);
+			expect(closeCount).toBe(closeCountBeforePrewarm);
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.OPEN);
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(
+				getOpenAICodexTransportDetails(ownerModel, {
+					sessionId,
+					providerSessionState,
+				}).prewarmed,
+			).toBe(false);
+
+			if (clock && !clockRestored) {
+				clock.mockRestore();
+				clockRestored = true;
+			}
+			const statsBeforeAttach = getOpenAICodexWebSocketDebugStats(ownerModel, {
+				sessionId,
+				providerSessionState,
+			});
+			if (!statsBeforeAttach) throw new Error("expected diagnostics before protected steering attach");
+			const statsBeforeAttachSnapshot = structuredClone(statsBeforeAttach);
+			const steeringUser = { role: "user" as const, content: "continue automatically", timestamp: Date.now() };
+			const second = await streamOpenAICodexResponses(
+				ownerModel,
+				{
+					systemPrompt: ["You are a helpful assistant."],
+					messages: [user, first, steeringUser],
+				},
+				{
+					fetch: fetchMock as FetchImpl,
+					...ownerOptions,
+					onPayload: async payload => {
+						hookCalls += 1;
+						return payload;
+					},
+				},
+			).result();
+			expect(second.responseId).toBe("resp_pre_warm_2");
+			const successorText = second.content
+				.filter(
+					(block): block is Extract<(typeof second.content)[number], { type: "text" }> => block.type === "text",
+				)
+				.map(block => block.text)
+				.join("");
+			expect(successorText).toBe("Protected successor");
+			expect(second.usage).toMatchObject({
+				input: 18,
+				output: 7,
+				cacheRead: 5,
+				totalTokens: 30,
+			});
+			expect(hookCalls).toBe(0);
+			expect(steerSendCount).toBe(1);
+			expect(createSendCount).toBe(1);
+			expect(steerFrames).toHaveLength(1);
+			expect(createFrames).toHaveLength(1);
+			expect(sockets).toHaveLength(1);
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.OPEN);
+			const statsAfterAttach = getOpenAICodexWebSocketDebugStats(ownerModel, {
+				sessionId,
+				providerSessionState,
+			});
+			if (!statsAfterAttach) throw new Error("expected diagnostics after protected steering attach");
+			expect({
+				fullContextRequests: statsAfterAttach.fullContextRequests,
+				deltaRequests: statsAfterAttach.deltaRequests,
+				lastInputItems: statsAfterAttach.lastInputItems,
+				lastDeltaInputItems: statsAfterAttach.lastDeltaInputItems,
+				lastPreviousResponseId: statsAfterAttach.lastPreviousResponseId,
+			}).toEqual({
+				fullContextRequests: statsBeforeAttachSnapshot.fullContextRequests,
+				deltaRequests: statsBeforeAttachSnapshot.deltaRequests,
+				lastInputItems: statsBeforeAttachSnapshot.lastInputItems,
+				lastDeltaInputItems: statsBeforeAttachSnapshot.lastDeltaInputItems,
+				lastPreviousResponseId: statsBeforeAttachSnapshot.lastPreviousResponseId,
+			});
+			expect(statsAfterAttach.lastTurn).toBeUndefined();
+			expect(statsBeforeAttachSnapshot.lastTurn).toEqual(statsBeforeAttach.lastTurn);
+
+			const followUpUser = { role: "user" as const, content: "real follow-up", timestamp: Date.now() };
+			const third = await streamOpenAICodexResponses(
+				ownerModel,
+				{
+					systemPrompt: ["You are a helpful assistant."],
+					messages: [user, first, steeringUser, second, followUpUser],
+				},
+				{
+					fetch: fetchMock as FetchImpl,
+					...ownerOptions,
+				},
+			).result();
+			expect(third.responseId).toBe("resp_pre_warm_3");
+			expect(JSON.stringify(third.content)).toContain("Follow-up");
+			expect(createSendCount).toBe(2);
+			expect(createFrames[1]?.previous_response_id).toBe("resp_pre_warm_2");
+			expect(sockets).toHaveLength(1);
+
+			const staleNow = kind === "staleHealth" ? Date.now() + 30_001 : undefined;
+			const replacementClock = staleNow === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(staleNow);
+			const replacementConstructorCount = constructorCount;
+			const replacementSendCount = sendCount;
+			const replacementCloseCount = closeCount;
+			try {
+				await prewarmOpenAICodexResponses(replacementModel, prewarmOptions);
+			} finally {
+				replacementClock?.mockRestore();
+			}
+			expect(constructorCount).toBe(replacementConstructorCount + 1);
+			expect(sendCount).toBe(replacementSendCount);
+			expect(closeCount).toBe(replacementCloseCount + 1);
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.CLOSED);
+			expect(sockets[1]?.readyState).toBe(MockWebSocket.OPEN);
+			expect(sockets[1]?.options?.headers?.["x-codex-routing-hint"]).toBe(replacementRoute);
+			expect(sockets[1]?.options?.headers?.authorization).toBe(`Bearer ${replacementToken}`);
+			expect(
+				getOpenAICodexTransportDetails(replacementModel, {
+					sessionId,
+					providerSessionState,
+				}).prewarmed,
+			).toBe(true);
+
+			const replacementUser = { role: "user" as const, content: "replacement follow-up", timestamp: Date.now() };
+			const fourth = await streamOpenAICodexResponses(
+				replacementModel,
+				{
+					systemPrompt: ["You are a helpful assistant."],
+					messages: [user, first, steeringUser, second, followUpUser, third, replacementUser],
+				},
+				{
+					fetch: fetchMock as FetchImpl,
+					...prewarmOptions,
+				},
+			).result();
+			expect(fourth.responseId).toBe("resp_pre_warm_replacement");
+			expect(JSON.stringify(fourth.content)).toContain("Replacement");
+			expect(createSendCount).toBe(3);
+			expect(createFrames).toHaveLength(3);
+			expect(createFrames[2]?.previous_response_id).toBeUndefined();
+			expect(JSON.stringify(createFrames[2]?.input)).toContain("Initial");
+			expect(JSON.stringify(createFrames[2]?.input)).toContain("Protected successor");
+			expect(JSON.stringify(createFrames[2]?.input)).toContain("Follow-up");
+			expect(JSON.stringify(createFrames[2]?.input)).toContain("replacement follow-up");
+			expect(fetchMock).not.toHaveBeenCalled();
+		} finally {
+			if (clock && !clockRestored) clock.mockRestore();
+			for (const state of providerSessionState.values()) state.close();
+		}
+	});
+	it("prewarm steering ownership protects settlement before accepted publication", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-prewarm-steering-settlement-");
+		setAgentDir(tempDir.path());
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run while settlement owns steering");
+		});
+		const createFrames: Array<Record<string, unknown>> = [];
+		const sockets: SettlementHandoffWebSocket[] = [];
+		const firstWaitEntered = Promise.withResolvers<void>();
+		const releaseSecondWait = Promise.withResolvers<void>();
+		let claimCount = 0;
+		let steeringOutcome: "accepted" | "rejected" | undefined;
+		let sendCount = 0;
+		let closeCount = 0;
+		let hookCalls = 0;
+
+		const steering: LiveSteering = {
+			wait: async signal => {
+				void signal;
+				if (claimCount === 0) return;
+				firstWaitEntered.resolve();
+				await releaseSecondWait.promise;
+			},
+			claim: async () => {
+				if (claimCount > 0) return undefined;
+				claimCount += 1;
+				return {
+					messages: [{ role: "user", content: "settlement steer", timestamp: Date.now() }],
+					accept: () => {
+						steeringOutcome = "accepted";
+					},
+					reject: () => {
+						steeringOutcome = "rejected";
+					},
+				};
+			},
+		};
+
+		class SettlementHandoffWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				sockets.push(this);
+				queueMicrotask(() => {
+					this.readyState = MockWebSocket.OPEN;
+					this.emit("open", new Event("open"));
+				});
+			}
+
+			override close(): void {
+				const wasOpenOrConnecting =
+					this.readyState === MockWebSocket.OPEN || this.readyState === MockWebSocket.CONNECTING;
+				if (wasOpenOrConnecting) closeCount += 1;
+				super.close();
+				if (wasOpenOrConnecting) this.emit("close", { code: 1000 } as unknown as Event);
+			}
+
+			override send(data: string): void {
+				const frame = JSON.parse(data) as Record<string, unknown>;
+				sendCount += 1;
+				if (frame.type === "response.steer") {
+					this.sendJson({
+						type: "response.steer.accepted",
+						steer: { id: "steer_settlement", previous_response_id: "resp_settlement_1" },
+					});
+					void firstWaitEntered.promise.then(() => {
+						this.sendJson({
+							type: "response.incomplete",
+							response: {
+								id: "resp_settlement_1",
+								status: "incomplete",
+								incomplete_details: { reason: "steered" },
+								usage: DEFAULT_USAGE,
+							},
+						});
+						this.sendJson({ type: "response.created", response: { id: "resp_settlement_2" } });
+						this.sendJson({
+							type: "response.output_item.added",
+							item: {
+								type: "message",
+								id: "msg_settlement_2",
+								role: "assistant",
+								status: "in_progress",
+								content: [],
+							},
+						});
+						this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+						this.sendJson({ type: "response.output_text.delta", delta: "Settlement successor" });
+						this.sendJson({
+							type: "response.output_item.done",
+							item: {
+								type: "message",
+								id: "msg_settlement_2",
+								role: "assistant",
+								status: "completed",
+								content: [{ type: "output_text", text: "Settlement successor" }],
+							},
+						});
+						this.sendJson({
+							type: "response.completed",
+							response: { id: "resp_settlement_2", status: "completed", usage: DEFAULT_USAGE },
+						});
+					});
+					return;
+				}
+				createFrames.push(frame);
+				this.sendJson({ type: "response.created", response: { id: "resp_settlement_1" } });
+				this.sendJson({
+					type: "response.output_item.added",
+					item: { type: "message", id: "msg_settlement_1", role: "assistant", status: "in_progress", content: [] },
+				});
+				this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+				this.sendJson({ type: "response.output_text.delta", delta: "Initial" });
+				this.sendJson({
+					type: "response.output_item.done",
+					item: {
+						type: "message",
+						id: "msg_settlement_1",
+						role: "assistant",
+						status: "completed",
+						content: [{ type: "output_text", text: "Initial" }],
+					},
+				});
+			}
+		}
+		global.WebSocket = SettlementHandoffWebSocket as unknown as typeof WebSocket;
+
+		const model = buildModel({
+			...createCodexSteeringTestModel("https://chatgpt.com/backend-api"),
+			serviceTiers: ["priority"],
+		} as ModelSpec<"openai-codex-responses">);
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const token = createCodexTestToken();
+		const sessionId = "ws-prewarm-steering-settlement";
+		const user = { role: "user" as const, content: "Initial", timestamp: Date.now() };
+		let firstSettled = false;
+		const firstResultPromise = streamOpenAICodexResponses(
+			model,
+			{ systemPrompt: ["You are a helpful assistant."], messages: [user] },
+			{
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+				serviceTier: "priority",
+				liveSteering: steering,
+			},
+		).result();
+		void firstResultPromise.then(
+			() => {
+				firstSettled = true;
+			},
+			() => {
+				firstSettled = true;
+			},
+		);
+
+		try {
+			await firstWaitEntered.promise;
+			const providerState = [...providerSessionState.values()].find(
+				state => isRecord(state) && state.webSocketSessions instanceof Map,
+			);
+			if (!providerState) throw new Error("expected Codex provider session state");
+			// The production provider state intentionally keeps websocket sessions internal; narrow this fixture value locally.
+			const codexState = providerState as ProviderSessionState & {
+				webSocketSessions: Map<
+					string,
+					{
+						connection?: { isBusy(): boolean; isOpen(): boolean };
+						acceptedSteering?: unknown;
+					}
+				>;
+			};
+			const sessions = codexState.webSocketSessions;
+			const session = [...sessions.values()][0];
+			const connection = session?.connection;
+			if (!session || !connection) throw new Error("expected the active Codex websocket session");
+
+			for (let attempt = 0; attempt < 100 && connection.isBusy(); attempt += 1) await Promise.resolve();
+			expect(connection.isBusy()).toBe(false);
+			expect(session.acceptedSteering).toBeUndefined();
+			expect(firstSettled).toBe(false);
+
+			const prewarmSocket = sockets[0];
+			if (!prewarmSocket) throw new Error("expected the settlement websocket");
+			const sendCountBeforePrewarm = sendCount;
+			const closeCountBeforePrewarm = closeCount;
+			const prewarmPromise = prewarmOpenAICodexResponses(model, {
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+			});
+			await prewarmPromise;
+			expect(sockets).toHaveLength(1);
+			expect(prewarmSocket.readyState).toBe(MockWebSocket.OPEN);
+			expect(sendCount).toBe(sendCountBeforePrewarm);
+			expect(closeCount).toBe(closeCountBeforePrewarm);
+			expect(createFrames).toHaveLength(1);
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(
+				getOpenAICodexTransportDetails(model, {
+					sessionId,
+					providerSessionState,
+				}).prewarmed,
+			).toBe(false);
+
+			releaseSecondWait.resolve();
+			const first = await firstResultPromise;
+			expect(steeringOutcome).toBe("accepted");
+			expect(first.responseId).toBe("resp_settlement_1");
+
+			const steeringUser = { role: "user" as const, content: "settlement steer", timestamp: Date.now() };
+			const second = await streamOpenAICodexResponses(
+				model,
+				{
+					systemPrompt: ["You are a helpful assistant."],
+					messages: [user, first, steeringUser],
+				},
+				{
+					fetch: fetchMock as FetchImpl,
+					apiKey: token,
+					sessionId,
+					providerSessionState,
+					serviceTier: "priority",
+					onPayload: async payload => {
+						hookCalls += 1;
+						return payload;
+					},
+				},
+			).result();
+			expect(second.responseId).toBe("resp_settlement_2");
+			const successorText = second.content
+				.filter(
+					(block): block is Extract<(typeof second.content)[number], { type: "text" }> => block.type === "text",
+				)
+				.map(block => block.text)
+				.join("");
+			expect(successorText).toBe("Settlement successor");
+			expect(hookCalls).toBe(0);
+			expect(createFrames).toHaveLength(1);
+			expect(sockets).toHaveLength(1);
+			expect(fetchMock).not.toHaveBeenCalled();
+		} finally {
+			releaseSecondWait.resolve();
+			await Promise.allSettled([firstResultPromise]);
+			for (const state of providerSessionState.values()) state.close();
+		}
+	});
+	it("prewarm steering ownership protects a pending acknowledgement", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-prewarm-steering-ack-");
+		setAgentDir(tempDir.path());
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run while steering acknowledgement is pending");
+		});
+		const createFrames: Array<Record<string, unknown>> = [];
+		const sockets: PendingAckHandoffWebSocket[] = [];
+		const steerSent = Promise.withResolvers<void>();
+		const steering = createOneShotCodexSteering("pending acknowledgement steer");
+		let sendCount = 0;
+		let closeCount = 0;
+		let hookCalls = 0;
+
+		class PendingAckHandoffWebSocket extends MockWebSocket {
+			#steerFinished = false;
+
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				sockets.push(this);
+				queueMicrotask(() => {
+					this.readyState = MockWebSocket.OPEN;
+					this.emit("open", new Event("open"));
+				});
+			}
+
+			override close(): void {
+				const wasOpenOrConnecting =
+					this.readyState === MockWebSocket.OPEN || this.readyState === MockWebSocket.CONNECTING;
+				if (wasOpenOrConnecting) closeCount += 1;
+				super.close();
+				if (wasOpenOrConnecting) this.emit("close", { code: 1000 } as unknown as Event);
+			}
+
+			finishSteer(): void {
+				if (this.#steerFinished) return;
+				this.#steerFinished = true;
+				this.sendJson({
+					type: "response.steer.accepted",
+					steer: { id: "steer_pending_ack", previous_response_id: "resp_pending_ack_1" },
+				});
+				this.sendJson({ type: "response.created", response: { id: "resp_pending_ack_2" } });
+				this.sendJson({
+					type: "response.output_item.added",
+					item: {
+						type: "message",
+						id: "msg_pending_ack_2",
+						role: "assistant",
+						status: "in_progress",
+						content: [],
+					},
+				});
+				this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+				this.sendJson({ type: "response.output_text.delta", delta: "Pending ack successor" });
+				this.sendJson({
+					type: "response.output_item.done",
+					item: {
+						type: "message",
+						id: "msg_pending_ack_2",
+						role: "assistant",
+						status: "completed",
+						content: [{ type: "output_text", text: "Pending ack successor" }],
+					},
+				});
+				this.sendJson({
+					type: "response.completed",
+					response: { id: "resp_pending_ack_2", status: "completed", usage: DEFAULT_USAGE },
+				});
+			}
+
+			override send(data: string): void {
+				const frame = JSON.parse(data) as Record<string, unknown>;
+				sendCount += 1;
+				if (frame.type === "response.steer") {
+					steerSent.resolve();
+					this.sendJson({
+						type: "response.incomplete",
+						response: {
+							id: "resp_pending_ack_1",
+							status: "incomplete",
+							incomplete_details: { reason: "steered" },
+							usage: DEFAULT_USAGE,
+						},
+					});
+					return;
+				}
+				createFrames.push(frame);
+				this.sendJson({ type: "response.created", response: { id: "resp_pending_ack_1" } });
+				this.sendJson({
+					type: "response.output_item.added",
+					item: {
+						type: "message",
+						id: "msg_pending_ack_1",
+						role: "assistant",
+						status: "in_progress",
+						content: [],
+					},
+				});
+				this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+				this.sendJson({ type: "response.output_text.delta", delta: "Initial" });
+				this.sendJson({
+					type: "response.output_item.done",
+					item: {
+						type: "message",
+						id: "msg_pending_ack_1",
+						role: "assistant",
+						status: "completed",
+						content: [{ type: "output_text", text: "Initial" }],
+					},
+				});
+			}
+		}
+		global.WebSocket = PendingAckHandoffWebSocket as unknown as typeof WebSocket;
+
+		const model = buildModel({
+			...createCodexSteeringTestModel("https://chatgpt.com/backend-api"),
+			serviceTiers: ["priority"],
+		} as ModelSpec<"openai-codex-responses">);
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const token = createCodexTestToken();
+		const sessionId = "ws-prewarm-steering-ack";
+		const user = { role: "user" as const, content: "Initial", timestamp: Date.now() };
+		let firstSettled = false;
+		let ownerSocket: PendingAckHandoffWebSocket | undefined;
+		const firstResultPromise = streamOpenAICodexResponses(
+			model,
+			{ systemPrompt: ["You are a helpful assistant."], messages: [user] },
+			{
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+				serviceTier: "priority",
+				liveSteering: steering.source,
+			},
+		).result();
+		void firstResultPromise.then(
+			() => {
+				firstSettled = true;
+			},
+			() => {
+				firstSettled = true;
+			},
+		);
+
+		try {
+			await steerSent.promise;
+			ownerSocket = sockets[0];
+			if (!ownerSocket) throw new Error("expected the pending acknowledgement websocket");
+			const providerState = [...providerSessionState.values()].find(
+				state => isRecord(state) && state.webSocketSessions instanceof Map,
+			);
+			if (!providerState) throw new Error("expected Codex provider session state");
+			const codexState = providerState as ProviderSessionState & {
+				webSocketSessions: Map<
+					string,
+					{
+						connection?: { isBusy(): boolean; isOpen(): boolean };
+						acceptedSteering?: unknown;
+					}
+				>;
+			};
+			const session = [...codexState.webSocketSessions.values()][0];
+			const connection = session?.connection;
+			if (!session || !connection) throw new Error("expected the pending acknowledgement connection");
+			for (let attempt = 0; attempt < 100 && connection.isBusy(); attempt += 1) await Promise.resolve();
+			expect(connection.isBusy()).toBe(false);
+			expect(session.acceptedSteering).toBeUndefined();
+			expect(firstSettled).toBe(false);
+
+			const constructorCountBeforePrewarm = sockets.length;
+			const sendCountBeforePrewarm = sendCount;
+			const closeCountBeforePrewarm = closeCount;
+			await prewarmOpenAICodexResponses(model, {
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+			});
+			expect(sockets).toHaveLength(constructorCountBeforePrewarm);
+			expect(sendCount).toBe(sendCountBeforePrewarm);
+			expect(closeCount).toBe(closeCountBeforePrewarm);
+			expect(ownerSocket.readyState).toBe(MockWebSocket.OPEN);
+			expect(createFrames).toHaveLength(1);
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(
+				getOpenAICodexTransportDetails(model, {
+					sessionId,
+					providerSessionState,
+				}).prewarmed,
+			).toBe(false);
+
+			ownerSocket.finishSteer();
+			const first = await firstResultPromise;
+			expect(first.responseId).toBe("resp_pending_ack_1");
+			expect(steering.settled()).toBe("accepted");
+			const steeringUser = {
+				role: "user" as const,
+				content: "pending acknowledgement steer",
+				timestamp: Date.now(),
+			};
+			const second = await streamOpenAICodexResponses(
+				model,
+				{
+					systemPrompt: ["You are a helpful assistant."],
+					messages: [user, first, steeringUser],
+				},
+				{
+					fetch: fetchMock as FetchImpl,
+					apiKey: token,
+					sessionId,
+					providerSessionState,
+					serviceTier: "priority",
+					onPayload: async payload => {
+						hookCalls += 1;
+						return payload;
+					},
+				},
+			).result();
+			expect(second.responseId).toBe("resp_pending_ack_2");
+			const successorText = second.content
+				.filter(
+					(block): block is Extract<(typeof second.content)[number], { type: "text" }> => block.type === "text",
+				)
+				.map(block => block.text)
+				.join("");
+			expect(successorText).toBe("Pending ack successor");
+			expect(hookCalls).toBe(0);
+			expect(createFrames).toHaveLength(1);
+			expect(sockets).toHaveLength(1);
+			expect(fetchMock).not.toHaveBeenCalled();
+		} finally {
+			ownerSocket?.finishSteer();
+			await Promise.allSettled([firstResultPromise]);
+			for (const state of providerSessionState.values()) state.close();
+		}
+	});
+	it("prewarm steering ownership protects the consumed lazy handoff", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-prewarm-steering-consumed-");
+		setAgentDir(tempDir.path());
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run while a consumed successor is held");
+		});
+		const createFrames: Array<Record<string, unknown>> = [];
+		const sockets: ConsumedHandoffWebSocket[] = [];
+		const steering = createOneShotCodexSteering("consumed handoff steer");
+		const attachEntered = Promise.withResolvers<void>();
+		const releaseAttach = Promise.withResolvers<void>();
+		let sendCount = 0;
+		let closeCount = 0;
+		let hookCalls = 0;
+
+		class ConsumedHandoffWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				sockets.push(this);
+				queueMicrotask(() => {
+					this.readyState = MockWebSocket.OPEN;
+					this.emit("open", new Event("open"));
+				});
+			}
+
+			override close(): void {
+				const wasOpenOrConnecting =
+					this.readyState === MockWebSocket.OPEN || this.readyState === MockWebSocket.CONNECTING;
+				if (wasOpenOrConnecting) closeCount += 1;
+				super.close();
+				if (wasOpenOrConnecting) this.emit("close", { code: 1000 } as unknown as Event);
+			}
+
+			override send(data: string): void {
+				const frame = JSON.parse(data) as Record<string, unknown>;
+				sendCount += 1;
+				if (frame.type === "response.steer") {
+					this.sendJson({
+						type: "response.steer.accepted",
+						steer: { id: "steer_consumed", previous_response_id: "resp_consumed_1" },
+					});
+					this.sendJson({
+						type: "response.incomplete",
+						response: {
+							id: "resp_consumed_1",
+							status: "incomplete",
+							incomplete_details: { reason: "steered" },
+							usage: DEFAULT_USAGE,
+						},
+					});
+					this.sendJson({ type: "response.created", response: { id: "resp_consumed_2" } });
+					this.sendJson({
+						type: "response.output_item.added",
+						item: {
+							type: "message",
+							id: "msg_consumed_2",
+							role: "assistant",
+							status: "in_progress",
+							content: [],
+						},
+					});
+					this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+					this.sendJson({ type: "response.output_text.delta", delta: "Consumed successor" });
+					this.sendJson({
+						type: "response.output_item.done",
+						item: {
+							type: "message",
+							id: "msg_consumed_2",
+							role: "assistant",
+							status: "completed",
+							content: [{ type: "output_text", text: "Consumed successor" }],
+						},
+					});
+					this.sendJson({
+						type: "response.completed",
+						response: { id: "resp_consumed_2", status: "completed", usage: DEFAULT_USAGE },
+					});
+					return;
+				}
+				createFrames.push(frame);
+				this.sendJson({ type: "response.created", response: { id: "resp_consumed_1" } });
+				this.sendJson({
+					type: "response.output_item.added",
+					item: { type: "message", id: "msg_consumed_1", role: "assistant", status: "in_progress", content: [] },
+				});
+				this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+				this.sendJson({ type: "response.output_text.delta", delta: "Initial" });
+				this.sendJson({
+					type: "response.output_item.done",
+					item: {
+						type: "message",
+						id: "msg_consumed_1",
+						role: "assistant",
+						status: "completed",
+						content: [{ type: "output_text", text: "Initial" }],
+					},
+				});
+			}
+		}
+		global.WebSocket = ConsumedHandoffWebSocket as unknown as typeof WebSocket;
+
+		const model = buildModel({
+			...createCodexSteeringTestModel("https://chatgpt.com/backend-api"),
+			serviceTiers: ["priority"],
+		} as ModelSpec<"openai-codex-responses">);
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const token = createCodexTestToken();
+		const sessionId = "ws-prewarm-steering-consumed";
+		const user = { role: "user" as const, content: "Initial", timestamp: Date.now() };
+		const first = await streamOpenAICodexResponses(
+			model,
+			{ systemPrompt: ["You are a helpful assistant."], messages: [user] },
+			{
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+				serviceTier: "priority",
+				liveSteering: steering.source,
+			},
+		).result();
+		expect(first.responseId).toBe("resp_consumed_1");
+		expect(steering.settled()).toBe("accepted");
+
+		const providerState = [...providerSessionState.values()].find(
+			state => isRecord(state) && state.webSocketSessions instanceof Map,
+		);
+		if (!providerState) throw new Error("expected Codex provider session state");
+		const codexState = providerState as ProviderSessionState & {
+			webSocketSessions: Map<
+				string,
+				{
+					connection?: {
+						isBusy(): boolean;
+						isOpen(): boolean;
+						streamRequest: (
+							exchange: unknown,
+							timeouts: unknown,
+							signal?: AbortSignal,
+							onSseEvent?: unknown,
+						) => AsyncGenerator<Record<string, unknown>>;
+					};
+					acceptedSteering?: unknown;
+				}
+			>;
+		};
+		const session = [...codexState.webSocketSessions.values()][0];
+		const connection = session?.connection;
+		if (!session || !connection) throw new Error("expected the consumed handoff connection");
+		expect(session.acceptedSteering).toBeDefined();
+
+		const originalStreamRequest = connection.streamRequest.bind(connection) as (
+			exchange: unknown,
+			timeouts: unknown,
+			signal?: AbortSignal,
+			onSseEvent?: unknown,
+		) => AsyncGenerator<Record<string, unknown>>;
+		const wrappedConnection = connection as {
+			streamRequest: (
+				exchange: unknown,
+				timeouts: unknown,
+				signal?: AbortSignal,
+				onSseEvent?: unknown,
+			) => AsyncGenerator<Record<string, unknown>>;
+		};
+		wrappedConnection.streamRequest = (exchange, timeouts, signal, onSseEvent) => {
+			const exchangeRecord = isRecord(exchange) ? exchange : undefined;
+			if (!exchangeRecord || !Array.isArray(exchangeRecord.attachSteerIds)) {
+				return originalStreamRequest(exchange, timeouts, signal, onSseEvent);
+			}
+			return (async function* () {
+				attachEntered.resolve();
+				await releaseAttach.promise;
+				yield* originalStreamRequest(exchange, timeouts, signal, onSseEvent);
+			})();
+		};
+
+		let secondResultPromise: Promise<Awaited<typeof first>> | undefined;
+		try {
+			const steeringUser = { role: "user" as const, content: "consumed handoff steer", timestamp: Date.now() };
+			secondResultPromise = streamOpenAICodexResponses(
+				model,
+				{
+					systemPrompt: ["You are a helpful assistant."],
+					messages: [user, first, steeringUser],
+				},
+				{
+					fetch: fetchMock as FetchImpl,
+					apiKey: token,
+					sessionId,
+					providerSessionState,
+					serviceTier: "priority",
+					onPayload: async payload => {
+						hookCalls += 1;
+						return payload;
+					},
+				},
+			).result();
+			await attachEntered.promise;
+			expect(session.acceptedSteering).toBeUndefined();
+			expect(connection.isBusy()).toBe(false);
+			const socketCountBeforePrewarm = sockets.length;
+			const sendCountBeforePrewarm = sendCount;
+			const closeCountBeforePrewarm = closeCount;
+			await prewarmOpenAICodexResponses(model, {
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+			});
+			expect(sockets).toHaveLength(socketCountBeforePrewarm);
+			expect(sendCount).toBe(sendCountBeforePrewarm);
+			expect(closeCount).toBe(closeCountBeforePrewarm);
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.OPEN);
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(
+				getOpenAICodexTransportDetails(model, {
+					sessionId,
+					providerSessionState,
+				}).prewarmed,
+			).toBe(false);
+			releaseAttach.resolve();
+			const second = await secondResultPromise;
+			expect(second.responseId).toBe("resp_consumed_2");
+			const successorText = second.content
+				.filter(
+					(block): block is Extract<(typeof second.content)[number], { type: "text" }> => block.type === "text",
+				)
+				.map(block => block.text)
+				.join("");
+			expect(successorText).toBe("Consumed successor");
+			expect(hookCalls).toBe(0);
+			expect(createFrames).toHaveLength(1);
+			expect(sockets).toHaveLength(1);
+		} finally {
+			releaseAttach.resolve();
+			if (secondResultPromise) await Promise.allSettled([secondResultPromise]);
+			wrappedConnection.streamRequest = originalStreamRequest;
+			for (const state of providerSessionState.values()) state.close();
+		}
+	});
+	it.each([
+		["duplicate acknowledgement", "duplicateAck"],
+		["compaction reset", "compactionReset"],
+		["owner close", "closeOwner"],
+		["session release", "releaseSession"],
+	] as const)("prewarm steering ownership retires %s", async (_label, kind) => {
+		const tempDir = TempDir.createSync(`@pi-codex-prewarm-steering-retire-${kind}-`);
+		setAgentDir(tempDir.path());
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run during steering retirement");
+		});
+		const createFrames: Array<Record<string, unknown>> = [];
+		const sockets: RetiredSteeringWebSocket[] = [];
+		const steering = createOneShotCodexSteering("retired steering");
+		let sendCount = 0;
+		let closeCount = 0;
+
+		class RetiredSteeringWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				sockets.push(this);
+				queueMicrotask(() => {
+					this.readyState = MockWebSocket.OPEN;
+					this.emit("open", new Event("open"));
+				});
+			}
+
+			override close(): void {
+				const wasOpenOrConnecting =
+					this.readyState === MockWebSocket.OPEN || this.readyState === MockWebSocket.CONNECTING;
+				if (wasOpenOrConnecting) closeCount += 1;
+				super.close();
+				if (wasOpenOrConnecting) this.emit("close", { code: 1000 } as unknown as Event);
+			}
+
+			replayConsumedSteer(): void {
+				this.sendJson({
+					type: "response.steer.accepted",
+					steer: { id: "steer_retired", previous_response_id: "resp_retired_1" },
+				});
+			}
+
+			override send(data: string): void {
+				const frame = JSON.parse(data) as Record<string, unknown>;
+				sendCount += 1;
+				if (frame.type === "response.steer") {
+					this.sendJson({
+						type: "response.steer.accepted",
+						steer: { id: "steer_retired", previous_response_id: "resp_retired_1" },
+					});
+					this.sendJson({
+						type: "response.incomplete",
+						response: {
+							id: "resp_retired_1",
+							status: "incomplete",
+							incomplete_details: { reason: "steered" },
+							usage: DEFAULT_USAGE,
+						},
+					});
+					this.sendJson({ type: "response.created", response: { id: "resp_retired_2" } });
+					this.sendJson({
+						type: "response.output_item.added",
+						item: { type: "message", id: "msg_retired_2", role: "assistant", status: "in_progress", content: [] },
+					});
+					this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+					this.sendJson({ type: "response.output_text.delta", delta: "Retired successor" });
+					this.sendJson({
+						type: "response.output_item.done",
+						item: {
+							type: "message",
+							id: "msg_retired_2",
+							role: "assistant",
+							status: "completed",
+							content: [{ type: "output_text", text: "Retired successor" }],
+						},
+					});
+					this.sendJson({
+						type: "response.completed",
+						response: { id: "resp_retired_2", status: "completed", usage: DEFAULT_USAGE },
+					});
+					return;
+				}
+				createFrames.push(frame);
+				if (sockets.indexOf(this) === 0) {
+					this.sendJson({ type: "response.created", response: { id: "resp_retired_1" } });
+					this.sendJson({
+						type: "response.output_item.added",
+						item: { type: "message", id: "msg_retired_1", role: "assistant", status: "in_progress", content: [] },
+					});
+					this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+					this.sendJson({ type: "response.output_text.delta", delta: "Initial" });
+					this.sendJson({
+						type: "response.output_item.done",
+						item: {
+							type: "message",
+							id: "msg_retired_1",
+							role: "assistant",
+							status: "completed",
+							content: [{ type: "output_text", text: "Initial" }],
+						},
+					});
+					return;
+				}
+				this.emitCodexResponse({
+					messageId: "msg_retired_replacement",
+					responseId: "resp_retired_replacement",
+					text: "Retired replacement",
+					includeCreated: true,
+					terminalType: "response.completed",
+				});
+			}
+		}
+		global.WebSocket = RetiredSteeringWebSocket as unknown as typeof WebSocket;
+
+		const model = buildModel({
+			...createCodexSteeringTestModel("https://chatgpt.com/backend-api"),
+			serviceTiers: ["priority"],
+		} as ModelSpec<"openai-codex-responses">);
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const token = createCodexTestToken();
+		const sessionId = `ws-prewarm-steering-retire-${kind}`;
+		const user = { role: "user" as const, content: "Initial", timestamp: Date.now() };
+		const ownerOptions = {
+			fetch: fetchMock as FetchImpl,
+			apiKey: token,
+			sessionId,
+			providerSessionState,
+			serviceTier: "priority" as const,
+		};
+		const replacementOptions = {
+			fetch: fetchMock as FetchImpl,
+			apiKey: token,
+			sessionId,
+			providerSessionState,
+		};
+		const first = await streamOpenAICodexResponses(
+			model,
+			{ systemPrompt: ["You are a helpful assistant."], messages: [user] },
+			{ ...ownerOptions, liveSteering: steering.source },
+		).result();
+		expect(first.responseId).toBe("resp_retired_1");
+		expect(steering.settled()).toBe("accepted");
+		const steeringUser = { role: "user" as const, content: "retired steering", timestamp: Date.now() };
+
+		const providerState = [...providerSessionState.values()].find(
+			state => isRecord(state) && state.webSocketSessions instanceof Map,
+		);
+		if (!providerState) throw new Error("expected Codex provider session state");
+		const codexState = providerState as ProviderSessionState & {
+			webSocketSessions: Map<
+				string,
+				{
+					connection?: {
+						isBusy(): boolean;
+						isOpen(): boolean;
+						close(reason?: string): void;
+					};
+					acceptedSteering?: unknown;
+				}
+			>;
+		};
+		const session = [...codexState.webSocketSessions.values()][0];
+		const connection = session?.connection;
+		if (!session || !connection) throw new Error("expected the retired steering connection");
+
+		let attachedResponse: typeof first | undefined;
+		if (kind === "duplicateAck") {
+			const attached = await streamOpenAICodexResponses(
+				model,
+				{
+					systemPrompt: ["You are a helpful assistant."],
+					messages: [user, first, steeringUser],
+				},
+				ownerOptions,
+			).result();
+			attachedResponse = attached;
+			expect(attached.responseId).toBe("resp_retired_2");
+			const attachedText = attached.content
+				.filter(
+					(block): block is Extract<(typeof attached.content)[number], { type: "text" }> => block.type === "text",
+				)
+				.map(block => block.text)
+				.join("");
+			expect(attachedText).toBe("Retired successor");
+			sockets[0]?.replayConsumedSteer();
+		} else if (kind === "compactionReset") {
+			resetOpenAICodexHistoryAfterCompaction({
+				providerSessionState,
+				sessionId,
+				compaction: {
+					operationId: "prewarm-steering-retire-reset",
+					trigger: "auto",
+					reason: "context_limit",
+					phase: "mid_turn",
+					strategy: "memento",
+				},
+			});
+			expect(session.acceptedSteering).toBeDefined();
+		} else if (kind === "closeOwner") {
+			connection.close("fixture-owner-close");
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.CLOSED);
+		} else {
+			providerState.releaseSession?.(sessionId);
+			expect(codexState.webSocketSessions.size).toBe(0);
+		}
+
+		const constructorCountBeforePrewarm = sockets.length;
+		const sendCountBeforePrewarm = sendCount;
+		const closeCountBeforePrewarm = closeCount;
+		await prewarmOpenAICodexResponses(model, {
+			apiKey: token,
+			sessionId,
+			providerSessionState,
+		});
+		expect(sockets).toHaveLength(constructorCountBeforePrewarm + 1);
+		expect(sendCount).toBe(sendCountBeforePrewarm);
+		expect(closeCount).toBe(
+			closeCountBeforePrewarm + (kind === "duplicateAck" || kind === "compactionReset" ? 1 : 0),
+		);
+		expect(sockets[0]?.readyState).toBe(MockWebSocket.CLOSED);
+		expect(sockets[1]?.readyState).toBe(MockWebSocket.OPEN);
+		expect(
+			getOpenAICodexTransportDetails(model, {
+				sessionId,
+				providerSessionState,
+			}).prewarmed,
+		).toBe(true);
+
+		const replacementUser = { role: "user" as const, content: "replacement request", timestamp: Date.now() };
+		const replacementMessages =
+			attachedResponse === undefined
+				? [user, first, steeringUser, replacementUser]
+				: [user, first, steeringUser, attachedResponse, replacementUser];
+		const replacement = await streamOpenAICodexResponses(
+			model,
+			{
+				systemPrompt: ["You are a helpful assistant."],
+				messages: replacementMessages,
+			},
+			replacementOptions,
+		).result();
+		expect(replacement.responseId).toBe("resp_retired_replacement");
+		const replacementText = replacement.content
+			.filter(
+				(block): block is Extract<(typeof replacement.content)[number], { type: "text" }> => block.type === "text",
+			)
+			.map(block => block.text)
+			.join("");
+		expect(replacementText).toBe("Retired replacement");
+		expect(createFrames).toHaveLength(2);
+		expect(createFrames[1]?.previous_response_id).toBeUndefined();
+		expect(JSON.stringify(createFrames[1]?.input)).toContain("Initial");
+		expect(JSON.stringify(createFrames[1]?.input)).toContain("replacement request");
+		if (kind === "duplicateAck") {
+			expect(JSON.stringify(createFrames[1]?.input)).toContain("Retired successor");
+		} else {
+			expect(JSON.stringify(createFrames[1]?.input)).not.toContain("Retired successor");
+		}
+		expect(fetchMock).not.toHaveBeenCalled();
+		for (const state of providerSessionState.values()) state.close();
+	});
+	it.each([
+		["surviving accepted ID", "survivor"],
+		["all accepted IDs failed", "allFailed"],
+	] as const)("prewarm steering ownership handles multiple IDs after %s", async (_label, failureMode) => {
+		const tempDir = TempDir.createSync(`@pi-codex-prewarm-steering-multi-${failureMode}-`);
+		setAgentDir(tempDir.path());
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run during multi-steer ownership");
+		});
+		const createFrames: Array<Record<string, unknown>> = [];
+		const steerFrames: Array<Record<string, unknown>> = [];
+		const sockets: MultiSteerWebSocket[] = [];
+		let sendCount = 0;
+		let closeCount = 0;
+		let claimIndex = 0;
+		const steering: LiveSteering = {
+			wait: async signal => {
+				if (claimIndex < 2) return;
+				if (signal.aborted) return;
+				const { promise, resolve } = Promise.withResolvers<void>();
+				signal.addEventListener("abort", () => resolve(), { once: true });
+				await promise;
+			},
+			claim: async () => {
+				if (claimIndex >= 2) return undefined;
+				const index = claimIndex;
+				claimIndex += 1;
+				const text = index === 0 ? "failed steering" : "surviving steering";
+				return {
+					messages: [{ role: "user", content: text, timestamp: Date.now() }],
+					accept: () => {},
+					reject: () => {},
+				};
+			},
+		};
+
+		class MultiSteerWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				sockets.push(this);
+				queueMicrotask(() => {
+					this.readyState = MockWebSocket.OPEN;
+					this.emit("open", new Event("open"));
+				});
+			}
+
+			override close(): void {
+				const wasOpenOrConnecting =
+					this.readyState === MockWebSocket.OPEN || this.readyState === MockWebSocket.CONNECTING;
+				if (wasOpenOrConnecting) closeCount += 1;
+				super.close();
+				if (wasOpenOrConnecting) this.emit("close", { code: 1000 } as unknown as Event);
+			}
+
+			override send(data: string): void {
+				const frame = JSON.parse(data) as Record<string, unknown>;
+				sendCount += 1;
+				if (frame.type === "response.steer") {
+					steerFrames.push(frame);
+					const steerNumber = steerFrames.length;
+					if (steerNumber === 1) {
+						this.sendJson({
+							type: "response.steer.accepted",
+							steer: { id: "steer_multi_1", previous_response_id: "resp_multi_1" },
+						});
+						return;
+					}
+					this.sendJson({
+						type: "response.steer.accepted",
+						steer: { id: "steer_multi_2", previous_response_id: "resp_multi_1" },
+					});
+					this.sendJson({
+						type: "response.steer.failed",
+						steer: { id: "steer_multi_1", previous_response_id: "resp_multi_1" },
+						error: { code: "failed_one", message: "first steering failed" },
+					});
+					if (failureMode === "allFailed") {
+						this.sendJson({
+							type: "response.steer.failed",
+							steer: { id: "steer_multi_2", previous_response_id: "resp_multi_1" },
+							error: { code: "failed_two", message: "second steering failed" },
+						});
+					}
+					this.sendJson({
+						type: "response.incomplete",
+						response: {
+							id: "resp_multi_1",
+							status: "incomplete",
+							incomplete_details: { reason: "steered" },
+							usage: DEFAULT_USAGE,
+						},
+					});
+					if (failureMode === "survivor") {
+						this.sendJson({ type: "response.created", response: { id: "resp_multi_survivor" } });
+						this.sendJson({
+							type: "response.output_item.added",
+							item: {
+								type: "message",
+								id: "msg_multi_survivor",
+								role: "assistant",
+								status: "in_progress",
+								content: [],
+							},
+						});
+						this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+						this.sendJson({ type: "response.output_text.delta", delta: "Surviving successor" });
+						this.sendJson({
+							type: "response.output_item.done",
+							item: {
+								type: "message",
+								id: "msg_multi_survivor",
+								role: "assistant",
+								status: "completed",
+								content: [{ type: "output_text", text: "Surviving successor" }],
+							},
+						});
+						this.sendJson({
+							type: "response.completed",
+							response: { id: "resp_multi_survivor", status: "completed", usage: DEFAULT_USAGE },
+						});
+					}
+					return;
+				}
+				createFrames.push(frame);
+				if (sockets.indexOf(this) === 0) {
+					this.sendJson({ type: "response.created", response: { id: "resp_multi_1" } });
+					this.sendJson({
+						type: "response.output_item.added",
+						item: { type: "message", id: "msg_multi_1", role: "assistant", status: "in_progress", content: [] },
+					});
+					this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+					this.sendJson({ type: "response.output_text.delta", delta: "Initial" });
+					this.sendJson({
+						type: "response.output_item.done",
+						item: {
+							type: "message",
+							id: "msg_multi_1",
+							role: "assistant",
+							status: "completed",
+							content: [{ type: "output_text", text: "Initial" }],
+						},
+					});
+					return;
+				}
+				this.emitCodexResponse({
+					messageId: "msg_multi_recovery",
+					responseId: "resp_multi_recovery",
+					text: "Full recovery",
+					includeCreated: true,
+					terminalType: "response.completed",
+				});
+			}
+		}
+		global.WebSocket = MultiSteerWebSocket as unknown as typeof WebSocket;
+
+		const model = buildModel({
+			...createCodexSteeringTestModel("https://chatgpt.com/backend-api"),
+			serviceTiers: ["priority"],
+		} as ModelSpec<"openai-codex-responses">);
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const token = createCodexTestToken();
+		const sessionId = `ws-prewarm-steering-multi-${failureMode}`;
+		const user = { role: "user" as const, content: "Initial", timestamp: Date.now() };
+		const first = await streamOpenAICodexResponses(
+			model,
+			{ systemPrompt: ["You are a helpful assistant."], messages: [user] },
+			{
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+				serviceTier: "priority",
+				liveSteering: steering,
+			},
+		).result();
+		expect(first.responseId).toBe("resp_multi_1");
+		expect(steerFrames).toHaveLength(2);
+		const failedSteeringUser = { role: "user" as const, content: "failed steering", timestamp: Date.now() };
+		const survivingSteeringUser = { role: "user" as const, content: "surviving steering", timestamp: Date.now() };
+		const socketCountBeforePrewarm = sockets.length;
+		const sendCountBeforePrewarm = sendCount;
+		const closeCountBeforePrewarm = closeCount;
+		const prewarmPromise = prewarmOpenAICodexResponses(model, {
+			apiKey: token,
+			sessionId,
+			providerSessionState,
+		});
+		await prewarmPromise;
+
+		if (failureMode === "survivor") {
+			expect(sockets).toHaveLength(socketCountBeforePrewarm);
+			expect(sendCount).toBe(sendCountBeforePrewarm);
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.OPEN);
+			expect(closeCount).toBe(closeCountBeforePrewarm);
+			const second = await streamOpenAICodexResponses(
+				model,
+				{
+					systemPrompt: ["You are a helpful assistant."],
+					messages: [user, first, survivingSteeringUser],
+				},
+				{
+					fetch: fetchMock as FetchImpl,
+					apiKey: token,
+					sessionId,
+					providerSessionState,
+					serviceTier: "priority",
+				},
+			).result();
+			expect(second.responseId).toBe("resp_multi_survivor");
+			const successorText = second.content
+				.filter(
+					(block): block is Extract<(typeof second.content)[number], { type: "text" }> => block.type === "text",
+				)
+				.map(block => block.text)
+				.join("");
+			expect(successorText).toBe("Surviving successor");
+			expect(createFrames).toHaveLength(1);
+			expect(sockets).toHaveLength(1);
+		} else {
+			expect(sockets).toHaveLength(socketCountBeforePrewarm + 1);
+			expect(sendCount).toBe(sendCountBeforePrewarm);
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.CLOSED);
+			expect(sockets[1]?.readyState).toBe(MockWebSocket.OPEN);
+			expect(closeCount).toBe(closeCountBeforePrewarm + 1);
+			const recoveryUser = { role: "user" as const, content: "full recovery", timestamp: Date.now() };
+			const recovery = await streamOpenAICodexResponses(
+				model,
+				{
+					systemPrompt: ["You are a helpful assistant."],
+					messages: [user, first, failedSteeringUser, survivingSteeringUser, recoveryUser],
+				},
+				{
+					fetch: fetchMock as FetchImpl,
+					apiKey: token,
+					sessionId,
+					providerSessionState,
+				},
+			).result();
+			expect(recovery.responseId).toBe("resp_multi_recovery");
+			const recoveryText = recovery.content
+				.filter(
+					(block): block is Extract<(typeof recovery.content)[number], { type: "text" }> => block.type === "text",
+				)
+				.map(block => block.text)
+				.join("");
+			expect(recoveryText).toBe("Full recovery");
+			expect(createFrames).toHaveLength(2);
+			expect(createFrames[1]?.previous_response_id).toBeUndefined();
+			expect(JSON.stringify(createFrames[1]?.input)).toContain("failed steering");
+			expect(JSON.stringify(createFrames[1]?.input)).toContain("surviving steering");
+			expect(JSON.stringify(createFrames[1]?.input)).toContain("full recovery");
+		}
+		for (const state of providerSessionState.values()) state.close();
+	});
+	it("prewarm steering ownership preserves nested steering accepted during attach", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-prewarm-steering-nested-");
+		setAgentDir(tempDir.path());
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run while nested steering owns the socket");
+		});
+		const createFrames: Array<Record<string, unknown>> = [];
+		const steerFrames: Array<Record<string, unknown>> = [];
+		const sockets: NestedSteeringWebSocket[] = [];
+		const initialSteering = createOneShotCodexSteering("initial steering");
+		const nestedSteering = createOneShotCodexSteering("nested steering");
+		let sendCount = 0;
+		let closeCount = 0;
+		let hookCalls = 0;
+
+		class NestedSteeringWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				sockets.push(this);
+				queueMicrotask(() => {
+					this.readyState = MockWebSocket.OPEN;
+					this.emit("open", new Event("open"));
+				});
+			}
+
+			override close(): void {
+				const wasOpenOrConnecting =
+					this.readyState === MockWebSocket.OPEN || this.readyState === MockWebSocket.CONNECTING;
+				if (wasOpenOrConnecting) closeCount += 1;
+				super.close();
+				if (wasOpenOrConnecting) this.emit("close", { code: 1000 } as unknown as Event);
+			}
+
+			override send(data: string): void {
+				const frame = JSON.parse(data) as Record<string, unknown>;
+				sendCount += 1;
+				if (frame.type === "response.steer") {
+					steerFrames.push(frame);
+					if (steerFrames.length === 1) {
+						this.sendJson({
+							type: "response.steer.accepted",
+							steer: { id: "steer_nested_1", previous_response_id: "resp_nested_1" },
+						});
+						this.sendJson({
+							type: "response.incomplete",
+							response: {
+								id: "resp_nested_1",
+								status: "incomplete",
+								incomplete_details: { reason: "steered" },
+								usage: DEFAULT_USAGE,
+							},
+						});
+						this.sendJson({ type: "response.created", response: { id: "resp_nested_2" } });
+						return;
+					}
+					this.sendJson({
+						type: "response.steer.accepted",
+						steer: { id: "steer_nested_2", previous_response_id: "resp_nested_2" },
+					});
+					this.sendJson({
+						type: "response.output_item.added",
+						item: { type: "message", id: "msg_nested_2", role: "assistant", status: "in_progress", content: [] },
+					});
+					this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+					this.sendJson({ type: "response.output_text.delta", delta: "Nested attached" });
+					this.sendJson({
+						type: "response.output_item.done",
+						item: {
+							type: "message",
+							id: "msg_nested_2",
+							role: "assistant",
+							status: "completed",
+							content: [{ type: "output_text", text: "Nested attached" }],
+						},
+					});
+					this.sendJson({
+						type: "response.completed",
+						response: { id: "resp_nested_2", status: "completed", usage: DEFAULT_USAGE },
+					});
+					this.sendJson({ type: "response.created", response: { id: "resp_nested_3" } });
+					this.sendJson({
+						type: "response.output_item.added",
+						item: { type: "message", id: "msg_nested_3", role: "assistant", status: "in_progress", content: [] },
+					});
+					this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+					this.sendJson({ type: "response.output_text.delta", delta: "Nested queued successor" });
+					this.sendJson({
+						type: "response.output_item.done",
+						item: {
+							type: "message",
+							id: "msg_nested_3",
+							role: "assistant",
+							status: "completed",
+							content: [{ type: "output_text", text: "Nested queued successor" }],
+						},
+					});
+					this.sendJson({
+						type: "response.completed",
+						response: { id: "resp_nested_3", status: "completed", usage: DEFAULT_USAGE },
+					});
+					return;
+				}
+				createFrames.push(frame);
+				this.sendJson({ type: "response.created", response: { id: "resp_nested_1" } });
+				this.sendJson({
+					type: "response.output_item.added",
+					item: { type: "message", id: "msg_nested_1", role: "assistant", status: "in_progress", content: [] },
+				});
+				this.sendJson({ type: "response.content_part.added", part: { type: "output_text", text: "" } });
+				this.sendJson({ type: "response.output_text.delta", delta: "Initial" });
+				this.sendJson({
+					type: "response.output_item.done",
+					item: {
+						type: "message",
+						id: "msg_nested_1",
+						role: "assistant",
+						status: "completed",
+						content: [{ type: "output_text", text: "Initial" }],
+					},
+				});
+			}
+		}
+		global.WebSocket = NestedSteeringWebSocket as unknown as typeof WebSocket;
+
+		const model = buildModel({
+			...createCodexSteeringTestModel("https://chatgpt.com/backend-api"),
+			serviceTiers: ["priority"],
+		} as ModelSpec<"openai-codex-responses">);
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const token = createCodexTestToken();
+		const sessionId = "ws-prewarm-steering-nested";
+		const user = { role: "user" as const, content: "Initial", timestamp: Date.now() };
+		const first = await streamOpenAICodexResponses(
+			model,
+			{ systemPrompt: ["You are a helpful assistant."], messages: [user] },
+			{
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+				serviceTier: "priority",
+				liveSteering: initialSteering.source,
+			},
+		).result();
+		expect(first.responseId).toBe("resp_nested_1");
+		expect(initialSteering.settled()).toBe("accepted");
+		const initialSteeringUser = { role: "user" as const, content: "initial steering", timestamp: Date.now() };
+		const nestedSteeringUser = { role: "user" as const, content: "nested steering", timestamp: Date.now() };
+		const second = await streamOpenAICodexResponses(
+			model,
+			{
+				systemPrompt: ["You are a helpful assistant."],
+				messages: [user, first, initialSteeringUser],
+			},
+			{
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+				serviceTier: "priority",
+				liveSteering: nestedSteering.source,
+				onPayload: async payload => {
+					hookCalls += 1;
+					return payload;
+				},
+			},
+		).result();
+		expect(second.responseId).toBe("resp_nested_2");
+		expect(nestedSteering.settled()).toBe("accepted");
+		const attachedText = second.content
+			.filter((block): block is Extract<(typeof second.content)[number], { type: "text" }> => block.type === "text")
+			.map(block => block.text)
+			.join("");
+		expect(attachedText).toBe("Nested attached");
+		expect(hookCalls).toBe(0);
+		expect(steerFrames).toHaveLength(2);
+		expect(createFrames).toHaveLength(1);
+		expect(sockets).toHaveLength(1);
+
+		const closeCountBeforePrewarm = closeCount;
+		await prewarmOpenAICodexResponses(model, {
+			apiKey: token,
+			sessionId,
+			providerSessionState,
+		});
+		expect(closeCount).toBe(closeCountBeforePrewarm);
+		expect(sockets).toHaveLength(1);
+		expect(sockets[0]?.readyState).toBe(MockWebSocket.OPEN);
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(
+			getOpenAICodexTransportDetails(model, {
+				sessionId,
+				providerSessionState,
+			}).prewarmed,
+		).toBe(false);
+
+		const third = await streamOpenAICodexResponses(
+			model,
+			{
+				systemPrompt: ["You are a helpful assistant."],
+				messages: [user, first, initialSteeringUser, second, nestedSteeringUser],
+			},
+			{
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId,
+				providerSessionState,
+				serviceTier: "priority",
+			},
+		).result();
+		expect(third.responseId).toBe("resp_nested_3");
+		const queuedText = third.content
+			.filter((block): block is Extract<(typeof third.content)[number], { type: "text" }> => block.type === "text")
+			.map(block => block.text)
+			.join("");
+		expect(queuedText).toBe("Nested queued successor");
+		expect(createFrames).toHaveLength(1);
+		expect(sockets).toHaveLength(1);
+		expect(fetchMock).not.toHaveBeenCalled();
+		for (const state of providerSessionState.values()) state.close();
+	});
 
 	it("recovers a lazy steering attach reset before consumption as a full create", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-steering-lazy-reset-");
