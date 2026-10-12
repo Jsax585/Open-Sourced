@@ -5,6 +5,10 @@
 ### Added
 
 - Added Vercel AI Gateway `type: "evaluation"` discovery as `api: typesafe` judge models with a KDL-driven `judgment` contract ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
+### Removed
+
+- Removed the Codex `toolMode` model field (`code_mode_only`); Codex discovery no longer maps `tool_mode`
+
 ## [18.10.3] - 2026-10-12
 
 ### Breaking Changes
