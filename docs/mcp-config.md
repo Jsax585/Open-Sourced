@@ -133,7 +133,7 @@ Three deadlines guard different parts of the MCP lifecycle:
 }
 ```
 
-Each phase resolves, highest precedence first: `OMP_MCP_TIMEOUT_MS` (every phase, every server), the server's `timeout` (a number, or that phase's key), the `mcp.timeout.*Ms` setting, then 30 seconds. Values must be non-negative integers; `0` disables that deadline. An invalid value is logged with the offending key and ignored, and unknown keys inside a `timeout` object are logged and ignored, so one typo never changes the other phases.
+Each phase resolves, highest precedence first: `OMP_MCP_TIMEOUT_MS` (every phase, every server), the server's `timeout` (a number, or that phase's key), the `mcp.timeout.*Ms` setting, then 30 seconds. Values must be non-negative integers of at most 2147483647 milliseconds (about 24.8 days, the largest delay a timer can hold); `0` disables that deadline. An invalid value is logged with the offending key and ignored, and unknown keys inside a `timeout` object are logged and ignored, so one typo never changes the other phases.
 
 A timeout error names the phase and method that expired, for example `Request timeout after 60ms (catalog timeout, tools/list)`, so you know which key to raise. Closing an HTTP session (the `DELETE` sent on disconnect) uses the `connect` deadline, so a very long `execution` deadline cannot stall shutdown. Set `OMP_MCP_TIMEOUT_MS=0` to disable every client-side deadline, or to a positive millisecond value such as `120000`; invalid values are logged and ignored.
 

@@ -56,7 +56,7 @@ export function parseMCPTimeoutConfig(value: unknown, label: string): MCPTimeout
 		const candidate = typeof raw === "string" && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : raw;
 		return isValidTimeoutMs(candidate) ? candidate : undefined;
 	};
-	const expected = "expected a non-negative integer number of milliseconds (0 disables)";
+	const expected = `expected a non-negative integer number of milliseconds, at most ${MAX_TIMER_DELAY_MS} (0 disables)`;
 	if (typeof value !== "object" || Array.isArray(value)) {
 		const parsed = coerce(value);
 		if (parsed === undefined)
