@@ -407,10 +407,6 @@ function detectOpenAICompat(
 	const isQwen = facts.is("qwen");
 	const isDeepseekFamily = modelMatchesHost(hostModel, "deepseekFamily") || facts.is("deepseek");
 	const supportsZaiReasoningEffort = (d.isZai || d.isZhipu) && facts.is("glm") && facts.revGte("5.2");
-	const isFriendli = modelMatchesHost(hostModel, "friendli");
-	// A declared ladder is the authority for otherwise unknown Friendli models;
-	// known identity fallbacks are selected by the KDL deployment contract.
-	const friendliHasEffortSurface = isFriendli && reasoningCapable && (spec.thinking?.efforts?.length ?? 0) > 0;
 
 	const isNonStandard =
 		isCerebras ||
@@ -506,9 +502,7 @@ function detectOpenAICompat(
 		supportsStore: !isNonStandard,
 		supportsDeveloperRole: isOpenAIHost || isAzureHost,
 		supportsMultipleSystemMessages: supportsMultipleSystemMessagesDefault,
-		supportsReasoningEffort: isFriendli
-			? friendliHasEffortSurface
-			: !isGrok && !d.isXiaomiMimo && (!(d.isZai || d.isZhipu) || supportsZaiReasoningEffort),
+		supportsReasoningEffort: !isGrok && !d.isXiaomiMimo && (!(d.isZai || d.isZhipu) || supportsZaiReasoningEffort),
 		trustExplicitThinkingOnly: undefined,
 		// API-conditional: this completions-only Copilot exclusion cannot be a
 		// provider rule without changing Copilot Responses rows.
@@ -672,6 +666,14 @@ function fixupOpenAICompat(
 	if (whenThinkingPolicy) {
 		const variant: ResolvedOpenAICompat = { ...compat, whenThinking: undefined };
 		applyCompatOverrides(variant, whenThinkingPolicy);
+		// An enabled capability view cannot invent an effort dial explicitly removed by KDL.
+		if (
+			!spec.thinking?.efforts?.length &&
+			Array.isArray(axes.thinking.efforts) &&
+			axes.thinking.efforts.length === 0
+		) {
+			variant.supportsReasoningEffort = false;
+		}
 		if (Reflect.get(whenThinkingPolicy, "reasoningDisableMode") === undefined) {
 			variant.reasoningDisableMode = d.isVenice
 				? "venice-disable-thinking"

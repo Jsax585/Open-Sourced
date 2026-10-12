@@ -2,8 +2,11 @@
 provider "friendli" {
 	on-api "openai-completions" {
 		thinking-format "qwen-chat-template"
+		supports-reasoning-effort #false
 		when-thinking {
 			thinking-format "openai"
+			supports-reasoning-effort #true
+			omit-reasoning-effort #false
 			extra-body {
 				chat_template_kwargs {
 					enable_thinking #true

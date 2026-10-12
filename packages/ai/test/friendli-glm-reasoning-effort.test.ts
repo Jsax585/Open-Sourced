@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Context, FetchImpl } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
@@ -23,7 +24,12 @@ function model(overrides: Partial<ModelSpec<"openai-completions">> = {}): Model<
 	});
 }
 
-async function capture(model: Model<"openai-completions">, reasoning?: Effort, disableReasoning = false) {
+async function capture(
+	model: Model<"openai-completions">,
+	reasoning?: Effort,
+	disableReasoning = false,
+	simple = true,
+) {
 	let body: Record<string, unknown> | undefined;
 	const fetch: FetchImpl = async (_input, init) => {
 		body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -34,12 +40,8 @@ async function capture(model: Model<"openai-completions">, reasoning?: Effort, d
 			},
 		);
 	};
-	const result = await streamOpenAICompletions(model, context, {
-		apiKey: "test",
-		fetch,
-		reasoning,
-		disableReasoning,
-	}).result();
+	const stream = simple ? streamSimple : streamOpenAICompletions;
+	const result = await stream(model, context, { apiKey: "test", fetch, reasoning, disableReasoning }).result();
 	expect(result.stopReason).not.toBe("error");
 	if (!body) throw new Error("Expected captured chat request");
 	return body;
@@ -73,12 +75,25 @@ describe("Friendli reasoning wire contract", () => {
 		}
 	});
 
-	it("does not invent tiers or send effort for sparse specs", async () => {
-		for (const id of ["unknown-reasoner", "zai-org/GLM-4.5"]) {
-			const sparse = model({ id });
-			expect(sparse.thinking).toBeUndefined();
-			const body = await capture(sparse, Effort.High);
-			expect(body.reasoning_effort).toBeUndefined();
+	it("preserves endpoint defaults for sparse specs and distinguishes explicit disable", async () => {
+		for (const provider of ["friendli", "custom-friendli"]) {
+			for (const id of ["unknown-reasoner", "zai-org/GLM-4.5"]) {
+				for (const thinking of [undefined, { mode: "effort", efforts: [] }] as const) {
+					const sparse = model({ id, provider, thinking });
+					expect(sparse.thinking).toBeUndefined();
+					for (const effort of [undefined, Effort.High]) {
+						const body = await capture(sparse, effort);
+						expect(body.reasoning_effort).toBeUndefined();
+						expect(body.chat_template_kwargs).toBeUndefined();
+					}
+					const direct = await capture(sparse, Effort.High, false, false);
+					expect(direct.reasoning_effort).toBeUndefined();
+					expect(direct.chat_template_kwargs).toEqual({ enable_thinking: true });
+					const off = await capture(sparse, undefined, true);
+					expect(off.reasoning_effort).toBeUndefined();
+					expect(off.chat_template_kwargs).toEqual({ enable_thinking: false });
+				}
+			}
 		}
 	});
 
@@ -111,7 +126,7 @@ describe("Friendli reasoning wire contract", () => {
 			provider: "nvidia",
 			baseUrl: "https://integrate.api.nvidia.com/v1",
 		});
-		const body = await capture(nim, Effort.High);
+		const body = await capture(nim, Effort.High, false, false);
 		expect(body.reasoning_effort).toBeUndefined();
 		expect(body.chat_template_kwargs).toMatchObject({ enable_thinking: true });
 	});
