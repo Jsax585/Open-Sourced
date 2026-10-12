@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `statusLine.segmentOptions.context_pct.showTokens` to show context usage as used/window tokens (for example `114K/272K`) instead of a percentage, in the terminal segment and the native composer context meter ([#15396](https://github.com/can1357/oh-my-pi/pull/15396) by [@nszceta](https://github.com/nszceta)).
+- Added the `context_tok` status-line segment, which shows used/window context tokens (for example `114K/272K`) next to the percentage-based `context_pct` ([#15396](https://github.com/can1357/oh-my-pi/pull/15396) by [@nszceta](https://github.com/nszceta)).
 
 ## [18.10.0] - 2026-10-12
 

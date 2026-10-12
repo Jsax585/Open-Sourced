@@ -66,6 +66,7 @@ export type StatusLineNativeAction = "status.model" | "status.context" | "status
 const NATIVE_SEGMENT_ACTIONS: Partial<Record<string, StatusLineNativeAction>> = {
 	model: "status.model",
 	context_pct: "status.context",
+	context_tok: "status.context",
 	context_total: "status.context",
 	git: "status.git",
 	cost: "status.cost",
@@ -76,6 +77,7 @@ const NATIVE_SEGMENT_ACTIONS: Partial<Record<string, StatusLineNativeAction>> = 
 const PINNED_NATIVE_SEGMENTS: Partial<Record<string, true>> = {
 	model: true,
 	context_pct: true,
+	context_tok: true,
 	context_total: true,
 	git: true,
 };
@@ -3659,14 +3661,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 					? { parts: [{ value: speculationAt }, { value: used - speculationAt, token: "accent" }] }
 					: {}),
 				...(marks.length > 0 ? { marks } : {}),
-				...(pct === null
-					? {}
-					: {
-							label:
-								window > 0 && ctx.options.context_pct?.showTokens === true
-									? formatNumber(ctx.contextTokens)
-									: `${Math.round(pct)}%`,
-						}),
+				...(pct === null ? {} : { label: `${Math.round(pct)}%` }),
 				...(window > 0 ? { total: formatNumber(window) } : {}),
 				title: lines.join("\n"),
 				actions: { click: "status.context" },

@@ -831,14 +831,21 @@ function contextUsageText(ctx: SegmentContext): string {
 	const pct = ctx.contextPercent;
 	const window = ctx.contextWindow;
 	if (pct === null && window > 0) return formatNumber(window);
-	if (window > 0 && ctx.options.context_pct?.showTokens === true) {
-		return `${formatNumber(ctx.contextTokens)}/${formatNumber(window)}`;
-	}
 	return formatContextUsage(pct, window, ctx.contextTokens);
 }
 
-const contextPctSegment: StatusLineSegment = {
-	id: "context_pct",
+/** Used tokens over the window (`114K/272K`); the window alone while usage is unknown. */
+function contextTokenText(ctx: SegmentContext): string {
+	const window = ctx.contextWindow;
+	if (ctx.contextPercent === null && window > 0) return formatNumber(window);
+	return window > 0 ? `${formatNumber(ctx.contextTokens)}/${formatNumber(window)}` : formatNumber(ctx.contextTokens);
+}
+
+const createContextSegment = (
+	id: "context_pct" | "context_tok",
+	usageText: (ctx: SegmentContext) => string,
+): StatusLineSegment => ({
+	id,
 	render(ctx) {
 		const pct = ctx.contextPercent;
 		const window = ctx.contextWindow;
@@ -861,7 +868,7 @@ const contextPctSegment: StatusLineSegment = {
 			}`;
 		}
 		// A known window with unknown usage (startup prepaint) shows the window alone.
-		const text = theme.fg(color, contextUsageText(ctx));
+		const text = theme.fg(color, usageText(ctx));
 		const content = withIcon(theme.icon.context, `${text}${autoIcon}`);
 
 		return { content, visible: true };
@@ -871,7 +878,7 @@ const contextPctSegment: StatusLineSegment = {
 		const window = ctx.contextWindow;
 		const level = getContextUsageLevel(pct ?? 0, window);
 		const color = getContextUsageThemeColor(level);
-		const spans: TspSpan[] = [span(contextUsageText(ctx), color)];
+		const spans: TspSpan[] = [span(usageText(ctx), color)];
 		if (ctx.autoCompactEnabled && theme.icon.auto) {
 			// Async-compaction indicator: the terminal pulses the auto icon while a
 			// background speculation runs; an armed result holds it in accent.
@@ -884,7 +891,10 @@ const contextPctSegment: StatusLineSegment = {
 		}
 		return segView(spans, "context", getContextUsageTone(level));
 	},
-};
+});
+
+const contextPctSegment = createContextSegment("context_pct", contextUsageText);
+const contextTokSegment = createContextSegment("context_tok", contextTokenText);
 
 const contextTotalSegment: StatusLineSegment = {
 	id: "context_total",
@@ -1304,6 +1314,7 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	token_rate: tokenRateSegment,
 	cost: costSegment,
 	context_pct: contextPctSegment,
+	context_tok: contextTokSegment,
 	context_total: contextTotalSegment,
 	time_spent: timeSpentSegment,
 	time: timeSegment,

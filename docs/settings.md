@@ -877,15 +877,7 @@ For a custom status line, set `statusLine.preset: custom` and configure `statusL
 
 The `path` segment abbreviates the home directory to `~`. On Windows, shared path formatting recognizes both the long home name and its existing 8.3 aliases (such as `ADMINI~1`), including in tool labels and error text. Only the home prefix is abbreviated; remaining path components keep their spelling, and formatting does not change the working directory or environment. Set `statusLine.segmentOptions.path.abbreviate: false` to keep the full path in the status line.
 
-The `context_pct` segment shows the percentage of the context window in use. Set `statusLine.segmentOptions.context_pct.showTokens: true` to show used and window tokens instead, for example `114K/272K`. The same applies to the native composer context meter (`omp.composer.context`), whose label becomes the used-token count over the existing window total. The non-native embedded gauge does not use this option. The `contextLine: percentage` (or `off`) requirement for keeping `context_pct` visible applies to the terminal segment only; include `context_pct` in your segment list when using a custom preset. For example:
-
-```yaml
-statusLine:
-  contextLine: percentage
-  segmentOptions:
-    context_pct:
-      showTokens: true
-```
+The `context_pct` segment shows the percentage of the context window in use (for example `42.0%/272K`). The `context_tok` segment shows used and window tokens instead (for example `114K/272K`). Both show the window alone while usage is unknown. Add `context_tok` to `statusLine.leftSegments` or `statusLine.rightSegments` under `statusLine.preset: custom`; it is a separate segment, so it stays visible alongside the embedded context gauge and the native composer context meter, both of which keep their percentage label.
 
 The `cost` segment shows recorded session costs. For an active provider/model with scheduled pricing, it appends `↑` during peak hours or `↓` off-peak, refreshing at boundaries even while idle. The arrow reflects the current tariff, not past spending; flat-price models and explicit cost overrides have no arrow. See [usage costs and time-based pricing](models.md#usage-costs-and-time-based-pricing) for the UTC schedule and estimation semantics.
 
