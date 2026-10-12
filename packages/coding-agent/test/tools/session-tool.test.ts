@@ -296,6 +296,24 @@ describe("session tool: worktrees", () => {
 		expect(listing).not.toContain("refs/heads/other");
 	});
 
+	it("checks out the new branch even when a tag has the same name at an older commit", async () => {
+		await git(fixture.repo, "tag", "topic");
+		await Bun.write(path.join(fixture.repo, "tracked.txt"), "newer\n");
+		await git(fixture.repo, "commit", "-qam", "newer");
+		const created = (await fixture.tool.execute("1", { op: "worktree_create", branch: "topic" })).details!.path!;
+		expect(await Bun.file(path.join(created, "tracked.txt")).text()).toBe("newer\n");
+	});
+
+	it("refuses to remove a worktree that contains another registered worktree", async () => {
+		const parent = (await fixture.tool.execute("1", { op: "worktree_create", branch: "parent" })).details!.path!;
+		const child = path.join(parent, "child");
+		await git(fixture.repo, "worktree", "add", "-q", "-b", "child", child);
+		await expect(fixture.tool.execute("2", { op: "worktree_remove", path: parent, force: true })).rejects.toThrow(
+			"contains another registered worktree",
+		);
+		expect(await Bun.file(path.join(child, "tracked.txt")).exists()).toBe(true);
+	});
+
 	it("refuses to remove a locked worktree unless forced", async () => {
 		const created = (await fixture.tool.execute("1", { op: "worktree_create", branch: "locked" })).details!.path!;
 		await git(fixture.repo, "worktree", "lock", created);

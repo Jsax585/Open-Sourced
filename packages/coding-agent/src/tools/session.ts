@@ -144,7 +144,7 @@ export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolD
 			case "worktree_create":
 				return await this.#create(control, params, signal);
 			case "worktree_remove":
-				return await this.#remove(control, params);
+				return await this.#remove(control, params, signal);
 		}
 	}
 
@@ -236,7 +236,11 @@ export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolD
 			.done();
 	}
 
-	async #remove(control: SessionControl, params: SessionParams): Promise<AgentToolResult<SessionToolDetails>> {
+	async #remove(
+		control: SessionControl,
+		params: SessionParams,
+		signal: AbortSignal | undefined,
+	): Promise<AgentToolResult<SessionToolDetails>> {
 		const input = requireText(params.path, "path", "worktree_remove");
 		const repository = this.#repository();
 		const target = await realpathOrSelf(resolveToCwd(input, this.session.cwd));
@@ -250,6 +254,12 @@ export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolD
 		}
 		if (target === (await realpathOrSelf(repository.primaryRoot()))) {
 			throw new ToolError(`${target} is the primary checkout, not a removable worktree.`);
+		}
+		const nested = registered.find(item => item !== match && pathIsWithin(target, item.real));
+		if (nested) {
+			throw new ToolError(
+				`Refusing to remove ${target}: it contains another registered worktree (${nested.real}). Remove that one first.`,
+			);
 		}
 		const inUse = [this.session.cwd, ...(this.session.additionalDirectories ?? []), control.pendingMove()];
 		for (const directory of inUse) {
@@ -270,6 +280,7 @@ export class SessionTool implements AgentTool<typeof sessionSchema, SessionToolD
 			);
 		}
 		const adminDir = await readWorktreeAdminDir(match.entry.path);
+		signal?.throwIfAborted();
 		let removed: boolean;
 		try {
 			removed = await repository.worktreeRemove(match.entry.path, params.force === true);

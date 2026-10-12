@@ -156,7 +156,7 @@ export async function createSessionWorktree(
 		await repository.createBranch(branch, baseCommit, false, signal);
 		result = await repository.worktreeAdd(
 			worktreePath,
-			branch,
+			branchRef,
 			{
 				detach: false,
 				clone: cfgWorktreeClone.get(settings),

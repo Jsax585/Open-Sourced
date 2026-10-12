@@ -2,7 +2,14 @@ import type { Component } from "../tui";
 import { Text } from "../components/text";
 import type { Theme } from "../theme/theme";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
-import { formatErrorDetail, replaceTabs, shortenEmbeddedPaths, TRUNCATE_LENGTHS } from "../render/render-utils";
+import {
+	formatErrorDetail,
+	formatMoreItems,
+	PREVIEW_LIMITS,
+	replaceTabs,
+	shortenEmbeddedPaths,
+	TRUNCATE_LENGTHS,
+} from "../render/render-utils";
 import { renderStatusLine, truncateToWidth } from "../render/index";
 import { framedToolCard } from "../render/tool-card";
 import { compact, span, text } from "../native/describe";
@@ -54,6 +61,22 @@ function resultLines(result: ToolRenderResult<SessionRenderDetails>): string[] {
 		.map(line => truncateToWidth(displayText(line), TRUNCATE_LENGTHS.LONG));
 }
 
+/** The error text bounded in rows and width: it can embed a long model-supplied path or a multiline VCS message. */
+function errorText(result: ToolRenderResult<SessionRenderDetails>): string {
+	const lines = displayText(resultText(result))
+		.split("\n")
+		.slice(0, PREVIEW_LIMITS.EXPANDED_LINES)
+		.map(line => truncateToWidth(line, TRUNCATE_LENGTHS.LONG));
+	return lines.join("\n") || "Session tool failed";
+}
+
+/** Result rows capped at `limit`, with the standard omitted-items marker for the rest. */
+function boundedResultLines(result: ToolRenderResult<SessionRenderDetails>, limit: number): string[] {
+	const lines = resultLines(result);
+	if (lines.length <= limit) return lines;
+	return [...lines.slice(0, limit), formatMoreItems(lines.length - limit, "worktree")];
+}
+
 const sessionResultMemo = new OwnerMemo<NativeToolView | undefined>();
 
 function describeSessionResult(
@@ -61,11 +84,14 @@ function describeSessionResult(
 	args?: SessionRenderArgs,
 ): NativeToolView {
 	const op = result.details?.op ?? args?.op;
-	if (result.isError)
-		return errorView("Session", displayText(resultText(result)) || "Session tool failed", describeOp(op));
+	if (result.isError) return errorView("Session", errorText(result), describeOp(op));
 	return {
 		head: toolHead("Session", describeOp(op)),
-		body: compact(resultLines(result).map(line => text([span(line, "muted")], { wrap: "word" }))),
+		body: compact(
+			boundedResultLines(result, PREVIEW_LIMITS.EXPANDED_LINES).map(line =>
+				text([span(line, "muted")], { wrap: "word" }),
+			),
+		),
 	};
 }
 
@@ -84,7 +110,7 @@ export const sessionToolRenderer = {
 
 	renderResult(
 		result: ToolRenderResult<SessionRenderDetails>,
-		_options: RenderResultOptions,
+		options: RenderResultOptions,
 		uiTheme: Theme,
 		args?: SessionRenderArgs,
 	): Component {
@@ -95,9 +121,7 @@ export const sessionToolRenderer = {
 				header,
 				sections: [
 					{
-						content: formatErrorDetail(displayText(resultText(result)) || "Session tool failed", uiTheme).split(
-							"\n",
-						),
+						content: formatErrorDetail(errorText(result), uiTheme).split("\n"),
 					},
 				],
 				phase: "error",
@@ -107,7 +131,14 @@ export const sessionToolRenderer = {
 		const header = renderStatusLine({ icon: "success", title: "Session", description }, uiTheme);
 		return framedToolCard(uiTheme, () => ({
 			header,
-			sections: [{ content: resultLines(result).map(line => uiTheme.fg("muted", line)) }],
+			sections: [
+				{
+					content: boundedResultLines(
+						result,
+						options.expanded ? PREVIEW_LIMITS.EXPANDED_LINES : PREVIEW_LIMITS.COLLAPSED_ITEMS,
+					).map(line => uiTheme.fg("muted", line)),
+				},
+			],
 			phase: "success",
 			borderColor: "borderMuted",
 		}));

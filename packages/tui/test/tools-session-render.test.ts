@@ -63,4 +63,24 @@ describe("session tool renderer", () => {
 			expect(JSON.stringify(sessionToolRenderer.describeCall(args)).length).toBeLessThan(1000);
 		}
 	});
+
+	it("bounds a long worktree list and a long multiline error in the native view", () => {
+		const list = sessionToolRenderer.describeResult(
+			{
+				content: [{ type: "text", text: Array.from({ length: 200 }, (_, index) => `/wt/${index}`).join("\n") }],
+				details: { op: "worktree_list" },
+			},
+			opts,
+		);
+		const error = sessionToolRenderer.describeResult(
+			{
+				content: [{ type: "text", text: Array.from({ length: 200 }, () => "y".repeat(3000)).join("\n") }],
+				isError: true,
+				details: { op: "worktree_remove" },
+			},
+			opts,
+		);
+		expect(JSON.stringify(list).length).toBeLessThan(2000);
+		expect(JSON.stringify(error).length).toBeLessThan(10000);
+	});
 });
