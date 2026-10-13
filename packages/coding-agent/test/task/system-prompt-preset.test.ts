@@ -86,13 +86,13 @@ describe("systemPreset: minimal-task", () => {
 		expect(out.join("\n")).not.toContain("RULE_SENTINEL");
 	});
 
-	it("preserves the existing sandwich composition without the preset", () => {
+	it("preserves the existing inherited prompt composition without the preset", () => {
 		const out = buildSubagentSystemPrompt(inheritedPrompt, undefined, data);
 		expect(out).toHaveLength(4);
 		expect(out[0]).toBe("PROJECT_SENTINEL");
 		expect(out[1]).toBe("SKILL_SENTINEL");
-		expect(out[2]).toContain("Probe agent role prompt.");
-		expect(out[3]).toBe("RULE_SENTINEL");
+		expect(out[2]).toBe("RULE_SENTINEL");
+		expect(out[3]).toContain("Probe agent role prompt.");
 	});
 
 	it("still collapses to the subagent packet when no default prompt exists", () => {

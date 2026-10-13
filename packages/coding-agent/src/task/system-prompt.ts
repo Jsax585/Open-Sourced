@@ -11,8 +11,6 @@ export interface SubagentSystemPromptData {
 	worktree: string;
 	outputSchema: unknown;
 	outputSchemaOverridesAgent: boolean;
-	ircPeers: string;
-	ircSelfId: string;
 }
 
 export function buildSubagentSystemPrompt(
@@ -22,5 +20,5 @@ export function buildSubagentSystemPrompt(
 ): string[] {
 	const subagentPrompt = prompt.render(subagentSystemPromptTemplate, data);
 	if (systemPreset === "minimal-task" || defaultPrompt.length === 0) return [subagentPrompt];
-	return [...defaultPrompt.slice(0, -1), subagentPrompt, defaultPrompt[defaultPrompt.length - 1]];
+	return [...defaultPrompt, subagentPrompt];
 }
