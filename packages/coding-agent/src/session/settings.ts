@@ -165,6 +165,33 @@ export const cfgProvidersOpenaiCodexCodeModeDirectTools = register({
 	},
 });
 
+export const cfgToolsCodeMode = register({
+	id: "tools.codeMode",
+	type: "enum",
+	values: ["off", "on"] as const,
+	default: "off",
+	ui: {
+		tab: "tools",
+		group: "Code Mode",
+		label: "Code Mode",
+		description:
+			"Route any model through eval. The direct tools are eval, ask, todo, yield, think, checkpoint, and rewind. Use eval cells for other session tools. Requires eval with JavaScript enabled. Applies to every provider; only Codex also sends tool_namespaces_info.",
+	},
+});
+
+export const cfgToolsCodeModeDirectTools = register({
+	id: "tools.codeModeDirectTools",
+	type: "array",
+	default: EMPTY_STRING_ARRAY,
+	ui: {
+		tab: "tools",
+		group: "Code Mode",
+		label: "Code Mode Direct Tools",
+		description:
+			"Extra direct tools for provider-neutral Code Mode (tools.codeMode). The standard direct tools are eval, ask, todo, yield, think, checkpoint, and rewind.",
+	},
+});
+
 /**
  * Settings that change the Code Mode tool partition. `edit.mode` belongs here because it renames
  * `EditTool` on the wire (`apply_patch` vs `edit`), which the namespace metadata is keyed by.
@@ -172,6 +199,8 @@ export const cfgProvidersOpenaiCodexCodeModeDirectTools = register({
 export const cfgCodeModeInputs = combine({
 	codeMode: cfgProvidersOpenaiCodexCodeMode,
 	directTools: cfgProvidersOpenaiCodexCodeModeDirectTools,
+	genericCodeMode: cfgToolsCodeMode,
+	genericDirectTools: cfgToolsCodeModeDirectTools,
 	evalJs: cfgEvalJs,
 	editMode: cfgEditMode,
 });

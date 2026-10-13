@@ -94,6 +94,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Output Limits",
 		"Execution",
 		"Discovery & MCP",
+		"Code Mode",
 		"Extensions",
 		"Developer",
 	],

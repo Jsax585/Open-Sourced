@@ -618,6 +618,8 @@ tools:
 | `tools.xdev` | boolean | `true` | Mount discoverable tools under `xd://` device URLs instead of exposing every schema directly. Disabling it exposes enabled tools top-level. |
 | `tools.xdevDocs` | enum | `catalog` | `inline` includes all mounted docs/schemas, `builtins` inlines built-ins only, `catalog` lists devices with docs fetched on demand. |
 | `tools.xdevInlineDevices` | array | `[]` | Dynamic-device name globs to inline in `builtins` mode; ignored in `catalog` mode. |
+| `tools.codeMode` | enum | `off` | Provider-neutral Code Mode: `on` collapses the direct tool surface to `eval`/`ask`/`todo` (plus `yield`/`think`/`checkpoint`/`rewind` when enabled) for any provider, with every other session tool invoked from `eval` cells via its `tool.<name>()` bridge. Requires `eval` with JavaScript enabled and its transport available; subagents inherit it. Only Codex models also send `tool_namespaces_info`. |
+| `tools.codeModeDirectTools` | array | `[]` | Extra tool names to keep directly callable alongside the standard direct tools when `tools.codeMode` is active; entries that are not enabled in the session are ignored. |
 | `async.enabled` | boolean | `true` | Enable async bash commands and background task execution. |
 | `async.maxJobs` | number | `100` | Running background-job cap, floored to at least 1; parked/queued jobs do not consume execution slots. |
 

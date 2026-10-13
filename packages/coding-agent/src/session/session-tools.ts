@@ -44,7 +44,12 @@ import {
 	PERMISSION_REQUIRED_TOOLS,
 } from "./acp-permission-gate";
 import type { ClientBridge, ClientBridgePermissionOutcome } from "./client-bridge";
-import { buildToolNamespacesInfo, resolveCodeMode, type ToolNamespacesInfo } from "./code-mode";
+import {
+	buildToolNamespacesInfo,
+	resolveCodeMode,
+	type CodeModeResolution,
+	type ToolNamespacesInfo,
+} from "./code-mode";
 import { toolReadsSkillUris } from "../system-prompt";
 
 import type { CustomMessage } from "./messages";
@@ -58,6 +63,8 @@ import {
 	cfgInlineToolDescriptors,
 	cfgProvidersOpenaiCodexCodeMode,
 	cfgProvidersOpenaiCodexCodeModeDirectTools,
+	cfgToolsCodeMode,
+	cfgToolsCodeModeDirectTools,
 	cfgSkillful,
 } from "./settings";
 import { cfgStartupQuiet } from "../modes/settings";
@@ -898,19 +905,30 @@ export class SessionTools {
 		const enabledToolNames = this.getEnabledToolNames();
 		const setting = cfgProvidersOpenaiCodexCodeMode.get(this.#host.settings);
 		const extraDirectTools = cfgProvidersOpenaiCodexCodeModeDirectTools.get(this.#host.settings);
+		const genericSetting = cfgToolsCodeMode.get(this.#host.settings);
+		const genericExtraDirectTools = cfgToolsCodeModeDirectTools.get(this.#host.settings);
 		const resolve = (model: Model | undefined) =>
 			resolveCodeMode({
 				provider: model?.provider ?? "",
 				toolMode: model?.toolMode,
 				setting,
 				extraDirectTools,
+				genericSetting,
+				genericExtraDirectTools,
 				enabledToolNames,
 				evalTransportAvailable: this.#hasCodeModeEvalTransport(),
 			});
-		const previous = resolve(previousModel);
+		// No previous model means the unrestricted startup surface, i.e. inactive,
+		// even though a provider-less resolution would satisfy the generic opt-in.
+		const previous: CodeModeResolution = previousModel
+			? resolve(previousModel)
+			: { active: false, directToolNames: new Set(enabledToolNames) };
 		const next = resolve(nextModel);
 		if (previous.active !== next.active) return true;
 		if (!next.active) return false;
+		// The namespaces snapshot is Codex-only, so crossing the Codex boundary
+		// while active changes the wire metadata even when the partition is equal.
+		if ((previousModel?.provider === "openai-codex") !== (nextModel.provider === "openai-codex")) return true;
 		if (previous.directToolNames.size !== next.directToolNames.size) return true;
 		for (const name of previous.directToolNames) {
 			if (!next.directToolNames.has(name)) return true;
@@ -1086,6 +1104,8 @@ export class SessionTools {
 			toolMode: this.#host.model()?.toolMode,
 			setting: cfgProvidersOpenaiCodexCodeMode.get(this.#host.settings),
 			extraDirectTools: cfgProvidersOpenaiCodexCodeModeDirectTools.get(this.#host.settings),
+			genericSetting: cfgToolsCodeMode.get(this.#host.settings),
+			genericExtraDirectTools: cfgToolsCodeModeDirectTools.get(this.#host.settings),
 			enabledToolNames: toolNames,
 			evalTransportAvailable: this.#hasCodeModeEvalTransport(),
 		});
@@ -1178,24 +1198,28 @@ export class SessionTools {
 			if (transportNeeded && validToolNames.includes("write")) codeMode.directToolNames.add("write");
 			appliedTools = tools.filter(tool => codeMode.directToolNames.has(tool.name));
 			appliedNames = validToolNames.filter(name => codeMode.directToolNames.has(name));
-			nextCodeModeNamespacesInfo = buildToolNamespacesInfo({
-				tools: validToolNames.flatMap(name => {
-					const tool = this.#toolRegistry.get(name);
-					if (!tool) return [];
-					return [
-						{
-							name,
-							customWireName: tool.customWireName,
-							loadMode: "loadMode" in tool && typeof tool.loadMode === "string" ? tool.loadMode : undefined,
-							mcpServerName:
-								"mcpServerName" in tool && typeof tool.mcpServerName === "string"
-									? tool.mcpServerName
-									: undefined,
-						},
-					];
-				}),
-				directToolNames: codeMode.directToolNames,
-			});
+			// Only the Codex transport sends `tool_namespaces_info`; other
+			// providers get the same direct-surface partition without it.
+			if (this.#host.model()?.provider === "openai-codex") {
+				nextCodeModeNamespacesInfo = buildToolNamespacesInfo({
+					tools: validToolNames.flatMap(name => {
+						const tool = this.#toolRegistry.get(name);
+						if (!tool) return [];
+						return [
+							{
+								name,
+								customWireName: tool.customWireName,
+								loadMode: "loadMode" in tool && typeof tool.loadMode === "string" ? tool.loadMode : undefined,
+								mcpServerName:
+									"mcpServerName" in tool && typeof tool.mcpServerName === "string"
+										? tool.mcpServerName
+										: undefined,
+							},
+						];
+					}),
+					directToolNames: codeMode.directToolNames,
+				});
+			}
 		}
 		const restrictDeviceOnlyWrite =
 			validToolNames.includes("write") &&

@@ -4395,7 +4395,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					...streamOptions,
 					promptCacheKey: streamOptions?.promptCacheKey ?? session?.getPromptCacheKeyForModel(streamModel),
 					forceReasoningOff: externalThinking || streamOptions?.forceReasoningOff,
-					...(codeModeState.namespacesInfo === undefined
+					// Only the Codex transport sends `tool_namespaces_info`, even
+					// when provider-neutral Code Mode is active on another provider.
+					...(codeModeState.namespacesInfo === undefined || streamModel.provider !== "openai-codex"
 						? {}
 						: { toolNamespacesInfo: codeModeState.namespacesInfo }),
 				};

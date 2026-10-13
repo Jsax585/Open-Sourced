@@ -21,7 +21,12 @@ import { SessionManager } from "../src/session/session-manager";
 import { generateCodeModeDeclarations } from "@oh-my-pi/pi-tui/tools/eval-format/code-mode-declarations";
 
 import { cfgEvalJs } from "@oh-my-pi/pi-coding-agent/eval/settings";
-import { cfgProvidersOpenaiCodexCodeMode } from "@oh-my-pi/pi-coding-agent/session/settings";
+import {
+	cfgProvidersOpenaiCodexCodeMode,
+	cfgToolsCodeMode,
+	cfgToolsCodeModeDirectTools,
+} from "@oh-my-pi/pi-coding-agent/session/settings";
+import { createSubagentSettings } from "../src/task/executor";
 
 const ENABLED = [
 	"eval",
@@ -89,6 +94,72 @@ describe("resolveCodeMode", () => {
 				evalTransportAvailable: true,
 			}).active,
 		).toBe(false);
+	});
+	test("tools.codeMode on: active for a non-codex provider", () => {
+		const r = resolveCodeMode({
+			provider: "anthropic",
+			setting: "off",
+			genericSetting: "on",
+			enabledToolNames: ENABLED,
+			evalTransportAvailable: true,
+		});
+		expect(r.active).toBe(true);
+		expect([...r.directToolNames].sort()).toEqual(["ask", "checkpoint", "eval", "rewind", "think", "todo", "yield"]);
+	});
+	test("tools.codeMode on: still requires eval and its transport", () => {
+		expect(
+			resolveCodeMode({
+				provider: "anthropic",
+				setting: "off",
+				genericSetting: "on",
+				enabledToolNames: ["read", "bash"],
+				evalTransportAvailable: true,
+			}).active,
+		).toBe(false);
+		expect(
+			resolveCodeMode({
+				provider: "anthropic",
+				setting: "off",
+				genericSetting: "on",
+				enabledToolNames: ENABLED,
+				evalTransportAvailable: false,
+			}).active,
+		).toBe(false);
+	});
+	test("tools.codeMode off: non-codex provider stays inactive", () => {
+		expect(
+			resolveCodeMode({
+				provider: "anthropic",
+				setting: "on",
+				genericSetting: "off",
+				enabledToolNames: ENABLED,
+				evalTransportAvailable: true,
+			}).active,
+		).toBe(false);
+	});
+	test("generic direct tools apply only to the generic activation, and vice versa", () => {
+		const generic = resolveCodeMode({
+			provider: "anthropic",
+			setting: "off",
+			extraDirectTools: ["bash"],
+			genericSetting: "on",
+			genericExtraDirectTools: ["read"],
+			enabledToolNames: ENABLED,
+			evalTransportAvailable: true,
+		});
+		expect(generic.directToolNames.has("read")).toBe(true);
+		expect(generic.directToolNames.has("bash")).toBe(false);
+		const codex = resolveCodeMode({
+			provider: "openai-codex",
+			setting: "on",
+			extraDirectTools: ["bash"],
+			genericSetting: "off",
+			genericExtraDirectTools: ["read"],
+			enabledToolNames: ENABLED,
+			evalTransportAvailable: true,
+		});
+		expect(codex.directToolNames.has("bash")).toBe(true);
+		expect(codex.directToolNames.has("read")).toBe(false);
 	});
 	test("inactive when eval is unavailable", () => {
 		expect(
@@ -368,6 +439,55 @@ describe("Code Mode session reconciliation", () => {
 		expect(session.agent.state.tools.map(value => value.name)).toEqual(["eval"]);
 	});
 
+	test("tools.codeMode on restricts a non-codex model without namespaces info", async () => {
+		const { session, directModel } = createSession(Settings.isolated({ "tools.codeMode": "on" }));
+		await session.setModel(directModel);
+		await session.setActiveToolsByName(["eval", "read"]);
+		expect(session.agent.state.tools.map(value => value.name)).toEqual(["eval"]);
+		expect(session.getEnabledToolNames()).toEqual(["eval", "read"]);
+		expect(session.getToolForEvalBridge("read")?.name).toBe("read");
+		// Only the Codex transport sends `tool_namespaces_info`.
+		expect(session.codeModeNamespacesInfo).toBeUndefined();
+	});
+
+	test("tools.codeModeDirectTools keeps extra tools direct on a non-codex model", async () => {
+		const { session, directModel } = createSession(
+			Settings.isolated({ "tools.codeMode": "on", "tools.codeModeDirectTools": ["read"] }),
+		);
+		await session.setModel(directModel);
+		await session.setActiveToolsByName(["eval", "read"]);
+		expect(session.agent.state.tools.map(value => value.name)).toEqual(["eval", "read"]);
+		expect(session.codeModeNamespacesInfo).toBeUndefined();
+	});
+
+	test("switching from Codex to a non-codex model clears namespaces info under tools.codeMode", async () => {
+		const { session, directModel } = createSession(Settings.isolated({ "tools.codeMode": "on" }));
+		await session.setActiveToolsByName(["eval", "read"]);
+		expect(session.codeModeNamespacesInfo).toBeDefined();
+		await session.setModel(directModel);
+		expect(session.agent.state.tools.map(value => value.name)).toEqual(["eval"]);
+		expect(session.codeModeNamespacesInfo).toBeUndefined();
+	});
+
+	test("runtime tools.codeMode changes reconcile a non-codex surface", async () => {
+		const settings = Settings.isolated();
+		const { session, directModel } = createSession(settings);
+		await session.setModel(directModel);
+		await session.setActiveToolsByName(["eval", "read"]);
+		expect(session.agent.state.tools.map(value => value.name)).toEqual(["eval", "read"]);
+
+		cfgToolsCodeMode.set(settings, "on");
+		await Promise.resolve();
+		await session.runToolRegistryMutation(async () => undefined);
+		expect(session.agent.state.tools.map(value => value.name)).toEqual(["eval"]);
+		expect(session.codeModeNamespacesInfo).toBeUndefined();
+
+		cfgToolsCodeMode.set(settings, "off");
+		await Promise.resolve();
+		await session.runToolRegistryMutation(async () => undefined);
+		expect(session.agent.state.tools.map(value => value.name)).toEqual(["eval", "read"]);
+	});
+
 	test("a caller slate without eval keeps Code Mode inactive", async () => {
 		const { session } = createSession(Settings.isolated({ "providers.openai-codex.codeMode": "auto" }));
 
@@ -636,6 +756,44 @@ describe("Code Mode session startup", () => {
 		expect(info.functions.functions.read.direct).toBe(false);
 	});
 
+	test("fresh session on a non-codex model with tools.codeMode on starts restricted without namespaces info", async () => {
+		const { session } = await createAgentSession({
+			cwd: registryDir,
+			agentDir: registryDir,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "tools.codeMode": "on" }),
+			model: buildModel({
+				id: "claude-sonnet-5",
+				name: "Claude Sonnet 5",
+				api: "anthropic-messages",
+				provider: "anthropic",
+				baseUrl: "https://example.invalid",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 8192,
+				maxTokens: 1024,
+			}),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+		});
+		sessions.push(session);
+
+		const active = session.getActiveToolNames();
+		expect(active).toContain("eval");
+		expect(active).not.toContain("read");
+		expect(active).not.toContain("bash");
+		expect(session.getEnabledToolNames()).toContain("read");
+		expect(session.getToolForEvalBridge("read")?.name).toBe("read");
+		expect(session.codeModeNamespacesInfo).toBeUndefined();
+	});
+
 	test("fresh session with code mode off keeps the direct surface and no namespaces info", async () => {
 		const { session } = await createAgentSession({
 			cwd: registryDir,
@@ -670,6 +828,13 @@ describe("Code Mode session startup", () => {
 		expect(active).toContain("read");
 		expect(active).toContain("bash");
 		expect(session.codeModeNamespacesInfo).toBeUndefined();
+	});
+
+	test("subagents inherit tools.codeMode and its direct tools", () => {
+		const parent = Settings.isolated({ "tools.codeMode": "on", "tools.codeModeDirectTools": ["read"] });
+		const child = createSubagentSettings(parent);
+		expect(cfgToolsCodeMode.get(child)).toBe("on");
+		expect(cfgToolsCodeModeDirectTools.get(child)).toEqual(["read"]);
 	});
 
 	afterEach(async () => {

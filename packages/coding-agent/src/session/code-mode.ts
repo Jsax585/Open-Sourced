@@ -1,7 +1,8 @@
 /**
- * Codex Code Mode: collapse the direct tool surface for code_mode_only models
- * to a small keep-set and expose every other session tool through the eval
- * bridge, mirroring codex-rs ToolMode::CodeModeOnly.
+ * Code Mode: collapse the direct tool surface to a small keep-set and expose
+ * every other session tool through the eval bridge. The Codex path mirrors
+ * codex-rs ToolMode::CodeModeOnly; the provider-neutral `tools.codeMode`
+ * setting applies the same partition to any provider.
  */
 
 import { logger } from "@oh-my-pi/pi-utils";
@@ -47,20 +48,29 @@ export function resolveCodeMode(args: {
 	toolMode?: string;
 	setting: "off" | "on" | "auto";
 	extraDirectTools?: readonly string[];
+	/** Provider-neutral opt-in (`tools.codeMode`); `on` activates for any provider. */
+	genericSetting?: "off" | "on";
+	/** Extra direct tools (`tools.codeModeDirectTools`) honored when the provider-neutral opt-in activates. */
+	genericExtraDirectTools?: readonly string[];
 	enabledToolNames: readonly string[];
 	evalTransportAvailable: boolean;
 }): CodeModeResolution {
-	const active =
+	const codexActive =
 		args.provider === "openai-codex" &&
-		args.enabledToolNames.includes("eval") &&
-		args.evalTransportAvailable &&
 		(args.setting === "on" || (args.setting === "auto" && args.toolMode === "code_mode_only"));
+	const genericActive = args.genericSetting === "on";
+	const active =
+		(codexActive || genericActive) && args.enabledToolNames.includes("eval") && args.evalTransportAvailable;
 	if (!active) return { active: false, directToolNames: new Set(args.enabledToolNames) };
 	const direct = new Set<string>();
 	for (const name of args.enabledToolNames) {
 		if (CODE_MODE_KEEP_TOOLS[name] === true) direct.add(name);
 	}
-	for (const name of args.extraDirectTools ?? []) {
+	const extraDirectTools = [
+		...(codexActive ? (args.extraDirectTools ?? []) : []),
+		...(genericActive ? (args.genericExtraDirectTools ?? []) : []),
+	];
+	for (const name of extraDirectTools) {
 		if (args.enabledToolNames.includes(name)) direct.add(name);
 	}
 	return { active: true, directToolNames: direct };
