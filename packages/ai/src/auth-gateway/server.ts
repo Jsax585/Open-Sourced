@@ -15,6 +15,8 @@
  *   GET  /v1/models                        → list known models from the registry
  *   GET  /v1/routes                        → list registered virtual routes
  *   GET  /v1/routes/:id                    → inspect one registered virtual route
+ *   PUT  /v1/routes/:id                    → register/replace a route (opt-in admin)
+ *   DELETE /v1/routes/:id                  → remove a route (opt-in admin)
  *   POST /v1/chat/completions              → OpenAI chat-completions in/out
  *   POST /v1/messages                      → Anthropic messages in/out
  *   POST /v1/responses                     → OpenAI Responses in/out
@@ -675,6 +677,10 @@ async function handleRoutePut(registry: RouteRegistry, id: string, req: Request)
 	return handleRouteGet(registry, id);
 }
 
+function handleRouteDelete(registry: RouteRegistry, id: string): Response {
+	return registry.unregister(id) ? new Response(null, { status: 204 }) : json(404, { error: `Unknown route: ${id}` });
+}
+
 /** `GET /v1/videos/:id` (poll) and `GET /v1/videos/:id/content` (download); group 1 = id, group 2 = `/content`. */
 const VIDEO_JOB_PATH = /^\/v1\/videos\/([^/]+)(\/content)?$/;
 
@@ -811,9 +817,12 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 
 			// Model catalog.
 			if (req.method === "GET" && pathname === "/v1/routes") return handleRoutesList(routeRegistry);
-			if ((req.method === "GET" || req.method === "PUT") && pathname.startsWith("/v1/routes/")) {
+			if (
+				(req.method === "GET" || req.method === "PUT" || req.method === "DELETE") &&
+				pathname.startsWith("/v1/routes/")
+			) {
 				const rawId = pathname.slice("/v1/routes/".length);
-				if (req.method === "PUT") {
+				if (req.method !== "GET") {
 					if (opts.allowManagement !== true) return json(404, { error: "route management disabled" });
 					if (adminTokens.size === 0 || !isAuthorized(req, adminTokens))
 						return json(403, { error: "Management mutation requires separate administrator authorization" });
@@ -826,9 +835,9 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 				} catch {
 					return json(400, { error: "invalid route id encoding" });
 				}
-				return req.method === "PUT"
-					? await handleRoutePut(routeRegistry, id, req)
-					: handleRouteGet(routeRegistry, id);
+				if (req.method === "PUT") return await handleRoutePut(routeRegistry, id, req);
+				if (req.method === "DELETE") return handleRouteDelete(routeRegistry, id);
+				return handleRouteGet(routeRegistry, id);
 			}
 			if (req.method === "GET" && pathname === "/v1/models") {
 				return handleModelsList(opts);
@@ -880,7 +889,7 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 				return withCors(json(200, { ok: true, version }), req);
 			}
 			const routePath = pathname === "/v1/routes" || pathname.startsWith("/v1/routes/");
-			const adminSurface = routePath && (req.method === "GET" || req.method === "PUT");
+			const adminSurface = routePath && (req.method === "GET" || req.method === "PUT" || req.method === "DELETE");
 			const adminAuthorized = adminTokens.size > 0 && isAuthorized(req, adminTokens);
 			if (!isAuthorized(req, tokens) && !(adminSurface && adminAuthorized)) {
 				logger.info("auth-gateway request unauthorized", {

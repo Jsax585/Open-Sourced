@@ -81,6 +81,14 @@ export class RouteRegistry {
 		this.#routes.set(definition.id, compiled);
 	}
 
+	/** Remove a registered virtual route. Existing request snapshots remain valid. */
+	unregister(id: string): boolean {
+		if (!this.#routes.delete(id)) return false;
+		this.#definitions.delete(id);
+		this.#generation += 1;
+		return true;
+	}
+
 	/** A route's model snapshots remain private and are never resolved again during dispatch. */
 	getModel(route: CompiledRoute, target: string | undefined = route.targets[0]): Model<Api> | undefined {
 		return target === undefined ? undefined : this.#models.get(route)?.get(target);

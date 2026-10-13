@@ -4,6 +4,7 @@
 
 ### Added
 
+- Administrators can remove a virtual route with `DELETE /v1/routes/:id` without changing other routes, concrete models or already-running request snapshots ([#10149](https://github.com/can1357/oh-my-pi/pull/10149) by [@jroth1111](https://github.com/jroth1111)).
 - Virtual routes can be atomically registered or replaced with JSON5 through `PUT /v1/routes/:id`, disabled by default and requiring a separate administrator capability ([#10148](https://github.com/can1357/oh-my-pi/pull/10148) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway clients can inspect one virtual route with `GET /v1/routes/:id`, preserving encoded IDs and excluding concrete or private model state ([#10147](https://github.com/can1357/oh-my-pi/pull/10147) by [@jroth1111](https://github.com/jroth1111)).
 - Authenticated gateway clients can list virtual routes and their current compiled targets through `GET /v1/routes`, without exposing private model state ([#10146](https://github.com/can1357/oh-my-pi/pull/10146) by [@jroth1111](https://github.com/jroth1111)).

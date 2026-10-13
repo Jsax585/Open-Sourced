@@ -188,6 +188,8 @@ Replace those placeholder targets with concrete IDs from the gateway's `/v1/mode
 
 `PUT /v1/routes/:id` registers or atomically replaces a virtual route from JSON/JSON5. It accepts a definition with a matching `id`, or a `root` object whose ID is supplied by the decoded path. Invalid syntax, mismatched IDs and invalid/cyclic definitions return 400 without changing registry generations or existing routes. Changes are in-memory; route files are not rewritten.
 
+`DELETE /v1/routes/:id` removes only the named virtual route and returns an empty 204 response. Unknown and concrete model IDs return 404 without changing the registry. Other routes and already-running request snapshots remain intact; the next request can no longer resolve the removed virtual route. Encoded IDs are decoded once for all route operations. DELETE uses the same opt-in administrator boundary as PUT and never rewrites the route file.
+
 Management is disabled by default. Library hosts must explicitly set `allowManagement: true` and a separate nonempty `adminBearerTokens` capability. The CLI opts in only when `OMP_AUTH_GATEWAY_ADMIN_TOKEN` contains an administrator token. Inference tokens and `--no-auth` do not authorize mutations. Admin tokens can read route metadata but do not independently authorize inference. Keep the admin token out of URLs and forwarded/identity headers; do not publish it in logs or route files.
 
 ### stdio

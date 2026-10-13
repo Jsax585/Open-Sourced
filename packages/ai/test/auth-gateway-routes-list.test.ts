@@ -172,13 +172,15 @@ it("keeps route mutation disabled by default, including for an admin bearer", as
 		definitions,
 		async (url, registry) => {
 			const generation = registry.generation;
-			const response = await fetch(`${url}/v1/routes/virtual-a`, {
-				method: "PUT",
-				headers: { Authorization: "Bearer management-fixture-admin" },
-				body: "{root:{type:'target',model:'second'}}",
-			});
-			expect(response.status).toBe(404);
-			await response.text();
+			for (const method of ["PUT", "DELETE"]) {
+				const response = await fetch(`${url}/v1/routes/virtual-a`, {
+					method,
+					headers: { Authorization: "Bearer management-fixture-admin" },
+					body: method === "PUT" ? "{root:{type:'target',model:'second'}}" : undefined,
+				});
+				expect(response.status).toBe(404);
+				await response.text();
+			}
 			expect(registry.generation).toBe(generation);
 		},
 		{ adminBearerTokens: ["management-fixture-admin"] },
@@ -190,13 +192,15 @@ it("requires separate admin authorization even when management is enabled", asyn
 		definitions,
 		async (url, registry) => {
 			const generation = registry.generation;
-			const response = await fetch(`${url}/v1/routes/virtual-a`, {
-				method: "PUT",
-				headers: auth,
-				body: "{root:{type:'target',model:'second'}}",
-			});
-			expect(response.status).toBe(403);
-			await response.text();
+			for (const method of ["PUT", "DELETE"]) {
+				const response = await fetch(`${url}/v1/routes/virtual-a`, {
+					method,
+					headers: auth,
+					body: method === "PUT" ? "{root:{type:'target',model:'second'}}" : undefined,
+				});
+				expect(response.status).toBe(403);
+				await response.text();
+			}
 			expect(registry.generation).toBe(generation);
 		},
 		{ allowManagement: true, adminBearerTokens: ["management-fixture-admin"] },
@@ -283,15 +287,17 @@ it("an empty admin capability cannot authorize a direct router mutation", async 
 		});
 		try {
 			const generation = registry.generation;
-			const response = await router.route(
-				new Request("http://fixture/v1/routes/virtual-a", {
-					method: "PUT",
-					body: "{root:{type:'target',model:'second'}}",
-				}),
-				"fixture",
-			);
-			expect(response.status).toBe(403);
-			await response.text();
+			for (const method of ["PUT", "DELETE"]) {
+				const response = await router.route(
+					new Request("http://fixture/v1/routes/virtual-a", {
+						method,
+						body: method === "PUT" ? "{root:{type:'target',model:'second'}}" : undefined,
+					}),
+					"fixture",
+				);
+				expect(response.status).toBe(403);
+				await response.text();
+			}
 			expect(registry.generation).toBe(generation);
 		} finally {
 			router.close();
@@ -304,14 +310,98 @@ it("rejects misplaced admin bearer material before a route write", async () => {
 		definitions,
 		async (url, registry) => {
 			const generation = registry.generation;
-			const response = await fetch(`${url}/v1/routes/virtual-a?token=management-fixture-admin`, {
-				method: "PUT",
-				headers: { Authorization: "Bearer management-fixture-admin" },
-				body: "{root:{type:'target',model:'second'}}",
-			});
-			expect(response.status).toBe(400);
-			await response.text();
+			for (const method of ["PUT", "DELETE"]) {
+				const response = await fetch(`${url}/v1/routes/virtual-a?token=management-fixture-admin`, {
+					method,
+					headers: { Authorization: "Bearer management-fixture-admin" },
+					body: method === "PUT" ? "{root:{type:'target',model:'second'}}" : undefined,
+				});
+				expect(response.status).toBe(400);
+				await response.text();
+			}
 			expect(registry.generation).toBe(generation);
+		},
+		{ allowManagement: true, adminBearerTokens: ["management-fixture-admin"] },
+	);
+});
+
+it("deletes only the named virtual route and stops future dispatch while retaining in-flight snapshots", async () => {
+	const id = "virtual/雪 % +?#";
+	await withListing(
+		[{ id, root: { type: "target", model: "alias" } }, definitions[1]],
+		async (url, registry) => {
+			const captured = registry.resolve(id);
+			if (!captured) throw new Error("Expected a captured route");
+			const response = await fetch(`${url}/v1/routes/${encodeURIComponent(id)}`, {
+				method: "DELETE",
+				headers: { Authorization: "Bearer management-fixture-admin" },
+			});
+			expect(response.status).toBe(204);
+			expect(await response.text()).toBe("");
+			const gone = await fetch(`${url}/v1/routes/${encodeURIComponent(id)}`, { headers: auth });
+			expect(gone.status).toBe(404);
+			expect(await gone.json()).toEqual({ error: `Unknown route: ${id}` });
+			const collection = await fetch(`${url}/v1/routes`, { headers: auth });
+			expect(await collection.json()).toEqual({
+				object: "list",
+				generation: 4,
+				data: [{ id: "virtual-b", generation: 3, targets: ["fixture/second"], fallbacks: {} }],
+			});
+			const inference = await fetch(`${url}/v1/chat/completions`, {
+				method: "POST",
+				headers: { ...auth, "Content-Type": "application/json" },
+				body: JSON.stringify({ model: id, messages: [{ role: "user", content: "fixture" }] }),
+			});
+			expect(inference.status).toBe(404);
+			await inference.text();
+			expect(registry.resolve(id)).toBeUndefined();
+			expect(registry.getModel(captured)?.id).toBe("first");
+		},
+		{ allowManagement: true, adminBearerTokens: ["management-fixture-admin"] },
+	);
+});
+
+it("rejects unknown and concrete deletions without changing routes or generation", async () => {
+	await withListing(
+		definitions,
+		async (url, registry) => {
+			const before = JSON.stringify(registry.list());
+			for (const id of ["no-such-route", "alias", "fixture/first"]) {
+				const response = await fetch(`${url}/v1/routes/${encodeURIComponent(id)}`, {
+					method: "DELETE",
+					headers: { Authorization: "Bearer management-fixture-admin" },
+				});
+				expect(response.status).toBe(404);
+				expect(await response.json()).toEqual({ error: `Unknown route: ${id}` });
+			}
+			expect(registry.generation).toBe(3);
+			expect(JSON.stringify(registry.list())).toBe(before);
+		},
+		{ allowManagement: true, adminBearerTokens: ["management-fixture-admin"] },
+	);
+});
+
+it("rejects empty or malformed DELETE IDs and allows browser preflight", async () => {
+	await withListing(
+		definitions,
+		async (url, registry) => {
+			const admin = { Authorization: "Bearer management-fixture-admin" };
+			const empty = await fetch(`${url}/v1/routes/`, { method: "DELETE", headers: admin });
+			expect(empty.status).toBe(404);
+			expect(await empty.json()).toEqual({ error: "Missing route id" });
+			const invalid = await fetch(`${url}/v1/routes/%GG`, { method: "DELETE", headers: admin });
+			expect(invalid.status).toBe(400);
+			expect(await invalid.json()).toEqual({ error: "invalid route id encoding" });
+			const unauthenticated = await fetch(`${url}/v1/routes/virtual-a`, { method: "DELETE" });
+			expect(unauthenticated.status).toBe(401);
+			await unauthenticated.text();
+			const options = await fetch(`${url}/v1/routes/virtual-a`, {
+				method: "OPTIONS",
+				headers: { Origin: "http://fixture-client", "Access-Control-Request-Method": "DELETE" },
+			});
+			expect(options.status).toBe(204);
+			expect(options.headers.get("Access-Control-Allow-Methods")).toContain("DELETE");
+			expect(registry.generation).toBe(3);
 		},
 		{ allowManagement: true, adminBearerTokens: ["management-fixture-admin"] },
 	);
