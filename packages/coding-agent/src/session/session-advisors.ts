@@ -625,6 +625,8 @@ export class SessionAdvisors {
 	#finalAnswerReview: FinalAnswerReviewGate | undefined;
 	#reviewedFinalAnswer: AssistantMessage | undefined;
 	#discardFinalReviewThroughTurn = 0;
+	/** User message the closed review covered; read against the live one at route time. */
+	#discardFinalReviewUser: AgentMessage | undefined;
 	#finalReviewUserMessage: AgentMessage | undefined;
 	#finalReviewRequestFirstTurn = 0;
 
@@ -824,9 +826,9 @@ export class SessionAdvisors {
 			return { action: "block", advice };
 		} finally {
 			// Late notes from the now-closed window must not change a later user
-			// request; `#routeAdvice` compares the note's turn with the request
-			// boundary this records.
+			// request; `#routeAdvice` compares them against what this records.
 			this.#discardFinalReviewThroughTurn = gate.turn;
+			this.#discardFinalReviewUser = this.#finalReviewUserMessage;
 			this.#finalAnswerReview = undefined;
 		}
 	}
@@ -1186,6 +1188,7 @@ export class SessionAdvisors {
 		this.#finalAnswerReview = undefined;
 		this.#reviewedFinalAnswer = undefined;
 		this.#discardFinalReviewThroughTurn = 0;
+		this.#discardFinalReviewUser = undefined;
 		this.#finalReviewUserMessage = undefined;
 		this.#finalReviewRequestFirstTurn = 0;
 		this.#advisorPrimaryWillContinue = false;
@@ -1833,13 +1836,14 @@ export class SessionAdvisors {
 		// request that a newer primary user message started. Until that happens the
 		// gate suppresses nothing: a late blocker still routes like any post-turn
 		// note, so a review that timed out cannot silently cost the turn its advice.
-		// "Newer request" compares the note's turn with the request's first turn, not
-		// with a live user marker: that marker is replaced per request, including by
-		// this session's own later gate, so it can never identify a stale note.
+		// Two clauses, because the request boundary only advances at turn end: the
+		// covered user catches a newer request still generating its first answer,
+		// and the boundary catches one whose later gate overwrote that user.
 		if (
 			turn !== undefined &&
 			turn <= this.#discardFinalReviewThroughTurn &&
-			turn < this.#finalReviewRequestFirstTurn
+			(turn < this.#finalReviewRequestFirstTurn ||
+				lastPrimaryUserMessage(this.#host.agent.state.messages) !== this.#discardFinalReviewUser)
 		) {
 			return;
 		}

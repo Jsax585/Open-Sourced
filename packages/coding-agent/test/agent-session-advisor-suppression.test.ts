@@ -66,6 +66,8 @@ interface CompletedAdvisorOptions {
 	reviewFinalAnswer?: boolean;
 	finalReviewTimeoutMs?: number;
 	primaryResponses?: MockResponse[];
+	/** Fallback for primary calls after {@link primaryResponses} runs out; can hold a call open. */
+	primaryHandler?: () => MockResponse | Promise<MockResponse>;
 	advisorResponses?: (MockResponse | (() => Promise<MockResponse> | MockResponse))[];
 	advisorTools?: AgentTool[];
 	primaryTools?: AgentTool[];
@@ -189,6 +191,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 	): Promise<CompletedAdvisorHarness> {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({
+			handler: options.primaryHandler,
 			responses: options.primaryResponses ?? [
 				{ content: ["EXACT VERDICT"], stopReason: "stop" },
 				{ content: ["CHANGED VERDICT"], stopReason: "stop" },
@@ -1023,6 +1026,60 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		await session.waitForIdle();
 
 		expect(mock.calls).toHaveLength(callsAfterSecondRequest);
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(0);
+	});
+
+	it("does not steer a superseded note into the next request mid-generation", async () => {
+		const staleNote = Promise.withResolvers<void>();
+		const secondCallStarted = Promise.withResolvers<void>();
+		const secondResponse = Promise.withResolvers<void>();
+		let reviewAttempts = 0;
+		const { session, mock } = await createCompletedAdvisorSession("blocker", undefined, {
+			reviewFinalAnswer: true,
+			finalReviewTimeoutMs: 25,
+			primaryResponses: [{ content: ["FIRST ANSWER"], stopReason: "stop" }],
+			// Hold the second request's answer open so the stale note lands mid-flight.
+			primaryHandler: async () => {
+				secondCallStarted.resolve();
+				await secondResponse.promise;
+				return { content: ["SECOND ANSWER"], stopReason: "stop" };
+			},
+			advisorResponses: [
+				async () => {
+					reviewAttempts++;
+					await staleNote.promise;
+					return {
+						content: [
+							{
+								type: "toolCall",
+								name: "advise",
+								arguments: { note: "stale blocker from the first request", severity: "blocker" },
+							},
+						],
+					};
+				},
+			],
+		});
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const firstPrompt = session.prompt("first prompt with slow advisor");
+		await session.waitForIdle();
+		await firstPrompt;
+		expect(reviewAttempts).toBe(1);
+
+		// The second request starts and is still generating its first answer, so the
+		// request boundary has not advanced yet.
+		const secondPrompt = session.prompt("second unrelated prompt");
+		await secondCallStarted.promise;
+
+		staleNote.resolve();
+		await session.waitForAdvisorCatchup(1000);
+		secondResponse.resolve();
+		await secondPrompt;
+		await session.waitForIdle();
+
+		// The blocker belongs to the superseded request: steering it into the live
+		// one would inject feedback against work the primary already finished.
+		expect(mock.calls).toHaveLength(2);
 		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(0);
 	});
 
