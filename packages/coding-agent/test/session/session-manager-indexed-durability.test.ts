@@ -503,7 +503,7 @@ describe("indexed session turns while every whole-journal publish fails", () => 
 		{
 			change: "a header change",
 			apply: async (manager: SessionManager) => {
-				await manager.setTaskPromptCacheKey("task-cache-key").catch(() => {});
+				await manager.addWorkspaceDirectory("/extra-workspace-root").catch(() => {});
 			},
 		},
 	])("saves the next turns after $change", async ({ apply }) => {

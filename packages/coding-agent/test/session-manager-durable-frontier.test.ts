@@ -156,7 +156,7 @@ describe("session turns while every full rewrite fails", () => {
 		{
 			change: "a header change",
 			apply: async (manager: SessionManager) => {
-				await manager.setTaskPromptCacheKey("task-cache-key").catch(() => undefined);
+				await manager.addWorkspaceDirectory("/extra-workspace-root").catch(() => undefined);
 			},
 		},
 	])("saves the next turns after $change, reports the failure, and lets flush() resolve", async ({ apply }) => {
