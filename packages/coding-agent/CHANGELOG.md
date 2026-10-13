@@ -9,7 +9,7 @@
 
 ### Fixed
 
-- Fixed `computer` input sent right after other input in the same Eval cell landing on UI the app was still drawing (a new Finder folder lost the first letters of its typed name): input now waits for its app to go quiet first, like reads do
+- Fixed `computer` input sent right after other input in the same Eval cell landing on UI the app was still drawing (a new Finder folder lost the first letters of its typed name): input now waits for earlier input's apps to go quiet first, like reads do
 
 ## [18.9.2] - 2026-10-11
 

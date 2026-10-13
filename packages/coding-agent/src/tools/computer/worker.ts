@@ -147,10 +147,10 @@ function isRootTarget(target: string): boolean {
 /**
  * Input settles once the apps it reached have sent no accessibility
  * notification for this long, measured from when the wait starts, and at the
- * latest after the cap; the read or input that follows on those apps sees them
- * done reacting. One read per window: a ref expires once its element is
- * missing from the window's last two snapshots, so a second read would expire
- * refs the model held before the cell.
+ * latest after the cap; the read or input that follows sees them done
+ * reacting. One read per window: a ref expires once its element is missing
+ * from the window's last two snapshots, so a second read would expire refs
+ * the model held before the cell.
  */
 const SETTLE_QUIET_MS = 250;
 const SETTLE_CAP_MS = 5_000;
@@ -203,15 +203,9 @@ interface ComputerRunContext extends CellScope {
 	screenshots: ComputerScreenshot[];
 }
 
-/** Input a wait settles: the processes it reached, the cells that sent it, and when it ended. */
+/** Input since the UI last settled: the processes it reached, the cells that sent it, and when it ended. */
 interface Unsettled {
 	pids: Set<number>;
-	cells: Set<CellKey>;
-	endedAt: number;
-}
-
-/** Input one process owes a settle for: the cells that sent it, and when the latest of it ended. */
-interface Debt {
 	cells: Set<CellKey>;
 	endedAt: number;
 }
@@ -364,25 +358,24 @@ function guardRun(context: ComputerRunContext, method: string): void {
 	throwIfAborted(context.signal);
 }
 
-/** A screenshot of `target` (a window, or a desktop-root target, which has no process), once its app has settled. */
 async function captureScreenshot(
 	session: NativeDesktopSession,
 	getContext: RunContextAccessor,
 	observer: InputObserver,
-	target: InputWindow,
+	target: string,
 	options?: ScreenshotOptions,
 	region?: CaptureRegion,
 ): Promise<ScreenshotResult> {
 	const context = getContext();
-	await observer.settle(context.signal, target.pid);
+	await observer.settle(context.signal);
 	const caps = {
 		maxWidth: context.snapshot.captureMaxWidth,
 		maxHeight: context.snapshot.captureMaxHeight,
 	};
 	const frame = await nativeCall(context.signal, () =>
-		region === undefined ? session.capture(target.id, caps) : session.captureRegion(target.id, region, caps),
+		region === undefined ? session.capture(target, caps) : session.captureRegion(target, region, caps),
 	);
-	if (isRootTarget(target.id) && region === undefined) observer.noteRootCapture(target.id, frame.displays);
+	if (isRootTarget(target) && region === undefined) observer.noteRootCapture(target, frame.displays);
 	return await emitScreenshot(context, frame, options);
 }
 
@@ -457,10 +450,10 @@ class El {
 		this.childCount = node.childCount;
 	}
 
-	/** A read of this element, once its app has settled; a failure (an expired ref) has the settle report the window. */
+	/** A read of this element, once the cell's input has settled; a failure (an expired ref) has the settle report the window. */
 	async #read<T>(call: () => Promise<T>): Promise<T> {
 		const context = this.#getContext();
-		await this.#observer.settle(context.signal, this.#observer.windowOf(this.ref)?.pid);
+		await this.#observer.settle(context.signal);
 		return await this.#observer.read(context, this.ref, call);
 	}
 
@@ -673,21 +666,14 @@ class Win {
 	}
 
 	screenshot(options?: ScreenshotOptions): Promise<ScreenshotResult> {
-		return captureScreenshot(
-			this.#session,
-			this.#getContext,
-			this.#observer,
-			{ id: this.id, pid: this.pid },
-			options,
-		);
+		return captureScreenshot(this.#session, this.#getContext, this.#observer, this.id, options);
 	}
 
 	zoom(region: CaptureRegion, options?: ScreenshotOptions): Promise<ScreenshotResult> {
 		if (!region || typeof region !== "object" || Array.isArray(region)) {
 			throw new ToolError("zoom requires a region { x, y, width, height } in the last full screenshot's pixels");
 		}
-		const window = { id: this.id, pid: this.pid };
-		return captureScreenshot(this.#session, this.#getContext, this.#observer, window, options, region);
+		return captureScreenshot(this.#session, this.#getContext, this.#observer, this.id, options, region);
 	}
 
 	/** The run context, once the read-only guard has passed: every input helper calls this before touching its arguments. */
@@ -789,7 +775,7 @@ class Win {
 
 	async observe(options?: ScreenshotOptions & AxOptions): Promise<ObservationResult> {
 		const context = this.#getContext();
-		await this.#observer.settle(context.signal, this.pid);
+		await this.#observer.settle(context.signal);
 		// Sent now: an input sent after it does not make this a post-input read, however late it returns.
 		const issued = this.#observer.ledger.sequence;
 		const result = await nativeCall(context.signal, () =>
@@ -830,7 +816,7 @@ class Win {
 					path.length <= 1 && path[0] === undefined
 						? undefined
 						: menuPath("menu.items", path, { allowEmpty: true });
-				await this.#observer.settle(context.signal, this.pid);
+				await this.#observer.settle(context.signal);
 				return await nativeCall(context.signal, () => this.#session.menuItems(this.id, segments));
 			},
 			select: async (...path: [string, ...string[]] | [string[]]): Promise<void> => {
@@ -852,7 +838,7 @@ class Win {
 
 	async ax(options?: AxOptions): Promise<string> {
 		const { signal, cell } = this.#getContext();
-		await this.#observer.settle(signal, this.pid);
+		await this.#observer.settle(signal);
 		// Sent now: an input sent after it does not make this a post-input read, however late it returns.
 		const issued = this.#observer.ledger.sequence;
 		const text = (await nativeCall(signal, () => this.#session.axSnapshot(this.id, options))).text;
@@ -862,7 +848,7 @@ class Win {
 
 	async find(query: AxQuery): Promise<El[]> {
 		const { signal } = this.#getContext();
-		await this.#observer.settle(signal, this.pid);
+		await this.#observer.settle(signal);
 		const window = { id: this.id, pid: this.pid };
 		return foundElements(
 			(await nativeCall(signal, () => this.#session.axQuery(this.id, query))).map(node =>
@@ -891,8 +877,8 @@ class InputObserver {
 	readonly #session: NativeDesktopSession;
 	/** Display regions of each root target's latest screenshot, whose pixels its pointer input is given in. */
 	readonly #rootDisplays = new Map<string, DesktopDisplay[]>();
-	/** Input each app owes a settle for, by the process it reached; the `undefined` key holds input whose process is not known. */
-	readonly #owed = new Map<number | undefined, Debt>();
+	/** Input since the UI last settled: the processes it reached, the cells that sent it, and when it ended; undefined once settled. */
+	#unsettled?: Unsettled;
 	/** The wait in progress: every call issued meanwhile waits for it too. */
 	#settling?: Promise<SettleOutcome>;
 	/** Settles once the latest input has dispatched: inputs reach the native session in call order. */
@@ -929,56 +915,49 @@ class InputObserver {
 	}
 
 	/**
-	 * Pay the settle owed for input to `pid`'s app (every app's when `pid` is
-	 * undefined) and for input whose app is not known: wait until those apps
-	 * have gone quiet. Every observation pays its app's debt before it reads,
-	 * every input before it is sent, and the cell's report pays the rest, so
-	 * nothing reads or acts on a half-drawn UI; calls issued during a wait wait
-	 * for it too. Without a process to watch, the wait is a fixed time after the
-	 * input. Input sent during a wait is waited for next. How each wait ended
-	 * goes on the record of every cell whose input it waited for.
+	 * Wait until the apps that input since the last settle reached have gone
+	 * quiet. Every observation pays this before it reads, every input before it
+	 * is sent, and so does the cell's report, so nothing reads or acts on a
+	 * half-drawn UI; calls issued during a wait share it. Without a process to
+	 * watch, the wait is a fixed time after the input. Input sent during a wait
+	 * is waited for next, and a wait that is cancelled leaves its input owed.
+	 * How each wait ended goes on the record of every cell whose input it
+	 * waited for.
 	 */
-	async settle(signal: AbortSignal, pid?: number): Promise<void> {
+	async settle(signal: AbortSignal): Promise<void> {
 		for (;;) {
 			if (this.#settling) {
 				await this.#settling;
 				continue;
 			}
-			const unsettled = this.#take(pid);
+			const unsettled = this.#unsettled;
 			if (!unsettled) return;
+			this.#unsettled = undefined;
 			const settling = this.#wait(unsettled, signal);
 			this.#settling = settling;
+			let outcome: SettleOutcome;
 			try {
-				this.ledger.noteOutcome(unsettled.cells, await settling);
+				outcome = await settling;
+			} catch (error) {
+				this.#restore(unsettled);
+				throw error;
 			} finally {
 				this.#settling = undefined;
 			}
+			this.ledger.noteOutcome(unsettled.cells, outcome);
 		}
 	}
 
-	/** Take what `settle(pid)` pays as one wait, or undefined when nothing is owed. */
-	#take(pid: number | undefined): Unsettled | undefined {
-		let unsettled: Unsettled | undefined;
-		for (const [key, debt] of this.#owed) {
-			if (pid !== undefined && key !== undefined && key !== pid) continue;
-			this.#owed.delete(key);
-			unsettled ??= { pids: new Set(), cells: new Set(), endedAt: debt.endedAt };
-			if (key !== undefined) unsettled.pids.add(key);
-			for (const cell of debt.cells) unsettled.cells.add(cell);
-			unsettled.endedAt = Math.max(unsettled.endedAt, debt.endedAt);
+	/** Input a wait did not settle is owed again, with any input sent since. */
+	#restore(unsettled: Unsettled): void {
+		const current = this.#unsettled;
+		if (!current) {
+			this.#unsettled = unsettled;
+			return;
 		}
-		return unsettled;
-	}
-
-	/** `cell` is sending input to `pid`'s app (undefined: an app not known), which then owes a settle. */
-	#owe(pid: number | undefined, cell: CellKey): Debt {
-		let debt = this.#owed.get(pid);
-		if (!debt) {
-			debt = { cells: new Set(), endedAt: Date.now() };
-			this.#owed.set(pid, debt);
-		}
-		debt.cells.add(cell);
-		return debt;
+		for (const pid of unsettled.pids) current.pids.add(pid);
+		for (const cell of unsettled.cells) current.cells.add(cell);
+		current.endedAt = Math.max(current.endedAt, unsettled.endedAt);
 	}
 
 	async #wait(unsettled: Unsettled, signal: AbortSignal): Promise<SettleOutcome> {
@@ -995,17 +974,15 @@ class InputObserver {
 	}
 
 	/**
-	 * Dispatch one input, once the app it addresses has settled from earlier
-	 * input, capturing the roster first when it opens the cell's input. Input
-	 * whose app is known only once sent (desktop-root input, an app launch)
-	 * waits for every app. Desktop-root input (`root`) is recorded on the window
-	 * it reaches: the topmost window under `root.point` (pixels of the root
-	 * target's latest screenshot), or the focused window for keys; it stays
-	 * unattributed when that is unknown. `opens` names what an app launch
-	 * opened: the process, whose settling the next call on it waits for, and
-	 * its window when known; that input is reported on the app's window, never
-	 * the focused one. Concurrent inputs dispatch in call order, each after the
-	 * reads that precede the one before it.
+	 * Dispatch one input, once earlier input has settled, capturing the roster
+	 * first when it opens the cell's input. Desktop-root input (`root`) is
+	 * recorded on the window it reaches: the topmost window under `root.point`
+	 * (pixels of the root target's latest screenshot), or the focused window
+	 * for keys; it stays unattributed when that is unknown. `opens` names what
+	 * an app launch opened: the process, whose settling the next call waits for
+	 * too, and its window when known; that input is reported on the app's
+	 * window, never the focused one. Concurrent inputs dispatch in call order,
+	 * each after the reads that precede the one before it.
 	 */
 	async input<T>(
 		scope: CellScope,
@@ -1019,14 +996,14 @@ class InputObserver {
 		const previous = this.#dispatched;
 		const { promise: dispatched, resolve: markDispatched } = Promise.withResolvers<void>();
 		this.#dispatched = dispatched;
-		let debt: Debt | undefined;
+		let unsettled: Unsettled | undefined;
 		const { signal, cell } = scope;
 		try {
 			await previous;
 			// A cancelled cell's state is discarded; input it still sends must not record more.
 			throwIfAborted(signal);
-			const known = options?.root || options?.opens ? undefined : window;
-			await this.settle(signal, known && this.ledger.pidOf(known));
+			// Keys and clicks sent while an app still draws what the last input opened land on the wrong control.
+			await this.settle(signal);
 			let roster: DesktopWindow[] | undefined;
 			if (this.ledger.wantsRoster(cell)) {
 				const claim = this.ledger.claimRoster(cell);
@@ -1038,14 +1015,19 @@ class InputObserver {
 				const at = root.point && desktopPoint(this.#rootDisplays.get(root.target) ?? [], root.point);
 				if (!root.point || at) window = await this.windowReached(signal, at, roster);
 			}
+			let pid: number | undefined;
 			if (options?.opens) this.ledger.noteAppInput(cell);
-			else debt = this.#owe(this.ledger.noteInput(cell, window), cell);
+			else pid = this.ledger.noteInput(cell, window);
+			unsettled = this.#unsettled ??= { pids: new Set(), cells: new Set(), endedAt: Date.now() };
+			unsettled.cells.add(cell);
+			if (pid !== undefined) unsettled.pids.add(pid);
 			const call = nativeCall(signal, dispatch);
 			markDispatched();
 			const result = await call;
 			if (options?.opens) {
 				const opened = options.opens(result);
-				debt = this.#owe(opened.window?.pid ?? opened.pid, cell);
+				const started = opened.window?.pid ?? opened.pid;
+				if (started !== undefined) unsettled.pids.add(started);
 				this.ledger.noteOpened(cell, opened);
 			}
 			return result;
@@ -1054,7 +1036,7 @@ class InputObserver {
 			throw error;
 		} finally {
 			markDispatched();
-			if (debt) debt.endedAt = Date.now();
+			if (unsettled) unsettled.endedAt = Date.now();
 		}
 	}
 
@@ -1793,7 +1775,7 @@ export class ComputerWorkerCore {
 				return window ? makeWin(window) : null;
 			},
 			screenshot: (options?: ScreenshotOptions) =>
-				captureScreenshot(session, getContext, observer, { id: DESKTOP_TARGET }, options),
+				captureScreenshot(session, getContext, observer, DESKTOP_TARGET, options),
 			zoom: desktopTarget.zoom.bind(desktopTarget),
 			click: desktopTarget.click.bind(desktopTarget),
 			doubleClick: desktopTarget.doubleClick.bind(desktopTarget),

@@ -2910,13 +2910,13 @@ describe("computer cell settlement", () => {
 		expect(calls).toEqual(["press cmd+s", "quiet 123", "type name"]);
 	});
 
-	it("lets input and reads on another app go ahead without the first app's wait", async () => {
+	it("makes input to one app wait for the app earlier input reached, so a paste follows its copy", async () => {
 		const transport = new MemoryTransport();
 		const native = new EditableWindowSession();
 		native.windows = [windowFixture, { ...windowFixture, id: "43", title: "Other", pid: 456, focused: false }];
 		const calls: string[] = [];
-		native.keyChord = async target => {
-			calls.push(`press ${target}`);
+		native.keyChord = async (target, keys) => {
+			calls.push(`press ${target} ${keys.join("+")}`);
 		};
 		native.waitForUiQuiet = async pids => {
 			calls.push(`quiet ${pids.join(",")}`);
@@ -2926,36 +2926,50 @@ describe("computer cell settlement", () => {
 
 		await runWorker(
 			transport,
-			"two-apps",
-			'const a = await desktop.window("42"); const b = await desktop.window("43"); await a.press("x"); await b.press("y"); await b.ax(); await a.press("z")',
+			"copy-paste",
+			'const a = await desktop.window("42"); const b = await desktop.window("43"); await a.press("cmd+c"); await b.press("cmd+v"); await desktop.press("return")',
 		);
-		expect(calls).toEqual(["press 42", "press 43", "quiet 456", "quiet 123", "press 42"]);
-		// The report pays what is left: the second input to window 42.
-		await settleWorker(transport, "settle");
-		expect(calls.slice(5)).toEqual(["quiet 123"]);
+		// The paste goes out once the app that took the copy has gone quiet, and keys to the desktop after the paste.
+		expect(calls).toEqual(["press 42 cmd+c", "quiet 123", "press 43 cmd+v", "quiet 456", "press desktop return"]);
 	});
 
-	it("makes desktop input wait for every app that owes a settle", async () => {
+	it("keeps input owed when the wait for it is cancelled, so the next input still waits", async () => {
 		const transport = new MemoryTransport();
 		const native = new EditableWindowSession();
-		native.windows = [windowFixture, { ...windowFixture, id: "43", title: "Other", pid: 456, focused: false }];
 		const calls: string[] = [];
-		native.keyChord = async target => {
-			calls.push(`press ${target}`);
+		native.keyChord = async (_target, keys) => {
+			calls.push(`press ${keys.join("+")}`);
 		};
+		let hang = true;
+		let cancelWait: (() => void) | undefined;
+		const waiting = Promise.withResolvers<void>();
 		native.waitForUiQuiet = async pids => {
 			calls.push(`quiet ${pids.join(",")}`);
-			return native.quiet;
+			if (!hang) return native.quiet;
+			const { promise, reject } = Promise.withResolvers<UiQuiet>();
+			cancelWait = () => reject(new Error("Cancelled: operation was cancelled"));
+			waiting.resolve();
+			return await promise;
 		};
+		native.cancel = () => cancelWait?.();
 		new ComputerWorkerCore(transport, () => native);
 
-		await runWorker(
-			transport,
-			"desktop-keys",
-			'const a = await desktop.window("42"); const b = await desktop.window("43"); await a.press("x"); await b.press("y"); await desktop.press("return")',
-		);
-		// Keys to the desktop reach whichever window has the focus, so both apps settle first.
-		expect(calls).toEqual(["press 42", "press 43", "quiet 123,456", "press desktop"]);
+		await runWorker(transport, "a", 'await (await desktop.window("42")).press("a")');
+		transport.inbound({
+			type: "run",
+			id: "b",
+			code: 'await (await desktop.window("42")).press("b")',
+			timeoutMs: 2_000,
+			session: snapshot(false),
+		});
+		await waiting.promise;
+		transport.inbound({ type: "abort", id: "b" });
+		const cancelled = await transport.waitFor(message => message.type === "result" && message.id === "b");
+		expect(cancelled.type === "result" && cancelled.ok).toBe(false);
+		hang = false;
+		await runWorker(transport, "c", 'await (await desktop.window("42")).press("c")');
+		// The cancelled cell never sent its key, and the next input waited for the first one's app.
+		expect(calls).toEqual(["press a", "quiet 123", "quiet 123", "press c"]);
 	});
 
 	it("waits a fixed half second after the input when no app can be watched, and says so on no change", async () => {
