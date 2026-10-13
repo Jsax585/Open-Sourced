@@ -22,7 +22,9 @@ use objc2_core_foundation::{
 
 use super::{
 	super::{
-		ax::{AxBounds, AxHandle, AxIdentity, AxProps, WalkBounds, normalize_role_macos},
+		ax::{
+			AxBounds, AxHandle, AxIdentity, AxProps, UNKNOWN_FIELD, WalkBounds, normalize_role_macos,
+		},
 		backend::AxBackend,
 		error::{CoreResult, DesktopError},
 		types::DesktopWindow,
@@ -823,21 +825,20 @@ fn element_props(
 const IDENTIFYING: [usize; 9] =
 	[SUBROLE, ROLE_DESCRIPTION, TITLE, DESCRIPTION, VALUE, VALUE_DESCRIPTION, HELP, IDENTIFIER, URL];
 
-/// Stands in an [`AxIdentity`] for an attribute whose read failed outright.
-const FAILED_READ: &str = "\0read failed";
-
 /// The element's [`AxIdentity`], or `None` when the app did not get to answer
-/// one of the [`IDENTIFYING`] attributes, as when it was too busy to reply: an
-/// unknown field could hide a difference. A read that fails outright is the
-/// element's answer, compared like a value: `AppKit` fails some attributes on
-/// every read, a checkbox's `AXSubrole` among them.
+/// one of the [`IDENTIFYING`] attributes, as when it was too busy to reply:
+/// the walk that met it then can't vouch for any identity. A read that fails
+/// outright is [`UNKNOWN_FIELD`]: the element itself is never re-found, and
+/// it counts as a twin of any element agreeing with its other fields, since
+/// `AppKit` fails some attributes on every read, a checkbox's `AXSubrole`
+/// among them, and a window holding one must stay readable.
 fn read_identity(values: &NodeValues, native_role: &str) -> Option<AxIdentity> {
 	let mut identity = Vec::with_capacity(IDENTIFYING.len() + 1);
 	identity.push(Some(native_role.to_owned()));
 	for index in IDENTIFYING {
 		let value = match values.get(index) {
 			Err(error) if error == AXError::Failure => {
-				identity.push(Some(FAILED_READ.to_owned()));
+				identity.push(Some(UNKNOWN_FIELD.to_owned()));
 				continue;
 			},
 			value if answered(&value) => value.ok().flatten(),
@@ -1577,7 +1578,8 @@ mod tests {
 			1
 		);
 		assert!(answered(&walk(&no_value).get(CHILDREN)));
-		// A read that failed outright is an answer, unequal to any value.
+		// A read that failed outright leaves the identity, with that field
+		// unknown.
 		let failing = read_identity(&walk(&failed), "AXButton").unwrap();
 		assert_ne!(failing, identity);
 		assert_eq!(read_identity(&walk(&failed), "AXButton").unwrap(), failing);

@@ -112,8 +112,31 @@ pub struct AxProps {
 }
 
 /// An element's identifying fields, in a fixed backend-defined order; two
-/// elements match only when every field is equal.
+/// elements match only when every field is equal. A field holding
+/// [`UNKNOWN_FIELD`] could hold anything.
 pub type AxIdentity = Box<[Option<String>]>;
+
+/// Stands in an [`AxIdentity`] for a field the app failed to report, as
+/// `AppKit` does with a checkbox's `AXSubrole` on every read: the element
+/// can't be re-found by it, and it could be a twin of any element that agrees
+/// with its other fields.
+pub const UNKNOWN_FIELD: &str = "\0unknown";
+
+fn has_unknown(identity: &AxIdentity) -> bool {
+	identity
+		.iter()
+		.any(|field| field.as_deref() == Some(UNKNOWN_FIELD))
+}
+
+/// Whether an element with identity `candidate` could be one with `target`:
+/// every field is equal or unknown in `candidate`.
+fn could_be(candidate: &AxIdentity, target: &AxIdentity) -> bool {
+	candidate.len() == target.len()
+		&& candidate
+			.iter()
+			.zip(target)
+			.all(|(field, wanted)| field.as_deref() == Some(UNKNOWN_FIELD) || field == wanted)
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct AxBounds {
@@ -238,7 +261,10 @@ impl AxRegistry {
 			id
 		});
 		let identity = match unique {
-			Some(true) => props.identity.clone(),
+			Some(true) => props
+				.identity
+				.clone()
+				.filter(|identity| !has_unknown(identity)),
 			Some(false) => None,
 			None => renewed
 				.and_then(|id| self.entries.get(&id))
@@ -281,7 +307,8 @@ impl AxRegistry {
 	/// the one it named. When a read already registered that element under
 	/// another ref, `reference` becomes an alias of that ref, which reads
 	/// renew, and names the element for as long as that ref does; that ref
-	/// takes the identity the re-find proved unique when it has none.
+	/// takes the identity the re-find just proved, which an older one it was
+	/// registered with may no longer describe.
 	pub(crate) fn rebind(&mut self, reference: &str, handle: AxHandle) {
 		let Some(id) = self.id(reference) else {
 			return;
@@ -300,7 +327,7 @@ impl AxRegistry {
 					refs.remove(&entry.handle);
 				}
 				if let Some(owner_entry) = self.entries.get_mut(&owner) {
-					owner_entry.identity = owner_entry.identity.take().or(entry.identity);
+					owner_entry.identity = entry.identity;
 				}
 			}
 			for target in self.aliases.values_mut() {
@@ -321,6 +348,15 @@ impl AxRegistry {
 			refs.insert(handle.clone(), id);
 		}
 		entry.handle = handle;
+	}
+
+	/// Stops `reference`'s element from being re-found by the fields it was
+	/// read with, as after a call that acted on it and may have changed them,
+	/// until a read that can vouch for its fields registers it again.
+	pub(crate) fn forget_identity(&mut self, reference: &str) {
+		if let Some(entry) = self.id(reference).and_then(|id| self.entries.get_mut(&id)) {
+			entry.identity = None;
+		}
 	}
 
 	/// Drops expired refs and the aliases of each. An identity a newer ref took
@@ -746,46 +782,48 @@ pub fn element_at_node(
 	register_node(backend, registry, target, handle).map(Some)
 }
 
-/// The identities more than one element of the walked tree shares.
-fn shared_identities(root: &WalkNode) -> HashSet<AxIdentity> {
-	let mut seen = HashSet::new();
-	let mut shared = HashSet::new();
-	let mut stack = vec![root];
-	while let Some(node) = stack.pop() {
-		stack.extend(&node.children);
-		if let Some(identity) = &node.props.identity
-			&& !seen.insert(identity)
-		{
-			shared.insert(identity.clone());
-		}
-	}
-	shared
-}
-
 /// What one tree walk can say about whether an identity is unique in its
 /// window.
 struct ReadIdentities {
 	/// The identities more than one element of the walk shares.
-	shared: HashSet<AxIdentity>,
+	shared:  HashSet<AxIdentity>,
+	/// The identities of the walk with an unknown field, each a possible twin
+	/// of any identity that agrees with its other fields.
+	unknown: Vec<AxIdentity>,
 	/// Whether the walk read the whole window; see [`WalkState::whole`].
-	whole:  bool,
+	whole:   bool,
 }
 
 impl ReadIdentities {
 	fn new(root: Option<&WalkNode>, state: &WalkState) -> Self {
-		Self { shared: root.map_or_default(shared_identities), whole: state.whole() }
+		let mut seen = HashSet::new();
+		let mut read = Self { shared: HashSet::new(), unknown: Vec::new(), whole: state.whole() };
+		let mut stack: Vec<_> = root.into_iter().collect();
+		while let Some(node) = stack.pop() {
+			stack.extend(&node.children);
+			let Some(identity) = &node.props.identity else {
+				continue;
+			};
+			if has_unknown(identity) {
+				read.unknown.push(identity.clone());
+			} else if !seen.insert(identity) {
+				read.shared.insert(identity.clone());
+			}
+		}
+		read
 	}
 
-	/// The `unique` verdict [`AxRegistry::register`] takes for `props`: a twin
-	/// anywhere in the walk rules re-finding out, but only a walk of the whole
-	/// window can rule it in; a walk that missed part of it keeps what an
-	/// earlier read found.
+	/// The `unique` verdict [`AxRegistry::register`] takes for `props`: a
+	/// possible twin anywhere in the walk rules re-finding out, but only a walk
+	/// of the whole window can rule it in; a walk that missed part of it keeps
+	/// what an earlier read found.
 	fn unique(&self, props: &AxProps) -> Option<bool> {
-		let shared = props
-			.identity
-			.as_ref()
-			.is_some_and(|identity| self.shared.contains(identity));
-		if shared {
+		let twinned = props.identity.as_ref().is_some_and(|identity| {
+			has_unknown(identity)
+				|| self.shared.contains(identity)
+				|| self.unknown.iter().any(|other| could_be(other, identity))
+		});
+		if twinned {
 			Some(false)
 		} else if self.whole {
 			Some(true)
@@ -823,11 +861,14 @@ pub fn refind(
 	let mut matches = Vec::new();
 	let mut stack = vec![root];
 	while let Some(node) = stack.pop() {
-		if node.props.identity.as_ref() == Some(&identity) {
-			matches.push(node.handle);
-			if matches.len() > 1 {
+		if let Some(candidate) = &node.props.identity
+			&& could_be(candidate, &identity)
+		{
+			// An element with an unknown field may or may not be the one.
+			if has_unknown(candidate) || !matches.is_empty() {
 				return Ok(None);
 			}
+			matches.push(node.handle);
 		}
 		stack.extend(node.children);
 	}
@@ -1272,6 +1313,59 @@ mod tests {
 		let reread =
 			snapshot(&mut m, &mut registry, &window(), &AxSnapshotOptions::default()).unwrap();
 		assert!(reread.text.contains("button \"Go\" [ref=e2]"), "{}", reread.text);
+	}
+	#[test]
+	fn a_field_the_app_failed_to_report_matches_nothing_for_certain() {
+		let unknown = |role: &str| {
+			let mut props = p(role, None);
+			props.identity = Some(Box::new([Some(role.to_string()), Some(UNKNOWN_FIELD.into())]));
+			props
+		};
+		let mock = |children: Vec<u64>| Mock {
+			props: [
+				(1, p("window", Some("Title"))),
+				(2, p("button", Some("Go"))),
+				(3, p("button", Some("Stop"))),
+				(4, p("button", Some("Go"))),
+				(5, unknown("checkbox")),
+				(6, unknown("button")),
+				(7, unknown("button")),
+			]
+			.into(),
+			children: [(1, children)].into(),
+			..Default::default()
+		};
+		let refound = |m: &mut Mock, registry: &AxRegistry, reference: &str| {
+			refind(m, registry, &window(), reference)
+				.unwrap()
+				.map(|handle| matches!(handle, AxHandle::Test(4)))
+		};
+		// An element with an unknown field of another role blocks nothing.
+		let mut m = mock(vec![2, 3, 5]);
+		let mut registry = AxRegistry::default();
+		snapshot(&mut m, &mut registry, &window(), &AxSnapshotOptions::default()).unwrap();
+		m.children.insert(1, vec![4, 3, 5]);
+		assert_eq!(refound(&mut m, &registry, "e2"), Some(true));
+		// One whose other fields agree could be the copy, so nothing is.
+		m.children.insert(1, vec![4, 3, 6]);
+		assert_eq!(refound(&mut m, &registry, "e2"), None);
+		// It could also be a twin when the ref is read.
+		let mut m = mock(vec![2, 3, 6]);
+		let mut registry = AxRegistry::default();
+		snapshot(&mut m, &mut registry, &window(), &AxSnapshotOptions::default()).unwrap();
+		m.children.insert(1, vec![4, 3]);
+		assert_eq!(refound(&mut m, &registry, "e2"), None);
+		// Nor is an element with an unknown field re-found by it, even when
+		// its replacement fails the same read.
+		let mut m = mock(vec![6, 3]);
+		let mut registry = AxRegistry::default();
+		snapshot(&mut m, &mut registry, &window(), &AxSnapshotOptions::default()).unwrap();
+		m.children.insert(1, vec![7, 3]);
+		assert!(
+			refind(&mut m, &registry, &window(), "e2")
+				.unwrap()
+				.is_none()
+		);
 	}
 	#[test]
 	fn a_read_that_missed_part_of_the_window_cannot_make_a_ref_refindable() {

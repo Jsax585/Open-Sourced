@@ -734,7 +734,9 @@ impl Worker {
 	/// app destroyed is re-found ([`ax::refind`]) before `op` is sent, and
 	/// the flag says so; an `op` that fails is never sent again, since a
 	/// request that failed may still have acted, and may itself be what
-	/// destroyed the element.
+	/// destroyed the element. An element acted on is not re-found again until
+	/// a read registers it anew: the action may have changed the very fields,
+	/// such as its value, that it would be matched by.
 	fn act_on_ref<T>(
 		&mut self,
 		reference: &str,
@@ -742,14 +744,17 @@ impl Worker {
 		op: impl FnOnce(&mut Self, &ax::AxHandle) -> CoreResult<T>,
 	) -> CoreResult<(T, bool)> {
 		let handle = self.registry.resolve(reference)?;
-		if self.ax()?.destroyed(&handle)
+		let acted = if self.ax()?.destroyed(&handle)
 			&& let Some(found) = self.refind(reference)
 		{
-			return self.on_refound(reference, found, token, op);
-		}
-		// The probe may have outlived a cancellation.
-		token.check()?;
-		op(self, &handle).map(|value| (value, false))
+			self.on_refound(reference, found, token, op)?
+		} else {
+			// The probe may have outlived a cancellation.
+			token.check()?;
+			(op(self, &handle)?, false)
+		};
+		self.registry.forget_identity(reference);
+		Ok(acted)
 	}
 
 	/// Runs `op` on `found`, the element re-found for `reference`, unless the
@@ -2596,6 +2601,17 @@ mod capture_tests {
 		perform(worker, reference, "press", &CancellationSource::default())
 	}
 
+	/// Reads `reference`: whether it was re-found, or the error's code.
+	fn read(worker: &mut Worker, reference: &str) -> std::result::Result<bool, ErrorCode> {
+		let (reply, _rx) = flume::bounded(1);
+		let request = Request::AxNode { reference: reference.to_string(), reply };
+		match worker.process(&request, &CancellationSource::default().token()) {
+			Ok(Response::Node(Some(node))) => Ok(node.refound == Some(true)),
+			Ok(_) => panic!("a read answers with the element"),
+			Err(error) => Err(error.code),
+		}
+	}
+
 	#[test]
 	fn a_press_on_a_rebuilt_element_goes_to_its_one_identical_copy() {
 		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
@@ -2684,7 +2700,8 @@ mod capture_tests {
 		assert_eq!(press(&mut worker, "e2"), Ok(false));
 		assert_eq!(press(&mut worker, "e4"), Ok(false));
 		assert_eq!(tree.lock().pressed, [4, 4, 4]);
-		// Both refs follow the element when the app rebuilds it again.
+		// Both refs follow the element when the app rebuilds it after a read.
+		snapshot(&mut worker);
 		rebuild(&tree, 4, &[(5, "Go"), (3, "Stop")]);
 		assert_eq!(press(&mut worker, "e2"), Ok(true));
 		assert_eq!(press(&mut worker, "e4"), Ok(false));
@@ -2705,10 +2722,37 @@ mod capture_tests {
 			panic!("the window lists its children");
 		};
 		assert_eq!(nodes[0].ref_, "e4");
-		assert_eq!(press(&mut worker, "e2"), Ok(true));
+		assert_eq!(read(&mut worker, "e2"), Ok(true));
 		rebuild(&tree, 4, &[(5, "Go"), (3, "Stop")]);
 		assert_eq!(press(&mut worker, "e4"), Ok(true));
-		assert_eq!(tree.lock().pressed, [4, 5]);
+		assert_eq!(tree.lock().pressed, [5]);
+	}
+
+	#[test]
+	fn an_element_acted_on_is_not_refound_by_the_fields_it_was_read_with() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		assert_eq!(press(&mut worker, "e2"), Ok(false));
+		// The press renamed the button and the app rebuilt it; another "Go"
+		// is not it.
+		rebuild(&tree, 2, &[(4, "Done"), (5, "Go"), (3, "Stop")]);
+		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
+		assert_eq!(tree.lock().pressed, [2]);
+	}
+
+	#[test]
+	fn a_ref_aliased_onto_a_renamed_element_follows_it_by_its_current_fields() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		rebuild(&tree, 2, &[(4, "Wait"), (3, "Stop")]);
+		let target = Target::Window(WAYLAND_ID.to_string());
+		worker
+			.snapshot(&target, &AxSnapshotOptions::default())
+			.unwrap();
+		// `e4` was read as "Wait", then became "Go" and is `e2`'s copy.
+		tree.lock().titles.insert(4, "Go");
+		assert_eq!(read(&mut worker, "e2"), Ok(true));
+		rebuild(&tree, 4, &[(5, "Go"), (6, "Wait"), (3, "Stop")]);
+		assert_eq!(press(&mut worker, "e4"), Ok(true));
+		assert_eq!(tree.lock().pressed, [5]);
 	}
 
 	#[test]
