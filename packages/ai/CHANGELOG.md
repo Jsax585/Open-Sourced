@@ -22,6 +22,7 @@
 
 ### Fixed
 
+- Gateway fallbacks reject incompatible OpenAI file references in ordinary messages as well as tool outputs, preserving the input rather than silently dropping it ([#10142](https://github.com/can1357/oh-my-pi/pull/10142) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway quota probes settle only on canonical inference success; cancellation, reader errors and response-assembly failures release request-owned holds without clearing failed cooldowns ([#10139](https://github.com/can1357/oh-my-pi/pull/10139) by [@jroth1111](https://github.com/jroth1111)).
 - Authentication, policy, provider-wait, and unknown legacy blocks cannot be bypassed by quota probes; broker compatibility preserves their provenance ([#10138](https://github.com/can1357/oh-my-pi/pull/10138) by [@jroth1111](https://github.com/jroth1111)).
 - Active gateway SSE inference survives the HTTP idle limit; failures with reported usage or explicit no-retry intent are not transparently replayed ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
