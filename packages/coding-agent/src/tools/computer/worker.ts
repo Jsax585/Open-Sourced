@@ -94,10 +94,12 @@ export interface NativeDesktopSession {
 	axAttributes(ref: string): Promise<Array<[string, string]>>;
 	axChildren(ref: string): Promise<AxNode[]>;
 	axParent(ref: string): Promise<AxNode | null | undefined>;
-	axPerform(ref: string, action: string): Promise<AxActed>;
-	axSetValue(ref: string, value: string): Promise<AxActed>;
-	axFocus(ref: string): Promise<AxActed>;
-	axClick(ref: string, opts?: PointerOptions | null): Promise<AxActed>;
+	// The element actions resolve to `undefined` from an addon built before
+	// they reported `AxActed`, which a workspace checkout may still load.
+	axPerform(ref: string, action: string): Promise<AxActed | undefined>;
+	axSetValue(ref: string, value: string): Promise<AxActed | undefined>;
+	axFocus(ref: string): Promise<AxActed | undefined>;
+	axClick(ref: string, opts?: PointerOptions | null): Promise<AxActed | undefined>;
 	close(): Promise<void>;
 }
 
@@ -391,8 +393,8 @@ class El {
 		return node;
 	}
 
-	async #act(signal: AbortSignal, call: () => Promise<AxActed>): Promise<void> {
-		this.#reportRefound((await nativeCall(signal, call)).refound);
+	async #act(signal: AbortSignal, call: () => Promise<AxActed | undefined>): Promise<void> {
+		this.#reportRefound((await nativeCall(signal, call))?.refound);
 	}
 
 	async value(): Promise<string | undefined> {

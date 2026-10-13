@@ -239,16 +239,16 @@ class FakeNativeSession implements NativeDesktopSession {
 	async axParent(_ref: string): Promise<AxNode | null> {
 		return null;
 	}
-	async axPerform(_ref: string, _action: string): Promise<AxActed> {
+	async axPerform(_ref: string, _action: string): Promise<AxActed | undefined> {
 		return { refound: false };
 	}
-	async axSetValue(_ref: string, _value: string): Promise<AxActed> {
+	async axSetValue(_ref: string, _value: string): Promise<AxActed | undefined> {
 		return { refound: false };
 	}
-	async axFocus(_ref: string): Promise<AxActed> {
+	async axFocus(_ref: string): Promise<AxActed | undefined> {
 		return { refound: false };
 	}
-	async axClick(_ref: string, _opts?: PointerOptions | null): Promise<AxActed> {
+	async axClick(_ref: string, _opts?: PointerOptions | null): Promise<AxActed | undefined> {
 		return { refound: false };
 	}
 	async close(): Promise<void> {
@@ -1352,6 +1352,38 @@ describe("computer worker round trips", () => {
 			expect(notes).toHaveLength(rebuilt ? 3 : 0);
 			for (const note of notes) expect(note).toStartWith("e1: the app had destroyed this element");
 		}
+	});
+
+	it("completes element actions on an addon built before they reported a result", async () => {
+		class OldAddonSession extends FakeNativeSession {
+			readonly calls: string[] = [];
+			override async axPerform(ref: string, action: string): Promise<AxActed | undefined> {
+				this.calls.push(`axPerform:${ref}:${action}`);
+				return undefined;
+			}
+			override async axSetValue(ref: string, _value: string): Promise<AxActed | undefined> {
+				this.calls.push(`axSetValue:${ref}`);
+				return undefined;
+			}
+			override async axFocus(ref: string): Promise<AxActed | undefined> {
+				this.calls.push(`axFocus:${ref}`);
+				return undefined;
+			}
+			override async axClick(ref: string, _opts?: PointerOptions | null): Promise<AxActed | undefined> {
+				this.calls.push(`axClick:${ref}`);
+				return undefined;
+			}
+		}
+		const native = new OldAddonSession();
+		const transport = new MemoryTransport();
+		new ComputerWorkerCore(transport, () => native);
+		const result = await runWorker(
+			transport,
+			"old-addon",
+			'const el = await (await desktop.window(42)).ref("e1"); await el.press(); await el.setValue("x"); await el.focus(); await el.click(); return "done";',
+		);
+		expect(result.ok).toBe(true);
+		expect(native.calls).toEqual(["axPerform:e1:press", "axSetValue:e1", "axFocus:e1", "axClick:e1"]);
 	});
 
 	it("tells the model a run ended on a locked screen without refusing its input", async () => {
