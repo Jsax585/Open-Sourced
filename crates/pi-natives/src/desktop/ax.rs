@@ -164,6 +164,10 @@ struct Registered {
 	/// The element's [`AxIdentity`], kept only when no other element read
 	/// with it shared it, so the ref can be re-found by it.
 	identity:    Option<AxIdentity>,
+	/// The process that owned the window when `identity` was proven: a
+	/// window id the system gave to another process's window since is not the
+	/// window to re-find in.
+	pid:         Option<u32>,
 }
 
 pub struct AxRegistry {
@@ -176,6 +180,8 @@ pub struct AxRegistry {
 	/// Refs re-found onto an element another ref already named, each to that
 	/// ref, which they follow until it expires.
 	aliases:     HashMap<u64, u64>,
+	/// The owning process of each target as its last walk found it.
+	pids:        HashMap<String, Option<u32>>,
 }
 
 impl Default for AxRegistry {
@@ -186,6 +192,7 @@ impl Default for AxRegistry {
 			entries:     HashMap::new(),
 			refs:        HashMap::new(),
 			aliases:     HashMap::new(),
+			pids:        HashMap::new(),
 		}
 	}
 }
@@ -196,6 +203,12 @@ impl AxRegistry {
 		let generation = self.generations.entry(target.to_string()).or_default();
 		*generation = generation.saturating_add(1);
 		*generation
+	}
+
+	/// Notes the process that owns `target`'s window, for the identities its
+	/// walk proves.
+	pub(crate) fn note_window(&mut self, target: &str, pid: Option<u32>) {
+		self.pids.insert(target.to_string(), pid);
 	}
 
 	/// Ends `target`'s snapshot `generation` once it has registered its
@@ -248,6 +261,13 @@ impl AxRegistry {
 				.get(id)
 				.is_some_and(|entry| entry.fingerprint == fingerprint && backend.alive(&entry.handle))
 		});
+		// A ref this read replaces keeps naming its element until it expires,
+		// but no longer by fields it no longer has.
+		if let Some(old) = known.filter(|id| renewed != Some(*id))
+			&& let Some(entry) = self.entries.get_mut(&old)
+		{
+			entry.identity = None;
+		}
 		let id = renewed.unwrap_or_else(|| {
 			let id = self.next_ref;
 			self.next_ref = self.next_ref.saturating_add(1);
@@ -260,16 +280,19 @@ impl AxRegistry {
 			}
 			id
 		});
-		let identity = match unique {
-			Some(true) => props
-				.identity
-				.clone()
-				.filter(|identity| !has_unknown(identity)),
-			Some(false) => None,
+		let (identity, pid) = match unique {
+			Some(true) => (
+				props
+					.identity
+					.clone()
+					.filter(|identity| !has_unknown(identity)),
+				self.pids.get(target).copied().flatten(),
+			),
+			Some(false) => (None, None),
 			None => renewed
 				.and_then(|id| self.entries.get(&id))
-				.and_then(|entry| entry.identity.clone())
-				.filter(|identity| props.identity.as_ref() == Some(identity)),
+				.filter(|entry| entry.identity.is_some() && entry.identity == props.identity)
+				.map_or((None, None), |entry| (entry.identity.clone(), entry.pid)),
 		};
 		self.entries.insert(id, Registered {
 			handle,
@@ -277,6 +300,7 @@ impl AxRegistry {
 			generation,
 			fingerprint,
 			identity,
+			pid,
 		});
 		self.enforce_cap();
 		format!("e{id}")
@@ -328,6 +352,7 @@ impl AxRegistry {
 				}
 				if let Some(owner_entry) = self.entries.get_mut(&owner) {
 					owner_entry.identity = entry.identity;
+					owner_entry.pid = entry.pid;
 				}
 			}
 			for target in self.aliases.values_mut() {
@@ -675,6 +700,7 @@ pub fn snapshot(
 ) -> CoreResult<AxSnapshot> {
 	let target = &window.id;
 	let generation = registry.begin_snapshot(target);
+	registry.note_window(target, window.pid);
 	let root = backend.window_root(window)?;
 	let mut state = WalkState::new(
 		options.max_nodes.unwrap_or(800).max(1),
@@ -724,6 +750,7 @@ pub fn query(
 ) -> CoreResult<Vec<AxNode>> {
 	let target = &window.id;
 	let generation = registry.current_generation(target);
+	registry.note_window(target, window.pid);
 	let root = backend.window_root(window)?;
 	let mut state = WalkState::new(5_000, 24, WalkBounds::Read);
 	let Some(root) = walk_raw(backend, root, 0, &mut state)? else {
@@ -846,7 +873,13 @@ pub fn refind(
 	window: &DesktopWindow,
 	reference: &str,
 ) -> CoreResult<Option<AxHandle>> {
-	let Some(identity) = registry.entry(reference)?.identity.clone() else {
+	let entry = registry.entry(reference)?;
+	// The window id may now belong to another process's window.
+	let Some(identity) = entry
+		.identity
+		.clone()
+		.filter(|_| entry.pid.is_some() && entry.pid == window.pid)
+	else {
 		return Ok(None);
 	};
 	let root = backend.window_root(window)?;
@@ -1075,7 +1108,7 @@ mod tests {
 			id:      "7".into(),
 			title:   "Title".into(),
 			app:     "Safari".into(),
-			pid:     None,
+			pid:     Some(41),
 			x:       0,
 			y:       0,
 			width:   100,
@@ -1361,6 +1394,61 @@ mod tests {
 		let mut registry = AxRegistry::default();
 		snapshot(&mut m, &mut registry, &window(), &AxSnapshotOptions::default()).unwrap();
 		m.children.insert(1, vec![7, 3]);
+		assert!(
+			refind(&mut m, &registry, &window(), "e2")
+				.unwrap()
+				.is_none()
+		);
+	}
+	#[test]
+	fn a_window_id_now_owned_by_another_process_is_not_searched() {
+		let mut m = Mock {
+			props: [
+				(1, p("window", Some("Title"))),
+				(2, p("button", Some("Go"))),
+				(3, p("button", Some("Stop"))),
+				(4, p("button", Some("Go"))),
+			]
+			.into(),
+			children: [(1, vec![2, 3])].into(),
+			..Default::default()
+		};
+		let mut registry = AxRegistry::default();
+		snapshot(&mut m, &mut registry, &window(), &AxSnapshotOptions::default()).unwrap();
+		m.children.insert(1, vec![4, 3]);
+		let recycled = DesktopWindow { pid: Some(99), ..window() };
+		assert!(
+			refind(&mut m, &registry, &recycled, "e2")
+				.unwrap()
+				.is_none()
+		);
+		assert!(matches!(
+			refind(&mut m, &registry, &window(), "e2").unwrap(),
+			Some(AxHandle::Test(4))
+		));
+	}
+	#[test]
+	fn a_ref_a_relabel_replaced_is_not_refound_by_its_old_label() {
+		let mut m = Mock {
+			props: [
+				(1, p("window", Some("Title"))),
+				(2, p("button", Some("Go"))),
+				(3, p("button", Some("Stop"))),
+				(5, p("button", Some("Go"))),
+			]
+			.into(),
+			children: [(1, vec![2, 3])].into(),
+			..Default::default()
+		};
+		let mut registry = AxRegistry::default();
+		snapshot(&mut m, &mut registry, &window(), &AxSnapshotOptions::default()).unwrap();
+		// The button becomes "Save" and is read again under a new ref.
+		m.props.insert(2, p("button", Some("Save")));
+		let reread =
+			snapshot(&mut m, &mut registry, &window(), &AxSnapshotOptions::default()).unwrap();
+		assert!(reread.text.contains("button \"Save\" [ref=e4]"), "{}", reread.text);
+		// Then the app replaces it, and an unrelated "Go" appears.
+		m.children.insert(1, vec![5, 3]);
 		assert!(
 			refind(&mut m, &registry, &window(), "e2")
 				.unwrap()

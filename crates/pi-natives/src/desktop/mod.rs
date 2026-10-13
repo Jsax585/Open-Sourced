@@ -731,12 +731,13 @@ impl Worker {
 	}
 
 	/// Acts on `reference`'s element with `op`, at most once. An element the
-	/// app destroyed is re-found ([`ax::refind`]) before `op` is sent, and
-	/// the flag says so; an `op` that fails is never sent again, since a
-	/// request that failed may still have acted, and may itself be what
-	/// destroyed the element. An element acted on is not re-found again until
-	/// a read registers it anew: the action may have changed the very fields,
-	/// such as its value, that it would be matched by.
+	/// app destroyed is re-found ([`ax::refind`]) before `op` is sent, the
+	/// ref names it once `op` succeeds, and the flag says so; an `op` that
+	/// fails is never sent again, since a request that failed may still have
+	/// acted, and may itself be what destroyed the element. Once `op` is sent,
+	/// whatever its result, the element is not re-found again until a read
+	/// registers it anew: the action may have changed the very fields, such as
+	/// its value, that it would be matched by.
 	fn act_on_ref<T>(
 		&mut self,
 		reference: &str,
@@ -744,17 +745,22 @@ impl Worker {
 		op: impl FnOnce(&mut Self, &ax::AxHandle) -> CoreResult<T>,
 	) -> CoreResult<(T, bool)> {
 		let handle = self.registry.resolve(reference)?;
-		let acted = if self.ax()?.destroyed(&handle)
-			&& let Some(found) = self.refind(reference)
-		{
-			self.on_refound(reference, found, token, op)?
+		let found = if self.ax()?.destroyed(&handle) {
+			self.refind(reference)
 		} else {
-			// The probe may have outlived a cancellation.
-			token.check()?;
-			(op(self, &handle)?, false)
+			None
 		};
+		// The search may have outlived a cancellation.
+		token.check()?;
+		let result = op(self, found.as_ref().unwrap_or(&handle));
+		let refound = found.is_some();
+		if result.is_ok()
+			&& let Some(found) = found
+		{
+			self.registry.rebind(reference, found);
+		}
 		self.registry.forget_identity(reference);
-		Ok(acted)
+		result.map(|value| (value, refound))
 	}
 
 	/// Runs `op` on `found`, the element re-found for `reference`, unless the
@@ -2673,6 +2679,9 @@ mod capture_tests {
 		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
 		tree.lock().press_rebuilds_as = Some(4);
 		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
+		// Nor does a later call re-find it by the fields it was read with.
+		tree.lock().press_rebuilds_as = None;
+		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
 		assert_eq!(tree.lock().pressed, [2]);
 	}
 
@@ -2756,13 +2765,15 @@ mod capture_tests {
 	}
 
 	#[test]
-	fn a_call_that_fails_on_the_refound_element_leaves_the_next_one_to_report_it() {
+	fn a_call_that_fails_on_the_refound_element_leaves_its_ref_stale() {
+		// It may have acted, so the re-found element is neither used without a
+		// note nor re-found by its old fields.
 		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
 		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
 		let source = CancellationSource::default();
 		assert_eq!(perform(&mut worker, "e2", "bogus", &source), Err(ErrorCode::AxFailed));
-		assert_eq!(press(&mut worker, "e2"), Ok(true));
-		assert_eq!(tree.lock().pressed, [4]);
+		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
+		assert!(tree.lock().pressed.is_empty());
 	}
 
 	#[test]
