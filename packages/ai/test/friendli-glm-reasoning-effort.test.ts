@@ -178,6 +178,28 @@ describe("Friendli reasoning wire contract", () => {
 		}
 	});
 
+	it("drops stale baseline effort fields when the encoded Off toggle wins", async () => {
+		const glm = model({
+			compat: {
+				extraBody: {
+					gateway: "route-a",
+					reasoning_effort: "high",
+					chat_template_kwargs: {
+						template_option: "keep",
+						enable_thinking: true,
+						reasoning_effort: "high",
+					},
+				},
+			},
+		});
+		for (const simple of [true, false]) {
+			const off = await capture(glm, Effort.High, true, simple);
+			expect(off.gateway).toBe("route-a");
+			expect(off.reasoning_effort).toBeUndefined();
+			expect(off.chat_template_kwargs).toEqual({ template_option: "keep", enable_thinking: false });
+		}
+	});
+
 	it("honors flat effort omission unless the authored enabled view overrides it", async () => {
 		const omitted = model({ compat: { omitReasoningEffort: true } });
 		expect((await capture(omitted, Effort.High)).reasoning_effort).toBeUndefined();

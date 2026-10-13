@@ -786,6 +786,8 @@ export function applyOpenAIExtraBody<P extends object>(
 	if (!extraBody) return;
 	const encodedVeniceParameters = params.venice_parameters;
 	const encodedTemplateKwargs = params.chat_template_kwargs;
+	const reasoningParams = params as P & { reasoning_effort?: unknown };
+	const encodedReasoningEffort = reasoningParams.reasoning_effort;
 	Object.assign(params, extraBody);
 	if (encodedVeniceParameters?.disable_thinking === true) {
 		const configuredVeniceParameters = extraBody.venice_parameters;
@@ -800,6 +802,14 @@ export function applyOpenAIExtraBody<P extends object>(
 			...(isRecord(configuredTemplateKwargs) ? configuredTemplateKwargs : {}),
 			...encodedTemplateKwargs,
 		};
+		if (encodedTemplateKwargs.reasoning_effort === undefined) {
+			delete params.chat_template_kwargs.reasoning_effort;
+		}
+		if (encodedReasoningEffort === undefined) {
+			delete reasoningParams.reasoning_effort;
+		} else {
+			reasoningParams.reasoning_effort = encodedReasoningEffort;
+		}
 	}
 	if (options?.dropThinkingWhenReasoningEffort) {
 		const shaped = params as { reasoning_effort?: unknown; thinking?: unknown };

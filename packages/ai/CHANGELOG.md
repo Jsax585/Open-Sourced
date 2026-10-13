@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Friendli reasoning requests preserve distinct effort tiers and baseline routing/template settings, honor effort-omission overrides, retain endpoint defaults for dialless models, and preserve explicit Thinking Off toggles alongside baseline template settings ([#9413](https://github.com/can1357/oh-my-pi/pull/9413) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
+- Friendli reasoning requests preserve distinct effort tiers and baseline routing/template settings, honor effort-omission overrides, retain endpoint defaults for dialless models, and keep explicit Thinking Off free of conflicting static efforts ([#9413](https://github.com/can1357/oh-my-pi/pull/9413) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
 
 ### Removed
 
