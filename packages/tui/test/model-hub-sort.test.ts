@@ -387,3 +387,54 @@ describe("model hub metric order within provider blocks", () => {
 		expect(action()?.on).toBe(true);
 	});
 });
+
+describe("the Recent divider under a metric order", () => {
+	/**
+	 * The picker's `order` prop, where the Recent group head appears. The ANSI
+	 * divider and this head come from the same `split`, so the group is the
+	 * contract: present means the divider was drawn too.
+	 */
+	const pickerOrder = (hub: ModelHubComponent): unknown[] => {
+		const cx: DescribeContext = {
+			cols: 140,
+			reduceMotion: false,
+			dark: true,
+			supports: () => true,
+			feature: () => true,
+		};
+		return (hub.describe(cx).p as { order?: unknown[] } | undefined)?.order ?? [];
+	};
+	const hasRecentGroup = (hub: ModelHubComponent) =>
+		pickerOrder(hub).some(entry => typeof entry !== "string" && (entry as { group: string }).group === "recent");
+	/** Selector strings, with the Recent head marked and any other head generic. */
+	const shape = (hub: ModelHubComponent): string[] =>
+		pickerOrder(hub).map(entry => {
+			if (typeof entry === "string") return entry;
+			return (entry as { group: string }).group === "recent" ? "«recent»" : "«group»";
+		});
+
+	test("is dropped when a metric order scatters the recent rows", () => {
+		// top(90) is recent, dim(30) is recent, and mid(60) sorts between them.
+		// A divider after `top` would split the block and strand `dim` below it,
+		// unlabelled in the picker.
+		const { hub } = createHub({ modelSort: "int:desc", mruOrder: ["demo/top", "demo/dim"] });
+
+		// No Recent head at all: the four rows sit under one provider head rather
+		// than three being mislabelled `Recent` and one stranded below it.
+		expect(shape(hub)).toEqual(["«group»", "demo/top", "demo/mid", "demo/dim", "demo/unscored"]);
+		expect(hasRecentGroup(hub)).toBe(false);
+	});
+
+	test("is kept when a metric order leaves the recent rows together", () => {
+		// Only `top` is recent, so it is still a prefix and the divider is right.
+		const { hub } = createHub({ modelSort: "int:desc", mruOrder: ["demo/top"] });
+
+		expect(shape(hub)).toEqual(["«recent»", "demo/top", "«group»", "demo/mid", "demo/dim", "demo/unscored"]);
+	});
+
+	test("is kept in the default order, where recent and role are both prefixes", () => {
+		const { hub } = createHub({ mruOrder: ["demo/top", "demo/dim"] });
+
+		expect(shape(hub)).toEqual(["«recent»", "demo/top", "demo/dim", "«group»", "demo/mid", "demo/unscored"]);
+	});
+});

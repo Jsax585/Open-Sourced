@@ -1331,6 +1331,19 @@ export class ModelBrowser implements Component {
 		return tps != null && Number.isFinite(tps) && tps > 0 ? tps : undefined;
 	}
 
+	/**
+	 * Whether the recent/role divider is drawn above the row at `index`. False
+	 * when those rows are not one contiguous block, so a metric order cannot
+	 * split a provider and strand a recent row under the divider.
+	 */
+	showsRecentDivider(index: number): boolean {
+		if (index <= 0) return false;
+		const visible = this.#menu.visibleItems;
+		if (index >= visible.length) return false;
+		if (!this.#isRecentOrRole(visible[index]!)) return false;
+		return !visible.slice(index).some(item => this.#isRecentOrRole(item) && !this.#isDisabled(item));
+	}
+
 	/** Measured TPS/TTFT averages keyed by `provider/id` selector (see AgentStorage.getModelPerf). */
 	setPerfStats(perf: ReadonlyMap<string, ModelBrowserPerf>): void {
 		if (perf !== this.#perf) this.#bumpPickerEpoch();
@@ -1497,7 +1510,17 @@ export class ModelBrowser implements Component {
 	#insertSeparator(items: ModelBrowserItem[]): ModelBrowserItem[] {
 		const filtered = items.filter(item => item.id !== "separator");
 		const firstNonRecentIndex = filtered.findIndex(item => !this.#isRecentOrRole(item));
-		if (firstNonRecentIndex > 0 && firstNonRecentIndex < filtered.length) {
+		// The divider only means something when the recent/role rows form one
+		// contiguous block. The default order guarantees that — role rank and MRU
+		// are both prefixes — but a metric order, and grouped mode's provider
+		// precedence, can scatter them. Cutting the first non-recent row would
+		// then split the block and leave a later recent row below the divider,
+		// unlabelled in the picker.
+		if (
+			firstNonRecentIndex > 0 &&
+			firstNonRecentIndex < filtered.length &&
+			!filtered.slice(firstNonRecentIndex).some(item => this.#isRecentOrRole(item))
+		) {
 			const separatorItem: ModelBrowserItem = {
 				id: "separator",
 				provider: "",
