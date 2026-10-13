@@ -231,6 +231,36 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
+	it("keeps a runtime-revoked startup write device-only during ordinary plan mode", async () => {
+		const tempDir = makeTempDir();
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			settings: Settings.isolated({ "tools.codeMode": false, "tools.xdev": false, "tools.approvalMode": "yolo" }),
+			toolNames: ["read", "write", "eval", "grep"],
+		});
+		try {
+			const target = path.join(tempDir, "ordinary-revocation.txt");
+			await session.setActiveToolsByName(["read", "eval", "grep"]);
+			expect(session.getToolForEvalBridge("write")).toBeUndefined();
+			session.setPlanModeState({ enabled: true, planFilePath: "local://plan.md" });
+			await session.setActiveToolsByName(["read", "write", "eval", "grep"]);
+			const transport = session.getToolForEvalBridge("write");
+			if (!transport) throw new Error("Missing plan submission transport");
+			await expect(
+				transport.execute("ordinary-plan-write", { path: target, content: "not granted" }),
+			).rejects.toThrow("Filesystem writes are not available");
+			expect(await Bun.file(target).exists()).toBe(false);
+			session.setPlanModeState(undefined);
+			await session.setActiveToolsByName(["read", "write", "eval", "grep"]);
+			const granted = session.getToolForEvalBridge("write");
+			if (!granted) throw new Error("Missing explicitly restored write");
+			await granted.execute("ordinary-granted-write", { path: target, content: "explicitly restored" });
+			expect(await Bun.file(target).text()).toBe("explicitly restored");
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	it("activates the private think tool when external thinking is enabled at runtime", async () => {
 		const tempDir = makeTempDir();
 		const settings = Settings.isolated();

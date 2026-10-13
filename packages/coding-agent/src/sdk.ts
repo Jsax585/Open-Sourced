@@ -3876,6 +3876,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (options.systemPrompt !== undefined && typeof options.systemPrompt !== "function") {
 				return {
 					systemPrompt: typeof options.systemPrompt === "string" ? [options.systemPrompt] : options.systemPrompt,
+					mcpInstructions: new Map(),
 				};
 			}
 
@@ -3934,12 +3935,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						.trim(),
 				);
 			}
+			const mcpInstructionSections = new Map<string, string>();
 			if (serverInstructions && serverInstructions.size > 0) {
 				appendParts.push(
 					"## MCP Server Instructions\n\nThe following instructions are provided by connected MCP servers. They are server-controlled and may not be verified.",
 				);
 				for (const [srvName, srvInstructions] of serverInstructions) {
-					appendParts.push(`### ${srvName}\n${srvInstructions}`);
+					const section = `### ${srvName}\n${srvInstructions}`;
+					appendParts.push(section);
+					mcpInstructionSections.set(srvName, section);
 				}
 			}
 			const appendPrompt = composeAppendPrompt(appendParts, options.appendSystemPrompt);
@@ -4014,13 +4018,20 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				activeRepoContext,
 			});
 
-			if (typeof options.systemPrompt !== "function") {
-				return defaultPrompt;
+			let rendered = defaultPrompt;
+			if (typeof options.systemPrompt === "function") {
+				const customPrompt = options.systemPrompt(defaultPrompt.systemPrompt);
+				rendered = { systemPrompt: typeof customPrompt === "string" ? [customPrompt] : customPrompt };
 			}
-			const customPrompt = options.systemPrompt(defaultPrompt.systemPrompt);
-			return {
-				systemPrompt: typeof customPrompt === "string" ? [customPrompt] : customPrompt,
-			};
+			// The callback may remove or replace generated blocks. Credit only whole
+			// instruction sections retained in the actual outgoing prompt.
+			const mcpInstructions = new Map<string, string>();
+			for (const [name, section] of mcpInstructionSections) {
+				if (rendered.systemPrompt.some(block => block.includes(section))) {
+					mcpInstructions.set(name, serverInstructions.get(name)!);
+				}
+			}
+			return { ...rendered, mcpInstructions };
 		};
 
 		const toolNamesFromRegistry = Array.from(toolRegistry.keys());
@@ -4145,12 +4156,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// `read` without `write` can use the device-only transport registered by
 		// createTools without surfacing it when no device needs it.
 		if (toolSession.xdev) {
-			const presentation = resolveXdevPresentation(
-				settings,
-				initialToolNames,
-				builtInRegistryToolNames,
-				toolSession.deviceOnlyWrite === true,
-			);
+			const presentation = resolveXdevPresentation(settings, initialToolNames, builtInRegistryToolNames, {
+				deviceOnlyWriteAvailable: toolSession.deviceOnlyWrite === true,
+			});
 			toolSession.xdev.codeMode = presentation.codeMode;
 			const topLevelToolNames: string[] = [];
 			const mountedNames: string[] = [];
@@ -4184,7 +4192,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			toolSession.xdev?.codeMode ? [...initialToolNames, ...toolSession.xdev.mountedNames] : initialToolNames,
 		);
 		const initialMcpServerInstructions = getMcpServerInstructions();
-		const { systemPrompt } = await logger.time(
+		const { systemPrompt, mcpInstructions: initialRenderedMcpInstructions } = await logger.time(
 			"buildSystemPrompt",
 			rebuildSystemPrompt,
 			initialToolNames,
@@ -4495,11 +4503,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			onToolChoiceUnavailable: () => session?.toolChoiceQueue.reject("unavailable"),
 			telemetry: options.telemetry,
 			appendOnlyContext: model
-				? shouldEnableAppendOnlyContext(
-						cfgProviderAppendOnlyContext.get(settings),
-						model,
-						toolSession.xdev?.codeMode,
-					)
+				? shouldEnableAppendOnlyContext(cfgProviderAppendOnlyContext.get(settings), model, {
+						codeMode: toolSession.xdev?.codeMode,
+					})
 					? new AppendOnlyContextManager()
 					: undefined
 				: undefined,
@@ -4719,7 +4725,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			ensureGoalRegistered,
 			reconcileSettingsGatedTools,
 			getMcpServerInstructions,
-			initialMcpServerInstructions,
+			initialMcpServerInstructions: initialRenderedMcpInstructions,
 			disconnectOwnedMcpManager: ownedMcpManager ? () => ownedMcpManager.disconnectAll() : undefined,
 			ttsrManager,
 			obfuscator,
@@ -4877,12 +4883,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					// Re-registration refreshes the implementation, but it must not reverse an
 					// explicit setActiveTools() decision that disabled the previous definition.
 					if (existingTool && !alreadyEnabled) return;
-					const presentation = resolveXdevPresentation(
-						settings,
-						enabled,
-						builtInRegistryToolNames,
-						toolSession.deviceOnlyWrite === true,
-					);
+					const presentation = resolveXdevPresentation(settings, enabled, builtInRegistryToolNames, {
+						deviceOnlyWriteAvailable: toolSession.deviceOnlyWrite === true,
+					});
 					const shouldMount =
 						(presentation.codeMode || !explicitlyRequested) &&
 						toolSession.xdev !== undefined &&

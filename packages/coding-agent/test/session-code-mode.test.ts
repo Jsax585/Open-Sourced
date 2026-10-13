@@ -861,4 +861,59 @@ describe("provider-neutral Code Mode", () => {
 		if (!schema) throw new Error("Missing reconnected direct MCP tool");
 		expect(toolWireSchema(schema).required).toContain("unit");
 	});
+
+	it("announces MCP instructions omitted by a fixed SDK system prompt", async () => {
+		const manager = new MCPManager("/tmp");
+		cleanup.push(() => manager.disconnectAll());
+		const instructions = new Map([["fixed", "Use tenant=fixed-sdk."]]);
+		spyOn(manager, "getServerInstructions").mockImplementation(() => new Map(instructions));
+		const { session } = await fixture({ enableMCP: true, mcpManager: manager, systemPrompt: "Fixed SDK policy." });
+		const mock = createMockModel({ provider: "anthropic", handler: { content: ["Ready."] } });
+		session.agent.streamFn = mock.stream;
+		await session.prompt("Use the connected server instructions.");
+		expect(mock.calls[0]!.context.systemPrompt).toEqual(["Fixed SDK policy."]);
+		expect(JSON.stringify(mock.calls[0]!.context.messages)).toContain("Use tenant=fixed-sdk.");
+		await session.refreshBaseSystemPrompt();
+		await session.prompt("The fixed SDK policy and instructions are unchanged.");
+		expect(
+			session.messages.filter(message => message.role === "custom" && message.customType === "xdev-mount-notice"),
+		).toHaveLength(1);
+	});
+
+	it("credits only MCP instruction sections retained by an SDK prompt callback", async () => {
+		const manager = new MCPManager("/tmp");
+		cleanup.push(() => manager.disconnectAll());
+		const instructions = new Map([
+			["retained", "Use tenant=retained-sdk."],
+			["omitted", "Use tenant=omitted-sdk."],
+		]);
+		spyOn(manager, "getServerInstructions").mockImplementation(() => new Map(instructions));
+		let keepGenerated = true;
+		const { session } = await fixture({
+			enableMCP: true,
+			mcpManager: manager,
+			systemPrompt: blocks =>
+				keepGenerated ? blocks : ["SDK replacement policy.", "### retained\nUse tenant=retained-sdk."],
+		});
+		const mock = createMockModel({ provider: "anthropic", handler: { content: ["Ready."] } });
+		session.agent.streamFn = mock.stream;
+		await session.prompt("Use the original generated instructions.");
+		expect(JSON.stringify(mock.calls[0]!.context.messages)).not.toContain("Use tenant=omitted-sdk.");
+		keepGenerated = false;
+		await session.refreshBaseSystemPrompt();
+		await session.prompt("Use the instructions after SDK replacement.");
+		const request = mock.calls.at(-1)!.context;
+		expect(request.systemPrompt).toEqual(["SDK replacement policy.", "### retained\nUse tenant=retained-sdk."]);
+		const notice = session.messages.findLast(
+			message => message.role === "custom" && message.customType === "xdev-mount-notice",
+		);
+		if (notice?.role !== "custom") throw new Error("Missing omitted SDK instruction notice");
+		expect(notice.details).toMatchObject({ mcpInstructions: [["omitted", "Use tenant=omitted-sdk."]] });
+		expect(JSON.stringify(request.messages)).toContain("Use tenant=omitted-sdk.");
+		await session.refreshBaseSystemPrompt();
+		await session.prompt("Reuse the unchanged replacement.");
+		expect(
+			session.messages.filter(message => message.role === "custom" && message.customType === "xdev-mount-notice"),
+		).toHaveLength(1);
+	});
 });

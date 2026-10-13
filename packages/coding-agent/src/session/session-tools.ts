@@ -52,7 +52,7 @@ import {
 	PERMISSION_REQUIRED_TOOLS,
 } from "./acp-permission-gate";
 import type { ClientBridge, ClientBridgePermissionOutcome } from "./client-bridge";
-import { toolReadsSkillUris } from "../system-prompt";
+import { type BuildSystemPromptResult, toolReadsSkillUris } from "../system-prompt";
 
 import type { CustomMessage } from "./messages";
 import type { SessionEntry } from "./session-entries";
@@ -135,8 +135,9 @@ interface SessionToolsOptions {
 		toolNames: string[],
 		tools: Map<string, AgentTool>,
 		mcpInstructions: ReadonlyMap<string, string>,
-	) => Promise<{ systemPrompt: string[]; xdevCatalogNames?: readonly string[] }>;
+	) => Promise<BuildSystemPromptResult>;
 	getMcpServerInstructions?: () => Map<string, string> | undefined;
+	/** MCP instructions retained by baseSystemPrompt, not just supplied to its builder. */
 	initialMcpServerInstructions?: ReadonlyMap<string, string>;
 	xdev?: XdevState;
 	setActiveToolNames?: (names: Iterable<string>) => void;
@@ -294,7 +295,7 @@ interface PromptSurface {
 	evalPreludes: readonly EvalPreludeDefinition[];
 	/** User-tagged model agents listed in the task description. */
 	sessionAgents: readonly AgentDefinition[];
-	/** Bounded server instructions rendered by this base prompt. */
+	/** Bounded server-instruction input captured for a prompt build and its signature. */
 	mcpInstructions: ReadonlyMap<string, string>;
 }
 
@@ -400,6 +401,7 @@ export class SessionTools {
 	#promptModelKey: string | undefined;
 	#rebuildSystemPrompt: SessionToolsOptions["rebuildSystemPrompt"];
 	#getMcpServerInstructions: SessionToolsOptions["getMcpServerInstructions"];
+	#basePromptMcpInstructions: ReadonlyMap<string, string>;
 	/**
 	 * Session-lifetime factory shared by every custom-tool wrapper. Defining it
 	 * outside the refresh frame prevents wrappers from retaining rollback maps
@@ -491,9 +493,7 @@ export class SessionTools {
 		this.#skillsSettings = options.skillsSettings;
 		this.#skillsReloadable = options.skillsReloadable ?? true;
 		this.#promptSurface = this.#derivePromptSurface();
-		if (options.initialMcpServerInstructions) {
-			this.#promptSurface.mcpInstructions = options.initialMcpServerInstructions;
-		}
+		this.#basePromptMcpInstructions = options.initialMcpServerInstructions ?? new Map();
 		// Seed from the construction slate (top-level tools plus xd:// mounts).
 		// Left empty, getEnabledToolNames() falls back to live agent.state.tools,
 		// so an early reconcile (think after the startup model resolution)
@@ -1071,12 +1071,9 @@ export class SessionTools {
 			builtInWriteAvailable &&
 			(selectedTools.some(({ name }) => name === "write") || this.#deviceOnlyWriteTransportAvailable);
 		const presentation = this.#xdev
-			? resolveXdevPresentation(
-					this.#host.settings,
-					toolNames,
-					this.#builtInToolNames,
-					this.#deviceOnlyWriteTransportAvailable,
-				)
+			? resolveXdevPresentation(this.#host.settings, toolNames, this.#builtInToolNames, {
+					deviceOnlyWriteAvailable: this.#deviceOnlyWriteTransportAvailable,
+				})
 			: undefined;
 		const codeMode = presentation?.codeMode === true;
 		const isPresentationPinned = (name: string): boolean =>
@@ -1174,6 +1171,7 @@ export class SessionTools {
 		// Trigger of an implicit (non-forced) rebuild, rechecked at commit.
 		let implicitRebuildSignature: string | undefined;
 		let rebuiltXdevCatalogNames: readonly string[] | undefined;
+		let rebuiltMcpInstructions: ReadonlyMap<string, string> | undefined;
 		let candidateSurface: PromptSurface | undefined;
 		try {
 			if (restrictDeviceOnlyWrite) this.#setDeviceOnlyWrite?.(true);
@@ -1222,6 +1220,7 @@ export class SessionTools {
 					if (!forcePromptRefresh) implicitRebuildSignature = triggerSignature;
 					rebuiltSignature = signature;
 					rebuiltXdevCatalogNames = built.xdevCatalogNames;
+					rebuiltMcpInstructions = built.mcpInstructions;
 					candidateSurface = candidate;
 				}
 			}
@@ -1279,6 +1278,7 @@ export class SessionTools {
 				this.#lastAppliedToolSignature = rebuiltSignature;
 				this.#promptModelKey = this.#currentPromptModelKey();
 				this.#setBasePromptXdevNames(rebuiltXdevCatalogNames);
+				this.#basePromptMcpInstructions = rebuiltMcpInstructions ?? new Map();
 				// The rebuilt prompt is a fresh roster snapshot. Keep the complete
 				// pending delta for a turn override that hides it, while separately
 				// tracking any later frozen changes that must follow a delivered base.
@@ -1749,7 +1749,7 @@ export class SessionTools {
 		this.#pendingXdevMountDelta = pending.added.size > 0 || pending.removed.size > 0 ? pending : undefined;
 	}
 
-	#projectMcpInstructions(baseDelivered: boolean):
+	#projectMcpInstructions({ baseDelivered }: { baseDelivered: boolean }):
 		| {
 				changed: Array<{ name: string; text: string }>;
 				removed: string[];
@@ -1759,7 +1759,7 @@ export class SessionTools {
 		// System text is present only when the outgoing request carries the base.
 		// Every surviving notice is still visible, regardless of which base or
 		// override created it; reconcile its text and withdrawals in history order.
-		const known = new Map(baseDelivered ? this.#promptSurface.mcpInstructions : undefined);
+		const known = new Map(baseDelivered ? this.#basePromptMcpInstructions : undefined);
 		for (const message of this.#host.agent.state.messages) {
 			if (message.role !== "custom" || message.customType !== XDEV_MOUNT_NOTICE_MESSAGE_TYPE) continue;
 			const details = message.details;
@@ -1781,7 +1781,7 @@ export class SessionTools {
 
 	#projectPendingXdevMountNotice(baseCatalogDelivered: boolean): XdevMountNoticeProjection | undefined {
 		const pending = this.#pendingXdevMountDelta;
-		const instructions = this.#projectMcpInstructions(baseCatalogDelivered);
+		const instructions = this.#projectMcpInstructions({ baseDelivered: baseCatalogDelivered });
 		if (!pending && !instructions) return undefined;
 		this.#ensureAnnouncedMountsSeeded();
 		const announcedMounts = new Set(this.#announcedMounts);
@@ -2117,6 +2117,7 @@ export class SessionTools {
 				this.#baseSystemPrompt = built.systemPrompt;
 				this.#promptSurface = candidate;
 				this.#setBasePromptXdevNames(built.xdevCatalogNames);
+				this.#basePromptMcpInstructions = built.mcpInstructions ?? new Map();
 				this.#host.clearMemoryPromotionSnapshot();
 				if (
 					previousBaseSystemPrompt.length !== this.#baseSystemPrompt.length ||

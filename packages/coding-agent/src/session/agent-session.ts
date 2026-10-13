@@ -10817,7 +10817,7 @@ export class AgentSession implements SettingsScope {
 	 */
 	#syncAppendOnlyContext(model: Model | null | undefined): void {
 		const setting = cfgProviderAppendOnlyContext.get(this.settings);
-		const enable = shouldEnableAppendOnlyContext(setting, model, this.#tools.codeMode);
+		const enable = shouldEnableAppendOnlyContext(setting, model, { codeMode: this.#tools.codeMode });
 		const providerId = model?.provider;
 		const prev = this.#lastAppendOnlyResolution;
 		if (prev && prev.enable === enable && prev.providerId === providerId) return;

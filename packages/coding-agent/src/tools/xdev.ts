@@ -74,9 +74,10 @@ export const XDEV_KEEP_TOP_LEVEL: Record<string, true> = {
  */
 export const XDEV_TRANSPORT_TOOLS: Record<string, true> = { read: true, write: true };
 
-/** These results drive session state by their direct tool name, not an enclosing eval result. */
+/** Session state and usage consumers require these direct tool results, not enclosing eval/write results. */
 export const CODE_MODE_DIRECT_CONTROLS: Record<string, true> = {
 	ask: true,
+	task: true,
 	yield: true,
 	checkpoint: true,
 	rewind: true,
@@ -116,7 +117,7 @@ export function resolveXdevPresentation(
 	settings: Settings,
 	enabledNames: readonly string[],
 	builtInNames: ReadonlySet<string>,
-	deviceOnlyWriteAvailable = false,
+	options: { deviceOnlyWriteAvailable?: boolean } = {},
 ): XdevPresentation {
 	return {
 		codeMode:
@@ -126,7 +127,7 @@ export function resolveXdevPresentation(
 			builtInNames.has("read") &&
 			enabledNames.includes("read") &&
 			builtInNames.has("write") &&
-			(enabledNames.includes("write") || deviceOnlyWriteAvailable),
+			(enabledNames.includes("write") || options.deviceOnlyWriteAvailable === true),
 		extraDirectTools: cfgToolsCodeModeDirectTools.get(settings),
 	};
 }

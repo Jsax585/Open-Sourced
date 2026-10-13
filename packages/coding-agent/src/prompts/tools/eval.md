@@ -10,7 +10,7 @@ Batch known dependent steps in one cell, awaiting prerequisites before using the
 Call approved registered tools via `await tool.<name>(args)`, using their documented parameter objects. Discover names with the `read` tool at `xd://` and docs at `xd://<tool>`; inside eval, use `await tool.read({"path": "xd://<tool>"})`.
 Results are a string or an object with `text`, optional `details`/`images`, and `hasError`.{{#if js}} Text: `typeof r === "string" ? r : r.text`.{{/if}}{{#if py}} Python: `r if isinstance(r, str) else r["text"]`.{{/if}} Read `path:raw` for machine-parsable file text instead of numbered previews.
 Inspect returned `hasError` flags as well as exceptions before continuing dependent steps; retry only failed steps. Display only results relevant to the task, not every intermediate payload.
-Keep session control calls direct, including `ask`, `wait`, `yield`, `checkpoint`, `rewind`, `new_context`, and `goal`.
+Keep orchestration and session control calls direct, including `task`, `ask`, `wait`, `yield`, `checkpoint`, `rewind`, `new_context`, and `goal`.
 </code_mode>
 {{/if}}
 

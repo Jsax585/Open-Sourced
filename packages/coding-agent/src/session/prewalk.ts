@@ -217,17 +217,16 @@ export class PrewalkCoordinator {
 		)
 			return;
 		if (name === "todo") this.#todoSeen = true;
-		if (
-			isPrewalkImplementationAction(name, result.details) &&
-			(this.#todoSeen || !this.#host.getActiveToolNames().includes("todo"))
-		)
-			this.#bridgedAction ??= name;
+		if (isPrewalkImplementationAction(name, result.details)) this.#bridgedAction ??= name;
 	}
 
 	/** Advances the one-way prewalk switch at a completed assistant-turn boundary. */
 	async advanceAtTurnEnd(liveMessages: AgentMessage[], context: AgentTurnEndContext | undefined): Promise<void> {
 		const prewalk = this.#prewalk;
 		if (!prewalk || context?.message.role !== "assistant") return;
+		// Like direct tool results, bridge actions belong only to this completed turn.
+		const bridgedAction = this.#bridgedAction;
+		this.#bridgedAction = undefined;
 		if (this.#isNoop(prewalk)) {
 			this.#scrubPlanNudge(liveMessages);
 			this.#disarmNoop(prewalk);
@@ -253,7 +252,7 @@ export class PrewalkCoordinator {
 		const todoGateOpen = this.#todoSeen || !this.#host.getActiveToolNames().includes("todo");
 		const action = todoGateOpen
 			? (context.toolResults.find(result => isPrewalkImplementationAction(result.toolName, result.details))
-					?.toolName ?? this.#bridgedAction)
+					?.toolName ?? bridgedAction)
 			: undefined;
 		if (!action) {
 			if (!this.#planInjected) {

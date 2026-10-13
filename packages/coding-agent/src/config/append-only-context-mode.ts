@@ -64,7 +64,7 @@ function shouldAutoEnableAppendOnlyContext(model: AppendOnlyContextModel | null 
 export function shouldEnableAppendOnlyContext(
 	setting: "auto" | "on" | "off" | undefined,
 	model: AppendOnlyContextModel | null | undefined,
-	codeMode = false,
+	options: { codeMode?: boolean } = {},
 ): boolean {
 	switch (setting ?? "auto") {
 		case "on":
@@ -72,6 +72,6 @@ export function shouldEnableAppendOnlyContext(
 		case "off":
 			return false;
 		default:
-			return codeMode || shouldAutoEnableAppendOnlyContext(model);
+			return options.codeMode === true || shouldAutoEnableAppendOnlyContext(model);
 	}
 }

@@ -43,8 +43,8 @@ describe("shouldEnableAppendOnlyContext", () => {
 	});
 
 	test("Code Mode enables stable context across providers without overriding explicit off", () => {
-		expect(shouldEnableAppendOnlyContext("auto", GENERIC_PROXY, true)).toBe(true);
-		expect(shouldEnableAppendOnlyContext("off", GENERIC_PROXY, true)).toBe(false);
+		expect(shouldEnableAppendOnlyContext("auto", GENERIC_PROXY, { codeMode: true })).toBe(true);
+		expect(shouldEnableAppendOnlyContext("off", GENERIC_PROXY, { codeMode: true })).toBe(false);
 	});
 
 	test("auto enables for local inference providers", () => {

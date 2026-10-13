@@ -9,6 +9,7 @@
 ### Changed
 
 - `provider.appendOnlyContext: auto` now enables prefix reuse while provider-neutral Code Mode is active; explicit `off` still takes precedence ([#15634](https://github.com/can1357/oh-my-pi/pull/15634) by [@brndnmtthws](https://github.com/brndnmtthws)).
+- Runtime tool selections now override startup write grants in ordinary sessions as well as Code Mode; plan/device transports cannot restore revoked filesystem writes without an explicit new grant ([#15634](https://github.com/can1357/oh-my-pi/pull/15634) by [@brndnmtthws](https://github.com/brndnmtthws)).
 
 ## [18.10.4] - 2026-10-13
 
