@@ -4020,31 +4020,25 @@ export class SessionManager {
 	 * Durably move the active branch past a discarded entry.
 	 *
 	 * The loader reconstructs the active branch from the last physical journal
-	 * entry, so changing the in-memory leaf alone is lost on reload. Known
-	 * metadata children are chained onto the discarded entry's parent before the
-	 * entry is removed. If any child may carry content, the subtree is preserved
-	 * off-branch instead. Both paths append a metadata-only branch marker and
-	 * rewrite the journal, making the selected path durable.
+	 * entry, so changing the in-memory leaf alone is lost on reload. A
+	 * metadata-only branch marker is appended under the discarded entry's
+	 * parent, leaving the entry and its subtree off-branch, and fresh copies of
+	 * its `service_tier_change` children are appended under the marker so the
+	 * selected service tier carries over. Nothing is re-parented or removed,
+	 * so the change is only appends.
 	 */
 	async discardEntryDurably(entryId: string): Promise<void> {
 		const entry = this.#index.get(entryId);
 		if (!entry) return;
-		const children = this.#index.childrenOf(entryId);
-		const canReparentChildren = children.every(child => child.type === "service_tier_change");
-		let leafId = entry.parentId;
-		if (canReparentChildren) {
-			for (const child of children) {
-				child.parentId = leafId;
-				leafId = child.id;
-			}
-			this.#entries = this.#entries.filter(candidate => candidate.id !== entryId);
-			this.#index.rebuild(this.#entries);
-		}
-		this.branchWithSummary(leafId, "", {
+		const serviceTierChildren = this.#index
+			.childrenOf(entryId)
+			.filter((child): child is ServiceTierChangeEntry => child.type === "service_tier_change");
+		this.branchWithSummary(entry.parentId, "", {
 			kind: DISCARDED_ENTRY_BRANCH_MARKER,
 			discardedEntryId: entryId,
 		});
-		await this.rewriteEntries();
+		for (const child of serviceTierChildren) this.appendServiceTierChange(child.serviceTier);
+		await this.flush();
 	}
 
 	/** Like branch(), but also records a branch_summary of the abandoned path. */

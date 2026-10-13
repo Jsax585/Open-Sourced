@@ -389,7 +389,7 @@ describe("SessionManager JSONL software-crash durability", () => {
 		}
 	});
 
-	it("reparents metadata children when durably discarding an entry", async () => {
+	it("carries a discarded entry's service tier onto the marker branch when durably discarding it", async () => {
 		const cwd = makeTempDir("@pi-discard-metadata-cwd-");
 		const sessionDir = path.join(cwd, "sessions");
 		const manager = SessionManager.create(cwd, sessionDir);
@@ -398,24 +398,27 @@ describe("SessionManager JSONL software-crash durability", () => {
 
 		const priorId = manager.appendMessage(assistantMessage("prior turn"));
 		const discardedId = manager.appendMessage(assistantMessage(""));
-		const serviceTierId = manager.appendServiceTierChange(null);
+		manager.appendServiceTierChange({ openai: "priority" });
 		await manager.discardEntryDurably(discardedId);
 		await manager.close();
 
 		const reloaded = await SessionManager.open(sessionFile, sessionDir);
 		const branch = reloaded.getBranch();
 		expect(branch.some(entry => entry.id === discardedId)).toBe(false);
-		expect(branch).toContainEqual(expect.objectContaining({ id: serviceTierId, parentId: priorId }));
-		expect(branch.at(-1)).toMatchObject({
+		const markerIndex = branch.findIndex(entry => entry.type === "branch_summary");
+		expect(branch[markerIndex]).toMatchObject({
 			type: "branch_summary",
 			summary: "",
 			details: { kind: "discarded-entry-branch", discardedEntryId: discardedId },
-			parentId: serviceTierId,
+			parentId: priorId,
 		});
+		expect(branch.slice(markerIndex + 1)).toEqual([
+			expect.objectContaining({ type: "service_tier_change", serviceTier: { openai: "priority" } }),
+		]);
 		await reloaded.close();
 	});
 
-	it("republishes a discarded structural change before later appends survive a restart", async () => {
+	it("discards an entry by appending alone, so a restart sees it while full rewrites fail", async () => {
 		const storage = new MemorySessionStorage();
 		const manager = SessionManager.create("/cwd", "/sessions", storage);
 		await manager.ensureOnDisk();
@@ -424,27 +427,34 @@ describe("SessionManager JSONL software-crash durability", () => {
 
 		const priorId = manager.appendMessage(assistantMessage("prior turn"));
 		const discardedId = manager.appendMessage(assistantMessage("discarded turn"));
-		const serviceTierId = manager.appendServiceTierChange(null);
-		const rewrite = spyOn(storage, "writeTextAtomic").mockRejectedValueOnce(
-			new Error("synthetic discarded-entry rewrite failure"),
-		);
+		manager.appendServiceTierChange(null);
+		const fullRewriteFailure = new Error("synthetic full rewrite failure");
+		const atomic = spyOn(storage, "writeTextAtomic").mockRejectedValue(fullRewriteFailure);
+		const sync = spyOn(storage, "writeTextSync").mockImplementation(() => {
+			throw fullRewriteFailure;
+		});
+		let markerId: string | undefined;
+		let laterId: string | undefined;
 		try {
-			// The marker's append republishes the structural change, so the failed
-			// maintenance rewrite after it costs nothing.
-			await manager.discardEntryDurably(discardedId).catch(() => undefined);
+			await manager.discardEntryDurably(discardedId);
+			markerId = manager.getBranch().find(entry => entry.type === "branch_summary")?.id;
+			laterId = manager.appendMessage({ role: "user", content: "after discard", timestamp: Date.now() });
 		} finally {
-			rewrite.mockRestore();
+			atomic.mockRestore();
+			sync.mockRestore();
 		}
-
-		const markerId = manager.getBranch().at(-1)?.id;
-		if (!markerId) throw new Error("Expected a discarded-entry branch marker");
-		const laterId = manager.appendMessage({ role: "user", content: "after failed discard", timestamp: Date.now() });
 
 		const reloaded = await SessionManager.open(sessionFile, "/sessions", storage, { suppressBreadcrumb: true });
 		try {
-			// A restart consumes the persisted branch, not this manager's in-memory tree.
-			expect(reloaded.getBranch().map(entry => entry.id)).toEqual([priorId, serviceTierId, markerId, laterId]);
-			expect(reloaded.getBranch().some(entry => entry.id === discardedId)).toBe(false);
+			const branch = reloaded.getBranch();
+			expect(branch.some(entry => entry.id === discardedId)).toBe(false);
+			expect(branch.map(entry => entry.type)).toEqual([
+				"message",
+				"branch_summary",
+				"service_tier_change",
+				"message",
+			]);
+			expect(branch.map(entry => entry.id)).toEqual([priorId, markerId, expect.any(String), laterId]);
 		} finally {
 			await reloaded.close();
 			await manager.close().catch(() => undefined);
