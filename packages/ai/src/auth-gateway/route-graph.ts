@@ -116,6 +116,16 @@ export class RouteRegistry {
 		return route;
 	}
 
+	/** Virtual routes only, with the same current catalog snapshots used by request resolution. */
+	list(): readonly CompiledRoute[] {
+		return Object.freeze(
+			[...this.#routes.keys()].flatMap(id => {
+				const route = this.resolve(id);
+				return route ? [route] : [];
+			}),
+		);
+	}
+
 	resolve(modelId: string): CompiledRoute | undefined {
 		const virtual = this.#routes.get(modelId);
 		if (virtual) return this.#compile(modelId, this.#definitions.get(modelId)!, virtual.generation);

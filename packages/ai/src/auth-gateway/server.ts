@@ -13,6 +13,7 @@
  *   GET  /v1/usage                         → aggregated provider usage (5-min per-credential cache via AuthStorage)
  *   GET  /v1/credentials/check             → per-credential auth probe (diagnose 401s in a multi-account pool)
  *   GET  /v1/models                        → list known models from the registry
+ *   GET  /v1/routes                        → list registered virtual routes
  *   POST /v1/chat/completions              → OpenAI chat-completions in/out
  *   POST /v1/messages                      → Anthropic messages in/out
  *   POST /v1/responses                     → OpenAI Responses in/out
@@ -638,6 +639,13 @@ function handleModelsList(opts: AuthGatewayRouteOptions): Response {
 	return json(200, { object: "list", data });
 }
 
+function handleRoutesList(registry: RouteRegistry): Response {
+	const data = registry
+		.list()
+		.map(({ id, generation, targets, fallbacks }) => ({ id, generation, targets, fallbacks }));
+	return json(200, { object: "list", generation: registry.generation, data });
+}
+
 /** `GET /v1/videos/:id` (poll) and `GET /v1/videos/:id/content` (download); group 1 = id, group 2 = `/content`. */
 const VIDEO_JOB_PATH = /^\/v1\/videos\/([^/]+)(\/content)?$/;
 
@@ -772,6 +780,7 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 			}
 
 			// Model catalog.
+			if (req.method === "GET" && pathname === "/v1/routes") return handleRoutesList(routeRegistry);
 			if (req.method === "GET" && pathname === "/v1/models") {
 				return handleModelsList(opts);
 			}

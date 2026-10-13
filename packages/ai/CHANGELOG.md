@@ -4,6 +4,7 @@
 
 ### Added
 
+- Authenticated gateway clients can list virtual routes and their current compiled targets through `GET /v1/routes`, without exposing private model state ([#10146](https://github.com/can1357/oh-my-pi/pull/10146) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway route definitions can be loaded from JSON5 files, with validation for unusable IDs, duplicate definitions and malformed or cyclic trees ([#10144](https://github.com/can1357/oh-my-pi/pull/10144) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway HTTP and stdio routers accept virtual route definitions at boot, including when a registry is supplied by the caller ([#10143](https://github.com/can1357/oh-my-pi/pull/10143) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway inference follows configured fallback edges before output commits across chat, messages, Responses and pi-native transports, while preserving credential and continuation ownership ([#10142](https://github.com/can1357/oh-my-pi/pull/10142) by [@jroth1111](https://github.com/jroth1111)).
