@@ -1773,6 +1773,53 @@ it("turns a buffered provider failure into one turn that keeps the streamed text
 	expect(turn.message.content.find(part => part.type === "text")?.text).toBe("streamed before the throw");
 });
 
+it("keeps the finished answer when the user aborts during final review", async () => {
+	const answer = createAssistantMessage([{ type: "text", text: "finished before the abort" }], "stop");
+	answer.usage.input = 30;
+	answer.usage.output = 7;
+	const streamFn = () => {
+		const response = new AssistantMessageEventStream();
+		queueMicrotask(() => {
+			response.push({ type: "start", partial: answer });
+			response.push({ type: "text_start", contentIndex: 0, partial: answer });
+			response.push({ type: "text_delta", contentIndex: 0, delta: "finished before the abort", partial: answer });
+			response.push({ type: "text_end", contentIndex: 0, content: "finished before the abort", partial: answer });
+			response.push({ type: "done", reason: "stop", message: answer });
+		});
+		return response;
+	};
+	const mock = createMockModel();
+	const agent = new Agent({
+		getApiKey: () => "test-key",
+		initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+		streamFn,
+	});
+	agent.setReviewFinalAnswer({
+		review: async () => {
+			agent.abort(new Error("User stopped"));
+			return { action: "approve" };
+		},
+	});
+
+	const events: AgentEvent[] = [];
+	agent.subscribe(event => events.push(event));
+	await agent.prompt("go");
+
+	// The provider already finished, so the abort cancels only the review. One
+	// assistant turn, with the text and the billed usage: the abort path would
+	// otherwise persist an empty, zero-usage aborted turn beside it.
+	const assistantTurns = events.filter(
+		(event): event is Extract<AgentEvent, { type: "message_end" }> =>
+			event.type === "message_end" && event.message.role === "assistant",
+	);
+	expect(assistantTurns).toHaveLength(1);
+	const turn = assistantTurns[0]!;
+	if (turn.message.role !== "assistant") throw new Error("Expected an assistant turn");
+	expect(turn.message.content.find(part => part.type === "text")?.text).toBe("finished before the abort");
+	expect(turn.message.usage.input).toBe(30);
+	expect(turn.message.usage.output).toBe(7);
+});
+
 describe("Agent — F3 in-place state mutation", () => {
 	it("appendMessage mutates the existing messages array in place", () => {
 		const agent = new Agent();

@@ -1751,21 +1751,23 @@ async function runLoopBody(
 						);
 						decision = await raceWithSignal(reviewPromise, reviewSignal);
 					} catch (error) {
-						if (signal?.aborted) {
-							// A user abort while the review wait was open. Release the finished
-							// answer as an unfinished lifecycle: the caller's abort path turns
-							// it into the aborted turn, keeping the text and avoiding a second
-							// empty turn after a released answer.
-							if (candidateStream instanceof FinalAnswerBufferingStream) candidateStream.releasePartial();
-							throw signal.reason ?? error;
+						if (!signal?.aborted) {
+							logger.warn("Final answer review failed or timed out; releasing answer", { error });
+							decision = { action: "approve" };
 						}
-						logger.warn("Final answer review failed or timed out; releasing answer", { error });
-						decision = { action: "approve" };
 					}
 
 					if (signal?.aborted) {
-						if (candidateStream instanceof FinalAnswerBufferingStream) candidateStream.releasePartial();
-						throw signal.reason ?? new Error("Aborted");
+						// A user abort while the review wait was open. The provider already
+						// finished, so the answer is complete: release it and leave the loop
+						// the way every other abort does. Throwing here would send the caller
+						// down its abort path, which persists an empty aborted turn beside the
+						// answer instead of keeping this one.
+						if (candidateStream instanceof FinalAnswerBufferingStream) candidateStream.flush();
+						newMessages.push(message);
+						await emitTurnEnd(stream, currentContext, message, [], config, signal, { willContinue: false });
+						endAgentStream(stream, newMessages, telemetry, stepCounter.count);
+						return;
 					}
 
 					const adviceList = decision?.advice
