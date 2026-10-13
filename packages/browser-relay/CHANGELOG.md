@@ -6,6 +6,10 @@
 
 - The extension now reports which omp version installed it, so omp can tell when an extension from before an upgrade is still loaded ([#15105](https://github.com/can1357/oh-my-pi/pull/15105) by [@will-bogusz](https://github.com/will-bogusz))
 
+### Fixed
+
+- Fixed the relay attaching Chrome's debugger to every tab of your browser whenever omp connected; only tabs omp opened or borrowed are attached ([#15554](https://github.com/can1357/oh-my-pi/pull/15554) by [@will-bogusz](https://github.com/will-bogusz))
+
 ## [18.8.8] - 2026-10-10
 
 ### Fixed
