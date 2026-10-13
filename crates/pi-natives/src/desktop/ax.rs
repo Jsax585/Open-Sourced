@@ -388,21 +388,15 @@ impl AxRegistry {
 		}
 	}
 
-	/// Stops `handle`, an element of `reference`'s window, from being re-found
-	/// by the fields the ref that names it was read with, as after a call sent
-	/// to it that may have changed them.
-	pub(crate) fn forget_element_identity(&mut self, reference: &str, handle: &AxHandle) {
-		let Some(owner) = self
-			.id(reference)
-			.and_then(|id| self.entries.get(&id))
-			.and_then(|entry| self.refs.get(&entry.target_key))
-			.and_then(|refs| refs.get(handle))
-			.copied()
-		else {
-			return;
-		};
-		if let Some(entry) = self.entries.get_mut(&owner) {
-			entry.identity = None;
+	/// Stops `handle` from being re-found by the fields any ref that names it,
+	/// under any target, was read with, as after a call sent to it that may
+	/// have changed them: `win.ax()` and `desktop.elementAt()` can each name
+	/// the same element.
+	pub(crate) fn forget_element_identity(&mut self, handle: &AxHandle) {
+		for id in self.refs.values().filter_map(|refs| refs.get(handle)) {
+			if let Some(entry) = self.entries.get_mut(id) {
+				entry.identity = None;
+			}
 		}
 	}
 

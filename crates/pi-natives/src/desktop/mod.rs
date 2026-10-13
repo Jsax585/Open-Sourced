@@ -735,9 +735,10 @@ impl Worker {
 	/// ref names it once `op` succeeds, and the flag says so; an `op` that
 	/// fails is never sent again, since a request that failed may still have
 	/// acted, and may itself be what destroyed the element. Once `op` is sent,
-	/// whatever its result, the element is not re-found again until a read
-	/// registers it anew: the action may have changed the very fields, such as
-	/// its value, that it would be matched by.
+	/// whatever its result, neither the element it reached nor the one that
+	/// element replaced is re-found again, under any ref of any target, until
+	/// a read registers it anew: the action may have changed the very fields,
+	/// such as its value, that it would be matched by.
 	fn act_on_ref<T>(
 		&mut self,
 		reference: &str,
@@ -753,15 +754,15 @@ impl Worker {
 		// The search may have outlived a cancellation.
 		token.check()?;
 		let result = op(self, found.as_ref().unwrap_or(&handle));
+		self.registry.forget_identity(reference);
+		self.registry.forget_element_identity(&handle);
 		let refound = found.is_some();
 		if let Some(found) = found {
-			// `op` was sent to it, so a ref a read gave it is spent too.
-			self.registry.forget_element_identity(reference, &found);
+			self.registry.forget_element_identity(&found);
 			if result.is_ok() {
 				self.registry.rebind(reference, found);
 			}
 		}
-		self.registry.forget_identity(reference);
 		result.map(|value| (value, refound))
 	}
 
@@ -2836,6 +2837,20 @@ mod capture_tests {
 		rebuild(&tree, 4, &[(5, "Go"), (3, "Stop")]);
 		assert_eq!(press(&mut worker, "e4"), Err(ErrorCode::StaleRef));
 		assert!(tree.lock().pressed.is_empty());
+	}
+
+	#[test]
+	fn an_element_acted_on_through_a_desktop_ref_is_not_refound_by_its_window_ref() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		// `desktop.elementAt()` names `e2`'s button under the desktop target.
+		let ax = worker.backend.as_mut().unwrap().ax().unwrap();
+		let node = ax::register_node(ax, &mut worker.registry, "desktop", AxHandle::Test(2)).unwrap();
+		assert_eq!(press(&mut worker, &node.ref_), Ok(false));
+		// The press renamed the button and the app rebuilt it; another "Go"
+		// is not it.
+		rebuild(&tree, 2, &[(4, "Done"), (5, "Go"), (3, "Stop")]);
+		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
+		assert_eq!(tree.lock().pressed, [2]);
 	}
 
 	#[test]
