@@ -22,7 +22,7 @@ async function discovered(id: string, reasoningOptions: Record<string, unknown>[
 
 async function capture(
 	model: Model<"openai-completions">,
-	options: Pick<OpenAICompletionsOptions, "reasoning" | "disableReasoning">,
+	options: Pick<OpenAICompletionsOptions, "reasoning" | "disableReasoning" | "maxTokens">,
 	context: Context = { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
 ) {
 	let body: Record<string, unknown> | undefined;
@@ -54,6 +54,14 @@ describe("Friendli discovery-to-wire contracts", () => {
 		await withEnv({ FRIENDLI_API_KEY: "existing-key", FRIENDLI_TOKEN: "sdk-token" }, () => {
 			expect(getEnvApiKey("friendli")).toBe("existing-key");
 		});
+	});
+
+	test("uses advertised output budgets above the generic OpenAI cap", async () => {
+		const model = buildModel(seedModels<"openai-completions">("friendli")[0]);
+		const supported = await capture(model, { reasoning: "high", maxTokens: 131_072 });
+		expect(supported.max_tokens).toBe(131_072);
+		const clamped = await capture(model, { reasoning: "high", maxTokens: 2_097_152 });
+		expect(clamped.max_tokens).toBe(1_048_576);
 	});
 
 	test("live binary controls override both unknown and effort-capable KDL defaults", async () => {

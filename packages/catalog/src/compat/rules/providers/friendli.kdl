@@ -18,6 +18,7 @@ provider "friendli" {
 	supports-developer-role #false
 	supports-reasoning-effort #false
 	max-tokens-field "max_tokens"
+	clamp-output-to-model-max #true
 	thinking-format "qwen-chat-template"
 	reasoning-disable-mode "qwen-template-false"
 	thinking-mode "effort"
