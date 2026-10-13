@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { startAuthGateway } from "../src/auth-gateway";
+import { resolveGatewayAccount } from "../src/auth-gateway/dispatch";
 import { AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
 
 afterEach(() => vi.restoreAllMocks());
@@ -36,6 +37,94 @@ function completedResponse(id: string): Response {
 		headers: { "Content-Type": "text/event-stream" },
 	});
 }
+
+it("carries the rotated account snapshot into a reopened held Responses attempt", async () => {
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-held-account-"));
+	const storage = new AuthStorage(await SqliteAuthCredentialStore.open(path.join(directory, "auth.db")), {
+		usageProviderResolver: () => undefined,
+		rankingStrategyResolver: () => undefined,
+		refreshOAuthCredential: async (_provider, _id, credential) => credential,
+	});
+	const provider = "unit-held-account";
+	await storage.credentials.set(provider, [
+		{
+			type: "oauth",
+			access: "retired",
+			refresh: "retired-refresh",
+			expires: Date.now() + 3_600_000,
+			accountId: "retired",
+		},
+		{
+			type: "oauth",
+			access: "survivor",
+			refresh: "survivor-refresh",
+			expires: Date.now() + 3_600_000,
+			accountId: "survivor",
+		},
+	]);
+	storage.sessions.pin(provider, "held-account-session", storage.credentials.list(provider)[0]!.id);
+	const model = buildModel({
+		id: "held-account-model",
+		name: "Fixture",
+		provider,
+		api: "openai-responses",
+		baseUrl: "https://held.example/v1",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 10000,
+		maxTokens: 100,
+	});
+	const bearers: Array<string | null> = [];
+	let failedAttemptSignal: AbortSignal | undefined;
+	const gateway = startAuthGateway({
+		storage,
+		bind: "127.0.0.1:0",
+		bearerTokens: ["opaque-held-account-client-token"],
+		resolveModel: () => model,
+		fetch: async (_url, init) => {
+			const bearer = new Headers(init?.headers).get("authorization");
+			bearers.push(bearer);
+			if (bearer === "Bearer retired")
+				return Response.json({ error: { message: "Expired fixture bearer" } }, { status: 401 });
+			const signal = init?.signal;
+			if (!signal) throw new Error("Expected an upstream attempt abort scope");
+			failedAttemptSignal ??= signal;
+			if (signal === failedAttemptSignal)
+				return Response.json(
+					{ error: { message: "Fixture upstream unavailable", type: "api_error" } },
+					{ status: 503, headers: { "retry-after-ms": "0" } },
+				);
+			return completedResponse("resp_held_survivor");
+		},
+	});
+	try {
+		const response = await fetch(`${gateway.url}/v1/responses`, {
+			method: "POST",
+			headers: { Authorization: "Bearer opaque-held-account-client-token", "Content-Type": "application/json" },
+			body: JSON.stringify({
+				model: model.id,
+				input: "fixture",
+				stream: true,
+				prompt_cache_key: "held-account-session",
+			}),
+		});
+		const body = await response.text();
+		expect(response.status).toBe(200);
+		expect(body).toContain("response.completed");
+		expect(body).not.toContain("response.failed");
+		const rotatedAt = bearers.indexOf("Bearer survivor");
+		expect(rotatedAt).toBeGreaterThan(0);
+		expect(bearers.slice(rotatedAt).every(bearer => bearer === "Bearer survivor")).toBe(true);
+		expect(storage.responses.get("resp_held_survivor")?.account).toBe(
+			resolveGatewayAccount(storage, provider, "held-account-session", "survivor"),
+		);
+	} finally {
+		await gateway.close();
+		storage.close();
+		await fs.rm(directory, { recursive: true, force: true });
+	}
+});
 
 for (const native of [false, true]) {
 	it(`resumes a stored ${native ? "pi-native" : "Responses"} response after reopening the gateway and credential database`, async () => {

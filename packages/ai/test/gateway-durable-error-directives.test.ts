@@ -42,11 +42,16 @@ it("retains an explicit no-retry directive on the gateway's actual HTTP error", 
 	try {
 		const response = await fetch(`${gateway.url}/v1/chat/completions`, {
 			method: "POST",
-			headers: { Authorization: "Bearer client", "Content-Type": "application/json" },
+			headers: {
+				Authorization: "Bearer client",
+				"Content-Type": "application/json",
+				Origin: "https://client.example",
+			},
 			body: JSON.stringify({ model: model.id, messages: [{ role: "user", content: "fixture" }], stream: false }),
 		});
 		expect(response.status).toBe(503);
 		expect(response.headers.get("x-should-retry")).toBe("false");
+		expect(response.headers.get("access-control-expose-headers")?.split(/,\s*/)).toContain("x-should-retry");
 		expect(requests).toBe(1);
 		await response.text();
 	} finally {
