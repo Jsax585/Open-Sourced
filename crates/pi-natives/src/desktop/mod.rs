@@ -1060,8 +1060,14 @@ impl Worker {
 				Ok(Response::Node(Some(node)))
 			},
 			Request::AxMarkdown { reference, .. } => {
-				let (markdown, refound) =
-					self.read_ref(reference, token, |worker, h| worker.ax()?.markdown(h))?;
+				// The element's fields are read too, so a read that finds them
+				// changed drops the ref's re-find fields as a plain read does.
+				let ((markdown, identity), refound) =
+					self.read_ref(reference, token, |worker, h| {
+						let markdown = worker.ax()?.markdown(h)?;
+						Ok((markdown, worker.ax()?.props(h)?.identity))
+					})?;
+				self.registry.check_identity(reference, identity.as_ref());
 				Ok(Response::Text(AxText { markdown, refound }))
 			},
 			Request::AxAttributes { reference, .. } => {
@@ -2838,6 +2844,23 @@ mod capture_tests {
 		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
 		tree.lock().titles.insert(2, "Gone");
 		assert_eq!(read(&mut worker, "e2"), Ok(false));
+		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
+		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
+		assert!(tree.lock().pressed.is_empty());
+	}
+
+	#[test]
+	fn a_markdown_read_that_finds_the_fields_changed_drops_them() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		tree.lock().titles.insert(2, "Gone");
+		let (reply, _rx) = flume::bounded(1);
+		let request = Request::AxMarkdown { reference: "e2".to_string(), reply };
+		let Ok(Response::Text(text)) =
+			worker.process(&request, &CancellationSource::default().token())
+		else {
+			panic!("the element is still there");
+		};
+		assert_eq!((text.markdown.as_str(), text.refound), ("**Gone**", false));
 		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
 		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
 		assert!(tree.lock().pressed.is_empty());
