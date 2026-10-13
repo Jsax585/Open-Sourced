@@ -766,6 +766,10 @@ impl AxBackend for MacAx {
 		attribute_settable(element, "AXValue")
 			&& element_pid(element).is_ok_and(|pid| !process::is_terminal(pid))
 	}
+
+	fn value_read_only(&mut self, h: &AxHandle) -> bool {
+		mac_handle(h).is_ok_and(|element| attribute_settable_answer(element, "AXValue") == Some(false))
+	}
 }
 
 fn element_props(
@@ -894,13 +898,18 @@ fn ensure_native_text_target(element: &AXUIElement) -> CoreResult<()> {
 }
 
 fn attribute_settable(element: &AXUIElement, name: &str) -> bool {
+	attribute_settable_answer(element, name) == Some(true)
+}
+
+/// `AXUIElementIsAttributeSettable`'s answer; `None` when the query failed.
+fn attribute_settable_answer(element: &AXUIElement, name: &str) -> Option<bool> {
 	let attribute = CFString::from_str(name);
 	let mut settable = 0;
 	// SAFETY: The Boolean out parameter is writable and all CF objects outlive
 	// the synchronous AX query.
 	(unsafe { element.is_attribute_settable(&attribute, NonNull::from(&mut settable)) }
 		== AXError::Success)
-		&& settable != 0
+		.then_some(settable != 0)
 }
 
 fn set_string_value(element: &AXUIElement, name: &str, text: &str) -> CoreResult<()> {

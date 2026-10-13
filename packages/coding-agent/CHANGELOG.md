@@ -8,6 +8,7 @@
 
 ### Changed
 
+- The `computer` guide explains `(readonly)` on a web page's text field: typing into it changes nothing
 - The `computer` guide explains the new `ax()` line states, `actions=`, local dates and how to read a value cut at 200 characters, and tells the model to check the target before repeating an action that threw `AxUnconfirmed` ([#15282](https://github.com/can1357/oh-my-pi/pull/15282) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.9.2] - 2026-10-11

@@ -296,6 +296,7 @@ struct WalkNode {
 	handle:   AxHandle,
 	props:    AxProps,
 	settable: bool,
+	readonly: bool,
 	children: Vec<Self>,
 }
 
@@ -337,6 +338,15 @@ fn walk_raw(
 		&& !in_web
 		&& keeps_set_value(&props.role)
 		&& backend.value_settable(&handle);
+	// A page's text field reports its `AXValue` unsettable exactly when the
+	// page will not let the user edit it (`readonly`, `aria-readonly`,
+	// disabled). Outside web content the answer proves nothing: a terminal's
+	// text area takes keys yet reports its value unsettable.
+	let readonly = state.line_states
+		&& in_web
+		&& props.enabled
+		&& matches!(props.role.as_str(), "textfield" | "textarea" | "combobox")
+		&& backend.value_read_only(&handle);
 	let mut children = Vec::new();
 	for child in child_handles {
 		if let Some(child) = walk_raw(backend, child, depth + 1, in_web, state)? {
@@ -346,7 +356,7 @@ fn walk_raw(
 			break;
 		}
 	}
-	Ok(Some(WalkNode { handle, props, settable, children }))
+	Ok(Some(WalkNode { handle, props, settable, readonly, children }))
 }
 
 /// Roles whose `setValue` write the app keeps: dates. A text field's `AXValue`
@@ -611,6 +621,9 @@ fn format_tree(
 	}
 	if !node.props.enabled {
 		text.push_str(" (disabled)");
+	}
+	if node.readonly {
+		text.push_str(" (readonly)");
 	}
 	if node.props.selected {
 		text.push_str(" (selected)");
@@ -879,22 +892,26 @@ mod tests {
 
 	#[derive(Default)]
 	struct Mock {
-		props:          HashMap<u64, AxProps>,
-		children:       HashMap<u64, Vec<u64>>,
+		props:           HashMap<u64, AxProps>,
+		children:        HashMap<u64, Vec<u64>>,
 		/// Nodes read without an identity.
-		unidentified:   HashSet<u64>,
+		unidentified:    HashSet<u64>,
 		/// Nodes whose earlier reads are gone, their identity taken over.
-		gone:           HashSet<u64>,
+		gone:            HashSet<u64>,
 		/// Bounds read by tree walks.
-		bounds_reads:   u32,
+		bounds_reads:    u32,
 		/// The application's focused element.
-		focus:          Option<u64>,
+		focus:           Option<u64>,
 		/// Application-focus reads made.
-		focus_reads:    u32,
+		focus_reads:     u32,
 		/// Nodes whose value `setValue` can write.
-		settable:       HashSet<u64>,
+		settable:        HashSet<u64>,
 		/// Settability checks made.
-		settable_reads: u32,
+		settable_reads:  u32,
+		/// Nodes that answer their value is not settable.
+		read_only:       HashSet<u64>,
+		/// Read-only checks made.
+		read_only_reads: u32,
 	}
 	impl Mock {
 		fn handle(&self, id: u64) -> AxHandle {
@@ -1002,6 +1019,11 @@ mod tests {
 		fn value_settable(&mut self, h: &AxHandle) -> bool {
 			self.settable_reads += 1;
 			self.settable.contains(&node(h))
+		}
+
+		fn value_read_only(&mut self, h: &AxHandle) -> bool {
+			self.read_only_reads += 1;
+			self.read_only.contains(&node(h))
 		}
 	}
 	fn p(role: &str, title: Option<&str>) -> AxProps {
@@ -1449,6 +1471,51 @@ mod tests {
 			assert!(!line(&text, unsettable).contains("(settable)"), "{text}");
 		}
 		assert_eq!(m.settable_reads, 1);
+	}
+	#[test]
+	fn only_page_text_fields_answering_unsettable_are_marked_readonly() {
+		let field = |role: &str, title: &str, value: &str| {
+			let mut props = p(role, Some(title));
+			props.value = Some(value.into());
+			props
+		};
+		let mut off = field("textfield", "Off", "off");
+		off.enabled = false;
+		let mut m = Mock {
+			props: [
+				(1, p("window", Some("Title"))),
+				(2, field("textarea", "Terminal", "$ ls")),
+				(3, p("webarea", Some("Page"))),
+				(4, field("textfield", "Name", "alpha")),
+				(5, field("textfield", "Fixed", "fixed")),
+				(6, field("textarea", "Notes", "frozen")),
+				(7, field("combobox", "City", "Oslo")),
+				(8, off),
+				(9, p("button", Some("Go"))),
+			]
+			.into(),
+			children: [(1, vec![2, 3]), (3, vec![4, 5, 6, 7, 8, 9])].into(),
+			read_only: [2, 5, 6, 7, 8, 9].into(),
+			..Default::default()
+		};
+		let text = tree(&mut m);
+		for readonly in ["e5", "e6", "e7"] {
+			assert!(line(&text, readonly).ends_with("(readonly)"), "{text}");
+		}
+		assert_eq!(line(&text, "e8"), "- textfield \"Off\" [ref=e8]: \"off\" (disabled)");
+		for editable in ["e2", "e4", "e9"] {
+			assert!(!line(&text, editable).contains("(readonly)"), "{text}");
+		}
+		// Only the page's enabled text fields are asked.
+		assert_eq!(m.read_only_reads, 4);
+		query(&mut m, &mut AxRegistry::default(), &window(), &AxQuery {
+			role:  Some("textfield".into()),
+			title: None,
+			value: None,
+			limit: None,
+		})
+		.unwrap();
+		assert_eq!(m.read_only_reads, 4);
 	}
 	#[test]
 	fn selected_rows_and_items_are_marked() {

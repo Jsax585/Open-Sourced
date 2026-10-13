@@ -229,4 +229,9 @@ pub trait AxBackend {
 	fn value_settable(&mut self, _h: &AxHandle) -> bool {
 		false
 	}
+	/// Whether the element answers that its value is not settable. A failed
+	/// query, or a backend that cannot ask, is not an answer.
+	fn value_read_only(&mut self, _h: &AxHandle) -> bool {
+		false
+	}
 }
