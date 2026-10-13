@@ -575,8 +575,11 @@ pub fn node_to_napi(reference: String, props: AxProps) -> AxNode {
 struct LineMarks {
 	/// `role "label" [ref=eN]` of the focused element.
 	focused:  Option<String>,
-	/// Refs of the lines marked `(selected)`, in tree order.
+	/// Refs of the lines marked `(selected)` outside another selected line
+	/// (a selected row's cells are left out), in tree order.
 	selected: Vec<String>,
+	/// Depth of the selected line whose subtree the walk is in.
+	in_selected: Option<usize>,
 }
 
 /// `role "label" [ref=eN]`: what names an element on its line.
@@ -664,9 +667,15 @@ fn format_tree(
 	if !node.props.enabled {
 		text.push_str(" (disabled)");
 	}
+	if marks.in_selected.is_some_and(|selected| depth <= selected) {
+		marks.in_selected = None;
+	}
 	if node.props.selected {
 		text.push_str(" (selected)");
-		marks.selected.push(reference.clone());
+		if marks.in_selected.is_none() {
+			marks.selected.push(reference.clone());
+			marks.in_selected = Some(depth);
+		}
 	}
 	if node.settable {
 		text.push_str(" (settable)");
@@ -1601,15 +1610,20 @@ mod tests {
 				(5, row("b", true)),
 				(6, row("c", false)),
 				(7, row("d", true)),
+				(8, {
+					let mut cell = p("cell", Some("d1"));
+					cell.selected = true;
+					cell
+				}),
 			]
 			.into(),
-			children: [(1, vec![2, 3]), (3, vec![4, 5, 6, 7])].into(),
+			children: [(1, vec![2, 3]), (3, vec![4, 5, 6, 7]), (7, vec![8])].into(),
 			focus: Some(2),
 			selection: Some((2, "hello".into())),
 			..Default::default()
 		};
 		let text = tree(&mut m);
-		let tail: Vec<_> = text.lines().skip(7).collect();
+		let tail: Vec<_> = text.lines().skip(8).collect();
 		assert_eq!(tail, [
 			"Focused: textfield \"Name\" [ref=e2]",
 			"Selected text: \"hello\"",
@@ -1619,14 +1633,14 @@ mod tests {
 		// it holds.
 		assert_eq!((m.focus_reads, m.selection_reads), (1, 1));
 		// No focus below the window and no selection: the tree ends with its last
-		// row.
+		// line.
 		m.focus = Some(1);
 		m.selection = None;
-		for id in [4, 5, 7] {
+		for id in [4, 5, 7, 8] {
 			m.props.get_mut(&id).unwrap().selected = false;
 		}
 		let text = tree(&mut m);
-		assert!(text.lines().last().unwrap().starts_with("    - row \"d\""), "{text}");
+		assert!(text.lines().last().unwrap().starts_with("      - cell \"d1\""), "{text}");
 	}
 	#[test]
 	fn focus_outside_the_tree_is_named_with_a_ref_and_a_long_selection_is_cut() {
