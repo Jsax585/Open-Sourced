@@ -116,3 +116,63 @@ it("execution responses omit injected non-allowlisted trace fields", async () =>
 		await fs.rm(directory, { recursive: true });
 	}
 });
+
+it("execution readback returns every retained decision in order and keeps legacy first-decision fields", async () => {
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-trace-history-"));
+	const storage = await AuthStorage.create(path.join(directory, "auth.db"), {
+		usageProviderResolver: () => undefined,
+	});
+	const log = new RouteDecisionTraceLog();
+	const input = {
+		requestId: "fixture-history",
+		routeId: "fixture-route",
+		generation: 1,
+		selectedTarget: "unavailable-target",
+		disposition: "skipped" as const,
+		reason: "credential_unavailable" as const,
+		prompt: "private history prompt",
+		token: "private history token",
+	};
+	const first = log.record(input);
+	log.record({
+		requestId: "other-execution",
+		routeId: "other",
+		generation: 1,
+		selectedTarget: "other",
+		disposition: "dispatched",
+	});
+	const second = log.record({
+		requestId: "fixture-history",
+		routeId: "fixture-route",
+		generation: 1,
+		selectedTarget: "serving-target",
+		disposition: "dispatched",
+	});
+	const gateway = startAuthGateway({
+		bind: "127.0.0.1:0",
+		storage,
+		bearerTokens: ["trace-fixture-client"],
+		resolveModel: () => undefined,
+		decisionTraces: log,
+	});
+	try {
+		const url = `${gateway.url}/v1/executions/fixture-history`;
+		expect((await fetch(url)).status).toBe(401);
+		const response = await fetch(url, { headers: { Authorization: "Bearer trace-fixture-client" } });
+		expect(response.status).toBe(200);
+		const payload = await response.json();
+		expect(payload).toMatchObject({ ...first, object: "list", data: [first, second] });
+		expect(JSON.stringify(payload)).not.toContain("private history");
+		expect(
+			(
+				await fetch(`${gateway.url}/v1/executions/absent`, {
+					headers: { Authorization: "Bearer trace-fixture-client" },
+				})
+			).status,
+		).toBe(404);
+	} finally {
+		await gateway.close();
+		storage.close();
+		await fs.rm(directory, { recursive: true });
+	}
+});

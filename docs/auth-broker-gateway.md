@@ -217,7 +217,7 @@ Management is disabled by default. Library hosts must explicitly set `allowManag
 
 ### Native protocol surfaces
 
-Gemini clients can use `/v1beta/models/{model}:generateContent` for JSON or `:streamGenerateContent` for SSE. Encode model IDs (including slashes) once. The action controls streaming; a conflicting body model is rejected. Body-based `/v1beta/models/generateContent` and `/v1beta/models/streamGenerateContent` aliases are also available. Image-only user turns, function declarations, named/subset tool controls, parallel function history and tool thought-signatures are preserved. Direct Google/Vertex requests retain native structured-output schema fields. File references, audio, code-execution/built-in tools, standalone thinking/signed-text parts and assistant-image history are not supported and are rejected instead of silently dropped.
+Gemini clients can use `/v1beta/models/{model}:generateContent` for JSON or `:streamGenerateContent` for SSE. Encode model IDs (including slashes) once. The action controls streaming; a conflicting body model is rejected. Body-based `/v1beta/models/generateContent` and `/v1beta/models/streamGenerateContent` aliases are also available. Image-only user turns, function declarations, named/subset tool controls, parallel function history and tool thought-signatures are preserved. Direct Google/Vertex requests retain native structured-output schema fields, including pi-native `options.responseMimeType`, `options.responseSchema` and `options.responseJsonSchema`. File references, audio, code-execution/built-in tools, standalone thinking/signed-text parts and assistant-image history are not supported and are rejected instead of silently dropped.
 
 `/backend-api/codex/responses` and `/backend-api/responses` use the existing Responses pipeline; `/v1/grok/chat/completions` uses Chat Completions. They share normal authentication, continuation ownership, retry and lifecycle controls—not separate credential paths.
 
@@ -250,6 +250,7 @@ Library hosts can supply `hooks` for `beforeRequest`, `beforeAttempt`, `afterAtt
 | `GET`  | `/healthz`              | none   | Liveness + version                                           |
 | `GET`  | `/v1/usage`             | bearer | Aggregate `UsageReport[]` (proxied through `AuthStorage`)    |
 | `GET`  | `/v1/models`            | bearer | Registry catalog filtered to providers with credentials |
+| `GET`  | `/v1/executions/:id`    | bearer | Retained ordered routing decisions for one request, without prompts or credentials |
 | `GET`  | `/v1/credentials/check` | bearer | Per-credential auth health probe                             |
 | `POST` | `/v1/chat/completions`  | bearer | OpenAI Chat Completions wire format                          |
 | `POST` | `/v1/messages`          | bearer | Anthropic Messages wire format                               |
@@ -277,6 +278,8 @@ Live OpenRouter discovery covers image and Decisions rosters, `/embeddings/model
 Inference routes record observed usage against `x-omp-install-id`, `x-omp-hostname`, and `x-omp-app`; unlabeled requests fall back to the gateway host's identity. These attribution headers are not forwarded upstream. Completed non-streaming responses carry computed cost in `x-litellm-response-cost` when known; streaming chat responses send headers before usage arrives and do not include that cost header. Video cost may become available only while polling. Upstreams that report tokens only (TypeSafe) are priced from the catalog model; the response body's own `cost` field (OpenRouter shape) is only present when the upstream billed one.
 
 TypeSafe clients using the default base-URL resolver can set `TYPESAFE_BASE_URL=http://gateway:4000` with `TYPESAFE_API_KEY=<gateway token>`. omp's catalog-backed `judge` role passes the model's explicit `baseUrl`, which takes precedence over that environment fallback; configure the TypeSafe provider's `baseUrl` and `apiKey` in `models.yml` to use the gateway. OpenAI-SDK-style clients use `http://gateway:4000/v1`.
+
+Execution lookups return `object: "list"` with every retained redacted decision in `data`, in recorded order, while keeping the first decision's legacy top-level fields. The router retains at most 2,000 records for 30 minutes; absent or expired executions return 404.
 
 There is no raw provider passthrough path. All supported routes go through `pi-ai` provider logic so credential-specific request shaping, OAuth refresh-on-auth-error, and provider quirks stay centralized.
 
