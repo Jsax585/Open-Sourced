@@ -261,6 +261,11 @@ function continuationRejection(
 	headers?: Record<string, string>,
 ): string | undefined {
 	if (!previousId) return undefined;
+	if (owner?.credentialId !== undefined) {
+		const explicit = storage.sessions.explicitCredentialId(model.provider, owner.sessionId);
+		if (explicit !== undefined && explicit !== owner.credentialId)
+			return "previous_response_id belongs to another account";
+	}
 	if (model.api !== "openai-responses" && model.api !== "azure-openai-responses") {
 		return "previous_response_id requires an OpenAI or Azure Responses upstream";
 	}
@@ -407,7 +412,9 @@ async function handleFormatEndpoint(
 	// expected to resolve the credential and pass it as `options.apiKey`.
 	// For OAuth providers this returns the access token (refreshed via the
 	// broker override on AuthStorage when needed).
-	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
+	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer, {
+		credentialId: previousOwner?.credentialId,
+	});
 	if (controller.signal.aborted) return clientClosedResponse(route);
 	if ("status" in apiKey) return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
 	const owner: GatewayResponseOwner = {
@@ -417,6 +424,7 @@ async function handleFormatEndpoint(
 		api: model.api,
 		endpoint: responseEndpointIdentity(model, parsed.options.headers),
 		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
+		credentialId: apiKey.credentialId,
 	};
 	if (previousOwner && previousOwner.account !== owner.account) {
 		return route.module.formatError(400, "invalid_request_error", "previous_response_id belongs to another account");
@@ -450,6 +458,7 @@ async function handleFormatEndpoint(
 				peer,
 				resolvedKey => {
 					owner.account = resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, resolvedKey);
+					owner.credentialId = resolvedKey.credentialId;
 					lease.updateAccount(owner.account);
 				},
 			);
@@ -626,7 +635,9 @@ async function handlePiNative(
 		previousOwner?.sessionId ?? clientKey ?? deriveSessionId(parsed.modelId, parsed.context, toolsJson);
 	parsed.options.sessionId = sessionId;
 
-	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
+	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer, {
+		credentialId: previousOwner?.credentialId,
+	});
 	if (controller.signal.aborted) return aborted();
 	if ("status" in apiKey) return piNative.formatError(apiKey.status, apiKey.type, apiKey.message);
 	const owner: GatewayResponseOwner = {
@@ -636,6 +647,7 @@ async function handlePiNative(
 		api: model.api,
 		endpoint: responseEndpointIdentity(model, requestHeaders),
 		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
+		credentialId: apiKey.credentialId,
 	};
 	if (previousOwner && previousOwner.account !== owner.account) {
 		return piNative.formatError(400, "invalid_request_error", "previous_response_id belongs to another account");
@@ -676,6 +688,7 @@ async function handlePiNative(
 				peer,
 				resolvedKey => {
 					owner.account = resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, resolvedKey);
+					owner.credentialId = resolvedKey.credentialId;
 					lease.updateAccount(owner.account);
 				},
 			);
