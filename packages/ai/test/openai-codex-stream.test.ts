@@ -9990,6 +9990,895 @@ describe("openai-codex streaming", () => {
 		}
 	});
 
+	it("debug rewrite reader drains a held request dump while flooding the websocket", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-debug-rewrite-reader-success-");
+		const previousCwd = process.cwd();
+		const previousDebug = Bun.env.PI_REQ_DEBUG;
+		const previousWebSocket = global.WebSocket;
+		const previousBunWrite = Bun.write;
+		const abortController = new AbortController();
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const sentWire: string[] = [];
+		const capturedWrites: Array<{ pathname: string; content: string }> = [];
+		const responseTasks: Promise<void>[] = [];
+		const sockets: MockWebSocket[] = [];
+		const startedPromises: Promise<unknown>[] = [];
+		const rewriteEntered = Promise.withResolvers<void>();
+		const releaseRewrite = Promise.withResolvers<void>();
+		const firstTerminalSent = Promise.withResolvers<void>();
+		const producerFailure = Promise.withResolvers<never>();
+		void producerFailure.promise.catch(() => undefined);
+		const floodText = "x".repeat(4200);
+		const floodUsage: CodexTestUsage = {
+			input_tokens: 5,
+			output_tokens: 4200,
+			total_tokens: 4205,
+			input_tokens_details: { cached_tokens: 0 },
+		};
+		let socketCount = 0;
+		let createCount = 0;
+		let closeCount = 0;
+		let hookCalls = 0;
+		let deliveredDeltas = 0;
+		let deliveredText = "";
+		let firstResultSettled = false;
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run during debug rewrite reader success");
+		});
+		const emitNormalResponse = (
+			socket: MockWebSocket,
+			messageId: string,
+			responseId: string,
+			text: string,
+			usage = DEFAULT_USAGE,
+		): void => {
+			socket.emitCodexResponse({
+				messageId,
+				responseId,
+				text,
+				includeCreated: true,
+				usage,
+			});
+		};
+		const assertDumpMatchesWire = async (index: number): Promise<void> => {
+			const captured = capturedWrites[index];
+			const wire = sentWire[index];
+			if (!captured || !wire) throw new Error(`expected debug dump and wire request ${index}`);
+			const dumpPath = path.isAbsolute(captured.pathname)
+				? captured.pathname
+				: path.join(tempDir.path(), captured.pathname);
+			const persisted = await fs.readFile(dumpPath, "utf8");
+			expect(persisted).toBe(captured.content);
+			expect(decodeCodexDebugRequestBody(JSON.parse(persisted) as Record<string, unknown>)).toEqual(
+				JSON.parse(wire),
+			);
+		};
+		const forwardingWrite = async (...args: Parameters<typeof Bun.write>) => {
+			const destination = args[0] as unknown;
+			if (typeof destination === "string" && /(^|[/\\])rr-session-\d+\.json$/.test(destination)) {
+				const input = args[1] as unknown;
+				if (typeof input !== "string") throw new Error("expected serialized request debug dump");
+				capturedWrites.push({ pathname: destination, content: input });
+				if (capturedWrites.length === 1) {
+					rewriteEntered.resolve();
+					await releaseRewrite.promise;
+				}
+			}
+			return previousBunWrite(...(args as Parameters<typeof previousBunWrite>));
+		};
+		const track = <T>(promise: Promise<T>): Promise<T> => {
+			startedPromises.push(promise);
+			void promise.catch(() => undefined);
+			return promise;
+		};
+
+		class DebugRewriteReaderWebSocket extends MockWebSocket {
+			constructor(url: string, options?: WsOptions) {
+				super(url, options);
+				sockets.push(this);
+				socketCount += 1;
+				queueMicrotask(() => {
+					if (this.readyState !== MockWebSocket.CONNECTING) return;
+					this.readyState = MockWebSocket.OPEN;
+					this.emit("open", new Event("open"));
+				});
+			}
+
+			override send(data: string): void {
+				sentWire.push(data);
+				const request = JSON.parse(data) as Record<string, unknown>;
+				if (request.type === "response.create" || request.type === "proxy.debug-rewrite") createCount += 1;
+				const requestIndex = sentWire.length;
+				const responseTask = (async () => {
+					if (requestIndex === 1) {
+						await rewriteEntered.promise;
+						if (abortController.signal.aborted) return;
+						this.sendJson({ type: "response.created", response: { id: "resp_debug_rewrite" } });
+						this.sendJson({
+							type: "response.output_item.added",
+							item: {
+								type: "message",
+								id: "msg_debug_rewrite",
+								role: "assistant",
+								status: "in_progress",
+								content: [],
+							},
+						});
+						this.sendJson({
+							type: "response.content_part.added",
+							part: { type: "output_text", text: "" },
+						});
+						for (let frameIndex = 0; frameIndex < 4200; frameIndex += 1) {
+							this.sendJson({ type: "response.output_text.delta", delta: "x" });
+							for (let microtask = 0; microtask < 32; microtask += 1) await Promise.resolve();
+						}
+						this.sendJson({
+							type: "response.output_item.done",
+							item: {
+								type: "message",
+								id: "msg_debug_rewrite",
+								role: "assistant",
+								status: "completed",
+								content: [{ type: "output_text", text: floodText }],
+							},
+						});
+						this.sendJson({
+							type: "response.completed",
+							response: {
+								id: "resp_debug_rewrite",
+								status: "completed",
+								usage: floodUsage,
+							},
+						});
+						firstTerminalSent.resolve();
+						return;
+					}
+					emitNormalResponse(this, "msg_debug_rewrite_followup", "resp_debug_rewrite_followup", "follow-up");
+				})().catch(error => {
+					producerFailure.reject(error);
+					throw error;
+				});
+				responseTasks.push(responseTask);
+				void responseTask.catch(() => undefined);
+			}
+
+			override close(): void {
+				closeCount += 1;
+				super.close();
+			}
+		}
+
+		try {
+			process.chdir(tempDir.path());
+			Bun.env.PI_REQ_DEBUG = "1";
+			Bun.write = forwardingWrite as typeof Bun.write;
+			global.WebSocket = DebugRewriteReaderWebSocket as unknown as typeof WebSocket;
+			const token = createCodexTestToken();
+			const model = createCodexTestModel("https://chatgpt.com/backend-api");
+			const firstUser = { role: "user" as const, content: "debug raw", timestamp: 1 };
+			const firstContext: Context = {
+				systemPrompt: ["You are a helpful assistant."],
+				messages: [firstUser],
+			};
+			const firstStream = streamOpenAICodexResponses(model, firstContext, {
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId: "ws-debug-rewrite-reader-success",
+				providerSessionState,
+				signal: abortController.signal,
+				onPayload: async payload => {
+					hookCalls += 1;
+					const request = payload as Record<string, unknown>;
+					if (!Array.isArray(request.input)) throw new Error("expected hooked input");
+					let replaced = false;
+					for (const item of request.input) {
+						if (!isRecord(item) || !Array.isArray(item.content)) continue;
+						for (const part of item.content) {
+							if (isRecord(part) && part.type === "input_text" && part.text === "debug raw") {
+								part.text = "debug approved";
+								replaced = true;
+							}
+						}
+					}
+					if (!replaced) throw new Error("expected the raw debug input text");
+					request.type = "proxy.debug-rewrite";
+					return request;
+				},
+			});
+			const firstConsumer = track(
+				(async () => {
+					for await (const event of firstStream) {
+						if (event.type !== "text_delta") continue;
+						deliveredDeltas += 1;
+						deliveredText += event.delta;
+					}
+				})(),
+			);
+			const firstResultPromise = track(firstStream.result());
+			void firstResultPromise.then(
+				() => {
+					firstResultSettled = true;
+				},
+				() => {
+					firstResultSettled = true;
+				},
+			);
+
+			await Promise.race([
+				rewriteEntered.promise,
+				firstResultPromise.then(
+					() => {
+						throw new Error("debug rewrite reader stream settled before rewrite entered");
+					},
+					error => {
+						throw error;
+					},
+				),
+			]);
+			await Promise.race([firstTerminalSent.promise, producerFailure.promise]);
+			for (let microtask = 0; microtask < 100; microtask += 1) await Promise.resolve();
+			expect(deliveredDeltas).toBe(4200);
+			expect(deliveredText).toBe(floodText);
+			expect(sentWire).toHaveLength(1);
+			expect(createCount).toBe(1);
+			expect(socketCount).toBe(1);
+			expect(closeCount).toBe(0);
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(sockets).toHaveLength(1);
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.OPEN);
+			expect(firstResultSettled).toBe(false);
+			releaseRewrite.resolve();
+			const first = await firstResultPromise;
+			await firstConsumer;
+
+			const firstText = first.content
+				.filter((block): block is { type: "text"; text: string } => block.type === "text")
+				.map(block => block.text)
+				.join("");
+			expect(first.stopReason).toBe("stop");
+			expect(first.responseId).toBe("resp_debug_rewrite");
+			expect(firstText).toBe(floodText);
+			expect(first.usage).toEqual({
+				input: 5,
+				output: 4200,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 4205,
+				premiumRequests: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			});
+			const firstWire = JSON.parse(sentWire[0]!) as Record<string, unknown>;
+			expect(firstWire.type).toBe("proxy.debug-rewrite");
+			expect(JSON.stringify(firstWire.input)).toContain("debug approved");
+			expect(JSON.stringify(firstWire.input)).not.toContain("debug raw");
+			expect(hookCalls).toBe(1);
+
+			const approvedUser = { ...firstUser, content: "debug approved" };
+			const followupUser = { role: "user" as const, content: "debug follow-up", timestamp: 2 };
+			const followupContext: Context = {
+				systemPrompt: firstContext.systemPrompt,
+				messages: [approvedUser, first, followupUser],
+			};
+			const followupStream = streamOpenAICodexResponses(model, followupContext, {
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId: "ws-debug-rewrite-reader-success",
+				providerSessionState,
+				signal: abortController.signal,
+			});
+			let followupTextDeltas = 0;
+			const followupConsumer = track(
+				(async () => {
+					for await (const event of followupStream) {
+						if (event.type === "text_delta") followupTextDeltas += 1;
+					}
+				})(),
+			);
+			const followupResultPromise = track(followupStream.result());
+			const followup = await followupResultPromise;
+			await followupConsumer;
+			await Promise.all(responseTasks);
+			expect(followupTextDeltas).toBe(1);
+			expect(followup.stopReason).toBe("stop");
+			expect(followup.responseId).toBe("resp_debug_rewrite_followup");
+			expect(
+				followup.content
+					.filter((block): block is { type: "text"; text: string } => block.type === "text")
+					.map(block => block.text)
+					.join(""),
+			).toBe("follow-up");
+			expect(followup.usage).toEqual({
+				input: DEFAULT_USAGE.input_tokens,
+				output: DEFAULT_USAGE.output_tokens,
+				cacheRead: DEFAULT_USAGE.input_tokens_details.cached_tokens,
+				cacheWrite: 0,
+				totalTokens: DEFAULT_USAGE.total_tokens,
+				premiumRequests: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			});
+			expect(sentWire).toHaveLength(2);
+			expect(createCount).toBe(2);
+			expect(socketCount).toBe(1);
+			expect(closeCount).toBe(0);
+			expect(fetchMock).not.toHaveBeenCalled();
+			const followupWire = JSON.parse(sentWire[1]!) as Record<string, unknown>;
+			expect(followupWire.type).toBe("response.create");
+			expect(followupWire.previous_response_id).toBe("resp_debug_rewrite");
+			expect(JSON.stringify(followupWire.input)).toContain("debug follow-up");
+			expect(JSON.stringify(followupWire.input)).not.toContain("debug raw");
+			expect(capturedWrites).toHaveLength(2);
+			await assertDumpMatchesWire(0);
+			await assertDumpMatchesWire(1);
+		} finally {
+			rewriteEntered.resolve();
+			releaseRewrite.resolve();
+			abortController.abort();
+			await Promise.allSettled([...startedPromises, ...responseTasks]);
+			for (const state of providerSessionState.values()) state.close();
+			Bun.write = previousBunWrite;
+			process.chdir(previousCwd);
+			restoreEnv("PI_REQ_DEBUG", previousDebug);
+			global.WebSocket = previousWebSocket;
+			await tempDir.remove();
+		}
+	}, 15_000);
+
+	it("debug rewrite reader keeps reading after a rejected request dump rewrite", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-debug-rewrite-reader-reject-");
+		const previousCwd = process.cwd();
+		const previousDebug = Bun.env.PI_REQ_DEBUG;
+		const previousWebSocket = global.WebSocket;
+		const previousBunWrite = Bun.write;
+		const abortController = new AbortController();
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const sentWire: string[] = [];
+		const capturedWrites: Array<{ pathname: string; content: string }> = [];
+		const responseTasks: Promise<void>[] = [];
+		const sockets: MockWebSocket[] = [];
+		const startedPromises: Promise<unknown>[] = [];
+		const rewriteEntered = Promise.withResolvers<void>();
+		const releaseRewrite = Promise.withResolvers<void>();
+		const producerFailure = Promise.withResolvers<never>();
+		void producerFailure.promise.catch(() => undefined);
+		const partialEmitted = Promise.withResolvers<void>();
+		const partialText = "partial";
+		const completeText = "partial response";
+		let rejectRewrite = false;
+		let socketCount = 0;
+		let createCount = 0;
+		let closeCount = 0;
+		let deliveredText = "";
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run after a debug rewrite rejection");
+		});
+		const assertDumpMatchesWire = async (index: number): Promise<void> => {
+			const captured = capturedWrites[index];
+			const wire = sentWire[index];
+			if (!captured || !wire) throw new Error(`expected debug dump and wire request ${index}`);
+			const dumpPath = path.isAbsolute(captured.pathname)
+				? captured.pathname
+				: path.join(tempDir.path(), captured.pathname);
+			const persisted = await fs.readFile(dumpPath, "utf8");
+			expect(persisted).toBe(captured.content);
+			expect(decodeCodexDebugRequestBody(JSON.parse(persisted) as Record<string, unknown>)).toEqual(
+				JSON.parse(wire),
+			);
+		};
+		const forwardingWrite = async (...args: Parameters<typeof Bun.write>) => {
+			const destination = args[0] as unknown;
+			if (typeof destination === "string" && /(^|[/\\])rr-session-\d+\.json$/.test(destination)) {
+				const input = args[1] as unknown;
+				if (typeof input !== "string") throw new Error("expected serialized request debug dump");
+				capturedWrites.push({ pathname: destination, content: input });
+				if (capturedWrites.length === 1) {
+					rewriteEntered.resolve();
+					await releaseRewrite.promise;
+					if (rejectRewrite) throw new Error("fixture request dump rewrite failed");
+				}
+			}
+			return previousBunWrite(...(args as Parameters<typeof previousBunWrite>));
+		};
+		const track = <T>(promise: Promise<T>): Promise<T> => {
+			startedPromises.push(promise);
+			void promise.catch(() => undefined);
+			return promise;
+		};
+
+		class DebugRewriteReaderWebSocket extends MockWebSocket {
+			constructor(url: string, options?: WsOptions) {
+				super(url, options);
+				sockets.push(this);
+				socketCount += 1;
+				queueMicrotask(() => {
+					if (this.readyState !== MockWebSocket.CONNECTING) return;
+					this.readyState = MockWebSocket.OPEN;
+					this.emit("open", new Event("open"));
+				});
+			}
+
+			override send(data: string): void {
+				sentWire.push(data);
+				const request = JSON.parse(data) as Record<string, unknown>;
+				if (request.type === "response.create") createCount += 1;
+				const requestIndex = sentWire.length;
+				const responseTask = (async () => {
+					if (requestIndex === 1) {
+						await rewriteEntered.promise;
+						if (abortController.signal.aborted) return;
+						this.sendJson({ type: "response.created", response: { id: "resp_debug_rewrite_rejected" } });
+						this.sendJson({
+							type: "response.output_item.added",
+							item: {
+								type: "message",
+								id: "msg_debug_rewrite_rejected",
+								role: "assistant",
+								status: "in_progress",
+								content: [],
+							},
+						});
+						this.sendJson({
+							type: "response.content_part.added",
+							part: { type: "output_text", text: "" },
+						});
+						this.sendJson({ type: "response.output_text.delta", delta: partialText });
+						partialEmitted.resolve();
+						await releaseRewrite.promise;
+						for (let microtask = 0; microtask < 32; microtask += 1) await Promise.resolve();
+						if (abortController.signal.aborted) return;
+						this.sendJson({ type: "response.output_text.delta", delta: " response" });
+						this.sendJson({
+							type: "response.output_item.done",
+							item: {
+								type: "message",
+								id: "msg_debug_rewrite_rejected",
+								role: "assistant",
+								status: "completed",
+								content: [{ type: "output_text", text: completeText }],
+							},
+						});
+						this.sendJson({
+							type: "response.completed",
+							response: {
+								id: "resp_debug_rewrite_rejected",
+								status: "completed",
+								usage: DEFAULT_USAGE,
+							},
+						});
+						return;
+					}
+					this.emitCodexResponse({
+						messageId: "msg_debug_rewrite_rejected_followup",
+						responseId: "resp_debug_rewrite_rejected_followup",
+						text: "follow-up",
+						includeCreated: true,
+					});
+				})().catch(error => {
+					producerFailure.reject(error);
+					throw error;
+				});
+				responseTasks.push(responseTask);
+				void responseTask.catch(() => undefined);
+			}
+
+			override close(): void {
+				closeCount += 1;
+				super.close();
+			}
+		}
+
+		try {
+			process.chdir(tempDir.path());
+			Bun.env.PI_REQ_DEBUG = "1";
+			Bun.write = forwardingWrite as typeof Bun.write;
+			global.WebSocket = DebugRewriteReaderWebSocket as unknown as typeof WebSocket;
+			const token = createCodexTestToken();
+			const model = createCodexTestModel("https://chatgpt.com/backend-api");
+			const firstUser = { role: "user" as const, content: "debug raw", timestamp: 1 };
+			const firstContext: Context = {
+				systemPrompt: ["You are a helpful assistant."],
+				messages: [firstUser],
+			};
+			const firstStream = streamOpenAICodexResponses(model, firstContext, {
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId: "ws-debug-rewrite-reader-reject",
+				providerSessionState,
+				signal: abortController.signal,
+			});
+			const firstConsumer = track(
+				(async () => {
+					for await (const event of firstStream) {
+						if (event.type === "text_delta") {
+							deliveredText += event.delta;
+						}
+					}
+				})(),
+			);
+			const firstResultPromise = track(firstStream.result());
+
+			await Promise.race([
+				rewriteEntered.promise,
+				firstResultPromise.then(
+					() => {
+						throw new Error("debug rewrite reader stream settled before rewrite entered");
+					},
+					error => {
+						throw error;
+					},
+				),
+			]);
+			await Promise.race([partialEmitted.promise, producerFailure.promise]);
+			for (let microtask = 0; microtask < 100; microtask += 1) await Promise.resolve();
+			expect(deliveredText).toBe(partialText);
+			expect(sentWire).toHaveLength(1);
+			expect(createCount).toBe(1);
+			expect(socketCount).toBe(1);
+			expect(closeCount).toBe(0);
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(sockets).toHaveLength(1);
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.OPEN);
+			rejectRewrite = true;
+			releaseRewrite.resolve();
+			for (let microtask = 0; microtask < 32; microtask += 1) await Promise.resolve();
+			const first = await firstResultPromise;
+			await firstConsumer;
+			await Promise.all(responseTasks);
+			const firstText = first.content
+				.filter((block): block is { type: "text"; text: string } => block.type === "text")
+				.map(block => block.text)
+				.join("");
+			expect(first.stopReason).toBe("stop");
+			expect(first.responseId).toBe("resp_debug_rewrite_rejected");
+			expect(firstText).toBe(completeText);
+			expect(first.usage).toEqual({
+				input: DEFAULT_USAGE.input_tokens,
+				output: DEFAULT_USAGE.output_tokens,
+				cacheRead: DEFAULT_USAGE.input_tokens_details.cached_tokens,
+				cacheWrite: 0,
+				totalTokens: DEFAULT_USAGE.total_tokens,
+				premiumRequests: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			});
+
+			const followupUser = { role: "user" as const, content: "debug follow-up", timestamp: 2 };
+			const followupStream = streamOpenAICodexResponses(
+				model,
+				{ systemPrompt: firstContext.systemPrompt, messages: [firstUser, first, followupUser] },
+				{
+					fetch: fetchMock as FetchImpl,
+					apiKey: token,
+					sessionId: "ws-debug-rewrite-reader-reject",
+					providerSessionState,
+					signal: abortController.signal,
+				},
+			);
+			let followupTextDeltas = 0;
+			const followupConsumer = track(
+				(async () => {
+					for await (const event of followupStream) {
+						if (event.type === "text_delta") followupTextDeltas += 1;
+					}
+				})(),
+			);
+			const followupResultPromise = track(followupStream.result());
+			const followup = await followupResultPromise;
+			await followupConsumer;
+			await Promise.all(responseTasks);
+			expect(followupTextDeltas).toBe(1);
+			expect(followup.stopReason).toBe("stop");
+			expect(followup.responseId).toBe("resp_debug_rewrite_rejected_followup");
+			expect(
+				followup.content
+					.filter((block): block is { type: "text"; text: string } => block.type === "text")
+					.map(block => block.text)
+					.join(""),
+			).toBe("follow-up");
+			expect(sentWire).toHaveLength(2);
+			expect(createCount).toBe(2);
+			expect(socketCount).toBe(1);
+			expect(closeCount).toBe(0);
+			expect(fetchMock).not.toHaveBeenCalled();
+			const followupWire = JSON.parse(sentWire[1]!) as Record<string, unknown>;
+			expect(followupWire.type).toBe("response.create");
+			expect(followupWire.previous_response_id).toBe("resp_debug_rewrite_rejected");
+			expect(JSON.stringify(followupWire.input)).toContain("debug follow-up");
+			expect(capturedWrites).toHaveLength(2);
+			await assertDumpMatchesWire(1);
+		} finally {
+			rewriteEntered.resolve();
+			partialEmitted.resolve();
+			releaseRewrite.resolve();
+			abortController.abort();
+			await Promise.allSettled([...startedPromises, ...responseTasks]);
+			for (const state of providerSessionState.values()) state.close();
+			Bun.write = previousBunWrite;
+			process.chdir(previousCwd);
+			restoreEnv("PI_REQ_DEBUG", previousDebug);
+			global.WebSocket = previousWebSocket;
+			await tempDir.remove();
+		}
+	}, 15_000);
+
+	it("debug rewrite reader aborts with a held request dump rewrite", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-debug-rewrite-reader-abort-");
+		const previousCwd = process.cwd();
+		const previousDebug = Bun.env.PI_REQ_DEBUG;
+		const previousWebSocket = global.WebSocket;
+		const previousBunWrite = Bun.write;
+		const abortController = new AbortController();
+		const followupAbortController = new AbortController();
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const sentWire: string[] = [];
+		const sockets: MockWebSocket[] = [];
+		const capturedWrites: Array<{ pathname: string; content: string }> = [];
+		const responseTasks: Promise<void>[] = [];
+		const startedPromises: Promise<unknown>[] = [];
+		const rewriteEntered = Promise.withResolvers<void>();
+		const releaseRewrite = Promise.withResolvers<void>();
+		const producerFailure = Promise.withResolvers<never>();
+		void producerFailure.promise.catch(() => undefined);
+		const partialEmitted = Promise.withResolvers<void>();
+		const partialText = "partial abort";
+		let socketCount = 0;
+		let createCount = 0;
+		let closeCount = 0;
+		let deliveredText = "";
+		let firstResultSettled = false;
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not run during a debug rewrite reader abort");
+		});
+		const assertDumpMatchesWire = async (index: number): Promise<void> => {
+			const captured = capturedWrites[index];
+			const wire = sentWire[index];
+			if (!captured || !wire) throw new Error(`expected debug dump and wire request ${index}`);
+			const dumpPath = path.isAbsolute(captured.pathname)
+				? captured.pathname
+				: path.join(tempDir.path(), captured.pathname);
+			const persisted = await fs.readFile(dumpPath, "utf8");
+			expect(persisted).toBe(captured.content);
+			expect(decodeCodexDebugRequestBody(JSON.parse(persisted) as Record<string, unknown>)).toEqual(
+				JSON.parse(wire),
+			);
+		};
+		const forwardingWrite = async (...args: Parameters<typeof Bun.write>) => {
+			const destination = args[0] as unknown;
+			if (typeof destination === "string" && /(^|[/\\])rr-session-\d+\.json$/.test(destination)) {
+				const input = args[1] as unknown;
+				if (typeof input !== "string") throw new Error("expected serialized request debug dump");
+				capturedWrites.push({ pathname: destination, content: input });
+				if (capturedWrites.length === 1) {
+					rewriteEntered.resolve();
+					await releaseRewrite.promise;
+				}
+			}
+			return previousBunWrite(...(args as Parameters<typeof previousBunWrite>));
+		};
+		const track = <T>(promise: Promise<T>): Promise<T> => {
+			startedPromises.push(promise);
+			void promise.catch(() => undefined);
+			return promise;
+		};
+
+		class DebugRewriteReaderWebSocket extends MockWebSocket {
+			constructor(url: string, options?: WsOptions) {
+				super(url, options);
+				socketCount += 1;
+				sockets.push(this);
+				queueMicrotask(() => {
+					if (this.readyState !== MockWebSocket.CONNECTING) return;
+					this.readyState = MockWebSocket.OPEN;
+					this.emit("open", new Event("open"));
+				});
+			}
+
+			override send(data: string): void {
+				sentWire.push(data);
+				const request = JSON.parse(data) as Record<string, unknown>;
+				if (request.type === "response.create") createCount += 1;
+				const requestIndex = sentWire.length;
+				const responseTask = (async () => {
+					if (requestIndex === 1) {
+						await rewriteEntered.promise;
+						if (abortController.signal.aborted) return;
+						this.sendJson({ type: "response.created", response: { id: "resp_debug_rewrite_abort" } });
+						this.sendJson({
+							type: "response.output_item.added",
+							item: {
+								type: "message",
+								id: "msg_debug_rewrite_abort",
+								role: "assistant",
+								status: "in_progress",
+								content: [],
+							},
+						});
+						this.sendJson({
+							type: "response.content_part.added",
+							part: { type: "output_text", text: "" },
+						});
+						this.sendJson({ type: "response.output_text.delta", delta: partialText });
+						partialEmitted.resolve();
+						await releaseRewrite.promise;
+						if (abortController.signal.aborted) return;
+						this.sendJson({
+							type: "response.output_item.done",
+							item: {
+								type: "message",
+								id: "msg_debug_rewrite_abort",
+								role: "assistant",
+								status: "completed",
+								content: [{ type: "output_text", text: partialText }],
+							},
+						});
+						this.sendJson({
+							type: "response.completed",
+							response: {
+								id: "resp_debug_rewrite_abort",
+								status: "completed",
+								usage: DEFAULT_USAGE,
+							},
+						});
+						return;
+					}
+					this.emitCodexResponse({
+						messageId: "msg_debug_rewrite_abort_followup",
+						responseId: "resp_debug_rewrite_abort_followup",
+						text: "recovered",
+						includeCreated: true,
+					});
+				})().catch(error => {
+					producerFailure.reject(error);
+					throw error;
+				});
+				responseTasks.push(responseTask);
+				void responseTask.catch(() => undefined);
+			}
+
+			override close(): void {
+				closeCount += 1;
+				super.close();
+			}
+		}
+
+		try {
+			process.chdir(tempDir.path());
+			Bun.env.PI_REQ_DEBUG = "1";
+			Bun.write = forwardingWrite as typeof Bun.write;
+			global.WebSocket = DebugRewriteReaderWebSocket as unknown as typeof WebSocket;
+			const token = createCodexTestToken();
+			const model = createCodexTestModel("https://chatgpt.com/backend-api");
+			const firstUser = { role: "user" as const, content: "debug raw", timestamp: 1 };
+			const firstContext: Context = {
+				systemPrompt: ["You are a helpful assistant."],
+				messages: [firstUser],
+			};
+			const firstStream = streamOpenAICodexResponses(model, firstContext, {
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId: "ws-debug-rewrite-reader-abort",
+				providerSessionState,
+				signal: abortController.signal,
+			});
+			const firstConsumer = track(
+				(async () => {
+					for await (const event of firstStream) {
+						if (event.type === "text_delta") {
+							deliveredText += event.delta;
+						}
+					}
+				})(),
+			);
+			const firstResultPromise = track(firstStream.result());
+			void firstResultPromise.then(
+				() => {
+					firstResultSettled = true;
+				},
+				() => {
+					firstResultSettled = true;
+				},
+			);
+
+			await Promise.race([
+				rewriteEntered.promise,
+				firstResultPromise.then(
+					() => {
+						throw new Error("debug rewrite reader stream settled before rewrite entered");
+					},
+					error => {
+						throw error;
+					},
+				),
+			]);
+			await Promise.race([partialEmitted.promise, producerFailure.promise]);
+			for (let microtask = 0; microtask < 100; microtask += 1) await Promise.resolve();
+			expect(deliveredText).toBe(partialText);
+			abortController.abort();
+			for (let microtask = 0; microtask < 100; microtask += 1) await Promise.resolve();
+			expect(closeCount).toBe(1);
+			expect(sentWire).toHaveLength(1);
+			expect(createCount).toBe(1);
+			expect(socketCount).toBe(1);
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(sockets).toHaveLength(1);
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.CLOSED);
+			expect(firstResultSettled).toBe(false);
+			releaseRewrite.resolve();
+			const first = await firstResultPromise;
+			await firstConsumer;
+			await Promise.all(responseTasks);
+			const firstText = first.content
+				.filter((block): block is { type: "text"; text: string } => block.type === "text")
+				.map(block => block.text)
+				.join("");
+			expect(first.stopReason).toBe("aborted");
+			expect(firstText).toBe(partialText);
+			expect(capturedWrites).toHaveLength(1);
+			await assertDumpMatchesWire(0);
+			const followupUser = { role: "user" as const, content: "debug abort follow-up", timestamp: 2 };
+			const followupStream = streamOpenAICodexResponses(
+				model,
+				{ systemPrompt: firstContext.systemPrompt, messages: [firstUser, first, followupUser] },
+				{
+					fetch: fetchMock as FetchImpl,
+					apiKey: token,
+					sessionId: "ws-debug-rewrite-reader-abort",
+					providerSessionState,
+					signal: followupAbortController.signal,
+				},
+			);
+			let followupTextDeltas = 0;
+			const followupConsumer = track(
+				(async () => {
+					for await (const event of followupStream) {
+						if (event.type === "text_delta") followupTextDeltas += 1;
+					}
+				})(),
+			);
+			const followupResultPromise = track(followupStream.result());
+			const followup = await followupResultPromise;
+			await followupConsumer;
+			await Promise.all(responseTasks);
+			expect(followupTextDeltas).toBe(1);
+			expect(followup.stopReason).toBe("stop");
+			expect(followup.responseId).toBe("resp_debug_rewrite_abort_followup");
+			expect(
+				followup.content
+					.filter((block): block is { type: "text"; text: string } => block.type === "text")
+					.map(block => block.text)
+					.join(""),
+			).toBe("recovered");
+			expect(sentWire).toHaveLength(2);
+			expect(createCount).toBe(2);
+			expect(socketCount).toBe(2);
+			expect(closeCount).toBe(1);
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(sockets).toHaveLength(2);
+			expect(sockets[0]?.readyState).toBe(MockWebSocket.CLOSED);
+			expect(sockets[1]?.readyState).toBe(MockWebSocket.OPEN);
+			const followupWire = JSON.parse(sentWire[1]!) as Record<string, unknown>;
+			expect(followupWire.type).toBe("response.create");
+			expect(followupWire.previous_response_id).toBeUndefined();
+			expect(JSON.stringify(followupWire.input)).toContain("debug raw");
+			expect(JSON.stringify(followupWire.input)).toContain(partialText);
+			expect(JSON.stringify(followupWire.input)).toContain("debug abort follow-up");
+			expect(JSON.stringify(followupWire.input)).not.toContain("resp_debug_rewrite_abort");
+			expect(capturedWrites).toHaveLength(2);
+			await assertDumpMatchesWire(1);
+		} finally {
+			rewriteEntered.resolve();
+			partialEmitted.resolve();
+			releaseRewrite.resolve();
+			abortController.abort();
+			followupAbortController.abort();
+			await Promise.allSettled([...startedPromises, ...responseTasks]);
+			for (const state of providerSessionState.values()) state.close();
+			Bun.write = previousBunWrite;
+			process.chdir(previousCwd);
+			restoreEnv("PI_REQ_DEBUG", previousDebug);
+			global.WebSocket = previousWebSocket;
+			await tempDir.remove();
+		}
+	}, 15_000);
+
 	it("refreshes unchanged hooked turn-state metadata after the websocket handshake", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-hook-turn-state-");
 		setAgentDir(tempDir.path());

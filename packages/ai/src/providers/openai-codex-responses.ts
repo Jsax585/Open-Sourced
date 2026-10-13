@@ -4761,6 +4761,7 @@ class CodexWebSocketConnection {
 		};
 		if (signal) signal.addEventListener("abort", onAbort, { once: true });
 
+		let requestDebugUpdate: Promise<void> | undefined;
 		try {
 			if ("send" in exchange) {
 				const request = exchange.send;
@@ -4812,14 +4813,12 @@ class CodexWebSocketConnection {
 				}
 				exchange.afterSend?.();
 				if (debugSession) {
-					try {
-						await debugSession.updateRequestBody(JSON.parse(requestPayload));
-					} catch (error) {
+					requestDebugUpdate = debugSession.updateRequestBody(JSON.parse(requestPayload)).catch(error => {
 						logger.warn("Codex websocket request debug dump update failed", {
 							path: debugSession.requestPath,
 							error: String(error),
 						});
-					}
+					});
 				}
 			} else {
 				exchange.beforeAttach?.();
@@ -4951,7 +4950,11 @@ class CodexWebSocketConnection {
 			}
 			const debugResponseLog = this.#debugResponseLog;
 			this.#debugResponseLog = undefined;
-			await debugResponseLog?.close();
+			try {
+				await debugResponseLog?.close();
+			} finally {
+				if (requestDebugUpdate) await requestDebugUpdate;
+			}
 		}
 	}
 
