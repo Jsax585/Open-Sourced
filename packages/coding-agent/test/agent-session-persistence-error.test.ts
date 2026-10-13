@@ -7,16 +7,12 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { MemorySessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import { MemorySessionStorage, type WriteTextAtomicOptions } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 
 class FailingRewriteStorage extends MemorySessionStorage {
 	failNextRewrite = false;
 
-	override async writeTextAtomic(
-		path: string,
-		content: string,
-		options?: Parameters<MemorySessionStorage["writeTextAtomic"]>[2],
-	): Promise<void> {
+	override async writeTextAtomic(path: string, content: string, options?: WriteTextAtomicOptions): Promise<void> {
 		if (this.failNextRewrite) {
 			this.failNextRewrite = false;
 			throw new Error("ENOSPC: synthetic session rewrite failure");
