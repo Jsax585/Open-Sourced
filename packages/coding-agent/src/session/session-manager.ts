@@ -87,6 +87,7 @@ import {
 	resolveBlobRefsInEntries,
 	resolveBlobRefsInEntriesSync,
 	type SessionLoadResult,
+	sessionContentDigest,
 	visitEntriesFromFile,
 } from "./session-loader";
 import { generateId, migrateToCurrentVersion } from "./session-migrations";
@@ -828,15 +829,20 @@ async function fileMatchesLines(filePath: string, lines: Iterable<string>): Prom
 	return expectedOffset === expectedLength && !encodeNextWindow();
 }
 
-/** Whether `loaded` still describes the current session object without parsing it again. */
-function sessionSnapshotIsCurrent(storage: SessionStorage, filePath: string, loaded: SessionLoadResult): boolean {
-	if (loaded.sourceSize === undefined || loaded.sourceMtimeMs === undefined) return false;
-	const current = storage.statSync(filePath);
-	return (
-		current.size === loaded.sourceSize &&
-		current.mtimeMs === loaded.sourceMtimeMs &&
-		current.identity === loaded.sourceIdentity
-	);
+/**
+ * Whether `loaded` still describes the current session object without parsing
+ * it again. Size, mtime, and inode are not authoritative (an in-place rewrite
+ * can keep all three, and an indexed backend's stat reads only its local
+ * index), so this compares a digest of the current content with the one taken
+ * while parsing. A session that is gone throws ENOENT.
+ */
+async function sessionSnapshotIsCurrent(
+	storage: SessionStorage,
+	filePath: string,
+	loaded: SessionLoadResult,
+): Promise<boolean> {
+	if (loaded.sourceDigest === undefined) return false;
+	return (await sessionContentDigest(filePath, storage)) === loaded.sourceDigest;
 }
 
 /**
@@ -4179,7 +4185,10 @@ export class SessionManager {
 		storage: SessionStorage = new FileSessionStorage(),
 		options?: { initialCwd?: string; parentSession?: string; suppressBreadcrumb?: boolean; throwIfMissing?: boolean },
 	): Promise<SessionManager> {
-		const probed = await loadSessionFile(filePath, storage, { throwIfMissing: options?.throwIfMissing });
+		const probed = await loadSessionFile(filePath, storage, {
+			throwIfMissing: options?.throwIfMissing,
+			digest: options?.throwIfMissing,
+		});
 		const header = probed.entries.find(entry => entry.type === "session") as SessionHeader | undefined;
 		// Resume into the session's recorded cwd only when it is verifiably
 		// accessible. A deleted or permission-blocked (macOS TCC denial) project
@@ -4197,13 +4206,13 @@ export class SessionManager {
 				: path.dirname(path.resolve(filePath)));
 		const manager = new SessionManager(cwd, dir, true, storage);
 		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
-		// Fail-closed callers yield while probing the recorded cwd. Re-stat the
-		// snapshot before adoption and parse again only if its bytes, mtime, or
-		// backing-object identity changed. A deleted, truncated, or replaced
-		// transcript then still fails closed without a second parse of a stable
-		// multi-gigabyte session.
+		// Fail-closed callers yield while probing the recorded cwd. Before
+		// adoption, digest the current content and parse again only if it
+		// differs from the snapshot parsed above. A deleted, truncated, or
+		// replaced transcript then still fails closed, and a stable
+		// multi-gigabyte session is read once more but parsed only once.
 		const loaded =
-			options?.throwIfMissing && !sessionSnapshotIsCurrent(storage, filePath, probed)
+			options?.throwIfMissing && !(await sessionSnapshotIsCurrent(storage, filePath, probed))
 				? await loadSessionFile(filePath, storage, { throwIfMissing: true })
 				: probed;
 		await manager.#setSessionFile(filePath, loaded, {

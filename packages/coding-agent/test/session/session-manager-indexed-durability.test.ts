@@ -10,7 +10,7 @@
  * path; it is not a general-purpose mock.
  */
 
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import {
 	IndexedSessionStorage,
 	type SessionStorageBackend,
@@ -20,6 +20,7 @@ import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-ent
 import { parseSessionContent } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { SessionWriteConflictError } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import * as piUtils from "@oh-my-pi/pi-utils";
 
 class FakeBackend implements SessionStorageBackend {
 	readonly files = new Map<string, string>();
@@ -422,4 +423,41 @@ describe("SessionManager + indexed backend durability", () => {
 			expect(errors.length).toBeGreaterThan(0);
 		},
 	);
+
+	it("refuses a fail-closed open whose row another process deleted during the cwd probe", async () => {
+		const { backend, storage, manager } = await makeManager();
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("expected a session file");
+		manager.appendMessage(assistantMessage("parked turn"));
+		await manager.flush();
+		await storage.drain();
+		await manager.close();
+
+		// A reviver in another process loads its index while the row still exists.
+		const reviverStorage = new IndexedSessionStorage(backend);
+		await reviverStorage.initialize();
+		// The row is deleted while open() awaits the recorded-cwd probe.
+		const probe = spyOn(piUtils, "directoryIsEnterable").mockImplementationOnce(async () => {
+			backend.files.delete(sessionFile);
+			return true;
+		});
+		let failure: unknown;
+		let probes = 0;
+		try {
+			await SessionManager.open(sessionFile, "/sessions/proj", reviverStorage, {
+				suppressBreadcrumb: true,
+				throwIfMissing: true,
+			});
+		} catch (error) {
+			failure = error;
+		} finally {
+			probes = probe.mock.calls.length;
+			probe.mockRestore();
+		}
+		expect(probes).toBe(1);
+		expect(piUtils.isEnoent(failure), String(failure)).toBe(true);
+		// Failing closed mints nothing at the deleted path.
+		await reviverStorage.drain();
+		expect(backend.files.has(sessionFile)).toBe(false);
+	});
 });
