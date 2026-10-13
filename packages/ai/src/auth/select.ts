@@ -313,6 +313,11 @@ export class CredentialSelector {
 			.map((credential, index) => ({ credential, index }))
 			.filter((entry): entry is ApiKeySelection => {
 				if (entry.credential.type !== "api_key") return false;
+				if (
+					options?.credentialId !== undefined &&
+					this.#deps.pool.entries(provider)[entry.index]?.id !== options.credentialId
+				)
+					return false;
 				return filter?.(entry.credential) ?? true;
 			});
 
@@ -567,7 +572,9 @@ export class CredentialSelector {
 				this.#deps.affinity.allows(provider, sessionId, entry.credential) &&
 				(!onlyQuotaProbes ||
 					this.#deps.coordination.resolveQuotaProbeLeaseScope(provider, providerKey, entry.index, blockScopes) !==
-						null),
+						null) &&
+				(options?.credentialId === undefined ||
+					this.#deps.pool.entries(provider)[entry.index]?.id === options.credentialId),
 		);
 
 		if (credentials.length === 0) return undefined;

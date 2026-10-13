@@ -43,6 +43,22 @@ async function postResponses(url: string, model: string): Promise<Response> {
 }
 
 describe("auth-gateway StreamCommitGate wiring", () => {
+	it("does not replay a canonical aborted turn before output", async () => {
+		const mock = createMockModel({ provider: "openrouter", id: "mock/canonical-abort" });
+		mock.push({ content: [], stopReason: "aborted", errorMessage: "fixture canonical cancellation" });
+		mock.push({ content: ["must not replay cancelled work"] });
+		const gateway = await boot(mock);
+		try {
+			const response = await postResponses(gateway.url, mock.id);
+			const body = await response.text();
+			expect(mock.calls).toHaveLength(1);
+			expect(body).toContain("response.failed");
+			expect(body).not.toContain("must not replay cancelled work");
+		} finally {
+			await gateway.close();
+		}
+	});
+
 	it("holds the Responses prelude and fails over without exposing the dead attempt", async () => {
 		const mock = createMockModel({ provider: "openrouter", id: "mock/commit-failover" });
 		// Attempt 1 dies pre-commit with a retryable terminal; attempt 2 succeeds.

@@ -3,13 +3,13 @@
  * snapshot. Refresh tokens never leave the broker; mutating methods (`replace*`,
  * `upsert*`, `delete*ForProvider`) throw because login flows are server-side.
  *
- * Cache (`getCache`/`setCache`/`cleanExpiredCache`) is in-memory and ephemeral —
- * usage reports cache TTL is 5 minutes per credential, so durability across
- * runs isn't required.
+ * Bearer and usage caches are in-memory and ephemeral. Hosts may persist only
+ * private session/response routing metadata so stored continuations survive restarts.
  */
 import * as os from "node:os";
 import { getAppName, getInstallId, logger, postmortem } from "@oh-my-pi/pi-utils";
 import type { AuthCredentialStore } from "../auth/store";
+import { isPrivateAuthMetadataKey, PrivateAuthMetadataCache } from "../auth/private-metadata-cache";
 import {
 	type AuthCredential,
 	type AuthCredentialSnapshotEntry,
@@ -241,6 +241,8 @@ function mergeUsageReports(base: UsageReport, overlay: UsageReport): UsageReport
 }
 
 export interface RemoteAuthCredentialStoreOptions {
+	/** Optional private routing-state database; contains no local credentials, tokens or usage reports. */
+	metadataCachePath?: string;
 	client: AuthBrokerClient;
 	/**
 	 * Initial snapshot. When omitted, callers must call
@@ -308,6 +310,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	/** Present while the background loop is parked; resolved by `#noteActivity` or `close()`. */
 	#activityWakeup: PromiseWithResolvers<void> | null = null;
 	#cache: Map<string, CacheEntry> = new Map();
+	readonly #metadataCache?: PrivateAuthMetadataCache;
 	#usageCache?: UsageCacheEntry;
 	#usageInflight?: Promise<UsageReport[] | null>;
 	#credentialBlockReconcileAfter: Map<string, number> = new Map();
@@ -345,6 +348,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#cancelObservedUsageExitFlush: (() => void) | undefined;
 
 	constructor(opts: RemoteAuthCredentialStoreOptions) {
+		if (opts.metadataCachePath) this.#metadataCache = new PrivateAuthMetadataCache(opts.metadataCachePath);
 		this.#client = opts.client;
 		this.#streamSnapshots = opts.streamSnapshots ?? true;
 		this.#observedUsageFlushMs = opts.observedUsageFlushMs ?? 10_000;
@@ -1193,7 +1197,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	getCache(key: string): string | null {
+		if (this.#closed) return null;
 		this.#noteActivity();
+		if (this.#metadataCache && isPrivateAuthMetadataKey(key)) return this.#metadataCache.getCache(key);
 		const entry = this.#cache.get(key);
 		if (!entry) return null;
 		if (entry.expiresAtSec * 1000 <= Date.now()) {
@@ -1204,18 +1210,25 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	setCache(key: string, value: string, expiresAtSec: number): void {
+		if (this.#closed) return;
 		this.#noteActivity();
+		if (this.#metadataCache && isPrivateAuthMetadataKey(key)) {
+			this.#metadataCache.setCache(key, value, expiresAtSec);
+			return;
+		}
 		this.#cache.set(key, { value, expiresAtSec });
 	}
 
 	/** Drop all cache rows whose keys start with the supplied prefix. */
 	deleteCachePrefix(prefix: string): void {
+		if (!this.#closed) this.#metadataCache?.deleteCachePrefix(prefix);
 		for (const key of this.#cache.keys()) {
 			if (key.startsWith(prefix)) this.#cache.delete(key);
 		}
 	}
 
 	cleanExpiredCache(): void {
+		if (!this.#closed) this.#metadataCache?.cleanExpiredCache();
 		const nowSec = Math.floor(Date.now() / 1000);
 		for (const [key, entry] of this.#cache) {
 			if (entry.expiresAtSec <= nowSec) this.#cache.delete(key);
@@ -1592,6 +1605,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		// process exiting right after close() still sends it; failures are dropped.
 		void this.#flushObservedUsage().finally(() => this.#cancelObservedUsageExitFlush?.());
 		this.#cache.clear();
+		this.#metadataCache?.close();
 		this.#usageOverlays.clear();
 	}
 }
