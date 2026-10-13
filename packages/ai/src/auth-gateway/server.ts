@@ -34,6 +34,7 @@ import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { type ModelKind, modelKind } from "@oh-my-pi/pi-catalog/types";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import type { AuthStorage } from "../auth-storage";
+import { ValidationError } from "../error";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
 import * as openaiChat from "../providers/openai-chat-server";
 import * as openaiResponses from "../providers/openai-responses-server";
@@ -65,6 +66,7 @@ import {
 	responseEndpointIdentity,
 } from "./response-ownership";
 import { RouteRegistry } from "./route-graph";
+import { parseRouteDefinition } from "./route-definitions";
 import { handleEmbeddings } from "./routes/embeddings";
 import { handleImageEdits, handleImageGenerations } from "./routes/images";
 import { handleRerank } from "./routes/rerank";
@@ -654,6 +656,25 @@ function handleRouteGet(registry: RouteRegistry, id: string): Response {
 	return json(200, { id, generation, targets, fallbacks });
 }
 
+async function handleRoutePut(registry: RouteRegistry, id: string, req: Request): Promise<Response> {
+	let body: unknown;
+	try {
+		body = Bun.JSON5.parse(await req.text());
+	} catch {
+		return json(400, { error: "Invalid JSON/JSON5 body" });
+	}
+	try {
+		if (!isRecord(body)) throw new ValidationError("Route definition must be an object");
+		if (Object.hasOwn(body, "id") && body.id !== id)
+			throw new ValidationError("Route definition id must equal path id");
+		registry.register(parseRouteDefinition({ ...body, id }));
+	} catch (error) {
+		if (error instanceof ValidationError) return json(400, { error: error.message });
+		throw error;
+	}
+	return handleRouteGet(registry, id);
+}
+
 /** `GET /v1/videos/:id` (poll) and `GET /v1/videos/:id/content` (download); group 1 = id, group 2 = `/content`. */
 const VIDEO_JOB_PATH = /^\/v1\/videos\/([^/]+)(\/content)?$/;
 
@@ -699,6 +720,7 @@ export interface AuthGatewayRouter {
 export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGatewayRouter {
 	const routeRegistry = opts.routeRegistry ?? new RouteRegistry(opts.resolveModel);
 	for (const definition of opts.routes ?? []) routeRegistry.register(definition);
+	const adminTokens = new Set(opts.adminBearerTokens?.filter(token => token.trim().length > 0));
 	const boot: AuthGatewayRouteOptions = {
 		...opts,
 		routeRegistry,
@@ -789,16 +811,24 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 
 			// Model catalog.
 			if (req.method === "GET" && pathname === "/v1/routes") return handleRoutesList(routeRegistry);
-			if (req.method === "GET" && pathname.startsWith("/v1/routes/")) {
+			if ((req.method === "GET" || req.method === "PUT") && pathname.startsWith("/v1/routes/")) {
 				const rawId = pathname.slice("/v1/routes/".length);
-				if (!rawId) return handleRoutesList(routeRegistry);
+				if (req.method === "PUT") {
+					if (opts.allowManagement !== true) return json(404, { error: "route management disabled" });
+					if (adminTokens.size === 0 || !isAuthorized(req, adminTokens))
+						return json(403, { error: "Management mutation requires separate administrator authorization" });
+				}
+				if (!rawId)
+					return req.method === "GET" ? handleRoutesList(routeRegistry) : json(404, { error: "Missing route id" });
 				let id: string;
 				try {
 					id = decodeURIComponent(rawId);
 				} catch {
 					return json(400, { error: "invalid route id encoding" });
 				}
-				return handleRouteGet(routeRegistry, id);
+				return req.method === "PUT"
+					? await handleRoutePut(routeRegistry, id, req)
+					: handleRouteGet(routeRegistry, id);
 			}
 			if (req.method === "GET" && pathname === "/v1/models") {
 				return handleModelsList(opts);
@@ -828,6 +858,8 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServerHandle {
 	const bind = parseBind(opts.bind ?? DEFAULT_AUTH_GATEWAY_BIND);
 	const tokens = new Set<string>(opts.bearerTokens);
+	const adminTokens = new Set(opts.adminBearerTokens?.filter(token => token.trim().length > 0));
+	const allTokens = new Set([...tokens, ...adminTokens]);
 	const version = opts.version;
 	const router = createAuthGatewayRouter(opts);
 
@@ -847,7 +879,10 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 			if (req.method === "GET" && pathname === "/healthz") {
 				return withCors(json(200, { ok: true, version }), req);
 			}
-			if (!isAuthorized(req, tokens)) {
+			const routePath = pathname === "/v1/routes" || pathname.startsWith("/v1/routes/");
+			const adminSurface = routePath && (req.method === "GET" || req.method === "PUT");
+			const adminAuthorized = adminTokens.size > 0 && isAuthorized(req, adminTokens);
+			if (!isAuthorized(req, tokens) && !(adminSurface && adminAuthorized)) {
 				logger.info("auth-gateway request unauthorized", {
 					method: req.method,
 					path: loggablePath(pathname),
@@ -855,7 +890,7 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 				});
 				return withCors(json(401, { error: "unauthorized" }), req);
 			}
-			if (hasMisplacedBearer(req, url, tokens)) {
+			if (hasMisplacedBearer(req, url, allTokens)) {
 				return withCors(json(400, { error: "gateway bearer token outside Authorization" }), req);
 			}
 			const peer = resolvePeer(req, socketPeer, opts.trustProxyHeaders);

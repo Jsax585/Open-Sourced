@@ -184,6 +184,12 @@ omp auth-gateway check   [--strict] [--json]
 
 Replace those placeholder targets with concrete IDs from the gateway's `/v1/models` catalog. Clients request the virtual ID (`work` in this example). Only configured failure conditions select another target, and committed or billed inference and caller-owned Responses continuations are not transparently replayed across targets.
 
+### Route management
+
+`PUT /v1/routes/:id` registers or atomically replaces a virtual route from JSON/JSON5. It accepts a definition with a matching `id`, or a `root` object whose ID is supplied by the decoded path. Invalid syntax, mismatched IDs and invalid/cyclic definitions return 400 without changing registry generations or existing routes. Changes are in-memory; route files are not rewritten.
+
+Management is disabled by default. Library hosts must explicitly set `allowManagement: true` and a separate nonempty `adminBearerTokens` capability. The CLI opts in only when `OMP_AUTH_GATEWAY_ADMIN_TOKEN` contains an administrator token. Inference tokens and `--no-auth` do not authorize mutations. Admin tokens can read route metadata but do not independently authorize inference. Keep the admin token out of URLs and forwarded/identity headers; do not publish it in logs or route files.
+
 ### stdio
 
 `omp auth-gateway stdio` is the gateway for one trusted parent process (an editor, a terminal's git UI, a script): no listener, no token, no broker requirement. It uses the credentials, models (`models.yml` and extension providers included) and settings any other `omp` command would: the broker when one is configured, else the local store. Requests and responses are JSON lines:

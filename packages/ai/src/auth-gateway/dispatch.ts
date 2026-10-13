@@ -42,6 +42,10 @@ export interface AuthGatewayRouteOptions {
 	routeRegistry?: RouteRegistry;
 	/** Virtual definitions registered at router boot for HTTP and stdio; an empty list is a no-op. */
 	routes?: readonly RouteDefinition[];
+	/** Explicit opt-in to route mutation; defaults to false. */
+	allowManagement?: boolean;
+	/** Separate administrator capability. Empty/omitted never authorizes writes. */
+	adminBearerTokens?: readonly string[];
 	/** Shared bounded request-decision history, owned by the router when omitted. */
 	decisionTraces?: RouteDecisionTraceLog;
 }

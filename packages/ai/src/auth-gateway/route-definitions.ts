@@ -59,7 +59,8 @@ function parseNode(input: unknown, ancestors = new Set<object>(), depth = 0): Ro
 	}
 }
 
-function parseRouteDefinition(input: unknown): RouteDefinition {
+/** Validate a single definition before an atomic registry replacement. */
+export function parseRouteDefinition(input: unknown): RouteDefinition {
 	if (!isRecord(input)) {
 		throw new AIError.ValidationError("Route definition must be an object");
 	}

@@ -2,14 +2,15 @@ import { expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { RouteRegistry, startAuthGateway } from "../src/auth-gateway";
+import { createAuthGatewayRouter, RouteRegistry, startAuthGateway } from "../src/auth-gateway";
 import type { RouteDefinition } from "../src/auth-gateway";
 import { AuthStorage } from "../src/auth-storage";
 import { createMockModel } from "../src/providers/mock";
 
 async function withListing(
 	definitions: readonly RouteDefinition[],
-	run: (url: string, registry: RouteRegistry, changeAlias: () => void) => Promise<void>,
+	run: (url: string, registry: RouteRegistry, changeAlias: () => void, storage: AuthStorage) => Promise<void>,
+	management: { allowManagement?: boolean; adminBearerTokens?: string[] } = {},
 ): Promise<void> {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-route-list-"));
 	const storage = await AuthStorage.create(path.join(directory, "auth.db"), {
@@ -30,11 +31,17 @@ async function withListing(
 		routeRegistry: registry,
 		routes: definitions,
 		listModels: () => [first, second],
+		...management,
 	});
 	try {
-		await run(gateway.url, registry, () => {
-			alias = { ...first, id: "changed", name: "Changed fixture" };
-		});
+		await run(
+			gateway.url,
+			registry,
+			() => {
+				alias = { ...first, id: "changed", name: "Changed fixture" };
+			},
+			storage,
+		);
 	} finally {
 		await gateway.close();
 		storage.close();
@@ -158,4 +165,154 @@ it("keeps individual lookup and collection listing consistent", async () => {
 		expect(collection.status).toBe(200);
 		expect(await collection.json()).toMatchObject({ object: "list", data: expect.arrayContaining([row]) });
 	});
+});
+
+it("keeps route mutation disabled by default, including for an admin bearer", async () => {
+	await withListing(
+		definitions,
+		async (url, registry) => {
+			const generation = registry.generation;
+			const response = await fetch(`${url}/v1/routes/virtual-a`, {
+				method: "PUT",
+				headers: { Authorization: "Bearer management-fixture-admin" },
+				body: "{root:{type:'target',model:'second'}}",
+			});
+			expect(response.status).toBe(404);
+			await response.text();
+			expect(registry.generation).toBe(generation);
+		},
+		{ adminBearerTokens: ["management-fixture-admin"] },
+	);
+});
+
+it("requires separate admin authorization even when management is enabled", async () => {
+	await withListing(
+		definitions,
+		async (url, registry) => {
+			const generation = registry.generation;
+			const response = await fetch(`${url}/v1/routes/virtual-a`, {
+				method: "PUT",
+				headers: auth,
+				body: "{root:{type:'target',model:'second'}}",
+			});
+			expect(response.status).toBe(403);
+			await response.text();
+			expect(registry.generation).toBe(generation);
+		},
+		{ allowManagement: true, adminBearerTokens: ["management-fixture-admin"] },
+	);
+});
+
+it("admin can read and update routes but its token does not authorize inference", async () => {
+	await withListing(
+		definitions,
+		async (url, registry) => {
+			const admin = { Authorization: "Bearer management-fixture-admin" };
+			const read = await fetch(`${url}/v1/routes`, { headers: admin });
+			expect(read.status).toBe(200);
+			await read.text();
+			const denied = await fetch(`${url}/v1/chat/completions`, {
+				method: "POST",
+				headers: { ...admin, "Content-Type": "application/json" },
+				body: JSON.stringify({ model: "alias", messages: [{ role: "user", content: "fixture" }] }),
+			});
+			expect(denied.status).toBe(401);
+			await denied.text();
+			const changed = await fetch(`${url}/v1/routes/virtual-a`, {
+				method: "PUT",
+				headers: admin,
+				body: "{/*JSON5*/root:{type:'target',model:'second'},}",
+			});
+			expect(changed.status).toBe(200);
+			expect(await changed.json()).toEqual({
+				id: "virtual-a",
+				generation: 4,
+				targets: ["fixture/second"],
+				fallbacks: {},
+			});
+			const readback = await fetch(`${url}/v1/routes/virtual-a`, { headers: auth });
+			expect(await readback.json()).toEqual({
+				id: "virtual-a",
+				generation: registry.generation,
+				targets: ["fixture/second"],
+				fallbacks: {},
+			});
+		},
+		{ allowManagement: true, adminBearerTokens: ["management-fixture-admin"] },
+	);
+});
+
+it("validates route replacement atomically and allows PUT preflight", async () => {
+	await withListing(
+		definitions,
+		async (url, registry) => {
+			const admin = { Authorization: "Bearer management-fixture-admin" };
+			for (const body of [
+				"{",
+				"{id:'different',root:{type:'target',model:'second'}}",
+				"{root:{type:'unknown'}}",
+				"{root:{type:'fallback',on:['provider_unavailable'],children:[{type:'target',model:'second'},{type:'target',model:'second'}]}}",
+			]) {
+				const before = JSON.stringify(registry.list());
+				const generation = registry.generation;
+				const rejected = await fetch(`${url}/v1/routes/virtual-a`, { method: "PUT", headers: admin, body });
+				expect(rejected.status).toBe(400);
+				await rejected.text();
+				expect(registry.generation).toBe(generation);
+				expect(JSON.stringify(registry.list())).toBe(before);
+			}
+			const options = await fetch(`${url}/v1/routes/virtual-a`, {
+				method: "OPTIONS",
+				headers: { Origin: "http://fixture-client", "Access-Control-Request-Method": "PUT" },
+			});
+			expect(options.status).toBe(204);
+			expect(options.headers.get("Access-Control-Allow-Methods")).toContain("PUT");
+		},
+		{ allowManagement: true, adminBearerTokens: ["management-fixture-admin"] },
+	);
+});
+
+it("an empty admin capability cannot authorize a direct router mutation", async () => {
+	await withListing(definitions, async (_url, registry, _changeAlias, storage) => {
+		const router = createAuthGatewayRouter({
+			storage,
+			routeRegistry: registry,
+			resolveModel: () => undefined,
+			allowManagement: true,
+			adminBearerTokens: [],
+		});
+		try {
+			const generation = registry.generation;
+			const response = await router.route(
+				new Request("http://fixture/v1/routes/virtual-a", {
+					method: "PUT",
+					body: "{root:{type:'target',model:'second'}}",
+				}),
+				"fixture",
+			);
+			expect(response.status).toBe(403);
+			await response.text();
+			expect(registry.generation).toBe(generation);
+		} finally {
+			router.close();
+		}
+	});
+});
+
+it("rejects misplaced admin bearer material before a route write", async () => {
+	await withListing(
+		definitions,
+		async (url, registry) => {
+			const generation = registry.generation;
+			const response = await fetch(`${url}/v1/routes/virtual-a?token=management-fixture-admin`, {
+				method: "PUT",
+				headers: { Authorization: "Bearer management-fixture-admin" },
+				body: "{root:{type:'target',model:'second'}}",
+			});
+			expect(response.status).toBe(400);
+			await response.text();
+			expect(registry.generation).toBe(generation);
+		},
+		{ allowManagement: true, adminBearerTokens: ["management-fixture-admin"] },
+	);
 });

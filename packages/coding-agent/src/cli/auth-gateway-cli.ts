@@ -274,6 +274,8 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	}
 	const bind = flags.bind ?? DEFAULT_AUTH_GATEWAY_BIND;
 	const gatewayToken = flags.noAuth ? null : await ensureToken();
+	// Management is explicitly opt-in and never shares the inference/no-auth capability.
+	const adminToken = process.env.OMP_AUTH_GATEWAY_ADMIN_TOKEN?.trim();
 
 	// Build a broker-backed AuthStorage — same pattern as discoverAuthStorage()
 	// in sdk.ts. Credentials remain broker-only; private routing metadata has its own database.
@@ -345,6 +347,8 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		listModels: () => modelById.values(),
 		excludeProviders: new Set(cfgDisabledProviders.get(settings)),
 		routes,
+		allowManagement: Boolean(adminToken),
+		adminBearerTokens: adminToken ? [adminToken] : [],
 	});
 	process.stdout.write(`auth-gateway listening on ${handle.url}\n`);
 	if (gatewayToken) {

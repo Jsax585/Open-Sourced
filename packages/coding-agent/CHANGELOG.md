@@ -4,6 +4,7 @@
 
 ### Added
 
+- `OMP_AUTH_GATEWAY_ADMIN_TOKEN` explicitly enables authenticated route management without granting write access to inference or no-auth clients ([#10148](https://github.com/can1357/oh-my-pi/pull/10148) by [@jroth1111](https://github.com/jroth1111)).
 - `omp auth-gateway serve --routes` loads validated JSON5 route files before broker setup, preserving exact paths and rejecting unsupported actions ([#10145](https://github.com/can1357/oh-my-pi/pull/10145) by [@jroth1111](https://github.com/jroth1111)).
 
 ### Fixed

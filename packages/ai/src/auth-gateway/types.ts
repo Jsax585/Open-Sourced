@@ -152,7 +152,7 @@ export interface AuthGatewayServerOptions {
 	idleTimeout?: number;
 	/** Listen address. Default `127.0.0.1:4000`. */
 	bind?: string;
-	/** Accept any of these bearer tokens. Empty allows unauthenticated calls. */
+	/** Inference/read-only tokens. Empty allows unauthenticated non-mutating calls. */
 	bearerTokens: string[];
 	/** Honor forwarded peer headers only when the connecting proxy is trusted. Default false. */
 	trustProxyHeaders?: boolean;

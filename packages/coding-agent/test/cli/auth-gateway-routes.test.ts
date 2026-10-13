@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { SnapshotResponse } from "@oh-my-pi/pi-ai/auth-broker";
 
 const entry = path.resolve(import.meta.dir, "../../src/cli.ts");
-function launch(directory: string, routeFile: string, brokerUrl?: string, action = "serve") {
+function launch(directory: string, routeFile: string, brokerUrl?: string, action = "serve", adminToken?: string) {
 	return Bun.spawn(
 		[process.execPath, entry, "auth-gateway", action, "--routes", routeFile, "--no-auth", "--bind=127.0.0.1:0"],
 		{
@@ -21,6 +21,7 @@ function launch(directory: string, routeFile: string, brokerUrl?: string, action
 				PI_CONFIG_DIR: directory,
 				PI_CODING_AGENT_DIR: path.join(directory, "agent"),
 				...(brokerUrl ? { OMP_AUTH_BROKER_URL: brokerUrl, OMP_AUTH_BROKER_TOKEN: "fixture-broker-token" } : {}),
+				...(adminToken ? { OMP_AUTH_GATEWAY_ADMIN_TOKEN: adminToken } : {}),
 			},
 		},
 	);
@@ -99,7 +100,7 @@ it("loads an exact JSON5 path through CLI flags into the broker-backed HTTP rout
 			return Response.json(snapshot);
 		},
 	});
-	const child = launch(directory, routeFile, broker.url.href);
+	const child = launch(directory, routeFile, broker.url.href, "serve", "cli-management-fixture-admin");
 	const ready = Promise.withResolvers<string>();
 	const stderr = new Response(child.stderr).text();
 	const stdout = (async () => {
@@ -144,6 +145,19 @@ it("loads an exact JSON5 path through CLI flags into the broker-backed HTTP rout
 		const models = await fetch(`${url}/v1/models`);
 		expect(models.status).toBe(200);
 		expect(await models.json()).toMatchObject({ data: [] });
+		const withoutAdmin = await fetch(`${url}/v1/routes/loaded-cli-route`, {
+			method: "PUT",
+			body: "{root:{type:'target',model:'fixture/changed-target'}}",
+		});
+		expect(withoutAdmin.status).toBe(403);
+		await withoutAdmin.text();
+		const changed = await fetch(`${url}/v1/routes/loaded-cli-route`, {
+			method: "PUT",
+			headers: { Authorization: "Bearer cli-management-fixture-admin" },
+			body: "{root:{type:'target',model:'fixture/changed-target'}}",
+		});
+		expect(changed.status).toBe(200);
+		expect(await changed.json()).toMatchObject({ id: "loaded-cli-route", targets: ["fixture/changed-target"] });
 	} finally {
 		child.kill("SIGTERM");
 		await child.exited;
