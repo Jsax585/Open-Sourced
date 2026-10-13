@@ -1043,6 +1043,9 @@ impl Worker {
 			Request::AxNode { reference, .. } => {
 				let (props, refound) =
 					self.read_ref(reference, token, |worker, h| worker.ax()?.props(h))?;
+				self
+					.registry
+					.check_identity(reference, props.identity.as_ref());
 				let mut node = ax::node_to_napi(reference.clone(), props);
 				node.refound = refound.then_some(true);
 				Ok(Response::Node(Some(node)))
@@ -2746,6 +2749,16 @@ mod capture_tests {
 		rebuild(&tree, 2, &[(4, "Done"), (5, "Go"), (3, "Stop")]);
 		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
 		assert_eq!(tree.lock().pressed, [2]);
+	}
+
+	#[test]
+	fn a_read_that_finds_the_fields_changed_drops_them() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		tree.lock().titles.insert(2, "Gone");
+		assert_eq!(read(&mut worker, "e2"), Ok(false));
+		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
+		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
+		assert!(tree.lock().pressed.is_empty());
 	}
 
 	#[test]

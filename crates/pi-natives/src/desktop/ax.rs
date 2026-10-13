@@ -384,6 +384,17 @@ impl AxRegistry {
 		}
 	}
 
+	/// Drops `reference`'s re-find fields when a read of its element found
+	/// them changed: they no longer describe it.
+	pub(crate) fn check_identity(&mut self, reference: &str, read: Option<&AxIdentity>) {
+		if let Some(entry) = self.id(reference).and_then(|id| self.entries.get_mut(&id))
+			&& entry.identity.is_some()
+			&& entry.identity.as_ref() != read
+		{
+			entry.identity = None;
+		}
+	}
+
 	/// Drops expired refs and the aliases of each. An identity a newer ref took
 	/// over keeps pointing at that one.
 	fn evict(&mut self, mut expired: impl FnMut(&Registered) -> bool) {
