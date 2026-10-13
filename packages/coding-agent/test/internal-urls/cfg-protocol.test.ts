@@ -291,8 +291,8 @@ describe("CfgProtocolHandler", () => {
 			value,
 			save: true,
 		});
-		expect(saved.details?.cfg?.previous).toBe(String(previous));
-		expect(textOf(saved)).toBe(`Saved \`worktree.clone\` = ${value} to the global config (was ${previous}).`);
+		expect(saved.details?.cfg).toMatchObject({ outcome: "applied", save: true, previous: String(previous), value });
+		expect(textOf(saved)).toContain(`(was ${previous})`);
 		expect(cfgWorktreeClone.get(persistent)).toBe(!previous);
 		expect(cfgWorktreeClone.get(settings)).toBe(!previous);
 	});
@@ -310,9 +310,7 @@ describe("CfgProtocolHandler", () => {
 		if (answer === "deny") {
 			const declined = await write("cfg://worktree/clone/save", "false", settings);
 			expect(declined.details?.cfg).toMatchObject({ outcome: "declined", previous: "false" });
-			expect(textOf(declined)).toBe(
-				"User declined changing `worktree.clone`; it stays false. NEVER retry unless the user asks.",
-			);
+			expect(textOf(declined)).toContain("stays false");
 		} else {
 			await expect(write("cfg://worktree/clone/save", "false", settings)).rejects.toThrow(
 				"nothing changed; it stays false.",

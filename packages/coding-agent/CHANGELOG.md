@@ -59,6 +59,7 @@
 - Fixed hashline edits silently dropping the tail of a line that `read` or `grep` had cut at the column limit; such an edit is now refused until a `:raw` read shows the full line ([#15649](https://github.com/can1357/oh-my-pi/issues/15649))
 - Fixed isolated tasks failing on linked worktrees with initialized recursive submodules and leaving updated submodule pins unreachable after cleanup ([#15457](https://github.com/can1357/oh-my-pi/issues/15457))
 - Fixed `/tan` missing the parent's prompt cache by advertising `xd://` tools top-level and omitting `ask` ([#15578](https://github.com/can1357/oh-my-pi/issues/15578)).
+- Fixed `cfg://<setting>/save` approval prompts and results reporting a session override as the previous value instead of the global value being replaced ([#15478](https://github.com/can1357/oh-my-pi/pull/15478) by [@mg-mg-mg](https://github.com/mg-mg-mg))
 
 ## [18.10.4] - 2026-10-13
 
@@ -106,9 +107,6 @@
 - Fixed anonymized session exports losing whether bash timing was shown ([#15468](https://github.com/can1357/oh-my-pi/pull/15468) by [@iliaal](https://github.com/iliaal))
 - Added `omp --restore <session>`: resumes a session like `--resume`, then goes on with what its last process left unfinished when it crashed or was killed, both the interrupted turn and the subagents it was running (their results reach the parent as usual); Tern's session daemon now restarts omp with it after a crash
 - Kept private prompt-cache routing keys out of shared sessions and HTML exports ([#15467](https://github.com/can1357/oh-my-pi/pull/15467) by [@iliaal](https://github.com/iliaal))
-### Fixed
-
-- Fixed `cfg://<setting>/save` approval prompts and results reporting a session override as the previous value instead of the global value being replaced
 
 ## [18.10.2] - 2026-10-12
 

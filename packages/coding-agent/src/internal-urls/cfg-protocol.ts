@@ -259,13 +259,6 @@ function shadowingLayer(
 	return undefined;
 }
 
-/** Raw value in the global layer a `/save` replaces, without higher-precedence layers. */
-function globalValue(setting: AnySetting, persistent: Settings): unknown {
-	let value: unknown = persistent.getGlobalSettings();
-	for (const segment of setting.segments) value = isRecord(value) ? value[segment] : undefined;
-	return value;
-}
-
 /**
  * {@link shadowingLayer} judged before a `/save` lands on `persistent`. Layers deep-merge records, so a
  * written key is shadowed only when its current value comes from a higher layer rather than the global
@@ -282,7 +275,7 @@ function saveShadowingLayer(
 	if (owner === "env" || !above.includes(owner) || !isRecord(value) || !isRecord(effective)) {
 		return shadowingLayer(setting, persistent, value, above);
 	}
-	const global = globalValue(setting, persistent);
+	const global = persistent.globalValue(setting);
 	for (const key in value) {
 		const current = effective[key];
 		if (current === undefined || Bun.deepEquals(current, value[key])) continue;
@@ -444,7 +437,7 @@ export class CfgProtocolHandler implements ProtocolHandler {
 					layer === "env" && leaf.envName ? `environment variable ${leaf.envName}` : PROVENANCE_LABELS[layer];
 			}
 			// Describe the global value being replaced, not a session override or another higher layer.
-			savePrevious = formatValue(leaf, globalValue(leaf, persistent) ?? leaf.default);
+			savePrevious = formatValue(leaf, persistent.globalValue(leaf) ?? leaf.default);
 		}
 		const sessionId = callerSession(context).getSessionId?.() ?? undefined;
 		const approvalRequest = save ? { ...request, previous: savePrevious } : request;
