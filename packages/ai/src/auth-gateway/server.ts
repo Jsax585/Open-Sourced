@@ -73,7 +73,11 @@ import { handleSystemOne } from "./routes/systemone";
 import { handleTranscriptions } from "./routes/transcriptions";
 import { handleVideoContent, handleVideoPoll, handleVideoSubmit } from "./routes/video";
 import { AuthGatewaySessionStateStore } from "./session-state";
-import { GatewayResponseOwnership, type GatewayResponseOwner, responseEndpointIdentity } from "./response-ownership";
+import {
+	type GatewayResponseOwnership,
+	type GatewayResponseOwner,
+	responseEndpointIdentity,
+} from "./response-ownership";
 import {
 	commitGateObservesDownstreamSse,
 	holdSseUntilCommit,
@@ -1053,7 +1057,10 @@ export interface AuthGatewayRouter {
  */
 export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGatewayRouter {
 	const sessionStates = new AuthGatewaySessionStateStore();
-	const responseOwners = new GatewayResponseOwnership();
+	const responseOwners: GatewayResponseOwnership = {
+		get: responseId => opts.storage.responses.get(responseId),
+		record: (responseId, owner) => opts.storage.responses.record(responseId, owner),
+	};
 	const route = async (req: Request, peer: string): Promise<Response> => {
 		const pathname = new URL(req.url).pathname;
 		try {
