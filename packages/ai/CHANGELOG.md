@@ -4,6 +4,7 @@
 
 ### Added
 
+- Credential recovery uses request-owned quota probes, and replacing an account or key invalidates its stale cooldown and affinity ([#10138](https://github.com/can1357/oh-my-pi/pull/10138) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway requests expose bounded, redacted routing decisions through authenticated execution lookups ([#10137](https://github.com/can1357/oh-my-pi/pull/10137) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway chat and pi-native requests resolve through a shared route registry and dispatch its selected target ([#10136](https://github.com/can1357/oh-my-pi/pull/10136) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway Responses streams hold metadata before output and preserve terminal failures without replaying committed content ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
@@ -15,6 +16,7 @@
 
 ### Fixed
 
+- Authentication, policy, provider-wait, and unknown legacy blocks cannot be bypassed by quota probes; broker compatibility preserves their provenance ([#10138](https://github.com/can1357/oh-my-pi/pull/10138) by [@jroth1111](https://github.com/jroth1111)).
 - Active gateway SSE inference survives the HTTP idle limit; failures with reported usage or explicit no-retry intent are not transparently replayed ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway errors retain authoritative provider statuses, structural cancellation, and Anthropic retry directives ([#10133](https://github.com/can1357/oh-my-pi/pull/10133) by [@jroth1111](https://github.com/jroth1111)).
 - Responses continuation IDs stay with the serving account and deployment instead of crossing account replacements ([#10134](https://github.com/can1357/oh-my-pi/pull/10134) by [@jroth1111](https://github.com/jroth1111)).
