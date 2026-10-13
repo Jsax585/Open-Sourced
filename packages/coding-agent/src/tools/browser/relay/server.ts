@@ -13,6 +13,7 @@
  * Binds loopback only: anything that can reach this port can drive the
  * user's logged-in browser.
  */
+import { macOSFrontApp } from "@oh-my-pi/pi-natives";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
 import { RelayBridge } from "./bridge";
 
@@ -76,7 +77,12 @@ export function startRelayServer(opts: RelayServerOptions): RelayServer {
 	const log = opts.log ?? (() => {});
 	const group =
 		opts.group === false ? null : opts.group === true || opts.group === undefined ? DEFAULT_GROUP : opts.group;
-	const bridge = new RelayBridge({ log, group });
+	// Only macOS can hand the front app back; elsewhere the relay never reads it.
+	const bridge = new RelayBridge({
+		log,
+		group,
+		frontApp: process.platform === "darwin" ? macOSFrontApp : undefined,
+	});
 	const sockets = new Set<RelayWebSocket>();
 	const startedAt = Date.now();
 
