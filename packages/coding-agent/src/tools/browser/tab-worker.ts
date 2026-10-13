@@ -2254,9 +2254,11 @@ export class WorkerCore {
 				{
 					prepare: async (filePaths, sig) => {
 						const uploads = this.#requireUploads();
-						return prepareInputUpload(
+						return prepareElementUpload(
+							page,
 							handle,
 							filePaths.map(filePath => resolveToCwd(filePath, session.cwd)),
+							"handle.uploadFile()",
 							await uploads.route(page, sig),
 							uploads,
 							sig,
