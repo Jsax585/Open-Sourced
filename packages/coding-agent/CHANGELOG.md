@@ -9,6 +9,7 @@
 ### Changed
 
 - A relay `browser.open` without `app.target` now opens its own background tab instead of adopting the visible one (after reinstalling the relay extension; older ones select it), and `browser.close` closes it; `app.target` still borrows an existing tab ([#15110](https://github.com/can1357/oh-my-pi/pull/15110) by [@will-bogusz](https://github.com/will-bogusz))
+- Browser `webmcp*` helpers read Chrome's native WebMCP on first use instead of injecting a script and `modelContext` polyfill into every page omp drives, and say why when Chrome offers a page none; Tern tabs no longer support them
 
 ### Fixed
 
@@ -25,6 +26,7 @@
 - Relay mode: when Chrome detaches omp from a tab it drives (a password manager's inline menu loading in the page), the call fails at once saying why and omp reattaches to the same tab, instead of every later call timing out and reopening failing with `No page targets available` ([#15493](https://github.com/can1357/oh-my-pi/pull/15493) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed a browser call hanging for about 21 s, and its tab staying listed but dead, when the tab's worker crashed (such as on an error inside Puppeteer): the call fails at once with the cause and the next call continues on the same page ([#15498](https://github.com/can1357/oh-my-pi/pull/15498) by [@alnaggar-dev](https://github.com/alnaggar-dev) and [@will-bogusz](https://github.com/will-bogusz))
 - Fixed the browser relay attaching Chrome's debugger to every tab of the user's browser whenever omp connected; it now attaches only tabs omp opened or borrowed with `app.target`, and omp replaces a relay an older omp started (or reports one started by hand as out of date) instead of using it ([#15554](https://github.com/can1357/oh-my-pi/pull/15554) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed `webmcpInvoke` returning an empty error when a page's tool throws, and leaving a timed-out invocation running in the page
 - Browser (Chrome tabs): a click or drag that timed out on a page busy in its own script no longer completes on its target once the page answers, a timed-out key combo sends no further key, and a call or run cut off mid-gesture releases the mouse button or keys it held instead of leaving them down in the tab ([#15559](https://github.com/can1357/oh-my-pi/pull/15559) by [@will-bogusz](https://github.com/will-bogusz))
 - Relay mode: `tab.waitForSelector`, `tab.evaluate` and `tab.goto` no longer fail after 20 s when the page or server takes longer; like on a launched Chrome they now run to the call's own timeout, up to omp's 60 s protocol timeout, and a command Chrome never answers names itself and its tab ([#15559](https://github.com/can1357/oh-my-pi/pull/15559) by [@will-bogusz](https://github.com/will-bogusz))
 
