@@ -1779,6 +1779,12 @@ export class SessionManager {
 				this.#hasTitleSlot = true;
 			}
 		} catch (err) {
+			// Every caller rewrites because memory holds state the store lacks (an
+			// append made inside a fence, relocation, or repair window, a new branch's
+			// file), so a failed rewrite leaves that state undurable: the next write
+			// must republish it rather than append after the missing records.
+			this.#fileIsCurrent = false;
+			this.#rewriteRequired = true;
 			this.#noteDiskFailure(err);
 		}
 	}
