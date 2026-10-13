@@ -3942,6 +3942,7 @@ export class SessionManager {
 		if (!entry) return;
 		const children = this.#index.childrenOf(entryId);
 		const canReparentChildren = children.every(child => child.type === "service_tier_change");
+		const structuralMutationStart = this.#entries.indexOf(entry);
 		let leafId = entry.parentId;
 		if (canReparentChildren) {
 			for (const child of children) {
@@ -3955,6 +3956,17 @@ export class SessionManager {
 			kind: DISCARDED_ENTRY_BRANCH_MARKER,
 			discardedEntryId: entryId,
 		});
+		if (canReparentChildren && structuralMutationStart >= 0) {
+			// The marker append cannot describe the removed entry or its reparented
+			// children. If this rewrite fails, a later hot append would make the
+			// stale on-disk tree the one a restart reconstructs.
+			this.#firstUndurableEntryIndex = Math.min(
+				this.#firstUndurableEntryIndex ?? structuralMutationStart,
+				structuralMutationStart,
+			);
+			this.#fileIsCurrent = false;
+			this.#rewriteRequired = true;
+		}
 		await this.rewriteEntries();
 	}
 
