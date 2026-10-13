@@ -270,7 +270,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	const gatewayToken = flags.noAuth ? null : await ensureToken();
 
 	// Build a broker-backed AuthStorage — same pattern as discoverAuthStorage()
-	// in sdk.ts. The gateway never touches local SQLite.
+	// in sdk.ts. Credentials remain broker-only; private routing metadata has its own database.
 	const accountPool = await loadAuthBrokerAccountPool();
 	const settings = await resolveEffectiveSettings();
 	const { accountPolicies, defaultReservePct } = await loadEffectiveAuthAccountPolicyConfig({ settings });
@@ -280,6 +280,11 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		client,
 		initialSnapshot,
 		accountPool,
+		metadataCachePath: path.join(
+			getConfigRootDir(),
+			"auth-gateway",
+			`state-${Bun.SHA256.hash(brokerConfig.url.replace(/\/+$/, ""), "hex")}.db`,
+		),
 	});
 	// Refresh + usage both flow through the store's broker hooks automatically —
 	// `RemoteAuthCredentialStore.refreshOAuthCredential` and `.fetchUsageReports`.

@@ -222,6 +222,11 @@ export class SessionAffinity implements SessionsApi {
 		return credential && this.#permits(provider, sessionId, credential.index) ? credential : undefined;
 	}
 
+	explicitCredentialId(provider: string, sessionId: string): number | undefined {
+		const pin = this.get(provider, sessionId);
+		return pin?.explicit ? pin.credentialId : undefined;
+	}
+
 	#lookup(provider: string, sessionId: string): SessionCredential | undefined {
 		const live = this.#sessionLastCredential.get(provider)?.get(sessionId);
 		if (live) {
