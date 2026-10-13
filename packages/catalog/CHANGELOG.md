@@ -4,23 +4,76 @@
 
 ### Added
 
-- Enabled `supports-prompt-cache-key` for the `mistral` provider so openai-completions requests to `api.mistral.ai` carry the session's `prompt_cache_key`, increasing cache hits and reducing billed uncached input tokens on Mistral models ([#15079](https://github.com/can1357/oh-my-pi/pull/15079) by [@richardotomislav](https://github.com/richardotomislav))
-- Added `max-image-dimension` and `max-image-payload-bytes` compat axes so an Anthropic-compatible host whose image limits differ from the canonical API can override them instead of inheriting 8000px and 10 MB ([#10633](https://github.com/can1357/oh-my-pi/pull/10633) by [@aktanazat](https://github.com/aktanazat)).
-- Added OpenCode Zen's `jev-1.13` and `jev-1.13-free` judge models, routed to the System One judgment API (kind `judge`) instead of chat completions ([#14446](https://github.com/can1357/oh-my-pi/pull/14446) by [@jpds](https://github.com/jpds)).
-- Added the `session-header` compat axis; the `litellm` provider declares `x-litellm-session-id`, which carries the conversation session id independent of prompt caching ([#15096](https://github.com/can1357/oh-my-pi/pull/15096) by [@occ](https://github.com/occ))
-- Added Factory Droid Claude Haiku 5.5 and Mistral Large 4 ([#15116](https://github.com/can1357/oh-my-pi/pull/15116) by [@will-bogusz](https://github.com/will-bogusz))
-- Added the `portable-reasoning` rule: a model family declares that its reasoning may move natively between hosts serving the same model (same class, family and revision), and a host can opt out. Declared for Kimi K3, DeepSeek V4, GLM 5+ and MiniMax M3; Cursor's K3 turns opt out ([#15123](https://github.com/can1357/oh-my-pi/pull/15123) by [@will-bogusz](https://github.com/will-bogusz)).
+- Added the `classifier-cot-extraction` rule axis, set for Claude, marking models whose classifier refuses earlier reasoning quoted back into their input ([#15436](https://github.com/can1357/oh-my-pi/pull/15436) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Removed
+
+- Removed the Codex `toolMode` model field (`code_mode_only`); Codex discovery no longer maps `tool_mode`
+
+## [18.10.3] - 2026-10-12
+
+### Breaking Changes
+
+- `resolveInlineImageByteBudget(model, officialEndpoint)` and `resolveImageCountBudget(model, officialEndpoint)` take whether the request reaches the official endpoint instead of reading `compat.officialEndpoint`, which misses request-time reroutes such as `ANTHROPIC_BASE_URL`; pass pi-ai's `reachesOfficialEndpoint(model)` ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Added
+
+- Added Muse Wonder (`muse-wonder-1.0`) to Meta and Muse Code with its `minimal`–`max` effort ladder and pricing
+- Added the `thinking-unverified` rule axis: on hosts whose model list carries no capability metadata (Meta, Muse Code), unrecognized models now offer an opt-in thinking ladder (`ThinkingConfig.unverified`) instead of none
+- Added `thinking-unverified` axis for offering reasoning ladders on unclassified model IDs
+- Added `Muse Wonder 1.0` model definition to Meta provider
+- Added the opt-in `snapcompact-image-reads` axis: snapcompact images a fresh `read` result only for readers whose rule sets it; Claude Opus 5.5 and later opt in ([#14249](https://github.com/can1357/oh-my-pi/pull/14249) by [@will-bogusz](https://github.com/will-bogusz))
+- Added the `image-count-budget` rule for how many images one request may carry (Anthropic 90, Codex 200, other hosts unchanged) and the `official-image-count-budget` override that applies only on the official endpoint: Anthropic 600 (100 on 200k-window Claude models), Codex 2,000 ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+- Added a 24 MB inline-image byte budget for the Codex backend, which now counts as its official endpoint at its default URL and at paths under it such as `/codex/responses` ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+- Added `isOfficialCodexApiUrl` to `wire/codex`, moved from pi-ai ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+- Added `verified` to `image-tokenization` rules, marking the Claude 4.7+ high-res tier and the GPT-5.5 to 6.1 and gpt-6-astra rules as matching measured provider billing ([#15442](https://github.com/can1357/oh-my-pi/pull/15442) by [@will-bogusz](https://github.com/will-bogusz))
+- Added the `image-max-edge` axis and `resolveImageMaxEdge()` for hosts that shrink images before the model reads them; Cursor's Claude and GPT models and its `default` (Auto) route fit 1024×1024 ([#15448](https://github.com/can1357/oh-my-pi/pull/15448) by [@will-bogusz](https://github.com/will-bogusz))
+- Added the `thinking-replay-tokens` axis; Claude lines set it to `output` on every host, since a replayed signed thinking block bills the turn's full reasoning, not the signature's bytes ([#15446](https://github.com/can1357/oh-my-pi/pull/15446) by [@will-bogusz](https://github.com/will-bogusz))
+- Added a KDL opt-in for sibling subagent prompt-cache sharing, enabled for Muse Code's Spark 1.3, Wonder 1.0, and Wonder Full 1.0 variants over the Responses API ([#15467](https://github.com/can1357/oh-my-pi/pull/15467) by [@iliaal](https://github.com/iliaal))
 
 ### Changed
 
-- Changed Factory Droid to match droid 0.237: thinking Off for Claude and GPT, Azure stale-thinking recovery, EU regions for Opus, Fable and Gemini Flash, GPT-6.1 Sol routes, ungated GPT-6 Luna and DeepSeek V4.1 Flash ([#15116](https://github.com/can1357/oh-my-pi/pull/15116) by [@will-bogusz](https://github.com/will-bogusz))
+- Updated model definitions and compatibility rules for provider metadata
+- Google Antigravity, xAI and Cursor requests keep up to 60 images, 20 for Claude on Antigravity and Cursor, up from 5; this counts snapcompact frames and live screenshots together ([#15449](https://github.com/can1357/oh-my-pi/pull/15449) by [@will-bogusz](https://github.com/will-bogusz))
+- Snapcompact sizes archives at the frame prices measured for Antigravity Gemini (a fixed 1,089 tokens), Grok 4.6 to 4.20, and Claude Sonnet 4.6's standard tier ([#15449](https://github.com/can1357/oh-my-pi/pull/15449) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
 
-- Fixed GLM-5.3-FlashX on Zhipu Coding Plan missing bundled context, image, and thinking-level metadata ([#15314](https://github.com/can1357/oh-my-pi/issues/15314)).
-- Fixed `openrouterDecisionsBaseUrl` deriving a malformed OpenRouter Decisions root when the chat `baseUrl` has a trailing slash (such as `.../api/v1/`); it now strips trailing slashes before mapping `/v1` to `/alpha`, and is exported so provider-wide `baseUrl` overrides can reuse it ([#14848](https://github.com/can1357/oh-my-pi/pull/14848) by [@jerryfane](https://github.com/jerryfane))
-- Fixed GPT-6.1 Sol Ultrafast usage being priced at the Standard rate; it now applies OpenAI's published premium: 6x on the OpenAI API and 8x included usage on Codex ([#15000](https://github.com/can1357/oh-my-pi/pull/15000) by [@eggpeat](https://github.com/eggpeat)).
-- Fixed GPT-6 Sol, GPT-6.1 Sol and GPT-6 Luna losing the prompt cache on every reasoning-effort change: like GPT-6 Astra they now carry the change as a `configuration_update` item (OpenRouter's GPT-6 rows keep request-level effort changes)
+- Applied `max-image-dimension` and `max-image-payload-bytes` to Google API models, and declared the 5 MiB per-image limit of Claude on Google Antigravity ([#15444](https://github.com/can1357/oh-my-pi/pull/15444) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed local token counts for OpenAI GPT-5 and later models (Codex, OpenAI, Azure, OpenRouter, Copilot and other hosts) reading about 12% low: their text is now counted with o200k_base instead of a bytes/4 estimate ([#15447](https://github.com/can1357/oh-my-pi/pull/15447) by [@will-bogusz](https://github.com/will-bogusz))
+
+## [18.10.2] - 2026-10-12
+
+### Added
+
+- Added the `honors-claude-code-beta-kill-switch` axis (`compat.honorsClaudeCodeBetaKillSwitch`), on for the `anthropic` provider, so a rule or `models.yml` override decides which providers honor `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` ([#15458](https://github.com/can1357/oh-my-pi/pull/15458) by [@H4vC](https://github.com/H4vC))
+
+## [18.10.0] - 2026-10-12
+
+### Changed
+
+- Raised the default context window for `openai-codex/gpt-6.1-sol` and `gpt-6.1-sol-wm` from 272K to 500K, matching OpenAI's new Codex default; extended context still opens 922K ([#15421](https://github.com/can1357/oh-my-pi/issues/15421))
+
+## [18.9.2] - 2026-10-11
+
+### Removed
+
+- Removed `parseCloudflareAiGatewayCredential`, `serializeCloudflareAiGatewayCredential`, and `CloudflareAiGatewayCredential` from `@oh-my-pi/pi-catalog/wire/cloudflare-ai-gateway`. Use the equivalents from `@oh-my-pi/pi-catalog/wire/cloudflare` instead.
+
+## [18.9.1] - 2026-10-11
+
+### Added
+
+- Added the `supports-thinking-binding-controls` axis to Bedrock Converse models (on by default) so a rule or `models.yml` override can turn off Claude thinking-binding controls on hosts that reject them ([#15316](https://github.com/can1357/oh-my-pi/pull/15316) by [@harshaygadekar](https://github.com/harshaygadekar))
+
+## [18.9.0] - 2026-10-11
+
+### Fixed
+
+- Fixed GLM-5.3-FlashX on Zhipu Coding Plan so bundled context, image, and reasoning-level capabilities are reported correctly.
+- Fixed OpenRouter Decisions endpoint derivation when the chat base URL has a trailing slash.
+- Fixed GPT-6.1 Sol Ultrafast usage pricing to apply OpenAI's published premium rates for the OpenAI API and Codex included usage.
+- Fixed GPT-6 Sol, GPT-6.1 Sol, and GPT-6 Luna so changing reasoning effort preserves prompt caching.
 
 ## [18.8.8] - 2026-10-10
 

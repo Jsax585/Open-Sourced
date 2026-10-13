@@ -2,13 +2,7 @@ import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { hasFsCode, isEnoent, logger, postmortem } from "@oh-my-pi/pi-utils";
-import {
-	canonicalProjectDir,
-	daemonBrokerEndpoint,
-	daemonRuntimeDir,
-	probeBrokerEndpoint,
-	readDaemonScopeMeta,
-} from "./paths";
+import { canonicalProjectDir, daemonBrokerEndpoint, daemonRuntimeDir, probeBrokerEndpoint } from "./paths";
 
 const CLIENTS_DIR = "clients";
 const BROKER_PID_FILE = "broker.pid";
@@ -250,12 +244,9 @@ export async function pruneDeadDaemonRuntimeDirs(currentRuntimeDir: string): Pro
 			if (broker !== "absent" && (await recordedProcessState(broker)) !== "dead") continue;
 			const presence = await scanDaemonProjectPresence(dir, false);
 			if (presence.live || presence.unknown) continue;
-			// The project dir only names a Windows pipe; a scope without scope.json
-			// there cannot be probed, and the checks above decide alone.
-			const endpoint = daemonBrokerEndpoint((await readDaemonScopeMeta(dir)) ?? dir, dir);
-			const endpointState = await probeBrokerEndpoint(endpoint);
+			const endpointState = await probeBrokerEndpoint(daemonBrokerEndpoint(dir));
 			if (endpointState === "live" || endpointState === "unknown") continue;
-			// Bun reports a live broker's full accept queue as ECONNREFUSED too, so a
+			// A live broker can be refused too (see BrokerEndpointState), so a
 			// refused connect proves the broker gone only when broker.pid already
 			// does: absent (every broker writes it before listening) or naming a dead
 			// process of this domain. A pid written without a domain, by an older
