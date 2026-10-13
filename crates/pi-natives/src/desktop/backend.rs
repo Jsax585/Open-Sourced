@@ -229,4 +229,8 @@ pub trait AxBackend {
 	fn value_settable(&mut self, _h: &AxHandle) -> bool {
 		false
 	}
+	/// The text selected in the element, when it reports one.
+	fn selected_text(&mut self, _h: &AxHandle) -> Option<String> {
+		None
+	}
 }

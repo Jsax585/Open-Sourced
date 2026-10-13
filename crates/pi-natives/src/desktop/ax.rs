@@ -449,16 +449,19 @@ fn filter_node(mut node: WalkNode, all: bool) -> Option<WalkNode> {
 const SHOWN_CHARS: usize = 200;
 
 /// Writes `text` quoted, with escapes that keep its newlines and quotes
-/// readable. Past [`SHOWN_CHARS`] the line shows the start, how much it cut and
-/// the call that reads the whole text, unless that note would be longer than
-/// what it replaces.
-fn push_quoted(line: &mut String, text: &str, reference: &str, accessor: &str) {
+/// readable. Past [`SHOWN_CHARS`] the line shows the start, how much it cut
+/// and, given the element's ref and accessor (`whole`), the call that reads
+/// the whole text, unless that note would be longer than what it replaces.
+fn push_quoted(line: &mut String, text: &str, whole: Option<(&str, &str)>) {
 	let total = text.chars().count();
 	let cut = total.checked_sub(SHOWN_CHARS).and_then(|hidden| {
-		let note = format!(
-			"… (+{} chars; (await computer.ref(\"{reference}\")).{accessor})",
-			grouped(hidden)
-		);
+		let note = match whole {
+			Some((reference, accessor)) => format!(
+				"… (+{} chars; (await computer.ref(\"{reference}\")).{accessor})",
+				grouped(hidden)
+			),
+			None => format!("… (+{} chars)", grouped(hidden)),
+		};
 		(note.chars().count() < hidden).then_some(note)
 	});
 	line.push('"');
@@ -566,6 +569,45 @@ pub fn node_to_napi(reference: String, props: AxProps) -> AxNode {
 	}
 }
 
+/// What a snapshot prints after its tree, gathered while its lines are
+/// written: the application's focused element and the selected lines.
+#[derive(Default)]
+struct LineMarks {
+	/// `role "label" [ref=eN]` of the focused element.
+	focused:  Option<String>,
+	/// Refs of the lines marked `(selected)`, in tree order.
+	selected: Vec<String>,
+}
+
+/// `role "label" [ref=eN]`: what names an element on its line.
+fn push_identity(text: &mut String, props: &AxProps, reference: &str) {
+	text.push_str(&props.role);
+	if let Some((label, field)) = labelled(props) {
+		text.push(' ');
+		push_quoted(text, label, Some((reference, field)));
+	}
+	let _ = write!(text, " [ref={reference}]");
+}
+
+/// `e3, e5-e7`: refs as runs of consecutive numbers, in the order given.
+fn ref_runs(refs: &[String]) -> String {
+	let mut runs: Vec<(u64, u64)> = Vec::new();
+	for number in refs.iter().filter_map(|reference| reference.strip_prefix('e')?.parse().ok()) {
+		match runs.last_mut() {
+			Some((_, end)) if *end + 1 == number => *end = number,
+			_ => runs.push((number, number)),
+		}
+	}
+	let mut text = String::new();
+	for (index, (start, end)) in runs.into_iter().enumerate() {
+		if index > 0 {
+			text.push_str(", ");
+		}
+		let _ = if start == end { write!(text, "e{start}") } else { write!(text, "e{start}-e{end}") };
+	}
+	text
+}
+
 fn format_tree(
 	node: WalkNode,
 	depth: usize,
@@ -577,6 +619,7 @@ fn format_tree(
 	generation: u64,
 	text: &mut String,
 	nodes: &mut u32,
+	marks: &mut LineMarks,
 ) {
 	// The root's own focus only reflects app-local focus; report the global
 	// roster flag instead.
@@ -585,18 +628,20 @@ fn format_tree(
 	} else {
 		focused_in(focus, &node.handle, node.props.focused)
 	};
+	// The application's focused element, or without one the first element
+	// below the root that reports focus.
+	let holds_focus = depth > 0 && focus.map_or(focused, |focus| *focus == node.handle);
 	let reference = registry.register(backend, target, generation, node.handle, &node.props);
 	if !text.is_empty() {
 		text.push('\n');
 	}
 	text.push_str(&"  ".repeat(depth));
 	text.push_str("- ");
-	text.push_str(&node.props.role);
-	if let Some((label, field)) = labelled(&node.props) {
-		text.push(' ');
-		push_quoted(text, label, &reference, field);
+	let identity = text.len();
+	push_identity(text, &node.props, &reference);
+	if holds_focus && marks.focused.is_none() {
+		marks.focused = Some(text[identity..].to_owned());
 	}
-	let _ = write!(text, " [ref={reference}]");
 	if depth == 0 {
 		let _ = write!(text, " app={}", window.app);
 	}
@@ -607,13 +652,14 @@ fn format_tree(
 		.filter(|value| !value.is_empty())
 	{
 		text.push_str(": ");
-		push_quoted(text, value, &reference, "value()");
+		push_quoted(text, value, Some((&reference, "value()")));
 	}
 	if !node.props.enabled {
 		text.push_str(" (disabled)");
 	}
 	if node.props.selected {
 		text.push_str(" (selected)");
+		marks.selected.push(reference.clone());
 	}
 	if node.settable {
 		text.push_str(" (settable)");
@@ -637,6 +683,7 @@ fn format_tree(
 			generation,
 			text,
 			nodes,
+			marks,
 		);
 	}
 }
@@ -654,6 +701,7 @@ pub fn snapshot(
 	// `(focused)` marks only the application's own focused element where the
 	// backend reports one.
 	let focus = backend.focused_within(&root);
+	let root_handle = root.clone();
 	let mut state = WalkState {
 		visited:     0,
 		skipped:     0,
@@ -667,6 +715,7 @@ pub fn snapshot(
 		.and_then(|node| filter_node(node, options.all.unwrap_or(false)));
 	let mut text = String::new();
 	let mut node_count = 0;
+	let mut marks = LineMarks::default();
 	if let Some(root) = root {
 		format_tree(
 			root,
@@ -679,20 +728,49 @@ pub fn snapshot(
 			generation,
 			&mut text,
 			&mut node_count,
+			&mut marks,
 		);
 	}
+	// The application's focus lies outside the lines: in another of its
+	// windows (Finder's rename field is one), or past the node limit. Its line
+	// still says where keys sent to the application go.
+	if let Some(focus) = focus.as_ref().filter(|focus| marks.focused.is_none() && **focus != root_handle)
+		&& let Ok(props) = backend.props(focus)
+	{
+		let reference = registry.register(backend, target, generation, focus.clone(), &props);
+		let mut line = String::new();
+		push_identity(&mut line, &props, &reference);
+		line.push_str(" (not in this tree)");
+		marks.focused = Some(line);
+	}
 	registry.end_snapshot(target, generation);
+	let mut trailers = Vec::new();
 	if state.truncated {
-		if !text.is_empty() {
-			text.push('\n');
-		}
-		let _ = write!(text, "… truncated ({} nodes)", state.visited);
+		trailers.push(format!("… truncated ({} nodes)", state.visited));
 	}
 	if state.skipped > 0 {
+		trailers.push(format!("… skipped {} unreadable nodes", state.skipped));
+	}
+	if let Some(focused) = marks.focused {
+		trailers.push(format!("Focused: {focused}"));
+	}
+	if let Some(selection) = focus
+		.as_ref()
+		.and_then(|focus| backend.selected_text(focus))
+		.filter(|selection| !selection.is_empty())
+	{
+		let mut line = "Selected text: ".to_owned();
+		push_quoted(&mut line, &selection, None);
+		trailers.push(line);
+	}
+	if !marks.selected.is_empty() {
+		trailers.push(format!("Selected: {}", ref_runs(&marks.selected)));
+	}
+	for trailer in trailers {
 		if !text.is_empty() {
 			text.push('\n');
 		}
-		let _ = write!(text, "… skipped {} unreadable nodes", state.skipped);
+		text.push_str(&trailer);
 	}
 	Ok(AxSnapshot { text, node_count, truncated: state.truncated })
 }
@@ -894,7 +972,11 @@ mod tests {
 		/// Nodes whose value `setValue` can write.
 		settable:       HashSet<u64>,
 		/// Settability checks made.
-		settable_reads: u32,
+		settable_reads:  u32,
+		/// The element holding selected text, and that text.
+		selection:       Option<(u64, String)>,
+		/// Selected-text reads made.
+		selection_reads: u32,
 	}
 	impl Mock {
 		fn handle(&self, id: u64) -> AxHandle {
@@ -1002,6 +1084,15 @@ mod tests {
 		fn value_settable(&mut self, h: &AxHandle) -> bool {
 			self.settable_reads += 1;
 			self.settable.contains(&node(h))
+		}
+
+		fn selected_text(&mut self, h: &AxHandle) -> Option<String> {
+			self.selection_reads += 1;
+			self
+				.selection
+				.as_ref()
+				.filter(|(id, _)| *id == node(h))
+				.map(|(_, text)| text.clone())
 		}
 	}
 	fn p(role: &str, title: Option<&str>) -> AxProps {
@@ -1347,7 +1438,7 @@ mod tests {
 			format!(
 				"- window \"Title\" [ref=e1] app=Safari (focused)\n  - textarea [ref=e2]: \"line \
 				 one\\n\\\"two\\\"\\t{}\"… (+14,230 chars; (await computer.ref(\"e2\")).value()) \
-				 (focused)\n  - textfield [ref=e3]: \"{}\"",
+				 (focused)\n  - textfield [ref=e3]: \"{}\"\nFocused: textarea [ref=e2]",
 				"x".repeat(SHOWN_CHARS - 15),
 				"y".repeat(SHOWN_CHARS + 30),
 			)
@@ -1480,6 +1571,80 @@ mod tests {
 			"- row \"Inbox\" [ref=e3] (selected)",
 			"- image \"b.pdf\" [ref=e7] (selected)"
 		]);
+		assert_eq!(text.lines().last(), Some("Selected: e3, e7"));
+	}
+	#[test]
+	fn the_tree_ends_with_the_focused_element_its_selected_text_and_the_selected_refs() {
+		let mut name = p("textfield", Some("Name"));
+		name.value = Some("hello world".into());
+		name.focused = true;
+		let row = |title, selected| {
+			let mut row = p("row", Some(title));
+			row.selected = selected;
+			row
+		};
+		let mut m = Mock {
+			props: [
+				(1, p("window", Some("Title"))),
+				(2, name),
+				(3, p("list", Some("Files"))),
+				(4, row("a", true)),
+				(5, row("b", true)),
+				(6, row("c", false)),
+				(7, row("d", true)),
+			]
+			.into(),
+			children: [(1, vec![2, 3]), (3, vec![4, 5, 6, 7])].into(),
+			focus: Some(2),
+			selection: Some((2, "hello".into())),
+			..Default::default()
+		};
+		let text = tree(&mut m);
+		let tail: Vec<_> = text.lines().skip(7).collect();
+		assert_eq!(tail, [
+			"Focused: textfield \"Name\" [ref=e2]",
+			"Selected text: \"hello\"",
+			"Selected: e4-e5, e7",
+		]);
+		// One focus read and one selection read per tree, however many elements it holds.
+		assert_eq!((m.focus_reads, m.selection_reads), (1, 1));
+		// No focus below the window and no selection: the tree ends with its last row.
+		m.focus = Some(1);
+		m.selection = None;
+		for id in [4, 5, 7] {
+			m.props.get_mut(&id).unwrap().selected = false;
+		}
+		let text = tree(&mut m);
+		assert!(text.lines().last().unwrap().starts_with("    - row \"d\""), "{text}");
+	}
+	#[test]
+	fn focus_outside_the_tree_is_named_with_a_ref_and_a_long_selection_is_cut() {
+		let mut rename = p("textfield", Some("Rename"));
+		rename.value = Some("untitled folder".into());
+		rename.focused = true;
+		let mut m = Mock {
+			props: [
+				(1, p("window", Some("Title"))),
+				(2, p("button", Some("Go"))),
+				(9, rename),
+			]
+			.into(),
+			children: [(1, vec![2])].into(),
+			focus: Some(9),
+			selection: Some((9, "z".repeat(SHOWN_CHARS + 40))),
+			..Default::default()
+		};
+		let mut registry = AxRegistry::default();
+		let text = snapshot(&mut m, &mut registry, &window(), &AxSnapshotOptions::default())
+			.unwrap()
+			.text;
+		let tail: Vec<_> = text.lines().skip(2).collect();
+		assert_eq!(tail, [
+			"Focused: textfield \"Rename\" [ref=e3] (not in this tree)".to_owned(),
+			format!("Selected text: \"{}\"… (+40 chars)", "z".repeat(SHOWN_CHARS)),
+		]);
+		// The ref acts on the focused element like any other.
+		assert_eq!(node(&registry.resolve("e3").unwrap()), 9);
 	}
 	#[test]
 	fn lines_list_the_actions_a_role_does_not_imply() {

@@ -766,6 +766,10 @@ impl AxBackend for MacAx {
 		attribute_settable(element, "AXValue")
 			&& element_pid(element).is_ok_and(|pid| !process::is_terminal(pid))
 	}
+
+	fn selected_text(&mut self, h: &AxHandle) -> Option<String> {
+		copy_string(mac_handle(h).ok()?, "AXSelectedText")
+	}
 }
 
 fn element_props(
