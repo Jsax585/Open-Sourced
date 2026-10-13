@@ -607,21 +607,8 @@ describe("NativeJudge", () => {
 	});
 
 	it("requires valueMap pairing when typeField names a canonical answer key", () => {
-		expect(
-			() =>
-				new NativeJudge({
-					apiKey: "k",
-					judgment: { typeField: "choice" },
-				}),
-		).toThrow(ConfigurationError);
-		expect(
-			() =>
-				new NativeJudge({
-					apiKey: "k",
-					judgment: { typeField: "choice", valueMap: { choice: "value" } },
-				}),
-		).not.toThrow();
-
+		// Rejection only: acceptance is pinned behaviorally by
+		// "preserves mapped values when typeField matches the answer key".
 		for (const key of ["choice", "noul", "score"] as const) {
 			expect(
 				() =>
@@ -630,13 +617,6 @@ describe("NativeJudge", () => {
 						judgment: { typeField: key },
 					}),
 			).toThrow(ConfigurationError);
-			expect(
-				() =>
-					new NativeJudge({
-						apiKey: "k",
-						judgment: { typeField: key, valueMap: { [key]: "value" } },
-					}),
-			).not.toThrow();
 		}
 		expect(
 			() =>
