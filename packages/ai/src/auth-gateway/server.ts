@@ -30,7 +30,7 @@
 
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { type ModelKind, modelKind } from "@oh-my-pi/pi-catalog/types";
-import { logger } from "@oh-my-pi/pi-utils";
+import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import type { AuthStorage } from "../auth-storage";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
 import * as openaiChat from "../providers/openai-chat-server";
@@ -295,15 +295,31 @@ function chatRouteRejection(model: Model<Api>, context: Context): string | undef
 		model.api !== "openai-responses" &&
 		model.api !== "azure-openai-responses" &&
 		model.api !== "openai-codex-responses" &&
-		context.messages.some(
-			message =>
+		context.messages.some(message => {
+			if (
 				message.role === "toolResult" &&
 				message.content.some(
 					block => block.type === "image" && block.providerFile?.provider === "openai" && block.providerFile.id,
-				),
-		)
+				)
+			)
+				return true;
+			const payload = "providerPayload" in message ? message.providerPayload : undefined;
+			if (payload?.type !== "openaiResponsesHistory") return false;
+			return payload.items.some(
+				item =>
+					isRecord(item) &&
+					Array.isArray(item.content) &&
+					item.content.some(
+						part =>
+							isRecord(part) &&
+							(part.type === "input_image" || part.type === "input_file") &&
+							typeof part.file_id === "string" &&
+							part.file_id.length > 0,
+					),
+			);
+		})
 	)
-		return "OpenAI image file IDs in tool outputs require a Responses-compatible upstream model";
+		return "OpenAI file references require a Responses-compatible upstream model";
 	return undefined;
 }
 
