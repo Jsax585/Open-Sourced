@@ -514,6 +514,12 @@ export async function dispatchXdevTool(
 			};
 		}
 
+		if (state.codeMode && CODE_MODE_DIRECT_CONTROLS[canonical.name] === true) {
+			throw new ToolError(
+				`\`${canonical.name}\` must be called directly, not through xd://, so its session action takes effect.`,
+			);
+		}
+
 		const validated = parseDeviceArgs(canonical, content, toolCallId, () => renderDocs(canonical));
 		// Record the wrapped tool's approval tier so the prewalk coordinator can
 		// tell a read-only device call (e.g. `lsp` navigation) from a real

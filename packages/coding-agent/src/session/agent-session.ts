@@ -1593,6 +1593,11 @@ export class AgentSession implements SettingsScope {
 		this.#prewalk.disarm();
 	}
 
+	/** Preserve turn-boundary prewalk handoff when implementation tools execute inside eval. */
+	recordEvalToolResult(name: string, result: AgentToolResult): void {
+		this.#prewalk.recordBridgedToolResult(name, result);
+	}
+
 	/** Restore a planning model and re-arm prewalk without partially applying a rejected restart. */
 	restartPrewalk(
 		source: Model,

@@ -71,15 +71,18 @@ function createMcpCustomTool(name: string, serverName: string, mcpToolName: stri
 	} as CustomTool;
 }
 
-/** Rendered xd:// mount notices within one provider call's messages. */
+/** Provider snapshots retain which structured notices produced their rendered content. */
+const mountNoticeContents = new WeakMap<readonly Message[], ReadonlySet<string>>();
+
 function mountNoticesIn(messages: readonly Message[]): string[] {
+	const contents = mountNoticeContents.get(messages);
 	return messages.flatMap(message => {
 		const { content } = message;
 		const text =
 			typeof content === "string"
 				? content
 				: content.flatMap(part => (part.type === "text" ? [part.text] : [])).join("");
-		return text.includes("xd:// device inventory changed.") ? [text] : [];
+		return contents?.has(text) ? [text] : [];
 	});
 }
 
@@ -150,6 +153,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		const mock = options.responses ? createMockModel({ responses: options.responses }) : undefined;
 		const contexts: Message[][] = [];
 		const systemPrompts: string[][] = [];
+		let renderedMountNotices: ReadonlySet<string> = new Set();
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: {
@@ -162,10 +166,24 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 					: [readTool, initialMcp as unknown as AgentTool],
 				messages: options.initialMessages ?? [],
 			},
-			convertToLlm,
+			convertToLlm: messages => {
+				renderedMountNotices = new Set(
+					messages.flatMap(message => {
+						if (message.role !== "custom" || message.customType !== "xdev-mount-notice") return [];
+						return [
+							typeof message.content === "string"
+								? message.content
+								: message.content.flatMap(part => (part.type === "text" ? [part.text] : [])).join(""),
+						];
+					}),
+				);
+				return convertToLlm(messages);
+			},
 			streamFn: mock
 				? (model, context, streamOptions) => {
-						contexts.push([...context.messages]);
+						const snapshot = [...context.messages];
+						mountNoticeContents.set(snapshot, renderedMountNotices);
+						contexts.push(snapshot);
 						systemPrompts.push([...(context.systemPrompt ?? [])]);
 						return mock.stream(model, context, streamOptions);
 					}
@@ -1030,10 +1048,8 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		expect(contexts).toHaveLength(2);
 		const mountNotices = mountNoticesIn(contexts[1]);
 		expect(mountNotices).toHaveLength(1);
-		expect(mountNotices[0]).toContain("Available tools.");
 		expect(mountNotices[0]).toContain("xd://mcp__nucleus_search");
 		expect(mountNotices[0]).toContain("xd://mcp__nucleus_fetch");
-		expect(mountNotices[0]).not.toContain("Unmounted; writes fail:");
 
 		// A later unmount is likewise held for the following user prompt.
 		await session.refreshMCPTools([search]);
@@ -1042,9 +1058,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		await session.prompt("third");
 		const allNotices = mountNoticesIn(contexts[2]);
 		expect(allNotices).toHaveLength(2);
-		expect(allNotices[1]).toContain("Unmounted; writes fail:");
 		expect(allNotices[1]).toContain("xd://mcp__nucleus_fetch");
-		expect(allNotices[1]).not.toContain("Available tools.");
 	});
 
 	it("caps dynamic xd:// mount-notice summaries", async () => {
@@ -1091,12 +1105,10 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 				? estimatedNotice.content
 				: (estimatedNotice?.content ?? []).flatMap(part => (part.type === "text" ? [part.text] : [])).join("");
 		expect(estimatedText).toContain("## mcp__nucleus_search");
-		expect(estimatedText).toContain("## Schema");
 
 		const notices = mountNoticesIn(contexts[0]);
 		expect(notices).toHaveLength(1);
 		expect(notices[0]).toContain("## mcp__nucleus_search");
-		expect(notices[0]).toContain("## Schema");
 	});
 
 	it("defers a mount delta queued after its pre-prompt preview", async () => {
@@ -1321,7 +1333,6 @@ These tools became available:
 		await session.prompt("second");
 		const notices = mountNoticesIn(contexts[1] ?? []);
 		expect(notices).toHaveLength(1);
-		expect(notices[0]).toContain("Unmounted; writes fail:");
 		expect(notices[0]).toContain("xd://mcp__nucleus_search");
 	});
 

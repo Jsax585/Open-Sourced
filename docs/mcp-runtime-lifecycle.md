@@ -144,7 +144,7 @@ Server and tool name components are lowercased and sanitized to letters, digits,
 
 Connected manager tools become enabled immediately. Presentation is reconciled with the session's current tool policy: tools may be mounted under `xd://` rather than exposed as top-level function definitions. Registry identity and original server/tool ownership remain intact regardless of presentation.
 
-With `tools.codeMode: true`, enabled MCP tools use the on-demand catalog unless listed in `tools.codeModeDirectTools`. Fetch parameters through `read xd://<name>` and invoke through eval's `tool.<name>(args)` bridge. Late mounts are announced in appended discovery notices without rewriting an established system/tool prefix. Explicit presentation changes or direct-tool replacements may rebuild it. This is provider-neutral and sends no Codex Code Mode metadata.
+With `tools.codeMode: true`, enabled MCP tools use the on-demand catalog unless listed in `tools.codeModeDirectTools`. Fetch parameters through `read xd://<name>` and invoke through eval's `tool.<name>(args)` bridge. Late mounts and changed or removed server instructions are delivered in budgeted, appended discovery notices without rewriting an established system/tool prefix. Direct-tool additions or replacements and explicit presentation changes may rebuild it. This is provider-neutral and sends no Codex Code Mode metadata.
 
 ### Tool calls
 

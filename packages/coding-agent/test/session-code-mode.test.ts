@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -10,6 +10,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgEvalJs } from "@oh-my-pi/pi-coding-agent/eval/settings";
+import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import { initializeExtensions } from "@oh-my-pi/pi-coding-agent/modes/runtime-init";
 import {
 	type CreateAgentSessionOptions,
@@ -76,6 +77,7 @@ describe("provider-neutral Code Mode", () => {
 
 	afterEach(async () => {
 		for (const dispose of cleanup.splice(0).reverse()) await dispose();
+		vi.restoreAllMocks();
 	});
 
 	async function fixture(overrides: Partial<CreateAgentSessionOptions> = {}) {
@@ -293,7 +295,7 @@ describe("provider-neutral Code Mode", () => {
 
 	it("rejects nested terminal controls before they can silently consume a subagent result", async () => {
 		const { session } = await fixture({
-			toolNames: ["read", "eval", "yield"],
+			toolNames: ["read", "eval", "grep", "yield"],
 			requireYieldTool: true,
 		});
 		const output = await evaluate(
@@ -305,6 +307,17 @@ describe("provider-neutral Code Mode", () => {
 		);
 		expect(output).toContain("must be called directly");
 		expect(session.getActiveToolNames()).toContain("yield");
+		const nested = await evaluate(
+			session,
+			`
+			const result = await tool.write({path: "xd://yield", content: JSON.stringify({data: "lost"})});
+			print(JSON.stringify({blocked: result.hasError === true, message: result.text}));
+		`,
+		);
+		expect(nested).toContain('"blocked":true');
+		expect(nested).toContain("must be called directly");
+		const direct = await execute(session, "yield", { data: "delivered" });
+		expect(direct.details).toMatchObject({ data: "delivered", status: "success" });
 	});
 
 	it("restores native tools when switched off or eval is unavailable, then remounts without losing grants", async () => {
@@ -404,5 +417,215 @@ describe("provider-neutral Code Mode", () => {
 		`,
 		);
 		expect(output).toContain('"combined":42');
+	});
+
+	it("keeps discoverable APIs direct when a custom eval disables Code Mode and xdev is off", async () => {
+		const { session } = await fixture({
+			customTools: [normalizeTool("eval"), { ...normalizeTool("discoverable_probe"), loadMode: "discoverable" }],
+		});
+		expect(session.getActiveToolNames()).toContain("discoverable_probe");
+		expect(session.getMountedXdevToolNames()).toEqual([]);
+		expect(text(await execute(session, "discoverable_probe", { samples: [1, 4], scale: 2 }))).toBe('{"total":10}');
+	});
+
+	it("delivers docs for a late direct API when native descriptions are pruned", async () => {
+		const settings = Settings.isolated({
+			"tools.codeMode": true,
+			"tools.codeModeDirectTools": ["mcp__late_scale"],
+			inlineToolDescriptors: "on",
+			"eval.py": false,
+			"compaction.enabled": false,
+		});
+		const { session } = await fixture({ settings });
+		const mock = createMockModel({ provider: "anthropic", handler: { content: ["Ready."] } });
+		session.agent.streamFn = mock.stream;
+		await session.prompt("Establish the inline inventory.");
+		await session.refreshMCPTools([
+			{
+				...normalizeTool("mcp__late_scale"),
+				loadMode: "discoverable",
+				mcpServerName: "late",
+				mcpToolName: "scale",
+			},
+		]);
+		await session.prompt("Use the newly exposed direct API.");
+		const request = mock.calls.at(-1)!.context;
+		expect(request.tools?.find(tool => tool.name === "mcp__late_scale")?.description).toBe("");
+		const documentation = request.systemPrompt?.join("\n");
+		expect(documentation).toContain("Scale numeric samples and return their total.");
+		expect(documentation).toContain("samples");
+		expect(documentation).toContain("scale");
+	});
+
+	it("appends bounded instruction-only MCP changes without rewriting the established prefix", async () => {
+		const manager = new MCPManager("/tmp");
+		cleanup.push(() => manager.disconnectAll());
+		const instructions = new Map<string, string>();
+		spyOn(manager, "getServerInstructions").mockImplementation(() => new Map(instructions));
+		const { session } = await fixture({ enableMCP: true, mcpManager: manager });
+		const requests: Array<{ system: string; tools: string; context: Context }> = [];
+		const mock = createMockModel({ provider: "anthropic", handler: { content: ["Ready."] } });
+		session.agent.streamFn = (model, context, options) => {
+			requests.push({ system: JSON.stringify(context.systemPrompt), tools: wireTools(context), context });
+			return mock.stream(model, context, options);
+		};
+		await session.prompt("Establish an empty MCP baseline.");
+		instructions.set("late", "Use tenant=blue for this server.");
+		await session.refreshMCPTools([]);
+		await session.prompt("Read the late server's instructions.");
+		expect(JSON.stringify(requests[1]!.context.messages)).toContain("Use tenant=blue for this server.");
+		instructions.set("late", `Use tenant=green.${"x".repeat(4_500)}OMITTED_INSTRUCTION_TAIL`);
+		await session.refreshMCPTools([]);
+		await session.prompt("Read the replacement instructions.");
+		const updatedMessages = JSON.stringify(requests[2]!.context.messages);
+		expect(updatedMessages).toContain("Use tenant=green.");
+		expect(updatedMessages).not.toContain("OMITTED_INSTRUCTION_TAIL");
+		instructions.clear();
+		await session.refreshMCPTools([]);
+		await session.prompt("Observe the removed server instructions.");
+		const lastNotice = session.messages.findLast(
+			message => message.role === "custom" && message.customType === "xdev-mount-notice",
+		);
+		if (lastNotice?.role !== "custom") throw new Error("Missing MCP metadata notice");
+		expect(lastNotice.content).toContain("late");
+		expect(lastNotice.details).toMatchObject({ mcpInstructions: [], mcpInstructionsRemoved: ["late"] });
+		const noticeCount = session.messages.filter(
+			message => message.role === "custom" && message.customType === "xdev-mount-notice",
+		).length;
+		await session.prompt("No further metadata changed.");
+		expect(
+			session.messages.filter(message => message.role === "custom" && message.customType === "xdev-mount-notice"),
+		).toHaveLength(noticeCount);
+		for (const request of requests.slice(1)) {
+			expect(request.system).toBe(requests[0]!.system);
+			expect(request.tools).toBe(requests[0]!.tools);
+		}
+	});
+
+	it("replays instruction changes after a prompt override hides a rebuilt baseline", async () => {
+		const manager = new MCPManager("/tmp");
+		cleanup.push(() => manager.disconnectAll());
+		const instructions = new Map<string, string>();
+		spyOn(manager, "getServerInstructions").mockImplementation(() => new Map(instructions));
+		let override = false;
+		const extension: ExtensionFactory = pi => {
+			pi.on("before_agent_start", () =>
+				override ? { systemPrompt: ["Override without MCP metadata."] } : undefined,
+			);
+		};
+		const { session } = await fixture({ enableMCP: true, mcpManager: manager, extensions: [extension] });
+		await initializeExtensions(session, {
+			reportSendError: () => {},
+			reportRuntimeError: error => {
+				throw error;
+			},
+		});
+		const mock = createMockModel({ provider: "anthropic", handler: { content: ["Ready."] } });
+		session.agent.streamFn = mock.stream;
+		await session.prompt("Establish the base.");
+		const baselineMessages = [...session.messages];
+		instructions.set("late", "Use project=delta.");
+		await session.refreshMCPTools([]);
+		await session.refreshBaseSystemPrompt();
+		override = true;
+		await session.prompt("Override the base while learning updated metadata.");
+		let request = mock.calls.at(-1)!.context;
+		expect(request.systemPrompt).toEqual(["Override without MCP metadata."]);
+		expect(JSON.stringify(request.messages)).toContain("Use project=delta.");
+		// A history replacement drops the notice; it must not remain marked delivered.
+		session.agent.replaceMessages(baselineMessages);
+		await session.prompt("The replaced history needs current metadata again.");
+		request = mock.calls.at(-1)!.context;
+		expect(JSON.stringify(request.messages)).toContain("Use project=delta.");
+	});
+
+	it("does not treat another server's surviving notice as delivery of dropped instructions", async () => {
+		const manager = new MCPManager("/tmp");
+		cleanup.push(() => manager.disconnectAll());
+		const instructions = new Map<string, string>();
+		spyOn(manager, "getServerInstructions").mockImplementation(() => new Map(instructions));
+		const { session } = await fixture({ enableMCP: true, mcpManager: manager });
+		const mock = createMockModel({ provider: "anthropic", handler: { content: ["Ready."] } });
+		session.agent.streamFn = mock.stream;
+		await session.prompt("Start without servers.");
+		instructions.set("alpha", "Alpha requires tenant=first.");
+		await session.refreshMCPTools([]);
+		await session.prompt("Learn alpha.");
+		const alphaNotice = session.messages.findLast(
+			message => message.role === "custom" && message.customType === "xdev-mount-notice",
+		);
+		if (!alphaNotice) throw new Error("Missing alpha instructions");
+		instructions.set("beta", "Beta requires tenant=second.");
+		await session.refreshMCPTools([]);
+		await session.prompt("Learn beta.");
+		session.agent.replaceMessages(session.messages.filter(message => message !== alphaNotice));
+		await session.prompt("Restore only missing instruction context.");
+		const restored = session.messages.findLast(
+			message => message.role === "custom" && message.customType === "xdev-mount-notice",
+		);
+		if (restored?.role !== "custom") throw new Error("Missing re-announced instructions");
+		expect(restored.content).toContain("Alpha requires tenant=first.");
+		expect(restored.content).not.toContain("Beta requires tenant=second.");
+	});
+
+	it("does not restore a revoked filesystem write grant when Code Mode adds its transport", async () => {
+		const settings = Settings.isolated({
+			"tools.codeMode": false,
+			"tools.xdev": false,
+			"eval.py": false,
+			"tools.approvalMode": "yolo",
+		});
+		const { session, cwd } = await fixture({ settings, toolNames: ["read", "write", "eval", "grep"] });
+		await session.setActiveToolsByName(["read", "eval", "grep"]);
+		cfgToolsCodeMode.override(settings, true);
+		await Promise.resolve();
+		await session.runToolRegistryMutation(async () => {});
+		const target = path.join(cwd, "revoked.txt");
+		await expect(execute(session, "write", { path: target, content: "revoked" })).rejects.toThrow(
+			"Filesystem writes are not available",
+		);
+		cfgToolsCodeMode.override(settings, false);
+		await Promise.resolve();
+		await session.runToolRegistryMutation(async () => {});
+		expect(session.getToolForEvalBridge("write")).toBeUndefined();
+		await session.setActiveToolsByName(["read", "write", "eval", "grep"]);
+		await execute(session, "write", { path: target, content: "explicitly granted" });
+		expect(await Bun.file(target).text()).toBe("explicitly granted");
+	});
+
+	it("hands off prewalk after a bridged todo and workspace write complete", async () => {
+		const target = getBundledModel("anthropic", "claude-sonnet-4-6");
+		if (!target) throw new Error("Missing prewalk target");
+		const { session, cwd } = await fixture({
+			toolNames: ["read", "write", "eval", "todo"],
+			prewalk: { target },
+		});
+		const primary = session.model!.id;
+		const code = `
+			await tool.todo({op: "init", items: ["Write the requested file"]});
+			const written = await tool.write({path: "prewalk.txt", content: "implemented"});
+			if (written.hasError) throw new Error(written.text);
+			await tool.todo({op: "done", task: "Write the requested file"});
+		`;
+		const mock = createMockModel({
+			provider: "anthropic",
+			responses: [
+				{
+					content: [
+						{ type: "toolCall", id: "bridged-implementation", name: "eval", arguments: { language: "js", code } },
+					],
+				},
+				{ content: ["Finished."] },
+			],
+		});
+		const models: string[] = [];
+		session.agent.streamFn = (model, context, options) => {
+			models.push(model.id);
+			return mock.stream(model, context, options);
+		};
+		await session.prompt("Implement the planned file.");
+		expect(await Bun.file(path.join(cwd, "prewalk.txt")).text()).toBe("implemented");
+		expect(models).toEqual([primary, target.id]);
+		expect(session.getPrewalkState()).toBeUndefined();
 	});
 });

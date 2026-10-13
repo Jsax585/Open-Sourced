@@ -262,6 +262,10 @@ interface ToolRosterNoticeDetails {
 interface XdevMountNoticeDetails {
 	added: string[];
 	removed: string[];
+	/** Bounded instruction deltas actually rendered by this notice, tied to its base. */
+	mcpInstructionBase?: string;
+	mcpInstructions?: Array<[string, string]>;
+	mcpInstructionsRemoved?: string[];
 }
 
 /** Prelude names added/removed by one hidden {@link EVAL_PRELUDE_NOTICE_MESSAGE_TYPE} message. */
@@ -289,6 +293,8 @@ interface PromptSurface {
 	evalPreludes: readonly EvalPreludeDefinition[];
 	/** User-tagged model agents listed in the task description. */
 	sessionAgents: readonly AgentDefinition[];
+	/** Bounded server instructions rendered by this base prompt. */
+	mcpInstructions: ReadonlyMap<string, string>;
 }
 
 interface PendingNoticePreview<T> {
@@ -393,6 +399,10 @@ export class SessionTools {
 	#promptModelKey: string | undefined;
 	#rebuildSystemPrompt: SessionToolsOptions["rebuildSystemPrompt"];
 	#getMcpServerInstructions: SessionToolsOptions["getMcpServerInstructions"];
+	#deliveredMcpInstructionBase: { promptDigest: string; instructions: ReadonlyMap<string, string> } = {
+		promptDigest: "",
+		instructions: new Map(),
+	};
 	/**
 	 * Session-lifetime factory shared by every custom-tool wrapper. Defining it
 	 * outside the refresh frame prevents wrappers from retaining rollback maps
@@ -594,6 +604,7 @@ export class SessionTools {
 			skillHintVisible: cfgSkillful.get(this.#host.settings) === true && (this.#skills?.length ?? 0) > 0,
 			evalPreludes: this.#host.evalPreludes(),
 			sessionAgents: this.#host.sessionAgents(),
+			mcpInstructions: new Map(this.#getMcpServerInstructions?.()),
 		};
 	}
 	/** Drops cached per-session ACP `allow_always`/`reject_always` decisions. */
@@ -1029,8 +1040,7 @@ export class SessionTools {
 		let builtInWriteAvailable = this.#builtInToolNames.has("write");
 		const fullWriteSelected =
 			toolNames.includes("write") &&
-			(this.#presentationPinnedToolNames?.has("write") === true ||
-				this.#runtimeSelectedToolNames?.has("write") === true);
+			(this.#runtimeSelectedToolNames ?? this.#presentationPinnedToolNames)?.has("write") === true;
 		if (fullWriteSelected) {
 			const writeRegistration = this.#ensureWriteRegistered?.();
 			if (writeRegistration) {
@@ -1089,7 +1099,7 @@ export class SessionTools {
 			validToolNames.push(name);
 		}
 
-		const pinnedWrite = isPresentationPinned("write");
+		const pinnedWrite = fullWriteSelected;
 		const activeDeferrableTool = tools.some(tool => tool.deferrable === true);
 		const transportNeeded = mountNames.size > 0 || activeDeferrableTool || this.#host.planModeEnabled();
 		if (transportNeeded && !builtInWriteAvailable) {
@@ -1139,8 +1149,23 @@ export class SessionTools {
 		if (this.#xdev) this.#xdev.codeMode = codeMode;
 		const previousToolPredicateNames = previousCodeMode ? [...previousEnabledToolNames] : previousActiveToolNames;
 		this.#setActiveToolNames?.(codeMode ? this.#enabledToolNames : validToolNames);
-		// Entering or leaving the mode deliberately changes the model's work surface.
-		forcePromptRefresh ||= codeMode !== (previousCodeMode === true);
+		// A changed direct API already invalidates the wire prefix. Rebuild its
+		// inventory too, including providers that inline then prune descriptors.
+		const currentDirectTools = this.#host.agent.state.tools;
+		const directSurfaceChanged =
+			currentDirectTools.length !== tools.length ||
+			tools.some((tool, index) => {
+				const previous = currentDirectTools[index];
+				return (
+					!previous ||
+					tool.name !== previous.name ||
+					tool.description !== previous.description ||
+					tool.parameters !== previous.parameters ||
+					tool.customWireName !== previous.customWireName ||
+					tool.strict !== previous.strict
+				);
+			});
+		forcePromptRefresh ||= codeMode !== (previousCodeMode === true) || (codeMode && directSurfaceChanged);
 
 		let rebuiltSystemPrompt: string[] | undefined;
 		let rebuiltSignature: string | undefined;
@@ -1327,6 +1352,12 @@ export class SessionTools {
 	recordPrimaryModelCall(prompt: string[]): void {
 		this.#restoredTranscript = undefined;
 		this.#capturedPromptDigest = systemPromptDigest(this.baseOfSystemPrompt(prompt));
+		if (prompt === this.#baseSystemPrompt) {
+			this.#deliveredMcpInstructionBase = {
+				promptDigest: this.#capturedPromptDigest,
+				instructions: this.#promptSurface.mcpInstructions,
+			};
+		}
 	}
 
 	/**
@@ -1475,6 +1506,7 @@ export class SessionTools {
 	resetAnnouncedMounts(): void {
 		this.#announcedMounts.clear();
 		this.#announcedMountsSeeded = false;
+		this.#deliveredMcpInstructionBase = { promptDigest: "", instructions: new Map() };
 	}
 
 	/**
@@ -1723,9 +1755,49 @@ export class SessionTools {
 		this.#pendingXdevMountDelta = pending.added.size > 0 || pending.removed.size > 0 ? pending : undefined;
 	}
 
+	#projectMcpInstructions(baseDelivered: boolean):
+		| {
+				base: string;
+				changed: Array<{ name: string; text: string }>;
+				removed: string[];
+		  }
+		| undefined {
+		if (!this.#xdev?.codeMode) return undefined;
+		const baseline = baseDelivered
+			? {
+					promptDigest: systemPromptDigest(this.#baseSystemPrompt),
+					instructions: this.#promptSurface.mcpInstructions,
+				}
+			: this.#deliveredMcpInstructionBase;
+		const known = new Map(baseline.instructions);
+		for (const message of this.#host.agent.state.messages) {
+			if (message.role !== "custom" || message.customType !== XDEV_MOUNT_NOTICE_MESSAGE_TYPE) continue;
+			const details = message.details;
+			if (
+				!isRecord(details) ||
+				details.mcpInstructionBase !== baseline.promptDigest ||
+				!Array.isArray(details.mcpInstructions)
+			)
+				continue;
+			for (const entry of details.mcpInstructions) {
+				if (Array.isArray(entry) && typeof entry[0] === "string" && typeof entry[1] === "string") {
+					known.set(entry[0], entry[1]);
+				}
+			}
+			if (Array.isArray(details.mcpInstructionsRemoved)) {
+				for (const name of details.mcpInstructionsRemoved) if (typeof name === "string") known.delete(name);
+			}
+		}
+		const live = this.#getMcpServerInstructions?.() ?? new Map<string, string>();
+		const changed = [...live].flatMap(([name, text]) => (known.get(name) === text ? [] : [{ name, text }]));
+		const removed = [...known.keys()].filter(name => !live.has(name));
+		return changed.length || removed.length ? { base: baseline.promptDigest, changed, removed } : undefined;
+	}
+
 	#projectPendingXdevMountNotice(baseCatalogDelivered: boolean): XdevMountNoticeProjection | undefined {
 		const pending = this.#pendingXdevMountDelta;
-		if (!pending) return undefined;
+		const instructions = this.#projectMcpInstructions(baseCatalogDelivered);
+		if (!pending && !instructions) return undefined;
 		this.#ensureAnnouncedMountsSeeded();
 		const announcedMounts = new Set(this.#announcedMounts);
 		// A pending add for a device the outgoing base prompt already lists in its
@@ -1737,7 +1809,7 @@ export class SessionTools {
 		// {@link #notifyXdevMountDelta} cancel a mount followed by an unmount before
 		// any request is sent (issue #7139 reviews).
 		if (baseCatalogDelivered) {
-			for (const name of pending.added) {
+			for (const name of pending?.added ?? []) {
 				if (this.#basePromptXdevNames.has(name)) announcedMounts.add(name);
 			}
 		}
@@ -1746,11 +1818,11 @@ export class SessionTools {
 		// device — the common resume/reconnect case — and an unmount for a device
 		// it was never told about are both suppressed, keeping the provider prompt
 		// cache prefix byte-stable across resumes.
-		const addedNames = [...pending.added].filter(name => !announcedMounts.has(name));
-		const removedNames = [...pending.removed].filter(name => announcedMounts.has(name));
+		const addedNames = [...(pending?.added ?? [])].filter(name => !announcedMounts.has(name));
+		const removedNames = [...(pending?.removed ?? [])].filter(name => announcedMounts.has(name));
 		for (const name of addedNames) announcedMounts.add(name);
 		for (const name of removedNames) announcedMounts.delete(name);
-		if (addedNames.length === 0 && removedNames.length === 0) {
+		if (addedNames.length === 0 && removedNames.length === 0 && !instructions) {
 			return { notice: undefined, announcedMounts };
 		}
 		const summaries = new Map(this.#xdev ? xdevEntries(this.#xdev).map(entry => [entry.name, entry.summary]) : []);
@@ -1768,8 +1840,24 @@ export class SessionTools {
 			notice: {
 				role: "custom",
 				customType: XDEV_MOUNT_NOTICE_MESSAGE_TYPE,
-				content: prompt.render(xdevMountNoticePrompt, { added, removed, docs }),
-				details: { added: addedNames, removed: removedNames },
+				content: prompt.render(xdevMountNoticePrompt, {
+					added,
+					removed,
+					docs,
+					instructions: instructions?.changed,
+					removedInstructions: instructions?.removed,
+				}),
+				details: {
+					added: addedNames,
+					removed: removedNames,
+					...(instructions
+						? {
+								mcpInstructionBase: instructions.base,
+								mcpInstructions: instructions.changed.map(({ name, text }): [string, string] => [name, text]),
+								mcpInstructionsRemoved: instructions.removed,
+							}
+						: {}),
+				},
 				attribution: "agent",
 				display: false,
 				timestamp: Date.now(),
@@ -1882,8 +1970,7 @@ export class SessionTools {
 		const transportWriteActive =
 			normalized.includes("write") &&
 			this.#builtInToolNames.has("write") &&
-			this.#presentationPinnedToolNames?.has("write") !== true &&
-			this.#runtimeSelectedToolNames?.has("write") !== true &&
+			(this.#runtimeSelectedToolNames ?? this.#presentationPinnedToolNames)?.has("write") !== true &&
 			((this.#host.planModeEnabled() && (!writeSelected || deviceOnlyWriteActive)) ||
 				(writeSelected && deviceOnlyWriteActive && (retainedMountedDevice || retainedDeferrableTool)));
 		const previousRuntimeSelectedToolNames = this.#runtimeSelectedToolNames;

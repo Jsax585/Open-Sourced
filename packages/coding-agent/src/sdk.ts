@@ -2340,6 +2340,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getToolByName: name => session?.getToolByName(name),
 			getToolForEvalBridge: name => session?.getToolForEvalBridge(name),
 			getEvalBridgeToolNames: () => session?.getEvalBridgeToolNames() ?? [],
+			onEvalToolResult: (name, result) => session?.recordEvalToolResult(name, result),
 			agentRegistry,
 			// The global lifecycle releases through AgentRegistry.global(); wiring it
 			// onto a caller-supplied registry would report a cancel while releasing an
@@ -4149,6 +4150,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				const explicitlyRequested = explicitlyRequestedToolNameSet?.has(name) === true;
 				if (
 					tool &&
+					(presentation.codeMode || cfgToolsXdev.get(settings)) &&
 					xdevReadAvailable &&
 					xdevWriteAvailable &&
 					(presentation.codeMode || !explicitlyRequested) &&
@@ -4885,6 +4887,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					const shouldMount =
 						(presentation.codeMode || !explicitlyRequested) &&
 						toolSession.xdev !== undefined &&
+						(presentation.codeMode || cfgToolsXdev.get(settings)) &&
 						builtInRegistryToolNames.has("read") &&
 						builtInRegistryToolNames.has("write") &&
 						enabled.includes("read") &&

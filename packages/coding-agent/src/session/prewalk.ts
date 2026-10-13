@@ -1,6 +1,6 @@
 import type { Agent, AgentMessage, AgentToolResult, AgentTurnEndContext } from "@oh-my-pi/pi-agent-core";
 import { invalidateMessageCache } from "@oh-my-pi/pi-agent-core/compaction";
-import type { Model, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import type { Model } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import type { LocalProtocolOptions } from "../internal-urls";
@@ -48,9 +48,8 @@ const PLAN_YOLO_HANDOFF_MESSAGE_TYPE = "plan-yolo-handoff";
  * internal URLs, help lookups — leave the tier `read` (or absent) and must not
  * switch the model mid-investigation (issue #7312).
  */
-function isPrewalkImplementationAction(result: ToolResultMessage): boolean {
-	if (!PREWALK_ACTION_TOOLS[result.toolName]) return false;
-	const details = result.details;
+function isPrewalkImplementationAction(toolName: string, details: unknown): boolean {
+	if (PREWALK_ACTION_TOOLS[toolName] !== true) return false;
 	// A direct filesystem edit/write carries no `xd://` dispatch metadata.
 	if (!details || typeof details !== "object" || !("xdev" in details) || !details.xdev) return true;
 	const xdev = details.xdev;
@@ -105,6 +104,7 @@ export class PrewalkCoordinator {
 	#planInjected = false;
 	#continuePending = false;
 	#todoSeen = false;
+	#bridgedAction: string | undefined;
 	#planYolo: PlanYolo | undefined;
 	#planYoloPreviousNonMCPPresentation: { enabled: string[]; mounted: string[] } | undefined;
 	#planYoloArmed = false;
@@ -148,6 +148,7 @@ export class PrewalkCoordinator {
 		this.#planInjected = false;
 		this.#continuePending = false;
 		this.#todoSeen = false;
+		this.#bridgedAction = undefined;
 	}
 
 	/** A later model/effort selection owns the active model, even if its identity is unchanged. */
@@ -204,6 +205,25 @@ export class PrewalkCoordinator {
 		);
 	}
 
+	/** A bridge result has no top-level entry, but must still arm the next turn's handoff. */
+	recordBridgedToolResult(name: string, result: AgentToolResult): void {
+		if (
+			!this.#prewalk ||
+			result.isError ||
+			(result.details &&
+				typeof result.details === "object" &&
+				"isError" in result.details &&
+				result.details.isError === true)
+		)
+			return;
+		if (name === "todo") this.#todoSeen = true;
+		if (
+			isPrewalkImplementationAction(name, result.details) &&
+			(this.#todoSeen || !this.#host.getActiveToolNames().includes("todo"))
+		)
+			this.#bridgedAction ??= name;
+	}
+
 	/** Advances the one-way prewalk switch at a completed assistant-turn boundary. */
 	async advanceAtTurnEnd(liveMessages: AgentMessage[], context: AgentTurnEndContext | undefined): Promise<void> {
 		const prewalk = this.#prewalk;
@@ -232,7 +252,8 @@ export class PrewalkCoordinator {
 
 		const todoGateOpen = this.#todoSeen || !this.#host.getActiveToolNames().includes("todo");
 		const action = todoGateOpen
-			? context.toolResults.find(result => isPrewalkImplementationAction(result))
+			? (context.toolResults.find(result => isPrewalkImplementationAction(result.toolName, result.details))
+					?.toolName ?? this.#bridgedAction)
 			: undefined;
 		if (!action) {
 			if (!this.#planInjected) {
@@ -275,7 +296,7 @@ export class PrewalkCoordinator {
 		}
 		this.#host.emitNotice(
 			"info",
-			`Prewalk: switched to ${target.provider}/${target.id} after first ${action.toolName} call.`,
+			`Prewalk: switched to ${target.provider}/${target.id} after first ${action} call.`,
 			"prewalk",
 		);
 		this.#host.agent.steer({
