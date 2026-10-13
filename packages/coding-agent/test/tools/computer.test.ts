@@ -21,6 +21,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/tools/computer/supervisor";
 import { ComputerWorkerCore, type NativeDesktopSession } from "@oh-my-pi/pi-coding-agent/tools/computer/worker";
 import type {
+	AxActed,
 	AxNode,
 	AxQuery,
 	AxSnapshotOptions,
@@ -238,10 +239,18 @@ class FakeNativeSession implements NativeDesktopSession {
 	async axParent(_ref: string): Promise<AxNode | null> {
 		return null;
 	}
-	async axPerform(_ref: string, _action: string): Promise<void> {}
-	async axSetValue(_ref: string, _value: string): Promise<void> {}
-	async axFocus(_ref: string): Promise<void> {}
-	async axClick(_ref: string, _opts?: PointerOptions | null): Promise<void> {}
+	async axPerform(_ref: string, _action: string): Promise<AxActed> {
+		return { refound: false };
+	}
+	async axSetValue(_ref: string, _value: string): Promise<AxActed> {
+		return { refound: false };
+	}
+	async axFocus(_ref: string): Promise<AxActed> {
+		return { refound: false };
+	}
+	async axClick(_ref: string, _opts?: PointerOptions | null): Promise<AxActed> {
+		return { refound: false };
+	}
 	async close(): Promise<void> {
 		this.closeCount += 1;
 		this.controlActive = false;
@@ -977,11 +986,13 @@ describe("computer prelude", () => {
 			this.axCalls.push(["axNode", ref]);
 			return axNode;
 		}
-		override async axPerform(ref: string, action: string): Promise<void> {
+		override async axPerform(ref: string, action: string): Promise<AxActed> {
 			this.axCalls.push(["axPerform", ref, action]);
+			return { refound: false };
 		}
-		override async axClick(ref: string, opts?: PointerOptions | null): Promise<void> {
+		override async axClick(ref: string, opts?: PointerOptions | null): Promise<AxActed> {
 			this.axCalls.push(["axClick", ref, opts]);
+			return { refound: false };
 		}
 	}
 
@@ -1315,6 +1326,31 @@ describe("computer worker round trips", () => {
 				expect(result.payload.screenshots[0]).not.toHaveProperty("screenLocked");
 				expect(result.payload.returnValue).not.toHaveProperty("screenLocked");
 			}
+		}
+	});
+
+	it("says in the output when a call used the element that replaced its ref's destroyed one, and only then", async () => {
+		class RebuiltSession extends FakeNativeSession {
+			override async axNode(_ref: string): Promise<AxNode> {
+				return { ...axNode, refound: true };
+			}
+			override async axPerform(_ref: string, _action: string): Promise<AxActed> {
+				return { refound: true };
+			}
+		}
+		for (const rebuilt of [true, false]) {
+			const transport = new MemoryTransport();
+			new ComputerWorkerCore(transport, () => (rebuilt ? new RebuiltSession() : new FakeNativeSession()));
+			const result = await runWorker(
+				transport,
+				`refound-${rebuilt}`,
+				'const el = await (await desktop.window(42)).ref("e1"); await el.press(); return await el.value();',
+			);
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
+			const notes = result.payload.displays.filter(block => block.type === "text").map(block => block.text);
+			expect(notes).toHaveLength(rebuilt ? 3 : 0);
+			for (const note of notes) expect(note).toStartWith("e1: the app had destroyed this element");
 		}
 	});
 
@@ -1861,8 +1897,9 @@ describe("computer worker round trips", () => {
 			transport,
 			() =>
 				new (class extends FakeNativeSession {
-					override async axClick(ref: string, opts?: PointerOptions | null): Promise<void> {
+					override async axClick(ref: string, opts?: PointerOptions | null): Promise<AxActed> {
 						axClicks.push([ref, opts]);
+						return { refound: false };
 					}
 				})(),
 		);
@@ -2358,11 +2395,13 @@ describe("expanded computer APIs", () => {
 				this.calls.push(`axNode:${ref}`);
 				return axNode;
 			}
-			override async axSetValue(ref: string, _value: string): Promise<void> {
+			override async axSetValue(ref: string, _value: string): Promise<AxActed> {
 				this.calls.push(`axSetValue:${ref}`);
+				return { refound: false };
 			}
-			override async axPerform(ref: string, _action: string): Promise<void> {
+			override async axPerform(ref: string, _action: string): Promise<AxActed> {
 				this.calls.push(`axPerform:${ref}`);
+				return { refound: false };
 			}
 			override async typeText(target: string, _text: string): Promise<void> {
 				this.calls.push(`typeText:${target}`);

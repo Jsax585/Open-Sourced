@@ -10,6 +10,7 @@ import type {
 	DesktopObservation as NativeObservation,
 	DesktopControlState,
 	HoldOptions as NativeHoldOptions,
+	AxActed,
 	AxNode,
 	AxQuery,
 	AxSnapshotOptions,
@@ -93,10 +94,10 @@ export interface NativeDesktopSession {
 	axAttributes(ref: string): Promise<Array<[string, string]>>;
 	axChildren(ref: string): Promise<AxNode[]>;
 	axParent(ref: string): Promise<AxNode | null | undefined>;
-	axPerform(ref: string, action: string): Promise<void>;
-	axSetValue(ref: string, value: string): Promise<void>;
-	axFocus(ref: string): Promise<void>;
-	axClick(ref: string, opts?: PointerOptions | null): Promise<void>;
+	axPerform(ref: string, action: string): Promise<AxActed>;
+	axSetValue(ref: string, value: string): Promise<AxActed>;
+	axFocus(ref: string): Promise<AxActed>;
+	axClick(ref: string, opts?: PointerOptions | null): Promise<AxActed>;
 	close(): Promise<void>;
 }
 
@@ -372,23 +373,41 @@ class El {
 		this.enabled = node.enabled;
 		this.focused = node.focused;
 		this.childCount = node.childCount;
+		this.#reportRefound(node.refound);
+	}
+
+	/** Says in the cell output that the app had destroyed this ref's element and the call used the one element with its fields. */
+	#reportRefound(refound: boolean | undefined): void {
+		if (!refound) return;
+		this.#getContext().output.push({
+			type: "text",
+			text: `${this.ref}: the app had destroyed this element; the call used the one element of the window with the same role, labels and value, which ${this.ref} now names`,
+		});
+	}
+
+	async #node(): Promise<AxNode> {
+		const node = await nativeCall(this.#getContext().signal, () => this.#session.axNode(this.ref));
+		this.#reportRefound(node.refound);
+		return node;
+	}
+
+	async #act(signal: AbortSignal, call: () => Promise<AxActed>): Promise<void> {
+		this.#reportRefound((await nativeCall(signal, call)).refound);
 	}
 
 	async value(): Promise<string | undefined> {
-		const { signal } = this.#getContext();
-		return (await nativeCall(signal, () => this.#session.axNode(this.ref))).value;
+		return (await this.#node()).value;
 	}
 
 	async setValue(value: string): Promise<void> {
 		const context = this.#getContext();
 		guardRun(context, "setValue");
 		validateString(value, "setValue(value)");
-		await nativeCall(context.signal, () => this.#session.axSetValue(this.ref, value));
+		await this.#act(context.signal, () => this.#session.axSetValue(this.ref, value));
 	}
 
 	async bounds(): Promise<{ x: number; y: number; width: number; height: number } | null> {
-		const { signal } = this.#getContext();
-		const node = await nativeCall(signal, () => this.#session.axNode(this.ref));
+		const node = await this.#node();
 		if (node.x === undefined || node.y === undefined || node.width === undefined || node.height === undefined)
 			return null;
 		return { x: node.x, y: node.y, width: node.width, height: node.height };
@@ -400,39 +419,38 @@ class El {
 	}
 
 	async actions(): Promise<string[]> {
-		const { signal } = this.#getContext();
-		return (await nativeCall(signal, () => this.#session.axNode(this.ref))).actions ?? [];
+		return (await this.#node()).actions ?? [];
 	}
 
 	async perform(action: string): Promise<void> {
 		const context = this.#getContext();
 		guardRun(context, "perform");
 		validateString(action, "perform(action)", { nonEmpty: true });
-		await nativeCall(context.signal, () => this.#session.axPerform(this.ref, action));
+		await this.#act(context.signal, () => this.#session.axPerform(this.ref, action));
 	}
 
 	async press(): Promise<void> {
 		const context = this.#getContext();
 		guardRun(context, "press");
-		await nativeCall(context.signal, () => this.#session.axPerform(this.ref, "press"));
+		await this.#act(context.signal, () => this.#session.axPerform(this.ref, "press"));
 	}
 
 	async click(options?: ClickOptions): Promise<void> {
 		const context = this.#getContext();
 		guardRun(context, "click");
-		await nativeCall(context.signal, () => this.#session.axClick(this.ref, pointerOptions(options)));
+		await this.#act(context.signal, () => this.#session.axClick(this.ref, pointerOptions(options)));
 	}
 
 	async doubleClick(options?: Omit<ClickOptions, "count">): Promise<void> {
 		const context = this.#getContext();
 		guardRun(context, "doubleClick");
-		await nativeCall(context.signal, () => this.#session.axClick(this.ref, pointerOptions({ ...options, count: 2 })));
+		await this.#act(context.signal, () => this.#session.axClick(this.ref, pointerOptions({ ...options, count: 2 })));
 	}
 
 	async focus(): Promise<void> {
 		const context = this.#getContext();
 		guardRun(context, "focus");
-		await nativeCall(context.signal, () => this.#session.axFocus(this.ref));
+		await this.#act(context.signal, () => this.#session.axFocus(this.ref));
 	}
 
 	async parent(): Promise<El | null> {
