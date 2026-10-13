@@ -332,22 +332,31 @@ describe("pruneDeadDaemonRuntimeDirs", () => {
 			const crashedListener = await startStalledListener(path.join(crashed, "broker.sock"));
 			crashedListener.kill("SIGKILL");
 			await crashedListener.exited;
+			// The same leftover socket behind a lease without a domain: a refused
+			// connect cannot tell a dead older broker from a live one in another PID
+			// namespace that refuses, so the scope stays.
+			const legacy = await scope(daemons, "dddddddddddddddd", { pid: "dead" });
+			const legacyListener = await startStalledListener(path.join(legacy, "broker.sock"));
+			legacyListener.kill("SIGKILL");
+			await legacyListener.exited;
 			const busyListener = await startStalledListener(path.join(busy, "broker.sock"));
 			let held: net.Socket[] = [];
 			try {
-				// Once the busy broker's accept queue is full, a connect to it is
-				// refused exactly as one to the dead broker's socket is.
+				// Once the busy broker's accept queue is full, a node:net connect to it
+				// is refused exactly as one to the dead broker's socket is. (The prune's
+				// own probe may see EAGAIN there instead, depending on the platform.)
 				const queue = await fillAcceptQueue(path.join(busy, "broker.sock"));
 				held = queue.held;
 				expect(queue.refusal).toBe("ECONNREFUSED");
-				for (const dir of [busy, crashed]) await fs.utimes(dir, STALE, STALE);
+				for (const dir of [busy, crashed, legacy]) await fs.utimes(dir, STALE, STALE);
 
 				await pruneDeadDaemonRuntimeDirs(current);
 
-				expect({ busy: await fs.exists(busy), crashed: await fs.exists(crashed) }).toEqual({
-					busy: true,
-					crashed: false,
-				});
+				expect({
+					busy: await fs.exists(busy),
+					legacy: await fs.exists(legacy),
+					crashed: await fs.exists(crashed),
+				}).toEqual({ busy: true, legacy: true, crashed: false });
 			} finally {
 				for (const socket of held) socket.destroy();
 				busyListener.kill("SIGKILL");
