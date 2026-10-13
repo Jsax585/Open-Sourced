@@ -145,7 +145,8 @@ import {
 	BrowserTracingController,
 } from "./tracing";
 import {
-	WebMcpController,
+	installWebMcp,
+	type WebMcpController,
 	type WebMcpEventsOptions,
 	type WebMcpEventsResult,
 	type WebMcpInvokeOptions,
@@ -1681,7 +1682,7 @@ export class WorkerCore {
 				// this connection's session (on the relay, with the bridge's last session).
 				await this.#page.emulateFocusedPage(true);
 			}
-			this.#webmcp = new WebMcpController(this.#page);
+			this.#webmcp = await installWebMcp(this.#page);
 			await installVitalsObservers(this.#page);
 			if (payload.userAgent !== undefined) await applyUserAgentOverride(this.#page, payload.userAgent);
 			if (payload.ignoreHttpsErrors) await applyIgnoreHttpsErrors(this.#page);
@@ -1712,6 +1713,8 @@ export class WorkerCore {
 			// with a fresh worker), so close it before reporting. An adopted target —
 			// a borrowed page, or an owned one a recycle retries — is never closed here.
 			const page = this.#page;
+			await this.#webmcp?.dispose().catch(() => undefined);
+			this.#webmcp = undefined;
 			await this.#printHold?.dispose().catch(() => undefined);
 			this.#printHold = undefined;
 			if (createsPage && page && !page.isClosed()) {
@@ -3396,6 +3399,8 @@ export class WorkerCore {
 				error: error instanceof Error ? error.message : String(error),
 			});
 		});
+		await this.#webmcp?.dispose().catch(() => undefined);
+		this.#webmcp = undefined;
 		await this.#printHold?.dispose().catch(() => undefined);
 		this.#printHold = undefined;
 		this.#dialogs?.dispose();
