@@ -535,6 +535,16 @@ describe("model thinking derivation", () => {
 		expect(() => requireSupportedEffort(model, Effort.Medium)).toThrow(/not supported/);
 	});
 
+	it("uses thinkingLevel, not thinkingBudget, for Gemini 4+ on google-vertex", () => {
+		const model = createModel({
+			id: "gemini-4-argon",
+			api: "google-vertex",
+			provider: "google-vertex",
+		});
+
+		expect(model.thinking?.mode).toBe("google-level");
+	});
+
 	it("maps minimal to LOW when a collapsed family aliases it onto the low wire id", () => {
 		const model = createModel({
 			id: "gemini-3.7-flash",
