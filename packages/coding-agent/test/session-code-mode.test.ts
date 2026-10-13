@@ -601,6 +601,82 @@ describe("provider-neutral Code Mode", () => {
 		expect(restored.content).toContain("Use project=existing-baseline.");
 	});
 
+	it("withdraws surviving override instructions after returning to a rebuilt base", async () => {
+		const manager = new MCPManager("/tmp");
+		cleanup.push(() => manager.disconnectAll());
+		const instructions = new Map([["existing", "Use project=retired-override."]]);
+		spyOn(manager, "getServerInstructions").mockImplementation(() => new Map(instructions));
+		let override = true;
+		const extension: ExtensionFactory = pi => {
+			pi.on("before_agent_start", () =>
+				override ? { systemPrompt: ["Replacement without server instructions."] } : undefined,
+			);
+		};
+		const { session } = await fixture({ enableMCP: true, mcpManager: manager, extensions: [extension] });
+		await initializeExtensions(session, {
+			reportSendError: (_action, error) => {
+				throw error;
+			},
+			reportRuntimeError: error => {
+				throw error;
+			},
+		});
+		const mock = createMockModel({ provider: "anthropic", handler: { content: ["Ready."] } });
+		session.agent.streamFn = mock.stream;
+		await session.prompt("Learn the initial instructions under the replacement prompt.");
+		const originalNotice = session.messages.findLast(
+			message => message.role === "custom" && message.customType === "xdev-mount-notice",
+		);
+		if (originalNotice?.role !== "custom") throw new Error("Missing initial instruction notice");
+		expect(originalNotice.details).toMatchObject({
+			mcpInstructions: [["existing", "Use project=retired-override."]],
+		});
+		instructions.clear();
+		await session.refreshMCPTools([]);
+		await session.refreshBaseSystemPrompt();
+		override = false;
+		await session.prompt("The server disconnected; return to the rebuilt base prompt.");
+		const returned = mock.calls.at(-1)!.context;
+		expect(returned.systemPrompt?.join("\n")).not.toContain("Use project=retired-override.");
+		const withdrawal = session.messages.findLast(
+			message => message.role === "custom" && message.customType === "xdev-mount-notice",
+		);
+		if (withdrawal?.role !== "custom") throw new Error("Missing instruction withdrawal");
+		expect(withdrawal.details).toMatchObject({ mcpInstructions: [], mcpInstructionsRemoved: ["existing"] });
+		expect(
+			returned.messages.some(message => {
+				const content =
+					typeof message.content === "string"
+						? message.content
+						: message.content
+								.flatMap(block => (block.type === "text" && "text" in block ? [block.text] : []))
+								.join("");
+				return content === withdrawal.content;
+			}),
+		).toBe(true);
+		await session.prompt("No further metadata changed.");
+		expect(
+			session.messages.filter(message => message.role === "custom" && message.customType === "xdev-mount-notice"),
+		).toHaveLength(2);
+		// A reconnect must supersede the still-visible withdrawal, even when a new base contains it.
+		instructions.set("existing", "Use project=restored-base.");
+		await session.refreshMCPTools([]);
+		await session.refreshBaseSystemPrompt();
+		await session.prompt("The server reconnected with a new project.");
+		const restored = session.messages.findLast(
+			message => message.role === "custom" && message.customType === "xdev-mount-notice",
+		);
+		if (restored?.role !== "custom") throw new Error("Missing reconnect instruction notice");
+		expect(restored.details).toMatchObject({
+			mcpInstructions: [["existing", "Use project=restored-base."]],
+			mcpInstructionsRemoved: [],
+		});
+		await session.prompt("The reconnected instructions are unchanged.");
+		expect(
+			session.messages.filter(message => message.role === "custom" && message.customType === "xdev-mount-notice"),
+		).toHaveLength(3);
+	});
+
 	it("does not treat another server's surviving notice as delivery of dropped instructions", async () => {
 		const manager = new MCPManager("/tmp");
 		cleanup.push(() => manager.disconnectAll());

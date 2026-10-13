@@ -175,7 +175,7 @@ Both preserve MCP content and metadata; `structuredContent` is retained in `deta
 
 Prompt rendering, applied-tool signatures, and instruction-notice baselines use the same bounded instruction snapshot, including the initial session prompt. A server connecting during an awaited rebuild is picked up by a later discovery notice rather than silently diverging from that baseline. Direct MCP reconnects compare normalized wire-schema values, so a fresh but equivalent schema does not force a prompt rebuild; changed schemas still refresh the direct inventory.
 
-When `before_agent_start` replaces the system prompt, instructions present only in an earlier system prompt are not treated as delivered. The outgoing request receives any missing live instructions through a notice; surviving instruction notices prevent redundant delivery even if the hidden base was rebuilt.
+When `before_agent_start` replaces the system prompt, instructions present only in an earlier system prompt are not treated as delivered. Instruction reconciliation starts with the outgoing base, if present, then applies every surviving notice in history order. Notices remain visible across prompt replacements and rebuilds: stale instructions receive a withdrawal after disconnect, and reconnecting instructions supersede an earlier withdrawal without repeated notices.
 
 ### Live settings reconciliation
 

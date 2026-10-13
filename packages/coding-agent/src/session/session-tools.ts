@@ -264,8 +264,7 @@ interface ToolRosterNoticeDetails {
 interface XdevMountNoticeDetails {
 	added: string[];
 	removed: string[];
-	/** Bounded instruction deltas actually rendered by this notice, tied to its base. */
-	mcpInstructionBase?: string;
+	/** Bounded instruction deltas actually rendered by this notice. */
 	mcpInstructions?: Array<[string, string]>;
 	mcpInstructionsRemoved?: string[];
 }
@@ -1752,26 +1751,19 @@ export class SessionTools {
 
 	#projectMcpInstructions(baseDelivered: boolean):
 		| {
-				base: string;
 				changed: Array<{ name: string; text: string }>;
 				removed: string[];
 		  }
 		| undefined {
 		if (!this.#xdev?.codeMode) return undefined;
-		// A replacement prompt carries none of the old system text. Only its
-		// surviving notices count as delivered instructions; base digests limit
-		// replay only when that base is actually present in the outgoing request.
-		const base = baseDelivered ? systemPromptDigest(this.#baseSystemPrompt) : "";
+		// System text is present only when the outgoing request carries the base.
+		// Every surviving notice is still visible, regardless of which base or
+		// override created it; reconcile its text and withdrawals in history order.
 		const known = new Map(baseDelivered ? this.#promptSurface.mcpInstructions : undefined);
 		for (const message of this.#host.agent.state.messages) {
 			if (message.role !== "custom" || message.customType !== XDEV_MOUNT_NOTICE_MESSAGE_TYPE) continue;
 			const details = message.details;
-			if (
-				!isRecord(details) ||
-				(baseDelivered && details.mcpInstructionBase !== base) ||
-				!Array.isArray(details.mcpInstructions)
-			)
-				continue;
+			if (!isRecord(details) || !Array.isArray(details.mcpInstructions)) continue;
 			for (const entry of details.mcpInstructions) {
 				if (Array.isArray(entry) && typeof entry[0] === "string" && typeof entry[1] === "string") {
 					known.set(entry[0], entry[1]);
@@ -1784,7 +1776,7 @@ export class SessionTools {
 		const live = this.#getMcpServerInstructions?.() ?? new Map<string, string>();
 		const changed = [...live].flatMap(([name, text]) => (known.get(name) === text ? [] : [{ name, text }]));
 		const removed = [...known.keys()].filter(name => !live.has(name));
-		return changed.length || removed.length ? { base, changed, removed } : undefined;
+		return changed.length || removed.length ? { changed, removed } : undefined;
 	}
 
 	#projectPendingXdevMountNotice(baseCatalogDelivered: boolean): XdevMountNoticeProjection | undefined {
@@ -1845,7 +1837,6 @@ export class SessionTools {
 					removed: removedNames,
 					...(instructions
 						? {
-								mcpInstructionBase: instructions.base,
 								mcpInstructions: instructions.changed.map(({ name, text }): [string, string] => [name, text]),
 								mcpInstructionsRemoved: instructions.removed,
 							}
