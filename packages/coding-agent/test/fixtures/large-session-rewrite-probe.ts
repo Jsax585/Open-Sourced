@@ -55,9 +55,7 @@ try {
 	const retainedBytes = Math.max(0, (await liveBytes()) - liveBeforeRewrite);
 	const peakBytes = process.resourceUsage().maxRSS * 1024;
 	const rewrittenBytes = (await Bun.file(sessionFile).size) ?? 0;
-	process.stdout.write(
-		JSON.stringify({ sourceBytes, rewrittenBytes, peakBytes, retainedBytes, rewriteComplete: true }),
-	);
+	process.stdout.write(JSON.stringify({ sourceBytes, rewrittenBytes, peakBytes, retainedBytes }));
 } finally {
 	await manager?.close();
 	await fs.rm(root, { recursive: true, force: true });

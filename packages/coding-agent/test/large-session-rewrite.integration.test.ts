@@ -7,7 +7,6 @@ interface ProbeResult {
 	rewrittenBytes: number;
 	peakBytes: number;
 	retainedBytes: number;
-	rewriteComplete: boolean;
 }
 
 const SHOULD_RUN = Bun.env.PI_SESSION_2GIB_INTEGRATION === "1";
@@ -18,7 +17,7 @@ const probePath = path.resolve(import.meta.dir, "fixtures", "large-session-rewri
 function parseProbeResult(stdout: string): ProbeResult {
 	const parsed: unknown = JSON.parse(stdout);
 	if (!isRecord(parsed)) throw new Error(`invalid large-rewrite probe output: ${stdout}`);
-	const { sourceBytes, rewrittenBytes, peakBytes, retainedBytes, rewriteComplete } = parsed;
+	const { sourceBytes, rewrittenBytes, peakBytes, retainedBytes } = parsed;
 	if (
 		typeof sourceBytes !== "number" ||
 		!Number.isFinite(sourceBytes) ||
@@ -27,12 +26,11 @@ function parseProbeResult(stdout: string): ProbeResult {
 		typeof peakBytes !== "number" ||
 		!Number.isFinite(peakBytes) ||
 		typeof retainedBytes !== "number" ||
-		!Number.isFinite(retainedBytes) ||
-		typeof rewriteComplete !== "boolean"
+		!Number.isFinite(retainedBytes)
 	) {
 		throw new Error(`invalid large-rewrite probe output: ${stdout}`);
 	}
-	return { sourceBytes, rewrittenBytes, peakBytes, retainedBytes, rewriteComplete };
+	return { sourceBytes, rewrittenBytes, peakBytes, retainedBytes };
 }
 
 async function runProbe(): Promise<ProbeResult> {
@@ -66,7 +64,6 @@ describe.skipIf(!SHOULD_RUN)("multi-gibabyte session rewrite", () => {
 		async () => {
 			const result = await runProbe();
 
-			expect(result.rewriteComplete).toBe(true);
 			expect(result.sourceBytes).toBeGreaterThan(2 ** 31);
 			expect(result.rewrittenBytes).toBeGreaterThan(2 ** 31);
 			expect(result.peakBytes, JSON.stringify(result)).toBeLessThan(MAX_PEAK_BYTES);
