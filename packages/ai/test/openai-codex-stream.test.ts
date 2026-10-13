@@ -10148,10 +10148,11 @@ describe("openai-codex streaming", () => {
 			}
 		}
 
+		const writeSpy = vi.spyOn(Bun, "write");
 		try {
 			process.chdir(tempDir.path());
 			Bun.env.PI_REQ_DEBUG = "1";
-			Bun.write = forwardingWrite as typeof Bun.write;
+			writeSpy.mockImplementation(forwardingWrite as typeof Bun.write);
 			global.WebSocket = DebugRewriteReaderWebSocket as unknown as typeof WebSocket;
 			const token = createCodexTestToken();
 			const model = createCodexTestModel("https://chatgpt.com/backend-api");
@@ -10310,12 +10311,12 @@ describe("openai-codex streaming", () => {
 			await assertDumpMatchesWire(0);
 			await assertDumpMatchesWire(1);
 		} finally {
+			writeSpy.mockRestore();
 			rewriteEntered.resolve();
 			releaseRewrite.resolve();
 			abortController.abort();
 			await Promise.allSettled([...startedPromises, ...responseTasks]);
 			for (const state of providerSessionState.values()) state.close();
-			Bun.write = previousBunWrite;
 			process.chdir(previousCwd);
 			restoreEnv("PI_REQ_DEBUG", previousDebug);
 			global.WebSocket = previousWebSocket;
@@ -10466,10 +10467,11 @@ describe("openai-codex streaming", () => {
 			}
 		}
 
+		const writeSpy = vi.spyOn(Bun, "write");
 		try {
 			process.chdir(tempDir.path());
 			Bun.env.PI_REQ_DEBUG = "1";
-			Bun.write = forwardingWrite as typeof Bun.write;
+			writeSpy.mockImplementation(forwardingWrite as typeof Bun.write);
 			global.WebSocket = DebugRewriteReaderWebSocket as unknown as typeof WebSocket;
 			const token = createCodexTestToken();
 			const model = createCodexTestModel("https://chatgpt.com/backend-api");
@@ -10585,13 +10587,13 @@ describe("openai-codex streaming", () => {
 			expect(capturedWrites).toHaveLength(2);
 			await assertDumpMatchesWire(1);
 		} finally {
+			writeSpy.mockRestore();
 			rewriteEntered.resolve();
 			partialEmitted.resolve();
 			releaseRewrite.resolve();
 			abortController.abort();
 			await Promise.allSettled([...startedPromises, ...responseTasks]);
 			for (const state of providerSessionState.values()) state.close();
-			Bun.write = previousBunWrite;
 			process.chdir(previousCwd);
 			restoreEnv("PI_REQ_DEBUG", previousDebug);
 			global.WebSocket = previousWebSocket;
@@ -10739,10 +10741,11 @@ describe("openai-codex streaming", () => {
 			}
 		}
 
+		const writeSpy = vi.spyOn(Bun, "write");
 		try {
 			process.chdir(tempDir.path());
 			Bun.env.PI_REQ_DEBUG = "1";
-			Bun.write = forwardingWrite as typeof Bun.write;
+			writeSpy.mockImplementation(forwardingWrite as typeof Bun.write);
 			global.WebSocket = DebugRewriteReaderWebSocket as unknown as typeof WebSocket;
 			const token = createCodexTestToken();
 			const model = createCodexTestModel("https://chatgpt.com/backend-api");
@@ -10864,6 +10867,7 @@ describe("openai-codex streaming", () => {
 			expect(capturedWrites).toHaveLength(2);
 			await assertDumpMatchesWire(1);
 		} finally {
+			writeSpy.mockRestore();
 			rewriteEntered.resolve();
 			partialEmitted.resolve();
 			releaseRewrite.resolve();
@@ -10871,7 +10875,6 @@ describe("openai-codex streaming", () => {
 			followupAbortController.abort();
 			await Promise.allSettled([...startedPromises, ...responseTasks]);
 			for (const state of providerSessionState.values()) state.close();
-			Bun.write = previousBunWrite;
 			process.chdir(previousCwd);
 			restoreEnv("PI_REQ_DEBUG", previousDebug);
 			global.WebSocket = previousWebSocket;
