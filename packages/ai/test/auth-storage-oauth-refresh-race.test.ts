@@ -29,6 +29,7 @@ describe("AuthStorage OAuth refresh race", () => {
 		store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 		events = [];
 		authStorage = new AuthStorage(store, {
+			usageProviderResolver: () => undefined,
 			onCredentialDisabled: event => {
 				events.push(event);
 			},
