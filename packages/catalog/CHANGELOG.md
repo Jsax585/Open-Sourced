@@ -10,6 +10,7 @@
 - Added the `classifier-cot-extraction` rule axis, set for Claude, marking models whose classifier refuses earlier reasoning quoted back into their input ([#15436](https://github.com/can1357/oh-my-pi/pull/15436) by [@will-bogusz](https://github.com/will-bogusz))
 - Added Gemini 4 Argon pricing on Cursor ($2 input / $0.10 cached / $10 output per 1M tokens) and Google Antigravity, which now uses Google's first-party rate instead of showing $0 ([#15620](https://github.com/can1357/oh-my-pi/pull/15620) by [@eggpeat](https://github.com/eggpeat))
 - Added scheduled list-price changes to `cost-patch`, as `cost-fallback` already allowed: a dated `effective-rates` card sets the price from its date, and each request is priced at the card in force when it was made, even on models loaded before the change, on rebuilt models, and on Cursor lanes priced from a sibling's card. A malformed dated card now fails the model build instead of silently keeping the old price. `getEffectiveTokenCost` returns that card for price displays, and `hasRecurringTariff` tells these dated-only schedules apart from peak/off-peak tariffs, which alone show a status-line arrow ([#15620](https://github.com/can1357/oh-my-pi/pull/15620) by [@eggpeat](https://github.com/eggpeat))
+- Added the `exllama3` provider for TabbyAPI (ExLlamaV3) ([#14489](https://github.com/can1357/oh-my-pi/pull/14489) by [@tapstoop](https://github.com/tapstoop)).
 
 ### Changed
 
@@ -193,9 +194,6 @@
 - Added an optional `statefulResponses` compat field for OpenAI Responses models, kept through OpenRouter's Responses dispatch ([#13686](https://github.com/can1357/oh-my-pi/pull/13686) by [@alphastorm](https://github.com/alphastorm)).
 - Added 15 Snowflake Cortex models with account-specific endpoints, Cortex compatibility rules, and estimated account-billed pricing ([#14507](https://github.com/can1357/oh-my-pi/pull/14507) by [@jorgoose](https://github.com/jorgoose)).
 - Added the `image-tokenization` axis, which declares how GPT-5.2+, Claude and Gemini 3 lines bill input images on every host, with wire-API fallback rules for other models, plus `imageTokens()` to price one image ([#14286](https://github.com/can1357/oh-my-pi/pull/14286) by [@will-bogusz](https://github.com/will-bogusz)).
-- Added the `exllama3` provider for TabbyAPI, the official ExLlamaV3 server. Discovery takes the context window the server is actually running (`meta.n_ctx`, then `parameters.max_seq_len`, then trained context, then `/props`) rather than a per-model guess, and Qwen thinking rides `chat_template_kwargs`, the one dialect TabbyAPI guarantees reaches the chat template.
-- Added the `exllama3` provider for TabbyAPI, the official ExLlamaV3 server. Discovery takes the context window the server is actually running (`meta.n_ctx`, then `parameters.max_seq_len`, then trained context, then `/props`) rather than a per-model guess, and Qwen thinking rides `chat_template_kwargs`, the one dialect TabbyAPI guarantees reaches the chat template ([#14489](https://github.com/can1357/oh-my-pi/pull/14489) by [@tapstoop](https://github.com/tapstoop)).
-- Added the `exllama3` provider for TabbyAPI (ExLlamaV3) ([#14489](https://github.com/can1357/oh-my-pi/pull/14489) by [@tapstoop](https://github.com/tapstoop)).
 
 ### Changed
 

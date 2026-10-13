@@ -9,6 +9,7 @@
 - Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
 - Added opt-in `omp gc --compress` (or `gc.compress`), which stores sessions idle for `gc.compressAfterDays` (default 7) with filesystem transparent compression (APFS, NTFS); they stay resumable and searchable ([#15600](https://github.com/can1357/oh-my-pi/pull/15600) by [@wolfiesch](https://github.com/wolfiesch))
 - Extensions can reopen a dismissed plan review while the session is idle (`ctx.openPlanReview()`) and pick the execution tier on `ctx.resolvePlanReview` (`input.role`); `plan_review_requested` now reports the slider's tiers ([#15552](https://github.com/can1357/oh-my-pi/pull/15552) by [@Shadorain](https://github.com/Shadorain))
+- A running TabbyAPI (ExLlama3) server is now offered in the model picker with no configuration, alongside llama.cpp, LM Studio, and Ollama. It is probed at `http://127.0.0.1:5000/v1` and moved with `EXLLAMA3_BASE_URL`; an `EXLLAMA3_API_KEY` or stored key unlocks the full `model_dir` roster instead of only the loaded model ([#14489](https://github.com/can1357/oh-my-pi/pull/14489) by [@tapstoop](https://github.com/tapstoop)).
 
 ### Changed
 
@@ -538,8 +539,6 @@
 - RPC `remove_queued_message` now returns the removed message's images, so clients can put an edited queued message back in the editor with its attachments ([#14179](https://github.com/can1357/oh-my-pi/pull/14179) by [@andrebrait](https://github.com/andrebrait))
 - Added `/btw` side questions for RPC hosts: `btw` asks one (or a follow-up in an earlier topic) while the main turn keeps running, the answer streams as `btw_delta` / `btw_record` frames, `btw_cancel` stops it, and `get_btw_history` lists the session's BTW history shared with the TUI ([#14110](https://github.com/can1357/oh-my-pi/pull/14110) by [@andrebrait](https://github.com/andrebrait))
 - Added the `providers.muse-code.storeResponses` setting (off by default; `PI_MUSE_STORE_RESPONSES` overrides it) to store Muse Code results on Meta's servers, so a turn whose connection drops is recovered instead of re-run ([#14534](https://github.com/can1357/oh-my-pi/pull/14534) by [@abilliontokens](https://github.com/abilliontokens)).
-- A running TabbyAPI (ExLlama3) server is now offered in the model picker with no configuration, alongside llama.cpp, LM Studio, and Ollama. It is probed at `http://127.0.0.1:5000/v1` and moved with `EXLLAMA3_BASE_URL`; an `EXLLAMA3_API_KEY` or stored key unlocks the full `model_dir` roster instead of only the loaded model.
-- A running TabbyAPI (ExLlama3) server is now offered in the model picker with no configuration, alongside llama.cpp, LM Studio, and Ollama. It is probed at `http://127.0.0.1:5000/v1` and moved with `EXLLAMA3_BASE_URL`; an `EXLLAMA3_API_KEY` or stored key unlocks the full `model_dir` roster instead of only the loaded model ([#14489](https://github.com/can1357/oh-my-pi/pull/14489) by [@tapstoop](https://github.com/tapstoop)).
 
 ### Changed
 
