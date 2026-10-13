@@ -811,6 +811,13 @@ interface DurableFrontier {
 	issuedSize: number;
 }
 
+/** Entries another writer added to the session file, and where they sit in it (see `#foreignEntriesIn`). */
+interface ForeignEntries {
+	foreign: SessionEntry[];
+	at: number;
+	extendsFrontier: boolean;
+}
+
 /**
  * One full-file serialization: title slot, header, and entry lines in file
  * order. `lines` regenerates on every iteration so file storage can write
@@ -1247,40 +1254,98 @@ export class SessionManager {
 		return sessionFile;
 	}
 
-	/** The entries `content` holds that this manager does not, or `undefined` when it is not this session's journal. */
-	#foreignEntriesIn(content: string): SessionEntry[] | undefined {
-		const { entries, invalidHeader } = parseSessionContent(content);
+	/**
+	 * The entries `content` holds that this manager does not, or `undefined`
+	 * when it is not this session's journal. `at` is where they go in
+	 * `#entries` to keep the file's order: after the last entry both hold, so
+	 * this manager's entries the file lacks still follow them.
+	 * `extendsFrontier` reports that the file is exactly the durable frontier
+	 * followed by them.
+	 */
+	#foreignEntriesIn(content: string): ForeignEntries | undefined {
+		const { entries, invalidHeader, malformedRecords } = parseSessionContent(content);
 		const header = entries[0];
 		if (invalidHeader || header?.type !== "session" || header.id !== this.#sessionId) return undefined;
+		const durable = this.#durable;
+		let extendsFrontier =
+			malformedRecords === 0 && durable?.entries === this.#entries && durable.issued === durable.confirmed;
 		const foreign: SessionEntry[] = [];
+		const shared = new Set<string>();
 		for (let i = 1; i < entries.length; i++) {
 			const entry = entries[i] as SessionEntry;
-			if (!this.#index.has(entry.id)) foreign.push(entry);
+			if (!this.#index.has(entry.id)) {
+				foreign.push(entry);
+				continue;
+			}
+			shared.add(entry.id);
+			if (foreign.length > 0 || this.#entries[shared.size - 1]?.id !== entry.id) extendsFrontier = false;
 		}
-		return foreign;
+		if (shared.size !== durable?.confirmed) extendsFrontier = false;
+		let at = this.#entries.length;
+		while (at > 0 && !shared.has(this.#entries[at - 1]!.id)) at--;
+		return { foreign, at, extendsFrontier };
 	}
 
 	/**
 	 * Keep the entries another writer added to `#sessionFile`, whose bytes now
 	 * measure `diskSize`. They join this session's tree as a side branch (their
-	 * parents are entries both writers loaded), the active leaf stays this
-	 * session's, and the retried rewrite republishes them with the rest.
+	 * parents are entries both writers loaded) at their place in the file, and
+	 * the active leaf stays this session's. When the file is exactly the
+	 * durable frontier followed by them, the frontier extends over them, so
+	 * this manager's next entries follow them as an append; otherwise the
+	 * retried rewrite republishes them with the rest.
 	 */
-	#adoptForeignEntries(foreign: readonly SessionEntry[], diskSize: number): void {
+	#adoptForeignEntries(found: ForeignEntries, diskSize: number): void {
 		const leaf = this.#index.leafId();
-		let adopted = 0;
-		for (const entry of foreign) {
+		const durable = this.#durable;
+		const kept: SessionEntry[] = [];
+		for (const entry of found.foreign) {
 			// A recovery that raced this one may already have kept it.
 			if (this.#index.has(entry.id)) continue;
-			this.#entries.push(entry);
 			this.#index.insert(entry);
-			adopted++;
+			kept.push(entry);
 		}
 		this.#index.setLeaf(leaf);
+		this.#entries = [...this.#entries.slice(0, found.at), ...kept, ...this.#entries.slice(found.at)];
 		this.#expectedDiskSize = diskSize;
-		this.#durable = undefined;
-		if (adopted > 0)
-			logger.warn("Kept session entries another writer added", { sessionFile: this.#sessionFile, adopted });
+		this.#durable =
+			found.extendsFrontier && durable && kept.length === found.foreign.length
+				? {
+						entries: this.#entries,
+						confirmed: durable.confirmed + kept.length,
+						confirmedSize: diskSize,
+						issued: durable.confirmed + kept.length,
+						issuedSize: diskSize,
+					}
+				: undefined;
+		if (kept.length > 0)
+			logger.warn("Kept session entries another writer added", {
+				sessionFile: this.#sessionFile,
+				adopted: kept.length,
+			});
+	}
+
+	/**
+	 * Another writer appended to the session file past the durable frontier,
+	 * as a session's previous process does with its exit marker after this one
+	 * resumed it. Keep those entries and extend the frontier over them when the
+	 * file proves to be exactly the frontier followed by them; returns whether
+	 * it did. Otherwise the caller republishes, and its conflict recovery
+	 * keeps them.
+	 */
+	#adoptEntriesAppendedPastFrontier(sessionFile: string): boolean {
+		if (this.#storage.defersSyncPublish || !this.#storage.readTextSync) return false;
+		let content: string;
+		try {
+			content = this.#storage.readTextSync(sessionFile);
+		} catch {
+			return false;
+		}
+		const found = this.#foreignEntriesIn(content);
+		if (!found?.extendsFrontier || found.foreign.length === 0) return false;
+		resolveBlobRefsInEntriesSync(found.foreign, this.#blobs);
+		this.#adoptForeignEntries(found, Buffer.byteLength(content, "utf8"));
+		return this.#durable !== undefined;
 	}
 
 	/**
@@ -1312,10 +1377,10 @@ export class SessionManager {
 			this.#durable = undefined;
 			return contested;
 		}
-		const foreign = this.#foreignEntriesIn(content);
-		if (!foreign) return this.#moveOffSessionFile("replaced");
-		resolveBlobRefsInEntriesSync(foreign, this.#blobs);
-		this.#adoptForeignEntries(foreign, Buffer.byteLength(content, "utf8"));
+		const found = this.#foreignEntriesIn(content);
+		if (!found) return this.#moveOffSessionFile("replaced");
+		resolveBlobRefsInEntriesSync(found.foreign, this.#blobs);
+		this.#adoptForeignEntries(found, Buffer.byteLength(content, "utf8"));
 		return contested;
 	}
 
@@ -1337,11 +1402,12 @@ export class SessionManager {
 			return contested;
 		}
 		if (this.#diskEpoch !== epoch || this.#sessionFile !== contested) return this.#sessionFile;
-		const foreign = this.#foreignEntriesIn(content);
-		if (!foreign) return this.#moveOffSessionFile("replaced");
-		await resolveBlobRefsInEntries(foreign, this.#blobs);
+		const found = this.#foreignEntriesIn(content);
+		if (!found) return this.#moveOffSessionFile("replaced");
+		await resolveBlobRefsInEntries(found.foreign, this.#blobs);
 		if (this.#diskEpoch !== epoch || this.#sessionFile !== contested) return this.#sessionFile;
-		this.#adoptForeignEntries(foreign, Buffer.byteLength(content, "utf8"));
+		// An append during the await may have moved the frontier past what was read; the retry republishes.
+		this.#adoptForeignEntries({ ...found, extendsFrontier: false }, Buffer.byteLength(content, "utf8"));
 		return contested;
 	}
 
@@ -2016,7 +2082,7 @@ export class SessionManager {
 			return;
 		}
 		const sessionFile = this.#sessionFile;
-		const durable = this.#durable;
+		let durable = this.#durable;
 		let storedSize: number | null = null;
 		if (sessionFile && durable?.entries === this.#entries && !this.#sessionOwnedElsewhere()) {
 			try {
@@ -2024,6 +2090,18 @@ export class SessionManager {
 			} catch {
 				// Absent or unreadable: nothing on disk is known, so republish.
 			}
+		}
+		// Another writer appended past the frontier: keep its entries in file
+		// order and extend the frontier over them, so this manager's entries
+		// follow them instead of a republish writing them first.
+		if (
+			sessionFile &&
+			durable &&
+			storedSize !== null &&
+			storedSize > durable.issuedSize &&
+			this.#adoptEntriesAppendedPastFrontier(sessionFile)
+		) {
+			durable = this.#durable;
 		}
 		// Not written yet, a structural change, another live owner, or bytes
 		// this manager cannot account for (a publish not yet confirmed, another

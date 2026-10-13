@@ -220,6 +220,45 @@ describe("an entry that missed the journal while full rewrites fail", () => {
 	});
 });
 
+describe("a turn appended after another writer's entries", () => {
+	/** A second manager resumes the journal while the first is still live; the first then appends its tail and closes. */
+	async function resumedBehindAnotherWriter(storage = new ControlledRewriteStorage()) {
+		const first = await fileSession();
+		const resumed = await SessionManager.open(first.sessionFile, first.sessionDir, storage, {
+			suppressBreadcrumb: true,
+		});
+		managers.push(resumed);
+		first.manager.appendCustomEntry("previous-writer-tail", { n: 1 });
+		await first.manager.flush();
+		await first.manager.close();
+		return { ...first, storage, resumed };
+	}
+
+	it("is the leaf a resume restores, and the other writer's entry is kept", async () => {
+		const { resumed, sessionDir, sessionFile } = await resumedBehindAnotherWriter();
+		resumed.appendMessage(userTurn("latest turn"));
+		await resumed.flush();
+
+		const reopened = await reopen(sessionFile, sessionDir);
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "latest turn"]);
+		expect(reopened.getBranch().at(-1)).toMatchObject({ type: "message", message: { content: "latest turn" } });
+		expect(reopened.getEntries()).toContainEqual(
+			expect.objectContaining({ type: "custom", customType: "previous-writer-tail" }),
+		);
+	});
+
+	it("reaches the journal while every full rewrite fails", async () => {
+		const storage = new ControlledRewriteStorage();
+		storage.failRewrites = true;
+		const { resumed, sessionDir, sessionFile } = await resumedBehindAnotherWriter(storage);
+		resumed.appendMessage(userTurn("latest turn"));
+
+		await expect(resumed.flush()).resolves.toBeUndefined();
+		const reopened = await reopen(sessionFile, sessionDir);
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "latest turn"]);
+	});
+});
+
 describe("a durably discarded entry", () => {
 	/** A session whose branch ends in an assistant turn to discard and its service-tier child. */
 	async function sessionWithDiscardableTurn() {
