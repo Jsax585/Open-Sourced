@@ -53,13 +53,19 @@ pub(super) fn markdown(element: &AXUIElement) -> CoreResult<String> {
 }
 
 /// A secure text field's text is never read, masked or not, and neither is the
-/// text of an element whose subrole could not be read.
+/// text of an element whose subrole could not be read or is not a string.
 fn ensure_readable(subrole: Result<Option<CFRetained<CFType>>, AXError>) -> CoreResult<()> {
 	let subrole = match subrole {
-		Ok(subrole) => subrole
-			.and_then(|value| value.downcast::<CFString>().ok())
-			.map(|value| value.to_string()),
-		Err(error) if error == AXError::NoValue || error == AXError::AttributeUnsupported => None,
+		Ok(None) => return Ok(()),
+		Ok(Some(subrole)) => subrole.downcast::<CFString>().map_err(|_| {
+			DesktopError::ax_failed(
+				"the element's subrole is not a string, so its text is not read: it may be a secure \
+				 text field",
+			)
+		})?,
+		Err(error) if error == AXError::NoValue || error == AXError::AttributeUnsupported => {
+			return Ok(());
+		},
 		Err(error) => {
 			return Err(ax_error(
 				error,
@@ -68,7 +74,7 @@ fn ensure_readable(subrole: Result<Option<CFRetained<CFType>>, AXError>) -> Core
 			));
 		},
 	};
-	if subrole.as_deref() == Some("AXSecureTextField") {
+	if subrole.to_string() == "AXSecureTextField" {
 		return Err(DesktopError::ax_failed("a secure text field's text is never read"));
 	}
 	Ok(())
@@ -822,6 +828,9 @@ mod tests {
 		assert_eq!(code(Ok(None)), Ok(()));
 		assert_eq!(code(Err(AXError::NoValue)), Ok(()));
 		assert_eq!(code(Err(AXError::AttributeUnsupported)), Ok(()));
+		// A subrole that is not a string says nothing about the field.
+		let number: &CFType = &CFNumber::new_i64(1);
+		assert_eq!(code(Ok(Some(number.retain()))), Err(ErrorCode::AxFailed));
 	}
 
 	#[test]
