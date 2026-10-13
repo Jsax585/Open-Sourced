@@ -238,6 +238,32 @@ describe("an entry that missed the journal once storage recovers", () => {
 		await expect(manager.close()).resolves.toBeUndefined();
 		expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual(["before", "missing"]);
 	});
+
+	it("is appended by newSession() before it switches", async () => {
+		const { manager, sessionDir, sessionFile } = await fileSession();
+		failNextFileWrite();
+		manager.appendMessage(userTurn("missing"));
+
+		const next = await manager.newSession();
+		expect(next).not.toBe(sessionFile);
+		expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual(["before", "missing"]);
+	});
+
+	it("blocks newSession() once while storage still refuses it, and a retry switches", async () => {
+		const { manager, sessionFile } = await fileSession();
+		failNextFileWrite();
+		manager.appendMessage(userTurn("missing"));
+		spyOn(fs, "writeSync").mockImplementation(() => {
+			throw Object.assign(new Error("ENOSPC: synthetic append failure"), { code: "ENOSPC" });
+		});
+		try {
+			await expect(manager.newSession()).rejects.toThrow("ENOSPC");
+			expect(manager.getSessionFile()).toBe(sessionFile);
+		} finally {
+			mock.restore();
+		}
+		expect(await manager.newSession()).not.toBe(sessionFile);
+	});
 });
 
 describe("a turn appended after another writer's entries", () => {

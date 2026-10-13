@@ -1019,6 +1019,12 @@ export class SessionManager {
 	#durable: DurableFrontier | undefined;
 	/** Outstanding confirmations of appends a deferring backend accepted. */
 	readonly #pendingAppendConfirmations = new Set<Promise<void>>();
+	/**
+	 * The unsaved entries a {@link newSession} refused to abandon, as the
+	 * entry array and its length then; a second call for the same entries
+	 * switches anyway.
+	 */
+	#refusedSessionSwitch: { entries: readonly SessionEntry[]; count: number } | undefined;
 	/** Malformed records the loader skipped for the current session file; reported by `/dump anon`. */
 	#loadedMalformedRecords = 0;
 	/** Byte length this manager last loaded or durably wrote; `null` means the path was absent. */
@@ -2667,9 +2673,28 @@ export class SessionManager {
 	 *
 	 * The durable empty boundary prevents a later process on another terminal
 	 * from selecting the previous conversation as the most recent session.
+	 *
+	 * Entries the previous session's file is missing are appended first. When
+	 * that fails, this rejects with the failure and switches nothing; calling
+	 * again for the same unsaved entries switches anyway, abandoning them.
 	 */
 	async newSession(options?: NewSessionOptions): Promise<string | undefined> {
-		await this.#drainAndCloseWriter();
+		const refused = this.#refusedSessionSwitch;
+		const abandoning = refused?.entries === this.#entries && refused.count === this.#entries.length;
+		const unsaved = !abandoning && this.#persist && this.#sessionFile !== undefined && this.#hasUnsavedEntries();
+		if (unsaved) await this.#healMissingEntriesAndSettle();
+		let failure: unknown;
+		try {
+			await this.#drainAndCloseWriter();
+		} catch (error) {
+			failure = error;
+		}
+		if (unsaved && this.#hasUnsavedEntries()) {
+			this.#refusedSessionSwitch = { entries: this.#entries, count: this.#entries.length };
+			throw failure ?? this.#diskFailure ?? new Error("Session entries could not be saved before switching.");
+		}
+		if (failure !== undefined && !abandoning) throw failure;
+		this.#refusedSessionSwitch = undefined;
 		const sessionFile = this.#resetToNewSession(options);
 		await this.ensureOnDisk();
 		return sessionFile;
