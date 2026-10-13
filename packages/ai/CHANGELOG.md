@@ -4,7 +4,7 @@
 
 ### Added
 
-- Gateway clients can use Gemini model-action JSON/SSE paths and Codex/xAI aliases, preserving image/function parts, named tool controls, Google output schemas and signed tool-call replay; unsupported parts fail before inference ([#10152](https://github.com/can1357/oh-my-pi/pull/10152) by [@jroth1111](https://github.com/jroth1111)).
+- Gateway clients can use Gemini model-action JSON/SSE paths and Codex/xAI aliases, preserving image/function parts, named tool controls, Google output schemas on Gemini and pi-native paths, and signed tool-call replay; unsupported parts fail before inference ([#10152](https://github.com/can1357/oh-my-pi/pull/10152) by [@jroth1111](https://github.com/jroth1111)).
 - `POST /v1/messages/count_tokens` provides an explicitly approximate character-based estimate including system and tool input, without consuming provider inference ([#10152](https://github.com/can1357/oh-my-pi/pull/10152) by [@jroth1111](https://github.com/jroth1111)).
 - Virtual route graphs support nested round-robin or weighted balances, request-matched vision branches, ordered domains and validated references, with atomic batch replacement ([#10151](https://github.com/can1357/oh-my-pi/pull/10151) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway hosts can await request and attempt lifecycle hooks across translated and native inference, with once-only completion and no replay when completion observers fail ([#10150](https://github.com/can1357/oh-my-pi/pull/10150) by [@jroth1111](https://github.com/jroth1111)).
