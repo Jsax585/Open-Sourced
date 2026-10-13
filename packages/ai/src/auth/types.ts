@@ -480,6 +480,8 @@ export interface ModelUsageHealthOptions {
 
 /** Options controlling model, base URL, cancellation, and forced OAuth refresh in KeysApi.get. */
 export type AuthApiKeyOptions = {
+	/** Exact stored row owning a continuation; never widens session/account restrictions. */
+	credentialId?: number;
 	baseUrl?: string;
 	modelId?: string;
 	/** Identity of the inference attempt owning a recovery probe; callers settle or release it. */
@@ -1153,6 +1155,7 @@ export interface StoredResponseOwner {
 	api: Api;
 	endpoint: string;
 	account: string;
+	credentialId?: number;
 }
 
 /** Private response-to-account bindings, persisted alongside session affinity. */
@@ -1163,6 +1166,8 @@ export interface ResponseOwnersApi {
 
 /** Session credential affinity operations. */
 export interface SessionsApi {
+	/** Deliberate user pin only; automatic warm affinity is not a continuation ownership constraint. */
+	explicitCredentialId(provider: string, sessionId: string): number | undefined;
 	/**
 	 * Pin one stored OAuth account as this session's preferred credential.
 	 *

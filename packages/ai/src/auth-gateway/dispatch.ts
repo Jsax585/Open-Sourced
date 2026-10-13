@@ -105,10 +105,14 @@ export async function resolveGatewayApiKey(
 	sessionId: string,
 	signal: AbortSignal,
 	peer: string,
+	selection?: Pick<AuthApiKeyOptions, "credentialId">,
 ): Promise<ResolvedApiKey | GatewayCredentialFailure> {
 	let apiKey: ResolvedApiKey | undefined;
 	try {
-		apiKey = await storage.keys.getWithCredential(model.provider, sessionId, modelKeyOptions(model, signal));
+		apiKey = await storage.keys.getWithCredential(model.provider, sessionId, {
+			...modelKeyOptions(model, signal),
+			...selection,
+		});
 	} catch (error) {
 		const classified = classifyGatewayError(error);
 		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: classified.message });
