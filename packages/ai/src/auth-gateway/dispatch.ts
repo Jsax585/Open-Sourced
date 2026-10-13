@@ -69,8 +69,12 @@ export function resolveGatewayAccount(
 	storage: AuthStorage,
 	provider: string,
 	_sessionId: string,
-	apiKey: string,
+	apiKey: ResolvedApiKey | string,
 ): string {
+	if (typeof apiKey !== "string")
+		return apiKey.credentialIdentity
+			? `oauth:${apiKey.credentialIdentity}`
+			: `key:${Bun.hash(apiKey.apiKey).toString(36)}`;
 	const identity = storage.getCredentialIdentityMatchingApiKey(provider, apiKey);
 	if (identity) {
 		return `oauth:${identity}`;
@@ -210,7 +214,7 @@ export function buildGatewayApiKeyResolver(
 	requestSignal: AbortSignal,
 	format: string,
 	peer: string,
-	onResolvedKey?: (apiKey: string) => void,
+	onResolvedKey?: (apiKey: ResolvedApiKey) => void,
 ): ApiKeyResolver {
 	let lastKey = initialKey.apiKey;
 	return async ({ lastChance, error, signal, previousKey }) => {
@@ -226,7 +230,7 @@ export function buildGatewayApiKeyResolver(
 				refreshReason: AIError.status(error) === 401 ? "auth-recovery" : undefined,
 			});
 			lastKey = refreshed?.apiKey ?? lastKey;
-			if (refreshed) onResolvedKey?.(refreshed.apiKey);
+			if (refreshed) onResolvedKey?.(refreshed);
 			return refreshed;
 		}
 		const next = await refreshGatewayApiKeyAfterAuthError(
@@ -241,8 +245,36 @@ export function buildGatewayApiKeyResolver(
 			peer,
 		);
 		lastKey = next?.apiKey ?? lastKey;
-		if (next) onResolvedKey?.(next.apiKey);
+		if (next) onResolvedKey?.(next);
 		return next;
+	};
+}
+
+/** Recover a continuation's owning row, never switching its account or replaying its response ID on a sibling. */
+export function buildGatewayContinuationApiKeyResolver(
+	storage: AuthStorage,
+	model: Model<Api>,
+	initialKey: ResolvedApiKey,
+	requestSignal: AbortSignal,
+	onResolvedKey?: (apiKey: ResolvedApiKey) => void,
+): ApiKeyResolver {
+	let current = initialKey;
+	return async ({ lastChance, error, signal }) => {
+		if (error === undefined) return current;
+		if (lastChance || initialKey.credentialId === undefined || initialKey.credentialIdentity === undefined)
+			return undefined;
+		const sig = signal ?? requestSignal;
+		const access = await storage.oauth.accessById(model.provider, initialKey.credentialId, {
+			...modelKeyOptions(model, sig),
+			forceRefresh: true,
+			recordAffinity: false,
+			refreshReason: AIError.status(error) === 401 ? "auth-recovery" : undefined,
+		});
+		if (!access?.ok || !access.resolvedKey || access.resolvedKey.credentialIdentity !== initialKey.credentialIdentity)
+			return undefined;
+		current = access.resolvedKey;
+		onResolvedKey?.(current);
+		return current;
 	};
 }
 

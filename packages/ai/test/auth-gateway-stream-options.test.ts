@@ -104,7 +104,10 @@ for (const mode of ["chat", "chat-no-sampling", "responses"] as const) {
 					logit_bias: { "42": -1 },
 					user: "account-1",
 					parallel_tool_calls: false,
-					response_format: { type: "json_schema", json_schema: { name: "answer", schema, strict: true } },
+					response_format: {
+						type: "json_schema",
+						json_schema: { name: "answer", description: "answer shape", schema, strict: true },
+					},
 				}),
 			});
 			expect(response.status).toBe(200);
@@ -115,7 +118,9 @@ for (const mode of ["chat", "chat-no-sampling", "responses"] as const) {
 			expect(payload.user).toBe("account-1");
 			if (mode === "responses") {
 				expect(payload.text).toEqual(
-					expect.objectContaining({ format: { type: "json_schema", name: "answer", schema, strict: true } }),
+					expect.objectContaining({
+						format: { type: "json_schema", name: "answer", description: "answer shape", schema, strict: true },
+					}),
 				);
 				expect(payload).not.toHaveProperty("seed");
 				expect(payload).not.toHaveProperty("logit_bias");
@@ -123,7 +128,7 @@ for (const mode of ["chat", "chat-no-sampling", "responses"] as const) {
 			} else {
 				expect(payload.response_format).toEqual({
 					type: "json_schema",
-					json_schema: { name: "answer", schema, strict: true },
+					json_schema: { name: "answer", description: "answer shape", schema, strict: true },
 				});
 				if (mode === "chat") {
 					expect(payload.seed).toBe(7);
