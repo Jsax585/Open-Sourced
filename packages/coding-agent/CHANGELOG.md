@@ -4,11 +4,11 @@
 
 ### Added
 
-- Added opt-in provider-neutral Code Mode (`tools.codeMode`, `tools.codeModeDirectTools`) for batched eval tool calls, on-demand schemas, and cache-stable tool discovery.
+- Added opt-in provider-neutral Code Mode (`tools.codeMode`, `tools.codeModeDirectTools`) for batched eval tool calls, on-demand schemas, and cache-stable tool discovery ([#15634](https://github.com/can1357/oh-my-pi/pull/15634) by [@brndnmtthws](https://github.com/brndnmtthws)).
 
 ### Changed
 
-- `provider.appendOnlyContext: auto` now enables prefix reuse while provider-neutral Code Mode is active; explicit `off` still takes precedence.
+- `provider.appendOnlyContext: auto` now enables prefix reuse while provider-neutral Code Mode is active; explicit `off` still takes precedence ([#15634](https://github.com/can1357/oh-my-pi/pull/15634) by [@brndnmtthws](https://github.com/brndnmtthws)).
 
 ## [18.10.4] - 2026-10-13
 
