@@ -185,7 +185,7 @@ export class CredentialCoordination {
 		};
 	}
 
-	/** Validate cooldown/probe ownership again after preparation, then reserve the exact serving incarnation. */
+	/** Revalidate prepared material; only recovery probes acquire an implicit exclusive turn hold. */
 	tryReservePreparedCredential(args: {
 		provider: string;
 		credentialId: number;
@@ -217,7 +217,15 @@ export class CredentialCoordination {
 			)
 				return { ok: false };
 		}
-		if (!args.options?.requestId || args.options.recordAffinity === false) return { ok: true };
+		// A request identity is not a concurrency limit. Healthy account/key traffic remains shareable;
+		// explicit reservation calls still impose their own policy, and quota probes stay single-flight.
+		if (
+			!args.options?.requestId ||
+			args.options.recordAffinity === false ||
+			args.probeRequestId !== args.options.requestId ||
+			!this.hasInflightProbe(args.options.requestId)
+		)
+			return { ok: true };
 		const result = this.tryAcquireTurnReservation({
 			credentialId: args.credentialId,
 			incarnation: args.incarnation,
