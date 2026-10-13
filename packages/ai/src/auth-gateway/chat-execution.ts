@@ -188,7 +188,7 @@ async function executeGatewayChat(
 ): Promise<Response> {
 	const { boot, registry, compiled, requestId, controller, sessionId, previousId, previousOwner } = opts;
 	return withGatewayCredentialTurn(boot.storage, requestId, controller, async turn => {
-		const firstTarget = previousOwner?.target ?? compiled.targets[0];
+		const firstTarget = previousOwner?.target ?? registry.pickInitialTarget(compiled);
 		if (firstTarget === undefined || !compiled.targets.includes(firstTarget))
 			return opts.formatError(
 				400,

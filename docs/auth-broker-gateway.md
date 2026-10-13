@@ -184,6 +184,13 @@ omp auth-gateway check   [--strict] [--json]
 
 Replace those placeholder targets with concrete IDs from the gateway's `/v1/models` catalog. Clients request the virtual ID (`work` in this example). Only configured failure conditions select another target, and committed or billed inference and caller-owned Responses continuations are not transparently replayed across targets.
 
+Behavioral route nodes work at every tree position, not just at the root:
+
+- `balance` uses `strategy: "rr"` for a registry-owned round-robin cursor or `"weighted"` for fair shares from positive finite target `weight` values (default 1). Composite children start at their entry targets, never at fallback-only leaves. Balances exhaust eligible alternatives on retryable failures before an enclosing fallback/domain proceeds.
+- `conditional` uses `when: { vision: true }` (or false), with one matching child and an optional alternative. Parsed request images—including provider-native Responses history—select the branch before credential lookup. Empty or overfull branches are rejected at registration.
+- `domain` groups ordered children under a `name` and advances on retryable failures. Explicit fallback conditions remain scoped to their own branches.
+- `route-ref` expands `route: "another-id"` into a snapshot at registration. Self/structural/reference cycles and missing references are rejected. Boot batches and library `replaceAll` resolve against the complete incoming definition set, independently of order; invalid batches leave the registry intact. A later referenced-route edit does not retroactively mutate a previously expanded route—replace the complete graph to update dependent definitions.
+
 ### Route management
 
 `PUT /v1/routes/:id` registers or atomically replaces a virtual route from JSON/JSON5. It accepts a definition with a matching `id`, or a `root` object whose ID is supplied by the decoded path. Invalid syntax, mismatched IDs and invalid/cyclic definitions return 400 without changing registry generations or existing routes. Changes are in-memory; route files are not rewritten.

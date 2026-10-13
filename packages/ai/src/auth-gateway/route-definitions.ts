@@ -40,7 +40,16 @@ function parseNode(input: unknown, ancestors = new Set<object>(), depth = 0): Ro
 			if (typeof input.model !== "string" || input.model.trim().length === 0) {
 				throw new AIError.ValidationError("Target node missing model");
 			}
-			return { type: "target", model: input.model };
+			if (
+				input.weight !== undefined &&
+				(typeof input.weight !== "number" || !Number.isFinite(input.weight) || input.weight <= 0)
+			)
+				throw new AIError.ValidationError("Target weight must be positive and finite");
+			return {
+				type: "target",
+				model: input.model,
+				...(input.weight !== undefined ? { weight: input.weight as number } : {}),
+			};
 		}
 		if (type === "fallback") {
 			if (!Array.isArray(input.on)) {
@@ -52,6 +61,35 @@ function parseNode(input: unknown, ancestors = new Set<object>(), depth = 0): Ro
 			const on = input.on.map(parseDisposition);
 			const children = input.children.map(child => parseNode(child, ancestors, depth + 1));
 			return { type: "fallback", on, children };
+		}
+		if (type === "route-ref") {
+			if (typeof input.route !== "string" || !input.route.trim())
+				throw new AIError.ValidationError("Route-ref node missing route");
+			return { type, route: input.route };
+		}
+		if (type === "balance" || type === "conditional" || type === "domain") {
+			if (!Array.isArray(input.children) || !input.children.length)
+				throw new AIError.ValidationError("Route node has empty children");
+			const children = input.children.map(child => parseNode(child, ancestors, depth + 1));
+			if (type === "balance") {
+				if (input.strategy !== "rr" && input.strategy !== "weighted")
+					throw new AIError.ValidationError("Unknown balance strategy");
+				return { type, strategy: input.strategy, children };
+			}
+			if (type === "domain") {
+				if (typeof input.name !== "string" || !input.name.trim())
+					throw new AIError.ValidationError("Domain node missing name");
+				return { type, name: input.name, children };
+			}
+			if (children.length > 2)
+				throw new AIError.ValidationError("Conditional routes accept a matching branch and optional alternative");
+			if (!isRecord(input.when) || (input.when.vision !== undefined && typeof input.when.vision !== "boolean"))
+				throw new AIError.ValidationError("Conditional node requires a boolean when.vision predicate");
+			return {
+				type,
+				when: input.when.vision === undefined ? {} : { vision: input.when.vision as boolean },
+				children,
+			};
 		}
 		throw new AIError.ValidationError(`Unknown route node type: ${String(type)}`);
 	} finally {

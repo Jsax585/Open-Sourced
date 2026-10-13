@@ -68,6 +68,7 @@ import {
 	responseEndpointIdentity,
 } from "./response-ownership";
 import { RouteRegistry } from "./route-graph";
+import { routeRequestFacts } from "./request-facts";
 import { parseRouteDefinition } from "./route-definitions";
 import { handleEmbeddings } from "./routes/embeddings";
 import { handleImageEdits, handleImageGenerations } from "./routes/images";
@@ -364,10 +365,6 @@ async function handleFormatEndpoint(
 		return route.module.formatError(400, "invalid_request_error", "Missing top-level `model` field");
 	}
 	const registry = bootOpts.routeRegistry ?? new RouteRegistry(bootOpts.resolveModel);
-	const compiled = registry.resolve(modelId);
-	if (!compiled) {
-		return route.module.formatError(404, "invalid_request_error", `Unknown model: ${modelId}`);
-	}
 	const client = resolveClientIdentity(req.headers);
 
 	// Parse the wire-format request BEFORE resolving the credential so we
@@ -384,6 +381,8 @@ async function handleFormatEndpoint(
 		const message = error instanceof Error ? error.message : String(error);
 		return route.module.formatError(400, "invalid_request_error", message);
 	}
+	const compiled = registry.resolve(modelId, routeRequestFacts(parsed.context));
+	if (!compiled) return route.module.formatError(404, "invalid_request_error", `Unknown model: ${modelId}`);
 	// Merge gateway-captured passthrough headers under the parser's own
 	// captures. Parsers that set `options.headers` themselves win (they may
 	// have stripped or normalized values); the gateway's allow-list fills in
@@ -490,7 +489,7 @@ async function handlePiNative(
 	}
 
 	const registry = bootOpts.routeRegistry ?? new RouteRegistry(bootOpts.resolveModel);
-	const compiled = registry.resolve(parsed.modelId);
+	const compiled = registry.resolve(parsed.modelId, routeRequestFacts(parsed.context));
 	if (!compiled) {
 		return piNative.formatError(404, "invalid_request_error", `Unknown model: ${parsed.modelId}`);
 	}
@@ -725,7 +724,7 @@ export interface AuthGatewayRouter {
  */
 export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGatewayRouter {
 	const routeRegistry = opts.routeRegistry ?? new RouteRegistry(opts.resolveModel);
-	for (const definition of opts.routes ?? []) routeRegistry.register(definition);
+	routeRegistry.registerMany(opts.routes ?? []);
 	const adminTokens = new Set(opts.adminBearerTokens?.filter(token => token.trim().length > 0));
 	const boot: AuthGatewayRouteOptions = {
 		...opts,
