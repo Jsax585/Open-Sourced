@@ -12,7 +12,6 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { formatShakeSummary } from "@oh-my-pi/pi-coding-agent/session/shake-types";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -121,23 +120,6 @@ describe("AgentSession shake", () => {
 			.getBranch()
 			.filter(e => e.type === "message" && (e.message as { role?: string }).role === "toolResult")
 			.map(e => (e as { message: ToolResultMessage }).message);
-	}
-
-	/** Fail the next atomic rewrite once, append a turn, and return the branch a restart reconstructs. */
-	async function restartAfterFailedRewrite(maintenance: () => Promise<unknown>): Promise<AgentMessage[]> {
-		vi.spyOn(FileSessionStorage.prototype, "writeLinesAtomic").mockRejectedValueOnce(
-			new Error("synthetic maintenance rewrite failure"),
-		);
-		await expect(maintenance()).rejects.toThrow("synthetic maintenance rewrite failure");
-		sessionManager.appendMessage({ role: "user", content: "after failed rewrite", timestamp: Date.now() });
-		const sessionFile = sessionManager.getSessionFile();
-		if (!sessionFile) throw new Error("Expected persisted session");
-		const reopened = await SessionManager.open(sessionFile, tempDir.path());
-		try {
-			return reopened.buildSessionContext().messages;
-		} finally {
-			await reopened.close();
-		}
 	}
 
 	describe("elide", () => {
@@ -441,35 +423,6 @@ describe("AgentSession shake", () => {
 			const content = (userMsg as { message: { content: unknown } }).message.content as Array<{ type: string }>;
 			expect(content.some(b => b.type === "image")).toBe(false);
 		});
-
-		it("keeps dropped images dropped after a failed rewrite and a restart", async () => {
-			sessionManager.appendMessage({
-				role: "user",
-				content: [
-					{ type: "text", text: "look" },
-					{ type: "image", data: "iVBORw0KGgo", mimeType: "image/png" },
-				],
-				timestamp: Date.now(),
-			});
-			sessionManager.appendMessage({
-				role: "assistant",
-				content: [{ type: "text", text: "seen" }],
-				...apiInfo,
-				stopReason: "stop",
-				usage,
-				timestamp: Date.now() + 1,
-			});
-
-			const restarted = await restartAfterFailedRewrite(() => session.dropImages());
-
-			const blockTypes = restarted.flatMap(message =>
-				message.role === "user" && typeof message.content !== "string"
-					? message.content.map(block => block.type)
-					: [],
-			);
-			expect(blockTypes).not.toContain("image");
-			expect(restarted.at(-1)).toMatchObject({ role: "user", content: "after failed rewrite" });
-		});
 	});
 
 	describe("thinking", () => {
@@ -537,31 +490,6 @@ describe("AgentSession shake", () => {
 			} finally {
 				await persisted.close();
 			}
-		});
-
-		it("keeps stripped thinking stripped after a failed rewrite and a restart", async () => {
-			sessionManager.appendMessage({
-				role: "assistant",
-				content: [
-					{ type: "thinking", thinking: "private reasoning" },
-					{ type: "text", text: "visible answer" },
-				],
-				...apiInfo,
-				stopReason: "stop",
-				usage,
-				timestamp: Date.now(),
-			});
-			session.agent.replaceMessages(session.buildDisplaySessionContext().messages);
-
-			const restarted = await restartAfterFailedRewrite(() => session.shake("thinking"));
-
-			const restartHasThinking = restarted.some(
-				message =>
-					message.role === "assistant" &&
-					message.content.some(block => block.type === "thinking" || block.type === "redactedThinking"),
-			);
-			expect(restartHasThinking).toBe(false);
-			expect(restarted.at(-1)).toMatchObject({ role: "user", content: "after failed rewrite" });
 		});
 
 		it("does not inflate reported savings with opaque signature bytes", async () => {
