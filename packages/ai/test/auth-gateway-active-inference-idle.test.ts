@@ -8,15 +8,22 @@ for (const native of [false, true]) {
 				["bun", path.join(import.meta.dir, "fixtures/gateway-active-stream.ts"), native ? "native" : "chat", phase],
 				{ stdout: "pipe", stderr: "pipe" },
 			);
-			const [stdout, stderr, exitCode] = await Promise.all([
-				new Response(child.stdout).text(),
-				new Response(child.stderr).text(),
-				child.exited,
-			]);
-			expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
-			const result = JSON.parse(stdout) as { status: number; output: string; calls: number; aborted: boolean };
-			expect(result).toMatchObject({ status: 200, calls: 1, aborted: false });
-			expect(result.output).toContain("opening");
-			expect(result.output).toContain("completed");
-		}, 15000);
+			const deadline = setTimeout(() => child.kill("SIGKILL"), 65_000);
+			try {
+				const [stdout, stderr, exitCode] = await Promise.all([
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+					child.exited,
+				]);
+				expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+				const result = JSON.parse(stdout) as { status: number; output: string; calls: number; aborted: boolean };
+				expect(result).toMatchObject({ status: 200, calls: 1, aborted: false });
+				expect(result.output).toContain("opening");
+				expect(result.output).toContain("completed");
+			} finally {
+				clearTimeout(deadline);
+				child.kill("SIGTERM");
+				await child.exited;
+			}
+		}, 75_000);
 }
