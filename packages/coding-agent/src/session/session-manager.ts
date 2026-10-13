@@ -3393,6 +3393,11 @@ export class SessionManager {
 		};
 	}
 
+	/** Whether a persistence failure remains latched for the current session file. */
+	hasPersistenceFailure(): boolean {
+		return this.#diskFailure !== undefined;
+	}
+
 	/**
 	 * Subscribe to persistence failures so hosts can surface lost-durability state.
 	 *
