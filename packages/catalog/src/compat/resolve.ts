@@ -41,6 +41,7 @@ import {
 } from "./anthropic";
 import { applyCompatOverrides } from "./apply";
 import { API_COMPAT_RECORDS, AXES, type CompatRecordName } from "./axes";
+import { resolveBackendProvider } from "./behavior";
 import { hasModelScopedEffortsRule, resolveCascade } from "./cascade";
 import { compareRevision, parseRevision, type Revision } from "./revision";
 import { classifyModel, stripThinkingVariantSuffix } from "./taxonomy";
@@ -338,7 +339,7 @@ function detectOpenAI(
 	reasoningCapable: boolean,
 ): OpenAIDetection {
 	const provider = spec.provider;
-	const backendProvider = spec.providerType ?? provider;
+	const backendProvider = resolveBackendProvider(spec);
 	const baseUrl = spec.baseUrl;
 	const hostModel = { provider, baseUrl };
 	const isZai = modelMatchesHost(hostModel, "zai");
@@ -668,12 +669,48 @@ function fixupOpenAICompat(
 	if (whenThinkingPolicy) {
 		const variant: ResolvedOpenAICompat = { ...compat, whenThinking: undefined };
 		applyCompatOverrides(variant, whenThinkingPolicy);
+		if (compat.extraBody && variant.extraBody && variant.extraBody !== compat.extraBody) {
+			const baselineKwargs = objectPayload(compat.extraBody.chat_template_kwargs);
+			const enabledKwargs = objectPayload(variant.extraBody.chat_template_kwargs);
+			variant.extraBody = { ...compat.extraBody, ...variant.extraBody };
+			if (baselineKwargs && enabledKwargs) {
+				variant.extraBody.chat_template_kwargs = { ...baselineKwargs, ...enabledKwargs };
+			}
+		}
+		// Explicit capabilities also outrank rule-owned enabled-view defaults.
+		if (
+			spec.compat?.supportsReasoningEffort !== undefined &&
+			spec.compat.whenThinking?.supportsReasoningEffort === undefined
+		) {
+			variant.supportsReasoningEffort = spec.compat.supportsReasoningEffort;
+		}
+		if (
+			spec.compat?.omitReasoningEffort !== undefined &&
+			spec.compat.whenThinking?.omitReasoningEffort === undefined
+		) {
+			variant.omitReasoningEffort = spec.compat.omitReasoningEffort;
+		}
+		// An authored empty dial cannot gain wire tiers from the enabled view;
+		// explicit discovery/configuration ladders remain authoritative.
+		if (
+			spec.compat?.whenThinking === undefined &&
+			spec.compat?.supportsReasoningEffort === undefined &&
+			!spec.thinking?.efforts?.length &&
+			Array.isArray(axes.thinking.efforts) &&
+			axes.thinking.efforts.length === 0
+		) {
+			variant.supportsReasoningEffort = false;
+		}
 		if (Reflect.get(whenThinkingPolicy, "reasoningDisableMode") === undefined) {
 			variant.reasoningDisableMode = d.isVenice
 				? "venice-disable-thinking"
 				: resolveReasoningDisableMode(variant.thinkingFormat);
 		}
-		if (Reflect.get(whenThinkingPolicy, "omitReasoningEffort") === undefined && !variant.supportsReasoningEffort) {
+		if (
+			spec.compat?.omitReasoningEffort === undefined &&
+			Reflect.get(whenThinkingPolicy, "omitReasoningEffort") === undefined &&
+			!variant.supportsReasoningEffort
+		) {
 			variant.omitReasoningEffort = true;
 		}
 		compat.whenThinking = variant;
@@ -706,7 +743,7 @@ function resolveOpenAIResponsesPolicy(
 ): ResolvedOpenAIResponsesCompat {
 	const baseUrl = spec.baseUrl ?? "";
 	const provider = spec.provider;
-	const backendProvider = spec.providerType ?? provider;
+	const backendProvider = resolveBackendProvider(spec);
 	const hostModel = { provider, baseUrl };
 	const isAzure = modelMatchesHost(hostModel, "azureOpenAI");
 	const isOpenRouter = modelMatchesHost(hostModel, "openrouter");
@@ -1299,10 +1336,10 @@ function fillExplicitThinking<TApi extends Api>(
 function buildResolveTarget<TApi extends Api>(
 	spec: ModelSpec<TApi>,
 	identity: ModelIdentity,
-	providerType = spec.providerType ?? spec.provider,
+	providerType?: string,
 ): ResolveTarget {
 	const target: ResolveTarget = {
-		provider: providerType,
+		provider: resolveBackendProvider(spec, providerType),
 		api: spec.api,
 		class: identity.class,
 		model: spec.id,

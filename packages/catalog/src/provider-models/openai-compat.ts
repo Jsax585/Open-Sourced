@@ -2704,6 +2704,175 @@ export function fireworksModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// 7.55 FriendliAI
+// ---------------------------------------------------------------------------
+
+/**
+ * Live reasoning controls are deployment-specific: a binary picker tier must
+ * not be mistaken for permission to send top-level `reasoning_effort`.
+ */
+function mapFriendliThinking(
+	reasoning: boolean,
+	reasoningOptions: unknown,
+	reference: ModelSpec<"openai-completions"> | undefined,
+): ThinkingConfig | undefined {
+	if (!reasoning) return undefined;
+	if (Array.isArray(reasoningOptions)) {
+		const hasToggle = reasoningOptions.some(opt => isRecord(opt) && opt.type === "toggle");
+		const effortOption = reasoningOptions.find(
+			(opt): opt is { type: "effort"; values: unknown } => isRecord(opt) && opt.type === "effort",
+		);
+		if (effortOption && Array.isArray(effortOption.values)) {
+			const values = effortOption.values;
+			const efforts = THINKING_EFFORTS.filter(effort => values.includes(effort));
+			if (efforts.length > 0) return { mode: "effort", efforts, requiresEffort: !hasToggle };
+		}
+		return hasToggle ? { mode: "effort", efforts: [Effort.High], requiresEffort: false } : undefined;
+	}
+	return reference?.thinking;
+}
+
+function friendliRate(value: unknown, fallback: number): number {
+	const parsed = toNumber(value);
+	return parsed !== undefined && parsed >= 0 ? parsed * 1_000_000 : fallback;
+}
+
+export interface FriendliModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+const FRIENDLI_DEFAULT_BASE_URL = "https://api.friendli.ai/serverless/v1";
+
+export function friendliModelManagerOptions(
+	config?: FriendliModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? FRIENDLI_DEFAULT_BASE_URL;
+	const references = createBundledReferenceMap<"openai-completions">("friendli");
+	return {
+		providerId: "friendli",
+		dynamicModelsAuthoritative: true,
+		dynamicReasoningAuthoritative: true,
+		dynamicInputAuthoritative: true,
+		dynamicCostAuthoritative: true,
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "friendli",
+					baseUrl,
+					apiKey,
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						const raw = entry as Record<string, unknown> & {
+							context_length?: unknown;
+							max_completion_tokens?: unknown;
+							pricing?: Record<string, unknown>;
+							functionality?: Record<string, unknown>;
+							reasoning?: unknown;
+							reasoning_options?: unknown;
+							input_modalities?: unknown;
+							interleaved?: unknown;
+						};
+
+						const contextWindow = toPositiveNumber(
+							raw.context_length,
+							reference?.contextWindow ?? defaults.contextWindow,
+						);
+						const maxTokens = toPositiveNumber(
+							raw.max_completion_tokens,
+							reference?.maxTokens ?? defaults.maxTokens,
+						);
+
+						const pricing = isRecord(raw.pricing) ? raw.pricing : {};
+						const refCost = reference?.cost;
+						const cost = {
+							input: friendliRate(pricing.input, refCost?.input ?? 0),
+							output: friendliRate(pricing.output, refCost?.output ?? 0),
+							cacheRead: friendliRate(pricing.input_cache_read, refCost?.cacheRead ?? 0),
+							cacheWrite: friendliRate(pricing.cache_write, refCost?.cacheWrite ?? 0),
+						};
+
+						const functionality = isRecord(raw.functionality) ? raw.functionality : {};
+						const toolCallFlag = toBoolean(functionality.tool_call);
+						const supportsTools = toolCallFlag ?? reference?.supportsTools;
+						const hasModalities = Array.isArray(raw.input_modalities);
+						const modalities = hasModalities ? (raw.input_modalities as unknown[]) : [];
+						// Explicit modalities supersede the bundled fallback.
+						const vision =
+							modalities.includes("image") || (!hasModalities && (reference?.input.includes("image") ?? false));
+
+						const reasoning = toBoolean(raw.reasoning) ?? reference?.reasoning ?? false;
+						const interleaved = raw.interleaved === "reasoning_content";
+						const thinking = mapFriendliThinking(reasoning, raw.reasoning_options, reference);
+						const effortSurface =
+							reasoning &&
+							(Array.isArray(raw.reasoning_options)
+								? raw.reasoning_options.some(
+										opt =>
+											isRecord(opt) &&
+											opt.type === "effort" &&
+											Array.isArray(opt.values) &&
+											opt.values.some(value => THINKING_EFFORTS.includes(value)),
+									)
+								: reference !== undefined && resolveModelPolicy(reference).compat.supportsReasoningEffort);
+
+						const baseModel = mapWithBundledReference(entry, defaults, reference);
+
+						return {
+							...baseModel,
+							reasoning,
+							thinking,
+							input: vision ? ["text", "image"] : ["text"],
+							cost,
+							contextWindow,
+							maxTokens,
+							...(supportsTools !== undefined ? { supportsTools } : {}),
+							compat: {
+								...baseModel.compat,
+								trustExplicitThinkingOnly: true,
+								supportsReasoningEffort: effortSurface,
+								omitReasoningEffort: !effortSurface,
+								...(thinking?.requiresEffort === false
+									? {
+											thinkingFormat: "qwen-chat-template",
+											reasoningDisableMode: "qwen-template-false",
+											whenThinking: {
+												thinkingFormat: "openai",
+												requiresReasoningContentForToolCalls: true,
+												allowsSyntheticReasoningContentForToolCalls: false,
+												extraBody: {
+													chat_template_kwargs: { enable_thinking: true },
+													parse_reasoning: true,
+													include_reasoning: true,
+												},
+											},
+										}
+									: thinking?.requiresEffort
+										? {
+												thinkingFormat: "openai",
+												reasoningDisableMode: "lowest-effort",
+												whenThinking: {
+													thinkingFormat: "openai",
+													requiresReasoningContentForToolCalls: true,
+													allowsSyntheticReasoningContentForToolCalls: false,
+													extraBody: { parse_reasoning: true, include_reasoning: true },
+												},
+											}
+										: {}),
+								...(interleaved ? { reasoningContentField: "reasoning_content" } : {}),
+							},
+						};
+					},
+					fetch: config?.fetch,
+				}),
+		}),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 7.6 Fire Pass (Fireworks subscription)
 // ---------------------------------------------------------------------------
 

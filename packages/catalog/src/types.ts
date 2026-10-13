@@ -585,6 +585,8 @@ export interface OpenAICompat {
 	 * suppressed by a forced tool choice). `buildModel` materializes the full
 	 * alternate view as `compat.whenThinking`; handlers pointer-swap, never
 	 * spread. Default: auto-detected (OpenCode gateways, #1071/#1484).
+	 * Enabled `extraBody` overlays the baseline body and merges template kwargs.
+	 * Authored flat effort flags persist unless the authored enabled view overrides them.
 	 */
 	whenThinking?: Partial<Omit<OpenAICompat, "whenThinking">>;
 	/** Kimi K3 drives reasoning through native `reasoning_effort` on Moonshot-native hosts. */

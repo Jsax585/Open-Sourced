@@ -1,0 +1,67 @@
+// Friendli's serverless deployment; live /models controls are authoritative.
+provider "friendli" {
+	default-model "zai-org/GLM-5.2"
+	env "FRIENDLI_API_KEY" "FRIENDLI_TOKEN"
+	dynamic-models-authoritative #true
+	skip-cross-provider-reference-fills #true
+	discovery label="FriendliAI"
+	seed api="openai-completions" base-url="https://api.friendli.ai/serverless/v1" bundle="always" {
+		// Public catalog snapshot, 2026-10-12; costs are USD per million tokens.
+		model "zai-org/GLM-5.2" name="GLM-5.2" {
+			reasoning #true
+			input "text"
+			cost input=1.4 output=4.4 cache-read=0.26 cache-write=0
+			limits context=1048576 max-tokens=1048576
+		}
+	}
+	supports-store #false
+	supports-developer-role #false
+	supports-reasoning-effort #false
+	max-tokens-field "max_tokens"
+	clamp-output-to-model-max #true
+	thinking-format "qwen-chat-template"
+	reasoning-disable-mode "qwen-template-false"
+	thinking-mode "effort"
+	// Override lineage-only ladders without raising the priority of wire policy.
+	on-api "openai-completions" priority=1 {
+		thinking-efforts
+	}
+	class "glm" {
+		revision ">=5.2 <5.3" {
+			supports-reasoning-effort #true
+			thinking-efforts "high" "max"
+		}
+		revision ">=5.3" {
+			supports-reasoning-effort #true
+			thinking-efforts "low" "high" "max"
+			thinking-requires-effort #true
+			thinking-format "openai"
+			reasoning-disable-mode "lowest-effort"
+			when-thinking {
+				thinking-format "openai"
+				requires-reasoning-content-for-tool-calls #true
+				allows-synthetic-reasoning-content-for-tool-calls #false
+				extra-body {
+					parse_reasoning #true
+					include_reasoning #true
+				}
+			}
+		}
+	}
+	// Select the existing OpenAI effort encoder only on enabled turns. The
+	// baseline template dialect remains responsible for explicit Thinking Off.
+	when-thinking {
+		thinking-format "openai"
+		supports-reasoning-effort #true
+		omit-reasoning-effort #false
+		requires-reasoning-content-for-tool-calls #true
+		allows-synthetic-reasoning-content-for-tool-calls #false
+		extra-body {
+			chat_template_kwargs {
+				enable_thinking #true
+			}
+			parse_reasoning #true
+			include_reasoning #true
+		}
+	}
+}

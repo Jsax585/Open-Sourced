@@ -1020,6 +1020,7 @@ export function resolveOpenAICompatPolicy<TApi extends Api>(
 		enabled && requestedEffort !== undefined ? mapOpenAIReasoningEffort(model, compat, requestedEffort) : undefined;
 	const disabledWithoutRequest =
 		modelSupported &&
+		model.thinking !== undefined &&
 		requestedEffort === undefined &&
 		!options.disableReasoning &&
 		isImplicitDisableWhenNotRequested(disableMode);

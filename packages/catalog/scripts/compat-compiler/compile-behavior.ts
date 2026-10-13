@@ -5,9 +5,10 @@
  * model-operations, cursor-effort, cursor-model-parameter, quota-tiers,
  * hosted-default) and adds the pi-only nodes: api-routes, model-limits,
  * exclude-discovery-modes, exclude-models, plan-requirement, pricing-peer,
- * and retry-reset-timezone.
+ * backend-provider, and retry-reset-timezone.
  * Every node kind is optional; per-node shapes are strict.
  */
+import { KNOWN_HOSTS, type KnownHost } from "../../src/hosts";
 import type {
 	CompiledApiRoutes,
 	CompiledBehavior,
@@ -325,6 +326,17 @@ export function compileBehavior(source: { file: string; text: string } | undefin
 				if (behavior.openaiResponsesHeuristic) malformed(node);
 				behavior.openaiResponsesHeuristic = parseResponsesHeuristic(node);
 				break;
+			case "backend-provider": {
+				ensureLeaf(node, ["provider", "host", "api"]);
+				const provider = requiredProp(node, "provider");
+				const host = requiredProp(node, "host");
+				const api = requiredProp(node, "api");
+				if (!provider || !api || !Object.hasOwn(KNOWN_HOSTS, host) || node.args.length > 0) malformed(node);
+				behavior.backendProviders ??= [];
+				if (behavior.backendProviders.some(rule => rule.host === host && rule.api === api)) malformed(node);
+				behavior.backendProviders.push({ provider, host: host as KnownHost, api });
+				break;
+			}
 			case "model-operations":
 				behavior.modelOperations.push(parseModelOperations(node));
 				break;

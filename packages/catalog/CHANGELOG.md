@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added FriendliAI model discovery with authoritative live reasoning controls and output budgets, endpoint defaults for dialless models, a GLM-5.2 fallback seed, and persisted backend policy for custom endpoints with explicit backend overrides preserved ([#8204](https://github.com/can1357/oh-my-pi/pull/8204) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
 - Added the `classifier-cot-extraction` rule axis, set for Claude, marking models whose classifier refuses earlier reasoning quoted back into their input ([#15436](https://github.com/can1357/oh-my-pi/pull/15436) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Removed
