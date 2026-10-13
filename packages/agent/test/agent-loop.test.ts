@@ -8808,22 +8808,22 @@ describe("final answer review gate", () => {
 
 		expect(thrownError).toBeDefined();
 		// The provider had already finished, so the abort cancels only the review.
-		// Throwing the answer away would lose text the gate-off path keeps.
-		const emittedMessageEnds = events.filter(
-			(e): e is Extract<AgentEvent, { type: "message_end" }> => e.type === "message_end",
+		// The answer is released as an unfinished lifecycle: the caller's abort path
+		// turns the partial into the aborted turn, keeping the text. Publishing
+		// `message_end` here would clear that partial and append an empty second turn.
+		const startEvent = events.find(
+			(event): event is Extract<AgentEvent, { type: "message_start" }> =>
+				event.type === "message_start" && event.message.role === "assistant",
 		);
-		expect(
-			emittedMessageEnds.some(
-				e =>
-					e.message.role === "assistant" &&
-					e.message.content.some(c => c.type === "text" && c.text === "Answer will be aborted"),
-			),
-		).toBe(true);
-		// Released as the block sequence consumers expect, not as a bare start/end.
+		expect(startEvent?.message.role).toBe("assistant");
+		if (startEvent?.message.role !== "assistant") throw new Error("Missing released answer");
+		expect(startEvent.message.content.find(part => part.type === "text")?.text).toBe("Answer will be aborted");
+		// Released as the block sequence consumers expect, not as a bare start.
 		const kinds = events
 			.filter((e): e is Extract<AgentEvent, { type: "message_update" }> => e.type === "message_update")
 			.map(e => e.assistantMessageEvent.type);
 		expect(kinds).toEqual(["text_start", "text_delta", "text_end"]);
+		expect(events.filter(e => e.type === "message_end" && e.message.role === "assistant")).toEqual([]);
 		// The abort stopped the run before any correction turn could start.
 		expect(events.filter(e => e.type === "turn_start")).toHaveLength(1);
 	});
@@ -9169,14 +9169,16 @@ describe("final answer review gate", () => {
 
 		expect(thrown).toBeDefined();
 		// The streamed text must survive the throw exactly as it does with the gate
-		// off, or the caller synthesizes an empty, zero-usage error message.
-		const ended = events.find(
-			(event): event is Extract<AgentEvent, { type: "message_end" }> =>
-				event.type === "message_end" && event.message.role === "assistant",
+		// off: partial events, no `message_end`, so the caller's failure path turns
+		// the unfinished partial into the error turn instead of an empty one.
+		const started = events.find(
+			(event): event is Extract<AgentEvent, { type: "message_start" }> =>
+				event.type === "message_start" && event.message.role === "assistant",
 		);
-		expect(ended?.message.role).toBe("assistant");
-		if (ended?.message.role !== "assistant") throw new Error("Missing released partial");
-		expect(ended.message.content.find(part => part.type === "text")?.text).toBe("partial before failure");
+		expect(started?.message.role).toBe("assistant");
+		if (started?.message.role !== "assistant") throw new Error("Missing released partial");
+		expect(started.message.content.find(part => part.type === "text")?.text).toBe("partial before failure");
+		expect(events.filter(event => event.type === "message_end" && event.message.role === "assistant")).toEqual([]);
 	});
 
 	it("skips review once the buffer released the message to a tool turn", async () => {

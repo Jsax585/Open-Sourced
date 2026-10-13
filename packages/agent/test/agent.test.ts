@@ -1737,6 +1737,42 @@ describe("Agent", () => {
 	});
 });
 
+it("turns a buffered provider failure into one turn that keeps the streamed text", async () => {
+	const partial = createAssistantMessage([{ type: "text", text: "streamed before the throw" }], "error");
+	const streamFn = () => {
+		const response = new AssistantMessageEventStream();
+		queueMicrotask(() => {
+			response.push({ type: "start", partial });
+			response.push({ type: "text_start", contentIndex: 0, partial });
+			response.push({ type: "text_delta", contentIndex: 0, delta: "streamed before the throw", partial });
+			response.fail(new Error("provider exploded"));
+		});
+		return response;
+	};
+	const mock = createMockModel();
+	const agent = new Agent({
+		getApiKey: () => "test-key",
+		initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+		streamFn,
+	});
+	agent.setReviewFinalAnswer({ review: () => ({ action: "approve" }) });
+
+	const events: AgentEvent[] = [];
+	agent.subscribe(event => events.push(event));
+	await agent.prompt("go");
+
+	// Exactly one assistant turn, carrying the streamed text. A second, empty one
+	// would mean the flush published `message_end`, clearing the wrapper's partial.
+	const assistantTurns = events.filter(
+		(event): event is Extract<AgentEvent, { type: "message_end" }> =>
+			event.type === "message_end" && event.message.role === "assistant",
+	);
+	expect(assistantTurns).toHaveLength(1);
+	const turn = assistantTurns[0]!;
+	if (turn.message.role !== "assistant") throw new Error("Expected an assistant turn");
+	expect(turn.message.content.find(part => part.type === "text")?.text).toBe("streamed before the throw");
+});
+
 describe("Agent — F3 in-place state mutation", () => {
 	it("appendMessage mutates the existing messages array in place", () => {
 		const agent = new Agent();

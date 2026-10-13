@@ -842,6 +842,23 @@ class FinalAnswerBufferingStream extends EventStream<AgentEvent, AgentMessage[]>
 		this.#target.push({ type: "message_end", message });
 	}
 
+	/**
+	 * Release a buffered lifecycle that never completes: the provider threw, or
+	 * the run is aborting, after content streamed. Consumers get the partial
+	 * events but no `message_end`, so the caller's own failure path turns the
+	 * unfinished partial into the error or aborted turn — holding content the
+	 * gate-off path keeps, instead of appending an empty second turn.
+	 */
+	releasePartial(): void {
+		this.#passthrough = true;
+		this.#startMessage = undefined;
+		const message = this.#finalSnapshot;
+		this.#finalSnapshot = undefined;
+		if (!message) return;
+		this.#target.push({ type: "message_start", message });
+		replayStreamedBlocks(this.#target, message);
+	}
+
 	discard(): void {
 		this.#passthrough = true;
 		this.#startMessage = undefined;
@@ -1652,7 +1669,7 @@ async function runLoopBody(
 						// partial so the run keeps the streamed text, exactly as it would
 						// with the gate off; otherwise the caller synthesizes an empty,
 						// zero-usage error message.
-						if (candidateStream instanceof FinalAnswerBufferingStream) candidateStream.flush();
+						if (candidateStream instanceof FinalAnswerBufferingStream) candidateStream.releasePartial();
 						throw err;
 					}
 					if (err.recovered) {
@@ -1711,6 +1728,10 @@ async function runLoopBody(
 					// forwarded this message's lifecycle; reviewing it now could only
 					// hide an answer listeners and the transcript already have.
 					!(candidateStream instanceof FinalAnswerBufferingStream && candidateStream.released) &&
+					// A pending soft requirement makes a text-only stop nonterminal: the
+					// loop forces the required tool next, so this refusal is not the
+					// answer the request will end on.
+					!(softRequiredTool !== undefined && !hardToolChoiceBlocks(config.toolChoice, softRequiredTool)) &&
 					isTerminalTextCandidate(message);
 
 				if (isCandidateFinalAnswer) {
@@ -1731,10 +1752,11 @@ async function runLoopBody(
 						decision = await raceWithSignal(reviewPromise, reviewSignal);
 					} catch (error) {
 						if (signal?.aborted) {
-							// A user abort while the review wait was open. The provider already
-							// finished, so release the completed answer like the gate-off path
-							// and cancel only the review.
-							if (candidateStream instanceof FinalAnswerBufferingStream) candidateStream.flush();
+							// A user abort while the review wait was open. Release the finished
+							// answer as an unfinished lifecycle: the caller's abort path turns
+							// it into the aborted turn, keeping the text and avoiding a second
+							// empty turn after a released answer.
+							if (candidateStream instanceof FinalAnswerBufferingStream) candidateStream.releasePartial();
 							throw signal.reason ?? error;
 						}
 						logger.warn("Final answer review failed or timed out; releasing answer", { error });
@@ -1742,7 +1764,7 @@ async function runLoopBody(
 					}
 
 					if (signal?.aborted) {
-						if (candidateStream instanceof FinalAnswerBufferingStream) candidateStream.flush();
+						if (candidateStream instanceof FinalAnswerBufferingStream) candidateStream.releasePartial();
 						throw signal.reason ?? new Error("Aborted");
 					}
 

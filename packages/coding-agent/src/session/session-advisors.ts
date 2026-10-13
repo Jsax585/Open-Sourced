@@ -628,6 +628,8 @@ export class SessionAdvisors {
 	#discardFinalReviewThroughTurn = 0;
 	/** User message the closed review covered; read against the live one at route time. */
 	#discardFinalReviewUser: AgentMessage | undefined;
+	/** Turn whose review already blocked, so its remaining late notes cannot ask again. */
+	#blockedFinalReviewTurn = 0;
 	#finalReviewUserMessage: AgentMessage | undefined;
 	#finalReviewRequestFirstTurn = 0;
 
@@ -822,6 +824,9 @@ export class SessionAdvisors {
 			this.#recordAdvisorInterruptDelivered();
 			this.#advisorContinuation = { userMessage: lastPrimaryUserMessage(context.messages) };
 			this.#reviewedFinalAnswer = undefined;
+			// This turn already spent its one replacement. Remaining notes from the
+			// same in-flight update share the turn and must not ask for another.
+			this.#blockedFinalReviewTurn = gate.turn;
 			for (const advisor of this.#advisors) advisor.runtime.forgetReviewedPrimaryTail(context.message);
 			advice.content = [finalAnswerGuidance.trim(), advice.content].join("\n\n");
 			return { action: "block", advice };
@@ -1190,6 +1195,7 @@ export class SessionAdvisors {
 		this.#reviewedFinalAnswer = undefined;
 		this.#discardFinalReviewThroughTurn = 0;
 		this.#discardFinalReviewUser = undefined;
+		this.#blockedFinalReviewTurn = 0;
 		this.#finalReviewUserMessage = undefined;
 		this.#finalReviewRequestFirstTurn = 0;
 		this.#advisorPrimaryWillContinue = false;
@@ -1837,13 +1843,14 @@ export class SessionAdvisors {
 		// request that a newer primary user message started. Until that happens the
 		// gate suppresses nothing: a late blocker still routes like any post-turn
 		// note, so a review that timed out cannot silently cost the turn its advice.
-		// Two clauses, because the request boundary only advances at turn end: the
-		// covered user catches a newer request still generating its first answer,
-		// and the boundary catches one whose later gate overwrote that user.
+		// Three clauses: a turn whose gate already blocked spent its replacement, the
+		// covered user catches a newer request still generating its first answer, and
+		// the request boundary catches one whose later gate replaced that user.
 		if (
 			turn !== undefined &&
 			turn <= this.#discardFinalReviewThroughTurn &&
-			(turn < this.#finalReviewRequestFirstTurn ||
+			(turn <= this.#blockedFinalReviewTurn ||
+				turn < this.#finalReviewRequestFirstTurn ||
 				lastPrimaryUserMessage(this.#host.agent.state.messages) !== this.#discardFinalReviewUser)
 		) {
 			return;
