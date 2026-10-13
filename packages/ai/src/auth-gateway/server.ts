@@ -665,9 +665,11 @@ export interface AuthGatewayRouter {
  * two routers in one process never share (or tear down) each other's.
  */
 export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGatewayRouter {
+	const routeRegistry = opts.routeRegistry ?? new RouteRegistry(opts.resolveModel);
+	for (const definition of opts.routes ?? []) routeRegistry.register(definition);
 	const boot: AuthGatewayRouteOptions = {
 		...opts,
-		routeRegistry: opts.routeRegistry ?? new RouteRegistry(opts.resolveModel),
+		routeRegistry,
 		decisionTraces: opts.decisionTraces ?? new RouteDecisionTraceLog(),
 	};
 	const sessionStates = new AuthGatewaySessionStateStore();

@@ -16,7 +16,7 @@ import { isUsageLimitOutcome } from "../error/rate-limit";
 import type { Api, FetchImpl, Model, Usage } from "../types";
 import type { ClientUsageIdentity } from "../usage";
 import { extractProviderRetryHint } from "../utils/retry-after";
-import type { RouteRegistry } from "./route-graph";
+import type { RouteDefinition, RouteRegistry } from "./route-graph";
 import type { RouteDecisionTraceLog } from "./decision-trace";
 import type { AuthGatewayServerOptions } from "./types";
 
@@ -38,8 +38,10 @@ export interface AuthGatewayRouteOptions {
 	excludeProviders?: ReadonlySet<string>;
 	/** Upstream transport for every provider call; defaults to global `fetch`. Test seam. */
 	fetch?: FetchImpl;
-	/** Wave A compiled-route shim. Constructed by {@link startAuthGateway} when omitted. */
+	/** Compiled-route registry; boot definitions are applied even when the caller supplies this object. */
 	routeRegistry?: RouteRegistry;
+	/** Virtual definitions registered at router boot for HTTP and stdio; an empty list is a no-op. */
+	routes?: readonly RouteDefinition[];
 	/** Shared bounded request-decision history, owned by the router when omitted. */
 	decisionTraces?: RouteDecisionTraceLog;
 }

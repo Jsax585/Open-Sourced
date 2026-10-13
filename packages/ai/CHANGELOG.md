@@ -4,6 +4,7 @@
 
 ### Added
 
+- Gateway HTTP and stdio routers accept virtual route definitions at boot, including when a registry is supplied by the caller ([#10143](https://github.com/can1357/oh-my-pi/pull/10143) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway inference follows configured fallback edges before output commits across chat, messages, Responses and pi-native transports, while preserving credential and continuation ownership ([#10142](https://github.com/can1357/oh-my-pi/pull/10142) by [@jroth1111](https://github.com/jroth1111)).
 - Added a pure route next-action planner that tries sibling credentials before configured fallbacks, retains branch scope and stops after stream commitment or terminal outcomes ([#10141](https://github.com/can1357/oh-my-pi/pull/10141) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway route definitions compile ordered, branch-scoped fallback trees with canonical targets, immutable snapshots and ambiguous-cycle rejection ([#10140](https://github.com/can1357/oh-my-pi/pull/10140) by [@jroth1111](https://github.com/jroth1111)).
