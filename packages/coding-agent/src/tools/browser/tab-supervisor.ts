@@ -54,6 +54,7 @@ import type {
 import { cfgBrowserScreenshotDir } from "./settings";
 import { listTernBlocks, noTernBlockError, pickTernBlock } from "./tern/blocks";
 import { TernTab } from "./tern/tern-tab";
+import { newUploadStagingDir, removeUploadStaging, sweepUploadStaging } from "./upload-files";
 
 // Coding-agent binary/bundle workers route through the CLI entrypoint with a
 // hidden argv mode, so compiled/npm builds only need one JavaScript entry.
@@ -133,6 +134,11 @@ export interface WorkerTabSession extends TabSessionBase<PuppeteerBrowserHandle>
 	workerRecovery?: Promise<boolean>;
 	/** `Date.now()` of the last unexpected worker exit; a second one soon after closes the tab instead. */
 	workerExitedAt?: number;
+	/**
+	 * The tab's upload staging folder. It outlives the tab's workers, since Chrome reads a picked file only when the page
+	 * does, and goes with the page when omp closes it; a page left open in the user's browser keeps it until the sweep.
+	 */
+	uploadDir: string;
 }
 
 export interface CmuxTabSession extends TabSessionBase<CmuxBrowserHandle> {
@@ -224,6 +230,9 @@ const workerPageTargets = new WeakMap<WorkerHandle, string>();
 // awaits) cannot interleave and leak a worker + browser refCount.
 const acquireChains = new Map<string, Promise<void>>();
 const GRACE_MS = 750;
+// Staging folders of closed tabs are swept at most this often (see `sweepUploadStaging`).
+const UPLOAD_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+let lastUploadSweep = 0;
 // Cold-start guard for the worker's `setup` handshake (realm usable: puppeteer
 // loaded, browser connected, page acquired). On hosts where the worker's cold
 // import stalls (observed: Bun worker inside a full RPC process), an
@@ -589,9 +598,11 @@ async function acquireTabImpl(
 		persist: opts.persist ?? false,
 		lastActivityAt: Date.now(),
 		frozen: false,
+		uploadDir: initPayload.uploadDir,
 	};
 	attachTabWorker(tab, worker);
 	tabs.set(name, tab);
+	sweepClosedTabUploads();
 	// Durably record ownership so another live omp process can reap this page if
 	// this process dies abnormally before its own teardown closes the tab.
 	const scope = sharedScopeOf(browser);
@@ -1311,6 +1322,9 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 		}
 	}
 	await tab.worker.terminate().catch(() => undefined);
+	// omp closes the pages it owns (headless, or a relay tab it opened), and with them goes the last reader of their
+	// staged uploads.
+	if (tab.ownsPage) await removeUploadStaging(tab.uploadDir);
 	// Close a live tab's owned page by id as well, which confirms it is gone: a worker's own
 	// close can fail and still report `closed` (its CDP socket broke), and the relay retracts a
 	// target whose debugger the user dismissed, so the worker cannot close it at all. A dead
@@ -1741,8 +1755,19 @@ function sameAllowedDomains(left: readonly string[], right: readonly string[] | 
 	return left.every((domain, index) => domain === right[index]);
 }
 
+/** At most hourly, sweep the upload staging folders of closed tabs (see `sweepUploadStaging`). */
+function sweepClosedTabUploads(): void {
+	const now = Date.now();
+	if (now - lastUploadSweep < UPLOAD_SWEEP_INTERVAL_MS) return;
+	lastUploadSweep = now;
+	const live = new Set<string>();
+	for (const tab of tabs.values()) if (tab.backend === "worker") live.add(tab.uploadDir);
+	void sweepUploadStaging(live, now).catch(() => undefined);
+}
+
 async function buildInitPayload(browser: PuppeteerBrowserHandle, opts: AcquireTabOptions): Promise<WorkerInitPayload> {
 	const safeDir = getPuppeteerDir();
+	const uploadDir = newUploadStagingDir();
 	const browserWSEndpoint = browser.browser.wsEndpoint();
 	if (!browserWSEndpoint) throw new ToolError("Browser websocket endpoint is unavailable");
 	if (browser.kind.kind === "headless") {
@@ -1750,6 +1775,7 @@ async function buildInitPayload(browser: PuppeteerBrowserHandle, opts: AcquireTa
 			mode: "headless",
 			browserWSEndpoint,
 			safeDir,
+			uploadDir,
 			// Visible launches still need an OMP-owned page, stealth setup, and
 			// independent lifecycle; only their fixed device emulation is disabled.
 			emulateViewport: browser.kind.headless,
@@ -1788,6 +1814,7 @@ async function buildInitPayload(browser: PuppeteerBrowserHandle, opts: AcquireTa
 		mode: "attach",
 		browserWSEndpoint,
 		safeDir,
+		uploadDir,
 		page,
 		dialogs: opts.dialogs,
 		allowedDomains: opts.allowedDomains,
@@ -1954,6 +1981,7 @@ async function recycleTimedOutWorkerTab(
 		mode: "attach",
 		browserWSEndpoint,
 		safeDir: getPuppeteerDir(),
+		uploadDir: tab.uploadDir,
 		page: { kind: tab.ownsPage ? "owned" : "borrowed", targetId: tab.targetId },
 		dialogs: tab.dialogPolicy,
 		allowedDomains: tab.allowedDomains,
@@ -2054,6 +2082,7 @@ async function forceKillSurfaceTab(tab: CmuxTabSession | TernTabSession, name: s
  */
 async function forceKillTabTeardown(tab: WorkerTabSession): Promise<void> {
 	await tab.worker.terminate().catch(() => undefined);
+	if (tab.ownsPage) await removeUploadStaging(tab.uploadDir);
 	let targetClosed = true;
 	if (tab.ownsPage) {
 		targetClosed = await waitForTabCleanup(
