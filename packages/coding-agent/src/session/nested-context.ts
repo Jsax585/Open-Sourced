@@ -28,7 +28,7 @@ import {
 	type CommittableAsideMessage,
 	createAdditionalContextMessage,
 } from "@oh-my-pi/pi-agent-core";
-import { isRecord, logger, prompt } from "@oh-my-pi/pi-utils";
+import { isRecord, isStrictlyWithinNormalizedRoot, logger, prompt } from "@oh-my-pi/pi-utils";
 import { invalidate as invalidateCapabilityCache } from "../capability";
 import { type ContextFile, contextFileCapability } from "../capability/context-file";
 import type { Settings } from "../config/settings";
@@ -113,10 +113,12 @@ interface QueuedBlock {
  */
 interface BatchState {
 	key: string;
-	/** Calls registered through `beforeToolCall`. */
-	registered: Set<string>;
+	/** Calls registered through `beforeToolCall`, with the tool each dispatches to. */
+	registered: Map<string, string>;
 	/** Calls past `beforeToolCall` whose `afterToolCall` has not run. */
 	outstanding: Set<string>;
+	/** A call has settled, so preflight is over: the next `beforeToolCall` starts another batch. */
+	executing: boolean;
 	/** Files claimed for delivery. */
 	claimed: Set<string>;
 	/** Context files a read of this batch showed whole. */
@@ -138,14 +140,18 @@ export class NestedContextInjector {
 	/**
 	 * Registers a loop call that will settle through {@link afterToolCall}. The
 	 * loop runs this for every call that passed validation before any executes.
+	 * `toolName` is the tool the call dispatches to: a custom-format call keeps
+	 * its wire name (`apply_patch` for `edit`) in the message.
 	 */
-	beforeToolCall(assistantMessage: AgentMessage, toolCallId: string): void {
+	beforeToolCall(assistantMessage: AgentMessage, toolCallId: string, toolName: string): void {
 		if (!cfgContextFilesOnTouch.get(this.#host.settings)) return;
 		let batch = this.#batchFor(assistantMessage);
-		// Some providers rebuild ids from position and tool name, so a later run can
-		// repeat a settled batch's key. An id registering twice means a new batch.
-		if (batch.registered.has(toolCallId)) batch = this.#newBatch(batch.key);
-		batch.registered.add(toolCallId);
+		// Some providers rebuild ids from position, so a later run can repeat a
+		// settled batch's key with a different subset of valid calls. Preflight
+		// runs for the whole message before any call executes, so one after a
+		// call settled, or an id registering twice, means a new batch.
+		if (batch.executing || batch.registered.has(toolCallId)) batch = this.#newBatch(batch.key);
+		batch.registered.set(toolCallId, toolName);
 		batch.outstanding.add(toolCallId);
 	}
 
@@ -162,7 +168,7 @@ export class NestedContextInjector {
 		const own = ctx.isError
 			? undefined
 			: this.#touch({
-					toolName: ctx.toolCall.name,
+					toolName: batch.registered.get(id) ?? ctx.toolCall.name,
 					args: ctx.args,
 					details: ctx.result.details,
 					batch,
@@ -225,6 +231,7 @@ export class NestedContextInjector {
 		const batch = this.#batch;
 		if (!batch || batch.queue.length === 0) return null;
 		batch.outstanding.clear();
+		batch.executing = true;
 		const queued = [...batch.queue];
 		const text = this.#drain(batch);
 		if (text === undefined) return null;
@@ -254,8 +261,9 @@ export class NestedContextInjector {
 		const queue = this.#batch?.queue ?? [];
 		this.#batch = {
 			key,
-			registered: new Set(),
+			registered: new Map(),
 			outstanding: new Set(),
+			executing: false,
 			claimed: new Set(queue.map(queued => queued.path)),
 			fullReads: new Set(),
 			queue,
@@ -346,6 +354,7 @@ export class NestedContextInjector {
 
 	/** Marks `id` settled; hands over the queue once no call of the batch is outstanding. */
 	#settle(batch: BatchState, id: string): string | undefined {
+		batch.executing = true;
 		batch.outstanding.delete(id);
 		return batch.outstanding.size > 0 ? undefined : this.#drain(batch);
 	}
@@ -381,15 +390,13 @@ export class NestedContextInjector {
 		for (const dir of directories) {
 			const root = rootOf(roots, dir);
 			if (root === undefined) continue;
-			for (let current = dir; isStrictlyBelow(root, current); current = path.dirname(current)) {
+			for (let current = dir; isStrictlyWithinNormalizedRoot(root, current); current = path.dirname(current)) {
 				probes.set(current, root);
 			}
 		}
 		let files: Omit<NestedContextFile, "content">[] = [];
 		for (const [owner, root] of probes) {
-			// Hidden directories and dependency trees are not project context.
-			const segments = path.relative(root, owner).split(path.sep);
-			if (segments.some(segment => segment.startsWith(".") || EXCLUDED_SEGMENTS[segment] === true)) continue;
+			if (isExcludedDirectory(path.relative(root, owner))) continue;
 			const result = await loadCapability<ContextFile>(contextFileCapability.id, { cwd: owner });
 			for (const item of result.items) {
 				// Depth counts levels above the probe; files in its own config folders report -1.
@@ -398,8 +405,8 @@ export class NestedContextInjector {
 			}
 		}
 		const realRoots = await Promise.all(roots.map(root => fs.realpath(root).catch(() => root)));
-		const inside = await Promise.all(files.map(file => isInsideRoots(file.path, realRoots)));
-		files = files.filter((_, index) => inside[index]);
+		const allowed = await Promise.all(files.map(file => isProjectContext(file, realRoots)));
+		files = files.filter((_, index) => allowed[index]);
 		// Stable: within a directory, capability order (the winner, then additive extras).
 		files.sort((a, b) => segmentCount(a.owner) - segmentCount(b.owner) || a.owner.localeCompare(b.owner));
 		return Promise.all(files.map(async file => ({ ...file, content: await expandAtImports(file.raw, file.path) })));
@@ -458,7 +465,12 @@ export class NestedContextInjector {
 function rootOf(roots: readonly string[], dir: string): string | undefined {
 	let deepest: string | undefined;
 	for (const root of roots) {
-		if (isStrictlyBelow(root, dir) && (deepest === undefined || isStrictlyBelow(deepest, root))) deepest = root;
+		if (
+			isStrictlyWithinNormalizedRoot(root, dir) &&
+			(deepest === undefined || isStrictlyWithinNormalizedRoot(deepest, root))
+		) {
+			deepest = root;
+		}
 	}
 	return deepest;
 }
@@ -471,7 +483,7 @@ function rootOf(roots: readonly string[], dir: string): string | undefined {
  * from it; one outside every root (the session moved since) ranks just below cwd.
  */
 function nestedDepth(cwd: string, roots: readonly string[], owner: string): number {
-	const base = isStrictlyBelow(cwd, owner) ? cwd : rootOf(roots, owner);
+	const base = isStrictlyWithinNormalizedRoot(cwd, owner) ? cwd : rootOf(roots, owner);
 	return base === undefined ? -1 : segmentCount(base) - segmentCount(owner);
 }
 
@@ -659,26 +671,37 @@ function ownerDirectory(filePath: string): string {
 	return dir;
 }
 
-/** Whether `child` lies strictly below `parent`, lexically. */
-export function isStrictlyBelow(parent: string, child: string): boolean {
-	const relative = path.relative(parent, child);
-	// `..draft` is a child; only `..` itself or a `../` prefix leaves `parent`.
-	return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+/**
+ * Whether a directory, given relative to its workspace root, is a hidden
+ * directory, a dependency tree, or inside one: never project context.
+ */
+function isExcludedDirectory(relative: string): boolean {
+	return relative.split(path.sep).some(segment => segment.startsWith(".") || EXCLUDED_SEGMENTS[segment] === true);
 }
 
 /**
- * Whether the file a context path resolves to lies below a workspace root. A
+ * Whether the file a context path resolves to is project context: below a
+ * workspace root, and not in a hidden directory or dependency tree there. A
  * symlinked directory or file in the repository can point at a third-party
- * `AGENTS.md`; the link's location does not make its target project context.
- * A file that cannot be resolved is not loaded.
+ * `AGENTS.md` or into `node_modules/`; the link's location does not make its
+ * target project context. A file that cannot be resolved is not loaded.
  */
-async function isInsideRoots(filePath: string, realRoots: readonly string[]): Promise<boolean> {
+async function isProjectContext(file: { path: string; owner: string }, realRoots: readonly string[]): Promise<boolean> {
+	let real: string;
 	try {
-		const real = await fs.realpath(filePath);
-		return realRoots.some(root => isStrictlyBelow(root, real));
+		real = await fs.realpath(file.path);
 	} catch {
 		return false;
 	}
+	const root = rootOf(realRoots, real);
+	if (root === undefined) return false;
+	// A provider's config folder below the governed directory (`.github/`) is its layout, not a hidden tree.
+	const configFolder = path.relative(file.owner, path.dirname(file.path));
+	let dir = path.dirname(real);
+	if (configFolder !== "" && dir.endsWith(`${path.sep}${configFolder}`)) {
+		dir = dir.slice(0, dir.length - configFolder.length - path.sep.length);
+	}
+	return !isExcludedDirectory(path.relative(root, dir));
 }
 
 function displayPath(cwd: string, target: string): string {

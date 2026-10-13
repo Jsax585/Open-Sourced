@@ -33,7 +33,8 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 interface ScriptedCall {
-	name: "read" | "write" | "edit" | "ast_edit" | "eval" | "wait";
+	/** A tool name, or `apply_patch`, the wire name of `edit` in apply-patch mode. */
+	name: "read" | "write" | "edit" | "apply_patch" | "ast_edit" | "eval" | "wait";
 	arguments: Record<string, unknown>;
 }
 
@@ -674,6 +675,40 @@ describe("contextFiles.onTouch", () => {
 		},
 	);
 
+	it.skipIf(process.platform === "win32")(
+		"loads no context file a symlink resolves into a dependency tree or hidden directory",
+		async () => {
+			// Guards exclusion after resolution: a link's lexical path is ordinary, but its owner is
+			// vendored or tool-private, so the file is not project context. A link to an ordinary
+			// directory still loads, config folder included.
+			setup({
+				"node_modules/pkg/AGENTS.md": "DEP-CANARY",
+				"node_modules/pkg/a.ts": "a",
+				".cache/tool/AGENTS.md": "HIDDEN-CANARY",
+				".cache/tool/b.ts": "b",
+				"real/.github/copilot-instructions.md": "COPILOT-CANARY",
+				"real/c.ts": "c",
+			});
+			fs.symlinkSync(path.join(repo, "node_modules/pkg"), path.join(repo, "vendor"));
+			fs.symlinkSync(path.join(repo, ".cache/tool"), path.join(repo, "tool"));
+			fs.symlinkSync(path.join(repo, "real"), path.join(repo, "linked"));
+			const result = await run(
+				tempDir,
+				repo,
+				[
+					[
+						{ name: "read", arguments: { path: "vendor/a.ts" } },
+						{ name: "read", arguments: { path: "tool/b.ts" } },
+						{ name: "read", arguments: { path: "linked/c.ts" } },
+					],
+				],
+				ON,
+			);
+			expect(blockPaths(result.developerTexts, repo)).toEqual(["linked/.github/copilot-instructions.md"]);
+			expect(result.developerTexts.join("\n")).not.toMatch(/DEP-CANARY|HIDDEN-CANARY/);
+		},
+	);
+
 	it("triggers on an edit", async () => {
 		// Guards the edit trigger, whose result reports paths differently from write.
 		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "old\n" });
@@ -682,6 +717,19 @@ describe("contextFiles.onTouch", () => {
 			...ON,
 			"edit.mode": "apply_patch",
 		});
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
+	});
+
+	it("triggers on an edit called by its apply_patch wire name", async () => {
+		// Guards custom-format tools: in apply_patch mode the model calls `edit` as `apply_patch`,
+		// and the message keeps that name, so matching on it would miss every edit.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "old\n" });
+		const input = "*** Begin Patch\n*** Update File: pkg/a.ts\n@@\n-old\n+new\n*** End Patch\n";
+		const result = await run(tempDir, repo, [[{ name: "apply_patch", arguments: { input } }]], {
+			...ON,
+			"edit.mode": "apply_patch",
+		});
+		expect(fs.readFileSync(path.join(repo, "pkg/a.ts"), "utf8")).toBe("new\n");
 		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
 	});
 
@@ -786,6 +834,27 @@ describe("contextFiles.onTouch", () => {
 		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
 	});
 
+	it("loads a file again after compaction when a repeated batch's invalid calls differ", async () => {
+		// Guards batch identity: an invalid call never registers, so two runs with the same ids
+		// but different valid calls register disjoint sets, and the first run's claims must not
+		// carry into the second.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "a", "pkg/b.ts": "b" });
+		const invalid: ScriptedCall = { name: "read", arguments: {} };
+		const result = await run(
+			tempDir,
+			repo,
+			[[invalid, { name: "read", arguments: { path: "pkg/a.ts" } }]],
+			{ ...ON, "compaction.keepRecentTokens": 1 },
+			[],
+			{
+				before: session => session.compact(),
+				turns: [[{ name: "read", arguments: { path: "pkg/b.ts" } }, invalid]],
+			},
+		);
+		expect(result.notices).toEqual(["Loaded pkg/AGENTS.md", "Loaded pkg/AGENTS.md"]);
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
+	});
+
 	it("keeps recognising delivered files after the session moves to another cwd", async () => {
 		// Guards block keys: a cwd-relative path would point elsewhere after the move, so the
 		// file would load twice and subagents would get a wrong path.
@@ -835,7 +904,7 @@ describe("NestedContextInjector batch order", () => {
 		}));
 		const assistantMessage = createAssistantMessage("");
 		assistantMessage.content = toolCalls;
-		for (const toolCall of toolCalls) injector.beforeToolCall(assistantMessage, toolCall.id);
+		for (const toolCall of toolCalls) injector.beforeToolCall(assistantMessage, toolCall.id, toolCall.name);
 		const settle = (index: number, details: Record<string, unknown> = {}) =>
 			injector.afterToolCall({
 				assistantMessage,

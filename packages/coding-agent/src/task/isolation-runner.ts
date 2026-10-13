@@ -22,12 +22,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type * as natives from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { isStrictlyWithinNormalizedRoot, prompt } from "@oh-my-pi/pi-utils";
 import isolationErrorTemplate from "../prompts/tools/isolation-error.md" with { type: "text" };
 import isolationSummaryTemplate from "../prompts/tools/isolation-summary.md" with { type: "text" };
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry } from "../registry/agent-registry";
-import { isStrictlyBelow } from "../session/nested-context";
 import type { ContextFileEntry, ToolSession } from "../tools";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import { trackLateCleanup } from "../utils/late-cleanup";
@@ -108,7 +107,7 @@ export function rebaseContextFiles(
 	isolationDir: string,
 ): ContextFileEntry[] | undefined {
 	return files?.map(file =>
-		isStrictlyBelow(repoRoot, file.path)
+		isStrictlyWithinNormalizedRoot(repoRoot, file.path)
 			? { ...file, path: path.join(isolationDir, path.relative(repoRoot, file.path)) }
 			: file,
 	);

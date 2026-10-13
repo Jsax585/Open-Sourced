@@ -4963,7 +4963,7 @@ export class AgentSession implements SettingsScope {
 	 * execution still emit there).
 	 */
 	async #beforeToolCall(ctx: BeforeToolCallContext, signal?: AbortSignal): Promise<BeforeToolCallResult | undefined> {
-		this.#nestedContext.beforeToolCall(ctx.assistantMessage, ctx.toolCall.id);
+		this.#nestedContext.beforeToolCall(ctx.assistantMessage, ctx.toolCall.id, ctx.tool.name);
 		const runner = this.#extensionRunner;
 		runner?.markLoopToolCall?.(ctx.toolCall.id, ctx.tool.name);
 		const ttsrResult = await this.#ttsr.beforeToolCall(ctx);
