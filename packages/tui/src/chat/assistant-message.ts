@@ -19,7 +19,7 @@ import { card, col, elapsed, node, span, text } from "../native/describe";
 import { hasTranscriptActions, runTranscriptAction } from "./transcript-actions";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { isNativeRendering } from "../native/state";
-import { NativeImageCache, nativeMediaNode } from "../native/blobs";
+import { NativeImageCache } from "../native/blobs";
 import { Memo } from "../native/memo";
 import { EMPTY_LINK_TARGETS, resolveImageOptions } from "../render/render-utils";
 import { WidthAwareText } from "../render";
@@ -249,9 +249,7 @@ export class AssistantMessageComponent extends Container {
 	#servedModelMarker?: ServedModelMarkerComponent;
 	#lastMessage?: AssistantMessage;
 	#emergencyText?: ProseBlock;
-	#toolImagesByCallId = new Map<string, ImageContent[]>();
-	/** File each grouped read showed that Tern's media viewer shows, for native `media` nodes. */
-	#toolMediaPathByCallId = new Map<string, string>();
+
 	/**
 	 * Payload keys ({@link imagePayloadKey}) whose Kitty PNG conversion this
 	 * component is awaiting, so a re-delivered image neither re-encodes nor
@@ -271,7 +269,6 @@ export class AssistantMessageComponent extends Container {
 	/** The previous pass's {@link #kittyDisplayed}, readable only during a render pass. */
 	#kittyPreviouslyDisplayed: Map<string, ImageContent> | undefined;
 	#showImages = true;
-	#showToolResultImages = true;
 	/** Charts under numeric tables; off for subagent transcripts. */
 	#showTableCharts = true;
 	#transcriptBlockFinalized: boolean;
@@ -801,7 +798,6 @@ export class AssistantMessageComponent extends Container {
 	 * and a finished thought emits nothing.
 	 */
 	override describe(cx?: DescribeContext): NativeNode {
-		const media = cx?.supports("media") === true;
 		const tail = this.#displayedMessage ? this.#thinkingTailIndex(this.#displayedMessage) : undefined;
 		const rate =
 			tail !== undefined && this.#lastUpdateTransient && this.#thinkingRateLive
@@ -812,14 +808,12 @@ export class AssistantMessageComponent extends Container {
 			this.#transcriptBlockFinalized,
 			this.#hideThinkingBlock,
 			this.#showImages,
-			this.#showToolResultImages,
 			this.#errorExpanded,
 			this.#nativeViewVersion,
 			rate,
-			media,
 			getThemeEpoch(),
 		];
-		return this.#native.get(key, () => this.#describeMessage(tail, rate, media));
+		return this.#native.get(key, () => this.#describeMessage(tail, rate));
 	}
 
 	/**
@@ -845,7 +839,7 @@ export class AssistantMessageComponent extends Container {
 		this.#nativeViewVersion++;
 	}
 
-	#describeMessage(thinkingTail: number | undefined, rate: number, media: boolean): NativeNode {
+	#describeMessage(thinkingTail: number | undefined, rate: number): NativeNode {
 		const message = this.#displayedMessage;
 		const previousParts = this.#nativeParts;
 		const parts = new Map<string, { text: string; stream: boolean; node: NativeNode }>();
@@ -965,23 +959,7 @@ export class AssistantMessageComponent extends Container {
 					children.push(this.#nativeImages.get(`i${index}`, content.data, content.mimeType));
 				}
 			}
-			if (this.#showImages && this.#showToolResultImages) {
-				// Reads of files Tern's media viewer shows: the host loads each file once by path, no bytes uploaded.
-				const shownPaths = new Set<string>();
-				if (media) {
-					for (const [toolCallId, mediaPath] of this.#toolMediaPathByCallId) {
-						if (shownPaths.has(mediaPath)) continue;
-						shownPaths.add(mediaPath);
-						children.push(nativeMediaNode(mediaPath, `r${toolCallId}`));
-					}
-				}
-				for (const [toolCallId, images] of this.#toolImagesByCallId) {
-					if (media && this.#toolMediaPathByCallId.has(toolCallId)) continue;
-					images.forEach((image, index) => {
-						children.push(this.#nativeImages.get(`r${toolCallId}:${index}`, image.data, image.mimeType));
-					});
-				}
-			}
+
 			const errorNode = this.#describeError(message);
 			if (errorNode) children.push(errorNode);
 		}
@@ -1526,36 +1504,6 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
-	/** Toggle only images produced by tool results; assistant-native images remain governed by setImagesVisible. */
-	setToolResultImagesVisible(visible: boolean): void {
-		if (this.#showToolResultImages === visible) return;
-		this.#showToolResultImages = visible;
-		if (this.#lastMessage) {
-			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
-		}
-	}
-
-	/**
-	 * A grouped read's result images, and `mediaPath`: the file it read that Tern's media viewer
-	 * shows (read details), which a native host supporting `media` shows by path instead of the
-	 * images. A media-only result (a model, a PDF) passes no images.
-	 */
-	setToolResultImages(toolCallId: string, images: ImageContent[], mediaPath?: string): void {
-		if (!toolCallId) return;
-		if (mediaPath) this.#toolMediaPathByCallId.set(toolCallId, mediaPath);
-		else this.#toolMediaPathByCallId.delete(toolCallId);
-		const validImages = images.filter(img => img.type === "image" && img.data && img.mimeType);
-		if (validImages.length === 0) {
-			this.#toolImagesByCallId.delete(toolCallId);
-		} else {
-			this.#toolImagesByCallId.set(toolCallId, validImages);
-			this.#convertImagesForKitty(validImages.map((image, index) => ({ image, key: `${toolCallId}:${index}` })));
-		}
-		if (this.#lastMessage) {
-			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
-		}
-	}
-
 	/** A displayable Kitty PNG for a non-PNG `image`: the shared cache, else this component's displayed copy. */
 	#kittyConversion(image: ImageContent): ImageContent | undefined {
 		const cached = cachedPngConversion(image);
@@ -1616,14 +1564,6 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
-	#renderToolImages(): void {
-		if (!this.#showToolResultImages) return;
-		const entries = Array.from(this.#toolImagesByCallId.entries()).flatMap(([toolCallId, images]) =>
-			images.map((image, index) => ({ image, key: `${toolCallId}:${index}` })),
-		);
-		this.#renderImageEntries(entries, true);
-	}
-
 	#appendThinkingExtensions(contentIndex: number, thinkingIndex: number, text: string): void {
 		const mounted: Component[] = [];
 		this.#thinkingExtensions.set(contentIndex, mounted);
@@ -1678,7 +1618,6 @@ export class AssistantMessageComponent extends Container {
 		for (const content of message.content) {
 			if (content.type === "toolCall" || content.type === "image") return false;
 		}
-		if (this.#toolImagesByCallId.size > 0) return false;
 		const errorPresentation = resolveAssistantErrorPresentation(message);
 		if (errorPresentation.kind === "compact-recovered") return false;
 		if (
@@ -1893,7 +1832,6 @@ export class AssistantMessageComponent extends Container {
 			this.#stopThinkingAnimation();
 		}
 
-		this.#renderToolImages();
 		this.#kittyPreviouslyDisplayed = undefined;
 		const errorPresentation = resolveAssistantErrorPresentation(message);
 		const hasToolCalls = message.content.some(c => c.type === "toolCall");

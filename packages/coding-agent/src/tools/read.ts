@@ -1173,6 +1173,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const content: Array<TextContent | ImageContent> = [];
 		const displayReadTargets: string[] = [];
 		const displayReadTargetLinks: Array<string | null> = [];
+		// Index into the merged result's image blocks per target (null: no image), so
+		// the TUI draws each target's own image under its row instead of the first.
+		const displayReadTargetImages: Array<number | null> = [];
+		let imageCount = 0;
 		let pendingText = notice;
 		const flushText = () => {
 			if (pendingText.length === 0) return;
@@ -1187,15 +1191,22 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			try {
 				const result = await this.execute("read-delimited-part", { path: part }, signal);
 				const nestedTargets = result.details?.displayReadTargets;
+				const partImageBase = imageCount;
 				if (nestedTargets?.length) {
 					const nestedLinks = result.details?.displayReadTargetLinks;
+					const nestedImages = result.details?.displayReadTargetImages;
 					for (const [index, target] of nestedTargets.entries()) {
 						displayReadTargets.push(target);
 						displayReadTargetLinks.push(nestedLinks?.[index] ?? null);
+						const nestedImage = nestedImages?.[index];
+						displayReadTargetImages.push(typeof nestedImage === "number" ? partImageBase + nestedImage : null);
 					}
 				} else {
 					displayReadTargets.push(result.details?.suffixResolution?.to ?? part);
 					displayReadTargetLinks.push(readDetailsLinkPath(result.details));
+					displayReadTargetImages.push(
+						result.content.some(block => block.type === "image") ? partImageBase : null,
+					);
 				}
 				for (const block of result.content) {
 					if (block.type === "text") {
@@ -1204,6 +1215,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					}
 					flushText();
 					content.push(block);
+					imageCount++;
 				}
 			} catch (error) {
 				if (error instanceof ToolAbortError || signal?.aborted) throw error;
@@ -1212,12 +1224,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				notes.push(errorNote);
 				displayReadTargets.push(part);
 				displayReadTargetLinks.push(null);
+				displayReadTargetImages.push(null);
 				appendText(`[${errorNote}]`);
 			}
 		}
 		flushText();
 
-		return toolResult<ReadToolDetails>({ notes, displayReadTargets, displayReadTargetLinks }).content(content).done();
+		return toolResult<ReadToolDetails>({ notes, displayReadTargets, displayReadTargetLinks, displayReadTargetImages })
+			.content(content)
+			.done();
 	}
 
 	/**

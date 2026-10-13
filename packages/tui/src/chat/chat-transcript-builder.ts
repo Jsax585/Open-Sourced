@@ -236,6 +236,8 @@ export class ChatTranscriptBuilder {
 		if (!this.#readGroup) {
 			this.#readGroup = new ReadToolGroupComponent({
 				showContentPreview: displayPreferences.readToolResultPreview,
+				showImages: displayPreferences.showImages,
+				ui: this.#deps.ui,
 			});
 			this.#trackExpandable(this.#readGroup);
 			this.container.addChild(this.#readGroup);
@@ -418,7 +420,6 @@ export class ChatTranscriptBuilder {
 			expandThinkingBlocks,
 		);
 		assistantComponent.setImagesVisible(displayPreferences.showImages);
-		assistantComponent.setToolResultImagesVisible(!displayPreferences.hideToolActivity);
 		assistantComponent.setTableChartsVisible(this.#deps.tableCharts !== false);
 		this.#trackExpandable(assistantComponent);
 		assistantComponent.pickReactionTarget(this.container.children);
@@ -457,7 +458,6 @@ export class ChatTranscriptBuilder {
 				expandThinkingBlocks,
 			);
 			component.setImagesVisible(displayPreferences.showImages);
-			component.setToolResultImagesVisible(!displayPreferences.hideToolActivity);
 			component.setTableChartsVisible(this.#deps.tableCharts !== false);
 			this.#trackExpandable(component);
 			this.container.addChild(component);

@@ -104,6 +104,16 @@
 ### Fixed
 
 - Improved responsiveness when inserting assistant messages after tool calls in long transcripts.
+- Improved responsiveness when placing assistant text after tool calls in long transcripts ([#12178](https://github.com/can1357/oh-my-pi/issues/12178), [#14344](https://github.com/can1357/oh-my-pi/pull/14344) by [@F0Rextasy](https://github.com/F0Rextasy), [#15353](https://github.com/can1357/oh-my-pi/pull/15353) by [@iliaal](https://github.com/iliaal)).
+- Added opt-in JSON editing for free-form array settings, with credential settings kept masked in rows and editors ([#15252](https://github.com/can1357/oh-my-pi/pull/15252) by [@Shadorain](https://github.com/Shadorain)).
+- Added `Editor.prediction`, a callback whose text the editor shows as ghost text while the buffer is empty or a prefix of it; Tab or Right at line end inserts the rest without submitting ([#15137](https://github.com/can1357/oh-my-pi/pull/15137) by [@wolfiesch](https://github.com/wolfiesch))
+- Added table-chart kinds `stacked` (parts a total is made of, or outcome mixes as 100% bars), `waterfall`, `timeline`, `dots`, and `range`; share bars now also take counts that split a total, and 2–4 status columns draw as a dot matrix beside bars
+- Table charts now title themselves with a fact the numbers prove (`Step 5 Preview has 74× the Total of Sonnet 5.5`), mark the best value where rows or columns compete, color improvements and regressions, highlight the row a table is about, badge status cells, and draw reference rules at a baseline row
+- Added `ChartPlan` fields a planner can set — row naming (`qualifiers`, `group`), `shading`, `reference`, `order`, `polarity`, `rivals`, `focus`, `title`, `normalize` — and `shouldJudge`, which picks the tables `smart` mode sends to a model
+- Added an optional `assistantMessageText` theme token that colors assistant reply paragraph prose; unset or empty keeps the terminal default foreground ([#11204](https://github.com/can1357/oh-my-pi/issues/11204), [#11260](https://github.com/can1357/oh-my-pi/pull/11260) by [@oleg494](https://github.com/oleg494)).
+- Added optional `StatusLineHost.classifyResetExpiry` and `resetExpiryNotice` plus `StatusLineComponent.setResetExpiryNoticeHandler`: the usage segment marks saved resets expiring within 7 days (`▲ N exp …`), and the handler gets one pool-wide warning per conversation for resets expiring within 24 hours ([#15134](https://github.com/can1357/oh-my-pi/pull/15134) by [@will-bogusz](https://github.com/will-bogusz))
+- `ReadToolGroupComponent` draws a read's visual under its file row: PNG/JPEG/GIF/WebP reads as inline images (`showImages`, `ui` options; `setShowImages` toggles them) and whole-file `.svg`/`.svgz` text reads as a rasterized figure capped to the inline-image limits; native hosts get the raster or the SVG source as an `image` node ([#15339](https://github.com/can1357/oh-my-pi/pull/15339) by [@yashs33244](https://github.com/yashs33244))
+- `SvgFigure` takes a `maxRows` callback so a figure can keep to a row cap below its viewport share ([#15339](https://github.com/can1357/oh-my-pi/pull/15339) by [@yashs33244](https://github.com/yashs33244))
 
 ## [18.9.1] - 2026-10-11
 

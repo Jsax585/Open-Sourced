@@ -13,7 +13,6 @@ import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../coll
 import { settings } from "../../config/settings";
 import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
-import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
 import { createBackgroundTanDispatchBlock } from "@oh-my-pi/pi-tui/chat/background-tan-message";
 import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
@@ -490,7 +489,16 @@ export class UiHelpers {
 
 		let readGroup: ReadToolGroupComponent | null = null;
 		const readToolCallArgs = new Map<string, Record<string, unknown>>();
-		const readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
+		const newReadGroup = () => {
+			const group = new ReadToolGroupComponent({
+				showContentPreview: cfgReadToolResultPreview.get(this.ctx.settings),
+				showImages: cfgTerminalShowImages.get(this.ctx.settings),
+				ui: this.ctx.ui,
+			});
+			group.setExpanded(this.ctx.toolOutputExpanded);
+			this.ctx.chatContainer.addChild(group);
+			return group;
+		};
 		// Defer per-turn metrics until the turn's tool results have materialized.
 		// Read-only invisible turns attach the metrics to their shared compact
 		// group; every other turn keeps the standalone row below its tool blocks.
@@ -582,7 +590,7 @@ export class UiHelpers {
 		for (let i = 0; i < count; i++) {
 			// Yield BEFORE each message (except the first) rather than after: the
 			// per-message body has several early `continue` paths (preserved live
-			// results, image-only and grouped `read` results), and a trailing yield
+			// results and grouped `read` results), and a trailing yield
 			// is skipped by all of them. A large parallel-read batch is entirely
 			// such results, so an after-body yield never trips the chunk counter and
 			// the whole batch replays in one event-loop turn. Yielding at the top of
@@ -644,13 +652,7 @@ export class UiHelpers {
 
 					if (renderToolName === "read" && readArgsCollapseIntoGroup(content.arguments)) {
 						if (hasErrorStop && errorMessage) {
-							if (!readGroup) {
-								readGroup = new ReadToolGroupComponent({
-									showContentPreview: cfgReadToolResultPreview.get(this.ctx.settings),
-								});
-								readGroup.setExpanded(this.ctx.toolOutputExpanded);
-								this.ctx.chatContainer.addChild(readGroup);
-							}
+							readGroup ??= newReadGroup();
 							readGroup.updateArgs(content.arguments, content.id);
 							readGroup.updateResult(
 								{ content: [{ type: "text", text: errorMessage }], isError: true },
@@ -658,27 +660,11 @@ export class UiHelpers {
 								content.id,
 							);
 						} else if (afterToolSegment) {
-							if (!readGroup) {
-								readGroup = new ReadToolGroupComponent({
-									showContentPreview: cfgReadToolResultPreview.get(this.ctx.settings),
-								});
-								readGroup.setExpanded(this.ctx.toolOutputExpanded);
-								this.ctx.chatContainer.addChild(readGroup);
-							}
+							readGroup ??= newReadGroup();
 							readGroup.updateArgs(content.arguments, content.id);
 							this.ctx.pendingTools.set(content.id, readGroup);
-							if (assistantComponent) {
-								readToolCallAssistantComponents.set(content.id, assistantComponent);
-								if (this.ctx.viewSession.isStreaming) {
-									this.ctx.eventController?.inheritReadToolAssistant(content.id, assistantComponent);
-								}
-							}
 						} else {
-							const normalizedArgs = normalizeToolArgs(content.arguments);
-							readToolCallArgs.set(content.id, normalizedArgs);
-							if (assistantComponent) {
-								readToolCallAssistantComponents.set(content.id, assistantComponent);
-							}
+							readToolCallArgs.set(content.id, normalizeToolArgs(content.arguments));
 						}
 						appendAssistantSegment(afterToolSegment);
 						continue;
@@ -755,38 +741,9 @@ export class UiHelpers {
 					message.toolName === "read" &&
 					(!pendingReadComponent || pendingReadComponent instanceof ReadToolGroupComponent);
 				if (isReadGroupResult) {
-					const assistantComponent = readToolCallAssistantComponents.get(message.toolCallId);
-					if (this.ctx.viewSession.isStreaming) {
-						this.ctx.eventController?.inheritReadToolAssistant(message.toolCallId, undefined);
-					}
-					const images: ImageContent[] = message.content.filter(
-						(content): content is ImageContent => content.type === "image",
-					);
-					const mediaPath = readMediaPath(message.details);
-					if (mediaPath && images.length === 0)
-						assistantComponent?.setToolResultImages(message.toolCallId, [], mediaPath);
-					if (images.length > 0 && assistantComponent) {
-						assistantComponent.setToolResultImages(message.toolCallId, images, mediaPath);
-						const hasText = message.content.some(c => c.type === "text");
-						if (!hasText && cfgTerminalShowImages.get(settings)) {
-							if (pendingReadComponent) {
-								pendingReadComponent.updateResult(message, false, message.toolCallId);
-								this.ctx.pendingTools.delete(message.toolCallId);
-							}
-							readToolCallArgs.delete(message.toolCallId);
-							readToolCallAssistantComponents.delete(message.toolCallId);
-							continue;
-						}
-					}
-					let component = this.ctx.pendingTools.get(message.toolCallId);
+					let component = pendingReadComponent;
 					if (!component) {
-						if (!readGroup) {
-							readGroup = new ReadToolGroupComponent({
-								showContentPreview: cfgReadToolResultPreview.get(this.ctx.settings),
-							});
-							readGroup.setExpanded(this.ctx.toolOutputExpanded);
-							this.ctx.chatContainer.addChild(readGroup);
-						}
+						readGroup ??= newReadGroup();
 						const args = readToolCallArgs.get(message.toolCallId);
 						if (args) {
 							readGroup.updateArgs(args, message.toolCallId);
@@ -797,7 +754,6 @@ export class UiHelpers {
 					component.updateResult(message, false, message.toolCallId);
 					this.ctx.pendingTools.delete(message.toolCallId);
 					readToolCallArgs.delete(message.toolCallId);
-					readToolCallAssistantComponents.delete(message.toolCallId);
 					continue;
 				}
 

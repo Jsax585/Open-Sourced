@@ -3525,8 +3525,6 @@ export class InteractiveMode implements InteractiveModeContext {
 					(child instanceof ToolExecutionComponent || child instanceof ReadToolGroupComponent)
 				) {
 					child.setExpanded(false);
-				} else if (child instanceof AssistantMessageComponent) {
-					child.setToolResultImagesVisible(!hideToolActivity);
 				}
 			}
 			this.chatContainer.setToolActivityVisible(!hideToolActivity);
@@ -3537,7 +3535,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (any("terminal.showImages")) {
 			const visible = cfgTerminalShowImages.get(this.settings);
 			for (const child of this.chatContainer.children) {
-				if (child instanceof ToolExecutionComponent) {
+				if (child instanceof ToolExecutionComponent || child instanceof ReadToolGroupComponent) {
 					child.setShowImages(visible);
 				} else if (child instanceof AssistantMessageComponent) {
 					child.setImagesVisible(visible);

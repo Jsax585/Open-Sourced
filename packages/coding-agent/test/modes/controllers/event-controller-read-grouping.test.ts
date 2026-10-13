@@ -15,7 +15,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
@@ -258,12 +257,10 @@ describe("EventController read-group accretion", () => {
 			isError: false,
 		} as AgentSessionEvent);
 
-		const assistant = chatContainer.children.find(
-			(child): child is AssistantMessageComponent => child instanceof AssistantMessageComponent,
-		);
-		expect(assistant).toBeDefined();
-		expect(hasImageComponent(assistant!)).toBe(false);
-		assistant?.setImagesVisible(true);
-		expect(hasImageComponent(assistant!)).toBe(true);
+		const [group] = readGroups(chatContainer);
+		expect(group).toBeDefined();
+		expect(hasImageComponent(group!)).toBe(false);
+		group!.setShowImages(true);
+		expect(hasImageComponent(group!)).toBe(true);
 	});
 });

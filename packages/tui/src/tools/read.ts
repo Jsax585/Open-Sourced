@@ -89,6 +89,11 @@ export interface ReadToolDetails {
 	 * delimited part has no linkable fs path. Lets the TUI hyperlink each grouped row the same way a standalone read row is.
 	 */
 	displayReadTargetLinks?: Array<string | null>;
+	/**
+	 * Index into the result's image blocks (in content order) for each {@link displayReadTargets} entry, aligned by
+	 * index; `null` when that part returned no image. Lets the TUI draw each target's own image under its row.
+	 */
+	displayReadTargetImages?: Array<number | null>;
 }
 
 // Parsing also recognizes incomplete counts to explain their errors; path splitting
@@ -415,13 +420,13 @@ export function readContentCode(
 }
 
 /** An image content block as the read tool emits it (base64 data + mime type). */
-interface ReadImageBlock {
+export interface ReadImageBlock {
 	type: "image";
 	data: string;
 	mimeType: string;
 }
 
-function isImageBlock(block: { type: string }): block is ReadImageBlock {
+export function isImageBlock(block: { type: string }): block is ReadImageBlock {
 	return (
 		block.type === "image" &&
 		typeof (block as Partial<ReadImageBlock>).data === "string" &&
@@ -437,7 +442,7 @@ interface TaggedReadImageBlock extends ReadImageBlock {
 }
 
 /** Native `image` node for a read image: registered blob, alt = displayed path, source pixel size when parseable. */
-function describeReadImage(block: TaggedReadImageBlock, alt: string): NativeNode {
+export function describeReadImage(block: TaggedReadImageBlock, alt: string): NativeNode {
 	const cached = block[kReadImageNode];
 	if (cached) return cached;
 	const described = base64ImageNode(block.data, block.mimeType, { alt: alt || "image", role: "omp.tool.read.image" });

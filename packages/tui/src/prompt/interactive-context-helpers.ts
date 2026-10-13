@@ -128,7 +128,6 @@ export function createAssistantMessageComponent(
 	);
 	component.setImagesVisible(ctx.assistantImagesVisible);
 	component.setTableChartsVisible(ctx.tableChartsVisible);
-	component.setToolResultImagesVisible(!ctx.hideToolActivity);
 	component.setExpanded(ctx.toolOutputExpanded);
 	// A wire the `stream-revision` axis marks `possible` can rewrite text it has
 	// already streamed; published rows are unrecoverable once they reach native

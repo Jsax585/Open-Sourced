@@ -2726,8 +2726,6 @@ export class InputController {
 				(child instanceof ToolExecutionComponent || child instanceof ReadToolGroupComponent)
 			) {
 				child.setExpanded(false);
-			} else if (child instanceof AssistantMessageComponent) {
-				child.setToolResultImagesVisible(!this.ctx.hideToolActivity);
 			}
 		}
 		this.ctx.chatContainer.setToolActivityVisible(!this.ctx.hideToolActivity);
