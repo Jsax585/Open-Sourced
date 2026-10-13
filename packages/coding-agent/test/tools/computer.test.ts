@@ -2863,7 +2863,7 @@ describe("computer cell settlement", () => {
 		]);
 	});
 
-	it("pays one quiet wait for a batch of inputs, at the first read after them, and none to resolve a ref", async () => {
+	it("pays the wait before each input to an app that owes it and at the read after them, and none to resolve a ref", async () => {
 		const transport = new MemoryTransport();
 		const native = new EditableWindowSession();
 		new ComputerWorkerCore(transport, () => native);
@@ -2872,17 +2872,90 @@ describe("computer cell settlement", () => {
 		const printed = await runWorker(
 			transport,
 			"batch-then-read",
-			'const win = await desktop.window("42"); await win.press("shift"); await (await desktop.ref("e3")).press(); return await win.ax()',
+			'const win = await desktop.window("42"); await win.press("shift"); const el = await desktop.ref("e3"); await el.press(); return await win.ax()',
 		);
 		expect(printed.ok).toBe(true);
-		expect(native.quietWaits).toEqual([[123]]);
-		// The settled tree the cell printed after its last input is what the model saw: no report, no second wait.
+		expect(native.quietWaits).toEqual([[123], [123]]);
+		// The settled tree the cell printed after its last input is what the model saw: no report, no third wait.
 		const before = native.snapshots;
 		expect(
 			await settleWorker(transport, "settle", String(printed.ok && printed.payload.returnValue)),
 		).toBeUndefined();
 		expect(native.snapshots).toBe(before);
-		expect(native.quietWaits).toEqual([[123]]);
+		expect(native.quietWaits).toEqual([[123], [123]]);
+	});
+
+	it("sends input only once its app has gone quiet after the input before it", async () => {
+		const transport = new MemoryTransport();
+		const native = new EditableWindowSession();
+		const calls: string[] = [];
+		native.keyChord = async (_target, keys) => {
+			calls.push(`press ${keys.join("+")}`);
+		};
+		native.typeText = async (_target, text) => {
+			calls.push(`type ${text}`);
+		};
+		native.waitForUiQuiet = async pids => {
+			calls.push(`quiet ${pids.join(",")}`);
+			return native.quiet;
+		};
+		new ComputerWorkerCore(transport, () => native);
+
+		await runWorker(
+			transport,
+			"save-then-name",
+			'const win = await desktop.window("42"); await win.press("cmd+s"); await win.type("name")',
+		);
+		// The sheet the shortcut opens is in place before the name is typed.
+		expect(calls).toEqual(["press cmd+s", "quiet 123", "type name"]);
+	});
+
+	it("lets input and reads on another app go ahead without the first app's wait", async () => {
+		const transport = new MemoryTransport();
+		const native = new EditableWindowSession();
+		native.windows = [windowFixture, { ...windowFixture, id: "43", title: "Other", pid: 456, focused: false }];
+		const calls: string[] = [];
+		native.keyChord = async target => {
+			calls.push(`press ${target}`);
+		};
+		native.waitForUiQuiet = async pids => {
+			calls.push(`quiet ${pids.join(",")}`);
+			return native.quiet;
+		};
+		new ComputerWorkerCore(transport, () => native);
+
+		await runWorker(
+			transport,
+			"two-apps",
+			'const a = await desktop.window("42"); const b = await desktop.window("43"); await a.press("x"); await b.press("y"); await b.ax(); await a.press("z")',
+		);
+		expect(calls).toEqual(["press 42", "press 43", "quiet 456", "quiet 123", "press 42"]);
+		// The report pays what is left: the second input to window 42.
+		await settleWorker(transport, "settle");
+		expect(calls.slice(5)).toEqual(["quiet 123"]);
+	});
+
+	it("makes desktop input wait for every app that owes a settle", async () => {
+		const transport = new MemoryTransport();
+		const native = new EditableWindowSession();
+		native.windows = [windowFixture, { ...windowFixture, id: "43", title: "Other", pid: 456, focused: false }];
+		const calls: string[] = [];
+		native.keyChord = async target => {
+			calls.push(`press ${target}`);
+		};
+		native.waitForUiQuiet = async pids => {
+			calls.push(`quiet ${pids.join(",")}`);
+			return native.quiet;
+		};
+		new ComputerWorkerCore(transport, () => native);
+
+		await runWorker(
+			transport,
+			"desktop-keys",
+			'const a = await desktop.window("42"); const b = await desktop.window("43"); await a.press("x"); await b.press("y"); await desktop.press("return")',
+		);
+		// Keys to the desktop reach whichever window has the focus, so both apps settle first.
+		expect(calls).toEqual(["press 42", "press 43", "quiet 123,456", "press desktop"]);
 	});
 
 	it("waits a fixed half second after the input when no app can be watched, and says so on no change", async () => {

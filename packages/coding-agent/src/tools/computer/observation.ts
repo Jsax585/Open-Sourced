@@ -447,6 +447,11 @@ export class ObservationLedger {
 		return id === undefined ? undefined : { id, pid: this.#windows.get(id)?.pid };
 	}
 
+	/** The process a window belongs to, when the window or the session's record of it says. */
+	pidOf(window: InputWindow): number | undefined {
+		return window.pid ?? this.#windows.get(window.id)?.pid;
+	}
+
 	/** The model received this tree of the window: it is the baseline the next read-back is marked against. */
 	recordShown(window: InputWindow, text: string, options: AxReadOptions): void {
 		const record = this.#record(window.id);
