@@ -48,6 +48,7 @@ import {
 	type AuthGatewayBootOptions,
 	type AuthGatewayRouteOptions,
 	buildGatewayApiKeyResolver,
+	buildGatewayContinuationApiKeyResolver,
 	mirrorRequestAbort,
 	normalizeClientSessionKey,
 	recordGatewayUsage,
@@ -462,7 +463,7 @@ async function handleFormatEndpoint(
 		provider: model.provider,
 		api: model.api,
 		endpoint: responseEndpointIdentity(model, parsed.options.headers),
-		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey.apiKey),
+		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
 	};
 	if (previousOwner && previousOwner.account !== owner.account) {
 		return route.module.formatError(400, "invalid_request_error", "previous_response_id belongs to another account");
@@ -481,11 +482,11 @@ async function handleFormatEndpoint(
 		model,
 		context: parsed.context,
 		toolsJson,
-		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey.apiKey),
+		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
 	});
 	streamOpts.providerSessionState = lease.states;
 	streamOpts.apiKey = previousId
-		? apiKey.apiKey
+		? buildGatewayContinuationApiKeyResolver(bootOpts.storage, model, apiKey, controller.signal)
 		: buildGatewayApiKeyResolver(
 				bootOpts.storage,
 				model,
@@ -771,7 +772,7 @@ async function handlePiNative(
 		provider: model.provider,
 		api: model.api,
 		endpoint: responseEndpointIdentity(model, requestHeaders),
-		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey.apiKey),
+		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
 	};
 	if (previousOwner && previousOwner.account !== owner.account) {
 		return piNative.formatError(400, "invalid_request_error", "previous_response_id belongs to another account");
@@ -787,7 +788,7 @@ async function handlePiNative(
 		model,
 		context: parsed.context,
 		toolsJson,
-		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey.apiKey),
+		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
 	});
 	// Build the SimpleStreamOptions actually handed to `streamSimple`. We
 	// trust the client's options (already allow-listed by `parseRequest`) and
@@ -801,7 +802,7 @@ async function handlePiNative(
 	};
 	if (bootOpts.fetch) streamOpts.fetch = bootOpts.fetch;
 	streamOpts.apiKey = previousId
-		? apiKey.apiKey
+		? buildGatewayContinuationApiKeyResolver(bootOpts.storage, model, apiKey, controller.signal)
 		: buildGatewayApiKeyResolver(
 				bootOpts.storage,
 				model,

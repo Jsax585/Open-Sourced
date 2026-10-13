@@ -8,6 +8,7 @@ import { AUTHENTICATED_SENTINEL } from "../registry/types";
 import type { SessionAffinity } from "./affinity";
 import type { CredentialPool } from "./pool";
 import type { CredentialSelector, OAuthResolutionResult } from "./select";
+import { resolveCredentialStateScopeKey } from "./sqlite-credential-store";
 import type {
 	AuthApiKeyOptions,
 	AuthCredential,
@@ -322,11 +323,20 @@ export class KeyCascade implements KeysApi {
 	): Promise<ResolvedApiKey | undefined> {
 		let credentialId: number | undefined;
 		let oauthIdentity: OAuthRequestIdentity | undefined;
-		const apiKey = await this.#resolve(provider, sessionId, options, (id, identity) => {
+		let credentialIdentity: string | undefined;
+		const apiKey = await this.#resolve(provider, sessionId, options, (id, identity, scope) => {
 			credentialId = id;
 			oauthIdentity = identity;
+			credentialIdentity = scope;
 		});
-		return apiKey === undefined ? undefined : { apiKey, credentialId, ...(oauthIdentity ? { oauthIdentity } : {}) };
+		return apiKey === undefined
+			? undefined
+			: {
+					apiKey,
+					credentialId,
+					...(oauthIdentity ? { oauthIdentity } : {}),
+					...(credentialIdentity ? { credentialIdentity } : {}),
+				};
 	}
 
 	/**
@@ -355,7 +365,7 @@ export class KeyCascade implements KeysApi {
 		provider: string,
 		sessionId?: string,
 		options?: AuthApiKeyOptions,
-		onCredentialId?: (id: number, identity?: OAuthRequestIdentity) => void,
+		onCredentialId?: (id: number, identity?: OAuthRequestIdentity, credentialIdentity?: string) => void,
 	): Promise<string | undefined> {
 		const restricted = this.#deps.affinity.isRestricted(provider, sessionId);
 		// Runtime override takes highest priority
@@ -395,7 +405,11 @@ export class KeyCascade implements KeysApi {
 		if (oauthResolved) {
 			if (onCredentialId && oauthResolved.credentialId !== undefined) {
 				const { orgId, region, inferenceRegion } = oauthResolved.credential;
-				onCredentialId(oauthResolved.credentialId, { orgId, region, inferenceRegion });
+				onCredentialId(
+					oauthResolved.credentialId,
+					{ orgId, region, inferenceRegion },
+					resolveCredentialStateScopeKey(provider, oauthResolved.credential) ?? undefined,
+				);
 			}
 			return oauthResolved.apiKey;
 		}
