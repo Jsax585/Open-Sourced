@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `skills.enableOpencodeUser` (default `false`), a skills-only opt-in for `~/.config/opencode/skills/` that matches `skills.enableClaudeUser` and `skills.enableCodexUser`, so OpenCode user skills load without enabling the whole OpenCode provider in `enabledProviders` ([#14486](https://github.com/can1357/oh-my-pi/pull/14486) by [@lockwo](https://github.com/lockwo)).
 - Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
 
 ### Changed
