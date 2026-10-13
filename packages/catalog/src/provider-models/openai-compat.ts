@@ -1096,14 +1096,14 @@ export function openaiModelManagerOptions(config?: OpenAIModelManagerConfig): Mo
  * already bundled keep resolving through the bundled slice, and the static
  * catalog (and with it the cache fingerprint) stays the bundled one.
  */
-function appendUnbundledSeedModels(
+function appendUnbundledSeedModels<TApi extends Api = Api>(
 	providerId: GeneratedProvider,
-	discovered: readonly ModelSpec<Api>[] | null,
-): readonly ModelSpec<Api>[] | null {
+	discovered: readonly ModelSpec<TApi>[] | null,
+): readonly ModelSpec<TApi>[] | null {
 	if (!discovered) return null;
 	const known = new Set(getBundledModels(providerId).map(model => model.id));
 	for (const model of discovered) known.add(model.id);
-	const seeds = seedModels(providerId).filter(seed => !known.has(seed.id));
+	const seeds = seedModels<TApi>(providerId).filter(seed => !known.has(seed.id));
 	return seeds.length === 0 ? discovered : [...discovered, ...seeds.map(seed => ({ ...seed }))];
 }
 
@@ -4109,9 +4109,10 @@ export function vercelAiGatewayModelManagerOptions(
 			const discovered = await fetchDiscovered();
 			if (!discovered) return null;
 			if (discovered.length === 0) return [];
-			const models = appendUnbundledSeedModels("vercel-ai-gateway", discovered) as
-				| readonly ModelSpec<"anthropic-messages" | "typesafe">[]
-				| null;
+			const models = appendUnbundledSeedModels<"anthropic-messages" | "typesafe">(
+				"vercel-ai-gateway",
+				discovered,
+			);
 			if (!models) return null;
 			const discoveredCount = discovered.length;
 			return models.map((model, index): ModelSpec<"anthropic-messages" | "typesafe"> => {

@@ -87,8 +87,8 @@ function stringRecord<K extends string = string>(value: unknown, allow?: readonl
 /**
  * Narrow a compiled `judgment` axis value to a JudgmentConfig. Unknown keys
  * are ignored; `undefined` (absent, non-object, or no recognized field)
- * makes the caller drop any spec value, so stale policy cannot survive
- * an api-switched rebuild.
+ * makes the caller drop inherited policy when the spec does not explicitly
+ * set judgment, so stale policy cannot survive an api-switched rebuild.
  */
 function judgmentConfig(value: unknown): JudgmentConfig | undefined {
 	const payload = objectPayload(value);
@@ -121,7 +121,11 @@ function judgmentConfig(value: unknown): JudgmentConfig | undefined {
  * `supports-assistant-prefill`) is rule-owned; `context-promotion-target` fills
  * only when the spec left it unset.
  */
-function applyCatalogAssignments<TApi extends Api>(model: Model<TApi>, catalog: Record<string, unknown>): void {
+function applyCatalogAssignments<TApi extends Api>(
+	model: Model<TApi>,
+	catalog: Record<string, unknown>,
+	specHasJudgment = false,
+): void {
 	const kind = MODEL_KINDS.find(value => value === catalog.kind);
 	if (kind !== undefined) model.kind = kind;
 	// Catalog judgment wire facts are the baseline; spec keys win per-key, while
@@ -131,7 +135,7 @@ function applyCatalogAssignments<TApi extends Api>(model: Model<TApi>, catalog: 
 	if (judgment !== undefined) {
 		const prior = model.judgment;
 		model.judgment = { ...judgment, ...prior };
-	} else {
+	} else if (!specHasJudgment) {
 		delete model.judgment;
 	}
 	if (catalog.contextWindowAuthoritative === true) {
@@ -433,7 +437,11 @@ export function buildModel<TApi extends Api>(spec: ModelSpec<TApi>): Model<TApi>
 		compat: policy.compat,
 		compatConfig: spec.compat,
 	};
-	applyCatalogAssignments(model, policy.catalog);
+	applyCatalogAssignments(
+		model,
+		policy.catalog,
+		Object.hasOwn(spec, "judgment") && spec.judgment !== undefined,
+	);
 	applyCatalogCorrections(model, policy.catalog);
 	// Configured kinds and lifetimes replace catalog values rather than merging with them.
 	if (spec.kindConfig !== undefined) model.kind = spec.kindConfig;

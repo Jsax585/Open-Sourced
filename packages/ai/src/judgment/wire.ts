@@ -7,7 +7,7 @@ import type { JudgmentConfig } from "@oh-my-pi/pi-catalog/types";
 import * as AIError from "../error";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { Usage } from "../types";
-import { type JudgmentRequest, type Questions, tokenUsage } from "./types";
+import { type JudgmentRequest, type Questions, type WireQuestions, tokenUsage } from "./types";
 
 /** Where one attempt posts and which bearer token it sends. */
 export interface JudgmentTarget {
@@ -34,7 +34,7 @@ export interface JudgmentWire {
 	 */
 	target(baseUrl: string, model: string, key: string): JudgmentTarget;
 	/** Request body for `model`. */
-	encode(request: JudgmentRequest, model: string): unknown;
+	encode(request: JudgmentRequest<Questions | WireQuestions>, model: string): unknown;
 	/** The response's answers and usage; `undefined` when the payload is not this API's response shape. */
 	decode(payload: unknown, questions?: Questions): DecodedJudgment | undefined;
 }
@@ -117,11 +117,11 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 				token: innerTarget.token,
 			};
 		},
-		encode(request, model) {
+		encode(request: JudgmentRequest<Questions>, model) {
 			if (typeMap === undefined && typeField === "type") {
 				return inner.encode(request, model);
 			}
-			const wireQuestions: Record<string, Record<string, unknown>> = Object.create(null);
+			const wireQuestions: WireQuestions = Object.create(null);
 			for (const id in request.questions) {
 				if (!Object.hasOwn(request.questions, id)) continue;
 				const question = request.questions[id];
@@ -133,7 +133,7 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 				wireQuestions[id] = wireQuestion;
 			}
 			// Validated wire question envelope: wire-mapped discriminators replace canonical question types.
-			return inner.encode({ state: request.state, questions: wireQuestions as unknown as Questions }, model);
+			return inner.encode({ state: request.state, questions: wireQuestions }, model);
 		},
 		decode(payload, questions) {
 			const decoded = inner.decode(payload, questions);
