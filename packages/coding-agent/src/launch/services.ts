@@ -103,7 +103,8 @@ function subscribe(session: ToolSession, client: DaemonBrokerClient): void {
 	const revision = serviceState(session).revision;
 	const cwd = session.cwd;
 	const unsubscribe = client.onCompletion(owner, notification => {
-		if (serviceOwner(session) !== owner || session.cwd !== cwd || serviceState(session).revision !== revision) return;
+		if (serviceOwner(session) !== owner || session.cwd !== cwd || serviceState(session).revision !== revision)
+			throw new Error("Service session changed before completion delivery");
 		const generation = `${notification.daemon.id}:${notification.daemon.startedAt}`;
 		for (const pending of serviceState(session).pending) pending.completed.add(generation);
 		const tracked = serviceState(session).owned.get(notification.daemon.name);
