@@ -617,6 +617,75 @@ describe("an indexed session started while the previous session's publish is sti
 	});
 });
 
+/**
+ * Holds the next writer flush's confirmation until released, after the append
+ * itself landed; `undelayedConfirmed` resolves once a flush confirms while
+ * that one is held.
+ */
+class DelayedConfirmationStorage extends IndexedSessionStorage {
+	delayNextConfirmation = false;
+	readonly confirmationHeld = Promise.withResolvers<void>();
+	readonly releaseConfirmation = Promise.withResolvers<void>();
+	readonly undelayedConfirmed = Promise.withResolvers<void>();
+	#holding = false;
+
+	override openWriter(path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }) {
+		const writer = super.openWriter(path, options);
+		const flush = writer.flush.bind(writer);
+		writer.flush = async () => {
+			const delayed = this.delayNextConfirmation;
+			this.delayNextConfirmation = false;
+			await flush();
+			if (!delayed) {
+				if (this.#holding) queueMicrotask(() => this.undelayedConfirmed.resolve());
+				return;
+			}
+			this.#holding = true;
+			this.confirmationHeld.resolve();
+			await this.releaseConfirmation.promise;
+			this.#holding = false;
+		};
+		return writer;
+	}
+}
+
+describe("indexed append confirmations that arrive out of order", () => {
+	it("keep both confirmed turns when a later append fails and whole-journal publishes fail", async () => {
+		const backend = new FakeBackend();
+		const storage = new DelayedConfirmationStorage(backend);
+		await storage.initialize();
+		const manager = SessionManager.create("/cwd", "/sessions/proj", storage);
+		await manager.ensureOnDisk();
+		manager.appendMessage(assistantMessage("seed"));
+		await manager.flush();
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("expected a session file");
+
+		storage.delayNextConfirmation = true;
+		manager.appendMessage({ role: "user", content: "confirmed late", timestamp: Date.now() });
+		await storage.confirmationHeld.promise;
+		manager.appendMessage({ role: "user", content: "confirmed early", timestamp: Date.now() });
+		// The second append's confirmation settles before the first one's.
+		await storage.undelayedConfirmed.promise;
+		storage.releaseConfirmation.resolve();
+		await manager.flush();
+
+		backend.failWrites = Number.POSITIVE_INFINITY;
+		backend.failAppends = 1;
+		manager.appendMessage({ role: "user", content: "rejected", timestamp: Date.now() });
+		await storage.drain().catch(() => {});
+		manager.appendMessage({ role: "user", content: "after", timestamp: Date.now() });
+
+		await expect(manager.flush()).resolves.toBeUndefined();
+		expect(userTurnsOf((await reopenIndexed(backend, sessionFile)).getBranch())).toEqual([
+			"confirmed late",
+			"confirmed early",
+			"rejected",
+			"after",
+		]);
+	});
+});
+
 describe("an indexed durably discarded entry", () => {
 	async function sessionWithDiscardableTurn() {
 		const session = await seededIndexedSession();

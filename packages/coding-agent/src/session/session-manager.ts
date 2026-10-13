@@ -799,9 +799,10 @@ interface SessionBodyStamp {
  * write succeeded: records whose ids and parent links are
  * `entries[0..confirmed)` in order, `confirmedSize` bytes long. Their content
  * may be older than memory's. `issued` and `issuedSize` also count appends a
- * deferring backend accepted but has not confirmed yet. It describes the live
- * journal only while `entries` is the manager's entry array, which every
- * structural change replaces.
+ * deferring backend accepted but has not confirmed yet; `confirmedAhead`
+ * holds those that confirmed before an earlier one, keyed by their start. It
+ * describes the live journal only while `entries` is the manager's entry
+ * array, which every structural change replaces.
  */
 interface DurableFrontier {
 	readonly entries: readonly SessionEntry[];
@@ -809,6 +810,19 @@ interface DurableFrontier {
 	confirmedSize: number;
 	issued: number;
 	issuedSize: number;
+	readonly confirmedAhead: Map<number, { end: number; bytes: number }>;
+}
+
+/** A frontier proving `entries[0..count)` occupy exactly `size` bytes, with nothing pending. */
+function durableFrontier(entries: readonly SessionEntry[], count: number, size: number): DurableFrontier {
+	return {
+		entries,
+		confirmed: count,
+		confirmedSize: size,
+		issued: count,
+		issuedSize: size,
+		confirmedAhead: new Map(),
+	};
 }
 
 /** Entries another writer added to the session file, and where they sit in it (see `#foreignEntriesIn`). */
@@ -1316,13 +1330,7 @@ export class SessionManager {
 		this.#expectedDiskSize = diskSize;
 		this.#durable =
 			found.extendsFrontier && durable && kept.length === found.foreign.length
-				? {
-						entries: this.#entries,
-						confirmed: durable.confirmed + kept.length,
-						confirmedSize: diskSize,
-						issued: durable.confirmed + kept.length,
-						issuedSize: diskSize,
-					}
+				? durableFrontier(this.#entries, durable.confirmed + kept.length, diskSize)
 				: undefined;
 		if (kept.length > 0)
 			logger.warn("Kept session entries another writer added", {
@@ -1698,13 +1706,7 @@ export class SessionManager {
 			this.#durable = undefined;
 			return;
 		}
-		this.#durable = {
-			entries: stamp.entries,
-			confirmed: stamp.entryCount,
-			confirmedSize: bytes,
-			issued: stamp.entryCount,
-			issuedSize: bytes,
-		};
+		this.#durable = durableFrontier(stamp.entries, stamp.entryCount, bytes);
 		if (
 			stamp.entryCount === this.#entries.length &&
 			stamp.revision === this.#bodyRevision &&
@@ -2151,11 +2153,18 @@ export class SessionManager {
 			durable.issuedSize += bytes;
 			const settled = confirmation.then(
 				() => {
-					if (this.#durable !== durable || durable.confirmed !== start) return;
-					durable.confirmed = end;
-					durable.confirmedSize += bytes;
+					if (this.#durable !== durable) return;
+					// Confirmations can settle out of order; one that lands past
+					// the confirmed position waits until the gap before it fills.
+					durable.confirmedAhead.set(start, { end, bytes });
+					for (let next = durable.confirmedAhead.get(durable.confirmed); next;) {
+						durable.confirmedAhead.delete(durable.confirmed);
+						durable.confirmed = next.end;
+						durable.confirmedSize += next.bytes;
+						next = durable.confirmedAhead.get(durable.confirmed);
+					}
 					this.#expectedDiskSize = durable.confirmedSize;
-					if (end === this.#entries.length && !this.#rewriteRequired) this.#clearDiskError();
+					if (durable.confirmed === this.#entries.length && !this.#rewriteRequired) this.#clearDiskError();
 				},
 				err => {
 					// The store rolls its size back to the last confirmed append, and
@@ -2163,6 +2172,7 @@ export class SessionManager {
 					if (this.#durable === durable) {
 						durable.issued = durable.confirmed;
 						durable.issuedSize = durable.confirmedSize;
+						durable.confirmedAhead.clear();
 					}
 					this.#noteDiskFailure(err);
 				},
@@ -2509,13 +2519,7 @@ export class SessionManager {
 		// The copy holds the same entries in the same order, so the file still
 		// holds the snapshot's durable prefix of it.
 		this.#durable = snapshot.durable
-			? {
-					entries: this.#entries,
-					confirmed: snapshot.durable.count,
-					confirmedSize: snapshot.durable.size,
-					issued: snapshot.durable.count,
-					issuedSize: snapshot.durable.size,
-				}
+			? durableFrontier(this.#entries, snapshot.durable.count, snapshot.durable.size)
 			: undefined;
 		this.#additionalDirectories = snapshot.header.additionalDirectories ?? [];
 		this.#sessionName = snapshot.sessionName;
@@ -2660,13 +2664,7 @@ export class SessionManager {
 		this.#durable =
 			migrated || loaded.malformedRecords > 0 || sourceSize === null
 				? undefined
-				: {
-						entries: this.#entries,
-						confirmed: this.#entries.length,
-						confirmedSize: sourceSize,
-						issued: this.#entries.length,
-						issuedSize: sourceSize,
-					};
+				: durableFrontier(this.#entries, this.#entries.length, sourceSize);
 		this.#loadedMalformedRecords = loaded.malformedRecords;
 		this.#forceFileCreation = true;
 		this.#artifactManager = null;
