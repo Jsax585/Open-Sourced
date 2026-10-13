@@ -33,7 +33,15 @@ import { isFilesystemSourcePath } from "../tools/path-utils";
 import { supportsExternalThinking } from "../tools/think";
 import { ToolAbortError } from "../tools/tool-errors";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import { isMountableUnderXdev, listXdevTools, type XdevState, xdevDocsFor, xdevEntries } from "../tools/xdev";
+import {
+	CODE_MODE_DIRECT_CONTROLS,
+	isMountableUnderXdev,
+	listXdevTools,
+	resolveXdevPresentation,
+	type XdevState,
+	xdevDocsFor,
+	xdevEntries,
+} from "../tools/xdev";
 import { type EditMode } from "@oh-my-pi/pi-tui/tools/edit";
 import { resolveEditMode } from "../utils/edit-mode";
 import {
@@ -53,7 +61,13 @@ import type { SessionManager } from "./session-manager";
 import { cfgDisabledExtensions, cfgSkills, type SkillsSettings } from "../extensibility/settings";
 import { cfgExternalThinking, cfgIncludeModelInPrompt, cfgInlineToolDescriptors, cfgSkillful } from "./settings";
 import { cfgStartupQuiet } from "../modes/settings";
-import { cfgToolsApproval, cfgToolsApprovalMode, cfgToolsXdevDocs, cfgToolsXdevInlineDevices } from "../tools/settings";
+import {
+	cfgToolsApproval,
+	cfgToolsApprovalMode,
+	cfgToolsXdev,
+	cfgToolsXdevDocs,
+	cfgToolsXdevInlineDevices,
+} from "../tools/settings";
 
 /** Capabilities borrowed from the owning AgentSession. */
 export interface SessionToolsHost {
@@ -82,6 +96,8 @@ export interface SessionToolsHost {
 	evalPreludes(): readonly EvalPreludeDefinition[];
 	/** Live user-tagged model agents; candidates for the next base rebuild's advertised snapshot. */
 	sessionAgents(): readonly AgentDefinition[];
+	/** Synchronize transport-dependent runtime policy after a tool presentation commits. */
+	onToolPresentationChanged?(): void;
 }
 
 /** Registry delta applied by the SDK's settings-gated tool reconcile. */
@@ -400,10 +416,10 @@ export class SessionTools {
 	#setDeviceOnlyWrite: SessionToolsOptions["setDeviceOnlyWrite"];
 	#setPendingFullWriteDescription: SessionToolsOptions["setPendingFullWriteDescription"];
 	/**
-	 * The session originated with an xd:// transport grant. Unlike the live
+	 * The session acquired an xd:// transport grant. Unlike the live
 	 * device-only flag, this survives temporary full-write upgrades.
 	 */
-	readonly #deviceOnlyWriteTransportAvailable: boolean;
+	#deviceOnlyWriteTransportAvailable: boolean;
 	#ensureGoalRegistered: SessionToolsOptions["ensureGoalRegistered"];
 	#reconcileSettingsGatedTools: SessionToolsOptions["reconcileSettingsGatedTools"];
 	#skills: Skill[];
@@ -618,6 +634,11 @@ export class SessionTools {
 		return [...(this.#xdev?.mountedNames ?? [])];
 	}
 
+	/** Whether tools are currently presented through provider-neutral Code Mode. */
+	get codeMode(): boolean {
+		return this.#xdev?.codeMode === true;
+	}
+
 	/** Whether the edit tool is registered. */
 	get hasEditTool(): boolean {
 		return this.#toolRegistry.has("edit");
@@ -645,6 +666,11 @@ export class SessionTools {
 	/** Looks up an enabled tool through the same ACP permission gate as direct calls. */
 	getToolForEvalBridge(name: string): AgentTool | undefined {
 		if (!this.getEnabledToolNames().includes(name)) return undefined;
+		if (this.#xdev?.codeMode && CODE_MODE_DIRECT_CONTROLS[name] === true) {
+			throw new ToolError(
+				`\`${name}\` must be called directly, not through eval, so its session action takes effect.`,
+			);
+		}
 		const tool = this.#toolRegistry.get(name);
 		return tool ? this.#wrapToolForAcpPermission(tool) : undefined;
 	}
@@ -1034,15 +1060,25 @@ export class SessionTools {
 		const xdevWriteAvailable =
 			builtInWriteAvailable &&
 			(selectedTools.some(({ name }) => name === "write") || this.#deviceOnlyWriteTransportAvailable);
+		const presentation = this.#xdev
+			? resolveXdevPresentation(
+					this.#host.settings,
+					toolNames,
+					this.#builtInToolNames,
+					this.#deviceOnlyWriteTransportAvailable,
+				)
+			: undefined;
+		const codeMode = presentation?.codeMode === true;
 		const isPresentationPinned = (name: string): boolean =>
 			this.#presentationPinnedToolNames?.has(name) === true || this.#runtimeSelectedToolNames?.has(name) === true;
 		const mountCandidates = selectedTools.filter(
 			({ name, tool }) =>
 				this.#xdev !== undefined &&
+				(codeMode || cfgToolsXdev.get(this.#host.settings)) &&
 				xdevReadAvailable &&
 				xdevWriteAvailable &&
-				!isPresentationPinned(name) &&
-				isMountableUnderXdev(tool),
+				(codeMode || !isPresentationPinned(name)) &&
+				isMountableUnderXdev(tool, presentation),
 		);
 		const mountNames = new Set(mountCandidates.map(({ name }) => name));
 		const tools: AgentTool[] = [];
@@ -1095,11 +1131,16 @@ export class SessionTools {
 			this.#isDeviceOnlyWrite?.() === true &&
 			this.#setDeviceOnlyWrite !== undefined;
 		const previousMounted = new Set(this.#xdev?.mountedNames ?? []);
+		const previousCodeMode = this.#xdev?.codeMode;
 		const previousActiveToolNames = this.getActiveToolNames();
 		const previousEnabledToolNames = this.#enabledToolNames;
 		this.#enabledToolNames = new Set([...validToolNames, ...mountNames]);
 		this.#setMountedNames(mountNames);
-		this.#setActiveToolNames?.(validToolNames);
+		if (this.#xdev) this.#xdev.codeMode = codeMode;
+		const previousToolPredicateNames = previousCodeMode ? [...previousEnabledToolNames] : previousActiveToolNames;
+		this.#setActiveToolNames?.(codeMode ? this.#enabledToolNames : validToolNames);
+		// Entering or leaving the mode deliberately changes the model's work surface.
+		forcePromptRefresh ||= codeMode !== (previousCodeMode === true);
 
 		let rebuiltSystemPrompt: string[] | undefined;
 		let rebuiltSignature: string | undefined;
@@ -1163,7 +1204,8 @@ export class SessionTools {
 			if (restrictDeviceOnlyWrite) this.#setDeviceOnlyWrite?.(false);
 			if (upgradeDeviceOnlyWrite) this.#setPendingFullWriteDescription?.(false);
 			this.#setMountedNames(previousMounted);
-			this.#setActiveToolNames?.(previousActiveToolNames);
+			if (this.#xdev) this.#xdev.codeMode = previousCodeMode;
+			this.#setActiveToolNames?.(previousToolPredicateNames);
 			this.#enabledToolNames = previousEnabledToolNames;
 			throw error;
 		}
@@ -1172,7 +1214,8 @@ export class SessionTools {
 			if (restrictDeviceOnlyWrite) this.#setDeviceOnlyWrite?.(false);
 			if (upgradeDeviceOnlyWrite) this.#setPendingFullWriteDescription?.(false);
 			this.#setMountedNames(previousMounted);
-			this.#setActiveToolNames?.(previousActiveToolNames);
+			if (this.#xdev) this.#xdev.codeMode = previousCodeMode;
+			this.#setActiveToolNames?.(previousToolPredicateNames);
 			this.#enabledToolNames = previousEnabledToolNames;
 			return;
 		}
@@ -1227,6 +1270,7 @@ export class SessionTools {
 			} else if (upgradeDeviceOnlyWrite || deactivateDeviceOnlyWrite) {
 				this.#setDeviceOnlyWrite?.(false);
 			}
+			this.#host.onToolPresentationChanged?.();
 		} finally {
 			if (upgradeDeviceOnlyWrite) this.#setPendingFullWriteDescription?.(false);
 		}
@@ -1334,9 +1378,13 @@ export class SessionTools {
 	 * or switched in later, stays frozen.
 	 */
 	#implicitRebuildBinding(): "free" | "frozen" | { promptDigest: string } {
-		if (this.#lastAppliedToolSignature === undefined || this.#host.model()?.thinking?.prefixBinding !== true) {
+		if (
+			!this.#xdev?.codeMode &&
+			(this.#lastAppliedToolSignature === undefined || this.#host.model()?.thinking?.prefixBinding !== true)
+		) {
 			return "free";
 		}
+		if (this.#xdev?.codeMode && this.#capturedPromptDigest !== undefined) return "frozen";
 		const latest = this.#latestReply();
 		if (latest === undefined) return "free";
 		return latest === this.#restoredTranscript?.reply ? this.#restoredTranscript : "frozen";
@@ -1933,6 +1981,7 @@ export class SessionTools {
 				this.setToolBuiltIn(name, builtIn);
 				if (activate) enabled.add(name);
 			}
+			this.#deviceOnlyWriteTransportAvailable ||= this.#isDeviceOnlyWrite?.() === true;
 			const xdevChanged = delta.xdev !== this.#xdev;
 			if (xdevChanged) {
 				this.#xdev = delta.xdev;
@@ -1961,7 +2010,7 @@ export class SessionTools {
 		// Local alias: closures below cannot observe the field narrowing.
 		const rebuildSystemPrompt = this.#rebuildSystemPrompt;
 		const activeToolNames = this.getActiveToolNames();
-		this.#setActiveToolNames?.(activeToolNames);
+		this.#setActiveToolNames?.(this.#xdev?.codeMode ? this.getEnabledToolNames() : activeToolNames);
 		const previousBaseSystemPrompt = this.#baseSystemPrompt;
 		// Derive the candidate and run the awaited render inside its scope: the
 		// tool getters read the candidate while the prompt renders, so the built

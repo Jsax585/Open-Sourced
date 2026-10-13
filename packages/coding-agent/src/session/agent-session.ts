@@ -2065,6 +2065,7 @@ export class AgentSession implements SettingsScope {
 			localProtocolOptions: () => this.#localProtocolOptions(),
 			evalPreludes: () => this.getEvalPreludes(),
 			sessionAgents: () => this.getSessionAgents(),
+			onToolPresentationChanged: () => this.#syncAppendOnlyContext(this.model),
 		};
 		this.#tools = new SessionTools(sessionToolsHost, {
 			autoApprove: config.autoApprove,
@@ -10810,7 +10811,7 @@ export class AgentSession implements SettingsScope {
 	 */
 	#syncAppendOnlyContext(model: Model | null | undefined): void {
 		const setting = cfgProviderAppendOnlyContext.get(this.settings);
-		const enable = shouldEnableAppendOnlyContext(setting, model);
+		const enable = shouldEnableAppendOnlyContext(setting, model, this.#tools.codeMode);
 		const providerId = model?.provider;
 		const prev = this.#lastAppendOnlyResolution;
 		if (prev && prev.enable === enable && prev.providerId === providerId) return;

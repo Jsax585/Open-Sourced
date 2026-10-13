@@ -75,7 +75,7 @@ import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { TodoTool } from "./todo";
 import { WriteTool } from "./write";
 import { WaitTool } from "./wait";
-import { isMountableUnderXdev, resolveXdevTool, type XdevState } from "./xdev";
+import { isMountableUnderXdev, resolveXdevPresentation, resolveXdevTool, type XdevState } from "./xdev";
 import { YieldTool } from "./yield";
 
 import {
@@ -91,6 +91,7 @@ import {
 	cfgLaunchEnabled,
 	cfgSecurityEnabled,
 	cfgTodoEnabled,
+	cfgToolsCodeMode,
 	cfgToolsXdev,
 	cfgWebSearchEnabled,
 } from "./settings";
@@ -858,7 +859,9 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const builtInNames = new Set(tools.map(tool => tool.name));
 	for (const tool of tools) toolRegistry.set(tool.name, tool);
 
-	const xdevRequested = !restrictToolNames && cfgToolsXdev.get(session.settings);
+	const codeModeRequested =
+		cfgToolsCodeMode.get(session.settings) && builtInNames.has("eval") && builtInNames.has("read");
+	const xdevRequested = !restrictToolNames && (cfgToolsXdev.get(session.settings) || codeModeRequested);
 	// xd:// mounting rides the write tool as its execution transport, so a
 	// session whose explicit tool list grants `read` but omits `write` would
 	// allocate no xd:// state and expose every later-registered MCP/extension
@@ -894,14 +897,23 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const xdevEnabled = xdevRequested && tools.some(tool => tool.name === "write");
 	const mountBuiltinTools = requestedTools === undefined;
 	if (xdevEnabled) {
+		const presentation = resolveXdevPresentation(
+			session.settings,
+			tools.map(tool => tool.name),
+			builtInNames,
+		);
 		const mountedNames = new Set<string>();
 		const kept: Tool[] = [];
 		for (const tool of tools) {
-			const mountable = mountBuiltinTools && isMountableUnderXdev(tool) && tool.name in BUILTIN_TOOLS;
+			const mountable =
+				(mountBuiltinTools || presentation.codeMode) &&
+				isMountableUnderXdev(tool, presentation) &&
+				tool.name in BUILTIN_TOOLS;
 			if (mountable) mountedNames.add(tool.name);
 			else kept.push(tool);
 		}
 		session.xdev = createXdevState(session, toolRegistry, builtInNames, mountedNames);
+		session.xdev.codeMode = presentation.codeMode;
 		tools = kept;
 	}
 	// Staged previews from deferrable tools (e.g. ast_edit) resolve through a
@@ -931,6 +943,9 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	}
 	if (xdevEnabled) {
 		const finalActiveNames = new Set(tools.map(tool => tool.name));
+		if (session.xdev?.codeMode) {
+			for (const name of session.xdev.mountedNames) finalActiveNames.add(name);
+		}
 		if (session.setActiveToolNames) session.setActiveToolNames(finalActiveNames);
 		else session.isToolActive = name => finalActiveNames.has(name);
 	}

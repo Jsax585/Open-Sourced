@@ -279,6 +279,7 @@ import {
 	renderXdevPromptDocs,
 	resolveBuiltinToolPlan,
 	resolveMountedXdevExecutable,
+	resolveXdevPresentation,
 	SETTINGS_GATED_BUILTIN_TOOL_NAMES,
 	supportsExternalThinking,
 	type Tool,
@@ -323,6 +324,7 @@ import {
 	cfgSecurityEnabled,
 	cfgSpeechgenEnabled,
 	cfgToolsAbortOnFabricatedResult,
+	cfgToolsCodeMode,
 	cfgToolsIntentTracing,
 	cfgToolsMaxTimeout,
 	cfgToolsXdev,
@@ -3561,13 +3563,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			return goalRegistration;
 		};
 
-		// `tools.xdev` flips allocate or release the `xd://` state createTools builds
-		// over the canonical map; the session re-partitions on its next apply. Like
-		// createTools, mounting needs a built-in `write` transport.
+		// Tool-presentation settings allocate or release xd:// over the canonical
+		// map. Code Mode requires this discovery transport even when ordinary
+		// discoverable-tool mounting is disabled.
 		const syncXdevState = (): void => {
 			const wanted =
 				!restrictToolNames &&
-				cfgToolsXdev.get(settings) &&
+				(cfgToolsXdev.get(settings) || cfgToolsCodeMode.get(settings)) &&
 				toolRegistry.has("write") &&
 				builtInRegistryToolNames.has("write");
 			if (wanted === (toolSession.xdev !== undefined)) return;
@@ -3623,6 +3625,31 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			removed.push(...custom.removed);
 			for (const entry of custom.added) {
 				added.push({ name: entry.name, builtIn: false, activate: entry.hidden !== true });
+			}
+			// Code Mode can be enabled after a read-only session starts without xd://.
+			// Add only the existing device transport, never a filesystem write grant.
+			const enabled = new Set(session.getEnabledToolNames());
+			for (const { name, activate } of added) {
+				if (activate) enabled.add(name);
+			}
+			for (const name of removed) enabled.delete(name);
+			if (
+				!restrictToolNames &&
+				cfgToolsCodeMode.get(settings) &&
+				enabled.has("eval") &&
+				enabled.has("read") &&
+				!enabled.has("write") &&
+				(!toolRegistry.has("write") || builtInRegistryToolNames.has("write"))
+			) {
+				const previousDeviceOnlyWrite = toolSession.deviceOnlyWrite;
+				toolSession.deviceOnlyWrite = true;
+				try {
+					if (await ensureWriteRegistered()) added.push({ name: "write", builtIn: true, activate: true });
+					else toolSession.deviceOnlyWrite = previousDeviceOnlyWrite;
+				} catch (error) {
+					toolSession.deviceOnlyWrite = previousDeviceOnlyWrite;
+					throw error;
+				}
 			}
 			syncXdevState();
 			return { added, removed, xdev: toolSession.xdev };
@@ -4108,14 +4135,27 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// `read` without `write` can use the device-only transport registered by
 		// createTools without surfacing it when no device needs it.
 		if (toolSession.xdev) {
+			const presentation = resolveXdevPresentation(
+				settings,
+				initialToolNames,
+				builtInRegistryToolNames,
+				toolSession.deviceOnlyWrite === true,
+			);
+			toolSession.xdev.codeMode = presentation.codeMode;
 			const topLevelToolNames: string[] = [];
 			const mountedNames: string[] = [];
 			for (const name of initialToolNames) {
 				const tool = toolRegistry.get(name);
 				const explicitlyRequested = explicitlyRequestedToolNameSet?.has(name) === true;
-				if (tool && xdevReadAvailable && xdevWriteAvailable && !explicitlyRequested && isMountableUnderXdev(tool))
+				if (
+					tool &&
+					xdevReadAvailable &&
+					xdevWriteAvailable &&
+					(presentation.codeMode || !explicitlyRequested) &&
+					isMountableUnderXdev(tool, presentation)
+				) {
 					mountedNames.push(name);
-				else topLevelToolNames.push(name);
+				} else topLevelToolNames.push(name);
 			}
 			toolSession.xdev.mountedNames.clear();
 			for (const name of mountedNames) toolSession.xdev.mountedNames.add(name);
@@ -4129,7 +4169,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 		}
 
-		setSessionActiveToolNames(initialToolNames);
+		setSessionActiveToolNames(
+			toolSession.xdev?.codeMode ? [...initialToolNames, ...toolSession.xdev.mountedNames] : initialToolNames,
+		);
 		const { systemPrompt } = await logger.time(
 			"buildSystemPrompt",
 			rebuildSystemPrompt,
@@ -4440,7 +4482,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			onToolChoiceUnavailable: () => session?.toolChoiceQueue.reject("unavailable"),
 			telemetry: options.telemetry,
 			appendOnlyContext: model
-				? shouldEnableAppendOnlyContext(cfgProviderAppendOnlyContext.get(settings), model)
+				? shouldEnableAppendOnlyContext(
+						cfgProviderAppendOnlyContext.get(settings),
+						model,
+						toolSession.xdev?.codeMode,
+					)
 					? new AppendOnlyContextManager()
 					: undefined
 				: undefined,
@@ -4830,14 +4876,20 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					// Re-registration refreshes the implementation, but it must not reverse an
 					// explicit setActiveTools() decision that disabled the previous definition.
 					if (existingTool && !alreadyEnabled) return;
+					const presentation = resolveXdevPresentation(
+						settings,
+						enabled,
+						builtInRegistryToolNames,
+						toolSession.deviceOnlyWrite === true,
+					);
 					const shouldMount =
-						!explicitlyRequested &&
+						(presentation.codeMode || !explicitlyRequested) &&
 						toolSession.xdev !== undefined &&
 						builtInRegistryToolNames.has("read") &&
 						builtInRegistryToolNames.has("write") &&
 						enabled.includes("read") &&
 						(enabled.includes("write") || toolSession.deviceOnlyWrite === true) &&
-						isMountableUnderXdev(liveTool);
+						isMountableUnderXdev(liveTool, presentation);
 					const nextMounted = shouldMount
 						? mounted.includes(name)
 							? mounted

@@ -75,6 +75,20 @@ When at least one runtime is enabled, disabled runtimes are removed from the ses
 
 `eval.autoProvision=true` lets the first `%bun add` create the managed JavaScript package environment; turning it off requires an existing environment or `%environment project`. Package installation pauses the compute watchdog but has its own ten-minute deadline and remains cancellable.
 
+## Code Mode
+
+Enable `tools.codeMode: true` to use eval as the primary work surface on any provider. It is opt-in and does not require provider-specific Code Mode metadata. Built-in `eval` and `read` must be enabled; restricted host-owned sessions retain their original tool surface.
+
+Code Mode keeps discovery (`read`, `write`, `eval`), user interaction, and session controls directly callable. Other enabled tools are listed in the `xd://` catalog instead of carrying their full schemas on every request. Read `xd://<tool>` for its parameters, then invoke it through `await tool.<name>(args)`. `tools.codeModeDirectTools` keeps additional enabled names direct without granting access to disabled tools. Code Mode uses catalog-only discovery even when `tools.xdev` is off or `tools.xdevDocs` normally inlines schemas.
+
+Batch known dependent steps in one cell; use `Promise.all` in JavaScript or `asyncio.gather` in Python for independent calls. Inspect exceptions and returned `hasError` flags before using results, and display only the information needed for the next decision. On failure, retry only the failed step: earlier side effects are not rolled back.
+
+This reduces upfront tool-schema tokens, avoids returning every intermediate payload to the model, and can combine several operations into one model round trip. Discovery reads and generated code also consume tokens, so task-level savings depend on the workload. No quality or billing improvement is guaranteed.
+
+With `provider.appendOnlyContext: auto`, active Code Mode reuses the append-only context manager. Ordinary turns and newly mounted tool discoveries preserve the static system/tool prefix; discovery notices are appended to the conversation. Explicit tool-setting changes, replacement tool definitions, model switches, custom prompt overrides, and compaction can invalidate the prefix. `provider.appendOnlyContext: off` remains an explicit override, and provider cache eligibility is not a guarantee of a cache hit.
+
+Permissions and enabled-tool restrictions still apply to bridged calls. Read-only tool lists may receive the existing device-only `write` transport, not a filesystem write grant. `ask`, `yield`, `checkpoint`, `rewind`, `new_context`, and `goal` must be called directly because their results drive session state; the eval bridge rejects them in Code Mode. Disabling the mode or removing its eval transport restores the ordinary tool presentation.
+
 ## Outputs
 
 `execute()` returns one text content block plus any image blocks. `onUpdate` streams the active cell's output and details while it runs, coalesced at 50 ms intervals.

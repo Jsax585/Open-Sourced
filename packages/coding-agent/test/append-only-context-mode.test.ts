@@ -42,6 +42,11 @@ describe("shouldEnableAppendOnlyContext", () => {
 		expect(shouldEnableAppendOnlyContext("auto", GENERIC_PROXY)).toBe(false);
 	});
 
+	test("Code Mode enables stable context across providers without overriding explicit off", () => {
+		expect(shouldEnableAppendOnlyContext("auto", GENERIC_PROXY, true)).toBe(true);
+		expect(shouldEnableAppendOnlyContext("off", GENERIC_PROXY, true)).toBe(false);
+	});
+
 	test("auto enables for local inference providers", () => {
 		// Ollama serves both `ollama-chat` (cloud-managed) and the openai-responses
 		// path used by locally pulled models — issue #3033 (llama.cpp KV-cache prefix
