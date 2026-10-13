@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added provider-neutral `tools.codeMode` (with `tools.codeModeDirectTools`): set it to `on` to collapse any provider's direct tool surface to `eval`/`ask`/`todo` and reach every other session tool through the eval bridge, instead of only Codex `code_mode_only` models. Subagents inherit the setting, and only the Codex transport sends `tool_namespaces_info`.
+- Added provider-neutral `tools.codeMode` (with `tools.codeModeDirectTools`): set it to `on` to collapse any provider's direct tool surface to `eval`/`ask`/`todo` and reach every other session tool through the eval bridge, instead of only Codex `code_mode_only` models. Subagents inherit the setting, and only the Codex transport sends `tool_namespaces_info` ([#15553](https://github.com/can1357/oh-my-pi/pull/15553) by [@shtse8](https://github.com/shtse8))
 
 ## [18.10.3] - 2026-10-12
 
