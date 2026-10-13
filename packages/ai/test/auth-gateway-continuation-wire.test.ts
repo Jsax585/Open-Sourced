@@ -10,7 +10,6 @@ import { completedResponse } from "./fixtures/responses-completed";
 
 afterEach(() => vi.restoreAllMocks());
 
-
 it("carries the rotated account snapshot into a reopened held Responses attempt", async () => {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-held-account-"));
 	const storage = new AuthStorage(await SqliteAuthCredentialStore.open(path.join(directory, "auth.db")), {

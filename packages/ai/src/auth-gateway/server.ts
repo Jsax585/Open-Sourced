@@ -635,6 +635,7 @@ async function handleFormatEndpoint(
 				shouldRetry: async () => {
 					if (previousId || controller.signal.aborted || !lastAttempt) return false;
 					const message = await lastAttempt;
+					if (message.stopReason === "aborted") return false;
 					if (hasBillableUsage(message.usage)) return false;
 					const classified = classifyGatewayError(message);
 					return (
