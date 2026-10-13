@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added Vercel AI Gateway `type: "evaluation"` discovery as `api: typesafe` judge models with a KDL-driven `judgment` contract ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
+- Added Vercel AI Gateway `type: "evaluation"` discovery as `api: typesafe` judge models with a KDL-driven `judgment` contract ([#15613](https://github.com/can1357/oh-my-pi/pull/15613) by [@szavadsky](https://github.com/szavadsky)).
 - Added the `classifier-cot-extraction` rule axis, set for Claude, marking models whose classifier refuses earlier reasoning quoted back into their input ([#15436](https://github.com/can1357/oh-my-pi/pull/15436) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Removed
