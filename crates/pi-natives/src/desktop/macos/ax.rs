@@ -17,7 +17,7 @@ use objc2_application_services::{
 };
 use objc2_core_foundation::{
 	CFArray, CFBoolean, CFDate, CFIndex, CFNull, CFNumber, CFRange, CFRetained, CFString,
-	CFTimeZone, CFType, CGPoint, CGSize, Type,
+	CFTimeZone, CFType, CFURL, CGPoint, CGSize, Type,
 };
 
 use super::{
@@ -1394,6 +1394,11 @@ fn stringify_value(value: &CFType) -> String {
 			.or_else(|| nonempty(copy_string(element, "AXDescription")))
 			.unwrap_or_default();
 	}
+	// A URL's description carries its object's address, so two reads of one
+	// link would never compare equal.
+	if let Some(url) = value.downcast_ref::<CFURL>() {
+		return url.string().to_string();
+	}
 	format!("{value:?}")
 }
 
@@ -1450,7 +1455,7 @@ mod tests {
 	use std::ptr::NonNull;
 
 	use objc2_application_services::{AXError, AXValue, AXValueType};
-	use objc2_core_foundation::{CFArray, CFNumber, CFString, CFType, Type, kCFNull};
+	use objc2_core_foundation::{CFArray, CFNumber, CFString, CFType, CFURL, Type, kCFNull};
 
 	use super::{
 		AttachedCandidate, CHILDREN, DESCRIPTION, ENABLED, NodeRead, NodeValues, ROLE, TITLE, VALUE,
@@ -1624,6 +1629,15 @@ mod tests {
 		assert_eq!(stringify_value(&CFNumber::new_i64(-3)), "-3");
 		assert_eq!(stringify_value(&CFNumber::new_f64(0.185)), "0.185");
 		assert_eq!(stringify_value(&CFNumber::new_f32(0.185)), "0.185");
+	}
+
+	#[test]
+	fn a_url_value_reads_as_its_text_on_every_read() {
+		let url =
+			|| CFURL::from_string(None, &CFString::from_str("https://example.com/a"), None).unwrap();
+		let (first, second) = (url(), url());
+		assert_eq!(stringify_value(&first), "https://example.com/a");
+		assert_eq!(stringify_value(&first), stringify_value(&second));
 	}
 
 	#[test]
