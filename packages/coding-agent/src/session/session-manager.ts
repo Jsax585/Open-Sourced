@@ -758,6 +758,8 @@ interface SessionManagerStateSnapshot {
 	hasTitleSlot: boolean;
 	onDisk: boolean;
 	needsRewrite: boolean;
+	/** Entries and bytes the session file durably held, when that was known exactly. */
+	durable: { count: number; size: number } | undefined;
 	draftOnlySessionCleanupArmed: boolean;
 	fallbackRuntimeOnly: boolean;
 	header: SessionHeader;
@@ -765,7 +767,6 @@ interface SessionManagerStateSnapshot {
 }
 
 interface DiskQueueOptions {
-	ignorePriorError?: boolean;
 	ignoreEpoch?: boolean;
 	epoch?: number;
 }
@@ -788,10 +789,26 @@ interface AtomicEntryBatch {
 interface SessionBodyStamp {
 	entries: readonly SessionEntry[];
 	entryCount: number;
-	lastEntry: SessionEntry | undefined;
 	revision: number;
 	/** Serialized title slot and header lines. */
 	prefix: string;
+}
+
+/**
+ * What the session file is proven to hold, recorded only after a load or a
+ * write succeeded: records whose ids and parent links are
+ * `entries[0..confirmed)` in order, `confirmedSize` bytes long. Their content
+ * may be older than memory's. `issued` and `issuedSize` also count appends a
+ * deferring backend accepted but has not confirmed yet. It describes the live
+ * journal only while `entries` is the manager's entry array, which every
+ * structural change replaces.
+ */
+interface DurableFrontier {
+	readonly entries: readonly SessionEntry[];
+	confirmed: number;
+	confirmedSize: number;
+	issued: number;
+	issuedSize: number;
 }
 
 /**
@@ -983,12 +1000,18 @@ export class SessionManager {
 	#entries: SessionEntry[] = [];
 	#index = new SessionEntryIndex();
 
-	/** File reflects all current entries; appends can go incrementally. */
+	/** A full body reached the session file and nothing has replaced it since; crosses the lazy file-creation gate. */
 	#fileIsCurrent = false;
-	/** In-memory entries diverged from disk (load-migration/sanitize) → next persist must full-rewrite. */
+	/**
+	 * Content or header changes no full rewrite has published yet (load
+	 * migration or sanitize, `rewriteEntries()`, header edits, a new file).
+	 * Appends never wait for it: the next full rewrite carries it.
+	 */
 	#rewriteRequired = false;
-	/** Earliest append that did not reach durable storage; later appends must rewrite it before extending the file. */
-	#firstUndurableEntryIndex: number | undefined;
+	/** What the session file durably holds; appends extend it and anything else republishes. */
+	#durable: DurableFrontier | undefined;
+	/** Outstanding confirmations of appends a deferring backend accepted. */
+	readonly #pendingAppendConfirmations = new Set<Promise<void>>();
 	/** Malformed records the loader skipped for the current session file; reported by `/dump anon`. */
 	#loadedMalformedRecords = 0;
 	/** Byte length this manager last loaded or durably wrote; `null` means the path was absent. */
@@ -1255,6 +1278,7 @@ export class SessionManager {
 		}
 		this.#index.setLeaf(leaf);
 		this.#expectedDiskSize = diskSize;
+		this.#durable = undefined;
 		if (adopted > 0)
 			logger.warn("Kept session entries another writer added", { sessionFile: this.#sessionFile, adopted });
 	}
@@ -1285,6 +1309,7 @@ export class SessionManager {
 		} catch (readError) {
 			if (!isEnoent(readError)) return this.#moveOffSessionFile("replaced");
 			this.#expectedDiskSize = null;
+			this.#durable = undefined;
 			return contested;
 		}
 		const foreign = this.#foreignEntriesIn(content);
@@ -1308,6 +1333,7 @@ export class SessionManager {
 			if (this.#diskEpoch !== epoch || this.#sessionFile !== contested) return this.#sessionFile;
 			if (!isEnoent(readError)) return this.#moveOffSessionFile("replaced");
 			this.#expectedDiskSize = null;
+			this.#durable = undefined;
 			return contested;
 		}
 		if (this.#diskEpoch !== epoch || this.#sessionFile !== contested) return this.#sessionFile;
@@ -1348,6 +1374,7 @@ export class SessionManager {
 		this.#closeWriterEventually();
 		this.#sessionFile = to;
 		this.#expectedDiskSize = null;
+		this.#durable = undefined;
 		this.#fileIsCurrent = false;
 		this.#rewriteRequired = true;
 		this.#artifactManager = null;
@@ -1365,7 +1392,6 @@ export class SessionManager {
 			.catch(() => undefined)
 			.then(async () => {
 				if (!options.ignoreEpoch && epoch !== this.#diskEpoch) return;
-				if (this.#diskFailure && !options.ignorePriorError) throw this.#diskFailure;
 				await work();
 			});
 
@@ -1394,7 +1420,7 @@ export class SessionManager {
 				async () => {
 					await this.#closeWriterHandle();
 				},
-				{ ignorePriorError: true, ignoreEpoch: true },
+				{ ignoreEpoch: true },
 			);
 		} finally {
 			this.#writer = undefined;
@@ -1418,6 +1444,8 @@ export class SessionManager {
 	#latchIndeterminate(operationError: Error, recoveryErrors: readonly Error[]): SessionPersistenceIndeterminateError {
 		const error = new SessionPersistenceIndeterminateError(operationError, recoveryErrors);
 		this.#diskFailure = error;
+		// Storage may hold a body nobody verified, so the next append republishes.
+		this.#durable = undefined;
 		forgetExternalizedImages(this.#blobs);
 		if (!this.#diskFailureLogged) {
 			this.#diskFailureLogged = true;
@@ -1524,8 +1552,8 @@ export class SessionManager {
 	 * body, tolerating a write whose own acknowledgment failed but that
 	 * landed anyway: a readback matching the intended body still counts as
 	 * durable. Callers own serialization (the disk queue) and any
-	 * `#released`/epoch guard; this only writes and repairs
-	 * `#expectedDiskSize` bookkeeping via {@link #recordFullRewrite}.
+	 * `#released`/epoch guard; this only writes and records the published
+	 * body through {@link #recordPublish}.
 	 */
 	async #publishAuthoritativeBody(
 		sessionFile: string,
@@ -1563,13 +1591,17 @@ export class SessionManager {
 				throw this.#latchIndeterminate(operationError, recoveryErrors);
 			}
 		}
-		this.#recordFullRewrite(body.bytes);
+		this.#recordPublish(body.stamp, body.bytes, target === this.#sessionFile);
 	}
 
 	#appendWriter(): SessionStorageWriter {
 		if (!this.#sessionFile) throw new Error("Cannot open a session writer before a session file exists");
 
-		if (this.#writer?.isOpen()) return this.#writer;
+		const current = this.#writer;
+		if (current?.isOpen() && !current.getError()) return current;
+		// A writer latches its first failure and rejects every later append, so
+		// the append that retries the missing entries needs a fresh one.
+		this.#closeWriterEventually();
 
 		this.#writer = this.#storage.openWriter(this.#sessionFile, {
 			flags: "a",
@@ -1581,31 +1613,45 @@ export class SessionManager {
 	#lineFor(entry: FileEntry): string {
 		return `${stringifyJson(prepareEntryForPersistence(entry, this.#blobs)) ?? "null"}\n`;
 	}
-	#recordDurableAppend(line: string): void {
-		this.#expectedDiskSize = (this.#expectedDiskSize ?? 0) + Buffer.byteLength(line, "utf8");
-	}
 
-	#recordAppendFailure(entry: SessionEntry, errorLike: unknown): void {
-		const entryIndex = this.#entries.indexOf(entry);
-		if (entryIndex >= 0) this.#markUndurableFrom(entryIndex);
-		else {
-			this.#fileIsCurrent = false;
-			this.#rewriteRequired = true;
-		}
-		this.#noteDiskFailure(errorLike);
-	}
-
-	/** Make the next write republish the journal from `entryIndex` instead of appending after it. */
-	#markUndurableFrom(entryIndex: number): void {
-		this.#firstUndurableEntryIndex = Math.min(this.#firstUndurableEntryIndex ?? entryIndex, entryIndex);
-		this.#fileIsCurrent = false;
-		this.#rewriteRequired = true;
-	}
-
-	#recordFullRewrite(bytes: number): void {
+	/**
+	 * Record that the session file (when `atSessionFile`) now holds the body
+	 * serialized as `stamp`, `bytes` long. Only a body serialized from the live
+	 * entry array moves the durable frontier; one that also carries every later
+	 * change settles pending content and a latched failure.
+	 */
+	#recordPublish(stamp: SessionBodyStamp, bytes: number, atSessionFile = true): void {
 		this.#expectedDiskSize = bytes;
-		this.#firstUndurableEntryIndex = undefined;
-		this.#clearDiskError();
+		if (!atSessionFile || stamp.entries !== this.#entries) {
+			this.#durable = undefined;
+			return;
+		}
+		this.#durable = {
+			entries: stamp.entries,
+			confirmed: stamp.entryCount,
+			confirmedSize: bytes,
+			issued: stamp.entryCount,
+			issuedSize: bytes,
+		};
+		if (
+			stamp.entryCount === this.#entries.length &&
+			stamp.revision === this.#bodyRevision &&
+			stamp.prefix === this.#titleSlotLine() + this.#lineFor(this.#header)
+		) {
+			this.#rewriteRequired = false;
+			this.#clearDiskError();
+		}
+	}
+
+	/** Whether storage has accepted every entry: the durable frontier covers the live entry array. */
+	#allEntriesHandedToStorage(): boolean {
+		const durable = this.#durable;
+		return durable?.entries === this.#entries && durable.issued === this.#entries.length;
+	}
+
+	/** Whether entries that belong in the session file have not all been handed to storage. */
+	#hasUnsavedEntries(): boolean {
+		return !this.#allEntriesHandedToStorage() && this.#shouldHaveSessionFile();
 	}
 
 	/** Verify a failed acknowledgement without materializing a file-backed transcript. */
@@ -1619,8 +1665,8 @@ export class SessionManager {
 	 * (durable size, current-marking) advances only here, never at queue time:
 	 * until the store confirms, the record still describes the last confirmed
 	 * publish. A rejected publish is realigned with the size the store actually
-	 * holds and latched, so the next append retries the transcript instead of
-	 * reusing an `expectedSize` the backend never reached.
+	 * holds and latched; the durable frontier still describes the last
+	 * confirmed body, so the next append extends that body.
 	 *
 	 * `onConfirm` runs only once the backend confirms the queued publish. A
 	 * deferred rewrite must neither record the replacement nor mark the manager
@@ -1640,7 +1686,6 @@ export class SessionManager {
 			})
 			.catch(err => {
 				this.#fileIsCurrent = false;
-				this.#rewriteRequired = true;
 				try {
 					this.#expectedDiskSize = this.#storage.existsSync(sessionFile)
 						? this.#storage.statSync(sessionFile).size
@@ -1694,7 +1739,6 @@ export class SessionManager {
 		const stamp: SessionBodyStamp = {
 			entries,
 			entryCount,
-			lastEntry: entries.at(-1),
 			revision: this.#bodyRevision,
 			prefix: titleLine + headerLine,
 		};
@@ -1766,60 +1810,36 @@ export class SessionManager {
 				}
 			}
 			if (this.#storage.defersSyncPublish) {
-				// The publish is only queued: record nothing and stay non-current
-				// until the backend confirms (hV-oB). A racing rewrite still
-				// carries the last confirmed token, so the store's queue-time
-				// size check fail-fasts it instead of queueing a second
-				// provisional publish behind the unconfirmed one; a racing
-				// append retries the transcript on the cold path instead of
-				// landing a bare append on a body the backend may still reject.
-				// The success handler below is the single place the replacement
-				// becomes durable state.
+				// The publish is only queued: record nothing until the backend
+				// confirms (hV-oB). A racing rewrite still carries the last
+				// confirmed token, so the store's queue-time size check fail-fasts
+				// it instead of queueing a second provisional publish behind the
+				// unconfirmed one; a racing append finds the store's size past the
+				// durable frontier and takes the same path. The success handler
+				// below is the single place the replacement becomes durable state.
 				const generation = ++this.#deferredPublishGen;
 				const { bytes, stamp } = body;
 				this.#confirmDeferredPublish(targetPath, () => {
 					// A newer deferred publish owns the durability record now;
 					// this body is no longer on the backend, so record nothing.
 					if (generation !== this.#deferredPublishGen) return;
-					const entries = this.#entries;
-					const bodyIsCurrent =
-						stamp.entries === entries &&
-						stamp.entryCount === entries.length &&
-						stamp.lastEntry === entries.at(-1) &&
-						stamp.revision === this.#bodyRevision &&
-						stamp.prefix === this.#titleSlotLine() + this.#lineFor(this.#header);
-					if (!bodyIsCurrent) {
-						// Entries raced the unconfirmed publish: the confirmed
-						// body predates them. Record only its size, so a failure
-						// latched since it was issued still stands, stay
-						// non-current and re-issue the full transcript instead
-						// of declaring it durable (rvEW); the re-issued publish
-						// carries the just-confirmed size token, so its
-						// queue-time check passes.
-						this.#expectedDiskSize = bytes;
-						this.#fileIsCurrent = false;
-						this.#rewriteRequired = true;
-						this.#rewriteSynchronously();
-						return;
-					}
-					this.#recordFullRewrite(bytes);
-					if (!this.#sessionFileRelocating || targetPath === this.#sessionFile) {
-						this.#fileIsCurrent = true;
-						this.#materializeBreadcrumb();
-						this.#rewriteRequired = false;
-						this.#hasTitleSlot = true;
-					}
+					this.#recordPublish(stamp, bytes, targetPath === this.#sessionFile);
+					if (targetPath !== this.#sessionFile) return;
+					this.#fileIsCurrent = true;
+					this.#materializeBreadcrumb();
+					this.#hasTitleSlot = true;
+					// Entries that raced the unconfirmed publish follow it as one append (rvEW).
+					if (this.#hasUnsavedEntries()) this.#appendToCurrentSessionFile();
 				});
 				return;
 			}
-			this.#recordFullRewrite(body.bytes);
+			this.#recordPublish(body.stamp, body.bytes, targetPath === this.#sessionFile);
 			// Only mark the manager current when writing the active session path.
 			// Mid-move writes update the live relocation path; `#sessionFile` is
 			// still the pre-repoint source until moveTo repoints it.
 			if (!this.#sessionFileRelocating || targetPath === this.#sessionFile) {
 				this.#fileIsCurrent = true;
 				this.#materializeBreadcrumb();
-				this.#rewriteRequired = false;
 				this.#hasTitleSlot = true;
 			} else {
 				// Destination body is current on disk; in-memory still needs a
@@ -1829,12 +1849,8 @@ export class SessionManager {
 				this.#hasTitleSlot = true;
 			}
 		} catch (err) {
-			// Every caller rewrites because memory holds state the store lacks (an
-			// append made inside a fence, relocation, or repair window, a new branch's
-			// file), so a failed rewrite leaves that state undurable: the next write
-			// must republish it rather than append after the missing records.
-			this.#fileIsCurrent = false;
-			this.#rewriteRequired = true;
+			// The durable frontier still describes the file, so a later append
+			// restores whatever this rewrite carried without republishing.
 			this.#noteDiskFailure(err);
 		}
 	}
@@ -1849,7 +1865,7 @@ export class SessionManager {
 	 * synchronous rewrite from being overwritten by the stale body serialized
 	 * before it ran.
 	 */
-	async #rewriteAtomically(retryAfterFailure = false): Promise<void> {
+	async #rewriteAtomically(): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
 		if (this.#released) return;
 
@@ -1859,17 +1875,16 @@ export class SessionManager {
 				if (await this.#runFencedAtomicRewrite(startEpoch)) {
 					this.#fileIsCurrent = true;
 					this.#materializeBreadcrumb();
-					this.#rewriteRequired = false;
 					this.#hasTitleSlot = true;
 				}
 			},
-			{ epoch: startEpoch, ignorePriorError: retryAfterFailure },
+			{ epoch: startEpoch },
 		);
 	}
 
 	/**
-	 * Shared fenced atomic-rewrite loop used by `#rewriteAtomically` and the
-	 * `#persistTitleChangeEntry` fallback. Holds `#atomicRewriteActive` across
+	 * Fenced atomic-rewrite loop behind `#rewriteAtomically`. Holds
+	 * `#atomicRewriteActive` across
 	 * the writer close and the full-file replace, and loops on
 	 * `#atomicRewriteDirty` so any fenced append that lands during the rewrite
 	 * is captured before the task resolves. Returns `false` when the disk epoch
@@ -1918,11 +1933,12 @@ export class SessionManager {
 					// another writer's.
 					if (this.#atomicEntryBatch) {
 						this.#expectedDiskSize = body.bytes;
+						this.#durable = undefined;
 						throw error;
 					}
 				}
 				if (this.#diskEpoch !== epoch) return false;
-				this.#recordFullRewrite(body.bytes);
+				this.#recordPublish(body.stamp, body.bytes);
 			} while (this.#atomicRewriteDirty);
 			return true;
 		} finally {
@@ -1944,10 +1960,6 @@ export class SessionManager {
 			this.#atomicRewriteDirty = true;
 			return;
 		}
-		if (this.#firstUndurableEntryIndex !== undefined) {
-			this.#fileIsCurrent = false;
-			this.#rewriteRequired = true;
-		}
 
 		// Lazy gate: a brand-new session is not written until it has an assistant
 		// message (or someone forced creation), so sessions that never produce
@@ -1967,18 +1979,25 @@ export class SessionManager {
 			this.#entries.every(candidate => candidate === entry || isDraftOnlyMetadataEntry(candidate))
 		) {
 			try {
-				this.#storage.withSessionFileLockSync(this.#sessionFile, () => this.#appendToCurrentSessionFile(entry));
+				this.#storage.withSessionFileLockSync(this.#sessionFile, () => this.#appendToCurrentSessionFile());
 			} catch (err) {
-				this.#fileIsCurrent = false;
-				this.#rewriteRequired = true;
 				this.#noteDiskFailure(err);
 			}
 			return;
 		}
-		this.#appendToCurrentSessionFile(entry);
+		this.#appendToCurrentSessionFile();
 	}
 
-	#appendToCurrentSessionFile(entry: SessionEntry): void {
+	/**
+	 * Bring the session file up to date with `#entries`. When it still holds
+	 * exactly what the durable frontier records, append every entry past the
+	 * frontier as one write: usually the entry just recorded, after a failure
+	 * also the ones that missed the file, so no successor lands before its
+	 * parent. Anything else republishes the whole journal. Never throws: the
+	 * core turn loop calls it without try/catch, and a failure is reported and
+	 * retried by the next append.
+	 */
+	#appendToCurrentSessionFile(): void {
 		// Atomic replacement / move window: do not open a fresh append writer that
 		// a Windows EPERM replace could detach from the current JSONL path.
 		// - moveTo: write a full body to the live relocation path (source pre-
@@ -1996,98 +2015,106 @@ export class SessionManager {
 			this.#rewriteSynchronously();
 			return;
 		}
-		// Cold/divergent: not on disk yet, in-memory entries diverged from the
-		// file, or another live process owns it → rewrite the whole file
-		// synchronously (to a sibling in the last case) and keep going.
-		if (!this.#fileIsCurrent || this.#rewriteRequired || this.#sessionOwnedElsewhere()) {
+		const sessionFile = this.#sessionFile;
+		const durable = this.#durable;
+		let storedSize: number | null = null;
+		if (sessionFile && durable?.entries === this.#entries && !this.#sessionOwnedElsewhere()) {
+			try {
+				storedSize = this.#storage.statSync(sessionFile).size;
+			} catch {
+				// Absent or unreadable: nothing on disk is known, so republish.
+			}
+		}
+		// Not written yet, a structural change, another live owner, or bytes
+		// this manager cannot account for (a publish not yet confirmed, another
+		// writer) → rewrite the whole file synchronously.
+		if (!sessionFile || !durable || storedSize !== durable.issuedSize) {
 			this.#rewriteSynchronously();
 			return;
 		}
-
-		// Hot path: write the entry directly on the writer, outside the async disk
-		// chain. Prefer appendSync so write failures latch `#diskFailure` before
-		// this call returns (not via a discarded rejected Promise after a later
-		// microtask). Callers stay non-throwing here — the core turn loop invokes
-		// appendMessage/appendCustomEntry without try/catch. A later entry retries
-		// all in-memory state through a full rewrite. File writers apply each line
-		// to the OS page cache before return.
-		// A mid-close writer leaves `#writer` undefined, so `#appendWriter` simply
-		// opens a fresh append handle and the entry still lands.
+		const start = durable.issued;
+		const end = this.#entries.length;
+		if (start === end) return;
 		try {
 			const writer = this.#appendWriter();
-			const line = this.#lineFor(entry);
+			let chunk = "";
+			for (let index = start; index < end; index++) chunk += this.#lineFor(this.#entries[index]!);
+			const bytes = Buffer.byteLength(chunk, "utf8");
+			// File writers apply the bytes to the OS page cache before returning,
+			// so a software crash right after still keeps them.
 			if (writer.appendSync && !this.#storage.defersSyncPublish) {
-				writer.appendSync(line);
-				this.#recordDurableAppend(line);
-			} else {
-				// A backend that only queues the publish (indexed) has no synchronous
-				// durability, so the durable size may advance only once it confirms
-				// the line: a lost publish must not leave the record describing bytes
-				// the store never accepted, or the next recovery rewrite hands the
-				// backend CAS an impossible `expectedSize`.
-				if (writer.appendSync) writer.appendSync(line);
-				const confirmed = writer.appendSync ? writer.flush() : writer.append(line);
-				void confirmed
-					.then(() => this.#recordDurableAppend(line))
-					.catch(err => this.#recordAppendFailure(entry, err));
+				writer.appendSync(chunk);
+				durable.confirmed = durable.issued = end;
+				durable.confirmedSize = durable.issuedSize = durable.issuedSize + bytes;
+				this.#expectedDiskSize = durable.confirmedSize;
+				if (!this.#rewriteRequired) this.#clearDiskError();
+				return;
 			}
+			// A backend that only queues the publish (indexed) confirms later: the
+			// issued position lets the next append extend past these entries, and
+			// the durable size advances only on confirmation, so a lost publish
+			// never leaves the CAS token describing bytes the store never accepted.
+			if (writer.appendSync) writer.appendSync(chunk);
+			const confirmation = writer.appendSync ? writer.flush() : writer.append(chunk);
+			durable.issued = end;
+			durable.issuedSize += bytes;
+			const settled = confirmation.then(
+				() => {
+					if (this.#durable !== durable || durable.confirmed !== start) return;
+					durable.confirmed = end;
+					durable.confirmedSize += bytes;
+					this.#expectedDiskSize = durable.confirmedSize;
+					if (end === this.#entries.length && !this.#rewriteRequired) this.#clearDiskError();
+				},
+				err => {
+					// The store rolls its size back to the last confirmed append, and
+					// the next append re-sends everything after it.
+					if (this.#durable === durable) {
+						durable.issued = durable.confirmed;
+						durable.issuedSize = durable.confirmedSize;
+					}
+					this.#noteDiskFailure(err);
+				},
+			);
+			this.#pendingAppendConfirmations.add(settled);
+			void settled.finally(() => this.#pendingAppendConfirmations.delete(settled));
 		} catch (err) {
-			this.#recordAppendFailure(entry, err);
+			this.#noteDiskFailure(err);
 		}
 	}
 
+	/**
+	 * Persist a title change. Its `title_change` entry is the new leaf, so it
+	 * goes through the ordinary append path; the fixed title slot is content,
+	 * rewritten in place when it can be and otherwise carried by the next full
+	 * rewrite.
+	 */
 	async #persistTitleChangeEntry(entry: TitleChangeEntry, update: SessionTitleUpdate): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
-		if (this.#diskFailure) {
-			this.#fileIsCurrent = false;
+		this.#appendToSessionFile(entry);
+		if (!this.#shouldHaveSessionFile()) return;
+		// A batch's or a move's own full rewrite publishes the slot, and while an
+		// entry is missing from storage a full rewrite would only fail again.
+		if (this.#atomicEntryBatch || this.#sessionFileRelocating || this.#hasUnsavedEntries()) {
 			this.#rewriteRequired = true;
-			this.#rewriteSynchronously();
-			if (this.#diskFailure) throw this.#diskFailure;
 			return;
 		}
-
-		if (!this.#shouldHaveSessionFile()) {
-			this.#fileIsCurrent = false;
-			return;
-		}
-
-		// Title changes use their own asynchronous append path rather than
-		// #appendToSessionFile. During move, write the full body (including the
-		// title entry) to the live relocation path so a crash mid-move still
-		// keeps the title change; the trailing rewrite still updates header cwd.
-		if (this.#sessionFileRelocating) {
-			this.#rewriteSynchronously();
-			return;
-		}
-
-		if (
-			!this.#fileIsCurrent ||
-			this.#rewriteRequired ||
-			!this.#hasTitleSlot ||
-			!this.#storage.existsSync(this.#sessionFile) ||
-			this.#sessionOwnedElsewhere()
-		) {
+		if (!this.#hasTitleSlot) {
+			this.#rewriteRequired = true;
 			await this.#rewriteAtomically();
 			return;
 		}
-
 		const epoch = this.#diskEpoch;
-		const line = this.#lineFor(entry);
 		await this.#scheduleDiskWork(
 			async () => {
-				if (this.#released) return;
 				const sessionFile = this.#sessionFile;
-				if (!sessionFile) return;
+				if (this.#released || !sessionFile) return;
 				try {
-					await this.#appendWriter().append(line);
-					this.#recordDurableAppend(line);
 					await this.#storage.updateSessionTitle(sessionFile, update);
-					if (this.#diskEpoch === epoch) this.#fileIsCurrent = true;
 				} catch {
+					this.#rewriteRequired = true;
 					if (!(await this.#runFencedAtomicRewrite(epoch))) return;
-					this.#clearDiskError();
 					this.#fileIsCurrent = true;
-					this.#rewriteRequired = false;
 					this.#hasTitleSlot = true;
 				}
 			},
@@ -2109,7 +2136,6 @@ export class SessionManager {
 	#resetToNewSession(options?: NewSessionOptions, forcedSessionFile?: string): string | undefined {
 		this.#diskTail = Promise.resolve();
 		this.#clearDiskError();
-		this.#firstUndurableEntryIndex = undefined;
 		this.#expectedDiskSize = null;
 		this.#reconcileSessionDirForFallback();
 		if (options?.sessionDir && this.#persist) {
@@ -2337,6 +2363,10 @@ export class SessionManager {
 			expectedDiskSize: this.#expectedDiskSize,
 			onDisk: this.#fileIsCurrent,
 			needsRewrite: this.#rewriteRequired,
+			durable:
+				this.#durable?.entries === this.#entries && this.#durable.issued === this.#durable.confirmed
+					? { count: this.#durable.confirmed, size: this.#durable.confirmedSize }
+					: undefined,
 			draftOnlySessionCleanupArmed: this.#draftOnlySessionCleanupArmed,
 			fallbackRuntimeOnly: this.#fallbackRuntimeOnly,
 			// Entries are snapshotted by reference (switch/reload replaces the
@@ -2364,6 +2394,7 @@ export class SessionManager {
 			clone.#expectedDiskSize = null;
 			clone.#fileIsCurrent = false;
 			clone.#rewriteRequired = false;
+			clone.#durable = undefined;
 			clone.#forceFileCreation = false;
 		}
 		return clone;
@@ -2384,6 +2415,17 @@ export class SessionManager {
 		this.#draftOnlySessionCleanupArmed = snapshot.draftOnlySessionCleanupArmed;
 		this.#fallbackRuntimeOnly = snapshot.fallbackRuntimeOnly;
 		this.#applyEntries(snapshot.header, [...snapshot.entries]);
+		// The copy holds the same entries in the same order, so the file still
+		// holds the snapshot's durable prefix of it.
+		this.#durable = snapshot.durable
+			? {
+					entries: this.#entries,
+					confirmed: snapshot.durable.count,
+					confirmedSize: snapshot.durable.size,
+					issued: snapshot.durable.count,
+					issuedSize: snapshot.durable.size,
+				}
+			: undefined;
 		this.#additionalDirectories = snapshot.header.additionalDirectories ?? [];
 		this.#sessionName = snapshot.sessionName;
 
@@ -2429,6 +2471,7 @@ export class SessionManager {
 		// Persist the captured header so disk and memory agree after a fresh open.
 		if (this.#persist && this.#sessionFile) {
 			this.#expectedDiskSize = relocatedDiskSize;
+			this.#durable = undefined;
 			this.#forceFileCreation = true;
 			this.#rewriteRequired = true;
 			await this.#rewriteAtomically();
@@ -2446,7 +2489,6 @@ export class SessionManager {
 	): Promise<void> {
 		await this.#drainAndCloseWriter();
 		this.#clearDiskError();
-		this.#firstUndurableEntryIndex = undefined;
 		this.#draftOnlySessionCleanupArmed = false;
 		// A switch gives up the previous file. Opening claims nothing: the first
 		// write does, so inspecting a session never counts as owning it.
@@ -2522,6 +2564,18 @@ export class SessionManager {
 		this.#hasTitleSlot = titleSlot !== undefined;
 		this.#fileIsCurrent = true;
 		this.#rewriteRequired = migrated || loaded.malformedRecords > 0;
+		// Migration assigns ids and parents the file lacks, and a torn record
+		// would swallow the next append, so either republishes first.
+		this.#durable =
+			migrated || loaded.malformedRecords > 0 || sourceSize === null
+				? undefined
+				: {
+						entries: this.#entries,
+						confirmed: this.#entries.length,
+						confirmedSize: sourceSize,
+						issued: this.#entries.length,
+						issuedSize: sourceSize,
+					};
 		this.#loadedMalformedRecords = loaded.malformedRecords;
 		this.#forceFileCreation = true;
 		this.#artifactManager = null;
@@ -2570,6 +2624,7 @@ export class SessionManager {
 		this.#sessionId = mintSessionId();
 		this.#sessionFile = path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${this.#sessionId}.jsonl`);
 		this.#expectedDiskSize = null;
+		this.#durable = undefined;
 		this.#header = {
 			type: "session",
 			version: CURRENT_SESSION_VERSION,
@@ -2769,7 +2824,10 @@ export class SessionManager {
 				// #expectedDiskSize still applies; without a rename the destination
 				// holds no bytes this manager wrote, so a recreate-from-memory must
 				// publish against an absent file rather than a stale size.
-				if (sessionPathChanged && !sessionMoved) this.#expectedDiskSize = null;
+				if (sessionPathChanged && !sessionMoved) {
+					this.#expectedDiskSize = null;
+					this.#durable = undefined;
+				}
 				this.#artifactManager = null;
 				this.#artifactManagerSessionFile = null;
 				// Path is repointed; hot-path appends may use `#sessionFile` again.
@@ -2815,7 +2873,7 @@ export class SessionManager {
 	async ensureOnDisk(): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
 		this.#forceFileCreation = true;
-		if (this.#fileIsCurrent && !this.#rewriteRequired) return;
+		if (!this.#hasUnsavedEntries()) return;
 		await this.#rewriteAtomically();
 	}
 
@@ -2885,7 +2943,7 @@ export class SessionManager {
 				batch.collecting = false;
 			}
 			await this.#rewriteAtomically();
-			if (!this.#fileIsCurrent || this.#rewriteRequired) {
+			if (this.#hasUnsavedEntries()) {
 				throw new Error("Atomic session batch was superseded before commit.");
 			}
 			this.#atomicEntryBatch = undefined;
@@ -2929,39 +2987,46 @@ export class SessionManager {
 		});
 	}
 
-	/** Flush pending writes. Call before switching sessions or on shutdown. */
+	/**
+	 * Flush pending writes. Call before switching sessions or on shutdown.
+	 * Rejects with the latched failure only while storage is not proven to hold
+	 * every entry; content a failed rewrite could not publish (a maintenance
+	 * edit, a header change) waits for the next full rewrite instead.
+	 */
 	async flush(): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
+		// Failures below are reported through the latch; whether they cost an
+		// entry is decided once everything has settled.
 		await this.#scheduleDiskWork(async () => {
-			if (this.#writer?.isOpen()) await this.#writer.flush();
-		});
+			const writer = this.#writer;
+			if (writer?.isOpen() && !writer.getError()) await writer.flush();
+		}).catch(() => undefined);
 		// Drain any fire-and-forget backing writes (e.g. `writeTextSync` queued
 		// on IndexedSessionStorage during `flushSync`) so callers relying on
 		// flush() see the write durably visible to readers.
 		await this.#scheduleDiskWork(async () => {
 			await this.#storage.drain();
-		});
+		}).catch(() => undefined);
+		await Promise.all(this.#pendingAppendConfirmations);
 		await this.#pendingArtifactCopy?.done;
-		if (this.#diskFailure) throw this.#diskFailure;
+		if (this.#diskFailure && !this.#allEntriesHandedToStorage()) throw this.#diskFailure;
 	}
 
 	/**
 	 * Synchronously makes the current append-only session durable. Avoid rewriting
 	 * an already-current file: large restored sessions can contain GiB of compacted
 	 * history, and Ctrl+C must not rebuild the whole JSONL string just to flush.
+	 * Throws the latched failure only while storage is not proven to hold every entry.
 	 */
 	flushSync(): void {
 		if (!this.#persist || !this.#sessionFile) return;
 		if (this.#atomicEntryBatch) throw new Error("Cannot synchronously flush during an atomic session batch.");
-		if (this.#diskFailure) throw this.#diskFailure;
-		if (this.#fileIsCurrent && !this.#rewriteRequired) {
-			this.#writer?.flushSync?.();
-			const writerError = this.#writer?.getError();
-			if (writerError) throw writerError;
-			return;
+		if (this.#hasUnsavedEntries()) this.#appendToCurrentSessionFile();
+		else {
+			const writer = this.#writer;
+			if (writer?.isOpen() && !writer.getError()) writer.flushSync?.();
 		}
-		this.#rewriteSynchronously();
-		if (this.#diskFailure) throw this.#diskFailure;
+		if (this.#diskFailure && !this.#allEntriesHandedToStorage()) throw this.#diskFailure;
 	}
 
 	/**
@@ -3003,6 +3068,7 @@ export class SessionManager {
 				return;
 			}
 			this.#fileIsCurrent = false;
+			this.#durable = undefined;
 			this.#forceFileCreation = false;
 			this.#hasTitleSlot = false;
 			this.#draftOnlySessionCleanupArmed = false;
@@ -3020,35 +3086,31 @@ export class SessionManager {
 		const claim = this.#sessionClaim;
 		claim?.release?.();
 		if (claim) claim.release = undefined;
-		// A prior `flushSync` can self-conflict with this manager's own
-		// unconfirmed deferred publish; drain despite the latch so that
-		// publish can still confirm before we give up on the transcript.
-		await this.#scheduleDiskWork(
-			async () => {
-				const hadWriter = this.#writer !== undefined;
-				await this.#closeWriterHandle();
-				if (hadWriter || (this.#sessionFile && this.#storage.existsSync(this.#sessionFile)))
-					this.#fileIsCurrent = true;
-			},
-			{ ignorePriorError: true },
-		);
+		// Failures below are reported through the latch; whether they cost an
+		// entry is decided once everything has settled, as in flush(). A prior
+		// `flushSync` can self-conflict with this manager's own unconfirmed
+		// deferred publish, so the drain still runs and that publish can confirm.
+		await this.#scheduleDiskWork(async () => {
+			const hadWriter = this.#writer !== undefined;
+			await this.#closeWriterHandle();
+			if (hadWriter || (this.#sessionFile && this.#storage.existsSync(this.#sessionFile)))
+				this.#fileIsCurrent = true;
+		}).catch(() => undefined);
 		await this.#pendingArtifactCopy?.done;
 		await this.#dropIfEmptyAndNoDraft();
 		// Wait for any queued backing writes (IndexedSessionStorage per-path
 		// tail) to become durable so a graceful shutdown does not exit while
 		// a fire-and-forget publish is still on the wire.
-		await this.#scheduleDiskWork(
-			async () => {
-				await this.#storage.drain();
-			},
-			{ ignorePriorError: true },
-		);
+		await this.#scheduleDiskWork(async () => {
+			await this.#storage.drain();
+		}).catch(() => undefined);
+		await Promise.all(this.#pendingAppendConfirmations);
 		if (
 			this.#diskFailure &&
 			this.#sessionFile &&
 			this.#storage.defersSyncPublish &&
 			!this.#entriesReleased &&
-			this.#shouldHaveSessionFile()
+			this.#hasUnsavedEntries()
 		) {
 			// Deferred-publish only: a synchronous backend's drain() is a
 			// no-op, so any failure there is a genuine external conflict or a
@@ -3057,15 +3119,13 @@ export class SessionManager {
 			// close() issues the terminal write directly instead.
 			const operationError = this.#diskFailure;
 			const sessionFile = this.#sessionFile;
-			await this.#scheduleDiskWork(
-				async () => {
-					await this.#publishAuthoritativeBody(sessionFile, operationError);
-					this.#clearDiskError();
-				},
-				{ ignorePriorError: true },
-			).catch(() => undefined);
+			await this.#scheduleDiskWork(async () => {
+				await this.#publishAuthoritativeBody(sessionFile, operationError);
+			}).catch(() => undefined);
 		}
-		if (this.#diskFailure) throw this.#diskFailure;
+		// After a terminal release the entries are gone, so a latched failure
+		// cannot be shown harmless.
+		if (this.#diskFailure && (this.#entriesReleased || !this.#allEntriesHandedToStorage())) throw this.#diskFailure;
 	}
 
 	/**
@@ -3713,23 +3773,15 @@ export class SessionManager {
 
 	/**
 	 * Rewrite the session file after in-place entry updates (e.g. pruning old tool
-	 * outputs). Use sparingly.
-	 *
-	 * `changedEntries` names entries the caller changed in place and keeps changed
-	 * if this rewrite fails. They are marked undurable before the rewrite, so a
-	 * failed rewrite makes the next write republish from the earliest of them and
-	 * a restart cannot restore their old records. A caller that undoes its edits
-	 * on failure passes none, leaving later appends incremental.
+	 * outputs). Use sparingly. It persists content changes only; re-parenting
+	 * entries in place is not supported. A failed rewrite leaves later appends
+	 * incremental, and its edits reach the file with the next full rewrite.
 	 */
-	async rewriteEntries(changedEntries: Iterable<SessionEntry> = []): Promise<void> {
+	async rewriteEntries(): Promise<void> {
 		this.#bodyRevision++;
 		if (!this.#persist || !this.#sessionFile) return;
-		const changed = new Set(changedEntries);
-		if (changed.size > 0) {
-			const firstChanged = this.#entries.findIndex(entry => changed.has(entry));
-			if (firstChanged >= 0) this.#markUndurableFrom(firstChanged);
-		}
-		await this.#rewriteAtomically(true);
+		this.#rewriteRequired = true;
+		await this.#rewriteAtomically();
 	}
 
 	/**
@@ -3979,7 +4031,6 @@ export class SessionManager {
 		if (!entry) return;
 		const children = this.#index.childrenOf(entryId);
 		const canReparentChildren = children.every(child => child.type === "service_tier_change");
-		const structuralMutationStart = this.#entries.indexOf(entry);
 		let leafId = entry.parentId;
 		if (canReparentChildren) {
 			for (const child of children) {
@@ -3993,12 +4044,6 @@ export class SessionManager {
 			kind: DISCARDED_ENTRY_BRANCH_MARKER,
 			discardedEntryId: entryId,
 		});
-		if (canReparentChildren && structuralMutationStart >= 0) {
-			// The marker append cannot describe the removed entry or its reparented
-			// children. If this rewrite fails, a later hot append would make the
-			// stale on-disk tree the one a restart reconstructs.
-			this.#markUndurableFrom(structuralMutationStart);
-		}
 		await this.rewriteEntries();
 	}
 
