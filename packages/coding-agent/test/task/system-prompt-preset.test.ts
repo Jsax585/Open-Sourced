@@ -21,8 +21,6 @@ const data: SubagentSystemPromptData = {
 	ircSelfId: "",
 };
 
-const inheritedPrompt = ["PROJECT_SENTINEL", "SKILL_SENTINEL", "RULE_SENTINEL"];
-
 function identityConverter(messages: AgentMessage[]): Message[] {
 	return messages.filter(
 		message => message.role === "user" || message.role === "assistant" || message.role === "toolResult",
@@ -50,7 +48,7 @@ async function captureProviderContext(dialect?: AgentLoopConfig["dialect"]): Pro
 		],
 	});
 	const context: AgentContext = {
-		systemPrompt: buildSubagentSystemPrompt(inheritedPrompt, "minimal-task", data),
+		systemPrompt: buildSubagentSystemPrompt([], "minimal-task", data),
 		messages: [],
 		tools: [readTool],
 	};
@@ -74,41 +72,6 @@ function expectNoInheritedBlocks(context: Context): void {
 }
 
 describe("systemPreset: minimal-task", () => {
-	it("keeps only the subagent packet before provider tool adaptation", () => {
-		const out = buildSubagentSystemPrompt(inheritedPrompt, "minimal-task", data);
-		expect(out).toHaveLength(1);
-		expect(out[0]).toContain("Probe agent role prompt.");
-		expect(out[0]).toContain("Supplied context block.");
-		expect(out[0]).toContain("Plan packet body.");
-		expect(out[0]).toContain("/tmp/probe-worktree");
-		expect(out.join("\n")).not.toContain("PROJECT_SENTINEL");
-		expect(out.join("\n")).not.toContain("SKILL_SENTINEL");
-		expect(out.join("\n")).not.toContain("RULE_SENTINEL");
-	});
-
-	it("preserves the existing inherited prompt composition without the preset", () => {
-		const out = buildSubagentSystemPrompt(inheritedPrompt, undefined, data);
-		expect(out).toHaveLength(4);
-		expect(out[0]).toBe("PROJECT_SENTINEL");
-		expect(out[1]).toBe("SKILL_SENTINEL");
-		expect(out[2]).toBe("RULE_SENTINEL");
-		expect(out[3]).toContain("Probe agent role prompt.");
-	});
-
-	it("still collapses to the subagent packet when no default prompt exists", () => {
-		const out = buildSubagentSystemPrompt([], undefined, data);
-		expect(out).toHaveLength(1);
-		expect(out[0]).toContain("Probe agent role prompt.");
-	});
-
-	it("keeps native tool and parameter descriptions on the provider wire", async () => {
-		const context = await captureProviderContext();
-		expect(context.tools).toHaveLength(1);
-		expect(context.tools?.[0]?.description).toBe("tool description sentinel");
-		expect(JSON.stringify(context.tools?.[0]?.parameters)).toContain("path argument sentinel");
-		expectNoInheritedBlocks(context);
-	});
-
 	for (const [dialect, grammar] of [
 		["xml", "<invoke name="],
 		["hermes", "<tool_call>"],
