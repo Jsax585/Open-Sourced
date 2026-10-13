@@ -81,7 +81,7 @@ try {
 		method: "POST",
 		headers: { Authorization: "Bearer client", "Content-Type": "application/json" },
 		body: JSON.stringify(body),
-		signal: AbortSignal.timeout(12000),
+		signal: AbortSignal.timeout(60_000),
 	});
 	const output = await response.text();
 	process.stdout.write(
