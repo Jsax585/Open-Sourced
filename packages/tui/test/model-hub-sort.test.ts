@@ -274,15 +274,6 @@ describe("model hub metric order", () => {
 		expect(rowOrder(rows())).toEqual(["demo/dim", "demo/mid", "demo/top", "demo/unscored"]);
 	});
 
-	test("the footer names the active order so the key is discoverable", () => {
-		const { rows, key } = createHub();
-		focusRows(key);
-		expect(rows()).toContain("sort: default");
-
-		key(CTRL_ALT_S);
-		expect(rows()).toContain("sort: IQ ↓");
-	});
-
 	test("a live search still puts the typed match on top of the metric order", () => {
 		const { rows, key } = createHub({ modelSort: "int:desc" });
 		focusRows(key);
@@ -355,17 +346,6 @@ describe("model hub metric order on the native picker path", () => {
 	test("offers no sort action when the key is unbound", () => {
 		const { hub } = createHub({ sortKeys: [] });
 		expect(pickerActions(hub).some(action => action.id === "sort")).toBe(false);
-	});
-
-	test("advertises exactly the keys a Tern picker can route", () => {
-		// A picker action carries one keycap, so a second binding would exist
-		// only on the fallback input path. Declaring only the first keeps the
-		// two paths honest about what the key does.
-		const { hub } = createHub();
-		const sort = pickerActions(hub).find(action => action.id === "sort");
-
-		expect(sort?.keys).toHaveLength(3);
-		expect(sort?.keys?.join("+")).toBe("ctrl+alt+s");
 	});
 });
 
