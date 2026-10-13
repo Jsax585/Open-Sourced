@@ -5,7 +5,6 @@
 ### Added
 
 - Gateway route definitions compile ordered, branch-scoped fallback trees with canonical targets, immutable snapshots and ambiguous-cycle rejection ([#10140](https://github.com/can1357/oh-my-pi/pull/10140) by [@jroth1111](https://github.com/jroth1111)).
-- Gateway turns reserve stored OAuth and API-key credentials by request and physical incarnation, with fenced releases and renewal during active inference ([#10139](https://github.com/can1357/oh-my-pi/pull/10139) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway recovery probes reserve stored OAuth and API-key credentials by request and physical incarnation, with fenced releases and renewal during active inference; healthy traffic remains shareable unless explicitly reserved ([#10139](https://github.com/can1357/oh-my-pi/pull/10139) by [@jroth1111](https://github.com/jroth1111)).
 - Credential recovery uses request-owned quota probes, and replacing an account or key invalidates its stale cooldown and affinity ([#10138](https://github.com/can1357/oh-my-pi/pull/10138) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway requests expose their retained, ordered, redacted routing decisions through authenticated execution lookups, preserving legacy first-decision fields ([#10137](https://github.com/can1357/oh-my-pi/pull/10137) by [@jroth1111](https://github.com/jroth1111)).
