@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { HistorySearchComponent, type HistorySearchScope } from "@oh-my-pi/pi-tui/overlays/history-search";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
@@ -74,7 +74,7 @@ describe("HistorySearchComponent", () => {
 		expect(selected).toEqual([]);
 		expect(render(component)).not.toContain("deploy release");
 		fail = false;
-		component.handleInput("e");
+		component.handleInput("\x1b[D"); // Retry the unchanged query after the failed read.
 		component.handleInput("\r");
 		expect(selected).toEqual(["deploy release"]);
 	});
@@ -105,5 +105,137 @@ describe("HistorySearchComponent", () => {
 		component.handleInput("y");
 		expect(component.title).toBe("History (folder)");
 		expect(render(component)).toContain("abzcy");
+	});
+});
+
+describe("HistorySearchComponent debounced search", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	function countingStorage(prompts: string[]): { storage: HistorySearchScope; searches: string[] } {
+		const base = source("folder", prompts);
+		const searches: string[] = [];
+		const storage: HistorySearchScope = {
+			label: base.label,
+			getRecent: limit => base.getRecent(limit),
+			search: (query, limit) => {
+				searches.push(query);
+				return base.search(query, limit);
+			},
+		};
+		return { storage, searches };
+	}
+
+	it("switches scope immediately and cancels the pending previous-scope query", () => {
+		vi.useFakeTimers();
+		const selected: string[] = [];
+		const component = new HistorySearchComponent(
+			[source("conversation", ["deploy old session"]), source("folder", ["deploy folder"])],
+			prompt => selected.push(prompt),
+			() => {},
+		);
+		let renders = 0;
+		component.setOnRequestRender(() => renders++);
+		for (const char of "deploy") component.handleInput(char);
+		component.handleInput("\t");
+		expect(render(component)).toContain("deploy folder");
+		expect(render(component)).not.toContain("deploy old session");
+		component.handleInput("\r");
+		vi.advanceTimersByTime(150);
+		expect(selected).toEqual(["deploy folder"]);
+		expect(renders).toBe(0);
+	});
+
+	it("searches once after the quiet period and requests a repaint", () => {
+		vi.useFakeTimers();
+		const { storage, searches } = countingStorage(["deploy the needle rollback", "routine status update"]);
+		const component = new HistorySearchComponent(
+			[storage],
+			() => {},
+			() => {},
+		);
+		let renders = 0;
+		component.setOnRequestRender(() => renders++);
+
+		for (const char of "needle") component.handleInput(char);
+		expect(searches).toEqual([]);
+		expect(render(component)).toContain("routine status update");
+
+		vi.advanceTimersByTime(150);
+		expect(searches).toEqual(["needle"]);
+		expect(renders).toBe(1);
+		expect(render(component)).not.toContain("routine status update");
+	});
+
+	it("skips the search when only the cursor moves", () => {
+		vi.useFakeTimers();
+		const { storage, searches } = countingStorage(["deploy the needle rollback"]);
+		const component = new HistorySearchComponent(
+			[storage],
+			() => {},
+			() => {},
+		);
+		component.setOnRequestRender(() => {});
+		for (const char of "needle") component.handleInput(char);
+		vi.advanceTimersByTime(150);
+		component.handleInput("\x1b[D");
+		component.handleInput("\x1b[C");
+		component.handleInput(" ");
+		vi.advanceTimersByTime(150);
+		expect(searches).toEqual(["needle"]);
+	});
+
+	it("uses fresh results when Enter arrives before the debounce fires", () => {
+		vi.useFakeTimers();
+		const { storage } = countingStorage(["routine status update", "needle in a haystack"]);
+		const selected: string[] = [];
+		const component = new HistorySearchComponent(
+			[storage],
+			prompt => selected.push(prompt),
+			() => {},
+		);
+		let renders = 0;
+		component.setOnRequestRender(() => renders++);
+		for (const char of "needle") component.handleInput(char);
+		component.handleInput("\n");
+		expect(selected).toEqual(["needle in a haystack"]);
+		vi.advanceTimersByTime(150);
+		expect(renders).toBe(0);
+	});
+
+	it("ignores a list pick of a row from the previous query while the search is pending", () => {
+		vi.useFakeTimers();
+		const stale = { prompt: "routine status update", created_at: 1 };
+		const { storage } = countingStorage([stale.prompt, "needle in a haystack"]);
+		const selected: string[] = [];
+		const component = new HistorySearchComponent(
+			[storage],
+			prompt => selected.push(prompt),
+			() => {},
+		);
+		component.setOnRequestRender(() => {});
+		for (const char of "needle") component.handleInput(char);
+		// The row is still on screen: the debounce has not refreshed results yet.
+		const staleKey = `${stale.created_at}-${Bun.hash(stale.prompt).toString(36)}`;
+		component.handleNativeEvent({ type: "activate", key: "list", item: staleKey });
+		expect(selected).toEqual([]);
+		expect(render(component)).not.toContain("routine status update");
+	});
+
+	it("shows recent history immediately when the query is cleared", () => {
+		vi.useFakeTimers();
+		const { storage } = countingStorage(["routine status update", "needle in a haystack"]);
+		const component = new HistorySearchComponent(
+			[storage],
+			() => {},
+			() => {},
+		);
+		component.setOnRequestRender(() => {});
+		for (const char of "h") component.handleInput(char);
+		vi.advanceTimersByTime(150);
+		expect(render(component)).not.toContain("routine status update");
+		component.handleInput("\x7f");
+		expect(render(component)).toContain("routine status update");
 	});
 });

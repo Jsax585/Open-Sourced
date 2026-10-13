@@ -13,6 +13,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { theme } from "../theme/theme";
 import {
 	matchesAppInterrupt,
+	matchesSelectCancel,
 	matchesSelectDown,
 	matchesSelectPageDown,
 	matchesSelectPageUp,
@@ -74,6 +75,13 @@ export interface HistorySearchScope extends HistorySource {
 /** Visible result rows; also the jump distance for PageUp/PageDown. */
 const MAX_VISIBLE = 10;
 
+/**
+ * Quiet period after the last query edit before the synchronous storage
+ * search runs. Only applied when the host wires {@link HistorySearchComponent.setOnRequestRender},
+ * since the deferred results need a repaint to show up.
+ */
+const SEARCH_DEBOUNCE_MS = 100;
+
 /** Split a query the same way `HistorySource` tokenizes it, so highlights align with matches. */
 function queryTokens(query: string): string[] {
 	return query
@@ -117,6 +125,8 @@ class HistoryResultsList implements Component {
 	// Set before every render by the owning overlay.
 	#emptyMessage = "";
 	#maxVisible = MAX_VISIBLE;
+	/** Highlighted prompt text per entry, valid for one `(tokens, budget)` pair; reset on invalidate (theme). */
+	#highlightCache = new WeakMap<HistorySearchEntry, { tokens: string[]; budget: number; text: string }>();
 
 	constructor(menu: MenuSelection<HistorySearchEntry>) {
 		this.#menu = menu;
@@ -128,7 +138,17 @@ class HistoryResultsList implements Component {
 	}
 
 	invalidate(): void {
-		// No cached state to invalidate currently
+		this.#highlightCache = new WeakMap();
+	}
+
+	/** Truncated, token-highlighted prompt of `entry` for `budget` cells. */
+	#highlightedPrompt(entry: HistorySearchEntry, budget: number): string {
+		const cached = this.#highlightCache.get(entry);
+		if (cached !== undefined && cached.tokens === this.#tokens && cached.budget === budget) return cached.text;
+		const normalized = entry.prompt.replace(/\s+/g, " ").trim();
+		const text = highlightTokens(truncateToWidth(normalized, budget), this.#tokens);
+		this.#highlightCache.set(entry, { tokens: this.#tokens, budget, text });
+		return text;
 	}
 
 	render(width: number): readonly string[] {
@@ -162,9 +182,7 @@ class HistoryResultsList implements Component {
 			const showTime = rowWidth >= gutterWidth + 12 + timeWidth;
 
 			const promptBudget = Math.max(4, rowWidth - gutterWidth - (showTime ? timeWidth + 1 : 0));
-			const normalized = entry.prompt.replace(/\s+/g, " ").trim();
-			const plain = truncateToWidth(normalized, promptBudget);
-			const highlighted = highlightTokens(plain, this.#tokens);
+			const highlighted = this.#highlightedPrompt(entry, promptBudget);
 
 			const cursor = isSelected ? theme.fg("accent", cursorSymbol) : padding(gutterWidth);
 			let line = cursor + (isSelected ? theme.bold(highlighted) : highlighted);
@@ -200,14 +218,24 @@ export class HistorySearchComponent extends OverlayPanel {
 	#nativeMemo: HistoryNativeMemo | undefined;
 	#pickerItems: { items: readonly HistorySearchEntry[]; rows: readonly TspPickerItem[] } | undefined;
 	#emptyMessage = "";
+	/** Trimmed query the current results were fetched for; `undefined` before the first fetch. */
+	#resultsQuery: string | undefined;
+	#searchTimer: NodeJS.Timeout | undefined;
+	#onRequestRender?: () => void;
 
 	/** Sources are host-bound and ordered for Tab cycling, with the initial scope first. */
 	constructor(scopes: readonly HistorySearchScope[], onSelect: (prompt: string) => void, onCancel: () => void) {
 		super("History", "omp.overlay.history");
 		if (scopes.length === 0) throw new RangeError("History search requires at least one source");
 		this.#scopes = scopes;
-		this.#onSelect = onSelect;
-		this.#onCancel = onCancel;
+		this.#onSelect = prompt => {
+			this.#cancelPendingSearch();
+			onSelect(prompt);
+		};
+		this.#onCancel = () => {
+			this.#cancelPendingSearch();
+			onCancel();
+		};
 
 		this.#menu = new MenuSelection<HistorySearchEntry>([], {
 			getKey: entry => `${entry.created_at}:${entry.prompt}`,
@@ -215,6 +243,7 @@ export class HistorySearchComponent extends OverlayPanel {
 		});
 		this.#searchInput = new Input();
 		this.#searchInput.onSubmit = () => {
+			this.#flushPendingSearch();
 			const selected = this.#menu.selectedItem;
 			if (selected) {
 				this.#onSelect(selected.prompt);
@@ -265,6 +294,20 @@ export class HistorySearchComponent extends OverlayPanel {
 		this.#updateResults();
 	}
 
+	/**
+	 * Repaint hook for debounced result updates. Once set, query edits search
+	 * storage after a {@link SEARCH_DEBOUNCE_MS} quiet period instead of on
+	 * every key; without it every edit searches synchronously.
+	 */
+	setOnRequestRender(callback: () => void): void {
+		this.#onRequestRender = callback;
+	}
+
+	override dispose(): void {
+		this.#cancelPendingSearch();
+		super.dispose();
+	}
+
 	handleInput(keyData: string): void {
 		// Tab and Shift+Tab cycle the scope ring in opposite directions. The ring starts on
 		// the configured scope and wraps, so neither key is strictly "wider" than the other.
@@ -277,36 +320,43 @@ export class HistorySearchComponent extends OverlayPanel {
 		}
 
 		if (matchesSelectUp(keyData)) {
+			this.#flushPendingSearch();
 			this.#menu.move(-1, false);
 			return;
 		}
 
 		if (matchesSelectDown(keyData)) {
+			this.#flushPendingSearch();
 			this.#menu.move(1, false);
 			return;
 		}
 
 		if (matchesSelectPageUp(keyData)) {
+			this.#flushPendingSearch();
 			this.#menu.move(-MAX_VISIBLE, false);
 			return;
 		}
 
 		if (matchesSelectPageDown(keyData)) {
+			this.#flushPendingSearch();
 			this.#menu.move(MAX_VISIBLE, false);
 			return;
 		}
 
 		if (matchesKey(keyData, "home")) {
+			this.#flushPendingSearch();
 			this.#menu.moveToBoundary("first");
 			return;
 		}
 
 		if (matchesKey(keyData, "end")) {
+			this.#flushPendingSearch();
 			this.#menu.moveToBoundary("last");
 			return;
 		}
 
 		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
+			this.#flushPendingSearch();
 			const selected = this.#menu.selectedItem;
 			if (selected) {
 				this.#onSelect(selected.prompt);
@@ -314,13 +364,13 @@ export class HistorySearchComponent extends OverlayPanel {
 			return;
 		}
 
-		if (matchesAppInterrupt(keyData)) {
+		if (matchesAppInterrupt(keyData) || matchesSelectCancel(keyData)) {
 			this.#onCancel();
 			return;
 		}
 
 		this.#searchInput.handleInput(keyData);
-		this.#updateResults();
+		this.#scheduleResults();
 	}
 
 	/**
@@ -435,6 +485,9 @@ export class HistorySearchComponent extends OverlayPanel {
 	 * Picker: a row click highlights, a second click or `Insert` inserts it
 	 * (Enter), `Close` cancels (Esc), `Clear search` empties the query.
 	 * List: picking a result does what highlighting it and pressing Enter does.
+	 * A row picked while a debounced search is pending belongs to the previous
+	 * query: results are refreshed first and the pick only lands if that entry
+	 * is still among them.
 	 */
 	handleNativeEvent(event: NativeUiEvent): void {
 		const ev = pickerEvent(event, PICKER_KEY);
@@ -450,6 +503,7 @@ export class HistorySearchComponent extends OverlayPanel {
 				}
 				return;
 			}
+			this.#flushPendingSearch();
 			const index = this.#menu.visibleItems.findIndex(entry => nativeEntryKey(entry) === ev.item);
 			if (index < 0) return;
 			this.#menu.setSelectedIndex(index);
@@ -457,6 +511,7 @@ export class HistorySearchComponent extends OverlayPanel {
 			return;
 		}
 		if ((event.type !== "select" && event.type !== "activate") || event.key !== "list") return;
+		this.#flushPendingSearch();
 		const index = this.#menu.visibleItems.findIndex(entry => nativeEntryKey(entry) === event.item);
 		const target = this.#menu.visibleItems[index];
 		if (!target) return;
@@ -464,16 +519,56 @@ export class HistorySearchComponent extends OverlayPanel {
 		this.#onSelect(target.prompt);
 	}
 
+	/**
+	 * Refresh results after a query edit: no-op when the trimmed query is
+	 * unchanged (cursor moves, trailing spaces), immediate for the empty query
+	 * or when no repaint hook is wired, debounced otherwise.
+	 */
+	#scheduleResults(): void {
+		const query = this.#searchInput.getValue().trim();
+		if (query === this.#resultsQuery) {
+			this.#cancelPendingSearch();
+			return;
+		}
+		const requestRender = this.#onRequestRender;
+		if (!query || !requestRender) {
+			this.#updateResults();
+			return;
+		}
+		this.#cancelPendingSearch();
+		this.#searchTimer = setTimeout(() => {
+			this.#searchTimer = undefined;
+			this.#updateResults();
+			requestRender();
+		}, SEARCH_DEBOUNCE_MS);
+	}
+
+	/** Run a pending debounced search now, so selection acts on the current query's results. */
+	#flushPendingSearch(): void {
+		if (this.#searchTimer === undefined) return;
+		this.#cancelPendingSearch();
+		this.#updateResults();
+	}
+
+	#cancelPendingSearch(): void {
+		if (this.#searchTimer === undefined) return;
+		clearTimeout(this.#searchTimer);
+		this.#searchTimer = undefined;
+	}
+
 	#updateResults(): void {
 		this.#nativeMemo = undefined;
 		this.#pickerItems = undefined;
+		this.#cancelPendingSearch();
 		const query = this.#searchInput.getValue().trim();
+		this.#resultsQuery = query;
 		const scope = this.#scopeAt(this.#scopeIndex);
 		// Source failures must not escape a keystroke handler; the next input retries.
 		let results: HistorySearchEntry[] = [];
 		try {
 			results = query ? scope.search(query, this.#resultLimit) : scope.getRecent(this.#resultLimit);
 		} catch (error) {
+			this.#resultsQuery = undefined;
 			logger.warn("History search read failed", { error: String(error) });
 		}
 		this.#menu.setItems(results);

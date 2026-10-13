@@ -283,8 +283,9 @@ describe("history search picker", () => {
 		expect(sheet().items?.[0]?.hits).toEqual([[7, 14]]);
 		shared.push({ prompt: "release follow-up", created_at: now + 1 });
 		search.handleInput("\x1b[D");
+		search.handleInput("s");
 		const refreshed = sheet();
-		expect(refreshed.cursor).toBe(6);
+		expect(refreshed.cursor).toBe(7);
 		expect(refreshed.items?.map(item => item.label)).toEqual(["deploy release", "release follow-up"]);
 		search.handleNativeEvent({ type: "activate", key: "^picker", item: refreshed.items![1]!.id });
 		expect(inserted).toEqual(["release follow-up"]);
