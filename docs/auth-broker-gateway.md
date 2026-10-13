@@ -199,6 +199,8 @@ Only canonical stop/length/tool-use completion records affinity. Partial/error/a
 
 `affinity: "none"` disables this preference. Balanced graphs retain their configured strategy unless `affinity: "preferred"` explicitly opts into cache-first ranking. A changed route generation invalidates its old serving hint.
 
+Pi-native `options.promptCacheKey` wins over `options.sessionId`, then the supported body/header identity, before stable derivation. Its upstream cache identity, local serving-hint lookup and recording remain aligned; a changing first-message delta does not replace an explicit nested identity.
+
 ### Target health and state constraints
 
 Each router owns its target health book. Three consecutive provider/model failures open a 30-second circuit; a canonical success resets it. Credential quota/auth failures, caller cancellation and observer failures do not poison target health, and one attempt is counted once. Open-circuit and incompatible capability skips can follow only the graph's declared availability edges; they never cause unconditional fallback or replay billed/committed output.

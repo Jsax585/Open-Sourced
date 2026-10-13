@@ -536,12 +536,15 @@ async function handlePiNative(
 		return piNative.formatError(404, "invalid_request_error", `Unknown model: ${parsed.modelId}`);
 	}
 	const client = resolveClientIdentity(req.headers);
-	// Pi-native already parsed `streamOpts.sessionId` (when set by the
-	// client); fall back to the derived key so credential-stickiness lines
+	// Prefer the native cache identity, then the explicit session/header
+	// identity; fall back to the derived key so credential-stickiness lines
 	// up with cache-prefix stickiness — same identity used for both means
 	// the next turn of this conversation reuses the same credential until
 	// it hits a usage cap, then markUsageLimitReached can hand off.
-	const clientKey = normalizeClientSessionKey(parsed.options.sessionId);
+	const clientKey =
+		normalizeClientSessionKey(parsed.options.promptCacheKey) ??
+		normalizeClientSessionKey(parsed.options.sessionId) ??
+		normalizeClientSessionKey(resolvePromptCacheKey(body, req.headers));
 	const previousId = parsed.options.previousResponseId;
 	const previousOwner = previousId ? responseOwners.get(previousId) : undefined;
 	const requestHeaders = {
@@ -571,10 +574,7 @@ async function handlePiNative(
 		previousId,
 		previousOwner,
 		requestHeaders,
-		cacheFingerprint: Bun.SHA256.hash(
-			JSON.stringify([compiled.id, resolvePromptCacheKey(body, req.headers) ?? sessionId]),
-			"hex",
-		),
+		cacheFingerprint: Bun.SHA256.hash(JSON.stringify([compiled.id, sessionId]), "hex"),
 		requiresNativeSurface:
 			parsed.options.responseMimeType !== undefined ||
 			parsed.options.responseSchema !== undefined ||

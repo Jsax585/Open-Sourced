@@ -111,13 +111,22 @@ function send(
 	format: string,
 	stream: boolean,
 	headerKey: string = cacheKey,
+	message = "fixture",
+	nativeOptions?: Record<string, unknown>,
 ): Promise<Response> {
 	return fetch(`${gateway.url}${format}`, {
 		method: "POST",
-		headers: { ...headers, "x-prompt-cache-key": headerKey },
+		headers: headerKey
+			? { ...headers, "x-prompt-cache-key": headerKey }
+			: { Authorization: headers.Authorization, "Content-Type": "application/json" },
 		body: JSON.stringify(
 			format === "/v1/pi/stream"
-				? { modelId: "work", context: { messages: [{ role: "user", content: "fixture", timestamp: 0 }] }, stream }
+				? {
+						modelId: "work",
+						context: { messages: [{ role: "user", content: message, timestamp: 0 }] },
+						stream,
+						...(nativeOptions ? { options: nativeOptions } : {}),
+					}
 				: format === "/v1/responses"
 					? { model: "work", input: "fixture", stream }
 					: { model: "work", messages: [{ role: "user", content: "fixture" }], max_tokens: 100, stream },
@@ -237,5 +246,40 @@ it("explicit preferred affinity can override a balanced route's normal cursor", 
 			expect(await response.text()).toContain("served-b");
 		}
 		expect(calls).toEqual(["a", "b", "b", "b"]);
+	});
+});
+
+for (const identity of ["promptCacheKey", "sessionId"] as const)
+	it(`pi-native nested ${identity} is the lookup fingerprint even when the first-message delta changes`, async () => {
+		await withCache(async (gateway, _storage, _registry, _cache, calls, recover) => {
+			const first = await send(gateway, "/v1/pi/stream", false, "", "first prefix", {
+				[identity]: "nested-private-cache-key",
+			});
+			expect(await first.text()).toContain("served-b");
+			recover();
+			const next = await send(gateway, "/v1/pi/stream", false, "", "different delta", {
+				[identity]: "nested-private-cache-key",
+			});
+			expect(await next.text()).toContain("served-b");
+			expect(calls).toEqual(["a", "b", "b"]);
+		});
+	});
+
+it("pi-native promptCacheKey takes precedence over changing session and header identities", async () => {
+	await withCache(async (gateway, _storage, _registry, cache, calls, recover) => {
+		const first = await send(gateway, "/v1/pi/stream", false, "first-header", "first prefix", {
+			promptCacheKey: "stable-nested-key",
+			sessionId: "first-session",
+		});
+		expect(await first.text()).toContain("served-b");
+		recover();
+		const next = await send(gateway, "/v1/pi/stream", false, "different-header", "different delta", {
+			promptCacheKey: "stable-nested-key",
+			sessionId: "different-session",
+		});
+		expect(await next.text()).toContain("served-b");
+		expect(calls).toEqual(["a", "b", "b"]);
+		const fingerprint = Bun.SHA256.hash(JSON.stringify(["work", "stable-nested-key"]), "hex");
+		expect(cache.lookup(fingerprint)).toMatchObject({ model: "cache-backup/b" });
 	});
 });
