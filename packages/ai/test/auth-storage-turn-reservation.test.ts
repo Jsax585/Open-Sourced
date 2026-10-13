@@ -97,14 +97,16 @@ describe("AuthStorage in-flight turn reservations", () => {
 		expect(key).toBe("access-b");
 	});
 
-	it("does not vend a reserved credential to a second concurrent getApiKey", async () => {
+	it("does not turn request identities into a healthy OAuth concurrency limit", async () => {
 		if (!storage) throw new Error("setup failed");
 		await storage.credentials.set(PROVIDER, [oauth("a"), oauth("b")]);
-		const first = await storage.keys.get(PROVIDER, "s-one", { requestId: "req-a" });
-		const second = await storage.keys.get(PROVIDER, "s-two", { requestId: "req-b" });
+		const first = await storage.keys.get(PROVIDER, "same-session", { requestId: "req-a" });
+		const second = await storage.keys.get(PROVIDER, "same-session", { requestId: "req-b" });
 		expect(first).toBeDefined();
 		expect(second).toBeDefined();
-		expect(first).not.toBe(second);
+		expect(first).toBe(second);
+		for (const row of storage.credentials.list(PROVIDER))
+			expect(storage.coordination.activeTurnReservation(row.id, 1)).toBeUndefined();
 	});
 
 	it("does not let an old release() kill a renewed same-requestId reservation (negative)", () => {
@@ -149,7 +151,7 @@ describe("AuthStorage in-flight turn reservations", () => {
 		expect(key).toBe("access-a");
 	});
 
-	it("reserves stored api_key rows before returning them", async () => {
+	it("shares healthy stored API keys without creating implicit exclusive holds", async () => {
 		if (!storage) throw new Error("setup failed");
 		const apiProvider = `${PROVIDER}-api-keys`;
 		await storage.credentials.set(apiProvider, [
@@ -160,7 +162,9 @@ describe("AuthStorage in-flight turn reservations", () => {
 		const second = await storage.keys.get(apiProvider, "same-session", { requestId: "api-req-b" });
 		expect(first).toBeDefined();
 		expect(second).toBeDefined();
-		expect(first).not.toBe(second);
+		expect(first).toBe(second);
+		for (const row of storage.credentials.list(apiProvider))
+			expect(storage.coordination.activeTurnReservation(row.id, 1)).toBeUndefined();
 	});
 
 	it("does not resurrect an expired reservation during renewal", () => {
@@ -222,7 +226,7 @@ describe("AuthStorage in-flight turn reservations", () => {
 		expect(storage.coordination.activeTurnReservation(id, 1)).toBeUndefined();
 	});
 
-	it("reserves the prepared replacement incarnation rather than an earlier snapshot", async () => {
+	it("captures the prepared replacement incarnation without serializing its healthy traffic", async () => {
 		if (!storage || !store) throw new Error("setup failed");
 		const database = store;
 		let prepared = false;
@@ -238,11 +242,11 @@ describe("AuthStorage in-flight turn reservations", () => {
 		const id = storage.credentials.list(PROVIDER)[0]!.id;
 		expect(await storage.keys.get(PROVIDER, "owner", { requestId: "owner" })).toBe("access-replacement");
 		expect(storage.coordination.getCredentialIncarnation(id)).toBe(2);
-		expect(storage.coordination.activeTurnReservation(id, 2)?.requestId).toBe("owner");
-		expect(await storage.keys.get(PROVIDER, "other", { requestId: "other" })).toBeUndefined();
+		expect(storage.coordination.activeTurnReservation(id, 2)).toBeUndefined();
+		expect(await storage.keys.get(PROVIDER, "other", { requestId: "other" })).toBe("access-replacement");
 	});
 
-	it("reserves the physical identity returned by a forced OAuth refresh", async () => {
+	it("captures the physical identity returned by a forced OAuth refresh without imposing single-flight", async () => {
 		if (!store) throw new Error("setup failed");
 		storage = new AuthStorage(store, {
 			usageProviderResolver: () => undefined,
@@ -255,22 +259,37 @@ describe("AuthStorage in-flight turn reservations", () => {
 			"access-refreshed-account",
 		);
 		expect(storage.coordination.getCredentialIncarnation(id)).toBe(2);
-		expect(storage.coordination.activeTurnReservation(id, 2)?.requestId).toBe("owner");
-		expect(await storage.keys.get(PROVIDER, "other", { requestId: "other" })).toBeUndefined();
+		expect(storage.coordination.activeTurnReservation(id, 2)).toBeUndefined();
+		expect(await storage.keys.get(PROVIDER, "other", { requestId: "other" })).toBe("access-refreshed-account");
 	});
 
-	it("rechecks stored-key exclusivity after concurrent asynchronous material resolution", async () => {
+	it("rechecks an explicit foreign hold after concurrent asynchronous material resolution", async () => {
 		if (!store) throw new Error("setup failed");
 		const barrier = Promise.withResolvers<void>();
 		let firstReference: string | undefined;
 		let preparing = 0;
+		let heldId: number | undefined;
 		storage = new AuthStorage(store, {
 			usageProviderResolver: () => undefined,
 			rankingStrategyResolver: () => undefined,
 			configValueResolver: async reference => {
 				firstReference ??= reference;
 				if (reference === firstReference) {
-					if (++preparing === 2) barrier.resolve();
+					if (++preparing === 2) {
+						const row = storage!.credentials
+							.list(PROVIDER)
+							.find(row => row.credential.type === "api_key" && row.credential.key === reference);
+						if (!row) throw new Error("Missing selected fixture row");
+						heldId = row.id;
+						expect(
+							storage!.coordination.tryAcquireTurnReservation({
+								credentialId: row.id,
+								incarnation: 1,
+								requestId: "explicit-owner",
+							}).ok,
+						).toBe(true);
+						barrier.resolve();
+					}
 					await barrier.promise;
 				}
 				return reference;
@@ -286,9 +305,11 @@ describe("AuthStorage in-flight turn reservations", () => {
 		]);
 		expect(keys[0]?.apiKey).toBeDefined();
 		expect(keys[1]?.apiKey).toBeDefined();
-		expect(keys[0]?.credentialId).not.toBe(keys[1]?.credentialId);
+		expect(keys[0]?.credentialId).not.toBe(heldId);
+		expect(keys[1]?.credentialId).not.toBe(heldId);
+		expect(keys[0]?.credentialId).toBe(keys[1]?.credentialId);
 		storage.coordination.releaseTurnReservation("first");
-		expect(storage.coordination.activeTurnReservation(keys[1]!.credentialId!, 1)?.requestId).toBe("second");
+		expect(storage.coordination.activeTurnReservation(heldId!, 1)?.requestId).toBe("explicit-owner");
 	});
 
 	it("does not use a timed cooldown key when its healthy sibling is reserved", async () => {

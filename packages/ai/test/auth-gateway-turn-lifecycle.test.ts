@@ -77,6 +77,13 @@ for (const route of routes)
 							quotaOrigin: true,
 						});
 						const owners: string[] = [];
+						let resolvedRequestId: string | undefined;
+						const getKey = storage.keys.getWithCredential.bind(storage.keys);
+						vi.spyOn(storage.keys, "getWithCredential").mockImplementation(async (...args) => {
+							const key = await getKey(...args);
+							resolvedRequestId = args[2]?.requestId;
+							return key;
+						});
 						const mock = createMockModel({
 							provider,
 							id: "canonical-lifecycle",
@@ -87,11 +94,12 @@ for (const route of routes)
 									id,
 									storage.coordination.getCredentialIncarnation(id),
 								);
-								if (!hold) throw new Error("Inference dispatched without its stored-credential reservation");
-								owners.push(hold.requestId);
-								expect(storage.coordination.hasInflightProbe(hold.requestId)).toBe(
-									owners.length === 1 || outcome !== "stop",
-								);
+								if (!resolvedRequestId) throw new Error("Inference dispatched without its request identity");
+								owners.push(resolvedRequestId);
+								const probing = owners.length === 1 || outcome !== "stop";
+								expect(storage.coordination.hasInflightProbe(resolvedRequestId)).toBe(probing);
+								if (probing) expect(hold?.requestId).toBe(resolvedRequestId);
+								else expect(hold).toBeUndefined();
 								return owners.length === 1 && outcome !== "stop"
 									? {
 											content: [],
@@ -182,27 +190,28 @@ it("renews a silent active turn beyond its initial TTL without needing stream ch
 	await withStorage(async storage => {
 		await storage.credentials.set("unit-quiet-turn", { type: "api_key", key: "fixture" });
 		const id = storage.credentials.list("unit-quiet-turn")[0]!.id;
+		let now = Date.now();
+		vi.useFakeTimers();
+		const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
 		storage.coordination.tryAcquireTurnReservation({
 			credentialId: id,
 			incarnation: 1,
 			requestId: "quiet",
 			ttlMs: 90,
 		});
-		const renewed = Promise.withResolvers<void>();
-		const original = storage.coordination.renewTurnReservation.bind(storage.coordination);
-		let renewals = 0;
-		vi.spyOn(storage.coordination, "renewTurnReservation").mockImplementation((...args) => {
-			original(...args);
-			if (++renewals === 4) renewed.resolve();
-		});
 		const turn = new GatewayCredentialTurn(storage, "quiet", new AbortController(), 90);
 		try {
-			await renewed.promise;
+			for (let index = 0; index < 4; index++) {
+				now += 30;
+				vi.advanceTimersByTime(30);
+			}
 			expect(
 				storage.coordination.tryAcquireTurnReservation({ credentialId: id, incarnation: 1, requestId: "other" }).ok,
 			).toBe(false);
 		} finally {
 			turn.release();
+			vi.useRealTimers();
+			clock.mockRestore();
 		}
 		expect(
 			storage.coordination.tryAcquireTurnReservation({ credentialId: id, incarnation: 1, requestId: "other" }).ok,
