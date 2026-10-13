@@ -5,12 +5,15 @@
 ### Added
 
 - Added OpenZoo live model discovery from its keyless local proxy, including pricing and a single `auto` router entry.
+- Added Muse Code's subscription-only Muse Wonder Full and Wonder contributor tiers with the `max` effort, recording API-equivalent cost instead of $0: Wonder Full at Muse Wonder's $4 input / $0.20 cached / $20 output per 1M tokens, contributor tiers at the measured $1.60 / $0.08 / $8 ([#15522](https://github.com/can1357/oh-my-pi/pull/15522) by [@eggpeat](https://github.com/eggpeat))
+- Added the `classifier-cot-extraction` rule axis, set for Claude, marking models whose classifier refuses earlier reasoning quoted back into their input ([#15436](https://github.com/can1357/oh-my-pi/pull/15436) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
 
 - Fixed the OpenZoo `auto` router hiding reasoning and image input when the live roster advertises them.
 - Fixed OpenZoo sessions sending native tool calls to models whose live roster lists parameters and omits tools.
 - Fixed OpenZoo models staying tool-disabled after a refresh when the live roster starts advertising tools.
+
 ### Removed
 
 - Removed the Codex `toolMode` model field (`code_mode_only`); Codex discovery no longer maps `tool_mode`
