@@ -18,7 +18,6 @@
 ### Fixed
 
 - Authentication, policy, provider-wait, and unknown legacy blocks cannot be bypassed by quota probes; broker compatibility preserves their provenance ([#10138](https://github.com/can1357/oh-my-pi/pull/10138) by [@jroth1111](https://github.com/jroth1111)).
-- Active gateway SSE inference survives the HTTP idle limit; failures with reported usage or explicit no-retry intent are not transparently replayed ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
 - Active gateway SSE inference survives the HTTP idle limit, held retries retain rotated credentials, and cross-origin clients can read explicit retry directives; failures with reported usage or no-retry intent are not transparently replayed ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
 - Explicit Responses storage does not enable disconnect recovery on hosts without that capability ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
 - Held Responses retries do not restart canonically aborted inference before output ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
