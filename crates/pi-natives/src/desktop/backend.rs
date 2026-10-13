@@ -220,4 +220,10 @@ pub trait AxBackend {
 	fn alive(&mut self, _h: &AxHandle) -> bool {
 		true
 	}
+	/// Whether the app has provably destroyed the element `h` was read from,
+	/// rather than the element merely failing one request. Only then is a ref
+	/// re-found in its place.
+	fn destroyed(&mut self, _h: &AxHandle) -> bool {
+		false
+	}
 }

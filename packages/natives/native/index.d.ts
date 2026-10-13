@@ -91,10 +91,10 @@ export declare class DesktopSession {
   axAttributes(reference: string): Promise<Array<[string, string]>>
   axChildren(reference: string): Promise<Array<AxNode>>
   axParent(reference: string): Promise<AxNode | undefined | null>
-  axPerform(reference: string, action: string): Promise<undefined>
-  axSetValue(reference: string, value: string): Promise<undefined>
-  axFocus(reference: string): Promise<undefined>
-  axClick(reference: string, opts?: PointerOptions | undefined | null): Promise<undefined>
+  axPerform(reference: string, action: string): Promise<AxActed>
+  axSetValue(reference: string, value: string): Promise<AxActed>
+  axFocus(reference: string): Promise<AxActed>
+  axClick(reference: string, opts?: PointerOptions | undefined | null): Promise<AxActed>
   /**
    * Immediately cancel operations submitted before this call. Later
    * operations may proceed.
@@ -1147,6 +1147,15 @@ export interface AstReplaceResult {
   missingGrammars?: Array<string>
 }
 
+/** The outcome of an action on an element ref. */
+export interface AxActed {
+  /**
+   * The app had destroyed the ref's element; the action went to the one
+   * element identical to it, which the ref names from now on.
+   */
+  refound: boolean
+}
+
 export interface AxNode {
   ref: string
   role: string
@@ -1162,6 +1171,11 @@ export interface AxNode {
   height?: number
   actions?: Array<string>
   childCount: number
+  /**
+   * Set when the app had destroyed the ref's element and the read went to
+   * the one element identical to it, which the ref names from now on.
+   */
+  refound?: boolean
 }
 
 export interface AxQuery {

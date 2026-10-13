@@ -31,7 +31,7 @@ pub use applications::{Application, ApplicationOpenOptions, ApplicationQuery};
 use ax::{AxRegistry, register_node};
 use backend::{Backend, DeliveryMode, MouseButton, PointerEvent};
 use control::{CancellationSource, InputLease, OperationToken};
-use error::{CoreResult, DesktopError};
+use error::{CoreResult, DesktopError, ErrorCode};
 use frame::{FrameGeometry, apply_capture_caps, encode_png};
 use keys::{parse_keys, parse_modifiers};
 pub use menus::DesktopMenuItem;
@@ -60,6 +60,7 @@ enum Response {
 	Application(Application),
 	MenuItems(Vec<DesktopMenuItem>),
 	Unit,
+	Acted(AxActed),
 	Snapshot(AxSnapshot),
 	Nodes(Vec<AxNode>),
 	Node(Option<AxNode>),
@@ -704,6 +705,40 @@ impl Worker {
 		result
 	}
 
+	/// Runs `op` on `reference`'s element. When `op` fails because the app
+	/// destroyed that element, as apps do when they rebuild a row or control in
+	/// place, the ref is re-found once ([`ax::refind`]) and `op` runs again on
+	/// the re-found element; the flag says it did. Otherwise the `StaleRef`
+	/// stands.
+	fn on_ref<T>(
+		&mut self,
+		reference: &str,
+		mut op: impl FnMut(&mut Self, &ax::AxHandle) -> CoreResult<T>,
+	) -> CoreResult<(T, bool)> {
+		let handle = self.registry.resolve(reference)?;
+		let error = match op(self, &handle) {
+			Err(error) if error.code == ErrorCode::StaleRef => error,
+			result => return result.map(|value| (value, false)),
+		};
+		if !self.ax()?.destroyed(&handle) {
+			return Err(error);
+		}
+		let Some(found) = self.refind(reference) else {
+			return Err(error);
+		};
+		op(self, &found).map(|value| (value, true))
+	}
+
+	/// The element re-found in place of `reference`'s destroyed one, in the
+	/// window the ref was read from; `None` when there is not exactly one.
+	fn refind(&mut self, reference: &str) -> Option<ax::AxHandle> {
+		let target = self.registry.target(reference).ok()?;
+		let window = self.window(&Target::Window(target)).ok()?;
+		let (backend, registry) = (&mut self.backend, &mut self.registry);
+		let ax = backend.as_mut().ok()?.ax()?;
+		ax::refind(ax, registry, &window, reference).ok().flatten()
+	}
+
 	fn ax(&mut self) -> CoreResult<&mut dyn backend::AxBackend> {
 		self
 			.backend()?
@@ -954,9 +989,10 @@ impl Worker {
 				Ok(Response::Node(node))
 			},
 			Request::AxNode { reference, .. } => {
-				let h = self.registry.resolve(reference)?;
-				let props = self.ax()?.props(&h)?;
-				Ok(Response::Node(Some(ax::node_to_napi(reference.clone(), props))))
+				let (props, refound) = self.on_ref(reference, |worker, h| worker.ax()?.props(h))?;
+				let mut node = ax::node_to_napi(reference.clone(), props);
+				node.refound = refound.then_some(true);
+				Ok(Response::Node(Some(node)))
 			},
 			Request::AxAttributes { reference, .. } => {
 				let h = self.registry.resolve(reference)?;
@@ -1007,28 +1043,30 @@ impl Worker {
 				Ok(Response::Node(node))
 			},
 			Request::AxPerform { reference, action, .. } => {
-				let h = self.registry.resolve(reference)?;
-				if action.eq_ignore_ascii_case("press") {
-					ax::ax_press(self.ax()?, &h)?;
-				} else {
-					self.ax()?.perform(&h, action)?;
-				}
-				Ok(Response::Unit)
+				let ((), refound) = self.on_ref(reference, |worker, h| {
+					if action.eq_ignore_ascii_case("press") {
+						ax::ax_press(worker.ax()?, h)
+					} else {
+						worker.ax()?.perform(h, action)
+					}
+				})?;
+				Ok(Response::Acted(AxActed { refound }))
 			},
 			Request::AxSetValue { reference, value, .. } => {
-				let h = self.registry.resolve(reference)?;
-				self.ax()?.set_value(&h, value)?;
-				Ok(Response::Unit)
+				let ((), refound) =
+					self.on_ref(reference, |worker, h| worker.ax()?.set_value(h, value))?;
+				Ok(Response::Acted(AxActed { refound }))
 			},
 			Request::AxFocus { reference, .. } => {
-				let h = self.registry.resolve(reference)?;
-				self.ax()?.focus(&h)?;
-				Ok(Response::Unit)
+				let ((), refound) = self.on_ref(reference, |worker, h| worker.ax()?.focus(h))?;
+				Ok(Response::Acted(AxActed { refound }))
 			},
 			Request::AxClick { reference, options, .. } => {
-				let h = self.registry.resolve(reference)?;
-				let bounds = self.ax()?.props(&h)?.bounds.ok_or_else(|| {
-					DesktopError::ax_failed(format!("{reference} has no clickable bounds"))
+				let ((bounds, h), refound) = self.on_ref(reference, |worker, h| {
+					let bounds = worker.ax()?.props(h)?.bounds.ok_or_else(|| {
+						DesktopError::ax_failed(format!("{reference} has no clickable bounds"))
+					})?;
+					Ok((bounds, h.clone()))
 				})?;
 				let x = bounds.x + bounds.width / 2.0;
 				let y = bounds.y + bounds.height / 2.0;
@@ -1050,7 +1088,7 @@ impl Worker {
 					options.mode(token),
 					token,
 				)?;
-				Ok(Response::Unit)
+				Ok(Response::Acted(AxActed { refound }))
 			},
 			Request::Close { .. } => Ok(Response::Unit),
 		}
@@ -1737,8 +1775,8 @@ impl DesktopSession {
 	}
 
 	#[napi]
-	pub fn ax_perform(&self, reference: String, action: String) -> Result<task::Promise<()>> {
-		Ok(self.unit("desktop.axPerform", move |reply| Request::AxPerform {
+	pub fn ax_perform(&self, reference: String, action: String) -> Result<task::Promise<AxActed>> {
+		Ok(self.acted("desktop.axPerform", move |reply| Request::AxPerform {
 			reference,
 			action,
 			reply,
@@ -1746,8 +1784,8 @@ impl DesktopSession {
 	}
 
 	#[napi]
-	pub fn ax_set_value(&self, reference: String, value: String) -> Result<task::Promise<()>> {
-		Ok(self.unit("desktop.axSetValue", move |reply| Request::AxSetValue {
+	pub fn ax_set_value(&self, reference: String, value: String) -> Result<task::Promise<AxActed>> {
+		Ok(self.acted("desktop.axSetValue", move |reply| Request::AxSetValue {
 			reference,
 			value,
 			reply,
@@ -1755,8 +1793,8 @@ impl DesktopSession {
 	}
 
 	#[napi]
-	pub fn ax_focus(&self, reference: String) -> Result<task::Promise<()>> {
-		Ok(self.unit("desktop.axFocus", move |reply| Request::AxFocus { reference, reply }))
+	pub fn ax_focus(&self, reference: String) -> Result<task::Promise<AxActed>> {
+		Ok(self.acted("desktop.axFocus", move |reply| Request::AxFocus { reference, reply }))
 	}
 
 	#[napi]
@@ -1764,9 +1802,9 @@ impl DesktopSession {
 		&self,
 		reference: String,
 		opts: Option<PointerOptions>,
-	) -> Result<task::Promise<()>> {
+	) -> Result<task::Promise<AxActed>> {
 		let o = ParsedPointerOptions::parse(opts).map_err(napi::Error::from)?;
-		Ok(self.unit("desktop.axClick", move |reply| Request::AxClick {
+		Ok(self.acted("desktop.axClick", move |reply| Request::AxClick {
 			reference,
 			options: o,
 			reply,
@@ -1799,6 +1837,22 @@ impl DesktopSession {
 			c.call(token, make)
 				.and_then(response_unit)
 				.map_err(Into::into)
+		})
+	}
+
+	fn acted(
+		&self,
+		label: &'static str,
+		make: impl FnOnce(Reply) -> Request + Send + 'static,
+	) -> task::Promise<AxActed> {
+		let c = Arc::clone(&self.core);
+		let token = c.cancellation.token();
+		task::blocking(label, (), move |_| {
+			match c.call(token, make)? {
+				Response::Acted(v) => Ok(v),
+				_ => Err(DesktopError::internal("unexpected response")),
+			}
+			.map_err(Into::into)
 		})
 	}
 
@@ -1837,6 +1891,8 @@ impl DesktopSession {
 
 #[cfg(test)]
 mod capture_tests {
+	use std::collections::HashSet;
+
 	use image::RgbaImage;
 
 	use super::*;
@@ -1849,12 +1905,38 @@ mod capture_tests {
 
 	const WAYLAND_ID: &str = "atspi::1.31:/org/a11y/atspi/accessible/1";
 
+	/// Elements by test id under the window root, id 1. A destroyed element
+	/// answers every request as gone.
+	#[derive(Default)]
+	struct FakeTree {
+		titles:    HashMap<u64, &'static str>,
+		children:  Vec<u64>,
+		destroyed: HashSet<u64>,
+		pressed:   Vec<u64>,
+	}
+
+	impl FakeTree {
+		fn element(&self, h: &AxHandle) -> CoreResult<u64> {
+			let AxHandle::Test(id) = h else {
+				unreachable!("test handles only")
+			};
+			if self.destroyed.contains(id) {
+				Err(DesktopError::stale_ref("the element no longer exists"))
+			} else {
+				Ok(*id)
+			}
+		}
+	}
+
 	/// Backend that mints a composite AT-SPI window id, mirroring the Wayland
 	/// `AtSpiAx` path. Exists to exercise `Worker::process` without a display.
 	struct FakeWaylandBackend {
 		window:                 DesktopWindow,
 		overlap:                Option<DesktopWindow>,
 		window_present:         bool,
+		/// An AX tree the app can rebuild; `None` answers every element as one
+		/// button.
+		tree:                   Option<Arc<Mutex<FakeTree>>>,
 		clicks:                 Arc<Mutex<Vec<String>>>,
 		layout:                 Arc<Mutex<Vec<DesktopDisplay>>>,
 		active_display:         Arc<Mutex<String>>,
@@ -1888,6 +1970,7 @@ mod capture_tests {
 				},
 				overlap:                None,
 				window_present:         true,
+				tree:                   None,
 				clicks:                 Arc::new(Mutex::new(Vec::new())),
 				layout:                 Arc::new(Mutex::new(vec![DesktopDisplay {
 					id:           "screen-1".to_string(),
@@ -1937,31 +2020,60 @@ mod capture_tests {
 				.ok_or_else(|| DesktopError::window_not_found("the element's window closed"))
 		}
 
-		fn props(&mut self, _: &AxHandle) -> CoreResult<AxProps> {
+		fn props(&mut self, h: &AxHandle) -> CoreResult<AxProps> {
+			let (role, title) = match &self.tree {
+				Some(tree) => {
+					let tree = tree.lock();
+					let id = tree.element(h)?;
+					if id == 1 {
+						("window", None)
+					} else {
+						("button", tree.titles.get(&id).map(|title| (*title).to_string()))
+					}
+				},
+				None => ("button", None),
+			};
 			Ok(AxProps {
-				role:        "button".to_string(),
-				native_role: "button".to_string(),
-				title:       None,
-				value:       None,
+				role: role.to_string(),
+				native_role: role.to_string(),
+				identity: Some(Box::new([Some(role.to_string()), title.clone()])),
+				partial: false,
+				title,
+				value: None,
 				description: None,
-				enabled:     true,
-				focused:     false,
-				bounds:      Some(AxBounds { x: 10.0, y: 10.0, width: 20.0, height: 20.0 }),
-				actions:     Vec::new(),
+				enabled: true,
+				focused: false,
+				bounds: Some(AxBounds { x: 10.0, y: 10.0, width: 20.0, height: 20.0 }),
+				actions: Vec::new(),
 				child_count: 0,
 			})
 		}
 
-		fn children(&mut self, _: &AxHandle) -> CoreResult<Vec<AxHandle>> {
-			Ok(Vec::new())
+		fn children(&mut self, h: &AxHandle) -> CoreResult<Vec<AxHandle>> {
+			Ok(match &self.tree {
+				Some(tree) if *h == AxHandle::Test(1) => tree
+					.lock()
+					.children
+					.iter()
+					.map(|id| AxHandle::Test(*id))
+					.collect(),
+				_ => Vec::new(),
+			})
 		}
 
 		fn parent(&mut self, _: &AxHandle) -> CoreResult<Option<AxHandle>> {
 			unreachable!("tree traversal not exercised")
 		}
 
-		fn perform(&mut self, _: &AxHandle, _: &str) -> CoreResult<()> {
-			unreachable!("semantic actions not exercised")
+		fn perform(&mut self, h: &AxHandle, _: &str) -> CoreResult<()> {
+			let mut tree = self
+				.tree
+				.as_ref()
+				.expect("semantic actions need a tree")
+				.lock();
+			let id = tree.element(h)?;
+			tree.pressed.push(id);
+			Ok(())
 		}
 
 		fn set_value(&mut self, _: &AxHandle, _: &str) -> CoreResult<()> {
@@ -1982,6 +2094,14 @@ mod capture_tests {
 
 		fn attributes(&mut self, _: &AxHandle) -> CoreResult<Vec<(String, String)>> {
 			unreachable!("attributes not exercised")
+		}
+
+		fn destroyed(&mut self, h: &AxHandle) -> bool {
+			let AxHandle::Test(id) = h else { return false };
+			self
+				.tree
+				.as_ref()
+				.is_some_and(|tree| tree.lock().destroyed.contains(id))
 		}
 	}
 
@@ -2359,6 +2479,102 @@ mod capture_tests {
 		};
 		assert_eq!(error.code, ErrorCode::WindowNotFound);
 		assert!(clicks.lock().is_empty(), "no input may reach the overlapping window");
+	}
+
+	/// A worker whose window holds one button per `(id, title)`, read once by
+	/// `ax()`: the window is `e1` and the buttons `e2`, `e3`, … in order.
+	fn read_buttons(buttons: &[(u64, &'static str)]) -> (Worker, Arc<Mutex<FakeTree>>) {
+		let tree = Arc::new(Mutex::new(FakeTree {
+			titles: buttons.iter().copied().collect(),
+			children: buttons.iter().map(|(id, _)| *id).collect(),
+			..FakeTree::default()
+		}));
+		let mut backend = FakeWaylandBackend::new();
+		backend.tree = Some(Arc::clone(&tree));
+		let mut worker = worker_with(backend);
+		let target = Target::Window(WAYLAND_ID.to_string());
+		worker
+			.snapshot(&target, &AxSnapshotOptions::default())
+			.unwrap();
+		(worker, tree)
+	}
+
+	/// The app destroys `old` and puts `buttons` in the window instead.
+	fn rebuild(tree: &Mutex<FakeTree>, old: u64, buttons: &[(u64, &'static str)]) {
+		let mut tree = tree.lock();
+		tree.destroyed.insert(old);
+		tree.titles.extend(buttons.iter().copied());
+		tree.children = buttons.iter().map(|(id, _)| *id).collect();
+	}
+
+	/// Presses `reference`: whether it was re-found, or the error's code.
+	fn press(worker: &mut Worker, reference: &str) -> std::result::Result<bool, ErrorCode> {
+		let (reply, _rx) = flume::bounded(1);
+		let request = Request::AxPerform {
+			reference: reference.to_string(),
+			action: "press".to_string(),
+			reply,
+		};
+		match worker.process(&request, &CancellationSource::default().token()) {
+			Ok(Response::Acted(AxActed { refound })) => Ok(refound),
+			Ok(_) => panic!("a press answers with what it did"),
+			Err(error) => Err(error.code),
+		}
+	}
+
+	#[test]
+	fn a_press_on_a_rebuilt_element_goes_to_its_one_identical_copy() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
+		assert_eq!(press(&mut worker, "e2"), Ok(true));
+		assert_eq!(tree.lock().pressed, [4]);
+		// The ref names the copy from now on.
+		assert_eq!(press(&mut worker, "e2"), Ok(false));
+		assert_eq!(tree.lock().pressed, [4, 4]);
+	}
+
+	#[test]
+	fn a_read_of_a_rebuilt_element_says_it_was_refound() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		rebuild(&tree, 2, &[(3, "Stop"), (4, "Go")]);
+		let (reply, _rx) = flume::bounded(1);
+		let request = Request::AxNode { reference: "e2".to_string(), reply };
+		let Ok(Response::Node(Some(node))) =
+			worker.process(&request, &CancellationSource::default().token())
+		else {
+			panic!("the read must reach the copy");
+		};
+		assert_eq!(
+			(node.ref_.as_str(), node.title.as_deref(), node.refound),
+			("e2", Some("Go"), Some(true))
+		);
+	}
+
+	#[test]
+	fn a_rebuilt_element_with_two_identical_copies_stays_stale_and_nothing_is_pressed() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		rebuild(&tree, 2, &[(4, "Go"), (5, "Go"), (3, "Stop")]);
+		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
+		assert!(tree.lock().pressed.is_empty());
+	}
+
+	#[test]
+	fn an_element_that_had_a_twin_when_read_is_never_refound() {
+		// The other "Go" may be the one left, not a copy of the pressed one.
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Go")]);
+		rebuild(&tree, 2, &[(3, "Go")]);
+		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
+		assert!(tree.lock().pressed.is_empty());
+	}
+
+	#[test]
+	fn a_changed_or_removed_element_stays_stale() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		rebuild(&tree, 2, &[(4, "Going"), (3, "Stop")]);
+		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
+		rebuild(&tree, 4, &[(3, "Stop")]);
+		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
+		assert!(tree.lock().pressed.is_empty());
 	}
 
 	fn capture_request(target: Target) -> Request {

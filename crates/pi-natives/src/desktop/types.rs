@@ -231,6 +231,18 @@ pub struct AxNode {
 	pub height:      Option<f64>,
 	pub actions:     Option<Vec<String>>,
 	pub child_count: u32,
+	/// Set when the app had destroyed the ref's element and the read went to
+	/// the one element identical to it, which the ref names from now on.
+	pub refound:     Option<bool>,
+}
+
+/// The outcome of an action on an element ref.
+#[napi(object)]
+#[derive(Debug, Clone)]
+pub struct AxActed {
+	/// The app had destroyed the ref's element; the action went to the one
+	/// element identical to it, which the ref names from now on.
+	pub refound: bool,
 }
 
 #[napi(object)]
