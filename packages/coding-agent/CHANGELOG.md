@@ -9,7 +9,7 @@
 ### Changed
 
 - The `computer` guide explains the new `ax()` line states, `actions=`, local dates and how to read a value cut at 200 characters, and tells the model to check the target before repeating an action that threw `AxUnconfirmed` ([#15282](https://github.com/can1357/oh-my-pi/pull/15282) by [@will-bogusz](https://github.com/will-bogusz))
-- The `computer` guide tells the model to read a tree's `Focused:`, `Selected text:` and `Selected:` lines instead of probing for focus or selection
+- The `computer` guide tells the model to read a tree's `Focused:` and `Selected:` lines instead of probing for focus or selection
 
 ## [18.9.2] - 2026-10-11
 

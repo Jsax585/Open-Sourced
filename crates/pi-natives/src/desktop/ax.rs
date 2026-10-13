@@ -769,16 +769,18 @@ pub fn snapshot(
 	if state.skipped > 0 {
 		trailers.push(format!("… skipped {} unreadable nodes", state.skipped));
 	}
+	// The focused element's selected text rides on its line, so a selection
+	// that clears changes that line instead of removing one.
 	if let Some(focused) = marks.focused {
-		trailers.push(format!("Focused: {focused}"));
-	}
-	if let Some(selection) = focus
-		.as_ref()
-		.and_then(|focus| backend.selected_text(focus))
-		.filter(|selection| !selection.is_empty())
-	{
-		let mut line = "Selected text: ".to_owned();
-		push_quoted(&mut line, &selection, None);
+		let mut line = format!("Focused: {focused}");
+		if let Some(selection) = focus
+			.as_ref()
+			.and_then(|focus| backend.selected_text(focus))
+			.filter(|selection| !selection.is_empty())
+		{
+			line.push_str(", selected text ");
+			push_quoted(&mut line, &selection, None);
+		}
 		trailers.push(line);
 	}
 	if !marks.selected.is_empty() {
@@ -1625,8 +1627,7 @@ mod tests {
 		let text = tree(&mut m);
 		let tail: Vec<_> = text.lines().skip(8).collect();
 		assert_eq!(tail, [
-			"Focused: textfield \"Name\" [ref=e2]",
-			"Selected text: \"hello\"",
+			"Focused: textfield \"Name\" [ref=e2], selected text \"hello\"",
 			"Selected: e4-e5, e7",
 		]);
 		// One focus read and one selection read per tree, however many elements
@@ -1666,10 +1667,11 @@ mod tests {
 			.unwrap()
 			.text;
 		let tail: Vec<_> = text.lines().skip(2).collect();
-		assert_eq!(tail, [
-			"Focused: textfield \"Rename\" [ref=e3] (not in this tree)".to_owned(),
-			format!("Selected text: \"{}\"… (+40 chars)", "z".repeat(SHOWN_CHARS)),
-		]);
+		assert_eq!(tail, [format!(
+			"Focused: textfield \"Rename\" [ref=e3] (not in this tree), selected text \"{}\"… (+40 \
+			 chars)",
+			"z".repeat(SHOWN_CHARS)
+		)]);
 		// The ref acts on the focused element like any other.
 		assert_eq!(node(&registry.resolve("e3").unwrap()), 9);
 	}
