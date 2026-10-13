@@ -918,8 +918,10 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 			}
 			if (req.method === "GET" && pathname.startsWith("/v1/executions/")) {
 				const requestId = pathname.slice("/v1/executions/".length);
-				const trace = boot.decisionTraces?.list().find(entry => entry.requestId === requestId);
-				return trace ? json(200, trace) : json(404, { error: "unknown execution" });
+				const traces = boot.decisionTraces?.list().filter(entry => entry.requestId === requestId) ?? [];
+				return traces.length
+					? json(200, { ...traces[0], object: "list", data: traces })
+					: json(404, { error: "unknown execution" });
 			}
 
 			// Route-table miss: no format module to defer to, so we emit a
