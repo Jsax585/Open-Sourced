@@ -574,10 +574,10 @@ pub fn node_to_napi(reference: String, props: AxProps) -> AxNode {
 #[derive(Default)]
 struct LineMarks {
 	/// `role "label" [ref=eN]` of the focused element.
-	focused:  Option<String>,
+	focused:     Option<String>,
 	/// Refs of the lines marked `(selected)` outside another selected line
 	/// (a selected row's cells are left out), in tree order.
-	selected: Vec<String>,
+	selected:    Vec<String>,
 	/// Depth of the selected line whose subtree the walk is in.
 	in_selected: Option<usize>,
 }
@@ -1640,7 +1640,14 @@ mod tests {
 			m.props.get_mut(&id).unwrap().selected = false;
 		}
 		let text = tree(&mut m);
-		assert!(text.lines().last().unwrap().starts_with("      - cell \"d1\""), "{text}");
+		assert!(
+			text
+				.lines()
+				.last()
+				.unwrap()
+				.starts_with("      - cell \"d1\""),
+			"{text}"
+		);
 	}
 	#[test]
 	fn focus_outside_the_tree_is_named_with_a_ref_and_a_long_selection_is_cut() {
