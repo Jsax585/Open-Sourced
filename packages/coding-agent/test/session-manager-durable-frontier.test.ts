@@ -266,6 +266,34 @@ describe("an entry that missed the journal once storage recovers", () => {
 	});
 });
 
+describe("a restored snapshot taken while an entry missed the journal", () => {
+	it("has flush() append the entry", async () => {
+		const { manager, sessionDir, sessionFile } = await fileSession();
+		failNextFileWrite();
+		manager.appendMessage(userTurn("missing"));
+		manager.restoreState(manager.captureState());
+
+		await expect(manager.flush()).resolves.toBeUndefined();
+		expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual(["before", "missing"]);
+	});
+
+	it("has flush() reject while storage still refuses the entry", async () => {
+		const { manager } = await fileSession();
+		failNextFileWrite();
+		manager.appendMessage(userTurn("missing"));
+		manager.restoreState(manager.captureState());
+		spyOn(fs, "writeSync").mockImplementation(() => {
+			throw Object.assign(new Error("ENOSPC: synthetic append failure"), { code: "ENOSPC" });
+		});
+
+		try {
+			await expect(manager.flush()).rejects.toThrow("ENOSPC");
+		} finally {
+			mock.restore();
+		}
+	});
+});
+
 describe("a turn appended after another writer's entries", () => {
 	/** A second manager resumes the journal while the first is still live; the first then appends its tail and closes. */
 	async function resumedBehindAnotherWriter(storage = new ControlledRewriteStorage()) {
