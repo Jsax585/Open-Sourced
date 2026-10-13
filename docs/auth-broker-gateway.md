@@ -150,7 +150,7 @@ The CLI broker refresh hook also handles managed `mcp_oauth:*` credentials using
 ### CLI
 
 ```
-omp auth-gateway serve   [--bind=host:port] [--no-auth] [--trust-proxy-headers]
+omp auth-gateway serve   [--bind=host:port] [--no-auth] [--trust-proxy-headers] [--routes=file.json5]
 omp auth-gateway stdio
 omp auth-gateway token   [--regenerate] [--json]
 omp auth-gateway status  [--json]
@@ -161,6 +161,28 @@ omp auth-gateway check   [--strict] [--json]
 - Logs attribute requests to the socket peer address. Behind a trusted reverse proxy, pass `--trust-proxy-headers` to use `X-Forwarded-For` / `X-Real-IP` for authenticated requests; unauthorized requests are always logged with the socket peer. An authenticated request that also carries the gateway token in its URL or in a forwarded, logged, or identity header is rejected with `400` before any credential lookup.
 - `token` manages the token file; `--regenerate` requires a running gateway to restart before accepting the replacement. `status` checks the local token file and an authenticated broker snapshot; it does not probe the gateway listener.
 - `check` constructs its own broker-backed store and probes the credentials the gateway would use, without calling a running gateway. Without `--strict` it uses provider usage probes. `--strict` additionally tries suitable bundled chat models and can consume quota; providers with no suitable candidate (including pi-native forwarding, Bedrock, Vertex, and Cursor transports) cannot be completion-probed.
+
+### Route files
+
+`omp auth-gateway serve --routes=routes.json5` loads a JSON or JSON5 array of route definitions, or an object with a `routes` array. File syntax and shape are validated before broker connections or private token/cache creation. Blank paths are rejected; quoted filename whitespace is preserved. `--routes` is serve-only and is rejected on other actions.
+
+```json5
+{
+  routes: [{
+    id: "work",
+    root: {
+      type: "fallback",
+      on: ["provider_unavailable", "model_unavailable"],
+      children: [
+        { type: "target", model: "provider/primary-model" },
+        { type: "target", model: "provider/backup-model" },
+      ],
+    },
+  }],
+}
+```
+
+Replace those placeholder targets with concrete IDs from the gateway's `/v1/models` catalog. Clients request the virtual ID (`work` in this example). Only configured failure conditions select another target, and committed or billed inference and caller-owned Responses continuations are not transparently replayed across targets.
 
 ### stdio
 

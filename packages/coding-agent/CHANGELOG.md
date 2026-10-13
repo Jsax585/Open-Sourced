@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `omp auth-gateway serve --routes` loads validated JSON5 route files before broker setup, preserving exact paths and rejecting unsupported actions ([#10145](https://github.com/can1357/oh-my-pi/pull/10145) by [@jroth1111](https://github.com/jroth1111)).
+
 ### Fixed
 
 - Broker-backed auth-gateway continuations retain private session and response ownership across restarts, without storing credentials or bearer/usage caches locally ([#10134](https://github.com/can1357/oh-my-pi/pull/10134) by [@jroth1111](https://github.com/jroth1111)).
