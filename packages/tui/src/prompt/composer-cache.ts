@@ -166,6 +166,20 @@ function cachedAutoResumeIsFresh(value: CachedAutoResume | undefined): value is 
 	return value.sources.every(source => JSON.stringify(snapshotSource(source.path)) === JSON.stringify(source));
 }
 
+function withoutSessionOwnedStatus(status: ComposerStatusCache): ComposerStatusCache {
+	return {
+		statusLine: {
+			settings: status.statusLine.settings,
+			gitEnabled: status.statusLine.gitEnabled,
+			autoThinking: false,
+			fastMode: false,
+			usingSubscription: false,
+			autoCompactEnabled: false,
+			compactionBoundaries: null,
+		},
+	};
+}
+
 function rebaseMovedProjectSource(
 	source: CachedSourceSnapshot,
 	previousCwd: string,
@@ -330,17 +344,23 @@ export class ComposerCache {
 			autoResume === true &&
 			options.sessionFile !== undefined &&
 			cachedStatus?.sessionFile === options.sessionFile;
+		const targetsDifferentSession =
+			options.sessionFile !== undefined &&
+			cachedStatus?.sessionFile !== undefined &&
+			cachedStatus.sessionFile !== options.sessionFile;
 		const status =
-			cachedStatus && !canReuseSessionUsage
-				? {
-						...cachedStatus.status,
-						statusLine: {
-							...cachedStatus.status.statusLine,
-							contextPercent: undefined,
-							tokenBreakdown: undefined,
-						},
-					}
-				: cachedStatus?.status;
+			cachedStatus && targetsDifferentSession
+				? withoutSessionOwnedStatus(cachedStatus.status)
+				: cachedStatus && !canReuseSessionUsage
+					? {
+							...cachedStatus.status,
+							statusLine: {
+								...cachedStatus.status.statusLine,
+								contextPercent: undefined,
+								tokenBreakdown: undefined,
+							},
+						}
+					: cachedStatus?.status;
 		return {
 			preferences: ui?.preferences,
 			theme: ui?.theme,

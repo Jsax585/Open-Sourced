@@ -404,7 +404,7 @@ import { goalContinuationActivity, goalFromModeData } from "../goals/state";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../plan-mode/settings";
 import { cfgStreamRedactPatterns } from "../stream/settings";
 import { cfgSttEnabled } from "../stt/settings";
-import { combine, type SettingValueOf } from "../config/registry";
+import { all as allSettings, combine, type SettingValueOf } from "../config/registry";
 import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
 import { cfgTierAdvisor } from "../session/settings";
 import {
@@ -1251,6 +1251,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#todoAutoClearGeneration = 0;
 	#modelCycleClearTimer: NodeJS.Timeout | undefined;
 	#composerStatusPersistTimer: NodeJS.Timeout | undefined;
+	#autoResumeCacheSyncPromise: Promise<void> | undefined;
+	#autoResumeCacheSyncPending = false;
 	readonly #judgmentBatchProgressHud = new JudgmentBatchProgressHud();
 	readonly #downloadActivityHud = new DownloadActivityHud(() => this.ui.requestRender());
 	readonly #judgmentBatchProgressClearTimers = new Map<string, NodeJS.Timeout>();
@@ -2444,8 +2446,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				void this.#handleGoalSessionEvent(event);
 			}),
 			cfgLiveUiSettings.listen(this.settings, (next, previous) => this.#applyUiSettingChanges(next, previous)),
-			this.settings.onGlobalChange([cfgAutoResume], () => this.#syncGlobalAutoResumeCacheAfterPersistence()),
-			this.settings.onProjectChange([cfgAutoResume], () => this.#syncAutoResumeCache()),
+			this.settings.onGlobalChange(allSettings(), () => this.#syncAutoResumeCacheAfterPersistence()),
+			this.settings.onProjectChange(allSettings(), () => this.#syncAutoResumeCacheAfterPersistence()),
 		);
 		this.#syncAutoResumeCache();
 		// Cache the live model for the next status-bar prepaint: init-time
@@ -3664,16 +3666,29 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 	}
 
-	#syncGlobalAutoResumeCacheAfterPersistence(): void {
-		void this.settings
+	#syncAutoResumeCacheAfterPersistence(): void {
+		if (this.#autoResumeCacheSyncPromise) {
+			this.#autoResumeCacheSyncPending = true;
+			return;
+		}
+		const syncPromise = this.settings
 			.flush()
 			.then(() => {
+				this.#syncAutoResumeCache();
 				sharedComposerCache()?.writeGlobalAutoResume(
 					this.settings.globalValue(cfgAutoResume) ?? cfgAutoResume.default,
 					this.settings.settingCacheSourcePaths("global"),
 				);
 			})
-			.catch(error => logger.warn("Failed to persist Auto Resume composer cache", { error: String(error) }));
+			.catch(error => logger.warn("Failed to persist Auto Resume composer cache", { error: String(error) }))
+			.finally(() => {
+				if (this.#autoResumeCacheSyncPromise !== syncPromise) return;
+				this.#autoResumeCacheSyncPromise = undefined;
+				if (!this.#autoResumeCacheSyncPending) return;
+				this.#autoResumeCacheSyncPending = false;
+				this.#syncAutoResumeCacheAfterPersistence();
+			});
+		this.#autoResumeCacheSyncPromise = syncPromise;
 	}
 
 	#syncStatusLineSettings(): void {

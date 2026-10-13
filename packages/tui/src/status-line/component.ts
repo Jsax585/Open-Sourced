@@ -38,7 +38,13 @@ import {
 import { canReuseCachedPr, createPrCacheContext, isSamePrCacheContext, type PrCacheContext } from "./git-utils";
 import { summarizeUsageResetCredits } from "../overlays/usage-display";
 import { getPreset } from "./presets";
-import { describeSegment, formatCompactContextPercent, renderSegment, type SegmentContext } from "./segments";
+import {
+	describeSegment,
+	formatCompactContextPercent,
+	renderSegment,
+	STARTUP_COMPACT_CONTEXT_PERCENT,
+	type SegmentContext,
+} from "./segments";
 import type { TspMeterMark, TspProps } from "@oh-my-pi/pi-wire";
 import type { NativeNode, NativeUiEvent } from "../native/node";
 import { col, node, span } from "../native/describe";
@@ -3098,7 +3104,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		// this budget a long path/session title can leave a one-cell gap: the
 		// context segment is gone, and the gauge silently omits its labels too.
 		const embeddedContextPercent =
-			ctx.contextPercent ?? ctx.session.startupContextPercent ?? (embedCompactContext ? 100 : null);
+			ctx.contextPercent ??
+			ctx.session.startupContextPercent ??
+			(embedCompactContext ? STARTUP_COMPACT_CONTEXT_PERCENT : null);
 		const embeddedContextWidth = embedContext
 			? embeddedContextGaugeMinWidth(
 					embeddedContextPercent,
@@ -3777,7 +3785,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const compactContextLabel = `ctx:${formatCompactContextPercent(pct)}`;
 		const startupCompactContextLabel =
 			compactContext && pct === null
-				? `ctx:${formatCompactContextPercent(ctx.session.startupContextPercent ?? 100)}`
+				? `ctx:${formatCompactContextPercent(ctx.session.startupContextPercent ?? STARTUP_COMPACT_CONTEXT_PERCENT)}`
 				: undefined;
 		const nativeCompactContextLabel = startupCompactContextLabel
 			? compactContextLabel.padEnd(startupCompactContextLabel.length)

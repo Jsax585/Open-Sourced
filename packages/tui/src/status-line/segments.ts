@@ -111,6 +111,9 @@ export function formatCompactContextPercent(percent: number | null | undefined):
 	return `${percent.toFixed(1)}%`;
 }
 
+/** Representative value whose formatted label reserves the widest ordinary compact percentage. */
+export const STARTUP_COMPACT_CONTEXT_PERCENT = 100.01;
+
 /**
  * Single-field usage counter (`token_in`, `token_out`, `cache_read`,
  * `cache_write`). Hidden on zero, startup-placeholder aware, icon omitted when
@@ -930,7 +933,9 @@ const contextPctSegment: StatusLineSegment = {
 		const text = theme.fg(color, display);
 		const startupPercent = ctx.session.startupContextPercent;
 		const startupDisplay =
-			compact && pct === null ? `ctx:${formatCompactContextPercent(startupPercent ?? 100)}` : undefined;
+			compact && pct === null
+				? `ctx:${formatCompactContextPercent(startupPercent ?? STARTUP_COMPACT_CONTEXT_PERCENT)}`
+				: undefined;
 		const startupPadding = startupDisplay ? " ".repeat(Math.max(0, startupDisplay.length - display.length)) : "";
 		const content = compact
 			? `${text}${startupPadding}${autoIcon}`

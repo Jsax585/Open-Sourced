@@ -75,6 +75,8 @@ describe("status line startup layout", () => {
 			const narrow = Bun.stripANSI(line.getTopBorder(14).content);
 			expect(narrow).toContain("ctx:?");
 			expect(narrow).not.toContain("Model");
+			const widestPercentBoundary = Bun.stripANSI(line.getTopBorder(18).content);
+			expect(widestPercentBoundary).not.toContain("Model");
 		} finally {
 			line.dispose();
 		}
@@ -148,6 +150,42 @@ describe("status line startup layout", () => {
 			const narrow = Bun.stripANSI(line.getTopBorder(11).content);
 			expect(narrow).not.toContain("ctx:?");
 			expect(narrow).toContain("Model");
+		} finally {
+			line.dispose();
+		}
+	});
+
+	it("keeps the auto-compact icon after the widest ordinary compact percentage", () => {
+		const model = {
+			id: "startup-model",
+			name: "Model",
+			provider: "test",
+			api: "test",
+			contextWindow: 100_000,
+		} as Model;
+		const line = createStartupStatusLine({
+			settings: {
+				preset: "custom",
+				leftSegments: ["context_pct"],
+				rightSegments: [],
+				separator: "none",
+				contextLine: "off",
+				segmentOptions: { context_pct: { compact: true } },
+			},
+			gitEnabled: false,
+			model,
+			autoThinking: false,
+			fastMode: false,
+			usingSubscription: false,
+			autoCompactEnabled: true,
+			compactionBoundaries: null,
+		});
+
+		try {
+			const rendered = Bun.stripANSI(line.getTopBorder(30).content);
+			const placeholderStart = rendered.indexOf("ctx:?");
+			expect(placeholderStart).toBeGreaterThanOrEqual(0);
+			expect(rendered.indexOf(theme.icon.auto)).toBe(placeholderStart + "ctx:100.0% ".length);
 		} finally {
 			line.dispose();
 		}

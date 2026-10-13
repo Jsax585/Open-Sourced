@@ -100,7 +100,7 @@ describe("native composer facts", () => {
 
 		try {
 			const meterJson = JSON.stringify(line.describeComposerFacts().context);
-			expect(meterJson).toContain('"label":"ctx:?   "');
+			expect(meterJson).toContain('"label":"ctx:?     "');
 		} finally {
 			line.dispose();
 		}

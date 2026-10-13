@@ -102,8 +102,20 @@ describe("composer startup cache", () => {
 			allowSessionUsage: true,
 			sessionFile: path.join(root, "sessions", "session-b.jsonl"),
 		}).status?.statusLine;
+		expect(otherTerminal?.thinkingLevel).toBeUndefined();
+		expect(otherTerminal?.autoThinking).toBeFalse();
+		expect(otherTerminal?.fastMode).toBeFalse();
+		expect(otherTerminal?.usingSubscription).toBeFalse();
+		expect(otherTerminal?.autoCompactEnabled).toBeFalse();
+		expect(otherTerminal?.compactionBoundaries).toBeNull();
 		expect(otherTerminal?.contextPercent).toBeUndefined();
 		expect(otherTerminal?.tokenBreakdown).toBeUndefined();
+		expect(
+			cache.read(project, {
+				allowSessionUsage: true,
+				sessionFile: path.join(root, "sessions", "session-b.jsonl"),
+			}).status?.borderColor,
+		).toBeUndefined();
 		cache.writeUi(project, COMPOSER_DEFAULTS, {}, false);
 		const disabled = cache.read(project, { allowSessionUsage: true, sessionFile }).status?.statusLine;
 		expect(disabled?.contextPercent).toBeUndefined();
