@@ -323,7 +323,6 @@ function computeModelRank(model: Model, roles: RoleAssignments): number {
 	return i;
 }
 
-/** Catalog metric a browser list can be ordered by. */
 export type ModelSortMetric = "int" | "tps" | "cost";
 
 /** An explicit metric order layered on top of the default role/MRU/provider order. */
@@ -358,9 +357,8 @@ function sortMetricValue(
 			return int != null && Number.isFinite(int) ? int : undefined;
 		}
 		case "tps": {
-			// Measured first, exactly as the row's perf cell prints it: a model
-			// with a recorded speed outranks one carrying only the `~` estimate,
-			// and a measured model with no catalog estimate is not unscored.
+			// Measured first, exactly as the row's perf cell prints it, so a
+			// recorded speed outranks a bare `~` estimate.
 			const measured = effectiveTps?.(item);
 			if (measured !== undefined) return measured;
 			const tps = model.tps;
@@ -369,22 +367,17 @@ function sortMetricValue(
 		case "cost": {
 			const cost = model.cost;
 			if (!cost) return undefined;
-			// A negative leg is a sentinel, not a rate: the bundled
-			// `openrouter/auto` rows carry -1e6, and a `modelOverrides` entry can
-			// pair one with a valid leg. `formatCostLeg` prints such a leg as `?`,
-			// so a card with an unknown leg has no known blended price either —
-			// and `isTokenCost` deliberately keeps finite negatives, so this is
-			// reachable from config, not just the bundled catalog.
+			// A negative leg is a sentinel, not a rate — the bundled
+			// `openrouter/auto` rows carry -1e6, and `isTokenCost` keeps finite
+			// negatives so a `models.yml` override can too. `formatCostLeg` prints
+			// such a leg as `?`, so an unknown leg means no known blended price.
 			const input = Number.isFinite(cost.input) && cost.input >= 0 ? cost.input : undefined;
 			const output = Number.isFinite(cost.output) && cost.output >= 0 ? cost.output : undefined;
 			if (input === undefined || output === undefined) return undefined;
 			const blended = input * COST_INPUT_WEIGHT + output * COST_OUTPUT_WEIGHT;
-			// A zero rate card is a $0 price only when the row really is free. A
-			// rule declaring `unknown`/`variable`/`included` is saying the rate
-			// is unpublished, so the row is unscored — otherwise an unknown-price
-			// model would sort ahead of a known $1 one and contradict the
-			// `unknown` the row itself displays. Mirrors `isFreeModel`, minus the
-			// credit case: a credits-backed row really is $0 per token.
+			// A zero card is $0 only when the row really is free; a declared
+			// `unknown`/`variable`/`included` is an unpublished rate. Mirrors
+			// `isFreeModel`, minus the credit case (credits are $0 per token).
 			const declared = declaredPricingStatus(model);
 			if (blended === 0 && declared !== undefined && declared !== "free") return undefined;
 			return blended;
@@ -392,7 +385,6 @@ function sortMetricValue(
 	}
 }
 
-/** The sort states the browser cycles through, in ring order. */
 const MODEL_SORT_RING: readonly (ModelSort | undefined)[] = [
 	undefined,
 	{ metric: "int", direction: "desc" },
@@ -413,8 +405,8 @@ export function parseModelSort(value: string | undefined): ModelSort | undefined
 	const raw = value?.trim().toLowerCase();
 	if (!raw || raw === "default") return undefined;
 	const parts = raw.split(":");
-	// A third segment is a typo, not a value to ignore: accepting `int:desc:junk`
-	// would silently run a different order than the setting spells out.
+	// A third segment is a typo, not a value to ignore: accepting
+	// `int:desc:junk` would run a different order than the setting spells out.
 	if (parts.length > 2) return undefined;
 	const [metric, direction] = parts;
 	if (metric !== "int" && metric !== "tps" && metric !== "cost") return undefined;
@@ -423,7 +415,6 @@ export function parseModelSort(value: string | undefined): ModelSort | undefined
 	return { metric, direction };
 }
 
-/** The `modelSort` string for a sort state; `default` for the unsorted list. */
 export function formatModelSort(sort: ModelSort | undefined): string {
 	if (!sort) return "default";
 	return `${sort.metric}:${sort.direction}`;
@@ -465,15 +456,12 @@ export interface SortModelItemsOptions {
 	sort?: ModelSort;
 	/**
 	 * Keep the role/MRU/provider blocks and rank by `sort` inside each one
-	 * instead of ranking across all providers. Off by default: "sort by
-	 * intelligence" reads as one league table, and grouping turns it into a
-	 * per-provider ranking the user has to read across.
+	 * instead of across all providers. Only consulted while `sort` is set.
 	 */
 	grouped?: boolean;
 	/**
-	 * The session's measured speed for a row, used by the `tps` order in place
-	 * of the catalog estimate. Supplied by the host so the order matches the
-	 * number the row prints; without it the order falls back to the estimate.
+	 * The session's measured speed for a row, used by the `tps` order in place of
+	 * the catalog estimate so the order matches the number the row prints.
 	 */
 	effectiveTps?: (item: ModelBrowserItem) => number | undefined;
 }
@@ -493,7 +481,6 @@ function modelItemComparator(options: SortModelItemsOptions): (a: ModelBrowserIt
 	const dateRe = /-(\d{8})$/;
 	const latestRe = /-latest$/;
 
-	/** Metric comparison, or 0 when both rows score the same (or there is no metric). */
 	const byMetric = (a: ModelBrowserItem, b: ModelBrowserItem): number => {
 		if (!sort) return 0;
 		const aMetric = sortMetricValue(a, sort.metric, options.effectiveTps);
@@ -506,18 +493,13 @@ function modelItemComparator(options: SortModelItemsOptions): (a: ModelBrowserIt
 	};
 
 	return (a, b) => {
-		// Grouping only means something while a metric order is active. With no
-		// `sort` the flag would put provider ahead of role/MRU and drop the later
-		// provider tie-break, silently reordering the default list while the UI
-		// still reads `sort: default`. The host keeps the preference for the next
-		// metric; only the comparison is gated here.
+		// Gate on an active metric: with no `sort` the flag would put provider
+		// ahead of role/MRU and drop the later provider tie-break, silently
+		// reordering the default list while the UI still reads `sort: default`.
 		const groupedOrder = grouped && sort !== undefined;
-		// Grouped ordering pins each provider's block and ranks the metric
-		// inside it. The metric still leads within a block and the role/MRU
-		// chain below stays the tie-breaker, so both orders read the same way;
-		// only the provider comparison moves ahead of them. Without this a
-		// recent or role-assigned model would float above another provider and
-		// split the block the mode promises to keep whole.
+		// Grouped ordering pins each provider's block and ranks the metric inside
+		// it. Only the provider comparison moves above role/MRU — which is what
+		// keeps a recent or role-assigned model from splitting the block.
 		if (groupedOrder) {
 			const providerCmp = a.provider.localeCompare(b.provider);
 			if (providerCmp !== 0) return providerCmp;

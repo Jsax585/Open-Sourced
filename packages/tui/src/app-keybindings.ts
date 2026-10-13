@@ -135,13 +135,12 @@ export const KEYBINDINGS = {
 	},
 	"app.model.cycleSort": {
 		// A control chord, never a letter: the `/models` hub's picker keeps a
-		// live search field, so a printable key belongs to the query. Option is
-		// also unusable as the modifier on macOS, where terminals send it as a
-		// text modifier (`alt+s` arrives as `ß`, which is not a key at all)
-		// unless the user turns on Option-as-Esc. A control chord is delivered
-		// as a control byte either way, so it needs no second binding — and a
-		// second binding would only exist on the fallback input path, since a
-		// Tern picker action advertises one key.
+		// search field, so a printable key belongs to the query. Option is also
+		// unusable as the modifier on macOS, where terminals send it as a text
+		// modifier (`alt+s` arrives as `ß`, not a key at all) unless the user
+		// turns on Option-as-Esc. A control byte arrives either way, so one
+		// binding covers every terminal — and a second would reach only the
+		// fallback input path, since a Tern picker action advertises one key.
 		defaultKeys: "ctrl+alt+s",
 		description: "Cycle the /models list order (intelligence, speed, price)",
 	},
