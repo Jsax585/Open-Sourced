@@ -12,11 +12,13 @@ import {
 	type BrowserKind,
 	type BrowserKindTag,
 	holdBrowser,
+	normalizeConnectedCdpUrl,
 	releaseBrowser,
 } from "./browser/registry";
 import { ensureChromiumExecutable } from "./browser/launch";
 import { resolveInitScriptSources } from "./browser/open-options";
 import { resolveRelayKind } from "./browser/relay/kind";
+import { relayExtensionNotice } from "./browser/relay/probe";
 import { describeTernTargets, listTernBlocks, type TernTarget, ternTargets } from "./browser/tern/blocks";
 import { resolveTernKind } from "./browser/tern/kind";
 import { isTernUnavailable } from "./browser/tern/wire";
@@ -33,6 +35,7 @@ import {
 	releaseAllTabs,
 	releaseIdleTabsForOwner,
 	releaseTab,
+	rollBackCreatedTab,
 	runInTab,
 	type TabSession,
 	type TernTabSession,
@@ -523,6 +526,14 @@ async function openOnKind(
 		details.url = url;
 		details.viewport = tab.info.viewport;
 		const verb = result.created ? "Opened" : "Reused";
+		// Advisory only: an open deadline that passes during the read drops the note, not the opened tab.
+		const relayNotice =
+			kind.kind === "relay" ? await relayExtensionNotice(normalizeConnectedCdpUrl(kind.cdpUrl), openSignal) : null;
+		// A cancel that lands during the read still cancels the open, so the tab it created goes too.
+		if (signal?.aborted) {
+			if (result.created) await rollBackCreatedTab(name, tab);
+			throw new ToolAbortError();
+		}
 		const lines = [
 			`${verb} tab ${JSON.stringify(name)} on ${describeBrowser(tab)}`,
 			`URL: ${url}`,
@@ -530,6 +541,7 @@ async function openOnKind(
 			...(tab.backend === "tern" ? ternNotes(tab) : []),
 			...notes,
 			result.note,
+			relayNotice,
 		].filter((line): line is string => typeof line === "string");
 		return toolResult(details).text(lines.join("\n")).done();
 	} catch (error) {
