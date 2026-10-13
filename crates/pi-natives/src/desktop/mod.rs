@@ -713,6 +713,7 @@ impl Worker {
 	fn read_ref<T>(
 		&mut self,
 		reference: &str,
+		token: &OperationToken,
 		mut op: impl FnMut(&mut Self, &ax::AxHandle) -> CoreResult<T>,
 	) -> CoreResult<(T, bool)> {
 		let handle = self.registry.resolve(reference)?;
@@ -726,7 +727,7 @@ impl Worker {
 		let Some(found) = self.refind(reference) else {
 			return Err(error);
 		};
-		op(self, &found).map(|value| (value, true))
+		self.on_refound(reference, found, token, op)
 	}
 
 	/// Acts on `reference`'s element with `op`, at most once. An element the
@@ -737,15 +738,35 @@ impl Worker {
 	fn act_on_ref<T>(
 		&mut self,
 		reference: &str,
+		token: &OperationToken,
 		op: impl FnOnce(&mut Self, &ax::AxHandle) -> CoreResult<T>,
 	) -> CoreResult<(T, bool)> {
 		let handle = self.registry.resolve(reference)?;
 		if self.ax()?.destroyed(&handle)
 			&& let Some(found) = self.refind(reference)
 		{
-			return op(self, &found).map(|value| (value, true));
+			return self.on_refound(reference, found, token, op);
 		}
+		// The probe may have outlived a cancellation.
+		token.check()?;
 		op(self, &handle).map(|value| (value, false))
+	}
+
+	/// Runs `op` on `found`, the element re-found for `reference`, unless the
+	/// call was cancelled during the search. The ref names `found` only once
+	/// `op` succeeds, so a call that fails leaves the next one to re-find the
+	/// element and say so.
+	fn on_refound<T>(
+		&mut self,
+		reference: &str,
+		found: ax::AxHandle,
+		token: &OperationToken,
+		op: impl FnOnce(&mut Self, &ax::AxHandle) -> CoreResult<T>,
+	) -> CoreResult<(T, bool)> {
+		token.check()?;
+		let value = op(self, &found)?;
+		self.registry.rebind(reference, found);
+		Ok((value, true))
 	}
 
 	/// The element re-found in place of `reference`'s destroyed one, in the
@@ -753,9 +774,10 @@ impl Worker {
 	fn refind(&mut self, reference: &str) -> Option<ax::AxHandle> {
 		let target = self.registry.target(reference).ok()?;
 		let window = self.window(&Target::Window(target)).ok()?;
-		let (backend, registry) = (&mut self.backend, &mut self.registry);
-		let ax = backend.as_mut().ok()?.ax()?;
-		ax::refind(ax, registry, &window, reference).ok().flatten()
+		let ax = self.backend.as_mut().ok()?.ax()?;
+		ax::refind(ax, &self.registry, &window, reference)
+			.ok()
+			.flatten()
 	}
 
 	fn ax(&mut self) -> CoreResult<&mut dyn backend::AxBackend> {
@@ -1008,7 +1030,8 @@ impl Worker {
 				Ok(Response::Node(node))
 			},
 			Request::AxNode { reference, .. } => {
-				let (props, refound) = self.read_ref(reference, |worker, h| worker.ax()?.props(h))?;
+				let (props, refound) =
+					self.read_ref(reference, token, |worker, h| worker.ax()?.props(h))?;
 				let mut node = ax::node_to_napi(reference.clone(), props);
 				node.refound = refound.then_some(true);
 				Ok(Response::Node(Some(node)))
@@ -1062,7 +1085,7 @@ impl Worker {
 				Ok(Response::Node(node))
 			},
 			Request::AxPerform { reference, action, .. } => {
-				let ((), refound) = self.act_on_ref(reference, |worker, h| {
+				let ((), refound) = self.act_on_ref(reference, token, |worker, h| {
 					if action.eq_ignore_ascii_case("press") {
 						ax::ax_press(worker.ax()?, h)
 					} else {
@@ -1073,40 +1096,41 @@ impl Worker {
 			},
 			Request::AxSetValue { reference, value, .. } => {
 				let ((), refound) =
-					self.act_on_ref(reference, |worker, h| worker.ax()?.set_value(h, value))?;
+					self.act_on_ref(reference, token, |worker, h| worker.ax()?.set_value(h, value))?;
 				Ok(Response::Acted(AxActed { refound }))
 			},
 			Request::AxFocus { reference, .. } => {
-				let ((), refound) = self.act_on_ref(reference, |worker, h| worker.ax()?.focus(h))?;
+				let ((), refound) =
+					self.act_on_ref(reference, token, |worker, h| worker.ax()?.focus(h))?;
 				Ok(Response::Acted(AxActed { refound }))
 			},
 			Request::AxClick { reference, options, .. } => {
-				let ((bounds, h), refound) = self.read_ref(reference, |worker, h| {
+				let ((), refound) = self.act_on_ref(reference, token, |worker, h| {
 					let bounds = worker.ax()?.props(h)?.bounds.ok_or_else(|| {
 						DesktopError::ax_failed(format!("{reference} has no clickable bounds"))
 					})?;
-					Ok((bounds, h.clone()))
+					let x = bounds.x + bounds.width / 2.0;
+					let y = bounds.y + bounds.height / 2.0;
+					let windows = worker.backend()?.windows()?;
+					// Desktop refs and parent traversal can leave the snapshot's
+					// original window; only the live element can establish
+					// ownership.
+					let window_id = worker.ax()?.window_id(h, &windows)?;
+					let target = Target::Window(window_id);
+					worker.backend()?.pointer(
+						&target,
+						PointerEvent::Click {
+							x,
+							y,
+							button: options.button,
+							count: options.count,
+							modifiers: options.modifiers,
+						},
+						&FrameGeometry::identity_global(),
+						options.mode(token),
+						token,
+					)
 				})?;
-				let x = bounds.x + bounds.width / 2.0;
-				let y = bounds.y + bounds.height / 2.0;
-				let windows = self.backend()?.windows()?;
-				// Desktop refs and parent traversal can leave the snapshot's
-				// original window; only the live element can establish ownership.
-				let window_id = self.ax()?.window_id(&h, &windows)?;
-				let target = Target::Window(window_id);
-				self.backend()?.pointer(
-					&target,
-					PointerEvent::Click {
-						x,
-						y,
-						button: options.button,
-						count: options.count,
-						modifiers: options.modifiers,
-					},
-					&FrameGeometry::identity_global(),
-					options.mode(token),
-					token,
-				)?;
 				Ok(Response::Acted(AxActed { refound }))
 			},
 			Request::Close { .. } => Ok(Response::Unit),
@@ -1935,6 +1959,9 @@ mod capture_tests {
 		/// A press is delivered, then the app replaces the pressed element with
 		/// an identical one under this id and the press answers as stale.
 		press_rebuilds_as: Option<u64>,
+		/// Cancelled when a call asks whether an element was destroyed, as a
+		/// user's cancel arriving during that probe would be.
+		cancel_on_probe:   Option<CancellationSource>,
 	}
 
 	impl FakeTree {
@@ -2087,13 +2114,16 @@ mod capture_tests {
 			unreachable!("tree traversal not exercised")
 		}
 
-		fn perform(&mut self, h: &AxHandle, _: &str) -> CoreResult<()> {
+		fn perform(&mut self, h: &AxHandle, action: &str) -> CoreResult<()> {
 			let mut tree = self
 				.tree
 				.as_ref()
 				.expect("semantic actions need a tree")
 				.lock();
 			let id = tree.element(h)?;
+			if action != "press" {
+				return Err(DesktopError::ax_failed(format!("no action {action}")));
+			}
 			tree.pressed.push(id);
 			let Some(copy) = tree.press_rebuilds_as else {
 				return Ok(());
@@ -2131,10 +2161,13 @@ mod capture_tests {
 
 		fn destroyed(&mut self, h: &AxHandle) -> bool {
 			let AxHandle::Test(id) = h else { return false };
-			self
-				.tree
-				.as_ref()
-				.is_some_and(|tree| tree.lock().destroyed.contains(id))
+			self.tree.as_ref().is_some_and(|tree| {
+				let tree = tree.lock();
+				if let Some(source) = &tree.cancel_on_probe {
+					source.cancel();
+				}
+				tree.destroyed.contains(id)
+			})
 		}
 	}
 
@@ -2540,19 +2573,27 @@ mod capture_tests {
 		tree.children = buttons.iter().map(|(id, _)| *id).collect();
 	}
 
-	/// Presses `reference`: whether it was re-found, or the error's code.
-	fn press(worker: &mut Worker, reference: &str) -> std::result::Result<bool, ErrorCode> {
+	/// Performs `action` on `reference` under `source`: whether the ref was
+	/// re-found, or the error's code.
+	fn perform(
+		worker: &mut Worker,
+		reference: &str,
+		action: &str,
+		source: &CancellationSource,
+	) -> std::result::Result<bool, ErrorCode> {
 		let (reply, _rx) = flume::bounded(1);
-		let request = Request::AxPerform {
-			reference: reference.to_string(),
-			action: "press".to_string(),
-			reply,
-		};
-		match worker.process(&request, &CancellationSource::default().token()) {
+		let request =
+			Request::AxPerform { reference: reference.to_string(), action: action.to_string(), reply };
+		match worker.process(&request, &source.token()) {
 			Ok(Response::Acted(AxActed { refound })) => Ok(refound),
-			Ok(_) => panic!("a press answers with what it did"),
+			Ok(_) => panic!("an action answers with what it did"),
 			Err(error) => Err(error.code),
 		}
+	}
+
+	/// Presses `reference`: whether it was re-found, or the error's code.
+	fn press(worker: &mut Worker, reference: &str) -> std::result::Result<bool, ErrorCode> {
+		perform(worker, reference, "press", &CancellationSource::default())
 	}
 
 	#[test]
@@ -2648,6 +2689,48 @@ mod capture_tests {
 		assert_eq!(press(&mut worker, "e2"), Ok(true));
 		assert_eq!(press(&mut worker, "e4"), Ok(false));
 		assert_eq!(tree.lock().pressed, [4, 4, 4, 5, 5]);
+	}
+
+	#[test]
+	fn a_ref_refound_onto_an_element_read_alone_follows_its_next_rebuild() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
+		// `children()` registers the replacement as `e4` without proving its
+		// fields unique in the window.
+		let (reply, _rx) = flume::bounded(1);
+		let request = Request::AxChildren { reference: "e1".to_string(), reply };
+		let Ok(Response::Nodes(nodes)) =
+			worker.process(&request, &CancellationSource::default().token())
+		else {
+			panic!("the window lists its children");
+		};
+		assert_eq!(nodes[0].ref_, "e4");
+		assert_eq!(press(&mut worker, "e2"), Ok(true));
+		rebuild(&tree, 4, &[(5, "Go"), (3, "Stop")]);
+		assert_eq!(press(&mut worker, "e4"), Ok(true));
+		assert_eq!(tree.lock().pressed, [4, 5]);
+	}
+
+	#[test]
+	fn a_call_that_fails_on_the_refound_element_leaves_the_next_one_to_report_it() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
+		let source = CancellationSource::default();
+		assert_eq!(perform(&mut worker, "e2", "bogus", &source), Err(ErrorCode::AxFailed));
+		assert_eq!(press(&mut worker, "e2"), Ok(true));
+		assert_eq!(tree.lock().pressed, [4]);
+	}
+
+	#[test]
+	fn an_action_cancelled_during_the_refind_is_not_sent() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		let source = CancellationSource::default();
+		tree.lock().cancel_on_probe = Some(source.clone());
+		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
+		assert_eq!(perform(&mut worker, "e2", "press", &source), Err(ErrorCode::Cancelled));
+		// Nor on an element still there.
+		assert_eq!(perform(&mut worker, "e3", "press", &source), Err(ErrorCode::Cancelled));
+		assert!(tree.lock().pressed.is_empty());
 	}
 
 	fn capture_request(target: Target) -> Request {

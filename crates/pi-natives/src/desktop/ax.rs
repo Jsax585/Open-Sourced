@@ -277,11 +277,12 @@ impl AxRegistry {
 		self.entry(reference).map(|entry| entry.target_key.clone())
 	}
 
-	/// Points `reference` at `handle`, the element re-found in place of the one
-	/// it named. When a read already registered that element under another
-	/// ref, `reference` becomes an alias of that ref, which reads renew, and
-	/// names the element for as long as that ref does.
-	fn rebind(&mut self, reference: &str, handle: AxHandle) {
+	/// Points `reference` at `handle`, the element [`refind`] found in place of
+	/// the one it named. When a read already registered that element under
+	/// another ref, `reference` becomes an alias of that ref, which reads
+	/// renew, and names the element for as long as that ref does; that ref
+	/// takes the identity the re-find proved unique when it has none.
+	pub(crate) fn rebind(&mut self, reference: &str, handle: AxHandle) {
 		let Some(id) = self.id(reference) else {
 			return;
 		};
@@ -294,10 +295,13 @@ impl AxRegistry {
 			.copied()
 			.filter(|owner| *owner != id && self.entries.contains_key(owner));
 		if let Some(owner) = owner {
-			if let Some(entry) = self.entries.remove(&id)
-				&& refs.get(&entry.handle) == Some(&id)
-			{
-				refs.remove(&entry.handle);
+			if let Some(entry) = self.entries.remove(&id) {
+				if refs.get(&entry.handle) == Some(&id) {
+					refs.remove(&entry.handle);
+				}
+				if let Some(owner_entry) = self.entries.get_mut(&owner) {
+					owner_entry.identity = owner_entry.identity.take().or(entry.identity);
+				}
 			}
 			for target in self.aliases.values_mut() {
 				if *target == id {
@@ -791,15 +795,16 @@ impl ReadIdentities {
 	}
 }
 
-/// Re-finds the element `reference` named after the app destroyed it, as
-/// apps do when they rebuild a row or a control in place: the one element of
-/// `window` whose [`AxIdentity`] equals the one registered, which then takes
-/// over the ref. `None` leaves the ref as it was: it has no identity, or no
-/// identity unique in the read that registered it, the walk could not read the
-/// whole window, or zero or several elements match.
+/// Finds the element `reference` named after the app destroyed it, as apps
+/// do when they rebuild a row or a control in place: the one element of
+/// `window` whose [`AxIdentity`] equals the one registered.
+/// [`AxRegistry::rebind`] points the ref at it once a call on it succeeds.
+/// `None` when the ref has no identity, or no identity unique in the read that
+/// registered it, the walk could not read the whole window, or zero or several
+/// elements match.
 pub fn refind(
 	backend: &mut dyn AxBackend,
-	registry: &mut AxRegistry,
+	registry: &AxRegistry,
 	window: &DesktopWindow,
 	reference: &str,
 ) -> CoreResult<Option<AxHandle>> {
@@ -826,11 +831,7 @@ pub fn refind(
 		}
 		stack.extend(node.children);
 	}
-	let Some(handle) = matches.pop() else {
-		return Ok(None);
-	};
-	registry.rebind(reference, handle.clone());
-	Ok(Some(handle))
+	Ok(matches.pop())
 }
 
 pub fn ax_press(backend: &mut dyn AxBackend, handle: &AxHandle) -> CoreResult<()> {
@@ -1241,7 +1242,7 @@ mod tests {
 		// Node 9 cannot be read, so it could be a second copy.
 		m.children.insert(1, vec![4, 3, 9]);
 		assert!(
-			refind(&mut m, &mut registry, &window(), "e2")
+			refind(&mut m, &registry, &window(), "e2")
 				.unwrap()
 				.is_none()
 		);
@@ -1252,7 +1253,7 @@ mod tests {
 		m.props.insert(6, group);
 		m.children.insert(1, vec![4, 3, 6]);
 		assert!(
-			refind(&mut m, &mut registry, &window(), "e2")
+			refind(&mut m, &registry, &window(), "e2")
 				.unwrap()
 				.is_none()
 		);
@@ -1260,9 +1261,12 @@ mod tests {
 		m.destroyed.insert(8);
 		m.children.insert(1, vec![4, 3, 8]);
 		assert!(matches!(
-			refind(&mut m, &mut registry, &window(), "e2").unwrap(),
+			refind(&mut m, &registry, &window(), "e2").unwrap(),
 			Some(AxHandle::Test(4))
 		));
+		// Finding it leaves the ref alone until a call on it succeeds.
+		assert!(matches!(registry.resolve("e2").unwrap(), AxHandle::Test(2)));
+		registry.rebind("e2", AxHandle::Test(4));
 		assert!(matches!(registry.resolve("e2").unwrap(), AxHandle::Test(4)));
 		// The copy's later reads keep the ref.
 		let reread =
@@ -1323,7 +1327,7 @@ mod tests {
 		m.props.insert(4, p("group", None));
 		m.children.insert(4, vec![3]);
 		assert!(
-			refind(&mut m, &mut registry, &window(), "e1")
+			refind(&mut m, &registry, &window(), "e1")
 				.unwrap()
 				.is_none()
 		);
