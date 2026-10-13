@@ -12,6 +12,7 @@ import { registerProvider } from "../capability";
 import { readFile } from "../capability/fs";
 import { type MCPServer, mcpCapability } from "../capability/mcp";
 import type { LoadContext, LoadResult, SourceMeta } from "../capability/types";
+import { parseMCPTimeoutConfig } from "../mcp/timeout";
 import { createSourceMeta, expandEnvVarsDeep, parseRequestIdFormat } from "./helpers";
 
 const PROVIDER_ID = "mcp-json";
@@ -25,7 +26,7 @@ interface MCPConfigFile {
 		string,
 		{
 			enabled?: boolean;
-			timeout?: number;
+			timeout?: unknown;
 			requestIdFormat?: "string" | "number";
 			instructions?: boolean;
 			command?: string;
@@ -72,18 +73,7 @@ function transformMCPConfig(config: MCPConfigFile, source: SourceMeta): MCPServe
 				}
 			}
 
-			let timeout: number | undefined;
-			if (serverConfig.timeout !== undefined) {
-				if (
-					typeof serverConfig.timeout === "number" &&
-					Number.isFinite(serverConfig.timeout) &&
-					serverConfig.timeout >= 0
-				) {
-					timeout = serverConfig.timeout;
-				} else {
-					logger.warn("MCP server has invalid 'timeout' value, ignoring", { name, value: serverConfig.timeout });
-				}
-			}
+			const timeout = parseMCPTimeoutConfig(serverConfig.timeout, `MCP server "${name}"`);
 
 			const requestIdFormat = parseRequestIdFormat(serverConfig.requestIdFormat);
 			if (requestIdFormat === undefined && serverConfig.requestIdFormat !== undefined) {

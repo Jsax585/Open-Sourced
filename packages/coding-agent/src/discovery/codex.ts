@@ -22,6 +22,7 @@ import { promptCapability } from "../capability/prompt";
 import type { Settings } from "../capability/settings";
 import { settingsCapability } from "../capability/settings";
 import { settings as activeSettings } from "../config/settings";
+import { isValidTimeoutMs } from "../mcp/timeout";
 import type { Skill } from "../capability/skill";
 import { skillCapability } from "../capability/skill";
 import { type SlashCommand, slashCommandCapability } from "../capability/slash-command";
@@ -247,10 +248,22 @@ function extractMCPServersFromToml(
 		}
 		// Note: validation of transport vs endpoint is handled by mcpCapability.validate()
 
-		// Map Codex tool_timeout_sec (seconds) to MCPServer timeout (milliseconds)
-		if (typeof config.tool_timeout_sec === "number" && config.tool_timeout_sec > 0) {
-			server.timeout = config.tool_timeout_sec * 1000;
-		}
+		// Map Codex startup_timeout_sec and tool_timeout_sec (seconds) to the connect and execution
+		// deadlines (milliseconds).
+		// Out-of-range values are dropped, as the shared validator drops them elsewhere.
+		const connect =
+			typeof config.startup_timeout_sec === "number" && config.startup_timeout_sec > 0
+				? Math.max(1, Math.round(config.startup_timeout_sec * 1000))
+				: undefined;
+		const execution =
+			typeof config.tool_timeout_sec === "number" && config.tool_timeout_sec > 0
+				? Math.max(1, Math.round(config.tool_timeout_sec * 1000))
+				: undefined;
+		const timeout = {
+			...(isValidTimeoutMs(connect) && { connect }),
+			...(isValidTimeoutMs(execution) && { execution }),
+		};
+		if (Object.keys(timeout).length > 0) server.timeout = timeout;
 		result[name] = server;
 	}
 

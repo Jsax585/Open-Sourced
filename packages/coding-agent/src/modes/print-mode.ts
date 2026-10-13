@@ -9,7 +9,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { $flag, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { MCPManager } from "../mcp/manager";
-import { resolveMCPTimeoutMs } from "../mcp/timeout";
+import { resolveMCPReadinessTimeoutMs } from "../mcp/timeout";
 import { type AgentSession, type AgentSessionEvent, SHUTDOWN_CONSOLIDATE_BUDGET_MS } from "../session/agent-session";
 import { CREDENTIAL_DISABLED_NOTICE_SOURCE } from "../session/credential-disabled-notice";
 import { isSilentAbort } from "../session/messages";
@@ -241,7 +241,10 @@ async function runPrintModeCore(
 		}
 	});
 
-	const timeoutMs = resolveMCPTimeoutMs();
+	const mcpManager = options.mcpManager;
+	const timeoutMs = resolveMCPReadinessTimeoutMs(
+		mcpManager ? mcpManager.getAllServerNames().map(name => mcpManager.getServerConfig(name)?.timeout) : [],
+	);
 	let strictMCPFailure = false;
 	if (options.mcpManager) {
 		const readiness = await options.mcpManager.waitForStartup(timeoutMs);

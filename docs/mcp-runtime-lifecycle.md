@@ -22,7 +22,7 @@ This document describes how MCP servers are discovered, connected, exposed as to
 
 `createAgentSession()` in `src/sdk.ts` performs MCP startup when `enableMCP` is true (default) and tool names are not restricted. A supplied `mcpManager` is reused without discovery. Otherwise there are two paths:
 
-- **Headless/SDK** (no UI, no provided manager): awaits `discoverAndLoadMCPTools(cwd, { ... })` and merges the returned tools into the startup `customTools` set. Print mode alone then waits for configured servers' tool handshakes or failures before its first prompt (bounded by `OMP_MCP_TIMEOUT_MS`, default 30 seconds), refreshes the session's tool registry, and warns per unavailable server; `OMP_MCP_REQUIRE_READY=1` instead exits 1 without sending the prompt. `OMP_MCP_TIMEOUT_MS=0` disables this barrier deadline and may wait indefinitely.
+- **Headless/SDK** (no UI, no provided manager): awaits `discoverAndLoadMCPTools(cwd, { ... })` and merges the returned tools into the startup `customTools` set. Print mode alone then waits for configured servers' tool handshakes or failures before its first prompt (bounded by the slowest server's `connect` plus `catalog` deadlines, 60 seconds by default, or `OMP_MCP_TIMEOUT_MS` per phase), refreshes the session's tool registry, and warns per unavailable server; `OMP_MCP_REQUIRE_READY=1` instead exits 1 without sending the prompt. `OMP_MCP_TIMEOUT_MS=0` disables this barrier deadline and may wait indefinitely.
 - **Interactive/TUI** (`hasUI: true`, no provided manager): constructs `MCPManager` immediately (with cache + auth storage), defers `discoverAndConnect()` to a background task started after the session exists, then binds tools via `session.refreshMCPTools(...)` (disposing the manager if the session was torn down mid-connect).
   The first turn of such a session (interactive or `--mode rpc-ui`) waits up to 1.5 s for this MCP startup, so its system prompt includes servers connected by then; slower servers register later and change the next turn's prompt.
 
@@ -102,7 +102,7 @@ For each discovered server in `connectServers()`:
 - answers server-to-client `ping` and `roots/list` requests; unsupported request methods return JSON-RPC `-32601`,
 - sends `notifications/initialized` before any further session traffic,
 - for Streamable HTTP, starts the background SSE listener only after `notifications/initialized`,
-- uses timeout precedence `OMP_MCP_TIMEOUT_MS`, then `config.timeout`, then 30s; `0` disables the client-side timeout,
+- bounds connect plus `initialize` by the `connect` deadline: `OMP_MCP_TIMEOUT_MS`, then the server's `timeout` (number or `timeout.connect`), then `mcp.timeout.connectMs`, then 30s; `0` disables it. List requests use the `catalog` deadline and every other request the `execution` deadline, resolved the same way (`mcp-config.md`, Timeouts),
 - records the server's negotiated protocol revision; Streamable HTTP carries it on subsequent requests in `MCP-Protocol-Version`,
 - closes transport on init failure.
 

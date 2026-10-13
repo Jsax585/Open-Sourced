@@ -128,7 +128,7 @@ describe("headless MCP readiness", () => {
 		expect(code).toBe(1);
 		expect(capture.prompted()).toBeUndefined();
 		expect(capture.disposed()).toBe(true);
-		expect(output.join("")).toContain('Warning: MCP server "slowstart" not ready after 100ms');
+		expect(output.join("")).toContain('Warning: MCP server "slowstart" not ready after 200ms');
 		expect(output.join("")).toContain("Error: MCP servers not ready: slowstart");
 	}, 4_000);
 
@@ -150,7 +150,7 @@ describe("headless MCP readiness", () => {
 		}
 		expect(code).toBe(0);
 		expect(capture.prompted()).toEqual(expectedTools.slice(0, 2));
-		expect(output.join("")).toContain('Warning: MCP server "slowstart" not ready after 80ms');
+		expect(output.join("")).toContain('Warning: MCP server "slowstart" not ready after 160ms');
 	}, 3_000);
 
 	it("reports a failed configured server and rejects strict print startup", async () => {

@@ -126,7 +126,9 @@ describe("MCPManager initial connection ownership", () => {
 				},
 				0,
 			);
-			expect(result.errors.get("server")).toBe('Connection to MCP server "server" timed out after 1000ms');
+			expect(result.errors.get("server")).toBe(
+				'Connection to MCP server "server" timed out after 1000ms (connect timeout)',
+			);
 			await rebound.promise;
 			await statusSettled.promise;
 

@@ -103,7 +103,7 @@ The config writer accepts names up to 100 characters containing letters, numbers
 Shared fields for every transport:
 
 - `enabled?: boolean` — skip this server when `false`, unless the active-profile user `enabledServers` allowlist names it
-- `timeout?: number` — MCP request timeout in milliseconds; `0` disables client-side MCP timeouts
+- `timeout?: number | { connect?, catalog?, execution? }` — MCP deadlines in milliseconds; `0` disables a deadline. A number applies to every phase. The object form sets phases individually (see below). The object form is OMP-specific: configs translated from other tools read only a plain number.
 - `requestIdFormat?: "number" | "string"` — outgoing JSON-RPC request-id encoding; defaults to per-transport integers. `"string"` uses collision-resistant snowflake IDs. This OMP-specific field is read only from OMP-native files, root `mcp.json` / `.mcp.json`, and OMP extension packages; configs translated from other tools ignore it.
 - `instructions?: boolean` — include server-provided instructions in the system prompt (default: `true`). Set `false` to omit that server's instructions without disabling its tools. Like `requestIdFormat`, this is OMP-specific and is ignored in configs translated from other tools.
 - `auth?: { ... }` — stored-credential metadata; managed credential injection is implemented for OAuth
@@ -111,11 +111,35 @@ Shared fields for every transport:
 
 Disable instructions when a server's guidance conflicts with your tool policy or adds unwanted context to every request, including subagent requests. If no connected server contributes instructions, the MCP Server Instructions section is omitted entirely. `instructions` does not distinguish connections: when two entries under different names describe the same endpoint, only the higher-priority entry is kept, together with its own `instructions` value, so set the option on the entry that wins (see `/mcp list`). A changed value applies to an already-connected server after `/mcp reload`.
 
-`OMP_MCP_TIMEOUT_MS` has process-wide precedence over every per-server `timeout`. Set it to `0` to disable client-side timeouts, or to a positive millisecond value such as `120000`. If it is unset or invalid, OMP uses the server value and then the 30-second default; invalid values are logged and ignored.
+### Timeouts
+
+Three deadlines guard different parts of the MCP lifecycle:
+
+| Phase       | `mcp.json` key | Global setting          | Guards                                                                                               |
+| ----------- | -------------- | ----------------------- | ---------------------------------------------------------------------------------------------------- |
+| `connect`   | `connect`      | `mcp.timeout.connectMs`   | Transport connect, the `initialize` request and the `initialized` notification                       |
+| `catalog`   | `catalog`      | `mcp.timeout.catalogMs`   | `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`                           |
+| `execution` | `execution`    | `mcp.timeout.executionMs` | `tools/call`, `prompts/get`, `resources/read`, subscriptions and every other request                 |
+
+```json
+{
+  "mcpServers": {
+    "slow-index": {
+      "command": "slow-index-mcp",
+      "timeout": { "connect": 60000, "execution": 600000 }
+    },
+    "quick": { "command": "quick-mcp", "timeout": 10000 }
+  }
+}
+```
+
+Each phase resolves, highest precedence first: `OMP_MCP_TIMEOUT_MS` (every phase, every server), the server's `timeout` (a number, or that phase's key), the `mcp.timeout.*Ms` setting, then 30 seconds. Values must be non-negative integers of at most 2147483647 milliseconds (about 24.8 days, the largest delay a timer can hold); `0` disables that deadline. An invalid value is logged with the offending key and ignored, and unknown keys inside a `timeout` object are logged and ignored, so one typo never changes the other phases.
+
+A timeout error names the phase and method that expired, for example `Request timeout after 60ms (catalog timeout, tools/list)`, so you know which key to raise. Closing an HTTP session (the `DELETE` sent on disconnect) uses the `connect` deadline, so a very long `execution` deadline cannot stall shutdown. Set `OMP_MCP_TIMEOUT_MS=0` to disable every client-side deadline, or to a positive millisecond value such as `120000`; invalid values are logged and ignored.
 
 These request deadlines also govern subagent MCP calls over borrowed parent connections. The proxy adds no independent timeout; caller cancellation still stops the subagent's wait.
 
-Initial MCP discovery returns after a 250 ms window while slower connections continue in the background. Set `mcp.startupTimeoutMs` or override it with `OMP_MCP_STARTUP_TIMEOUT_MS` to change the window; `0` waits for the initial connection attempts to settle. In print mode (`-p`, `--mode text|json`), OMP additionally waits for all configured servers to load tools or fail before the first turn, up to `OMP_MCP_TIMEOUT_MS` (default 30 seconds). `OMP_MCP_TIMEOUT_MS=0` disables this barrier deadline too, so an unresponsive server can block print mode indefinitely. Servers still unavailable at the deadline are named on stderr; `OMP_MCP_REQUIRE_READY=1` instead exits with code 1 before the turn. These print-mode waits do not affect interactive, RPC, or ACP startup. In interactive and `--mode rpc-ui` sessions, which connect MCP servers in the background, the first turn waits up to 1.5 s for MCP startup, so its system prompt includes servers connected by then; slower servers register later and change the next turn's prompt.
+Initial MCP discovery returns after a 250 ms window while slower connections continue in the background. Set `mcp.startupTimeoutMs` or override it with `OMP_MCP_STARTUP_TIMEOUT_MS` to change the window; `0` waits for the initial connection attempts to settle. In print mode (`-p`, `--mode text|json`), OMP additionally waits for all configured servers to load tools or fail before the first turn, up to the slowest server's `connect` plus `catalog` deadlines (default 60 seconds, using each server's own `timeout` when it sets one; `OMP_MCP_TIMEOUT_MS` overrides each phase). The catalog share covers a single `tools/list` page: a server that paginates its catalog gets a fresh `catalog` deadline per page, so a slow paginated server can outlast the barrier and is then reported as not ready. Disabling either with `0` disables this barrier deadline too, so an unresponsive server can block print mode indefinitely. Servers still unavailable at the deadline are named on stderr; `OMP_MCP_REQUIRE_READY=1` instead exits with code 1 before the turn. These print-mode waits do not affect interactive, RPC, or ACP startup. In interactive and `--mode rpc-ui` sessions, which connect MCP servers in the background, the first turn waits up to 1.5 s for MCP startup, so its system prompt includes servers connected by then; slower servers register later and change the next turn's prompt.
 
 Client-generated remote protocol headers take precedence over configured headers case-insensitively. Streamable HTTP owns `MCP-Protocol-Version`: it ignores configured copies and sends the negotiated version after initialization. Portable Agent Plugins' configured headers are origin-locked and are not forwarded to another origin on redirects.
 

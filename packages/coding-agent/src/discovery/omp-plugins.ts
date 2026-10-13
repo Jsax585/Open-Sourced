@@ -28,6 +28,7 @@ import { type Skill, skillCapability } from "../capability/skill";
 import { type SlashCommand, slashCommandCapability } from "../capability/slash-command";
 import { type CustomTool, toolCapability } from "../capability/tool";
 import type { LoadContext, LoadResult } from "../capability/types";
+import { parseMCPTimeoutConfig } from "../mcp/timeout";
 import { legacyProviderAllowed } from "./agent-plugin-format";
 import {
 	discoverRuleFromMarkdown,
@@ -277,7 +278,7 @@ const MCP_FILENAMES = [".mcp.json", "mcp.json"] as const;
 
 interface RawMcpServer {
 	enabled?: boolean;
-	timeout?: number;
+	timeout?: unknown;
 	requestIdFormat?: unknown;
 	instructions?: unknown;
 	command?: string;
@@ -346,10 +347,11 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 					`[omp-plugins] MCP server "${serverName}" in ${mcpPath}: invalid instructions ${JSON.stringify(cfg.instructions)}, ignoring`,
 				);
 			}
+			const timeout = parseMCPTimeoutConfig(cfg.timeout, `[omp-plugins] MCP server "${serverName}" in ${mcpPath}`);
 			items.push({
 				name: serverName,
 				...(cfg.enabled !== undefined && { enabled: cfg.enabled }),
-				...(cfg.timeout !== undefined && { timeout: cfg.timeout }),
+				...(timeout !== undefined && { timeout }),
 				...(requestIdFormat !== undefined && { requestIdFormat }),
 				...(instructions !== undefined && { instructions }),
 				...(rooted.command !== undefined && { command: rooted.command }),

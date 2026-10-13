@@ -117,9 +117,38 @@
           "description": "Whether OMP should try to connect this server."
         },
         "timeout": {
-          "type": "number",
-          "minimum": 0,
-          "description": "MCP request timeout in milliseconds. Set to 0 to disable client-side MCP timeouts."
+          "description": "MCP deadlines in milliseconds. A number applies to every phase; an object sets `connect` (connect + initialize), `catalog` (listing tools, prompts, resources) and `execution` (tool calls, prompt gets, resource reads) individually, with omitted phases falling back to the `mcp.timeout.*` settings and then 30000. 0 disables a deadline.",
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "connect": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2147483647,
+                  "description": "Transport connect and initialize handshake, in milliseconds."
+                },
+                "catalog": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2147483647,
+                  "description": "Listing tools, prompts, resources and resource templates, in milliseconds."
+                },
+                "execution": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2147483647,
+                  "description": "Tool calls, prompt retrieval and resource reads, in milliseconds."
+                }
+              }
+            }
+          ]
         },
         "requestIdFormat": {
           "type": "string",

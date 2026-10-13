@@ -281,7 +281,7 @@ describe("MCP Streamable HTTP transport timeouts", () => {
 			stage: "decode",
 			failure: "timeout",
 			retryable: false,
-			message: `Request timeout after ${REQUEST_TIMEOUT_MS}ms`,
+			message: `Request timeout after ${REQUEST_TIMEOUT_MS}ms (catalog timeout, tools/list)`,
 		});
 	});
 

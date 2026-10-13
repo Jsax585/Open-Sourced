@@ -11,6 +11,7 @@ import type { MCPContent, MCPImageContent, MCPResourceContent, MCPTextContent } 
 // =============================================================================
 
 import type { SourceMeta } from "../capability/types";
+import type { MCPTimeoutConfig } from "./timeout";
 
 export interface JsonRpcRequest {
 	jsonrpc: "2.0";
@@ -67,8 +68,14 @@ export type MCPRequestIdFormat = "string" | "number";
 interface MCPServerConfigBase {
 	/** Whether this server is enabled (default: true) */
 	enabled?: boolean;
-	/** MCP request timeout in milliseconds (default: 30000, 0 to disable) */
-	timeout?: number;
+	/**
+	 * MCP deadlines in milliseconds (default: 30000, 0 to disable). A number applies to every
+	 * phase. An object sets `connect` (connect + initialize), `catalog` (tools/prompts/resources
+	 * listing) and `execution` (tool calls, prompt gets, resource reads) individually; omitted
+	 * phases fall back to the `mcp.timeout.*` settings, then 30000. OMP-specific object form:
+	 * only OMP-owned providers parse it; other providers read a plain number.
+	 */
+	timeout?: MCPTimeoutConfig;
 	/**
 	 * Encoding for outgoing JSON-RPC request ids (default: `"number"`).
 	 *

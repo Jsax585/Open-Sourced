@@ -29,7 +29,11 @@ import {
 	createMCPTimeout,
 	getNeverAbortSignal,
 	isMCPTimeoutEnabled,
+	type MCPRequestTimeout,
+	type MCPTimeoutConfig,
 	type MCPTimeoutOperation,
+	describeMCPRequestTimeout,
+	resolveMCPRequestTimeout,
 	resolveMCPTimeoutMs,
 } from "../timeout";
 import { type MCPFetchInit, mcpFetch, withoutHeader } from "./header-policy";
@@ -66,13 +70,13 @@ async function waitForSSERetry(ms: number, signal: AbortSignal): Promise<void> {
 /**
  * Best-effort startup deadline for the optional Streamable HTTP GET SSE listener.
  *
- * Returns `0` (disabled) when the operator has explicitly disabled MCP client-side
- * timeouts via `timeout: 0` or `OMP_MCP_TIMEOUT_MS=0`, mirroring the rest of the
- * MCP timeout surface. Otherwise caps the wait at one second and scales below
- * short request timeouts so connect-time never exceeds the request budget.
+ * Returns `0` (disabled) when the operator has explicitly disabled the `connect`
+ * timeout via `timeout: 0`, `timeout.connect: 0` or `OMP_MCP_TIMEOUT_MS=0`.
+ * Otherwise caps the wait at one second and scales below short connect
+ * timeouts so connect-time never exceeds the connect budget.
  */
-export function resolveSSEConnectTimeoutMs(configTimeout?: number): number {
-	const requestTimeout = resolveMCPTimeoutMs(configTimeout);
+export function resolveSSEConnectTimeoutMs(configTimeout?: MCPTimeoutConfig): number {
+	const requestTimeout = resolveMCPTimeoutMs(configTimeout, "connect");
 	if (!isMCPTimeoutEnabled(requestTimeout)) return 0;
 	const boundedTimeout = Math.min(HTTP_SSE_CONNECT_TIMEOUT_MS, Math.floor(requestTimeout / 4));
 	return Math.max(1, boundedTimeout);
@@ -473,8 +477,8 @@ export class HttpTransport implements MCPTransport {
 			}
 			callerSignal = controller.signal;
 		}
-		const timeout = resolveMCPTimeoutMs(this.config.timeout);
-		const operation = createMCPTimeout(timeout, this.#operationSignal(callerSignal));
+		const requestTimeout = resolveMCPRequestTimeout(this.config.timeout, method);
+		const operation = createMCPTimeout(requestTimeout.ms, this.#operationSignal(callerSignal));
 		let stage: MCPFailureStage = "send";
 		let traceId: string | undefined;
 
@@ -520,7 +524,7 @@ export class HttpTransport implements MCPTransport {
 			// share one logical deadline; returning the promise would let finally
 			// clear the fetch timer before the response body is read.
 			if (contentType.includes("text/event-stream")) {
-				return await this.#parseSSEResponse<T>(response, id, operation, timeout, releaseCaller);
+				return await this.#parseSSEResponse<T>(response, id, operation, requestTimeout, method, releaseCaller);
 			}
 
 			stage = "decode";
@@ -552,7 +556,7 @@ export class HttpTransport implements MCPTransport {
 					transport: "http",
 					stage,
 					failure: "timeout",
-					message: `Request timeout after ${timeout}ms`,
+					message: `Request timeout after ${describeMCPRequestTimeout(requestTimeout, method)}`,
 					retryable: false,
 					traceId,
 					cause: error,
@@ -570,7 +574,8 @@ export class HttpTransport implements MCPTransport {
 		response: Response,
 		expectedId: string | number,
 		operation: MCPTimeoutOperation,
-		timeout: number,
+		requestTimeout: MCPRequestTimeout,
+		method: string,
 		releaseCaller?: () => void,
 	): Promise<T> {
 		const traceId = mcpTraceIdFromHeaders(response.headers);
@@ -676,7 +681,7 @@ export class HttpTransport implements MCPTransport {
 							transport: "http",
 							stage: "receive",
 							failure: "timeout",
-							message: `SSE response timeout after ${timeout}ms`,
+							message: `SSE response timeout after ${describeMCPRequestTimeout(requestTimeout, method)}`,
 							retryable: false,
 							traceId,
 							cause: error,
@@ -743,7 +748,7 @@ export class HttpTransport implements MCPTransport {
 			generated["Mcp-Session-Id"] = this.#sessionId;
 		}
 		const payload = JSON.stringify(body);
-		const timeout = resolveMCPTimeoutMs(this.config.timeout);
+		const timeout = resolveMCPTimeoutMs(this.config.timeout, "execution");
 		const operation = createMCPTimeout(timeout, this.#operationSignal());
 		try {
 			const resp = await this.#fetch({ method: "POST", body: payload, signal: operation.signal }, generated);
@@ -806,8 +811,8 @@ export class HttpTransport implements MCPTransport {
 			generated["Mcp-Session-Id"] = this.#sessionId;
 		}
 
-		const timeout = resolveMCPTimeoutMs(this.config.timeout);
-		const operation = createMCPTimeout(timeout, this.#operationSignal());
+		const notifyTimeout = resolveMCPRequestTimeout(this.config.timeout, method);
+		const operation = createMCPTimeout(notifyTimeout.ms, this.#operationSignal());
 		let stage: MCPFailureStage = "send";
 		let traceId: string | undefined;
 
@@ -853,7 +858,7 @@ export class HttpTransport implements MCPTransport {
 					transport: "http",
 					stage,
 					failure: "timeout",
-					message: `Notify timeout after ${timeout}ms`,
+					message: `Notify timeout after ${describeMCPRequestTimeout(notifyTimeout, method)}`,
 					retryable: false,
 					traceId,
 					cause: error,
@@ -895,7 +900,9 @@ export class HttpTransport implements MCPTransport {
 		}
 
 		if (this.#sessionId) {
-			const timeout = resolveMCPTimeoutMs(this.config.timeout);
+			// Session teardown is bounded by the connect deadline, not the (possibly
+			// hours-long) execution deadline, so a dead server cannot stall close().
+			const timeout = resolveMCPTimeoutMs(this.config.timeout, "connect");
 			const operation = createMCPTimeout(timeout);
 			try {
 				const response = await this.#fetch(
