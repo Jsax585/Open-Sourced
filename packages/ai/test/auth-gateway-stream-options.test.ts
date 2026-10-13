@@ -6,64 +6,64 @@ import { startAuthGateway } from "@oh-my-pi/pi-ai/auth-gateway";
 import { AuthStorage } from "@oh-my-pi/pi-ai/auth-storage";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
-for (const mode of ["chat", "chat-no-sampling", "responses"] as const) {
+for (const mode of ["chat", "chat-no-sampling", "responses", "azure-responses"] as const) {
 	it(`forwards gateway fields in the ${mode} provider request body`, async () => {
+		const responses = mode === "responses" || mode === "azure-responses";
 		const captured: Record<string, unknown>[] = [];
 		const upstream = Bun.serve({
 			hostname: "127.0.0.1",
 			port: 0,
 			async fetch(request) {
 				captured.push((await request.json()) as Record<string, unknown>);
-				const events =
-					mode === "responses"
-						? [
-								{ type: "response.created", response: { id: "resp_capture" } },
-								{
-									type: "response.output_item.added",
-									item: {
-										type: "message",
-										id: "msg_capture",
-										role: "assistant",
-										status: "in_progress",
-										content: [],
-									},
+				const events = responses
+					? [
+							{ type: "response.created", response: { id: "resp_capture" } },
+							{
+								type: "response.output_item.added",
+								item: {
+									type: "message",
+									id: "msg_capture",
+									role: "assistant",
+									status: "in_progress",
+									content: [],
 								},
-								{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
-								{ type: "response.output_text.delta", delta: "ok" },
-								{
-									type: "response.output_item.done",
-									item: {
-										type: "message",
-										id: "msg_capture",
-										role: "assistant",
-										status: "completed",
-										content: [{ type: "output_text", text: "ok" }],
-									},
+							},
+							{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+							{ type: "response.output_text.delta", delta: "ok" },
+							{
+								type: "response.output_item.done",
+								item: {
+									type: "message",
+									id: "msg_capture",
+									role: "assistant",
+									status: "completed",
+									content: [{ type: "output_text", text: "ok" }],
 								},
-								{
-									type: "response.completed",
-									response: {
-										id: "resp_capture",
-										status: "completed",
-										usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-									},
+							},
+							{
+								type: "response.completed",
+								response: {
+									id: "resp_capture",
+									status: "completed",
+									usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
 								},
-							]
-						: [
-								{
-									id: "chat_capture",
-									object: "chat.completion.chunk",
-									choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }],
-								},
-								{
-									id: "chat_capture",
-									object: "chat.completion.chunk",
-									choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-								},
-							];
+							},
+						]
+					: [
+							{
+								id: "chat_capture",
+								object: "chat.completion.chunk",
+								choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }],
+							},
+							{
+								id: "chat_capture",
+								object: "chat.completion.chunk",
+								choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+							},
+						];
 				return new Response(
 					events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("") +
-						(mode === "responses" ? "" : "data: [DONE]\n\n"),
+						(responses ? "" : "data: [DONE]\n\n"),
 					{ headers: { "Content-Type": "text/event-stream" } },
 				);
 			},
@@ -75,7 +75,12 @@ for (const mode of ["chat", "chat-no-sampling", "responses"] as const) {
 			id: "wire-capture",
 			name: "Wire capture",
 			provider: "openai",
-			api: mode === "responses" ? "openai-responses" : "openai-completions",
+			api:
+				mode === "azure-responses"
+					? "azure-openai-responses"
+					: responses
+						? "openai-responses"
+						: "openai-completions",
 			baseUrl: `${upstream.url}v1`,
 			reasoning: false,
 			input: ["text"],
@@ -116,7 +121,7 @@ for (const mode of ["chat", "chat-no-sampling", "responses"] as const) {
 			const payload = captured[0]!;
 			expect(payload.parallel_tool_calls).toBe(false);
 			expect(payload.user).toBe("account-1");
-			if (mode === "responses") {
+			if (responses) {
 				expect(payload.text).toEqual(
 					expect.objectContaining({
 						format: { type: "json_schema", name: "answer", description: "answer shape", schema, strict: true },
