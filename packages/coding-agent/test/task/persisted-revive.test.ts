@@ -61,6 +61,18 @@ function fakeMcpManager(getTools: () => Array<{ name: string; label: string }>):
 	return { getTools, addToolsChangedListener: () => () => {} } as unknown as MCPManager;
 }
 
+const revivedMcpTool = {
+	name: "mcp__server_probe",
+	label: "server/probe",
+	description: "revived MCP probe description sentinel",
+	parameters: type({ value: type("string").describe("revived value sentinel") }),
+	mcpServerName: "server",
+	mcpToolName: "probe",
+	async execute() {
+		return { content: [{ type: "text" as const, text: "ok" }] };
+	},
+} as AgentTool & { mcpServerName: string; mcpToolName: string };
+
 function createRef(sessionFile: string): AgentRef {
 	return {
 		id: "persisted-restricted",
@@ -562,6 +574,7 @@ describe("persisted subagent revival", () => {
 		await Bun.write(path.join(cwd, "AGENTS.md"), "PROJECT_CONTEXT_SENTINEL");
 		const sessionFile = await createPersistedSession(cwd, undefined, "default", "on", {
 			systemPreset: "minimal-task",
+			tools: ["read", "yield", "mcp__server_probe"],
 		});
 		const authStorage = await AuthStorage.create(":memory:");
 		authStorage.keys.setRuntime("anthropic", "test-key");
@@ -572,7 +585,7 @@ describe("persisted subagent revival", () => {
 				advisor: "anthropic/claude-sonnet-4-5",
 			},
 		});
-		MCPManager.setInstance(fakeMcpManager(() => []));
+		MCPManager.setInstance(fakeMcpManager(() => [revivedMcpTool]));
 		const ref = AgentRegistry.global().register({
 			...createRef(sessionFile),
 			id: "minimal-revive-context",
@@ -584,6 +597,10 @@ describe("persisted subagent revival", () => {
 			revived = await reviver(ref);
 			const advisor = revived.getAdvisorAgent();
 			if (!advisor) throw new Error("Expected a revived advisor");
+			expect(revived.getMountedXdevToolNames()).toEqual([]);
+			const providerTool = revived.agent.state.tools.find(tool => tool.name === "mcp__server_probe");
+			expect(providerTool?.description).toContain("revived MCP probe description sentinel");
+			expect(providerTool?.parameters?.ir?.props?.[0]?.val?.desc).toBe("revived value sentinel");
 			expect(advisor.state.systemPrompt.join("\n")).not.toContain("PROJECT_CONTEXT_SENTINEL");
 		} finally {
 			await revived?.dispose();

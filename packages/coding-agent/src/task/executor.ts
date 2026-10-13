@@ -4015,7 +4015,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		{
 			...compactionThresholdSettings(options.compactionThresholdOverride),
 			...(agent.readSummarize === false ? { "read.summarize.enabled": false } : undefined),
-			...(isMinimalTask ? { inlineToolDescriptors: "off" } : undefined),
+			...(isMinimalTask ? { inlineToolDescriptors: "off", "tools.xdev": false } : undefined),
 			// Isolated runs must not expose roots outside the worktree.
 			...(worktree !== undefined ? { "workspace.additionalDirectories": [] } : undefined),
 			...(advisorSelection ? { "advisor.enabled": true } : undefined),

@@ -152,7 +152,9 @@ export function createPersistedSubagentReviverFactory(
 			// createSubagentSettings default).
 			const subagentSettings = createSubagentSettings(ctx.settings, {
 				...(init.readSummarize === false ? { "read.summarize.enabled": false } : undefined),
-				...(init.systemPreset === "minimal-task" ? { inlineToolDescriptors: "off" } : undefined),
+				...(init.systemPreset === "minimal-task"
+					? { inlineToolDescriptors: "off", "tools.xdev": false }
+					: undefined),
 				...(init.advisor
 					? {
 							"advisor.enabled": true,

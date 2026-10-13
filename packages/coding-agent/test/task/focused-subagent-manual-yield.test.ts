@@ -5,11 +5,13 @@
  * and the parent's delivery sink receives the completion (#14428).
  */
 import { afterEach, beforeEach, expect, it, vi } from "bun:test";
+import { type } from "@oh-my-pi/omptype";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
+import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -26,6 +28,16 @@ import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 const AGENT_ID = "FocusedYield";
 const PARENT_ID = "Main";
 const MOCK_API_SOURCE = "test/focused-subagent-manual-yield";
+const mountedTool: CustomTool = {
+	name: "mounted_probe",
+	label: "Mounted probe",
+	description: "mounted probe description sentinel",
+	parameters: type({ value: type("string").describe("mounted value sentinel") }),
+	loadMode: "discoverable",
+	async execute() {
+		return { content: [{ type: "text", text: "ok" }] };
+	},
+};
 const ENV_KEYS = ["HOME", "PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE"] as const;
 
 let savedEnv: Record<string, string | undefined> = {};
@@ -184,6 +196,7 @@ async function spawnKeptAliveChild(systemPreset?: "minimal-task", agentId = AGEN
 			}),
 			enableLsp: false,
 			enableMCP: false,
+			customTools: [mountedTool],
 			enableIrc: false,
 			contextFiles: [inheritedContextFile],
 			rules: [inheritedRule],
@@ -245,6 +258,11 @@ it("minimal-task omits inherited prompt and autoload skill content while default
 		expect(minimalYieldTool).toBeDefined();
 		expect(normalYieldTool?.description).toBe("");
 		expect(minimalYieldTool?.description).toContain("Submit subagent output");
+		expect(normalTools.some(tool => tool.name === "mounted_probe")).toBe(false);
+		const minimalMountedTool = minimalTools.find(tool => tool.name === "mounted_probe");
+		expect(minimalMountedTool).toBeDefined();
+		expect(minimalMountedTool?.description).toContain("mounted probe description sentinel");
+		expect(JSON.stringify(minimalMountedTool?.parameters)).toContain("mounted value sentinel");
 		expect(JSON.stringify(minimalYieldTool?.parameters)).toContain("Optional result type");
 	} finally {
 		normal.close();
