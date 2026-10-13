@@ -176,10 +176,20 @@ pub(crate) fn prune_clone_excludes(
 }
 
 /// Whether any tracked index entry lives under `dir_rel` (a `/`-separated
-/// path relative to the worktree root). Index paths are `/`-separated too,
-/// so testing a trailing-`/` prefix is exact: looking under `secrets` never
-/// matches a sibling like `secrets-old`.
+/// path relative to the worktree root), or is the directory itself. Index
+/// paths are `/`-separated too, so testing a trailing-`/` prefix is exact:
+/// looking under `secrets` never matches a sibling like `secrets-old`.
+///
+/// The exact-path check matters for gitlinks: an unpopulated submodule's
+/// index entry is the directory path itself (no descendant entries), and
+/// deleting that directory would leave the index claiming an entry that is
+/// not on disk.
 fn dir_has_tracked_entries(source_index: &gix::index::File, dir_rel: &str) -> bool {
+	// A gitlink (e.g. an uninitialized submodule at a matched path) is
+	// tracked by an exact index entry at the directory path.
+	if source_index.entry_by_path(dir_rel.as_bytes().as_bstr()).is_some() {
+		return true;
+	}
 	let mut prefix: Vec<u8> = dir_rel.as_bytes().to_vec();
 	prefix.push(b'/');
 	source_index

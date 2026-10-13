@@ -2999,6 +2999,53 @@ mod tests {
 		let _ = fs::remove_dir_all(&clone);
 	}
 
+	/// A matched directory that is itself a tracked gitlink (an unpopulated
+	/// submodule) must not be `remove_dir_all`'d: the index holds an exact
+	/// entry at the directory path with no descendant entries, so a
+	/// descendant-only tracked guard would delete a tracked directory and
+	/// leave the new worktree reporting a tracked deletion. The directory
+	/// survives; untracked secret-shaped files inside it are still pruned
+	/// file-by-file. Regression test for bot review feedback on #15521.
+	#[test]
+	fn prune_clone_excludes_preserves_gitlink_at_matched_path() {
+		let (temp, repo) = fixture();
+		let root = temp.path();
+		// Gitlink entry without a real submodule behind it: `update-index
+		// --cacheinfo` stages a mode-160000 entry at `.env.d` pointing at
+		// the empty tree, exactly like an uninitialized submodule.
+		git(root, &[
+			"update-index",
+			"--add",
+			"--cacheinfo",
+			"160000,4b825dc642cb6eb9a060e54bf8d69288fbee4904,.env.d",
+		]);
+		git(root, &["commit", "-qm", "unpopulated submodule"]);
+		// The unpopulated submodule's directory, holding an ignored secret.
+		fs::create_dir_all(root.join(".env.d")).unwrap();
+		fs::write(root.join(".env.d/deploy.pem"), "SECRET=1\n").unwrap();
+
+		let clone = root.join("prune-clone-gitlink");
+		copy_tree_except_git(root, &clone);
+
+		let gix = repo.gix().unwrap();
+		let index = load_index_or_empty(&gix, "git worktree add").unwrap();
+		let matcher = CloneExcludeMatcher::resolve(None).unwrap();
+		assert!(matcher.is_excluded(".env.d"), "fixture sanity: .env* matches .env.d");
+		prune_clone_excludes(&clone, &index, &matcher).unwrap();
+
+		// The tracked gitlink directory survives...
+		assert!(
+			clone.join(".env.d").is_dir(),
+			"matched dir that is itself a tracked gitlink must survive"
+		);
+		// ...while the untracked secret inside it is still pruned.
+		assert!(
+			!clone.join(".env.d/deploy.pem").exists(),
+			"untracked secret inside a preserved dir must be pruned"
+		);
+		let _ = fs::remove_dir_all(&clone);
+	}
+
 	#[test]
 	fn clone_first_worktree_at_source_head_needs_no_checkout() {
 		let (temp, repo) = fixture();
