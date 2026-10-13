@@ -384,6 +384,7 @@ async function executeGatewayChat(
 			};
 			try {
 				await runGatewayHook(boot.hooks?.beforeAttempt, { ...hookContext });
+				if (controller.signal.aborted) throw controller.signal.reason;
 				const streamOpts = opts.buildOptions(model, attempt.signal);
 				if (boot.fetch) streamOpts.fetch = boot.fetch;
 				streamOpts.providerSessionState = lease.states;

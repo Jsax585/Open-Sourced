@@ -3,7 +3,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { clearCustomApis } from "../src/api-registry";
-import { startAuthGateway, type GatewayHooks, type AuthGatewayServerHandle, runHook } from "../src/auth-gateway";
+import {
+	startAuthGateway,
+	createAuthGatewayRouter,
+	type GatewayHooks,
+	type AuthGatewayServerHandle,
+	runHook,
+} from "../src/auth-gateway";
 import { AuthStorage } from "../src/auth-storage";
 import { createMockModel, type MockModel, registerMockApi } from "../src/providers/mock";
 
@@ -80,7 +86,12 @@ for (const native of [false, true]) {
 
 async function withHookRoute(
 	hooks: GatewayHooks,
-	run: (gateway: AuthGatewayServerHandle, primary: MockModel, backup: MockModel) => Promise<void>,
+	run: (
+		gateway: AuthGatewayServerHandle,
+		primary: MockModel,
+		backup: MockModel,
+		storage: AuthStorage,
+	) => Promise<void>,
 	failPrimary = false,
 ): Promise<void> {
 	registerMockApi();
@@ -118,7 +129,7 @@ async function withHookRoute(
 		],
 	});
 	try {
-		await run(gateway, primary, backup);
+		await run(gateway, primary, backup, storage);
 	} finally {
 		await gateway.close();
 		storage.close();
@@ -249,6 +260,51 @@ it("public runHook preserves the original synchronous and asynchronous rejection
 	]) {
 		await expect(runHook(fn, undefined)).rejects.toBe(failure);
 	}
+});
+
+it("does not start provider work if the caller aborts while an async attempt hook is pending", async () => {
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const outcomes: boolean[] = [];
+	const hooks: GatewayHooks = {
+		beforeAttempt: async () => {
+			entered.resolve();
+			await release.promise;
+		},
+		afterRequest: ctx => {
+			outcomes.push(ctx.ok);
+		},
+	};
+	await withHookRoute(hooks, async (_gateway, primary, backup, storage) => {
+		const router = createAuthGatewayRouter({
+			storage,
+			hooks,
+			resolveModel: id => (id === "primary" ? primary : undefined),
+		});
+		const client = new AbortController();
+		try {
+			const pending = router.route(
+				new Request("http://fixture/v1/chat/completions", {
+					method: "POST",
+					signal: client.signal,
+					body: JSON.stringify({ model: "primary", messages: [{ role: "user", content: "fixture" }] }),
+				}),
+				"fixture",
+			);
+			await entered.promise;
+			client.abort(new Error("fixture client abort"));
+			release.resolve();
+			const response = await pending;
+			expect(response.status).toBe(499);
+			await response.text();
+			expect(primary.calls).toHaveLength(0);
+			expect(backup.calls).toHaveLength(0);
+			expect(outcomes).toEqual([false]);
+		} finally {
+			release.resolve();
+			router.close();
+		}
+	});
 });
 
 for (const hook of ["afterAttempt", "afterRequest"] as const) {
