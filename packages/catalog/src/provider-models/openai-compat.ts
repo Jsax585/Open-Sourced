@@ -7470,6 +7470,8 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_SPECIALIZED: readonly ModelsDevProviderDes
 	// --- MiniMax (Anthropic) ---
 	anthropicMessagesDescriptor("minimax", "minimax", "https://api.minimax.io/anthropic"),
 	anthropicMessagesDescriptor("minimax-cn", "minimax-cn", "https://api.minimaxi.com/anthropic"),
+	// --- FriendliAI ---
+	openAiCompletionsDescriptor("friendli", "friendli", "https://api.friendli.ai/serverless/v1"),
 	// --- Hugging Face ---
 	openAiCompletionsDescriptor("huggingface", "huggingface", "https://router.huggingface.co/v1"),
 	// --- Kilo Gateway ---

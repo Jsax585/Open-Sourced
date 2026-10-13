@@ -28,6 +28,7 @@ export type KnownProvider =
 	| "factory-droid"
 	| "firepass"
 	| "fireworks"
+	| "friendli"
 	| "github-copilot"
 	| "gitlab-duo"
 	| "gitlab-duo-agent"

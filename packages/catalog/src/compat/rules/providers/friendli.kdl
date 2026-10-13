@@ -1,0 +1,41 @@
+provider "friendli" {
+	default-model "zai-org/GLM-5.3"
+	env "FRIENDLI_API_KEY" "FRIENDLI_TOKEN"
+	clamp-output-to-model-max #true
+
+	// Offline fallback for the default model; upstream models.dev rows win.
+	// GLM-5.3 effort tiers are derived from the model class, not this seed.
+	seed api="openai-completions" base-url="https://api.friendli.ai/serverless/v1" bundle="fallback" {
+		model "zai-org/GLM-5.3" name="GLM-5.3" {
+			reasoning #true
+			input "text"
+			cost input=1.26 output=3.96 cache-read=0.234 cache-write=0
+			limits context=1048576 max-tokens=1048576
+		}
+	}
+
+	// The serverless catalog reports a full-window output cap for these SKUs,
+	// unlike upstream GLM deployments: https://api.friendli.ai/serverless/v1/models.
+	models "zai-org/GLM-5.3" "zai-org/GLM-5.3-Flash" {
+		limits-patch {
+			max-tokens 1048576
+		}
+	}
+
+	// models.dev does not advertise Friendli's per-model effort controls.
+	// Do not fabricate selectable tiers from the upstream model's ladder.
+	on-api "openai-completions" priority=1 {
+		thinking-efforts
+		supports-reasoning-effort #false
+	}
+	class "glm" {
+		revision ">=5.2 <5.3" {
+			thinking-efforts "high" "max"
+			supports-reasoning-effort #true
+		}
+		revision ">=5.3" {
+			thinking-efforts "low" "high" "max"
+			supports-reasoning-effort #true
+		}
+	}
+}

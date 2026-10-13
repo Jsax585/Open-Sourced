@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added FriendliAI's bundled serverless catalog with `zai-org/GLM-5.3` as its default model and its advertised output allowance on requests ([#9410](https://github.com/can1357/oh-my-pi/pull/9410) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
 - Added the `classifier-cot-extraction` rule axis, set for Claude, marking models whose classifier refuses earlier reasoning quoted back into their input ([#15436](https://github.com/can1357/oh-my-pi/pull/15436) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Removed

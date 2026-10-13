@@ -1,0 +1,10 @@
+auth "friendli" {
+	name "FriendliAI"
+	login "api-key" {
+		auth-url "https://friendli.ai/suite"
+		instructions "Copy your Personal API key from Friendli Suite"
+		prompt "Paste your FriendliAI API key" placeholder="flp_..."
+		// The models endpoint is public and accepts invalid bearer tokens.
+		validate "chat-completions" label="FriendliAI" base-url="https://api.friendli.ai/serverless/v1" model="zai-org/GLM-5.3"
+	}
+}

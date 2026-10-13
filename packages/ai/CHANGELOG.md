@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added FriendliAI API-key login and environment authentication through `FRIENDLI_API_KEY` or the documented `FRIENDLI_TOKEN` variable ([#9410](https://github.com/can1357/oh-my-pi/pull/9410) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
+
 ### Removed
 
 - Removed the `toolNamespacesInfo` stream option; Codex requests no longer send `tool_namespaces_info` turn metadata, and `code_mode_tool_names`/`tool_namespaces_info` are no longer reserved client metadata keys.
