@@ -568,7 +568,7 @@ export interface InteractiveModeContext {
 	 * sheet natively. Replaces the report already shown.
 	 */
 	showCommandReport(options: { title: string; head?: TspText; body: Component }): void;
-	/** The live background-jobs sheet (the jobs pill's). */
+	/** The live background-jobs sheet the jobs pill and `/jobs` open, on any terminal. */
 	showJobsSheet(): void;
 	/** Clear the docked command report; false when none was shown (Esc falls through). */
 	dismissCommandReport(): boolean;

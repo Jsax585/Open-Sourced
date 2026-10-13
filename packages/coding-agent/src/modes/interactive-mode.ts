@@ -7338,9 +7338,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/**
-	 * The jobs pill's sheet: live background jobs in a dismissable overlay.
-	 * Unlike `/jobs` it adds nothing to the transcript, so a click mid-turn
-	 * leaves no deferred command preview above the editor.
+	 * The live jobs sheet: background jobs in a dismissable overlay. Opened by
+	 * the native jobs pill and by `/jobs` on any terminal — it adds nothing to
+	 * the transcript, so it leaves no deferred command preview above the editor.
 	 */
 	showJobsSheet(): void {
 		if (this.#jobsSheetHandle) return;
@@ -7356,6 +7356,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.ui.requestRender();
 			},
 			close: () => this.#hideJobsSheet(),
+			// The sheet budgets its rows against the live terminal height so its
+			// content fits the 90% overlay instead of being clipped at the bottom.
+			rows: () => this.ui.terminal.rows,
 		});
 		this.#jobsSheetHandle = this.ui.showOverlay(sheet, { anchor: "center", width: "90%", maxHeight: "90%" });
 		this.#jobsSheetTimer = setInterval(() => this.ui.requestRender(), JOBS_SHEET_REFRESH_MS);

@@ -6,6 +6,10 @@
 
 - Added `ApprovalDialogComponent` and the `app.approval.approve` keybinding (default `Ctrl+Enter`, `Ctrl+Q`) ([#15548](https://github.com/can1357/oh-my-pi/pull/15548) by [@H4vC](https://github.com/H4vC))
 
+### Changed
+
+- `JobsSheet` now fits its terminal job list and live output tail to the window height, with safe tab/control-character handling ([#14575](https://github.com/can1357/oh-my-pi/issues/14575)).
+
 ### Removed
 
 - Removed `tools/eval-format/code-mode-declarations` (`generateCodeModeDeclarations`), which only served Codex Code Mode.
