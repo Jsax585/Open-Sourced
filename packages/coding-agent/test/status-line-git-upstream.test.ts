@@ -8,10 +8,10 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { renderSegment } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/segments";
-import type { SegmentContext } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/types";
-import { loadTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/loader";
-import { setThemeInstance, type Theme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { renderSegment } from "@oh-my-pi/pi-tui/status-line/segments";
+import type { SegmentContext } from "@oh-my-pi/pi-tui/status-line/types";
+import { loadTheme } from "@oh-my-pi/pi-tui/theme/loader";
+import { setThemeInstance, type Theme, theme } from "@oh-my-pi/pi-tui/theme";
 
 // Segments render through the process-global theme that every test file in this
 // process shares. Build the presets we need as standalone instances and swap
@@ -38,7 +38,6 @@ function ctxWith(status: GitStatus | null, showAheadBehind?: boolean): SegmentCo
 	return {
 		git: { branch: "main", status, pr: null },
 		options: { git: { showBranch: true, showAheadBehind } },
-		startupPlaceholder: false,
 	} as unknown as SegmentContext;
 }
 
