@@ -2820,9 +2820,19 @@ describe("computer background fallback", () => {
 		it("returns the outcome and says in the run output what a degraded one means", async () => {
 			const cases: Array<[DesktopPaste, string | undefined]> = [
 				[{ outcome: "provided", read: true }, undefined],
-				[{ outcome: "noReadSeen", read: false }, "nothing read the text in time"],
-				[{ outcome: "clipboardConflict", read: false }, "the window may have pasted that app's text instead"],
-				[{ outcome: "clipboardConflict", read: true }, "left as that app set it; the text was read"],
+				[{ outcome: "noReadSeen", read: false }, "no app requested the text in time"],
+				[
+					{ outcome: "clipboardConflict", read: false },
+					"left as that app set it; the window may have pasted that app's text",
+				],
+				[
+					{ outcome: "clipboardConflict", read: true },
+					"(the user's dictation, for example) instead of yours: read the field, and if it holds text you did not paste, replace it with yours; never put that text into the user's app",
+				],
+				[
+					{ outcome: "reclaimed", read: true },
+					"put back over it; the window may have pasted that app's text (the user's dictation, for example) instead of yours: read the field, and if it holds text you did not paste, replace it with yours; never put that text into the user's app",
+				],
 				[{ outcome: "restoreUnconfirmed", read: true }, "tell the user their clipboard may hold the pasted text"],
 			];
 			for (const [pasted, note] of cases) {
@@ -2847,6 +2857,81 @@ describe("computer background fallback", () => {
 				`paste ran in takeover because ${reason}; the input was delivered, and focus returned to Notes`,
 			]);
 			if (result.ok) expect(result.payload.returnValue).toEqual({ outcome: "provided", read: true });
+		});
+
+		/**
+		 * Holds every paste until the run cancels or retires native work, then
+		 * settles it the way native does once it has put the clipboard back:
+		 * rejecting with `ended` when it is an error, else resolving with it.
+		 * `undefined` never settles, like a wedged helper.
+		 */
+		class HeldPasteSession extends RefusingSession {
+			readonly started = Promise.withResolvers<void>();
+			readonly #held = Promise.withResolvers<DesktopPaste>();
+			constructor(readonly ended: Error | DesktopPaste | undefined) {
+				super();
+			}
+			override async paste(): Promise<DesktopPaste> {
+				this.started.resolve();
+				return await this.#held.promise;
+			}
+			#end(): void {
+				if (this.ended instanceof Error) this.#held.reject(this.ended);
+				else if (this.ended) this.#held.resolve(this.ended);
+			}
+			override cancel(): void {
+				super.cancel();
+				this.#end();
+			}
+			override retire(): void {
+				super.retire();
+				this.#end();
+			}
+		}
+		const cancelled = "Cancelled: desktop operation cancelled; input may be partial; inspect before retrying";
+
+		it.each([
+			[
+				"abort",
+				"aborted",
+				"; another app wrote the clipboard while the text was on it, so the clipboard was left as that app set it",
+			],
+			["timeout", "timed out after 100ms", "; putting the user's clipboard back could not be confirmed"],
+		] as const)("keeps what became of the clipboard when %s cuts a paste off", async (reason, ended, clipboard) => {
+			const native = new HeldPasteSession(new Error(`${cancelled}${clipboard}`));
+			const transport = new MemoryTransport();
+			new ComputerWorkerCore(transport, () => native);
+			const pending = runWorker(transport, "cut-paste", pasteTarget, false, reason === "timeout" ? 100 : 2_000);
+			await native.started.promise;
+			if (reason === "abort") transport.inbound({ type: "abort", id: "cut-paste" });
+			const result = await pending;
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.error.message).toContain(ended);
+			expect(result.error.message).toContain(`the run ended before a paste finished: ${cancelled}${clipboard}`);
+		});
+
+		it("reports a paste the script did not await once the run's end has settled it", async () => {
+			const native = new HeldPasteSession({ outcome: "clipboardConflict", read: false });
+			const result = await run(
+				native,
+				'(await desktop.window("42")).paste("long text").catch(() => {}); return 1',
+				"takeover",
+			);
+			expect(native.retireCount).toBe(1);
+			expect(texts(result).join("\n")).toContain("paste: another app wrote the clipboard while the text was on it");
+		});
+
+		it("says a paste was still restoring the clipboard when it does not settle in time", async () => {
+			const native = new HeldPasteSession(undefined);
+			const result = await run(
+				native,
+				'(await desktop.window("42")).paste("long text").catch(() => {}); return 1',
+				"takeover",
+			);
+			expect(texts(result).join("\n")).toContain(
+				"a paste was still putting the user's clipboard back when the run ended",
+			);
 		});
 	});
 

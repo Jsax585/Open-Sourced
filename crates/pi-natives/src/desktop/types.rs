@@ -232,13 +232,18 @@ pub struct DesktopFocusReturn {
 #[napi(object)]
 #[derive(Debug, Clone)]
 pub struct DesktopPaste {
-	/// What the paste did: `provided` (the target read the text, and the user's
-	/// clipboard is back), `noReadSeen` (⌘V went out, but nothing read the text
+	/// What the paste did: `provided` (an application requested the text, which
+	/// says nothing of which one, so inspect the target; the user's clipboard is
+	/// back), `noReadSeen` (⌘V went out, but no application requested the text
 	/// in time; the clipboard is back), `clipboardConflict` (another app wrote
-	/// the clipboard while the text was on it, so it keeps that app's copy), or
+	/// the clipboard while the text was on it, so it keeps that app's copy),
+	/// `reclaimed` (another app saved the clipboard with the text on it and put
+	/// that copy back; the user's clipboard is back over it), or
 	/// `restoreUnconfirmed` (putting the clipboard back was not confirmed).
+	/// After either conflict the target may have pasted the other app's text
+	/// instead.
 	pub outcome: String,
-	/// Whether an application read the text.
+	/// Whether an application requested the text; not proof the target pasted.
 	pub read:    bool,
 	/// Where focus ended when the paste took over; see [`DesktopFocusReturn`].
 	pub focus:   Option<DesktopFocusReturn>,

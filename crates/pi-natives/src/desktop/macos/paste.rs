@@ -1,15 +1,15 @@
 //! Pasting text through the user's clipboard without keeping it there.
 //!
 //! A worker process saves every item and type on the clipboard, puts the text
-//! there as a promise and serves it to the application that reads it; once the
-//! application has read it, the worker puts the saved clipboard back unless
+//! there as a promise and serves it to whichever application requests it;
+//! once one has, the worker puts the saved clipboard back unless
 //! someone else wrote the clipboard meanwhile. `AppKit` asks a promise's owner
 //! for the data on the owner's main run loop only, and the process hosting the
 //! addon runs none, so the promise lives in a process that does.
 
 use std::{
-	io::{BufRead, BufReader, BufWriter, Write},
-	process::{ChildStdin, Command, Stdio},
+	io::{self, BufRead, BufReader, BufWriter, Write},
+	process::{Child, ChildStdin, ChildStdout, Command, Stdio},
 	thread,
 	time::{Duration, Instant},
 };
@@ -31,17 +31,24 @@ const CLIPBOARD_QUIET: Duration = Duration::from_millis(200);
 /// How long a paste waits for the clipboard to go quiet before giving up with
 /// nothing written.
 const QUIET_LIMIT: Duration = Duration::from_secs(2);
-/// How long the target has to read the text after ⌘V before the clipboard is
-/// put back.
+/// How long an application has to request the text after ⌘V before the
+/// clipboard is put back.
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
-/// Lets the target finish the paste it read before the clipboard changes under
-/// it.
+/// Lets the target finish a paste whose text it requested before the
+/// clipboard changes under it.
 const READ_SETTLE: Duration = Duration::from_millis(150);
 /// Bound on each worker reply; saving the clipboard has every application that
 /// promised data on it render that data.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 /// How often a wait on the worker checks for cancellation.
 const POLL: Duration = Duration::from_millis(20);
+/// How long after a conflict the worker watches for another app putting back
+/// a copy it saved of the text, as a tool that saves the clipboard around its
+/// own paste does.
+const RECLAIM_WINDOW: Duration = Duration::from_secs(3);
+/// How long a worker's helper has to put the clipboard back and exit once its
+/// input closes before it is killed; longer than [`RECLAIM_WINDOW`].
+const TEARDOWN_GRACE: Duration = REPLY_TIMEOUT;
 
 /// The clipboard as a paste drives it; [`Worker`] is the real one.
 pub(super) trait Clipboard {
@@ -49,11 +56,15 @@ pub(super) trait Clipboard {
 	fn change_count(&self) -> isize;
 	/// Saves the clipboard and promises `text` in its place.
 	fn write(&mut self, text: &str) -> CoreResult<Written>;
-	/// Whether an application read the text, waiting up to `timeout`.
+	/// Whether an application requested the text, waiting up to `timeout`.
 	fn await_read(&mut self, timeout: Duration) -> CoreResult<bool>;
 	/// Puts the saved clipboard back while the pasteboard still holds the
 	/// text; `None` when the worker did not answer.
 	fn restore(&mut self) -> Option<Restored>;
+	/// After a conflict, watches up to `window` for the pasteboard to hold this
+	/// paste's text again, put back by an app that had saved it, and puts the
+	/// saved clipboard back over it; `None` when the worker did not answer.
+	fn reclaim(&mut self, window: Duration) -> Option<Restored>;
 }
 
 /// The worker's answer to a write.
@@ -68,7 +79,8 @@ pub(super) enum Written {
 /// The worker's report of a restore, its fields as the worker read them.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub(super) struct Restored {
-	/// The change count the text's write produced; absent when nothing was
+	/// The change count the worker restores over: the text's write, or, after
+	/// a reclaim, another app's copy of the text; absent when nothing was
 	/// written.
 	ours:   Option<isize>,
 	/// The change count when the restore began.
@@ -92,6 +104,9 @@ enum Restore {
 	Back,
 	/// Someone else wrote the clipboard after the text; it holds their copy.
 	Conflict,
+	/// Another app put back a copy it saved of the text, and the saved
+	/// clipboard is back over it with every item and type.
+	Reclaimed,
 	/// The restore was attempted, but its result could not be read back.
 	Unconfirmed,
 }
@@ -126,14 +141,21 @@ fn restore_verdict(reply: Option<&Restored>) -> Restore {
 /// What a paste did with its text and with the user's clipboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PasteOutcome {
-	/// The target read the text, and the user's clipboard is back.
+	/// An application requested the text, and the user's clipboard is back.
+	/// The request does not say which application made it, so it does not
+	/// prove the target pasted.
 	Provided,
-	/// ⌘V went out, but nothing read the text in time; the user's clipboard is
-	/// back, so a later read gets it, not the text.
+	/// ⌘V went out, but no application requested the text in time; the user's
+	/// clipboard is back, so a later read gets it, not the text.
 	NoReadSeen,
 	/// Another app wrote the clipboard while the text was on it, so it keeps
 	/// that app's copy and was not put back.
 	ClipboardConflict,
+	/// Another app saved the clipboard while the text was on it and later put
+	/// that copy back, as a tool that saves the clipboard around its own paste
+	/// does; the user's clipboard is back over it. Its save requests the text,
+	/// so `read` may be that app's request.
+	Reclaimed,
 	/// Putting the user's clipboard back was attempted but not confirmed.
 	RestoreUnconfirmed,
 }
@@ -144,6 +166,7 @@ impl PasteOutcome {
 			Self::Provided => "provided",
 			Self::NoReadSeen => "noReadSeen",
 			Self::ClipboardConflict => "clipboardConflict",
+			Self::Reclaimed => "reclaimed",
 			Self::RestoreUnconfirmed => "restoreUnconfirmed",
 		}
 	}
@@ -153,15 +176,16 @@ impl PasteOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Pasted {
 	pub(super) outcome: PasteOutcome,
-	/// Whether an application read the text.
+	/// Whether an application requested the text.
 	pub(super) read:    bool,
 }
 
-/// The outcome a paste reports, from whether the text was read and what
+/// The outcome a paste reports, from whether the text was requested and what
 /// became of the clipboard; a clipboard left changed outranks the read.
 const fn outcome(read: bool, restore: Restore) -> PasteOutcome {
 	match restore {
 		Restore::Conflict => PasteOutcome::ClipboardConflict,
+		Restore::Reclaimed => PasteOutcome::Reclaimed,
 		Restore::Unconfirmed => PasteOutcome::RestoreUnconfirmed,
 		Restore::Back | Restore::Untouched if read => PasteOutcome::Provided,
 		Restore::Back | Restore::Untouched => PasteOutcome::NoReadSeen,
@@ -172,7 +196,7 @@ const fn outcome(read: bool, restore: Restore) -> PasteOutcome {
 /// the text was written.
 fn with_clipboard(mut error: DesktopError, restore: Restore) -> DesktopError {
 	match restore {
-		Restore::Untouched | Restore::Back => {},
+		Restore::Untouched | Restore::Back | Restore::Reclaimed => {},
 		Restore::Conflict => error.message.push_str(
 			"; another app wrote the clipboard while the text was on it, so the clipboard was left \
 			 as that app set it",
@@ -263,10 +287,27 @@ pub(super) fn paste(
 		}
 		Ok(read)
 	});
-	let restore = control::cleanup(|| restore_verdict(clipboard.restore().as_ref()));
+	let restore = control::cleanup(|| settle_clipboard(clipboard));
 	match read {
 		Ok(read) => Ok(Pasted { outcome: outcome(read, restore), read }),
 		Err(error) => Err(with_clipboard(error, restore)),
+	}
+}
+
+/// Puts the user's clipboard back. After a conflict it watches for
+/// [`RECLAIM_WINDOW`] whether the conflicting app puts back a copy it saved of
+/// the text, which leaves the agent's text on the user's clipboard unless the
+/// saved clipboard goes back over it; a copy without the text's marker, such
+/// as one the user makes from the pasted field, is never touched.
+fn settle_clipboard(clipboard: &mut impl Clipboard) -> Restore {
+	let restore = restore_verdict(clipboard.restore().as_ref());
+	if restore != Restore::Conflict {
+		return restore;
+	}
+	match restore_verdict(clipboard.reclaim(RECLAIM_WINDOW).as_ref()) {
+		Restore::Back => Restore::Reclaimed,
+		Restore::Unconfirmed => Restore::Unconfirmed,
+		Restore::Conflict | Restore::Untouched | Restore::Reclaimed => Restore::Conflict,
 	}
 }
 
@@ -275,6 +316,7 @@ pub(super) fn paste(
 enum Request<'a> {
 	Write { text: &'a str },
 	Restore,
+	Reclaim { seconds: f64 },
 }
 
 #[derive(Deserialize)]
@@ -292,11 +334,16 @@ enum Reply {
 	},
 }
 
+/// Reader of the helper's replies, which runs until its output closes.
+type ReplySender = flume::Sender<Result<Reply, String>>;
+
 /// The paste worker process, started for one paste. Closing its input makes
-/// it put the clipboard back if the text is still there, then exit; a thread
-/// reads its replies and reaps it.
+/// it put the clipboard back if the text is still there, then exit; the
+/// worker reaps it, killing it once [`TEARDOWN_GRACE`] passes.
 pub(super) struct Worker {
-	input:      BufWriter<ChildStdin>,
+	child:      Child,
+	/// `None` once closed for teardown.
+	input:      Option<BufWriter<ChildStdin>>,
 	replies:    flume::Receiver<Result<Reply, String>>,
 	read:       bool,
 	_directory: HelperDirectory,
@@ -306,40 +353,63 @@ impl Worker {
 	pub(super) fn start() -> CoreResult<Self> {
 		let directory = HelperDirectory::create("omp-paste")?;
 		let executable = directory.write("omp-paste-helper", HELPER, 0o700)?;
-		let mut child = Command::new(executable)
+		Self::launch(Command::new(executable), directory, spawn_reader)
+	}
+
+	/// Starts `command` and has `start_reader` read its output into the
+	/// worker's replies; when that fails, the process is killed and reaped.
+	fn launch(
+		mut command: Command,
+		directory: HelperDirectory,
+		start_reader: impl FnOnce(ChildStdout, ReplySender) -> io::Result<()>,
+	) -> CoreResult<Self> {
+		let mut child = command
 			.stdin(Stdio::piped())
 			.stdout(Stdio::piped())
 			.stderr(Stdio::null())
 			.spawn()
 			.map_err(|error| failed(&error))?;
-		let (Some(input), Some(output)) = (child.stdin.take(), child.stdout.take()) else {
-			let _ = child.kill();
-			let _ = child.wait();
-			return Err(failed(&"its pipes are missing"));
-		};
+		let (input, output) = (child.stdin.take().map(BufWriter::new), child.stdout.take());
 		let (sender, replies) = flume::unbounded();
-		thread::Builder::new()
-			.name("omp-paste-worker".into())
-			.spawn(move || {
-				for line in BufReader::new(output).split(b'\n') {
-					let Ok(line) = line else { break };
-					let reply = serde_json::from_slice(&line).map_err(|error| error.to_string());
-					if sender.send(reply).is_err() {
-						break;
-					}
-				}
-				let _ = child.wait();
-			})
-			.map_err(|error| failed(&error))?;
-		Ok(Self { input: BufWriter::new(input), replies, read: false, _directory: directory })
+		let mut worker = Self { child, input, replies, read: false, _directory: directory };
+		let started = match output {
+			Some(output) => start_reader(output, sender).map_err(|error| failed(&error)),
+			None => Err(failed(&"its output pipe is missing")),
+		};
+		if let Err(error) = started {
+			// Nothing is on the clipboard yet, so nothing is lost by not waiting.
+			worker.finish(Duration::ZERO);
+			return Err(error);
+		}
+		Ok(worker)
+	}
+
+	/// Closes the helper's input, which makes it put the clipboard back if the
+	/// text is still there and exit, then reaps it; a helper still running
+	/// after `grace` is killed.
+	fn finish(&mut self, grace: Duration) {
+		drop(self.input.take());
+		let deadline = Instant::now() + grace;
+		loop {
+			match self.child.try_wait() {
+				Ok(Some(_)) => return,
+				Ok(None) if Instant::now() < deadline => thread::sleep(POLL),
+				_ => break,
+			}
+		}
+		let _ = self.child.kill();
+		let _ = self.child.wait();
 	}
 
 	fn send(&mut self, request: &Request<'_>) -> CoreResult<()> {
-		serde_json::to_writer(&mut self.input, request).map_err(|error| failed(&error))?;
-		self
+		let input = self
 			.input
+			.as_mut()
+			.ok_or_else(|| failed(&"its input is closed"))?;
+		serde_json::to_writer(&mut *input, request).map_err(|error| failed(&error))?;
+		input
 			.write_all(b"\n")
-			.and_then(|()| self.input.flush())
+			.and_then(|()| input.flush())
 			.map_err(|error| failed(&error))
 	}
 
@@ -371,6 +441,18 @@ impl Worker {
 			match self.receive(deadline)? {
 				Some(Reply::Read) => {},
 				reply => return Ok(reply),
+			}
+		}
+	}
+
+	/// The next restore report, skipping a write's late answer; `None` when
+	/// `deadline` passes first.
+	fn restored(&mut self, deadline: Instant) -> Option<Restored> {
+		loop {
+			match self.next(deadline) {
+				Ok(Some(Reply::Restore(reply))) => return Some(reply),
+				Ok(Some(_)) => {},
+				Ok(None) | Err(_) => return None,
 			}
 		}
 	}
@@ -406,14 +488,38 @@ impl Clipboard for Worker {
 
 	fn restore(&mut self) -> Option<Restored> {
 		self.send(&Request::Restore).ok()?;
-		let deadline = Instant::now() + REPLY_TIMEOUT;
-		// A write that timed out may still answer first.
-		loop {
-			match self.next(deadline) {
-				Ok(Some(Reply::Restore(reply))) => return Some(reply),
-				Ok(Some(_)) => {},
-				Ok(None) | Err(_) => return None,
-			}
+		self.restored(Instant::now() + REPLY_TIMEOUT)
+	}
+
+	fn reclaim(&mut self, window: Duration) -> Option<Restored> {
+		self
+			.send(&Request::Reclaim { seconds: window.as_secs_f64() })
+			.ok()?;
+		self.restored(Instant::now() + window + REPLY_TIMEOUT)
+	}
+}
+
+impl Drop for Worker {
+	fn drop(&mut self) {
+		self.finish(TEARDOWN_GRACE);
+	}
+}
+
+/// Starts the thread that reads the helper's replies.
+fn spawn_reader(output: ChildStdout, sender: ReplySender) -> io::Result<()> {
+	thread::Builder::new()
+		.name("omp-paste-worker".into())
+		.spawn(move || read_replies(output, &sender))
+		.map(drop)
+}
+
+/// Forwards each reply line until the helper's output closes.
+fn read_replies(output: ChildStdout, sender: &ReplySender) {
+	for line in BufReader::new(output).split(b'\n') {
+		let Ok(line) = line else { break };
+		let reply = serde_json::from_slice(&line).map_err(|error| error.to_string());
+		if sender.send(reply).is_err() {
+			break;
 		}
 	}
 }
@@ -425,6 +531,10 @@ fn failed(error: &dyn std::fmt::Display) -> DesktopError {
 #[cfg(test)]
 mod tests {
 	use std::{cell::Cell, rc::Rc};
+
+	use objc2::{msg_send, rc::Retained, runtime::ProtocolObject};
+	use objc2_app_kit::{NSPasteboardItem, NSPasteboardTypeString, NSPasteboardWriting};
+	use objc2_foundation::{NSArray, NSData, NSString};
 
 	use super::*;
 	use crate::desktop::error::ErrorCode;
@@ -447,6 +557,10 @@ mod tests {
 		restores:         usize,
 		/// Whether a restore wrote the saved clipboard back.
 		restored:         bool,
+		/// After a conflict, the conflicting app puts back a copy it saved of
+		/// the text.
+		puts_text_back:   bool,
+		reclaims:         usize,
 	}
 
 	impl FakeClipboard {
@@ -461,6 +575,8 @@ mod tests {
 				writes:           0,
 				restores:         0,
 				restored:         false,
+				puts_text_back:   false,
+				reclaims:         0,
 			}
 		}
 	}
@@ -498,9 +614,7 @@ mod tests {
 				return None;
 			}
 			let before = self.count.get();
-			let saved = vec![SAVED.map(str::to_owned).to_vec()];
-			let mut reply =
-				Restored { ours: self.ours, before: Some(before), saved, ..Restored::default() };
+			let mut reply = self.restore_reply();
 			if self.ours == Some(before) {
 				self.count.set(before + 1);
 				self.restored = true;
@@ -508,6 +622,34 @@ mod tests {
 				reply.now.clone_from(&reply.saved);
 			}
 			Some(reply)
+		}
+
+		fn reclaim(&mut self, _window: Duration) -> Option<Restored> {
+			self.reclaims += 1;
+			let mut reply = self.restore_reply();
+			if self.puts_text_back {
+				// The app's copy of the text gets the next count, and the saved
+				// clipboard goes back over it.
+				another_app_copies(&self.count);
+				let theirs = self.count.get();
+				self.count.set(theirs + 1);
+				self.restored = true;
+				reply = Restored {
+					ours: Some(theirs),
+					before: Some(theirs),
+					after: Some(theirs + 1),
+					now: reply.saved.clone(),
+					..reply
+				};
+			}
+			Some(reply)
+		}
+	}
+
+	impl FakeClipboard {
+		fn restore_reply(&self) -> Restored {
+			let saved = vec![SAVED.map(str::to_owned).to_vec()];
+			Restored { ours: self.ours, before: Some(self.count.get()), saved, ..Restored::default() }
 		}
 	}
 
@@ -574,6 +716,8 @@ mod tests {
 			(false, Restore::Conflict, PasteOutcome::ClipboardConflict),
 			(true, Restore::Unconfirmed, PasteOutcome::RestoreUnconfirmed),
 			(false, Restore::Unconfirmed, PasteOutcome::RestoreUnconfirmed),
+			(true, Restore::Reclaimed, PasteOutcome::Reclaimed),
+			(false, Restore::Reclaimed, PasteOutcome::Reclaimed),
 		] {
 			assert_eq!(outcome(read, restore), expected, "read {read}, {restore:?}");
 		}
@@ -602,6 +746,7 @@ mod tests {
 		let pasted = paste_with(&mut clipboard, |ready| ready()).unwrap();
 		assert_eq!((pasted.outcome, pasted.read), (PasteOutcome::Provided, true));
 		assert_eq!((clipboard.writes, clipboard.restores, clipboard.restored), (1, 1, true));
+		assert_eq!(clipboard.reclaims, 0);
 
 		let mut clipboard = FakeClipboard { read: Ok(false), ..FakeClipboard::new() };
 		let pasted = paste_with(&mut clipboard, |ready| ready()).unwrap();
@@ -683,7 +828,21 @@ mod tests {
 		})
 		.unwrap();
 		assert_eq!((pasted.outcome, pasted.read), (PasteOutcome::ClipboardConflict, true));
-		assert_eq!((clipboard.restores, clipboard.restored), (1, false));
+		assert_eq!((clipboard.restores, clipboard.reclaims, clipboard.restored), (1, 1, false));
+	}
+
+	#[test]
+	fn the_clipboard_goes_back_over_a_copy_of_the_text_another_app_puts_back() {
+		let mut clipboard = FakeClipboard { puts_text_back: true, ..FakeClipboard::new() };
+		let count = Rc::clone(&clipboard.count);
+		let pasted = paste_with(&mut clipboard, |ready| {
+			ready()?;
+			another_app_copies(&count);
+			Ok(())
+		})
+		.unwrap();
+		assert_eq!(pasted.outcome, PasteOutcome::Reclaimed);
+		assert_eq!((clipboard.restores, clipboard.reclaims, clipboard.restored), (1, 1, true));
 	}
 
 	#[test]
@@ -708,5 +867,242 @@ mod tests {
 		let error = paste_with(&mut clipboard, |ready| ready()).unwrap_err();
 		assert_eq!(error.code, ErrorCode::Cancelled);
 		assert!(clipboard.restored);
+	}
+
+	/// The embedded helper working on a pasteboard of its own, which first
+	/// holds the user's text. With `stall` it pauses a second before each
+	/// ownership check and says so, so a test can copy there meanwhile.
+	struct HelperFixture {
+		board:      Retained<NSPasteboard>,
+		child:      Child,
+		input:      ChildStdin,
+		output:     BufReader<ChildStdout>,
+		stall:      bool,
+		_directory: HelperDirectory,
+	}
+
+	impl HelperFixture {
+		fn start(test: &str, stall: bool) -> Self {
+			let name = format!("omp-paste-test-{}-{test}", std::process::id());
+			let board = NSPasteboard::pasteboardWithName(&NSString::from_str(&name));
+			copy(&board, "the user's text");
+			let directory = HelperDirectory::create("omp-paste-test").unwrap();
+			let executable = directory.write("omp-paste-helper", HELPER, 0o700).unwrap();
+			let mut child = Command::new(executable)
+				.arg(&name)
+				.args(stall.then_some("stall"))
+				.stdin(Stdio::piped())
+				.stdout(Stdio::piped())
+				.stderr(Stdio::null())
+				.spawn()
+				.unwrap();
+			let input = child.stdin.take().unwrap();
+			let output = BufReader::new(child.stdout.take().unwrap());
+			Self { board, child, input, output, stall, _directory: directory }
+		}
+
+		fn send(&mut self, request: &str) {
+			writeln!(self.input, "{request}").unwrap();
+		}
+
+		/// The next reply other than a read of the text.
+		fn reply(&mut self) -> serde_json::Value {
+			loop {
+				let mut line = String::new();
+				self.output.read_line(&mut line).unwrap();
+				let reply: serde_json::Value = serde_json::from_str(&line).unwrap();
+				if reply["kind"] != "read" {
+					return reply;
+				}
+			}
+		}
+
+		/// Writes the text, with no copy during the pause.
+		fn write(&mut self) {
+			self.send(r#"{"op":"write","text":"agent text"}"#);
+			if self.stall {
+				assert_eq!(self.reply()["at"], "write");
+			}
+			assert_eq!(self.reply()["kind"], "written");
+		}
+
+		fn text(&self) -> String {
+			// SAFETY: `NSPasteboardTypeString` is an immutable AppKit string
+			// constant.
+			let kind = unsafe { NSPasteboardTypeString };
+			self
+				.board
+				.stringForType(kind)
+				.map(|text| text.to_string())
+				.unwrap_or_default()
+		}
+	}
+
+	impl Drop for HelperFixture {
+		fn drop(&mut self) {
+			let _ = self.child.kill();
+			let _ = self.child.wait();
+			// SAFETY: `releaseGlobally` takes no arguments and returns nothing.
+			let () = unsafe { msg_send![&*self.board, releaseGlobally] };
+		}
+	}
+
+	/// Another app's copy.
+	fn copy(board: &NSPasteboard, text: &str) {
+		board.clearContents();
+		// SAFETY: `NSPasteboardTypeString` is an immutable AppKit string
+		// constant.
+		assert!(
+			board.setString_forType(&NSString::from_str(text), unsafe { NSPasteboardTypeString })
+		);
+	}
+
+	#[test]
+	fn the_helper_keeps_a_copy_made_while_it_saves_the_clipboard() {
+		let mut helper = HelperFixture::start("save", true);
+		helper.send(r#"{"op":"write","text":"agent text"}"#);
+		assert_eq!(helper.reply()["at"], "write");
+		copy(&helper.board, "a copy made meanwhile");
+		assert_eq!(helper.reply()["kind"], "changed");
+		assert_eq!(helper.text(), "a copy made meanwhile");
+	}
+
+	#[test]
+	fn the_helper_keeps_a_copy_made_while_it_rebuilds_the_clipboard() {
+		let mut helper = HelperFixture::start("rebuild", true);
+		helper.write();
+		helper.send(r#"{"op":"restore"}"#);
+		assert_eq!(helper.reply()["at"], "restore");
+		copy(&helper.board, "a copy made meanwhile");
+		let reply: Restored = serde_json::from_value(helper.reply()).unwrap();
+		assert_eq!(restore_verdict(Some(&reply)), Restore::Conflict);
+		assert_eq!(helper.text(), "a copy made meanwhile");
+	}
+
+	#[test]
+	fn the_helper_puts_back_a_clipboard_it_still_holds() {
+		let mut helper = HelperFixture::start("restore", true);
+		helper.write();
+		helper.send(r#"{"op":"restore"}"#);
+		assert_eq!(helper.reply()["at"], "restore");
+		let reply: Restored = serde_json::from_value(helper.reply()).unwrap();
+		assert_eq!(restore_verdict(Some(&reply)), Restore::Back);
+		assert_eq!(helper.text(), "the user's text");
+	}
+
+	/// What a tool that saves the clipboard around its own paste keeps: every
+	/// item's readable types and their data.
+	type SavedClipboard = Vec<Vec<(Retained<NSString>, Retained<NSData>)>>;
+
+	fn save_clipboard(board: &NSPasteboard) -> SavedClipboard {
+		board
+			.pasteboardItems()
+			.unwrap()
+			.iter()
+			.map(|item| {
+				item
+					.types()
+					.iter()
+					.filter_map(|kind| item.dataForType(&kind).map(|data| (kind, data)))
+					.collect()
+			})
+			.collect()
+	}
+
+	/// Clears `board` and, `gap` later, writes `saved` to it, the two steps
+	/// every write takes.
+	fn put_back(board: &NSPasteboard, saved: &SavedClipboard, gap: Duration) {
+		let items: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> = saved
+			.iter()
+			.map(|entries| {
+				let item = NSPasteboardItem::new();
+				for (kind, data) in entries {
+					assert!(item.setData_forType(data, kind));
+				}
+				ProtocolObject::from_retained(item)
+			})
+			.collect();
+		board.clearContents();
+		thread::sleep(gap);
+		assert!(board.writeObjects(&NSArray::from_retained_slice(&items)));
+	}
+
+	#[test]
+	fn the_helper_puts_the_clipboard_back_over_its_text_another_app_puts_back() {
+		// With a gap longer than the helper's poll, a poll finds the put-back's
+		// change count before its items.
+		for gap in [Duration::ZERO, Duration::from_millis(200)] {
+			let mut helper = HelperFixture::start(&format!("dictation-{}", gap.as_millis()), false);
+			helper.write();
+			// A dictation tool saves the clipboard, the text included, and pastes
+			// its own.
+			let saved = save_clipboard(&helper.board);
+			copy(&helper.board, "dictated text");
+			helper.send(r#"{"op":"restore"}"#);
+			let reply: Restored = serde_json::from_value(helper.reply()).unwrap();
+			assert_eq!(restore_verdict(Some(&reply)), Restore::Conflict);
+			helper.send(r#"{"op":"reclaim","seconds":3}"#);
+			thread::sleep(Duration::from_millis(300));
+			// It puts back what it saved: the agent's text.
+			put_back(&helper.board, &saved, gap);
+			let reply: Restored = serde_json::from_value(helper.reply()).unwrap();
+			assert_eq!(restore_verdict(Some(&reply)), Restore::Back, "gap {gap:?}");
+			assert_eq!(helper.text(), "the user's text");
+		}
+	}
+
+	#[test]
+	fn the_helper_leaves_a_copy_without_its_text_alone_after_a_conflict() {
+		let mut helper = HelperFixture::start("later-copy", false);
+		helper.write();
+		copy(&helper.board, "dictated text");
+		helper.send(r#"{"op":"restore"}"#);
+		let reply: Restored = serde_json::from_value(helper.reply()).unwrap();
+		assert_eq!(restore_verdict(Some(&reply)), Restore::Conflict);
+		helper.send(r#"{"op":"reclaim","seconds":0.6}"#);
+		thread::sleep(Duration::from_millis(100));
+		// The user copies the pasted text from the field: same text, no marker.
+		copy(&helper.board, "agent text");
+		let reply: Restored = serde_json::from_value(helper.reply()).unwrap();
+		assert_eq!(restore_verdict(Some(&reply)), Restore::Conflict);
+		assert_eq!(helper.text(), "agent text");
+	}
+
+	/// Whether process `pid` exists, a zombie included.
+	fn exists(pid: u32) -> bool {
+		// SAFETY: signal 0 only checks that the process exists.
+		unsafe { libc::kill(libc::pid_t::try_from(pid).unwrap(), 0) == 0 }
+	}
+
+	#[test]
+	fn a_helper_whose_reader_cannot_start_is_reaped() {
+		let directory = HelperDirectory::create("omp-paste-test").unwrap();
+		let mut command = Command::new("/bin/sh");
+		command.args(["-c", "echo $$; exec sleep 60"]);
+		let pid = Cell::new(0);
+		let started = Worker::launch(command, directory, |output, _| {
+			let mut line = String::new();
+			BufReader::new(output).read_line(&mut line)?;
+			pid.set(line.trim().parse().unwrap());
+			Err(io::Error::other("no thread"))
+		});
+		assert!(started.err().unwrap().message.ends_with("no thread"));
+		assert!(!exists(pid.get()));
+	}
+
+	#[test]
+	fn a_helper_that_outlives_its_closed_input_is_killed_and_reaped() {
+		let directory = HelperDirectory::create("omp-paste-test").unwrap();
+		let mut command = Command::new("/bin/sleep");
+		command.arg("60");
+		let mut worker = Worker::launch(command, directory, spawn_reader).unwrap();
+		let pid = worker.child.id();
+		worker.finish(Duration::from_millis(100));
+		assert!(!exists(pid));
+		// The reader thread ends with the helper's output.
+		assert!(matches!(
+			worker.replies.recv_timeout(Duration::from_secs(5)),
+			Err(flume::RecvTimeoutError::Disconnected)
+		));
 	}
 }

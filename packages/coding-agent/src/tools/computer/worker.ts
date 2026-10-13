@@ -146,6 +146,8 @@ interface ComputerRunContext {
 	output: RunOutput;
 	confirmControl(reason: string): Promise<boolean>;
 	screenshots: ComputerScreenshot[];
+	/** Native pastes whose outcome the script has not received: still running, or cut off by an abort. */
+	unseenPastes: Set<Promise<DesktopPaste>>;
 }
 
 type RunContextAccessor = () => ComputerRunContext;
@@ -513,6 +515,53 @@ async function sendInput<T extends DesktopFocusReturn | DesktopPaste | null | vo
 		});
 		return report;
 	}
+}
+
+/** What a paste's outcome means for the model; `provided` needs no note. */
+/** What the model does after a paste another app's clipboard write overlapped. */
+const PASTE_CONFLICT_FIELD =
+	"the window may have pasted that app's text (the user's dictation, for example) instead of yours: read the field, and if it holds text you did not paste, replace it with yours; never put that text into the user's app";
+
+function pasteNote({ outcome }: DesktopPaste): string | undefined {
+	switch (outcome) {
+		case "noReadSeen":
+			return "⌘V was sent, but no app requested the text in time, and the user's clipboard was put back; read the field before pasting again";
+		case "clipboardConflict":
+			return `another app wrote the clipboard while the text was on it, so the clipboard was left as that app set it; ${PASTE_CONFLICT_FIELD}`;
+		case "reclaimed":
+			return `another app saved the clipboard while the text was on it and later put that copy back, so the user's clipboard was put back over it; ${PASTE_CONFLICT_FIELD}`;
+		case "restoreUnconfirmed":
+			return "putting the user's clipboard back could not be confirmed; tell the user their clipboard may hold the pasted text";
+	}
+	return undefined;
+}
+
+/**
+ * How long a run that ends waits for its unseen pastes: cancellation reaches a
+ * paste within one 20 ms native poll and its restore takes milliseconds, and
+ * the supervisor allows a timed-out run 750 ms to answer.
+ */
+const PASTE_SETTLE_MS = 500;
+
+/**
+ * Says what became of each paste whose outcome the script never received
+ * (an abort or timeout cut it off, or the script did not await it), once the
+ * run's cancellation or retirement has made native put the clipboard back.
+ */
+async function settleUnseenPastes(pastes: Set<Promise<DesktopPaste>>): Promise<string[]> {
+	if (pastes.size === 0) return [];
+	const late =
+		"a paste was still putting the user's clipboard back when the run ended; its helper finishes that unless another app wrote the clipboard";
+	const deadline = Bun.sleep(PASTE_SETTLE_MS).then(() => late);
+	const notes = await Promise.all(
+		[...pastes].map(paste =>
+			Promise.race([
+				paste.then(pasteNote, error => `the run ended before a paste finished: ${nativeError(error).message}`),
+				deadline,
+			]),
+		),
+	);
+	return notes.flatMap(note => (note ? [`paste: ${note}`] : []));
 }
 
 async function captureScreenshot(
@@ -1017,31 +1066,31 @@ class Win {
 			"Use type(text), which leaves the clipboard alone.",
 		);
 		const native = pointerOptions(options);
-		const { outcome, read } = await sendInput(
-			this.#session,
-			context,
-			"paste",
-			native.takeover,
-			fallback => this.#session.paste(this.id, text, { ...native, ...fallback }),
-			this.pid,
-		);
-		// The result names the outcome; the run output says what a degraded one means.
-		let note: string | undefined;
-		switch (outcome) {
-			case "noReadSeen":
-				note =
-					"⌘V was sent, but nothing read the text in time, and the user's clipboard was put back; read the field before pasting again";
-				break;
-			case "clipboardConflict":
-				note = `another app wrote the clipboard while the text was on it, so the clipboard was left as that app set it; ${read ? "the text was read" : "nothing read the text, so the window may have pasted that app's text instead"}: read the field before going on`;
-				break;
-			case "restoreUnconfirmed":
-				note =
-					"putting the user's clipboard back could not be confirmed; tell the user their clipboard may hold the pasted text";
-				break;
+		const calls: Promise<DesktopPaste>[] = [];
+		let pasted: DesktopPaste;
+		try {
+			pasted = await sendInput(
+				this.#session,
+				context,
+				"paste",
+				native.takeover,
+				fallback => {
+					const call = this.#session.paste(this.id, text, { ...native, ...fallback });
+					calls.push(call);
+					context.unseenPastes.add(call);
+					return call;
+				},
+				this.pid,
+			);
+		} catch (error) {
+			// An abort hides the native outcome, so the run reports it once it settles.
+			if (!(error instanceof ToolAbortError)) for (const call of calls) context.unseenPastes.delete(call);
+			throw error;
 		}
+		for (const call of calls) context.unseenPastes.delete(call);
+		const note = pasteNote(pasted);
 		if (note) context.output.push({ type: "text", text: `paste: ${note}` });
-		return { outcome, read };
+		return { outcome: pasted.outcome, read: pasted.read };
 	}
 
 	async holdKeys(keys: string[], options: HoldOptions): Promise<void> {
@@ -1285,8 +1334,10 @@ export class ComputerWorkerCore {
 			output,
 			screenshots,
 			confirmControl: reason => this.#confirmControl(active, reason),
+			unseenPastes: new Set(),
 		};
 		let returnValue: unknown;
+		let pasteNotes: string[] = [];
 		let failure: { error: unknown } | undefined;
 		let completed = false;
 		try {
@@ -1357,17 +1408,18 @@ export class ComputerWorkerCore {
 			if (failure === undefined && !signal.aborted) this.#session?.retire();
 			else if (!nativeCancelled) this.#session?.cancel();
 			runAc.abort(postmortem.markExpectedCleanupError(new ToolAbortError("Computer run ended")));
+			// The cancellation or retirement above ends every native paste, which
+			// puts the clipboard back first; the run reports what became of it.
+			pasteNotes = await settleUnseenPastes(runContext.unseenPastes);
 			if (this.#active?.id === message.id) this.#active = null;
 		}
 		if (failure !== undefined) {
-			this.#transport.send({
-				type: "result",
-				id: message.id,
-				ok: false,
-				error: this.#withScreenState(errorPayload(failure.error)),
-			});
+			const payload = this.#withScreenState(errorPayload(failure.error));
+			if (pasteNotes.length > 0) payload.message = [payload.message, ...pasteNotes].join("\n");
+			this.#transport.send({ type: "result", id: message.id, ok: false, error: payload });
 			return;
 		}
+		for (const text of pasteNotes) output.push({ type: "text", text });
 		if (completed) {
 			let capabilities: DesktopCapabilities;
 			try {

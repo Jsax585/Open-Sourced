@@ -70,13 +70,15 @@ interface ComputerObservationResult extends ComputerScreenshotResult {
 /** What `win.paste` did with its text and with the user's clipboard. */
 interface ComputerPasteResult {
 	/**
-	 * "provided": the window read the text, and the user's clipboard is back.
-	 * "noReadSeen": ⌘V was sent, but nothing read the text in time; the clipboard is back, so the window may not have pasted.
+	 * "provided": an app requested the text, and the user's clipboard is back; it may not be the window, so read the field before relying on the paste or repeating it.
+	 * "noReadSeen": ⌘V was sent, but no app requested the text in time; the clipboard is back, so the window may not have pasted.
 	 * "clipboardConflict": another app wrote the clipboard while the text was on it, so it keeps that app's copy and was not put back.
+	 * "reclaimed": another app saved the clipboard while the text was on it and later put that copy back (a dictation tool does, around its own paste); the user's clipboard is back over it.
 	 * "restoreUnconfirmed": putting the user's clipboard back was not confirmed.
+	 * After "clipboardConflict" or "reclaimed" the window may have pasted that app's text (the user's dictation, for example) instead of yours: read the field, and if it holds text you did not paste, replace it with yours; never put that text into the user's app.
 	 */
-	outcome: "provided" | "noReadSeen" | "clipboardConflict" | "restoreUnconfirmed";
-	/** Whether an application read the text. */
+	outcome: "provided" | "noReadSeen" | "clipboardConflict" | "reclaimed" | "restoreUnconfirmed";
+	/** Whether an app requested the text; not proof the window pasted it. */
 	read: boolean;
 }
 
