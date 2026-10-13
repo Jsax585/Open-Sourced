@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added a pure route next-action planner that tries sibling credentials before configured fallbacks, retains branch scope and stops after stream commitment or terminal outcomes ([#10141](https://github.com/can1357/oh-my-pi/pull/10141) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway route definitions compile ordered, branch-scoped fallback trees with canonical targets, immutable snapshots and ambiguous-cycle rejection ([#10140](https://github.com/can1357/oh-my-pi/pull/10140) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway turns reserve stored OAuth and API-key credentials by request and physical incarnation, with fenced releases and renewal during active inference ([#10139](https://github.com/can1357/oh-my-pi/pull/10139) by [@jroth1111](https://github.com/jroth1111)).
 - Credential recovery uses request-owned quota probes, and replacing an account or key invalidates its stale cooldown and affinity ([#10138](https://github.com/can1357/oh-my-pi/pull/10138) by [@jroth1111](https://github.com/jroth1111)).

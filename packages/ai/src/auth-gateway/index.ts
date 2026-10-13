@@ -2,6 +2,7 @@ export * from "./dispatch";
 export * from "./decision-trace";
 export * from "./http";
 export * from "./route-graph";
+export * from "./route-conductor";
 export * from "./session-state";
 export * from "./stdio";
 export * from "./server";
