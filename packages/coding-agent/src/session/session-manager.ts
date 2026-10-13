@@ -4098,24 +4098,69 @@ export class SessionManager {
 	 * Durably move the active branch past a discarded entry.
 	 *
 	 * The loader reconstructs the active branch from the last physical journal
-	 * entry, so changing the in-memory leaf alone is lost on reload. A
-	 * metadata-only branch marker is appended under the discarded entry's
-	 * parent, leaving the entry and its subtree off-branch, and fresh copies of
-	 * its `service_tier_change` children are appended under the marker so the
-	 * selected service tier carries over. Nothing is re-parented or removed,
-	 * so the change is only appends.
+	 * entry, so changing the in-memory leaf alone is lost on reload. Known
+	 * metadata children are chained onto the discarded entry's parent before the
+	 * entry is removed. If any child may carry content, the subtree is preserved
+	 * off-branch instead. Both paths append a metadata-only branch marker, and
+	 * a removal republishes the journal without the entry.
+	 *
+	 * When that republish fails, the removal is undone: the entry and its
+	 * children return to the journal as storage holds them, and the marker is
+	 * appended under the entry's parent instead, followed by fresh copies of the
+	 * `service_tier_change` children, so the discard survives a restart while
+	 * full rewrites keep failing and later turns keep appending.
 	 */
 	async discardEntryDurably(entryId: string): Promise<void> {
 		const entry = this.#index.get(entryId);
 		if (!entry) return;
-		const serviceTierChildren = this.#index
-			.childrenOf(entryId)
-			.filter((child): child is ServiceTierChangeEntry => child.type === "service_tier_change");
-		this.branchWithSummary(entry.parentId, "", {
-			kind: DISCARDED_ENTRY_BRANCH_MARKER,
-			discardedEntryId: entryId,
-		});
-		for (const child of serviceTierChildren) this.appendServiceTierChange(child.serviceTier);
+		const children = this.#index.childrenOf(entryId);
+		const markerDetails = { kind: DISCARDED_ENTRY_BRANCH_MARKER, discardedEntryId: entryId };
+		if (!children.every(child => child.type === "service_tier_change")) {
+			this.branchWithSummary(entry.parentId, "", markerDetails);
+			await this.flush();
+			return;
+		}
+		const original = this.#entries;
+		let leafId = entry.parentId;
+		for (const child of children) {
+			child.parentId = leafId;
+			leafId = child.id;
+		}
+		const removed = original.filter(candidate => candidate !== entry);
+		this.#entries = removed;
+		this.#index.rebuild(removed);
+		// The durable frontier described the previous array, so recording the
+		// marker republishes the journal without the entry.
+		const markerId = this.branchWithSummary(leafId, "", markerDetails);
+		// A deferring backend confirms the republish only once it drains.
+		await this.flush().catch(() => undefined);
+		const published =
+			!this.#persist || !this.#sessionFile || !this.#shouldHaveSessionFile() || this.#durable?.entries === removed;
+		const marker = this.#index.get(markerId);
+		if (published || this.#entries !== removed || marker?.type !== "branch_summary") {
+			await this.flush();
+			return;
+		}
+		const appendedSince = removed.slice(removed.indexOf(marker) + 1);
+		const leafAfter = this.#index.leafId();
+		for (const child of children) child.parentId = entryId;
+		this.#entries = original;
+		this.#index.rebuild(original);
+		// Neither the marker nor anything recorded after it reached storage, so
+		// their parents can still change before they are appended.
+		marker.parentId = entry.parentId;
+		marker.fromId = entry.parentId ?? "root";
+		original.push(marker);
+		this.#index.insert(marker);
+		for (const child of children as ServiceTierChangeEntry[]) this.appendServiceTierChange(child.serviceTier);
+		const tip = this.#index.leafId();
+		for (const later of appendedSince) {
+			if (later.parentId === markerId) later.parentId = tip;
+			original.push(later);
+			this.#index.insert(later);
+		}
+		this.#index.setLeaf(leafAfter === markerId ? tip : leafAfter);
+		this.#appendToSessionFile(marker);
 		await this.flush();
 	}
 

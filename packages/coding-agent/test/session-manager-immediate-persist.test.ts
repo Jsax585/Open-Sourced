@@ -389,7 +389,7 @@ describe("SessionManager JSONL software-crash durability", () => {
 		}
 	});
 
-	it("carries a discarded entry's service tier onto the marker branch when durably discarding it", async () => {
+	it("reparents metadata children when durably discarding an entry", async () => {
 		const cwd = makeTempDir("@pi-discard-metadata-cwd-");
 		const sessionDir = path.join(cwd, "sessions");
 		const manager = SessionManager.create(cwd, sessionDir);
@@ -398,23 +398,20 @@ describe("SessionManager JSONL software-crash durability", () => {
 
 		const priorId = manager.appendMessage(assistantMessage("prior turn"));
 		const discardedId = manager.appendMessage(assistantMessage(""));
-		manager.appendServiceTierChange({ openai: "priority" });
+		const serviceTierId = manager.appendServiceTierChange(null);
 		await manager.discardEntryDurably(discardedId);
 		await manager.close();
 
 		const reloaded = await SessionManager.open(sessionFile, sessionDir);
 		const branch = reloaded.getBranch();
 		expect(branch.some(entry => entry.id === discardedId)).toBe(false);
-		const markerIndex = branch.findIndex(entry => entry.type === "branch_summary");
-		expect(branch[markerIndex]).toMatchObject({
+		expect(branch).toContainEqual(expect.objectContaining({ id: serviceTierId, parentId: priorId }));
+		expect(branch.at(-1)).toMatchObject({
 			type: "branch_summary",
 			summary: "",
 			details: { kind: "discarded-entry-branch", discardedEntryId: discardedId },
-			parentId: priorId,
+			parentId: serviceTierId,
 		});
-		expect(branch.slice(markerIndex + 1)).toEqual([
-			expect.objectContaining({ type: "service_tier_change", serviceTier: { openai: "priority" } }),
-		]);
 		await reloaded.close();
 	});
 
