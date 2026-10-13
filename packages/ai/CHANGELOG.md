@@ -18,9 +18,11 @@
 
 - Authentication, policy, provider-wait, and unknown legacy blocks cannot be bypassed by quota probes; broker compatibility preserves their provenance ([#10138](https://github.com/can1357/oh-my-pi/pull/10138) by [@jroth1111](https://github.com/jroth1111)).
 - Active gateway SSE inference survives the HTTP idle limit; failures with reported usage or explicit no-retry intent are not transparently replayed ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
+- Active gateway SSE inference survives the HTTP idle limit, held retries retain rotated credentials, and cross-origin clients can read explicit retry directives; failures with reported usage or no-retry intent are not transparently replayed ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
+- Explicit Responses storage does not enable disconnect recovery on hosts without that capability ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
 - Responses storage opt-out stays off, continuation retries refresh only their owning account, and JSON schemas work across Responses and Chat transports ([#10134](https://github.com/can1357/oh-my-pi/pull/10134) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway errors retain authoritative provider statuses, structural cancellation, and Anthropic retry directives ([#10133](https://github.com/can1357/oh-my-pi/pull/10133) by [@jroth1111](https://github.com/jroth1111)).
-- Responses continuation IDs stay with the serving account and deployment instead of crossing account replacements ([#10134](https://github.com/can1357/oh-my-pi/pull/10134) by [@jroth1111](https://github.com/jroth1111)).
+- Responses continuation IDs stay with the serving account and deployment instead of crossing account replacements, with private ownership bindings retained for 30 days across gateway restarts and hot-cache eviction ([#10134](https://github.com/can1357/oh-my-pi/pull/10134) by [@jroth1111](https://github.com/jroth1111)).
 - Responses replies retain upstream IDs, and caller-owned continuation input is not mixed with internal deltas ([#10134](https://github.com/can1357/oh-my-pi/pull/10134) by [@jroth1111](https://github.com/jroth1111)).
 
 ## [18.9.2] - 2026-10-11
