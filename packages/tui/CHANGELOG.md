@@ -8,7 +8,7 @@
 
 ### Changed
 
-- `JobsSheet` now fits its terminal job list and live output tail to the window height, with safe tab/control-character handling ([#14575](https://github.com/can1357/oh-my-pi/issues/14575)).
+- `JobsSheet` now fits its terminal job list and live output tail to the window height, with safe tab/control-character handling ([#14575](https://github.com/can1357/oh-my-pi/issues/14575); [#15595](https://github.com/can1357/oh-my-pi/pull/15595) by [@wyyyz1937365497](https://github.com/wyyyz1937365497)).
 
 ### Removed
 

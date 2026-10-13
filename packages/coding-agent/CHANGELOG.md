@@ -9,7 +9,7 @@
 ### Changed
 
 - Tool approval prompts now replace the composer like `ask`, show one row per detail, and approve with `Ctrl+Enter` (or `Ctrl+Q`) instead of `Enter` ([#15548](https://github.com/can1357/oh-my-pi/pull/15548) by [@H4vC](https://github.com/H4vC))
-- `/jobs` now lets plain-terminal users select background jobs and follow their captured output live; `/jobs full` keeps the full command report ([#14575](https://github.com/can1357/oh-my-pi/issues/14575)).
+- `/jobs` now lets plain-terminal users select background jobs and follow their captured output live; `/jobs full` keeps the full command report ([#14575](https://github.com/can1357/oh-my-pi/issues/14575); [#15595](https://github.com/can1357/oh-my-pi/pull/15595) by [@wyyyz1937365497](https://github.com/wyyyz1937365497)).
 
 ### Fixed
 
