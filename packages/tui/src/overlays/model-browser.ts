@@ -506,13 +506,19 @@ function modelItemComparator(options: SortModelItemsOptions): (a: ModelBrowserIt
 	};
 
 	return (a, b) => {
+		// Grouping only means something while a metric order is active. With no
+		// `sort` the flag would put provider ahead of role/MRU and drop the later
+		// provider tie-break, silently reordering the default list while the UI
+		// still reads `sort: default`. The host keeps the preference for the next
+		// metric; only the comparison is gated here.
+		const groupedOrder = grouped && sort !== undefined;
 		// Grouped ordering pins each provider's block and ranks the metric
 		// inside it. The metric still leads within a block and the role/MRU
 		// chain below stays the tie-breaker, so both orders read the same way;
 		// only the provider comparison moves ahead of them. Without this a
 		// recent or role-assigned model would float above another provider and
 		// split the block the mode promises to keep whole.
-		if (grouped) {
+		if (groupedOrder) {
 			const providerCmp = a.provider.localeCompare(b.provider);
 			if (providerCmp !== 0) return providerCmp;
 			const metricCmp = byMetric(a, b);
@@ -534,7 +540,7 @@ function modelItemComparator(options: SortModelItemsOptions): (a: ModelBrowserIt
 		if (aMru !== bMru) return aMru - bMru;
 
 		// By provider, then recency within provider
-		if (!grouped) {
+		if (!groupedOrder) {
 			const providerCmp = a.provider.localeCompare(b.provider);
 			if (providerCmp !== 0) return providerCmp;
 		}

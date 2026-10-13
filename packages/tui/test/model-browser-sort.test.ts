@@ -186,6 +186,31 @@ describe("sortModelItems metric order", () => {
 		expect(items.map(item => item.id)).toEqual(["fast", "slow"]);
 	});
 
+	it("ignores the grouping flag when no metric order is active", () => {
+		// `modelSortGrouped: true` can outlive a `modelSort: default` — the flag is
+		// the preference for the *next* metric. It must not reorder the default
+		// list, which the footer still advertises as `sort: default`.
+		const build = () => {
+			const items = buildBrowserItems([
+				providerModel("alpha", "low", { int: 20 }),
+				providerModel("alpha", "high", { int: 95 }),
+				providerModel("beta", "mid", { int: 60 }),
+				providerModel("beta", "top", { int: 80 }),
+			]);
+			return items;
+		};
+		const shape = (items: ReturnType<typeof build>) => items.map(item => `${item.provider}/${item.id}`);
+
+		const plain = build();
+		sortModelItems(plain, { mruOrder: ["beta/mid"] });
+		const groupedFlag = build();
+		sortModelItems(groupedFlag, { mruOrder: ["beta/mid"], grouped: true });
+
+		expect(shape(groupedFlag)).toEqual(shape(plain));
+		// beta/mid still floats above alpha: that is the default order, unchanged.
+		expect(shape(groupedFlag)[0]).toBe("beta/mid");
+	});
+
 	it("leaves the default order untouched when no metric is selected", () => {
 		const scores = { a: { int: 1 }, b: { int: 99 } };
 		expect(order(scores)).toEqual(["a", "b"]);

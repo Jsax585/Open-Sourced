@@ -3492,8 +3492,12 @@ export class ModelHubComponent implements Component {
 			);
 		}
 		const query = this.#browser.query.trim();
+		// A cross-provider metric order interleaves providers, so one head per
+		// run would repeat Alpha, Beta, Alpha and break the league table the
+		// footer advertises. Only the default and per-provider orders group.
+		const crossProviderOrder = this.#sort !== undefined && !this.#sortGrouped;
 		const view = this.#browser.pickerOrder({
-			providers: entry.kind === "all" && query.length === 0,
+			providers: entry.kind === "all" && query.length === 0 && !crossProviderOrder,
 			rest: entry.kind === "provider" ? entry.label : query ? "Matches" : "All models",
 		});
 		const refreshing =

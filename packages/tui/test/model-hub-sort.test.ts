@@ -176,6 +176,32 @@ function pickerActions(hub: ModelHubComponent): PickerAction[] {
 	return (described.p?.actions ?? []) as PickerAction[];
 }
 
+/**
+ * The picker's `order` prop, where the Recent and provider heads appear. The
+ * ANSI divider and these heads come from the same `split`, so the order is the
+ * contract: a `recent` head means the divider was drawn too.
+ */
+function pickerOrder(hub: ModelHubComponent): unknown[] {
+	const cx: DescribeContext = {
+		cols: 140,
+		reduceMotion: false,
+		dark: true,
+		supports: () => true,
+		feature: () => true,
+	};
+	return (hub.describe(cx).p as { order?: unknown[] } | undefined)?.order ?? [];
+}
+
+const hasRecentGroup = (hub: ModelHubComponent) =>
+	pickerOrder(hub).some(entry => typeof entry !== "string" && (entry as { group: string }).group === "recent");
+
+/** Selector strings, with the Recent head marked and any other head generic. */
+const shape = (hub: ModelHubComponent): string[] =>
+	pickerOrder(hub).map(entry => {
+		if (typeof entry === "string") return entry;
+		return (entry as { group: string }).group === "recent" ? "«recent»" : "«group»";
+	});
+
 /** The hub opens on the `all` scope with the list focused after →. */
 function focusRows(key: (data: string) => void): void {
 	key("\x1b[C"); // → list focus
@@ -385,6 +411,27 @@ describe("model hub metric order within provider blocks", () => {
 		expect(rowOrder(rows())).toEqual(["alpha/lo", "alpha/hi", "beta/mid", "beta/top"]);
 	});
 
+	test("drops the provider heads for a cross-provider metric order", () => {
+		// Ungrouped, the rows interleave providers. One head per run would emit
+		// Alpha, Beta, Alpha and break the league table the footer advertises.
+		const groupIds = (hub: ModelHubComponent) =>
+			pickerOrder(hub)
+				.map(entry => (typeof entry === "string" ? entry : String((entry as { group: string }).group)))
+				.join(" ");
+
+		const cross = createHub({ modelSort: "int:desc" }, groupedModels);
+		// No heads at all: the rows interleave, so a head per run would repeat
+		// alpha, beta, alpha and fracture the league table.
+		expect(groupIds(cross.hub)).toBe("alpha/hi beta/top beta/mid alpha/lo");
+
+		// Grouped and default both keep the provider blocks whole, so heads stay.
+		const grouped = createHub({ modelSort: "int:desc", modelSortGrouped: true }, groupedModels);
+		expect(groupIds(grouped.hub)).toContain("alpha");
+
+		const plain = createHub({}, groupedModels);
+		expect(groupIds(plain.hub)).toContain("alpha");
+	});
+
 	test("declares the grouping action for the native picker once sorting", () => {
 		const { hub, key } = createHub({ modelSort: "int:desc" });
 		const action = () => pickerActions(hub).find(entry => entry.id === "sort-grouping");
@@ -403,39 +450,16 @@ describe("model hub metric order within provider blocks", () => {
 });
 
 describe("the Recent divider under a metric order", () => {
-	/**
-	 * The picker's `order` prop, where the Recent group head appears. The ANSI
-	 * divider and this head come from the same `split`, so the group is the
-	 * contract: present means the divider was drawn too.
-	 */
-	const pickerOrder = (hub: ModelHubComponent): unknown[] => {
-		const cx: DescribeContext = {
-			cols: 140,
-			reduceMotion: false,
-			dark: true,
-			supports: () => true,
-			feature: () => true,
-		};
-		return (hub.describe(cx).p as { order?: unknown[] } | undefined)?.order ?? [];
-	};
-	const hasRecentGroup = (hub: ModelHubComponent) =>
-		pickerOrder(hub).some(entry => typeof entry !== "string" && (entry as { group: string }).group === "recent");
-	/** Selector strings, with the Recent head marked and any other head generic. */
-	const shape = (hub: ModelHubComponent): string[] =>
-		pickerOrder(hub).map(entry => {
-			if (typeof entry === "string") return entry;
-			return (entry as { group: string }).group === "recent" ? "«recent»" : "«group»";
-		});
-
 	test("is dropped when a metric order scatters the recent rows", () => {
 		// top(90) is recent, dim(30) is recent, and mid(60) sorts between them.
 		// A divider after `top` would split the block and strand `dim` below it,
 		// unlabelled in the picker.
 		const { hub } = createHub({ modelSort: "int:desc", mruOrder: ["demo/top", "demo/dim"] });
 
-		// No Recent head at all: the four rows sit under one provider head rather
-		// than three being mislabelled `Recent` and one stranded below it.
-		expect(shape(hub)).toEqual(["«group»", "demo/top", "demo/mid", "demo/dim", "demo/unscored"]);
+		// A cross-provider metric order also drops the provider heads, so these
+		// four rows carry no head at all rather than a `Recent` head that would
+		// mislabel `dim`.
+		expect(shape(hub)).toEqual(["demo/top", "demo/mid", "demo/dim", "demo/unscored"]);
 		expect(hasRecentGroup(hub)).toBe(false);
 	});
 
