@@ -1,5 +1,6 @@
 pub(crate) mod menus;
 mod popup;
+mod rich_text;
 
 use std::{
 	collections::{HashSet, VecDeque},
@@ -773,6 +774,10 @@ impl AxBackend for MacAx {
 		mac_handle(h).is_ok_and(|element| {
 			copy_attribute_result(element, "AXRole").err() == Some(AXError::InvalidUIElement)
 		})
+	}
+
+	fn markdown(&mut self, h: &AxHandle) -> CoreResult<String> {
+		rich_text::markdown(mac_handle(h)?)
 	}
 }
 

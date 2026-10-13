@@ -5,6 +5,7 @@
 ### Added
 
 - Added `AxNode.refound` and an `AxActed` result for `axPerform`, `axSetValue`, `axFocus` and `axClick`: on macOS, a ref whose element the app destroyed and replaced with one identical element now reaches that element and says so ([#15574](https://github.com/can1357/oh-my-pi/pull/15574) by [@will-bogusz](https://github.com/will-bogusz))
+- Added `axMarkdown(ref)` on macOS: a text element's text as Markdown, keeping the bold, italic, struck-out text, links and lists that `AXValue` drops ([#15608](https://github.com/can1357/oh-my-pi/pull/15608) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
 
