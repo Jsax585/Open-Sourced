@@ -16,6 +16,8 @@ import {
 	type SessionStorageBackend,
 	type SessionStorageIndexEntry,
 } from "@oh-my-pi/pi-coding-agent/session/indexed-session-storage";
+import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import { parseSessionContent } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { SessionWriteConflictError } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 
@@ -30,6 +32,9 @@ class FakeBackend implements SessionStorageBackend {
 	failAppends = 0;
 	/** Reject the next N whole-file publishes with a transient failure. */
 	failWrites = 0;
+	/** When set, the next whole-journal publish waits for it before landing; `writeHeld` resolves once one waits. */
+	holdNextWrite: PromiseWithResolvers<void> | undefined;
+	readonly writeHeld = Promise.withResolvers<void>();
 	#mtime = 1;
 
 	async init(): Promise<void> {}
@@ -74,6 +79,12 @@ class FakeBackend implements SessionStorageBackend {
 		if (this.failWrites > 0) {
 			this.failWrites -= 1;
 			throw new Error("transient backend write failure");
+		}
+		const hold = this.holdNextWrite;
+		if (hold) {
+			this.holdNextWrite = undefined;
+			this.writeHeld.resolve();
+			await hold.promise;
 		}
 		const current = this.files.get(path) ?? null;
 		const actualSize = current === null ? null : Buffer.byteLength(current, "utf8");
@@ -142,6 +153,13 @@ async function makeManager(): Promise<{
 	await manager.ensureOnDisk();
 	await storage.drain();
 	return { backend, storage, manager };
+}
+
+/** Ids of records in `content` whose `parentId` names a record the journal does not hold. */
+function orphanedRecords(content: string): string[] {
+	const records = parseSessionContent(content).entries.slice(1) as SessionEntry[];
+	const ids = new Set(records.map(record => record.id));
+	return records.filter(record => record.parentId !== null && !ids.has(record.parentId)).map(record => record.id);
 }
 
 describe("SessionManager + indexed backend durability", () => {
@@ -348,4 +366,60 @@ describe("SessionManager + indexed backend durability", () => {
 		expect(body).toContain("first turn");
 		expect(body).toContain("second turn");
 	});
+
+	// A maintenance rewrite holds the fence while its publish is on the wire, so
+	// an append made then is persisted only by a synchronous full rewrite. When
+	// that rewrite fails, its successor (parented to it) must not reach the
+	// backend as a bare append: a reload would find a record whose parent is gone.
+	it.each([
+		{ failure: "the backend rejects its deferred publish", rewritesContent: false, failWrites: 1 },
+		{
+			// Tool-output pruning changes a durable turn's length in place, so the held
+			// publish moves the optimistic index past the last confirmed size.
+			failure: "its size check meets the held rewrite's optimistic index",
+			rewritesContent: true,
+			failWrites: 0,
+		},
+	])(
+		"never lands a successor of a fenced append whose rewrite failed when $failure",
+		async ({ rewritesContent, failWrites }) => {
+			const { backend, storage, manager } = await makeManager();
+			const sessionFile = manager.getSessionFile();
+			if (!sessionFile) throw new Error("expected a session file");
+			const errors: Error[] = [];
+			manager.onPersistenceError(error => errors.push(error));
+			manager.appendMessage(assistantMessage("seed turn"));
+			manager.appendMessage({ role: "user", content: "before rewrite", timestamp: Date.now() });
+			await manager.flush();
+			await storage.drain();
+			if (rewritesContent) {
+				const durable = manager
+					.getEntries()
+					.find(entry => entry.type === "message" && entry.message.role === "user");
+				if (!durable || durable.type !== "message" || durable.message.role !== "user") {
+					throw new Error("expected durable user entry");
+				}
+				durable.message.content = "pruned before rewrite";
+			}
+
+			const hold = Promise.withResolvers<void>();
+			backend.holdNextWrite = hold;
+			const rewritePublished = manager.rewriteEntries();
+			await backend.writeHeld.promise;
+			backend.failWrites = failWrites;
+			manager.appendMessage({ role: "user", content: "fenced append", timestamp: Date.now() });
+			manager.appendMessage({ role: "user", content: "after fenced append", timestamp: Date.now() });
+			hold.resolve();
+			await rewritePublished.catch(() => {});
+			await manager.flush().catch(() => {});
+			await storage.drain().catch(() => {});
+			manager.appendMessage({ role: "user", content: "next turn", timestamp: Date.now() });
+			await manager.flush().catch(() => {});
+			await storage.drain().catch(() => {});
+			await manager.close().catch(() => {});
+
+			expect(orphanedRecords(backend.files.get(sessionFile) ?? "")).toEqual([]);
+			expect(errors.length).toBeGreaterThan(0);
+		},
+	);
 });
