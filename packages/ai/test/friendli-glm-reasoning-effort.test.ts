@@ -148,6 +148,36 @@ describe("Friendli reasoning wire contract", () => {
 		expect(body.reasoning_effort).toBe("high");
 	});
 
+	it("preserves encoded Off toggles with baseline sibling kwargs through both streaming APIs", async () => {
+		for (const simple of [true, false]) {
+			for (const kwargs of [
+				{ template_option: "keep" },
+				{ template_option: "keep", enable_thinking: true },
+				null,
+				"invalid",
+				[],
+			]) {
+				const glm = model({
+					compat: { extraBody: { gateway: "route-a", chat_template_kwargs: kwargs } },
+				});
+				const off = await capture(glm, Effort.High, true, simple);
+				expect(off.gateway).toBe("route-a");
+				expect(off.chat_template_kwargs).toEqual({
+					...(kwargs !== null && typeof kwargs === "object" && !Array.isArray(kwargs) ? kwargs : {}),
+					enable_thinking: false,
+				});
+				expect(off.reasoning_effort).toBeUndefined();
+				const on = await capture(glm, Effort.High, false, simple);
+				expect(on.gateway).toBe("route-a");
+				expect(on.chat_template_kwargs).toEqual({
+					...(kwargs !== null && typeof kwargs === "object" && !Array.isArray(kwargs) ? kwargs : {}),
+					enable_thinking: true,
+				});
+				expect(on.reasoning_effort).toBe("high");
+			}
+		}
+	});
+
 	it("honors flat effort omission unless the authored enabled view overrides it", async () => {
 		const omitted = model({ compat: { omitReasoningEffort: true } });
 		expect((await capture(omitted, Effort.High)).reasoning_effort).toBeUndefined();

@@ -17,6 +17,7 @@
  */
 import { Effort, THINKING_EFFORTS } from "../effort";
 import { hostMatchesUrl, modelMatchesHost } from "../hosts";
+import { withoutUnverifiedThinking } from "../model-thinking";
 import type {
 	Api,
 	CompatOf,
@@ -31,6 +32,7 @@ import type {
 	ResolvedOpenAISharedCompat,
 	ThinkingConfig,
 } from "../types";
+import { isOfficialCodexApiUrl } from "../wire/codex";
 import {
 	isAnthropicSigningProxyUrl,
 	isAzureAnthropicRoute,
@@ -831,7 +833,11 @@ function resolveOpenAIResponsesPolicy(
 		supportsObfuscationOptOut: isOpenAIUrl || provider === "openai",
 		storeResponses: false,
 		connectionBoundNativeHistory: false,
-		officialEndpoint: isOfficialOpenAIEndpoint(provider, baseUrl),
+		// The Codex backend is official at the URL its requests default to when `baseUrl` is unset, and at paths
+		// under it such as `/codex` and `/codex/responses`, which its requests resolve to the same endpoint.
+		officialEndpoint:
+			isOfficialOpenAIEndpoint(provider, baseUrl) ||
+			(api === "openai-codex-responses" && isOfficialCodexApiUrl(baseUrl)),
 		harmonyLeakMitigation: false,
 		rejectRootObjectUnion: false,
 		retryWithoutStrictOnGrammarError: false,
@@ -1015,6 +1021,10 @@ function resolveGooglePolicy(
 		claudeThinkingBetaHeader: false,
 		antigravityClaudeToolMode: false,
 		stripImageInput: false,
+		// Unset means "no image contract": images go out as sent. Keys exist so
+		// a KDL rule or a user `compat` block can declare one.
+		maxImageDimension: undefined,
+		maxImagePayloadBytes: undefined,
 	};
 	applyWireAxes(compat, axes.wire, spec.api);
 	applyCompatOverrides(compat, spec.compat);
@@ -1124,6 +1134,7 @@ interface RuleThinking {
 	supportsDisplay?: boolean;
 	prefixBinding?: boolean;
 	upgradeNeutral?: boolean;
+	unverified?: boolean;
 }
 
 function readRuleThinking(axes: ResolvedAxes): RuleThinking {
@@ -1144,6 +1155,7 @@ function readRuleThinking(axes: ResolvedAxes): RuleThinking {
 	if (typeof raw.supportsDisplay === "boolean") out.supportsDisplay = raw.supportsDisplay;
 	if (typeof raw.prefixBinding === "boolean") out.prefixBinding = raw.prefixBinding;
 	if (typeof raw.upgradeNeutral === "boolean") out.upgradeNeutral = raw.upgradeNeutral;
+	if (typeof raw.unverified === "boolean") out.unverified = raw.unverified;
 	return out;
 }
 
@@ -1191,8 +1203,16 @@ function resolveThinkingPolicy<TApi extends Api>(
 	// not re-expand it into an unadvertised ladder. Absent metadata is
 	// repaired only where KDL opts in with `thinking-upgrade-neutral`
 	// alongside a reviewed `thinking-efforts` ladder (the cascade upgrade for
-	// stale source capability data); otherwise the neutral default holds.
-	if (!spec.reasoning && (explicitThinking !== undefined || rule.upgradeNeutral !== true)) return undefined;
+	// stale source capability data). On deployments whose discovery reports no
+	// capabilities (`thinking-unverified`), an unclassified neutral spec — nothing
+	// says whether it reasons — gets an unverified ladder the user may opt into.
+	const unverified = !compatReasoning(spec, axes);
+	if (
+		unverified &&
+		(explicitThinking !== undefined || facts.identity.class !== "unknown" || rule.unverified !== true)
+	) {
+		return undefined;
+	}
 	if (
 		spec.provider === "cline-pass" &&
 		compat !== undefined &&
@@ -1216,9 +1236,14 @@ function resolveThinkingPolicy<TApi extends Api>(
 	if (config.efforts.length === 0) {
 		throw new Error(`Model ${spec.provider}/${spec.id} resolved to an empty thinking range`);
 	}
-	if (rule.defaultLevel !== undefined) config.defaultLevel = rule.defaultLevel;
 	const effortMap = mergeEffortMap(spec, rule.effortMap, compat, config.efforts);
 	if (effortMap !== undefined) config.effortMap = effortMap;
+	if (unverified) {
+		// Off-by-default opt-in: no default level, mandatory effort, or wire off-switch.
+		config.unverified = true;
+		return config;
+	}
+	if (rule.defaultLevel !== undefined) config.defaultLevel = rule.defaultLevel;
 	if (rule.effortBudgets !== undefined) config.effortBudgets = rule.effortBudgets;
 	const supportsDisplay = rule.supportsDisplay ?? defaultSupportsDisplay(spec, facts);
 	if (supportsDisplay) config.supportsDisplay = true;
@@ -1351,7 +1376,8 @@ export function resolveModelPolicy<TApi extends Api>(
 	spec: ModelSpec<TApi>,
 	route?: ResolveRoute,
 ): ResolvedModelPolicy<TApi>;
-export function resolveModelPolicy(spec: ModelSpec<Api>, route?: ResolveRoute): ResolvedModelPolicy<Api> {
+export function resolveModelPolicy(input: ModelSpec<Api>, route?: ResolveRoute): ResolvedModelPolicy<Api> {
+	const spec = withoutUnverifiedThinking(input);
 	const identity = resolveIdentity(spec);
 	const facts = new IdentityFacts(identity);
 	const target = buildResolveTarget(spec, identity);
