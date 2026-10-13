@@ -29,6 +29,7 @@ import type {
 	DesktopCapture,
 	DesktopDisplay,
 	DesktopFocusReturn,
+	DesktopPaste,
 	DesktopPoint,
 	DesktopScreenState,
 	DesktopWindow,
@@ -220,6 +221,9 @@ class FakeNativeSession implements NativeDesktopSession {
 	): Promise<void> {}
 	async typeText(_target: string, _text: string, _opts?: PointerOptions | null): Promise<void> {}
 	async keyChord(_target: string, _keys: string[], _opts?: PointerOptions | null): Promise<void> {}
+	async paste(_target: string, _text: string, _opts?: PointerOptions | null): Promise<DesktopPaste> {
+		return { outcome: "provided", read: true };
+	}
 	async raiseWindow(_windowId: string): Promise<void> {}
 	async axSnapshot(_target: string, _opts?: AxSnapshotOptions | null): Promise<{ text: string }> {
 		return { text: "- button [ref=e1]" };
@@ -2794,6 +2798,58 @@ describe("computer background fallback", () => {
 		expect(native.sent).toEqual([{}]);
 	});
 
+	describe("paste", () => {
+		const pasteTarget = 'return await (await desktop.window("42")).paste("long text")';
+
+		/** Answers every paste with `result`, refusing background ones first when `refuse` is set. */
+		class PasteSession extends RefusingSession {
+			readonly pastes: Array<PointerOptions | null | undefined> = [];
+			constructor(
+				readonly result: DesktopPaste,
+				readonly refuse = false,
+			) {
+				super();
+			}
+			override async paste(_target: string, _text: string, opts?: PointerOptions | null): Promise<DesktopPaste> {
+				this.pastes.push(opts);
+				if (this.refuse && opts?.takeover !== true) throw new Error(this.refusal);
+				return this.result;
+			}
+		}
+
+		it("returns the outcome and says in the run output what a degraded one means", async () => {
+			const cases: Array<[DesktopPaste, string | undefined]> = [
+				[{ outcome: "provided", read: true }, undefined],
+				[{ outcome: "noReadSeen", read: false }, "nothing read the text in time"],
+				[{ outcome: "clipboardConflict", read: false }, "the window may have pasted that app's text instead"],
+				[{ outcome: "clipboardConflict", read: true }, "left as that app set it; the text was read"],
+				[{ outcome: "restoreUnconfirmed", read: true }, "tell the user their clipboard may hold the pasted text"],
+			];
+			for (const [pasted, note] of cases) {
+				const result = await run(new PasteSession(pasted), pasteTarget, "takeover");
+				const label = `${pasted.outcome} read=${pasted.read}`;
+				if (!result.ok) throw new Error(`${label}: ${result.error.message}`);
+				expect(result.payload.returnValue, label).toEqual(pasted);
+				const output = texts(result);
+				if (note === undefined) expect(output, label).toEqual([]);
+				else expect(output.join("\n"), label).toContain(note);
+			}
+		});
+
+		it("reruns a refused background paste in takeover and reports where focus went", async () => {
+			const native = new PasteSession(
+				{ outcome: "provided", read: true, focus: { handedBack: true, previousPid: 300, frontPid: 300 } },
+				true,
+			);
+			const result = await run(native, pasteTarget, "takeover");
+			expect(native.pastes).toEqual([{}, { takeover: true, returnFocus: true }]);
+			expect(texts(result)).toEqual([
+				`paste ran in takeover because ${reason}; the input was delivered, and focus returned to Notes`,
+			]);
+			if (result.ok) expect(result.payload.returnValue).toEqual({ outcome: "provided", read: true });
+		});
+	});
+
 	it("passes an explicit takeover through under takeover; false never falls back", async () => {
 		const forced = new RefusingSession();
 		const result = await run(
@@ -2829,6 +2885,10 @@ describe("computer background fallback", () => {
 			}
 			override async typeText(target: string, _text: string, opts?: PointerOptions | null): Promise<void> {
 				this.calls.push(`type:${target}:${opts?.takeover ?? "-"}`);
+			}
+			override async paste(target: string, _text: string, opts?: PointerOptions | null): Promise<DesktopPaste> {
+				this.calls.push(`paste:${target}:${opts?.takeover ?? "-"}`);
+				return { outcome: "provided", read: true };
 			}
 			override async raiseWindow(windowId: string): Promise<void> {
 				this.calls.push(`raise:${windowId}`);
@@ -2884,6 +2944,11 @@ describe("computer background fallback", () => {
 				code: 'await (await desktop.display("active")).click(1, 2)',
 				call: "click:display:active:-",
 				route: "window handle",
+			},
+			{
+				code: 'await (await desktop.window("42")).paste("x")',
+				call: "paste:42:-",
+				route: "Use type(text), which leaves the clipboard alone",
 			},
 		];
 

@@ -64,6 +64,7 @@ enum Response {
 	/// An input call's takeover focus report; see
 	/// [`control::take_focus_return`].
 	Input(Option<DesktopFocusReturn>),
+	Paste(DesktopPaste),
 	Nodes(Vec<AxNode>),
 	Node(Option<AxNode>),
 	Attributes(Vec<(String, String)>),
@@ -185,6 +186,12 @@ enum Request {
 		takeover: Takeover,
 		reply:    Reply,
 	},
+	Paste {
+		target:   Target,
+		text:     String,
+		takeover: Takeover,
+		reply:    Reply,
+	},
 	RaiseWindow {
 		id:    String,
 		reply: Reply,
@@ -271,6 +278,7 @@ impl Request {
 			| Self::Scroll { reply, .. }
 			| Self::TypeText { reply, .. }
 			| Self::KeyChord { reply, .. }
+			| Self::Paste { reply, .. }
 			| Self::RaiseWindow { reply, .. }
 			| Self::AxSnapshot { reply, .. }
 			| Self::AxQuery { reply, .. }
@@ -298,6 +306,7 @@ impl Request {
 				| Self::Scroll { .. }
 				| Self::TypeText { .. }
 				| Self::KeyChord { .. }
+				| Self::Paste { .. }
 				| Self::RaiseWindow { .. }
 				| Self::AxPerform { .. }
 				| Self::AxSetValue { .. }
@@ -334,6 +343,7 @@ impl Request {
 			| Self::Scroll { target, .. }
 			| Self::TypeText { target, .. }
 			| Self::KeyChord { target, .. }
+			| Self::Paste { target, .. }
 			| Self::AxSnapshot { target, .. }
 			| Self::AxQuery { target, .. }
 			| Self::AxElementAt { target, .. } => Some(target),
@@ -971,6 +981,14 @@ impl Worker {
 					.backend()?
 					.key_chord(target, keys, delivery_mode(*takeover, token), token)?;
 				Ok(Response::Input(control::take_focus_return()))
+			},
+			Request::Paste { target, text, takeover, .. } => {
+				let mut pasted =
+					self
+						.backend()?
+						.paste(target, text, delivery_mode(*takeover, token), token)?;
+				pasted.focus = control::take_focus_return();
+				Ok(Response::Paste(pasted))
 			},
 			Request::RaiseWindow { id, .. } => {
 				self.backend()?.raise_window(id, token)?;
@@ -1709,6 +1727,30 @@ impl DesktopSession {
 			keys,
 			takeover,
 			reply,
+		}))
+	}
+
+	/// Pastes `text` into a window with one ⌘V through the clipboard, then
+	/// puts the user's clipboard back unless another app wrote it meanwhile.
+	#[napi]
+	pub fn paste(
+		&self,
+		target: String,
+		text: String,
+		opts: Option<PointerOptions>,
+	) -> Result<task::Promise<DesktopPaste>> {
+		let takeover = ParsedPointerOptions::parse(opts)
+			.map_err(napi::Error::from)?
+			.takeover;
+		let c = Arc::clone(&self.core);
+		let token = c.cancellation.token();
+		let target = Target::parse(&target);
+		Ok(task::blocking("desktop.paste", (), move |_| {
+			match c.call(token, |reply| Request::Paste { target, text, takeover, reply })? {
+				Response::Paste(value) => Ok(value),
+				_ => Err(DesktopError::internal("unexpected desktop worker response")),
+			}
+			.map_err(Into::into)
 		}))
 	}
 

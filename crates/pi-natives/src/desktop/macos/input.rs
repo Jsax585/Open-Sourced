@@ -174,10 +174,6 @@ impl MacInput {
 		}
 	}
 
-	#[allow(
-		clippy::needless_pass_by_ref_mut,
-		reason = "`&mut self` exclusivity backs the `Send` safety argument for the CF event source"
-	)]
 	pub(super) fn key_chord(
 		&mut self,
 		target: &Target,
@@ -185,8 +181,29 @@ impl MacInput {
 		mode: DeliveryMode,
 		capture: &MacCapture,
 	) -> CoreResult<()> {
+		self.key_chord_after(target, keys, mode, capture, &mut || Ok(()))
+	}
+
+	/// [`Self::key_chord`], running `ready` once the keys are known to reach
+	/// the target and right before the first one goes out; its error sends
+	/// nothing.
+	#[allow(
+		clippy::needless_pass_by_ref_mut,
+		reason = "`&mut self` exclusivity backs the `Send` safety argument for the CF event source"
+	)]
+	pub(super) fn key_chord_after(
+		&mut self,
+		target: &Target,
+		keys: &[KeyName],
+		mode: DeliveryMode,
+		capture: &MacCapture,
+		ready: &mut dyn FnMut() -> CoreResult<()>,
+	) -> CoreResult<()> {
 		match target {
-			Target::Desktop | Target::Display(_) => global_chord(&self.source, keys),
+			Target::Desktop | Target::Display(_) => {
+				ready()?;
+				global_chord(&self.source, keys)
+			},
 			Target::Window(id) => {
 				let window = capture.window(id)?;
 				let (pid, wid) = window_identity(&window)?;
@@ -201,6 +218,7 @@ impl MacInput {
 							));
 						}
 						with_background_keyboard(&self.source, pid, wid, &window, |to, guard| {
+							ready()?;
 							background_chord(&self.source, to, keys, guard)
 						})?;
 						confirm_shortcut_answered(&window, keys, || {
@@ -211,6 +229,7 @@ impl MacInput {
 					DeliveryMode::Foreground | DeliveryMode::ForegroundReturnFocus => {
 						skylight::with_foreground(pid, wid, returns_focus(mode), |activated| {
 							control::wait(first_key_settle(activated))?;
+							ready()?;
 							key_chord(&self.source, keys, |event| post_takeover_key(pid, wid, event))
 						})
 					},

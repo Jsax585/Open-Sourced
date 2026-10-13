@@ -56,6 +56,7 @@
 		"scroll",
 		"type",
 		"press",
+		"paste",
 		"raise",
 		"ax",
 		"holdKeys",

@@ -2,6 +2,7 @@ mod ax;
 mod capture;
 mod date;
 mod input;
+mod paste;
 mod process;
 mod session;
 mod skylight;
@@ -21,8 +22,8 @@ use super::{
 	frame::FrameGeometry,
 	keys::KeyName,
 	types::{
-		CaptureCaps, DesktopCapabilities, DesktopDisplay, DesktopWindow, DisplaySelector,
-		ScreenState, Target,
+		CaptureCaps, DesktopCapabilities, DesktopDisplay, DesktopPaste, DesktopWindow,
+		DisplaySelector, ScreenState, Target,
 	},
 };
 
@@ -169,6 +170,34 @@ impl Backend for MacosBackend {
 		token.check()?;
 		Self::require_input_permission()?;
 		self.input.key_chord(target, keys, mode, &self.capture)
+	}
+
+	fn paste(
+		&mut self,
+		target: &Target,
+		text: &str,
+		mode: DeliveryMode,
+		token: &OperationToken,
+	) -> CoreResult<DesktopPaste> {
+		token.check()?;
+		Self::require_input_permission()?;
+		if !matches!(target, Target::Window(_)) {
+			return Err(DesktopError::invalid_target(
+				"paste needs a window target, whose application reads the clipboard",
+			));
+		}
+		let mut worker = paste::Worker::start()?;
+		let pasted = paste::paste(&mut worker, text, |ready| {
+			let keys = [KeyName::Meta, KeyName::Char('v')];
+			self
+				.input
+				.key_chord_after(target, &keys, mode, &self.capture, ready)
+		})?;
+		Ok(DesktopPaste {
+			outcome: pasted.outcome.as_str().to_owned(),
+			read:    pasted.read,
+			focus:   None,
+		})
 	}
 
 	fn hold_keys(

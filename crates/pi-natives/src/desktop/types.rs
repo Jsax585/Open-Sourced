@@ -228,6 +228,22 @@ pub struct DesktopFocusReturn {
 	pub front_pid:    Option<u32>,
 }
 
+/// Result of `paste`.
+#[napi(object)]
+#[derive(Debug, Clone)]
+pub struct DesktopPaste {
+	/// What the paste did: `provided` (the target read the text, and the user's
+	/// clipboard is back), `noReadSeen` (⌘V went out, but nothing read the text
+	/// in time; the clipboard is back), `clipboardConflict` (another app wrote
+	/// the clipboard while the text was on it, so it keeps that app's copy), or
+	/// `restoreUnconfirmed` (putting the clipboard back was not confirmed).
+	pub outcome: String,
+	/// Whether an application read the text.
+	pub read:    bool,
+	/// Where focus ended when the paste took over; see [`DesktopFocusReturn`].
+	pub focus:   Option<DesktopFocusReturn>,
+}
+
 #[napi(object)]
 #[derive(Debug, Clone, Copy)]
 pub struct DesktopControlState {

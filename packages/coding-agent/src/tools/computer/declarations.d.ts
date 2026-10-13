@@ -67,6 +67,19 @@ interface ComputerObservationResult extends ComputerScreenshotResult {
 	truncated: boolean;
 }
 
+/** What `win.paste` did with its text and with the user's clipboard. */
+interface ComputerPasteResult {
+	/**
+	 * "provided": the window read the text, and the user's clipboard is back.
+	 * "noReadSeen": ⌘V was sent, but nothing read the text in time; the clipboard is back, so the window may not have pasted.
+	 * "clipboardConflict": another app wrote the clipboard while the text was on it, so it keeps that app's copy and was not put back.
+	 * "restoreUnconfirmed": putting the user's clipboard back was not confirmed.
+	 */
+	outcome: "provided" | "noReadSeen" | "clipboardConflict" | "restoreUnconfirmed";
+	/** Whether an application read the text. */
+	read: boolean;
+}
+
 /** Options for wheel scrolling; `dx`/`dy` are scroll units at the pointer position. */
 interface ComputerScrollOptions extends ComputerInputOptions {
 	dx?: number;
@@ -272,6 +285,8 @@ interface ComputerWindow extends ComputerInputTarget {
 	raise(): Promise<void>;
 	/** Move this macOS window to the current Space without switching Spaces; recapture afterward. */
 	bringToCurrentSpace(): Promise<void>;
+	/** macOS: paste `text` with one ⌘V through the user's clipboard, then put back every item and type they had there unless another app wrote it meanwhile; refused under the user's `refuse` setting. */
+	paste(text: string, options?: ComputerInputOptions): Promise<ComputerPasteResult>;
 	/** Emit one full screenshot and AX snapshot without exposing a partial failed observation. */
 	observe(options?: ComputerScreenshotOptions & ComputerAxOptions): Promise<ComputerObservationResult>;
 	/** Menu paths take one title, an array of titles, or the titles as separate arguments: `select("File", "Export…")`. */

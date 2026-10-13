@@ -10,8 +10,8 @@ use super::{
 	keys::KeyName,
 	menus::DesktopMenuItem,
 	types::{
-		CaptureCaps, DesktopCapabilities, DesktopDisplay, DesktopWindow, DisplaySelector,
-		ScreenState, Target,
+		CaptureCaps, DesktopCapabilities, DesktopDisplay, DesktopPaste, DesktopWindow,
+		DisplaySelector, ScreenState, Target,
 	},
 };
 
@@ -199,6 +199,21 @@ pub trait Backend: Send {
 		mode: DeliveryMode,
 		token: &OperationToken,
 	) -> CoreResult<()>;
+	/// Pastes `text` into window `target` with one ⌘V through the clipboard,
+	/// then puts the user's clipboard back unless someone else wrote it; the
+	/// result carries no focus report.
+	fn paste(
+		&mut self,
+		_target: &Target,
+		_text: &str,
+		_mode: DeliveryMode,
+		_token: &OperationToken,
+	) -> CoreResult<DesktopPaste> {
+		Err(DesktopError::new(
+			ErrorCode::Unsupported,
+			"pasting through the clipboard is available only on macOS",
+		))
+	}
 	fn hold_keys(
 		&mut self,
 		target: &Target,

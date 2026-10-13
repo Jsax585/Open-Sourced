@@ -104,7 +104,7 @@ Window methods include:
 - `zoom({ x, y, width, height }, { silent? })`
 - `click(x, y, { button?, count?, modifiers?, takeover? })` and `doubleClick(x, y)`
 - `move(x, y)`, `drag([[x, y], ...], options?)`, and `scroll(x, y, { dx?, dy?, takeover? })`
-- `type(text, { takeover? })` and `press(chord, { takeover? })`
+- `type(text, { takeover? })`, `press(chord, { takeover? })`, and on macOS `paste(text, { takeover? })`
 - `raise()`
 
 `computer` itself (and `desktop` inside `computer.run`) exposes the same screenshot and input surface for the selected monitor or explicit all-displays composite.
@@ -190,6 +190,8 @@ await computer.run(async ({ desktop, wait }) => {
 ```
 
 Inside `computer.run`, `wait(milliseconds)` sleeps and `wait(predicate, { timeout?, interval? })` polls until truthy. Prefer it to hand-written polling loops.
+
+On macOS, `await win.paste(text, { takeover? })` pastes `text` into the window with one ⌘V, sent the way `press` sends keys, without leaving it on the user's clipboard. It saves every item and type on the clipboard, waits until the clipboard has gone 0.2 s without changing, so a paste another tool just started (a dictation app's, for example) reads that tool's text, and puts `text` there as plain text that clipboard history tools skip and that stays on this Mac. Once the window has read it, or 2 s after ⌘V when nothing did, the saved clipboard goes back, unless another app wrote the clipboard meanwhile: that app's copy stays. It resolves to `{ outcome, read }`, where `outcome` is `provided` (the window read the text), `noReadSeen` (nothing read it in time, so a later read gets the user's clipboard), `clipboardConflict` (another app wrote the clipboard while the text was on it and keeps its copy), or `restoreUnconfirmed` (putting the clipboard back was not confirmed); the run output explains every outcome but `provided`. A copy made after `text` went onto the clipboard but before ⌘V went out stops the call with `InputFailed`, nothing pasted. A helper process holds the saved clipboard and puts it back itself if omp exits mid-paste. Under `computer.backgroundFallback: refuse`, `paste` throws `BackgroundUnavailable` before touching the clipboard.
 
 ## Platforms
 

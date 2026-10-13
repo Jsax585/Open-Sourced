@@ -17,6 +17,13 @@ fn main() {
 			&["AppKit", "ScreenCaptureKit", "CoreGraphics"],
 			"14.0",
 		);
+		build_darwin_native_helper(
+			"src/desktop/macos/paste/helper.m",
+			"omp-paste-helper",
+			"OMP_PASTE_DARWIN_HELPER",
+			&["AppKit"],
+			"12.0",
+		);
 		build_applefm_bridge();
 	}
 }

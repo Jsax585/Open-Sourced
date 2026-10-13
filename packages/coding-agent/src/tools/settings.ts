@@ -686,7 +686,7 @@ export const cfgComputerBackgroundFallback = register({
 				value: "refuse",
 				label: "Refuse",
 				description:
-					"Fail the call; nothing takes over, and the agent's own takeover, raise, activating open, desktop input and macOS menus (context menus, popup and menu buttons; they take your keyboard while open) are refused too",
+					"Fail the call; nothing takes over, and the agent's own takeover, raise, activating open, desktop input, clipboard pastes and macOS menus (context menus, popup and menu buttons; they take your keyboard while open) are refused too",
 			},
 		],
 	},

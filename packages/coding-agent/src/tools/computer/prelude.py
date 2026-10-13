@@ -296,6 +296,9 @@ def _make_computer():
         async def bringToCurrentSpace(self):
             return await self._method("bringToCurrentSpace", (), {})
 
+        async def paste(self, *args, **kwargs):
+            return await self._method("paste", args, kwargs)
+
         def __repr__(self):
             return f"<computer.Window id={self.id!r} app={self.app!r}>"
 

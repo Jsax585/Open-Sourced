@@ -18,6 +18,7 @@ import type {
 	DesktopCapture,
 	DesktopDisplay,
 	DesktopFocusReturn,
+	DesktopPaste,
 	DesktopPoint,
 	DesktopScreenState,
 	DesktopSessionOptions,
@@ -89,6 +90,7 @@ export interface NativeDesktopSession {
 	scroll(target: string, x: number, y: number, dx: number, dy: number, opts?: PointerOptions | null): InputCall;
 	typeText(target: string, text: string, opts?: PointerOptions | null): InputCall;
 	keyChord(target: string, keys: string[], opts?: PointerOptions | null): InputCall;
+	paste(target: string, text: string, opts?: PointerOptions | null): Promise<DesktopPaste>;
 	raiseWindow(windowId: string): Promise<void>;
 	axSnapshot(target: string, opts?: AxSnapshotOptions | null): Promise<{ text: string }>;
 	axQuery(target: string, query: AxQuery): Promise<AxNode[]>;
@@ -114,6 +116,7 @@ type WindowFilter = { id?: string | number; app?: string; title?: string };
 /** Window listings are session-transcript payload; `window()` lookups search the whole native list. */
 const MAX_LISTED_WINDOWS = 48;
 type InputOptions = { takeover?: boolean };
+type PasteResult = Pick<DesktopPaste, "outcome" | "read">;
 type ScreenshotOptions = { silent?: boolean };
 type ScreenshotResult = Pick<
 	ComputerScreenshot,
@@ -450,21 +453,22 @@ async function focusReport(
 }
 
 /**
- * Sends one window input call. A model-supplied `takeover: true` is refused
+ * Sends one window input call and resolves to what the call that delivered it
+ * returned. A model-supplied `takeover: true` is refused
  * under `computer.backgroundFallback: "refuse"`. When the background route
  * throws `BackgroundUnavailable` and the call did not set `takeover`, the
  * setting decides: `takeover` reruns that call in takeover, handing focus back
  * to the user's app, and reports it in the run output; `refuse` fails without
  * taking over.
  */
-async function sendInput(
+async function sendInput<T extends DesktopFocusReturn | DesktopPaste | null | void>(
 	session: NativeDesktopSession,
 	context: ComputerRunContext,
 	method: string,
 	takeover: boolean | undefined,
-	send: (fallback?: Fallback) => InputCall,
+	send: (fallback?: Fallback) => Promise<T>,
 	target?: number,
-): Promise<void> {
+): Promise<T> {
 	if (takeover === true) {
 		refuseForeground(
 			context,
@@ -474,8 +478,7 @@ async function sendInput(
 		);
 	}
 	try {
-		await nativeCall(context.signal, () => send());
-		return;
+		return await nativeCall(context.signal, () => send());
 	} catch (error) {
 		if (takeover !== undefined || !(error instanceof ToolError) || !error.message.startsWith(BACKGROUND_UNAVAILABLE))
 			throw error;
@@ -490,7 +493,7 @@ async function sendInput(
 		if (!session.capabilities.takeover) {
 			throw new ToolError(`${error.message}; this desktop backend has no takeover, so no takeover happened`);
 		}
-		let report: DesktopFocusReturn | null | void;
+		let report: T;
 		try {
 			report = await nativeCall(context.signal, () => send(FALLBACK));
 		} catch (rerun) {
@@ -498,11 +501,17 @@ async function sendInput(
 			const message = rerun instanceof Error ? rerun.message : String(rerun);
 			throw new ToolError(`${method} fell back to takeover because ${reason}, and the takeover failed: ${message}`);
 		}
-		const focus = await focusReport(session, context.signal, report, target);
+		const focus = await focusReport(
+			session,
+			context.signal,
+			report && "outcome" in report ? report.focus : report,
+			target,
+		);
 		context.output.push({
 			type: "text",
 			text: `${method} ran in takeover because ${reason.replace(UNSENT_CLAUSE, "")}; the input was delivered, and ${focus}`,
 		});
+		return report;
 	}
 }
 
@@ -996,6 +1005,43 @@ class Win {
 			fallback => this.#session.keyChord(this.id, keys, { ...native, ...fallback }),
 			this.pid,
 		);
+	}
+
+	async paste(text: string, options?: InputOptions): Promise<PasteResult> {
+		const context = this.#guardInput("paste");
+		validateString(text, "paste(text)");
+		refuseForeground(
+			context,
+			"paste",
+			"put text on the user's clipboard while the window reads it",
+			"Use type(text), which leaves the clipboard alone.",
+		);
+		const native = pointerOptions(options);
+		const { outcome, read } = await sendInput(
+			this.#session,
+			context,
+			"paste",
+			native.takeover,
+			fallback => this.#session.paste(this.id, text, { ...native, ...fallback }),
+			this.pid,
+		);
+		// The result names the outcome; the run output says what a degraded one means.
+		let note: string | undefined;
+		switch (outcome) {
+			case "noReadSeen":
+				note =
+					"⌘V was sent, but nothing read the text in time, and the user's clipboard was put back; read the field before pasting again";
+				break;
+			case "clipboardConflict":
+				note = `another app wrote the clipboard while the text was on it, so the clipboard was left as that app set it; ${read ? "the text was read" : "nothing read the text, so the window may have pasted that app's text instead"}: read the field before going on`;
+				break;
+			case "restoreUnconfirmed":
+				note =
+					"putting the user's clipboard back could not be confirmed; tell the user their clipboard may hold the pasted text";
+				break;
+		}
+		if (note) context.output.push({ type: "text", text: `paste: ${note}` });
+		return { outcome, read };
 	}
 
 	async holdKeys(keys: string[], options: HoldOptions): Promise<void> {

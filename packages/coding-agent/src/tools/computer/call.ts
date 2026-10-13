@@ -75,6 +75,7 @@ export const WINDOW_METHODS: MethodPolicies = {
 	scroll: "exec",
 	type: "exec",
 	press: "exec",
+	paste: "exec",
 	raise: "exec",
 	ax: "read",
 	find: "read",

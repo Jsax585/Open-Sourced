@@ -78,6 +78,11 @@ export declare class DesktopSession {
   scroll(target: string, x: number, y: number, dx: number, dy: number, opts?: PointerOptions | undefined | null): Promise<DesktopFocusReturn | undefined | null>
   typeText(target: string, text: string, opts?: PointerOptions | undefined | null): Promise<DesktopFocusReturn | undefined | null>
   keyChord(target: string, keys: Array<string>, opts?: PointerOptions | undefined | null): Promise<DesktopFocusReturn | undefined | null>
+  /**
+   * Pastes `text` into a window with one ⌘V through the clipboard, then
+   * puts the user's clipboard back unless another app wrote it meanwhile.
+   */
+  paste(target: string, text: string, opts?: PointerOptions | undefined | null): Promise<DesktopPaste>
   raiseWindow(windowId: string): Promise<undefined>
   axSnapshot(target: string, opts?: AxSnapshotOptions | undefined | null): Promise<AxSnapshot>
   axQuery(target: string, query: AxQuery): Promise<Array<AxNode>>
@@ -1348,6 +1353,22 @@ export interface DesktopMenuItem {
 export interface DesktopObservation {
   capture: DesktopCapture
   accessibility: AxSnapshot
+}
+
+/** Result of `paste`. */
+export interface DesktopPaste {
+  /**
+   * What the paste did: `provided` (the target read the text, and the user's
+   * clipboard is back), `noReadSeen` (⌘V went out, but nothing read the text
+   * in time; the clipboard is back), `clipboardConflict` (another app wrote
+   * the clipboard while the text was on it, so it keeps that app's copy), or
+   * `restoreUnconfirmed` (putting the clipboard back was not confirmed).
+   */
+  outcome: string
+  /** Whether an application read the text. */
+  read: boolean
+  /** Where focus ended when the paste took over; see [`DesktopFocusReturn`]. */
+  focus?: DesktopFocusReturn
 }
 
 export interface DesktopPoint {
