@@ -1060,7 +1060,9 @@ export class RelayBridge {
 				const url =
 					typeof msg.params?.url === "string" && msg.params.url.length > 0 ? msg.params.url : "about:blank";
 				// `nearTargetId` is the relay's own parameter: open in the browser of that tab.
-				const inst = near ? this.#instances.get(near.instanceId) : this.#instanceForNewTab(conn, msg.params?.nearTargetId);
+				const inst = near
+					? this.#instances.get(near.instanceId)
+					: this.#instanceForNewTab(conn, msg.params?.nearTargetId);
 				if (!inst || !inst.socket) {
 					this.#replyError(conn, msg, "relay extension is not connected for the browser this tab would open in");
 					return;

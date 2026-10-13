@@ -20,6 +20,9 @@ const TAB_ID = 1;
 const FOREIGN_FRAME_REFUSAL = "Cannot access a chrome-extension:// URL of different extension";
 /** A call that stays in flight until something ends it. */
 const HANG = { code: "await page.evaluate(() => new Promise(() => {}));", timeout: 30 };
+/** The call's own evaluation of {@link HANG}, not one the tab's print hold or other setup sends first. */
+const evaluatesHang = (params: Record<string, unknown>): boolean =>
+	String(params.functionDeclaration).includes("new Promise(() => {})");
 
 /**
  * The relay extension's side of the wire, played over a real headless Chromium's CDP endpoint: `attach`,
@@ -37,7 +40,10 @@ class ChromeBackedExtension {
 	/** Chrome command id → relay RPC id of in-flight `send`s, answered with Chrome's error when the attachment ends. */
 	readonly #inFlight = new Map<number, number>();
 	/** Resolved by the next forwarded command of that method. */
-	readonly #sendWaiters = new Map<string, () => void>();
+	readonly #sendWaiters = new Map<
+		string,
+		{ resolve: () => void; matches: (params: Record<string, unknown>) => boolean }
+	>();
 	/** Answer attaches with Chrome's refusal, as while a foreign extension frame is in the tab. */
 	refuseAttach = false;
 
@@ -164,8 +170,11 @@ class ChromeBackedExtension {
 					typeof message.sessionId === "string" ? message.sessionId : root,
 				);
 				this.#inFlight.set(sent.id, id);
-				this.#sendWaiters.get(method)?.();
-				this.#sendWaiters.delete(method);
+				const waiter = this.#sendWaiters.get(method);
+				if (waiter?.matches(isRecord(message.params) ? message.params : {})) {
+					this.#sendWaiters.delete(method);
+					waiter.resolve();
+				}
 				const answer = await sent.promise;
 				// Chrome already answered this RPC when the attachment ended under it.
 				if (!this.#inFlight.delete(sent.id)) return;
@@ -177,10 +186,10 @@ class ChromeBackedExtension {
 		}
 	}
 
-	/** Resolves once the relay forwards a command of `method` to the tab. */
-	nextSend(method: string): Promise<void> {
+	/** Resolves once the relay forwards a command of `method` whose params `matches` accepts to the tab. */
+	nextSend(method: string, matches: (params: Record<string, unknown>) => boolean = () => true): Promise<void> {
 		const { promise, resolve } = Promise.withResolvers<void>();
-		this.#sendWaiters.set(method, resolve);
+		this.#sendWaiters.set(method, { resolve, matches });
 		return promise;
 	}
 
@@ -279,7 +288,7 @@ describe("relay tabs Chrome detaches omp from", () => {
 		"fails the call in flight at once, names the cause, and re-adopts the same page for the next call",
 		async () => {
 			const ext = await openRelayTab();
-			const evaluating = ext.nextSend("Runtime.callFunctionOn");
+			const evaluating = ext.nextSend("Runtime.callFunctionOn", evaluatesHang);
 			const stalled = invoke({ action: "run", ...HANG }).catch((error: unknown) => error);
 			await evaluating;
 			await ext.chromeDetach("target_closed");
@@ -307,7 +316,7 @@ describe("relay tabs Chrome detaches omp from", () => {
 				throw signal.reason;
 			});
 			try {
-				const evaluating = ext.nextSend("Runtime.callFunctionOn");
+				const evaluating = ext.nextSend("Runtime.callFunctionOn", evaluatesHang);
 				const code = `void __omp_call_tool__("probe", {}); ${HANG.code}`;
 				const stalled = invoke({ action: "run", code, timeout: HANG.timeout }).catch((error: unknown) => error);
 				const signal = await started.promise;
@@ -439,7 +448,7 @@ describe("relay tabs Chrome detaches omp from", () => {
 		async () => {
 			const ext = await openRelayTab();
 			ext.refuseAttach = true;
-			const evaluating = ext.nextSend("Runtime.callFunctionOn");
+			const evaluating = ext.nextSend("Runtime.callFunctionOn", evaluatesHang);
 			const stalled = invoke({ action: "run", ...HANG }).catch((error: unknown) => error);
 			await evaluating;
 			await ext.chromeDetach("target_closed");
@@ -469,7 +478,7 @@ describe("relay tabs Chrome detaches omp from", () => {
 			});
 			try {
 				const ac = new AbortController();
-				const evaluating = ext.nextSend("Runtime.callFunctionOn");
+				const evaluating = ext.nextSend("Runtime.callFunctionOn", evaluatesHang);
 				const stalled = runInTab(name, {
 					code: HANG.code,
 					timeoutMs: 30_000,

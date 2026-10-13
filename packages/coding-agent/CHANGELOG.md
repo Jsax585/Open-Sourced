@@ -2,9 +2,28 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a note to relay `browser.open` results when the OMP Browser Relay extension in Chrome was installed by an older omp, naming `omp browser-relay install` and a reload; `omp browser-relay install` now records the installing omp's version in the extension ([#15105](https://github.com/can1357/oh-my-pi/pull/15105) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Changed
+
+- A relay `browser.open` without `app.target` now opens its own background tab instead of adopting the visible one (after reinstalling the relay extension; older ones select it), and `browser.close` closes it; `app.target` still borrows an existing tab ([#15110](https://github.com/can1357/oh-my-pi/pull/15110) by [@will-bogusz](https://github.com/will-bogusz))
+
 ### Fixed
 
 - Fixed browser `uploadFile` failing with "Not allowed" through a relay without file-URL access or in a Chrome on another machine, stalling behind a macOS folder-privacy prompt, and breaking the tab when dropping a file of 128 MB or more: Chrome now gets copies of the files from omp's temporary folder, a browser that cannot read them gets their contents in chunks with the cell's time to arrive, and element handles upload the same way ([#15489](https://github.com/can1357/oh-my-pi/pull/15489) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed tabs omp opens through a relay shared by two browsers landing in whichever browser reconnected last; they open in the browser of the tab omp used last, else the one showing the first selected tab ([#15110](https://github.com/can1357/oh-my-pi/pull/15110) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed Chrome element handles' `uploadFile()` failing "Node is not a file input element" on labels, chooser triggers and drop zones; it now uploads like `tab.uploadFile()` and reads relative paths from the session directory ([#15492](https://github.com/can1357/oh-my-pi/pull/15492) by [@will-bogusz](https://github.com/will-bogusz))
+- A page calling `window.print()` in a Chromium tab no longer freezes behind the print preview and times out the browser call: omp holds it, the page carries on as after a finished print, and the call says so (pointing at `tab.pdf()`) ([#15508](https://github.com/can1357/oh-my-pi/pull/15508) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed browser `uploadFile` on a control that opens `showOpenFilePicker()` hanging the cell until the tab was killed; it now fails at once with a named error ([#15490](https://github.com/can1357/oh-my-pi/pull/15490) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed every later file chooser on a page doing nothing, the user's own clicks in a relay tab included, after browser `uploadFile` clicked a chooser trigger or drop zone ([#15490](https://github.com/can1357/oh-my-pi/pull/15490) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed background relay and `app.cdp_url` tabs ignoring omp's clicks and keys or timing out on hover and drag; the page reads as visible while omp drives it and hidden again once released ([#15510](https://github.com/can1357/oh-my-pi/pull/15510) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed a tab that a relay page opens over its own CDP session (`Target.createTarget`) landing in a separate Chrome window with `newWindow`, under an id omp could not attach to, activate or close; it now opens as a relay tab in that page's browser ([#15494](https://github.com/can1357/oh-my-pi/pull/15494) by [@alnaggar-dev](https://github.com/alnaggar-dev) and [@will-bogusz](https://github.com/will-bogusz))
+- Fixed browser `uploadFile` in Chrome reporting success with no file attached when the element opens no file chooser and nothing on the page reads the dropped files; it now fails and says what to target ([#15491](https://github.com/can1357/oh-my-pi/pull/15491) by [@will-bogusz](https://github.com/will-bogusz))
+- Browser `tab.fill` in Chrome sets colour, date, time and range inputs to the given value (it typed `2026-10-12` as `61012-02-02` and left a colour at `#000000`), and refuses a value the input rejects ([#15503](https://github.com/can1357/oh-my-pi/pull/15503) by [@will-bogusz](https://github.com/will-bogusz))
+- Relay mode: when Chrome detaches omp from a tab it drives (a password manager's inline menu loading in the page), the call fails at once saying why and omp reattaches to the same tab, instead of every later call timing out and reopening failing with `No page targets available` ([#15493](https://github.com/can1357/oh-my-pi/pull/15493) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed a browser call hanging for about 21 s, and its tab staying listed but dead, when the tab's worker crashed (such as on an error inside Puppeteer): the call fails at once with the cause and the next call continues on the same page ([#15498](https://github.com/can1357/oh-my-pi/pull/15498) by [@alnaggar-dev](https://github.com/alnaggar-dev) and [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.10.4] - 2026-10-13
 
@@ -17,11 +36,6 @@
 ### Changed
 
 - Tool approval prompts now replace the composer like `ask`, show one row per detail, and approve with `Ctrl+Enter` (or `Ctrl+Q`) instead of `Enter` ([#15548](https://github.com/can1357/oh-my-pi/pull/15548) by [@H4vC](https://github.com/H4vC))
-- A relay `browser.open` without `app.target` now opens its own background tab instead of adopting the visible one (after reinstalling the relay extension; older ones select it), and `browser.close` closes it; `app.target` still borrows an existing tab ([#15110](https://github.com/can1357/oh-my-pi/pull/15110) by [@will-bogusz](https://github.com/will-bogusz))
-
-### Added
-
-- Added a note to relay `browser.open` results when the OMP Browser Relay extension in Chrome was installed by an older omp, naming `omp browser-relay install` and a reload; `omp browser-relay install` now records the installing omp's version in the extension ([#15105](https://github.com/can1357/oh-my-pi/pull/15105) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
 
@@ -30,24 +44,10 @@
 - Fixed Claude refusing every turn (`reasoning_extraction`) in a session snapcompacted under Codex, Grok or another reasoning model, after a switch or resume; Claude turns, `/btw`, `/handoff` and compaction now read a reasoning-free copy of the archive ([#15436](https://github.com/can1357/oh-my-pi/pull/15436) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed the project-shared browser (headless or headed) reopening every page its previous run left open whenever it relaunched (after a crash, an out-of-memory kill, a normal stop, or a restart from `omp ps`); no session owned those pages, so they were never closed and piled up across restarts. Detaching it through `proc://<name>/mode`, which relaunched it the same way, is now refused ([#15561](https://github.com/can1357/oh-my-pi/pull/15561) by [@eggpeat](https://github.com/eggpeat))
 - Fixed `omp models --json` reporting a scheduled model's superseded price in `cost`; it reports the price in force, such as DeepSeek V4 Pro's $0.30 / $1.20 card since 2026-09-14 ([#15620](https://github.com/can1357/oh-my-pi/pull/15620) by [@eggpeat](https://github.com/eggpeat))
-- Fixed tabs omp opens through a relay shared by two browsers landing in whichever browser reconnected last; they open in the browser of the tab omp used last, else the one showing the first selected tab ([#15110](https://github.com/can1357/oh-my-pi/pull/15110) by [@will-bogusz](https://github.com/will-bogusz))
-- Fixed Chrome element handles' `uploadFile()` failing "Node is not a file input element" on labels, chooser triggers and drop zones; it now uploads like `tab.uploadFile()` and reads relative paths from the session directory ([#15492](https://github.com/can1357/oh-my-pi/pull/15492) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Removed
 
 - Removed Codex Code Mode and its `providers.openai-codex.codeMode` / `providers.openai-codex.codeModeDirectTools` settings; Codex models always use the full direct tool surface.
-- Relay mode: when Chrome detaches omp from a tab it drives (a password manager's inline menu loading in the page), the call fails at once saying why and omp reattaches to the same tab, instead of every later call timing out and reopening failing with `No page targets available` ([#15493](https://github.com/can1357/oh-my-pi/pull/15493) by [@will-bogusz](https://github.com/will-bogusz))
-- Fixed a browser call hanging for about 21 s, and its tab staying listed but dead, when the tab's worker crashed (such as on an error inside Puppeteer): the call fails at once with the cause and the next call continues on the same page ([#15498](https://github.com/can1357/oh-my-pi/pull/15498) by [@alnaggar-dev](https://github.com/alnaggar-dev) and [@will-bogusz](https://github.com/will-bogusz))
-
-### Fixed
-
-- A page calling `window.print()` in a Chromium tab no longer freezes behind the print preview and times out the browser call: omp holds it, the page carries on as after a finished print, and the call says so (pointing at `tab.pdf()`) ([#15508](https://github.com/can1357/oh-my-pi/pull/15508) by [@will-bogusz](https://github.com/will-bogusz))
-
-### Fixed
-
-- Fixed browser `uploadFile` on a control that opens `showOpenFilePicker()` hanging the cell until the tab was killed; it now fails at once with a named error ([#15490](https://github.com/can1357/oh-my-pi/pull/15490) by [@will-bogusz](https://github.com/will-bogusz))
-- Fixed every later file chooser on a page doing nothing, the user's own clicks in a relay tab included, after browser `uploadFile` clicked a chooser trigger or drop zone ([#15490](https://github.com/can1357/oh-my-pi/pull/15490) by [@will-bogusz](https://github.com/will-bogusz))
-- Fixed background relay and `app.cdp_url` tabs ignoring omp's clicks and keys or timing out on hover and drag; the page reads as visible while omp drives it and hidden again once released ([#15510](https://github.com/can1357/oh-my-pi/pull/15510) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.10.3] - 2026-10-12
 
@@ -71,14 +71,6 @@
 - Fixed anonymized session exports losing whether bash timing was shown ([#15468](https://github.com/can1357/oh-my-pi/pull/15468) by [@iliaal](https://github.com/iliaal))
 - Added `omp --restore <session>`: resumes a session like `--resume`, then goes on with what its last process left unfinished when it crashed or was killed, both the interrupted turn and the subagents it was running (their results reach the parent as usual); Tern's session daemon now restarts omp with it after a crash
 - Kept private prompt-cache routing keys out of shared sessions and HTML exports ([#15467](https://github.com/can1357/oh-my-pi/pull/15467) by [@iliaal](https://github.com/iliaal))
-
-### Fixed
-
-- Fixed a tab that a relay page opens over its own CDP session (`Target.createTarget`) landing in a separate Chrome window with `newWindow`, under an id omp could not attach to, activate or close; it now opens as a relay tab in that page's browser ([#15494](https://github.com/can1357/oh-my-pi/pull/15494) by [@alnaggar-dev](https://github.com/alnaggar-dev) and [@will-bogusz](https://github.com/will-bogusz))
-
-### Fixed
-
-- Fixed browser `uploadFile` in Chrome reporting success with no file attached when the element opens no file chooser and nothing on the page reads the dropped files; it now fails and says what to target ([#15491](https://github.com/can1357/oh-my-pi/pull/15491) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.10.2] - 2026-10-12
 

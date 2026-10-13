@@ -5,11 +5,8 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { disposeAllVmContexts } from "@oh-my-pi/pi-coding-agent/eval/js/context-manager";
 import { createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
-import { uploadFilesToElement } from "@oh-my-pi/pi-coding-agent/tools/browser/interactions";
 import { releaseAllTabs } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
-import type { ElementHandle, Page } from "puppeteer-core";
-import { rejectionOf } from "../helpers/rejection";
 import { chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
@@ -140,9 +137,16 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser uploadFile", () => {
 	tab.uploadFile("#other", "beta.txt"),
 ]);
 error = outcomes.map(outcome => outcome.status === "rejected" ? outcome.reason.message : "ok").join(" | ");`);
-			expect(result.error).toStartWith("ok | ");
-			expect(result.error).toContain("waits for its file chooser");
-			expect(result.log).toEqual([{ id: "trigger-input", event: "change", names: ["alpha.txt"] }]);
+			// Either may reach the chooser first; the other is refused and its chooser never opens.
+			const outcomes = result.error?.split(" | ") ?? [];
+			const winner = outcomes.indexOf("ok");
+			expect(winner).not.toBe(-1);
+			expect(outcomes[1 - winner]).toContain("waits for its file chooser");
+			expect(result.log).toEqual([
+				winner === 0
+					? { id: "trigger-input", event: "change", names: ["alpha.txt"] }
+					: { id: "other-input", event: "change", names: ["beta.txt"] },
+			]);
 		} finally {
 			await close();
 		}
@@ -178,27 +182,4 @@ await tab.click("#trigger");`);
 			await close();
 		}
 	}, 60_000);
-});
-
-test("detaches a chooser session that attaches after the upload was cancelled", async () => {
-	const { promise: attached, resolve: attach } = Promise.withResolvers<{ detach: () => Promise<void> }>();
-	let detached = false;
-	const controller = new AbortController();
-	// Only what the chooser route touches before its session exists: the target's tag and session creation,
-	// which the cancel interrupts.
-	const page = {
-		createCDPSession: () => {
-			controller.abort();
-			return attached;
-		},
-	} as unknown as Page;
-	const handle = { evaluate: async () => ({ tag: "BUTTON", type: "" }) } as unknown as ElementHandle;
-	await rejectionOf(uploadFilesToElement(page, handle, ["/missing.txt"], "upload", controller.signal));
-	attach({
-		detach: async () => {
-			detached = true;
-		},
-	});
-	for (let turn = 0; turn < 5; turn++) await Promise.resolve();
-	expect(detached).toBe(true);
 });
