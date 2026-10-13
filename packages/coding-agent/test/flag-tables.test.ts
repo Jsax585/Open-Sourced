@@ -7,7 +7,7 @@ import {
 	validateRestorePrompt,
 	validateToolNames,
 } from "../src/cli/args";
-import { OPTIONAL_VALUE_FLAGS, restartArgv, STRING_VALUE_FLAGS } from "../src/cli/flag-tables";
+import { OPTIONAL_VALUE_FLAGS, restartArgv, STRING_VALUE_FLAGS, withAbsoluteCwd } from "../src/cli/flag-tables";
 import { CliUsageError } from "../src/cli/usage-error";
 
 /**
@@ -88,6 +88,25 @@ describe("--session-dir", () => {
 	});
 });
 
+describe("withAbsoluteCwd", () => {
+	it("replaces cwd options while preserving the remaining launch arguments", () => {
+		expect(withAbsoluteCwd(["--cwd", "..", "--model", "x", "fix it"], "/abs")).toEqual([
+			"--cwd",
+			"/abs",
+			"--model",
+			"x",
+			"fix it",
+		]);
+		expect(withAbsoluteCwd(["--cwd=proj", "hi"], "/abs")).toEqual(["--cwd", "/abs", "hi"]);
+	});
+
+	it("does not treat values or arguments after -- as cwd options", () => {
+		const valueArgv = ["--system-prompt", "--cwd", "hi"];
+		expect(withAbsoluteCwd(valueArgv, "/abs")).toBe(valueArgv);
+		const literalArgv = ["--", "--cwd", "x"];
+		expect(withAbsoluteCwd(literalArgv, "/abs")).toBe(literalArgv);
+	});
+});
 describe("--tools validation", () => {
 	it("maps legacy search to grep and keeps find canonical", () => {
 		const result = parseArgs(["--tools", "search,find,grep"]);

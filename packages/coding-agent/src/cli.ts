@@ -512,6 +512,11 @@ export async function runCli(argv: string[]): Promise<void> {
 		return;
 	}
 
+	if (resolvedArgv[0] === "--version" && process.env.PI_REPORT_INSTALL === "1") {
+		process.stdout.write(`${JSON.stringify({ execPath: process.execPath, main: Bun.main })}\n`);
+		return;
+	}
+
 	if (resolvedArgv[0] === "--license") {
 		// Command boundary: bundled notices are read only when requested.
 		const { formatLicenseOutput } = await import("./cli/license");

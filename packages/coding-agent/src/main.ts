@@ -5,12 +5,13 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 import * as fsSync from "node:fs";
+import * as path from "node:path";
 import * as os from "node:os";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core/utils/yield";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
-import { isEnoent, isEnotdir } from "@oh-my-pi/pi-utils";
+import { $which, isEnoent, isEnotdir } from "@oh-my-pi/pi-utils";
 import {
 	APP_NAME,
 	directoryIsMissing,
@@ -36,6 +37,7 @@ import {
 	validateRestorePrompt,
 	validateToolNames,
 } from "./cli/args";
+import { withAbsoluteCwd } from "./cli/flag-tables";
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
@@ -43,7 +45,15 @@ import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker";
 import { fetchBuild } from "./cli/build-service";
 import { applyStartupCwd } from "./cli/startup-cwd";
-import { getLatestRelease, isSourceCheckout, managedInstallName } from "./cli/update-cli";
+import {
+	autoInstallStartupUpdate,
+	getLatestRelease,
+	launcherRunsInstall,
+	isSourceCheckout,
+	managedInstallName,
+	reportedVersionAtPath,
+} from "./cli/update-cli";
+import { relaunch } from "./cli/relaunch";
 import { findConfigFile } from "./config";
 import { ModelRegistry } from "./config/model-registry";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
@@ -169,6 +179,7 @@ import {
 	cfgTuiImeSafeCursor,
 	cfgTuiMaxInlineImages,
 	cfgTuiResizeScrollback,
+	cfgUpdateAutoInstall,
 	cfgUpdateChannel,
 } from "./modes/settings";
 import {
@@ -254,6 +265,39 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * `update.autoInstall`: install `newVersion` before the TUI opens, then exec into the
+ * updated launcher only when `omp` on PATH runs this install (asked via
+ * `launcherRunsInstall`, so shims count). Returns when nothing was installed; startup
+ * then continues on the running version and the "Update Available" banner still shows.
+ */
+async function autoInstallAndRelaunch(newVersion: string): Promise<void> {
+	const ompPath = $which(APP_NAME);
+	if (!ompPath || !(await launcherRunsInstall(ompPath, { execPath: process.execPath, main: Bun.main }))) return;
+
+	stopPendingStartupComposer();
+	pauseStartupWatchdog();
+	process.stdout.write(`${chalk.cyan(`Updating ${APP_NAME} ${VERSION} → ${newVersion}…`)}\n`);
+	const updated = await autoInstallStartupUpdate(newVersion, {
+		runUpdate: () =>
+			Bun.spawn([ompPath, "update"], {
+				stdin: "inherit",
+				stdout: "inherit",
+				stderr: "inherit",
+				env: { ...process.env, PI_CONFIG_FILES: settings.getConfigFiles().join(path.delimiter) },
+			}).exited,
+		installedVersion: () => reportedVersionAtPath(ompPath),
+	});
+	if (!updated) {
+		resumeStartupWatchdog();
+		return;
+	}
+	stopStartupWatchdog();
+
+	const cmd = [ompPath, ...withAbsoluteCwd(process.argv.slice(2), getProjectDir())];
+	await relaunch(cmd, "Relaunch");
 }
 
 // Protocol hosts inherit OMP's neutral defaults for settings declaring `protocolDefault`
@@ -1898,6 +1942,19 @@ export async function runRootCommand(
 		}
 
 		const settingsInstance = await settingsPromise;
+		const versionCheckPromise = isInteractive
+			? checkForNewVersion(VERSION).catch(() => undefined)
+			: Promise.resolve(undefined);
+		// Resumed and imported sessions may switch to another project whose settings load later; skip auto-install there (the banner still offers the update).
+		if (
+			isInteractive &&
+			!parsedArgs.resume &&
+			!isForeignSessionImport(parsedArgs) &&
+			cfgUpdateAutoInstall.get(settingsInstance)
+		) {
+			const newVersion = await logger.time("autoInstall:updateCheck", () => versionCheckPromise);
+			if (newVersion) await autoInstallAndRelaunch(newVersion);
+		}
 		// Process-lifetime: broker/account-policy edits reconfigure the shared credential store.
 		createAuthStorageSettingsSync(settingsInstance, authStorage);
 		if (parsedArgs.approvalMode) {
@@ -2602,7 +2659,6 @@ export async function runRootCommand(
 					input: rpcInput,
 				});
 			} else if (isInteractive) {
-				const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
 				const startupChangelog = await startupChangelogPromise;
 
 				const modelScopeNotification = buildModelScopeNotification(

@@ -16,6 +16,7 @@ import {
 	buildNpmInstallArgs,
 	buildRenameCleanupPackages,
 	downloadVerifiedBinary,
+	launcherRunsInstall,
 	type InstalledVersionVerification,
 	managedInstallName,
 	type ManagerUpdateSteps,
@@ -37,8 +38,8 @@ import {
 	updateViaManager,
 	updateViaShimTakeover,
 } from "@oh-my-pi/pi-coding-agent/cli/update-cli";
+import { TempDir, VERSION, $which, removeWithRetries } from "@oh-my-pi/pi-utils";
 import Update from "@oh-my-pi/pi-coding-agent/commands/update";
-import { $which, removeWithRetries } from "@oh-my-pi/pi-utils";
 import type { CliConfig } from "@oh-my-pi/pi-utils/cli";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 
@@ -1844,5 +1845,83 @@ describe("update-cli manager update recovery", () => {
 		await expect(updateViaManager(release, launcherPath, steps)).rejects.toThrow(
 			"update did not produce a working launcher and binary repair failed: Error: no binary asset",
 		);
+	});
+});
+
+describe.skipIf(process.platform === "win32")("launcherRunsInstall", () => {
+	const cliPath = path.join(import.meta.dir, "../src/cli.ts");
+
+	it("matches a non-symlink launcher that runs this CLI entry", async () => {
+		using tempDir = TempDir.createSync("@omp-launcher-install-");
+		const launcher = tempDir.join("omp");
+		await Bun.write(launcher, `#!/bin/sh\nexec "${process.execPath}" "${cliPath}" "$@"\n`);
+		nodeFs.chmodSync(launcher, 0o755);
+
+		expect(await launcherRunsInstall(launcher, { execPath: process.execPath, main: cliPath })).toBe(true);
+	}, 30_000);
+
+	it("rejects a launcher that runs a different entry", async () => {
+		using tempDir = TempDir.createSync("@omp-launcher-install-");
+		const launcher = tempDir.join("omp");
+		await Bun.write(launcher, `#!/bin/sh\nexec "${process.execPath}" "${cliPath}" "$@"\n`);
+		nodeFs.chmodSync(launcher, 0o755);
+
+		expect(
+			await launcherRunsInstall(launcher, { execPath: process.execPath, main: tempDir.join("other-cli.ts") }),
+		).toBe(false);
+	}, 30_000);
+
+	it("treats a launcher without the probe as a different install", async () => {
+		using tempDir = TempDir.createSync("@omp-launcher-install-");
+		const launcher = tempDir.join("omp");
+		await Bun.write(launcher, "#!/bin/sh\necho omp/1.0.0\n");
+		nodeFs.chmodSync(launcher, 0o755);
+
+		expect(await launcherRunsInstall(launcher, { execPath: process.execPath, main: cliPath })).toBe(false);
+	});
+});
+describe("autoInstallStartupUpdate", () => {
+	it("falls back when the update command rejects", async () => {
+		const installedVersion = vi.fn(async () => "999.0.0");
+		expect(
+			await updateCli.autoInstallStartupUpdate("999.0.0", {
+				runUpdate: async () => {
+					throw new Error("spawn failed");
+				},
+				installedVersion,
+			}),
+		).toBe(false);
+		expect(installedVersion).not.toHaveBeenCalled();
+	});
+
+	it("does not verify the launcher after a nonzero update exit", async () => {
+		const installedVersion = vi.fn(async () => "999.0.0");
+		expect(
+			await updateCli.autoInstallStartupUpdate("999.0.0", {
+				runUpdate: async () => 1,
+				installedVersion,
+			}),
+		).toBe(false);
+		expect(installedVersion).not.toHaveBeenCalled();
+	});
+
+	it("rejects the same or unreported launcher version", async () => {
+		for (const installed of [VERSION, undefined]) {
+			expect(
+				await updateCli.autoInstallStartupUpdate("999.0.0", {
+					runUpdate: async () => 0,
+					installedVersion: async () => installed,
+				}),
+			).toBe(false);
+		}
+	});
+
+	it("accepts a strictly newer launcher version", async () => {
+		expect(
+			await updateCli.autoInstallStartupUpdate("999.0.0", {
+				runUpdate: async () => 0,
+				installedVersion: async () => "999.0.0",
+			}),
+		).toBe(true);
 	});
 });
