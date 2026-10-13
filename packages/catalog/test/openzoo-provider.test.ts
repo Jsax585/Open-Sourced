@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/env-api-key";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { DiscoveryAuthRejectionError } from "@oh-my-pi/pi-catalog/discovery/auth-rejection";
 import { getBundledModelReferenceIndex } from "@oh-my-pi/pi-catalog/identity/bundled";
 import { resolveModelReference } from "@oh-my-pi/pi-catalog/identity/reference";
+import { createModelManager } from "@oh-my-pi/pi-catalog/model-manager";
 import { getBundledProviders } from "@oh-my-pi/pi-catalog/models";
 import { resolveModelCacheProviderId } from "@oh-my-pi/pi-catalog/provider-models/cache-provider-id";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
@@ -424,5 +429,197 @@ describe("openzoo built-in provider", () => {
 		};
 		const options = openzooModelManagerOptions({ fetch: failingFetch });
 		expect(await options.fetchDynamicModels?.()).toBeNull();
+	});
+
+	test("a parameter list that omits sampling controls disables them; a missing list stays neutral", async () => {
+		// The completions transport sends temperature/top_p whenever
+		// supportsSamplingParams is on, and penalties plus stop whenever
+		// supportsPenaltyAndStopParams is on. A present list that omits any
+		// control in a group must turn that flag off or the request 400s. A
+		// row with no list keeps the default (both on). Advertising the whole
+		// group turns the flag on so a cached no does not survive the refresh.
+		const options = openzooModelManagerOptions({
+			fetch: async () =>
+				Response.json({
+					data: [
+						{
+							id: "example-lab/no-sampling",
+							supported_parameters: ["presence_penalty", "frequency_penalty", "repetition_penalty", "stop"],
+						},
+						{
+							id: "example-lab/no-penalties",
+							supported_parameters: ["temperature", "top_p", "tools"],
+						},
+						{
+							id: "example-lab/samples",
+							supported_parameters: [
+								"temperature",
+								"top_p",
+								"presence_penalty",
+								"frequency_penalty",
+								"repetition_penalty",
+								"stop",
+							],
+						},
+						{ id: "example-lab/silent" },
+					],
+				}),
+		});
+		const models = await options.fetchDynamicModels?.();
+		const noSampling = models?.find(model => model.id === "example-lab/no-sampling");
+		const noPenalties = models?.find(model => model.id === "example-lab/no-penalties");
+		const samples = models?.find(model => model.id === "example-lab/samples");
+		const silent = models?.find(model => model.id === "example-lab/silent");
+
+		expect(noSampling && buildModel(noSampling).compat.supportsSamplingParams).toBe(false);
+		expect(noSampling && buildModel(noSampling).compat.supportsPenaltyAndStopParams).toBe(true);
+		expect(noPenalties && buildModel(noPenalties).compat.supportsSamplingParams).toBe(true);
+		expect(noPenalties && buildModel(noPenalties).compat.supportsPenaltyAndStopParams).toBe(false);
+		expect(samples && buildModel(samples).compat.supportsSamplingParams).toBe(true);
+		expect(samples && buildModel(samples).compat.supportsPenaltyAndStopParams).toBe(true);
+		expect(silent?.compat?.supportsSamplingParams).toBeUndefined();
+		expect(silent?.compat?.supportsPenaltyAndStopParams).toBeUndefined();
+		expect(silent && buildModel(silent).compat.supportsSamplingParams).toBe(true);
+		expect(silent && buildModel(silent).compat.supportsPenaltyAndStopParams).toBe(true);
+	});
+
+	test("a folded router alias that omits sampling controls keeps them off", async () => {
+		// Alias spellings fold into one auto. An omit on any alias sticks,
+		// including over a later alias that lists the controls. An alias with
+		// no parameter list does not clear an advertisement and does not
+		// invent an omit.
+		const omitted = openzooModelManagerOptions({
+			fetch: async () =>
+				Response.json({
+					data: [
+						{ id: "auto", owned_by: "openzoo", supported_parameters: ["temperature", "tools"] },
+						{
+							id: "openzoo/auto",
+							owned_by: "openzoo",
+							supported_parameters: [
+								"temperature",
+								"top_p",
+								"presence_penalty",
+								"frequency_penalty",
+								"repetition_penalty",
+								"stop",
+							],
+						},
+					],
+				}),
+		});
+		const omittedModels = await omitted.fetchDynamicModels?.();
+		expect(omittedModels?.map(model => model.id)).toEqual(["auto"]);
+		expect(omittedModels?.[0] && buildModel(omittedModels[0]).compat.supportsSamplingParams).toBe(false);
+		expect(omittedModels?.[0] && buildModel(omittedModels[0]).compat.supportsPenaltyAndStopParams).toBe(false);
+
+		const advertised = openzooModelManagerOptions({
+			fetch: async () =>
+				Response.json({
+					data: [
+						{ id: "auto", owned_by: "openzoo" },
+						{
+							id: "openzoo/auto",
+							owned_by: "openzoo",
+							supported_parameters: [
+								"temperature",
+								"top_p",
+								"presence_penalty",
+								"frequency_penalty",
+								"repetition_penalty",
+								"stop",
+							],
+						},
+					],
+				}),
+		});
+		const advertisedModels = await advertised.fetchDynamicModels?.();
+		expect(advertisedModels?.[0] && buildModel(advertisedModels[0]).compat.supportsSamplingParams).toBe(true);
+		expect(advertisedModels?.[0] && buildModel(advertisedModels[0]).compat.supportsPenaltyAndStopParams).toBe(true);
+	});
+
+	test("an explicit text-only modality report survives the image correction", async () => {
+		// providers/openzoo.kdl marks Claude and Gemini image-capable because
+		// the roster often omits architecture. A row that does report
+		// input_modalities: ["text"] must stay text-only after buildModel;
+		// a sibling that omits the field still receives the correction.
+		const options = openzooModelManagerOptions({
+			fetch: async () =>
+				Response.json({
+					data: [
+						{
+							id: "anthropic/claude-sonnet-4",
+							architecture: { input_modalities: ["text"] },
+						},
+						{
+							id: "google/gemini-2.5-pro",
+							architecture: { input_modalities: ["text"] },
+						},
+						{ id: "anthropic/claude-opus-4" },
+					],
+				}),
+		});
+		const models = await options.fetchDynamicModels?.();
+		const sonnet = models?.find(model => model.id === "anthropic/claude-sonnet-4");
+		const gemini = models?.find(model => model.id === "google/gemini-2.5-pro");
+		const opus = models?.find(model => model.id === "anthropic/claude-opus-4");
+		expect(sonnet?.input).toEqual(["text"]);
+		expect(sonnet && buildModel(sonnet).input).toEqual(["text"]);
+		expect(gemini?.input).toEqual(["text"]);
+		expect(gemini && buildModel(gemini).input).toEqual(["text"]);
+		expect(opus?.input).toEqual(["text"]);
+		expect(opus && buildModel(opus).input).toEqual(["text", "image"]);
+	});
+
+	test("a public tunnel 401/403 is an auth rejection; a local 401 stays empty", async () => {
+		// fetchOpenAICompatibleModels turns every non-OK /models response into
+		// null. On a public tunnel that null never reached the registry's
+		// authentication handling, so a bad bearer looked like a dead proxy.
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openzoo-auth-"));
+		try {
+			const tunnel = openzooModelManagerOptions({
+				baseUrl: "https://tunnel.example/v1",
+				fetch: async () => new Response("unauthorized", { status: 401 }),
+			});
+			const rejected = await tunnel.fetchDynamicModels?.().then(
+				() => null,
+				(error: unknown) => error,
+			);
+			expect(rejected).toBeInstanceOf(DiscoveryAuthRejectionError);
+			expect(rejected).toMatchObject({
+				status: 401,
+				message: "HTTP 401 from https://tunnel.example/v1/models",
+			});
+
+			const forbidden = openzooModelManagerOptions({
+				baseUrl: "https://tunnel.example/v1/",
+				fetch: async () => new Response("forbidden", { status: 403 }),
+			});
+			await expect(forbidden.fetchDynamicModels?.()).rejects.toMatchObject({ status: 403 });
+
+			const manager = createModelManager({
+				...openzooModelManagerOptions({
+					baseUrl: "https://tunnel.example/v1",
+					fetch: async () => new Response("unauthorized", { status: 401 }),
+				}),
+				staticModels: [],
+				cacheDbPath: path.join(tempDir, "models.db"),
+			});
+			await expect(manager.refresh("online")).rejects.toBeInstanceOf(DiscoveryAuthRejectionError);
+
+			const local = openzooModelManagerOptions({
+				baseUrl: "http://127.0.0.1:8402/v1",
+				fetch: async () => new Response("unauthorized", { status: 401 }),
+			});
+			expect(await local.fetchDynamicModels?.()).toBeNull();
+
+			const outage = openzooModelManagerOptions({
+				baseUrl: "https://tunnel.example/v1",
+				fetch: async () => new Response("unavailable", { status: 500 }),
+			});
+			expect(await outage.fetchDynamicModels?.()).toBeNull();
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
 	});
 });

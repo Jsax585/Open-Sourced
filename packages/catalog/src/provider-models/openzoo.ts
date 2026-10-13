@@ -8,14 +8,16 @@
  * bundled, and a successful discovery is authoritative.
  */
 import { type EffortVariantFamily, reviewedCollapseTable } from "../compat/collapse";
+import { hasLocalLoopbackBaseUrl } from "../compat/resolve";
 import { classifyModel } from "../compat/taxonomy";
+import { DiscoveryAuthRejectionError } from "../discovery/auth-rejection";
 import { fetchOpenAICompatibleModels, type OpenAICompatibleModelRecord } from "../discovery/openai-compatible";
 import { getBundledModelReferenceIndex } from "../identity/bundled";
 import type { ModelReferenceIndex } from "../identity/reference";
 import { resolveModelReference } from "../identity/reference";
 import type { ModelManagerOptions } from "../model-manager";
-import type { FetchImpl, ModelSpec, TokenCost } from "../types";
-import { isRecord, toPositiveNumber } from "../utils";
+import type { FetchImpl, ModelSpec, OpenAICompat, TokenCost } from "../types";
+import { discoveryFetch, isRecord, toPositiveNumber } from "../utils";
 import { getDefaultModelDiscoveryBaseUrl, resolveModelCacheProviderId } from "./cache-provider-id";
 
 export const OPENZOO_DEFAULT_BASE_URL = "http://localhost:8402/v1";
@@ -95,6 +97,30 @@ function listIncludes(value: unknown, token: string): boolean {
 	return Array.isArray(value) && value.includes(token);
 }
 
+function listIncludesEvery(value: unknown, tokens: readonly string[]): boolean {
+	return tokens.every(token => listIncludes(value, token));
+}
+
+/**
+ * Parameters gated by `supportsSamplingParams` (`temperature`, `top_p`).
+ * `top_k` and `min_p` ride the same flag but are not required: ordinary
+ * OpenAI-compatible rows advertise temperature and top_p without those
+ * extensions, and requiring them would drop temperature too.
+ */
+const OPENZOO_SAMPLING_PARAMETERS = ["temperature", "top_p"] as const;
+
+/**
+ * Parameters gated by `supportsPenaltyAndStopParams`. One flag covers every
+ * penalty field and `stop`, so a present list that omits any of them disables
+ * the group.
+ */
+const OPENZOO_PENALTY_AND_STOP_PARAMETERS = [
+	"presence_penalty",
+	"frequency_penalty",
+	"repetition_penalty",
+	"stop",
+] as const;
+
 /**
  * Reasoning the live row actually advertises. A matching bundled id from
  * another provider is not a signal — that host may expose a different
@@ -133,6 +159,28 @@ function liveOpenzooSupportsTools(entry: OpenAICompatibleModelRecord): boolean |
 }
 
 /**
+ * Sampling compatibility the live row actually advertises.
+ *
+ * `false` for a group when `supported_parameters` is present and omits any
+ * control in that group: the completions transport sends the whole group
+ * whenever the flag is on, and a route that did not advertise a control
+ * rejects it with 400. `true` when the list includes every control in the
+ * group, so a cached no does not survive a refresh that now advertises them.
+ * `undefined` when the list is absent — absence stays neutral.
+ */
+function liveOpenzooSamplingCompat(
+	entry: OpenAICompatibleModelRecord,
+): Pick<OpenAICompat, "supportsSamplingParams" | "supportsPenaltyAndStopParams"> | undefined {
+	if (!Array.isArray(entry.supported_parameters)) {
+		return undefined;
+	}
+	return {
+		supportsSamplingParams: listIncludesEvery(entry.supported_parameters, OPENZOO_SAMPLING_PARAMETERS),
+		supportsPenaltyAndStopParams: listIncludesEvery(entry.supported_parameters, OPENZOO_PENALTY_AND_STOP_PARAMETERS),
+	};
+}
+
+/**
  * Input modalities the live row actually advertises. `undefined` means the
  * roster omitted them — leave the discovery default and let KDL
  * `input-modalities` correct at `buildModel` time.
@@ -165,9 +213,14 @@ function liveOpenzooInput(entry: OpenAICompatibleModelRecord): ("text" | "image"
  * signal. A present `supported_parameters` list that omits `tools` marks
  * the model not tool-capable; a list that includes `tools` sets
  * `supportsTools: true` so a cached no does not survive the refresh; a
- * missing list leaves that unset. Reviewed corrections are rule-owned
- * (`providers/openzoo.kdl`) and applied at `buildModel` time. Pricing is
- * always the proxy's: it is what the wallet pays.
+ * missing list leaves that unset. The same list sets
+ * `supportsSamplingParams` / `supportsPenaltyAndStopParams` false when it
+ * omits that group's controls, and leaves both unset when the list itself
+ * is absent. An explicit modality report sets `inputModalitiesReported` so
+ * the image correction in `providers/openzoo.kdl` does not overwrite a
+ * text-only row; an omitted report stays neutral and the correction fills
+ * it at `buildModel` time. Pricing is always the proxy's: it is what the
+ * wallet pays.
  *
  * `context_length` is deliberately ignored: the proxy reports the ceiling its
  * bind/retrieval layer accepts (128M tokens), not the transformer's window,
@@ -181,6 +234,10 @@ export function mapOpenzooModel(
 	const family = openzooVariantFamily(defaults.id);
 	const supportsTools = liveOpenzooSupportsTools(entry);
 	const toolSupport = supportsTools !== undefined ? { supportsTools } : {};
+	const sampling = liveOpenzooSamplingCompat(entry);
+	const samplingCompat = sampling !== undefined ? { compat: sampling } : {};
+	const liveInput = liveOpenzooInput(entry);
+	const reportedInput = liveInput !== undefined ? { inputModalitiesReported: true } : {};
 	if (family) {
 		// Same live capability fields as an ordinary row. The family return
 		// used to keep the generic reasoning:false / input:["text"] defaults,
@@ -188,10 +245,12 @@ export function mapOpenzooModel(
 		return {
 			...defaults,
 			...toolSupport,
+			...samplingCompat,
+			...reportedInput,
 			id: family.id,
 			name: family.name,
 			reasoning: liveOpenzooReasoning(entry),
-			input: liveOpenzooInput(entry) ?? defaults.input,
+			input: liveInput ?? defaults.input,
 			cost: mapOpenzooCost(entry.pricing),
 			contextWindow: toPositiveNumber(entry.max_model_len, null),
 			maxTokens: toPositiveNumber(entry.max_output_tokens, null),
@@ -215,9 +274,11 @@ export function mapOpenzooModel(
 	return {
 		...defaults,
 		...toolSupport,
+		...samplingCompat,
+		...reportedInput,
 		name: canonical?.name ?? toDisplayName(entry.display_name, defaults.name),
 		reasoning: liveOpenzooReasoning(entry) || identity.thinkingVariant === true,
-		input: liveOpenzooInput(entry) ?? defaults.input,
+		input: liveInput ?? defaults.input,
 		cost: mapOpenzooCost(entry.pricing),
 		contextWindow,
 		maxTokens,
@@ -226,14 +287,34 @@ export function mapOpenzooModel(
 
 /**
  * An omit sticks for the rest of this roster fold, including over a later
- * alias that lists `tools`. An explicit `true` sticks while no alias omitted
- * tools, so a tools advertisement on a later alias is not dropped. A missing
- * list is neutral.
+ * alias that advertises the capability. An explicit `true` sticks while no
+ * alias omitted it. A missing list is neutral.
  */
-function mergeOpenzooAdvertisedTools(previous: boolean | undefined, next: boolean | undefined): boolean | undefined {
+function mergeOpenzooAdvertisedBoolean(previous: boolean | undefined, next: boolean | undefined): boolean | undefined {
 	if (previous === false || next === false) return false;
 	if (previous === true || next === true) return true;
 	return undefined;
+}
+
+function mergeOpenzooSamplingCompat(
+	previous: ModelSpec<"openai-completions">["compat"],
+	next: ModelSpec<"openai-completions">["compat"],
+): ModelSpec<"openai-completions">["compat"] | undefined {
+	const supportsSamplingParams = mergeOpenzooAdvertisedBoolean(
+		previous?.supportsSamplingParams,
+		next?.supportsSamplingParams,
+	);
+	const supportsPenaltyAndStopParams = mergeOpenzooAdvertisedBoolean(
+		previous?.supportsPenaltyAndStopParams,
+		next?.supportsPenaltyAndStopParams,
+	);
+	if (supportsSamplingParams === undefined && supportsPenaltyAndStopParams === undefined) {
+		return undefined;
+	}
+	return {
+		...(supportsSamplingParams !== undefined ? { supportsSamplingParams } : {}),
+		...(supportsPenaltyAndStopParams !== undefined ? { supportsPenaltyAndStopParams } : {}),
+	};
 }
 
 /** Image input sticks once any router alias advertises it; a text-only alias does not clear it. */
@@ -253,9 +334,11 @@ function mergeOpenzooAdvertisedInput(
  * An alias whose parameter list omits `tools` marks the folded model not
  * tool-capable, and a later alias that lists `tools` does not clear that
  * mark. An alias with no list does not clear it either. A tools
- * advertisement is kept when no alias omitted tools.
- * Advertised reasoning and image input are a union: a later alias that
- * reports either keeps it, and an alias that omits them does not clear it.
+ * advertisement is kept when no alias omitted tools. Sampling and
+ * penalty/stop flags fold the same way. Advertised reasoning and image
+ * input are a union: a later alias that reports either keeps it, and an
+ * alias that omits them does not clear it. An explicit modality report on
+ * any alias keeps the folded input from the image correction.
  */
 export function createOpenzooModelMapper(
 	references: ModelReferenceIndex,
@@ -271,8 +354,11 @@ export function createOpenzooModelMapper(
 		}
 		const previous = variants.get(row.id);
 		const supportsTools = previous
-			? mergeOpenzooAdvertisedTools(previous.supportsTools, row.supportsTools)
+			? mergeOpenzooAdvertisedBoolean(previous.supportsTools, row.supportsTools)
 			: row.supportsTools;
+		const sampling = previous ? mergeOpenzooSamplingCompat(previous.compat, row.compat) : row.compat;
+		const inputModalitiesReported =
+			previous?.inputModalitiesReported === true || row.inputModalitiesReported === true;
 		const merged = previous
 			? {
 					...previous,
@@ -287,6 +373,8 @@ export function createOpenzooModelMapper(
 					contextWindow: previous.contextWindow ?? row.contextWindow,
 					maxTokens: previous.maxTokens ?? row.maxTokens,
 					...(supportsTools !== undefined ? { supportsTools } : {}),
+					...(sampling !== undefined ? { compat: sampling } : {}),
+					...(inputModalitiesReported ? { inputModalitiesReported: true } : {}),
 				}
 			: row;
 		variants.set(row.id, merged);
@@ -303,18 +391,34 @@ export function openzooModelManagerOptions(
 		providerId: "openzoo",
 		cacheProviderId: resolveModelCacheProviderId("openzoo", { baseUrl }),
 		dynamicModelsAuthoritative: true,
-		fetchDynamicModels: () => {
+		fetchDynamicModels: async () => {
 			// Resolved here, not at options construction: walking the bundled
 			// reference index is only worth paying for when discovery actually runs.
 			const mapModel = createOpenzooModelMapper(getBundledModelReferenceIndex());
-			return fetchOpenAICompatibleModels({
+			// The local proxy is keyless. A public tunnel checks the oz_ bearer
+			// and answers 401/403 when it is missing or wrong; that status has to
+			// survive as an auth rejection instead of a silent empty catalog.
+			const tunnel = !hasLocalLoopbackBaseUrl(baseUrl);
+			let authStatus: 401 | 403 | undefined;
+			const fetchImpl: FetchImpl = async (input, init) => {
+				const response = await discoveryFetch(config?.fetch)(input, init);
+				if (tunnel && (response.status === 401 || response.status === 403)) {
+					authStatus = response.status;
+				}
+				return response;
+			};
+			const models = await fetchOpenAICompatibleModels({
 				api: "openai-completions",
 				provider: "openzoo",
 				baseUrl,
 				apiKey,
 				mapModel: (entry, defaults) => mapModel(entry, defaults),
-				fetch: config?.fetch,
+				fetch: fetchImpl,
 			});
+			if (models === null && authStatus !== undefined) {
+				throw new DiscoveryAuthRejectionError(authStatus, `${baseUrl}/models`);
+			}
+			return models;
 		},
 	};
 }

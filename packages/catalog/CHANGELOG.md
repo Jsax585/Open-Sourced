@@ -10,6 +10,9 @@
 
 ### Fixed
 
+- Fixed OpenZoo sending temperature, top_p, penalties, or stop to a model whose live roster lists parameters and omits those controls.
+- Fixed OpenZoo marking a model image-capable when its live roster explicitly reports text-only input.
+- Fixed OpenZoo public-tunnel discovery treating an HTTP 401/403 from `/models` as an unavailable provider instead of an authentication failure.
 - Fixed the OpenZoo `auto` router hiding reasoning and image input when the live roster advertises them.
 - Fixed OpenZoo sessions sending native tool calls to models whose live roster lists parameters and omits tools.
 - Fixed OpenZoo models staying tool-disabled after a refresh when the live roster starts advertising tools.

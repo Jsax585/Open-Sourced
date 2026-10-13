@@ -1560,6 +1560,13 @@ export interface Model<TApi extends Api = Api> {
 	tokenizer?: ModelTokenizer;
 	input: ("text" | "image")[];
 	/**
+	 * The discovery row reported input modalities. When true, a catalog
+	 * `input-modalities` correction does not replace `input`: the correction
+	 * only fills rows that omitted modality metadata, so an explicit text-only
+	 * report stays text-only.
+	 */
+	inputModalitiesReported?: boolean;
+	/**
 	 * Decoder family used for image inputs when it has narrower format support
 	 * than OMP's general image pipeline. `stb` local backends reject WebP.
 	 */

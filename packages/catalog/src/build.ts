@@ -173,7 +173,7 @@ function applyCatalogAssignments<TApi extends Api>(model: Model<TApi>, catalog: 
  * limits and pricing still win.
  */
 export function applyCatalogCorrections(
-	model: Pick<ModelSpec<Api>, "cost" | "contextWindow" | "maxTokens" | "input">,
+	model: Pick<ModelSpec<Api>, "cost" | "contextWindow" | "maxTokens" | "input" | "inputModalitiesReported">,
 	catalog: Record<string, unknown>,
 ): void {
 	const patch = objectPayload(catalog.costPatch);
@@ -270,7 +270,9 @@ export function applyCatalogCorrections(
 		model.contextWindow = Math.max(model.contextWindow ?? 0, contextWindowFloor);
 	}
 	const inputModalities = catalog.inputModalities;
-	if (isInputModalities(inputModalities)) {
+	// A live roster that reported modalities owns `input`, including an
+	// explicit text-only list. The correction fills rows that omitted it.
+	if (isInputModalities(inputModalities) && model.inputModalitiesReported !== true) {
 		model.input = inputModalities;
 	}
 }

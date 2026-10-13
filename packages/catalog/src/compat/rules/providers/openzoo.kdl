@@ -19,7 +19,9 @@ provider "openzoo" {
 	// generating would freeze one snapshot into models.json.
 
 	// Modern Claude and Gemini are multimodal on the OpenAI-completions
-	// proxy; the roster carries no architecture.modality.
+	// proxy when the roster omits architecture. An explicit live
+	// input_modalities report, including text-only, is kept: buildModel
+	// applies these corrections only for that omitted case.
 	class "anthropic" {
 		input-modalities "text" "image"
 	}

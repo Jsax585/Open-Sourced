@@ -258,7 +258,7 @@ const LOCAL_OPENAI_COMPAT_PROVIDERS: Record<string, true> = {
 	ollama: true,
 };
 const PROXY_OPENAI_COMPAT_PROVIDERS: Record<string, true> = { litellm: true };
-function hasLocalLoopbackBaseUrl(baseUrl: string | undefined): boolean {
+export function hasLocalLoopbackBaseUrl(baseUrl: string | undefined): boolean {
 	if (!baseUrl) return false;
 	let hostname: string;
 	try {
