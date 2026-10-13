@@ -179,6 +179,7 @@ async function spawnKeptAliveChild(systemPreset?: "minimal-task", agentId = AGEN
 				"todo.enabled": false,
 				"todo.reminders": false,
 				"advisor.enabled": false,
+				inlineToolDescriptors: "on",
 				modelRoles: { default: "mock/mock-model" },
 			}),
 			enableLsp: false,
@@ -236,7 +237,15 @@ it("minimal-task omits inherited prompt and autoload skill content while default
 		expect(minimalText).not.toContain("SKILL_SENTINEL");
 		expect(minimalMessages).not.toContain("Skill body sentinel");
 		expect(minimalText).toContain("CHILD_ROLE_SENTINEL");
-		expect(minimal.calls.some(call => call.context.tools?.some(tool => tool.name === "yield"))).toBe(true);
+		const normalTools = normal.calls.flatMap(call => call.context.tools ?? []);
+		const minimalTools = minimal.calls.flatMap(call => call.context.tools ?? []);
+		const normalYieldTool = normalTools.find(tool => tool.name === "yield");
+		const minimalYieldTool = minimalTools.find(tool => tool.name === "yield");
+		expect(normalYieldTool).toBeDefined();
+		expect(minimalYieldTool).toBeDefined();
+		expect(normalYieldTool?.description).toBe("");
+		expect(minimalYieldTool?.description).toContain("Submit subagent output");
+		expect(JSON.stringify(minimalYieldTool?.parameters)).toContain("Optional result type");
 	} finally {
 		normal.close();
 		minimal.close();

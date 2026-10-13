@@ -557,6 +557,41 @@ describe("persisted subagent revival", () => {
 		expect(capturedOptions?.rules).toEqual([]);
 	});
 
+	it("keeps project context out of an advisor after a minimal cold revival", async () => {
+		const cwd = makeTempDir("@pi-minimal-revive-context-");
+		await Bun.write(path.join(cwd, "AGENTS.md"), "PROJECT_CONTEXT_SENTINEL");
+		const sessionFile = await createPersistedSession(cwd, undefined, "default", "on", {
+			systemPreset: "minimal-task",
+		});
+		const authStorage = await AuthStorage.create(":memory:");
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+		const settings = Settings.isolated({
+			modelRoles: {
+				default: "anthropic/claude-sonnet-4-5",
+				advisor: "anthropic/claude-sonnet-4-5",
+			},
+		});
+		MCPManager.setInstance(fakeMcpManager(() => []));
+		const ref = AgentRegistry.global().register({
+			...createRef(sessionFile),
+			id: "minimal-revive-context",
+		});
+		let revived: AgentSession | undefined;
+		try {
+			const reviver = await createFactory(cwd, undefined, { authStorage, modelRegistry, settings })(ref);
+			if (!reviver) throw new Error("Expected a persisted reviver");
+			revived = await reviver(ref);
+			const advisor = revived.getAdvisorAgent();
+			if (!advisor) throw new Error("Expected a revived advisor");
+			expect(advisor.state.systemPrompt.join("\n")).not.toContain("PROJECT_CONTEXT_SENTINEL");
+		} finally {
+			await revived?.dispose();
+			AgentRegistry.global().unregister(ref.id);
+			authStorage.close();
+		}
+	});
+
 	it("leaves isolated sessions transcript-only even when the workspace still exists", async () => {
 		// Isolated runs are never resumable: the worktree is merged + cleaned,
 		// and the parent is told messaging is impossible. A retained workspace

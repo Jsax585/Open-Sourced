@@ -180,7 +180,7 @@ export function createPersistedSubagentReviverFactory(
 			const oauthAccountPools =
 				init.agent && Object.hasOwn(agentAccountPools, init.agent) ? agentAccountPools[init.agent] : undefined;
 			const minimalCapabilityOverrides =
-				init.systemPreset === "minimal-task" ? { skills: [], rules: [] } : undefined;
+				init.systemPreset === "minimal-task" ? { contextFiles: [], skills: [], rules: [] } : undefined;
 			const persistedModelPattern =
 				init.modelRole && init.modelRole !== "default"
 					? [formatModelRoleAlias(init.modelRole), ...(init.resolvedModel ? [init.resolvedModel] : [])]
