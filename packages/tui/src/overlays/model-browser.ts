@@ -369,13 +369,16 @@ function sortMetricValue(
 		case "cost": {
 			const cost = model.cost;
 			if (!cost) return undefined;
-			// A negative leg is a sentinel, not a price: the bundled
-			// `openrouter/auto` rows carry -1e6 and `formatCostLeg` prints them
-			// as `?`, so the order must not treat them as the cheapest models.
+			// A negative leg is a sentinel, not a rate: the bundled
+			// `openrouter/auto` rows carry -1e6, and a `modelOverrides` entry can
+			// pair one with a valid leg. `formatCostLeg` prints such a leg as `?`,
+			// so a card with an unknown leg has no known blended price either —
+			// and `isTokenCost` deliberately keeps finite negatives, so this is
+			// reachable from config, not just the bundled catalog.
 			const input = Number.isFinite(cost.input) && cost.input >= 0 ? cost.input : undefined;
 			const output = Number.isFinite(cost.output) && cost.output >= 0 ? cost.output : undefined;
-			if (input === undefined && output === undefined) return undefined;
-			const blended = (input ?? 0) * COST_INPUT_WEIGHT + (output ?? 0) * COST_OUTPUT_WEIGHT;
+			if (input === undefined || output === undefined) return undefined;
+			const blended = input * COST_INPUT_WEIGHT + output * COST_OUTPUT_WEIGHT;
 			// A zero rate card is a $0 price only when the row really is free. A
 			// rule declaring `unknown`/`variable`/`included` is saying the rate
 			// is unpublished, so the row is unscored — otherwise an unknown-price

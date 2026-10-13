@@ -676,6 +676,10 @@ export class ModelHubComponent implements Component {
 		const mruOrder = this.#settings.mruOrder;
 		this.#adoptPersistedSort();
 		this.#availableItems = buildBrowserItems(availableModels);
+		// Perf stats first: the `tps` order resolves measured speed through the
+		// browser, so sorting before the map lands would rank a reopened hub by
+		// the catalog estimate while its rows print the measurement.
+		this.#browser.setPerfStats(this.#settings.modelPerf);
 		sortModelItems(this.#availableItems, {
 			roles: this.#roles,
 			mruOrder,
@@ -686,7 +690,6 @@ export class ModelHubComponent implements Component {
 		this.#browser.setRoles(this.#roles);
 		this.#browser.setMruOrder(mruOrder);
 		this.#browser.setSort(this.#sort, this.#sortGrouped);
-		this.#browser.setPerfStats(this.#settings.modelPerf);
 
 		const bySelector = new Map(this.#availableItems.map(item => [item.selector, item]));
 		this.#recentItems = [];

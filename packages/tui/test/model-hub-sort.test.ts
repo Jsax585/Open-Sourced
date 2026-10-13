@@ -217,6 +217,20 @@ describe("model hub metric order", () => {
 		expect(sortWrites).toEqual(["int:desc", "int:asc", "tps:desc", "tps:asc", "cost:asc"]);
 	});
 
+	test("orders a reopened hub by measured speed, not the catalog estimate", () => {
+		// Reopening with `modelSort: tps:desc` must land on the measured order.
+		// The sort runs during the registry sync, so the browser has to hold the
+		// perf stats by then — otherwise the first paint ranks by the `~` estimate
+		// while printing the measurement.
+		const perf = new Map([
+			["demo/top", { samples: 5, tps: 5, ttftMs: null }],
+			["demo/dim", { samples: 5, tps: 250, ttftMs: null }],
+		]);
+		const { rows } = createHub({ modelSort: "tps:desc", modelPerf: perf });
+
+		expect(rowOrder(rows())).toEqual(["demo/dim", "demo/mid", "demo/top", "demo/unscored"]);
+	});
+
 	test("a persisted modelSort is adopted when the hub opens", () => {
 		const { rows, key, sortWrites } = createHub({ modelSort: "int:desc" });
 		focusRows(key);

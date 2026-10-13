@@ -119,6 +119,22 @@ describe("sortModelItems metric order", () => {
 		expect(items.map(item => item.id)).toEqual(["priced", "sentinel"]);
 	});
 
+	it("treats a card with one unknown leg as unscored, not half-priced", () => {
+		// `isTokenCost` keeps finite negatives, so a models.yml override can pair
+		// a sentinel with a real rate. `formatCostLeg` prints that leg as `?` and
+		// the row reads `$?/10` — it must not rank as a known 2.5.
+		const items = buildBrowserItems([
+			providerModel("beta", "half-known", { input: -1_000_000, output: 10 }),
+			providerModel("alpha", "priced", { input: 1, output: 1 }),
+		]);
+
+		sortModelItems(items, { sort: { metric: "cost", direction: "asc" } });
+		expect(items.map(item => item.id)).toEqual(["priced", "half-known"]);
+
+		sortModelItems(items, { sort: { metric: "cost", direction: "desc" } });
+		expect(items.map(item => item.id)).toEqual(["priced", "half-known"]);
+	});
+
 	it("ranks a genuinely free row at zero", () => {
 		const items = buildBrowserItems([
 			providerModel("alpha", "priced", { input: 1, output: 1 }),
