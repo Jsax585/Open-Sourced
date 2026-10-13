@@ -959,6 +959,7 @@ export class TurnRecovery {
 			branchById.set(entry.id, entry);
 		}
 		const retryErrors: RetryErrorUpdate[] = [];
+		const changedEntries: SessionEntry[] = [];
 		for (const pending of this.#pendingRetryErrors) {
 			let entry = branchById.get(pending.entryId);
 			if (entry?.type !== "message" || entry.message.role !== "assistant") {
@@ -998,6 +999,7 @@ export class TurnRecovery {
 				};
 			}
 			entry.message.retryRecovery = retryRecovery;
+			changedEntries.push(entry);
 			retryErrors.push({
 				entryId: entry.id,
 				persistenceKey: pending.persistenceKey,
@@ -1006,7 +1008,7 @@ export class TurnRecovery {
 			});
 		}
 		if (retryErrors.length > 0) {
-			await this.#host.sessionManager.rewriteEntries();
+			await this.#host.sessionManager.rewriteEntries(changedEntries);
 		}
 		return retryErrors;
 	}

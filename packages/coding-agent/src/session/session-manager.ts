@@ -1587,15 +1587,19 @@ export class SessionManager {
 
 	#recordAppendFailure(entry: SessionEntry, errorLike: unknown): void {
 		const entryIndex = this.#entries.indexOf(entry);
-		if (
-			entryIndex >= 0 &&
-			(this.#firstUndurableEntryIndex === undefined || entryIndex < this.#firstUndurableEntryIndex)
-		) {
-			this.#firstUndurableEntryIndex = entryIndex;
+		if (entryIndex >= 0) this.#markUndurableFrom(entryIndex);
+		else {
+			this.#fileIsCurrent = false;
+			this.#rewriteRequired = true;
 		}
+		this.#noteDiskFailure(errorLike);
+	}
+
+	/** Make the next write republish the journal from `entryIndex` instead of appending after it. */
+	#markUndurableFrom(entryIndex: number): void {
+		this.#firstUndurableEntryIndex = Math.min(this.#firstUndurableEntryIndex ?? entryIndex, entryIndex);
 		this.#fileIsCurrent = false;
 		this.#rewriteRequired = true;
-		this.#noteDiskFailure(errorLike);
 	}
 
 	#recordFullRewrite(bytes: number): void {
@@ -3710,10 +3714,21 @@ export class SessionManager {
 	/**
 	 * Rewrite the session file after in-place entry updates (e.g. pruning old tool
 	 * outputs). Use sparingly.
+	 *
+	 * `changedEntries` names entries the caller changed in place and keeps changed
+	 * if this rewrite fails. They are marked undurable before the rewrite, so a
+	 * failed rewrite makes the next write republish from the earliest of them and
+	 * a restart cannot restore their old records. A caller that undoes its edits
+	 * on failure passes none, leaving later appends incremental.
 	 */
-	async rewriteEntries(): Promise<void> {
+	async rewriteEntries(changedEntries: Iterable<SessionEntry> = []): Promise<void> {
 		this.#bodyRevision++;
 		if (!this.#persist || !this.#sessionFile) return;
+		const changed = new Set(changedEntries);
+		if (changed.size > 0) {
+			const firstChanged = this.#entries.findIndex(entry => changed.has(entry));
+			if (firstChanged >= 0) this.#markUndurableFrom(firstChanged);
+		}
 		await this.#rewriteAtomically(true);
 	}
 
@@ -3982,12 +3997,7 @@ export class SessionManager {
 			// The marker append cannot describe the removed entry or its reparented
 			// children. If this rewrite fails, a later hot append would make the
 			// stale on-disk tree the one a restart reconstructs.
-			this.#firstUndurableEntryIndex = Math.min(
-				this.#firstUndurableEntryIndex ?? structuralMutationStart,
-				structuralMutationStart,
-			);
-			this.#fileIsCurrent = false;
-			this.#rewriteRequired = true;
+			this.#markUndurableFrom(structuralMutationStart);
 		}
 		await this.rewriteEntries();
 	}

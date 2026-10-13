@@ -804,9 +804,14 @@ export class SessionMaintenance {
 	async dropImages(): Promise<{ removed: number }> {
 		const branchEntries = this.#host.sessionManager.getBranch();
 		let removed = 0;
+		const changedEntries: SessionEntry[] = [];
 		for (const entry of branchEntries) {
 			if (entry.type === "message") {
-				removed += stripImagesFromMessage(entry.message);
+				const dropped = stripImagesFromMessage(entry.message);
+				if (dropped > 0) {
+					removed += dropped;
+					changedEntries.push(entry);
+				}
 				continue;
 			}
 			if (entry.type === "custom_message" && typeof entry.content !== "string") {
@@ -825,13 +830,14 @@ export class SessionMaintenance {
 					}
 					entry.content = kept;
 					removed += dropped;
+					changedEntries.push(entry);
 				}
 			}
 		}
 		if (removed === 0) {
 			return { removed: 0 };
 		}
-		await this.#host.sessionManager.rewriteEntries();
+		await this.#host.sessionManager.rewriteEntries(changedEntries);
 		const sessionContext = this.#host.buildDisplaySessionContext();
 		this.#host.agent.replaceMessages(sessionContext.messages);
 		this.#host.resetAdvisorRuntimes("drop-images");
@@ -883,6 +889,7 @@ export class SessionMaintenance {
 			let removed = 0;
 			let tokensFreed = 0;
 			let anchoredTokensRemoved = 0;
+			const changedEntries: SessionEntry[] = [];
 			const countOptions = { excludeEncryptedReasoning: true } as const;
 			for (const [index, entry] of branchEntries.entries()) {
 				if (entry.type !== "message" || entry.message.role !== "assistant") continue;
@@ -898,6 +905,7 @@ export class SessionMaintenance {
 				// Provider serializers omit empty assistant turns, so don't invent model-authored text.
 				message.content = kept;
 				invalidateMessageCache(message);
+				changedEntries.push(entry);
 				const saved = Math.max(0, before - this.#tokenizer.countMessage(message, countOptions));
 				tokensFreed += saved;
 				if (index < anchorIndex && (!hasRemoteReplacementHistory || index > compactionIndex)) {
@@ -909,7 +917,7 @@ export class SessionMaintenance {
 				return { mode, toolResultsDropped: 0, blocksDropped: 0, thinkingBlocksDropped: 0, tokensFreed: 0 };
 			}
 			this.#host.recordAnchoredHistoryRewrite(anchoredTokensRemoved);
-			await this.#host.sessionManager.rewriteEntries();
+			await this.#host.sessionManager.rewriteEntries(changedEntries);
 			const sessionContext = this.#host.buildDisplaySessionContext();
 			this.#host.agent.replaceMessages(sessionContext.messages);
 			this.#host.resetAdvisorRuntimes("shake");
@@ -1871,7 +1879,7 @@ export class SessionMaintenance {
 				const entry = getLatestCompactionEntry(this.#host.sessionManager.getBranch());
 				if (entry) {
 					entry.warning = warning;
-					await this.#host.sessionManager.rewriteEntries();
+					await this.#host.sessionManager.rewriteEntries([entry]);
 				}
 				this.#host.emitNotice("warning", warning, "compaction");
 				return COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION;
@@ -4921,7 +4929,7 @@ export class SessionMaintenance {
 						const stampEntry = getLatestCompactionEntry(this.#host.sessionManager.getBranch());
 						if (stampEntry) {
 							stampEntry.warning = deadEndWarning;
-							await this.#host.sessionManager.rewriteEntries();
+							await this.#host.sessionManager.rewriteEntries([stampEntry]);
 						}
 					}
 					// A successful frame rescue rewrote history and activated a new
@@ -5687,7 +5695,7 @@ export class SessionMaintenance {
 			const stampEntry = getLatestCompactionEntry(this.#host.sessionManager.getBranch()) ?? savedCompactionEntry;
 			if (stampEntry) {
 				stampEntry.warning = deadEndWarning;
-				await this.#host.sessionManager.rewriteEntries();
+				await this.#host.sessionManager.rewriteEntries([stampEntry]);
 			}
 		}
 
