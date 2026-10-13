@@ -508,7 +508,11 @@ export interface SessionAdvisorsHost {
 		currentSelector: string,
 		currentModel?: Model | null,
 	): RetryFallbackSelector[];
-	isRetryFallbackSelectorSuppressed(selector: RetryFallbackSelector, signal?: AbortSignal): Promise<boolean>;
+	isRetryFallbackSelectorSuppressed(
+		selector: RetryFallbackSelector,
+		signal?: AbortSignal,
+		sessionIdOverride?: string,
+	): Promise<boolean>;
 	noteRetryFallbackCooldown(
 		currentSelector: string,
 		retryAfterMs: number | undefined,
@@ -2024,7 +2028,11 @@ export class SessionAdvisors {
 		const currentSelector = formatRetryFallbackSelector(advisor.agent.state.model, advisor.thinkingLevel);
 		if (currentSelector === originalSelector.raw) {
 			if (
-				!(await this.#host.isRetryFallbackSelectorSuppressed(originalSelector, signal)) &&
+				!(await this.#host.isRetryFallbackSelectorSuppressed(
+					originalSelector,
+					signal,
+					advisor.providerSessionId,
+				)) &&
 				advisor.retryFallback === fallback
 			) {
 				advisor.retryFallback = undefined;
@@ -2032,7 +2040,8 @@ export class SessionAdvisors {
 			}
 			return;
 		}
-		if (await this.#host.isRetryFallbackSelectorSuppressed(originalSelector, signal)) return;
+		if (await this.#host.isRetryFallbackSelectorSuppressed(originalSelector, signal, advisor.providerSessionId))
+			return;
 		if (advisor.retryFallback !== fallback || advisor.runtime.disposed) return;
 
 		const resolvedPrimary = resolveModelOverride(

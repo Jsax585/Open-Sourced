@@ -204,7 +204,16 @@ function mergeUsageReports(base: UsageReport, overlay: UsageReport): UsageReport
 		} else {
 			// Retained from the older base snapshot: keep its own fetch time so
 			// cutoff checks cannot treat it as fresh via the merged maximum.
-			limits.push({ ...limit, fetchedAt: base.fetchedAt });
+			// A base that is itself a merge already carries a per-limit stamp
+			// newer than the report-wide one; preserve it instead of ratcheting
+			// the row back to the older snapshot time on every merge.
+			limits.push({
+				...limit,
+				fetchedAt:
+					typeof limit.fetchedAt === "number" && Number.isFinite(limit.fetchedAt)
+						? limit.fetchedAt
+						: base.fetchedAt,
+			});
 		}
 	}
 	for (const limit of overlayLimitsById.values()) {

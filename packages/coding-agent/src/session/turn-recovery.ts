@@ -1809,9 +1809,13 @@ export class TurnRecovery {
 	}
 
 	/** Checks cooldowns against fresh usage evidence when the failure was quota-related. */
-	async isRetryFallbackSelectorSuppressed(selector: RetryFallbackSelector, signal?: AbortSignal): Promise<boolean> {
+	async isRetryFallbackSelectorSuppressed(
+		selector: RetryFallbackSelector,
+		signal?: AbortSignal,
+		sessionIdOverride?: string,
+	): Promise<boolean> {
 		return this.#host.modelRegistry.isSelectorSuppressedWithRecovery(selector.raw, {
-			sessionId: this.#host.sessionId(),
+			sessionId: sessionIdOverride ?? this.#host.sessionId(),
 			reserveFraction: cfgRetryUsageReservePct.get(this.#host.settings) / 100,
 			signal,
 		});

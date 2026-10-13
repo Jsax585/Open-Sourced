@@ -567,7 +567,16 @@ export class UsageService implements UsageApi {
 				} else {
 					// Retained from the older full snapshot: keep its own fetch time so
 					// cutoff checks cannot treat it as fresh via the report-wide stamp.
-					limits.push({ ...limit, fetchedAt: prior.fetchedAt });
+					// A prior entry that is itself a merge already carries a per-limit
+					// stamp newer than the snapshot time; preserve it instead of
+					// ratcheting the row back on every merge.
+					limits.push({
+						...limit,
+						fetchedAt:
+							typeof limit.fetchedAt === "number" && Number.isFinite(limit.fetchedAt)
+								? limit.fetchedAt
+								: prior.fetchedAt,
+					});
 				}
 			}
 			for (const limit of headerLimitsById.values()) {
