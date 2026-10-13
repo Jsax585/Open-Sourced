@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added opt-in provider-neutral Code Mode (`tools.codeMode`, `tools.codeModeDirectTools`) for batched eval tool calls, on-demand schemas, and cache-stable tool discovery.
+
+### Changed
+
+- `provider.appendOnlyContext: auto` now enables prefix reuse while provider-neutral Code Mode is active; explicit `off` still takes precedence.
+
 ## [18.10.4] - 2026-10-13
 
 ### Added
@@ -9,12 +17,10 @@
 - Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
 - Added opt-in `omp gc --compress` (or `gc.compress`), which stores sessions idle for `gc.compressAfterDays` (default 7) with filesystem transparent compression (APFS, NTFS); they stay resumable and searchable ([#15600](https://github.com/can1357/oh-my-pi/pull/15600) by [@wolfiesch](https://github.com/wolfiesch))
 - Extensions can reopen a dismissed plan review while the session is idle (`ctx.openPlanReview()`) and pick the execution tier on `ctx.resolvePlanReview` (`input.role`); `plan_review_requested` now reports the slider's tiers ([#15552](https://github.com/can1357/oh-my-pi/pull/15552) by [@Shadorain](https://github.com/Shadorain))
-- Added opt-in provider-neutral Code Mode (`tools.codeMode`, `tools.codeModeDirectTools`) for batched eval tool calls, on-demand schemas, and cache-stable tool discovery.
 
 ### Changed
 
 - Tool approval prompts now replace the composer like `ask`, show one row per detail, and approve with `Ctrl+Enter` (or `Ctrl+Q`) instead of `Enter` ([#15548](https://github.com/can1357/oh-my-pi/pull/15548) by [@H4vC](https://github.com/H4vC))
-- `provider.appendOnlyContext: auto` now enables prefix reuse while provider-neutral Code Mode is active; explicit `off` still takes precedence.
 
 ### Fixed
 
@@ -26,7 +32,7 @@
 
 ### Removed
 
-- Removed Codex-specific Code Mode and its `providers.openai-codex.codeMode` / `providers.openai-codex.codeModeDirectTools` settings; use the opt-in provider-neutral `tools.codeMode` instead.
+- Removed Codex Code Mode and its `providers.openai-codex.codeMode` / `providers.openai-codex.codeModeDirectTools` settings; Codex models always use the full direct tool surface.
 
 ## [18.10.3] - 2026-10-12
 
