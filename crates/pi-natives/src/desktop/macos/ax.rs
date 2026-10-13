@@ -768,7 +768,8 @@ impl AxBackend for MacAx {
 	}
 
 	fn value_read_only(&mut self, h: &AxHandle) -> bool {
-		mac_handle(h).is_ok_and(|element| attribute_settable_answer(element, "AXValue") == Some(false))
+		mac_handle(h)
+			.is_ok_and(|element| attribute_settable_answer(element, "AXValue") == Some(false))
 	}
 }
 
