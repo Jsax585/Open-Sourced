@@ -461,3 +461,172 @@ describe("SessionManager + indexed backend durability", () => {
 		expect(backend.files.has(sessionFile)).toBe(false);
 	});
 });
+
+/** What a restart of `sessionFile` reads from `backend`, through a fresh index. */
+async function reopenIndexed(backend: FakeBackend, sessionFile: string): Promise<SessionManager> {
+	const storage = new IndexedSessionStorage(backend);
+	await storage.initialize();
+	return SessionManager.open(sessionFile, "/sessions/proj", storage, { suppressBreadcrumb: true });
+}
+
+const userTurnsOf = (entries: readonly SessionEntry[]) =>
+	entries.flatMap(entry => (entry.type === "message" && entry.message.role === "user" ? [entry.message.content] : []));
+
+/** An indexed session whose backend holds an assistant turn and the user turn "before". */
+async function seededIndexedSession() {
+	const made = await makeManager();
+	made.manager.appendMessage(assistantMessage("seed"));
+	made.manager.appendMessage({ role: "user", content: "before", timestamp: Date.now() });
+	await made.manager.flush();
+	await made.storage.drain();
+	const sessionFile = made.manager.getSessionFile();
+	if (!sessionFile) throw new Error("expected a session file");
+	return { ...made, sessionFile };
+}
+
+async function settle(manager: SessionManager, storage: IndexedSessionStorage): Promise<void> {
+	await manager.flush().catch(() => {});
+	await storage.drain().catch(() => {});
+}
+
+describe("indexed session turns while every whole-journal publish fails", () => {
+	it.each([
+		{
+			change: "an in-place entry edit followed by rewriteEntries()",
+			apply: async (manager: SessionManager) => {
+				const entry = manager.getEntries().find(e => e.type === "message" && e.message.role === "user");
+				if (entry?.type !== "message" || entry.message.role !== "user") throw new Error("expected a user entry");
+				entry.message.content = "edited in place";
+				await manager.rewriteEntries().catch(() => {});
+			},
+		},
+		{
+			change: "a header change",
+			apply: async (manager: SessionManager) => {
+				await manager.setTaskPromptCacheKey("task-cache-key").catch(() => {});
+			},
+		},
+	])("saves the next turns after $change", async ({ apply }) => {
+		const { backend, storage, manager, sessionFile } = await seededIndexedSession();
+		backend.failWrites = Number.POSITIVE_INFINITY;
+		await apply(manager);
+		await storage.drain().catch(() => {});
+
+		for (const turn of ["t1", "t2", "t3"])
+			manager.appendMessage({ role: "user", content: turn, timestamp: Date.now() });
+		await settle(manager, storage);
+
+		const reopened = await reopenIndexed(backend, sessionFile);
+		expect(userTurnsOf(reopened.getBranch()).slice(-3)).toEqual(["t1", "t2", "t3"]);
+	});
+});
+
+describe("indexed entries that missed the backend while whole-journal publishes fail", () => {
+	it("appends a turn whose append the backend rejected before the next turn", async () => {
+		const { backend, storage, manager, sessionFile } = await seededIndexedSession();
+		backend.failWrites = Number.POSITIVE_INFINITY;
+		backend.failAppends = 1;
+		manager.appendMessage({ role: "user", content: "missing", timestamp: Date.now() });
+		await settle(manager, storage);
+		manager.appendMessage({ role: "user", content: "after", timestamp: Date.now() });
+		await settle(manager, storage);
+
+		const reopened = await reopenIndexed(backend, sessionFile);
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "missing", "after"]);
+		expect(orphanedRecords(backend.files.get(sessionFile) ?? "")).toEqual([]);
+	});
+
+	it("records two turns appended before the first confirms exactly once each", async () => {
+		const { backend, storage, manager, sessionFile } = await seededIndexedSession();
+		manager.appendMessage({ role: "user", content: "t1", timestamp: Date.now() });
+		manager.appendMessage({ role: "user", content: "t2", timestamp: Date.now() });
+		await settle(manager, storage);
+		manager.appendMessage({ role: "user", content: "t3", timestamp: Date.now() });
+		await settle(manager, storage);
+
+		const reopened = await reopenIndexed(backend, sessionFile);
+		expect(userTurnsOf(reopened.getEntries())).toEqual(["before", "t1", "t2", "t3"]);
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "t1", "t2", "t3"]);
+	});
+
+	it("re-appends both of two unconfirmed turns once the first one's append is rejected", async () => {
+		const { backend, storage, manager, sessionFile } = await seededIndexedSession();
+		backend.failWrites = Number.POSITIVE_INFINITY;
+		backend.failAppends = 1;
+		manager.appendMessage({ role: "user", content: "t1", timestamp: Date.now() });
+		manager.appendMessage({ role: "user", content: "t2", timestamp: Date.now() });
+		await settle(manager, storage);
+		manager.appendMessage({ role: "user", content: "t3", timestamp: Date.now() });
+		await settle(manager, storage);
+
+		const reopened = await reopenIndexed(backend, sessionFile);
+		expect(userTurnsOf(reopened.getEntries())).toEqual(["before", "t1", "t2", "t3"]);
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "t1", "t2", "t3"]);
+	});
+
+	it("keeps a title change on the branch after its append and fallback publish both failed", async () => {
+		const { backend, storage, manager, sessionFile } = await seededIndexedSession();
+		backend.failWrites = Number.POSITIVE_INFINITY;
+		backend.failAppends = 1;
+		await manager.setSessionName("new title", "user").catch(() => false);
+		await settle(manager, storage);
+		manager.appendMessage({ role: "user", content: "after", timestamp: Date.now() });
+		await settle(manager, storage);
+
+		const branch = (await reopenIndexed(backend, sessionFile)).getBranch();
+		expect(userTurnsOf(branch)).toEqual(["before", "after"]);
+		expect(branch.at(-2)).toMatchObject({ type: "title_change", title: "new title" });
+	});
+});
+
+describe("an indexed durably discarded entry", () => {
+	async function sessionWithDiscardableTurn() {
+		const session = await seededIndexedSession();
+		const discardedId = session.manager.appendMessage(assistantMessage("discarded turn"));
+		session.manager.appendServiceTierChange({ openai: "priority" });
+		await settle(session.manager, session.storage);
+		return { ...session, discardedId };
+	}
+
+	async function expectDiscardSurvivesRestart(backend: FakeBackend, sessionFile: string, discardedId: string) {
+		const branch = (await reopenIndexed(backend, sessionFile)).getBranch();
+		expect(branch.some(entry => entry.id === discardedId)).toBe(false);
+		expect(branch.flatMap(entry => (entry.type === "service_tier_change" ? [entry.serviceTier] : []))).toContainEqual(
+			{
+				openai: "priority",
+			},
+		);
+		expect(userTurnsOf(branch)).toEqual(["before", "after", "after2"]);
+	}
+
+	it("stays discarded after its publish failed once and the backend healed", async () => {
+		const { backend, storage, manager, sessionFile, discardedId } = await sessionWithDiscardableTurn();
+		backend.failWrites = 1;
+		await manager.discardEntryDurably(discardedId).catch(() => {});
+		await settle(manager, storage);
+		manager.appendMessage({ role: "user", content: "after", timestamp: Date.now() });
+		manager.appendMessage({ role: "user", content: "after2", timestamp: Date.now() });
+		await settle(manager, storage);
+
+		await expectDiscardSurvivesRestart(backend, sessionFile, discardedId);
+	});
+
+	it("stays discarded when queued behind a held publish and its own publish failed", async () => {
+		const { backend, storage, manager, sessionFile, discardedId } = await sessionWithDiscardableTurn();
+		const hold = Promise.withResolvers<void>();
+		backend.holdNextWrite = hold;
+		const unrelated = manager.rewriteEntries();
+		await backend.writeHeld.promise;
+		const discard = manager.discardEntryDurably(discardedId);
+		backend.failWrites = 1;
+		hold.resolve();
+		await unrelated.catch(() => {});
+		await discard.catch(() => {});
+		await settle(manager, storage);
+		manager.appendMessage({ role: "user", content: "after", timestamp: Date.now() });
+		manager.appendMessage({ role: "user", content: "after2", timestamp: Date.now() });
+		await settle(manager, storage);
+
+		await expectDiscardSurvivesRestart(backend, sessionFile, discardedId);
+	});
+});

@@ -154,6 +154,43 @@ describe("AgentSession persistence failure context", () => {
 		await sessionManager.recoverPersistenceFromCurrentState();
 	});
 
+	it("delivers one warning after /clear when its reset boundary is the first persistence failure", async () => {
+		const mock = createMockModel({ provider: "openai", id: "gpt-test", responses: [{ content: ["acknowledged"] }] });
+		const storage = new FailingAppendStorage();
+		const sessionManager = SessionManager.create("/cwd", "/sessions", storage);
+		await sessionManager.ensureOnDisk();
+		authStorage = await AuthStorage.create(":memory:");
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+			convertToLlm,
+			streamFn: mock.stream,
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: new ModelRegistry(authStorage),
+		});
+		sessionManager.appendCustomEntry("durable-before-clear");
+
+		storage.failNextAppend = true;
+		expect(await executeBuiltinSlashCommand("/clear", clearCommandRuntime(session))).toBe(true);
+		expect(sessionManager.hasPersistenceFailure()).toBe(true);
+		await session.prompt("continue the task");
+
+		const warnings = session.agent.state.messages.filter(
+			message => message.role === "custom" && message.customType === "session-persistence-error",
+		);
+		expect(warnings).toHaveLength(1);
+		const warning = warnings[0];
+		if (warning?.role !== "custom" || typeof warning.content !== "string") {
+			throw new Error("Expected the persistence warning to be a hidden custom message");
+		}
+		const providerContext = JSON.stringify(mock.calls[0]?.context.messages);
+		expect(providerContext.split(warning.content).length - 1).toBe(1);
+	});
+
 	it("does not warn after /clear when its reset boundary republishes the session", async () => {
 		const mock = createMockModel({ provider: "openai", id: "gpt-test", responses: [{ content: ["acknowledged"] }] });
 		const storage = new FailingAppendStorage();
