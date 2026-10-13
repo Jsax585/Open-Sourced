@@ -15,6 +15,7 @@ import {
 	type CredentialBlocks,
 } from "./blocks";
 import type { AccountPolicies } from "./policy";
+import { anonymousProbeRequestKey, type CredentialCoordination } from "./coordination";
 import { authCredentialEquals, type CredentialPool } from "./pool";
 import {
 	orderUsageRankedCandidates,
@@ -28,6 +29,7 @@ import {
 	type UsageRankingResult,
 } from "./rank";
 import { mergeRefreshedCredential, OAUTH_REFRESH_SKEW_MS, type OAuthRefresher } from "./refresh";
+import { resolveCredentialStateScopeKey } from "./sqlite-credential-store";
 import type { AuthCredentialStore } from "./store";
 import {
 	type ApiKeyCredential,
@@ -81,6 +83,7 @@ export interface CredentialSelectorDeps {
 	usage: UsageService;
 	refresher: OAuthRefresher;
 	strategies: RankingStrategyResolver;
+	coordination: CredentialCoordination;
 }
 
 /** Picks which stored credential serves a request: ordering, usage ranking, OAuth refresh ladder. */
@@ -261,6 +264,7 @@ export class CredentialSelector {
 					blockedUntil,
 					args.blockScope,
 					resetAtMs !== undefined,
+					true,
 				);
 				blocked = true;
 			}
@@ -296,6 +300,7 @@ export class CredentialSelector {
 		sessionId: string | undefined,
 		options: AuthApiKeyOptions | undefined,
 		filter?: (credential: ApiKeyCredential) => boolean,
+		allowQuotaProbes = true,
 	): Promise<ApiKeySelection | undefined> {
 		const credentials = this.#deps.pool
 			.credentials(provider)
@@ -306,39 +311,49 @@ export class CredentialSelector {
 			});
 
 		if (credentials.length === 0) return undefined;
-		if (credentials.length === 1) return credentials[0];
 
 		const providerKey = providerTypeKey(provider, "api_key");
 		const order = this.#getCredentialOrder(providerKey, sessionId, credentials.length);
-		const fallback = credentials[order[0]];
 		const strategy = this.#deps.strategies(provider);
-		if (!strategy) {
-			for (const idx of order) {
-				const candidate = credentials[idx];
-				if (!this.#deps.blocks.isBlocked(provider, providerKey, candidate.index)) {
-					return candidate;
-				}
-			}
-			return fallback;
-		}
 
 		const rankingContext: CredentialRankingContext = {
 			modelId: options?.modelId,
 		};
-		const blockScope = strategy.blockScope?.(rankingContext);
+		const blockScope = strategy?.blockScope?.(rankingContext);
 		const blockScopes = credentialBlockScopesForRequest(provider, strategy, rankingContext, blockScope);
-		const candidates = await this.#rankApiKeySelections({
-			providerKey,
-			provider,
-			order,
-			credentials,
-			options,
-			strategy,
-			rankingContext,
-			blockScope,
-			blockScopes,
-		});
-		return candidates[0]?.selection ?? fallback;
+		const candidates = strategy
+			? (
+					await this.#rankApiKeySelections({
+						providerKey,
+						provider,
+						order,
+						credentials,
+						options,
+						strategy,
+						rankingContext,
+						blockScope,
+						blockScopes,
+					})
+				).map(candidate => candidate.selection)
+			: order.map(index => credentials[index]!);
+		for (const selection of candidates) {
+			if (
+				!this.#deps.coordination.isBlockedForRequest(
+					provider,
+					providerKey,
+					selection.index,
+					blockScopes,
+					options?.requestId,
+				)
+			)
+				return selection;
+		}
+		if (!allowQuotaProbes || options?.recordAffinity === false) return undefined;
+		for (const selection of candidates) {
+			if (this.#deps.coordination.tryApiKeyProbe(provider, providerKey, selection, options, blockScope, blockScopes))
+				return selection;
+		}
+		return undefined;
 	}
 
 	async #rankOAuthSelections(args: {
@@ -454,6 +469,7 @@ export class CredentialSelector {
 					blockedUntil,
 					args.blockScope,
 					resetAtMs !== undefined,
+					true,
 				);
 				blocked = true;
 			}
@@ -520,8 +536,15 @@ export class CredentialSelector {
 		provider: string,
 		sessionId?: string,
 		options?: AuthApiKeyOptions,
+		allowQuotaProbes = true,
+		onlyQuotaProbes = false,
 	): Promise<OAuthResolutionResult | undefined> {
 		await this.#deps.pool.adoptExternalChanges();
+		const providerKey = providerTypeKey(provider, "oauth");
+		const strategy = this.#deps.strategies(provider);
+		const rankingContext: CredentialRankingContext = { modelId: options?.modelId };
+		const blockScope = strategy?.blockScope?.(rankingContext);
+		const blockScopes = credentialBlockScopesForRequest(provider, strategy, rankingContext, blockScope);
 		const stored = this.#deps.pool
 			.credentials(provider)
 			.map((credential, index) => ({ credential, index }))
@@ -532,7 +555,13 @@ export class CredentialSelector {
 		);
 		// A session restriction drops every other account before ranking, pins,
 		// and the fallback passes below, so none of them can route back to it.
-		const credentials = stored.filter(entry => this.#deps.affinity.allows(provider, sessionId, entry.credential));
+		const credentials = stored.filter(
+			entry =>
+				this.#deps.affinity.allows(provider, sessionId, entry.credential) &&
+				(!onlyQuotaProbes ||
+					this.#deps.coordination.resolveQuotaProbeLeaseScope(provider, providerKey, entry.index, blockScopes) !==
+						null),
+		);
 
 		if (credentials.length === 0) return undefined;
 		// Ranking and preflight both await provider work; preserve the row each
@@ -540,15 +569,7 @@ export class CredentialSelector {
 		const credentialIds = this.#deps.pool.entries(provider).map(entry => entry.id);
 		this.#deps.policies.validateUsageCapability(provider, this.#deps.usage.canFetchOAuthUsage(provider));
 
-		const providerKey = providerTypeKey(provider, "oauth");
 		const order = this.#getCredentialOrder(providerKey, sessionId, credentials.length);
-		const strategy = this.#deps.strategies(provider);
-		const rankingContext: CredentialRankingContext = {
-			modelId: options?.modelId,
-		};
-		const blockScope = strategy?.blockScope?.(rankingContext);
-		// Reads honour every scope that applies; the scalar above is for args that persist.
-		const blockScopes = credentialBlockScopesForRequest(provider, strategy, rankingContext, blockScope);
 		const planGate = strategy?.planGate?.(rankingContext);
 		const hasPlanRequirement = planGate !== undefined;
 		const accountIds = options?.accountIds?.length ? new Set(options.accountIds) : undefined;
@@ -727,6 +748,20 @@ export class CredentialSelector {
 		let preflightRows: StoredAuthCredential[] | undefined;
 		await Promise.all(
 			candidates.map(async candidate => {
+				// Authentication/policy/unknown and provider-timed blocks are not
+				// quota probes. Avoid renewing every blocked bearer during a normal
+				// resolve; explicit forced auth recovery and targeted access remain separate.
+				if (
+					!options?.forceRefresh &&
+					this.#deps.blocks.isBlocked(provider, providerKey, candidate.selection.index, blockScopes) &&
+					this.#deps.coordination.resolveQuotaProbeLeaseScope(
+						provider,
+						providerKey,
+						candidate.selection.index,
+						blockScopes,
+					) === null
+				)
+					return;
 				const force = forceRefreshIndex !== undefined && candidate.selection.index === forceRefreshIndex;
 				const initialCredentialId = credentialIds[candidate.selection.index];
 				if (initialCredentialId === undefined) {
@@ -903,6 +938,7 @@ export class CredentialSelector {
 			: candidates;
 
 		for (const pass of passes) {
+			if (pass.allowBlocked && (!allowQuotaProbes || options?.recordAffinity === false)) continue;
 			for (const candidate of pass.allowBlocked ? lastResortCandidates : candidates) {
 				if (preflightFailures.has(candidate)) continue;
 				const candidateAccountKey = oauthAccountKey(candidate.selection.credential);
@@ -980,8 +1016,74 @@ export class CredentialSelector {
 		return this.#syncOAuthSelectionFromStore(provider, selection, selected.id);
 	}
 
-	/** Attempts to use a single OAuth credential, checking usage and refreshing token. */
+	/** Admit a quota-only last-resort probe, then retain its lease until the caller observes inference success. */
 	async tryOAuth(
+		provider: Provider,
+		selection: OAuthSelection,
+		providerKey: string,
+		sessionId: string | undefined,
+		options: AuthApiKeyOptions | undefined,
+		usageOptions: TryOAuthOptions,
+	): Promise<OAuthResolutionResult | undefined> {
+		const coordination = this.#deps.coordination;
+		const credentialId = this.#deps.pool.entries(provider)[selection.index]?.id;
+		const incarnation = credentialId === undefined ? undefined : coordination.getCredentialIncarnation(credentialId);
+		let probeScope: string | null = null;
+		let probeRequestId: string | undefined;
+		if (
+			(usageOptions.allowFallback ?? true) &&
+			coordination.isBlockedForRequest(
+				provider,
+				providerKey,
+				selection.index,
+				usageOptions.blockScopes ?? usageOptions.blockScope,
+				options?.requestId,
+			)
+		) {
+			if (!usageOptions.allowBlocked || credentialId === undefined || options?.recordAffinity === false)
+				return undefined;
+			probeScope = coordination.resolveQuotaProbeLeaseScope(
+				provider,
+				providerKey,
+				selection.index,
+				usageOptions.blockScopes ?? usageOptions.blockScope,
+			);
+			if (probeScope === null) return undefined;
+			probeRequestId = options?.requestId ?? anonymousProbeRequestKey(credentialId, probeScope);
+			if (!options?.requestId && coordination.hasInflightProbe(probeRequestId)) return undefined;
+			if (!coordination.acquireOrReuseQuotaProbeLease(probeRequestId, credentialId, probeScope)) return undefined;
+		}
+		let keepProbe = false;
+		try {
+			const result = await this.#tryOAuthCredential(provider, selection, providerKey, sessionId, options, {
+				...usageOptions,
+				// A failed probe advances through the caller's candidate loop, never
+				// recursively swapping its lease owner inside this resolution.
+				...(probeRequestId ? { allowFallback: false } : {}),
+			});
+			if (result && probeRequestId && credentialId !== undefined && probeScope !== null) {
+				if (
+					result.credentialId !== credentialId ||
+					coordination.getCredentialIncarnation(credentialId) !== incarnation ||
+					!coordination.isCurrentProbe(probeRequestId, credentialId, probeScope) ||
+					coordination.resolveQuotaProbeLeaseScope(
+						provider,
+						providerKey,
+						selection.index,
+						usageOptions.blockScopes ?? usageOptions.blockScope,
+					) !== probeScope
+				)
+					return undefined;
+			}
+			keepProbe = result !== undefined;
+			return result;
+		} finally {
+			if (!keepProbe && probeRequestId) coordination.clearQuotaProbe(probeRequestId);
+		}
+	}
+
+	/** Existing account preparation, usage, refresh and bearer-snapshot path. */
+	async #tryOAuthCredential(
 		provider: Provider,
 		selection: OAuthSelection,
 		providerKey: string,
@@ -1049,6 +1151,7 @@ export class CredentialSelector {
 						resetAtMs ?? Date.now() + DEFAULT_BLOCK_MS,
 						blockScope,
 						resetAtMs !== undefined,
+						true,
 					);
 					return undefined;
 				}
@@ -1118,10 +1221,18 @@ export class CredentialSelector {
 							resetAtMs ?? Date.now() + DEFAULT_BLOCK_MS,
 							blockScope,
 							resetAtMs !== undefined,
+							true,
 						);
 						return undefined;
 					}
 				}
+			}
+			if (credentialId !== undefined) {
+				if (!this.#syncOAuthSelectionFromStore(provider, selection, credentialId)) return undefined;
+				const servedIdentity = resolveCredentialStateScopeKey(provider, updated);
+				const currentIdentity = resolveCredentialStateScopeKey(provider, selection.credential);
+				if (servedIdentity !== null && currentIdentity !== null && servedIdentity !== currentIdentity)
+					return undefined;
 			}
 			this.#deps.pool.noteBearer(provider, result.apiKey, credentialId);
 			if (options?.recordAffinity !== false) {

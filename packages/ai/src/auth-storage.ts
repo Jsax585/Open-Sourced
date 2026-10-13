@@ -22,11 +22,13 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { SessionAffinity, type SessionRestrictions } from "./auth/affinity";
 import { BlockStoreHealth, CredentialBlocks } from "./auth/blocks";
 import { KeyCascade, KeyOverrides } from "./auth/cascade";
+import { CredentialCoordination } from "./auth/coordination";
 import { extractStructuredApiKeyToken } from "./auth/credential-key";
 import { CredentialHealth } from "./auth/health";
 import { OAuthAccounts } from "./auth/oauth";
 import { AccountPolicies } from "./auth/policy";
 import { CredentialPool } from "./auth/pool";
+import { QuotaProbeLeaseBook } from "./auth/probe-lease";
 import { OAuthRefresher } from "./auth/refresh";
 import { ResetCredits } from "./auth/resets";
 import { RateLimits } from "./auth/rotation";
@@ -75,6 +77,7 @@ interface AuthStorageModules {
 	limits: RateLimits;
 	resets: ResetCredits;
 	blocks: CredentialBlocks;
+	coordination: CredentialCoordination;
 }
 
 /**
@@ -137,6 +140,11 @@ export class AuthStorage {
 		return this.#modules.blocks;
 	}
 
+	/** Request-owned quota recovery leases and physical credential generations. */
+	get coordination(): CredentialCoordination {
+		return this.#modules.coordination;
+	}
+
 	/**
 	 * Apply new account routing policy (live `auth.accountPolicies` /
 	 * `retry.usageReservePct` change). Throws a configuration error, leaving the
@@ -188,6 +196,8 @@ export class AuthStorage {
 				selector.resetRoundRobin(provider);
 				affinity.clearProvider(provider);
 			},
+			onCredentialIdentityChanged: (provider, id, previous, next) =>
+				coordination.maybeBumpIncarnation(provider, id, previous, next),
 		});
 		const refresher = new OAuthRefresher({
 			store,
@@ -199,8 +209,17 @@ export class AuthStorage {
 		// Key reports by the effective provider (runtime extension override first), so an
 		// override's `cacheVersion` separates its rows from other processes sharing the store.
 		const usageCache = new UsageCache(store, pool, provider => usage.providerFor(provider));
-		const blocks = new CredentialBlocks({ store, pool, health: blockHealth, usageCache, strategies });
+		const probeLeases = new QuotaProbeLeaseBook();
+		const blocks = new CredentialBlocks({
+			store,
+			pool,
+			health: blockHealth,
+			usageCache,
+			strategies,
+			probeBook: probeLeases,
+		});
 		const affinity = new SessionAffinity(store, pool, overrides, this.#restrictions);
+		const coordination = new CredentialCoordination({ pool, blocks, affinity, usageCache, strategies, probeLeases });
 		const usage = new UsageService({
 			store,
 			pool,
@@ -229,6 +248,7 @@ export class AuthStorage {
 			usage,
 			refresher,
 			strategies,
+			coordination,
 		});
 		const limits = new RateLimits({ store, pool, overrides, blocks, affinity, usage, strategies });
 		const keys = new KeyCascade({
@@ -236,6 +256,7 @@ export class AuthStorage {
 			overrides,
 			selector,
 			affinity,
+			coordination,
 			rotate: (provider, sessionId, rotateOptions) => limits.rotate(provider, sessionId, rotateOptions),
 			sourceLabel,
 		});
@@ -262,6 +283,7 @@ export class AuthStorage {
 			limits,
 			resets: new ResetCredits({ store, pool, oauth, usage, usageCache, blocks }),
 			blocks,
+			coordination,
 		};
 	}
 

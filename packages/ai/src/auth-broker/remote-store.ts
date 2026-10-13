@@ -78,6 +78,23 @@ function toCredentialBlockSnapshot(block: StoredCredentialBlock): CredentialBloc
 		blockScope: block.blockScope,
 		blockedUntilMs: block.blockedUntilMs,
 		...(block.updatedAtMs !== undefined ? { updatedAtMs: block.updatedAtMs } : {}),
+		...(block.retryAfter === true ? { retryAfter: true } : {}),
+		...(block.quotaOrigin !== undefined ? { quotaOrigin: block.quotaOrigin } : {}),
+	};
+}
+
+/** Active constraints merge conservatively: longest wait, any provider timing, only unanimously known quota origin. */
+function mergeCredentialBlockSnapshots(
+	existing: CredentialBlockSnapshot | undefined,
+	incoming: CredentialBlockSnapshot,
+): CredentialBlockSnapshot {
+	if (!existing || existing.blockedUntilMs <= Date.now()) return incoming;
+	return {
+		...existing,
+		...incoming,
+		blockedUntilMs: Math.max(existing.blockedUntilMs, incoming.blockedUntilMs),
+		retryAfter: existing.retryAfter === true || incoming.retryAfter === true,
+		quotaOrigin: existing.quotaOrigin === true && incoming.quotaOrigin === true,
 	};
 }
 
@@ -95,7 +112,9 @@ function credentialBlockSnapshotsEqual(
 			leftBlock.providerKey !== rightBlock.providerKey ||
 			leftBlock.blockScope !== rightBlock.blockScope ||
 			leftBlock.blockedUntilMs !== rightBlock.blockedUntilMs ||
-			leftBlock.updatedAtMs !== rightBlock.updatedAtMs
+			leftBlock.updatedAtMs !== rightBlock.updatedAtMs ||
+			leftBlock.retryAfter !== rightBlock.retryAfter ||
+			leftBlock.quotaOrigin !== rightBlock.quotaOrigin
 		) {
 			return false;
 		}
@@ -756,6 +775,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					blockScope: block.blockScope,
 					blockedUntilMs: block.blockedUntilMs,
 					updatedAtMs: block.updatedAtMs,
+					...(block.retryAfter === true ? { retryAfter: true } : {}),
+					...(block.quotaOrigin !== undefined ? { quotaOrigin: block.quotaOrigin } : {}),
 				});
 			}
 		}
@@ -774,7 +795,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		);
 		const body = toCredentialBlockSnapshot(block);
 		const pending = this.#pendingCredentialBlocks.get(key);
-		if (!pending || pending.blockedUntilMs < body.blockedUntilMs) this.#pendingCredentialBlocks.set(key, body);
+		this.#pendingCredentialBlocks.set(key, mergeCredentialBlockSnapshots(pending, body));
 		void this.#client
 			.upsertCredentialBlock(block.credentialId, body)
 			.then(() => {
@@ -1066,6 +1087,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				blockScope: block.blockScope,
 				blockedUntilMs: block.blockedUntilMs,
 				...(block.updatedAtMs !== undefined ? { updatedAtMs: block.updatedAtMs } : {}),
+				...(block.retryAfter === true ? { retryAfter: true } : {}),
+				...(block.quotaOrigin !== undefined ? { quotaOrigin: block.quotaOrigin } : {}),
 			}))
 			.sort(compareCredentialBlockSnapshots);
 		if (blocks.length > 0) return { ...entry, blocks };
@@ -1115,10 +1138,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			blocks.push(incoming);
 		} else {
 			const existing = blocks[blockIndex]!;
-			blocks[blockIndex] = {
-				...existing,
-				blockedUntilMs: Math.max(existing.blockedUntilMs, incoming.blockedUntilMs),
-			};
+			blocks[blockIndex] = mergeCredentialBlockSnapshots(existing, incoming);
 		}
 		blocks.sort(compareCredentialBlockSnapshots);
 		const credentials = [...this.#snapshot.credentials];

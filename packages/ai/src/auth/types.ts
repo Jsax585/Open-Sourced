@@ -105,6 +105,10 @@ export interface StoredCredentialBlock {
 	blockScope: string;
 	/** Epoch milliseconds. */
 	blockedUntilMs: number;
+	/** True when the block came from a provider Retry-After / usage wait window. */
+	retryAfter?: boolean;
+	/** Known quota exhaustion; missing/false provenance is never eligible for a recovery probe. */
+	quotaOrigin?: boolean;
 	/** Last row update timestamp in epoch milliseconds, when provided by the backing store. */
 	updatedAtMs?: number;
 }
@@ -478,6 +482,8 @@ export interface ModelUsageHealthOptions {
 export type AuthApiKeyOptions = {
 	baseUrl?: string;
 	modelId?: string;
+	/** Identity of the inference attempt owning a recovery probe; callers settle or release it. */
+	requestId?: string;
 	/** {@link oauthAccountKey}s of accounts known to serve `modelId` from multi-account discovery; OAuth selection prefers them and tries other accounts only as a last resort. */
 	accountIds?: readonly string[];
 	/**
