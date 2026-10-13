@@ -772,19 +772,22 @@ export interface OpenAIExtraBodyOptions {
 }
 
 /**
- * Merge a compat/options `extraBody` blob into the request params. An encoded
- * Venice disable signal takes precedence over static `venice_parameters`, so
- * an explicit per-turn Thinking Off selection cannot be re-enabled by config.
+ * Merge a compat/options `extraBody` blob into the request params. Encoded
+ * Venice and chat-template disable signals take precedence over static config,
+ * so an explicit per-turn Thinking Off selection cannot be re-enabled.
  * When `dropThinkingWhenReasoningEffort` is set and `reasoning_effort` is
  * present, delete the conflicting `thinking` toggle (Fireworks rejects both).
  */
 export function applyOpenAIExtraBody<P extends object>(
-	params: P & { venice_parameters?: Record<string, unknown> },
+	params: P & { venice_parameters?: Record<string, unknown>; chat_template_kwargs?: Record<string, unknown> },
 	extraBody: Record<string, unknown> | undefined,
 	options?: OpenAIExtraBodyOptions,
 ): void {
 	if (!extraBody) return;
 	const encodedVeniceParameters = params.venice_parameters;
+	const encodedTemplateKwargs = params.chat_template_kwargs;
+	const reasoningParams = params as P & { reasoning_effort?: unknown };
+	const encodedReasoningEffort = reasoningParams.reasoning_effort;
 	Object.assign(params, extraBody);
 	if (encodedVeniceParameters?.disable_thinking === true) {
 		const configuredVeniceParameters = extraBody.venice_parameters;
@@ -792,6 +795,21 @@ export function applyOpenAIExtraBody<P extends object>(
 			...(isRecord(configuredVeniceParameters) ? configuredVeniceParameters : {}),
 			...encodedVeniceParameters,
 		};
+	}
+	if (encodedTemplateKwargs?.enable_thinking === false || encodedTemplateKwargs?.thinking === false) {
+		const configuredTemplateKwargs = extraBody.chat_template_kwargs;
+		params.chat_template_kwargs = {
+			...(isRecord(configuredTemplateKwargs) ? configuredTemplateKwargs : {}),
+			...encodedTemplateKwargs,
+		};
+		if (encodedTemplateKwargs.reasoning_effort === undefined) {
+			delete params.chat_template_kwargs.reasoning_effort;
+		}
+		if (encodedReasoningEffort === undefined) {
+			delete reasoningParams.reasoning_effort;
+		} else {
+			reasoningParams.reasoning_effort = encodedReasoningEffort;
+		}
 	}
 	if (options?.dropThinkingWhenReasoningEffort) {
 		const shaped = params as { reasoning_effort?: unknown; thinking?: unknown };
@@ -1020,6 +1038,7 @@ export function resolveOpenAICompatPolicy<TApi extends Api>(
 		enabled && requestedEffort !== undefined ? mapOpenAIReasoningEffort(model, compat, requestedEffort) : undefined;
 	const disabledWithoutRequest =
 		modelSupported &&
+		model.thinking !== undefined &&
 		requestedEffort === undefined &&
 		!options.disableReasoning &&
 		isImplicitDisableWhenNotRequested(disableMode);

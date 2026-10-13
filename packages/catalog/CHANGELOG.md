@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Friendli explicit effort ladders remain authoritative, with GLM identity fallback and no invented tiers for sparse specs; declarative endpoint backend inference preserves credential identity and explicit backend overrides across rebuilds ([#9413](https://github.com/can1357/oh-my-pi/pull/9413) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
 ### Added
 
 - Added the `classifier-cot-extraction` rule axis, set for Claude, marking models whose classifier refuses earlier reasoning quoted back into their input ([#15436](https://github.com/can1357/oh-my-pi/pull/15436) by [@will-bogusz](https://github.com/will-bogusz))

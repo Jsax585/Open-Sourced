@@ -41,6 +41,8 @@ const RUNTIME_ONLY_PROVIDERS = new Set([
 	// User-configured models.yml provider pointing at
 	// https://inference-api.nousresearch.com/v1 (NousResearch inference API).
 	"nous",
+	// User-configured models.yml providers pointed at Friendli's serverless API.
+	"friendli",
 ]);
 
 function collectReferencedProviders(): Map<string, string> {

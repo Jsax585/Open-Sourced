@@ -198,7 +198,7 @@ A `models` string without `*` is an exact, case-sensitive match against the prov
 
 `priority=N` is an optional signed integer property on the block that owns axis assignments. Its default is zero. Use it only to resolve an intentional equal-specificity overlap; do not use it to encode declaration order.
 
-`buildDiscoveredModel(spec, providerType)` resolves the catalog `discovery-api` axis before materializing compatibility. It preserves the credential-bearing provider ID and records `providerType` as the backend used for provider selectors on subsequent rebuilds. Ordinary `buildModel` preserves its input API. This lets custom-named llama.cpp deployments reuse the same rules without model-specific discovery code.
+`buildDiscoveredModel(spec, providerType)` resolves the catalog `discovery-api` axis before materializing compatibility. It preserves the credential-bearing provider ID and records `providerType` as the backend used for provider selectors on subsequent rebuilds. Ordinary `buildModel` preserves its input API and infers backend metadata from `backend-provider` rules only when no explicit backend is supplied. This lets custom-named deployments reuse the same rules without model-specific discovery code.
 
 `resolveModelPolicy(spec, { upstream })` resolves the selected route without mutating the model identity. Call it again when retry routing selects another upstream. Its typed `request` record carries request-shaping axes (reasoning history, disabled-effort semantics, Anthropic thinking mode, Responses options, and Google thinking dialect); shared transport fields remain in `compat`. Both records use the same per-axis cascade, precedence, ambiguity checks, and upstream-aware cache key. Request fields have the `request` applicability record in `axes.ts`, so they do not leak into shared transport compat objects. See [`providers/factory-droid.kdl`](providers/factory-droid.kdl) for the upstream-scoped consumer.
 
@@ -294,8 +294,11 @@ Wire axes are considered for every matching target. Thinking axes require `reaso
 
 `runtime/behavior.kdl` has one root `behavior` node. Child node kinds (all optional, strict shapes):
 
+`backend-provider` maps a central `KnownHost` URL class and API to deployment policy. Explicit `providerType` wins; inference preserves the credential-bearing provider and persists the backend across rebuilds. Duplicate host/API mappings are rejected.
+
 ```kdl
 behavior {
+    backend-provider provider="friendli" host="friendli" api="openai-completions"
     openai-responses-heuristic {
         include-prefix "gpt-" "o1"
         exclude-prefix "whisper-"

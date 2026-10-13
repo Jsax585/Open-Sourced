@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Friendli reasoning requests preserve distinct effort tiers and baseline routing/template settings, honor effort-omission overrides, retain endpoint defaults for dialless models, and keep explicit Thinking Off free of conflicting static efforts ([#9413](https://github.com/can1357/oh-my-pi/pull/9413) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
+
 ### Removed
 
 - Removed the `toolNamespacesInfo` stream option; Codex requests no longer send `tool_namespaces_info` turn metadata, and `code_mode_tool_names`/`tool_namespaces_info` are no longer reserved client metadata keys.

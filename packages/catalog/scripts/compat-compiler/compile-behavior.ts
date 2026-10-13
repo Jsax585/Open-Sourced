@@ -8,6 +8,7 @@
  * and retry-reset-timezone.
  * Every node kind is optional; per-node shapes are strict.
  */
+import { KNOWN_HOSTS, type KnownHost } from "../../src/hosts";
 import type {
 	CompiledApiRoutes,
 	CompiledBehavior,
@@ -321,6 +322,17 @@ export function compileBehavior(source: { file: string; text: string } | undefin
 	if (root.name !== "behavior" || root.args.length > 0 || root.props.length > 0) malformed(root);
 	for (const node of ensureContainer(root, [])) {
 		switch (node.name) {
+			case "backend-provider": {
+				ensureLeaf(node, ["provider", "host", "api"]);
+				const provider = requiredProp(node, "provider");
+				const host = requiredProp(node, "host");
+				const api = requiredProp(node, "api");
+				if (!provider || !Object.hasOwn(KNOWN_HOSTS, host) || !api || node.args.length > 0) malformed(node);
+				const entries = (behavior.backendProviders ??= []);
+				if (entries.some(entry => entry.host === host && entry.api === api)) malformed(node);
+				entries.push({ provider, host: host as KnownHost, api });
+				break;
+			}
 			case "openai-responses-heuristic":
 				if (behavior.openaiResponsesHeuristic) malformed(node);
 				behavior.openaiResponsesHeuristic = parseResponsesHeuristic(node);

@@ -1,6 +1,9 @@
 // Provider and model behavior needed before or outside exact bundled-model lookup.
 
 behavior {
+	// Infer deployment policy for custom-named endpoints without changing credentials.
+	backend-provider provider="friendli" host="friendli" api="openai-completions"
+
 	// LiteLLM may discover ids absent from the bundled catalog. This conservative
 	// heuristic routes likely OpenAI text/reasoning ids to Responses while
 	// excluding other OpenAI product surfaces.

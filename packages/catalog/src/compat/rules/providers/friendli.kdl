@@ -1,0 +1,41 @@
+// Wire-only contract; catalog discovery and authentication are separate.
+provider "friendli" {
+	on-api "openai-completions" {
+		thinking-format "qwen-chat-template"
+		supports-reasoning-effort #false
+		when-thinking {
+			thinking-format "openai"
+			supports-reasoning-effort #true
+			omit-reasoning-effort #false
+			extra-body {
+				chat_template_kwargs {
+					enable_thinking #true
+				}
+			}
+		}
+	}
+	// Override equal-rank lineage ladders for sparse custom model specs.
+	on-api "openai-completions" priority=1 {
+		thinking-efforts
+	}
+}
+
+class "glm" {
+	on "friendli" {
+		on-api "openai-completions" {
+			revision ">=5.2 <5.3" {
+				thinking-efforts "high" "max"
+				supports-reasoning-effort #true
+			}
+			revision ">=5.3" {
+				thinking-efforts "low" "high" "max"
+				supports-reasoning-effort #true
+				thinking-requires-effort #true
+				reasoning-disable-mode "lowest-effort"
+				when-thinking {
+					thinking-format "openai"
+				}
+			}
+		}
+	}
+}
