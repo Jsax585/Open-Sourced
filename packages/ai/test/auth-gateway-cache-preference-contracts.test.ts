@@ -147,6 +147,7 @@ it("does not remember a committed partial failure as a successful target", async
 	await withCache(async (gateway, _storage, registry, _cache, calls, _recover, partial) => {
 		registry.register({
 			id: "work",
+			affinity: "preferred",
 			root: {
 				type: "balance",
 				strategy: "rr",
@@ -189,5 +190,52 @@ it("the TTL expires cache preference and returns to normal route selection", asy
 		const next = await send(gateway, "/v1/chat/completions", false);
 		expect(await next.text()).toContain("served-a");
 		expect(calls).toEqual(["a", "b", "a"]);
+	});
+});
+
+it("a changed route generation invalidates the old serving hint even when its target still exists", async () => {
+	await withCache(async (gateway, _storage, registry, _cache, calls, recover) => {
+		const first = await send(gateway, "/v1/chat/completions", false);
+		await first.text();
+		registry.register({
+			id: "work",
+			root: {
+				type: "fallback",
+				on: ["provider_unavailable"],
+				children: [
+					{ type: "target", model: "a" },
+					{ type: "target", model: "b" },
+				],
+			},
+		});
+		recover();
+		const next = await send(gateway, "/v1/chat/completions", false);
+		expect(await next.text()).toContain("served-a");
+		expect(calls).toEqual(["a", "b", "a"]);
+	});
+});
+
+it("explicit preferred affinity can override a balanced route's normal cursor", async () => {
+	await withCache(async (gateway, _storage, registry, _cache, calls, recover) => {
+		registry.register({
+			id: "work",
+			affinity: "preferred",
+			root: {
+				type: "balance",
+				strategy: "rr",
+				children: [
+					{ type: "target", model: "a" },
+					{ type: "target", model: "b" },
+				],
+			},
+		});
+		const first = await send(gateway, "/v1/chat/completions", false);
+		await first.text();
+		recover();
+		for (let i = 0; i < 2; i++) {
+			const response = await send(gateway, "/v1/chat/completions", false);
+			expect(await response.text()).toContain("served-b");
+		}
+		expect(calls).toEqual(["a", "b", "b", "b"]);
 	});
 });
