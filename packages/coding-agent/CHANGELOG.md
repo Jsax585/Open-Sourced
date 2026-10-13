@@ -9,7 +9,7 @@
 ### Changed
 
 - Tool approval prompts now replace the composer like `ask`, show one row per detail, and approve with `Ctrl+Enter` (or `Ctrl+Q`) instead of `Enter` ([#15548](https://github.com/can1357/oh-my-pi/pull/15548) by [@H4vC](https://github.com/H4vC))
-- Agents can delegate a substantial repetitive single task to a cheaper suitable worker after settling the design and defining verification.
+- Agents can delegate a substantial repetitive single task to a cheaper suitable worker after settling the design and defining verification ([#15606](https://github.com/can1357/oh-my-pi/pull/15606) by [@markur4](https://github.com/markur4)).
 
 ### Fixed
 
