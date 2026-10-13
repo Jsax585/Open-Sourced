@@ -2162,6 +2162,7 @@ function buildParams(
 
 	applyOpenAIExtraBody(params, compat.extraBody, {
 		dropThinkingWhenReasoningEffort: compat.dropThinkingWhenReasoningEffort,
+		reasoningDisabled: finalPolicy.reasoning.disabled,
 	});
 	applyOpenAIChatCompletionsPromptCachePolicy(params, model, options);
 

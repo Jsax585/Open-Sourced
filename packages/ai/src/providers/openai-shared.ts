@@ -769,6 +769,41 @@ export interface OpenAIExtraBodyOptions {
 	 * `reasoning_effort`; drop `thinking` when the effort field carries the level.
 	 */
 	dropThinkingWhenReasoningEffort?: boolean;
+	/** Strip reasoning overrides while preserving unrelated extraBody configuration. */
+	reasoningDisabled?: boolean;
+}
+
+/** Reserved wire controls; own-property membership preserves prototype-named config keys. */
+const REASONING_ONLY_EXTRA_BODY_KEYS: Readonly<Record<string, true>> = {
+	thinking: true,
+	parse_reasoning: true,
+	include_reasoning: true,
+	enable_thinking: true,
+	reasoning_effort: true,
+	reasoning: true,
+};
+
+/** Sanitize nested controls without replacing the encoder's disabled kwargs. */
+function splitReasoningDisabledExtraBody(extraBody: Record<string, unknown>): {
+	values: Record<string, unknown>;
+	chatTemplateKwargs?: Record<string, unknown>;
+} {
+	const values: Record<string, unknown> = Object.create(null);
+	let chatTemplateKwargs: Record<string, unknown> | undefined;
+	for (const [key, value] of Object.entries(extraBody)) {
+		if (Object.hasOwn(REASONING_ONLY_EXTRA_BODY_KEYS, key)) continue;
+		if (key === "chat_template_kwargs") {
+			// Malformed kwargs must not clobber the encoder's disabled shape.
+			if (isRecord(value)) {
+				chatTemplateKwargs = Object.fromEntries(
+					Object.entries(value).filter(([kwarg]) => !Object.hasOwn(REASONING_ONLY_EXTRA_BODY_KEYS, kwarg)),
+				);
+			}
+			continue;
+		}
+		values[key] = value;
+	}
+	return { values, chatTemplateKwargs };
 }
 
 /**
@@ -777,6 +812,9 @@ export interface OpenAIExtraBodyOptions {
  * an explicit per-turn Thinking Off selection cannot be re-enabled by config.
  * When `dropThinkingWhenReasoningEffort` is set and `reasoning_effort` is
  * present, delete the conflicting `thinking` toggle (Fireworks rejects both).
+ * When `reasoningDisabled` is set, strip only the reasoning-control keys
+ * from the blob before merging so unrelated provider-required configuration
+ * (gateway routing, controller fields, …) still reaches the request.
  */
 export function applyOpenAIExtraBody<P extends object>(
 	params: P & { venice_parameters?: Record<string, unknown> },
@@ -785,9 +823,24 @@ export function applyOpenAIExtraBody<P extends object>(
 ): void {
 	if (!extraBody) return;
 	const encodedVeniceParameters = params.venice_parameters;
-	Object.assign(params, extraBody);
+	const { values: mergedExtraBody, chatTemplateKwargs } = options?.reasoningDisabled
+		? splitReasoningDisabledExtraBody(extraBody)
+		: { values: extraBody };
+	if (options?.reasoningDisabled) {
+		// Define own keys so `__proto__` remains configuration, not a prototype setter.
+		Object.defineProperties(params, Object.getOwnPropertyDescriptors(mergedExtraBody));
+	} else {
+		Object.assign(params, mergedExtraBody);
+	}
+	if (chatTemplateKwargs !== undefined) {
+		const shaped = params as P & { chat_template_kwargs?: Record<string, unknown> };
+		shaped.chat_template_kwargs = {
+			...chatTemplateKwargs,
+			...shaped.chat_template_kwargs,
+		};
+	}
 	if (encodedVeniceParameters?.disable_thinking === true) {
-		const configuredVeniceParameters = extraBody.venice_parameters;
+		const configuredVeniceParameters = mergedExtraBody.venice_parameters;
 		params.venice_parameters = {
 			...(isRecord(configuredVeniceParameters) ? configuredVeniceParameters : {}),
 			...encodedVeniceParameters,

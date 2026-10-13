@@ -1,6 +1,6 @@
 /**
- * Bake↔runtime consistency gate: for every bundled models.json row, the compat
- * engine (`resolveModelPolicy`) must reproduce the row's baked `compat` and
+ * Bundled↔runtime consistency gate: for every public bundled model, the compat
+ * engine (`resolveModelPolicy`) must reproduce its materialized `compat` and
  * `thinking` values exactly, for every field that existed before the engine.
  *
  * Thinking is derived from scratch (`thinking: undefined`), mirroring the
@@ -8,13 +8,13 @@
  * exemption rows, which keep their explicit metadata.
  *
  * Hermetic (no network). Zero diffs required — a failure names each divergent
- * field as `provider/model.field: baked=X engine=Y`; fix the KDL rules (or a
- * host-detection seam in `resolve.ts`), never the baked values.
+ * field as `provider/model.field: baked=X engine=Y`. Bundled loading repairs
+ * stale toggle-only thinking metadata before either consumer sees the row.
  */
 import { describe, expect, test } from "bun:test";
 import { isCollapsedVariantSpec } from "../src/compat/collapse";
-import { resolveModelPolicy } from "../src/compat/resolve";
-import models from "../src/models.json";
+import { type ResolvedModelPolicy, resolveModelPolicy } from "../src/compat/resolve";
+import { type GeneratedProvider, getBundledModels, getBundledProviders } from "../src/models";
 import type { Api, Model, ModelSpec } from "../src/types";
 
 /** Fields introduced by the compat engine — absent from pre-engine baked rows. */
@@ -100,13 +100,13 @@ function keepsExplicitThinking(row: RowLike): boolean {
 }
 
 describe("compat parity", () => {
-	test("engine reproduces every baked models.json compat/thinking value", () => {
+	test("engine reproduces every public bundled compat/thinking value", () => {
 		const diffs: string[] = [];
 		let rows = 0;
-		for (const provider in models) {
-			const providerModels = models[provider as keyof typeof models] as Record<string, unknown>;
-			for (const modelId in providerModels) {
-				const row = providerModels[modelId] as unknown as Model<Api> & RowLike;
+		for (const provider of getBundledProviders()) {
+			for (const bundledModel of getBundledModels(provider as GeneratedProvider)) {
+				const row = bundledModel as Model<Api> & RowLike;
+				const modelId = row.id;
 				rows++;
 				const label = `${provider}/${modelId}`;
 				const {
@@ -126,7 +126,7 @@ describe("compat parity", () => {
 				if (!exempt) (rest as Record<string, unknown>).thinking = undefined;
 				const umansAuthored =
 					provider === "umans" && (row.thinking?.requiresEffort === true || row.id === "umans-kimi-k2.7");
-				let policy: ReturnType<typeof resolveModelPolicy>;
+				let policy: ResolvedModelPolicy<Api>;
 				try {
 					policy = resolveModelPolicy(rest as unknown as ModelSpec<Api>);
 				} catch (error) {

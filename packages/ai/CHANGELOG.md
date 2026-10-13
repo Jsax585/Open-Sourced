@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserved unrelated `extraBody` fields while preventing top-level and nested reasoning controls from overriding Thinking Off ([#9411](https://github.com/can1357/oh-my-pi/pull/9411) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
+
 ### Removed
 
 - Removed the `toolNamespacesInfo` stream option; Codex requests no longer send `tool_namespaces_info` turn metadata, and `code_mode_tool_names`/`tool_namespaces_info` are no longer reserved client metadata keys.

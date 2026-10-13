@@ -1,4 +1,5 @@
 import { classifyModel } from "./compat/taxonomy";
+import { normalizeChatTemplateThinking } from "./model-thinking";
 import MODELS from "./models.json" with { type: "json" };
 import type {
 	Api,
@@ -31,12 +32,13 @@ function getProviderModels(provider: string): Map<string, Model<Api>> | undefine
 	const providerModels = new Map<string, Model<Api>>();
 	const rawModels = MODELS[provider as keyof typeof MODELS];
 	for (const id in rawModels) {
-		// models.json rows are complete Models emitted by generate-models.ts;
-		// consuming them verbatim keeps startup allocation-free.
+		// Rows are complete Models; only stale toggle-only thinking ladders
+		// need normalization. Other rows retain their generated metadata.
 		const row = rawModels[id as keyof typeof rawModels] as unknown as Model<Api>;
 		// Rows baked before the compat engine (and stale cache snapshots) lack
 		// `identity`; classify lazily so consumers can rely on the field.
 		row.identity ??= classifyModel(provider, id, { lenient: true });
+		row.thinking = normalizeChatTemplateThinking(row, row.compat, row.thinking);
 		providerModels.set(id, row);
 	}
 	modelRegistry.set(provider, providerModels);

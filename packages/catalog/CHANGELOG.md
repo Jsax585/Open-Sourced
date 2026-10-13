@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Collapsed toggle-only chat-template thinking ladders, including thinking-enabled overrides and stale bundled metadata, while preserving real effort fields and distinct effort-routed model IDs ([#9411](https://github.com/can1357/oh-my-pi/pull/9411) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
+
 ### Added
 
 - Added the `classifier-cot-extraction` rule axis, set for Claude, marking models whose classifier refuses earlier reasoning quoted back into their input ([#15436](https://github.com/can1357/oh-my-pi/pull/15436) by [@will-bogusz](https://github.com/will-bogusz))

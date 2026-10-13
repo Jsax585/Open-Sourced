@@ -273,6 +273,102 @@ describe("OpenAI completions disableReasoning and thinking dialects", () => {
 		const payload = (await promise) as Record<string, unknown>;
 		expect(payload.chat_template_kwargs).toEqual({ enable_thinking: true });
 	});
+
+	it("keeps Qwen chat-template reasoning disabled when extraBody carries a nested override", async () => {
+		const model = buildModel({
+			id: "qwen-ct-extra-body-reasoner",
+			name: "Qwen Chat Template Extra Body Reasoner",
+			api: "openai-completions",
+			provider: "custom",
+			baseUrl: "https://proxy.example.com/v1",
+			reasoning: true,
+			compat: {
+				thinkingFormat: "qwen-chat-template",
+				supportsReasoningParams: true,
+				extraBody: {
+					enable_thinking: true,
+					reasoning_effort: "high",
+					reasoning: { enabled: true },
+					chat_template_kwargs: {
+						enable_thinking: true,
+						reasoning_effort: "high",
+						custom_template_option: "keep-me",
+					},
+					gateway: "route-a",
+				},
+			},
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 16_384,
+		});
+
+		const payload = await captureDisableReasoningPayload(model);
+		expect(payload.chat_template_kwargs).toEqual({ enable_thinking: false, custom_template_option: "keep-me" });
+		expect(payload.gateway).toBe("route-a");
+		expect(payload.enable_thinking).toBeUndefined();
+		expect(payload.reasoning_effort).toBeUndefined();
+		expect(payload.reasoning).toBeUndefined();
+	});
+
+	it("keeps the disabled toggle on the wire for non-record template kwargs", async () => {
+		for (const kwargs of [null, [], "false", 42]) {
+			const model = buildModel({
+				...createReasoningEffortModel(),
+				compat: {
+					thinkingFormat: "qwen-chat-template",
+					extraBody: { chat_template_kwargs: kwargs, gateway: "route-a" },
+				},
+			});
+			const payload = await captureDisableReasoningPayload(model);
+			expect(payload.chat_template_kwargs).toEqual({ enable_thinking: false });
+			expect(payload.gateway).toBe("route-a");
+		}
+	});
+
+	it("keeps distinct model routes and real effort fields selectable on the wire", async () => {
+		for (const surface of ["routing", "template", "top-level"] as const) {
+			const model = buildModel({
+				...createReasoningEffortModel(),
+				compat: {
+					thinkingFormat: "qwen-chat-template",
+					qwenTemplateReasoningEffort: surface === "template",
+					...(surface === "top-level"
+						? {
+								whenThinking: {
+									thinkingFormat: "openai",
+									reasoningDisableMode: "none-effort",
+									supportsReasoningEffort: true,
+									omitReasoningEffort: false,
+								},
+							}
+						: {}),
+				},
+				thinking: {
+					mode: "effort",
+					efforts: [Effort.Low, Effort.High],
+					...(surface === "routing" ? { effortRouting: { low: "reasoner-low", high: "reasoner-high" } } : {}),
+				},
+			});
+			expect(model.thinking?.efforts).toEqual([Effort.Low, Effort.High]);
+			for (const reasoning of [Effort.Low, Effort.High]) {
+				let payload: Record<string, unknown> | undefined;
+				const result = await streamOpenAICompletions(model, testContext, {
+					apiKey: "test-key",
+					fetch: createMockFetchForQwen(value => {
+						payload = value;
+					}),
+					reasoning,
+				}).result();
+				expect(result.stopReason).toBe("stop");
+				if (surface === "routing") expect(payload?.model).toBe(`reasoner-${reasoning}`);
+				if (surface === "template") {
+					expect(payload?.chat_template_kwargs).toEqual({ enable_thinking: true, reasoning_effort: reasoning });
+				}
+				if (surface === "top-level") expect(payload?.reasoning_effort).toBe(reasoning);
+			}
+		}
+	});
 	it("does not emit enable_thinking or chat_template_kwargs for the bundled Fireworks Qwen model without reasoning", async () => {
 		// Reproduces the raw 400 from `fireworks/qwen3.7-plus`: before the fix the
 		// `qwen/*` id pattern forced `thinkingFormat: "qwen"`, so an effort-less
@@ -366,7 +462,7 @@ function createMockFetchForQwen(resolve: (value: Record<string, unknown>) => voi
 					object: "chat.completion.chunk",
 					created: 0,
 					model: "model",
-					choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+					choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }],
 				},
 				"[DONE]",
 			]);

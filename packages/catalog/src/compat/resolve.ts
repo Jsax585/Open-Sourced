@@ -17,7 +17,7 @@
  */
 import { Effort, THINKING_EFFORTS } from "../effort";
 import { hostMatchesUrl, modelMatchesHost } from "../hosts";
-import { withoutUnverifiedThinking } from "../model-thinking";
+import { normalizeChatTemplateThinking, withoutUnverifiedThinking } from "../model-thinking";
 import type {
 	Api,
 	CompatOf,
@@ -1379,7 +1379,7 @@ export function resolveModelPolicy(input: ModelSpec<Api>, route?: ResolveRoute):
 	return {
 		identity,
 		compat,
-		thinking: resolveThinkingPolicy(spec, facts, axes, compat),
+		thinking: normalizeChatTemplateThinking(spec, compat, resolveThinkingPolicy(spec, facts, axes, compat)),
 		catalog: axes.catalog,
 		request: resolveRequestPolicy(axes),
 	};

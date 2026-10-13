@@ -1,19 +1,51 @@
 /**
- * Thinking metadata: runtime field-read helpers.
+ * Thinking metadata: runtime field-read helpers and chat-template normalization.
  *
- * Derivation lives in the compat engine (`compat/resolve`) and runs exactly
- * once per model — from `buildModel` for dynamic specs and from the catalog
- * generator for bundled entries. Everything here reads baked fields only: no
- * id parsing, no host matching, no compat detection per request.
+ * Derivation lives in the compat engine (`compat/resolve`). Toggle-only effort
+ * metadata is normalized once at build time or when a bundled row is loaded;
+ * request-time helpers below only read the baked fields.
  */
 import { Effort, THINKING_EFFORTS } from "./effort";
-import type { Api, Model, ModelSpec, ThinkingConfig } from "./types";
+import type { Api, CompatOf, Model, ModelSpec, ResolvedOpenAICompat, ThinkingConfig } from "./types";
 
 /**
  * Runtime helpers read baked metadata only, so they accept both pre-build
  * specs and built models.
  */
 type ApiModel<TApi extends Api = Api> = ModelSpec<TApi> | Model<TApi>;
+
+/**
+ * Toggle-only chat templates have one on-rung unless effort changes the wire
+ * model. Use the thinking-enabled compat view, just like the request encoder.
+ * Shared by policy resolution and bundled-row loading to repair stale snapshots.
+ */
+export function normalizeChatTemplateThinking<TApi extends Api>(
+	spec: Pick<ModelSpec<TApi>, "api" | "id" | "requestModelId">,
+	compat: CompatOf<TApi>,
+	thinking: ThinkingConfig | undefined,
+): ThinkingConfig | undefined {
+	if (!thinking || thinking.efforts.length <= 1) return thinking;
+	if (spec.api !== "openai-completions" && spec.api !== "openrouter") return thinking;
+	const baseCompat = compat as ResolvedOpenAICompat | undefined;
+	const enabledCompat = baseCompat?.whenThinking ?? baseCompat;
+	const binaryTemplate =
+		enabledCompat?.reasoningDisableMode === "qwen-template-false" &&
+		enabledCompat.qwenTemplateReasoningEffort !== true;
+	const binaryEnabledView =
+		baseCompat?.reasoningDisableMode === "qwen-template-false" &&
+		(enabledCompat?.reasoningDisableMode === "lowest-effort" ||
+			enabledCompat?.reasoningDisableMode === "none-effort") &&
+		(enabledCompat.supportsReasoningEffort === false || enabledCompat.omitReasoningEffort === true);
+	if (!binaryTemplate && !binaryEnabledView) return thinking;
+	const wireId = thinking.effortRouting?.[thinking.efforts[0]] ?? spec.requestModelId ?? spec.id;
+	for (const effort of thinking.efforts) {
+		if ((thinking.effortRouting?.[effort] ?? spec.requestModelId ?? spec.id) !== wireId) return thinking;
+	}
+	const tier = thinking.defaultLevel ?? thinking.efforts[thinking.efforts.length - 1];
+	const collapsed: ThinkingConfig = { ...thinking, efforts: [tier] };
+	delete collapsed.effortMap;
+	return collapsed;
+}
 
 /**
  * Returns the supported thinking efforts declared on the model metadata.
