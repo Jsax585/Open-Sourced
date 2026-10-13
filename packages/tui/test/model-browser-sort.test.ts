@@ -3,6 +3,7 @@ import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
 	buildBrowserItems,
+	type ModelBrowserItem,
 	describeModelSort,
 	formatModelSort,
 	nextModelSort,
@@ -190,16 +191,14 @@ describe("sortModelItems metric order", () => {
 		// `modelSortGrouped: true` can outlive a `modelSort: default` — the flag is
 		// the preference for the *next* metric. It must not reorder the default
 		// list, which the footer still advertises as `sort: default`.
-		const build = () => {
-			const items = buildBrowserItems([
+		const build = (): ModelBrowserItem[] =>
+			buildBrowserItems([
 				providerModel("alpha", "low", { int: 20 }),
 				providerModel("alpha", "high", { int: 95 }),
 				providerModel("beta", "mid", { int: 60 }),
 				providerModel("beta", "top", { int: 80 }),
 			]);
-			return items;
-		};
-		const shape = (items: ReturnType<typeof build>) => items.map(item => `${item.provider}/${item.id}`);
+		const shape = (items: ModelBrowserItem[]) => items.map(item => `${item.provider}/${item.id}`);
 
 		const plain = build();
 		sortModelItems(plain, { mruOrder: ["beta/mid"] });
