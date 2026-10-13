@@ -6,10 +6,15 @@
 
 - Added a metric order to the `/models` hub: `ctrl+alt+s` cycles the rows through intelligence, output speed, and blended price (each direction), persisting the choice as the `modelSort` setting ([#15541](https://github.com/can1357/oh-my-pi/pull/15541) by [@omerdikyol](https://github.com/omerdikyol))
 - Added `ctrl+alt+g` in the `/models` hub to rank the active metric inside each provider instead of across all of them, persisted as `modelSortGrouped` ([#15541](https://github.com/can1357/oh-my-pi/pull/15541) by [@omerdikyol](https://github.com/omerdikyol))
+- Added `ApprovalDialogComponent` and the `app.approval.approve` keybinding (default `Ctrl+Enter`, `Ctrl+Q`) ([#15548](https://github.com/can1357/oh-my-pi/pull/15548) by [@H4vC](https://github.com/H4vC))
 
 ### Removed
 
 - Removed `tools/eval-format/code-mode-declarations` (`generateCodeModeDeclarations`), which only served Codex Code Mode.
+
+### Fixed
+
+- Clicking Copy answer in the `/btw` history (and Copy raw in the raw SSE viewer) on native terminals copies the answer instead of the button's label ([#15547](https://github.com/can1357/oh-my-pi/pull/15547) by [@H4vC](https://github.com/H4vC))
 
 ## [18.10.3] - 2026-10-12
 
