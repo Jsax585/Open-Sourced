@@ -360,7 +360,9 @@ export class BackgroundJobsPage implements Component {
 	 * frame shows its frozen capture outright — while it matches, the live text
 	 * is not sanitized or split at all — and the viewport is
 	 * only re-filled when the shown job, the follow state, or (while live) the
-	 * text changed, so an unchanged 250 ms repaint re-copies nothing.
+	 * text changed, so an unchanged 250 ms repaint re-copies nothing. An empty
+	 * capture clears the viewport instead, so no previous job's rows or scroll
+	 * offset survive into the next fill.
 	 */
 	#renderOutput(
 		width: number,
@@ -379,15 +381,23 @@ export class BackgroundJobsPage implements Component {
 		const matched = frozen !== undefined && frozen.id === job.id;
 		const lines = frozen && matched ? frozen.lines : this.#outputLines(job.id, output);
 		if (!this.#follow && !matched) this.#frozen = { id: job.id, lines };
+		const shown = this.#outputView;
 		if (lines.length === 0) {
 			const message = job.status === "running" ? "No output yet" : "No output";
+			// An empty capture must not leave the previous job's rows, height or
+			// scroll offset inside the reusable viewport: a later `setLines` would
+			// reconcile from that stale offset and open the new capture at a
+			// foreign middle segment. Clear it once per empty spell — an unchanged
+			// repaint re-copies nothing — and keep the height current for the
+			// next fill.
+			if (shown && (shown.lines.length > 0 || shown.id !== job.id)) this.#output.setLines([]);
+			this.#output.setHeight(rows - 1);
 			this.#outputView = { id: job.id, output, frozen: !this.#follow, lines: [] };
 			return [truncateToWidth(` ${theme.fg("muted", message)}`, width)];
 		}
 		// A single output row keeps the same viewport at height 1 and only drops the
 		// `Output` header, so PgUp can still page back through the capture.
 		const header = rows === 1 ? [] : [truncateToWidth(` ${theme.fg("muted", "Output")}`, width)];
-		const shown = this.#outputView;
 		// The frozen rows are stable, so output churn must not re-copy them; only a
 		// job switch, a follow toggle, or (while live) new text replaces the
 		// viewport rows.

@@ -14,7 +14,8 @@
 ### Fixed
 
 - Clicking Copy answer in the `/btw` history (and Copy raw in the raw SSE viewer) on native terminals copies the answer instead of the button's label ([#15547](https://github.com/can1357/oh-my-pi/pull/15547) by [@H4vC](https://github.com/H4vC))
-- Fixed fullscreen pages restoring a stale main screen after resizing back to the original window size ([#15595](https://github.com/can1357/oh-my-pi/pull/15595) by [@wyyyz1937365497](https://github.com/wyyyz1937365497)).
+- Fixed fullscreen pages restoring a stale main screen or waiting unnecessarily for a cursor probe after resizing ([#15595](https://github.com/can1357/oh-my-pi/pull/15595) by [@wyyyz1937365497](https://github.com/wyyyz1937365497)).
+- Fixed background job logs inheriting another job's scroll position after selecting a task with no output ([#15595](https://github.com/can1357/oh-my-pi/pull/15595) by [@wyyyz1937365497](https://github.com/wyyyz1937365497)).
 
 ## [18.10.3] - 2026-10-12
 

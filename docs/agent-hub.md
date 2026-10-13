@@ -134,4 +134,6 @@ Advisor rows are intentionally excluded from the agent-facing peer roster, `hist
 
 The page repaints on a timer while it is open, so a running job's output and pids stay live. It never replaces the per-agent transcript or control view, and closing it stops nothing. Native terminals keep the centred live `JobsSheet` instead. `/jobs full` prints a static snapshot of running and recently settled asynchronous tool jobs with untruncated commands; `/jobs kill <id>|all` cancels running jobs from the command line.
 
+Switching to a job with no output clears the previous job's output viewport. Its first captured output follows its own tail; `Space` can freeze even an empty capture until following resumes.
+
 See also [Task Agent Discovery and Selection](./task-agent-discovery.md), [Collaboration](./collab.md), and [Advisor, WATCHDOG.md, and WATCHDOG.yml](./advisor-watchdog.md).

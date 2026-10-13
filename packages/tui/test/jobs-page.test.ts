@@ -285,6 +285,60 @@ describe("BackgroundJobsPage", () => {
 		expect(resumed).toContain("step 41");
 	});
 
+	it("clears the viewport on an empty capture so the first chunk opens at its own tail, not a foreign offset", () => {
+		let betaOutput = "";
+		const jobs: JobsPanelSnapshot = {
+			running: [bash("bash-full", "running", "long run"), bash("bash-empty", "running", "quiet run")],
+			recent: [],
+		};
+		const { page } = setup(jobs, {
+			rows: 30,
+			inspect: id =>
+				id === "bash-full"
+					? { command: "long run", cwd: "/work", pids: [7], output: log(60, "full") }
+					: { command: "quiet run", cwd: "/work", pids: [8], output: betaOutput },
+		});
+		expect(visibleCapture(page.render(120), "full").at(-1)).toContain("full 60");
+
+		// Select the empty job, pause it with PgUp, then let its first long chunk
+		// land before the next frame: the paused fill must reconcile from the
+		// cleared viewport, not from the previous job's scroll offset.
+		page.handleInput(DOWN);
+		expect(plain(page.render(120))).toContain("No output yet");
+		page.handleInput(PGUP);
+		betaOutput = log(200, "beta");
+		const rows = visibleCapture(page.render(120), "beta");
+		expect(rows.at(-1)).toContain("beta 200");
+		expect(rows.some(row => /\bbeta 0(0\d|1\d|2\d|3\d)\b/.test(row))).toBe(false);
+	});
+
+	it("keeps a paused empty capture frozen and resumes its tail on End after the first chunk", () => {
+		let betaOutput = "";
+		const jobs: JobsPanelSnapshot = {
+			running: [bash("bash-full", "running", "long run"), bash("bash-empty", "running", "quiet run")],
+			recent: [],
+		};
+		const { page } = setup(jobs, {
+			rows: 30,
+			inspect: id =>
+				id === "bash-full"
+					? { command: "long run", cwd: "/work", pids: [7], output: log(60, "full") }
+					: { command: "quiet run", cwd: "/work", pids: [8], output: betaOutput },
+		});
+		page.render(120);
+
+		// Pausing an empty capture freezes that empty view: the first chunk must
+		// not shift the paused viewport, and End still opens the newest tail.
+		page.handleInput(DOWN);
+		expect(plain(page.render(120))).toContain("No output yet");
+		page.handleInput(SPACE);
+		expect(plain(page.render(120))).toContain("No output yet");
+		betaOutput = log(200, "beta");
+		expect(plain(page.render(120))).toContain("No output yet");
+		page.handleInput(END);
+		expect(visibleCapture(page.render(120), "beta").at(-1)).toContain("beta 200");
+	});
+
 	it("hides the log on a narrow terminal until Tab or Enter opens the selected job", () => {
 		const { page, source } = setup(undefined, { rows: 30 });
 		const roster = plain(page.render(40));

@@ -3800,7 +3800,12 @@ export class TUI extends Container {
 			// covers the old normal buffer. Fuse the restore into the destructive
 			// repaint so no stale frame can become visible between writes.
 			if (this.#clearScrollbackOnNextRender) {
+				// Same invariant as #settleResizeAltPaint's fused exit: the terminal
+				// stays on the borrowed buffer until the replay frame writes, so a
+				// SIGWINCH landing first must adopt that buffer instead of entering
+				// it again.
 				this.#pendingAltExit = exitSequence;
+				this.#resizeAltExitFused = true;
 			} else {
 				this.#noteAltBufferToggle();
 				this.terminal.write(exitSequence);
@@ -3816,8 +3821,12 @@ export class TUI extends Container {
 			// rewrap or a height-grow scrollback pull, while our viewport anchor
 			// stayed frozen. Recover the restored cursor position before any
 			// provider repaint can overwrite history at the stale row.
+			// A fused exit still pending skips this: the normal screen is not
+			// restored yet, so a DSR would snapshot the still-displayed alternate
+			// grid and stall the replay for the CPR round trip — and a rebuild
+			// repaint starts at row zero, needing no anchor at all.
 			if (width !== this.#altEnterWidth || height !== this.#altEnterHeight) {
-				if (this.#frameProvider !== undefined) {
+				if (this.#frameProvider !== undefined && this.#pendingAltExit === "") {
 					this.#beginResizeAnchorProbe();
 					return;
 				}
