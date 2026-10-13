@@ -12,7 +12,7 @@
 
 ### Fixed
 
-- Fixed a failed session-maintenance rewrite making every later turn republish its full transcript; turns with durable predecessors now keep appending normally ([#15404](https://github.com/can1357/oh-my-pi/pull/15404) by [@sjawhar](https://github.com/sjawhar)).
+- Fixed sessions that stop saving new turns after one failed session write; later turns keep appending, and an entry the failed write missed is appended before them ([#15404](https://github.com/can1357/oh-my-pi/pull/15404) by [@sjawhar](https://github.com/sjawhar)).
 - Fixed agents continuing after a session persistence failure without context about the risk; the next prompt now receives a hidden warning to preserve critical work ([#15404](https://github.com/can1357/oh-my-pi/pull/15404) by [@sjawhar](https://github.com/sjawhar)).
 - Fixed `omp --resume <path>` parsing an unchanged session file twice; resume now re-reads the file to confirm it is unchanged and parses it again only after a change ([#15404](https://github.com/can1357/oh-my-pi/pull/15404) by [@sjawhar](https://github.com/sjawhar)).
 - Fixed full rewrites of large file-backed sessions retaining a second transcript-sized serialization; file storage now streams the journal and verifies uncertain publication by an exact streamed comparison ([#15404](https://github.com/can1357/oh-my-pi/pull/15404) by [@sjawhar](https://github.com/sjawhar)).
