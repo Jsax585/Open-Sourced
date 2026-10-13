@@ -471,4 +471,104 @@ describe("/jobs on a plain terminal", () => {
 
 		gate.resolve("done");
 	});
+
+	it("defaults to bash only over a live manager task job: `a` restores it, toggling back recovers bash, and nothing is cancelled or consumed", async () => {
+		const bashGate = Promise.withResolvers<string>();
+		const taskGate = Promise.withResolvers<string>();
+		const idBash = manager.register(
+			"bash",
+			"sleep 111",
+			async ctx => {
+				await ctx.reportProgress(["bash-out-1", "bash-out-2", "bash-out-final"].join("\n"));
+				return bashGate.promise;
+			},
+			{ ownerId: "main", process: { command: "sleep 111", cwd: tempDir.path(), pids: () => [] } },
+		);
+		const idTask = manager.register(
+			"task",
+			"explore the repo",
+			async ctx => {
+				await ctx.reportProgress("task-progress-live");
+				return taskGate.promise;
+			},
+			{ ownerId: "main" },
+		);
+		const last = await mount(2);
+		const transcript = [...mode.chatContainer.children];
+
+		term.sendInput("/jobs");
+		await term.waitForRender(() => plainScreen(term).some(row => row.includes("/jobs")));
+		term.sendInput("\r");
+		await term.waitForRender(() => plainScreen(term).some(row => row.includes("Background jobs")));
+
+		// Bash-only default: the bash job and its output are live on the page
+		// while the task job stays off it — no row, no output.
+		const opened = plainScreen(term);
+		expect(opened.some(row => row.includes("Background jobs · bash"))).toBe(true);
+		expect(opened.some(row => row.includes(idBash))).toBe(true);
+		expect(opened.some(row => row.includes("bash-out-final"))).toBe(true);
+		expect(opened.some(row => row.includes(idTask))).toBe(false);
+		expect(opened.some(row => row.includes("task-progress-live"))).toBe(false);
+
+		// The runtime registry still holds every job, and the session snapshot
+		// still lists the task the page is hiding — the filter is view-only.
+		expect(manager.getJob(idTask)?.status).toBe("running");
+		expect(manager.getAllJobs({ ownerId: "main" }).map(backendJob => backendJob.id)).toEqual(
+			expect.arrayContaining([idBash, idTask]),
+		);
+		const snapshot = session.getAsyncJobSnapshot();
+		expect(snapshot?.running.some(item => item.id === idTask && item.type === "task")).toBe(true);
+
+		// `a` restores all jobs: the task row appears while the retained bash
+		// selection keeps its output pane.
+		term.sendInput("a");
+		await term.waitForRender(() => plainScreen(term).some(row => row.includes(idTask)));
+		const allRows = plainScreen(term);
+		expect(allRows.some(row => row.includes("Background jobs · all"))).toBe(true);
+		expect(allRows.some(row => row.includes(idBash))).toBe(true);
+		expect(allRows.some(row => row.includes("bash-out-final"))).toBe(true);
+
+		// ↓ selects the task; its own reported output fills the detail pane.
+		term.sendInput("\x1b[B");
+		await term.waitForRender(() => plainScreen(term).some(row => row.includes("task-progress-live")));
+
+		// Toggle back from the roster: the task hides again and the page shows the
+		// bash job's output.
+		term.sendInput("a");
+		await term.waitForRender(() => {
+			const rows = plainScreen(term);
+			return !rows.some(row => row.includes(idTask)) && rows.some(row => row.includes("bash-out-final"));
+		});
+
+		// Toggling alone cancelled nothing and consumed no results.
+		expect(manager.getJob(idTask)?.status).toBe("running");
+		expect(manager.getJob(idBash)?.status).toBe("running");
+		expect(manager.isJobResultConsumed(idTask)).toBe(false);
+		expect(manager.isJobResultConsumed(idBash)).toBe(false);
+		expect(mode.chatContainer.children).toEqual(transcript);
+
+		// The expanded log carries the same toggle: open the bash log, press `a`
+		// there, and the task is back on the roster once the log is collapsed.
+		term.sendInput("\r");
+		await term.waitForRender(() => plainScreen(term).some(row => row.includes(`Background jobs · ${idBash}`)));
+		term.sendInput("a");
+		term.sendInput("\x1b");
+		await term.waitForRender(() => plainScreen(term).some(row => row.includes(idTask)));
+		expect(plainScreen(term).some(row => row.includes("task-progress-live"))).toBe(false);
+
+		// And back to bash-only from the roster, then a clean close.
+		term.sendInput("a");
+		await term.waitForRender(() => !plainScreen(term).some(row => row.includes(idTask)));
+		term.sendInput("\x1b");
+		await term.waitForRender(() => {
+			const rows = plainScreen(term);
+			return !mode.ui.hasOverlay() && !rows.some(row => row.includes("Background jobs")) && rows.includes(last);
+		});
+		expect(mode.ui.hasOverlay()).toBe(false);
+		expect(manager.getJob(idTask)?.status).toBe("running");
+		expect(mode.chatContainer.children).toEqual(transcript);
+
+		bashGate.resolve("done");
+		taskGate.resolve("done");
+	});
 });

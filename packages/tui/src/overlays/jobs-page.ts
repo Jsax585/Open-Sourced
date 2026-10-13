@@ -15,7 +15,7 @@ import type { Component, TUI } from "../tui";
 import { formatKeyHint, formatKeyHints } from "../app-keybindings";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
 import { matchesKey } from "../keys";
-import { truncateToWidth } from "../utils";
+import { truncateToWidth, visibleWidth } from "../utils";
 import { shortenPath } from "../render/render-utils";
 import { collapseCommand } from "../apps/ps-data";
 import { compact } from "../native/describe";
@@ -83,10 +83,12 @@ interface FrozenOutput {
 	readonly lines: readonly string[];
 }
 
-/** One session snapshot: every job, and the selected one. */
+/** One snapshot: the jobs the roster shows, the selected one, and how many the filter hides. */
 interface JobsSample {
 	readonly jobs: readonly JobsPanelJob[];
 	readonly selected: JobsPanelJob | undefined;
+	/** Jobs the current filter hides (0 when showing all or nothing is hidden). */
+	readonly hidden: number;
 }
 
 /** What the output viewport currently holds, so an unchanged repaint never re-copies the capture. */
@@ -107,7 +109,8 @@ interface OutputViewport {
  * expands the log to the full body. ↑/↓ (or j/k) select on the roster and
  * scroll the log when it is focused, PgUp/PgDn page the log, Space toggles
  * tail-follow (a manual scroll pauses it; End or Space resumes), X cancels the
- * selected running job, and Esc returns from the log to the roster, then
+ * selected running job, `a` toggles the roster between bash jobs only (the
+ * default) and every job, and Esc returns from the log to the roster, then
  * closes. While paused the shown rows are frozen, so a rolling capture — the
  * session appending *or* dropping leading rows — never shifts the viewport;
  * status, command and facts keep refreshing.
@@ -118,6 +121,8 @@ export class BackgroundJobsPage implements Component {
 	/** One session snapshot per render, shared by the frame and both panes. */
 	#sample: JobsSample | undefined;
 	#selectedId: string | undefined;
+	/** Whether the roster lists every job type (`a` toggles) or only bash jobs — the default. */
+	#showAll = false;
 	/** Whether the log/detail surface is open: the log on a wide split, the detail pane when narrow. */
 	#detailsOpen = false;
 	#follow = true;
@@ -203,10 +208,15 @@ export class BackgroundJobsPage implements Component {
 		this.#split.setHeight(contentRows);
 		this.#split.setNarrowPane(splitMode ? "left" : this.#detailsOpen ? "right" : "left");
 
+		// The roster title carries the filter mode and the live running count of
+		// the visible jobs; the log title keeps the selected job's identity.
+		let runningCount = 0;
+		for (const job of sample.jobs) if (job.status === "running") runningCount++;
+		const rosterTitle = `Background jobs · ${this.#showAll ? "all" : "bash"} · ${runningCount} running`;
 		const title =
 			this.#detailsOpen && sample.selected
 				? `Background jobs · ${sanitizeDisplaySingleLine(sample.selected.id)}`
-				: "Background jobs";
+				: rosterTitle;
 		this.#frameTop.setLines([
 			showSplit ? topBorderSplit(safeWidth, title, geometry.left?.width ?? 0) : topBorder(safeWidth, title),
 		]);
@@ -249,6 +259,7 @@ export class BackgroundJobsPage implements Component {
 		else if (matchesKey(data, "home")) this.#scrollOutput("top");
 		else if (matchesKey(data, "end")) this.#setFollow(true);
 		else if (matchesKey(data, "x")) this.#cancelSelected();
+		else if (matchesKey(data, "a")) this.#toggleAll();
 	}
 
 	/** Esc closes from the roster, or returns from the open log/detail surface first. */
@@ -263,6 +274,12 @@ export class BackgroundJobsPage implements Component {
 		if (this.#current().selected === undefined) return;
 		this.#detailsOpen = !this.#detailsOpen;
 		if (!this.#detailsOpen) this.#setFollow(true);
+	}
+
+	/** Apply the filter immediately so subsequent keys see the new selection and detail state. */
+	#toggleAll(): void {
+		this.#showAll = !this.#showAll;
+		this.#sample = this.#current();
 	}
 
 	#setFollow(follow: boolean): void {
@@ -308,9 +325,15 @@ export class BackgroundJobsPage implements Component {
 
 	/** The roster pane: Running then Recent, the selectable rows windowed around the selection. */
 	#renderRoster(width: number, height: number): readonly string[] {
-		const { jobs, selected } = this.#sample ?? this.#current();
+		const { jobs, selected, hidden } = this.#sample ?? this.#current();
 		if (jobs.length === 0) {
-			return height > 0 ? [truncateToWidth(` ${theme.fg("muted", "No background jobs")}`, width)] : [];
+			if (height <= 0) return [];
+			// The bash filter can empty the roster while other jobs still exist:
+			// say so, and how to widen the list.
+			if (hidden > 0) {
+				return [truncateToWidth(` ${theme.fg("muted", `No bash jobs · ${hidden} hidden · a:all`)}`, width)];
+			}
+			return [truncateToWidth(` ${theme.fg("muted", "No background jobs")}`, width)];
 		}
 		const entries = rosterEntries(jobs);
 		const selectedIndex = entries.findIndex(entry => entry.job?.id === selected?.id);
@@ -458,45 +481,57 @@ export class BackgroundJobsPage implements Component {
 
 	#footer(isSplit: boolean, width: number): string {
 		const state = this.#follow ? "following" : "paused";
+		// The filter toggle stays visible on every layout: the compact line drops
+		// the state word, then the logs/tail hint, before the primary
+		// filter/back/cancel hints would overflow the frame (40-column floor).
+		const filter = `${formatKeyHint("a")}:${this.#showAll ? "bash" : "all"}`;
 		if (width < 96) {
 			const back = `${formatKeyHint("escape")}:${this.#detailsOpen ? "back" : "close"}`;
 			const view = this.#detailsOpen
 				? `${formatKeyHint("end")}:tail`
 				: `${formatKeyHint(isSplit ? "enter" : "tab")}:logs`;
-			return theme.fg("dim", `${back} ${view} ${state} ${formatKeyHint("x")}:cancel`);
+			const cancel = `${formatKeyHint("x")}:cancel`;
+			let footer = `${filter} ${back} ${view} ${state} ${cancel}`;
+			if (visibleWidth(footer) > width) footer = `${filter} ${back} ${view} ${cancel}`;
+			if (visibleWidth(footer) > width) footer = `${filter} ${back} ${cancel}`;
+			return theme.fg("dim", footer);
 		}
 		const scroll = `${formatKeyHints(["pageUp", "pageDown"])}:scroll`;
-		if (this.#detailsOpen) {
-			return theme.fg(
-				"dim",
-				`${scroll}  ${formatKeyHint("end")}:tail  ${formatKeyHint("space")}:follow  ` +
-					`${formatKeyHint("x")}:cancel  ${formatKeyHint("escape")}:back  ·  ${state}`,
-			);
-		}
-		const select = `${formatKeyHints(["j", "k"])}:select`;
-		const open = `${formatKeyHint(isSplit ? "enter" : "tab")}:logs`;
-		return theme.fg(
-			"dim",
-			`${select}  ${open}  ${scroll}  ${formatKeyHint("space")}:follow  ` +
-				`${formatKeyHint("x")}:cancel  ${formatKeyHint("escape")}:close  ·  ${state}`,
-		);
+		const follow = `${formatKeyHint("space")}:follow`;
+		const cancel = `${formatKeyHint("x")}:cancel`;
+		const back = `${formatKeyHint("escape")}:${this.#detailsOpen ? "back" : "close"}`;
+		// `·  state` is the least valuable segment of the wide line: only appended
+		// when the rest of the hints leave room for it.
+		const tail = `  ·  ${state}`;
+		let footer = this.#detailsOpen
+			? `${scroll}  ${filter}  ${formatKeyHint("end")}:tail  ${follow}  ${cancel}  ${back}`
+			: `${formatKeyHints(["j", "k"])}:select  ${filter}  ` +
+				`${formatKeyHint(isSplit ? "enter" : "tab")}:logs  ${scroll}  ${follow}  ${cancel}  ${back}`;
+		if (visibleWidth(footer) + visibleWidth(tail) <= width) footer += tail;
+		return theme.fg("dim", footer);
 	}
 
 	#current(): JobsSample {
 		const { running, recent } = this.#source.load();
-		const jobs = [...running, ...recent];
+		// Filter into a fresh roster without mutating or copying the source arrays.
+		const jobs: JobsPanelJob[] = [];
+		for (const job of running) if (this.#showAll || job.type === "bash") jobs.push(job);
+		for (const job of recent) if (this.#showAll || job.type === "bash") jobs.push(job);
+		const hidden = running.length + recent.length - jobs.length;
 		const previous = this.#selectedId;
 		const selected = jobs.find(job => job.id === previous) ?? jobs[0];
 		this.#selectedId = selected?.id;
-		// The selection can vanish (job evicted) or arrive from nothing; when that
-		// changes the identity, treat it like an explicit move so a paused viewport
-		// follows the new job's newest output instead of keeping a stale freeze.
+		// The selection can vanish (job evicted, or hidden by the bash filter) or
+		// arrive from nothing; when that changes the identity, treat it like an
+		// explicit move so a paused viewport follows the new job's newest output
+		// instead of keeping a stale freeze. A selection that stays visible keeps
+		// its paused viewport across filter toggles.
 		if (selected?.id !== previous) this.#setFollow(true);
 		// With no jobs left there is nothing to show in the log surface: fall back
 		// to the (empty) roster page rather than a blank expanded body. The page
 		// itself stays mounted; closing stays with Esc on the roster.
 		if (!selected && this.#detailsOpen) this.#detailsOpen = false;
-		return { jobs, selected };
+		return { jobs, selected, hidden };
 	}
 
 	#move(delta: number): void {

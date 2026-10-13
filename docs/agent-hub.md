@@ -123,12 +123,15 @@ Advisor rows are intentionally excluded from the agent-facing peer roster, `hist
 
 `/jobs` opens the dedicated fullscreen Background jobs page on an ordinary terminal. It borrows Agent Hub's layout primitives — a roster, a split detail pane, and a scroll view — but is separate from Agent Hub and its agent roster: it lists only the session's asynchronous tool jobs and shows only their captured output, which stays read-only. There is no chat, stdin, or revive. On a wide terminal the roster and the selected job's live output sit side by side; on a narrow one the roster fills the page until `Tab` or `Enter` opens the output.
 
+The roster lists bash jobs only by default; `a` widens it to every job type (tasks, evals) and narrows it back, and the title's running count covers only the listed jobs, so it follows the filter. Every newly opened page starts bash-only again, and the filter lives on this page alone: task and eval jobs stay in the backend job registry, and this page filter leaves the existing statusline counter, native `JobsSheet`, `/jobs full` and `/jobs kill` behavior unchanged. With no bash jobs while task or eval jobs exist, the roster says how many are hidden and points at `a:all`.
+
 | Input              | Action                                                                                                              |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------- |
 | `↑` / `↓`, `j` / `k` | Select a job, or scroll the open output.                                                                            |
 | `Tab`, `Enter`     | Open or close the selected job's output: the full-body log on a wide terminal, the detail pane on a narrow one.      |
 | `PgUp` / `PgDn`    | Page the output. Scrolling away from the tail freezes the displayed snapshot, so rolling captures cannot shift it. |
 | `End`, `Space`     | `End` follows the newest output; `Space` toggles following. Returning to the tail also resumes following. |
+| `a`                | Toggle the roster between bash jobs (the default) and every job type.                                              |
 | `x`                | Cancel the selected running job. Only running jobs can be cancelled.                                               |
 | `Esc`              | Back from the open output to the roster, then close the page.                                                      |
 

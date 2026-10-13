@@ -20,6 +20,7 @@ beforeAll(async () => {
 });
 
 const DOWN = "\x1b[B";
+const UP = "\x1b[A";
 const ESC = "\x1b";
 const TAB = "\t";
 const ENTER = "\r";
@@ -37,6 +38,17 @@ function bash(
 ): JobsPanelJob {
 	const job: JobsPanelJob = { id, type: "bash", status, label, startTime: NOW - 4_000, ...extra };
 	return job;
+}
+
+/** A non-bash job of any type; the page's bash-only default must hide these. */
+function job(
+	type: string,
+	id: string,
+	status: JobsPanelJob["status"],
+	label: string,
+	extra: Partial<JobsPanelJob> = {},
+): JobsPanelJob {
+	return { id, type, status, label, startTime: NOW - 4_000, ...extra };
 }
 
 /** `count` numbered log lines with a trailing newline, newest last. */
@@ -57,6 +69,30 @@ const DETAILS: Record<string, JobsPanelDetail> = {
 	"bash-c": { command: "gamma run", cwd: "/work", pids: [], exitCode: 0, output: log(2, "gamma") },
 };
 
+/**
+ * Task + eval + bash mix. Distinct output prefixes per job so a frame can be
+ * negatively asserted: a leaked non-bash row or output is always detectable.
+ */
+const MIXED: JobsPanelSnapshot = {
+	running: [
+		job("task", "task-1", "running", "explore repo"),
+		bash("bash-a", "running", "alpha run"),
+		job("eval", "eval-1", "running", "smoke eval"),
+	],
+	recent: [
+		bash("bash-c", "completed", "gamma run", { endTime: NOW - 100 }),
+		job("task", "task-2", "failed", "dead task", { endTime: NOW - 50 }),
+	],
+};
+
+const MIXED_DETAILS: Record<string, JobsPanelDetail> = {
+	"task-1": { cwd: "/work", pids: [], output: log(3, "taskout") },
+	"bash-a": { command: "alpha run", cwd: "/work", pids: [7], output: log(3, "alpha") },
+	"eval-1": { cwd: "/work", pids: [], output: log(3, "evalout") },
+	"bash-c": { command: "gamma run", cwd: "/work", pids: [], exitCode: 0, output: log(2, "gamma") },
+	"task-2": { cwd: "/work", pids: [], exitCode: 1, output: log(2, "tasktwo") },
+};
+
 /** Plain text of a rendered frame, ANSI stripped for stable assertions. */
 function plain(lines: readonly string[]): string {
 	const out: string[] = [];
@@ -70,6 +106,11 @@ function visibleCapture(lines: readonly string[], prefix: string): string[] {
 	const marker = new RegExp(`\\b${prefix} \\d`);
 	for (const row of plain(lines).split("\n")) if (marker.test(row)) rows.push(row);
 	return rows;
+}
+
+/** The frame's top border row, where the roster title (filter word + running count) lives. */
+function titleRow(lines: readonly string[]): string {
+	return plain(lines).split("\n")[0] ?? "";
 }
 
 const pages: BackgroundJobsPage[] = [];
@@ -569,6 +610,11 @@ describe("BackgroundJobsPage", () => {
 			rows: 40,
 			inspect: () => ({ command: "c\x1b[2Jmd", cwd: "/w\x07ork", pids: [1], output: "out\n" }),
 		});
+		// `ba\tsh` is not strictly `bash`, so the bash-only default hides the row —
+		// which is itself the strict-filter behavior. Toggle All explicitly so the
+		// row renders and the sanitizer intent stays under test, unweakened.
+		expect(plain(page.render(200))).not.toContain("job-a");
+		page.handleInput("a");
 		const frame = page.render(200);
 		for (const line of frame) {
 			expect(line).not.toContain("\x1b[2J");
@@ -599,5 +645,264 @@ describe("BackgroundJobsPage", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("defaults to bash only on a mixed roster: non-bash rows and output stay hidden and the first bash is selected", () => {
+		const { page } = setup(MIXED, { details: MIXED_DETAILS });
+		const frame = plain(page.render(120));
+		// The bash jobs are listed and the first filtered one is selected...
+		expect(frame).toContain("bash-a");
+		expect(frame).toContain("bash-c");
+		expect(frame).toContain("alpha 01");
+		// ...while the task/eval entries and everything they carry stay off the page.
+		expect(frame).not.toContain("task-1");
+		expect(frame).not.toContain("eval-1");
+		expect(frame).not.toContain("task-2");
+		expect(frame).not.toContain("taskout");
+		expect(frame).not.toContain("evalout");
+		expect(frame).not.toContain("tasktwo");
+		// The title names the bash view and counts only the filtered running job.
+		expect(titleRow(page.render(120))).toContain("Background jobs · bash · 1 running");
+		expect(titleRow(page.render(120))).not.toContain("· all");
+	});
+
+	it("derives the title's running count from the filtered jobs, running and settled alike", () => {
+		const { page } = setup(MIXED, { details: MIXED_DETAILS });
+		// Bash-only: one running bash; the settled bash and the two hidden running
+		// jobs must not inflate the count (settled branch stays out of `running`).
+		const bashTitle = titleRow(page.render(120));
+		expect(bashTitle).toContain("Background jobs · bash · 1 running");
+		expect(bashTitle).not.toContain("2 running");
+		expect(bashTitle).not.toContain("3 running");
+
+		// All: every running job counts; the two settled jobs still do not.
+		page.handleInput("a");
+		const allTitle = titleRow(page.render(120));
+		expect(allTitle).toContain("Background jobs · all · 3 running");
+		expect(allTitle).not.toContain("4 running");
+		expect(allTitle).not.toContain("5 running");
+
+		// Back to bash-only: the count returns to the single filtered running job.
+		page.handleInput("a");
+		expect(titleRow(page.render(120))).toContain("Background jobs · bash · 1 running");
+	});
+
+	it("counts explicitly at zero when every running job is filtered out", () => {
+		const snapshot: JobsPanelSnapshot = {
+			running: [job("task", "task-1", "running", "explore repo")],
+			recent: [bash("bash-old", "completed", "old run", { endTime: NOW - 100 })],
+		};
+		const { page } = setup(snapshot, {
+			details: {
+				"task-1": { cwd: "/work", pids: [], output: log(2, "taskout") },
+				"bash-old": { command: "old run", cwd: "/work", pids: [], exitCode: 0, output: log(2, "old") },
+			},
+		});
+		// Bash-only: the single running job is a hidden task and the visible bash
+		// job is settled — the title still reports the consumer-scoped count at 0
+		// rather than hiding it or borrowing the unfiltered number.
+		expect(plain(page.render(120))).toContain("bash-old");
+		expect(titleRow(page.render(120))).toContain("Background jobs · bash · 0 running");
+
+		// All: the hidden running task makes the count 1.
+		page.handleInput("a");
+		expect(titleRow(page.render(120))).toContain("Background jobs · all · 1 running");
+		page.handleInput("a");
+		expect(titleRow(page.render(120))).toContain("Background jobs · bash · 0 running");
+	});
+
+	it("a toggles to every job and back: entries return, then re-hide and reseat the selection onto the bash tail", () => {
+		const { page } = setup(MIXED, { details: MIXED_DETAILS });
+		page.render(120);
+
+		page.handleInput("a");
+		const all = plain(page.render(120));
+		expect(all).toContain("task-1");
+		expect(all).toContain("eval-1");
+		expect(all).toContain("task-2");
+		expect(titleRow(page.render(120))).toContain("· all ·");
+		// The surviving bash selection is retained, not reset to the first entry.
+		expect(all).toContain("alpha 01");
+		expect(all).not.toContain("taskout");
+
+		// Move to the eval job and make sure its own output is the one shown.
+		page.handleInput(DOWN);
+		const evalFrame = plain(page.render(120));
+		expect(evalFrame).toContain("evalout 03");
+		expect(evalFrame).not.toContain("alpha 03");
+
+		// Filtering back drops the vanished eval selection: the page lands on the
+		// filtered first bash, following its own tail, with no eval leakage.
+		page.handleInput("a");
+		const back = plain(page.render(120));
+		expect(back).not.toContain("eval-1");
+		expect(back).not.toContain("evalout");
+		expect(back).toContain("following");
+		expect(back).toContain("alpha 03");
+		expect(titleRow(page.render(120))).toContain("· bash · 1 running");
+	});
+
+	it("explains an empty bash view on a task-only session, then All restores, inspects, and one Esc closes", () => {
+		const snapshot: JobsPanelSnapshot = { running: [job("task", "task-only", "running", "solo task")], recent: [] };
+		const { page, source } = setup(snapshot, {
+			rows: 24,
+			details: { "task-only": { cwd: "/work", pids: [], output: log(3, "solo") } },
+		});
+		const empty = plain(page.render(120));
+		expect(empty).not.toContain("task-only");
+		expect(empty).not.toContain("solo");
+		// Nothing filtered is running: the title still counts, at zero.
+		expect(titleRow(page.render(120))).toContain("Background jobs · bash · 0 running");
+		// The page explains the hidden jobs and the way out instead of claiming an
+		// idle session.
+		expect(empty).toContain("No bash jobs");
+		expect(empty).toContain("1 hidden");
+		expect(empty).toContain("a:all");
+
+		// Without a filtered selection Tab/Enter stay inert — no blank log surface.
+		page.handleInput(TAB);
+		page.handleInput(ENTER);
+		expect(plain(page.render(120))).not.toContain("Output");
+
+		page.handleInput("a");
+		expect(plain(page.render(120))).toContain("task-only");
+		expect(titleRow(page.render(120))).toContain("Background jobs · all · 1 running");
+		page.handleInput(ENTER);
+		const logFrame = plain(page.render(120));
+		expect(logFrame).toContain("Output");
+		expect(logFrame).toContain("solo 03");
+
+		// Back to bash-only from the expanded non-bash log. The toggle refreshes
+		// the page state immediately, so the Esc a user presses right after —
+		// with no render in between — closes the page itself instead of merely
+		// backing out of the stale empty detail.
+		page.handleInput("a");
+		page.handleInput(ESC);
+		expect(source.close).toHaveBeenCalledTimes(1);
+
+		// The collapse is observable on the next frame: the empty bash roster.
+		const collapsed = plain(page.render(120));
+		expect(collapsed).not.toContain("Output");
+		expect(collapsed).not.toContain("solo");
+		expect(collapsed).toContain("No bash jobs");
+	});
+
+	it("keeps the selected bash and its paused viewport across filter toggles", () => {
+		let alphaOutput = log(40, "alpha");
+		const snapshot: JobsPanelSnapshot = {
+			running: [job("task", "task-1", "running", "explore repo"), bash("bash-a", "running", "alpha run")],
+			recent: [],
+		};
+		const { page } = setup(snapshot, {
+			rows: 20,
+			inspect: id =>
+				id === "bash-a"
+					? { command: "alpha run", cwd: "/work", pids: [1], output: alphaOutput }
+					: { cwd: "/work", pids: [], output: log(40, "taskout") },
+		});
+		page.render(120);
+		page.handleInput(PGUP);
+		expect(plain(page.render(120))).toContain("paused");
+		const before = visibleCapture(page.render(120), "alpha");
+
+		// Output appended after the pause must not leak into either toggled frame.
+		alphaOutput += "alpha 41\n";
+		page.handleInput("a");
+		expect(plain(page.render(120))).toContain("paused");
+		expect(visibleCapture(page.render(120), "alpha")).toEqual(before);
+		const all = plain(page.render(120));
+		expect(all).not.toContain("alpha 41");
+		// The task row is listed, but the selection (and viewport) stayed on bash-a.
+		expect(all).toContain("task-1");
+		expect(all).not.toContain("taskout");
+
+		page.handleInput("a");
+		expect(plain(page.render(120))).toContain("paused");
+		expect(visibleCapture(page.render(120), "alpha")).toEqual(before);
+		expect(plain(page.render(120))).not.toContain("alpha 41");
+	});
+
+	it("resets follow to the remaining bash's own output when the filter drops the selected task", () => {
+		const snapshot: JobsPanelSnapshot = {
+			running: [job("task", "task-1", "running", "explore repo"), bash("bash-a", "running", "alpha run")],
+			recent: [],
+		};
+		const details: Record<string, JobsPanelDetail> = {
+			"task-1": { cwd: "/work", pids: [], output: log(40, "taskout") },
+			"bash-a": { command: "alpha run", cwd: "/work", pids: [1], output: log(40, "alpha") },
+		};
+		const { page } = setup(snapshot, { rows: 20, details });
+		page.render(120);
+		page.handleInput("a");
+		// Select the task (up from the retained bash selection) and pause on its log.
+		page.handleInput(UP);
+		expect(plain(page.render(120))).toContain("taskout");
+		page.handleInput(PGUP);
+		expect(plain(page.render(120))).toContain("paused");
+
+		page.handleInput("a");
+		const after = plain(page.render(120));
+		// The task vanished with its frozen viewport: the page resumes the bash's
+		// newest output rather than keeping a stale freeze of the dropped job.
+		expect(after).toContain("following");
+		expect(after).toContain("alpha 40");
+		expect(after).not.toContain("taskout");
+		expect(after).not.toContain("task-1");
+	});
+
+	it("surfaces the filter hint on the roster and the expanded log, wide and 40 columns", () => {
+		const { page } = setup(MIXED, { details: MIXED_DETAILS, rows: 24 });
+		const wide = plain(page.render(120));
+		expect(wide).toContain("a:all");
+		expect(wide).not.toContain("a:bash");
+
+		page.handleInput("a");
+		const wideAll = plain(page.render(120));
+		expect(wideAll).toContain("a:bash");
+		expect(wideAll).not.toContain("a:all");
+
+		// The expanded log carries the hint too, and the toggle works from there.
+		page.handleInput(ENTER);
+		expect(plain(page.render(120))).toContain("a:bash");
+		page.handleInput("a");
+		expect(plain(page.render(120))).toContain("a:all");
+		page.handleInput(ESC);
+
+		// 40 columns: the hint survives on the roster and in the expanded log
+		// without corrupting the layout.
+		const narrow = page.render(40);
+		expect(plain(narrow)).toContain("a:all");
+		for (const line of narrow) expect(visibleWidth(line)).toBeLessThanOrEqual(40);
+		page.handleInput(TAB);
+		const narrowLog = page.render(40);
+		expect(plain(narrowLog)).toContain("a:all");
+		for (const line of narrowLog) expect(visibleWidth(line)).toBeLessThanOrEqual(40);
+	});
+
+	it("filters a derived view: the source snapshot keeps every job across toggles", () => {
+		const running: JobsPanelJob[] = [
+			job("task", "task-1", "running", "explore repo"),
+			bash("bash-a", "running", "alpha run"),
+			job("eval", "eval-1", "running", "smoke eval"),
+		];
+		const recent: JobsPanelJob[] = [bash("bash-c", "completed", "gamma run", { endTime: NOW - 100 })];
+		const snapshot: JobsPanelSnapshot = { running, recent };
+		const runningCopy = [...running];
+		const recentCopy = [...recent];
+		const { page } = setup(snapshot, { details: MIXED_DETAILS });
+
+		expect(plain(page.render(120))).not.toContain("task-1");
+		page.handleInput("a");
+		expect(plain(page.render(120))).toContain("task-1");
+		expect(plain(page.render(120))).toContain("eval-1");
+		page.handleInput("a");
+		expect(plain(page.render(120))).not.toContain("task-1");
+		expect(plain(page.render(120))).not.toContain("eval-1");
+
+		// Neither toggling ever touched the source: all five entries remain.
+		expect(snapshot.running).toEqual(runningCopy);
+		expect(snapshot.recent).toEqual(recentCopy);
+		expect(snapshot.running).toHaveLength(3);
+		expect(snapshot.recent).toHaveLength(1);
 	});
 });
