@@ -1593,6 +1593,11 @@ export class AgentSession implements SettingsScope {
 		this.#prewalk.disarm();
 	}
 
+	/** Preserve turn-boundary prewalk handoff when implementation tools execute inside eval. */
+	recordEvalToolResult(name: string, result: AgentToolResult): void {
+		this.#prewalk.recordBridgedToolResult(name, result);
+	}
+
 	/** Restore a planning model and re-arm prewalk without partially applying a rejected restart. */
 	restartPrewalk(
 		source: Model,
@@ -2065,6 +2070,7 @@ export class AgentSession implements SettingsScope {
 			localProtocolOptions: () => this.#localProtocolOptions(),
 			evalPreludes: () => this.getEvalPreludes(),
 			sessionAgents: () => this.getSessionAgents(),
+			onToolPresentationChanged: () => this.#syncAppendOnlyContext(this.model),
 		};
 		this.#tools = new SessionTools(sessionToolsHost, {
 			autoApprove: config.autoApprove,
@@ -2082,6 +2088,7 @@ export class AgentSession implements SettingsScope {
 			reconcileSettingsGatedTools: config.reconcileSettingsGatedTools,
 			rebuildSystemPrompt: config.rebuildSystemPrompt,
 			getMcpServerInstructions: config.getMcpServerInstructions,
+			initialMcpServerInstructions: config.initialMcpServerInstructions,
 			xdev: config.xdev,
 			setActiveToolNames: config.setActiveToolNames,
 			baseSystemPrompt: this.agent.state.systemPrompt,
@@ -10810,7 +10817,7 @@ export class AgentSession implements SettingsScope {
 	 */
 	#syncAppendOnlyContext(model: Model | null | undefined): void {
 		const setting = cfgProviderAppendOnlyContext.get(this.settings);
-		const enable = shouldEnableAppendOnlyContext(setting, model);
+		const enable = shouldEnableAppendOnlyContext(setting, model, { codeMode: this.#tools.codeMode });
 		const providerId = model?.provider;
 		const prev = this.#lastAppendOnlyResolution;
 		if (prev && prev.enable === enable && prev.providerId === providerId) return;

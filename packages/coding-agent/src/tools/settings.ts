@@ -909,6 +909,32 @@ export const cfgAsyncMaxJobs = register({
 	default: 100,
 });
 
+export const cfgToolsCodeMode = register({
+	id: "tools.codeMode",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "tools",
+		group: "Discovery & MCP",
+		label: "Code Mode",
+		description:
+			"Use eval to compose and parallelize tool calls on any provider. Keep discovery and session controls direct; fetch other tool schemas through xd:// on demand. Requires enabled eval and read tools; restricted sessions keep their tool surface.",
+	},
+});
+
+export const cfgToolsCodeModeDirectTools = register({
+	id: "tools.codeModeDirectTools",
+	type: "array",
+	default: EMPTY_STRING_ARRAY,
+	ui: {
+		tab: "tools",
+		group: "Discovery & MCP",
+		label: "Code Mode Direct Tools",
+		editor: "json",
+		description: "Extra enabled tool names to keep directly callable in Code Mode. Does not enable disabled tools.",
+	},
+});
+
 export const cfgToolsXdev = register({
 	id: "tools.xdev",
 	type: "boolean",
@@ -1043,4 +1069,6 @@ export const cfgSessionToolGates = combine({
 	generateImage: cfgGenerateImageEnabled,
 	speechgen: cfgSpeechgenEnabled,
 	xdev: cfgToolsXdev,
+	codeMode: cfgToolsCodeMode,
+	codeModeDirectTools: cfgToolsCodeModeDirectTools,
 });

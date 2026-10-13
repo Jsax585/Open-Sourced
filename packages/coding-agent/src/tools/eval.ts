@@ -198,6 +198,8 @@ function formatDisplayJson(value: unknown, canSpill: boolean): FormattedDisplayJ
 export interface EvalToolDescriptionOptions {
 	py?: boolean;
 	js?: boolean;
+	/** Active session presentation, not merely the configured Code Mode preference. */
+	codeMode?: boolean;
 	/**
 	 * Parent spawn policy (`getSessionSpawns`). `true`/omitted means unrestricted,
 	 * `false`/`""` hides `agent()`, and a comma list drives the advertised default.
@@ -227,6 +229,7 @@ function evalTemplateContext(options: EvalToolDescriptionOptions) {
 	return {
 		py: options.py ?? true,
 		js: options.js ?? true,
+		codeMode: options.codeMode ?? false,
 		evalTools: options.evalTools ?? true,
 		eagerDelegation: options.eagerDelegation ?? true,
 		waitTool: options.waitTool ?? true,
@@ -388,6 +391,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		return {
 			py: backends.python,
 			js: backends.js,
+			codeMode: session.xdev?.codeMode,
 			spawns: depthAllowsSpawning ? (session.getSessionSpawns?.() ?? "*") : false,
 			autoBackgroundEnabled: cfgEvalAutoBackgroundEnabled.get(session.settings),
 			evalTools: cfgEvalToolsEnabled.get(session.settings),

@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Agent, AgentMessage, AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
-import type { Model } from "@oh-my-pi/pi-ai";
+import { type Model, toolWireSchema } from "@oh-my-pi/pi-ai";
 import { resolveDelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
 import { isRecord, logger, prompt, stringProperty, structuredCloneJSON, untilAborted } from "@oh-my-pi/pi-utils";
 import { reset as resetCapabilities } from "../capability";
@@ -33,7 +33,15 @@ import { isFilesystemSourcePath } from "../tools/path-utils";
 import { supportsExternalThinking } from "../tools/think";
 import { ToolAbortError } from "../tools/tool-errors";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import { isMountableUnderXdev, listXdevTools, type XdevState, xdevDocsFor, xdevEntries } from "../tools/xdev";
+import {
+	CODE_MODE_DIRECT_CONTROLS,
+	isMountableUnderXdev,
+	listXdevTools,
+	resolveXdevPresentation,
+	type XdevState,
+	xdevDocsFor,
+	xdevEntries,
+} from "../tools/xdev";
 import { type EditMode } from "@oh-my-pi/pi-tui/tools/edit";
 import { resolveEditMode } from "../utils/edit-mode";
 import {
@@ -44,7 +52,7 @@ import {
 	PERMISSION_REQUIRED_TOOLS,
 } from "./acp-permission-gate";
 import type { ClientBridge, ClientBridgePermissionOutcome } from "./client-bridge";
-import { toolReadsSkillUris } from "../system-prompt";
+import { type BuildSystemPromptResult, toolReadsSkillUris } from "../system-prompt";
 
 import type { CustomMessage } from "./messages";
 import type { SessionEntry } from "./session-entries";
@@ -53,7 +61,13 @@ import type { SessionManager } from "./session-manager";
 import { cfgDisabledExtensions, cfgSkills, type SkillsSettings } from "../extensibility/settings";
 import { cfgExternalThinking, cfgIncludeModelInPrompt, cfgInlineToolDescriptors, cfgSkillful } from "./settings";
 import { cfgStartupQuiet } from "../modes/settings";
-import { cfgToolsApproval, cfgToolsApprovalMode, cfgToolsXdevDocs, cfgToolsXdevInlineDevices } from "../tools/settings";
+import {
+	cfgToolsApproval,
+	cfgToolsApprovalMode,
+	cfgToolsXdev,
+	cfgToolsXdevDocs,
+	cfgToolsXdevInlineDevices,
+} from "../tools/settings";
 
 /** Capabilities borrowed from the owning AgentSession. */
 export interface SessionToolsHost {
@@ -82,6 +96,8 @@ export interface SessionToolsHost {
 	evalPreludes(): readonly EvalPreludeDefinition[];
 	/** Live user-tagged model agents; candidates for the next base rebuild's advertised snapshot. */
 	sessionAgents(): readonly AgentDefinition[];
+	/** Synchronize transport-dependent runtime policy after a tool presentation commits. */
+	onToolPresentationChanged?(): void;
 }
 
 /** Registry delta applied by the SDK's settings-gated tool reconcile. */
@@ -118,8 +134,11 @@ interface SessionToolsOptions {
 	rebuildSystemPrompt?: (
 		toolNames: string[],
 		tools: Map<string, AgentTool>,
-	) => Promise<{ systemPrompt: string[]; xdevCatalogNames?: readonly string[] }>;
+		mcpInstructions: ReadonlyMap<string, string>,
+	) => Promise<BuildSystemPromptResult>;
 	getMcpServerInstructions?: () => Map<string, string> | undefined;
+	/** MCP instructions retained by baseSystemPrompt, not just supplied to its builder. */
+	initialMcpServerInstructions?: ReadonlyMap<string, string>;
 	xdev?: XdevState;
 	setActiveToolNames?: (names: Iterable<string>) => void;
 	baseSystemPrompt: string[];
@@ -246,6 +265,9 @@ interface ToolRosterNoticeDetails {
 interface XdevMountNoticeDetails {
 	added: string[];
 	removed: string[];
+	/** Bounded instruction deltas actually rendered by this notice. */
+	mcpInstructions?: Array<[string, string]>;
+	mcpInstructionsRemoved?: string[];
 }
 
 /** Prelude names added/removed by one hidden {@link EVAL_PRELUDE_NOTICE_MESSAGE_TYPE} message. */
@@ -273,6 +295,8 @@ interface PromptSurface {
 	evalPreludes: readonly EvalPreludeDefinition[];
 	/** User-tagged model agents listed in the task description. */
 	sessionAgents: readonly AgentDefinition[];
+	/** Bounded server-instruction input captured for a prompt build and its signature. */
+	mcpInstructions: ReadonlyMap<string, string>;
 }
 
 interface PendingNoticePreview<T> {
@@ -377,6 +401,7 @@ export class SessionTools {
 	#promptModelKey: string | undefined;
 	#rebuildSystemPrompt: SessionToolsOptions["rebuildSystemPrompt"];
 	#getMcpServerInstructions: SessionToolsOptions["getMcpServerInstructions"];
+	#basePromptMcpInstructions: ReadonlyMap<string, string>;
 	/**
 	 * Session-lifetime factory shared by every custom-tool wrapper. Defining it
 	 * outside the refresh frame prevents wrappers from retaining rollback maps
@@ -400,10 +425,10 @@ export class SessionTools {
 	#setDeviceOnlyWrite: SessionToolsOptions["setDeviceOnlyWrite"];
 	#setPendingFullWriteDescription: SessionToolsOptions["setPendingFullWriteDescription"];
 	/**
-	 * The session originated with an xd:// transport grant. Unlike the live
+	 * The session acquired an xd:// transport grant. Unlike the live
 	 * device-only flag, this survives temporary full-write upgrades.
 	 */
-	readonly #deviceOnlyWriteTransportAvailable: boolean;
+	#deviceOnlyWriteTransportAvailable: boolean;
 	#ensureGoalRegistered: SessionToolsOptions["ensureGoalRegistered"];
 	#reconcileSettingsGatedTools: SessionToolsOptions["reconcileSettingsGatedTools"];
 	#skills: Skill[];
@@ -468,6 +493,7 @@ export class SessionTools {
 		this.#skillsSettings = options.skillsSettings;
 		this.#skillsReloadable = options.skillsReloadable ?? true;
 		this.#promptSurface = this.#derivePromptSurface();
+		this.#basePromptMcpInstructions = options.initialMcpServerInstructions ?? new Map();
 		// Seed from the construction slate (top-level tools plus xd:// mounts).
 		// Left empty, getEnabledToolNames() falls back to live agent.state.tools,
 		// so an early reconcile (think after the startup model resolution)
@@ -578,6 +604,7 @@ export class SessionTools {
 			skillHintVisible: cfgSkillful.get(this.#host.settings) === true && (this.#skills?.length ?? 0) > 0,
 			evalPreludes: this.#host.evalPreludes(),
 			sessionAgents: this.#host.sessionAgents(),
+			mcpInstructions: new Map(this.#getMcpServerInstructions?.()),
 		};
 	}
 	/** Drops cached per-session ACP `allow_always`/`reject_always` decisions. */
@@ -618,6 +645,11 @@ export class SessionTools {
 		return [...(this.#xdev?.mountedNames ?? [])];
 	}
 
+	/** Whether tools are currently presented through provider-neutral Code Mode. */
+	get codeMode(): boolean {
+		return this.#xdev?.codeMode === true;
+	}
+
 	/** Whether the edit tool is registered. */
 	get hasEditTool(): boolean {
 		return this.#toolRegistry.has("edit");
@@ -645,6 +677,11 @@ export class SessionTools {
 	/** Looks up an enabled tool through the same ACP permission gate as direct calls. */
 	getToolForEvalBridge(name: string): AgentTool | undefined {
 		if (!this.getEnabledToolNames().includes(name)) return undefined;
+		if (this.#xdev?.codeMode && CODE_MODE_DIRECT_CONTROLS[name] === true) {
+			throw new ToolError(
+				`\`${name}\` must be called directly, not through eval, so its session action takes effect.`,
+			);
+		}
 		const tool = this.#toolRegistry.get(name);
 		return tool ? this.#wrapToolForAcpPermission(tool) : undefined;
 	}
@@ -1003,8 +1040,7 @@ export class SessionTools {
 		let builtInWriteAvailable = this.#builtInToolNames.has("write");
 		const fullWriteSelected =
 			toolNames.includes("write") &&
-			(this.#presentationPinnedToolNames?.has("write") === true ||
-				this.#runtimeSelectedToolNames?.has("write") === true);
+			(this.#runtimeSelectedToolNames ?? this.#presentationPinnedToolNames)?.has("write") === true;
 		if (fullWriteSelected) {
 			const writeRegistration = this.#ensureWriteRegistered?.();
 			if (writeRegistration) {
@@ -1034,15 +1070,22 @@ export class SessionTools {
 		const xdevWriteAvailable =
 			builtInWriteAvailable &&
 			(selectedTools.some(({ name }) => name === "write") || this.#deviceOnlyWriteTransportAvailable);
+		const presentation = this.#xdev
+			? resolveXdevPresentation(this.#host.settings, toolNames, this.#builtInToolNames, {
+					deviceOnlyWriteAvailable: this.#deviceOnlyWriteTransportAvailable,
+				})
+			: undefined;
+		const codeMode = presentation?.codeMode === true;
 		const isPresentationPinned = (name: string): boolean =>
 			this.#presentationPinnedToolNames?.has(name) === true || this.#runtimeSelectedToolNames?.has(name) === true;
 		const mountCandidates = selectedTools.filter(
 			({ name, tool }) =>
 				this.#xdev !== undefined &&
+				(codeMode || cfgToolsXdev.get(this.#host.settings)) &&
 				xdevReadAvailable &&
 				xdevWriteAvailable &&
-				!isPresentationPinned(name) &&
-				isMountableUnderXdev(tool),
+				(codeMode || !isPresentationPinned(name)) &&
+				isMountableUnderXdev(tool, presentation),
 		);
 		const mountNames = new Set(mountCandidates.map(({ name }) => name));
 		const tools: AgentTool[] = [];
@@ -1053,7 +1096,7 @@ export class SessionTools {
 			validToolNames.push(name);
 		}
 
-		const pinnedWrite = isPresentationPinned("write");
+		const pinnedWrite = fullWriteSelected;
 		const activeDeferrableTool = tools.some(tool => tool.deferrable === true);
 		const transportNeeded = mountNames.size > 0 || activeDeferrableTool || this.#host.planModeEnabled();
 		if (transportNeeded && !builtInWriteAvailable) {
@@ -1095,11 +1138,32 @@ export class SessionTools {
 			this.#isDeviceOnlyWrite?.() === true &&
 			this.#setDeviceOnlyWrite !== undefined;
 		const previousMounted = new Set(this.#xdev?.mountedNames ?? []);
+		const previousCodeMode = this.#xdev?.codeMode;
 		const previousActiveToolNames = this.getActiveToolNames();
 		const previousEnabledToolNames = this.#enabledToolNames;
 		this.#enabledToolNames = new Set([...validToolNames, ...mountNames]);
 		this.#setMountedNames(mountNames);
-		this.#setActiveToolNames?.(validToolNames);
+		if (this.#xdev) this.#xdev.codeMode = codeMode;
+		const previousToolPredicateNames = previousCodeMode ? [...previousEnabledToolNames] : previousActiveToolNames;
+		this.#setActiveToolNames?.(codeMode ? this.#enabledToolNames : validToolNames);
+		// A changed direct API already invalidates the wire prefix. Rebuild its
+		// inventory too, including providers that inline then prune descriptors.
+		const currentDirectTools = this.#host.agent.state.tools;
+		const directSurfaceChanged =
+			currentDirectTools.length !== tools.length ||
+			tools.some((tool, index) => {
+				const previous = currentDirectTools[index];
+				return (
+					!previous ||
+					tool.name !== previous.name ||
+					tool.description !== previous.description ||
+					(tool.parameters !== previous.parameters &&
+						JSON.stringify(toolWireSchema(tool)) !== JSON.stringify(toolWireSchema(previous))) ||
+					tool.customWireName !== previous.customWireName ||
+					tool.strict !== previous.strict
+				);
+			});
+		forcePromptRefresh ||= codeMode !== (previousCodeMode === true) || (codeMode && directSurfaceChanged);
 
 		let rebuiltSystemPrompt: string[] | undefined;
 		let rebuiltSignature: string | undefined;
@@ -1107,6 +1171,7 @@ export class SessionTools {
 		// Trigger of an implicit (non-forced) rebuild, rechecked at commit.
 		let implicitRebuildSignature: string | undefined;
 		let rebuiltXdevCatalogNames: readonly string[] | undefined;
+		let rebuiltMcpInstructions: ReadonlyMap<string, string> | undefined;
 		let candidateSurface: PromptSurface | undefined;
 		try {
 			if (restrictDeviceOnlyWrite) this.#setDeviceOnlyWrite?.(true);
@@ -1148,13 +1213,14 @@ export class SessionTools {
 					const built = await untilAborted(
 						signal,
 						this.#promptSurfaceScope.run(candidate, () =>
-							rebuildSystemPrompt(validToolNames, this.#toolRegistry),
+							rebuildSystemPrompt(validToolNames, this.#toolRegistry, candidate.mcpInstructions),
 						),
 					);
 					rebuiltSystemPrompt = built.systemPrompt;
 					if (!forcePromptRefresh) implicitRebuildSignature = triggerSignature;
 					rebuiltSignature = signature;
 					rebuiltXdevCatalogNames = built.xdevCatalogNames;
+					rebuiltMcpInstructions = built.mcpInstructions;
 					candidateSurface = candidate;
 				}
 			}
@@ -1163,7 +1229,8 @@ export class SessionTools {
 			if (restrictDeviceOnlyWrite) this.#setDeviceOnlyWrite?.(false);
 			if (upgradeDeviceOnlyWrite) this.#setPendingFullWriteDescription?.(false);
 			this.#setMountedNames(previousMounted);
-			this.#setActiveToolNames?.(previousActiveToolNames);
+			if (this.#xdev) this.#xdev.codeMode = previousCodeMode;
+			this.#setActiveToolNames?.(previousToolPredicateNames);
 			this.#enabledToolNames = previousEnabledToolNames;
 			throw error;
 		}
@@ -1172,7 +1239,8 @@ export class SessionTools {
 			if (restrictDeviceOnlyWrite) this.#setDeviceOnlyWrite?.(false);
 			if (upgradeDeviceOnlyWrite) this.#setPendingFullWriteDescription?.(false);
 			this.#setMountedNames(previousMounted);
-			this.#setActiveToolNames?.(previousActiveToolNames);
+			if (this.#xdev) this.#xdev.codeMode = previousCodeMode;
+			this.#setActiveToolNames?.(previousToolPredicateNames);
 			this.#enabledToolNames = previousEnabledToolNames;
 			return;
 		}
@@ -1210,6 +1278,7 @@ export class SessionTools {
 				this.#lastAppliedToolSignature = rebuiltSignature;
 				this.#promptModelKey = this.#currentPromptModelKey();
 				this.#setBasePromptXdevNames(rebuiltXdevCatalogNames);
+				this.#basePromptMcpInstructions = rebuiltMcpInstructions ?? new Map();
 				// The rebuilt prompt is a fresh roster snapshot. Keep the complete
 				// pending delta for a turn override that hides it, while separately
 				// tracking any later frozen changes that must follow a delivered base.
@@ -1227,6 +1296,7 @@ export class SessionTools {
 			} else if (upgradeDeviceOnlyWrite || deactivateDeviceOnlyWrite) {
 				this.#setDeviceOnlyWrite?.(false);
 			}
+			this.#host.onToolPresentationChanged?.();
 		} finally {
 			if (upgradeDeviceOnlyWrite) this.#setPendingFullWriteDescription?.(false);
 		}
@@ -1334,9 +1404,13 @@ export class SessionTools {
 	 * or switched in later, stays frozen.
 	 */
 	#implicitRebuildBinding(): "free" | "frozen" | { promptDigest: string } {
-		if (this.#lastAppliedToolSignature === undefined || this.#host.model()?.thinking?.prefixBinding !== true) {
+		if (
+			!this.#xdev?.codeMode &&
+			(this.#lastAppliedToolSignature === undefined || this.#host.model()?.thinking?.prefixBinding !== true)
+		) {
 			return "free";
 		}
+		if (this.#xdev?.codeMode && this.#capturedPromptDigest !== undefined) return "frozen";
 		const latest = this.#latestReply();
 		if (latest === undefined) return "free";
 		return latest === this.#restoredTranscript?.reply ? this.#restoredTranscript : "frozen";
@@ -1675,9 +1749,40 @@ export class SessionTools {
 		this.#pendingXdevMountDelta = pending.added.size > 0 || pending.removed.size > 0 ? pending : undefined;
 	}
 
+	#projectMcpInstructions({ baseDelivered }: { baseDelivered: boolean }):
+		| {
+				changed: Array<{ name: string; text: string }>;
+				removed: string[];
+		  }
+		| undefined {
+		if (!this.#xdev?.codeMode) return undefined;
+		// System text is present only when the outgoing request carries the base.
+		// Every surviving notice is still visible, regardless of which base or
+		// override created it; reconcile its text and withdrawals in history order.
+		const known = new Map(baseDelivered ? this.#basePromptMcpInstructions : undefined);
+		for (const message of this.#host.agent.state.messages) {
+			if (message.role !== "custom" || message.customType !== XDEV_MOUNT_NOTICE_MESSAGE_TYPE) continue;
+			const details = message.details;
+			if (!isRecord(details) || !Array.isArray(details.mcpInstructions)) continue;
+			for (const entry of details.mcpInstructions) {
+				if (Array.isArray(entry) && typeof entry[0] === "string" && typeof entry[1] === "string") {
+					known.set(entry[0], entry[1]);
+				}
+			}
+			if (Array.isArray(details.mcpInstructionsRemoved)) {
+				for (const name of details.mcpInstructionsRemoved) if (typeof name === "string") known.delete(name);
+			}
+		}
+		const live = this.#getMcpServerInstructions?.() ?? new Map<string, string>();
+		const changed = [...live].flatMap(([name, text]) => (known.get(name) === text ? [] : [{ name, text }]));
+		const removed = [...known.keys()].filter(name => !live.has(name));
+		return changed.length || removed.length ? { changed, removed } : undefined;
+	}
+
 	#projectPendingXdevMountNotice(baseCatalogDelivered: boolean): XdevMountNoticeProjection | undefined {
 		const pending = this.#pendingXdevMountDelta;
-		if (!pending) return undefined;
+		const instructions = this.#projectMcpInstructions({ baseDelivered: baseCatalogDelivered });
+		if (!pending && !instructions) return undefined;
 		this.#ensureAnnouncedMountsSeeded();
 		const announcedMounts = new Set(this.#announcedMounts);
 		// A pending add for a device the outgoing base prompt already lists in its
@@ -1689,7 +1794,7 @@ export class SessionTools {
 		// {@link #notifyXdevMountDelta} cancel a mount followed by an unmount before
 		// any request is sent (issue #7139 reviews).
 		if (baseCatalogDelivered) {
-			for (const name of pending.added) {
+			for (const name of pending?.added ?? []) {
 				if (this.#basePromptXdevNames.has(name)) announcedMounts.add(name);
 			}
 		}
@@ -1698,11 +1803,11 @@ export class SessionTools {
 		// device — the common resume/reconnect case — and an unmount for a device
 		// it was never told about are both suppressed, keeping the provider prompt
 		// cache prefix byte-stable across resumes.
-		const addedNames = [...pending.added].filter(name => !announcedMounts.has(name));
-		const removedNames = [...pending.removed].filter(name => announcedMounts.has(name));
+		const addedNames = [...(pending?.added ?? [])].filter(name => !announcedMounts.has(name));
+		const removedNames = [...(pending?.removed ?? [])].filter(name => announcedMounts.has(name));
 		for (const name of addedNames) announcedMounts.add(name);
 		for (const name of removedNames) announcedMounts.delete(name);
-		if (addedNames.length === 0 && removedNames.length === 0) {
+		if (addedNames.length === 0 && removedNames.length === 0 && !instructions) {
 			return { notice: undefined, announcedMounts };
 		}
 		const summaries = new Map(this.#xdev ? xdevEntries(this.#xdev).map(entry => [entry.name, entry.summary]) : []);
@@ -1720,8 +1825,23 @@ export class SessionTools {
 			notice: {
 				role: "custom",
 				customType: XDEV_MOUNT_NOTICE_MESSAGE_TYPE,
-				content: prompt.render(xdevMountNoticePrompt, { added, removed, docs }),
-				details: { added: addedNames, removed: removedNames },
+				content: prompt.render(xdevMountNoticePrompt, {
+					added,
+					removed,
+					docs,
+					instructions: instructions?.changed,
+					removedInstructions: instructions?.removed,
+				}),
+				details: {
+					added: addedNames,
+					removed: removedNames,
+					...(instructions
+						? {
+								mcpInstructions: instructions.changed.map(({ name, text }): [string, string] => [name, text]),
+								mcpInstructionsRemoved: instructions.removed,
+							}
+						: {}),
+				},
 				attribution: "agent",
 				display: false,
 				timestamp: Date.now(),
@@ -1834,8 +1954,7 @@ export class SessionTools {
 		const transportWriteActive =
 			normalized.includes("write") &&
 			this.#builtInToolNames.has("write") &&
-			this.#presentationPinnedToolNames?.has("write") !== true &&
-			this.#runtimeSelectedToolNames?.has("write") !== true &&
+			(this.#runtimeSelectedToolNames ?? this.#presentationPinnedToolNames)?.has("write") !== true &&
 			((this.#host.planModeEnabled() && (!writeSelected || deviceOnlyWriteActive)) ||
 				(writeSelected && deviceOnlyWriteActive && (retainedMountedDevice || retainedDeferrableTool)));
 		const previousRuntimeSelectedToolNames = this.#runtimeSelectedToolNames;
@@ -1933,6 +2052,7 @@ export class SessionTools {
 				this.setToolBuiltIn(name, builtIn);
 				if (activate) enabled.add(name);
 			}
+			this.#deviceOnlyWriteTransportAvailable ||= this.#isDeviceOnlyWrite?.() === true;
 			const xdevChanged = delta.xdev !== this.#xdev;
 			if (xdevChanged) {
 				this.#xdev = delta.xdev;
@@ -1961,7 +2081,7 @@ export class SessionTools {
 		// Local alias: closures below cannot observe the field narrowing.
 		const rebuildSystemPrompt = this.#rebuildSystemPrompt;
 		const activeToolNames = this.getActiveToolNames();
-		this.#setActiveToolNames?.(activeToolNames);
+		this.#setActiveToolNames?.(this.#xdev?.codeMode ? this.getEnabledToolNames() : activeToolNames);
 		const previousBaseSystemPrompt = this.#baseSystemPrompt;
 		// Derive the candidate and run the awaited render inside its scope: the
 		// tool getters read the candidate while the prompt renders, so the built
@@ -1972,7 +2092,7 @@ export class SessionTools {
 		// winner.
 		const candidate = this.#derivePromptSurface();
 		const built = await this.#promptSurfaceScope.run(candidate, () =>
-			rebuildSystemPrompt(activeToolNames, this.#toolRegistry),
+			rebuildSystemPrompt(activeToolNames, this.#toolRegistry, candidate.mcpInstructions),
 		);
 		const promptTools = activeToolNames
 			.map(name => this.#toolRegistry.get(name))
@@ -1997,6 +2117,7 @@ export class SessionTools {
 				this.#baseSystemPrompt = built.systemPrompt;
 				this.#promptSurface = candidate;
 				this.#setBasePromptXdevNames(built.xdevCatalogNames);
+				this.#basePromptMcpInstructions = built.mcpInstructions ?? new Map();
 				this.#host.clearMemoryPromotionSnapshot();
 				if (
 					previousBaseSystemPrompt.length !== this.#baseSystemPrompt.length ||
@@ -2142,7 +2263,7 @@ export class SessionTools {
 				mappings: mountedMCPProjection.mappings.map(mapping => [mapping.label, mapping.path] as const),
 				hasOmittedMappings: mountedMCPProjection.hasOmittedMappings,
 			}) ?? "{}";
-		const serverInstructions = this.#getMcpServerInstructions?.();
+		const serverInstructions = (this.#promptSurfaceScope.getStore() ?? this.#promptSurface).mcpInstructions;
 		let instructionsSegment = "";
 		if (serverInstructions && serverInstructions.size > 0) {
 			// Sort by server name so transport flap order does not perturb the signature.

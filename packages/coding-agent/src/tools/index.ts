@@ -1,4 +1,10 @@
-import type { AgentOptions, AgentTelemetryConfig, AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentOptions,
+	AgentTelemetryConfig,
+	AgentTool,
+	AgentToolContext,
+	AgentToolResult,
+} from "@oh-my-pi/pi-agent-core";
 import type { EditStore } from "@oh-my-pi/pi-natives";
 import type { FetchImpl, ImageContent, Model, ServiceTierByFamily, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -75,7 +81,7 @@ import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { TodoTool } from "./todo";
 import { WriteTool } from "./write";
 import { WaitTool } from "./wait";
-import { isMountableUnderXdev, resolveXdevTool, type XdevState } from "./xdev";
+import { isMountableUnderXdev, resolveXdevPresentation, resolveXdevTool, type XdevState } from "./xdev";
 import { YieldTool } from "./yield";
 
 import {
@@ -91,6 +97,7 @@ import {
 	cfgLaunchEnabled,
 	cfgSecurityEnabled,
 	cfgTodoEnabled,
+	cfgToolsCodeMode,
 	cfgToolsXdev,
 	cfgWebSearchEnabled,
 } from "./settings";
@@ -365,6 +372,8 @@ export interface ToolSession {
 	getToolContext?: () => AgentToolContext | undefined;
 	/** Names currently authorized for invocation through the eval bridge. */
 	getEvalBridgeToolNames?: () => readonly string[];
+	/** Notify session consumers when a bridged call completes without a direct toolResult entry. */
+	onEvalToolResult?: (name: string, result: AgentToolResult) => void;
 	/** Return whether a built-in tool is active in this turn's tool set. */
 	isToolActive?: (name: string) => boolean;
 	/** Update the active built-in tool predicate when a session changes tools mid-run. */
@@ -858,7 +867,9 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const builtInNames = new Set(tools.map(tool => tool.name));
 	for (const tool of tools) toolRegistry.set(tool.name, tool);
 
-	const xdevRequested = !restrictToolNames && cfgToolsXdev.get(session.settings);
+	const codeModeRequested =
+		cfgToolsCodeMode.get(session.settings) && builtInNames.has("eval") && builtInNames.has("read");
+	const xdevRequested = !restrictToolNames && (cfgToolsXdev.get(session.settings) || codeModeRequested);
 	// xd:// mounting rides the write tool as its execution transport, so a
 	// session whose explicit tool list grants `read` but omits `write` would
 	// allocate no xd:// state and expose every later-registered MCP/extension
@@ -894,14 +905,23 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const xdevEnabled = xdevRequested && tools.some(tool => tool.name === "write");
 	const mountBuiltinTools = requestedTools === undefined;
 	if (xdevEnabled) {
+		const presentation = resolveXdevPresentation(
+			session.settings,
+			tools.map(tool => tool.name),
+			builtInNames,
+		);
 		const mountedNames = new Set<string>();
 		const kept: Tool[] = [];
 		for (const tool of tools) {
-			const mountable = mountBuiltinTools && isMountableUnderXdev(tool) && tool.name in BUILTIN_TOOLS;
+			const mountable =
+				(mountBuiltinTools || presentation.codeMode) &&
+				isMountableUnderXdev(tool, presentation) &&
+				tool.name in BUILTIN_TOOLS;
 			if (mountable) mountedNames.add(tool.name);
 			else kept.push(tool);
 		}
 		session.xdev = createXdevState(session, toolRegistry, builtInNames, mountedNames);
+		session.xdev.codeMode = presentation.codeMode;
 		tools = kept;
 	}
 	// Staged previews from deferrable tools (e.g. ast_edit) resolve through a
@@ -931,6 +951,9 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	}
 	if (xdevEnabled) {
 		const finalActiveNames = new Set(tools.map(tool => tool.name));
+		if (session.xdev?.codeMode) {
+			for (const name of session.xdev.mountedNames) finalActiveNames.add(name);
+		}
 		if (session.setActiveToolNames) session.setActiveToolNames(finalActiveNames);
 		else session.isToolActive = name => finalActiveNames.has(name);
 	}

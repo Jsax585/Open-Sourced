@@ -144,6 +144,8 @@ Server and tool name components are lowercased and sanitized to letters, digits,
 
 Connected manager tools become enabled immediately. Presentation is reconciled with the session's current tool policy: tools may be mounted under `xd://` rather than exposed as top-level function definitions. Registry identity and original server/tool ownership remain intact regardless of presentation.
 
+With `tools.codeMode: true`, enabled MCP tools use the on-demand catalog unless listed in `tools.codeModeDirectTools`. Fetch parameters through `read xd://<name>` and invoke through eval's `tool.<name>(args)` bridge. Late mounts and changed or removed server instructions are delivered in budgeted, appended discovery notices without rewriting an established system/tool prefix. Direct-tool additions or replacements and explicit presentation changes may rebuild it. This is provider-neutral and sends no Codex Code Mode metadata.
+
 ### Tool calls
 
 - `MCPTool` calls tools through an already connected `MCPServerConnection`.
@@ -170,6 +172,10 @@ Both preserve MCP content and metadata; `structuredContent` is retained in `deta
 4. calls `session.refreshMCPTools(mcpManager.getTools())`.
 
 `session.refreshMCPTools()` delegates to `src/session/session-tools.ts`, which serializes registry mutations, reconciles manager and extension-owned MCP tools, re-wraps the latest tools, and reapplies availability/presentation without restarting. Connected manager tools become enabled; extension-owned MCP tools preserve their previous selection. A failed refresh restores the previous MCP registry. The owning SDK session also installs `setOnToolsChanged`, so late initial connections, server `tools/list_changed` notifications, reconnects, and disconnects can trigger the same rebinding. Explicit `/mcp reconnect <name>` performs one final refresh after the manager reconnect completes.
+
+Prompt rendering and applied-tool signatures use the same bounded instruction input, including the initial session prompt. The renderer separately reports which complete per-server instruction sections remain in its final output; fixed SDK `systemPrompt` replacements credit none, and callbacks credit only retained sections. Only that rendered projection enters the instruction-notice baseline. A server connecting during an awaited rebuild is picked up by a later discovery notice rather than silently diverging from that baseline. Direct MCP reconnects compare normalized wire-schema values, so a fresh but equivalent schema does not force a prompt rebuild; changed schemas still refresh the direct inventory.
+
+When `before_agent_start` replaces the system prompt, instructions present only in an earlier system prompt are not treated as delivered. Instruction reconciliation starts with the outgoing base, if present, then applies every surviving notice in history order. Notices remain visible across prompt replacements and rebuilds: stale instructions receive a withdrawal after disconnect, and reconnecting instructions supersede an earlier withdrawal without repeated notices.
 
 ### Live settings reconciliation
 

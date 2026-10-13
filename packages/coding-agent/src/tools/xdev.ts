@@ -37,6 +37,8 @@ import {
 	validateAgentToolArguments,
 } from "@oh-my-pi/pi-agent-core";
 import { type Tool as AiTool, jsonSchemaToTypeScript, toolWireSchema } from "@oh-my-pi/pi-ai";
+import type { Settings } from "../config/settings";
+import { cfgToolsCodeMode, cfgToolsCodeModeDirectTools } from "./settings";
 import { schemaDeclaresIntentField } from "../utils/tool-schema";
 import { stripXdUrlPrefix, XD_URL_PREFIX } from "@oh-my-pi/pi-tui/tools/xd-url";
 import { truncateHeadBytes } from "@oh-my-pi/pi-tui/tools/streaming-output";
@@ -72,6 +74,64 @@ export const XDEV_KEEP_TOP_LEVEL: Record<string, true> = {
  */
 export const XDEV_TRANSPORT_TOOLS: Record<string, true> = { read: true, write: true };
 
+/** Session state and usage consumers require these direct tool results, not enclosing eval/write results. */
+export const CODE_MODE_DIRECT_CONTROLS: Record<string, true> = {
+	ask: true,
+	task: true,
+	yield: true,
+	checkpoint: true,
+	rewind: true,
+	new_context: true,
+	goal: true,
+};
+
+/** Discovery transports and session controls must remain directly callable in Code Mode. */
+const CODE_MODE_KEEP_TOP_LEVEL: Record<string, true> = {
+	...CODE_MODE_DIRECT_CONTROLS,
+	read: true,
+	write: true,
+	eval: true,
+	todo: true,
+	wait: true,
+	think: true,
+	// These names are consumed by the eval bridge before normal tool lookup.
+	__prelude__: true,
+	__agent__: true,
+	__budget__: true,
+	__completion__: true,
+	__judge__: true,
+	__judge_batch__: true,
+	__wait__: true,
+	__status__: true,
+	__cancel__: true,
+	__workpool__: true,
+};
+
+export interface XdevPresentation {
+	codeMode?: boolean;
+	extraDirectTools?: readonly string[];
+}
+
+/** Code Mode changes presentation only while the granted built-in transports can execute it. */
+export function resolveXdevPresentation(
+	settings: Settings,
+	enabledNames: readonly string[],
+	builtInNames: ReadonlySet<string>,
+	options: { deviceOnlyWriteAvailable?: boolean } = {},
+): XdevPresentation {
+	return {
+		codeMode:
+			cfgToolsCodeMode.get(settings) &&
+			builtInNames.has("eval") &&
+			enabledNames.includes("eval") &&
+			builtInNames.has("read") &&
+			enabledNames.includes("read") &&
+			builtInNames.has("write") &&
+			(enabledNames.includes("write") || options.deviceOnlyWriteAvailable === true),
+		extraDirectTools: cfgToolsCodeModeDirectTools.get(settings),
+	};
+}
+
 /** Controls which mounted-device docs are inlined into the system prompt. */
 export type XdevDocsMode = "inline" | "builtins" | "catalog";
 
@@ -79,10 +139,17 @@ export type XdevDocsMode = "inline" | "builtins" | "catalog";
  * Whether an enabled tool is presented under `xd://` (rather than top-level)
  * while the `xd://` transport is active. Discoverable tools mount unless they
  * are pinned top-level by {@link XDEV_KEEP_TOP_LEVEL} or carry the transport
- * itself ({@link XDEV_TRANSPORT_TOOLS}); essential tools never do. The caller
- * gates this on the transport being active.
+ * itself ({@link XDEV_TRANSPORT_TOOLS}). Code Mode additionally mounts essential
+ * tools except its direct controls and explicit exceptions. Callers gate this
+ * on transport availability and preserve the enabled-tool allowlist.
  */
-export function isMountableUnderXdev(tool: { name: string; loadMode?: ToolLoadMode }): boolean {
+export function isMountableUnderXdev(
+	tool: { name: string; loadMode?: ToolLoadMode },
+	presentation?: XdevPresentation,
+): boolean {
+	if (presentation?.codeMode) {
+		return CODE_MODE_KEEP_TOP_LEVEL[tool.name] !== true && !presentation.extraDirectTools?.includes(tool.name);
+	}
 	if (tool.name in XDEV_TRANSPORT_TOOLS || tool.name in XDEV_KEEP_TOP_LEVEL) return false;
 	return tool.loadMode === "discoverable";
 }
@@ -237,6 +304,8 @@ export interface XdevState {
 	readonly resolve?: (name: string) => Tool | undefined;
 	/** Optional execution-only decorator, such as the ACP permission gate. */
 	decorateExecution?(tool: Tool): Tool;
+	/** Active provider-neutral Code Mode presentation, not merely the configured preference. */
+	codeMode?: boolean;
 }
 
 /** Full-doc character budget for system-prompt mounted-device sections. */
@@ -332,6 +401,7 @@ export function planXdevPromptDocs(
 	mode: XdevDocsMode = "inline",
 	inlinePatterns: readonly string[] = [],
 ): XdevPromptDocs {
+	if (state.codeMode) mode = "catalog";
 	const sections: string[] = [];
 	const catalog = new Map<string, string>();
 	const inlineGlobs = compileInlineGlobs(inlinePatterns);
@@ -386,6 +456,7 @@ export function xdevDocsFor(
 	mode: XdevDocsMode,
 	inlinePatterns: readonly string[] = [],
 ): string {
+	if (state.codeMode) mode = "catalog";
 	const sections: string[] = [];
 	const inlineGlobs = compileInlineGlobs(inlinePatterns);
 	let used = 0;
@@ -442,6 +513,12 @@ export async function dispatchXdevTool(
 				result: { content: [{ type: "text", text: renderDocs(canonical) }] },
 				xdev: { tool: name, mode: "help" },
 			};
+		}
+
+		if (state.codeMode && CODE_MODE_DIRECT_CONTROLS[canonical.name] === true) {
+			throw new ToolError(
+				`\`${canonical.name}\` must be called directly, not through xd://, so its session action takes effect.`,
+			);
 		}
 
 		const validated = parseDeviceArgs(canonical, content, toolCallId, () => renderDocs(canonical));

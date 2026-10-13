@@ -279,6 +279,7 @@ import {
 	renderXdevPromptDocs,
 	resolveBuiltinToolPlan,
 	resolveMountedXdevExecutable,
+	resolveXdevPresentation,
 	SETTINGS_GATED_BUILTIN_TOOL_NAMES,
 	supportsExternalThinking,
 	type Tool,
@@ -323,6 +324,7 @@ import {
 	cfgSecurityEnabled,
 	cfgSpeechgenEnabled,
 	cfgToolsAbortOnFabricatedResult,
+	cfgToolsCodeMode,
 	cfgToolsIntentTracing,
 	cfgToolsMaxTimeout,
 	cfgToolsXdev,
@@ -2338,6 +2340,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getToolByName: name => session?.getToolByName(name),
 			getToolForEvalBridge: name => session?.getToolForEvalBridge(name),
 			getEvalBridgeToolNames: () => session?.getEvalBridgeToolNames() ?? [],
+			onEvalToolResult: (name, result) => session?.recordEvalToolResult(name, result),
 			agentRegistry,
 			// The global lifecycle releases through AgentRegistry.global(); wiring it
 			// onto a caller-supplied registry would report a cancel while releasing an
@@ -3561,13 +3564,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			return goalRegistration;
 		};
 
-		// `tools.xdev` flips allocate or release the `xd://` state createTools builds
-		// over the canonical map; the session re-partitions on its next apply. Like
-		// createTools, mounting needs a built-in `write` transport.
+		// Tool-presentation settings allocate or release xd:// over the canonical
+		// map. Code Mode requires this discovery transport even when ordinary
+		// discoverable-tool mounting is disabled.
 		const syncXdevState = (): void => {
 			const wanted =
 				!restrictToolNames &&
-				cfgToolsXdev.get(settings) &&
+				(cfgToolsXdev.get(settings) || cfgToolsCodeMode.get(settings)) &&
 				toolRegistry.has("write") &&
 				builtInRegistryToolNames.has("write");
 			if (wanted === (toolSession.xdev !== undefined)) return;
@@ -3623,6 +3626,31 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			removed.push(...custom.removed);
 			for (const entry of custom.added) {
 				added.push({ name: entry.name, builtIn: false, activate: entry.hidden !== true });
+			}
+			// Code Mode can be enabled after a read-only session starts without xd://.
+			// Add only the existing device transport, never a filesystem write grant.
+			const enabled = new Set(session.getEnabledToolNames());
+			for (const { name, activate } of added) {
+				if (activate) enabled.add(name);
+			}
+			for (const name of removed) enabled.delete(name);
+			if (
+				!restrictToolNames &&
+				cfgToolsCodeMode.get(settings) &&
+				enabled.has("eval") &&
+				enabled.has("read") &&
+				!enabled.has("write") &&
+				(!toolRegistry.has("write") || builtInRegistryToolNames.has("write"))
+			) {
+				const previousDeviceOnlyWrite = toolSession.deviceOnlyWrite;
+				toolSession.deviceOnlyWrite = true;
+				try {
+					if (await ensureWriteRegistered()) added.push({ name: "write", builtIn: true, activate: true });
+					else toolSession.deviceOnlyWrite = previousDeviceOnlyWrite;
+				} catch (error) {
+					toolSession.deviceOnlyWrite = previousDeviceOnlyWrite;
+					throw error;
+				}
 			}
 			syncXdevState();
 			return { added, removed, xdev: toolSession.xdev };
@@ -3764,9 +3792,23 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					: resolveTelemetry(options.telemetry, providerSessionId),
 			),
 		});
+		// One bounded projection feeds rendering, signatures, and delivered-notice baselines.
+		const getMcpServerInstructions = (): Map<string, string> => {
+			const snapshot = new Map<string, string>();
+			for (const [name, text] of mcpManager?.getServerInstructions() ?? []) {
+				snapshot.set(
+					name,
+					text.length > MAX_MCP_INSTRUCTIONS_LENGTH
+						? `${text.slice(0, MAX_MCP_INSTRUCTIONS_LENGTH)}\n[truncated]`
+						: text,
+				);
+			}
+			return snapshot;
+		};
 		const rebuildSystemPrompt = async (
 			toolNames: string[],
 			tools: Map<string, AgentTool>,
+			serverInstructions: ReadonlyMap<string, string>,
 		): Promise<BuildSystemPromptResult> => {
 			const promptCwd = sessionManager.getCwd();
 			const activeRepoContext = hasSession
@@ -3834,6 +3876,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (options.systemPrompt !== undefined && typeof options.systemPrompt !== "function") {
 				return {
 					systemPrompt: typeof options.systemPrompt === "string" ? [options.systemPrompt] : options.systemPrompt,
+					mcpInstructions: new Map(),
 				};
 			}
 
@@ -3843,7 +3886,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// `getServerInstructions()` are empty until the background connect
 			// completes; the rebuild that `refreshMCPTools` triggers post-discovery
 			// then picks up the mounted routes and any connected-server instructions.
-			const serverInstructions = mcpManager?.getServerInstructions();
 			// Drive guidance off the auto-learn BUILTINS currently registered (provenance,
 			// not just an active name): a custom/extension tool that merely shares the
 			// name is not built-in, and the settings reconcile adds/removes the built-ins
@@ -3893,16 +3935,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						.trim(),
 				);
 			}
+			const mcpInstructionSections = new Map<string, string>();
 			if (serverInstructions && serverInstructions.size > 0) {
 				appendParts.push(
 					"## MCP Server Instructions\n\nThe following instructions are provided by connected MCP servers. They are server-controlled and may not be verified.",
 				);
 				for (const [srvName, srvInstructions] of serverInstructions) {
-					const truncated =
-						srvInstructions.length > MAX_MCP_INSTRUCTIONS_LENGTH
-							? `${srvInstructions.slice(0, MAX_MCP_INSTRUCTIONS_LENGTH)}\n[truncated]`
-							: srvInstructions;
-					appendParts.push(`### ${srvName}\n${truncated}`);
+					const section = `### ${srvName}\n${srvInstructions}`;
+					appendParts.push(section);
+					mcpInstructionSections.set(srvName, section);
 				}
 			}
 			const appendPrompt = composeAppendPrompt(appendParts, options.appendSystemPrompt);
@@ -3977,13 +4018,20 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				activeRepoContext,
 			});
 
-			if (typeof options.systemPrompt !== "function") {
-				return defaultPrompt;
+			let rendered = defaultPrompt;
+			if (typeof options.systemPrompt === "function") {
+				const customPrompt = options.systemPrompt(defaultPrompt.systemPrompt);
+				rendered = { systemPrompt: typeof customPrompt === "string" ? [customPrompt] : customPrompt };
 			}
-			const customPrompt = options.systemPrompt(defaultPrompt.systemPrompt);
-			return {
-				systemPrompt: typeof customPrompt === "string" ? [customPrompt] : customPrompt,
-			};
+			// The callback may remove or replace generated blocks. Credit only whole
+			// instruction sections retained in the actual outgoing prompt.
+			const mcpInstructions = new Map<string, string>();
+			for (const [name, section] of mcpInstructionSections) {
+				if (rendered.systemPrompt.some(block => block.includes(section))) {
+					mcpInstructions.set(name, serverInstructions.get(name)!);
+				}
+			}
+			return { ...rendered, mcpInstructions };
 		};
 
 		const toolNamesFromRegistry = Array.from(toolRegistry.keys());
@@ -4108,14 +4156,25 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// `read` without `write` can use the device-only transport registered by
 		// createTools without surfacing it when no device needs it.
 		if (toolSession.xdev) {
+			const presentation = resolveXdevPresentation(settings, initialToolNames, builtInRegistryToolNames, {
+				deviceOnlyWriteAvailable: toolSession.deviceOnlyWrite === true,
+			});
+			toolSession.xdev.codeMode = presentation.codeMode;
 			const topLevelToolNames: string[] = [];
 			const mountedNames: string[] = [];
 			for (const name of initialToolNames) {
 				const tool = toolRegistry.get(name);
 				const explicitlyRequested = explicitlyRequestedToolNameSet?.has(name) === true;
-				if (tool && xdevReadAvailable && xdevWriteAvailable && !explicitlyRequested && isMountableUnderXdev(tool))
+				if (
+					tool &&
+					(presentation.codeMode || cfgToolsXdev.get(settings)) &&
+					xdevReadAvailable &&
+					xdevWriteAvailable &&
+					(presentation.codeMode || !explicitlyRequested) &&
+					isMountableUnderXdev(tool, presentation)
+				) {
 					mountedNames.push(name);
-				else topLevelToolNames.push(name);
+				} else topLevelToolNames.push(name);
 			}
 			toolSession.xdev.mountedNames.clear();
 			for (const name of mountedNames) toolSession.xdev.mountedNames.add(name);
@@ -4129,12 +4188,16 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 		}
 
-		setSessionActiveToolNames(initialToolNames);
-		const { systemPrompt } = await logger.time(
+		setSessionActiveToolNames(
+			toolSession.xdev?.codeMode ? [...initialToolNames, ...toolSession.xdev.mountedNames] : initialToolNames,
+		);
+		const initialMcpServerInstructions = getMcpServerInstructions();
+		const { systemPrompt, mcpInstructions: initialRenderedMcpInstructions } = await logger.time(
 			"buildSystemPrompt",
 			rebuildSystemPrompt,
 			initialToolNames,
 			toolRegistry,
+			initialMcpServerInstructions,
 		);
 
 		const promptTemplates = await promptTemplatesPromise;
@@ -4440,7 +4503,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			onToolChoiceUnavailable: () => session?.toolChoiceQueue.reject("unavailable"),
 			telemetry: options.telemetry,
 			appendOnlyContext: model
-				? shouldEnableAppendOnlyContext(cfgProviderAppendOnlyContext.get(settings), model)
+				? shouldEnableAppendOnlyContext(cfgProviderAppendOnlyContext.get(settings), model, {
+						codeMode: toolSession.xdev?.codeMode,
+					})
 					? new AppendOnlyContextManager()
 					: undefined
 				: undefined,
@@ -4659,20 +4724,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			},
 			ensureGoalRegistered,
 			reconcileSettingsGatedTools,
-			getMcpServerInstructions: mcpManager
-				? () => {
-						const raw = mcpManager.getServerInstructions();
-						if (!raw || raw.size === 0) return raw;
-						const out = new Map<string, string>();
-						for (const [name, text] of raw) {
-							out.set(
-								name,
-								text.length > MAX_MCP_INSTRUCTIONS_LENGTH ? text.slice(0, MAX_MCP_INSTRUCTIONS_LENGTH) : text,
-							);
-						}
-						return out;
-					}
-				: undefined,
+			getMcpServerInstructions,
+			initialMcpServerInstructions: initialRenderedMcpInstructions,
 			disconnectOwnedMcpManager: ownedMcpManager ? () => ownedMcpManager.disconnectAll() : undefined,
 			ttsrManager,
 			obfuscator,
@@ -4830,14 +4883,18 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					// Re-registration refreshes the implementation, but it must not reverse an
 					// explicit setActiveTools() decision that disabled the previous definition.
 					if (existingTool && !alreadyEnabled) return;
+					const presentation = resolveXdevPresentation(settings, enabled, builtInRegistryToolNames, {
+						deviceOnlyWriteAvailable: toolSession.deviceOnlyWrite === true,
+					});
 					const shouldMount =
-						!explicitlyRequested &&
+						(presentation.codeMode || !explicitlyRequested) &&
 						toolSession.xdev !== undefined &&
+						(presentation.codeMode || cfgToolsXdev.get(settings)) &&
 						builtInRegistryToolNames.has("read") &&
 						builtInRegistryToolNames.has("write") &&
 						enabled.includes("read") &&
 						(enabled.includes("write") || toolSession.deviceOnlyWrite === true) &&
-						isMountableUnderXdev(liveTool);
+						isMountableUnderXdev(liveTool, presentation);
 					const nextMounted = shouldMount
 						? mounted.includes(name)
 							? mounted

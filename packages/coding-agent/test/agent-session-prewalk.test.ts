@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
-import { Agent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentTool, type AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type Api, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -125,6 +125,7 @@ describe("AgentSession prewalk", () => {
 			sessionManager?: SessionManager;
 			target?: Model;
 			startupTarget?: Model;
+			tools?: AgentTool[];
 		} = {},
 	) {
 		const primary = modelOrThrow("claude-sonnet-4-5");
@@ -144,7 +145,7 @@ describe("AgentSession prewalk", () => {
 			initialState: {
 				model: primary,
 				systemPrompt: ["Test"],
-				tools: [todoTool as AgentTool, writeTool as AgentTool],
+				tools: options.tools ?? [todoTool as AgentTool, writeTool as AgentTool],
 				messages: [],
 				thinkingLevel: Effort.High,
 			},
@@ -165,7 +166,7 @@ describe("AgentSession prewalk", () => {
 			sessionManager: options.sessionManager ?? SessionManager.inMemory(tempDir.path()),
 			settings,
 			modelRegistry,
-			toolRegistry,
+			toolRegistry: options.tools ? new Map(options.tools.map(tool => [tool.name, tool])) : toolRegistry,
 			thinkingLevel: Effort.High,
 			prewalk:
 				options.armed === false
@@ -176,6 +177,123 @@ describe("AgentSession prewalk", () => {
 		session = created;
 		return { session: created, primary, target, settings, requested, nudges };
 	}
+
+	const bridgedSuccess: AgentToolResult = { content: [{ type: "text", text: "ok" }], details: undefined };
+	const bridgedFailure: AgentToolResult = { ...bridgedSuccess, isError: true };
+	const bridgedDetailsFailure: AgentToolResult = { ...bridgedSuccess, details: { isError: true } };
+	const bridgedRead: AgentToolResult = {
+		...bridgedSuccess,
+		details: { xdev: { tool: "lsp", mode: "execute", tier: "read" } },
+	};
+
+	it.each<{
+		name: string;
+		turns: [string, AgentToolResult][][];
+		handoff: boolean;
+	}>([
+		{
+			name: "write before todo in the same eval turn hands off",
+			turns: [
+				[
+					["write", bridgedSuccess],
+					["todo", bridgedSuccess],
+				],
+			],
+			handoff: true,
+		},
+		{
+			name: "todo before write in the same eval turn hands off",
+			turns: [
+				[
+					["todo", bridgedSuccess],
+					["write", bridgedSuccess],
+				],
+			],
+			handoff: true,
+		},
+		{
+			name: "write from a completed turn cannot hand off on a later todo-only turn",
+			turns: [[["write", bridgedSuccess]], [["todo", bridgedSuccess]]],
+			handoff: false,
+		},
+		{
+			name: "read-only device write cannot hand off after todo",
+			turns: [
+				[
+					["todo", bridgedSuccess],
+					["write", bridgedRead],
+				],
+			],
+			handoff: false,
+		},
+		{
+			name: "failed write cannot hand off after todo",
+			turns: [
+				[
+					["todo", bridgedSuccess],
+					["write", bridgedFailure],
+				],
+			],
+			handoff: false,
+		},
+		{
+			name: "write reporting failure in details cannot hand off after todo",
+			turns: [
+				[
+					["todo", bridgedSuccess],
+					["write", bridgedDetailsFailure],
+				],
+			],
+			handoff: false,
+		},
+		{
+			name: "failed todo does not open the handoff gate for write",
+			turns: [
+				[
+					["todo", bridgedFailure],
+					["write", bridgedSuccess],
+				],
+			],
+			handoff: false,
+		},
+		{
+			name: "todo reporting failure in details does not open the handoff gate for write",
+			turns: [
+				[
+					["todo", bridgedDetailsFailure],
+					["write", bridgedSuccess],
+				],
+			],
+			handoff: false,
+		},
+	])("$name", async ({ turns, handoff }) => {
+		const pendingTurns = turns[Symbol.iterator]();
+		const evalTool: AgentTool<typeof recordToolSchema, undefined> = {
+			name: "eval",
+			label: "Eval",
+			description: "Execute bridged tools",
+			parameters: recordToolSchema,
+			async execute() {
+				const next = pendingTurns.next();
+				if (next.done) throw new Error("Unexpected extra bridged turn");
+				for (const [name, result] of next.value) created.session.recordEvalToolResult(name, result);
+				return { content: [{ type: "text", text: "eval completed" }], details: undefined };
+			},
+		};
+		const created = createLifecycleSession(
+			[...turns.map((_, index) => toolCall(`eval-${index}`, "eval")), { content: ["done"] }],
+			{ tools: [todoTool as AgentTool, evalTool as AgentTool] },
+		);
+
+		await created.session.prompt("Implement the task");
+
+		expect(created.requested.slice(0, turns.length + 1)).toEqual([
+			...turns.map(() => created.primary.id),
+			handoff ? created.target.id : created.primary.id,
+		]);
+		if (!handoff) expect(created.requested.every(model => model === created.primary.id)).toBe(true);
+		expect(created.session.model?.id).toBe(handoff ? created.target.id : created.primary.id);
+	});
 
 	it("/new restores the previous prewalk source and effort, then requires a fresh todo before handoff", async () => {
 		const created = createLifecycleSession([

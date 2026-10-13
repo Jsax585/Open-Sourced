@@ -60,10 +60,11 @@ function shouldAutoEnableAppendOnlyContext(model: AppendOnlyContextModel | null 
 	return !!model.compatConfig && "supportsStore" in model.compatConfig && model.compatConfig.supportsStore === true;
 }
 
-/** Resolves whether append-only context should be active for a model and setting. */
+/** Resolves append-only context, preserving explicit overrides over Code Mode and provider defaults. */
 export function shouldEnableAppendOnlyContext(
 	setting: "auto" | "on" | "off" | undefined,
 	model: AppendOnlyContextModel | null | undefined,
+	options: { codeMode?: boolean } = {},
 ): boolean {
 	switch (setting ?? "auto") {
 		case "on":
@@ -71,6 +72,6 @@ export function shouldEnableAppendOnlyContext(
 		case "off":
 			return false;
 		default:
-			return shouldAutoEnableAppendOnlyContext(model);
+			return options.codeMode === true || shouldAutoEnableAppendOnlyContext(model);
 	}
 }

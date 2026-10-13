@@ -605,6 +605,8 @@ export interface BuildSystemPromptResult {
 	 * a catalog the prompt already carries (issue #7139).
 	 */
 	xdevCatalogNames?: readonly string[];
+	/** Complete per-server instruction sections retained by the final SDK prompt. Omitted means none. */
+	mcpInstructions?: ReadonlyMap<string, string>;
 }
 
 /** Static wrapper; compiled (not rendered) so user-authored Markdown passes through byte-for-byte. */
