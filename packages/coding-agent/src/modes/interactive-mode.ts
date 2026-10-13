@@ -392,7 +392,7 @@ import {
 	cfgTuiVimMode,
 	cfgTuiVimModeDisplay,
 } from "./settings";
-import { cfgTasksTodoClearDelay } from "../tools/settings";
+import { cfgTasksTodoClearDelay, cfgTodoSticky } from "../tools/settings";
 import { cfgWorktreeOnExit, cfgWorktreeOnStart } from "../task/settings";
 import { cfgExpandThinkingBlocks, cfgProseOnlyThinking } from "../session/settings";
 import { cfgHideThinkingBlock } from "../session/settings";
@@ -431,6 +431,7 @@ const cfgLiveUiSettings = combine({
 	"tui.vimModeDisplay": cfgTuiVimModeDisplay,
 	"display.pinnedAgents": cfgDisplayPinnedAgents,
 	"display.subagentLivePreview": cfgDisplaySubagentLivePreview,
+	"todo.sticky": cfgTodoSticky,
 	"compaction.idleEnabled": cfgCompactionIdleEnabled,
 	"compaction.idleThresholdTokens": cfgCompactionIdleThresholdTokens,
 	"compaction.idleTimeoutSeconds": cfgCompactionIdleTimeoutSeconds,
@@ -3502,6 +3503,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#renderSubagentList();
 			this.ui.requestRender();
 		}
+		if (any("todo.sticky")) {
+			this.#renderTodoList();
+			this.ui.requestRender();
+		}
 		if (any("compaction.idleEnabled", "compaction.idleThresholdTokens", "compaction.idleTimeoutSeconds")) {
 			this.#eventController.refreshIdleCompactionTimer();
 		}
@@ -4223,6 +4228,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const activeDescs = this.#getActiveSubagentDescriptions();
 		this.#todoHudSubagentKey = activeDescs.join("\n");
 		if (this.#todoHudHidden) return;
+		if (!cfgTodoSticky.get((this.#todoPhasesOwner ?? this.session).settings)) return;
 		const phases = this.todoPhases.filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) return;
 		const expanded = this.todoExpanded;
@@ -4433,6 +4439,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	renderCompactStatusLine(width: number, childLines: readonly string[]): readonly string[] {
+		// The compact one-line HUD is the pinned HUD on short terminals, so the pin setting governs it too.
+		if (!cfgTodoSticky.get((this.#todoPhasesOwner ?? this.session).settings)) return childLines;
 		const phases = this.todoPhases.filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) return childLines;
 
@@ -8348,6 +8356,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	setTodoExpanded(expanded: boolean): void {
+		if (expanded && !cfgTodoSticky.get((this.#todoPhasesOwner ?? this.session).settings)) {
+			this.showWarning("Todo HUD is unpinned (todo.sticky is off); expand has nothing to show.");
+			return;
+		}
 		this.todoExpanded = expanded;
 		if (expanded) {
 			const owner = this.#todoPhasesOwner ?? this.viewSession;
