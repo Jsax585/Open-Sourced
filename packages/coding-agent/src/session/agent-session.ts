@@ -8514,6 +8514,9 @@ export class AgentSession implements SettingsScope {
 	}
 
 	#queuePersistenceFailureMessage(): void {
+		// The failure observer and the post-/clear check can both report one
+		// failure (a reset boundary whose own append is the first to fail).
+		if (this.#pendingNextTurnMessages.some(message => message.customType === "session-persistence-error")) return;
 		this.#queueHiddenNextTurnMessage(
 			{
 				role: "custom",
