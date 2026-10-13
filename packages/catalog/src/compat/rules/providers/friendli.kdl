@@ -1,6 +1,7 @@
 provider "friendli" {
 	default-model "zai-org/GLM-5.3"
 	env "FRIENDLI_API_KEY" "FRIENDLI_TOKEN"
+	clamp-output-to-model-max #true
 
 	// Offline fallback for the default model; upstream models.dev rows win.
 	// GLM-5.3 effort tiers are derived from the model class, not this seed.

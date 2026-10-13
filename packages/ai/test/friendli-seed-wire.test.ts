@@ -27,14 +27,19 @@ function chatSse(): Response {
 	});
 }
 
-async function captureBody(reasoning: Effort | undefined): Promise<Record<string, unknown>> {
+async function captureBody(reasoning: Effort | undefined, maxTokens?: number): Promise<Record<string, unknown>> {
 	let body: Record<string, unknown> | undefined;
 	const fetchMock: FetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
 		body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
 		return chatSse();
 	});
 	const model = buildModel(seedModels<"openai-completions">("friendli")[0]) as Model<"openai-completions">;
-	for await (const event of streamOpenAICompletions(model, context, { apiKey: "k", fetch: fetchMock, reasoning })) {
+	for await (const event of streamOpenAICompletions(model, context, {
+		apiKey: "k",
+		fetch: fetchMock,
+		reasoning,
+		maxTokens,
+	})) {
 		if (event.type === "done" || event.type === "error") break;
 	}
 	if (!body) throw new Error("no captured body");
@@ -57,5 +62,12 @@ describe("Friendli GLM-5.3 wire dialect", () => {
 	it("emits no reasoning_effort when no effort is requested", async () => {
 		const none = await captureBody(undefined);
 		expect("reasoning_effort" in none).toBe(false);
+	});
+
+	it("uses Friendli's advertised output cap instead of OpenAI's generic clamp", async () => {
+		const supported = await captureBody(Effort.High, 131_072);
+		expect(supported.max_completion_tokens).toBe(131_072);
+		const clamped = await captureBody(Effort.High, 2_097_152);
+		expect(clamped.max_completion_tokens).toBe(1_048_576);
 	});
 });
