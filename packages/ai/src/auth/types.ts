@@ -6,7 +6,7 @@ import type {
 	OAuthPrompt,
 	OAuthProviderId,
 } from "../registry/oauth/types";
-import type { Provider } from "../types";
+import type { Api, Provider } from "../types";
 import type {
 	ClientUsageIdentity,
 	ClientUsageReport,
@@ -1138,6 +1138,22 @@ export interface OAuthApi {
  * lifts a restriction only with the lease of the call that installed it.
  */
 export type SessionRestrictionLease = symbol;
+
+/** Credential and deployment binding of an upstream response, without bearer material. */
+export interface StoredResponseOwner {
+	sessionId: string;
+	target: string;
+	provider: string;
+	api: Api;
+	endpoint: string;
+	account: string;
+}
+
+/** Private response-to-account bindings, persisted alongside session affinity. */
+export interface ResponseOwnersApi {
+	get(responseId: string): Readonly<StoredResponseOwner> | undefined;
+	record(responseId: string | undefined, owner: StoredResponseOwner): void;
+}
 
 /** Session credential affinity operations. */
 export interface SessionsApi {

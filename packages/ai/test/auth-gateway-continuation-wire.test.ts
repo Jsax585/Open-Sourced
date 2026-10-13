@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { startAuthGateway } from "../src/auth-gateway";
+import { resolveGatewayAccount } from "../src/auth-gateway/dispatch";
 import { AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
 
 afterEach(() => vi.restoreAllMocks());
@@ -37,7 +38,209 @@ function completedResponse(id: string): Response {
 	});
 }
 
+it("carries the rotated account snapshot into a reopened held Responses attempt", async () => {
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-held-account-"));
+	const storage = new AuthStorage(await SqliteAuthCredentialStore.open(path.join(directory, "auth.db")), {
+		usageProviderResolver: () => undefined,
+		rankingStrategyResolver: () => undefined,
+		refreshOAuthCredential: async (_provider, _id, credential) => credential,
+	});
+	const provider = "unit-held-account";
+	await storage.credentials.set(provider, [
+		{
+			type: "oauth",
+			access: "retired",
+			refresh: "retired-refresh",
+			expires: Date.now() + 3_600_000,
+			accountId: "retired",
+		},
+		{
+			type: "oauth",
+			access: "survivor",
+			refresh: "survivor-refresh",
+			expires: Date.now() + 3_600_000,
+			accountId: "survivor",
+		},
+	]);
+	storage.sessions.pin(provider, "held-account-session", storage.credentials.list(provider)[0]!.id);
+	const model = buildModel({
+		id: "held-account-model",
+		name: "Fixture",
+		provider,
+		api: "openai-responses",
+		baseUrl: "https://held.example/v1",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 10000,
+		maxTokens: 100,
+	});
+	const bearers: Array<string | null> = [];
+	let failedAttemptSignal: AbortSignal | undefined;
+	const gateway = startAuthGateway({
+		storage,
+		bind: "127.0.0.1:0",
+		bearerTokens: ["opaque-held-account-client-token"],
+		resolveModel: () => model,
+		fetch: async (_url, init) => {
+			const bearer = new Headers(init?.headers).get("authorization");
+			bearers.push(bearer);
+			if (bearer === "Bearer retired")
+				return Response.json({ error: { message: "Expired fixture bearer" } }, { status: 401 });
+			const signal = init?.signal;
+			if (!signal) throw new Error("Expected an upstream attempt abort scope");
+			failedAttemptSignal ??= signal;
+			if (signal === failedAttemptSignal)
+				return Response.json(
+					{ error: { message: "Fixture upstream unavailable", type: "api_error" } },
+					{ status: 503, headers: { "retry-after-ms": "0" } },
+				);
+			return completedResponse("resp_held_survivor");
+		},
+	});
+	try {
+		const response = await fetch(`${gateway.url}/v1/responses`, {
+			method: "POST",
+			headers: { Authorization: "Bearer opaque-held-account-client-token", "Content-Type": "application/json" },
+			body: JSON.stringify({
+				model: model.id,
+				input: "fixture",
+				stream: true,
+				prompt_cache_key: "held-account-session",
+			}),
+		});
+		const body = await response.text();
+		expect(response.status).toBe(200);
+		expect(body).toContain("response.completed");
+		expect(body).not.toContain("response.failed");
+		const rotatedAt = bearers.indexOf("Bearer survivor");
+		expect(rotatedAt).toBeGreaterThan(0);
+		expect(bearers.slice(rotatedAt).every(bearer => bearer === "Bearer survivor")).toBe(true);
+		expect(storage.responses.get("resp_held_survivor")?.account).toBe(
+			resolveGatewayAccount(storage, provider, "held-account-session", "survivor"),
+		);
+	} finally {
+		await gateway.close();
+		storage.close();
+		await fs.rm(directory, { recursive: true, force: true });
+	}
+});
+
 for (const native of [false, true]) {
+	it(`resumes a stored ${native ? "pi-native" : "Responses"} response after reopening the gateway and credential database`, async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-owner-restart-"));
+		const database = path.join(directory, "auth.db");
+		const provider = "unit-persisted-owner";
+		let storage = new AuthStorage(await SqliteAuthCredentialStore.open(database), {
+			usageProviderResolver: () => undefined,
+			rankingStrategyResolver: () => undefined,
+		});
+		await storage.credentials.set(provider, [
+			{
+				type: "oauth",
+				access: "owner",
+				refresh: "owner-refresh",
+				expires: Date.now() + 3_600_000,
+				accountId: "owner",
+			},
+			{
+				type: "oauth",
+				access: "sibling",
+				refresh: "sibling-refresh",
+				expires: Date.now() + 3_600_000,
+				accountId: "sibling",
+			},
+		]);
+		storage.sessions.pin(provider, "persisted-session", storage.credentials.list(provider)[0]!.id);
+		const model = buildModel({
+			id: "persisted-owner-model",
+			name: "Fixture",
+			provider,
+			api: "openai-responses",
+			baseUrl: "https://owner.example/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 10000,
+			maxTokens: 100,
+		});
+		const requests: Array<{ bearer: string | null; previous: unknown; store: unknown }> = [];
+		const start = () =>
+			startAuthGateway({
+				storage,
+				bind: "127.0.0.1:0",
+				bearerTokens: ["opaque-restart-client-token"],
+				resolveModel: () => model,
+				fetch: async (_url, init) => {
+					const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+					requests.push({
+						bearer: new Headers(init?.headers).get("authorization"),
+						previous: payload.previous_response_id,
+						store: payload.store,
+					});
+					return completedResponse(`resp_persisted_${requests.length}`);
+				},
+			});
+		let gateway = start();
+		const post = (previous?: string) =>
+			fetch(`${gateway.url}${native ? "/v1/pi/stream" : "/v1/responses"}`, {
+				method: "POST",
+				headers: { Authorization: "Bearer opaque-restart-client-token", "Content-Type": "application/json" },
+				body: JSON.stringify(
+					native
+						? {
+								modelId: model.id,
+								context: {
+									messages: [{ role: "user", content: previous ? "new input" : "seed input", timestamp: 0 }],
+								},
+								stream: false,
+								options: {
+									sessionId: previous ? undefined : "persisted-session",
+									previousResponseId: previous,
+									store: true,
+								},
+							}
+						: {
+								model: model.id,
+								input: previous ? "new input" : "seed input",
+								stream: false,
+								store: true,
+								prompt_cache_key: previous ? undefined : "persisted-session",
+								previous_response_id: previous,
+							},
+				),
+			});
+		try {
+			const first = await post();
+			expect(first.status).toBe(200);
+			await first.text();
+			await gateway.close();
+			storage.close();
+			storage = new AuthStorage(await SqliteAuthCredentialStore.open(database), {
+				usageProviderResolver: () => undefined,
+				rankingStrategyResolver: () => undefined,
+			});
+			await storage.credentials.reload();
+			gateway = start();
+			const continued = await post("resp_persisted_1");
+			expect(continued.status).toBe(200);
+			await continued.text();
+			expect(requests).toEqual([
+				{ bearer: "Bearer owner", previous: undefined, store: true },
+				{ bearer: "Bearer owner", previous: "resp_persisted_1", store: true },
+			]);
+			model.baseUrl = "https://another-deployment.example/v1";
+			const wrongDeployment = await post("resp_persisted_1");
+			expect(wrongDeployment.status).toBe(400);
+			await wrongDeployment.text();
+			expect(requests).toHaveLength(2);
+		} finally {
+			await gateway.close();
+			storage.close();
+			await fs.rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it(`preserves ${native ? "pi-native" : "Responses"} ownership when a peer refreshes after credential selection`, async () => {
 		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-owner-snapshot-"));
 		const store = await SqliteAuthCredentialStore.open(path.join(directory, "auth.db"));

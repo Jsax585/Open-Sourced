@@ -205,6 +205,8 @@ function modelKeyOptions(model: Model<Api>, signal: AbortSignal): AuthApiKeyOpti
  * the bearer they sent. `onResolvedKey` observes every rotation; routes that
  * retain provider session state use it to re-key the account lease, one-shot
  * routes pass `undefined`.
+ * `lastResolved` also retains the complete serving snapshot when a held
+ * pre-output attempt reopens; its initial resolve must not revive an old bearer.
  */
 export function buildGatewayApiKeyResolver(
 	storage: AuthStorage,
@@ -217,11 +219,11 @@ export function buildGatewayApiKeyResolver(
 	onResolvedKey?: (apiKey: ResolvedApiKey) => void,
 ): ApiKeyResolver {
 	let lastKey = initialKey.apiKey;
+	let lastResolved = initialKey;
 	return async ({ lastChance, error, signal, previousKey }) => {
 		const sig = signal ?? requestSignal;
 		if (error === undefined) {
-			lastKey = initialKey.apiKey;
-			return initialKey;
+			return lastResolved;
 		}
 		if (!lastChance) {
 			const refreshed = await storage.keys.getWithCredential(model.provider, sessionId, {
@@ -230,7 +232,10 @@ export function buildGatewayApiKeyResolver(
 				refreshReason: AIError.status(error) === 401 ? "auth-recovery" : undefined,
 			});
 			lastKey = refreshed?.apiKey ?? lastKey;
-			if (refreshed) onResolvedKey?.(refreshed);
+			if (refreshed) {
+				lastResolved = refreshed;
+				onResolvedKey?.(refreshed);
+			}
 			return refreshed;
 		}
 		const next = await refreshGatewayApiKeyAfterAuthError(
@@ -245,7 +250,10 @@ export function buildGatewayApiKeyResolver(
 			peer,
 		);
 		lastKey = next?.apiKey ?? lastKey;
-		if (next) onResolvedKey?.(next);
+		if (next) {
+			lastResolved = next;
+			onResolvedKey?.(next);
+		}
 		return next;
 	};
 }

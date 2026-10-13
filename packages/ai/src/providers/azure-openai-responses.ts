@@ -21,6 +21,7 @@ import {
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { OpenAIHttpError, postOpenAIStream } from "../utils/openai-http";
+import { normalizeOpenAIResponseFormat } from "../utils/response-format";
 import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
 import {
@@ -403,30 +404,7 @@ function buildParams(
 	// field and rejects it as an unknown parameter.
 	const responseFormat = options?.responseFormat;
 	if (responseFormat !== undefined && typeof responseFormat === "object" && responseFormat !== null) {
-		const format = responseFormat as {
-			type?: string;
-			json_schema?: { name?: string; description?: string; schema?: unknown; strict?: boolean };
-		};
-		if (
-			format.type === "json_schema" &&
-			format.json_schema &&
-			(format.json_schema.name !== undefined || format.json_schema.schema !== undefined)
-		) {
-			// Chat Completions nests `{ name, description, schema, strict }` under
-			// `json_schema`; Responses `text.format` requires those fields flat.
-			params.text = {
-				...params.text,
-				format: {
-					type: "json_schema",
-					name: format.json_schema.name ?? "response",
-					...(format.json_schema.description !== undefined ? { description: format.json_schema.description } : {}),
-					schema: format.json_schema.schema,
-					...(format.json_schema.strict !== undefined ? { strict: format.json_schema.strict } : {}),
-				} as never,
-			};
-		} else {
-			params.text = { ...params.text, format: responseFormat as never };
-		}
+		params.text = { ...params.text, format: normalizeOpenAIResponseFormat(responseFormat, "responses") as never };
 	}
 
 	if (context.tools) {

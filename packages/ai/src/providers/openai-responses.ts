@@ -1174,7 +1174,7 @@ const streamOpenAIResponsesOnce = (
 							// forces `store: true` on official OpenAI too, where a dropped run
 							// is not known to finish server-side and polling would only park
 							// a turn that used to fail fast.
-							storeEnabled: storesResponsesServerSide(model, options),
+							storeEnabled: model.compat.storeResponses === true && storesResponsesServerSide(model, options),
 							partialContent: output.content,
 							failure: streamFailure,
 						})
