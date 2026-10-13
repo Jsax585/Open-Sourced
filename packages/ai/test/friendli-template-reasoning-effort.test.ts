@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { getEnvApiKey } from "@oh-my-pi/pi-ai/env-api-key";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
@@ -7,6 +8,7 @@ import type { Model, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import { type OpenAICompletionsOptions, streamOpenAICompletions } from "../src/providers/openai-completions";
 import { getProviderDefinition } from "../src/registry/registry";
 import type { Context } from "../src/types";
+import { withEnv } from "./helpers";
 
 async function discovered(id: string, reasoningOptions: Record<string, unknown>[]) {
 	const options = friendliModelManagerOptions({
@@ -45,6 +47,15 @@ async function capture(
 }
 
 describe("Friendli discovery-to-wire contracts", () => {
+	test("uses the documented token variable while preserving API-key precedence", async () => {
+		await withEnv({ FRIENDLI_API_KEY: undefined, FRIENDLI_TOKEN: "sdk-token" }, () => {
+			expect(getEnvApiKey("friendli")).toBe("sdk-token");
+		});
+		await withEnv({ FRIENDLI_API_KEY: "existing-key", FRIENDLI_TOKEN: "sdk-token" }, () => {
+			expect(getEnvApiKey("friendli")).toBe("existing-key");
+		});
+	});
+
 	test("live binary controls override both unknown and effort-capable KDL defaults", async () => {
 		for (const id of ["zai-org/GLM-5.1", "zai-org/GLM-5.2", "zai-org/GLM-5.3", "vendor/opaque"]) {
 			const model = await discovered(id, [{ type: "toggle" }]);

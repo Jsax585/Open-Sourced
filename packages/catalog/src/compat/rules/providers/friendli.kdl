@@ -1,7 +1,7 @@
 // Friendli's serverless deployment; live /models controls are authoritative.
 provider "friendli" {
 	default-model "zai-org/GLM-5.2"
-	env "FRIENDLI_API_KEY"
+	env "FRIENDLI_API_KEY" "FRIENDLI_TOKEN"
 	dynamic-models-authoritative #true
 	skip-cross-provider-reference-fills #true
 	discovery label="FriendliAI"

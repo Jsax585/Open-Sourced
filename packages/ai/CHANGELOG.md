@@ -4,7 +4,8 @@
 
 ### Added
 
-- Added built-in FriendliAI authentication and serverless reasoning support ([#8204](https://github.com/can1357/oh-my-pi/pull/8204) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
+- Added built-in FriendliAI authentication through `FRIENDLI_API_KEY` or `FRIENDLI_TOKEN` and serverless reasoning support ([#8204](https://github.com/can1357/oh-my-pi/pull/8204) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
+
 ### Removed
 
 - Removed the `toolNamespacesInfo` stream option; Codex requests no longer send `tool_namespaces_info` turn metadata, and `code_mode_tool_names`/`tool_namespaces_info` are no longer reserved client metadata keys.
