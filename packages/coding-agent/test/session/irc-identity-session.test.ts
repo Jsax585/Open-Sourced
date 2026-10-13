@@ -7,6 +7,7 @@ import { prompt, TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { AgentRegistry } from "../../src/registry/agent-registry";
+import { createAgentSession } from "../../src/sdk";
 import { AgentSession } from "../../src/session/agent-session";
 import { AuthStorage } from "../../src/session/auth-storage";
 import { escapeHarnessTags } from "../../src/session/harness-tags";
@@ -30,7 +31,7 @@ describe("IRC identity through AgentSession", () => {
 		}
 	});
 
-	it("persists distinct parent IDs with identical timestamps and content through message_end and journal reopen", async () => {
+	it("persists distinct parent IDs through message_end, journal reopen, and a new session request", async () => {
 		using temp = TempDir.createSync("@omp-irc-session-");
 		const auth = await AuthStorage.create(path.join(temp.path(), "auth.db"));
 		auth.keys.setRuntime("openai", "synthetic-irc-fixture-key");
@@ -51,6 +52,7 @@ describe("IRC identity through AgentSession", () => {
 		};
 		let session: AgentSession | undefined;
 		let saved: SessionManager | undefined;
+		let reopenedSession: AgentSession | undefined;
 		const mock = createMockModel({
 			provider: "openai",
 			id: "synthetic-irc-model",
@@ -138,9 +140,51 @@ describe("IRC identity through AgentSession", () => {
 				if (!peerMessage || peerMessage.role !== "developer")
 					throw new Error("Expected the peer developer message");
 				expect(peerMessage.attribution).toBe("agent");
-				const providerView = mock.calls.at(-1)!.context.messages;
+				await session.dispose();
+				const reopenedMock = createMockModel({
+					provider: "openai",
+					id: "synthetic-reopened-irc-model",
+					handler: { content: ["synthetic reopened response"] },
+				});
+				({ session: reopenedSession } = await createAgentSession({
+					cwd: temp.path(),
+					agentDir: temp.path(),
+					sessionManager: saved,
+					settings,
+					modelRegistry: new ModelRegistry(auth),
+					model: reopenedMock.model,
+					agentRegistry: new AgentRegistry(),
+					agentId: recipient,
+					bindProcessState: false,
+					toolNames: [],
+					restrictToolNames: true,
+					disableExtensionDiscovery: true,
+					preloadedCustomToolPaths: [],
+					skills: [],
+					rules: [],
+					contextFiles: [],
+					promptTemplates: [],
+					slashCommands: [],
+					enableMCP: false,
+					enableLsp: false,
+					skipPythonPreflight: true,
+				}));
+				reopenedSession.agent.streamFn = reopenedMock.stream;
+				await reopenedSession.prompt("synthetic reopened request");
+				await reopenedSession.waitForIdle();
+				expect(reopenedMock.calls).toHaveLength(1);
+				const providerView = reopenedMock.calls[0]!.context.messages;
 				const providerParents = providerView.filter(message => message.role === "user" && "ircSource" in message);
 				expect(providerParents).toHaveLength(2);
+				expect(providerParents.map(message => ("ircSource" in message ? message.ircSource : undefined))).toEqual(
+					parents.map(message => ("ircSource" in message ? message.ircSource : undefined)),
+				);
+				expect(
+					providerView.filter(
+						message =>
+							message.role === "developer" && JSON.stringify(message.content).includes("IrcIdentityPeer"),
+					),
+				).toEqual(peerMessages);
 				const parentEnvelope = prompt.render(parentTemplate, {
 					from: parent,
 					message: escapeHarnessTags(first.body),
@@ -165,6 +209,7 @@ describe("IRC identity through AgentSession", () => {
 				registry.unregister(recipient, ref);
 			}
 		} finally {
+			await reopenedSession?.dispose();
 			await saved?.close();
 			await session?.dispose();
 			auth.close();
