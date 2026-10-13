@@ -211,7 +211,7 @@ export async function runGatewayChatExecution(opts: GatewayChatExecutionOptions)
 				response.headers.set(name, value);
 			return response;
 		};
-		const retry = (classified: GatewayErrorClassification, model: Model<Api>, allowHeldRetry: boolean): boolean => {
+		const retry = (classified: GatewayErrorClassification, allowHeldRetry: boolean): boolean => {
 			if (previousId || controller.signal.aborted) return false;
 			const state: ExecutionState = {
 				routeId: compiled.id,
@@ -274,14 +274,25 @@ export async function runGatewayChatExecution(opts: GatewayChatExecutionOptions)
 		};
 		while (true) {
 			if (controller.signal.aborted) return opts.formatError(499, "request_aborted", "client closed request");
+			attemptedTargets.add(target);
 			const model = registry.getModel(compiled, target);
-			if (!model) return opts.formatError(404, "invalid_request_error", `Unknown model: ${target}`);
+			if (!model) {
+				const unavailable: GatewayErrorClassification = {
+					status: 404,
+					type: "invalid_request_error",
+					message: `Unknown model: ${target}`,
+					owner: "model",
+					disposition: "model_unavailable",
+				};
+				trace({ disposition: "skipped", reason: "capability_mismatch" });
+				if (retry(unavailable, false)) continue;
+				return opts.formatError(unavailable.status, unavailable.type, unavailable.message);
+			}
 			const rejection = opts.validateModel(model);
 			if (rejection) {
 				trace({ disposition: "skipped", reason: "capability_mismatch" });
 				return opts.formatError(400, "invalid_request_error", rejection);
 			}
-			attemptedTargets.add(target);
 			const apiKey = await resolveGatewayApiKey(boot.storage, model, sessionId, controller.signal, opts.peer, {
 				requestId,
 				credentialId: requestedCredential ?? selectedKey?.credentialId,
@@ -296,7 +307,7 @@ export async function runGatewayChatExecution(opts: GatewayChatExecutionOptions)
 					attemptedCredentials.add(requestedCredential);
 					requestedCredential = undefined;
 				}
-				if (retry(apiKey.credentialLookupFailed ? apiKey : (siblingFailure ?? apiKey), model, false)) continue;
+				if (retry(apiKey.credentialLookupFailed ? apiKey : (siblingFailure ?? apiKey), false)) continue;
 				return errorResponse(apiKey, model, apiKey);
 			}
 			selectedKey = apiKey;
@@ -385,7 +396,7 @@ export async function runGatewayChatExecution(opts: GatewayChatExecutionOptions)
 					if (
 						message.stopReason === "error" &&
 						!hasBillableUsage(message.usage) &&
-						retry(classifyGatewayError(message), model, false)
+						retry(classifyGatewayError(message), false)
 					)
 						continue;
 					turn.finish(message);
@@ -413,7 +424,7 @@ export async function runGatewayChatExecution(opts: GatewayChatExecutionOptions)
 					!probed.committed &&
 					probed.failure?.stopReason === "error" &&
 					!hasBillableUsage(probed.failure.usage) &&
-					retry(classifyGatewayError(probed.failure), model, opts.label === "openai-responses")
+					retry(classifyGatewayError(probed.failure), opts.label === "openai-responses")
 				)
 					continue;
 				const encoded = opts.encodeStream(probed.events, {
@@ -442,7 +453,7 @@ export async function runGatewayChatExecution(opts: GatewayChatExecutionOptions)
 				});
 			} catch (error) {
 				if (controller.signal.aborted) return opts.formatError(499, "request_aborted", "client closed request");
-				if (replayEligible && retry(classifyGatewayError(error), model, false)) continue;
+				if (replayEligible && retry(classifyGatewayError(error), false)) continue;
 				return errorResponse(error, model);
 			} finally {
 				if (!streamOwned) {

@@ -221,6 +221,38 @@ function fallbackRegistry(models: MockModel[], on: GatewayErrorDisposition): Rou
 	return registry;
 }
 
+for (const format of ["/v1/pi/stream", "/v1/chat/completions"] as const)
+	for (const stream of [false, true])
+		it(`routes unresolved targets only along model-unavailable edges through ${format} (${stream ? "stream" : "complete"})`, async () => {
+			await withScenario(async (storage, post) => {
+				storage.keys.setRuntime("fixture-unknown", "unknown-target-fixture-key");
+				const backup = createMockModel({
+					provider: "fixture-unknown",
+					id: "backup",
+					handler: { content: ["catalog fallback survived"] },
+				});
+				for (const on of ["context_overflow", "model_unavailable"] as const) {
+					const registry = new RouteRegistry(id => (id === "backup" ? backup : undefined));
+					registry.register({
+						id: "routed",
+						root: {
+							type: "fallback",
+							on: [on],
+							children: [
+								{ type: "target", model: "unknown-primary" },
+								{ type: "target", model: "backup" },
+							],
+						},
+					});
+					const response = await post(registry, format, stream);
+					expect(response.status).toBe(on === "model_unavailable" ? 200 : 404);
+					const body = await response.text();
+					expect(body).toContain(on === "model_unavailable" ? "catalog fallback survived" : "Unknown model");
+					expect(backup.calls).toHaveLength(on === "model_unavailable" ? 1 : 0);
+				}
+			});
+		});
+
 for (const format of formats)
 	for (const stream of [false, true]) {
 		it(`exhausts sibling credentials independently on each target through ${format} (${stream ? "stream" : "complete"})`, async () => {
