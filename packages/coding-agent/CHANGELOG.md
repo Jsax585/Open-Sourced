@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Broker-backed auth-gateway continuations retain private session and response ownership across restarts, without storing credentials or bearer/usage caches locally ([#10134](https://github.com/can1357/oh-my-pi/pull/10134) by [@jroth1111](https://github.com/jroth1111)).
+
 ## [18.10.0] - 2026-10-12
 
 ### Added

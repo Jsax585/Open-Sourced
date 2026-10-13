@@ -2,7 +2,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import type { CredentialCacheStore } from "./store";
 import type { ResponseOwnersApi, StoredResponseOwner } from "./types";
 
-const RESPONSE_OWNER_CACHE_PREFIX = "response:owner:v1:";
+export const RESPONSE_OWNER_CACHE_PREFIX = "response:owner:v1:";
 const RESPONSE_OWNER_TTL_SEC = 30 * 24 * 60 * 60;
 const MAX_MEMORY_OWNERS = 4096;
 
@@ -43,7 +43,11 @@ export class ResponseOwners implements ResponseOwnersApi {
 				typeof owner.provider !== "string" ||
 				typeof owner.api !== "string" ||
 				typeof owner.endpoint !== "string" ||
-				typeof owner.account !== "string"
+				typeof owner.account !== "string" ||
+				(owner.credentialId !== undefined &&
+					(typeof owner.credentialId !== "number" ||
+						!Number.isSafeInteger(owner.credentialId) ||
+						owner.credentialId < 1))
 			)
 				return undefined;
 			const binding: StoredResponseOwner = {
@@ -53,6 +57,7 @@ export class ResponseOwners implements ResponseOwnersApi {
 				api: owner.api,
 				endpoint: owner.endpoint,
 				account: owner.account,
+				...(owner.credentialId !== undefined ? { credentialId: owner.credentialId as number } : {}),
 			};
 			const cached = { owner: Object.freeze(binding), expiresAtSec: record.expiresAtSec };
 			this.#remember(responseId, cached);
@@ -73,6 +78,7 @@ export class ResponseOwners implements ResponseOwnersApi {
 				api: owner.api,
 				endpoint: owner.endpoint,
 				account: owner.account,
+				...(owner.credentialId !== undefined ? { credentialId: owner.credentialId } : {}),
 			}),
 			expiresAtSec: Math.floor(Date.now() / 1000) + RESPONSE_OWNER_TTL_SEC,
 		};
