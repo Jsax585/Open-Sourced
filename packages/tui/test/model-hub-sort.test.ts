@@ -202,6 +202,28 @@ const shape = (hub: ModelHubComponent): string[] =>
 		return (entry as { group: string }).group === "recent" ? "«recent»" : "«group»";
 	});
 
+/**
+ * Keys the footer hint strip advertises on a native surface lacking `picker`
+ * support, where the hub renders its own frame instead of a picker sheet. Only
+ * the keycaps matter: the terminal matches them, the labels are prose.
+ */
+function footerKeys(hub: ModelHubComponent): string[] {
+	const cx: DescribeContext = {
+		cols: 140,
+		reduceMotion: false,
+		dark: true,
+		supports: () => false,
+		feature: () => true,
+	};
+	const found: string[] = [];
+	const walk = (node: { k: string; p?: { keys?: string[] }; c?: unknown[] }): void => {
+		if (node.k === "kbd") found.push((node.p?.keys ?? []).join("+"));
+		for (const child of (node.c ?? []) as { k: string; p?: { keys?: string[] }; c?: unknown[] }[]) walk(child);
+	};
+	walk(hub.describe(cx) as unknown as { k: string; c?: unknown[] });
+	return found;
+}
+
 /** The hub opens on the `all` scope with the list focused after →. */
 function focusRows(key: (data: string) => void): void {
 	key("\x1b[C"); // → list focus
@@ -341,6 +363,20 @@ describe("model hub metric order on the native picker path", () => {
 			"demo/dim",
 			"demo/unscored",
 		]);
+	});
+
+	test("advertises the sort keys on the fallback native footer too", () => {
+		// A TSP terminal whose handshake lacks `picker` support renders
+		// `#footerHints()` instead of a picker sheet. The key still works there, so
+		// the binding has to be advertised or the feature is undiscoverable.
+		const { hub, key } = createHub();
+		expect(footerKeys(hub)).toContain("ctrl+alt+s");
+
+		// The grouping key only appears once a metric order is active, matching
+		// the ANSI chip and the picker action.
+		expect(footerKeys(hub)).not.toContain("ctrl+alt+g");
+		key(CTRL_ALT_S);
+		expect(footerKeys(hub)).toContain("ctrl+alt+g");
 	});
 
 	test("offers no sort action when the key is unbound", () => {

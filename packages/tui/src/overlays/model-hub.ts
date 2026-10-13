@@ -2970,6 +2970,23 @@ export class ModelHubComponent implements Component {
 	}
 
 	/**
+	 * The sort chips for the generic native footer, mirroring the ANSI ones.
+	 * A TSP terminal whose handshake lacks `picker` support renders this path
+	 * rather than {@link #describePicker}, so without them the key would work
+	 * while nothing on screen advertised it.
+	 */
+	#sortFooterHints(): (NativeHint | undefined)[] {
+		const [sort] = this.#sortKeys;
+		const [grouping] = this.#sortGroupingKeys;
+		return [
+			sort ? { keys: [sort], label: `sort ${describeModelSort(this.#sort)}` } : undefined,
+			grouping && this.#sort
+				? { keys: [grouping], label: this.#sortGrouped ? "per provider" : "all providers" }
+				: undefined,
+		];
+	}
+
+	/**
 	 * Keys bound to {@link app.model.cycleSort}; empty when unbound. All of them
 	 * cycle the order on the input path, but only the first reaches Tern — a
 	 * picker action carries one keycap, as everywhere else in the hub.
@@ -4283,7 +4300,14 @@ export class ModelHubComponent implements Component {
 		}
 		if (this.#assigning !== null) {
 			if (this.#focus === "scope") {
-				return [keys("models", "enter", "right"), upDown("providers"), search, kind, cancel("cancel")];
+				return [
+					keys("models", "enter", "right"),
+					upDown("providers"),
+					search,
+					kind,
+					...this.#sortFooterHints(),
+					cancel("cancel"),
+				];
 			}
 			const pick =
 				this.#assigning.kind === "fallback"
@@ -4291,7 +4315,15 @@ export class ModelHubComponent implements Component {
 					: this.#assigning.kind === "fallbackKey"
 						? "pick the protected model"
 						: "assign";
-			return [keys(pick, "enter"), upDown("models"), keys("providers", "left"), search, kind, cancel("cancel")];
+			return [
+				keys(pick, "enter"),
+				upDown("models"),
+				keys("providers", "left"),
+				search,
+				kind,
+				...this.#sortFooterHints(),
+				cancel("cancel"),
+			];
 		}
 		const presetHint = this.#presets().names.length > 0 ? keys("preset", "ctrl+left", "ctrl+right") : undefined;
 		const entry = this.#activeEntry();
@@ -4366,7 +4398,15 @@ export class ModelHubComponent implements Component {
 		}
 		const refresh = entry.kind === "provider" ? keys("refresh", "f5") : undefined;
 		if (this.#focus === "scope") {
-			return [keys("models", "enter", "right"), upDown("providers"), search, kind, refresh, cancel("close")];
+			return [
+				keys("models", "enter", "right"),
+				upDown("providers"),
+				search,
+				kind,
+				refresh,
+				...this.#sortFooterHints(),
+				cancel("close"),
+			];
 		}
 		return [
 			keys("assign roles", "enter"),
@@ -4375,6 +4415,7 @@ export class ModelHubComponent implements Component {
 			search,
 			kind,
 			refresh,
+			...this.#sortFooterHints(),
 			cancel("close"),
 		];
 	}
