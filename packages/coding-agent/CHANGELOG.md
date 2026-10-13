@@ -20,6 +20,7 @@
 - Starting SQL session storage on PostgreSQL no longer waits for, and holds up, other processes' session writes. ([#13416](https://github.com/can1357/oh-my-pi/pull/13416) by [@sjawhar](https://github.com/sjawhar))
 - Fixed a `session.sql.dsnFile` whose contents are not a connection URL surfacing the driver's parse error (which embeds the connection string) instead of a refusal that names only the variable and the path. ([#13416](https://github.com/can1357/oh-my-pi/pull/13416) by [@sjawhar](https://github.com/sjawhar))
 - SQL and Redis session storage no longer warn `Session persistence failed: Session file changed before rewrite` when a new session writes again before its first save lands, as every `omp -p` run and every `/btw` branch did. ([#13416](https://github.com/can1357/oh-my-pi/pull/13416) by [@sjawhar](https://github.com/sjawhar))
+- Fixed SQL session storage holding Bun's default ten database connections per omp process; configured PostgreSQL and MySQL stores now use at most two and release them after five seconds of inactivity. ([#13416](https://github.com/can1357/oh-my-pi/pull/13416) by [@sjawhar](https://github.com/sjawhar))
 
 ## [18.8.3] - 2026-10-07
 
