@@ -3066,10 +3066,41 @@ export class SessionManager {
 	}
 
 	/**
+	 * Append the entries storage is missing past the durable frontier, through
+	 * the one decision at {@link #appendToCurrentSessionFile}. Only while the
+	 * frontier still describes the live entries: a journal that needs a
+	 * republish (a structural change, a rejected deferred publish) gets it
+	 * from the next append, so flushing never starts a full rewrite. Writes
+	 * nothing while an atomic batch is open, once the entries are released,
+	 * after {@link seal} unless `afterSeal` (close's terminal write), or while
+	 * an indeterminate failure waits for
+	 * {@link recoverPersistenceFromCurrentState}.
+	 */
+	#healMissingEntries(afterSeal = false): void {
+		if ((this.#released && !afterSeal) || this.#entriesReleased || this.#atomicEntryBatch) return;
+		if (this.#diskFailure instanceof SessionPersistenceIndeterminateError) return;
+		if (this.#durable?.entries !== this.#entries) return;
+		if (this.#hasUnsavedEntries()) this.#appendToCurrentSessionFile();
+	}
+
+	/** {@link #healMissingEntries} on the disk queue, then wait until a deferring backend confirms what it wrote. */
+	async #healMissingEntriesAndSettle(afterSeal = false): Promise<void> {
+		await this.#scheduleDiskWork(async () => this.#healMissingEntries(afterSeal), { ignoreEpoch: true }).catch(
+			() => undefined,
+		);
+		await this.#scheduleDiskWork(async () => {
+			await this.#storage.drain();
+		}).catch(() => undefined);
+		await Promise.all(this.#pendingAppendConfirmations);
+	}
+
+	/**
 	 * Flush pending writes. Call before switching sessions or on shutdown.
-	 * Rejects with the latched failure only while storage is not proven to hold
-	 * every entry; content a failed rewrite could not publish (a maintenance
-	 * edit, a header change) waits for the next full rewrite instead.
+	 * Entries storage is missing (an append that failed, a snapshot restored
+	 * past them) are written first. Rejects with the latched failure only
+	 * while storage is still not proven to hold every entry; content a failed
+	 * rewrite could not publish (a maintenance edit, a header change) waits
+	 * for the next full rewrite instead.
 	 */
 	async flush(): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
@@ -3087,6 +3118,7 @@ export class SessionManager {
 		}).catch(() => undefined);
 		await Promise.all(this.#pendingAppendConfirmations);
 		await this.#pendingArtifactCopy?.done;
+		if (this.#hasUnsavedEntries()) await this.#healMissingEntriesAndSettle();
 		if (this.#diskFailure && !this.#allEntriesHandedToStorage()) throw this.#diskFailure;
 	}
 
@@ -3157,17 +3189,29 @@ export class SessionManager {
 		}
 	}
 
-	/** Flush, then close the append writer. */
+	/**
+	 * Write the entries storage is missing, then close the append writer.
+	 * Rejects only while storage is still not proven to hold every entry.
+	 */
 	async close(): Promise<void> {
 		if (!this.#persist) return;
-		// Closing gives up this process's ownership claim; a later write reclaims it.
-		const claim = this.#sessionClaim;
-		claim?.release?.();
-		if (claim) claim.release = undefined;
+		try {
+			await this.#closeLocked();
+		} finally {
+			// Closing gives up this process's ownership claim; a later write
+			// reclaims it. Released last, since writing a missing entry claims it.
+			const claim = this.#sessionClaim;
+			claim?.release?.();
+			if (claim) claim.release = undefined;
+		}
+	}
+
+	async #closeLocked(): Promise<void> {
 		// Failures below are reported through the latch; whether they cost an
 		// entry is decided once everything has settled, as in flush(). A prior
 		// `flushSync` can self-conflict with this manager's own unconfirmed
 		// deferred publish, so the drain still runs and that publish can confirm.
+		if (this.#sessionFile && this.#hasUnsavedEntries()) await this.#healMissingEntriesAndSettle(true);
 		await this.#scheduleDiskWork(async () => {
 			const hadWriter = this.#writer !== undefined;
 			await this.#closeWriterHandle();
@@ -3183,6 +3227,14 @@ export class SessionManager {
 			await this.#storage.drain();
 		}).catch(() => undefined);
 		await Promise.all(this.#pendingAppendConfirmations);
+		// A deferring backend rejected an append while closing: append the
+		// missing tail again, which needs no full rewrite.
+		if (this.#sessionFile && this.#hasUnsavedEntries()) {
+			await this.#healMissingEntriesAndSettle(true);
+			await this.#scheduleDiskWork(async () => this.#closeWriterHandle(), { ignoreEpoch: true }).catch(
+				() => undefined,
+			);
+		}
 		if (
 			this.#diskFailure &&
 			this.#sessionFile &&

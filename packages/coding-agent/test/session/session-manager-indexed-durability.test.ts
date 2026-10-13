@@ -564,6 +564,17 @@ describe("indexed entries that missed the backend while whole-journal publishes 
 		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "t1", "t2", "t3"]);
 	});
 
+	it("lets close() append a turn whose append the backend rejected, while whole-journal publishes fail", async () => {
+		const { backend, manager, sessionFile } = await seededIndexedSession();
+		backend.failWrites = Number.POSITIVE_INFINITY;
+		backend.failAppends = 1;
+		manager.appendMessage({ role: "user", content: "missing", timestamp: Date.now() });
+
+		await expect(manager.close()).resolves.toBeUndefined();
+		const reopened = await reopenIndexed(backend, sessionFile);
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "missing"]);
+	});
+
 	it("keeps a title change on the branch after its append and fallback publish both failed", async () => {
 		const { backend, storage, manager, sessionFile } = await seededIndexedSession();
 		backend.failWrites = Number.POSITIVE_INFINITY;

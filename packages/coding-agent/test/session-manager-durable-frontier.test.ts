@@ -5,7 +5,7 @@
  * republish that cannot succeed. Every test reopens the session, because a
  * restart sees only what the journal holds.
  */
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -217,6 +217,26 @@ describe("an entry that missed the journal while full rewrites fail", () => {
 			entry => entry.type === "message" && entry.message.role === "user" && entry.message.content === "after",
 		);
 		expect(branch[after - 1]).toMatchObject({ type: "title_change", title: "new title" });
+	});
+});
+
+describe("an entry that missed the journal once storage recovers", () => {
+	it("is appended by flush(), which then resolves", async () => {
+		const { manager, sessionDir, sessionFile } = await fileSession();
+		failNextFileWrite();
+		manager.appendMessage(userTurn("missing"));
+
+		await expect(manager.flush()).resolves.toBeUndefined();
+		expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual(["before", "missing"]);
+	});
+
+	it("is appended by close(), which then resolves", async () => {
+		const { manager, sessionDir, sessionFile } = await fileSession();
+		failNextFileWrite();
+		manager.appendMessage(userTurn("missing"));
+
+		await expect(manager.close()).resolves.toBeUndefined();
+		expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual(["before", "missing"]);
 	});
 });
 
