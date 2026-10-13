@@ -401,10 +401,6 @@ export class SessionTools {
 	#promptModelKey: string | undefined;
 	#rebuildSystemPrompt: SessionToolsOptions["rebuildSystemPrompt"];
 	#getMcpServerInstructions: SessionToolsOptions["getMcpServerInstructions"];
-	#deliveredMcpInstructionBase: { promptDigest: string; instructions: ReadonlyMap<string, string> } = {
-		promptDigest: "",
-		instructions: new Map(),
-	};
 	/**
 	 * Session-lifetime factory shared by every custom-tool wrapper. Defining it
 	 * outside the refresh frame prevents wrappers from retaining rollback maps
@@ -1358,12 +1354,6 @@ export class SessionTools {
 	recordPrimaryModelCall(prompt: string[]): void {
 		this.#restoredTranscript = undefined;
 		this.#capturedPromptDigest = systemPromptDigest(this.baseOfSystemPrompt(prompt));
-		if (prompt === this.#baseSystemPrompt) {
-			this.#deliveredMcpInstructionBase = {
-				promptDigest: this.#capturedPromptDigest,
-				instructions: this.#promptSurface.mcpInstructions,
-			};
-		}
 	}
 
 	/**
@@ -1512,7 +1502,6 @@ export class SessionTools {
 	resetAnnouncedMounts(): void {
 		this.#announcedMounts.clear();
 		this.#announcedMountsSeeded = false;
-		this.#deliveredMcpInstructionBase = { promptDigest: "", instructions: new Map() };
 	}
 
 	/**
@@ -1769,19 +1758,17 @@ export class SessionTools {
 		  }
 		| undefined {
 		if (!this.#xdev?.codeMode) return undefined;
-		const baseline = baseDelivered
-			? {
-					promptDigest: systemPromptDigest(this.#baseSystemPrompt),
-					instructions: this.#promptSurface.mcpInstructions,
-				}
-			: this.#deliveredMcpInstructionBase;
-		const known = new Map(baseline.instructions);
+		// A replacement prompt carries none of the old system text. Only its
+		// surviving notices count as delivered instructions; base digests limit
+		// replay only when that base is actually present in the outgoing request.
+		const base = baseDelivered ? systemPromptDigest(this.#baseSystemPrompt) : "";
+		const known = new Map(baseDelivered ? this.#promptSurface.mcpInstructions : undefined);
 		for (const message of this.#host.agent.state.messages) {
 			if (message.role !== "custom" || message.customType !== XDEV_MOUNT_NOTICE_MESSAGE_TYPE) continue;
 			const details = message.details;
 			if (
 				!isRecord(details) ||
-				details.mcpInstructionBase !== baseline.promptDigest ||
+				(baseDelivered && details.mcpInstructionBase !== base) ||
 				!Array.isArray(details.mcpInstructions)
 			)
 				continue;
@@ -1797,7 +1784,7 @@ export class SessionTools {
 		const live = this.#getMcpServerInstructions?.() ?? new Map<string, string>();
 		const changed = [...live].flatMap(([name, text]) => (known.get(name) === text ? [] : [{ name, text }]));
 		const removed = [...known.keys()].filter(name => !live.has(name));
-		return changed.length || removed.length ? { base: baseline.promptDigest, changed, removed } : undefined;
+		return changed.length || removed.length ? { base, changed, removed } : undefined;
 	}
 
 	#projectPendingXdevMountNotice(baseCatalogDelivered: boolean): XdevMountNoticeProjection | undefined {

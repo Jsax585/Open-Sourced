@@ -542,6 +542,65 @@ describe("provider-neutral Code Mode", () => {
 		expect(JSON.stringify(request.messages)).toContain("Use project=delta.");
 	});
 
+	it("delivers a nonempty MCP baseline when the outgoing override hides it", async () => {
+		const manager = new MCPManager("/tmp");
+		cleanup.push(() => manager.disconnectAll());
+		const instructions = new Map([["existing", "Use project=existing-baseline."]]);
+		spyOn(manager, "getServerInstructions").mockImplementation(() => new Map(instructions));
+		let override = false;
+		const extension: ExtensionFactory = pi => {
+			pi.on("before_agent_start", () =>
+				override ? { systemPrompt: ["Replacement without server instructions."] } : undefined,
+			);
+		};
+		const { session } = await fixture({ enableMCP: true, mcpManager: manager, extensions: [extension] });
+		await initializeExtensions(session, {
+			reportSendError: (_action, error) => {
+				throw error;
+			},
+			reportRuntimeError: error => {
+				throw error;
+			},
+		});
+		const mock = createMockModel({ provider: "anthropic", handler: { content: ["Ready."] } });
+		session.agent.streamFn = mock.stream;
+		await session.prompt("Use the original instruction baseline.");
+		expect(mock.calls[0]!.context.systemPrompt?.join("\n")).toContain("Use project=existing-baseline.");
+		expect(JSON.stringify(mock.calls[0]!.context.messages)).not.toContain("Use project=existing-baseline.");
+		override = true;
+		await session.prompt("Replace the system prompt without changing MCP instructions.");
+		const replaced = mock.calls.at(-1)!.context;
+		expect(replaced.systemPrompt).toEqual(["Replacement without server instructions."]);
+		expect(JSON.stringify(replaced.messages)).toContain("Use project=existing-baseline.");
+		const delivered = session.messages.findLast(
+			message => message.role === "custom" && message.customType === "xdev-mount-notice",
+		);
+		if (delivered?.role !== "custom") throw new Error("Missing instruction baseline notice");
+		expect(delivered.details).toMatchObject({ mcpInstructions: [["existing", "Use project=existing-baseline."]] });
+		await session.prompt("Keep the replacement with the same surviving instruction notice.");
+		expect(
+			session.messages.filter(message => message.role === "custom" && message.customType === "xdev-mount-notice"),
+		).toHaveLength(1);
+		// Rebuilding the hidden base must not invalidate instructions still present in a notice.
+		const before = session.systemPrompt.join("\n");
+		await session.sessionManager.setAdditionalDirectories(["/tmp"]);
+		await session.refreshBaseSystemPrompt();
+		expect(session.systemPrompt.join("\n")).not.toBe(before);
+		await session.prompt("The surviving notice still supplies the unchanged server instructions.");
+		expect(JSON.stringify(mock.calls.at(-1)!.context.messages)).toContain("Use project=existing-baseline.");
+		expect(
+			session.messages.filter(message => message.role === "custom" && message.customType === "xdev-mount-notice"),
+		).toHaveLength(1);
+		// Dropping that notice must trigger re-delivery, not credit a previous system prompt.
+		session.agent.replaceMessages(session.messages.filter(message => message !== delivered));
+		await session.prompt("Restore the instructions missing from this replacement request.");
+		const restored = session.messages.findLast(
+			message => message.role === "custom" && message.customType === "xdev-mount-notice",
+		);
+		if (restored?.role !== "custom") throw new Error("Missing re-delivered baseline instructions");
+		expect(restored.content).toContain("Use project=existing-baseline.");
+	});
+
 	it("does not treat another server's surviving notice as delivery of dropped instructions", async () => {
 		const manager = new MCPManager("/tmp");
 		cleanup.push(() => manager.disconnectAll());
