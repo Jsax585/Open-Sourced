@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added FriendliAI API-key login support ([#9410](https://github.com/can1357/oh-my-pi/pull/9410) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
+- Added FriendliAI API-key login and environment authentication through `FRIENDLI_API_KEY` or the documented `FRIENDLI_TOKEN` variable ([#9410](https://github.com/can1357/oh-my-pi/pull/9410) by [@Lee-Si-Yoon](https://github.com/Lee-Si-Yoon)).
 
 ### Removed
 
