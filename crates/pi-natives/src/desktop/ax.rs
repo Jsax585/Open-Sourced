@@ -388,6 +388,24 @@ impl AxRegistry {
 		}
 	}
 
+	/// Stops `handle`, an element of `reference`'s window, from being re-found
+	/// by the fields the ref that names it was read with, as after a call sent
+	/// to it that may have changed them.
+	pub(crate) fn forget_element_identity(&mut self, reference: &str, handle: &AxHandle) {
+		let Some(owner) = self
+			.id(reference)
+			.and_then(|id| self.entries.get(&id))
+			.and_then(|entry| self.refs.get(&entry.target_key))
+			.and_then(|refs| refs.get(handle))
+			.copied()
+		else {
+			return;
+		};
+		if let Some(entry) = self.entries.get_mut(&owner) {
+			entry.identity = None;
+		}
+	}
+
 	/// Drops `reference`'s re-find fields when a read of its element found
 	/// them changed: they no longer describe it.
 	pub(crate) fn check_identity(&mut self, reference: &str, read: Option<&AxIdentity>) {

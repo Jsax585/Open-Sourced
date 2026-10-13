@@ -754,10 +754,12 @@ impl Worker {
 		token.check()?;
 		let result = op(self, found.as_ref().unwrap_or(&handle));
 		let refound = found.is_some();
-		if result.is_ok()
-			&& let Some(found) = found
-		{
-			self.registry.rebind(reference, found);
+		if let Some(found) = found {
+			// `op` was sent to it, so a ref a read gave it is spent too.
+			self.registry.forget_element_identity(reference, &found);
+			if result.is_ok() {
+				self.registry.rebind(reference, found);
+			}
 		}
 		self.registry.forget_identity(reference);
 		result.map(|value| (value, refound))
@@ -2817,6 +2819,22 @@ mod capture_tests {
 		let source = CancellationSource::default();
 		assert_eq!(perform(&mut worker, "e2", "bogus", &source), Err(ErrorCode::AxFailed));
 		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
+		assert!(tree.lock().pressed.is_empty());
+	}
+
+	#[test]
+	fn a_call_that_fails_on_an_element_another_ref_names_spends_that_ref_too() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
+		worker
+			.snapshot(&Target::Window(WAYLAND_ID.to_string()), &AxSnapshotOptions::default())
+			.unwrap();
+		let source = CancellationSource::default();
+		assert_eq!(perform(&mut worker, "e2", "bogus", &source), Err(ErrorCode::AxFailed));
+		// The failed call may have changed `e4`'s element before the app
+		// rebuilt it.
+		rebuild(&tree, 4, &[(5, "Go"), (3, "Stop")]);
+		assert_eq!(press(&mut worker, "e4"), Err(ErrorCode::StaleRef));
 		assert!(tree.lock().pressed.is_empty());
 	}
 
