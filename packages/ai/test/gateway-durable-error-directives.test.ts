@@ -104,6 +104,7 @@ for (const [status, directive, disposition] of [
 	[400, "true", "provider_transient"],
 	[503, "false", "request_terminal"],
 	[409, undefined, "provider_transient"],
+	[409, "false", "request_terminal"],
 ] as const) {
 	it(`preserves ${status}/${directive ?? "default"} retry intent after a real provider stream is finalized and serialized`, async () => {
 		const model = buildModel({
@@ -140,5 +141,39 @@ for (const [status, directive, disposition] of [
 		const durable: unknown = JSON.parse(JSON.stringify(result));
 		expect(result.stopReason).toBe("error");
 		expect(classifyGatewayError(durable)).toMatchObject({ status, disposition });
+	});
+}
+
+for (const [status, owner, disposition] of [
+	[404, "model", "model_unavailable"],
+	[503, "provider", "provider_unavailable"],
+] as const) {
+	it(`preserves structured model rejection without downgrading an authoritative ${status} after provider finalization`, async () => {
+		const model = buildModel({
+			id: "fixture",
+			name: "Fixture",
+			api: "openai-completions",
+			provider: "unit-model-rejection",
+			baseUrl: "https://models.example/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1000,
+			maxTokens: 100,
+		});
+		const result = await streamOpenAICompletions(
+			model,
+			{ messages: [{ role: "user", content: "fixture", timestamp: 0 }] },
+			{
+				apiKey: "fixture-key",
+				providerRetryWait: async () => {},
+				fetch: async () =>
+					Response.json(
+						{ error: { code: "model_not_found", message: "Resource missing", type: "api_error" } },
+					{ status, headers: { "retry-after-ms": "0" } },
+					),
+			},
+		).result();
+		expect(classifyGatewayError(JSON.parse(JSON.stringify(result)))).toMatchObject({ status, owner, disposition });
 	});
 }
