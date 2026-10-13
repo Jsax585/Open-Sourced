@@ -57,6 +57,24 @@ function restoreEnv(name: string, value: string | undefined): void {
 	Bun.env[name] = value;
 }
 
+let restoreDebugRewriteGlobals: (() => void) | undefined;
+
+function captureDebugRewriteGlobals(): () => void {
+	const previousCwd = process.cwd();
+	const previousDebug = Bun.env.PI_REQ_DEBUG;
+	const previousWebSocket = global.WebSocket;
+	const restore = () => {
+		// A timed-out fixture may resume after afterEach has restored its globals.
+		if (restoreDebugRewriteGlobals !== restore) return;
+		restoreDebugRewriteGlobals = undefined;
+		process.chdir(previousCwd);
+		restoreEnv("PI_REQ_DEBUG", previousDebug);
+		global.WebSocket = previousWebSocket;
+	};
+	restoreDebugRewriteGlobals = restore;
+	return restore;
+}
+
 beforeEach(() => {
 	for (const key in originalProxyEnv) delete Bun.env[key];
 	__resetProxyCache();
@@ -64,6 +82,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	restoreDebugRewriteGlobals?.();
 	global.WebSocket = originalWebSocket;
 	setAgentDir(originalAgentDir);
 	vi.useRealTimers();
@@ -9992,9 +10011,7 @@ describe("openai-codex streaming", () => {
 
 	it("debug rewrite reader drains a held request dump while flooding the websocket", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-debug-rewrite-reader-success-");
-		const previousCwd = process.cwd();
-		const previousDebug = Bun.env.PI_REQ_DEBUG;
-		const previousWebSocket = global.WebSocket;
+		const restoreGlobals = captureDebugRewriteGlobals();
 		const previousBunWrite = Bun.write;
 		const abortController = new AbortController();
 		const providerSessionState = new Map<string, ProviderSessionState>();
@@ -10056,6 +10073,7 @@ describe("openai-codex streaming", () => {
 		const forwardingWrite = async (...args: Parameters<typeof Bun.write>) => {
 			const destination = args[0] as unknown;
 			if (typeof destination === "string" && /(^|[/\\])rr-session-\d+\.json$/.test(destination)) {
+				args[0] = path.resolve(destination);
 				const input = args[1] as unknown;
 				if (typeof input !== "string") throw new Error("expected serialized request debug dump");
 				capturedWrites.push({ pathname: destination, content: input });
@@ -10312,23 +10330,19 @@ describe("openai-codex streaming", () => {
 			await assertDumpMatchesWire(1);
 		} finally {
 			writeSpy.mockRestore();
+			restoreGlobals();
 			rewriteEntered.resolve();
 			releaseRewrite.resolve();
 			abortController.abort();
 			await Promise.allSettled([...startedPromises, ...responseTasks]);
 			for (const state of providerSessionState.values()) state.close();
-			process.chdir(previousCwd);
-			restoreEnv("PI_REQ_DEBUG", previousDebug);
-			global.WebSocket = previousWebSocket;
 			await tempDir.remove();
 		}
 	}, 15_000);
 
 	it("debug rewrite reader keeps reading after a rejected request dump rewrite", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-debug-rewrite-reader-reject-");
-		const previousCwd = process.cwd();
-		const previousDebug = Bun.env.PI_REQ_DEBUG;
-		const previousWebSocket = global.WebSocket;
+		const restoreGlobals = captureDebugRewriteGlobals();
 		const previousBunWrite = Bun.write;
 		const abortController = new AbortController();
 		const providerSessionState = new Map<string, ProviderSessionState>();
@@ -10368,6 +10382,7 @@ describe("openai-codex streaming", () => {
 		const forwardingWrite = async (...args: Parameters<typeof Bun.write>) => {
 			const destination = args[0] as unknown;
 			if (typeof destination === "string" && /(^|[/\\])rr-session-\d+\.json$/.test(destination)) {
+				args[0] = path.resolve(destination);
 				const input = args[1] as unknown;
 				if (typeof input !== "string") throw new Error("expected serialized request debug dump");
 				capturedWrites.push({ pathname: destination, content: input });
@@ -10588,24 +10603,20 @@ describe("openai-codex streaming", () => {
 			await assertDumpMatchesWire(1);
 		} finally {
 			writeSpy.mockRestore();
+			restoreGlobals();
 			rewriteEntered.resolve();
 			partialEmitted.resolve();
 			releaseRewrite.resolve();
 			abortController.abort();
 			await Promise.allSettled([...startedPromises, ...responseTasks]);
 			for (const state of providerSessionState.values()) state.close();
-			process.chdir(previousCwd);
-			restoreEnv("PI_REQ_DEBUG", previousDebug);
-			global.WebSocket = previousWebSocket;
 			await tempDir.remove();
 		}
 	}, 15_000);
 
 	it("debug rewrite reader aborts with a held request dump rewrite", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-debug-rewrite-reader-abort-");
-		const previousCwd = process.cwd();
-		const previousDebug = Bun.env.PI_REQ_DEBUG;
-		const previousWebSocket = global.WebSocket;
+		const restoreGlobals = captureDebugRewriteGlobals();
 		const previousBunWrite = Bun.write;
 		const abortController = new AbortController();
 		const followupAbortController = new AbortController();
@@ -10645,6 +10656,7 @@ describe("openai-codex streaming", () => {
 		const forwardingWrite = async (...args: Parameters<typeof Bun.write>) => {
 			const destination = args[0] as unknown;
 			if (typeof destination === "string" && /(^|[/\\])rr-session-\d+\.json$/.test(destination)) {
+				args[0] = path.resolve(destination);
 				const input = args[1] as unknown;
 				if (typeof input !== "string") throw new Error("expected serialized request debug dump");
 				capturedWrites.push({ pathname: destination, content: input });
@@ -10868,6 +10880,7 @@ describe("openai-codex streaming", () => {
 			await assertDumpMatchesWire(1);
 		} finally {
 			writeSpy.mockRestore();
+			restoreGlobals();
 			rewriteEntered.resolve();
 			partialEmitted.resolve();
 			releaseRewrite.resolve();
@@ -10875,9 +10888,6 @@ describe("openai-codex streaming", () => {
 			followupAbortController.abort();
 			await Promise.allSettled([...startedPromises, ...responseTasks]);
 			for (const state of providerSessionState.values()) state.close();
-			process.chdir(previousCwd);
-			restoreEnv("PI_REQ_DEBUG", previousDebug);
-			global.WebSocket = previousWebSocket;
 			await tempDir.remove();
 		}
 	}, 15_000);
