@@ -9,11 +9,13 @@
 ### Added
 
 - Added a note to relay `browser.open` results when the OMP Browser Relay extension in Chrome was installed by an older omp, naming `omp browser-relay install` and a reload; `omp browser-relay install` now records the installing omp's version in the extension ([#15105](https://github.com/can1357/oh-my-pi/pull/15105) by [@will-bogusz](https://github.com/will-bogusz))
+- Added file choosers to browser `tab.dialog()` and `tab.handleDialog()` on Chromium: a chooser a call opens is held instead of raising the OS file dialog, reported as `file-chooser`, and answered with `handleDialog({ accept: true, files })` or cancelled with `{ accept: false }` ([#15555](https://github.com/can1357/oh-my-pi/pull/15555) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Changed
 
 - A relay `browser.open` without `app.target` now opens its own background tab instead of adopting the visible one (after reinstalling the relay extension; older ones select it), and `browser.close` closes it; `app.target` still borrows an existing tab ([#15110](https://github.com/can1357/oh-my-pi/pull/15110) by [@will-bogusz](https://github.com/will-bogusz))
 - Browser `webmcp*` helpers read Chrome's native WebMCP when called instead of injecting a script and `modelContext` polyfill into every page omp drives, and say why when Chrome offers a page none; Tern tabs no longer support them ([#15556](https://github.com/can1357/oh-my-pi/pull/15556) by [@will-bogusz](https://github.com/will-bogusz))
+- Changed alerts in connected and relay Chromium browsers to stay open for the user instead of being accepted automatically ([#15555](https://github.com/can1357/oh-my-pi/pull/15555) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
 
@@ -33,6 +35,8 @@
 - Fixed `webmcpInvoke` returning an empty error when a page's tool throws, and leaving a timed-out invocation running in the page ([#15556](https://github.com/can1357/oh-my-pi/pull/15556) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed popups and `target=_blank` tabs from a relay tab omp drives taking the user's selected tab or keyboard focus while omp could not reach them; with the reinstalled extension omp owns and drives them ([#15590](https://github.com/can1357/oh-my-pi/pull/15590) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed keys typed in another app going to a popup's page on macOS when a relay tab omp drives opened that popup: Chrome made itself the active app and kept it; the relay now puts the user's app back in front within milliseconds ([#15611](https://github.com/can1357/oh-my-pi/pull/15611) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed browser calls on Chromium hanging until the cell timed out, and the tab then being killed, when the page opened a confirm or prompt; other calls now fail at once naming `tab.handleDialog()` ([#15555](https://github.com/can1357/oh-my-pi/pull/15555) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed a Chromium browser tab being killed, its page still stopped in a JavaScript dialog, after a call timed out behind that dialog; omp now dismisses it and the tab recovers ([#15555](https://github.com/can1357/oh-my-pi/pull/15555) by [@will-bogusz](https://github.com/will-bogusz))
 - Browser (Chrome tabs): a click or drag that timed out on a page busy in its own script no longer completes on its target once the page answers, a timed-out key combo sends no further key, and a call or run cut off mid-gesture releases the mouse button or keys it held instead of leaving them down in the tab ([#15559](https://github.com/can1357/oh-my-pi/pull/15559) by [@will-bogusz](https://github.com/will-bogusz))
 - Relay mode: `tab.waitForSelector`, `tab.evaluate` and `tab.goto` no longer fail after 20 s when the page or server takes longer; like on a launched Chrome they now run to the call's own timeout, up to omp's 60 s protocol timeout, and a command Chrome never answers names itself and its tab ([#15559](https://github.com/can1357/oh-my-pi/pull/15559) by [@will-bogusz](https://github.com/will-bogusz))
 
