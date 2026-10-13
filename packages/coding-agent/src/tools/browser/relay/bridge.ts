@@ -24,7 +24,12 @@
 import { createHash } from "node:crypto";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
 import { BROWSER_PROTOCOL_TIMEOUT_MS } from "../launch";
-import { DISCARDED_TABS_PROTOCOL_VERSION, isOlderOmpVersion, isOmpVersion } from "./protocol";
+import {
+	DISCARDED_TABS_PROTOCOL_VERSION,
+	isOlderOmpVersion,
+	isOmpVersion,
+	RELAY_CDP_PROTOCOL_VERSION,
+} from "./protocol";
 import type { ExtToRelayMessage, RelayRpcRequest, RelayToExtMessage, TabSnapshot } from "./protocol";
 
 /** Transport-agnostic websocket surface the bridge writes to. */
@@ -403,6 +408,7 @@ export class RelayBridge {
 			webSocketDebuggerUrl: wsUrl,
 			ompRelayVersion: VERSION,
 			ompRelayDiscardedTabsProtocol: String(DISCARDED_TABS_PROTOCOL_VERSION),
+			ompRelayCdpProtocol: String(RELAY_CDP_PROTOCOL_VERSION),
 			ompExtensionDiscardedTabsProtocol: String(hasCompatibleExtension ? DISCARDED_TABS_PROTOCOL_VERSION : 0),
 			ompRelayCdpClients: this.#conns.size,
 			ompExtensionVersion: oldestExtensionOmp ?? "",
