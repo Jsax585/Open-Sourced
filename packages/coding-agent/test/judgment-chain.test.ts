@@ -5,6 +5,7 @@ import type { ChatUsageEvent } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, ChoiceQuestion, Model, NoulQuestion } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import type { JudgmentConfig } from "@oh-my-pi/pi-catalog/types";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -337,7 +338,7 @@ describe("ChainJudge", () => {
 		expect(new ChainJudge({ settings, registry, purpose: "test" }).primaryModel()?.id).toBe(JEV_PREVIEW.id);
 	});
 
-	const EVAL_JUDGMENT = {
+	const EVAL_JUDGMENT: JudgmentConfig = {
 		route: "/v1/evaluate",
 		typeMap: { noul: "boolean" },
 		valueMap: { noul: "probability" },
@@ -367,8 +368,8 @@ describe("ChainJudge", () => {
 			id: "jev-custom-route",
 			provider: "custom-judge",
 			baseUrl: "https://custom.example",
-			judgment: EVAL_JUDGMENT,
 		});
+		nativeModel.judgment = EVAL_JUDGMENT;
 
 		const settings = Settings.isolated({
 			modelRoles: { judge: "custom-judge/jev-custom-route" },

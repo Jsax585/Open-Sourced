@@ -169,7 +169,7 @@ Loading models.yml checks a `modelOverrides` `kind` only against an api the file
 
 ### Vercel AI Gateway evaluation models
 
-Discovery maps Vercel AI Gateway `type: "evaluation"` rows to `api: typesafe` judge models routing to `/v1/evaluate`. The six ids (`convaiinnovations/laya`, `laya-free`, `liquid/d1`, `microsoft/microsoft-decision-1`, `openai/gpt-6-luna-decisions`, `typesafe-ai/jev`) come from the public `/v1/models`.
+Discovery maps Vercel AI Gateway `type: "evaluation"` rows to `api: typesafe` judge models routing to `/v1/evaluate`. The six ids (`convaiinnovations/laya`, `convaiinnovations/laya-free`, `liquid/d1`, `microsoft/microsoft-decision-1`, `openai/gpt-6-luna-decisions`, `typesafe-ai/jev`) come from the public `/v1/models`.
 
 The discovery mapper carries upstream fields only; the ai judgment decorator applies the KDL contract (`boolean`/`probability`, camelCase usage). `choice` and `score` questions are sent canonically and answered natively. Cost reprices from the catalog because Vercel reports billed cost at `providerMetadata.gateway.cost` (outside usage).
 

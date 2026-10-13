@@ -87,7 +87,8 @@ function stringRecord<K extends string = string>(value: unknown, allow?: readonl
 /**
  * Narrow a compiled `judgment` axis value to a JudgmentConfig. Unknown keys
  * are ignored; `undefined` (absent, non-object, or no recognized field)
- * leaves the spec value in place.
+ * makes the caller drop any spec value, so stale policy cannot survive
+ * an api-switched rebuild.
  */
 function judgmentConfig(value: unknown): JudgmentConfig | undefined {
 	const payload = objectPayload(value);
@@ -130,6 +131,8 @@ function applyCatalogAssignments<TApi extends Api>(model: Model<TApi>, catalog: 
 	if (judgment !== undefined) {
 		const prior = model.judgment;
 		model.judgment = { ...judgment, ...prior };
+	} else {
+		delete model.judgment;
 	}
 	if (catalog.contextWindowAuthoritative === true) {
 		model.contextWindowAuthoritative = true;
