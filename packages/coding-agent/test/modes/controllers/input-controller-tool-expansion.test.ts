@@ -56,7 +56,6 @@ describe("InputController tool activity visibility", () => {
 		const pendingUserMessage = { kind: "pending-user" };
 		const loadingIndicator = { kind: "loading" };
 		const assistant = new AssistantMessageComponent();
-		const setToolResultImagesVisible = vi.spyOn(assistant, "setToolResultImagesVisible");
 		const children = [pendingUserMessage, assistant, loadingIndicator];
 		const clear = vi.fn();
 		const addChild = vi.fn();
@@ -91,7 +90,6 @@ describe("InputController tool activity visibility", () => {
 		expect(resetDisplay).toHaveBeenCalledTimes(1);
 		expect(clearInlineImages.mock.invocationCallOrder[0]).toBeLessThan(resetDisplay.mock.invocationCallOrder[0]);
 		expect(showStatus).toHaveBeenLastCalledWith("Tool activity: hidden");
-		expect(setToolResultImagesVisible).toHaveBeenLastCalledWith(false);
 		expect(setToolActivityVisible).toHaveBeenLastCalledWith(false);
 
 		controller.toggleToolActivityVisibility();
@@ -106,7 +104,6 @@ describe("InputController tool activity visibility", () => {
 		expect(clearInlineImages).toHaveBeenCalledTimes(1);
 		expect(resetDisplay).toHaveBeenCalledTimes(2);
 		expect(showStatus).toHaveBeenLastCalledWith("Tool activity: visible");
-		expect(setToolResultImagesVisible).toHaveBeenLastCalledWith(true);
 		expect(setToolActivityVisible).toHaveBeenLastCalledWith(true);
 	});
 });

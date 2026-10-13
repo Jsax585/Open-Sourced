@@ -4,6 +4,7 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AssistantThinkingRenderer } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { clearMermaidCache } from "@oh-my-pi/pi-tui/theme/mermaid-cache";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -373,18 +374,19 @@ describe("AssistantMessageComponent images", () => {
 		expect(Bun.stripANSI(component.render(80).join("\n"))).not.toContain("[Image: image/png]");
 	});
 
-	it("converts WebP tool images for Kitty terminal rendering", async () => {
+	it("converts WebP read images for Kitty terminal rendering", async () => {
 		const webpBase64 = Buffer.from(
 			await Bun.file(path.join(import.meta.dir, "../../../../../assets/python.webp")).arrayBuffer(),
 		).toBase64();
 		setTerminalImageProtocol(ImageProtocol.Kitty);
 
 		const converted = Promise.withResolvers<void>();
-		const component = new AssistantMessageComponent(createAssistantMessage("done"), false, () => converted.resolve());
-		component.setToolResultImages("read-1", [{ type: "image", data: webpBase64, mimeType: "image/webp" }]);
+		const group = new ReadToolGroupComponent({ ui: { requestRender: () => converted.resolve() } });
+		group.updateArgs({ path: "python.webp" }, "read-1");
+		group.updateResult({ content: [{ type: "image", data: webpBase64, mimeType: "image/webp" }] }, false, "read-1");
 
 		await converted.promise;
-		const rendered = component.render(80).join("\n");
+		const rendered = group.render(80).join("\n");
 
 		expect(rendered).toContain("\x1b_G");
 		expect(rendered).not.toContain("[Image: image/webp]");

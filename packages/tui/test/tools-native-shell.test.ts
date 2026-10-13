@@ -1,7 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { TspKind, TspSpan } from "@oh-my-pi/pi-wire";
-import { AssistantMessageComponent } from "../src/chat/assistant-message";
 import { BashExecutionComponent } from "../src/chat/bash-execution";
 import { ReadToolGroupComponent } from "../src/chat/read-tool-group";
 import { ToolExecutionComponent } from "../src/chat/tool-execution";
@@ -300,65 +299,48 @@ describe("read image results", () => {
 		const image: ImageContent = { type: "image", data: PNG, mimeType: "image/png" };
 		const withMedia = cx(["tool", "ansi", "code", "image", "media"]);
 		const withoutMedia = cx(["tool", "ansi", "code", "image"]);
-		const turn = (paths: Record<string, string>): AssistantMessage => ({
-			role: "assistant",
-			content: Object.entries(paths).map(([id, path]) => ({
-				type: "toolCall",
-				id,
-				name: "read",
-				arguments: { path },
-			})),
-			api: "anthropic-messages",
-			provider: "anthropic",
-			model: "claude-sonnet-4-5",
-			stopReason: "toolUse",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			timestamp: 1,
-		});
 
 		describe("house.obj, house.mtl, brick.png", () => {
-			// As the session wires it: each result with an image or a `mediaPath`; the .mtl has neither.
-			const assistant = () => {
-				const component = new AssistantMessageComponent(
-					turn({ obj: "house.obj", mtl: "house.mtl", png: "brick.png" }),
+			// As the read tool emits them: a `mediaPath` on each whole viewable file; the .mtl sidecar has none.
+			const group = () => {
+				const component = new ReadToolGroupComponent({ ui: { requestRender: () => {} } });
+				component.updateArgs({ path: "house.obj" }, "obj");
+				component.updateArgs({ path: "house.mtl" }, "mtl");
+				component.updateArgs({ path: "brick.png" }, "png");
+				component.updateResult(
+					{ content: [{ type: "text", text: "v 0 0 0" }], details: { mediaPath: "/repo/house.obj" } },
+					false,
+					"obj",
 				);
-				component.setToolResultImages("obj", [], "/repo/house.obj");
-				component.setToolResultImages("png", [image], "/repo/brick.png");
+				component.updateResult({ content: [{ type: "text", text: "newmtl brick" }] }, false, "mtl");
+				component.updateResult(
+					{
+						content: [{ type: "text", text: "Read image" }, image],
+						details: { resolvedPath: "/repo/brick.png", mediaPath: "/repo/brick.png" },
+					},
+					false,
+					"png",
+				);
 				return component;
 			};
 
 			it("show the model and the texture as media nodes, nothing for the sidecar", () => {
-				const message = assistant().describe(withMedia);
-				expect(collect(message.c, "media").map(n => props(n).path)).toEqual(["/repo/house.obj", "/repo/brick.png"]);
-				expect(collect(message.c, "image")).toHaveLength(0);
+				const rows = group().describe(withMedia);
+				expect(collect(rows.c, "media").map(n => props(n).path)).toEqual(["/repo/house.obj", "/repo/brick.png"]);
+				expect(collect(rows.c, "image")).toHaveLength(0);
 			});
 
 			it("upload only the texture's blob without media support", () => {
-				const message = assistant().describe(withoutMedia);
-				expect(collect(message.c, "media")).toHaveLength(0);
-				expect(collect(message.c, "image")).toHaveLength(1);
+				const rows = group().describe(withoutMedia);
+				expect(collect(rows.c, "media")).toHaveLength(0);
+				expect(collect(rows.c, "image")).toHaveLength(1);
 			});
 		});
 
 		describe("one SVG read as `:img` and as source", () => {
 			const svg = "/repo/crates/icons/svg/logo.svg";
-			const assistant = () => {
-				const component = new AssistantMessageComponent(
-					turn({ img: "crates/icons/svg/logo.svg:img", src: "crates/icons/svg/logo.svg" }),
-				);
-				component.setToolResultImages("img", [image], svg);
-				component.setToolResultImages("src", [], svg);
-				return component;
-			};
 			const group = () => {
-				const component = new ReadToolGroupComponent();
+				const component = new ReadToolGroupComponent({ ui: { requestRender: () => {} } });
 				component.updateArgs({ path: "crates/icons/svg/logo.svg:img" }, "img");
 				component.updateArgs({ path: "crates/icons/svg/logo.svg" }, "src");
 				component.updateResult(
@@ -377,23 +359,20 @@ describe("read image results", () => {
 				return component;
 			};
 
-			it("show the file once and plain rows for both reads", () => {
-				const message = assistant().describe(withMedia);
-				const media = collect(message.c, "media");
+			it("show the file once under the first of its rows", () => {
+				const rows = group().describe(withMedia);
+				const media = collect(rows.c, "media");
 				expect(media).toHaveLength(1);
 				expect(props(media[0]).path).toBe(svg);
-				expect(media[0]?.key).toBe("rimg");
-				expect(collect(message.c, "image")).toHaveLength(0);
-				const rows = group().describe(withMedia);
-				expect(collect(rows.c, "media")).toHaveLength(0);
+				expect(media[0]?.key).toBe("mediaimg");
 				expect(collect(rows.c, "image")).toHaveLength(0);
 			});
 
 			it("upload one blob image without media support", () => {
-				const message = assistant().describe(withoutMedia);
-				expect(collect(message.c, "media")).toHaveLength(0);
-				expect(collect(message.c, "image")).toHaveLength(1);
-				expect(collect(group().describe(withoutMedia).c, "image")).toHaveLength(0);
+				const rows = group().describe(withoutMedia);
+				expect(collect(rows.c, "media")).toHaveLength(0);
+				// The `:img` read's raster; the source read lacks proof of a whole document, so no SVG image.
+				expect(collect(rows.c, "image")).toHaveLength(1);
 			});
 		});
 	});

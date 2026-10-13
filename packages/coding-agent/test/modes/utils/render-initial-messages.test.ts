@@ -16,7 +16,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { kStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext, RenderSessionContextOptions } from "@oh-my-pi/pi-coding-agent/modes/types";
@@ -445,15 +445,15 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 		await new UiHelpers(ctx).renderInitialMessages();
 
 		expect(hasImageComponent(chatContainer)).toBe(false);
-		const assistant = chatContainer.children.find(
-			(child): child is AssistantMessageComponent => child instanceof AssistantMessageComponent,
+		const group = chatContainer.children.find(
+			(child): child is ReadToolGroupComponent => child instanceof ReadToolGroupComponent,
 		);
-		expect(assistant).toBeDefined();
-		assistant?.setImagesVisible(true);
-		expect(hasImageComponent(chatContainer)).toBe(true);
+		expect(group).toBeDefined();
+		group?.setShowImages(true);
+		expect(hasImageComponent(group!)).toBe(true);
 	});
 
-	it("preserves tool-result images while tool activity is hidden so revealing it can replay the image", async () => {
+	it("keeps read images under their row while tool activity is hidden so revealing it draws them again", async () => {
 		await Settings.init({ inMemory: true, overrides: { "terminal.showImages": true } });
 		setTerminalImageProtocol(ImageProtocol.Sixel);
 		const transcript = transcriptWith([
@@ -471,13 +471,15 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 
 		await new UiHelpers(ctx).renderInitialMessages();
 
-		expect(hasImageComponent(chatContainer)).toBe(false);
-		const assistant = chatContainer.children.find(
-			(child): child is AssistantMessageComponent => child instanceof AssistantMessageComponent,
+		const group = chatContainer.children.find(
+			(child): child is ReadToolGroupComponent => child instanceof ReadToolGroupComponent,
 		);
-		expect(assistant).toBeDefined();
-		assistant?.setToolResultImagesVisible(true);
-		expect(hasImageComponent(chatContainer)).toBe(true);
+		expect(group).toBeDefined();
+		// Hidden tool activity draws nothing — the image rows included.
+		expect(group!.render(100)).toEqual([]);
+		chatContainer.setToolActivityVisible(true);
+		expect(hasImageComponent(group!)).toBe(true);
+		expect(Bun.stripANSI(group!.render(100).join("\n"))).toContain("Read tool-hidden.png");
 	});
 
 	it("replays reopened session image blocks through the cold-start rebuild path", async () => {

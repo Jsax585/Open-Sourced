@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
-import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { ReadToolGroupComponent, type ReadToolGroupUi } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { ImageProtocol, setTerminalImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
@@ -29,12 +29,14 @@ describe("Tool image rendering", () => {
 		setTerminalImageProtocol(originalProtocol);
 	});
 
-	it("omits restored tool-result images when conversion throws synchronously", () => {
-		let imageUpdates = 0;
-		const component = new AssistantMessageComponent(undefined, false, () => imageUpdates++);
+	it("omits restored read images when conversion throws synchronously", () => {
+		const requestRender = vi.fn();
+		const group = new ReadToolGroupComponent({ ui: { requestRender } });
+		group.updateArgs({ path: "repro.jpg" }, "restored-read");
 
-		component.setToolResultImages("restored-read", [IMAGE]);
-		expect(imageUpdates).toBe(0);
+		group.updateResult({ content: [IMAGE] }, false, "restored-read");
+		expect(requestRender).not.toHaveBeenCalled();
+		expect(group.render(80).join("\n")).not.toContain("\x1b_G");
 	});
 
 	it("omits live tool-result images when conversion throws synchronously", () => {
@@ -96,24 +98,14 @@ describe("Kitty PNG conversion cache", () => {
 	/** When set, conversions publish this base64 payload instead of the real PNG. */
 	let oversizedPng: string | undefined;
 
-	function finishedMessage(): AssistantMessage {
-		return {
-			role: "assistant",
-			content: [{ type: "text", text: "done" }],
-			api: "anthropic-messages",
-			provider: "anthropic",
-			model: "claude-sonnet-4-5",
-			stopReason: "stop",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			timestamp: Date.now(),
-		};
+	/** A read group hosting one image per `toolCallId`, as a transcript rebuild would deliver them. */
+	function readGroup(ui: ReadToolGroupUi, deliveries: Array<[toolCallId: string, image: ImageContent]>) {
+		const group = new ReadToolGroupComponent({ ui });
+		for (const [toolCallId, image] of deliveries) {
+			group.updateArgs({ path: `${toolCallId}.webp` }, toolCallId);
+			group.updateResult({ content: [image] }, false, toolCallId);
+		}
+		return group;
 	}
 
 	/** Resolves once `count` conversions have published their result. */
@@ -161,32 +153,28 @@ describe("Kitty PNG conversion cache", () => {
 		setTerminalImageProtocol(originalProtocol);
 	});
 
-	it("converts each tool-result image once across re-delivery and rebuilt components", async () => {
+	it("converts each read image once across re-delivery and rebuilt components", async () => {
 		const first = converted(images.length);
-		const component = new AssistantMessageComponent(undefined, false, first.notify);
-		component.setToolResultImages("call-1", images);
+		const deliveries = images.map((image, index): [string, ImageContent] => [`call-${index}`, image]);
+		const group = readGroup({ requestRender: first.notify }, deliveries);
 		await first.promise;
 		expect(encodes).toBe(images.length);
 
 		// Read-result replay delivers the same images again for one toolCallId.
-		component.setToolResultImages("call-1", images);
+		for (const [toolCallId, image] of deliveries) group.updateResult({ content: [image] }, false, toolCallId);
 		expect(encodes).toBe(images.length);
 
 		// Transcript rebuilds (resume, rewind, /tree) construct fresh components.
-		for (let rebuild = 0; rebuild < 2; rebuild++) {
-			new AssistantMessageComponent(undefined, false, () => {}).setToolResultImages("call-1", images);
-		}
+		for (let rebuild = 0; rebuild < 2; rebuild++) readGroup({ requestRender: () => {} }, deliveries);
 		expect(encodes).toBe(images.length);
 	});
 
 	it("renders an already-converted image on a rebuilt component without waiting for a conversion", async () => {
 		const warmed = converted(1);
-		const warm = new AssistantMessageComponent(undefined, false, warmed.notify);
-		warm.setToolResultImages("call-1", [rebuildImage]);
+		readGroup({ requestRender: warmed.notify }, [["call-1", rebuildImage]]);
 		await warmed.promise;
 
-		const rebuilt = new AssistantMessageComponent(finishedMessage(), false, () => {});
-		rebuilt.setToolResultImages("call-1", [rebuildImage]);
+		const rebuilt = readGroup({ requestRender: () => {} }, [["call-1", rebuildImage]]);
 
 		// Synchronous: no await between delivery and render.
 		expect(rebuilt.render(80).join("\n")).toContain("\x1b_G");
@@ -194,19 +182,21 @@ describe("Kitty PNG conversion cache", () => {
 
 	it("keeps a displayed conversion after the shared cache evicts it", async () => {
 		const shown = converted(1);
-		const component = new AssistantMessageComponent(finishedMessage(), false, shown.notify);
-		component.setToolResultImages("call-1", [evictedImage]);
+		const group = readGroup({ requestRender: shown.notify }, [["call-1", evictedImage]]);
 		await shown.promise;
 
 		// Flood the bounded shared cache with conversions past its byte ceiling.
 		oversizedPng = "A".repeat(20 * 1024 * 1024);
 		const flooded = converted(floodImages.length);
-		new AssistantMessageComponent(undefined, false, flooded.notify).setToolResultImages("call-2", floodImages);
+		readGroup(
+			{ requestRender: flooded.notify },
+			floodImages.map((image, index): [string, ImageContent] => [`flood-${index}`, image]),
+		);
 		await flooded.promise;
 
 		// A theme change re-renders every component synchronously.
-		component.invalidate();
-		expect(component.render(80).join("\n")).toContain("\x1b_G");
+		group.invalidate();
+		expect(group.render(80).join("\n")).toContain("\x1b_G");
 	});
 
 	it("converts a live tool-result image once across repeated results and rebuilt components", async () => {

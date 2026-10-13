@@ -114,6 +114,11 @@ export interface SvgFigureOptions {
 	budget?: ImageBudget;
 	/** The figure's rows changed outside a text update: a raster landed or rendering fell back to code. */
 	onChange: () => void;
+	/**
+	 * Row cap at render time, below the viewport share: a file preview keeps to
+	 * the inline-image limits instead of the natural size an authored fence gets.
+	 */
+	maxRows?: () => number | undefined;
 }
 
 /** Cells a figure may fill. */
@@ -148,9 +153,10 @@ interface Attempt {
 
 let nextFigureId = 0;
 
-/** Cells a figure rendered at `width` may fill: the image's width, a share of the viewport, and the raster edge cap. */
-function limitsFor(width: number, cell: CellDimensions): Limits {
-	const viewportRows = Math.floor((process.stdout.rows || 24) * MAX_VIEWPORT_SHARE);
+/** Cells a figure rendered at `width` may fill: the image's width, a share of the viewport (or `maxRows`), and the raster edge cap. */
+function limitsFor(width: number, cell: CellDimensions, maxRows?: number): Limits {
+	let viewportRows = Math.floor((process.stdout.rows || 24) * MAX_VIEWPORT_SHARE);
+	if (maxRows !== undefined) viewportRows = Math.min(viewportRows, maxRows);
 	return {
 		columns: Math.min(imageMaxColumns(width), Math.floor(MAX_EDGE_PX / cell.widthPx)),
 		rows: Math.max(1, Math.min(viewportRows, Math.floor(MAX_EDGE_PX / cell.heightPx))),
@@ -245,7 +251,7 @@ export class SvgFigure implements Component {
 		const attempt = this.#attempt;
 		if (this.#failed === this.#source) return false;
 		const cell = getCellDimensions();
-		const limits = limitsFor(width, cell);
+		const limits = limitsFor(width, cell, this.#options.maxRows?.());
 		return (
 			attempt === undefined ||
 			attempt.source !== this.#source ||
@@ -300,7 +306,7 @@ export class SvgFigure implements Component {
 		const attempt: Attempt = {
 			source: this.#source,
 			cell,
-			limits: limitsFor(width, cell),
+			limits: limitsFor(width, cell, this.#options.maxRows?.()),
 			themeEpoch: getThemeEpoch(),
 			final: this.#final,
 		};

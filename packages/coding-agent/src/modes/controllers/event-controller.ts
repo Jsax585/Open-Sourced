@@ -15,7 +15,6 @@ import {
 	readArgsHaveTarget,
 } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { RecapNotice } from "@oh-my-pi/pi-tui/chat/recap-notice";
-import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
 import { TodoReminderComponent } from "@oh-my-pi/pi-tui/chat/todo-reminder";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
@@ -200,7 +199,6 @@ export class EventController {
 	#pendingStreamPreviews = new Map<string, unknown>();
 	#detachToolApprovalPreviewWaiter: (() => void) | undefined;
 	#readToolCallArgs = new Map<string, Record<string, unknown>>();
-	#readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
 	#toolTimelineComponents = new Map<string, Component>();
 	// Stable identity for a streamed tool call while its assistant message is
 	// live: maps the tool-call block's position in the streaming message to the
@@ -551,6 +549,8 @@ export class EventController {
 		if (!this.#lastReadGroup) {
 			const group = new ReadToolGroupComponent({
 				showContentPreview: cfgReadToolResultPreview.get(this.ctx.settings),
+				showImages: cfgTerminalShowImages.get(this.ctx.settings),
+				ui: this.ctx.ui,
 			});
 			group.setExpanded(this.ctx.toolOutputExpanded);
 			this.ctx.chatContainer.addChild(group);
@@ -564,20 +564,6 @@ export class EventController {
 		const normalizedArgs =
 			args && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
 		this.#readToolCallArgs.set(toolCallId, normalizedArgs);
-		const assistantComponent = this.ctx.streamingComponent ?? this.#lastAssistantComponent;
-		if (assistantComponent) {
-			this.#readToolCallAssistantComponents.set(toolCallId, assistantComponent);
-		}
-	}
-
-	inheritReadToolAssistant(toolCallId: string, component: AssistantMessageComponent | undefined): void {
-		if (component) this.#readToolCallAssistantComponents.set(toolCallId, component);
-		else this.#readToolCallAssistantComponents.delete(toolCallId);
-	}
-
-	#clearReadToolCall(toolCallId: string): void {
-		this.#readToolCallArgs.delete(toolCallId);
-		this.#readToolCallAssistantComponents.delete(toolCallId);
 	}
 
 	#retractToolCardEntry(toolCallId: string, component: ToolExecutionHandle): void {
@@ -590,7 +576,7 @@ export class EventController {
 		if (removeComponent) this.ctx.chatContainer.removeChild(component);
 		this.ctx.pendingTools.delete(toolCallId);
 		this.#toolTimelineComponents.delete(toolCallId);
-		this.#clearReadToolCall(toolCallId);
+		this.#readToolCallArgs.delete(toolCallId);
 	}
 
 	/**
@@ -633,11 +619,6 @@ export class EventController {
 		if (readArgs !== undefined) {
 			this.#readToolCallArgs.delete(oldId);
 			this.#readToolCallArgs.set(newId, readArgs);
-		}
-		const readAssistant = this.#readToolCallAssistantComponents.get(oldId);
-		if (readAssistant !== undefined) {
-			this.#readToolCallAssistantComponents.delete(oldId);
-			this.#readToolCallAssistantComponents.set(newId, readAssistant);
 		}
 		// A collapsed read renders into a shared group keyed by id; rename its
 		// entry so the row isn't duplicated under the new id.
@@ -703,25 +684,6 @@ export class EventController {
 			}
 			this.#streamedToolCallIdByIndex.set(contentIndex, id);
 		}
-	}
-
-	#inlineReadToolImages(
-		toolCallId: string,
-		result: { content: Array<{ type: string; data?: string; mimeType?: string }>; details?: unknown },
-	): boolean {
-		const assistantComponent = this.#readToolCallAssistantComponents.get(toolCallId);
-		if (!assistantComponent) return false;
-		const images: ImageContent[] = result.content
-			.filter(
-				(content): content is ImageContent =>
-					content.type === "image" && typeof content.data === "string" && typeof content.mimeType === "string",
-			)
-			.map(content => ({ type: "image", data: content.data, mimeType: content.mimeType }));
-		const mediaPath = readMediaPath(result.details);
-		if (images.length === 0 && !mediaPath) return false;
-		assistantComponent.setToolResultImages(toolCallId, images, mediaPath);
-		// A media-only result (a model, a PDF) still settles through the read group.
-		return images.length > 0 && cfgTerminalShowImages.get(settings);
 	}
 
 	#insertAfterTranscriptComponent(anchor: Component | undefined, component: Component): boolean {
@@ -938,7 +900,6 @@ export class EventController {
 		this.#settledBeforeReturn.clear();
 		this.#blockingPrompts.clear();
 		this.#readToolCallArgs.clear();
-		this.#readToolCallAssistantComponents.clear();
 		this.#lastAssistantComponent = undefined;
 		this.#turnStartedAt = undefined;
 		this.#turnUsage.reset();
@@ -1086,7 +1047,6 @@ export class EventController {
 		this.#postToolAssistantComponents.clear();
 		this.#lastIntent = undefined;
 		this.#readToolCallArgs.clear();
-		this.#readToolCallAssistantComponents.clear();
 		this.#resetReadGroup();
 		this.#seedHeldCompletionsFromPendingResults();
 		this.#resolveDisplaceableTodo();
@@ -2019,9 +1979,8 @@ export class EventController {
 		component: ToolExecutionHandle,
 		event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>,
 	): void {
-		if (event.toolName === "read") this.#inlineReadToolImages(event.toolCallId, event.result);
 		this.#applyToolCompletion(component, event);
-		if (event.toolName === "read") this.#clearReadToolCall(event.toolCallId);
+		if (event.toolName === "read") this.#readToolCallArgs.delete(event.toolCallId);
 		if (
 			component instanceof ToolExecutionComponent &&
 			component.isDisplaceableBlock() &&
@@ -2101,35 +2060,25 @@ export class EventController {
 			setRunStatus(this.#blockingPrompts.values().next().value ?? { state: "working" });
 		}
 		if (event.toolName === "read") {
-			if (this.#inlineReadToolImages(event.toolCallId, event.result)) {
-				const component = this.ctx.pendingTools.get(event.toolCallId);
-				if (component) {
-					component.updateResult({ ...event.result, isError: event.isError }, false, event.toolCallId);
-					this.ctx.pendingTools.delete(event.toolCallId);
+			const component = this.ctx.pendingTools.get(event.toolCallId);
+			if (!component) {
+				// A persisted result can win a mid-stream transcript rebuild
+				// before this live completion handler runs. Rebuild removes the
+				// pending handle and replay owns the completed card, but the
+				// original timeline entry remains as proof that a card already
+				// existed. Do not create a fallback read group beside replay
+				// (#6879). A completion that outran every streamed card is held
+				// and settled when the card is created, matching non-read tools.
+				if (this.#toolTimelineComponents.has(event.toolCallId)) {
+					this.#readToolCallArgs.delete(event.toolCallId);
+					return;
 				}
-				this.#clearReadToolCall(event.toolCallId);
-				this.ctx.ui.requestRender();
+				this.#orphanedToolCompletions.set(event.toolCallId, event);
 			} else {
-				const component = this.ctx.pendingTools.get(event.toolCallId);
-				if (!component) {
-					// A persisted result can win a mid-stream transcript rebuild
-					// before this live completion handler runs. Rebuild removes the
-					// pending handle and replay owns the completed card, but the
-					// original timeline entry remains as proof that a card already
-					// existed. Do not create a fallback read group beside replay
-					// (#6879). A completion that outran every streamed card is held
-					// and settled when the card is created, matching non-read tools.
-					if (this.#toolTimelineComponents.has(event.toolCallId)) {
-						this.#clearReadToolCall(event.toolCallId);
-						return;
-					}
-					this.#orphanedToolCompletions.set(event.toolCallId, event);
-				} else {
-					component.updateResult({ ...event.result, isError: event.isError }, false, event.toolCallId);
-					this.ctx.pendingTools.delete(event.toolCallId);
-					this.#clearReadToolCall(event.toolCallId);
-					this.ctx.ui.requestRender();
-				}
+				component.updateResult({ ...event.result, isError: event.isError }, false, event.toolCallId);
+				this.ctx.pendingTools.delete(event.toolCallId);
+				this.#readToolCallArgs.delete(event.toolCallId);
+				this.ctx.ui.requestRender();
 			}
 		} else {
 			const component = this.ctx.pendingTools.get(event.toolCallId);
@@ -2357,7 +2306,6 @@ export class EventController {
 		this.#sealAbandonedForegroundTools();
 		this.#blockingPrompts.clear();
 		this.#readToolCallArgs.clear();
-		this.#readToolCallAssistantComponents.clear();
 		this.#priorTurnToolComponents = new Map(this.#toolTimelineComponents);
 		this.#toolTimelineComponents.clear();
 		this.#streamedToolCallIdByIndex.clear();

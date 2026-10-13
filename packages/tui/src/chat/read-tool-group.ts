@@ -1,12 +1,16 @@
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { type Component } from "../tui";
 import { Container } from "../tui";
 import { Text } from "../components/text";
+import { Image, type ImageBudget } from "../components/image";
 import { getLanguageFromPath, theme } from "../theme";
 import { parseLineRanges, selectorLineRanges } from "../tools/line-ranges";
 import {
+	describeReadImage,
+	isImageBlock,
+	type ReadImageBlock,
 	type ReadRenderArgs,
 	type ReadToolDetails,
 	readContentCode,
@@ -14,9 +18,13 @@ import {
 	readSourceFsPath,
 	splitPathAndSel,
 } from "../tools/read";
-import { PREVIEW_LIMITS, shortenPath } from "../render/render-utils";
+import { PREVIEW_LIMITS, resolveImageOptions, shortenPath } from "../render/render-utils";
 import { fileHyperlink, renderCodeCell, renderMarkdownCell } from "../render";
 import { canonicalizeMessage } from "./thinking-display";
+import { cachedPngConversion, convertImageToPngShared } from "./image-loading";
+import { SvgFigure, svgFigureRendering } from "./svg-figure";
+import { getImageDimensions, ImageProtocol, imageFallback, TERMINAL } from "../terminal-capabilities";
+import { nativeImageNode, nativeMediaNode, readMediaPath } from "../native/blobs";
 import { internalUrlSchemeSpec, splitUrlScheme } from "../tools/url-scheme-host";
 import type { ToolExecutionHandle } from "./tool-execution";
 import { formatUsageRow } from "../overlays/usage-row";
@@ -100,8 +108,17 @@ type ReadToolSuffixResolution = {
 	to: string;
 };
 
+/** Host surface for inline visual previews: repaint scheduling and the shared image budget. */
+export interface ReadToolGroupUi {
+	requestRender(): void;
+	imageBudget?: ImageBudget;
+}
+
 type ReadToolGroupOptions = {
 	showContentPreview?: boolean;
+	/** Draw raster reads and whole-file SVG sources under their rows where the terminal can show them; default true. */
+	showImages?: boolean;
+	ui?: ReadToolGroupUi;
 };
 
 function getSuffixResolution(details: ReadToolDetails | undefined): ReadToolSuffixResolution | undefined {
@@ -111,8 +128,21 @@ function getSuffixResolution(details: ReadToolDetails | undefined): ReadToolSuff
 	return { from: details.suffixResolution.from, to: details.suffixResolution.to };
 }
 
-/** One display path recovered from a delimited read, paired with the resolved fs link target for its row. */
-type ReadDisplayPathSpec = { path: string; linkPath?: string };
+/** One display path recovered from a delimited read, with the resolved fs link target and image (by index) for its row. */
+type ReadDisplayPathSpec = { path: string; linkPath?: string; imageIndex?: number };
+
+/** One raster a read returned, with its Kitty conversion state. */
+type ReadVisualImage = {
+	/** The block as delivered (tagged with its native node once described). */
+	block: ReadImageBlock;
+	/**
+	 * Kitty draws PNG only: the shared conversion of a non-PNG block, pinned
+	 * once drawn so a cache eviction never blanks a row already on screen.
+	 */
+	kittyPng?: ImageContent;
+	/** A conversion is in flight; its landing rebuilds the display. */
+	kittyPending?: boolean;
+};
 
 type ReadEntry = {
 	toolCallId: string;
@@ -129,6 +159,16 @@ type ReadEntry = {
 	conflictCount?: number;
 	codeStartLine?: number;
 	codeLineNumbers?: Array<number | null>;
+	/** The result's image blocks in content order; a delimited read maps them to targets via `displayPaths[].imageIndex`. */
+	images: ReadVisualImage[];
+	/** Whole-file SVG source of a text read, rasterized under the row. */
+	svgSource?: string;
+	/** The SVG's figure, kept across display rebuilds so its raster is drawn once. */
+	figure?: SvgFigure;
+	/** The SVG's native `image` node, per source, so a rebuild does not re-register the blob. */
+	svgNode?: { source: string; node: NativeNode };
+	/** The whole file this read showed that Tern's media viewer shows (`details.mediaPath`); a native `media` host loads it by path. */
+	mediaPath?: string;
 };
 
 /**
@@ -171,6 +211,8 @@ type ReadDisplayTarget = {
 	basePath: string;
 	linkPath?: string;
 	selector?: string;
+	/** The raster this target returned, drawn under its row. */
+	image?: ReadVisualImage;
 };
 
 type ReadSummaryRow = {
@@ -189,13 +231,19 @@ const READ_STATUS_RANK: Record<ReadEntry["status"], number> = {
 function getDisplayReadTargets(details: ReadToolDetails | undefined): ReadDisplayPathSpec[] | undefined {
 	if (!Array.isArray(details?.displayReadTargets)) return undefined;
 	const links = Array.isArray(details.displayReadTargetLinks) ? details.displayReadTargetLinks : undefined;
+	const images = Array.isArray(details.displayReadTargetImages) ? details.displayReadTargetImages : undefined;
 	const targets: ReadDisplayPathSpec[] = [];
 	details.displayReadTargets.forEach((raw, index) => {
 		if (typeof raw !== "string") return;
 		const path = raw.trim();
 		if (!path) return;
 		const link = links?.[index];
-		targets.push({ path, linkPath: typeof link === "string" && link.length > 0 ? link : undefined });
+		const image = images?.[index];
+		targets.push({
+			path,
+			linkPath: typeof link === "string" && link.length > 0 ? link : undefined,
+			imageIndex: typeof image === "number" && image >= 0 ? image : undefined,
+		});
 	});
 	return targets.length > 0 ? targets : undefined;
 }
@@ -355,6 +403,29 @@ function formatMergedSelectorParts(selectors: string[]): string {
 	return `${first},${second},…,${last}`;
 }
 
+/**
+ * Whether a text read's body is one complete SVG document worth rasterizing:
+ * a single `.svg`/`.svgz` target read whole — no range selector (`:raw` still
+ * is whole), the scan reached EOF (`totalLines`), and the display content is
+ * exactly lines 1…totalLines with nothing elided, truncated or summarized. A
+ * prefix or a structural summary would only ever fail to draw.
+ */
+function isWholeSvgRead(entry: ReadEntry, details: ReadToolDetails | undefined): boolean {
+	if (entry.displayPaths && entry.displayPaths.length > 1) return false;
+	const split = splitPathAndSel(entry.path);
+	const ext = path.extname(split.path).toLowerCase();
+	if (ext !== ".svg" && ext !== ".svgz") return false;
+	if (split.sel !== undefined && split.sel.toLowerCase() !== "raw") return false;
+	if (!details || details.summary !== undefined || details.truncation !== undefined) return false;
+	if (details.meta?.truncation !== undefined) return false;
+	const totalLines = details.totalLines;
+	const lineNumbers = details.displayContent?.lineNumbers;
+	if (typeof totalLines !== "number" || totalLines < 1 || !lineNumbers || lineNumbers.length !== totalLines) {
+		return false;
+	}
+	return lineNumbers.every((lineNumber, index) => lineNumber === index + 1);
+}
+
 export class ReadToolGroupComponent extends Container implements ToolExecutionHandle {
 	#entries = new Map<string, ReadEntry>();
 	#usageRows = new Map<string, ReadUsageRow>();
@@ -363,6 +434,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#expanded = false;
 	#toolActivityVisible = true;
 	#showContentPreview: boolean;
+	#showImages: boolean;
+	readonly #ui: ReadToolGroupUi | undefined;
 	// A read group accretes entries across multiple assistant completions for as
 	// long as the run of reads is uninterrupted. It remains active while its
 	// header can change from `Read <path>` to `Read (N)` plus a tree. The
@@ -385,6 +458,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	constructor(options: ReadToolGroupOptions = {}) {
 		super();
 		this.#showContentPreview = options.showContentPreview ?? false;
+		this.#showImages = options.showImages ?? true;
+		this.#ui = options.ui;
 		this.#text = new Text("", 0, 0);
 		this.addChild(this.#text);
 		this.#updateDisplay();
@@ -439,6 +514,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			toolCallId,
 			path: rawPath,
 			status: "pending",
+			images: [],
 		};
 		entry.path = rawPath;
 		entry.raw = args.raw === true;
@@ -467,13 +543,24 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	}
 	/** Remove one call without discarding successful siblings in the shared group. */
 	removeEntry(toolCallId: string): boolean {
-		if (!this.#entries.delete(toolCallId)) return this.#entries.size === 0;
+		const entry = this.#entries.get(toolCallId);
+		if (!entry || !this.#entries.delete(toolCallId)) return this.#entries.size === 0;
+		entry.figure?.dispose();
 		this.#updateDisplay();
 		return this.#entries.size === 0;
 	}
 
+	override dispose(): void {
+		for (const entry of this.#entries.values()) entry.figure?.dispose();
+		super.dispose();
+	}
+
 	updateResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: unknown; isError?: boolean },
+		result: {
+			content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+			details?: unknown;
+			isError?: boolean;
+		},
 		isPartial = false,
 		toolCallId?: string,
 	): void {
@@ -499,6 +586,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		entry.conflictCount = conflictCount;
 		entry.status = result.isError ? "error" : suffixResolution ? "warning" : "success";
 		entry.contentType = details?.contentType;
+		entry.mediaPath = result.isError ? undefined : readMediaPath(details);
 		// Store clean display content for preview/expanded display when the read
 		// tool provides it; fall back to model-facing text for legacy results.
 		const displayContent = details?.displayContent;
@@ -507,6 +595,22 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			entry.contentText = displayContent?.text ?? textContent;
 			entry.codeStartLine = displayContent?.startLine;
 			entry.codeLineNumbers = displayContent?.lineNumbers;
+		}
+		const imageBlocks = result.content?.filter(isImageBlock) ?? [];
+		const sameImages =
+			imageBlocks.length === entry.images.length &&
+			imageBlocks.every((block, index) => block === entry.images[index]!.block);
+		if (!sameImages) entry.images = imageBlocks.map(block => ({ block }));
+		entry.svgSource =
+			imageBlocks.length === 0 &&
+			!result.isError &&
+			entry.contentText !== undefined &&
+			isWholeSvgRead(entry, details)
+				? entry.contentText
+				: undefined;
+		if (!entry.svgSource && entry.figure) {
+			entry.figure.dispose();
+			entry.figure = undefined;
 		}
 		this.#updateDisplay();
 	}
@@ -566,6 +670,14 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		super.invalidate();
 	}
 
+	/** Draw or hide the rows' visual previews (the host's `terminal.showImages`). */
+	setShowImages(visible: boolean): void {
+		if (this.#showImages === visible) return;
+		this.#showImages = visible;
+		this.#blockVersion++;
+		this.#updateDisplay();
+	}
+
 	getComponent(): Component {
 		return this;
 	}
@@ -597,9 +709,10 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	 */
 	override describe(cx?: DescribeContext): NativeNode {
 		const dataFirst = cx?.supports("tool") === true;
-		const key = [dataFirst, this.#displayVersion, this.#toolActivityVisible, this.#sealed];
+		const media = cx?.supports("media") === true;
+		const key = [dataFirst, media, this.#displayVersion, this.#toolActivityVisible, this.#sealed];
 		return this.#native.get(key, () =>
-			withHidden(dataFirst ? this.#describeTool() : this.#describeGroup(), !this.#toolActivityVisible),
+			withHidden(dataFirst ? this.#describeTool(media) : this.#describeGroup(media), !this.#toolActivityVisible),
 		);
 	}
 
@@ -610,15 +723,17 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	 * (glyph, dim dir, strong name, range). Each content preview is numbered
 	 * code or rendered Markdown, clamped per file while collapsed.
 	 */
-	#describeTool(): NativeNode {
+	#describeTool(media: boolean): NativeNode {
 		const entries = [...this.#entries.values()];
 		const rows = this.#buildSummaryRows(this.#displayTargetsForEntries(entries));
 		const status = this.#groupStatus(entries);
-		const previews = entries.filter(entry => entry.status !== "error" && this.#shouldRenderPreview(entry));
+		const previewed = entries.filter(entry => entry.status !== "error" && this.#shouldRenderPreview(entry));
 		const body: NativeChild[] = [];
+		const shownMedia = new Set<string>();
 		let head: NativeToolHead;
-		// Previews (and a long error message) are what a collapse hides; plain rows always show.
-		let collapsible = previews.length > 0;
+		// Previews, visuals and a long error message are what a collapse hides; plain rows always show.
+		let collapsible =
+			previewed.length > 0 || entries.some(entry => this.#hasVisual(entry) || this.#hasMedia(entry, media));
 		if (rows.length <= 1) {
 			const row = rows[0];
 			const error = row && this.#statusForTargets(row.targets) === "error" ? this.#errorFor(row) : undefined;
@@ -633,28 +748,30 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			} else {
 				head = rowHead;
 			}
-			for (const entry of previews) body.push(...this.#nativePreview(entry));
+			if (row) body.push(...this.#nativeVisualsForRow(row, media, shownMedia));
+			for (const entry of previewed) body.push(...this.#nativeBody(entry));
 			for (const [i, usage] of (this.#usageRowsBySummaryRow(rows).get(0) ?? []).entries()) {
 				body.push(this.#nativeUsage(usage, `u${i}`));
 			}
 		} else {
 			head = { target: formatCount("file", rows.length), targetKind: "text" };
 			const summaryRows = this.#buildSummaryRows(
-				this.#displayTargetsForEntries(entries.filter(entry => !previews.includes(entry))),
+				this.#displayTargetsForEntries(entries.filter(entry => !previewed.includes(entry))),
 			);
 			const usageByRow = this.#usageRowsBySummaryRow(summaryRows);
 			for (const [index, row] of summaryRows.entries()) {
 				body.push(this.#nativeFileRow(row));
+				body.push(...this.#nativeVisualsForRow(row, media, shownMedia));
 				for (const [i, usage] of (usageByRow.get(index) ?? []).entries()) {
 					body.push(this.#nativeUsage(usage, `u${index}.${i}`));
 				}
 			}
-			for (const entry of previews) {
+			for (const entry of previewed) {
 				const split = splitPathAndSel(entry.path);
 				const name = shortenPath(split.path);
 				const sectionHead: TspSpan[] = [span(name || "…", "path")];
 				if (split.sel) sectionHead.push(span(`:${split.sel}`, "muted"));
-				body.push(node("section", { head: sectionHead }, this.#nativePreview(entry), `p${entry.toolCallId}`));
+				body.push(node("section", { head: sectionHead }, this.#nativeBody(entry), `p${entry.toolCallId}`));
 				const usage = this.#usageRows.get(entry.toolCallId);
 				if (usage) body.push(this.#nativeUsage(usage, `u${entry.toolCallId}`));
 			}
@@ -729,6 +846,75 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		);
 	}
 
+	/** A previewed entry's body: its SVG figure (when any) over the trimmed content preview. */
+	#nativeBody(entry: ReadEntry): NativeChild[] {
+		const blocks: NativeChild[] = [];
+		if (this.#hasSvgVisual(entry)) blocks.push(this.#nativeSvg(entry));
+		blocks.push(...this.#nativePreview(entry));
+		return blocks;
+	}
+
+	/**
+	 * The native nodes under one summary row: on a `media` host the file by
+	 * path (once per file across the group: `shownMedia`), else each target's
+	 * own raster (as delivered), then the SVG source of an unpreviewed entry
+	 * for the host to draw. Each image and each SVG appears once per row.
+	 */
+	#nativeVisualsForRow(row: ReadSummaryRow, media: boolean, shownMedia: Set<string>): NativeNode[] {
+		const nodes: NativeNode[] = [];
+		const seenImages = new Set<ReadVisualImage>();
+		const seenEntries = new Set<string>();
+		for (const target of row.targets) {
+			const entry = target.entry;
+			// A file Tern's media viewer shows: the host loads it by path once, no bytes uploaded.
+			if (this.#hasMedia(entry, media)) {
+				const mediaPath = entry.mediaPath!;
+				if (!shownMedia.has(mediaPath)) nodes.push(nativeMediaNode(mediaPath, `media${entry.toolCallId}`));
+				shownMedia.add(mediaPath);
+				continue;
+			}
+			if (target.image && this.#hasVisual(entry) && !seenImages.has(target.image)) {
+				seenImages.add(target.image);
+				const alt = shortenPath(target.basePath) || "image";
+				nodes.push(
+					keyed(
+						describeReadImage(target.image.block, alt),
+						`img${entry.toolCallId}:${entry.images.indexOf(target.image)}`,
+					),
+				);
+			}
+			if (seenEntries.has(entry.toolCallId)) continue;
+			seenEntries.add(entry.toolCallId);
+			if (this.#hasSvgVisual(entry) && !this.#shouldRenderPreview(entry)) nodes.push(this.#nativeSvg(entry));
+		}
+		return nodes;
+	}
+
+	/**
+	 * Whether a native `media` host shows `entry`'s file by path in place of its
+	 * images or SVG: the read named a whole Tern-viewable file (an image, SVG,
+	 * model, PDF — the model may have received no image at all).
+	 */
+	#hasMedia(entry: ReadEntry, media: boolean): boolean {
+		return media && this.#showImages && entry.status !== "error" && entry.mediaPath !== undefined;
+	}
+
+	/** The entry's SVG source as a native `image`, cached per source so a rebuild does not re-register the blob. */
+	#nativeSvg(entry: ReadEntry): NativeNode {
+		const source = entry.svgSource ?? "";
+		let cached = entry.svgNode;
+		if (cached?.source !== source) {
+			cached = entry.svgNode = {
+				source,
+				node: nativeImageNode(new TextEncoder().encode(source), "image/svg+xml", {
+					alt: shortenPath(splitPathAndSel(entry.path).path) || "image",
+					role: "omp.tool.read.image",
+				}),
+			};
+		}
+		return keyed(cached.node, `svg${entry.toolCallId}`);
+	}
+
 	/** One read's content, clamped per file while the group is collapsed. */
 	#nativePreview(entry: ReadEntry): NativeChild[] {
 		if (previewsMarkdown(entry)) {
@@ -762,25 +948,25 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		return blocks;
 	}
 
-	#describeGroup(): NativeNode {
+	#describeGroup(media: boolean): NativeNode {
 		const entries = [...this.#entries.values()];
 		const rows = this.#buildSummaryRows(this.#displayTargetsForEntries(entries));
 		const usageByRow = this.#usageRowsBySummaryRow(rows);
-		const previews = entries.filter(entry => this.#shouldRenderPreview(entry));
+		const previewed = entries.filter(entry => this.#shouldRenderPreview(entry));
 		const status = this.#groupStatus(entries);
 		const title = span("Read", "toolTitle");
 		const children: NativeChild[] = [];
+		const shownMedia = new Set<string>();
 		let head: TspSpan[] = [title];
 		if (rows.length === 1) {
 			head = [title, span(" "), ...this.#nativePathSpans(rows[0]!)];
-			if (previews.length === 0) {
+			children.push(...this.#nativeVisualsForRow(rows[0]!, media, shownMedia));
+			if (previewed.length === 0) {
 				for (const usage of usageByRow.get(0) ?? []) children.push(this.#nativeUsage(usage, "u0"));
 			}
 		} else if (rows.length > 1) {
 			head = [title, span(` (${rows.length})`, "dim")];
-			const summaryTargets = this.#displayTargetsForEntries(
-				entries.filter(entry => !this.#shouldRenderPreview(entry)),
-			);
+			const summaryTargets = this.#displayTargetsForEntries(entries.filter(entry => !previewed.includes(entry)));
 			const summaryRows = this.#buildSummaryRows(summaryTargets);
 			const summaryUsage = this.#usageRowsBySummaryRow(summaryRows);
 			const items = summaryRows.map((row, index) => {
@@ -802,15 +988,26 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 						tone: READ_STATUS_TONE[this.#statusForTargets(row.targets)],
 						detail: usage.length > 0 ? [span(usage.join(" · "), "dim")] : undefined,
 					},
-					[],
+					this.#nativeVisualsForRow(row, media, shownMedia),
 					row.targetPath,
 				);
 			});
 			if (items.length > 0) children.push(node("list", {}, items));
 		}
-		for (const entry of previews) {
+		for (const entry of previewed) {
 			const split = splitPathAndSel(entry.path);
 			const pathValue = shortenPath(entry.path);
+			const cardBody: NativeChild[] = [];
+			if (this.#hasSvgVisual(entry)) cardBody.push(this.#nativeSvg(entry));
+			cardBody.push(
+				previewsMarkdown(entry)
+					? md(entry.contentText ?? "")
+					: code(entry.contentText ?? "", {
+							lang: getLanguageFromPath(split.path),
+							start: entry.codeStartLine,
+							numbers: true,
+						}),
+			);
 			children.push(
 				node(
 					"card",
@@ -822,15 +1019,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 						collapsed: this.#previewCollapsed.get(entry.toolCallId) ?? !this.#expanded,
 						preview: { lines: COLLAPSED_PREVIEW_LINES },
 					},
-					[
-						previewsMarkdown(entry)
-							? md(entry.contentText ?? "")
-							: code(entry.contentText ?? "", {
-									lang: getLanguageFromPath(split.path),
-									start: entry.codeStartLine,
-									numbers: true,
-								}),
-					],
+					cardBody,
 					`p${entry.toolCallId}`,
 				),
 			);
@@ -906,33 +1095,59 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 				const pathDisplay = this.#formatRowPath(row);
 				const lines = [` ${statusSymbol} ${theme.fg("toolTitle", theme.bold("Read"))} ${pathDisplay}`.trimEnd()];
 				const usageRows = this.#usageRowsBySummaryRow(displayRows).get(0) ?? [];
-				this.#appendUsageRows(lines, usageRows, "   ");
-				this.#text.setText(lines.join("\n"));
-				this.addChild(this.#text);
+				const visuals = this.#visualsForRow(row);
+				if (visuals.length === 0) {
+					this.#appendUsageRows(lines, usageRows, "   ");
+					this.#text.setText(lines.join("\n"));
+					this.addChild(this.#text);
+				} else {
+					// The visual sits right under its row; the usage follows it.
+					this.#text.setText(lines[0]!);
+					this.addChild(this.#text);
+					for (const visual of visuals) this.addChild(visual);
+					const usageLines: string[] = [];
+					this.#appendUsageRows(usageLines, usageRows, "   ");
+					if (usageLines.length > 0) this.addChild(new Text(usageLines.join("\n"), 0, 0));
+				}
+				return;
 			}
 			for (const entry of this.#previewEntriesForRow(row)) {
 				this.#addContentPreview(entry);
+				this.#addVisual(entry);
 				this.#addPreviewUsage(entry);
 			}
 			return;
 		}
 
 		const header = `${theme.fg("toolTitle", theme.bold("Read"))}${theme.fg("dim", ` (${displayRows.length})`)}`;
-		const lines = [` ${theme.format.bullet} ${header}`];
+		let lines = [` ${theme.format.bullet} ${header}`];
 		const entriesWithoutPreview = entries.filter(entry => !this.#shouldRenderPreview(entry));
 		const summaryTargets = this.#displayTargetsForEntries(entriesWithoutPreview);
 		const rows = this.#buildSummaryRows(summaryTargets);
 		const usageRowsBySummaryRow = this.#usageRowsBySummaryRow(rows);
 		for (const [index, row] of rows.entries()) {
-			this.#appendSummaryRow(lines, row, index, rows.length, usageRowsBySummaryRow.get(index) ?? []);
+			const usageRows = usageRowsBySummaryRow.get(index) ?? [];
+			const visuals = this.#visualsForRow(row);
+			if (visuals.length === 0) {
+				this.#appendSummaryRow(lines, row, index, rows.length, usageRows);
+				continue;
+			}
+			// Break the tree text around the visual so it hangs under its own row.
+			this.#appendSummaryRow(lines, row, index, rows.length, []);
+			this.addChild(new Text(lines.join("\n"), 0, 0));
+			lines = [];
+			for (const visual of visuals) this.addChild(visual);
+			this.#appendUsageRows(lines, usageRows, this.#summaryContinuation(index, rows.length));
 		}
-
-		this.#text.setText(lines.join("\n"));
-		this.addChild(this.#text);
+		if (lines.length > 0) {
+			this.#text.setText(lines.join("\n"));
+			this.addChild(this.#text);
+		}
 
 		for (const entry of entries) {
 			if (this.#shouldRenderPreview(entry)) {
 				this.#addContentPreview(entry);
+				this.#addVisual(entry);
 				this.#addPreviewUsage(entry);
 			}
 		}
@@ -943,18 +1158,28 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		for (const entry of entries) {
 			const pathSpecs: ReadDisplayPathSpec[] =
 				entry.displayPaths ?? splitReadDisplayPathSpecs(entry.path).map(path => ({ path }));
-			const useEntryLinkPath = pathSpecs.length === 1;
+			const singleTarget = pathSpecs.length === 1;
 			for (const pathSpec of pathSpecs) {
 				const split = splitPathAndSel(pathSpec.path);
-				const entryLinkPath = pathSpec.linkPath ?? (useEntryLinkPath ? entry.linkPath : undefined);
+				const entryLinkPath = pathSpec.linkPath ?? (singleTarget ? entry.linkPath : undefined);
 				const linkPath = readTargetLinkPath(split.path, entryLinkPath);
-				for (const selector of splitSelectorDisplayParts(split.sel)) {
+				// A delimited read names each target's image by index; a single
+				// target owns the result's image. Several targets without a mapping
+				// (a result from before it existed) draw none rather than the wrong one.
+				const image =
+					pathSpec.imageIndex !== undefined
+						? entry.images[pathSpec.imageIndex]
+						: singleTarget
+							? entry.images[0]
+							: undefined;
+				for (const [index, selector] of splitSelectorDisplayParts(split.sel).entries()) {
 					targets.push({
 						entry,
 						targetPath: selector ? `${split.path}:${selector}` : pathSpec.path,
 						basePath: split.path,
 						linkPath,
 						selector,
+						image: index === 0 ? image : undefined,
 					});
 				}
 			}
@@ -1021,13 +1246,18 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	): void {
 		const connector = index === total - 1 ? theme.tree.last : theme.tree.branch;
 		lines.push(`   ${theme.fg("dim", connector)} ${this.#formatRow(row)}`.trimEnd());
+		this.#appendUsageRows(lines, usageRows, this.#summaryContinuation(index, total));
+	}
 
+	/** Indent for lines continuing a tree row: the trunk while rows follow, blank under the last. */
+	#summaryContinuation(index: number, total: number): string {
+		const connector = index === total - 1 ? theme.tree.last : theme.tree.branch;
 		const connectorWidth = Bun.stringWidth(connector);
 		const continuation =
 			index === total - 1
 				? " ".repeat(connectorWidth)
 				: `${theme.tree.vertical}${" ".repeat(Math.max(0, connectorWidth - Bun.stringWidth(theme.tree.vertical)))}`;
-		this.#appendUsageRows(lines, usageRows, `   ${continuation} `);
+		return `   ${continuation} `;
 	}
 
 	#usageRowsBySummaryRow(rows: ReadSummaryRow[]): Map<number, ReadUsageRow[]> {
@@ -1237,8 +1467,122 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		);
 	}
 
+	/** Content previews are the setting's numbered code; a raster read's text is only its note, so it has none. */
 	#shouldRenderPreview(entry: ReadEntry): boolean {
-		return this.#showContentPreview && entry.contentText !== undefined;
+		return this.#showContentPreview && entry.contentText !== undefined && entry.images.length === 0;
+	}
+
+	/** Whether `entry` has visuals shown under its rows: raster reads, or a whole-file SVG while figures are on. */
+	#hasVisual(entry: ReadEntry): boolean {
+		if (!this.#showImages || entry.status === "error") return false;
+		return entry.images.length > 0 || (entry.svgSource !== undefined && svgFigureRendering());
+	}
+
+	/** Whether `entry` draws its SVG under its row (a previewed entry draws it inside the preview instead). */
+	#hasSvgVisual(entry: ReadEntry): boolean {
+		return this.#hasVisual(entry) && entry.images.length === 0 && entry.svgSource !== undefined;
+	}
+
+	/**
+	 * The visuals under one summary row: each target's own image, then the
+	 * row's SVG figure. Targets merged from one call share the entry; each
+	 * image and each figure is drawn once.
+	 */
+	#visualsForRow(row: ReadSummaryRow): Component[] {
+		const visuals: Component[] = [];
+		const seenImages = new Set<ReadVisualImage>();
+		const seenEntries = new Set<string>();
+		for (const target of row.targets) {
+			const entry = target.entry;
+			if (target.image && this.#hasVisual(entry) && !seenImages.has(target.image)) {
+				seenImages.add(target.image);
+				const visual = this.#imageVisual(entry, target.image);
+				if (visual) visuals.push(visual);
+			}
+			if (seenEntries.has(entry.toolCallId)) continue;
+			seenEntries.add(entry.toolCallId);
+			if (this.#hasSvgVisual(entry) && !this.#shouldRenderPreview(entry)) {
+				const figure = this.#svgVisual(entry);
+				if (figure) visuals.push(figure);
+			}
+		}
+		return visuals;
+	}
+
+	/** Under a content preview only an SVG figure can hang: previewed entries have no raster. */
+	#addVisual(entry: ReadEntry): void {
+		if (!this.#hasSvgVisual(entry)) return;
+		const figure = this.#svgVisual(entry);
+		if (figure) this.addChild(figure);
+	}
+
+	/**
+	 * The terminal component drawing one raster: an inline image (on Kitty its
+	 * PNG conversion, once landed) or a text marker where the terminal draws no
+	 * graphics.
+	 */
+	#imageVisual(entry: ReadEntry, image: ReadVisualImage): Component | undefined {
+		if (!TERMINAL.imageProtocol) {
+			const dimensions = getImageDimensions(image.block.data, image.block.mimeType) ?? undefined;
+			return new Text(theme.fg("dim", imageFallback(image.block.mimeType, dimensions)), 3, 0);
+		}
+		const drawable = this.#drawableImage(entry, image);
+		if (!drawable) return undefined;
+		return new Image(
+			drawable.data,
+			drawable.mimeType,
+			{ fallbackColor: (text: string) => theme.fg("toolOutput", text) },
+			{
+				...resolveImageOptions(),
+				budget: this.#ui?.imageBudget,
+				imageKey: `read:${entry.toolCallId}:${entry.images.indexOf(image)}`,
+				requestRender: () => this.#ui?.requestRender(),
+			},
+		);
+	}
+
+	/** The entry's SVG figure, created once and fed the final source; nothing where the terminal draws no graphics. */
+	#svgVisual(entry: ReadEntry): Component | undefined {
+		if (!TERMINAL.imageProtocol) return undefined;
+		let figure = entry.figure;
+		if (!figure) {
+			figure = entry.figure = new SvgFigure({
+				budget: this.#ui?.imageBudget,
+				maxRows: () => resolveImageOptions().maxHeightCells,
+				onChange: () => {
+					this.#blockVersion++;
+					this.#ui?.requestRender();
+				},
+			});
+		}
+		figure.update(entry.svgSource ?? "", true);
+		return figure;
+	}
+
+	/**
+	 * The raster to draw on this terminal: the block as delivered, or on Kitty
+	 * (PNG only) a non-PNG's shared conversion — started here when absent and
+	 * pinned on the image once it lands, which rebuilds the display.
+	 */
+	#drawableImage(entry: ReadEntry, image: ReadVisualImage): ImageContent | undefined {
+		const block = image.block;
+		if (TERMINAL.imageProtocol !== ImageProtocol.Kitty || block.mimeType === "image/png") return block;
+		image.kittyPng ??= cachedPngConversion(block);
+		if (image.kittyPng || image.kittyPending) return image.kittyPng;
+		image.kittyPending = true;
+		convertImageToPngShared(block)
+			.then(converted => {
+				image.kittyPending = false;
+				if (!entry.images.includes(image)) return;
+				image.kittyPng = converted;
+				this.#blockVersion++;
+				this.#updateDisplay();
+				this.#ui?.requestRender();
+			})
+			.catch(() => {
+				image.kittyPending = false;
+			});
+		return undefined;
 	}
 
 	#formatStatus(status: ReadEntry["status"]): string {
