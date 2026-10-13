@@ -702,6 +702,52 @@ function dropUploadFiles(el: unknown, files: unknown[]): void {
 	}
 }
 
+/** A drop event's page side, as the main world's listeners see it. */
+interface PageDropEvent {
+	dataTransfer: object | null;
+}
+
+interface DropWatchGlobals {
+	addEventListener(type: "drop", listener: (event: PageDropEvent) => void, options: { capture: true; once: true }): void;
+	removeEventListener(type: "drop", listener: (event: PageDropEvent) => void, options: { capture: true }): void;
+}
+
+/**
+ * Watch whether the page reads the next drop's files, and return the check. Runs in the main world: the page's
+ * listeners read through main-world wrappers, so a read is observed only there, on the wrapper a capturing listener
+ * instruments before the page's own listeners run.
+ *
+ * A drop zone reads the dropped files while handling drop. Canceling proves nothing: pages cancel dragover and drop
+ * document-wide only to stop the browser navigating to a dropped file. A read is the strongest signal there is, not
+ * proof of acceptance: a document guard that checks `files.length` counts too, and counting element-level reads only
+ * would fail delegated drop zones, which read at the document (React 16 and older, jQuery `.on("drop", selector)`).
+ */
+function watchDropRead(): () => boolean {
+	const page = globalThis as unknown as DropWatchGlobals;
+	let taken = false;
+	const listener = (event: PageDropEvent): void => {
+		const transfer = event.dataTransfer;
+		if (!transfer) return;
+		// The real prototype, whatever the page did to the `DataTransfer` global.
+		const proto = Object.getPrototypeOf(transfer);
+		for (const key of ["files", "items"]) {
+			const read = Object.getOwnPropertyDescriptor(proto, key)?.get;
+			Object.defineProperty(transfer, key, {
+				configurable: true,
+				get() {
+					taken = true;
+					return read?.call(transfer);
+				},
+			});
+		}
+	};
+	page.addEventListener("drop", listener, { capture: true, once: true });
+	return () => {
+		page.removeEventListener("drop", listener, { capture: true });
+		return taken;
+	};
+}
+
 /**
  * Stream files into `realm` in chunks, several calls in flight, and return a handle to the built `File` array. The
  * isolated world builds them, so the `File` and base64 decoding a page may replace are never the ones used.
@@ -788,12 +834,16 @@ async function deliverToInput(
 	}
 }
 
-/** Drop the files on an element, built from staged copies by a detached picker or from streamed contents. */
+/**
+ * Drop the files on an element, built from staged copies by a detached picker or from streamed contents, or fail when
+ * the page does not read them.
+ */
 async function deliverToDropZone(
 	zone: ElementHandle,
 	sources: UploadSource[],
 	route: UploadRoute,
 	staging: UploadStaging,
+	label: string,
 	signal: AbortSignal | undefined,
 ): Promise<void> {
 	const realm = zone.frame.isolatedRealm();
@@ -804,7 +854,20 @@ async function deliverToDropZone(
 				? await pickFiles(realm, await staging.stage(sources, signal), signal)
 				: await streamUploadFiles(realm, sources, signal);
 		try {
-			await untilAborted(signal, () => realm.evaluate(dropUploadFiles, target, files));
+			const main = zone.frame.mainRealm();
+			const watch = await untilAborted(signal, () => main.evaluateHandle(watchDropRead));
+			let accepted: boolean;
+			try {
+				await untilAborted(signal, () => realm.evaluate(dropUploadFiles, target, files));
+			} finally {
+				accepted = await main.evaluate(check => check(), watch).catch(() => false);
+				await watch.dispose().catch(() => undefined);
+			}
+			if (!accepted) {
+				throw new ToolError(
+					`${label} opened no file chooser and nothing on the page took the dropped files; target the page's <input type=file>, the control that opens the chooser, or its drop zone`,
+				);
+			}
 		} finally {
 			await files.dispose().catch(() => undefined);
 		}
@@ -949,7 +1012,7 @@ export async function prepareElementUpload(
 	} finally {
 		pagesAwaitingChooser.delete(page);
 	}
-	return preparedUpload(sources, sig => deliverToDropZone(handle, sources, route, staging, sig));
+	return preparedUpload(sources, sig => deliverToDropZone(handle, sources, route, staging, label, sig));
 }
 
 /** Press a keyboard key without releasing it. */
