@@ -90,7 +90,7 @@ export declare class DesktopSession {
   axNode(reference: string): Promise<AxNode>
   axAttributes(reference: string): Promise<Array<[string, string]>>
   /** The element's whole text as Markdown (macOS). */
-  axMarkdown(reference: string): Promise<string>
+  axMarkdown(reference: string): Promise<AxText>
   axChildren(reference: string): Promise<Array<AxNode>>
   axParent(reference: string): Promise<AxNode | undefined | null>
   axPerform(reference: string, action: string): Promise<AxActed>
@@ -1197,6 +1197,16 @@ export interface AxSnapshotOptions {
   maxDepth?: number
   maxNodes?: number
   all?: boolean
+}
+
+/** An element's whole text as Markdown (macOS). */
+export interface AxText {
+  markdown: string
+  /**
+   * The app had destroyed the ref's element; the read went to the one
+   * element identical to it, which the ref names from now on.
+   */
+  refound: boolean
 }
 
 export interface BlockParseOptions {

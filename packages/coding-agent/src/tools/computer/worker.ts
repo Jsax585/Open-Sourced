@@ -14,6 +14,7 @@ import type {
 	AxNode,
 	AxQuery,
 	AxSnapshotOptions,
+	AxText,
 	CaptureRegion,
 	DesktopCapabilities,
 	DesktopCapture,
@@ -92,7 +93,7 @@ export interface NativeDesktopSession {
 	axFocused(): Promise<AxNode | null | undefined>;
 	axNode(ref: string): Promise<AxNode>;
 	axAttributes(ref: string): Promise<Array<[string, string]>>;
-	axMarkdown(ref: string): Promise<string>;
+	axMarkdown(ref: string): Promise<AxText>;
 	axChildren(ref: string): Promise<AxNode[]>;
 	axParent(ref: string): Promise<AxNode | null | undefined>;
 	// The element actions resolve to `undefined` from an addon built before
@@ -411,8 +412,9 @@ class El {
 
 	async value(options?: ValueOptions): Promise<string | undefined> {
 		if (valueFormat(options) === "markdown") {
-			const { signal } = this.#getContext();
-			return nativeCall(signal, () => this.#session.axMarkdown(this.ref));
+			const text = await nativeCall(this.#getContext().signal, () => this.#session.axMarkdown(this.ref));
+			this.#reportRefound(text.refound);
+			return text.markdown;
 		}
 		return (await this.#node()).value;
 	}

@@ -25,6 +25,7 @@ import type {
 	AxNode,
 	AxQuery,
 	AxSnapshotOptions,
+	AxText,
 	CaptureRegion,
 	DesktopCapabilities,
 	DesktopCapture,
@@ -233,8 +234,8 @@ class FakeNativeSession implements NativeDesktopSession {
 	async axAttributes(_ref: string): Promise<Array<[string, string]>> {
 		return [];
 	}
-	async axMarkdown(_ref: string): Promise<string> {
-		return "";
+	async axMarkdown(_ref: string): Promise<AxText> {
+		return { markdown: "", refound: false };
 	}
 	async axChildren(_ref: string): Promise<AxNode[]> {
 		return [];
@@ -1340,6 +1341,9 @@ describe("computer worker round trips", () => {
 			override async axPerform(_ref: string, _action: string): Promise<AxActed> {
 				return { refound: true };
 			}
+			override async axMarkdown(_ref: string): Promise<AxText> {
+				return { markdown: "**Go**", refound: true };
+			}
 		}
 		for (const rebuilt of [true, false]) {
 			const transport = new MemoryTransport();
@@ -1347,12 +1351,12 @@ describe("computer worker round trips", () => {
 			const result = await runWorker(
 				transport,
 				`refound-${rebuilt}`,
-				'const el = await (await desktop.window(42)).ref("e1"); await el.press(); return await el.value();',
+				'const el = await (await desktop.window(42)).ref("e1"); await el.press(); await el.value({ format: "markdown" }); return await el.value();',
 			);
 			expect(result.ok).toBe(true);
 			if (!result.ok) return;
 			const notes = result.payload.displays.filter(block => block.type === "text").map(block => block.text);
-			expect(notes).toHaveLength(rebuilt ? 3 : 0);
+			expect(notes).toHaveLength(rebuilt ? 4 : 0);
 			for (const note of notes) expect(note).toStartWith("e1: the app had destroyed this element");
 		}
 	});
@@ -2430,9 +2434,9 @@ describe("expanded computer APIs", () => {
 				this.calls.push(`axNode:${ref}`);
 				return { ...axNode, value: "Make it bold" };
 			}
-			override async axMarkdown(ref: string): Promise<string> {
+			override async axMarkdown(ref: string): Promise<AxText> {
 				this.calls.push(`axMarkdown:${ref}`);
-				return "Make it **bold**";
+				return { markdown: "Make it **bold**", refound: false };
 			}
 		}
 		const transport = new MemoryTransport();

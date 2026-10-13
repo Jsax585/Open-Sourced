@@ -245,6 +245,16 @@ pub struct AxActed {
 	pub refound: bool,
 }
 
+/// An element's whole text as Markdown (macOS).
+#[napi(object)]
+#[derive(Debug, Clone)]
+pub struct AxText {
+	pub markdown: String,
+	/// The app had destroyed the ref's element; the read went to the one
+	/// element identical to it, which the ref names from now on.
+	pub refound:  bool,
+}
+
 #[napi(object)]
 #[derive(Debug, Clone)]
 pub struct AxSnapshot {

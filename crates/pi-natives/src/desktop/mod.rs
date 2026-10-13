@@ -65,7 +65,7 @@ enum Response {
 	Nodes(Vec<AxNode>),
 	Node(Option<AxNode>),
 	Attributes(Vec<(String, String)>),
-	Text(String),
+	Text(AxText),
 }
 
 type Reply = flume::Sender<CoreResult<Response>>;
@@ -1060,8 +1060,9 @@ impl Worker {
 				Ok(Response::Node(Some(node)))
 			},
 			Request::AxMarkdown { reference, .. } => {
-				let h = self.registry.resolve(reference)?;
-				Ok(Response::Text(self.ax()?.markdown(&h)?))
+				let (markdown, refound) =
+					self.read_ref(reference, token, |worker, h| worker.ax()?.markdown(h))?;
+				Ok(Response::Text(AxText { markdown, refound }))
 			},
 			Request::AxAttributes { reference, .. } => {
 				let h = self.registry.resolve(reference)?;
@@ -1843,7 +1844,7 @@ impl DesktopSession {
 
 	/// The element's whole text as Markdown (macOS).
 	#[napi]
-	pub fn ax_markdown(&self, reference: String) -> Result<task::Promise<String>> {
+	pub fn ax_markdown(&self, reference: String) -> Result<task::Promise<AxText>> {
 		let c = Arc::clone(&self.core);
 		let token = c.cancellation.token();
 		Ok(task::blocking("desktop.axMarkdown", (), move |_| {
@@ -2208,6 +2209,15 @@ mod capture_tests {
 			let id = tree.element(h)?;
 			let title = tree.titles.get(&id).copied().unwrap_or_default();
 			Ok(vec![("AXTitle".to_string(), title.to_string())])
+		}
+
+		fn markdown(&mut self, h: &AxHandle) -> CoreResult<String> {
+			let tree = self
+				.tree
+				.as_ref()
+				.expect("formatted text needs a tree")
+				.lock();
+			Ok(format!("**{}**", tree.titles[&tree.element(h)?]))
 		}
 
 		fn destroyed(&mut self, h: &AxHandle) -> bool {
@@ -2695,6 +2705,20 @@ mod capture_tests {
 			(node.ref_.as_str(), node.title.as_deref(), node.refound),
 			("e2", Some("Go"), Some(true))
 		);
+	}
+
+	#[test]
+	fn a_markdown_read_of_a_rebuilt_element_says_it_was_refound() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		rebuild(&tree, 2, &[(3, "Stop"), (4, "Go")]);
+		let (reply, _rx) = flume::bounded(1);
+		let request = Request::AxMarkdown { reference: "e2".to_string(), reply };
+		let Ok(Response::Text(text)) =
+			worker.process(&request, &CancellationSource::default().token())
+		else {
+			panic!("the read must reach the copy");
+		};
+		assert_eq!((text.markdown.as_str(), text.refound), ("**Go**", true));
 	}
 
 	#[test]
