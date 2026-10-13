@@ -170,7 +170,7 @@ for (const [status, owner, disposition] of [
 				fetch: async () =>
 					Response.json(
 						{ error: { code: "model_not_found", message: "Resource missing", type: "api_error" } },
-					{ status, headers: { "retry-after-ms": "0" } },
+						{ status, headers: { "retry-after-ms": "0" } },
 					),
 			},
 		).result();
