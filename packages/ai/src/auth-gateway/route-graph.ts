@@ -116,6 +116,11 @@ export class RouteRegistry {
 		return route;
 	}
 
+	/** A registered virtual route only; never wraps a concrete catalog model. */
+	get(id: string): CompiledRoute | undefined {
+		return this.#routes.has(id) ? this.resolve(id) : undefined;
+	}
+
 	/** Virtual routes only, with the same current catalog snapshots used by request resolution. */
 	list(): readonly CompiledRoute[] {
 		return Object.freeze(

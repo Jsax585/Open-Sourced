@@ -4,6 +4,7 @@
 
 ### Added
 
+- Gateway clients can inspect one virtual route with `GET /v1/routes/:id`, preserving encoded IDs and excluding concrete or private model state ([#10147](https://github.com/can1357/oh-my-pi/pull/10147) by [@jroth1111](https://github.com/jroth1111)).
 - Authenticated gateway clients can list virtual routes and their current compiled targets through `GET /v1/routes`, without exposing private model state ([#10146](https://github.com/can1357/oh-my-pi/pull/10146) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway route definitions can be loaded from JSON5 files, with validation for unusable IDs, duplicate definitions and malformed or cyclic trees ([#10144](https://github.com/can1357/oh-my-pi/pull/10144) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway HTTP and stdio routers accept virtual route definitions at boot, including when a registry is supplied by the caller ([#10143](https://github.com/can1357/oh-my-pi/pull/10143) by [@jroth1111](https://github.com/jroth1111)).

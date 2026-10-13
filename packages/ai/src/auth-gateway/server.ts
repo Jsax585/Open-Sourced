@@ -14,6 +14,7 @@
  *   GET  /v1/credentials/check             → per-credential auth probe (diagnose 401s in a multi-account pool)
  *   GET  /v1/models                        → list known models from the registry
  *   GET  /v1/routes                        → list registered virtual routes
+ *   GET  /v1/routes/:id                    → inspect one registered virtual route
  *   POST /v1/chat/completions              → OpenAI chat-completions in/out
  *   POST /v1/messages                      → Anthropic messages in/out
  *   POST /v1/responses                     → OpenAI Responses in/out
@@ -646,6 +647,13 @@ function handleRoutesList(registry: RouteRegistry): Response {
 	return json(200, { object: "list", generation: registry.generation, data });
 }
 
+function handleRouteGet(registry: RouteRegistry, id: string): Response {
+	const route = registry.get(id);
+	if (!route) return json(404, { error: `Unknown route: ${id}` });
+	const { generation, targets, fallbacks } = route;
+	return json(200, { id, generation, targets, fallbacks });
+}
+
 /** `GET /v1/videos/:id` (poll) and `GET /v1/videos/:id/content` (download); group 1 = id, group 2 = `/content`. */
 const VIDEO_JOB_PATH = /^\/v1\/videos\/([^/]+)(\/content)?$/;
 
@@ -781,6 +789,17 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 
 			// Model catalog.
 			if (req.method === "GET" && pathname === "/v1/routes") return handleRoutesList(routeRegistry);
+			if (req.method === "GET" && pathname.startsWith("/v1/routes/")) {
+				const rawId = pathname.slice("/v1/routes/".length);
+				if (!rawId) return handleRoutesList(routeRegistry);
+				let id: string;
+				try {
+					id = decodeURIComponent(rawId);
+				} catch {
+					return json(400, { error: "invalid route id encoding" });
+				}
+				return handleRouteGet(routeRegistry, id);
+			}
 			if (req.method === "GET" && pathname === "/v1/models") {
 				return handleModelsList(opts);
 			}
