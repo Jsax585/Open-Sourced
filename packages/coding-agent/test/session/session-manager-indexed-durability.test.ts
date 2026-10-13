@@ -590,6 +590,33 @@ describe("indexed entries that missed the backend while whole-journal publishes 
 	});
 });
 
+describe("an indexed session started while the previous session's publish is still on the wire", () => {
+	it("keeps saving its turns after the previous session's publish confirms, while whole-journal publishes fail", async () => {
+		const backend = new FakeBackend();
+		const storage = new IndexedSessionStorage(backend);
+		await storage.initialize();
+		const manager = SessionManager.create("/cwd", "/sessions/proj", storage);
+		const hold = Promise.withResolvers<void>();
+		backend.holdNextWrite = hold;
+		manager.appendMessage(assistantMessage("previous session"));
+		await backend.writeHeld.promise;
+
+		const next = await manager.newSession();
+		if (!next) throw new Error("expected a new session file");
+		manager.appendMessage({ role: "user", content: "first", timestamp: Date.now() });
+		await storage.confirmWrites(next);
+		// The previous session's publish confirms only now, after the new
+		// session has its own durable frontier.
+		hold.resolve();
+		await storage.drain().catch(() => {});
+
+		backend.failWrites = Number.POSITIVE_INFINITY;
+		manager.appendMessage({ role: "user", content: "second", timestamp: Date.now() });
+		await expect(manager.flush()).resolves.toBeUndefined();
+		expect(userTurnsOf((await reopenIndexed(backend, next)).getBranch())).toEqual(["first", "second"]);
+	});
+});
+
 describe("an indexed durably discarded entry", () => {
 	async function sessionWithDiscardableTurn() {
 		const session = await seededIndexedSession();

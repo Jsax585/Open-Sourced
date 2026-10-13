@@ -1757,13 +1757,17 @@ export class SessionManager {
 				onConfirm?.();
 			})
 			.catch(err => {
-				this.#fileIsCurrent = false;
-				try {
-					this.#expectedDiskSize = this.#storage.existsSync(sessionFile)
-						? this.#storage.statSync(sessionFile).size
-						: null;
-				} catch {
-					// Backend unreadable: leave the record for the next write to re-establish.
+				// A publish for a session this manager has since left describes
+				// none of the current session's state; it is only reported.
+				if (sessionFile === this.#sessionFile) {
+					this.#fileIsCurrent = false;
+					try {
+						this.#expectedDiskSize = this.#storage.existsSync(sessionFile)
+							? this.#storage.statSync(sessionFile).size
+							: null;
+					} catch {
+						// Backend unreadable: leave the record for the next write to re-establish.
+					}
 				}
 				this.#noteDiskFailure(err);
 			});
@@ -1895,6 +1899,9 @@ export class SessionManager {
 					// A newer deferred publish owns the durability record now;
 					// this body is no longer on the backend, so record nothing.
 					if (generation !== this.#deferredPublishGen) return;
+					// The manager switched to another session since: this body
+					// says nothing about the current session's file.
+					if (targetPath !== this.#sessionFile && !this.#sessionFileRelocating) return;
 					this.#recordPublish(stamp, bytes, targetPath === this.#sessionFile);
 					if (targetPath !== this.#sessionFile) return;
 					this.#fileIsCurrent = true;
@@ -2681,7 +2688,14 @@ export class SessionManager {
 	async newSession(options?: NewSessionOptions): Promise<string | undefined> {
 		const refused = this.#refusedSessionSwitch;
 		const abandoning = refused?.entries === this.#entries && refused.count === this.#entries.length;
-		const unsaved = !abandoning && this.#persist && this.#sessionFile !== undefined && this.#hasUnsavedEntries();
+		// Only a tail past a valid frontier is healed here: a journal awaiting
+		// a republish (or a deferred publish's confirmation) switches as before.
+		const unsaved =
+			!abandoning &&
+			this.#persist &&
+			this.#sessionFile !== undefined &&
+			this.#durable?.entries === this.#entries &&
+			this.#hasUnsavedEntries();
 		if (unsaved) await this.#healMissingEntriesAndSettle();
 		let failure: unknown;
 		try {
