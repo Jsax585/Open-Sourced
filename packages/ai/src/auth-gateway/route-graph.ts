@@ -1,6 +1,7 @@
 import * as AIError from "../error";
 import { type GatewayErrorDisposition, RETRYABLE_GATEWAY_DISPOSITIONS } from "../error/gateway";
 import type { Api, Model } from "../types";
+import type { AffinityLevel, StatePortability } from "./affinity";
 
 export type TargetNode = { type: "target"; model: string; weight?: number };
 
@@ -23,12 +24,16 @@ export interface RouteRequestFacts {
 export interface RouteDefinition {
 	id: string;
 	root: RouteNode;
+	affinity?: AffinityLevel;
+	portability?: StatePortability;
 }
 
 export interface CompiledRoute {
 	generation: number;
 	id: string;
 	requestFacts?: Readonly<RouteRequestFacts>;
+	affinity?: AffinityLevel;
+	portability?: Readonly<StatePortability>;
 	root: RouteNode;
 	/** DFS target model ids in visit order (primary first). */
 	targets: readonly string[];
@@ -71,6 +76,7 @@ export class RouteRegistry {
 	#resolveModel: ResolveModel;
 	#routes = new Map<string, CompiledRoute>();
 	#definitions = new Map<string, RouteNode>();
+	#policies = new Map<string, { affinity?: AffinityLevel; portability?: Readonly<StatePortability> }>();
 	#models = new WeakMap<CompiledRoute, ReadonlyMap<string, Model<Api>>>();
 	#selections = new Map<string, { signature: string; position: number; credits: number[] }>();
 
@@ -109,18 +115,27 @@ export class RouteRegistry {
 		}
 		const nextDefinitions = new Map(replace ? undefined : this.#definitions);
 		const nextRoutes = new Map(replace ? undefined : this.#routes);
+		const nextPolicies = new Map(replace ? undefined : this.#policies);
 		let generation = this.#generation + (replace ? 1 : 0);
 		for (const definition of definitions) {
 			const expanded = expandRouteRefs(definition.root, id => roots.get(id), new Set([definition.id]));
 			compileNode(expanded, new Set());
 			const root = copyNode(expanded);
-			const compiled = this.#compile(definition.id, root, replace ? generation : ++generation);
+			const policy = {
+				...(definition.affinity !== undefined ? { affinity: definition.affinity } : {}),
+				...(definition.portability !== undefined
+					? { portability: Object.freeze({ ...definition.portability }) }
+					: {}),
+			};
+			const compiled = this.#compile(definition.id, root, replace ? generation : ++generation, undefined, policy);
 			nextDefinitions.set(definition.id, root);
 			nextRoutes.set(definition.id, compiled);
+			nextPolicies.set(definition.id, policy);
 		}
 		this.#generation = generation;
 		this.#definitions = nextDefinitions;
 		this.#routes = nextRoutes;
+		this.#policies = nextPolicies;
 		this.#selections.clear();
 	}
 
@@ -128,6 +143,7 @@ export class RouteRegistry {
 	unregister(id: string): boolean {
 		if (!this.#routes.delete(id)) return false;
 		this.#definitions.delete(id);
+		this.#policies.delete(id);
 		this.#selections.clear();
 		this.#generation += 1;
 		return true;
@@ -138,7 +154,13 @@ export class RouteRegistry {
 		return target === undefined ? undefined : this.#models.get(route)?.get(target);
 	}
 
-	#compile(id: string, source: RouteNode, generation: number, facts?: RouteRequestFacts): CompiledRoute {
+	#compile(
+		id: string,
+		source: RouteNode,
+		generation: number,
+		facts?: RouteRequestFacts,
+		policy: { affinity?: AffinityLevel; portability?: Readonly<StatePortability> } = this.#policies.get(id) ?? {},
+	): CompiledRoute {
 		const resolved = new Map<string, Model<Api> | undefined>();
 		const models = new Map<string, Model<Api>>();
 		const normalize = (node: RouteNode): RouteNode => {
@@ -155,6 +177,7 @@ export class RouteRegistry {
 		const route: CompiledRoute = Object.freeze({
 			generation,
 			id,
+			...policy,
 			...(facts ? { requestFacts: Object.freeze({ ...facts }) } : {}),
 			root,
 			targets: Object.freeze([...compiled.targets]),

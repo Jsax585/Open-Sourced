@@ -1,6 +1,7 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { ResolvedApiKey } from "../auth-retry";
 import { classifyGatewayError, type GatewayErrorClassification } from "../error/gateway";
+import { ValidationError } from "../error";
 import { providerRetryDirective } from "../error/retryable";
 import { completeSimple, streamSimple } from "../stream";
 import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model, SimpleStreamOptions } from "../types";
@@ -18,6 +19,9 @@ import {
 } from "./dispatch";
 import { gatewayResponseHeaders, json } from "./http";
 import { GatewayRequestLifecycle, runGatewayHook } from "./hooks";
+import { candidateAllowed } from "./affinity";
+import { capabilitiesFor, fitsRequest, requestNeeds } from "./capabilities";
+import { surfaceAllowsApi, type GatewaySurface } from "./route-surface";
 import {
 	type GatewayResponseOwner,
 	type GatewayResponseOwnership,
@@ -144,6 +148,8 @@ export interface GatewayChatExecutionOptions {
 	previousId: string | undefined;
 	previousOwner: Readonly<GatewayResponseOwner> | undefined;
 	requestHeaders: Record<string, string> | undefined;
+	/** Native-only wire controls cannot be silently translated to another API. */
+	requiresNativeSurface?: GatewaySurface;
 	sessionStates: AuthGatewaySessionStateStore;
 	responseOwners: GatewayResponseOwnership;
 	validateModel: (model: Model<Api>) => string | undefined;
@@ -187,6 +193,7 @@ async function executeGatewayChat(
 	state: { streaming: boolean },
 ): Promise<Response> {
 	const { boot, registry, compiled, requestId, controller, sessionId, previousId, previousOwner } = opts;
+	const needs = requestNeeds(opts.context);
 	return withGatewayCredentialTurn(boot.storage, requestId, controller, async turn => {
 		const firstTarget = previousOwner?.target ?? registry.pickInitialTarget(compiled);
 		if (firstTarget === undefined || !compiled.targets.includes(firstTarget))
@@ -325,6 +332,31 @@ async function executeGatewayChat(
 				trace({ disposition: "skipped", reason: "capability_mismatch" });
 				return opts.formatError(400, "invalid_request_error", rejection);
 			}
+			const circuitOpen = boot.providerHealth?.state(model.provider, model.id) === "open";
+			const capabilitiesFit =
+				fitsRequest(capabilitiesFor(model), needs) &&
+				(opts.requiresNativeSurface === undefined || surfaceAllowsApi(opts.requiresNativeSurface, model.api));
+			const level = compiled.affinity ?? "preferred";
+			const providerFits =
+				compiled.portability?.scope !== "provider" ||
+				candidateAllowed(compiled.portability, { id: target, provider: model.provider }, level);
+			if (circuitOpen || !capabilitiesFit || !providerFits) {
+				trace({
+					disposition: "skipped",
+					reason: circuitOpen ? "circuit_open" : !providerFits ? "state_incompatible" : "capability_mismatch",
+				});
+				const unavailable: GatewayErrorClassification = {
+					status: circuitOpen ? 503 : 400,
+					type: "invalid_request_error",
+					message: circuitOpen
+						? "Target circuit is temporarily open"
+						: "Target is incompatible with request capabilities or required state",
+					owner: circuitOpen ? "provider" : "model",
+					disposition: circuitOpen ? "provider_unavailable" : "model_unavailable",
+				};
+				if (retry(unavailable, false)) continue;
+				return errorResponse(unavailable, model, unavailable);
+			}
 			const apiKey = await resolveGatewayApiKey(boot.storage, model, sessionId, controller.signal, opts.peer, {
 				requestId,
 				credentialId: requestedCredential ?? selectedKey?.credentialId,
@@ -355,6 +387,24 @@ async function executeGatewayChat(
 			};
 			if (previousOwner && previousOwner.account !== owner.account)
 				return opts.formatError(400, "invalid_request_error", "previous_response_id belongs to another account");
+			const stateFits = (account: string): boolean =>
+				candidateAllowed(
+					compiled.portability,
+					{ id: target, provider: model.provider, accountId: account, deployment: owner.endpoint },
+					level,
+				);
+			if (!stateFits(owner.account)) {
+				trace({ disposition: "skipped", reason: "state_incompatible" });
+				const unavailable: GatewayErrorClassification = {
+					status: 400,
+					type: "invalid_request_error",
+					message: "Selected credential or deployment does not satisfy required state affinity",
+					owner: compiled.portability?.scope === "account" ? "credential" : "model",
+					disposition: compiled.portability?.scope === "account" ? "credential_transient" : "model_unavailable",
+				};
+				if (retry(unavailable, false)) continue;
+				return errorResponse(unavailable, model, unavailable);
+			}
 			trace({ disposition: "dispatched" });
 			const lease = opts.sessionStates.acquire({
 				clientKey: opts.clientKey,
@@ -375,6 +425,27 @@ async function executeGatewayChat(
 				controller.signal.removeEventListener("abort", onAbort);
 			};
 			let replayEligible = true;
+			let healthRecorded = false;
+			const recordHealth = (message?: AssistantMessage, error?: unknown) => {
+				if (healthRecorded) return;
+				healthRecorded = true;
+				if (
+					message &&
+					(message.stopReason === "stop" || message.stopReason === "toolUse" || message.stopReason === "length")
+				) {
+					boot.providerHealth?.recordSuccess(model.provider, model.id);
+					return;
+				}
+				if (message?.stopReason === "aborted" || controller.signal.aborted) return;
+				const classified = classifyGatewayError(message ?? error);
+				if (classified.disposition === "model_unavailable")
+					boot.providerHealth?.recordFailure(model.provider, model.id, "model");
+				else if (
+					classified.disposition === "provider_transient" ||
+					classified.disposition === "provider_unavailable"
+				)
+					boot.providerHealth?.recordFailure(model.provider, model.id, "provider");
+			};
 			const hookContext = { requestId, routeId: compiled.id, generation: compiled.generation, target };
 			let attemptFinished = false;
 			const finishAttempt = async (ok: boolean) => {
@@ -390,9 +461,12 @@ async function executeGatewayChat(
 				streamOpts.providerSessionState = lease.states;
 				const resolved = (key: ResolvedApiKey) => {
 					if (attempt.signal.aborted) return;
+					const account = resolveGatewayAccount(boot.storage, model.provider, sessionId, key);
+					if (!stateFits(account))
+						throw new ValidationError("Refreshed or rotated credential does not satisfy required state affinity");
 					selectedKey = key;
 					if (key.credentialId !== undefined) attemptedCredentials.add(key.credentialId);
-					owner.account = resolveGatewayAccount(boot.storage, model.provider, sessionId, key);
+					owner.account = account;
 					owner.credentialId = key.credentialId;
 					lease.updateAccount(owner.account);
 				};
@@ -426,6 +500,7 @@ async function executeGatewayChat(
 					peer: opts.peer,
 				});
 				const observe = (message: AssistantMessage) => {
+					recordHealth(message);
 					recordGatewayUsage(boot.storage, model, opts.client, message.usage, message.timestamp || undefined);
 					if (message.stopReason !== "error" && message.stopReason !== "aborted")
 						opts.responseOwners.record(message.responseId, owner);
@@ -460,7 +535,7 @@ async function executeGatewayChat(
 				void source
 					.result()
 					.then(observe)
-					.catch(() => {});
+					.catch(error => recordHealth(undefined, error));
 				const probed = await probeStream(source, attempt.signal);
 				replayEligible = false;
 				if (
@@ -509,6 +584,7 @@ async function executeGatewayChat(
 					},
 				});
 			} catch (error) {
+				recordHealth(undefined, error);
 				await finishAttempt(false);
 				if (controller.signal.aborted) return opts.formatError(499, "request_aborted", "client closed request");
 				if (replayEligible && retry(classifyGatewayError(error), false)) continue;

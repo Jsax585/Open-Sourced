@@ -191,6 +191,14 @@ Behavioral route nodes work at every tree position, not just at the root:
 - `domain` groups ordered children under a `name` and advances on retryable failures. Explicit fallback conditions remain scoped to their own branches.
 - `route-ref` expands `route: "another-id"` into a snapshot at registration. Self/structural/reference cycles and missing references are rejected. Boot batches and library `replaceAll` resolve against the complete incoming definition set, independently of order; invalid batches leave the registry intact. A later referenced-route edit does not retroactively mutate a previously expanded route—replace the complete graph to update dependent definitions.
 
+### Target health and state constraints
+
+Each router owns its target health book. Three consecutive provider/model failures open a 30-second circuit; a canonical success resets it. Credential quota/auth failures, caller cancellation and observer failures do not poison target health, and one attempt is counted once. Open-circuit and incompatible capability skips can follow only the graph's declared availability edges; they never cause unconditional fallback or replay billed/committed output.
+
+Route definitions may add `affinity: "required"` with `portability: { scope, origin }`. `scope` is `portable`, `provider`, `account` or `deployment`; non-portable required scopes fail closed when origin is absent. Provider origins use the provider ID. Account origins use the captured `resolveGatewayAccount` identity; deployment origins use the `responseEndpointIdentity` fingerprint (endpoint/model headers and caller project/organization). Account/deployment checks run after credential preparation, and a later authentication refresh cannot substitute a foreign required account. `preferred`/`none` do not impose that extra hard constraint; existing continuation and file-reference guards remain mandatory.
+
+Model capability checks use resolved model records, including `supportsTools: false`. Native-only Google schema controls require a KDL-declared compatible API; ordinary stateless client-format translation can still use another chat backend.
+
 ### Route management
 
 `PUT /v1/routes/:id` registers or atomically replaces a virtual route from JSON/JSON5. It accepts a definition with a matching `id`, or a `root` object whose ID is supplied by the decoded path. Invalid syntax, mismatched IDs and invalid/cyclic definitions return 400 without changing registry generations or existing routes. Changes are in-memory; route files are not rewritten.

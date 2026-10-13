@@ -70,6 +70,7 @@ import {
 	responseEndpointIdentity,
 } from "./response-ownership";
 import { RouteRegistry } from "./route-graph";
+import { ProviderHealthBook } from "./provider-health";
 import { routeRequestFacts } from "./request-facts";
 import { parseRouteDefinition } from "./route-definitions";
 import { handleEmbeddings } from "./routes/embeddings";
@@ -456,6 +457,12 @@ async function handleFormatEndpoint(
 		previousId,
 		previousOwner,
 		requestHeaders: parsed.options.headers,
+		requiresNativeSurface:
+			parsed.options.responseMimeType !== undefined ||
+			parsed.options.responseSchema !== undefined ||
+			parsed.options.responseJsonSchema !== undefined
+				? "gemini-v1beta"
+				: undefined,
 		sessionStates,
 		responseOwners,
 		validateModel: target => {
@@ -558,6 +565,12 @@ async function handlePiNative(
 		previousId,
 		previousOwner,
 		requestHeaders,
+		requiresNativeSurface:
+			parsed.options.responseMimeType !== undefined ||
+			parsed.options.responseSchema !== undefined ||
+			parsed.options.responseJsonSchema !== undefined
+				? "gemini-v1beta"
+				: undefined,
 		sessionStates,
 		responseOwners,
 		validateModel: target =>
@@ -759,6 +772,7 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 		...opts,
 		routeRegistry,
 		decisionTraces: opts.decisionTraces ?? new RouteDecisionTraceLog(),
+		providerHealth: opts.providerHealth ?? new ProviderHealthBook(),
 	};
 	const sessionStates = new AuthGatewaySessionStateStore();
 	const responseOwners: GatewayResponseOwnership = {

@@ -2,6 +2,7 @@ import { isEnoent, isRecord } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import type { GatewayErrorDisposition } from "../error/gateway";
 import type { RouteDefinition, RouteNode } from "./route-graph";
+import type { AffinityLevel, StatePortability, StatePortabilityScope } from "./affinity";
 
 const GATEWAY_ERROR_DISPOSITIONS = {
 	cancelled: true,
@@ -108,7 +109,31 @@ export function parseRouteDefinition(input: unknown): RouteDefinition {
 	if (!("root" in input)) {
 		throw new AIError.ValidationError("Route definition missing root");
 	}
-	return { id: input.id, root: parseNode(input.root) };
+	let affinity: AffinityLevel | undefined;
+	if (input.affinity !== undefined) {
+		if (input.affinity !== "none" && input.affinity !== "preferred" && input.affinity !== "required")
+			throw new AIError.ValidationError("Unknown route affinity level");
+		affinity = input.affinity;
+	}
+	let portability: StatePortability | undefined;
+	if (input.portability !== undefined) {
+		if (!isRecord(input.portability)) throw new AIError.ValidationError("Route portability must be an object");
+		const { scope, origin } = input.portability;
+		if (scope !== "portable" && scope !== "provider" && scope !== "account" && scope !== "deployment")
+			throw new AIError.ValidationError("Unknown route portability scope");
+		if (origin !== undefined && (typeof origin !== "string" || !origin.trim()))
+			throw new AIError.ValidationError("Route portability origin must be a nonempty string");
+		portability = {
+			scope: scope as StatePortabilityScope,
+			...(origin !== undefined ? { origin: origin as string } : {}),
+		};
+	}
+	return {
+		id: input.id,
+		root: parseNode(input.root),
+		...(affinity !== undefined ? { affinity } : {}),
+		...(portability ? { portability } : {}),
+	};
 }
 
 /**

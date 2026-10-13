@@ -19,6 +19,7 @@ import { extractProviderRetryHint } from "../utils/retry-after";
 import type { RouteDefinition, RouteRegistry } from "./route-graph";
 import type { RouteDecisionTraceLog } from "./decision-trace";
 import type { GatewayHooks } from "./hooks";
+import type { ProviderHealthBook } from "./provider-health";
 import type { AuthGatewayServerOptions } from "./types";
 
 export type ModelResolver = (modelId: string) => Model<Api> | undefined;
@@ -51,6 +52,8 @@ export interface AuthGatewayRouteOptions {
 	decisionTraces?: RouteDecisionTraceLog;
 	/** Awaited lifecycle callbacks for parsed, resolved chat and pi-native requests. */
 	hooks?: GatewayHooks;
+	/** Per-router target circuit; injection keeps ownership and test clocks explicit. */
+	providerHealth?: ProviderHealthBook;
 }
 
 /** The HTTP server's options: the routes' plus its listener and inbound auth. */
