@@ -9,7 +9,28 @@ import { QuotaProbeLeaseBook } from "./probe-lease";
 import type { ApiKeySelection } from "./rank";
 import { extractOAuthCredentialPhysicalIdentifiers } from "./sqlite-credential-store";
 import type { UsageCache } from "./usage-cache";
-import type { AuthApiKeyOptions, AuthCredential } from "./types";
+import {
+	DEFAULT_TURN_RESERVATION_TTL_MS,
+	type AuthApiKeyOptions,
+	type AuthCredential,
+	type TurnReservation,
+	type TurnReservationResult,
+} from "./types";
+
+interface HeldTurn {
+	requestId: string;
+	expiresAtMs: number;
+	credentialId: number;
+	incarnation: number;
+	token: symbol;
+}
+
+function reservationExpiry(ttlMs: number): number {
+	const nowMs = Date.now();
+	if (!Number.isFinite(ttlMs) || ttlMs < 0 || ttlMs > Number.MAX_SAFE_INTEGER - nowMs)
+		throw new RangeError("Turn reservation TTL must be a finite non-negative duration");
+	return nowMs + ttlMs;
+}
 
 /** True only when an identifier present in both snapshots disagrees. A field
  * missing from either side is inconclusive (ordinary metadata loss on reload),
@@ -48,6 +69,7 @@ export interface CredentialCoordinationDeps {
 export class CredentialCoordination {
 	/** Per-credential generation counter, bumped when a row's physical identity changes. */
 	#credentialIncarnation = new Map<number, number>();
+	#turnReservations = new Map<string, HeldTurn>();
 	#inflightProbes = new Map<string, { credentialId: number; blockScope: string; leaseId: string }>();
 	#probeLeases: QuotaProbeLeaseBook;
 	readonly #deps: CredentialCoordinationDeps;
@@ -89,6 +111,9 @@ export class CredentialCoordination {
 		this.#deps.affinity.clearCredential(provider, credentialId);
 		this.#deps.blocks.clearCredential(provider, credentialId);
 		this.#probeLeases.purgeCredential(credentialId);
+		for (const [key, reservation] of this.#turnReservations) {
+			if (reservation.credentialId === credentialId) this.#turnReservations.delete(key);
+		}
 		for (const [requestId, probe] of this.#inflightProbes) {
 			if (probe.credentialId === credentialId) this.#inflightProbes.delete(requestId);
 		}
@@ -100,19 +125,135 @@ export class CredentialCoordination {
 		});
 	}
 
-	/**
-	 * {@link CredentialBlocks.blockedUntil} scoped per request. The requestId
-	 * parameter is carried for signature stability across the gateway stack;
-	 * request-scoped overlays arrive with turn reservations.
-	 */
+	/** An expired or replaced physical row never retains a turn hold. */
+	activeTurnReservation(
+		credentialId: number,
+		incarnation: number,
+		nowMs = Date.now(),
+	): { requestId: string; expiresAtMs: number } | undefined {
+		const key = `${credentialId}:${incarnation}`;
+		const held = this.#turnReservations.get(key);
+		if (!held) return undefined;
+		if (held.expiresAtMs <= nowMs || this.getCredentialIncarnation(credentialId) !== incarnation) {
+			this.#turnReservations.delete(key);
+			return undefined;
+		}
+		return { requestId: held.requestId, expiresAtMs: held.expiresAtMs };
+	}
+
+	hasForeignTurnReservation(credentialId: number, requestId?: string): boolean {
+		const held = this.activeTurnReservation(credentialId, this.getCredentialIncarnation(credentialId));
+		return held !== undefined && held.requestId !== requestId;
+	}
+
+	tryAcquireTurnReservation(args: {
+		credentialId: number;
+		incarnation: number;
+		requestId: string;
+		ttlMs?: number;
+	}): TurnReservationResult {
+		if (
+			!Number.isSafeInteger(args.credentialId) ||
+			args.credentialId < 1 ||
+			!Number.isSafeInteger(args.incarnation) ||
+			args.incarnation < 1 ||
+			!args.requestId
+		)
+			throw new TypeError("Turn reservations require a credential, incarnation and request identity");
+		if (this.getCredentialIncarnation(args.credentialId) !== args.incarnation)
+			return { ok: false, reason: "stale-incarnation" };
+		const expiresAtMs = reservationExpiry(args.ttlMs ?? DEFAULT_TURN_RESERVATION_TTL_MS);
+		const key = `${args.credentialId}:${args.incarnation}`;
+		const held = this.activeTurnReservation(args.credentialId, args.incarnation);
+		if (held && held.requestId !== args.requestId)
+			return { ok: false, reason: "held", heldByRequestId: held.requestId, expiresAtMs: held.expiresAtMs };
+		const token = Symbol("turn-reservation");
+		this.#turnReservations.set(key, { ...args, expiresAtMs, token });
+		const probe = this.#inflightProbes.get(args.requestId);
+		if (probe && probe.credentialId !== args.credentialId) this.clearQuotaProbe(args.requestId);
+		return {
+			ok: true,
+			reservation: {
+				credentialId: args.credentialId,
+				incarnation: args.incarnation,
+				requestId: args.requestId,
+				expiresAtMs,
+				release: () => {
+					if (this.#turnReservations.get(key)?.token === token) this.#turnReservations.delete(key);
+				},
+			},
+		};
+	}
+
+	/** Validate cooldown/probe ownership again after preparation, then reserve the exact serving incarnation. */
+	tryReservePreparedCredential(args: {
+		provider: string;
+		credentialId: number;
+		incarnation: number;
+		options?: AuthApiKeyOptions;
+		scopes?: string | readonly string[];
+		probeRequestId?: string;
+		/** Explicit targeted access may inspect a cooled-down row, never a foreign-held one. */
+		ignoreCooldown?: boolean;
+	}): { ok: true; reservation?: TurnReservation } | { ok: false } {
+		if (
+			args.options?.signal?.aborted ||
+			this.getCredentialIncarnation(args.credentialId) !== args.incarnation ||
+			this.hasForeignTurnReservation(args.credentialId, args.options?.requestId)
+		)
+			return { ok: false };
+		const index = this.#deps.pool.entries(args.provider).findIndex(entry => entry.id === args.credentialId);
+		if (index < 0) return { ok: false };
+		const providerKey = providerTypeKey(
+			args.provider,
+			this.#deps.pool.entries(args.provider)[index]!.credential.type,
+		);
+		if (!args.ignoreCooldown && this.#deps.blocks.isBlocked(args.provider, providerKey, index, args.scopes)) {
+			const scope = this.resolveQuotaProbeLeaseScope(args.provider, providerKey, index, args.scopes);
+			if (
+				!args.probeRequestId ||
+				scope === null ||
+				!this.isCurrentProbe(args.probeRequestId, args.credentialId, scope)
+			)
+				return { ok: false };
+		}
+		if (!args.options?.requestId || args.options.recordAffinity === false) return { ok: true };
+		const result = this.tryAcquireTurnReservation({
+			credentialId: args.credentialId,
+			incarnation: args.incarnation,
+			requestId: args.options.requestId,
+		});
+		return result.ok ? { ok: true, reservation: result.reservation } : { ok: false };
+	}
+
+	releaseTurnReservation(requestId: string): void {
+		for (const [key, held] of this.#turnReservations) {
+			if (held.requestId === requestId) this.#turnReservations.delete(key);
+		}
+		this.clearQuotaProbe(requestId);
+	}
+
+	/** Only renew live, current-incarnation holds; expired owners cannot resurrect a newer turn. */
+	renewTurnReservation(requestId: string, ttlMs = DEFAULT_TURN_RESERVATION_TTL_MS): void {
+		const expiresAtMs = reservationExpiry(ttlMs);
+		for (const [key, held] of this.#turnReservations) {
+			if (!this.activeTurnReservation(held.credentialId, held.incarnation)) continue;
+			if (held.requestId === requestId) this.#turnReservations.set(key, { ...held, expiresAtMs });
+		}
+	}
+
+	/** Foreign in-flight holds overlay durable cooldowns without changing their provenance. */
 	blockedUntilForRequest(
 		provider: string,
 		providerKey: string,
 		credentialIndex: number,
 		blockScopeOrScopes: string | readonly string[] | undefined = undefined,
-		_requestId?: string,
+		requestId?: string,
 	): number | undefined {
-		return this.#deps.blocks.blockedUntil(provider, providerKey, credentialIndex, blockScopeOrScopes);
+		const blocked = this.#deps.blocks.blockedUntil(provider, providerKey, credentialIndex, blockScopeOrScopes);
+		const id = this.#deps.pool.entries(provider)[credentialIndex]?.id;
+		const held = id === undefined ? undefined : this.activeTurnReservation(id, this.getCredentialIncarnation(id));
+		return held && held.requestId !== requestId ? Math.max(blocked ?? 0, held.expiresAtMs) : blocked;
 	}
 
 	isBlockedForRequest(
@@ -264,6 +405,7 @@ export class CredentialCoordination {
 			return false;
 		const credentialId = this.#deps.pool.entries(provider)[selection.index]?.id;
 		if (credentialId === undefined) return false;
+		if (this.hasForeignTurnReservation(credentialId, options?.requestId)) return false;
 		const scope = this.resolveQuotaProbeLeaseScope(provider, providerKey, selection.index, blockScopes ?? blockScope);
 		if (scope === null) return false;
 		const requestId = options?.requestId ?? anonymousProbeRequestKey(credentialId, scope);

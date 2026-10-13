@@ -198,6 +198,9 @@ it("does not probe cooling OAuth when a healthy stored API key can serve", async
 	expect(await storage.keys.getWithCredential(provider, "fresh", { requestId: "fresh" })).toMatchObject({
 		apiKey: "healthy-key",
 	});
+	expect(storage.coordination.hasInflightProbe("fresh")).toBe(false);
+	expect(storage.coordination.hasCoolingDownCredentials(provider)).toBe(true);
+	storage.coordination.releaseTurnReservation("fresh");
 	expect(storage.coordination.hasCoolingDownCredentials(provider)).toBe(false);
 	expect(storage.coordination.tryAcquireQuotaProbeLease(id, "scope:requested")).toBeTypeOf("string");
 });

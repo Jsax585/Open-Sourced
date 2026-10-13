@@ -19,6 +19,7 @@ import type {
 	KeysApi,
 	LimitsApi,
 	OAuthRequestIdentity,
+	TurnReservation,
 } from "./types";
 
 /**
@@ -484,6 +485,7 @@ export class KeyCascade implements KeysApi {
 		const incarnation =
 			credentialId === undefined ? undefined : this.#deps.coordination.getCredentialIncarnation(credentialId);
 		let keepProbe = false;
+		let reservation: TurnReservation | undefined;
 		try {
 			const apiKey = await this.#deps.overrides.resolve(selection.credential.key);
 			if (!apiKey) return undefined;
@@ -494,10 +496,23 @@ export class KeyCascade implements KeysApi {
 					this.#deps.coordination.getCredentialIncarnation(credentialId) !== incarnation)
 			)
 				return undefined;
+			if (credentialId !== undefined && incarnation !== undefined) {
+				const admission = this.#deps.coordination.tryReservePreparedCredential({
+					provider,
+					credentialId,
+					incarnation,
+					options,
+					scopes: selection.blockScopes,
+					probeRequestId: selection.probeRequestId,
+				});
+				if (!admission.ok) return undefined;
+				reservation = admission.reservation;
+			}
 			if (options?.recordAffinity !== false) this.#deps.affinity.record(provider, sessionId, "api_key", index);
 			keepProbe = true;
 			return { apiKey, credentialId };
 		} finally {
+			if (!keepProbe) reservation?.release();
 			if (!keepProbe && selection.probeRequestId) this.#deps.coordination.clearQuotaProbe(selection.probeRequestId);
 		}
 	}

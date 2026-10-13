@@ -38,6 +38,7 @@ import {
 	type OAuthCredential,
 	oauthAccountKey,
 	type StoredAuthCredential,
+	type TurnReservation,
 } from "./types";
 import type { UsageService } from "./usage";
 import {
@@ -53,7 +54,12 @@ import {
 export const OAUTH_REFRESH_FAILURE_BACKOFF_MS = 5 * 60 * 1000;
 
 /** OAuth bearer and credential chosen for a request, with its durable row id when available. */
-export type OAuthResolutionResult = { apiKey: string; credential: OAuthCredential; credentialId?: number };
+export type OAuthResolutionResult = {
+	apiKey: string;
+	credential: OAuthCredential;
+	credentialId?: number;
+	credentialIncarnation?: number;
+};
 
 /** Options for CredentialSelector.tryOAuth when evaluating one OAuth credential. */
 export type TryOAuthOptions = {
@@ -337,6 +343,7 @@ export class CredentialSelector {
 				).map(candidate => candidate.selection)
 			: order.map(index => credentials[index]!);
 		for (const selection of candidates) {
+			selection.blockScopes = blockScopes;
 			if (
 				!this.#deps.coordination.isBlockedForRequest(
 					provider,
@@ -768,6 +775,7 @@ export class CredentialSelector {
 					preflightFailures.add(candidate);
 					return;
 				}
+				if (this.#deps.coordination.hasForeignTurnReservation(initialCredentialId, options?.requestId)) return;
 				const beforeSync = candidate.selection.credential;
 				preflightRows ??= this.#reloadProviderRows(provider);
 				if (!this.#rebindOAuthSelection(preflightRows, candidate.selection, initialCredentialId)) {
@@ -1028,6 +1036,8 @@ export class CredentialSelector {
 		const coordination = this.#deps.coordination;
 		const credentialId = this.#deps.pool.entries(provider)[selection.index]?.id;
 		const incarnation = credentialId === undefined ? undefined : coordination.getCredentialIncarnation(credentialId);
+		if (credentialId !== undefined && coordination.hasForeignTurnReservation(credentialId, options?.requestId))
+			return undefined;
 		let probeScope: string | null = null;
 		let probeRequestId: string | undefined;
 		if (
@@ -1054,6 +1064,7 @@ export class CredentialSelector {
 			if (!coordination.acquireOrReuseQuotaProbeLease(probeRequestId, credentialId, probeScope)) return undefined;
 		}
 		let keepProbe = false;
+		let reservation: TurnReservation | undefined;
 		try {
 			const result = await this.#tryOAuthCredential(provider, selection, providerKey, sessionId, options, {
 				...usageOptions,
@@ -1075,9 +1086,25 @@ export class CredentialSelector {
 				)
 					return undefined;
 			}
+			if (result?.credentialId !== undefined && result.credentialIncarnation !== undefined) {
+				const admission = coordination.tryReservePreparedCredential({
+					provider,
+					credentialId: result.credentialId,
+					incarnation: result.credentialIncarnation,
+					options,
+					scopes: usageOptions.blockScopes ?? usageOptions.blockScope,
+					probeRequestId,
+					ignoreCooldown: usageOptions.allowFallback === false && !probeRequestId,
+				});
+				if (!admission.ok) return undefined;
+				reservation = admission.reservation;
+				const index = this.#deps.pool.entries(provider).findIndex(entry => entry.id === result.credentialId);
+				if (options?.recordAffinity !== false) this.#deps.affinity.record(provider, sessionId, "oauth", index);
+			}
 			keepProbe = result !== undefined;
 			return result;
 		} finally {
+			if (!keepProbe) reservation?.release();
 			if (!keepProbe && probeRequestId) coordination.clearQuotaProbe(probeRequestId);
 		}
 	}
@@ -1235,10 +1262,13 @@ export class CredentialSelector {
 					return undefined;
 			}
 			this.#deps.pool.noteBearer(provider, result.apiKey, credentialId);
-			if (options?.recordAffinity !== false) {
-				this.#deps.affinity.record(provider, sessionId, "oauth", selection.index);
-			}
-			return { apiKey: result.apiKey, credential: updated, credentialId };
+			return {
+				apiKey: result.apiKey,
+				credential: updated,
+				credentialId,
+				credentialIncarnation:
+					credentialId === undefined ? undefined : this.#deps.coordination.getCredentialIncarnation(credentialId),
+			};
 		} catch (error) {
 			const errorMsg = String(error);
 			// Only remove credentials for definitive auth failures

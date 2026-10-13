@@ -24,6 +24,22 @@ import type {
 /** Default remaining quota protected for accounts without an explicit policy override. */
 export const DEFAULT_USAGE_RESERVE_PCT = 10;
 
+/** Crash/abandonment backstop; owners renew reservations while inference remains active. */
+export const DEFAULT_TURN_RESERVATION_TTL_MS = 255_000;
+
+export interface TurnReservation {
+	credentialId: number;
+	incarnation: number;
+	requestId: string;
+	expiresAtMs: number;
+	release(): void;
+}
+
+export type TurnReservationResult =
+	| { ok: true; reservation: TurnReservation }
+	| { ok: false; reason: "held"; heldByRequestId: string; expiresAtMs: number }
+	| { ok: false; reason: "stale-incarnation" };
+
 /** Stored API key used by credential selection. */
 export type ApiKeyCredential = {
 	type: "api_key";

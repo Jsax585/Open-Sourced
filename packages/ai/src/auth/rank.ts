@@ -7,6 +7,8 @@ export type CredentialSelection<T extends AuthCredential> = {
 	index: number;
 	/** Lease owner carried to key-material resolution so failures release only this selection's probe. */
 	probeRequestId?: string;
+	/** Applicable cooldown scopes, retained until async key material has been validated. */
+	blockScopes?: readonly string[];
 };
 /** Selected OAuth credential for routing. */
 export type OAuthSelection = CredentialSelection<OAuthCredential>;
