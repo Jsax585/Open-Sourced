@@ -199,8 +199,16 @@ it("does not probe cooling OAuth when a healthy stored API key can serve", async
 		apiKey: "healthy-key",
 	});
 	expect(storage.coordination.hasInflightProbe("fresh")).toBe(false);
+	expect(storage.coordination.hasCoolingDownCredentials(provider)).toBe(false);
+	const healthy = storage.credentials.list(provider).find(row => row.credential.type === "api_key")!;
+	const explicit = storage.coordination.tryAcquireTurnReservation({
+		credentialId: healthy.id,
+		incarnation: 1,
+		requestId: "explicit-policy",
+	});
+	if (!explicit.ok) throw new Error("Expected an explicit fixture reservation");
 	expect(storage.coordination.hasCoolingDownCredentials(provider)).toBe(true);
-	storage.coordination.releaseTurnReservation("fresh");
+	explicit.reservation.release();
 	expect(storage.coordination.hasCoolingDownCredentials(provider)).toBe(false);
 	expect(storage.coordination.tryAcquireQuotaProbeLease(id, "scope:requested")).toBeTypeOf("string");
 });
