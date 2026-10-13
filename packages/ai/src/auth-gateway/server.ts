@@ -38,6 +38,8 @@ import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import type { AuthStorage } from "../auth-storage";
 import { ValidationError } from "../error";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
+import * as geminiV1beta from "../providers/gemini-v1beta-server";
+import { handleCountTokens } from "../providers/anthropic-count-tokens-server";
 import * as openaiChat from "../providers/openai-chat-server";
 import * as openaiResponses from "../providers/openai-responses-server";
 import * as piNative from "../providers/pi-native-server";
@@ -89,10 +91,23 @@ import { DEFAULT_AUTH_GATEWAY_BIND } from "./types";
 // `parseBind` lives in ../utils/parse-bind so the gateway and broker can't
 // drift on accepted inputs (e.g. empty hostname, IPv6 brackets).
 
-const FORMAT_ROUTES: Record<string, { module: FormatModule; label: string }> = {
+interface FormatRoute {
+	module: FormatModule;
+	label: string;
+	pathModel?: string;
+	pathStreaming?: boolean;
+}
+
+const GEMINI_MODEL_PATH = /^\/v1beta\/models\/(.+):(generateContent|streamGenerateContent)$/;
+const FORMAT_ROUTES: Record<string, FormatRoute> = {
 	"/v1/chat/completions": { module: openaiChat, label: "openai-chat" },
+	"/v1/grok/chat/completions": { module: openaiChat, label: "openai-chat" },
 	"/v1/messages": { module: anthropicMessages, label: "anthropic-messages" },
 	"/v1/responses": { module: openaiResponses, label: "openai-responses" },
+	"/backend-api/codex/responses": { module: openaiResponses, label: "openai-responses" },
+	"/backend-api/responses": { module: openaiResponses, label: "openai-responses" },
+	"/v1beta/models/generateContent": { module: geminiV1beta, label: "gemini-v1beta", pathStreaming: false },
+	"/v1beta/models/streamGenerateContent": { module: geminiV1beta, label: "gemini-v1beta", pathStreaming: true },
 };
 
 // (passthrough fast-path removed — it bypassed pi-ai provider logic, in
@@ -242,6 +257,9 @@ export function applyParsedGatewayOptions(opts: SimpleStreamOptions, options: Au
 	if (options.logitBias !== undefined) opts.logitBias = options.logitBias;
 	if (options.user !== undefined) opts.user = options.user;
 	if (options.responseFormat !== undefined) opts.responseFormat = options.responseFormat;
+	if (options.responseMimeType !== undefined) opts.responseMimeType = options.responseMimeType;
+	if (options.responseSchema !== undefined) opts.responseSchema = options.responseSchema;
+	if (options.responseJsonSchema !== undefined) opts.responseJsonSchema = options.responseJsonSchema;
 }
 
 function clientClosedResponse(route: { module: FormatModule }): Response {
@@ -333,7 +351,7 @@ function chatRouteRejection(model: Model<Api>, context: Context): string | undef
 // (handlePassthrough removed — see note above.)
 
 async function handleFormatEndpoint(
-	route: { module: FormatModule; label: string },
+	route: FormatRoute,
 	bootOpts: AuthGatewayRouteOptions,
 	req: Request,
 	peer: string,
@@ -353,6 +371,17 @@ async function handleFormatEndpoint(
 		return route.module.formatError(400, "invalid_request_error", `Invalid JSON body: ${String(error)}`);
 	}
 	if (controller.signal.aborted) return clientClosedResponse(route);
+	if (route.pathModel !== undefined || route.pathStreaming !== undefined) {
+		if (!isRecord(body))
+			return route.module.formatError(400, "invalid_request_error", "Request body must be an object");
+		if (route.pathModel !== undefined && body.model !== undefined && body.model !== route.pathModel)
+			return route.module.formatError(400, "invalid_request_error", "Body model must match the model-action path");
+		body = {
+			...body,
+			...(route.pathModel !== undefined ? { model: route.pathModel } : {}),
+			stream: route.pathStreaming,
+		};
+	}
 
 	// All three supported wire formats put the model id on a top-level `model`
 	// field. Read it without running the full strict schema so the route can
@@ -754,6 +783,38 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 			}
 
 			// Provider-format dispatch.
+			if (req.method === "POST") {
+				const geminiPath = GEMINI_MODEL_PATH.exec(pathname);
+				if (geminiPath) {
+					let pathModel: string;
+					try {
+						pathModel = decodeURIComponent(geminiPath[1]!);
+					} catch {
+						return geminiV1beta.formatError(400, "invalid_request_error", "invalid model path encoding");
+					}
+					return await handleFormatEndpoint(
+						{
+							module: geminiV1beta,
+							label: "gemini-v1beta",
+							pathModel,
+							pathStreaming: geminiPath[2] === "streamGenerateContent",
+						},
+						boot,
+						req,
+						peer,
+						sessionStates,
+						responseOwners,
+					);
+				}
+			}
+			if (req.method === "POST" && pathname === "/v1/messages/count_tokens") {
+				return await handleCountTokens(req, id => {
+					const compiled = routeRegistry.resolve(id);
+					return compiled?.targets
+						.map(target => routeRegistry.getModel(compiled, target))
+						.find(model => model !== undefined);
+				});
+			}
 			const formatRoute = FORMAT_ROUTES[pathname];
 			if (formatRoute && req.method === "POST") {
 				return await handleFormatEndpoint(formatRoute, boot, req, peer, sessionStates, responseOwners);

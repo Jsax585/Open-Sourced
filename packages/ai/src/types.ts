@@ -604,6 +604,10 @@ export interface StreamOptions {
 	user?: string;
 	/** OpenAI `response_format` (text | json_object | json_schema). Opaque passthrough. */
 	responseFormat?: unknown;
+	/** Google GenerateContent structured-output controls; ignored by other transports. */
+	responseMimeType?: string;
+	responseSchema?: Record<string, unknown>;
+	responseJsonSchema?: Record<string, unknown>;
 	/**
 	 * Store this request's result server-side on hosts that support it
 	 * (`compat.storeResponses`, e.g. Muse Code), so a stream that drops

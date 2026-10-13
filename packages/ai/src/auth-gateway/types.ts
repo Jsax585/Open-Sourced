@@ -47,6 +47,10 @@ export interface AuthGatewayParsedRequestOptions {
 	logitBias?: Record<string, number>;
 	/** OpenAI `response_format` (text | json_object | json_schema). Opaque passthrough. */
 	responseFormat?: unknown;
+	/** Native Google structured-output controls. */
+	responseMimeType?: string;
+	responseSchema?: Record<string, unknown>;
+	responseJsonSchema?: Record<string, unknown>;
 
 	// ── Tools ─────────────────────────────────────────────────────────────
 	toolChoice?: AuthGatewayToolChoice;

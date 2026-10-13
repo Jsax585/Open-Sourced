@@ -199,6 +199,14 @@ Behavioral route nodes work at every tree position, not just at the root:
 
 Management is disabled by default. Library hosts must explicitly set `allowManagement: true` and a separate nonempty `adminBearerTokens` capability. The CLI opts in only when `OMP_AUTH_GATEWAY_ADMIN_TOKEN` contains an administrator token. Inference tokens and `--no-auth` do not authorize mutations. Admin tokens can read route metadata but do not independently authorize inference. Keep the admin token out of URLs and forwarded/identity headers; do not publish it in logs or route files.
 
+### Native protocol surfaces
+
+Gemini clients can use `/v1beta/models/{model}:generateContent` for JSON or `:streamGenerateContent` for SSE. Encode model IDs (including slashes) once. The action controls streaming; a conflicting body model is rejected. Body-based `/v1beta/models/generateContent` and `/v1beta/models/streamGenerateContent` aliases are also available. Image-only user turns, function declarations, named/subset tool controls, parallel function history and tool thought-signatures are preserved. Direct Google/Vertex requests retain native structured-output schema fields. File references, audio, code-execution/built-in tools, standalone thinking/signed-text parts and assistant-image history are not supported and are rejected instead of silently dropped.
+
+`/backend-api/codex/responses` and `/backend-api/responses` use the existing Responses pipeline; `/v1/grok/chat/completions` uses Chat Completions. They share normal authentication, continuation ownership, retry and lifecycle controls—not separate credential paths.
+
+`POST /v1/messages/count_tokens` estimates `ceil(JSON.stringify(input).length / 4)` over messages, system, tools and tool choice. It is not Anthropic's tokenizer, not a billed usage measure, and not a guarantee that a request fits a model context. It makes no provider call. Unknown models and malformed requests still fail.
+
 ### Lifecycle hooks
 
 Library hosts can supply `hooks` for `beforeRequest`, `beforeAttempt`, `afterAttempt` and `afterRequest` on parsed, resolved chat and pi-native requests. Callbacks are awaited and receive a private context copy with the request/route IDs, generation and (for attempts) canonical target. Completion hooks run once per dispatched attempt and once per overall request, including streaming settlement, cancellation and reader failure. Hook errors are gateway failures, not provider outages: they cannot replay completed inference or select a fallback. Invalid requests rejected before route resolution do not enter this lifecycle.

@@ -1865,6 +1865,9 @@ function mapOptionsForApi<TApi extends Api>(
 		logitBias: options?.logitBias,
 		user: options?.user,
 		responseFormat: options?.responseFormat,
+		responseMimeType: options?.responseMimeType,
+		responseSchema: options?.responseSchema,
+		responseJsonSchema: options?.responseJsonSchema,
 		...simpleProviderOptions,
 	};
 
