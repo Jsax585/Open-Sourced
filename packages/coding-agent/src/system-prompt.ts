@@ -605,6 +605,11 @@ export interface BuildSystemPromptResult {
 	 * a catalog the prompt already carries (issue #7139).
 	 */
 	xdevCatalogNames?: readonly string[];
+	/**
+	 * Context files the prompt was built from, including those discovered for additional
+	 * workspace roots. Lets the session watch every file the model was told about.
+	 */
+	contextFiles?: ReadonlyArray<{ path: string; content: string; depth?: number }>;
 }
 
 /** Static wrapper; compiled (not rendered) so user-authored Markdown passes through byte-for-byte. */
@@ -629,7 +634,8 @@ export function composeAppendPrompt(appendParts: readonly string[], appendSystem
 /** Build the system prompt with tools, guidelines, and context */
 export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<BuildSystemPromptResult> {
 	if ($env.NULL_PROMPT === "true") {
-		return { systemPrompt: [] };
+		// The empty prompt carries no context files, so none may be watched for live updates either.
+		return { systemPrompt: [], contextFiles: [] };
 	}
 
 	const {
@@ -1042,5 +1048,5 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		!resolvedCustomPrompt && xdevTools.length > 0 && rendered.includes("xd://")
 			? xdevTools.map(mounted => mounted.name)
 			: undefined;
-	return { systemPrompt, xdevCatalogNames };
+	return { systemPrompt, xdevCatalogNames, contextFiles };
 }

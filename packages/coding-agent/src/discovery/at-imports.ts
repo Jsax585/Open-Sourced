@@ -25,7 +25,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
-import { readFile } from "../capability/fs";
+import { invalidate, readFile } from "../capability/fs";
 
 /** Maximum number of recursive `@`-import hops. Matches Claude Code's documented cap. */
 export const MAX_AT_IMPORT_DEPTH = 5;
@@ -48,7 +48,12 @@ const AT_IMPORT_REGEX = /(^|[ \t])@([./~A-Za-z0-9_-][^\s]*)/g;
  */
 const TRAILING_PUNCT = /[.,;:!?)\]}"']+$/;
 
+/** Reads one imported file; `null` when it cannot be read. */
+type ImportReader = (filePath: string) => Promise<string | null>;
+
 export interface ExpandAtImportsOptions {
+	/** Skip the discovery content cache so an imported file that changed since startup is re-read. */
+	uncached?: boolean;
 	/** Maximum hop depth (default: {@link MAX_AT_IMPORT_DEPTH}). */
 	maxDepth?: number;
 	/** Override the home directory used to resolve `~/...` (default: `os.homedir()`). */
@@ -70,7 +75,13 @@ export async function expandAtImports(
 	const home = options.home ?? os.homedir();
 	const absoluteSource = path.resolve(filePath);
 	const visited = new Set<string>([absoluteSource]);
-	return await expand(content, path.dirname(absoluteSource), 0, maxDepth, home, visited);
+	const read: ImportReader = options.uncached
+		? async importPath => {
+				invalidate(importPath);
+				return await readFile(importPath);
+			}
+		: readFile;
+	return await expand(content, path.dirname(absoluteSource), 0, maxDepth, home, visited, read);
 }
 
 async function expand(
@@ -80,6 +91,7 @@ async function expand(
 	maxDepth: number,
 	home: string,
 	visited: Set<string>,
+	read: ImportReader,
 ): Promise<string> {
 	if (depth >= maxDepth) return content;
 
@@ -90,7 +102,7 @@ async function expand(
 			out.push(segment.text);
 			continue;
 		}
-		out.push(await expandTextSegment(segment.text, baseDir, depth, maxDepth, home, visited));
+		out.push(await expandTextSegment(segment.text, baseDir, depth, maxDepth, home, visited, read));
 	}
 	return out.join("");
 }
@@ -102,10 +114,11 @@ async function expandTextSegment(
 	maxDepth: number,
 	home: string,
 	visited: Set<string>,
+	read: ImportReader,
 ): Promise<string> {
 	const lines = text.split("\n");
 	for (let i = 0; i < lines.length; i++) {
-		lines[i] = await expandLine(lines[i], baseDir, depth, maxDepth, home, visited);
+		lines[i] = await expandLine(lines[i], baseDir, depth, maxDepth, home, visited, read);
 	}
 	return lines.join("\n");
 }
@@ -117,6 +130,7 @@ async function expandLine(
 	maxDepth: number,
 	home: string,
 	visited: Set<string>,
+	read: ImportReader,
 ): Promise<string> {
 	if (!line.includes("@")) return line;
 
@@ -144,7 +158,7 @@ async function expandLine(
 	let cursor = 0;
 	for (const m of matches) {
 		parts.push(line.slice(cursor, m.start));
-		const expanded = await resolveAndExpand(m.importPath, baseDir, depth, maxDepth, home, visited);
+		const expanded = await resolveAndExpand(m.importPath, baseDir, depth, maxDepth, home, visited, read);
 		parts.push(expanded ?? line.slice(m.start, m.end));
 		cursor = m.end;
 	}
@@ -159,6 +173,7 @@ async function resolveAndExpand(
 	maxDepth: number,
 	home: string,
 	visited: Set<string>,
+	read: ImportReader,
 ): Promise<string | null> {
 	const resolved = resolveImportPath(importPath, baseDir, home);
 	if (visited.has(resolved)) {
@@ -166,7 +181,7 @@ async function resolveAndExpand(
 		return null;
 	}
 
-	const content = await readFile(resolved);
+	const content = await read(resolved);
 	if (content === null) {
 		logger.debug("@-import: file not found", { path: resolved });
 		return null;
@@ -175,7 +190,7 @@ async function resolveAndExpand(
 	// Visited is shared across the whole expansion tree to break cycles,
 	// even cycles that span multiple importing files.
 	visited.add(resolved);
-	return await expand(content, path.dirname(resolved), depth + 1, maxDepth, home, visited);
+	return await expand(content, path.dirname(resolved), depth + 1, maxDepth, home, visited, read);
 }
 
 function resolveImportPath(importPath: string, baseDir: string, home: string): string {

@@ -27,6 +27,7 @@ import evalPreludeNoticePrompt from "../prompts/system/eval-prelude-notice.md" w
 import sessionAgentNoticePrompt from "../prompts/system/session-agent-notice.md" with { type: "text" };
 import toolRosterNoticePrompt from "../prompts/system/tool-roster-notice.md" with { type: "text" };
 import xdevMountNoticePrompt from "../prompts/system/xdev-mount-notice.md" with { type: "text" };
+import type { ContextFileEntry } from "../tools";
 import { isMCPToolName, normalizeToolNames } from "../tools/builtin-names";
 import { wrapToolWithMetaNotice } from "../tools/output-meta";
 import { isFilesystemSourcePath } from "../tools/path-utils";
@@ -74,6 +75,8 @@ export interface SessionToolsHost {
 	memoryBackendSession(): MemoryBackendStartOptions["session"];
 	clearInheritedProviderPromptCacheKey(): void;
 	clearMemoryPromotionSnapshot(): void;
+	/** Watch these files for live updates: they are the ones the just-committed base prompt carries. */
+	setAmbientContextFiles(files: readonly ContextFileEntry[]): void;
 	captureMemoryPromotionSnapshot(prompt: string[]): void;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
 	notifyCommandMetadataChanged(): void;
@@ -118,7 +121,12 @@ interface SessionToolsOptions {
 	rebuildSystemPrompt?: (
 		toolNames: string[],
 		tools: Map<string, AgentTool>,
-	) => Promise<{ systemPrompt: string[]; xdevCatalogNames?: readonly string[] }>;
+	) => Promise<{
+		systemPrompt: string[];
+		xdevCatalogNames?: readonly string[];
+		/** Context files the rebuilt prompt carries; watched only once the prompt is committed. */
+		contextFiles?: readonly ContextFileEntry[];
+	}>;
 	getMcpServerInstructions?: () => Map<string, string> | undefined;
 	xdev?: XdevState;
 	setActiveToolNames?: (names: Iterable<string>) => void;
@@ -1107,6 +1115,7 @@ export class SessionTools {
 		// Trigger of an implicit (non-forced) rebuild, rechecked at commit.
 		let implicitRebuildSignature: string | undefined;
 		let rebuiltXdevCatalogNames: readonly string[] | undefined;
+		let rebuiltContextFiles: readonly ContextFileEntry[] | undefined;
 		let candidateSurface: PromptSurface | undefined;
 		try {
 			if (restrictDeviceOnlyWrite) this.#setDeviceOnlyWrite?.(true);
@@ -1155,6 +1164,7 @@ export class SessionTools {
 					if (!forcePromptRefresh) implicitRebuildSignature = triggerSignature;
 					rebuiltSignature = signature;
 					rebuiltXdevCatalogNames = built.xdevCatalogNames;
+					rebuiltContextFiles = built.contextFiles;
 					candidateSurface = candidate;
 				}
 			}
@@ -1210,6 +1220,7 @@ export class SessionTools {
 				this.#lastAppliedToolSignature = rebuiltSignature;
 				this.#promptModelKey = this.#currentPromptModelKey();
 				this.#setBasePromptXdevNames(rebuiltXdevCatalogNames);
+				if (rebuiltContextFiles) this.#host.setAmbientContextFiles(rebuiltContextFiles);
 				// The rebuilt prompt is a fresh roster snapshot. Keep the complete
 				// pending delta for a turn override that hides it, while separately
 				// tracking any later frozen changes that must follow a delivered base.
@@ -1997,6 +2008,7 @@ export class SessionTools {
 				this.#baseSystemPrompt = built.systemPrompt;
 				this.#promptSurface = candidate;
 				this.#setBasePromptXdevNames(built.xdevCatalogNames);
+				if (built.contextFiles) this.#host.setAmbientContextFiles(built.contextFiles);
 				this.#host.clearMemoryPromotionSnapshot();
 				if (
 					previousBaseSystemPrompt.length !== this.#baseSystemPrompt.length ||

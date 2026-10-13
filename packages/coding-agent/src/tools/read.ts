@@ -813,7 +813,7 @@ type ReadParams = ReadToolInput;
  * path plain-file reads record only in `meta.source`. Returns `null` for
  * URL/internal sources that are not fs paths.
  */
-function readDetailsLinkPath(details: ReadToolDetails | undefined): string | null {
+export function readDetailsLinkPath(details: ReadToolDetails | undefined): string | null {
 	if (typeof details?.resolvedPath === "string") return details.resolvedPath;
 	const source = details?.meta?.source;
 	return source?.type === "path" && typeof source.value === "string" ? source.value : null;

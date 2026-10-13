@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added lazy nested context files: reading a file or directory below the working directory loads the `AGENTS.md` (or `CLAUDE.md`) files in between into context once, nearest first, and loads them again only after compaction or a revert removed them. `contextFiles.nestedDiscovery` (default on) turns it off. Symlinks into `node_modules` or outside the workspace, and dot directories at any depth, never contribute instructions.
+- Added live context file updates: edits to or deletion of the context files loaded at startup are announced to the agent before its next request. `contextFiles.liveUpdates` (default on) turns it off. Files from additional workspace roots are watched too, changed `@`-imports are re-read, and a pending update counts toward pre-prompt compaction.
 - Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
 
 ### Changed

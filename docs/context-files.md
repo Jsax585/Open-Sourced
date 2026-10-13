@@ -181,7 +181,28 @@ The same trailing block is emitted when `SYSTEM.md` selects the bundled custom-p
 
 Loading is automatic — there is no need to instruct the agent to search for `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursorrules`, or similar files during a session.
 
-When workspace-tree scanning is enabled (`includeWorkspaceTree`), deeper-directory `AGENTS.md` files that were _not_ auto-loaded (for example, ones below the current directory) are surfaced separately in a `<dir-context>` block that lists their paths and tells the agent to read them before editing those directories. Those files are pointers, not full injected content.
+When workspace-tree scanning is enabled (`includeWorkspaceTree`), deeper-directory `AGENTS.md` files that were _not_ auto-loaded (for example, ones below the current directory) are surfaced separately in a `<dir-context>` block that lists their paths and tells the agent to read them before editing those directories. Those files are pointers, not full injected content. With nested discovery on (the default), reading anything beneath such a directory also loads its files, see [Nested context files](#nested-context-files).
+
+## Nested context files
+
+The session-opening files above come from the working directory upward. Directories below the working directory are covered lazily: when the agent uses `read` on a file or directory under the working directory (or under an additional workspace root), the standalone `AGENTS.md` (or, where a directory has none, `CLAUDE.md`) in each directory between the target and that root is loaded into the conversation. The root itself is excluded because its files are already in the system prompt.
+
+- **Nearest first.** For `read packages/api/src/db.ts`, `packages/api/src/AGENTS.md` is delivered before `packages/api/AGENTS.md`. Each file arrives as its own hidden message carrying the absolute path and the `@`-expanded content, delivered before the model's next request, after the tool batch that triggered it.
+- **Once while it stays in context.** A file is never delivered again while its message is still part of the current conversation, so reading more files in the same area adds nothing. Compaction, a revert, or a branch switch that removes the message lets the next read in that area load it again. Nothing is tracked outside the conversation, so there is no state to go stale.
+- **Which files.** Only the names the `agents-md` and `claude-md` providers load. A disabled provider or a `disabledExtensions` entry such as `context-file:project:AGENTS.md` suppresses them here too. Empty files, files under a dot directory at any depth (a single leading `.`, so `..draft` is an ordinary directory), and anything under `node_modules` or `.git` are skipped. Symlinks are resolved first: a linked directory or file whose real location is outside the workspace root, or inside `node_modules` or a dot directory, contributes nothing. Reading the instruction file itself does not also inject it.
+- **Size.** Each file is cut to the same limit a `read` result gets (50 KiB or 3000 lines), with a note pointing at the file.
+
+Set `contextFiles.nestedDiscovery: false` to turn this off. Subagents use it too, each against its own conversation.
+
+## Live updates
+
+Context files the session loaded at startup (the user-level file and the ancestor files in `<repo-rules>`) are watched for edits and deletion. Before the next user prompt, and at each step boundary inside a long run, a changed file produces a hidden update message holding its new content, and a deleted file produces a note that its instructions no longer apply. If every loaded context file is gone, the message says the earlier project context no longer applies.
+
+- A touched file whose content is unchanged produces nothing, and an update is sent once. What the model has already been told is read back from the conversation, so an update that compaction removed is sent again.
+- A transient failure, such as a permission error or a read that fails mid-save, keeps the last known instructions and is retried at the next check. Only a confirmed missing file counts as deleted.
+- Changes to files pulled in through `@` imports are noticed only when the importing file itself changes. A file that did not exist at startup is picked up by `/new` or `/reload-plugins`, which rebuild the system prompt from disk and make earlier updates moot.
+
+Set `contextFiles.liveUpdates: false` to turn this off.
 
 ## `@` imports
 

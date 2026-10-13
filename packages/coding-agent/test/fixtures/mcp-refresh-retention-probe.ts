@@ -56,6 +56,7 @@ const host: SessionToolsHost = {
 	memoryBackendSession: () => ({}) as never,
 	clearInheritedProviderPromptCacheKey: () => {},
 	clearMemoryPromotionSnapshot: () => {},
+	setAmbientContextFiles: () => {},
 	captureMemoryPromotionSnapshot: () => {},
 	emitNotice: () => {},
 	notifyCommandMetadataChanged: () => {},

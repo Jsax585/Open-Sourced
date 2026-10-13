@@ -20,6 +20,7 @@ import type {
 	PythonExecutionMessage,
 } from "./messages";
 import { truncateMiddle } from "@oh-my-pi/pi-tui/tools/streaming-output";
+import { CONTEXT_FILE_UPDATE_MESSAGE_TYPE, NESTED_CONTEXT_MESSAGE_TYPE } from "./context-file-tracker";
 
 export interface HistoryFormatOptions {
 	/** Optional H1 prepended to the transcript. */
@@ -429,7 +430,13 @@ function executionLine(
  * reviewer — and its constraints don't drive the file-write misreads this
  * targets.
  */
-export const PRIMARY_CONTEXT_CUSTOM_TYPES: ReadonlySet<string> = new Set(["plan-mode-context", "plan-mode-reference"]);
+export const PRIMARY_CONTEXT_CUSTOM_TYPES: ReadonlySet<string> = new Set([
+	"plan-mode-context",
+	"plan-mode-reference",
+	// Project instructions the primary loaded or saw change mid-session: the reviewer judges against them too.
+	NESTED_CONTEXT_MESSAGE_TYPE,
+	CONTEXT_FILE_UPDATE_MESSAGE_TYPE,
+]);
 
 /**
  * Hidden non-primary custom messages whose content is needed to understand visible transcript entries:

@@ -262,6 +262,7 @@ import {
 	createTools,
 	createVibeTools,
 	createXdevState,
+	type ContextFileEntry,
 	type DeferredDiagnosticsEntry,
 	defaultLoadModeForToolName,
 	discoverStartupLspServers,
@@ -2195,6 +2196,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			advisorConfigsPromise,
 		]);
 	let contextFiles = initialContextFiles;
+	// What the latest prompt was actually built from: `contextFiles` plus any additional-root files.
+	let promptContextFiles: ReadonlyArray<ContextFileEntry> | undefined;
 
 	let agent: Agent;
 	const effectiveGetApiKey =
@@ -3977,12 +3980,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				activeRepoContext,
 			});
 
+			promptContextFiles = defaultPrompt.contextFiles ?? contextFiles;
+
 			if (typeof options.systemPrompt !== "function") {
 				return defaultPrompt;
 			}
 			const customPrompt = options.systemPrompt(defaultPrompt.systemPrompt);
 			return {
 				systemPrompt: typeof customPrompt === "string" ? [customPrompt] : customPrompt,
+				contextFiles: defaultPrompt.contextFiles,
 			};
 		};
 
@@ -4701,6 +4707,17 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		});
 		hasSession = true;
 		credentialNoticeSession = session;
+		// A fixed system prompt replaces the project context block, so nothing in it is watchable.
+		const promptIsFixed =
+			(options.systemPrompt !== undefined && typeof options.systemPrompt !== "function") ||
+			$env.NULL_PROMPT === "true";
+		await session.setAmbientContextFiles(promptIsFixed ? [] : (promptContextFiles ?? contextFiles), {
+			// Only entries the caller supplied may lack a file; anything else came from disk discovery.
+			diskBacked: true,
+			virtualPaths: new Set((options.contextFiles ?? []).map(file => path.resolve(file.path))),
+			// An explicit empty list means the caller wants no project context, nested or otherwise.
+			nestedDiscovery: !promptIsFixed && options.contextFiles?.length !== 0,
+		});
 		// Hashline snapshots are session-scoped: /new and switchSession fire the
 		// change callbacks, so clear the tool-side store there — stale tags would
 		// otherwise surface as "issued in this session" in mismatch diagnostics
