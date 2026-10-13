@@ -2217,13 +2217,6 @@ mod capture_tests {
 		_ownership: parking_lot::MutexGuard<'static, ()>,
 	}
 
-	impl TestWorker {
-		fn serve(self, rx: &flume::Receiver<QueuedRequest>, grace: Duration) {
-			let Self { worker, _ownership } = self;
-			worker.serve(rx, grace);
-		}
-	}
-
 	impl std::ops::Deref for TestWorker {
 		type Target = Worker;
 
@@ -2245,8 +2238,8 @@ mod capture_tests {
 		}
 	}
 
-	/// A worker for tests that send it no input, so they don't wait for the
-	/// ownership tests.
+	/// A worker for tests that send it no input. Served ones time their calls,
+	/// so they must not wait for the ownership tests.
 	fn unlocked_worker(backend: impl Backend + 'static) -> Worker {
 		Worker {
 			backend:       Ok(Box::new(backend)),
@@ -2311,7 +2304,7 @@ mod capture_tests {
 		let awake = Arc::clone(&backend.awake);
 		let (tx, rx) = flume::unbounded();
 		let grace = Duration::from_millis(500);
-		let serving = thread::spawn(move || worker_with(backend).serve(&rx, grace));
+		let serving = thread::spawn(move || unlocked_worker(backend).serve(&rx, grace));
 
 		send_and_wait(&tx, |reply| Request::Capabilities { reply });
 		assert!(awake.lock().is_empty(), "a status read must not hold the display awake");
@@ -2335,7 +2328,7 @@ mod capture_tests {
 		let awake = Arc::clone(&backend.awake);
 		let (tx, rx) = flume::unbounded();
 		let serving =
-			thread::spawn(move || worker_with(backend).serve(&rx, Duration::from_secs(3600)));
+			thread::spawn(move || unlocked_worker(backend).serve(&rx, Duration::from_secs(3600)));
 		send_and_wait(&tx, |reply| Request::ListWindows { reply });
 		drop(tx);
 		serving.join().unwrap();
@@ -2369,8 +2362,6 @@ mod capture_tests {
 		let (tx, rx) = flume::unbounded();
 		let (done_tx, done) = flume::bounded(1);
 		let join = thread::spawn(move || {
-			// Only window listings are sent, and the calls' timeouts must not
-			// include a wait for the ownership tests.
 			let mut worker = unlocked_worker(backend);
 			worker.display_awake = display_awake;
 			worker.serve(&rx, Duration::from_secs(3600));
