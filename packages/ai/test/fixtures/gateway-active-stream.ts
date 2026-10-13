@@ -9,6 +9,7 @@ import type { AssistantMessage, Model, SimpleStreamOptions } from "../../src/typ
 import { AssistantMessageEventStream } from "../../src/utils/event-stream";
 
 const native = process.argv[2] === "native";
+const beforeOutput = process.argv[3] === "before-output";
 const api = "gateway-idle-fixture";
 let calls = 0;
 let signal: AbortSignal | undefined;
@@ -39,9 +40,10 @@ registerCustomApi(
 			try {
 				events.push({ type: "start", partial: message });
 				events.push({ type: "text_start", contentIndex: 0, partial: message });
+				if (beforeOutput) await Bun.sleep(5500);
 				message.content = [{ type: "text", text: "opening" }];
 				events.push({ type: "text_delta", contentIndex: 0, delta: "opening", partial: message });
-				await Bun.sleep(5500);
+				if (!beforeOutput) await Bun.sleep(5500);
 				message.content = [{ type: "text", text: "opening completed" }];
 				events.push({ type: "text_delta", contentIndex: 0, delta: " completed", partial: message });
 				events.push({ type: "text_end", contentIndex: 0, content: "opening completed", partial: message });
