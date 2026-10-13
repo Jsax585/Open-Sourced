@@ -4,6 +4,7 @@ export * from "./http";
 export * from "./hooks";
 export * from "./affinity";
 export * from "./provider-health";
+export * from "./prompt-cache-store";
 export * from "./capabilities";
 export * from "./route-surface";
 export * from "./route-graph";

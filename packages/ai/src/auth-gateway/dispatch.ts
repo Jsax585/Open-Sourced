@@ -20,6 +20,7 @@ import type { RouteDefinition, RouteRegistry } from "./route-graph";
 import type { RouteDecisionTraceLog } from "./decision-trace";
 import type { GatewayHooks } from "./hooks";
 import type { ProviderHealthBook } from "./provider-health";
+import type { PromptCacheAffinityStore } from "./prompt-cache-store";
 import type { AuthGatewayServerOptions } from "./types";
 
 export type ModelResolver = (modelId: string) => Model<Api> | undefined;
@@ -54,6 +55,7 @@ export interface AuthGatewayRouteOptions {
 	hooks?: GatewayHooks;
 	/** Per-router target circuit; injection keeps ownership and test clocks explicit. */
 	providerHealth?: ProviderHealthBook;
+	promptCacheAffinity?: PromptCacheAffinityStore;
 }
 
 /** The HTTP server's options: the routes' plus its listener and inbound auth. */

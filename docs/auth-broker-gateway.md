@@ -191,6 +191,14 @@ Behavioral route nodes work at every tree position, not just at the root:
 - `domain` groups ordered children under a `name` and advances on retryable failures. Explicit fallback conditions remain scoped to their own branches.
 - `route-ref` expands `route: "another-id"` into a snapshot at registration. Self/structural/reference cycles and missing references are rejected. Boot batches and library `replaceAll` resolve against the complete incoming definition set, independently of order; invalid batches leave the registry intact. A later referenced-route edit does not retroactively mutate a previously expanded route—replace the complete graph to update dependent definitions.
 
+### Successful-serving cache preference
+
+The router remembers a successful serving target for 30 minutes (at most 4,096 entries) and prefers it on later turns with the same route/cache identity. Keys are SHA-256 fingerprints of the route plus the body/header cache key or existing stable session derivation; prompt text, raw headers and token bytes are not cache keys. This is routing affinity for a warmed prefix, not proof that an upstream cache hit occurred.
+
+Only canonical stop/length/tool-use completion records affinity. Partial/error/aborted streams do not. Preferred targets still pass capability, circuit, portability and credential checks; deleted/replaced credentials and conflicting explicit pins invalidate the preference. Responses continuations keep their actual stored owner instead of consulting this hint. A cached preference does not grant permission to replay committed or billed output or bypass a graph's fallback conditions.
+
+`affinity: "none"` disables this preference. Balanced graphs retain their configured strategy unless `affinity: "preferred"` explicitly opts into cache-first ranking. A changed route generation invalidates its old serving hint.
+
 ### Target health and state constraints
 
 Each router owns its target health book. Three consecutive provider/model failures open a 30-second circuit; a canonical success resets it. Credential quota/auth failures, caller cancellation and observer failures do not poison target health, and one attempt is counted once. Open-circuit and incompatible capability skips can follow only the graph's declared availability edges; they never cause unconditional fallback or replay billed/committed output.

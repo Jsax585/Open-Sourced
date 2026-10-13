@@ -28,12 +28,19 @@ import {
 	responseEndpointIdentity,
 } from "./response-ownership";
 import { decideAttempt, type ExecutionState } from "./route-conductor";
-import type { CompiledRoute, RouteRegistry } from "./route-graph";
+import type { CompiledRoute, RouteRegistry, RouteNode } from "./route-graph";
 import type { AuthGatewaySessionStateStore } from "./session-state";
 import { withGatewayCredentialTurn } from "./turn-lifecycle";
 import type { AuthGatewayStreamControl } from "./types";
 
 const MAX_PRELUDE_BYTES = 4 * 1024 * 1024;
+
+function containsBalance(node: RouteNode): boolean {
+	return (
+		node.type === "balance" ||
+		(node.type !== "target" && node.type !== "route-ref" && node.children.some(containsBalance))
+	);
+}
 const PRELUDE_EVENTS = new Set<AssistantMessageEvent["type"]>([
 	"start",
 	"text_start",
@@ -150,6 +157,7 @@ export interface GatewayChatExecutionOptions {
 	requestHeaders: Record<string, string> | undefined;
 	/** Native-only wire controls cannot be silently translated to another API. */
 	requiresNativeSurface?: GatewaySurface;
+	cacheFingerprint: string;
 	sessionStates: AuthGatewaySessionStateStore;
 	responseOwners: GatewayResponseOwnership;
 	validateModel: (model: Model<Api>) => string | undefined;
@@ -195,7 +203,26 @@ async function executeGatewayChat(
 	const { boot, registry, compiled, requestId, controller, sessionId, previousId, previousOwner } = opts;
 	const needs = requestNeeds(opts.context);
 	return withGatewayCredentialTurn(boot.storage, requestId, controller, async turn => {
-		const firstTarget = previousOwner?.target ?? registry.pickInitialTarget(compiled);
+		const normalTarget = registry.pickInitialTarget(compiled);
+		const cacheEligible =
+			compiled.affinity !== "none" && (compiled.affinity === "preferred" || !containsBalance(compiled.root));
+		let cacheHit = previousId || !cacheEligible ? undefined : boot.promptCacheAffinity?.lookup(opts.cacheFingerprint);
+		if (
+			cacheHit &&
+			(!compiled.targets.includes(cacheHit.model) ||
+				(cacheHit.generation !== undefined && cacheHit.generation !== compiled.generation) ||
+				registry.getModel(compiled, cacheHit.model)?.provider !== cacheHit.provider ||
+				(boot.storage.sessions.explicitCredentialId(cacheHit.provider, sessionId) !== undefined &&
+					boot.storage.sessions.explicitCredentialId(cacheHit.provider, sessionId) !== cacheHit.credentialId) ||
+				(cacheHit.credentialId !== undefined &&
+					(!boot.storage.credentials.list(cacheHit.provider).some(row => row.id === cacheHit!.credentialId) ||
+						boot.storage.coordination.getCredentialIncarnation(cacheHit.credentialId) !==
+							cacheHit.credentialIncarnation)))
+		) {
+			boot.promptCacheAffinity?.forget(opts.cacheFingerprint);
+			cacheHit = undefined;
+		}
+		const firstTarget = previousOwner?.target ?? cacheHit?.model ?? normalTarget;
 		if (firstTarget === undefined || !compiled.targets.includes(firstTarget))
 			return opts.formatError(
 				400,
@@ -215,7 +242,7 @@ async function executeGatewayChat(
 		let fallbackCount = 0;
 		let siblingsExhausted = false;
 		let selectedKey: ResolvedApiKey | undefined;
-		let requestedCredential: number | undefined = previousOwner?.credentialId;
+		let requestedCredential: number | undefined = previousOwner?.credentialId ?? cacheHit?.credentialId;
 		let sameTargetRetries = 0;
 		let siblingFailure: GatewayErrorClassification | undefined;
 		const trace = (entry: Pick<RouteDecisionTraceInput, "disposition" | "reason">) => {
@@ -376,6 +403,22 @@ async function executeGatewayChat(
 			}
 			selectedKey = apiKey;
 			if (apiKey.credentialId !== undefined) attemptedCredentials.add(apiKey.credentialId);
+			if (
+				cacheHit &&
+				target === cacheHit.model &&
+				resolveGatewayAccount(boot.storage, model.provider, sessionId, apiKey) !== cacheHit.accountId
+			) {
+				boot.promptCacheAffinity?.forget(opts.cacheFingerprint);
+				cacheHit = undefined;
+				if (normalTarget !== undefined && normalTarget !== target) {
+					boot.storage.coordination.releaseTurnReservation(requestId);
+					target = normalTarget;
+					selectedKey = undefined;
+					requestedCredential = undefined;
+					attemptedCredentials = new Set();
+					continue;
+				}
+			}
 			const owner: GatewayResponseOwner = {
 				sessionId,
 				target,
@@ -385,6 +428,10 @@ async function executeGatewayChat(
 				account: resolveGatewayAccount(boot.storage, model.provider, sessionId, apiKey),
 				credentialId: apiKey.credentialId,
 			};
+			let servedIncarnation =
+				apiKey.credentialId === undefined
+					? undefined
+					: boot.storage.coordination.getCredentialIncarnation(apiKey.credentialId);
 			if (previousOwner && previousOwner.account !== owner.account)
 				return opts.formatError(400, "invalid_request_error", "previous_response_id belongs to another account");
 			const stateFits = (account: string): boolean =>
@@ -468,6 +515,10 @@ async function executeGatewayChat(
 					if (key.credentialId !== undefined) attemptedCredentials.add(key.credentialId);
 					owner.account = account;
 					owner.credentialId = key.credentialId;
+					servedIncarnation =
+						key.credentialId === undefined
+							? undefined
+							: boot.storage.coordination.getCredentialIncarnation(key.credentialId);
 					lease.updateAccount(owner.account);
 				};
 				streamOpts.apiKey = previousId
@@ -504,6 +555,23 @@ async function executeGatewayChat(
 					recordGatewayUsage(boot.storage, model, opts.client, message.usage, message.timestamp || undefined);
 					if (message.stopReason !== "error" && message.stopReason !== "aborted")
 						opts.responseOwners.record(message.responseId, owner);
+					if (
+						cacheEligible &&
+						(message.stopReason === "stop" || message.stopReason === "length" || message.stopReason === "toolUse")
+					) {
+						boot.promptCacheAffinity?.remember(opts.cacheFingerprint, {
+							provider: model.provider,
+							model: owner.target,
+							accountId: owner.account,
+							generation: compiled.generation,
+							...(owner.credentialId !== undefined
+								? {
+										credentialId: owner.credentialId,
+										credentialIncarnation: servedIncarnation,
+									}
+								: {}),
+						});
+					}
 				};
 				if (!opts.stream) {
 					const message = await completeSimple(model, opts.context, streamOpts);

@@ -62,6 +62,7 @@ import {
 	isAuthorized,
 	json,
 	resolveClientIdentity,
+	resolvePromptCacheKey,
 	withCors,
 } from "./http";
 import {
@@ -71,6 +72,7 @@ import {
 } from "./response-ownership";
 import { RouteRegistry } from "./route-graph";
 import { ProviderHealthBook } from "./provider-health";
+import { PromptCacheAffinityStore } from "./prompt-cache-store";
 import { routeRequestFacts } from "./request-facts";
 import { parseRouteDefinition } from "./route-definitions";
 import { handleEmbeddings } from "./routes/embeddings";
@@ -457,6 +459,10 @@ async function handleFormatEndpoint(
 		previousId,
 		previousOwner,
 		requestHeaders: parsed.options.headers,
+		cacheFingerprint: Bun.SHA256.hash(
+			JSON.stringify([compiled.id, resolvePromptCacheKey(body, req.headers) ?? sessionId]),
+			"hex",
+		),
 		requiresNativeSurface:
 			parsed.options.responseMimeType !== undefined ||
 			parsed.options.responseSchema !== undefined ||
@@ -565,6 +571,10 @@ async function handlePiNative(
 		previousId,
 		previousOwner,
 		requestHeaders,
+		cacheFingerprint: Bun.SHA256.hash(
+			JSON.stringify([compiled.id, resolvePromptCacheKey(body, req.headers) ?? sessionId]),
+			"hex",
+		),
 		requiresNativeSurface:
 			parsed.options.responseMimeType !== undefined ||
 			parsed.options.responseSchema !== undefined ||
@@ -773,6 +783,7 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 		routeRegistry,
 		decisionTraces: opts.decisionTraces ?? new RouteDecisionTraceLog(),
 		providerHealth: opts.providerHealth ?? new ProviderHealthBook(),
+		promptCacheAffinity: opts.promptCacheAffinity ?? new PromptCacheAffinityStore(),
 	};
 	const sessionStates = new AuthGatewaySessionStateStore();
 	const responseOwners: GatewayResponseOwnership = {

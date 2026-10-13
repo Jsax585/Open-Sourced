@@ -67,6 +67,7 @@ async function withHealth(
 		routes: [
 			{
 				id: "work",
+				affinity: "none",
 				root: {
 					type: "fallback",
 					on: ["provider_unavailable", "model_unavailable"],
