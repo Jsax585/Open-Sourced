@@ -540,21 +540,25 @@ export interface OpenAICompat {
 	/**
 	 * Whether chat-completions and Responses requests may send `top_k`.
 	 * Unset sends it with the rest of the sampling group. `false` suppresses
-	 * only that extension, so a roster that advertised `temperature` and
-	 * `top_p` but not `top_k` does not 400. Default: true.
+	 * only that extension. An explicit `true` still sends when
+	 * `supportsSamplingParams` is false, so a roster that listed `top_k`
+	 * but not `temperature` does not drop it. Default: true.
 	 */
 	supportsTopK?: boolean;
 	/**
 	 * Whether chat-completions and Responses requests may send `min_p`.
 	 * Unset sends it with the rest of the sampling group. `false` suppresses
-	 * only that extension. Default: true.
+	 * only that extension. An explicit `true` still sends when
+	 * `supportsSamplingParams` is false. Default: true.
 	 */
 	supportsMinP?: boolean;
 	/**
 	 * Whether presence/frequency penalties and stop sequences may be sent.
 	 * First-party xAI `/v1/responses` rejects penalty fields for every model.
 	 * xAI reasoning models also reject them (and `stop`) on chat completions.
-	 * When unset, auto-detected. Default: true.
+	 * Unset sends penalties with the sampling group. An explicit `true` still
+	 * sends them when `supportsSamplingParams` is false. When unset,
+	 * auto-detected. Default: true.
 	 */
 	supportsPenaltyAndStopParams?: boolean;
 	/** Always send a max-token field when the caller did not provide one. Default: auto-detected (Kimi-family models derive TPM limits from max_tokens). */

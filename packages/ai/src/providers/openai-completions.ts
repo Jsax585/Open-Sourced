@@ -110,11 +110,13 @@ import {
 	type OpenAIPromptCacheOptions,
 	type OpenAIRequestSetup,
 	type OpenAIStrictToolsState,
+	openAISamplingExtensionEnabled,
 	parseAzureDeploymentNameMap,
 	resolveOpenAICompatPolicy,
 	resolveOpenAICompletionsOutputClamp,
 	resolveOpenAIOutputTokenParam,
 	resolveOpenAIRequestSetup,
+	samplingCompatFlag,
 	shouldDropAutoToolChoiceForReasoning,
 	shouldRetryWithoutStrictTools,
 } from "./openai-shared";
@@ -1994,34 +1996,53 @@ function buildParams(
 	}
 
 	// OpenAI proprietary reasoning models (o-series, gpt-5+) reject explicit
-	// sampling params with a 400 on every serving host (#5606).
-	if (initialCompat.supportsSamplingParams) {
+	// sampling params with a 400 on every serving host (#5606). top_k, min_p,
+	// and penalties stay out of that gate: an authored true still sends when
+	// the roster omitted temperature or top_p.
+	const samplingOn = initialCompat.supportsSamplingParams;
+	if (samplingOn) {
 		if (options?.temperature !== undefined) {
 			params.temperature = options.temperature;
 		}
 		if (options?.topP !== undefined) {
 			params.top_p = options.topP;
 		}
-		// top_k and min_p are separate extensions. Unset stays on with the
-		// sampling group; an explicit false (a roster that listed parameters
-		// and omitted that extension) must not ride supportsSamplingParams
-		// onto the wire.
-		if (options?.topK !== undefined && initialCompat.supportsTopK !== false) {
-			params.top_k = options.topK;
+	}
+	if (
+		options?.topK !== undefined &&
+		openAISamplingExtensionEnabled(
+			samplingOn,
+			initialCompat.supportsTopK,
+			samplingCompatFlag(model.compatConfig, "supportsTopK"),
+		)
+	) {
+		params.top_k = options.topK;
+	}
+	if (
+		options?.minP !== undefined &&
+		openAISamplingExtensionEnabled(
+			samplingOn,
+			initialCompat.supportsMinP,
+			samplingCompatFlag(model.compatConfig, "supportsMinP"),
+		)
+	) {
+		params.min_p = options.minP;
+	}
+	if (
+		openAISamplingExtensionEnabled(
+			samplingOn,
+			initialCompat.supportsPenaltyAndStopParams,
+			samplingCompatFlag(model.compatConfig, "supportsPenaltyAndStopParams"),
+		)
+	) {
+		if (options?.presencePenalty !== undefined) {
+			params.presence_penalty = options.presencePenalty;
 		}
-		if (options?.minP !== undefined && initialCompat.supportsMinP !== false) {
-			params.min_p = options.minP;
+		if (options?.repetitionPenalty !== undefined) {
+			params.repetition_penalty = options.repetitionPenalty;
 		}
-		if (initialCompat.supportsPenaltyAndStopParams) {
-			if (options?.presencePenalty !== undefined) {
-				params.presence_penalty = options.presencePenalty;
-			}
-			if (options?.repetitionPenalty !== undefined) {
-				params.repetition_penalty = options.repetitionPenalty;
-			}
-			if (options?.frequencyPenalty !== undefined) {
-				params.frequency_penalty = options.frequencyPenalty;
-			}
+		if (options?.frequencyPenalty !== undefined) {
+			params.frequency_penalty = options.frequencyPenalty;
 		}
 	}
 	if (options?.stopSequences?.length && initialCompat.supportsPenaltyAndStopParams) {

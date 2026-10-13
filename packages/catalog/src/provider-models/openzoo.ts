@@ -47,7 +47,10 @@ export function resolveOpenzooBaseUrl(baseUrl?: string): string {
 	// cache-namespace key, so a trailing slash on OPENZOO_BASE_URL must not
 	// spell a different endpoint than the same URL passed explicitly.
 	const raw = baseUrl?.trim() || getDefaultModelDiscoveryBaseUrl("openzoo") || OPENZOO_DEFAULT_BASE_URL;
-	return raw.endsWith("/") ? raw.slice(0, -1) : raw;
+	// Strip the whole suffix. One slash at a time is not idempotent: the
+	// manager normalizes, then the cache id normalizes again, and a second
+	// slash left over hashes a different namespace than the restored row.
+	return raw.replace(/\/+$/, "");
 }
 
 function openzooVariantFamily(id: string): EffortVariantFamily | undefined {
@@ -171,9 +174,10 @@ type OpenzooSamplingCompat = Pick<
  * whenever the flag is on, and a route that did not advertise a control
  * rejects it with 400. `true` when the list includes every control in the
  * group, so a cached no does not survive a refresh that now advertises them.
- * `top_k` and `min_p` are gated on their own: a list that has temperature
- * and top_p but omits one of those extensions sets only that flag false.
- * `undefined` when the list is absent — absence stays neutral.
+ * `top_k`, `min_p`, and the penalty group are not cleared when temperature
+ * or top_p is missing: a list that names one of those controls sets that
+ * flag true even while `supportsSamplingParams` is false. `undefined` when
+ * the list is absent — absence stays neutral.
  */
 function liveOpenzooSamplingCompat(entry: OpenAICompatibleModelRecord): OpenzooSamplingCompat | undefined {
 	if (!Array.isArray(entry.supported_parameters)) {

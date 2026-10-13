@@ -164,10 +164,18 @@ describe("openzoo built-in provider", () => {
 		Bun.env.OPENZOO_BASE_URL = "http://localhost:9402/v1";
 		expect(resolveOpenzooBaseUrl()).toBe("http://localhost:9402/v1");
 		expect(resolveOpenzooBaseUrl("https://tunnel.example/v1/")).toBe("https://tunnel.example/v1");
+		// The whole trailing-slash suffix comes off in one pass. A second
+		// normalize must not change the string: the cache id is hashed from it.
+		expect(resolveOpenzooBaseUrl("https://tunnel.example/v1//")).toBe("https://tunnel.example/v1");
+		const doubled = resolveOpenzooBaseUrl("https://tunnel.example/v1//");
+		expect(resolveOpenzooBaseUrl(doubled)).toBe(doubled);
 		// The env fallback is normalized exactly like the explicit path: the
 		// resolved string keys the model cache, so a stray slash must not fork it.
 		Bun.env.OPENZOO_BASE_URL = "https://tunnel.example/v1/";
 		expect(resolveOpenzooBaseUrl()).toBe("https://tunnel.example/v1");
+		Bun.env.OPENZOO_BASE_URL = "https://tunnel.example/v1//";
+		expect(resolveOpenzooBaseUrl()).toBe("https://tunnel.example/v1");
+		expect(resolveOpenzooBaseUrl(resolveOpenzooBaseUrl())).toBe("https://tunnel.example/v1");
 	});
 
 	test("namespaces the model cache per endpoint", () => {
@@ -182,6 +190,16 @@ describe("openzoo built-in provider", () => {
 		// One endpoint, one id: a configured trailing slash goes through the same
 		// resolver the manager uses, so it cannot mint a second cache namespace.
 		expect(resolveModelCacheProviderId("openzoo", { baseUrl: "https://tunnel.example/v1/" })).toBe(
+			resolveModelCacheProviderId("openzoo", { baseUrl: "https://tunnel.example/v1" }),
+		);
+		// Normalizing twice must keep the same namespace. The manager hashes
+		// the already-normalized URL, and a leftover slash used to miss the row.
+		const doubled = "https://tunnel.example/v1//";
+		const normalized = resolveOpenzooBaseUrl(doubled);
+		expect(resolveModelCacheProviderId("openzoo", { baseUrl: doubled })).toBe(
+			resolveModelCacheProviderId("openzoo", { baseUrl: normalized }),
+		);
+		expect(resolveModelCacheProviderId("openzoo", { baseUrl: normalized })).toBe(
 			resolveModelCacheProviderId("openzoo", { baseUrl: "https://tunnel.example/v1" }),
 		);
 	});
@@ -588,6 +606,48 @@ describe("openzoo built-in provider", () => {
 		expect(silent?.compat?.supportsMinP).toBeUndefined();
 		expect(built("example-lab/silent")?.compat.supportsTopK).toBe(true);
 		expect(built("example-lab/silent")?.compat.supportsMinP).toBe(true);
+	});
+
+	test("an advertised top_k, min_p, or penalty set stays on when temperature or top_p is omitted", async () => {
+		// supportsSamplingParams is false because the core pair is incomplete.
+		// The control that was listed must stay true, or the request drops it
+		// under that flag and the route never sees the parameter it advertised.
+		const options = openzooModelManagerOptions({
+			baseUrl: OPENZOO_DEFAULT_BASE_URL,
+			fetch: async () =>
+				Response.json({
+					data: [
+						{ id: "example-lab/top-k-without-temperature", supported_parameters: ["top_p", "top_k"] },
+						{ id: "example-lab/min-p-without-top-p", supported_parameters: ["temperature", "min_p"] },
+						{
+							id: "example-lab/penalties-only",
+							supported_parameters: ["presence_penalty", "frequency_penalty", "repetition_penalty", "stop"],
+						},
+					],
+				}),
+		});
+		const models = await options.fetchDynamicModels?.();
+		const built = (id: string) => {
+			const model = models?.find(item => item.id === id);
+			return model ? buildModel(model) : undefined;
+		};
+		const topK = built("example-lab/top-k-without-temperature");
+		const minP = built("example-lab/min-p-without-top-p");
+		const penalties = built("example-lab/penalties-only");
+
+		expect(topK?.compat.supportsSamplingParams).toBe(false);
+		expect(topK?.compat.supportsTopK).toBe(true);
+		expect(topK?.compat.supportsMinP).toBe(false);
+		expect(topK?.compatConfig?.supportsTopK).toBe(true);
+
+		expect(minP?.compat.supportsSamplingParams).toBe(false);
+		expect(minP?.compat.supportsMinP).toBe(true);
+		expect(minP?.compat.supportsTopK).toBe(false);
+		expect(minP?.compatConfig?.supportsMinP).toBe(true);
+
+		expect(penalties?.compat.supportsSamplingParams).toBe(false);
+		expect(penalties?.compat.supportsPenaltyAndStopParams).toBe(true);
+		expect(penalties?.compatConfig?.supportsPenaltyAndStopParams).toBe(true);
 	});
 
 	test("a folded router alias keeps an omitted top_k or min_p off", async () => {
