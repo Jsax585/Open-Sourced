@@ -451,6 +451,42 @@ describe("SessionManager JSONL software-crash durability", () => {
 		}
 	});
 
+	it("does not carry a failed append recovery into the first append after switching sessions", async () => {
+		class FailingAppendStorage extends MemorySessionStorage {
+			failNextAppend = false;
+
+			override appendSync(path: string, chunk: string): void {
+				if (this.failNextAppend) {
+					this.failNextAppend = false;
+					throw new Error("synthetic append failure");
+				}
+				super.appendSync(path, chunk);
+			}
+		}
+
+		const storage = new FailingAppendStorage();
+		const manager = SessionManager.create("/cwd", "/sessions", storage);
+		await manager.ensureOnDisk();
+		storage.failNextAppend = true;
+		manager.appendMessage({ role: "user", content: "lost in the old session", timestamp: Date.now() });
+
+		const replacement = SessionManager.create("/cwd", "/sessions", storage);
+		await replacement.ensureOnDisk();
+		const replacementFile = replacement.getSessionFile();
+		if (!replacementFile) throw new Error("Expected replacement session file");
+		await replacement.close();
+
+		await manager.setSessionFile(replacementFile);
+		const fullRewrite = spyOn(storage, "writeTextSync");
+		try {
+			manager.appendMessage({ role: "user", content: "first turn in the new session", timestamp: Date.now() });
+			expect(fullRewrite).not.toHaveBeenCalled();
+		} finally {
+			fullRewrite.mockRestore();
+			await manager.close().catch(() => undefined);
+		}
+	});
+
 	it("persists a branch marker when a discarded entry has content children", async () => {
 		const cwd = makeTempDir("@pi-discard-content-cwd-");
 		const sessionDir = path.join(cwd, "sessions");
