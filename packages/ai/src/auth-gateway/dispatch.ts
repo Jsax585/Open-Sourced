@@ -105,10 +105,15 @@ export async function resolveGatewayApiKey(
 	sessionId: string,
 	signal: AbortSignal,
 	peer: string,
+	requestId?: string,
 ): Promise<ResolvedApiKey | GatewayCredentialFailure> {
 	let apiKey: ResolvedApiKey | undefined;
 	try {
-		apiKey = await storage.keys.getWithCredential(model.provider, sessionId, modelKeyOptions(model, signal));
+		apiKey = await storage.keys.getWithCredential(
+			model.provider,
+			sessionId,
+			modelKeyOptions(model, signal, requestId),
+		);
 	} catch (error) {
 		const classified = classifyGatewayError(error);
 		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: classified.message });
@@ -156,6 +161,7 @@ async function refreshGatewayApiKeyAfterAuthError(
 	signal: AbortSignal,
 	format: string,
 	peer: string,
+	requestId?: string,
 ): Promise<ResolvedApiKey | undefined> {
 	const message = error instanceof Error ? error.message : String(error);
 	const status = extractHttpStatusFromError(error);
@@ -179,7 +185,7 @@ async function refreshGatewayApiKeyAfterAuthError(
 			error: message,
 		});
 		if (!switched) return undefined;
-		return storage.keys.getWithCredential(provider, sessionId, modelKeyOptions(model, signal));
+		return storage.keys.getWithCredential(provider, sessionId, modelKeyOptions(model, signal, requestId));
 	}
 	await storage.limits.invalidateMatching(provider, oldKey, { sessionId, signal });
 	logger.debug("auth-gateway retrying provider request after credential invalidation", {
@@ -188,12 +194,12 @@ async function refreshGatewayApiKeyAfterAuthError(
 		peer,
 		error: message,
 	});
-	return storage.keys.getWithCredential(provider, sessionId, modelKeyOptions(model, signal));
+	return storage.keys.getWithCredential(provider, sessionId, modelKeyOptions(model, signal, requestId));
 }
 
 /** Model-scoped key options: usage ranking by model id, routing to accounts discovery saw serve it. */
-function modelKeyOptions(model: Model<Api>, signal: AbortSignal): AuthApiKeyOptions {
-	return { modelId: model.id, accountIds: model.accountAccess && Object.keys(model.accountAccess), signal };
+function modelKeyOptions(model: Model<Api>, signal: AbortSignal, requestId?: string): AuthApiKeyOptions {
+	return { modelId: model.id, accountIds: model.accountAccess && Object.keys(model.accountAccess), signal, requestId };
 }
 
 /**
@@ -224,6 +230,7 @@ export function buildGatewayApiKeyResolver(
 	format: string,
 	peer: string,
 	onResolvedKey?: (apiKey: ResolvedApiKey) => void,
+	requestId?: string,
 ): ApiKeyResolver {
 	let lastKey = initialKey.apiKey;
 	let lastResolved = initialKey;
@@ -234,7 +241,7 @@ export function buildGatewayApiKeyResolver(
 		}
 		if (!lastChance) {
 			const refreshed = await storage.keys.getWithCredential(model.provider, sessionId, {
-				...modelKeyOptions(model, sig),
+				...modelKeyOptions(model, sig, requestId),
 				forceRefresh: true,
 				refreshReason: AIError.status(error) === 401 ? "auth-recovery" : undefined,
 			});
@@ -255,6 +262,7 @@ export function buildGatewayApiKeyResolver(
 			sig,
 			format,
 			peer,
+			requestId,
 		);
 		lastKey = next?.apiKey ?? lastKey;
 		if (next) {
@@ -272,6 +280,7 @@ export function buildGatewayContinuationApiKeyResolver(
 	initialKey: ResolvedApiKey,
 	requestSignal: AbortSignal,
 	onResolvedKey?: (apiKey: ResolvedApiKey) => void,
+	requestId?: string,
 ): ApiKeyResolver {
 	let current = initialKey;
 	return async ({ lastChance, error, signal }) => {
@@ -280,7 +289,7 @@ export function buildGatewayContinuationApiKeyResolver(
 			return undefined;
 		const sig = signal ?? requestSignal;
 		const access = await storage.oauth.accessById(model.provider, initialKey.credentialId, {
-			...modelKeyOptions(model, sig),
+			...modelKeyOptions(model, sig, requestId),
 			forceRefresh: true,
 			recordAffinity: false,
 			refreshReason: AIError.status(error) === 401 ? "auth-recovery" : undefined,

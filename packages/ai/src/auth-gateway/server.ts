@@ -93,6 +93,7 @@ import type {
 	AuthGatewayParsedRequest as ParsedFormatRequest,
 } from "./types";
 import { DEFAULT_AUTH_GATEWAY_BIND } from "./types";
+import { withGatewayCredentialTurn } from "./turn-lifecycle";
 
 // `parseBind` lives in ../utils/parse-bind so the gateway and broker can't
 // drift on accepted inputs (e.g. empty hostname, IPv6 brackets).
@@ -459,15 +460,49 @@ async function handleFormatEndpoint(
 	const sessionId =
 		previousOwner?.sessionId ?? clientKey ?? deriveSessionId(parsed.modelId, parsed.context, toolsJson);
 	parsed.options.promptCacheKey = sessionId;
-
-	// pi-ai's stream() does NOT consult AuthStorage — the caller (us) is
-	// expected to resolve the credential and pass it as `options.apiKey`.
-	// For OAuth providers this returns the access token (refreshed via the
-	// broker override on AuthStorage when needed).
-	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
-	if (controller.signal.aborted) return clientClosedResponse(route);
-	const traces = bootOpts.decisionTraces;
-	if ("status" in apiKey) {
+	return withGatewayCredentialTurn(bootOpts.storage, requestId, controller, async turn => {
+		// pi-ai's stream() does NOT consult AuthStorage — the caller (us) is
+		// expected to resolve the credential and pass it as `options.apiKey`.
+		// For OAuth providers this returns the access token (refreshed via the
+		// broker override on AuthStorage when needed).
+		const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer, requestId);
+		if (controller.signal.aborted) return clientClosedResponse(route);
+		const traces = bootOpts.decisionTraces;
+		if ("status" in apiKey) {
+			if (traces)
+				logger.debug(
+					"auth-gateway route decision",
+					redactedDecisionSummary(
+						traces.record({
+							requestId,
+							routeId: compiled.id,
+							generation: compiled.generation,
+							selectedTarget: compiled.root.model,
+							disposition: "skipped",
+							reason: apiKey.credentialLookupFailed ? "credential_lookup_failed" : "credential_unavailable",
+						}),
+					),
+				);
+			const response = route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
+			for (const [name, value] of Object.entries(gatewayResponseHeaders(model, { requestId })))
+				response.headers.set(name, value);
+			return response;
+		}
+		const owner: GatewayResponseOwner = {
+			sessionId,
+			target: `${model.provider}/${model.id}`,
+			provider: model.provider,
+			api: model.api,
+			endpoint: responseEndpointIdentity(model, parsed.options.headers),
+			account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
+		};
+		if (previousOwner && previousOwner.account !== owner.account) {
+			return route.module.formatError(
+				400,
+				"invalid_request_error",
+				"previous_response_id belongs to another account",
+			);
+		}
 		if (traces)
 			logger.debug(
 				"auth-gateway route decision",
@@ -477,255 +512,239 @@ async function handleFormatEndpoint(
 						routeId: compiled.id,
 						generation: compiled.generation,
 						selectedTarget: compiled.root.model,
-						disposition: "skipped",
-						reason: apiKey.credentialLookupFailed ? "credential_lookup_failed" : "credential_unavailable",
+						disposition: "dispatched",
 					}),
 				),
 			);
-		const response = route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
-		for (const [name, value] of Object.entries(gatewayResponseHeaders(model, { requestId })))
-			response.headers.set(name, value);
-		return response;
-	}
-	const owner: GatewayResponseOwner = {
-		sessionId,
-		target: `${model.provider}/${model.id}`,
-		provider: model.provider,
-		api: model.api,
-		endpoint: responseEndpointIdentity(model, parsed.options.headers),
-		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
-	};
-	if (previousOwner && previousOwner.account !== owner.account) {
-		return route.module.formatError(400, "invalid_request_error", "previous_response_id belongs to another account");
-	}
-	if (traces)
-		logger.debug(
-			"auth-gateway route decision",
-			redactedDecisionSummary(
-				traces.record({
+
+		const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
+		if (bootOpts.fetch) streamOpts.fetch = bootOpts.fetch;
+		// Per-session provider learning (sticky strict-tools / fast-mode / thinking
+		// fallbacks, Codex transport sessions). Owned by this gateway instance: the
+		// map is non-serializable, so no client can supply it and every turn would
+		// otherwise re-learn each lesson from a fresh upstream rejection. The lease
+		// keeps the entry out of reach of eviction until this request is done with
+		// it, so it MUST be released on every exit path.
+		const lease = sessionStates.acquire({
+			clientKey,
+			model,
+			context: parsed.context,
+			toolsJson,
+			account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
+		});
+		streamOpts.providerSessionState = lease.states;
+		streamOpts.apiKey = previousId
+			? buildGatewayContinuationApiKeyResolver(
+					bootOpts.storage,
+					model,
+					apiKey,
+					controller.signal,
+					undefined,
 					requestId,
-					routeId: compiled.id,
-					generation: compiled.generation,
-					selectedTarget: compiled.root.model,
-					disposition: "dispatched",
-				}),
-			),
-		);
-
-	const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
-	if (bootOpts.fetch) streamOpts.fetch = bootOpts.fetch;
-	// Per-session provider learning (sticky strict-tools / fast-mode / thinking
-	// fallbacks, Codex transport sessions). Owned by this gateway instance: the
-	// map is non-serializable, so no client can supply it and every turn would
-	// otherwise re-learn each lesson from a fresh upstream rejection. The lease
-	// keeps the entry out of reach of eviction until this request is done with
-	// it, so it MUST be released on every exit path.
-	const lease = sessionStates.acquire({
-		clientKey,
-		model,
-		context: parsed.context,
-		toolsJson,
-		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
-	});
-	streamOpts.providerSessionState = lease.states;
-	streamOpts.apiKey = previousId
-		? buildGatewayContinuationApiKeyResolver(bootOpts.storage, model, apiKey, controller.signal)
-		: buildGatewayApiKeyResolver(
-				bootOpts.storage,
-				model,
-				sessionId,
-				apiKey,
-				controller.signal,
-				route.label,
-				peer,
-				resolvedKey => {
-					owner.account = resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, resolvedKey);
-					lease.updateAccount(owner.account);
-				},
-			);
-	const commitGate = new StreamCommitGate();
-	if (parsed.stream && !commitGateObservesDownstreamSse(route.label)) {
-		const previousSse = streamOpts.onSseEvent;
-		streamOpts.onSseEvent = (event, sseModel) => {
-			const bytes = new TextEncoder().encode(event.raw.join("\n")).byteLength;
-			commitGate.classifyAndObserve(event.event ?? "", bytes);
-			previousSse?.(event, sseModel);
-		};
-	}
-
-	logger.info("auth-gateway request", {
-		requestId,
-		format: route.label,
-		model: parsed.modelId,
-		resolvedProvider: model.provider,
-		resolvedModel: model.id,
-		stream: parsed.stream,
-		peer,
-	});
-
-	if (!parsed.stream) {
-		try {
-			if (controller.signal.aborted) return clientClosedResponse(route);
-			const message = await completeSimple(model, parsed.context, streamOpts);
-			recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
-			if (message.stopReason === "aborted" || message.stopReason === "error") {
-				const errorMessage =
-					message.errorMessage ??
-					(message.stopReason === "aborted" ? "Request was aborted" : "Upstream request failed");
-				logger.warn("auth-gateway non-streaming failed", {
-					format: route.label,
-					reason: message.stopReason,
-					error: errorMessage,
+				)
+			: buildGatewayApiKeyResolver(
+					bootOpts.storage,
+					model,
+					sessionId,
+					apiKey,
+					controller.signal,
+					route.label,
 					peer,
-				});
-				if (message.stopReason === "aborted") {
-					return route.module.formatError(499, "request_aborted", errorMessage);
-				}
-				return finalizedErrorResponse(route.module, message, errorMessage);
-			}
-			responseOwners.record(message.responseId, owner);
-			return json(
-				200,
-				route.module.encodeResponse(message, parsed.modelId),
-				gatewayResponseHeaders(model, { requestId, costUsd: message.usage.cost.total, startedAt }),
-			);
-		} catch (error) {
-			if (controller.signal.aborted) return clientClosedResponse(route);
-			const classified = classifyGatewayError(error);
-			logger.warn("auth-gateway non-streaming aborted", {
-				format: route.label,
-				error: classified.message,
-				peer,
-			});
-			return finalizedErrorResponse(route.module, error);
-		} finally {
-			// Every non-streaming outcome — answered, upstream error, thrown,
-			// client gone — is done with the provider state here.
-			lease.release();
-		}
-	}
-
-	// A streamed turn outlives this function, so the lease travels with the
-	// event stream and is released when the turn settles. Until that handoff
-	// happens, the `finally` below owns it.
-	let streamOwnsLease = false;
-	try {
-		const holdsPrelude = commitGateObservesDownstreamSse(route.label);
-		const recordUsage = (events: AssistantMessageEventStream) => {
-			void events
-				.result()
-				.then(message => {
-					recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
-					if (message.stopReason !== "error" && message.stopReason !== "aborted")
-						responseOwners.record(message.responseId, owner);
-				})
-				.catch(() => {});
-		};
-
-		let sseStream: ReadableStream<Uint8Array>;
-		if (holdsPrelude) {
-			let lastAttempt: Promise<AssistantMessage> | undefined;
-			// Held-prelude failover: the gate buffers metadata frames until first
-			// output so a pre-commit retryable terminal can be retried without the
-			// dead attempt's frames reaching the client. Each attempt gets its own
-			// abort scope — cancelling a dead attempt's encoder must not poison the
-			// shared request signal that a replacement attempt still needs.
-			const openHeldAttempt = (): ReadableStream<Uint8Array> => {
-				const attemptCtl = new AbortController();
-				const onParentAbort = () => attemptCtl.abort(controller.signal.reason);
-				if (controller.signal.aborted) attemptCtl.abort(controller.signal.reason);
-				else controller.signal.addEventListener("abort", onParentAbort, { once: true });
-				const attemptEvents = streamSimple(model, parsed.context, { ...streamOpts, signal: attemptCtl.signal });
-				lastAttempt = attemptEvents.result();
-				recordUsage(attemptEvents);
-				void attemptEvents
-					.result()
-					.catch(() => {})
-					.finally(() => controller.signal.removeEventListener("abort", onParentAbort));
-				return holdSseUntilCommit(
-					route.module.encodeStream(attemptEvents, parsed.modelId, parsed.options, {
-						signal: attemptCtl.signal,
-						onCancel: reason =>
-							attemptCtl.abort(reason instanceof Error ? reason : new Error("attempt stream cancelled")),
-					}),
-					commitGate,
+					resolvedKey => {
+						owner.account = resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, resolvedKey);
+						lease.updateAccount(owner.account);
+					},
+					requestId,
 				);
+		const commitGate = new StreamCommitGate();
+		if (parsed.stream && !commitGateObservesDownstreamSse(route.label)) {
+			const previousSse = streamOpts.onSseEvent;
+			streamOpts.onSseEvent = (event, sseModel) => {
+				const bytes = new TextEncoder().encode(event.raw.join("\n")).byteLength;
+				commitGate.classifyAndObserve(event.event ?? "", bytes);
+				previousSse?.(event, sseModel);
 			};
-			let firstSse: ReadableStream<Uint8Array>;
-			try {
-				firstSse = openHeldAttempt();
-			} catch (error) {
-				const classified = classifyGatewayError(error);
-				logger.warn("auth-gateway streamSimple threw", { format: route.label, error: classified.message, peer });
-				return route.module.formatError(classified.status, classified.type, classified.message);
-			}
-			streamOwnsLease = true;
-			sseStream = pumpHeldSseAttempts(firstSse, openHeldAttempt, commitGate, {
-				maxAttempts: MAX_HELD_PRECOMMIT_ATTEMPTS,
-				shouldRetry: async () => {
-					if (previousId || controller.signal.aborted || !lastAttempt) return false;
-					const message = await lastAttempt;
-					if (hasBillableUsage(message.usage)) return false;
-					const classified = classifyGatewayError(message);
-					return (
-						classified.disposition === "provider_transient" || classified.disposition === "provider_unavailable"
-					);
-				},
-				onAbort: (error, attempt) =>
-					logger.info("auth-gateway held prelude ended pre-commit; retrying", {
-						route: route.label,
-						event: error.eventType,
-						attempt,
-						peer,
-					}),
-				synthesizeFailure: error => {
-					const classified = classifyGatewayError(error);
-					return encodeResponsesFailedFrame(parsed.modelId, classified.message);
-				},
-				onSettle: () => lease.release(),
-			});
-		} else {
-			let events: AssistantMessageEventStream;
+		}
+
+		logger.info("auth-gateway request", {
+			requestId,
+			format: route.label,
+			model: parsed.modelId,
+			resolvedProvider: model.provider,
+			resolvedModel: model.id,
+			stream: parsed.stream,
+			peer,
+		});
+
+		if (!parsed.stream) {
 			try {
 				if (controller.signal.aborted) return clientClosedResponse(route);
-				events = streamSimple(model, parsed.context, streamOpts);
-			} catch (error) {
-				const classified = classifyGatewayError(error);
-				logger.warn("auth-gateway streamSimple threw", { format: route.label, error: classified.message, peer });
-				return route.module.formatError(classified.status, classified.type, classified.message);
-			}
-			if (controller.signal.aborted) return clientClosedResponse(route);
-			recordUsage(events);
-			void events
-				.result()
-				.catch(() => {})
-				.finally(() => lease.release());
-			streamOwnsLease = true;
-			sseStream = route.module.encodeStream(events, parsed.modelId, parsed.options, {
-				signal: controller.signal,
-				onCancel: reason => {
-					if (!controller.signal.aborted) {
-						controller.abort(reason instanceof Error ? reason : new Error("client closed request"));
+				const message = await completeSimple(model, parsed.context, streamOpts);
+				turn.finish(message);
+				recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
+				if (message.stopReason === "aborted" || message.stopReason === "error") {
+					const errorMessage =
+						message.errorMessage ??
+						(message.stopReason === "aborted" ? "Request was aborted" : "Upstream request failed");
+					logger.warn("auth-gateway non-streaming failed", {
+						format: route.label,
+						reason: message.stopReason,
+						error: errorMessage,
+						peer,
+					});
+					if (message.stopReason === "aborted") {
+						return route.module.formatError(499, "request_aborted", errorMessage);
 					}
+					return finalizedErrorResponse(route.module, message, errorMessage);
+				}
+				responseOwners.record(message.responseId, owner);
+				return json(
+					200,
+					route.module.encodeResponse(message, parsed.modelId),
+					gatewayResponseHeaders(model, { requestId, costUsd: message.usage.cost.total, startedAt }),
+				);
+			} catch (error) {
+				if (controller.signal.aborted) return clientClosedResponse(route);
+				const classified = classifyGatewayError(error);
+				logger.warn("auth-gateway non-streaming aborted", {
+					format: route.label,
+					error: classified.message,
+					peer,
+				});
+				return finalizedErrorResponse(route.module, error);
+			} finally {
+				// Every non-streaming outcome — answered, upstream error, thrown,
+				// client gone — is done with the provider state here.
+				lease.release();
+			}
+		}
+
+		// A streamed turn outlives this function, so the lease travels with the
+		// event stream and is released when the turn settles. Until that handoff
+		// happens, the `finally` below owns it.
+		let streamOwnsLease = false;
+		try {
+			const holdsPrelude = commitGateObservesDownstreamSse(route.label);
+			const recordUsage = (events: AssistantMessageEventStream) => {
+				void events
+					.result()
+					.then(message => {
+						recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
+						if (message.stopReason !== "error" && message.stopReason !== "aborted")
+							responseOwners.record(message.responseId, owner);
+					})
+					.catch(() => {});
+			};
+
+			let sseStream: ReadableStream<Uint8Array>;
+			if (holdsPrelude) {
+				let lastAttempt: Promise<AssistantMessage> | undefined;
+				// Held-prelude failover: the gate buffers metadata frames until first
+				// output so a pre-commit retryable terminal can be retried without the
+				// dead attempt's frames reaching the client. Each attempt gets its own
+				// abort scope — cancelling a dead attempt's encoder must not poison the
+				// shared request signal that a replacement attempt still needs.
+				const openHeldAttempt = (): ReadableStream<Uint8Array> => {
+					const attemptCtl = new AbortController();
+					const onParentAbort = () => attemptCtl.abort(controller.signal.reason);
+					if (controller.signal.aborted) attemptCtl.abort(controller.signal.reason);
+					else controller.signal.addEventListener("abort", onParentAbort, { once: true });
+					const attemptEvents = streamSimple(model, parsed.context, { ...streamOpts, signal: attemptCtl.signal });
+					lastAttempt = attemptEvents.result();
+					recordUsage(attemptEvents);
+					void attemptEvents
+						.result()
+						.catch(() => {})
+						.finally(() => controller.signal.removeEventListener("abort", onParentAbort));
+					return holdSseUntilCommit(
+						route.module.encodeStream(attemptEvents, parsed.modelId, parsed.options, {
+							signal: attemptCtl.signal,
+							onCancel: reason =>
+								attemptCtl.abort(reason instanceof Error ? reason : new Error("attempt stream cancelled")),
+						}),
+						commitGate,
+					);
+				};
+				let firstSse: ReadableStream<Uint8Array>;
+				try {
+					firstSse = openHeldAttempt();
+				} catch (error) {
+					const classified = classifyGatewayError(error);
+					logger.warn("auth-gateway streamSimple threw", { format: route.label, error: classified.message, peer });
+					return route.module.formatError(classified.status, classified.type, classified.message);
+				}
+				streamOwnsLease = true;
+				sseStream = pumpHeldSseAttempts(firstSse, openHeldAttempt, commitGate, {
+					maxAttempts: MAX_HELD_PRECOMMIT_ATTEMPTS,
+					shouldRetry: async () => {
+						if (previousId || controller.signal.aborted || !lastAttempt) return false;
+						const message = await lastAttempt;
+						if (message.stopReason === "aborted") return false;
+						if (hasBillableUsage(message.usage)) return false;
+						const classified = classifyGatewayError(message);
+						return (
+							classified.disposition === "provider_transient" ||
+							classified.disposition === "provider_unavailable"
+						);
+					},
+					onAbort: (error, attempt) =>
+						logger.info("auth-gateway held prelude ended pre-commit; retrying", {
+							route: route.label,
+							event: error.eventType,
+							attempt,
+							peer,
+						}),
+					synthesizeFailure: error => {
+						const classified = classifyGatewayError(error);
+						return encodeResponsesFailedFrame(parsed.modelId, classified.message);
+					},
+					onSettle: () => lease.release(),
+				});
+				sseStream = turn.wrap(sseStream, () => lastAttempt);
+			} else {
+				let events: AssistantMessageEventStream;
+				try {
+					if (controller.signal.aborted) return clientClosedResponse(route);
+					events = streamSimple(model, parsed.context, streamOpts);
+				} catch (error) {
+					const classified = classifyGatewayError(error);
+					logger.warn("auth-gateway streamSimple threw", { format: route.label, error: classified.message, peer });
+					return route.module.formatError(classified.status, classified.type, classified.message);
+				}
+				if (controller.signal.aborted) return clientClosedResponse(route);
+				recordUsage(events);
+				void events
+					.result()
+					.catch(() => {})
+					.finally(() => lease.release());
+				streamOwnsLease = true;
+				sseStream = route.module.encodeStream(events, parsed.modelId, parsed.options, {
+					signal: controller.signal,
+					onCancel: reason => {
+						if (!controller.signal.aborted) {
+							controller.abort(reason instanceof Error ? reason : new Error("client closed request"));
+						}
+					},
+				});
+				sseStream = turn.wrap(sseStream, () => events.result());
+			}
+			return new Response(sseStream, {
+				status: 200,
+				headers: {
+					...gatewayResponseHeaders(model, { requestId }),
+					"Content-Type": "text/event-stream; charset=utf-8",
+					"Cache-Control": "no-cache",
+					Connection: "keep-alive",
+					// Disable proxy buffering (nginx and ingress controllers honor this).
+					// Without it the SSE stream gets held until the buffer flushes, which
+					// stalls the long-thinking-budget calls we exist to support.
+					"X-Accel-Buffering": "no",
 				},
 			});
+		} finally {
+			if (!streamOwnsLease) lease.release();
 		}
-		return new Response(sseStream, {
-			status: 200,
-			headers: {
-				...gatewayResponseHeaders(model, { requestId }),
-				"Content-Type": "text/event-stream; charset=utf-8",
-				"Cache-Control": "no-cache",
-				Connection: "keep-alive",
-				// Disable proxy buffering (nginx and ingress controllers honor this).
-				// Without it the SSE stream gets held until the buffer flushes, which
-				// stalls the long-thinking-budget calls we exist to support.
-				"X-Accel-Buffering": "no",
-			},
-		});
-	} finally {
-		if (!streamOwnsLease) lease.release();
-	}
+	});
 }
 
 /**
@@ -810,11 +829,41 @@ async function handlePiNative(
 	const sessionId =
 		previousOwner?.sessionId ?? clientKey ?? deriveSessionId(parsed.modelId, parsed.context, toolsJson);
 	parsed.options.sessionId = sessionId;
-
-	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
-	if (controller.signal.aborted) return aborted();
-	const traces = bootOpts.decisionTraces;
-	if ("status" in apiKey) {
+	return withGatewayCredentialTurn(bootOpts.storage, requestId, controller, async turn => {
+		const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer, requestId);
+		if (controller.signal.aborted) return aborted();
+		const traces = bootOpts.decisionTraces;
+		if ("status" in apiKey) {
+			if (traces)
+				logger.debug(
+					"auth-gateway route decision",
+					redactedDecisionSummary(
+						traces.record({
+							requestId,
+							routeId: compiled.id,
+							generation: compiled.generation,
+							selectedTarget: compiled.root.model,
+							disposition: "skipped",
+							reason: apiKey.credentialLookupFailed ? "credential_lookup_failed" : "credential_unavailable",
+						}),
+					),
+				);
+			const response = piNative.formatError(apiKey.status, apiKey.type, apiKey.message);
+			for (const [name, value] of Object.entries(gatewayResponseHeaders(model, { requestId })))
+				response.headers.set(name, value);
+			return response;
+		}
+		const owner: GatewayResponseOwner = {
+			sessionId,
+			target: `${model.provider}/${model.id}`,
+			provider: model.provider,
+			api: model.api,
+			endpoint: responseEndpointIdentity(model, requestHeaders),
+			account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
+		};
+		if (previousOwner && previousOwner.account !== owner.account) {
+			return piNative.formatError(400, "invalid_request_error", "previous_response_id belongs to another account");
+		}
 		if (traces)
 			logger.debug(
 				"auth-gateway route decision",
@@ -824,190 +873,173 @@ async function handlePiNative(
 						routeId: compiled.id,
 						generation: compiled.generation,
 						selectedTarget: compiled.root.model,
-						disposition: "skipped",
-						reason: apiKey.credentialLookupFailed ? "credential_lookup_failed" : "credential_unavailable",
+						disposition: "dispatched",
 					}),
 				),
 			);
-		const response = piNative.formatError(apiKey.status, apiKey.type, apiKey.message);
-		for (const [name, value] of Object.entries(gatewayResponseHeaders(model, { requestId })))
-			response.headers.set(name, value);
-		return response;
-	}
-	const owner: GatewayResponseOwner = {
-		sessionId,
-		target: `${model.provider}/${model.id}`,
-		provider: model.provider,
-		api: model.api,
-		endpoint: responseEndpointIdentity(model, requestHeaders),
-		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
-	};
-	if (previousOwner && previousOwner.account !== owner.account) {
-		return piNative.formatError(400, "invalid_request_error", "previous_response_id belongs to another account");
-	}
-	if (traces)
-		logger.debug(
-			"auth-gateway route decision",
-			redactedDecisionSummary(
-				traces.record({
-					requestId,
-					routeId: compiled.id,
-					generation: compiled.generation,
-					selectedTarget: compiled.root.model,
-					disposition: "dispatched",
-				}),
-			),
-		);
 
-	// Per-session provider learning, owned by this gateway instance. The map is
-	// non-serializable, so `parseRequest` cannot accept one from the wire and
-	// every turn would otherwise re-learn each lesson from a fresh upstream
-	// rejection. The lease keeps the entry out of reach of eviction until this
-	// request is done with it, so it MUST be released on every exit path.
-	const lease = sessionStates.acquire({
-		clientKey,
-		model,
-		context: parsed.context,
-		toolsJson,
-		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
-	});
-	// Build the SimpleStreamOptions actually handed to `streamSimple`. We
-	// trust the client's options (already allow-listed by `parseRequest`) and
-	// only inject server-controlled fields. The codex sampling strip mirrors
-	// `buildStreamOptions` — Codex rejects every one with a 400 (#3117).
-	const streamOpts: SimpleStreamOptions = {
-		...parsed.options,
-		signal: controller.signal,
-		cursorExternalToolExecutor: true,
-		providerSessionState: lease.states,
-	};
-	if (bootOpts.fetch) streamOpts.fetch = bootOpts.fetch;
-	streamOpts.apiKey = previousId
-		? buildGatewayContinuationApiKeyResolver(bootOpts.storage, model, apiKey, controller.signal)
-		: buildGatewayApiKeyResolver(
-				bootOpts.storage,
-				model,
-				sessionId,
-				apiKey,
-				controller.signal,
-				"pi-native",
-				peer,
-				resolvedKey => {
-					owner.account = resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, resolvedKey);
-					lease.updateAccount(owner.account);
-				},
-			);
-	if (model.api === "openai-codex-responses") {
-		delete streamOpts.temperature;
-		delete streamOpts.topP;
-		delete streamOpts.topK;
-		delete streamOpts.minP;
-		delete streamOpts.stopSequences;
-		delete streamOpts.presencePenalty;
-		delete streamOpts.frequencyPenalty;
-		delete streamOpts.repetitionPenalty;
-	}
-	// Merge gateway-captured passthrough headers under the client's own
-	// headers — the client's values win when they collide.
-	const captured = captureRequestHeaders(req.headers);
-	streamOpts.headers = { ...captured, ...streamOpts.headers };
-	streamOpts.sessionId = sessionId;
-
-	logger.info("auth-gateway request", {
-		requestId,
-		format: "pi-native",
-		model: parsed.modelId,
-		resolvedProvider: model.provider,
-		resolvedModel: model.id,
-		stream: parsed.stream,
-		peer,
-	});
-
-	if (!parsed.stream) {
-		try {
-			if (controller.signal.aborted) return aborted();
-			const message = await completeSimple(model, parsed.context, streamOpts);
-			recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
-			if (message.stopReason === "aborted" || message.stopReason === "error") {
-				const errorMessage =
-					message.errorMessage ??
-					(message.stopReason === "aborted" ? "Request was aborted" : "Upstream request failed");
-				logger.warn("auth-gateway non-streaming failed", {
-					format: "pi-native",
-					reason: message.stopReason,
-					error: errorMessage,
-					peer,
-				});
-				if (message.stopReason === "aborted") {
-					return piNative.formatError(499, "request_aborted", errorMessage);
-				}
-				return finalizedErrorResponse(piNative, message, errorMessage);
-			}
-			responseOwners.record(message.responseId, owner);
-			return json(
-				200,
-				{ message },
-				gatewayResponseHeaders(model, { requestId, costUsd: message.usage.cost.total, startedAt }),
-			);
-		} catch (error) {
-			if (controller.signal.aborted) return aborted();
-			const classified = classifyGatewayError(error);
-			logger.warn("auth-gateway non-streaming aborted", { format: "pi-native", error: classified.message, peer });
-			return finalizedErrorResponse(piNative, error);
-		} finally {
-			// Every non-streaming outcome — answered, upstream error, thrown,
-			// client gone — is done with the provider state here.
-			lease.release();
-		}
-	}
-
-	// A streamed turn outlives this function, so the lease travels with the
-	// event stream and is released when the turn settles. Until that handoff
-	// happens, the `finally` below owns it.
-	let streamOwnsLease = false;
-	try {
-		let events: AssistantMessageEventStream;
-		try {
-			if (controller.signal.aborted) return aborted();
-			events = streamSimple(model, parsed.context, streamOpts);
-		} catch (error) {
-			const classified = classifyGatewayError(error);
-			logger.warn("auth-gateway streamSimple threw", { format: "pi-native", error: classified.message, peer });
-			return finalizedErrorResponse(piNative, error);
-		}
-		if (controller.signal.aborted) return aborted();
-		void events
-			.result()
-			.then(message => {
-				recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
-				if (message.stopReason !== "error" && message.stopReason !== "aborted")
-					responseOwners.record(message.responseId, owner);
-			})
-			.catch(() => {})
-			.finally(() => lease.release());
-		streamOwnsLease = true;
-
-		const sseStream = piNative.encodeStream(events, parsed.modelId, parsed.options, {
+		// Per-session provider learning, owned by this gateway instance. The map is
+		// non-serializable, so `parseRequest` cannot accept one from the wire and
+		// every turn would otherwise re-learn each lesson from a fresh upstream
+		// rejection. The lease keeps the entry out of reach of eviction until this
+		// request is done with it, so it MUST be released on every exit path.
+		const lease = sessionStates.acquire({
+			clientKey,
+			model,
+			context: parsed.context,
+			toolsJson,
+			account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
+		});
+		// Build the SimpleStreamOptions actually handed to `streamSimple`. We
+		// trust the client's options (already allow-listed by `parseRequest`) and
+		// only inject server-controlled fields. The codex sampling strip mirrors
+		// `buildStreamOptions` — Codex rejects every one with a 400 (#3117).
+		const streamOpts: SimpleStreamOptions = {
+			...parsed.options,
 			signal: controller.signal,
-			onCancel: reason => {
-				if (!controller.signal.aborted) {
-					controller.abort(reason instanceof Error ? reason : new Error("client closed request"));
+			cursorExternalToolExecutor: true,
+			providerSessionState: lease.states,
+		};
+		if (bootOpts.fetch) streamOpts.fetch = bootOpts.fetch;
+		streamOpts.apiKey = previousId
+			? buildGatewayContinuationApiKeyResolver(
+					bootOpts.storage,
+					model,
+					apiKey,
+					controller.signal,
+					undefined,
+					requestId,
+				)
+			: buildGatewayApiKeyResolver(
+					bootOpts.storage,
+					model,
+					sessionId,
+					apiKey,
+					controller.signal,
+					"pi-native",
+					peer,
+					resolvedKey => {
+						owner.account = resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, resolvedKey);
+						lease.updateAccount(owner.account);
+					},
+					requestId,
+				);
+		if (model.api === "openai-codex-responses") {
+			delete streamOpts.temperature;
+			delete streamOpts.topP;
+			delete streamOpts.topK;
+			delete streamOpts.minP;
+			delete streamOpts.stopSequences;
+			delete streamOpts.presencePenalty;
+			delete streamOpts.frequencyPenalty;
+			delete streamOpts.repetitionPenalty;
+		}
+		// Merge gateway-captured passthrough headers under the client's own
+		// headers — the client's values win when they collide.
+		const captured = captureRequestHeaders(req.headers);
+		streamOpts.headers = { ...captured, ...streamOpts.headers };
+		streamOpts.sessionId = sessionId;
+
+		logger.info("auth-gateway request", {
+			requestId,
+			format: "pi-native",
+			model: parsed.modelId,
+			resolvedProvider: model.provider,
+			resolvedModel: model.id,
+			stream: parsed.stream,
+			peer,
+		});
+
+		if (!parsed.stream) {
+			try {
+				if (controller.signal.aborted) return aborted();
+				const message = await completeSimple(model, parsed.context, streamOpts);
+				turn.finish(message);
+				recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
+				if (message.stopReason === "aborted" || message.stopReason === "error") {
+					const errorMessage =
+						message.errorMessage ??
+						(message.stopReason === "aborted" ? "Request was aborted" : "Upstream request failed");
+					logger.warn("auth-gateway non-streaming failed", {
+						format: "pi-native",
+						reason: message.stopReason,
+						error: errorMessage,
+						peer,
+					});
+					if (message.stopReason === "aborted") {
+						return piNative.formatError(499, "request_aborted", errorMessage);
+					}
+					return finalizedErrorResponse(piNative, message, errorMessage);
 				}
-			},
-		});
-		return new Response(sseStream, {
-			status: 200,
-			headers: {
-				...gatewayResponseHeaders(model, { requestId }),
-				"Content-Type": "text/event-stream; charset=utf-8",
-				"Cache-Control": "no-cache",
-				Connection: "keep-alive",
-				"X-Accel-Buffering": "no",
-			},
-		});
-	} finally {
-		if (!streamOwnsLease) lease.release();
-	}
+				responseOwners.record(message.responseId, owner);
+				return json(
+					200,
+					{ message },
+					gatewayResponseHeaders(model, { requestId, costUsd: message.usage.cost.total, startedAt }),
+				);
+			} catch (error) {
+				if (controller.signal.aborted) return aborted();
+				const classified = classifyGatewayError(error);
+				logger.warn("auth-gateway non-streaming aborted", { format: "pi-native", error: classified.message, peer });
+				return finalizedErrorResponse(piNative, error);
+			} finally {
+				// Every non-streaming outcome — answered, upstream error, thrown,
+				// client gone — is done with the provider state here.
+				lease.release();
+			}
+		}
+
+		// A streamed turn outlives this function, so the lease travels with the
+		// event stream and is released when the turn settles. Until that handoff
+		// happens, the `finally` below owns it.
+		let streamOwnsLease = false;
+		try {
+			let events: AssistantMessageEventStream;
+			try {
+				if (controller.signal.aborted) return aborted();
+				events = streamSimple(model, parsed.context, streamOpts);
+			} catch (error) {
+				const classified = classifyGatewayError(error);
+				logger.warn("auth-gateway streamSimple threw", { format: "pi-native", error: classified.message, peer });
+				return finalizedErrorResponse(piNative, error);
+			}
+			if (controller.signal.aborted) return aborted();
+			void events
+				.result()
+				.then(message => {
+					recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
+					if (message.stopReason !== "error" && message.stopReason !== "aborted")
+						responseOwners.record(message.responseId, owner);
+				})
+				.catch(() => {})
+				.finally(() => lease.release());
+			streamOwnsLease = true;
+
+			const sseStream = turn.wrap(
+				piNative.encodeStream(events, parsed.modelId, parsed.options, {
+					signal: controller.signal,
+					onCancel: reason => {
+						if (!controller.signal.aborted) {
+							controller.abort(reason instanceof Error ? reason : new Error("client closed request"));
+						}
+					},
+				}),
+				() => events.result(),
+			);
+			return new Response(sseStream, {
+				status: 200,
+				headers: {
+					...gatewayResponseHeaders(model, { requestId }),
+					"Content-Type": "text/event-stream; charset=utf-8",
+					"Cache-Control": "no-cache",
+					Connection: "keep-alive",
+					"X-Accel-Buffering": "no",
+				},
+			});
+		} finally {
+			if (!streamOwnsLease) lease.release();
+		}
+	});
 }
 
 /**
