@@ -795,11 +795,11 @@ export class CommandController {
 	}
 
 	/**
-	 * `/jobs`: the live jobs sheet the jobs pill opens — inspect (↑/↓), cancel a
-	 * running job (X) and close (Esc), on a plain terminal as well as a native
-	 * one, and without adding anything to the transcript. `/jobs full` keeps the
-	 * static report of the running and recent jobs with untruncated commands
-	 * (see {@link showCommandReport}).
+	 * `/jobs`: the live jobs surface the jobs pill opens — the fullscreen page on
+	 * an ordinary terminal and the centred sheet on a native one — inspect (↑/↓),
+	 * cancel a running job (X) and close (Esc), without adding anything to the
+	 * transcript. `/jobs full` keeps the static report of the running and recent
+	 * jobs with untruncated commands (see {@link showCommandReport}).
 	 */
 	async handleJobsCommand(options?: { full?: boolean }): Promise<void> {
 		const snapshot = this.ctx.session.getAsyncJobSnapshot({ recentLimit: 5 });
@@ -808,7 +808,7 @@ export class CommandController {
 			return;
 		}
 		if (options?.full !== true) {
-			this.ctx.showJobsSheet();
+			this.ctx.showBackgroundJobs();
 			return;
 		}
 

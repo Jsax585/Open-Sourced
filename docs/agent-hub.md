@@ -111,12 +111,27 @@ Agent Hub is the human-facing live session view. Adjacent commands and internal 
 
 `/agents` is a separate agent-definition/settings hub, not the live roster. It manages discovered agents, enable/disable state, model overrides, prewalk, and advisor selection.
 
-- `/jobs` opens the live background-jobs sheet on any terminal: ↑/↓ inspect a job, its captured output tails read-only while it runs, `x` cancels a running job, and Esc closes the sheet without stopping anything. The sheet sizes itself to the terminal and follows its resizes, and it never replaces the per-agent transcript or control view. `/jobs full` still prints a snapshot of running and recently settled asynchronous tool jobs with untruncated commands; `/jobs kill <id>|all` cancels running jobs from the command line.
+- `/jobs` opens the dedicated fullscreen Background jobs page on an ordinary terminal; native terminals keep the centred live `JobsSheet` (see [Background jobs page](#background-jobs-page)).
 - `history://<id>` gives the coding agent a concise transcript for a live/parked subagent or a retained on-disk transcript.
 - `agent://<id>` resolves a subagent's saved final output artifact; it is not the live transcript. Before that artifact exists, a registered agent resolves to its status, the `yield` payloads it has submitted so far, and its latest assistant text.
 - `write agent://<id>` steers or follows up with a normal subagent; `agent://all` broadcasts to visible live peers. Messaging a parked subagent revives it. `read history://` lists registered agents and retained on-disk transcripts, refreshing the caller root's persisted roster first, the same as `history://<id>` lookups.
 - `read proc://` lists background jobs and project services; `read proc://<id>` inspects status/output without consuming delivery.
 
 Advisor rows are intentionally excluded from the agent-facing peer roster, `history://` index, and `agent://` messaging workflows.
+
+### Background jobs page
+
+`/jobs` opens the dedicated fullscreen Background jobs page on an ordinary terminal. It borrows Agent Hub's layout primitives — a roster, a split detail pane, and a scroll view — but is separate from Agent Hub and its agent roster: it lists only the session's asynchronous tool jobs and shows only their captured output, which stays read-only. There is no chat, stdin, or revive. On a wide terminal the roster and the selected job's live output sit side by side; on a narrow one the roster fills the page until `Tab` or `Enter` opens the output.
+
+| Input              | Action                                                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `↑` / `↓`, `j` / `k` | Select a job, or scroll the open output.                                                                            |
+| `Tab`, `Enter`     | Open or close the selected job's output: the full-body log on a wide terminal, the detail pane on a narrow one.      |
+| `PgUp` / `PgDn`    | Page the output. Scrolling away from the tail freezes the displayed snapshot, so rolling captures cannot shift it. |
+| `End`, `Space`     | `End` follows the newest output; `Space` toggles following. Returning to the tail also resumes following. |
+| `x`                | Cancel the selected running job. Only running jobs can be cancelled.                                               |
+| `Esc`              | Back from the open output to the roster, then close the page.                                                      |
+
+The page repaints on a timer while it is open, so a running job's output and pids stay live. It never replaces the per-agent transcript or control view, and closing it stops nothing. Native terminals keep the centred live `JobsSheet` instead. `/jobs full` prints a static snapshot of running and recently settled asynchronous tool jobs with untruncated commands; `/jobs kill <id>|all` cancels running jobs from the command line.
 
 See also [Task Agent Discovery and Selection](./task-agent-discovery.md), [Collaboration](./collab.md), and [Advisor, WATCHDOG.md, and WATCHDOG.yml](./advisor-watchdog.md).

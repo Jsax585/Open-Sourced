@@ -14,7 +14,6 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { Container, Text } from "@oh-my-pi/pi-tui";
 import { isNativeRendering, setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
-import { JobsSheet } from "@oh-my-pi/pi-tui/overlays/jobs-panel";
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -119,23 +118,33 @@ describe("/jobs opens the live jobs sheet", () => {
 		resetSettingsForTest();
 	});
 
-	it("opens the live jobs sheet listing the running job, leaves the transcript alone, and Esc closes it", async () => {
-		const gate = Promise.withResolvers<string>();
-		manager.register("bash", "cargo test --workspace", () => gate.promise, { ownerId: "main" });
+	it("the native sheet's select/cancel actions cancel the selected owner job and Close dismisses it", async () => {
+		const gates = [Promise.withResolvers<string>(), Promise.withResolvers<string>()];
+		const idA = manager.register("bash", "sleep 111", () => gates[0].promise, { ownerId: "main" });
+		const idB = manager.register("bash", "cargo test --workspace", () => gates[1].promise, { ownerId: "main" });
 		const transcript = [...mode.chatContainer.children];
 
 		await mode.handleJobsCommand();
 
+		// The native surface's Cancel acts on the row it reports selected, not on
+		// the first roster row: selecting the second running job and cancelling
+		// goes through the same owner-scoped cancel `/jobs kill` uses.
+		expect(mode.ui.hasOverlay()).toBe(true);
 		const sheet = mode.ui.overlayStack.at(-1)?.component;
-		expect(sheet).toBeInstanceOf(JobsSheet);
-		expect(mode.ui.getFocused()).toBe(sheet ?? null);
-		expect(Bun.stripANSI(sheet?.render(100).join("\n") ?? "")).toContain("cargo test --workspace");
+		sheet?.handleNativeEvent?.({ type: "select", key: "jobs", item: idB });
+		sheet?.handleNativeEvent?.({ type: "action", key: "cancel", act: "cancel", mods: [] });
+		expect(manager.getJob(idB)?.status).toBe("cancelled");
+		expect(manager.getJob(idA)?.status).toBe("running");
 		expect(mode.chatContainer.children).toEqual(transcript);
 
-		sheet?.handleInput?.("\x1b");
+		// Close only dismisses the surface: job rows keep their state for the next open.
+		sheet?.handleNativeEvent?.({ type: "action", key: "close", act: "close", mods: [] });
 		expect(mode.ui.hasOverlay()).toBe(false);
+		expect(manager.getJob(idB)?.status).toBe("cancelled");
+		expect(manager.getJob(idA)?.status).toBe("running");
 		expect(mode.chatContainer.children).toEqual(transcript);
-		gate.resolve("done");
+		gates[0].resolve("done");
+		gates[1].resolve("done");
 	});
 
 	it("`/jobs kill <id>` cancels the running job through the TUI dispatcher", async () => {
@@ -217,7 +226,8 @@ function plainScreen(term: VirtualTerminal): string[] {
 
 /**
  * `/jobs` on a terminal without the native surface: the composer's keystrokes
- * run through the real slash dispatcher and the sheet draws on the real screen.
+ * run through the real slash dispatcher and the fullscreen page draws on the
+ * real screen.
  */
 describe("/jobs on a plain terminal", () => {
 	let tempDir: TempDir;
@@ -284,16 +294,18 @@ describe("/jobs on a plain terminal", () => {
 		return last;
 	}
 
-	it("keyboard `/jobs` opens the interactive sheet, ↓ follows the selection, Esc closes it, and `/jobs full` still prints the report", async () => {
+	it("keyboard `/jobs` opens the fullscreen page: narrow hides the log until Tab, PgUp pauses, End resumes, Esc closes without cancelling, and `/jobs full` still prints the report", async () => {
 		const gates = [Promise.withResolvers<string>(), Promise.withResolvers<string>()];
 		// Job A's output streams far more history lines than one screen holds, with
 		// the newest line last: a pane that clips its content or draws past the
 		// viewport loses `job-a-output`, an older-first one loses the history.
 		const history = Array.from({ length: 60 }, (_v, i) => `job-a-history-${i}`);
-		manager.register(
+		let reportA: ((text: string) => Promise<void>) | undefined;
+		const idA = manager.register(
 			"bash",
 			"sleep 111",
 			async ctx => {
+				reportA = text => ctx.reportProgress(text);
 				await ctx.reportProgress([...history, "job-a-output"].join("\n"));
 				return gates[0].promise;
 			},
@@ -311,94 +323,152 @@ describe("/jobs on a plain terminal", () => {
 		const last = await mount(3);
 		const transcript = [...mode.chatContainer.children];
 
-		// The keystrokes a user types reach the sheet through the slash dispatcher.
+		// The keystrokes a user types reach the page through the slash dispatcher.
 		term.sendInput("/jobs");
 		await term.waitForRender(() => plainScreen(term).some(row => row.includes("/jobs")));
 		term.sendInput("\r");
 		await term.waitForRender(() => plainScreen(term).some(row => row.includes("Background jobs")));
 
-		const sheet = mode.ui.overlayStack.at(-1)?.component;
-		expect(sheet).toBeInstanceOf(JobsSheet);
-		expect(mode.ui.getFocused()).toBe(sheet ?? null);
+		expect(mode.ui.hasOverlay()).toBe(true);
 		const opened = plainScreen(term);
+		expect(opened.some(row => row.includes(idA))).toBe(true);
 		expect(opened.some(row => row.includes("sleep 111"))).toBe(true);
 		expect(opened.some(row => row.includes("job-a-output"))).toBe(true);
 		expect(opened.some(row => row.includes("job-b-output"))).toBe(false);
-		// The composite screen carries the newest line of the long tail plus a
-		// window of the history above it, not just the latest progress string.
+		// The wide frame carries the newest line of the long tail plus a window of
+		// the history above it, not just the latest progress string.
 		expect(opened.filter(row => row.includes("job-a-history-")).length).toBeGreaterThan(8);
 		expect(mode.chatContainer.children).toEqual(transcript);
 
-		// Shrink to a short, narrow viewport while `job-a` is selected: the sheet
-		// sizes its pane to the live height, so the newest line must still survive
-		// composition. A pane laid out for the old 120x32 frame (or an unbounded
-		// one) overflows the 10 rows the overlay can draw and loses it at the cut.
+		// A repeat request keeps the open surface instead of stacking another.
+		const openOverlays = mode.ui.overlayStack.length;
+		mode.showBackgroundJobs();
+		expect(mode.ui.hasOverlay()).toBe(true);
+		expect(mode.ui.overlayStack.length).toBe(openOverlays);
+
+		// PgUp pauses the tail: output appended after it must not jump the viewport.
+		term.sendInput("\x1b[5~");
+		await term.waitForRender(() => plainScreen(term).some(row => row.includes("paused")));
+		// The split composes the roster and the log into shared rows, so compare the
+		// log's own line numbers rather than whole rows (ages tick on the left).
+		const paused = plainScreen(term)
+			.map(row => /job-a-history-(\d+)/.exec(row)?.[1])
+			.filter(index => index !== undefined);
+		expect(paused.length).toBeGreaterThan(0);
+		await reportA?.([...history, "job-a-output", "job-a-appended"].join("\n"));
+		mode.ui.requestRender();
+		await term.waitForRender();
+		const afterAppend = plainScreen(term)
+			.map(row => /job-a-history-(\d+)/.exec(row)?.[1])
+			.filter(index => index !== undefined);
+		expect(afterAppend).toEqual(paused);
+		expect(plainScreen(term).some(row => row.includes("job-a-appended"))).toBe(false);
+
+		// End resumes the tail: the newest line follows again.
+		term.sendInput("\x1b[F");
+		await term.waitForRender(() => plainScreen(term).some(row => row.includes("following")));
+		await term.waitForRender(() => plainScreen(term).some(row => row.includes("job-a-appended")));
+		expect(plainScreen(term).some(row => row.includes("job-a-appended"))).toBe(true);
+
+		// Narrow (40 columns): the frame drops to the roster alone, so the log is
+		// hidden until Tab opens the selected job's details.
 		term.resize(40, 12);
-		let narrow: string[] = [];
 		await term.waitForRender(() => {
 			const rows = plainScreen(term);
-			if (!rows.some(row => row.includes("job-a-output"))) return false;
-			if (rows.filter(row => row.includes("job-a-history-")).length >= 8) return false;
-			if (!rows.every(row => row.length <= 40)) return false;
-			narrow = rows;
-			return true;
+			if (rows.some(row => row.includes("job-a-appended"))) return false;
+			if (!rows.some(row => row.includes(idA))) return false;
+			return rows.every(row => row.length <= 40);
 		});
-		expect(narrow.some(row => row.includes("job-a-output"))).toBe(true);
-		// The short viewport holds a window of the tail, not the whole history: the
-		// rows came from the frame composed for 12 rows, not the stale 32-row one.
-		expect(narrow.filter(row => row.includes("job-a-history-")).length).toBeLessThan(8);
+		const narrow = plainScreen(term);
+		expect(narrow.some(row => row.includes("job-a-appended"))).toBe(false);
 		expect(narrow.every(row => row.length <= 40)).toBe(true);
 		expect(mode.chatContainer.children).toEqual(transcript);
 
-		// Growing back restores the taller window: the older tail rows come back
-		// with the newest line still last above the legend.
+		// Tab opens the selected job's details (the title names the selected id and
+		// the output returns); Esc drops back.
+		term.sendInput("\t");
+		await term.waitForRender(() => plainScreen(term).some(row => row.includes("job-a-appended")));
+		expect(plainScreen(term).some(row => row.includes(`Background jobs · ${idA}`))).toBe(true);
+		term.sendInput("\x1b");
+		await term.waitForRender(() => !plainScreen(term).some(row => row.includes("job-a-appended")));
+		expect(plainScreen(term).some(row => row.includes(idA))).toBe(true);
+
+		// Growing back restores the wide split with the log inline again — the
+		// frame is rebuilt for the live terminal, not the stale narrow one.
 		term.resize(PLAIN_COLUMNS, PLAIN_ROWS);
-		let restored: string[] = [];
-		await term.waitForRender(() => {
-			const rows = plainScreen(term);
-			if (rows.filter(row => row.includes("job-a-history-")).length <= 8) return false;
-			if (!rows.some(row => row.includes("job-a-output"))) return false;
-			restored = rows;
-			return true;
-		});
-		expect(restored.filter(row => row.includes("job-a-history-")).length).toBeGreaterThan(8);
-		expect(restored.some(row => row.includes("job-a-output"))).toBe(true);
+		await term.waitForRender(() => plainScreen(term).some(row => row.includes("job-a-appended")));
 		expect(mode.chatContainer.children).toEqual(transcript);
 
-		// ↓ moves the selection, so the detail follows the other running job's output.
+		// ↓ moves the selection; X cancels that job only — the same owner-scoped
+		// cancel `/jobs kill` uses — and Esc closes from the roster without touching A.
 		term.sendInput("\x1b[B");
-		await term.waitForRender(() => plainScreen(term).some(row => row.includes("job-b-output")));
-		const moved = plainScreen(term);
-		expect(moved.some(row => row.includes("job-b-output"))).toBe(true);
-		expect(moved.some(row => row.includes("job-a-output"))).toBe(false);
-		expect(mode.chatContainer.children).toEqual(transcript);
-
-		// X cancels the selected running job, the same owner-scoped cancel `/jobs kill` uses.
 		term.sendInput("x");
 		await term.waitForRender(() => manager.getJob(idB)?.status === "cancelled");
 		expect(manager.getJob(idB)?.status).toBe("cancelled");
+		expect(manager.getJob(idA)?.status).toBe("running");
 		expect(mode.chatContainer.children).toEqual(transcript);
 
-		// Esc closes it, and nothing of the sheet reached the transcript or the scrollback.
 		term.sendInput("\x1b");
-		await term.waitForRender(() => !plainScreen(term).some(row => row.includes("Background jobs")));
+		// The restored-main contract is positive: the overlay is gone, no page
+		// title remains, and the transcript row is back on the main buffer. A
+		// negative predicate alone would pass on the stale restoration frame the
+		// alt-screen exit writes before the main screen is recomposed.
+		await term.waitForRender(() => {
+			const rows = plainScreen(term);
+			return !mode.ui.hasOverlay() && !rows.some(row => row.includes("Background jobs")) && rows.includes(last);
+		});
 		expect(mode.ui.hasOverlay()).toBe(false);
+		expect(manager.getJob(idA)?.status).toBe("running");
 		expect(plainScreen(term)).toContain(last);
 		expect(mode.chatContainer.children).toEqual(transcript);
 		expect(term.getScrollBuffer().some(row => Bun.stripANSI(row).includes("Background jobs"))).toBe(false);
 
-		// `/jobs full` keeps the static report, multiline command and all.
+		// `/jobs full` keeps the static report at the full viewport: the running job
+		// with its multiline command, and the cancelled job under Recent Jobs (the
+		// report must not drop a settled job just because it was cancelled).
 		term.sendInput("/jobs full");
 		await term.waitForRender(() => plainScreen(term).some(row => row.includes("/jobs full")));
 		term.sendInput("\r");
 		await term.waitForRender(() => plainScreen(term).some(row => row.includes("Background Jobs")));
 		const report = plainScreen(term);
 		expect(report.some(row => row.includes("Running: 1"))).toBe(true);
+		expect(report.some(row => row.includes("Recent Jobs"))).toBe(true);
 		expect(report.some(row => row.includes("sleep 222"))).toBe(true);
+		expect(report.some(row => row.includes("cancelled"))).toBe(true);
 		expect(report.some(row => row.includes("import sys"))).toBe(true);
 		expect(mode.chatContainer.children).toEqual(transcript);
 
 		gates[0].resolve("done");
 		gates[1].resolve("done");
+	});
+
+	it("a session transition closes the open page without cancelling its jobs", async () => {
+		const gate = Promise.withResolvers<string>();
+		const id = manager.register("bash", "sleep 777", () => gate.promise, { ownerId: "main" });
+		const last = await mount(2);
+		const transcript = [...mode.chatContainer.children];
+
+		term.sendInput("/jobs");
+		await term.waitForRender(() => plainScreen(term).some(row => row.includes("/jobs")));
+		term.sendInput("\r");
+		await term.waitForRender(() => plainScreen(term).some(row => row.includes("Background jobs")));
+		expect(mode.ui.hasOverlay()).toBe(true);
+
+		// The page polls the session it was opened over: a switch must close it
+		// rather than leave it repainting the former session's jobs. Wait for the
+		// positive restored-main contract, not just the page title's absence — the
+		// alt-screen exit writes a stale restoration frame before the main screen
+		// is recomposed.
+		mode.clearTransientSessionUi();
+		await term.waitForRender(() => {
+			const rows = plainScreen(term);
+			return !mode.ui.hasOverlay() && !rows.some(row => row.includes("Background jobs")) && rows.includes(last);
+		});
+		expect(mode.ui.hasOverlay()).toBe(false);
+		expect(manager.getJob(id)?.status).toBe("running");
+		expect(mode.chatContainer.children).toEqual(transcript);
+		expect(plainScreen(term)).toContain(last);
+
+		gate.resolve("done");
 	});
 });

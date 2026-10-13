@@ -1,8 +1,8 @@
 /**
  * The async background jobs of a session as {@link JobsSheet}: the dismissable
- * sheet the native jobs pill and `/jobs` open. A master–detail split lists
- * every job (running first) beside the selected one's status, command, facts
- * (cwd, live pids, exit code, artifact) and live output.
+ * sheet native `/jobs` and the native jobs pill open. A master–detail split
+ * shows status, command, process facts and live output. The separate fullscreen
+ * terminal Background Jobs page reuses the source contracts below.
  */
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
@@ -12,6 +12,7 @@ import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
 import { matchesKey } from "../keys";
 import { replaceTabs, truncateToWidth } from "../utils";
+import { shortenPath } from "../render/render-utils";
 import { collapseCommand } from "../apps/ps-data";
 import { ansi, code, col, compact, item, node, row, span, stableKey, text } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
@@ -60,12 +61,26 @@ export interface JobsSheetSource {
 	/** Dismiss the sheet. */
 	close(): void;
 	/**
-	 * Raw terminal rows the plain-terminal body bounds itself to (a centred
-	 * `maxHeight: "90%"` overlay draws the front 90%), read once per frame.
+	 * Raw terminal rows, read once per frame. The fallback body ceiling follows
+	 * {@link JOBS_SHEET_HEIGHT_PERCENT}, shared with the host overlay.
 	 * Optional: without it the terminal's own row count is used.
 	 */
 	rows?(): number;
 }
+
+/**
+ * Repaint cadence (ms) shared by the jobs surfaces: the native jobs pill and
+ * the terminal Background jobs page both poll the session at this interval,
+ * since a job's output and pids change with no push notification.
+ */
+export const JOBS_REFRESH_MS = 250;
+
+/**
+ * Fraction of the terminal height the {@link JobsSheet} plain body may fill,
+ * in percent: the same 90% `maxHeight` the sheet's centred overlay opens with,
+ * so the compositor never clips its newest output line.
+ */
+export const JOBS_SHEET_HEIGHT_PERCENT = 90;
 
 /** A job's status as the sheet names it. */
 const STATUS_LABEL: Record<JobsPanelJob["status"], string> = {
@@ -172,7 +187,7 @@ export class JobsSheet implements Component {
 		const detail = selected && this.#source.inspect(selected.id);
 		const command = detail?.command;
 		const facts = compact([
-			detail?.cwd && `cwd ${detail.cwd}`,
+			detail?.cwd && `cwd ${shortenPath(detail.cwd)}`,
 			detail?.pids.length ? `pid ${detail.pids.join(", ")}` : undefined,
 			detail?.exitCode !== undefined && `exit ${detail.exitCode}`,
 			detail?.artifactId && `artifact://${detail.artifactId}`,
@@ -277,7 +292,7 @@ export class JobsSheet implements Component {
 	 */
 	#heightBudget(): number {
 		const rows = this.#source.rows?.() || process.stdout.rows || 40;
-		return Math.max(1, Math.floor(rows * 0.9));
+		return Math.max(1, Math.floor((rows * JOBS_SHEET_HEIGHT_PERCENT) / 100));
 	}
 
 	#tailLines(id: string, output: string, count: number): readonly string[] {
@@ -405,7 +420,7 @@ function describeDetail(job: JobsPanelJob, detail: JobsPanelDetail | undefined, 
 	const pids = detail?.pids ?? [];
 	const facts = compact([
 		job.agentId ? { k: "Agent", v: [span(job.agentId, "mono")] } : undefined,
-		detail?.cwd ? { k: "Directory", v: [span(detail.cwd, "path")] } : undefined,
+		detail?.cwd ? { k: "Directory", v: [span(shortenPath(detail.cwd), "path")] } : undefined,
 		pids.length > 0 && { k: pids.length > 1 ? "PIDs" : "PID", v: [span(pids.join(", "), "num")] },
 		exit !== undefined && { k: "Exit code", v: [span(String(exit), exit === 0 ? "success" : "error")] },
 		detail?.artifactId ? { k: "Full output", v: [span(`artifact://${detail.artifactId}`, "mono")] } : undefined,

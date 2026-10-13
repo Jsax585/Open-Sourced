@@ -5,10 +5,7 @@
 ### Added
 
 - Added `ApprovalDialogComponent` and the `app.approval.approve` keybinding (default `Ctrl+Enter`, `Ctrl+Q`) ([#15548](https://github.com/can1357/oh-my-pi/pull/15548) by [@H4vC](https://github.com/H4vC))
-
-### Changed
-
-- `JobsSheet` now fits its terminal job list and live output tail to the window height, with safe tab/control-character handling ([#14575](https://github.com/can1357/oh-my-pi/issues/14575); [#15595](https://github.com/can1357/oh-my-pi/pull/15595) by [@wyyyz1937365497](https://github.com/wyyyz1937365497)).
+- Added `BackgroundJobsPage` with responsive job-list/log panes, paused scrolling and tail-following; job working directories are shortened ([#14575](https://github.com/can1357/oh-my-pi/issues/14575); [#15595](https://github.com/can1357/oh-my-pi/pull/15595) by [@wyyyz1937365497](https://github.com/wyyyz1937365497)).
 
 ### Removed
 
@@ -17,6 +14,7 @@
 ### Fixed
 
 - Clicking Copy answer in the `/btw` history (and Copy raw in the raw SSE viewer) on native terminals copies the answer instead of the button's label ([#15547](https://github.com/can1357/oh-my-pi/pull/15547) by [@H4vC](https://github.com/H4vC))
+- Fixed fullscreen pages restoring a stale main screen after resizing back to the original window size ([#15595](https://github.com/can1357/oh-my-pi/pull/15595) by [@wyyyz1937365497](https://github.com/wyyyz1937365497)).
 
 ## [18.10.3] - 2026-10-12
 

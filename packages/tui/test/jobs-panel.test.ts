@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "bun:test";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import {
 	type JobsPanelDetail,
@@ -7,6 +9,7 @@ import {
 	type JobsPanelSnapshot,
 	type JobsSheetSource,
 } from "@oh-my-pi/pi-tui/overlays/jobs-panel";
+import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 
 const DOWN = "\x1b[B";
@@ -401,5 +404,19 @@ describe("JobsSheet terminal rows", () => {
 		const cancelled = sheet.render(80).join("\n");
 		expect(cancelled).toContain("stopped");
 		expect(cancelled).not.toContain("1 fail");
+	});
+
+	it("shortens a home-directory cwd in the facts line", () => {
+		const home = os.homedir();
+		const cwd = path.join(home, "proj");
+		const jobs: JobsPanelSnapshot = { running: [bash("bash-home", "running", "bun run build")], recent: [] };
+		const { sheet } = setup(jobs, {
+			inspect: () => ({ command: "bun run build", cwd, pids: [3], output: body("ok") }),
+			rows: () => TALL,
+		});
+		const text = sheet.render(80).join("\n");
+		const short = shortenPath(cwd);
+		expect(text).toContain(short);
+		if (short !== cwd) expect(text).not.toContain(cwd);
 	});
 });
