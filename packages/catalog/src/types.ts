@@ -538,6 +538,19 @@ export interface OpenAICompat {
 	 */
 	supportsSamplingParams?: boolean;
 	/**
+	 * Whether chat-completions and Responses requests may send `top_k`.
+	 * Unset sends it with the rest of the sampling group. `false` suppresses
+	 * only that extension, so a roster that advertised `temperature` and
+	 * `top_p` but not `top_k` does not 400. Default: true.
+	 */
+	supportsTopK?: boolean;
+	/**
+	 * Whether chat-completions and Responses requests may send `min_p`.
+	 * Unset sends it with the rest of the sampling group. `false` suppresses
+	 * only that extension. Default: true.
+	 */
+	supportsMinP?: boolean;
+	/**
 	 * Whether presence/frequency penalties and stop sequences may be sent.
 	 * First-party xAI `/v1/responses` rejects penalty fields for every model.
 	 * xAI reasoning models also reject them (and `stop`) on chat completions.
@@ -927,6 +940,10 @@ export interface ResolvedOpenAISharedCompat {
 	reasoningEffortMap: Partial<Record<Effort, string>>;
 	supportsReasoningParams: boolean;
 	supportsSamplingParams: boolean;
+	/** See {@link OpenAICompat.supportsTopK}. Present so a spec override sticks; default true. */
+	supportsTopK?: boolean;
+	/** See {@link OpenAICompat.supportsMinP}. Present so a spec override sticks; default true. */
+	supportsMinP?: boolean;
 	supportsPenaltyAndStopParams: boolean;
 	thinkingFormat: OpenAIReasoningFormat;
 	/** Kimi Code transport selected by live per-model protocol metadata. */
@@ -1014,6 +1031,8 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "supportsReasoningSummary"
 			| "statefulResponses"
 			| "supportsSamplingParams"
+			| "supportsTopK"
+			| "supportsMinP"
 			| "supportsPenaltyAndStopParams"
 			| "thinkingFormat"
 			| "kimiApiFormat"

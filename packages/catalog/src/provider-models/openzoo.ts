@@ -103,9 +103,9 @@ function listIncludesEvery(value: unknown, tokens: readonly string[]): boolean {
 
 /**
  * Parameters gated by `supportsSamplingParams` (`temperature`, `top_p`).
- * `top_k` and `min_p` ride the same flag but are not required: ordinary
- * OpenAI-compatible rows advertise temperature and top_p without those
- * extensions, and requiring them would drop temperature too.
+ * `top_k` and `min_p` are not part of this group: ordinary rows advertise
+ * temperature and top_p without those extensions, and requiring them would
+ * drop temperature too. Each extension has its own flag.
  */
 const OPENZOO_SAMPLING_PARAMETERS = ["temperature", "top_p"] as const;
 
@@ -158,6 +158,11 @@ function liveOpenzooSupportsTools(entry: OpenAICompatibleModelRecord): boolean |
 	return listIncludes(entry.supported_parameters, "tools");
 }
 
+type OpenzooSamplingCompat = Pick<
+	OpenAICompat,
+	"supportsSamplingParams" | "supportsPenaltyAndStopParams" | "supportsTopK" | "supportsMinP"
+>;
+
 /**
  * Sampling compatibility the live row actually advertises.
  *
@@ -166,17 +171,19 @@ function liveOpenzooSupportsTools(entry: OpenAICompatibleModelRecord): boolean |
  * whenever the flag is on, and a route that did not advertise a control
  * rejects it with 400. `true` when the list includes every control in the
  * group, so a cached no does not survive a refresh that now advertises them.
+ * `top_k` and `min_p` are gated on their own: a list that has temperature
+ * and top_p but omits one of those extensions sets only that flag false.
  * `undefined` when the list is absent — absence stays neutral.
  */
-function liveOpenzooSamplingCompat(
-	entry: OpenAICompatibleModelRecord,
-): Pick<OpenAICompat, "supportsSamplingParams" | "supportsPenaltyAndStopParams"> | undefined {
+function liveOpenzooSamplingCompat(entry: OpenAICompatibleModelRecord): OpenzooSamplingCompat | undefined {
 	if (!Array.isArray(entry.supported_parameters)) {
 		return undefined;
 	}
 	return {
 		supportsSamplingParams: listIncludesEvery(entry.supported_parameters, OPENZOO_SAMPLING_PARAMETERS),
 		supportsPenaltyAndStopParams: listIncludesEvery(entry.supported_parameters, OPENZOO_PENALTY_AND_STOP_PARAMETERS),
+		supportsTopK: listIncludes(entry.supported_parameters, "top_k"),
+		supportsMinP: listIncludes(entry.supported_parameters, "min_p"),
 	};
 }
 
@@ -215,8 +222,9 @@ function liveOpenzooInput(entry: OpenAICompatibleModelRecord): ("text" | "image"
  * `supportsTools: true` so a cached no does not survive the refresh; a
  * missing list leaves that unset. The same list sets
  * `supportsSamplingParams` / `supportsPenaltyAndStopParams` false when it
- * omits that group's controls, and leaves both unset when the list itself
- * is absent. An explicit modality report sets `inputModalitiesReported` so
+ * omits that group's controls, and `supportsTopK` / `supportsMinP` false
+ * unless that extension itself was listed. All four stay unset when the
+ * list itself is absent. An explicit modality report sets `inputModalitiesReported` so
  * the image correction in `providers/openzoo.kdl` does not overwrite a
  * text-only row; an omitted report stays neutral and the correction fills
  * it at `buildModel` time. Pricing is always the proxy's: it is what the
@@ -297,9 +305,9 @@ function mergeOpenzooAdvertisedBoolean(previous: boolean | undefined, next: bool
 }
 
 function mergeOpenzooSamplingCompat(
-	previous: ModelSpec<"openai-completions">["compat"],
-	next: ModelSpec<"openai-completions">["compat"],
-): ModelSpec<"openai-completions">["compat"] | undefined {
+	previous: OpenzooSamplingCompat | undefined,
+	next: OpenzooSamplingCompat | undefined,
+): OpenzooSamplingCompat | undefined {
 	const supportsSamplingParams = mergeOpenzooAdvertisedBoolean(
 		previous?.supportsSamplingParams,
 		next?.supportsSamplingParams,
@@ -308,12 +316,21 @@ function mergeOpenzooSamplingCompat(
 		previous?.supportsPenaltyAndStopParams,
 		next?.supportsPenaltyAndStopParams,
 	);
-	if (supportsSamplingParams === undefined && supportsPenaltyAndStopParams === undefined) {
+	const supportsTopK = mergeOpenzooAdvertisedBoolean(previous?.supportsTopK, next?.supportsTopK);
+	const supportsMinP = mergeOpenzooAdvertisedBoolean(previous?.supportsMinP, next?.supportsMinP);
+	if (
+		supportsSamplingParams === undefined &&
+		supportsPenaltyAndStopParams === undefined &&
+		supportsTopK === undefined &&
+		supportsMinP === undefined
+	) {
 		return undefined;
 	}
 	return {
 		...(supportsSamplingParams !== undefined ? { supportsSamplingParams } : {}),
 		...(supportsPenaltyAndStopParams !== undefined ? { supportsPenaltyAndStopParams } : {}),
+		...(supportsTopK !== undefined ? { supportsTopK } : {}),
+		...(supportsMinP !== undefined ? { supportsMinP } : {}),
 	};
 }
 
@@ -334,8 +351,10 @@ function mergeOpenzooAdvertisedInput(
  * An alias whose parameter list omits `tools` marks the folded model not
  * tool-capable, and a later alias that lists `tools` does not clear that
  * mark. An alias with no list does not clear it either. A tools
- * advertisement is kept when no alias omitted tools. Sampling and
- * penalty/stop flags fold the same way. Advertised reasoning and image
+ * advertisement is kept when no alias omitted tools. Sampling,
+ * penalty/stop, top_k, and min_p flags fold the same way: an omit on any
+ * alias sticks, and listing one extension does not turn the other on.
+ * Advertised reasoning and image
  * input are a union: a later alias that reports either keeps it, and an
  * alias that omits them does not clear it. An explicit modality report on
  * any alias keeps the folded input from the image correction.

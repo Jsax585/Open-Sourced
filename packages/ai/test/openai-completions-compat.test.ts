@@ -118,6 +118,9 @@ async function captureOpenAICompletionsPayload(
 		apiKey?: string;
 		reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 		temperature?: number;
+		topP?: number;
+		topK?: number;
+		minP?: number;
 		sessionId?: string;
 		cacheRetention?: "none" | "short" | "long";
 	},
@@ -172,6 +175,34 @@ describe("openai-completions compatibility", () => {
 
 		const payload = await captureOpenAICompletionsPayload(model, undefined, { temperature: 0 });
 		expect(toObject(payload)?.temperature).toBeUndefined();
+	});
+
+	it("omits top_k while still sending min_p when only top_k is turned off", async () => {
+		// A route that advertised temperature and top_p but not top_k rejects
+		// top_k with a 400. min_p stays on the wire when its own flag is on.
+		const model = buildModel({
+			...gpt4oMiniSpec,
+			id: "example-lab/partial-sampling",
+			provider: "openzoo",
+			baseUrl: "http://localhost:8402/v1",
+			api: "openai-completions",
+			compat: {
+				supportsSamplingParams: true,
+				supportsTopK: false,
+				supportsMinP: true,
+			},
+		} as ModelSpec<"openai-completions">);
+		const payload = await captureOpenAICompletionsPayload(model, undefined, {
+			temperature: 0.2,
+			topP: 0.9,
+			topK: 40,
+			minP: 0.05,
+		});
+		const body = toObject(payload);
+		expect(body?.temperature).toBe(0.2);
+		expect(body?.top_p).toBe(0.9);
+		expect(body?.top_k).toBeUndefined();
+		expect(body?.min_p).toBe(0.05);
 	});
 
 	it("serializes assistant text content as a plain string", () => {

@@ -11,6 +11,7 @@
 ### Fixed
 
 - Fixed OpenZoo sending temperature, top_p, penalties, or stop to a model whose live roster lists parameters and omits those controls.
+- Fixed OpenZoo sending `top_k` or `min_p` when the live roster lists temperature and top_p but omits that extension.
 - Fixed OpenZoo marking a model image-capable when its live roster explicitly reports text-only input.
 - Fixed OpenZoo public-tunnel discovery treating an HTTP 401/403 from `/models` as an unavailable provider instead of an authentication failure.
 - Fixed the OpenZoo `auto` router hiding reasoning and image input when the live roster advertises them.

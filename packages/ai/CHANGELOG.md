@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Fixed chat-completions and Responses requests sending `top_k` or `min_p` when model compat turns that extension off. Temperature and top_p are unchanged.
 - A stored OpenZoo API key, including one copied to the auth broker, is used when `OPENZOO_API_KEY` is unset. The keyless `openzoo-local` placeholder remains only when nothing is stored.
 ### Removed
 

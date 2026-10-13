@@ -2002,10 +2002,14 @@ function buildParams(
 		if (options?.topP !== undefined) {
 			params.top_p = options.topP;
 		}
-		if (options?.topK !== undefined) {
+		// top_k and min_p are separate extensions. Unset stays on with the
+		// sampling group; an explicit false (a roster that listed parameters
+		// and omitted that extension) must not ride supportsSamplingParams
+		// onto the wire.
+		if (options?.topK !== undefined && initialCompat.supportsTopK !== false) {
 			params.top_k = options.topK;
 		}
-		if (options?.minP !== undefined) {
+		if (options?.minP !== undefined && initialCompat.supportsMinP !== false) {
 			params.min_p = options.minP;
 		}
 		if (initialCompat.supportsPenaltyAndStopParams) {

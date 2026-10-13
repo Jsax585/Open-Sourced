@@ -510,6 +510,10 @@ function detectOpenAICompat(
 		// provider rule without changing Copilot Responses rows.
 		supportsReasoningParams: provider !== "github-copilot",
 		supportsSamplingParams: true,
+		// Present so a live roster or models.yml can turn one extension off
+		// without dropping temperature and top_p. Unset on a cached row still sends.
+		supportsTopK: true,
+		supportsMinP: true,
 		supportsPenaltyAndStopParams: !(isGrok && reasoningCapable),
 		reasoningEffortMap: {},
 		supportsUsageInStreaming: !isCerebrasHost,
@@ -758,6 +762,8 @@ function resolveOpenAIResponsesPolicy(
 		reasoningEffortMap: {},
 		supportsReasoningParams: true,
 		supportsSamplingParams: true,
+		supportsTopK: true,
+		supportsMinP: true,
 		supportsPenaltyAndStopParams: !isXaiHost,
 		thinkingFormat,
 		reasoningDisableMode: resolveReasoningDisableMode(thinkingFormat),

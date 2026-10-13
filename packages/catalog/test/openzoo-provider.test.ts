@@ -187,9 +187,13 @@ describe("openzoo built-in provider", () => {
 	});
 
 	test("discovers the live catalog keylessly, pricing from the proxy and limits from the real window", async () => {
-		delete Bun.env.OPENZOO_BASE_URL;
+		// The default is passed in. Deleting OPENZOO_BASE_URL across this await
+		// is process-global and can change what openzoo-session-restore reads.
 		const seen = { urls: [] as string[], authorization: [] as (string | null)[] };
-		const options = openzooModelManagerOptions({ fetch: stubFetch(seen) });
+		const options = openzooModelManagerOptions({
+			baseUrl: OPENZOO_DEFAULT_BASE_URL,
+			fetch: stubFetch(seen),
+		});
 		expect(options.dynamicModelsAuthoritative).toBe(true);
 
 		const models = await options.fetchDynamicModels?.();
@@ -536,6 +540,100 @@ describe("openzoo built-in provider", () => {
 		const advertisedModels = await advertised.fetchDynamicModels?.();
 		expect(advertisedModels?.[0] && buildModel(advertisedModels[0]).compat.supportsSamplingParams).toBe(true);
 		expect(advertisedModels?.[0] && buildModel(advertisedModels[0]).compat.supportsPenaltyAndStopParams).toBe(true);
+	});
+
+	test("a parameter list gates top_k and min_p on their own", async () => {
+		// supportsSamplingParams stays on for temperature and top_p. Each
+		// extension is its own flag: listing top_k must not send min_p, and a
+		// row with no list keeps both at the default (on) so temperature-only
+		// hosts are unchanged.
+		const options = openzooModelManagerOptions({
+			baseUrl: OPENZOO_DEFAULT_BASE_URL,
+			fetch: async () =>
+				Response.json({
+					data: [
+						{ id: "example-lab/core-only", supported_parameters: ["temperature", "top_p"] },
+						{ id: "example-lab/top-k-only", supported_parameters: ["temperature", "top_p", "top_k"] },
+						{ id: "example-lab/min-p-only", supported_parameters: ["temperature", "top_p", "min_p"] },
+						{
+							id: "example-lab/both-extensions",
+							supported_parameters: ["temperature", "top_p", "top_k", "min_p"],
+						},
+						{ id: "example-lab/silent" },
+					],
+				}),
+		});
+		const models = await options.fetchDynamicModels?.();
+		const built = (id: string) => {
+			const model = models?.find(item => item.id === id);
+			return model ? buildModel(model) : undefined;
+		};
+
+		expect(built("example-lab/core-only")?.compat.supportsSamplingParams).toBe(true);
+		expect(built("example-lab/core-only")?.compat.supportsTopK).toBe(false);
+		expect(built("example-lab/core-only")?.compat.supportsMinP).toBe(false);
+
+		expect(built("example-lab/top-k-only")?.compat.supportsSamplingParams).toBe(true);
+		expect(built("example-lab/top-k-only")?.compat.supportsTopK).toBe(true);
+		expect(built("example-lab/top-k-only")?.compat.supportsMinP).toBe(false);
+
+		expect(built("example-lab/min-p-only")?.compat.supportsTopK).toBe(false);
+		expect(built("example-lab/min-p-only")?.compat.supportsMinP).toBe(true);
+
+		expect(built("example-lab/both-extensions")?.compat.supportsTopK).toBe(true);
+		expect(built("example-lab/both-extensions")?.compat.supportsMinP).toBe(true);
+
+		const silent = models?.find(model => model.id === "example-lab/silent");
+		expect(silent?.compat?.supportsTopK).toBeUndefined();
+		expect(silent?.compat?.supportsMinP).toBeUndefined();
+		expect(built("example-lab/silent")?.compat.supportsTopK).toBe(true);
+		expect(built("example-lab/silent")?.compat.supportsMinP).toBe(true);
+	});
+
+	test("a folded router alias keeps an omitted top_k or min_p off", async () => {
+		// An omit on any alias sticks, including over a later alias that lists
+		// the extension. An alias with no list does not invent an omit, and
+		// listing only top_k does not turn min_p on.
+		const omitted = openzooModelManagerOptions({
+			baseUrl: OPENZOO_DEFAULT_BASE_URL,
+			fetch: async () =>
+				Response.json({
+					data: [
+						{ id: "auto", owned_by: "openzoo", supported_parameters: ["temperature", "top_p"] },
+						{
+							id: "openzoo/auto",
+							owned_by: "openzoo",
+							supported_parameters: ["temperature", "top_p", "top_k", "min_p"],
+						},
+					],
+				}),
+		});
+		const omittedModels = await omitted.fetchDynamicModels?.();
+		expect(omittedModels?.map(model => model.id)).toEqual(["auto"]);
+		const omittedAuto = omittedModels?.[0] ? buildModel(omittedModels[0]) : undefined;
+		expect(omittedAuto?.compat.supportsSamplingParams).toBe(true);
+		expect(omittedAuto?.compat.supportsTopK).toBe(false);
+		expect(omittedAuto?.compat.supportsMinP).toBe(false);
+
+		const partial = openzooModelManagerOptions({
+			baseUrl: OPENZOO_DEFAULT_BASE_URL,
+			fetch: async () =>
+				Response.json({
+					data: [
+						{ id: "auto", owned_by: "openzoo" },
+						{
+							id: "openzoo/auto",
+							owned_by: "openzoo",
+							supported_parameters: ["temperature", "top_p", "top_k"],
+						},
+					],
+				}),
+		});
+		const partialModels = await partial.fetchDynamicModels?.();
+		const partialAuto = partialModels?.[0] ? buildModel(partialModels[0]) : undefined;
+		expect(partialAuto?.compat.supportsSamplingParams).toBe(true);
+		expect(partialAuto?.compat.supportsTopK).toBe(true);
+		expect(partialAuto?.compat.supportsMinP).toBe(false);
 	});
 
 	test("an explicit text-only modality report survives the image correction", async () => {

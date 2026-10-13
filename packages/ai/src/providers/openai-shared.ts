@@ -4043,7 +4043,11 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 	model: Pick<Model, "provider" | "api" | "id" | "omitMaxOutputTokens" | "maxTokens" | "identity"> & {
 		compat: Pick<
 			ResolvedOpenAISharedCompat,
-			"supportsSamplingParams" | "supportsPenaltyAndStopParams" | "clampOutputToModelMax"
+			| "supportsSamplingParams"
+			| "supportsTopK"
+			| "supportsMinP"
+			| "supportsPenaltyAndStopParams"
+			| "clampOutputToModelMax"
 		>;
 	},
 ): void {
@@ -4059,8 +4063,8 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 	if (model.compat.supportsSamplingParams) {
 		if (options?.temperature !== undefined) params.temperature = options.temperature;
 		if (options?.topP !== undefined) params.top_p = options.topP;
-		if (options?.topK !== undefined) params.top_k = options.topK;
-		if (options?.minP !== undefined) params.min_p = options.minP;
+		if (options?.topK !== undefined && model.compat.supportsTopK !== false) params.top_k = options.topK;
+		if (options?.minP !== undefined && model.compat.supportsMinP !== false) params.min_p = options.minP;
 		if (model.compat.supportsPenaltyAndStopParams) {
 			if (options?.presencePenalty !== undefined) params.presence_penalty = options.presencePenalty;
 			if (options?.repetitionPenalty !== undefined) params.repetition_penalty = options.repetitionPenalty;
