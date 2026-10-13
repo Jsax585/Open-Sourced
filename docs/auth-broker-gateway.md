@@ -192,6 +192,10 @@ Replace those placeholder targets with concrete IDs from the gateway's `/v1/mode
 
 Management is disabled by default. Library hosts must explicitly set `allowManagement: true` and a separate nonempty `adminBearerTokens` capability. The CLI opts in only when `OMP_AUTH_GATEWAY_ADMIN_TOKEN` contains an administrator token. Inference tokens and `--no-auth` do not authorize mutations. Admin tokens can read route metadata but do not independently authorize inference. Keep the admin token out of URLs and forwarded/identity headers; do not publish it in logs or route files.
 
+### Lifecycle hooks
+
+Library hosts can supply `hooks` for `beforeRequest`, `beforeAttempt`, `afterAttempt` and `afterRequest` on parsed, resolved chat and pi-native requests. Callbacks are awaited and receive a private context copy with the request/route IDs, generation and (for attempts) canonical target. Completion hooks run once per dispatched attempt and once per overall request, including streaming settlement, cancellation and reader failure. Hook errors are gateway failures, not provider outages: they cannot replay completed inference or select a fallback. Invalid requests rejected before route resolution do not enter this lifecycle.
+
 ### stdio
 
 `omp auth-gateway stdio` is the gateway for one trusted parent process (an editor, a terminal's git UI, a script): no listener, no token, no broker requirement. It uses the credentials, models (`models.yml` and extension providers included) and settings any other `omp` command would: the broker when one is configured, else the local store. Requests and responses are JSON lines:

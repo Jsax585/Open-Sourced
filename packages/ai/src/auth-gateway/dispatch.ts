@@ -18,6 +18,7 @@ import type { ClientUsageIdentity } from "../usage";
 import { extractProviderRetryHint } from "../utils/retry-after";
 import type { RouteDefinition, RouteRegistry } from "./route-graph";
 import type { RouteDecisionTraceLog } from "./decision-trace";
+import type { GatewayHooks } from "./hooks";
 import type { AuthGatewayServerOptions } from "./types";
 
 export type ModelResolver = (modelId: string) => Model<Api> | undefined;
@@ -48,6 +49,8 @@ export interface AuthGatewayRouteOptions {
 	adminBearerTokens?: readonly string[];
 	/** Shared bounded request-decision history, owned by the router when omitted. */
 	decisionTraces?: RouteDecisionTraceLog;
+	/** Awaited lifecycle callbacks for parsed, resolved chat and pi-native requests. */
+	hooks?: GatewayHooks;
 }
 
 /** The HTTP server's options: the routes' plus its listener and inbound auth. */

@@ -67,8 +67,15 @@ export class GatewayCredentialTurn {
 	wrap(
 		source: ReadableStream<Uint8Array>,
 		result: () => Promise<AssistantMessage> | undefined,
+		onSettled?: (ok: boolean) => Promise<void>,
 	): ReadableStream<Uint8Array> {
 		const reader = source.getReader();
+		let settled = false;
+		const settle = async (ok: boolean) => {
+			if (settled) return;
+			settled = true;
+			await onSettled?.(ok);
+		};
 		this.#cancelSource = reason => reader.cancel(reason);
 		this.#streamOwned = true;
 		return new ReadableStream<Uint8Array>({
@@ -80,6 +87,7 @@ export class GatewayCredentialTurn {
 						return;
 					}
 					if (this.#released) {
+						await settle(false);
 						reader.releaseLock();
 						controller.close();
 						return;
@@ -87,11 +95,23 @@ export class GatewayCredentialTurn {
 					const message = await result();
 					if (message) this.finish(message);
 					else this.release();
+					await settle(
+						!this.#controller.signal.aborted &&
+							(message?.stopReason === "stop" ||
+								message?.stopReason === "length" ||
+								message?.stopReason === "toolUse"),
+					);
 					reader.releaseLock();
 					controller.close();
 				} catch (error) {
 					this.abort(error);
-					controller.error(error);
+					let failure = error;
+					try {
+						await settle(false);
+					} catch (settlementError) {
+						failure = settlementError;
+					}
+					controller.error(failure);
 					try {
 						await reader.cancel(error);
 					} catch {
@@ -107,6 +127,7 @@ export class GatewayCredentialTurn {
 					await reader.cancel(reason);
 				} finally {
 					reader.releaseLock();
+					await settle(false);
 				}
 			},
 		});

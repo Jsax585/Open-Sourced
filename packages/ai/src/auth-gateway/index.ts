@@ -1,6 +1,7 @@
 export * from "./dispatch";
 export * from "./decision-trace";
 export * from "./http";
+export * from "./hooks";
 export * from "./route-graph";
 export * from "./route-definitions";
 export * from "./route-conductor";

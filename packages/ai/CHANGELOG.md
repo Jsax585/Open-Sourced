@@ -4,6 +4,7 @@
 
 ### Added
 
+- Gateway hosts can await request and attempt lifecycle hooks across translated and native inference, with once-only completion and no replay when completion observers fail ([#10150](https://github.com/can1357/oh-my-pi/pull/10150) by [@jroth1111](https://github.com/jroth1111)).
 - Administrators can remove a virtual route with `DELETE /v1/routes/:id` without changing other routes, concrete models or already-running request snapshots ([#10149](https://github.com/can1357/oh-my-pi/pull/10149) by [@jroth1111](https://github.com/jroth1111)).
 - Virtual routes can be atomically registered or replaced with JSON5 through `PUT /v1/routes/:id`, disabled by default and requiring a separate administrator capability ([#10148](https://github.com/can1357/oh-my-pi/pull/10148) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway clients can inspect one virtual route with `GET /v1/routes/:id`, preserving encoded IDs and excluding concrete or private model state ([#10147](https://github.com/can1357/oh-my-pi/pull/10147) by [@jroth1111](https://github.com/jroth1111)).

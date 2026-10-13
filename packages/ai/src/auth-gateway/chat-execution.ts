@@ -17,6 +17,7 @@ import {
 	resolveGatewayApiKey,
 } from "./dispatch";
 import { gatewayResponseHeaders, json } from "./http";
+import { GatewayRequestLifecycle, runGatewayHook } from "./hooks";
 import {
 	type GatewayResponseOwner,
 	type GatewayResponseOwnership,
@@ -154,6 +155,37 @@ export interface GatewayChatExecutionOptions {
 
 /** A bounded, request-local consumer of the pure planner. Catalog snapshots and response owners never move mid-attempt. */
 export async function runGatewayChatExecution(opts: GatewayChatExecutionOptions): Promise<Response> {
+	const lifecycle = new GatewayRequestLifecycle(opts.boot.hooks, {
+		requestId: opts.requestId,
+		routeId: opts.compiled.id,
+		generation: opts.compiled.generation,
+	});
+	const state = { streaming: false };
+	let response: Response;
+	try {
+		await lifecycle.before();
+		response = await executeGatewayChat(opts, lifecycle, state);
+		if (!state.streaming) await lifecycle.after(response.ok);
+	} catch (error) {
+		let failure = error;
+		try {
+			await lifecycle.after(false);
+		} catch (hookError) {
+			failure = hookError;
+		}
+		const classified = classifyGatewayError(failure);
+		response = opts.formatError(classified.status, classified.type, classified.message);
+	}
+	response.headers.set("x-request-id", opts.requestId);
+	response.headers.set("request-id", opts.requestId);
+	return response;
+}
+
+async function executeGatewayChat(
+	opts: GatewayChatExecutionOptions,
+	lifecycle: GatewayRequestLifecycle,
+	state: { streaming: boolean },
+): Promise<Response> {
 	const { boot, registry, compiled, requestId, controller, sessionId, previousId, previousOwner } = opts;
 	return withGatewayCredentialTurn(boot.storage, requestId, controller, async turn => {
 		const firstTarget = previousOwner?.target ?? compiled.targets[0];
@@ -343,7 +375,15 @@ export async function runGatewayChatExecution(opts: GatewayChatExecutionOptions)
 				controller.signal.removeEventListener("abort", onAbort);
 			};
 			let replayEligible = true;
+			const hookContext = { requestId, routeId: compiled.id, generation: compiled.generation, target };
+			let attemptFinished = false;
+			const finishAttempt = async (ok: boolean) => {
+				if (attemptFinished) return;
+				attemptFinished = true;
+				await runGatewayHook(boot.hooks?.afterAttempt, { ...hookContext, ok });
+			};
 			try {
+				await runGatewayHook(boot.hooks?.beforeAttempt, { ...hookContext });
 				const streamOpts = opts.buildOptions(model, attempt.signal);
 				if (boot.fetch) streamOpts.fetch = boot.fetch;
 				streamOpts.providerSessionState = lease.states;
@@ -393,6 +433,8 @@ export async function runGatewayChatExecution(opts: GatewayChatExecutionOptions)
 					const message = await completeSimple(model, opts.context, streamOpts);
 					replayEligible = false;
 					observe(message);
+					if (message.stopReason !== "error" && message.stopReason !== "aborted") turn.finish(message);
+					await finishAttempt(message.stopReason !== "error" && message.stopReason !== "aborted");
 					if (
 						message.stopReason === "error" &&
 						!hasBillableUsage(message.usage) &&
@@ -423,10 +465,11 @@ export async function runGatewayChatExecution(opts: GatewayChatExecutionOptions)
 				if (
 					!probed.committed &&
 					probed.failure?.stopReason === "error" &&
-					!hasBillableUsage(probed.failure.usage) &&
-					retry(classifyGatewayError(probed.failure), opts.label === "openai-responses")
-				)
-					continue;
+					!hasBillableUsage(probed.failure.usage)
+				) {
+					await finishAttempt(false);
+					if (retry(classifyGatewayError(probed.failure), opts.label === "openai-responses")) continue;
+				}
 				const encoded = opts.encodeStream(probed.events, {
 					signal: attempt.signal,
 					onCancel: reason => {
@@ -435,12 +478,25 @@ export async function runGatewayChatExecution(opts: GatewayChatExecutionOptions)
 					},
 				});
 				// Retain the source result and lease through downstream settlement/cancellation.
-				const wrapped = turn.wrap(encoded, () => probed.events.result());
+				const wrapped = turn.wrap(
+					encoded,
+					() => probed.events.result(),
+					async ok => {
+						try {
+							await finishAttempt(ok);
+						} catch (error) {
+							await lifecycle.after(false);
+							throw error;
+						}
+						await lifecycle.after(ok);
+					},
+				);
 				void probed.events
 					.result()
 					.catch(() => {})
 					.finally(release);
 				streamOwned = true;
+				state.streaming = true;
 				return new Response(wrapped, {
 					status: 200,
 					headers: {
@@ -452,6 +508,7 @@ export async function runGatewayChatExecution(opts: GatewayChatExecutionOptions)
 					},
 				});
 			} catch (error) {
+				await finishAttempt(false);
 				if (controller.signal.aborted) return opts.formatError(499, "request_aborted", "client closed request");
 				if (replayEligible && retry(classifyGatewayError(error), false)) continue;
 				return errorResponse(error, model);

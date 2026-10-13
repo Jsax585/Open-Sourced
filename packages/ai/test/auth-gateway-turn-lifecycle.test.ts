@@ -233,6 +233,7 @@ it("releases a stored turn when the body reader rejects without pretending the p
 		await storage.keys.get("unit-reader-failure", "reader", { requestId: "reader" });
 		const request = new AbortController();
 		const turn = new GatewayCredentialTurn(storage, "reader", request);
+		const outcomes: boolean[] = [];
 		const wrapped = turn.wrap(
 			new ReadableStream({
 				pull(controller) {
@@ -242,12 +243,16 @@ it("releases a stored turn when the body reader rejects without pretending the p
 			() => {
 				throw new Error("Reader failure must not consult canonical success");
 			},
+			async ok => {
+				outcomes.push(ok);
+			},
 		);
 		await expect(new Response(wrapped).text()).rejects.toThrow("fixture reader failure");
 		expect(request.signal.aborted).toBe(true);
 		expect(storage.coordination.activeTurnReservation(id, 1)).toBeUndefined();
 		expect(storage.coordination.hasInflightProbe("reader")).toBe(false);
 		expect(storage.blocks.list([id])).toHaveLength(1);
+		expect(outcomes).toEqual([false]);
 	});
 });
 
@@ -261,6 +266,7 @@ it("cancels upstream before waiting for a canonical result that cannot yet settl
 		const pending = Promise.withResolvers<AssistantMessage>();
 		let canonicalRead = false;
 		let upstreamCanceled = false;
+		const outcomes: boolean[] = [];
 		const wrapped = turn.wrap(
 			new ReadableStream<Uint8Array>({
 				cancel() {
@@ -271,10 +277,15 @@ it("cancels upstream before waiting for a canonical result that cannot yet settl
 				canonicalRead = true;
 				return pending.promise;
 			},
+			async ok => {
+				expect(upstreamCanceled).toBe(true);
+				outcomes.push(ok);
+			},
 		);
 		await wrapped.cancel("fixture client disconnect");
 		expect(upstreamCanceled).toBe(true);
 		expect(canonicalRead).toBe(false);
+		expect(outcomes).toEqual([false]);
 		expect(storage.coordination.activeTurnReservation(id, 1)).toBeUndefined();
 	});
 });
