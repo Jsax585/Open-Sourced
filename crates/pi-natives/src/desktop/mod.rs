@@ -1053,6 +1053,13 @@ impl Worker {
 			Request::AxAttributes { reference, .. } => {
 				let h = self.registry.resolve(reference)?;
 				let mut attributes = self.ax()?.attributes(&h)?;
+				// The attributes may show the re-find fields changed: check them.
+				match self.ax()?.props(&h) {
+					Ok(props) => self
+						.registry
+						.check_identity(reference, props.identity.as_ref()),
+					Err(_) => self.registry.forget_identity(reference),
+				}
 				for (_, value) in &mut attributes {
 					if value.chars().count() > 200 {
 						*value = value
@@ -2169,8 +2176,11 @@ mod capture_tests {
 			unreachable!("focus not exercised")
 		}
 
-		fn attributes(&mut self, _: &AxHandle) -> CoreResult<Vec<(String, String)>> {
-			unreachable!("attributes not exercised")
+		fn attributes(&mut self, h: &AxHandle) -> CoreResult<Vec<(String, String)>> {
+			let tree = self.tree.as_ref().expect("attributes need a tree").lock();
+			let id = tree.element(h)?;
+			let title = tree.titles.get(&id).copied().unwrap_or_default();
+			Ok(vec![("AXTitle".to_string(), title.to_string())])
 		}
 
 		fn destroyed(&mut self, h: &AxHandle) -> bool {
@@ -2621,6 +2631,17 @@ mod capture_tests {
 		}
 	}
 
+	/// Reads `reference`'s attributes, or the error's code.
+	fn attributes(worker: &mut Worker, reference: &str) -> std::result::Result<(), ErrorCode> {
+		let (reply, _rx) = flume::bounded(1);
+		let request = Request::AxAttributes { reference: reference.to_string(), reply };
+		match worker.process(&request, &CancellationSource::default().token()) {
+			Ok(Response::Attributes(_)) => Ok(()),
+			Ok(_) => panic!("an attributes read answers with the attributes"),
+			Err(error) => Err(error.code),
+		}
+	}
+
 	#[test]
 	fn a_press_on_a_rebuilt_element_goes_to_its_one_identical_copy() {
 		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
@@ -2749,6 +2770,16 @@ mod capture_tests {
 		rebuild(&tree, 2, &[(4, "Done"), (5, "Go"), (3, "Stop")]);
 		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
 		assert_eq!(tree.lock().pressed, [2]);
+	}
+
+	#[test]
+	fn an_attributes_read_that_finds_the_fields_changed_drops_them() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		tree.lock().titles.insert(2, "Gone");
+		assert_eq!(attributes(&mut worker, "e2"), Ok(()));
+		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
+		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
+		assert!(tree.lock().pressed.is_empty());
 	}
 
 	#[test]
