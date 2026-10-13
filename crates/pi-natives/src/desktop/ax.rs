@@ -592,7 +592,10 @@ fn push_identity(text: &mut String, props: &AxProps, reference: &str) {
 /// `e3, e5-e7`: refs as runs of consecutive numbers, in the order given.
 fn ref_runs(refs: &[String]) -> String {
 	let mut runs: Vec<(u64, u64)> = Vec::new();
-	for number in refs.iter().filter_map(|reference| reference.strip_prefix('e')?.parse().ok()) {
+	for number in refs
+		.iter()
+		.filter_map(|reference| reference.strip_prefix('e')?.parse().ok())
+	{
 		match runs.last_mut() {
 			Some((_, end)) if *end + 1 == number => *end = number,
 			_ => runs.push((number, number)),
@@ -603,7 +606,11 @@ fn ref_runs(refs: &[String]) -> String {
 		if index > 0 {
 			text.push_str(", ");
 		}
-		let _ = if start == end { write!(text, "e{start}") } else { write!(text, "e{start}-e{end}") };
+		let _ = if start == end {
+			write!(text, "e{start}")
+		} else {
+			write!(text, "e{start}-e{end}")
+		};
 	}
 	text
 }
@@ -734,7 +741,9 @@ pub fn snapshot(
 	// The application's focus lies outside the lines: in another of its
 	// windows (Finder's rename field is one), or past the node limit. Its line
 	// still says where keys sent to the application go.
-	if let Some(focus) = focus.as_ref().filter(|focus| marks.focused.is_none() && **focus != root_handle)
+	if let Some(focus) = focus
+		.as_ref()
+		.filter(|focus| marks.focused.is_none() && **focus != root_handle)
 		&& let Ok(props) = backend.props(focus)
 	{
 		let reference = registry.register(backend, target, generation, focus.clone(), &props);
@@ -957,20 +966,20 @@ mod tests {
 
 	#[derive(Default)]
 	struct Mock {
-		props:          HashMap<u64, AxProps>,
-		children:       HashMap<u64, Vec<u64>>,
+		props:           HashMap<u64, AxProps>,
+		children:        HashMap<u64, Vec<u64>>,
 		/// Nodes read without an identity.
-		unidentified:   HashSet<u64>,
+		unidentified:    HashSet<u64>,
 		/// Nodes whose earlier reads are gone, their identity taken over.
-		gone:           HashSet<u64>,
+		gone:            HashSet<u64>,
 		/// Bounds read by tree walks.
-		bounds_reads:   u32,
+		bounds_reads:    u32,
 		/// The application's focused element.
-		focus:          Option<u64>,
+		focus:           Option<u64>,
 		/// Application-focus reads made.
-		focus_reads:    u32,
+		focus_reads:     u32,
 		/// Nodes whose value `setValue` can write.
-		settable:       HashSet<u64>,
+		settable:        HashSet<u64>,
 		/// Settability checks made.
 		settable_reads:  u32,
 		/// The element holding selected text, and that text.
@@ -1606,9 +1615,11 @@ mod tests {
 			"Selected text: \"hello\"",
 			"Selected: e4-e5, e7",
 		]);
-		// One focus read and one selection read per tree, however many elements it holds.
+		// One focus read and one selection read per tree, however many elements
+		// it holds.
 		assert_eq!((m.focus_reads, m.selection_reads), (1, 1));
-		// No focus below the window and no selection: the tree ends with its last row.
+		// No focus below the window and no selection: the tree ends with its last
+		// row.
 		m.focus = Some(1);
 		m.selection = None;
 		for id in [4, 5, 7] {
@@ -1623,12 +1634,7 @@ mod tests {
 		rename.value = Some("untitled folder".into());
 		rename.focused = true;
 		let mut m = Mock {
-			props: [
-				(1, p("window", Some("Title"))),
-				(2, p("button", Some("Go"))),
-				(9, rename),
-			]
-			.into(),
+			props: [(1, p("window", Some("Title"))), (2, p("button", Some("Go"))), (9, rename)].into(),
 			children: [(1, vec![2])].into(),
 			focus: Some(9),
 			selection: Some((9, "z".repeat(SHOWN_CHARS + 40))),
