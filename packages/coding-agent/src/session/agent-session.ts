@@ -5913,10 +5913,6 @@ export class AgentSession implements SettingsScope {
 		this.#releaseQueuedTtsrReservations();
 		this.agent.reset();
 		this.#pendingNextTurnMessages = [];
-		// The manager reports a latched persistence failure once. A clear removes
-		// its previous hidden warning with the old context, so queue a replacement
-		// for the first post-clear turn while persistence is still unavailable.
-		if (this.sessionManager.hasPersistenceFailure()) this.#queuePersistenceFailureMessage();
 		this.#experimentalContextNotesReminder = undefined;
 		this.#scheduledHiddenNextTurnGeneration = undefined;
 		// Reset the session_stop continuation chain: the queued continuation
@@ -5962,6 +5958,10 @@ export class AgentSession implements SettingsScope {
 		// on-disk record and the plain `transcript:true` export path keep the full
 		// pre-reset history.
 		this.sessionManager.appendResetBoundary();
+		// The manager reports a latched persistence failure once. A clear removes
+		// its previous hidden warning with the old context. Check only after the
+		// boundary append, whose full rewrite may already have recovered.
+		if (this.sessionManager.hasPersistenceFailure()) this.#queuePersistenceFailureMessage();
 
 		resetCapabilities();
 		await this.refreshBaseSystemPrompt();

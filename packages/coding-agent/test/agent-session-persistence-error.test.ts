@@ -25,6 +25,18 @@ class FailingRewriteStorage extends MemorySessionStorage {
 	}
 }
 
+class FailingAppendStorage extends MemorySessionStorage {
+	failNextAppend = false;
+
+	override appendSync(path: string, chunk: string): void {
+		if (this.failNextAppend) {
+			this.failNextAppend = false;
+			throw new Error("ENOSPC: synthetic session append failure");
+		}
+		super.appendSync(path, chunk);
+	}
+}
+
 beforeAll(async () => {
 	await initTheme(false);
 });
@@ -140,5 +152,41 @@ describe("AgentSession persistence failure context", () => {
 		const providerContext = JSON.stringify(mock.calls[0]?.context.messages);
 		expect(providerContext.split(warning.content).length - 1).toBe(1);
 		await sessionManager.recoverPersistenceFromCurrentState();
+	});
+
+	it("does not warn after /clear when its reset boundary republishes the session", async () => {
+		const mock = createMockModel({ provider: "openai", id: "gpt-test", responses: [{ content: ["acknowledged"] }] });
+		const storage = new FailingAppendStorage();
+		const sessionManager = SessionManager.create("/cwd", "/sessions", storage);
+		await sessionManager.ensureOnDisk();
+		authStorage = await AuthStorage.create(":memory:");
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+			convertToLlm,
+			streamFn: mock.stream,
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: new ModelRegistry(authStorage),
+		});
+
+		storage.failNextAppend = true;
+		sessionManager.appendCustomEntry("lost-append");
+		expect(sessionManager.hasPersistenceFailure()).toBe(true);
+
+		// The reset boundary's full rewrite succeeds and republishes the lost append.
+		expect(await executeBuiltinSlashCommand("/clear", clearCommandRuntime(session))).toBe(true);
+		expect(sessionManager.hasPersistenceFailure()).toBe(false);
+		await session.prompt("continue the task");
+
+		expect(mock.calls).toHaveLength(1);
+		expect(
+			session.agent.state.messages.some(
+				message => message.role === "custom" && message.customType === "session-persistence-error",
+			),
+		).toBe(false);
 	});
 });
