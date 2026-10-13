@@ -33,6 +33,7 @@
 
 ### Fixed
 
+- A failed prompt-cache-preferred backup retries unused earlier targets before tertiary dispatch on declared flat availability routes; missing intermediate targets retain the initiating scoped fallback condition ([#10156](https://github.com/can1357/oh-my-pi/pull/10156) by [@jroth1111](https://github.com/jroth1111)).
 - Native gateway cache preference uses the forwarded nested prompt-cache/session identity, so changing delta input does not lose the remembered serving target ([#10155](https://github.com/can1357/oh-my-pi/pull/10155) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway fallbacks reject incompatible OpenAI file references in ordinary messages as well as tool outputs, preserving the input rather than silently dropping it ([#10142](https://github.com/can1357/oh-my-pi/pull/10142) by [@jroth1111](https://github.com/jroth1111)).
 - Healthy gateway requests no longer become single-flight merely because they carry request IDs; cooldown recovery probes and explicit reservations retain their exclusivity ([#10139](https://github.com/can1357/oh-my-pi/pull/10139) by [@jroth1111](https://github.com/jroth1111)).

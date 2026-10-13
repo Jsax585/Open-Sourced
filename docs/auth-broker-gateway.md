@@ -201,6 +201,8 @@ Only canonical stop/length/tool-use completion records affinity. Partial/error/a
 
 Pi-native `options.promptCacheKey` wins over `options.sessionId`, then the supported body/header identity, before stable derivation. Its upstream cache identity, local serving-hint lookup and recording remain aligned; a changing first-message delta does not replace an explicit nested identity.
 
+If a remembered backup fails on a flat root fallback, explicitly declared provider/model availability conditions try unused earlier targets before later candidates. Context overflow and credential failures do not gain backwards edges, and nested graphs retain their scoped policies. A missing intermediate can continue the condition that selected it through its own declared edges. Billed or committed failures, cancellation and response continuations never permit cross-target replay.
+
 ### Target health and state constraints
 
 Each router owns its target health book. Three consecutive provider/model failures open a 30-second circuit; a canonical success resets it. Credential quota/auth failures, caller cancellation and observer failures do not poison target health, and one attempt is counted once. Open-circuit and incompatible capability skips can follow only the graph's declared availability edges; they never cause unconditional fallback or replay billed/committed output.

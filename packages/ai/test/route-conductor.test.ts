@@ -257,3 +257,73 @@ it("rejects stale route identities and generations without mutating execution st
 		expect({ ...execution, attemptedTargets: [...execution.attemptedTargets] }).toEqual(before);
 	}
 });
+
+for (const disposition of ["provider_unavailable", "provider_transient", "model_unavailable"] as const)
+	it(`tries unused earlier flat targets before later candidates for ${disposition}`, () => {
+		const registry = new RouteRegistry(() => undefined);
+		registry.register({
+			id: "preferred-flat",
+			root: {
+				type: "fallback",
+				on: [disposition],
+				children: [
+					{ type: "target", model: "A" },
+					{ type: "target", model: "B" },
+					{ type: "target", model: "C" },
+				],
+			},
+		});
+		const compiled = registry.resolve("preferred-flat")!;
+		expect(
+			decideAttempt({
+				route: compiled,
+				state: state({
+					routeId: compiled.id,
+					generation: compiled.generation,
+					currentTarget: "B",
+					attemptedTargets: new Set(["B"]),
+				}),
+				classification: classification(disposition),
+				commitState: "probing",
+			}),
+		).toEqual({ type: "fallback_target", targetModelId: "A" });
+	});
+
+it("keeps backwards recovery inside explicitly declared flat availability policies", () => {
+	const registry = new RouteRegistry(() => undefined);
+	registry.register({
+		id: "context-only",
+		root: {
+			type: "fallback",
+			on: ["context_overflow"],
+			children: [
+				{ type: "target", model: "A" },
+				{ type: "target", model: "B" },
+				{ type: "target", model: "C" },
+			],
+		},
+	});
+	const compiled = registry.resolve("context-only")!;
+	const execution = state({
+		routeId: compiled.id,
+		generation: compiled.generation,
+		currentTarget: "B",
+		attemptedTargets: new Set(["B"]),
+	});
+	expect(
+		decideAttempt({
+			route: compiled,
+			state: execution,
+			classification: classification("provider_unavailable"),
+			commitState: "probing",
+		}),
+	).toEqual({ type: "terminal" });
+	expect(
+		decideAttempt({
+			route: compiled,
+			state: execution,
+			classification: classification("context_overflow"),
+			commitState: "probing",
+		}),
+	).toEqual({ type: "fallback_target", targetModelId: "C" });
+});

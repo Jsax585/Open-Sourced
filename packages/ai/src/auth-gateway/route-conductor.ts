@@ -33,7 +33,21 @@ function fallbackTargets(
 	currentTarget: string,
 	disposition: GatewayErrorDisposition,
 ): readonly string[] | undefined {
-	return route.fallbackByTarget[currentTarget]?.[disposition];
+	const scoped = route.fallbackByTarget[currentTarget]?.[disposition];
+	// Cache preference can start a flat fallback on a later target. Availability
+	// failure must try unused predecessors before tertiary output can commit.
+	// Nested graphs and context/credential failures retain their scoped edges.
+	if (
+		(disposition === "provider_transient" ||
+			disposition === "provider_unavailable" ||
+			disposition === "model_unavailable") &&
+		route.root.type === "fallback" &&
+		route.root.on.includes(disposition) &&
+		route.root.children.every(child => child.type === "target")
+	) {
+		return [...route.targets.slice(0, route.targets.indexOf(currentTarget)), ...(scoped ?? [])];
+	}
+	return scoped;
 }
 
 /**

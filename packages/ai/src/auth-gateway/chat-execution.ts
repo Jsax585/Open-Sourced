@@ -245,6 +245,7 @@ async function executeGatewayChat(
 		let requestedCredential: number | undefined = previousOwner?.credentialId ?? cacheHit?.credentialId;
 		let sameTargetRetries = 0;
 		let siblingFailure: GatewayErrorClassification | undefined;
+		let incomingFallbackFailure: GatewayErrorClassification | undefined;
 		const trace = (entry: Pick<RouteDecisionTraceInput, "disposition" | "reason">) => {
 			if (boot.decisionTraces)
 				logger.debug(
@@ -316,6 +317,7 @@ async function executeGatewayChat(
 				}
 			}
 			if (action.type === "fallback_target") {
+				incomingFallbackFailure = classified;
 				target = action.targetModelId;
 				fallbackCount++;
 				attemptedCredentials = new Set();
@@ -351,7 +353,13 @@ async function executeGatewayChat(
 					disposition: "model_unavailable",
 				};
 				trace({ disposition: "skipped", reason: "capability_mismatch" });
-				if (retry(unavailable, false)) continue;
+				// An absent entry cannot serve the initiating fallback. Continue that
+				// disposition through this entry's edges, never the diagnostic DFS union.
+				if (
+					retry(unavailable, false) ||
+					(incomingFallbackFailure !== undefined && retry(incomingFallbackFailure, false))
+				)
+					continue;
 				return opts.formatError(unavailable.status, unavailable.type, unavailable.message);
 			}
 			const rejection = opts.validateModel(model);
