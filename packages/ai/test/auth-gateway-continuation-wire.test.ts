@@ -1,10 +1,12 @@
-import { expect, it } from "bun:test";
+import { afterEach, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { startAuthGateway } from "../src/auth-gateway";
-import { AuthStorage } from "../src/auth-storage";
+import { AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
+
+afterEach(() => vi.restoreAllMocks());
 
 function completedResponse(id: string): Response {
 	const events = [
@@ -33,6 +35,216 @@ function completedResponse(id: string): Response {
 	return new Response(`${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`, {
 		headers: { "Content-Type": "text/event-stream" },
 	});
+}
+
+for (const native of [false, true]) {
+	it(`preserves ${native ? "pi-native" : "Responses"} ownership when a peer refreshes after credential selection`, async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-owner-snapshot-"));
+		const store = await SqliteAuthCredentialStore.open(path.join(directory, "auth.db"));
+		const storage = new AuthStorage(store, {
+			usageProviderResolver: () => undefined,
+			rankingStrategyResolver: () => undefined,
+		});
+		const provider = "unit-snapshot-owner";
+		const credential = {
+			type: "oauth" as const,
+			access: "owner-old",
+			refresh: "owner-refresh",
+			expires: Date.now() + 3_600_000,
+			accountId: "owner",
+			projectId: "project",
+		};
+		await storage.credentials.set(provider, [credential]);
+		const id = storage.credentials.list(provider)[0]!.id;
+		const original = storage.keys.getWithCredential.bind(storage.keys);
+		let selected = false;
+		vi.spyOn(storage.keys, "getWithCredential").mockImplementation(async (...args) => {
+			const resolved = await original(...args);
+			if (!selected) {
+				selected = true;
+				store.updateAuthCredential(id, { ...credential, access: "owner-peer-refresh", refresh: "peer-refresh" });
+				await storage.credentials.reload();
+			}
+			return resolved;
+		});
+		const model = buildModel({
+			id: "owner-model",
+			name: "Fixture",
+			provider,
+			api: "openai-responses",
+			baseUrl: "https://owner.example/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 10000,
+			maxTokens: 100,
+		});
+		const bearers: Array<string | null> = [];
+		const gateway = startAuthGateway({
+			storage,
+			bind: "127.0.0.1:0",
+			bearerTokens: ["opaque-snapshot-client-token"],
+			resolveModel: () => model,
+			fetch: async (_url, init) => {
+				bearers.push(new Headers(init?.headers).get("authorization"));
+				return completedResponse(`resp_snapshot_${bearers.length}`);
+			},
+		});
+		const post = (previous?: string) =>
+			fetch(`${gateway.url}${native ? "/v1/pi/stream" : "/v1/responses"}`, {
+				method: "POST",
+				headers: { Authorization: "Bearer opaque-snapshot-client-token", "Content-Type": "application/json" },
+				body: JSON.stringify(
+					native
+						? {
+								modelId: model.id,
+								context: { messages: [{ role: "user", content: "snapshot fixture", timestamp: 0 }] },
+								stream: false,
+								options: { previousResponseId: previous },
+							}
+						: { model: model.id, input: "snapshot fixture", stream: false, previous_response_id: previous },
+				),
+			});
+		try {
+			const first = await post();
+			expect(first.status).toBe(200);
+			await first.text();
+			const second = await post("resp_snapshot_1");
+			expect(second.status).toBe(200);
+			await second.text();
+			expect(bearers).toEqual(["Bearer owner-old", "Bearer owner-peer-refresh"]);
+		} finally {
+			await gateway.close();
+			storage.close();
+			await fs.rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	for (const outcome of ["recovered", "still-unauthorized", "different-account"] as const) {
+		it(`keeps ${native ? "pi-native" : "Responses"} continuation retries on their owner when refresh is ${outcome}`, async () => {
+			const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-owned-refresh-"));
+			const store = await SqliteAuthCredentialStore.open(path.join(directory, "auth.db"));
+			const refreshed: number[] = [];
+			const storage = new AuthStorage(store, {
+				usageProviderResolver: () => undefined,
+				rankingStrategyResolver: () => undefined,
+				refreshOAuthCredential: async (_provider, id, credential) => {
+					refreshed.push(id);
+					return {
+						...credential,
+						accountId: outcome === "different-account" ? "replacement" : credential.accountId,
+						access: "owner-new",
+						refresh: "owner-refresh-new",
+						expires: Date.now() + 7_200_000,
+					};
+				},
+			});
+			const provider = "unit-owned-refresh";
+			await storage.credentials.set(provider, [
+				{
+					type: "oauth",
+					access: "owner-old",
+					refresh: "owner-refresh",
+					expires: Date.now() + 3_600_000,
+					accountId: "owner",
+				},
+				{
+					type: "oauth",
+					access: "sibling",
+					refresh: "sibling-refresh",
+					expires: Date.now() + 3_600_000,
+					accountId: "sibling",
+				},
+			]);
+			const owner = storage.credentials
+				.list(provider)
+				.find(row => row.credential.type === "oauth" && row.credential.accountId === "owner")!;
+			storage.sessions.pin(provider, "owned-session", owner.id);
+			const model = buildModel({
+				id: "owner-model",
+				name: "Fixture",
+				provider,
+				api: "openai-responses",
+				baseUrl: "https://owner.example/v1",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 10000,
+				maxTokens: 100,
+			});
+			let continuation = false;
+			const requests: Array<{ bearer: string | null; previous: unknown }> = [];
+			const gateway = startAuthGateway({
+				storage,
+				bind: "127.0.0.1:0",
+				bearerTokens: ["opaque-refresh-client-token"],
+				resolveModel: () => model,
+				fetch: async (_url, init) => {
+					const bearer = new Headers(init?.headers).get("authorization");
+					const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+					requests.push({ bearer, previous: payload.previous_response_id });
+					if (continuation && (bearer === "Bearer owner-old" || outcome === "still-unauthorized"))
+						return Response.json(
+							{ error: { message: "Unexpected authentication rejection", type: "api_error" } },
+							{ status: 401 },
+						);
+					return completedResponse(continuation ? "resp_after_refresh" : "resp_owned_seed");
+				},
+			});
+			const post = (previous?: string) =>
+				fetch(`${gateway.url}${native ? "/v1/pi/stream" : "/v1/responses"}`, {
+					method: "POST",
+					headers: { Authorization: "Bearer opaque-refresh-client-token", "Content-Type": "application/json" },
+					body: JSON.stringify(
+						native
+							? {
+									modelId: model.id,
+									context: { messages: [{ role: "user", content: "owned fixture", timestamp: 0 }] },
+									stream: false,
+									options: { sessionId: "owned-session", previousResponseId: previous },
+								}
+							: {
+									model: model.id,
+									input: "owned fixture",
+									stream: false,
+									prompt_cache_key: "owned-session",
+									previous_response_id: previous,
+								},
+					),
+				});
+			try {
+				const first = await post();
+				expect(first.status).toBe(200);
+				await first.text();
+				continuation = true;
+				const second = await post("resp_owned_seed");
+				expect(second.status).toBe(outcome === "recovered" ? 200 : 401);
+				await second.text();
+				expect(refreshed).toEqual([owner.id]);
+				const expected = [
+					{ bearer: "Bearer owner-old", previous: undefined },
+					{ bearer: "Bearer owner-old", previous: "resp_owned_seed" },
+				];
+				if (outcome !== "different-account")
+					expected.push({ bearer: "Bearer owner-new", previous: "resp_owned_seed" });
+				expect(requests).toEqual(expected);
+				if (outcome === "recovered") {
+					const sibling = storage.credentials
+						.list(provider)
+						.find(row => row.credential.type === "oauth" && row.credential.accountId === "sibling")!;
+					storage.sessions.pin(provider, "owned-session", sibling.id);
+					const rejected = await post("resp_owned_seed");
+					expect(rejected.status).toBe(400);
+					await rejected.text();
+					expect(requests).toHaveLength(3);
+				}
+			} finally {
+				await gateway.close();
+				storage.close();
+				await fs.rm(directory, { recursive: true, force: true });
+			}
+		});
+	}
 }
 
 it("rejects pi-native Codex continuation IDs before any upstream request", async () => {

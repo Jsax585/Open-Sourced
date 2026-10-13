@@ -538,6 +538,8 @@ export interface OAuthRequestIdentity {
  */
 export interface OAuthAccess {
 	accessToken: string;
+	/** Targeted request resolution, including provider-formatted key and selected account scope. */
+	resolvedKey?: ResolvedApiKey;
 	credentialId?: number;
 	accountId?: string;
 	email?: string;

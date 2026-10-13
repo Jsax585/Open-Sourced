@@ -9,6 +9,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { getEnvApiKey } from "../env-api-key";
+import { normalizeOpenAIResponseFormat } from "../utils/response-format";
 import type {
 	AssistantMessage,
 	CacheRetention,
@@ -511,7 +512,8 @@ export function configureProviderStoreResponses(byProvider: Readonly<Record<stri
 }
 
 /**
- * Whether this request stores its result server-side. Only hosts whose rule
+ * Whether this request stores its result server-side. An explicit wire `store`
+ * value wins. Otherwise only hosts whose rule
  * sets `store-responses` (they finish runs after a client disconnect, so a
  * dropped stream can be resumed) are eligible, and storage is opt-in:
  * `options.storeResponses`, then `PI_MUSE_STORE_RESPONSES`, then the host
@@ -523,6 +525,7 @@ function storesResponsesServerSide(
 	model: Model<"openai-responses">,
 	options: OpenAIResponsesOptions | undefined,
 ): boolean {
+	if (options?.store !== undefined) return options.store;
 	if (model.compat.storeResponses !== true) return false;
 	return (
 		options?.storeResponses ??
@@ -534,6 +537,8 @@ function isOpenAIResponsesStatefulEnabled(
 	options: OpenAIResponsesOptions | undefined,
 	model: Model<"openai-responses">,
 ): boolean {
+	// Explicit wire storage consent outranks the implicit chain default.
+	if ((options?.store ?? options?.storeResponses) === false) return false;
 	// Chaining forces `store: true`, so a storing host whose storage is off
 	// must never chain — not even when the caller asks for it.
 	if (model.compat.storeResponses === true && !storesResponsesServerSide(model, options)) return false;
@@ -814,9 +819,6 @@ const streamOpenAIResponsesOnce = (
 				// Platform `previous_response_id` chaining only resolves stored responses.
 				params.store = true;
 			}
-			// A caller-supplied store:true (e.g. starting a client-driven chain)
-			// must persist the response even with no internal chain state.
-			if (options?.store === true) params.store = true;
 			applyReasoningEffortFallbackForRequest(params);
 			// A caller-supplied `previous_response_id` names the client's own stored
 			// response; internal chain deltas are computed against a DIFFERENT
@@ -1694,32 +1696,7 @@ export function buildParams(
 	// field and rejects it as an unknown parameter.
 	const responseFormat = options?.responseFormat;
 	if (responseFormat !== undefined && typeof responseFormat === "object" && responseFormat !== null) {
-		const format = responseFormat as {
-			type?: string;
-			json_schema?: { name?: string; description?: string; schema?: unknown; strict?: boolean };
-		};
-		if (
-			format.type === "json_schema" &&
-			format.json_schema &&
-			(format.json_schema.name !== undefined || format.json_schema.schema !== undefined)
-		) {
-			// Chat Completions nests `{ name, description, schema, strict }` under
-			// `json_schema`; Responses `text.format` requires those fields flat at
-			// the top level. `description` steers the model's output, so it must
-			// survive the flatten.
-			params.text = {
-				...params.text,
-				format: {
-					type: "json_schema",
-					name: format.json_schema.name ?? "response",
-					...(format.json_schema.description !== undefined ? { description: format.json_schema.description } : {}),
-					schema: format.json_schema.schema,
-					...(format.json_schema.strict !== undefined ? { strict: format.json_schema.strict } : {}),
-				} as never,
-			};
-		} else {
-			params.text = { ...params.text, format: responseFormat as never };
-		}
+		params.text = { ...params.text, format: normalizeOpenAIResponseFormat(responseFormat, "responses") as never };
 	}
 	if (options?.include?.length) params.include = Array.from(new Set(options.include));
 	maybeAddOpenRouterAnthropicCacheControl(params, model, cacheRetention);
