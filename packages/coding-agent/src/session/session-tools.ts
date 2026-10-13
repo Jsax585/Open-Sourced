@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Agent, AgentMessage, AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
-import type { Model } from "@oh-my-pi/pi-ai";
+import { type Model, toolWireSchema } from "@oh-my-pi/pi-ai";
 import { resolveDelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
 import { isRecord, logger, prompt, stringProperty, structuredCloneJSON, untilAborted } from "@oh-my-pi/pi-utils";
 import { reset as resetCapabilities } from "../capability";
@@ -134,8 +134,10 @@ interface SessionToolsOptions {
 	rebuildSystemPrompt?: (
 		toolNames: string[],
 		tools: Map<string, AgentTool>,
+		mcpInstructions: ReadonlyMap<string, string>,
 	) => Promise<{ systemPrompt: string[]; xdevCatalogNames?: readonly string[] }>;
 	getMcpServerInstructions?: () => Map<string, string> | undefined;
+	initialMcpServerInstructions?: ReadonlyMap<string, string>;
 	xdev?: XdevState;
 	setActiveToolNames?: (names: Iterable<string>) => void;
 	baseSystemPrompt: string[];
@@ -494,6 +496,9 @@ export class SessionTools {
 		this.#skillsSettings = options.skillsSettings;
 		this.#skillsReloadable = options.skillsReloadable ?? true;
 		this.#promptSurface = this.#derivePromptSurface();
+		if (options.initialMcpServerInstructions) {
+			this.#promptSurface.mcpInstructions = options.initialMcpServerInstructions;
+		}
 		// Seed from the construction slate (top-level tools plus xd:// mounts).
 		// Left empty, getEnabledToolNames() falls back to live agent.state.tools,
 		// so an early reconcile (think after the startup model resolution)
@@ -1160,7 +1165,8 @@ export class SessionTools {
 					!previous ||
 					tool.name !== previous.name ||
 					tool.description !== previous.description ||
-					tool.parameters !== previous.parameters ||
+					(tool.parameters !== previous.parameters &&
+						JSON.stringify(toolWireSchema(tool)) !== JSON.stringify(toolWireSchema(previous))) ||
 					tool.customWireName !== previous.customWireName ||
 					tool.strict !== previous.strict
 				);
@@ -1214,7 +1220,7 @@ export class SessionTools {
 					const built = await untilAborted(
 						signal,
 						this.#promptSurfaceScope.run(candidate, () =>
-							rebuildSystemPrompt(validToolNames, this.#toolRegistry),
+							rebuildSystemPrompt(validToolNames, this.#toolRegistry, candidate.mcpInstructions),
 						),
 					);
 					rebuiltSystemPrompt = built.systemPrompt;
@@ -2108,7 +2114,7 @@ export class SessionTools {
 		// winner.
 		const candidate = this.#derivePromptSurface();
 		const built = await this.#promptSurfaceScope.run(candidate, () =>
-			rebuildSystemPrompt(activeToolNames, this.#toolRegistry),
+			rebuildSystemPrompt(activeToolNames, this.#toolRegistry, candidate.mcpInstructions),
 		);
 		const promptTools = activeToolNames
 			.map(name => this.#toolRegistry.get(name))
@@ -2278,7 +2284,7 @@ export class SessionTools {
 				mappings: mountedMCPProjection.mappings.map(mapping => [mapping.label, mapping.path] as const),
 				hasOmittedMappings: mountedMCPProjection.hasOmittedMappings,
 			}) ?? "{}";
-		const serverInstructions = this.#getMcpServerInstructions?.();
+		const serverInstructions = (this.#promptSurfaceScope.getStore() ?? this.#promptSurface).mcpInstructions;
 		let instructionsSegment = "";
 		if (serverInstructions && serverInstructions.size > 0) {
 			// Sort by server name so transport flap order does not perturb the signature.

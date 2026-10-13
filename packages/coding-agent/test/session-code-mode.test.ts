@@ -11,6 +11,8 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgEvalJs } from "@oh-my-pi/pi-coding-agent/eval/settings";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
+import { MCPTool } from "@oh-my-pi/pi-coding-agent/mcp/tool-bridge";
+import type { MCPServerConnection } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import { initializeExtensions } from "@oh-my-pi/pi-coding-agent/modes/runtime-init";
 import {
 	type CreateAgentSessionOptions,
@@ -21,6 +23,7 @@ import {
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { cfgToolsCodeMode, cfgToolsCodeModeDirectTools } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import * as activeRepoContext from "@oh-my-pi/pi-coding-agent/utils/active-repo-context";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 const normalizeSchema = type({ samples: "number[]", scale: "number" });
@@ -627,5 +630,100 @@ describe("provider-neutral Code Mode", () => {
 		expect(await Bun.file(path.join(cwd, "prewalk.txt")).text()).toBe("implemented");
 		expect(models).toEqual([primary, target.id]);
 		expect(session.getPrewalkState()).toBeUndefined();
+	});
+
+	it("renders the same MCP instruction snapshot it commits across an awaited rebuild", async () => {
+		const manager = new MCPManager("/tmp");
+		cleanup.push(() => manager.disconnectAll());
+		const instructions = new Map<string, string>();
+		spyOn(manager, "getServerInstructions").mockImplementation(() => new Map(instructions));
+		const { session } = await fixture({ enableMCP: true, mcpManager: manager });
+		const mock = createMockModel({ provider: "anthropic", handler: { content: ["Ready."] } });
+		session.agent.streamFn = mock.stream;
+		await session.prompt("Establish the instruction baseline.");
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		spyOn(activeRepoContext, "resolveActiveRepoContext").mockImplementationOnce(async () => {
+			entered.resolve();
+			await release.promise;
+			return null;
+		});
+		const rebuild = session.refreshBaseSystemPrompt();
+		await entered.promise;
+		instructions.set("fleeting", "Use workspace=ephemeral.");
+		release.resolve();
+		await rebuild;
+		instructions.clear();
+		await session.prompt("The server disconnected before metadata delivery.");
+		expect(JSON.stringify(mock.calls.at(-1)!.context)).not.toContain("Use workspace=ephemeral.");
+	});
+
+	it("announces MCP instructions connected after the initial prompt was rendered", async () => {
+		const manager = new MCPManager("/tmp");
+		cleanup.push(() => manager.disconnectAll());
+		const instructions = new Map<string, string>();
+		spyOn(manager, "getServerInstructions").mockImplementation(() => new Map(instructions));
+		const { session } = await fixture({
+			enableMCP: true,
+			mcpManager: manager,
+			systemPrompt: blocks => {
+				instructions.set("startup", "Use project=startup-race.");
+				return blocks;
+			},
+		});
+		const mock = createMockModel({ provider: "anthropic", handler: { content: ["Ready."] } });
+		session.agent.streamFn = mock.stream;
+		await session.prompt("Read instructions that connected during startup.");
+		expect(JSON.stringify(mock.calls[0]!.context)).toContain("Use project=startup-race.");
+	});
+
+	it("keeps equivalent direct MCP reconnects cache-stable but publishes changed wire schemas", async () => {
+		const manager = new MCPManager("/tmp");
+		cleanup.push(() => manager.disconnectAll());
+		const instructions = new Map<string, string>();
+		spyOn(manager, "getServerInstructions").mockImplementation(() => new Map(instructions));
+		const settings = Settings.isolated({
+			"tools.codeMode": true,
+			"tools.codeModeDirectTools": ["mcp__stable_measure"],
+			"eval.py": false,
+			"compaction.enabled": false,
+		});
+		const { session } = await fixture({ settings, enableMCP: true, mcpManager: manager });
+		const connection = { name: "stable" } as MCPServerConnection;
+		const definition = {
+			name: "measure",
+			description: "Measure a sample count.",
+			inputSchema: { type: "object" as const, properties: { count: { type: "number" } }, required: ["count"] },
+		};
+		await session.refreshMCPTools(MCPTool.fromTools(connection, [definition]));
+		const requests: Array<{ system: string; tools: string; context: Context }> = [];
+		const mock = createMockModel({ provider: "anthropic", handler: { content: ["Ready."] } });
+		session.agent.streamFn = (model, context, options) => {
+			requests.push({ system: JSON.stringify(context.systemPrompt), tools: wireTools(context), context });
+			return mock.stream(model, context, options);
+		};
+		await session.prompt("Establish the direct MCP schema.");
+		instructions.set("stable", "Use units=seconds.");
+		await session.refreshMCPTools(MCPTool.fromTools(connection, [structuredClone(definition)]));
+		await session.prompt("The same tool reconnected.");
+		expect(requests[1]!.system).toBe(requests[0]!.system);
+		expect(requests[1]!.tools).toBe(requests[0]!.tools);
+		expect(JSON.stringify(requests[1]!.context.messages)).toContain("Use units=seconds.");
+		await session.refreshMCPTools(
+			MCPTool.fromTools(connection, [
+				{
+					...definition,
+					inputSchema: {
+						type: "object",
+						properties: { count: { type: "number" }, unit: { type: "string" } },
+						required: ["count", "unit"],
+					},
+				},
+			]),
+		);
+		await session.prompt("Read the updated input schema.");
+		const schema = requests[2]!.context.tools?.find(tool => tool.name === "mcp__stable_measure");
+		if (!schema) throw new Error("Missing reconnected direct MCP tool");
+		expect(toolWireSchema(schema).required).toContain("unit");
 	});
 });

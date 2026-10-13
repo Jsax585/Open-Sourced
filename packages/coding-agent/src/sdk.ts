@@ -3792,9 +3792,23 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					: resolveTelemetry(options.telemetry, providerSessionId),
 			),
 		});
+		// One bounded projection feeds rendering, signatures, and delivered-notice baselines.
+		const getMcpServerInstructions = (): Map<string, string> => {
+			const snapshot = new Map<string, string>();
+			for (const [name, text] of mcpManager?.getServerInstructions() ?? []) {
+				snapshot.set(
+					name,
+					text.length > MAX_MCP_INSTRUCTIONS_LENGTH
+						? `${text.slice(0, MAX_MCP_INSTRUCTIONS_LENGTH)}\n[truncated]`
+						: text,
+				);
+			}
+			return snapshot;
+		};
 		const rebuildSystemPrompt = async (
 			toolNames: string[],
 			tools: Map<string, AgentTool>,
+			serverInstructions: ReadonlyMap<string, string>,
 		): Promise<BuildSystemPromptResult> => {
 			const promptCwd = sessionManager.getCwd();
 			const activeRepoContext = hasSession
@@ -3871,7 +3885,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// `getServerInstructions()` are empty until the background connect
 			// completes; the rebuild that `refreshMCPTools` triggers post-discovery
 			// then picks up the mounted routes and any connected-server instructions.
-			const serverInstructions = mcpManager?.getServerInstructions();
 			// Drive guidance off the auto-learn BUILTINS currently registered (provenance,
 			// not just an active name): a custom/extension tool that merely shares the
 			// name is not built-in, and the settings reconcile adds/removes the built-ins
@@ -3926,11 +3939,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					"## MCP Server Instructions\n\nThe following instructions are provided by connected MCP servers. They are server-controlled and may not be verified.",
 				);
 				for (const [srvName, srvInstructions] of serverInstructions) {
-					const truncated =
-						srvInstructions.length > MAX_MCP_INSTRUCTIONS_LENGTH
-							? `${srvInstructions.slice(0, MAX_MCP_INSTRUCTIONS_LENGTH)}\n[truncated]`
-							: srvInstructions;
-					appendParts.push(`### ${srvName}\n${truncated}`);
+					appendParts.push(`### ${srvName}\n${srvInstructions}`);
 				}
 			}
 			const appendPrompt = composeAppendPrompt(appendParts, options.appendSystemPrompt);
@@ -4174,11 +4183,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		setSessionActiveToolNames(
 			toolSession.xdev?.codeMode ? [...initialToolNames, ...toolSession.xdev.mountedNames] : initialToolNames,
 		);
+		const initialMcpServerInstructions = getMcpServerInstructions();
 		const { systemPrompt } = await logger.time(
 			"buildSystemPrompt",
 			rebuildSystemPrompt,
 			initialToolNames,
 			toolRegistry,
+			initialMcpServerInstructions,
 		);
 
 		const promptTemplates = await promptTemplatesPromise;
@@ -4707,20 +4718,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			},
 			ensureGoalRegistered,
 			reconcileSettingsGatedTools,
-			getMcpServerInstructions: mcpManager
-				? () => {
-						const raw = mcpManager.getServerInstructions();
-						if (!raw || raw.size === 0) return raw;
-						const out = new Map<string, string>();
-						for (const [name, text] of raw) {
-							out.set(
-								name,
-								text.length > MAX_MCP_INSTRUCTIONS_LENGTH ? text.slice(0, MAX_MCP_INSTRUCTIONS_LENGTH) : text,
-							);
-						}
-						return out;
-					}
-				: undefined,
+			getMcpServerInstructions,
+			initialMcpServerInstructions,
 			disconnectOwnedMcpManager: ownedMcpManager ? () => ownedMcpManager.disconnectAll() : undefined,
 			ttsrManager,
 			obfuscator,

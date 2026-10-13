@@ -173,6 +173,8 @@ Both preserve MCP content and metadata; `structuredContent` is retained in `deta
 
 `session.refreshMCPTools()` delegates to `src/session/session-tools.ts`, which serializes registry mutations, reconciles manager and extension-owned MCP tools, re-wraps the latest tools, and reapplies availability/presentation without restarting. Connected manager tools become enabled; extension-owned MCP tools preserve their previous selection. A failed refresh restores the previous MCP registry. The owning SDK session also installs `setOnToolsChanged`, so late initial connections, server `tools/list_changed` notifications, reconnects, and disconnects can trigger the same rebinding. Explicit `/mcp reconnect <name>` performs one final refresh after the manager reconnect completes.
 
+Prompt rendering, applied-tool signatures, and instruction-notice baselines use the same bounded instruction snapshot, including the initial session prompt. A server connecting during an awaited rebuild is picked up by a later discovery notice rather than silently diverging from that baseline. Direct MCP reconnects compare normalized wire-schema values, so a fresh but equivalent schema does not force a prompt rebuild; changed schemas still refresh the direct inventory.
+
 ### Live settings reconciliation
 
 The owning SDK session listens for `mcp.enableProjectConfig` changes: it disconnects affected project entries, restores user definitions they shadowed, or loads newly allowed project entries without `/mcp reload`. Browser-MCP reconciliation is serialized and follows whether the built-in browser prelude is actually callable. Borrowed managers keep the parent's single-slot tools/prompts/resources callbacks; each session still installs its own notification listener.
