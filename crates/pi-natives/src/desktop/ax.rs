@@ -338,14 +338,15 @@ fn walk_raw(
 		&& !in_web
 		&& keeps_set_value(&props.role)
 		&& backend.value_settable(&handle);
-	// A page's text field reports its `AXValue` unsettable exactly when the
-	// page will not let the user edit it (`readonly`, `aria-readonly`,
-	// disabled). Outside web content the answer proves nothing: a terminal's
-	// text area takes keys yet reports its value unsettable.
+	// A page's text field reports its `AXValue` unsettable when the page
+	// declares it read-only (`readonly`, `aria-readonly`) or disabled. Outside
+	// web content the answer proves nothing: a terminal's text area takes keys
+	// yet reports its value unsettable. A combo box can be a choice-only popup
+	// with no text to set, so it stays unmarked.
 	let readonly = state.line_states
 		&& in_web
 		&& props.enabled
-		&& matches!(props.role.as_str(), "textfield" | "textarea" | "combobox")
+		&& matches!(props.role.as_str(), "textfield" | "textarea")
 		&& backend.value_read_only(&handle);
 	let mut children = Vec::new();
 	for child in child_handles {
@@ -1499,15 +1500,16 @@ mod tests {
 			..Default::default()
 		};
 		let text = tree(&mut m);
-		for readonly in ["e5", "e6", "e7"] {
+		for readonly in ["e5", "e6"] {
 			assert!(line(&text, readonly).ends_with("(readonly)"), "{text}");
 		}
 		assert_eq!(line(&text, "e8"), "- textfield \"Off\" [ref=e8]: \"off\" (disabled)");
-		for editable in ["e2", "e4", "e9"] {
-			assert!(!line(&text, editable).contains("(readonly)"), "{text}");
+		// A combo box may be a choice-only popup with no text to set.
+		for unmarked in ["e2", "e4", "e7", "e9"] {
+			assert!(!line(&text, unmarked).contains("(readonly)"), "{text}");
 		}
-		// Only the page's enabled text fields are asked.
-		assert_eq!(m.read_only_reads, 4);
+		// Only the page's enabled text fields and areas are asked.
+		assert_eq!(m.read_only_reads, 3);
 		query(&mut m, &mut AxRegistry::default(), &window(), &AxQuery {
 			role:  Some("textfield".into()),
 			title: None,
@@ -1515,7 +1517,7 @@ mod tests {
 			limit: None,
 		})
 		.unwrap();
-		assert_eq!(m.read_only_reads, 4);
+		assert_eq!(m.read_only_reads, 3);
 	}
 	#[test]
 	fn selected_rows_and_items_are_marked() {
