@@ -261,6 +261,60 @@ it("the count-tokens character estimate includes system, tools and tool choice w
 });
 
 for (const streaming of [false, true])
+	for (const option of ["responseSchema", "responseJsonSchema"] as const)
+		it(`pi-native ${streaming ? "SSE" : "JSON"} forwards Google ${option} and response MIME type to the real client wire`, async () => {
+			const model = buildModel({
+				id: "gemini-2.5-flash",
+				name: "Google native schema fixture",
+				api: "google-generative-ai",
+				provider: "google",
+				baseUrl: "http://fixture.invalid/v1beta",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 100_000,
+				maxTokens: 100,
+			});
+			const schema = {
+				type: option === "responseSchema" ? "OBJECT" : "object",
+				properties: { value: { type: option === "responseSchema" ? "STRING" : "string" } },
+				required: ["value"],
+			};
+			let captured: Record<string, unknown> | undefined;
+			await withProtocol(
+				async gateway => {
+					const response = await fetch(`${gateway.url}/v1/pi/stream`, {
+						method: "POST",
+						headers,
+						body: JSON.stringify({
+							modelId: model.id,
+							context: { messages: [{ role: "user", content: "return structured fixture", timestamp: 0 }] },
+							options: { responseMimeType: "application/json", [option]: schema },
+							stream: streaming,
+						}),
+					});
+					expect(response.status).toBe(200);
+					expect(await response.text()).toContain("schema-fixture");
+					expect(captured?.generationConfig).toMatchObject({
+						responseMimeType: "application/json",
+						[option]: schema,
+					});
+				},
+				{
+					resolveModel: candidate => (candidate === model.id ? model : undefined),
+					fetch: async (_request, init) => {
+						captured = JSON.parse(String(init?.body));
+						expect(new Headers(init?.headers).get("x-goog-api-key")).toBe("fixture-google-key");
+						return new Response(
+							`data: ${JSON.stringify({ candidates: [{ content: { role: "model", parts: [{ text: "schema-fixture" }] }, finishReason: "STOP" }] })}\n\n`,
+							{ headers: { "Content-Type": "text/event-stream" } },
+						);
+					},
+				},
+			);
+		});
+
+for (const streaming of [false, true])
 	it(`Google wire ${streaming ? "SSE" : "JSON"} requests retain native schemas and signed tool history, and replies return the tool signature`, async () => {
 		const priorSignature = Buffer.from("fixture prior signature").toString("base64");
 		const returnedSignature = Buffer.from("fixture returned signature").toString("base64");
