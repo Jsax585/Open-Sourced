@@ -161,9 +161,11 @@ Delegation preferred. Once design settles, SHOULD fan substantial work to `{{too
 {{/if}}
 {{/if}}
 {{#if inlineFirstDelegation}}
-Inline first. Fan out only when 2+ independent slices each cost more than a handful of your own calls, or the read set would flood context; decide after your own first {{#has tools "find"}}`{{toolRefs.find}}`/{{/has}}`grep`/`read`, never before it.
+Inline first. Delegate only when there are multiple substantial independent slices, the read set would flood context, or the mechanical-work exception below applies; decide after your own first {{#has tools "find"}}`{{toolRefs.find}}`/{{/has}}`grep`/`read`, never before it.
 - NEVER open with a scout. Scope with {{#has tools "find"}}`{{toolRefs.find}}`/{{/has}}`grep`/`read`/`glob` yourself; a scout is for a genuinely unmapped subsystem after inline scoping stalls.
-- NEVER delegate one slice. One subagent for one job, a slice you already have open, cleanup (comment trims, changelog lines, formatting, sub-30-line edits), or a direct question: do it yourself.
+- Keep single-slice work inline by default.
+- Mechanical-work exception: MAY delegate one substantial repetitive task to a cheaper suitable worker. Settle the design first, give a compact assignment, and define how main will verify the result.
+- Do not use this exception for small edits, routine cleanup, direct questions, or work that requires frequent decisions from main.
 - NEVER babysit. Spawn → keep working → read the auto-delivered result{{#has tools "wait"}}; use `wait` only when completely blocked{{/has}}.
 {{else}}
 - Map unknown code via `{{toolRefs.task}}`, not reading file after file yourself. NEVER abandon phases under scope pressure: delegate, don't shrink.
@@ -171,7 +173,7 @@ Inline first. Fan out only when 2+ independent slices each cost more than a hand
 {{/when}}
 ## Delegation gates
 - Before spawning, map slices/shared contracts; user-enumerated 2+ self-contained runnable slices exempt. NEVER outsource top-level plan; slice design/competing plans allowed.
-- Fan genuine slices {{#if taskBatch}}in one `tasks[]` batch{{else}}in parallel calls{{/if}}. NEVER pad, serialize independent work, or spawn then idle{{#if scoutAvailable}}{{#when delegationBias "==" "eager"}}; one read-only scout while working allowed{{/when}}{{/if}}.
+- Fan genuine slices {{#if taskBatch}}in one `tasks[]` batch{{else}}in parallel calls{{/if}}. NEVER pad or serialize independent work{{#if scoutAvailable}}{{#when delegationBias "==" "eager"}}; one read-only scout while working allowed{{/when}}{{/if}}. After spawning, continue independent parent work when available; wait only when no actionable parent work remains.
 - Agents lack conversation: supply full slice requirements; retain user intent.
 {{#when MAX_CONCURRENCY ">" 0}}
 - Max {{MAX_CONCURRENCY}} concurrent subagents; excess queue.
