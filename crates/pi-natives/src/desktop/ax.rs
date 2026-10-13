@@ -150,6 +150,9 @@ pub struct AxRegistry {
 	/// Ref of each element registered under each target, so an element read
 	/// again keeps its ref.
 	refs:        HashMap<String, HashMap<AxHandle, u64>>,
+	/// Refs re-found onto an element another ref already named, each to that
+	/// ref, which they follow until it expires.
+	aliases:     HashMap<u64, u64>,
 }
 
 impl Default for AxRegistry {
@@ -159,6 +162,7 @@ impl Default for AxRegistry {
 			generations: HashMap::new(),
 			entries:     HashMap::new(),
 			refs:        HashMap::new(),
+			aliases:     HashMap::new(),
 		}
 	}
 }
@@ -252,8 +256,15 @@ impl AxRegistry {
 		format!("e{id}")
 	}
 
+	/// The entry id `reference` names, following an alias.
+	fn id(&self, reference: &str) -> Option<u64> {
+		let id = ref_id(reference)?;
+		Some(self.aliases.get(&id).copied().unwrap_or(id))
+	}
+
 	fn entry(&self, reference: &str) -> CoreResult<&Registered> {
-		ref_id(reference)
+		self
+			.id(reference)
 			.and_then(|id| self.entries.get(&id))
 			.ok_or_else(|| DesktopError::stale_ref(format!("{reference} expired; re-run ax()/find()")))
 	}
@@ -267,27 +278,49 @@ impl AxRegistry {
 	}
 
 	/// Points `reference` at `handle`, the element re-found in place of the one
-	/// it named. An element another ref already names keeps that ref for later
-	/// reads.
+	/// it named. When a read already registered that element under another
+	/// ref, `reference` becomes an alias of that ref, which reads renew, and
+	/// names the element for as long as that ref does.
 	fn rebind(&mut self, reference: &str, handle: AxHandle) {
-		let Some(id) = ref_id(reference) else {
+		let Some(id) = self.id(reference) else {
 			return;
 		};
+		let Some(target_key) = self.entries.get(&id).map(|entry| entry.target_key.clone()) else {
+			return;
+		};
+		let refs = self.refs.entry(target_key).or_default();
+		let owner = refs
+			.get(&handle)
+			.copied()
+			.filter(|owner| *owner != id && self.entries.contains_key(owner));
+		if let Some(owner) = owner {
+			if let Some(entry) = self.entries.remove(&id)
+				&& refs.get(&entry.handle) == Some(&id)
+			{
+				refs.remove(&entry.handle);
+			}
+			for target in self.aliases.values_mut() {
+				if *target == id {
+					*target = owner;
+				}
+			}
+			self.aliases.insert(id, owner);
+			return;
+		}
 		let Some(entry) = self.entries.get_mut(&id) else {
 			return;
 		};
-		let refs = self.refs.entry(entry.target_key.clone()).or_default();
 		if refs.get(&entry.handle) == Some(&id) {
 			refs.remove(&entry.handle);
 		}
 		if handle.identified() {
-			refs.entry(handle.clone()).or_insert(id);
+			refs.insert(handle.clone(), id);
 		}
 		entry.handle = handle;
 	}
 
-	/// Drops expired refs. An identity a newer ref took over keeps pointing at
-	/// that one.
+	/// Drops expired refs and the aliases of each. An identity a newer ref took
+	/// over keeps pointing at that one.
 	fn evict(&mut self, mut expired: impl FnMut(&Registered) -> bool) {
 		let refs = &mut self.refs;
 		self.entries.retain(|id, entry| {
@@ -300,6 +333,10 @@ impl AxRegistry {
 			}
 			!expired
 		});
+		let entries = &self.entries;
+		self
+			.aliases
+			.retain(|_, target| entries.contains_key(target));
 	}
 
 	fn enforce_cap(&mut self) {

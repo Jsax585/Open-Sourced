@@ -705,12 +705,12 @@ impl Worker {
 		result
 	}
 
-	/// Runs `op` on `reference`'s element. When `op` fails because the app
+	/// Reads `reference`'s element with `op`. When `op` fails because the app
 	/// destroyed that element, as apps do when they rebuild a row or control in
-	/// place, the ref is re-found once ([`ax::refind`]) and `op` runs again on
-	/// the re-found element; the flag says it did. Otherwise the `StaleRef`
-	/// stands.
-	fn on_ref<T>(
+	/// place, the ref is re-found once ([`ax::refind`]) and `op` reads the
+	/// re-found element; the flag says it did. Otherwise the `StaleRef` stands.
+	/// Only for reads: [`Self::act_on_ref`] never runs a failed action again.
+	fn read_ref<T>(
 		&mut self,
 		reference: &str,
 		mut op: impl FnMut(&mut Self, &ax::AxHandle) -> CoreResult<T>,
@@ -727,6 +727,25 @@ impl Worker {
 			return Err(error);
 		};
 		op(self, &found).map(|value| (value, true))
+	}
+
+	/// Acts on `reference`'s element with `op`, at most once. An element the
+	/// app destroyed is re-found ([`ax::refind`]) before `op` is sent, and
+	/// the flag says so; an `op` that fails is never sent again, since a
+	/// request that failed may still have acted, and may itself be what
+	/// destroyed the element.
+	fn act_on_ref<T>(
+		&mut self,
+		reference: &str,
+		op: impl FnOnce(&mut Self, &ax::AxHandle) -> CoreResult<T>,
+	) -> CoreResult<(T, bool)> {
+		let handle = self.registry.resolve(reference)?;
+		if self.ax()?.destroyed(&handle)
+			&& let Some(found) = self.refind(reference)
+		{
+			return op(self, &found).map(|value| (value, true));
+		}
+		op(self, &handle).map(|value| (value, false))
 	}
 
 	/// The element re-found in place of `reference`'s destroyed one, in the
@@ -989,7 +1008,7 @@ impl Worker {
 				Ok(Response::Node(node))
 			},
 			Request::AxNode { reference, .. } => {
-				let (props, refound) = self.on_ref(reference, |worker, h| worker.ax()?.props(h))?;
+				let (props, refound) = self.read_ref(reference, |worker, h| worker.ax()?.props(h))?;
 				let mut node = ax::node_to_napi(reference.clone(), props);
 				node.refound = refound.then_some(true);
 				Ok(Response::Node(Some(node)))
@@ -1043,7 +1062,7 @@ impl Worker {
 				Ok(Response::Node(node))
 			},
 			Request::AxPerform { reference, action, .. } => {
-				let ((), refound) = self.on_ref(reference, |worker, h| {
+				let ((), refound) = self.act_on_ref(reference, |worker, h| {
 					if action.eq_ignore_ascii_case("press") {
 						ax::ax_press(worker.ax()?, h)
 					} else {
@@ -1054,15 +1073,15 @@ impl Worker {
 			},
 			Request::AxSetValue { reference, value, .. } => {
 				let ((), refound) =
-					self.on_ref(reference, |worker, h| worker.ax()?.set_value(h, value))?;
+					self.act_on_ref(reference, |worker, h| worker.ax()?.set_value(h, value))?;
 				Ok(Response::Acted(AxActed { refound }))
 			},
 			Request::AxFocus { reference, .. } => {
-				let ((), refound) = self.on_ref(reference, |worker, h| worker.ax()?.focus(h))?;
+				let ((), refound) = self.act_on_ref(reference, |worker, h| worker.ax()?.focus(h))?;
 				Ok(Response::Acted(AxActed { refound }))
 			},
 			Request::AxClick { reference, options, .. } => {
-				let ((bounds, h), refound) = self.on_ref(reference, |worker, h| {
+				let ((bounds, h), refound) = self.read_ref(reference, |worker, h| {
 					let bounds = worker.ax()?.props(h)?.bounds.ok_or_else(|| {
 						DesktopError::ax_failed(format!("{reference} has no clickable bounds"))
 					})?;
@@ -1909,10 +1928,13 @@ mod capture_tests {
 	/// answers every request as gone.
 	#[derive(Default)]
 	struct FakeTree {
-		titles:    HashMap<u64, &'static str>,
-		children:  Vec<u64>,
-		destroyed: HashSet<u64>,
-		pressed:   Vec<u64>,
+		titles:            HashMap<u64, &'static str>,
+		children:          Vec<u64>,
+		destroyed:         HashSet<u64>,
+		pressed:           Vec<u64>,
+		/// A press is delivered, then the app replaces the pressed element with
+		/// an identical one under this id and the press answers as stale.
+		press_rebuilds_as: Option<u64>,
 	}
 
 	impl FakeTree {
@@ -2073,7 +2095,18 @@ mod capture_tests {
 				.lock();
 			let id = tree.element(h)?;
 			tree.pressed.push(id);
-			Ok(())
+			let Some(copy) = tree.press_rebuilds_as else {
+				return Ok(());
+			};
+			tree.destroyed.insert(id);
+			let title = tree.titles[&id];
+			tree.titles.insert(copy, title);
+			for child in &mut tree.children {
+				if *child == id {
+					*child = copy;
+				}
+			}
+			Err(DesktopError::stale_ref("the element no longer exists"))
 		}
 
 		fn set_value(&mut self, _: &AxHandle, _: &str) -> CoreResult<()> {
@@ -2575,6 +2608,46 @@ mod capture_tests {
 		rebuild(&tree, 4, &[(3, "Stop")]);
 		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
 		assert!(tree.lock().pressed.is_empty());
+	}
+
+	#[test]
+	fn a_press_that_destroys_its_element_is_never_sent_again() {
+		// The press may have acted before the app rebuilt the button.
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		tree.lock().press_rebuilds_as = Some(4);
+		assert_eq!(press(&mut worker, "e2"), Err(ErrorCode::StaleRef));
+		assert_eq!(tree.lock().pressed, [2]);
+	}
+
+	#[test]
+	fn a_ref_refound_onto_an_element_read_under_another_ref_outlives_later_reads() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
+		let target = Target::Window(WAYLAND_ID.to_string());
+		let snapshot = |worker: &mut Worker| {
+			worker
+				.snapshot(&target, &AxSnapshotOptions::default())
+				.unwrap();
+		};
+		snapshot(&mut worker);
+		// The replacement was read under its own ref before `e2` was re-found.
+		assert!(
+			worker
+				.registry
+				.resolve("e4")
+				.is_ok_and(|h| h == AxHandle::Test(4))
+		);
+		assert_eq!(press(&mut worker, "e2"), Ok(true));
+		snapshot(&mut worker);
+		snapshot(&mut worker);
+		assert_eq!(press(&mut worker, "e2"), Ok(false));
+		assert_eq!(press(&mut worker, "e4"), Ok(false));
+		assert_eq!(tree.lock().pressed, [4, 4, 4]);
+		// Both refs follow the element when the app rebuilds it again.
+		rebuild(&tree, 4, &[(5, "Go"), (3, "Stop")]);
+		assert_eq!(press(&mut worker, "e2"), Ok(true));
+		assert_eq!(press(&mut worker, "e4"), Ok(false));
+		assert_eq!(tree.lock().pressed, [4, 4, 4, 5, 5]);
 	}
 
 	fn capture_request(target: Target) -> Request {
