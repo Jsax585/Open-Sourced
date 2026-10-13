@@ -16,7 +16,7 @@ import {
 	buildNpmInstallArgs,
 	buildRenameCleanupPackages,
 	downloadVerifiedBinary,
-	isSameInstall,
+	launcherRunsInstall,
 	type InstalledVersionVerification,
 	managedInstallName,
 	type ManagerUpdateSteps,
@@ -1848,19 +1848,36 @@ describe("update-cli manager update recovery", () => {
 	});
 });
 
-describe("isSameInstall", () => {
-	it("matches launcher symlinks to the running entry and rejects other or missing paths", async () => {
-		using tempDir = TempDir.createSync("@omp-same-install-");
-		const entry = tempDir.join("cli.ts");
-		const launcher = tempDir.join("omp");
-		const other = tempDir.join("other");
-		await Bun.write(entry, "");
-		await Bun.write(other, "");
-		nodeFs.symlinkSync(entry, launcher);
+describe.skipIf(process.platform === "win32")("launcherRunsInstall", () => {
+	const cliPath = path.join(import.meta.dir, "../src/cli.ts");
 
-		expect(isSameInstall(launcher, entry)).toBe(true);
-		expect(isSameInstall(other, entry)).toBe(false);
-		expect(isSameInstall(tempDir.join("missing"), entry)).toBe(false);
+	it("matches a non-symlink launcher that runs this CLI entry", async () => {
+		using tempDir = TempDir.createSync("@omp-launcher-install-");
+		const launcher = tempDir.join("omp");
+		await Bun.write(launcher, `#!/bin/sh\nexec "${process.execPath}" "${cliPath}" "$@"\n`);
+		nodeFs.chmodSync(launcher, 0o755);
+
+		expect(await launcherRunsInstall(launcher, { execPath: process.execPath, main: cliPath })).toBe(true);
+	}, 30_000);
+
+	it("rejects a launcher that runs a different entry", async () => {
+		using tempDir = TempDir.createSync("@omp-launcher-install-");
+		const launcher = tempDir.join("omp");
+		await Bun.write(launcher, `#!/bin/sh\nexec "${process.execPath}" "${cliPath}" "$@"\n`);
+		nodeFs.chmodSync(launcher, 0o755);
+
+		expect(
+			await launcherRunsInstall(launcher, { execPath: process.execPath, main: tempDir.join("other-cli.ts") }),
+		).toBe(false);
+	}, 30_000);
+
+	it("treats a launcher without the probe as a different install", async () => {
+		using tempDir = TempDir.createSync("@omp-launcher-install-");
+		const launcher = tempDir.join("omp");
+		await Bun.write(launcher, "#!/bin/sh\necho omp/1.0.0\n");
+		nodeFs.chmodSync(launcher, 0o755);
+
+		expect(await launcherRunsInstall(launcher, { execPath: process.execPath, main: cliPath })).toBe(false);
 	});
 });
 describe("autoInstallStartupUpdate", () => {

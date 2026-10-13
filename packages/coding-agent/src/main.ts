@@ -48,7 +48,7 @@ import { applyStartupCwd } from "./cli/startup-cwd";
 import {
 	autoInstallStartupUpdate,
 	getLatestRelease,
-	isSameInstall,
+	launcherRunsInstall,
 	isSourceCheckout,
 	managedInstallName,
 	reportedVersionAtPath,
@@ -269,13 +269,13 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 
 /**
  * `update.autoInstall`: install `newVersion` before the TUI opens, then exec into the
- * updated launcher only when `omp` on PATH resolves to this running install. Returns
- * when nothing was installed; startup then continues on the running version and the
- * "Update Available" banner still shows.
+ * updated launcher only when `omp` on PATH runs this install (asked via
+ * `launcherRunsInstall`, so shims count). Returns when nothing was installed; startup
+ * then continues on the running version and the "Update Available" banner still shows.
  */
 async function autoInstallAndRelaunch(newVersion: string): Promise<void> {
 	const ompPath = $which(APP_NAME);
-	if (!ompPath || !isSameInstall(ompPath, isCompiledBinary() ? process.execPath : Bun.main)) return;
+	if (!ompPath || !(await launcherRunsInstall(ompPath, { execPath: process.execPath, main: Bun.main }))) return;
 
 	stopPendingStartupComposer();
 	pauseStartupWatchdog();
@@ -1945,7 +1945,13 @@ export async function runRootCommand(
 		const versionCheckPromise = isInteractive
 			? checkForNewVersion(VERSION).catch(() => undefined)
 			: Promise.resolve(undefined);
-		if (isInteractive && cfgUpdateAutoInstall.get(settingsInstance)) {
+		// Resumed and imported sessions may switch to another project whose settings load later; skip auto-install there (the banner still offers the update).
+		if (
+			isInteractive &&
+			!parsedArgs.resume &&
+			!isForeignSessionImport(parsedArgs) &&
+			cfgUpdateAutoInstall.get(settingsInstance)
+		) {
 			const newVersion = await logger.time("autoInstall:updateCheck", () => versionCheckPromise);
 			if (newVersion) await autoInstallAndRelaunch(newVersion);
 		}

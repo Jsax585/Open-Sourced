@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added opt-in `update.autoInstall` to install newer versions before interactive startup and relaunch into them; failed updates, resumed or imported sessions, and a PATH `omp` that runs a different install continue with the running version ([#15397](https://github.com/can1357/oh-my-pi/pull/15397) by [@aloyzzz](https://github.com/aloyzzz))
+
 ## [18.10.4] - 2026-10-13
 
 ### Added

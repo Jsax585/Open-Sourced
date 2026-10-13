@@ -371,10 +371,35 @@ function tryRealpath(p: string): string | undefined {
 	}
 }
 
-/** Whether `launcherPath` resolves to the same file as `runningEntry`. */
-export function isSameInstall(launcherPath: string, runningEntry: string): boolean {
-	const real = tryRealpath(launcherPath);
-	return real !== undefined && real === tryRealpath(runningEntry);
+/** Identity of an omp process: its runtime binary and entry module. */
+export interface InstallIdentity {
+	execPath: string;
+	main: string;
+}
+
+/**
+ * Whether `launcherPath` runs the install identified by `running`. Asks the launcher
+ * itself (`PI_REPORT_INSTALL=1 <launcher> --version`), so shims that realpath
+ * elsewhere (npm `.cmd`, bun `.exe` + `.bunx`, mise) resolve to their payload.
+ * Older launchers print a plain version and count as a different install.
+ */
+export async function launcherRunsInstall(launcherPath: string, running: InstallIdentity): Promise<boolean> {
+	let reported: unknown;
+	try {
+		const result = await $`${launcherPath} --version`
+			.env({ ...process.env, PI_REPORT_INSTALL: "1" })
+			.quiet()
+			.nothrow();
+		if (result.exitCode !== 0) return false;
+		reported = JSON.parse(result.text());
+	} catch {
+		return false;
+	}
+	if (!isRecord(reported) || typeof reported.execPath !== "string" || typeof reported.main !== "string") return false;
+	return (
+		(tryRealpath(reported.execPath) ?? reported.execPath) === (tryRealpath(running.execPath) ?? running.execPath) &&
+		(tryRealpath(reported.main) ?? reported.main) === (tryRealpath(running.main) ?? running.main)
+	);
 }
 
 /**
