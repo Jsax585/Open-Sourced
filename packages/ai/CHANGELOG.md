@@ -5,7 +5,6 @@
 ### Added
 
 - Credential recovery uses request-owned quota probes, and replacing an account or key invalidates its stale cooldown and affinity ([#10138](https://github.com/can1357/oh-my-pi/pull/10138) by [@jroth1111](https://github.com/jroth1111)).
-- Gateway requests expose bounded, redacted routing decisions through authenticated execution lookups ([#10137](https://github.com/can1357/oh-my-pi/pull/10137) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway requests expose their retained, ordered, redacted routing decisions through authenticated execution lookups, preserving legacy first-decision fields ([#10137](https://github.com/can1357/oh-my-pi/pull/10137) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway chat and pi-native requests resolve through a shared route registry and dispatch its selected target ([#10136](https://github.com/can1357/oh-my-pi/pull/10136) by [@jroth1111](https://github.com/jroth1111)).
 - Gateway Responses streams hold metadata before output and preserve terminal failures without replaying committed content ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
