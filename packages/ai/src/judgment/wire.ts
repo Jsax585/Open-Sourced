@@ -44,6 +44,8 @@ export function finiteNumber(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+const RESERVED_VALUE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 /**
  * Decorate a path-based System One wire (typesafe/openrouter-decisions)
  * with per-model {@link JudgmentConfig} overrides:
@@ -64,6 +66,15 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 	const typeMap = config.typeMap;
 	const valueMap = config.valueMap;
 	const usageMap = config.usageMap;
+	if (valueMap !== undefined) {
+		for (const [canonical, wireKey] of Object.entries(valueMap)) {
+			if (wireKey === typeField || RESERVED_VALUE_KEYS.has(wireKey)) {
+				throw new AIError.ConfigurationError(
+					`judgment.valueMap for "${canonical}" must not name reserved key "${wireKey}"`,
+				);
+			}
+		}
+	}
 	if (route === undefined && typeField === "type" && !typeMap && !valueMap && !usageMap) {
 		return inner;
 	}
@@ -84,8 +95,9 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 			if (typeMap === undefined && typeField === "type") {
 				return inner.encode(request, model);
 			}
-			const wireQuestions: Record<string, Record<string, unknown>> = {};
+			const wireQuestions: Record<string, Record<string, unknown>> = Object.create(null);
 			for (const id in request.questions) {
+				if (!Object.hasOwn(request.questions, id)) continue;
 				const question = request.questions[id];
 				const wireQuestion: Record<string, unknown> = {
 					...question,
@@ -116,14 +128,15 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 				return usageMap !== undefined ? { ...decoded, usage } : decoded;
 			}
 
-			const answers: Record<string, unknown> = {};
+			const answers: Record<string, unknown> = Object.create(null);
 			for (const id in decoded.answers) {
+				if (!Object.hasOwn(decoded.answers, id)) continue;
 				const raw: unknown = decoded.answers[id];
 				if (!isRecord(raw)) {
 					answers[id] = raw;
 					continue;
 				}
-				const canonical = questions?.[id]?.type;
+				const canonical = questions && Object.hasOwn(questions, id) ? questions[id]?.type : undefined;
 				if (canonical === undefined) {
 					answers[id] = raw;
 					continue;
@@ -137,17 +150,16 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 				}
 
 				const normalized: Record<string, unknown> = { ...raw };
-				normalized.type = canonical;
-				if (typeField !== "type") {
-					delete normalized[typeField];
-				}
-
 				if (valueMap !== undefined) {
 					const wireKey = valueMap[canonical];
 					if (wireKey !== undefined && wireKey !== canonical && normalized[wireKey] !== undefined) {
 						normalized[canonical] ??= normalized[wireKey];
 						delete normalized[wireKey];
 					}
+				}
+				normalized.type = canonical;
+				if (typeField !== "type") {
+					delete normalized[typeField];
 				}
 				answers[id] = normalized;
 			}

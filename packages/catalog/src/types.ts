@@ -1368,6 +1368,12 @@ export type CompatOf<TApi extends Api> = TApi extends "openrouter"
 							? ResolvedGoogleCompat
 							: undefined;
 
+/** Wire type overrides for judgment question types. Defaults: canonical names `noul`, `choice`, `score`. */
+export type JudgmentTypeMap = Partial<Record<"noul" | "choice" | "score", string>>;
+
+/** Wire key overrides for judgment answer values. Defaults: canonical names `noul`, `choice`, `score`. */
+export type JudgmentValueMap = Partial<Record<"noul" | "choice" | "score", string>>;
+
 /** Wire key overrides for judgment usage fields. Defaults: `input_tokens`, `output_tokens`. */
 export type JudgmentUsageMap = Partial<Record<"input" | "output", string>>;
 
@@ -1387,9 +1393,9 @@ export interface JudgmentConfig {
 	/** Discriminator field name; default "type". */
 	typeField?: string;
 	/** Canonical question type -> wire type, e.g. {noul:"boolean"}. */
-	typeMap?: Record<string, string>;
+	typeMap?: JudgmentTypeMap;
 	/** Canonical answer value key -> wire value key, e.g. {noul:"probability"}. */
-	valueMap?: Record<string, string>;
+	valueMap?: JudgmentValueMap;
 	usageMap?: JudgmentUsageMap;
 }
 
