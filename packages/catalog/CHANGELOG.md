@@ -10,7 +10,7 @@
 
 ### Fixed
 
-- Cursor model discovery no longer drops models the account can run when Cursor's `GetUsableModels` list under-reports entitlement — agent-capable models advertised by `AvailableModels` (e.g. GLM-5.3) stay on the roster even when no wire slug appears in the usable list ([#15527](https://github.com/can1357/oh-my-pi/issues/15527))
+- Cursor model discovery no longer drops models the account can run when Cursor's `GetUsableModels` list under-reports entitlement — agent-capable models advertised by `AvailableModels` (e.g. GLM-5.3) stay on the roster even when no wire slug appears in the usable list ([#15527](https://github.com/can1357/oh-my-pi/issues/15527), fixed in [#15540](https://github.com/can1357/oh-my-pi/pull/15540) by [@zhoffm](https://github.com/zhoffm))
 
 ## [18.10.2] - 2026-10-12
 
