@@ -62,6 +62,9 @@ export function authCredentialEquals(left: AuthCredential, right: AuthCredential
 		left.accountId === right.accountId &&
 		left.email === right.email &&
 		left.projectId === right.projectId &&
+		left.orgId === right.orgId &&
+		left.orgName === right.orgName &&
+		left.apiEndpoint === right.apiEndpoint &&
 		left.enterpriseUrl === right.enterpriseUrl
 	);
 }
@@ -84,6 +87,18 @@ export interface CredentialPoolOptions {
 	blockHealth: BlockStoreHealth;
 	/** Called whenever a provider's credential set changed locally. */
 	onReset: (provider: string) => void;
+	/**
+	 * Called inside {@link CredentialPool.replace} for every row whose stored
+	 * credential differs from the previous snapshot at the same durable id.
+	 * The coordination layer uses it to bump the row's incarnation when the
+	 * physical identity (account/key bytes, not a token refresh) changed.
+	 */
+	onCredentialIdentityChanged?: (
+		provider: string,
+		credentialId: number,
+		previous: AuthCredential,
+		next: AuthCredential,
+	) => void;
 }
 
 /** In-memory credential snapshot over an AuthCredentialStore: CRUD, change detection, events. */
@@ -335,6 +350,13 @@ export class CredentialPool implements CredentialsApi {
 	replace(provider: string, credentials: StoredCredential[]): void {
 		const current = this.#data.get(provider) ?? [];
 		if (storedCredentialArraysEqual(current, credentials)) return;
+		const onIdentityChanged = this.#options.onCredentialIdentityChanged;
+		if (onIdentityChanged) {
+			for (const next of credentials) {
+				const previous = current.find(entry => entry.id === next.id);
+				if (previous) onIdentityChanged(provider, next.id, previous.credential, next.credential);
+			}
+		}
 		const trackedBearerFingerprints = this.#oauthBearerFingerprints.get(provider);
 		if (trackedBearerFingerprints) {
 			const activeOAuthIds = new Set(
