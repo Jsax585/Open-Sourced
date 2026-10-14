@@ -1310,7 +1310,7 @@ export class VibeSessionRegistry {
 			modelRegistry: session.modelRegistry,
 			settings: session.settings,
 			asyncJobManager: session.asyncJobManager,
-			inheritedSessionAgents: session.getSessionAgents?.(),
+			inheritedSessionAgents: session.getSessionAgents ? () => session.getSessionAgents?.() ?? [] : undefined,
 			mcpManager: session.mcpManager ?? MCPManager.instance(),
 			contextFiles: session.contextFiles?.filter(file => path.basename(file.path).toLowerCase() !== "agents.md"),
 			skills: [...(session.skills ?? [])],

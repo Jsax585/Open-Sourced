@@ -155,6 +155,7 @@ it("revives a subagent a crash cut off mid tool call, runs the call again, and d
 		effectiveExtensionRoots: { explicit: [], mode: "merge", configured: [], configuredLevel: "user" },
 		preparedExtensions: undefined,
 		restoreInterruptedTurn: async () => false,
+		getSessionAgents: () => [],
 	} as unknown as AgentSession;
 	AgentLifecycleManager.global().setPersistedSubagentReviverFactory(
 		createPersistedSubagentReviverFactory({ session, authStorage, modelRegistry, settings, enableLsp: false }),

@@ -41,7 +41,7 @@ import { hasWaitTool } from "../tools/wait";
 import { isIrcEnabled } from "../irc/messaging";
 import { isReadOnlyAgent } from "./read-only-policy";
 import { formatTaskResultSummary } from "./result-summary";
-import { isScoutSpawnable, resolveSpawnPolicy } from "./spawn-policy";
+import { isScoutSpawnable, type ResolvedSpawnPolicy, resolveSpawnPolicy } from "./spawn-policy";
 import { type AgentDefinition, canSpawnAtDepth, getTaskSchema, type TaskToolSchemaInstance } from "./types";
 import {
 	type AgentProgress,
@@ -161,28 +161,39 @@ interface TaskDescriptionOptions {
 	parentSpawns: string;
 }
 
+function visibleAgents(
+	agents: readonly AgentDefinition[],
+	disabled: readonly string[],
+	policy: ResolvedSpawnPolicy,
+): AgentDefinition[] {
+	if (!policy.enabled) return [];
+	return agents.filter(
+		agent =>
+			!disabled.includes(agent.name) && (policy.allowedAgents === null || policy.allowedAgents.includes(agent.name)),
+	);
+}
+
 /** Render the tool description from a cached agent list and current settings. */
 function renderDescription(options: TaskDescriptionOptions): string {
 	const spawnPolicy = resolveSpawnPolicy(options.parentSpawns);
 	const spawningDisabled = !spawnPolicy.enabled;
-	const agents = [...options.agents, ...options.sessionAgents];
-	let filteredAgents =
-		options.disabledAgents.length > 0 ? agents.filter(agent => !options.disabledAgents.includes(agent.name)) : agents;
-	if (spawningDisabled) {
-		filteredAgents = [];
-	} else if (spawnPolicy.allowedAgents !== null) {
-		const allowed = new Set(spawnPolicy.allowedAgents);
-		filteredAgents = filteredAgents.filter(agent => allowed.has(agent.name));
-	}
-	const renderedAgents = filteredAgents.map(agent => ({
-		name: agent.name,
-		description: agent.description,
-		readOnly: isReadOnlyAgent(agent),
-		blocking: agent.blocking === true,
-	}));
+	// Match dispatch precedence when a named agent shadows an automatic model agent.
+	const discoveredNames = new Set(options.agents.map(agent => agent.name));
+	const agents = [...options.agents, ...options.sessionAgents.filter(agent => !discoveredNames.has(agent.name))];
+	const filteredAgents = visibleAgents(agents, options.disabledAgents, spawnPolicy);
+	const renderedAgents = filteredAgents
+		.filter(agent => !agent.modelAgent)
+		.map(agent => ({
+			name: agent.name,
+			description: agent.description,
+			readOnly: isReadOnlyAgent(agent),
+			blocking: agent.blocking === true,
+		}));
+	const modelAgents = filteredAgents.filter(agent => agent.modelAgent).map(agent => agent.name);
 	const scoutAvailable = isScoutSpawnable(options.disabledAgents, options.parentSpawns);
 	return prompt.render(taskDescriptionTemplate, {
 		agents: renderedAgents,
+		modelAgents,
 		scoutAvailable,
 		spawningDisabled,
 		defaultAgent: spawnPolicy.defaultAgent,
@@ -194,7 +205,7 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		structured: options.structured,
 		asyncEnabled: options.asyncEnabled,
 		hasBlockingAgents: renderedAgents.some(agent => agent.blocking),
-		hasModelMentions: options.sessionAgents.length > 0,
+		hasModelMentions: filteredAgents.some(agent => !agent.modelAgent && /^m\d+$/.test(agent.name)),
 		ircEnabled: options.ircEnabled,
 		asyncGuidance: options.asyncGuidance,
 	});
@@ -723,6 +734,19 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			asyncGuidance: this.delegationGuidance,
 			parentSpawns: this.session.getSessionSpawns() ?? "*",
 		});
+	}
+
+	/** Apply the task inventory's policy and shadowing rules to session-agent notices. */
+	filterSessionAgents(agents: readonly AgentDefinition[]): AgentDefinition[] {
+		const discovered =
+			discoverySnapshots.get(discoveryCacheKey(this.session.cwd, this.session.effectiveExtensionRoots?.())) ??
+			this.#discoveredAgents;
+		const names = new Set(discovered.map(agent => agent.name));
+		return visibleAgents(
+			agents.filter(agent => !names.has(agent.name)),
+			cfgTaskDisabledAgents.get(this.session.settings),
+			resolveSpawnPolicy(this.session.getSessionSpawns()),
+		);
 	}
 	private constructor(
 		private readonly session: ToolSession,
