@@ -6,7 +6,7 @@ import type {
 	OAuthPrompt,
 	OAuthProviderId,
 } from "../registry/oauth/types";
-import type { Provider } from "../types";
+import type { Api, Provider } from "../types";
 import type {
 	ClientUsageIdentity,
 	ClientUsageReport,
@@ -105,6 +105,10 @@ export interface StoredCredentialBlock {
 	blockScope: string;
 	/** Epoch milliseconds. */
 	blockedUntilMs: number;
+	/** True when the block came from a provider Retry-After / usage wait window. */
+	retryAfter?: boolean;
+	/** Known quota exhaustion; missing/false provenance is never eligible for a recovery probe. */
+	quotaOrigin?: boolean;
 	/** Last row update timestamp in epoch milliseconds, when provided by the backing store. */
 	updatedAtMs?: number;
 }
@@ -476,8 +480,12 @@ export interface ModelUsageHealthOptions {
 
 /** Options controlling model, base URL, cancellation, and forced OAuth refresh in KeysApi.get. */
 export type AuthApiKeyOptions = {
+	/** Exact stored row owning a continuation; never widens session/account restrictions. */
+	credentialId?: number;
 	baseUrl?: string;
 	modelId?: string;
+	/** Identity of the inference attempt owning a recovery probe; callers settle or release it. */
+	requestId?: string;
 	/** {@link oauthAccountKey}s of accounts known to serve `modelId` from multi-account discovery; OAuth selection prefers them and tries other accounts only as a last resort. */
 	accountIds?: readonly string[];
 	/**
@@ -532,6 +540,8 @@ export interface OAuthRequestIdentity {
  */
 export interface OAuthAccess {
 	accessToken: string;
+	/** Targeted request resolution, including provider-formatted key and selected account scope. */
+	resolvedKey?: ResolvedApiKey;
 	credentialId?: number;
 	accountId?: string;
 	email?: string;
@@ -1137,8 +1147,27 @@ export interface OAuthApi {
  */
 export type SessionRestrictionLease = symbol;
 
+/** Credential and deployment binding of an upstream response, without bearer material. */
+export interface StoredResponseOwner {
+	sessionId: string;
+	target: string;
+	provider: string;
+	api: Api;
+	endpoint: string;
+	account: string;
+	credentialId?: number;
+}
+
+/** Private response-to-account bindings, persisted alongside session affinity. */
+export interface ResponseOwnersApi {
+	get(responseId: string): Readonly<StoredResponseOwner> | undefined;
+	record(responseId: string | undefined, owner: StoredResponseOwner): void;
+}
+
 /** Session credential affinity operations. */
 export interface SessionsApi {
+	/** Deliberate user pin only; automatic warm affinity is not a continuation ownership constraint. */
+	explicitCredentialId(provider: string, sessionId: string): number | undefined;
 	/**
 	 * Pin one stored OAuth account as this session's preferred credential.
 	 *

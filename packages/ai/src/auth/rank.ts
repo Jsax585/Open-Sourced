@@ -5,6 +5,8 @@ import type { AuthCredential, ApiKeyCredential, OAuthCredential } from "./types"
 export type CredentialSelection<T extends AuthCredential> = {
 	credential: T;
 	index: number;
+	/** Lease owner carried to key-material resolution so failures release only this selection's probe. */
+	probeRequestId?: string;
 };
 /** Selected OAuth credential for routing. */
 export type OAuthSelection = CredentialSelection<OAuthCredential>;
