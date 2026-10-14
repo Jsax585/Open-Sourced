@@ -2,11 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed OpenZoo public-tunnel discovery reporting a rejected bearer as a missing model instead of an authentication failure.
-- Fixed resuming a session saved on `openzoo/auto` when the OpenZoo model cache is empty.
-- Explicit CLI model selection now discovers a requested live-only provider when its cache is empty.
 ### Added
 
 - The composer stays usable while a tool approval is pending: sending a message denies the call and steers the turn with it, so the agent knows why it was denied ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
@@ -19,6 +14,9 @@
 
 ### Fixed
 
+- Fixed OpenZoo public-tunnel discovery reporting a rejected bearer as a missing model instead of an authentication failure.
+- Fixed resuming a session saved on `openzoo/auto` when the OpenZoo model cache is empty.
+- Explicit CLI model selection now discovers a requested live-only provider when its cache is empty.
 - `tab.ariaSnapshot()` no longer prints the value of a password field; it shows one bullet per character, as `tab.observe()` and the screen do, so a typed or browser-autofilled password stays out of the model's context ([#15502](https://github.com/can1357/oh-my-pi/pull/15502) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed browser `tab.text()` and `tab.html()` (and the same calls on a frame) throwing when called without a selector; they now read the page body on Chrome, Tern and cmux ([#15599](https://github.com/can1357/oh-my-pi/pull/15599) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed the macOS `computer` tool keeping the display awake for the rest of the session after a native call hung; the call's timeout or closing the session now lets it sleep ([#15414](https://github.com/can1357/oh-my-pi/pull/15414) by [@will-bogusz](https://github.com/will-bogusz))
