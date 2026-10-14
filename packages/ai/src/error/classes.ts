@@ -1,5 +1,6 @@
 import type { CapturedHttpErrorResponse } from "../utils/http-inspector";
 import { AbortError } from "./abort";
+import { shouldRetryAnthropicResponse } from "./http-retry";
 
 /** Prefix on errors raised when an Anthropic SSE stream envelope is malformed. */
 export const STREAM_ENVELOPE_ERROR_PREFIX = "Anthropic stream envelope error:";
@@ -89,11 +90,13 @@ export const __anthropicApiErrorForTesting = {
 export class AnthropicApiError extends ProviderHttpError {
 	declare readonly headers: Headers;
 	readonly requestId: string | null;
+	readonly retryable: boolean;
 
 	constructor(status: number, message: string, headers: Headers, options?: { code?: string; cause?: unknown }) {
 		super(message, status, { headers, code: options?.code, cause: options?.cause });
 		this.name = "AnthropicApiError";
 		this.requestId = headers.get("request-id");
+		this.retryable = shouldRetryAnthropicResponse(this);
 	}
 
 	static async fromResponse(response: Response, signal?: AbortSignal): Promise<AnthropicApiError> {
