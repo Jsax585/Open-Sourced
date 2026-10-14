@@ -16,6 +16,8 @@ import type {
 	AgentMessage,
 	AgentTool,
 	AgentToolContext,
+	FinalAnswerReviewContext,
+	FinalAnswerReviewDecision,
 	SpeculativePhysicalOutcome,
 	ToolCallContext,
 } from "@oh-my-pi/pi-agent-core/types";
@@ -8426,5 +8428,918 @@ describe("speculative tool execution", () => {
 		expect(SpeculativeOperationCoordinator.take(message)).toBeUndefined();
 		cleanup.resolve();
 		await closing;
+	});
+});
+
+describe("final answer review gate", () => {
+	it("suppresses blocked candidate final answer and allows one same-loop correction with advice preserving role and balanced turns", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+
+		let turn = 0;
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				if (turn++ === 0) {
+					const draft = createAssistantMessage([{ type: "text", text: "First broken answer" }], "stop");
+					stream.push({ type: "start", partial: draft });
+					stream.push({ type: "text_start", contentIndex: 0, partial: draft });
+					stream.push({ type: "text_delta", contentIndex: 0, delta: "First broken answer", partial: draft });
+					stream.push({ type: "text_end", contentIndex: 0, content: "First broken answer", partial: draft });
+					stream.push({ type: "done", reason: "stop", message: draft });
+				} else {
+					const corrected = createAssistantMessage([{ type: "text", text: "Second corrected answer" }], "stop");
+					stream.push({ type: "start", partial: corrected });
+					stream.push({ type: "text_start", contentIndex: 0, partial: corrected });
+					stream.push({
+						type: "text_delta",
+						contentIndex: 0,
+						delta: "Second corrected answer",
+						partial: corrected,
+					});
+					stream.push({
+						type: "text_end",
+						contentIndex: 0,
+						content: "Second corrected answer",
+						partial: corrected,
+					});
+					stream.push({ type: "done", reason: "stop", message: corrected });
+				}
+			});
+			return stream;
+		};
+
+		const reviewCalls: string[] = [];
+		const adviceMessage: AgentMessage = {
+			role: "custom",
+			customType: "advisor",
+			content: "Tone down assertions and fix errors",
+			display: true,
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			reviewFinalAnswer: async ({ message, messages }: FinalAnswerReviewContext) => {
+				const text = message.content.find(c => c.type === "text")?.text;
+				reviewCalls.push(text ?? "");
+				expect(messages[messages.length - 1]).toBe(message);
+				if (text === "First broken answer") {
+					return {
+						action: "block",
+						advice: adviceMessage,
+					};
+				}
+				return { action: "approve" };
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Run task")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const messages = await stream.result();
+
+		// Review was called exactly once for the first candidate; never called for correction
+		expect(reviewCalls).toEqual(["First broken answer"]);
+
+		// Balanced turn start/end: exactly one logical turn across draft and correction
+		const turnStarts = events.filter(e => e.type === "turn_start");
+		const turnEnds = events.filter(e => e.type === "turn_end");
+		expect(turnStarts.length).toBe(1);
+		expect(turnEnds.length).toBe(1);
+
+		// Wrong draft is absent from ALL assistant events
+		for (const event of events) {
+			if ("message" in event && event.message && typeof event.message === "object") {
+				const msg = event.message as { role?: string; content?: Array<{ type: string; text?: string }> };
+				if (msg.role === "assistant" && Array.isArray(msg.content)) {
+					for (const part of msg.content) {
+						if (part.type === "text" && part.text) {
+							expect(part.text).not.toContain("First broken answer");
+						}
+					}
+				}
+			}
+			if (event.type === "message_update") {
+				const ame = event.assistantMessageEvent;
+				if ("delta" in ame && typeof ame.delta === "string") {
+					expect(ame.delta).not.toContain("First broken answer");
+				}
+			}
+		}
+
+		// Custom advice preserved actor role and attributes
+		const adviceStart = events.find(
+			(e): e is Extract<AgentEvent, { type: "message_start" }> =>
+				e.type === "message_start" && e.message.role === "custom",
+		);
+		expect(adviceStart).toBeDefined();
+		if (adviceStart && "customType" in adviceStart.message) {
+			expect(adviceStart.message.customType).toBe("advisor");
+		}
+
+		// User sees only the second corrected answer
+		const textMessages = events
+			.filter((e): e is Extract<AgentEvent, { type: "message_end" }> => e.type === "message_end")
+			.map(e => e.message)
+			.filter((m): m is AssistantMessage => m.role === "assistant")
+			.map(m => m.content.find(c => c.type === "text")?.text);
+		expect(textMessages).toEqual(["Second corrected answer"]);
+
+		// Returned messages contain prompt, advice, and corrected answer (no draft)
+		expect(
+			messages.some(
+				m => m.role === "assistant" && m.content.find(c => c.type === "text")?.text === "First broken answer",
+			),
+		).toBe(false);
+		expect(
+			messages.some(
+				m => m.role === "assistant" && m.content.find(c => c.type === "text")?.text === "Second corrected answer",
+			),
+		).toBe(true);
+		expect(messages.some(m => m.role === "custom" && "customType" in m && m.customType === "advisor")).toBe(true);
+	});
+
+	it("does not emit approval events before reviewer completes", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+
+		const finishReview = Promise.withResolvers<FinalAnswerReviewDecision>();
+		const reviewStarted = Promise.withResolvers<void>();
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const ans = createAssistantMessage([{ type: "text", text: "Approved answer" }], "stop");
+				stream.push({ type: "start", partial: ans });
+				stream.push({ type: "text_start", contentIndex: 0, partial: ans });
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "Approved answer", partial: ans });
+				stream.push({ type: "text_end", contentIndex: 0, content: "Approved answer", partial: ans });
+				stream.push({ type: "done", reason: "stop", message: ans });
+			});
+			return stream;
+		};
+
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			reviewFinalAnswer: async () => {
+				reviewStarted.resolve();
+				return finishReview.promise;
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, streamFn);
+		const consumer = (async () => {
+			for await (const event of stream) {
+				events.push(event);
+			}
+		})();
+
+		// Wait until review has started
+		await reviewStarted.promise;
+
+		// While review is pending, NO assistant events have leaked to the consumer
+		expect(
+			events.some(
+				e =>
+					(e.type === "message_start" || e.type === "message_end") &&
+					"message" in e &&
+					e.message.role === "assistant",
+			),
+		).toBe(false);
+
+		finishReview.resolve({ action: "approve" });
+		await consumer;
+		await stream.result();
+
+		// After review completes, candidate is released
+		const assistantEnd = events.find(
+			(e): e is Extract<AgentEvent, { type: "message_end" }> =>
+				e.type === "message_end" && e.message.role === "assistant",
+		);
+		expect(assistantEnd).toBeDefined();
+	});
+
+	it("fails open and releases candidate when noncooperating reviewer times out", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const ans = createAssistantMessage([{ type: "text", text: "Answer after review timeout" }], "stop");
+				stream.push({ type: "start", partial: ans });
+				stream.push({ type: "text_start", contentIndex: 0, partial: ans });
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "Answer after review timeout", partial: ans });
+				stream.push({ type: "text_end", contentIndex: 0, content: "Answer after review timeout", partial: ans });
+				stream.push({ type: "done", reason: "stop", message: ans });
+			});
+			return stream;
+		};
+
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			finalAnswerReviewTimeoutMs: 15,
+			reviewFinalAnswer: async () => {
+				// Noncooperating reviewer ignores reviewSignal and hangs
+				const hang = Promise.withResolvers<never>();
+				return hang.promise;
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const messages = await stream.result();
+
+		expect(messages.length).toBe(2);
+		expect(messages[1].role).toBe("assistant");
+		const endEvent = events.find(
+			(e): e is Extract<AgentEvent, { type: "message_end" }> =>
+				e.type === "message_end" && e.message.role === "assistant",
+		);
+		const answer = endEvent?.message;
+		expect(answer?.role).toBe("assistant");
+		if (answer?.role !== "assistant") throw new Error("Expected assistant final answer");
+		expect(answer.content.find(c => c.type === "text")?.text).toBe("Answer after review timeout");
+	});
+
+	it("fails open and releases candidate when reviewer throws an error", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const ans = createAssistantMessage([{ type: "text", text: "Answer after reviewer crash" }], "stop");
+				stream.push({ type: "start", partial: ans });
+				stream.push({ type: "text_start", contentIndex: 0, partial: ans });
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "Answer after reviewer crash", partial: ans });
+				stream.push({ type: "text_end", contentIndex: 0, content: "Answer after reviewer crash", partial: ans });
+				stream.push({ type: "done", reason: "stop", message: ans });
+			});
+			return stream;
+		};
+
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			reviewFinalAnswer: async () => {
+				throw new Error("Advisor crash");
+			},
+		};
+
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, streamFn);
+		for await (const _ of stream) {
+			// consume
+		}
+		const messages = await stream.result();
+		expect(messages.length).toBe(2);
+		expect(messages[1].role).toBe("assistant");
+		expect((messages[1] as AssistantMessage).content.find(c => c.type === "text")?.text).toBe(
+			"Answer after reviewer crash",
+		);
+	});
+
+	it("fails open and releases candidate when reviewer returns block with empty advice", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const ans = createAssistantMessage([{ type: "text", text: "Answer with empty advice" }], "stop");
+				stream.push({ type: "start", partial: ans });
+				stream.push({ type: "text_start", contentIndex: 0, partial: ans });
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "Answer with empty advice", partial: ans });
+				stream.push({ type: "text_end", contentIndex: 0, content: "Answer with empty advice", partial: ans });
+				stream.push({ type: "done", reason: "stop", message: ans });
+			});
+			return stream;
+		};
+
+		let reviewCalls = 0;
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			reviewFinalAnswer: async () => {
+				reviewCalls++;
+				return { action: "block", advice: [] };
+			},
+		};
+
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, streamFn);
+		for await (const _ of stream) {
+			// consume
+		}
+		const messages = await stream.result();
+		expect(reviewCalls).toBe(1);
+		expect(messages.length).toBe(2);
+		expect(messages[1].role).toBe("assistant");
+		expect((messages[1] as AssistantMessage).content.find(c => c.type === "text")?.text).toBe(
+			"Answer with empty advice",
+		);
+	});
+
+	it("releases the completed candidate when the user aborts during the review wait", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const ans = createAssistantMessage([{ type: "text", text: "Answer will be aborted" }], "stop");
+				stream.push({ type: "start", partial: ans });
+				stream.push({ type: "text_start", contentIndex: 0, partial: ans });
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "Answer will be aborted", partial: ans });
+				stream.push({ type: "text_end", contentIndex: 0, content: "Answer will be aborted", partial: ans });
+				stream.push({ type: "done", reason: "stop", message: ans });
+			});
+			return stream;
+		};
+
+		const abortController = new AbortController();
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			reviewFinalAnswer: async () => {
+				abortController.abort(new Error("User stopped"));
+				return { action: "approve" };
+			},
+		};
+
+		const stream = agentLoop([createUserMessage("Hello")], context, config, abortController.signal, streamFn);
+		const events: AgentEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		await stream.result();
+
+		// The provider had already finished, so the abort cancels only the review.
+		// The finished answer stands and the loop ends the turn cleanly, the way
+		// every other abort exits: throwing would send the caller down its abort
+		// path, which persists an empty aborted turn beside the answer.
+		const assistantTurns = events.filter(
+			(event): event is Extract<AgentEvent, { type: "message_end" }> =>
+				event.type === "message_end" && event.message.role === "assistant",
+		);
+		expect(assistantTurns).toHaveLength(1);
+		const turn = assistantTurns[0]!;
+		if (turn.message.role !== "assistant") throw new Error("Missing released answer");
+		expect(turn.message.content.find(part => part.type === "text")?.text).toBe("Answer will be aborted");
+		// Released as the block sequence consumers expect, not as a bare start/end.
+		const kinds = events
+			.filter((e): e is Extract<AgentEvent, { type: "message_update" }> => e.type === "message_update")
+			.map(e => e.assistantMessageEvent.type);
+		expect(kinds).toEqual(["text_start", "text_delta", "text_end"]);
+		// The abort stopped the run before any correction turn could start.
+		expect(events.filter(e => e.type === "turn_start")).toHaveLength(1);
+		expect(events.filter(e => e.type === "turn_end")).toHaveLength(1);
+	});
+
+	it("streams updates before provider completion when reviewer is inactive", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		const firstUpdate = Promise.withResolvers<void>();
+		const releaseProvider = Promise.withResolvers<void>();
+		let providerComplete = false;
+		let reviewCalled = false;
+		const livePartial = createAssistantMessage([{ type: "text", text: "Still streaming" }], "stop");
+		const streamFn = () => {
+			const response = new AssistantMessageEventStream();
+			queueMicrotask(async () => {
+				response.push({ type: "start", partial: livePartial });
+				response.push({ type: "text_start", contentIndex: 0, partial: livePartial });
+				response.push({ type: "text_delta", contentIndex: 0, delta: "Still streaming", partial: livePartial });
+				await releaseProvider.promise;
+				response.push({ type: "text_end", contentIndex: 0, content: "Still streaming", partial: livePartial });
+				providerComplete = true;
+				response.push({ type: "done", reason: "stop", message: livePartial });
+			});
+			return response;
+		};
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			reviewFinalAnswer: async () => {
+				reviewCalled = true;
+				return { action: "approve" };
+			},
+			shouldReviewFinalAnswer: () => false,
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, streamFn);
+		const consuming = (async () => {
+			for await (const event of stream) {
+				events.push(event);
+				if (event.type === "message_update") firstUpdate.resolve();
+			}
+		})();
+		await firstUpdate.promise;
+		expect(providerComplete).toBe(false);
+		expect(reviewCalled).toBe(false);
+		releaseProvider.resolve();
+		await consuming;
+		await stream.result();
+		expect(events.some(event => event.type === "message_update")).toBe(true);
+	});
+
+	it("streams updates before provider completion when reviewFinalAnswer is not configured", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		const firstUpdate = Promise.withResolvers<void>();
+		const releaseProvider = Promise.withResolvers<void>();
+		let providerComplete = false;
+		const livePartial = createAssistantMessage([{ type: "text", text: "Normal streaming" }], "stop");
+		const streamFn = () => {
+			const response = new AssistantMessageEventStream();
+			queueMicrotask(async () => {
+				response.push({ type: "start", partial: livePartial });
+				response.push({ type: "text_start", contentIndex: 0, partial: livePartial });
+				response.push({ type: "text_delta", contentIndex: 0, delta: "Normal streaming", partial: livePartial });
+				await releaseProvider.promise;
+				response.push({ type: "text_end", contentIndex: 0, content: "Normal streaming", partial: livePartial });
+				providerComplete = true;
+				response.push({ type: "done", reason: "stop", message: livePartial });
+			});
+			return response;
+		};
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, streamFn);
+		const consuming = (async () => {
+			for await (const event of stream) {
+				events.push(event);
+				if (event.type === "message_update") firstUpdate.resolve();
+			}
+		})();
+		await firstUpdate.promise;
+		expect(providerComplete).toBe(false);
+		releaseProvider.resolve();
+		await consuming;
+		await stream.result();
+		expect(events.some(event => event.type === "message_update")).toBe(true);
+	});
+
+	it("does not invoke review on intermediate tool calls and tool turns bypass gate", async () => {
+		const simpleTool: AgentTool = {
+			name: "read_file",
+			label: "Read file",
+			description: "Read a file",
+			parameters: type({ path: type("string") }),
+			execute: async () => ({ content: [{ type: "text", text: "file contents" }] }),
+		};
+
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [simpleTool],
+		};
+
+		let turn = 0;
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				if (turn++ === 0) {
+					const toolMsg = createAssistantMessage(
+						[{ type: "toolCall", id: "call_1", name: "read_file", arguments: { path: "test.txt" } }],
+						"toolUse",
+					);
+					stream.push({ type: "start", partial: toolMsg });
+					stream.push({
+						type: "toolcall_start",
+						contentIndex: 0,
+						partial: toolMsg,
+					});
+					stream.push({
+						type: "toolcall_end",
+						contentIndex: 0,
+						toolCall: { type: "toolCall", id: "call_1", name: "read_file", arguments: { path: "test.txt" } },
+						partial: toolMsg,
+					});
+					stream.push({ type: "done", reason: "toolUse", message: toolMsg });
+				} else {
+					const finalMsg = createAssistantMessage([{ type: "text", text: "File has been read." }], "stop");
+					stream.push({ type: "start", partial: finalMsg });
+					stream.push({ type: "text_start", contentIndex: 0, partial: finalMsg });
+					stream.push({ type: "text_delta", contentIndex: 0, delta: "File has been read.", partial: finalMsg });
+					stream.push({ type: "text_end", contentIndex: 0, content: "File has been read.", partial: finalMsg });
+					stream.push({ type: "done", reason: "stop", message: finalMsg });
+				}
+			});
+			return stream;
+		};
+
+		const reviewedMessages: string[] = [];
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			reviewFinalAnswer: async ({ message }) => {
+				const text = message.content.find(c => c.type === "text")?.text;
+				if (text) reviewedMessages.push(text);
+				return { action: "approve" };
+			},
+		};
+
+		const stream = agentLoop([createUserMessage("Read test.txt")], context, config, undefined, streamFn);
+		for await (const _ of stream) {
+			// consume stream
+		}
+		const messages = await stream.result();
+
+		// Review was only called for the terminal text answer, NOT the tool call turn
+		expect(reviewedMessages).toEqual(["File has been read."]);
+		expect(
+			messages.some(
+				m => m.role === "assistant" && m.content.find(c => c.type === "text")?.text === "File has been read.",
+			),
+		).toBe(true);
+	});
+	it("reviews a queued operator request without re-reviewing its advisor correction", async () => {
+		const context: AgentContext = { systemPrompt: ["Test"], messages: [], tools: [] };
+		const mock = createMockModel({
+			responses: [{ content: ["FIRST ANSWER"] }, { content: ["SECOND DRAFT"] }, { content: ["SECOND CORRECTED"] }],
+		});
+		let followUpPending = true;
+		const reviewed: string[] = [];
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			getFollowUpMessages: async () => {
+				if (!followUpPending) return [];
+				followUpPending = false;
+				return [createUserMessage("Second request")];
+			},
+			reviewFinalAnswer: ({ message }) => {
+				const text = message.content.find(part => part.type === "text")?.text ?? "";
+				reviewed.push(text);
+				if (text !== "SECOND DRAFT") return { action: "approve" };
+				return {
+					action: "block",
+					advice: {
+						role: "custom",
+						customType: "advisor",
+						content: "Replace the second draft.",
+						display: true,
+						attribution: "agent",
+						timestamp: 1,
+					},
+				};
+			},
+		};
+		const finalTexts: string[] = [];
+		const stream = agentLoop([createUserMessage("First request")], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			if (event.type === "message_end" && event.message.role === "assistant")
+				finalTexts.push(event.message.content.find(part => part.type === "text")?.text ?? "");
+		}
+		await stream.result();
+		expect(reviewed).toEqual(["FIRST ANSWER", "SECOND DRAFT"]);
+		expect(finalTexts).toEqual(["FIRST ANSWER", "SECOND CORRECTED"]);
+	});
+
+	it("emits an aborted buffered partial so cancellation state and usage remain observable", async () => {
+		const controller = new AbortController();
+		const context: AgentContext = { systemPrompt: ["Test"], messages: [], tools: [] };
+		const partial = createAssistantMessage([{ type: "text", text: "interrupted partial" }], "stop");
+		partial.usage.output = 9;
+		const streamFn = () => {
+			const response = new AssistantMessageEventStream();
+			response.push({ type: "start", partial });
+			response.push({ type: "text_start", contentIndex: 0, partial });
+			response.push({ type: "text_delta", contentIndex: 0, delta: "interrupted partial", partial });
+			return response;
+		};
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			reviewFinalAnswer: () => ({ action: "approve" }),
+			onAssistantMessageEvent: (_message, event) => {
+				if (event.type === "text_delta") controller.abort(new Error("Interrupted by user"));
+			},
+		};
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Begin")], context, config, controller.signal, streamFn);
+		for await (const event of stream) events.push(event);
+		await stream.result();
+		const ended = events.find(
+			(event): event is Extract<AgentEvent, { type: "message_end" }> =>
+				event.type === "message_end" && event.message.role === "assistant",
+		)?.message;
+		expect(ended?.role).toBe("assistant");
+		if (ended?.role !== "assistant") throw new Error("Missing cancelled assistant message");
+		expect(ended.stopReason).toBe("aborted");
+		expect(ended.content.find(part => part.type === "text")?.text).toBe("interrupted partial");
+		expect(ended.usage.output).toBe(9);
+	});
+
+	it("replays an image block when a buffered response is released", async () => {
+		const context: AgentContext = { systemPrompt: ["Test"], messages: [], tools: [] };
+		const image = { type: "image" as const, data: "aGk=", mimeType: "image/png" };
+		const answer = createAssistantMessage([image], "stop");
+		const streamFn = () => {
+			const response = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				response.push({ type: "start", partial: answer });
+				response.push({ type: "image_end", contentIndex: 0, content: image, partial: answer });
+				response.push({ type: "done", reason: "stop", message: answer });
+			});
+			return response;
+		};
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			reviewFinalAnswer: () => ({ action: "approve" }),
+		};
+		const events: AgentEvent[] = [];
+		for await (const event of agentLoop([createUserMessage("Draw")], context, config, undefined, streamFn)) {
+			events.push(event);
+		}
+
+		// An image-only answer is never a text candidate, so it is released through
+		// the flush path. Dropping `image_end` there costs ACP clients the image.
+		const images = events.filter(
+			(event): event is Extract<AgentEvent, { type: "message_update" }> =>
+				event.type === "message_update" && event.assistantMessageEvent.type === "image_end",
+		);
+		expect(images).toHaveLength(1);
+	});
+
+	it("replays an approved answer as a well-formed block sequence", async () => {
+		const context: AgentContext = { systemPrompt: ["Test"], messages: [], tools: [] };
+		const answer = createAssistantMessage([{ type: "text", text: "Approved answer" }], "stop");
+		const streamFn = () => {
+			const response = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				response.push({ type: "start", partial: answer });
+				response.push({ type: "text_start", contentIndex: 0, partial: answer });
+				response.push({ type: "text_delta", contentIndex: 0, delta: "Approved answer", partial: answer });
+				response.push({ type: "text_end", contentIndex: 0, content: "Approved answer", partial: answer });
+				response.push({ type: "done", reason: "stop", message: answer });
+			});
+			return response;
+		};
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			reviewFinalAnswer: () => ({ action: "approve" }),
+		};
+		const events: AgentEvent[] = [];
+		for await (const event of agentLoop([createUserMessage("Hi")], context, config, undefined, streamFn)) {
+			events.push(event);
+		}
+
+		// TTSR rules match `*_delta`/`*_end`, and session titles trigger on
+		// `text_start`; a bare start/end pair would hide the answer from both.
+		const kinds = events
+			.filter((event): event is Extract<AgentEvent, { type: "message_update" }> => event.type === "message_update")
+			.map(event => event.assistantMessageEvent.type);
+		expect(kinds).toEqual(["text_start", "text_delta", "text_end"]);
+	});
+
+	it("releases the buffered partial when the provider fails after streaming content", async () => {
+		const context: AgentContext = { systemPrompt: ["Test"], messages: [], tools: [] };
+		const partial = createAssistantMessage([{ type: "text", text: "partial before failure" }], "stop");
+		const streamFn = () => {
+			const response = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				response.push({ type: "start", partial });
+				response.push({ type: "text_start", contentIndex: 0, partial });
+				response.push({ type: "text_delta", contentIndex: 0, delta: "partial before failure", partial });
+				response.fail(new Error("provider exploded"));
+			});
+			return response;
+		};
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			reviewFinalAnswer: () => ({ action: "approve" }),
+		};
+		const events: AgentEvent[] = [];
+		let thrown: unknown;
+		try {
+			for await (const event of agentLoop([createUserMessage("Hi")], context, config, undefined, streamFn)) {
+				events.push(event);
+			}
+		} catch (error) {
+			thrown = error;
+		}
+
+		expect(thrown).toBeDefined();
+		// The streamed text must survive the throw exactly as it does with the gate
+		// off: partial events, no `message_end`, so the caller's failure path turns
+		// the unfinished partial into the error turn instead of an empty one.
+		const started = events.find(
+			(event): event is Extract<AgentEvent, { type: "message_start" }> =>
+				event.type === "message_start" && event.message.role === "assistant",
+		);
+		expect(started?.message.role).toBe("assistant");
+		if (started?.message.role !== "assistant") throw new Error("Missing released partial");
+		expect(started.message.content.find(part => part.type === "text")?.text).toBe("partial before failure");
+		expect(events.filter(event => event.type === "message_end" && event.message.role === "assistant")).toEqual([]);
+	});
+
+	it("skips review once the buffer released the message to a tool turn", async () => {
+		const context: AgentContext = { systemPrompt: ["Test"], messages: [], tools: [] };
+		const streamed = createAssistantMessage(
+			[
+				{ type: "text", text: "draft text" },
+				{ type: "toolCall", id: "call-1", name: "echo", arguments: {} },
+			],
+			"toolUse",
+		);
+		const streamFn = () => {
+			const response = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				response.push({ type: "start", partial: streamed });
+				response.push({ type: "toolcall_start", contentIndex: 1, partial: streamed });
+				response.push({ type: "done", reason: "toolUse", message: streamed });
+			});
+			return response;
+		};
+		let reviews = 0;
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			// Stripping the streamed call leaves terminal text the target already saw.
+			transformAssistantMessage: message => {
+				message.content = message.content.filter(part => part.type !== "toolCall");
+				message.stopReason = "stop";
+			},
+			reviewFinalAnswer: () => {
+				reviews++;
+				return { action: "approve" };
+			},
+		};
+		for await (const _event of agentLoop([createUserMessage("Hi")], context, config, undefined, streamFn)) {
+			// drain
+		}
+
+		expect(reviews).toBe(0);
+	});
+
+	it("keeps one correction when the reviewer steers advice back as a user message", async () => {
+		const context: AgentContext = { systemPrompt: ["Test"], messages: [], tools: [] };
+		let turn = 0;
+		const streamFn = () => {
+			const response = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const answer = createAssistantMessage(
+					[{ type: "text", text: turn++ === 0 ? "first draft" : "corrected draft" }],
+					"stop",
+				);
+				response.push({ type: "start", partial: answer });
+				response.push({ type: "text_start", contentIndex: 0, partial: answer });
+				response.push({ type: "text_delta", contentIndex: 0, delta: "draft", partial: answer });
+				response.push({ type: "text_end", contentIndex: 0, content: "draft", partial: answer });
+				response.push({ type: "done", reason: "stop", message: answer });
+			});
+			return response;
+		};
+		let reviews = 0;
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			// A plain `user` advice message must not look like fresh operator input.
+			reviewFinalAnswer: () => {
+				reviews++;
+				return { action: "block", advice: createUserMessage("please fix") };
+			},
+		};
+		const events: AgentEvent[] = [];
+		for await (const event of agentLoop([createUserMessage("Hi")], context, config, undefined, streamFn)) {
+			events.push(event);
+		}
+
+		expect(reviews).toBe(1);
+		expect(events.filter(event => event.type === "turn_start")).toHaveLength(1);
+	});
+
+	it("reviews again when an operator prompt arrives as a user-attributed custom message", async () => {
+		const context: AgentContext = { systemPrompt: ["Test"], messages: [], tools: [] };
+		const answers = ["first answer", "second answer"];
+		let turn = 0;
+		const streamFn = () => {
+			const response = new AssistantMessageEventStream();
+			const text = answers[Math.min(turn++, answers.length - 1)]!;
+			queueMicrotask(() => {
+				const answer = createAssistantMessage([{ type: "text", text }], "stop");
+				response.push({ type: "start", partial: answer });
+				response.push({ type: "text_start", contentIndex: 0, partial: answer });
+				response.push({ type: "text_delta", contentIndex: 0, delta: text, partial: answer });
+				response.push({ type: "text_end", contentIndex: 0, content: text, partial: answer });
+				response.push({ type: "done", reason: "stop", message: answer });
+			});
+			return response;
+		};
+		const skillPrompt: AgentMessage = {
+			role: "custom",
+			customType: "skill",
+			content: "run the skill",
+			display: true,
+			attribution: "user",
+			timestamp: Date.now(),
+		};
+		let followUpSent = false;
+		const reviewed: string[] = [];
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			getFollowUpMessages: async () => {
+				if (followUpSent) return [];
+				followUpSent = true;
+				return [skillPrompt];
+			},
+			reviewFinalAnswer: ({ message }) => {
+				reviewed.push(message.content.find(part => part.type === "text")?.text ?? "");
+				return { action: "approve" };
+			},
+		};
+		for await (const _event of agentLoop(
+			[createUserMessage("first request")],
+			context,
+			config,
+			undefined,
+			streamFn,
+		)) {
+			// drain
+		}
+
+		// A `/skill:` invocation is a custom message attributed to the user, not a
+		// `role: "user"` one; it opens its own request, so its answer is reviewed.
+		expect({ turn, reviewed }).toEqual({ turn: 2, reviewed: ["first answer", "second answer"] });
+	});
+
+	it("reports a rejected draft to the host before hiding it", async () => {
+		const context: AgentContext = { systemPrompt: ["Test"], messages: [], tools: [] };
+		let turn = 0;
+		const streamFn = () => {
+			const response = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const answer = createAssistantMessage(
+					[{ type: "text", text: turn++ === 0 ? "rejected draft" : "corrected draft" }],
+					"stop",
+				);
+				if (turn === 1) answer.usage.output = 12;
+				response.push({ type: "start", partial: answer });
+				response.push({ type: "text_start", contentIndex: 0, partial: answer });
+				response.push({ type: "text_delta", contentIndex: 0, delta: "text", partial: answer });
+				response.push({ type: "text_end", contentIndex: 0, content: "text", partial: answer });
+				response.push({ type: "done", reason: "stop", message: answer });
+			});
+			return response;
+		};
+		const rejected: AssistantMessage[] = [];
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			reviewFinalAnswer: () => ({ action: "block", advice: createUserMessage("please fix") }),
+			onFinalAnswerReviewRejected: message => {
+				rejected.push(message);
+			},
+		};
+		for await (const _event of agentLoop([createUserMessage("Hi")], context, config, undefined, streamFn)) {
+			// drain
+		}
+
+		// The draft never reaches `message_end`, but the provider billed it.
+		expect(rejected.map(message => message.usage.output)).toEqual([12]);
 	});
 });

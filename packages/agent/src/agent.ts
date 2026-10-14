@@ -59,6 +59,7 @@ import type {
 	AgentToolContext,
 	AgentTurnEndContext,
 	AsideMessage,
+	FinalAnswerReviewConfig,
 	PrepareQueuedMessages,
 	SpeculativeToolExecutionConfig,
 	StreamFn,
@@ -444,6 +445,7 @@ export class Agent {
 	#withdrawnMessages = new WeakMap<AgentMessage, AbortController>();
 	#steeringWaiters = new Set<() => void>();
 	#queuedMessageGrouping?: (previous: AgentMessage, next: AgentMessage) => boolean;
+	#reviewFinalAnswer?: FinalAnswerReviewConfig;
 
 	#steeringMode: "all" | "one-at-a-time";
 	#followUpMode: "all" | "one-at-a-time";
@@ -1170,6 +1172,10 @@ export class Agent {
 			| undefined,
 	): void {
 		this.#onTurnEnd = fn;
+	}
+
+	setReviewFinalAnswer(config: FinalAnswerReviewConfig | undefined): void {
+		this.#reviewFinalAnswer = config;
 	}
 
 	/** Called with the exact system prompt each model call is built from, after before-model-call hooks. */
@@ -1961,6 +1967,10 @@ export class Agent {
 			getFollowUpMessages: signal => this.#dequeueFollowUpMessagesAfterHooks(signal ?? loopSignal),
 			getAsideMessages: async () => (await this.#asideMessageProvider?.()) ?? [],
 			onBeforeYield: () => this.#onBeforeYield?.(),
+			reviewFinalAnswer: this.#reviewFinalAnswer?.review,
+			finalAnswerReviewTimeoutMs: this.#reviewFinalAnswer?.timeoutMs,
+			shouldReviewFinalAnswer: this.#reviewFinalAnswer?.enabled,
+			onFinalAnswerReviewRejected: this.#reviewFinalAnswer?.onRejected,
 			onDetachedToolUpdate: event => this.emitExternalEvent(event),
 			telemetry: this.#telemetry,
 		};

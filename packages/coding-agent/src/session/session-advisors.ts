@@ -6,6 +6,8 @@ import {
 	type AgentToolContext,
 	AppendOnlyContextManager,
 	type CompactionSummaryMessage,
+	type FinalAnswerReviewContext,
+	type FinalAnswerReviewDecision,
 	resolveTelemetry,
 	type StreamFn,
 	TERMINAL_TOOL_RESULT_ABORT_REASON,
@@ -90,6 +92,7 @@ import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-u
 import type { PlanModeState } from "../plan-mode/state";
 import advisorBoundaryGuidance from "../prompts/advisor/boundary-guidance.md" with { type: "text" };
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
+import finalAnswerGuidance from "../prompts/advisor/final-answer-guidance.md" with { type: "text" };
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import {
 	AUTO_THINKING,
@@ -121,9 +124,13 @@ import { buildSessionMetadata } from "./session-metadata";
 import type { YieldQueue } from "./yield-queue";
 
 import {
+	ADVISOR_FINAL_REVIEW_TIMEOUT_DEFAULT_MS,
+	ADVISOR_FINAL_REVIEW_TIMEOUT_MAX_MS,
 	cfgAdvisorEvictStaleResults,
+	cfgAdvisorFinalReviewTimeoutMs,
 	cfgAdvisorImmuneTurns,
 	cfgAdvisorMaxNotesPerUpdate,
+	cfgAdvisorReviewFinalAnswer,
 	cfgAdvisorReviewInterval,
 	cfgAdvisorReviewMode,
 	cfgAdvisorSyncBacklog,
@@ -531,6 +538,18 @@ export interface AdvisorStatusOverviewEntry {
 	yielded: boolean;
 }
 
+/**
+ * One open final-answer review window. While it is set, every note the advisors
+ * emit for the covered turns collects here instead of routing to the primary.
+ */
+interface FinalAnswerReviewGate {
+	/** Primary turn the reviewed draft belongs to. */
+	turn: number;
+	/** First primary turn of the reviewed user request. */
+	firstTurn: number;
+	notes: AdvisorNote[];
+}
+
 /** Owns advisor runtimes, delivery policy, context maintenance, and status reporting. */
 export class SessionAdvisors {
 	readonly #host: SessionAdvisorsHost;
@@ -604,6 +623,15 @@ export class SessionAdvisors {
 	#advisorInterruptImmuneTurnStart: number | undefined;
 	#pendingAdvisorCardEvents = new Set<Promise<void>>();
 	#advisorYieldQueueUnsubscribe: (() => void) | undefined;
+	#finalAnswerReview: FinalAnswerReviewGate | undefined;
+	#reviewedFinalAnswer: AssistantMessage | undefined;
+	#discardFinalReviewThroughTurn = 0;
+	/** User message the closed review covered; read against the live one at route time. */
+	#discardFinalReviewUser: AgentMessage | undefined;
+	/** Turn whose review already blocked, so its remaining late notes cannot ask again. */
+	#blockedFinalReviewTurn = 0;
+	#finalReviewUserMessage: AgentMessage | undefined;
+	#finalReviewRequestFirstTurn = 0;
 
 	constructor(host: SessionAdvisorsHost, options: SessionAdvisorsOptions) {
 		this.#host = host;
@@ -627,10 +655,27 @@ export class SessionAdvisors {
 
 	/** Queues eligible primary updates for each live advisor. */
 	async onPrimaryTurnEnd(
-		messages: AgentMessage[],
+		messages: readonly AgentMessage[],
 		willContinue: boolean | undefined,
 		signal?: AbortSignal,
 	): Promise<void> {
+		let terminalIndex = messages.length - 1;
+		while (terminalIndex >= 0 && isAdvisorCard(messages[terminalIndex]!)) terminalIndex--;
+		if (
+			!this.#finalAnswerReview &&
+			this.#reviewedFinalAnswer !== undefined &&
+			willContinue !== true &&
+			messages[terminalIndex] === this.#reviewedFinalAnswer
+		) {
+			this.#reviewedFinalAnswer = undefined;
+			this.#terminalUnwindActive = true;
+			return;
+		}
+		const requestUser = lastPrimaryUserMessage(messages);
+		if (requestUser !== this.#finalReviewUserMessage || this.#finalReviewRequestFirstTurn === 0) {
+			this.#finalReviewUserMessage = requestUser;
+			this.#finalReviewRequestFirstTurn = this.#advisorPrimaryTurnsCompleted + 1;
+		}
 		const terminalBoundary = willContinue !== true;
 		if (terminalBoundary) this.#terminalUnwindActive = true;
 		// Delivery state follows primary boundaries even when review cadence skips a callback.
@@ -672,7 +717,9 @@ export class SessionAdvisors {
 				const eligible = !advisorContinuation && !(reviewMode === "agent-end" && willContinue === true);
 				if (eligible) advisor.eligibleUpdates++;
 				const scheduled =
-					eligible && advisor.eligibleUpdates % (advisor.reviewInterval ?? defaultReviewInterval) === 0;
+					eligible &&
+					(this.#finalAnswerReview !== undefined ||
+						advisor.eligibleUpdates % (advisor.reviewInterval ?? defaultReviewInterval) === 0);
 				if (scheduled) {
 					scheduledAdvisors ??= [];
 					scheduledAdvisors.push(advisor);
@@ -684,7 +731,7 @@ export class SessionAdvisors {
 					logger.warn("advisor onTurnEnd threw; delta dropped", { advisor: advisor.name, err: String(error) });
 				}
 			}
-			if (!scheduledAdvisors) return;
+			if (!scheduledAdvisors || this.#finalAnswerReview) return;
 			// Catch-up policy resolves per advisor at each boundary: a roster
 			// entry's `syncBacklog` override wins; omitted entries follow the
 			// global `advisor.syncBacklog` setting live (a settings change needs
@@ -715,6 +762,80 @@ export class SessionAdvisors {
 			// keeps them from steering finished work — only a blocker or an
 			// agent-end reviewer's concern may still request a continuation.
 			if (!terminalBoundary) this.#terminalUnwindActive = false;
+		}
+	}
+
+	/** Whether a final text draft can be reviewed without changing default streaming. */
+	shouldReviewFinalAnswer(): boolean {
+		return (
+			cfgAdvisorReviewFinalAnswer.get(this.#host.settings) &&
+			this.#advisorEnabled &&
+			this.#advisors.some(
+				advisor => !advisor.runtime.disposed && !advisor.runtime.halted && !advisor.runtime.quotaExhausted,
+			) &&
+			!this.#host.planModeState()?.enabled
+		);
+	}
+
+	/**
+	 * Bounded wait for one final-answer review, in milliseconds: the configured
+	 * `advisor.finalReviewTimeoutMs`, clamped, or the default when the value is
+	 * unusable. The agent loop's own bound is derived from this so the two cannot
+	 * drift apart.
+	 */
+	finalReviewTimeoutMs(): number {
+		const configured = cfgAdvisorFinalReviewTimeoutMs.get(this.#host.settings);
+		return Number.isFinite(configured) && configured > 0
+			? Math.max(1, Math.min(ADVISOR_FINAL_REVIEW_TIMEOUT_MAX_MS, Math.trunc(configured)))
+			: ADVISOR_FINAL_REVIEW_TIMEOUT_DEFAULT_MS;
+	}
+
+	/** Reviews the candidate once while its message events remain withheld. */
+	async reviewFinalAnswer(
+		context: FinalAnswerReviewContext,
+		signal?: AbortSignal,
+	): Promise<FinalAnswerReviewDecision> {
+		if (!this.shouldReviewFinalAnswer()) return { action: "approve" };
+		const turn = this.#advisorPrimaryTurnsCompleted + 1;
+		const firstTurn =
+			lastPrimaryUserMessage(context.messages) === this.#finalReviewUserMessage
+				? this.#finalReviewRequestFirstTurn || turn
+				: turn;
+		const gate: FinalAnswerReviewGate = { turn, firstTurn, notes: [] };
+		this.#finalAnswerReview = gate;
+		this.#reviewedFinalAnswer = context.message;
+		try {
+			await this.onPrimaryTurnEnd(context.messages, false, signal);
+			await Promise.all(
+				this.#advisors.map(advisor => advisor.runtime.waitForCatchup(this.finalReviewTimeoutMs(), 1, signal)),
+			);
+			if (signal?.aborted) throw signal.reason;
+			if (gate.notes.length === 0) return { action: "approve" };
+			const advice: CustomMessage = {
+				role: "custom",
+				customType: "advisor",
+				content: formatAdvisorBatchContent(gate.notes),
+				display: true,
+				attribution: "agent",
+				details: { notes: gate.notes } satisfies AdvisorMessageDetails,
+				timestamp: Date.now(),
+			};
+			if (!gate.notes.some(note => isInterruptingSeverity(note.severity))) return { action: "approve", advice };
+			this.#recordAdvisorInterruptDelivered();
+			this.#advisorContinuation = { userMessage: lastPrimaryUserMessage(context.messages) };
+			this.#reviewedFinalAnswer = undefined;
+			// This turn already spent its one replacement. Remaining notes from the
+			// same in-flight update share the turn and must not ask for another.
+			this.#blockedFinalReviewTurn = gate.turn;
+			for (const advisor of this.#advisors) advisor.runtime.forgetReviewedPrimaryTail(context.message);
+			advice.content = [finalAnswerGuidance.trim(), advice.content].join("\n\n");
+			return { action: "block", advice };
+		} finally {
+			// Late notes from the now-closed window must not change a later user
+			// request; `#routeAdvice` compares them against what this records.
+			this.#discardFinalReviewThroughTurn = gate.turn;
+			this.#discardFinalReviewUser = this.#finalReviewUserMessage;
+			this.#finalAnswerReview = undefined;
 		}
 	}
 
@@ -1070,6 +1191,13 @@ export class SessionAdvisors {
 			this.#attachAdvisorRecorderFeed(a);
 		}
 		this.#advisorPrimaryTurnsCompleted = 0;
+		this.#finalAnswerReview = undefined;
+		this.#reviewedFinalAnswer = undefined;
+		this.#discardFinalReviewThroughTurn = 0;
+		this.#discardFinalReviewUser = undefined;
+		this.#blockedFinalReviewTurn = 0;
+		this.#finalReviewUserMessage = undefined;
+		this.#finalReviewRequestFirstTurn = 0;
 		this.#advisorPrimaryWillContinue = false;
 		this.#advisorContinuation = undefined;
 		this.#advisorInterruptImmuneTurnStart = undefined;
@@ -1711,6 +1839,28 @@ export class SessionAdvisors {
 		// The implicit single ("default") advisor stamps no source name, so its
 		// agent-facing `<advisory>` bytes stay identical to the pre-multi-advisor path.
 		const source = advisor.slug ? advisor.name : undefined;
+		// A note the final-answer gate has already closed over must not change a
+		// request that a newer primary user message started. Until that happens the
+		// gate suppresses nothing: a late blocker still routes like any post-turn
+		// note, so a review that timed out cannot silently cost the turn its advice.
+		// Three clauses: a turn whose gate already blocked spent its replacement, the
+		// covered user catches a newer request still generating its first answer, and
+		// the request boundary catches one whose later gate replaced that user.
+		if (
+			turn !== undefined &&
+			turn <= this.#discardFinalReviewThroughTurn &&
+			(turn <= this.#blockedFinalReviewTurn ||
+				turn < this.#finalReviewRequestFirstTurn ||
+				lastPrimaryUserMessage(this.#host.agent.state.messages) !== this.#discardFinalReviewUser)
+		) {
+			return;
+		}
+		const gate = this.#finalAnswerReview;
+		if (gate) {
+			if (turn === undefined || (turn >= gate.firstTurn && turn <= gate.turn))
+				gate.notes.push({ note, severity, advisor: source, turn });
+			return;
+		}
 		// Inside a terminal-boundary callback (deferred flush + catch-up wait) the
 		// loop still reports streaming, so a delivered note would steer a fresh turn
 		// — waking the primary to act on advice produced against work that already

@@ -13,6 +13,7 @@
 
 ### Added
 
+- Added support for withholding candidate final text answers for external review before emitting assistant message events ([#15025](https://github.com/can1357/oh-my-pi/pull/15025) by [@aliefe04](https://github.com/aliefe04)).
 - `AgentTool.formatApprovalDetails` receives `ApprovalDetailsOptions`; `compact: true` asks for untruncated bodies so a compact approval prompt can count their lines ([#15550](https://github.com/can1357/oh-my-pi/pull/15550) by [@H4vC](https://github.com/H4vC))
 
 ### Changed

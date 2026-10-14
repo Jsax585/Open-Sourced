@@ -97,6 +97,45 @@ export type AgentBeforeModelCall = (
 	signal?: AbortSignal,
 ) => AgentPreModelCallResult | void | Promise<AgentPreModelCallResult | void>;
 
+export interface FinalAnswerReviewDecision {
+	action: "approve" | "block";
+	/**
+	 * On block, steer these messages into one same-request correction.
+	 * On approval, append them after the answer without starting another model call.
+	 */
+	advice?: AgentMessage | AgentMessage[];
+}
+
+export interface FinalAnswerReviewContext {
+	message: AssistantMessage;
+	messages: readonly AgentMessage[];
+}
+
+/**
+ * Host wiring for the opt-in final-answer gate, passed to
+ * {@link Agent.setReviewFinalAnswer} as one object so the parts cannot drift.
+ */
+export interface FinalAnswerReviewConfig {
+	/** Reviews a candidate terminal answer before its message events are released. */
+	review: (
+		context: FinalAnswerReviewContext,
+		signal?: AbortSignal,
+	) => Promise<FinalAnswerReviewDecision | undefined> | FinalAnswerReviewDecision | undefined;
+	/**
+	 * Bound for the review in milliseconds, resolved per candidate so a live
+	 * settings change applies without rebuilding the agent.
+	 */
+	timeoutMs?: number | (() => number);
+	/** Live predicate; while it returns false the gate stays off and streaming is untouched. */
+	enabled?: () => boolean;
+	/**
+	 * Called once when a blocking decision hides the candidate. The draft never
+	 * reaches `message_end` consumers, so accounting that derives from the
+	 * assistant message lifecycle (usage, cost, perf) must run here.
+	 */
+	onRejected?: (message: AssistantMessage) => void | Promise<void>;
+}
+
 /**
  * A soft tool requirement: the host wants `toolName` called before the loop
  * runs other tools or yields, but WITHOUT paying the forced-`toolChoice` cost
@@ -598,6 +637,37 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * post-turn steering.
 	 */
 	onTurnEnd?: (messages: AgentMessage[], signal?: AbortSignal, context?: AgentTurnEndContext) => Promise<void> | void;
+	/**
+	 * Optional gate invoked only at a terminal text-answer boundary (an assistant
+	 * message with no tool calls and stopReason "stop") before user-facing message
+	 * events are emitted.
+	 *
+	 * Returning `{ action: "block", advice }` suppresses the candidate final answer
+	 * from user emission, injects the advice as steering into the current loop, and
+	 * continues the turn for same-turn correction (bounded to a single correction loop).
+	 *
+	 * Returning `{ action: "approve" }` (or void / undefined) releases the buffered
+	 * answer events to the user.
+	 */
+	reviewFinalAnswer?: (
+		context: FinalAnswerReviewContext,
+		signal?: AbortSignal,
+	) => Promise<FinalAnswerReviewDecision | undefined> | FinalAnswerReviewDecision | undefined;
+	/** Optional live predicate so hosts can disable buffering when no reviewer is active. */
+	shouldReviewFinalAnswer?: () => boolean;
+
+	/**
+	 * Bounded timeout for reviewFinalAnswer in milliseconds, or a live resolver.
+	 * Defaults to 5000.
+	 */
+	finalAnswerReviewTimeoutMs?: number | (() => number);
+
+	/**
+	 * Called once when a blocking review hides a candidate final answer. The draft
+	 * is removed from the transcript before any `message_end`, so usage and cost
+	 * accounting that normally rides the assistant message lifecycle must run here.
+	 */
+	onFinalAnswerReviewRejected?: (message: AssistantMessage) => void | Promise<void>;
 
 	/**
 	 * Called once an assistant message is finalized from the model stream, before

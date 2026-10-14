@@ -340,7 +340,7 @@ export class AdvisorRuntime {
 	 *  explicit reset/seed). While set, {@link waitForCatchup} resolves
 	 *  immediately: the primary agent NEVER parks on a failing advisor. */
 	#failing = false;
-	#latestMessages?: AgentMessage[];
+	#latestMessages?: readonly AgentMessage[];
 	#waiters: CatchupWaiter[] = [];
 	/** Bumped by every external {@link reset}/{@link dispose}. A drain iteration
 	 *  captures it before its awaits; a mismatch on resume means a reset aborted
@@ -405,7 +405,7 @@ export class AdvisorRuntime {
 	 *   delta is still captured now, as the primary saw it, and held until the
 	 *   next dispatching boundary sends every held delta as one review.
 	 */
-	onTurnEnd(messages?: AgentMessage[], opts?: { willContinue?: boolean; dispatch?: boolean }): void {
+	onTurnEnd(messages?: readonly AgentMessage[], opts?: { willContinue?: boolean; dispatch?: boolean }): void {
 		if (this.disposed || this.#quotaExhausted || this.#halted) return;
 		const all = messages ?? this.host.snapshotMessages();
 		this.#latestMessages = all;
@@ -713,6 +713,16 @@ export class AdvisorRuntime {
 		this.#clearSeenContext();
 		this.#wakeAllWaiters();
 	}
+	/**
+	 * Remove a reviewed final draft from the primary cursor without replaying
+	 * history. The advisor retains its review while the primary replaces the draft.
+	 */
+	forgetReviewedPrimaryTail(message: AssistantMessage): void {
+		if (this.#deliveredPrefix.at(-1)?.message !== message) return;
+		this.#deliveredPrefix.pop();
+		this.#lastCount = this.#deliveredPrefix.length;
+		this.#latestMessages = this.#latestMessages?.slice(0, this.#lastCount);
+	}
 
 	/**
 	 * Re-align the delivered prefix with the primary transcript after an
@@ -953,7 +963,10 @@ export class AdvisorRuntime {
 		return `${mdHead}\n\n---\n\n[in progress — more steps follow]`;
 	}
 
-	#renderDelta(messages?: AgentMessage[], wip = false): Omit<PendingDelta, "turns" | "overflowRecovery"> | null {
+	#renderDelta(
+		messages?: readonly AgentMessage[],
+		wip = false,
+	): Omit<PendingDelta, "turns" | "overflowRecovery"> | null {
 		const all = messages ?? this.#latestMessages ?? this.host.snapshotMessages();
 		let prefixChanged = all.length < this.#lastCount;
 		for (let i = 0; !prefixChanged && i < this.#lastCount; i++) {

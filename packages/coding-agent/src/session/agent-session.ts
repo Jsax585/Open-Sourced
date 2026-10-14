@@ -466,7 +466,11 @@ import { LoopGuards, type StreamGuardsHost, StreamingEditGuard } from "./stream-
 import { TodoTracker, type TodoTrackerHost } from "./todo-tracker";
 import { TtsrCoordinator, type TtsrCoordinatorHost } from "./ttsr-coordinator";
 
-import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
+import {
+	ADVISOR_FINAL_REVIEW_LOOP_GRACE_MS,
+	cfgAdvisorEnabled,
+	cfgAdvisorMaxNotesPerUpdate,
+} from "../advisor/settings";
 import { cfgBrowserEnabled, cfgBrowserFreezeOnTurnEnd, cfgBrowserIdleCloseSec } from "../tools/browser/settings";
 import {
 	cfgClaudeResets,
@@ -541,6 +545,8 @@ const cfgWorkspacePromptInputs = combine({
 });
 
 const PLAN_MODE_REMINDER_MAX = 3;
+/** Ledger purpose for a candidate answer the final-answer gate hid. */
+const REJECTED_FINAL_ANSWER_USAGE_PURPOSE = "final-answer-review-rejected";
 const POST_PROMPT_DRAIN_TIMEOUT_MS = 5_000;
 const AGENT_START_POLICY_MAX_ATTEMPTS = 3;
 /**
@@ -1152,6 +1158,52 @@ export class AgentSession implements SettingsScope {
 	#hindsightSessionState: HindsightSessionState | undefined = undefined;
 	readonly #memory: SessionMemory;
 	readonly rawSseDebugBuffer: RawSseDebugBuffer;
+
+	/**
+	 * Accounting for a candidate answer the final-answer gate hid. The draft never
+	 * reaches `message_end`, so it earns no durable assistant entry and the
+	 * off-transcript ledger stays empty unless it is written here. Without both a
+	 * perf sample and a `model_usage` entry the request under-counts its tokens and
+	 * cost in the session totals and in every later resume. Only accounting runs
+	 * here: the draft stays out of the transcript, TTSR, and recovery.
+	 */
+	async #observeRejectedFinalAnswer(assistantMsg: AssistantMessage): Promise<void> {
+		if (assistantMsg.stopReason !== "error" && assistantMsg.duration !== undefined) {
+			this.settings.getStorage()?.recordModelPerf(
+				`${assistantMsg.provider}/${assistantMsg.model}`,
+				{
+					outputTokens: assistantMsg.usage.output,
+					durationMs: assistantMsg.duration,
+					ttftMs: assistantMsg.ttft,
+				},
+				assistantMsg.serviceTier,
+			);
+		}
+		this.sessionManager.appendModelUsage(
+			{
+				purpose: REJECTED_FINAL_ANSWER_USAGE_PURPOSE,
+				api: assistantMsg.api,
+				provider: assistantMsg.provider,
+				model: assistantMsg.model,
+				usage: assistantMsg.usage,
+				stopReason: assistantMsg.stopReason,
+				errorMessage: assistantMsg.errorMessage,
+			},
+			{ sessionId: this.sessionId, parentId: this.sessionManager.getLeafId() },
+		);
+		this.#modelRegistry.authStorage.usage.observe({
+			provider: assistantMsg.provider,
+			model: assistantMsg.model,
+			at: assistantMsg.timestamp,
+			usage: {
+				input: assistantMsg.usage.input,
+				output: assistantMsg.usage.output,
+				cacheRead: assistantMsg.usage.cacheRead,
+				cacheWrite: assistantMsg.usage.cacheWrite,
+			},
+			costUsd: assistantMsg.usage.cost.total,
+		});
+	}
 
 	#resetPromptMaintenanceState(): void {
 		this.#recovery.resetForNewPrompt();
@@ -2287,6 +2339,14 @@ export class AgentSession implements SettingsScope {
 			configWarnings: config.advisorConfigWarnings,
 			streamFn: config.advisorStreamFn,
 			transformProviderContext: config.transformProviderContext,
+		});
+		this.agent.setReviewFinalAnswer({
+			review: (context, signal) => this.#advisors.reviewFinalAnswer(context, signal),
+			// The review wait below already honours `advisor.finalReviewTimeoutMs`;
+			// keep the loop's own bound strictly above it so the two cannot race.
+			timeoutMs: () => this.#advisors.finalReviewTimeoutMs() + ADVISOR_FINAL_REVIEW_LOOP_GRACE_MS,
+			enabled: () => this.#advisors.shouldReviewFinalAnswer(),
+			onRejected: message => this.#observeRejectedFinalAnswer(message),
 		});
 
 		const maintenanceHost: SessionMaintenanceHost = {
