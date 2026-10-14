@@ -113,8 +113,6 @@ const HTTP2_STREAM_RESET_ERROR_RE =
 // eligible for preserved-turn continuation on resolved tool turns.
 const PREMATURE_STREAM_CLOSE_ERROR_RE =
 	/(?:stream closed before a (?:finish_reason|terminal response event)|Codex stream ended before terminal completion event|Cursor stream ended before turnEnded)/i;
-const IMMUTABLE_ANTHROPIC_THINKING_ERROR_PATTERN =
-	/messages\.\d+\.content\.\d+.*\b(?:thinking|redacted_thinking)\b.*\blatest assistant message cannot be modified\b/is;
 
 /**
  * Bare abort sentinels with no provider reason: our own `"Request was aborted"`
@@ -1419,7 +1417,11 @@ export class TurnRecovery {
 	isRetryableReasonlessAbort(message: AssistantMessage): boolean {
 		if (
 			(message.stopReason !== "aborted" && message.stopReason !== "error") ||
-			message.content.length !== 0 ||
+			// A `fallback` boundary is bookkeeping, not output: a stream aborted
+			// right after a mid-turn server-side fallback persists `[fallback]`,
+			// which is as replay-safe to retry as an empty turn (`isEmptyErrorTurn`
+			// already counts the marker as no output).
+			message.content.some(block => block.type !== "fallback") ||
 			this.#host.abortInProgress() ||
 			this.#host.isDisposed() ||
 			this.#host.streamingEditAbortTriggered()
@@ -1493,7 +1495,7 @@ export class TurnRecovery {
 			(message.errorStatus === 400 ||
 				message.errorId === 400 ||
 				message.errorMessage?.startsWith("400 ") === true) &&
-			IMMUTABLE_ANTHROPIC_THINKING_ERROR_PATTERN.test(message.errorMessage ?? "");
+			AIError.isImmutableLatestThinkingText(message.errorMessage ?? "");
 		if (immutableAnthropicThinkingError) return false;
 
 		const id = this.#classifyRetryMessage(message);
@@ -2255,7 +2257,15 @@ export class TurnRecovery {
 				if (!this.#host.contextFitsModel(candidate, options?.preserveFailedTurn ? undefined : failedMessage)) {
 					continue;
 				}
-				const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId());
+				// A session restricted to an OAuth account pool throws for a provider
+				// none of its pooled accounts can serve; that candidate is unavailable,
+				// exactly like one without a credential.
+				let apiKey: string | undefined;
+				try {
+					apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId());
+				} catch (error) {
+					if (!(error instanceof AIError.MissingApiKeyError)) throw error;
+				}
 				if (!apiKey) continue;
 				const previousEditMode = this.#host.resolveActiveEditMode();
 				const previousSystemPrompt = [...this.#host.agent.state.systemPrompt];
@@ -2349,7 +2359,7 @@ export class TurnRecovery {
 			(message.errorStatus === 400 ||
 				message.errorId === 400 ||
 				message.errorMessage?.startsWith("400 ") === true) &&
-			IMMUTABLE_ANTHROPIC_THINKING_ERROR_PATTERN.test(message.errorMessage ?? "");
+			AIError.isImmutableLatestThinkingText(message.errorMessage ?? "");
 		if (immutableAnthropicThinkingError) return false;
 		const retrySettings = cfgRetry.get(this.#host.settings);
 		if (!retrySettings.enabled || !retrySettings.modelFallback) return false;
