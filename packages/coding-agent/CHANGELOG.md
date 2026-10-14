@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `cfg://<setting>/save` approval prompts and results reporting session overrides or stale queued values instead of the global value being replaced ([#15478](https://github.com/can1357/oh-my-pi/pull/15478) by [@mg-mg-mg](https://github.com/mg-mg-mg))
+
 ## [18.11.0] - 2026-10-14
 
 ### Added

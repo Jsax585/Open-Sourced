@@ -5,7 +5,7 @@
  * The settings registry (`config/registry.ts`) is the source of truth for available settings.
  */
 
-import { APP_NAME, getAgentDir, isRecord } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getAgentDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { orderedSettings } from "../config/all-settings";
 import { type AnySetting, lookup } from "../config/registry";
@@ -303,7 +303,7 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 
 	// Report the value written to config.yml. When another layer or an environment variable still
 	// supplies the effective value, say which instead of echoing its value as if it had been set.
-	const saved = globalValue(def.setting);
+	const saved = settings.globalValue(def.setting);
 	const shadow = shadowingSource(def.setting);
 
 	if (flags.json) {
@@ -312,13 +312,6 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 	}
 	console.log(chalk.green(`${theme.status.success} Set ${def.path} = ${formatValue(saved)}`));
 	if (shadow) console.log(chalk.yellow(`${theme.status.warning} ${shadow.message}`));
-}
-
-/** Value `setting` holds in the global config layer — what `config set` wrote. */
-function globalValue(setting: AnySetting): unknown {
-	let value: unknown = settings.getGlobalSettings();
-	for (const segment of setting.segments) value = isRecord(value) ? value[segment] : undefined;
-	return value;
 }
 
 /** Where the effective value comes from when it is not the global config (or the default), if anywhere. */

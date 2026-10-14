@@ -13,6 +13,7 @@ import { cfgAdvisorEnabled, cfgAdvisorSyncBacklog } from "@oh-my-pi/pi-coding-ag
 import { cfgEditFuzzyMatch } from "@oh-my-pi/pi-coding-agent/edit/settings";
 import { cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgSearxngEndpoint } from "@oh-my-pi/pi-coding-agent/web/settings";
+import { cfgWorktreeClone } from "@oh-my-pi/pi-coding-agent/task/settings";
 import type { InternalWriteResult } from "@oh-my-pi/pi-coding-agent/internal-urls/types";
 
 function sessionWith(settings: Settings, caller: Partial<ToolSession> = {}): ToolSession {
@@ -221,6 +222,7 @@ describe("CfgProtocolHandler", () => {
 
 		const shadowed = await write("cfg://modelRoles/save", '{"default":"anthropic/global"}', settings);
 		expect(asked[0]?.shadowedBy).toContain("project config");
+		expect(asked[0]?.previous).toBe("{}");
 		expect(shadowed.details?.cfg?.effective).toContain("anthropic/project");
 		expect(textOf(shadowed)).toContain("project config takes precedence");
 
@@ -252,6 +254,106 @@ describe("CfgProtocolHandler", () => {
 		expect(applied).toHaveLength(2);
 		expect(applied[0]).toBe(persistent);
 		expect(applied[1]).toBe(settings);
+	});
+
+	it.each([
+		{ shared: true, global: undefined, previous: true },
+		{ shared: false, global: undefined, previous: true },
+		{ shared: true, global: false, previous: false },
+		{ shared: false, global: false, previous: false },
+	])("reports the global previous value after a session change (%j)", async ({ shared, global, previous }) => {
+		const persistent = Settings.isolated();
+		if (global !== undefined) cfgWorktreeClone.set(persistent, global);
+		const settings = shared ? persistent : persistent.overlay();
+		const asked: CfgChangeRequest[] = [];
+		setCfgApprovalHost({
+			approve: async request => (asked.push(request), "once"),
+			applied: () => {},
+			persistentSettings: persistent,
+		});
+
+		const value = String(!previous);
+		const session = await write("cfg://worktree/clone", value, settings);
+		expect(asked[0]).toEqual({
+			path: "worktree.clone",
+			previous: String(previous),
+			value,
+			save: false,
+		});
+		expect(textOf(session)).toContain(`for this session only (was ${previous}); NOT saved.`);
+
+		const saved = await write("cfg://worktree/clone/save", value, settings);
+		expect(asked[1]).toEqual({
+			path: "worktree.clone",
+			previous: String(previous),
+			value,
+			save: true,
+		});
+		expect(saved.details?.cfg).toMatchObject({ outcome: "applied", save: true, previous: String(previous), value });
+		expect(textOf(saved)).toContain(`(was ${previous})`);
+		expect(cfgWorktreeClone.get(persistent)).toBe(!previous);
+		expect(cfgWorktreeClone.get(settings)).toBe(!previous);
+	});
+
+	it.each([false, true])(
+		"refreshes a queued save of %s after an earlier save replaces the global value",
+		async value => {
+			const persistent = Settings.isolated();
+			cfgWorktreeClone.set(persistent, true);
+			const settings = persistent;
+			cfgWorktreeClone.override(settings, false);
+			const firstPrompt = Promise.withResolvers<void>();
+			const firstAnswer = Promise.withResolvers<"once">();
+			const asked: CfgChangeRequest[] = [];
+			setCfgApprovalHost({
+				approve: async request => {
+					asked.push(request);
+					if (asked.length === 1) {
+						firstPrompt.resolve();
+						return firstAnswer.promise;
+					}
+					return "once";
+				},
+				applied: () => {},
+				persistentSettings: persistent,
+			});
+
+			const first = write("cfg://worktree/clone/save", "false", settings);
+			await firstPrompt.promise;
+			const second = write("cfg://worktree/clone/save", String(value), settings);
+			firstAnswer.resolve("once");
+			const [firstResult, secondResult] = await Promise.all([first, second]);
+
+			expect(asked.map(request => request.previous)).toEqual(["true", "false"]);
+			expect(firstResult.details?.cfg).toMatchObject({ outcome: "applied", previous: "true" });
+			expect(secondResult.details?.cfg).toMatchObject({ outcome: "applied", previous: "false" });
+			expect(textOf(secondResult)).toContain("(was false)");
+			expect(persistent.globalValue(cfgWorktreeClone)).toBe(value);
+		},
+	);
+
+	it.each(["deny", "timeout"] as const)("reports the effective value when a save returns %s", async answer => {
+		const settings = Settings.isolated();
+		const asked: CfgChangeRequest[] = [];
+		setCfgApprovalHost({
+			approve: async request => (asked.push(request), request.save ? answer : "once"),
+			applied: () => {},
+			persistentSettings: settings,
+		});
+		await write("cfg://worktree/clone", "false", settings);
+
+		if (answer === "deny") {
+			const declined = await write("cfg://worktree/clone/save", "false", settings);
+			expect(declined.details?.cfg).toMatchObject({ outcome: "declined", previous: "false" });
+			expect(textOf(declined)).toContain("stays false");
+		} else {
+			await expect(write("cfg://worktree/clone/save", "false", settings)).rejects.toThrow(
+				"nothing changed; it stays false.",
+			);
+		}
+		expect(asked[1]).toMatchObject({ previous: "true", value: "false", save: true });
+		expect(cfgWorktreeClone.get(settings)).toBe(false);
+		expect(settings.getGlobalSettings().worktree).toBeUndefined();
 	});
 
 	it("rejects namespace targets and values outside the schema before asking", async () => {

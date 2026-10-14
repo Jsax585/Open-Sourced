@@ -1569,6 +1569,13 @@ export class Settings {
 		return this.#parent ? this.#deepMerge(this.#parent.getGlobalSettings(), own) : own;
 	}
 
+	/** Raw value a global save replaces, without defaults, environment variables, or higher layers. */
+	globalValue(setting: AnySetting): unknown {
+		let value: unknown = this.getGlobalSettings();
+		for (const segment of setting.segments) value = isRecord(value) ? value[segment] : undefined;
+		return value;
+	}
+
 	/**
 	 * Raw project settings layer (`.claude/settings.yml`, `.omp/config.yml`,
 	 * etc.), deep-cloned. Companion to {@link getGlobalSettings} for the legacy
