@@ -580,6 +580,26 @@ describe("a dropped session file", () => {
 
 		expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual(["edited during the delete"]);
 	});
+
+	it("keeps a turn, a title and an in-place edit made while a delete that then failed was running", async () => {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		const parked = storage.parkNextDeleteToFail();
+		const drop = manager.dropSession(sessionFile);
+		await parked.started;
+		manager.appendMessage(userTurn("during the delete"));
+		await manager.setSessionName("named during the delete", "auto");
+		const entry = firstUserEntry(manager);
+		if (entry.message.role !== "user") throw new Error("Expected a user message");
+		entry.message.content = "edited during the delete";
+		await manager.rewriteEntries();
+		parked.fail();
+		await expect(drop).rejects.toThrow("EACCES");
+
+		await expect(manager.flush()).resolves.toBeUndefined();
+		const reopened = await reopen(sessionFile, sessionDir);
+		expect(reopened.getSessionName()).toBe("named during the delete");
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["edited during the delete", "during the delete"]);
+	});
 });
 
 describe("a restored snapshot taken while an entry missed the journal", () => {
