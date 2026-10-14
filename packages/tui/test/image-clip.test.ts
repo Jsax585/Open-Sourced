@@ -323,4 +323,41 @@ describe("sixel direct placement", () => {
 			tui.stop();
 		}
 	});
+
+	// A row can compose an image with sibling content (the git image diff puts
+	// text beside it). The block erase clears whole rows, so the sibling text in
+	// the rows above the drawing line must be written back before the draw.
+	it("restores sibling content in the rows it erases above a composed block", async () => {
+		let top = 3;
+		const { term, scheduler, tui } = await start((image, columns) => [
+			...Array.from({ length: top }, (_, index) => `prose ${index}`),
+			...image.render(10).map((line, index) => `${line}│side ${index}`),
+			"prose below",
+		]);
+		try {
+			top = 2;
+			tui.requestRender();
+			await scheduler.settle(term);
+			const viewport = term.getViewport().map(line => line.trimEnd());
+			for (const index of [0, 1, 2]) expect(viewport[top + index]).toContain(`│side ${index}`);
+		} finally {
+			tui.stop();
+		}
+	});
+
+	// A forced repaint of the live viewport is not a history replay: a block
+	// whose origin is above the viewport must stay hidden there too, or the
+	// clamped `CSI n A` paints it at row 0 over the rows below.
+	it("keeps a block whose origin is above the viewport hidden on a forced repaint", async () => {
+		const { term, scheduler, tui } = await start((image, columns) => [...image.render(columns).slice(2), "prose below"]);
+		try {
+			term.written = "";
+			tui.requestRender(true);
+			await scheduler.settle(term);
+			expect(term.written).toContain("prose below");
+			expect(term.written).not.toMatch(/\x1bP[0-9;]*q/);
+		} finally {
+			tui.stop();
+		}
+	});
 });
