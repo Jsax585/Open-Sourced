@@ -204,6 +204,9 @@ export interface MCPLoadResult {
 	exaApiKeys: string[];
 }
 
+/** `disabledExtensions` id prefix of an MCP server (`mcp:<name>`, see `capability/mcp.ts`). */
+const MCP_EXTENSION_PREFIX = "mcp:";
+
 /** Readiness of configured MCP servers after the initial tool handshake. */
 export interface MCPStartupStatus {
 	/** Servers whose tools have been registered and whose startup callbacks completed. */
@@ -1358,11 +1361,73 @@ export class MCPManager {
 	}
 
 	/**
-	 * Retarget the working directory used for config discovery and advertised to
-	 * servers as their `roots/list` workspace root, after the session's cwd moved.
+	 * Apply a change of the resolved `disabledExtensions` list (a `/move` or
+	 * cross-project resume into or out of a directory whose path-scoped entry
+	 * blocks `mcp:<name>`, or a config edit) and retarget the manager to `cwd`,
+	 * the directory later discovery reads and `roots/list` advertises.
+	 * Serialized with the other reconcilers and joined with in-flight discovery,
+	 * so a discovery that loaded the old list finishes before the new one
+	 * applies. Disabled servers that are still connected disconnect; servers the
+	 * new list allows again are rediscovered and connect. Resolves to the
+	 * connect result (with any Exa keys the rediscovery extracted), or
+	 * `undefined` when no connection changed.
 	 */
-	setCwd(cwd: string): void {
+	reconcileDisabledExtensions(
+		cwd: string,
+		before: readonly string[],
+		after: readonly string[],
+	): Promise<MCPLoadResult | undefined> {
+		const reconcile = this.#browserFilterMutationTail.then(() => this.#applyDisabledExtensions(cwd, before, after));
+		this.#browserFilterMutationTail = reconcile.then(
+			() => undefined,
+			() => undefined,
+		);
+		return reconcile;
+	}
+
+	async #applyDisabledExtensions(
+		cwd: string,
+		before: readonly string[],
+		after: readonly string[],
+	): Promise<MCPLoadResult | undefined> {
+		await this.#discoveryInFlight;
 		this.cwd = cwd;
+		// Before the first discovery there is nothing to reconcile: it reads the list itself.
+		const options = this.#discoverOptions;
+		if (!options) return undefined;
+		const disabled = new Set<string>();
+		for (const id of after)
+			if (id.startsWith(MCP_EXTENSION_PREFIX)) disabled.add(id.slice(MCP_EXTENSION_PREFIX.length));
+		const blocked = [...disabled].filter(name => this.getConnectionStatus(name) !== "disconnected");
+		const allowed: string[] = [];
+		for (const id of before) {
+			if (!id.startsWith(MCP_EXTENSION_PREFIX)) continue;
+			const name = id.slice(MCP_EXTENSION_PREFIX.length);
+			if (!disabled.has(name) && this.getConnectionStatus(name) === "disconnected") allowed.push(name);
+		}
+		if (blocked.length === 0 && allowed.length === 0) return undefined;
+		await Promise.all(blocked.map(name => this.disconnectServer(name)));
+		const loaded =
+			allowed.length > 0
+				? await this.loadConfigs(this.cwd, {
+						enableProjectConfig: options.enableProjectConfig,
+						filterExa: options.filterExa,
+						filterBrowser: options.filterBrowser,
+						extensionRoots: options.extensionRoots,
+					})
+				: undefined;
+		const configs: Record<string, MCPServerConfig> = {};
+		const sources: Record<string, SourceMeta> = {};
+		for (const name of allowed) {
+			const config = loaded?.configs[name];
+			if (!config) continue;
+			configs[name] = config;
+			const source = loaded?.sources[name];
+			if (source) sources[name] = source;
+		}
+		const result = await this.connectServers(configs, sources, options.onStatus, options.startupTimeoutMs);
+		result.exaApiKeys = loaded?.exaApiKeys ?? [];
+		return result;
 	}
 
 	/**
