@@ -1358,6 +1358,14 @@ export class MCPManager {
 	}
 
 	/**
+	 * Retarget the working directory used for config discovery and advertised to
+	 * servers as their `roots/list` workspace root, after the session's cwd moved.
+	 */
+	setCwd(cwd: string): void {
+		this.cwd = cwd;
+	}
+
+	/**
 	 * Disconnect from a specific server.
 	 */
 	async disconnectServer(name: string): Promise<void> {

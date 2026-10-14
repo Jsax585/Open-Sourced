@@ -97,12 +97,9 @@ import type { FileSlashCommand } from "../extensibility/slash-commands";
 import { loadSlashCommands } from "../extensibility/slash-commands";
 import type { GoalModeState } from "../goals/state";
 import { rebindMemoryBackendForCwd } from "../hindsight/backend";
-import { cfgDisabledExtensions } from "../extensibility/settings";
 import { copyLocalArtifacts, resolveLocalRoot } from "../internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
 import type { MCPManager } from "../mcp";
-import { cfgMcpEnableProjectConfig } from "../mcp/settings";
-import { reconcileMcpDisabledExtensions } from "./components/extensions/mcp-runtime";
 import {
 	formatMCPConnectionStatusMessage,
 	isMcpConnectionStatusEvent,
@@ -2763,7 +2760,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Everything after chdir is a rescope of cwd-derived state. If any of it
 		// fails, undo the chdir so `false` reliably means "nothing committed";
 		// callers roll back their own session/manager state on false.
-		const disabledExtensionsBefore = isSettingsInitialized() ? cfgDisabledExtensions.get(settings) : [];
 		try {
 			// Re-scope project settings (`.claude/settings.yml` etc.) to the new
 			// directory in place so the active session and every settings reader pick
@@ -2819,40 +2815,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 			return false;
 		}
-		await this.#reconcileMcpForCwd(newCwd, disabledExtensionsBefore);
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 		this.statusLine.applyCwdChange();
 		return true;
-	}
-
-	/**
-	 * A cwd change re-resolves path-scoped `disabledExtensions`. Disconnect MCP
-	 * servers the new directory blocks and connect the ones it no longer blocks,
-	 * so a blocked server's tools never stay callable after `/move`. The move has
-	 * already committed; a connection failure is reported, not rolled back.
-	 */
-	async #reconcileMcpForCwd(newCwd: string, disabledExtensionsBefore: readonly string[]): Promise<void> {
-		if (!this.mcpManager || !isSettingsInitialized()) return;
-		try {
-			await reconcileMcpDisabledExtensions({
-				before: disabledExtensionsBefore,
-				after: cfgDisabledExtensions.get(settings),
-				cwd: newCwd,
-				manager: this.mcpManager,
-				session: this.session,
-				discovery: {
-					enableProjectConfig: cfgMcpEnableProjectConfig.get(settings),
-					filterExa: true,
-					filterBrowser: this.session.getEvalPreludes().some(definition => definition.name === "browser"),
-					extensionRoots: this.session.effectiveExtensionRoots,
-				},
-				onStatus: event => this.#eventBus?.emit(MCP_CONNECTION_STATUS_EVENT_CHANNEL, event),
-			});
-		} catch (error) {
-			this.showWarning(
-				`Failed to update MCP servers for ${newCwd}: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
 	}
 
 	async getUserInput(): Promise<SubmittedUserInput> {

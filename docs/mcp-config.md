@@ -467,7 +467,7 @@ disabledExtensions:
       - mcp:personal-mail
 ```
 
-When a session changes directory (`/move`, or resuming a session from another project), servers the new directory blocks disconnect and their tools are removed; servers it no longer blocks reconnect.
+When a session changes directory (`/move` in the TUI or RPC mode, or resuming a session from another project), or a config edit changes the list, servers now blocked disconnect and their tools are removed; servers no longer blocked reconnect, with the session's current directory as their `roots/list` workspace root.
 
 ## `/mcp add` vs editing JSON directly
 

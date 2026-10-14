@@ -156,6 +156,7 @@ import {
 	shouldFilterBrowserMCPForPrelude,
 } from "./mcp";
 import { parseMCPToolName } from "@oh-my-pi/pi-tui/tools/mcp";
+import { reconcileMcpDisabledExtensions } from "./mcp/disabled-extensions";
 import { MCP_CONNECTION_STATUS_EVENT_CHANNEL, type McpConnectionStatusEvent } from "./mcp/startup-events";
 import { resolveMCPToolAlias } from "./mcp/tool-bridge";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
@@ -4964,6 +4965,36 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					.then(reconcileExtensionSources)
 					.then(() => session.refreshSkillsAndCommands());
 				extensionReconcile = next;
+				return next;
+			});
+			// Live `disabledExtensions` for MCP: a `/move` or cross-project resume
+			// (`reloadForCwd`, TUI and headless alike) or a config edit can block or
+			// allow `mcp:<name>`. Disconnect newly blocked servers and connect newly
+			// allowed ones so a blocked server's tools never stay callable.
+			let mcpReconcile: Promise<void> = Promise.resolve();
+			cfgDisabledExtensions.listen(session, (after, before) => {
+				const manager = mcpManager;
+				if (!manager) return;
+				const next = mcpReconcile
+					.catch(() => {})
+					.then(async () => {
+						const errors = await reconcileMcpDisabledExtensions({
+							before,
+							after,
+							cwd: sessionManager.getCwd(),
+							manager,
+							session,
+							discovery: {
+								...mcpDiscoverOptions,
+								enableProjectConfig: cfgMcpEnableProjectConfig.get(settings),
+								filterBrowser: session.getEvalPreludes().some(definition => definition.name === "browser"),
+								extensionRoots: buildSessionExtensionRoots(),
+							},
+							onStatus: onMCPStatus,
+						});
+						logMCPLoadErrors(errors);
+					});
+				mcpReconcile = next;
 				return next;
 			});
 		}
