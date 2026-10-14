@@ -241,6 +241,27 @@ describe("session turns after an authoritative repair failed while every full re
 	});
 });
 
+describe("an entry that missed the journal after an authoritative repair failed, once appends work again", () => {
+	it.each([
+		{ step: "flush()", run: (manager: SessionManager) => manager.flush() },
+		{ step: "close()", run: (manager: SessionManager) => manager.close() },
+	])("is appended by $step", async ({ run }) => {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		storage.failRewrites = true;
+		const entry = firstUserEntry(manager);
+		if (entry.message.role !== "user") throw new Error("Expected a user message");
+		entry.message.content = "pruned in place";
+		await manager.rewriteEntries().catch(() => undefined);
+		await expect(manager.recoverPersistenceFromCurrentState()).rejects.toThrow("indeterminate");
+		manager.appendMessage(userTurn("t1"));
+		failNextFileWrite();
+		manager.appendMessage(userTurn("missing"));
+
+		await run(manager).catch(() => undefined);
+		expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual(["before", "t1", "missing"]);
+	});
+});
+
 describe("an entry that missed the journal while full rewrites fail", () => {
 	it("is appended before the next turn after a hot append failed once", async () => {
 		const { storage, manager, sessionDir, sessionFile } = await fileSession();

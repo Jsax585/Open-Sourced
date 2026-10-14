@@ -3173,13 +3173,12 @@ export class SessionManager {
 	 * republish (a structural change, a rejected deferred publish) gets it
 	 * from the next append, so flushing never starts a full rewrite. Writes
 	 * nothing while an atomic batch is open, once the entries are released,
-	 * after {@link seal} unless `afterSeal` (close's terminal write), or while
-	 * an indeterminate failure waits for
-	 * {@link recoverPersistenceFromCurrentState}.
+	 * or after {@link seal} unless `afterSeal` (close's terminal write). An
+	 * indeterminate failure does not stop it: the append's size check refuses
+	 * any file this manager cannot account for.
 	 */
 	#healMissingEntries(afterSeal = false): void {
 		if ((this.#released && !afterSeal) || this.#entriesReleased || this.#atomicEntryBatch) return;
-		if (this.#diskFailure instanceof SessionPersistenceIndeterminateError) return;
 		if (this.#durable?.entries !== this.#entries) return;
 		if (this.#hasUnsavedEntries()) this.#appendToCurrentSessionFile();
 	}
