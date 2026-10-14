@@ -2864,54 +2864,48 @@ export class SessionManager {
 
 	/**
 	 * Delete a session file and its artifact directory. ENOENT is treated as
-	 * success. Nothing writes the current session file while its delete runs,
-	 * and once the file is gone its persistence ends: the entries stay in
-	 * memory, this manager never writes that path again, and the next
-	 * {@link newSession} or {@link setSessionFile} starts from scratch. When
-	 * the delete fails and the file is still there, the session keeps saving
-	 * to it as it did before the call, except that the next
-	 * {@link newSession} for the same entries switches without appending the
-	 * ones the file is missing.
+	 * success. Once the delete of the current session file succeeds its
+	 * persistence ends: the entries stay in memory, this manager never writes
+	 * that path again, and the next {@link newSession} or
+	 * {@link setSessionFile} starts from scratch; until then the session
+	 * saves as before. When the delete fails, this rethrows and leaves the
+	 * session as it was, except that the next {@link newSession} for the same
+	 * entries switches without appending the ones the file is missing.
 	 */
 	async dropSession(sessionPath: string): Promise<void> {
-		const current = this.#sessionFile;
-		const dropsCurrent = current !== undefined && path.resolve(current) === path.resolve(sessionPath);
+		const dropsCurrent = () =>
+			this.#sessionFile !== undefined && path.resolve(this.#sessionFile) === path.resolve(sessionPath);
 		try {
 			await this.#drainAndCloseWriter();
 		} catch (err) {
 			// A failed append's error, raised again on close, concerns only the
 			// file being deleted.
-			if (!dropsCurrent) throw err;
+			if (!dropsCurrent()) throw err;
 		}
-		if (dropsCurrent) this.#sessionFile = undefined;
-		let failure: unknown;
 		try {
 			await this.#storage.deleteSessionWithArtifacts(sessionPath);
 		} catch (err) {
-			if (!isEnoent(err)) failure = err;
-		}
-		// A session switch while the delete ran owns the persistence state now.
-		if (dropsCurrent && this.#sessionFile === undefined) {
-			if (failure !== undefined && this.#storage.existsSync(sessionPath)) {
-				this.#sessionFile = current;
+			if (!isEnoent(err)) {
 				// The caller asked to discard these entries: /delete's newSession()
 				// must not append the ones the file is missing.
-				this.#refusedSessionSwitch = { generation: this.#entriesGeneration, count: this.#entries.length };
-			} else {
-				this.#durable = undefined;
-				this.#refusedSessionSwitch = undefined;
-				this.#clearDiskError();
-				this.#expectedDiskSize = null;
-				this.#fileIsCurrent = false;
-				this.#rewriteRequired = false;
-				this.#draftOnlySessionCleanupArmed = false;
-				this.#artifactManager = null;
-				this.#artifactManagerSessionFile = null;
-				this.#sessionClaim?.release?.();
-				this.#sessionClaim = undefined;
+				if (dropsCurrent())
+					this.#refusedSessionSwitch = { generation: this.#entriesGeneration, count: this.#entries.length };
+				throw err;
 			}
 		}
-		if (failure !== undefined) throw failure;
+		if (!dropsCurrent()) return;
+		this.#sessionFile = undefined;
+		this.#durable = undefined;
+		this.#refusedSessionSwitch = undefined;
+		this.#clearDiskError();
+		this.#expectedDiskSize = null;
+		this.#fileIsCurrent = false;
+		this.#rewriteRequired = false;
+		this.#draftOnlySessionCleanupArmed = false;
+		this.#artifactManager = null;
+		this.#artifactManagerSessionFile = null;
+		this.#sessionClaim?.release?.();
+		this.#sessionClaim = undefined;
 	}
 
 	/**

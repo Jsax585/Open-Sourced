@@ -20,19 +20,39 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
-/** Fails full-journal publishes on demand and can park the next atomic one; appends are untouched. */
+/**
+ * Fails full-journal publishes on demand, can park the next atomic one, and
+ * can park the next session delete and then fail it; appends are untouched.
+ */
 class ControlledRewriteStorage extends FileSessionStorage {
 	/** Every full rewrite fails while set. */
 	failRewrites = false;
 	/** The next full rewrite fails. */
 	failNextRewrite = false;
 	#parked: { started: PromiseWithResolvers<void>; release: PromiseWithResolvers<void> } | undefined;
+	#parkedDelete: { started: PromiseWithResolvers<void>; release: PromiseWithResolvers<void> } | undefined;
 
 	/** Park the next atomic publish until `release()`; `started` resolves once it waits. */
 	parkNextAtomicRewrite(): { started: Promise<void>; release: () => void } {
 		const parked = { started: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
 		this.#parked = parked;
 		return { started: parked.started.promise, release: () => parked.release.resolve() };
+	}
+
+	/** Park the next session delete until `fail()`, which makes it throw EACCES; `started` resolves once it waits. */
+	parkNextDeleteToFail(): { started: Promise<void>; fail: () => void } {
+		const parked = { started: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+		this.#parkedDelete = parked;
+		return { started: parked.started.promise, fail: () => parked.release.resolve() };
+	}
+
+	override async deleteSessionWithArtifacts(sessionPath: string): Promise<void> {
+		const parked = this.#parkedDelete;
+		if (!parked) return super.deleteSessionWithArtifacts(sessionPath);
+		this.#parkedDelete = undefined;
+		parked.started.resolve();
+		await parked.release.promise;
+		throw Object.assign(new Error("EACCES: synthetic unlink failure"), { code: "EACCES" });
 	}
 
 	#rewriteFailure(): Error | undefined {
@@ -472,6 +492,58 @@ describe("a dropped session file", () => {
 			expect(fs.readFileSync(sessionFile).equals(bytesBefore)).toBe(true);
 		},
 	);
+
+	// Without search permission the unlink and any stat of the file both fail with EACCES.
+	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"keeps saving later turns after a directory without search permission refused the delete",
+		async () => {
+			const { manager, sessionDir, sessionFile } = await fileSession();
+			fs.chmodSync(sessionDir, 0o444);
+			try {
+				await expect(manager.dropSession(sessionFile)).rejects.toThrow("EACCES");
+			} finally {
+				fs.chmodSync(sessionDir, 0o755);
+			}
+
+			manager.appendMessage(userTurn("after the failed delete"));
+			await expect(manager.flush()).resolves.toBeUndefined();
+			expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual([
+				"before",
+				"after the failed delete",
+			]);
+		},
+	);
+
+	it("keeps a title set while a delete that then failed was running", async () => {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		const parked = storage.parkNextDeleteToFail();
+		const drop = manager.dropSession(sessionFile);
+		await parked.started;
+		await manager.setSessionName("named during the delete", "user");
+		parked.fail();
+		await expect(drop).rejects.toThrow("EACCES");
+
+		manager.appendMessage(userTurn("after the failed delete"));
+		await expect(manager.flush()).resolves.toBeUndefined();
+		const reopened = await reopen(sessionFile, sessionDir);
+		expect(reopened.getSessionName()).toBe("named during the delete");
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "after the failed delete"]);
+	});
+
+	it("publishes an in-place edit rewritten while a delete that then failed was running", async () => {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		const parked = storage.parkNextDeleteToFail();
+		const drop = manager.dropSession(sessionFile);
+		await parked.started;
+		const entry = firstUserEntry(manager);
+		if (entry.message.role !== "user") throw new Error("Expected a user message");
+		entry.message.content = "edited during the delete";
+		await manager.rewriteEntries();
+		parked.fail();
+		await expect(drop).rejects.toThrow("EACCES");
+
+		expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual(["edited during the delete"]);
+	});
 });
 
 describe("a restored snapshot taken while an entry missed the journal", () => {
