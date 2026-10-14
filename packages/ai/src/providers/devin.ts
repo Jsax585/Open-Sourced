@@ -29,7 +29,12 @@ import {
 } from "@oh-my-pi/pi-catalog/discovery/devin-proto";
 import { create, fromBinary, toBinary } from "@oh-my-pi/pi-catalog/discovery/protobuf";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
-import { DEVIN_DEFAULT_BASE_URL, devinCliMetadata, devinWireMetadata } from "@oh-my-pi/pi-catalog/wire/devin";
+import {
+	DEVIN_DEFAULT_BASE_URL,
+	devinCliMetadata,
+	devinWireMetadata,
+	normalizeDevinSessionToken,
+} from "@oh-my-pi/pi-catalog/wire/devin";
 import { decodeDevinUnaryMessage } from "@oh-my-pi/pi-catalog/wire/devin-proto";
 import { isRecord, logger, parseStreamingJsonThrottled, sanitizeText } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
@@ -250,6 +255,7 @@ export const streamDevin: StreamFunction<"devin-agent"> = (
 					DEVIN_TOOL_CALL_ID_MAX_LENGTH,
 				),
 			};
+			const sessionToken = normalizeDevinSessionToken(turn.apiKey);
 			// Router models (`adaptive`) are not valid chat model uids: the server
 			// resolves them through AssignModel and expects the returned uid plus
 			// assignment JWT on the chat request that shares the cascade id.
@@ -280,6 +286,11 @@ export const streamDevin: StreamFunction<"devin-agent"> = (
 					"accept-encoding": "identity",
 					"user-agent": "connect-go/1.18.1 (go1.26.3)",
 					"connect-accept-encoding": "gzip",
+					// The Devin CLI sends a Basic authorization header with the session
+					// token repeated (token-token, not base64). The server also accepts
+					// the token in Metadata.apiKey alone, but including the header
+					// matches the real client more closely.
+					authorization: `Basic ${sessionToken}-${sessionToken}`,
 					...options?.headers,
 				},
 				body: frame,
@@ -668,10 +679,22 @@ function buildRouterPrompt(messages: Message[]): ChatMessagePrompt | undefined {
 }
 
 /**
+ * Forward the caller's opaque Metadata field 31 (`f`) when explicitly supplied.
+ * Its generation and verification rules are unknown; an install-id hash is
+ * not a substitute for a valid client-provided value.
+ */
+function resolveDeviceFieldF(): string | undefined {
+	const envOverride = Bun.env.DEVIN_F_FIELD;
+	return envOverride && envOverride.length > 0 ? envOverride : undefined;
+}
+
+/**
  * Build a {@link GetChatMessageRequest} for one Cascade turn. Auth rides inside
- * `Metadata.apiKey`; the system prompt is the flattened `prompt` string and the
- * conversation history maps to `chatMessagePrompts`. `assignment` is present only
- * for router models and supplies both the resolved uid and its JWT.
+ * `Metadata.apiKey` (plus `Metadata.userJwt` from GetUserJwt) and field 31 (`f`)
+ * forwards an optional caller-provided opaque value; the system prompt is the flattened
+ * `prompt` string and the conversation history maps to `chatMessagePrompts`.
+ * `assignment` is present only for router models and supplies both the resolved
+ * uid and its JWT.
  */
 function buildDevinChatRequest(
 	model: Model<"devin-agent">,
@@ -701,7 +724,10 @@ function buildDevinChatRequest(
 		});
 	});
 	return create(GetChatMessageRequestSchema, {
-		metadata: create(MetadataSchema, devinWireMetadata(turn.apiKey, turn.userJwt)),
+		metadata: create(MetadataSchema, {
+			...devinWireMetadata(turn.apiKey, turn.userJwt),
+			f: resolveDeviceFieldF(),
+		}),
 		prompt: normalizeSystemPrompts(context.systemPrompt).join("\n\n"),
 		chatMessagePrompts: buildChatMessagePrompts(turn.messages, turn.cascadeId, model),
 		chatModelUid,

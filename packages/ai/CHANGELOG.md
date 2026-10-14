@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Devin requests retain caller generation settings and support explicit opaque client metadata without inventing a device field ([#8534](https://github.com/can1357/oh-my-pi/pull/8534) by [@jroth1111](https://github.com/jroth1111)).
 ## [18.10.4] - 2026-10-13
 
 ### Fixed
