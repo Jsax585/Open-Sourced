@@ -69,7 +69,7 @@ afterEach(() => {
 
 describe("model mentions", () => {
 	test("existing composer provider stops model completions after live disabling", async () => {
-		initTheme();
+		await initTheme();
 		const settings = Settings.isolated({});
 		const ctx = {
 			settings,
@@ -132,6 +132,7 @@ describe("model mentions", () => {
 					hasUI: false,
 					settings: agentSession.settings,
 					getSessionFile: () => file,
+					getSessionSpawns: () => "*",
 					getSessionAgents: () => agentSession.getSessionAgents(),
 				} as ToolSession);
 				expect(task.description).toContain("`m1`");
