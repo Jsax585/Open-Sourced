@@ -5,6 +5,7 @@
 ### Added
 
 - The composer stays usable while a tool approval is pending: sending a message denies the call and steers the turn with it, so the agent knows why it was denied ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+- Session entries record which omp build wrote them, so a transcript shows whether a fix was live even in a session left open across an upgrade: the version, plus commit, branch, and uncommitted-diff hash when run from a source checkout, and `OMP_BUILD_LABEL` when set. `/session` lists the builds that wrote the session ([#15680](https://github.com/can1357/oh-my-pi/pull/15680) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Changed
 
@@ -17,6 +18,8 @@
 
 - Fixed `wait` so delayed or unavailable broker discovery does not block local completions, messages, service exits, or cancellation ([#14860](https://github.com/can1357/oh-my-pi/pull/14860) by [@vavilonska](https://github.com/vavilonska))
 - Preserved unacknowledged service completions when a session switches cwd, including rejected switches, so resuming the owner delivers them to its transcript ([#14860](https://github.com/can1357/oh-my-pi/pull/14860) by [@vavilonska](https://github.com/vavilonska))
+- Fixed `page.waitForNetworkIdle` in a browser `run` timing out on a request an earlier `run` started ([#15495](https://github.com/can1357/oh-my-pi/pull/15495) by [@alnaggar-dev](https://github.com/alnaggar-dev) and [@will-bogusz](https://github.com/will-bogusz))
+- Fixed a tab that a relay page opens over its own CDP session (`Target.createTarget`) landing in a separate Chrome window with `newWindow`, under an id omp could not attach to, activate or close; it now opens as a relay tab in that page's browser ([#15494](https://github.com/can1357/oh-my-pi/pull/15494) by [@alnaggar-dev](https://github.com/alnaggar-dev) and [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.10.4] - 2026-10-13
 
