@@ -858,7 +858,7 @@ describe("a dropped session file", () => {
 		},
 	);
 
-	it.failingIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
 		"keeps a title set while a delete ran that a read-only directory refused, without a full rewrite (C5, C6)",
 		async () => {
 			const { storage, manager, sessionDir, sessionFile } = await fileSession();
@@ -887,22 +887,19 @@ describe("a dropped session file", () => {
 		},
 	);
 
-	it.failing(
-		"publishes a title held by a delete that then failed through the title slot, not a full rewrite (C6)",
-		async () => {
-			const { storage, manager, sessionDir, sessionFile } = await fileSession();
-			const parked = storage.parkNextDeleteToFail();
-			const drop = manager.dropSession(sessionFile);
-			await parked.started;
-			await manager.setSessionName("named in the window", "auto");
-			const rewritesBefore = storage.fullRewrites;
-			parked.fail();
-			await expect(drop).rejects.toThrow("EACCES");
+	it("publishes a title held by a delete that then failed through the title slot, not a full rewrite (C6)", async () => {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		const parked = storage.parkNextDeleteToFail();
+		const drop = manager.dropSession(sessionFile);
+		await parked.started;
+		await manager.setSessionName("named in the window", "auto");
+		const rewritesBefore = storage.fullRewrites;
+		parked.fail();
+		await expect(drop).rejects.toThrow("EACCES");
 
-			expect(storage.fullRewrites).toBe(rewritesBefore);
-			expect((await reopen(sessionFile, sessionDir)).getSessionName()).toBe("named in the window");
-		},
-	);
+		expect(storage.fullRewrites).toBe(rewritesBefore);
+		expect((await reopen(sessionFile, sessionDir)).getSessionName()).toBe("named in the window");
+	});
 
 	it("publishes a held title with a full rewrite when the title slot write fails (C6)", async () => {
 		const { storage, manager, sessionDir, sessionFile } = await fileSession();

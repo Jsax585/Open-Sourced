@@ -797,8 +797,10 @@ interface DiskQueueOptions {
 /** A {@link SessionManager.dropSession} of the current session file whose delete has not settled. */
 interface PendingDrop {
 	sessionFile: string;
-	/** A rewrite or title-slot write was skipped while the delete ran; a failed delete publishes it. */
+	/** A full rewrite was skipped while the delete ran; a failed delete runs it. */
 	deferredRewrite: boolean;
+	/** A title-slot write was skipped while the delete ran; a failed delete writes the current title. */
+	titleHeld: boolean;
 	settled: PromiseWithResolvers<void>;
 }
 
@@ -2399,7 +2401,11 @@ export class SessionManager {
 		if (!this.#persist || !this.#sessionFile) return;
 		this.#appendToSessionFile(entry);
 		if (!this.#shouldHaveSessionFile()) return;
-		if (this.#deferRewriteForPendingDrop()) return;
+		const drop = this.#pendingDropOfSessionFile();
+		if (drop) {
+			drop.titleHeld = true;
+			return;
+		}
 		// A batch's or a move's own full rewrite publishes the slot, and while an
 		// entry is missing from storage a full rewrite would only fail again.
 		if (this.#atomicEntryBatch || this.#sessionFileRelocating || this.#hasUnsavedEntries()) {
@@ -2411,12 +2417,21 @@ export class SessionManager {
 			await this.#rewriteAtomically();
 			return;
 		}
+		await this.#writeTitleSlot(update);
+	}
+
+	/** Write `update` into the title slot in place on the disk queue; when that fails, rewrite the whole file. */
+	async #writeTitleSlot(update: SessionTitleUpdate): Promise<void> {
 		const epoch = this.#diskEpoch;
 		await this.#scheduleDiskWork(
 			async () => {
 				const sessionFile = this.#sessionFile;
 				if (this.#released || !sessionFile) return;
-				if (this.#deferRewriteForPendingDrop()) return;
+				const drop = this.#pendingDropOfSessionFile();
+				if (drop) {
+					drop.titleHeld = true;
+					return;
+				}
 				try {
 					await this.#storage.updateSessionTitle(sessionFile, update);
 				} catch {
@@ -2951,7 +2966,12 @@ export class SessionManager {
 			}
 			return;
 		}
-		const drop: PendingDrop = { sessionFile, deferredRewrite: false, settled: Promise.withResolvers<void>() };
+		const drop: PendingDrop = {
+			sessionFile,
+			deferredRewrite: false,
+			titleHeld: false,
+			settled: Promise.withResolvers<void>(),
+		};
 		this.#pendingDrop = drop;
 		try {
 			// A publish already past its pending-drop check could land after the
@@ -2988,8 +3008,18 @@ export class SessionManager {
 				// The caller asked to discard these entries: /delete's newSession()
 				// must not append the ones the file is missing.
 				this.#refusedSessionSwitch = { generation: this.#entriesGeneration, count: this.#entries.length };
-				// The file stays: publish the rewrite or title change the delete held back.
-				if (drop.deferredRewrite) await this.#rewriteAtomically().catch(() => undefined);
+				// The file stays: publish what the delete held back. A title alone
+				// goes through the title slot; anything else needs a full rewrite.
+				if (drop.deferredRewrite || (drop.titleHeld && !this.#hasTitleSlot)) {
+					this.#rewriteRequired = true;
+					await this.#rewriteAtomically().catch(() => undefined);
+				} else if (drop.titleHeld) {
+					await this.#writeTitleSlot({
+						title: this.#sessionName,
+						source: this.#titleSource,
+						updatedAt: this.#titleUpdatedAt,
+					}).catch(() => undefined);
+				}
 			}
 			throw failure;
 		} finally {
