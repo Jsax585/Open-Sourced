@@ -9,12 +9,7 @@
 
 ### Changed
 
-- Reduced interactive startup memory usage for new sessions by initializing syntax highlighting only when needed; resumed sessions still prepare highlighting in the background so the restored transcript paints without delay ([#15299](https://github.com/can1357/oh-my-pi/pull/15299) by [@iliaal](https://github.com/iliaal))
-- Compacted Read directory listings by replacing alignment padding with single-space separators while retaining file sizes and relative modification times ([#9062](https://github.com/can1357/oh-my-pi/pull/9062) by [@MikeeI](https://github.com/MikeeI), [#15352](https://github.com/can1357/oh-my-pi/pull/15352) by [@iliaal](https://github.com/iliaal)).
 - `omp update` now shows download progress (bytes, percentage, speed, time left) and only gives up when no data arrives for 60 seconds, instead of failing every download that takes longer than 15 minutes ([#9499](https://github.com/can1357/oh-my-pi/issues/9499), [#15382](https://github.com/can1357/oh-my-pi/pull/15382) by [@ealeksandrov](https://github.com/ealeksandrov))
-- YouTube fetches now ask yt-dlp for video metadata and English manual subtitles in one process instead of three, so the common manual-caption path saves two process spawns; automatic captions still fall back to a second process, and the transcript and metadata survive a failing subtitle transfer ([#15334](https://github.com/can1357/oh-my-pi/pull/15334) by [@yuzu-octopus](https://github.com/yuzu-octopus))
-- `computer` menus: `win.menu.select` takes a path the way `win.menu.items` does, as one title, an array, or separate arguments (`select("File", "Export…")`), and both name these forms when a path is malformed ([#15309](https://github.com/can1357/oh-my-pi/pull/15309) by [@will-bogusz](https://github.com/will-bogusz))
-- Reduced startup memory usage in standalone binaries by loading lazily imported code on demand ([#15298](https://github.com/can1357/oh-my-pi/pull/15298) by [@iliaal](https://github.com/iliaal))
 - The in-composer tool approval prompt summarizes the command, path, or content to one row so the composer keeps its room; `Ctrl+O` shows them in full ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
 - Background task guidance now lives in the Task tool description (and in same-name extension replacements that delegate to Task) instead of being repeated in every spawn acknowledgment ([#15477](https://github.com/can1357/oh-my-pi/pull/15477) by [@iliaal](https://github.com/iliaal))
 
