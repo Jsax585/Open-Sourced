@@ -2525,6 +2525,9 @@ const streamAnthropicOnce = (
 				} else {
 					fallbackCreditShape = "unchanged";
 				}
+				// The signed replay body is immutable: observe a detached copy for
+				// policy vetoes, but ignore replacement results and in-place rewrites.
+				await options?.onPayload?.(structuredClone(frozenParams), model);
 				params = frozenParams;
 				rawRequestDump = {
 					provider: model.provider,

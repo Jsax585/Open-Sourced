@@ -480,7 +480,7 @@ Cancelable pre-events:
 
 - `input`
 - `before_agent_start`
-- `before_provider_request` — receives `{ payload }`; return the replacement payload itself (not `{ payload }`). Handlers chain. Provider transports must invoke `onPayload`; `devin-agent` does not.
+- `before_provider_request` — receives `{ payload }`; return the replacement payload itself (not `{ payload }`). Handlers chain until the first `rejectProviderRequest(code)` veto. Provider transports must invoke `onPayload`; `devin-agent` does not.
 - `after_provider_response` — notification before response-body consumption: `{ status, headers, requestId?, metadata? }`. Provider request/response handlers receive the model used for that request in `ctx.model`.
 - `context` — receives conversation messages and may return `{ messages }`; replacements chain without rewriting persisted history
 - `agent_start` / `agent_end` — agent loop lifecycle notification; `agent_end` remains notification-only
@@ -489,6 +489,16 @@ Cancelable pre-events:
 - `turn_start` / `turn_end`
 - `assistant_message` — awaited once per finalized assistant message before agent context, persistence, `message_end`, or tool dispatch. Return `{ content }` to replace text for history, persistence, `message_end` consumers, and the next provider request; handlers chain. Text already delivered through streaming updates (`message_update`, ACP/RPC chunks) is not retracted, so clients that render from the stream may keep showing the original text. Text blocks must retain their count, order, and positions; only their text may change. All non-text blocks and other block metadata must remain unchanged. Unchanged text retains its original `textSignature` (even if the handler drops or changes it); edited text loses its signature so provider replay state is never reused for different text. Invalid replacements and handler errors are reported and skipped. If aborted while a handler is pending, completed rewrites so far are retained and remaining handlers are skipped.
 - `message_start` / `message_update` / `message_end` — lifecycle notifications; `message_end` receives a detached snapshot, so in-place changes cannot rewrite agent or provider context
+
+Use the exported `rejectProviderRequest("policy")` helper to stop a request before the provider call. Rejections produce a terminal `AIError.Flag.RequestRejected` error, with no retry, credential rotation, model fallback, or auto-compaction. Rejection codes are `"policy"` and `"handler_failure"`; diagnostics are fixed and carry no payload data.
+
+```ts
+import { rejectProviderRequest } from "@oh-my-pi/pi-coding-agent";
+
+pi.on("before_provider_request", () => rejectProviderRequest("policy"), { failClosed: true });
+```
+
+The optional third argument `{ failClosed: true }` rejects when that handler throws or times out, using `"handler_failure"`. Extension-error listeners receive a fixed message without the exception message or stack. The default remains fail-open: handler errors are reported and the chain continues. Handlers still receive the live payload; do not mutate signed blocks or expect a failure to roll back in-place changes. Anthropic frozen fallback-credit replays also run the hook, but ignore replacement payloads to preserve their signed replay body.
 
 ```ts
 pi.on("assistant_message", event => ({

@@ -51,6 +51,12 @@ export const Flag = {
 	 * status value, so no raw status id can set it.
 	 */
 	CacheControlUnsupported: 0x0000_0800,
+	/**
+	 * Local pre-provider veto. 0x400 is reserved for integrity rejection and
+	 * 0x800 for cache-control rejection; all higher bits are occupied.
+	 * This overlaps raw HTTP statuses, so it is meaningful only with Class.
+	 */
+	RequestRejected: 0x0000_0200,
 	/** HTTP 413 byte/media rejection — token compaction cannot shrink bytes or media budgets (#9235). */
 	PayloadRejected: 0x8000_0000,
 } as const;
@@ -77,6 +83,7 @@ const KIND_MASK =
 	Flag.Grammar |
 	Flag.FastModeUnsupported |
 	Flag.CacheControlUnsupported |
+	Flag.RequestRejected |
 	Flag.OAuthExpiry;
 
 const RETRIABLE_KINDS =
@@ -464,10 +471,12 @@ export function create(...flags: number[]): number {
 }
 
 export function is(id: number | undefined, flag: Flag): boolean {
+	if (flag === Flag.RequestRejected && !isClassified(id)) return false;
 	return ((id ?? 0) & flag) !== 0;
 }
 
 export function retriable(id: number | undefined, opts?: { replayUnsafe?: boolean }): boolean {
+	if (is(id, Flag.RequestRejected)) return false;
 	if (is(id, Flag.ContentBlocked)) return false;
 	if (is(id, Flag.PayloadRejected)) return false;
 	if (opts?.replayUnsafe) return false;
@@ -725,8 +734,10 @@ export function classify(error: unknown, api?: Api): number {
 			if (seen.has(link)) break;
 			seen.add(link);
 
-			if ("errorId" in link && typeof (link as { errorId: unknown }).errorId === "number") {
-				kinds |= (link as { errorId: number }).errorId & KIND_MASK;
+			if ("errorId" in link && typeof link.errorId === "number") {
+				const errorId = link.errorId;
+				if (is(errorId, Flag.RequestRejected)) return create(Flag.RequestRejected);
+				kinds |= errorId & (isClassified(errorId) ? KIND_MASK : KIND_MASK & ~Flag.RequestRejected);
 			}
 			if ("code" in link && typeof link.code === "string") {
 				if (ACCOUNT_POLICY_PATTERN.test(link.code)) {
@@ -954,6 +965,7 @@ export function classifyMessage(message: {
 	errorStatus?: number;
 }): number {
 	const existingId = message.errorId;
+	if (is(existingId, Flag.RequestRejected)) return create(Flag.RequestRejected);
 	const currentStatus = message.errorStatus ?? statusFromId(existingId);
 	const existingOverflowOnly =
 		existingId !== undefined && is(existingId, Flag.ContextOverflow) && !is(existingId, Flag.PayloadRejected);
@@ -967,7 +979,10 @@ export function classifyMessage(message: {
 		message.model,
 	);
 
-	let kinds = ((existingId ?? 0) | textId) & KIND_MASK;
+	let kinds =
+		(((existingId ?? 0) & (isClassified(existingId) ? KIND_MASK : KIND_MASK & ~Flag.RequestRejected)) |
+			(textId & (isClassified(textId) ? KIND_MASK : KIND_MASK & ~Flag.RequestRejected))) &
+		KIND_MASK;
 	// Two-phase finalization: drop stale status-inferred payload bit when final text proves token overflow (#9235).
 	if (
 		currentStatus === 413 &&
@@ -1016,6 +1031,7 @@ export function isUsageBackedContextOverflow(message: ContextOverflowMessage, co
 
 /** Classify overflow from error flags, available token usage, or provider error text. */
 export function isContextOverflow(message: ContextOverflowMessage, contextWindow?: number): boolean {
+	if (is(message.errorId, Flag.RequestRejected)) return false;
 	if (is(message.errorId, Flag.ContextOverflow)) return true;
 	if (isUsageBackedContextOverflow(message, contextWindow)) return true;
 	return message.stopReason === "error" && !!message.errorMessage && matchesOverflowText(message.errorMessage);

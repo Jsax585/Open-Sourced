@@ -508,6 +508,11 @@ export class TurnRecovery {
 		this.#acceptTerminalEmptyStopForPrompt = accept;
 	}
 
+	/** A veto must not leave a redemption queued for another request. */
+	discardActiveFallbackCreditRedemption(): void {
+		this.#activeFallbackCreditRedemption = undefined;
+	}
+
 	/** Consumes any queued Anthropic fallback credit handle for the retry turn. */
 	consumeActiveFallbackCreditRedemption(targetModel?: Model): AnthropicFallbackCreditHandle | undefined {
 		const active = this.#activeFallbackCreditRedemption;
@@ -1485,6 +1490,7 @@ export class TurnRecovery {
 	 */
 	isRetryableError(message: AssistantMessage): boolean {
 		if (message.stopReason !== "error") return false;
+		if (AIError.is(message.errorId, AIError.Flag.RequestRejected)) return false;
 		if (this.#isUsagePreflightBlocked(message)) return false;
 		if (AIError.isResponsesRequestBodyReadTimeout(message)) return false;
 		const model = this.#host.model();
@@ -2292,6 +2298,7 @@ export class TurnRecovery {
 	 * Requires the base model to exist in the registry.
 	 */
 	isFireworksFastFallbackEligible(message: AssistantMessage): boolean {
+		if (AIError.is(message.errorId, AIError.Flag.RequestRejected)) return false;
 		const model = this.#activeFireworksFastModel();
 		if (!model) return false;
 		if (message.stopReason !== "error") return false;
@@ -2323,6 +2330,7 @@ export class TurnRecovery {
 	 * `pinFallback`), and turns that already emitted replay-unsafe output.
 	 */
 	isHardErrorFallbackEligible(message: AssistantMessage): boolean {
+		if (AIError.is(message.errorId, AIError.Flag.RequestRejected)) return false;
 		if (message.stopReason !== "error") return false;
 		if (this.#isUsagePreflightBlocked(message)) return false;
 		const model = this.#host.model();
@@ -2486,6 +2494,7 @@ export class TurnRecovery {
 	 * its dead ends leaves the saga for the caller to close.
 	 */
 	async #applyRetryPolicy(message: AssistantMessage, options?: RetryPolicyOptions): Promise<boolean> {
+		if (AIError.is(message.errorId, AIError.Flag.RequestRejected)) return false;
 		const retrySettings = cfgRetry.get(this.#host.settings);
 		if (this.#host.abortInProgress() || this.#host.isDisposed()) return false;
 		// The Fireworks Fast→base degrade is an intrinsic model-selection safety net,

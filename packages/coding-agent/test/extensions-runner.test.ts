@@ -23,6 +23,10 @@ import {
 	testSetExtensionHandlerTimeoutMs,
 	testSetSessionShutdownHandlerTimeoutMs,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import {
+	isProviderRequestRejection,
+	rejectProviderRequest,
+} from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type {
 	Extension,
 	ExtensionError,
@@ -832,6 +836,89 @@ describe("ExtensionRunner", () => {
 	});
 
 	describe("before_provider_request chaining", () => {
+		it("stops at a branded rejection without changing signed blocks", async () => {
+			fs.writeFileSync(
+				path.join(extensionsDir, "reject.ts"),
+				`export default function(pi) {
+					pi.on("before_provider_request", () => pi.pi.rejectProviderRequest("policy"));
+					pi.on("before_provider_request", () => { throw new Error("must not run"); });
+				}`,
+			);
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const errors: ExtensionError[] = [];
+			runner.onError(error => errors.push(error));
+			const body = { messages: [{ content: [{ type: "thinking", thinking: "signed\nbytes", signature: "abc+/=" }] }] };
+			const snapshot = structuredClone(body);
+			const rejection = await runner.emitBeforeProviderRequest(body);
+			expect(isProviderRequestRejection(rejection)).toBe(true);
+			expect(rejection).toEqual(rejectProviderRequest("policy"));
+			expect(body).toEqual(snapshot);
+			expect(errors).toEqual([]);
+		});
+
+		for (const failure of ["throw", "timeout"] as const) {
+			it(`rejects a failClosed ${failure} with a fixed, non-sensitive diagnostic`, async () => {
+				testSetExtensionHandlerTimeoutMs(20);
+				fs.writeFileSync(
+					path.join(extensionsDir, "fail-closed.ts"),
+					`export default function(pi) {
+						pi.on("before_provider_request", async () => {
+							${failure === "throw" ? 'throw new Error("secret-payload-429-auth");' : "await Promise.withResolvers().promise;"}
+						}, { failClosed: true });
+						pi.on("before_provider_request", () => { throw new Error("must not run"); });
+					}`,
+				);
+				const result = await loadTestExtensions();
+				const runner = new ExtensionRunner(
+					result.extensions,
+					result.runtime,
+					tempDir.path(),
+					sessionManager,
+					modelRegistry,
+				);
+				const errors: ExtensionError[] = [];
+				runner.onError(error => errors.push(error));
+				const body = { content: [{ type: "thinking", thinking: "signed", signature: "sig" }] };
+				const snapshot = structuredClone(body);
+				const rejection = await runner.emitBeforeProviderRequest(body);
+				expect(rejection).toEqual(rejectProviderRequest("handler_failure"));
+				expect(body).toEqual(snapshot);
+				expect(errors).toHaveLength(1);
+				expect(errors[0]?.error).toBe(rejectProviderRequest("handler_failure").message);
+				expect(errors[0]?.stack).toBeUndefined();
+				expect(JSON.stringify(errors)).not.toContain("secret-payload");
+			});
+		}
+
+		it("passes signed blocks through byte for byte and does not mistake plain objects for vetoes", async () => {
+			fs.writeFileSync(
+				path.join(extensionsDir, "pass.ts"),
+				`export default function(pi) {
+					pi.on("before_provider_request", event => event.payload);
+				}`,
+			);
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const body = { code: "policy", content: [{ type: "thinking", thinking: "a\nb", signature: "sig+/=" }] };
+			const bytes = JSON.stringify(body);
+			expect(await runner.emitBeforeProviderRequest(body)).toBe(body);
+			expect(JSON.stringify(body)).toBe(bytes);
+			expect(isProviderRequestRejection(body)).toBe(false);
+		});
+
 		it("exposes the request model instead of the primary session model", async () => {
 			const primaryModel = getBundledModel("openai-codex", "gpt-5.6-sol");
 			const requestModel = getBundledModel("anthropic", "claude-sonnet-4-5");

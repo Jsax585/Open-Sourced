@@ -41,6 +41,7 @@ import { resolvePath, withHostGuard } from "../utils";
 import type { ComposerShapeDefinition } from "@oh-my-pi/pi-tui/overlays/composer-shape-registry";
 import type {
 	AssistantThinkingRenderer,
+	BeforeProviderRequestHandlerOptions,
 	Extension,
 	ExtensionAPI,
 	ExtensionContext,
@@ -207,9 +208,16 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 		}
 	}
 
-	on<F extends HandlerFn>(event: string, handler: F): void {
+	on<F extends HandlerFn>(event: string, handler: F, options?: BeforeProviderRequestHandlerOptions): void {
 		const list = this.extension.handlers.get(event) ?? [];
-		list.push(handler);
+		if (event === "before_provider_request" && options?.failClosed) {
+			// Keep the option scoped to this registration if a function is registered more than once.
+			const registeredHandler: HandlerFn = (...args) => handler(...args);
+			list.push(registeredHandler);
+			(this.extension.failClosedProviderRequestHandlers ??= new Set()).add(registeredHandler);
+		} else {
+			list.push(handler);
+		}
 		this.extension.handlers.set(event, list);
 	}
 

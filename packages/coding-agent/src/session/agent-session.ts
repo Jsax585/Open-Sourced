@@ -4289,6 +4289,15 @@ export class AgentSession implements SettingsScope {
 				maintenanceRoute("resume-post-turn-maintenance");
 			}
 
+			// Policy vetoes end this request without any recovery or maintenance
+			// continuation, including threshold compaction and goal-mode resampling.
+			if (AIError.is(msg.errorId, AIError.Flag.RequestRejected)) {
+				this.#recovery.discardActiveFallbackCreditRedemption();
+				await this.#recovery.persistTerminalEmptyErrorTurn(msg);
+				this.#recovery.resolveRetry();
+				await emitAgentEndNotification();
+				return;
+			}
 			const activeGoal = this.#goalModeState?.enabled === true && this.#goalModeState.goal.status === "active";
 			// A successful `yield` in this run is terminal for execution purposes.
 			// Suppress empty-stop retry, unexpected-stop retry, queued-message drain,
