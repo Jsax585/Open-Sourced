@@ -7,6 +7,7 @@
  */
 import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
@@ -24,32 +25,106 @@ import {
 	SessionWriteConflictError,
 	type WriteTextAtomicOptions,
 } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import type { SessionTitleUpdate } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 /**
- * Fails full-journal publishes on demand, can park the next atomic one, and
- * can park the next session delete and then fail it; appends are untouched.
+ * Fails full-journal publishes on demand, can park the next atomic one, the
+ * next drain, or the next session-file unlink once it took effect, and can
+ * park the next session delete and then fail it; appends are untouched.
  */
 class ControlledRewriteStorage extends FileSessionStorage {
 	/** Every full rewrite fails while set. */
 	failRewrites = false;
 	/** The next full rewrite fails. */
 	failNextRewrite = false;
-	#parked: { started: PromiseWithResolvers<void>; release: PromiseWithResolvers<void> } | undefined;
-	#parkedDelete: { started: PromiseWithResolvers<void>; release: PromiseWithResolvers<void> } | undefined;
+	/** Every in-place title-slot write fails while set. */
+	failTitleSlots = false;
+	/** The next `statSync` throws EACCES. */
+	failNextStat = false;
+	/** Full-journal publishes that reached storage, failed ones included. */
+	fullRewrites = 0;
+	#parked:
+		| { started: PromiseWithResolvers<WriteTextAtomicOptions | undefined>; release: PromiseWithResolvers<void> }
+		| undefined;
+	#parkedDelete:
+		| { started: PromiseWithResolvers<void>; release: PromiseWithResolvers<void>; fail: boolean }
+		| undefined;
+	#parkedUnlink: { started: PromiseWithResolvers<void>; release: PromiseWithResolvers<void> } | undefined;
+	#parkedDrain: { started: PromiseWithResolvers<void>; release: PromiseWithResolvers<void> } | undefined;
 
-	/** Park the next atomic publish until `release()`; `started` resolves once it waits. */
-	parkNextAtomicRewrite(): { started: Promise<void>; release: () => void } {
+	/** Park the next session-file unlink once it has taken effect, until `release()`; `started` resolves then. */
+	parkAfterNextUnlink(): { started: Promise<void>; release: () => void } {
 		const parked = { started: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+		this.#parkedUnlink = parked;
+		return { started: parked.started.promise, release: () => parked.release.resolve() };
+	}
+
+	override async unlink(fpath: string): Promise<void> {
+		await super.unlink(fpath);
+		const parked = this.#parkedUnlink;
+		if (!parked || !fpath.endsWith(".jsonl")) return;
+		this.#parkedUnlink = undefined;
+		parked.started.resolve();
+		await parked.release.promise;
+	}
+
+	/** Park the next drain until `release()`; `started` resolves once it waits. */
+	parkNextDrain(): { started: Promise<void>; release: () => void } {
+		const parked = { started: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+		this.#parkedDrain = parked;
+		return { started: parked.started.promise, release: () => parked.release.resolve() };
+	}
+
+	override async drain(): Promise<void> {
+		const parked = this.#parkedDrain;
+		if (parked) {
+			this.#parkedDrain = undefined;
+			parked.started.resolve();
+			await parked.release.promise;
+		}
+		await super.drain();
+	}
+
+	override statSync(fpath: string) {
+		if (this.failNextStat) {
+			this.failNextStat = false;
+			throw Object.assign(new Error("EACCES: synthetic stat failure"), { code: "EACCES" });
+		}
+		return super.statSync(fpath);
+	}
+
+	override async updateSessionTitle(fpath: string, update: SessionTitleUpdate): Promise<void> {
+		if (this.failTitleSlots)
+			throw Object.assign(new Error("EACCES: synthetic title slot failure"), { code: "EACCES" });
+		await super.updateSessionTitle(fpath, update);
+	}
+
+	/**
+	 * Park the next atomic publish, before it stages its body, until `release()`;
+	 * `started` resolves with the publish's options once it waits.
+	 */
+	parkNextAtomicRewrite(): { started: Promise<WriteTextAtomicOptions | undefined>; release: () => void } {
+		const parked = {
+			started: Promise.withResolvers<WriteTextAtomicOptions | undefined>(),
+			release: Promise.withResolvers<void>(),
+		};
 		this.#parked = parked;
 		return { started: parked.started.promise, release: () => parked.release.resolve() };
 	}
 
 	/** Park the next session delete until `fail()`, which makes it throw EACCES; `started` resolves once it waits. */
 	parkNextDeleteToFail(): { started: Promise<void>; fail: () => void } {
-		const parked = { started: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+		const parked = { started: Promise.withResolvers<void>(), release: Promise.withResolvers<void>(), fail: true };
 		this.#parkedDelete = parked;
 		return { started: parked.started.promise, fail: () => parked.release.resolve() };
+	}
+
+	/** Park the next session delete until `release()`, which runs the real delete; `started` resolves once it waits. */
+	parkNextDelete(): { started: Promise<void>; release: () => void } {
+		const parked = { started: Promise.withResolvers<void>(), release: Promise.withResolvers<void>(), fail: false };
+		this.#parkedDelete = parked;
+		return { started: parked.started.promise, release: () => parked.release.resolve() };
 	}
 
 	override async deleteSessionWithArtifacts(sessionPath: string): Promise<void> {
@@ -58,6 +133,7 @@ class ControlledRewriteStorage extends FileSessionStorage {
 		this.#parkedDelete = undefined;
 		parked.started.resolve();
 		await parked.release.promise;
+		if (!parked.fail) return super.deleteSessionWithArtifacts(sessionPath);
 		throw Object.assign(new Error("EACCES: synthetic unlink failure"), { code: "EACCES" });
 	}
 
@@ -70,6 +146,7 @@ class ControlledRewriteStorage extends FileSessionStorage {
 	}
 
 	override writeLinesSync(fpath: string, lines: Iterable<string>, options?: SessionStorageWriteOptions): void {
+		this.fullRewrites++;
 		const failure = this.#rewriteFailure();
 		if (failure) throw failure;
 		super.writeLinesSync(fpath, lines, options);
@@ -83,9 +160,10 @@ class ControlledRewriteStorage extends FileSessionStorage {
 		const parked = this.#parked;
 		if (parked) {
 			this.#parked = undefined;
-			parked.started.resolve();
+			parked.started.resolve(options);
 			await parked.release.promise;
 		}
+		this.fullRewrites++;
 		const failure = this.#rewriteFailure();
 		if (failure) throw failure;
 		await super.writeLinesAtomic(fpath, lines, options);
@@ -148,16 +226,21 @@ class ReadCountingStorage extends ControlledRewriteStorage {
 
 /**
  * An in-memory backend for {@link IndexedSessionStorage} that counts every
- * write to a path and can hold the next `remove()` until released.
+ * write to a path and can hold the next `remove()` until released, then
+ * remove the paths or fail.
  */
 class HeldRemoveBackend implements SessionStorageBackend {
 	readonly files = new Map<string, string>();
 	readonly writes = new Map<string, number>();
-	#heldRemove: { started: PromiseWithResolvers<void>; release: PromiseWithResolvers<void> } | undefined;
+	#heldRemove: { started: PromiseWithResolvers<void>; release: PromiseWithResolvers<void>; fail: boolean } | undefined;
 
-	/** Hold the next remove until `release()`; `started` resolves once it waits. */
-	holdNextRemove(): { started: Promise<void>; release: () => void } {
-		const held = { started: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+	/** Hold the next remove until `release()`; `started` resolves once it waits. With `fail`, it then throws EIO. */
+	holdNextRemove(options: { fail?: boolean } = {}): { started: Promise<void>; release: () => void } {
+		const held = {
+			started: Promise.withResolvers<void>(),
+			release: Promise.withResolvers<void>(),
+			fail: options.fail ?? false,
+		};
 		this.#heldRemove = held;
 		return { started: held.started.promise, release: () => held.release.resolve() };
 	}
@@ -218,6 +301,7 @@ class HeldRemoveBackend implements SessionStorageBackend {
 			this.#heldRemove = undefined;
 			held.started.resolve();
 			await held.release.promise;
+			if (held.fail) throw Object.assign(new Error("EIO: synthetic remove failure"), { code: "EIO" });
 		}
 		for (const path of paths) this.files.delete(path);
 	}
@@ -536,28 +620,341 @@ describe("a dropped session file", () => {
 				await manager.setSessionName("auto title", "auto");
 			},
 		},
+		{
+			write: "an in-place edit and rewriteEntries()",
+			run: async (manager: SessionManager) => {
+				const entry = firstUserEntry(manager);
+				if (entry.message.role !== "user") throw new Error("Expected a user message");
+				entry.message.content = "edited in the window";
+				await manager.rewriteEntries();
+			},
+		},
+		{
+			write: "flushSync()",
+			run: async (manager: SessionManager) => {
+				manager.appendMessage(userTurn("in the window"));
+				manager.flushSync();
+			},
+		},
 	])(
-		"stays deleted and unlisted when $write lands after the unlink, before dropSession() resolves",
+		"stays deleted and unlisted when $write lands after the unlink, before dropSession() resolves (C2)",
 		async ({ run }) => {
-			const { manager, sessionDir, sessionFile } = await fileSession();
-			// The artifact directory is removed after the journal's unlink; enough
-			// files keep that removal running while the write lands.
-			for (let i = 0; i < 200; i++) await manager.saveArtifact(`payload ${i}`, "bash");
-			let dropSettled = false;
-			const drop = manager.dropSession(sessionFile).finally(() => {
-				dropSettled = true;
-			});
-			while (fs.existsSync(sessionFile) && !dropSettled) await new Promise<void>(resolve => setImmediate(resolve));
-			expect(dropSettled).toBe(false);
+			const { storage, manager, sessionDir, sessionFile } = await fileSession();
+			const parked = storage.parkAfterNextUnlink();
+			const drop = manager.dropSession(sessionFile);
+			await parked.started;
 
 			await run(manager);
+			parked.release();
 			await drop;
+			await manager.close();
 
 			expect(fs.existsSync(sessionFile)).toBe(false);
 			const listed = await SessionManager.list(path.dirname(sessionDir), sessionDir);
 			expect(listed.map(session => session.path)).not.toContain(sessionFile);
 		},
 	);
+
+	it.failing(
+		"stays deleted when an authoritative repair already in flight would publish after the unlink (C2)",
+		async () => {
+			const { storage, manager, sessionDir, sessionFile } = await fileSession();
+			const drain = storage.parkNextDrain();
+			const recovery = manager.recoverPersistenceFromCurrentState().catch(() => undefined);
+			await drain.started;
+			const unlinked = storage.parkAfterNextUnlink();
+			const drop = manager.dropSession(sessionFile);
+			drain.release();
+			await recovery;
+			unlinked.release();
+			await expect(drop).resolves.toBeUndefined();
+			await manager.close().catch(() => undefined);
+
+			expect(fs.existsSync(sessionFile)).toBe(false);
+			const listed = await SessionManager.list(path.dirname(sessionDir), sessionDir);
+			expect(listed.map(session => session.path)).not.toContain(sessionFile);
+		},
+	);
+
+	it("stays deleted when an atomic rewrite already in flight would publish after the unlink (C2)", async () => {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		const atomic = storage.parkNextAtomicRewrite();
+		const rewrite = manager.rewriteEntries().catch(() => undefined);
+		await atomic.started;
+		const unlinked = storage.parkAfterNextUnlink();
+		const drop = manager.dropSession(sessionFile);
+		atomic.release();
+		await rewrite;
+		unlinked.release();
+		await expect(drop).resolves.toBeUndefined();
+		await manager.close().catch(() => undefined);
+
+		expect(fs.existsSync(sessionFile)).toBe(false);
+		const listed = await SessionManager.list(path.dirname(sessionDir), sessionDir);
+		expect(listed.map(session => session.path)).not.toContain(sessionFile);
+	});
+
+	/** Journal unlinked, artifact cleanup failed, `run` in the window, then /delete's newSession(). */
+	async function dropWithFailedArtifactCleanup(run: (manager: SessionManager) => Promise<void>): Promise<void> {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		await manager.saveArtifact("payload", "bash");
+		const parked = storage.parkAfterNextUnlink();
+		const rm = spyOn(fsp, "rm").mockRejectedValueOnce(new Error("EBUSY: synthetic rm failure"));
+		const drop = manager.dropSession(sessionFile);
+		await parked.started;
+		await run(manager);
+		parked.release();
+		try {
+			await expect(drop).rejects.toThrow("failed to remove artifacts directory");
+		} finally {
+			rm.mockRestore();
+		}
+		// /delete switches next: the deleted file gets nothing.
+		const next = await manager.newSession();
+		manager.appendMessage(assistantMessage("in the new session"));
+		await manager.flush();
+
+		expect(next).not.toBe(sessionFile);
+		expect(manager.getSessionFile()).not.toBe(sessionFile);
+		expect(fs.existsSync(sessionFile)).toBe(false);
+		const listed = await SessionManager.list(path.dirname(sessionDir), sessionDir);
+		expect(listed.map(session => session.path)).not.toContain(sessionFile);
+	}
+
+	it.each([
+		{ write: "nothing", run: async (_manager: SessionManager) => {} },
+		{
+			write: "a turn",
+			run: async (manager: SessionManager) => {
+				manager.appendMessage(userTurn("in the window"));
+			},
+		},
+	])(
+		"counts as gone when the journal unlink succeeded but the artifact cleanup failed, with $write in the window (C4)",
+		async ({ run }) => dropWithFailedArtifactCleanup(run),
+	);
+
+	it.failing.each([
+		{
+			write: "an auto title",
+			run: async (manager: SessionManager) => {
+				await manager.setSessionName("auto title", "auto");
+			},
+		},
+		{
+			write: "an in-place edit and rewriteEntries()",
+			run: async (manager: SessionManager) => {
+				const entry = firstUserEntry(manager);
+				if (entry.message.role !== "user") throw new Error("Expected a user message");
+				entry.message.content = "edited in the window";
+				await manager.rewriteEntries();
+			},
+		},
+	])(
+		"counts as gone when the journal unlink succeeded but the artifact cleanup failed, with $write in the window (C4)",
+		async ({ run }) => dropWithFailedArtifactCleanup(run),
+	);
+
+	it.failing(
+		"ends persistence after an artifact cleanup failure: later turns, flushSync() and close() write nothing (C4)",
+		async () => {
+			const { storage, manager, sessionFile } = await fileSession();
+			await manager.saveArtifact("payload", "bash");
+			const rm = spyOn(fsp, "rm").mockRejectedValueOnce(new Error("EBUSY: synthetic rm failure"));
+			try {
+				await expect(manager.dropSession(sessionFile)).rejects.toThrow("failed to remove artifacts directory");
+			} finally {
+				rm.mockRestore();
+			}
+			manager.appendMessage(userTurn("after the drop"));
+			await manager.setSessionName("after the drop", "auto");
+			manager.flushSync();
+			await manager.close();
+
+			expect(manager.getSessionFile()).toBeUndefined();
+			expect(fs.existsSync(sessionFile)).toBe(false);
+			expect(storage.fullRewrites).toBe(0);
+		},
+	);
+
+	it("counts as present when the gone check's stat fails with an error other than ENOENT (C4)", async () => {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		const parked = storage.parkNextDeleteToFail();
+		const drop = manager.dropSession(sessionFile);
+		await parked.started;
+		storage.failNextStat = true;
+		parked.fail();
+		await expect(drop).rejects.toThrow("EACCES");
+		storage.failNextStat = false;
+
+		expect(manager.getSessionFile()).toBe(sessionFile);
+		manager.appendMessage(userTurn("after the failed delete"));
+		await expect(manager.flush()).resolves.toBeUndefined();
+		expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual([
+			"before",
+			"after the failed delete",
+		]);
+	});
+
+	it("keeps saving turns, titles and edits after a delete that failed with the journal intact (C1)", async () => {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		storage.parkNextDeleteToFail().fail();
+		await expect(manager.dropSession(sessionFile)).rejects.toThrow("EACCES");
+
+		manager.appendMessage(userTurn("after the failed delete"));
+		await manager.setSessionName("named after the failed delete", "user");
+		const entry = firstUserEntry(manager);
+		if (entry.message.role !== "user") throw new Error("Expected a user message");
+		entry.message.content = "edited after the failed delete";
+		await manager.rewriteEntries();
+		await expect(manager.flush()).resolves.toBeUndefined();
+
+		expect(manager.getPersistenceFailure()).toBeUndefined();
+		const reopened = await reopen(sessionFile, sessionDir);
+		expect(reopened.getSessionName()).toBe("named after the failed delete");
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["edited after the failed delete", "after the failed delete"]);
+	});
+
+	it("republishes an edit whose rewrite the drop fenced off once the delete fails with the journal intact (C2)", async () => {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		const drain = storage.parkNextDrain();
+		const recovery = manager.recoverPersistenceFromCurrentState().catch(() => undefined);
+		await drain.started;
+		const entry = firstUserEntry(manager);
+		if (entry.message.role !== "user") throw new Error("Expected a user message");
+		entry.message.content = "edited before the delete";
+		const parked = storage.parkNextDeleteToFail();
+		const drop = manager.dropSession(sessionFile);
+		drain.release();
+		await recovery;
+		await parked.started;
+		parked.fail();
+		await expect(drop).rejects.toThrow("EACCES");
+
+		await expect(manager.flush()).resolves.toBeUndefined();
+		expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual(["edited before the delete"]);
+	});
+
+	it.each([
+		{
+			write: "a turn",
+			run: async (manager: SessionManager) => {
+				manager.appendMessage(userTurn("in the window"));
+			},
+		},
+		{
+			write: "a title",
+			run: async (manager: SessionManager) => {
+				await manager.setSessionName("named in the window", "auto");
+			},
+		},
+	])(
+		"gets nothing from /delete's newSession() after a delete that failed with $write in the window (C3)",
+		async ({ run }) => {
+			const { storage, manager, sessionFile } = await fileSession();
+			const parked = storage.parkNextDeleteToFail();
+			const drop = manager.dropSession(sessionFile);
+			await parked.started;
+			await run(manager);
+			parked.fail();
+			await expect(drop).rejects.toThrow("EACCES");
+			const bytesAfterDrop = fs.readFileSync(sessionFile);
+
+			const next = await manager.newSession();
+			manager.appendMessage(assistantMessage("in the new session"));
+			await manager.flush();
+
+			expect(next).not.toBe(sessionFile);
+			expect(fs.readFileSync(sessionFile).equals(bytesAfterDrop)).toBe(true);
+		},
+	);
+
+	it.failingIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+		"keeps a title set while a delete ran that a read-only directory refused, without a full rewrite (C5, C6)",
+		async () => {
+			const { storage, manager, sessionDir, sessionFile } = await fileSession();
+			const errors: Error[] = [];
+			manager.onPersistenceError(error => errors.push(error));
+			fs.chmodSync(sessionDir, 0o555);
+			try {
+				const parked = storage.parkNextDelete();
+				const drop = manager.dropSession(sessionFile);
+				await parked.started;
+				await manager.setSessionName("named in the window", "auto");
+				parked.release();
+				await expect(drop).rejects.toThrow("EACCES");
+				expect(manager.getPersistenceFailure()).toBeUndefined();
+				manager.appendMessage(userTurn("after the failed delete"));
+				await expect(manager.flush()).resolves.toBeUndefined();
+			} finally {
+				fs.chmodSync(sessionDir, 0o755);
+			}
+
+			expect(errors).toEqual([]);
+			expect(manager.getPersistenceFailure()).toBeUndefined();
+			const reopened = await reopen(sessionFile, sessionDir);
+			expect(reopened.getSessionName()).toBe("named in the window");
+			expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "after the failed delete"]);
+		},
+	);
+
+	it.failing(
+		"publishes a title held by a delete that then failed through the title slot, not a full rewrite (C6)",
+		async () => {
+			const { storage, manager, sessionDir, sessionFile } = await fileSession();
+			const parked = storage.parkNextDeleteToFail();
+			const drop = manager.dropSession(sessionFile);
+			await parked.started;
+			await manager.setSessionName("named in the window", "auto");
+			const rewritesBefore = storage.fullRewrites;
+			parked.fail();
+			await expect(drop).rejects.toThrow("EACCES");
+
+			expect(storage.fullRewrites).toBe(rewritesBefore);
+			expect((await reopen(sessionFile, sessionDir)).getSessionName()).toBe("named in the window");
+		},
+	);
+
+	it("publishes a held title with a full rewrite when the title slot write fails (C6)", async () => {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		const parked = storage.parkNextDeleteToFail();
+		const drop = manager.dropSession(sessionFile);
+		await parked.started;
+		await manager.setSessionName("named in the window", "auto");
+		storage.failTitleSlots = true;
+		parked.fail();
+		await expect(drop).rejects.toThrow("EACCES");
+		storage.failTitleSlots = false;
+
+		expect((await reopen(sessionFile, sessionDir)).getSessionName()).toBe("named in the window");
+	});
+
+	it("has flush() append a turn that missed the journal before a delete that failed with the journal intact (C7)", async () => {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		failNextFileWrite();
+		manager.appendMessage(userTurn("missing"));
+		storage.parkNextDeleteToFail().fail();
+		await expect(manager.dropSession(sessionFile)).rejects.toThrow("EACCES");
+
+		await expect(manager.flush()).resolves.toBeUndefined();
+		expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual(["before", "missing"]);
+	});
+
+	it("has flush() report a turn that missed the journal when a failed delete is followed by failing appends (C7)", async () => {
+		const { storage, manager, sessionFile } = await fileSession();
+		failNextFileWrite();
+		manager.appendMessage(userTurn("missing"));
+		storage.parkNextDeleteToFail().fail();
+		await expect(manager.dropSession(sessionFile)).rejects.toThrow("EACCES");
+		spyOn(fs, "writeSync").mockImplementation(() => {
+			throw Object.assign(new Error("ENOSPC: synthetic append failure"), { code: "ENOSPC" });
+		});
+		try {
+			await expect(manager.flush()).rejects.toThrow("ENOSPC");
+		} finally {
+			mock.restore();
+		}
+	});
 
 	it("stays deleted on an indexed backend when a turn is appended while its remove is held", async () => {
 		const backend = new HeldRemoveBackend();
