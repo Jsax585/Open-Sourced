@@ -213,6 +213,34 @@ describe("session turns while every full rewrite fails", () => {
 	});
 });
 
+describe("session turns after an authoritative repair failed while every full rewrite fails", () => {
+	it.each([
+		{
+			repair: "recoverPersistenceFromCurrentState()",
+			run: (manager: SessionManager) => manager.recoverPersistenceFromCurrentState(),
+		},
+		{
+			repair: "a failed appendEntriesAtomically() batch",
+			run: (manager: SessionManager) =>
+				manager.appendEntriesAtomically(() => manager.appendCustomEntry("vibe-lifecycle")),
+		},
+	])("are saved after $repair over an unpublished in-place edit", async ({ run }) => {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		storage.failRewrites = true;
+		const entry = firstUserEntry(manager);
+		if (entry.message.role !== "user") throw new Error("Expected a user message");
+		entry.message.content = "pruned in place";
+		await manager.rewriteEntries().catch(() => undefined);
+		await expect(run(manager)).rejects.toThrow("indeterminate");
+
+		for (const turn of ["t1", "t2", "t3"]) manager.appendMessage(userTurn(turn));
+
+		await expect(manager.flush()).resolves.toBeUndefined();
+		const reopened = await reopen(sessionFile, sessionDir);
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "t1", "t2", "t3"]);
+	});
+});
+
 describe("an entry that missed the journal while full rewrites fail", () => {
 	it("is appended before the next turn after a hot append failed once", async () => {
 		const { storage, manager, sessionDir, sessionFile } = await fileSession();

@@ -811,7 +811,7 @@ interface SessionBodyStamp {
  * array, which every structural change replaces.
  */
 interface DurableFrontier {
-	readonly entries: readonly SessionEntry[];
+	entries: readonly SessionEntry[];
 	confirmed: number;
 	confirmedSize: number;
 	issued: number;
@@ -1537,8 +1537,9 @@ export class SessionManager {
 	#latchIndeterminate(operationError: Error, recoveryErrors: readonly Error[]): SessionPersistenceIndeterminateError {
 		const error = new SessionPersistenceIndeterminateError(operationError, recoveryErrors);
 		this.#diskFailure = error;
-		// Storage may hold a body nobody verified, so the next append republishes.
-		this.#durable = undefined;
+		// The frontier stays: a repair body that landed unverified starts with
+		// the same entries, and any other change to the file's size makes the
+		// next append republish instead.
 		forgetExternalizedImages(this.#blobs);
 		if (!this.#diskFailureLogged) {
 			this.#diskFailureLogged = true;
@@ -2421,6 +2422,15 @@ export class SessionManager {
 			}
 		}
 		const restoredLeaf = retainedAncestor(batch.externalLeafChanged ? batch.externalLeafId : batch.preBatchLeafId);
+		// The rolled-back entries never reached the file (a batch defers its
+		// appends), so a frontier over pre-batch entries still holds for the
+		// retained array, and later turns keep appending past it.
+		const durable = this.#durable;
+		if (
+			durable?.entries === this.#entries &&
+			this.#entries.slice(0, durable.issued).every(entry => !batch.entryIds.has(entry.id))
+		)
+			durable.entries = retained;
 		this.#entries = retained;
 		this.#index.rebuild(retained);
 		this.#index.setLeaf(restoredLeaf && this.#index.has(restoredLeaf) ? restoredLeaf : null);
