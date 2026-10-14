@@ -3213,6 +3213,20 @@ export class TUI extends Container {
 		placementRow: number,
 	): string {
 		if (screenRow < 0) return line;
+		// SIXEL pixels persist until their cells are erased, and a transparent
+		// raster does not cover an older copy. The renderer rewrites only changed
+		// rows, and the reserved rows above the drawing line are identical blanks,
+		// so a block that moved keeps its previous pixels and stacks a shifted copy.
+		// Erase every on-screen row of the block before drawing. When the origin
+		// is above the viewport, `CSI n A` would clamp at row 0 and paint the whole
+		// image lower, over the rows below; erase the visible rows and skip the draw.
+		const sixelLift = /^\x1b7\x1b\[(\d+)A\x1bP[0-9;]*q/.exec(line);
+		if (sixelLift) {
+			const lift = Number(sixelLift[1]);
+			const visibleAbove = Math.min(lift, screenRow);
+			const erase = visibleAbove > 0 ? `\x1b7${"\x1b[1A\x1b[2K".repeat(visibleAbove)}\x1b8` : "";
+			return lift > screenRow ? erase : erase + line;
+		}
 		const parsed = parseKittyDirectPlacementLine(line);
 		if (!parsed) return line;
 		const previous = placements?.get(placementRow);

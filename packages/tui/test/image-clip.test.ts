@@ -221,3 +221,76 @@ describe("direct placement lifecycle", () => {
 		}
 	});
 });
+
+describe("sixel direct placement", () => {
+	class RecordingTerminal extends VirtualTerminal {
+		written = "";
+		override write(data: string): void {
+			this.written += data;
+			super.write(data);
+		}
+	}
+
+	function sixelGraphic(onEncoded: () => void): Image {
+		return new Image(
+			BASE64_ONE_PIXEL_PNG,
+			"image/png",
+			{ fallbackColor: text => text },
+			{ maxWidthCells: 4, maxHeightCells: 4, requestRender: onEncoded },
+			{ widthPx: 40, heightPx: 40 },
+		);
+	}
+
+	async function start(render: (image: Image, columns: number) => string[]) {
+		terminal.imageProtocol = ImageProtocol.Sixel;
+		const term = new RecordingTerminal(40, 12);
+		const scheduler = new VirtualRenderScheduler();
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
+		const encoded = Promise.withResolvers<void>();
+		const image = sixelGraphic(() => {
+			encoded.resolve();
+			tui.requestRender();
+		});
+		tui.setFrameProvider({ renderFrame: size => ({ viewport: render(image, size.columns) }), acknowledgeHistory() {} });
+		tui.start();
+		await scheduler.settle(term);
+		// The first pass reserves rows; the settled off-thread encode repaints.
+		await encoded.promise;
+		await scheduler.settle(term);
+		return { term, scheduler, tui };
+	}
+
+	// The reserved rows above the drawing line are identical blanks, so a block
+	// that moves up one row rewrites only the drawing line; without an explicit
+	// erase the previous pixels stay and a transparent raster stacks over them.
+	it("erases every on-screen row of a moved block before redrawing it", async () => {
+		let top = 3;
+		const { term, scheduler, tui } = await start((image, columns) => [
+			...Array.from({ length: top }, (_, index) => `prose ${index}`),
+			...image.render(columns),
+			"prose below",
+		]);
+		try {
+			top = 2;
+			term.written = "";
+			tui.requestRender();
+			await scheduler.settle(term);
+			expect(term.written).toMatch(/\x1b7(?:\x1b\[1A\x1b\[2K){3}\x1b8\x1b7\x1b\[3A\x1bP[0-9;]*q/);
+		} finally {
+			tui.stop();
+		}
+	});
+
+	// With the origin above the viewport the terminal clamps `CSI n A` at row 0
+	// and paints the full image lower, over the prose below the block.
+	it("erases the visible rows of a block whose origin is above the viewport without drawing", async () => {
+		const { term, tui } = await start((image, columns) => [...image.render(columns).slice(2), "prose below"]);
+		try {
+			expect(term.written).not.toMatch(/\x1bP[0-9;]*q/);
+			expect(term.written).toContain("\x1b7\x1b[1A\x1b[2K\x1b8");
+			expect(term.getViewport()[2]?.trimEnd()).toBe("prose below");
+		} finally {
+			tui.stop();
+		}
+	});
+});

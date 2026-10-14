@@ -10,6 +10,7 @@
 ### Fixed
 
 - Fixed clipboard-image and image-path pastes being dropped while the composer draft is edited beneath an ask or approval dialog ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+- Fixed SIXEL charts and images stacking shifted copies over the text while streamed output pushes them up the screen: a moved image's blank reserved rows were never rewritten, so its old pixels stayed under the new transparent copy. The image's on-screen rows are now erased before each redraw, and an image whose top is above the screen is erased instead of drawn lower over the text below
 
 ## [18.10.4] - 2026-10-13
 
