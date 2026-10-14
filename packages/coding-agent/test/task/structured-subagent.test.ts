@@ -34,7 +34,11 @@ import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
 import { cfgRetryModelFallback } from "@oh-my-pi/pi-coding-agent/session/settings";
-import { cfgTaskAgentModelOverrides, cfgTaskEnableEffort } from "@oh-my-pi/pi-coding-agent/task/settings";
+import {
+	cfgTaskAgentModelOverrides,
+	cfgTaskDefaultAgentRole,
+	cfgTaskEnableEffort,
+} from "@oh-my-pi/pi-coding-agent/task/settings";
 
 const AGENT: AgentDefinition = {
 	name: "worker",
@@ -416,6 +420,44 @@ describe("structured subagent primitive", () => {
 		);
 		expect(dispatched[0]?.description).toBe("Refactor the auth flow");
 		await fs.rm(evalLabeled.artifactsDir, { recursive: true, force: true });
+	});
+
+	it("dispatches a model-less custom agent on its default role instead of the parent model", async () => {
+		mockDiscovery({ ...AGENT, source: "project" });
+		const childSession = session({
+			modelRoles: { critical_worker: "anthropic/claude-sonnet-4-5:high" },
+		});
+		childSession.getActiveModelString = () => "openai/gpt-4o";
+		cfgTaskDefaultAgentRole.override(childSession.settings, "@critical_worker");
+		const dispatched: executorModule.ExecutorOptions[] = [];
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			dispatched.push(options);
+			return result();
+		});
+
+		const run = await runStructuredSubagent(request({ session: childSession, retainArtifacts: true }));
+		expect(dispatched[0]?.modelOverride).toEqual(["anthropic/claude-sonnet-4-5:high"]);
+		expect(dispatched[0]?.modelRole).toBe("critical_worker");
+		await fs.rm(run.artifactsDir, { recursive: true, force: true });
+	});
+
+	it("keeps agentModelOverrides ahead of defaultAgentRole at spawn", async () => {
+		mockDiscovery();
+		const childSession = session({ modelRoles: { critical_worker: "anthropic/claude-sonnet-4-5:high" } });
+		cfgTaskDefaultAgentRole.override(childSession.settings, "@critical_worker");
+		cfgTaskAgentModelOverrides.override(childSession.settings, { worker: "openai/gpt-4o" });
+		const policy = await resolveEffectiveSubagentPolicy(request({ session: childSession }));
+		expect(policy.modelOverride).toEqual(["openai/gpt-4o"]);
+		expect(policy.modelRole).toBeUndefined();
+	});
+
+	it("rejects an unknown defaultAgentRole at spawn", async () => {
+		mockDiscovery();
+		const childSession = session();
+		cfgTaskDefaultAgentRole.override(childSession.settings, "@missing_worker");
+		await expect(resolveEffectiveSubagentPolicy(request({ session: childSession }))).rejects.toThrow(
+			'Invalid task.defaultAgentRole "@missing_worker": expected a known model role reference.',
+		);
 	});
 
 	it("derives modelRole from the raw selector source in request, override, definition order", async () => {
