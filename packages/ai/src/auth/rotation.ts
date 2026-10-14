@@ -5,6 +5,7 @@ import { extractProviderRetryHint } from "../utils/retry-after";
 import type { CredentialRankingContext, CredentialRankingStrategy } from "../usage";
 import type { RankingStrategyResolver } from "../usage/registry";
 import { raceSignal } from "./abort";
+import { extractStructuredApiKeyToken } from "./credential-key";
 import {
 	ACCOUNT_POLICY_BLOCK_SCOPE,
 	AUTH_BLOCK_SCOPE,
@@ -17,6 +18,7 @@ import type { CredentialBlocks } from "./blocks";
 import type { KeyOverrides } from "./cascade";
 import type { SessionAffinity } from "./affinity";
 import type { CredentialPool } from "./pool";
+import { resolveCredentialIdentityKey } from "./sqlite-credential-store";
 import type { AuthCredentialStore } from "./store";
 import type {
 	AuthCredential,
@@ -147,6 +149,7 @@ export class RateLimits implements LimitsApi {
 		blockedUntil: number,
 		routing: CredentialBlockRouting,
 		providerTimed: boolean,
+		quotaOrigin = false,
 	): UsageLimitMarkResult {
 		// Snapshot the live block deadline BEFORE this call's mark: the merged
 		// value below masks a pre-existing block shorter than this call's own
@@ -170,6 +173,7 @@ export class RateLimits implements LimitsApi {
 				blockedUntil,
 				routing.blockScope,
 				providerTimed,
+				quotaOrigin,
 			);
 		}
 
@@ -252,7 +256,7 @@ export class RateLimits implements LimitsApi {
 		let blockedUntil = requestedBlockedUntilMs;
 		// Heuristic/default fallbacks are guesses; provider-stated hints and
 		// report-derived extensions are timed.
-		let providerTimed = options?.providerTimed === true;
+		let providerTimed = options?.providerTimed === true || options?.retryAfterMs !== undefined;
 
 		// Epoch ms of the usage-report-derived reset. Authoritative only when
 		// EVERY exhausted window carries a future reset: a permanent cap
@@ -301,6 +305,7 @@ export class RateLimits implements LimitsApi {
 			blockedUntil,
 			routing,
 			providerTimed,
+			true,
 		);
 		return {
 			...rotation,
@@ -308,22 +313,13 @@ export class RateLimits implements LimitsApi {
 			...(reportResetAtMs === undefined ? {} : { reportResetAtMs }),
 		};
 	}
-	#extractStructuredApiKeyToken(apiKey: string): string | undefined {
-		if (!apiKey.startsWith("{")) return undefined;
-		try {
-			const parsed = JSON.parse(apiKey) as { token?: unknown };
-			return typeof parsed.token === "string" ? parsed.token : undefined;
-		} catch {
-			return undefined;
-		}
-	}
 
 	async #credentialMatchesApiKey(credential: AuthCredential, apiKey: string): Promise<boolean> {
 		if (credential.type === "api_key") {
 			return (await this.#deps.overrides.resolve(credential.key)) === apiKey;
 		}
 		if (credential.access === apiKey) return true;
-		return this.#extractStructuredApiKeyToken(apiKey) === credential.access;
+		return extractStructuredApiKeyToken(apiKey) === credential.access;
 	}
 	async invalidateMatching(
 		provider: string,
@@ -408,6 +404,43 @@ export class RateLimits implements LimitsApi {
 		const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
 		const exactCursorModelPolicy = AIError.isCursorPlanAccountPolicyError(error, provider);
 		const accountPolicy = exactCursorModelPolicy || AIError.isAccountPolicyError(error);
+		if (
+			status === 402 &&
+			typeof message === "string" &&
+			/\bdeactivated_workspace\b|\bdeactivated[_ ](?:org|organization|workspace)\b/i.test(message)
+		) {
+			const target = await this.#resolveCredentialTarget(provider, sessionId, {
+				credentialId: options?.credentialId,
+				apiKey: options?.apiKey,
+				allowStaleOAuthBearer: true,
+			});
+			if (!target) return { switched: false };
+			const source = this.#deps.pool.entries(provider)[target.index];
+			if (!source || source.credential.type !== "oauth") return { switched: false };
+			const providerKey = providerTypeKey(provider, "oauth");
+			const blockedUntil = Date.now() + DEFAULT_BLOCK_MS;
+			const orgId = source.credential.orgId?.trim();
+			const identity = resolveCredentialIdentityKey(provider, source.credential);
+			for (const [index, entry] of this.#deps.pool.entries(provider).entries()) {
+				if (entry.id === source.id || entry.credential.type !== "oauth") continue;
+				const sameWorkspace = orgId
+					? entry.credential.orgId?.trim() === orgId
+					: identity !== null && resolveCredentialIdentityKey(provider, entry.credential) === identity;
+				if (sameWorkspace)
+					this.#deps.blocks.mark(provider, providerKey, index, blockedUntil, ACCOUNT_POLICY_BLOCK_SCOPE);
+			}
+			const routing = this.#credentialBlockRouting(provider, "oauth", options?.modelId, ACCOUNT_POLICY_BLOCK_SCOPE);
+			const mark = this.#blockCredentialForRotation(
+				provider,
+				sessionId,
+				"oauth",
+				target.index,
+				blockedUntil,
+				routing,
+				false,
+			);
+			return awaitSiblingUnblock(mark, options?.signal);
+		}
 		if (!accountPolicy && (AIError.isUsageLimit(error) || isUsageLimitOutcome(status, message))) {
 			// Thread the provider-specified reset window (e.g. Devin "Your limit
 			// will reset in 13 minutes") into the block duration so the credential
