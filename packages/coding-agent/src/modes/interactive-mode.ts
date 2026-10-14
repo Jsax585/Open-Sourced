@@ -1714,6 +1714,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 	readonly #uiHelpers: UiHelpers;
 	#sttController: STTController | undefined;
+	#dictationStarting = false;
 	#micCursor: MicCursor | undefined;
 	#resizeHandler?: () => void;
 	#observerRegistry: SessionObserverRegistry;
@@ -1782,6 +1783,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editor.placeholder = () => this.#composerHint();
 		this.editor.prediction = () => this.#eventController.composerPrediction.text;
 		this.editor.composerState = () => this.#composerNativeState();
+		this.editor.onToggleDictation = () => void this.#toggleComposerDictation();
 		this.editor.imageReferenceHyperlink = imageReferenceHyperlink;
 		this.editor.skillFilePath = name => this.skillCommands.get(`skill:${name}`)?.filePath;
 		this.editor.modelMentionLabel = selector => {
@@ -3883,6 +3885,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	#composerNativeState(): ComposerNativeState {
 		const draft = this.editor.getText().trimStart();
+		const dictation = this.#sttController?.state ?? "idle";
 		return {
 			shell: this.isBashMode
 				? { kind: "bash", excluded: draft.startsWith("!!") }
@@ -3893,6 +3896,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			thinkingInModel: cfgStatusLineCompactThinkingLevel.get(settings),
 			rate: this.#nativeTokenRate(),
 			running: this.loadingAnimation !== undefined || this.session.isStreaming,
+			dictation:
+				cfgSttEnabled.get(settings) || this.#dictationStarting || dictation !== "idle"
+					? this.#dictationStarting && dictation === "idle"
+						? "starting"
+						: dictation
+					: undefined,
 			viewing: this.#viewingLineage(),
 			title: this.sessionManager.getSessionName(),
 		};
@@ -7409,6 +7418,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		nextEditor.placeholder = () => this.#composerHint();
 		nextEditor.prediction = () => this.#eventController.composerPrediction.text;
 		nextEditor.composerState = () => this.#composerNativeState();
+		nextEditor.onToggleDictation = () => void this.#toggleComposerDictation();
 		nextEditor.attachmentChips = previousEditor.attachmentChips;
 		nextEditor.imageReferenceHyperlink = imageReferenceHyperlink;
 		nextEditor.skillFilePath = name => this.skillCommands.get(`skill:${name}`)?.filePath;
@@ -8101,6 +8111,25 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async handleSTTToggle(): Promise<void> {
 		await this.#readySTTController()?.toggle(this.editor, this.#dictationCallbacks(this.editor));
+	}
+
+	/** The composer microphone: start a draft-only capture, or stop (or cancel the start of) the running one. */
+	async #toggleComposerDictation(): Promise<void> {
+		if (this.#dictationStarting || this.#sttController?.state === "recording") {
+			await this.#sttController?.stop();
+			return;
+		}
+		if (this.#sttController?.state === "transcribing") return;
+		const controller = this.#readySTTController();
+		if (!controller) return;
+		this.#dictationStarting = true;
+		this.ui.requestRender();
+		try {
+			await controller.start(this.editor, { ...this.#dictationCallbacks(this.editor), manualSubmit: true });
+		} finally {
+			this.#dictationStarting = false;
+			this.ui.requestRender();
+		}
 	}
 
 	dictationSpaceHold(target: DictationTarget): SpaceHoldHandler {
