@@ -202,6 +202,18 @@ export interface AgentStartEvent {
 	type: "agent_start";
 }
 
+export type PendingAnswerContinuation = "related" | "unrelated-background" | null;
+
+/** Durable selected-answer provenance at an agent-loop settle. */
+export interface SelectedAnswerSettle {
+	/** Persisted session entry for the selected assistant answer. */
+	entryId: string;
+	/** True when no continuation related to this answer is pending. */
+	isFinal: boolean;
+	/** Why the session may resume after this settle; background work does not invalidate finality. */
+	pendingContinuation: PendingAnswerContinuation;
+}
+
 /** Fired when an agent loop ends */
 export interface AgentEndEvent {
 	type: "agent_end";
@@ -212,6 +224,8 @@ export interface AgentEndEvent {
 	 * treat this as a user-visible terminal settle.
 	 */
 	willContinue?: boolean;
+	/** Present only when the selected assistant answer has a durable persisted identity. */
+	settle?: SelectedAnswerSettle;
 }
 
 /** Fired at the start of each turn */

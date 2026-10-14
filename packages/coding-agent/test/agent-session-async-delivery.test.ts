@@ -14,6 +14,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import type { AsyncJob } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { DaemonCompletionNotification } from "@oh-my-pi/pi-coding-agent/launch/protocol";
 import { buildAsyncResultBlock } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
@@ -59,6 +60,62 @@ describe("AgentSession owner-routed async delivery", () => {
 			authStorage.close();
 		}
 		AsyncJobManager.resetForTests();
+	});
+
+	it("marks an answer final while unrelated background delivery remains pending", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const gate = Promise.withResolvers<string>();
+		const mock = createMockModel({
+			responses: [{ content: ["Foreground answer"] }, { content: ["Background handled"] }],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			convertToLlm,
+			streamFn: mock.stream,
+		});
+		const authStorage = await AuthStorage.create(":memory:");
+		authStorages.push(authStorage);
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		const manager = new AsyncJobManager({});
+		AsyncJobManager.setInstance(manager);
+		const agentEnds: Array<{
+			settle?: { entryId: string; isFinal: boolean; pendingContinuation: string | null };
+		}> = [];
+		const extensionRunner = {
+			emit: async (event: {
+				settle?: { entryId: string; isFinal: boolean; pendingContinuation: string | null };
+			}) => {
+				if (event.settle) agentEnds.push(event);
+			},
+			emitBeforeAgentStart: async () => undefined,
+			hasHandlers: () => false,
+		} as unknown as ExtensionRunner;
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
+			modelRegistry: new ModelRegistry(authStorage),
+			agentId: "BackgroundOwner",
+			asyncJobManager: manager,
+			extensionRunner,
+		});
+		manager.register("bash", "unrelated job", () => gate.promise, {
+			id: "unrelated-job",
+			ownerId: "BackgroundOwner",
+		});
+
+		await session.prompt("Produce the foreground answer");
+		await session.waitForIdle();
+
+		expect(agentEnds[0]?.settle).toMatchObject({
+			isFinal: true,
+			pendingContinuation: "unrelated-background",
+		});
+		expect(agentEnds[0]?.settle?.entryId).toBeTruthy();
+
+		gate.resolve("job finished");
+		await session.settleAsyncWork();
 	});
 
 	it("delivers background text and images to the owning model and reaches quiescence", async () => {

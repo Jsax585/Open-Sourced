@@ -70,13 +70,21 @@ describe("AgentSession session_stop willContinue", () => {
 		});
 		settings.setModelRole("default", `${model.provider}/${model.id}`);
 
-		const extensionEmits: Array<{ type: string; willContinue?: boolean }> = [];
+		const extensionEmits: Array<{
+			type: string;
+			willContinue?: boolean;
+			settle?: { entryId: string; isFinal: boolean; pendingContinuation: string | null };
+		}> = [];
 		let sessionStopCalls = 0;
 		// Partial ExtensionRunner double — same pattern as sibling agent-session tests;
 		// only the emit surfaces used on the session_stop continuation path are implemented.
 		const extensionRunner = {
-			emit: async (event: { type: string; willContinue?: boolean }) => {
-				extensionEmits.push({ type: event.type, willContinue: event.willContinue });
+			emit: async (event: {
+				type: string;
+				willContinue?: boolean;
+				settle?: { entryId: string; isFinal: boolean; pendingContinuation: string | null };
+			}) => {
+				extensionEmits.push({ type: event.type, willContinue: event.willContinue, settle: event.settle });
 			},
 			emitBeforeAgentStart: async () => undefined,
 			hasHandlers: (eventType: string) => eventType === "session_stop",
@@ -106,10 +114,15 @@ describe("AgentSession session_stop willContinue", () => {
 		expect(sessionStopCalls).toBe(2);
 		expect(agentEnds).toHaveLength(2);
 		expect(mock.calls).toHaveLength(2);
-		// First settle scheduled the hidden session_stop turn.
+		// First settle scheduled a continuation related to the selected answer.
 		expect(agentEnds[0]?.willContinue).toBe(true);
-		// Final settle is terminal.
+		expect(agentEnds[0]?.settle).toMatchObject({ isFinal: false, pendingContinuation: "related" });
+		expect(agentEnds[0]?.settle?.entryId).toBeTruthy();
+		// The continuation produced a distinct durable answer and settled terminally.
 		expect(agentEnds[1]?.willContinue).toBeFalsy();
+		expect(agentEnds[1]?.settle).toMatchObject({ isFinal: true, pendingContinuation: null });
+		expect(agentEnds[1]?.settle?.entryId).toBeTruthy();
+		expect(agentEnds[1]?.settle?.entryId).not.toBe(agentEnds[0]?.settle?.entryId);
 		const last = session.agent.state.messages.at(-1);
 		expect(last?.role).toBe("assistant");
 		if (last?.role === "assistant") {
