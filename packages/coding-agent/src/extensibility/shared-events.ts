@@ -202,15 +202,17 @@ export interface AgentStartEvent {
 	type: "agent_start";
 }
 
-export type PendingAnswerContinuation = "related" | "unrelated-background" | null;
+export type PendingAnswerContinuation = "related" | "unrelated-background" | "unknown" | null;
 
 /** Durable selected-answer provenance at an agent-loop settle. */
 export interface SelectedAnswerSettle {
 	/** Persisted session entry for the selected assistant answer. */
 	entryId: string;
-	/** True when no continuation related to this answer is pending. */
+	/** Process-local identity shared with this answer's message lifecycle events. */
+	messageId: string;
+	/** True only when no related or unknown continuation is pending. */
 	isFinal: boolean;
-	/** Why the session may resume after this settle; background work does not invalidate finality. */
+	/** Why the session may resume after this settle; unknown never establishes finality. */
 	pendingContinuation: PendingAnswerContinuation;
 }
 

@@ -72,8 +72,9 @@ describe("AgentSession session_stop willContinue", () => {
 
 		const extensionEmits: Array<{
 			type: string;
+			messageId?: string;
 			willContinue?: boolean;
-			settle?: { entryId: string; isFinal: boolean; pendingContinuation: string | null };
+			settle?: { entryId: string; messageId: string; isFinal: boolean; pendingContinuation: string | null };
 		}> = [];
 		let sessionStopCalls = 0;
 		// Partial ExtensionRunner double — same pattern as sibling agent-session tests;
@@ -81,13 +82,23 @@ describe("AgentSession session_stop willContinue", () => {
 		const extensionRunner = {
 			emit: async (event: {
 				type: string;
+				messageId?: string;
 				willContinue?: boolean;
-				settle?: { entryId: string; isFinal: boolean; pendingContinuation: string | null };
+				settle?: { entryId: string; messageId: string; isFinal: boolean; pendingContinuation: string | null };
 			}) => {
-				extensionEmits.push({ type: event.type, willContinue: event.willContinue, settle: event.settle });
+				extensionEmits.push({
+					type: event.type,
+					messageId: event.messageId,
+					willContinue: event.willContinue,
+					settle: event.settle,
+				});
 			},
 			emitBeforeAgentStart: async () => undefined,
-			hasHandlers: (eventType: string) => eventType === "session_stop",
+			hasHandlers: (eventType: string) =>
+				eventType === "session_stop" ||
+				eventType === "message_start" ||
+				eventType === "message_update" ||
+				eventType === "message_end",
 			emitSessionStop: async () => {
 				sessionStopCalls++;
 				// Only the first settle should schedule a continuation; later settles are terminal.
@@ -110,6 +121,7 @@ describe("AgentSession session_stop willContinue", () => {
 		await session.waitForIdle();
 
 		const agentEnds = extensionEmits.filter(event => event.type === "agent_end");
+		const assistantEnds = extensionEmits.filter(event => event.type === "message_end" && event.messageId);
 		// One intermediate settle (continuation scheduled) + one terminal settle.
 		expect(sessionStopCalls).toBe(2);
 		expect(agentEnds).toHaveLength(2);
@@ -118,11 +130,13 @@ describe("AgentSession session_stop willContinue", () => {
 		expect(agentEnds[0]?.willContinue).toBe(true);
 		expect(agentEnds[0]?.settle).toMatchObject({ isFinal: false, pendingContinuation: "related" });
 		expect(agentEnds[0]?.settle?.entryId).toBeTruthy();
+		expect(agentEnds[0]?.settle?.messageId).toBe(assistantEnds[0]?.messageId);
 		// The continuation produced a distinct durable answer and settled terminally.
 		expect(agentEnds[1]?.willContinue).toBeFalsy();
 		expect(agentEnds[1]?.settle).toMatchObject({ isFinal: true, pendingContinuation: null });
 		expect(agentEnds[1]?.settle?.entryId).toBeTruthy();
 		expect(agentEnds[1]?.settle?.entryId).not.toBe(agentEnds[0]?.settle?.entryId);
+		expect(agentEnds[1]?.settle?.messageId).toBe(assistantEnds[1]?.messageId);
 		const last = session.agent.state.messages.at(-1);
 		expect(last?.role).toBe("assistant");
 		if (last?.role === "assistant") {

@@ -1060,6 +1060,8 @@ export type {
 export interface MessageStartEvent {
 	type: "message_start";
 	message: AgentMessage;
+	/** Process-local identity stable across start, update, end, and the matching settle event. */
+	messageId?: string;
 }
 
 /** Fired during assistant message streaming with token-by-token updates */
@@ -1067,6 +1069,8 @@ export interface MessageUpdateEvent {
 	type: "message_update";
 	message: AgentMessage;
 	assistantMessageEvent: AssistantMessageEvent;
+	/** Process-local identity stable across start, update, end, and the matching settle event. */
+	messageId?: string;
 }
 
 /**
@@ -1078,6 +1082,8 @@ export interface MessageUpdateEvent {
 export interface MessageEndEvent {
 	type: "message_end";
 	message: AgentMessage;
+	/** Process-local identity stable across start, update, end, and the matching settle event. */
+	messageId?: string;
 }
 
 /**

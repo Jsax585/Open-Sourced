@@ -115,6 +115,7 @@ export type MappedExtensionEvent =
 export function extensionEventFromSessionEvent(
 	event: AgentSessionEvent,
 	turnIndex: number,
+	messageId?: string,
 ): MappedExtensionEvent | null {
 	switch (event.type) {
 		case "agent_start":
@@ -135,9 +136,14 @@ export function extensionEventFromSessionEvent(
 				toolResults: event.toolResults,
 			};
 		case "message_start":
-			return { type: "message_start", message: event.message };
+			return { type: "message_start", message: event.message, messageId };
 		case "message_update":
-			return { type: "message_update", message: event.message, assistantMessageEvent: event.assistantMessageEvent };
+			return {
+				type: "message_update",
+				message: event.message,
+				assistantMessageEvent: event.assistantMessageEvent,
+				messageId,
+			};
 		case "message_end": {
 			// `message_end` is a notification, not a context-rewrite hook. Detach its
 			// payload so an async observer that mutates the event after an `await`
@@ -147,6 +153,7 @@ export function extensionEventFromSessionEvent(
 			const messageEnd: MessageEndEvent = {
 				type: "message_end",
 				message: cloneMessageNotification(event.message),
+				messageId,
 			};
 			return messageEnd;
 		}

@@ -103,6 +103,7 @@ describe("AgentSession owner-routed async delivery", () => {
 		manager.register("bash", "unrelated job", () => gate.promise, {
 			id: "unrelated-job",
 			ownerId: "BackgroundOwner",
+			answerRelation: "unrelated",
 		});
 
 		await session.prompt("Produce the foreground answer");
@@ -113,6 +114,59 @@ describe("AgentSession owner-routed async delivery", () => {
 			pendingContinuation: "unrelated-background",
 		});
 		expect(agentEnds[0]?.settle?.entryId).toBeTruthy();
+
+		gate.resolve("job finished");
+		await session.settleAsyncWork();
+	});
+
+	it("keeps selected-answer finality uncertain when pending async work has no relation provenance", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const gate = Promise.withResolvers<string>();
+		const mock = createMockModel({
+			responses: [{ content: ["Foreground answer"] }, { content: ["Background handled"] }],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			convertToLlm,
+			streamFn: mock.stream,
+		});
+		const authStorage = await AuthStorage.create(":memory:");
+		authStorages.push(authStorage);
+		const manager = new AsyncJobManager({});
+		AsyncJobManager.setInstance(manager);
+		const agentEnds: Array<{
+			settle?: { entryId: string; messageId: string; isFinal: boolean; pendingContinuation: string | null };
+		}> = [];
+		const extensionRunner = {
+			emit: async (event: {
+				settle?: { entryId: string; messageId: string; isFinal: boolean; pendingContinuation: string | null };
+			}) => {
+				if (event.settle) agentEnds.push(event);
+			},
+			emitBeforeAgentStart: async () => undefined,
+			hasHandlers: () => false,
+		} as unknown as ExtensionRunner;
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
+			modelRegistry: new ModelRegistry(authStorage),
+			agentId: "UnknownOwner",
+			asyncJobManager: manager,
+			extensionRunner,
+		});
+		manager.register("bash", "unknown relation job", () => gate.promise, {
+			id: "unknown-job",
+			ownerId: "UnknownOwner",
+		});
+
+		await session.prompt("Produce the foreground answer");
+		await session.waitForIdle();
+
+		expect(agentEnds[0]?.settle).toMatchObject({ isFinal: false, pendingContinuation: "unknown" });
+		expect(agentEnds[0]?.settle?.entryId).toBeTruthy();
+		expect(agentEnds[0]?.settle?.messageId).toBeTruthy();
 
 		gate.resolve("job finished");
 		await session.settleAsyncWork();

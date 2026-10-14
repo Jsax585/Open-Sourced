@@ -2990,6 +2990,21 @@ export class AgentSession implements SettingsScope {
 	 * delivery). The task executor's quiescence barrier polls this to
 	 * distinguish a scheduling pause from terminal completion.
 	 */
+	#pendingAsyncAnswerRelation(): "related" | "unrelated-background" | "unknown" | null {
+		const manager = this.#asyncJobManager;
+		if (!manager) return null;
+		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
+		const running = manager.getRunningJobs(ownerFilter).filter(job => !manager.isDeliverySuppressed(job.id));
+		const pendingIds = manager.getDeliveryState(ownerFilter).pendingJobIds;
+		const pending = pendingIds
+			.map(jobId => manager.getJob(jobId))
+			.filter((job): job is AsyncJob => job !== undefined && !manager.isDeliverySuppressed(job.id));
+		const jobs = [...running, ...pending];
+		if (jobs.some(job => job.answerRelation === "related")) return "related";
+		if (jobs.length > 0 && jobs.every(job => job.answerRelation === "unrelated")) return "unrelated-background";
+		return this.yieldQueue.hasDeliverable(ASYNC_RESULT_MESSAGE_TYPE) || jobs.length > 0 ? "unknown" : null;
+	}
+
 	hasPendingAsyncWork(): boolean {
 		return this.#hasPendingAsyncWake();
 	}
@@ -3337,6 +3352,26 @@ export class AgentSession implements SettingsScope {
 
 	// Track last assistant message for auto-compaction check
 	#lastAssistantMessage: AssistantMessage | undefined = undefined;
+	/** Process-local identities for live assistant message objects exposed to extensions. */
+	#extensionAssistantMessageIds = new WeakMap<AssistantMessage, string>();
+	#activeExtensionAssistantMessageId: string | undefined;
+	#nextExtensionAssistantMessageId = 0;
+
+	#trackExtensionMessageId(event: AgentSessionEvent): string | undefined {
+		if (event.type !== "message_start" && event.type !== "message_update" && event.type !== "message_end") {
+			return undefined;
+		}
+		if (event.message.role !== "assistant") return undefined;
+		const message = event.message as AssistantMessage;
+		if (event.type === "message_start") {
+			this.#activeExtensionAssistantMessageId = `${this.sessionId}:assistant:${++this.#nextExtensionAssistantMessageId}`;
+		}
+		const messageId = this.#activeExtensionAssistantMessageId;
+		if (!messageId) return undefined;
+		this.#extensionAssistantMessageIds.set(message, messageId);
+		if (event.type === "message_end") this.#activeExtensionAssistantMessageId = undefined;
+		return messageId;
+	}
 	/**
 	 * Terminal failure whose turn was pruned from history at settle: a classifier
 	 * refusal (#3591) or an abandoned length-stop recovery. Retained until the next
@@ -5059,12 +5094,19 @@ export class AgentSession implements SettingsScope {
 		const entryId = selectedAnswer?.[kPersistedSessionEntryId];
 		const pendingContinuation: SelectedAnswerSettle["pendingContinuation"] = options?.willContinue
 			? awaitingAsyncWork
-				? "unrelated-background"
+				? (this.#pendingAsyncAnswerRelation() ?? "unknown")
 				: "related"
 			: null;
-		const settle: SelectedAnswerSettle | undefined = entryId
-			? { entryId, isFinal: pendingContinuation !== "related", pendingContinuation }
-			: undefined;
+		const messageId = selectedAnswer ? this.#extensionAssistantMessageIds.get(selectedAnswer) : undefined;
+		const settle: SelectedAnswerSettle | undefined =
+			entryId && messageId
+				? {
+						entryId,
+						messageId,
+						isFinal: pendingContinuation === null || pendingContinuation === "unrelated-background",
+						pendingContinuation,
+					}
+				: undefined;
 		await this.#emitSessionEvent({
 			...event,
 			isTerminal: !options?.willContinue,
@@ -5153,6 +5195,7 @@ export class AgentSession implements SettingsScope {
 			return;
 		}
 
+		const messageId = this.#trackExtensionMessageId(event);
 		if (!this.#extensionRunner.hasHandlers(event.type)) return;
 		if (event.type === "agent_end") {
 			// `agent_end` extension notification is emitted from the settled
@@ -5160,7 +5203,7 @@ export class AgentSession implements SettingsScope {
 			// blocked by unrelated notification-only work.
 			return;
 		}
-		const mapped = extensionEventFromSessionEvent(event, this.#turnIndex);
+		const mapped = extensionEventFromSessionEvent(event, this.#turnIndex, messageId);
 		if (!mapped) return;
 		if (event.type === "turn_end") this.#turnIndex++;
 		await this.#extensionRunner.emit(mapped);

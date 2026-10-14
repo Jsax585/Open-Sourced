@@ -44,6 +44,8 @@ export const ASYNC_JOB_MANAGER_SHUTDOWN_REASON = Symbol("AsyncJobManager shutdow
 
 /** Kind of work a managed job runs; drives job-row badges and delivery labels. */
 export type AsyncJobType = "bash" | "task" | "eval";
+/** Whether a job's eventual delivery can continue the selected answer. */
+export type AsyncJobAnswerRelation = "related" | "unrelated";
 
 /** Settled job-body payload: delivery text plus its parsed structured output. */
 export interface AsyncJobRunResult {
@@ -103,6 +105,8 @@ export interface AsyncJob {
 	 * supply an id (e.g. legacy tests, SDK consumers without an agent context).
 	 */
 	ownerId?: string;
+	/** Explicit relation to the selected answer; absent means unknown. */
+	answerRelation?: AsyncJobAnswerRelation;
 	/**
 	 * Registry id of the subagent this job runs (task/tan/vibe jobs). Lets
 	 * job-view code link a job row to its AgentRegistry ref even when the job
@@ -229,6 +233,8 @@ export interface AsyncJobRegisterOptions {
 	ownerId?: string;
 	/** Registry id of the subagent this job runs; see {@link AsyncJob.agentId}. */
 	agentId?: string;
+	/** Explicit relation to the selected answer; absent means unknown. */
+	answerRelation?: AsyncJobAnswerRelation;
 	onProgress?: (text: string, details?: AsyncJobDetails) => void | Promise<void>;
 	/** Register the job in queued state; see {@link AsyncJob.queued}. */
 	queued?: boolean;
@@ -381,6 +387,7 @@ export class AsyncJobManager {
 			promise: Promise.resolve(),
 			ownerId: options?.ownerId,
 			agentId: options?.agentId,
+			answerRelation: options?.answerRelation,
 			process: options?.process,
 			queued: options?.queued === true,
 			...(options?.foreground ? { foreground: true } : {}),
