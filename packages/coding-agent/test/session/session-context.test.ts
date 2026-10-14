@@ -382,3 +382,94 @@ describe("buildSessionContext failed replay tails", () => {
 		expect(context.messages.map(message => message.role)).toEqual(["user", "assistant", "toolResult"]);
 	});
 });
+
+const LONG_TEXT = "x".repeat(400); // ~5 estimated rows at 80 cols + 1 framing row
+
+function longTurn(id: string, parent: string | null, ts: number): SessionEntry[] {
+	return [
+		userEntry(`${id}-user`, parent, `${id} prompt ${LONG_TEXT}`, ts),
+		assistantEntry(`${id}-assistant`, `${id}-user`, "stop", `reply ${LONG_TEXT}`, ts + 1),
+	];
+}
+
+describe("buildSessionContext transcriptReplayLimit", () => {
+	const turns = [
+		...longTurn("t1", null, 1),
+		...longTurn("t2", "t1-assistant", 3),
+		...longTurn("t3", "t2-assistant", 5),
+	];
+
+	it("draws every message when the limit is 0 or unset", () => {
+		for (const transcriptReplayLimit of [undefined, 0]) {
+			const context = buildSessionContext(structuredClone(turns), undefined, undefined, {
+				transcript: true,
+				collapseCompactedHistory: true,
+				transcriptReplayLimit,
+			});
+
+			expect(context.messages.map(message => message.role)).toEqual([
+				"user",
+				"assistant",
+				"user",
+				"assistant",
+				"user",
+				"assistant",
+			]);
+			expect(context.hiddenTranscriptMessages).toBeUndefined();
+		}
+	});
+
+	it("drops whole oldest turns and restarts at a user turn when the limit binds", () => {
+		// Each of the 6 messages estimates ceil(400/80)+1 = 6 rows → 36 total.
+		// A limit of 24 keeps exactly two turns (12 rows) once the third no
+		// longer fits; the kept slice must open on t2's user message.
+		const context = buildSessionContext(structuredClone(turns), undefined, undefined, {
+			transcript: true,
+			collapseCompactedHistory: true,
+			transcriptReplayLimit: 24,
+		});
+
+		expect(context.hiddenTranscriptMessages).toBe(2);
+		expect(context.messages.map(message => message.role)).toEqual(["user", "assistant", "user", "assistant"]);
+		const head = context.messages[0];
+		expect(head?.role).toBe("user");
+		if (head?.role !== "user") throw new Error(`Expected user head, received ${head?.role}`);
+		expect(head.content).toContain("t2 prompt");
+		// Newest messages are always drawn.
+		expect(context.messages.at(-1)?.role).toBe("assistant");
+	});
+
+	it("keeps the last message even when it alone exceeds the limit", () => {
+		const context = buildSessionContext(structuredClone(turns), undefined, undefined, {
+			transcript: true,
+			collapseCompactedHistory: true,
+			// 36 total; a limit below one turn's 12 rows still keeps the final
+			// assistant rather than emptying the transcript.
+			transcriptReplayLimit: 5,
+		});
+
+		expect(context.messages.length).toBeGreaterThan(0);
+		expect(context.messages.at(-1)?.role).toBe("assistant");
+	});
+
+	it("falls back to the full replay for negative, NaN, and fractional limits without throwing", () => {
+		for (const transcriptReplayLimit of [-3, Number.NaN, 1.5]) {
+			const context = buildSessionContext(structuredClone(turns), undefined, undefined, {
+				transcript: true,
+				collapseCompactedHistory: true,
+				transcriptReplayLimit,
+			});
+
+			expect(context.messages).toHaveLength(6);
+		}
+	});
+
+	it("never touches the non-transcript context path", () => {
+		const context = buildSessionContext(structuredClone(turns), undefined, undefined, {
+			transcriptReplayLimit: 5,
+		});
+
+		expect(context.messages).toHaveLength(6);
+		expect(context.hiddenTranscriptMessages).toBeUndefined();
+	});
+});

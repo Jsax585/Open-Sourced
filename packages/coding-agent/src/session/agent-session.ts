@@ -6610,7 +6610,10 @@ export class AgentSession implements SettingsScope {
 	 * `agent.replaceMessages` or a provider.
 	 */
 	buildTranscriptSessionContext(
-		options?: Pick<BuildSessionContextOptions, "collapseCompactedHistory" | "keepDanglingToolCalls">,
+		options?: Pick<
+			BuildSessionContextOptions,
+			"collapseCompactedHistory" | "keepDanglingToolCalls" | "transcriptReplayLimit"
+		>,
 	): SessionContext {
 		return this.#providerBoundary.buildTranscriptSessionContext(options);
 	}

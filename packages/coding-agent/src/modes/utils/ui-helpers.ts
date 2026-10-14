@@ -77,6 +77,7 @@ import {
 	type SkillPromptDetails,
 } from "../../session/messages";
 import type { SessionContext, StrippedToolCallsMarker } from "../../session/session-context";
+import { estimateTranscriptRows } from "../../session/session-context";
 import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { parseSlashCommand } from "../../slash-commands/helpers/parse";
 import { buildSkillCommandPrompt, invokeSkillCommandFromText, isKnownSkillCommand } from "../skill-command";
@@ -103,6 +104,7 @@ import {
 	cfgDisplayCollapseCompacted,
 	cfgDisplayShowTokenUsage,
 	cfgDisplayShowTurnTime,
+	cfgDisplayTranscriptReplayLimit,
 	cfgTerminalShowImages,
 } from "../settings";
 import { cfgReadToolResultPreview } from "../../tools/settings";
@@ -577,6 +579,50 @@ export class UiHelpers {
 		// (not finalized) so replayed and live frames still route to the card;
 		// the ids are handed back to the controller after the loop (#10447).
 		const backgroundCallIds = new Set<string>();
+		// Belt-and-braces transcript window: the builder above normally applies
+		// `display.transcriptReplayLimit`, but a caller-built context may still
+		// exceed it. Clamp to the newest messages that fit, restarting at a turn
+		// boundary (user request, bashExecution card, branch summary, user
+		// custom message) so an assistant fragment never opens the transcript.
+		const replayLimit = cfgDisplayTranscriptReplayLimit.get(settings);
+		if (Number.isInteger(replayLimit) && replayLimit > 0) {
+			let estimate = 0;
+			for (const message of sessionContext.messages) estimate += estimateTranscriptRows(message);
+			if (estimate > replayLimit) {
+				let cut = 0;
+				let acc = 0;
+				const count = sessionContext.messages.length;
+				for (let i = 0; i < count - 1; i++) {
+					acc += estimateTranscriptRows(sessionContext.messages[i]!);
+					if (estimate - acc > replayLimit) cut = i + 1;
+					else break;
+				}
+				if (cut > 0) {
+					let start = cut;
+					for (let i = cut; i >= 0; i--) {
+						const message = sessionContext.messages[i]!;
+						const boundary =
+							message.role === "user" ||
+							message.role === "bashExecution" ||
+							message.role === "branchSummary" ||
+							(message.role === "custom" && isUserTurnInitiator(message as CustomMessage));
+						if (boundary) {
+							start = i;
+							break;
+						}
+					}
+					if (start > 0) {
+						sessionContext.messages = sessionContext.messages.slice(start);
+						const droppedRow = new Text(
+							`${start} earlier messages not shown · full history preserved in the session file · /tree to browse`,
+							1,
+							0,
+						).setStyleFn(t => theme.fg("dim", t));
+						this.ctx.chatContainer.addChild(droppedRow);
+					}
+				}
+			}
+		}
 		const messages = sessionContext.messages;
 		const count = messages.length;
 		for (let i = 0; i < count; i++) {
@@ -984,6 +1030,7 @@ export class UiHelpers {
 		// mutating anything.
 		const context = this.ctx.viewSession.buildTranscriptSessionContext({
 			collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
+			transcriptReplayLimit: cfgDisplayTranscriptReplayLimit.get(settings),
 		});
 		for (const remaining of context.messages) {
 			if (remaining === message) return false;
@@ -1028,6 +1075,7 @@ export class UiHelpers {
 		let context = this.ctx.viewSession.buildTranscriptSessionContext({
 			collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
 			keepDanglingToolCalls: this.ctx.viewSession.isStreaming,
+			transcriptReplayLimit: cfgDisplayTranscriptReplayLimit.get(settings),
 		});
 		let replayEntryCount = this.ctx.viewSession.sessionManager.getEntries().length;
 
@@ -1097,6 +1145,7 @@ export class UiHelpers {
 				context = this.ctx.viewSession.buildTranscriptSessionContext({
 					collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
 					keepDanglingToolCalls: this.ctx.viewSession.isStreaming,
+					transcriptReplayLimit: cfgDisplayTranscriptReplayLimit.get(settings),
 				});
 				replayEntryCount = this.ctx.viewSession.sessionManager.getEntries().length;
 				await refreshAssistantMessageLinkTargets(

@@ -352,6 +352,7 @@ import {
 	cfgDisplayShowTokenUsage,
 	cfgDisplayShowTurnTime,
 	cfgDisplaySubagentLivePreview,
+	cfgDisplayTranscriptReplayLimit,
 	cfgGitEnabled,
 	cfgLoopConditionTimeoutMs,
 	cfgLoopMode,
@@ -447,6 +448,7 @@ const cfgLiveUiSettings = combine({
 	expandThinkingBlocks: cfgExpandThinkingBlocks,
 	"display.cacheMissMarker": cfgDisplayCacheMissMarker,
 	"display.collapseCompacted": cfgDisplayCollapseCompacted,
+	"display.transcriptReplayLimit": cfgDisplayTranscriptReplayLimit,
 	"display.showTokenUsage": cfgDisplayShowTokenUsage,
 	"display.showTurnTime": cfgDisplayShowTurnTime,
 	"tui.renderMermaid": cfgTuiRenderMermaid,
@@ -3577,7 +3579,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		// options are baked in at build time: rebuild, then retire rows already
 		// committed to native scrollback.
 		if (
-			any("display.cacheMissMarker", "display.collapseCompacted", "display.showTokenUsage", "display.showTurnTime")
+			any(
+				"display.cacheMissMarker",
+				"display.collapseCompacted",
+				"display.transcriptReplayLimit",
+				"display.showTokenUsage",
+				"display.showTurnTime",
+			)
 		) {
 			rebuildChat = true;
 		}
@@ -3888,6 +3896,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// their own mode.
 		const context = this.viewSession.buildTranscriptSessionContext({
 			collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
+			transcriptReplayLimit: cfgDisplayTranscriptReplayLimit.get(settings),
 		});
 		const preservedLiveToolCallIds = new Set<string>();
 		// A preserved pending-tool component whose result has already landed in

@@ -240,7 +240,11 @@ describe("UiHelpers.renderInitialMessages — transcript source", () => {
 
 		await new UiHelpers(ctx).renderInitialMessages();
 
-		expect(transcriptSpy).toHaveBeenCalledWith({ collapseCompactedHistory: true });
+		expect(transcriptSpy).toHaveBeenCalledWith({
+			collapseCompactedHistory: true,
+			keepDanglingToolCalls: undefined,
+			transcriptReplayLimit: 0,
+		});
 		expect(llmContextSpy).not.toHaveBeenCalled();
 		expect(renderSessionContextSpy).toHaveBeenCalledWith(transcript, {
 			updateFooter: true,

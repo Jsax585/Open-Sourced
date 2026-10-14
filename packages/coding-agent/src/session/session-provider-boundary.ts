@@ -144,13 +144,17 @@ export class SessionProviderBoundary {
 
 	/** Builds the full display-only transcript context. */
 	buildTranscriptSessionContext(
-		options?: Pick<BuildSessionContextOptions, "collapseCompactedHistory" | "keepDanglingToolCalls">,
+		options?: Pick<
+			BuildSessionContextOptions,
+			"collapseCompactedHistory" | "keepDanglingToolCalls" | "transcriptReplayLimit"
+		>,
 	): SessionContext {
 		return deobfuscateSessionContext(
 			this.#host.sessionManager.buildSessionContext({
 				transcript: true,
 				collapseCompactedHistory: options?.collapseCompactedHistory,
 				keepDanglingToolCalls: options?.keepDanglingToolCalls,
+				transcriptReplayLimit: options?.transcriptReplayLimit,
 			}),
 			this.#host.obfuscator(),
 		);

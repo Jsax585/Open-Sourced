@@ -717,6 +717,19 @@ export const cfgDisplayCollapseCompacted = register({
 	},
 });
 
+export const cfgDisplayTranscriptReplayLimit = register({
+	id: "display.transcriptReplayLimit",
+	type: "number",
+	default: 0,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Redrawn History",
+		description:
+			"Maximum rendered transcript rows (at the current terminal width) drawn when the transcript is rebuilt — resume, rewind, redraw, or a display-setting change. 0 draws the full history.",
+	},
+});
+
 export const cfgShowHardwareCursor = register({
 	id: "showHardwareCursor",
 	type: "boolean",

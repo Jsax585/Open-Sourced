@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { customMessageEntryMessage, isUserRequestEntry } from "@oh-my-pi/pi-tui/chat/transcript-entry";
+import { customMessageEntryMessage, isUserRequestEntry, textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import { getAnthropicCompactionPayload, isTurnStartEntry } from "@oh-my-pi/pi-agent-core/compaction";
 import {
 	coerceServiceTierByFamily,
@@ -14,6 +14,7 @@ import {
 	createCustomMessage,
 	INTERRUPTED_THINKING_MESSAGE_TYPE,
 	isEmptyErrorTurn,
+	isUserAuthoredMessage,
 	PREWALK_PLAN_MESSAGE_TYPE,
 	VIBE_MODE_CONTEXT_MESSAGE_TYPE,
 } from "./messages";
@@ -127,6 +128,12 @@ export interface SessionContext {
 	 * Only populated in transcript mode.
 	 */
 	cacheMissExplainedAt?: boolean[];
+	/**
+	 * Transcript mode only: number of oldest messages dropped by the
+	 * `transcriptReplayLimit` window (rendered-row estimate). `undefined` when
+	 * nothing was dropped / no limit applies.
+	 */
+	hiddenTranscriptMessages?: number;
 }
 
 /** Lists session model strings to try when restoring, in fallback order. */
@@ -168,6 +175,13 @@ export interface BuildSessionContextOptions {
 	transcript?: boolean;
 	/** In transcript mode, elide entries replaced by the latest compaction. */
 	collapseCompactedHistory?: boolean;
+	/**
+	 * Transcript mode only: maximum rendered rows kept for the display
+	 * transcript. `0`/`undefined` keeps every message (legacy full redraw).
+	 * Positive values drop whole oldest turns until the estimated rendered row
+	 * count fits; the kept slice always restarts at a user turn.
+	 */
+	transcriptReplayLimit?: number;
 	/**
 	 * Transcript mode only: keep `toolCall` blocks that have no matching
 	 * `toolResult` on the path instead of stripping them. Pass this when the
@@ -230,6 +244,32 @@ export function getOpenAiRemoteCompactionPayload(
 
 /** Session entries that replay as transcript messages: persisted messages and custom messages. */
 export type TranscriptEntry = SessionMessageEntry | CustomMessageEntry;
+
+/**
+ * Cheap upper-bound estimate of the rendered terminal rows a transcript
+ * message occupies: ~80 columns per wrapped line, plus one row of framing
+ * (header/spacer) per message, plus one row per tool result (its blocks
+ * render as separate rows). Deliberately coarse — the transcript renderer is
+ * the true measure; this only bounds the rebuild window.
+ */
+export function estimateTranscriptRows(message: AgentMessage): number {
+	const text =
+		"content" in message
+			? textContent(message.content as string | ReadonlyArray<{ type: string; text?: string }>)
+			: message.role === "bashExecution"
+				? message.command
+				: message.role === "branchSummary" || message.role === "compactionSummary"
+					? message.summary
+					: "";
+	let rows = Math.ceil(text.length / 80) + 1;
+	if (message.role === "assistant") {
+		for (const block of message.content) {
+			if (block.type === "toolCall") rows++;
+		}
+	}
+	if (message.role === "toolResult") rows++;
+	return rows;
+}
 
 export function isTranscriptEntry(entry: SessionEntry): entry is TranscriptEntry {
 	return entry.type === "message" || entry.type === "custom_message";
@@ -360,6 +400,7 @@ export function buildSessionContext(
 	// 3. Emit messages after compaction
 	const messages: AgentMessage[] = [];
 	const cacheMissExplainedAt: boolean[] = [];
+	let hiddenTranscriptMessages: number | undefined;
 	let pendingReset = false;
 	let currentMode = "none";
 	let lastAssistantModel: string | undefined;
@@ -768,8 +809,64 @@ export function buildSessionContext(
 		}
 	}
 
+	// Transcript replay window: bound the rebuilt display to the newest N
+	// estimated rendered rows. Drop whole oldest turns; restart the kept slice
+	// at a user turn so an assistant fragment never opens the transcript. A
+	// still-running background call's parked card lives in the newest messages
+	// (the walk emits it last), so trimming the front never orphans it.
+	// Hidden assistants must still consume reset/model bookkeeping — rerun
+	// their tracking here so cache-miss/served-model markers stay correct.
+	const replayLimit = options?.transcript ? options.transcriptReplayLimit : undefined;
+	if (replayLimit !== undefined && Number.isInteger(replayLimit) && replayLimit > 0) {
+		let estimate = 0;
+		for (const message of messages) estimate += estimateTranscriptRows(message);
+		if (estimate > replayLimit) {
+			// Walk forward accumulating rows; the last index whose predecessor
+			// still fits becomes the cut candidate. Never drop the last message.
+			let cut = 0;
+			let acc = 0;
+			for (let i = 0; i < messages.length - 1; i++) {
+				acc += estimateTranscriptRows(messages[i]!);
+				if (estimate - acc > replayLimit) cut = i + 1;
+				else break;
+			}
+			if (cut > 0) {
+				// Restart at a turn start at or before `cut` — same boundary rule as
+				// the walk: user request, bashExecution card, branch summary, or
+				// user-authored custom message. Keep the suffix when no earlier
+				// boundary exists (mirrors the collapsed-transcript trim).
+				let start = cut;
+				for (let i = cut; i >= 0; i--) {
+					const message = messages[i]!;
+					const boundary =
+						message.role === "user" ||
+						message.role === "bashExecution" ||
+						message.role === "branchSummary" ||
+						(message.role === "custom" && isUserAuthoredMessage(message));
+					if (boundary) {
+						start = i;
+						break;
+					}
+				}
+				if (start > 0) {
+					// Hidden assistants still consume model bookkeeping exactly as the
+					// visible walk did; rerun it for the dropped suffix so the
+					// cache-miss/served-model markers of the kept tail stay correct.
+					for (let i = 0; i < start; i++) {
+						const message = messages[i]!;
+						if (message.role === "assistant") trackMessageCacheState(message);
+					}
+					messages.splice(0, start);
+					cacheMissExplainedAt.splice(0, start);
+				}
+				hiddenTranscriptMessages = start;
+			}
+		}
+	}
+
 	return {
 		messages,
+		hiddenTranscriptMessages,
 		cacheMissExplainedAt: options?.transcript ? cacheMissExplainedAt : undefined,
 		thinkingLevel,
 		configuredThinkingLevel,
