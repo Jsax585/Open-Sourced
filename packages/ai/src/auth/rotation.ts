@@ -5,6 +5,7 @@ import { extractProviderRetryHint } from "../utils/retry-after";
 import type { CredentialRankingContext, CredentialRankingStrategy } from "../usage";
 import type { RankingStrategyResolver } from "../usage/registry";
 import { raceSignal } from "./abort";
+import { extractStructuredApiKeyToken } from "./credential-key";
 import {
 	ACCOUNT_POLICY_BLOCK_SCOPE,
 	AUTH_BLOCK_SCOPE,
@@ -308,22 +309,13 @@ export class RateLimits implements LimitsApi {
 			...(reportResetAtMs === undefined ? {} : { reportResetAtMs }),
 		};
 	}
-	#extractStructuredApiKeyToken(apiKey: string): string | undefined {
-		if (!apiKey.startsWith("{")) return undefined;
-		try {
-			const parsed = JSON.parse(apiKey) as { token?: unknown };
-			return typeof parsed.token === "string" ? parsed.token : undefined;
-		} catch {
-			return undefined;
-		}
-	}
 
 	async #credentialMatchesApiKey(credential: AuthCredential, apiKey: string): Promise<boolean> {
 		if (credential.type === "api_key") {
 			return (await this.#deps.overrides.resolve(credential.key)) === apiKey;
 		}
 		if (credential.access === apiKey) return true;
-		return this.#extractStructuredApiKeyToken(apiKey) === credential.access;
+		return extractStructuredApiKeyToken(apiKey) === credential.access;
 	}
 	async invalidateMatching(
 		provider: string,
