@@ -80,6 +80,7 @@ import {
 	cfgTaskMaxConcurrency,
 	cfgTaskMaxRecursionDepth,
 	cfgTaskMaxRuntimeMs,
+	cfgTaskModelMentions,
 	cfgTaskSpeculativeLaunch,
 	cfgTaskStructured,
 } from "./settings";
@@ -710,7 +711,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			agents:
 				discoverySnapshots.get(discoveryCacheKey(this.session.cwd, this.session.effectiveExtensionRoots?.())) ??
 				this.#discoveredAgents,
-			sessionAgents: this.session.advertisedSessionAgents?.() ?? this.session.getSessionAgents?.() ?? [],
+			sessionAgents: cfgTaskModelMentions.get(this.session.settings)
+				? (this.session.advertisedSessionAgents?.() ?? this.session.getSessionAgents?.() ?? [])
+				: [],
 			isolationEnabled: !planMode && isolationEnabled,
 			applyIsolatedChanges: cfgTaskIsolationApply.get(this.session.settings),
 			disabledAgents,

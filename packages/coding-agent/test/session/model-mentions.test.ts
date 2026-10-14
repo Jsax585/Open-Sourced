@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
@@ -16,6 +19,13 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/model-mentions";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getBundledAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
+import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
+import { cfgTaskModelMentions } from "@oh-my-pi/pi-coding-agent/task/settings";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
+import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
 function model(provider: string, id: string, name: string): Model {
 	return buildModel({
@@ -58,6 +68,88 @@ afterEach(() => {
 });
 
 describe("model mentions", () => {
+	test("existing composer provider stops model completions after live disabling", async () => {
+		await initTheme();
+		const settings = Settings.isolated({});
+		const ctx = {
+			settings,
+			keybindings: KeybindingsManager.inMemory(),
+			session: {
+				modelRegistry: registry,
+				scopedModels: [],
+				effectiveServiceTier: () => undefined,
+			},
+		} as unknown as InteractiveModeContext;
+		const provider = new InputController(ctx).createAutocompleteProvider([], "/tmp");
+		const before = await provider.getSuggestions(["^"], 0, 1);
+		expect(before?.items.map(item => item.value)).toContain("b/y");
+		cfgTaskModelMentions.set(settings, false);
+		const after = await provider.getSuggestions(["^"], 0, 1);
+		expect(after?.items ?? []).toEqual([]);
+	});
+
+	test("disabled mentions leave selectors literal and mint no agents", () => {
+		const disabled = new ModelMentionRegistry({
+			sessionManager: session,
+			modelRegistry: registry,
+			scopedModels: () => scoped,
+			enabled: () => false,
+		});
+		expect(disabled.expandMentions("ask ^a/x and ^b/y")).toBe("ask ^a/x and ^b/y");
+		expect(disabled.mentions).toEqual([]);
+		expect(disabled.sessionAgents()).toEqual([]);
+		expect(session.getBranch()).toEqual([]);
+	});
+
+	test.each([true, false])("resumed model-mention exercise: enabled=%s", async enabled => {
+		const dir = await mkdtemp(join(tmpdir(), "omp-model-mentions-"));
+		const persisted = SessionManager.create(dir, dir);
+		persisted.appendCustomEntry(MODEL_MENTION_ENTRY_TYPE, { agent: "m1", selector: "b/y", name: "Y" });
+		await persisted.ensureOnDisk();
+		await persisted.close();
+		const file = persisted.getSessionFile();
+		if (!file) throw new Error("Missing persisted session file");
+		const history = await readFile(file, "utf8");
+		const resumed = await SessionManager.open(file, dir);
+		const agentSession = new AgentSession({
+			agent: new Agent({
+				initialState: { model: models[0], systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: createMockModel({ responses: [] }).stream,
+			}),
+			sessionManager: resumed,
+			modelRegistry: registry,
+			settings: Settings.isolated(enabled ? {} : { "task.modelMentions": false }),
+		});
+		try {
+			const agents = agentSession.getSessionAgents().map(agent => agent.name);
+			expect(agents).toEqual(enabled ? ["m1"] : []);
+			expect(agentSession.modelMentions).toEqual([{ agent: "m1", selector: "b/y", name: "Y" }]);
+			expect(await readFile(file, "utf8")).toBe(history);
+			console.log(`resumed persisted model_mention: task.modelMentions=${enabled} agents=${JSON.stringify(agents)}`);
+			if (enabled) {
+				const task = await TaskTool.create({
+					cwd: dir,
+					hasUI: false,
+					settings: agentSession.settings,
+					getSessionFile: () => file,
+					getSessionSpawns: () => "*",
+					getSessionAgents: () => agentSession.getSessionAgents(),
+				} as ToolSession);
+				expect(task.description).toContain("`m1`");
+				cfgTaskModelMentions.set(agentSession.settings, false);
+				expect(agentSession.getSessionAgents()).toEqual([]);
+				const result = await task.execute("stale-model-mention", { agent: "m1", task: "Work." });
+				expect(result.content).toContainEqual(
+					expect.objectContaining({ type: "text", text: expect.stringContaining('Unknown agent "m1"') }),
+				);
+				expect(await readFile(file, "utf8")).toBe(history);
+			}
+		} finally {
+			await agentSession.dispose();
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("only user prompts authorize model agents before dispatch", async () => {
 		vi.spyOn(registry, "getApiKey").mockResolvedValue("test-key");
 		const agent = new Agent({
@@ -92,7 +184,7 @@ describe("model mentions", () => {
 		}
 	});
 
-	test("child sessions retain parent model agents and reserve their pseudonyms", async () => {
+	test.each([true, false])("child model agents honor model mentions enabled=%s", async enabled => {
 		vi.spyOn(registry, "getApiKey").mockResolvedValue("test-key");
 		const task = getBundledAgent("task");
 		if (!task) throw new Error("Missing bundled task agent");
@@ -106,15 +198,20 @@ describe("model mentions", () => {
 			agent,
 			sessionManager: SessionManager.inMemory(),
 			modelRegistry: registry,
-			settings: Settings.isolated({ "compaction.enabled": false }),
+			settings: Settings.isolated({ "compaction.enabled": false, "task.modelMentions": enabled }),
 			inheritedSessionAgents: [inheritedAgent],
 		});
 		try {
 			await childSession.prompt("ask ^a/x");
-			expect(childSession.getSessionAgents().map(candidate => [candidate.name, candidate.model])).toEqual([
-				["m1", ["b/y"]],
-				["m2", ["a/x"]],
-			]);
+			expect(childSession.getSessionAgents().map(candidate => [candidate.name, candidate.model])).toEqual(
+				enabled
+					? [
+							["m1", ["b/y"]],
+							["m2", ["a/x"]],
+						]
+					: [],
+			);
+			expect(childSession.modelMentions).toHaveLength(enabled ? 1 : 0);
 		} finally {
 			await childSession.dispose();
 		}

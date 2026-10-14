@@ -84,6 +84,15 @@ describe("task async preflight", () => {
 		return result;
 	}
 
+	it("omits model-mention guidance even when advertised agents were cached before disabling", async () => {
+		mockDiscovery();
+		const session = createSession({ manager: manager(), settings: { "task.modelMentions": false } });
+		session.advertisedSessionAgents = () => [{ ...taskAgent, name: "m1", model: ["b/y"] }];
+		const tool = await TaskTool.create(session);
+		expect(tool.description).not.toContain("`m<N>`");
+		expect(tool.description).not.toContain("`m1`");
+	});
+
 	it.each([
 		{
 			name: "Unknown",

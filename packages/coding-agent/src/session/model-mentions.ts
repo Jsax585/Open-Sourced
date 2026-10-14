@@ -45,6 +45,8 @@ export interface ModelMentionHost {
 	sessionManager: SessionManager;
 	modelRegistry: ModelRegistry;
 	scopedModels(): ReadonlyArray<Model>;
+	/** Whether model mentions may authorize task agents in this session. */
+	enabled?(): boolean;
 	/** User-authorized model agents inherited from the parent session. */
 	inheritedAgents?: readonly AgentDefinition[];
 }
@@ -90,7 +92,7 @@ export class ModelMentionRegistry {
 
 	/** Register user-tagged models and replace their tokens with persisted agent tags. */
 	expandMentions(text: string): string {
-		if (!text.includes("^")) return text;
+		if (this.#host.enabled?.() === false || !text.includes("^")) return text;
 		return text.replace(MODEL_MENTION_RE, (token, delimiter: string, selector: string) => {
 			let mention = this.#bySelector.get(selector);
 			if (!mention) {
@@ -110,6 +112,7 @@ export class ModelMentionRegistry {
 
 	/** Expose inherited and session-tagged models as general-purpose task agents. */
 	sessionAgents(): AgentDefinition[] {
+		if (this.#host.enabled?.() === false) return [];
 		const task = getBundledAgent("task");
 		if (!task) throw new Error("Bundled task agent is unavailable");
 		const inheritedNames = new Set(this.#inheritedAgents.map(agent => agent.name));

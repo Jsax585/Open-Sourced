@@ -468,6 +468,18 @@ export const cfgTaskMaxEffort = register({
 	},
 });
 
+export const cfgTaskModelMentions = register({
+	id: "task.modelMentions",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Model Mentions",
+		description: "Allow user-tagged models to become task agents, including resumed and inherited model mentions.",
+	},
+});
+
 export const cfgTaskDisabledAgents = register({
 	id: "task.disabledAgents",
 	protocolDefault: ["rpc", "acp"],
