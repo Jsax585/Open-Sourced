@@ -116,6 +116,17 @@
 - Fixed truncated Factory Droid Gemini responses ending as a hard error or a half-received tool call instead of being retried ([#15103](https://github.com/can1357/oh-my-pi/pull/15103) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed Factory Droid Gemini ignoring an error the server reports mid-response, which hid its status and retried errors that cannot succeed ([#15103](https://github.com/can1357/oh-my-pi/pull/15103) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed resumed OpenAI Responses sessions (xAI, Factory Droid, OpenAI and other hosts) dropping all earlier encrypted reasoning on their first request; GitHub Copilot still rebuilds history until its first response ([#15148](https://github.com/can1357/oh-my-pi/pull/15148) by [@will-bogusz](https://github.com/will-bogusz))
+### Added
+
+- Added Cursor Auto routing and client-owned tool passthrough with routing-aware gateway model labels ([#10099](https://github.com/can1357/oh-my-pi/pull/10099) by [@jroth1111](https://github.com/jroth1111)).
+
+### Fixed
+
+- Fixed Cursor passthrough allowlists to use protocol tool cases and restrict advertised client MCP definitions instead of disabling live tools ([#10099](https://github.com/can1357/oh-my-pi/pull/10099) by [@jroth1111](https://github.com/jroth1111)).
+
+- Fixed Cursor replies losing their first text chunk when it arrives alongside decimal timing metadata ([#11324](https://github.com/can1357/oh-my-pi/pull/11324) by [@jroth1111](https://github.com/jroth1111)).
+- Fixed Cursor routed-model updates being discarded despite advertising support, while preserving explicit requested model labels ([#11324](https://github.com/can1357/oh-my-pi/pull/11324) by [@jroth1111](https://github.com/jroth1111)).
+- Fixed Cursor capability/session controls and agent-mode user messages on the serialized request, with HTTP/1 streaming using the CLI's Bidi request contract ([#11324](https://github.com/can1357/oh-my-pi/pull/11324) by [@jroth1111](https://github.com/jroth1111)).
 
 ## [18.8.7] - 2026-10-09
 

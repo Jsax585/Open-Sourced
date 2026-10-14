@@ -7,6 +7,12 @@ provider "cursor" {
 		env "CURSOR_API_KEY"
 	}
 
+	// Synthetic Auto uses default; authoritative discovery wire IDs take precedence.
+	models "auto" {
+		request-model-id "default"
+		pricing-status "variable"
+	}
+
 	thinking-mode "effort"
 	// Cursor relays its upstream's image count (Claude 600, GPT 1,500) and took
 	// a 64 MB body; 60 images at the 500 KiB resize target stay near 31 MB.
