@@ -114,9 +114,11 @@ import { loadPinnedSessionIds, sortPinnedFirst } from "./session-pins";
 import {
 	FileSessionStorage,
 	MemorySessionStorage,
+	SESSION_HEADER_PREFIX_BYTES,
 	type SessionStorage,
 	type SessionStorageWriter,
 	SessionWriteConflictError,
+	sessionHeaderIdInPrefix,
 } from "./session-storage";
 import { type SessionTitleUpdate, serializeTitleSlot } from "./session-title-slot";
 import {
@@ -1398,8 +1400,12 @@ export class SessionManager {
 	 * they are whole records, this manager's next entries in order followed
 	 * only by entries that parent into known ones or are roots (`parentId:
 	 * null`, as after {@link resetLeaf}), keep those and extend the frontier
-	 * over all of them, and return whether it did. Otherwise the caller
-	 * republishes, and its conflict recovery keeps them.
+	 * over all of them, and return whether it did. A root names nothing this
+	 * manager knows, so it is kept only while the file's header, read from a
+	 * bounded prefix, still names this session: another session's journal
+	 * that replaced a header-only file measures the same and starts with a
+	 * root. Otherwise the caller republishes, and its conflict recovery keeps
+	 * them or moves the session off a file that holds another one.
 	 */
 	#adoptEntriesAppendedPastFrontier(sessionFile: string, durable: DurableFrontier, storedSize: number): boolean {
 		if (this.#storage.defersSyncPublish || !this.#storage.readTextRangeSync || durable.issued !== durable.confirmed)
@@ -1423,6 +1429,7 @@ export class SessionManager {
 		const foreign: SessionEntry[] = [];
 		const foreignIds = new Set<string>();
 		let shared = durable.confirmed;
+		let hasRoot = false;
 		for (const record of records) {
 			if (!isAppendedEntry(record)) return false;
 			if (this.#index.has(record.id)) {
@@ -1435,8 +1442,24 @@ export class SessionManager {
 				parentId === null ||
 				(typeof parentId === "string" && (this.#index.has(parentId) || foreignIds.has(parentId)));
 			if (!parentKnown || foreignIds.has(record.id)) return false;
+			hasRoot ||= parentId === null;
 			foreign.push(record);
 			foreignIds.add(record.id);
+		}
+		if (hasRoot) {
+			let headerId: string | undefined;
+			try {
+				headerId = sessionHeaderIdInPrefix(
+					this.#storage.readTextRangeSync(
+						sessionFile,
+						0,
+						Math.min(SESSION_HEADER_PREFIX_BYTES, durable.issuedSize),
+					),
+				);
+			} catch {
+				return false;
+			}
+			if (headerId !== this.#sessionId) return false;
 		}
 		resolveBlobRefsInEntriesSync(foreign, this.#blobs);
 		this.#adoptForeignEntries({ foreign, at: shared, shared, extendsFrontier: true }, storedSize);

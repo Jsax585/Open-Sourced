@@ -550,8 +550,25 @@ function sessionOwnersDir(): string {
 	return testSessionOwnersDir() ?? getSessionOwnersDir();
 }
 
-/** Bytes read to find a header at claim time: the title slot plus a header line fit well inside. */
-const SESSION_HEADER_PREFIX_BYTES = 64 * 1024;
+/** Bytes read to find a header: the title slot plus a header line fit well inside. */
+export const SESSION_HEADER_PREFIX_BYTES = 64 * 1024;
+
+/**
+ * The session id in the header at the start of `prefix` (past the title
+ * slot), or `undefined` when the prefix holds no complete session header.
+ */
+export function sessionHeaderIdInPrefix(prefix: string): string | undefined {
+	if (parseTitleSlotFromContent(prefix)) prefix = prefix.slice(prefix.indexOf("\n") + 1);
+	const end = prefix.indexOf("\n");
+	if (end === -1) return undefined;
+	try {
+		const entry: unknown = JSON.parse(prefix.slice(0, end));
+		if (entry && typeof entry === "object" && "type" in entry && entry.type === "session" && "id" in entry) {
+			return typeof entry.id === "string" ? entry.id : undefined;
+		}
+	} catch {}
+	return undefined;
+}
 
 /**
  * The session id in the header of the file at `sessionPath`, read
@@ -571,16 +588,7 @@ function readSessionHeaderIdSync(sessionPath: string): string | undefined {
 	} catch {
 		return undefined;
 	}
-	if (parseTitleSlotFromContent(prefix)) prefix = prefix.slice(prefix.indexOf("\n") + 1);
-	const end = prefix.indexOf("\n");
-	if (end === -1) return undefined;
-	try {
-		const entry: unknown = JSON.parse(prefix.slice(0, end));
-		if (entry && typeof entry === "object" && "type" in entry && entry.type === "session" && "id" in entry) {
-			return typeof entry.id === "string" ? entry.id : undefined;
-		}
-	} catch {}
-	return undefined;
+	return sessionHeaderIdInPrefix(prefix);
 }
 
 /**

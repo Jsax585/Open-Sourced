@@ -651,6 +651,54 @@ describe("a turn appended after another writer's entries", () => {
 		);
 	});
 
+	it.each([
+		{ replace: "copied over", put: (from: string, to: string) => fs.copyFileSync(from, to) },
+		{
+			replace: "renamed over",
+			put: (from: string, to: string) => {
+				fs.copyFileSync(from, `${to}.replacement`);
+				fs.renameSync(`${to}.replacement`, to);
+			},
+		},
+	])("moves to a sibling when another session's journal was $replace a header-only session file", async ({ put }) => {
+		const root = TempDir.createSync("@pi-durable-frontier-");
+		tempDirs.push(root);
+		const sessionDir = path.join(root.path(), "sessions");
+		const manager = SessionManager.create(root.path(), sessionDir, new FileSessionStorage());
+		managers.push(manager);
+		const sessionFile = await manager.newSession();
+		if (!sessionFile) throw new Error("Expected a persisted session file");
+		const other = SessionManager.create(root.path(), sessionDir, new FileSessionStorage());
+		managers.push(other);
+		other.appendMessage(userTurn("other session's turn"));
+		other.appendMessage(assistantMessage("other session's reply"));
+		await other.flush();
+		const otherFile = other.getSessionFile();
+		if (!otherFile) throw new Error("Expected a persisted session file");
+		const otherId = other.getSessionId();
+		await other.close();
+		// Two fresh headers in one cwd measure the same, so the bytes past this
+		// session's frontier are exactly the other session's entries, a root first.
+		const otherLines = fs.readFileSync(otherFile, "utf8").split("\n");
+		expect(Buffer.byteLength(`${otherLines[0]}\n${otherLines[1]}\n`)).toBe(fs.statSync(sessionFile).size);
+		put(otherFile, sessionFile);
+
+		manager.appendMessage(userTurn("own turn"));
+		manager.appendMessage(assistantMessage("own reply"));
+		await expect(manager.flush()).resolves.toBeUndefined();
+		// A full rewrite after the flush must not put this session's id on that journal.
+		await manager.setTaskPromptCacheKey("forced-rewrite");
+		await manager.close();
+
+		const movedTo = manager.getSessionFile();
+		expect(movedTo).not.toBe(sessionFile);
+		const replaced = await reopen(sessionFile, sessionDir);
+		expect(replaced.getSessionId()).toBe(otherId);
+		expect(userTurnsOf(replaced.getEntries())).toEqual(["other session's turn"]);
+		if (!movedTo) throw new Error("Expected the session to keep a file");
+		expect(userTurnsOf((await reopen(movedTo, sessionDir)).getBranch())).toEqual(["own turn"]);
+	});
+
 	it("reads back only the bytes the other writer appended", async () => {
 		const storage = new ReadCountingStorage();
 		const first = await fileSession();
