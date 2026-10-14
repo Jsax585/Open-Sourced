@@ -18,7 +18,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/indexed-session-storage";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { parseSessionContent } from "@oh-my-pi/pi-coding-agent/session/session-loader";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { SESSION_TAIL_APPEND_CHUNK_BYTES, SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { SessionWriteConflictError } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import * as piUtils from "@oh-my-pi/pi-utils";
 
@@ -31,6 +31,10 @@ class FakeBackend implements SessionStorageBackend {
 	fullWriteCalls = 0;
 	/** Reject the next N append calls with a transient failure. */
 	failAppends = 0;
+	/** When set, let this many append calls land, then reject the next one. */
+	rejectAppendAfter: number | undefined;
+	/** UTF-8 bytes of every append publish that landed. */
+	readonly appendBytes: number[] = [];
 	/** Reject the next N whole-file publishes with a transient failure. */
 	failWrites = 0;
 	/** When set, the next whole-journal publish waits for it before landing; `writeHeld` resolves once one waits. */
@@ -65,6 +69,11 @@ class FakeBackend implements SessionStorageBackend {
 			this.failAppends -= 1;
 			throw new Error("transient backend append failure");
 		}
+		if (this.rejectAppendAfter !== undefined && this.rejectAppendAfter-- === 0) {
+			this.rejectAppendAfter = undefined;
+			throw new Error("transient backend append failure");
+		}
+		this.appendBytes.push(Buffer.byteLength(line, "utf8"));
 		this.files.set(path, (this.files.get(path) ?? "") + line);
 		this.mtimes.set(path, this.#mtime++);
 	}
@@ -735,5 +744,53 @@ describe("an indexed durably discarded entry", () => {
 		await settle(manager, storage);
 
 		await expectDiscardSurvivesRestart(backend, sessionFile, discardedId);
+	});
+});
+
+describe("an indexed backlog of entries the backend rejected", () => {
+	/** About half a MiB serialized: whole entries, several to a chunk. */
+	const payload = "x".repeat(499_000);
+	/** Enough entries for about three chunks. */
+	const backlog = Math.ceil((3 * SESSION_TAIL_APPEND_CHUNK_BYTES) / payload.length);
+	const wholeBacklog = Array.from({ length: backlog }, (_, i) => i);
+
+	/** The backlog indexes the backend holds, in file order, duplicates included. */
+	function backlogOnBackend(backend: FakeBackend, sessionFile: string): number[] {
+		return parseSessionContent(backend.files.get(sessionFile) ?? "").entries.flatMap(entry => {
+			if (entry.type !== "custom" || entry.customType !== "backlog") return [];
+			const data = entry.data;
+			return data && typeof data === "object" && "i" in data && typeof data.i === "number" ? [data.i] : [];
+		});
+	}
+
+	it("is appended in confirmed chunks, and a rejected middle chunk is re-sent from the last confirmed one", async () => {
+		const { backend, storage, manager, sessionFile } = await seededIndexedSession();
+		backend.failWrites = Number.POSITIVE_INFINITY;
+		backend.failAppends = 1;
+		for (let i = 0; i < backlog; i++) manager.appendCustomEntry("backlog", { i, payload });
+		backend.appendBytes.length = 0;
+		// The heal's first chunk lands and its second is rejected.
+		backend.rejectAppendAfter = 1;
+
+		await expect(manager.flush()).rejects.toThrow("transient backend append failure");
+		const kept = backlogOnBackend(backend, sessionFile);
+		expect(kept.length).toBeGreaterThan(0);
+		expect(kept.length).toBeLessThan(backlog);
+		expect(kept).toEqual(wholeBacklog.slice(0, kept.length));
+
+		await expect(manager.flush()).resolves.toBeUndefined();
+		expect(backlogOnBackend(backend, sessionFile)).toEqual(wholeBacklog);
+		expect(Math.max(...backend.appendBytes)).toBeLessThanOrEqual(
+			SESSION_TAIL_APPEND_CHUNK_BYTES + payload.length + 1024,
+		);
+
+		// The frontier covers the whole journal, so the next turn is a plain
+		// append although every whole-journal publish still fails.
+		manager.appendMessage({ role: "user", content: "after", timestamp: Date.now() });
+		await expect(manager.flush()).resolves.toBeUndefined();
+		await storage.drain();
+		const branch = (await reopenIndexed(backend, sessionFile)).getBranch();
+		expect(userTurnsOf(branch)).toEqual(["before", "after"]);
+		expect(branch.at(-2)).toMatchObject({ type: "custom", data: { i: backlog - 1 } });
 	});
 });

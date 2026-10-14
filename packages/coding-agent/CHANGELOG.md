@@ -8,6 +8,7 @@
 - Fixed agents continuing after a session persistence failure without context about the risk; the next prompt now receives a hidden warning to preserve critical work ([#15404](https://github.com/can1357/oh-my-pi/pull/15404) by [@sjawhar](https://github.com/sjawhar)).
 - Fixed `omp --resume <path>` parsing an unchanged session file twice; resume now re-reads the file to confirm it is unchanged and parses it again only after a change ([#15404](https://github.com/can1357/oh-my-pi/pull/15404) by [@sjawhar](https://github.com/sjawhar)).
 - Fixed full rewrites of large file-backed sessions retaining a second transcript-sized serialization; file storage now streams the journal and verifies uncertain publication by an exact streamed comparison ([#15404](https://github.com/can1357/oh-my-pi/pull/15404) by [@sjawhar](https://github.com/sjawhar)).
+- Fixed a session that could not write for a while losing its whole backlog once storage recovered; the missed entries are now written in bounded chunks, and a write that still fails reports the current error instead of an earlier one ([#15404](https://github.com/can1357/oh-my-pi/pull/15404) by [@sjawhar](https://github.com/sjawhar)).
 
 ## [18.10.4] - 2026-10-13
 
