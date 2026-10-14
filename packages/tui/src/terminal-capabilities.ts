@@ -954,13 +954,18 @@ export function parseKittyDirectPlacementLine(line: string): ParsedKittyPlacemen
 	};
 }
 
-const SIXEL_DIRECT_PLACEMENT_LINE = /^\x1b7\x1b\[(\d+)A\x1bP[0-9;]*q/;
+// Anchored to the whole line: save cursor, `CUU(lift)`, the DCS SIXEL payload
+// (`\x1bP…q`, terminated by ST), restore cursor — nothing else. A composed row
+// that puts sibling text beside the placement no longer matches, so callers
+// leave it to the plain rewrite path.
+const SIXEL_DIRECT_PLACEMENT_LINE = /^\x1b7\x1b\[(\d+)A\x1bP[0-9;]*q[^\x1b]*(?:\x1b(?!\\)[^\x1b]*)*\x1b\\\x1b8$/;
 
 /**
- * Parse a frame line that draws a SIXEL {@link Image} block from its last
- * line: save cursor, `CUU(lift)` to the image origin, the SIXEL payload,
- * restore cursor. Returns null for anything else, including single-row
- * images, which draw in place.
+ * Parse a frame line that is exactly one SIXEL {@link Image} block placement:
+ * save cursor, `CUU(lift)` to the image origin, the SIXEL payload, restore
+ * cursor. Returns null for anything else, including single-row images (which
+ * draw in place, without the save/restore wrapper) and composed rows that mix
+ * the placement with sibling content.
  */
 export function parseSixelDirectPlacementLine(line: string): { lift: number } | null {
 	const m = SIXEL_DIRECT_PLACEMENT_LINE.exec(line);

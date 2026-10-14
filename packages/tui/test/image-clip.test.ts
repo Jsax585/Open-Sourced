@@ -325,9 +325,10 @@ describe("sixel direct placement", () => {
 	});
 
 	// A row can compose an image with sibling content (the git image diff puts
-	// text beside it). The block erase clears whole rows, so the sibling text in
-	// the rows above the drawing line must be written back before the draw.
-	it("restores sibling content in the rows it erases above a composed block", async () => {
+	// text beside it). Such a row is not a pure SIXEL placement, so the
+	// block-erase path leaves it alone: the row is rewritten in place and its
+	// sibling text is never cleared.
+	it("leaves a composed image row to the plain rewrite instead of erasing it", async () => {
 		let top = 3;
 		const { term, scheduler, tui } = await start((image, columns) => [
 			...Array.from({ length: top }, (_, index) => `prose ${index}`),
@@ -336,10 +337,12 @@ describe("sixel direct placement", () => {
 		]);
 		try {
 			top = 2;
+			term.written = "";
 			tui.requestRender();
 			await scheduler.settle(term);
+			expect(term.written).not.toContain("\x1b[1A\x1b[2K");
 			const viewport = term.getViewport().map(line => line.trimEnd());
-			for (const index of [0, 1, 2]) expect(viewport[top + index]).toContain(`│side ${index}`);
+			for (const index of [0, 1, 2, 3]) expect(viewport[top + index]).toContain(`│side ${index}`);
 		} finally {
 			tui.stop();
 		}

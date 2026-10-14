@@ -666,13 +666,6 @@ interface PreparedLines {
 	rows: PreparedLine[];
 }
 
-/** Rows of the frame being written and the row now written, for rewriting a SIXEL block's neighbours. */
-interface FrameRows {
-	rows: readonly PreparedLine[];
-	index: number;
-	width: number;
-}
-
 interface LineClassification {
 	asciiWidth: number | undefined;
 	isImage: boolean;
@@ -3219,30 +3212,26 @@ export class TUI extends Container {
 		screenRow: number,
 		placements: Map<number, LiveImagePlacement> | undefined,
 		placementRow: number,
-		options?: { clamped?: boolean; frame?: FrameRows },
+		options?: { clamped?: boolean },
 	): string {
 		if (screenRow < 0) return line;
 		// SIXEL pixels persist until their cells are erased, and a transparent
 		// raster does not cover an older copy. The live renderer rewrites only
 		// changed rows, and the reserved rows above the drawing line are identical
 		// blanks, so a block that moved keeps its previous pixels and stacks a
-		// shifted copy. Erase every on-screen row of the block before drawing,
-		// then write back whatever else those rows hold (a composed row can put
-		// text beside the image). When the origin is above the viewport,
-		// `CSI n A` would clamp at row 0 and paint the whole image lower, over
-		// the rows below; erase the visible rows and skip the draw. A write that
-		// scrolled past the last row clamps `screenRow` and cannot tell where the
-		// origin is; it draws as is.
+		// shifted copy. Erase every on-screen row of the block before drawing.
+		// This runs only for a line that is exactly one placement
+		// (parseSixelDirectPlacementLine); a composed row that mixes the placement
+		// with sibling content is left to the plain rewrite path, which cannot
+		// tell the image's rows from the sibling's. When the origin is above the
+		// viewport, `CSI n A` would clamp at row 0 and paint the whole image lower,
+		// over the rows below; erase the visible rows and skip the draw. A write
+		// that scrolled past the last row clamps `screenRow` and cannot tell where
+		// the origin is; it draws as is.
 		const sixel = options?.clamped ? null : parseSixelDirectPlacementLine(line);
 		if (sixel) {
 			const visibleAbove = Math.min(sixel.lift, screenRow);
-			let erase = visibleAbove > 0 ? `\x1b7${"\x1b[1A\x1b[2K".repeat(visibleAbove)}\x1b8` : "";
-			const frame = options?.frame;
-			for (let up = visibleAbove; up > 0 && frame; up--) {
-				const row = frame.rows[frame.index - up];
-				if (!row || row.isImage || row.line === "" || row.line === SEGMENT_RESET) continue;
-				erase += `\x1b7\x1b[${up}A\r${this.#lineRewriteSequence(row, frame.width)}\x1b8`;
-			}
+			const erase = visibleAbove > 0 ? `\x1b7${"\x1b[1A\x1b[2K".repeat(visibleAbove)}\x1b8` : "";
 			return sixel.lift > screenRow ? erase : erase + line;
 		}
 		const parsed = parseKittyDirectPlacementLine(line);
@@ -3587,7 +3576,7 @@ export class TUI extends Container {
 					width,
 					newTop + index,
 					this.#osc66SpacerGlyphWidth(prepared.lines, index),
-					{ imagePlacements: this.#screenImagePlacements, frame: { rows: prepared.rows, index, width } },
+					{ imagePlacements: this.#screenImagePlacements },
 				)}`;
 			}
 			if (this.#providerWindow.length > rows && newTop + rows < height) {
@@ -3616,7 +3605,6 @@ export class TUI extends Container {
 						{
 							blankRow: compactReplay,
 							clamped: screenRow >= height,
-							frame: { rows: preparedHistory.rows, index, width },
 						},
 					),
 				);
@@ -3633,7 +3621,6 @@ export class TUI extends Container {
 						{
 							blankRow: compactReplay,
 							clamped: screenRow >= height,
-							frame: { rows: prepared.rows, index, width },
 							imagePlacements: index < replayViewportRows ? undefined : this.#screenImagePlacements,
 							imageRow: newTop + index,
 						},
@@ -4264,7 +4251,6 @@ export class TUI extends Container {
 			imagePlacements?: Map<number, LiveImagePlacement>;
 			imageRow?: number;
 			clamped?: boolean;
-			frame?: FrameRows;
 		},
 	): string {
 		// End every rewrite at column zero. ConPTY can materialize a pending
@@ -4286,7 +4272,6 @@ export class TUI extends Container {
 				ERASE_LINE +
 				this.#imageLineSequence(line.line, screenRow, options?.imagePlacements, options?.imageRow ?? screenRow, {
 					clamped: options?.clamped,
-					frame: options?.frame,
 				});
 		} else {
 			const terminalLine = this.#terminalLine(line);
@@ -4451,7 +4436,7 @@ export class TUI extends Container {
 				width,
 				r,
 				this.#osc66SpacerGlyphWidth(prepared.lines, r),
-				{ imagePlacements: this.#altImagePlacements, frame: { rows: prepared.rows, index: r, width } },
+				{ imagePlacements: this.#altImagePlacements },
 			);
 		}
 		this.#altPreviousLines = prepared.lines;
