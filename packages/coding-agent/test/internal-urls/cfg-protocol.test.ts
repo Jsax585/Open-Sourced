@@ -259,8 +259,6 @@ describe("CfgProtocolHandler", () => {
 	it.each([
 		{ shared: true, global: undefined, previous: true },
 		{ shared: false, global: undefined, previous: true },
-		{ shared: true, global: true, previous: true },
-		{ shared: false, global: true, previous: true },
 		{ shared: true, global: false, previous: false },
 		{ shared: false, global: false, previous: false },
 	])("reports the global previous value after a session change (%j)", async ({ shared, global, previous }) => {
@@ -296,6 +294,43 @@ describe("CfgProtocolHandler", () => {
 		expect(cfgWorktreeClone.get(persistent)).toBe(!previous);
 		expect(cfgWorktreeClone.get(settings)).toBe(!previous);
 	});
+
+	it.each([false, true])(
+		"refreshes a queued save of %s after an earlier save replaces the global value",
+		async value => {
+			const persistent = Settings.isolated();
+			cfgWorktreeClone.set(persistent, true);
+			const settings = persistent;
+			cfgWorktreeClone.override(settings, false);
+			const firstPrompt = Promise.withResolvers<void>();
+			const firstAnswer = Promise.withResolvers<"once">();
+			const asked: CfgChangeRequest[] = [];
+			setCfgApprovalHost({
+				approve: async request => {
+					asked.push(request);
+					if (asked.length === 1) {
+						firstPrompt.resolve();
+						return firstAnswer.promise;
+					}
+					return "once";
+				},
+				applied: () => {},
+				persistentSettings: persistent,
+			});
+
+			const first = write("cfg://worktree/clone/save", "false", settings);
+			await firstPrompt.promise;
+			const second = write("cfg://worktree/clone/save", String(value), settings);
+			firstAnswer.resolve("once");
+			const [firstResult, secondResult] = await Promise.all([first, second]);
+
+			expect(asked.map(request => request.previous)).toEqual(["true", "false"]);
+			expect(firstResult.details?.cfg).toMatchObject({ outcome: "applied", previous: "true" });
+			expect(secondResult.details?.cfg).toMatchObject({ outcome: "applied", previous: "false" });
+			expect(textOf(secondResult)).toContain("(was false)");
+			expect(persistent.globalValue(cfgWorktreeClone)).toBe(value);
+		},
+	);
 
 	it.each(["deny", "timeout"] as const)("reports the effective value when a save returns %s", async answer => {
 		const settings = Settings.isolated();

@@ -436,12 +436,14 @@ export class CfgProtocolHandler implements ProtocolHandler {
 				request.shadowedBy =
 					layer === "env" && leaf.envName ? `environment variable ${leaf.envName}` : PROVENANCE_LABELS[layer];
 			}
-			// Describe the global value being replaced, not a session override or another higher layer.
-			savePrevious = formatValue(leaf, persistent.globalValue(leaf) ?? leaf.default);
 		}
 		const sessionId = callerSession(context).getSessionId?.() ?? undefined;
-		const approvalRequest = save ? { ...request, previous: savePrevious } : request;
-		const decision = approvalQueue.then(() => decide(host, approvalRequest, sessionId, context?.signal));
+		const decision = approvalQueue.then(() => {
+			// Earlier queued saves may have replaced the global value since this write began.
+			if (save) savePrevious = formatValue(leaf, host.persistentSettings.globalValue(leaf) ?? leaf.default);
+			const approvalRequest = save ? { ...request, previous: savePrevious } : request;
+			return decide(host, approvalRequest, sessionId, context?.signal);
+		});
 		approvalQueue = decision.catch(() => undefined);
 		const answer = await decision;
 		if (answer === "timeout") {
@@ -459,6 +461,8 @@ export class CfgProtocolHandler implements ProtocolHandler {
 			return finish("applied", layer ? { layer, scope: settings } : undefined);
 		}
 		const persistent = host.persistentSettings;
+		// The global layer can also change while the approval prompt is open.
+		savePrevious = formatValue(leaf, persistent.globalValue(leaf) ?? leaf.default);
 		leaf.set(persistent, value);
 		await persistent.flush();
 		// A session sharing the persistent instance drops its override so the saved value
