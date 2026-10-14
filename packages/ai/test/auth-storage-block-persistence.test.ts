@@ -156,7 +156,7 @@ describe("AuthStorage credential block persistence", () => {
 		}
 
 		const reopenedStore = await SqliteAuthCredentialStore.open(dbPath);
-		const reopenedStorage = new AuthStorage(reopenedStore);
+		const reopenedStorage = new AuthStorage(reopenedStore, { usageProviderResolver: () => undefined });
 		await reopenedStorage.credentials.reload();
 		try {
 			const fableKey = await reopenedStorage.keys.get(PROVIDER, "session-3", { modelId: "claude-fable-5" });
@@ -366,7 +366,7 @@ describe("AuthStorage credential block persistence", () => {
 		disablingStore.close();
 
 		const reopenedStore = await SqliteAuthCredentialStore.open(dbPath);
-		const reopenedStorage = new AuthStorage(reopenedStore);
+		const reopenedStorage = new AuthStorage(reopenedStore, { usageProviderResolver: () => undefined });
 		await reopenedStorage.credentials.reload();
 		try {
 			const key = await reopenedStorage.keys.get(PROVIDER, "a");
