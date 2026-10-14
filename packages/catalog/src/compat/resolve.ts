@@ -1145,7 +1145,7 @@ function readRuleThinking(axes: ResolvedAxes): RuleThinking {
  * stays the authoritative capability surface.
  */
 function compatReasoning<TApi extends Api>(spec: ModelSpec<TApi>, axes: ResolvedAxes): boolean {
-	if (spec.reasoning) return true;
+	if (spec.reasoning || axes.catalog.reasoning === true) return true;
 	return axes.reasoning && readRuleThinking(axes).upgradeNeutral === true;
 }
 
@@ -1176,6 +1176,7 @@ function resolveThinkingPolicy<TApi extends Api>(
 		spec.thinking !== undefined && Array.isArray(spec.thinking.efforts) && spec.thinking.efforts.length > 0
 			? spec.thinking
 			: undefined;
+	// Spec reasoning OR reviewed catalog `reasoning` (neutral seeds/routers) opts in.
 	// An explicit wire vocabulary is authoritative when discovery reports no
 	// reasoning (e.g. Synthetic's `none`-only off-switch): reviewed KDL must
 	// not re-expand it into an unadvertised ladder. Absent metadata is
@@ -1203,10 +1204,24 @@ function resolveThinkingPolicy<TApi extends Api>(
 	if (explicitThinking !== undefined) {
 		return fillExplicitThinking(spec, facts, compat, explicitThinking, rule);
 	}
+	// Grokbot AvailableModels marks unrecognized-only effort vocabularies with an
+	// explicit empty ladder; preserve-authored-thinking must not backfill KDL.
+	if (
+		axes.catalog.preserveAuthoredThinking === true &&
+		spec.thinking !== undefined &&
+		spec.thinking.efforts.length === 0
+	) {
+		return undefined;
+	}
 	if (compat !== undefined && "trustExplicitThinkingOnly" in compat && compat.trustExplicitThinkingOnly === true) {
 		return undefined;
 	}
 	if (rule.efforts?.length === 0) return undefined;
+	// Catalog fact `preserve-authored-thinking`: do not invent a fallback ladder
+	// when no thinking-efforts rule matched (AvailableModels / seed-owned surface).
+	if (axes.catalog.preserveAuthoredThinking === true && (rule.efforts === undefined || rule.efforts.length === 0)) {
+		return undefined;
+	}
 	const config: ThinkingConfig = {
 		mode: rule.mode ?? defaultThinkingMode(spec, facts),
 		efforts: rule.efforts ?? fallbackEfforts(spec, compat),
@@ -1396,6 +1411,30 @@ export function resolveModelPolicy(input: ModelSpec<Api>, route?: ResolveRoute):
 		catalog: axes.catalog,
 		request: resolveRequestPolicy(axes),
 	};
+}
+
+/**
+ * Whether a provider's KDL policy marks catalogs as credential-scoped
+ * (`credential-scoped-catalog`). Used by gen:models exclusions and cold
+ * refresh gates so provider-name tables do not duplicate the rule tree.
+ */
+export function isCredentialScopedCatalogProvider(providerId: string): boolean {
+	const trimmed = providerId.trim();
+	if (!trimmed) return false;
+	return (
+		resolveModelPolicy({
+			id: "__omp_credential_scoped_probe__",
+			name: "__omp_credential_scoped_probe__",
+			api: "openai-completions",
+			provider: trimmed,
+			baseUrl: "https://example.invalid",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: null,
+			maxTokens: null,
+		}).catalog.credentialScopedCatalog === true
+	);
 }
 
 /**
