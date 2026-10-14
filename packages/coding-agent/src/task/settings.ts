@@ -475,6 +475,12 @@ export const cfgTaskDisabledAgents = register({
 	default: [] as string[],
 });
 
+export const cfgTaskDefaultAgentRole = register({
+	id: "task.defaultAgentRole",
+	type: "string",
+	default: undefined,
+});
+
 export const cfgTaskAgentModelOverrides = register({
 	id: "task.agentModelOverrides",
 	protocolDefault: ["rpc", "acp"],

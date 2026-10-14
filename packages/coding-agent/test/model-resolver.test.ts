@@ -1180,6 +1180,62 @@ describe("resolveAgentAdvisorRolePattern", () => {
 	});
 });
 describe("resolveAgentModelPatterns", () => {
+	test("inherits the parent model for an agent without a model when defaultAgentRole is unset", () => {
+		const settings = Settings.isolated({ modelRoles: { default: "anthropic/claude-sonnet-4-5" } });
+		expect(resolveAgentModelSelection({ settings, activeModelPattern: "openai/gpt-4o" })).toEqual({
+			patterns: ["openai/gpt-4o"],
+			role: undefined,
+		});
+	});
+
+	test("routes a model-less agent through defaultAgentRole with its effort and fallback chain key", () => {
+		const settings = Settings.isolated({
+			"task.defaultAgentRole": "@critical_worker",
+			modelRoles: { critical_worker: "anthropic/claude-sonnet-4-5:high,openai/gpt-4o:off" },
+		});
+		expect(resolveAgentModelSelection({ settings, activeModelPattern: "openai/gpt-4o" })).toEqual({
+			patterns: ["anthropic/claude-sonnet-4-5:high", "openai/gpt-4o:off"],
+			role: "critical_worker",
+		});
+	});
+
+	test("keeps request and per-agent overrides and own models ahead of defaultAgentRole", () => {
+		const settings = Settings.isolated({
+			"task.defaultAgentRole": "@critical_worker",
+			modelRoles: { critical_worker: "anthropic/claude-sonnet-4-5:high" },
+		});
+		for (const selector of [
+			{ requestModel: "openai/gpt-4o" },
+			{ settingsOverride: "openai/gpt-4o" },
+			{ agentModel: "openai/gpt-4o" },
+		]) {
+			expect(resolveAgentModelSelection({ ...selector, settings })).toEqual({
+				patterns: ["openai/gpt-4o"],
+				role: undefined,
+			});
+		}
+	});
+
+	test("preserves explicit session inheritance with defaultAgentRole set", () => {
+		const settings = Settings.isolated({
+			"task.defaultAgentRole": "@critical_worker",
+			modelRoles: { critical_worker: "anthropic/claude-sonnet-4-5:high" },
+		});
+		for (const agentModel of ["default", "@default", "*", "pi/default", "@task", "pi/task"]) {
+			expect(resolveAgentModelSelection({ agentModel, settings, activeModelPattern: "openai/gpt-4o" })).toEqual({
+				patterns: ["openai/gpt-4o"],
+				role: undefined,
+			});
+		}
+	});
+
+	test("rejects an unknown defaultAgentRole rather than inheriting the parent", () => {
+		const settings = Settings.isolated({ "task.defaultAgentRole": "@missing_worker" });
+		expect(() => resolveAgentModelSelection({ settings, activeModelPattern: "openai/gpt-4o" })).toThrow(
+			'Invalid task.defaultAgentRole "@missing_worker": expected a known model role reference.',
+		);
+	});
+
 	test("pairs the first non-empty source's role with its patterns, skipping aliases with no patterns", () => {
 		const settings = Settings.isolated({
 			modelRoles: {

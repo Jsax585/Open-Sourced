@@ -60,6 +60,7 @@ import type { Settings } from "./settings";
 
 import { cfgDisabledProviders, cfgEnabledModels, cfgModelProviderOrder } from "./model-settings";
 import { cfgRetryFallbackChains } from "../session/settings";
+import { cfgTaskDefaultAgentRole } from "../task/settings";
 
 function isKnownProvider(provider: string): provider is KnownProvider {
 	return provider in DEFAULT_MODEL_PER_PROVIDER;
@@ -1301,6 +1302,18 @@ function resolveEffectiveAgentModelSelection(
 			return { source: agentModel, patterns: configuredAgentPatterns };
 		}
 		if (!agentInheritsSessionModel) return { source: agentModel, patterns: configuredAgentPatterns };
+	}
+
+	const defaultAgentRole = settings && cfgTaskDefaultAgentRole.get(settings)?.trim();
+	if (defaultAgentRole && normalizedAgentPatterns.length === 0) {
+		if (!resolveExplicitModelRole(defaultAgentRole, settings)) {
+			throw new Error(`Invalid task.defaultAgentRole "${defaultAgentRole}": expected a known model role reference.`);
+		}
+		const patterns = resolveConfiguredModelPatterns(defaultAgentRole, settings);
+		if (patterns.length === 0) {
+			throw new Error(`Invalid task.defaultAgentRole "${defaultAgentRole}": role has no model patterns.`);
+		}
+		return { source: defaultAgentRole, patterns };
 	}
 
 	const fallback =
