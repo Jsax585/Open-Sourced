@@ -70,7 +70,7 @@ import {
 	type ServingModel,
 	validateRetryFallbackChains,
 } from "./retry-fallback-chains";
-import { describeUsageFallback } from "./retry-fallback-reason";
+import { describeRequestFailure, describeUsageFallback } from "./retry-fallback-reason";
 import { getLatestCompactionEntry } from "./session-context";
 import { EPHEMERAL_MODEL_CHANGE_ROLE, type SessionEntry } from "./session-entries";
 import type { SessionManager } from "./session-manager";
@@ -2185,6 +2185,12 @@ export class TurnRecovery {
 			wrapAround?: boolean;
 			/** This hop is a classifier-refusal walk, which visits each model at most once per turn. */
 			refusalWalk?: boolean;
+			/**
+			 * Classified failure bits (`AIError.Flag.*`). Recorded in the applied
+			 * event's reason so a fallback switch can be traced to the error class
+			 * that caused it instead of only the raw provider text.
+			 */
+			failureKind?: number;
 		},
 	): Promise<boolean> {
 		const ceiling = this.#host.thinkingLevelCeiling();
@@ -2262,7 +2268,7 @@ export class TurnRecovery {
 				const previousTools = [...this.#host.agent.state.tools];
 				const applied = await this.applyRetryFallbackCandidate(role, selector, currentSelector, {
 					...options,
-					reason: `Request failed: ${failedMessage.errorMessage ?? "provider returned an error without details"}`,
+					reason: describeRequestFailure(failedMessage, options?.failureKind),
 				});
 				// Redemption replays the refused request's frozen `system` and `tools`. If the
 				// swap rebuilt either, the fallback model would be prompted with, and call tools
@@ -2789,6 +2795,9 @@ export class TurnRecovery {
 					refusalWalk: classifierRefusal,
 					preserveFailedTurn,
 					wrapAround: longUsageLimitFallback,
+					// The classification already decided this hop; carrying it into the
+					// applied event keeps the switch traceable to its error class.
+					failureKind: id,
 				});
 			}
 			// Auto fallback from a Fireworks Fast variant to its base model. Independent

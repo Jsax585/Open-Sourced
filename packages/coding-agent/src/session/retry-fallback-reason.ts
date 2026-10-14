@@ -1,5 +1,19 @@
-import type { ModelUsageHealth } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ModelUsageHealth } from "@oh-my-pi/pi-ai";
 import { formatDuration } from "@oh-my-pi/pi-utils";
+import * as AIError from "@oh-my-pi/pi-ai/error";
+
+/**
+ * Describe a request failure that triggered a fallback switch, including the
+ * classified error kind. The kind is what makes a switch traceable: the raw
+ * provider text may be absent or generic, while `AIError.stringify` yields the
+ * stable vocabulary (`usage-limit`, `transient`, `timeout`, `auth-failed`, …)
+ * that `retry.fallbackOn` is defined over.
+ */
+export function describeRequestFailure(failedMessage: AssistantMessage, failureKind: number | undefined): string {
+	const kind = AIError.stringify(failureKind);
+	const detail = failedMessage.errorMessage ?? "provider returned an error without details";
+	return `Request failed [${kind}]: ${detail}`;
+}
 
 /** Describe the health snapshot that actually caused a preflight switch. */
 export function describeUsageFallback(health: ModelUsageHealth, reservePercent: number): string {
