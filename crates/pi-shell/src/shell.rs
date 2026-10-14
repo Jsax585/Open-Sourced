@@ -6149,6 +6149,43 @@ mod tests {
 		assert_eq!(output, "v\n");
 	}
 
+	#[cfg(unix)]
+	#[test]
+	fn mapfile_process_substitution_delivers_lines_and_reaches_eof() {
+		for command in [
+			"mapfile -t arr < <(printf 'a\\nb\\n'); printf '%s\\n' \"${arr[@]}\"",
+			"while readarray -t -n 1 arr && [[ ${#arr[@]} -gt 0 ]]; do printf '%s\\n' \"${arr[@]}\"; \
+			 done < <(printf 'a\\nb\\n')",
+			"cb() { printf 'cb:%s:%s\\n' \"$1\" \"$2\"; }; mapfile -t -C cb -c 1 arr < <(printf \
+			 'a\\nb\\n'); printf '%s\\n' \"${arr[@]}\"",
+		] {
+			// One worker reproduces producer starvation. A host-thread watchdog
+			// fails even when a synchronous read blocks the entire runtime.
+			let (sender, receiver) = std::sync::mpsc::channel();
+			std::thread::spawn(move || {
+				let runtime = tokio::runtime::Builder::new_multi_thread()
+					.worker_threads(1)
+					.enable_all()
+					.build()
+					.expect("test runtime must build");
+				let outcome =
+					runtime.block_on(run_command_capture(command, None, None, CancelToken::default()));
+				let _ = sender.send(outcome);
+			});
+			let (result, output) = receiver
+				.recv_timeout(Duration::from_secs(5))
+				.expect("mapfile must not block its process-substitution producer");
+			assert!(!result.timed_out, "command: {command}; output: {output:?}");
+			assert_eq!(result.exit_code, Some(0), "command: {command}; output: {output:?}");
+			let expected = if command.starts_with("cb()") {
+				"cb:0:a\ncb:1:b\na\nb\n"
+			} else {
+				"a\nb\n"
+			};
+			assert_eq!(output, expected, "command: {command}");
+		}
+	}
+
 	/// Builtins share the host process, so a descriptor path must reach the
 	/// command's descriptors rather than the host's: the host's fd 0 is its
 	/// terminal (`cat /dev/stdin` once blocked on the TUI's keystrokes for

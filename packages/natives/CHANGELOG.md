@@ -15,6 +15,7 @@
 - Fixed `read` and `while read` hanging on process-substitution input ([#15501](https://github.com/can1357/oh-my-pi/issues/15501))
 - Fixed standalone binaries extracting unused native addon variants on first launch ([#15462](https://github.com/can1357/oh-my-pi/issues/15462))
 - Fixed Git diffs failing when staged or committed changes update a submodule pin ([#15457](https://github.com/can1357/oh-my-pi/issues/15457))
+- Fixed `mapfile` and `readarray` hanging when their input comes from process substitution ([#15501](https://github.com/can1357/oh-my-pi/issues/15501)).
 
 ## [18.10.4] - 2026-10-13
 

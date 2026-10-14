@@ -126,6 +126,12 @@ impl MapFileCommand {
 		};
 
 		let terminal = input_file.is_terminal();
+		// Read-ahead may also be enabled for a pipe consumed to EOF; only a
+		// regular file is safe to read inline without starving its producer.
+		let regular_file = matches!(
+			&input_file,
+			brush_core::openfiles::OpenFile::File(file) if file.metadata().is_ok_and(|m| m.is_file())
+		);
 		// Without -n or -C every byte up to EOF is consumed before anything
 		// else reads the descriptor, so any input is read in blocks. -n may
 		// stop early, and a -C callback may read the descriptor itself or
@@ -136,21 +142,20 @@ impl MapFileCommand {
 		let mut input = LineInput::new(input_file, read_ahead);
 
 		while max_count == 0 || entry_count < max_count {
-			let mut line = vec![];
-			let mut saw_delimiter = false;
-
-			while let Some(byte) = input.next_byte()? {
-				// Interactive keys end input only on a terminal; in a file or
-				// pipe they are data.
-				if terminal && (byte == CTRL_C || byte == CTRL_D && line.is_empty()) {
-					break;
-				}
-				line.push(byte);
-				if byte == delimiter {
-					saw_delimiter = true;
-					break;
-				}
-			}
+			let (mut line, saw_delimiter) = if regular_file {
+				read_entry(&mut input, delimiter, terminal)?
+			} else {
+				// Keep callbacks and array assignment on the shell side, moving
+				// only the blocking read and its buffer onto a worker.
+				let (returned_input, result) = tokio::task::spawn_blocking(move || {
+					let result = read_entry(&mut input, delimiter, terminal);
+					(input, result)
+				})
+				.await
+				.map_err(ErrorKind::ThreadingError)?;
+				input = returned_input;
+				result?
+			};
 
 			if line.is_empty() && !saw_delimiter {
 				break;
@@ -192,6 +197,26 @@ impl MapFileCommand {
 
 		Ok(None)
 	}
+}
+
+fn read_entry(
+	input: &mut LineInput,
+	delimiter: u8,
+	terminal: bool,
+) -> std::io::Result<(Vec<u8>, bool)> {
+	let mut line = vec![];
+	while let Some(byte) = input.next_byte()? {
+		// Interactive keys end input only on a terminal; in a file or pipe
+		// they are data.
+		if terminal && (byte == CTRL_C || byte == CTRL_D && line.is_empty()) {
+			break;
+		}
+		line.push(byte);
+		if byte == delimiter {
+			return Ok((line, true));
+		}
+	}
+	Ok((line, false))
 }
 
 async fn run_callback<SE: brush_core::ShellExtensions>(
