@@ -10,10 +10,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { SESSION_TAIL_APPEND_CHUNK_BYTES, SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	FileSessionStorage,
 	type SessionStorageWriteOptions,
+	type SessionStorageWriter,
 	type WriteTextAtomicOptions,
 } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -61,6 +62,37 @@ class ControlledRewriteStorage extends FileSessionStorage {
 		const failure = this.#rewriteFailure();
 		if (failure) throw failure;
 		await super.writeLinesAtomic(fpath, lines, options);
+	}
+}
+
+/** Records the bytes of every append; appends throw while `failAppends` is set, and the `failAppendAt`-th append from now throws. */
+class AppendRecordingStorage extends ControlledRewriteStorage {
+	readonly appendBytes: number[] = [];
+	failAppends = false;
+	failAppendAt: { count: number; error: Error } | undefined;
+
+	override openWriter(fpath: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }) {
+		const writer = super.openWriter(fpath, options);
+		const appendSync = (line: string): void => {
+			if (this.failAppends) throw Object.assign(new Error("ENOSPC: synthetic append failure"), { code: "ENOSPC" });
+			const injected = this.failAppendAt;
+			if (injected && --injected.count === 0) {
+				this.failAppendAt = undefined;
+				throw injected.error;
+			}
+			this.appendBytes.push(Buffer.byteLength(line, "utf8"));
+			writer.appendSync?.(line);
+		};
+		const wrapped: SessionStorageWriter = {
+			append: async line => appendSync(line),
+			appendSync,
+			flush: () => writer.flush(),
+			flushSync: () => writer.flushSync?.(),
+			isOpen: () => writer.isOpen(),
+			close: () => writer.close(),
+			getError: () => writer.getError(),
+		};
+		return wrapped;
 	}
 }
 
@@ -377,5 +409,51 @@ describe("a durably discarded entry", () => {
 		manager.appendMessage(userTurn("after2"));
 
 		expectDiscardSurvivesRestart((await reopen(sessionFile, sessionDir)).getBranch(), discardedId);
+	});
+});
+
+describe("a backlog of entries that missed the journal", () => {
+	/** About half a MiB serialized: whole entries, several to a chunk. */
+	const payload = "x".repeat(499_000);
+	/** Enough entries for about three chunks. */
+	const backlog = Math.ceil((3 * SESSION_TAIL_APPEND_CHUNK_BYTES) / payload.length);
+
+	async function sessionWithBacklog() {
+		const root = TempDir.createSync("@pi-durable-frontier-");
+		tempDirs.push(root);
+		const sessionDir = path.join(root.path(), "sessions");
+		const storage = new AppendRecordingStorage();
+		const manager = SessionManager.create(root.path(), sessionDir, storage);
+		managers.push(manager);
+		manager.appendMessage(assistantMessage("seed"));
+		await manager.flush();
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected a persisted session file");
+		storage.failAppends = true;
+		for (let i = 0; i < backlog; i++) manager.appendCustomEntry("backlog", { i, payload });
+		storage.failAppends = false;
+		storage.appendBytes.length = 0;
+		return { storage, manager, sessionDir, sessionFile };
+	}
+
+	async function backlogOnDisk(sessionFile: string, sessionDir: string): Promise<number[]> {
+		const entries = (await reopen(sessionFile, sessionDir)).getEntries();
+		return entries.flatMap(entry => {
+			if (entry.type !== "custom" || entry.customType !== "backlog") return [];
+			const data = entry.data;
+			return data && typeof data === "object" && "i" in data && typeof data.i === "number" ? [data.i] : [];
+		});
+	}
+
+	it("is written by flush() in appends no larger than the chunk budget plus one entry, in order", async () => {
+		const { storage, manager, sessionDir, sessionFile } = await sessionWithBacklog();
+
+		await expect(manager.flush()).resolves.toBeUndefined();
+
+		expect(storage.appendBytes.length).toBeGreaterThan(1);
+		expect(Math.max(...storage.appendBytes)).toBeLessThanOrEqual(
+			SESSION_TAIL_APPEND_CHUNK_BYTES + payload.length + 1024,
+		);
+		expect(await backlogOnDisk(sessionFile, sessionDir)).toEqual(Array.from({ length: backlog }, (_, i) => i));
 	});
 });

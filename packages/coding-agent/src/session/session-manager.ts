@@ -129,6 +129,12 @@ const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
 const utf8Encoder = new TextEncoder();
 /** UTF-8 bytes of the intended body encoded per step when verifying a failed acknowledgement. */
 const ACK_COMPARE_WINDOW_BYTES = 1 << 16;
+/**
+ * UTF-8 bytes of whole entries one append carries when it writes a backlog
+ * of entries the session file is missing; an entry larger than this goes
+ * alone. Bounds what a heal holds in memory however long the backlog grew.
+ */
+export const SESSION_TAIL_APPEND_CHUNK_BYTES = 4 * 1024 * 1024;
 const DISCARDED_ENTRY_BRANCH_MARKER = "discarded-entry-branch";
 /**
  * Read-back-and-retry passes one full rewrite makes after meeting another
@@ -2130,58 +2136,99 @@ export class SessionManager {
 		if (start === end) return;
 		try {
 			const writer = this.#appendWriter();
-			let chunk = "";
-			for (let index = start; index < end; index++) chunk += this.#lineFor(this.#entries[index]!);
-			const bytes = Buffer.byteLength(chunk, "utf8");
-			// File writers apply the bytes to the OS page cache before returning,
-			// so a software crash right after still keeps them.
-			if (writer.appendSync && !this.#storage.defersSyncPublish) {
-				writer.appendSync(chunk);
-				durable.confirmed = durable.issued = end;
-				durable.confirmedSize = durable.issuedSize = durable.issuedSize + bytes;
-				this.#expectedDiskSize = durable.confirmedSize;
-				if (!this.#rewriteRequired) this.#clearDiskError();
-				return;
+			// Whole entries, at most SESSION_TAIL_APPEND_CHUNK_BYTES per append (an
+			// entry larger than that goes alone), so a long backlog never becomes
+			// one transcript-sized string; every chunk that lands moves the frontier.
+			let line: string | undefined;
+			let lineBytes = 0;
+			for (let from = start; from < end;) {
+				let chunk = "";
+				let bytes = 0;
+				let to = from;
+				for (; to < end; to++) {
+					if (line === undefined) {
+						line = this.#lineFor(this.#entries[to]!);
+						lineBytes = Buffer.byteLength(line, "utf8");
+					}
+					if (bytes > 0 && bytes + lineBytes > SESSION_TAIL_APPEND_CHUNK_BYTES) break;
+					chunk += line;
+					bytes += lineBytes;
+					line = undefined;
+				}
+				this.#appendTailChunk(writer, durable, from, to, chunk, bytes);
+				from = to;
 			}
-			// A backend that only queues the publish (indexed) confirms later: the
-			// issued position lets the next append extend past these entries, and
-			// the durable size advances only on confirmation, so a lost publish
-			// never leaves the CAS token describing bytes the store never accepted.
-			if (writer.appendSync) writer.appendSync(chunk);
-			const confirmation = writer.appendSync ? writer.flush() : writer.append(chunk);
-			durable.issued = end;
-			durable.issuedSize += bytes;
-			const settled = confirmation.then(
-				() => {
-					if (this.#durable !== durable) return;
-					// Confirmations can settle out of order; one that lands past
-					// the confirmed position waits until the gap before it fills.
-					durable.confirmedAhead.set(start, { end, bytes });
-					for (let next = durable.confirmedAhead.get(durable.confirmed); next;) {
-						durable.confirmedAhead.delete(durable.confirmed);
-						durable.confirmed = next.end;
-						durable.confirmedSize += next.bytes;
-						next = durable.confirmedAhead.get(durable.confirmed);
-					}
-					this.#expectedDiskSize = durable.confirmedSize;
-					if (durable.confirmed === this.#entries.length && !this.#rewriteRequired) this.#clearDiskError();
-				},
-				err => {
-					// The store rolls its size back to the last confirmed append, and
-					// the next append re-sends everything after it.
-					if (this.#durable === durable) {
-						durable.issued = durable.confirmed;
-						durable.issuedSize = durable.confirmedSize;
-						durable.confirmedAhead.clear();
-					}
-					this.#noteDiskFailure(err);
-				},
-			);
-			this.#pendingAppendConfirmations.add(settled);
-			void settled.finally(() => this.#pendingAppendConfirmations.delete(settled));
 		} catch (err) {
 			this.#noteDiskFailure(err);
 		}
+	}
+
+	/**
+	 * Append `chunk`, the `bytes` of serialized entries `[start, end)` that
+	 * follow the frontier's issued position, and advance the frontier over
+	 * them: at once on storage that applies the bytes before returning, on
+	 * confirmation on a deferring backend. Throws when the writer refuses it.
+	 */
+	#appendTailChunk(
+		writer: SessionStorageWriter,
+		durable: DurableFrontier,
+		start: number,
+		end: number,
+		chunk: string,
+		bytes: number,
+	): void {
+		// File writers apply the bytes to the OS page cache before returning,
+		// so a software crash right after still keeps them.
+		if (writer.appendSync && !this.#storage.defersSyncPublish) {
+			writer.appendSync(chunk);
+			durable.confirmed = durable.issued = end;
+			durable.confirmedSize = durable.issuedSize = durable.issuedSize + bytes;
+			this.#expectedDiskSize = durable.confirmedSize;
+			if (end === this.#entries.length && !this.#rewriteRequired) this.#clearDiskError();
+			return;
+		}
+		// A backend that only queues the publish (indexed) confirms later: the
+		// issued position lets the next append extend past these entries, and
+		// the durable size advances only on confirmation, so a lost publish
+		// never leaves the CAS token describing bytes the store never accepted.
+		if (writer.appendSync) writer.appendSync(chunk);
+		const confirmation = writer.appendSync ? writer.flush() : writer.append(chunk);
+		durable.issued = end;
+		durable.issuedSize += bytes;
+		const settled = confirmation.then(
+			() => {
+				if (this.#durable !== durable) return;
+				// Confirmations can settle out of order; one that lands past
+				// the confirmed position waits until the gap before it fills.
+				durable.confirmedAhead.set(start, { end, bytes });
+				for (let next = durable.confirmedAhead.get(durable.confirmed); next;) {
+					durable.confirmedAhead.delete(durable.confirmed);
+					durable.confirmed = next.end;
+					durable.confirmedSize += next.bytes;
+					next = durable.confirmedAhead.get(durable.confirmed);
+				}
+				// A later chunk's rejection may have rewound the issued position
+				// before this one confirmed; what the store confirmed is issued.
+				if (durable.issued < durable.confirmed) {
+					durable.issued = durable.confirmed;
+					durable.issuedSize = durable.confirmedSize;
+				}
+				this.#expectedDiskSize = durable.confirmedSize;
+				if (durable.confirmed === this.#entries.length && !this.#rewriteRequired) this.#clearDiskError();
+			},
+			err => {
+				// The store rolls its size back to the last confirmed append, and
+				// the next append re-sends everything after it.
+				if (this.#durable === durable) {
+					durable.issued = durable.confirmed;
+					durable.issuedSize = durable.confirmedSize;
+					durable.confirmedAhead.clear();
+				}
+				this.#noteDiskFailure(err);
+			},
+		);
+		this.#pendingAppendConfirmations.add(settled);
+		void settled.finally(() => this.#pendingAppendConfirmations.delete(settled));
 	}
 
 	/**
