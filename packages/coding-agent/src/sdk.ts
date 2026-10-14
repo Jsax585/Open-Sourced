@@ -2972,6 +2972,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				disabledProviders.size === 0
 					? modelRegistry.getAvailable()
 					: modelRegistry.getAvailable().filter(candidate => !disabledProviders.has(candidate.provider));
+			const containedRole = options.modelPatternFallbackRole &&
+				cfgRetryFallbackChainExhausted.get(settings)[options.modelPatternFallbackRole] === "fail"
+				? options.modelPatternFallbackRole
+				: undefined;
 			const expandedModelPatterns = deferredModelPatterns.flatMap(pattern =>
 				pattern.split(",").flatMap(selector => {
 					const trimmedSelector = selector.trim();
@@ -3049,6 +3053,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					}));
 				}),
 			);
+			if (containedRole) {
+				for (const pattern of options.modelPatternDefaultFallbackChain ?? []) {
+					expandedModelPatterns.push({ pattern, retryFallback: undefined });
+				}
+			}
 			const resolutionModels = expandedModelPatterns.some(
 				({ pattern }) => parseModelPattern(pattern, availableModels, matchPreferences).model,
 			)
@@ -3060,6 +3069,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				const { pattern, retryFallback } = expandedModelPatterns[patternIndex];
 				const primary = parseModelPattern(pattern, resolutionModels, matchPreferences);
 				if (!primary.model || (retryFallback && !hasModelAuth(primary.model))) continue;
+				if (containedRole) {
+					const key = await modelRegistry.getApiKey(primary.model);
+					if (key !== kNoAuth && !isAuthenticated(key)) continue;
+				}
 				let hasUsageFallbackCandidate = false;
 				for (
 					let candidateIndex = patternIndex + 1;
@@ -3148,7 +3161,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					selectedExplicitThinkingLevel = true;
 				}
 				let authFallbackUsed = false;
-				if (options.modelPatternAuthFallback) {
+				if (options.modelPatternAuthFallback && !containedRole) {
 					const primaryKey = await modelRegistry.getApiKey(primary.model);
 					if (primaryKey !== kNoAuth && !isAuthenticated(primaryKey)) {
 						const fallback = parseModelPattern(
@@ -3220,6 +3233,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				break;
 			}
 			if (!model) {
+				if (containedRole) throw new Error(`No model with usable credentials in contained role "${containedRole}".`);
 				const requested =
 					deferredModelPatterns.length === 1
 						? `"${deferredModelPatterns[0]}"`
@@ -4628,7 +4642,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		} else {
 			// Save initial model, thinking level, and service tier for new sessions so they can be restored on resume.
 			if (model) {
-				sessionManager.appendModelChange(`${model.provider}/${model.id}`);
+				const role = options.modelPatternFallbackRole;
+				sessionManager.appendModelChange(
+					`${model.provider}/${model.id}`,
+					role && cfgRetryFallbackChainExhausted.get(settings)[role] === "fail" ? role : undefined,
+				);
 			}
 			if (!autoThinking) {
 				// Do not write the `auto` selector before the first turn resolves; auto
