@@ -19,6 +19,13 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/model-mentions";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getBundledAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
+import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
+import { cfgTaskModelMentions } from "@oh-my-pi/pi-coding-agent/task/settings";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
+import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
 function model(provider: string, id: string, name: string): Model {
 	return buildModel({
@@ -61,6 +68,26 @@ afterEach(() => {
 });
 
 describe("model mentions", () => {
+	test("existing composer provider stops model completions after live disabling", async () => {
+		initTheme();
+		const settings = Settings.isolated({});
+		const ctx = {
+			settings,
+			keybindings: KeybindingsManager.inMemory(),
+			session: {
+				modelRegistry: registry,
+				scopedModels: [],
+				effectiveServiceTier: () => undefined,
+			},
+		} as unknown as InteractiveModeContext;
+		const provider = new InputController(ctx).createAutocompleteProvider([], "/tmp");
+		const before = await provider.getSuggestions(["^"], 0, 1);
+		expect(before?.items.map(item => item.value)).toContain("b/y");
+		cfgTaskModelMentions.set(settings, false);
+		const after = await provider.getSuggestions(["^"], 0, 1);
+		expect(after?.items ?? []).toEqual([]);
+	});
+
 	test("disabled mentions leave selectors literal and mint no agents", () => {
 		const disabled = new ModelMentionRegistry({
 			sessionManager: session,
@@ -99,6 +126,23 @@ describe("model mentions", () => {
 			expect(agentSession.modelMentions).toEqual([{ agent: "m1", selector: "b/y", name: "Y" }]);
 			expect(await readFile(file, "utf8")).toBe(history);
 			console.log(`resumed persisted model_mention: task.modelMentions=${enabled} agents=${JSON.stringify(agents)}`);
+			if (enabled) {
+				const task = await TaskTool.create({
+					cwd: dir,
+					hasUI: false,
+					settings: agentSession.settings,
+					getSessionFile: () => file,
+					getSessionAgents: () => agentSession.getSessionAgents(),
+				} as ToolSession);
+				expect(task.description).toContain("`m1`");
+				cfgTaskModelMentions.set(agentSession.settings, false);
+				expect(agentSession.getSessionAgents()).toEqual([]);
+				const result = await task.execute("stale-model-mention", { agent: "m1", task: "Work." });
+				expect(result.content).toContainEqual(
+					expect.objectContaining({ type: "text", text: expect.stringContaining('Unknown agent "m1"') }),
+				);
+				expect(await readFile(file, "utf8")).toBe(history);
+			}
 		} finally {
 			await agentSession.dispose();
 			await rm(dir, { recursive: true, force: true });

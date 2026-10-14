@@ -100,12 +100,6 @@ describe("task async preflight", () => {
 			expectation: 'Unknown agent "missing"',
 		},
 		{
-			name: "StaleModelMention",
-			params: { agent: "m1", name: "StaleModelMention", task: "Work." },
-			settings: { "task.modelMentions": false },
-			expectation: 'Unknown agent "m1"',
-		},
-		{
 			name: "Disabled",
 			params: { agent: "task", name: "Disabled", task: "Work." },
 			settings: { "task.disabledAgents": ["task"] },
