@@ -29,7 +29,7 @@ import * as crypto from "node:crypto";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
-import { transcriptEntryMessage } from "@oh-my-pi/pi-tui/chat/transcript-entry";
+import { isUserRequestEntry, transcriptEntryMessage } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import {
 	sanitizeDisplayLine,
 	sanitizeDisplaySingleLine,
@@ -466,8 +466,9 @@ export class HostedClientLink {
 		const result = await this.#client.navigateTree(entryId, options, { ...this.#guard(), ifLeaf: this.leafId });
 		await this.#chain;
 		const entry = this.#ctx.session.sessionManager.getEntry(entryId);
+		// As in-process: only a user request hands its images back with its text.
 		const message =
-			result.editorText !== undefined && entry && isTranscriptEntry(entry)
+			result.editorText !== undefined && entry && isTranscriptEntry(entry) && isUserRequestEntry(entry)
 				? transcriptEntryMessage(entry)
 				: undefined;
 		const content = message?.role === "user" || message?.role === "custom" ? message.content : undefined;

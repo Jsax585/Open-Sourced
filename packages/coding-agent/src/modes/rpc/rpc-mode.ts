@@ -481,6 +481,7 @@ const SESSION_CHANGE_TYPES: Record<string, true> = {
 	switch_session: true,
 	branch: true,
 	fork: true,
+	navigate_tree: true,
 	open_session: true,
 };
 
