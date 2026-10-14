@@ -10,6 +10,7 @@ import { InternalUrlFilesystem } from "@oh-my-pi/pi-coding-agent/internal-urls/u
 import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/jfind";
 import { runCascade } from "@oh-my-pi/pi-coding-agent/tools/jfind/cascade";
 import { keywordsFromQuery } from "@oh-my-pi/pi-coding-agent/tools/jfind/keywords";
+import { grepIndex } from "@oh-my-pi/pi-coding-agent/tools/jfind/lexical";
 import {
 	mergeHeat,
 	type Passage,
@@ -156,6 +157,25 @@ describe("jfind readText", () => {
 	});
 });
 
+describe("jfind lexical index", () => {
+	it("counts keyword occurrences case-insensitively over every streamed matching line", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jfind-lexical-"));
+		try {
+			// Far more matching lines than one streamed batch carries.
+			await Bun.write(path.join(dir, "dense.txt"), "ΣΊΣΥΦΟΣ Service_Tier service_tier\n".repeat(3_000));
+			await Bun.write(path.join(dir, "other.txt"), "SERVICE_TIER\nunrelated\n");
+			const index = await grepIndex(dir, ["Σίσυφος", "service_tier"], {
+				includeHidden: false,
+				filesystem: urlFs(dir).shellFilesystem(),
+			});
+			expect(index.filesScanned).toBe(2);
+			expect(Object.fromEntries(index.perFileKw)).toEqual({ "dense.txt": [3_000, 6_000], "other.txt": [0, 1] });
+		} finally {
+			await removeWithRetries(dir);
+		}
+	});
+});
+
 /** Judge that answers every noul from `answer(request, key)` and records concurrency. */
 class FakeJudge implements Judge {
 	readonly label = "fake";
@@ -198,7 +218,7 @@ describe("jfind cascade", () => {
 	it("verifies only sketched passages, reports merged ranges, and runs waves in parallel", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jfind-cascade-"));
 		try {
-			// Enough files to need three filename batches (> 128 would be truncated).
+			// 72 files, so two 64-question filename batches (> 128 would be truncated).
 			for (let i = 0; i < 70; i++) {
 				await Bun.write(path.join(dir, "pkg", `filler${i}.ts`), `export const filler${i} = ${i};\n`);
 			}
