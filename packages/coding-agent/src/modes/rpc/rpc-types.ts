@@ -821,7 +821,10 @@ export interface RpcHostToolResult {
 /**
  * One DAP protocol message (request, response, or event) on a host debug
  * session. The server sends requests and reverse-request responses; the host
- * sends responses, events, and reverse requests.
+ * sends responses, events, and reverse requests. The host decides what each
+ * request does to its own session, including `terminate` and `disconnect`.
+ * A `launch` request may carry an `adapter` hint (the model's choice); the
+ * host may ignore it.
  */
 export interface RpcHostDapMessage {
 	type: "host_dap_message";
@@ -831,8 +834,15 @@ export interface RpcHostDapMessage {
 }
 
 /**
- * Ends a host debug session. From the server: the `debug` tool disposed it.
- * From the host: its session ended; pending requests fail with `error`.
+ * Ends a host debug session. From the server: OMP let go of the session (the
+ * `debug` tool terminated it, it sat idle, or OMP is shutting down); it means
+ * "the agent detached", not "stop debugging". From the host: its session
+ * ended; pending requests fail with `error`.
+ *
+ * The model's `terminate` arrives first as `terminate` and
+ * `disconnect { terminateDebuggee: true }` requests. When the session is the
+ * person's own, the host decides whether those end it; it may answer them
+ * without forwarding them to its adapter.
  */
 export interface RpcHostDapClose {
 	type: "host_dap_close";

@@ -4720,7 +4720,7 @@ pub struct HostUriResult {
 	pub error: Option<String>,
 }
 
-/// One DAP protocol message on a host debug session; the server sends requests, the host sends responses and events.
+/// One DAP protocol message on a host debug session; the server sends requests, the host sends responses and events. The host decides what each request, including `terminate` and `disconnect`, does to its own session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostDapMessage {
 	#[serde(rename = "sessionId")]
@@ -4728,7 +4728,7 @@ pub struct HostDapMessage {
 	pub message: Map<String, Value>,
 }
 
-/// Ends a host debug session: the server disposed it, or the host's session ended.
+/// Ends a host debug session. From the server it means the agent detached (terminate, idle timeout, shutdown), not that the host must stop debugging; from the host it fails pending requests with `error`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostDapClose {
 	#[serde(rename = "sessionId")]
@@ -4744,9 +4744,9 @@ pub enum RpcHostRequest {
 	HostToolCancel(HostToolCancelRequest),
 	HostUriRequest(HostUriRequest),
 	HostUriCancel(HostUriCancelRequest),
-	/// One DAP protocol message on a host debug session; the server sends requests, the host sends responses and events.
+	/// One DAP protocol message on a host debug session; the server sends requests, the host sends responses and events. The host decides what each request, including `terminate` and `disconnect`, does to its own session.
 	HostDapMessage(HostDapMessage),
-	/// Ends a host debug session: the server disposed it, or the host's session ended.
+	/// Ends a host debug session. From the server it means the agent detached (terminate, idle timeout, shutdown), not that the host must stop debugging; from the host it fails pending requests with `error`.
 	HostDapClose(HostDapClose),
 }
 
@@ -4798,9 +4798,9 @@ pub enum RpcInbound {
 	HostToolResult(HostToolResult),
 	/// Completes a pending host URI request.
 	HostUriResult(HostUriResult),
-	/// One DAP protocol message on a host debug session; the server sends requests, the host sends responses and events.
+	/// One DAP protocol message on a host debug session; the server sends requests, the host sends responses and events. The host decides what each request, including `terminate` and `disconnect`, does to its own session.
 	HostDapMessage(HostDapMessage),
-	/// Ends a host debug session: the server disposed it, or the host's session ended.
+	/// Ends a host debug session. From the server it means the agent detached (terminate, idle timeout, shutdown), not that the host must stop debugging; from the host it fails pending requests with `error`.
 	HostDapClose(HostDapClose),
 }
 

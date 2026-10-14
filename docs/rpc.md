@@ -86,15 +86,16 @@ Clients MUST continue reading stdout after closing stdin. Normal EOF and extensi
 4. `RpcExtensionUIRequest` (`{ type: "extension_ui_request", ... }`)
 5. Host tool requests/cancellations (`host_tool_call`, `host_tool_cancel`)
 6. Host URI requests/cancellations (`host_uri_request`, `host_uri_cancel`)
-7. Extension errors (`{ type: "extension_error", extensionPath, event, error }`)
-8. Available-commands updates (`{ type: "available_commands_update", commands }`), emitted at startup and whenever command metadata changes
-9. Prompt completion (`{ type: "prompt_result", id?, agentInvoked, status, error?, sessionSettled }`), unless the response already completed the prompt locally; see [`prompt` payload](#prompt-payload)
-10. Session quiescence (`{ type: "session_settled" }`); see [Yield vs settled](#yield-vs-settled)
-11. Subagent frames (`subagent_lifecycle`, `subagent_progress`, `subagent_event`), gated by `set_subagent_subscription`
-12. Side-question frames (`btw_delta`, `btw_record`); see [Side questions](#side-questions-btw)
-13. Builtin slash-command side channels (`command_output`, `session_info_update`, `config_update`)
-14. Transport overflow notifications (`rpc_frame_error`), when an event cannot fit within the transport limits
-15. Live voice frames (`live_phase`, `live_levels`, `live_transcript`, `live_end`); see [Live Voice Sub-Protocol](#live-voice-sub-protocol)
+7. Host debug session frames (`host_dap_message`, `host_dap_close`); see [Host Debug Sub-Protocol](#host-debug-sub-protocol)
+8. Extension errors (`{ type: "extension_error", extensionPath, event, error }`)
+9. Available-commands updates (`{ type: "available_commands_update", commands }`), emitted at startup and whenever command metadata changes
+10. Prompt completion (`{ type: "prompt_result", id?, agentInvoked, status, error?, sessionSettled }`), unless the response already completed the prompt locally; see [`prompt` payload](#prompt-payload)
+11. Session quiescence (`{ type: "session_settled" }`); see [Yield vs settled](#yield-vs-settled)
+12. Subagent frames (`subagent_lifecycle`, `subagent_progress`, `subagent_event`), gated by `set_subagent_subscription`
+13. Side-question frames (`btw_delta`, `btw_record`); see [Side questions](#side-questions-btw)
+14. Builtin slash-command side channels (`command_output`, `session_info_update`, `config_update`)
+15. Transport overflow notifications (`rpc_frame_error`), when an event cannot fit within the transport limits
+16. Live voice frames (`live_phase`, `live_levels`, `live_transcript`, `live_end`); see [Live Voice Sub-Protocol](#live-voice-sub-protocol)
 
 Protocol v2 may wrap oversized logical frames from these categories in `rpc_chunk` frames.
 
@@ -104,6 +105,7 @@ Protocol v2 may wrap oversized logical frames from these categories in `rpc_chun
 2. `RpcExtensionUIResponse` (`{ type: "extension_ui_response", ... }`)
 3. Host tool updates/results (`host_tool_update`, `host_tool_result`)
 4. Host URI results (`host_uri_result`)
+5. Host debug session frames (`host_dap_message`, `host_dap_close`)
 
 ## Request/Response Correlation
 
@@ -153,6 +155,7 @@ Important edge behavior from runtime:
 - `{ id?, type: "set_todos", phases: TodoPhase[] }`
 - `{ id?, type: "set_host_tools", tools: RpcHostToolDefinition[] }`
 - `{ id?, type: "set_host_uri_schemes", schemes: RpcHostUriSchemeDefinition[] }`
+- `{ id?, type: "set_host_debug", enabled: boolean }`
 - `{ id?, type: "set_subagent_subscription", level: "off" | "progress" | "events" }`
 - `{ id?, type: "set_event_filter", events: string[] | null, messageUpdates?: "full" | "delta" }`
 - `{ id?, type: "get_subagents" }`
@@ -818,6 +821,24 @@ Every built-in scheme (`local://`, `skill://`, `artifact://`, `security://`,
 `mcp://`, …) is reserved: RPC hosts cannot register or shadow one, and the
 request fails with `Host URI scheme is reserved by OMP: <scheme>://`.
 
+### `set_host_debug` payload
+
+Routes the `debug` tool's sessions to the host's debugger instead of a
+locally spawned adapter:
+
+```json
+{ "id": "req_5", "type": "set_host_debug", "enabled": true }
+```
+
+The response payload is:
+
+```json
+{ "enabled": true }
+```
+
+`enabled: false` restores local adapter spawning for later `launch`/`attach`
+calls. See [Host Debug Sub-Protocol](#host-debug-sub-protocol).
+
 ## Event Stream Schema
 
 RPC mode forwards `AgentSessionEvent` objects from `AgentSession.subscribe(...)`.
@@ -1480,6 +1501,63 @@ a message or fall back to `content` for textual error surfacing:
   value as an empty string. `contentType` defaults to `text/plain` and its
   declared values are `"text/plain"`, `"text/markdown"`, or `"application/json"`.
   A result-level `immutable` overrides the registered scheme's value for that read.
+
+## Host Debug Sub-Protocol
+
+After `set_host_debug { enabled: true }`, the `debug` tool's `launch` and
+`attach` do not spawn a debug adapter. Each session's DAP traffic travels over
+the RPC transport instead, so the host answers from the debugger session it
+already runs. OMP still drives the session as a DAP client: `initialize`,
+`launch`/`attach`, `configurationDone`, breakpoints, stepping and inspection
+all arrive as ordinary DAP requests.
+
+### Messages
+
+Both directions use one frame. `sessionId` is minted by OMP, one per `debug`
+launch/attach; `message` is one whole DAP protocol message (no
+`Content-Length` header):
+
+```json
+{
+  "type": "host_dap_message",
+  "sessionId": "4f1c...",
+  "message": { "seq": 3, "type": "request", "command": "threads" }
+}
+```
+
+OMP sends requests and responses to reverse requests. The host sends
+responses (correlated by `request_seq`), events (`stopped`, `continued`,
+`output`, `terminated`, …) and reverse requests (`runInTerminal`). OMP ignores
+the `seq` of host messages for correlation.
+
+With a host, `attach` needs no `pid` or `port`: it means "join the host's
+current session". `launch` skips local adapter selection and program
+validation; when the model names an adapter, the `launch` arguments carry it
+as `adapter`, a hint the host may ignore.
+
+### Closing
+
+```json
+{ "type": "host_dap_close", "sessionId": "4f1c...", "error": "editor stopped debugging" }
+```
+
+- From the host: its session ended. Pending requests fail with `error` (or a
+  default message), as if the adapter had exited.
+- From OMP: OMP let go of the session, because the model terminated it, it
+  sat idle for 10 minutes, or OMP is shutting down. It means "the agent
+  detached", not "stop debugging".
+
+### Constraints
+
+- The host decides what each request does to its own session. The model's
+  `terminate` arrives as `terminate` and `disconnect { terminateDebuggee: true }`;
+  when the session is the person's own, the host may answer these without
+  ending it.
+- One root session at a time, as with local adapters. `startDebugging` child
+  sessions are not supported over the host transport.
+- `set_host_debug` affects later `launch`/`attach` calls only. When the RPC
+  client disconnects, host sessions end with an error and no
+  `host_dap_close` is sent.
 
 ## Error Model and Recoverability
 

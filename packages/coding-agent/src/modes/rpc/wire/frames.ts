@@ -291,11 +291,11 @@ export const frameDefs = {
 	),
 	HostDapMessage: doc(
 		{ type: "'host_dap_message'", sessionId: "string", message: JSON_OBJECT },
-		"One DAP protocol message on a host debug session; the server sends requests, the host sends responses and events.",
+		"One DAP protocol message on a host debug session; the server sends requests, the host sends responses and events. The host decides what each request, including `terminate` and `disconnect`, does to its own session.",
 	),
 	HostDapClose: doc(
 		{ type: "'host_dap_close'", sessionId: "string", "error?": "string" },
-		"Ends a host debug session: the server disposed it, or the host's session ended.",
+		"Ends a host debug session. From the server it means the agent detached (terminate, idle timeout, shutdown), not that the host must stop debugging; from the host it fails pending requests with `error`.",
 	),
 	RpcHostRequest: doc(
 		"HostToolCallRequest | HostToolCancelRequest | HostUriRequest | HostUriCancelRequest | HostDapMessage | HostDapClose",

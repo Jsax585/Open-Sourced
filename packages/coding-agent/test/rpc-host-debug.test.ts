@@ -148,10 +148,17 @@ describe("RpcHostDebugBridge", () => {
 		const tool = makeTool();
 		const run = (params: DebugParams) => tool.execute("call", params);
 
-		// The program does not exist locally: the host, not OMP, resolves it.
-		await run({ action: "launch", program: "build/app" });
+		// No local adapter is usable and the program does not exist locally: the host, not OMP, resolves both.
+		const selectLaunch = spyOn(dapModule, "selectLaunchAdapter").mockReturnValue({
+			kind: "unavailable",
+			adapterName: "debugpy",
+			command: "debugpy-adapter",
+		});
+		const launched = await run({ action: "launch", program: "build/app", adapter: "debugpy" });
+		expect(launched.details?.adapter).toBe(HOST_DAP_ADAPTER.name);
+		expect(selectLaunch).not.toHaveBeenCalled();
 		const launch = host.requests.find(request => request.command === "launch");
-		expect(launch?.arguments).toMatchObject({ program: "/host/build/app", cwd: "/host" });
+		expect(launch?.arguments).toMatchObject({ program: "/host/build/app", cwd: "/host", adapter: "debugpy" });
 
 		await run({ action: "set_breakpoint", file: "src/main.c", line: 42 });
 		const setBreakpoints = host.requests.findLast(request => request.command === "setBreakpoints");
@@ -218,6 +225,25 @@ describe("RpcHostDebugBridge", () => {
 			true,
 		);
 		await expect(pending).rejects.toThrow("editor stopped debugging");
+	});
+
+	it("fails the pending request and restores spawning when the RPC client disconnects", async () => {
+		host = new FakeHost();
+		host.bridge.setEnabled(true);
+		const tool = makeTool();
+		await tool.execute("call", { action: "attach" });
+		host.hold.add("stackTrace");
+		const pending = tool.execute("call", { action: "stack_trace" });
+		await Bun.sleep(0);
+		host.bridge.close("RPC client disconnected");
+		await expect(pending).rejects.toThrow("RPC client disconnected");
+		expect(host.frames.some(frame => frame.type === "host_dap_close")).toBe(false);
+
+		await dapSessionManager.terminate().catch(() => undefined);
+		spyOn(dapModule, "selectAttachAdapter").mockReturnValue({ ...HOST_DAP_ADAPTER, name: "lldb-dap" });
+		const spawn = spyOn(DapClient, "spawn").mockRejectedValue(new Error("spawned local adapter"));
+		await expect(tool.execute("call", { action: "attach", pid: 1234 })).rejects.toThrow("spawned local adapter");
+		expect(spawn).toHaveBeenCalledTimes(1);
 	});
 
 	it("spawns the local adapter again once the host withdraws", async () => {

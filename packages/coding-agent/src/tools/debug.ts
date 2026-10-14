@@ -609,8 +609,15 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugExecutionDe
 				const program = resolveToCwd(params.program, commandCwd);
 				if (dapSessionManager.hasHostConnector()) {
 					// The host owns the debugger: it picks the adapter and validates the program.
+					// The model's adapter choice is passed on as a hint the host may ignore.
 					const snapshot = await dapSessionManager.launch(
-						{ adapter: HOST_DAP_ADAPTER, program, args: params.args, cwd: commandCwd },
+						{
+							adapter: HOST_DAP_ADAPTER,
+							program,
+							args: params.args,
+							cwd: commandCwd,
+							extraLaunchArguments: params.adapter ? { adapter: params.adapter } : undefined,
+						},
 						combinedSignal,
 						timeoutSec * 1000,
 					);

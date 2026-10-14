@@ -5603,7 +5603,7 @@
 				"sessionId",
 				"message"
 			],
-			"description": "One DAP protocol message on a host debug session; the server sends requests, the host sends responses and events."
+			"description": "One DAP protocol message on a host debug session; the server sends requests, the host sends responses and events. The host decides what each request, including `terminate` and `disconnect`, does to its own session."
 		},
 		"HostDapClose": {
 			"type": "object",
@@ -5622,7 +5622,7 @@
 				"type",
 				"sessionId"
 			],
-			"description": "Ends a host debug session: the server disposed it, or the host's session ended."
+			"description": "Ends a host debug session. From the server it means the agent detached (terminate, idle timeout, shutdown), not that the host must stop debugging; from the host it fails pending requests with `error`."
 		},
 		"RpcHostRequest": {
 			"anyOf": [
