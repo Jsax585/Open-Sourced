@@ -2232,6 +2232,7 @@ export class SessionManager {
 		// never leaves the CAS token describing bytes the store never accepted.
 		if (writer.appendSync) writer.appendSync(chunk);
 		const confirmation = writer.appendSync ? writer.flush() : writer.append(chunk);
+		const startSize = durable.issuedSize;
 		durable.issued = end;
 		durable.issuedSize += bytes;
 		const settled = confirmation.then(
@@ -2256,12 +2257,14 @@ export class SessionManager {
 				if (durable.confirmed === this.#entries.length && !this.#rewriteRequired) this.#clearDiskError();
 			},
 			err => {
-				// The store rolls its size back to the last confirmed append, and
-				// the next append re-sends everything after it.
-				if (this.#durable === durable) {
-					durable.issued = durable.confirmed;
-					durable.issuedSize = durable.confirmedSize;
-					durable.confirmedAhead.clear();
+				// The store keeps every append queued before this one and
+				// fails every append queued after it, so this chunk and later
+				// ones are re-sent; an earlier chunk that confirmed ahead of a
+				// still-pending one stays confirmed.
+				if (this.#durable === durable && durable.issued > start) {
+					durable.issued = start;
+					durable.issuedSize = startSize;
+					for (const key of durable.confirmedAhead.keys()) if (key >= start) durable.confirmedAhead.delete(key);
 				}
 				this.#noteDiskFailure(err);
 			},
