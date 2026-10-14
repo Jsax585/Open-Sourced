@@ -137,7 +137,7 @@ describe("AgentSession persistence failure context", () => {
 		durableEntry.data = { rewritten: true };
 		storage.failNextRewrite = true;
 		await expect(sessionManager.rewriteEntries()).rejects.toThrow("synthetic session rewrite failure");
-		expect(sessionManager.hasPersistenceFailure()).toBe(true);
+		expect(sessionManager.getPersistenceFailure()).toBeDefined();
 
 		expect(await executeBuiltinSlashCommand("/clear", clearCommandRuntime(session))).toBe(true);
 		await session.prompt("continue the task");
@@ -176,7 +176,7 @@ describe("AgentSession persistence failure context", () => {
 
 		storage.failNextAppend = true;
 		expect(await executeBuiltinSlashCommand("/clear", clearCommandRuntime(session))).toBe(true);
-		expect(sessionManager.hasPersistenceFailure()).toBe(true);
+		expect(sessionManager.getPersistenceFailure()).toBeDefined();
 		await session.prompt("continue the task");
 
 		const warnings = session.agent.state.messages.filter(
@@ -212,11 +212,11 @@ describe("AgentSession persistence failure context", () => {
 
 		storage.failNextAppend = true;
 		sessionManager.appendCustomEntry("lost-append");
-		expect(sessionManager.hasPersistenceFailure()).toBe(true);
+		expect(sessionManager.getPersistenceFailure()).toBeDefined();
 
 		// The reset boundary's full rewrite succeeds and republishes the lost append.
 		expect(await executeBuiltinSlashCommand("/clear", clearCommandRuntime(session))).toBe(true);
-		expect(sessionManager.hasPersistenceFailure()).toBe(false);
+		expect(sessionManager.getPersistenceFailure()).toBeUndefined();
 		await session.prompt("continue the task");
 
 		expect(mock.calls).toHaveLength(1);

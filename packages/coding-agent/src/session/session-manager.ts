@@ -1195,9 +1195,16 @@ export class SessionManager {
 		for (const observer of this.#persistenceErrorCallbacks) this.#invokePersistenceObserver(observer, error);
 	}
 
+	/**
+	 * Latch `errorLike` as the failure flush()/close() report: the latest one,
+	 * so a failure that has since cleared never stands in for the one storage
+	 * is giving now. An indeterminate failure stays latched until
+	 * {@link recoverPersistenceFromCurrentState} settles it. Observers hear
+	 * once per failure episode, so the agent is warned once.
+	 */
 	#noteDiskFailure(errorLike: unknown): Error {
 		const error = toError(errorLike);
-		if (!this.#diskFailure) this.#diskFailure = error;
+		if (!(this.#diskFailure instanceof SessionPersistenceIndeterminateError)) this.#diskFailure = error;
 		// A line that failed to land leaves its blob refs unreferenced on disk,
 		// so the next persist must re-check those blobs instead of trusting the memo.
 		forgetExternalizedImages(this.#blobs);
@@ -3684,9 +3691,12 @@ export class SessionManager {
 		};
 	}
 
-	/** Whether a persistence failure remains latched for the current session file. */
-	hasPersistenceFailure(): boolean {
-		return this.#diskFailure !== undefined;
+	/**
+	 * The persistence failure latched for the current session file, or
+	 * `undefined`: the one a rejecting flush()/close() throws.
+	 */
+	getPersistenceFailure(): Error | undefined {
+		return this.#diskFailure;
 	}
 
 	/**

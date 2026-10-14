@@ -5961,7 +5961,7 @@ export class AgentSession implements SettingsScope {
 		// The manager reports a latched persistence failure once. A clear removes
 		// its previous hidden warning with the old context. Check only after the
 		// boundary append, whose full rewrite may already have recovered.
-		if (this.sessionManager.hasPersistenceFailure()) this.#queuePersistenceFailureMessage();
+		if (this.sessionManager.getPersistenceFailure()) this.#queuePersistenceFailureMessage();
 
 		resetCapabilities();
 		await this.refreshBaseSystemPrompt();

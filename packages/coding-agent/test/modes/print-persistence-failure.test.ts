@@ -253,6 +253,7 @@ describe("headless persistence-failure surface", () => {
 					return () => {};
 				},
 				onPersistenceNotice: () => () => {},
+				getPersistenceFailure: () => persistenceError,
 			},
 			getLastAssistantMessage: () => assistant(""),
 			disableStopTimeTodoReminders: () => {},

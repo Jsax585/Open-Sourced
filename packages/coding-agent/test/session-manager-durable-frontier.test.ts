@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import { parseSessionContent } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SESSION_TAIL_APPEND_CHUNK_BYTES, SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	FileSessionStorage,
@@ -65,13 +66,19 @@ class ControlledRewriteStorage extends FileSessionStorage {
 	}
 }
 
-/** Records the bytes of every append; appends throw while `failAppends` is set, and the `failAppendAt`-th append from now throws. */
+/**
+ * Records the bytes of every append. While `failOpens` is set no writer opens;
+ * while `failAppends` is set every append throws; the `failAppendAt.count`-th
+ * append from now throws `failAppendAt.error`.
+ */
 class AppendRecordingStorage extends ControlledRewriteStorage {
 	readonly appendBytes: number[] = [];
+	failOpens = false;
 	failAppends = false;
 	failAppendAt: { count: number; error: Error } | undefined;
 
 	override openWriter(fpath: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }) {
+		if (this.failOpens) throw Object.assign(new Error("EMFILE: synthetic open failure"), { code: "EMFILE" });
 		const writer = super.openWriter(fpath, options);
 		const appendSync = (line: string): void => {
 			if (this.failAppends) throw Object.assign(new Error("ENOSPC: synthetic append failure"), { code: "ENOSPC" });
@@ -200,7 +207,7 @@ describe("session turns while every full rewrite fails", () => {
 
 		// Every turn reached the journal, so nothing waits on the failed rewrite.
 		await expect(manager.flush()).resolves.toBeUndefined();
-		expect(manager.hasPersistenceFailure()).toBe(true);
+		expect(manager.getPersistenceFailure()).toBeDefined();
 		const reopened = await reopen(sessionFile, sessionDir);
 		expect(userTurnsOf(reopened.getBranch()).slice(-3)).toEqual(["t1", "t2", "t3"]);
 	});
@@ -418,17 +425,23 @@ describe("a backlog of entries that missed the journal", () => {
 	/** Enough entries for about three chunks. */
 	const backlog = Math.ceil((3 * SESSION_TAIL_APPEND_CHUNK_BYTES) / payload.length);
 
-	async function sessionWithBacklog() {
+	/** A file-backed session on disk with no writer open yet. */
+	async function recordingSession() {
 		const root = TempDir.createSync("@pi-durable-frontier-");
 		tempDirs.push(root);
 		const sessionDir = path.join(root.path(), "sessions");
 		const storage = new AppendRecordingStorage();
 		const manager = SessionManager.create(root.path(), sessionDir, storage);
 		managers.push(manager);
-		manager.appendMessage(assistantMessage("seed"));
-		await manager.flush();
+		await manager.ensureOnDisk();
 		const sessionFile = manager.getSessionFile();
 		if (!sessionFile) throw new Error("Expected a persisted session file");
+		return { storage, manager, sessionDir, sessionFile };
+	}
+
+	async function sessionWithBacklog() {
+		const { storage, manager, sessionDir, sessionFile } = await recordingSession();
+		manager.appendMessage(assistantMessage("seed"));
 		storage.failAppends = true;
 		for (let i = 0; i < backlog; i++) manager.appendCustomEntry("backlog", { i, payload });
 		storage.failAppends = false;
@@ -436,14 +449,15 @@ describe("a backlog of entries that missed the journal", () => {
 		return { storage, manager, sessionDir, sessionFile };
 	}
 
-	async function backlogOnDisk(sessionFile: string, sessionDir: string): Promise<number[]> {
-		const entries = (await reopen(sessionFile, sessionDir)).getEntries();
-		return entries.flatMap(entry => {
+	/** The backlog indexes the journal holds, in file order, duplicates included. */
+	function backlogOnDisk(sessionFile: string): number[] {
+		return parseSessionContent(fs.readFileSync(sessionFile, "utf8")).entries.flatMap(entry => {
 			if (entry.type !== "custom" || entry.customType !== "backlog") return [];
 			const data = entry.data;
 			return data && typeof data === "object" && "i" in data && typeof data.i === "number" ? [data.i] : [];
 		});
 	}
+	const wholeBacklog = Array.from({ length: backlog }, (_, i) => i);
 
 	it("is written by flush() in appends no larger than the chunk budget plus one entry, in order", async () => {
 		const { storage, manager, sessionDir, sessionFile } = await sessionWithBacklog();
@@ -454,6 +468,34 @@ describe("a backlog of entries that missed the journal", () => {
 		expect(Math.max(...storage.appendBytes)).toBeLessThanOrEqual(
 			SESSION_TAIL_APPEND_CHUNK_BYTES + payload.length + 1024,
 		);
-		expect(await backlogOnDisk(sessionFile, sessionDir)).toEqual(Array.from({ length: backlog }, (_, i) => i));
+		expect(backlogOnDisk(sessionFile)).toEqual(wholeBacklog);
+		expect((await reopen(sessionFile, sessionDir)).getBranch().at(-1)).toMatchObject({ data: { i: backlog - 1 } });
+	});
+
+	it("keeps the chunks that landed before a failed one, and the next flush appends the rest once", async () => {
+		const { storage, manager, sessionFile } = await sessionWithBacklog();
+		storage.failAppendAt = {
+			count: 2,
+			error: Object.assign(new Error("ENOSPC: synthetic append failure"), { code: "ENOSPC" }),
+		};
+
+		await expect(manager.flush()).rejects.toThrow("ENOSPC");
+		const kept = backlogOnDisk(sessionFile);
+		expect(kept.length).toBeGreaterThan(0);
+		expect(kept).toEqual(wholeBacklog.slice(0, kept.length));
+
+		await expect(manager.flush()).resolves.toBeUndefined();
+		expect(backlogOnDisk(sessionFile)).toEqual(wholeBacklog);
+	});
+
+	it("has flush() and close() reject with the failure storage gives now, not one that has since cleared", async () => {
+		const { storage, manager } = await recordingSession();
+		storage.failOpens = true;
+		manager.appendMessage(assistantMessage("missing"));
+		storage.failOpens = false;
+		storage.failAppends = true;
+
+		await expect(manager.flush()).rejects.toThrow("ENOSPC");
+		await expect(manager.close()).rejects.toThrow("ENOSPC");
 	});
 });
