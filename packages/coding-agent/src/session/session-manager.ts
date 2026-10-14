@@ -1093,8 +1093,8 @@ export class SessionManager {
 	/**
 	 * Set while {@link dropSession} deletes the current session file. Until it
 	 * settles nothing writes that path: appends stay in memory past the
-	 * durable frontier, and rewrites and title-slot writes only record that a
-	 * full rewrite is owed.
+	 * durable frontier, a rewrite only records that it is owed, and a title
+	 * change only records that its title slot is owed.
 	 */
 	#pendingDrop: PendingDrop | undefined;
 	/**
@@ -2945,15 +2945,27 @@ export class SessionManager {
 
 	/**
 	 * Delete a session file and its artifact directory. ENOENT is treated as
-	 * success. While the delete of the current session file runs, nothing
-	 * writes that path: entries recorded meanwhile stay in memory, and
-	 * rewrites and title changes wait. Once the delete succeeds the file's
-	 * persistence ends: the entries stay in memory, this manager never writes
-	 * that path again, and the next {@link newSession} or
-	 * {@link setSessionFile} starts from scratch. When the delete fails, this
-	 * publishes any rewrite or title change that waited and rethrows; the
-	 * session saves as before, except that the next {@link newSession} for
-	 * the same entries switches without appending the ones the file is missing.
+	 * success. For the current session file:
+	 * - From the moment this is called, nothing this manager runs writes that
+	 *   path: no append, heal, rewrite or title write, and no publish already
+	 *   in flight, which is abandoned (an authoritative repair is waited for).
+	 *   Entries recorded meanwhile stay in memory; rewrites and titles wait.
+	 * - The file counts as gone when the delete succeeds, or when it fails and
+	 *   a stat of the journal then fails with ENOENT (its artifact cleanup can
+	 *   fail after the journal was unlinked). Any other stat result counts as
+	 *   present. Once gone, the file's persistence ends: the entries stay in
+	 *   memory, this manager never writes that path again, and the next
+	 *   {@link newSession} or {@link setSessionFile} starts from scratch. A
+	 *   failed delete still rethrows.
+	 * - When the delete fails with the journal present, the session keeps
+	 *   saving as before, by append alone where full rewrites cannot land
+	 *   (a read-only directory). A title set meanwhile is written to the
+	 *   title slot in place; a full rewrite runs only for an edit or abandoned
+	 *   publish that waited, or when the slot write fails. The next append,
+	 *   `flush()` or `close()` appends the entries recorded meanwhile and any
+	 *   that missed the journal before the drop, or reports the failure. The
+	 *   next {@link newSession} for the same entries switches without
+	 *   appending the ones the file is missing, so it writes nothing to it.
 	 */
 	async dropSession(sessionPath: string): Promise<void> {
 		const sessionFile = this.#sessionFile;

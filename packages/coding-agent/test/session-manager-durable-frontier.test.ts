@@ -20,6 +20,7 @@ import { parseSessionContent } from "@oh-my-pi/pi-coding-agent/session/session-l
 import { SESSION_TAIL_APPEND_CHUNK_BYTES, SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	FileSessionStorage,
+	MemorySessionStorage,
 	type SessionStorageWriteOptions,
 	type SessionStorageWriter,
 	SessionWriteConflictError,
@@ -284,7 +285,11 @@ class HeldRemoveBackend implements SessionStorageBackend {
 			throw new SessionWriteConflictError(path, expectedSize, actualSize);
 		}
 		this.files.set(path, content);
+		this.fullWrites++;
 	}
+
+	/** Full-content publishes that landed. */
+	fullWrites = 0;
 
 	async updateSessionTitle(path: string): Promise<void> {
 		this.#wrote(path);
@@ -311,6 +316,55 @@ class HeldRemoveBackend implements SessionStorageBackend {
 		if (content === undefined) throw Object.assign(new Error(`ENOENT: ${src}`), { code: "ENOENT" });
 		this.files.delete(src);
 		this.files.set(dst, content);
+	}
+}
+
+/**
+ * Memory storage whose session delete unlinks the journal; the next delete
+ * can park until `release()`, after the unlink, or before it when it then
+ * fails with the journal intact. Counts synchronous full writes.
+ */
+class ParkingMemoryStorage extends MemorySessionStorage {
+	fullWrites = 0;
+	#parked:
+		| {
+				started: PromiseWithResolvers<void>;
+				release: PromiseWithResolvers<void>;
+				fail: "none" | "before-unlink" | "after-unlink";
+		  }
+		| undefined;
+
+	/**
+	 * Park the next session delete until `release()`; `started` resolves once it waits. `fail` picks the
+	 * outcome: `"none"` unlinks and succeeds, `"after-unlink"` unlinks and then fails its cleanup, and
+	 * `"before-unlink"` fails with the journal intact.
+	 */
+	parkNextDelete(fail: "none" | "before-unlink" | "after-unlink"): { started: Promise<void>; release: () => void } {
+		const parked = { started: Promise.withResolvers<void>(), release: Promise.withResolvers<void>(), fail };
+		this.#parked = parked;
+		return { started: parked.started.promise, release: () => parked.release.resolve() };
+	}
+
+	override writeTextSync(path: string, content: string, options?: SessionStorageWriteOptions): void {
+		this.fullWrites++;
+		super.writeTextSync(path, content, options);
+	}
+
+	override async deleteSessionWithArtifacts(sessionPath: string): Promise<void> {
+		const parked = this.#parked;
+		this.#parked = undefined;
+		if (parked?.fail === "before-unlink") {
+			parked.started.resolve();
+			await parked.release.promise;
+			throw Object.assign(new Error("EACCES: synthetic unlink failure"), { code: "EACCES" });
+		}
+		await this.unlink(sessionPath);
+		if (!parked) return;
+		parked.started.resolve();
+		await parked.release.promise;
+		if (parked.fail === "after-unlink") {
+			throw new Error("Session file deleted but failed to remove artifacts directory: synthetic failure");
+		}
 	}
 }
 
@@ -1100,6 +1154,156 @@ describe("a dropped session file", () => {
 		const reopened = await reopen(sessionFile, sessionDir);
 		expect(reopened.getSessionName()).toBe("named during the delete");
 		expect(userTurnsOf(reopened.getBranch())).toEqual(["edited during the delete", "during the delete"]);
+	});
+});
+
+describe("a dropped session file on memory and indexed storage (C8)", () => {
+	async function memorySession() {
+		const storage = new ParkingMemoryStorage();
+		const manager = SessionManager.create("/cwd", "/sessions/proj", storage);
+		managers.push(manager);
+		manager.appendMessage(assistantMessage("seed"));
+		manager.appendMessage(userTurn("before"));
+		await manager.flush();
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected a persisted session file");
+		return { storage, manager, sessionFile };
+	}
+
+	async function indexedSession() {
+		const backend = new HeldRemoveBackend();
+		const storage = new IndexedSessionStorage(backend);
+		await storage.initialize();
+		const manager = SessionManager.create("/cwd", "/sessions/proj", storage);
+		managers.push(manager);
+		manager.appendMessage(assistantMessage("seed"));
+		manager.appendMessage(userTurn("before"));
+		await manager.flush();
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected a persisted session file");
+		expect(backend.files.has(sessionFile)).toBe(true);
+		return { backend, storage, manager, sessionFile };
+	}
+
+	const windowWrites = [
+		{
+			write: "a turn",
+			run: async (manager: SessionManager) => {
+				manager.appendMessage(userTurn("in the window"));
+			},
+		},
+		{
+			write: "an auto title",
+			run: async (manager: SessionManager) => {
+				await manager.setSessionName("auto title", "auto");
+			},
+		},
+		{
+			write: "an in-place edit and rewriteEntries()",
+			run: async (manager: SessionManager) => {
+				const entry = firstUserEntry(manager);
+				if (entry.message.role !== "user") throw new Error("Expected a user message");
+				entry.message.content = "edited in the window";
+				await manager.rewriteEntries();
+			},
+		},
+	];
+
+	it.each(windowWrites)("stays deleted on memory storage when $write lands after the unlink (C2)", async ({ run }) => {
+		const { storage, manager, sessionFile } = await memorySession();
+		const parked = storage.parkNextDelete("none");
+		const drop = manager.dropSession(sessionFile);
+		await parked.started;
+		await run(manager);
+		parked.release();
+		await drop;
+		manager.flushSync();
+		await manager.close();
+
+		expect(storage.existsSync(sessionFile)).toBe(false);
+	});
+
+	it.each(windowWrites)(
+		"counts as gone on memory storage when its cleanup failed after the unlink, with $write in the window (C4)",
+		async ({ run }) => {
+			const { storage, manager, sessionFile } = await memorySession();
+			const parked = storage.parkNextDelete("after-unlink");
+			const drop = manager.dropSession(sessionFile);
+			await parked.started;
+			await run(manager);
+			parked.release();
+			await expect(drop).rejects.toThrow("failed to remove artifacts directory");
+			const next = await manager.newSession();
+			manager.appendMessage(assistantMessage("in the new session"));
+			await manager.flush();
+
+			expect(next).not.toBe(sessionFile);
+			expect(storage.existsSync(sessionFile)).toBe(false);
+		},
+	);
+
+	it("keeps saving on memory storage after a delete failed with the journal intact, publishing a held title through the slot (C1, C6, C7)", async () => {
+		const { storage, manager, sessionFile } = await memorySession();
+		const parked = storage.parkNextDelete("before-unlink");
+		const drop = manager.dropSession(sessionFile);
+		await parked.started;
+		manager.appendMessage(userTurn("in the window"));
+		await manager.setSessionName("named in the window", "auto");
+		const fullWritesBefore = storage.fullWrites;
+		parked.release();
+		await expect(drop).rejects.toThrow("EACCES");
+		expect(storage.fullWrites).toBe(fullWritesBefore);
+
+		manager.appendMessage(userTurn("after the failed delete"));
+		await expect(manager.flush()).resolves.toBeUndefined();
+		const reopened = await SessionManager.open(sessionFile, "/sessions/proj", storage, { suppressBreadcrumb: true });
+		managers.push(reopened);
+		expect(reopened.getSessionName()).toBe("named in the window");
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "in the window", "after the failed delete"]);
+	});
+
+	it.each(windowWrites)(
+		"stays deleted on indexed storage when $write lands while its remove is held (C2)",
+		async ({ run }) => {
+			const { backend, storage, manager, sessionFile } = await indexedSession();
+			const held = backend.holdNextRemove();
+			const drop = manager.dropSession(sessionFile);
+			await held.started;
+			const writesBefore = backend.writes.get(sessionFile) ?? 0;
+			await run(manager);
+			held.release();
+			await drop;
+			await manager.flush();
+			await manager.close();
+			await storage.drain();
+
+			expect(backend.writes.get(sessionFile) ?? 0).toBe(writesBefore);
+			expect(backend.files.has(sessionFile)).toBe(false);
+			expect(storage.existsSync(sessionFile)).toBe(false);
+		},
+	);
+
+	it("keeps saving on indexed storage after its remove failed, publishing a held title through the slot (C1, C4, C6)", async () => {
+		const { backend, storage, manager, sessionFile } = await indexedSession();
+		const held = backend.holdNextRemove({ fail: true });
+		const drop = manager.dropSession(sessionFile);
+		await held.started;
+		manager.appendMessage(userTurn("in the window"));
+		await manager.setSessionName("named in the window", "auto");
+		const fullWritesBefore = backend.fullWrites;
+		held.release();
+		await expect(drop).rejects.toThrow("EIO");
+		await storage.drain();
+		expect(backend.fullWrites).toBe(fullWritesBefore);
+		expect(manager.getSessionFile()).toBe(sessionFile);
+
+		manager.appendMessage(userTurn("after the failed delete"));
+		await expect(manager.flush()).resolves.toBeUndefined();
+		await storage.drain();
+		const reopened = await SessionManager.open(sessionFile, "/sessions/proj", storage, { suppressBreadcrumb: true });
+		managers.push(reopened);
+		expect(reopened.getSessionName()).toBe("named in the window");
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "in the window", "after the failed delete"]);
 	});
 });
 
