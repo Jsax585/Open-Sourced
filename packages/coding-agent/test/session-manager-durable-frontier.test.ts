@@ -655,26 +655,23 @@ describe("a dropped session file", () => {
 		},
 	);
 
-	it.failing(
-		"stays deleted when an authoritative repair already in flight would publish after the unlink (C2)",
-		async () => {
-			const { storage, manager, sessionDir, sessionFile } = await fileSession();
-			const drain = storage.parkNextDrain();
-			const recovery = manager.recoverPersistenceFromCurrentState().catch(() => undefined);
-			await drain.started;
-			const unlinked = storage.parkAfterNextUnlink();
-			const drop = manager.dropSession(sessionFile);
-			drain.release();
-			await recovery;
-			unlinked.release();
-			await expect(drop).resolves.toBeUndefined();
-			await manager.close().catch(() => undefined);
+	it("stays deleted when an authoritative repair already in flight would publish after the unlink (C2)", async () => {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		const drain = storage.parkNextDrain();
+		const recovery = manager.recoverPersistenceFromCurrentState().catch(() => undefined);
+		await drain.started;
+		const unlinked = storage.parkAfterNextUnlink();
+		const drop = manager.dropSession(sessionFile);
+		drain.release();
+		await recovery;
+		unlinked.release();
+		await expect(drop).resolves.toBeUndefined();
+		await manager.close().catch(() => undefined);
 
-			expect(fs.existsSync(sessionFile)).toBe(false);
-			const listed = await SessionManager.list(path.dirname(sessionDir), sessionDir);
-			expect(listed.map(session => session.path)).not.toContain(sessionFile);
-		},
-	);
+		expect(fs.existsSync(sessionFile)).toBe(false);
+		const listed = await SessionManager.list(path.dirname(sessionDir), sessionDir);
+		expect(listed.map(session => session.path)).not.toContain(sessionFile);
+	});
 
 	it("stays deleted when an atomic rewrite already in flight would publish after the unlink (C2)", async () => {
 		const { storage, manager, sessionDir, sessionFile } = await fileSession();

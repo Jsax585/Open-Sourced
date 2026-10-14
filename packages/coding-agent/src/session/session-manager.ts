@@ -1095,6 +1095,11 @@ export class SessionManager {
 	 * full rewrite is owed.
 	 */
 	#pendingDrop: PendingDrop | undefined;
+	/**
+	 * Settles when the authoritative repair in flight ends. The repair runs
+	 * off the disk queue, so {@link dropSession} waits for it here.
+	 */
+	#authoritativeRepair: Promise<void> | undefined;
 	/** Malformed records the loader skipped for the current session file; reported by `/dump anon`. */
 	#loadedMalformedRecords = 0;
 	/** Byte length this manager last loaded or durably wrote; `null` means the path was absent. */
@@ -1693,6 +1698,8 @@ export class SessionManager {
 		this.#rewriteRequired = true;
 		this.#atomicRewriteFenceEpoch = epoch;
 		if (!this.#diskFailure) this.#diskFailure = operationError;
+		const repair = Promise.withResolvers<void>();
+		this.#authoritativeRepair = repair.promise;
 		try {
 			await previousDiskTail.catch(() => undefined);
 			let closeError: Error | undefined;
@@ -1730,6 +1737,8 @@ export class SessionManager {
 					() => !this.#released && this.#diskEpoch === epoch,
 				);
 				if (this.#diskEpoch !== epoch) {
+					// A dropSession() of this file fenced the repair off; a failed delete publishes it.
+					if (this.#deferRewriteForPendingDrop()) return;
 					throw this.#latchIndeterminate(operationError, [
 						new Error("Authoritative session repair was superseded before verification."),
 					]);
@@ -1745,6 +1754,8 @@ export class SessionManager {
 			throw this.#latchIndeterminate(operationError, [toError(error)]);
 		} finally {
 			if (this.#atomicRewriteFenceEpoch === epoch) this.#atomicRewriteFenceEpoch = null;
+			if (this.#authoritativeRepair === repair.promise) this.#authoritativeRepair = undefined;
+			repair.resolve();
 		}
 	}
 
@@ -1767,7 +1778,15 @@ export class SessionManager {
 				? this.#moveOffSessionFile("open-elsewhere")
 				: sessionFile;
 		const body = this.#serializeBody();
-		const options = { expectedSize: this.#expectedDiskSize, commitGuard };
+		// Storage asks the guard last right before it publishes, so its last answer says whether the body landed.
+		let refused = false;
+		const guard =
+			commitGuard &&
+			(() => {
+				refused = !commitGuard();
+				return !refused;
+			});
+		const options = { expectedSize: this.#expectedDiskSize, commitGuard: guard };
 		try {
 			await (this.#storage.writeLinesAtomic
 				? this.#storage.writeLinesAtomic(target, body.lines, options)
@@ -1792,6 +1811,7 @@ export class SessionManager {
 				throw this.#latchIndeterminate(operationError, recoveryErrors);
 			}
 		}
+		if (refused) return;
 		this.#recordPublish(body.stamp, body.bytes, target === this.#sessionFile);
 	}
 
@@ -2934,6 +2954,13 @@ export class SessionManager {
 		const drop: PendingDrop = { sessionFile, deferredRewrite: false, settled: Promise.withResolvers<void>() };
 		this.#pendingDrop = drop;
 		try {
+			// A publish already past its pending-drop check could land after the
+			// unlink: abandon it through its commit guard and owe its body instead.
+			if (this.#atomicRewriteFenceEpoch !== null || this.#authoritativeRepair) {
+				this.#diskEpoch++;
+				this.#deferRewriteForPendingDrop();
+			}
+			await this.#authoritativeRepair;
 			try {
 				await this.#drainAndCloseWriter();
 			} catch {
