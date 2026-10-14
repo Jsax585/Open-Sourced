@@ -629,6 +629,7 @@
 - Fixed `omp worktree add` and other git operations failing with `git open: … does not appear to be a git repository` when the checkout directory name ends in `.git` ([#14553](https://github.com/can1357/oh-my-pi/issues/14553))
 - Fixed Mnemopi embedding workers (and other local-model workers) staying alive and holding gigabytes of RAM after the omp process that started them exited mid-embedding ([#14340](https://github.com/can1357/oh-my-pi/issues/14340))
 - Fixed a supervised PTY service on Windows hanging when it asks the terminal for the cursor position; the launch broker now answers the query as it does on Linux and macOS
+- Added opt-in `retry.waitForConnection` to wait through provider connection loss without exhausting the API retry budget or switching models. Waits are cancellable and preserve completed tool results; repeated visible partial-text continuations retain their existing cap. Defaults to `false`, preserving ordinary error and fallback behavior ([#14380](https://github.com/can1357/oh-my-pi/pull/14380) by [@jroth1111](https://github.com/jroth1111)).
 
 ## [18.6.2] - 2026-10-04
 
