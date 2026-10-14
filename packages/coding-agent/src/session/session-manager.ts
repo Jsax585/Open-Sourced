@@ -2977,6 +2977,12 @@ export class SessionManager {
 				this.#endDroppedSessionFile(sessionFile);
 				return;
 			}
+			// The journal can be gone even though the delete failed (its artifact
+			// cleanup failed after the unlink): that ends persistence too.
+			if (this.#sessionFileGone(sessionFile)) {
+				this.#endDroppedSessionFile(sessionFile);
+				throw failure;
+			}
 			this.#pendingDrop = undefined;
 			if (this.#sessionFile === sessionFile) {
 				// The caller asked to discard these entries: /delete's newSession()
@@ -2989,6 +2995,16 @@ export class SessionManager {
 		} finally {
 			if (this.#pendingDrop === drop) this.#pendingDrop = undefined;
 			drop.settled.resolve();
+		}
+	}
+
+	/** Whether `sessionFile` is known to be absent: its stat fails with ENOENT. Any other stat error counts as present. */
+	#sessionFileGone(sessionFile: string): boolean {
+		try {
+			this.#storage.statSync(sessionFile);
+			return false;
+		} catch (error) {
+			return isEnoent(error);
 		}
 	}
 

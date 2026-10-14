@@ -726,12 +726,6 @@ describe("a dropped session file", () => {
 				manager.appendMessage(userTurn("in the window"));
 			},
 		},
-	])(
-		"counts as gone when the journal unlink succeeded but the artifact cleanup failed, with $write in the window (C4)",
-		async ({ run }) => dropWithFailedArtifactCleanup(run),
-	);
-
-	it.failing.each([
 		{
 			write: "an auto title",
 			run: async (manager: SessionManager) => {
@@ -752,27 +746,25 @@ describe("a dropped session file", () => {
 		async ({ run }) => dropWithFailedArtifactCleanup(run),
 	);
 
-	it.failing(
-		"ends persistence after an artifact cleanup failure: later turns, flushSync() and close() write nothing (C4)",
-		async () => {
-			const { storage, manager, sessionFile } = await fileSession();
-			await manager.saveArtifact("payload", "bash");
-			const rm = spyOn(fsp, "rm").mockRejectedValueOnce(new Error("EBUSY: synthetic rm failure"));
-			try {
-				await expect(manager.dropSession(sessionFile)).rejects.toThrow("failed to remove artifacts directory");
-			} finally {
-				rm.mockRestore();
-			}
-			manager.appendMessage(userTurn("after the drop"));
-			await manager.setSessionName("after the drop", "auto");
-			manager.flushSync();
-			await manager.close();
+	it("ends persistence after an artifact cleanup failure: later turns, flushSync() and close() write nothing (C4)", async () => {
+		const { storage, manager, sessionFile } = await fileSession();
+		await manager.saveArtifact("payload", "bash");
+		const rewritesBefore = storage.fullRewrites;
+		const rm = spyOn(fsp, "rm").mockRejectedValueOnce(new Error("EBUSY: synthetic rm failure"));
+		try {
+			await expect(manager.dropSession(sessionFile)).rejects.toThrow("failed to remove artifacts directory");
+		} finally {
+			rm.mockRestore();
+		}
+		manager.appendMessage(userTurn("after the drop"));
+		await manager.setSessionName("after the drop", "auto");
+		manager.flushSync();
+		await manager.close();
 
-			expect(manager.getSessionFile()).toBeUndefined();
-			expect(fs.existsSync(sessionFile)).toBe(false);
-			expect(storage.fullRewrites).toBe(0);
-		},
-	);
+		expect(manager.getSessionFile()).toBeUndefined();
+		expect(fs.existsSync(sessionFile)).toBe(false);
+		expect(storage.fullRewrites).toBe(rewritesBefore);
+	});
 
 	it("counts as present when the gone check's stat fails with an error other than ENOENT (C4)", async () => {
 		const { storage, manager, sessionDir, sessionFile } = await fileSession();
