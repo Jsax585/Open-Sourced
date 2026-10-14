@@ -415,10 +415,50 @@ describe("a dropped session file", () => {
 
 	// Root ignores directory modes and Windows has none, so the unlink could not fail there.
 	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-		"keeps saving later turns when the delete failed and the file remains (ACP /session delete)",
+		"keeps saving later turns while the directory still refuses the delete (ACP /session delete)",
 		async () => {
 			const { manager, sessionDir, sessionFile } = await fileSession();
-			// A read-only directory refuses the unlink (EACCES).
+			// A read-only directory refuses the unlink (EACCES) and a full rewrite's
+			// temp file; appends to the existing file still work.
+			fs.chmodSync(sessionDir, 0o555);
+			try {
+				await expect(manager.dropSession(sessionFile)).rejects.toThrow();
+				manager.appendMessage(userTurn("after the failed delete"));
+				await expect(manager.flush()).resolves.toBeUndefined();
+			} finally {
+				fs.chmodSync(sessionDir, 0o755);
+			}
+			expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual([
+				"before",
+				"after the failed delete",
+			]);
+		},
+	);
+
+	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"has flush() append a turn that missed the journal before the delete failed",
+		async () => {
+			const { manager, sessionDir, sessionFile } = await fileSession();
+			failNextFileWrite();
+			manager.appendMessage(userTurn("missing"));
+			fs.chmodSync(sessionDir, 0o555);
+			try {
+				await expect(manager.dropSession(sessionFile)).rejects.toThrow();
+				await expect(manager.flush()).resolves.toBeUndefined();
+			} finally {
+				fs.chmodSync(sessionDir, 0o755);
+			}
+			expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual(["before", "missing"]);
+		},
+	);
+
+	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"is left as it was when newSession() follows a failed delete after a turn missed the journal (/delete)",
+		async () => {
+			const { manager, sessionDir, sessionFile } = await fileSession();
+			failNextFileWrite();
+			manager.appendMessage(userTurn("missing"));
+			const bytesBefore = fs.readFileSync(sessionFile);
 			fs.chmodSync(sessionDir, 0o555);
 			try {
 				await expect(manager.dropSession(sessionFile)).rejects.toThrow();
@@ -426,12 +466,10 @@ describe("a dropped session file", () => {
 				fs.chmodSync(sessionDir, 0o755);
 			}
 
-			manager.appendMessage(userTurn("after the failed delete"));
-			await expect(manager.flush()).resolves.toBeUndefined();
-			expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual([
-				"before",
-				"after the failed delete",
-			]);
+			const next = await manager.newSession();
+
+			expect(next).not.toBe(sessionFile);
+			expect(fs.readFileSync(sessionFile).equals(bytesBefore)).toBe(true);
 		},
 	);
 });
