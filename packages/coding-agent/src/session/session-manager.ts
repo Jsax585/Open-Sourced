@@ -20,6 +20,7 @@ import {
 	isEnotempty,
 	isFsError,
 	logger,
+	parseJsonlLenient,
 	pathIsWithin,
 	stringifyJson,
 	toError,
@@ -495,6 +496,19 @@ function resetNestedTaskBilling(extractedToolData: Record<string, unknown[]> | u
 
 function isAssistantEntry(entry: SessionEntry): boolean {
 	return entry.type === "message" && entry.message.role === "assistant";
+}
+
+/** Whether a record read back from a session file is shaped like a session entry (not a header). */
+function isAppendedEntry(record: unknown): record is SessionEntry {
+	return (
+		typeof record === "object" &&
+		record !== null &&
+		"type" in record &&
+		typeof record.type === "string" &&
+		record.type !== "session" &&
+		"id" in record &&
+		typeof record.id === "string"
+	);
 }
 
 function isDraftOnlyMetadataEntry(entry: SessionEntry): boolean {
@@ -1376,26 +1390,56 @@ export class SessionManager {
 	}
 
 	/**
-	 * Another writer appended to the session file past the durable frontier,
-	 * as a session's previous process does with its exit marker after this one
-	 * resumed it, or a clone's original does when it heals an entry both
-	 * hold. Keep those entries and extend the frontier over them when the
-	 * file proves to be exactly this manager's entries followed by them;
-	 * returns whether it did. Otherwise the caller republishes, and its
-	 * conflict recovery keeps them.
+	 * Another writer appended to the session file past `durable`, the file now
+	 * measuring `storedSize`: a session's previous process does with its exit
+	 * marker after this one resumed it, and a clone's original does when it
+	 * heals an entry both hold. Reads only the bytes past the frontier; when
+	 * they are whole records, this manager's next entries in order followed
+	 * only by entries that parent into known ones, keep those and extend the
+	 * frontier over all of them, and return whether it did. Otherwise the
+	 * caller republishes, and its conflict recovery keeps them.
 	 */
-	#adoptEntriesAppendedPastFrontier(sessionFile: string): boolean {
-		if (this.#storage.defersSyncPublish || !this.#storage.readTextSync) return false;
-		let content: string;
+	#adoptEntriesAppendedPastFrontier(sessionFile: string, durable: DurableFrontier, storedSize: number): boolean {
+		if (this.#storage.defersSyncPublish || !this.#storage.readTextRangeSync || durable.issued !== durable.confirmed)
+			return false;
+		let appended: string;
 		try {
-			content = this.#storage.readTextSync(sessionFile);
+			appended = this.#storage.readTextRangeSync(sessionFile, durable.issuedSize, storedSize);
 		} catch {
 			return false;
 		}
-		const found = this.#foreignEntriesIn(content);
-		if (!found?.extendsFrontier) return false;
-		resolveBlobRefsInEntriesSync(found.foreign, this.#blobs);
-		this.#adoptForeignEntries(found, Buffer.byteLength(content, "utf8"));
+		// A record the other writer has not finished would otherwise join the next append's first line.
+		if (!appended.endsWith("\n") || Buffer.byteLength(appended, "utf8") !== storedSize - durable.issuedSize)
+			return false;
+		let malformed = false;
+		const records = parseJsonlLenient<unknown>(appended, {
+			onMalformedRecord: () => {
+				malformed = true;
+			},
+		});
+		if (malformed) return false;
+		const foreign: SessionEntry[] = [];
+		const foreignIds = new Set<string>();
+		let shared = durable.confirmed;
+		for (const record of records) {
+			if (!isAppendedEntry(record)) return false;
+			if (this.#index.has(record.id)) {
+				if (foreign.length > 0 || this.#entries[shared]?.id !== record.id) return false;
+				shared++;
+				continue;
+			}
+			const parentId: unknown = record.parentId;
+			if (
+				typeof parentId !== "string" ||
+				foreignIds.has(record.id) ||
+				!(this.#index.has(parentId) || foreignIds.has(parentId))
+			)
+				return false;
+			foreign.push(record);
+			foreignIds.add(record.id);
+		}
+		resolveBlobRefsInEntriesSync(foreign, this.#blobs);
+		this.#adoptForeignEntries({ foreign, at: shared, shared, extendsFrontier: true }, storedSize);
 		return this.#durable !== undefined;
 	}
 
@@ -2148,9 +2192,10 @@ export class SessionManager {
 	/**
 	 * The durable frontier when it describes the live entries and the session
 	 * file, which no other live process owns, measures exactly what it issued.
-	 * Entries another writer appended past it are adopted first when the file
-	 * is exactly the frontier followed by them, so this manager's entries
-	 * follow them instead of a republish writing them first.
+	 * Entries another writer appended past it are adopted first when the
+	 * bytes past it are this manager's next entries followed only by them, so
+	 * this manager's entries follow them instead of a republish writing them
+	 * first.
 	 */
 	#frontierMatchingSessionFile(): DurableFrontier | undefined {
 		const sessionFile = this.#sessionFile;
@@ -2165,7 +2210,8 @@ export class SessionManager {
 			return undefined;
 		}
 		if (storedSize === durable.issuedSize) return durable;
-		if (storedSize < durable.issuedSize || !this.#adoptEntriesAppendedPastFrontier(sessionFile)) return undefined;
+		if (storedSize < durable.issuedSize || !this.#adoptEntriesAppendedPastFrontier(sessionFile, durable, storedSize))
+			return undefined;
 		const adopted = this.#durable;
 		return adopted?.issuedSize === storedSize ? adopted : undefined;
 	}

@@ -103,6 +103,23 @@ class AppendRecordingStorage extends ControlledRewriteStorage {
 	}
 }
 
+/** Counts the bytes every synchronous read-back returns. */
+class ReadCountingStorage extends ControlledRewriteStorage {
+	bytesRead = 0;
+
+	override readTextSync(fpath: string): string {
+		const text = super.readTextSync(fpath);
+		this.bytesRead += Buffer.byteLength(text, "utf8");
+		return text;
+	}
+
+	override readTextRangeSync(fpath: string, start: number, end: number): string {
+		const text = super.readTextRangeSync(fpath, start, end);
+		this.bytesRead += Buffer.byteLength(text, "utf8");
+		return text;
+	}
+}
+
 const tempDirs: TempDir[] = [];
 const managers: SessionManager[] = [];
 
@@ -482,6 +499,33 @@ describe("a turn appended after another writer's entries", () => {
 		await expect(resumed.flush()).resolves.toBeUndefined();
 		const reopened = await reopen(sessionFile, sessionDir);
 		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "latest turn"]);
+	});
+
+	it("reads back only the bytes the other writer appended", async () => {
+		const storage = new ReadCountingStorage();
+		const first = await fileSession();
+		// History the read-back must not touch.
+		for (let i = 0; i < 20; i++) first.manager.appendCustomEntry("history", { i, payload: "x".repeat(10_000) });
+		await first.manager.flush();
+		const resumed = await SessionManager.open(first.sessionFile, first.sessionDir, storage, {
+			suppressBreadcrumb: true,
+		});
+		managers.push(resumed);
+		const sizeAtResume = fs.statSync(first.sessionFile).size;
+		first.manager.appendCustomEntry("previous-writer-tail", { n: 1 });
+		await first.manager.close();
+		const appendedBytes = fs.statSync(first.sessionFile).size - sizeAtResume;
+		storage.bytesRead = 0;
+
+		resumed.appendMessage(userTurn("latest turn"));
+		await expect(resumed.flush()).resolves.toBeUndefined();
+		expect(storage.bytesRead).toBeGreaterThan(0);
+		expect(storage.bytesRead).toBeLessThanOrEqual(appendedBytes);
+		const reopened = await reopen(first.sessionFile, first.sessionDir);
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "latest turn"]);
+		expect(reopened.getEntries()).toContainEqual(
+			expect.objectContaining({ type: "custom", customType: "previous-writer-tail" }),
+		);
 	});
 });
 
