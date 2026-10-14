@@ -34,6 +34,7 @@ export const stateDefs = {
 		content: "string",
 		status: "TodoStatus",
 		"blocker?": doc("string", "What a `blocked` task is waiting on."),
+		"droppedBy?": doc("'user'", "Explicit user cancellation, distinct from model-authored abandoned work."),
 		"details?": "string",
 		"notes?": "string[]",
 	},

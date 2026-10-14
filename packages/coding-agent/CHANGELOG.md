@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve incomplete and blocked TODOs through compaction and durable snapshots, while keeping explicit user cancellations out of remaining work ([#10053](https://github.com/can1357/oh-my-pi/pull/10053) by [@jroth1111](https://github.com/jroth1111)).
+
 ### Added
 
 - The composer stays usable while a tool approval is pending: sending a message denies the call and steers the turn with it, so the agent knows why it was denied ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))

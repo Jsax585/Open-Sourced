@@ -399,6 +399,8 @@ export interface TodoItem {
 	status: TodoStatus;
 	/** What a `blocked` task is waiting on. */
 	blocker?: string;
+	/** Explicit user cancellation, distinct from model-authored abandoned work. */
+	droppedBy?: "user";
 	details?: string;
 	notes?: string[];
 }

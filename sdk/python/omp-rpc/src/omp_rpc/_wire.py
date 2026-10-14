@@ -552,6 +552,8 @@ class TodoItem:
     status: TodoStatus
     blocker: str | None = None
     """What a `blocked` task is waiting on."""
+    dropped_by: Literal["user"] | None = None
+    """Explicit user cancellation, distinct from model-authored abandoned work."""
     details: str | None = None
     notes: tuple[str, ...] | None = None
 
@@ -1824,6 +1826,7 @@ def parse_todo_item(value: object, path: str = "TodoItem") -> TodoItem:
         content=required(payload, "content", decode_str, path),
         status=required(payload, "status", _decode_todo_status, path),
         blocker=optional(payload, "blocker", decode_str, path),
+        dropped_by=optional(payload, "droppedBy", cast('Decoder[Literal["user"]]', literal(frozenset({"user"}))), path),
         details=optional(payload, "details", decode_str, path),
         notes=optional(payload, "notes", array(decode_str), path),
     )

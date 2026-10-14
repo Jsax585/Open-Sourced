@@ -2387,6 +2387,8 @@ export class AgentSession implements SettingsScope {
 				this.#todo.syncFromBranch();
 				this.#modelMentions.syncFromBranch();
 			},
+			incompleteTodosCompactionContext: () => this.#todo.buildIncompleteTodosCompactionContext(),
+			appendIncompleteTodosToCompactionSummary: summary => this.#todo.appendIncompleteTodosToSummary(summary),
 			resetAdvisorRuntimes: (reason, options) => this.#advisors.resetAllRuntimes(reason, options),
 			rebaseAdvisorPrefix: reason => this.#advisors.rebaseDeliveredPrefixes(reason),
 			rebaseAfterCompaction: () => this.#stats.rebaseAfterCompaction(),
@@ -7121,12 +7123,15 @@ export class AgentSession implements SettingsScope {
 		let total = 0;
 		let closed = 0;
 		let open = 0;
+		let dropped = 0;
 		const promptPhases = phases.map(phase => ({
 			name: this.#sanitizeGoalTodoText(phase.name),
 			tasks: phase.tasks.map(task => {
 				total++;
-				if (task.status === "completed" || task.status === "abandoned") {
+				if (task.status === "completed") {
 					closed++;
+				} else if (task.status === "abandoned") {
+					dropped++;
 				} else {
 					open++;
 				}
@@ -7137,6 +7142,7 @@ export class AgentSession implements SettingsScope {
 		return prompt.render(goalTodoContextPrompt, {
 			canCallTodoTool,
 			closed: String(closed),
+			dropped: dropped > 0 ? String(dropped) : undefined,
 			open: String(open),
 			phases: promptPhases,
 			total: String(total),
