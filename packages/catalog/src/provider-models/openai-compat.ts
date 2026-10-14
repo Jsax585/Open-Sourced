@@ -3495,6 +3495,7 @@ export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): Mo
 						if (metadata.input) {
 							model.input = metadata.input;
 						}
+						return undefined;
 					}),
 				);
 				return openAiCompatible;
@@ -8027,4 +8028,89 @@ export function singularityApiTechModelManagerOptions(
 	config?: SingularityApiModelManagerConfig,
 ): ModelManagerOptions<Api> {
 	return singularityApiModelManagerOptions("singularityapi-tech", SINGULARITYAPI_TECH_API_BASE_URL, config);
+}
+
+// ---------------------------------------------------------------------------
+// ExLlama3 (TabbyAPI)
+// ---------------------------------------------------------------------------
+
+const EXLLAMA3_DISCOVERY_TIMEOUT_MS = 10_000;
+
+export interface ExLlama3ModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+/**
+ * The context window TabbyAPI reports for one `/v1/models` entry.
+ *
+ * TabbyAPI shapes its roster after llama-server on purpose: each card carries a
+ * `meta` block documented as *"the shape llama-server attaches to /v1/models
+ * entries, which local-model clients read to size their context window"*, plus the
+ * card's own `parameters.max_seq_len`. Precedence is most-runtime-truth-first:
+ * `meta.n_ctx` is the **loaded** context length (`model.container.max_seq_len`), so
+ * it reflects the `max_seq_len` the operator actually booted with; the card's
+ * `max_seq_len` is the same value on a loaded model and the configured default
+ * otherwise; `meta.n_ctx_train` is only the architectural training window, which is
+ * the weakest claim about what the server will accept, so it stays the last resort.
+ * The generic OpenAI reader looks at `max_model_len`/`context_length`, which TabbyAPI
+ * never emits, so without this every exl3 model would land on the discovery default.
+ */
+function exLlama3ReportedContextWindow(entry: OpenAICompatibleModelRecord): number | null {
+	const meta = isRecord(entry.meta) ? entry.meta : undefined;
+	const parameters = isRecord(entry.parameters) ? entry.parameters : undefined;
+	return (
+		toPositiveNumberOrNull(meta?.n_ctx) ??
+		toPositiveNumberOrNull(parameters?.max_seq_len) ??
+		toPositiveNumberOrNull(meta?.n_ctx_train)
+	);
+}
+
+/**
+ * ExLlama3 through TabbyAPI, its official OpenAI-compatible server. Discovery is
+ * authoritative and the roster is the operator's model directory, so ids are
+ * user-chosen folder names that cannot match a bundled catalog row: no reference
+ * enrichment is attempted, and every field comes off the wire or from the reviewed
+ * `exllama3` KDL rules.
+ */
+export function exLlama3ModelManagerOptions(
+	config?: ExLlama3ModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? getDefaultModelDiscoveryBaseUrl("exllama3")!;
+	return {
+		providerId: "exllama3",
+		cacheProviderId: resolveModelCacheProviderId("exllama3", { baseUrl }),
+		fetchDynamicModels: () =>
+			fetchOpenAICompatibleModels({
+				api: "openai-completions",
+				provider: "exllama3",
+				baseUrl,
+				apiKey,
+				mapModel: (entry, defaults) => {
+					// TabbyAPI serializes `parameters: null` on every card (Pydantic v2 keeps
+					// null fields), while a generic OpenAI `/v1/models` roster (text-generation-
+					// webui, a Flask dev server) carries only the bare OpenAI fields. A foreign
+					// roster on the crowded default port must not be listed under exllama3 with
+					// TabbyAPI-specific compat.
+					if (!("parameters" in entry) && !("logging" in entry)) {
+						return null;
+					}
+					// With an admin key TabbyAPI lists every subdirectory of `model_dir`, and it
+					// filters nothing: HuggingFace's download cache (`.cache`) shows up beside real
+					// checkpoints. A dot-directory is never a loadable model choice, so the catalog
+					// path drops it exactly as the coding-agent discovery path does.
+					if (defaults.id.startsWith(".")) {
+						return null;
+					}
+					return {
+						...defaults,
+						contextWindow: exLlama3ReportedContextWindow(entry) ?? defaults.contextWindow,
+					};
+				},
+				fetch: config?.fetch,
+				timeoutMs: EXLLAMA3_DISCOVERY_TIMEOUT_MS,
+			}),
+	};
 }

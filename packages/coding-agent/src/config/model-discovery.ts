@@ -15,6 +15,7 @@ import {
 	resolveModelReference,
 	stripBracketedModelIdAffixes,
 } from "@oh-my-pi/pi-catalog/identity";
+import { EXLLAMA3_DEFAULT_BASE_URL } from "@oh-my-pi/pi-catalog/provider-models/cache-provider-id";
 import {
 	fetchLiteLLMRichModels,
 	fetchLmStudioNativeModelMetadata,
@@ -218,17 +219,24 @@ type DiscoveredModelRuntimeMetadata = {
 	input?: ("text" | "image")[];
 };
 
+/**
+ * A llama-server-shaped model-list entry, shared by the llama.cpp and ExLlama3
+ * (TabbyAPI) discovery paths: TabbyAPI shapes its roster after llama-server
+ * deliberately, so both parsers normalize into this one shape.
+ */
 type LlamaCppModelListEntry = {
 	id: string;
 	input?: ("text" | "image")[];
 	runtimeContextWindow?: number;
 	/**
-	 * `--ctx-size` extracted from the entry's `status.args` (rendered CLI arg
-	 * vector) or `status.preset` INI. Populated for llama-server router-mode
-	 * presets so unloaded models surface the user's configured window instead
-	 * of falling through to the 128K default — the router-level `/props`
-	 * reports a dummy `n_ctx: 0` and `meta.n_ctx` is only merged in after a
-	 * child instance loads (issue #4190).
+	 * The context window the server declares for this entry outside the loaded
+	 * runtime. For llama.cpp this is `--ctx-size` extracted from the entry's
+	 * `status.args` (rendered CLI arg vector) or `status.preset` INI — populated
+	 * for llama-server router-mode presets so unloaded models surface the user's
+	 * configured window instead of falling through to the 128K default, since the
+	 * router-level `/props` reports a dummy `n_ctx: 0` and `meta.n_ctx` is only
+	 * merged in after a child instance loads (issue #4190). For ExLlama3
+	 * (TabbyAPI) this is `parameters.max_seq_len` from the model card.
 	 */
 	configuredContextWindow?: number;
 	trainingContextWindow?: number;
@@ -436,6 +444,8 @@ export function discoverModelsByProviderType(
 		case "lm-studio":
 		case "openai-models-list":
 			return discoverOpenAIModelsList(providerConfig, ctx);
+		case "exllama3":
+			return discoverExLlama3Models(providerConfig, ctx);
 		case "proxy":
 			return discoverProxyModels(providerConfig, ctx);
 		case "litellm":
@@ -609,42 +619,87 @@ async function discoverLlamaCppServerMetadata(
 	}
 }
 
-export async function discoverLlamaCppModels(
+/**
+ * Options for the shared local-server roster probe, which both llama.cpp and
+ * ExLlama3 (TabbyAPI) discovery run: the two servers expose a llama-server-shaped
+ * model list and a `/props` endpoint, and differ only in the list URL, the roster
+ * parser, and which HTTP statuses count as an auth rejection.
+ */
+type LocalServerRosterOptions = {
+	/** The model-list URL to probe. */
+	modelsUrl: string;
+	/** The native base URL for the `/props` probe and the loopback timeout budget. */
+	nativeBaseUrl: string;
+	/**
+	 * HTTP statuses that count as an auth rejection for this provider. llama.cpp
+	 * treats both 401 and 403 as "needs a key"; TabbyAPI answers 401 for every
+	 * auth failure (its `check_api_key` never raises 403), so a 403 on its default
+	 * port is more likely a foreign service (macOS AirPlay answers 403 for unknown
+	 * paths) than a missing key, and exllama3 lists only 401.
+	 */
+	authRejectionStatuses: readonly number[];
+	/** Parse the roster payload into normalized entries. */
+	parse: (payload: unknown) => LlamaCppModelListEntry[];
+};
+
+/**
+ * Probe a local server's model list and server-wide `/props` metadata in
+ * parallel, applying the provider's auth-rejection statuses to the non-OK
+ * response, and build the discovered models from the parsed roster.
+ *
+ * Shared by {@link discoverLlamaCppModels} and {@link discoverExLlama3Models}:
+ * the two differ only in the list URL, the roster parser, and the auth-rejection
+ * statuses, so the fetch/auth/timeout dance and the build loop live here once.
+ */
+async function discoverLocalServerModels(
 	providerConfig: DiscoveryProviderConfig,
 	ctx: DiscoveryContext,
+	options: LocalServerRosterOptions,
 ): Promise<Model<Api>[]> {
-	const baseUrl = normalizeLlamaCppBaseUrl(providerConfig.baseUrl);
-	const modelsUrl = `${baseUrl}/models`;
-
+	const { modelsUrl, nativeBaseUrl, authRejectionStatuses, parse } = options;
 	const baseHeaders: Record<string, string> = { ...providerConfig.headers };
 	let headers = baseHeaders;
 	const customTimeoutMs = providerConfig.discovery.timeoutMs;
 	const attempt = async (h: Record<string, string>) => {
-		const [payload, metadata] = await Promise.all([
-			withTimeoutSignal(discoveryProbeTimeoutMs(baseUrl, 250, customTimeoutMs), async signal => {
-				const response = await ctx.fetch(modelsUrl, {
-					headers: h,
-					signal,
-				});
+		const [payload, serverMetadata] = await Promise.all([
+			// Loopback budget: a stopped local server means "not running", not
+			// "slow link", so an implicit provider with no server up must not
+			// stall startup.
+			withTimeoutSignal(discoveryProbeTimeoutMs(nativeBaseUrl, 250, customTimeoutMs), async signal => {
+				const response = await ctx.fetch(modelsUrl, { headers: h, signal });
 				if (!response.ok) {
+					if (response.status === 403 && !authRejectionStatuses.includes(403)) {
+						// A 403 this provider does not treat as an auth rejection is a
+						// foreign service on a crowded default port, not a missing key:
+						// surfacing it as one would prompt for a credential the service
+						// never checks. The message carries no status digits so the
+						// auth-retry classifier cannot parse it as a retryable 403.
+						throw new Error(
+							`${providerConfig.provider} discovery: the service on this port rejected the request without an authentication response`,
+						);
+					}
 					throw new DiscoveryHttpError(response.status, modelsUrl);
 				}
 				headers = h;
 				return (await response.json()) as unknown;
 			}),
-			discoverLlamaCppServerMetadata(ctx, baseUrl, h, customTimeoutMs),
+			discoverLlamaCppServerMetadata(ctx, nativeBaseUrl, h, customTimeoutMs),
 		]);
-		return [payload, metadata] as const;
+		return [payload, serverMetadata] as const;
 	};
 	const apiKey = await ctx.getBearerApiKeyResolver(providerConfig.provider);
 	const [payload, serverMetadata] = apiKey
 		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
 		: await attempt(baseHeaders);
-	const models = parseLlamaCppModelList(payload);
 	const discovered: Model<Api>[] = [];
-	for (const item of models) {
+	for (const item of parse(payload)) {
 		const { id } = item;
 		if (!id) continue;
+		// Most-runtime-truth-first: the loaded window beats the server-declared
+		// window, which beats the server-wide `/props` window, which beats the
+		// architectural training window (a 256K-trained model booted at 32K must
+		// not be registered at 256K, or every request 400s after the template is
+		// applied).
 		const contextWindow =
 			item.runtimeContextWindow ??
 			item.configuredContextWindow ??
@@ -658,7 +713,7 @@ export async function discoverLlamaCppModels(
 					name: id,
 					api: providerConfig.api,
 					provider: providerConfig.provider,
-					baseUrl: ensureLlamaCppV1BaseUrl(baseUrl),
+					baseUrl: ensureLlamaCppV1BaseUrl(nativeBaseUrl),
 					reasoning: false,
 					input: item.input ?? serverMetadata?.input ?? ["text"],
 					imageInputDecoder: "stb",
@@ -674,37 +729,165 @@ export async function discoverLlamaCppModels(
 	return discovered;
 }
 
-export async function discoverLlamaCppModelRuntimeMetadata(
+export async function discoverLlamaCppModels(
+	providerConfig: DiscoveryProviderConfig,
+	ctx: DiscoveryContext,
+): Promise<Model<Api>[]> {
+	const baseUrl = normalizeLlamaCppBaseUrl(providerConfig.baseUrl);
+	return discoverLocalServerModels(providerConfig, ctx, {
+		modelsUrl: `${baseUrl}/models`,
+		nativeBaseUrl: baseUrl,
+		authRejectionStatuses: [401, 403],
+		parse: parseLlamaCppModelList,
+	});
+}
+
+// ---------------------------------------------------------------------------
+// ExLlama3 (TabbyAPI)
+// ---------------------------------------------------------------------------
+
+/**
+ * TabbyAPI's HTTP root, with the `/v1` chat suffix removed.
+ *
+ * TabbyAPI roots its OpenAI-compatible surface at `/v1` (`/v1/models`,
+ * `/v1/chat/completions`) while `/props` sits at the root, so the two probes need
+ * different bases — the inverse of llama.cpp, whose native `/models` is at the root
+ * and whose OpenAI surface is the `/v1` child.
+ */
+export function normalizeExLlama3BaseUrl(baseUrl?: string): string {
+	const raw = baseUrl || EXLLAMA3_DEFAULT_BASE_URL;
+	try {
+		const parsed = new URL(raw);
+		const trimmedPath = parsed.pathname.replace(/\/+$/g, "");
+		const nativePath = trimmedPath.endsWith("/v1") ? trimmedPath.slice(0, -3) : trimmedPath;
+		return `${parsed.protocol}//${parsed.host}${nativePath}`;
+	} catch {
+		return raw;
+	}
+}
+
+/**
+ * TabbyAPI's model-card extras, which the OpenAI schema it follows defines
+ * nowhere: `parameters.max_seq_len` (the context the server will accept) and
+ * `parameters.use_vision` (whether the loaded build carries a vision tower).
+ */
+function extractExLlama3CardCapabilities(item: Record<string, unknown>): {
+	contextWindow?: number;
+	input?: ("text" | "image")[];
+} {
+	const parameters = item.parameters;
+	if (!isRecord(parameters)) return {};
+	const extracted: { contextWindow?: number; input?: ("text" | "image")[] } = {};
+	const contextWindow = toPositiveNumberOrUndefined(parameters.max_seq_len);
+	if (contextWindow !== undefined) {
+		extracted.contextWindow = contextWindow;
+	}
+	if (typeof parameters.use_vision === "boolean") {
+		extracted.input = parameters.use_vision ? ["text", "image"] : ["text"];
+	}
+	return extracted;
+}
+
+function parseExLlama3ModelList(payload: unknown): LlamaCppModelListEntry[] {
+	if (!isRecord(payload) || !Array.isArray(payload.data)) {
+		return [];
+	}
+	return payload.data.flatMap(item => {
+		if (!isRecord(item) || typeof item.id !== "string" || !item.id) {
+			return [];
+		}
+		// With an admin key TabbyAPI lists every subdirectory of `model_dir`, and it
+		// filters nothing: HuggingFace's download cache (`.cache`) shows up beside real
+		// checkpoints. A dot-directory is never a loadable model choice, so offering it
+		// in the picker only produces a model that cannot be selected.
+		if (item.id.startsWith(".")) {
+			return [];
+		}
+		const card = extractExLlama3CardCapabilities(item);
+		// `meta.n_ctx` / `meta.n_ctx_train` are read by the llama.cpp helper because
+		// TabbyAPI shapes its roster after llama-server deliberately: its `ModelCardMeta`
+		// is documented as "the shape llama-server attaches to /v1/models entries, which
+		// local-model clients read to size their context window".
+		const { runtimeContextWindow, trainingContextWindow } = extractLlamaCppModelContextWindows(item);
+		return [
+			{
+				id: item.id,
+				input: card.input,
+				runtimeContextWindow,
+				configuredContextWindow: card.contextWindow,
+				trainingContextWindow,
+			},
+		];
+	});
+}
+
+/**
+ * ExLlama3, served by TabbyAPI (its official OpenAI-compatible backend).
+ *
+ * The `/props` probe is the llama.cpp one on purpose: TabbyAPI implements that
+ * contract deliberately (`ModelPropsResponse` is documented as "the shape of
+ * llama-server's /props so clients written for it can discover the context size and
+ * modalities"), and it is the only route to `modalities.vision` and to the running
+ * server's `n_ctx`.
+ */
+export async function discoverExLlama3Models(
+	providerConfig: DiscoveryProviderConfig,
+	ctx: DiscoveryContext,
+): Promise<Model<Api>[]> {
+	const nativeBaseUrl = normalizeExLlama3BaseUrl(providerConfig.baseUrl);
+	return discoverLocalServerModels(providerConfig, ctx, {
+		modelsUrl: `${nativeBaseUrl}/v1/models`,
+		nativeBaseUrl,
+		authRejectionStatuses: [401],
+		parse: parseExLlama3ModelList,
+	});
+}
+
+/**
+ * Re-probe a single selected model's runtime metadata on a local server, the
+ * shared core of {@link discoverLlamaCppModelRuntimeMetadata} and
+ * {@link discoverExLlama3ModelRuntimeMetadata}.
+ *
+ * A roster captured at discovery time can go stale when the operator reloads the
+ * model at a different context size, so the selected model's window is re-probed
+ * on selection. The probe resolves `undefined` on any failure (a stopped server,
+ * a timeout, a non-JSON body) so the caller keeps the cached row rather than
+ * rejecting the selection.
+ */
+async function discoverLocalServerModelRuntimeMetadata(
 	model: Pick<Model<Api>, "provider" | "id" | "baseUrl" | "headers">,
 	ctx: DiscoveryContext,
+	options: {
+		modelsUrl: string;
+		nativeBaseUrl: string;
+		parse: (payload: unknown) => LlamaCppModelListEntry[];
+		/**
+		 * Whether the architectural training window is a last-resort claim.
+		 * llama.cpp falls back to it; ExLlama3 does not, because patching the
+		 * selected model's window to the training ceiling after a reload could
+		 * overstate what the server accepts (a 256K-trained model booted at 32K).
+		 */
+		fallbackToTraining: boolean;
+	},
 	customTimeoutMs?: number,
 ): Promise<DiscoveredModelRuntimeMetadata | undefined> {
-	const baseUrl = normalizeLlamaCppBaseUrl(model.baseUrl);
-	// Probe the native `/models` endpoint (not the OpenAI-compatible `/v1/models`)
-	// so the runtime `meta`, `status.args`, and `architecture.input_modalities`
-	// fields survive; a Qwen model routed to chat-completions carries a `/v1`
-	// base URL, which would otherwise send this to `/v1/models`.
-	const nativeBaseUrl = toLlamaCppNativeBaseUrl(baseUrl);
-	const modelsUrl = `${nativeBaseUrl}/models`;
+	const { modelsUrl, nativeBaseUrl, parse, fallbackToTraining } = options;
 	const baseHeaders: Record<string, string> = { ...model.headers };
 	const attempt = async (headers: Record<string, string>) => {
 		const [entries, serverMetadata] = await Promise.all([
 			withTimeoutSignal(discoveryProbeTimeoutMs(nativeBaseUrl, 250, customTimeoutMs), async signal => {
-				const response = await ctx.fetch(modelsUrl, {
-					headers,
-					signal,
-				});
+				const response = await ctx.fetch(modelsUrl, { headers, signal });
 				if (!response.ok) {
 					return undefined;
 				}
-				return parseLlamaCppModelList(await response.json());
+				return parse(await response.json());
 			}),
 			discoverLlamaCppServerMetadata(ctx, nativeBaseUrl, headers, customTimeoutMs),
 		]);
 		if (!entries) {
 			return undefined;
 		}
-		const entry = entries.find(entry => entry.id === model.id);
+		const entry = entries.find(candidate => candidate.id === model.id);
 		if (!entry) {
 			return undefined;
 		}
@@ -712,7 +895,7 @@ export async function discoverLlamaCppModelRuntimeMetadata(
 			entry.runtimeContextWindow ??
 			entry.configuredContextWindow ??
 			serverMetadata?.contextWindow ??
-			entry.trainingContextWindow;
+			(fallbackToTraining ? entry.trainingContextWindow : undefined);
 		const input = entry.input ?? serverMetadata?.input;
 		if (contextWindow === undefined) {
 			return input === undefined ? undefined : { input };
@@ -731,6 +914,60 @@ export async function discoverLlamaCppModelRuntimeMetadata(
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Re-probe the selected model's runtime metadata, the ExLlama3 sibling of
+ * {@link discoverLlamaCppModelRuntimeMetadata}.
+ *
+ * TabbyAPI fills `meta.n_ctx` from `model.container.max_seq_len`, i.e. only for the
+ * model that is currently loaded, and `/props` sits behind `check_model_container`
+ * (it errors until something is loaded). A roster captured before the operator
+ * loaded a model — or captured at a different `max_seq_len` after a reload —
+ * therefore carries a stale window, and only a re-probe reveals what the server will
+ * actually accept.
+ */
+export async function discoverExLlama3ModelRuntimeMetadata(
+	model: Pick<Model<Api>, "provider" | "id" | "baseUrl" | "headers">,
+	ctx: DiscoveryContext,
+	customTimeoutMs?: number,
+): Promise<DiscoveredModelRuntimeMetadata | undefined> {
+	const nativeBaseUrl = normalizeExLlama3BaseUrl(model.baseUrl);
+	return discoverLocalServerModelRuntimeMetadata(
+		model,
+		ctx,
+		{
+			modelsUrl: `${nativeBaseUrl}/v1/models`,
+			nativeBaseUrl,
+			parse: parseExLlama3ModelList,
+			fallbackToTraining: false,
+		},
+		customTimeoutMs,
+	);
+}
+
+export async function discoverLlamaCppModelRuntimeMetadata(
+	model: Pick<Model<Api>, "provider" | "id" | "baseUrl" | "headers">,
+	ctx: DiscoveryContext,
+	customTimeoutMs?: number,
+): Promise<DiscoveredModelRuntimeMetadata | undefined> {
+	const baseUrl = normalizeLlamaCppBaseUrl(model.baseUrl);
+	// Probe the native `/models` endpoint (not the OpenAI-compatible `/v1/models`)
+	// so the runtime `meta`, `status.args`, and `architecture.input_modalities`
+	// fields survive; a Qwen model routed to chat-completions carries a `/v1`
+	// base URL, which would otherwise send this to `/v1/models`.
+	const nativeBaseUrl = toLlamaCppNativeBaseUrl(baseUrl);
+	return discoverLocalServerModelRuntimeMetadata(
+		model,
+		ctx,
+		{
+			modelsUrl: `${nativeBaseUrl}/models`,
+			nativeBaseUrl,
+			parse: parseLlamaCppModelList,
+			fallbackToTraining: true,
+		},
+		customTimeoutMs,
+	);
 }
 
 /**
