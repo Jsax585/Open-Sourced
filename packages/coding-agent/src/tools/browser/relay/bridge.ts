@@ -865,19 +865,15 @@ export class RelayBridge {
 						),
 				);
 				const pendingTrackedRootMutation = [...tab.pendingSubscriptions.values()].some(pending => pending.size > 0);
-				const interruptedPreloadRecovery = [...this.#pendingRpc.entries()].some(
-					([key, pending]) =>
-						key.startsWith(`${instanceId}:`) &&
-						pending.req.op === "send" &&
-						pending.req.tabId === tab.tabId &&
-						[
-							"Page.addScriptToEvaluateOnNewDocument",
-							"Page.removeScriptToEvaluateOnNewDocument",
-							"Page.getFrameTree",
-							"Page.createIsolatedWorld",
-							"Runtime.evaluate",
-						].includes(pending.req.method),
-				);
+				// Any interrupted recovery await can leave a newly attached root before
+				// its preserved preloads were replayed. Recycle that root instead of
+				// treating the replacement hello's attached bit as completion.
+				const interruptedPreloadRecovery =
+					tab.preloadScripts.size > 0 &&
+					[...this.#pendingRpc.entries()].some(
+						([key, pending]) =>
+							key.startsWith(`${instanceId}:`) && pending.req.op === "send" && pending.req.tabId === tab.tabId,
+					);
 				if (
 					pendingPreloadRootMutation ||
 					tab.pendingPreloadProbes > 0 ||
@@ -3931,6 +3927,12 @@ export class RelayBridge {
 		const [, currentDocumentState] = await Promise.all([enablePageEvents, currentLoaderPromise]);
 		const currentLoaderId = currentDocumentState?.mainLoaderId;
 		for (const script of preloadScripts) {
+			if (
+				this.#preloadScript(tab, script.ownerSessionId, script.clientIdentifier) !== script ||
+				!conns.some(conn => this.#sessionOwnsTab(conn, tab.tabKey, script.ownerSessionId))
+			) {
+				continue;
+			}
 			this.#assertExtensionCurrent(expectedExt);
 			const rootGeneration = tab.runtimeGeneration;
 			const previousLoaderId = recoveryLoaderId ?? script.loaderId;

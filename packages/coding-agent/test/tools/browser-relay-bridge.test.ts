@@ -3891,6 +3891,123 @@ describe("RelayBridge tab grouping", () => {
 		expect(cdp.messages.filter(message => message.id === removeId && "result" in message)).toHaveLength(1);
 	});
 
+	it("replays preloads when socket replacement interrupts restore before preload replay", async () => {
+		const bridge = new RelayBridge({});
+		const ext = new FakeExtSocket();
+		connect(bridge, ext, [tab({ tabId: 1 })]);
+		const cdp = new FakeCdpSocket();
+		const connId = bridge.cdpConnected(cdp);
+		const pageSession = await attachPage(bridge, ext, cdp, connId, 1);
+
+		bridge.cdpMessage(connId, JSON.stringify({ id: ++msgSeq, sessionId: pageSession, method: "Runtime.enable" }));
+		await waitFor(() => ext.pending("send").some(rpc => rpc.method === "Runtime.disable"));
+		ack(bridge, ext, "send");
+		await waitFor(() => ext.pending("send").some(rpc => rpc.method === "Runtime.enable"));
+		ack(bridge, ext, "send");
+		await flush();
+
+		bridge.cdpMessage(
+			connId,
+			JSON.stringify({
+				id: ++msgSeq,
+				sessionId: pageSession,
+				method: "Page.addScriptToEvaluateOnNewDocument",
+				params: { source: "window.__restoredAfterSwap = true;" },
+			}),
+		);
+		await waitFor(() => ext.pending("send").some(rpc => rpc.method === "Page.addScriptToEvaluateOnNewDocument"));
+		ack(bridge, ext, "send", { identifier: "root-script-before-recovery" });
+		await flush();
+
+		bridge.extClosed(ext);
+		const recovering = new FakeExtSocket();
+		connect(bridge, recovering, [tab({ tabId: 1, groupId: -1 })], { recoverableTabIds: [1] });
+		await waitFor(() => recovering.pending("attach").length === 1, "first recovery attach");
+		ack(bridge, recovering, "attach");
+		await waitFor(
+			() => recovering.pending("send").some(rpc => rpc.method === "Runtime.disable"),
+			"pre-preload restore RPC",
+		);
+
+		const replacement = new FakeExtSocket();
+		connect(bridge, replacement, [tab({ tabId: 1, groupId: -1 })], {
+			attachedTabIds: [1],
+			recoverableTabIds: [1],
+		});
+		await waitFor(() => replacement.pending("detach").length === 1, "fresh-root detach after interrupted restore");
+		ack(bridge, replacement, "detach");
+		await waitFor(() => replacement.pending("attach").length === 1, "fresh-root attach after interrupted restore");
+		ack(bridge, replacement, "attach");
+		await waitFor(() => replacement.pending("send").some(rpc => rpc.method === "Runtime.disable"));
+		ack(bridge, replacement, "send");
+		await waitFor(() => replacement.pending("send").some(rpc => rpc.method === "Runtime.enable"));
+		ack(bridge, replacement, "send");
+		await waitFor(
+			() => replacement.pending("send").some(rpc => rpc.method === "Page.addScriptToEvaluateOnNewDocument"),
+			"preload replay after interrupted restore",
+		);
+		expect(
+			replacement.pending("send").find(rpc => rpc.method === "Page.addScriptToEvaluateOnNewDocument")?.params,
+		).toEqual({ source: "window.__restoredAfterSwap = true;" });
+		ack(bridge, replacement, "send", { identifier: "root-script-after-replacement" });
+		await flush();
+	});
+
+	it("skips a snapshotted preload whose owner disconnects before replay", async () => {
+		const bridge = new RelayBridge({});
+		const ext = new FakeExtSocket();
+		connect(bridge, ext, [tab({ tabId: 1 })]);
+		const surviving = new FakeCdpSocket();
+		const survivingConn = bridge.cdpConnected(surviving);
+		const survivingSession = await attachPage(bridge, ext, surviving, survivingConn, 1);
+		const departing = new FakeCdpSocket();
+		const departingConn = bridge.cdpConnected(departing);
+		const departingSession = await attachPage(bridge, ext, departing, departingConn, 1);
+
+		for (const [connId, sessionId, source, identifier] of [
+			[survivingConn, survivingSession, "window.__survivingPreload = true;", "surviving-before-recovery"],
+			[departingConn, departingSession, "window.__departedPreload = true;", "departing-before-recovery"],
+		] as const) {
+			bridge.cdpMessage(
+				connId,
+				JSON.stringify({
+					id: ++msgSeq,
+					sessionId,
+					method: "Page.addScriptToEvaluateOnNewDocument",
+					params: { source },
+				}),
+			);
+			await waitFor(() => ext.pending("send").some(rpc => rpc.method === "Page.addScriptToEvaluateOnNewDocument"));
+			ack(bridge, ext, "send", { identifier });
+			await flush();
+		}
+
+		bridge.extClosed(ext);
+		const recovered = new FakeExtSocket();
+		connect(bridge, recovered, [tab({ tabId: 1, groupId: -1 })], { recoverableTabIds: [1] });
+		await waitFor(() => recovered.pending("attach").length === 1, "preload owner recovery attach");
+		ack(bridge, recovered, "attach");
+		await waitFor(
+			() => recovered.pending("send").some(rpc => rpc.method === "Page.addScriptToEvaluateOnNewDocument"),
+			"surviving preload replay",
+		);
+		expect(
+			recovered.pending("send").find(rpc => rpc.method === "Page.addScriptToEvaluateOnNewDocument")?.params,
+		).toEqual({ source: "window.__survivingPreload = true;" });
+
+		bridge.cdpClosed(departingConn);
+		ack(bridge, recovered, "send", { identifier: "surviving-after-recovery" });
+		await flush();
+		expect(
+			recovered
+				.rpcs("send")
+				.filter(rpc => rpc.method === "Page.addScriptToEvaluateOnNewDocument")
+				.map(rpc => rpc.params),
+		).toEqual([{ source: "window.__survivingPreload = true;" }]);
+		ack(bridge, recovered, "send");
+		await flush();
+	});
+
 	it.each([
 		{
 			name: "after a hashbang",
