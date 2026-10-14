@@ -425,6 +425,27 @@ describe("a restored snapshot taken while an entry missed the journal", () => {
 	});
 });
 
+describe("a clone taken before its original heals an entry that missed the journal", () => {
+	it("saves the clone's next turn after the heal while every full rewrite fails", async () => {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		storage.failRewrites = true;
+		failNextFileWrite();
+		manager.appendMessage(userTurn("missing"));
+		// AgentSession.newSession detaches the running bash command onto a clone, then flushes, which heals.
+		const clone = manager.cloneCurrentSession();
+		managers.push(clone);
+		await manager.flush();
+
+		clone.appendMessage(userTurn("bash result"));
+		await expect(clone.close()).resolves.toBeUndefined();
+		expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual([
+			"before",
+			"missing",
+			"bash result",
+		]);
+	});
+});
+
 describe("a turn appended after another writer's entries", () => {
 	/** A second manager resumes the journal while the first is still live; the first then appends its tail and closes. */
 	async function resumedBehindAnotherWriter(storage = new ControlledRewriteStorage()) {

@@ -837,6 +837,8 @@ function durableFrontier(generation: number, count: number, size: number): Durab
 interface ForeignEntries {
 	foreign: SessionEntry[];
 	at: number;
+	/** How many of this manager's entries, in order from the first, the file holds before them. */
+	shared: number;
 	extendsFrontier: boolean;
 }
 
@@ -1308,8 +1310,10 @@ export class SessionManager {
 	 * when it is not this session's journal. `at` is where they go in
 	 * `#entries` to keep the file's order: after the last entry both hold, so
 	 * this manager's entries the file lacks still follow them.
-	 * `extendsFrontier` reports that the file is exactly the durable frontier
-	 * followed by them.
+	 * `extendsFrontier` reports that the file is this manager's first
+	 * `shared` entries, at least the durable frontier's, followed only by
+	 * them: another writer (a clone's original healing a missed entry) may
+	 * have appended this manager's own next entries before them.
 	 */
 	#foreignEntriesIn(content: string): ForeignEntries | undefined {
 		const { entries, invalidHeader, malformedRecords } = parseSessionContent(content);
@@ -1331,20 +1335,21 @@ export class SessionManager {
 			shared.add(entry.id);
 			if (foreign.length > 0 || this.#entries[shared.size - 1]?.id !== entry.id) extendsFrontier = false;
 		}
-		if (shared.size !== durable?.confirmed) extendsFrontier = false;
+		if (durable === undefined || shared.size < durable.confirmed) extendsFrontier = false;
 		let at = this.#entries.length;
 		while (at > 0 && !shared.has(this.#entries[at - 1]!.id)) at--;
-		return { foreign, at, extendsFrontier };
+		return { foreign, at, shared: shared.size, extendsFrontier };
 	}
 
 	/**
 	 * Keep the entries another writer added to `#sessionFile`, whose bytes now
 	 * measure `diskSize`. They join this session's tree as a side branch (their
 	 * parents are entries both writers loaded) at their place in the file, and
-	 * the active leaf stays this session's. When the file is exactly the
-	 * durable frontier followed by them, the frontier extends over them, so
-	 * this manager's next entries follow them as an append; otherwise the
-	 * retried rewrite republishes them with the rest.
+	 * the active leaf stays this session's. When the file is exactly this
+	 * manager's first entries, at least the durable frontier's, followed by
+	 * them, the frontier extends over all of them, so this manager's next
+	 * entries follow as an append; otherwise the retried rewrite republishes
+	 * them with the rest.
 	 */
 	#adoptForeignEntries(found: ForeignEntries, diskSize: number): void {
 		const leaf = this.#index.leafId();
@@ -1361,7 +1366,7 @@ export class SessionManager {
 		this.#expectedDiskSize = diskSize;
 		this.#durable =
 			found.extendsFrontier && durable && kept.length === found.foreign.length
-				? durableFrontier(this.#entriesGeneration, durable.confirmed + kept.length, diskSize)
+				? durableFrontier(this.#entriesGeneration, found.shared + kept.length, diskSize)
 				: undefined;
 		if (kept.length > 0)
 			logger.warn("Kept session entries another writer added", {
@@ -1373,10 +1378,11 @@ export class SessionManager {
 	/**
 	 * Another writer appended to the session file past the durable frontier,
 	 * as a session's previous process does with its exit marker after this one
-	 * resumed it. Keep those entries and extend the frontier over them when the
-	 * file proves to be exactly the frontier followed by them; returns whether
-	 * it did. Otherwise the caller republishes, and its conflict recovery
-	 * keeps them.
+	 * resumed it, or a clone's original does when it heals an entry both
+	 * hold. Keep those entries and extend the frontier over them when the
+	 * file proves to be exactly this manager's entries followed by them;
+	 * returns whether it did. Otherwise the caller republishes, and its
+	 * conflict recovery keeps them.
 	 */
 	#adoptEntriesAppendedPastFrontier(sessionFile: string): boolean {
 		if (this.#storage.defersSyncPublish || !this.#storage.readTextSync) return false;
@@ -1387,7 +1393,7 @@ export class SessionManager {
 			return false;
 		}
 		const found = this.#foreignEntriesIn(content);
-		if (!found?.extendsFrontier || found.foreign.length === 0) return false;
+		if (!found?.extendsFrontier) return false;
 		resolveBlobRefsInEntriesSync(found.foreign, this.#blobs);
 		this.#adoptForeignEntries(found, Buffer.byteLength(content, "utf8"));
 		return this.#durable !== undefined;
