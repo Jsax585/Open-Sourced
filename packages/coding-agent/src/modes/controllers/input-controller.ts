@@ -36,6 +36,7 @@ import { setCachedImageDimensions } from "@oh-my-pi/pi-tui/prompt/image-referenc
 import { createPromptActionAutocompleteProvider } from "@oh-my-pi/pi-tui/prompt/prompt-action-autocomplete";
 import { createModelMentionSource } from "@oh-my-pi/pi-tui/prompt/model-mention-autocomplete";
 import { createModelBrowserSource } from "../model-browser-source";
+import { cfgTaskModelMentions } from "../../task/settings";
 import { parseQueueShorthand, splitQueuedMessages } from "@oh-my-pi/pi-tui/prompt/queue-input";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/skill-command";
 import type { InteractiveModeContext, SubmittedUserInput } from "../../modes/types";
@@ -2599,11 +2600,13 @@ export class InputController {
 			commands,
 			basePath,
 			commandUsage: name => commandUsage.get(name),
-			modelMentions: createModelMentionSource({
-				source: createModelBrowserSource(this.ctx.settings, model => this.ctx.session.effectiveServiceTier(model)),
-				registry: this.ctx.session.modelRegistry,
-				scopedModels: () => this.ctx.session.scopedModels.map(s => s.model),
-			}),
+			modelMentions: cfgTaskModelMentions.get(this.ctx.settings)
+				? createModelMentionSource({
+						source: createModelBrowserSource(this.ctx.settings, model => this.ctx.session.effectiveServiceTier(model)),
+						registry: this.ctx.session.modelRegistry,
+						scopedModels: () => this.ctx.session.scopedModels.map(s => s.model),
+					})
+				: undefined,
 			// This TUI host uses the default registry; the receiving session can change with focus.
 			internalUrlCaller: () => {
 				const manager = this.ctx.viewSession.sessionManager;

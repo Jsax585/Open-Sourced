@@ -507,7 +507,7 @@ import {
 	cfgThemeDark,
 	cfgThemeLight,
 } from "../modes/settings";
-import { cfgTaskBatch, cfgTaskDisabledAgents } from "../task/settings";
+import { cfgTaskBatch, cfgTaskDisabledAgents, cfgTaskModelMentions } from "../task/settings";
 import {
 	cfgBranchSummaryReserveTokens,
 	cfgCompactionModelThresholds,
@@ -1751,6 +1751,7 @@ export class AgentSession implements SettingsScope {
 			sessionManager: this.sessionManager,
 			modelRegistry: this.#modelRegistry,
 			scopedModels: () => this.scopedModels.map(s => s.model),
+			enabled: () => cfgTaskModelMentions.get(this.settings),
 			inheritedAgents: config.inheritedSessionAgents,
 		});
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
