@@ -2133,9 +2133,11 @@ type TodoItem struct {
 	Content string     `json:"content"`
 	Status  TodoStatus `json:"status"`
 	// What a `blocked` task is waiting on.
-	Blocker *string  `json:"blocker,omitempty"`
-	Details *string  `json:"details,omitempty"`
-	Notes   []string `json:"notes,omitempty"`
+	Blocker *string `json:"blocker,omitempty"`
+	// Explicit user cancellation, distinct from model-authored abandoned work.
+	DroppedBy *TodoItemDroppedBy `json:"droppedBy,omitempty"`
+	Details   *string            `json:"details,omitempty"`
+	Notes     []string           `json:"notes,omitempty"`
 }
 
 func (v *TodoItem) UnmarshalJSON(data []byte) error {
@@ -2148,6 +2150,7 @@ func (v *TodoItem) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("content", &out.Content)
 	d.required("status", &out.Status)
 	d.optional("blocker", &out.Blocker)
+	d.optional("droppedBy", &out.DroppedBy)
 	d.optional("details", &out.Details)
 	d.optional("notes", &out.Notes)
 	if d.err != nil {
@@ -2155,6 +2158,25 @@ func (v *TodoItem) decodeFrom(raw map[string]json.RawMessage) error {
 	}
 	*v = out
 	return nil
+}
+
+type TodoItemDroppedBy string
+
+const (
+	TodoItemDroppedByUser TodoItemDroppedBy = "user"
+)
+
+func (v *TodoItemDroppedBy) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "TodoItemDroppedBy")
+	if err != nil {
+		return err
+	}
+	switch value := TodoItemDroppedBy(s); value {
+	case TodoItemDroppedByUser:
+		*v = value
+		return nil
+	}
+	return unknownValue("TodoItemDroppedBy", s)
 }
 
 type TodoPhase struct {
@@ -4205,9 +4227,10 @@ func (v TtsrTriggeredEvent) MarshalJSON() ([]byte, error) {
 }
 
 type TodoReminderEvent struct {
-	Todos       []TodoItem `json:"todos"`
-	Attempt     int64      `json:"attempt"`
-	MaxAttempts int64      `json:"maxAttempts"`
+	Todos           []TodoItem `json:"todos"`
+	Attempt         int64      `json:"attempt"`
+	MaxAttempts     int64      `json:"maxAttempts"`
+	UnverifiedMerge *bool      `json:"unverifiedMerge,omitempty"`
 }
 
 func (v *TodoReminderEvent) UnmarshalJSON(data []byte) error {
@@ -4221,6 +4244,7 @@ func (v *TodoReminderEvent) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("todos", &out.Todos)
 	d.required("attempt", &out.Attempt)
 	d.required("maxAttempts", &out.MaxAttempts)
+	d.optional("unverifiedMerge", &out.UnverifiedMerge)
 	if d.err != nil {
 		return d.err
 	}

@@ -2880,6 +2880,9 @@ pub struct TodoItem {
 	/// What a `blocked` task is waiting on.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub blocker: Option<String>,
+	/// Explicit user cancellation, distinct from model-authored abandoned work.
+	#[serde(rename = "droppedBy", default, skip_serializing_if = "Option::is_none")]
+	pub dropped_by: Option<LitUser>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub details: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3803,6 +3806,8 @@ pub struct TodoReminderEvent {
 	pub attempt: i64,
 	#[serde(rename = "maxAttempts")]
 	pub max_attempts: i64,
+	#[serde(rename = "unverifiedMerge", default, skip_serializing_if = "Option::is_none")]
+	pub unverified_merge: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5662,6 +5667,27 @@ impl AssistantErrorEventReason {
 		match self {
 			Self::Aborted => "aborted",
 			Self::Error => "error",
+		}
+	}
+}
+
+/// The constant `"user"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct LitUser;
+
+impl Serialize for LitUser {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_str("user")
+	}
+}
+
+impl<'de> Deserialize<'de> for LitUser {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let value = Value::deserialize(deserializer)?;
+		if value.as_str() == Some("user") {
+			Ok(Self)
+		} else {
+			Err(D::Error::custom(format!("expected \"user\", got {value}")))
 		}
 	}
 }

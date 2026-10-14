@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Compaction summary prompts now include an Incomplete Todos section so pending/in_progress items from additional-context survive the cut ([#8874](https://github.com/can1357/oh-my-pi/issues/8874)).
 ### Breaking Changes
 
 - Removed `ApprovalDetailsOptions`; `formatApprovalDetails` takes only `args` again, since the compact approval prompt no longer shows tool details ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))

@@ -552,6 +552,8 @@ class TodoItem:
     status: TodoStatus
     blocker: str | None = None
     """What a `blocked` task is waiting on."""
+    dropped_by: Literal["user"] | None = None
+    """Explicit user cancellation, distinct from model-authored abandoned work."""
     details: str | None = None
     notes: tuple[str, ...] | None = None
 
@@ -1146,6 +1148,7 @@ class TodoReminderEvent:
     todos: tuple[TodoItem, ...]
     attempt: int
     max_attempts: int
+    unverified_merge: bool | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1823,6 +1826,7 @@ def parse_todo_item(value: object, path: str = "TodoItem") -> TodoItem:
         content=required(payload, "content", decode_str, path),
         status=required(payload, "status", _decode_todo_status, path),
         blocker=optional(payload, "blocker", decode_str, path),
+        dropped_by=optional(payload, "droppedBy", cast('Decoder[Literal["user"]]', literal(frozenset({"user"}))), path),
         details=optional(payload, "details", decode_str, path),
         notes=optional(payload, "notes", array(decode_str), path),
     )
@@ -2496,6 +2500,7 @@ def parse_todo_reminder_event(value: object, path: str = "TodoReminderEvent") ->
         todos=required(payload, "todos", array(parse_todo_item), path),
         attempt=required(payload, "attempt", decode_int, path),
         max_attempts=required(payload, "maxAttempts", decode_int, path),
+        unverified_merge=optional(payload, "unverifiedMerge", decode_bool, path),
     )
 
 
