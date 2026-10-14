@@ -788,12 +788,13 @@ interface AtomicEntryBatch {
 
 /**
  * The state a full-file body was serialized from, cheap to compare against
- * the live state. Entries change only by append, array replacement, or an
- * in-place update announced through `rewriteEntries()` (which bumps the
- * revision); the title slot and header are small and compared by value.
+ * the live state. Entries change only by append, array replacement (which
+ * bumps the entries generation), or an in-place update announced through
+ * `rewriteEntries()` (which bumps the revision); the title slot and header
+ * are small and compared by value.
  */
 interface SessionBodyStamp {
-	entries: readonly SessionEntry[];
+	generation: number;
 	entryCount: number;
 	revision: number;
 	/** Serialized title slot and header lines. */
@@ -802,16 +803,17 @@ interface SessionBodyStamp {
 
 /**
  * What the session file is proven to hold, recorded only after a load or a
- * write succeeded: records whose ids and parent links are
- * `entries[0..confirmed)` in order, `confirmedSize` bytes long. Their content
+ * write succeeded: records whose ids and parent links are the first
+ * `confirmed` entries in order, `confirmedSize` bytes long. Their content
  * may be older than memory's. `issued` and `issuedSize` also count appends a
  * deferring backend accepted but has not confirmed yet; `confirmedAhead`
  * holds those that confirmed before an earlier one, keyed by their start. It
- * describes the live journal only while `entries` is the manager's entry
- * array, which every structural change replaces.
+ * describes the live journal only while `generation` is the manager's
+ * entries generation, which every replacement of the entry array bumps; it
+ * never holds the array, so a replaced transcript is collectable.
  */
 interface DurableFrontier {
-	entries: readonly SessionEntry[];
+	generation: number;
 	confirmed: number;
 	confirmedSize: number;
 	issued: number;
@@ -819,10 +821,10 @@ interface DurableFrontier {
 	readonly confirmedAhead: Map<number, { end: number; bytes: number }>;
 }
 
-/** A frontier proving `entries[0..count)` occupy exactly `size` bytes, with nothing pending. */
-function durableFrontier(entries: readonly SessionEntry[], count: number, size: number): DurableFrontier {
+/** A frontier proving the first `count` entries of `generation` occupy exactly `size` bytes, with nothing pending. */
+function durableFrontier(generation: number, count: number, size: number): DurableFrontier {
 	return {
-		entries,
+		generation,
 		confirmed: count,
 		confirmedSize: size,
 		issued: count,
@@ -1024,7 +1026,21 @@ export class SessionManager {
 	#header!: SessionHeader;
 	#titleUpdatedAt = "";
 	#hasTitleSlot = true;
-	#entries: SessionEntry[] = [];
+	#entriesArray: SessionEntry[] = [];
+	/**
+	 * Bumped by every replacement of the entry array. The durable frontier and
+	 * a refused switch record the generation they describe instead of holding
+	 * the array, so a replacement voids them and the old transcript stays
+	 * collectable.
+	 */
+	#entriesGeneration = 0;
+	get #entries(): SessionEntry[] {
+		return this.#entriesArray;
+	}
+	set #entries(entries: SessionEntry[]) {
+		this.#entriesArray = entries;
+		this.#entriesGeneration++;
+	}
 	#index = new SessionEntryIndex();
 
 	/** A full body reached the session file and nothing has replaced it since; crosses the lazy file-creation gate. */
@@ -1041,10 +1057,10 @@ export class SessionManager {
 	readonly #pendingAppendConfirmations = new Set<Promise<void>>();
 	/**
 	 * The unsaved entries a {@link newSession} refused to abandon, as the
-	 * entry array and its length then; a second call for the same entries
+	 * entries generation and length then; a second call for the same entries
 	 * switches anyway.
 	 */
-	#refusedSessionSwitch: { entries: readonly SessionEntry[]; count: number } | undefined;
+	#refusedSessionSwitch: { generation: number; count: number } | undefined;
 	/** Malformed records the loader skipped for the current session file; reported by `/dump anon`. */
 	#loadedMalformedRecords = 0;
 	/** Byte length this manager last loaded or durably wrote; `null` means the path was absent. */
@@ -1301,7 +1317,9 @@ export class SessionManager {
 		if (invalidHeader || header?.type !== "session" || header.id !== this.#sessionId) return undefined;
 		const durable = this.#durable;
 		let extendsFrontier =
-			malformedRecords === 0 && durable?.entries === this.#entries && durable.issued === durable.confirmed;
+			malformedRecords === 0 &&
+			durable?.generation === this.#entriesGeneration &&
+			durable.issued === durable.confirmed;
 		const foreign: SessionEntry[] = [];
 		const shared = new Set<string>();
 		for (let i = 1; i < entries.length; i++) {
@@ -1343,7 +1361,7 @@ export class SessionManager {
 		this.#expectedDiskSize = diskSize;
 		this.#durable =
 			found.extendsFrontier && durable && kept.length === found.foreign.length
-				? durableFrontier(this.#entries, durable.confirmed + kept.length, diskSize)
+				? durableFrontier(this.#entriesGeneration, durable.confirmed + kept.length, diskSize)
 				: undefined;
 		if (kept.length > 0)
 			logger.warn("Kept session entries another writer added", {
@@ -1716,11 +1734,11 @@ export class SessionManager {
 	 */
 	#recordPublish(stamp: SessionBodyStamp, bytes: number, atSessionFile = true): void {
 		this.#expectedDiskSize = bytes;
-		if (!atSessionFile || stamp.entries !== this.#entries) {
+		if (!atSessionFile || stamp.generation !== this.#entriesGeneration) {
 			this.#durable = undefined;
 			return;
 		}
-		this.#durable = durableFrontier(stamp.entries, stamp.entryCount, bytes);
+		this.#durable = durableFrontier(stamp.generation, stamp.entryCount, bytes);
 		if (
 			stamp.entryCount === this.#entries.length &&
 			stamp.revision === this.#bodyRevision &&
@@ -1734,7 +1752,7 @@ export class SessionManager {
 	/** Whether storage has accepted every entry: the durable frontier covers the live entry array. */
 	#allEntriesHandedToStorage(): boolean {
 		const durable = this.#durable;
-		return durable?.entries === this.#entries && durable.issued === this.#entries.length;
+		return durable?.generation === this.#entriesGeneration && durable.issued === this.#entries.length;
 	}
 
 	/** Whether entries that belong in the session file have not all been handed to storage. */
@@ -1829,7 +1847,7 @@ export class SessionManager {
 			},
 		};
 		const stamp: SessionBodyStamp = {
-			entries,
+			generation: this.#entriesGeneration,
 			entryCount,
 			revision: this.#bodyRevision,
 			prefix: titleLine + headerLine,
@@ -2131,7 +2149,8 @@ export class SessionManager {
 	#frontierMatchingSessionFile(): DurableFrontier | undefined {
 		const sessionFile = this.#sessionFile;
 		const durable = this.#durable;
-		if (!sessionFile || durable?.entries !== this.#entries || this.#sessionOwnedElsewhere()) return undefined;
+		if (!sessionFile || durable?.generation !== this.#entriesGeneration || this.#sessionOwnedElsewhere())
+			return undefined;
 		let storedSize: number;
 		try {
 			storedSize = this.#storage.statSync(sessionFile).size;
@@ -2438,12 +2457,11 @@ export class SessionManager {
 		// appends), so a frontier over pre-batch entries still holds for the
 		// retained array, and later turns keep appending past it.
 		const durable = this.#durable;
-		if (
-			durable?.entries === this.#entries &&
-			this.#entries.slice(0, durable.issued).every(entry => !batch.entryIds.has(entry.id))
-		)
-			durable.entries = retained;
+		const keepsFrontier =
+			durable?.generation === this.#entriesGeneration &&
+			this.#entries.slice(0, durable.issued).every(entry => !batch.entryIds.has(entry.id));
 		this.#entries = retained;
+		if (durable && keepsFrontier) durable.generation = this.#entriesGeneration;
 		this.#index.rebuild(retained);
 		this.#index.setLeaf(restoredLeaf && this.#index.has(restoredLeaf) ? restoredLeaf : null);
 	}
@@ -2541,7 +2559,7 @@ export class SessionManager {
 			onDisk: this.#fileIsCurrent,
 			needsRewrite: this.#rewriteRequired,
 			durable:
-				this.#durable?.entries === this.#entries && this.#durable.issued === this.#durable.confirmed
+				this.#durable?.generation === this.#entriesGeneration && this.#durable.issued === this.#durable.confirmed
 					? { count: this.#durable.confirmed, size: this.#durable.confirmedSize }
 					: undefined,
 			draftOnlySessionCleanupArmed: this.#draftOnlySessionCleanupArmed,
@@ -2595,7 +2613,7 @@ export class SessionManager {
 		// The copy holds the same entries in the same order, so the file still
 		// holds the snapshot's durable prefix of it.
 		this.#durable = snapshot.durable
-			? durableFrontier(this.#entries, snapshot.durable.count, snapshot.durable.size)
+			? durableFrontier(this.#entriesGeneration, snapshot.durable.count, snapshot.durable.size)
 			: undefined;
 		this.#additionalDirectories = snapshot.header.additionalDirectories ?? [];
 		this.#sessionName = snapshot.sessionName;
@@ -2740,7 +2758,7 @@ export class SessionManager {
 		this.#durable =
 			migrated || loaded.malformedRecords > 0 || sourceSize === null
 				? undefined
-				: durableFrontier(this.#entries, this.#entries.length, sourceSize);
+				: durableFrontier(this.#entriesGeneration, this.#entries.length, sourceSize);
 		this.#loadedMalformedRecords = loaded.malformedRecords;
 		this.#forceFileCreation = true;
 		this.#artifactManager = null;
@@ -2761,14 +2779,14 @@ export class SessionManager {
 	 */
 	async newSession(options?: NewSessionOptions): Promise<string | undefined> {
 		const refused = this.#refusedSessionSwitch;
-		const abandoning = refused?.entries === this.#entries && refused.count === this.#entries.length;
+		const abandoning = refused?.generation === this.#entriesGeneration && refused.count === this.#entries.length;
 		// Only a tail past a valid frontier is healed here: a journal awaiting
 		// a republish (or a deferred publish's confirmation) switches as before.
 		const unsaved =
 			!abandoning &&
 			this.#persist &&
 			this.#sessionFile !== undefined &&
-			this.#durable?.entries === this.#entries &&
+			this.#durable?.generation === this.#entriesGeneration &&
 			this.#hasUnsavedEntries();
 		if (unsaved) await this.#healMissingEntriesAndSettle();
 		let failure: unknown;
@@ -2778,7 +2796,7 @@ export class SessionManager {
 			failure = error;
 		}
 		if (unsaved && this.#hasUnsavedEntries()) {
-			this.#refusedSessionSwitch = { entries: this.#entries, count: this.#entries.length };
+			this.#refusedSessionSwitch = { generation: this.#entriesGeneration, count: this.#entries.length };
 			throw failure ?? this.#diskFailure ?? new Error("Session entries could not be saved before switching.");
 		}
 		if (failure !== undefined && !abandoning) throw failure;
@@ -3440,6 +3458,8 @@ export class SessionManager {
 	releaseRetainedEntries(): void {
 		this.seal();
 		this.#entries = [];
+		this.#durable = undefined;
+		this.#refusedSessionSwitch = undefined;
 		this.#index.clear();
 		this.#inMemoryArtifacts = null;
 		this.#closeWriterEventually();
@@ -4324,8 +4344,10 @@ export class SessionManager {
 			child.parentId = leafId;
 			leafId = child.id;
 		}
+		const originalGeneration = this.#entriesGeneration;
 		const removed = original.filter(candidate => candidate !== entry);
 		this.#entries = removed;
+		const removedGeneration = this.#entriesGeneration;
 		this.#index.rebuild(removed);
 		// The durable frontier described the previous array, so recording the
 		// marker republishes the journal without the entry.
@@ -4333,7 +4355,10 @@ export class SessionManager {
 		// A deferring backend confirms the republish only once it drains.
 		await this.flush().catch(() => undefined);
 		const published =
-			!this.#persist || !this.#sessionFile || !this.#shouldHaveSessionFile() || this.#durable?.entries === removed;
+			!this.#persist ||
+			!this.#sessionFile ||
+			!this.#shouldHaveSessionFile() ||
+			this.#durable?.generation === removedGeneration;
 		const marker = this.#index.get(markerId);
 		if (published || this.#entries !== removed || marker?.type !== "branch_summary") {
 			await this.flush();
@@ -4343,6 +4368,9 @@ export class SessionManager {
 		const leafAfter = this.#index.leafId();
 		for (const child of children) child.parentId = entryId;
 		this.#entries = original;
+		// Storage still holds the original entries, so the frontier over them holds again.
+		const durable = this.#durable;
+		if (durable?.generation === originalGeneration) durable.generation = this.#entriesGeneration;
 		this.#index.rebuild(original);
 		// Neither the marker nor anything recorded after it reached storage, so
 		// their parents can still change before they are appended.
