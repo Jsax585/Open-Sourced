@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `mapfile` and `readarray` hanging when their input comes from process substitution ([#15501](https://github.com/can1357/oh-my-pi/issues/15501), [#15647](https://github.com/can1357/oh-my-pi/pull/15647) by [@mg-mg-mg](https://github.com/mg-mg-mg))
+
 ## [18.11.0] - 2026-10-14
 
 ### Fixed

@@ -3322,6 +3322,52 @@ mod tests {
 		assert_eq!(output, "cb:0:1:2\ncb:1:3:4\narr=1 3\n");
 	}
 
+	/// Batching stops at the callback before it reads shared stdin, counts
+	/// only unskipped entries, and assigns the boundary entry after callback.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn mapfile_batches_respect_skip_count_limit_and_callback_order() {
+		let (result, output) = execute_captured(
+			"cb() { echo \"cb:$1:$2:${arr[*]}\"; read -r extra; echo \"extra:$extra\"; }; seq 1 7 | \
+			 { arr=(seed); mapfile -t -O 2 -s 1 -n 3 -C cb -c 2 arr; echo \"arr:${arr[*]}\"; cat; }"
+				.to_owned(),
+		)
+		.await;
+		assert_eq!(result.exit_code, Some(0), "{output:?}");
+		assert_eq!(output, "cb:3:3:seed 2\nextra:4\narr:seed 2 3 5\n6\n7\n");
+	}
+
+	/// Empty delimited entries count toward callback boundaries; partial EOF
+	/// entries are stored, with only actual delimiters removed by -t.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn mapfile_batches_preserve_empty_entries_and_partial_final_lines() {
+		for (options, expected) in
+			[("-t", "cb:1::a\n<a>\n<>\n<tail>\n"), ("", "cb:1:|:a|\n<a|>\n<|>\n<tail>\n")]
+		{
+			let (result, output) = execute_captured(format!(
+				"cb() {{ echo \"cb:$1:$2:${{arr[*]}}\"; }}; printf 'skip|a||tail' | {{ mapfile \
+				 {options} -d '|' -s 1 -C cb -c 2 arr; printf '<%s>\\n' \"${{arr[@]}}\"; }}"
+			))
+			.await;
+			assert_eq!(result.exit_code, Some(0), "{output:?}");
+			assert_eq!(output, expected);
+		}
+	}
+
+	/// Worker chunk boundaries must not change callback indices or consume
+	/// the lines beyond a count limit.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn mapfile_chunk_boundaries_preserve_callbacks_and_count_limits() {
+		let (result, output) = execute_captured(
+			"cb() { echo \"cb:$1:$2:${#arr[@]}\"; }; seq 1 8200 | { mapfile -t -n 8193 -C cb -c 5000 \
+			 arr; echo \"arr:${#arr[@]}:${arr[0]}:${arr[8192]}\"; read -r next; echo \"next:$next\"; \
+			 }"
+			.to_owned(),
+		)
+		.await;
+		assert_eq!(result.exit_code, Some(0), "{output:?}");
+		assert_eq!(output, "cb:4999:5000:4999\narr:8193:1:8193\nnext:8194\n");
+	}
+
 	/// Contract: `mapfile` into a readonly array fails before reading, as in
 	/// bash: the array is unchanged and the piped input stays for the next
 	/// reader.
@@ -6147,6 +6193,54 @@ mod tests {
 
 		assert_eq!(result.exit_code, Some(0), "output: {output:?}");
 		assert_eq!(output, "v\n");
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn mapfile_process_substitution_delivers_lines_and_reaches_eof() {
+		const CHILD: &str = "OMP_MAPFILE_REGRESSION_CHILD";
+		if std::env::var_os(CHILD).is_none() {
+			// A regression must not strand the shared test lock in this process.
+			let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+				.args([
+					"--exact",
+					"shell::tests::mapfile_process_substitution_delivers_lines_and_reaches_eof",
+					"--nocapture",
+				])
+				.env(CHILD, "1")
+				.spawn()
+				.expect("spawn isolated regression");
+			let deadline = std::time::Instant::now() + Duration::from_secs(20);
+			loop {
+				if let Some(status) = child.try_wait().expect("wait for regression") {
+					assert!(status.success(), "isolated mapfile regression failed: {status}");
+					return;
+				}
+				if std::time::Instant::now() >= deadline {
+					child.kill().expect("kill blocked regression");
+					child.wait().expect("reap blocked regression");
+					panic!("mapfile blocked its process-substitution producer");
+				}
+				std::thread::sleep(Duration::from_millis(10));
+			}
+		}
+		for command in [
+			"mapfile -t arr < <(printf 'a\\nb\\n'); printf '%s\\n' \"${arr[@]}\"",
+			"while readarray -t -n 1 arr && [[ ${#arr[@]} -gt 0 ]]; do printf '%s\\n' \"${arr[@]}\"; \
+			 done < <(printf 'a\\nb\\n')",
+			"cb() { printf 'cb:%s:%s\\n' \"$1\" \"$2\"; }; mapfile -t -C cb -c 1 arr < <(printf \
+			 'a\\nb\\n'); printf '%s\\n' \"${arr[@]}\"",
+		] {
+			let (result, output) = capture_on_single_worker(command);
+			assert!(!result.timed_out, "command: {command}; output: {output:?}");
+			assert_eq!(result.exit_code, Some(0), "command: {command}; output: {output:?}");
+			let expected = if command.starts_with("cb()") {
+				"cb:0:a\ncb:1:b\na\nb\n"
+			} else {
+				"a\nb\n"
+			};
+			assert_eq!(output, expected, "command: {command}");
+		}
 	}
 
 	/// Builtins share the host process, so a descriptor path must reach the
