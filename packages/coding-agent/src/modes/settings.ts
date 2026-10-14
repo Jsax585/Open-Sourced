@@ -726,7 +726,7 @@ export const cfgDisplayTranscriptReplayLimit = register({
 		group: "Display",
 		label: "Redrawn History",
 		description:
-			"Maximum rendered transcript rows (at the current terminal width) drawn when the transcript is rebuilt — resume, rewind, redraw, or a display-setting change. 0 draws the full history.",
+			"Bounds how many OLDER turns are dropped when the transcript is rebuilt (resume, rewind, redraw, or a display-setting change): the rebuilt transcript keeps roughly this many rendered rows, estimated at a fixed 80-column reference, by dropping whole oldest turns — the newest turn is always drawn in full. 0 keeps the full history.",
 	},
 });
 

@@ -8,6 +8,7 @@ import {
 } from "@oh-my-pi/pi-ai";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { isRecord } from "@oh-my-pi/pi-utils";
+import { parksAsBackground } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import {
 	createBranchSummaryMessage,
 	createCompactionSummaryMessage,
@@ -182,10 +183,14 @@ export interface BuildSessionContextOptions {
 	/** In transcript mode, elide entries replaced by the latest compaction. */
 	collapseCompactedHistory?: boolean;
 	/**
-	 * Transcript mode only: maximum rendered rows kept for the display
-	 * transcript. `0`/`undefined` keeps every message (legacy full redraw).
-	 * Positive values drop whole oldest turns until the estimated rendered row
-	 * count fits; the kept slice always restarts at a user turn.
+	 * Transcript mode only: bound on the rebuilt display transcript, in
+	 * estimated rendered rows (a coarse fixed-80-column estimate, so the same
+	 * value behaves the same at any terminal width). `0`/`undefined` keeps every
+	 * message. Positive values drop whole oldest turns until the estimate fits;
+	 * the newest turn is always drawn in full, so a limit below one turn's rows
+	 * still renders that turn (no hard cap). The kept slice normally restarts at
+	 * a user turn, except that a still-running background job's call+result pair
+	 * is never cut.
 	 */
 	transcriptReplayLimit?: number;
 	/**
@@ -817,12 +822,14 @@ export function buildSessionContext(
 	}
 
 	// Transcript replay window: bound the rebuilt display to the newest N
-	// estimated rendered rows. Drop whole oldest turns; restart the kept slice
-	// at a user turn so an assistant fragment never opens the transcript. A
-	// still-running background call's parked card lives in the newest messages
-	// (the walk emits it last), so trimming the front never orphans it.
-	// Hidden assistants must still consume reset/model bookkeeping — rerun
-	// their tracking here so cache-miss/served-model markers stay correct.
+	// estimated rendered rows (a fixed 80-column estimate). Drop whole oldest
+	// turns — never a fragment of one, and never the newest turn, which is
+	// always drawn in full — restarting the kept slice at a user turn so an
+	// assistant fragment does not normally open the transcript. The walk already
+	// consumed every message's reset/model bookkeeping, so the kept tail's
+	// cacheMissExplainedAt flags are correct; splicing keeps them aligned.
+	// Hidden assistants' served-model announcements replay renderer-side via
+	// hiddenTranscriptPrefix.
 	const replayLimit = options?.transcript ? options.transcriptReplayLimit : undefined;
 	if (replayLimit !== undefined && Number.isInteger(replayLimit) && replayLimit > 0) {
 		let estimate = 0;
@@ -855,14 +862,27 @@ export function buildSessionContext(
 						break;
 					}
 				}
-				if (start > 0) {
-					// Hidden assistants still consume model bookkeeping exactly as the
-					// visible walk did; rerun it for the dropped suffix so the
-					// cache-miss/served-model markers of the kept tail stay correct.
-					for (let i = 0; i < start; i++) {
-						const message = messages[i]!;
-						if (message.role === "assistant") trackMessageCacheState(message);
+				// A running background job's card is rebuilt from its call+result
+				// pair; hiding either half orphans the live job's only surface.
+				// Never cut past one: for every parked result inside the would-be
+				// hidden prefix, move `start` back to its owning assistant call
+				// (the message whose toolCall id matches), so call and result stay
+				// in the kept suffix.
+				for (let i = start - 1; i >= 0; i--) {
+					const message = messages[i]!;
+					if (message.role !== "toolResult") continue;
+					if (!parksAsBackground(message.toolName, message.details)) continue;
+					for (let j = i - 1; j >= 0; j--) {
+						const candidate = messages[j]!;
+						if (candidate.role !== "assistant") continue;
+						if (!candidate.content.some(block => block.type === "toolCall" && block.id === message.toolCallId)) {
+							continue;
+						}
+						if (j < start) start = j;
+						break;
 					}
+				}
+				if (start > 0) {
 					hiddenTranscriptPrefix = messages.slice(0, start);
 					messages.splice(0, start);
 					cacheMissExplainedAt.splice(0, start);

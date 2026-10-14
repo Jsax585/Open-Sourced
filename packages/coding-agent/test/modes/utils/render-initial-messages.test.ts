@@ -839,3 +839,69 @@ describe("UiHelpers.renderInitialMessages — prompt history isolation", () => {
 		expect(ctx.editor.addToHistory).not.toHaveBeenCalled();
 	});
 });
+
+describe("UiHelpers.renderInitialMessages — transcript replay window", () => {
+	const LONG_TEXT = "x".repeat(400); // ~7 estimated rows per message at 80 cols
+
+	/** Three long user/assistant turns: 6 messages, ~42 estimated rows. */
+	function replayMessages(): AgentMessage[] {
+		const messages: AgentMessage[] = [];
+		for (let turn = 1; turn <= 3; turn++) {
+			messages.push({ role: "user", content: `t${turn} prompt ${LONG_TEXT}`, timestamp: turn * 2 - 1 });
+			messages.push({
+				role: "assistant",
+				content: [{ type: "text", text: `t${turn} reply ${LONG_TEXT}` }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet",
+				usage: emptyUsage,
+				stopReason: "stop",
+				timestamp: turn * 2,
+			});
+		}
+		return messages;
+	}
+
+	it("draws the builder's messages as-is: the window is the builder's, not the renderer's", async () => {
+		// A context that carries every message (the builder either applied no
+		// window or already applied it) must not be re-windowed here: a second
+		// pass derives cut=0 on the trimmed list and drops the wrong messages.
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true, overrides: { "display.transcriptReplayLimit": 24 } });
+		const { ctx, chatContainer } = makeRenderCtx(transcriptWith(replayMessages()));
+
+		await new UiHelpers(ctx).renderInitialMessages();
+
+		const rendered = Bun.stripANSI(chatContainer.render(120).join("\n"));
+		expect(rendered).toContain("t1 prompt");
+		expect(rendered).toContain("t3 prompt");
+		expect(rendered).not.toContain("earlier messages not shown");
+	});
+
+	it("renders the omission row from the builder's count, exactly once", async () => {
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true, overrides: { "display.transcriptReplayLimit": 24 } });
+		const dropped = transcriptWith(replayMessages());
+		dropped.hiddenTranscriptMessages = 4;
+		const withDrop = makeRenderCtx(dropped);
+
+		await new UiHelpers(withDrop.ctx).renderInitialMessages();
+
+		const rendered = Bun.stripANSI(withDrop.chatContainer.render(120).join("\n"));
+		// Exactly one row, and it states the builder's number — a second pass that
+		// re-derived its own cut would add a second, differently-numbered row.
+		expect(rendered.split("earlier messages not shown")).toHaveLength(2);
+		expect(rendered).toContain(
+			"4 earlier messages not shown · full history preserved in the session file · /tree to browse",
+		);
+
+		// No row when the builder hid nothing (unset and explicit zero alike).
+		for (const hiddenTranscriptMessages of [undefined, 0]) {
+			const context = transcriptWith(replayMessages());
+			context.hiddenTranscriptMessages = hiddenTranscriptMessages;
+			const none = makeRenderCtx(context);
+			await new UiHelpers(none.ctx).renderInitialMessages();
+			expect(Bun.stripANSI(none.chatContainer.render(120).join("\n"))).not.toContain("earlier messages not shown");
+		}
+	});
+});
