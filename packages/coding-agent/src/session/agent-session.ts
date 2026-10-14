@@ -154,6 +154,7 @@ import type {
 	ToolInfo,
 	TreePreparation,
 } from "../extensibility/extensions";
+import type { SelectedAnswerSettle } from "../extensibility/shared-events";
 import { emitSessionShutdownEvent, TOP_LEVEL_AGENT, UNAVAILABLE_ANNOTATIONS } from "../extensibility/extensions";
 import { extensionEventFromSessionEvent } from "../extensibility/extensions/lifecycle-mirror";
 import { ManagedTimers } from "../extensibility/extensions/managed-timers";
@@ -5051,22 +5052,40 @@ export class AgentSession implements SettingsScope {
 		// `yielded` alone also covers queued steer/follow-up and IRC continuations,
 		// which `#flushPendingAgentEnd` re-tags non-terminal.
 		const awaitingAsyncWork = options?.willContinue === true && options.awaitingAsyncWork === true;
+		const lastAssistant = activeMessages.findLast(
+			(message): message is PersistedAssistantMessage => message.role === "assistant",
+		);
+		const selectedAnswer = lastAssistant?.stopReason === "stop" ? lastAssistant : undefined;
+		const entryId = selectedAnswer?.[kPersistedSessionEntryId];
+		const pendingContinuation: SelectedAnswerSettle["pendingContinuation"] = options?.willContinue
+			? awaitingAsyncWork
+				? "unrelated-background"
+				: "related"
+			: null;
+		const settle: SelectedAnswerSettle | undefined = entryId
+			? { entryId, isFinal: pendingContinuation !== "related", pendingContinuation }
+			: undefined;
 		await this.#emitSessionEvent({
 			...event,
 			isTerminal: !options?.willContinue,
 			yielded: !options?.willContinue || awaitingAsyncWork,
 			...(awaitingAsyncWork ? { awaitingAsyncWork } : {}),
 		});
-		void this.#emitAgentEndNotification([...activeMessages], options).catch(err => {
+		void this.#emitAgentEndNotification([...activeMessages], options, settle).catch(err => {
 			logger.error("Agent end extension notification failed", { err });
 		});
 	}
 
-	async #emitAgentEndNotification(messages: AgentMessage[], options?: { willContinue?: boolean }): Promise<void> {
+	async #emitAgentEndNotification(
+		messages: AgentMessage[],
+		options?: { willContinue?: boolean },
+		settle?: SelectedAnswerSettle,
+	): Promise<void> {
 		await this.#extensionRunner?.emit({
 			type: "agent_end",
 			messages,
 			willContinue: options?.willContinue,
+			settle,
 		});
 	}
 
