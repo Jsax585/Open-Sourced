@@ -293,4 +293,34 @@ describe("sixel direct placement", () => {
 			tui.stop();
 		}
 	});
+
+	// Replay writes scroll as they go and clamp `screenRow` to the last row, so a
+	// block taller than the terminal looks like it starts above the viewport.
+	// History is never repainted: skipping the draw there would leave blank rows
+	// in native scrollback for good.
+	it("draws a block taller than the terminal when replaying it into history", async () => {
+		terminal.imageProtocol = ImageProtocol.Sixel;
+		const term = new RecordingTerminal(40, 6);
+		const scheduler = new VirtualRenderScheduler();
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
+		const sixel = "\x1b7\x1b[7A\x1bP9;1;0q#0~\x1b\\\x1b8";
+		const rows = [...Array.from({ length: 7 }, () => "\x1b[0m"), sixel];
+		let acknowledged = false;
+		tui.setFrameProvider({
+			renderFrame: () => ({
+				history: acknowledged ? undefined : { id: 1, kind: "replay", rows },
+				viewport: ["live prose"],
+			}),
+			acknowledgeHistory() {
+				acknowledged = true;
+			},
+		});
+		try {
+			tui.start();
+			await scheduler.settle(term);
+			expect(term.written).toContain(sixel);
+		} finally {
+			tui.stop();
+		}
+	});
 });

@@ -39,6 +39,7 @@ import {
 	isImageProtocolForced,
 	isInsideTerminalMultiplexer,
 	parseKittyDirectPlacementLine,
+	parseSixelDirectPlacementLine,
 	setCellDimensions,
 	setTerminalImageProtocol,
 	shouldEnableSynchronizedOutputByDefault,
@@ -3211,21 +3212,23 @@ export class TUI extends Container {
 		screenRow: number,
 		placements: Map<number, LiveImagePlacement> | undefined,
 		placementRow: number,
+		replay = false,
 	): string {
 		if (screenRow < 0) return line;
 		// SIXEL pixels persist until their cells are erased, and a transparent
-		// raster does not cover an older copy. The renderer rewrites only changed
-		// rows, and the reserved rows above the drawing line are identical blanks,
-		// so a block that moved keeps its previous pixels and stacks a shifted copy.
-		// Erase every on-screen row of the block before drawing. When the origin
-		// is above the viewport, `CSI n A` would clamp at row 0 and paint the whole
-		// image lower, over the rows below; erase the visible rows and skip the draw.
-		const sixelLift = /^\x1b7\x1b\[(\d+)A\x1bP[0-9;]*q/.exec(line);
-		if (sixelLift) {
-			const lift = Number(sixelLift[1]);
-			const visibleAbove = Math.min(lift, screenRow);
+		// raster does not cover an older copy. The live renderer rewrites only
+		// changed rows, and the reserved rows above the drawing line are identical
+		// blanks, so a block that moved keeps its previous pixels and stacks a
+		// shifted copy. Erase every on-screen row of the block before drawing.
+		// When the origin is above the viewport, `CSI n A` would clamp at row 0
+		// and paint the whole image lower, over the rows below; erase the visible
+		// rows and skip the draw. Replay writes scroll as they go and clamp
+		// `screenRow`, so they cannot tell where the origin is; they draw as is.
+		const sixel = replay ? null : parseSixelDirectPlacementLine(line);
+		if (sixel) {
+			const visibleAbove = Math.min(sixel.lift, screenRow);
 			const erase = visibleAbove > 0 ? `\x1b7${"\x1b[1A\x1b[2K".repeat(visibleAbove)}\x1b8` : "";
-			return lift > screenRow ? erase : erase + line;
+			return sixel.lift > screenRow ? erase : erase + line;
 		}
 		const parsed = parseKittyDirectPlacementLine(line);
 		if (!parsed) return line;
@@ -3595,7 +3598,7 @@ export class TUI extends Container {
 						width,
 						Math.min(screenRow, height - 1),
 						this.#osc66SpacerGlyphWidth(preparedHistory.lines, index),
-						{ blankRow: compactReplay },
+						{ blankRow: compactReplay, replay: true },
 					),
 				);
 				screenRow++;
@@ -3610,6 +3613,7 @@ export class TUI extends Container {
 						this.#osc66SpacerGlyphWidth(prepared.lines, index),
 						{
 							blankRow: compactReplay,
+							replay: true,
 							imagePlacements: index < replayViewportRows ? undefined : this.#screenImagePlacements,
 							imageRow: newTop + index,
 						},
@@ -4235,7 +4239,12 @@ export class TUI extends Container {
 		width: number,
 		screenRow = -1,
 		spacerGlyphWidth = -1,
-		options?: { blankRow?: boolean; imagePlacements?: Map<number, LiveImagePlacement>; imageRow?: number },
+		options?: {
+			blankRow?: boolean;
+			imagePlacements?: Map<number, LiveImagePlacement>;
+			imageRow?: number;
+			replay?: boolean;
+		},
 	): string {
 		// End every rewrite at column zero. ConPTY can materialize a pending
 		// wrap before a following cursor-addressing sequence even while DECAWM is
@@ -4254,7 +4263,13 @@ export class TUI extends Container {
 		} else if (line.isImage) {
 			rewrite =
 				ERASE_LINE +
-				this.#imageLineSequence(line.line, screenRow, options?.imagePlacements, options?.imageRow ?? screenRow);
+				this.#imageLineSequence(
+					line.line,
+					screenRow,
+					options?.imagePlacements,
+					options?.imageRow ?? screenRow,
+					options?.replay,
+				);
 		} else {
 			const terminalLine = this.#terminalLine(line);
 			if (options?.blankRow) {

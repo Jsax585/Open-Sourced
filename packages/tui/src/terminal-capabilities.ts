@@ -954,6 +954,19 @@ export function parseKittyDirectPlacementLine(line: string): ParsedKittyPlacemen
 	};
 }
 
+const SIXEL_DIRECT_PLACEMENT_LINE = /^\x1b7\x1b\[(\d+)A\x1bP[0-9;]*q/;
+
+/**
+ * Parse a frame line that draws a SIXEL {@link Image} block from its last
+ * line: save cursor, `CUU(lift)` to the image origin, the SIXEL payload,
+ * restore cursor. Returns null for anything else, including single-row
+ * images, which draw in place.
+ */
+export function parseSixelDirectPlacementLine(line: string): { lift: number } | null {
+	const m = SIXEL_DIRECT_PLACEMENT_LINE.exec(line);
+	return m ? { lift: Number(m[1]) } : null;
+}
+
 /**
  * Rebuild an {@link Image} direct-placement line for the viewport row it is
  * written at. The component-rendered line encodes `CUU(rows-1)`, which clamps
