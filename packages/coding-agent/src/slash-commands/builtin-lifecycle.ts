@@ -1,5 +1,5 @@
 import { SEANCE_SLASH_COMMAND } from "./seance";
-import { clearSubmittedText } from "./helpers/draft";
+import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import { runOnHost } from "./helpers/hosted";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -182,12 +182,17 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		name: "new",
 		icon: "plus",
 		description: "Start a new session",
-		handleTui: async (_command, runtime) => {
+		handleTui: async (command, runtime) => {
 			clearSubmittedText(runtime);
-			// Attached: the host starts it through its session-change path, and every terminal follows.
-			if (runtime.ctx.hostedClientMode)
-				await runOnHost(runtime.ctx, link => link.newSession(), "New session started");
-			else await runtime.ctx.handleNewCommand();
+			if (!runtime.ctx.hostedClientMode) {
+				await runtime.ctx.handleNewCommand();
+				return;
+			}
+			// Attached: the host starts it through its session-change path, and every terminal follows. Refused: the
+			// input goes back for the user to resend.
+			if (!(await runOnHost(runtime.ctx, link => link.newSession(), "New session started"))) {
+				restoreDetachedDraft(runtime.ctx.editor, command.text);
+			}
 		},
 	},
 	{
