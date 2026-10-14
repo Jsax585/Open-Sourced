@@ -67,6 +67,7 @@ import {
 } from "../persistence-failure";
 import { initializeExtensions } from "../runtime-init";
 import { cfgSpellingAutocomplete } from "../settings";
+import { isRpcHostDapClose, isRpcHostDapMessage, RpcHostDebugBridge } from "./host-debug";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
 import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
@@ -91,6 +92,8 @@ import type {
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcExtensionUISelectOptionDetail,
+	RpcHostDapClose,
+	RpcHostDapMessage,
 	RpcHostToolCallRequest,
 	RpcHostToolCancelRequest,
 	RpcHostToolDefinition,
@@ -223,6 +226,8 @@ type RpcOutput = (
 		| RpcHostToolCancelRequest
 		| RpcHostUriRequest
 		| RpcHostUriCancelRequest
+		| RpcHostDapMessage
+		| RpcHostDapClose
 		| object,
 ) => void;
 
@@ -371,6 +376,7 @@ export interface RpcInputFrameDeps {
 	onHostToolResult: (frame: RpcHostToolResult) => void;
 	onHostToolUpdate: (frame: RpcHostToolUpdate) => void;
 	onHostUriResult: (frame: RpcHostUriResult) => void;
+	onHostDapFrame?: (frame: RpcHostDapMessage | RpcHostDapClose) => void;
 }
 
 /**
@@ -404,6 +410,11 @@ export function dispatchRpcControlFrame(parsed: unknown, deps: RpcInputFrameDeps
 
 	if (isRpcHostUriResult(parsed)) {
 		deps.onHostUriResult(parsed);
+		return true;
+	}
+
+	if (isRpcHostDapMessage(parsed) || isRpcHostDapClose(parsed)) {
+		deps.onHostDapFrame?.(parsed);
 		return true;
 	}
 
@@ -1407,6 +1418,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	const pendingExtensionRequests = new RpcPendingExtensionRequests();
 	const hostToolBridge = new RpcHostToolBridge(output);
 	const hostUriBridge = new RpcHostUriBridge(output);
+	const hostDebugBridge = new RpcHostDebugBridge(output);
 	// Live frames go straight to `output`, so `set_event_filter` (session events only) never drops them.
 	const liveBridge = new RpcLiveBridge(session, output, createLiveSession);
 	const subagentRegistry = subagentEventBus ? new RpcSubagentRegistry(subagentEventBus, output) : undefined;
@@ -2174,6 +2186,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				}
 			}
 
+			case "set_host_debug": {
+				return success(id, "set_host_debug", { enabled: hostDebugBridge.setEnabled(command.enabled) });
+			}
+
 			case "set_subagent_subscription": {
 				if (!subagentRegistry) {
 					return error(id, "set_subagent_subscription", "Subagent event bus is unavailable");
@@ -2659,6 +2675,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		onHostToolResult: frame => hostToolBridge.handleResult(frame),
 		onHostToolUpdate: frame => hostToolBridge.handleUpdate(frame),
 		onHostUriResult: frame => hostUriBridge.handleResult(frame),
+		onHostDapFrame: frame =>
+			frame.type === "host_dap_message" ? hostDebugBridge.handleMessage(frame) : hostDebugBridge.handleClose(frame),
 	};
 
 	const inputDispatcher = new RpcInputDispatcher({
@@ -2684,6 +2702,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	pendingExtensionRequests.rejectAll("RPC client disconnected before extension UI response completed");
 	hostToolBridge.close("RPC client disconnected before host tool execution completed");
 	hostUriBridge.clear("RPC client disconnected before host URI request completed");
+	hostDebugBridge.close("RPC client disconnected; host debug session ended");
 	await liveBridge.stop();
 	await inputDispatcher.drain();
 	await shutdownCoordinator.drain();

@@ -4,6 +4,7 @@ import { NON_INTERACTIVE_ENV } from "../exec/non-interactive-env";
 import { encodeMessageFrame, MessageFramer, MessageFramingError } from "../jsonrpc/message-framing";
 import { ToolAbortError } from "../tools/tool-errors";
 import type {
+	DapAdapterProcess,
 	DapCapabilities,
 	DapClientState,
 	DapEventMessage,
@@ -28,7 +29,7 @@ interface DapSpawnOptions {
 }
 
 /** Minimal write interface shared by Bun.FileSink and Bun TCP sockets. */
-interface DapWriteSink {
+export interface DapWriteSink {
 	write(data: string | Uint8Array): number | Promise<number>;
 	flush(): number | Promise<number> | undefined;
 }
@@ -83,9 +84,9 @@ export class DapClient {
 		adapter: DapResolvedAdapter,
 		cwd: string,
 		proc: DapClientState["proc"],
-		options?: {
-			readable?: ReadableStream<Uint8Array>;
-			writeSink?: DapWriteSink;
+		options: {
+			readable: ReadableStream<Uint8Array>;
+			writeSink: DapWriteSink;
 			socket?: { end(): void };
 			port?: number;
 		},
@@ -93,10 +94,10 @@ export class DapClient {
 		this.adapter = adapter;
 		this.cwd = cwd;
 		this.proc = proc;
-		this.#readable = options?.readable ?? (proc.stdout as ReadableStream<Uint8Array>);
-		this.#writeSink = options?.writeSink ?? proc.stdin;
-		this.#socket = options?.socket;
-		this.port = options?.port;
+		this.#readable = options.readable;
+		this.#writeSink = options.writeSink;
+		this.#socket = options.socket;
+		this.port = options.port;
 		this.proc.exited.then(
 			() => this.#rejectPendingWritesForExit(),
 			() => this.#rejectPendingWritesForExit(),
@@ -124,7 +125,10 @@ export class DapClient {
 			env,
 			detached: true,
 		});
-		const client = new DapClient(adapter, cwd, proc);
+		const client = new DapClient(adapter, cwd, proc, {
+			readable: proc.stdout as ReadableStream<Uint8Array>,
+			writeSink: proc.stdin,
+		});
 		proc.exited.then(() => {
 			client.#handleProcessExit();
 		});
@@ -336,6 +340,24 @@ export class DapClient {
 			clearTimeout(connectTimeout);
 			server.stop();
 		}
+	}
+
+	/**
+	 * Client over a caller-owned transport (e.g. an RPC host's debug session)
+	 * instead of a spawned adapter. `proc.exited` settling acts as adapter exit.
+	 */
+	static fromTransport(
+		adapter: DapResolvedAdapter,
+		cwd: string,
+		transport: { proc: DapAdapterProcess; readable: ReadableStream<Uint8Array>; writeSink: DapWriteSink },
+	): DapClient {
+		const client = new DapClient(adapter, cwd, transport.proc, transport);
+		transport.proc.exited.then(
+			() => client.#handleProcessExit(),
+			() => client.#handleProcessExit(),
+		);
+		void client.#startMessageReader();
+		return client;
 	}
 
 	get capabilities(): DapCapabilities | undefined {

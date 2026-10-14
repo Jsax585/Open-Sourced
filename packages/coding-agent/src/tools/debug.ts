@@ -32,6 +32,7 @@ import {
 	dapSessionManager,
 	getAdapterConfigs,
 	getAvailableAdapters,
+	HOST_DAP_ADAPTER,
 	type LaunchProgramKind,
 	resolveLaunchOverrides,
 	selectAttachAdapter,
@@ -606,6 +607,17 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugExecutionDe
 				}
 				const commandCwd = params.cwd ? resolveToCwd(params.cwd, this.session.cwd) : this.session.cwd;
 				const program = resolveToCwd(params.program, commandCwd);
+				if (dapSessionManager.hasHostConnector()) {
+					// The host owns the debugger: it picks the adapter and validates the program.
+					const snapshot = await dapSessionManager.launch(
+						{ adapter: HOST_DAP_ADAPTER, program, args: params.args, cwd: commandCwd },
+						combinedSignal,
+						timeoutSec * 1000,
+					);
+					details.snapshot = snapshot;
+					details.adapter = HOST_DAP_ADAPTER.name;
+					return result.text(formatSessionSnapshot(snapshot).join("\n")).done();
+				}
 				const programKind = await classifyLaunchProgram(program);
 				const selection = selectLaunchAdapter(program, commandCwd, params.adapter, programKind);
 				if (selection.kind === "unavailable") {
@@ -629,11 +641,13 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugExecutionDe
 				return result.text(formatSessionSnapshot(snapshot).join("\n")).done();
 			}
 			case "attach": {
-				if (params.pid === undefined && params.port === undefined && !params.adapter) {
+				const hosted = dapSessionManager.hasHostConnector();
+				if (!hosted && params.pid === undefined && params.port === undefined && !params.adapter) {
 					throw new ToolError("attach requires pid or port");
 				}
 				const commandCwd = params.cwd ? resolveToCwd(params.cwd, this.session.cwd) : this.session.cwd;
-				const adapter = selectAttachAdapter(commandCwd, params.adapter, params.port);
+				// With a host, attach without pid/port joins the host's current debug session.
+				const adapter = hosted ? HOST_DAP_ADAPTER : selectAttachAdapter(commandCwd, params.adapter, params.port);
 				if (!adapter) {
 					if (params.adapter) {
 						const command = getAdapterConfigs(commandCwd)[params.adapter]?.command ?? params.adapter;

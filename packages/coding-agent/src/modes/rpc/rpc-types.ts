@@ -66,6 +66,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_todos"; phases: TodoPhase[] }
 	| { id?: string; type: "set_host_tools"; tools: RpcHostToolDefinition[] }
 	| { id?: string; type: "set_host_uri_schemes"; schemes: RpcHostUriSchemeDefinition[] }
+	| { id?: string; type: "set_host_debug"; enabled: boolean }
 	| { id?: string; type: "set_subagent_subscription"; level: RpcSubagentSubscriptionLevel }
 	| { id?: string; type: "set_event_filter"; events: string[] | null; messageUpdates?: RpcMessageUpdates }
 	| { id?: string; type: "get_subagents" }
@@ -438,6 +439,7 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "set_todos"; success: true; data: { todoPhases: TodoPhase[] } }
 	| { id?: string; type: "response"; command: "set_host_tools"; success: true; data: { toolNames: string[] } }
 	| { id?: string; type: "response"; command: "set_host_uri_schemes"; success: true; data: { schemes: string[] } }
+	| { id?: string; type: "response"; command: "set_host_debug"; success: true; data: { enabled: boolean } }
 	| {
 			id?: string;
 			type: "response";
@@ -810,6 +812,32 @@ export interface RpcHostToolResult {
 	id: string;
 	result: AgentToolResult<unknown>;
 	isError?: boolean;
+}
+
+// ============================================================================
+// Host Debug Frames (bidirectional)
+// ============================================================================
+
+/**
+ * One DAP protocol message (request, response, or event) on a host debug
+ * session. The server sends requests and reverse-request responses; the host
+ * sends responses, events, and reverse requests.
+ */
+export interface RpcHostDapMessage {
+	type: "host_dap_message";
+	/** Server-minted id of the debug session (one per `debug` launch/attach). */
+	sessionId: string;
+	message: Record<string, unknown>;
+}
+
+/**
+ * Ends a host debug session. From the server: the `debug` tool disposed it.
+ * From the host: its session ended; pending requests fail with `error`.
+ */
+export interface RpcHostDapClose {
+	type: "host_dap_close";
+	sessionId: string;
+	error?: string;
 }
 
 // ============================================================================

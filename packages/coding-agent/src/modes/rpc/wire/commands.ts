@@ -146,6 +146,13 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		unwrap: "schemes",
 	},
 	{
+		name: "set_host_debug",
+		doc: "Route the `debug` tool's launch/attach to the host's debugger session over `host_dap_message` frames.",
+		params: { enabled: "boolean" },
+		result: { enabled: "boolean" },
+		unwrap: "enabled",
+	},
+	{
 		name: "set_subagent_subscription",
 		doc: "Select which subagent frames are forwarded.",
 		params: { level: "SubagentSubscriptionLevel" },

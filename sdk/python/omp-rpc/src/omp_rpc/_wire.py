@@ -3225,6 +3225,12 @@ class WireClient:
         params: dict[str, object] = {}
         return parse_session_tree(self._command("get_tree", params), "get_tree")
 
+    def set_host_debug(self, enabled: bool) -> bool:
+        """Route the `debug` tool's launch/attach to the host's debugger session over `host_dap_message` frames."""
+        params: dict[str, object] = {}
+        params["enabled"] = enabled
+        return required(expect_object(self._command("set_host_debug", params), "set_host_debug"), "enabled", decode_bool, "set_host_debug")
+
     def set_subagent_subscription(self, level: SubagentSubscriptionLevel) -> SubagentSubscriptionLevel:
         """Select which subagent frames are forwarded."""
         params: dict[str, object] = {}

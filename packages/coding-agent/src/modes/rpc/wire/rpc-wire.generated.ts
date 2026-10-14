@@ -1404,11 +1404,25 @@ export interface HostUriResult {
 	error?: string;
 }
 
-/** Server request for host-owned tools and URI schemes, discriminated by `type`. */
-export type RpcHostRequest = HostToolCallRequest | HostToolCancelRequest | HostUriRequest | HostUriCancelRequest;
+/** One DAP protocol message on a host debug session; the server sends requests, the host sends responses and events. */
+export interface HostDapMessage {
+	type: "host_dap_message";
+	sessionId: string;
+	message: Record<string, unknown>;
+}
+
+/** Ends a host debug session: the server disposed it, or the host's session ended. */
+export interface HostDapClose {
+	type: "host_dap_close";
+	sessionId: string;
+	error?: string;
+}
+
+/** Server request for host-owned tools, URI schemes, and debug sessions, discriminated by `type`. */
+export type RpcHostRequest = HostToolCallRequest | HostToolCancelRequest | HostUriRequest | HostUriCancelRequest | HostDapMessage | HostDapClose;
 
 /** Non-command frame the host sends, discriminated by `type`. */
-export type RpcInbound = ExtensionUiResponse | HostToolUpdate | HostToolResult | HostUriResult;
+export type RpcInbound = ExtensionUiResponse | HostToolUpdate | HostToolResult | HostUriResult | HostDapMessage | HostDapClose;
 
 /** Response to a command, correlated by `id`. */
 export interface RpcResponse {
@@ -1558,6 +1572,14 @@ export interface SetHostUriSchemesParams {
 
 export interface SetHostUriSchemesResult {
 	schemes: string[];
+}
+
+export interface SetHostDebugParams {
+	enabled: boolean;
+}
+
+export interface SetHostDebugResult {
+	enabled: boolean;
 }
 
 export interface SetSubagentSubscriptionParams {
@@ -1808,6 +1830,7 @@ export interface RpcWireCommands {
 	set_todos: { params: SetTodosParams; result: SetTodosResult };
 	set_host_tools: { params: SetHostToolsParams; result: SetHostToolsResult };
 	set_host_uri_schemes: { params: SetHostUriSchemesParams; result: SetHostUriSchemesResult };
+	set_host_debug: { params: SetHostDebugParams; result: SetHostDebugResult };
 	set_subagent_subscription: { params: SetSubagentSubscriptionParams; result: SetSubagentSubscriptionResult };
 	set_event_filter: { params: SetEventFilterParams; result: SetEventFilterResult };
 	get_subagents: { params: undefined; result: GetSubagentsResult };

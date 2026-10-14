@@ -252,6 +252,17 @@
 				"clientOmit": []
 			},
 			{
+				"name": "set_host_debug",
+				"doc": "Route the `debug` tool's launch/attach to the host's debugger session over `host_dap_message` frames.",
+				"params": "SetHostDebugParams",
+				"result": "SetHostDebugResult",
+				"nullable": false,
+				"unwrap": "enabled",
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "set_subagent_subscription",
 				"doc": "Select which subagent frames are forwarded.",
 				"params": "SetSubagentSubscriptionParams",
@@ -5572,6 +5583,47 @@
 			],
 			"description": "Completes a pending host URI request."
 		},
+		"HostDapMessage": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "host_dap_message"
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"message": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {}
+				}
+			},
+			"required": [
+				"type",
+				"sessionId",
+				"message"
+			],
+			"description": "One DAP protocol message on a host debug session; the server sends requests, the host sends responses and events."
+		},
+		"HostDapClose": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "host_dap_close"
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"error": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"type",
+				"sessionId"
+			],
+			"description": "Ends a host debug session: the server disposed it, or the host's session ended."
+		},
 		"RpcHostRequest": {
 			"anyOf": [
 				{
@@ -5585,9 +5637,15 @@
 				},
 				{
 					"$ref": "#/$defs/HostUriCancelRequest"
+				},
+				{
+					"$ref": "#/$defs/HostDapMessage"
+				},
+				{
+					"$ref": "#/$defs/HostDapClose"
 				}
 			],
-			"description": "Server request for host-owned tools and URI schemes, discriminated by `type`."
+			"description": "Server request for host-owned tools, URI schemes, and debug sessions, discriminated by `type`."
 		},
 		"RpcInbound": {
 			"anyOf": [
@@ -5602,6 +5660,12 @@
 				},
 				{
 					"$ref": "#/$defs/HostUriResult"
+				},
+				{
+					"$ref": "#/$defs/HostDapMessage"
+				},
+				{
+					"$ref": "#/$defs/HostDapClose"
 				}
 			],
 			"description": "Non-command frame the host sends, discriminated by `type`."
@@ -6104,6 +6168,28 @@
 			},
 			"required": [
 				"schemes"
+			]
+		},
+		"SetHostDebugParams": {
+			"type": "object",
+			"properties": {
+				"enabled": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"enabled"
+			]
+		},
+		"SetHostDebugResult": {
+			"type": "object",
+			"properties": {
+				"enabled": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"enabled"
 			]
 		},
 		"SetSubagentSubscriptionParams": {

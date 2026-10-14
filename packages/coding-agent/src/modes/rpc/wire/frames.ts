@@ -289,12 +289,20 @@ export const frameDefs = {
 		},
 		"Completes a pending host URI request.",
 	),
+	HostDapMessage: doc(
+		{ type: "'host_dap_message'", sessionId: "string", message: JSON_OBJECT },
+		"One DAP protocol message on a host debug session; the server sends requests, the host sends responses and events.",
+	),
+	HostDapClose: doc(
+		{ type: "'host_dap_close'", sessionId: "string", "error?": "string" },
+		"Ends a host debug session: the server disposed it, or the host's session ended.",
+	),
 	RpcHostRequest: doc(
-		"HostToolCallRequest | HostToolCancelRequest | HostUriRequest | HostUriCancelRequest",
-		"Server request for host-owned tools and URI schemes, discriminated by `type`.",
+		"HostToolCallRequest | HostToolCancelRequest | HostUriRequest | HostUriCancelRequest | HostDapMessage | HostDapClose",
+		"Server request for host-owned tools, URI schemes, and debug sessions, discriminated by `type`.",
 	),
 	RpcInbound: doc(
-		"ExtensionUiResponse | HostToolUpdate | HostToolResult | HostUriResult",
+		"ExtensionUiResponse | HostToolUpdate | HostToolResult | HostUriResult | HostDapMessage | HostDapClose",
 		"Non-command frame the host sends, discriminated by `type`.",
 	),
 	RpcResponse: doc(

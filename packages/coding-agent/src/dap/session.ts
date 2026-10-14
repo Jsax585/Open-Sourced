@@ -281,8 +281,32 @@ function buildSummary(session: DapSession): DapSessionSummary {
 	};
 }
 
+/**
+ * Supplies the DAP connection for new sessions in place of spawning the
+ * adapter, e.g. an RPC host that runs its own debugger session.
+ */
+export interface DapHostConnector {
+	connect(adapter: DapResolvedAdapter, cwd: string): DapClient;
+}
+
+/** Adapter identity for sessions served by a {@link DapHostConnector}. */
+export const HOST_DAP_ADAPTER: DapResolvedAdapter = {
+	name: "host",
+	command: "host",
+	args: [],
+	resolvedCommand: "host",
+	languages: [],
+	fileTypes: [],
+	rootMarkers: [],
+	launchDefaults: {},
+	attachDefaults: {},
+	connectMode: "stdio",
+	acceptsDirectoryProgram: true,
+};
+
 export class DapSessionManager {
 	#sessions = new Map<string, DapSession>();
+	#hostConnector: DapHostConnector | null = null;
 	#activeSessionId: string | null = null;
 	#cleanupLoopPromise?: Promise<void>;
 	#nextId = 0;
@@ -290,6 +314,20 @@ export class DapSessionManager {
 
 	constructor() {
 		this.#startCleanupTimer();
+	}
+
+	/** Route new launch/attach sessions to `connector`; `null` restores adapter spawning. */
+	setHostConnector(connector: DapHostConnector | null): void {
+		this.#hostConnector = connector;
+	}
+
+	hasHostConnector(): boolean {
+		return this.#hostConnector !== null;
+	}
+
+	#connect(adapter: DapResolvedAdapter, cwd: string): Promise<DapClient> {
+		if (this.#hostConnector) return Promise.resolve(this.#hostConnector.connect(adapter, cwd));
+		return DapClient.spawn({ adapter, cwd });
 	}
 
 	getActiveSession(): DapSessionSummary | null {
@@ -311,7 +349,7 @@ export class DapSessionManager {
 		timeoutMs: number = 30_000,
 	): Promise<DapSessionSummary> {
 		await this.#ensureLaunchSlot();
-		const client = await DapClient.spawn({ adapter: options.adapter, cwd: options.cwd });
+		const client = await this.#connect(options.adapter, options.cwd);
 		const session = this.#registerSession(client, options.adapter, options.cwd, options.program);
 		try {
 			session.capabilities = await client.initialize(
@@ -384,7 +422,7 @@ export class DapSessionManager {
 		timeoutMs: number = 30_000,
 	): Promise<DapSessionSummary> {
 		await this.#ensureLaunchSlot();
-		const client = await DapClient.spawn({ adapter: options.adapter, cwd: options.cwd });
+		const client = await this.#connect(options.adapter, options.cwd);
 		const session = this.#registerSession(client, options.adapter, options.cwd);
 		try {
 			session.capabilities = await client.initialize(

@@ -1,5 +1,3 @@
-import type { ptree } from "@oh-my-pi/pi-utils";
-
 export type DapMessage = DapRequestMessage | DapResponseMessage | DapEventMessage;
 export type DapSessionStatus = "launching" | "configuring" | "stopped" | "running" | "terminated";
 
@@ -463,10 +461,21 @@ export interface DapPendingRequest {
 	command: string;
 }
 
+/**
+ * The adapter lifetime a {@link DapClient} watches. A spawned adapter's
+ * `ptree.ChildProcess` satisfies it; an RPC host session supplies its own.
+ */
+export interface DapAdapterProcess {
+	readonly exited: Promise<unknown>;
+	readonly exitCode: number | null;
+	kill(): void;
+	peekStderr(): string;
+}
+
 export interface DapClientState {
 	adapterName: string;
 	cwd: string;
-	proc: ptree.ChildProcess<"pipe">;
+	proc: DapAdapterProcess;
 	requestSeq: number;
 	pendingRequests: Map<number, DapPendingRequest>;
 	isReading: boolean;

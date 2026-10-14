@@ -6232,7 +6232,63 @@ func (v *HostUriResultContentType) UnmarshalJSON(data []byte) error {
 	return unknownValue("HostUriResultContentType", s)
 }
 
-// Server request for host-owned tools and URI schemes, discriminated by `type`.
+// One DAP protocol message on a host debug session; the server sends requests, the host sends responses and events.
+type HostDapMessage struct {
+	SessionID string                     `json:"sessionId"`
+	Message   map[string]json.RawMessage `json:"message"`
+}
+
+func (v *HostDapMessage) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "HostDapMessage", v.decodeFrom)
+}
+
+func (v *HostDapMessage) decodeFrom(raw map[string]json.RawMessage) error {
+	var out HostDapMessage
+	d := fieldDecoder{raw: raw, owner: "HostDapMessage"}
+	d.constant("type", "host_dap_message")
+	d.required("sessionId", &out.SessionID)
+	d.required("message", &out.Message)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v HostDapMessage) MarshalJSON() ([]byte, error) {
+	type plain HostDapMessage
+	return encodeObject(plain(v), `"type":"host_dap_message"`, nil)
+}
+
+// Ends a host debug session: the server disposed it, or the host's session ended.
+type HostDapClose struct {
+	SessionID string  `json:"sessionId"`
+	Error     *string `json:"error,omitempty"`
+}
+
+func (v *HostDapClose) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "HostDapClose", v.decodeFrom)
+}
+
+func (v *HostDapClose) decodeFrom(raw map[string]json.RawMessage) error {
+	var out HostDapClose
+	d := fieldDecoder{raw: raw, owner: "HostDapClose"}
+	d.constant("type", "host_dap_close")
+	d.required("sessionId", &out.SessionID)
+	d.optional("error", &out.Error)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v HostDapClose) MarshalJSON() ([]byte, error) {
+	type plain HostDapClose
+	return encodeObject(plain(v), `"type":"host_dap_close"`, nil)
+}
+
+// Server request for host-owned tools, URI schemes, and debug sessions, discriminated by `type`.
 type RpcHostRequest struct {
 	// Value holds one variant, chosen by "type" on decode.
 	Value RpcHostRequestVariant
@@ -6247,6 +6303,8 @@ func (HostToolCallRequest) isRpcHostRequest()   {}
 func (HostToolCancelRequest) isRpcHostRequest() {}
 func (HostUriRequest) isRpcHostRequest()        {}
 func (HostUriCancelRequest) isRpcHostRequest()  {}
+func (HostDapMessage) isRpcHostRequest()        {}
+func (HostDapClose) isRpcHostRequest()          {}
 
 func (v RpcHostRequest) MarshalJSON() ([]byte, error) {
 	return encodeVariant("RpcHostRequest", v.Value)
@@ -6271,6 +6329,10 @@ func (v *RpcHostRequest) decodeFrom(raw map[string]json.RawMessage) error {
 		value, err = decodeVariant[HostUriRequest](raw)
 	case "host_uri_cancel":
 		value, err = decodeVariant[HostUriCancelRequest](raw)
+	case "host_dap_message":
+		value, err = decodeVariant[HostDapMessage](raw)
+	case "host_dap_close":
+		value, err = decodeVariant[HostDapClose](raw)
 	default:
 		return unknownValue("RpcHostRequest.type", tag)
 	}
@@ -6299,6 +6361,8 @@ func (AnswersUiResponse) isRpcInbound() {}
 func (HostToolUpdate) isRpcInbound()    {}
 func (HostToolResult) isRpcInbound()    {}
 func (HostUriResult) isRpcInbound()     {}
+func (HostDapMessage) isRpcInbound()    {}
+func (HostDapClose) isRpcInbound()      {}
 
 func (v RpcInbound) MarshalJSON() ([]byte, error) {
 	return encodeVariant("RpcInbound", v.Value)
@@ -6621,6 +6685,8 @@ func (HostToolCallRequest) isRpcServerFrame()          {}
 func (HostToolCancelRequest) isRpcServerFrame()        {}
 func (HostUriRequest) isRpcServerFrame()               {}
 func (HostUriCancelRequest) isRpcServerFrame()         {}
+func (HostDapMessage) isRpcServerFrame()               {}
+func (HostDapClose) isRpcServerFrame()                 {}
 func (ReadyEvent) isRpcServerFrame()                   {}
 func (PromptResultEvent) isRpcServerFrame()            {}
 func (SessionSettledEvent) isRpcServerFrame()          {}
@@ -6695,6 +6761,10 @@ func (v *RpcServerFrame) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[HostUriRequest](raw)
 	case "host_uri_cancel":
 		value, err = decodeVariant[HostUriCancelRequest](raw)
+	case "host_dap_message":
+		value, err = decodeVariant[HostDapMessage](raw)
+	case "host_dap_close":
+		value, err = decodeVariant[HostDapClose](raw)
 	case "ready":
 		value, err = decodeVariant[ReadyEvent](raw)
 	case "prompt_result":
@@ -6931,6 +7001,25 @@ func (v *SetHostUriSchemesResult) decodeFrom(raw map[string]json.RawMessage) err
 	var out SetHostUriSchemesResult
 	d := fieldDecoder{raw: raw, owner: "SetHostUriSchemesResult"}
 	d.required("schemes", &out.Schemes)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type SetHostDebugResult struct {
+	Enabled bool `json:"enabled"`
+}
+
+func (v *SetHostDebugResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SetHostDebugResult", v.decodeFrom)
+}
+
+func (v *SetHostDebugResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SetHostDebugResult
+	d := fieldDecoder{raw: raw, owner: "SetHostDebugResult"}
+	d.required("enabled", &out.Enabled)
 	if d.err != nil {
 		return d.err
 	}
@@ -7584,6 +7673,18 @@ func (c Commands) SetHostURISchemes(ctx context.Context, p SetHostURISchemesComm
 	var out SetHostUriSchemesResult
 	err := c.call(ctx, "set_host_uri_schemes", p, 0, &out)
 	return out.Schemes, err
+}
+
+// SetHostDebugCommand holds the parameters of "set_host_debug".
+type SetHostDebugCommand struct {
+	Enabled bool `json:"enabled"`
+}
+
+// SetHostDebug sends "set_host_debug": Route the `debug` tool's launch/attach to the host's debugger session over `host_dap_message` frames.
+func (c Commands) SetHostDebug(ctx context.Context, p SetHostDebugCommand) (bool, error) {
+	var out SetHostDebugResult
+	err := c.call(ctx, "set_host_debug", p, 0, &out)
+	return out.Enabled, err
 }
 
 // SetSubagentSubscriptionCommand holds the parameters of "set_subagent_subscription".
