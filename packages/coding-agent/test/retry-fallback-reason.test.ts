@@ -40,6 +40,14 @@ test("names the classified failure kind so a switch is traceable to its error cl
 	expect(transient).not.toContain("usage-limit");
 });
 
+test("the recorded label matches the raw classification the retry event carries", () => {
+	// auto_retry_start exposes the raw bitset as errorId; the fallback reason now
+	// carries the same bits as labels, so the two records agree.
+	const kind = AIError.create(AIError.Flag.UsageLimit, AIError.Flag.Transient);
+	expect(AIError.stringify(kind)).toBe("transient|usage-limit");
+	expect(describeRequestFailure(failedMessage("429"), kind)).toContain("[transient|usage-limit]");
+});
+
 test("keeps a placeholder when the provider sent no text, and reports unclassified failures", () => {
 	const timeout = describeRequestFailure(failedMessage(undefined), AIError.create(AIError.Flag.Timeout));
 	expect(timeout).toContain("[timeout]");
