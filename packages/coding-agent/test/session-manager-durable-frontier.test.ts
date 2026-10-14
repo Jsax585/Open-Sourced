@@ -9,6 +9,11 @@ import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import {
+	IndexedSessionStorage,
+	type SessionStorageBackend,
+	type SessionStorageIndexEntry,
+} from "@oh-my-pi/pi-coding-agent/session/indexed-session-storage";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { parseSessionContent } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SESSION_TAIL_APPEND_CHUNK_BYTES, SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -16,6 +21,7 @@ import {
 	FileSessionStorage,
 	type SessionStorageWriteOptions,
 	type SessionStorageWriter,
+	SessionWriteConflictError,
 	type WriteTextAtomicOptions,
 } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -137,6 +143,90 @@ class ReadCountingStorage extends ControlledRewriteStorage {
 		const text = super.readTextRangeSync(fpath, start, end);
 		this.bytesRead += Buffer.byteLength(text, "utf8");
 		return text;
+	}
+}
+
+/**
+ * An in-memory backend for {@link IndexedSessionStorage} that counts every
+ * write to a path and can hold the next `remove()` until released.
+ */
+class HeldRemoveBackend implements SessionStorageBackend {
+	readonly files = new Map<string, string>();
+	readonly writes = new Map<string, number>();
+	#heldRemove: { started: PromiseWithResolvers<void>; release: PromiseWithResolvers<void> } | undefined;
+
+	/** Hold the next remove until `release()`; `started` resolves once it waits. */
+	holdNextRemove(): { started: Promise<void>; release: () => void } {
+		const held = { started: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+		this.#heldRemove = held;
+		return { started: held.started.promise, release: () => held.release.resolve() };
+	}
+
+	#wrote(path: string): void {
+		this.writes.set(path, (this.writes.get(path) ?? 0) + 1);
+	}
+
+	async init(): Promise<void> {}
+
+	async loadIndex(): Promise<SessionStorageIndexEntry[]> {
+		return [...this.files].map(([path, content]) => ({ path, size: Buffer.byteLength(content, "utf8"), mtimeMs: 0 }));
+	}
+
+	async readFull(path: string): Promise<string | null> {
+		return this.files.get(path) ?? null;
+	}
+
+	async readSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]> {
+		const bytes = Buffer.from(this.files.get(path) ?? "", "utf8");
+		const suffix = suffixBytes > 0 ? bytes.subarray(Math.max(0, bytes.length - suffixBytes)).toString("utf8") : "";
+		return [bytes.subarray(0, prefixBytes).toString("utf8"), suffix];
+	}
+
+	async append(path: string, line: string): Promise<void> {
+		this.#wrote(path);
+		this.files.set(path, (this.files.get(path) ?? "") + line);
+	}
+
+	async writeFull(
+		path: string,
+		content: string,
+		_mtimeMs: number,
+		_title?: unknown,
+		expectedSize?: number | null,
+	): Promise<void> {
+		this.#wrote(path);
+		const current = this.files.get(path);
+		const actualSize = current === undefined ? null : Buffer.byteLength(current, "utf8");
+		if (expectedSize !== undefined && actualSize !== expectedSize) {
+			throw new SessionWriteConflictError(path, expectedSize, actualSize);
+		}
+		this.files.set(path, content);
+	}
+
+	async updateSessionTitle(path: string): Promise<void> {
+		this.#wrote(path);
+	}
+
+	async truncate(path: string): Promise<void> {
+		this.#wrote(path);
+		this.files.set(path, "");
+	}
+
+	async remove(paths: string[]): Promise<void> {
+		const held = this.#heldRemove;
+		if (held) {
+			this.#heldRemove = undefined;
+			held.started.resolve();
+			await held.release.promise;
+		}
+		for (const path of paths) this.files.delete(path);
+	}
+
+	async move(src: string, dst: string): Promise<void> {
+		const content = this.files.get(src);
+		if (content === undefined) throw Object.assign(new Error(`ENOENT: ${src}`), { code: "ENOENT" });
+		this.files.delete(src);
+		this.files.set(dst, content);
 	}
 }
 
@@ -468,6 +558,34 @@ describe("a dropped session file", () => {
 			expect(listed.map(session => session.path)).not.toContain(sessionFile);
 		},
 	);
+
+	it("stays deleted on an indexed backend when a turn is appended while its remove is held", async () => {
+		const backend = new HeldRemoveBackend();
+		const storage = new IndexedSessionStorage(backend);
+		await storage.initialize();
+		const manager = SessionManager.create("/cwd", "/sessions/proj", storage);
+		managers.push(manager);
+		manager.appendMessage(assistantMessage("seed"));
+		manager.appendMessage(userTurn("before"));
+		await manager.flush();
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected a persisted session file");
+		expect(backend.files.has(sessionFile)).toBe(true);
+		const held = backend.holdNextRemove();
+		const drop = manager.dropSession(sessionFile);
+		await held.started;
+		const writesBefore = backend.writes.get(sessionFile) ?? 0;
+
+		manager.appendMessage(userTurn("in the window"));
+		held.release();
+		await drop;
+		await manager.flush();
+		await storage.drain();
+
+		expect(backend.writes.get(sessionFile) ?? 0).toBe(writesBefore);
+		expect(backend.files.has(sessionFile)).toBe(false);
+		expect(storage.existsSync(sessionFile)).toBe(false);
+	});
 
 	// Root ignores directory modes and Windows has none, so the unlink could not fail there.
 	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
