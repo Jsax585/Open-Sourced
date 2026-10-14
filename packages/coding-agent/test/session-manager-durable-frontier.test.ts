@@ -433,6 +433,42 @@ describe("a dropped session file", () => {
 		expect(fs.existsSync(sessionFile)).toBe(false);
 	});
 
+	it.each([
+		{
+			write: "a turn",
+			run: async (manager: SessionManager) => {
+				manager.appendMessage(userTurn("in the window"));
+			},
+		},
+		{
+			write: "an auto title",
+			run: async (manager: SessionManager) => {
+				await manager.setSessionName("auto title", "auto");
+			},
+		},
+	])(
+		"stays deleted and unlisted when $write lands after the unlink, before dropSession() resolves",
+		async ({ run }) => {
+			const { manager, sessionDir, sessionFile } = await fileSession();
+			// The artifact directory is removed after the journal's unlink; enough
+			// files keep that removal running while the write lands.
+			for (let i = 0; i < 200; i++) await manager.saveArtifact(`payload ${i}`, "bash");
+			let dropSettled = false;
+			const drop = manager.dropSession(sessionFile).finally(() => {
+				dropSettled = true;
+			});
+			while (fs.existsSync(sessionFile) && !dropSettled) await new Promise<void>(resolve => setImmediate(resolve));
+			expect(dropSettled).toBe(false);
+
+			await run(manager);
+			await drop;
+
+			expect(fs.existsSync(sessionFile)).toBe(false);
+			const listed = await SessionManager.list(path.dirname(sessionDir), sessionDir);
+			expect(listed.map(session => session.path)).not.toContain(sessionFile);
+		},
+	);
+
 	// Root ignores directory modes and Windows has none, so the unlink could not fail there.
 	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
 		"keeps saving later turns while the directory still refuses the delete (ACP /session delete)",

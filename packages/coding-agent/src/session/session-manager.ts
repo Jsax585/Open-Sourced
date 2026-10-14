@@ -794,6 +794,14 @@ interface DiskQueueOptions {
 	epoch?: number;
 }
 
+/** A {@link SessionManager.dropSession} of the current session file whose delete has not settled. */
+interface PendingDrop {
+	sessionFile: string;
+	/** A rewrite or title-slot write was skipped while the delete ran; a failed delete publishes it. */
+	deferredRewrite: boolean;
+	settled: PromiseWithResolvers<void>;
+}
+
 interface AtomicEntryBatch {
 	collecting: boolean;
 	entryIds: Set<string>;
@@ -1080,6 +1088,13 @@ export class SessionManager {
 	 * switches anyway.
 	 */
 	#refusedSessionSwitch: { generation: number; count: number } | undefined;
+	/**
+	 * Set while {@link dropSession} deletes the current session file. Until it
+	 * settles nothing writes that path: appends stay in memory past the
+	 * durable frontier, and rewrites and title-slot writes only record that a
+	 * full rewrite is owed.
+	 */
+	#pendingDrop: PendingDrop | undefined;
 	/** Malformed records the loader skipped for the current session file; reported by `/dump anon`. */
 	#loadedMalformedRecords = 0;
 	/** Byte length this manager last loaded or durably wrote; `null` means the path was absent. */
@@ -1666,6 +1681,7 @@ export class SessionManager {
 			return;
 		}
 		if (!this.#persist || !this.#sessionFile) return;
+		if (this.#deferRewriteForPendingDrop()) return;
 		const previousDiskTail = this.#diskTail;
 		const writer = this.#writer;
 		this.#diskEpoch++;
@@ -1970,6 +1986,7 @@ export class SessionManager {
 	#rewriteSynchronously(): void {
 		if (this.#released) return;
 		if (!this.#persist || !this.#shouldHaveSessionFile()) return;
+		if (this.#deferRewriteForPendingDrop()) return;
 		let targetPath = this.#liveRelocationWritePath() ?? this.#sessionFile;
 		if (!targetPath) return;
 
@@ -2079,6 +2096,7 @@ export class SessionManager {
 	 */
 	async #runFencedAtomicRewrite(epoch: number): Promise<boolean> {
 		if (this.#released) return false;
+		if (this.#deferRewriteForPendingDrop()) return false;
 		this.#atomicRewriteFenceEpoch = epoch;
 		let recoveries = 0;
 		try {
@@ -2140,6 +2158,8 @@ export class SessionManager {
 
 	#appendToSessionFile(entry: SessionEntry): void {
 		if (this.#released || !this.#persist || !this.#sessionFile) return;
+		// The delete of this file is running: the entry stays past the frontier.
+		if (this.#pendingDropOfSessionFile()) return;
 		if (this.#atomicEntryBatch) {
 			this.#fileIsCurrent = false;
 			this.#rewriteRequired = true;
@@ -2184,6 +2204,7 @@ export class SessionManager {
 	 * retried by the next append.
 	 */
 	#appendToCurrentSessionFile(): void {
+		if (this.#pendingDropOfSessionFile()) return;
 		// Atomic replacement / move window: do not open a fresh append writer that
 		// a Windows EPERM replace could detach from the current JSONL path.
 		// - moveTo: write a full body to the live relocation path (source pre-
@@ -2358,6 +2379,7 @@ export class SessionManager {
 		if (!this.#persist || !this.#sessionFile) return;
 		this.#appendToSessionFile(entry);
 		if (!this.#shouldHaveSessionFile()) return;
+		if (this.#deferRewriteForPendingDrop()) return;
 		// A batch's or a move's own full rewrite publishes the slot, and while an
 		// entry is missing from storage a full rewrite would only fail again.
 		if (this.#atomicEntryBatch || this.#sessionFileRelocating || this.#hasUnsavedEntries()) {
@@ -2374,6 +2396,7 @@ export class SessionManager {
 			async () => {
 				const sessionFile = this.#sessionFile;
 				if (this.#released || !sessionFile) return;
+				if (this.#deferRewriteForPendingDrop()) return;
 				try {
 					await this.#storage.updateSessionTitle(sessionFile, update);
 				} catch {
@@ -2887,36 +2910,64 @@ export class SessionManager {
 
 	/**
 	 * Delete a session file and its artifact directory. ENOENT is treated as
-	 * success. Once the delete of the current session file succeeds its
+	 * success. While the delete of the current session file runs, nothing
+	 * writes that path: entries recorded meanwhile stay in memory, and
+	 * rewrites and title changes wait. Once the delete succeeds the file's
 	 * persistence ends: the entries stay in memory, this manager never writes
 	 * that path again, and the next {@link newSession} or
-	 * {@link setSessionFile} starts from scratch; until then the session
-	 * saves as before. When the delete fails, this rethrows and leaves the
-	 * session as it was, except that the next {@link newSession} for the same
-	 * entries switches without appending the ones the file is missing.
+	 * {@link setSessionFile} starts from scratch. When the delete fails, this
+	 * publishes any rewrite or title change that waited and rethrows; the
+	 * session saves as before, except that the next {@link newSession} for
+	 * the same entries switches without appending the ones the file is missing.
 	 */
 	async dropSession(sessionPath: string): Promise<void> {
-		const dropsCurrent = () =>
-			this.#sessionFile !== undefined && path.resolve(this.#sessionFile) === path.resolve(sessionPath);
-		try {
+		const sessionFile = this.#sessionFile;
+		if (sessionFile === undefined || path.resolve(sessionFile) !== path.resolve(sessionPath)) {
 			await this.#drainAndCloseWriter();
-		} catch (err) {
-			// A failed append's error, raised again on close, concerns only the
-			// file being deleted.
-			if (!dropsCurrent()) throw err;
+			try {
+				await this.#storage.deleteSessionWithArtifacts(sessionPath);
+			} catch (err) {
+				if (!isEnoent(err)) throw err;
+			}
+			return;
 		}
+		const drop: PendingDrop = { sessionFile, deferredRewrite: false, settled: Promise.withResolvers<void>() };
+		this.#pendingDrop = drop;
 		try {
-			await this.#storage.deleteSessionWithArtifacts(sessionPath);
-		} catch (err) {
-			if (!isEnoent(err)) {
+			try {
+				await this.#drainAndCloseWriter();
+			} catch {
+				// A failed append's error, raised again on close, concerns only the
+				// file being deleted.
+			}
+			let failure: unknown;
+			try {
+				await this.#storage.deleteSessionWithArtifacts(sessionPath);
+			} catch (err) {
+				if (!isEnoent(err)) failure = err;
+			}
+			if (failure === undefined) {
+				this.#endDroppedSessionFile(sessionFile);
+				return;
+			}
+			this.#pendingDrop = undefined;
+			if (this.#sessionFile === sessionFile) {
 				// The caller asked to discard these entries: /delete's newSession()
 				// must not append the ones the file is missing.
-				if (dropsCurrent())
-					this.#refusedSessionSwitch = { generation: this.#entriesGeneration, count: this.#entries.length };
-				throw err;
+				this.#refusedSessionSwitch = { generation: this.#entriesGeneration, count: this.#entries.length };
+				// The file stays: publish the rewrite or title change the delete held back.
+				if (drop.deferredRewrite) await this.#rewriteAtomically().catch(() => undefined);
 			}
+			throw failure;
+		} finally {
+			if (this.#pendingDrop === drop) this.#pendingDrop = undefined;
+			drop.settled.resolve();
 		}
-		if (!dropsCurrent()) return;
+	}
+
+	/** End the persistence of `sessionFile`, which {@link dropSession} deleted, when it is still the current file. */
+	#endDroppedSessionFile(sessionFile: string): void {
+		if (this.#sessionFile !== sessionFile) return;
 		this.#sessionFile = undefined;
 		this.#durable = undefined;
 		this.#refusedSessionSwitch = undefined;
@@ -2929,6 +2980,24 @@ export class SessionManager {
 		this.#artifactManagerSessionFile = null;
 		this.#sessionClaim?.release?.();
 		this.#sessionClaim = undefined;
+	}
+
+	/** The pending {@link dropSession} deleting the current session file, if one is running. */
+	#pendingDropOfSessionFile(): PendingDrop | undefined {
+		const drop = this.#pendingDrop;
+		return drop !== undefined && drop.sessionFile === this.#sessionFile ? drop : undefined;
+	}
+
+	/**
+	 * While a {@link dropSession} deletes the current session file, record that
+	 * a full rewrite is owed instead of writing, and return `true`.
+	 */
+	#deferRewriteForPendingDrop(): boolean {
+		const drop = this.#pendingDropOfSessionFile();
+		if (!drop) return false;
+		drop.deferredRewrite = true;
+		this.#rewriteRequired = true;
+		return true;
 	}
 
 	/**
@@ -3325,6 +3394,7 @@ export class SessionManager {
 	 */
 	#healMissingEntries(afterSeal = false): void {
 		if ((this.#released && !afterSeal) || this.#entriesReleased || this.#atomicEntryBatch) return;
+		if (this.#pendingDropOfSessionFile()) return;
 		if (this.#sessionFileRelocating || this.#atomicRewriteFenceEpoch === this.#diskEpoch) return;
 		if (!this.#hasUnsavedEntries()) return;
 		const durable = this.#frontierMatchingSessionFile();
@@ -3348,9 +3418,11 @@ export class SessionManager {
 	 * past them) are written first. Rejects with the latched failure only
 	 * while storage is still not proven to hold every entry; content a failed
 	 * rewrite could not publish (a maintenance edit, a header change) waits
-	 * for the next full rewrite instead.
+	 * for the next full rewrite instead. While a {@link dropSession} deletes
+	 * the current file, this waits for the delete to settle first.
 	 */
 	async flush(): Promise<void> {
+		await this.#pendingDrop?.settled.promise;
 		if (!this.#persist || !this.#sessionFile) return;
 		// Failures below are reported through the latch; whether they cost an
 		// entry is decided once everything has settled.
@@ -3375,9 +3447,15 @@ export class SessionManager {
 	 * an already-current file: large restored sessions can contain GiB of compacted
 	 * history, and Ctrl+C must not rebuild the whole JSONL string just to flush.
 	 * Throws the latched failure only while storage is not proven to hold every entry.
+	 *
+	 * While a {@link dropSession} deletes the current file this returns without
+	 * touching it and without throwing: the entries it would write are either
+	 * discarded with the file the caller asked to delete, or, when the delete
+	 * fails, appended by the next append, `flush()` or `close()`.
 	 */
 	flushSync(): void {
 		if (!this.#persist || !this.#sessionFile) return;
+		if (this.#pendingDropOfSessionFile()) return;
 		if (this.#atomicEntryBatch) throw new Error("Cannot synchronously flush during an atomic session batch.");
 		if (this.#hasUnsavedEntries()) this.#appendToCurrentSessionFile();
 		else {
@@ -3440,8 +3518,11 @@ export class SessionManager {
 	/**
 	 * Write the entries storage is missing, then close the append writer.
 	 * Rejects only while storage is still not proven to hold every entry.
+	 * While a {@link dropSession} deletes the current file, this waits for the
+	 * delete to settle first.
 	 */
 	async close(): Promise<void> {
+		await this.#pendingDrop?.settled.promise;
 		if (!this.#persist) return;
 		try {
 			await this.#closeLocked();
