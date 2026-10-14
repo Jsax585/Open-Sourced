@@ -2864,9 +2864,11 @@ export class SessionManager {
 	/**
 	 * Delete a session file and its artifact directory. ENOENT is treated as
 	 * success. Dropping the current session file ends its persistence before
-	 * the delete starts, whether or not it succeeds: the entries stay in
-	 * memory, but this manager never writes that path again, and the next
-	 * {@link newSession} or {@link setSessionFile} starts from scratch.
+	 * the delete starts: the entries stay in memory, but this manager never
+	 * writes that path again, and the next {@link newSession} or
+	 * {@link setSessionFile} starts from scratch. When the delete fails and the
+	 * file is still there, the session keeps saving to it: the next write
+	 * republishes the whole journal over what the file now holds.
 	 */
 	async dropSession(sessionPath: string): Promise<void> {
 		const current = this.#sessionFile;
@@ -2895,7 +2897,22 @@ export class SessionManager {
 		try {
 			await this.#storage.deleteSessionWithArtifacts(sessionPath);
 		} catch (err) {
-			if (!isEnoent(err)) throw err;
+			if (isEnoent(err)) return;
+			if (dropsCurrent && this.#sessionFile === undefined) {
+				let size: number | undefined;
+				try {
+					size = this.#storage.statSync(sessionPath).size;
+				} catch {
+					// The file is gone (only its artifacts failed to go): it stays dropped.
+				}
+				if (size !== undefined) {
+					this.#sessionFile = current;
+					this.#expectedDiskSize = size;
+					this.#forceFileCreation = true;
+					this.#rewriteRequired = true;
+				}
+			}
+			throw err;
 		}
 	}
 

@@ -412,6 +412,28 @@ describe("a dropped session file", () => {
 
 		expect(fs.existsSync(sessionFile)).toBe(false);
 	});
+
+	// Root ignores directory modes and Windows has none, so the unlink could not fail there.
+	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"keeps saving later turns when the delete failed and the file remains (ACP /session delete)",
+		async () => {
+			const { manager, sessionDir, sessionFile } = await fileSession();
+			// A read-only directory refuses the unlink (EACCES).
+			fs.chmodSync(sessionDir, 0o555);
+			try {
+				await expect(manager.dropSession(sessionFile)).rejects.toThrow();
+			} finally {
+				fs.chmodSync(sessionDir, 0o755);
+			}
+
+			manager.appendMessage(userTurn("after the failed delete"));
+			await expect(manager.flush()).resolves.toBeUndefined();
+			expect(userTurnsOf((await reopen(sessionFile, sessionDir)).getBranch())).toEqual([
+				"before",
+				"after the failed delete",
+			]);
+		},
+	);
 });
 
 describe("a restored snapshot taken while an entry missed the journal", () => {
