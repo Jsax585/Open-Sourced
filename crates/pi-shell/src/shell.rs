@@ -1940,13 +1940,13 @@ fn should_skip_env_var(key: &str) -> bool {
 /// `EBADF: Bad file descriptor (posix_spawn())`. Windows env names are
 /// case-insensitive, so `node_channel_fd` binds there like `NODE_CHANNEL_FD`.
 #[cfg(windows)]
-fn is_node_ipc_channel_var(key: &str) -> bool {
+pub fn is_node_ipc_channel_var(key: &str) -> bool {
 	key.eq_ignore_ascii_case("NODE_CHANNEL_FD")
 		|| key.eq_ignore_ascii_case("NODE_CHANNEL_SERIALIZATION_MODE")
 }
 
 #[cfg(not(windows))]
-fn is_node_ipc_channel_var(key: &str) -> bool {
+pub fn is_node_ipc_channel_var(key: &str) -> bool {
 	matches!(key, "NODE_CHANNEL_FD" | "NODE_CHANNEL_SERIALIZATION_MODE")
 }
 
