@@ -43,6 +43,8 @@ pub(crate) struct LineInput {
 	block:  Vec<u8>,
 	pos:    usize,
 	regular_file: bool,
+	cancel_token: Option<tokio_util::sync::CancellationToken>,
+	ready: usize,
 }
 
 impl LineInput {
@@ -58,7 +60,7 @@ impl LineInput {
 				ReadAhead::ToEof => true,
 				ReadAhead::Seekable => regular_file,
 			};
-		Self { input, blocks, block: Vec::new(), pos: 0, regular_file }
+		Self { input, blocks, block: Vec::new(), pos: 0, regular_file, cancel_token: None, ready: 0 }
 	}
 
 	/// The underlying descriptor, e.g. to poll it before a read that could
@@ -78,13 +80,55 @@ impl LineInput {
 		self.regular_file
 	}
 
+	/// Interrupts stream refills when the owning builtin is cancelled or dropped.
+	pub(crate) fn set_cancel_token(&mut self, token: tokio_util::sync::CancellationToken) {
+		self.cancel_token = Some(token);
+	}
+
+	fn wait_for_input(&mut self) -> io::Result<()> {
+		let Some(token) = &self.cancel_token else { return Ok(()) };
+		if token.is_cancelled() {
+			return Err(io::ErrorKind::Interrupted.into());
+		}
+		#[cfg(unix)]
+		if !self.regular_file && self.input.try_borrow_as_fd().is_ok() {
+			if self.ready > 0 {
+				self.ready -= 1;
+				return Ok(());
+			}
+			loop {
+				if token.is_cancelled() {
+					return Err(io::ErrorKind::Interrupted.into());
+				}
+				if brush_core::sys::poll::poll_for_input(&self.input, std::time::Duration::from_millis(100))? {
+					if token.is_cancelled() {
+						return Err(io::ErrorKind::Interrupted.into());
+					}
+					use std::os::fd::AsRawFd;
+					let fd = self.input.try_borrow_as_fd().map_err(io::Error::other)?;
+					let mut available: libc::c_int = 0;
+					// SAFETY: ioctl writes a c_int through a valid pointer and only
+					// inspects the live descriptor. Failure falls back to polling.
+					if unsafe { libc::ioctl(fd.as_raw_fd(), libc::FIONREAD, &mut available) } == 0 {
+						self.ready = usize::try_from(available).unwrap_or(0).saturating_sub(1);
+					}
+					return Ok(());
+				}
+			}
+		}
+		Ok(())
+	}
+
 	/// The next byte, or `None` at end of input.
 	pub(crate) fn next_byte(&mut self) -> io::Result<Option<u8>> {
 		if !self.blocks {
+			self.wait_for_input()?;
 			let mut byte = [0_u8; 1];
 			return Ok((self.input.read(&mut byte)? == 1).then_some(byte[0]));
 		}
 		if self.pos == self.block.len() {
+			self.ready = 0;
+			self.wait_for_input()?;
 			self.block.resize(BLOCK, 0);
 			let n = self.input.read(&mut self.block)?;
 			self.block.truncate(n);

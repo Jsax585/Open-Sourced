@@ -3353,6 +3353,21 @@ mod tests {
 		}
 	}
 
+	/// Worker chunk boundaries must not change callback indices or consume
+	/// the lines beyond a count limit.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn mapfile_chunk_boundaries_preserve_callbacks_and_count_limits() {
+		let (result, output) = execute_captured(
+			"cb() { echo \"cb:$1:$2:${#arr[@]}\"; }; seq 1 8200 | { mapfile -t -n 8193 -C cb -c 5000 \
+			 arr; echo \"arr:${#arr[@]}:${arr[0]}:${arr[8192]}\"; read -r next; echo \"next:$next\"; \
+			 }"
+			.to_owned(),
+		)
+		.await;
+		assert_eq!(result.exit_code, Some(0), "{output:?}");
+		assert_eq!(output, "cb:4999:5000:4999\narr:8193:1:8193\nnext:8194\n");
+	}
+
 	/// Contract: `mapfile` into a readonly array fails before reading, as in
 	/// bash: the array is unchanged and the piped input stays for the next
 	/// reader.
@@ -6183,6 +6198,32 @@ mod tests {
 	#[cfg(unix)]
 	#[test]
 	fn mapfile_process_substitution_delivers_lines_and_reaches_eof() {
+		const CHILD: &str = "OMP_MAPFILE_REGRESSION_CHILD";
+		if std::env::var_os(CHILD).is_none() {
+			// A regression must not strand the shared test lock in this process.
+			let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+				.args([
+					"--exact",
+					"shell::tests::mapfile_process_substitution_delivers_lines_and_reaches_eof",
+					"--nocapture",
+				])
+				.env(CHILD, "1")
+				.spawn()
+				.expect("spawn isolated regression");
+			let deadline = std::time::Instant::now() + Duration::from_secs(20);
+			loop {
+				if let Some(status) = child.try_wait().expect("wait for regression") {
+					assert!(status.success(), "isolated mapfile regression failed: {status}");
+					return;
+				}
+				if std::time::Instant::now() >= deadline {
+					child.kill().expect("kill blocked regression");
+					child.wait().expect("reap blocked regression");
+					panic!("mapfile blocked its process-substitution producer");
+				}
+				std::thread::sleep(Duration::from_millis(10));
+			}
+		}
 		for command in [
 			"mapfile -t arr < <(printf 'a\\nb\\n'); printf '%s\\n' \"${arr[@]}\"",
 			"while readarray -t -n 1 arr && [[ ${#arr[@]} -gt 0 ]]; do printf '%s\\n' \"${arr[@]}\"; \
@@ -6190,22 +6231,7 @@ mod tests {
 			"cb() { printf 'cb:%s:%s\\n' \"$1\" \"$2\"; }; mapfile -t -C cb -c 1 arr < <(printf \
 			 'a\\nb\\n'); printf '%s\\n' \"${arr[@]}\"",
 		] {
-			// One worker reproduces producer starvation. A host-thread watchdog
-			// fails even when a synchronous read blocks the entire runtime.
-			let (sender, receiver) = std::sync::mpsc::channel();
-			std::thread::spawn(move || {
-				let runtime = tokio::runtime::Builder::new_multi_thread()
-					.worker_threads(1)
-					.enable_all()
-					.build()
-					.expect("test runtime must build");
-				let outcome =
-					runtime.block_on(run_command_capture(command, None, None, CancelToken::default()));
-				let _ = sender.send(outcome);
-			});
-			let (result, output) = receiver
-				.recv_timeout(Duration::from_secs(5))
-				.expect("mapfile must not block its process-substitution producer");
+			let (result, output) = capture_on_single_worker(command);
 			assert!(!result.timed_out, "command: {command}; output: {output:?}");
 			assert_eq!(result.exit_code, Some(0), "command: {command}; output: {output:?}");
 			let expected = if command.starts_with("cb()") {

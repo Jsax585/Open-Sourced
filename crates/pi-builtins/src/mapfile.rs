@@ -134,13 +134,20 @@ impl MapFileCommand {
 		let read_ahead =
 			if max_count == 0 && self.callback.is_none() { ReadAhead::ToEof } else { ReadAhead::Seekable };
 		let mut input = LineInput::new(input_file, read_ahead);
+		let cancel_token = context.cancel_token().map_or_else(
+			tokio_util::sync::CancellationToken::new,
+			|token| token.child_token(),
+		);
+		let _cancel_on_drop = cancel_token.clone().drop_guard();
+		input.set_cancel_token(cancel_token);
 		let mut lines = Vec::new();
 
 		while max_count == 0 || entry_count < max_count {
 			// Stop before anything on the shell side can read the descriptor:
 			// the next callback boundary, the count limit, or EOF. Skipped
 			// entries do not count toward either boundary.
-			let mut batch_limit = if max_count == 0 { usize::MAX } else { max_count - entry_count };
+			// Bound staging even for unlimited streams and large callback groups.
+			let mut batch_limit = if max_count == 0 { 4096 } else { (max_count - entry_count).min(4096) };
 			if self.callback.is_some() {
 				batch_limit = batch_limit.min(callback_group_size - entry_count % callback_group_size);
 			}
@@ -306,6 +313,31 @@ mod tests {
 
 	use super::read_batch;
 	use crate::line_input::{LineInput, ReadAhead};
+
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn cancelled_mapfile_releases_idle_pipe_without_consuming_next_commands_input() {
+		use std::io::Read;
+		let (reader, mut writer) = std::io::pipe().expect("pipe");
+		let mut next_reader = reader.try_clone().expect("duplicate reader");
+		let mut input = LineInput::new(OpenFile::from(reader), ReadAhead::ToEof);
+		let token = tokio_util::sync::CancellationToken::new();
+		input.set_cancel_token(token.clone());
+		let worker = tokio::task::spawn_blocking(move || {
+			read_batch(&mut input, b'\n', false, 4096, &mut 0, &mut Vec::new())
+		});
+		tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+		token.cancel();
+		let error = tokio::time::timeout(std::time::Duration::from_secs(2), worker)
+			.await.expect("reader must stop while writer remains open")
+			.expect("worker").expect_err("cancelled read");
+		assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+		writer.write_all(b"next\n").expect("next command input");
+		drop(writer);
+		let mut remaining = String::new();
+		next_reader.read_to_string(&mut remaining).expect("read remaining input");
+		assert_eq!(remaining, "next\n");
+	}
 
 	#[test]
 	fn mapfile_batch_keeps_interrupted_partial_entries_and_stops_on_empty_terminal_keys() {
