@@ -30,7 +30,11 @@ import type {
 	UsageResponse,
 	UsageStaleResponse,
 } from "./types";
-import { AUTH_BROKER_CAPABILITIES_HEADER, AUTH_BROKER_CAPABILITY_CODEX_METER_BLOCK_SCOPES } from "./types";
+import {
+	AUTH_BROKER_CAPABILITIES_HEADER,
+	AUTH_BROKER_CAPABILITY_BLOCK_PROVENANCE,
+	AUTH_BROKER_CLIENT_CAPABILITIES,
+} from "./types";
 import { parseGenerationTag } from "./protocol";
 import {
 	clientUsageReportResponseSchema,
@@ -122,6 +126,7 @@ export class AuthBrokerClient {
 	readonly #timeoutMs: number;
 	readonly #maxRetries: number;
 	readonly #fetch: typeof fetch;
+	#supportsBlockProvenance = false;
 
 	constructor(opts: AuthBrokerClientOptions) {
 		this.#baseUrl = opts.url.replace(/\/+$/, "");
@@ -147,7 +152,7 @@ export class AuthBrokerClient {
 		if (opts.waitMs !== undefined) query.set("wait", String(opts.waitMs));
 		const path = `/v1/snapshot${query.size > 0 ? `?${query.toString()}` : ""}`;
 		const headers: Record<string, string> = {
-			[AUTH_BROKER_CAPABILITIES_HEADER]: AUTH_BROKER_CAPABILITY_CODEX_METER_BLOCK_SCOPES,
+			[AUTH_BROKER_CAPABILITIES_HEADER]: AUTH_BROKER_CLIENT_CAPABILITIES,
 		};
 		if (opts.ifGenerationGt !== undefined) headers["If-None-Match"] = `"${opts.ifGenerationGt}"`;
 		const timeoutMs =
@@ -189,7 +194,7 @@ export class AuthBrokerClient {
 		const headers: Record<string, string> = {
 			Accept: "text/event-stream",
 			Authorization: `Bearer ${this.#token}`,
-			[AUTH_BROKER_CAPABILITIES_HEADER]: AUTH_BROKER_CAPABILITY_CODEX_METER_BLOCK_SCOPES,
+			[AUTH_BROKER_CAPABILITIES_HEADER]: AUTH_BROKER_CLIENT_CAPABILITIES,
 		};
 		if (opts.signal?.aborted) {
 			throw new AuthBrokerError("Auth broker request aborted", { cause: opts.signal.reason });
@@ -197,6 +202,7 @@ export class AuthBrokerClient {
 		// No timeout: this connection is intentionally long-lived. Caller's signal
 		// is the only cancel path.
 		const response = await this.#fetch(url, { method: "GET", headers, signal: opts.signal });
+		this.#noteServerCapabilities(response);
 		if (response.status === 404) {
 			// Drain the body so the socket can be reused; tiny payload.
 			await response.text().catch(() => {});
@@ -379,12 +385,29 @@ export class AuthBrokerClient {
 		block: CredentialBlockRequest,
 		signal?: AbortSignal,
 	): Promise<CredentialBlockResponse> {
-		const body: CredentialBlockRequest = block;
+		// Never send new fields to an older strict broker. Missing provenance
+		// remains conservative on readers: the cooldown applies but is not probeable.
+		const body: CredentialBlockRequest = this.#supportsBlockProvenance
+			? block
+			: {
+					providerKey: block.providerKey,
+					blockScope: block.blockScope,
+					blockedUntilMs: block.blockedUntilMs,
+					...(block.updatedAtMs !== undefined ? { updatedAtMs: block.updatedAtMs } : {}),
+				};
 		return this.#request<CredentialBlockResponse>("POST", `/v1/credential/${id}/block`, {
 			body,
 			schema: "credentialBlockResponseSchema",
 			signal,
 		});
+	}
+
+	#noteServerCapabilities(response: Response): void {
+		this.#supportsBlockProvenance =
+			response.headers
+				.get(AUTH_BROKER_CAPABILITIES_HEADER)
+				?.split(",")
+				.some(capability => capability.trim() === AUTH_BROKER_CAPABILITY_BLOCK_PROVENANCE) ?? false;
 	}
 
 	async deleteCredentialBlock(
@@ -480,6 +503,7 @@ export class AuthBrokerClient {
 					body: payload,
 					signal,
 				});
+				this.#noteServerCapabilities(response);
 				if (!response.ok && response.status !== 304) {
 					let text = "";
 					try {
