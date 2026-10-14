@@ -246,6 +246,26 @@ describe("RpcHostDebugBridge", () => {
 		expect(spawn).toHaveBeenCalledTimes(1);
 	});
 
+	it("sends the host the launch arguments the local adapter would get", async () => {
+		host = new FakeHost();
+		host.bridge.setEnabled(true);
+		await makeTool().execute("call", { action: "launch", program: "build/app", adapter: "lldb-dap" });
+		const launch = host.requests.find(request => request.command === "launch");
+		expect(launch?.arguments).toMatchObject({ adapter: "lldb-dap", request: "launch", stopOnEntry: true });
+	});
+
+	it("sends the selected adapter's launch arguments when the model names none", async () => {
+		host = new FakeHost();
+		host.bridge.setEnabled(true);
+		spyOn(dapModule, "selectLaunchAdapter").mockReturnValue({
+			kind: "adapter",
+			adapter: { ...HOST_DAP_ADAPTER, name: "lldb-dap", launchDefaults: { stopOnEntry: true } },
+		});
+		await makeTool().execute("call", { action: "launch", program: "build/app" });
+		const launch = host.requests.find(request => request.command === "launch");
+		expect(launch?.arguments).toMatchObject({ adapter: "lldb-dap", stopOnEntry: true });
+	});
+
 	it("spawns the local adapter again once the host withdraws", async () => {
 		host = new FakeHost();
 		host.bridge.setEnabled(true);

@@ -1531,9 +1531,11 @@ responses (correlated by `request_seq`), events (`stopped`, `continued`,
 the `seq` of host messages for correlation.
 
 With a host, `attach` needs no `pid` or `port`: it means "join the host's
-current session". `launch` skips local adapter selection and program
-validation; when the model names an adapter, the `launch` arguments carry it
-as `adapter`, a hint the host may ignore.
+current session". `launch` skips program validation and does not need the
+adapter installed locally, but its arguments are the ones the local path
+would send: the named (or auto-selected) adapter's `launchDefaults`, such as
+`stopOnEntry: true` for `lldb-dap`, plus the adapter name as `adapter`. All
+are hints the host may ignore.
 
 ### Closing
 

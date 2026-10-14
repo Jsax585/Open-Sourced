@@ -499,6 +499,34 @@ async function classifyLaunchProgram(program: string): Promise<LaunchProgramKind
 	}
 }
 
+/**
+ * Launch arguments for a host-served session: what the local path would send
+ * (the adapter's `launchDefaults` plus per-program overrides) and the adapter
+ * name. The adapter need not be installed locally when the model names it.
+ */
+async function resolveHostLaunchArguments(
+	program: string,
+	cwd: string,
+	adapterName: string | undefined,
+): Promise<Record<string, unknown> | undefined> {
+	const programKind = await classifyLaunchProgram(program);
+	let adapter: DapResolvedAdapter | undefined;
+	if (adapterName) {
+		const config = getAdapterConfigs(cwd)[adapterName];
+		if (!config) return { adapter: adapterName };
+		adapter = { ...HOST_DAP_ADAPTER, name: adapterName, launchDefaults: config.launchDefaults ?? {} };
+	} else {
+		const selection = selectLaunchAdapter(program, cwd, undefined, programKind);
+		if (selection.kind !== "adapter") return undefined;
+		adapter = selection.adapter;
+	}
+	return {
+		...adapter.launchDefaults,
+		...resolveLaunchOverrides(adapter, program, programKind),
+		adapter: adapter.name,
+	};
+}
+
 function validateLaunchProgram(
 	program: string,
 	cwd: string,
@@ -609,14 +637,14 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugExecutionDe
 				const program = resolveToCwd(params.program, commandCwd);
 				if (dapSessionManager.hasHostConnector()) {
 					// The host owns the debugger: it picks the adapter and validates the program.
-					// The model's adapter choice is passed on as a hint the host may ignore.
+					// It still gets the arguments the local adapter would, as hints it may ignore.
 					const snapshot = await dapSessionManager.launch(
 						{
 							adapter: HOST_DAP_ADAPTER,
 							program,
 							args: params.args,
 							cwd: commandCwd,
-							extraLaunchArguments: params.adapter ? { adapter: params.adapter } : undefined,
+							extraLaunchArguments: await resolveHostLaunchArguments(program, commandCwd, params.adapter),
 						},
 						combinedSignal,
 						timeoutSec * 1000,
