@@ -4044,6 +4044,9 @@
 				},
 				"maxAttempts": {
 					"type": "integer"
+				},
+				"unverifiedMerge": {
+					"type": "boolean"
 				}
 			},
 			"required": [

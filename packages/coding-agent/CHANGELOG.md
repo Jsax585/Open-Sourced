@@ -2,7 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added parent verification after isolated task changes are merged, with continuation until an in-tree Bash, eval, or LSP check succeeds ([#10054](https://github.com/can1357/oh-my-pi/pull/10054) by [@jroth1111](https://github.com/jroth1111)).
+
 ### Fixed
+
+- Unverified merges no longer settle after read-only, status-masked, backgrounded, or out-of-tree checks ([#10054](https://github.com/can1357/oh-my-pi/pull/10054) by [@jroth1111](https://github.com/jroth1111)).
+- Verification results are matched to their merge and async job, so stale or duplicated completions cannot approve newer work ([#10054](https://github.com/can1357/oh-my-pi/pull/10054) by [@jroth1111](https://github.com/jroth1111)).
 
 - Preserve incomplete and blocked TODOs through compaction and durable snapshots, while keeping explicit user cancellations out of remaining work ([#10053](https://github.com/can1357/oh-my-pi/pull/10053) by [@jroth1111](https://github.com/jroth1111)).
 

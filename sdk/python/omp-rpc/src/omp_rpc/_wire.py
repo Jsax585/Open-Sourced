@@ -1148,6 +1148,7 @@ class TodoReminderEvent:
     todos: tuple[TodoItem, ...]
     attempt: int
     max_attempts: int
+    unverified_merge: bool | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2499,6 +2500,7 @@ def parse_todo_reminder_event(value: object, path: str = "TodoReminderEvent") ->
         todos=required(payload, "todos", array(parse_todo_item), path),
         attempt=required(payload, "attempt", decode_int, path),
         max_attempts=required(payload, "maxAttempts", decode_int, path),
+        unverified_merge=optional(payload, "unverifiedMerge", decode_bool, path),
     )
 
 

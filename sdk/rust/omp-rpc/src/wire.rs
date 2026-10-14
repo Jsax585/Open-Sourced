@@ -3806,6 +3806,8 @@ pub struct TodoReminderEvent {
 	pub attempt: i64,
 	#[serde(rename = "maxAttempts")]
 	pub max_attempts: i64,
+	#[serde(rename = "unverifiedMerge", default, skip_serializing_if = "Option::is_none")]
+	pub unverified_merge: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

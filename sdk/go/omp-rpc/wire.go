@@ -4227,9 +4227,10 @@ func (v TtsrTriggeredEvent) MarshalJSON() ([]byte, error) {
 }
 
 type TodoReminderEvent struct {
-	Todos       []TodoItem `json:"todos"`
-	Attempt     int64      `json:"attempt"`
-	MaxAttempts int64      `json:"maxAttempts"`
+	Todos           []TodoItem `json:"todos"`
+	Attempt         int64      `json:"attempt"`
+	MaxAttempts     int64      `json:"maxAttempts"`
+	UnverifiedMerge *bool      `json:"unverifiedMerge,omitempty"`
 }
 
 func (v *TodoReminderEvent) UnmarshalJSON(data []byte) error {
@@ -4243,6 +4244,7 @@ func (v *TodoReminderEvent) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("todos", &out.Todos)
 	d.required("attempt", &out.Attempt)
 	d.required("maxAttempts", &out.MaxAttempts)
+	d.optional("unverifiedMerge", &out.UnverifiedMerge)
 	if d.err != nil {
 		return d.err
 	}

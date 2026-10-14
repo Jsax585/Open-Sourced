@@ -40,6 +40,7 @@ function host(overrides: Partial<TodoTrackerHost> = {}): {
 		} as unknown as TodoTrackerHost["sessionManager"],
 		settings: Settings.isolated({ "todo.enabled": true, "todo.reminders": true, "todo.remindersMax": 3 }),
 		model: (): Model | undefined => undefined,
+		cwd: () => "/repo",
 		agentKind: () => "main",
 		emitSessionEvent: async () => {},
 		scheduleAgentContinue: () => {
