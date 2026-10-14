@@ -128,18 +128,30 @@ const OPENZOO_PENALTY_AND_STOP_PARAMETERS = [
  * Reasoning the live row actually advertises. A matching bundled id from
  * another provider is not a signal — that host may expose a different
  * control surface than this OpenAI-completions proxy.
+ *
+ * `true` when the row says it reasons. `false` when it explicitly declines
+ * (`supports_reasoning: false` or `reasoning: false`) and no positive signal
+ * exists — a thinking-variant name must not turn that back on. `undefined`
+ * when the row omits reasoning metadata, which is the only case where that
+ * name is a fallback.
  */
-function liveOpenzooReasoning(entry: OpenAICompatibleModelRecord): boolean {
+function liveOpenzooReasoning(entry: OpenAICompatibleModelRecord): boolean | undefined {
 	if (entry.supports_reasoning === true || entry.reasoning === true) {
 		return true;
 	}
 	if (isRecord(entry.reasoning)) {
 		return true;
 	}
-	return (
+	if (
 		listIncludes(entry.supported_parameters, "reasoning") ||
 		listIncludes(entry.supported_parameters, "reasoning_effort")
-	);
+	) {
+		return true;
+	}
+	if (entry.supports_reasoning === false || entry.reasoning === false) {
+		return false;
+	}
+	return undefined;
 }
 
 /**
@@ -194,7 +206,10 @@ function liveOpenzooSamplingCompat(entry: OpenAICompatibleModelRecord): OpenzooS
 /**
  * Input modalities the live row actually advertises. `undefined` means the
  * roster omitted them — leave the discovery default and let KDL
- * `input-modalities` correct at `buildModel` time.
+ * `input-modalities` correct at `buildModel` time. An explicit
+ * `supports_vision` / `supports_image` / `supports_image_in: false`, with no
+ * positive modality signal, is a reported text-only result so that correction
+ * does not put image back.
  */
 function liveOpenzooInput(entry: OpenAICompatibleModelRecord): ("text" | "image")[] | undefined {
 	if (entry.supports_vision === true || entry.supports_image === true || entry.supports_image_in === true) {
@@ -212,6 +227,9 @@ function liveOpenzooInput(entry: OpenAICompatibleModelRecord): ("text" | "image"
 	if (Array.isArray(entry.input_modalities)) {
 		return listIncludes(entry.input_modalities, "image") ? ["text", "image"] : ["text"];
 	}
+	if (entry.supports_vision === false || entry.supports_image === false || entry.supports_image_in === false) {
+		return ["text"];
+	}
 	return undefined;
 }
 
@@ -219,16 +237,20 @@ function liveOpenzooInput(entry: OpenAICompatibleModelRecord): ("text" | "image"
  * Map one proxy row. Limits come from the row where it carries the model's
  * real numbers; the bundled upstream reference (matched by the
  * OpenRouter-style id) supplies only the display name.
- * Reasoning and image-input stay on the discovery defaults unless the row
- * reports them — a matching id from another provider is not a capability
- * signal. A present `supported_parameters` list that omits `tools` marks
+ * Reasoning is the live report when the row gives one. An explicit false
+ * stays false; only a row that omits reasoning metadata falls back to a
+ * thinking-variant name. Image input stays on the discovery default unless
+ * the row reports it, including an explicit false vision flag with no
+ * positive modality signal. A matching id from another provider is not a
+ * capability signal. A present `supported_parameters` list that omits `tools` marks
  * the model not tool-capable; a list that includes `tools` sets
  * `supportsTools: true` so a cached no does not survive the refresh; a
  * missing list leaves that unset. The same list sets
  * `supportsSamplingParams` / `supportsPenaltyAndStopParams` false when it
  * omits that group's controls, and `supportsTopK` / `supportsMinP` false
  * unless that extension itself was listed. All four stay unset when the
- * list itself is absent. An explicit modality report sets `inputModalitiesReported` so
+ * list itself is absent. An explicit modality report, including a false
+ * vision flag with no positive signal, sets `inputModalitiesReported` so
  * the image correction in `providers/openzoo.kdl` does not overwrite a
  * text-only row; an omitted report stays neutral and the correction fills
  * it at `buildModel` time. Pricing is always the proxy's: it is what the
@@ -250,10 +272,12 @@ export function mapOpenzooModel(
 	const samplingCompat = sampling !== undefined ? { compat: sampling } : {};
 	const liveInput = liveOpenzooInput(entry);
 	const reportedInput = liveInput !== undefined ? { inputModalitiesReported: true } : {};
+	const liveReasoning = liveOpenzooReasoning(entry);
 	if (family) {
 		// Same live capability fields as an ordinary row. The family return
 		// used to keep the generic reasoning:false / input:["text"] defaults,
-		// so openzoo/auto hid a roster that advertised them.
+		// so openzoo/auto hid a roster that advertised them. Omitted reasoning
+		// stays off: router ids are not thinking-variant names.
 		return {
 			...defaults,
 			...toolSupport,
@@ -261,7 +285,7 @@ export function mapOpenzooModel(
 			...reportedInput,
 			id: family.id,
 			name: family.name,
-			reasoning: liveOpenzooReasoning(entry),
+			reasoning: liveReasoning ?? false,
 			input: liveInput ?? defaults.input,
 			cost: mapOpenzooCost(entry.pricing),
 			contextWindow: toPositiveNumber(entry.max_model_len, null),
@@ -289,7 +313,7 @@ export function mapOpenzooModel(
 		...samplingCompat,
 		...reportedInput,
 		name: canonical?.name ?? toDisplayName(entry.display_name, defaults.name),
-		reasoning: liveOpenzooReasoning(entry) || identity.thinkingVariant === true,
+		reasoning: liveReasoning ?? identity.thinkingVariant === true,
 		input: liveInput ?? defaults.input,
 		cost: mapOpenzooCost(entry.pricing),
 		contextWindow,

@@ -696,6 +696,80 @@ describe("openzoo built-in provider", () => {
 		expect(partialAuto?.compat.supportsMinP).toBe(false);
 	});
 
+	test("an explicit false vision flag stays text-only when nothing else advertises image input", async () => {
+		// supports_vision / supports_image / supports_image_in: false used to
+		// look omitted, so inputModalitiesReported stayed unset and the OpenZoo
+		// image correction put image back on Claude, Gemini, and vision-token
+		// rows. A sibling that omits the flags still receives that correction.
+		// A positive modality list still wins over the false flag.
+		const options = openzooModelManagerOptions({
+			fetch: async () =>
+				Response.json({
+					data: [
+						{ id: "anthropic/claude-sonnet-4", supports_vision: false },
+						{ id: "google/gemini-2.5-pro", supports_image: false },
+						{ id: "example-lab/qwen2-vl", supports_image_in: false },
+						{ id: "anthropic/claude-opus-4" },
+						{ id: "google/gemini-2.5-flash" },
+						{ id: "example-lab/minicpm-vl" },
+						{
+							id: "anthropic/claude-haiku-4",
+							supports_vision: false,
+							architecture: { input_modalities: ["text", "image"] },
+						},
+					],
+				}),
+		});
+		const models = await options.fetchDynamicModels?.();
+		const builtInput = (id: string) => {
+			const model = models?.find(item => item.id === id);
+			return model ? buildModel(model).input : undefined;
+		};
+
+		expect(builtInput("anthropic/claude-sonnet-4")).toEqual(["text"]);
+		expect(builtInput("google/gemini-2.5-pro")).toEqual(["text"]);
+		expect(builtInput("example-lab/qwen2-vl")).toEqual(["text"]);
+		expect(builtInput("anthropic/claude-opus-4")).toEqual(["text", "image"]);
+		expect(builtInput("google/gemini-2.5-flash")).toEqual(["text", "image"]);
+		expect(builtInput("example-lab/minicpm-vl")).toEqual(["text", "image"]);
+		expect(builtInput("anthropic/claude-haiku-4")).toEqual(["text", "image"]);
+	});
+
+	test("an explicit false reasoning report is not turned on by a thinking suffix", async () => {
+		// foo-thinking classifies as a thinking variant. That name is the
+		// fallback only when the row omits reasoning metadata. supports_reasoning
+		// or reasoning set to false stays off through buildModel, including
+		// when the picker materializes thinking controls. A parameter list that
+		// advertises reasoning still wins over the false flag.
+		const options = openzooModelManagerOptions({
+			fetch: async () =>
+				Response.json({
+					data: [
+						{ id: "example-lab/foo-thinking", supports_reasoning: false },
+						{ id: "example-lab/bar-thinking", reasoning: false },
+						{ id: "example-lab/baz-thinking" },
+						{
+							id: "example-lab/qux-thinking",
+							supports_reasoning: false,
+							supported_parameters: ["reasoning"],
+						},
+						{ id: "example-lab/plain" },
+					],
+				}),
+		});
+		const models = await options.fetchDynamicModels?.();
+		const builtReasoning = (id: string) => {
+			const model = models?.find(item => item.id === id);
+			return model ? buildModel(model).reasoning : undefined;
+		};
+
+		expect(builtReasoning("example-lab/foo-thinking")).toBe(false);
+		expect(builtReasoning("example-lab/bar-thinking")).toBe(false);
+		expect(builtReasoning("example-lab/baz-thinking")).toBe(true);
+		expect(builtReasoning("example-lab/qux-thinking")).toBe(true);
+		expect(builtReasoning("example-lab/plain")).toBe(false);
+	});
+
 	test("an explicit text-only modality report survives the image correction", async () => {
 		// providers/openzoo.kdl marks Claude and Gemini image-capable because
 		// the roster often omits architecture. A row that does report
