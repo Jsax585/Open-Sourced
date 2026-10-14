@@ -467,6 +467,8 @@ disabledExtensions:
       - mcp:personal-mail
 ```
 
+When a session changes directory (`/move`, or resuming a session from another project), servers the new directory blocks disconnect and their tools are removed; servers it no longer blocks reconnect.
+
 ## `/mcp add` vs editing JSON directly
 
 Use `/mcp add` when you want guided setup.
