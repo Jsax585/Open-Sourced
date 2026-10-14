@@ -139,3 +139,18 @@ export const cfgAdvisorEvictStaleResults = register({
 		condition: "advisorEnabled",
 	},
 });
+
+export const cfgAdvisorContinueOnFinalConcern = register({
+	id: "advisor.continueOnFinalConcern",
+	protocolDefault: ["rpc", "acp"],
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "model",
+		group: "Advisor",
+		label: "Advisor Continue On Final Concern",
+		description:
+			"Let a turn reviewer's concern about the final turn continue the run once instead of leaving a card. Agent-end reviewers always can.",
+		condition: "advisorEnabled",
+	},
+});

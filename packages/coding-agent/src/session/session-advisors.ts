@@ -121,6 +121,7 @@ import { buildSessionMetadata } from "./session-metadata";
 import type { YieldQueue } from "./yield-queue";
 
 import {
+	cfgAdvisorContinueOnFinalConcern,
 	cfgAdvisorEvictStaleResults,
 	cfgAdvisorImmuneTurns,
 	cfgAdvisorMaxNotesPerUpdate,
@@ -712,8 +713,8 @@ export class SessionAdvisors {
 			// off the review drain can still emit after it returns; those late notes
 			// deliver individually through #routeAdvice, and `#terminalUnwindActive`
 			// (held until the next primary turn starts), not the merge window, is what
-			// keeps them from steering finished work — only a blocker or an
-			// agent-end reviewer's concern may still request a continuation.
+			// keeps them from steering finished work — only a blocker or a
+			// final-review concern may still request a continuation.
 			if (!terminalBoundary) this.#terminalUnwindActive = false;
 		}
 	}
@@ -1736,7 +1737,8 @@ export class SessionAdvisors {
 		const finalReviewConcern =
 			severity === "concern" &&
 			this.#terminalUnwindActive &&
-			(advisor.reviewMode ?? cfgAdvisorReviewMode.get(this.#host.settings)) === "agent-end";
+			((advisor.reviewMode ?? cfgAdvisorReviewMode.get(this.#host.settings)) === "agent-end" ||
+				(cfgAdvisorContinueOnFinalConcern.get(this.#host.settings) && turn === this.#advisorPrimaryTurnsCompleted));
 		const terminalUnwindPreserve =
 			this.#terminalUnwindActive && severity !== "blocker" && !finalReviewConcern && terminalAnswerNoQueuedWork;
 		const channel = resolveAdvisorDeliveryChannel({
@@ -1772,7 +1774,8 @@ export class SessionAdvisors {
 	 * when a note qualifies on its own merits: a blocker, or a concern from an
 	 * agent-end advisor (it reviewed the complete run, so a material issue in
 	 * finished work deserves one steering turn — the sleep latch prevents
-	 * cascade). For those final-review concerns `allowTerminalConcernSteering`
+	 * cascade) or, with `advisor.continueOnFinalConcern`, from the review of the
+	 * final turn. For those final-review concerns `allowTerminalConcernSteering`
 	 * lifts ONLY the terminal-answer preservation — the turn they reviewed has
 	 * by definition just answered — never the stop/abort/preserve/cooldown
 	 * gates. Otherwise preserves as a single visible card.
@@ -1803,11 +1806,16 @@ export class SessionAdvisors {
 		const aborting = this.#host.abortInProgress();
 		const terminalAnswerNoQueuedWork = this.#hasTerminalTextAnswerWithoutQueuedWork();
 		const interruptImmuneTurnActive = this.#isAdvisorInterruptImmuneTurnActive();
+		const continueOnFinalConcern = cfgAdvisorContinueOnFinalConcern.get(this.#host.settings);
 		const shouldSteer = notes.some(n => {
 			// Steering eligibility: a blocker, or a concern from an agent-end
-			// reviewer. A turn-mode concern at a terminal boundary still
-			// preserves: the work was already reviewed per-turn.
-			const finalReviewConcern = n.severity === "concern" && this.#noteAdvisorIsAgentEnd(n.advisor);
+			// reviewer or, with `advisor.continueOnFinalConcern`, from the review of
+			// the final turn. Other turn-mode concerns at a terminal boundary still
+			// preserve: the work was already reviewed per-turn.
+			const finalReviewConcern =
+				n.severity === "concern" &&
+				(this.#noteAdvisorIsAgentEnd(n.advisor) ||
+					(continueOnFinalConcern && n.turn === this.#advisorPrimaryTurnsCompleted));
 			if (n.severity !== "blocker" && !finalReviewConcern) return false;
 			return (
 				resolveAdvisorDeliveryChannel({
