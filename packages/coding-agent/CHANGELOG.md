@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- The composer stays usable while a tool approval is pending: sending a message denies the call and steers the turn with it, so the agent knows why it was denied ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+
+### Changed
+
+- The in-composer tool approval prompt summarizes the command, path, or content to one row so the composer keeps its room; `Ctrl+O` shows them in full ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+### Changed
+
+- Background task guidance now lives in the Task tool description (and in same-name extension replacements that delegate to Task) instead of being repeated in every spawn acknowledgment ([#15477](https://github.com/can1357/oh-my-pi/pull/15477) by [@iliaal](https://github.com/iliaal))
+
 ### Fixed
 
 - Fixed sessions that stop saving new turns after one failed session write; later turns keep appending, and an entry the failed write missed is appended before them ([#15404](https://github.com/can1357/oh-my-pi/pull/15404) by [@sjawhar](https://github.com/sjawhar)).
