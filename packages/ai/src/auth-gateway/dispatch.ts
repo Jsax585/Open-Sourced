@@ -65,17 +65,16 @@ export function normalizeClientSessionKey(clientKey: string | undefined): string
 export function resolveGatewayAccount(
 	storage: AuthStorage,
 	provider: string,
-	sessionId: string,
-	apiKey: string,
+	_sessionId: string,
+	apiKey: ResolvedApiKey | string,
 ): string {
-	const identity = storage.oauth.identity(provider, sessionId);
+	if (typeof apiKey !== "string")
+		return apiKey.credentialIdentity
+			? `oauth:${apiKey.credentialIdentity}`
+			: `key:${Bun.hash(apiKey.apiKey).toString(36)}`;
+	const identity = storage.getCredentialIdentityMatchingApiKey(provider, apiKey);
 	if (identity) {
-		return `oauth:${JSON.stringify([
-			identity.accountId ?? "",
-			identity.email ?? "",
-			identity.projectId ?? "",
-			identity.orgId ?? "",
-		])}`;
+		return `oauth:${identity}`;
 	}
 	return `key:${Bun.hash(apiKey).toString(36)}`;
 }
@@ -87,7 +86,8 @@ export function resolveGatewayAccount(
  * and its OAuth identity together (refreshing through the broker when needed).
  * Keep this selection snapshot intact even if another request replaces the
  * stored token before dispatch. Storage failures map through
- * {@link classifyGatewayError}; a provider without any credential is a 401.
+ * {@link classifyGatewayError}; a provider without a usable credential is
+ * unavailable, not proof that the client's gateway bearer was rejected.
  */
 export async function resolveGatewayApiKey(
 	storage: AuthStorage,
@@ -95,10 +95,14 @@ export async function resolveGatewayApiKey(
 	sessionId: string,
 	signal: AbortSignal,
 	peer: string,
+	selection?: Pick<AuthApiKeyOptions, "credentialId">,
 ): Promise<ResolvedApiKey | GatewayErrorClassification> {
 	let apiKey: ResolvedApiKey | undefined;
 	try {
-		apiKey = await storage.keys.getWithCredential(model.provider, sessionId, modelKeyOptions(model, signal));
+		apiKey = await storage.keys.getWithCredential(model.provider, sessionId, {
+			...modelKeyOptions(model, signal),
+			...selection,
+		});
 	} catch (error) {
 		const classified = classifyGatewayError(error);
 		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: classified.message });
@@ -106,9 +110,11 @@ export async function resolveGatewayApiKey(
 	}
 	if (apiKey) return apiKey;
 	return {
-		status: 401,
-		type: "authentication_error",
+		status: 503,
+		type: "upstream_error",
 		message: `No credential available for provider ${model.provider}`,
+		owner: "provider",
+		disposition: "provider_unavailable",
 	};
 }
 
@@ -209,7 +215,7 @@ export function buildGatewayApiKeyResolver(
 	requestSignal: AbortSignal,
 	format: string,
 	peer: string,
-	onResolvedKey?: (apiKey: string) => void,
+	onResolvedKey?: (apiKey: ResolvedApiKey) => void,
 ): ApiKeyResolver {
 	let lastKey = initialKey.apiKey;
 	return async ({ lastChance, error, signal, previousKey }) => {
@@ -225,7 +231,7 @@ export function buildGatewayApiKeyResolver(
 				refreshReason: AIError.status(error) === 401 ? "auth-recovery" : undefined,
 			});
 			lastKey = refreshed?.apiKey ?? lastKey;
-			if (refreshed) onResolvedKey?.(refreshed.apiKey);
+			if (refreshed) onResolvedKey?.(refreshed);
 			return refreshed;
 		}
 		const next = await refreshGatewayApiKeyAfterAuthError(
@@ -240,8 +246,36 @@ export function buildGatewayApiKeyResolver(
 			peer,
 		);
 		lastKey = next?.apiKey ?? lastKey;
-		if (next) onResolvedKey?.(next.apiKey);
+		if (next) onResolvedKey?.(next);
 		return next;
+	};
+}
+
+/** Recover a continuation's owning row, never switching its account or replaying its response ID on a sibling. */
+export function buildGatewayContinuationApiKeyResolver(
+	storage: AuthStorage,
+	model: Model<Api>,
+	initialKey: ResolvedApiKey,
+	requestSignal: AbortSignal,
+	onResolvedKey?: (apiKey: ResolvedApiKey) => void,
+): ApiKeyResolver {
+	let current = initialKey;
+	return async ({ lastChance, error, signal }) => {
+		if (error === undefined) return current;
+		if (lastChance || initialKey.credentialId === undefined || initialKey.credentialIdentity === undefined)
+			return undefined;
+		const sig = signal ?? requestSignal;
+		const access = await storage.oauth.accessById(model.provider, initialKey.credentialId, {
+			...modelKeyOptions(model, sig),
+			forceRefresh: true,
+			recordAffinity: false,
+			refreshReason: AIError.status(error) === 401 ? "auth-recovery" : undefined,
+		});
+		if (!access?.ok || !access.resolvedKey || access.resolvedKey.credentialIdentity !== initialKey.credentialIdentity)
+			return undefined;
+		current = access.resolvedKey;
+		onResolvedKey?.(current);
+		return current;
 	};
 }
 

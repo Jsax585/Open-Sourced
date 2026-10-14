@@ -7,6 +7,7 @@
  * - `keys` — the provider auth cascade (runtime → config → OAuth → login key → env → stored key)
  * - `oauth` — login, per-account access resolution, account listings, refresh
  * - `sessions` — session → account pins
+ * - `responses` — private response → account/deployment bindings
  * - `usage` — usage reports, header ingestion, history
  * - `health` — model pool health and per-credential auth probes
  * - `limits` — usage-limit marking and credential rotation
@@ -22,15 +23,17 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { SessionAffinity, type SessionRestrictions } from "./auth/affinity";
 import { BlockStoreHealth, CredentialBlocks } from "./auth/blocks";
 import { KeyCascade, KeyOverrides } from "./auth/cascade";
+import { extractStructuredApiKeyToken } from "./auth/credential-key";
 import { CredentialHealth } from "./auth/health";
 import { OAuthAccounts } from "./auth/oauth";
 import { AccountPolicies } from "./auth/policy";
 import { CredentialPool } from "./auth/pool";
 import { OAuthRefresher } from "./auth/refresh";
 import { ResetCredits } from "./auth/resets";
+import { ResponseOwners } from "./auth/response-owners";
 import { RateLimits } from "./auth/rotation";
 import { CredentialSelector } from "./auth/select";
-import { SqliteAuthCredentialStore } from "./auth/sqlite-credential-store";
+import { resolveCredentialStateScopeKey, SqliteAuthCredentialStore } from "./auth/sqlite-credential-store";
 import type { AuthCredentialStore } from "./auth/store";
 import type {
 	AuthAccountPolicies,
@@ -44,6 +47,7 @@ import type {
 	LimitsApi,
 	OAuthApi,
 	ResetsApi,
+	ResponseOwnersApi,
 	SessionsApi,
 	UsageApi,
 } from "./auth/types";
@@ -69,6 +73,7 @@ interface AuthStorageModules {
 	keys: KeyCascade;
 	oauth: OAuthAccounts;
 	sessions: SessionAffinity;
+	responses: ResponseOwners;
 	usage: UsageService;
 	health: CredentialHealth;
 	limits: RateLimits;
@@ -114,6 +119,10 @@ export class AuthStorage {
 	/** Session → account pins. */
 	get sessions(): SessionsApi {
 		return this.#modules.sessions;
+	}
+	/** Durable, private bindings of upstream response IDs to accounts and deployments. */
+	get responses(): ResponseOwnersApi {
+		return this.#modules.responses;
 	}
 	/** Usage reports, header ingestion, history. */
 	get usage(): UsageApi {
@@ -245,6 +254,7 @@ export class AuthStorage {
 			keys,
 			oauth,
 			sessions: affinity,
+			responses: new ResponseOwners(store),
 			usage,
 			health: new CredentialHealth({
 				store,
@@ -273,6 +283,21 @@ export class AuthStorage {
 	/** Close the underlying credential store; the instance must not be reused. */
 	close(): void {
 		this.#modules.pool.close();
+	}
+
+	/** Return configured key overrides without resolving or selecting a stored account. */
+	peekApiKeyOverrides(provider: string): string | undefined {
+		return this.#overrides.runtimeKey(provider) ?? this.#overrides.configKey(provider);
+	}
+
+	/** Attribute a resolved OAuth bearer to its stored physical account, not a mutable session cursor. */
+	getCredentialIdentityMatchingApiKey(provider: string, apiKey: string): string | undefined {
+		if (this.peekApiKeyOverrides(provider) !== undefined) return undefined;
+		const bearer = extractStructuredApiKeyToken(apiKey) ?? apiKey;
+		const row = this.#modules.pool
+			.entries(provider)
+			.find(entry => entry.credential.type === "oauth" && entry.credential.access === bearer);
+		return row ? (resolveCredentialStateScopeKey(provider, row.credential) ?? undefined) : undefined;
 	}
 
 	/**

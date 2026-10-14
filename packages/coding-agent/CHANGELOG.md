@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Broker-backed auth-gateway continuations retain private session and response ownership across restarts, without storing credentials or bearer/usage caches locally ([#10134](https://github.com/can1357/oh-my-pi/pull/10134) by [@jroth1111](https://github.com/jroth1111)).
 ### Added
 
 - The composer stays usable while a tool approval is pending: sending a message denies the call and steers the turn with it, so the agent knows why it was denied ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))

@@ -31,7 +31,9 @@
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { type ModelKind, modelKind } from "@oh-my-pi/pi-catalog/types";
 import { logger } from "@oh-my-pi/pi-utils";
+import type { AuthStorage } from "../auth-storage";
 import { classifyGatewayError } from "../error/gateway";
+import { providerRetryDirective } from "../error/retryable";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
 import * as openaiChat from "../providers/openai-chat-server";
 import * as openaiResponses from "../providers/openai-responses-server";
@@ -45,6 +47,7 @@ import {
 	type AuthGatewayBootOptions,
 	type AuthGatewayRouteOptions,
 	buildGatewayApiKeyResolver,
+	buildGatewayContinuationApiKeyResolver,
 	mirrorRequestAbort,
 	normalizeClientSessionKey,
 	recordGatewayUsage,
@@ -69,7 +72,13 @@ import { handleSystemOne } from "./routes/systemone";
 import { handleTranscriptions } from "./routes/transcriptions";
 import { handleVideoContent, handleVideoPoll, handleVideoSubmit } from "./routes/video";
 import { AuthGatewaySessionStateStore } from "./session-state";
+import {
+	type GatewayResponseOwnership,
+	type GatewayResponseOwner,
+	responseEndpointIdentity,
+} from "./response-ownership";
 import type {
+	AuthGatewayParsedRequestOptions,
 	AuthGatewayServerHandle,
 	AuthGatewayFormatModule as FormatModule,
 	AuthGatewayParsedRequest as ParsedFormatRequest,
@@ -209,34 +218,73 @@ function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: Abort
 		};
 		opts.reasoning ??= effort;
 	}
-	// Fields that don't yet have a matching pi-ai `SimpleStreamOptions` slot.
-	// Surfaced once in debug logs so they show up when wiring a new provider,
-	// but NEVER widened into `options.extra` — every consumer would have to
-	// re-implement the typed parse to read them back out.
-	// TODO(pi-ai): land first-class fields and replace these blocks.
-	if (
-		options.parallelToolCalls !== undefined ||
-		options.previousResponseId !== undefined ||
-		options.seed !== undefined ||
-		options.logitBias !== undefined ||
-		options.user !== undefined ||
-		options.responseFormat !== undefined
-	) {
-		logger.debug("auth-gateway dropped unsupported typed options", {
-			api,
-			parallelToolCalls: options.parallelToolCalls,
-			previousResponseId: options.previousResponseId,
-			seed: options.seed,
-			hasLogitBias: options.logitBias !== undefined,
-			user: options.user,
-			hasResponseFormat: options.responseFormat !== undefined,
-		});
-	}
+	applyParsedGatewayOptions(opts, options);
 	return opts;
+}
+
+/**
+ * Copy first-class parsed gateway fields onto {@link SimpleStreamOptions}.
+ * Previously these were debug-logged and dropped; providers that honour them
+ * (Responses continuation, parallel tool calls, …) must be able to read them.
+ */
+export function applyParsedGatewayOptions(opts: SimpleStreamOptions, options: AuthGatewayParsedRequestOptions): void {
+	if (options.parallelToolCalls !== undefined) opts.parallelToolCalls = options.parallelToolCalls;
+	if (options.previousResponseId !== undefined) opts.previousResponseId = options.previousResponseId;
+	if (options.store !== undefined) opts.store = options.store;
+	if (options.seed !== undefined) opts.seed = options.seed;
+	if (options.logitBias !== undefined) opts.logitBias = options.logitBias;
+	if (options.user !== undefined) opts.user = options.user;
+	if (options.responseFormat !== undefined) opts.responseFormat = options.responseFormat;
 }
 
 function clientClosedResponse(route: { module: FormatModule }): Response {
 	return route.module.formatError(499, "request_aborted", "client closed request");
+}
+
+function finalizedErrorResponse(
+	module: Pick<FormatModule, "formatError">,
+	error: unknown,
+	displayMessage?: string,
+): Response {
+	const classified = classifyGatewayError(error);
+	const response = module.formatError(classified.status, classified.type, displayMessage ?? classified.message);
+	const retryable = providerRetryDirective(error);
+	if (retryable !== undefined) response.headers.set("x-should-retry", String(retryable));
+	return response;
+}
+
+function continuationRejection(
+	storage: AuthStorage,
+	model: Model<Api>,
+	previousId: string | undefined,
+	owner: Readonly<GatewayResponseOwner> | undefined,
+	headers?: Record<string, string>,
+): string | undefined {
+	if (!previousId) return undefined;
+	if (owner?.credentialId !== undefined) {
+		const explicit = storage.sessions.explicitCredentialId(model.provider, owner.sessionId);
+		if (explicit !== undefined && explicit !== owner.credentialId)
+			return "previous_response_id belongs to another account";
+	}
+	if (model.api !== "openai-responses" && model.api !== "azure-openai-responses") {
+		return "previous_response_id requires an OpenAI or Azure Responses upstream";
+	}
+	if (
+		owner &&
+		(owner.target !== `${model.provider}/${model.id}` ||
+			owner.api !== model.api ||
+			owner.endpoint !== responseEndpointIdentity(model, headers))
+	) {
+		return "previous_response_id belongs to another upstream deployment";
+	}
+	if (
+		!owner &&
+		storage.peekApiKeyOverrides(model.provider) === undefined &&
+		storage.credentials.list(model.provider).length > 1
+	) {
+		return "Unknown previous_response_id is ambiguous across multiple stored credentials";
+	}
+	return undefined;
 }
 
 /** Route that serves each non-chat catalog kind the gateway advertises. */
@@ -265,6 +313,7 @@ async function handleFormatEndpoint(
 	req: Request,
 	peer: string,
 	sessionStates: AuthGatewaySessionStateStore,
+	responseOwners: GatewayResponseOwnership,
 ): Promise<Response> {
 	const startedAt = performance.now();
 	const requestId = crypto.randomUUID();
@@ -350,17 +399,36 @@ async function handleFormatEndpoint(
 	// modelId + system + tools + first message. Mirrored into
 	// streamOpts.sessionId / promptCacheKey by `buildStreamOptions`.
 	const clientKey = normalizeClientSessionKey(parsed.options.promptCacheKey);
+	const previousId = parsed.options.previousResponseId;
+	const previousOwner = previousId ? responseOwners.get(previousId) : undefined;
+	const rejection = continuationRejection(bootOpts.storage, model, previousId, previousOwner, parsed.options.headers);
+	if (rejection) return route.module.formatError(400, "invalid_request_error", rejection);
 	const toolsJson = clientKey === undefined ? serializeTools(parsed.context) : undefined;
-	const sessionId = clientKey ?? deriveSessionId(parsed.modelId, parsed.context, toolsJson);
+	const sessionId =
+		previousOwner?.sessionId ?? clientKey ?? deriveSessionId(parsed.modelId, parsed.context, toolsJson);
 	parsed.options.promptCacheKey = sessionId;
 
 	// pi-ai's stream() does NOT consult AuthStorage — the caller (us) is
 	// expected to resolve the credential and pass it as `options.apiKey`.
 	// For OAuth providers this returns the access token (refreshed via the
 	// broker override on AuthStorage when needed).
-	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
+	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer, {
+		credentialId: previousOwner?.credentialId,
+	});
 	if (controller.signal.aborted) return clientClosedResponse(route);
 	if ("status" in apiKey) return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
+	const owner: GatewayResponseOwner = {
+		sessionId,
+		target: `${model.provider}/${model.id}`,
+		provider: model.provider,
+		api: model.api,
+		endpoint: responseEndpointIdentity(model, parsed.options.headers),
+		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
+		credentialId: apiKey.credentialId,
+	};
+	if (previousOwner && previousOwner.account !== owner.account) {
+		return route.module.formatError(400, "invalid_request_error", "previous_response_id belongs to another account");
+	}
 
 	const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
 	if (bootOpts.fetch) streamOpts.fetch = bootOpts.fetch;
@@ -375,20 +443,25 @@ async function handleFormatEndpoint(
 		model,
 		context: parsed.context,
 		toolsJson,
-		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey.apiKey),
+		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
 	});
 	streamOpts.providerSessionState = lease.states;
-	streamOpts.apiKey = buildGatewayApiKeyResolver(
-		bootOpts.storage,
-		model,
-		sessionId,
-		apiKey,
-		controller.signal,
-		route.label,
-		peer,
-		resolvedKey =>
-			lease.updateAccount(resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, resolvedKey)),
-	);
+	streamOpts.apiKey = previousId
+		? buildGatewayContinuationApiKeyResolver(bootOpts.storage, model, apiKey, controller.signal)
+		: buildGatewayApiKeyResolver(
+				bootOpts.storage,
+				model,
+				sessionId,
+				apiKey,
+				controller.signal,
+				route.label,
+				peer,
+				resolvedKey => {
+					owner.account = resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, resolvedKey);
+					owner.credentialId = resolvedKey.credentialId;
+					lease.updateAccount(owner.account);
+				},
+			);
 
 	logger.info("auth-gateway request", {
 		requestId,
@@ -418,9 +491,9 @@ async function handleFormatEndpoint(
 				if (message.stopReason === "aborted") {
 					return route.module.formatError(499, "request_aborted", errorMessage);
 				}
-				const classified = classifyGatewayError(message.errorClassificationMessage ?? errorMessage);
-				return route.module.formatError(classified.status, classified.type, errorMessage);
+				return finalizedErrorResponse(route.module, message, errorMessage);
 			}
+			responseOwners.record(message.responseId, owner);
 			return json(
 				200,
 				route.module.encodeResponse(message, parsed.modelId),
@@ -434,7 +507,7 @@ async function handleFormatEndpoint(
 				error: classified.message,
 				peer,
 			});
-			return route.module.formatError(classified.status, classified.type, classified.message);
+			return finalizedErrorResponse(route.module, error);
 		} finally {
 			// Every non-streaming outcome — answered, upstream error, thrown,
 			// client gone — is done with the provider state here.
@@ -454,14 +527,16 @@ async function handleFormatEndpoint(
 		} catch (error) {
 			const classified = classifyGatewayError(error);
 			logger.warn("auth-gateway streamSimple threw", { format: route.label, error: classified.message, peer });
-			return route.module.formatError(classified.status, classified.type, classified.message);
+			return finalizedErrorResponse(route.module, error);
 		}
 		if (controller.signal.aborted) return clientClosedResponse(route);
 		void events
 			.result()
-			.then(message =>
-				recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined),
-			)
+			.then(message => {
+				recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
+				if (message.stopReason !== "error" && message.stopReason !== "aborted")
+					responseOwners.record(message.responseId, owner);
+			})
 			.catch(() => {})
 			.finally(() => lease.release());
 		streamOwnsLease = true;
@@ -511,6 +586,7 @@ async function handlePiNative(
 	req: Request,
 	peer: string,
 	sessionStates: AuthGatewaySessionStateStore,
+	responseOwners: GatewayResponseOwnership,
 ): Promise<Response> {
 	const startedAt = performance.now();
 	const requestId = crypto.randomUUID();
@@ -549,13 +625,33 @@ async function handlePiNative(
 	// the next turn of this conversation reuses the same credential until
 	// it hits a usage cap, then markUsageLimitReached can hand off.
 	const clientKey = normalizeClientSessionKey(parsed.options.sessionId);
+	const previousId = parsed.options.previousResponseId;
+	const previousOwner = previousId ? responseOwners.get(previousId) : undefined;
+	const requestHeaders = { ...captureRequestHeaders(req.headers), ...parsed.options.headers };
+	const rejection = continuationRejection(bootOpts.storage, model, previousId, previousOwner, requestHeaders);
+	if (rejection) return piNative.formatError(400, "invalid_request_error", rejection);
 	const toolsJson = clientKey === undefined ? serializeTools(parsed.context) : undefined;
-	const sessionId = clientKey ?? deriveSessionId(parsed.modelId, parsed.context, toolsJson);
+	const sessionId =
+		previousOwner?.sessionId ?? clientKey ?? deriveSessionId(parsed.modelId, parsed.context, toolsJson);
 	parsed.options.sessionId = sessionId;
 
-	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
+	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer, {
+		credentialId: previousOwner?.credentialId,
+	});
 	if (controller.signal.aborted) return aborted();
 	if ("status" in apiKey) return piNative.formatError(apiKey.status, apiKey.type, apiKey.message);
+	const owner: GatewayResponseOwner = {
+		sessionId,
+		target: `${model.provider}/${model.id}`,
+		provider: model.provider,
+		api: model.api,
+		endpoint: responseEndpointIdentity(model, requestHeaders),
+		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
+		credentialId: apiKey.credentialId,
+	};
+	if (previousOwner && previousOwner.account !== owner.account) {
+		return piNative.formatError(400, "invalid_request_error", "previous_response_id belongs to another account");
+	}
 
 	// Per-session provider learning, owned by this gateway instance. The map is
 	// non-serializable, so `parseRequest` cannot accept one from the wire and
@@ -567,7 +663,7 @@ async function handlePiNative(
 		model,
 		context: parsed.context,
 		toolsJson,
-		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey.apiKey),
+		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey),
 	});
 	// Build the SimpleStreamOptions actually handed to `streamSimple`. We
 	// trust the client's options (already allow-listed by `parseRequest`) and
@@ -580,17 +676,22 @@ async function handlePiNative(
 		providerSessionState: lease.states,
 	};
 	if (bootOpts.fetch) streamOpts.fetch = bootOpts.fetch;
-	streamOpts.apiKey = buildGatewayApiKeyResolver(
-		bootOpts.storage,
-		model,
-		sessionId,
-		apiKey,
-		controller.signal,
-		"pi-native",
-		peer,
-		resolvedKey =>
-			lease.updateAccount(resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, resolvedKey)),
-	);
+	streamOpts.apiKey = previousId
+		? buildGatewayContinuationApiKeyResolver(bootOpts.storage, model, apiKey, controller.signal)
+		: buildGatewayApiKeyResolver(
+				bootOpts.storage,
+				model,
+				sessionId,
+				apiKey,
+				controller.signal,
+				"pi-native",
+				peer,
+				resolvedKey => {
+					owner.account = resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, resolvedKey);
+					owner.credentialId = resolvedKey.credentialId;
+					lease.updateAccount(owner.account);
+				},
+			);
 	if (model.api === "openai-codex-responses") {
 		delete streamOpts.temperature;
 		delete streamOpts.topP;
@@ -635,9 +736,9 @@ async function handlePiNative(
 				if (message.stopReason === "aborted") {
 					return piNative.formatError(499, "request_aborted", errorMessage);
 				}
-				const classified = classifyGatewayError(message.errorClassificationMessage ?? errorMessage);
-				return piNative.formatError(classified.status, classified.type, errorMessage);
+				return finalizedErrorResponse(piNative, message, errorMessage);
 			}
+			responseOwners.record(message.responseId, owner);
 			return json(
 				200,
 				{ message },
@@ -647,7 +748,7 @@ async function handlePiNative(
 			if (controller.signal.aborted) return aborted();
 			const classified = classifyGatewayError(error);
 			logger.warn("auth-gateway non-streaming aborted", { format: "pi-native", error: classified.message, peer });
-			return piNative.formatError(classified.status, classified.type, classified.message);
+			return finalizedErrorResponse(piNative, error);
 		} finally {
 			// Every non-streaming outcome — answered, upstream error, thrown,
 			// client gone — is done with the provider state here.
@@ -667,14 +768,16 @@ async function handlePiNative(
 		} catch (error) {
 			const classified = classifyGatewayError(error);
 			logger.warn("auth-gateway streamSimple threw", { format: "pi-native", error: classified.message, peer });
-			return piNative.formatError(classified.status, classified.type, classified.message);
+			return finalizedErrorResponse(piNative, error);
 		}
 		if (controller.signal.aborted) return aborted();
 		void events
 			.result()
-			.then(message =>
-				recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined),
-			)
+			.then(message => {
+				recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
+				if (message.stopReason !== "error" && message.stopReason !== "aborted")
+					responseOwners.record(message.responseId, owner);
+			})
 			.catch(() => {})
 			.finally(() => lease.release());
 		streamOwnsLease = true;
@@ -826,6 +929,10 @@ export interface AuthGatewayRouter {
  */
 export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGatewayRouter {
 	const sessionStates = new AuthGatewaySessionStateStore();
+	const responseOwners: GatewayResponseOwnership = {
+		get: responseId => opts.storage.responses.get(responseId),
+		record: (responseId, owner) => opts.storage.responses.record(responseId, owner),
+	};
 	const route = async (req: Request, peer: string): Promise<Response> => {
 		const pathname = new URL(req.url).pathname;
 		try {
@@ -846,13 +953,13 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 			// Provider-format dispatch.
 			const formatRoute = FORMAT_ROUTES[pathname];
 			if (formatRoute && req.method === "POST") {
-				return await handleFormatEndpoint(formatRoute, opts, req, peer, sessionStates);
+				return await handleFormatEndpoint(formatRoute, opts, req, peer, sessionStates, responseOwners);
 			}
 
 			// Pi-native fast path. Same auth + provider plumbing as the
 			// foreign-wire routes, just without the wire-format translation.
 			if (req.method === "POST" && pathname === "/v1/pi/stream") {
-				return await handlePiNative(opts, req, peer, sessionStates);
+				return await handlePiNative(opts, req, peer, sessionStates, responseOwners);
 			}
 
 			// TypeSafe System One judgments (jev). TypeSafe SDKs and omp's own

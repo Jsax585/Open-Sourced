@@ -302,6 +302,11 @@ export class CredentialSelector {
 			.map((credential, index) => ({ credential, index }))
 			.filter((entry): entry is ApiKeySelection => {
 				if (entry.credential.type !== "api_key") return false;
+				if (
+					options?.credentialId !== undefined &&
+					this.#deps.pool.entries(provider)[entry.index]?.id !== options.credentialId
+				)
+					return false;
 				return filter?.(entry.credential) ?? true;
 			});
 
@@ -532,7 +537,12 @@ export class CredentialSelector {
 		);
 		// A session restriction drops every other account before ranking, pins,
 		// and the fallback passes below, so none of them can route back to it.
-		const credentials = stored.filter(entry => this.#deps.affinity.allows(provider, sessionId, entry.credential));
+		const credentials = stored.filter(
+			entry =>
+				this.#deps.affinity.allows(provider, sessionId, entry.credential) &&
+				(options?.credentialId === undefined ||
+					this.#deps.pool.entries(provider)[entry.index]?.id === options.credentialId),
+		);
 
 		if (credentials.length === 0) return undefined;
 		// Ranking and preflight both await provider work; preserve the row each
