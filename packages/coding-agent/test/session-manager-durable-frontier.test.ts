@@ -861,7 +861,7 @@ describe("a turn appended after another writer's entries", () => {
 		manager.appendMessage(assistantMessage("own reply"));
 		await expect(manager.flush()).resolves.toBeUndefined();
 		// A full rewrite after the flush must not put this session's id on that journal.
-		await manager.setTaskPromptCacheKey("forced-rewrite");
+		await manager.rewriteEntries();
 		await manager.close();
 
 		const movedTo = manager.getSessionFile();
