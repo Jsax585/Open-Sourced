@@ -103,6 +103,7 @@ import {
 	cfgDisplayCollapseCompacted,
 	cfgDisplayShowTokenUsage,
 	cfgDisplayShowTurnTime,
+	cfgDisplayTranscriptReplayLimit,
 	cfgTerminalShowImages,
 } from "../settings";
 import { cfgReadToolResultPreview } from "../../tools/settings";
@@ -577,6 +578,26 @@ export class UiHelpers {
 		// (not finalized) so replayed and live frames still route to the card;
 		// the ids are handed back to the controller after the loop (#10447).
 		const backgroundCallIds = new Set<string>();
+		// The builder's `hiddenTranscriptMessages` is authoritative: the transcript
+		// window was already applied there (whole oldest turns dropped, kept slice
+		// restarts at a user turn, cacheMissExplainedAt spliced in lockstep). The
+		// renderer only announces the omission.
+		const hiddenTranscriptMessages = sessionContext.hiddenTranscriptMessages;
+		if (hiddenTranscriptMessages !== undefined && hiddenTranscriptMessages > 0) {
+			const droppedRow = new Text(
+				`${hiddenTranscriptMessages} earlier messages not shown · full history preserved in the session file · /tree to browse`,
+				1,
+				0,
+			).setStyleFn(t => theme.fg("dim", t));
+			this.ctx.chatContainer.addChild(droppedRow);
+		}
+		// Replay the dropped prefix's one-time bookkeeping before drawing the kept
+		// tail: a model substitution that occurred only inside the hidden window
+		// would otherwise never be announced, because the tracker forgets each
+		// pair once shown and the visible walk is seeded fresh above.
+		for (const hidden of sessionContext.hiddenTranscriptPrefix ?? []) {
+			if (hidden.role === "assistant") this.ctx.servedModelTracker.check(hidden);
+		}
 		const messages = sessionContext.messages;
 		const count = messages.length;
 		for (let i = 0; i < count; i++) {
@@ -981,7 +1002,9 @@ export class UiHelpers {
 		}
 		// Ground truth for the surviving prefix. The cut message still present
 		// means the session was not actually rewound past it — bail before
-		// mutating anything.
+		// mutating anything. Unwindowed: a rewind needs the FULL transcript to
+		// know whether the message survives; the replay limit trims the oldest
+		// turns and could hide the survivor, falsely passing the check.
 		const context = this.ctx.viewSession.buildTranscriptSessionContext({
 			collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
 		});
@@ -1028,6 +1051,7 @@ export class UiHelpers {
 		let context = this.ctx.viewSession.buildTranscriptSessionContext({
 			collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
 			keepDanglingToolCalls: this.ctx.viewSession.isStreaming,
+			transcriptReplayLimit: cfgDisplayTranscriptReplayLimit.get(settings),
 		});
 		let replayEntryCount = this.ctx.viewSession.sessionManager.getEntries().length;
 
@@ -1097,6 +1121,7 @@ export class UiHelpers {
 				context = this.ctx.viewSession.buildTranscriptSessionContext({
 					collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
 					keepDanglingToolCalls: this.ctx.viewSession.isStreaming,
+					transcriptReplayLimit: cfgDisplayTranscriptReplayLimit.get(settings),
 				});
 				replayEntryCount = this.ctx.viewSession.sessionManager.getEntries().length;
 				await refreshAssistantMessageLinkTargets(

@@ -71,11 +71,17 @@ function createHarness() {
 	transcriptMessageComponents.set(assistant2, blocks[3]!);
 
 	// Messages the view session reports AFTER the rewind; tests mutate this to
-	// model a session that was (or was not) actually rewound.
+	// model a session that was (or was not) actually rewound. A caller that
+	// passes `transcriptReplayLimit` sees a WINDOWED transcript — the oldest
+	// messages gone — which is exactly the trap the ground-truth check must not
+	// fall into (`buildTranscriptSessionContext` windowing is for display, not
+	// for answering "does this message still exist in the session?").
 	const remainingMessages: AgentMessage[] = [user1, assistant1];
 	const viewSession = {
 		isStreaming: false,
-		buildTranscriptSessionContext: () => ({ messages: remainingMessages }),
+		buildTranscriptSessionContext: (options?: { transcriptReplayLimit?: number }) => ({
+			messages: options?.transcriptReplayLimit ? remainingMessages.slice(2) : remainingMessages,
+		}),
 	};
 
 	const ctx = {
@@ -114,5 +120,21 @@ describe("UiHelpers.truncateTranscriptFromMessage", () => {
 		pending.ctx.pendingTools.set("call-1", {} as never);
 		expect(pending.helpers.truncateTranscriptFromMessage(pending.messages.user2)).toBe(false);
 		expect(pending.chat.children).toHaveLength(4);
+	});
+
+	it("checks the unwindowed transcript: a display window must not fake a rewind", async () => {
+		// The rewind target is an OLD message, so a replay window hides it from
+		// the display transcript even when the session was NOT rewound. Ground
+		// truth must therefore come from the unwindowed build; otherwise the
+		// check reads "gone" → truncates → drops rows that are still history.
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true, overrides: { "display.transcriptReplayLimit": 24 } });
+		const harness = createHarness();
+		// Not rewound: the full session (no limit) still contains every message,
+		// while the windowed view drops the oldest two.
+		harness.remainingMessages.push(harness.messages.user2, harness.messages.assistant2);
+
+		expect(harness.helpers.truncateTranscriptFromMessage(harness.messages.user1)).toBe(false);
+		expect(harness.chat.children).toHaveLength(4);
 	});
 });

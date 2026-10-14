@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { customMessageEntryMessage, isUserRequestEntry } from "@oh-my-pi/pi-tui/chat/transcript-entry";
+import { customMessageEntryMessage, isUserRequestEntry, textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import { getAnthropicCompactionPayload, isTurnStartEntry } from "@oh-my-pi/pi-agent-core/compaction";
 import {
 	coerceServiceTierByFamily,
@@ -8,12 +8,14 @@ import {
 } from "@oh-my-pi/pi-ai";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { isRecord } from "@oh-my-pi/pi-utils";
+import { parksAsBackground } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import {
 	createBranchSummaryMessage,
 	createCompactionSummaryMessage,
 	createCustomMessage,
 	INTERRUPTED_THINKING_MESSAGE_TYPE,
 	isEmptyErrorTurn,
+	isUserAuthoredMessage,
 	PREWALK_PLAN_MESSAGE_TYPE,
 	VIBE_MODE_CONTEXT_MESSAGE_TYPE,
 } from "./messages";
@@ -127,6 +129,18 @@ export interface SessionContext {
 	 * Only populated in transcript mode.
 	 */
 	cacheMissExplainedAt?: boolean[];
+	/**
+	 * Transcript mode only: number of oldest messages dropped by the
+	 * `transcriptReplayLimit` window (rendered-row estimate). `undefined` when
+	 * nothing was dropped / no limit applies.
+	 */
+	hiddenTranscriptMessages?: number;
+	/**
+	 * Transcript mode only, with {@link hiddenTranscriptMessages} set: the
+	 * dropped messages themselves, so the renderer can replay their one-time
+	 * bookkeeping (served-model announcements) before drawing the kept tail.
+	 */
+	hiddenTranscriptPrefix?: AgentMessage[];
 }
 
 /** Lists session model strings to try when restoring, in fallback order. */
@@ -168,6 +182,17 @@ export interface BuildSessionContextOptions {
 	transcript?: boolean;
 	/** In transcript mode, elide entries replaced by the latest compaction. */
 	collapseCompactedHistory?: boolean;
+	/**
+	 * Transcript mode only: bound on the rebuilt display transcript, in
+	 * estimated rendered rows (a coarse fixed-80-column estimate, so the same
+	 * value behaves the same at any terminal width). `0`/`undefined` keeps every
+	 * message. Positive values drop whole oldest turns until the estimate fits;
+	 * the newest turn is always drawn in full, so a limit below one turn's rows
+	 * still renders that turn (no hard cap). The kept slice normally restarts at
+	 * a user turn, except that a still-running background job's call+result pair
+	 * is never cut.
+	 */
+	transcriptReplayLimit?: number;
 	/**
 	 * Transcript mode only: keep `toolCall` blocks that have no matching
 	 * `toolResult` on the path instead of stripping them. Pass this when the
@@ -230,6 +255,32 @@ export function getOpenAiRemoteCompactionPayload(
 
 /** Session entries that replay as transcript messages: persisted messages and custom messages. */
 export type TranscriptEntry = SessionMessageEntry | CustomMessageEntry;
+
+/**
+ * Cheap upper-bound estimate of the rendered terminal rows a transcript
+ * message occupies: ~80 columns per wrapped line, plus one row of framing
+ * (header/spacer) per message, plus one row per tool result (its blocks
+ * render as separate rows). Deliberately coarse — the transcript renderer is
+ * the true measure; this only bounds the rebuild window.
+ */
+export function estimateTranscriptRows(message: AgentMessage): number {
+	const text =
+		"content" in message
+			? textContent(message.content as string | ReadonlyArray<{ type: string; text?: string }>)
+			: message.role === "bashExecution"
+				? message.command
+				: message.role === "branchSummary" || message.role === "compactionSummary"
+					? message.summary
+					: "";
+	let rows = Math.ceil(text.length / 80) + 1;
+	if (message.role === "assistant") {
+		for (const block of message.content) {
+			if (block.type === "toolCall") rows++;
+		}
+	}
+	if (message.role === "toolResult") rows++;
+	return rows;
+}
 
 export function isTranscriptEntry(entry: SessionEntry): entry is TranscriptEntry {
 	return entry.type === "message" || entry.type === "custom_message";
@@ -360,6 +411,8 @@ export function buildSessionContext(
 	// 3. Emit messages after compaction
 	const messages: AgentMessage[] = [];
 	const cacheMissExplainedAt: boolean[] = [];
+	let hiddenTranscriptMessages: number | undefined;
+	let hiddenTranscriptPrefix: AgentMessage[] | undefined;
 	let pendingReset = false;
 	let currentMode = "none";
 	let lastAssistantModel: string | undefined;
@@ -768,8 +821,81 @@ export function buildSessionContext(
 		}
 	}
 
+	// Transcript replay window: bound the rebuilt display to the newest N
+	// estimated rendered rows (a fixed 80-column estimate). Drop whole oldest
+	// turns — never a fragment of one, and never the newest turn, which is
+	// always drawn in full — restarting the kept slice at a user turn so an
+	// assistant fragment does not normally open the transcript. The walk already
+	// consumed every message's reset/model bookkeeping, so the kept tail's
+	// cacheMissExplainedAt flags are correct; splicing keeps them aligned.
+	// Hidden assistants' served-model announcements replay renderer-side via
+	// hiddenTranscriptPrefix.
+	const replayLimit = options?.transcript ? options.transcriptReplayLimit : undefined;
+	if (replayLimit !== undefined && Number.isInteger(replayLimit) && replayLimit > 0) {
+		let estimate = 0;
+		for (const message of messages) estimate += estimateTranscriptRows(message);
+		if (estimate > replayLimit) {
+			// Walk forward accumulating rows; the last index whose predecessor
+			// still fits becomes the cut candidate. Never drop the last message.
+			let cut = 0;
+			let acc = 0;
+			for (let i = 0; i < messages.length - 1; i++) {
+				acc += estimateTranscriptRows(messages[i]!);
+				if (estimate - acc > replayLimit) cut = i + 1;
+				else break;
+			}
+			if (cut > 0) {
+				// Restart at a turn start at or before `cut` — same boundary rule as
+				// the walk: user request, bashExecution card, branch summary, or
+				// user-authored custom message. Keep the suffix when no earlier
+				// boundary exists (mirrors the collapsed-transcript trim).
+				let start = cut;
+				for (let i = cut; i >= 0; i--) {
+					const message = messages[i]!;
+					const boundary =
+						message.role === "user" ||
+						message.role === "bashExecution" ||
+						message.role === "branchSummary" ||
+						(message.role === "custom" && isUserAuthoredMessage(message));
+					if (boundary) {
+						start = i;
+						break;
+					}
+				}
+				// A running background job's card is rebuilt from its call+result
+				// pair; hiding either half orphans the live job's only surface.
+				// Never cut past one: for every parked result inside the would-be
+				// hidden prefix, move `start` back to its owning assistant call
+				// (the message whose toolCall id matches), so call and result stay
+				// in the kept suffix.
+				for (let i = start - 1; i >= 0; i--) {
+					const message = messages[i]!;
+					if (message.role !== "toolResult") continue;
+					if (!parksAsBackground(message.toolName, message.details)) continue;
+					for (let j = i - 1; j >= 0; j--) {
+						const candidate = messages[j]!;
+						if (candidate.role !== "assistant") continue;
+						if (!candidate.content.some(block => block.type === "toolCall" && block.id === message.toolCallId)) {
+							continue;
+						}
+						if (j < start) start = j;
+						break;
+					}
+				}
+				if (start > 0) {
+					hiddenTranscriptPrefix = messages.slice(0, start);
+					messages.splice(0, start);
+					cacheMissExplainedAt.splice(0, start);
+				}
+				hiddenTranscriptMessages = start;
+			}
+		}
+	}
+
 	return {
 		messages,
+		hiddenTranscriptMessages,
+		hiddenTranscriptPrefix,
 		cacheMissExplainedAt: options?.transcript ? cacheMissExplainedAt : undefined,
 		thinkingLevel,
 		configuredThinkingLevel,

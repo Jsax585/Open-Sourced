@@ -717,6 +717,19 @@ export const cfgDisplayCollapseCompacted = register({
 	},
 });
 
+export const cfgDisplayTranscriptReplayLimit = register({
+	id: "display.transcriptReplayLimit",
+	type: "number",
+	default: 0,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Redrawn History",
+		description:
+			"Bounds how many OLDER turns are dropped when the transcript is rebuilt (resume, rewind, redraw, or a display-setting change): the rebuilt transcript keeps roughly this many rendered rows, estimated at a fixed 80-column reference, by dropping whole oldest turns — the newest turn is always drawn in full. 0 keeps the full history.",
+	},
+});
+
 export const cfgShowHardwareCursor = register({
 	id: "showHardwareCursor",
 	type: "boolean",
