@@ -584,6 +584,31 @@ export interface StreamOptions {
 	 */
 	statefulResponses?: boolean;
 	/**
+	 * Client-supplied OpenAI Responses continuation id. When set, it wins over
+	 * internal chain state (`statefulResponses` / lastResponseId) for this request.
+	 */
+	previousResponseId?: string;
+	/**
+	 * OpenAI Responses `store`: persist the response server-side so a later
+	 * `previous_response_id` continuation can resolve it. Platform chaining only
+	 * resolves stored responses.
+	 */
+	store?: boolean;
+	/** OpenAI `parallel_tool_calls`. */
+	parallelToolCalls?: boolean;
+	/** OpenAI deterministic-sampling `seed`. */
+	seed?: number;
+	/** OpenAI `logit_bias` map (token id → bias). */
+	logitBias?: Record<string, number>;
+	/** OpenAI / abuse-tracking `user` field. */
+	user?: string;
+	/** OpenAI `response_format` (text | json_object | json_schema). Opaque passthrough. */
+	responseFormat?: unknown;
+	/** Google GenerateContent structured-output controls; ignored by other transports. */
+	responseMimeType?: string;
+	responseSchema?: Record<string, unknown>;
+	responseJsonSchema?: Record<string, unknown>;
+	/**
 	 * Store this request's result server-side on hosts that support it
 	 * (`compat.storeResponses`, e.g. Muse Code), so a stream that drops
 	 * mid-turn resumes from `GET /responses/{id}` instead of re-running the
@@ -1302,6 +1327,8 @@ export interface AssistantMessage {
 	toolCallAbortMessages?: Record<string, string>;
 	/** HTTP status surfaced by the provider when the request failed. Populated by every provider's catch block alongside `errorMessage` so consumers (auth retry, telemetry, UI) can branch without regex-scraping the message. */
 	errorStatus?: number;
+	/** Explicit provider retry directive preserved through stream finalization and transport. */
+	errorRetryable?: boolean;
 	/** Structured machine-readable error classifier; see `utils/error-id.ts` for bit layout and helpers. */
 	errorId?: number;
 	/**

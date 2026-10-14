@@ -21,6 +21,7 @@ import {
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { OpenAIHttpError, postOpenAIStream } from "../utils/openai-http";
+import { normalizeOpenAIResponseFormat } from "../utils/response-format";
 import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
 import {
@@ -395,6 +396,16 @@ function buildParams(
 
 	applyCommonResponsesSamplingParams(params, options, model);
 	if (options?.include?.length) params.include = Array.from(new Set(options.include));
+	if (options?.previousResponseId !== undefined) params.previous_response_id = options.previousResponseId;
+	if (options?.store === true) params.store = true;
+	if (options?.parallelToolCalls !== undefined) params.parallel_tool_calls = options.parallelToolCalls;
+	if (options?.user !== undefined) params.user = options.user;
+	// `seed` is a Chat Completions parameter — the Responses API has no such
+	// field and rejects it as an unknown parameter.
+	const responseFormat = options?.responseFormat;
+	if (responseFormat !== undefined && typeof responseFormat === "object" && responseFormat !== null) {
+		params.text = { ...params.text, format: normalizeOpenAIResponseFormat(responseFormat, "responses") as never };
+	}
 
 	if (context.tools) {
 		const serializedTools: NonNullable<AzureOpenAIResponsesSamplingParams["tools"]> = [];
