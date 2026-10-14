@@ -623,6 +623,13 @@ export class UiHelpers {
 				}
 			}
 		}
+		// Replay the dropped prefix's one-time bookkeeping before drawing the kept
+		// tail: a model substitution that occurred only inside the hidden window
+		// would otherwise never be announced, because the tracker forgets each
+		// pair once shown and the visible walk is seeded fresh above.
+		for (const hidden of sessionContext.hiddenTranscriptPrefix ?? []) {
+			if (hidden.role === "assistant") this.ctx.servedModelTracker.check(hidden);
+		}
 		const messages = sessionContext.messages;
 		const count = messages.length;
 		for (let i = 0; i < count; i++) {

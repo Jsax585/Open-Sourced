@@ -439,6 +439,20 @@ describe("buildSessionContext transcriptReplayLimit", () => {
 		expect(context.messages.at(-1)?.role).toBe("assistant");
 	});
 
+	it("exposes the dropped prefix so its bookkeeping can be replayed", () => {
+		const context = buildSessionContext(structuredClone(turns), undefined, undefined, {
+			transcript: true,
+			collapseCompactedHistory: true,
+			transcriptReplayLimit: 24,
+		});
+
+		// The two hidden entries are the whole t1 turn, in order, and the kept
+		// slice is exactly the suffix after them.
+		expect(context.hiddenTranscriptPrefix?.map(message => message.role)).toEqual(["user", "assistant"]);
+		expect(context.hiddenTranscriptMessages).toBe(context.hiddenTranscriptPrefix?.length);
+		expect(context.messages.map(message => message.role)).toEqual(["user", "assistant", "user", "assistant"]);
+	});
+
 	it("keeps the last message even when it alone exceeds the limit", () => {
 		const context = buildSessionContext(structuredClone(turns), undefined, undefined, {
 			transcript: true,

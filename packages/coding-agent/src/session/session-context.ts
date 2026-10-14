@@ -134,6 +134,12 @@ export interface SessionContext {
 	 * nothing was dropped / no limit applies.
 	 */
 	hiddenTranscriptMessages?: number;
+	/**
+	 * Transcript mode only, with {@link hiddenTranscriptMessages} set: the
+	 * dropped messages themselves, so the renderer can replay their one-time
+	 * bookkeeping (served-model announcements) before drawing the kept tail.
+	 */
+	hiddenTranscriptPrefix?: AgentMessage[];
 }
 
 /** Lists session model strings to try when restoring, in fallback order. */
@@ -401,6 +407,7 @@ export function buildSessionContext(
 	const messages: AgentMessage[] = [];
 	const cacheMissExplainedAt: boolean[] = [];
 	let hiddenTranscriptMessages: number | undefined;
+	let hiddenTranscriptPrefix: AgentMessage[] | undefined;
 	let pendingReset = false;
 	let currentMode = "none";
 	let lastAssistantModel: string | undefined;
@@ -856,6 +863,7 @@ export function buildSessionContext(
 						const message = messages[i]!;
 						if (message.role === "assistant") trackMessageCacheState(message);
 					}
+					hiddenTranscriptPrefix = messages.slice(0, start);
 					messages.splice(0, start);
 					cacheMissExplainedAt.splice(0, start);
 				}
@@ -867,6 +875,7 @@ export function buildSessionContext(
 	return {
 		messages,
 		hiddenTranscriptMessages,
+		hiddenTranscriptPrefix,
 		cacheMissExplainedAt: options?.transcript ? cacheMissExplainedAt : undefined,
 		thinkingLevel,
 		configuredThinkingLevel,
