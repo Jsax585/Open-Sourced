@@ -2110,35 +2110,47 @@ export class SessionManager {
 			this.#rewriteSynchronously();
 			return;
 		}
-		const sessionFile = this.#sessionFile;
-		let durable = this.#durable;
-		let storedSize: number | null = null;
-		if (sessionFile && durable?.entries === this.#entries && !this.#sessionOwnedElsewhere()) {
-			try {
-				storedSize = this.#storage.statSync(sessionFile).size;
-			} catch {
-				// Absent or unreadable: nothing on disk is known, so republish.
-			}
-		}
-		// Another writer appended past the frontier: keep its entries in file
-		// order and extend the frontier over them, so this manager's entries
-		// follow them instead of a republish writing them first.
-		if (
-			sessionFile &&
-			durable &&
-			storedSize !== null &&
-			storedSize > durable.issuedSize &&
-			this.#adoptEntriesAppendedPastFrontier(sessionFile)
-		) {
-			durable = this.#durable;
-		}
 		// Not written yet, a structural change, another live owner, or bytes
 		// this manager cannot account for (a publish not yet confirmed, another
 		// writer) → rewrite the whole file synchronously.
-		if (!sessionFile || !durable || storedSize !== durable.issuedSize) {
+		const durable = this.#frontierMatchingSessionFile();
+		if (!durable) {
 			this.#rewriteSynchronously();
 			return;
 		}
+		this.#appendTailPastFrontier(durable);
+	}
+
+	/**
+	 * The durable frontier when it describes the live entries and the session
+	 * file, which no other live process owns, measures exactly what it issued.
+	 * Entries another writer appended past it are adopted first when the file
+	 * is exactly the frontier followed by them, so this manager's entries
+	 * follow them instead of a republish writing them first.
+	 */
+	#frontierMatchingSessionFile(): DurableFrontier | undefined {
+		const sessionFile = this.#sessionFile;
+		const durable = this.#durable;
+		if (!sessionFile || durable?.entries !== this.#entries || this.#sessionOwnedElsewhere()) return undefined;
+		let storedSize: number;
+		try {
+			storedSize = this.#storage.statSync(sessionFile).size;
+		} catch {
+			// Absent or unreadable: nothing on disk is known.
+			return undefined;
+		}
+		if (storedSize === durable.issuedSize) return durable;
+		if (storedSize < durable.issuedSize || !this.#adoptEntriesAppendedPastFrontier(sessionFile)) return undefined;
+		const adopted = this.#durable;
+		return adopted?.issuedSize === storedSize ? adopted : undefined;
+	}
+
+	/**
+	 * Append every entry past `durable`'s issued position to the session file,
+	 * which holds exactly what the frontier issued. Never throws; a failure is
+	 * latched and the entries stay unsaved.
+	 */
+	#appendTailPastFrontier(durable: DurableFrontier): void {
 		const start = durable.issued;
 		const end = this.#entries.length;
 		if (start === end) return;
@@ -2776,9 +2788,37 @@ export class SessionManager {
 		return sessionFile;
 	}
 
-	/** Delete a session file and its artifact directory. ENOENT is treated as success. */
+	/**
+	 * Delete a session file and its artifact directory. ENOENT is treated as
+	 * success. Dropping the current session file ends its persistence before
+	 * the delete starts, whether or not it succeeds: the entries stay in
+	 * memory, but this manager never writes that path again, and the next
+	 * {@link newSession} or {@link setSessionFile} starts from scratch.
+	 */
 	async dropSession(sessionPath: string): Promise<void> {
-		await this.#drainAndCloseWriter();
+		const current = this.#sessionFile;
+		const dropsCurrent = current !== undefined && path.resolve(current) === path.resolve(sessionPath);
+		try {
+			await this.#drainAndCloseWriter();
+		} catch (err) {
+			// A failed append's error, raised again on close, concerns only the
+			// file being deleted.
+			if (!dropsCurrent) throw err;
+		}
+		if (dropsCurrent) {
+			this.#sessionFile = undefined;
+			this.#durable = undefined;
+			this.#refusedSessionSwitch = undefined;
+			this.#clearDiskError();
+			this.#expectedDiskSize = null;
+			this.#fileIsCurrent = false;
+			this.#rewriteRequired = false;
+			this.#draftOnlySessionCleanupArmed = false;
+			this.#artifactManager = null;
+			this.#artifactManagerSessionFile = null;
+			this.#sessionClaim?.release?.();
+			this.#sessionClaim = undefined;
+		}
 		try {
 			await this.#storage.deleteSessionWithArtifacts(sessionPath);
 		} catch (err) {
@@ -3167,20 +3207,23 @@ export class SessionManager {
 	}
 
 	/**
-	 * Append the entries storage is missing past the durable frontier, through
-	 * the one decision at {@link #appendToCurrentSessionFile}. Only while the
-	 * frontier still describes the live entries: a journal that needs a
-	 * republish (a structural change, a rejected deferred publish) gets it
-	 * from the next append, so flushing never starts a full rewrite. Writes
-	 * nothing while an atomic batch is open, once the entries are released,
-	 * or after {@link seal} unless `afterSeal` (close's terminal write). An
-	 * indeterminate failure does not stop it: the append's size check refuses
-	 * any file this manager cannot account for.
+	 * Append the entries storage is missing past the durable frontier, and
+	 * only append: when {@link #frontierMatchingSessionFile} holds. Anything
+	 * else (a journal that needs a republish, a file that vanished or does not
+	 * measure what the frontier issued, a move or atomic rewrite in flight,
+	 * another live owner) is left to the next append, so flushing never starts
+	 * a full rewrite and never recreates a deleted file. Writes nothing while
+	 * an atomic batch is open, once the entries are released, or after
+	 * {@link seal} unless `afterSeal` (close's terminal write). An
+	 * indeterminate failure does not stop it, because the size check already
+	 * refuses a file this manager cannot account for.
 	 */
 	#healMissingEntries(afterSeal = false): void {
 		if ((this.#released && !afterSeal) || this.#entriesReleased || this.#atomicEntryBatch) return;
-		if (this.#durable?.entries !== this.#entries) return;
-		if (this.#hasUnsavedEntries()) this.#appendToCurrentSessionFile();
+		if (this.#sessionFileRelocating || this.#atomicRewriteFenceEpoch === this.#diskEpoch) return;
+		if (!this.#hasUnsavedEntries()) return;
+		const durable = this.#frontierMatchingSessionFile();
+		if (durable) this.#appendTailPastFrontier(durable);
 	}
 
 	/** {@link #healMissingEntries} on the disk queue, then wait until a deferring backend confirms what it wrote. */

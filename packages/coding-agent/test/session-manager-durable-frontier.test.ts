@@ -354,6 +354,49 @@ describe("an entry that missed the journal once storage recovers", () => {
 	});
 });
 
+describe("a session file the heal cannot account for", () => {
+	it("is not recreated by flush() after it vanished; the next turn republishes the whole transcript", async () => {
+		const { manager, sessionDir, sessionFile } = await fileSession();
+		failNextFileWrite();
+		manager.appendMessage(userTurn("missing"));
+		fs.rmSync(sessionFile);
+
+		await expect(manager.flush()).rejects.toThrow("ENOSPC");
+		expect(fs.existsSync(sessionFile)).toBe(false);
+
+		manager.appendMessage(userTurn("after"));
+		await manager.flush();
+		const current = manager.getSessionFile();
+		if (!current) throw new Error("Expected a session file");
+		expect(userTurnsOf((await reopen(current, sessionDir)).getBranch())).toEqual(["before", "missing", "after"]);
+	});
+});
+
+describe("a dropped session file", () => {
+	it("stays deleted when newSession() follows dropSession() after a turn missed the journal (/delete)", async () => {
+		const { manager, sessionFile } = await fileSession();
+		failNextFileWrite();
+		manager.appendMessage(userTurn("missing"));
+
+		await manager.dropSession(sessionFile);
+		const next = await manager.newSession();
+
+		expect(next).not.toBe(sessionFile);
+		expect(fs.existsSync(sessionFile)).toBe(false);
+	});
+
+	it("is never written again by later turns, flushSync() or close()", async () => {
+		const { manager, sessionFile } = await fileSession();
+
+		await manager.dropSession(sessionFile);
+		manager.appendMessage(assistantMessage("after the drop"));
+		manager.flushSync();
+		await manager.close();
+
+		expect(fs.existsSync(sessionFile)).toBe(false);
+	});
+});
+
 describe("a restored snapshot taken while an entry missed the journal", () => {
 	it("has flush() append the entry", async () => {
 		const { manager, sessionDir, sessionFile } = await fileSession();
