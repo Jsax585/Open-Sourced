@@ -4,6 +4,14 @@
 
 ### Added
 
+- `OMP_AUTH_GATEWAY_ADMIN_TOKEN` explicitly enables authenticated route management without granting write access to inference or no-auth clients ([#10148](https://github.com/can1357/oh-my-pi/pull/10148) by [@jroth1111](https://github.com/jroth1111)).
+- `omp auth-gateway serve --routes` loads validated JSON5 route files before broker setup, preserving exact paths and rejecting unsupported actions ([#10145](https://github.com/can1357/oh-my-pi/pull/10145) by [@jroth1111](https://github.com/jroth1111)).
+
+### Fixed
+
+- Broker-backed auth-gateway continuations retain private session and response ownership across restarts, without storing credentials or bearer/usage caches locally ([#10134](https://github.com/can1357/oh-my-pi/pull/10134) by [@jroth1111](https://github.com/jroth1111)).
+### Added
+
 - The composer stays usable while a tool approval is pending: sending a message denies the call and steers the turn with it, so the agent knows why it was denied ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
 
 ### Changed

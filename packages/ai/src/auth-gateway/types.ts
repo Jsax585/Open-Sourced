@@ -47,6 +47,10 @@ export interface AuthGatewayParsedRequestOptions {
 	logitBias?: Record<string, number>;
 	/** OpenAI `response_format` (text | json_object | json_schema). Opaque passthrough. */
 	responseFormat?: unknown;
+	/** Native Google structured-output controls. */
+	responseMimeType?: string;
+	responseSchema?: Record<string, unknown>;
+	responseJsonSchema?: Record<string, unknown>;
 
 	// ── Tools ─────────────────────────────────────────────────────────────
 	toolChoice?: AuthGatewayToolChoice;
@@ -89,6 +93,8 @@ export interface AuthGatewayParsedRequestOptions {
 	promptCacheKey?: string;
 	/** OpenAI Responses `previous_response_id` for response chaining. */
 	previousResponseId?: string;
+	/** OpenAI Responses `store`: persist the response so a later `previous_response_id` can resolve it. */
+	store?: boolean;
 	/** OpenAI / abuse-tracking `user` field. */
 	user?: string;
 
@@ -146,9 +152,11 @@ export interface AuthGatewayFormatModule {
 }
 
 export interface AuthGatewayServerOptions {
+	/** Default transport idle limit in seconds; active SSE streams override it. Default 255. */
+	idleTimeout?: number;
 	/** Listen address. Default `127.0.0.1:4000`. */
 	bind?: string;
-	/** Accept any of these bearer tokens. Empty allows unauthenticated calls. */
+	/** Inference/read-only tokens. Empty allows unauthenticated non-mutating calls. */
 	bearerTokens: string[];
 	/** Honor forwarded peer headers only when the connecting proxy is trusted. Default false. */
 	trustProxyHeaders?: boolean;

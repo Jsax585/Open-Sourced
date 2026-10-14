@@ -1846,6 +1846,16 @@ function mapOptionsForApi<TApi extends Api>(
 		anthropicCompaction: options?.anthropicCompaction,
 		anthropicSlowMode: options?.anthropicSlowMode,
 		userProfileId: options?.userProfileId,
+		previousResponseId: options?.previousResponseId,
+		store: options?.store,
+		parallelToolCalls: options?.parallelToolCalls,
+		seed: options?.seed,
+		logitBias: options?.logitBias,
+		user: options?.user,
+		responseFormat: options?.responseFormat,
+		responseMimeType: options?.responseMimeType,
+		responseSchema: options?.responseSchema,
+		responseJsonSchema: options?.responseJsonSchema,
 		...simpleProviderOptions,
 	};
 
