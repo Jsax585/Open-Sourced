@@ -42,6 +42,7 @@ pub(crate) struct LineInput {
 	blocks: bool,
 	block:  Vec<u8>,
 	pos:    usize,
+	regular_file: bool,
 }
 
 impl LineInput {
@@ -50,14 +51,14 @@ impl LineInput {
 	/// std's `Stdin` keeps a buffer of its own, which a seek on the
 	/// descriptor could not give back.
 	pub(crate) fn new(input: OpenFile, read_ahead: ReadAhead) -> Self {
+		let regular_file =
+			matches!(&input, OpenFile::File(file) if file.metadata().is_ok_and(|m| m.is_file()));
 		let blocks = !input.is_terminal()
 			&& match read_ahead {
 				ReadAhead::ToEof => true,
-				ReadAhead::Seekable => {
-					matches!(&input, OpenFile::File(file) if file.metadata().is_ok_and(|m| m.is_file()))
-				},
+				ReadAhead::Seekable => regular_file,
 			};
-		Self { input, blocks, block: Vec::new(), pos: 0 }
+		Self { input, blocks, block: Vec::new(), pos: 0, regular_file }
 	}
 
 	/// The underlying descriptor, e.g. to poll it before a read that could
@@ -66,9 +67,15 @@ impl LineInput {
 		&self.input
 	}
 
-	/// Whether reads come from a read-ahead block, never waiting on input.
+	/// Whether bytes are read ahead in blocks; refills may still wait on a pipe.
 	pub(crate) const fn reads_ahead(&self) -> bool {
 		self.blocks
+	}
+
+	/// Whether the descriptor is a regular file, safe to read inline without
+	/// starving a producer on the shell runtime.
+	pub(crate) const fn is_regular_file(&self) -> bool {
+		self.regular_file
 	}
 
 	/// The next byte, or `None` at end of input.

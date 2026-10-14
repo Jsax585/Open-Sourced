@@ -3322,6 +3322,37 @@ mod tests {
 		assert_eq!(output, "cb:0:1:2\ncb:1:3:4\narr=1 3\n");
 	}
 
+	/// Batching stops at the callback before it reads shared stdin, counts
+	/// only unskipped entries, and assigns the boundary entry after callback.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn mapfile_batches_respect_skip_count_limit_and_callback_order() {
+		let (result, output) = execute_captured(
+			"cb() { echo \"cb:$1:$2:${arr[*]}\"; read -r extra; echo \"extra:$extra\"; }; seq 1 7 | \
+			 { arr=(seed); mapfile -t -O 2 -s 1 -n 3 -C cb -c 2 arr; echo \"arr:${arr[*]}\"; cat; }"
+				.to_owned(),
+		)
+		.await;
+		assert_eq!(result.exit_code, Some(0), "{output:?}");
+		assert_eq!(output, "cb:3:3:seed 2\nextra:4\narr:seed 2 3 5\n6\n7\n");
+	}
+
+	/// Empty delimited entries count toward callback boundaries; partial EOF
+	/// entries are stored, with only actual delimiters removed by -t.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn mapfile_batches_preserve_empty_entries_and_partial_final_lines() {
+		for (options, expected) in
+			[("-t", "cb:1::a\n<a>\n<>\n<tail>\n"), ("", "cb:1:|:a|\n<a|>\n<|>\n<tail>\n")]
+		{
+			let (result, output) = execute_captured(format!(
+				"cb() {{ echo \"cb:$1:$2:${{arr[*]}}\"; }}; printf 'skip|a||tail' | {{ mapfile \
+				 {options} -d '|' -s 1 -C cb -c 2 arr; printf '<%s>\\n' \"${{arr[@]}}\"; }}"
+			))
+			.await;
+			assert_eq!(result.exit_code, Some(0), "{output:?}");
+			assert_eq!(output, expected);
+		}
+	}
+
 	/// Contract: `mapfile` into a readonly array fails before reading, as in
 	/// bash: the array is unchanged and the piped input stays for the next
 	/// reader.
