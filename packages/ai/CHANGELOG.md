@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added gateway failure ownership and retry dispositions for credential, model, provider, and terminal errors ([#10133](https://github.com/can1357/oh-my-pi/pull/10133) by [@jroth1111](https://github.com/jroth1111)).
+
+### Fixed
+
+- Gateway errors retain authoritative provider statuses, structural cancellation, and Anthropic retry directives ([#10133](https://github.com/can1357/oh-my-pi/pull/10133) by [@jroth1111](https://github.com/jroth1111)).
 ## [18.10.4] - 2026-10-13
 
 ### Fixed
