@@ -143,4 +143,55 @@ describe("AgentSession session_stop willContinue", () => {
 			expect(last.stopReason).toBe("stop");
 		}
 	});
+
+	it("keeps the ended assistant identity on delayed message updates", async () => {
+		const model = getBundledModel("openai", "gpt-5");
+		if (!model) throw new Error("Expected bundled OpenAI test model to exist");
+		const mock = createMockModel({ responses: [{ content: ["settled answer"], stopReason: "stop" }] });
+		const agent = new Agent({
+			getApiKey: requestedModel => `${requestedModel.provider}-test-key`,
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (requestedModel, context, options) => mock.stream(requestedModel, context, options),
+		});
+		const events: Array<{ type: string; messageId?: string; settleMessageId?: string }> = [];
+		const lateUpdate = Promise.withResolvers<void>();
+		let awaitingLateUpdate = false;
+		const extensionRunner = {
+			emit: async (event: { type: string; messageId?: string; settle?: { messageId: string } }) => {
+				events.push({ type: event.type, messageId: event.messageId, settleMessageId: event.settle?.messageId });
+				if (awaitingLateUpdate && event.type === "message_update") lateUpdate.resolve();
+			},
+			emitBeforeAgentStart: async () => undefined,
+			hasHandlers: (eventType: string) =>
+				eventType === "message_start" || eventType === "message_update" || eventType === "message_end",
+		} as unknown as ExtensionRunner;
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
+			modelRegistry,
+			extensionRunner,
+		});
+
+		await session.prompt("answer once");
+		await session.waitForIdle();
+		const ended = session.getLastAssistantMessage();
+		if (!ended) throw new Error("Expected settled assistant message");
+		awaitingLateUpdate = true;
+		agent.emitExternalEvent({
+			type: "message_update",
+			message: { ...ended },
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "", partial: ended },
+		});
+		await lateUpdate.promise;
+
+		const start = events.find(event => event.type === "message_start" && event.messageId);
+		const end = events.find(event => event.type === "message_end" && event.messageId);
+		const late = events.findLast(event => event.type === "message_update" && event.messageId);
+		const settle = events.find(event => event.type === "agent_end");
+		expect(start?.messageId).toBeTruthy();
+		expect(end?.messageId).toBe(start?.messageId);
+		expect(late?.messageId).toBe(start?.messageId);
+		expect(settle?.settleMessageId).toBe(start?.messageId);
+	});
 });

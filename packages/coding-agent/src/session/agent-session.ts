@@ -3354,6 +3354,7 @@ export class AgentSession implements SettingsScope {
 	#lastAssistantMessage: AssistantMessage | undefined = undefined;
 	/** Process-local identities for live assistant message objects exposed to extensions. */
 	#extensionAssistantMessageIds = new WeakMap<AssistantMessage, string>();
+	/** Most recently started assistant identity; retained after end for delayed update callbacks. */
 	#activeExtensionAssistantMessageId: string | undefined;
 	#nextExtensionAssistantMessageId = 0;
 
@@ -3369,7 +3370,6 @@ export class AgentSession implements SettingsScope {
 		const messageId = this.#activeExtensionAssistantMessageId;
 		if (!messageId) return undefined;
 		this.#extensionAssistantMessageIds.set(message, messageId);
-		if (event.type === "message_end") this.#activeExtensionAssistantMessageId = undefined;
 		return messageId;
 	}
 	/**
