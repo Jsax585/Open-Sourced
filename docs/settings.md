@@ -591,7 +591,7 @@ A prefixed wildcard such as `openrouter/google/*` can be used as a chain key or 
 
 Retry model fallback is not context promotion. `contextPromotion.enabled: false` only disables [context promotion](./models.md#context-promotion) to a model's `contextPromotionTarget`; set `retry.modelFallback: false` to stop `retry.fallbackChains` from switching the active model after provider errors. Same-model retries and compaction remain available.
 
-Set `retry.fallbackChainExhausted` to a role map such as `{ task: "fail", smol: "fail" }` to contain those roles. A `"fail"` role never inherits or enters `default`, including after its chain is exhausted and in subagents launched through that role alias; a missing role chain means no fallbacks. Recovery retains the provider's error when no eligible role candidate remains. Unlisted roles (or `"default"` entries) retain existing routing, including root `/model` switches. Explicit-selector children without a known role are not covered by this policy.
+Set `retry.fallbackChainExhausted` to a role map such as `{ task: "fail", smol: "fail" }` to contain those roles. A `"fail"` role never inherits or enters `default`, including after its chain is exhausted and in subagents launched through that role alias; a missing role chain means no fallbacks. A known contained role uses only its own chain, ahead of model-selector and provider-wildcard chains. Recovery retains the provider's error when no eligible role candidate remains. Unlisted roles (or `"default"` entries) retain existing routing, including root `/model` switches. Explicit-selector children without a known role are not covered by this policy.
 
 ### Tools and approvals
 
