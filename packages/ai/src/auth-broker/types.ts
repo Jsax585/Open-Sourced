@@ -174,6 +174,13 @@ export const AUTH_BROKER_CAPABILITIES_HEADER = "OMP-Auth-Broker-Capabilities";
 /** Client understands independent Codex `chat` and `spark` credential-block scopes. */
 export const AUTH_BROKER_CAPABILITY_CODEX_METER_BLOCK_SCOPES = "codex-meter-block-scopes";
 
+/** Client understands quota-origin and provider-wait provenance on credential blocks. */
+export const AUTH_BROKER_CAPABILITY_BLOCK_PROVENANCE = "credential-block-provenance";
+export const AUTH_BROKER_CLIENT_CAPABILITIES = [
+	AUTH_BROKER_CAPABILITY_CODEX_METER_BLOCK_SCOPES,
+	AUTH_BROKER_CAPABILITY_BLOCK_PROVENANCE,
+].join(",");
+
 /** Default port when none is configured. Loopback-only, no external exposure. */
 export const DEFAULT_AUTH_BROKER_BIND = "127.0.0.1:8765";
 

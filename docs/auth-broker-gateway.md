@@ -150,7 +150,7 @@ The CLI broker refresh hook also handles managed `mcp_oauth:*` credentials using
 ### CLI
 
 ```
-omp auth-gateway serve   [--bind=host:port] [--no-auth] [--trust-proxy-headers]
+omp auth-gateway serve   [--bind=host:port] [--no-auth] [--trust-proxy-headers] [--routes=file.json5]
 omp auth-gateway stdio
 omp auth-gateway token   [--regenerate] [--json]
 omp auth-gateway status  [--json]
@@ -161,6 +161,40 @@ omp auth-gateway check   [--strict] [--json]
 - Logs attribute requests to the socket peer address. Behind a trusted reverse proxy, pass `--trust-proxy-headers` to use `X-Forwarded-For` / `X-Real-IP` for authenticated requests; unauthorized requests are always logged with the socket peer. An authenticated request that also carries the gateway token in its URL or in a forwarded, logged, or identity header is rejected with `400` before any credential lookup.
 - `token` manages the token file; `--regenerate` requires a running gateway to restart before accepting the replacement. `status` checks the local token file and an authenticated broker snapshot; it does not probe the gateway listener.
 - `check` constructs its own broker-backed store and probes the credentials the gateway would use, without calling a running gateway. Without `--strict` it uses provider usage probes. `--strict` additionally tries suitable bundled chat models and can consume quota; providers with no suitable candidate (including pi-native forwarding, Bedrock, Vertex, and Cursor transports) cannot be completion-probed.
+
+### Route files
+
+`omp auth-gateway serve --routes=routes.json5` loads a JSON or JSON5 array of route definitions, or an object with a `routes` array. File syntax and shape are validated before broker connections or private token/cache creation. Blank paths are rejected; quoted filename whitespace is preserved. `--routes` is serve-only and is rejected on other actions.
+
+```json5
+{
+  routes: [{
+    id: "work",
+    root: {
+      type: "fallback",
+      on: ["provider_unavailable", "model_unavailable"],
+      children: [
+        { type: "target", model: "provider/primary-model" },
+        { type: "target", model: "provider/backup-model" },
+      ],
+    },
+  }],
+}
+```
+
+Replace those placeholder targets with concrete IDs from the gateway's `/v1/models` catalog. Clients request the virtual ID (`work` in this example). Only configured failure conditions select another target, and committed or billed inference and caller-owned Responses continuations are not transparently replayed across targets.
+
+### Route management
+
+`PUT /v1/routes/:id` registers or atomically replaces a virtual route from JSON/JSON5. It accepts a definition with a matching `id`, or a `root` object whose ID is supplied by the decoded path. Invalid syntax, mismatched IDs and invalid/cyclic definitions return 400 without changing registry generations or existing routes. Changes are in-memory; route files are not rewritten.
+
+`DELETE /v1/routes/:id` removes only the named virtual route and returns an empty 204 response. Unknown and concrete model IDs return 404 without changing the registry. Other routes and already-running request snapshots remain intact; the next request can no longer resolve the removed virtual route. Encoded IDs are decoded once for all route operations. DELETE uses the same opt-in administrator boundary as PUT and never rewrites the route file.
+
+Management is disabled by default. Library hosts must explicitly set `allowManagement: true` and a separate nonempty `adminBearerTokens` capability. The CLI opts in only when `OMP_AUTH_GATEWAY_ADMIN_TOKEN` contains an administrator token. Inference tokens and `--no-auth` do not authorize mutations. Admin tokens can read route metadata but do not independently authorize inference. Keep the admin token out of URLs and forwarded/identity headers; do not publish it in logs or route files.
+
+### Lifecycle hooks
+
+Library hosts can supply `hooks` for `beforeRequest`, `beforeAttempt`, `afterAttempt` and `afterRequest` on parsed, resolved chat and pi-native requests. Callbacks are awaited and receive a private context copy with the request/route IDs, generation and (for attempts) canonical target. Completion hooks run once per dispatched attempt and once per overall request, including streaming settlement, cancellation and reader failure. Hook errors are gateway failures, not provider outages: they cannot replay completed inference or select a fallback. Invalid requests rejected before route resolution do not enter this lifecycle.
 
 ### stdio
 
@@ -185,6 +219,7 @@ omp auth-gateway check   [--strict] [--json]
 | `GET`  | `/healthz`              | none   | Liveness + version                                           |
 | `GET`  | `/v1/usage`             | bearer | Aggregate `UsageReport[]` (proxied through `AuthStorage`)    |
 | `GET`  | `/v1/models`            | bearer | Registry catalog filtered to providers with credentials |
+| `GET`  | `/v1/executions/:id`    | bearer | Retained ordered routing decisions for one request, without prompts or credentials |
 | `GET`  | `/v1/credentials/check` | bearer | Per-credential auth health probe                             |
 | `POST` | `/v1/chat/completions`  | bearer | OpenAI Chat Completions wire format                          |
 | `POST` | `/v1/messages`          | bearer | Anthropic Messages wire format                               |
@@ -212,6 +247,8 @@ Live OpenRouter discovery covers image and Decisions rosters, `/embeddings/model
 Inference routes record observed usage against `x-omp-install-id`, `x-omp-hostname`, and `x-omp-app`; unlabeled requests fall back to the gateway host's identity. These attribution headers are not forwarded upstream. Completed non-streaming responses carry computed cost in `x-litellm-response-cost` when known; streaming chat responses send headers before usage arrives and do not include that cost header. Video cost may become available only while polling. Upstreams that report tokens only (TypeSafe) are priced from the catalog model; the response body's own `cost` field (OpenRouter shape) is only present when the upstream billed one.
 
 TypeSafe clients using the default base-URL resolver can set `TYPESAFE_BASE_URL=http://gateway:4000` with `TYPESAFE_API_KEY=<gateway token>`. omp's catalog-backed `judge` role passes the model's explicit `baseUrl`, which takes precedence over that environment fallback; configure the TypeSafe provider's `baseUrl` and `apiKey` in `models.yml` to use the gateway. OpenAI-SDK-style clients use `http://gateway:4000/v1`.
+
+Execution lookups return `object: "list"` with every retained redacted decision in `data`, in recorded order, while keeping the first decision's legacy top-level fields. The router retains at most 2,000 records for 30 minutes; absent or expired executions return 404.
 
 There is no raw provider passthrough path. All supported routes go through `pi-ai` provider logic so credential-specific request shaping, OAuth refresh-on-auth-error, and provider quirks stay centralized.
 

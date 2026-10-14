@@ -7,6 +7,7 @@
  * - `keys` — the provider auth cascade (runtime → config → OAuth → login key → env → stored key)
  * - `oauth` — login, per-account access resolution, account listings, refresh
  * - `sessions` — session → account pins
+ * - `responses` — private response → account/deployment bindings
  * - `usage` — usage reports, header ingestion, history
  * - `health` — model pool health and per-credential auth probes
  * - `limits` — usage-limit marking and credential rotation
@@ -22,15 +23,19 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { SessionAffinity, type SessionRestrictions } from "./auth/affinity";
 import { BlockStoreHealth, CredentialBlocks } from "./auth/blocks";
 import { KeyCascade, KeyOverrides } from "./auth/cascade";
+import { CredentialCoordination } from "./auth/coordination";
+import { extractStructuredApiKeyToken } from "./auth/credential-key";
 import { CredentialHealth } from "./auth/health";
 import { OAuthAccounts } from "./auth/oauth";
 import { AccountPolicies } from "./auth/policy";
 import { CredentialPool } from "./auth/pool";
+import { QuotaProbeLeaseBook } from "./auth/probe-lease";
 import { OAuthRefresher } from "./auth/refresh";
 import { ResetCredits } from "./auth/resets";
+import { ResponseOwners } from "./auth/response-owners";
 import { RateLimits } from "./auth/rotation";
 import { CredentialSelector } from "./auth/select";
-import { SqliteAuthCredentialStore } from "./auth/sqlite-credential-store";
+import { resolveCredentialStateScopeKey, SqliteAuthCredentialStore } from "./auth/sqlite-credential-store";
 import type { AuthCredentialStore } from "./auth/store";
 import type {
 	AuthAccountPolicies,
@@ -44,6 +49,7 @@ import type {
 	LimitsApi,
 	OAuthApi,
 	ResetsApi,
+	ResponseOwnersApi,
 	SessionsApi,
 	UsageApi,
 } from "./auth/types";
@@ -69,11 +75,13 @@ interface AuthStorageModules {
 	keys: KeyCascade;
 	oauth: OAuthAccounts;
 	sessions: SessionAffinity;
+	responses: ResponseOwners;
 	usage: UsageService;
 	health: CredentialHealth;
 	limits: RateLimits;
 	resets: ResetCredits;
 	blocks: CredentialBlocks;
+	coordination: CredentialCoordination;
 }
 
 /**
@@ -115,6 +123,10 @@ export class AuthStorage {
 	get sessions(): SessionsApi {
 		return this.#modules.sessions;
 	}
+	/** Durable, private bindings of upstream response IDs to accounts and deployments. */
+	get responses(): ResponseOwnersApi {
+		return this.#modules.responses;
+	}
 	/** Usage reports, header ingestion, history. */
 	get usage(): UsageApi {
 		return this.#modules.usage;
@@ -134,6 +146,11 @@ export class AuthStorage {
 	/** Persisted rate-limit blocks (auth-broker server seam). */
 	get blocks(): BlocksApi {
 		return this.#modules.blocks;
+	}
+
+	/** Request-owned quota recovery leases and physical credential generations. */
+	get coordination(): CredentialCoordination {
+		return this.#modules.coordination;
 	}
 
 	/**
@@ -187,6 +204,8 @@ export class AuthStorage {
 				selector.resetRoundRobin(provider);
 				affinity.clearProvider(provider);
 			},
+			onCredentialIdentityChanged: (provider, id, previous, next) =>
+				coordination.maybeBumpIncarnation(provider, id, previous, next),
 		});
 		const refresher = new OAuthRefresher({
 			store,
@@ -198,8 +217,17 @@ export class AuthStorage {
 		// Key reports by the effective provider (runtime extension override first), so an
 		// override's `cacheVersion` separates its rows from other processes sharing the store.
 		const usageCache = new UsageCache(store, pool, provider => usage.providerFor(provider));
-		const blocks = new CredentialBlocks({ store, pool, health: blockHealth, usageCache, strategies });
+		const probeLeases = new QuotaProbeLeaseBook();
+		const blocks = new CredentialBlocks({
+			store,
+			pool,
+			health: blockHealth,
+			usageCache,
+			strategies,
+			probeBook: probeLeases,
+		});
 		const affinity = new SessionAffinity(store, pool, overrides, this.#restrictions);
+		const coordination = new CredentialCoordination({ pool, blocks, affinity, usageCache, strategies, probeLeases });
 		const usage = new UsageService({
 			store,
 			pool,
@@ -228,6 +256,7 @@ export class AuthStorage {
 			usage,
 			refresher,
 			strategies,
+			coordination,
 		});
 		const limits = new RateLimits({ store, pool, overrides, blocks, affinity, usage, strategies });
 		const keys = new KeyCascade({
@@ -235,6 +264,7 @@ export class AuthStorage {
 			overrides,
 			selector,
 			affinity,
+			coordination,
 			rotate: (provider, sessionId, rotateOptions) => limits.rotate(provider, sessionId, rotateOptions),
 			sourceLabel,
 		});
@@ -245,6 +275,7 @@ export class AuthStorage {
 			keys,
 			oauth,
 			sessions: affinity,
+			responses: new ResponseOwners(store),
 			usage,
 			health: new CredentialHealth({
 				store,
@@ -261,6 +292,7 @@ export class AuthStorage {
 			limits,
 			resets: new ResetCredits({ store, pool, oauth, usage, usageCache, blocks }),
 			blocks,
+			coordination,
 		};
 	}
 
@@ -273,6 +305,21 @@ export class AuthStorage {
 	/** Close the underlying credential store; the instance must not be reused. */
 	close(): void {
 		this.#modules.pool.close();
+	}
+
+	/** Return configured key overrides without resolving or selecting a stored account. */
+	peekApiKeyOverrides(provider: string): string | undefined {
+		return this.#overrides.runtimeKey(provider) ?? this.#overrides.configKey(provider);
+	}
+
+	/** Attribute a resolved OAuth bearer to its stored physical account, not a mutable session cursor. */
+	getCredentialIdentityMatchingApiKey(provider: string, apiKey: string): string | undefined {
+		if (this.peekApiKeyOverrides(provider) !== undefined) return undefined;
+		const bearer = extractStructuredApiKeyToken(apiKey) ?? apiKey;
+		const row = this.#modules.pool
+			.entries(provider)
+			.find(entry => entry.credential.type === "oauth" && entry.credential.access === bearer);
+		return row ? (resolveCredentialStateScopeKey(provider, row.credential) ?? undefined) : undefined;
 	}
 
 	/**

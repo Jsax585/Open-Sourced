@@ -32,7 +32,7 @@ import {
 	RemoteAuthCredentialStore,
 	type SnapshotResponse,
 } from "@oh-my-pi/pi-ai/auth-broker";
-import { DEFAULT_AUTH_GATEWAY_BIND, startAuthGateway } from "@oh-my-pi/pi-ai/auth-gateway";
+import { DEFAULT_AUTH_GATEWAY_BIND, loadRouteDefinitionsFile, startAuthGateway } from "@oh-my-pi/pi-ai/auth-gateway";
 import { type GeneratedProvider, getBundledModels, getEffectiveTokenCost } from "@oh-my-pi/pi-catalog/models";
 import { type ModelKind, modelKind } from "@oh-my-pi/pi-catalog/types";
 import { getConfigRootDir, logger, VERSION } from "@oh-my-pi/pi-utils";
@@ -65,6 +65,8 @@ export interface AuthGatewayCommandArgs {
 		 * to wire token-paste plumbing into every local client.
 		 */
 		noAuth?: boolean;
+		/** JSON/JSON5 route-definition file for serve. */
+		routes?: string;
 		/**
 		 * Strict mode for `check` — additionally exercise every credential
 		 * against its provider's chat-completion endpoint. The usage probe (run
@@ -260,6 +262,10 @@ export function createSerializedRebuilder(run: (force: boolean) => Promise<void>
 }
 
 async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
+	if (flags.routes !== undefined && flags.routes.trim().length === 0)
+		throw new Error("`omp auth-gateway serve --routes` requires a file path");
+	// Validate before contacting the broker or creating private token/cache files.
+	const routes = flags.routes === undefined ? undefined : await loadRouteDefinitionsFile(flags.routes);
 	const brokerConfig = await resolveAuthBrokerConfig();
 	if (!brokerConfig) {
 		throw new Error(
@@ -268,9 +274,11 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	}
 	const bind = flags.bind ?? DEFAULT_AUTH_GATEWAY_BIND;
 	const gatewayToken = flags.noAuth ? null : await ensureToken();
+	// Management is explicitly opt-in and never shares the inference/no-auth capability.
+	const adminToken = process.env.OMP_AUTH_GATEWAY_ADMIN_TOKEN?.trim();
 
 	// Build a broker-backed AuthStorage — same pattern as discoverAuthStorage()
-	// in sdk.ts. The gateway never touches local SQLite.
+	// in sdk.ts. Credentials remain broker-only; private routing metadata has its own database.
 	const accountPool = await loadAuthBrokerAccountPool();
 	const settings = await resolveEffectiveSettings();
 	const { accountPolicies, defaultReservePct } = await loadEffectiveAuthAccountPolicyConfig({ settings });
@@ -280,6 +288,11 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		client,
 		initialSnapshot,
 		accountPool,
+		metadataCachePath: path.join(
+			getConfigRootDir(),
+			"auth-gateway",
+			`state-${Bun.SHA256.hash(brokerConfig.url.replace(/\/+$/, ""), "hex")}.db`,
+		),
 	});
 	// Refresh + usage both flow through the store's broker hooks automatically —
 	// `RemoteAuthCredentialStore.refreshOAuthCredential` and `.fetchUsageReports`.
@@ -333,6 +346,9 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		resolveModel: (id: string) => resolveGatewayModel(id, modelById, routable),
 		listModels: () => modelById.values(),
 		excludeProviders: new Set(cfgDisabledProviders.get(settings)),
+		routes,
+		allowManagement: Boolean(adminToken),
+		adminBearerTokens: adminToken ? [adminToken] : [],
 	});
 	process.stdout.write(`auth-gateway listening on ${handle.url}\n`);
 	if (gatewayToken) {
@@ -514,6 +530,8 @@ async function runStatus(flags: AuthGatewayCommandArgs["flags"]): Promise<void> 
 }
 
 export async function runAuthGatewayCommand(cmd: AuthGatewayCommandArgs): Promise<void> {
+	if (cmd.flags.routes !== undefined && cmd.action !== "serve")
+		throw new Error("`--routes` is only supported by `omp auth-gateway serve`");
 	switch (cmd.action) {
 		case "serve":
 			await runServe(cmd.flags);
