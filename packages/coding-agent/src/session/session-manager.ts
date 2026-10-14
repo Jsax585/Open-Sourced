@@ -1395,9 +1395,10 @@ export class SessionManager {
 	 * marker after this one resumed it, and a clone's original does when it
 	 * heals an entry both hold. Reads only the bytes past the frontier; when
 	 * they are whole records, this manager's next entries in order followed
-	 * only by entries that parent into known ones, keep those and extend the
-	 * frontier over all of them, and return whether it did. Otherwise the
-	 * caller republishes, and its conflict recovery keeps them.
+	 * only by entries that parent into known ones or are roots (`parentId:
+	 * null`, as after {@link resetLeaf}), keep those and extend the frontier
+	 * over all of them, and return whether it did. Otherwise the caller
+	 * republishes, and its conflict recovery keeps them.
 	 */
 	#adoptEntriesAppendedPastFrontier(sessionFile: string, durable: DurableFrontier, storedSize: number): boolean {
 		if (this.#storage.defersSyncPublish || !this.#storage.readTextRangeSync || durable.issued !== durable.confirmed)
@@ -1429,12 +1430,10 @@ export class SessionManager {
 				continue;
 			}
 			const parentId: unknown = record.parentId;
-			if (
-				typeof parentId !== "string" ||
-				foreignIds.has(record.id) ||
-				!(this.#index.has(parentId) || foreignIds.has(parentId))
-			)
-				return false;
+			const parentKnown =
+				parentId === null ||
+				(typeof parentId === "string" && (this.#index.has(parentId) || foreignIds.has(parentId)));
+			if (!parentKnown || foreignIds.has(record.id)) return false;
 			foreign.push(record);
 			foreignIds.add(record.id);
 		}

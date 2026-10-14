@@ -524,13 +524,17 @@ describe("a clone taken before its original heals an entry that missed the journ
 });
 
 describe("a turn appended after another writer's entries", () => {
-	/** A second manager resumes the journal while the first is still live; the first then appends its tail and closes. */
-	async function resumedBehindAnotherWriter(storage = new ControlledRewriteStorage()) {
+	/**
+	 * A second manager resumes the journal while the first is still live; the
+	 * first then appends its tail (a root entry with `asRoot`) and closes.
+	 */
+	async function resumedBehindAnotherWriter(storage = new ControlledRewriteStorage(), { asRoot = false } = {}) {
 		const first = await fileSession();
 		const resumed = await SessionManager.open(first.sessionFile, first.sessionDir, storage, {
 			suppressBreadcrumb: true,
 		});
 		managers.push(resumed);
+		if (asRoot) first.manager.resetLeaf();
 		first.manager.appendCustomEntry("previous-writer-tail", { n: 1 });
 		await first.manager.flush();
 		await first.manager.close();
@@ -559,6 +563,20 @@ describe("a turn appended after another writer's entries", () => {
 		await expect(resumed.flush()).resolves.toBeUndefined();
 		const reopened = await reopen(sessionFile, sessionDir);
 		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "latest turn"]);
+	});
+
+	it("reaches the journal while every full rewrite fails when the other writer's entry is a root", async () => {
+		const storage = new ControlledRewriteStorage();
+		storage.failRewrites = true;
+		const { resumed, sessionDir, sessionFile } = await resumedBehindAnotherWriter(storage, { asRoot: true });
+		resumed.appendMessage(userTurn("latest turn"));
+
+		await expect(resumed.flush()).resolves.toBeUndefined();
+		const reopened = await reopen(sessionFile, sessionDir);
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "latest turn"]);
+		expect(reopened.getEntries()).toContainEqual(
+			expect.objectContaining({ type: "custom", customType: "previous-writer-tail", parentId: null }),
+		);
 	});
 
 	it("reads back only the bytes the other writer appended", async () => {
