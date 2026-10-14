@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Added
+
+- Gateway chat and pi-native requests resolve through a shared route registry and dispatch its selected target ([#10136](https://github.com/can1357/oh-my-pi/pull/10136) by [@jroth1111](https://github.com/jroth1111)).
+- Gateway Responses streams hold metadata before output and preserve terminal failures without replaying committed content ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
+- Added gateway failure ownership and retry dispositions for credential, model, provider, and terminal errors ([#10133](https://github.com/can1357/oh-my-pi/pull/10133) by [@jroth1111](https://github.com/jroth1111)).
+
+### Changed
+
+- Gateway requests forward Responses continuation and structured-output options through both translated and pi-native transports ([#10134](https://github.com/can1357/oh-my-pi/pull/10134) by [@jroth1111](https://github.com/jroth1111)).
+
+### Fixed
+
+- Active gateway SSE inference survives the HTTP idle limit, held retries retain rotated credentials, and cross-origin clients can read explicit retry directives; failures with reported usage or no-retry intent are not transparently replayed ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
+- Explicit Responses storage does not enable disconnect recovery on hosts without that capability ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
+- Held Responses retries do not restart canonically aborted inference before output ([#10135](https://github.com/can1357/oh-my-pi/pull/10135) by [@jroth1111](https://github.com/jroth1111)).
+- Responses storage opt-out stays off, continuation retries refresh only their owning account, and JSON schemas work across Responses and Chat transports ([#10134](https://github.com/can1357/oh-my-pi/pull/10134) by [@jroth1111](https://github.com/jroth1111)).
+- Gateway errors retain authoritative provider statuses, structural cancellation, and Anthropic retry directives ([#10133](https://github.com/can1357/oh-my-pi/pull/10133) by [@jroth1111](https://github.com/jroth1111)).
+- Responses continuation IDs stay with the serving account and deployment instead of crossing account replacements, with private ownership bindings retained for 30 days across gateway restarts and hot-cache eviction; owning rows remain targeted even after session affinity is lost ([#10134](https://github.com/can1357/oh-my-pi/pull/10134) by [@jroth1111](https://github.com/jroth1111)).
+- Responses replies retain upstream IDs, and caller-owned continuation input is not mixed with internal deltas ([#10134](https://github.com/can1357/oh-my-pi/pull/10134) by [@jroth1111](https://github.com/jroth1111)).
 ## [18.10.4] - 2026-10-13
 
 ### Fixed
