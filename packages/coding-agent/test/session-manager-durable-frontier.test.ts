@@ -339,6 +339,28 @@ class HeldRemoveBackend implements SessionStorageBackend {
 	}
 }
 
+/** Indexed storage whose next drain can park until `release()`. */
+class ParkingIndexedStorage extends IndexedSessionStorage {
+	#parkedDrain: { started: PromiseWithResolvers<void>; release: PromiseWithResolvers<void> } | undefined;
+
+	/** Park the next drain until `release()`; `started` resolves once it waits. */
+	parkNextDrain(): { started: Promise<void>; release: () => void } {
+		const parked = { started: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+		this.#parkedDrain = parked;
+		return { started: parked.started.promise, release: () => parked.release.resolve() };
+	}
+
+	override async drain(): Promise<void> {
+		const parked = this.#parkedDrain;
+		if (parked) {
+			this.#parkedDrain = undefined;
+			parked.started.resolve();
+			await parked.release.promise;
+		}
+		await super.drain();
+	}
+}
+
 /**
  * Memory storage whose session delete unlinks the journal; the next delete
  * can park until `release()`, after the unlink, or before it when it then
@@ -449,6 +471,27 @@ async function reopen(sessionFile: string, sessionDir: string): Promise<SessionM
 	});
 	managers.push(reopened);
 	return reopened;
+}
+
+/** An indexed session whose backend row holds an assistant turn and the user turn "before". */
+async function indexedSession(): Promise<{
+	backend: HeldRemoveBackend;
+	storage: ParkingIndexedStorage;
+	manager: SessionManager;
+	sessionFile: string;
+}> {
+	const backend = new HeldRemoveBackend();
+	const storage = new ParkingIndexedStorage(backend);
+	await storage.initialize();
+	const manager = SessionManager.create("/cwd", "/sessions/proj", storage);
+	managers.push(manager);
+	manager.appendMessage(assistantMessage("seed"));
+	manager.appendMessage(userTurn("before"));
+	await manager.flush();
+	const sessionFile = manager.getSessionFile();
+	if (!sessionFile) throw new Error("Expected a persisted session file");
+	expect(backend.files.has(sessionFile)).toBe(true);
+	return { backend, storage, manager, sessionFile };
 }
 
 /** Make the next raw file write fail, as a full disk fails an append. */
@@ -796,6 +839,56 @@ describe("a dropped session file", () => {
 			expect(manager.getPersistenceFailure()).toBeUndefined();
 		},
 	);
+
+	it("saves a later turn and the edit on indexed storage after it fenced off an authoritative repair carrying that edit and the remove failed with the row intact (C1, C8)", async () => {
+		const { backend, storage, manager, sessionFile } = await indexedSession();
+		const entry = firstUserEntry(manager);
+		if (entry.message.role !== "user") throw new Error("Expected a user message");
+		entry.message.content = "edited before the repair";
+		const drain = storage.parkNextDrain();
+		const recovery = manager.recoverPersistenceFromCurrentState();
+		await drain.started;
+		const held = backend.holdNextRemove("before-remove");
+		const drop = manager.dropSession(sessionFile);
+		drain.release();
+		await held.started;
+		held.release();
+		await expect(recovery).resolves.toBeUndefined();
+		await expect(drop).rejects.toThrow("EIO");
+
+		manager.appendMessage(userTurn("after the failed delete"));
+		await expect(manager.flush()).resolves.toBeUndefined();
+		await storage.drain();
+		const fresh = new IndexedSessionStorage(backend);
+		await fresh.initialize();
+		const reopened = await SessionManager.open(sessionFile, "/sessions/proj", fresh, { suppressBreadcrumb: true });
+		managers.push(reopened);
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["edited before the repair", "after the failed delete"]);
+	});
+
+	it("saves a later turn by append after it fenced off an authoritative repair carrying an edit and the delete failed with the journal intact, while every full rewrite fails (C1, C5)", async () => {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		const entry = firstUserEntry(manager);
+		if (entry.message.role !== "user") throw new Error("Expected a user message");
+		entry.message.content = "edited before the repair";
+		const drain = storage.parkNextDrain();
+		const recovery = manager.recoverPersistenceFromCurrentState();
+		await drain.started;
+		const deleting = storage.parkNextDeleteToFail();
+		const drop = manager.dropSession(sessionFile);
+		drain.release();
+		await deleting.started;
+		storage.failRewrites = true;
+		deleting.fail();
+		await expect(recovery).resolves.toBeUndefined();
+		await expect(drop).rejects.toThrow("EACCES");
+
+		manager.appendMessage(userTurn("after the failed delete"));
+		await expect(manager.flush()).resolves.toBeUndefined();
+		// The edit needs the full rewrite that cannot land; the turn is appended after the journal's own bytes.
+		const reopened = await reopen(sessionFile, sessionDir);
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "after the failed delete"]);
+	});
 
 	it("lets an appendEntriesAtomically() batch already publishing commit when the delete then fails with the journal intact (C1)", async () => {
 		const { storage, manager, sessionDir, sessionFile } = await fileSession();
@@ -1254,21 +1347,6 @@ describe("a dropped session file on memory and indexed storage (C8)", () => {
 		const sessionFile = manager.getSessionFile();
 		if (!sessionFile) throw new Error("Expected a persisted session file");
 		return { storage, manager, sessionFile };
-	}
-
-	async function indexedSession() {
-		const backend = new HeldRemoveBackend();
-		const storage = new IndexedSessionStorage(backend);
-		await storage.initialize();
-		const manager = SessionManager.create("/cwd", "/sessions/proj", storage);
-		managers.push(manager);
-		manager.appendMessage(assistantMessage("seed"));
-		manager.appendMessage(userTurn("before"));
-		await manager.flush();
-		const sessionFile = manager.getSessionFile();
-		if (!sessionFile) throw new Error("Expected a persisted session file");
-		expect(backend.files.has(sessionFile)).toBe(true);
-		return { backend, storage, manager, sessionFile };
 	}
 
 	const windowWrites = [
