@@ -1607,6 +1607,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		setEditorComponent(): void {
 			// Custom editor components not supported in RPC mode
 		}
+
+		getEditorComponent() {
+			return undefined;
+		}
 	}
 
 	// Wire up UI context for tool execution (ask tool, etc.) and extensions.
@@ -2038,7 +2042,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					hasPendingAsyncWork: session.hasPendingAsyncWork(),
 					// A scheduled goal continuation will start a turn: not settled.
 					isSettled: isRpcSessionSettled(session, goalTurnScheduled),
-					queuedMessages: { steering: [...queuedMessages.steering], followUp: [...queuedMessages.followUp] },
+					queuedMessages: {
+						steering: [...queuedMessages.steering],
+						followUp: [...queuedMessages.followUp],
+						liveSteered: queuedMessages.liveSteered,
+					},
 					todoPhases: session.getTodoPhases(),
 					fastModeEnabled: session.isFastModeEnabled(),
 					tokensPerSecond: calculateTokensPerSecond(session.messages, session.isStreaming),

@@ -2,9 +2,21 @@
 
 ## [Unreleased]
 
+## [18.11.0] - 2026-10-14
+
 ### Fixed
 
-- Fixed memory saves slowing down and the memory database growing quadratically with the number of stored memories, because any two memories mentioning a date or words like "today" were linked even when unrelated ([#15013](https://github.com/can1357/oh-my-pi/pull/15013) by [@tickernelz](https://github.com/tickernelz)).
+- Fixed polyphonic recall ranking unrelated memories above relevant ones when the query shared only a common word such as "that" with an extracted fact subject ([#15512](https://github.com/can1357/oh-my-pi/issues/15512)).
+
+## [18.9.0] - 2026-10-11
+
+### Added
+
+- Exported `clipRecallContent` for applications that need to format content consistently with Mnemopi recall previews.
+
+### Fixed
+
+- Fixed memory-save performance degradation and excessive memory-database growth when date-related terms such as “today” appeared in otherwise unrelated memories.
 
 ## [18.8.8] - 2026-10-10
 

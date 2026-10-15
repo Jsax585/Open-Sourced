@@ -31,8 +31,10 @@ import type { DescribeContext, NativeNode, NativeScreen, NativeSurfaceProvider, 
 import { STDOUT_BACKLOG_CLEAR_BYTES, setAltScreenActive, type Terminal } from "./terminal";
 import { classifyTerminalMultiplexerModule, terminalMultiplexerSessions } from "./terminal-multiplexer";
 import {
+	directPlacementLift,
 	encodeKittyDeleteAllImages,
 	encodeKittyDeleteImage,
+	encodeKittyDeletePlacement,
 	encodeKittyPlacementLine,
 	ImageProtocol,
 	isImageProtocolForced,
@@ -45,6 +47,7 @@ import {
 	TERMINAL,
 } from "./terminal-capabilities";
 import { compositeLineAt } from "./render/composite";
+import { tmuxMultiplexer } from "./multiplexers/tmux";
 import {
 	Ellipsis,
 	getWidthConfigEpoch,
@@ -55,6 +58,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "./utils";
+import { tmuxClientRendersSixel } from "./tmux";
 
 /** Full-attribute reset terminating each rendered content row. */
 export const SEGMENT_RESET = "\x1b[0m";
@@ -249,10 +253,6 @@ export interface Component {
 	 * last time.
 	 */
 	render(width: number): readonly string[];
-
-	/** Inline decision panels must keep displaced settled transcript rows in
-	 * native scrollback even when mounted inside a transient editor container. */
-	readonly retireDisplacedTranscript?: boolean;
 
 	/**
 	 * Describe the component semantically for a Tern Surface Protocol
@@ -642,6 +642,13 @@ interface HardwareCursorState {
 	visible: boolean;
 }
 
+/** A cursor-positioned image owned by a mutable viewport, never by history. */
+interface LiveImagePlacement {
+	imageId: number;
+	placementId: number;
+	line: string;
+}
+
 interface PreparedLine {
 	raw: string;
 	width: number;
@@ -812,6 +819,10 @@ export class TUI extends Container {
 	// rows the paint prepended for a short viewport. Negative while prepended
 	// blanks outweigh replaced rows; zero on ordinary frames.
 	#providerViewportPadTop = 0;
+	// Whether native history holds rows the provider committed since the last
+	// destructive reset. Only paints write history and only a destructive reset
+	// erases it; an `append` resize replay keeps the rows it replays beneath.
+	#providerHistoryWritten = false;
 	// Viewport-relative row of the hardware cursor after the last normal paint
 	// (0 = parked at the viewport top). A resize reflows the normal buffer
 	// before the app hears about it; terminals keep the cursor attached to its
@@ -981,6 +992,9 @@ export class TUI extends Container {
 	// Caps how many inline images render as live graphics; older ones fall back
 	// to text via a purge + full redraw. Cap is configured by the host app.
 	#imageBudget = new ImageBudget(DEFAULT_MAX_INLINE_IMAGES, () => this.requestRender());
+	#screenImagePlacements = new Map<number, LiveImagePlacement>();
+	#altImagePlacements = new Map<number, LiveImagePlacement>();
+	#nextImagePlacementId = 1;
 	#ghosttyInitialImageDelayDone = false;
 	#ghosttyInitialImageDelayTimer: RenderTimer | undefined;
 	#ghosttyImageReadyAtMs = 0;
@@ -1162,6 +1176,8 @@ export class TUI extends Container {
 
 	#purgeInlineImages(): void {
 		const transmittedIds = this.#imageBudget.takeAllTransmittedIds();
+		this.#screenImagePlacements.clear();
+		this.#altImagePlacements.clear();
 		if (TERMINAL.imageProtocol !== ImageProtocol.Kitty) return;
 		for (const id of transmittedIds) {
 			this.terminal.write(encodeKittyDeleteImage(id));
@@ -1353,6 +1369,27 @@ export class TUI extends Container {
 	}
 
 	/**
+	 * Rows of native history the last paint left on screen above a mutable
+	 * viewport that reached the bottom row, or `undefined` when that paint left
+	 * rows free below it (or none happened, or a destructive reset will repaint
+	 * from row zero). Rows above a bottom-reaching viewport may already sit in
+	 * native scrollback, which a later shrink cannot pull back down.
+	 */
+	getFilledHistoryRows(): number | undefined {
+		if (!this.#hasEverRendered || this.#clearScrollbackOnNextRender) return undefined;
+		const height = this.terminal.rows;
+		if (this.#providerWindow.length === 0 || this.#providerViewportTop + this.#providerWindow.length < height) {
+			return undefined;
+		}
+		return Math.min(this.#providerViewportTop, height);
+	}
+
+	/** Whether native history holds rows the frame provider committed since the last destructive reset. */
+	hasProviderHistory(): boolean {
+		return this.#providerHistoryWritten && !this.#clearScrollbackOnNextRender;
+	}
+
+	/**
 	 * Probe for opt-in normal-buffer click capture. The provider is read every
 	 * frame; while it returns true (and no fullscreen overlay owns the
 	 * display) the terminal reports button clicks as SGR events for inline
@@ -1493,6 +1530,9 @@ export class TUI extends Container {
 		this.terminal.onSixelSupport?.(supported => {
 			if (!supported || this.#stopped || this.#nativeLive || this.terminal.tspExpected) return;
 			if (isImageProtocolForced()) return;
+			// tmux answers DA1 for its own emulator; only its record of the
+			// attached client says whether SIXEL reaches the outer terminal.
+			if (tmuxMultiplexer.isInside() && !tmuxClientRendersSixel()) return;
 			// Keep consuming an already-requested XTSMGRAPHICS reply until it
 			// arrives or times out, even though DA1 has established support.
 			this.#enableSixelProtocol();
@@ -1710,7 +1750,7 @@ export class TUI extends Container {
 		this.#resizeSettleTimer?.cancel();
 		this.#resizeSettleTimer = undefined;
 		if (this.#altActive || this.#resizeAltActive) {
-			this.terminal.write(`${this.#takePendingAltEnter()}${this.#keyboardEnhancementExit()}\x1b[?1049l`);
+			this.terminal.write(`${this.#takePendingAltEnter()}${this.#altScreenExit()}`);
 			setAltScreenActive(false);
 			this.#altActive = false;
 			this.#resizeAltActive = false;
@@ -2021,7 +2061,7 @@ export class TUI extends Container {
 		this.#suppressResizeUntil = this.#renderScheduler.now() + 100;
 		this.#altPreviousLines = [];
 		this.#altPreparedRows = [];
-		const exitSequence = `${this.#keyboardEnhancementExit()}\x1b[?1049l`;
+		const exitSequence = this.#altScreenExit();
 		// Only the provider plan frame emits a pending exit, and an exit already
 		// pending (a fused overlay close) owns that slot.
 		if (this.#frameProvider !== undefined && this.#pendingAltExit === "") {
@@ -2550,7 +2590,7 @@ export class TUI extends Container {
 		this.#cancelResizeProbe();
 		if (this.#resizeAltActive) {
 			this.#resizeAltActive = false;
-			this.terminal.write(`${this.#takePendingAltEnter()}${this.#keyboardEnhancementExit()}\x1b[?1049l`);
+			this.terminal.write(`${this.#takePendingAltEnter()}${this.#altScreenExit()}`);
 			setAltScreenActive(false);
 		}
 		if (this.#altActive || this.#pendingAltExit) {
@@ -2562,7 +2602,7 @@ export class TUI extends Container {
 			const mouseExit = this.#mouseTracking !== "off" ? MOUSE_TRACKING_OFF : "";
 			const exitSequence = this.#pendingAltExit
 				? `${this.#takePendingAltEnter()}${this.#pendingAltExit}${mouseExit}`
-				: `${mouseExit}${this.#keyboardEnhancementExit()}\x1b[?1049l`;
+				: `${mouseExit}${this.#altScreenExit()}`;
 			this.terminal.write(exitSequence);
 			setAltScreenActive(false);
 			this.#altActive = false;
@@ -3148,34 +3188,57 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Rewrite a Kitty direct-placement line for the viewport row it is written
-	 * at, clipping to the visible slice (see {@link encodeKittyPlacementLine})
-	 * under the placement id resolved by the budget's epoch tracking (see
-	 * {@link ImageBudget.resolvePlacementEmit}). `screenRow` -1 (write position
-	 * unknown) and non-placement image lines (placeholder grids, sixel, iTerm2,
-	 * tmux-wrapped) pass through verbatim.
+	 * Remove placements before their viewport cells are replaced. History uses
+	 * separate placement ids, so deleting a live copy cannot erase scrollback.
 	 */
-	#imageLineSequence(line: string, screenRow: number, frameRow: number, committedTo: number): string {
+	#retireImagePlacements(
+		placements: Map<number, LiveImagePlacement>,
+		lines: readonly string[],
+		top: number,
+		repaint: boolean,
+	): string {
+		let output = "";
+		for (const [row, placement] of placements) {
+			if (!repaint && lines[row - top] === placement.line) continue;
+			output += encodeKittyDeletePlacement(placement.imageId, placement.placementId);
+			placements.delete(row);
+		}
+		return output;
+	}
+
+	/**
+	 * Clip a Kitty direct placement and record its live owner; history
+	 * placements have no mutable owner. Other direct placements (SIXEL,
+	 * iTerm2) have no delete command and composite over whatever pixels they
+	 * land on, so the rows they paint above `screenRow` are erased first.
+	 */
+	#imageLineSequence(
+		line: string,
+		screenRow: number,
+		placements: Map<number, LiveImagePlacement> | undefined,
+		placementRow: number,
+	): string {
 		if (screenRow < 0) return line;
 		const parsed = parseKittyDirectPlacementLine(line);
-		if (!parsed) return line;
-		// The emitted placement attaches from the block's first *visible* row
-		// (the clip drops the rows above the viewport), so epoch tracking keys
-		// on that row — not the block origin, which may be long committed.
-		const placement = this.#imageBudget.resolvePlacementEmit(
-			parsed.imageId,
-			frameRow >= 0 ? frameRow - Math.min(parsed.rows - 1, screenRow) : -1,
-			committedTo,
+		if (!parsed) {
+			const lift = Math.min(directPlacementLift(line), screenRow);
+			return lift > 0 ? `\x1b[${lift}A${`${ERASE_LINE}\x1b[B`.repeat(lift)}${line}` : line;
+		}
+		const previous = placements?.get(placementRow);
+		const placementId = previous?.placementId ?? this.#nextImagePlacementId++;
+		const erase = previous ? encodeKittyDeletePlacement(previous.imageId, previous.placementId) : "";
+		placements?.set(placementRow, { imageId: parsed.imageId, placementId, line });
+		return (
+			erase +
+			encodeKittyPlacementLine({
+				imageId: parsed.imageId,
+				placementId,
+				columns: parsed.columns,
+				rows: parsed.rows,
+				screenRow,
+				imageHeightPx: this.#imageBudget.getPlacementGeometry(parsed.imageId)?.heightPx ?? 0,
+			})
 		);
-		if (!placement) return line;
-		return encodeKittyPlacementLine({
-			imageId: parsed.imageId,
-			placementId: placement.placementId,
-			columns: parsed.columns,
-			rows: parsed.rows,
-			screenRow,
-			imageHeightPx: placement.heightPx,
-		});
 	}
 
 	#terminalLine(line: PreparedLine): string {
@@ -3413,6 +3476,7 @@ export class TUI extends Container {
 			this.#providerViewportTop = 0;
 			this.#providerWindow = [];
 			this.#providerPreparedRows = [];
+			this.#providerHistoryWritten = false;
 		}
 		// The viewport stays anchored directly below whatever history remains on
 		// screen. Appending K history rows moves the anchor down by K; the write
@@ -3449,7 +3513,7 @@ export class TUI extends Container {
 			// reset forgot are named explicitly here — their tracking is gone, so
 			// nothing downstream could find them again.
 			for (const id of this.#imageBudget.takeResetPurgeIds()) buffer += encodeKittyDeleteImage(id);
-			this.#imageBudget.resetPlacementEpochs();
+			this.#screenImagePlacements.clear();
 		}
 		if (TERMINAL.imageProtocol === ImageProtocol.Kitty) {
 			for (const id of this.#imageBudget.takePurgeIds()) buffer += encodeKittyDeleteImage(id);
@@ -3472,7 +3536,6 @@ export class TUI extends Container {
 		// image the terminal no longer had and every inline image vanished
 		// after a settled width resize.
 		if (destructiveReset) buffer += `${LINE_TERMINATOR}\x1b[H\x1b[2J\x1b[3J`;
-		for (const sequence of this.#imageBudget.takeTransmits()) append(sequence);
 		const diffable =
 			geometryStable &&
 			historyRows.length === 0 &&
@@ -3480,6 +3543,8 @@ export class TUI extends Container {
 			!this.#forceViewportRepaintOnNextRender &&
 			!destructiveReset &&
 			this.#providerWindow.length > 0;
+		buffer += this.#retireImagePlacements(this.#screenImagePlacements, prepared.lines, newTop, !diffable);
+		for (const sequence of this.#imageBudget.takeTransmits()) append(sequence);
 		if (diffable) {
 			for (let index = 0; index < rows; index++) {
 				if (
@@ -3498,9 +3563,8 @@ export class TUI extends Container {
 					current,
 					width,
 					newTop + index,
-					-1,
-					-1,
 					this.#osc66SpacerGlyphWidth(prepared.lines, index),
+					{ imagePlacements: this.#screenImagePlacements },
 				)}`;
 			}
 			if (this.#providerWindow.length > rows && newTop + rows < height) {
@@ -3525,8 +3589,6 @@ export class TUI extends Container {
 						preparedHistory.rows[index]!,
 						width,
 						Math.min(screenRow, height - 1),
-						-1,
-						-1,
 						this.#osc66SpacerGlyphWidth(preparedHistory.lines, index),
 						{ blankRow: compactReplay },
 					),
@@ -3540,10 +3602,12 @@ export class TUI extends Container {
 						prepared.rows[index]!,
 						width,
 						Math.min(screenRow, height - 1),
-						-1,
-						-1,
 						this.#osc66SpacerGlyphWidth(prepared.lines, index),
-						{ blankRow: compactReplay },
+						{
+							blankRow: compactReplay,
+							imagePlacements: index < replayViewportRows ? undefined : this.#screenImagePlacements,
+							imageRow: newTop + index,
+						},
 					),
 				);
 				screenRow++;
@@ -3605,6 +3669,7 @@ export class TUI extends Container {
 		this.#resizeBurstWidthChanged = false;
 		this.#resizeBurstResized = false;
 		this.#previousFrameLength = mutablePreparedLines.length;
+		if (preparedHistory.lines.length > 0 || replayViewportRows > 0) this.#providerHistoryWritten = true;
 		this.#clearScrollbackOnNextRender = false;
 		this.#forceViewportRepaintOnNextRender = false;
 		this.#hasEverRendered = true;
@@ -3705,8 +3770,7 @@ export class TUI extends Container {
 			// restore it in the fused exit or later frames see matching states
 			// and inline click/hover stays dead until the setting toggles.
 			const mouseEnter = wantMouse !== "off" && this.#mouseTracking === "off" ? MOUSE_TRACKING_ON : "";
-			const enhancementExit = this.#keyboardEnhancementExit();
-			const exitSequence = `${mouseExit}${mouseEnter}${enhancementExit}\x1b[?1049l`;
+			const exitSequence = `${mouseExit}${mouseEnter}${this.#altScreenExit()}`;
 			// Session replacement finishes while its fullscreen selector still
 			// covers the old normal buffer. Fuse the restore into the destructive
 			// repaint so no stale frame can become visible between writes.
@@ -4164,10 +4228,8 @@ export class TUI extends Container {
 		line: PreparedLine,
 		width: number,
 		screenRow = -1,
-		frameRow = -1,
-		committedTo = -1,
 		spacerGlyphWidth = -1,
-		options?: { blankRow?: boolean },
+		options?: { blankRow?: boolean; imagePlacements?: Map<number, LiveImagePlacement>; imageRow?: number },
 	): string {
 		// End every rewrite at column zero. ConPTY can materialize a pending
 		// wrap before a following cursor-addressing sequence even while DECAWM is
@@ -4184,7 +4246,9 @@ export class TUI extends Container {
 		if (spacerGlyphWidth >= 0) {
 			rewrite = spacerGlyphWidth >= width ? "" : `${SEGMENT_RESET}\x1b[${spacerGlyphWidth}C${ERASE_TO_END_OF_LINE}`;
 		} else if (line.isImage) {
-			rewrite = ERASE_LINE + this.#imageLineSequence(line.line, screenRow, frameRow, committedTo);
+			rewrite =
+				ERASE_LINE +
+				this.#imageLineSequence(line.line, screenRow, options?.imagePlacements, options?.imageRow ?? screenRow);
 		} else {
 			const terminalLine = this.#terminalLine(line);
 			if (options?.blankRow) {
@@ -4247,14 +4311,15 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Resolve the active keyboard-enhancement exit sequence. Falls back to popping
-	 * kitty whenever a custom Terminal exposes its push sequence but predates the
-	 * `keyboardEnhancementExitSequence` property.
+	 * Leave the alternate screen: pop its keyboard-enhancement frame first, then
+	 * re-assert the main-screen mode for terminals that lose it on `?1049l`.
+	 * Falls back to popping kitty whenever a custom Terminal exposes its push
+	 * sequence but predates the `keyboardEnhancementExitSequence` property.
 	 */
-	#keyboardEnhancementExit(): string {
+	#altScreenExit(): string {
 		const exit = this.terminal.keyboardEnhancementExitSequence;
-		if (exit !== undefined) return exit ?? "";
-		return this.terminal.kittyEnableSequence ? "\x1b[<u" : "";
+		const keyboardExit = exit !== undefined ? (exit ?? "") : this.terminal.kittyEnableSequence ? "\x1b[<u" : "";
+		return `${keyboardExit}\x1b[?1049l${this.terminal.keyboardEnhancementRestoreSequence ?? ""}`;
 	}
 
 	/**
@@ -4331,6 +4396,7 @@ export class TUI extends Container {
 				prepared.rows.some((_row, r) =>
 					this.#rowNeedsRewrite(this.#altPreviousLines, this.#altPreparedRows, prepared.lines, prepared.rows, r),
 				));
+		prelude += this.#retireImagePlacements(this.#altImagePlacements, prepared.lines, 0, full);
 		let rowsBuffer = "";
 		for (let r = 0; r < height; r++) {
 			if (full) {
@@ -4346,9 +4412,8 @@ export class TUI extends Container {
 				prepared.rows[r]!,
 				width,
 				r,
-				-1,
-				-1,
 				this.#osc66SpacerGlyphWidth(prepared.lines, r),
+				{ imagePlacements: this.#altImagePlacements },
 			);
 		}
 		this.#altPreviousLines = prepared.lines;
