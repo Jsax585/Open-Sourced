@@ -630,8 +630,9 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 			timeout: timeoutSeconds,
 		});
 		// Cursor answers the model from the streamed stdout, not from the final
-		// `shellResult`, and the stream cannot be retracted. When a `tool_result`
-		// handler may replace the output, nothing is streamed until it has run.
+		// `shellResult`, and the stream cannot be retracted. When an extension
+		// declared a rewriting `tool_result` handler, nothing is streamed until the
+		// handlers have run.
 		const holdOutput = tool instanceof ExtensionToolWrapper && tool.mayRewriteResult();
 
 		this.options.emitEvent?.({ type: "tool_execution_start", toolCallId, toolName, args: toolArgs });

@@ -1305,6 +1305,11 @@ export class ExtensionRunner {
 		return false;
 	}
 
+	/** Whether any extension registered a `tool_result` handler with `{ rewrites: true }`. */
+	hasToolResultRewriters(): boolean {
+		return this.extensions.some(ext => ext.rewritesToolResults === true);
+	}
+
 	getMessageRenderer(customType: string): MessageRenderer | undefined {
 		for (const ext of this.extensions) {
 			const renderer = ext.messageRenderers.get(customType);

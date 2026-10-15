@@ -38,8 +38,17 @@ import {
 } from "@oh-my-pi/pi-coding-agent/cursor-bridge-tools";
 
 import { EditTool } from "@oh-my-pi/pi-coding-agent/edit";
-import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
-import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import {
+	type ExtensionFactory,
+	ExtensionRunner,
+	ExtensionToolWrapper,
+	loadExtensionFromFactory,
+} from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { createWarpEventBridgeExtension } from "@oh-my-pi/pi-coding-agent/modes/warp-events";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { BUILTIN_TOOLS, GrepTool, ReadTool, type Tool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { TodoTool } from "@oh-my-pi/pi-coding-agent/tools/todo";
@@ -47,6 +56,7 @@ import type { TruncationMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { AdviseTool } from "../src/advisor/advise-tool";
+import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 function yoloToolContext(): AgentToolContext {
 	return { settings: Settings.isolated({ "tools.approvalMode": "yolo" }) } as AgentToolContext;
@@ -2412,14 +2422,22 @@ describe("Cursor native frames carry extension tool_result rewrites (issue #1581
 	const RAW = Array.from({ length: 50 }, (_, i) => `raw line ${i + 1}`).join("\n");
 	const REWRITTEN = "raw line 1\n[context-mode: output cut, full text saved]\nraw line 50";
 
-	/** A runner whose `tool_result` handler replaces every result, or none when `rewrites` is false. */
-	function rewritingRunner(rewrites: boolean): ExtensionRunner {
-		return {
-			...passthroughRunner(),
-			hasHandlers: (event: string) => rewrites || event !== "tool_result",
-			emitToolResult: async () => (rewrites ? { content: [{ type: "text", text: REWRITTEN }] } : undefined),
-		} as unknown as ExtensionRunner;
+	async function runnerFor(factory: ExtensionFactory): Promise<ExtensionRunner> {
+		const runtime = new ExtensionRuntime();
+		const extension = await loadExtensionFromFactory(factory, os.tmpdir(), new EventBus(), runtime);
+		return new ExtensionRunner(
+			[extension],
+			runtime,
+			os.tmpdir(),
+			SessionManager.inMemory(os.tmpdir()),
+			new ModelRegistry(createInMemoryAuthStorage()),
+		);
 	}
+
+	/** Replaces every result, declared as a rewriter the way context-mode registers. */
+	const declaredRewriter: ExtensionFactory = pi => {
+		pi.on("tool_result", () => ({ content: [{ type: "text", text: REWRITTEN }] }), { rewrites: true });
+	};
 
 	async function dispatch(handlers: CursorExecHandlers, message: ExecServerMessage["message"]) {
 		const written: Buffer[] = [];
@@ -2451,7 +2469,7 @@ describe("Cursor native frames carry extension tool_result rewrites (issue #1581
 			.flatMap(message => (message.case === "execClientMessage" ? [message.value.message] : []));
 	}
 
-	async function streamedStdout(runner: ExtensionRunner): Promise<string> {
+	async function streamedStdout(factory: ExtensionFactory): Promise<string[]> {
 		// Streams its output in chunks before returning it.
 		const bash: AgentTool = {
 			name: "bash",
@@ -2468,29 +2486,31 @@ describe("Cursor native frames carry extension tool_result rewrites (issue #1581
 		};
 		const handlers = new CursorExecHandlers({
 			cwd: os.tmpdir(),
-			tools: new Map<string, AgentTool>([["bash", new ExtensionToolWrapper(bash, runner)]]),
+			tools: new Map<string, AgentTool>([["bash", new ExtensionToolWrapper(bash, await runnerFor(factory))]]),
 			getToolContext: () => yoloToolContext(),
 		});
 		const frames = await dispatch(handlers, {
 			case: "shellStreamArgs",
 			value: create(ShellArgsSchema, { toolCallId: "shell-15817", command: "emit" }),
 		});
-		return frames
-			.flatMap(frame =>
-				frame.case === "shellStream" && frame.value.event.case === "stdout" ? [frame.value.event.value.data] : [],
-			)
-			.join("");
+		return frames.flatMap(frame =>
+			frame.case === "shellStream" && frame.value.event.case === "stdout" ? [frame.value.event.value.data] : [],
+		);
 	}
 
-	it("streams only the rewritten shell output when a handler replaces it", async () => {
-		expect(await streamedStdout(rewritingRunner(true))).toBe(REWRITTEN);
+	it("streams only the rewritten shell output when a declared rewriter replaces it", async () => {
+		expect(await streamedStdout(declaredRewriter)).toEqual([REWRITTEN]);
 	});
 
-	it("keeps streaming the raw shell output when no handler can replace it", async () => {
-		expect(await streamedStdout(rewritingRunner(false))).toBe(`${RAW}\n`);
+	it("keeps streaming the raw shell output live under an observe-only handler", async () => {
+		// The Warp bridge observes `tool_result` in every interactive session.
+		const chunks = await streamedStdout(createWarpEventBridgeExtension());
+		expect(chunks.length).toBeGreaterThan(1);
+		expect(chunks.join("")).toBe(`${RAW}\n`);
 	});
 
-	it("answers a native grep frame with the rewritten text, note included", async () => {
+	/** Answers a native grep frame in `outputMode` under a declared rewriter. */
+	async function rewrittenGrep(outputMode?: string) {
 		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "cursor-grep-15817-"));
 		try {
 			await Bun.write(path.join(cwd, "needles.txt"), `${RAW}\n`);
@@ -2498,25 +2518,42 @@ describe("Cursor native frames carry extension tool_result rewrites (issue #1581
 			const handlers = new CursorExecHandlers({
 				cwd,
 				tools: new Map<string, Tool>([["grep", new GrepTool(session)]]),
-				createGrepTool: createBridgeGrepFactory(session, rewritingRunner(true)),
+				createGrepTool: createBridgeGrepFactory(session, await runnerFor(declaredRewriter)),
 				getToolContext: () => yoloToolContext(),
 			});
 			const frames = await dispatch(handlers, {
 				case: "grepArgs",
-				value: create(GrepArgsSchema, { toolCallId: "grep-15817", pattern: "raw", path: cwd }),
+				value: create(GrepArgsSchema, { toolCallId: "grep-15817", pattern: "raw", path: cwd, outputMode }),
 			});
 			const answer = frames.find(frame => frame.case === "grepResult");
 			if (answer?.case !== "grepResult" || answer.value.result.case !== "success")
 				throw new Error("expected grep success");
-			const union = answer.value.result.value.workspaceResults[cwd]?.result;
-			if (union?.case !== "content") throw new Error("expected grep content");
-			// Cursor prints each entry's file name, then its lines; together they must be the rewrite.
-			const rendered = union.value.matches
-				.flatMap(entry => [entry.file, ...entry.matches.map(line => `${line.lineNumber}:${line.content}`)])
-				.join("\n");
-			expect(rendered).toBe(REWRITTEN);
+			return { success: answer.value.result.value, union: answer.value.result.value.workspaceResults[cwd]?.result };
 		} finally {
 			await removeWithRetries(cwd);
 		}
+	}
+
+	it("answers a native grep frame with the rewritten text, note included", async () => {
+		const { union } = await rewrittenGrep();
+		if (union?.case !== "content") throw new Error("expected grep content");
+		// Cursor prints each entry's file name, then its lines; together they must be the rewrite.
+		const rendered = union.value.matches
+			.flatMap(entry => [entry.file, ...entry.matches.map(line => `${line.lineNumber}:${line.content}`)])
+			.join("\n");
+		expect(rendered).toBe(REWRITTEN);
+	});
+
+	it("keeps the requested output mode when answering with the rewritten text", async () => {
+		const files = await rewrittenGrep("files_with_matches");
+		expect(files.success.outputMode).toBe("files_with_matches");
+		expect(files.union?.case === "files" ? files.union.value.files : undefined).toEqual([REWRITTEN]);
+
+		// Cursor prints a count entry as `path:count`, so count mode answers as content.
+		const count = await rewrittenGrep("count");
+		expect(count.success.outputMode).toBe("content");
+		expect(count.union?.case === "content" ? count.union.value.matches.map(entry => entry.file) : undefined).toEqual([
+			REWRITTEN,
+		]);
 	});
 });

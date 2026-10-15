@@ -12,6 +12,7 @@ import {
 import {
 	type ComputerSafetyCheck,
 	type ImageContent,
+	type MaybeRewrittenToolResult,
 	type Static,
 	type TextContent,
 	TOOL_RESULT_REWRITTEN,
@@ -235,11 +236,11 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 	}
 
 	/**
-	 * Whether an extension `tool_result` handler may replace this tool's result.
-	 * Output streamed before that handler runs cannot be taken back.
+	 * Whether an extension declared a `tool_result` handler that may replace this
+	 * tool's result. Output streamed before that handler runs cannot be taken back.
 	 */
 	mayRewriteResult(): boolean {
-		return this.runner.hasHandlers("tool_result");
+		return this.runner.hasToolResultRewriters();
 	}
 
 	async execute(
@@ -517,13 +518,14 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				// `coerceToolResult` in agent-loop), so replacement failure content reaches
 				// the model while the call remains an error — the original exception text is
 				// no longer forced through, which previously discarded the replacement.
-				return {
+				const rewritten: AgentToolResult<TDetails, TParameters> & MaybeRewrittenToolResult = {
 					content: modifiedContent,
 					details: modifiedDetails,
 					providerMetadata: result.providerMetadata,
 					...(effectiveError ? { isError: true } : {}),
 					[TOOL_RESULT_REWRITTEN]: true,
-				} as AgentToolResult<TDetails, TParameters>;
+				};
+				return rewritten;
 			}
 		}
 
