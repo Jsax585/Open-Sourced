@@ -225,6 +225,20 @@ class ReadCountingStorage extends ControlledRewriteStorage {
 	}
 }
 
+/** Forces conflict recovery to inspect the complete journal and fail its first retry. */
+class FullConflictStorage extends ControlledRewriteStorage {
+	#writeAttempts = 0;
+
+	override readTextRangeSync(_fpath: string, _start: number, _end: number): string {
+		throw new Error("Synthetic tail read failure");
+	}
+
+	override writeLinesSync(fpath: string, lines: Iterable<string>, options?: SessionStorageWriteOptions): void {
+		if (++this.#writeAttempts === 2) throw new Error("EROFS: synthetic recovery rewrite failure");
+		super.writeLinesSync(fpath, lines, options);
+	}
+}
+
 /**
  * An in-memory backend for {@link IndexedSessionStorage} that counts every
  * write to a path and can hold the next `remove()` until released, then
@@ -1669,6 +1683,33 @@ describe("a clone taken before its original heals an entry that missed the journ
 			"bash result",
 		]);
 	});
+});
+
+it("republishes the original graph when a shared entry's parent changed before a foreign append", async () => {
+	const first = await fileSession();
+	const resumed = await SessionManager.open(first.sessionFile, first.sessionDir, new FullConflictStorage(), {
+		suppressBreadcrumb: true,
+	});
+	managers.push(resumed);
+	const shared = first.manager.getEntries().find(entry => entry.type === "message" && entry.message.role === "user");
+	if (shared?.type !== "message" || shared.message.role !== "user") throw new Error("Expected the shared user turn");
+	shared.parentId = shared.id;
+	await first.manager.rewriteEntries();
+	first.manager.appendCustomEntry("previous-writer-tail", { n: 1 });
+	await first.manager.close();
+
+	resumed.appendMessage(userTurn("recovery write fails"));
+	resumed.appendMessage(userTurn("latest turn"));
+	await resumed.flush();
+
+	const reopened = await reopen(first.sessionFile, first.sessionDir);
+	expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "recovery write fails", "latest turn"]);
+	expect(reopened.getBranch()).toContainEqual(
+		expect.objectContaining({
+			type: "message",
+			message: expect.objectContaining({ content: [expect.objectContaining({ text: "seed" })] }),
+		}),
+	);
 });
 
 describe("a turn appended after another writer's entries", () => {

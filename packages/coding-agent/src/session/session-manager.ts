@@ -1372,7 +1372,14 @@ export class SessionManager {
 				continue;
 			}
 			shared.add(entry.id);
-			if (foreign.length > 0 || this.#entries[shared.size - 1]?.id !== entry.id) extendsFrontier = false;
+			const sharedEntry = this.#index.get(entry.id);
+			if (
+				foreign.length > 0 ||
+				this.#entries[shared.size - 1]?.id !== entry.id ||
+				sharedEntry?.parentId !== entry.parentId
+			) {
+				extendsFrontier = false;
+			}
 		}
 		if (durable === undefined || shared.size < durable.confirmed) extendsFrontier = false;
 		let at = this.#entries.length;
