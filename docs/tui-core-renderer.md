@@ -259,6 +259,18 @@ Never retransmit full base64 image data on every frame. Kitty Unicode
 placeholders remain capability-gated and can be overridden with the existing
 image environment settings.
 
+iTerm2 has no image store, so an `Image` renders one inline-image strip per
+row (`encodeImageRowsAsync`, or the synchronous `encodeImageRows` when the rows
+go straight to scrollback) instead of one image anchored at its block's last
+row. Each row then shows exactly its slice of the image wherever the frame puts
+it: clipped at the viewport top, split across a history commit, or repainted
+alone. Each strip row starts with blank cells that the strip paints over, so
+layout measures it at its real width. GIFs, which iTerm2 animates, images
+whose size the header does not give, EXIF-oriented photos, which iTerm2
+rotates, sources with a non-RGB colour profile or past the encoder's size
+limits, and images the native decoder cannot read keep the single anchored
+image.
+
 ## 7. Core invariants
 
 1. Products decide finality and submit finalized or declared append-only stable

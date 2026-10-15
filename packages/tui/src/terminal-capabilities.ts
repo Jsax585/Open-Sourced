@@ -1,4 +1,4 @@
-import { encodeSixel } from "@oh-my-pi/pi-natives";
+import { encodeImageRows, encodeSixel } from "@oh-my-pi/pi-natives";
 import { $env, isBunTestRuntime, isTerminalHeadless, isWsl } from "@oh-my-pi/pi-utils/env";
 import { writeTerminalSequence } from "./active-terminal";
 import { sendDesktopNotification, shouldDeliverDesktopNotification } from "./desktop-notify";
@@ -54,6 +54,23 @@ const IMAGE_MARKER_SCAN_LIMIT = 512;
 const SIXEL_MARKER_SCAN_LIMIT = 128;
 const KITTY_PLACEHOLDER_HIGH_SURROGATE = KITTY_PLACEHOLDER.charCodeAt(0);
 const KITTY_PLACEHOLDER_LOW_SURROGATE = KITTY_PLACEHOLDER.charCodeAt(1);
+
+/**
+ * Whether `start` directly follows an iTerm2 strip row's blank-cell prefix:
+ * spaces from the row start, then one cursor-back (`ESC [ n D`). A wide
+ * strip's prefix pushes its marker past the scan window.
+ */
+function followsITerm2StripPrefix(line: string, start: number): boolean {
+	let i = start - 1;
+	if (line.charCodeAt(i) !== 0x44) return false;
+	const lastDigit = --i;
+	while (i >= 0 && line.charCodeAt(i) >= 0x30 && line.charCodeAt(i) <= 0x39) i--;
+	if (i === lastDigit || line.charCodeAt(i) !== 0x5b || line.charCodeAt(i - 1) !== 0x1b) return false;
+	for (i -= 2; i >= 0; i--) {
+		if (line.charCodeAt(i) !== 0x20) return false;
+	}
+	return true;
+}
 
 /** Terminal capability details used for rendering and protocol selection. */
 export class TerminalInfo {
@@ -111,7 +128,11 @@ export class TerminalInfo {
 		}
 
 		const limit = Math.min(line.length, IMAGE_MARKER_SCAN_LIMIT);
-		let protocolMatches = start + protocol.length <= limit;
+		let protocolMatches =
+			start + protocol.length <= limit ||
+			(protocol === ImageProtocol.Iterm2 &&
+				start + protocol.length <= line.length &&
+				followsITerm2StripPrefix(line, start));
 		for (let offset = 0; protocolMatches && offset < protocol.length; offset++) {
 			protocolMatches = line.charCodeAt(start + offset) === protocol.charCodeAt(offset);
 		}
@@ -133,6 +154,15 @@ export class TerminalInfo {
 			const code = line.charCodeAt(i);
 			if (code !== 0x1b && code !== KITTY_PLACEHOLDER_HIGH_SURROGATE) continue;
 			if (this.hasImageMarkerAt(line, i)) return true;
+		}
+		// A wide iTerm2 strip row: its marker follows the blank-cell prefix.
+		if (this.imageProtocol === ImageProtocol.Iterm2 && line.length > limit && line.charCodeAt(0) === 0x20) {
+			let i = 1;
+			while (line.charCodeAt(i) === 0x20) i++;
+			if (line.charCodeAt(i) !== 0x1b || line.charCodeAt(i + 1) !== 0x5b) return false;
+			i += 2;
+			while (line.charCodeAt(i) >= 0x30 && line.charCodeAt(i) <= 0x39) i++;
+			return this.hasImageMarkerAt(line, i + 1);
 		}
 		return false;
 	}
@@ -827,7 +857,20 @@ export interface ImageRenderOptions {
 	 * Without a provider, renderImage encodes synchronously.
 	 */
 	sixel?: (widthPx: number, heightPx: number) => string | null | undefined;
+	/**
+	 * iTerm2 image rows: base64 PNG strips of `rowHeightPx` covering the image
+	 * at `widthPx`, one per terminal row; `undefined` while an encode is
+	 * pending, `null` when it failed. With a provider, iTerm2 images render as
+	 * `lines`, one self-contained image row per line; without one, or when the
+	 * encode failed, they keep the single cursor-anchored sequence.
+	 */
+	iterm2Rows?: (widthPx: number, rowHeightPx: number, rows: number) => readonly string[] | null | undefined;
 }
+
+// Strip resolution cap, about a cell's width on a 2x display. Wider strips add
+// payload, and iTerm2 sometimes shows freshly repainted wide strips as smeared
+// bands for a moment.
+const ITERM2_ROW_MAX_PX_PER_COLUMN = 16;
 
 // Default cell dimensions - updated by TUI when terminal responds to query
 let cellDimensions: CellDimensions = { widthPx: 9, heightPx: 18 };
@@ -1257,6 +1300,23 @@ export function encodeSixelNow(base64Data: string, widthPx: number, heightPx: nu
 	}
 }
 
+/**
+ * Base64 PNG row strips for `base64Data`, encoded on the JS thread; `null`
+ * when the encode fails. For output that cannot wait for an off-thread encode.
+ */
+export function encodeImageRowsNow(
+	base64Data: string,
+	widthPx: number,
+	rowHeightPx: number,
+	rows: number,
+): string[] | null {
+	try {
+		return encodeImageRows(new Uint8Array(Buffer.from(base64Data, "base64")), widthPx, rowHeightPx, rows);
+	} catch {
+		return null;
+	}
+}
+
 export function renderImage(
 	base64Data: string,
 	imageDimensions: ImageDimensions,
@@ -1334,6 +1394,38 @@ export function renderImage(
 		return { sequence, rows };
 	}
 	if (TERMINAL.imageProtocol === ImageProtocol.Iterm2) {
+		if (options.iterm2Rows) {
+			// A cursor-anchored image is emitted on its block's last row and moves
+			// the cursor up to its origin, so whenever the rows above are not its
+			// own (the block straddles the viewport top, or its head was committed
+			// to scrollback) it lands on other content. One strip per row has no
+			// anchor: every row draws exactly its slice in place.
+			const columns = fit.columns;
+			const rowHeightPerWidth = cellDims.heightPx / cellDims.widthPx / columns;
+			// At least one pixel per strip row: a narrower strip would round its
+			// row height up and leave the bottom of a small, upscaled image empty.
+			const widthPx = Math.min(
+				Math.max(imageDimensions.widthPx, Math.ceil(1 / rowHeightPerWidth)),
+				columns * ITERM2_ROW_MAX_PX_PER_COLUMN,
+			);
+			// The native encoder scales geometry past its decode limits down itself.
+			const rowHeightPx = Math.max(1, Math.floor(widthPx * rowHeightPerWidth));
+			const strips = options.iterm2Rows(widthPx, rowHeightPx, fit.rows);
+			// Undefined while the provider's encode is pending: the rows stay reserved.
+			if (strips === undefined) return { rows: fit.rows };
+			if (strips !== null) {
+				// Blank cells first, so layout measures the row as `columns` wide; the
+				// strip then paints over them from the row start and iTerm2 advances
+				// the cursor past it. TerminalInfo.hasImageMarkerAt recognises this
+				// prefix, which can push the marker past its scan window.
+				const blank = `${" ".repeat(columns)}\x1b[${columns}D`;
+				const lines = strips.map(
+					strip => blank + encodeITerm2(strip, { width: columns, height: 1, preserveAspectRatio: false }),
+				);
+				return { lines, rows: fit.rows };
+			}
+			// The native decoder cannot read this image; iTerm2 decodes the original.
+		}
 		const sequence = encodeITerm2(base64Data, {
 			width: fit.columns,
 			height: "auto",

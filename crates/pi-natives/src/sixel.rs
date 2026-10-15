@@ -1,15 +1,24 @@
-//! SIXEL terminal-image encoding and bounded decoding.
+//! Terminal-image encoding: SIXEL sequences, per-row image strips, and bounded
+//! SIXEL decoding.
 //!
 //! Encodes PNG/JPEG/WebP/GIF images for terminal display and decodes captured
 //! SIXEL control strings back to bounded PNG attachments.
 //!
 //! General-purpose image processing stays in `Bun.Image`; the native boundary
-//! exists because SIXEL has no equivalent decoder there.
+//! exists because SIXEL has no equivalent decoder there, and `Bun.Image` can
+//! neither crop nor run synchronously for output that cannot wait.
 
 use std::io::Cursor;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use icy_sixel::{EncodeOptions, SixelImage, sixel_encode};
-use image::{DynamicImage, ImageFormat, ImageReader, RgbaImage, imageops::FilterType};
+use image::{
+	DynamicImage, ExtendedColorType, ImageDecoder, ImageEncoder, ImageFormat, ImageReader,
+	RgbaImage,
+	codecs::png::PngEncoder,
+	imageops::{self, FilterType},
+	metadata::Orientation,
+};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
@@ -19,6 +28,13 @@ const MAX_DECODED_PIXELS: usize = 4 * 1024 * 1024;
 const MAX_IMAGE_EDGE: usize = 8192;
 const MAX_SIXEL_BYTES: usize = 20 * 1024 * 1024;
 const MAX_PNG_BYTES: usize = 20 * 1024 * 1024;
+/// Largest decoded source `encode_image_rows` inflates: a 6K RGBA8 screenshot
+/// (about 81 MiB) fits, an 8192×8192 RGBA8 raster (256 MiB) does not.
+const MAX_ROW_SOURCE_BYTES: u64 = 128 * 1024 * 1024;
+/// Largest total of ICC profile bytes `encode_image_rows` repeats across its
+/// strips: a Display P3 profile (about 0.5 KiB) on hundreds of rows fits,
+/// a 1 MiB profile on 1,000 rows (1 GiB of strips) does not.
+const MAX_ROW_PROFILE_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Decode one complete SIXEL control string into a PNG on the calling thread.
 ///
@@ -77,7 +93,7 @@ fn guard_dimensions(width: usize, height: usize) -> Result<()> {
 		|| height > MAX_IMAGE_EDGE
 		|| width.saturating_mul(height) > MAX_DECODED_PIXELS
 	{
-		return Err(Error::from_reason("SIXEL image dimensions exceed the decode limit"));
+		return Err(Error::from_reason("Image dimensions exceed the decode limit"));
 	}
 	Ok(())
 }
@@ -221,6 +237,168 @@ fn encode_image(bytes: &[u8], target_width_px: u32, target_height_px: u32) -> Re
 	let options = EncodeOptions::default();
 	sixel_encode(rgba.as_raw(), target_width_px as usize, target_height_px as usize, &options)
 		.map_err(|err| Error::from_reason(format!("Failed to encode SIXEL: {err}")))
+}
+
+/// Encode image bytes as one base64 PNG per terminal row, on the calling
+/// thread.
+///
+/// The image is scaled to `target_width_px` with its aspect ratio kept
+/// (squashed if it would be taller than `rows` × `row_height_px`), then cut
+/// into `rows` strips of `row_height_px`; rows past the image bottom are
+/// transparent. Geometry beyond the decode limits is scaled down with its
+/// shape kept, so the strips can be smaller than requested. Each strip
+/// carries the source's embedded RGB ICC profile, if any. A terminal that
+/// draws each strip into exactly one cell row (such as iTerm2 inline images)
+/// shows the image row by row, so any subset of rows can be repainted,
+/// clipped, or scrolled without the others. Prefer
+/// [`encode_image_rows_async`] unless the caller cannot wait.
+///
+/// # Errors
+/// Returns an error if a dimension is zero, if `rows` cannot fit the decode
+/// limit even at one pixel each, if the source is wider or taller than the
+/// 8192 px decode edge or would decode to more than 128 MiB, if the image
+/// carries an EXIF orientation other than none or a non-RGB ICC profile (the
+/// strips could not honour either), if its ICC profile repeated on every row
+/// would exceed 16 MiB, or if decoding, resizing, or PNG encoding fails.
+#[napi]
+pub fn encode_image_rows(
+	bytes: Uint8Array,
+	target_width_px: u32,
+	row_height_px: u32,
+	rows: u32,
+) -> Result<Vec<String>> {
+	encode_rows(bytes.as_ref(), target_width_px, row_height_px, rows)
+}
+
+/// Same result as [`encode_image_rows`], but the decode, resize and encodes
+/// run on the native blocking pool, so they never stall the JavaScript event
+/// loop.
+///
+/// # Errors
+/// Rejects if a dimension is zero, if `rows` cannot fit the decode limit
+/// even at one pixel each, if the source is wider or taller than the 8192 px
+/// decode edge or would decode to more than 128 MiB, if the image carries an
+/// EXIF orientation other than none or a non-RGB ICC profile, if its ICC
+/// profile repeated on every row would exceed 16 MiB, or if decoding,
+/// resizing, or PNG encoding fails.
+#[napi]
+pub fn encode_image_rows_async(
+	bytes: Uint8Array,
+	target_width_px: u32,
+	row_height_px: u32,
+	rows: u32,
+) -> task::Promise<Vec<String>> {
+	let bytes = bytes.to_vec();
+	task::blocking("image.rows", (), move |_| {
+		encode_rows(&bytes, target_width_px, row_height_px, rows)
+	})
+}
+
+fn encode_rows(
+	bytes: &[u8],
+	target_width_px: u32,
+	row_height_px: u32,
+	rows: u32,
+) -> Result<Vec<String>> {
+	if target_width_px == 0 || row_height_px == 0 || rows == 0 {
+		return Err(Error::from_reason("Image row geometry must be greater than zero"));
+	}
+	let (target_width_px, row_height_px) = fit_row_geometry(target_width_px, row_height_px, rows);
+	let total_height_px = row_height_px.saturating_mul(rows);
+	guard_dimensions(target_width_px as usize, total_height_px as usize)?;
+
+	// Header probe before the full decode. A source too large to inflate in the
+	// worker, one needing EXIF reorientation (strips carry no EXIF, and the
+	// caller sized the rows from the stored raster), or one whose colour profile
+	// cannot describe RGB strips (CMYK, grey) or is too large to repeat per row
+	// is left to a viewer of the original. An RGB profile is copied into every
+	// strip.
+	let mut header = ImageReader::new(Cursor::new(bytes))
+		.with_guessed_format()
+		.map_err(|e| Error::from_reason(format!("Failed to detect image format: {e}")))?
+		.into_decoder()
+		.map_err(|e| Error::from_reason(format!("Failed to decode image: {e}")))?;
+	let (source_width, source_height) = header.dimensions();
+	if source_width as usize > MAX_IMAGE_EDGE
+		|| source_height as usize > MAX_IMAGE_EDGE
+		|| header.total_bytes() > MAX_ROW_SOURCE_BYTES
+	{
+		return Err(Error::from_reason("Image dimensions exceed the decode limit"));
+	}
+	if header
+		.orientation()
+		.is_ok_and(|orientation| orientation != Orientation::NoTransforms)
+	{
+		return Err(Error::from_reason("Image needs EXIF reorientation"));
+	}
+	let icc_profile = header.icc_profile().ok().flatten();
+	// The ICC header names the profile's colour space at bytes 16..20.
+	if icc_profile
+		.as_deref()
+		.is_some_and(|profile| profile.get(16..20) != Some(&b"RGB "[..]))
+	{
+		return Err(Error::from_reason("Image has a non-RGB colour profile"));
+	}
+	if icc_profile
+		.as_ref()
+		.is_some_and(|profile| profile.len() as u64 * u64::from(rows) > MAX_ROW_PROFILE_BYTES)
+	{
+		return Err(Error::from_reason("Image colour profile is too large to repeat per row"));
+	}
+	let source = decode_image_from_bytes(bytes)?;
+	if source.width() == 0 || source.height() == 0 {
+		return Err(Error::from_reason("Image has no pixels"));
+	}
+	let scaled_height = (u64::from(source.height()) * u64::from(target_width_px))
+		.div_ceil(u64::from(source.width()))
+		.clamp(1, u64::from(total_height_px)) as u32;
+	let scaled = if source.width() == target_width_px && source.height() == scaled_height {
+		source.into_rgba8()
+	} else {
+		source
+			.resize_exact(target_width_px, scaled_height, FilterType::Lanczos3)
+			.into_rgba8()
+	};
+
+	let mut strips = Vec::with_capacity(rows as usize);
+	let mut png = Vec::new();
+	for row in 0..rows {
+		let mut strip = RgbaImage::new(target_width_px, row_height_px);
+		let top = row * row_height_px;
+		if top < scaled_height {
+			let height = row_height_px.min(scaled_height - top);
+			let source_rows = imageops::crop_imm(&scaled, 0, top, target_width_px, height);
+			imageops::replace(&mut strip, &*source_rows, 0, 0);
+		}
+		png.clear();
+		let mut encoder = PngEncoder::new(&mut png);
+		if let Some(profile) = &icc_profile {
+			encoder
+				.set_icc_profile(profile.clone())
+				.map_err(|err| Error::from_reason(format!("Failed to embed ICC profile: {err}")))?;
+		}
+		encoder
+			.write_image(strip.as_raw(), target_width_px, row_height_px, ExtendedColorType::Rgba8)
+			.map_err(|err| Error::from_reason(format!("Failed to encode image row as PNG: {err}")))?;
+		strips.push(STANDARD.encode(&png));
+	}
+	Ok(strips)
+}
+
+/// Scales the strip width and row height down by one factor until the whole
+/// strip stack fits `MAX_IMAGE_EDGE` and `MAX_DECODED_PIXELS`.
+fn fit_row_geometry(width: u32, row_height: u32, rows: u32) -> (u32, u32) {
+	let width_px = f64::from(width);
+	let height_px = f64::from(row_height) * f64::from(rows);
+	let scale = (MAX_DECODED_PIXELS as f64 / (width_px * height_px))
+		.sqrt()
+		.min(MAX_IMAGE_EDGE as f64 / width_px)
+		.min(MAX_IMAGE_EDGE as f64 / height_px);
+	if scale >= 1.0 {
+		return (width, row_height);
+	}
+	let shrink = |px: u32| ((f64::from(px) * scale).floor() as u32).max(1);
+	(shrink(width), shrink(row_height))
 }
 
 fn decode_image_from_bytes(bytes: &[u8]) -> Result<DynamicImage> {

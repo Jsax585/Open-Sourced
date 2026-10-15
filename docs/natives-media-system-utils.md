@@ -22,7 +22,7 @@ This document covers the media/system/conversion exports in `@oh-my-pi/pi-native
 - `crates/pi-natives/src/task.rs`
 - `packages/natives/native/index.d.ts`
 
-There is no native `PhotonImage` class or `image.rs` in the addon. General-purpose image processing stays in `Bun.Image`; the native image surface supplies SIXEL encoding/decoding, bounded SVG rasterization, and snapcompact frame rendering. Filesystem isolation is a separate subsystem.
+There is no native `PhotonImage` class or `image.rs` in the addon. General-purpose image processing stays in `Bun.Image`; the native image surface supplies SIXEL encoding/decoding, per-row PNG strips, bounded SVG rasterization, and snapcompact frame rendering. Filesystem isolation is a separate subsystem.
 
 ## JS API ↔ Rust export/module mapping
 
@@ -33,6 +33,7 @@ There is no native `PhotonImage` class or `image.rs` in the addon. General-purpo
 | `new LiveWebRtcPeer(...)`                | `LiveWebRtcPeer`               | `live.rs`        |
 | `encodeSixel(bytes, width, height)`      | `encode_sixel`                 | `sixel.rs`       |
 | `decodeSixelToPng(bytes)`                | `decode_sixel_to_png`          | `sixel.rs`       |
+| `encodeImageRows(bytes, width, rowHeight, rows)` | `encode_image_rows`    | `sixel.rs`       |
 | `rasterizeSvg(bytes, maxWidth, maxHeight)` | `rasterize_svg`               | `svg.rs`         |
 | `pdfToMarkdown(bytes)`                   | `pdf_to_markdown`              | `pdf.rs`         |
 | `renderSnapcompactPng(text, options)`    | `render_snapcompact_png`       | `snapcompact.rs` |
@@ -66,6 +67,10 @@ There is no native `PhotonImage` class or `image.rs` in the addon. General-purpo
 The configured `image` features enable PNG, JPEG, WebP, GIF, and BMP decoding. Invalid target dimensions (`0` width or height) fail with `Target SIXEL dimensions must be greater than zero`.
 
 `decodeSixelToPng(bytes)` synchronously converts one SIXEL control string into PNG bytes. It preflights raster declarations, repeats, and row advances before decoding, then checks the decoded dimensions again. Limits are 20 MiB input/output, 8192 pixels per edge, and 4,194,304 decoded pixels; malformed or oversized input throws.
+
+#### Per-row PNG strips
+
+`encodeImageRows(bytes, targetWidthPx, rowHeightPx, rows)` scales the image to `targetWidthPx` with its aspect ratio kept (squashed if it would be taller than `rows` × `rowHeightPx`) and returns `rows` base64 PNG strips of `targetWidthPx`×`rowHeightPx`, top to bottom; rows past the image bottom are transparent, and each strip carries the source's embedded RGB ICC profile, if any. The TUI draws each strip into one iTerm2 cell row, so any subset of an image's rows can be repainted, clipped at the viewport top, or committed to scrollback. Geometry past the same 8192-pixel edge and 4,194,304-pixel limits is scaled down with its shape kept, so the strips can be smaller than requested; a zero dimension, more rows than fit at one pixel each, a source wider or taller than 8192 pixels or decoding to more than 128 MiB, a non-RGB ICC profile, an ICC profile that would total more than 16 MiB across the rows, or an EXIF orientation the strips cannot carry throws. `encodeImageRowsAsync` returns the same strips from the native blocking pool.
 
 ### SVG rasterization
 

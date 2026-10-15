@@ -90,6 +90,10 @@
 - Added `parksAsBackground(toolName, details)`, `asyncJobState(details)`, `isSettledJobFrame(details)` and `settleWithJobFrame(component, frame, toolCallId)` (`chat/tool-execution`): whether a returned call's card stays live for its background job's frames (`task` always; `bash` and `eval` under native rendering), the job state a frame reports, and settling the card with the job's last frame (a cancelled job keeps its output and seals as cancelled)
 - `BashToolDetails.async.state` and `EvalToolDetails.async.state` gain `cancelled` for a job killed before it finished
 
+### Fixed
+
+- Fixed iTerm2 inline images drawing over the wrong rows once they scroll past the top of the window, which left the wrong part of the image on screen and stacked copies of its top rows in scrollback until a resize redrew the transcript ([#15483](https://github.com/can1357/oh-my-pi/pull/15483) by [@saulcapital](https://github.com/saulcapital))
+
 ## [18.10.1] - 2026-10-12
 
 ### Added

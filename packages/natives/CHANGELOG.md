@@ -36,6 +36,7 @@
 
 - Added in-process `env`, `du`, `chmod`, `fold`, `rmdir`, `od`, `df`, `uptime`, `id`, and `dd` shell builtins matching GNU coreutils 9.x options, output, and exit codes (`chmod` and `id` on Unix only; `dd` is disabled with the destructive set by `PI_DISABLE_UUTILS_DESTRUCTIVE`).
 - Added an in-process `nl` shell builtin (ported from uutils coreutils 0.8.0, matching GNU `nl`), with header/body/footer numbering styles including `pBRE` regex styles, logical-page section delimiters, `-l` blank-line grouping, and `ln`/`rn`/`rz` number formats.
+- Added `encodeImageRows` and `encodeImageRowsAsync`: scale an image to a width and cut it into one base64 PNG strip per terminal row, for terminals such as iTerm2 that draw each strip into a single cell row ([#15483](https://github.com/can1357/oh-my-pi/pull/15483) by [@saulcapital](https://github.com/saulcapital)).
 
 ## [18.10.0] - 2026-10-12
 

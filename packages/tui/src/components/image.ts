@@ -1,6 +1,7 @@
-import { encodeSixelAsync } from "@oh-my-pi/pi-natives";
+import { encodeImageRowsAsync, encodeSixelAsync } from "@oh-my-pi/pi-natives";
 import { getKittyGraphics } from "../kitty-graphics";
 import {
+	encodeImageRowsNow,
 	encodeSixelNow,
 	getCellDimensions,
 	getImageDimensions,
@@ -637,10 +638,17 @@ function normalizeCap(cap: number): number {
 	return Math.max(0, Math.trunc(cap));
 }
 
+/** Newest native encode of one kind: its target key and, once settled, the result (`null` on failure). */
+interface EncodeSlot<T> {
+	current?: { key: string; result?: T | null };
+}
+
 export class Image implements Component {
 	#base64Data: string;
 	#mimeType: string;
 	#dimensions: ImageDimensions;
+	/** False when `#dimensions` is the 800x600 stand-in for an unreadable header. */
+	#sizeKnown: boolean;
 	#theme: ImageTheme;
 	#options: ImageOptions;
 	#budget?: ImageBudget;
@@ -658,8 +666,8 @@ export class Image implements Component {
 	// (its rows may already be committed to native scrollback).
 	#renderedGraphicRows = 0;
 	#native?: NativeNode;
-	/** Newest SIXEL encode: its target size and, once settled, the sequence (`null` on failure). */
-	#sixel?: { widthPx: number; heightPx: number; sequence?: string | null };
+	readonly #sixel: EncodeSlot<string> = {};
+	readonly #iterm2Rows: EncodeSlot<readonly string[]> = {};
 
 	constructor(
 		base64Data: string,
@@ -672,7 +680,9 @@ export class Image implements Component {
 		this.#mimeType = mimeType;
 		this.#theme = theme;
 		this.#options = options;
-		this.#dimensions = dimensions || getImageDimensions(base64Data, mimeType) || { widthPx: 800, heightPx: 600 };
+		const known = dimensions || getImageDimensions(base64Data, mimeType);
+		this.#dimensions = known || { widthPx: 800, heightPx: 600 };
+		this.#sizeKnown = known != null;
 		this.#budget = options.budget;
 		this.#imageId = options.budget ? options.budget.acquireId(options.imageKey) : undefined;
 	}
@@ -699,34 +709,44 @@ export class Image implements Component {
 	}
 
 	/**
-	 * SIXEL sequence for a target size. A new size starts the encode off the JS
+	 * Native encode for `key` in `slot`. A new key starts the encode off the JS
 	 * thread and answers `undefined` until it settles; the settled encode
 	 * invalidates the cached lines and requests a repaint. A render bound for
 	 * scrollback cannot wait, so it encodes synchronously.
 	 */
-	#sixelSequence(widthPx: number, heightPx: number): string | null | undefined {
-		const current = this.#sixel;
-		const sameSize = current !== undefined && current.widthPx === widthPx && current.heightPx === heightPx;
-		if (sameSize && current.sequence !== undefined) return current.sequence;
+	#encoded<T>(
+		slot: EncodeSlot<T>,
+		key: string,
+		encodeNow: () => T | null,
+		encodeLater: () => Promise<T>,
+	): T | null | undefined {
+		const current = slot.current;
+		const sameKey = current?.key === key;
+		if (sameKey && current.result !== undefined) return current.result;
 		if (scrollbackRenderDepth > 0) {
 			// Replacing the entry makes a still-pending async encode settle as stale.
-			const sequence = encodeSixelNow(this.#base64Data, widthPx, heightPx);
-			this.#sixel = { widthPx, heightPx, sequence };
-			return sequence;
+			const result = encodeNow();
+			slot.current = { key, result };
+			return result;
 		}
-		if (sameSize) return undefined;
-		const request: { widthPx: number; heightPx: number; sequence?: string | null } = { widthPx, heightPx };
-		this.#sixel = request;
-		const settle = (sequence: string | null): void => {
-			request.sequence = sequence;
-			if (this.#sixel !== request) return;
+		if (sameKey) return undefined;
+		const request: { key: string; result?: T | null } = { key };
+		slot.current = request;
+		const settle = (result: T | null): void => {
+			request.result = result;
+			if (slot.current !== request) return;
 			this.invalidate();
 			if (this.#options.requestRender) this.#options.requestRender();
 			else this.#budget?.requestRender();
 		};
-		encodeSixelAsync(new Uint8Array(Buffer.from(this.#base64Data, "base64")), widthPx, heightPx).then(settle, () =>
-			settle(null),
-		);
+		// A missing native export (stale addon) throws instead of rejecting.
+		let encoding: Promise<T>;
+		try {
+			encoding = encodeLater();
+		} catch (error) {
+			encoding = Promise.reject(error);
+		}
+		encoding.then(settle, () => settle(null));
 		return undefined;
 	}
 
@@ -781,8 +801,13 @@ export class Image implements Component {
 			this.#cachedCellHeightPx === cellDimensions.heightPx &&
 			this.#cachedKittyUnicodePlaceholders === kittyUnicodePlaceholders &&
 			(!transmitsSeparately || this.#budget?.shouldTransmit(imageId) !== true) &&
-			// Cached rows reserved for a pending SIXEL encode must not reach scrollback.
-			!(scrollbackRenderDepth > 0 && this.#sixel !== undefined && this.#sixel.sequence === undefined)
+			// Cached rows reserved for a pending native encode must not reach scrollback.
+			!(
+				scrollbackRenderDepth > 0 &&
+				[this.#sixel, this.#iterm2Rows].some(
+					slot => slot.current !== undefined && slot.current.result === undefined,
+				)
+			)
 		) {
 			return this.#cachedLines;
 		}
@@ -801,7 +826,33 @@ export class Image implements Component {
 				maxHeightCells: this.#options.maxHeightCells,
 				imageId: this.#imageId,
 				includeTransmit: needsTransmit,
-				sixel: (widthPx, heightPx) => this.#sixelSequence(widthPx, heightPx),
+				sixel: (widthPx, heightPx) =>
+					this.#encoded(
+						this.#sixel,
+						`${widthPx}x${heightPx}`,
+						() => encodeSixelNow(this.#base64Data, widthPx, heightPx),
+						() => encodeSixelAsync(new Uint8Array(Buffer.from(this.#base64Data, "base64")), widthPx, heightPx),
+					),
+				// Strips are cut to the measured size, so an unknown size would squash
+				// them; iTerm2 sizes the original itself. It also animates GIFs, which
+				// strips would freeze: sniff the `GIF8` magic (base64 `R0lGOD`), since
+				// MIME strings vary in case and parameters.
+				iterm2Rows:
+					!this.#sizeKnown || this.#base64Data.startsWith("R0lGOD")
+						? undefined
+						: (widthPx, rowHeightPx, rows) =>
+								this.#encoded(
+									this.#iterm2Rows,
+									`${widthPx}x${rowHeightPx}x${rows}`,
+									() => encodeImageRowsNow(this.#base64Data, widthPx, rowHeightPx, rows),
+									() =>
+										encodeImageRowsAsync(
+											new Uint8Array(Buffer.from(this.#base64Data, "base64")),
+											widthPx,
+											rowHeightPx,
+											rows,
+										),
+								),
 			});
 
 			if (result?.transmit && this.#imageId != null && this.#budget !== undefined) {
@@ -809,8 +860,10 @@ export class Image implements Component {
 			}
 
 			if (result?.lines) {
-				// Unicode placeholders: the image is already a block of real text-cell
-				// lines (line 0 carries the virtual-placement APC). No cursor moves.
+				// Rows that carry the image themselves, so no cursor moves: Kitty
+				// Unicode placeholders (line 0 carries the virtual-placement APC) or
+				// iTerm2 strips (each line draws its own image row in place, so the
+				// renderer can clip, repaint, or commit any subset of them).
 				lines = result.lines;
 			} else if (result) {
 				// Direct placement: return `rows` lines so TUI accounts for image
