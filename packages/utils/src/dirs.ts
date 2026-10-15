@@ -1087,9 +1087,17 @@ export function getMnemopiEmbedRuntimeDir(): string {
 	return dirs.rootSubdir(path.join("run", "mnemopi"), "state");
 }
 
+/** Isolate broker sockets, leases, and metadata without moving config or credentials. */
+function namespacedDaemonRoot(root: string): string {
+	const namespace = process.env.OMP_DAEMON_NAMESPACE;
+	if (!namespace) return root;
+	const key = Bun.hash.wyhash(namespace).toString(16).padStart(16, "0");
+	return path.join(root, `ns-${key}`);
+}
+
 /** Root directory containing every per-project daemon runtime scope (~/.omp/run/daemons; XDG default: $XDG_STATE_HOME/omp/run/daemons). */
 export function getDaemonRuntimeRoot(): string {
-	return dirs.rootSubdir(path.join("run", "daemons"), "state");
+	return namespacedDaemonRoot(dirs.rootSubdir(path.join("run", "daemons"), "state"));
 }
 
 /** Get the daemon runtime directory for a project (~/.omp/run/daemons/<hash>; XDG default: $XDG_STATE_HOME/omp/run/daemons/<hash>). */
@@ -1100,7 +1108,7 @@ export function getDaemonRuntimeDir(projectDir: string): string {
 
 /** Root directory containing every machine-global daemon service scope (~/.omp/run/daemons/global; XDG default: $XDG_STATE_HOME/omp/run/daemons/global). Shared across profiles. */
 export function getGlobalDaemonRuntimeRoot(): string {
-	return dirs.baseRootSubdir(path.join("run", "daemons", "global"), "state");
+	return namespacedDaemonRoot(dirs.baseRootSubdir(path.join("run", "daemons", "global"), "state"));
 }
 
 /** Get a profile-independent runtime directory for a machine-global daemon service. */

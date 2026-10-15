@@ -551,6 +551,7 @@ These affect where coding-agent stores data and which process-local settings ove
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `OMP_PROFILE`                                       | Canonical named profile selector; wins over `PI_PROFILE` even when explicitly empty                                        |
 | `PI_PROFILE`                                        | Legacy profile selector used only when `OMP_PROFILE` is undefined                                                          |
+| `OMP_DAEMON_NAMESPACE`                              | Optional broker namespace. Non-empty values add a bounded hash-keyed subdirectory to project and global daemon runtime roots; unset/empty preserves existing paths. Config, credentials, and other state stay shared. Use a distinct value per supervised seat so broker children inherit that seat's cgroup; this is not a security boundary. |
 | `PI_CONFIG_DIR`                                     | Config root dirname under home (default `.omp`)                                                                            |
 | `PI_CODING_AGENT_DIR`                               | Full agent-directory override for the default profile only; named profiles ignore it                                       |
 | `PI_CODING_AGENT_SESSION_DIR`                       | Initial session-directory override consumed by launch argument parsing                                                     |
