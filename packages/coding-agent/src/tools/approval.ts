@@ -33,7 +33,10 @@ export {
 } from "./approval-cache";
 
 export type ApprovalPolicy = "allow" | "deny" | "prompt";
-export type ApprovalMode = "always-ask" | "always-ask-cached" | "write" | "yolo";
+
+/** Every approval mode: the type below and `isApprovalMode` read from one list. */
+const APPROVAL_MODES = ["always-ask", "always-ask-cached", "write", "yolo"] as const;
+export type ApprovalMode = (typeof APPROVAL_MODES)[number];
 
 /** The slice of `AgentToolContext` that approval resolution actually reads. */
 export type ApprovalContextSource = {
@@ -59,10 +62,9 @@ type ApprovalSubject = Pick<
 	readonly legacyName?: string;
 };
 
-const APPROVAL_MODES: ReadonlySet<ApprovalMode> = new Set(["always-ask", "always-ask-cached", "write", "yolo"]);
-
+/** Whether a runtime value names a supported approval mode. */
 function isApprovalMode(value: unknown): value is ApprovalMode {
-	return typeof value === "string" && APPROVAL_MODES.has(value as ApprovalMode);
+	return typeof value === "string" && APPROVAL_MODES.some(mode => mode === value);
 }
 
 function asPolicyMap(value: unknown): Record<string, unknown> {

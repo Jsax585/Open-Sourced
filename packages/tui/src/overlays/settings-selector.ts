@@ -87,8 +87,6 @@ const PREVIEWED_SETTINGS = new Set([
 ]);
 /** The byte a cancel key sends: native menu closes go through the same cancel handling as the key. */
 const ESCAPE = "\x1b";
-/** What an action row's one-option menu reports when its choice is taken. */
-const ACTION_RUN = "run";
 
 /** Footer hint set of the settings overlay, by what currently owns the keys. */
 type SettingsHintMode = "search" | "plugins" | "sections" | "rows" | "rows-sections";
@@ -1123,7 +1121,7 @@ export class SettingsSelectorComponent implements Component {
 				// open (it closes itself), else directly. The row's value never changes.
 				const field = list.openSubmenuFor(id);
 				if (field instanceof SelectFormField) {
-					field.selectList.handleNativeEvent({ type: "activate", key: "", item: ACTION_RUN });
+					field.selectList.handleNativeEvent({ type: "activate", key: "", item: "run" });
 					return;
 				}
 				this.#runAction(def.path);
@@ -1739,8 +1737,8 @@ export class SettingsSelectorComponent implements Component {
 		return createSettingsSelectField(
 			def.label,
 			def.description,
-			[{ value: ACTION_RUN, label: `Run ${def.label}` }],
-			ACTION_RUN,
+			[{ value: "run", label: `Run ${def.label}` }],
+			"run",
 			() => {
 				this.#runAction(def.path);
 				// No value: the row keeps what it had, and SettingsList closes the menu.

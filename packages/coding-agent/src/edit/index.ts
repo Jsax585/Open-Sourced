@@ -405,7 +405,7 @@ export class EditTool implements AgentTool<TInput> {
 	 * `always-ask-cached` keys: every file the payload writes — section targets
 	 * plus move/rename destinations, mirroring {@link approval}.
 	 */
-	approvalCacheTargets(args: unknown): readonly string[] | undefined {
+	readonly approvalCacheTargets = (args: unknown): readonly string[] | undefined => {
 		const { paths, fileOps } = this.#inspect(args);
 		const targets = [...paths];
 		for (const op of fileOps) if (op.kind === "move" && op.to !== undefined) targets.push(op.to);
@@ -415,7 +415,7 @@ export class EditTool implements AgentTool<TInput> {
 			if (key !== undefined) keys.push(key);
 		}
 		return keys.length > 0 ? keys : undefined;
-	}
+	};
 
 	matcherDigest(args: unknown): string | undefined {
 		const digest = this.#inspect(args)

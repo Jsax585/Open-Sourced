@@ -62,7 +62,7 @@ function approvalDialogRememberLabel(always: boolean): string {
 }
 
 /** Whether the prompt has a grant to record at all; without one the remember checkbox is pointless. */
-function approvalDialogRemembers(options: ApprovalDialogOptions): boolean {
+function approvalDialogCanRemember(options: ApprovalDialogOptions): boolean {
 	return options.exactGrant === true || options.folderLabel !== undefined;
 }
 
@@ -75,7 +75,7 @@ function approvalDialogAnswers(
 	rememberAlways: boolean,
 ): readonly { id: ApprovalDialogAnswerId; label: string }[] {
 	const answers: { id: ApprovalDialogAnswerId; label: string }[] = [];
-	if (approvalDialogRemembers(options)) {
+	if (approvalDialogCanRemember(options)) {
 		answers.push({ id: "remember", label: approvalDialogRememberLabel(rememberAlways) });
 	}
 	if (options.folderLabel !== undefined) {
@@ -205,7 +205,7 @@ export class ApprovalDialogComponent implements Component {
 			if (armed) this.#finish("approve");
 			return;
 		}
-		if (approvalDialogRemembers(this.options) && matchesAppRemember(keyData)) {
+		if (approvalDialogCanRemember(this.options) && matchesAppRemember(keyData)) {
 			this.#toggleRemember();
 			return;
 		}
@@ -394,13 +394,12 @@ export class ApprovalDialogComponent implements Component {
 							title: `Approve this call and remember ${folderLabel} ${this.#rememberAlways ? "for every session" : "for this session only"}${folderKey ? `  ${formatTooltipKey(folderKey)}` : ""}`,
 						}),
 					];
-		const remembersFile = this.#rememberAlways && this.options.exactGrant === true;
 		const approve = actionButton(this.options.exactGrant === true ? "Approve File" : "Approve", "approve", {
 			...(approveKey ? { keys: approveKey } : {}),
 			tone: "accent",
-			title: `${this.options.exactGrant === true ? `Approve this call and remember it ${remembersFile ? "for every session" : "for this session only"}` : "Approve this call (a command is never remembered by its text)"}${approveKey ? `  ${formatTooltipKey(approveKey)}` : ""}`,
+			title: `${this.options.exactGrant === true ? `Approve this call and remember it ${this.#rememberAlways ? "for every session" : "for this session only"}` : "Approve this call (a command is never remembered by its text)"}${approveKey ? `  ${formatTooltipKey(approveKey)}` : ""}`,
 		});
-		const remember = approvalDialogRemembers(this.options)
+		const remember = approvalDialogCanRemember(this.options)
 			? [
 					actionButton(approvalDialogRememberLabel(this.#rememberAlways), "remember", {
 						...(rememberKey ? { keys: rememberKey } : {}),
@@ -457,9 +456,9 @@ export class ApprovalDialogComponent implements Component {
 
 	#footerHint(overflows: boolean, menu: boolean): string {
 		const draft = this.options.draft;
-		const remembers = approvalDialogRemembers(this.options);
+		const canRemember = approvalDialogCanRemember(this.options);
 		if (menu) {
-			const remember = remembers ? ` · ${formatKeyHints(appRememberKeys())} remember` : "";
+			const remember = canRemember ? ` · ${formatKeyHints(appRememberKeys())} remember` : "";
 			const hint = `${editorKeys("tui.select.up", "tui.select.down")} choose · ${formatKeyHint("enter")} confirm${remember} · ${editorKey("tui.select.cancel")} deny`;
 			if (draft?.hasDraft()) return `${hint} · ${editorKey("tui.input.submit")} deny and send`;
 			const scroll = overflows ? ` · ${editorKeys("tui.select.pageUp", "tui.select.pageDown")} scroll` : "";
@@ -474,7 +473,7 @@ export class ApprovalDialogComponent implements Component {
 			: "";
 		const directory =
 			this.options.folderLabel === undefined ? "" : ` · ${formatKeyHints(appApproveFolderKeys())} approve dir`;
-		const remember = remembers ? ` · ${formatKeyHints(appRememberKeys())} remember` : "";
+		const remember = canRemember ? ` · ${formatKeyHints(appRememberKeys())} remember` : "";
 		const hint = `${approve} approve${directory}${remember} · ${editorKey("tui.select.cancel")} deny${expand}`;
 		if (draft?.hasDraft()) return `${hint} · ${editorKey("tui.input.submit")} deny and send`;
 		const scroll = overflows ? ` · ${editorKeys("tui.select.up", "tui.select.down")} scroll` : "";
