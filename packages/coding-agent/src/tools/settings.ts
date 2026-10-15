@@ -321,7 +321,7 @@ export const cfgToolsApprovalMode = register({
 		group: "Approvals",
 		label: "Tool Approval",
 		description:
-			"Default approval behavior for tool calls. 'Always ask' auto-approves read-only tools only. 'Ask and remember' prompts for read/write targets and exec commands once each and remembers approvals. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers; user policy may still prompt or block.",
+			"Default approval behavior for tool calls. 'Always ask' auto-approves read-only tools only. 'Ask and remember' prompts once per file, command, or folder, then remembers it. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers; user policy may still prompt or block.",
 		options: [
 			{
 				value: "always-ask",
@@ -332,7 +332,7 @@ export const cfgToolsApprovalMode = register({
 				value: "always-ask-cached",
 				label: "Ask and remember",
 				description:
-					"Ask the first time a read or write tool touches a file and the first time a command runs, then remember it so the same file or exact command runs without asking; approve a whole folder to cover everything inside it. Commands flagged as dangerous, and per-tool or per-pattern prompt policies, still ask every time.",
+					"Prompt once per file, command, or folder, then remember the approval. Dangerous commands and explicit prompt policies still ask every time.",
 			},
 			{
 				value: "write",
@@ -364,19 +364,17 @@ export const cfgToolsApprovalScope = register({
 		group: "Approvals",
 		label: "Remembered Scope",
 		description:
-			"Scope the 'Ask and remember' mode records when a call is approved. 'Exact item' remembers the file path or command text that was approved; 'Whole folder' remembers the folder around it instead, covering every read and write below it and every command that runs inside it. The prompt's folder answer always grants the folder either way.",
+			"What a plain approval remembers in 'Ask and remember': the exact file or command, or the folder around it.",
 		options: [
 			{
 				value: "target",
 				label: "Exact item",
-				description:
-					"Remember the exact file or command approved; the prompt's folder answer (F6) grants the folder instead.",
+				description: "Remember the approved file or command; the prompt's folder answer grants its folder instead.",
 			},
 			{
 				value: "folder",
 				label: "Whole folder",
-				description:
-					"Remember the folder containing the approved file or command, covering everything inside it at any depth. The folder answer is not offered since plain approval already grants it.",
+				description: "Remember the folder around the approved file or command, covering everything inside it.",
 			},
 		],
 	},
