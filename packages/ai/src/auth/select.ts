@@ -741,49 +741,68 @@ export class CredentialSelector {
 				candidate.selection.index === sessionPreferredIndex,
 		);
 		const preferredCandidate = sessionPreferredCandidate === -1 ? undefined : candidates[sessionPreferredCandidate];
-		// Automatic pins may yield to reserve, spent allowance, or an opt-in,
-		// fresh near-reset drain advantage from the native top-ranked candidate.
-		const automaticPinWouldBeEvicted = (excludePreflightFailures: boolean): boolean =>
-			!sessionPinIsExplicit &&
-			preferredCandidate !== undefined &&
-			candidates.some(candidate => {
-				if (candidate === preferredCandidate) return false;
+		// Preserve native order across the temporary pin promotions below.
+		const drainOrder = drainEvictionEnabled ? [...candidates] : undefined;
+		const eligibleDrainChallenger = (excludePreflightFailures: boolean): OAuthCandidate | undefined =>
+			drainOrder?.find(candidate => {
 				if (excludePreflightFailures && preflightFailures.has(candidate)) return false;
-				if (
-					drainEvictionEnabled &&
-					strategy &&
-					drainPolicy &&
-					candidate === candidates[0] &&
+				const accountKey = oauthAccountKey(candidate.selection.credential);
+				return (
+					(!enforceAccounts || (accountKey !== undefined && accountIds?.has(accountKey) === true)) &&
+					this.#deps.affinity.allows(provider, sessionId, candidate.selection.credential) &&
 					candidate.inReserve !== true &&
 					!this.#deps.blocks.isBlocked(provider, providerKey, candidate.selection.index, blockScopes) &&
 					(!planGate || planGate(candidate.usage) === true) &&
-					(this.#deps.policies.forCredential(provider, candidate.selection.credential)?.priority ?? 0) ===
-						(this.#deps.policies.forCredential(provider, preferredCandidate.selection.credential)?.priority ??
-							0) &&
-					drainPressureExceeds(
-						preferredCandidate.usage,
-						candidate.usage,
-						strategy,
-						rankingContext,
-						drainPolicy,
-						Date.now(),
-					)
-				)
-					return true;
-				if (
-					preferredCandidate.inReserve === true &&
-					candidate.reserveMeasured === true &&
-					candidate.inReserve === false
-				) {
-					return true;
-				}
-				return (
-					preferredCandidate.allowanceSpent === true &&
-					candidate.usage !== null &&
-					candidate.allowanceSpent === false &&
-					!this.#deps.blocks.isBlocked(provider, providerKey, candidate.selection.index, blockScopes)
+					(!checkUsage ||
+						!candidate.usage ||
+						!strategy ||
+						!isUsageLimitReached(scopedUsageLimits(strategy, candidate.usage, rankingContext)))
 				);
 			});
+		// Automatic pins may yield to reserve, spent allowance, or an opt-in,
+		// fresh near-reset drain advantage from the native top-ranked candidate.
+		const automaticPinWouldBeEvicted = (excludePreflightFailures: boolean): boolean => {
+			const drainChallenger = eligibleDrainChallenger(excludePreflightFailures);
+			return (
+				!sessionPinIsExplicit &&
+				preferredCandidate !== undefined &&
+				candidates.some(candidate => {
+					if (candidate === preferredCandidate) return false;
+					if (excludePreflightFailures && preflightFailures.has(candidate)) return false;
+					if (
+						drainEvictionEnabled &&
+						strategy &&
+						drainPolicy &&
+						candidate === drainChallenger &&
+						(this.#deps.policies.forCredential(provider, candidate.selection.credential)?.priority ?? 0) ===
+							(this.#deps.policies.forCredential(provider, preferredCandidate.selection.credential)?.priority ??
+								0) &&
+						drainPressureExceeds(
+							preferredCandidate.usage,
+							candidate.usage,
+							strategy,
+							rankingContext,
+							drainPolicy,
+							Date.now(),
+						)
+					)
+						return true;
+					if (
+						preferredCandidate.inReserve === true &&
+						candidate.reserveMeasured === true &&
+						candidate.inReserve === false
+					) {
+						return true;
+					}
+					return (
+						preferredCandidate.allowanceSpent === true &&
+						candidate.usage !== null &&
+						candidate.allowanceSpent === false &&
+						!this.#deps.blocks.isBlocked(provider, providerKey, candidate.selection.index, blockScopes)
+					);
+				})
+			);
+		};
 		const pinEvictedBeforePreflight = automaticPinWouldBeEvicted(false);
 		if (
 			!hasPlanRequirement &&

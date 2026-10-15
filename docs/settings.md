@@ -125,9 +125,9 @@ auth:
 | `auth.automaticPinEviction.secondaryDrainFactor` | `0` | Disabled unless finite and greater than `1`. The challenger's required secondary drain must strictly exceed this factor times the pinned account's drain. |
 | `auth.automaticPinEviction.maxResetHours` | `12` | The challenger's secondary reset must be within this many hours. Must be finite and positive; otherwise eviction is disabled. |
 
-Both usage reports must be no more than five minutes old, with measured secondary usage and future reset times. The challenger must respect the native ranker's ordering, account priority, reserve, blocking, session restrictions, and model-plan eligibility. A measured primary window at or above 85% usage (or with unknown usage) cannot trigger eviction. Explicit user pins remain authoritative. Failed challenger preflight restores the warm pin. Drain pressure is recomputed from current windows rather than carried across resets.
+Both usage reports must be no more than five minutes old, with measured secondary usage and future reset times. The challenger is the highest native-ranked candidate eligible for strict selection, respecting account access, account priority, reserve, blocking, session restrictions, and model-plan eligibility. A measured primary window at or above 85% usage (or with unknown usage) cannot trigger eviction. Explicit user pins remain authoritative. Failed challenger preflight restores the warm pin unless the next eligible challenger independently qualifies. Drain pressure is recomputed from current windows rather than carried across resets.
 
-These settings are read on subsequent credential selections, including after live settings reload. Leaving the factor unset or at `0` preserves existing pin behavior.
+These settings apply to SDK discovery and `omp auth-gateway serve` storage and are read on subsequent credential selections, including after live settings reload. Leaving the factor unset or at `0` preserves existing pin behavior.
 
 ## Precedence
 

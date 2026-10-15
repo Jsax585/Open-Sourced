@@ -181,6 +181,7 @@ import {
 	type Prewalk,
 } from "./session/agent-session";
 import {
+	automaticPinEvictionFromSettings,
 	createAuthStorageSettingsSync,
 	discoverAuthStorage as discoverAuthStorageFromConfig,
 	type EffectiveSettingsScope,
@@ -188,7 +189,6 @@ import {
 	resolveEffectiveSettings,
 } from "./session/auth-broker-config";
 import type { AuthStorage } from "./session/auth-storage";
-import { cfgAuthSecondaryDrainFactor, cfgAuthMaxResetHours } from "./config/model-settings";
 import {
 	CREDENTIAL_DISABLED_NOTICE_SOURCE,
 	formatCredentialDisabledNotice,
@@ -1035,10 +1035,7 @@ export async function discoverAuthStorage(
 			defaultReservePct: discoveryOptions.authStorageOptions?.defaultReservePct ?? policy.defaultReservePct,
 			automaticPinEviction:
 				discoveryOptions.authStorageOptions?.automaticPinEviction ??
-				(() => ({
-					secondaryDrainFactor: cfgAuthSecondaryDrainFactor.get(effectiveSettings),
-					maxResetHours: cfgAuthMaxResetHours.get(effectiveSettings),
-				})),
+				automaticPinEvictionFromSettings(effectiveSettings),
 		},
 	});
 }

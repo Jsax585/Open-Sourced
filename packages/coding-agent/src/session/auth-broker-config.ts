@@ -40,7 +40,13 @@ import { resolveConfigValue } from "../config/resolve-config-value";
 import { Settings } from "../config/settings";
 import type { AuthStorage } from "./auth-storage";
 
-import { cfgAuthAccountPolicies, cfgAuthBrokerToken, cfgAuthBrokerUrl } from "../config/model-settings";
+import {
+	cfgAuthAccountPolicies,
+	cfgAuthBrokerToken,
+	cfgAuthBrokerUrl,
+	cfgAuthMaxResetHours,
+	cfgAuthSecondaryDrainFactor,
+} from "../config/model-settings";
 import { cfgRetryUsageReservePct } from "./settings";
 
 export { type AuthBrokerClientConfig, getAuthBrokerTokenFilePath };
@@ -83,6 +89,14 @@ export async function loadEffectiveAuthAccountPolicyConfig(
 	return loadAuthAccountPolicyConfig({
 		accountPolicies: cfgAuthAccountPolicies.get(settings),
 		usageReservePct: cfgRetryUsageReservePct.get(settings),
+	});
+}
+
+/** Live drain settings shared by SDK discovery and broker-backed gateway storage. */
+export function automaticPinEvictionFromSettings(settings: Settings) {
+	return () => ({
+		secondaryDrainFactor: cfgAuthSecondaryDrainFactor.get(settings),
+		maxResetHours: cfgAuthMaxResetHours.get(settings),
 	});
 }
 

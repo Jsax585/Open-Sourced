@@ -26,6 +26,7 @@ import {
 	type Model,
 	type OAuthRequestIdentity,
 } from "@oh-my-pi/pi-ai";
+import type { AuthStorageOptions } from "@oh-my-pi/pi-ai/auth-storage";
 import {
 	AuthBrokerClient,
 	loadAuthBrokerAccountPool,
@@ -42,6 +43,7 @@ import { cfgDisabledProviders } from "../config/model-settings";
 import { resolveProviderModelReference } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import {
+	automaticPinEvictionFromSettings,
 	type AuthBrokerClientConfig,
 	loadEffectiveAuthAccountPolicyConfig,
 	resolveAuthBrokerConfig,
@@ -259,6 +261,15 @@ export function createSerializedRebuilder(run: (force: boolean) => Promise<void>
 	return rebuild;
 }
 
+/** Storage options for the gateway's broker-backed credential router. */
+export async function createAuthGatewayStorageOptions(
+	settings: Settings,
+	sourceLabel: string,
+): Promise<AuthStorageOptions> {
+	const policy = await loadEffectiveAuthAccountPolicyConfig({ settings });
+	return { ...policy, sourceLabel, automaticPinEviction: automaticPinEvictionFromSettings(settings) };
+}
+
 async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	const brokerConfig = await resolveAuthBrokerConfig();
 	if (!brokerConfig) {
@@ -273,7 +284,6 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	// in sdk.ts. The gateway never touches local SQLite.
 	const accountPool = await loadAuthBrokerAccountPool();
 	const settings = await resolveEffectiveSettings();
-	const { accountPolicies, defaultReservePct } = await loadEffectiveAuthAccountPolicyConfig({ settings });
 	const client = createBrokerClient(brokerConfig);
 	const initialSnapshot = await fetchBrokerSnapshot(client);
 	const store = new RemoteAuthCredentialStore({
@@ -285,11 +295,10 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	// `RemoteAuthCredentialStore.refreshOAuthCredential` and `.fetchUsageReports`.
 	// AuthStorage discovers them when no explicit option overrides them, so the
 	// gateway only needs to construct the store and pass it in.
-	const storage = new AuthStorage(store, {
-		sourceLabel: `broker ${brokerConfig.url}`,
-		accountPolicies,
-		defaultReservePct,
-	});
+	const storage = new AuthStorage(
+		store,
+		await createAuthGatewayStorageOptions(settings, `broker ${brokerConfig.url}`),
+	);
 	await storage.credentials.reload();
 
 	// Build the model resolver + catalog from the ModelRegistry — the same

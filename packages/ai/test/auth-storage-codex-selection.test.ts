@@ -930,6 +930,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		for (const modelId of [undefined, "gpt-5.3-codex-spark"]) {
 			test.each([
 				{ name: "enabled", expected: "sibling" },
+				{ name: "repeated turns stay stable", expected: "sibling" },
 				{ name: "unset", expected: "pinned" },
 				{ name: "zero factor", expected: "pinned", factor: 0 },
 				{ name: "explicit pin", expected: "pinned" },
@@ -1037,8 +1038,45 @@ describe("AuthStorage codex oauth ranking", () => {
 				}
 				const expected = scenario.name === "plan guard" && !modelId ? "sibling" : scenario.expected;
 				expect(await authStorage.keys.get("openai-codex", sessionId, { modelId })).toBe(`api-acct-${expected}`);
+				if (scenario.name === "repeated turns stay stable") {
+					for (let turn = 0; turn < 8; turn++) {
+						expect(await authStorage.keys.get("openai-codex", sessionId, { modelId })).toBe("api-acct-sibling");
+					}
+				}
 			});
 		}
+	});
+
+	test("an account-access-excluded top rank cannot evict a warm pin onto a nonqualifying third account", async () => {
+		if (!store) throw new Error("test setup failed");
+		let enabled = false;
+		authStorage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
+			automaticPinEviction: () => ({ secondaryDrainFactor: enabled ? 2 : 0, maxResetHours: 12 }),
+		});
+		await authStorage.credentials.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "b@example.com") },
+			{ type: "oauth", ...createCredential("acct-c", "c@example.com") },
+		]);
+		const report = (accountId: string, usedFraction: number, hours: number) =>
+			createCodexUsageReport({
+				accountId,
+				primary: { usedFraction: 0.1, resetInMs: HOUR_MS },
+				secondary: { usedFraction, resetInMs: hours * HOUR_MS },
+			});
+		usageByAccount.set("acct-a", report("acct-a", 0.87, 41));
+		usageByAccount.set("acct-b", report("acct-b", 0.99, 168));
+		usageByAccount.set("acct-c", report("acct-c", 0.99, 168));
+		const options = { accountIds: ["acct-a", "acct-c"] };
+		expect(await authStorage.keys.get("openai-codex", "three-account-drain", options)).toBe("api-acct-a");
+		usageByAccount.set("acct-b", report("acct-b", 0.92, 2));
+		usageByAccount.set("acct-c", report("acct-c", 0.94, 12));
+		await authStorage.usage.invalidate("openai-codex");
+		enabled = true;
+		// Native rank is B > C > A, but B is excluded and C's pressure is below 2x A.
+		expect(await authStorage.keys.get("openai-codex", "fresh-allowed-drain", options)).toBe("api-acct-c");
+		expect(await authStorage.keys.get("openai-codex", "three-account-drain", options)).toBe("api-acct-a");
 	});
 
 	test("evicts an automatic warm pin only after confirming sibling reserve health", async () => {
