@@ -51,6 +51,7 @@ import {
 	resolveAuthBrokerConfig,
 	resolveEffectiveSettings,
 } from "../session/auth-broker-config";
+import { readBodyCapped } from "../web/response-body";
 import { runAuthGatewayStdio } from "./auth-gateway-stdio";
 import { generateToken, readTokenFile, writeTokenFile } from "./token-file";
 
@@ -270,9 +271,10 @@ const ATTEMPT_HOOK_TIMEOUT_MS = 10_000;
 
 /**
  * `serve --attempt-hook`: POST each upstream attempt to `url` as JSON and let
- * it proceed only on a 2xx answer. Any other status, a timeout or an
- * unreachable hook refuses the attempt, so a hook outage stops traffic instead
- * of letting it through unrecorded. `token`, when set, is sent as a bearer.
+ * it proceed only on a 2xx answer from `url` itself. Any other status, a
+ * redirect included, a timeout or an unreachable hook refuses the attempt, so
+ * a hook outage stops traffic instead of letting it through unrecorded.
+ * `token`, when set, is sent as a bearer.
  */
 export function createAttemptHookClient(url: string, token: string | undefined): AuthGatewayUpstreamAttemptHook {
 	const target = URL.parse(url);
@@ -287,13 +289,15 @@ export function createAttemptHookClient(url: string, token: string | undefined):
 			method: "POST",
 			headers,
 			body: JSON.stringify(attempt),
+			redirect: "manual",
 			signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
 		});
 		if (response.ok) {
 			await response.body?.cancel();
 			return;
 		}
-		const reason = (await response.text()).trim().slice(0, 200);
+		// Only the start of a refusal is logged, so only the start is read.
+		const reason = (await readBodyCapped(response, 200))?.bytes.toString().trim();
 		throw new Error(`attempt hook answered ${response.status}${reason ? `: ${reason}` : ""}`);
 	};
 }

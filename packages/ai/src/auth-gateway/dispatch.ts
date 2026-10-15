@@ -289,12 +289,21 @@ const REFUSED_ATTEMPT_BODY = JSON.stringify({
 	error: { type: "invalid_request_error", message: GATEWAY_REFUSED_ATTEMPT_MESSAGE },
 });
 
+/** Redirects a hooked GET or HEAD follows before it hands the provider the last one. */
+const MAX_REDIRECTS = 20;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+/** What `fetch` itself drops from a redirect to another origin. */
+const CROSS_ORIGIN_DROPPED_HEADERS = ["authorization", "cookie", "proxy-authorization"];
+
 /**
  * The upstream fetch for one gateway request: `opts.fetch` as is, or, with an
- * attempt hook, a fetch that awaits the hook before every call, so a
- * provider's own retries, alternate endpoints and credential-recovery resends
- * each reach it. A refused call answers {@link REFUSED_ATTEMPT_BODY} without
- * touching the network and logs the hook's reason.
+ * attempt hook, a fetch that awaits the hook before every request it sends, so
+ * a provider's own retries, alternate endpoints and credential-recovery
+ * resends each reach it. `fetch` would follow a redirect without asking, so
+ * redirects come back here: a GET or HEAD follows them with each hop approved
+ * on its own, and any other request hands the provider the redirect itself. A
+ * refused request answers {@link REFUSED_ATTEMPT_BODY} without touching the
+ * network and logs the hook's reason.
  */
 export function gatewayUpstreamFetch(
 	opts: AuthGatewayRouteOptions,
@@ -303,22 +312,20 @@ export function gatewayUpstreamFetch(
 ): FetchImpl | undefined {
 	const hook = opts.onUpstreamAttempt;
 	if (!hook) return opts.fetch;
-	const transport = opts.fetch;
 	let attempts = 0;
-	return async (input, init) => {
-		const request = input instanceof Request ? input : undefined;
-		const target = new URL(request?.url ?? String(input));
-		const signal = init?.signal ?? request?.signal ?? undefined;
+	/** The refusal to answer with, if the hook declines this request. */
+	const approve = async (url: URL, method: string, signal: AbortSignal | undefined): Promise<Response | undefined> => {
 		const attempt: AuthGatewayUpstreamAttempt = {
 			requestId,
 			attempt: ++attempts,
 			provider: model.provider,
 			model: model.id,
-			method: (init?.method ?? request?.method ?? "GET").toUpperCase(),
-			url: `${target.origin}${target.pathname}`,
+			method,
+			url: `${url.origin}${url.pathname}`,
 		};
 		try {
 			await hook(attempt, signal);
+			return undefined;
 		} catch (error) {
 			if (signal?.aborted) throw signal.reason;
 			logger.warn("auth-gateway upstream attempt refused", {
@@ -330,7 +337,35 @@ export function gatewayUpstreamFetch(
 				headers: { "content-type": "application/json", "x-should-retry": "false" },
 			});
 		}
-		return (transport ?? fetch)(input, init);
+	};
+	return async (input, init) => {
+		const request = input instanceof Request ? input : undefined;
+		const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
+		const signal = init?.signal ?? request?.signal ?? undefined;
+		const redirect = init?.redirect ?? request?.redirect ?? "follow";
+		const follows = redirect === "follow" && (method === "GET" || method === "HEAD");
+		let url = new URL(request?.url ?? String(input));
+		let hopInput: string | URL | Request = input;
+		let hopInit: RequestInit = { ...init, redirect: redirect === "follow" ? "manual" : redirect };
+		for (let hop = 0; ; hop++) {
+			const refused = await approve(url, method, signal);
+			if (refused) return refused;
+			const response = await (opts.fetch ?? fetch)(hopInput, hopInit);
+			const location = response.headers.get("location");
+			if (!follows || !location || !REDIRECT_STATUSES.has(response.status) || hop === MAX_REDIRECTS) {
+				return response;
+			}
+			await response.body?.cancel();
+			const next = new URL(location, url);
+			// Later hops go by URL, so they carry the first request's method, headers and signal themselves.
+			const headers = new Headers(hopInit.headers ?? request?.headers);
+			if (next.origin !== url.origin) {
+				for (const name of CROSS_ORIGIN_DROPPED_HEADERS) headers.delete(name);
+			}
+			hopInit = { ...hopInit, method, headers, signal };
+			url = next;
+			hopInput = next;
+		}
 	};
 }
 

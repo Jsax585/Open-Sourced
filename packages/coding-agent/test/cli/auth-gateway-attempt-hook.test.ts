@@ -12,29 +12,49 @@ const attempt = (n: number): AuthGatewayUpstreamAttempt => ({
 });
 
 describe("auth-gateway --attempt-hook client", () => {
-	test("posts each attempt with the bearer and refuses whatever the hook does not approve", async () => {
+	test("posts each attempt with the bearer and refuses whatever the hook itself does not approve", async () => {
 		const received: Array<{ authorization: string | null; body: unknown }> = [];
+		let redirectsFollowed = 0;
 		using meter = Bun.serve({
 			hostname: "127.0.0.1",
 			port: 0,
 			fetch: async req => {
+				if (new URL(req.url).pathname === "/approved") {
+					redirectsFollowed++;
+					return new Response(null, { status: 204 });
+				}
 				received.push({ authorization: req.headers.get("authorization"), body: await req.json() });
-				return received.length === 1
-					? new Response(null, { status: 204 })
-					: new Response("budget exhausted", { status: 429 });
+				switch (received.length) {
+					case 1:
+						return new Response(null, { status: 204 });
+					case 2:
+						return new Response("budget exhausted", { status: 429 });
+					case 3:
+						return new Response(null, { status: 302, headers: { location: "/approved" } });
+					default: {
+						// A refusal body that never ends: only its start may be read.
+						const chunk = new TextEncoder().encode("x".repeat(1024));
+						return new Response(new ReadableStream({ pull: controller => controller.enqueue(chunk) }), {
+							status: 500,
+						});
+					}
+				}
 			},
 		});
 		const hook = createAttemptHookClient(`http://127.0.0.1:${meter.port}/attempts`, "meter-token");
 
 		await hook(attempt(1), undefined);
 		await expect(hook(attempt(2), undefined)).rejects.toThrow("attempt hook answered 429: budget exhausted");
-		expect(received).toEqual([
-			{ authorization: "Bearer meter-token", body: attempt(1) },
-			{ authorization: "Bearer meter-token", body: attempt(2) },
-		]);
+		// A redirect is the hook's answer, not a reason to ask somewhere else.
+		await expect(hook(attempt(3), undefined)).rejects.toThrow("attempt hook answered 302");
+		expect(redirectsFollowed).toBe(0);
+		const endless = await hook(attempt(4), undefined).catch((error: Error) => error.message);
+		expect(endless).toStartWith("attempt hook answered 500: xxx");
+		expect(endless?.length).toBeLessThan(300);
+		expect(received).toEqual([1, 2, 3, 4].map(n => ({ authorization: "Bearer meter-token", body: attempt(n) })));
 
 		// An unreachable hook refuses too, so a meter outage stops traffic.
 		meter.stop(true);
-		await expect(hook(attempt(3), undefined)).rejects.toThrow();
+		await expect(hook(attempt(5), undefined)).rejects.toThrow();
 	});
 });

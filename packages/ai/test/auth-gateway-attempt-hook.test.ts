@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { type AuthGatewayUpstreamAttempt, startAuthGateway } from "@oh-my-pi/pi-ai/auth-gateway";
+import { type AuthGatewayUpstreamAttempt, gatewayUpstreamFetch, startAuthGateway } from "@oh-my-pi/pi-ai/auth-gateway";
 import type { AuthGatewayServerHandle } from "@oh-my-pi/pi-ai/auth-gateway/types";
 import { AuthStorage } from "@oh-my-pi/pi-ai/auth-storage";
 import type { Api, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
@@ -227,5 +227,56 @@ describe("auth-gateway upstream attempt hook", () => {
 		expect(sockets).toEqual([]);
 		expect(harness.trace).toEqual(["hook 1", "upstream"]);
 		expect(harness.attempts[0]?.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+	});
+
+	it("asks again for each redirect hop of a GET, and hands any other request its redirect", async () => {
+		const storage = await AuthStorage.create(":memory:", { usageProviderResolver: () => undefined });
+		const redirects: Record<string, string> = {
+			"https://api.example/start": "/next",
+			"https://api.example/next": "https://cdn.example/file?sig=1",
+			"https://api.example/blocked": "https://blocked.example/file",
+		};
+		const sent: Array<{ url: string; authorization: string | null }> = [];
+		const transport: FetchImpl = async (input, init) => {
+			const url = String(input);
+			sent.push({ url, authorization: new Headers(init?.headers).get("authorization") });
+			if (init?.redirect !== "manual") throw new Error("a hooked request must not follow redirects on its own");
+			const location = redirects[url];
+			return location ? new Response(null, { status: 302, headers: { location } }) : new Response("done");
+		};
+		const asked: string[] = [];
+		const hooked = gatewayUpstreamFetch(
+			{
+				storage,
+				resolveModel: () => undefined,
+				fetch: transport,
+				onUpstreamAttempt: async attempt => {
+					asked.push(`${attempt.attempt} ${attempt.method} ${attempt.url}`);
+					if (attempt.url.startsWith("https://blocked.example/")) throw new Error("not this host");
+				},
+			},
+			"req-1",
+			ANTHROPIC,
+		);
+		if (!hooked) throw new Error("expected a hooked fetch");
+
+		const download = await hooked("https://api.example/start", { headers: { Authorization: "Bearer secret" } });
+		expect(await download.text()).toBe("done");
+		expect(asked).toEqual([
+			"1 GET https://api.example/start",
+			"2 GET https://api.example/next",
+			"3 GET https://cdn.example/file",
+		]);
+		// The credential stays with its own origin, as when `fetch` follows a redirect itself.
+		expect(sent.map(request => request.authorization)).toEqual(["Bearer secret", "Bearer secret", null]);
+
+		const refused = await hooked("https://api.example/blocked");
+		expect(refused.status).toBe(422);
+		expect(sent.at(-1)?.url).toBe("https://api.example/blocked");
+
+		const post = await hooked("https://api.example/start", { method: "POST", body: "{}" });
+		expect(post.status).toBe(302);
+		expect(asked.at(-1)).toBe("6 POST https://api.example/start");
+		storage.close();
 	});
 });
