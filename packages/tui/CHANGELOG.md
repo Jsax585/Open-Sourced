@@ -6,6 +6,7 @@
 
 - Removed `fuzzy.ts` (`FuzzyQuery`, `FuzzyText`, `FuzzyCorpus`, `fuzzyRank`, `resetFuzzyIndexCache`, `FuzzyMatch`, `FuzzyFilterResult`); use `matchText`, `MatchTarget`, `MatchCorpus` and `rankByText` from `text-match.ts`, while `fuzzyFilter` and `fuzzyMatch` remain ([#15579](https://github.com/can1357/oh-my-pi/pull/15579) by [@azain47](https://github.com/azain47))
 - Renamed `MenuSelectionAdapter.getSearchText(item)` to `getMatchFields(item)` and `getSettingItemFilterText` to `settingItemMatchFields` ([#15579](https://github.com/can1357/oh-my-pi/pull/15579) by [@azain47](https://github.com/azain47))
+- Removed the autocomplete scoring helpers `subsequenceScore` and `scoreCommandTextMatch`, and the `description` argument of `midPromptSkillTokenMatches`; rank with `matchText` or `rankByText` from `text-match.ts`, which return a match kind and cost instead of a number ([#15579](https://github.com/can1357/oh-my-pi/pull/15579) by [@azain47](https://github.com/azain47))
 
 ### Added
 
