@@ -379,6 +379,23 @@ export const cfgToolsApprovalScope = register({
 	},
 });
 
+// Forget every remembered approval, session and persistent. An action row in the
+// settings panel (activation runs it instead of storing a value): the next read,
+// write, or command asks again, and `approval-cache.db` is emptied.
+export const cfgToolsForgetApprovals = register({
+	id: "tools.forgetApprovals",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "interaction",
+		group: "Approvals",
+		label: "Forget Remembered Approvals",
+		description:
+			"Delete every file and folder remembered in approval-cache.db, and forget the approvals remembered in this session too. The next read, write, or command asks again.",
+		action: true,
+	},
+});
+
 // Todo tool
 // Todo settings deliberately have no `protocolDefault`: protocol embedders need project-level opt-outs
 // for reminder/prelude prompt injection.

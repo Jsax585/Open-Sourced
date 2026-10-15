@@ -554,26 +554,29 @@ function approvalSummary(details: readonly string[]): string | undefined {
 
 /** Label of the once-only answer for a call with no file target (a command). */
 export const APPROVAL_APPROVE_LABEL = "Approve";
-/** Label of the once-only answer for a file. */
+/** Label of the session-scoped answer for a file. */
 export const APPROVAL_APPROVE_FILE_LABEL = "Approve File";
-/** Label of the exact, cross-instance approval option. */
-export const APPROVAL_ALWAYS_LABEL = "Always Approve File";
+/** Label of the cross-instance answer for a file. */
+export const APPROVAL_ALWAYS_FILE_LABEL = "Always Approve File";
+/** Label of the session-scoped directory answer. */
+export const APPROVAL_DIRECTORY_LABEL = "Approve Directory";
+/** Label of the cross-instance directory answer. */
+export const APPROVAL_ALWAYS_DIRECTORY_LABEL = "Always Approve Directory";
 /** Label of the denial option. */
 export const APPROVAL_DENY_LABEL = "Deny";
 
-/** The once-only answer's label: files are named, commands (which are never remembered) are not. */
-export function approvalApproveOptionLabel(fileTarget: boolean): string {
-	return fileTarget ? APPROVAL_APPROVE_FILE_LABEL : APPROVAL_APPROVE_LABEL;
+/**
+ * The exact answer's label: files are named for what the grant covers, commands (never remembered
+ * by their text) keep the plain name however the remember toggle reads.
+ */
+export function approvalApproveOptionLabel(fileTarget: boolean, always: boolean): string {
+	if (!fileTarget) return APPROVAL_APPROVE_LABEL;
+	return always ? APPROVAL_ALWAYS_FILE_LABEL : APPROVAL_APPROVE_FILE_LABEL;
 }
 
-/** Label of the directory answer: approves the call and remembers its folder for this instance. */
-export function approvalDirectoryOptionLabel(folderLabel: string): string {
-	return `Approve For Directory: ${folderLabel}`;
-}
-
-/** Label of the global directory answer: approves the call and remembers its folder for good. */
-export function approvalAlwaysDirectoryOptionLabel(folderLabel: string): string {
-	return `Always Approve For Directory: ${folderLabel}`;
+/** Label of the directory answer, which approves the call and remembers its folder. */
+export function approvalDirectoryOptionLabel(folderLabel: string, always: boolean): string {
+	return `${always ? APPROVAL_ALWAYS_DIRECTORY_LABEL : APPROVAL_DIRECTORY_LABEL}: ${folderLabel}`;
 }
 
 /** What an approval prompt answered: denied, or approved with where the grant goes. */
@@ -632,24 +635,25 @@ export async function requestApproval(
 		}
 		return { approved: false };
 	}
-	const approveOption = approvalApproveOptionLabel(exactGrant);
+	const approveOption = approvalApproveOptionLabel(exactGrant, false);
 	if (folderLabel === undefined && !exactGrant) {
 		return { approved: (await ui.select(full, [approveOption, APPROVAL_DENY_LABEL])) === approveOption };
 	}
-	const directoryOption = folderLabel === undefined ? undefined : approvalDirectoryOptionLabel(folderLabel);
+	const alwaysFileOption = exactGrant ? approvalApproveOptionLabel(true, true) : undefined;
+	const directoryOption = folderLabel === undefined ? undefined : approvalDirectoryOptionLabel(folderLabel, false);
 	const alwaysDirectoryOption =
-		folderLabel === undefined ? undefined : approvalAlwaysDirectoryOptionLabel(folderLabel);
+		folderLabel === undefined ? undefined : approvalDirectoryOptionLabel(folderLabel, true);
 	const choices = [
-		approveOption,
 		...(directoryOption === undefined ? [] : [directoryOption]),
-		...(exactGrant ? [APPROVAL_ALWAYS_LABEL] : []),
+		approveOption,
 		...(alwaysDirectoryOption === undefined ? [] : [alwaysDirectoryOption]),
+		...(alwaysFileOption === undefined ? [] : [alwaysFileOption]),
 		APPROVAL_DENY_LABEL,
 	];
 	const choice = await ui.select(full, choices);
 	if (choice === approveOption) return { approved: true };
 	if (directoryOption !== undefined && choice === directoryOption) return { approved: true, scope: "folder" };
-	if (choice === APPROVAL_ALWAYS_LABEL) return { approved: true, global: true };
+	if (alwaysFileOption !== undefined && choice === alwaysFileOption) return { approved: true, global: true };
 	if (alwaysDirectoryOption !== undefined && choice === alwaysDirectoryOption) {
 		return { approved: true, scope: "folder", global: true };
 	}

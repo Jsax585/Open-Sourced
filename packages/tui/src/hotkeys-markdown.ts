@@ -139,12 +139,11 @@ function hotkeyGroups(bindings: HotkeysMarkdownBindings): HotkeyGroup[] {
 				{ keys: [act("app.approval.approve")], action: "Approve a pending tool call" },
 				{
 					keys: [act("app.approval.approveFolder")],
-					action: "Approve a pending tool call for its directory (this session)",
+					action: "Approve a pending tool call for its directory",
 				},
-				{ keys: [act("app.approval.alwaysApprove")], action: "Approve a pending tool call always" },
 				{
-					keys: [act("app.approval.alwaysApproveFolder")],
-					action: "Approve a pending tool call always for its directory",
+					keys: [act("app.approval.remember")],
+					action: "Toggle remembering approvals for every session",
 				},
 				{ keys: [act("app.thinking.toggle")], action: "Toggle thinking block visibility" },
 				{ keys: [act("app.editor.external")], action: "Edit message in external editor" },

@@ -43,13 +43,7 @@ import type { InteractiveModeContext, InteractiveSelectorDialogOptions } from ".
 import { normalizeCustomMessagePayload, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { disambiguateDisplayLabels, sanitizeCarriageReturns } from "@oh-my-pi/pi-tui/render/render-utils";
 import { setExtensionTerminalTitle, setSessionTerminalTitle } from "../../utils/title-generator";
-import {
-	APPROVAL_ALWAYS_LABEL,
-	APPROVAL_DENY_LABEL,
-	approvalAlwaysDirectoryOptionLabel,
-	approvalApproveOptionLabel,
-	approvalDirectoryOptionLabel,
-} from "../../tools/approval";
+import { APPROVAL_DENY_LABEL, approvalApproveOptionLabel, approvalDirectoryOptionLabel } from "../../tools/approval";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { launchTerminal } from "../../subprocess/terminal-launch";
 
@@ -678,19 +672,19 @@ export class ExtensionUiController {
 	): Promise<ExtensionApprovalAnswer> {
 		const folderLabel = prompt.folderLabel;
 		const exactGrant = prompt.exactGrant === true;
-		const approveOption = approvalApproveOptionLabel(exactGrant);
-		const directoryOption = folderLabel === undefined ? undefined : approvalDirectoryOptionLabel(folderLabel);
-		const alwaysOption = exactGrant ? APPROVAL_ALWAYS_LABEL : undefined;
+		const fileOption = approvalApproveOptionLabel(exactGrant, false);
+		const alwaysFileOption = exactGrant ? approvalApproveOptionLabel(exactGrant, true) : undefined;
+		const directoryOption = folderLabel === undefined ? undefined : approvalDirectoryOptionLabel(folderLabel, false);
 		const alwaysDirectoryOption =
-			folderLabel === undefined ? undefined : approvalAlwaysDirectoryOptionLabel(folderLabel);
+			folderLabel === undefined ? undefined : approvalDirectoryOptionLabel(folderLabel, true);
 		const request: CollabUiRequestDraft = {
 			kind: "select",
 			title: prompt.full,
 			options: [
-				approveOption,
 				...(directoryOption === undefined ? [] : [directoryOption]),
-				...(alwaysOption === undefined ? [] : [alwaysOption]),
+				fileOption,
 				...(alwaysDirectoryOption === undefined ? [] : [alwaysDirectoryOption]),
+				...(alwaysFileOption === undefined ? [] : [alwaysFileOption]),
 				APPROVAL_DENY_LABEL,
 			],
 		};
@@ -718,12 +712,13 @@ export class ExtensionUiController {
 					const dialog = new ApprovalDialogComponent(
 						prompt.compact,
 						{
-							onApprove: () => settle(approveOption),
-							...(directoryOption === undefined ? {} : { onApproveFolder: () => settle(directoryOption) }),
-							...(alwaysOption === undefined ? {} : { onAlwaysApprove: () => settle(alwaysOption) }),
-							...(alwaysDirectoryOption === undefined
+							onApprove: always => settle(approvalApproveOptionLabel(exactGrant, always)),
+							...(folderLabel === undefined
 								? {}
-								: { onAlwaysApproveFolder: () => settle(alwaysDirectoryOption) }),
+								: {
+										onApproveFolder: (always: boolean) =>
+											settle(approvalDirectoryOptionLabel(folderLabel, always)),
+									}),
 							onDeny: () => settle(APPROVAL_DENY_LABEL),
 						},
 						{
@@ -758,9 +753,9 @@ export class ExtensionUiController {
 					};
 				}),
 			);
-			if (choice === approveOption) return true;
+			if (choice === fileOption) return true;
 			if (directoryOption !== undefined && choice === directoryOption) return { approved: true, scope: "folder" };
-			if (alwaysOption !== undefined && choice === alwaysOption) return { approved: true, global: true };
+			if (alwaysFileOption !== undefined && choice === alwaysFileOption) return { approved: true, global: true };
 			if (alwaysDirectoryOption !== undefined && choice === alwaysDirectoryOption) {
 				return { approved: true, scope: "folder", global: true };
 			}

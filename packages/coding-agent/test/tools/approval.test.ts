@@ -261,10 +261,10 @@ describe("MCP fallback and prompt formatting", () => {
 		expect((await requestApproval(ui, write, {}, undefined, [], { cacheAnswers: true })).approved).toBe(true);
 		const label = approvalDirectoryKey(path.resolve("/work/project", "TestDir")).replace(/[\\/]+$/, "");
 		expect(selects[0]).toEqual([
+			`Approve Directory: ${label}`,
 			"Approve File",
-			`Approve For Directory: ${label}`,
+			`Always Approve Directory: ${label}`,
 			"Always Approve File",
-			`Always Approve For Directory: ${label}`,
 			"Deny",
 		]);
 		expect((await requestApproval(ui, write, {}, undefined, [], { cacheAnswers: false })).approved).toBe(true);

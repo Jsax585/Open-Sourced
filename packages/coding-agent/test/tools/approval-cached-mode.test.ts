@@ -17,7 +17,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	type ApprovalGrantStore,
-	APPROVAL_ALWAYS_LABEL,
+	APPROVAL_ALWAYS_FILE_LABEL,
 	APPROVAL_APPROVE_FILE_LABEL,
 	APPROVAL_APPROVE_LABEL,
 	approvalFolderCandidate,
@@ -33,6 +33,7 @@ import {
 	approvalDirectoryCovers,
 	approvalDirectoryKey,
 	commonApprovalDirectoryKey,
+	clearApprovalGrants,
 	getApprovalCache,
 	getApprovalGrants,
 	SessionApprovals,
@@ -447,6 +448,43 @@ describe("approval cache store", () => {
 		expect(getApprovalGrants(tempDir.path()).global).toBe(getApprovalCache(tempDir.path()));
 		expect(getApprovalGrants(path.join(tempDir.path(), "nested-other"))).not.toBe(getApprovalGrants(tempDir.path()));
 	});
+
+	it("forgets every row when cleared, and clearing an absent cache is a no-op", () => {
+		const cache = new ApprovalCache(tempDir.path());
+		cache.record("C:/work/notes.txt", "read");
+		cache.record("c:\\testdir\\", "read", "directory");
+		expect(cache.size).toBe(2);
+
+		cache.clear();
+
+		expect(cache.size).toBe(0);
+		expect(readGrants(tempDir.path())).toEqual([]);
+		// A fresh instance (and a later check through the same store) sees nothing either.
+		expect(new ApprovalCache(tempDir.path()).has("C:/work/notes.txt")).toBe(false);
+		expect(cache.has("c:\\testdir\\")).toBe(false);
+		cache.clear();
+		expect(cache.size).toBe(0);
+		// The file stays: grants recorded after a clear persist as usual.
+		cache.record("after-clear.txt", "read");
+		expect(readGrants(tempDir.path()).map(row => row.key)).toEqual(["after-clear.txt"]);
+	});
+
+	it("clears both tiers through clearApprovalGrants, the settings action", () => {
+		const grants = getApprovalGrants(tempDir.path());
+		grants.record("session-key", "read");
+		grants.record("global-key", "read", undefined, "global");
+		expect(grants.has("session-key")).toBe(true);
+		expect(grants.has("global-key")).toBe(true);
+		expect(readGrants(tempDir.path())).toEqual([expect.objectContaining({ key: "global-key" })]);
+
+		clearApprovalGrants(tempDir.path());
+
+		expect(grants.has("session-key")).toBe(false);
+		expect(grants.has("global-key")).toBe(false);
+		expect(getApprovalCache(tempDir.path()).size).toBe(0);
+		expect(readGrants(tempDir.path())).toEqual([]);
+		__resetSessionApprovalsForTests();
+	});
 });
 
 describe("approval target keys", () => {
@@ -811,8 +849,9 @@ describe("always-ask-cached wrapper cycle", () => {
 
 	it("forgets session grants when a fresh instance starts, but keeps 'Always …' ones", async () => {
 		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
-		// Answer by option label: plain approve for the first call, "Always approve" for the second.
-		const picks = [APPROVAL_APPROVE_FILE_LABEL, APPROVAL_ALWAYS_LABEL];
+		// Answer by option label: the session-scoped file answer for the first call, the
+		// cross-instance one for the second.
+		const picks = [APPROVAL_APPROVE_FILE_LABEL, APPROVAL_ALWAYS_FILE_LABEL];
 		const select = vi.fn(async (_title: string, options: string[]) => {
 			const pick = picks.shift() ?? APPROVAL_APPROVE_FILE_LABEL;
 			expect(options).toContain(pick);
@@ -866,17 +905,17 @@ describe("always-ask-cached wrapper cycle", () => {
 		expect(select).toHaveBeenCalledTimes(3);
 	});
 
-	it("records a directory for every session when 'Always approve for directory' answers", async () => {
+	it("records a directory for every session when the cross-instance directory answer is picked", async () => {
 		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
-		const select = vi.fn(async (_title: string, options: string[]) => options[3]);
+		const select = vi.fn(async (_title: string, options: string[]) => options[2]);
 		initializeRunner(runner, select);
 		const settings = cachedSettings();
 		const dir = path.join(tempDir.path(), "AlwaysDir");
 		const wrapper = new ExtensionToolWrapper(pathTool("write", "write", tempDir.path()), runner);
 
 		await wrapper.execute("always-dir", { path: path.join(dir, "One.txt") }, undefined, undefined, context(settings));
-		expect(select.mock.calls[0]![1][3]).toBe(
-			`Always Approve For Directory: ${approvalDirectoryKey(dir).replace(/[\\/]+$/, "")}`,
+		expect(select.mock.calls[0]![1][2]).toBe(
+			`Always Approve Directory: ${approvalDirectoryKey(dir).replace(/[\\/]+$/, "")}`,
 		);
 		expect(readGrants(tempDir.path())).toEqual([
 			expect.objectContaining({ key: approvalDirectoryKey(dir), scope: "directory" }),
@@ -937,8 +976,8 @@ describe("always-ask-cached wrapper cycle", () => {
 
 	it("lets the folder answer cover exec calls, whatever command runs there", async () => {
 		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
-		// Select hosts (RPC/ACP) answer with the option label; option 2 is the folder answer.
-		const select = vi.fn(async (_title: string, options: string[]) => options[1]);
+		// Select hosts (RPC/ACP) answer with the option label; the first option is the folder answer.
+		const select = vi.fn(async (_title: string, options: string[]) => options[0]);
 		initializeRunner(runner, select);
 		const settings = cachedSettings();
 		const dir = path.join(tempDir.path(), "ExecDir");
@@ -955,8 +994,8 @@ describe("always-ask-cached wrapper cycle", () => {
 
 		await wrapper.execute("exec-folder-answer", { command: "npm test" }, undefined, undefined, context(settings));
 		expect(select).toHaveBeenCalledTimes(1);
-		expect(select.mock.calls[0]![1][1]).toBe(
-			`Approve For Directory: ${approvalDirectoryKey(dir).replace(/[\\/]+$/, "")}`,
+		expect(select.mock.calls[0]![1][0]).toBe(
+			`Approve Directory: ${approvalDirectoryKey(dir).replace(/[\\/]+$/, "")}`,
 		);
 		expect(getApprovalGrants(settings.getAgentDir()).session.has(approvalDirectoryKey(dir))).toBe(true);
 		expect(getApprovalCache(settings.getAgentDir()).size).toBe(0);

@@ -183,6 +183,25 @@ export class ApprovalCache implements ApprovalGrantStore {
 	}
 
 	/**
+	 * Delete every remembered grant. A missing database means there is nothing
+	 * to forget, so no empty file is created; the file itself stays, and later
+	 * approvals write into it again. A failed delete is logged and swallowed:
+	 * the cache is rebuildable, and the settings panel must stay usable.
+	 */
+	clear(): void {
+		const db = this.#open(false);
+		if (!db) return;
+		try {
+			db.query("DELETE FROM grants").run();
+			logger.info("approval cache: forgotten", { path: this.filePath });
+		} catch (err) {
+			logger.warn("approval cache: clear failed", { err: String(err), path: this.filePath });
+		} finally {
+			db.close();
+		}
+	}
+
+	/**
 	 * Open a connection; `create` allows creating the file and schema. Checks do
 	 * not create an empty database — merely running a session leaves no cache
 	 * behind — but they do open a creating connection to import a legacy JSON
@@ -425,6 +444,18 @@ export function getApprovalGrants(agentDir: string = getAgentDir()): ApprovalGra
 /** Drop every in-memory grant, simulating a fresh instance (tests only). */
 export function __resetSessionApprovalsForTests(): void {
 	sessionApprovals.clear();
+}
+
+/**
+ * Forget every remembered approval for an agent directory: the persistent
+ * grants in `approval-cache.db` and the in-memory ones for this process. What
+ * the settings panel's "Forget Remembered Approvals" action runs; the next
+ * read, write, or command asks again.
+ */
+export function clearApprovalGrants(agentDir: string = getAgentDir()): void {
+	const grants = getApprovalGrants(agentDir);
+	grants.session.clear();
+	grants.global.clear();
 }
 
 /**

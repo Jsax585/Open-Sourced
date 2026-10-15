@@ -123,10 +123,8 @@ export function matchesAppApprove(data: string): boolean {
 
 /** Folder-answer defaults when `app.approval.approveFolder` is unbound: approval must stay reachable by keyboard. */
 const APPROVE_FOLDER_DEFAULT_KEYS: readonly KeyId[] = ["f6"];
-/** Exact, cross-instance answer defaults when its binding is unbound. */
-const ALWAYS_APPROVE_DEFAULT_KEYS: readonly KeyId[] = ["f7"];
-/** Directory, cross-instance answer defaults when its binding is unbound. */
-const ALWAYS_APPROVE_FOLDER_DEFAULT_KEYS: readonly KeyId[] = ["f8"];
+/** Remember-toggle defaults when its binding is unbound. */
+const REMEMBER_DEFAULT_KEYS: readonly KeyId[] = ["f7"];
 
 /** Effective directory-answer keys: the `app.approval.approveFolder` bindings, or F6 when unbound. */
 export function appApproveFolderKeys(): readonly KeyId[] {
@@ -134,16 +132,10 @@ export function appApproveFolderKeys(): readonly KeyId[] {
 	return keys.length > 0 ? keys : APPROVE_FOLDER_DEFAULT_KEYS;
 }
 
-/** Effective cross-instance answer keys: `app.approval.alwaysApprove`, or F7 when unbound. */
-export function appAlwaysApproveKeys(): readonly KeyId[] {
-	const keys = getKeybindings().getKeys("app.approval.alwaysApprove");
-	return keys.length > 0 ? keys : ALWAYS_APPROVE_DEFAULT_KEYS;
-}
-
-/** Effective cross-instance directory-answer keys: `app.approval.alwaysApproveFolder`, or F8 when unbound. */
-export function appAlwaysApproveFolderKeys(): readonly KeyId[] {
-	const keys = getKeybindings().getKeys("app.approval.alwaysApproveFolder");
-	return keys.length > 0 ? keys : ALWAYS_APPROVE_FOLDER_DEFAULT_KEYS;
+/** Effective remember-toggle keys: the `app.approval.remember` bindings, or F7 when unbound. */
+export function appRememberKeys(): readonly KeyId[] {
+	const keys = getKeybindings().getKeys("app.approval.remember");
+	return keys.length > 0 ? keys : REMEMBER_DEFAULT_KEYS;
 }
 
 /** Match the "approve for directory" key shown beside the primary approve key. */
@@ -151,12 +143,7 @@ export function matchesAppApproveFolder(data: string): boolean {
 	return matchesEffectiveKeys(data, appApproveFolderKeys());
 }
 
-/** Match the "always approve" key: the answer that grants the exact target for every session. */
-export function matchesAppAlwaysApprove(data: string): boolean {
-	return matchesEffectiveKeys(data, appAlwaysApproveKeys());
-}
-
-/** Match the "always approve for directory" key: the answer that grants the folder for every session. */
-export function matchesAppAlwaysApproveFolder(data: string): boolean {
-	return matchesEffectiveKeys(data, appAlwaysApproveFolderKeys());
+/** Match the remember-toggle key: it flips the checkbox the answers read. */
+export function matchesAppRemember(data: string): boolean {
+	return matchesEffectiveKeys(data, appRememberKeys());
 }

@@ -267,76 +267,84 @@ describe("dialogs under a native surface", () => {
 		}
 	});
 
-	it("approval: the grant answers fire from their keys and buttons, and stay hidden when not offered", () => {
+	it("approval: the grants fire from their keys and buttons, with the remember checkbox naming the mode", () => {
 		const root = "/tmp/project";
 		const directoryKey = process.platform === "win32" ? root.toLowerCase() : root;
 		const prompt = "Allow tool: write\nPath: /tmp/project/out.txt";
 		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
 		try {
-			const cases = [
-				["\x1b[17~", "onApproveFolder"], // F6 → directory
-				["\x1b[18~", "onAlwaysApprove"], // F7 → always
-				["\x1b[19~", "onAlwaysApproveFolder"], // F8 → always for directory
-			] as const;
-			for (const [keys, answer] of cases) {
-				const callbacks = {
-					onApprove: vi.fn(),
-					onApproveFolder: vi.fn(),
-					onAlwaysApprove: vi.fn(),
-					onAlwaysApproveFolder: vi.fn(),
-					onDeny: vi.fn(),
-				};
-				now.mockReturnValue(1_000);
-				const dialog = new ApprovalDialogComponent(prompt, callbacks, {
-					folderLabel: directoryKey,
-					exactGrant: true,
-				});
-				now.mockReturnValue(1_000 + APPROVE_ARM_MS);
-				dialog.handleInput(keys);
-				expect(callbacks[answer]).toHaveBeenCalledTimes(1);
-				expect(callbacks.onApprove).not.toHaveBeenCalled();
-				expect(callbacks.onDeny).not.toHaveBeenCalled();
-			}
-			// The native bar carries a button per offered answer, every approval one styled like
-			// the primary Approve (accent); Deny keeps the destructive tone.
-			const buttons = new ApprovalDialogComponent(
-				prompt,
-				{ onApprove: vi.fn(), onDeny: vi.fn() },
-				{
-					folderLabel: directoryKey,
-					exactGrant: true,
-				},
+			// F6 answers with the directory; F7 flips the checkbox first, so the next F6 grants it
+			// for every session; F8 answers nothing at all.
+			const callbacks = { onApprove: vi.fn(), onApproveFolder: vi.fn(), onDeny: vi.fn() };
+			now.mockReturnValue(1_000);
+			const dialog = new ApprovalDialogComponent(prompt, callbacks, { folderLabel: directoryKey, exactGrant: true });
+			now.mockReturnValue(1_000 + APPROVE_ARM_MS);
+			dialog.handleInput("\x1b[17~"); // F6
+			expect(callbacks.onApproveFolder).toHaveBeenCalledWith(false);
+			const toggled = { onApprove: vi.fn(), onApproveFolder: vi.fn(), onDeny: vi.fn() };
+			now.mockReturnValue(1_000);
+			const flipped = new ApprovalDialogComponent(prompt, toggled, { folderLabel: directoryKey, exactGrant: true });
+			now.mockReturnValue(1_000 + APPROVE_ARM_MS);
+			flipped.handleInput("\x1b[18~"); // F7
+			expect(toggled.onApprove).not.toHaveBeenCalled();
+			expect(toggled.onApproveFolder).not.toHaveBeenCalled();
+			flipped.handleInput("\x1b[17~"); // F6, now for every session
+			expect(toggled.onApproveFolder).toHaveBeenCalledWith(true);
+			const untouched = { onApprove: vi.fn(), onApproveFolder: vi.fn(), onDeny: vi.fn() };
+			new ApprovalDialogComponent(prompt, untouched, { folderLabel: directoryKey, exactGrant: true }).handleInput(
+				"\x1b[19~", // F8: no answer is bound to it
 			);
+			expect(untouched.onApprove).not.toHaveBeenCalled();
+			expect(untouched.onApproveFolder).not.toHaveBeenCalled();
+			expect(untouched.onDeny).not.toHaveBeenCalled();
+
+			// The native bar carries a button per offered answer, every approval one styled like
+			// the primary Approve (accent); Deny keeps the destructive tone, the checkbox none.
+			const granted = { onApprove: vi.fn(), onDeny: vi.fn() };
+			const buttons = new ApprovalDialogComponent(prompt, granted, {
+				folderLabel: directoryKey,
+				exactGrant: true,
+			});
 			const button = (key: string) =>
 				find(buttons.describe(), node => node.p?.role === "omp.btn" && node.key === key)?.node;
-			for (const key of ["approve", "folder", "always", "always-folder", "deny"]) {
+			for (const key of ["remember", "folder", "approve", "deny"]) {
 				expect(button(key)).toBeDefined();
 			}
-			for (const key of ["approve", "folder", "always", "always-folder"]) {
+			for (const key of ["folder", "approve"]) {
 				expect(button(key)?.p?.tone).toBe("accent");
 			}
 			expect(button("deny")?.p?.tone).toBe("error");
-			// The answers keep the menu's order: Approve first, then the directory and Always
-			// variants, with Deny last.
+			expect(button("remember")?.p?.tone).toBeUndefined();
+			// The answers keep the menu's order: the checkbox, Approve Directory, Approve File, Deny.
 			const keys: string[] = [];
 			const collect = (node: NativeNode): void => {
 				if (node.p?.role === "omp.btn" && typeof node.key === "string") keys.push(node.key);
 				for (const child of node.c ?? []) if (isNode(child)) collect(child);
 			};
 			collect(buttons.describe());
-			expect(keys).toEqual(["approve", "folder", "always", "always-folder", "deny"]);
+			expect(keys).toEqual(["remember", "folder", "approve", "deny"]);
+			// Clicking the checkbox flips it; the next click on Approve then carries that mode.
+			const remember = find(buttons.describe(), node => node.p?.role === "omp.btn" && node.key === "remember");
+			expect(remember?.node.p?.title).toContain("every session");
+			buttons.handleNativeEvent({ type: "action", key: remember!.path, act: "remember", mods: [] });
+			expect(button("remember")?.p?.title).toContain("this session only");
+			const approve = find(buttons.describe(), node => node.p?.role === "omp.btn" && node.key === "approve");
+			buttons.handleNativeEvent({ type: "action", key: approve!.path, act: "approve", mods: [] });
+			expect(granted.onApprove).toHaveBeenCalledWith(true);
 		} finally {
 			now.mockRestore();
 		}
 
-		// Without a file target the "Always Approve File" answer is neither keyed nor rendered.
-		const clicked = { onApprove: vi.fn(), onAlwaysApprove: vi.fn(), onDeny: vi.fn() };
+		// Without a file target or a folder there is nothing to remember: the checkbox is neither
+		// rendered nor bound, and F7 leaves the prompt untouched.
+		const clicked = { onApprove: vi.fn(), onDeny: vi.fn() };
 		const plain = new ApprovalDialogComponent("Allow tool: eval", clicked);
-		expect(find(plain.describe(), node => node.p?.role === "omp.btn" && node.key === "always")).toBeUndefined();
+		expect(find(plain.describe(), node => node.p?.role === "omp.btn" && node.key === "remember")).toBeUndefined();
 		const armed = vi.spyOn(performance, "now").mockReturnValue(1_000);
 		try {
-			plain.handleInput("\x1b[18~"); // F7 without an exact grant: no answer
-			expect(clicked.onAlwaysApprove).not.toHaveBeenCalled();
+			plain.handleInput("\x1b[18~"); // F7 without a grant to record: no answer
+			expect(clicked.onApprove).not.toHaveBeenCalled();
+			expect(clicked.onDeny).not.toHaveBeenCalled();
 		} finally {
 			armed.mockRestore();
 		}
@@ -383,22 +391,16 @@ describe("dialogs under a native surface", () => {
 		}
 	});
 
-	it("approval: the answer menu moves with the arrows and confirms with Enter", () => {
+	it("approval: the answer menu moves with the arrows, confirms with Enter, and toggles its checkbox", () => {
 		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
 		try {
-			const callbacks = {
-				onApprove: vi.fn(),
-				onApproveFolder: vi.fn(),
-				onAlwaysApprove: vi.fn(),
-				onAlwaysApproveFolder: vi.fn(),
-				onDeny: vi.fn(),
-			};
+			const callbacks = { onApprove: vi.fn(), onApproveFolder: vi.fn(), onDeny: vi.fn() };
 			const dialog = new ApprovalDialogComponent("Allow tool: write\nPath: /tmp/project/out.txt", callbacks, {
 				folderLabel: "/tmp/project",
 				exactGrant: true,
 			});
 			now.mockReturnValue(1_000 + APPROVE_ARM_MS);
-			// Every offered answer is listed, with the cursor (theme.nav.cursor) on the first row.
+			// Every offered control is listed, with the cursor (theme.nav.cursor) on the first row.
 			const lines = () =>
 				stripVTControlCharacters(dialog.render(80).join("\n"))
 					.split("\n")
@@ -406,24 +408,40 @@ describe("dialogs under a native surface", () => {
 			const cursorRow = () => lines().find(line => line.startsWith(theme.nav.cursor));
 			const text = () => lines().join("\n");
 			for (const label of [
+				`${theme.checkbox.unchecked} Remember: This Session`,
+				"Approve Directory (/tmp/project)",
 				"Approve File",
-				"Approve For Directory (/tmp/project)",
-				"Always Approve File",
-				"Always Approve For Directory (/tmp/project)",
 				"Deny",
 			]) {
 				expect(text()).toContain(label);
 			}
-			expect(cursorRow()).toContain("Approve File");
-			expect(cursorRow()).not.toContain("directory");
-			// Down twice lands on "Always Approve File"; Enter confirms it.
-			dialog.handleInput(DOWN);
-			dialog.handleInput(DOWN);
-			expect(cursorRow()).toContain("Always Approve File");
-			expect(cursorRow()).not.toContain("directory");
+			expect(text()).not.toContain("Always");
+			expect(cursorRow()).toContain("Remember: This Session");
+			// The checkbox toggles in place, and the answers below it keep their rows.
 			dialog.handleInput(ENTER);
-			expect(callbacks.onAlwaysApprove).toHaveBeenCalledTimes(1);
+			expect(text()).toContain(`${theme.checkbox.checked} Remember: Always`);
+			expect(text()).not.toContain("This Session");
 			expect(callbacks.onApprove).not.toHaveBeenCalled();
+			expect(callbacks.onDeny).not.toHaveBeenCalled();
+			// Two rows down is Approve File; Enter confirms it with the checkbox as it stands.
+			dialog.handleInput(DOWN);
+			dialog.handleInput(DOWN);
+			expect(cursorRow()).toContain("Approve File");
+			expect(cursorRow()).not.toContain("Directory");
+			dialog.handleInput(ENTER);
+			expect(callbacks.onApprove).toHaveBeenCalledWith(true);
+			// A fresh prompt starts unchecked, and its directory row answers for this session.
+			const fresh = { onApprove: vi.fn(), onApproveFolder: vi.fn(), onDeny: vi.fn() };
+			const reopenedAt = 2_000;
+			now.mockReturnValue(reopenedAt);
+			const reopen = new ApprovalDialogComponent("Allow tool: write\nPath: /tmp/project/out.txt", fresh, {
+				folderLabel: "/tmp/project",
+				exactGrant: true,
+			});
+			now.mockReturnValue(reopenedAt + APPROVE_ARM_MS);
+			reopen.handleInput(DOWN);
+			reopen.handleInput(ENTER);
+			expect(fresh.onApproveFolder).toHaveBeenCalledWith(false);
 		} finally {
 			now.mockRestore();
 		}
@@ -433,12 +451,7 @@ describe("dialogs under a native surface", () => {
 		setNativeRendering(true);
 		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
 		try {
-			const callbacks = {
-				onApprove: vi.fn(),
-				onAlwaysApprove: vi.fn(),
-				onAlwaysApproveFolder: vi.fn(),
-				onDeny: vi.fn(),
-			};
+			const callbacks = { onApprove: vi.fn(), onApproveFolder: vi.fn(), onDeny: vi.fn() };
 			const dialog = new ApprovalDialogComponent("Allow tool: write\nPath: /tmp/project/out.txt", callbacks, {
 				folderLabel: "/tmp/project",
 				exactGrant: true,
@@ -446,9 +459,9 @@ describe("dialogs under a native surface", () => {
 			now.mockReturnValue(1_000 + APPROVE_ARM_MS);
 			// No list rows: the surface shows the buttons from describe() instead.
 			expect(stripVTControlCharacters(dialog.render(80).join("\n"))).not.toContain(
-				"Always approve for directory (/tmp/project)",
+				"Approve Directory (/tmp/project)",
 			);
-			for (const key of ["approve", "folder", "always", "always-folder", "deny"]) {
+			for (const key of ["remember", "folder", "approve", "deny"]) {
 				expect(find(dialog.describe(), node => node.p?.role === "omp.btn" && node.key === key)).toBeDefined();
 			}
 			// Enter must not answer from an invisible selection; the accelerators still work.
@@ -457,8 +470,11 @@ describe("dialogs under a native surface", () => {
 			dialog.handleInput(ENTER);
 			expect(callbacks.onApprove).not.toHaveBeenCalled();
 			expect(callbacks.onDeny).not.toHaveBeenCalled();
-			dialog.handleInput("\x1b[18~"); // F7 → Always Approve File
-			expect(callbacks.onAlwaysApprove).toHaveBeenCalledTimes(1);
+			// F7 flips the checkbox (no answer of its own); F6's grant then carries that mode.
+			dialog.handleInput("\x1b[18~");
+			expect(callbacks.onApproveFolder).not.toHaveBeenCalled();
+			dialog.handleInput("\x1b[17~");
+			expect(callbacks.onApproveFolder).toHaveBeenCalledWith(true);
 		} finally {
 			now.mockRestore();
 			setNativeRendering(false);

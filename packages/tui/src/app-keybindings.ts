@@ -40,8 +40,7 @@ interface AppKeybindings {
 	"app.ask.hide": true;
 	"app.approval.approve": true;
 	"app.approval.approveFolder": true;
-	"app.approval.alwaysApprove": true;
-	"app.approval.alwaysApproveFolder": true;
+	"app.approval.remember": true;
 	"app.editor.external": true;
 	"app.message.followUp": true;
 	"app.retry": true;
@@ -160,15 +159,11 @@ export const KEYBINDINGS = {
 		defaultKeys: "f6",
 		description: "Approve a pending tool call for its directory",
 	},
-	"app.approval.alwaysApprove": {
-		// The cross-instance answers live on F-keys for the same reason; only offered when the
-		// call can record a grant (or a folder, for the directory variant).
+	"app.approval.remember": {
+		// An F-key leads for the same reason the folder answer does; it is offered only while the
+		// prompt has something to remember, and flips the "Remember: …" checkbox the answers use.
 		defaultKeys: "f7",
-		description: "Approve a pending tool call and always remember it",
-	},
-	"app.approval.alwaysApproveFolder": {
-		defaultKeys: "f8",
-		description: "Approve a pending tool call and always remember its directory",
+		description: "Toggle remembering approvals for every session",
 	},
 	"app.editor.external": {
 		defaultKeys: "ctrl+g",

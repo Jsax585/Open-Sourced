@@ -263,10 +263,10 @@ export interface ExtensionApprovalPrompt {
 	compact: string;
 	/**
 	 * Directory the directory answers would grant, when the call names one; hosts
-	 * that support them show "Approve for directory" / "Always approve for directory".
+	 * that support them show "Approve Directory" / "Always Approve Directory".
 	 */
 	folderLabel?: string;
-	/** The call can record an exact grant; hosts may offer the global "Always approve" answer. */
+	/** The call can record an exact grant; hosts may offer the file-scoped (and always) answers. */
 	exactGrant?: boolean;
 }
 
