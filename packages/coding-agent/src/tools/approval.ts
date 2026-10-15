@@ -142,10 +142,11 @@ function approvalCacheTargets(tool: ApprovalSubject, args: unknown): string[] {
 /**
  * Fallback decision for `always-ask-cached` (reached only when no tool or user
  * policy already decided). Read/write calls run without asking once every cache
- * target is approved; otherwise they prompt, and `recordApprovalCacheTargets`
- * remembers the targets when the user approves. Exec calls always prompt.
- * Read-tier tools without cache targets (searches, listings) stay auto-approved
- * exactly as in `always-ask`.
+ * target is approved, and exec calls (e.g. `bash`) do too once every command
+ * target is approved; anything else prompts, and `recordApprovalCacheTargets`
+ * remembers the targets when the user approves. Read-tier tools without cache
+ * targets (searches, listings) stay auto-approved exactly as in `always-ask`;
+ * exec tools without targets (eval, browser, task) always prompt.
  */
 function resolveCachedModeApproval(
 	tool: ApprovalSubject,
@@ -159,16 +160,21 @@ function resolveCachedModeApproval(
 		source: "mode" as const,
 		...(decision.policyKey ? { policyKey: decision.policyKey } : {}),
 	};
-	if (decision.tier === "exec") {
-		return { ...base, policy: "prompt", ...(decision.reason ? { reason: decision.reason } : {}) };
-	}
 	const targets = approvalCacheTargets(tool, args);
 	if (targets.length === 0) {
 		if (decision.tier === "read") return { ...base, policy: "allow" };
-		return { ...base, policy: "prompt", reason: decision.reason ?? "target not yet approved" };
+		return {
+			...base,
+			policy: "prompt",
+			reason: decision.reason ?? (decision.tier === "exec" ? "command not yet approved" : "target not yet approved"),
+		};
 	}
 	if (targets.every(target => grants.has(target))) return { ...base, policy: "allow" };
-	return { ...base, policy: "prompt", reason: decision.reason ?? "target not yet approved" };
+	return {
+		...base,
+		policy: "prompt",
+		reason: decision.reason ?? (decision.tier === "exec" ? "command not yet approved" : "target not yet approved"),
+	};
 }
 
 /**
@@ -252,11 +258,10 @@ function modeApprovesTier(mode: ApprovalMode, tier: ToolTier): boolean {
  *     the keyed sub-tool (e.g. an `xd://` device dispatch without a device
  *     policy still honors `tools.approval.write`).
  *  2. User per-tool override, if set and valid.
- *  3. Active mode tier comparison. In `always-ask-cached`, read/write calls
- *     whose {@link ApprovalSubject.approvalCacheTargets} are all present in
- *     `grants` are allowed; other read/write calls prompt and record their
- *     targets on approval (see {@link recordApprovalCacheTargets}); exec calls
- *     always prompt.
+ *  3. Active mode tier comparison. In `always-ask-cached`, read/write calls and
+ *     exec calls whose {@link ApprovalSubject.approvalCacheTargets} are all
+ *     present in `grants` are allowed; other read/write/exec calls prompt and
+ *     record their targets on approval (see {@link recordApprovalCacheTargets}).
  *
  * In yolo mode, override-based tool prompts are ignored; user `tools.approval`
  * settings remain authoritative.

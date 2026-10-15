@@ -435,15 +435,10 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				throw new Error(`Tool call denied by user: ${this.tool.name}`);
 			}
 			// `always-ask-cached`: a prompt the mode itself raised, now approved, remembers every
-			// target it asked about so the next operation on them runs without asking. Prompts forced
-			// by tool or user policy (e.g. explicit `prompt`) stay per-call, and exec calls are never
-			// cached.
-			if (
-				approvalMode === "always-ask-cached" &&
-				resolved.policy === "prompt" &&
-				resolved.source === "mode" &&
-				resolved.tier !== "exec"
-			) {
+			// target it asked about — a file path or an exact command — so the next operation on it
+			// runs without asking. Prompts forced by tool or user policy (e.g. an explicit `prompt`,
+			// a critical-command override) stay per-call.
+			if (approvalMode === "always-ask-cached" && resolved.policy === "prompt" && resolved.source === "mode") {
 				recordApprovalCacheTargets(this.tool, resolvedArgs, approvalCache);
 			}
 			if (pendingSafetyChecks.length > 0) {

@@ -25,7 +25,8 @@ import {
 	APPROVAL_CACHE_FILENAME,
 	getApprovalCache,
 } from "@oh-my-pi/pi-coding-agent/tools/approval-cache";
-import { approvalTargetKey } from "@oh-my-pi/pi-coding-agent/tools/approval-targets";
+import { approvalCommandKey, approvalTargetKey } from "@oh-my-pi/pi-coding-agent/tools/approval-targets";
+import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { getAgentDir, isRecord, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
@@ -104,13 +105,28 @@ describe("always-ask-cached resolution", () => {
 		});
 	});
 
-	it("never auto-approves exec-tier calls, even with every target approved", () => {
-		const exec = targetTool("bash_exec", "exec");
-		const grants = testGrants(["target:script.sh"]);
-		expect(resolveApproval(exec, { path: "script.sh" }, "always-ask-cached", {}, grants)).toMatchObject({
-			policy: "prompt",
+	it("remembers exec calls per exact command, gated on the tool's own target", () => {
+		const bash = targetTool("bash", "exec");
+		const grants = testGrants(["target:npm test"]);
+		expect(resolveApproval(bash, { path: "npm test" }, "always-ask-cached", {}, grants)).toMatchObject({
+			policy: "allow",
 			tier: "exec",
 			source: "mode",
+		});
+		// A different command still asks.
+		expect(resolveApproval(bash, { path: "npm run build" }, "always-ask-cached", {}, grants)).toMatchObject({
+			policy: "prompt",
+			tier: "exec",
+		});
+	});
+
+	it("keeps prompting exec tools that declare no cache target", () => {
+		const evalTool = { name: "eval", approval: "exec" as const } as AgentTool;
+		const grants = testGrants(["target:anything"]);
+		expect(resolveApproval(evalTool, { code: "1 + 1" }, "always-ask-cached", {}, grants)).toMatchObject({
+			policy: "prompt",
+			tier: "exec",
+			reason: "command not yet approved",
 		});
 	});
 
@@ -245,6 +261,19 @@ describe("approval target keys", () => {
 		expect(write.approvalCacheTargets?.({ path: "[notes.txt#ABCD]" })).toEqual(readKey);
 		expect(write.approvalCacheTargets?.({ path: "" })).toBeUndefined();
 		expect(read.approvalCacheTargets?.({})).toBeUndefined();
+	});
+
+	it("keys commands by tool and exact text, ignoring only surrounding whitespace", () => {
+		expect(approvalCommandKey("bash", "  npm test  ")).toBe("bash: npm test");
+		expect(approvalCommandKey("bash", "   ")).toBeUndefined();
+		expect(approvalCommandKey("bash", "echo 'a  b'")).not.toBe(approvalCommandKey("bash", "echo 'a b'"));
+
+		const bash = new BashTool(createToolSession(cwd));
+		expect(bash.approvalCacheTargets?.({ command: "git status" })).toEqual(["bash: git status"]);
+		expect(bash.approvalCacheTargets?.({ command: "git status " })).toEqual(["bash: git status"]);
+		expect(bash.approvalCacheTargets?.({ command: "git status --short" })).toEqual(["bash: git status --short"]);
+		expect(bash.approvalCacheTargets?.({ command: "" })).toBeUndefined();
+		expect(bash.approvalCacheTargets?.({})).toBeUndefined();
 	});
 });
 
@@ -400,16 +429,57 @@ describe("always-ask-cached wrapper cycle", () => {
 		expect(select).toHaveBeenCalledTimes(2);
 	});
 
-	it("keeps prompting exec-tier calls and never caches them", async () => {
+	it("remembers an approved exec command and keeps asking for other commands", async () => {
 		const select = vi.fn(async () => "Approve");
 		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
 		initializeRunner(runner, select);
 		const settings = cachedSettings();
-		const wrapper = new ExtensionToolWrapper(targetTool("exec_probe", "exec"), runner);
+		const tool: AgentTool = {
+			name: "bash",
+			label: "Bash",
+			description: "command tool",
+			parameters: {} as never,
+			approval: "exec",
+			approvalCacheTargets: (args: unknown) =>
+				isRecord(args) && typeof args.command === "string"
+					? [approvalCommandKey("bash", args.command)!]
+					: undefined,
+			execute: async () => ({ content: [{ type: "text" as const, text: "executed" }] }),
+		};
+		const wrapper = new ExtensionToolWrapper(tool, runner);
 
-		await wrapper.execute("exec-first", { path: "script.sh" }, undefined, undefined, context(settings));
-		await wrapper.execute("exec-second", { path: "script.sh" }, undefined, undefined, context(settings));
+		await wrapper.execute("exec-first", { command: "npm test" }, undefined, undefined, context(settings));
+		expect(select).toHaveBeenCalledTimes(1);
+		expect(getApprovalCache(settings.getAgentDir()).has("bash: npm test")).toBe(true);
+
+		await wrapper.execute("exec-again", { command: "npm test" }, undefined, undefined, context(settings));
+		expect(select).toHaveBeenCalledTimes(1);
+
+		await wrapper.execute("exec-other", { command: "npm run build" }, undefined, undefined, context(settings));
 		expect(select).toHaveBeenCalledTimes(2);
-		expect(getApprovalCache(settings.getAgentDir()).has("target:script.sh")).toBe(false);
+	});
+
+	it("does not remember a command whose prompt came from a tool safety override", async () => {
+		const select = vi.fn(async () => "Approve");
+		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
+		initializeRunner(runner, select);
+		const settings = cachedSettings();
+		const tool: AgentTool = {
+			name: "bash",
+			label: "Bash",
+			description: "guarded command tool",
+			parameters: {} as never,
+			approval: () => ({ tier: "exec", override: true, reason: "critical pattern detected" }),
+			approvalCacheTargets: () => ["bash: rm -rf /"],
+			execute: async () => ({ content: [{ type: "text" as const, text: "executed" }] }),
+		};
+		const wrapper = new ExtensionToolWrapper(tool, runner);
+
+		await wrapper.execute("guarded-first", { command: "rm -rf /" }, undefined, undefined, context(settings));
+		await wrapper.execute("guarded-second", { command: "rm -rf /" }, undefined, undefined, context(settings));
+		expect(select).toHaveBeenCalledTimes(2);
+		expect(getApprovalCache(settings.getAgentDir()).has("bash: rm -rf /")).toBe(false);
+		const [title] = select.mock.calls[0] as unknown as [string, string[]];
+		expect(title).toContain("critical pattern detected");
 	});
 });

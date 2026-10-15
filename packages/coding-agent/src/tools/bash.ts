@@ -35,6 +35,7 @@ import { resolveCliEntryCmd } from "../subprocess/worker-client";
 import { TerminalGraphicsDecoder } from "../utils/terminal-graphics";
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
+import { approvalCommandKey } from "./approval-targets";
 import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-interactive";
 import { checkBashInterception } from "./bash-interceptor";
 import { rewriteGitWorktreeAdd } from "./bash-worktree-rewrite";
@@ -585,6 +586,18 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			};
 		}
 		return "exec";
+	};
+	/**
+	 * `always-ask-cached` key: the exact command this call runs (`bash: <command>`),
+	 * so approving `npm test` once stops the prompt for that same command while a
+	 * changed command still asks. Commands the approval above forces a prompt for
+	 * (critical overrides, `bash.patterns` rules) are never recorded.
+	 */
+	readonly approvalCacheTargets = (args: unknown): readonly string[] | undefined => {
+		const rawCommand = (args as Partial<BashToolInput>).command;
+		if (typeof rawCommand !== "string") return undefined;
+		const key = approvalCommandKey("bash", rawCommand);
+		return key === undefined ? undefined : [key];
 	};
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const rawCommand = (args as Partial<BashToolInput>).command;

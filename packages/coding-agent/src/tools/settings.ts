@@ -306,9 +306,9 @@ export const cfgToolsApproval = register({
 
 // Default tool approval mode (interaction tab, but governs the tool wrapper).
 //   "always-ask"        — auto-approves read-tier tools only; prompts for write/exec.
-//   "always-ask-cached" — prompts per target for read/write tools; approved targets
-//                         are remembered under the agent directory and skip later
-//                         prompts. Exec-tier tools keep prompting.
+//   "always-ask-cached" — prompts per target (file path, or exact command) for
+//                         read/write/exec calls; approved targets are remembered
+//                         under the agent directory and skip later prompts.
 //   "write"             — auto-approves read and write-tier tools; prompts for exec.
 //   "yolo"              — auto-approves every tier.
 export const cfgToolsApprovalMode = register({
@@ -321,7 +321,7 @@ export const cfgToolsApprovalMode = register({
 		group: "Approvals",
 		label: "Tool Approval",
 		description:
-			"Default approval behavior for tool calls. 'Always ask' auto-approves read-only tools only. 'Ask and remember' prompts for read/write targets once per target and remembers approvals. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers; user policy may still prompt or block.",
+			"Default approval behavior for tool calls. 'Always ask' auto-approves read-only tools only. 'Ask and remember' prompts for read/write targets and exec commands once each and remembers approvals. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers; user policy may still prompt or block.",
 		options: [
 			{
 				value: "always-ask",
@@ -332,7 +332,7 @@ export const cfgToolsApprovalMode = register({
 				value: "always-ask-cached",
 				label: "Ask and remember",
 				description:
-					"Ask the first time a read or write tool touches a file, then remember the approved path so later operations on it run without asking. Exec tools still require confirmation every time.",
+					"Ask the first time a read or write tool touches a file and the first time a command runs, then remember it so the same file or exact command runs without asking. Commands flagged as dangerous, and per-tool or per-pattern prompt policies, still ask every time.",
 			},
 			{
 				value: "write",

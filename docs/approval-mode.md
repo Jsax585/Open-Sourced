@@ -20,7 +20,7 @@ Configure with `tools.approvalMode`:
 | Mode                 | Auto-approves           | Prompts for     |
 | -------------------- | ----------------------- | --------------- |
 | `always-ask`         | `read`                  | `write`, `exec` |
-| `always-ask-cached`  | approved targets        | `write`, `exec`, new `read` targets |
+| `always-ask-cached`  | approved targets and commands | `write`, `exec`, new `read` targets |
 | `write`              | `read`, `write`         | `exec`          |
 | `yolo` (default)     | `read`, `write`, `exec` | none            |
 
@@ -28,14 +28,16 @@ Configure with `tools.approvalMode`:
 
 ### Ask and remember (`always-ask-cached`)
 
-The **Ask and remember** mode (`always-ask-cached`) behaves like `always-ask` for exec-tier tools — they prompt on every call — but turns read/write file operations into one approval per target:
+The **Ask and remember** mode (`always-ask-cached`) turns file operations and shell commands into one approval per target:
 
 - The first `read`, `write`, or `edit` touching a path prompts (`Reason: target not yet approved`).
+- The first `bash` run of a command prompts (`Reason: command not yet approved`). Approving records `bash: <command>`; the same command text then runs without asking, while any change to it — including inside quotes — asks again.
 - Approving records that target in `approval-cache.json` under the active agent directory (`~/.omp/agent/approval-cache.json`, or the profile's equivalent). Later operations on the same target run without prompting.
 - A read of `file.ts:120-140` and a write to `file.ts` share one entry: the selector (`:120-140`, `:raw`, `:img`, `?q=`) is peeled, the path resolves against the session cwd, and case is folded on case-insensitive platforms. Registered internal URLs (`xd://…`, `local://…`) are keyed by their normalized URL.
+- Command grants are keyed by tool name and the exact command, not by working directory or execution plumbing (`pty`, `async`, service `name`) — like `bash.patterns` allow rules, which are also cwd-independent.
 - Denying leaves no entry, so the next attempt prompts again.
-- Read-tier tools without a target (`glob`, `grep`, listings) stay auto-approved, and write-tier tools with no resolvable target keep prompting every call.
-- Prompts forced by a tool's own `policy: prompt`/`override` or by `tools.approval.<tool>: prompt` stay per-call: only approvals raised by the mode itself are cached.
+- Read-tier tools without a target (`glob`, `grep`, listings) stay auto-approved. Exec tools with no cache target keep prompting on every call: `eval`, `browser`, `task`, `computer`, and any tool an extension registers without `approvalCacheTargets`.
+- Prompts forced by a tool's own `policy: prompt`/`override` or by `tools.approval.<tool>: prompt` stay per-call: only approvals raised by the mode itself are cached. That covers bash critical-command overrides (`rm -rf /`, fork bombs, …) and `bash.patterns` `prompt` rules, which ask every time even for an otherwise remembered command.
 - `--auto-approve`/`--yolo` still force yolo execution and bypass the cache entirely.
 
 The cache file is a plain JSON map of normalized target → `{ tool, approvedAt }`; deleting the file (or an entry) revokes the grants.
