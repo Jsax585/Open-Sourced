@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `startup.scratchDir` and `/scratch` to choose the directory omp starts in when launched from your home directory, instead of the system temp directory ([#14150](https://github.com/can1357/oh-my-pi/pull/14150) by [@jaredlyon](https://github.com/jaredlyon))
+
 ## [18.11.0] - 2026-10-14
 
 ### Added
