@@ -5,6 +5,7 @@ import type {
 	AssistantMessageEventStream,
 	CacheRetention,
 	Context,
+	Model,
 	OpenAIResponseInclude,
 	ServiceTier,
 	TokenTaskBudget,
@@ -130,7 +131,8 @@ export interface AuthGatewayStreamControl {
 }
 
 export interface AuthGatewayFormatModule {
-	parseRequest(body: unknown, headers?: Headers): AuthGatewayParsedRequest;
+	/** Resolved upstream identity is available to codecs that bind native replay history. */
+	parseRequest(body: unknown, headers: Headers | undefined, model: Model): AuthGatewayParsedRequest;
 	encodeResponse(message: AssistantMessage, requestedModelId: string): Record<string, unknown>;
 	encodeStream(
 		events: AssistantMessageEventStream,

@@ -214,6 +214,7 @@ omp auth-gateway check   [--strict] [--json]
 | `POST` | `/v1/chat/completions`  | bearer | OpenAI Chat Completions wire format                          |
 | `POST` | `/v1/messages`          | bearer | Anthropic Messages wire format                               |
 | `POST` | `/v1/responses`         | bearer | OpenAI Responses wire format                                 |
+| `POST` | `/v1/codex/responses`   | bearer | OpenAI Codex Responses wire format |
 | `POST` | `/v1/pi/stream`         | bearer | Native `pi-ai` stream wire format                            |
 | `POST` | `/v1/systemone`         | bearer | TypeSafe System One judgments (`judge` models, e.g. `typesafe/jev-latest`); `/alpha/decisions` is the OpenRouter Decisions alias |
 | `POST` | `/v1/images/generations` | bearer | Image generation, OpenAI Images JSON wire; `/v1/images` is the OpenRouter alias (`image` models) |
@@ -241,6 +242,25 @@ Live OpenRouter discovery covers image and Decisions rosters, `/embeddings/model
 Inference routes record observed usage against `x-omp-install-id`, `x-omp-hostname`, and `x-omp-app`; unlabeled requests fall back to the gateway host's identity. These attribution headers are not forwarded upstream. Completed non-streaming responses carry computed cost in `x-litellm-response-cost` when known; streaming chat responses send headers before usage arrives and do not include that cost header. Video cost may become available only while polling. Upstreams that report tokens only (TypeSafe) are priced from the catalog model; the response body's own `cost` field (OpenRouter shape) is only present when the upstream billed one.
 
 TypeSafe clients using the default base-URL resolver can set `TYPESAFE_BASE_URL=http://gateway:4000` with `TYPESAFE_API_KEY=<gateway token>`. omp's catalog-backed `judge` role passes the model's explicit `baseUrl`, which takes precedence over that environment fallback; configure the TypeSafe provider's `baseUrl` and `apiKey` in `models.yml` to use the gateway. OpenAI-SDK-style clients use `http://gateway:4000/v1`.
+
+Codex CLI clients can use a custom Responses provider with the gateway bearer token:
+
+```toml
+model_provider = "omp_gateway"
+model = "openai-codex/gpt-5.3-codex"
+
+[model_providers.omp_gateway]
+name = "OMP gateway"
+base_url = "http://127.0.0.1:4000/v1/codex"
+env_key = "OMP_GATEWAY_TOKEN"
+wire_api = "responses"
+```
+
+`/v1/codex/responses` accepts JSON or `Content-Encoding: zstd`, translates function/custom tools (including namespaces and client-side tool discovery), and preserves encrypted reasoning in authoritative `response.output_item.done` events. The requested model still selects the upstream provider; this route does not force an OpenAI subscription backend. Explicit `parallel_tool_calls` and `text` controls reach Responses-compatible upstreams. WebSocket upgrade requests receive `426` so Codex falls back to HTTP SSE.
+
+For OpenAI Responses, Azure Responses, and Codex Responses upstreams, replayed history is associated with the resolved upstream provider, API, and model rather than the client-facing model alias. Responses input items do not identify their source, so this assumes the history came from that same upstream model; the gateway cannot verify its origin or make encrypted history portable across providers or models. Non-Responses upstreams retain the existing cross-protocol conversion rules; OpenAI encrypted reasoning is not relabeled as another provider's signed thinking.
+
+This is a protocol-translation route, not a native Codex backend proxy. Hosted tools follow the existing Responses bridge's policy (accepted but not executed). Remote encrypted compaction requests/history return `400` rather than losing context; the custom provider configuration above uses Codex's local compaction. No WebSocket sessions or stored-response chaining are exposed to clients. Existing `/v1/responses`, `/v1/chat/completions`, and `/v1/messages` keep their own codecs and behavior.
 
 There is no raw provider passthrough path. All supported routes go through `pi-ai` provider logic so credential-specific request shaping, OAuth refresh-on-auth-error, and provider quirks stay centralized.
 
