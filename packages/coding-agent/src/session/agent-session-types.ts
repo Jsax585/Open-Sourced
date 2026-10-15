@@ -79,6 +79,12 @@ export type AsyncJobSnapshotItem = Pick<
 > & {
 	/** Full command line of a job that runs a process; `label` is cut to 120 characters. */
 	command?: string;
+	/**
+	 * A running task job's latest completion self-estimate (0–100) from the
+	 * subagent completion probe (`task.completionProbe`). Absent until the first
+	 * estimate arrives and once the job settles.
+	 */
+	completionPercent?: number;
 };
 
 /** One async job as a job inspector (the jobs sheet) shows it beyond its snapshot row. */

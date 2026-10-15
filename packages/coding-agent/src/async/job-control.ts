@@ -6,7 +6,14 @@
 
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 
-import type { AsyncJob, AsyncJobDetails, AsyncJobManager, AsyncJobType } from "./job-manager";
+import {
+	type AsyncJob,
+	type AsyncJobDetails,
+	type AsyncJobManager,
+	type AsyncJobType,
+	taskJobCompletionPercent,
+	taskJobProgressRecord,
+} from "./job-manager";
 
 import { renderStructuredJson, structuredStatusLabel } from "../session/async-job-delivery";
 import { USER_INTERRUPT_LABEL } from "../session/messages";
@@ -153,6 +160,7 @@ interface TrackedJobLike {
 	startTime: number;
 	endTime?: number;
 	latestDetails?: AsyncJobDetails;
+	agentId?: string;
 	resultText?: string;
 	errorText?: string;
 	structured?: StructuredSubagentOutput;
@@ -173,41 +181,25 @@ export function snapshotJobs(
 		let resolvedModelIdentity: string | undefined;
 		let resolvedThinkingLevel: JobSnapshot["resolvedThinkingLevel"];
 		let advisor = false;
-		let completionPercent: number | undefined;
-		if (latest.type === "task") {
-			const progressValue = latest.latestDetails?.progress;
-			if (Array.isArray(progressValue)) {
-				let progressRecord: Record<string, unknown> | undefined;
-				for (const item of progressValue) {
-					if (!item || typeof item !== "object") continue;
-					const candidate = item as Record<string, unknown>;
-					if (!progressRecord) progressRecord = candidate;
-					if (candidate.id === latest.id) {
-						progressRecord = candidate;
-						break;
-					}
-				}
-				const modelValue = progressRecord?.resolvedModel;
-				if (typeof modelValue === "string") {
-					const trimmed = modelValue.trim();
-					if (trimmed) resolvedModel = trimmed;
-				}
-				const identityValue = progressRecord?.resolvedModelIdentity;
-				if (typeof identityValue === "string") {
-					const trimmed = identityValue.trim();
-					if (trimmed) resolvedModelIdentity = trimmed;
-				}
-				const thinkingValue = progressRecord?.resolvedThinkingLevel;
-				if (typeof thinkingValue === "string") {
-					resolvedThinkingLevel = parseConfiguredThinkingLevel(thinkingValue);
-				}
-				advisor = progressRecord?.advisor === true;
-				const completionValue = progressRecord?.completionPercent;
-				if (typeof completionValue === "number" && Number.isFinite(completionValue)) {
-					completionPercent = completionValue;
-				}
+		const progressRecord = taskJobProgressRecord(latest);
+		if (progressRecord) {
+			const modelValue = progressRecord.resolvedModel;
+			if (typeof modelValue === "string") {
+				const trimmed = modelValue.trim();
+				if (trimmed) resolvedModel = trimmed;
 			}
+			const identityValue = progressRecord.resolvedModelIdentity;
+			if (typeof identityValue === "string") {
+				const trimmed = identityValue.trim();
+				if (trimmed) resolvedModelIdentity = trimmed;
+			}
+			const thinkingValue = progressRecord.resolvedThinkingLevel;
+			if (typeof thinkingValue === "string") {
+				resolvedThinkingLevel = parseConfiguredThinkingLevel(thinkingValue);
+			}
+			advisor = progressRecord.advisor === true;
 		}
+		const completionPercent = taskJobCompletionPercent(latest);
 		return {
 			id: latest.id,
 			type: latest.type,
@@ -219,7 +211,7 @@ export function snapshotJobs(
 			...(resolvedModelIdentity ? { resolvedModelIdentity } : {}),
 			...(resolvedThinkingLevel !== undefined ? { resolvedThinkingLevel } : {}),
 			...(advisor ? { advisor: true } : {}),
-			...(completionPercent !== undefined && latest.status === "running" ? { completionPercent } : {}),
+			...(completionPercent !== undefined ? { completionPercent } : {}),
 			...(!resultConsumed && options.includeResults !== false && latest.resultText
 				? { resultText: latest.resultText }
 				: {}),

@@ -172,6 +172,61 @@ describe("AgentSession owner-routed async delivery", () => {
 		expect(recent.find(job => job.id === "proc-job")?.command).toBe(command);
 	});
 
+	it("exposes a running task job's own completion estimate in the async job snapshot", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			convertToLlm,
+			streamFn: mock.stream,
+		});
+		const authStorage = await AuthStorage.create(":memory:");
+		authStorages.push(authStorage);
+		const manager = new AsyncJobManager({});
+		AsyncJobManager.setInstance(manager);
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated(),
+			modelRegistry: new ModelRegistry(authStorage),
+			agentId: "Owner",
+			asyncJobManager: manager,
+		});
+
+		const reported = Promise.withResolvers<void>();
+		const gate = Promise.withResolvers<string>();
+		// A live job already holds the subagent's id, so the task job's id is suffixed.
+		manager.register("bash", "occupies the id", async () => gate.promise, { id: "Worker", ownerId: "Owner" });
+		const taskJobId = manager.register(
+			"task",
+			"subagent work",
+			async ({ reportProgress }) => {
+				// A batch reports every member's progress, keyed by subagent id; only this job's own entry counts.
+				await reportProgress("working", {
+					progress: [
+						{ id: "Sibling", completionPercent: 90 },
+						{ id: "Worker", completionPercent: 40 },
+					],
+				});
+				reported.resolve();
+				return gate.promise;
+			},
+			{ id: "Worker", ownerId: "Owner", agentId: "Worker" },
+		);
+		await reported.promise;
+		expect(taskJobId).toBe("Worker-2");
+
+		const running = session.getAsyncJobSnapshot()?.running ?? [];
+		expect(running.find(job => job.id === "Worker-2")?.completionPercent).toBe(40);
+		const bashJob = running.find(job => job.id === "Worker");
+		expect(bashJob).toBeDefined();
+		expect(Object.hasOwn(bashJob!, "completionPercent")).toBe(false);
+
+		gate.resolve("done");
+		await session.settleAsyncWork();
+	});
+
 	it("does not spill an incomplete background capture as full output during follow-up delivery", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
