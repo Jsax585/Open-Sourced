@@ -228,20 +228,30 @@ class ReadCountingStorage extends ControlledRewriteStorage {
 /**
  * An in-memory backend for {@link IndexedSessionStorage} that counts every
  * write to a path and can hold the next `remove()` until released, then
- * remove the paths or fail.
+ * remove the paths, fail, or remove only the first path and then fail.
  */
 class HeldRemoveBackend implements SessionStorageBackend {
 	readonly files = new Map<string, string>();
 	readonly writes = new Map<string, number>();
-	#heldRemove: { started: PromiseWithResolvers<void>; release: PromiseWithResolvers<void>; fail: boolean } | undefined;
+	#heldRemove:
+		| {
+				started: PromiseWithResolvers<void>;
+				release: PromiseWithResolvers<void>;
+				fail: "none" | "before-remove" | "after-first-path";
+		  }
+		| undefined;
 
-	/** Hold the next remove until `release()`; `started` resolves once it waits. With `fail`, it then throws EIO. */
-	holdNextRemove(options: { fail?: boolean } = {}): { started: Promise<void>; release: () => void } {
-		const held = {
-			started: Promise.withResolvers<void>(),
-			release: Promise.withResolvers<void>(),
-			fail: options.fail ?? false,
-		};
+	/**
+	 * Hold the next remove until `release()`; `started` resolves once it waits. `fail` picks the outcome:
+	 * `"none"` removes every path, `"before-remove"` throws EIO with every path intact, and
+	 * `"after-first-path"` removes the session row and then throws EIO, as Redis's DEL-then-HDEL or SQL's
+	 * per-path DELETE loop can fail partway.
+	 */
+	holdNextRemove(fail: "none" | "before-remove" | "after-first-path" = "none"): {
+		started: Promise<void>;
+		release: () => void;
+	} {
+		const held = { started: Promise.withResolvers<void>(), release: Promise.withResolvers<void>(), fail };
 		this.#heldRemove = held;
 		return { started: held.started.promise, release: () => held.release.resolve() };
 	}
@@ -306,7 +316,8 @@ class HeldRemoveBackend implements SessionStorageBackend {
 			this.#heldRemove = undefined;
 			held.started.resolve();
 			await held.release.promise;
-			if (held.fail) throw Object.assign(new Error("EIO: synthetic remove failure"), { code: "EIO" });
+			if (held.fail === "after-first-path") this.files.delete(paths[0]);
+			if (held.fail !== "none") throw Object.assign(new Error("EIO: synthetic remove failure"), { code: "EIO" });
 		}
 		for (const path of paths) this.files.delete(path);
 	}
@@ -1283,9 +1294,35 @@ describe("a dropped session file on memory and indexed storage (C8)", () => {
 		},
 	);
 
+	it.each(windowWrites)(
+		"counts as gone on indexed storage when its remove deleted the session row and then failed, with $write in the window (C4)",
+		async ({ run }) => {
+			const { backend, storage, manager, sessionFile } = await indexedSession();
+			const held = backend.holdNextRemove("after-first-path");
+			const drop = manager.dropSession(sessionFile);
+			await held.started;
+			const writesBefore = backend.writes.get(sessionFile) ?? 0;
+			await run(manager);
+			held.release();
+			await expect(drop).rejects.toThrow("EIO");
+			expect(manager.getSessionFile()).toBeUndefined();
+			manager.appendMessage(userTurn("after the failed delete"));
+			await manager.flush();
+			const next = await manager.newSession();
+			manager.appendMessage(assistantMessage("in the new session"));
+			await manager.flush();
+			await manager.close();
+			await storage.drain();
+
+			expect(next).not.toBe(sessionFile);
+			expect(backend.writes.get(sessionFile) ?? 0).toBe(writesBefore);
+			expect(backend.files.has(sessionFile)).toBe(false);
+		},
+	);
+
 	it("keeps saving on indexed storage after its remove failed, publishing a held title through the slot (C1, C4, C6)", async () => {
 		const { backend, storage, manager, sessionFile } = await indexedSession();
-		const held = backend.holdNextRemove({ fail: true });
+		const held = backend.holdNextRemove("before-remove");
 		const drop = manager.dropSession(sessionFile);
 		await held.started;
 		manager.appendMessage(userTurn("in the window"));
