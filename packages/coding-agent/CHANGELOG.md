@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Copy the latest assistant response to the clipboard with `/copy last` or the `Alt+C` keybinding (`app.clipboard.copyLastAssistant`) ([#14652](https://github.com/can1357/oh-my-pi/pull/14652) by [@danzaio](https://github.com/danzaio)).
+
+### Changed
+
+- Agent Hub keeps existing agents in place while open; new agents appear first in the flat roster or within their tree sibling group ([#13066](https://github.com/can1357/oh-my-pi/pull/13066) by [@kmccleary3301](https://github.com/kmccleary3301))
+
 ### Fixed
 
 - Fixed print mode returning success after length-stop recovery gave up; it now waits for the session to settle before choosing its exit code ([#15732](https://github.com/can1357/oh-my-pi/pull/15732) by [@nick-maderight](https://github.com/nick-maderight))

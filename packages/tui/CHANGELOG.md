@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `app.clipboard.copyLastAssistant` keybinding action and `extractLastAssistantText` helper to copy the latest assistant response ([#14652](https://github.com/can1357/oh-my-pi/pull/14652) by [@danzaio](https://github.com/danzaio)).
+
+### Changed
+
+- Agent Hub keeps existing agents in place while open; new agents appear first in the flat roster or within their tree sibling group ([#13066](https://github.com/can1357/oh-my-pi/pull/13066) by [@kmccleary3301](https://github.com/kmccleary3301))
+
 ### Fixed
 
 - A collapsing live block no longer leaves its slack as a band of blank rows between the retired history and the live rows: the slack falls below the transcript, so a streamed reply stays contiguous and the input keeps the bottom row ([#15499](https://github.com/can1357/oh-my-pi/pull/15499) by [@iacore](https://github.com/iacore))
