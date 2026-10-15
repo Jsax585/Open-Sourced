@@ -6,6 +6,10 @@
 
 - Added OpenZoo live model discovery from its keyless local proxy, including pricing and a single `auto` router entry.
 
+### Changed
+
+- GPT Image models (`gpt-image-*`, `chatgpt-image-*`) now classify as their own `gpt-image` family instead of `gpt` or `chatgpt`, so GPT chat-model rules no longer apply to them ([#14619](https://github.com/can1357/oh-my-pi/pull/14619) by [@jimhester](https://github.com/jimhester))
+
 ### Fixed
 
 - Fixed OpenZoo treating an OpenRouter `text->image` modality as image input; only the side before `->` counts, and a legacy `text+image` value still does.
