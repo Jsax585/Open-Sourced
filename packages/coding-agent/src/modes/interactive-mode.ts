@@ -1250,6 +1250,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	#todoAutoClearTimer: NodeJS.Timeout | undefined;
 	#todoAutoClearGeneration = 0;
 	#modelCycleClearTimer: NodeJS.Timeout | undefined;
+	#editorComponentFactory:
+		| ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor)
+		| undefined;
 	#composerStatusPersistTimer: NodeJS.Timeout | undefined;
 	#autoResumeCacheSyncPromise: Promise<void> | undefined;
 	#autoResumeCacheSyncPending = false;
@@ -7404,6 +7407,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const nextEditor = factory
 			? factory(this.ui, getEditorTheme(), this.keybindings)
 			: new CustomEditor(getEditorTheme());
+		this.#editorComponentFactory = factory;
 		nextEditor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		nextEditor.setImeSafeCursorLayout(cfgTuiImeSafeCursor.get(this.settings));
 		this.#applyVimMode(nextEditor);
@@ -7461,6 +7465,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.#syncVimStatus(nextEditor);
 		this.ui.requestRender();
+	}
+
+	getEditorComponent(): ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined {
+		return this.#editorComponentFactory;
 	}
 
 	// UI helpers
