@@ -1735,10 +1735,12 @@ export class SessionAdvisors {
 		// (catch-up off, or a review slower than its wait) keeps the one
 		// continuation the merged boundary flush would have granted it.
 		const finalReviewConcern =
-			severity === "concern" &&
 			this.#terminalUnwindActive &&
-			((advisor.reviewMode ?? cfgAdvisorReviewMode.get(this.#host.settings)) === "agent-end" ||
-				(cfgAdvisorContinueOnFinalConcern.get(this.#host.settings) && turn === this.#advisorPrimaryTurnsCompleted));
+			this.#isFinalReviewConcern(
+				severity,
+				(advisor.reviewMode ?? cfgAdvisorReviewMode.get(this.#host.settings)) === "agent-end",
+				turn,
+			);
 		const terminalUnwindPreserve =
 			this.#terminalUnwindActive && severity !== "blocker" && !finalReviewConcern && terminalAnswerNoQueuedWork;
 		const channel = resolveAdvisorDeliveryChannel({
@@ -1806,16 +1808,16 @@ export class SessionAdvisors {
 		const aborting = this.#host.abortInProgress();
 		const terminalAnswerNoQueuedWork = this.#hasTerminalTextAnswerWithoutQueuedWork();
 		const interruptImmuneTurnActive = this.#isAdvisorInterruptImmuneTurnActive();
-		const continueOnFinalConcern = cfgAdvisorContinueOnFinalConcern.get(this.#host.settings);
 		const shouldSteer = notes.some(n => {
 			// Steering eligibility: a blocker, or a concern from an agent-end
 			// reviewer or, with `advisor.continueOnFinalConcern`, from the review of
 			// the final turn. Other turn-mode concerns at a terminal boundary still
 			// preserve: the work was already reviewed per-turn.
-			const finalReviewConcern =
-				n.severity === "concern" &&
-				(this.#noteAdvisorIsAgentEnd(n.advisor) ||
-					(continueOnFinalConcern && n.turn === this.#advisorPrimaryTurnsCompleted));
+			const finalReviewConcern = this.#isFinalReviewConcern(
+				n.severity,
+				this.#noteAdvisorIsAgentEnd(n.advisor),
+				n.turn,
+			);
 			if (n.severity !== "blocker" && !finalReviewConcern) return false;
 			return (
 				resolveAdvisorDeliveryChannel({
@@ -1842,6 +1844,14 @@ export class SessionAdvisors {
 			}
 		}
 		return false;
+	}
+
+	#isFinalReviewConcern(severity: AdvisorSeverity | undefined, agentEnd: boolean, turn: number | undefined): boolean {
+		return (
+			severity === "concern" &&
+			(agentEnd ||
+				(cfgAdvisorContinueOnFinalConcern.get(this.#host.settings) && turn === this.#advisorPrimaryTurnsCompleted))
+		);
 	}
 
 	/**
