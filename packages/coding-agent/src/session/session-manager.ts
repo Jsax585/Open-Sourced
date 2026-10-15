@@ -20,7 +20,6 @@ import {
 	isEnotempty,
 	isFsError,
 	logger,
-	parseJsonlLenient,
 	pathIsWithin,
 	stringifyJson,
 	toError,
@@ -1447,40 +1446,58 @@ export class SessionManager {
 		}
 		if (headerId !== this.#sessionId) return false;
 
-		let appended: string;
-		try {
-			appended = this.#storage.readTextRangeSync(sessionFile, durable.issuedSize, storedSize);
-		} catch {
-			return false;
-		}
-		// A record the other writer has not finished would otherwise join the next append's first line.
-		if (!appended.endsWith("\n") || Buffer.byteLength(appended, "utf8") !== storedSize - durable.issuedSize)
-			return false;
-		let malformed = false;
-		const records = parseJsonlLenient<unknown>(appended, {
-			onMalformedRecord: () => {
-				malformed = true;
-			},
-		});
-		if (malformed) return false;
 		const foreign: SessionEntry[] = [];
 		const foreignIds = new Set<string>();
 		let shared = durable.confirmed;
-		for (const record of records) {
-			if (!isAppendedEntry(record)) return false;
-			if (this.#index.has(record.id)) {
-				if (foreign.length > 0 || this.#entries[shared]?.id !== record.id) return false;
-				shared++;
-				continue;
+		let position = durable.issuedSize;
+		let partial = "";
+		while (position < storedSize) {
+			let end = Math.min(position + SESSION_TAIL_APPEND_CHUNK_BYTES, storedSize);
+			let chunk: string | undefined;
+			while (end > position) {
+				try {
+					chunk = this.#storage.readTextRangeSync(sessionFile, position, end);
+				} catch {
+					return false;
+				}
+				if (Buffer.byteLength(chunk, "utf8") === end - position) break;
+				end--;
 			}
-			const parentId: unknown = record.parentId;
-			const parentKnown =
-				parentId === null ||
-				(typeof parentId === "string" && (this.#index.has(parentId) || foreignIds.has(parentId)));
-			if (!parentKnown || foreignIds.has(record.id)) return false;
-			foreign.push(record);
-			foreignIds.add(record.id);
+			if (chunk === undefined || Buffer.byteLength(chunk, "utf8") !== end - position) return false;
+
+			const records = partial + chunk;
+			let start = 0;
+			for (;;) {
+				const newline = records.indexOf("\n", start);
+				if (newline === -1) break;
+				const line = records.slice(start, newline);
+				start = newline + 1;
+				if (line.trim().length === 0) continue;
+				let record: unknown;
+				try {
+					record = JSON.parse(line);
+				} catch {
+					return false;
+				}
+				if (!isAppendedEntry(record)) return false;
+				if (this.#index.has(record.id)) {
+					if (foreign.length > 0 || this.#entries[shared]?.id !== record.id) return false;
+					shared++;
+					continue;
+				}
+				const parentId: unknown = record.parentId;
+				const parentKnown =
+					parentId === null ||
+					(typeof parentId === "string" && (this.#index.has(parentId) || foreignIds.has(parentId)));
+				if (!parentKnown || foreignIds.has(record.id)) return false;
+				foreign.push(record);
+				foreignIds.add(record.id);
+			}
+			partial = records.slice(start);
+			position = end;
 		}
+		// A record the other writer has not finished would otherwise join the next append's first line.
+		if (partial.length > 0) return false;
 		resolveBlobRefsInEntriesSync(foreign, this.#blobs);
 		this.#adoptForeignEntries({ foreign, at: shared, shared, extendsFrontier: true }, storedSize);
 		return this.#durable !== undefined;

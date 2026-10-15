@@ -21,6 +21,7 @@ import { SESSION_TAIL_APPEND_CHUNK_BYTES, SessionManager } from "@oh-my-pi/pi-co
 import {
 	FileSessionStorage,
 	MemorySessionStorage,
+	SESSION_HEADER_PREFIX_BYTES,
 	type SessionStorageWriteOptions,
 	type SessionStorageWriter,
 	SessionWriteConflictError,
@@ -211,6 +212,7 @@ class AppendRecordingStorage extends ControlledRewriteStorage {
 /** Counts the bytes every synchronous read-back returns. */
 class ReadCountingStorage extends ControlledRewriteStorage {
 	bytesRead = 0;
+	readonly rangeReadBytes: number[] = [];
 
 	override readTextSync(fpath: string): string {
 		const text = super.readTextSync(fpath);
@@ -220,7 +222,9 @@ class ReadCountingStorage extends ControlledRewriteStorage {
 
 	override readTextRangeSync(fpath: string, start: number, end: number): string {
 		const text = super.readTextRangeSync(fpath, start, end);
-		this.bytesRead += Buffer.byteLength(text, "utf8");
+		const bytes = Buffer.byteLength(text, "utf8");
+		this.bytesRead += bytes;
+		this.rangeReadBytes.push(bytes);
 		return text;
 	}
 }
@@ -1851,7 +1855,7 @@ describe("a turn appended after another writer's entries", () => {
 		expect(userTurnsOf((await reopen(movedTo, sessionDir)).getBranch())).toEqual(["own turn"]);
 	});
 
-	it("reads back only the bytes the other writer appended", async () => {
+	it("reads the bounded header plus only the bytes the other writer appended", async () => {
 		const storage = new ReadCountingStorage();
 		const first = await fileSession();
 		// History the read-back must not touch.
@@ -1870,12 +1874,36 @@ describe("a turn appended after another writer's entries", () => {
 		resumed.appendMessage(userTurn("latest turn"));
 		await expect(resumed.flush()).resolves.toBeUndefined();
 		expect(storage.bytesRead).toBeGreaterThan(0);
-		expect(storage.bytesRead).toBeLessThanOrEqual(appendedBytes);
+		expect(storage.bytesRead).toBeLessThanOrEqual(SESSION_HEADER_PREFIX_BYTES + appendedBytes);
 		const reopened = await reopen(first.sessionFile, first.sessionDir);
 		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "latest turn"]);
 		expect(reopened.getEntries()).toContainEqual(
 			expect.objectContaining({ type: "custom", customType: "previous-writer-tail" }),
 		);
+	});
+
+	it("adopts a foreign tail larger than three chunks without a transcript-sized range read", async () => {
+		const storage = new ReadCountingStorage();
+		const first = await fileSession();
+		const resumed = await SessionManager.open(first.sessionFile, first.sessionDir, storage, {
+			suppressBreadcrumb: true,
+		});
+		managers.push(resumed);
+		const payload = "x".repeat(1_000_000);
+		const backlog = Math.ceil((3 * SESSION_TAIL_APPEND_CHUNK_BYTES) / Buffer.byteLength(payload, "utf8"));
+		for (let i = 0; i < backlog; i++) first.manager.appendCustomEntry("foreign-backlog", { i, payload });
+		await first.manager.close();
+		storage.rangeReadBytes.length = 0;
+
+		resumed.appendMessage(userTurn("latest turn"));
+		await expect(resumed.flush()).resolves.toBeUndefined();
+
+		expect(Math.max(...storage.rangeReadBytes)).toBeLessThanOrEqual(SESSION_TAIL_APPEND_CHUNK_BYTES);
+		expect(
+			(await reopen(first.sessionFile, first.sessionDir))
+				.getEntries()
+				.filter(entry => entry.type === "custom" && entry.customType === "foreign-backlog"),
+		).toHaveLength(backlog);
 	});
 });
 
