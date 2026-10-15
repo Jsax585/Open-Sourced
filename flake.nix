@@ -37,6 +37,10 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # Builds pi-natives as a separate derivation; its filtered source
+    # (crates/ + manifests, no TS) lets Rust-untouched revs skip the build.
+    crane.url = "github:ipetkov/crane";
   };
 
   outputs =
@@ -44,6 +48,7 @@
       self,
       bun2nix,
       bun2nix-darwin-x64,
+      crane,
       nix-bun,
       nixpkgs,
       nixpkgs-darwin-x64,
@@ -83,27 +88,37 @@
           rustToolchain = rustToolchainFor system;
         };
 
+      piNativesFor =
+        system:
+        let
+          pkgs = pkgsFor system;
+        in
+        pkgs.callPackage ./nix/native.nix {
+          craneLib = (crane.mkLib pkgs).overrideToolchain (rustToolchainFor system);
+          source = self.outPath;
+        };
+
       packageFor =
         system:
         let
           pkgs = pkgsFor system;
           localPkgs = localPackagesFor system;
         in
-        pkgs.callPackage ./nix/package.nix (
-          {
-            source = self.outPath;
-          }
-          // localPkgs
-        );
+        pkgs.callPackage ./nix/package.nix {
+          source = self.outPath;
+          pi-natives = piNativesFor system;
+          inherit (localPkgs) bun bun2nix;
+        };
     in
     {
       packages = forAllSystems (
         system:
         let
           omp = packageFor system;
+          pi-natives = piNativesFor system;
         in
         {
-          inherit omp;
+          inherit omp pi-natives;
           default = omp;
         }
       );
