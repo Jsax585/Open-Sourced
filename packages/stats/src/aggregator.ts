@@ -357,10 +357,6 @@ async function syncAllSessionsLocked(
 			replay?: boolean,
 		) => Promise<ParseSessionResult>,
 	): Promise<ParsedSession | null> => {
-		// Snapshot this batch's promise and origin before awaiting: another worker
-		// can start the next metadata batch and replace the shared slots.
-		let metaPromise = metadata;
-		let metaStart = metadataStart;
 		if (index >= metadataEnd) {
 			const batch = files.slice(index, index + SYNC_METADATA_FILES);
 			const offsets = getFileOffsets(batch);
@@ -376,12 +372,10 @@ async function syncAllSessionsLocked(
 					}
 				}),
 			);
-			metaPromise = metadata;
-			metaStart = metadataStart;
 		}
 		// Capture the position before awaiting: another worker can start the next metadata batch.
-		const metadataIndex = index - metaStart;
-		const { fileStats, stored } = (await metaPromise)[metadataIndex];
+		const metadataIndex = index - metadataStart;
+		const { fileStats, stored } = (await metadata)[metadataIndex];
 		if (failed || !fileStats) return null;
 		if (
 			!replay &&

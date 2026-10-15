@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed stats omitting or miscounting session usage when syncing large histories with concurrent workers ([#15808](https://github.com/can1357/oh-my-pi/pull/15808) by [@yuzu-octopus](https://github.com/yuzu-octopus))
+- `omp stats` no longer risks dropping or mis-attributing a transcript's usage when the session history is larger than one metadata window and syncs run with concurrent workers ([#15808](https://github.com/can1357/oh-my-pi/issues/15808))
 
 ## [18.11.0] - 2026-10-14
 
