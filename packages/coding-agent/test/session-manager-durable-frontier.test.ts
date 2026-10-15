@@ -738,6 +738,56 @@ describe("a dropped session file", () => {
 		expect(listed.map(session => session.path)).not.toContain(sessionFile);
 	});
 
+	it("does not let an authoritative repair already in flight publish an edit before the delete (C2)", async () => {
+		const { storage, manager, sessionFile } = await fileSession();
+		const entry = firstUserEntry(manager);
+		if (entry.message.role !== "user") throw new Error("Expected a user message");
+		entry.message.content = "edited before the repair";
+		const drain = storage.parkNextDrain();
+		const recovery = manager.recoverPersistenceFromCurrentState().catch(() => undefined);
+		await drain.started;
+		const bytesAtDrop = fs.readFileSync(sessionFile);
+		const deleting = storage.parkNextDelete();
+		const drop = manager.dropSession(sessionFile);
+		// dropSession() waits for the repair before it deletes, so the repair runs on only once the drop has started.
+		drain.release();
+		await recovery;
+		await deleting.started;
+		const bytesAtDelete = fs.readFileSync(sessionFile);
+		deleting.release();
+		await expect(drop).resolves.toBeUndefined();
+		await manager.close().catch(() => undefined);
+
+		expect(bytesAtDelete.equals(bytesAtDrop)).toBe(true);
+		expect(fs.existsSync(sessionFile)).toBe(false);
+	});
+
+	it.each([
+		{ outcome: "succeeds", failDelete: false },
+		{ outcome: "fails with the journal intact", failDelete: true },
+	])(
+		"lets an authoritative repair it fenced off resolve without a persistence error when the delete $outcome (C2)",
+		async ({ failDelete }) => {
+			const { storage, manager, sessionFile } = await fileSession();
+			const errors: Error[] = [];
+			manager.onPersistenceError(error => errors.push(error));
+			const drain = storage.parkNextDrain();
+			const recovery = manager.recoverPersistenceFromCurrentState();
+			await drain.started;
+			if (failDelete) storage.parkNextDeleteToFail().fail();
+			const drop = manager.dropSession(sessionFile).then(
+				() => "resolved",
+				(error: Error) => error.message,
+			);
+			drain.release();
+			await expect(recovery).resolves.toBeUndefined();
+			expect(await drop).toBe(failDelete ? "EACCES: synthetic unlink failure" : "resolved");
+
+			expect(errors).toEqual([]);
+			expect(manager.getPersistenceFailure()).toBeUndefined();
+		},
+	);
+
 	it("stays deleted when an atomic rewrite already in flight would publish after the unlink (C2)", async () => {
 		const { storage, manager, sessionDir, sessionFile } = await fileSession();
 		const atomic = storage.parkNextAtomicRewrite();
