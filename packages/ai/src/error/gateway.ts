@@ -8,9 +8,10 @@ export interface GatewayErrorClassification {
 }
 
 /**
- * Message of the upstream answer the auth gateway substitutes for a request its
- * attempt hook refused. Whatever status a provider wraps it in, the client
- * gets a 403: the gateway refused the request, nothing failed upstream.
+ * Start of the message the auth gateway answers a request with when its
+ * attempt hook refused it; the gateway request's id follows. Whatever status a
+ * provider wraps it in, the client gets a 403: the gateway refused the
+ * request, nothing failed upstream.
  */
 export const GATEWAY_REFUSED_ATTEMPT_MESSAGE = "Upstream request refused by the gateway's attempt hook";
 
@@ -32,7 +33,7 @@ export const GATEWAY_REFUSED_ATTEMPT_MESSAGE = "Upstream request refused by the 
 export function classifyGatewayError(err: unknown): GatewayErrorClassification {
 	const message = err instanceof Error ? err.message : String(err);
 	if (message.includes(GATEWAY_REFUSED_ATTEMPT_MESSAGE)) {
-		return { status: 403, type: "permission_error", message: GATEWAY_REFUSED_ATTEMPT_MESSAGE };
+		return { status: 403, type: "permission_error", message };
 	}
 
 	// 1. Custom pi-ai errors may attach a numeric `status` property.

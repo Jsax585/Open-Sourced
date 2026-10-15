@@ -201,7 +201,10 @@ describe("auth-gateway upstream attempt hook", () => {
 
 			const refused = await send(harness, route, request);
 			expect(refused.status).toBe(403);
-			expect(await refused.text()).toContain("refused by the gateway's attempt hook");
+			// The client can find the hook's record of the refused attempt.
+			expect(await refused.text()).toContain(
+				`refused by the gateway's attempt hook (request ${harness.attempts[0]?.requestId})`,
+			);
 			expect(harness.trace).toEqual(["hook 1"]);
 
 			// The only credential is still usable.

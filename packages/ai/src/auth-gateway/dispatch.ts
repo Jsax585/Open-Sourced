@@ -275,20 +275,6 @@ export function buildGatewayApiKeyResolver(
 	};
 }
 
-/**
- * Upstream answer to a refused attempt. Providers fail a 422 as the request's
- * own fault, with no backoff retry, credential rotation or rate-limit block (a
- * 401, 403, 429 or 5xx can trigger those), and unlike a 400 it neither saves a
- * request dump nor makes Codex resend without zstd. The fixed message keeps the
- * hook's wording out of providers' error classification, which matches
- * usage-limit phrases at any status, and `classifyGatewayError` turns it into
- * the client's 403.
- */
-const REFUSED_ATTEMPT_BODY = JSON.stringify({
-	type: "error",
-	error: { type: "invalid_request_error", message: GATEWAY_REFUSED_ATTEMPT_MESSAGE },
-});
-
 /** Redirects a hooked GET or HEAD follows before it hands the provider the last one. */
 const MAX_REDIRECTS = 20;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -302,8 +288,7 @@ const CROSS_ORIGIN_DROPPED_HEADERS = ["authorization", "cookie", "proxy-authoriz
  * resends each reach it. `fetch` would follow a redirect without asking, so
  * redirects come back here: a GET or HEAD follows them with each hop approved
  * on its own, and any other request hands the provider the redirect itself. A
- * refused request answers {@link REFUSED_ATTEMPT_BODY} without touching the
- * network and logs the hook's reason.
+ * refused request is answered locally and the hook's reason logged.
  */
 export function gatewayUpstreamFetch(
 	opts: AuthGatewayRouteOptions,
@@ -312,6 +297,17 @@ export function gatewayUpstreamFetch(
 ): FetchImpl | undefined {
 	const hook = opts.onUpstreamAttempt;
 	if (!hook) return opts.fetch;
+	// The answer to a refused attempt. Providers fail a 422 as the request's own
+	// fault, with no backoff retry, credential rotation or rate-limit block (a
+	// 401, 403, 429 or 5xx can trigger those), and unlike a 400 it neither saves
+	// a request dump nor makes Codex resend without zstd. The fixed wording keeps
+	// the hook's reason out of providers' error classification, which matches
+	// usage-limit phrases at any status; `classifyGatewayError` turns it into the
+	// client's 403, and the request id lets the client find the hook's record.
+	const refusal = JSON.stringify({
+		type: "error",
+		error: { type: "invalid_request_error", message: `${GATEWAY_REFUSED_ATTEMPT_MESSAGE} (request ${requestId})` },
+	});
 	let attempts = 0;
 	/** The refusal to answer with, if the hook declines this request. */
 	const approve = async (url: URL, method: string, signal: AbortSignal | undefined): Promise<Response | undefined> => {
@@ -332,7 +328,7 @@ export function gatewayUpstreamFetch(
 				...attempt,
 				error: error instanceof Error ? error.message : String(error),
 			});
-			return new Response(REFUSED_ATTEMPT_BODY, {
+			return new Response(refusal, {
 				status: 422,
 				headers: { "content-type": "application/json", "x-should-retry": "false" },
 			});
