@@ -850,7 +850,9 @@ export class MCPManager {
 			this.#forgetLostServer(name);
 			this.#serverConfigs.set(name, config);
 			const connectionEpoch = this.#epoch;
-			const connectSignal = signal ? AbortSignal.any([this.#connectAbort.signal, signal]) : this.#connectAbort.signal;
+			const connectSignal = signal
+				? AbortSignal.any([this.#connectAbort.signal, signal])
+				: this.#connectAbort.signal;
 
 			// Whether this attempt still owns the server's pending slot. Only called
 			// after an await, by which point `connectionPromise` is registered.
