@@ -228,7 +228,9 @@ class ReadCountingStorage extends ControlledRewriteStorage {
 /**
  * An in-memory backend for {@link IndexedSessionStorage} that counts every
  * write to a path and can hold the next `remove()` until released, then
- * remove the paths, fail, or remove only the first path and then fail.
+ * remove the paths, fail, or remove only the first path and then fail. The
+ * next `readFull()` can fail, as a connection that failed the remove can
+ * still be failing for the readback after it.
  */
 class HeldRemoveBackend implements SessionStorageBackend {
 	readonly files = new Map<string, string>();
@@ -260,6 +262,9 @@ class HeldRemoveBackend implements SessionStorageBackend {
 		this.writes.set(path, (this.writes.get(path) ?? 0) + 1);
 	}
 
+	/** The next `readFull()` throws ECONNRESET. */
+	failNextRead = false;
+
 	async init(): Promise<void> {}
 
 	async loadIndex(): Promise<SessionStorageIndexEntry[]> {
@@ -267,6 +272,10 @@ class HeldRemoveBackend implements SessionStorageBackend {
 	}
 
 	async readFull(path: string): Promise<string | null> {
+		if (this.failNextRead) {
+			this.failNextRead = false;
+			throw Object.assign(new Error("ECONNRESET: synthetic read failure"), { code: "ECONNRESET" });
+		}
 		return this.files.get(path) ?? null;
 	}
 
@@ -1407,6 +1416,45 @@ describe("a dropped session file on memory and indexed storage (C8)", () => {
 		managers.push(reopened);
 		expect(reopened.getSessionName()).toBe("named in the window");
 		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "in the window", "after the failed delete"]);
+	});
+
+	it("keeps saving on indexed storage after its remove failed with the session row intact and the readback of it failed (C1, C4)", async () => {
+		const { backend, storage, manager, sessionFile } = await indexedSession();
+		const held = backend.holdNextRemove("before-remove");
+		const drop = manager.dropSession(sessionFile);
+		await held.started;
+		backend.failNextRead = true;
+		held.release();
+		await expect(drop).rejects.toThrow("EIO");
+		expect(backend.failNextRead).toBe(false);
+		expect(manager.getSessionFile()).toBe(sessionFile);
+
+		manager.appendMessage(userTurn("after the failed delete"));
+		await expect(manager.flush()).resolves.toBeUndefined();
+		await storage.drain();
+		const reopened = await SessionManager.open(sessionFile, "/sessions/proj", storage, { suppressBreadcrumb: true });
+		managers.push(reopened);
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "after the failed delete"]);
+	});
+
+	it("reports the next turn's failure instead of writing a headerless row when its remove deleted the session row and the readback of it failed (C2)", async () => {
+		const { backend, storage, manager, sessionFile } = await indexedSession();
+		const errors: Error[] = [];
+		manager.onPersistenceError(error => errors.push(error));
+		const held = backend.holdNextRemove("after-first-path");
+		const drop = manager.dropSession(sessionFile);
+		await held.started;
+		backend.failNextRead = true;
+		held.release();
+		await expect(drop).rejects.toThrow("EIO");
+		expect(backend.failNextRead).toBe(false);
+
+		manager.appendMessage(userTurn("after the failed delete"));
+		await expect(manager.flush()).rejects.toBeInstanceOf(SessionWriteConflictError);
+		await storage.drain().catch(() => undefined);
+
+		expect(errors.map(error => error.constructor)).toContain(SessionWriteConflictError);
+		expect(backend.files.has(sessionFile)).toBe(false);
 	});
 });
 

@@ -2965,9 +2965,12 @@ export class SessionManager {
 	 *   title slot in place; a full rewrite runs only for an edit or abandoned
 	 *   publish that waited, or when the slot write fails. The next append,
 	 *   `flush()` or `close()` appends the entries recorded meanwhile and any
-	 *   that missed the journal before the drop, or reports the failure. The
-	 *   next {@link newSession} for the same entries switches without
-	 *   appending the ones the file is missing, so it writes nothing to it.
+	 *   that missed the journal before the drop, or reports the failure. On
+	 *   indexed storage that next write is a full publish checked against
+	 *   the stored size instead, so a row the failed remove deleted is
+	 *   reported, never recreated without its header. The next
+	 *   {@link newSession} for the same entries switches without appending
+	 *   the ones the file is missing, so it writes nothing to it.
 	 */
 	async dropSession(sessionPath: string): Promise<void> {
 		const sessionFile = this.#sessionFile;
@@ -3022,6 +3025,11 @@ export class SessionManager {
 			}
 			this.#pendingDrop = undefined;
 			if (this.#sessionFile === sessionFile) {
+				// An indexed remove can fail after deleting the row while its
+				// readback fails too, so the row may be gone: the next write is a
+				// size-checked full publish, which reports a missing row where an
+				// append would recreate it without a header.
+				if (this.#storage.defersSyncPublish) this.#durable = undefined;
 				// The caller asked to discard these entries: /delete's newSession()
 				// must not append the ones the file is missing.
 				this.#refusedSessionSwitch = { generation: this.#entriesGeneration, count: this.#entries.length };
