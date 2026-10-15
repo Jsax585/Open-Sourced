@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `/relay` to opt into driving your existing Chrome tabs for the current session without enabling relay for every session ([#14424](https://github.com/can1357/oh-my-pi/pull/14424) by [@jasonharrison](https://github.com/jasonharrison)).
+
 ## [18.11.0] - 2026-10-14
 
 ### Added

@@ -149,7 +149,7 @@ export function createPersistedSubagentReviverFactory(
 			// them); expanding again is a no-op for those and only resolves aliases
 			// in files written before that. Absent = unadvised (the
 			// createSubagentSettings default).
-			const subagentSettings = createSubagentSettings(ctx.settings, {
+			const subagentSettings = createSubagentSettings(ctx.session.getSubagentSettings(), {
 				...(init.readSummarize === false ? { "read.summarize.enabled": false } : undefined),
 				...(init.advisor
 					? {
