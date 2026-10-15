@@ -770,6 +770,43 @@ describe("openzoo built-in provider", () => {
 		expect(builtReasoning("example-lab/plain")).toBe(false);
 	});
 
+	test("architecture.modality image output is not image input", async () => {
+		// OpenRouter spells modality as input->output. `text->image` is an
+		// image generator: a substring check used to mark that row image-capable,
+		// and inputModalitiesReported then kept the image through the Claude
+		// correction. Legacy `text+image` (no arrow) and `text+image->text`
+		// still accept image input. The picture ids are outside the image
+		// correction, so a pass there is the parser, not the KDL fill.
+		const options = openzooModelManagerOptions({
+			fetch: async () =>
+				Response.json({
+					data: [
+						{
+							id: "anthropic/claude-sonnet-4",
+							architecture: { modality: "text->image" },
+						},
+						{
+							id: "example-lab/legacy-picture",
+							architecture: { modality: "text+image" },
+						},
+						{
+							id: "example-lab/arrow-picture",
+							architecture: { modality: "text+image->text" },
+						},
+					],
+				}),
+		});
+		const models = await options.fetchDynamicModels?.();
+		const builtInput = (id: string) => {
+			const model = models?.find(item => item.id === id);
+			return model ? buildModel(model).input : undefined;
+		};
+
+		expect(builtInput("anthropic/claude-sonnet-4")).toEqual(["text"]);
+		expect(builtInput("example-lab/legacy-picture")).toEqual(["text", "image"]);
+		expect(builtInput("example-lab/arrow-picture")).toEqual(["text", "image"]);
+	});
+
 	test("an explicit text-only modality report survives the image correction", async () => {
 		// providers/openzoo.kdl marks Claude and Gemini image-capable because
 		// the roster often omits architecture. A row that does report

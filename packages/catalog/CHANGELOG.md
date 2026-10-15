@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Fixed OpenZoo treating an OpenRouter `text->image` modality as image input; only the side before `->` counts, and a legacy `text+image` value still does.
 - Fixed OpenZoo sending temperature, top_p, penalties, or stop to a model whose live roster lists parameters and omits those controls.
 - Fixed OpenZoo sending `top_k` or `min_p` when the live roster lists temperature and top_p but omits that extension.
 - Fixed OpenZoo dropping `top_k`, `min_p`, or penalties when the live roster lists that control but omits temperature or top_p.

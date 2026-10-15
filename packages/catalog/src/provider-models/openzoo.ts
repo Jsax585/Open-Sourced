@@ -204,12 +204,24 @@ function liveOpenzooSamplingCompat(entry: OpenAICompatibleModelRecord): OpenzooS
 }
 
 /**
+ * OpenRouter spells `architecture.modality` as `input->output`
+ * (`text->image`, `text+image->text`). Image on the output side is not
+ * image input. A legacy value with no arrow (`text+image`) is entirely input.
+ */
+function openzooModalityHasImageInput(modality: string): boolean {
+	const arrow = modality.indexOf("->");
+	const input = (arrow === -1 ? modality : modality.slice(0, arrow)).trim();
+	return input.includes("image");
+}
+
+/**
  * Input modalities the live row actually advertises. `undefined` means the
  * roster omitted them — leave the discovery default and let KDL
  * `input-modalities` correct at `buildModel` time. An explicit
  * `supports_vision` / `supports_image` / `supports_image_in: false`, with no
  * positive modality signal, is a reported text-only result so that correction
- * does not put image back.
+ * does not put image back. When the roster omits `input_modalities` and sets
+ * `architecture.modality`, only the input side of `->` counts.
  */
 function liveOpenzooInput(entry: OpenAICompatibleModelRecord): ("text" | "image")[] | undefined {
 	if (entry.supports_vision === true || entry.supports_image === true || entry.supports_image_in === true) {
@@ -221,7 +233,7 @@ function liveOpenzooInput(entry: OpenAICompatibleModelRecord): ("text" | "image"
 		}
 		const modality = entry.architecture.modality;
 		if (typeof modality === "string" && modality.length > 0) {
-			return modality.includes("image") ? ["text", "image"] : ["text"];
+			return openzooModalityHasImageInput(modality) ? ["text", "image"] : ["text"];
 		}
 	}
 	if (Array.isArray(entry.input_modalities)) {
