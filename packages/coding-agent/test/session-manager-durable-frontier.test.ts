@@ -788,6 +788,22 @@ describe("a dropped session file", () => {
 		},
 	);
 
+	it("lets an appendEntriesAtomically() batch already publishing commit when the delete then fails with the journal intact (C1)", async () => {
+		const { storage, manager, sessionDir, sessionFile } = await fileSession();
+		const atomic = storage.parkNextAtomicRewrite();
+		const batch = manager.appendEntriesAtomically(() => manager.appendCustomEntry("batched", { n: 1 }));
+		await atomic.started;
+		storage.parkNextDeleteToFail().fail();
+		const drop = manager.dropSession(sessionFile);
+		atomic.release();
+		const batchId = await batch;
+		await expect(drop).rejects.toThrow("EACCES");
+
+		expect(manager.getEntries().map(entry => entry.id)).toContain(batchId);
+		const reopened = await reopen(sessionFile, sessionDir);
+		expect(reopened.getEntries().map(entry => entry.id)).toContain(batchId);
+	});
+
 	it("stays deleted when an atomic rewrite already in flight would publish after the unlink (C2)", async () => {
 		const { storage, manager, sessionDir, sessionFile } = await fileSession();
 		const atomic = storage.parkNextAtomicRewrite();

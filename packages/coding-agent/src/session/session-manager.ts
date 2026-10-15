@@ -2946,9 +2946,10 @@ export class SessionManager {
 	/**
 	 * Delete a session file and its artifact directory. ENOENT is treated as
 	 * success. For the current session file:
-	 * - From the moment this is called, nothing this manager runs writes that
-	 *   path: no append, heal, rewrite or title write, and no publish already
-	 *   in flight, which is abandoned (an authoritative repair is waited for).
+	 * - From the moment this is called, nothing this manager starts writes
+	 *   that path: no append, heal, rewrite or title write. A publish already
+	 *   on the disk queue lands before the delete; an authoritative repair
+	 *   already in flight is abandoned and waited for.
 	 *   Entries recorded meanwhile stay in memory; rewrites and titles wait.
 	 * - The file counts as gone when the delete succeeds, or when it fails and
 	 *   a stat of the journal then fails with ENOENT (its artifact cleanup can
@@ -2986,9 +2987,12 @@ export class SessionManager {
 		};
 		this.#pendingDrop = drop;
 		try {
-			// A publish already past its pending-drop check could land after the
-			// unlink: abandon it through its commit guard and owe its body instead.
-			if (this.#atomicRewriteFenceEpoch !== null || this.#authoritativeRepair) {
+			// An authoritative repair runs off the disk queue and could publish
+			// after the unlink: abandon it through its commit guard, owe its body
+			// instead, and wait for it below. A publish on the disk queue already
+			// past its pending-drop check finishes before the writer drain, so
+			// before the delete.
+			if (this.#authoritativeRepair) {
 				this.#diskEpoch++;
 				this.#deferRewriteForPendingDrop();
 			}
