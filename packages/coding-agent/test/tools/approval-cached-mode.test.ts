@@ -624,6 +624,7 @@ describe("always-ask-cached wrapper cycle", () => {
 				editor: async () => undefined,
 				addAutocompleteProvider: () => {},
 				setEditorComponent: () => {},
+				getEditorComponent: () => undefined,
 				get theme() {
 					return {} as never;
 				},
@@ -734,6 +735,7 @@ describe("always-ask-cached wrapper cycle", () => {
 				editor: async () => undefined,
 				addAutocompleteProvider: () => {},
 				setEditorComponent: () => {},
+				getEditorComponent: () => undefined,
 				get theme() {
 					return {} as never;
 				},
