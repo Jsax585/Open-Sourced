@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added ACP subagent sessions for clients that advertise the unstable `subagents` capability: `omp acp` announces each subagent with `subagent_update` (running, then idle with its stop reason), streams its messages, thoughts and tool calls under its own session id, and reports its assignment and `agent://` messages as `session_message` updates ([#15043](https://github.com/can1357/oh-my-pi/pull/15043) by [@vnguyen42](https://github.com/vnguyen42))
+
 ### Changed
 
 - Reduced status-line refresh overhead while subagents have long conversations ([#15874](https://github.com/can1357/oh-my-pi/pull/15874) by [@iliaal](https://github.com/iliaal)).

@@ -8,16 +8,24 @@ import type {
 	ToolKind,
 } from "@oh-my-pi/pi-utils/acp";
 import { InternalUrlRouter } from "../../internal-urls/router";
-import { extractUriScheme } from "../../internal-urls/parse";
+import { extractUriScheme, parseInternalUrl } from "../../internal-urls/parse";
 import type { SchemeSpec } from "../../internal-urls/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
+import { recoverConflictUriPrefix } from "../../tools/conflict-detect";
 import { resolveToCwd, splitPathAndSelPreferringLiteralSync } from "../../tools/path-utils";
+import { unwrapHashlineHeaderPath } from "../../tools/plan-mode-guard";
 import type { TodoStatus } from "@oh-my-pi/pi-tui/tools/todo";
 import { canonicalizeMessage } from "@oh-my-pi/pi-tui/chat/thinking-display";
 
 interface MessageProgress {
 	textEmitted: boolean;
 	thoughtEmitted: boolean;
+}
+
+/** Per-transcript tracking that gives each streamed assistant message one ACP `messageId`. */
+export interface AcpLiveMessageState {
+	liveMessageId: string | undefined;
+	liveMessageProgress: MessageProgress | undefined;
 }
 
 interface AcpEventMapperOptions {
@@ -32,6 +40,15 @@ interface AcpEventMapperOptions {
 	 * before emitting `ToolCallLocation` entries.
 	 */
 	cwd?: string;
+	/**
+	 * Report agent↔agent (IRC) messages as ACP `session_message` updates. Set
+	 * only when the client advertised the unstable `subagents` capability;
+	 * without it, peer messages stay off the external session stream.
+	 */
+	sessionMessages?: {
+		/** ACP session id of an omp agent, or `undefined` when that agent is not exposed to the client. */
+		resolveAgentSessionId: (agentId: string) => string | undefined;
+	};
 }
 
 interface ContentArrayContainer {
@@ -136,11 +153,27 @@ interface TextMessageLike {
 
 const ACP_TEXT_LIMIT = 4_000;
 
+/**
+ * Target `write` dispatches for `path`: like `WriteTool.execute`, drop a hashline
+ * `[path#TAG]` wrapper, a whole-file read selector (`:raw`) and a `<file>:conflict://N` prefix.
+ */
+function normalizeWritePath(path: string): string {
+	const unwrapped = unwrapHashlineHeaderPath(path);
+	let peeled = unwrapped;
+	try {
+		peeled = InternalUrlRouter.instance().peelWriteSelector(unwrapped, "write");
+	} catch {
+		// A line-range selector fails the write itself; classify the call by its unpeeled target.
+	}
+	return recoverConflictUriPrefix(peeled).path;
+}
+
 /** Declared spec of the registered scheme a `write` call targets; undefined for file paths and other tools. */
 function writeTargetSpec(toolName: string, args: unknown): SchemeSpec | undefined {
 	if (toolName !== "write") return undefined;
-	const path = extractStringProperty<PathContainer>(args, "path");
-	if (!path) return undefined;
+	const rawPath = extractStringProperty<PathContainer>(args, "path");
+	if (!rawPath) return undefined;
+	const path = normalizeWritePath(rawPath);
 	const router = InternalUrlRouter.instance();
 	const scheme = extractUriScheme(path);
 	return scheme && router.canHandle(path) ? router.spec(scheme) : undefined;
@@ -194,6 +227,12 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 		case "message_update":
 			return mapAssistantMessageUpdate(event, sessionId, options);
 		case "message_end":
+			// An IRC message that woke an idle agent is only observable as the wake
+			// turn's opening record; `irc_message` and this record share a messageId,
+			// so the client sees one upserted entry when both are observed.
+			if (options.sessionMessages && event.message.role === "custom") {
+				return mapIncomingAgentMessage(event.message, sessionId, options.sessionMessages);
+			}
 			return mapAssistantMessageEnd(event, sessionId, options);
 		case "tool_execution_start": {
 			if (isInternalAgentMessageTool(event.toolName, event.args)) return [];
@@ -229,7 +268,11 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 		}
 		case "tool_execution_end": {
 			const args = getToolExecutionEndArgs(event, options);
-			if (isInternalAgentMessageTool(event.toolName, args)) return [];
+			if (isInternalAgentMessageTool(event.toolName, args)) {
+				return options.sessionMessages && !event.isError
+					? mapOutgoingAgentMessage(event.toolCallId, args, sessionId, options.sessionMessages)
+					: [];
+			}
 			const resultContent = [
 				...extractDiffToolCallContent(event.result),
 				...extractToolCallContent(event.result, options),
@@ -253,6 +296,9 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 			if (planUpdate) {
 				notifications.push(toSessionNotification(sessionId, planUpdate));
 			}
+			if (options.sessionMessages && !event.isError && event.toolName === "wait") {
+				notifications.push(...mapWaitedAgentMessage(event.result, sessionId, options.sessionMessages));
+			}
 			return notifications;
 		}
 		case "todo_reminder": {
@@ -265,9 +311,132 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 		}
 		case "todo_auto_clear":
 			return [toSessionNotification(sessionId, { sessionUpdate: "plan", entries: [] })];
+		case "irc_message":
+			return options.sessionMessages
+				? mapIncomingAgentMessage(event.message, sessionId, options.sessionMessages)
+				: [];
 		default:
 			return [];
 	}
+}
+
+/** Outgoing view of a delivered `write agent://<id>` message, in the sender's transcript. */
+function mapOutgoingAgentMessage(
+	toolCallId: string,
+	args: unknown,
+	sessionId: string,
+	sessionMessages: NonNullable<AcpEventMapperOptions["sessionMessages"]>,
+): SessionNotification[] {
+	const path = extractStringProperty<PathContainer>(args, "path");
+	const text = extractStringProperty<{ content?: unknown }>(args, "content");
+	if (!path || !text) return [];
+	const to = parseInternalUrl(normalizeWritePath(path)).rawHost;
+	// `agent://all` is a broadcast: there is no single recipient session to name.
+	const recipientSessionId = to && to !== "all" ? sessionMessages.resolveAgentSessionId(to) : undefined;
+	return [
+		toSessionNotification(sessionId, {
+			sessionUpdate: "session_message",
+			messageId: `irc-out:${toolCallId}`,
+			senderSessionId: sessionId,
+			...(recipientSessionId ? { recipientSessionId } : {}),
+			content: [{ type: "text", text }],
+		}),
+	];
+}
+
+/**
+ * Incoming view of an IRC message consumed by a pending `wait`: the bus hands it
+ * to the waiter instead of `deliverIrcMessage`, so no `irc_message` event reports it.
+ */
+function mapWaitedAgentMessage(
+	result: unknown,
+	sessionId: string,
+	sessionMessages: NonNullable<AcpEventMapperOptions["sessionMessages"]>,
+): SessionNotification[] {
+	if (typeof result !== "object" || result === null || !("details" in result)) return [];
+	const details = result.details;
+	if (typeof details !== "object" || details === null || !("op" in details) || details.op !== "wait") return [];
+	if (!("waited" in details)) return [];
+	const waited = details.waited;
+	if (typeof waited !== "object" || waited === null || !("id" in waited) || !("body" in waited)) return [];
+	return mapIncomingAgentMessage(
+		{
+			customType: "irc:incoming",
+			details: { id: waited.id, from: "from" in waited ? waited.from : undefined, message: waited.body },
+		},
+		sessionId,
+		sessionMessages,
+	);
+}
+
+/**
+ * Incoming view of an IRC message in the recipient's transcript, from a live
+ * `irc_message` event or a recorded `irc:incoming` custom message. Returns
+ * nothing for any other message.
+ */
+export function mapIncomingAgentMessage(
+	message: { customType?: unknown; details?: unknown },
+	sessionId: string,
+	sessionMessages: NonNullable<AcpEventMapperOptions["sessionMessages"]>,
+): SessionNotification[] {
+	// `irc:relay` cards are display-only observations of traffic between two other agents.
+	if (message.customType !== "irc:incoming" || typeof message.details !== "object" || message.details === null) {
+		return [];
+	}
+	const details: { id?: unknown; from?: unknown; message?: unknown } = message.details;
+	if (typeof details.id !== "string" || typeof details.message !== "string") return [];
+	const senderSessionId =
+		typeof details.from === "string" ? sessionMessages.resolveAgentSessionId(details.from) : undefined;
+	return [
+		toSessionNotification(sessionId, {
+			sessionUpdate: "session_message",
+			messageId: `irc-in:${details.id}`,
+			...(senderSessionId ? { senderSessionId } : {}),
+			recipientSessionId: sessionId,
+			content: [{ type: "text", text: details.message }],
+		}),
+	];
+}
+
+export function prepareLiveAssistantMessage(state: AcpLiveMessageState, event: AgentSessionEvent): void {
+	if (
+		(event.type === "message_start" || event.type === "message_update" || event.type === "message_end") &&
+		event.message.role === "assistant" &&
+		(event.type === "message_start" || !state.liveMessageId || !state.liveMessageProgress)
+	) {
+		state.liveMessageId = crypto.randomUUID();
+		state.liveMessageProgress = { textEmitted: false, thoughtEmitted: false };
+	}
+}
+
+/**
+ * Reset live-message tracking once the assistant `message_end` is handled.
+ * The ACP agent's `agent_end` reset happens after its missed-final-text
+ * flush, so a `message_end` that arrives during the end-of-turn waits maps
+ * against the real progress instead of resurrecting a fresh one (which would
+ * double-emit the final answer).
+ */
+export function clearLiveAssistantMessageAfterEvent(state: AcpLiveMessageState, event: AgentSessionEvent): void {
+	if (event.type === "message_end" && event.message.role === "assistant") {
+		state.liveMessageId = undefined;
+		state.liveMessageProgress = undefined;
+	}
+}
+
+export function getLiveMessageId(state: AcpLiveMessageState, message: unknown): string | undefined {
+	if (typeof message !== "object" || message === null) {
+		return undefined;
+	}
+	state.liveMessageId ??= crypto.randomUUID();
+	return state.liveMessageId;
+}
+
+export function getLiveMessageProgress(state: AcpLiveMessageState, message: unknown): MessageProgress | undefined {
+	if (typeof message !== "object" || message === null) {
+		return undefined;
+	}
+	state.liveMessageProgress ??= { textEmitted: false, thoughtEmitted: false };
+	return state.liveMessageProgress;
 }
 
 function mapAssistantMessageUpdate(
