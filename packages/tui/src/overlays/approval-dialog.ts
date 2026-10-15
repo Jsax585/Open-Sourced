@@ -16,6 +16,7 @@ import { formatKeyHint, formatKeyHints, formatTooltipKey } from "../app-keybindi
 import { OverlayPanel, PanelDivider, PanelRows } from "../chrome/overlay-box";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { getKeybindings } from "../keybindings";
+import { isNativeRendering } from "../native/state";
 import {
 	appAlwaysApproveFolderKeys,
 	appAlwaysApproveKeys,
@@ -178,6 +179,15 @@ export class ApprovalDialogComponent implements Component {
 		this.#panel.dispose();
 	}
 
+	/**
+	 * The arrow-key answer menu is the classic-terminal presentation; a native surface (Tern)
+	 * shows the same answers as clickable buttons, so the selection stays invisible there and
+	 * the arrows keep scrolling. Prompts that offer only Approve/Deny keep the key hints.
+	 */
+	get #menuEnabled(): boolean {
+		return this.#answers.length > 2 && !isNativeRendering();
+	}
+
 	handleInput(keyData: string): void {
 		if (this.#closed) return;
 		this.#restartCountdown();
@@ -217,16 +227,21 @@ export class ApprovalDialogComponent implements Component {
 			return;
 		}
 		// With the composer empty, the arrows drive the answer menu like any omp selector;
-		// page keys keep scrolling the details behind it.
-		if (matchesSelectUp(keyData)) this.#moveSelection(-1);
-		else if (matchesSelectDown(keyData)) this.#moveSelection(1);
-		else if (matchesSelectPageUp(keyData)) this.#scroll(-Math.max(1, this.#bodyRows - 1));
-		else if (matchesSelectPageDown(keyData)) this.#scroll(Math.max(1, this.#bodyRows - 1));
-		else if (getKeybindings().matches(keyData, "tui.input.submit")) {
+		// page keys keep scrolling the details behind it. Without a menu (native rendering,
+		// or a plain Approve/Deny prompt) the arrows keep scrolling as before.
+		const menu = this.#menuEnabled;
+		const page = Math.max(1, this.#bodyRows - 1);
+		if (menu && matchesSelectUp(keyData)) this.#moveSelection(-1);
+		else if (menu && matchesSelectDown(keyData)) this.#moveSelection(1);
+		else if (matchesSelectPageUp(keyData)) this.#scroll(-page);
+		else if (matchesSelectPageDown(keyData)) this.#scroll(page);
+		else if (menu && getKeybindings().matches(keyData, "tui.input.submit")) {
 			// The highlighted answer confirms on Enter; the arming delay keeps an Enter
 			// meant for the composer from answering the prompt as it appears.
 			if (armed) this.#finish(this.#answers[this.#selected]?.id ?? "deny");
-		} else if (draft) this.#editDraft(draft, keyData);
+		} else if (!menu && matchesSelectUp(keyData)) this.#scroll(-1);
+		else if (!menu && matchesSelectDown(keyData)) this.#scroll(1);
+		else if (draft) this.#editDraft(draft, keyData);
 	}
 
 	/** Move the highlight by `delta` rows, stopping at the edges like the selector does. */
@@ -295,8 +310,10 @@ export class ApprovalDialogComponent implements Component {
 			this.#body.setLines(lines);
 		}
 		this.#body.setHeight(rows);
-		this.#choices.setLines(this.#answerLines(width));
-		this.#footer.setLines([theme.fg("dim", this.#footerHint(overflows))]);
+		const menu = this.#menuEnabled;
+		this.#choices.setHeight(menu ? this.#answers.length : 0);
+		this.#choices.setLines(menu ? this.#answerLines(width) : []);
+		this.#footer.setLines([theme.fg("dim", this.#footerHint(overflows, menu))]);
 		return this.#panel.render(width);
 	}
 
@@ -423,15 +440,30 @@ export class ApprovalDialogComponent implements Component {
 		return this.#details.flatMap(line => (line === "" ? [""] : wrapTextWithAnsi(theme.fg("accent", line), width)));
 	}
 
-	#footerHint(overflows: boolean): string {
-		const hint = `${editorKeys("tui.select.up", "tui.select.down")} choose · ${formatKeyHint("enter")} confirm · ${editorKey("tui.select.cancel")} deny`;
+	#footerHint(overflows: boolean, menu: boolean): string {
 		const draft = this.options.draft;
-		if (draft?.hasDraft()) return `${hint} · ${editorKey("tui.input.submit")} deny and send`;
-		const scroll = overflows ? ` · ${editorKeys("tui.select.pageUp", "tui.select.pageDown")} scroll` : "";
-		const details = this.#full
+		if (menu) {
+			const hint = `${editorKeys("tui.select.up", "tui.select.down")} choose · ${formatKeyHint("enter")} confirm · ${editorKey("tui.select.cancel")} deny`;
+			if (draft?.hasDraft()) return `${hint} · ${editorKey("tui.input.submit")} deny and send`;
+			const scroll = overflows ? ` · ${editorKeys("tui.select.pageUp", "tui.select.pageDown")} scroll` : "";
+			const details = this.#full
+				? ` · ${formatKeyHints([appToolsExpandKey()])} ${this.#expanded ? "less" : "details"}`
+				: "";
+			return `${hint}${scroll}${details}${draft ? " · type to steer instead" : ""}`;
+		}
+		const approve = formatKeyHints(appApproveKeys());
+		const expand = this.#full
 			? ` · ${formatKeyHints([appToolsExpandKey()])} ${this.#expanded ? "less" : "details"}`
 			: "";
-		return `${hint}${scroll}${details}${draft ? " · type to steer instead" : ""}`;
+		const directory =
+			this.options.folderLabel === undefined
+				? ""
+				: ` · ${formatKeyHints(appApproveFolderKeys())} approve dir · ${formatKeyHints(appAlwaysApproveFolderKeys())} always dir`;
+		const always = this.options.exactGrant === true ? ` · ${formatKeyHints(appAlwaysApproveKeys())} always` : "";
+		const hint = `${approve} approve${directory}${always} · ${editorKey("tui.select.cancel")} deny${expand}`;
+		if (draft?.hasDraft()) return `${hint} · ${editorKey("tui.input.submit")} deny and send`;
+		const scroll = overflows ? ` · ${editorKeys("tui.select.up", "tui.select.down")} scroll` : "";
+		return `${hint}${scroll}${draft ? " · type to steer instead" : ""}`;
 	}
 
 	#scroll(delta: number): void {

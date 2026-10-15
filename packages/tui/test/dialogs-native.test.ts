@@ -413,6 +413,42 @@ describe("dialogs under a native surface", () => {
 		}
 	});
 
+	it("approval: the arrow menu is classic-terminal only; a native surface keeps buttons and keys", () => {
+		setNativeRendering(true);
+		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+		try {
+			const callbacks = {
+				onApprove: vi.fn(),
+				onAlwaysApprove: vi.fn(),
+				onAlwaysApproveFolder: vi.fn(),
+				onDeny: vi.fn(),
+			};
+			const dialog = new ApprovalDialogComponent("Allow tool: write\nPath: /tmp/project/out.txt", callbacks, {
+				folderLabel: "/tmp/project",
+				exactGrant: true,
+			});
+			now.mockReturnValue(1_000 + APPROVE_ARM_MS);
+			// No list rows: the surface shows the buttons from describe() instead.
+			expect(stripVTControlCharacters(dialog.render(80).join("\n"))).not.toContain(
+				"Always approve for directory (/tmp/project)",
+			);
+			for (const key of ["approve", "folder", "always", "always-folder", "deny"]) {
+				expect(find(dialog.describe(), node => node.p?.role === "omp.btn" && node.key === key)).toBeDefined();
+			}
+			// Enter must not answer from an invisible selection; the accelerators still work.
+			dialog.handleInput(ENTER);
+			dialog.handleInput(DOWN);
+			dialog.handleInput(ENTER);
+			expect(callbacks.onApprove).not.toHaveBeenCalled();
+			expect(callbacks.onDeny).not.toHaveBeenCalled();
+			dialog.handleInput("\x1b[18~"); // F7 → Always approve
+			expect(callbacks.onAlwaysApprove).toHaveBeenCalledTimes(1);
+		} finally {
+			now.mockRestore();
+			setNativeRendering(false);
+		}
+	});
+
 	it("approval: any key restarts the timeout (reporting start and reset), so a scroll before the deadline keeps it open", () => {
 		vi.useFakeTimers();
 		const callbacks = { onApprove: vi.fn(), onDeny: vi.fn() };
