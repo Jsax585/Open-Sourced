@@ -30,17 +30,7 @@
 
 ## Single-task mechanical delegation
 
-Inline-first instructions normally keep single-slice work in main. They permit
-one substantial repetitive task to run on a cheaper suitable worker when main
-settles the design, provides a compact assignment, and defines how it will verify
-the result. Eager delegation retains this optional exception; it does not require
-delegating that task.
-
-Small edits, routine cleanup, direct questions, and work requiring frequent
-decisions from main do not qualify. Existing agent-role and permission restrictions
-still apply. Main continues independent work when available and waits only when
-no actionable parent work remains. Delegation does not guarantee lower total cost
-or faster completion.
+For the opt-in single-task mechanical exception and model-dependent delegation rules, see the canonical [Delegation policy](../../packages/coding-agent/src/prompts/system/system-prompt.md#delegation).
 
 ## Inputs
 
