@@ -1711,6 +1711,8 @@ export interface Model<TApi extends Api = Api> {
 	contextPromotionTarget?: string;
 	/** Preferred model to use only for compaction (model id or provider/id); the active session model is unchanged. */
 	compactionModel?: string;
+	/** Preferred model for handoff generation (model id or provider/id, optional `:level` thinking suffix); the active session model is unchanged. */
+	handoffModel?: string;
 	/** Provider-native compaction endpoint configuration. */
 	remoteCompaction?: RemoteCompactionConfig<TApi>;
 	/** Provider-assigned priority value (lower = higher priority). */

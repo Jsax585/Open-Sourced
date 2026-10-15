@@ -913,13 +913,14 @@ export class Agent {
 	 * `systemPrompt` defaults to the live agent prompt so the side request hits the
 	 * same cached prefix as the main loop. Callers that must pin a different prompt
 	 * (e.g. handoff generation, which uses the base prompt rather than a per-turn
-	 * `before_agent_start` hook override) pass it explicitly.
+	 * `before_agent_start` hook override) pass it explicitly. `model` defaults to
+	 * the active model; pass the request model when the side request targets another.
 	 */
 	async buildSideRequestContext(
 		llmMessages: Message[],
 		systemPrompt: string[] = this.#state.systemPrompt,
+		model: Model | undefined = this.#state.model,
 	): Promise<Context> {
-		const model = this.#state.model;
 		if (!model) throw new Error("No active model on agent");
 		const ownedDialect =
 			(this.#dialectResolver ? this.#dialectResolver(model) : this.#dialect) ??

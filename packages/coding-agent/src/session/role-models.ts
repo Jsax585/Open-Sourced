@@ -2,6 +2,7 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelSelectorValue, parseModelString } from "@oh-my-pi/pi-tui/overlays/model-selector";
+import { concreteThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import {
 	extractExplicitThinkingSelector,
 	getModelMatchPreferences,
@@ -33,12 +34,17 @@ export function formatRoleModelValue(
 	return formatModelSelectorValue(modelKey, thinkingLevel);
 }
 
-/** Resolves a configured model target relative to the current provider. */
-export function resolveConfiguredModelTarget(
+/** A configured model target and the thinking level its selector pins, if any. */
+export interface ConfiguredModelSelection {
+	model: Model;
+	thinkingLevel?: ThinkingLevel;
+}
+
+function resolveConfiguredModelSelection(
 	configuredTarget: string | undefined,
 	currentModel: Model,
 	availableModels: Model[],
-): Model | undefined {
+): ConfiguredModelSelection | undefined {
 	const trimmedTarget = configuredTarget?.trim();
 	if (!trimmedTarget) return undefined;
 	const parsed = parseModelString(trimmedTarget, {
@@ -48,9 +54,19 @@ export function resolveConfiguredModelTarget(
 	});
 	if (parsed) {
 		const explicitModel = availableModels.find(model => model.provider === parsed.provider && model.id === parsed.id);
-		if (explicitModel) return explicitModel;
+		if (explicitModel) return { model: explicitModel, thinkingLevel: concreteThinkingLevel(parsed.thinkingLevel) };
 	}
-	return availableModels.find(model => model.provider === currentModel.provider && model.id === trimmedTarget);
+	const model = availableModels.find(model => model.provider === currentModel.provider && model.id === trimmedTarget);
+	return model && { model };
+}
+
+/** Resolves a configured model target relative to the current provider. */
+export function resolveConfiguredModelTarget(
+	configuredTarget: string | undefined,
+	currentModel: Model,
+	availableModels: Model[],
+): Model | undefined {
+	return resolveConfiguredModelSelection(configuredTarget, currentModel, availableModels)?.model;
 }
 
 /** Resolves a model's configured context-promotion target. */
@@ -64,6 +80,14 @@ export function resolveContextPromotionConfiguredTarget(
 /** Resolves a model's configured compaction target. */
 export function resolveCompactionConfiguredTarget(currentModel: Model, availableModels: Model[]): Model | undefined {
 	return resolveConfiguredModelTarget(currentModel.compactionModel, currentModel, availableModels);
+}
+
+/** Resolves a model's configured handoff target, keeping an explicit `:level` thinking suffix. */
+export function resolveHandoffConfiguredTarget(
+	currentModel: Model,
+	availableModels: Model[],
+): ConfiguredModelSelection | undefined {
+	return resolveConfiguredModelSelection(currentModel.handoffModel, currentModel, availableModels);
 }
 
 /** Resolves a model role and its explicit thinking selection. */

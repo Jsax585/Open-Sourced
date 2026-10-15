@@ -516,7 +516,7 @@ Defined in `packages/coding-agent/src/session/context-settings.ts`:
 - `compaction.autoContinue` = `true`
 - `compaction.midTurnEnabled` = `true`; a `false` value applies to the session that configured it, not to spawned subagents — each subagent keeps mid-run checks so its single-turn assignment still compacts at the configured threshold.
 - `compaction.handoffSaveToDisk` = `false`
-- The `handoff` method generates a handoff document through the live-cache side-request pipeline and commits it as a compaction entry on the current session (no new session is created); `/handoff` does the same manually.
+- The `handoff` method generates a handoff document through the live-cache side-request pipeline and commits it as a compaction entry on the current session (no new session is created); `/handoff` does the same manually. The request runs on the active model's `handoffModel` (at its thinking suffix, if any) when it has usable credentials, otherwise on the active model. A `handoffModel` request cannot reuse the live prompt cache, so it uses the summarization system prompt and omits tool definitions (except on APIs that forbid tool opt-out with tool history), so it cannot answer with a tool call.
 - `compaction.remoteEndpoint` = `undefined`
 - `compaction.remoteStreamingV2Enabled` = `true`
 - `compaction.v2RetainedMessageBudget` = `64000`

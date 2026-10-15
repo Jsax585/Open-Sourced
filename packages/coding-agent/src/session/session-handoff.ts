@@ -8,8 +8,14 @@ import {
 	type StreamFn,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
-import { generateHandoffFromContext, renderHandoffPrompt } from "@oh-my-pi/pi-agent-core/compaction";
+import {
+	generateHandoffFromContext,
+	renderHandoffPrompt,
+	SUMMARIZATION_SYSTEM_PROMPT,
+} from "@oh-my-pi/pi-agent-core/compaction";
 import type { Message, Model, ServiceTier, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
+import { requiresToolFreeHistoryForToolOptOut } from "@oh-my-pi/pi-catalog/compat/tools";
+import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
@@ -19,6 +25,7 @@ import type { HandoffResult, SessionHandoffOptions } from "./agent-session-types
 import type { SessionManager } from "./session-manager";
 
 import { cfgCompactionHandoffSaveToDisk } from "./context-settings";
+import { resolveHandoffConfiguredTarget } from "./role-models";
 
 function createHandoffFileName(date = new Date()): string {
 	const fileTimestamp = date.toISOString().replace(/[:.]/g, "-");
@@ -82,10 +89,12 @@ export class SessionHandoff {
 	/**
 	 * Generate a handoff document with a oneshot LLM call.
 	 *
-	 * The request is built through the same pipeline a live turn uses so the
-	 * oneshot reads the provider prompt cache the main turn populated. The
-	 * caller (SessionMaintenance) commits the returned document as a compaction
-	 * entry; this method rewrites no history.
+	 * The request is built through the same pipeline a live turn uses so, on the
+	 * active model, the oneshot reads the provider prompt cache the main turn
+	 * populated. A configured `handoffModel` with usable credentials takes
+	 * precedence, at its `:level` thinking suffix when set. The caller
+	 * (SessionMaintenance) commits the returned document as a compaction entry;
+	 * this method rewrites no history.
 	 *
 	 * @param customInstructions Optional focus for the handoff document
 	 * @param options Handoff execution options
@@ -117,10 +126,15 @@ export class SessionHandoff {
 		try {
 			throwIfHandoffAborted(handoffSignal);
 
-			const model = this.#host.model();
-			if (!model) {
+			const activeModel = this.#host.model();
+			if (!activeModel) {
 				throw new Error("No model selected for handoff");
 			}
+			const handoffTarget = resolveHandoffConfiguredTarget(activeModel, this.#host.modelRegistry.getAvailable());
+			const { model, thinkingLevel } =
+				handoffTarget && (await this.#host.modelRegistry.getApiKey(handoffTarget.model, this.#host.sessionId()))
+					? handoffTarget
+					: { model: activeModel, thinkingLevel: undefined };
 			const apiKey = await this.#host.modelRegistry.getApiKey(model, this.#host.sessionId());
 			if (!apiKey) {
 				throw new Error(`No API key for ${model.provider}`);
@@ -151,13 +165,19 @@ export class SessionHandoff {
 				},
 			];
 			const handoffLlmMessages = await this.#host.convertMessagesToLlm(handoffSnapshot, handoffSignal, model);
-			// Base system prompt, not a per-turn `before_agent_start` hook override —
-			// the document seeds the post-compaction context and must not carry
-			// prompt-specific hook state.
-			const handoffContext = await this.#host.agent.buildSideRequestContext(
+			// The base system prompt and tools only keep the live turn's cached prefix
+			// (base, not a per-turn `before_agent_start` hook override, so the document
+			// carries no prompt-specific hook state). Another model cannot reuse that cache
+			// and may not honor `toolChoice: "none"`, so it gets the summarization prompt
+			// and no tools, unless its API forbids a tool opt-out.
+			const crossModel = !modelsAreEqual(model, activeModel);
+			const sideContext = await this.#host.agent.buildSideRequestContext(
 				handoffLlmMessages,
-				this.#host.baseSystemPrompt(),
+				crossModel ? [SUMMARIZATION_SYSTEM_PROMPT] : this.#host.baseSystemPrompt(),
+				model,
 			);
+			const handoffContext =
+				crossModel && !requiresToolFreeHistoryForToolOptOut(model) ? { ...sideContext, tools: [] } : sideContext;
 			const handoffStreamOptions = this.#host.prepareSimpleStreamOptions(
 				{
 					apiKey: this.#host.modelRegistry.resolver(model, cacheSessionId),
@@ -181,11 +201,11 @@ export class SessionHandoff {
 						return stream.result();
 					},
 					telemetry: resolveTelemetry(this.#host.agent.telemetry, this.#host.sessionId()),
-					// Honor the user's /model thinking selection on the handoff path.
-					// Clamped per-model inside generateHandoffFromContext via
-					// resolveCompactionEffort so unsupported-effort models don't trip
-					// requireSupportedEffort.
-					thinkingLevel: this.#host.thinkingLevel(),
+					// A `handoffModel` `:level` suffix wins; otherwise honor the user's
+					// /model thinking selection. Clamped per-model inside
+					// generateHandoffFromContext via resolveCompactionEffort so
+					// unsupported-effort models don't trip requireSupportedEffort.
+					thinkingLevel: thinkingLevel ?? this.#host.thinkingLevel(),
 				},
 			);
 			const handoffText = this.#host.deobfuscateFromProvider(rawHandoffText);
