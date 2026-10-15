@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Reduced memory between tool calls by releasing unused structural parse trees and returning freed allocator pages on Linux glibc.
+- Reduced memory between tool calls by releasing unused structural parse trees and returning freed allocator pages on Linux glibc ([#15875](https://github.com/can1357/oh-my-pi/pull/15875) by [@iliaal](https://github.com/iliaal)).
 
 ### Fixed
 
