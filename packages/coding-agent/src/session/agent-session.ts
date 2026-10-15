@@ -7945,8 +7945,10 @@ export class AgentSession implements SettingsScope {
 			// it subsumes, avoiding a contradictory materialized notice.
 			const xdevMountNoticeIndex = messages.length;
 			messages.push(message);
-			// Inject any pending "nextTurn" messages as context alongside the user message
+			// Inject pending "nextTurn" messages as context alongside the user message.
 			for (const msg of this.#pendingNextTurnMessages) {
+				if (msg.customType === "session-persistence-error" && !this.sessionManager.getPersistenceFailure())
+					continue;
 				messages.push(msg);
 			}
 			this.#pendingNextTurnMessages = [];
