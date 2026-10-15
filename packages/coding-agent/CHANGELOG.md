@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added the **Ask and remember** tool approval mode (`tools.approvalMode: always-ask-cached`, `--approval-mode always-ask-cached`): the first `read`, `write`, or `edit` touching a file asks for approval, the approved file (the `grants` table of `approval-cache.db` under the agent directory) then runs without asking, and the prompt's **Remember folder** answer (`F6`) remembers a whole directory, covering every read/write below it and every command that runs inside it. Command text is never remembered — shell commands prompt unless their folder is approved. `tools.approvalScope` (`target`, the default, or `folder`) picks what a plain approval remembers. Dangerous commands and explicit prompt policies still ask every call.
+- Added the **Ask and remember** tool approval mode (`tools.approvalMode: always-ask-cached`, `--approval-mode always-ask-cached`): the first `read`, `write`, or `edit` touching a file asks for approval, and the answers differ by where the grant lives — **Approve** and **Approve for directory** (`F6`) remember it for this session only (in memory, per instance), while **Always approve** (`F7`) and **Always approve for directory** (`F8`) write it to the `grants` table of `approval-cache.db` under the agent directory so it covers every later session. Directory grants cover every read/write below them and every command that runs inside them; command text is never remembered, so `bash` prompts unless its folder is approved. `tools.approvalScope` (`target`, the default, or `folder`) picks what a plain approval remembers. Dangerous commands and explicit prompt policies still ask every call.
 
 ## [18.11.0] - 2026-10-14
 

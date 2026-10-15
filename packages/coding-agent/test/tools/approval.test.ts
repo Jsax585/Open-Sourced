@@ -4,6 +4,7 @@ import { customToolToDefinition } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentTool, ToolApproval } from "@oh-my-pi/pi-agent-core";
 import {
 	type ApprovalMode,
+	APPROVAL_APPROVE_LABEL,
 	denyError,
 	formatApprovalPrompt,
 	requestApproval,
@@ -12,6 +13,7 @@ import {
 	resolveApprovalFromContext,
 	truncateForPrompt,
 } from "@oh-my-pi/pi-coding-agent/tools/approval";
+import { approvalDirectoryKey } from "@oh-my-pi/pi-coding-agent/tools/approval-cache";
 import { approvalTargetKey } from "@oh-my-pi/pi-coding-agent/tools/approval-targets";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { Settings } from "../../src/config/settings";
@@ -240,12 +242,12 @@ describe("MCP fallback and prompt formatting", () => {
 		]);
 	});
 
-	it("keeps the folder answer off policy-forced prompts", async () => {
+	it("keeps the grant answers off policy-forced prompts", async () => {
 		const selects: string[][] = [];
 		const ui = {
 			select: async (_title: string, options: string[]) => {
 				selects.push(options);
-				return "Approve";
+				return APPROVAL_APPROVE_LABEL;
 			},
 		};
 		const write: AgentTool = {
@@ -257,10 +259,16 @@ describe("MCP fallback and prompt formatting", () => {
 			approvalCacheTargets: () => [approvalTargetKey(path.resolve("/work/project"), "TestDir/a.txt")!],
 			execute: async () => ({ content: [{ type: "text" as const, text: "executed" }] }),
 		};
-		expect((await requestApproval(ui, write, {}, undefined, [], { folderGrant: true })).approved).toBe(true);
-		expect(selects[0]).toHaveLength(3);
-		expect(selects[0]![1]).toContain("Approve folder: ");
-		expect((await requestApproval(ui, write, {}, undefined, [], { folderGrant: false })).approved).toBe(true);
+		expect((await requestApproval(ui, write, {}, undefined, [], { cacheAnswers: true })).approved).toBe(true);
+		const label = approvalDirectoryKey(path.resolve("/work/project", "TestDir")).replace(/[\\/]+$/, "");
+		expect(selects[0]).toEqual([
+			"Approve",
+			`Approve for directory: ${label}`,
+			"Always approve",
+			`Always approve for directory: ${label}`,
+			"Deny",
+		]);
+		expect((await requestApproval(ui, write, {}, undefined, [], { cacheAnswers: false })).approved).toBe(true);
 		expect(selects[1]).toEqual(["Approve", "Deny"]);
 	});
 

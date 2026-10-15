@@ -17,9 +17,13 @@ import { OverlayPanel, PanelDivider, PanelRows } from "../chrome/overlay-box";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { getKeybindings } from "../keybindings";
 import {
+	appAlwaysApproveFolderKeys,
+	appAlwaysApproveKeys,
 	appApproveFolderKeys,
 	appApproveKeys,
 	appToolsExpandKey,
+	matchesAppAlwaysApprove,
+	matchesAppAlwaysApproveFolder,
 	matchesAppApprove,
 	matchesAppApproveFolder,
 	matchesAppToolsExpand,
@@ -43,8 +47,12 @@ export const APPROVE_ARM_MS = 500;
 
 interface ApprovalDialogCallbacks {
 	onApprove(): void;
-	/** The folder answer; only reachable when the dialog was given a folder label. */
+	/** The directory answer; only reachable when the dialog was given a folder label. */
 	onApproveFolder?(): void;
+	/** The exact, cross-instance answer; only reachable when the call can record a grant. */
+	onAlwaysApprove?(): void;
+	/** The directory, cross-instance answer; only reachable with a folder label. */
+	onAlwaysApproveFolder?(): void;
 	onDeny(): void;
 }
 
@@ -59,8 +67,10 @@ interface ApprovalDialogOptions {
 	tui?: TUI;
 	/** The prompt with every detail in full, which the expand key swaps in (wrapped) for the summarized one. */
 	fullPrompt?: string;
-	/** Directory an "approve folder" answer would grant; enables that answer (key and button) when set. */
+	/** Directory the directory answers grant; enables them (keys and buttons) when set. */
 	folderLabel?: string;
+	/** Whether the exact, cross-instance "Always approve" answer is offered. */
+	exactGrant?: boolean;
 	/** Deny once this many ms pass without input (any key restarts the countdown). */
 	timeout?: number;
 	/** Called when {@link timeout} expires, before the dialog denies. */
@@ -142,12 +152,21 @@ export class ApprovalDialogComponent implements Component {
 	handleInput(keyData: string): void {
 		if (this.#closed) return;
 		this.#restartCountdown();
+		const armed = performance.now() >= this.#armedAt;
 		if (matchesAppApprove(keyData)) {
-			if (performance.now() >= this.#armedAt) this.#finish("approve");
+			if (armed) this.#finish("approve");
+			return;
+		}
+		if (this.options.exactGrant === true && matchesAppAlwaysApprove(keyData)) {
+			if (armed) this.#finish("always");
 			return;
 		}
 		if (this.options.folderLabel !== undefined && matchesAppApproveFolder(keyData)) {
-			if (performance.now() >= this.#armedAt) this.#finish("folder");
+			if (armed) this.#finish("folder");
+			return;
+		}
+		if (this.options.folderLabel !== undefined && matchesAppAlwaysApproveFolder(keyData)) {
+			if (armed) this.#finish("always-folder");
 			return;
 		}
 		if (this.#full && matchesAppToolsExpand(keyData)) {
@@ -269,13 +288,34 @@ export class ApprovalDialogComponent implements Component {
 				]
 			: [];
 		const folderKey = appApproveFolderKeys()[0];
-		const folder =
-			this.options.folderLabel === undefined
+		const alwaysKey = appAlwaysApproveKeys()[0];
+		const alwaysFolderKey = appAlwaysApproveFolderKeys()[0];
+		const folderLabel = this.options.folderLabel;
+		const directory =
+			folderLabel === undefined
 				? []
 				: [
-						actionButton("Remember folder", "folder", {
+						actionButton("Approve for directory", "folder", {
 							...(folderKey ? { keys: folderKey } : {}),
-							title: `Approve and remember ${this.options.folderLabel}${folderKey ? `  ${formatTooltipKey(folderKey)}` : ""}`,
+							title: `Approve and remember ${folderLabel} for this session${folderKey ? `  ${formatTooltipKey(folderKey)}` : ""}`,
+						}),
+					];
+		const always =
+			this.options.exactGrant === true
+				? [
+						actionButton("Always approve", "always", {
+							...(alwaysKey ? { keys: alwaysKey } : {}),
+							title: `Approve this call and remember it for every session${alwaysKey ? `  ${formatTooltipKey(alwaysKey)}` : ""}`,
+						}),
+					]
+				: [];
+		const alwaysDirectory =
+			folderLabel === undefined
+				? []
+				: [
+						actionButton("Always approve for directory", "always-folder", {
+							...(alwaysFolderKey ? { keys: alwaysFolderKey } : {}),
+							title: `Approve and remember ${folderLabel} for every session${alwaysFolderKey ? `  ${formatTooltipKey(alwaysFolderKey)}` : ""}`,
 						}),
 					];
 		const children: NativeNode[] = [
@@ -290,7 +330,16 @@ export class ApprovalDialogComponent implements Component {
 		}
 		// The countdown, when one runs, leads the bar like the ask dialog's.
 		children.push(
-			actionBar([...(this.#countdown ? [this.#countdown.describe()] : []), null, ...expand, ...folder, deny, approve]),
+			actionBar([
+				...(this.#countdown ? [this.#countdown.describe()] : []),
+				null,
+				...expand,
+				...directory,
+				...alwaysDirectory,
+				...always,
+				deny,
+				approve,
+			]),
 		);
 		// Under the `omp.editor.ask` prefix: Tern's console layout sizes an ask's rows to the
 		// composer column by that prefix, where a bare `omp.editor.*` role spans the whole dock.
@@ -298,11 +347,13 @@ export class ApprovalDialogComponent implements Component {
 		return this.#native;
 	}
 
-	/** Deny, Approve, Folder, and Details run exactly what Esc, the approve keys, and the expand key run. */
+	/** Deny, the four answers, and Details run exactly what their keys run. */
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (this.#closed || event.type !== "action") return;
 		if (event.act === "approve") this.#finish("approve");
 		else if (event.act === "folder") this.#finish("folder");
+		else if (event.act === "always") this.#finish("always");
+		else if (event.act === "always-folder") this.#finish("always-folder");
 		else if (event.act === "deny") this.#finish("deny");
 		else if (event.act === "expand") this.toggleDetails();
 	}
@@ -320,11 +371,12 @@ export class ApprovalDialogComponent implements Component {
 		const expand = this.#full
 			? ` · ${formatKeyHints([appToolsExpandKey()])} ${this.#expanded ? "less" : "details"}`
 			: "";
-		const folder =
+		const directory =
 			this.options.folderLabel === undefined
 				? ""
-				: ` · ${formatKeyHints(appApproveFolderKeys())} approve folder`;
-		const hint = `${approve} approve${folder} · ${editorKey("tui.select.cancel")} deny${expand}`;
+				: ` · ${formatKeyHints(appApproveFolderKeys())} approve dir · ${formatKeyHints(appAlwaysApproveFolderKeys())} always dir`;
+		const always = this.options.exactGrant === true ? ` · ${formatKeyHints(appAlwaysApproveKeys())} always` : "";
+		const hint = `${approve} approve${directory}${always} · ${editorKey("tui.select.cancel")} deny${expand}`;
 		const draft = this.options.draft;
 		if (draft?.hasDraft()) return `${hint} · ${editorKey("tui.input.submit")} deny and send`;
 		const scroll = overflows ? ` · ${editorKeys("tui.select.up", "tui.select.down")} scroll` : "";
@@ -336,12 +388,14 @@ export class ApprovalDialogComponent implements Component {
 		this.options.tui?.requestRender();
 	}
 
-	#finish(outcome: "approve" | "folder" | "deny"): void {
+	#finish(outcome: "approve" | "folder" | "always" | "always-folder" | "deny"): void {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#countdown?.dispose();
 		if (outcome === "approve") this.callbacks.onApprove();
 		else if (outcome === "folder") this.callbacks.onApproveFolder?.();
+		else if (outcome === "always") this.callbacks.onAlwaysApprove?.();
+		else if (outcome === "always-folder") this.callbacks.onAlwaysApproveFolder?.();
 		else this.callbacks.onDeny();
 	}
 }

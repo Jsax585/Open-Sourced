@@ -15,6 +15,7 @@ import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import nativeDelegationTemplate from "../../prompts/tools/native-delegation.md" with { type: "text" };
 import {
 	type ApprovalOutcome,
+	type ApprovalTier,
 	denyError,
 	recordApprovalCacheTargets,
 	recordApprovalFolderGrant,
@@ -23,7 +24,7 @@ import {
 	resolveApprovalFromContext,
 	truncateForPrompt,
 } from "../../tools/approval";
-import { getApprovalCache } from "../../tools/approval-cache";
+import { getApprovalGrants } from "../../tools/approval-cache";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import { cfgToolsApprovalScope } from "../../tools/settings";
 import { withFileMutationSession } from "../../tools/file-write-fallback";
@@ -260,15 +261,15 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		const { approvalMode, userPolicies } = resolveApprovalFromContext(
 			context ?? (this.runner.sessionSettings ? { settings: this.runner.sessionSettings } : undefined),
 		);
-		// `always-ask-cached` grants live in the effective session's agent directory; one store is
-		// shared by the pre-check, the full gate, and the post-approval record below.
-		const approvalCache = getApprovalCache(effectiveSettings?.getAgentDir());
+		// `always-ask-cached` grants live behind one session+global store per agent directory; one
+		// instance is shared by the pre-check, the full gate, and the post-approval record below.
+		const approvalGrants = getApprovalGrants(effectiveSettings?.getAgentDir());
 		const preResolved = resolveApproval(
 			this.tool,
 			approvalArgs(params, context),
 			approvalMode,
 			userPolicies,
-			approvalCache,
+			approvalGrants,
 		);
 		if (preResolved.policy === "deny") {
 			throw denyError(preResolved, this.tool.name);
@@ -341,7 +342,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		// input that newly resolves to `deny` is caught here even though the original passed the
 		// short-circuit above.
 		const resolvedArgs = approvalArgs(effectiveParams, context);
-		const resolved = resolveApproval(this.tool, resolvedArgs, approvalMode, userPolicies, approvalCache);
+		const resolved = resolveApproval(this.tool, resolvedArgs, approvalMode, userPolicies, approvalGrants);
 		context?.xdevTierResolved?.(resolved.tier);
 		if (resolved.policy === "deny") {
 			cancelPreflight();
@@ -424,17 +425,14 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			const uiContext = this.runner.getUIContext();
 			const safetyAppendix =
 				pendingSafetyChecks.length > 0 ? ["Provider safety checks:", ...safetyCheckLines(pendingSafetyChecks)] : [];
-			// The folder answer is only meaningful for prompts this mode raised: policy-forced prompts
-			// (critical commands, explicit `prompt` rules) are never recorded, so they keep plain options.
-			// With `tools.approvalScope: folder` plain approval already grants the folder, so the
-			// separate folder answer is not offered.
+			// The grant answers are only meaningful for prompts this mode raised: policy-forced prompts
+			// (critical commands, explicit `prompt` rules) are never recorded, so they keep the plain
+			// Approve/Deny options.
 			const modeRaised = approvalMode === "always-ask-cached" && resolved.source === "mode";
-			const rememberFolder =
-				modeRaised && effectiveSettings !== undefined && cfgToolsApprovalScope.get(effectiveSettings) === "folder";
 			let outcome: ApprovalOutcome;
 			try {
 				outcome = await requestApproval(uiContext, this.tool, resolvedArgs, approvalCheck.reason, safetyAppendix, {
-					folderGrant: modeRaised && !rememberFolder,
+					cacheAnswers: modeRaised,
 				});
 			} catch (err) {
 				await emitApprovalResolved(false, err instanceof Error ? err.message : "approval aborted");
@@ -447,16 +445,25 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				cancelPreflight();
 				throw new Error(`Tool call denied by user: ${this.tool.name}`);
 			}
-			// `always-ask-cached`: a prompt the mode itself raised, now approved, remembers every
-			// target it asked about — a file path, an exact command, or, for the folder answer (and
-			// `tools.approvalScope: folder`), the directory that covers them. Calls with no folder
-			// candidate fall back to their exact targets.
+			// `always-ask-cached`: a prompt the mode itself raised, now approved, remembers the file or
+			// the directory it covers. A directory answer (or `tools.approvalScope: folder` for a plain
+			// approval) grants the folder; an "Always …" answer puts the grant in the global cache
+			// instead of this instance's memory. Calls with no folder candidate fall back to their
+			// exact targets, and a command with neither records nothing.
 			if (modeRaised && resolved.policy === "prompt") {
+				const scope =
+					outcome.scope ??
+					(effectiveSettings !== undefined && cfgToolsApprovalScope.get(effectiveSettings) === "folder"
+						? "folder"
+						: "target");
+				const tier: ApprovalTier = outcome.global === true ? "global" : "session";
 				const folderGranted =
-					outcome.folder === true || rememberFolder
-						? recordApprovalFolderGrant(this.tool, resolvedArgs, approvalCache)
+					scope === "folder"
+						? recordApprovalFolderGrant(this.tool, resolvedArgs, approvalGrants, tier)
 						: undefined;
-				if (folderGranted === undefined) recordApprovalCacheTargets(this.tool, resolvedArgs, approvalCache);
+				if (folderGranted === undefined) {
+					recordApprovalCacheTargets(this.tool, resolvedArgs, approvalGrants, tier);
+				}
 			}
 			if (pendingSafetyChecks.length > 0) {
 				if (!context) {

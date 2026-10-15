@@ -262,15 +262,24 @@ export interface ExtensionApprovalPrompt {
 	full: string;
 	compact: string;
 	/**
-	 * Directory a "remember this folder" answer would grant, when the call names
-	 * one; hosts that support the folder answer show it and may return
-	 * `{ approved: true, scope: "folder" }` instead of a plain approval.
+	 * Directory the directory answers would grant, when the call names one; hosts
+	 * that support them show "Approve for directory" / "Always approve for directory".
 	 */
 	folderLabel?: string;
+	/** The call can record an exact grant; hosts may offer the global "Always approve" answer. */
+	exactGrant?: boolean;
 }
 
-/** What an `approve()` dialog answered: denied, approved once, or approved with a folder grant. */
-export type ExtensionApprovalAnswer = boolean | { approved: true; scope: "folder" };
+/** What an `approve()` dialog answered: denied, or approved with where the grant goes. */
+export type ExtensionApprovalAnswer =
+	| boolean
+	| {
+			approved: true;
+			/** Directory-scoped rather than exact. */
+			scope?: "target" | "folder";
+			/** Remember in the global, cross-instance cache rather than this session's. */
+			global?: boolean;
+	  };
 
 /**
  * UI context for extensions to request interactive UI.
@@ -308,13 +317,16 @@ export interface ExtensionUIContext {
 	): Promise<ExtensionAskDialogResult | undefined>;
 
 	/**
-	 * Show a tool-approval prompt; `true` only for an explicit approval, or the folder answer when
-	 * {@link ExtensionApprovalPrompt.folderLabel} is set and the host supports it. Each prompt is a
-	 * title line then details: `compact` summarizes the tool's own details (command, path, content)
-	 * to one row for a host with little room, `full` keeps them whole. Absent: callers fall back to
-	 * an Approve/Deny `select`.
+	 * Show a tool-approval prompt; `true` only for an explicit approval, or the richer answer
+	 * (scope and lifetime of the grant) when the host renders the additional answers. Each prompt
+	 * is a title line then details: `compact` summarizes the tool's own details (command, path,
+	 * content) to one row for a host with little room, `full` keeps them whole. Absent: callers
+	 * fall back to an Approve/Deny `select`.
 	 */
-	approve?(prompt: ExtensionApprovalPrompt, dialogOptions?: ExtensionUIDialogOptions): Promise<ExtensionApprovalAnswer>;
+	approve?(
+		prompt: ExtensionApprovalPrompt,
+		dialogOptions?: ExtensionUIDialogOptions,
+	): Promise<ExtensionApprovalAnswer>;
 
 	/** Show a notification to the user. */
 	notify(message: string, type?: "info" | "warning" | "error"): void;

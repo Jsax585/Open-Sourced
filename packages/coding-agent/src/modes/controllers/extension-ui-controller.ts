@@ -43,14 +43,17 @@ import type { InteractiveModeContext, InteractiveSelectorDialogOptions } from ".
 import { normalizeCustomMessagePayload, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { disambiguateDisplayLabels, sanitizeCarriageReturns } from "@oh-my-pi/pi-tui/render/render-utils";
 import { setExtensionTerminalTitle, setSessionTerminalTitle } from "../../utils/title-generator";
-import { approvalFolderOptionLabel } from "../../tools/approval";
+import {
+	APPROVAL_ALWAYS_LABEL,
+	APPROVAL_APPROVE_LABEL,
+	APPROVAL_DENY_LABEL,
+	approvalAlwaysDirectoryOptionLabel,
+	approvalDirectoryOptionLabel,
+} from "../../tools/approval";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { launchTerminal } from "../../subprocess/terminal-launch";
 
 const MAX_WIDGET_LINES = 10;
-/** Approval answers, as a collab guest's select shows them. */
-const APPROVE_OPTION = "Approve";
-const DENY_OPTION = "Deny";
 
 /**
  * Footer hint for a guest-rendered ask selector. The guest's selector handles
@@ -673,12 +676,22 @@ export class ExtensionUiController {
 		prompt: ExtensionApprovalPrompt,
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<ExtensionApprovalAnswer> {
-		const folderOption = prompt.folderLabel === undefined ? undefined : approvalFolderOptionLabel(prompt.folderLabel);
+		const folderLabel = prompt.folderLabel;
+		const exactGrant = prompt.exactGrant === true;
+		const directoryOption = folderLabel === undefined ? undefined : approvalDirectoryOptionLabel(folderLabel);
+		const alwaysOption = exactGrant ? APPROVAL_ALWAYS_LABEL : undefined;
+		const alwaysDirectoryOption =
+			folderLabel === undefined ? undefined : approvalAlwaysDirectoryOptionLabel(folderLabel);
 		const request: CollabUiRequestDraft = {
 			kind: "select",
 			title: prompt.full,
-			options:
-				folderOption === undefined ? [APPROVE_OPTION, DENY_OPTION] : [APPROVE_OPTION, folderOption, DENY_OPTION],
+			options: [
+				APPROVAL_APPROVE_LABEL,
+				...(directoryOption === undefined ? [] : [directoryOption]),
+				...(alwaysOption === undefined ? [] : [alwaysOption]),
+				...(alwaysDirectoryOption === undefined ? [] : [alwaysDirectoryOption]),
+				APPROVAL_DENY_LABEL,
+			],
 		};
 		const session = this.ctx.session;
 		const queued = session.getQueuedMessages().steering;
@@ -704,14 +717,19 @@ export class ExtensionUiController {
 					const dialog = new ApprovalDialogComponent(
 						prompt.compact,
 						{
-							onApprove: () => settle(APPROVE_OPTION),
-							...(folderOption === undefined ? {} : { onApproveFolder: () => settle(folderOption) }),
-							onDeny: () => settle(DENY_OPTION),
+							onApprove: () => settle(APPROVAL_APPROVE_LABEL),
+							...(directoryOption === undefined ? {} : { onApproveFolder: () => settle(directoryOption) }),
+							...(alwaysOption === undefined ? {} : { onAlwaysApprove: () => settle(alwaysOption) }),
+							...(alwaysDirectoryOption === undefined
+								? {}
+								: { onAlwaysApproveFolder: () => settle(alwaysDirectoryOption) }),
+							onDeny: () => settle(APPROVAL_DENY_LABEL),
 						},
 						{
 							tui: this.ctx.ui,
 							fullPrompt: prompt.full,
 							...(prompt.folderLabel === undefined ? {} : { folderLabel: prompt.folderLabel }),
+							...(prompt.exactGrant === true ? { exactGrant: true } : {}),
 							timeout: dialogOptions?.timeout,
 							onTimeout: dialogOptions?.onTimeout,
 							onTimeoutStart: dialogOptions?.onTimeoutStart,
@@ -739,8 +757,12 @@ export class ExtensionUiController {
 					};
 				}),
 			);
-			if (choice === APPROVE_OPTION) return true;
-			if (folderOption !== undefined && choice === folderOption) return { approved: true, scope: "folder" };
+			if (choice === APPROVAL_APPROVE_LABEL) return true;
+			if (directoryOption !== undefined && choice === directoryOption) return { approved: true, scope: "folder" };
+			if (alwaysOption !== undefined && choice === alwaysOption) return { approved: true, global: true };
+			if (alwaysDirectoryOption !== undefined && choice === alwaysDirectoryOption) {
+				return { approved: true, scope: "folder", global: true };
+			}
 			return false;
 		} finally {
 			unsubscribe();

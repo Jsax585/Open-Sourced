@@ -266,6 +266,72 @@ describe("dialogs under a native surface", () => {
 		}
 	});
 
+	it("approval: the grant answers fire from their keys and buttons, and stay hidden when not offered", () => {
+		const callbacks = {
+			onApprove: vi.fn(),
+			onApproveFolder: vi.fn(),
+			onAlwaysApprove: vi.fn(),
+			onAlwaysApproveFolder: vi.fn(),
+			onDeny: vi.fn(),
+		};
+		const root = "/tmp/project";
+		const directoryKey = process.platform === "win32" ? root.toLowerCase() : root;
+		const prompt = "Allow tool: write\nPath: /tmp/project/out.txt";
+		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+		try {
+			const cases = [
+				["\x1b[17~", "onApproveFolder"], // F6 → directory
+				["\x1b[18~", "onAlwaysApprove"], // F7 → always
+				["\x1b[19~", "onAlwaysApproveFolder"], // F8 → always for directory
+			] as const;
+			for (const [keys, answer] of cases) {
+				const callbacks = {
+					onApprove: vi.fn(),
+					onApproveFolder: vi.fn(),
+					onAlwaysApprove: vi.fn(),
+					onAlwaysApproveFolder: vi.fn(),
+					onDeny: vi.fn(),
+				};
+				now.mockReturnValue(1_000);
+				const dialog = new ApprovalDialogComponent(prompt, callbacks, {
+					folderLabel: directoryKey,
+					exactGrant: true,
+				});
+				now.mockReturnValue(1_000 + APPROVE_ARM_MS);
+				dialog.handleInput(keys);
+				expect(callbacks[answer]).toHaveBeenCalledTimes(1);
+				expect(callbacks.onApprove).not.toHaveBeenCalled();
+				expect(callbacks.onDeny).not.toHaveBeenCalled();
+			}
+			// The native bar carries a button per offered answer.
+			const buttons = new ApprovalDialogComponent(
+				prompt,
+				{ onApprove: vi.fn(), onDeny: vi.fn() },
+				{
+					folderLabel: directoryKey,
+					exactGrant: true,
+				},
+			);
+			for (const key of ["approve", "folder", "always", "always-folder", "deny"]) {
+				expect(find(buttons.describe(), node => node.p?.role === "omp.btn" && node.key === key)).toBeDefined();
+			}
+		} finally {
+			now.mockRestore();
+		}
+
+		// Without an exact grant the "Always approve" answer is neither keyed nor rendered.
+		const clicked = { onApprove: vi.fn(), onAlwaysApprove: vi.fn(), onDeny: vi.fn() };
+		const plain = new ApprovalDialogComponent("Allow tool: eval", clicked);
+		expect(find(plain.describe(), node => node.p?.role === "omp.btn" && node.key === "always")).toBeUndefined();
+		const armed = vi.spyOn(performance, "now").mockReturnValue(1_000);
+		try {
+			plain.handleInput("\x1b[18~"); // F7 without an exact grant: no answer
+			expect(clicked.onAlwaysApprove).not.toHaveBeenCalled();
+		} finally {
+			armed.mockRestore();
+		}
+	});
+
 	it("approval: with a composer draft, typing edits it, an empty Enter is swallowed, and arrows scroll only while it is empty", () => {
 		let draft = "";
 		const routed: string[] = [];

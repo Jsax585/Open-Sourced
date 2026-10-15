@@ -13,20 +13,23 @@ import type { ExtensionUIContext } from "../extensibility/extensions/types";
 
 import {
 	type ApprovalGrantStore,
+	type ApprovalGrants,
+	type ApprovalTier,
 	approvalAncestorDirectoryKeys,
 	commonApprovalDirectoryKey,
-	getApprovalCache,
+	getApprovalGrants,
 } from "./approval-cache";
 
 import { cfgToolsApproval, cfgToolsApprovalMode } from "./settings";
 
 export type { ToolApproval, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
-export type { ApprovalGrantStore, ApprovalGrant } from "./approval-cache";
+export type { ApprovalGrantStore, ApprovalGrant, ApprovalTier } from "./approval-cache";
 export {
 	approvalAncestorDirectoryKeys,
 	approvalDirectoryCovers,
 	approvalDirectoryKey,
 	commonApprovalDirectoryKey,
+	getApprovalGrants,
 } from "./approval-cache";
 
 export type ApprovalPolicy = "allow" | "deny" | "prompt";
@@ -228,27 +231,35 @@ export function approvalFolderCandidate(
 }
 
 /**
- * Record every cache target of a call the user just approved. No-op for tools
- * without targets and for blank keys, so an approved call never widens a grant
- * beyond the target the prompt showed.
+ * Record every cache target of a call the user just approved into `tier`
+ * (`session` for a plain approval, `global` for an "Always …" one). No-op for
+ * tools without targets and for blank keys, so an approved call never widens a
+ * grant beyond the target the prompt showed.
  */
-export function recordApprovalCacheTargets(tool: ApprovalSubject, args: unknown, grants: ApprovalGrantStore): void {
-	for (const target of approvalCacheTargets(tool, args)) grants.record(target, tool.name);
+export function recordApprovalCacheTargets(
+	tool: ApprovalSubject,
+	args: unknown,
+	grants: ApprovalGrants,
+	tier: ApprovalTier = "session",
+): void {
+	for (const target of approvalCacheTargets(tool, args)) grants.record(target, tool.name, undefined, tier);
 }
 
 /**
- * Record the folder grant a "remember this folder" answer approved: every read
- * or write below that directory, and every exec call that runs inside it, then
- * skips its prompt.
+ * Record the folder grant a directory answer approved: every read or write
+ * below that directory, and every exec call that runs inside it, then skips its
+ * prompt. Returns the folder's label, or `undefined` when the call names no
+ * filesystem path (the caller then falls back to the exact targets).
  */
 export function recordApprovalFolderGrant(
 	tool: ApprovalSubject,
 	args: unknown,
-	grants: ApprovalGrantStore,
+	grants: ApprovalGrants,
+	tier: ApprovalTier = "session",
 ): string | undefined {
 	const folder = approvalFolderCandidate(tool, args);
 	if (folder === undefined) return undefined;
-	grants.record(folder.key, tool.name, "directory");
+	grants.record(folder.key, tool.name, "directory", tier);
 	return folder.label;
 }
 
@@ -337,7 +348,7 @@ export function resolveApproval(
 	args: unknown,
 	mode: ApprovalMode,
 	userConfig: Record<string, unknown> = {},
-	grants: ApprovalGrantStore = getApprovalCache(),
+	grants: ApprovalGrantStore = getApprovalGrants(),
 ): ResolvedApproval {
 	const decision = getToolDecision(tool, args);
 	const policyKey = decision.policyKey ?? tool.name;
@@ -541,25 +552,45 @@ function approvalSummary(details: readonly string[]): string | undefined {
 	return omitted ? `${row} …` : row;
 }
 
-/** What an approval prompt answered: denied, approved once, or approved and remembered as a folder. */
-export interface ApprovalOutcome {
-	approved: boolean;
-	/** True when the answer was the host's "remember this folder" choice. */
-	folder?: boolean;
+/** Label of the plain approval option. */
+export const APPROVAL_APPROVE_LABEL = "Approve";
+/** Label of the exact, cross-instance approval option. */
+export const APPROVAL_ALWAYS_LABEL = "Always approve";
+/** Label of the denial option. */
+export const APPROVAL_DENY_LABEL = "Deny";
+
+/** Label of the directory answer: approves the call and remembers its folder for this instance. */
+export function approvalDirectoryOptionLabel(folderLabel: string): string {
+	return `Approve for directory: ${folderLabel}`;
 }
 
-/** Label of the `select`-fallback option that approves and grants the folder. */
-export function approvalFolderOptionLabel(folderLabel: string): string {
-	return `Approve folder: ${folderLabel}`;
+/** Label of the global directory answer: approves the call and remembers its folder for good. */
+export function approvalAlwaysDirectoryOptionLabel(folderLabel: string): string {
+	return `Always approve for directory: ${folderLabel}`;
+}
+
+/** What an approval prompt answered: denied, or approved with where the grant goes. */
+export interface ApprovalOutcome {
+	approved: boolean;
+	/**
+	 * The answer was a directory one. Absent means the scope follows
+	 * `tools.approvalScope` (`target` by default).
+	 */
+	scope?: "target" | "folder";
+	/** The user chose an "Always …" answer: the grant goes to the global, persistent cache. */
+	global?: boolean;
 }
 
 /**
  * Ask the user to approve a call: the host's approval dialog when it has one (it gets the full
  * prompt and a compact one with the details summarized to a row, so the composer beneath it
  * keeps its room), else an Approve/Deny select with the full prompt (RPC, ACP, extension hosts).
- * `appendix` lines follow the prompt on both. A call whose folder candidate exists also offers
- * the folder answer when `options.folderGrant` allows it — the tool wrapper records that answer
- * as a directory grant, so prompts a tool or user policy forced keep their plain options.
+ * `appendix` lines follow the prompt on both.
+ *
+ * With `options.cacheAnswers`, the prompt also offers grant answers, each gated by what the call
+ * can record: the directory answers need a folder candidate, and the "Always …" answers need a
+ * cache target. Prompts a tool or user policy forced pass `cacheAnswers: false` — they are never
+ * recorded, so they keep plain Approve/Deny.
  */
 export async function requestApproval(
 	ui: Pick<ExtensionUIContext, "select" | "approve">,
@@ -567,28 +598,54 @@ export async function requestApproval(
 	args: unknown,
 	reason?: string,
 	appendix: readonly string[] = [],
-	options: { folderGrant?: boolean } = {},
+	options: { cacheAnswers?: boolean } = {},
 ): Promise<ApprovalOutcome> {
 	const header = approvalHeader(tool, reason);
 	const details = approvalDetails(tool, args);
-	const folderLabel = options.folderGrant === false ? undefined : approvalFolderCandidate(tool, args)?.label;
+	const cacheAnswers = options.cacheAnswers !== false;
+	const folderLabel = cacheAnswers ? approvalFolderCandidate(tool, args)?.label : undefined;
+	const exactGrant = cacheAnswers && approvalCacheTargets(tool, args).length > 0;
 	const full = [...header, ...details, ...appendix].join("\n");
 	if (ui.approve) {
 		const summary = approvalSummary(details);
 		const compact = [...header, ...(summary === undefined ? [] : [summary]), ...appendix].join("\n");
-		const answer = await ui.approve({ full, compact, ...(folderLabel === undefined ? {} : { folderLabel }) });
+		const answer = await ui.approve({
+			full,
+			compact,
+			...(folderLabel === undefined ? {} : { folderLabel }),
+			...(exactGrant ? { exactGrant } : {}),
+		});
 		if (answer === true) return { approved: true };
-		if (typeof answer === "object" && answer.approved === true && answer.scope === "folder") {
-			return { approved: true, folder: true };
+		if (typeof answer === "object" && answer.approved === true) {
+			return {
+				approved: true,
+				...(answer.scope === undefined ? {} : { scope: answer.scope }),
+				...(answer.global === true ? { global: true } : {}),
+			};
 		}
 		return { approved: false };
 	}
-	if (folderLabel === undefined) {
-		return { approved: (await ui.select(full, ["Approve", "Deny"])) === "Approve" };
+	if (folderLabel === undefined && !exactGrant) {
+		return {
+			approved: (await ui.select(full, [APPROVAL_APPROVE_LABEL, APPROVAL_DENY_LABEL])) === APPROVAL_APPROVE_LABEL,
+		};
 	}
-	const folderOption = approvalFolderOptionLabel(folderLabel);
-	const choice = await ui.select(full, ["Approve", folderOption, "Deny"]);
-	if (choice === "Approve") return { approved: true };
-	if (choice === folderOption) return { approved: true, folder: true };
+	const directoryOption = folderLabel === undefined ? undefined : approvalDirectoryOptionLabel(folderLabel);
+	const alwaysDirectoryOption =
+		folderLabel === undefined ? undefined : approvalAlwaysDirectoryOptionLabel(folderLabel);
+	const choices = [
+		APPROVAL_APPROVE_LABEL,
+		...(directoryOption === undefined ? [] : [directoryOption]),
+		...(exactGrant ? [APPROVAL_ALWAYS_LABEL] : []),
+		...(alwaysDirectoryOption === undefined ? [] : [alwaysDirectoryOption]),
+		APPROVAL_DENY_LABEL,
+	];
+	const choice = await ui.select(full, choices);
+	if (choice === APPROVAL_APPROVE_LABEL) return { approved: true };
+	if (directoryOption !== undefined && choice === directoryOption) return { approved: true, scope: "folder" };
+	if (choice === APPROVAL_ALWAYS_LABEL) return { approved: true, global: true };
+	if (alwaysDirectoryOption !== undefined && choice === alwaysDirectoryOption) {
+		return { approved: true, scope: "folder", global: true };
+	}
 	return { approved: false };
 }

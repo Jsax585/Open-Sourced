@@ -46,9 +46,68 @@ export interface ApprovalGrant {
  * agree on one store.
  */
 export interface ApprovalGrantStore {
-	readonly filePath: string;
 	has(key: string): boolean;
-	record(key: string, tool?: string, scope?: "directory"): void;
+}
+
+/** Where a grant lives: this instance's memory (`session`) or the shared database (`global`). */
+export type ApprovalTier = "session" | "global";
+
+/**
+ * Grants for one running instance, held in memory: they cover calls until the
+ * process exits and two instances never share them. Answers other than the
+ * "Always …" ones write here, so a plain approval forgets itself when omp
+ * closes; `ApprovalGrants` layers the persistent global cache underneath.
+ */
+export class SessionApprovals implements ApprovalGrantStore {
+	#grants = new Map<string, ApprovalGrant>();
+
+	has(key: string): boolean {
+		return this.#grants.has(key);
+	}
+
+	record(key: string, tool = "", scope?: "directory"): void {
+		if (key.length === 0 || this.#grants.has(key)) return;
+		this.#grants.set(
+			key,
+			scope === "directory"
+				? { tool, approvedAt: new Date().toISOString(), scope }
+				: { tool, approvedAt: new Date().toISOString() },
+		);
+	}
+
+	/** Number of in-memory grants. */
+	get size(): number {
+		return this.#grants.size;
+	}
+
+	clear(): void {
+		this.#grants.clear();
+	}
+}
+
+/**
+ * Session grants plus the global database behind one interface: a call is
+ * covered when either tier holds its key. "Always …" answers write to the
+ * global cache and survive this instance; every other answer writes to
+ * {@link SessionApprovals} and is gone when the process exits.
+ */
+export class ApprovalGrants implements ApprovalGrantStore {
+	readonly filePath: string;
+
+	constructor(
+		readonly session: SessionApprovals,
+		readonly global: ApprovalCache,
+	) {
+		this.filePath = global.filePath;
+	}
+
+	has(key: string): boolean {
+		return this.session.has(key) || this.global.has(key);
+	}
+
+	record(key: string, tool = "", scope?: "directory", tier: ApprovalTier = "session"): void {
+		(tier === "global" ? this.global : this.session).record(key, tool, scope);
+	}
 }
 
 interface GrantRow {
@@ -328,6 +387,33 @@ export function commonApprovalDirectoryKey(directories: readonly string[]): stri
 }
 
 const cachesByDir = new Map<string, ApprovalCache>();
+
+/** One instance-wide session tier: every agent directory in this process shares it. */
+const sessionApprovals = new SessionApprovals();
+
+const grantsByDir = new Map<string, ApprovalGrants>();
+
+/**
+ * Session plus global grants for an agent directory. The session tier is this
+ * process's memory (cleared when omp exits, never shared between instances);
+ * the global tier is `approval-cache.db` in that directory and outlives every
+ * instance. Both the resolver's checks and the wrapper's records go through it.
+ */
+export function getApprovalGrants(agentDir: string = getAgentDir()): ApprovalGrants {
+	const resolved = path.resolve(agentDir);
+	const directoryKey = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+	let grants = grantsByDir.get(directoryKey);
+	if (!grants) {
+		grants = new ApprovalGrants(sessionApprovals, getApprovalCache(resolved));
+		grantsByDir.set(directoryKey, grants);
+	}
+	return grants;
+}
+
+/** Drop every in-memory grant, simulating a fresh instance (tests only). */
+export function __resetSessionApprovalsForTests(): void {
+	sessionApprovals.clear();
+}
 
 /**
  * Shared grant store for an agent directory. Defaults to the active

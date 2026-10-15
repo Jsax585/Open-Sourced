@@ -332,7 +332,7 @@ export const cfgToolsApprovalMode = register({
 				value: "always-ask-cached",
 				label: "Ask and remember",
 				description:
-					"Prompt once per file or folder, then remember it; commands are covered through their folder. Dangerous commands and explicit prompt policies still ask every time.",
+					"Prompt once per file or folder, then remember it; commands are covered through their folder. Approve keeps the grant for this session, Always approve keeps it for good. Dangerous commands and explicit prompt policies still ask every time.",
 			},
 			{
 				value: "write",
@@ -368,12 +368,12 @@ export const cfgToolsApprovalScope = register({
 			{
 				value: "target",
 				label: "Exact item",
-				description: "Remember the approved file; the prompt's folder answer grants its folder instead.",
+				description: "Remember the approved file; the directory answers grant its folder instead.",
 			},
 			{
 				value: "folder",
 				label: "Whole folder",
-				description: "Remember the folder around the approved file or command, covering everything inside it.",
+				description: "Remember the folder around the approved file (or a command's working directory).",
 			},
 		],
 	},
