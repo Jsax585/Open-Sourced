@@ -11,7 +11,11 @@ import { extractHttpStatusFromError, logger } from "@oh-my-pi/pi-utils";
 import type { ApiKeyResolver, ResolvedApiKey } from "../auth-retry";
 import type { AuthApiKeyOptions, AuthStorage } from "../auth-storage";
 import * as AIError from "../error";
-import { classifyGatewayError, type GatewayErrorClassification } from "../error/gateway";
+import {
+	classifyGatewayError,
+	GATEWAY_REFUSED_ATTEMPT_MESSAGE,
+	type GatewayErrorClassification,
+} from "../error/gateway";
 import { isUsageLimitOutcome } from "../error/rate-limit";
 import type { Api, FetchImpl, Model, Usage } from "../types";
 import type { ClientUsageIdentity } from "../usage";
@@ -36,7 +40,33 @@ export interface AuthGatewayRouteOptions {
 	excludeProviders?: ReadonlySet<string>;
 	/** Upstream transport for every provider call; defaults to global `fetch`. Test seam. */
 	fetch?: FetchImpl;
+	/**
+	 * Awaited before every upstream request a provider sends through
+	 * {@link fetch}; see {@link gatewayUpstreamFetch}. `serve --attempt-hook`
+	 * sets it.
+	 */
+	onUpstreamAttempt?: AuthGatewayUpstreamAttemptHook;
 }
+
+/** One upstream request about to leave the gateway, as an attempt hook sees it. */
+export interface AuthGatewayUpstreamAttempt {
+	/** The gateway request it belongs to; the client gets the same id in `x-request-id`. */
+	requestId: string;
+	/** 1 for the request's first upstream call; provider retries, alternate endpoints and credential recovery each add one. */
+	attempt: number;
+	provider: string;
+	/** Model id the request resolved to. */
+	model: string;
+	method: string;
+	/** Upstream origin and path. The query is left out: some providers carry a key in it. */
+	url: string;
+}
+
+/** Rejecting stops the upstream request before it leaves the process. */
+export type AuthGatewayUpstreamAttemptHook = (
+	attempt: AuthGatewayUpstreamAttempt,
+	signal: AbortSignal | undefined,
+) => Promise<void>;
 
 /** The HTTP server's options: the routes' plus its listener and inbound auth. */
 export interface AuthGatewayBootOptions extends AuthGatewayServerOptions, AuthGatewayRouteOptions {}
@@ -242,6 +272,65 @@ export function buildGatewayApiKeyResolver(
 		lastKey = next?.apiKey ?? lastKey;
 		if (next) onResolvedKey?.(next.apiKey);
 		return next;
+	};
+}
+
+/**
+ * Upstream answer to a refused attempt. Providers fail a 422 as the request's
+ * own fault, with no backoff retry, credential rotation or rate-limit block (a
+ * 401, 403, 429 or 5xx can trigger those), and unlike a 400 it neither saves a
+ * request dump nor makes Codex resend without zstd. The fixed message keeps the
+ * hook's wording out of providers' error classification, which matches
+ * usage-limit phrases at any status, and `classifyGatewayError` turns it into
+ * the client's 403.
+ */
+const REFUSED_ATTEMPT_BODY = JSON.stringify({
+	type: "error",
+	error: { type: "invalid_request_error", message: GATEWAY_REFUSED_ATTEMPT_MESSAGE },
+});
+
+/**
+ * The upstream fetch for one gateway request: `opts.fetch` as is, or, with an
+ * attempt hook, a fetch that awaits the hook before every call, so a
+ * provider's own retries, alternate endpoints and credential-recovery resends
+ * each reach it. A refused call answers {@link REFUSED_ATTEMPT_BODY} without
+ * touching the network and logs the hook's reason.
+ */
+export function gatewayUpstreamFetch(
+	opts: AuthGatewayRouteOptions,
+	requestId: string,
+	model: Model<Api>,
+): FetchImpl | undefined {
+	const hook = opts.onUpstreamAttempt;
+	if (!hook) return opts.fetch;
+	const transport = opts.fetch;
+	let attempts = 0;
+	return async (input, init) => {
+		const request = input instanceof Request ? input : undefined;
+		const target = new URL(request?.url ?? String(input));
+		const signal = init?.signal ?? request?.signal ?? undefined;
+		const attempt: AuthGatewayUpstreamAttempt = {
+			requestId,
+			attempt: ++attempts,
+			provider: model.provider,
+			model: model.id,
+			method: (init?.method ?? request?.method ?? "GET").toUpperCase(),
+			url: `${target.origin}${target.pathname}`,
+		};
+		try {
+			await hook(attempt, signal);
+		} catch (error) {
+			if (signal?.aborted) throw signal.reason;
+			logger.warn("auth-gateway upstream attempt refused", {
+				...attempt,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return new Response(REFUSED_ATTEMPT_BODY, {
+				status: 422,
+				headers: { "content-type": "application/json", "x-should-retry": "false" },
+			});
+		}
+		return (transport ?? fetch)(input, init);
 	};
 }
 

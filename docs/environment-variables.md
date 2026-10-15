@@ -142,7 +142,7 @@ When the broker is enabled, the local SQLite credential store is bypassed and al
 | `OMP_AUTH_BROKER_SNAPSHOT_CACHE`    | Path to the encrypted local broker snapshot cache                                            | Optional in broker mode                                                                                                   | Defaults to `~/.omp/cache/auth-broker-snapshot.enc` (or XDG cache equivalent). Useful for tests, ephemeral hosts, or relocating the `0600` cache file.                                                                                                                               |
 | `OMP_AUTH_BROKER_ACCOUNT_POOL_FILE` | Process-scoped OAuth account routing for a trusted broker client                             | Optional in broker mode                                                                                                   | Path to a JSON object mapping provider IDs to exact broker `identityKey` arrays. Missing providers are unrestricted; `[]` hides that provider's OAuth accounts; API keys remain visible. Parsed once at startup and fails closed on invalid input. This is not server authorization. |
 
-The gateway has no dedicated env vars — it inherits `OMP_AUTH_BROKER_*`. Its own inbound bearer token lives at `<config-dir>/auth-gateway.token` and is managed via `omp auth-gateway token`.
+The gateway inherits `OMP_AUTH_BROKER_*`; its one dedicated variable is `OMP_AUTH_GATEWAY_ATTEMPT_HOOK_TOKEN`, the bearer `omp auth-gateway serve --attempt-hook` sends to its hook ([attempt hook](./auth-broker-gateway.md#upstream-attempt-hook)). Its own inbound bearer token lives at `<config-dir>/auth-gateway.token` and is managed via `omp auth-gateway token`.
 
 ---
 

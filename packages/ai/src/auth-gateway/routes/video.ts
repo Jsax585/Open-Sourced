@@ -9,6 +9,7 @@ import { deterministicUuid } from "../../utils/deterministic-id";
 import {
 	type AuthGatewayRouteOptions,
 	buildGatewayApiKeyResolver,
+	gatewayUpstreamFetch,
 	mirrorRequestAbort,
 	resolveGatewayApiKey,
 } from "../dispatch";
@@ -63,7 +64,12 @@ async function resolveVideoJob(
 	return { model, upstreamId: identity.upstreamId, sessionId, apiKey, controller };
 }
 
-function videoOptions(bootOpts: AuthGatewayRouteOptions, resolved: ResolvedVideoRequest, peer: string) {
+function videoOptions(
+	bootOpts: AuthGatewayRouteOptions,
+	requestId: string,
+	resolved: ResolvedVideoRequest,
+	peer: string,
+) {
 	return {
 		apiKey: buildGatewayApiKeyResolver(
 			bootOpts.storage,
@@ -74,7 +80,7 @@ function videoOptions(bootOpts: AuthGatewayRouteOptions, resolved: ResolvedVideo
 			"video",
 			peer,
 		),
-		fetch: bootOpts.fetch,
+		fetch: gatewayUpstreamFetch(bootOpts, requestId, resolved.model),
 		signal: resolved.controller.signal,
 	};
 }
@@ -163,7 +169,7 @@ export async function handleVideoSubmit(
 				"video",
 				peer,
 			),
-			fetch: bootOpts.fetch,
+			fetch: gatewayUpstreamFetch(bootOpts, requestId, model),
 			signal: controller.signal,
 		});
 		const gatewayId = videoServer.encodeGatewayJobId({
@@ -197,7 +203,11 @@ export async function handleVideoPoll(
 	if (resolved instanceof Response) return resolved;
 	logVideoRequest(requestId, "poll", resolved.model, peer);
 	try {
-		const job = await pollVideo(resolved.model, resolved.upstreamId, videoOptions(bootOpts, resolved, peer));
+		const job = await pollVideo(
+			resolved.model,
+			resolved.upstreamId,
+			videoOptions(bootOpts, requestId, resolved, peer),
+		);
 		recordCompletedUsage(bootOpts, resolved, req, job);
 		return json(
 			200,
@@ -229,7 +239,11 @@ export async function handleVideoContent(
 	if (resolved instanceof Response) return resolved;
 	logVideoRequest(requestId, "content", resolved.model, peer);
 	try {
-		const content = await downloadVideo(resolved.model, resolved.upstreamId, videoOptions(bootOpts, resolved, peer));
+		const content = await downloadVideo(
+			resolved.model,
+			resolved.upstreamId,
+			videoOptions(bootOpts, requestId, resolved, peer),
+		);
 		const headers = new Headers(gatewayResponseHeaders(resolved.model, { requestId, startedAt }));
 		headers.set("Content-Type", content.contentType);
 		headers.set("X-Content-Type-Options", "nosniff");

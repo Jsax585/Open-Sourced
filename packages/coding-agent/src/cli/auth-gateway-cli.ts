@@ -8,7 +8,7 @@
  * `OMP_AUTH_BROKER_URL` / `auth.broker.url` precedence used elsewhere).
  *
  * Sub-verbs:
- *   - `serve [--bind=…] [--trust-proxy-headers]` — boots the gateway against the configured broker.
+ *   - `serve [--bind=…] [--trust-proxy-headers] [--attempt-hook=<url>]` — boots the gateway against the configured broker.
  *   - `stdio` — serves the same routes as JSON lines on stdin/stdout with this omp's own credentials
  *     and model roles (`auth-gateway-stdio.ts`).
  *   - `token` / `token --regenerate` — manages the gateway bearer token file.
@@ -32,7 +32,11 @@ import {
 	RemoteAuthCredentialStore,
 	type SnapshotResponse,
 } from "@oh-my-pi/pi-ai/auth-broker";
-import { DEFAULT_AUTH_GATEWAY_BIND, startAuthGateway } from "@oh-my-pi/pi-ai/auth-gateway";
+import {
+	type AuthGatewayUpstreamAttemptHook,
+	DEFAULT_AUTH_GATEWAY_BIND,
+	startAuthGateway,
+} from "@oh-my-pi/pi-ai/auth-gateway";
 import { type GeneratedProvider, getBundledModels, getEffectiveTokenCost } from "@oh-my-pi/pi-catalog/models";
 import { type ModelKind, modelKind } from "@oh-my-pi/pi-catalog/types";
 import { getConfigRootDir, logger, VERSION } from "@oh-my-pi/pi-utils";
@@ -73,6 +77,8 @@ export interface AuthGatewayCommandArgs {
 		 * actually usable" signal. Slower and consumes a tiny amount of quota.
 		 */
 		strict?: boolean;
+		/** `serve`: URL that must approve every upstream attempt; see {@link createAttemptHookClient}. */
+		attemptHook?: string;
 	};
 }
 
@@ -259,6 +265,39 @@ export function createSerializedRebuilder(run: (force: boolean) => Promise<void>
 	return rebuild;
 }
 
+/** How long `serve --attempt-hook` waits for the hook before refusing the attempt. */
+const ATTEMPT_HOOK_TIMEOUT_MS = 10_000;
+
+/**
+ * `serve --attempt-hook`: POST each upstream attempt to `url` as JSON and let
+ * it proceed only on a 2xx answer. Any other status, a timeout or an
+ * unreachable hook refuses the attempt, so a hook outage stops traffic instead
+ * of letting it through unrecorded. `token`, when set, is sent as a bearer.
+ */
+export function createAttemptHookClient(url: string, token: string | undefined): AuthGatewayUpstreamAttemptHook {
+	const target = URL.parse(url);
+	if (!target || (target.protocol !== "http:" && target.protocol !== "https:")) {
+		throw new Error(`--attempt-hook needs an http(s) URL, got ${JSON.stringify(url)}`);
+	}
+	const headers: Record<string, string> = { "content-type": "application/json" };
+	if (token) headers.authorization = `Bearer ${token}`;
+	return async (attempt, signal) => {
+		const timeout = AbortSignal.timeout(ATTEMPT_HOOK_TIMEOUT_MS);
+		const response = await fetch(target, {
+			method: "POST",
+			headers,
+			body: JSON.stringify(attempt),
+			signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+		});
+		if (response.ok) {
+			await response.body?.cancel();
+			return;
+		}
+		const reason = (await response.text()).trim().slice(0, 200);
+		throw new Error(`attempt hook answered ${response.status}${reason ? `: ${reason}` : ""}`);
+	};
+}
+
 async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	const brokerConfig = await resolveAuthBrokerConfig();
 	if (!brokerConfig) {
@@ -268,6 +307,10 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	}
 	const bind = flags.bind ?? DEFAULT_AUTH_GATEWAY_BIND;
 	const gatewayToken = flags.noAuth ? null : await ensureToken();
+	const onUpstreamAttempt =
+		flags.attemptHook === undefined
+			? undefined
+			: createAttemptHookClient(flags.attemptHook, Bun.env.OMP_AUTH_GATEWAY_ATTEMPT_HOOK_TOKEN || undefined);
 
 	// Build a broker-backed AuthStorage — same pattern as discoverAuthStorage()
 	// in sdk.ts. The gateway never touches local SQLite.
@@ -333,6 +376,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		resolveModel: (id: string) => resolveGatewayModel(id, modelById, routable),
 		listModels: () => modelById.values(),
 		excludeProviders: new Set(cfgDisabledProviders.get(settings)),
+		onUpstreamAttempt,
 	});
 	process.stdout.write(`auth-gateway listening on ${handle.url}\n`);
 	if (gatewayToken) {
@@ -341,6 +385,12 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		process.stdout.write(`auth: disabled (--no-auth) — any client can call this gateway\n`);
 	}
 	process.stdout.write(`upstream broker: ${brokerConfig.url}\n`);
+	if (flags.attemptHook !== undefined) {
+		const hook = new URL(flags.attemptHook);
+		process.stdout.write(
+			`attempt hook: ${hook.origin}${hook.pathname} (refuses upstream calls it does not approve)\n`,
+		);
+	}
 
 	// `serve` is long-lived: rebuild the catalog periodically so models
 	// discovered after boot (for providers we already hold credentials for)

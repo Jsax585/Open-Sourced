@@ -37,6 +37,10 @@ export default class AuthGateway extends Command {
 			description:
 				"For `check`: additionally probe each credential against its provider's chat-completion endpoint. Slower; consumes a tiny amount of quota per credential.",
 		}),
+		"attempt-hook": Flags.string({
+			description:
+				"For `serve`: POST every upstream request to this URL first and send it only on a 2xx answer (bearer from OMP_AUTH_GATEWAY_ATTEMPT_HOOK_TOKEN).",
+		}),
 	};
 
 	static examples = [
@@ -44,6 +48,7 @@ export default class AuthGateway extends Command {
 		'# Serve the same routes as JSON lines on stdin/stdout with your own credentials\n  echo \'{"id":1,"path":"/v1/chat/completions","body":{"model":"@smol","messages":[{"role":"user","content":"hi"}]}}\' | omp auth-gateway stdio',
 		"# Boot on a non-default port\n  omp auth-gateway serve --bind=127.0.0.1:4000",
 		"# Trust client IP headers from a trusted reverse proxy\n  omp auth-gateway serve --trust-proxy-headers",
+		"# Ask a local meter to approve every upstream request before it is sent\n  omp auth-gateway serve --attempt-hook=http://127.0.0.1:8081/attempts",
 		"# Print the gateway bearer token (creates one on first run)\n  omp auth-gateway token",
 		"# Rotate the gateway bearer token\n  omp auth-gateway token --regenerate",
 		"# Run on loopback without any bearer (anyone on this host can call)\n  omp auth-gateway serve --no-auth",
@@ -68,6 +73,7 @@ export default class AuthGateway extends Command {
 				noAuth: flags["no-auth"],
 				trustProxyHeaders: flags["trust-proxy-headers"],
 				strict: flags.strict,
+				attemptHook: flags["attempt-hook"],
 			},
 		};
 		await initTheme();

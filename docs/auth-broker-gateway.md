@@ -150,7 +150,7 @@ The CLI broker refresh hook also handles managed `mcp_oauth:*` credentials using
 ### CLI
 
 ```
-omp auth-gateway serve   [--bind=host:port] [--no-auth] [--trust-proxy-headers]
+omp auth-gateway serve   [--bind=host:port] [--no-auth] [--trust-proxy-headers] [--attempt-hook=<url>]
 omp auth-gateway stdio
 omp auth-gateway token   [--regenerate] [--json]
 omp auth-gateway status  [--json]
@@ -220,6 +220,27 @@ TypeSafe clients using the default base-URL resolver can set `TYPESAFE_BASE_URL=
 There is no raw provider passthrough path. All supported routes go through `pi-ai` provider logic so credential-specific request shaping, OAuth refresh-on-auth-error, and provider quirks stay centralized.
 
 `idleTimeout` on the underlying `Bun.serve` is set to `255 s` so long thinking-budget calls do not get killed by Bun’s default idle timeout.
+
+### Upstream attempt hook
+
+`serve --attempt-hook=<url>` asks an operator service, such as a meter, to approve every request the gateway sends upstream. Before each one it POSTs JSON to `<url>`, with `Authorization: Bearer $OMP_AUTH_GATEWAY_ATTEMPT_HOOK_TOKEN` when that variable is set:
+
+```json
+{
+  "requestId": "6f0c9a3e-…",
+  "attempt": 2,
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-5",
+  "method": "POST",
+  "url": "https://api.anthropic.com/v1/messages"
+}
+```
+
+- `requestId` is the gateway request's `x-request-id`, also on its `auth-gateway request` log line. `attempt` counts from 1 within that request: provider retries, alternate endpoints, credential-recovery resends, and a provider's own token exchanges or downloads each add one. `url` never carries the query string.
+- A 2xx answer sends the request. Any other status, no answer within 10 s, or an unreachable hook refuses it: nothing is sent, the gateway logs the hook's answer, and the client gets `403` with `Upstream request refused by the gateway's attempt hook` (a streaming request gets that as its stream's error event). The provider sees the refusal as a `422` with that fixed wording, so it does not retry the request or block, rotate or invalidate the credential.
+- WebSocket and HTTP/2 transports bypass the gateway's fetch. With a hook set, Codex uses HTTP instead of a WebSocket unless `PI_CODEX_WEBSOCKET=1` forces one; Cursor and GitLab Duo workflow sessions are never hooked, so list those providers in `disabledProviders` when every request must be approved. Credential refresh through the broker, catalog discovery, and the `/v1/usage` and `/v1/credentials/check` probes are not hooked.
+
+SDK hosts set `onUpstreamAttempt` in the options of `startAuthGateway` or `createAuthGatewayRouter`; a rejected promise refuses the request the same way.
 
 ## Usage cache: server-side 5-min jitter + client-side 15 s single-flight
 

@@ -45,6 +45,7 @@ import {
 	type AuthGatewayBootOptions,
 	type AuthGatewayRouteOptions,
 	buildGatewayApiKeyResolver,
+	gatewayUpstreamFetch,
 	mirrorRequestAbort,
 	normalizeClientSessionKey,
 	recordGatewayUsage,
@@ -363,7 +364,10 @@ async function handleFormatEndpoint(
 	if ("status" in apiKey) return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
 
 	const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
-	if (bootOpts.fetch) streamOpts.fetch = bootOpts.fetch;
+	const upstreamFetch = gatewayUpstreamFetch(bootOpts, requestId, model);
+	if (upstreamFetch) streamOpts.fetch = upstreamFetch;
+	// A WebSocket transport (Codex) bypasses fetch, so the hook would never see its attempts.
+	if (bootOpts.onUpstreamAttempt) streamOpts.preferWebsockets = false;
 	// Per-session provider learning (sticky strict-tools / fast-mode / thinking
 	// fallbacks, Codex transport sessions). Owned by this gateway instance: the
 	// map is non-serializable, so no client can supply it and every turn would
@@ -579,7 +583,10 @@ async function handlePiNative(
 		cursorExternalToolExecutor: true,
 		providerSessionState: lease.states,
 	};
-	if (bootOpts.fetch) streamOpts.fetch = bootOpts.fetch;
+	const upstreamFetch = gatewayUpstreamFetch(bootOpts, requestId, model);
+	if (upstreamFetch) streamOpts.fetch = upstreamFetch;
+	// A WebSocket transport (Codex) bypasses fetch, so the hook would never see its attempts.
+	if (bootOpts.onUpstreamAttempt) streamOpts.preferWebsockets = false;
 	streamOpts.apiKey = buildGatewayApiKeyResolver(
 		bootOpts.storage,
 		model,

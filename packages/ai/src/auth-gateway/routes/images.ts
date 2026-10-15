@@ -8,6 +8,7 @@ import { deterministicUuid } from "../../utils/deterministic-id";
 import {
 	type AuthGatewayRouteOptions,
 	buildGatewayApiKeyResolver,
+	gatewayUpstreamFetch,
 	mirrorRequestAbort,
 	recordGatewayUsage,
 	resolveGatewayApiKey,
@@ -102,7 +103,7 @@ async function handleImages(
 				"images",
 				peer,
 			),
-			fetch: bootOpts.fetch,
+			fetch: gatewayUpstreamFetch(bootOpts, requestId, model),
 			signal: controller.signal,
 		});
 		if (result.usage.cost.total === 0) calculateCost(model, result.usage);

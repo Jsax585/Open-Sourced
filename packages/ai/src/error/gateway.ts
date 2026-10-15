@@ -8,9 +8,18 @@ export interface GatewayErrorClassification {
 }
 
 /**
+ * Message of the upstream answer the auth gateway substitutes for a request its
+ * attempt hook refused. Whatever status a provider wraps it in, the client
+ * gets a 403: the gateway refused the request, nothing failed upstream.
+ */
+export const GATEWAY_REFUSED_ATTEMPT_MESSAGE = "Upstream request refused by the gateway's attempt hook";
+
+/**
  * Classify an upstream / gateway-internal error into a status code and a
  * format-neutral type. The order is intentional:
  *
+ *  0. The gateway's own attempt-hook refusal ({@link GATEWAY_REFUSED_ATTEMPT_MESSAGE})
+ *     is a 403 whatever status the provider reported it with.
  *  1. Honour an explicit numeric `status` property on the thrown error.
  *  2. Parse a status code embedded in the message string. Provider errors
  *     virtually always carry one (`Google API error (400): …`, `HTTP 429`,
@@ -22,6 +31,9 @@ export interface GatewayErrorClassification {
  */
 export function classifyGatewayError(err: unknown): GatewayErrorClassification {
 	const message = err instanceof Error ? err.message : String(err);
+	if (message.includes(GATEWAY_REFUSED_ATTEMPT_MESSAGE)) {
+		return { status: 403, type: "permission_error", message: GATEWAY_REFUSED_ATTEMPT_MESSAGE };
+	}
 
 	// 1. Custom pi-ai errors may attach a numeric `status` property.
 	const statusProp =

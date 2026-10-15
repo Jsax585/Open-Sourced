@@ -21,6 +21,7 @@ import { deterministicUuid } from "../../utils/deterministic-id";
 import {
 	type AuthGatewayRouteOptions,
 	buildGatewayApiKeyResolver,
+	gatewayUpstreamFetch,
 	mirrorRequestAbort,
 	recordGatewayUsage,
 	resolveGatewayApiKey,
@@ -97,7 +98,7 @@ export async function handleSystemOne(
 			"systemone",
 			peer,
 		),
-		fetch: bootOpts.fetch,
+		fetch: gatewayUpstreamFetch(bootOpts, requestId, model),
 	});
 
 	logger.info("auth-gateway request", {

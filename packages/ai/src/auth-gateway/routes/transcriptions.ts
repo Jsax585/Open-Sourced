@@ -6,6 +6,7 @@ import { deterministicUuid } from "../../utils/deterministic-id";
 import {
 	type AuthGatewayRouteOptions,
 	buildGatewayApiKeyResolver,
+	gatewayUpstreamFetch,
 	mirrorRequestAbort,
 	recordGatewayUsage,
 	resolveGatewayApiKey,
@@ -76,7 +77,7 @@ export async function handleTranscriptions(
 				"transcriptions",
 				peer,
 			),
-			fetch: bootOpts.fetch,
+			fetch: gatewayUpstreamFetch(bootOpts, requestId, model),
 			signal: controller.signal,
 		});
 		recordGatewayUsage(bootOpts.storage, model, client, result.usage);

@@ -6,6 +6,7 @@ import { deterministicUuid } from "../../utils/deterministic-id";
 import {
 	type AuthGatewayRouteOptions,
 	buildGatewayApiKeyResolver,
+	gatewayUpstreamFetch,
 	mirrorRequestAbort,
 	recordGatewayUsage,
 	resolveGatewayApiKey,
@@ -64,7 +65,7 @@ export async function handleRerank(bootOpts: AuthGatewayRouteOptions, req: Reque
 				"rerank",
 				peer,
 			),
-			fetch: bootOpts.fetch,
+			fetch: gatewayUpstreamFetch(bootOpts, requestId, model),
 			signal: controller.signal,
 		});
 		recordGatewayUsage(bootOpts.storage, model, client, result.usage);
