@@ -230,7 +230,8 @@ class ReadCountingStorage extends ControlledRewriteStorage {
  * write to a path and can hold the next `remove()` until released, then
  * remove the paths, fail, or remove only the first path and then fail. The
  * next `readFull()` can fail, as a connection that failed the remove can
- * still be failing for the readback after it.
+ * still be failing for the readback after it, and the next `append()` can
+ * fail, as a backend that rejects one turn and then recovers.
  */
 class HeldRemoveBackend implements SessionStorageBackend {
 	readonly files = new Map<string, string>();
@@ -265,6 +266,9 @@ class HeldRemoveBackend implements SessionStorageBackend {
 	/** The next `readFull()` throws ECONNRESET. */
 	failNextRead = false;
 
+	/** The next `append()` throws ECONNRESET without storing the line. */
+	failNextAppend = false;
+
 	async init(): Promise<void> {}
 
 	async loadIndex(): Promise<SessionStorageIndexEntry[]> {
@@ -286,6 +290,10 @@ class HeldRemoveBackend implements SessionStorageBackend {
 	}
 
 	async append(path: string, line: string): Promise<void> {
+		if (this.failNextAppend) {
+			this.failNextAppend = false;
+			throw Object.assign(new Error("ECONNRESET: synthetic append failure"), { code: "ECONNRESET" });
+		}
 		this.#wrote(path);
 		this.files.set(path, (this.files.get(path) ?? "") + line);
 	}
@@ -492,6 +500,15 @@ async function indexedSession(): Promise<{
 	if (!sessionFile) throw new Error("Expected a persisted session file");
 	expect(backend.files.has(sessionFile)).toBe(true);
 	return { backend, storage, manager, sessionFile };
+}
+
+/** Reopen `sessionFile` through a fresh index over `backend`, so it reads only what the backend holds. */
+async function reopenFromBackend(backend: HeldRemoveBackend, sessionFile: string): Promise<SessionManager> {
+	const fresh = new IndexedSessionStorage(backend);
+	await fresh.initialize();
+	const reopened = await SessionManager.open(sessionFile, "/sessions/proj", fresh, { suppressBreadcrumb: true });
+	managers.push(reopened);
+	return reopened;
 }
 
 /** Make the next raw file write fail, as a full disk fails an append. */
@@ -1473,7 +1490,7 @@ describe("a dropped session file on memory and indexed storage (C8)", () => {
 		},
 	);
 
-	it("keeps saving on indexed storage after its remove failed, publishing a held title through the slot (C1, C4, C6)", async () => {
+	it("keeps saving on indexed storage after its remove failed, publishing the turn and title held meanwhile in one full publish (C1, C4, C6)", async () => {
 		const { backend, storage, manager, sessionFile } = await indexedSession();
 		const held = backend.holdNextRemove("before-remove");
 		const drop = manager.dropSession(sessionFile);
@@ -1484,7 +1501,7 @@ describe("a dropped session file on memory and indexed storage (C8)", () => {
 		held.release();
 		await expect(drop).rejects.toThrow("EIO");
 		await storage.drain();
-		expect(backend.fullWrites).toBe(fullWritesBefore);
+		expect(backend.fullWrites).toBe(fullWritesBefore + 1);
 		expect(manager.getSessionFile()).toBe(sessionFile);
 
 		manager.appendMessage(userTurn("after the failed delete"));
@@ -1494,6 +1511,75 @@ describe("a dropped session file on memory and indexed storage (C8)", () => {
 		managers.push(reopened);
 		expect(reopened.getSessionName()).toBe("named in the window");
 		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "in the window", "after the failed delete"]);
+	});
+
+	it.each([
+		{ step: "flush()", run: (manager: SessionManager) => manager.flush() },
+		{ step: "close()", run: (manager: SessionManager) => manager.close() },
+		{
+			step: "a switch to another session (flush(), then setSessionFile())",
+			run: async (manager: SessionManager, storage: IndexedSessionStorage) => {
+				const other = SessionManager.create("/cwd", "/sessions/proj", storage);
+				managers.push(other);
+				other.appendMessage(assistantMessage("other seed"));
+				await other.flush();
+				const otherFile = other.getSessionFile();
+				if (!otherFile) throw new Error("Expected a persisted session file");
+				await other.close();
+				await manager.flush();
+				await manager.setSessionFile(otherFile);
+				expect(manager.getSessionFile()).toBe(otherFile);
+			},
+		},
+	])(
+		"has $step alone save a turn recorded while its indexed remove was held, after the remove failed with the row intact (C1, C8)",
+		async ({ run }) => {
+			const { backend, storage, manager, sessionFile } = await indexedSession();
+			const held = backend.holdNextRemove("before-remove");
+			const drop = manager.dropSession(sessionFile);
+			await held.started;
+			manager.appendMessage(userTurn("in the window"));
+			held.release();
+			await expect(drop).rejects.toThrow("EIO");
+
+			await expect(run(manager, storage)).resolves.toBeUndefined();
+			await storage.drain();
+			const reopened = await reopenFromBackend(backend, sessionFile);
+			expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "in the window"]);
+		},
+	);
+
+	it("has close() alone save a title set while its indexed remove was held, after the remove failed with the row intact (C6, C8)", async () => {
+		const { backend, storage, manager, sessionFile } = await indexedSession();
+		const held = backend.holdNextRemove("before-remove");
+		const drop = manager.dropSession(sessionFile);
+		await held.started;
+		await manager.setSessionName("named in the window", "auto");
+		held.release();
+		await expect(drop).rejects.toThrow("EIO");
+
+		await expect(manager.close()).resolves.toBeUndefined();
+		await storage.drain();
+		const reopened = await reopenFromBackend(backend, sessionFile);
+		expect(reopened.getSessionName()).toBe("named in the window");
+	});
+
+	it("has flush() save a turn the indexed backend rejected before the drop, once the backend recovers and the remove failed with the row intact (C7, C8)", async () => {
+		const { backend, storage, manager, sessionFile } = await indexedSession();
+		backend.failNextAppend = true;
+		manager.appendMessage(userTurn("missed"));
+		await storage.drain().catch(() => undefined);
+		expect(manager.getPersistenceFailure()?.message).toContain("ECONNRESET");
+		const held = backend.holdNextRemove("before-remove");
+		const drop = manager.dropSession(sessionFile);
+		await held.started;
+		held.release();
+		await expect(drop).rejects.toThrow("EIO");
+
+		await expect(manager.flush()).resolves.toBeUndefined();
+		await storage.drain();
+		const reopened = await reopenFromBackend(backend, sessionFile);
+		expect(userTurnsOf(reopened.getBranch())).toEqual(["before", "missed"]);
 	});
 
 	it("keeps saving on indexed storage after its remove failed with the session row intact and the readback of it failed (C1, C4)", async () => {

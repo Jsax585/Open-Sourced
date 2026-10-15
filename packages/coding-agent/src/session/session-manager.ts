@@ -2966,9 +2966,13 @@ export class SessionManager {
 	 *   publish that waited, or when the slot write fails. The next append,
 	 *   `flush()` or `close()` appends the entries recorded meanwhile and any
 	 *   that missed the journal before the drop, or reports the failure. On
-	 *   indexed storage that next write is a full publish checked against
-	 *   the stored size instead, so a row the failed remove deleted is
-	 *   reported, never recreated without its header. The next
+	 *   indexed storage the whole journal is instead published once, checked
+	 *   against the stored size, so a row the failed remove deleted is
+	 *   reported, never recreated without its header. It runs before this
+	 *   returns when any entry is unsaved (a turn or title recorded meanwhile,
+	 *   or one that missed the journal before the drop), since `flush()`,
+	 *   `close()` and a switch only append; otherwise it is the next write.
+	 *   The next
 	 *   {@link newSession} for the same entries switches without appending
 	 *   the ones the file is missing, so it writes nothing to it.
 	 */
@@ -3026,10 +3030,15 @@ export class SessionManager {
 			this.#pendingDrop = undefined;
 			if (this.#sessionFile === sessionFile) {
 				// An indexed remove can fail after deleting the row while its
-				// readback fails too, so the row may be gone: the next write is a
-				// size-checked full publish, which reports a missing row where an
-				// append would recreate it without a header.
-				if (this.#storage.defersSyncPublish) this.#durable = undefined;
+				// readback fails too, so the row may be gone: publish the whole
+				// journal once, size-checked, which reports a missing row where an
+				// append would recreate it without a header. flush(), close() and a
+				// switch only append past the frontier, so when any entry is
+				// unsaved that publish runs now; otherwise the next write is it.
+				if (this.#storage.defersSyncPublish) {
+					if (!this.#allEntriesHandedToStorage()) drop.deferredRewrite = true;
+					this.#durable = undefined;
+				}
 				// The caller asked to discard these entries: /delete's newSession()
 				// must not append the ones the file is missing.
 				this.#refusedSessionSwitch = { generation: this.#entriesGeneration, count: this.#entries.length };
