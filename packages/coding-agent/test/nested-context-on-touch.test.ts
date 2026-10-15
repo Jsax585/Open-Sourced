@@ -383,6 +383,37 @@ describe("contextFiles.onTouch", () => {
 		expect(result.developerTexts.join("\n")).toContain("NEW-CANARY");
 	});
 
+	it("does not load a file the system prompt reached walking up from a nested workspace root", async () => {
+		// Guards the duplicate the skip prevents: the prompt loads each additional root's
+		// ancestors' files, which a touch beside that root probes too.
+		setup({ "packages/AGENTS.md": "PACKAGES-CANARY", "packages/foo/AGENTS.md": "FOO", "packages/bar/a.ts": "a" });
+		const result = await run(tempDir, repo, [[{ name: "read", arguments: { path: "packages/bar/a.ts" } }]], {
+			...ON,
+			"workspace.additionalDirectories": [path.join(repo, "packages/foo")],
+		});
+		expect(JSON.stringify(result.contexts[0]?.systemPrompt)).toContain("PACKAGES-CANARY");
+		expect(result.developerTexts).toEqual([]);
+	});
+
+	it("loads an ancestor file of a nested workspace root created after the prompt was built", async () => {
+		// Guards the prompt snapshot: only the files the prompt was built from are in it, so a
+		// file that a fresh walk up from the root would find, but the prompt never held, still loads.
+		setup({ "packages/foo/AGENTS.md": "FOO-CANARY", "packages/bar/a.ts": "a" });
+		const result = await run(
+			tempDir,
+			repo,
+			[
+				[{ name: "write", arguments: { path: "packages/AGENTS.md", content: "PACKAGES-CANARY" } }],
+				[{ name: "read", arguments: { path: "packages/bar/a.ts" } }],
+			],
+			{ ...ON, "workspace.additionalDirectories": [path.join(repo, "packages/foo")] },
+		);
+		const prompt = JSON.stringify(result.contexts.at(-1)?.systemPrompt);
+		expect(prompt).toContain("FOO-CANARY");
+		expect(prompt).not.toContain("PACKAGES-CANARY");
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["packages/AGENTS.md"]);
+	});
+
 	it("hands loaded files to subagents, and a session already holding a file does not load it again", async () => {
 		// Guards subagent inheritance: the parent's loaded files reach the child's system prompt
 		// with their content, and the child does not inject them a second time on its own touch.
@@ -877,12 +908,13 @@ describe("NestedContextInjector batch order", () => {
 
 	/**
 	 * One assistant message reading `files` (relative to the temp dir) in parallel, settled call
-	 * by call in the order a test picks. `roots` are the session's cwd and additional directories.
+	 * by call in the order a test picks. `cwd` and `additional` are the session's workspace roots,
+	 * `prompt` the context files its system prompt holds, and `window` its live messages.
 	 */
 	const batch = (
 		tree: Record<string, string>,
 		files: string[],
-		roots: { cwd?: string; additional?: string[] } = {},
+		options: { cwd?: string; additional?: string[]; prompt?: string[]; window?: AgentMessage[] } = {},
 	) => {
 		tempDir = TempDir.createSync("@pi-nested-order-");
 		const repo = fs.realpathSync(tempDir.path());
@@ -890,10 +922,10 @@ describe("NestedContextInjector batch order", () => {
 		resetCapabilityCache();
 		const injector = new NestedContextInjector({
 			settings: Settings.isolated(ON),
-			cwd: () => path.join(repo, roots.cwd ?? ""),
-			additionalDirectories: () => (roots.additional ?? []).map(dir => path.join(repo, dir)),
-			promptContextFiles: () => [],
-			window: () => [],
+			cwd: () => path.join(repo, options.cwd ?? ""),
+			additionalDirectories: () => (options.additional ?? []).map(dir => path.join(repo, dir)),
+			promptContextFiles: () => (options.prompt ?? []).map(file => path.join(repo, file)),
+			window: () => options.window ?? [],
 			emitNotice: () => {},
 		});
 		const toolCalls = files.map((file, index) => ({
@@ -917,7 +949,7 @@ describe("NestedContextInjector batch order", () => {
 				isError: false,
 				context: { systemPrompt: [], messages: [] },
 			} as never);
-		return { repo, settle, injector };
+		return { repo, settle, injector, assistantMessage };
 	};
 
 	it("delivers a shared parent once, before its child, however parallel calls settle", async () => {
@@ -970,20 +1002,36 @@ describe("NestedContextInjector batch order", () => {
 				"packages/bar/a.ts": "a",
 			},
 			["packages/bar/a.ts"],
-			{ additional: ["packages/foo"] },
+			{ additional: ["packages/foo"], prompt: ["packages/AGENTS.md", "packages/foo/AGENTS.md"] },
 		);
 		expect(blockPaths([(await settle(0)) ?? ""], repo)).toEqual(["packages/.github/copilot-instructions.md"]);
 	});
 
-	it("does not load a file the system prompt reached walking up from a nested workspace root", async () => {
-		// Guards the duplicate the old skip prevented: the prompt loads each additional root's
-		// ancestors' files, which a touch beside that root now probes too.
-		const { settle } = batch(
-			{ "packages/AGENTS.md": "PACKAGES", "packages/foo/AGENTS.md": "FOO", "packages/bar/a.ts": "a" },
-			["packages/bar/a.ts"],
-			{ additional: ["packages/foo"] },
+	it("gives a Cursor exec call a fresh batch once compaction drops what the previous response got", async () => {
+		// Guards out-of-loop batch identity: Cursor exec runs before its response joins the window,
+		// so the newest assistant there is the previous response, whose batch claimed files a
+		// compaction may since have dropped. Calls within one response still share claims.
+		const window: AgentMessage[] = [];
+		const { repo, settle, injector, assistantMessage } = batch(
+			{ "pkg/AGENTS.md": "PKG", "pkg/a.ts": "a", "pkg/b.ts": "b", "pkg/c.ts": "c" },
+			["pkg/a.ts"],
+			{ window },
 		);
-		expect(await settle(0)).toBeUndefined();
+		expect(blockPaths([(await settle(0)) ?? ""], repo)).toEqual(["pkg/AGENTS.md"]);
+		// Compaction kept the assistant message but dropped the developer message after it.
+		window.push(assistantMessage);
+		const delivered: string[] = [];
+		const context = {
+			bridgedResultShown: true,
+			addAdditionalContext: (text: string) => delivered.push(text),
+		} as unknown as AgentToolContext;
+		for (const file of ["pkg/b.ts", "pkg/c.ts"]) {
+			const id = `cursor-${file}`;
+			injector.beforeBridgedToolCall(id, "read", { path: file });
+			const result = { content: [], details: { resolvedPath: path.join(repo, file) } };
+			await injector.afterBridgedToolCall(id, result, false, context);
+		}
+		expect(blockPaths(delivered, repo)).toEqual(["pkg/AGENTS.md"]);
 	});
 
 	it("gives carried files a depth below the workspace root each sits under", async () => {

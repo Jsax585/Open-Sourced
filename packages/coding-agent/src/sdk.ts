@@ -4058,6 +4058,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			const customPrompt = options.systemPrompt(defaultPrompt.systemPrompt);
 			return {
 				systemPrompt: typeof customPrompt === "string" ? [customPrompt] : customPrompt,
+				contextFilePaths: defaultPrompt.contextFilePaths,
 			};
 		};
 
@@ -4210,7 +4211,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		}
 
 		setSessionActiveToolNames(initialToolNames);
-		const { systemPrompt } = await logger.time(
+		const { systemPrompt, contextFilePaths } = await logger.time(
 			"buildSystemPrompt",
 			rebuildSystemPrompt,
 			initialToolNames,
@@ -4682,7 +4683,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			extensionRunner,
 			getEvalPreludes,
 			evalToolSession: toolSession,
-			getContextFiles: () => toolSession.contextFiles,
+			promptContextFiles: contextFilePaths,
 			customCommands: customCommandsResult.commands,
 			skills,
 			skillDescriptions,

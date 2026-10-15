@@ -2115,6 +2115,7 @@ export class AgentSession implements SettingsScope {
 			xdev: config.xdev,
 			setActiveToolNames: config.setActiveToolNames,
 			baseSystemPrompt: this.agent.state.systemPrompt,
+			baseContextFilePaths: config.promptContextFiles,
 			skills: config.skills,
 			skillWarnings: config.skillWarnings,
 			skillsSettings: config.skillsSettings,
@@ -2138,7 +2139,7 @@ export class AgentSession implements SettingsScope {
 			settings: this.settings,
 			cwd: () => this.sessionManager.getCwd(),
 			additionalDirectories: () => this.sessionManager.getAdditionalDirectories(),
-			promptContextFiles: () => config.getContextFiles?.()?.map(file => file.path) ?? [],
+			promptContextFiles: () => this.#tools.basePromptContextFiles,
 			window: () => this.agent.state.messages,
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 		});

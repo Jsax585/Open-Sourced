@@ -61,8 +61,10 @@ export interface NestedContextHost {
 	/** Additional workspace roots, whose context files are also in the system prompt. */
 	additionalDirectories(): readonly string[];
 	/**
-	 * Absolute paths of the context files the system prompt is built from. Read
-	 * structurally, never from the prompt text, which file bodies can spoof.
+	 * Absolute paths of the context files the current system prompt was built
+	 * from, every workspace root's included. Read structurally, never from the
+	 * prompt text, which file bodies can spoof, and never rediscovered, since a
+	 * file created after the build is not in the prompt.
 	 */
 	promptContextFiles(): readonly string[];
 	/** The live window, for calls that run outside the agent loop. */
@@ -124,6 +126,19 @@ interface BatchState {
 	/** Context files a read of this batch showed whole. */
 	fullReads: Set<string>;
 	queue: QueuedBlock[];
+}
+
+/**
+ * Prefix of the key of a batch for out-of-loop calls (Cursor exec). Tool-call
+ * ids never contain a NUL, so such a key never matches a loop batch's.
+ */
+const BRIDGED_BATCH_PREFIX = "\0bridged\n";
+
+/** A batch's identity: the tool-call ids of its assistant message. */
+function toolCallKey(message: AgentMessage | undefined): string {
+	const ids =
+		message?.role === "assistant" ? message.content.flatMap(part => (part.type === "toolCall" ? [part.id] : [])) : [];
+	return ids.join("\n");
 }
 
 /** Delivers subdirectory context files the first time a tool touches their directory. */
@@ -203,7 +218,7 @@ export class NestedContextInjector {
 		this.#bridged.delete(toolCallId);
 		if (!call || isError) return;
 		const messages = this.#host.window();
-		const batch = this.#batchFor(messages.findLast(message => message.role === "assistant"));
+		const batch = this.#bridgedBatch(messages.findLast(message => message.role === "assistant"));
 		await this.#touch({
 			...call,
 			details: result.details,
@@ -247,13 +262,26 @@ export class NestedContextInjector {
 	}
 
 	#batchFor(message: AgentMessage | undefined): BatchState {
-		const ids =
-			message?.role === "assistant"
-				? message.content.flatMap(part => (part.type === "toolCall" ? [part.id] : []))
-				: [];
 		// The loop and the session's message list can hold different copies of the message.
-		const key = ids.join("\n");
+		const key = toolCallKey(message);
 		return this.#batch?.key === key ? this.#batch : this.#newBatch(key);
+	}
+
+	/**
+	 * The batch a bridged call joins. Eval's `tool.*` runs inside the loop call
+	 * that issued it, so it joins that call's batch while the call is
+	 * outstanding. Cursor exec runs before its response joins the window, so the
+	 * newest assistant message there is the previous response, whose batch has
+	 * handed its blocks over and whose claims a compaction may since have made
+	 * stale. Each response's out-of-loop calls share a batch of their own,
+	 * keyed off that previous message.
+	 */
+	#bridgedBatch(previous: AgentMessage | undefined): BatchState {
+		const key = toolCallKey(previous);
+		const current = this.#batch;
+		if (current?.key === key && current.outstanding.size > 0) return current;
+		const bridgedKey = `${BRIDGED_BATCH_PREFIX}${key}`;
+		return current?.key === bridgedKey ? current : this.#newBatch(bridgedKey);
 	}
 
 	#newBatch(key: string): BatchState {
@@ -302,7 +330,7 @@ export class NestedContextInjector {
 
 	async #load(touch: Touch, cwd: string, roots: readonly string[], targets: readonly TouchedTarget[]): Promise<void> {
 		let files: NestedContextFile[];
-		let inPrompt: Set<string>;
+		let inPrompt: ReadonlySet<string>;
 		try {
 			const directories = (await Promise.all(targets.map(touchedDirectory))).filter(
 				dir => rootOf(roots, dir) !== undefined,
@@ -310,7 +338,7 @@ export class NestedContextInjector {
 			if (directories.length === 0) return;
 			files = await this.#discover(directories, roots);
 			if (files.length === 0) return;
-			inPrompt = await this.#promptPaths(cwd, roots);
+			inPrompt = new Set(this.#host.promptContextFiles());
 		} catch (error) {
 			logger.warn("Nested context discovery failed", { error: String(error) });
 			return;
@@ -334,22 +362,6 @@ export class NestedContextInjector {
 			});
 			batch.queue.push({ path: file.path, block, display, depth: segmentCount(file.owner), plain });
 		}
-	}
-
-	/**
-	 * Context files the system prompt holds: the host's, and what the prompt
-	 * loads walking up from each additional root, as `buildSystemPrompt` does.
-	 * Those reach the ancestors of a root nested below cwd, which a touch beside
-	 * that root still probes for files only an exact-directory provider finds.
-	 */
-	async #promptPaths(cwd: string, roots: readonly string[]): Promise<Set<string>> {
-		const paths = new Set(this.#host.promptContextFiles());
-		for (const root of roots) {
-			if (root === cwd) continue;
-			const result = await loadCapability<ContextFile>(contextFileCapability.id, { cwd: root });
-			for (const item of result.items) paths.add(item.path);
-		}
-		return paths;
 	}
 
 	/** Marks `id` settled; hands over the queue once no call of the batch is outstanding. */
