@@ -243,25 +243,6 @@ Inference routes record observed usage against `x-omp-install-id`, `x-omp-hostna
 
 TypeSafe clients using the default base-URL resolver can set `TYPESAFE_BASE_URL=http://gateway:4000` with `TYPESAFE_API_KEY=<gateway token>`. omp's catalog-backed `judge` role passes the model's explicit `baseUrl`, which takes precedence over that environment fallback; configure the TypeSafe provider's `baseUrl` and `apiKey` in `models.yml` to use the gateway. OpenAI-SDK-style clients use `http://gateway:4000/v1`.
 
-Codex CLI clients can use a custom Responses provider with the gateway bearer token:
-
-```toml
-model_provider = "omp_gateway"
-model = "openai-codex/gpt-5.3-codex"
-
-[model_providers.omp_gateway]
-name = "OMP gateway"
-base_url = "http://127.0.0.1:4000/v1/codex"
-env_key = "OMP_GATEWAY_TOKEN"
-wire_api = "responses"
-```
-
-`/v1/codex/responses` accepts JSON or `Content-Encoding: zstd`, translates function/custom tools (including namespaces and client-side tool discovery), and preserves encrypted reasoning in authoritative `response.output_item.done` events. The requested model still selects the upstream provider; this route does not force an OpenAI subscription backend. Explicit `parallel_tool_calls` and `text` controls reach Responses-compatible upstreams. WebSocket upgrade requests receive `426` so Codex falls back to HTTP SSE.
-
-For OpenAI Responses, Azure Responses, and Codex Responses upstreams, replayed history is associated with the resolved upstream provider, API, and model rather than the client-facing model alias. Responses input items do not identify their source, so this assumes the history came from that same upstream model; the gateway cannot verify its origin or make encrypted history portable across providers or models. Non-Responses upstreams retain the existing cross-protocol conversion rules; OpenAI encrypted reasoning is not relabeled as another provider's signed thinking.
-
-This is a protocol-translation route, not a native Codex backend proxy. Hosted tools follow the existing Responses bridge's policy (accepted but not executed). Remote encrypted compaction requests/history return `400` rather than losing context; the custom provider configuration above uses Codex's local compaction. No WebSocket sessions or stored-response chaining are exposed to clients. Existing `/v1/responses`, `/v1/chat/completions`, and `/v1/messages` keep their own codecs and behavior.
-
 There is no raw provider passthrough path. All supported routes go through `pi-ai` provider logic so credential-specific request shaping, OAuth refresh-on-auth-error, and provider quirks stay centralized.
 
 `idleTimeout` on the underlying `Bun.serve` is set to `255 s` so long thinking-budget calls do not get killed by Bun’s default idle timeout.
