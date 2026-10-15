@@ -4,7 +4,6 @@ import { customToolToDefinition } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentTool, ToolApproval } from "@oh-my-pi/pi-agent-core";
 import {
 	type ApprovalMode,
-	APPROVAL_APPROVE_LABEL,
 	denyError,
 	formatApprovalPrompt,
 	requestApproval,
@@ -247,7 +246,7 @@ describe("MCP fallback and prompt formatting", () => {
 		const ui = {
 			select: async (_title: string, options: string[]) => {
 				selects.push(options);
-				return APPROVAL_APPROVE_LABEL;
+				return options[0];
 			},
 		};
 		const write: AgentTool = {
@@ -262,10 +261,10 @@ describe("MCP fallback and prompt formatting", () => {
 		expect((await requestApproval(ui, write, {}, undefined, [], { cacheAnswers: true })).approved).toBe(true);
 		const label = approvalDirectoryKey(path.resolve("/work/project", "TestDir")).replace(/[\\/]+$/, "");
 		expect(selects[0]).toEqual([
-			"Approve",
-			`Approve for directory: ${label}`,
-			"Always approve",
-			`Always approve for directory: ${label}`,
+			"Approve File",
+			`Approve For Directory: ${label}`,
+			"Always Approve File",
+			`Always Approve For Directory: ${label}`,
 			"Deny",
 		]);
 		expect((await requestApproval(ui, write, {}, undefined, [], { cacheAnswers: false })).approved).toBe(true);

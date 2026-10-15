@@ -65,15 +65,18 @@ function approvalDialogAnswers(
 	options: ApprovalDialogOptions,
 ): readonly { id: ApprovalDialogAnswerId; label: string }[] {
 	const folder = options.folderLabel;
-	const answers: { id: ApprovalDialogAnswerId; label: string }[] = [{ id: "approve", label: "Approve" }];
+	const fileTarget = options.exactGrant === true;
+	const answers: { id: ApprovalDialogAnswerId; label: string }[] = [
+		{ id: "approve", label: fileTarget ? "Approve File" : "Approve" },
+	];
 	if (folder !== undefined) {
-		answers.push({ id: "folder", label: `Approve for directory (${folder})` });
+		answers.push({ id: "folder", label: `Approve For Directory (${folder})` });
 	}
-	if (options.exactGrant === true) {
-		answers.push({ id: "always", label: "Always approve" });
+	if (fileTarget) {
+		answers.push({ id: "always", label: "Always Approve File" });
 	}
 	if (folder !== undefined) {
-		answers.push({ id: "always-folder", label: `Always approve for directory (${folder})` });
+		answers.push({ id: "always-folder", label: `Always Approve For Directory (${folder})` });
 	}
 	answers.push({ id: "deny", label: "Deny" });
 	return answers;
@@ -405,17 +408,18 @@ export class ApprovalDialogComponent implements Component {
 			);
 			children.push(node("col", { role: "omp.approval.details" }, rows, "details"));
 		}
-		// The countdown, when one runs, leads the bar like the ask dialog's.
+		// The countdown, when one runs, leads the bar like the ask dialog's. The answers keep the
+		// menu's order — Approve, then the directory and Always variants, then Deny.
 		children.push(
 			actionBar([
 				...(this.#countdown ? [this.#countdown.describe()] : []),
 				null,
 				...expand,
-				...directory,
-				...alwaysDirectory,
-				...always,
-				deny,
 				approve,
+				...directory,
+				...always,
+				...alwaysDirectory,
+				deny,
 			]),
 		);
 		// Under the `omp.editor.ask` prefix: Tern's console layout sizes an ask's rows to the

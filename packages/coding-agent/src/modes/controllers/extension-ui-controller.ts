@@ -45,9 +45,9 @@ import { disambiguateDisplayLabels, sanitizeCarriageReturns } from "@oh-my-pi/pi
 import { setExtensionTerminalTitle, setSessionTerminalTitle } from "../../utils/title-generator";
 import {
 	APPROVAL_ALWAYS_LABEL,
-	APPROVAL_APPROVE_LABEL,
 	APPROVAL_DENY_LABEL,
 	approvalAlwaysDirectoryOptionLabel,
+	approvalApproveOptionLabel,
 	approvalDirectoryOptionLabel,
 } from "../../tools/approval";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
@@ -678,6 +678,7 @@ export class ExtensionUiController {
 	): Promise<ExtensionApprovalAnswer> {
 		const folderLabel = prompt.folderLabel;
 		const exactGrant = prompt.exactGrant === true;
+		const approveOption = approvalApproveOptionLabel(exactGrant);
 		const directoryOption = folderLabel === undefined ? undefined : approvalDirectoryOptionLabel(folderLabel);
 		const alwaysOption = exactGrant ? APPROVAL_ALWAYS_LABEL : undefined;
 		const alwaysDirectoryOption =
@@ -686,7 +687,7 @@ export class ExtensionUiController {
 			kind: "select",
 			title: prompt.full,
 			options: [
-				APPROVAL_APPROVE_LABEL,
+				approveOption,
 				...(directoryOption === undefined ? [] : [directoryOption]),
 				...(alwaysOption === undefined ? [] : [alwaysOption]),
 				...(alwaysDirectoryOption === undefined ? [] : [alwaysDirectoryOption]),
@@ -717,7 +718,7 @@ export class ExtensionUiController {
 					const dialog = new ApprovalDialogComponent(
 						prompt.compact,
 						{
-							onApprove: () => settle(APPROVAL_APPROVE_LABEL),
+							onApprove: () => settle(approveOption),
 							...(directoryOption === undefined ? {} : { onApproveFolder: () => settle(directoryOption) }),
 							...(alwaysOption === undefined ? {} : { onAlwaysApprove: () => settle(alwaysOption) }),
 							...(alwaysDirectoryOption === undefined
@@ -757,7 +758,7 @@ export class ExtensionUiController {
 					};
 				}),
 			);
-			if (choice === APPROVAL_APPROVE_LABEL) return true;
+			if (choice === approveOption) return true;
 			if (directoryOption !== undefined && choice === directoryOption) return { approved: true, scope: "folder" };
 			if (alwaysOption !== undefined && choice === alwaysOption) return { approved: true, global: true };
 			if (alwaysDirectoryOption !== undefined && choice === alwaysDirectoryOption) {

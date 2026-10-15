@@ -552,21 +552,28 @@ function approvalSummary(details: readonly string[]): string | undefined {
 	return omitted ? `${row} …` : row;
 }
 
-/** Label of the plain approval option. */
+/** Label of the once-only answer for a call with no file target (a command). */
 export const APPROVAL_APPROVE_LABEL = "Approve";
+/** Label of the once-only answer for a file. */
+export const APPROVAL_APPROVE_FILE_LABEL = "Approve File";
 /** Label of the exact, cross-instance approval option. */
-export const APPROVAL_ALWAYS_LABEL = "Always approve";
+export const APPROVAL_ALWAYS_LABEL = "Always Approve File";
 /** Label of the denial option. */
 export const APPROVAL_DENY_LABEL = "Deny";
 
+/** The once-only answer's label: files are named, commands (which are never remembered) are not. */
+export function approvalApproveOptionLabel(fileTarget: boolean): string {
+	return fileTarget ? APPROVAL_APPROVE_FILE_LABEL : APPROVAL_APPROVE_LABEL;
+}
+
 /** Label of the directory answer: approves the call and remembers its folder for this instance. */
 export function approvalDirectoryOptionLabel(folderLabel: string): string {
-	return `Approve for directory: ${folderLabel}`;
+	return `Approve For Directory: ${folderLabel}`;
 }
 
 /** Label of the global directory answer: approves the call and remembers its folder for good. */
 export function approvalAlwaysDirectoryOptionLabel(folderLabel: string): string {
-	return `Always approve for directory: ${folderLabel}`;
+	return `Always Approve For Directory: ${folderLabel}`;
 }
 
 /** What an approval prompt answered: denied, or approved with where the grant goes. */
@@ -625,23 +632,22 @@ export async function requestApproval(
 		}
 		return { approved: false };
 	}
+	const approveOption = approvalApproveOptionLabel(exactGrant);
 	if (folderLabel === undefined && !exactGrant) {
-		return {
-			approved: (await ui.select(full, [APPROVAL_APPROVE_LABEL, APPROVAL_DENY_LABEL])) === APPROVAL_APPROVE_LABEL,
-		};
+		return { approved: (await ui.select(full, [approveOption, APPROVAL_DENY_LABEL])) === approveOption };
 	}
 	const directoryOption = folderLabel === undefined ? undefined : approvalDirectoryOptionLabel(folderLabel);
 	const alwaysDirectoryOption =
 		folderLabel === undefined ? undefined : approvalAlwaysDirectoryOptionLabel(folderLabel);
 	const choices = [
-		APPROVAL_APPROVE_LABEL,
+		approveOption,
 		...(directoryOption === undefined ? [] : [directoryOption]),
 		...(exactGrant ? [APPROVAL_ALWAYS_LABEL] : []),
 		...(alwaysDirectoryOption === undefined ? [] : [alwaysDirectoryOption]),
 		APPROVAL_DENY_LABEL,
 	];
 	const choice = await ui.select(full, choices);
-	if (choice === APPROVAL_APPROVE_LABEL) return { approved: true };
+	if (choice === approveOption) return { approved: true };
 	if (directoryOption !== undefined && choice === directoryOption) return { approved: true, scope: "folder" };
 	if (choice === APPROVAL_ALWAYS_LABEL) return { approved: true, global: true };
 	if (alwaysDirectoryOption !== undefined && choice === alwaysDirectoryOption) {

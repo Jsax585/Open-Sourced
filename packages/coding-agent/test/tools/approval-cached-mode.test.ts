@@ -17,6 +17,9 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	type ApprovalGrantStore,
+	APPROVAL_ALWAYS_LABEL,
+	APPROVAL_APPROVE_FILE_LABEL,
+	APPROVAL_APPROVE_LABEL,
 	approvalFolderCandidate,
 	recordApprovalCacheTargets,
 	resolveApproval,
@@ -612,7 +615,7 @@ describe("always-ask-cached wrapper cycle", () => {
 	}
 
 	it("prompts on the first write, records the target, and runs later writes without asking", async () => {
-		const select = vi.fn(async () => "Approve");
+		const select = vi.fn(async _title => APPROVAL_APPROVE_FILE_LABEL);
 		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
 		initializeRunner(runner, select);
 		const settings = cachedSettings();
@@ -634,7 +637,7 @@ describe("always-ask-cached wrapper cycle", () => {
 			sessionManager,
 			modelRegistry,
 		);
-		const secondSelect = vi.fn(async () => "Approve");
+		const secondSelect = vi.fn(async _title => APPROVAL_APPROVE_FILE_LABEL);
 		initializeRunner(secondRunner, secondSelect);
 		const secondWrapper = new ExtensionToolWrapper(tool, secondRunner);
 		await secondWrapper.execute("cached-second", { path: "notes.txt" }, undefined, undefined, context(settings));
@@ -642,7 +645,7 @@ describe("always-ask-cached wrapper cycle", () => {
 	});
 
 	it("remembers a folder when the folder answer approves the call", async () => {
-		const select = vi.fn(async () => "Approve");
+		const select = vi.fn(async _title => APPROVAL_APPROVE_FILE_LABEL);
 		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
 		// The dialog host answers with the folder scope.
 		const approve = vi.fn(async () => ({ approved: true, scope: "folder" }) as const);
@@ -752,7 +755,7 @@ describe("always-ask-cached wrapper cycle", () => {
 	});
 
 	it("records the whole folder on plain approval when the scope prefers folders", async () => {
-		const select = vi.fn(async () => "Approve");
+		const select = vi.fn(async _title => APPROVAL_APPROVE_FILE_LABEL);
 		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
 		initializeRunner(runner, select);
 		const settings = Settings.isolated({
@@ -809,9 +812,9 @@ describe("always-ask-cached wrapper cycle", () => {
 	it("forgets session grants when a fresh instance starts, but keeps 'Always …' ones", async () => {
 		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
 		// Answer by option label: plain approve for the first call, "Always approve" for the second.
-		const picks = ["Approve", "Always approve"];
+		const picks = [APPROVAL_APPROVE_FILE_LABEL, APPROVAL_ALWAYS_LABEL];
 		const select = vi.fn(async (_title: string, options: string[]) => {
-			const pick = picks.shift() ?? "Approve";
+			const pick = picks.shift() ?? APPROVAL_APPROVE_FILE_LABEL;
 			expect(options).toContain(pick);
 			return pick;
 		});
@@ -873,7 +876,7 @@ describe("always-ask-cached wrapper cycle", () => {
 
 		await wrapper.execute("always-dir", { path: path.join(dir, "One.txt") }, undefined, undefined, context(settings));
 		expect(select.mock.calls[0]![1][3]).toBe(
-			`Always approve for directory: ${approvalDirectoryKey(dir).replace(/[\\/]+$/, "")}`,
+			`Always Approve For Directory: ${approvalDirectoryKey(dir).replace(/[\\/]+$/, "")}`,
 		);
 		expect(readGrants(tempDir.path())).toEqual([
 			expect.objectContaining({ key: approvalDirectoryKey(dir), scope: "directory" }),
@@ -908,7 +911,7 @@ describe("always-ask-cached wrapper cycle", () => {
 	});
 
 	it("never remembers a command by its text; only the folder answer covers exec calls", async () => {
-		const select = vi.fn(async () => "Approve");
+		const select = vi.fn(async _title => APPROVAL_APPROVE_LABEL);
 		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
 		initializeRunner(runner, select);
 		const settings = cachedSettings();
@@ -953,7 +956,7 @@ describe("always-ask-cached wrapper cycle", () => {
 		await wrapper.execute("exec-folder-answer", { command: "npm test" }, undefined, undefined, context(settings));
 		expect(select).toHaveBeenCalledTimes(1);
 		expect(select.mock.calls[0]![1][1]).toBe(
-			`Approve for directory: ${approvalDirectoryKey(dir).replace(/[\\/]+$/, "")}`,
+			`Approve For Directory: ${approvalDirectoryKey(dir).replace(/[\\/]+$/, "")}`,
 		);
 		expect(getApprovalGrants(settings.getAgentDir()).session.has(approvalDirectoryKey(dir))).toBe(true);
 		expect(getApprovalCache(settings.getAgentDir()).size).toBe(0);
@@ -963,7 +966,7 @@ describe("always-ask-cached wrapper cycle", () => {
 	});
 
 	it("does not remember a guarded command even when its folder is granted", async () => {
-		const select = vi.fn(async () => "Approve");
+		const select = vi.fn(async _title => APPROVAL_APPROVE_LABEL);
 		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
 		initializeRunner(runner, select);
 		const settings = cachedSettings();

@@ -316,11 +316,20 @@ describe("dialogs under a native surface", () => {
 				expect(button(key)?.p?.tone).toBe("accent");
 			}
 			expect(button("deny")?.p?.tone).toBe("error");
+			// The answers keep the menu's order: Approve first, then the directory and Always
+			// variants, with Deny last.
+			const keys: string[] = [];
+			const collect = (node: NativeNode): void => {
+				if (node.p?.role === "omp.btn" && typeof node.key === "string") keys.push(node.key);
+				for (const child of node.c ?? []) if (isNode(child)) collect(child);
+			};
+			collect(buttons.describe());
+			expect(keys).toEqual(["approve", "folder", "always", "always-folder", "deny"]);
 		} finally {
 			now.mockRestore();
 		}
 
-		// Without an exact grant the "Always approve" answer is neither keyed nor rendered.
+		// Without a file target the "Always Approve File" answer is neither keyed nor rendered.
 		const clicked = { onApprove: vi.fn(), onAlwaysApprove: vi.fn(), onDeny: vi.fn() };
 		const plain = new ApprovalDialogComponent("Allow tool: eval", clicked);
 		expect(find(plain.describe(), node => node.p?.role === "omp.btn" && node.key === "always")).toBeUndefined();
@@ -397,20 +406,20 @@ describe("dialogs under a native surface", () => {
 			const cursorRow = () => lines().find(line => line.startsWith(theme.nav.cursor));
 			const text = () => lines().join("\n");
 			for (const label of [
-				"Approve",
-				"Approve for directory (/tmp/project)",
-				"Always approve",
-				"Always approve for directory (/tmp/project)",
+				"Approve File",
+				"Approve For Directory (/tmp/project)",
+				"Always Approve File",
+				"Always Approve For Directory (/tmp/project)",
 				"Deny",
 			]) {
 				expect(text()).toContain(label);
 			}
-			expect(cursorRow()).toContain("Approve");
+			expect(cursorRow()).toContain("Approve File");
 			expect(cursorRow()).not.toContain("directory");
-			// Down twice lands on "Always approve"; Enter confirms it.
+			// Down twice lands on "Always Approve File"; Enter confirms it.
 			dialog.handleInput(DOWN);
 			dialog.handleInput(DOWN);
-			expect(cursorRow()).toContain("Always approve");
+			expect(cursorRow()).toContain("Always Approve File");
 			expect(cursorRow()).not.toContain("directory");
 			dialog.handleInput(ENTER);
 			expect(callbacks.onAlwaysApprove).toHaveBeenCalledTimes(1);
@@ -448,7 +457,7 @@ describe("dialogs under a native surface", () => {
 			dialog.handleInput(ENTER);
 			expect(callbacks.onApprove).not.toHaveBeenCalled();
 			expect(callbacks.onDeny).not.toHaveBeenCalled();
-			dialog.handleInput("\x1b[18~"); // F7 → Always approve
+			dialog.handleInput("\x1b[18~"); // F7 → Always Approve File
 			expect(callbacks.onAlwaysApprove).toHaveBeenCalledTimes(1);
 		} finally {
 			now.mockRestore();
