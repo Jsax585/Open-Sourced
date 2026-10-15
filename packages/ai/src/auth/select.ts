@@ -45,6 +45,7 @@ import {
 	scopedUsageLimits,
 	usageResetAtMs,
 	windowRequiredDrain,
+	windowResetAt,
 } from "./usage-report";
 
 /** Temporary block after a transient OAuth refresh failure. */
@@ -71,6 +72,33 @@ export type TryOAuthOptions = {
 	onTransientRefreshFailure?: (error: unknown) => void;
 };
 
+/** Fresh, comparable secondary windows only; no urgency from expired/unknown clocks. */
+export function drainPressureExceeds(
+	preferred: UsageReport | null, challenger: UsageReport | null,
+	strategy: CredentialRankingStrategy, context: CredentialRankingContext,
+	policy: { secondaryDrainFactor: number; maxResetHours: number }, now: number,
+): boolean {
+	if (!Number.isFinite(policy.secondaryDrainFactor) || policy.secondaryDrainFactor <= 1 ||
+		!Number.isFinite(policy.maxResetHours) || policy.maxResetHours <= 0) return false;
+	if (!preferred || !challenger) return false;
+	for (const report of [preferred, challenger]) {
+		if (!Number.isFinite(report.fetchedAt) || report.fetchedAt > now || now - report.fetchedAt > 300_000) return false;
+	}
+	const pinned = strategy.findWindowLimits(preferred, context).secondary;
+	const target = strategy.findWindowLimits(challenger, context);
+	const pinnedReset = windowResetAt(pinned?.window);
+	const targetReset = windowResetAt(target.secondary?.window);
+	if (!pinned || !target.secondary || pinnedReset === undefined || targetReset === undefined ||
+		pinnedReset <= now || targetReset <= now || targetReset - now > policy.maxResetHours * 3_600_000 ||
+		!Number.isFinite(pinned.amount.usedFraction) || !Number.isFinite(target.secondary.amount.usedFraction)) return false;
+	// Preserve the native hot-primary guard and never infer headroom from unknown primary usage.
+	if (target.primary && (!Number.isFinite(target.primary.amount.usedFraction) ||
+		normalizeUsageFraction(target.primary) >= 0.85)) return false;
+	const pinnedDrain = windowRequiredDrain(pinned, now, strategy.windowDefaults.secondaryMs);
+	const targetDrain = windowRequiredDrain(target.secondary, now, strategy.windowDefaults.secondaryMs);
+	return targetDrain > 0 && targetDrain > pinnedDrain * policy.secondaryDrainFactor;
+}
+
 /** Services consulted by CredentialSelector for policy, usage, blocks, refresh, and session affinity. */
 export interface CredentialSelectorDeps {
 	store: AuthCredentialStore;
@@ -81,6 +109,7 @@ export interface CredentialSelectorDeps {
 	usage: UsageService;
 	refresher: OAuthRefresher;
 	strategies: RankingStrategyResolver;
+	automaticPinEviction?: () => { secondaryDrainFactor: number; maxResetHours: number };
 }
 
 /** Picks which stored credential serves a request: ordering, usage ranking, OAuth refresh ladder. */
@@ -594,11 +623,15 @@ export class CredentialSelector {
 			sessionPreferredCanRefreshOrUse &&
 			!this.#deps.blocks.isBlocked(provider, providerKey, sessionPreferredIndex, blockScopes);
 		const sessionPinIsExplicit = sessionCredential?.type === "oauth" && sessionCredential.explicit === true;
+		const drainPolicy = this.#deps.automaticPinEviction?.();
+		const drainEvictionEnabled = strategy !== undefined && drainPolicy !== undefined &&
+			Number.isFinite(drainPolicy.secondaryDrainFactor) && drainPolicy.secondaryDrainFactor > 1 &&
+			Number.isFinite(drainPolicy.maxResetHours) && drainPolicy.maxResetHours > 0;
 		const rankDespitePin =
 			!sessionPreferredIsAvailable ||
 			!sessionPreferredIsWarm ||
 			hasPlanRequirement ||
-			(policyReserveEnabled && !sessionPinIsExplicit);
+			((policyReserveEnabled || drainEvictionEnabled) && !sessionPinIsExplicit);
 		// A warm automatic pin whose allowance is spent keeps serving on paid overage
 		// (Codex credits) and is never blocked, so check it and rank when spent: a
 		// sibling with renewable allowance left must take over (#13889). tryOAuth
@@ -683,15 +716,21 @@ export class CredentialSelector {
 				candidate.selection.index === sessionPreferredIndex,
 		);
 		const preferredCandidate = sessionPreferredCandidate === -1 ? undefined : candidates[sessionPreferredCandidate];
-		// A warm automatic pin normally wins. Two policies may evict it, each only
-		// while a sibling is confirmed better: reserve (sibling measured outside
-		// reserve) and spent allowance (unblocked sibling with allowance left).
+		// Automatic pins may yield to reserve, spent allowance, or an opt-in,
+		// fresh near-reset drain advantage from the native top-ranked candidate.
 		const automaticPinWouldBeEvicted = (excludePreflightFailures: boolean): boolean =>
 			!sessionPinIsExplicit &&
 			preferredCandidate !== undefined &&
 			candidates.some(candidate => {
 				if (candidate === preferredCandidate) return false;
 				if (excludePreflightFailures && preflightFailures.has(candidate)) return false;
+				if (drainEvictionEnabled && strategy && drainPolicy &&
+					candidate === candidates[0] && candidate.inReserve !== true &&
+					!this.#deps.blocks.isBlocked(provider, providerKey, candidate.selection.index, blockScopes) &&
+					(!planGate || planGate(candidate.usage) === true) &&
+					(this.#deps.policies.forCredential(provider, candidate.selection.credential)?.priority ?? 0) ===
+						(this.#deps.policies.forCredential(provider, preferredCandidate.selection.credential)?.priority ?? 0) &&
+					drainPressureExceeds(preferredCandidate.usage, candidate.usage, strategy, rankingContext, drainPolicy, Date.now())) return true;
 				if (
 					preferredCandidate.inReserve === true &&
 					candidate.reserveMeasured === true &&

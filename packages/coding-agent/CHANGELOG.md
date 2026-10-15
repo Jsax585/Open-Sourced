@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added default-off `auth.automaticPinEviction.secondaryDrainFactor` and `auth.automaticPinEviction.maxResetHours` settings to let automatic credential pins yield to near-reset secondary allowance ([#10203](https://github.com/can1357/oh-my-pi/issues/10203)).
+
 ## [18.11.0] - 2026-10-14
 
 ### Added

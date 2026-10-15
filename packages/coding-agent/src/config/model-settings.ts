@@ -60,6 +60,18 @@ export const cfgAuthAccountPolicies = register({
 	default: EMPTY_AUTH_ACCOUNT_POLICIES,
 });
 
+// Disabled by default; a factor above one supplies ratio hysteresis.
+export const cfgAuthSecondaryDrainFactor = register({
+	id: "auth.automaticPinEviction.secondaryDrainFactor",
+	type: "number",
+	default: 0,
+});
+export const cfgAuthMaxResetHours = register({
+	id: "auth.automaticPinEviction.maxResetHours",
+	type: "number",
+	default: 12,
+});
+
 export const cfgEnabledModels = register({
 	id: "enabledModels",
 	type: "array",

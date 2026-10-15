@@ -185,8 +185,10 @@ import {
 	discoverAuthStorage as discoverAuthStorageFromConfig,
 	type EffectiveSettingsScope,
 	loadEffectiveAuthAccountPolicyConfig,
+	resolveEffectiveSettings,
 } from "./session/auth-broker-config";
 import type { AuthStorage } from "./session/auth-storage";
+import { cfgAuthSecondaryDrainFactor, cfgAuthMaxResetHours } from "./config/model-settings";
 import {
 	CREDENTIAL_DISABLED_NOTICE_SOURCE,
 	formatCredentialDisabledNotice,
@@ -1023,6 +1025,7 @@ export async function discoverAuthStorage(
 		Omit<EffectiveSettingsScope, "agentDir"> = {},
 ): Promise<AuthStorage> {
 	const { settings, cwd, ...discoveryOptions } = options;
+	const effectiveSettings = await resolveEffectiveSettings({ settings, cwd, agentDir });
 	const policy = await loadEffectiveAuthAccountPolicyConfig({ settings, cwd, agentDir });
 	return discoverAuthStorageFromConfig(agentDir, {
 		...discoveryOptions,
@@ -1030,6 +1033,10 @@ export async function discoverAuthStorage(
 		authStorageOptions: {
 			...discoveryOptions.authStorageOptions,
 			defaultReservePct: discoveryOptions.authStorageOptions?.defaultReservePct ?? policy.defaultReservePct,
+			automaticPinEviction: discoveryOptions.authStorageOptions?.automaticPinEviction ?? (() => ({
+				secondaryDrainFactor: cfgAuthSecondaryDrainFactor.get(effectiveSettings),
+				maxResetHours: cfgAuthMaxResetHours.get(effectiveSettings),
+			})),
 		},
 	});
 }

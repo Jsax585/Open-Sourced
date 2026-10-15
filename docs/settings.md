@@ -109,6 +109,26 @@ Reloading changes the settings values available to consumers; startup-only work 
 
 Routing changes to `modelRoles`, `retry.fallbackChains`, and `task.agentModelOverrides` apply to subsequent subagent launches and fallback decisions without restarting the host. `auth.accountPolicies` and `retry.usageReservePct` also update the long-lived account router for subsequent credential selection and quota checks. Reloading does not restart running subagents or switch a healthy active session's model; explicit runtime overrides still take precedence.
 
+### Automatic credential pin eviction
+
+Sessions normally keep a warm automatically selected OAuth account to preserve prompt-cache affinity. Opt in to drain-based eviction when a native top-ranked sibling has substantially more secondary allowance to drain before an imminent reset:
+
+```yaml
+auth:
+  automaticPinEviction:
+    secondaryDrainFactor: 2
+    maxResetHours: 12
+```
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `auth.automaticPinEviction.secondaryDrainFactor` | `0` | Disabled unless finite and greater than `1`. The challenger's required secondary drain must strictly exceed this factor times the pinned account's drain. |
+| `auth.automaticPinEviction.maxResetHours` | `12` | The challenger's secondary reset must be within this many hours. Must be finite and positive; otherwise eviction is disabled. |
+
+Both usage reports must be no more than five minutes old, with measured secondary usage and future reset times. The challenger must respect the native ranker's ordering, account priority, reserve, blocking, session restrictions, and model-plan eligibility. A measured primary window at or above 85% usage (or with unknown usage) cannot trigger eviction. Explicit user pins remain authoritative. Failed challenger preflight restores the warm pin. Drain pressure is recomputed from current windows rather than carried across resets.
+
+These settings are read on subsequent credential selections, including after live settings reload. Leaving the factor unset or at `0` preserves existing pin behavior.
+
 ## Precedence
 
 From lowest to highest priority, the effective value of a setting is built as:

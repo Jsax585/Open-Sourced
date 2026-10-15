@@ -925,6 +925,98 @@ describe("AuthStorage codex oauth ranking", () => {
 		expect(health.accounts[0]?.remainingFraction).toBeCloseTo(0.05);
 	});
 
+	describe("automatic pin drain eviction", () => {
+		for (const modelId of [undefined, "gpt-5.3-codex-spark"]) {
+			test.each([
+				{ name: "enabled", expected: "sibling" },
+				{ name: "unset", expected: "pinned" },
+				{ name: "zero factor", expected: "pinned", factor: 0 },
+				{ name: "explicit pin", expected: "pinned" },
+				{ name: "reserve", expected: "pinned" },
+				{ name: "priority", expected: "pinned" },
+				{ name: "hot primary", expected: "pinned", primary: 0.85 },
+				{ name: "stale report", expected: "pinned", age: 300_001 },
+				{ name: "future report", expected: "pinned", age: -1 },
+				{ name: "expired reset", expected: "pinned", hours: -1 },
+				{ name: "outside horizon", expected: "pinned", hours: 13 },
+				{ name: "renewed epoch", expected: "pinned", hours: 168 },
+				{ name: "insufficient ratio", expected: "pinned", factor: 20 },
+				{ name: "nonfinite factor", expected: "pinned", factor: NaN },
+				{ name: "invalid horizon", expected: "pinned", horizon: 0 },
+				{ name: "missing secondary", expected: "pinned" },
+				{ name: "unknown primary", expected: "pinned" },
+				{ name: "plan guard", expected: "pinned" },
+				{ name: "failed preflight", expected: "pinned" },
+				{ name: "session restriction", expected: "pinned" },
+			])("$name (model=" + modelId + ")", async scenario => {
+				if (!store) throw new Error("test setup failed");
+				const now = Date.now();
+				vi.spyOn(Date, "now").mockReturnValue(now);
+				let enabled = false;
+				authStorage = new AuthStorage(store, {
+					usageProviderResolver: provider => provider === "openai-codex" ? usageProvider : undefined,
+					automaticPinEviction: scenario.name === "unset" ? undefined : () => ({
+						secondaryDrainFactor: enabled ? (scenario.factor ?? 2) : 0,
+						maxResetHours: scenario.horizon ?? 12,
+					}),
+					accountPolicies: [
+						{ provider: "openai-codex", account: { accountId: "acct-pinned" }, priority: scenario.name === "priority" ? 1 : 0 },
+						{ provider: "openai-codex", account: { accountId: "acct-sibling" }, reservePct: scenario.name === "reserve" ? 50 : 0 },
+					],
+				});
+				await authStorage.credentials.set("openai-codex", [
+					{ type: "oauth", ...createCredential("acct-pinned", "pinned@example.com") },
+					{ type: "oauth", ...createCredential("acct-sibling", "sibling@example.com") },
+				]);
+				const makeReport = (accountId: string, used: number, hours: number, primary = 0.1): UsageReport => {
+					let report = createCodexUsageReport({
+						accountId,
+						primary: { usedFraction: primary, resetInMs: HOUR_MS },
+						secondary: { usedFraction: used, resetInMs: hours * HOUR_MS },
+						metadata: { planType: "pro" },
+					});
+					if (modelId) {
+						report = addSparkUsage(report, primary, used);
+						for (const limit of report.limits) {
+							if (limit.scope.windowId === "7d" && limit.window) limit.window.resetsAt = now + hours * HOUR_MS;
+						}
+					}
+					return report;
+				};
+				usageByAccount.set("acct-pinned", makeReport("acct-pinned", 0.87, 41));
+				usageByAccount.set("acct-sibling", makeReport("acct-sibling", 0.99, 168));
+				const sessionId = "drain-pin";
+				expect(await authStorage.keys.get("openai-codex", sessionId, { modelId })).toBe("api-acct-pinned");
+				if (scenario.name === "explicit pin") {
+					const account = authStorage.oauth.accounts("openai-codex").find(account => account.accountId === "acct-pinned");
+					if (!account) throw new Error("missing pinned account");
+					expect(authStorage.sessions.pin("openai-codex", sessionId, account.credentialId)).toBe(true);
+				}
+				if (scenario.name === "session restriction") {
+					authStorage.sessions.restrict("openai-codex", sessionId, ["account:acct-pinned"]);
+				}
+				const target = makeReport("acct-sibling", 0.92, scenario.hours ?? 2, scenario.primary ?? 0.1);
+				target.fetchedAt = now - (scenario.age ?? 0);
+				if (scenario.name === "missing secondary") target.limits = target.limits.filter(limit => limit.scope.windowId !== "7d");
+				if (scenario.name === "unknown primary") {
+					for (const limit of target.limits) {
+						if (limit.scope.windowId !== "7d") limit.amount = { unit: "percent" };
+					}
+				}
+				if (scenario.name === "plan guard") target.metadata = { ...target.metadata, planType: "free" };
+				usageByAccount.set("acct-sibling", target);
+				enabled = true;
+				await authStorage.usage.invalidate("openai-codex");
+				if (scenario.name === "failed preflight") {
+					const list = store.listAuthCredentials.bind(store);
+					vi.spyOn(store, "listAuthCredentials").mockImplementation(provider => list(provider).filter(row => row.credential.type === "oauth" && row.credential.accountId === "acct-pinned"));
+				}
+				const expected = scenario.name === "plan guard" && !modelId ? "sibling" : scenario.expected;
+				expect(await authStorage.keys.get("openai-codex", sessionId, { modelId })).toBe(`api-acct-${expected}`);
+			});
+		}
+	});
+
 	test("evicts an automatic warm pin only after confirming sibling reserve health", async () => {
 		if (!store) throw new Error("test setup failed");
 		authStorage = new AuthStorage(store, {
