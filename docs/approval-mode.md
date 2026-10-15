@@ -36,6 +36,7 @@ The **Ask and remember** mode (`always-ask-cached`) turns file operations and sh
 Prompts, per call class:
 
 - The first `read`, `write`, or `edit` touching a file prompts (`Reason: target not yet approved`) unless that file — or any granted folder above it — is already approved.
+- Reads of public web URLs (`http://`, `https://`, or a `www.` host) never prompt and are never remembered — their contents are already public; registered internal URLs (`xd://…`, `local://…`) still prompt once per normalized URL.
 - `bash` prompts on every call unless it runs inside an approved folder (`Reason: folder not yet approved`) — commands are never remembered by their text, only a *file* or *folder* grant is.
 - The answers are offered as a menu in terminals without a native dialog: the dock lists the checkbox first, then `Approve Directory (<folder>)`, `Approve File`, and `Deny`, and the arrows move the highlight, `Enter` confirms it (on the checkbox it toggles instead), `Esc` denies. The accelerator keys (`Ctrl+Enter`/`Ctrl+Q`, `F6`, `F7`) keep working for hosts and habits that use them — `F6` is the directory answer, `F7` flips the checkbox — `Ctrl+O` swaps the details between summarised and full, and page keys scroll the details; anything typed goes to the composer and sending it denies the call, as before. Tern's native surface shows the same controls as buttons: `Details`, the remember checkbox, `Approve Directory`, `Approve File`, `Deny`.
 - The file-scoped answer is named for what it remembers: a prompt whose call has no file to remember (a shell command, which is only ever covered through its folder) shows `Approve` instead of `Approve File`, and the checkbox is hidden when the call has neither a file nor a folder to record (e.g. `eval`).
@@ -151,7 +152,7 @@ formatApprovalDetails?: (args: unknown) => string | string[] | undefined;
 approvalCacheTargets?: (args: unknown) => readonly string[] | undefined;
 ```
 
-`approvalCacheTargets` feeds `always-ask-cached`: the returned keys are checked against the grant file before the mode prompts, and recorded when the user approves. Path-based tools (`read`, `write`, `edit`) derive them through `approvalTargetKey` so a selector-stripped, cwd-resolved path (or normalized internal URL) is the unit of approval. Tools that omit it never get cached grants.
+`approvalCacheTargets` feeds `always-ask-cached`: the returned keys are checked against the grant file before the mode prompts, and recorded when the user approves. Path-based tools (`read`, `write`, `edit`) derive them through `approvalTargetKey` so a selector-stripped, cwd-resolved path (or normalized internal URL) is the unit of approval. Tools that omit it never get cached grants; `read` omits it for public web URLs, so those reads are never gated or remembered either.
 
 Examples:
 

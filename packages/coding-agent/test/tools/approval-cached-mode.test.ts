@@ -505,6 +505,26 @@ describe("approval target keys", () => {
 		expect(approvalTargetKey(cwd, "https://example.com/a.txt")).toBe("https://example.com/a.txt");
 	});
 
+	it("reports no cache key for public web URLs, so the cached mode never asks", () => {
+		const read = new ReadTool(createToolSession(cwd));
+		// Web URLs (and `www.` hosts) are public: nothing to approve, nothing to remember.
+		expect(read.approvalCacheTargets?.({ path: "https://example.com/a.txt" })).toBeUndefined();
+		expect(read.approvalCacheTargets?.({ path: "https://example.com/a.txt:10-20" })).toBeUndefined();
+		expect(read.approvalCacheTargets?.({ path: "www.example.com/docs" })).toBeUndefined();
+		// Local files keep their key, and the resolver still prompts once for them.
+		expect(read.approvalCacheTargets?.({ path: "notes.txt" })).toEqual([approvalTargetKey(cwd, "notes.txt")!]);
+
+		const grants = testGrants();
+		expect(
+			resolveApproval(read, { path: "https://example.com/a.txt" }, "always-ask-cached", {}, grants),
+		).toMatchObject({ policy: "allow", tier: "read", source: "mode" });
+		expect(resolveApproval(read, { path: "notes.txt" }, "always-ask-cached", {}, grants)).toMatchObject({
+			policy: "prompt",
+			tier: "read",
+			source: "mode",
+		});
+	});
+
 	it("shares one key between read selectors and write hashline headers", () => {
 		const session = createToolSession(cwd);
 		const read = new ReadTool(session);

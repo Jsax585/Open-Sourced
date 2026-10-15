@@ -1,4 +1,4 @@
-import type { ReadToolDetails } from "@oh-my-pi/pi-tui/tools/read";
+import { isReadableUrlPath, type ReadToolDetails } from "@oh-my-pi/pi-tui/tools/read";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type EditStore, notebookToEditableText } from "@oh-my-pi/pi-natives";
@@ -988,12 +988,22 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	/**
 	 * `always-ask-cached` key: the file this read targets, with every selector
 	 * (`:120-140`, `:raw`, `:img`, `?q=`) peeled, so all reads of one file share
-	 * a single grant. URL targets keep their normalized form.
+	 * a single grant. Internal-URL targets keep their normalized form.
+	 *
+	 * Public web reads (`http(s)://`, `www.`) report no key at all: their
+	 * contents are already public, so the cached mode allows them like a
+	 * listing instead of asking, and there is nothing to remember. The legacy
+	 * PDF image-member syntax keeps its target — that read is exec-tier, and
+	 * its remembered grant is what silences the prompt.
 	 */
 	readonly approvalCacheTargets = (args: unknown): readonly string[] | undefined => {
 		const rawPath = args && typeof args === "object" && "path" in args ? String(args.path ?? "") : "";
 		if (rawPath.length === 0) return undefined;
-		const { path: selectorless } = splitPathAndSel(splitImageQuestionTarget(rawPath).path);
+		const withoutImageQuestion = splitImageQuestionTarget(rawPath).path;
+		const { path: selectorless, sel } = splitPathAndSel(withoutImageQuestion);
+		if (isReadableUrlPath(selectorless) && !(sel === undefined && splitPdfImageReadPath(withoutImageQuestion))) {
+			return undefined;
+		}
 		const key = approvalTargetKey(this.session.cwd, selectorless);
 		return key === undefined ? undefined : [key];
 	};

@@ -6,6 +6,8 @@
 
 - Added a **Forget Remembered Approvals** action to the settings panel (Interaction → Approvals): acting on the row empties the global `approval-cache.db` and forgets the session's approvals too, so the next read, write, or command asks again.
 - Added the **Ask and remember** tool approval mode (`tools.approvalMode: always-ask-cached`, `--approval-mode always-ask-cached`): the first `read`, `write`, or `edit` touching a file asks for approval. Each prompt offers **Approve Directory** (`F6`) and **Approve File** answers plus a **Remember** checkbox the `F7` key, the arrows and Enter, or a click flips between *This Session* (in memory, per instance) and *Always* (the `grants` table of `approval-cache.db` under the agent directory, covering every later session). Directory grants cover every read/write below them and every command that runs inside them; command text is never remembered, so `bash` prompts unless its folder is approved. `tools.approvalScope` (`target`, the default, or `folder`) picks what the exact approval remembers. Dangerous commands and explicit prompt policies still ask every call.
+- Reads of public web URLs (`http://`, `https://`, `www.`) never prompt in **Ask and remember** — their contents are already public, so there is nothing to remember.
+
 ### Changed
 
 - Reduced status-line refresh overhead while subagents have long conversations ([#15874](https://github.com/can1357/oh-my-pi/pull/15874) by [@iliaal](https://github.com/iliaal)).
