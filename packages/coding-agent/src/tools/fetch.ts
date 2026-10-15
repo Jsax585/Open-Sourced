@@ -13,6 +13,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import type { ToolSession } from "../sdk";
 import type { AgentStorage } from "../session/agent-storage";
+import { tryWriteArtifact } from "../session/artifacts";
 import { DEFAULT_MAX_BYTES, truncateHead } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { webpExclusionForModel } from "@oh-my-pi/pi-tui/chat/image-loading";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
@@ -1617,8 +1618,7 @@ async function persistReadUrlArtifact(
 ): Promise<{ id?: string; path?: string } | undefined> {
 	const artifact = await session.allocateOutputArtifact?.("read");
 	if (!artifact?.path) return undefined;
-	await Bun.write(artifact.path, output);
-	return artifact;
+	return (await tryWriteArtifact(artifact.path, output, "read")) ? artifact : undefined;
 }
 
 async function ensureReadUrlArtifact(session: ToolSession, entry: ReadUrlEntry): Promise<ReadUrlEntry> {
