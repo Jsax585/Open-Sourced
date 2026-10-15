@@ -39,7 +39,7 @@ import {
 } from "@oh-my-pi/pi-ai/auth-gateway";
 import { type GeneratedProvider, getBundledModels, getEffectiveTokenCost } from "@oh-my-pi/pi-catalog/models";
 import { type ModelKind, modelKind } from "@oh-my-pi/pi-catalog/types";
-import { getConfigRootDir, logger, VERSION } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, logger, VERSION, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { ModelRegistry } from "../config/model-registry";
 import { cfgDisabledProviders } from "../config/model-settings";
@@ -274,7 +274,8 @@ const ATTEMPT_HOOK_TIMEOUT_MS = 10_000;
  * it proceed only on a 2xx answer from `url` itself. Any other status, a
  * redirect included, a timeout or an unreachable hook refuses the attempt, so
  * a hook outage stops traffic instead of letting it through unrecorded.
- * `token`, when set, is sent as a bearer.
+ * `token`, when set, is sent as a bearer. An https hook's certificate may
+ * chain to a CA from `NODE_EXTRA_CA_CERTS`, as a provider's may.
  */
 export function createAttemptHookClient(url: string, token: string | undefined): AuthGatewayUpstreamAttemptHook {
 	const target = URL.parse(url);
@@ -283,9 +284,10 @@ export function createAttemptHookClient(url: string, token: string | undefined):
 	}
 	const headers: Record<string, string> = { "content-type": "application/json" };
 	if (token) headers.authorization = `Bearer ${token}`;
+	const send = wrapFetchForExtraCa(fetch);
 	return async (attempt, signal) => {
 		const timeout = AbortSignal.timeout(ATTEMPT_HOOK_TIMEOUT_MS);
-		const response = await fetch(target, {
+		const response = await send(target, {
 			method: "POST",
 			headers,
 			body: JSON.stringify(attempt),

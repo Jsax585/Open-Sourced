@@ -223,7 +223,7 @@ There is no raw provider passthrough path. All supported routes go through `pi-a
 
 ### Upstream attempt hook
 
-`serve --attempt-hook=<url>` asks an operator service, such as a meter, to approve every request the gateway sends upstream. Before each one it POSTs JSON to `<url>`, with `Authorization: Bearer $OMP_AUTH_GATEWAY_ATTEMPT_HOOK_TOKEN` when that variable is set:
+`serve --attempt-hook=<url>` asks an operator service, such as a meter, to approve every request the gateway sends upstream. Before each one it POSTs JSON to `<url>`, with `Authorization: Bearer $OMP_AUTH_GATEWAY_ATTEMPT_HOOK_TOKEN` when that variable is set; an `https` hook's certificate may chain to a CA from `NODE_EXTRA_CA_CERTS`:
 
 ```json
 {
@@ -238,7 +238,7 @@ There is no raw provider passthrough path. All supported routes go through `pi-a
 
 - `requestId` is the gateway request's id, on its `auth-gateway request` log line, in `x-request-id` of a successful response, and in the message of a refusal. `attempt` counts from 1 within that request: provider retries, alternate endpoints, credential-recovery resends, redirect hops, and a provider's own token exchanges or downloads each add one. `url` never carries the query string.
 - A 2xx answer from the hook URL itself sends the request; a redirect does not count. Any other status, no answer within 10 s, or an unreachable hook refuses it: nothing is sent, the gateway logs the start of the hook's answer, and the client gets `403` with `Upstream request refused by the gateway's attempt hook (request <requestId>)` (a streaming request gets that as its stream's error event). The provider sees the refusal as a `422` with that fixed wording, so it does not retry the request or block, rotate or invalidate the credential.
-- A redirect answered to a GET or HEAD is followed with each hop asked about as its own attempt, and `Authorization`, `Cookie` and `Proxy-Authorization` are dropped when a hop leaves the origin, as `fetch` itself does. Any other request gets the redirect back instead of following it.
+- A redirect answered to a GET or HEAD is followed with each hop asked about as its own attempt, and `Authorization`, `Cookie` and `Proxy-Authorization` are dropped when a hop leaves the origin, as `fetch` itself does. A redirect to anything but an `http(s)` URL fails the request, as with `fetch`. Any other request gets the redirect back instead of following it.
 - WebSocket and HTTP/2 transports bypass the gateway's fetch. With a hook set, Codex uses HTTP instead of a WebSocket unless `PI_CODEX_WEBSOCKET=1` forces one; Cursor and GitLab Duo workflow sessions are never hooked, so list those providers in `disabledProviders` when every request must be approved. Credential refresh through the broker, catalog discovery, and the `/v1/usage` and `/v1/credentials/check` probes are not hooked.
 
 SDK hosts set `onUpstreamAttempt` in the options of `startAuthGateway` or `createAuthGatewayRouter`; a rejected promise refuses the request the same way.

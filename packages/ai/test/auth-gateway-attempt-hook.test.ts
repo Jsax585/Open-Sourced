@@ -232,12 +232,13 @@ describe("auth-gateway upstream attempt hook", () => {
 		expect(harness.attempts[0]?.url).toBe("https://chatgpt.com/backend-api/codex/responses");
 	});
 
-	it("asks again for each redirect hop of a GET, and hands any other request its redirect", async () => {
+	it("asks again for each http(s) redirect hop of a GET, and hands any other request its redirect", async () => {
 		const storage = await AuthStorage.create(":memory:", { usageProviderResolver: () => undefined });
 		const redirects: Record<string, string> = {
 			"https://api.example/start": "/next",
 			"https://api.example/next": "https://cdn.example/file?sig=1",
 			"https://api.example/blocked": "https://blocked.example/file",
+			"https://api.example/local": "file:///etc/hosts",
 		};
 		const sent: Array<{ url: string; authorization: string | null }> = [];
 		const transport: FetchImpl = async (input, init) => {
@@ -280,6 +281,12 @@ describe("auth-gateway upstream attempt hook", () => {
 		const post = await hooked("https://api.example/start", { method: "POST", body: "{}" });
 		expect(post.status).toBe(302);
 		expect(asked.at(-1)).toBe("6 POST https://api.example/start");
+
+		// As with `fetch` following it, a redirect off http(s) fails the request: the
+		// hop is neither approved nor sent, so no `file:` URL reaches a local read.
+		await expect(hooked("https://api.example/local")).rejects.toThrow("UnsupportedRedirectProtocol");
+		expect(asked.at(-1)).toBe("7 GET https://api.example/local");
+		expect(sent.at(-1)?.url).toBe("https://api.example/local");
 		storage.close();
 	});
 

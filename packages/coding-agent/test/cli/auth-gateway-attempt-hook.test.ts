@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { AuthGatewayUpstreamAttempt } from "@oh-my-pi/pi-ai/auth-gateway";
+import { __resetExtraCaCache } from "@oh-my-pi/pi-utils";
 import { createAttemptHookClient } from "../../src/cli/auth-gateway-cli";
 
 const attempt = (n: number): AuthGatewayUpstreamAttempt => ({
@@ -56,5 +60,35 @@ describe("auth-gateway --attempt-hook client", () => {
 		// An unreachable hook refuses too, so a meter outage stops traffic.
 		meter.stop(true);
 		await expect(hook(attempt(5), undefined)).rejects.toThrow();
+	});
+
+	test("trusts the CAs in NODE_EXTRA_CA_CERTS for an https hook", async () => {
+		const pem =
+			"-----BEGIN CERTIFICATE-----\nMIIBkTCCATegAwIBAgIUF/sample/extra/ca/for/attempt/hook=\n-----END CERTIFICATE-----\n";
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-attempt-hook-ca-"));
+		const originalEnv = Bun.env.NODE_EXTRA_CA_CERTS;
+		const originalFetch = globalThis.fetch;
+		const trusted: unknown[] = [];
+		try {
+			__resetExtraCaCache();
+			const caPath = path.join(dir, "meter-ca.pem");
+			await Bun.write(caPath, pem);
+			Bun.env.NODE_EXTRA_CA_CERTS = caPath;
+			globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+				trusted.push((init as { tls?: { ca?: unknown } } | undefined)?.tls?.ca);
+				return new Response(null, { status: 204 });
+			}) as typeof globalThis.fetch;
+
+			await createAttemptHookClient("https://meter.corp.example/attempts", undefined)(attempt(1), undefined);
+
+			expect(trusted).toHaveLength(1);
+			expect(trusted[0]).toContain(pem);
+		} finally {
+			__resetExtraCaCache();
+			globalThis.fetch = originalFetch;
+			if (originalEnv === undefined) delete Bun.env.NODE_EXTRA_CA_CERTS;
+			else Bun.env.NODE_EXTRA_CA_CERTS = originalEnv;
+			await fs.rm(dir, { recursive: true, force: true });
+		}
 	});
 });

@@ -355,6 +355,12 @@ export function gatewayUpstreamFetch(
 			}
 			await response.body?.cancel();
 			const next = new URL(location, url);
+			// `fetch` follows only http(s) redirects, and handed a `file:` URL it reads a local file.
+			if (next.protocol !== "http:" && next.protocol !== "https:") {
+				throw Object.assign(new TypeError(`UnsupportedRedirectProtocol fetching ${JSON.stringify(url.href)}`), {
+					code: "UnsupportedRedirectProtocol",
+				});
+			}
 			// Later hops go by URL, so they carry the first request's method, headers and signal themselves.
 			const headers = new Headers(hopInit.headers ?? request?.headers);
 			if (next.origin !== url.origin) {
