@@ -1,7 +1,7 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import type { UsageFetchContext, UsageFetchParams } from "@oh-my-pi/pi-ai/usage";
-import { kimiUsageProvider } from "@oh-my-pi/pi-ai/usage/kimi";
+import { kimiGlobalUsageProvider, kimiUsageProvider } from "@oh-my-pi/pi-ai/usage/kimi";
 
 function makeCredential(accountId?: string): UsageFetchParams["credential"] {
 	return {
@@ -182,5 +182,31 @@ describe("kimi usage provider", () => {
 		expect(report).not.toBeNull();
 		expect(report!.limits).toHaveLength(1);
 		expect(report!.limits[0]!.label).toBe("Weekly limit");
+	});
+});
+
+describe("kimi usage regions", () => {
+	const originalBaseUrl = Bun.env.KIMI_CODE_BASE_URL;
+	afterEach(() => {
+		if (originalBaseUrl === undefined) delete Bun.env.KIMI_CODE_BASE_URL;
+		else Bun.env.KIMI_CODE_BASE_URL = originalBaseUrl;
+	});
+
+	async function requestedUrl(provider: typeof kimiUsageProvider): Promise<string | undefined> {
+		let url: string | undefined;
+		const fetch: FetchImpl = async input => {
+			url = String(input);
+			return new Response(JSON.stringify({ usage: { limit: "100", used: "1", remaining: "99" } }), { status: 200 });
+		};
+		await provider.fetchUsage!({ provider: provider.id, credential: makeCredential(), signal: undefined }, { fetch });
+		return url;
+	}
+
+	it("routes each region to its own host and applies KIMI_CODE_BASE_URL only to mainland", async () => {
+		// Kimi Code tokens are region-scoped: a kimi.ai token is rejected by api.kimi.com,
+		// and the official client's KIMI_CODE_BASE_URL override targets the mainland deployment.
+		Bun.env.KIMI_CODE_BASE_URL = "https://override.example/coding/v1";
+		expect(await requestedUrl(kimiUsageProvider)).toBe("https://override.example/coding/v1/usages");
+		expect(await requestedUrl(kimiGlobalUsageProvider)).toBe("https://api.kimi.ai/coding/v1/usages");
 	});
 });

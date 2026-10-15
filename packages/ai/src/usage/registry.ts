@@ -11,7 +11,7 @@ import { factoryDroidRankingStrategy, factoryDroidUsageProvider } from "./factor
 import { googleGeminiCliUsageProvider } from "./gemini";
 import { githubCopilotUsageProvider } from "./github-copilot";
 import { antigravityRankingStrategy, antigravityUsageProvider } from "./google-antigravity";
-import { kimiRankingStrategy, kimiUsageProvider } from "./kimi";
+import { kimiGlobalUsageProvider, kimiRankingStrategy, kimiUsageProvider } from "./kimi";
 import { museCodeUsageProvider } from "./muse-code";
 import { minimaxCodeUsageProvider } from "./minimax-code";
 import { ollamaCloudUsageProvider, ollamaUsageProvider } from "./ollama";
@@ -30,6 +30,7 @@ export const DEFAULT_USAGE_PROVIDERS: readonly UsageProvider[] = [
 	alibabaTokenPlanUsageProvider,
 	openaiCodexUsageProvider,
 	kimiUsageProvider,
+	kimiGlobalUsageProvider,
 	minimaxCodeUsageProvider,
 	museCodeUsageProvider,
 	antigravityUsageProvider,
@@ -68,6 +69,7 @@ const DEFAULT_RANKING_STRATEGIES = new Map<Provider, CredentialRankingStrategy>(
 	["google-antigravity", antigravityRankingStrategy],
 	["factory-droid", factoryDroidRankingStrategy],
 	["kimi-code", kimiRankingStrategy],
+	["kimi-code-global", kimiRankingStrategy],
 	["zai", zaiRankingStrategy],
 	["opencode-go", opencodeGoRankingStrategy],
 	["xai-oauth", xaiOauthRankingStrategy],

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the `kimi-code-global` provider for the global Kimi Code deployment (`auth.kimi.ai` / `api.kimi.ai`); `kimi-code` is now labeled "Kimi Code (China)" ([#15889](https://github.com/can1357/oh-my-pi/pull/15889) by [@z80dev](https://github.com/z80dev)).
+
 ## [18.11.1] - 2026-10-15
 
 ### Fixed

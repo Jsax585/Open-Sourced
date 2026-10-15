@@ -2,7 +2,7 @@
 
 provider "kimi-code" {
 	default-model "kimi-for-coding"
-	discovery label="Kimi Code" {
+	discovery label="Kimi Code (China)" {
 		env "KIMI_API_KEY"
 	}
 
@@ -13,6 +13,9 @@ provider "kimi-code" {
 			thinking-format "openai"
 		}
 	}
+	// Kimi Code serves the K2 chat template on every model; heal leaked
+	// section/tool-call markup regardless of family.
+	stream-markup-healing-pattern "kimi"
 	// Replaces streamKimi's TS fallback for models whose discovery metadata omits the protocol.
 	kimi-api-format "anthropic"
 	// Kimi Code derives cache routing from top-level `prompt_cache_key` on

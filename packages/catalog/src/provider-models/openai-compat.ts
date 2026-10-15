@@ -52,6 +52,7 @@ import {
 } from "../utils";
 import { ALIBABA_TOKEN_PLAN_BASE_URL, parseAlibabaTokenPlanCredential } from "../wire/alibaba-token-plan";
 import { normalizeCharmHyperBaseUrl } from "../wire/charm-hyper";
+import { KIMI_CODE_BASE_URLS, type KimiCodeProvider } from "../wire/kimi-code";
 import { CLINEPASS_API_BASE_URL, clinePassClientHeaders } from "../wire/cline-pass";
 import { CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL } from "../wire/cloudflare-ai-gateway";
 import { coreWeaveProjectHeaders } from "../wire/coreweave";
@@ -4272,27 +4273,25 @@ export const KIMI_CODE_DEFAULT_MAX_TOKENS = 32_000;
  * rule-owned (`runtime/behavior.kdl` model-limits), everything else ->
  * `fallback`.
  */
-export function kimiCodeMaxTokens(modelId: string, fallback?: number): number;
-export function kimiCodeMaxTokens(modelId: string, fallback: number | null): number | null;
-export function kimiCodeMaxTokens(
-	modelId: string,
-	fallback: number | null = KIMI_CODE_DEFAULT_MAX_TOKENS,
-): number | null {
-	return modelLimitsFor("kimi-code", modelId.trim().toLowerCase())?.maxTokens ?? fallback;
+export function kimiCodeMaxTokens(provider: KimiCodeProvider, modelId: string, fallback: number): number;
+export function kimiCodeMaxTokens(provider: KimiCodeProvider, modelId: string, fallback: number | null): number | null;
+export function kimiCodeMaxTokens(provider: KimiCodeProvider, modelId: string, fallback: number | null): number | null {
+	return modelLimitsFor(provider, modelId.trim().toLowerCase())?.maxTokens ?? fallback;
 }
 
 export function kimiCodeModelManagerOptions(
 	config?: KimiCodeModelManagerConfig,
+	provider: KimiCodeProvider = "kimi-code",
 ): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://api.kimi.com/coding/v1";
+	const baseUrl = config?.baseUrl ?? KIMI_CODE_BASE_URLS[provider];
 	return {
-		providerId: "kimi-code",
+		providerId: provider,
 		...(apiKey && {
 			fetchDynamicModels: () =>
 				fetchOpenAICompatibleModels({
 					api: "openai-completions",
-					provider: "kimi-code",
+					provider,
 					baseUrl,
 					apiKey,
 					headers: {
@@ -4315,7 +4314,7 @@ export function kimiCodeModelManagerOptions(
 							// (`providers/kimi-code.kdl` input-modalities).
 							input: entry.supports_image_in === true ? ["text", "image"] : ["text"],
 							contextWindow: typeof entry.context_length === "number" ? entry.context_length : 262144,
-							maxTokens: kimiCodeMaxTokens(id),
+							maxTokens: kimiCodeMaxTokens(provider, id, KIMI_CODE_DEFAULT_MAX_TOKENS),
 							thinking,
 							compat: {
 								thinkingFormat: thinking ? "kimi" : "zai",

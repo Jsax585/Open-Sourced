@@ -1148,30 +1148,30 @@ Provider-specific overrides in `packages/catalog/src/compat/rules/providers/kilo
 - **Provider entry (`kilo`)**: `packages/catalog/src/compat/rules/providers/kilo.kdl` declares default model `anthropic/claude-opus-5`. Environment keys: `KILO_API_KEY`.
 - **Model Manager & Wire Descriptor**: `kiloModelManagerOptions` in `packages/catalog/src/provider-models/openai-compat.ts` maps `providerId: "kilo"` to base URL `https://api.kilo.ai/api/gateway` and delegates dynamic model discovery to `fetchOpenAICompatibleModels`. Associated with `openAiCompletionsDescriptor("kilo", "kilo", "https://api.kilo.ai/api/gateway")`.
 
-## Kimi Code (`kimi-code`)
-Kimi Code provides subscription-backed access to Kimi models (`kimi-for-coding`, `k3`) via Moonshot AI's `/coding/v1` API endpoints. It rides the [Kimi Code](#kimi-code) transport pipeline, delegating request execution to `streamKimi` (`packages/ai/src/providers/kimi.ts`) and `streamOpenAIAnthropicShim` (`packages/ai/src/providers/openai-anthropic-shim.ts`).
+## Kimi Code (`kimi-code`, `kimi-code-global`)
+Kimi Code provides subscription-backed access to Kimi models (`kimi-for-coding`, `k3`) via Moonshot AI's `/coding/v1` API endpoints. Moonshot runs two independent regional deployments with region-scoped accounts and tokens, so each is its own provider: `kimi-code` is mainland China (`auth.kimi.com`, `api.kimi.com`) and `kimi-code-global` is global (`auth.kimi.ai`, `api.kimi.ai`). Region endpoints live in `packages/catalog/src/wire/kimi-code.ts`; both providers share every transport, compat, and usage path below. It rides the [Kimi Code](#kimi-code) transport pipeline, delegating request execution to `streamKimi` (`packages/ai/src/providers/kimi.ts`) and `streamOpenAIAnthropicShim` (`packages/ai/src/providers/openai-anthropic-shim.ts`).
 
 ### Special casings
 
-Provider-specific overrides in `packages/catalog/src/compat/rules/providers/kimi-code.kdl` (more-specific selectors override provider defaults):
+Provider-specific overrides in `packages/catalog/src/compat/rules/providers/kimi-code.kdl` and `kimi-code-global.kdl` (identical; more-specific selectors override provider defaults):
 
 - For class kimi; family k3: `thinkingFormat="openai"`.
 - For class kimi: `thinkingFormat="zai"`.
 - For class unknown: `reasoningContentField="reasoning_content"`, `supportsDeveloperRole=false`, `thinkingFormat="kimi"`, `thinking.efforts=["minimal","low","medium","high"]`.
 - For models kimi-for*: `reasoningContentField="reasoning_content"`, `supportsDeveloperRole=false`, `thinkingFormat="zai"`, `thinking.efforts=["minimal","low","medium","high"]`.
-- Provider defaults: `kimiApiFormat="anthropic"`, `supportsPromptCacheKey=true`, `thinking.mode="effort"`.
+- Provider defaults: `kimiApiFormat="anthropic"`, `supportsPromptCacheKey=true`, `thinking.mode="effort"`, `streamMarkupHealingPattern="kimi"`.
 
-- **Prompt Cache Key Sharing**: `isKimiModel` (`packages/ai/src/providers/kimi.ts`) gates prompt caching; Anthropic-compatible (`packages/ai/src/providers/anthropic.ts`) and OpenAI-compatible (`packages/ai/src/providers/openai-completions.ts`) requests both attach `prompt_cache_key` derived via `getOpenAIPromptCacheKey` to share affinity identity across transport switches.
-- **Common Header Prepending**: `prependHeaders` in `packages/ai/src/providers/openai-completions.ts` injects `getKimiCommonHeaders()` (`packages/ai/src/registry/oauth/kimi.ts`) into all `kimi-code` requests.
-- **Reasoning Guard**: `stream.ts` checks `isKimiModel` before execution, disabling unsupported reasoning configurations on K3 (`packages/ai/src/providers/openai-completions.ts`).
+- **Prompt Cache Key Sharing**: `isKimiCodeProvider` (`packages/catalog/src/wire/kimi-code.ts`) gates prompt caching; Anthropic-compatible (`packages/ai/src/providers/anthropic.ts`) and OpenAI-compatible (`packages/ai/src/providers/openai-completions.ts`) requests both attach `prompt_cache_key` derived via `getOpenAIPromptCacheKey` to share affinity identity across transport switches.
+- **Common Header Prepending**: `prependHeaders` in `packages/ai/src/providers/openai-completions.ts` injects `getKimiCommonHeaders()` (`packages/ai/src/registry/oauth/kimi.ts`) into all `kimi-code` / `kimi-code-global` requests.
+- **Reasoning Guard**: `stream.ts` checks `isKimiCodeProvider` before execution, disabling unsupported reasoning configurations on K3 (`packages/ai/src/providers/openai-completions.ts`).
 
 ### Auth & usage
-- **Device OAuth Flow**: Declared in `packages/catalog/src/compat/rules/auth/kimi-code.kdl` as a `login "device-code"` rule (`packages/ai/src/registry/engine/device-code.ts`) with headers hook in `packages/ai/src/registry/oauth/kimi.ts`. Uses OAuth 2.0 Device Code Authorization (`client-id` `17e5f671-d194-4dfb-9706-5516cb48c098`) against base URL `https://auth.kimi.com` (overrideable via `KIMI_CODE_OAUTH_HOST` or `KIMI_OAUTH_HOST`).
+- **Device OAuth Flow**: Declared in `packages/catalog/src/compat/rules/auth/kimi-code.kdl` and `kimi-code-global.kdl` as `login "device-code"` rules (`packages/ai/src/registry/engine/device-code.ts`) with headers hook in `packages/ai/src/registry/oauth/kimi.ts`. Uses OAuth 2.0 Device Code Authorization (shared `client-id` `17e5f671-d194-4dfb-9706-5516cb48c098`) against `https://auth.kimi.com` for `kimi-code` (overrideable via `KIMI_CODE_OAUTH_HOST` or `KIMI_OAUTH_HOST`) and `https://auth.kimi.ai` for `kimi-code-global`.
 - **Fingerprinting & Device Persistence**: `getKimiCommonHeaders()` injects tracking headers (`User-Agent: KimiCLI/<ver>`, `X-Msh-Platform`, `X-Msh-Version`, `X-Msh-Device-Name`, `X-Msh-Device-Model`, `X-Msh-Os-Version`, `X-Msh-Device-Id`). `getDeviceId` persists a random hex UUID to `path.join(getAgentDir(), "kimi-device-id")` (mode `0600`), falling back to an in-memory ephemeral UUID if file writing fails.
-- **Usage & Quota Tracker**: `kimiUsageProvider` (`packages/ai/src/usage/kimi.ts`) fetches `GET /coding/v1/usages` (`https://api.kimi.com/coding/v1/usages`, configurable via `KIMI_CODE_BASE_URL`) for OAuth credentials. Short-circuits when tokens are expired (`credential.expiresAt <= nowMs`). Parses `usage` and `limits` into `UsageLimit` entries, carrying row-level reset timestamps (`reset_at`, `resetTime`, `ttl`) to the window object when window reset time is absent.
+- **Usage & Quota Tracker**: `kimiUsageProvider` / `kimiGlobalUsageProvider` (`packages/ai/src/usage/kimi.ts`) fetch `GET /coding/v1/usages` on the provider's regional host (`https://api.kimi.com/coding/v1/usages`, configurable via `KIMI_CODE_BASE_URL`; `https://api.kimi.ai/coding/v1/usages` for `kimi-code-global`) for OAuth credentials. Short-circuits when tokens are expired (`credential.expiresAt <= nowMs`). Parses `usage` and `limits` into `UsageLimit` entries, carrying row-level reset timestamps (`reset_at`, `resetTime`, `ttl`) to the window object when window reset time is absent.
 
 ### Catalog model handling
-- **Provider entry (`kimi-code`)**: `packages/catalog/src/compat/rules/providers/kimi-code.kdl` declares default model `kimi-for-coding`.
+- **Provider entries (`kimi-code`, `kimi-code-global`)**: `packages/catalog/src/compat/rules/providers/kimi-code.kdl` and `kimi-code-global.kdl` declare default model `kimi-for-coding`; discovery builds via `kimiCodeModelManagerOptions(config, provider)`. When the global provider is not discovered live during generation, the generator mirrors `kimi-code` rows onto `kimi-code-global` (`projectKimiCodeGlobalModels`).
 - **Dynamic Model Discovery**: `kimiCodeModelManagerOptions` (`packages/catalog/src/provider-models/openai-compat.ts`) queries `/coding/v1/models` using `fetchOpenAICompatibleModels` with `KimiCLI/1.0` headers. Maps models via `kimiSupportsReasoning`, `mapKimiThinking`, and `mapKimiApiFormat` (setting `compat.kimiApiFormat` to `"anthropic"` or `"openai"`).
 
 ## LiteLLM (`litellm`)
@@ -1315,7 +1315,7 @@ Mistral AI provides access to Mistral, Codestral, Devstral, Ministral, and Pixtr
 - **Host Matching**: Host URL marker matching checks for `mistral.ai` (`packages/catalog/src/hosts.ts`: `mistral`).
 
 ## Moonshot (`moonshot`)
-Moonshot is the pay-as-you-go open platform provider for Moonshot AI endpoints (`https://api.moonshot.ai/v1` or mainland China `https://api.moonshot.cn/v1`). It rides the `OpenAI Chat Completions` transport engine (`openai-completions` API surface) and shares Kimi-family dialect and thinking mechanics (Kimi taxonomy in `packages/catalog/src/compat/taxonomy.ts`). It is distinct from `kimi-code`, which uses subscription device OAuth and subscription endpoints (`api.kimi.com` / `/coding/v1/*`).
+Moonshot is the pay-as-you-go open platform provider for Moonshot AI endpoints (`https://api.moonshot.ai/v1` or mainland China `https://api.moonshot.cn/v1`). It rides the `OpenAI Chat Completions` transport engine (`openai-completions` API surface) and shares Kimi-family dialect and thinking mechanics (Kimi taxonomy in `packages/catalog/src/compat/taxonomy.ts`). It is distinct from `kimi-code` / `kimi-code-global`, which use subscription device OAuth and subscription endpoints (`api.kimi.com` / `api.kimi.ai`, `/coding/v1/*`).
 
 ### Special casings
 
@@ -1339,7 +1339,7 @@ Provider-specific overrides in `packages/catalog/src/compat/rules/providers/moon
 - **Dynamic K3 & K2.x Model Mapping**: In `moonshotModelManagerOptions` (`packages/catalog/src/provider-models/openai-compat.ts`):
   - Unreferenced `kimi-k3` entries are stamped with `reasoning: true`, input `["text", "image"]`, `MOONSHOT_KIMI_K3_COST`, `contextWindow: 1_000_000`, `maxTokens: 131_072`, and effort-based `thinking` config (issue #5756).
   - `kimi-k2.x` entries (e.g. `kimi-k2.5`, `kimi-k2.6`) are marked with `reasoning: true`, vision `["text", "image"]`, and multi-tier effort (`[Minimal, Low, Medium, High]`), ensuring `thinking` payloads are generated so models do not stall (issue #2113).
-- **Host & Priority Token Classification**: Host marker `moonshotNative` (`urlMarkers: ["api.moonshot.ai", "api.kimi.com"]`) in `packages/catalog/src/hosts.ts` maps native Moonshot endpoints. Family priority token in `packages/catalog/src/identity/priority.ts` ranks `"moonshot"` right after `"kimi-code"`.
+- **Host & Priority Token Classification**: Host marker `moonshotNative` (`urlMarkers: ["api.moonshot.ai", "api.kimi.com", "api.kimi.ai"]`) in `packages/catalog/src/hosts.ts` maps native Moonshot endpoints. Family priority token in `packages/catalog/src/identity/priority.ts` ranks `"moonshot"` right after `"kimi-code"`.
 
 ## NanoGPT (`nanogpt`)
 NanoGPT is a pay-per-token API gateway exposing diverse open-weights and commercial language models via an OpenAI-compatible interface. It executes requests using the OpenAI Chat Completions transport (`openai-completions`) with a default base URL of `https://nano-gpt.com/api/v1`.
