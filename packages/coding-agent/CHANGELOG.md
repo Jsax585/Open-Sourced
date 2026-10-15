@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `omp launchers`, which lists your profiles, `PI_CONFIG_FILES` overlays (plus the files of a directory passed with `--overlay-dir`), and model presets with the command that starts each; `--json` supported ([#PR](https://github.com/can1357/oh-my-pi/pull/PR) by [@ian139](https://github.com/ian139))
+- Added `omp launchers`, which lists your profiles, `PI_CONFIG_FILES` overlays (plus the files of a directory passed with `--overlay-dir`), and model presets with the command that starts each; `--json` supported ([#15893](https://github.com/can1357/oh-my-pi/pull/15893) by [@ian139](https://github.com/ian139))
 
 ### Changed
 

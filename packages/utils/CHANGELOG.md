@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `getProfilesDir()` for the directory holding named profiles (`~/.omp/profiles`, following `PI_CONFIG_DIR`) ([#PR](https://github.com/can1357/oh-my-pi/pull/PR) by [@ian139](https://github.com/ian139))
+- Added `getProfilesDir()` for the directory holding named profiles (`~/.omp/profiles`, following `PI_CONFIG_DIR`) ([#15893](https://github.com/can1357/oh-my-pi/pull/15893) by [@ian139](https://github.com/ian139))
 
 ## [18.10.0] - 2026-10-12
 
