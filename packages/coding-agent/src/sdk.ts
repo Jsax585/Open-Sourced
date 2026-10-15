@@ -181,10 +181,12 @@ import {
 	type Prewalk,
 } from "./session/agent-session";
 import {
+	automaticPinEvictionFromSettings,
 	createAuthStorageSettingsSync,
 	discoverAuthStorage as discoverAuthStorageFromConfig,
 	type EffectiveSettingsScope,
 	loadEffectiveAuthAccountPolicyConfig,
+	resolveEffectiveSettings,
 } from "./session/auth-broker-config";
 import type { AuthStorage } from "./session/auth-storage";
 import {
@@ -1023,13 +1025,17 @@ export async function discoverAuthStorage(
 		Omit<EffectiveSettingsScope, "agentDir"> = {},
 ): Promise<AuthStorage> {
 	const { settings, cwd, ...discoveryOptions } = options;
-	const policy = await loadEffectiveAuthAccountPolicyConfig({ settings, cwd, agentDir });
+	const effectiveSettings = await resolveEffectiveSettings({ settings, cwd, agentDir });
+	const policy = await loadEffectiveAuthAccountPolicyConfig({ settings: effectiveSettings });
 	return discoverAuthStorageFromConfig(agentDir, {
 		...discoveryOptions,
 		accountPolicies: discoveryOptions.accountPolicies ?? policy.accountPolicies,
 		authStorageOptions: {
 			...discoveryOptions.authStorageOptions,
 			defaultReservePct: discoveryOptions.authStorageOptions?.defaultReservePct ?? policy.defaultReservePct,
+			automaticPinEviction:
+				discoveryOptions.authStorageOptions?.automaticPinEviction ??
+				automaticPinEvictionFromSettings(effectiveSettings),
 		},
 	});
 }

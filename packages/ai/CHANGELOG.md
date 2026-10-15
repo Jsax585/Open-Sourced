@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added opt-in drain-based eviction of warm automatic credential pins, retaining explicit pins and account routing guards ([#10203](https://github.com/can1357/oh-my-pi/issues/10203)).
+
 ## [18.11.0] - 2026-10-14
 
 ### Fixed

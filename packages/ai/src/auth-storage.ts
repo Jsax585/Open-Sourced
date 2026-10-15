@@ -228,6 +228,7 @@ export class AuthStorage {
 			usage,
 			refresher,
 			strategies,
+			automaticPinEviction: options.automaticPinEviction,
 		});
 		const limits = new RateLimits({ store, pool, overrides, blocks, affinity, usage, strategies });
 		const keys = new KeyCascade({

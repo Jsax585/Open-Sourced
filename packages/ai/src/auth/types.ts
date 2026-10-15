@@ -334,6 +334,8 @@ export type OAuthRefreshReason = "auth-recovery";
 export type AuthStorageOptions = {
 	usageProviderResolver?: (provider: Provider) => UsageProvider | undefined;
 	rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
+	/** Read on every selection; undefined preserves warm automatic pins. */
+	automaticPinEviction?: () => { secondaryDrainFactor: number; maxResetHours: number };
 	accountPolicies?: AuthAccountPolicies;
 	/** Global reserve fallback for accounts without a matching reservePct policy. */
 	defaultReservePct?: number;

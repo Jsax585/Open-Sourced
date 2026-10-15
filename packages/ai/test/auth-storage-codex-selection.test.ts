@@ -16,6 +16,7 @@ import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/registry/oauth/types";
 import type { UsageLimit, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai/usage";
 import { OAuthRefresher } from "../src/auth/refresh";
+import { resolveCredentialIdentityKey } from "../src/auth/sqlite-credential-store";
 import { removeWithRetries } from "../../utils/src/temp";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -923,6 +924,159 @@ describe("AuthStorage codex oauth ranking", () => {
 		expect(health.state).toBe("reserve");
 		expect(health.accounts[0]?.state).toBe("reserve");
 		expect(health.accounts[0]?.remainingFraction).toBeCloseTo(0.05);
+	});
+
+	describe("automatic pin drain eviction", () => {
+		for (const modelId of [undefined, "gpt-5.3-codex-spark"]) {
+			test.each([
+				{ name: "enabled", expected: "sibling" },
+				{ name: "repeated turns stay stable", expected: "sibling" },
+				{ name: "unset", expected: "pinned" },
+				{ name: "zero factor", expected: "pinned", factor: 0 },
+				{ name: "explicit pin", expected: "pinned" },
+				{ name: "reserve", expected: "pinned" },
+				{ name: "priority", expected: "pinned" },
+				{ name: "hot primary", expected: "pinned", primary: 0.85 },
+				{ name: "stale report", expected: "pinned", age: 300_001 },
+				{ name: "future report", expected: "pinned", age: -1 },
+				{ name: "expired reset", expected: "pinned", hours: -1 },
+				{ name: "outside horizon", expected: "pinned", hours: 13 },
+				{ name: "renewed epoch", expected: "pinned", hours: 168 },
+				{ name: "insufficient ratio", expected: "pinned", factor: 20 },
+				{ name: "nonfinite factor", expected: "pinned", factor: NaN },
+				{ name: "invalid horizon", expected: "pinned", horizon: 0 },
+				{ name: "missing secondary", expected: "pinned" },
+				{ name: "unknown primary", expected: "pinned" },
+				{ name: "plan guard", expected: "pinned" },
+				{ name: "failed preflight", expected: "pinned" },
+				{ name: "session restriction", expected: "pinned" },
+			])("$name (model=" + modelId + ")", async scenario => {
+				if (!store) throw new Error("test setup failed");
+				const now = Date.now();
+				vi.spyOn(Date, "now").mockReturnValue(now);
+				let enabled = false;
+				authStorage = new AuthStorage(store, {
+					usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
+					automaticPinEviction:
+						scenario.name === "unset"
+							? undefined
+							: () => ({
+									secondaryDrainFactor: enabled ? (scenario.factor ?? 2) : 0,
+									maxResetHours: scenario.horizon ?? 12,
+								}),
+					accountPolicies: [
+						{
+							provider: "openai-codex",
+							account: { accountId: "acct-pinned" },
+							priority: scenario.name === "priority" ? 1 : 0,
+						},
+						{
+							provider: "openai-codex",
+							account: { accountId: "acct-sibling" },
+							reservePct: scenario.name === "reserve" ? 50 : 0,
+						},
+					],
+				});
+				await authStorage.credentials.set("openai-codex", [
+					{ type: "oauth", ...createCredential("acct-pinned", "pinned@example.com") },
+					{ type: "oauth", ...createCredential("acct-sibling", "sibling@example.com") },
+				]);
+				const makeReport = (accountId: string, used: number, hours: number, primary = 0.1): UsageReport => {
+					let report = createCodexUsageReport({
+						accountId,
+						primary: { usedFraction: primary, resetInMs: HOUR_MS },
+						secondary: { usedFraction: used, resetInMs: hours * HOUR_MS },
+						metadata: { planType: "pro" },
+					});
+					if (modelId) {
+						report = addSparkUsage(report, primary, used);
+						for (const limit of report.limits) {
+							if (limit.scope.windowId === "7d" && limit.window) limit.window.resetsAt = now + hours * HOUR_MS;
+						}
+					}
+					return report;
+				};
+				usageByAccount.set("acct-pinned", makeReport("acct-pinned", 0.87, 41));
+				usageByAccount.set("acct-sibling", makeReport("acct-sibling", 0.99, 168));
+				const sessionId = "drain-pin";
+				expect(await authStorage.keys.get("openai-codex", sessionId, { modelId })).toBe("api-acct-pinned");
+				if (scenario.name === "explicit pin") {
+					const account = authStorage.oauth
+						.accounts("openai-codex")
+						.find(account => account.accountId === "acct-pinned");
+					if (!account) throw new Error("missing pinned account");
+					expect(authStorage.sessions.pin("openai-codex", sessionId, account.credentialId)).toBe(true);
+				}
+				if (scenario.name === "session restriction") {
+					const key = resolveCredentialIdentityKey("openai-codex", {
+						type: "oauth",
+						...createCredential("acct-pinned", "pinned@example.com"),
+					});
+					if (!key) throw new Error("missing account identity");
+					authStorage.sessions.restrict("openai-codex", sessionId, [key]);
+				}
+				const target = makeReport("acct-sibling", 0.92, scenario.hours ?? 2, scenario.primary ?? 0.1);
+				target.fetchedAt = now - (scenario.age ?? 0);
+				if (scenario.name === "missing secondary")
+					target.limits = target.limits.filter(limit => limit.scope.windowId !== "7d");
+				if (scenario.name === "unknown primary") {
+					for (const limit of target.limits) {
+						if (limit.scope.windowId !== "7d") limit.amount = { unit: "percent" };
+					}
+				}
+				if (scenario.name === "plan guard") target.metadata = { ...target.metadata, planType: "free" };
+				usageByAccount.set("acct-sibling", target);
+				enabled = true;
+				await authStorage.usage.invalidate("openai-codex");
+				if (scenario.name === "failed preflight") {
+					const list = store.listAuthCredentials.bind(store);
+					vi.spyOn(store, "listAuthCredentials").mockImplementation(provider =>
+						list(provider).filter(
+							row => row.credential.type === "oauth" && row.credential.accountId === "acct-pinned",
+						),
+					);
+				}
+				const expected = scenario.name === "plan guard" && !modelId ? "sibling" : scenario.expected;
+				expect(await authStorage.keys.get("openai-codex", sessionId, { modelId })).toBe(`api-acct-${expected}`);
+				if (scenario.name === "repeated turns stay stable") {
+					for (let turn = 0; turn < 8; turn++) {
+						expect(await authStorage.keys.get("openai-codex", sessionId, { modelId })).toBe("api-acct-sibling");
+					}
+				}
+			});
+		}
+	});
+
+	test("an account-access-excluded top rank cannot evict a warm pin onto a nonqualifying third account", async () => {
+		if (!store) throw new Error("test setup failed");
+		let enabled = false;
+		authStorage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
+			automaticPinEviction: () => ({ secondaryDrainFactor: enabled ? 2 : 0, maxResetHours: 12 }),
+		});
+		await authStorage.credentials.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "b@example.com") },
+			{ type: "oauth", ...createCredential("acct-c", "c@example.com") },
+		]);
+		const report = (accountId: string, usedFraction: number, hours: number) =>
+			createCodexUsageReport({
+				accountId,
+				primary: { usedFraction: 0.1, resetInMs: HOUR_MS },
+				secondary: { usedFraction, resetInMs: hours * HOUR_MS },
+			});
+		usageByAccount.set("acct-a", report("acct-a", 0.87, 41));
+		usageByAccount.set("acct-b", report("acct-b", 0.99, 168));
+		usageByAccount.set("acct-c", report("acct-c", 0.99, 168));
+		const options = { accountIds: ["acct-a", "acct-c"] };
+		expect(await authStorage.keys.get("openai-codex", "three-account-drain", options)).toBe("api-acct-a");
+		usageByAccount.set("acct-b", report("acct-b", 0.92, 2));
+		usageByAccount.set("acct-c", report("acct-c", 0.94, 12));
+		await authStorage.usage.invalidate("openai-codex");
+		enabled = true;
+		// Native rank is B > C > A, but B is excluded and C's pressure is below 2x A.
+		expect(await authStorage.keys.get("openai-codex", "fresh-allowed-drain", options)).toBe("api-acct-c");
+		expect(await authStorage.keys.get("openai-codex", "three-account-drain", options)).toBe("api-acct-a");
 	});
 
 	test("evicts an automatic warm pin only after confirming sibling reserve health", async () => {
