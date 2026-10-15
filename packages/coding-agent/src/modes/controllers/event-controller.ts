@@ -303,6 +303,21 @@ export class EventController {
 	#runEpoch = 0;
 	/** Epoch of the in-flight {@link #finishWhenRunSettles} watch, if any. */
 	#settleWatchEpoch: number | undefined = undefined;
+	/**
+	 * Bumped when a terminal `agent_end` is handled. A settle watch armed before
+	 * it stands down, so a real terminal status is never overwritten by the
+	 * watch's synthetic (message-less) teardown.
+	 */
+	#terminalSettleCount = 0;
+	/**
+	 * Held while a terminal `agent_end` teardown runs. {@link #finishAgentEnd}
+	 * awaits a deferred model switch, and a focus attachment resuming in that
+	 * window must not arm a recovery watch that later runs a second,
+	 * message-less teardown over the real terminal status.
+	 */
+	#terminalTeardownActive = false;
+	/** Changes whenever transcript ownership is detached, including same-session reattachment. */
+	#transcriptGeneration = 0;
 	// Coalescing window for `message_update` events at the subscription boundary.
 	// `message_update` carries the CUMULATIVE assistant message (every update
 	// re-lists all content blocks), so when a burst of deltas arrives faster than
@@ -779,7 +794,31 @@ export class EventController {
 		// the listener's first await, preserving the timing the coalescing
 		// tests assert on. `message_update` enqueue is itself synchronous and
 		// needs no serialization.
-		this.ctx.unsubscribe = this.ctx.session.subscribe(event => this.dispatchSessionEvent(event));
+		this.ctx.unsubscribe?.();
+		const session = this.ctx.session;
+		let active = true;
+		// Startup can finish after agent_start or a nonterminal settle has fired.
+		this.restoreRunActivity();
+		const unsubscribe = session.subscribe(event => {
+			if (!active || this.ctx.viewSession !== session) return;
+			return this.dispatchSessionEvent(event);
+		});
+		this.ctx.unsubscribe = () => {
+			active = false;
+			unsubscribe();
+		};
+	}
+
+	/** Restore the viewed logical run, including pauses whose stream timestamp was cleared. */
+	restoreRunActivity(): void {
+		const session = this.ctx.viewSession;
+		const active = session.hasLogicalRunActivity;
+		this.ctx.composer.setRunActive(active);
+		if (active && !session.isStreaming) {
+			// Attachment can miss the nonterminal event. Reuse its cancellation/
+			// async-drain watcher rather than interpreting stream-idle as run-idle.
+			void this.#finishWhenRunSettles({ type: "agent_end", messages: [], isTerminal: false });
+		}
 	}
 
 	/**
@@ -797,12 +836,16 @@ export class EventController {
 	 * snapshot first so ordering is preserved.
 	 */
 	async dispatchSessionEvent(event: AgentSessionEvent): Promise<void> {
+		const generation = this.#transcriptGeneration;
+		const session = this.ctx.viewSession;
 		if (event.type === "message_update") {
 			this.#enqueueMessageUpdate(event);
 			return;
 		}
 		await this.#runSerialized(async () => {
+			if (generation !== this.#transcriptGeneration || session !== this.ctx.viewSession) return;
 			await this.#flushPendingMessageUpdate();
+			if (generation !== this.#transcriptGeneration || session !== this.ctx.viewSession) return;
 			await this.handleEvent(event);
 		});
 	}
@@ -871,6 +914,8 @@ export class EventController {
 		this.#vocalizedMessageUpdates.add(event);
 		this.#pendingMessageUpdate = event;
 		if (this.#messageUpdateTimer) return;
+		const generation = this.#transcriptGeneration;
+		const session = this.ctx.viewSession;
 		this.#messageUpdateTimer = setTimeout(() => {
 			this.#messageUpdateTimer = undefined;
 			// Mirror AgentSession.#emit: attach a catch so a streaming rebuild
@@ -880,6 +925,7 @@ export class EventController {
 			// agent_end landing mid-window cannot overtake this flush (issue
 			// #7443 follow-up).
 			void this.#runSerialized(async () => {
+				if (generation !== this.#transcriptGeneration || session !== this.ctx.viewSession) return;
 				await this.#flushPendingMessageUpdate();
 			}).catch(err => {
 				logger.warn("Message update flush rejected", {
@@ -917,6 +963,8 @@ export class EventController {
 	 * session's transcript and must not bleed into the new one.
 	 */
 	resetTranscriptAnchors(): void {
+		this.#transcriptGeneration++;
+		this.#settleWatchEpoch = undefined;
 		if (this.#messageUpdateTimer) {
 			clearTimeout(this.#messageUpdateTimer);
 			this.#messageUpdateTimer = undefined;
@@ -2237,8 +2285,8 @@ export class EventController {
 		}
 	}
 	async #handleAgentEnd(event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
-		// A superseded agent_end: the agent is already streaming a fresh turn, so
-		// this event belongs to a turn that has already been replaced. The session
+		// A superseded agent_end: the viewed agent is already streaming a fresh turn,
+		// so this event belongs to a turn that has already been replaced. The session
 		// dispatches to listeners fire-and-forget across an async extension-emit hop
 		// (#emitSessionEvent), so an interrupted turn's agent_end can land AFTER the
 		// resumed turn's agent_start (e.g. any post-turn agent.continue()). Running
@@ -2246,11 +2294,7 @@ export class EventController {
 		// leaving "Working…" gone while the agent keeps running. The live turn owns
 		// the loader and finalizes it at its own agent_end (isStreaming === false by
 		// then). Mirrors the collab guest's !isStreaming loader reconciler.
-		if (this.ctx.session.isStreaming) {
-			// A focused worker can end while the main session streams; the run flag follows the viewed session.
-			this.ctx.composer.setRunActive(this.ctx.viewSession.isStreaming);
-			return;
-		}
+		if (this.ctx.viewSession.isStreaming) return;
 		// A non-terminal settle (`isTerminal: false`) is a scheduling pause, not the
 		// end of the run: the agent's own continuation (reminder, retry, queued
 		// steer/follow-up, IRC wake) follows, or background work may re-wake it.
@@ -2261,6 +2305,27 @@ export class EventController {
 		// to apply once the current stream ends, and `#finishAgentEnd` is otherwise
 		// its only flush site, so the automatic continuation would otherwise run
 		// on the old model/thinking level until the terminal settle.
+		if (this.ctx.session.isStreaming) {
+			// A focused worker can end while the main session streams; stop only the
+			// viewed worker's loader and sync the composer run flag without firing
+			// main-owned completion side effects (terminal progress, notifications,
+			// run status, queued model/command flushes, or idle tasks).
+			if (event.isTerminal === false) {
+				void this.#finishWhenRunSettles(event);
+				return;
+			}
+			this.#terminalSettleCount += 1;
+			this.#streamingReveal.stop();
+			this.#toolArgsReveal.flushAll();
+			if (this.ctx.loadingAnimation) {
+				this.ctx.loadingAnimation.stop();
+				this.ctx.loadingAnimation = undefined;
+				this.ctx.statusContainer.disposeChildren();
+			}
+			this.ctx.composer.setRunActive(this.ctx.viewSession.hasLogicalRunActivity);
+			this.ctx.ui.requestRender();
+			return;
+		}
 		if (event.isTerminal === false) {
 			// `awaitingAsyncWork`: the model handed control back and only a
 			// background-job result can resume it. The title tracks the model, so it
@@ -2270,17 +2335,38 @@ export class EventController {
 			if (event.awaitingAsyncWork === true) setTerminalTitleState("idle");
 			void this.#finishWhenRunSettles(event);
 			await this.ctx.flushPendingModelSwitch();
-			// Reaching here means the first guard passed, so `isStreaming` is already
-			// false: a command issued from now on mounts immediately. Leaving earlier
-			// panels queued would render them out of order, minutes later, after the
-			// user was told they were only waiting for the turn. The transcript is
-			// quiescent at a settle, which is the condition #4806 wanted.
+			// Reaching here means the first guard passed, so the viewed session is
+			// idle and the main session is not streaming: a command issued from now
+			// on mounts immediately. Leaving earlier panels queued would render them
+			// out of order, minutes later.
 			this.ctx.flushPendingCommandOutput();
 			return;
 		}
-		setRunStatus(this.#settledRunStatus(event));
-
-		await this.#finishAgentEnd(event);
+		this.#terminalSettleCount += 1;
+		this.#terminalTeardownActive = true;
+		const epoch = this.#runEpoch;
+		const session = this.ctx.viewSession;
+		const generation = this.#transcriptGeneration;
+		try {
+			setRunStatus(this.#settledRunStatus(event));
+			await this.#finishAgentEnd(event);
+		} finally {
+			this.#terminalTeardownActive = false;
+			// A focus attach can land `restoreRunActivity()` while the teardown awaits the model
+			// switch and flip the composer back to busy, and its watcher refused to arm under the
+			// teardown token. Settle the composer only when this same view is still the one that
+			// ended: a different attached session, a rebuilt transcript, or a newer run owns its own
+			// flag. Even then, defer to the logical predicate so paused work (post-prompt, async
+			// wake, queued continuation) keeps the composer busy.
+			if (
+				epoch === this.#runEpoch &&
+				generation === this.#transcriptGeneration &&
+				this.ctx.viewSession === session &&
+				!session.hasLogicalRunActivity
+			) {
+				this.ctx.composer.setRunActive(false);
+			}
+		}
 		// This settle may belong to an extension-started turn while the main
 		// input loop remains asleep. Do not await session-idle from its own event.
 		if (this.ctx.shutdownRequested) this.ctx.requestShutdown();
@@ -2293,19 +2379,26 @@ export class EventController {
 	 * cancelled background job enqueues no wake (acknowledged/watched ones are
 	 * suppressed). Mirrors `RpcSessionSettleWatcher`: wait out retries, scheduled
 	 * continuations, and owner-scoped background work, then — if no new run
-	 * started and the session is quiet — run the same teardown a terminal
+	 * started and the viewed session is quiet — run the same teardown a terminal
 	 * `agent_end` would. A continuation that does start bumps the epoch and its
 	 * own `agent_end` finalizes the run instead.
 	 */
 	async #finishWhenRunSettles(event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
 		const epoch = this.#runEpoch;
-		if (this.#settleWatchEpoch === epoch) return;
+		if (this.#terminalTeardownActive || this.#settleWatchEpoch === epoch) return;
 		this.#settleWatchEpoch = epoch;
-		const session = this.ctx.session;
+		const session = this.ctx.viewSession;
+		const generation = this.#transcriptGeneration;
 		// No `hasAdmittedSubmission` gate: this very settle is emitted while the
 		// prompt that produced it is still admitted, and a new submission starts a
 		// run whose `agent_start` bumps the epoch anyway.
-		const superseded = () => this.#runEpoch !== epoch || this.ctx.session !== session || session.isStreaming;
+		const terminalSettles = this.#terminalSettleCount;
+		const superseded = () =>
+			this.#terminalSettleCount !== terminalSettles ||
+			this.#runEpoch !== epoch ||
+			this.#transcriptGeneration !== generation ||
+			this.ctx.viewSession !== session ||
+			session.isStreaming;
 		try {
 			while (!superseded()) {
 				await session.waitForIdle();
@@ -2321,6 +2414,18 @@ export class EventController {
 				) {
 					return;
 				}
+				if (this.ctx.session.isStreaming) {
+					this.#streamingReveal.stop();
+					this.#toolArgsReveal.flushAll();
+					if (this.ctx.loadingAnimation) {
+						this.ctx.loadingAnimation.stop();
+						this.ctx.loadingAnimation = undefined;
+						this.ctx.statusContainer.disposeChildren();
+					}
+					this.ctx.composer.setRunActive(this.ctx.viewSession.hasLogicalRunActivity);
+					this.ctx.ui.requestRender();
+					return;
+				}
 				setRunStatus(this.#settledRunStatus(event));
 				await this.#finishAgentEnd(event);
 				if (this.ctx.shutdownRequested) this.ctx.requestShutdown();
@@ -2328,7 +2433,9 @@ export class EventController {
 		} catch (error) {
 			logger.warn("Non-terminal settle teardown failed", { error: String(error) });
 		} finally {
-			if (this.#settleWatchEpoch === epoch) this.#settleWatchEpoch = undefined;
+			if (this.#transcriptGeneration === generation && this.#settleWatchEpoch === epoch) {
+				this.#settleWatchEpoch = undefined;
+			}
 		}
 	}
 
