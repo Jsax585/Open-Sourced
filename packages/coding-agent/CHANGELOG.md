@@ -12,6 +12,8 @@
 - Fixed OpenZoo public-tunnel discovery reporting a rejected bearer as a missing model instead of an authentication failure.
 - Fixed resuming a session saved on `openzoo/auto` when the OpenZoo model cache is empty.
 - Explicit CLI model selection now discovers a requested live-only provider when its cache is empty.
+- Fixed startup skipping a configured default fallback whose provider authenticates only through another provider's key (e.g. `xai-oauth` via `XAI_API_KEY`) and picking an unrelated model instead ([#15781](https://github.com/can1357/oh-my-pi/pull/15781))
+- Fixed slower startup when the configured default model is unavailable and no fallback chain is configured ([#15781](https://github.com/can1357/oh-my-pi/pull/15781))
 
 ## [18.11.1] - 2026-10-15
 
