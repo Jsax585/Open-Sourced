@@ -25,6 +25,7 @@ import {
 } from "../../tools/approval";
 import { getApprovalCache } from "../../tools/approval-cache";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
+import { cfgToolsApprovalScope } from "../../tools/settings";
 import { withFileMutationSession } from "../../tools/file-write-fallback";
 import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-input";
 import { applyToolProxy } from "../tool-proxy";
@@ -425,11 +426,15 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				pendingSafetyChecks.length > 0 ? ["Provider safety checks:", ...safetyCheckLines(pendingSafetyChecks)] : [];
 			// The folder answer is only meaningful for prompts this mode raised: policy-forced prompts
 			// (critical commands, explicit `prompt` rules) are never recorded, so they keep plain options.
-			const rememberFolder = approvalMode === "always-ask-cached" && resolved.source === "mode";
+			// With `tools.approvalScope: folder` plain approval already grants the folder, so the
+			// separate folder answer is not offered.
+			const modeRaised = approvalMode === "always-ask-cached" && resolved.source === "mode";
+			const rememberFolder =
+				modeRaised && effectiveSettings !== undefined && cfgToolsApprovalScope.get(effectiveSettings) === "folder";
 			let outcome: ApprovalOutcome;
 			try {
 				outcome = await requestApproval(uiContext, this.tool, resolvedArgs, approvalCheck.reason, safetyAppendix, {
-					folderGrant: rememberFolder,
+					folderGrant: modeRaised && !rememberFolder,
 				});
 			} catch (err) {
 				await emitApprovalResolved(false, err instanceof Error ? err.message : "approval aborted");
@@ -443,11 +448,15 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				throw new Error(`Tool call denied by user: ${this.tool.name}`);
 			}
 			// `always-ask-cached`: a prompt the mode itself raised, now approved, remembers every
-			// target it asked about — a file path, an exact command, or, for the folder answer, the
-			// directory that covers them.
-			if (rememberFolder && resolved.policy === "prompt") {
-				if (outcome.folder) recordApprovalFolderGrant(this.tool, resolvedArgs, approvalCache);
-				else recordApprovalCacheTargets(this.tool, resolvedArgs, approvalCache);
+			// target it asked about — a file path, an exact command, or, for the folder answer (and
+			// `tools.approvalScope: folder`), the directory that covers them. Calls with no folder
+			// candidate fall back to their exact targets.
+			if (modeRaised && resolved.policy === "prompt") {
+				const folderGranted =
+					outcome.folder === true || rememberFolder
+						? recordApprovalFolderGrant(this.tool, resolvedArgs, approvalCache)
+						: undefined;
+				if (folderGranted === undefined) recordApprovalCacheTargets(this.tool, resolvedArgs, approvalCache);
 			}
 			if (pendingSafetyChecks.length > 0) {
 				if (!context) {

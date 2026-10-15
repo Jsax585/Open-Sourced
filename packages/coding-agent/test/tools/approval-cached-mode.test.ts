@@ -636,6 +636,60 @@ describe("always-ask-cached wrapper cycle", () => {
 		expect(select).not.toHaveBeenCalled();
 	});
 
+	it("records the whole folder on plain approval when the scope prefers folders", async () => {
+		const select = vi.fn(async () => "Approve");
+		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
+		initializeRunner(runner, select);
+		const settings = Settings.isolated({
+			"tools.approvalMode": "always-ask-cached",
+			"tools.approvalScope": "folder",
+		});
+		const dir = path.join(tempDir.path(), "ScopedDir");
+		const tool: AgentTool = {
+			name: "write_scope",
+			label: "Write",
+			description: "file tool",
+			parameters: {} as never,
+			approval: "write",
+			approvalCacheTargets: (args: unknown) =>
+				isRecord(args) && typeof args.path === "string"
+					? [approvalTargetKey(tempDir.path(), args.path)!]
+					: undefined,
+			execute: async () => ({ content: [{ type: "text" as const, text: "executed" }] }),
+		};
+		const wrapper = new ExtensionToolWrapper(tool, runner);
+
+		await wrapper.execute(
+			"scope-first",
+			{ path: path.join(dir, "One.txt") },
+			undefined,
+			undefined,
+			context(settings),
+		);
+		expect(select).toHaveBeenCalledTimes(1);
+		const cache = getApprovalCache(settings.getAgentDir());
+		expect(cache.has(approvalDirectoryKey(dir))).toBe(true);
+
+		// A sibling file is covered by the recorded folder, without a prompt.
+		await wrapper.execute(
+			"scope-second",
+			{ path: path.join(dir, "Two.txt") },
+			undefined,
+			undefined,
+			context(settings),
+		);
+		expect(select).toHaveBeenCalledTimes(1);
+		// Outside the folder it still asks.
+		await wrapper.execute(
+			"scope-outside",
+			{ path: path.join(tempDir.path(), "Elsewhere.txt") },
+			undefined,
+			undefined,
+			context(settings),
+		);
+		expect(select).toHaveBeenCalledTimes(2);
+	});
+
 	it("leaves no grant behind when the user denies, so the next call asks again", async () => {
 		const select = vi.fn(async () => "Deny");
 		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);

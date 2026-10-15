@@ -350,6 +350,38 @@ export const cfgToolsApprovalMode = register({
 	},
 });
 
+// What 'Ask and remember' records when a call is approved without the folder answer.
+//   "target" — the exact file path or command text (each needs its own approval).
+//   "folder" — the whole folder around the call: every read/write below it, and every
+//              command that runs inside it.
+export const cfgToolsApprovalScope = register({
+	id: "tools.approvalScope",
+	type: "enum",
+	values: ["target", "folder"] as const,
+	default: "target",
+	ui: {
+		tab: "interaction",
+		group: "Approvals",
+		label: "Remembered Scope",
+		description:
+			"Scope the 'Ask and remember' mode records when a call is approved. 'Exact item' remembers the file path or command text that was approved; 'Whole folder' remembers the folder around it instead, covering every read and write below it and every command that runs inside it. The prompt's folder answer always grants the folder either way.",
+		options: [
+			{
+				value: "target",
+				label: "Exact item",
+				description:
+					"Remember the exact file or command approved; the prompt's folder answer (F6) grants the folder instead.",
+			},
+			{
+				value: "folder",
+				label: "Whole folder",
+				description:
+					"Remember the folder containing the approved file or command, covering everything inside it at any depth. The folder answer is not offered since plain approval already grants it.",
+			},
+		],
+	},
+});
+
 // Todo tool
 // Todo settings deliberately have no `protocolDefault`: protocol embedders need project-level opt-outs
 // for reminder/prelude prompt injection.
