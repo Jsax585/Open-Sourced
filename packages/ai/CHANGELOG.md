@@ -5,14 +5,22 @@
 ### Added
 
 - Added keyless OpenZoo authentication, with optional credentials for protected proxy endpoints.
-- Added image support for native OpenAI Decisions and Workers AI judgments, prompted vision chat, and auth-gateway System One requests; images exceeding a judgment API's documented caps (e.g. Clef's 4 images, 4 MiB each) are rejected locally ([#15471](https://github.com/can1357/oh-my-pi/pull/15471) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
-- `isSurvivingAssistant` in `providers/transform-messages`: whether an assistant turn reaches a replay, malformed tool calls dropped first, so callers outside `transformMessages` pick the same latest turn ([#15791](https://github.com/can1357/oh-my-pi/pull/15791) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
 
 - Fixed chat-completions and Responses requests sending `top_k` or `min_p` when model compat turns that extension off. Temperature and top_p are unchanged.
 - Fixed chat-completions and Responses requests dropping an advertised `top_k`, `min_p`, or penalty when the model rejects temperature and top_p.
 - A stored OpenZoo API key, including one copied to the auth broker, is used when `OPENZOO_API_KEY` is unset. The keyless `openzoo-local` placeholder remains only when nothing is stored.
+
+## [18.11.1] - 2026-10-15
+
+### Added
+
+- Added image support for native OpenAI Decisions and Workers AI judgments, prompted vision chat, and auth-gateway System One requests; images exceeding a judgment API's documented caps (e.g. Clef's 4 images, 4 MiB each) are rejected locally ([#15471](https://github.com/can1357/oh-my-pi/pull/15471) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+- `isSurvivingAssistant` in `providers/transform-messages`: whether an assistant turn reaches a replay, malformed tool calls dropped first, so callers outside `transformMessages` pick the same latest turn ([#15791](https://github.com/can1357/oh-my-pi/pull/15791) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Fixed
+
 - Fixed Codex-hosted image generation ignoring the requested `aspect_ratio`/`image_size`, and `3:2`/`2:3` requests sending no size to OpenAI image models ([#15601](https://github.com/can1357/oh-my-pi/pull/15601) by [@chulmin-dev](https://github.com/chulmin-dev))
 - Fixed Claude subagents failing to return structured results when `yield` arguments arrived as invalid JSON ([#15605](https://github.com/can1357/oh-my-pi/pull/15605) by [@farnoy](https://github.com/farnoy))
 - Fixed turns stopping instead of retrying when a gateway reports its upstream WebSocket closed before `response.completed` ([#15628](https://github.com/can1357/oh-my-pi/pull/15628) by [@nqrwhal](https://github.com/nqrwhal)).

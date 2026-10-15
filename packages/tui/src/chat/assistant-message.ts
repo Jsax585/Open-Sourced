@@ -8,6 +8,7 @@ import {
 	Markdown,
 	type MarkdownTheme,
 	rewriteMarkdownLinkDestinations,
+	speculativeStreamingSource,
 	streamingMarkdownSource,
 } from "../components/markdown";
 import { Spacer } from "../components/spacer";
@@ -22,6 +23,7 @@ import { hasTranscriptActions, runTranscriptAction } from "./transcript-actions"
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { isNativeRendering } from "../native/state";
 import { NativeImageCache, nativeMediaNode } from "../native/blobs";
+import { linkedImageText } from "../prompt/image-references";
 import { Memo } from "../native/memo";
 import { EMPTY_LINK_TARGETS, resolveImageOptions } from "../render/render-utils";
 import { WidthAwareText } from "../render";
@@ -868,7 +870,13 @@ export class AssistantMessageComponent extends Container {
 					: {
 							text: source,
 							stream,
-							node: node("md", stream ? { text: source, stream: true } : { text: source }, undefined, key),
+							// A streaming node renders its open link or math span as already closed, as the TUI does.
+							node: node(
+								"md",
+								stream ? { text: speculativeStreamingSource(source), stream: true } : { text: source },
+								undefined,
+								key,
+							),
 						};
 			parts.set(slot, entry);
 			return entry.node;
@@ -990,7 +998,14 @@ export class AssistantMessageComponent extends Container {
 				for (const [toolCallId, images] of this.#toolImagesByCallId) {
 					if (media && this.#toolMediaPathByCallId.has(toolCallId)) continue;
 					images.forEach((image, index) => {
-						children.push(this.#nativeImages.get(`r${toolCallId}:${index}`, image.data, image.mimeType));
+						children.push(
+							this.#nativeImages.get(
+								`r${toolCallId}:${index}`,
+								image.data,
+								image.mimeType,
+								this.#toolMediaPathByCallId.get(toolCallId),
+							),
+						);
 					});
 				}
 			}
@@ -1603,12 +1618,15 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
-	#renderImageEntries(entries: Array<{ image: ImageContent; key: string }>, withLeadingSpacer: boolean): void {
+	#renderImageEntries(
+		entries: Array<{ image: ImageContent; key: string; sourcePath?: string }>,
+		withLeadingSpacer: boolean,
+	): void {
 		if (!this.#showImages || entries.length === 0) return;
 		this.#convertImagesForKitty(entries);
 
 		if (withLeadingSpacer) this.#contentContainer.addChild(new Spacer(1));
-		for (const { image, key } of entries) {
+		for (const { image, key, sourcePath } of entries) {
 			let displayImage: ImageContent | undefined = image;
 			if (TERMINAL.imageProtocol === ImageProtocol.Kitty && image.mimeType !== "image/png") {
 				displayImage = this.#kittyConversion(image);
@@ -1622,6 +1640,7 @@ export class AssistantMessageComponent extends Container {
 						{ fallbackColor: (text: string) => theme.fg("toolOutput", text) },
 						{
 							...resolveImageOptions(),
+							sourcePath,
 							budget: this.#imageBudget,
 							imageKey: key,
 							requestRender: this.#onImageUpdate,
@@ -1630,15 +1649,18 @@ export class AssistantMessageComponent extends Container {
 				);
 				continue;
 			}
-			this.#contentContainer.addChild(new Text(theme.fg("toolOutput", `[Image: ${image.mimeType}]`), 1, 0));
+			this.#contentContainer.addChild(
+				new Text(theme.fg("toolOutput", linkedImageText(`[Image: ${image.mimeType}]`, image, sourcePath)), 1, 0),
+			);
 		}
 	}
 
 	#renderToolImages(): void {
 		if (!this.#showToolResultImages) return;
-		const entries = Array.from(this.#toolImagesByCallId.entries()).flatMap(([toolCallId, images]) =>
-			images.map((image, index) => ({ image, key: `${toolCallId}:${index}` })),
-		);
+		const entries = Array.from(this.#toolImagesByCallId.entries()).flatMap(([toolCallId, images]) => {
+			const sourcePath = this.#toolMediaPathByCallId.get(toolCallId);
+			return images.map((image, index) => ({ image, key: `${toolCallId}:${index}`, sourcePath }));
+		});
 		this.#renderImageEntries(entries, true);
 	}
 

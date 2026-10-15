@@ -20,6 +20,11 @@
 - Fixed the OpenZoo `auto` router hiding reasoning and image input when the live roster advertises them.
 - Fixed OpenZoo sessions sending native tool calls to models whose live roster lists parameters and omits tools.
 - Fixed OpenZoo models staying tool-disabled after a refresh when the live roster starts advertising tools.
+
+## [18.11.1] - 2026-10-15
+
+### Fixed
+
 - Enabled long prompt-cache retention (`ttl: "1h"`) for Claude models on `google-vertex` ([#15505](https://github.com/can1357/oh-my-pi/pull/15505) by [@hpost](https://github.com/hpost))
 - Fixed Gemini 4 Argon on Google Vertex and the Gemini API failing every request with "Thinking budget is not supported for this model": Gemini 4 now sends `thinkingLevel` instead of `thinkingBudget`, and Argon offers only the low, medium, and high levels Google accepts ([#15643](https://github.com/can1357/oh-my-pi/pull/15643) by [@kevcube](https://github.com/kevcube))
 - Fixed the Antigravity model selector offering roster rows the backend marks disabled (`disabled: true`, e.g. `gemini-4-argon-disabled` on accounts without Argon access), which answered `Cloud Code Assist API error (404): Requested entity was not found.`; discovery now skips them the way it already skips `isInternal` rows ([#15684](https://github.com/can1357/oh-my-pi/pull/15684) by [@CharleoYang](https://github.com/CharleoYang))

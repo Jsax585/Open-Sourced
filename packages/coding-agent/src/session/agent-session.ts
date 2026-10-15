@@ -3687,9 +3687,7 @@ export class AgentSession implements SettingsScope {
 			if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
 				assistantMsg.contextSnapshot = {
 					promptTokens: calculatePromptTokens(assistantMsg.usage),
-					nonMessageTokens:
-						this.#stats.pendingNonMessageTokens ??
-						computeNonMessageTokens(this, this.agent.tokenizer, this.settings.revision),
+					...this.#stats.nonMessageSnapshot(),
 					compactionEpoch: this.#stats.compactionEpoch,
 				};
 			}
@@ -10246,6 +10244,11 @@ export class AgentSession implements SettingsScope {
 	/** Reports whether priority service is realized by the active model. */
 	isFastModeActive(): boolean {
 		return this.#models.isFastModeActive();
+	}
+
+	/** Reports whether a fresh session on `model` realizes a fast tier from configured `tier.*` settings. */
+	isFastModeConfiguredFor(model: Model): boolean {
+		return this.#models.isFastModeConfiguredFor(model);
 	}
 
 	/** Effective wire service tier for a request to `model` under the live per-family tiers. */
