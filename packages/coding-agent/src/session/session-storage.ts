@@ -36,7 +36,10 @@ export function sessionStagingPath(target: string): string {
 	return path.join(path.dirname(target), `.${path.basename(target)}.${Snowflake.next()}.tmp`);
 }
 
-export type SessionStorageFileIdentity = string;
+export interface SessionStorageFileIdentity {
+	dev: bigint;
+	ino: bigint;
+}
 
 export interface SessionStorageStat {
 	size: number;
@@ -1025,7 +1028,7 @@ export class FileSessionStorage implements SessionStorage {
 			size: Number(stats.size),
 			mtimeMs: Number(stats.mtimeMs),
 			mtime: stats.mtime,
-			identity: `${stats.dev}:${stats.ino}`,
+			identity: { dev: stats.dev, ino: stats.ino },
 		};
 	}
 
