@@ -273,7 +273,7 @@ export class ApprovalDialogComponent implements Component {
 			this.options.folderLabel === undefined
 				? []
 				: [
-						actionButton("Folder", "folder", {
+						actionButton("Remember folder", "folder", {
 							...(folderKey ? { keys: folderKey } : {}),
 							title: `Approve and remember ${this.options.folderLabel}${folderKey ? `  ${formatTooltipKey(folderKey)}` : ""}`,
 						}),

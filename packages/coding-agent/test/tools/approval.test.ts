@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { describe, expect, it, spyOn } from "bun:test";
 import { customToolToDefinition } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentTool, ToolApproval } from "@oh-my-pi/pi-agent-core";
@@ -11,6 +12,7 @@ import {
 	resolveApprovalFromContext,
 	truncateForPrompt,
 } from "@oh-my-pi/pi-coding-agent/tools/approval";
+import { approvalTargetKey } from "@oh-my-pi/pi-coding-agent/tools/approval-targets";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { Settings } from "../../src/config/settings";
 import { EditTool } from "../../src/edit";
@@ -236,6 +238,30 @@ describe("MCP fallback and prompt formatting", () => {
 			"Content:",
 			"hello",
 		]);
+	});
+
+	it("keeps the folder answer off policy-forced prompts", async () => {
+		const selects: string[][] = [];
+		const ui = {
+			select: async (_title: string, options: string[]) => {
+				selects.push(options);
+				return "Approve";
+			},
+		};
+		const write: AgentTool = {
+			name: "write",
+			label: "Write",
+			description: "guarded write",
+			parameters: {} as never,
+			approval: () => ({ tier: "write", override: true, reason: "critical pattern" }),
+			approvalCacheTargets: () => [approvalTargetKey(path.resolve("/work/project"), "TestDir/a.txt")!],
+			execute: async () => ({ content: [{ type: "text" as const, text: "executed" }] }),
+		};
+		expect((await requestApproval(ui, write, {}, undefined, [], { folderGrant: true })).approved).toBe(true);
+		expect(selects[0]).toHaveLength(3);
+		expect(selects[0]![1]).toContain("Approve folder: ");
+		expect((await requestApproval(ui, write, {}, undefined, [], { folderGrant: false })).approved).toBe(true);
+		expect(selects[1]).toEqual(["Approve", "Deny"]);
 	});
 
 	it("the dialog's compact prompt summarizes the details to one row, keeping origin, reason, and appendix", async () => {

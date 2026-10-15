@@ -560,7 +560,8 @@ export function approvalFolderOptionLabel(folderLabel: string): string {
  * prompt and a compact one with the details summarized to a row, so the composer beneath it
  * keeps its room), else an Approve/Deny select with the full prompt (RPC, ACP, extension hosts).
  * `appendix` lines follow the prompt on both. A call whose folder candidate exists also offers
- * the folder answer, which the tool wrapper records as a directory grant.
+ * the folder answer when `options.folderGrant` allows it — the tool wrapper records that answer
+ * as a directory grant, so prompts a tool or user policy forced keep their plain options.
  */
 export async function requestApproval(
 	ui: Pick<ExtensionUIContext, "select" | "approve">,
@@ -568,10 +569,11 @@ export async function requestApproval(
 	args: unknown,
 	reason?: string,
 	appendix: readonly string[] = [],
+	options: { folderGrant?: boolean } = {},
 ): Promise<ApprovalOutcome> {
 	const header = approvalHeader(tool, reason);
 	const details = approvalDetails(tool, args);
-	const folderLabel = approvalFolderCandidate(tool, args)?.label;
+	const folderLabel = options.folderGrant === false ? undefined : approvalFolderCandidate(tool, args)?.label;
 	const full = [...header, ...details, ...appendix].join("\n");
 	if (ui.approve) {
 		const summary = approvalSummary(details);

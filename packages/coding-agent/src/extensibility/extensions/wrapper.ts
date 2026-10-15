@@ -423,9 +423,14 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			const uiContext = this.runner.getUIContext();
 			const safetyAppendix =
 				pendingSafetyChecks.length > 0 ? ["Provider safety checks:", ...safetyCheckLines(pendingSafetyChecks)] : [];
+			// The folder answer is only meaningful for prompts this mode raised: policy-forced prompts
+			// (critical commands, explicit `prompt` rules) are never recorded, so they keep plain options.
+			const rememberFolder = approvalMode === "always-ask-cached" && resolved.source === "mode";
 			let outcome: ApprovalOutcome;
 			try {
-				outcome = await requestApproval(uiContext, this.tool, resolvedArgs, approvalCheck.reason, safetyAppendix);
+				outcome = await requestApproval(uiContext, this.tool, resolvedArgs, approvalCheck.reason, safetyAppendix, {
+					folderGrant: rememberFolder,
+				});
 			} catch (err) {
 				await emitApprovalResolved(false, err instanceof Error ? err.message : "approval aborted");
 				cancelPreflight();
@@ -439,9 +444,8 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			}
 			// `always-ask-cached`: a prompt the mode itself raised, now approved, remembers every
 			// target it asked about — a file path, an exact command, or, for the folder answer, the
-			// directory that covers them. Prompts forced by tool or user policy (e.g. an explicit
-			// `prompt`, a critical-command override) stay per-call.
-			if (approvalMode === "always-ask-cached" && resolved.policy === "prompt" && resolved.source === "mode") {
+			// directory that covers them.
+			if (rememberFolder && resolved.policy === "prompt") {
 				if (outcome.folder) recordApprovalFolderGrant(this.tool, resolvedArgs, approvalCache);
 				else recordApprovalCacheTargets(this.tool, resolvedArgs, approvalCache);
 			}
