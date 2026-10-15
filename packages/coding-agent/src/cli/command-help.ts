@@ -101,6 +101,10 @@ export const installHelp = {
 
 export const joinHelp = { description: "Join a shared collab session (same as /join)" } satisfies CommandMetadata;
 
+export const launchersHelp = {
+	description: "List profiles, config overlays, and model presets you can launch omp with",
+} satisfies CommandMetadata;
+
 export const modelsHelp = { description: "List, search, and refresh available models" } satisfies CommandMetadata;
 
 export const pluginHelp = { description: "Manage plugins (install, uninstall, list, etc.)" } satisfies CommandMetadata;

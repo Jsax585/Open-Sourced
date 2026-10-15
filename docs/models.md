@@ -711,6 +711,8 @@ When several config layers define a preset of the same name, the highest layer (
 
 Saving captures the effective assignments — including any `--model` session override — and the configured `defaultThinkingLevel`, not the session's live thinking level.
 
+`omp launchers` lists every preset with its `default` model, thinking level, and the config layer that defines it (add `--json` for scripts); it also lists profiles and `--config` overlays, so you can see all the ways to start omp in one place.
+
 Related settings:
 
 - `modelRoles` (record)

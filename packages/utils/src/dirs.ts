@@ -116,9 +116,13 @@ export function getBaseConfigRoot(): string {
 	return path.join(os.homedir(), getConfigDirName());
 }
 
+/** Directory holding every named profile's config root (~/.omp/profiles; follows PI_CONFIG_DIR). Shared by all profiles. */
+export function getProfilesDir(): string {
+	return path.join(getBaseConfigRoot(), "profiles");
+}
+
 function getProfileConfigRoot(profile: string | undefined): string {
-	const root = getBaseConfigRoot();
-	return profile ? path.join(root, "profiles", profile) : root;
+	return profile ? path.join(getProfilesDir(), profile) : getBaseConfigRoot();
 }
 
 function readPiProfileFromEnvSafe(): string | undefined {
