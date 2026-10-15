@@ -289,6 +289,7 @@ function createHandlerContext(
 /**
  * Race `work` against a `timeoutMs` budget and optional cancellation signal,
  * clearing the timer and abort listener as soon as one branch settles.
+ * A zero budget disables the deadline, but retains cancellation and cleanup.
  *
  * We deliberately avoid `Bun.sleep(timeoutMs).then(...)` here: that leaves an
  * uncancellable timer registered with the event loop, so every successful
@@ -330,7 +331,7 @@ async function raceHandlerWithTimeout<T>(
 		resolveInterrupt(EXTENSION_HANDLER_TIMEOUT);
 	};
 	const armTimer = () => {
-		if (settled || pauseDepth > 0) return;
+		if (timeoutMs === 0 || settled || pauseDepth > 0) return;
 		activeSince = performance.now();
 		timer = setTimeout(expire, Math.max(0, remainingMs));
 	};
@@ -341,7 +342,7 @@ async function raceHandlerWithTimeout<T>(
 	};
 	const timeoutBudget: HandlerTimeoutBudget = {
 		pause: () => {
-			if (settled) return;
+			if (timeoutMs === 0 || settled) return;
 			pauseDepth++;
 			if (pauseDepth !== 1) return;
 			remainingMs = Math.max(0, remainingMs - (performance.now() - activeSince));
@@ -1527,9 +1528,14 @@ export class ExtensionRunner {
 		ctx: ExtensionContext,
 		ext: Extension,
 		timeoutMs: number,
-		onFailure?: (kind: "timeout" | "error", message: string) => R,
+		onFailure?: (kind: "timeout" | "error", message: string, timeoutMs: number) => R,
 		outerSignal?: AbortSignal,
 	): Promise<R | undefined> {
+		const override = ext.handlerTimeouts?.get(event.type)?.get(handler);
+		if (override !== undefined) {
+			timeoutMs =
+				event.type === "session_shutdown" ? (override === 0 ? timeoutMs : Math.min(timeoutMs, override)) : override;
+		}
 		// `session_stop` carries its own signal on the event; `tool_call` receives
 		// the outer dispatch signal (loop request or wrapper execute) so an abort
 		// while a handler awaits a human dialog cancels the dialog and settles the
@@ -1593,7 +1599,7 @@ export class ExtensionRunner {
 				event: event.type,
 				error,
 			});
-			return onFailure?.("timeout", error);
+			return onFailure?.("timeout", error, timeoutMs);
 		}
 		if (handlerFailure) {
 			const message =
@@ -1605,7 +1611,7 @@ export class ExtensionRunner {
 				error: message,
 				stack,
 			});
-			return onFailure?.("error", message);
+			return onFailure?.("error", message, timeoutMs);
 		}
 		return handlerResult as R | undefined;
 	}
@@ -1870,11 +1876,11 @@ export class ExtensionRunner {
 					ctx,
 					ext,
 					timeoutMs,
-					(kind, message) => ({
+					(kind, message, handlerTimeoutMs) => ({
 						block: true,
 						reason:
 							kind === "timeout"
-								? `Extension ${ext.path} timed out after ${timeoutMs}ms`
+								? `Extension ${ext.path} timed out after ${handlerTimeoutMs}ms`
 								: `Extension ${ext.path} failed: ${message}`,
 					}),
 					signal,

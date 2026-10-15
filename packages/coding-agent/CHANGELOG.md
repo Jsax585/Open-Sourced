@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added per-handler deadlines through `pi.on(event, handler, { timeoutMs })`, including zero for cancellable waits without a deadline. Input and assistant-message handlers can exceed 30 seconds without changing unrelated defaults, the 2-second shutdown cap, or fail-closed input/tool-call behavior.
 - Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
 
 ### Fixed

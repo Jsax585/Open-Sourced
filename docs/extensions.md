@@ -1269,8 +1269,8 @@ Provide `renderCall` / `renderResult` on `registerTool` definitions for custom t
 ## Constraints and pitfalls
 
 - Session actions are unavailable during extension load; registration methods, `getFlag`, and `exec` are available.
-- `tool_call` errors and timeouts block execution (fail-closed). Its budget is `extensionHandlers.toolCallTimeoutMs` (default 30,000 ms), paused during extension UI waits.
-- Most dispatched handlers have a 30-second budget; `session_shutdown` handlers run concurrently with a 2-second budget. Timing out stops waiting and cancels handler UI, but cannot undo arbitrary extension side effects.
+- `tool_call` errors and timeouts block execution (fail-closed). Its default budget is `extensionHandlers.toolCallTimeoutMs` (default 30,000 ms), paused during extension UI waits.
+- `pi.on(event, handler, { timeoutMs })` overrides only that handler's budget for that event, including `input`, `assistant_message`, and `message_end`. The value must be finite, nonnegative, and at most 2,147,483,647 ms. Zero disables the deadline for handlers managing their own cancellable waits; it does not disable cancellation through `ctx.abortSignal`. Without an override, most handlers retain their 30-second budget. `session_shutdown` handlers run concurrently and remain capped at 2 seconds, including when zero or a larger override is requested. Input failures reject the submission; tool-call failures block execution. Timing out stops waiting and cancels handler UI, but cannot undo arbitrary extension side effects.
 - Command name conflicts with built-ins are skipped with diagnostics.
 - Reserved shortcuts are ignored (`ctrl+c`, `ctrl+d`, `ctrl+z`, `ctrl+k`, `ctrl+p`, `ctrl+l`, `ctrl+o`, `ctrl+t`, `ctrl+g`, `ctrl+q`, `alt+m`, `shift+tab`, `shift+ctrl+p`, `alt+enter`, `escape`, `enter`).
 - Treat `ctx.reload()` as terminal for the current command handler frame.

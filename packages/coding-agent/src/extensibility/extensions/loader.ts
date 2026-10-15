@@ -46,6 +46,7 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 	ExtensionFactory,
+	ExtensionHandlerOptions,
 	ExtensionRuntime as IExtensionRuntime,
 	LoadExtensionsResult,
 	MessageRenderer,
@@ -208,7 +209,17 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 		}
 	}
 
-	on<F extends HandlerFn>(event: string, handler: F): void {
+	on<F extends HandlerFn>(event: string, handler: F, options?: ExtensionHandlerOptions): void {
+		const timeoutMs = options?.timeoutMs;
+		if (timeoutMs !== undefined) {
+			if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 2_147_483_647) {
+				throw new RangeError("Handler timeoutMs must be finite, nonnegative, and at most 2147483647");
+			}
+			const timeouts = (this.extension.handlerTimeouts ??= new Map());
+			const eventTimeouts = timeouts.get(event) ?? new WeakMap<object, number>();
+			eventTimeouts.set(handler, timeoutMs);
+			timeouts.set(event, eventTimeouts);
+		}
 		const list = this.extension.handlers.get(event) ?? [];
 		list.push(handler);
 		this.extension.handlers.set(event, list);
