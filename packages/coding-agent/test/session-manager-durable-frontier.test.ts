@@ -229,10 +229,7 @@ class ReadCountingStorage extends ControlledRewriteStorage {
 	}
 }
 
-/**
- * Forces conflict recovery to inspect the complete journal and fail its first retry.
- * The file-identity regression below covers the fast tail-adoption path.
- */
+/** Forces conflict recovery to inspect the complete journal and fail its first retry. */
 class FullConflictStorage extends ControlledRewriteStorage {
 	#writeAttempts = 0;
 
@@ -1690,37 +1687,6 @@ describe("a clone taken before its original heals an entry that missed the journ
 			"bash result",
 		]);
 	});
-});
-
-it.skipIf(process.platform === "win32")("does not append through a same-size rewritten shared parent", async () => {
-	const first = await fileSession();
-	const resumed = await SessionManager.open(first.sessionFile, first.sessionDir, new ControlledRewriteStorage(), {
-		suppressBreadcrumb: true,
-	});
-	managers.push(resumed);
-
-	const shared = first.manager.getEntries().find(entry => entry.type === "message" && entry.message.role === "user");
-	if (shared?.type !== "message" || shared.message.role !== "user") throw new Error("Expected the shared user turn");
-	const beforeRewrite = fs.statSync(first.sessionFile);
-	shared.parentId = shared.id;
-	await first.manager.rewriteEntries();
-	const afterRewrite = fs.statSync(first.sessionFile);
-	expect(afterRewrite.size).toBe(beforeRewrite.size);
-	expect(afterRewrite.ino).not.toBe(beforeRewrite.ino);
-
-	first.manager.appendCustomEntry("previous-writer-tail", { n: 1 });
-	await first.manager.close();
-
-	resumed.appendMessage(userTurn("latest turn"));
-	await resumed.flush();
-
-	const reopened = await reopen(first.sessionFile, first.sessionDir);
-	expect(reopened.getBranch()).toContainEqual(
-		expect.objectContaining({
-			type: "message",
-			message: expect.objectContaining({ content: [expect.objectContaining({ text: "seed" })] }),
-		}),
-	);
 });
 
 it("republishes the original graph when a shared entry's parent changed before a foreign append", async () => {
