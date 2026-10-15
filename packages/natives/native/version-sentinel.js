@@ -76,7 +76,7 @@ export function bindingsReleaseVersion(bindings) {
 		}
 	}
 	for (const key of Object.keys(bindings)) {
-		const match = LEGACY_SENTINEL_RE.exec(key);
+		const match = key.match(LEGACY_SENTINEL_RE);
 		if (match) return match[1].replace(/_/g, ".");
 	}
 	return null;
@@ -91,6 +91,6 @@ export function bindingsReleaseVersion(bindings) {
 export function bindingsHaveReleaseIdentity(bindings) {
 	return (
 		typeof bindings.__piNativesBuildVersion === "function" ||
-		Object.keys(bindings).some(key => LEGACY_SENTINEL_RE.test(key))
+		Object.keys(bindings).some(key => key.match(LEGACY_SENTINEL_RE))
 	);
 }
