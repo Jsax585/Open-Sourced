@@ -1443,12 +1443,7 @@ export class SessionManager {
 	 */
 	#frontierMatchesStorageIdentity(durable: DurableFrontier, stat: SessionStorageStat): boolean {
 		const identity = stat.identity;
-		return (
-			identity === undefined ||
-			(durable.identity !== undefined &&
-				durable.identity.dev === identity.dev &&
-				durable.identity.ino === identity.ino)
-		);
+		return identity === undefined || durable.identity === identity;
 	}
 
 	#adoptEntriesAppendedPastFrontier(sessionFile: string, durable: DurableFrontier, stat: SessionStorageStat): boolean {
