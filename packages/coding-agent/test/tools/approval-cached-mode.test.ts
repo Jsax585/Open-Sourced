@@ -379,7 +379,7 @@ describe("approval cache store", () => {
 		expect(fs.existsSync(`${path.join(tempDir.path(), APPROVAL_CACHE_FILENAME)}.corrupt`)).toBe(true);
 	});
 
-	it("imports a legacy JSON cache once and moves it aside", () => {
+	it("imports a legacy JSON cache once and leaves only the database behind", () => {
 		fs.mkdirSync(tempDir.path(), { recursive: true });
 		fs.writeFileSync(
 			path.join(tempDir.path(), "approval-cache.json"),
@@ -397,6 +397,17 @@ describe("approval cache store", () => {
 			{ key: "c:\\testdir\\", tool: "read", approvedAt: "2026-10-15T00:00:00.000Z", scope: "directory" },
 			{ key: "c:\\testdir\\notes.txt", tool: "read", approvedAt: "2026-10-15T00:00:00.000Z", scope: null },
 		]);
+		// The legacy file is gone: the database is the only cache on disk.
+		expect(fs.existsSync(path.join(tempDir.path(), "approval-cache.json"))).toBe(false);
+		expect(fs.existsSync(path.join(tempDir.path(), "approval-cache.json.bak"))).toBe(false);
+		expect(fs.existsSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME))).toBe(true);
+	});
+
+	it("keeps an unreadable legacy JSON as a .bak instead of dropping it", () => {
+		fs.mkdirSync(tempDir.path(), { recursive: true });
+		fs.writeFileSync(path.join(tempDir.path(), "approval-cache.json"), "{not json");
+		const cache = new ApprovalCache(tempDir.path());
+		expect(cache.has("anything")).toBe(false);
 		expect(fs.existsSync(path.join(tempDir.path(), "approval-cache.json"))).toBe(false);
 		expect(fs.existsSync(path.join(tempDir.path(), "approval-cache.json.bak"))).toBe(true);
 	});

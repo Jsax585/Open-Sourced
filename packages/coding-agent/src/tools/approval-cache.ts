@@ -270,8 +270,9 @@ function legacyJsonPath(filePath: string): string {
 
 /**
  * Import a pre-SQLite `approval-cache.json` once: grants move into the database
- * and the JSON file is renamed aside, so an existing session keeps its approvals
- * across the switch.
+ * and the JSON file is removed, so nothing but `approval-cache.db` is left
+ * behind. An unreadable or unrecognized file is renamed to `.json.bak` instead,
+ * so a broken legacy cache is never dropped on the floor.
  */
 function migrateLegacyJson(db: Database, filePath: string): void {
 	const jsonPath = legacyJsonPath(filePath);
@@ -284,11 +285,13 @@ function migrateLegacyJson(db: Database, filePath: string): void {
 		return;
 	}
 	let imported = 0;
+	let recognized = false;
 	try {
 		const parsed: unknown = JSON.parse(raw);
 		if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && "paths" in parsed) {
 			const entries = parsed.paths;
 			if (entries !== null && typeof entries === "object" && !Array.isArray(entries)) {
+				recognized = true;
 				const insert = db.query(
 					"INSERT INTO grants (key, tool, approved_at, scope) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO NOTHING",
 				);
@@ -308,11 +311,20 @@ function migrateLegacyJson(db: Database, filePath: string): void {
 	} catch (err) {
 		logger.debug("approval cache: legacy JSON unreadable", { err: String(err), path: jsonPath });
 	}
+	if (!recognized) {
+		try {
+			fs.renameSync(jsonPath, `${jsonPath}.bak`);
+			logger.warn("approval cache: legacy JSON not recognized; kept as .bak", { path: jsonPath });
+		} catch (err) {
+			logger.debug("approval cache: could not rename legacy JSON", { err: String(err), path: jsonPath });
+		}
+		return;
+	}
 	try {
-		fs.renameSync(jsonPath, `${jsonPath}.bak`);
+		fs.rmSync(jsonPath, { force: true });
 		logger.info("approval cache: migrated legacy JSON grants", { count: imported, from: jsonPath });
 	} catch (err) {
-		logger.debug("approval cache: could not rename legacy JSON", { err: String(err), path: jsonPath });
+		logger.debug("approval cache: could not remove legacy JSON", { err: String(err), path: jsonPath });
 	}
 }
 
