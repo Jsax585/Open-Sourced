@@ -21,7 +21,7 @@ import {
 import { cfgToolsApproval, cfgToolsApprovalMode } from "./settings";
 
 export type { ToolApproval, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
-export type { ApprovalGrantStore, ApprovalCacheFile, ApprovalGrant } from "./approval-cache";
+export type { ApprovalGrantStore, ApprovalGrant } from "./approval-cache";
 export {
 	approvalAncestorDirectoryKeys,
 	approvalDirectoryCovers,

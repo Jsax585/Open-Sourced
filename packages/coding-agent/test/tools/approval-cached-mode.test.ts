@@ -3,6 +3,7 @@
  * grant store, and the wrapper's approve-then-remember cycle.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, ToolTier } from "@oh-my-pi/pi-agent-core";
@@ -251,6 +252,21 @@ describe("always-ask-cached resolution", () => {
 	});
 });
 
+/** Reads the raw grant rows of a test database, ordered by key. */
+function readGrants(dir: string): Array<{ key: string; tool: string; approvedAt: string; scope: string | null }> {
+	const db = new Database(path.join(dir, APPROVAL_CACHE_FILENAME), { readonly: true });
+	try {
+		return db
+			.query<{ key: string; tool: string; approved_at: string; scope: string | null }, []>(
+				"SELECT key, tool, approved_at, scope FROM grants ORDER BY key",
+			)
+			.all()
+			.map(row => ({ key: row.key, tool: row.tool, approvedAt: row.approved_at, scope: row.scope }));
+	} finally {
+		db.close();
+	}
+}
+
 describe("approval cache store", () => {
 	let tempDir: TempDir;
 
@@ -262,62 +278,84 @@ describe("approval cache store", () => {
 		tempDir.removeSync();
 	});
 
-	it("persists granted targets and reads them back in a fresh instance", () => {
+	it("leaves no file behind until a grant is recorded", () => {
+		const cache = new ApprovalCache(tempDir.path());
+		expect(cache.has("C:/work/notes.txt")).toBe(false);
+		expect(cache.size).toBe(0);
+		expect(fs.existsSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME))).toBe(false);
+	});
+
+	it("persists granted targets as database rows and reads them back in a fresh instance", () => {
 		const cache = new ApprovalCache(tempDir.path());
 		cache.record("C:/work/notes.txt", "read");
 		expect(cache.has("C:/work/notes.txt")).toBe(true);
 		expect(cache.has("C:/work/other.txt")).toBe(false);
+		expect(cache.size).toBe(1);
 
-		const persisted = JSON.parse(fs.readFileSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME), "utf8"));
-		expect(persisted.version).toBe(1);
-		expect(Object.keys(persisted.paths)).toEqual(["C:/work/notes.txt"]);
-		expect(persisted.paths["C:/work/notes.txt"].tool).toBe("read");
-		expect(Number.isNaN(Date.parse(persisted.paths["C:/work/notes.txt"].approvedAt))).toBe(false);
+		const [row] = readGrants(tempDir.path());
+		expect(row).toMatchObject({ key: "C:/work/notes.txt", tool: "read", scope: null });
+		expect(Number.isNaN(Date.parse(row!.approvedAt))).toBe(false);
 
-		const reopened = new ApprovalCache(tempDir.path());
-		expect(reopened.has("C:/work/notes.txt")).toBe(true);
+		expect(new ApprovalCache(tempDir.path()).has("C:/work/notes.txt")).toBe(true);
 	});
 
-	it("merges grants another writer stored since this instance loaded", () => {
+	it("keeps grants from another writer and never rewrites an existing key", () => {
 		const cache = new ApprovalCache(tempDir.path());
-		cache.record("first.txt");
-		const other = new ApprovalCache(tempDir.path());
-		other.record("second.txt");
-		// First instance records again; the second writer's entry must survive.
-		cache.record("third.txt");
-		const persisted = JSON.parse(fs.readFileSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME), "utf8"));
-		expect(Object.keys(persisted.paths).sort()).toEqual(["first.txt", "second.txt", "third.txt"]);
-		// The merged on-disk state is visible to the first instance too.
-		expect(cache.has("second.txt")).toBe(true);
+		cache.record("first.txt", "read");
+		new ApprovalCache(tempDir.path()).record("second.txt", "write");
+		cache.record("first.txt", "edit");
+		expect(readGrants(tempDir.path()).map(row => row.key)).toEqual(["first.txt", "second.txt"]);
+		expect(readGrants(tempDir.path())[0]!.tool).toBe("read");
 	});
 
-	it("drops grants when the file is deleted, so revocation does not need a restart", () => {
+	it("drops grants when the database is deleted, so revocation does not need a restart", () => {
 		const cache = new ApprovalCache(tempDir.path());
 		cache.record("first.txt");
 		fs.rmSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME));
 		expect(cache.has("first.txt")).toBe(false);
 		cache.record("second.txt");
-		const persisted = JSON.parse(fs.readFileSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME), "utf8"));
-		expect(Object.keys(persisted.paths)).toEqual(["second.txt"]);
+		expect(readGrants(tempDir.path()).map(row => row.key)).toEqual(["second.txt"]);
 	});
 
 	it("persists a directory grant with its scope marker", () => {
 		const cache = new ApprovalCache(tempDir.path());
 		cache.record("c:\\testdir\\", "read", "directory");
 		expect(cache.has("c:\\testdir\\")).toBe(true);
-		const persisted = JSON.parse(fs.readFileSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME), "utf8"));
-		expect(persisted.paths["c:\\testdir\\"]).toMatchObject({ scope: "directory", tool: "read" });
-		expect(Object.keys(persisted.paths)).toEqual(["c:\\testdir\\"]);
+		expect(readGrants(tempDir.path())).toEqual([
+			{ key: "c:\\testdir\\", tool: "read", approvedAt: expect.any(String), scope: "directory" },
+		]);
 	});
 
-	it("degrades to no grants for a corrupt file and repairs it on the next record", () => {
+	it("quarantines an unusable database and starts a fresh one", () => {
 		fs.mkdirSync(tempDir.path(), { recursive: true });
-		fs.writeFileSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME), "{not json");
+		fs.writeFileSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME), "{not a database");
 		const cache = new ApprovalCache(tempDir.path());
 		expect(cache.has("anything")).toBe(false);
 		cache.record("fresh.txt");
-		const persisted = JSON.parse(fs.readFileSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME), "utf8"));
-		expect(Object.keys(persisted.paths)).toEqual(["fresh.txt"]);
+		expect(readGrants(tempDir.path()).map(row => row.key)).toEqual(["fresh.txt"]);
+		expect(fs.existsSync(`${path.join(tempDir.path(), APPROVAL_CACHE_FILENAME)}.corrupt`)).toBe(true);
+	});
+
+	it("imports a legacy JSON cache once and moves it aside", () => {
+		fs.mkdirSync(tempDir.path(), { recursive: true });
+		fs.writeFileSync(
+			path.join(tempDir.path(), "approval-cache.json"),
+			JSON.stringify({
+				version: 1,
+				paths: {
+					"c:\\testdir\\notes.txt": { tool: "read", approvedAt: "2026-10-15T00:00:00.000Z" },
+					"c:\\testdir\\": { tool: "read", approvedAt: "2026-10-15T00:00:00.000Z", scope: "directory" },
+				},
+			}),
+		);
+		const cache = new ApprovalCache(tempDir.path());
+		expect(cache.has("c:\\testdir\\notes.txt")).toBe(true);
+		expect(readGrants(tempDir.path())).toEqual([
+			{ key: "c:\\testdir\\", tool: "read", approvedAt: "2026-10-15T00:00:00.000Z", scope: "directory" },
+			{ key: "c:\\testdir\\notes.txt", tool: "read", approvedAt: "2026-10-15T00:00:00.000Z", scope: null },
+		]);
+		expect(fs.existsSync(path.join(tempDir.path(), "approval-cache.json"))).toBe(false);
+		expect(fs.existsSync(path.join(tempDir.path(), "approval-cache.json.bak"))).toBe(true);
 	});
 
 	it("returns one shared store per agent directory", () => {

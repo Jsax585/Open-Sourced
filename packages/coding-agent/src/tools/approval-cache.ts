@@ -2,28 +2,31 @@
  * Persistent per-path approval cache for `tools.approvalMode: always-ask-cached`.
  *
  * The first read/write operation on a target prompts. When the user approves it,
- * the resolved target key is recorded in `approval-cache.json` under the active
- * agent directory (e.g. `~/.omp/agent/approval-cache.json`) so later operations
- * on the same target run without asking again. Exec-tier calls are never cached:
- * they keep prompting on every call, like `always-ask`.
+ * the resolved target key is recorded in `approval-cache.db` (SQLite) under the
+ * active agent directory (e.g. `~/.omp/agent/approval-cache.db`) so later
+ * operations on the same target run without asking again. Exec-tier calls are
+ * cached per exact command, and a "remember this folder" answer records the
+ * directory instead; see `tools.approvalScope`.
  *
- * IO is best-effort: a corrupt or unreadable file degrades to "nothing approved"
- * and a failed write logs and leaves the in-memory grants intact, so the cache
- * can never block a tool call.
+ * IO is best-effort: an unreadable or corrupt database degrades to "nothing
+ * approved" — prompting more, never allowing more — and a failed write logs and
+ * leaves the next call to ask again. Connections open per operation rather than
+ * for the process lifetime, so the file is never locked and deleting it (or its
+ * rows) revokes grants without restarting a session.
  */
+import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getAgentDir, isEnoent, logger, normalizePathForComparison } from "@oh-my-pi/pi-utils";
+import { getAgentDir, logger, normalizePathForComparison } from "@oh-my-pi/pi-utils";
 
 /** File name of the approval cache inside the agent directory. */
-export const APPROVAL_CACHE_FILENAME = "approval-cache.json";
+export const APPROVAL_CACHE_FILENAME = "approval-cache.db";
 
-/** On-disk shape of the cache file. */
-export interface ApprovalCacheFile {
-	version: 1;
-	/** Normalized target key → grant metadata. */
-	paths: Record<string, ApprovalGrant>;
-}
+/** Pre-SQLite JSON cache, imported once and renamed aside. */
+const LEGACY_JSON_FILENAME = "approval-cache.json";
+
+/** `busy_timeout` for the rare case of two sessions writing at the same time. */
+const BUSY_TIMEOUT_MS = 5000;
 
 export interface ApprovalGrant {
 	/** Tool whose call the user approved for this target (`read`, `write`, `edit`, …). */
@@ -48,139 +51,198 @@ export interface ApprovalGrantStore {
 	record(key: string, tool?: string, scope?: "directory"): void;
 }
 
-/** Parse a cache file's contents; anything unrecognized yields an empty cache. */
-function parseCacheFile(raw: string): ApprovalCacheFile {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch {
-		return { version: 1, paths: {} };
-	}
-	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { version: 1, paths: {} };
-	if (
-		!("paths" in parsed) ||
-		parsed.paths === null ||
-		typeof parsed.paths !== "object" ||
-		Array.isArray(parsed.paths)
-	) {
-		return { version: 1, paths: {} };
-	}
-	const entries: Record<string, ApprovalGrant> = {};
-	for (const [key, value] of Object.entries(parsed.paths)) {
-		if (key.length === 0 || value === null || typeof value !== "object" || Array.isArray(value)) continue;
-		const tool = "tool" in value && typeof value.tool === "string" ? value.tool : "";
-		const approvedAt = "approvedAt" in value && typeof value.approvedAt === "string" ? value.approvedAt : "";
-		entries[key] =
-			"scope" in value && value.scope === "directory"
-				? { tool, approvedAt, scope: "directory" }
-				: { tool, approvedAt };
-	}
-	return { version: 1, paths: entries };
+interface GrantRow {
+	key: string;
+	tool: string;
+	approved_at: string;
+	scope: string | null;
 }
 
-/** Read a cache file, tolerating a missing file and logging other IO failures. */
-function readCacheFile(filePath: string): ApprovalCacheFile {
-	try {
-		return parseCacheFile(fs.readFileSync(filePath, "utf8"));
-	} catch (err) {
-		if (!isEnoent(err)) logger.debug("approval cache: unreadable file ignored", { err: String(err), path: filePath });
-		return { version: 1, paths: {} };
-	}
-}
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS grants (
+	key         TEXT PRIMARY KEY,
+	tool        TEXT NOT NULL DEFAULT '',
+	approved_at TEXT NOT NULL,
+	scope       TEXT
+);
+PRAGMA user_version = 1;
+`;
 
 /**
- * JSON-file-backed grant store for one agent directory. Entries load lazily on
- * the first check; writes merge with the on-disk file first so a grant another
- * process recorded since this one loaded is never dropped.
+ * SQLite-backed grant store for one agent directory. Every operation opens a
+ * short-lived connection (read-only for checks) so the database file stays
+ * unlocked between calls.
  */
 export class ApprovalCache implements ApprovalGrantStore {
 	readonly filePath: string;
-	#entries: Map<string, ApprovalGrant> | undefined;
-	/** On-disk identity of the loaded contents, so external edits and deletions are noticed. */
-	#loadedIdentity: string | undefined;
 
 	constructor(agentDir: string = getAgentDir()) {
 		this.filePath = path.join(agentDir, APPROVAL_CACHE_FILENAME);
 	}
 
 	has(key: string): boolean {
-		return this.#load().has(key);
+		const db = this.#open(false);
+		if (!db) return false;
+		try {
+			return db.query<GrantRow, [string]>("SELECT key FROM grants WHERE key = ?").get(key) !== null;
+		} catch (err) {
+			logger.debug("approval cache: read failed", { err: String(err), path: this.filePath });
+			return false;
+		} finally {
+			db.close();
+		}
 	}
 
 	record(key: string, tool = "", scope?: "directory"): void {
 		if (key.length === 0) return;
-		const entries = this.#load();
-		if (entries.has(key)) return;
-		entries.set(
-			key,
-			scope === "directory"
-				? { tool, approvedAt: new Date().toISOString(), scope }
-				: { tool, approvedAt: new Date().toISOString() },
-		);
-		this.#persist(entries);
-	}
-
-	/** Number of in-memory grants; loads the file on first use. */
-	get size(): number {
-		return this.#load().size;
-	}
-
-	#load(): Map<string, ApprovalGrant> {
-		const identity = this.#fileIdentity();
-		if (this.#entries && identity === this.#loadedIdentity) return this.#entries;
-		const entries = new Map(Object.entries(readCacheFile(this.filePath).paths));
-		this.#entries = entries;
-		this.#loadedIdentity = identity;
-		return entries;
-	}
-
-	/** Cheap on-disk identity (`mtime` + size); `"absent"` when the file is gone. */
-	#fileIdentity(): string {
+		const db = this.#open(true);
+		if (!db) return;
 		try {
-			const stat = fs.statSync(this.filePath, { throwIfNoEntry: false });
-			return stat ? `${stat.mtimeMs}:${stat.size}` : "absent";
-		} catch {
-			return "absent";
+			db.query(
+				"INSERT INTO grants (key, tool, approved_at, scope) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO NOTHING",
+			).run(key, tool, new Date().toISOString(), scope ?? null);
+		} catch (err) {
+			logger.debug("approval cache: write failed", { err: String(err), path: this.filePath });
+		} finally {
+			db.close();
 		}
 	}
 
-	#persist(entries: Map<string, ApprovalGrant>): void {
+	/** Number of grants; 0 when the database is missing or unreadable. */
+	get size(): number {
+		const db = this.#open(false);
+		if (!db) return 0;
 		try {
-			const merged = new Map(Object.entries(readCacheFile(this.filePath).paths));
-			for (const [key, grant] of entries) merged.set(key, grant);
-			fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-			const temporaryPath = `${this.filePath}.${process.pid}.tmp`;
-			const payload: ApprovalCacheFile = { version: 1, paths: Object.fromEntries(merged) };
-			fs.writeFileSync(temporaryPath, `${JSON.stringify(payload, null, 2)}\n`);
-			fs.renameSync(temporaryPath, this.filePath);
-			// Keep memory equal to what is on disk: the merge may have pulled in a
-			// grant another process recorded since this instance last loaded.
-			this.#entries = merged;
-			this.#loadedIdentity = this.#fileIdentity();
+			const row = db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM grants").get();
+			return row?.count ?? 0;
 		} catch (err) {
-			logger.debug("approval cache: failed to persist", { err: String(err), path: this.filePath });
+			logger.debug("approval cache: count failed", { err: String(err), path: this.filePath });
+			return 0;
+		} finally {
+			db.close();
+		}
+	}
+
+	/**
+	 * Open a connection; `create` allows creating the file and schema. Checks do
+	 * not create an empty database — merely running a session leaves no cache
+	 * behind — but they do open a creating connection to import a legacy JSON
+	 * cache once. A corrupt database is moved aside and recreated.
+	 */
+	#open(create: boolean): Database | undefined {
+		if (!create && !fs.existsSync(this.filePath) && !fs.existsSync(legacyJsonPath(this.filePath))) {
+			return undefined;
+		}
+		try {
+			fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+			return this.#connect();
+		} catch (err) {
+			logger.debug("approval cache: failed to open", { err: String(err), path: this.filePath });
+			return undefined;
+		}
+	}
+
+	#connect(): Database {
+		try {
+			return this.#initialize();
+		} catch (err) {
+			// A file that is not a database (truncated, foreign, pre-SQLite) is
+			// moved aside so the next check starts from an empty cache.
+			const quarantined = `${this.filePath}.corrupt`;
+			try {
+				fs.rmSync(quarantined, { force: true });
+				fs.renameSync(this.filePath, quarantined);
+				logger.warn("approval cache: unusable database moved aside", {
+					err: String(err),
+					path: this.filePath,
+					quarantined,
+				});
+			} catch (renameError) {
+				logger.debug("approval cache: could not quarantine", {
+					err: String(renameError),
+					path: this.filePath,
+				});
+				throw err;
+			}
+			return this.#initialize();
+		}
+	}
+
+	#initialize(): Database {
+		const db = new Database(this.filePath);
+		try {
+			// Install the busy handler before any lock-taking statement.
+			db.run(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+			db.run("PRAGMA synchronous = NORMAL");
+			db.run(SCHEMA);
+			migrateLegacyJson(db, this.filePath);
+			return db;
+		} catch (err) {
+			db.close();
+			throw err;
 		}
 	}
 }
 
-const cachesByDir = new Map<string, ApprovalCache>();
+/** Directories whose legacy JSON cache has been checked in this process. */
+const migratedDirs = new Set<string>();
+
+/** Sibling path of the pre-SQLite JSON cache for a database path. */
+function legacyJsonPath(filePath: string): string {
+	return path.join(path.dirname(filePath), LEGACY_JSON_FILENAME);
+}
 
 /**
- * Shared grant store for an agent directory. Defaults to the active
- * `getAgentDir()` (honoring `PI_CODING_AGENT_DIR` and named profiles), so the
- * resolver's checks and the wrapper's records land in one file.
+ * Import a pre-SQLite `approval-cache.json` once: grants move into the database
+ * and the JSON file is renamed aside, so an existing session keeps its approvals
+ * across the switch.
  */
-export function getApprovalCache(agentDir: string = getAgentDir()): ApprovalCache {
-	const resolved = path.resolve(agentDir);
-	// String-only key: cheap on the per-call path, and a symlinked agent dir
-	// still yields one store because callers pass the directory they resolved.
-	const directoryKey = process.platform === "win32" ? resolved.toLowerCase() : resolved;
-	let cache = cachesByDir.get(directoryKey);
-	if (!cache) {
-		cache = new ApprovalCache(resolved);
-		cachesByDir.set(directoryKey, cache);
+function migrateLegacyJson(db: Database, filePath: string): void {
+	const jsonPath = legacyJsonPath(filePath);
+	if (migratedDirs.has(jsonPath)) return;
+	migratedDirs.add(jsonPath);
+	let raw: string;
+	try {
+		raw = fs.readFileSync(jsonPath, "utf8");
+	} catch {
+		return;
 	}
-	return cache;
+	let imported = 0;
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && "paths" in parsed) {
+			const entries = parsed.paths;
+			if (entries !== null && typeof entries === "object" && !Array.isArray(entries)) {
+				const insert = db.query(
+					"INSERT INTO grants (key, tool, approved_at, scope) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO NOTHING",
+				);
+				for (const [key, value] of Object.entries(entries)) {
+					if (key.length === 0 || value === null || typeof value !== "object" || Array.isArray(value)) continue;
+					const tool = "tool" in value && typeof value.tool === "string" ? value.tool : "";
+					const approvedAt =
+						"approvedAt" in value && typeof value.approvedAt === "string"
+							? value.approvedAt
+							: new Date().toISOString();
+					const scope = "scope" in value && value.scope === "directory" ? "directory" : null;
+					insert.run(key, tool, approvedAt, scope);
+					imported++;
+				}
+			}
+		}
+	} catch (err) {
+		logger.debug("approval cache: legacy JSON unreadable", { err: String(err), path: jsonPath });
+	}
+	try {
+		fs.renameSync(jsonPath, `${jsonPath}.bak`);
+		logger.info("approval cache: migrated legacy JSON grants", { count: imported, from: jsonPath });
+	} catch (err) {
+		logger.debug("approval cache: could not rename legacy JSON", { err: String(err), path: jsonPath });
+	}
+}
+
+/** Trailing separator that marks a directory grant and makes it prefix-matchable. */
+function withTrailingSeparator(dir: string): string {
+	return dir.endsWith(path.sep) ? dir : `${dir}${path.sep}`;
 }
 
 /**
@@ -192,15 +254,10 @@ export function approvalCacheKeyForPath(target: string): string {
 	return normalizePathForComparison(path.resolve(target));
 }
 
-/** Trailing separator that marks a directory grant and makes it prefix-matchable. */
-function withTrailingSeparator(dir: string): string {
-	return dir.endsWith(path.sep) ? dir : `${dir}${path.sep}`;
-}
-
 /**
  * Cache key for a granted directory: the same normalization as
  * {@link approvalCacheKeyForPath} plus a trailing separator, so a folder grant
- * reads as one in the cache file and covers every target below it.
+ * reads as one in the database and covers every target below it.
  */
 export function approvalDirectoryKey(directory: string): string {
 	return withTrailingSeparator(normalizePathForComparison(path.resolve(directory)));
@@ -251,4 +308,24 @@ export function commonApprovalDirectoryKey(directories: readonly string[]): stri
 		common = parent;
 	}
 	return common;
+}
+
+const cachesByDir = new Map<string, ApprovalCache>();
+
+/**
+ * Shared grant store for an agent directory. Defaults to the active
+ * `getAgentDir()` (honoring `PI_CODING_AGENT_DIR` and named profiles), so the
+ * resolver's checks and the wrapper's records land in one database.
+ */
+export function getApprovalCache(agentDir: string = getAgentDir()): ApprovalCache {
+	const resolved = path.resolve(agentDir);
+	// String-only key: cheap on the per-call path, and a symlinked agent dir
+	// still yields one store because callers pass the directory they resolved.
+	const directoryKey = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+	let cache = cachesByDir.get(directoryKey);
+	if (!cache) {
+		cache = new ApprovalCache(resolved);
+		cachesByDir.set(directoryKey, cache);
+	}
+	return cache;
 }
