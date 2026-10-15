@@ -95,7 +95,7 @@ describe("task tool advisory gating via suppressSpawnAdvisory", () => {
 		} as unknown as ToolSession;
 	}
 
-	async function spawnTextFor(s: ToolSession): Promise<string> {
+	async function spawnTextFor(s: ToolSession, agentName?: string): Promise<string> {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [agent], projectAgentsDir: null });
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options): Promise<SingleResult> => ({
 			index: options.index ?? 0,
@@ -116,8 +116,8 @@ describe("task tool advisory gating via suppressSpawnAdvisory", () => {
 		const result = await tool.execute("tc", {
 			context: "shared fan-out background",
 			tasks: [
-				{ name: "First", task: "do the thing" },
-				{ name: "Second", task: "do the other thing" },
+				{ name: "First", task: "do the thing", ...(agentName ? { agent: agentName } : {}) },
+				{ name: "Second", task: "do the other thing", ...(agentName ? { agent: agentName } : {}) },
 			],
 		});
 		return result.content.find(part => part.type === "text")?.text ?? "";
@@ -133,5 +133,10 @@ describe("task tool advisory gating via suppressSpawnAdvisory", () => {
 
 	it("omits the advisory entirely when the session suppresses it", async () => {
 		expect(await spawnTextFor(session(true))).not.toContain('`agent: "scout"`');
+	});
+
+	it("counts agent@selector spawns of a generic agent as generic workers", async () => {
+		const tagged = { ...session(false), getSessionAgents: () => [{ ...agent, name: "m1", model: ["a/x"] }] };
+		expect(await spawnTextFor(tagged as unknown as ToolSession, "task@a/x")).toContain('`agent: "scout"`');
 	});
 });

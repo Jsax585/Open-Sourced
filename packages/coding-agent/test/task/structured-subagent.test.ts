@@ -157,6 +157,85 @@ describe("structured subagent primitive", () => {
 		expect(policy.modelOverride).toEqual(["b/y"]);
 	});
 
+	it("runs a named agent on a user-tagged model via agent@selector", async () => {
+		mockDiscovery({ ...AGENT, model: ["b/y"] });
+		const taggedSession = session({ sessionAgents: [{ ...AGENT, name: "m1", model: ["a/x"] }] });
+		cfgTaskAgentModelOverrides.override(taggedSession.settings, { worker: "c/z" });
+		const policy = await resolveEffectiveSubagentPolicy(request({ session: taggedSession, agent: "worker@a/x" }));
+		expect(policy.agentName).toBe("worker");
+		expect(policy.agent.name).toBe("worker");
+		expect(policy.modelOverride).toEqual(["a/x"]);
+	});
+
+	it("rejects agent@selector when the user did not tag that model", async () => {
+		mockDiscovery();
+		const taggedSession = session({ sessionAgents: [{ ...AGENT, name: "m1", model: ["a/x"] }] });
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: taggedSession, agent: "worker@b/y" })),
+		).rejects.toThrow('Model "b/y" was not tagged with ^ in this session. Tagged: a/x');
+	});
+
+	it("rejects agent@selector when the named agent is unknown", async () => {
+		mockDiscovery();
+		const taggedSession = session({ sessionAgents: [{ ...AGENT, name: "m1", model: ["a/x"] }] });
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: taggedSession, agent: "nope@a/x" })),
+		).rejects.toThrow('Unknown agent "nope". Available: worker, m1');
+	});
+
+	it("resolves an agent literally named with @ before splitting agent@selector", async () => {
+		mockDiscovery({ ...AGENT, name: "team@review", model: ["b/y"] });
+		const taggedSession = session({ sessionAgents: [{ ...AGENT, name: "m1", model: ["a/x"] }] });
+		const policy = await resolveEffectiveSubagentPolicy(request({ session: taggedSession, agent: "team@review" }));
+		expect(policy.agentName).toBe("team@review");
+		expect(policy.modelOverride).toEqual(["b/y"]);
+	});
+
+	it("applies spawn, depth, blocked-agent, and disabled-agent guards to the agent in agent@selector", async () => {
+		const tagged = [{ ...AGENT, name: "m1", model: ["a/x"] }];
+		mockDiscovery();
+
+		const noSpawns = session({ sessionAgents: tagged });
+		noSpawns.getSessionSpawns = () => "";
+		await expect(resolveEffectiveSubagentPolicy(request({ session: noSpawns, agent: "worker@a/x" }))).rejects.toThrow(
+			"Cannot spawn 'worker'",
+		);
+
+		const otherAllowed = session({ sessionAgents: tagged });
+		otherAllowed.getSessionSpawns = () => "rogue";
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: otherAllowed, agent: "worker@a/x" })),
+		).rejects.toThrow("Cannot spawn 'worker'. Allowed: rogue");
+
+		const atMaxDepth = session({ sessionAgents: tagged, maxDepth: 1 });
+		atMaxDepth.taskDepth = 1;
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: atMaxDepth, agent: "worker@a/x" })),
+		).rejects.toThrow("Cannot spawn another agent at task depth 1");
+
+		await expect(
+			resolveEffectiveSubagentPolicy(
+				request({ session: session({ sessionAgents: tagged }), agent: "worker@a/x", blockedAgent: "worker" }),
+			),
+		).rejects.toThrow("Cannot spawn worker agent from within itself");
+
+		const disabled = session({
+			sessionAgents: tagged,
+			settings: Settings.isolated({ "task.disabledAgents": ["worker"] }),
+		});
+		await expect(resolveEffectiveSubagentPolicy(request({ session: disabled, agent: "worker@a/x" }))).rejects.toThrow(
+			'Agent "worker" is disabled in settings',
+		);
+	});
+
+	it("counts only ^-tagged session agents, not discovered agents' models, as taggable selectors", async () => {
+		mockDiscovery({ ...AGENT, model: ["c/z"] });
+		const taggedSession = session({ sessionAgents: [{ ...AGENT, name: "m1", model: ["a/x"] }] });
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: taggedSession, agent: "worker@c/z" })),
+		).rejects.toThrow('Model "c/z" was not tagged with ^ in this session. Tagged: a/x');
+	});
+
 	it("rescans agents when a plugin provider is disabled while an earlier discovery is in flight", async () => {
 		const previouslyDisabled = getDisabledProviders();
 		enableProvider("omp-plugins");
