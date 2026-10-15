@@ -1,3 +1,4 @@
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
 import { Container } from "../tui";
 import { Spacer } from "../components/spacer";
@@ -146,12 +147,21 @@ function usageRowSpecs(
 	ttftMs?: number,
 	timestamp?: number,
 	turnElapsedMs?: number,
+	model?: string,
+	thinkingLevel?: ThinkingLevel,
 ): MetricSpec[] {
 	const specs = usageRowBaseSpecs(usage, ttftMs, timestamp, turnElapsedMs);
 	const tokPerSec = usageThroughput(usage, durationMs);
 	if (tokPerSec !== undefined) {
 		specs.push({ leading: theme.icon.throughput, value: `${tokPerSec.toFixed(1)}/s` });
 	}
+	// The serving model and effective thinking level trail the metrics without
+	// an icon, as the pre-refactor string row emitted them. A `ThinkingLevel.Off`
+	// (or absent) level omits its metric; the metric row drops undefined values.
+	specs.push({ value: model });
+	specs.push({
+		value: thinkingLevel !== undefined && thinkingLevel !== ThinkingLevel.Off ? thinkingLevel : undefined,
+	});
 	return specs;
 }
 
@@ -162,20 +172,32 @@ class UsageRowBlock extends Container {
 	readonly #ttftMs: number | undefined;
 	readonly #timestamp: number | undefined;
 	readonly #turnElapsedMs: number | undefined;
+	readonly #model: string | undefined;
+	readonly #thinkingLevel: ThinkingLevel | undefined;
 	#nativeNode: NativeNode | undefined;
 	/** The terminal's clock {@link #nativeNode} was described with. */
 	#nativeHour12: boolean | undefined;
 
-	constructor(usage: Usage, durationMs?: number, ttftMs?: number, timestamp?: number, turnElapsedMs?: number) {
+	constructor(
+		usage: Usage,
+		durationMs?: number,
+		ttftMs?: number,
+		timestamp?: number,
+		turnElapsedMs?: number,
+		model?: string,
+		thinkingLevel?: ThinkingLevel,
+	) {
 		super();
 		this.#usage = usage;
 		this.#durationMs = durationMs;
 		this.#ttftMs = ttftMs;
 		this.#timestamp = timestamp;
 		this.#turnElapsedMs = turnElapsedMs;
+		this.#model = model;
+		this.#thinkingLevel = thinkingLevel;
 		this.addChild(new Spacer(1));
 		this.addChild(
-			new MetricRow(usageRowSpecs(usage, durationMs, ttftMs, timestamp, turnElapsedMs), {
+			new MetricRow(usageRowSpecs(usage, durationMs, ttftMs, timestamp, turnElapsedMs, model, thinkingLevel), {
 				separator: "  ",
 				overflow: "wrap",
 				paddingX: 1,
@@ -221,6 +243,12 @@ class UsageRowBlock extends Container {
 				node("rate", { value: Math.round(tokPerSec * 10) / 10, unit: "tok/s" }),
 			);
 		}
+		if (this.#model !== undefined) {
+			children.push(text([span(" · ", "dim"), span(this.#model, "dim")]));
+		}
+		if (this.#thinkingLevel !== undefined && this.#thinkingLevel !== ThinkingLevel.Off) {
+			children.push(text([span(" · ", "dim"), span(this.#thinkingLevel, "dim")]));
+		}
 		this.#nativeNode = row(children, {
 			role: "omp.usage.turn",
 			gap: "none",
@@ -238,8 +266,10 @@ export function formatUsageRow(
 	ttftMs?: number,
 	timestamp?: number,
 	turnElapsedMs?: number,
+	model?: string,
+	thinkingLevel?: ThinkingLevel,
 ): string {
-	return formatMetricRow(usageRowSpecs(usage, durationMs, ttftMs, timestamp, turnElapsedMs), {
+	return formatMetricRow(usageRowSpecs(usage, durationMs, ttftMs, timestamp, turnElapsedMs, model, thinkingLevel), {
 		separator: "  ",
 	});
 }
@@ -253,16 +283,19 @@ export function isUsageRowBlock(component: object): boolean {
 }
 
 // `timestamp` and `turnElapsedMs` are optional and trail the throughput args to
-// preserve the existing (usage, durationMs, ttftMs) call contract — this
-// function is part of the package's public export surface (./modes/components/*).
+// preserve the existing (usage, durationMs, ttftMs) call contract; `model` and
+// `thinkingLevel` trail `turnElapsedMs` for the same reason — this function is
+// part of the package's public export surface (./modes/components/*).
 export function createUsageRowBlock(
 	usage: Usage,
 	durationMs?: number,
 	ttftMs?: number,
 	timestamp?: number,
 	turnElapsedMs?: number,
+	model?: string,
+	thinkingLevel?: ThinkingLevel,
 ): Container {
-	const block = new UsageRowBlock(usage, durationMs, ttftMs, timestamp, turnElapsedMs);
+	const block = new UsageRowBlock(usage, durationMs, ttftMs, timestamp, turnElapsedMs, model, thinkingLevel);
 	usageRowBlocks.add(block);
 	return block;
 }

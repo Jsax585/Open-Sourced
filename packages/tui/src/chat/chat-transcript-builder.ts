@@ -97,6 +97,7 @@ export class ChatTranscriptBuilder {
 	#pendingUsageDuration: number | undefined;
 	#pendingUsageTtft: number | undefined;
 	#pendingUsageTimestamp: number | undefined;
+	#pendingUsageModel: string | undefined;
 	#pendingReadUsageCallIds: string[] | undefined;
 	#pendingUsageElapsedMs: number | undefined;
 	#turnStartedAt: number | undefined;
@@ -171,6 +172,7 @@ export class ChatTranscriptBuilder {
 		this.#pendingUsageDuration = undefined;
 		this.#pendingUsageTtft = undefined;
 		this.#pendingUsageTimestamp = undefined;
+		this.#pendingUsageModel = undefined;
 		this.#pendingReadUsageCallIds = undefined;
 		this.#pendingUsageElapsedMs = undefined;
 		this.#turnStartedAt = undefined;
@@ -257,6 +259,7 @@ export class ChatTranscriptBuilder {
 				this.#pendingUsageTtft,
 				this.#pendingUsageTimestamp,
 				this.#pendingUsageElapsedMs,
+				this.#pendingUsageModel,
 			) ??
 				false);
 		if (!usageAttached) {
@@ -269,6 +272,7 @@ export class ChatTranscriptBuilder {
 					this.#pendingUsageTtft,
 					this.#pendingUsageTimestamp,
 					this.#pendingUsageElapsedMs,
+					this.#pendingUsageModel,
 				),
 			);
 		}
@@ -276,6 +280,7 @@ export class ChatTranscriptBuilder {
 		this.#pendingUsageDuration = undefined;
 		this.#pendingUsageTtft = undefined;
 		this.#pendingUsageTimestamp = undefined;
+		this.#pendingUsageModel = undefined;
 		this.#pendingReadUsageCallIds = undefined;
 		this.#pendingUsageElapsedMs = undefined;
 	}
@@ -528,6 +533,7 @@ export class ChatTranscriptBuilder {
 		this.#pendingUsageDuration = message.duration;
 		this.#pendingUsageTtft = message.ttft;
 		this.#pendingUsageTimestamp = message.timestamp;
+		this.#pendingUsageModel = this.#pendingUsage ? `${message.provider}/${message.model}` : undefined;
 		this.#pendingReadUsageCallIds = this.#pendingUsage ? groupedReadUsageCallIds(message) : undefined;
 		this.#pendingUsageElapsedMs =
 			this.#pendingUsage && displayPreferences.showTurnTime ? this.#turnElapsedMs(message) : undefined;

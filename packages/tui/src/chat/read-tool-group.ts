@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
 import { type Component } from "../tui";
 import { Container } from "../tui";
@@ -148,6 +149,8 @@ type ReadUsageRow = {
 	ttftMs?: number;
 	timestamp?: number;
 	turnElapsedMs?: number;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
 };
 
 /** Number of preview rows to show per read while collapsed. */
@@ -524,6 +527,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		ttftMs?: number,
 		timestamp?: number,
 		turnElapsedMs?: number,
+		model?: string,
+		thinkingLevel?: ThinkingLevel,
 	): boolean {
 		const attachedToolCallIds: string[] = [];
 		let anchorId: string | undefined;
@@ -543,6 +548,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			ttftMs,
 			timestamp,
 			turnElapsedMs,
+			model,
+			thinkingLevel,
 		});
 		this.#updateDisplay();
 		return true;
@@ -794,6 +801,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 							usageRow.ttftMs,
 							usageRow.timestamp,
 							usageRow.turnElapsedMs,
+							usageRow.model,
+							usageRow.thinkingLevel,
 						),
 					),
 				);
@@ -881,7 +890,15 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	}
 
 	#nativeUsage(usage: ReadUsageRow, key: string): NativeNode {
-		const line = formatUsageRow(usage.usage, usage.durationMs, usage.ttftMs, usage.timestamp, usage.turnElapsedMs);
+		const line = formatUsageRow(
+			usage.usage,
+			usage.durationMs,
+			usage.ttftMs,
+			usage.timestamp,
+			usage.turnElapsedMs,
+			usage.model,
+			usage.thinkingLevel,
+		);
 		return text([span(plainText(line), "dim")], { wrap: "word", key, role: "omp.usage" });
 	}
 
@@ -1064,7 +1081,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			lines.push(
 				theme.fg(
 					"dim",
-					`${prefix}${formatUsageRow(usageRow.usage, usageRow.durationMs, usageRow.ttftMs, usageRow.timestamp, usageRow.turnElapsedMs)}`,
+					`${prefix}${formatUsageRow(usageRow.usage, usageRow.durationMs, usageRow.ttftMs, usageRow.timestamp, usageRow.turnElapsedMs, usageRow.model, usageRow.thinkingLevel)}`,
 				),
 			);
 		}
@@ -1233,6 +1250,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 						usageRow.ttftMs,
 						usageRow.timestamp,
 						usageRow.turnElapsedMs,
+						usageRow.model,
+						usageRow.thinkingLevel,
 					),
 				),
 				3,

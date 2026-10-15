@@ -13,6 +13,7 @@
  * one-entry block).
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
@@ -78,7 +79,12 @@ function assistantMessage(content: Block[]): AssistantMessage {
 }
 
 function createFixture() {
-	const ctx = createInteractiveModeContext();
+	const ctx = createInteractiveModeContext({
+		session: {
+			thinkingLevel: ThinkingLevel.XHigh,
+			modelRegistry: { find: () => undefined },
+		},
+	});
 	return { controller: new EventController(ctx), chatContainer: ctx.chatContainer };
 }
 
@@ -144,6 +150,9 @@ describe("EventController read-group accretion", () => {
 			Bun.stripANSI(component.render(120).join("\n")).includes("2026-01-02 03:04:05"),
 		);
 		expect(usageBlocks).toEqual([group!]);
+		const groupText = Bun.stripANSI(group!.render(120).join("\n"));
+		expect(groupText).toContain("openai-codex/gpt-5.5");
+		expect(groupText).toContain(ThinkingLevel.XHigh);
 	});
 
 	it("keeps usage standalone when visible content follows a read", async () => {
@@ -171,6 +180,9 @@ describe("EventController read-group accretion", () => {
 		);
 		expect(usageBlocks).toHaveLength(1);
 		expect(usageBlocks[0]).not.toBe(group!);
+		const standaloneText = Bun.stripANSI(usageBlocks[0]!.render(120).join("\n"));
+		expect(standaloneText).toContain("openai-codex/gpt-5.5");
+		expect(standaloneText).toContain(ThinkingLevel.XHigh);
 	});
 
 	it("starts a fresh group after standalone usage for a mixed-tool turn ending in read", async () => {
