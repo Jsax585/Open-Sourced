@@ -13,6 +13,7 @@ import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../coll
 import { settings } from "../../config/settings";
 import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
 import { createBackgroundTanDispatchBlock } from "@oh-my-pi/pi-tui/chat/background-tan-message";
 import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
@@ -41,7 +42,14 @@ import { SkillMessageComponent } from "@oh-my-pi/pi-tui/chat/skill-message";
 import { StrippedToolCallsPlaceholder } from "@oh-my-pi/pi-tui/chat/stripped-tool-calls-placeholder";
 import { imageContent, textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import { ToolActivityContainer } from "@oh-my-pi/pi-tui/chrome/tool-activity";
-import { ToolExecutionComponent, type ToolExecutionHandle, toolRenderName } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import {
+	isSettledJobFrame,
+	parksAsBackground,
+	settleWithJobFrame,
+	ToolExecutionComponent,
+	type ToolExecutionHandle,
+	toolRenderName,
+} from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TranscriptBlock, TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { createUsageRowBlock, turnElapsedMs } from "@oh-my-pi/pi-tui/overlays/usage-row";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
@@ -468,9 +476,10 @@ export class UiHelpers {
 	): Generator<void, void, void> {
 		// Preserved: message_start handler owns this lifecycle (see #783)
 		this.ctx.pendingTools.clear();
-		const isLiveBackgroundTask = this.#liveBackgroundTaskCheck();
+		const activeToolExecutionUpdates = this.ctx.viewSession.activeToolExecutionUpdates?.() ?? [];
+		const runningAsyncJobs = this.ctx.viewSession.getAsyncJobSnapshot?.()?.running ?? [];
 		const messages = sessionContext.messages;
-		const start = this.#transcriptWindowStart(messages, isLiveBackgroundTask);
+		const start = this.#transcriptWindowStart(messages, this.#liveBackgroundJobCheck());
 		// Reseed the cache-invalidation baseline: this rebuild re-derives every
 		// turn's marker from usage, and the last turn becomes the live baseline.
 		this.ctx.lastAssistantUsage = undefined;
@@ -580,11 +589,11 @@ export class UiHelpers {
 			todoSnapshot = null;
 			previous.seal();
 		};
-		// Detached task calls persist their initial `async.state === "running"`
+		// Background job calls persist their initial `async.state === "running"`
 		// result, but the job keeps streaming progress afterwards. Parked here
 		// (not finalized) so replayed and live frames still route to the card;
 		// the ids are handed back to the controller after the loop (#10447).
-		const backgroundTaskCallIds = new Set<string>();
+		const backgroundCallIds = new Set<string>();
 		const count = messages.length;
 		for (let i = start; i < count; i++) {
 			// Yield BEFORE each message (except the first) rather than after: the
@@ -769,8 +778,11 @@ export class UiHelpers {
 					const images: ImageContent[] = message.content.filter(
 						(content): content is ImageContent => content.type === "image",
 					);
+					const mediaPath = readMediaPath(message.details);
+					if (mediaPath && images.length === 0)
+						assistantComponent?.setToolResultImages(message.toolCallId, [], mediaPath);
 					if (images.length > 0 && assistantComponent) {
-						assistantComponent.setToolResultImages(message.toolCallId, images);
+						assistantComponent.setToolResultImages(message.toolCallId, images, mediaPath);
 						const hasText = message.content.some(c => c.type === "text");
 						if (!hasText && cfgTerminalShowImages.get(settings)) {
 							if (pendingReadComponent) {
@@ -808,15 +820,29 @@ export class UiHelpers {
 				// Match tool results to pending tool components
 				const component = this.ctx.pendingTools.get(message.toolCallId);
 				if (component) {
-					const isBackgroundTask = isLiveBackgroundTask(message);
-					// A detached task's persisted result is only its "still running"
-					// snapshot. Keep the card partial, parked, and in `pendingTools` so
-					// the snapshot replay and later live progress frames land on it
-					// instead of hitting the no-pending-component early return (#10447).
-					component.updateResult(message, isBackgroundTask, message.toolCallId);
-					if (isBackgroundTask) {
+					const jobId = (message.details as { async?: { jobId?: string } } | undefined)?.async?.jobId;
+					const frame = activeToolExecutionUpdates.find(
+						event => event.toolCallId === message.toolCallId,
+					)?.partialResult;
+					const isBackground =
+						parksAsBackground(message.toolName, message.details) &&
+						(frame !== undefined || runningAsyncJobs.some(job => job.id === jobId));
+					const settled = isBackground && isSettledJobFrame(frame?.details);
+					// A background job call's persisted result is only its "still running"
+					// snapshot; the job's latest frame supersedes it. Until that frame
+					// settles, keep the card partial, parked, and in `pendingTools` so
+					// later live progress frames land on it instead of hitting the
+					// no-pending-component early return (#10447).
+					if (settled) {
+						settleWithJobFrame(component, frame, message.toolCallId);
+					} else if (frame && isBackground) {
+						component.updateResult(frame, true, message.toolCallId);
+					} else {
+						component.updateResult(message, isBackground, message.toolCallId);
+					}
+					if (isBackground && !settled) {
 						component.parkAsBackground();
-						backgroundTaskCallIds.add(message.toolCallId);
+						backgroundCallIds.add(message.toolCallId);
 					} else {
 						this.ctx.pendingTools.delete(message.toolCallId);
 						if (
@@ -891,13 +917,13 @@ export class UiHelpers {
 		if (this.ctx.viewSession.isStreaming) {
 			this.ctx.eventController?.inheritTurnStart(turnStartedAt);
 		}
-		// Re-register parked background task cards with the controller: focus
-		// attach resets its `#backgroundTaskCallIds` before replaying, and unlike
+		// Re-register parked background cards with the controller: focus
+		// attach resets its `#backgroundCallIds` before replaying, and unlike
 		// the todo/turn handoffs this must run whether or not the session streams
-		// — a detached task keeps running while the main session sits idle
+		// — a background job keeps running while the main session sits idle
 		// (#10447). Membership is re-checked against `pendingTools`.
-		if (backgroundTaskCallIds.size > 0) {
-			this.ctx.eventController?.markBackgroundTaskCalls(backgroundTaskCallIds);
+		if (backgroundCallIds.size > 0) {
+			this.ctx.eventController?.markBackgroundCalls(backgroundCallIds);
 		}
 
 		// Entries still in `pendingTools` are toolCalls whose result never landed
@@ -921,10 +947,10 @@ export class UiHelpers {
 			}
 		} else {
 			for (const [toolCallId, component] of this.ctx.pendingTools) {
-				// A parked background task keeps running even while the main session
+				// A parked background job keeps running even while the main session
 				// is idle, so leave its card pending — sealing and clearing it would
 				// drop the replayed snapshot and every later job frame (#10447).
-				if (backgroundTaskCallIds.has(toolCallId)) {
+				if (backgroundCallIds.has(toolCallId)) {
 					component.setArgsComplete(toolCallId);
 					continue;
 				}
@@ -936,19 +962,19 @@ export class UiHelpers {
 	}
 
 	/**
-	 * Snapshot of detached `task` calls whose persisted result is only the
-	 * "still running" state while the job keeps streaming progress (#10447).
+	 * Snapshot of background job calls whose persisted result is only the
+	 * "still running" state while the job keeps streaming progress (#10447):
+	 * the same rule the replay uses to park their cards.
 	 */
-	#liveBackgroundTaskCheck(): (message: ToolResultMessage) => boolean {
+	#liveBackgroundJobCheck(): (message: ToolResultMessage) => boolean {
 		const activeToolExecutionUpdates = this.ctx.viewSession.activeToolExecutionUpdates?.() ?? [];
 		const runningAsyncJobs = this.ctx.viewSession.getAsyncJobSnapshot?.()?.running ?? [];
 		return message => {
-			if (message.toolName !== "task") return false;
-			const asyncDetails = (message.details as { async?: { state?: string; jobId?: string } } | undefined)?.async;
+			if (!parksAsBackground(message.toolName, message.details)) return false;
+			const jobId = (message.details as { async?: { jobId?: string } } | undefined)?.async?.jobId;
 			return (
-				asyncDetails?.state === "running" &&
-				(activeToolExecutionUpdates.some(event => event.toolCallId === message.toolCallId) ||
-					runningAsyncJobs.some(job => job.id === asyncDetails.jobId))
+				activeToolExecutionUpdates.some(event => event.toolCallId === message.toolCallId) ||
+				runningAsyncJobs.some(job => job.id === jobId)
 			);
 		};
 	}
@@ -957,7 +983,7 @@ export class UiHelpers {
 	 * First message a transcript redraw draws. Past `display.transcriptReplayLimit`
 	 * messages, the redraw starts at the user request opening the turn that
 	 * contains the limit, so tool calls stay with their results, and reaches
-	 * further back to any still-running background task so its card keeps
+	 * further back to any still-running background job so its card keeps
 	 * receiving progress. Clearing native scrollback means every drawn row is
 	 * re-sent to the terminal; earlier history stays browsable in /tree. Views
 	 * without /tree access to their own history (a focused subagent, a collab
@@ -965,7 +991,7 @@ export class UiHelpers {
 	 */
 	#transcriptWindowStart(
 		messages: readonly AgentMessage[],
-		isLiveBackgroundTask: (message: ToolResultMessage) => boolean,
+		isLiveBackgroundJob: (message: ToolResultMessage) => boolean,
 	): number {
 		if (messages.length === 0 || this.ctx.focusedAgentId || this.ctx.collabGuest) return 0;
 		// Config accepts any finite number; a fractional limit would index between messages.
@@ -984,7 +1010,7 @@ export class UiHelpers {
 		const start = turnStartAtOrBefore(messages.length - limit);
 		for (let i = 0; i < start; i++) {
 			const message = messages[i]!;
-			if (message.role === "toolResult" && isLiveBackgroundTask(message)) return turnStartAtOrBefore(i);
+			if (message.role === "toolResult" && isLiveBackgroundJob(message)) return turnStartAtOrBefore(i);
 		}
 		return start;
 	}
@@ -1039,7 +1065,7 @@ export class UiHelpers {
 		const notice = chat.children.find((child): child is HiddenHistoryNotice => child instanceof HiddenHistoryNotice);
 		if (
 			notice &&
-			this.#transcriptWindowStart(context.messages, this.#liveBackgroundTaskCheck()) !== notice.hiddenMessages
+			this.#transcriptWindowStart(context.messages, this.#liveBackgroundJobCheck()) !== notice.hiddenMessages
 		) {
 			return false;
 		}
