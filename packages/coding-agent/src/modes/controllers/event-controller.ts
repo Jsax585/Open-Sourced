@@ -2352,19 +2352,14 @@ export class EventController {
 			await this.#finishAgentEnd(event);
 		} finally {
 			this.#terminalTeardownActive = false;
-			// A focus attach can land `restoreRunActivity()` while the teardown awaits the model
-			// switch and flip the composer back to busy, and its watcher refused to arm under the
-			// teardown token. Settle the composer only when this same view is still the one that
-			// ended: a different attached session, a rebuilt transcript, or a newer run owns its own
-			// flag. Even then, defer to the logical predicate so paused work (post-prompt, async
-			// wake, queued continuation) keeps the composer busy.
-			if (
-				epoch === this.#runEpoch &&
-				generation === this.#transcriptGeneration &&
-				this.ctx.viewSession === session &&
-				!session.hasLogicalRunActivity
-			) {
-				this.ctx.composer.setRunActive(false);
+			// A same-session attach resets anchors while teardown blocks its settle watcher.
+			// Restore that watcher after teardown without changing a newer run or another view.
+			if (epoch === this.#runEpoch && this.ctx.viewSession === session) {
+				if (!session.hasLogicalRunActivity) {
+					this.ctx.composer.setRunActive(false);
+				} else if (generation !== this.#transcriptGeneration) {
+					this.restoreRunActivity();
+				}
 			}
 		}
 		// This settle may belong to an extension-started turn while the main

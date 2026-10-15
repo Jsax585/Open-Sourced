@@ -387,4 +387,38 @@ describe("EventController superseded agent_end", () => {
 		// The old view's teardown must not clear the restored busy flag.
 		expect(ctx.composer.setRunActive).toHaveBeenLastCalledWith(true);
 	});
+
+	it("clears busy when work drains after a focus attach reset anchors during terminal teardown", async () => {
+		const { ctx, streamState } = createContext();
+		vi.spyOn(runStatus, "setRunStatus").mockImplementation(() => {});
+		// The watcher's idle wait is the logical work draining: no session event follows it.
+		const waitForIdle = vi.spyOn(ctx.viewSession, "waitForIdle").mockImplementation(async () => {
+			streamState.hasPostPromptWork = false;
+		});
+		const switching = Promise.withResolvers<void>();
+		ctx.flushPendingModelSwitch = vi.fn(() => switching.promise);
+		const controller = new EventController(ctx);
+
+		const ended = controller.handleEvent({
+			type: "agent_end",
+			messages: [],
+		});
+		await Promise.resolve();
+
+		// Same-session focus attach: anchors reset first, then the logical run is restored
+		// while post-prompt work is still pending. The watcher refuses under teardown.
+		streamState.hasPostPromptWork = true;
+		controller.resetTranscriptAnchors();
+		controller.restoreRunActivity();
+		expect(ctx.composer.setRunActive).toHaveBeenLastCalledWith(true);
+		expect(waitForIdle).not.toHaveBeenCalled();
+
+		switching.resolve();
+		await ended;
+		// Let any re-armed watcher drain; no further session events are dispatched.
+		for (let i = 0; i < 20; i++) await Promise.resolve();
+
+		expect(streamState.hasPostPromptWork).toBe(false);
+		expect(ctx.composer.setRunActive).toHaveBeenLastCalledWith(false);
+	});
 });

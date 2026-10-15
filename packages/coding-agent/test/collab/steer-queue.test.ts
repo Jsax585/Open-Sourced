@@ -4,7 +4,7 @@
  * as `queueChipText` on the queued custom message; the session derives
  * `queuedMessageCount` from the agent-core queue for host and guest UI state.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import { importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import { CollabHost } from "@oh-my-pi/pi-coding-agent/collab/host";
 import {
@@ -84,11 +84,16 @@ interface StreamingHostHarness {
 	ctx: InteractiveModeContext;
 	prompts: CapturedPrompt[];
 	nextPrompt(): Promise<CapturedPrompt>;
+	/** Mutable session flags and the captured session listener, for lifecycle tests. */
+	live: { isStreaming: boolean; runActive: boolean };
+	emit(event: { type: "agent_start" | "agent_end" }): void;
 }
 
 /** Context double for a host whose agent is mid-turn (isStreaming === true). */
 function makeStreamingHostContext(options: { paused?: boolean } = {}): StreamingHostHarness {
 	const prompts: CapturedPrompt[] = [];
+	const listeners: ((event: { type: string }) => void)[] = [];
+	const live = { isStreaming: !options.paused, runActive: true };
 	const promptWaiters: ((prompt: CapturedPrompt) => void)[] = [];
 	const ctx = {
 		settings: Settings.isolated(),
@@ -102,9 +107,13 @@ function makeStreamingHostContext(options: { paused?: boolean } = {}): Streaming
 			onEntryAppended: undefined,
 		},
 		session: {
-			isStreaming: !options.paused,
+			get isStreaming(): boolean {
+				return live.isStreaming;
+			},
 			// A paused host is stream-idle but its logical run is still open.
-			hasLogicalRunActivity: true,
+			get hasLogicalRunActivity(): boolean {
+				return live.runActive;
+			},
 			get queuedMessageCount(): number {
 				return prompts.filter(prompt => prompt.options?.queueChipText).length;
 			},
@@ -112,7 +121,10 @@ function makeStreamingHostContext(options: { paused?: boolean } = {}): Streaming
 			sessionName: "test",
 			model: undefined,
 			thinkingLevel: undefined,
-			subscribe: () => () => {},
+			subscribe: (listener: (event: { type: string }) => void) => {
+				listeners.push(listener);
+				return () => {};
+			},
 			emitNotice: () => {},
 			promptCustomMessage: (message: CapturedPrompt, options?: CapturedPrompt["options"]) => {
 				const captured: CapturedPrompt = { details: message.details, options };
@@ -137,12 +149,22 @@ function makeStreamingHostContext(options: { paused?: boolean } = {}): Streaming
 		promptWaiters.push(resolve);
 		return promise;
 	};
-	return { ctx, prompts, nextPrompt };
+	return {
+		ctx,
+		prompts,
+		nextPrompt,
+		live,
+		emit: event => {
+			for (const listener of listeners) listener(event);
+		},
+	};
 }
 
 interface TestGuest {
 	socket: CollabSocket;
 	nextFrame(): Promise<CollabFrame>;
+	/** Frames received but not yet consumed, oldest first. */
+	drain(): CollabFrame[];
 }
 
 async function joinAsGuest(link: string, name: string): Promise<TestGuest> {
@@ -171,7 +193,7 @@ async function joinAsGuest(link: string, name: string): Promise<TestGuest> {
 		waiters.push(resolve);
 		return promise;
 	};
-	return { socket, nextFrame };
+	return { socket, nextFrame, drain: () => queue.splice(0) };
 }
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -227,5 +249,52 @@ describe("collab mid-turn guest prompts", () => {
 
 		expect(welcome.state.isStreaming).toBe(false);
 		expect(welcome.state.runActive).toBe(true);
+	});
+
+	it("keeps broadcasting state after agent_end while the logical run stays open", async () => {
+		vi.useFakeTimers();
+		cleanups.push(() => {
+			vi.useRealTimers();
+		});
+		const relay = startTestRelay();
+		cleanups.push(relay.stop);
+		const harness = makeStreamingHostContext({ paused: true });
+		// Start fully idle so the agent_start state differs from the welcome state (broadcasts dedup on equal JSON).
+		harness.live.runActive = false;
+		const host = new CollabHost(harness.ctx);
+		await host.start(relay.url);
+		cleanups.push(() => host.stop("test done"));
+
+		const guest = await joinAsGuest(host.link, "reader");
+		cleanups.push(() => guest.socket.close());
+		const welcome = await guest.nextFrame();
+		if (welcome.t !== "welcome") throw new Error(`expected welcome, got ${welcome.t}`);
+
+		const states: { isStreaming: boolean; runActive: boolean | undefined }[] = [];
+		const send = vi.spyOn(CollabSocket.prototype, "send").mockImplementation(frame => {
+			if (typeof frame === "object" && "t" in frame && frame.t === "state") {
+				states.push({ isStreaming: frame.state.isStreaming, runActive: frame.state.runActive });
+			}
+		});
+		cleanups.push(() => {
+			send.mockRestore();
+		});
+
+		harness.live.isStreaming = true;
+		harness.live.runActive = true;
+		harness.emit({ type: "agent_start" });
+		vi.advanceTimersByTime(100);
+		expect(states.at(-1)).toEqual({ isStreaming: true, runActive: true });
+
+		// Stream goes idle but a background task keeps the run open: agent_end arrives.
+		harness.live.isStreaming = false;
+		harness.emit({ type: "agent_end" });
+		vi.advanceTimersByTime(100);
+		expect(states.at(-1)).toEqual({ isStreaming: false, runActive: true });
+
+		// Background work drains with no further session event; only the periodic broadcast can report it.
+		harness.live.runActive = false;
+		vi.advanceTimersByTime(2_100);
+		expect(states.at(-1)).toEqual({ isStreaming: false, runActive: false });
 	});
 });
