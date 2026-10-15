@@ -9,6 +9,9 @@
 - Fixed `omp --resume <path>` parsing an unchanged session file twice; resume now re-reads the file to confirm it is unchanged and parses it again only after a change ([#15404](https://github.com/can1357/oh-my-pi/pull/15404) by [@sjawhar](https://github.com/sjawhar)).
 - Fixed full rewrites of large file-backed sessions retaining a second transcript-sized serialization; file storage now streams the journal and verifies uncertain publication by an exact streamed comparison ([#15404](https://github.com/can1357/oh-my-pi/pull/15404) by [@sjawhar](https://github.com/sjawhar)).
 - Fixed a session that could not write for a while losing its whole backlog once storage recovered; the missed entries are now written in bounded chunks, and a write that still fails reports the current error instead of an earlier one ([#15404](https://github.com/can1357/oh-my-pi/pull/15404) by [@sjawhar](https://github.com/sjawhar)).
+- Loop-watchdog stalls while Mnemopi truncates the recall query for compaction or background first-turn recall are now logged under `mnemopi.recall` instead of `unknown` ([#15413](https://github.com/can1357/oh-my-pi/pull/15413) by [@jaredlyon](https://github.com/jaredlyon)).
+- Clarified the `/session pin` description: it pins a stored OAuth account to the current provider for this session only ([#15479](https://github.com/can1357/oh-my-pi/pull/15479) by [@iacore](https://github.com/iacore))
+- Fixed `/jobs` doing nothing in a focused subagent view: it now lists that subagent's own background jobs, as does the jobs pill's sheet, without a way to cancel them; `/jobs kill` still requires returning to the main session ([#15161](https://github.com/can1357/oh-my-pi/pull/15161) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ## [18.11.0] - 2026-10-14
 
