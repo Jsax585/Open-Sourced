@@ -10,11 +10,13 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initializeWithSettings } from "@oh-my-pi/pi-coding-agent/discovery";
 import { loadAllMCPConfigs } from "@oh-my-pi/pi-coding-agent/mcp/config";
-import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
-import type { MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
+import { MCPManager, type MCPReconnectPolicy } from "@oh-my-pi/pi-coding-agent/mcp/manager";
+import type { MCPHttpServerConfig, MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { __resetDirsFromEnvForTests, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import type { McpConnectionStatusEvent } from "@oh-my-pi/pi-coding-agent/mcp/startup-events";
+import { startFlakyHttpMcpServer } from "./fixtures/flaky-http-mcp";
 import { YAML } from "bun";
 import { ROOTS_ECHO_MODE } from "./fixtures/instructions-mcp";
 
@@ -119,7 +121,7 @@ describe("path-scoped disabledExtensions for MCP servers", () => {
 		const settings = await initSettingsAt(cwd);
 		const sessionManager = SessionManager.inMemory(cwd);
 		const authStorage = await AuthStorage.create(":memory:");
-		const { session } = await createAgentSession({
+		const { session, mcpManager } = await createAgentSession({
 			cwd,
 			agentDir,
 			modelRegistry: new ModelRegistry(authStorage),
@@ -137,6 +139,7 @@ describe("path-scoped disabledExtensions for MCP servers", () => {
 		});
 		return {
 			session,
+			mcpManager,
 			hasTool: (name: string) => session.getToolByName(name) !== undefined,
 			// The same rescope `/move` and cross-project resume run, TUI and headless alike.
 			moveTo: async (target: string) => {
@@ -144,7 +147,7 @@ describe("path-scoped disabledExtensions for MCP servers", () => {
 				await settings.reloadForCwd(target);
 			},
 			close: async () => {
-				await session.dispose();
+				if (!session.isDisposed) await session.dispose();
 				authStorage.close();
 				closeModelCache();
 			},
@@ -211,7 +214,7 @@ describe("path-scoped disabledExtensions for MCP servers", () => {
 		}
 	}, 30_000);
 
-	it("hands a newly allowed Exa server's API key to the native Exa integration", async () => {
+	it("gives the native Exa integration an Exa server's key only while the list allows that server", async () => {
 		const exaKey = "scoped-exa-key-7f3e";
 		await Bun.write(
 			path.join(agentDir, "mcp.json"),
@@ -236,9 +239,65 @@ describe("path-scoped disabledExtensions for MCP servers", () => {
 			await moveTo(otherDir);
 			await eventually(() => Bun.env.EXA_API_KEY !== undefined);
 			expect(Bun.env.EXA_API_KEY).toBe(exaKey);
+
+			await moveTo(nestedDir);
+			await eventually(() => Bun.env.EXA_API_KEY === undefined);
+			expect(Bun.env.EXA_API_KEY).toBeUndefined();
 		} finally {
 			await close();
 			restoreEnvValue("EXA_API_KEY", originalExaKey);
+		}
+	}, 30_000);
+
+	it("does not leave a server connected when the session is disposed while a move is still connecting it", async () => {
+		const { session, mcpManager, moveTo, close } = await startSession(nestedDir);
+		try {
+			if (!mcpManager) throw new Error("session has no MCP manager");
+			await eventually(() => mcpManager.getConnectionStatus(ALWAYS_SERVER) === "connected");
+			await moveTo(otherDir);
+			await session.dispose();
+			// Queued behind the move's reconcile, so it settles once that connect has finished.
+			await mcpManager.reconcileDisabledExtensions(otherDir, [], []);
+			await eventually(() => mcpManager.getConnectionStatus(WORK_SERVER) === "disconnected");
+			expect(mcpManager.getConnectionStatus(WORK_SERVER)).toBe("disconnected");
+		} finally {
+			await close();
+		}
+	}, 30_000);
+
+	it("tears down a server whose transport already dropped when the list blocks it", async () => {
+		const flaky = startFlakyHttpMcpServer();
+		const config: MCPHttpServerConfig = { type: "http", url: flaky.url, timeout: 5_000 };
+		// Short ladder, fast schedule, so the lost-server retry would fire within the test.
+		const policy: MCPReconnectPolicy = { ladderMs: [10, 10], retryBaseMs: 20, retryMaxMs: 80 };
+		const manager = new MCPManager(
+			otherDir,
+			null,
+			async () => ({ configs: { flaky: config }, exaApiKeys: [], sources: {} }),
+			policy,
+		);
+		const statuses: McpConnectionStatusEvent["type"][] = [];
+		manager.addConnectionStatusListener(event => statuses.push(event.type));
+		try {
+			await manager.discoverAndConnect({});
+			expect(manager.getConnectionStatus("flaky")).toBe("connected");
+			flaky.setDown(true);
+			await eventually(() => statuses.includes("failed") && manager.getConnectionStatus("flaky") === "disconnected");
+			// The lost server keeps its tools and a scheduled retry.
+			expect(manager.getTools().some(tool => tool.mcpServerName === "flaky")).toBe(true);
+
+			await manager.reconcileDisabledExtensions(nestedDir, [], ["mcp:flaky"]);
+			expect(manager.getTools().some(tool => tool.mcpServerName === "flaky")).toBe(false);
+			const initializesAtBlock = flaky.initializes;
+			flaky.setDown(false);
+			// Negative contract: no event to await, so wait out the longest delay the
+			// retry schedule can arm. Fake timers cannot drive a real Bun.serve round trip.
+			await Bun.sleep(policy.retryMaxMs * 4);
+			expect(flaky.initializes).toBe(initializesAtBlock);
+			expect(manager.getConnectionStatus("flaky")).toBe("disconnected");
+		} finally {
+			await manager.disconnectAll();
+			flaky.stop();
 		}
 	}, 30_000);
 });

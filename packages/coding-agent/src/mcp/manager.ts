@@ -1367,10 +1367,10 @@ export class MCPManager {
 	 * the directory later discovery reads and `roots/list` advertises.
 	 * Serialized with the other reconcilers and joined with in-flight discovery,
 	 * so a discovery that loaded the old list finishes before the new one
-	 * applies. Disabled servers that are still connected disconnect; servers the
-	 * new list allows again are rediscovered and connect. Resolves to the
-	 * connect result (with any Exa keys the rediscovery extracted), or
-	 * `undefined` when no connection changed.
+	 * applies. Every disabled server is torn down, tools and retries included;
+	 * servers the new list allows again are rediscovered and connect. Resolves
+	 * to the connect result, whose `exaApiKeys` are those of the Exa definitions
+	 * the new list allows, or `undefined` when its `mcp:` ids did not change.
 	 */
 	reconcileDisabledExtensions(
 		cwd: string,
@@ -1395,38 +1395,42 @@ export class MCPManager {
 		// Before the first discovery there is nothing to reconcile: it reads the list itself.
 		const options = this.#discoverOptions;
 		if (!options) return undefined;
-		const disabled = new Set<string>();
-		for (const id of after)
-			if (id.startsWith(MCP_EXTENSION_PREFIX)) disabled.add(id.slice(MCP_EXTENSION_PREFIX.length));
-		const blocked = [...disabled].filter(name => this.getConnectionStatus(name) !== "disconnected");
-		const allowed: string[] = [];
-		for (const id of before) {
-			if (!id.startsWith(MCP_EXTENSION_PREFIX)) continue;
-			const name = id.slice(MCP_EXTENSION_PREFIX.length);
-			if (!disabled.has(name) && this.getConnectionStatus(name) === "disconnected") allowed.push(name);
-		}
-		if (blocked.length === 0 && allowed.length === 0) return undefined;
-		await Promise.all(blocked.map(name => this.disconnectServer(name)));
-		const loaded =
-			allowed.length > 0
-				? await this.loadConfigs(this.cwd, {
-						enableProjectConfig: options.enableProjectConfig,
-						filterExa: options.filterExa,
-						filterBrowser: options.filterBrowser,
-						extensionRoots: options.extensionRoots,
-					})
-				: undefined;
+		const mcpNames = (ids: readonly string[]) => {
+			const names = new Set<string>();
+			for (const id of ids)
+				if (id.startsWith(MCP_EXTENSION_PREFIX)) names.add(id.slice(MCP_EXTENSION_PREFIX.length));
+			return names;
+		};
+		const wasDisabled = mcpNames(before);
+		const disabled = mcpNames(after);
+		if (wasDisabled.size === disabled.size && [...disabled].every(name => wasDisabled.has(name))) return undefined;
+		// Tear down every disabled server whatever its transport state: one whose
+		// transport dropped still keeps its tools, config and scheduled retry, and a
+		// discovery that loaded the old list may have connected one. No-op for
+		// servers the manager does not know.
+		await Promise.all([...disabled].map(name => this.disconnectServer(name)));
+		const allowed = [...wasDisabled].filter(
+			name => !disabled.has(name) && this.getConnectionStatus(name) === "disconnected",
+		);
+		// Always rediscover: besides the configs of newly allowed servers, it
+		// yields the Exa keys of the definitions the new list still allows.
+		const loaded = await this.loadConfigs(this.cwd, {
+			enableProjectConfig: options.enableProjectConfig,
+			filterExa: options.filterExa,
+			filterBrowser: options.filterBrowser,
+			extensionRoots: options.extensionRoots,
+		});
 		const configs: Record<string, MCPServerConfig> = {};
 		const sources: Record<string, SourceMeta> = {};
 		for (const name of allowed) {
-			const config = loaded?.configs[name];
+			const config = loaded.configs[name];
 			if (!config) continue;
 			configs[name] = config;
-			const source = loaded?.sources[name];
+			const source = loaded.sources[name];
 			if (source) sources[name] = source;
 		}
 		const result = await this.connectServers(configs, sources, options.onStatus, options.startupTimeoutMs);
-		result.exaApiKeys = loaded?.exaApiKeys ?? [];
+		result.exaApiKeys = loaded.exaApiKeys;
 		return result;
 	}
 

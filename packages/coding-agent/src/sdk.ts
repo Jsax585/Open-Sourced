@@ -529,10 +529,11 @@ function logMCPLoadErrors(errors: MCPLoadResult["errors"]): void {
 	}
 }
 
-function applyMCPEnvironment(result: { exaApiKeys: string[] }): void {
-	if (result.exaApiKeys.length > 0 && !$env.EXA_API_KEY) {
-		Bun.env.EXA_API_KEY = result.exaApiKeys[0];
-	}
+/** Hand an MCP Exa definition's key to the native Exa integration; returns the key when it was injected. */
+function applyMCPEnvironment(result: { exaApiKeys: string[] }): string | undefined {
+	if (result.exaApiKeys.length === 0 || $env.EXA_API_KEY) return undefined;
+	Bun.env.EXA_API_KEY = result.exaApiKeys[0];
+	return result.exaApiKeys[0];
 }
 
 // Types
@@ -2502,6 +2503,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const customTools: CustomTool[] = [];
 		const initialMcpManagerTools: CustomTool[] = [];
 		let startDeferredMCPDiscovery: ((liveSession: AgentSession) => void) | undefined;
+		/** `EXA_API_KEY` this session injected from an MCP Exa definition, if any. */
+		let mcpExaApiKey: string | undefined;
 		const onMCPStatus = (event: McpConnectionStatusEvent) => {
 			if (!options.hasUI || cfgStartupQuiet.get(settings)) return;
 			if (event.type === "connecting" && event.serverNames.length === 0) return;
@@ -2556,7 +2559,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 								await deferredMCPManager.disconnectAll();
 								return;
 							}
-							applyMCPEnvironment(mcpResult);
+							mcpExaApiKey = applyMCPEnvironment(mcpResult);
 							logMCPLoadErrors(mcpResult.errors);
 							// Connected MCP tools (and cached routes of servers still connecting) are
 							// enabled and mounted under xd:// devices right away, so a turn whose
@@ -2589,7 +2592,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				if (cfgMcpNotifications.get(settings)) {
 					mcpManager.setNotificationsEnabled(true);
 				}
-				applyMCPEnvironment(mcpResult);
+				mcpExaApiKey = applyMCPEnvironment(mcpResult);
 
 				// Log MCP errors
 				for (const { path, error } of mcpResult.errors) {
@@ -4974,8 +4977,20 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				const manager = mcpManager;
 				if (!manager) return;
 				const result = await manager.reconcileDisabledExtensions(sessionManager.getCwd(), before, after);
-				if (!result || session.isDisposed) return;
-				applyMCPEnvironment(result);
+				if (!result) return;
+				if (session.isDisposed) {
+					// Disposal's disconnect may have run before this connect: don't leak
+					// the transports/subprocesses of the servers it just allowed.
+					const allowed = before.filter(id => id.startsWith("mcp:") && !after.includes(id));
+					await Promise.all(allowed.map(id => manager.disconnectServer(id.slice("mcp:".length))));
+					return;
+				}
+				// A key injected from an Exa definition the new list blocks no longer applies.
+				if (mcpExaApiKey !== undefined && !result.exaApiKeys.includes(mcpExaApiKey)) {
+					if ($env.EXA_API_KEY === mcpExaApiKey) delete Bun.env.EXA_API_KEY;
+					mcpExaApiKey = undefined;
+				}
+				mcpExaApiKey = applyMCPEnvironment(result) ?? mcpExaApiKey;
 				logMCPLoadErrors(result.errors);
 				await session.refreshMCPTools(manager.getTools());
 			});
