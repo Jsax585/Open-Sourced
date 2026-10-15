@@ -2952,8 +2952,9 @@ export class SessionManager {
 	 *   already in flight is abandoned and waited for.
 	 *   Entries recorded meanwhile stay in memory; rewrites and titles wait.
 	 * - The file counts as gone when the delete succeeds, or when it fails and
-	 *   a stat of the journal then fails with ENOENT (its artifact cleanup can
-	 *   fail after the journal was unlinked). Any other stat result counts as
+	 *   a stat of the journal then fails with ENOENT (its artifact cleanup, or
+	 *   an indexed backend's remove of the other paths, can fail after the
+	 *   journal was deleted). Any other stat result counts as
 	 *   present. Once gone, the file's persistence ends: the entries stay in
 	 *   memory, this manager never writes that path again, and the next
 	 *   {@link newSession} or {@link setSessionFile} starts from scratch. A
