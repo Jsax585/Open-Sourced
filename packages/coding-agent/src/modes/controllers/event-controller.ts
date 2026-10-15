@@ -44,6 +44,7 @@ import {
 	resolveAbortLabel,
 } from "../../session/messages";
 import { formatApprovalPrompt, resolveApproval } from "../../tools/approval";
+import { getApprovalCache } from "../../tools/approval-cache";
 import { recoverAskQuestions } from "../../tools/ask";
 import { previewLine, PREVIEW_LIMITS, TRUNCATE_LENGTHS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
@@ -1966,7 +1967,7 @@ export class EventController {
 		if (!tool) return undefined;
 		const mode = cfgToolsApprovalMode.get(settings);
 		const userPolicies: Record<string, unknown> = cfgToolsApproval.get(settings);
-		const approval = resolveApproval(tool, args, mode, userPolicies);
+		const approval = resolveApproval(tool, args, mode, userPolicies, getApprovalCache(settings.getAgentDir()));
 		if (approval.policy !== "prompt") return undefined;
 		return { state: "blocked", kind: "permission", msg: formatApprovalPrompt(tool, args, approval.reason) };
 	}

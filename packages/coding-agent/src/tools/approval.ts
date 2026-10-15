@@ -10,12 +10,15 @@ import type { AgentTool, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-age
 import type { Settings } from "../config/settings";
 import type { ExtensionUIContext } from "../extensibility/extensions/types";
 
+import { type ApprovalGrantStore, getApprovalCache } from "./approval-cache";
+
 import { cfgToolsApproval, cfgToolsApprovalMode } from "./settings";
 
 export type { ToolApproval, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
+export type { ApprovalGrantStore, ApprovalCacheFile, ApprovalGrant } from "./approval-cache";
 
 export type ApprovalPolicy = "allow" | "deny" | "prompt";
-export type ApprovalMode = "always-ask" | "write" | "yolo";
+export type ApprovalMode = "always-ask" | "always-ask-cached" | "write" | "yolo";
 
 /** The slice of `AgentToolContext` that approval resolution actually reads. */
 export type ApprovalContextSource = {
@@ -28,7 +31,7 @@ export interface ResolvedExecuteTimeApproval {
 	userPolicies: Record<string, unknown>;
 }
 
-type ApprovalSubject = Pick<AgentTool, "name" | "approval" | "formatApprovalDetails"> & {
+type ApprovalSubject = Pick<AgentTool, "name" | "approval" | "formatApprovalDetails" | "approvalCacheTargets"> & {
 	/**
 	 * Previous public name of this tool, when a rename changed how it mints.
 	 * MCP tools minted before digits were kept carry their digit-stripped name
@@ -38,7 +41,7 @@ type ApprovalSubject = Pick<AgentTool, "name" | "approval" | "formatApprovalDeta
 	readonly legacyName?: string;
 };
 
-const APPROVAL_MODES: ReadonlySet<ApprovalMode> = new Set(["always-ask", "write", "yolo"]);
+const APPROVAL_MODES: ReadonlySet<ApprovalMode> = new Set(["always-ask", "always-ask-cached", "write", "yolo"]);
 
 function isApprovalMode(value: unknown): value is ApprovalMode {
 	return typeof value === "string" && APPROVAL_MODES.has(value as ApprovalMode);
@@ -120,9 +123,62 @@ export function strictestApproval(decisions: Iterable<ToolApprovalDecision>): To
 
 const APPROVAL_MODE_MAX_TIER: Record<ApprovalMode, ToolTier> = {
 	"always-ask": "read",
+	"always-ask-cached": "read",
 	write: "write",
 	yolo: "exec",
 };
+
+/** Cache targets a tool reports for this call, blanks dropped; empty when the tool declares none. */
+function approvalCacheTargets(tool: ApprovalSubject, args: unknown): string[] {
+	const raw = tool.approvalCacheTargets?.(args);
+	if (!raw) return [];
+	const targets: string[] = [];
+	for (const target of raw) {
+		if (typeof target === "string" && target.length > 0) targets.push(target);
+	}
+	return targets;
+}
+
+/**
+ * Fallback decision for `always-ask-cached` (reached only when no tool or user
+ * policy already decided). Read/write calls run without asking once every cache
+ * target is approved; otherwise they prompt, and `recordApprovalCacheTargets`
+ * remembers the targets when the user approves. Exec calls always prompt.
+ * Read-tier tools without cache targets (searches, listings) stay auto-approved
+ * exactly as in `always-ask`.
+ */
+function resolveCachedModeApproval(
+	tool: ApprovalSubject,
+	args: unknown,
+	decision: Omit<ResolvedApproval, "policy"> & { policy?: ApprovalPolicy },
+	grants: ApprovalGrantStore,
+): ResolvedApproval {
+	const base = {
+		tier: decision.tier,
+		override: false,
+		source: "mode" as const,
+		...(decision.policyKey ? { policyKey: decision.policyKey } : {}),
+	};
+	if (decision.tier === "exec") {
+		return { ...base, policy: "prompt", ...(decision.reason ? { reason: decision.reason } : {}) };
+	}
+	const targets = approvalCacheTargets(tool, args);
+	if (targets.length === 0) {
+		if (decision.tier === "read") return { ...base, policy: "allow" };
+		return { ...base, policy: "prompt", reason: decision.reason ?? "target not yet approved" };
+	}
+	if (targets.every(target => grants.has(target))) return { ...base, policy: "allow" };
+	return { ...base, policy: "prompt", reason: decision.reason ?? "target not yet approved" };
+}
+
+/**
+ * Record every cache target of a call the user just approved. No-op for tools
+ * without targets and for blank keys, so an approved call never widens a grant
+ * beyond the target the prompt showed.
+ */
+export function recordApprovalCacheTargets(tool: ApprovalSubject, args: unknown, grants: ApprovalGrantStore): void {
+	for (const target of approvalCacheTargets(tool, args)) grants.record(target, tool.name);
+}
 
 const DEFAULT_PROMPT_TRUNCATE_CHARS = 2000;
 
@@ -196,7 +252,11 @@ function modeApprovesTier(mode: ApprovalMode, tier: ToolTier): boolean {
  *     the keyed sub-tool (e.g. an `xd://` device dispatch without a device
  *     policy still honors `tools.approval.write`).
  *  2. User per-tool override, if set and valid.
- *  3. Active mode tier comparison.
+ *  3. Active mode tier comparison. In `always-ask-cached`, read/write calls
+ *     whose {@link ApprovalSubject.approvalCacheTargets} are all present in
+ *     `grants` are allowed; other read/write calls prompt and record their
+ *     targets on approval (see {@link recordApprovalCacheTargets}); exec calls
+ *     always prompt.
  *
  * In yolo mode, override-based tool prompts are ignored; user `tools.approval`
  * settings remain authoritative.
@@ -206,6 +266,7 @@ export function resolveApproval(
 	args: unknown,
 	mode: ApprovalMode,
 	userConfig: Record<string, unknown> = {},
+	grants: ApprovalGrantStore = getApprovalCache(),
 ): ResolvedApproval {
 	const decision = getToolDecision(tool, args);
 	const policyKey = decision.policyKey ?? tool.name;
@@ -303,6 +364,10 @@ export function resolveApproval(
 			source: "user",
 			...(combinedUserPolicyKey ? { policyKey: combinedUserPolicyKey } : {}),
 		};
+	}
+
+	if (mode === "always-ask-cached") {
+		return resolveCachedModeApproval(tool, args, decision, grants);
 	}
 
 	if (modeApprovesTier(mode, decision.tier)) {

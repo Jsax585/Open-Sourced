@@ -83,6 +83,7 @@ import {
 	scanFileForConflicts,
 } from "./conflict-detect";
 import { executeReadUrl, fetchReadUrl, parseReadUrlTarget } from "./fetch";
+import { approvalTargetKey } from "./approval-targets";
 import { postProcessToolResult, resolveOutputMaxColumns } from "./output-meta";
 import {
 	expandPath,
@@ -992,6 +993,18 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		readPath = splitImageQuestionTarget(readPath).path;
 		const target = splitPathAndSel(readPath);
 		return target.sel === undefined && splitPdfImageReadPath(readPath) ? "exec" : "read";
+	};
+	/**
+	 * `always-ask-cached` key: the file this read targets, with every selector
+	 * (`:120-140`, `:raw`, `:img`, `?q=`) peeled, so all reads of one file share
+	 * a single grant. URL targets keep their normalized form.
+	 */
+	readonly approvalCacheTargets = (args: unknown): readonly string[] | undefined => {
+		const rawPath = args && typeof args === "object" && "path" in args ? String(args.path ?? "") : "";
+		if (rawPath.length === 0) return undefined;
+		const { path: selectorless } = splitPathAndSel(splitImageQuestionTarget(rawPath).path);
+		const key = approvalTargetKey(this.session.cwd, selectorless);
+		return key === undefined ? undefined : [key];
 	};
 	readonly label = "Read";
 	readonly loadMode = "essential";

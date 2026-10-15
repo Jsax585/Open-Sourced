@@ -15,11 +15,13 @@ import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import nativeDelegationTemplate from "../../prompts/tools/native-delegation.md" with { type: "text" };
 import {
 	denyError,
+	recordApprovalCacheTargets,
 	requestApproval,
 	resolveApproval,
 	resolveApprovalFromContext,
 	truncateForPrompt,
 } from "../../tools/approval";
+import { getApprovalCache } from "../../tools/approval-cache";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import { withFileMutationSession } from "../../tools/file-write-fallback";
 import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-input";
@@ -251,10 +253,20 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		// runner is touched — an already-denied tool never emits `tool_call` — while the full gate below
 		// re-resolves against the (possibly revised) input so a handler cannot rewrite into a denied or
 		// newly prompt-gated command and have it run unapproved.
+		const effectiveSettings = context?.settings ?? this.runner.sessionSettings;
 		const { approvalMode, userPolicies } = resolveApprovalFromContext(
 			context ?? (this.runner.sessionSettings ? { settings: this.runner.sessionSettings } : undefined),
 		);
-		const preResolved = resolveApproval(this.tool, approvalArgs(params, context), approvalMode, userPolicies);
+		// `always-ask-cached` grants live in the effective session's agent directory; one store is
+		// shared by the pre-check, the full gate, and the post-approval record below.
+		const approvalCache = getApprovalCache(effectiveSettings?.getAgentDir());
+		const preResolved = resolveApproval(
+			this.tool,
+			approvalArgs(params, context),
+			approvalMode,
+			userPolicies,
+			approvalCache,
+		);
 		if (preResolved.policy === "deny") {
 			throw denyError(preResolved, this.tool.name);
 		}
@@ -326,7 +338,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		// input that newly resolves to `deny` is caught here even though the original passed the
 		// short-circuit above.
 		const resolvedArgs = approvalArgs(effectiveParams, context);
-		const resolved = resolveApproval(this.tool, resolvedArgs, approvalMode, userPolicies);
+		const resolved = resolveApproval(this.tool, resolvedArgs, approvalMode, userPolicies, approvalCache);
 		context?.xdevTierResolved?.(resolved.tier);
 		if (resolved.policy === "deny") {
 			cancelPreflight();
@@ -421,6 +433,18 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			if (!approved) {
 				cancelPreflight();
 				throw new Error(`Tool call denied by user: ${this.tool.name}`);
+			}
+			// `always-ask-cached`: a prompt the mode itself raised, now approved, remembers every
+			// target it asked about so the next operation on them runs without asking. Prompts forced
+			// by tool or user policy (e.g. explicit `prompt`) stay per-call, and exec calls are never
+			// cached.
+			if (
+				approvalMode === "always-ask-cached" &&
+				resolved.policy === "prompt" &&
+				resolved.source === "mode" &&
+				resolved.tier !== "exec"
+			) {
+				recordApprovalCacheTargets(this.tool, resolvedArgs, approvalCache);
 			}
 			if (pendingSafetyChecks.length > 0) {
 				if (!context) {

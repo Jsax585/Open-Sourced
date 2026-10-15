@@ -32,8 +32,12 @@
 
 import { isServiceTierOpenAISettingValue, SERVICE_TIER_OPENAI_VALUES } from "../config/service-tier";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import type { ApprovalMode } from "../tools/approval";
 import type { Args } from "./args";
 import { CliUsageError } from "./usage-error";
+
+/** Every `--approval-mode` value; typed so a new mode cannot be forgotten here. */
+const APPROVAL_MODE_VALUES: readonly ApprovalMode[] = ["always-ask", "always-ask-cached", "write", "yolo"];
 
 /**
  * Runtime dependencies injected into setters that need to validate input.
@@ -239,13 +243,13 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 		result.skills = value.split(",").map(s => s.trim());
 	},
 	"--approval-mode": (result, value) => {
-		if (value !== "always-ask" && value !== "write" && value !== "yolo") {
+		if (!(APPROVAL_MODE_VALUES as readonly string[]).includes(value)) {
 			result.invalidFlagValues.push(
-				`Invalid --approval-mode value: ${JSON.stringify(value)}. Expected one of: always-ask, write, yolo.`,
+				`Invalid --approval-mode value: ${JSON.stringify(value)}. Expected one of: ${APPROVAL_MODE_VALUES.join(", ")}.`,
 			);
 			return;
 		}
-		result.approvalMode = value;
+		result.approvalMode = value as ApprovalMode;
 	},
 };
 

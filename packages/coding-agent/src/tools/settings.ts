@@ -305,25 +305,34 @@ export const cfgToolsApproval = register({
 });
 
 // Default tool approval mode (interaction tab, but governs the tool wrapper).
-//   "always-ask" — auto-approves read-tier tools only; prompts for write/exec.
-//   "write"      — auto-approves read and write-tier tools; prompts for exec.
-//   "yolo"       — auto-approves every tier.
+//   "always-ask"        — auto-approves read-tier tools only; prompts for write/exec.
+//   "always-ask-cached" — prompts per target for read/write tools; approved targets
+//                         are remembered under the agent directory and skip later
+//                         prompts. Exec-tier tools keep prompting.
+//   "write"             — auto-approves read and write-tier tools; prompts for exec.
+//   "yolo"              — auto-approves every tier.
 export const cfgToolsApprovalMode = register({
 	id: "tools.approvalMode",
 	type: "enum",
-	values: ["always-ask", "write", "yolo"] as const,
+	values: ["always-ask", "always-ask-cached", "write", "yolo"] as const,
 	default: "yolo",
 	ui: {
 		tab: "interaction",
 		group: "Approvals",
 		label: "Tool Approval",
 		description:
-			"Default approval behavior for tool calls. 'Always ask' auto-approves read-only tools only. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers; user policy may still prompt or block.",
+			"Default approval behavior for tool calls. 'Always ask' auto-approves read-only tools only. 'Always ask, cached' prompts for read/write targets once per target and remembers approvals. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers; user policy may still prompt or block.",
 		options: [
 			{
 				value: "always-ask",
 				label: "Always ask",
 				description: "Auto-approve read-only tools; require confirmation for write and exec tools.",
+			},
+			{
+				value: "always-ask-cached",
+				label: "Always ask, cached",
+				description:
+					"Require confirmation for read and write tools the first time they touch a file, then remember the approved path so later operations on it run without asking. Exec tools still require confirmation every time.",
 			},
 			{
 				value: "write",

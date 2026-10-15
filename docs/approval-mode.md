@@ -17,13 +17,28 @@ When an execute-time caller supplies neither settings nor `autoApprove`, approva
 
 Configure with `tools.approvalMode`:
 
-| Mode             | Auto-approves           | Prompts for     |
-| ---------------- | ----------------------- | --------------- |
-| `always-ask`     | `read`                  | `write`, `exec` |
-| `write`          | `read`, `write`         | `exec`          |
-| `yolo` (default) | `read`, `write`, `exec` | none            |
+| Mode                 | Auto-approves           | Prompts for     |
+| -------------------- | ----------------------- | --------------- |
+| `always-ask`         | `read`                  | `write`, `exec` |
+| `always-ask-cached`  | approved targets        | `write`, `exec`, new `read` targets |
+| `write`              | `read`, `write`         | `exec`          |
+| `yolo` (default)     | `read`, `write`, `exec` | none            |
 
 `--approval-mode <mode>` overrides the configured mode for the session. `--auto-approve` and `--yolo` force yolo execution even when an explicit `--approval-mode` is also supplied; tool/user denies and explicit tool prompt policies still apply.
+
+### Cached approvals (`always-ask-cached`)
+
+`always-ask-cached` behaves like `always-ask` for exec-tier tools — they prompt on every call — but turns read/write file operations into one approval per target:
+
+- The first `read`, `write`, or `edit` touching a path prompts (`Reason: target not yet approved`).
+- Approving records that target in `approval-cache.json` under the active agent directory (`~/.omp/agent/approval-cache.json`, or the profile's equivalent). Later operations on the same target run without prompting.
+- A read of `file.ts:120-140` and a write to `file.ts` share one entry: the selector (`:120-140`, `:raw`, `:img`, `?q=`) is peeled, the path resolves against the session cwd, and case is folded on case-insensitive platforms. Registered internal URLs (`xd://…`, `local://…`) are keyed by their normalized URL.
+- Denying leaves no entry, so the next attempt prompts again.
+- Read-tier tools without a target (`glob`, `grep`, listings) stay auto-approved, and write-tier tools with no resolvable target keep prompting every call.
+- Prompts forced by a tool's own `policy: prompt`/`override` or by `tools.approval.<tool>: prompt` stay per-call: only approvals raised by the mode itself are cached.
+- `--auto-approve`/`--yolo` still force yolo execution and bypass the cache entirely.
+
+The cache file is a plain JSON map of normalized target → `{ tool, approvedAt }`; deleting the file (or an entry) revokes the grants.
 
 ## User overrides
 
@@ -55,7 +70,7 @@ Resolution per tool call:
 3. In `yolo`, an explicit tool `allow`/`prompt` policy wins; otherwise the valid user policy wins, or the call is allowed. The `override` flag alone does not force a prompt in `yolo`.
 4. In non-yolo modes, an `override: true` decision allows only an accompanying tool `policy: allow`; every other non-denied case prompts.
 5. Without an override, an explicit tool `allow`/`prompt` policy wins, then a valid user policy wins.
-6. With no explicit policy, the active mode auto-approves or prompts by tier.
+6. With no explicit policy, the active mode auto-approves or prompts by tier. In `always-ask-cached`, that mode step instead allows a read/write call whose `approvalCacheTargets` are all approved and prompts otherwise; approving records them.
 
 Policy strings are trimmed and case-normalized. Invalid user values are ignored.
 
@@ -123,7 +138,10 @@ export type ToolApproval = ToolApprovalDecision | ((args: unknown) => ToolApprov
 
 approval?: ToolApproval;
 formatApprovalDetails?: (args: unknown) => string | string[] | undefined;
+approvalCacheTargets?: (args: unknown) => readonly string[] | undefined;
 ```
+
+`approvalCacheTargets` feeds `always-ask-cached`: the returned keys are checked against the grant file before the mode prompts, and recorded when the user approves. Path-based tools (`read`, `write`, `edit`) derive them through `approvalTargetKey` so a selector-stripped, cwd-resolved path (or normalized internal URL) is the unit of approval. Tools that omit it never get cached grants.
 
 Examples:
 

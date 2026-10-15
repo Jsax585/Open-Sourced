@@ -1225,6 +1225,15 @@ export interface AgentTool<
 	/** Lines appended after the standard approval prompt header. */
 	formatApprovalDetails?: (args: unknown) => string | string[] | undefined;
 
+	/**
+	 * Resolved cache targets for `tools.approvalMode: always-ask-cached`: the
+	 * paths (or URL targets) this call needs to touch. When every returned key
+	 * is already approved, the call skips the cached-mode prompt; approving the
+	 * call records these keys. Return `undefined` (or an empty array) for tools
+	 * whose calls must always re-prompt.
+	 */
+	approvalCacheTargets?: (args: unknown) => readonly string[] | undefined;
+
 	/** The main execution callback for this tool. */
 	execute: AgentToolExecFn<TParameters, TDetails, TTheme>;
 

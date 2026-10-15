@@ -91,7 +91,7 @@ export interface Args {
 	/** RPC modes only: run extensions without a UI; `rpc-ui` tool UI remains enabled. */
 	noUi?: boolean;
 	autoApprove?: boolean;
-	approvalMode?: "always-ask" | "write" | "yolo";
+	approvalMode?: "always-ask" | "always-ask-cached" | "write" | "yolo";
 	messages: string[];
 	fileArgs: string[];
 	/** Extension-registered flags this parse recognized — name to value. */
