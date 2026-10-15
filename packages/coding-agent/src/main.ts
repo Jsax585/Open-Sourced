@@ -1837,6 +1837,7 @@ async function runHostedInteractive(options: {
 	parsedArgs: Args;
 	rawArgs: string[];
 	cwd: string;
+	launchCwd: string;
 	sessionManager: SessionManager | undefined;
 	settings: Settings;
 	authStorage: AuthStorage;
@@ -1849,7 +1850,7 @@ async function runHostedInteractive(options: {
 	// From the argv as given, before anything below makes the local session lean.
 	const launch: HostLaunch = {
 		cwd,
-		args: hostLaunchArgs(options.rawArgs),
+		args: hostLaunchArgs(options.rawArgs, options.launchCwd),
 		sessionDir: parsedArgs.sessionDir,
 	};
 	const processedFiles =
@@ -2024,6 +2025,8 @@ export async function runRootCommand(
 		}
 
 		let cwd = getProjectDir();
+		// Where this launch's relative paths are read; a resume below may move `cwd` to the session's directory.
+		const launchCwd = cwd;
 		// Classify the host before opening auth or settings storage so every
 		// session-critical database connection picks the right busy timeout.
 		// See getDbBusyTimeoutMs().
@@ -2434,6 +2437,7 @@ export async function runRootCommand(
 				parsedArgs,
 				rawArgs,
 				cwd,
+				launchCwd,
 				sessionManager,
 				settings: settingsInstance,
 				authStorage,
