@@ -1460,6 +1460,18 @@ export async function buildSessionOptions(
 			// Discover a cold live-only provider before fuzzy matching can bind
 			// its selector to an unrelated provider's model with a similar name.
 			await modelRegistry.refreshDiscoverableProviders([provider]);
+			// A public tunnel that answers 401/403 records `unauthenticated` and
+			// returns no models. resolveCliModel only sees the empty catalog, so
+			// it would exit with `Unknown provider` and hide the /login remedy.
+			const discoveryId = modelRegistry.getDiscoveryProviderId(provider) ?? provider;
+			const discovery = modelRegistry.getProviderDiscoveryState(discoveryId);
+			if (discovery?.status === "unauthenticated" && discovery.models.length === 0) {
+				const detail = discovery.error ? ` (${discovery.error})` : "";
+				process.stderr.write(
+					`${chalk.red(`Provider "${discovery.provider}" rejected authentication${detail}. Run \`omp\` and use /login to sign in.`)}\n`,
+				);
+				process.exit(1);
+			}
 		}
 		const resolved = resolveCliModel({
 			cliProvider: parsed.provider,

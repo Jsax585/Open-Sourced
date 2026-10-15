@@ -40,10 +40,10 @@ for (const args of [
 	});
 }
 
-test("a public tunnel 401 is an authentication failure, not a missing catalog", async () => {
+test("a public tunnel 401 tells --provider openzoo to /login", async () => {
 	// models.yml scopes the tunnel so this does not touch OPENZOO_BASE_URL.
-	// A cold cache used to record the provider unavailable and an explicit
-	// openzoo/auto selection reported a missing model instead of /login.
+	// Discovery records unauthenticated and returns no models. The CLI used to
+	// ignore that state and exit with Unknown provider "openzoo".
 	const tmp = await TempDir.create("@openzoo-tunnel-auth-");
 	await Bun.write(
 		tmp.join("models.yml"),
@@ -55,14 +55,30 @@ test("a public tunnel 401 is an authentication failure, not a missing catalog", 
 		settings,
 		fetch: async () => new Response("unauthorized", { status: 401 }),
 	});
+	let stderr = "";
+	const write = spyOn(process.stderr, "write").mockImplementation(chunk => {
+		stderr += String(chunk);
+		return true;
+	});
+	const exit = spyOn(process, "exit").mockImplementation(code => {
+		throw new Error(`exit ${code}`);
+	});
 	try {
-		await registry.refreshProvider("openzoo", "online");
-		expect(registry.getProviderDiscoveryState("openzoo")).toMatchObject({
-			status: "unauthenticated",
-			error: "HTTP 401 from https://tunnel.example/v1/models",
-		});
-		expect(registry.find("openzoo", "auto")).toBeUndefined();
+		await expect(
+			buildSessionOptions(
+				parseArgs(["--provider", "openzoo", "--model", "auto"]),
+				[],
+				undefined,
+				registry,
+				settings,
+			),
+		).rejects.toThrow("exit 1");
+		expect(stderr).toContain("/login");
+		expect(stderr).toContain("openzoo");
+		expect(stderr).not.toContain("Unknown provider");
 	} finally {
+		write.mockRestore();
+		exit.mockRestore();
 		authStorage.close();
 		await tmp.remove();
 	}
