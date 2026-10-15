@@ -342,10 +342,6 @@ interface ActiveAdvisor {
 	syncBacklog: AdvisorSyncBacklog | undefined;
 	/** Eligible updates since the last reset; a review is scheduled at each multiple of the interval. */
 	eligibleUpdates: number;
-	/** Primary-turn count when the latest review was scheduled; the update that
-	 *  runs from it covers work up to this turn. Notes stamped with it so merged
-	 *  deliveries can show how many turns old each review was. */
-	pendingCoveredTurn: number;
 	retryFallback?: AdvisorRetryFallbackState;
 	retryFallbackPendingSuccess: boolean;
 	/** Count of consecutive usage-limit block waits, bounded by retry.maxRetries; reset on turn success. */
@@ -677,10 +673,13 @@ export class SessionAdvisors {
 				if (scheduled) {
 					scheduledAdvisors ??= [];
 					scheduledAdvisors.push(advisor);
-					advisor.pendingCoveredTurn = this.#advisorPrimaryTurnsCompleted;
 				}
 				try {
-					advisor.runtime.onTurnEnd(messages, { willContinue, dispatch: scheduled });
+					advisor.runtime.onTurnEnd(messages, {
+						willContinue,
+						dispatch: scheduled,
+						coveredTurn: this.#advisorPrimaryTurnsCompleted,
+					});
 				} catch (error) {
 					logger.warn("advisor onTurnEnd threw; delta dropped", { advisor: advisor.name, err: String(error) });
 				}
@@ -1567,7 +1566,7 @@ export class SessionAdvisors {
 				maintainContext: (incoming, signal) => this.#maintainAdvisorContext(advisorRef, incoming, signal),
 				obfuscator: this.#host.obfuscator(),
 				getModelIdentity: () => formatModelString(advisorRef.agent.state.model),
-				beginAdvisorUpdate: inProgress => {
+				beginAdvisorUpdate: (inProgress, coveredTurn) => {
 					advisorRef.recorder.beginTurn();
 					// Flushes the deferred backlog on the in-progress→completed
 					// transition (notes already cleared admission when reserved) and
@@ -1575,10 +1574,7 @@ export class SessionAdvisors {
 					// notes — both owned by the tool now. A queued WIP review may
 					// start after a terminal boundary flushed deferred notes; do not
 					// re-arm in-progress deferral.
-					advisorRef.adviseTool.beginUpdate(
-						inProgress && this.#advisorPrimaryWillContinue,
-						advisorRef.pendingCoveredTurn,
-					);
+					advisorRef.adviseTool.beginUpdate(inProgress && this.#advisorPrimaryWillContinue, coveredTurn);
 				},
 				onTurnError: (error, failedMessages, signal) =>
 					this.#recoverAdvisorTurn(advisorRef, error, failedMessages, signal),
@@ -1645,7 +1641,6 @@ export class SessionAdvisors {
 				reviewInterval: descriptor.reviewInterval,
 				syncBacklog: descriptor.syncBacklog,
 				eligibleUpdates: carried?.get(slug)?.eligibleUpdates ?? 0,
-				pendingCoveredTurn: 0,
 				retryFallbackPendingSuccess: false,
 				usageLimitRetries: 0,
 				signature,
