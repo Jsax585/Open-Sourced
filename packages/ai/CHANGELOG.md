@@ -14,7 +14,7 @@
 - Added experimental native image judgments for TypeSafe Jev's `jev-latest`, `jev-preview`, `jev-1.13.0`, and `jev-1.14.0`, plus OpenRouter's `typesafe/jev-1.13`, `typesafe/jev-1.14`, and `~typesafe/jev-latest` models; images outside Jev's documented size bounds fall through to a vision chat judge instead of failing ([#15887](https://github.com/can1357/oh-my-pi/pull/15887) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy))
 ### Added
 
-- Added `/v1/codex/responses` to auth-gateway for Codex HTTP/SSE clients, with namespaced custom tools, client-side tool discovery, zstd requests, and encrypted reasoning replay on OpenAI, Azure, and Codex Responses upstreams.
+- Added `/v1/codex/responses` to auth-gateway for Codex HTTP/SSE clients, with namespaced custom tools, client-side tool discovery, zstd requests, and encrypted reasoning replay on OpenAI, Azure, and Codex Responses upstreams ([#15903](https://github.com/can1357/oh-my-pi/pull/15903) by [@kanren3](https://github.com/kanren3)).
 
 ### Fixed
 
