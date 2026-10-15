@@ -91,6 +91,6 @@ export function bindingsReleaseVersion(bindings) {
 export function bindingsHaveReleaseIdentity(bindings) {
 	return (
 		typeof bindings.__piNativesBuildVersion === "function" ||
-		Object.keys(bindings).some(key => key.match(LEGACY_SENTINEL_RE))
+		Object.keys(bindings).some(key => LEGACY_SENTINEL_RE.test(key))
 	);
 }
