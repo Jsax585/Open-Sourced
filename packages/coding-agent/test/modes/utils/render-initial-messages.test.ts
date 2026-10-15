@@ -886,7 +886,7 @@ describe("UiHelpers.renderInitialMessages — redraw window", () => {
 
 	it.each([
 		["a focused subagent", { focusedAgentId: "Scout" }],
-		["a collab guest", { collabGuest: {} }],
+		["a collab guest's replica", { collabGuest: { showsReplica: true } }],
 	])("draws the full history for %s, which /tree cannot browse", async (_view, fields) => {
 		const rendered = makeRenderCtx(transcriptWith(turns(4)), true, false, { "display.transcriptReplayLimit": 3 });
 		Object.assign(rendered.ctx, fields);
@@ -895,6 +895,16 @@ describe("UiHelpers.renderInitialMessages — redraw window", () => {
 
 		expect(text).not.toContain("earlier message");
 		expect(text).toContain("question 0");
+	});
+
+	it("windows the local session a collab guest returns to while leaving is still in progress", async () => {
+		const rendered = makeRenderCtx(transcriptWith(turns(4)), true, false, { "display.transcriptReplayLimit": 3 });
+		Object.assign(rendered.ctx, { collabGuest: { showsReplica: false } });
+		await new UiHelpers(rendered.ctx).renderInitialMessages({ clearTerminalHistory: true });
+		const text = Bun.stripANSI(rendered.chatContainer.render(120).join("\n"));
+
+		expect(text).toContain("earlier messages not shown");
+		expect(text).not.toContain("question 0");
 	});
 
 	it("uses the whole part of a fractional limit from config", async () => {

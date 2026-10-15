@@ -270,6 +270,14 @@ export class CollabGuestLink {
 		return this.#readOnly;
 	}
 
+	/**
+	 * True while the transcript shows the host's replica: false once leaving
+	 * starts, though `collabGuest` stays set until the local session is back.
+	 */
+	get showsReplica(): boolean {
+		return !this.#left;
+	}
+
 	/** Shows the read-only status hint when applicable; true when the action must be dropped. */
 	#rejectReadOnly(): boolean {
 		if (!this.#readOnly) return false;

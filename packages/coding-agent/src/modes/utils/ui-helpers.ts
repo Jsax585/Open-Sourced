@@ -987,13 +987,14 @@ export class UiHelpers {
 	 * receiving progress. Clearing native scrollback means every drawn row is
 	 * re-sent to the terminal; earlier history stays browsable in /tree. Views
 	 * without /tree access to their own history (a focused subagent, a collab
-	 * guest) are drawn in full.
+	 * guest's replica) are drawn in full; the local session a guest returns to
+	 * is windowed like any other.
 	 */
 	#transcriptWindowStart(
 		messages: readonly AgentMessage[],
 		isLiveBackgroundJob: (message: ToolResultMessage) => boolean,
 	): number {
-		if (messages.length === 0 || this.ctx.focusedAgentId || this.ctx.collabGuest) return 0;
+		if (messages.length === 0 || this.ctx.focusedAgentId || this.ctx.collabGuest?.showsReplica) return 0;
 		// Config accepts any finite number; a fractional limit would index between messages.
 		const limit = Math.trunc(cfgDisplayTranscriptReplayLimit.get(this.ctx.settings));
 		if (limit <= 0 || messages.length <= limit) return 0;
