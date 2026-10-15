@@ -1852,6 +1852,7 @@ async function runHostedInteractive(options: {
 		cwd,
 		launchCwd: options.launchCwd,
 		sessionDir: parsedArgs.sessionDir,
+		envSessionDir: $env.PI_CODING_AGENT_SESSION_DIR,
 	});
 	const processedFiles =
 		parsedArgs.fileArgs.length > 0
