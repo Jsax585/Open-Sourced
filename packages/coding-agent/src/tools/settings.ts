@@ -321,7 +321,7 @@ export const cfgToolsApprovalMode = register({
 		group: "Approvals",
 		label: "Tool Approval",
 		description:
-			"Default approval behavior for tool calls. 'Always ask' auto-approves read-only tools only. 'Always ask, cached' prompts for read/write targets once per target and remembers approvals. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers; user policy may still prompt or block.",
+			"Default approval behavior for tool calls. 'Always ask' auto-approves read-only tools only. 'Ask and remember' prompts for read/write targets once per target and remembers approvals. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers; user policy may still prompt or block.",
 		options: [
 			{
 				value: "always-ask",
@@ -330,9 +330,9 @@ export const cfgToolsApprovalMode = register({
 			},
 			{
 				value: "always-ask-cached",
-				label: "Always ask, cached",
+				label: "Ask and remember",
 				description:
-					"Require confirmation for read and write tools the first time they touch a file, then remember the approved path so later operations on it run without asking. Exec tools still require confirmation every time.",
+					"Ask the first time a read or write tool touches a file, then remember the approved path so later operations on it run without asking. Exec tools still require confirmation every time.",
 			},
 			{
 				value: "write",

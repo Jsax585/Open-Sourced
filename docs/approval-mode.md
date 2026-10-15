@@ -26,9 +26,9 @@ Configure with `tools.approvalMode`:
 
 `--approval-mode <mode>` overrides the configured mode for the session. `--auto-approve` and `--yolo` force yolo execution even when an explicit `--approval-mode` is also supplied; tool/user denies and explicit tool prompt policies still apply.
 
-### Cached approvals (`always-ask-cached`)
+### Ask and remember (`always-ask-cached`)
 
-`always-ask-cached` behaves like `always-ask` for exec-tier tools — they prompt on every call — but turns read/write file operations into one approval per target:
+The **Ask and remember** mode (`always-ask-cached`) behaves like `always-ask` for exec-tier tools — they prompt on every call — but turns read/write file operations into one approval per target:
 
 - The first `read`, `write`, or `edit` touching a path prompts (`Reason: target not yet approved`).
 - Approving records that target in `approval-cache.json` under the active agent directory (`~/.omp/agent/approval-cache.json`, or the profile's equivalent). Later operations on the same target run without prompting.

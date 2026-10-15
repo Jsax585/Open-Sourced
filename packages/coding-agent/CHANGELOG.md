@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added the `always-ask-cached` tool approval mode (`tools.approvalMode`, `--approval-mode always-ask-cached`): the first `read`, `write`, or `edit` touching a path asks for approval, the approved target is remembered in `approval-cache.json` under the agent directory, and later operations on it run without asking. Exec-tier tools keep prompting on every call.
+- Added the **Ask and remember** tool approval mode (`tools.approvalMode: always-ask-cached`, `--approval-mode always-ask-cached`): the first `read`, `write`, or `edit` touching a path asks for approval, the approved target is remembered in `approval-cache.json` under the agent directory, and later operations on it run without asking. Exec-tier tools keep prompting on every call.
 
 ## [18.11.0] - 2026-10-14
 
