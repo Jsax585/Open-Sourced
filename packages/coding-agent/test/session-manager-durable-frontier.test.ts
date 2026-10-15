@@ -1775,6 +1775,41 @@ describe("a turn appended after another writer's entries", () => {
 		expect(userTurnsOf((await reopen(movedTo, sessionDir)).getBranch())).toEqual(["own turn"]);
 	});
 
+	it("moves to a sibling when a persistCopy journal replaces this session with a non-root tail", async () => {
+		const root = TempDir.createSync("@pi-durable-frontier-");
+		tempDirs.push(root);
+		const sessionDir = path.join(root.path(), "sessions");
+		const manager = SessionManager.create(root.path(), sessionDir, new FileSessionStorage());
+		managers.push(manager);
+		manager.appendMessage(assistantMessage("shared seed"));
+		await manager.flush();
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected a persisted session file");
+		const issuedSize = fs.statSync(sessionFile).size;
+
+		const other = await manager.persistCopy({ sessionDir, suppressBreadcrumb: true }, new FileSessionStorage());
+		managers.push(other);
+		other.appendMessage(userTurn("other session's non-root tail"));
+		await other.flush();
+		const otherFile = other.getSessionFile();
+		if (!otherFile) throw new Error("Expected a copied session file");
+		const otherId = other.getSessionId();
+		expect(Buffer.byteLength(fs.readFileSync(otherFile, "utf8"))).toBeGreaterThan(issuedSize);
+		fs.copyFileSync(otherFile, sessionFile);
+
+		manager.appendMessage(userTurn("own turn"));
+		manager.appendMessage(assistantMessage("own reply"));
+		await expect(manager.flush()).resolves.toBeUndefined();
+		await manager.rewriteEntries();
+		await manager.close();
+
+		const movedTo = manager.getSessionFile();
+		expect(movedTo).not.toBe(sessionFile);
+		expect((await reopen(sessionFile, sessionDir)).getSessionId()).toBe(otherId);
+		if (!movedTo) throw new Error("Expected the session to keep a file");
+		expect(userTurnsOf((await reopen(movedTo, sessionDir)).getBranch())).toEqual(["own turn"]);
+	});
+
 	it("reads back only the bytes the other writer appended", async () => {
 		const storage = new ReadCountingStorage();
 		const first = await fileSession();
