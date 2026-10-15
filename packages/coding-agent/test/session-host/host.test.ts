@@ -1268,6 +1268,34 @@ describe("session host goal mode", () => {
 		await host.stop();
 	});
 
+	it("a session host admits a decided continuation after 800 ms, not before", async () => {
+		const host = await startHost();
+		await (await attachClient(host)).detach();
+		await waitFor(async () => (await onlyEntry()).clients === 0);
+		const goalMode = host.session.goalMode;
+		if (!goalMode) throw new Error("the host did not enable goal mode");
+		const admitted: string[] = [];
+		const prompt = spyOn(host.session, "promptCustomMessage").mockImplementation(async message => {
+			admitted.push(message.customType);
+			return true;
+		});
+		const nextMacrotask = () => new Promise<void>(resolve => setImmediate(resolve));
+		vi.useFakeTimers();
+		try {
+			await goalMode.handle({ op: "create", objective: "keep going" });
+			vi.advanceTimersByTime(799);
+			await nextMacrotask();
+			expect(admitted).toEqual([]);
+			vi.advanceTimersByTime(1);
+			await nextMacrotask();
+			expect(admitted).toEqual(["goal-continuation"]);
+		} finally {
+			vi.useRealTimers();
+			prompt.mockRestore();
+		}
+		await host.stop();
+	});
+
 	it("two clients see one continuation per idle", async () => {
 		const host = await startHost();
 		const a = await attachClient(host);

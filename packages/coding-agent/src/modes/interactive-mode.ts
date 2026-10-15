@@ -2685,7 +2685,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (event.type === "config_warnings_changed") {
 					this.#syncConfigWarningHeader();
 				}
-				this.#handleGoalSessionEvent(event);
+				this.handleGoalSessionEvent(event);
 			}),
 			cfgLiveUiSettings.listen(this.settings, (next, previous) => this.#applyUiSettingChanges(next, previous)),
 		);
@@ -3098,7 +3098,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			resolve(input);
 		};
 		this.#scheduleLoopAutoSubmit();
-		this.session.goalMode?.reschedule();
 
 		using _ = new EventLoopKeepalive();
 		return await promise;
@@ -3564,7 +3563,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.updateEditorBorderColor();
 		this.ui.requestRender();
-		this.session.goalMode?.reschedule();
 		return true;
 	}
 
@@ -3613,8 +3611,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#pendingSubmittedInput = undefined;
 			this.#pendingSubmissionDispose = undefined;
 			this.#pendingSubmissionPreservesDraft = false;
-			// The submission held goal continuation back (isBlocked); its run has ended.
-			this.session.goalMode?.reschedule();
 		}
 
 		if (wasPendingSubmission && !this.session.isStreaming && !this.streamingComponent) {
@@ -4849,7 +4845,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/** Presenter for the session's goal mode: the status line and the guided-interview flag. */
-	#handleGoalSessionEvent(event: AgentSessionEvent): void {
+	handleGoalSessionEvent(event: AgentSessionEvent): void {
 		if (event.type === "goal_updated") {
 			if (event.state) this.#guidedGoalInterviewActive = false;
 		} else if (event.type === "agent_end") {

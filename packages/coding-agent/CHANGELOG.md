@@ -394,7 +394,7 @@
 - RPC: delta `message_update` frames (`messageUpdates: "delta"`) now carry the block on start/end events and the message on a restart, so a client can rebuild the streaming message; session-host clients can select the projection in their `hello` (`capabilities.messageUpdates`), which also covers a resume's replay
 - Hosted sessions stream replies as deltas and rebuild them in the client, so a long reply no longer sends the whole message again with every update
 - Hosted terminals run `/new`, `/fork`, `/tree`, `/branch`, the double-Esc rewind, branch summaries and tree labels on the session host, and every attached terminal follows; a change from a view the host has moved past is refused instead of applied to another branch. RPC gains `navigate_tree`, `abort_branch_summary` and `set_label` for this
-- Goal mode runs in the session and works from a hosted terminal: `/goal`, `/guided-goal` and `--goal` (on a newly started host) run on the session host, every attached terminal shows the goal, and the host continues it with default settings (`goal.continuationModes` counts `--mode host` as `"interactive"`) once per idle, with or without attached terminals; `--mode rpc` stays opt-in with `"rpc"`. RPC `goal` gains `replace`, `budget` (without `token_budget` it clears the budget) and `guided` ops, `submitObjective` on `create`/`replace` sends the objective as a visible user prompt, and `RpcClient.goal` takes write preconditions. In the terminal a continuation is no longer a pending submission that Esc can cancel before it starts: a draft or an open dialog during the 800 ms wait still holds it back, and Esc once it has started still pauses the goal
+- Goal mode works in hosted terminals: `/goal`, `/guided-goal` and `--goal` (when the launch starts a new host) run on the session host, every attached terminal shows the goal, and the host keeps continuing it once per idle with or without terminals attached. RPC `goal` gains `replace`, `budget` and `guided` ops and `submitObjective`
 
 ### Changed
 
@@ -405,6 +405,7 @@
 - Idle recap and idle compaction now run from one session-owned scheduler. Clearing a draft re-arms the recap and compaction that the stretch still owes, and a view that is returned to receives the recap it still owed; the former per-terminal timers dropped both ([can1357/oh-my-pi#14468](https://github.com/can1357/oh-my-pi/pull/14468) by [@andrebrait](https://github.com/andrebrait)).
 - Goal mode runs in the session: a session host continues an active goal with default settings (`goal.continuationModes` counts `--mode host` as `"interactive"`), with or without attached clients and once per idle however many are attached; `--mode rpc` stays opt-in with `"rpc"`
 - The terminal's goal mode uses the same session-owned controller: a goal continuation is no longer a pending submission that Esc can cancel before it starts. Typing a draft during the 800 ms wait still holds it back, and Esc once it has started still pauses the goal
+- A goal continuation in the terminal no longer shows as a pending prompt that Esc can cancel before it starts; typing a draft or having a dialog open still holds it back, and Esc after it starts still pauses the goal. In a hosted terminal, a draft does not hold back a continuation yet
 
 ### Fixed
 
