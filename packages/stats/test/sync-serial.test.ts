@@ -146,4 +146,27 @@ describe("stats sync serial mode", () => {
 
 		expect(synced).toEqual({ processed: 200, files: 200 });
 	});
+
+	it("never indexes an in-flight batch after a later worker advances past it", async () => {
+		// Pre-populate file_offsets for the first 128 files so those workers return
+		// null immediately (already-tracked). With 200 files and 4 workers, fast
+		// workers drain batch 1 and advance the shared metadata slots to batch 2
+		// while slower workers are still inside batch 1. A worker that reads the
+		// advanced slots mid-flight computes a negative metadataIndex and crashes
+		// on the parent implementation (undefined array element destructure).
+		const sessionDir = path.join(getSessionsDir(), "--tmp--sync-serial-stale");
+		await fs.mkdir(sessionDir, { recursive: true });
+		const filePaths = Array.from({ length: 200 }, (_, index) => path.join(sessionDir, `session-${index}.jsonl`));
+		await Promise.all(filePaths.map((file, index) => Bun.write(file, sessionLine(`assistant-${index}`))));
+
+		// Pre-populate offsets for files 0–127 (batch 1) so they appear unchanged.
+		await syncAllSessions({ files: filePaths.slice(0, 128), workers: 1 });
+
+		// Sync all 200 with 4 workers: batch-1 workers return null instantly and
+		// race ahead; batch-2 workers trigger the second metadata batch while
+		// batch-1 promises may still be resolving.
+		const synced = await syncAllSessions({ files: filePaths, workers: 4 });
+
+		expect(synced).toEqual({ processed: 72, files: 72 });
+	});
 });

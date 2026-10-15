@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed stats session sync skipping or misreading session files when concurrent workers crossed a metadata batch boundary ([#15808](https://github.com/can1357/oh-my-pi/pull/15808) by [@yuzu-octopus](https://github.com/yuzu-octopus))
+- Fixed stats omitting or miscounting session usage when syncing large histories with concurrent workers ([#15808](https://github.com/can1357/oh-my-pi/pull/15808) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ## [18.11.0] - 2026-10-14
 
