@@ -1803,6 +1803,7 @@ export class EventController {
 			const turnUsage = this.#turnUsage.add(event.message, this.#turnStartedAt);
 			if (turnUsage) this.#lastAssistantComponent.setTurnUsage(turnUsage);
 			if (cfgDisplayShowTokenUsage.get(settings) && assistantUsageIsBilled(event.message.usage)) {
+				const usageRowModel = `${event.message.provider}/${event.message.model}`;
 				const readCallIds = groupedReadUsageCallIds(event.message);
 				const turnElapsed = cfgDisplayShowTurnTime.get(settings)
 					? turnElapsedMs(this.#turnStartedAt, event.message)
@@ -1816,6 +1817,8 @@ export class EventController {
 						event.message.ttft,
 						event.message.timestamp,
 						turnElapsed,
+						usageRowModel,
+						this.ctx.session.thinkingLevel,
 					) ??
 						false);
 				if (!usageAttached) {
@@ -1827,6 +1830,8 @@ export class EventController {
 							event.message.ttft,
 							event.message.timestamp,
 							turnElapsed,
+							usageRowModel,
+							this.ctx.session.thinkingLevel,
 						),
 					);
 				}

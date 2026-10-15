@@ -498,6 +498,7 @@ export class UiHelpers {
 		let pendingUsageDuration: number | undefined;
 		let pendingUsageTtft: number | undefined;
 		let pendingUsageTimestamp: number | undefined;
+		let pendingUsageModel: string | undefined;
 		let pendingReadUsageCallIds: string[] | undefined;
 		let pendingUsageTurnElapsed: number | undefined;
 		let turnStartedAt: number | undefined;
@@ -512,6 +513,7 @@ export class UiHelpers {
 					pendingUsageTtft,
 					pendingUsageTimestamp,
 					pendingUsageTurnElapsed,
+					pendingUsageModel,
 				) ??
 					false);
 			if (!usageAttached) {
@@ -524,6 +526,7 @@ export class UiHelpers {
 						pendingUsageTtft,
 						pendingUsageTimestamp,
 						pendingUsageTurnElapsed,
+						pendingUsageModel,
 					),
 				);
 			}
@@ -531,6 +534,7 @@ export class UiHelpers {
 			pendingUsageDuration = undefined;
 			pendingUsageTtft = undefined;
 			pendingUsageTimestamp = undefined;
+			pendingUsageModel = undefined;
 			pendingReadUsageCallIds = undefined;
 			pendingUsageTurnElapsed = undefined;
 		};
@@ -744,6 +748,7 @@ export class UiHelpers {
 				pendingUsageDuration = message.duration;
 				pendingUsageTtft = message.ttft;
 				pendingUsageTimestamp = message.timestamp;
+				pendingUsageModel = pendingUsage ? `${message.provider}/${message.model}` : undefined;
 				pendingReadUsageCallIds = pendingUsage ? groupedReadUsageCallIds(message) : undefined;
 				pendingUsageTurnElapsed = cfgDisplayShowTurnTime.get(this.ctx.settings)
 					? turnElapsedMs(turnStartedAt, message)

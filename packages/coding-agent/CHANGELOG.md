@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the serving model (`provider/id`) and the effective thinking level to per-turn token-usage rows, including the compact grouped-read row. The model renders on live, rebuilt, and exported transcripts; the thinking level renders on live rows only, since it is not persisted per message ([#7777](https://github.com/can1357/oh-my-pi/pull/7777) by [@jasonharrison](https://github.com/jasonharrison)).
+
 ## [18.11.0] - 2026-10-14
 
 ### Added
