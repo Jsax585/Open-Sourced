@@ -1026,17 +1026,19 @@ export async function discoverAuthStorage(
 ): Promise<AuthStorage> {
 	const { settings, cwd, ...discoveryOptions } = options;
 	const effectiveSettings = await resolveEffectiveSettings({ settings, cwd, agentDir });
-	const policy = await loadEffectiveAuthAccountPolicyConfig({ settings, cwd, agentDir });
+	const policy = await loadEffectiveAuthAccountPolicyConfig({ settings: effectiveSettings });
 	return discoverAuthStorageFromConfig(agentDir, {
 		...discoveryOptions,
 		accountPolicies: discoveryOptions.accountPolicies ?? policy.accountPolicies,
 		authStorageOptions: {
 			...discoveryOptions.authStorageOptions,
 			defaultReservePct: discoveryOptions.authStorageOptions?.defaultReservePct ?? policy.defaultReservePct,
-			automaticPinEviction: discoveryOptions.authStorageOptions?.automaticPinEviction ?? (() => ({
-				secondaryDrainFactor: cfgAuthSecondaryDrainFactor.get(effectiveSettings),
-				maxResetHours: cfgAuthMaxResetHours.get(effectiveSettings),
-			})),
+			automaticPinEviction:
+				discoveryOptions.authStorageOptions?.automaticPinEviction ??
+				(() => ({
+					secondaryDrainFactor: cfgAuthSecondaryDrainFactor.get(effectiveSettings),
+					maxResetHours: cfgAuthMaxResetHours.get(effectiveSettings),
+				})),
 		},
 	});
 }

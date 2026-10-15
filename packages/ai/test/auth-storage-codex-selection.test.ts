@@ -16,6 +16,7 @@ import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/registry/oauth/types";
 import type { UsageLimit, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai/usage";
 import { OAuthRefresher } from "../src/auth/refresh";
+import { resolveCredentialIdentityKey } from "../src/auth/sqlite-credential-store";
 import { removeWithRetries } from "../../utils/src/temp";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -954,14 +955,25 @@ describe("AuthStorage codex oauth ranking", () => {
 				vi.spyOn(Date, "now").mockReturnValue(now);
 				let enabled = false;
 				authStorage = new AuthStorage(store, {
-					usageProviderResolver: provider => provider === "openai-codex" ? usageProvider : undefined,
-					automaticPinEviction: scenario.name === "unset" ? undefined : () => ({
-						secondaryDrainFactor: enabled ? (scenario.factor ?? 2) : 0,
-						maxResetHours: scenario.horizon ?? 12,
-					}),
+					usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
+					automaticPinEviction:
+						scenario.name === "unset"
+							? undefined
+							: () => ({
+									secondaryDrainFactor: enabled ? (scenario.factor ?? 2) : 0,
+									maxResetHours: scenario.horizon ?? 12,
+								}),
 					accountPolicies: [
-						{ provider: "openai-codex", account: { accountId: "acct-pinned" }, priority: scenario.name === "priority" ? 1 : 0 },
-						{ provider: "openai-codex", account: { accountId: "acct-sibling" }, reservePct: scenario.name === "reserve" ? 50 : 0 },
+						{
+							provider: "openai-codex",
+							account: { accountId: "acct-pinned" },
+							priority: scenario.name === "priority" ? 1 : 0,
+						},
+						{
+							provider: "openai-codex",
+							account: { accountId: "acct-sibling" },
+							reservePct: scenario.name === "reserve" ? 50 : 0,
+						},
 					],
 				});
 				await authStorage.credentials.set("openai-codex", [
@@ -988,16 +1000,24 @@ describe("AuthStorage codex oauth ranking", () => {
 				const sessionId = "drain-pin";
 				expect(await authStorage.keys.get("openai-codex", sessionId, { modelId })).toBe("api-acct-pinned");
 				if (scenario.name === "explicit pin") {
-					const account = authStorage.oauth.accounts("openai-codex").find(account => account.accountId === "acct-pinned");
+					const account = authStorage.oauth
+						.accounts("openai-codex")
+						.find(account => account.accountId === "acct-pinned");
 					if (!account) throw new Error("missing pinned account");
 					expect(authStorage.sessions.pin("openai-codex", sessionId, account.credentialId)).toBe(true);
 				}
 				if (scenario.name === "session restriction") {
-					authStorage.sessions.restrict("openai-codex", sessionId, ["account:acct-pinned"]);
+					const key = resolveCredentialIdentityKey("openai-codex", {
+						type: "oauth",
+						...createCredential("acct-pinned", "pinned@example.com"),
+					});
+					if (!key) throw new Error("missing account identity");
+					authStorage.sessions.restrict("openai-codex", sessionId, [key]);
 				}
 				const target = makeReport("acct-sibling", 0.92, scenario.hours ?? 2, scenario.primary ?? 0.1);
 				target.fetchedAt = now - (scenario.age ?? 0);
-				if (scenario.name === "missing secondary") target.limits = target.limits.filter(limit => limit.scope.windowId !== "7d");
+				if (scenario.name === "missing secondary")
+					target.limits = target.limits.filter(limit => limit.scope.windowId !== "7d");
 				if (scenario.name === "unknown primary") {
 					for (const limit of target.limits) {
 						if (limit.scope.windowId !== "7d") limit.amount = { unit: "percent" };
@@ -1009,7 +1029,11 @@ describe("AuthStorage codex oauth ranking", () => {
 				await authStorage.usage.invalidate("openai-codex");
 				if (scenario.name === "failed preflight") {
 					const list = store.listAuthCredentials.bind(store);
-					vi.spyOn(store, "listAuthCredentials").mockImplementation(provider => list(provider).filter(row => row.credential.type === "oauth" && row.credential.accountId === "acct-pinned"));
+					vi.spyOn(store, "listAuthCredentials").mockImplementation(provider =>
+						list(provider).filter(
+							row => row.credential.type === "oauth" && row.credential.accountId === "acct-pinned",
+						),
+					);
 				}
 				const expected = scenario.name === "plan guard" && !modelId ? "sibling" : scenario.expected;
 				expect(await authStorage.keys.get("openai-codex", sessionId, { modelId })).toBe(`api-acct-${expected}`);
