@@ -48,9 +48,9 @@ function isPlainObject(val: object): val is Record<string, unknown> {
 	return Object.getPrototypeOf(val) === Object.prototype || Array.isArray(val);
 }
 
-// Values whose `structuredClone` attempt already threw. A repeat clone of the
-// same value goes straight to the JSON fallback instead of re-traversing an
-// input that cannot be cloned (and re-reading its getters).
+// Values whose `structuredClone` attempt already threw. A repeat clone of a
+// *frozen* value goes straight to the JSON fallback instead of re-traversing an
+// input whose contents cannot change, so the untraversable part is still there.
 const failedCloneValues = new WeakSet<object>();
 
 export function structuredCloneJSON<T>(value: T): T {
@@ -64,9 +64,12 @@ export function structuredCloneJSON<T>(value: T): T {
 		try {
 			return structuredClone(value);
 		} catch {
-			// might still fail due to nested structures; remember it so the next
-			// clone of this value skips the traversal that cannot succeed
-			failedCloneValues.add(value);
+			// Only frozen values are remembered: a mutable value can shed the
+			// member that broke the clone later, and remembering the failure would
+			// force the JSON fallback on a value `structuredClone` can now handle.
+			if (Object.isFrozen(value)) {
+				failedCloneValues.add(value);
+			}
 		}
 	}
 	return JSON.parse(JSON.stringify(value)) as T;
