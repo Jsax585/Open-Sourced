@@ -3587,6 +3587,14 @@ export class AgentSession implements SettingsScope {
 				});
 			}
 		}
+		// After every subscriber: a completed goal's journal entries follow its terminal agent_end.
+		try {
+			this.#goalMode?.observeAfterListeners(event);
+		} catch (err) {
+			logger.warn("Goal mode failed to journal a completed goal", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
 	}
 
 	#emitRunState(state: "running" | "idle"): void {
@@ -6033,6 +6041,7 @@ export class AgentSession implements SettingsScope {
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
+		this.#goalMode?.dispose();
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.#modelDiscoveryAbortController.abort();
 		this.#queuedMessageDrainBlocked = false;
@@ -7462,13 +7471,22 @@ export class AgentSession implements SettingsScope {
 
 	/**
 	 * Run goal mode in this session: one controller decides continuations whatever the number of
-	 * clients. Idempotent (the first owner's options stay). The controller sees every event before
+	 * clients. Idempotent for the same `mode`/`delayMs`; a second owner asking for others throws, as
+	 * does a passive replica, whose owner already runs it. The controller sees every event before
 	 * any subscriber, is stopped by an interrupting {@link abort}, and holds/reattaches the goal
-	 * across session changes. Throws on a passive replica, whose owner already runs it.
+	 * across session changes.
 	 */
 	enableGoalMode(options: GoalModeOptions): GoalModeController {
 		if (this.passiveReplica) throw new Error("A passive replica does not run goal mode");
-		if (this.#goalMode) return this.#goalMode;
+		const running = this.#goalMode;
+		if (running) {
+			if (running.options.mode !== options.mode || running.options.delayMs !== options.delayMs) {
+				throw new Error(
+					`Goal mode already runs with mode ${running.options.mode} and ${running.options.delayMs} ms delay`,
+				);
+			}
+			return running;
+		}
 		const goalMode = new GoalModeController(this, options);
 		this.#goalMode = goalMode;
 		this.#eventListeners = [event => goalMode.observe(event), ...this.#eventListeners];
@@ -8929,14 +8947,8 @@ export class AgentSession implements SettingsScope {
 			getAsyncJobSnapshot: () => this.getAsyncJobSnapshot(),
 			waitForIdle: () => this.waitForIdle(),
 			newSession: async options => {
-				const success = await this.newSession({ parentSession: options?.parentSession });
-				if (!success) {
-					return { cancelled: true };
-				}
-				if (options?.setup) {
-					await options.setup(this.sessionManager);
-				}
-				return { cancelled: false };
+				const success = await this.newSession({ parentSession: options?.parentSession, setup: options?.setup });
+				return { cancelled: !success };
 			},
 			branch: async entryId => {
 				const result = await this.branch(entryId);
@@ -11124,6 +11136,8 @@ export class AgentSession implements SettingsScope {
 				});
 			}
 
+			// Inside the goal hold (see `newSession`), so the reattach sees what setup journals.
+			await options?.setup?.(this.sessionManager);
 			return true;
 		} finally {
 			if (advisorRecordersDetached) {
