@@ -120,3 +120,17 @@ export function appApproveKeys(): readonly KeyId[] {
 export function matchesAppApprove(data: string): boolean {
 	return matchesEffectiveKeys(data, appApproveKeys());
 }
+
+/** Folder-answer defaults when `app.approval.approveFolder` is unbound: approval must stay reachable by keyboard. */
+const APPROVE_FOLDER_DEFAULT_KEYS: readonly KeyId[] = ["f6"];
+
+/** Effective folder-answer keys: the `app.approval.approveFolder` bindings, or F6 when unbound. */
+export function appApproveFolderKeys(): readonly KeyId[] {
+	const keys = getKeybindings().getKeys("app.approval.approveFolder");
+	return keys.length > 0 ? keys : APPROVE_FOLDER_DEFAULT_KEYS;
+}
+
+/** Match the "approve and remember the folder" key shown beside the primary approve key. */
+export function matchesAppApproveFolder(data: string): boolean {
+	return matchesEffectiveKeys(data, appApproveFolderKeys());
+}

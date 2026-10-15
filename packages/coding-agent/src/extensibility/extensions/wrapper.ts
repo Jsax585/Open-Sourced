@@ -14,8 +14,10 @@ import { prompt, sanitizeText, untilAborted } from "@oh-my-pi/pi-utils";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import nativeDelegationTemplate from "../../prompts/tools/native-delegation.md" with { type: "text" };
 import {
+	type ApprovalOutcome,
 	denyError,
 	recordApprovalCacheTargets,
+	recordApprovalFolderGrant,
 	requestApproval,
 	resolveApproval,
 	resolveApprovalFromContext,
@@ -421,25 +423,27 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			const uiContext = this.runner.getUIContext();
 			const safetyAppendix =
 				pendingSafetyChecks.length > 0 ? ["Provider safety checks:", ...safetyCheckLines(pendingSafetyChecks)] : [];
-			let approved: boolean;
+			let outcome: ApprovalOutcome;
 			try {
-				approved = await requestApproval(uiContext, this.tool, resolvedArgs, approvalCheck.reason, safetyAppendix);
+				outcome = await requestApproval(uiContext, this.tool, resolvedArgs, approvalCheck.reason, safetyAppendix);
 			} catch (err) {
 				await emitApprovalResolved(false, err instanceof Error ? err.message : "approval aborted");
 				cancelPreflight();
 				throw err;
 			}
+			const approved = outcome.approved;
 			await emitApprovalResolved(approved, approved ? undefined : "denied by user");
 			if (!approved) {
 				cancelPreflight();
 				throw new Error(`Tool call denied by user: ${this.tool.name}`);
 			}
 			// `always-ask-cached`: a prompt the mode itself raised, now approved, remembers every
-			// target it asked about — a file path or an exact command — so the next operation on it
-			// runs without asking. Prompts forced by tool or user policy (e.g. an explicit `prompt`,
-			// a critical-command override) stay per-call.
+			// target it asked about — a file path, an exact command, or, for the folder answer, the
+			// directory that covers them. Prompts forced by tool or user policy (e.g. an explicit
+			// `prompt`, a critical-command override) stay per-call.
 			if (approvalMode === "always-ask-cached" && resolved.policy === "prompt" && resolved.source === "mode") {
-				recordApprovalCacheTargets(this.tool, resolvedArgs, approvalCache);
+				if (outcome.folder) recordApprovalFolderGrant(this.tool, resolvedArgs, approvalCache);
+				else recordApprovalCacheTargets(this.tool, resolvedArgs, approvalCache);
 			}
 			if (pendingSafetyChecks.length > 0) {
 				if (!context) {

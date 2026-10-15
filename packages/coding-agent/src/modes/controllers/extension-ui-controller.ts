@@ -6,6 +6,7 @@ import { formatKeyHint, formatKeyHints, KeybindingsManager } from "@oh-my-pi/pi-
 import type {
 	CompactOptions,
 	ExtensionActions,
+	ExtensionApprovalAnswer,
 	ExtensionApprovalPrompt,
 	ExtensionAskDialogQuestion,
 	ExtensionAskDialogResult,
@@ -42,6 +43,7 @@ import type { InteractiveModeContext, InteractiveSelectorDialogOptions } from ".
 import { normalizeCustomMessagePayload, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { disambiguateDisplayLabels, sanitizeCarriageReturns } from "@oh-my-pi/pi-tui/render/render-utils";
 import { setExtensionTerminalTitle, setSessionTerminalTitle } from "../../utils/title-generator";
+import { approvalFolderOptionLabel } from "../../tools/approval";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { launchTerminal } from "../../subprocess/terminal-launch";
 
@@ -670,16 +672,20 @@ export class ExtensionUiController {
 	async showCollabAwareApproval(
 		prompt: ExtensionApprovalPrompt,
 		dialogOptions?: ExtensionUIDialogOptions,
-	): Promise<boolean> {
+	): Promise<ExtensionApprovalAnswer> {
+		const folderOption = prompt.folderLabel === undefined ? undefined : approvalFolderOptionLabel(prompt.folderLabel);
 		const request: CollabUiRequestDraft = {
 			kind: "select",
 			title: prompt.full,
-			options: [APPROVE_OPTION, DENY_OPTION],
+			options:
+				folderOption === undefined ? [APPROVE_OPTION, DENY_OPTION] : [APPROVE_OPTION, folderOption, DENY_OPTION],
 		};
 		const session = this.ctx.session;
 		const queued = session.getQueuedMessages().steering;
 		const denying = this.#denyingSteering;
-		if (denying && denying.length <= queued.length && denying.every((text, i) => text === queued[i])) return false;
+		if (denying && denying.length <= queued.length && denying.every((text, i) => text === queued[i])) {
+			return false;
+		}
 		this.#denyingSteering = undefined;
 		const steered = new AbortController();
 		let steeringBaseline = queued.length;
@@ -697,10 +703,15 @@ export class ExtensionUiController {
 					const editor = this.ctx.editor;
 					const dialog = new ApprovalDialogComponent(
 						prompt.compact,
-						{ onApprove: () => settle(APPROVE_OPTION), onDeny: () => settle(DENY_OPTION) },
+						{
+							onApprove: () => settle(APPROVE_OPTION),
+							...(folderOption === undefined ? {} : { onApproveFolder: () => settle(folderOption) }),
+							onDeny: () => settle(DENY_OPTION),
+						},
 						{
 							tui: this.ctx.ui,
 							fullPrompt: prompt.full,
+							...(prompt.folderLabel === undefined ? {} : { folderLabel: prompt.folderLabel }),
 							timeout: dialogOptions?.timeout,
 							onTimeout: dialogOptions?.onTimeout,
 							onTimeoutStart: dialogOptions?.onTimeoutStart,
@@ -728,7 +739,9 @@ export class ExtensionUiController {
 					};
 				}),
 			);
-			return choice === APPROVE_OPTION;
+			if (choice === APPROVE_OPTION) return true;
+			if (folderOption !== undefined && choice === folderOption) return { approved: true, scope: "folder" };
+			return false;
 		} finally {
 			unsubscribe();
 		}

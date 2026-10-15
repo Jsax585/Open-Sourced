@@ -16,6 +16,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	type ApprovalGrantStore,
+	approvalFolderCandidate,
 	recordApprovalCacheTargets,
 	resolveApproval,
 	resolveApprovalFromContext,
@@ -23,6 +24,10 @@ import {
 import {
 	ApprovalCache,
 	APPROVAL_CACHE_FILENAME,
+	approvalAncestorDirectoryKeys,
+	approvalDirectoryCovers,
+	approvalDirectoryKey,
+	commonApprovalDirectoryKey,
 	getApprovalCache,
 } from "@oh-my-pi/pi-coding-agent/tools/approval-cache";
 import { approvalCommandKey, approvalTargetKey } from "@oh-my-pi/pi-coding-agent/tools/approval-targets";
@@ -130,6 +135,72 @@ describe("always-ask-cached resolution", () => {
 		});
 	});
 
+	it("covers read/write targets below a granted folder at any depth", () => {
+		const cwd = path.resolve("/work/project");
+		const key = (target: string) => approvalTargetKey(cwd, target)!;
+		const granted = testGrants([approvalDirectoryKey(path.join(cwd, "TestDir"))]);
+		const read = targetTool("read", "read");
+		const write = targetTool("write", "write");
+		// The tool reports keys, so feed it pre-derived ones through a wrapper.
+		const keyed: AgentTool = { ...read, approvalCacheTargets: () => [key("TestDir/TestFile.exe")] };
+		expect(resolveApproval(keyed, {}, "always-ask-cached", {}, granted).policy).toBe("allow");
+		const nested: AgentTool = { ...read, approvalCacheTargets: () => [key("TestDir/sub/deep/file.ts")] };
+		expect(resolveApproval(nested, {}, "always-ask-cached", {}, granted).policy).toBe("allow");
+		// Outside the granted folder it still asks, and the whole-folder key never matches.
+		const outside: AgentTool = { ...read, approvalCacheTargets: () => [key("OtherDir/file.ts")] };
+		expect(resolveApproval(outside, {}, "always-ask-cached", {}, granted).policy).toBe("prompt");
+		expect(resolveApproval(write, { path: "TestDir/x.txt" }, "always-ask-cached", {}, granted).policy).toBe("prompt");
+	});
+
+	it("covers an exec call whose working directory is inside a granted folder", () => {
+		const cwd = path.resolve("/work/project");
+		const granted = testGrants([approvalDirectoryKey(path.join(cwd, "TestDir"))]);
+		const scoped: AgentTool = {
+			name: "bash",
+			label: "Bash",
+			description: "scoped command tool",
+			parameters: {} as never,
+			approval: "exec",
+			approvalCacheTargets: () => ["bash: anything goes"],
+			approvalCacheScopes: () => [approvalDirectoryKey(path.join(cwd, "TestDir", "sub"))],
+			execute: async () => ({ content: [{ type: "text" as const, text: "executed" }] }),
+		};
+		expect(resolveApproval(scoped, {}, "always-ask-cached", {}, granted).policy).toBe("allow");
+		const elsewhere: AgentTool = {
+			...scoped,
+			approvalCacheScopes: () => [approvalDirectoryKey(path.join(cwd, "Other"))],
+		};
+		expect(resolveApproval(elsewhere, {}, "always-ask-cached", {}, granted).policy).toBe("prompt");
+	});
+
+	it("offers the shared folder as the approval candidate", () => {
+		const cwd = path.resolve("/work/project");
+		const single: AgentTool = {
+			name: "write",
+			label: "Write",
+			description: "single",
+			parameters: {} as never,
+			approval: "write",
+			approvalCacheTargets: () => [approvalTargetKey(cwd, "TestDir/TestFile.exe")!],
+			execute: async () => ({ content: [{ type: "text" as const, text: "executed" }] }),
+		};
+		expect(approvalFolderCandidate(single, {})).toEqual({
+			key: approvalDirectoryKey(path.join(cwd, "TestDir")),
+			label: approvalDirectoryKey(path.join(cwd, "TestDir")).replace(/[\\/]+$/, ""),
+		});
+		const command: AgentTool = {
+			...single,
+			approvalCacheScopes: () => [approvalDirectoryKey(path.join(cwd, "TestDir"))],
+		};
+		expect(approvalFolderCandidate(command, {})).toBeDefined();
+		const urls: AgentTool = {
+			...single,
+			approvalCacheTargets: () => ["xd://todo"],
+			approvalCacheScopes: () => undefined,
+		};
+		expect(approvalFolderCandidate(urls, {})).toBeUndefined();
+	});
+
 	it("requires every target of a multi-target call to be approved", () => {
 		const edit: AgentTool = {
 			name: "edit",
@@ -230,6 +301,15 @@ describe("approval cache store", () => {
 		expect(Object.keys(persisted.paths)).toEqual(["second.txt"]);
 	});
 
+	it("persists a directory grant with its scope marker", () => {
+		const cache = new ApprovalCache(tempDir.path());
+		cache.record("c:\\testdir\\", "read", "directory");
+		expect(cache.has("c:\\testdir\\")).toBe(true);
+		const persisted = JSON.parse(fs.readFileSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME), "utf8"));
+		expect(persisted.paths["c:\\testdir\\"]).toMatchObject({ scope: "directory", tool: "read" });
+		expect(Object.keys(persisted.paths)).toEqual(["c:\\testdir\\"]);
+	});
+
 	it("degrades to no grants for a corrupt file and repairs it on the next record", () => {
 		fs.mkdirSync(tempDir.path(), { recursive: true });
 		fs.writeFileSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME), "{not json");
@@ -286,6 +366,30 @@ describe("approval target keys", () => {
 		expect(bash.approvalCacheTargets?.({ command: "git status --short" })).toEqual(["bash: git status --short"]);
 		expect(bash.approvalCacheTargets?.({ command: "" })).toBeUndefined();
 		expect(bash.approvalCacheTargets?.({})).toBeUndefined();
+	});
+
+	it("derives directory keys, ancestors, and shared folders", () => {
+		const notes = approvalTargetKey(cwd, "sub/notes.txt")!;
+		const directory = approvalDirectoryKey(path.join(cwd, "sub"));
+		expect(approvalDirectoryCovers(directory, notes)).toBe(true);
+		expect(approvalDirectoryCovers(approvalDirectoryKey(cwd), notes)).toBe(true);
+		expect(approvalDirectoryCovers(approvalDirectoryKey(path.resolve("/elsewhere")), notes)).toBe(false);
+		expect(approvalAncestorDirectoryKeys(notes)[0]).toBe(directory);
+		expect(approvalAncestorDirectoryKeys("bash: npm test")).toEqual([]);
+		expect(approvalAncestorDirectoryKeys("xd://todo")).toEqual([]);
+
+		expect(commonApprovalDirectoryKey([path.join(cwd, "a"), path.join(cwd, "b")])).toBe(approvalDirectoryKey(cwd));
+		expect(commonApprovalDirectoryKey([path.join(cwd, "a")])).toBe(approvalDirectoryKey(path.join(cwd, "a")));
+		expect(commonApprovalDirectoryKey([])).toBeUndefined();
+	});
+
+	it("reports a shell command's working directory as its scope", () => {
+		const bash = new BashTool(createToolSession(cwd));
+		expect(bash.approvalCacheScopes?.({ command: "git status" })).toEqual([approvalDirectoryKey(cwd)]);
+		const elsewhere = path.resolve("/elsewhere");
+		expect(bash.approvalCacheScopes?.({ command: "git status", cwd: elsewhere })).toEqual([
+			approvalDirectoryKey(elsewhere),
+		]);
 	});
 });
 
@@ -421,6 +525,115 @@ describe("always-ask-cached wrapper cycle", () => {
 		const secondWrapper = new ExtensionToolWrapper(tool, secondRunner);
 		await secondWrapper.execute("cached-second", { path: "notes.txt" }, undefined, undefined, context(settings));
 		expect(secondSelect).not.toHaveBeenCalled();
+	});
+
+	it("remembers a folder when the folder answer approves the call", async () => {
+		const select = vi.fn(async () => "Approve");
+		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
+		// The dialog host answers with the folder scope.
+		const approve = vi.fn(async () => ({ approved: true, scope: "folder" }) as const);
+		runner.initialize(
+			{
+				sendMessage: () => {},
+				sendUserMessage: () => {},
+				appendEntry: () => {},
+				setLabel: () => {},
+				getActiveTools: () => [],
+				getAllTools: () => [],
+				setActiveTools: async () => {},
+				getCommands: () => [],
+				setModel: async () => false,
+				getThinkingLevel: () => undefined,
+				setThinkingLevel: () => {},
+				getSessionName: () => undefined,
+				setSessionName: async () => {},
+			},
+			{
+				getModel: () => undefined,
+				isIdle: () => true,
+				abort: () => {},
+				hasPendingMessages: () => false,
+				shutdown: () => {},
+				getContextUsage: () => undefined,
+				compact: async () => {},
+				getSystemPrompt: () => [],
+			},
+			undefined,
+			{
+				select,
+				approve,
+				confirm: async () => false,
+				input: async () => undefined,
+				notify: () => {},
+				onTerminalInput: () => () => {},
+				setStatus: () => {},
+				setWorkingMessage: () => {},
+				setWidget: () => {},
+				setFooter: () => {},
+				setHeader: () => {},
+				setTitle: () => {},
+				custom: async <T>() => undefined as T,
+				pasteToEditor: () => {},
+				setEditorText: () => {},
+				getEditorText: () => "",
+				editor: async () => undefined,
+				addAutocompleteProvider: () => {},
+				setEditorComponent: () => {},
+				get theme() {
+					return {} as never;
+				},
+				getAllThemes: async () => [],
+				getTheme: async () => undefined,
+				setTheme: async () => ({ success: false, error: "not implemented" }),
+				getToolsExpanded: () => false,
+				setToolsExpanded: () => {},
+			} satisfies ExtensionUIContext,
+		);
+		const settings = cachedSettings();
+		const dir = path.join(tempDir.path(), "TestDir");
+		const write = (toolName: string): AgentTool => ({
+			name: toolName,
+			label: toolName,
+			description: "file tool",
+			parameters: {} as never,
+			approval: "write",
+			approvalCacheTargets: (args: unknown) =>
+				isRecord(args) && typeof args.path === "string"
+					? [approvalTargetKey(tempDir.path(), args.path)!]
+					: undefined,
+			execute: async () => ({ content: [{ type: "text" as const, text: "executed" }] }),
+		});
+		const first = new ExtensionToolWrapper(write("write"), runner);
+		await first.execute(
+			"folder-first",
+			{ path: path.join(dir, "TestFile.exe") },
+			undefined,
+			undefined,
+			context(settings),
+		);
+		expect(approve).toHaveBeenCalledTimes(1);
+		const [prompt] = approve.mock.calls[0] as unknown as [{ folderLabel?: string }];
+		expect(prompt.folderLabel).toBe(approvalDirectoryKey(dir).replace(/[\\/]+$/, ""));
+		expect(getApprovalCache(settings.getAgentDir()).has(approvalDirectoryKey(dir))).toBe(true);
+
+		// A different file in the folder, and a nested one, run without asking.
+		const second = new ExtensionToolWrapper(write("write"), runner);
+		await second.execute(
+			"folder-second",
+			{ path: path.join(dir, "Other.txt") },
+			undefined,
+			undefined,
+			context(settings),
+		);
+		await second.execute(
+			"folder-third",
+			{ path: path.join(dir, "sub", "deep.txt") },
+			undefined,
+			undefined,
+			context(settings),
+		);
+		expect(approve).toHaveBeenCalledTimes(1);
+		expect(select).not.toHaveBeenCalled();
 	});
 
 	it("leaves no grant behind when the user denies, so the next call asks again", async () => {

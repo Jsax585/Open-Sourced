@@ -17,9 +17,11 @@ import { OverlayPanel, PanelDivider, PanelRows } from "../chrome/overlay-box";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { getKeybindings } from "../keybindings";
 import {
+	appApproveFolderKeys,
 	appApproveKeys,
 	appToolsExpandKey,
 	matchesAppApprove,
+	matchesAppApproveFolder,
 	matchesAppToolsExpand,
 	matchesSelectCancel,
 	matchesSelectDown,
@@ -41,6 +43,8 @@ export const APPROVE_ARM_MS = 500;
 
 interface ApprovalDialogCallbacks {
 	onApprove(): void;
+	/** The folder answer; only reachable when the dialog was given a folder label. */
+	onApproveFolder?(): void;
 	onDeny(): void;
 }
 
@@ -55,6 +59,8 @@ interface ApprovalDialogOptions {
 	tui?: TUI;
 	/** The prompt with every detail in full, which the expand key swaps in (wrapped) for the summarized one. */
 	fullPrompt?: string;
+	/** Directory an "approve folder" answer would grant; enables that answer (key and button) when set. */
+	folderLabel?: string;
 	/** Deny once this many ms pass without input (any key restarts the countdown). */
 	timeout?: number;
 	/** Called when {@link timeout} expires, before the dialog denies. */
@@ -116,7 +122,7 @@ export class ApprovalDialogComponent implements Component {
 				},
 				() => {
 					options.onTimeout?.();
-					this.#finish(false);
+					this.#finish("deny");
 				},
 			);
 		}
@@ -137,7 +143,11 @@ export class ApprovalDialogComponent implements Component {
 		if (this.#closed) return;
 		this.#restartCountdown();
 		if (matchesAppApprove(keyData)) {
-			if (performance.now() >= this.#armedAt) this.#finish(true);
+			if (performance.now() >= this.#armedAt) this.#finish("approve");
+			return;
+		}
+		if (this.options.folderLabel !== undefined && matchesAppApproveFolder(keyData)) {
+			if (performance.now() >= this.#armedAt) this.#finish("folder");
 			return;
 		}
 		if (this.#full && matchesAppToolsExpand(keyData)) {
@@ -151,7 +161,7 @@ export class ApprovalDialogComponent implements Component {
 			return;
 		}
 		if (matchesSelectCancel(keyData)) {
-			this.#finish(false);
+			this.#finish("deny");
 			return;
 		}
 		if (draft?.hasDraft()) {
@@ -258,6 +268,16 @@ export class ApprovalDialogComponent implements Component {
 					}),
 				]
 			: [];
+		const folderKey = appApproveFolderKeys()[0];
+		const folder =
+			this.options.folderLabel === undefined
+				? []
+				: [
+						actionButton("Folder", "folder", {
+							...(folderKey ? { keys: folderKey } : {}),
+							title: `Approve and remember ${this.options.folderLabel}${folderKey ? `  ${formatTooltipKey(folderKey)}` : ""}`,
+						}),
+					];
 		const children: NativeNode[] = [
 			node("text", { text: this.#title, role: "omp.approval.title", tone: "accent" }, undefined, "title"),
 		];
@@ -270,7 +290,7 @@ export class ApprovalDialogComponent implements Component {
 		}
 		// The countdown, when one runs, leads the bar like the ask dialog's.
 		children.push(
-			actionBar([...(this.#countdown ? [this.#countdown.describe()] : []), null, ...expand, deny, approve]),
+			actionBar([...(this.#countdown ? [this.#countdown.describe()] : []), null, ...expand, ...folder, deny, approve]),
 		);
 		// Under the `omp.editor.ask` prefix: Tern's console layout sizes an ask's rows to the
 		// composer column by that prefix, where a bare `omp.editor.*` role spans the whole dock.
@@ -278,11 +298,12 @@ export class ApprovalDialogComponent implements Component {
 		return this.#native;
 	}
 
-	/** Deny, Approve, and Details run exactly what Esc, the approve key, and the expand key run. */
+	/** Deny, Approve, Folder, and Details run exactly what Esc, the approve keys, and the expand key run. */
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (this.#closed || event.type !== "action") return;
-		if (event.act === "approve") this.#finish(true);
-		else if (event.act === "deny") this.#finish(false);
+		if (event.act === "approve") this.#finish("approve");
+		else if (event.act === "folder") this.#finish("folder");
+		else if (event.act === "deny") this.#finish("deny");
 		else if (event.act === "expand") this.toggleDetails();
 	}
 
@@ -299,7 +320,11 @@ export class ApprovalDialogComponent implements Component {
 		const expand = this.#full
 			? ` · ${formatKeyHints([appToolsExpandKey()])} ${this.#expanded ? "less" : "details"}`
 			: "";
-		const hint = `${approve} approve · ${editorKey("tui.select.cancel")} deny${expand}`;
+		const folder =
+			this.options.folderLabel === undefined
+				? ""
+				: ` · ${formatKeyHints(appApproveFolderKeys())} approve folder`;
+		const hint = `${approve} approve${folder} · ${editorKey("tui.select.cancel")} deny${expand}`;
 		const draft = this.options.draft;
 		if (draft?.hasDraft()) return `${hint} · ${editorKey("tui.input.submit")} deny and send`;
 		const scroll = overflows ? ` · ${editorKeys("tui.select.up", "tui.select.down")} scroll` : "";
@@ -311,11 +336,12 @@ export class ApprovalDialogComponent implements Component {
 		this.options.tui?.requestRender();
 	}
 
-	#finish(approved: boolean): void {
+	#finish(outcome: "approve" | "folder" | "deny"): void {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#countdown?.dispose();
-		if (approved) this.callbacks.onApprove();
+		if (outcome === "approve") this.callbacks.onApprove();
+		else if (outcome === "folder") this.callbacks.onApproveFolder?.();
 		else this.callbacks.onDeny();
 	}
 }

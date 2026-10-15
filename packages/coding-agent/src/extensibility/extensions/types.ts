@@ -261,7 +261,16 @@ export type AutocompleteProviderFactory = (current: AutocompleteProvider) => Aut
 export interface ExtensionApprovalPrompt {
 	full: string;
 	compact: string;
+	/**
+	 * Directory a "remember this folder" answer would grant, when the call names
+	 * one; hosts that support the folder answer show it and may return
+	 * `{ approved: true, scope: "folder" }` instead of a plain approval.
+	 */
+	folderLabel?: string;
 }
+
+/** What an `approve()` dialog answered: denied, approved once, or approved with a folder grant. */
+export type ExtensionApprovalAnswer = boolean | { approved: true; scope: "folder" };
 
 /**
  * UI context for extensions to request interactive UI.
@@ -299,12 +308,13 @@ export interface ExtensionUIContext {
 	): Promise<ExtensionAskDialogResult | undefined>;
 
 	/**
-	 * Show a tool-approval prompt; true only for an explicit approval. Each prompt is a title line
-	 * then details: `compact` summarizes the tool's own details (command, path, content) to one
-	 * row for a host with little room, `full` keeps them whole. Absent: callers fall back to an
-	 * Approve/Deny `select`.
+	 * Show a tool-approval prompt; `true` only for an explicit approval, or the folder answer when
+	 * {@link ExtensionApprovalPrompt.folderLabel} is set and the host supports it. Each prompt is a
+	 * title line then details: `compact` summarizes the tool's own details (command, path, content)
+	 * to one row for a host with little room, `full` keeps them whole. Absent: callers fall back to
+	 * an Approve/Deny `select`.
 	 */
-	approve?(prompt: ExtensionApprovalPrompt, dialogOptions?: ExtensionUIDialogOptions): Promise<boolean>;
+	approve?(prompt: ExtensionApprovalPrompt, dialogOptions?: ExtensionUIDialogOptions): Promise<ExtensionApprovalAnswer>;
 
 	/** Show a notification to the user. */
 	notify(message: string, type?: "info" | "warning" | "error"): void;

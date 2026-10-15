@@ -332,7 +332,7 @@ export const cfgToolsApprovalMode = register({
 				value: "always-ask-cached",
 				label: "Ask and remember",
 				description:
-					"Ask the first time a read or write tool touches a file and the first time a command runs, then remember it so the same file or exact command runs without asking. Commands flagged as dangerous, and per-tool or per-pattern prompt policies, still ask every time.",
+					"Ask the first time a read or write tool touches a file and the first time a command runs, then remember it so the same file or exact command runs without asking; approve a whole folder to cover everything inside it. Commands flagged as dangerous, and per-tool or per-pattern prompt policies, still ask every time.",
 			},
 			{
 				value: "write",

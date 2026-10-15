@@ -30,6 +30,11 @@ export interface ApprovalGrant {
 	tool: string;
 	/** ISO timestamp of the approving decision. */
 	approvedAt: string;
+	/**
+	 * `"directory"` for a folder grant: the key is a directory (trailing
+	 * separator) and covers every target below it, at any depth.
+	 */
+	scope?: "directory";
 }
 
 /**
@@ -40,7 +45,7 @@ export interface ApprovalGrant {
 export interface ApprovalGrantStore {
 	readonly filePath: string;
 	has(key: string): boolean;
-	record(key: string, tool?: string): void;
+	record(key: string, tool?: string, scope?: "directory"): void;
 }
 
 /** Parse a cache file's contents; anything unrecognized yields an empty cache. */
@@ -65,7 +70,10 @@ function parseCacheFile(raw: string): ApprovalCacheFile {
 		if (key.length === 0 || value === null || typeof value !== "object" || Array.isArray(value)) continue;
 		const tool = "tool" in value && typeof value.tool === "string" ? value.tool : "";
 		const approvedAt = "approvedAt" in value && typeof value.approvedAt === "string" ? value.approvedAt : "";
-		entries[key] = { tool, approvedAt };
+		entries[key] =
+			"scope" in value && value.scope === "directory"
+				? { tool, approvedAt, scope: "directory" }
+				: { tool, approvedAt };
 	}
 	return { version: 1, paths: entries };
 }
@@ -99,11 +107,16 @@ export class ApprovalCache implements ApprovalGrantStore {
 		return this.#load().has(key);
 	}
 
-	record(key: string, tool = ""): void {
+	record(key: string, tool = "", scope?: "directory"): void {
 		if (key.length === 0) return;
 		const entries = this.#load();
 		if (entries.has(key)) return;
-		entries.set(key, { tool, approvedAt: new Date().toISOString() });
+		entries.set(
+			key,
+			scope === "directory"
+				? { tool, approvedAt: new Date().toISOString(), scope }
+				: { tool, approvedAt: new Date().toISOString() },
+		);
 		this.#persist(entries);
 	}
 
@@ -177,4 +190,65 @@ export function getApprovalCache(agentDir: string = getAgentDir()): ApprovalCach
  */
 export function approvalCacheKeyForPath(target: string): string {
 	return normalizePathForComparison(path.resolve(target));
+}
+
+/** Trailing separator that marks a directory grant and makes it prefix-matchable. */
+function withTrailingSeparator(dir: string): string {
+	return dir.endsWith(path.sep) ? dir : `${dir}${path.sep}`;
+}
+
+/**
+ * Cache key for a granted directory: the same normalization as
+ * {@link approvalCacheKeyForPath} plus a trailing separator, so a folder grant
+ * reads as one in the cache file and covers every target below it.
+ */
+export function approvalDirectoryKey(directory: string): string {
+	return withTrailingSeparator(normalizePathForComparison(path.resolve(directory)));
+}
+
+/** Whether a directory grant covers a normalized target key (the directory itself or anything below it). */
+export function approvalDirectoryCovers(directoryKey: string, targetKey: string): boolean {
+	return targetKey === directoryKey || targetKey.startsWith(directoryKey);
+}
+
+/**
+ * Ancestor directory keys of a path-shaped target key, nearest first (`read
+ * /a/b/f.ts` → `/a/b/`, `/a/`, `/`). Empty for keys that are not absolute
+ * filesystem paths — commands, URLs, and other opaque targets match exactly.
+ */
+export function approvalAncestorDirectoryKeys(target: string): string[] {
+	if (!path.isAbsolute(target)) return [];
+	const ancestors: string[] = [];
+	let current = target;
+	for (;;) {
+		const parent = path.dirname(current);
+		if (parent === current) break;
+		ancestors.push(withTrailingSeparator(normalizePathForComparison(parent)));
+		current = parent;
+	}
+	return ancestors;
+}
+
+/**
+ * Deepest directory that contains every entry of `directories`, as a grant key;
+ * `undefined` when they share no root (e.g. two drives). Serves the approval
+ * prompt's "approve folder" option for calls that touch several paths.
+ */
+export function commonApprovalDirectoryKey(directories: readonly string[]): string | undefined {
+	if (directories.length === 0) return undefined;
+	const keys = directories.map(dir => approvalDirectoryKey(dir));
+	let common = keys[0]!;
+	for (const key of keys.slice(1)) {
+		if (approvalDirectoryCovers(common, key)) continue;
+		if (approvalDirectoryCovers(key, common)) {
+			common = key;
+			continue;
+		}
+		const parent = approvalAncestorDirectoryKeys(common.replace(/[\\/]+$/, "")).find(candidate =>
+			approvalDirectoryCovers(candidate, key),
+		);
+		if (parent === undefined) return undefined;
+		common = parent;
+	}
+	return common;
 }

@@ -1234,6 +1234,16 @@ export interface AgentTool<
 	 */
 	approvalCacheTargets?: (args: unknown) => readonly string[] | undefined;
 
+	/**
+	 * Directory scopes this call runs inside, for `tools.approvalMode:
+	 * always-ask-cached`: when every reported scope is covered by a folder grant,
+	 * the call skips its prompt (e.g. a shell command whose working directory was
+	 * approved). Scopes are only checked — a plain approval records
+	 * {@link approvalCacheTargets}, never a scope; only the mode's "remember this
+	 * folder" answer grants one.
+	 */
+	approvalCacheScopes?: (args: unknown) => readonly string[] | undefined;
+
 	/** The main execution callback for this tool. */
 	execute: AgentToolExecFn<TParameters, TDetails, TTheme>;
 

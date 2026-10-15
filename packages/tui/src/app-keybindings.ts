@@ -39,6 +39,7 @@ interface AppKeybindings {
 	"app.tools.toggleVisibility": true;
 	"app.ask.hide": true;
 	"app.approval.approve": true;
+	"app.approval.approveFolder": true;
 	"app.editor.external": true;
 	"app.message.followUp": true;
 	"app.retry": true;
@@ -149,6 +150,13 @@ export const KEYBINDINGS = {
 		// Ctrl+Q backs up Ctrl+Enter, which Windows Terminal cannot deliver (#1903).
 		defaultKeys: ["ctrl+enter", "ctrl+q"],
 		description: "Approve a pending tool call",
+	},
+	"app.approval.approveFolder": {
+		// An F-key leads: like F5, it is delivered verbatim by every terminal, unlike modified
+		// Enter/letter chords some terminals swallow. Offered only while the approval prompt shows
+		// a folder to remember.
+		defaultKeys: "f6",
+		description: "Approve a pending tool call and remember its folder",
 	},
 	"app.editor.external": {
 		defaultKeys: "ctrl+g",

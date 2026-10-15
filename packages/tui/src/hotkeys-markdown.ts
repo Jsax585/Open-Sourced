@@ -137,6 +137,10 @@ function hotkeyGroups(bindings: HotkeysMarkdownBindings): HotkeyGroup[] {
 				{ keys: [act("app.tools.toggleVisibility")], action: "Toggle tool activity visibility" },
 				{ keys: [act("app.ask.hide")], action: "Hide/show a pending ask question" },
 				{ keys: [act("app.approval.approve")], action: "Approve a pending tool call" },
+				{
+					keys: [act("app.approval.approveFolder")],
+					action: "Approve a pending tool call and remember its folder",
+				},
 				{ keys: [act("app.thinking.toggle")], action: "Toggle thinking block visibility" },
 				{ keys: [act("app.editor.external")], action: "Edit message in external editor" },
 				{ keys: [act("app.retry")], action: "Retry last failed assistant turn" },
