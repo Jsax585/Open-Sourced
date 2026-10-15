@@ -332,7 +332,7 @@ export const cfgToolsApprovalMode = register({
 				value: "always-ask-cached",
 				label: "Ask and remember",
 				description:
-					"Prompt once per file or folder, then remember it; commands are covered through their folder. Approve keeps the grant for this session, Always approve keeps it for good. Dangerous commands and explicit prompt policies still ask every time.",
+					"Prompt once per file or folder, then remember it; commands are covered through their folder. 'Approve File' keeps the grant for this session, 'Always Approve File' keeps it for good. Dangerous commands and explicit prompt policies still ask every time.",
 			},
 			{
 				value: "write",
