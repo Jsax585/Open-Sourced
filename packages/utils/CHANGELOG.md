@@ -22,6 +22,9 @@
 ### Fixed
 
 - Fixed an unhandled rejection when a subprocess is spawned with an already-aborted signal ([#15750](https://github.com/can1357/oh-my-pi/pull/15750) by [@harshaygadekar](https://github.com/harshaygadekar))
+### Changed
+
+- Improved `structuredCloneJSON()` performance for values that cannot be deep-cloned natively: a failed `structuredClone` attempt is remembered, so later copies of that value skip straight to the JSON fallback ([#15807](https://github.com/can1357/oh-my-pi/pull/15807) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ## [18.10.0] - 2026-10-12
 

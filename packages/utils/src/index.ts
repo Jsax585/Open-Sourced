@@ -48,6 +48,11 @@ function isPlainObject(val: object): val is Record<string, unknown> {
 	return Object.getPrototypeOf(val) === Object.prototype || Array.isArray(val);
 }
 
+// Values whose `structuredClone` attempt already threw. A repeat clone of the
+// same value goes straight to the JSON fallback instead of re-traversing an
+// input that cannot be cloned (and re-reading its getters).
+const failedCloneValues = new WeakSet<object>();
+
 export function structuredCloneJSON<T>(value: T): T {
 	// primitives|null|undefined, copy
 	if (!value || typeof value !== "object") {
@@ -55,17 +60,14 @@ export function structuredCloneJSON<T>(value: T): T {
 	}
 
 	// deep clone
-	if (isPlainObject(value)) {
+	if (isPlainObject(value) && !failedCloneValues.has(value)) {
 		try {
 			return structuredClone(value);
 		} catch {
-			// might still fail due to nested structures
+			// might still fail due to nested structures; remember it so the next
+			// clone of this value skips the traversal that cannot succeed
+			failedCloneValues.add(value);
 		}
-	}
-	try {
-		return structuredClone(value);
-	} catch {
-		// might still fail due to non-cloneable nested structures
 	}
 	return JSON.parse(JSON.stringify(value)) as T;
 }
