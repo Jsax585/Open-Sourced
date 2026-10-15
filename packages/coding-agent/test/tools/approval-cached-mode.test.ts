@@ -216,6 +216,18 @@ describe("approval cache store", () => {
 		cache.record("third.txt");
 		const persisted = JSON.parse(fs.readFileSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME), "utf8"));
 		expect(Object.keys(persisted.paths).sort()).toEqual(["first.txt", "second.txt", "third.txt"]);
+		// The merged on-disk state is visible to the first instance too.
+		expect(cache.has("second.txt")).toBe(true);
+	});
+
+	it("drops grants when the file is deleted, so revocation does not need a restart", () => {
+		const cache = new ApprovalCache(tempDir.path());
+		cache.record("first.txt");
+		fs.rmSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME));
+		expect(cache.has("first.txt")).toBe(false);
+		cache.record("second.txt");
+		const persisted = JSON.parse(fs.readFileSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME), "utf8"));
+		expect(Object.keys(persisted.paths)).toEqual(["second.txt"]);
 	});
 
 	it("degrades to no grants for a corrupt file and repairs it on the next record", () => {

@@ -40,7 +40,7 @@ The **Ask and remember** mode (`always-ask-cached`) turns file operations and sh
 - Prompts forced by a tool's own `policy: prompt`/`override` or by `tools.approval.<tool>: prompt` stay per-call: only approvals raised by the mode itself are cached. That covers bash critical-command overrides (`rm -rf /`, fork bombs, …) and `bash.patterns` `prompt` rules, which ask every time even for an otherwise remembered command.
 - `--auto-approve`/`--yolo` still force yolo execution and bypass the cache entirely.
 
-The cache file is a plain JSON map of normalized target → `{ tool, approvedAt }`; deleting the file (or an entry) revokes the grants.
+The cache file is a plain JSON map of normalized target → `{ tool, approvedAt }`; deleting the file (or an entry) revokes the grants — running sessions notice the change on their next approval check, so no restart is needed.
 
 ## User overrides
 

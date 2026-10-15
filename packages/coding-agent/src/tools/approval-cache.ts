@@ -88,6 +88,8 @@ function readCacheFile(filePath: string): ApprovalCacheFile {
 export class ApprovalCache implements ApprovalGrantStore {
 	readonly filePath: string;
 	#entries: Map<string, ApprovalGrant> | undefined;
+	/** On-disk identity of the loaded contents, so external edits and deletions are noticed. */
+	#loadedIdentity: string | undefined;
 
 	constructor(agentDir: string = getAgentDir()) {
 		this.filePath = path.join(agentDir, APPROVAL_CACHE_FILENAME);
@@ -111,9 +113,22 @@ export class ApprovalCache implements ApprovalGrantStore {
 	}
 
 	#load(): Map<string, ApprovalGrant> {
-		if (this.#entries) return this.#entries;
-		this.#entries = new Map(Object.entries(readCacheFile(this.filePath).paths));
-		return this.#entries;
+		const identity = this.#fileIdentity();
+		if (this.#entries && identity === this.#loadedIdentity) return this.#entries;
+		const entries = new Map(Object.entries(readCacheFile(this.filePath).paths));
+		this.#entries = entries;
+		this.#loadedIdentity = identity;
+		return entries;
+	}
+
+	/** Cheap on-disk identity (`mtime` + size); `"absent"` when the file is gone. */
+	#fileIdentity(): string {
+		try {
+			const stat = fs.statSync(this.filePath, { throwIfNoEntry: false });
+			return stat ? `${stat.mtimeMs}:${stat.size}` : "absent";
+		} catch {
+			return "absent";
+		}
 	}
 
 	#persist(entries: Map<string, ApprovalGrant>): void {
@@ -125,6 +140,10 @@ export class ApprovalCache implements ApprovalGrantStore {
 			const payload: ApprovalCacheFile = { version: 1, paths: Object.fromEntries(merged) };
 			fs.writeFileSync(temporaryPath, `${JSON.stringify(payload, null, 2)}\n`);
 			fs.renameSync(temporaryPath, this.filePath);
+			// Keep memory equal to what is on disk: the merge may have pulled in a
+			// grant another process recorded since this instance last loaded.
+			this.#entries = merged;
+			this.#loadedIdentity = this.#fileIdentity();
 		} catch (err) {
 			logger.debug("approval cache: failed to persist", { err: String(err), path: this.filePath });
 		}
