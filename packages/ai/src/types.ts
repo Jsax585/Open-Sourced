@@ -1358,6 +1358,19 @@ export type Message = UserMessage | DeveloperMessage | AssistantMessage | ToolRe
 export type CursorExecHandlerResult<T> = { result: T; toolResult?: ToolResultMessage } | T | ToolResultMessage;
 
 /**
+ * Marks a tool result whose content an extension `tool_result` handler replaced.
+ *
+ * Cursor's native grep frame has no text variant, so its reply is rebuilt from
+ * the result's match lines. A replaced result is not a grep listing — it may
+ * cut the middle and add a note — so it is forwarded as written instead. Set
+ * in memory only; it is not persisted with the session.
+ */
+export const TOOL_RESULT_REWRITTEN = Symbol("tool-result-rewritten");
+
+/** A tool result optionally carrying {@link TOOL_RESULT_REWRITTEN}. */
+export type MaybeRewrittenToolResult = { [TOOL_RESULT_REWRITTEN]?: true };
+
+/**
  * Optional rewrite of a Cursor exec-channel tool result.
  * May return a Promise. Returning `undefined` keeps the original result.
  *

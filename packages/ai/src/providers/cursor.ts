@@ -211,6 +211,7 @@ import type {
 	ToolResultMessage,
 	Usage,
 } from "../types";
+import { TOOL_RESULT_REWRITTEN } from "../types";
 import { normalizeSystemPrompts, normalizeToolCallId } from "../utils";
 import {
 	type CursorExecResolvedCarrier,
@@ -4008,6 +4009,9 @@ function buildGrepResultFromToolResult(
 	if (toolResult.isError) {
 		return buildGrepErrorResult(text || "Grep failed");
 	}
+	if (TOOL_RESULT_REWRITTEN in toolResult) {
+		return buildGrepTextResult(args, text);
+	}
 
 	const outputMode = args.outputMode || "content";
 	const clientTruncated = toolResultDetailBoolean(toolResult, "truncated");
@@ -4143,6 +4147,43 @@ function buildGrepResultFromToolResult(
 				path: args.path || "",
 				outputMode,
 				workspaceResults: { [workspaceKey]: unionResult },
+			}),
+		},
+	});
+}
+
+/**
+ * A grep result an extension replaced, forwarded as written.
+ *
+ * `GrepResult` has no text variant, and re-parsing the text as a listing keeps
+ * only its match lines: a note the handler added is dropped, and lines past a
+ * cut are filed under whichever header preceded the cut. Cursor prints a file
+ * entry's name on its own line, so one entry named by the whole text reaches
+ * the model verbatim.
+ */
+function buildGrepTextResult(args: { pattern: string; path?: string }, text: string) {
+	const workspaceKey = args.path || ".";
+	return create(GrepResultSchema, {
+		result: {
+			case: "success",
+			value: create(GrepSuccessSchema, {
+				pattern: args.pattern,
+				path: args.path || "",
+				outputMode: "content",
+				workspaceResults: {
+					[workspaceKey]: create(GrepUnionResultSchema, {
+						result: {
+							case: "content",
+							value: create(GrepContentResultSchema, {
+								matches: [create(GrepFileMatchSchema, { file: text, matches: [] })],
+								totalLines: 0,
+								totalMatchedLines: 0,
+								clientTruncated: false,
+								ripgrepTruncated: false,
+							}),
+						},
+					}),
+				},
 			}),
 		},
 	});

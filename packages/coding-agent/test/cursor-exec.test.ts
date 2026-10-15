@@ -18,7 +18,9 @@ import {
 	AgentClientMessageSchema,
 	AgentServerMessageSchema,
 	DeleteArgsSchema,
+	type ExecServerMessage,
 	ExecServerMessageSchema,
+	GrepArgsSchema,
 	McpArgsSchema,
 	ReadArgsSchema,
 	ShellArgsSchema,
@@ -2400,6 +2402,121 @@ describe("CursorExecHandlers passive tool context", () => {
 			expect(result[TOOL_RESULT_ADDITIONAL_CONTEXT]).toBe(expected);
 			// The carrier is symbol-keyed and never reaches serialized history.
 			expect(JSON.stringify(result)).not.toContain("tool context");
+		}
+	});
+});
+
+// Issue #15817: Cursor answers the model from the frames the bridge writes, so a
+// `tool_result` rewrite must reach those frames, not only the stored result.
+describe("Cursor native frames carry extension tool_result rewrites (issue #15817)", () => {
+	const RAW = Array.from({ length: 50 }, (_, i) => `raw line ${i + 1}`).join("\n");
+	const REWRITTEN = "raw line 1\n[context-mode: output cut, full text saved]\nraw line 50";
+
+	/** A runner whose `tool_result` handler replaces every result, or none when `rewrites` is false. */
+	function rewritingRunner(rewrites: boolean): ExtensionRunner {
+		return {
+			...passthroughRunner(),
+			hasHandlers: (event: string) => rewrites || event !== "tool_result",
+			emitToolResult: async () => (rewrites ? { content: [{ type: "text", text: REWRITTEN }] } : undefined),
+		} as unknown as ExtensionRunner;
+	}
+
+	async function dispatch(handlers: CursorExecHandlers, message: ExecServerMessage["message"]) {
+		const written: Buffer[] = [];
+		const h2Request = {
+			write: (chunk: Buffer) => {
+				written.push(chunk);
+				return true;
+			},
+		} as unknown as Parameters<typeof handleServerMessage>[5];
+		await handleServerMessage(
+			create(AgentServerMessageSchema, {
+				message: {
+					case: "execServerMessage",
+					value: create(ExecServerMessageSchema, { id: 1, execId: "exec-15817", message }),
+				},
+			}),
+			cursorAssistantMessage(),
+			new AssistantMessageEventStream(),
+			newBlockState(),
+			new Map(),
+			h2Request,
+			handlers,
+			undefined,
+			{ sawTokenDelta: false },
+			[],
+		);
+		return written
+			.map(chunk => fromBinary(AgentClientMessageSchema, chunk.subarray(5)).message)
+			.flatMap(message => (message.case === "execClientMessage" ? [message.value.message] : []));
+	}
+
+	async function streamedStdout(runner: ExtensionRunner): Promise<string> {
+		// Streams its output in chunks before returning it.
+		const bash: AgentTool = {
+			name: "bash",
+			label: "bash",
+			description: "streams fixed output",
+			parameters: type({ command: "string", "cwd?": "string", "timeout?": "number" }),
+			execute: async (_id, _args, _signal, onUpdate) => {
+				const lines = RAW.split("\n");
+				for (let end = 10; end <= lines.length; end += 10) {
+					onUpdate?.({ content: [{ type: "text", text: `${lines.slice(0, end).join("\n")}\n` }] });
+				}
+				return { content: [{ type: "text", text: RAW }], details: {} };
+			},
+		};
+		const handlers = new CursorExecHandlers({
+			cwd: os.tmpdir(),
+			tools: new Map<string, AgentTool>([["bash", new ExtensionToolWrapper(bash, runner)]]),
+			getToolContext: () => yoloToolContext(),
+		});
+		const frames = await dispatch(handlers, {
+			case: "shellStreamArgs",
+			value: create(ShellArgsSchema, { toolCallId: "shell-15817", command: "emit" }),
+		});
+		return frames
+			.flatMap(frame =>
+				frame.case === "shellStream" && frame.value.event.case === "stdout" ? [frame.value.event.value.data] : [],
+			)
+			.join("");
+	}
+
+	it("streams only the rewritten shell output when a handler replaces it", async () => {
+		expect(await streamedStdout(rewritingRunner(true))).toBe(REWRITTEN);
+	});
+
+	it("keeps streaming the raw shell output when no handler can replace it", async () => {
+		expect(await streamedStdout(rewritingRunner(false))).toBe(`${RAW}\n`);
+	});
+
+	it("answers a native grep frame with the rewritten text, note included", async () => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "cursor-grep-15817-"));
+		try {
+			await Bun.write(path.join(cwd, "needles.txt"), `${RAW}\n`);
+			const session = createTestSession(cwd);
+			const handlers = new CursorExecHandlers({
+				cwd,
+				tools: new Map<string, Tool>([["grep", new GrepTool(session)]]),
+				createGrepTool: createBridgeGrepFactory(session, rewritingRunner(true)),
+				getToolContext: () => yoloToolContext(),
+			});
+			const frames = await dispatch(handlers, {
+				case: "grepArgs",
+				value: create(GrepArgsSchema, { toolCallId: "grep-15817", pattern: "raw", path: cwd }),
+			});
+			const answer = frames.find(frame => frame.case === "grepResult");
+			if (answer?.case !== "grepResult" || answer.value.result.case !== "success")
+				throw new Error("expected grep success");
+			const union = answer.value.result.value.workspaceResults[cwd]?.result;
+			if (union?.case !== "content") throw new Error("expected grep content");
+			// Cursor prints each entry's file name, then its lines; together they must be the rewrite.
+			const rendered = union.value.matches
+				.flatMap(entry => [entry.file, ...entry.matches.map(line => `${line.lineNumber}:${line.content}`)])
+				.join("\n");
+			expect(rendered).toBe(REWRITTEN);
+		} finally {
+			await removeWithRetries(cwd);
 		}
 	});
 });

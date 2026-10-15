@@ -12,14 +12,16 @@ import {
 	type ToolResultWithAdditionalContext,
 	validateAgentToolArguments,
 } from "@oh-my-pi/pi-agent-core";
-import type {
-	CursorMcpCall,
-	CursorMcpResource,
-	CursorMcpResourceContent,
-	CursorShellStreamCallbacks,
-	CursorTodoSnapshot,
-	CursorExecHandlers as ICursorExecHandlers,
-	ToolResultMessage,
+import {
+	type CursorMcpCall,
+	type CursorMcpResource,
+	type CursorMcpResourceContent,
+	type CursorShellStreamCallbacks,
+	type CursorTodoSnapshot,
+	type CursorExecHandlers as ICursorExecHandlers,
+	type MaybeRewrittenToolResult,
+	TOOL_RESULT_REWRITTEN,
+	type ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
 import {
 	cursorRawReadPath,
@@ -35,6 +37,7 @@ import {
 } from "@oh-my-pi/pi-ai/providers/cursor-pi-args";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { cursorMcpPrefersReplaceEdit, normalizeCursorReplaceArgs } from "./cursor-bridge-tools";
+import { ExtensionToolWrapper } from "./extensibility/extensions";
 import type { MCPResourceReadResult } from "./mcp/types";
 import { resolveApproval, resolveApprovalFromContext } from "./tools/approval";
 import {
@@ -225,7 +228,7 @@ function createToolResultMessage(
 	result: AgentToolResult<unknown>,
 	isError: boolean,
 ): ToolResultMessage {
-	return {
+	const message: ToolResultMessage & MaybeRewrittenToolResult = {
 		role: "toolResult",
 		toolCallId,
 		toolName,
@@ -234,6 +237,8 @@ function createToolResultMessage(
 		isError,
 		timestamp: Date.now(),
 	};
+	if (TOOL_RESULT_REWRITTEN in result) message[TOOL_RESULT_REWRITTEN] = true;
+	return message;
 }
 
 /**
@@ -624,6 +629,10 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 			cwd: args.workingDirectory || undefined,
 			timeout: timeoutSeconds,
 		});
+		// Cursor answers the model from the streamed stdout, not from the final
+		// `shellResult`, and the stream cannot be retracted. When a `tool_result`
+		// handler may replace the output, nothing is streamed until it has run.
+		const holdOutput = tool instanceof ExtensionToolWrapper && tool.mayRewriteResult();
 
 		this.options.emitEvent?.({ type: "tool_execution_start", toolCallId, toolName, args: toolArgs });
 
@@ -652,7 +661,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 				args: toolArgs,
 				partialResult: sanitizedPartialResult,
 			});
-			if (!canStreamSanitizedDelta) {
+			if (holdOutput || !canStreamSanitizedDelta) {
 				return;
 			}
 			if (sanitizedRawText.startsWith(streamedSanitizedText)) {
@@ -692,7 +701,9 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 			rawText = finalRawText;
 			sanitizedRawText = sanitizeText(finalRawText);
 		}
-		if (canStreamSanitizedDelta && sanitizedRawText.startsWith(streamedSanitizedText)) {
+		if (holdOutput) {
+			if (sanitizedRawText) callbacks.onStdout(sanitizedRawText);
+		} else if (canStreamSanitizedDelta && sanitizedRawText.startsWith(streamedSanitizedText)) {
 			const finalDelta = sanitizedRawText.slice(streamedSanitizedText.length);
 			streamedSanitizedText = sanitizedRawText;
 			if (finalDelta) {

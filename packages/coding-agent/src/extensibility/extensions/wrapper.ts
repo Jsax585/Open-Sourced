@@ -9,7 +9,14 @@ import {
 	isNonBlankContext,
 	type ToolLoadMode,
 } from "@oh-my-pi/pi-agent-core";
-import type { ComputerSafetyCheck, ImageContent, Static, TextContent, TSchema } from "@oh-my-pi/pi-ai";
+import {
+	type ComputerSafetyCheck,
+	type ImageContent,
+	type Static,
+	type TextContent,
+	TOOL_RESULT_REWRITTEN,
+	type TSchema,
+} from "@oh-my-pi/pi-ai";
 import { prompt, sanitizeText, untilAborted } from "@oh-my-pi/pi-utils";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import nativeDelegationTemplate from "../../prompts/tools/native-delegation.md" with { type: "text" };
@@ -225,6 +232,14 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		const target = this.tool as { restartForModeChange?: () => Promise<void> };
 		if (!target.restartForModeChange) return Promise.resolve();
 		return target.restartForModeChange();
+	}
+
+	/**
+	 * Whether an extension `tool_result` handler may replace this tool's result.
+	 * Output streamed before that handler runs cannot be taken back.
+	 */
+	mayRewriteResult(): boolean {
+		return this.runner.hasHandlers("tool_result");
 	}
 
 	async execute(
@@ -507,7 +522,8 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 					details: modifiedDetails,
 					providerMetadata: result.providerMetadata,
 					...(effectiveError ? { isError: true } : {}),
-				};
+					[TOOL_RESULT_REWRITTEN]: true,
+				} as AgentToolResult<TDetails, TParameters>;
 			}
 		}
 

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Cursor models getting the original output of their built-in Shell and Grep tools when an extension's `tool_result` handler rewrote it, such as one that shortens large results; they now get the rewritten result ([#15817](https://github.com/can1357/oh-my-pi/issues/15817))
+
 ## [18.11.0] - 2026-10-14
 
 ### Added
