@@ -761,6 +761,8 @@ export class InputController {
 
 		this.ctx.editor.onChange = (text: string) => {
 			const wasComposing = (this.#draftText ?? "").trim() !== "";
+			// A draft holds goal continuation back; emptying it lets a waiting goal continue.
+			if (wasComposing && !text.trim()) this.ctx.session.goalMode?.reschedule();
 			this.#draftText = text;
 			// Typing signals an imminent turn; refresh the API connection now so
 			// the handshake overlaps composition instead of delaying the send.

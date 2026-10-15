@@ -74,7 +74,6 @@ export type SubmittedUserInput = {
 	text: string;
 	images?: ImageContent[];
 	imageLinks?: (string | undefined)[];
-	customType?: string;
 	/** Route through `session.prompt(text, { synthetic: true })` so the text lands
 	 *  as a hidden agent-authored `developer` message rather than a visible user
 	 *  turn. Used by the `c`/`.` continue shortcut. */
@@ -84,14 +83,11 @@ export type SubmittedUserInput = {
 	 *  `session.prompt({ userInitiated })` so it clears advisor auto-resume
 	 *  suppression even though it is synthetic. */
 	userInitiated?: boolean;
-	display?: boolean;
 	/** Queue intent if the session is (or becomes) busy when this submission is
 	 *  dispatched: "steer" (interrupt the active turn) or "followUp" (process after
 	 *  it). Normal user Enter carries "steer" to match the streaming-branch Enter;
 	 *  background/continuation submits omit it and default to "followUp". */
 	streamingBehavior?: "steer" | "followUp";
-	/** Set by `submitInteractiveInput` for a custom-message submission: the session took it (started a turn or queued it into one). */
-	dispatched?: boolean;
 	cancelled: boolean;
 	started: boolean;
 };
@@ -258,8 +254,8 @@ export interface InteractiveModeContext {
 	todoExpanded: boolean;
 	planModeEnabled: boolean;
 	vibeModeEnabled: boolean;
-	goalModeEnabled: boolean;
-	goalModePaused: boolean;
+	readonly goalModeEnabled: boolean;
+	readonly goalModePaused: boolean;
 	loopModeEnabled: boolean;
 	loopModePaused: boolean;
 	loopPrompt?: string;
@@ -415,8 +411,6 @@ export interface InteractiveModeContext {
 			text: string;
 			images?: ImageContent[];
 			imageLinks?: (string | undefined)[];
-			customType?: string;
-			display?: boolean;
 			streamingBehavior?: "steer" | "followUp";
 		},
 		options?: { preserveDraft?: boolean; clearEditor?: boolean },
@@ -662,8 +656,6 @@ export interface InteractiveModeContext {
 	setLoopPrompt(prompt: string): void;
 	armLoopAutoSubmit(): void;
 	disableLoopMode(message?: string): void;
-	cancelGoalContinuation(): void;
-	disableGoalMode(message?: string): void;
 	pauseLoop(): void;
 	handlePlanApproval(details: PlanApprovalDetails): Promise<void>;
 	resolvePlanReview(reviewId: string, choice: PlanReviewChoice, input?: { feedback?: string; role?: string }): boolean;
