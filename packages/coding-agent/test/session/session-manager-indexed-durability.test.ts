@@ -130,6 +130,28 @@ class FakeBackend implements SessionStorageBackend {
 	}
 }
 
+/** An indexed writer whose accepted append rejects only when a switch drains and closes it. */
+class DrainRejectingIndexedStorage extends IndexedSessionStorage {
+	#publication = Promise.withResolvers<void>();
+	#failure = new Error("transient backend append failure");
+
+	override openWriter(_path: string, _options?: { flags?: "a" | "w"; onError?: (err: Error) => void }) {
+		let open = true;
+		return {
+			append: async (_line: string) => await this.#publication.promise,
+			appendSync: (_line: string) => {},
+			flush: () => this.#publication.promise,
+			isOpen: () => open,
+			close: async () => {
+				open = false;
+				this.#publication.reject(this.#failure);
+				await this.#publication.promise;
+			},
+			getError: () => undefined,
+		};
+	}
+}
+
 /** A well-formed assistant message: the lazy gate materializes the file for it. */
 function assistantMessage(text: string) {
 	return {
@@ -189,6 +211,23 @@ describe("SessionManager + indexed backend durability", () => {
 			Buffer.byteLength(backend.files.get(sessionFile) ?? "", "utf8"),
 		);
 		await manager.close();
+	});
+
+	it("refuses one switch when an indexed append rejects during its writer drain", async () => {
+		const backend = new FakeBackend();
+		const storage = new DrainRejectingIndexedStorage(backend);
+		await storage.initialize();
+		const manager = SessionManager.create("/cwd", "/sessions/proj", storage);
+		await manager.ensureOnDisk();
+		await storage.drain();
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("expected a session file");
+		manager.appendMessage({ role: "user", content: "pending turn", timestamp: Date.now() });
+
+		await expect(manager.newSession()).rejects.toThrow("transient backend append failure");
+
+		const nextSessionFile = await manager.newSession();
+		expect(nextSessionFile).not.toBe(sessionFile);
 	});
 
 	it("continues appending after a rejected maintenance rewrite when earlier turns are durable", async () => {

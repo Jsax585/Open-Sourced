@@ -2947,7 +2947,13 @@ export class SessionManager {
 		} catch (error) {
 			failure = error;
 		}
-		if (unsaved && this.#hasUnsavedEntries()) {
+		const unsavedAfterDrain =
+			!abandoning &&
+			this.#persist &&
+			this.#sessionFile !== undefined &&
+			this.#durable?.generation === this.#entriesGeneration &&
+			this.#hasUnsavedEntries();
+		if ((unsaved || unsavedAfterDrain) && this.#hasUnsavedEntries()) {
 			this.#refusedSessionSwitch = { generation: this.#entriesGeneration, count: this.#entries.length };
 			throw failure ?? this.#diskFailure ?? new Error("Session entries could not be saved before switching.");
 		}
