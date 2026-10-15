@@ -7,6 +7,7 @@ import { mapEffortToAnthropicAdaptiveEffort } from "@oh-my-pi/pi-catalog/model-t
 import { calculateCost, getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { isAnthropicOAuthToken } from "@oh-my-pi/pi-catalog/utils";
 import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
+import { isKimiCodeProvider } from "@oh-my-pi/pi-catalog/wire/kimi-code";
 import {
 	$env,
 	$flag,
@@ -5298,7 +5299,7 @@ function buildParams(
 	const metadataUserId = resolveAnthropicMetadataUserId(
 		readAnthropicMetadataString(options?.metadata, "user_id") ??
 			// Deliberately share the normalized affinity identity across Kimi's two transports.
-			(model.provider === "kimi-code" ? getOpenAIPromptCacheKey(options) : undefined),
+			(isKimiCodeProvider(model.provider) ? getOpenAIPromptCacheKey(options) : undefined),
 		isOAuthToken,
 		options?.sessionId,
 		metadataAccountId,

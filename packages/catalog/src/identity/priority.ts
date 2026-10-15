@@ -7,6 +7,7 @@ const DEFAULT_MODEL_PROVIDER_ORDER = [
 	"google-gemini-cli",
 	"google",
 	"google-vertex",
+	"kimi-code-global",
 	"kimi-code",
 	"moonshot",
 	"qwen-portal",

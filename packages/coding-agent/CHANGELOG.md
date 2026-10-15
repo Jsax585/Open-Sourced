@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the `kimi-code-global` provider: `/login kimi-code-global` signs in through kimi.ai for Kimi Code accounts outside mainland China, and `kimi-code` is now labeled "Kimi Code (China)" (kimi.com). Kimi web search follows whichever region you are logged into ([#15889](https://github.com/can1357/oh-my-pi/pull/15889) by [@z80dev](https://github.com/z80dev)).
+
 ### Changed
 
 - Reduced status-line refresh overhead while subagents have long conversations ([#15874](https://github.com/can1357/oh-my-pi/pull/15874) by [@iliaal](https://github.com/iliaal)).

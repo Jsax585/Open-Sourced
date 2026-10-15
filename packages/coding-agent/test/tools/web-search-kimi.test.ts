@@ -97,6 +97,30 @@ describe("searchKimi credential resolution", () => {
 		expect(capturedAuth).toBe("Bearer kimi-code-console-key");
 	});
 
+	it("sends a kimi-code-global credential to the global search host", async () => {
+		// Kimi Code tokens are region-scoped: a kimi.ai login 401s on api.kimi.com.
+		delete process.env.MOONSHOT_SEARCH_API_KEY;
+		delete process.env.KIMI_SEARCH_API_KEY;
+		let capturedUrl: string | undefined;
+		const fetchMock: FetchImpl = url => {
+			capturedUrl = String(url);
+			return Promise.resolve(
+				new Response(JSON.stringify({ search_results: [] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		};
+
+		await withLocalAuthStorage(async authStorage => {
+			await authStorage.credentials.set("kimi-code-global", { type: "api_key", key: "kimi-global-console-key" });
+			expect(new KimiProvider().isAvailable(authStorage)).toBe(true);
+			await searchKimi({ query: "kimi docs", authStorage, fetch: fetchMock });
+		});
+
+		expect(capturedUrl).toBe("https://api.kimi.ai/coding/v1/search");
+	});
+
 	it("ignores a stored moonshot credential and reports missing Kimi Code credentials", async () => {
 		delete process.env.MOONSHOT_SEARCH_API_KEY;
 		delete process.env.KIMI_SEARCH_API_KEY;

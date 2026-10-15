@@ -128,6 +128,7 @@ const MODEL_MANAGER_FACTORIES: Readonly<Partial<Record<KnownProvider, ModelManag
 	huggingface: config => huggingfaceModelManagerOptions(config),
 	kilo: config => kiloModelManagerOptions(config),
 	"kimi-code": config => kimiCodeModelManagerOptions(config),
+	"kimi-code-global": config => kimiCodeModelManagerOptions(config, "kimi-code-global"),
 	litellm: config => litellmModelManagerOptions(config),
 	local: () => localModelManagerOptions(),
 	"lm-studio": config => lmStudioModelManagerOptions(config),

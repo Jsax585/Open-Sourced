@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Kimi Code global-region support: `kimi-code-global` models stream with Kimi client headers and report quota from `api.kimi.ai` ([#15889](https://github.com/can1357/oh-my-pi/pull/15889) by [@z80dev](https://github.com/z80dev)).
+
 ## [18.11.1] - 2026-10-15
 
 ### Added
