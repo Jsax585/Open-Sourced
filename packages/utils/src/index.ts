@@ -62,6 +62,11 @@ export function structuredCloneJSON<T>(value: T): T {
 			// might still fail due to nested structures
 		}
 	}
+	try {
+		return structuredClone(value);
+	} catch {
+		// might still fail due to non-cloneable nested structures
+	}
 	return JSON.parse(JSON.stringify(value)) as T;
 }
 
