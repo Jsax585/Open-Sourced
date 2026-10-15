@@ -216,11 +216,14 @@ export class SessionFocusController {
 			await target.settleInFlightMessagePersistence();
 			if (generation !== this.#attachGeneration) return false;
 			this.ctx.statusLine.setSession(target, this.#focusedAgentId);
+			if (target.isStreaming) await this.ctx.eventController.handleEvent({ type: "agent_start" });
+			else {
+				setRunStatus({ state: "idle" });
+				this.ctx.eventController.markViewIdle();
+			}
 			// A stream-idle pulse clears runStartedAt even when this logical run
 			// still owns a continuation. Restore its activity and settlement watch.
 			this.ctx.eventController.restoreRunActivity();
-			if (target.isStreaming) await this.ctx.eventController.handleEvent({ type: "agent_start" });
-			else setRunStatus({ state: "idle" });
 			if (generation !== this.#attachGeneration) return false;
 			await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 			if (generation !== this.#attachGeneration) return false;

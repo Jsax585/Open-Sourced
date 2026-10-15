@@ -251,7 +251,7 @@ describe("collab mid-turn guest prompts", () => {
 		expect(welcome.state.runActive).toBe(true);
 	});
 
-	it("keeps broadcasting state after agent_end while the logical run stays open", async () => {
+	it.each([false, true])("broadcasts silent settlement when joining paused: %s", async joiningPaused => {
 		vi.useFakeTimers();
 		cleanups.push(() => {
 			vi.useRealTimers();
@@ -259,8 +259,7 @@ describe("collab mid-turn guest prompts", () => {
 		const relay = startTestRelay();
 		cleanups.push(relay.stop);
 		const harness = makeStreamingHostContext({ paused: true });
-		// Start fully idle so the agent_start state differs from the welcome state (broadcasts dedup on equal JSON).
-		harness.live.runActive = false;
+		harness.live.runActive = joiningPaused;
 		const host = new CollabHost(harness.ctx);
 		await host.start(relay.url);
 		cleanups.push(() => host.stop("test done"));
@@ -280,17 +279,21 @@ describe("collab mid-turn guest prompts", () => {
 			send.mockRestore();
 		});
 
-		harness.live.isStreaming = true;
-		harness.live.runActive = true;
-		harness.emit({ type: "agent_start" });
-		vi.advanceTimersByTime(100);
-		expect(states.at(-1)).toEqual({ isStreaming: true, runActive: true });
+		if (joiningPaused) {
+			expect(welcome.state.runActive).toBe(true);
+			vi.advanceTimersByTime(100);
+		} else {
+			harness.live.isStreaming = true;
+			harness.live.runActive = true;
+			harness.emit({ type: "agent_start" });
+			vi.advanceTimersByTime(100);
+			expect(states.at(-1)).toEqual({ isStreaming: true, runActive: true });
 
-		// Stream goes idle but a background task keeps the run open: agent_end arrives.
-		harness.live.isStreaming = false;
-		harness.emit({ type: "agent_end" });
-		vi.advanceTimersByTime(100);
-		expect(states.at(-1)).toEqual({ isStreaming: false, runActive: true });
+			harness.live.isStreaming = false;
+			harness.emit({ type: "agent_end" });
+			vi.advanceTimersByTime(100);
+			expect(states.at(-1)).toEqual({ isStreaming: false, runActive: true });
+		}
 
 		// Background work drains with no further session event; only the periodic broadcast can report it.
 		harness.live.runActive = false;

@@ -112,6 +112,7 @@ function makeHarness(options: { renderInitialMessages?: () => void | Promise<voi
 			restoreRunActivity() {
 				runActive = ctx.viewSession.runStartedAt !== undefined;
 			},
+			markViewIdle() {},
 		},
 		statusLine: {
 			setSession: (session: AgentSession, focusedAgentId?: string) => {

@@ -89,6 +89,7 @@ describe("EventController superseded agent_end", () => {
 		// the agent is streaming again. The interrupted turn's agent_end is still in
 		// flight through the async event pipeline.
 		streamState.isStreaming = true;
+		streamState.viewIsStreaming = true;
 		await controller.handleEvent(AGENT_START);
 
 		// The interrupted turn's agent_end finally propagates. Because the agent is
@@ -224,6 +225,26 @@ describe("EventController superseded agent_end", () => {
 		expect(ctx.composer.setRunActive).toHaveBeenLastCalledWith(true);
 		expect(loader.stop).not.toHaveBeenCalled();
 		ctx.unsubscribe?.();
+	});
+
+	it("keeps the composer busy for idle auto-compaction and releases it at the end", async () => {
+		const { ctx } = createContext();
+		const controller = new EventController(ctx);
+
+		await controller.handleEvent({
+			type: "auto_compaction_start",
+			reason: "idle",
+			action: "context-full",
+		} as unknown as AgentSessionEvent);
+		expect(ctx.composer.setRunActive).toHaveBeenLastCalledWith(true);
+
+		// An aborted compaction leaves no rebuilt transcript to refill the loader's row.
+		await controller.handleEvent({
+			type: "auto_compaction_end",
+			action: "context-full",
+			aborted: true,
+		} as unknown as AgentSessionEvent);
+		expect(ctx.composer.setRunActive).toHaveBeenLastCalledWith(false);
 	});
 
 	it("flushes queued command panels at a non-terminal settle", async () => {
