@@ -297,7 +297,8 @@ describe("dialogs under a native surface", () => {
 				expect(callbacks.onApprove).not.toHaveBeenCalled();
 				expect(callbacks.onDeny).not.toHaveBeenCalled();
 			}
-			// The native bar carries a button per offered answer.
+			// The native bar carries a button per offered answer, every approval one styled like
+			// the primary Approve (accent); Deny keeps the destructive tone.
 			const buttons = new ApprovalDialogComponent(
 				prompt,
 				{ onApprove: vi.fn(), onDeny: vi.fn() },
@@ -306,9 +307,15 @@ describe("dialogs under a native surface", () => {
 					exactGrant: true,
 				},
 			);
+			const button = (key: string) =>
+				find(buttons.describe(), node => node.p?.role === "omp.btn" && node.key === key)?.node;
 			for (const key of ["approve", "folder", "always", "always-folder", "deny"]) {
-				expect(find(buttons.describe(), node => node.p?.role === "omp.btn" && node.key === key)).toBeDefined();
+				expect(button(key)).toBeDefined();
 			}
+			for (const key of ["approve", "folder", "always", "always-folder"]) {
+				expect(button(key)?.p?.tone).toBe("accent");
+			}
+			expect(button("deny")?.p?.tone).toBe("error");
 		} finally {
 			now.mockRestore();
 		}

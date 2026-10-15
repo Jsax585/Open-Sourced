@@ -371,6 +371,7 @@ export class ApprovalDialogComponent implements Component {
 				: [
 						actionButton("Approve for directory", "folder", {
 							...(folderKey ? { keys: folderKey } : {}),
+							tone: "accent",
 							title: `Approve and remember ${folderLabel} for this session${folderKey ? `  ${formatTooltipKey(folderKey)}` : ""}`,
 						}),
 					];
@@ -379,6 +380,7 @@ export class ApprovalDialogComponent implements Component {
 				? [
 						actionButton("Always approve", "always", {
 							...(alwaysKey ? { keys: alwaysKey } : {}),
+							tone: "accent",
 							title: `Approve this call and remember it for every session${alwaysKey ? `  ${formatTooltipKey(alwaysKey)}` : ""}`,
 						}),
 					]
@@ -389,6 +391,7 @@ export class ApprovalDialogComponent implements Component {
 				: [
 						actionButton("Always approve for directory", "always-folder", {
 							...(alwaysFolderKey ? { keys: alwaysFolderKey } : {}),
+							tone: "accent",
 							title: `Approve and remember ${folderLabel} for every session${alwaysFolderKey ? `  ${formatTooltipKey(alwaysFolderKey)}` : ""}`,
 						}),
 					];
