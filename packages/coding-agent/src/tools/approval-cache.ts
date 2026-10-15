@@ -176,6 +176,7 @@ export class ApprovalCache implements ApprovalGrantStore {
 			db.run("PRAGMA synchronous = NORMAL");
 			db.run(SCHEMA);
 			migrateLegacyJson(db, this.filePath);
+			purgeCommandGrants(db);
 			return db;
 		} catch (err) {
 			db.close();
@@ -186,6 +187,22 @@ export class ApprovalCache implements ApprovalGrantStore {
 
 /** Directories whose legacy JSON cache has been checked in this process. */
 const migratedDirs = new Set<string>();
+
+/**
+ * Drop grants keyed by command text (`bash: …`), which briefly recorded exact
+ * commands. Only files and folders are remembered now, so those rows would sit
+ * in the database doing nothing.
+ */
+function purgeCommandGrants(db: Database): void {
+	try {
+		const stale = db.query("SELECT 1 FROM grants WHERE key LIKE 'bash: %' LIMIT 1").get();
+		if (stale === null) return;
+		db.query("DELETE FROM grants WHERE key LIKE 'bash: %'").run();
+		logger.info("approval cache: dropped command-text grants");
+	} catch (err) {
+		logger.debug("approval cache: command-grant purge failed", { err: String(err) });
+	}
+}
 
 /** Sibling path of the pre-SQLite JSON cache for a database path. */
 function legacyJsonPath(filePath: string): string {

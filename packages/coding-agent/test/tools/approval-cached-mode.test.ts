@@ -31,7 +31,7 @@ import {
 	commonApprovalDirectoryKey,
 	getApprovalCache,
 } from "@oh-my-pi/pi-coding-agent/tools/approval-cache";
-import { approvalCommandKey, approvalTargetKey } from "@oh-my-pi/pi-coding-agent/tools/approval-targets";
+import { approvalTargetKey } from "@oh-my-pi/pi-coding-agent/tools/approval-targets";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { getAgentDir, isRecord, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/sdk";
@@ -111,28 +111,46 @@ describe("always-ask-cached resolution", () => {
 		});
 	});
 
-	it("remembers exec calls per exact command, gated on the tool's own target", () => {
-		const bash = targetTool("bash", "exec");
-		const grants = testGrants(["target:npm test"]);
-		expect(resolveApproval(bash, { path: "npm test" }, "always-ask-cached", {}, grants)).toMatchObject({
-			policy: "allow",
-			tier: "exec",
-			source: "mode",
-		});
-		// A different command still asks.
-		expect(resolveApproval(bash, { path: "npm run build" }, "always-ask-cached", {}, grants)).toMatchObject({
+	it("uses folder scopes, never command text, to cover exec calls", () => {
+		const cwd = path.resolve("/work/project");
+		const bash: AgentTool = {
+			name: "bash",
+			label: "Bash",
+			description: "command tool",
+			parameters: {} as never,
+			approval: "exec",
+			approvalCacheScopes: () => [approvalDirectoryKey(path.join(cwd, "TestDir"))],
+			execute: async () => ({ content: [{ type: "text" as const, text: "executed" }] }),
+		};
+		const uncovered = testGrants();
+		expect(resolveApproval(bash, { command: "npm test" }, "always-ask-cached", {}, uncovered)).toMatchObject({
 			policy: "prompt",
 			tier: "exec",
+			reason: "folder not yet approved",
 		});
+		// A granted folder (or any ancestor of it) covers the call, whatever the command.
+		const covered = testGrants([approvalDirectoryKey(path.join(cwd, "TestDir"))]);
+		expect(resolveApproval(bash, { command: "npm test" }, "always-ask-cached", {}, covered).policy).toBe("allow");
+		expect(resolveApproval(bash, { command: "rm -rf build" }, "always-ask-cached", {}, covered).policy).toBe("allow");
+		const ancestor = testGrants([approvalDirectoryKey(cwd)]);
+		expect(
+			resolveApproval(
+				bash,
+				{ command: "npm test", cwd: path.join(cwd, "TestDir", "sub") },
+				"always-ask-cached",
+				{},
+				ancestor,
+			).policy,
+		).toBe("allow");
 	});
 
-	it("keeps prompting exec tools that declare no cache target", () => {
+	it("keeps prompting exec tools that declare no scope or target", () => {
 		const evalTool = { name: "eval", approval: "exec" as const } as AgentTool;
 		const grants = testGrants(["target:anything"]);
 		expect(resolveApproval(evalTool, { code: "1 + 1" }, "always-ask-cached", {}, grants)).toMatchObject({
 			policy: "prompt",
 			tier: "exec",
-			reason: "command not yet approved",
+			reason: "target not yet approved",
 		});
 	});
 
@@ -393,17 +411,15 @@ describe("approval target keys", () => {
 		expect(read.approvalCacheTargets?.({})).toBeUndefined();
 	});
 
-	it("keys commands by tool and exact text, ignoring only surrounding whitespace", () => {
-		expect(approvalCommandKey("bash", "  npm test  ")).toBe("bash: npm test");
-		expect(approvalCommandKey("bash", "   ")).toBeUndefined();
-		expect(approvalCommandKey("bash", "echo 'a  b'")).not.toBe(approvalCommandKey("bash", "echo 'a b'"));
-
+	it("reports a shell command's working directory as its scope and no targets", () => {
 		const bash = new BashTool(createToolSession(cwd));
-		expect(bash.approvalCacheTargets?.({ command: "git status" })).toEqual(["bash: git status"]);
-		expect(bash.approvalCacheTargets?.({ command: "git status " })).toEqual(["bash: git status"]);
-		expect(bash.approvalCacheTargets?.({ command: "git status --short" })).toEqual(["bash: git status --short"]);
-		expect(bash.approvalCacheTargets?.({ command: "" })).toBeUndefined();
-		expect(bash.approvalCacheTargets?.({})).toBeUndefined();
+		expect(bash.approvalCacheScopes?.({ command: "git status" })).toEqual([approvalDirectoryKey(cwd)]);
+		const elsewhere = path.resolve("/elsewhere");
+		expect(bash.approvalCacheScopes?.({ command: "git status", cwd: elsewhere })).toEqual([
+			approvalDirectoryKey(elsewhere),
+		]);
+		// Command text is never a cache target: only files and folders are remembered.
+		expect("approvalCacheTargets" in bash).toBe(false);
 	});
 
 	it("derives directory keys, ancestors, and shared folders", () => {
@@ -419,15 +435,6 @@ describe("approval target keys", () => {
 		expect(commonApprovalDirectoryKey([path.join(cwd, "a"), path.join(cwd, "b")])).toBe(approvalDirectoryKey(cwd));
 		expect(commonApprovalDirectoryKey([path.join(cwd, "a")])).toBe(approvalDirectoryKey(path.join(cwd, "a")));
 		expect(commonApprovalDirectoryKey([])).toBeUndefined();
-	});
-
-	it("reports a shell command's working directory as its scope", () => {
-		const bash = new BashTool(createToolSession(cwd));
-		expect(bash.approvalCacheScopes?.({ command: "git status" })).toEqual([approvalDirectoryKey(cwd)]);
-		const elsewhere = path.resolve("/elsewhere");
-		expect(bash.approvalCacheScopes?.({ command: "git status", cwd: elsewhere })).toEqual([
-			approvalDirectoryKey(elsewhere),
-		]);
 	});
 });
 
@@ -452,6 +459,8 @@ describe("always-ask-cached wrapper cycle", () => {
 	beforeEach(() => {
 		originalAgentDir = getAgentDir();
 		setAgentDir(tempDir.path());
+		// Grants are per agent directory and shared across tests otherwise; start each case clean.
+		fs.rmSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME), { force: true });
 		sessionManager = SessionManager.inMemory(path.join(tempDir.path(), "cwd"));
 	});
 
@@ -746,48 +755,71 @@ describe("always-ask-cached wrapper cycle", () => {
 		expect(select).toHaveBeenCalledTimes(2);
 	});
 
-	it("remembers an approved exec command and keeps asking for other commands", async () => {
+	it("never remembers a command by its text; only the folder answer covers exec calls", async () => {
 		const select = vi.fn(async () => "Approve");
 		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
 		initializeRunner(runner, select);
 		const settings = cachedSettings();
+		const dir = path.join(tempDir.path(), "ExecDir");
 		const tool: AgentTool = {
 			name: "bash",
 			label: "Bash",
 			description: "command tool",
 			parameters: {} as never,
 			approval: "exec",
-			approvalCacheTargets: (args: unknown) =>
-				isRecord(args) && typeof args.command === "string"
-					? [approvalCommandKey("bash", args.command)!]
-					: undefined,
+			approvalCacheScopes: () => [approvalDirectoryKey(dir)],
 			execute: async () => ({ content: [{ type: "text" as const, text: "executed" }] }),
 		};
 		const wrapper = new ExtensionToolWrapper(tool, runner);
 
+		// A plain approval of a command records nothing: the same command asks again.
 		await wrapper.execute("exec-first", { command: "npm test" }, undefined, undefined, context(settings));
 		expect(select).toHaveBeenCalledTimes(1);
-		expect(getApprovalCache(settings.getAgentDir()).has("bash: npm test")).toBe(true);
-
+		expect(getApprovalCache(settings.getAgentDir()).size).toBe(0);
 		await wrapper.execute("exec-again", { command: "npm test" }, undefined, undefined, context(settings));
-		expect(select).toHaveBeenCalledTimes(1);
-
-		await wrapper.execute("exec-other", { command: "npm run build" }, undefined, undefined, context(settings));
 		expect(select).toHaveBeenCalledTimes(2);
 	});
 
-	it("does not remember a command whose prompt came from a tool safety override", async () => {
+	it("lets the folder answer cover exec calls, whatever command runs there", async () => {
+		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
+		// Select hosts (RPC/ACP) answer with the option label; option 2 is the folder answer.
+		const select = vi.fn(async (_title: string, options: string[]) => options[1]);
+		initializeRunner(runner, select);
+		const settings = cachedSettings();
+		const dir = path.join(tempDir.path(), "ExecDir");
+		const tool: AgentTool = {
+			name: "bash",
+			label: "Bash",
+			description: "command tool",
+			parameters: {} as never,
+			approval: "exec",
+			approvalCacheScopes: () => [approvalDirectoryKey(dir)],
+			execute: async () => ({ content: [{ type: "text" as const, text: "executed" }] }),
+		};
+		const wrapper = new ExtensionToolWrapper(tool, runner);
+
+		await wrapper.execute("exec-folder-answer", { command: "npm test" }, undefined, undefined, context(settings));
+		expect(select).toHaveBeenCalledTimes(1);
+		expect(select.mock.calls[0]![1][1]).toBe(`Approve folder: ${approvalDirectoryKey(dir).replace(/[\\/]+$/, "")}`);
+		expect(getApprovalCache(settings.getAgentDir()).has(approvalDirectoryKey(dir))).toBe(true);
+
+		await wrapper.execute("exec-sibling", { command: "npm run build" }, undefined, undefined, context(settings));
+		expect(select).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not remember a guarded command even when its folder is granted", async () => {
 		const select = vi.fn(async () => "Approve");
 		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
 		initializeRunner(runner, select);
 		const settings = cachedSettings();
+		const dir = path.join(tempDir.path(), "GuardedDir");
 		const tool: AgentTool = {
 			name: "bash",
 			label: "Bash",
 			description: "guarded command tool",
 			parameters: {} as never,
 			approval: () => ({ tier: "exec", override: true, reason: "critical pattern detected" }),
-			approvalCacheTargets: () => ["bash: rm -rf /"],
+			approvalCacheScopes: () => [approvalDirectoryKey(dir)],
 			execute: async () => ({ content: [{ type: "text" as const, text: "executed" }] }),
 		};
 		const wrapper = new ExtensionToolWrapper(tool, runner);
@@ -795,7 +827,7 @@ describe("always-ask-cached wrapper cycle", () => {
 		await wrapper.execute("guarded-first", { command: "rm -rf /" }, undefined, undefined, context(settings));
 		await wrapper.execute("guarded-second", { command: "rm -rf /" }, undefined, undefined, context(settings));
 		expect(select).toHaveBeenCalledTimes(2);
-		expect(getApprovalCache(settings.getAgentDir()).has("bash: rm -rf /")).toBe(false);
+		expect(getApprovalCache(settings.getAgentDir()).size).toBe(0);
 		const [title] = select.mock.calls[0] as unknown as [string, string[]];
 		expect(title).toContain("critical pattern detected");
 	});

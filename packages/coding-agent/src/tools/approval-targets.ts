@@ -31,17 +31,3 @@ export function approvalTargetKey(cwd: string, target: string): string | undefin
 		return trimmed;
 	}
 }
-
-/**
- * Cache key for an exec call (`bash`): the tool's name plus the exact command
- * text it would run, so approving one command never widens to a different one.
- * Only surrounding whitespace is ignored — everything inside is significant.
- * The working directory and execution plumbing (`pty`, `async`, service name)
- * are not part of the identity, matching `bash.patterns` allow rules, which are
- * also cwd-independent.
- */
-export function approvalCommandKey(toolName: string, command: string): string | undefined {
-	const trimmed = command.trim();
-	if (trimmed.length === 0) return undefined;
-	return `${toolName}: ${trimmed}`;
-}

@@ -36,7 +36,6 @@ import { TerminalGraphicsDecoder } from "../utils/terminal-graphics";
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
 import { approvalDirectoryKey } from "./approval-cache";
-import { approvalCommandKey } from "./approval-targets";
 import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-interactive";
 import { checkBashInterception } from "./bash-interceptor";
 import { rewriteGitWorktreeAdd } from "./bash-worktree-rewrite";
@@ -589,21 +588,11 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		return "exec";
 	};
 	/**
-	 * `always-ask-cached` key: the exact command this call runs (`bash: <command>`),
-	 * so approving `npm test` once stops the prompt for that same command while a
-	 * changed command still asks. Commands the approval above forces a prompt for
-	 * (critical overrides, `bash.patterns` rules) are never recorded.
-	 */
-	readonly approvalCacheTargets = (args: unknown): readonly string[] | undefined => {
-		const rawCommand = (args as Partial<BashToolInput>).command;
-		if (typeof rawCommand !== "string") return undefined;
-		const key = approvalCommandKey("bash", rawCommand);
-		return key === undefined ? undefined : [key];
-	};
-	/**
 	 * `always-ask-cached` scope: the directory this command runs in (its `cwd`
-	 * argument, else the session cwd). A folder grant for it pre-approves every
-	 * command run there; it is only checked, never recorded by a plain approval.
+	 * argument, else the session cwd). Commands are never remembered by their
+	 * text — only a folder grant for this scope (or the prompt's folder answer)
+	 * pre-approves them, and it is only checked, never recorded by a plain
+	 * approval.
 	 */
 	readonly approvalCacheScopes = (args: unknown): readonly string[] | undefined => {
 		const rawCwd = (args as Partial<BashToolInput>).cwd;

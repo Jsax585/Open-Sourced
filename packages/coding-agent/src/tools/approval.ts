@@ -173,14 +173,14 @@ function grantCovers(grants: ApprovalGrantStore, target: string): boolean {
 
 /**
  * Fallback decision for `always-ask-cached` (reached only when no tool or user
- * policy already decided). A call runs without asking when every cache target
- * is approved, or when the tool reports directory scopes and every one of them
- * is covered by a folder grant — so approving a folder allows read/write calls
- * inside it and exec calls that run in it. Anything else prompts, and the
+ * policy already decided). Grants remember the *file* a read/write touched or a
+ * *folder*; command text is never remembered. A call runs without asking when
+ * every cache target is approved, or — for tools that report directory scopes —
+ * when every scope is covered by a folder grant, which is how a shell command
+ * inside an approved folder skips its prompt. Anything else prompts, and the
  * recording helpers remember the targets (or the folder) when the user
  * approves. Read-tier tools without cache targets (searches, listings) stay
- * auto-approved exactly as in `always-ask`; exec tools without targets (eval,
- * browser, task) always prompt.
+ * auto-approved exactly as in `always-ask`.
  */
 function resolveCachedModeApproval(
 	tool: ApprovalSubject,
@@ -194,20 +194,18 @@ function resolveCachedModeApproval(
 		source: "mode" as const,
 		...(decision.policyKey ? { policyKey: decision.policyKey } : {}),
 	};
-	const prompt = {
-		...base,
-		policy: "prompt" as const,
-		reason: decision.reason ?? (decision.tier === "exec" ? "command not yet approved" : "target not yet approved"),
-	};
+	const scopes = approvalCacheScopes(tool, args);
+	if (scopes.length > 0 && scopes.every(scope => grantCovers(grants, scope))) {
+		return { ...base, policy: "allow" };
+	}
+	const promptReason = decision.reason ?? (scopes.length > 0 ? "folder not yet approved" : "target not yet approved");
 	const targets = approvalCacheTargets(tool, args);
 	if (targets.length === 0) {
 		if (decision.tier === "read") return { ...base, policy: "allow" };
-		return prompt;
+		return { ...base, policy: "prompt", reason: promptReason };
 	}
 	if (targets.every(target => grantCovers(grants, target))) return { ...base, policy: "allow" };
-	const scopes = approvalCacheScopes(tool, args);
-	if (scopes.length > 0 && scopes.every(scope => grantCovers(grants, scope))) return { ...base, policy: "allow" };
-	return prompt;
+	return { ...base, policy: "prompt", reason: promptReason };
 }
 
 /**

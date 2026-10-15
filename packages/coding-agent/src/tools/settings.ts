@@ -321,7 +321,7 @@ export const cfgToolsApprovalMode = register({
 		group: "Approvals",
 		label: "Tool Approval",
 		description:
-			"Default approval behavior for tool calls. 'Always ask' auto-approves read-only tools only. 'Ask and remember' prompts once per file, command, or folder, then remembers it. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers; user policy may still prompt or block.",
+			"Default approval behavior for tool calls. 'Always ask' auto-approves read-only tools only. 'Ask and remember' prompts once per file or folder, then remembers it. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers; user policy may still prompt or block.",
 		options: [
 			{
 				value: "always-ask",
@@ -332,7 +332,7 @@ export const cfgToolsApprovalMode = register({
 				value: "always-ask-cached",
 				label: "Ask and remember",
 				description:
-					"Prompt once per file, command, or folder, then remember the approval. Dangerous commands and explicit prompt policies still ask every time.",
+					"Prompt once per file or folder, then remember it; commands are covered through their folder. Dangerous commands and explicit prompt policies still ask every time.",
 			},
 			{
 				value: "write",
@@ -363,13 +363,12 @@ export const cfgToolsApprovalScope = register({
 		tab: "interaction",
 		group: "Approvals",
 		label: "Remembered Scope",
-		description:
-			"What a plain approval remembers in 'Ask and remember': the exact file or command, or the folder around it.",
+		description: "What a plain approval remembers in 'Ask and remember': the exact file, or the folder around it.",
 		options: [
 			{
 				value: "target",
 				label: "Exact item",
-				description: "Remember the approved file or command; the prompt's folder answer grants its folder instead.",
+				description: "Remember the approved file; the prompt's folder answer grants its folder instead.",
 			},
 			{
 				value: "folder",
