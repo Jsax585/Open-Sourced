@@ -12,7 +12,7 @@
  * prompt, the expand key (`app.tools.expand`) swaps it in, wrapped.
  */
 import { type Component, Ellipsis, ScrollView, type TUI, truncateToWidth, wrapTextWithAnsi } from "../index";
-import { formatKeyHints, formatTooltipKey } from "../app-keybindings";
+import { formatKeyHint, formatKeyHints, formatTooltipKey } from "../app-keybindings";
 import { OverlayPanel, PanelDivider, PanelRows } from "../chrome/overlay-box";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { getKeybindings } from "../keybindings";
@@ -56,6 +56,28 @@ interface ApprovalDialogCallbacks {
 	onDeny(): void;
 }
 
+/** The answers the dock's menu can offer, in display order. */
+type ApprovalDialogAnswerId = "approve" | "folder" | "always" | "always-folder" | "deny";
+
+/** Menu rows for the answers this prompt offers. Directory rows name the folder they would grant. */
+function approvalDialogAnswers(
+	options: ApprovalDialogOptions,
+): readonly { id: ApprovalDialogAnswerId; label: string }[] {
+	const folder = options.folderLabel;
+	const answers: { id: ApprovalDialogAnswerId; label: string }[] = [{ id: "approve", label: "Approve" }];
+	if (folder !== undefined) {
+		answers.push({ id: "folder", label: `Approve for directory (${folder})` });
+	}
+	if (options.exactGrant === true) {
+		answers.push({ id: "always", label: "Always approve" });
+	}
+	if (folder !== undefined) {
+		answers.push({ id: "always-folder", label: `Always approve for directory (${folder})` });
+	}
+	answers.push({ id: "deny", label: "Deny" });
+	return answers;
+}
+
 /** The composer mounted beneath the dialog: it receives every key the dialog does not own. */
 export interface ApprovalDialogDraft {
 	/** True while the composer holds a draft — text, attachments, or a paste still landing: keys then edit and send it. */
@@ -97,7 +119,11 @@ export class ApprovalDialogComponent implements Component {
 	#expanded = false;
 	readonly #panel: OverlayPanel;
 	readonly #body = new PanelRows();
+	readonly #choices = new PanelRows();
 	readonly #footer = new PanelRows();
+	/** Answers shown as a navigable menu; index 0 is highlighted on mount. */
+	#answers: readonly { id: ApprovalDialogAnswerId; label: string }[] = [];
+	#selected = 0;
 	#scrollOffset = 0;
 	#bodyRows = MAX_DETAIL_ROWS;
 	#closed = false;
@@ -118,8 +144,11 @@ export class ApprovalDialogComponent implements Component {
 		this.#full =
 			options.fullPrompt === undefined ? undefined : promptDetails(sanitizeDisplayLines(options.fullPrompt));
 		this.#panel = new OverlayPanel(title, "omp.overlay.approval");
+		this.#answers = approvalDialogAnswers(options);
 		this.#footer.setHeight(1);
 		this.#panel.addChild(this.#body);
+		this.#choices.setHeight(this.#answers.length);
+		this.#panel.addChild(this.#choices);
 		this.#panel.addChild(new PanelDivider());
 		this.#panel.addChild(this.#footer);
 		if (options.timeout && options.timeout > 0) {
@@ -187,13 +216,25 @@ export class ApprovalDialogComponent implements Component {
 			this.#editDraft(draft, keyData);
 			return;
 		}
-		const page = Math.max(1, this.#bodyRows - 1);
-		if (matchesSelectUp(keyData)) this.#scroll(-1);
-		else if (matchesSelectDown(keyData)) this.#scroll(1);
-		else if (matchesSelectPageUp(keyData)) this.#scroll(-page);
-		else if (matchesSelectPageDown(keyData)) this.#scroll(page);
-		// An empty composer swallows Enter: it would otherwise submit nothing, or interrupt the run.
-		else if (draft && !getKeybindings().matches(keyData, "tui.input.submit")) this.#editDraft(draft, keyData);
+		// With the composer empty, the arrows drive the answer menu like any omp selector;
+		// page keys keep scrolling the details behind it.
+		if (matchesSelectUp(keyData)) this.#moveSelection(-1);
+		else if (matchesSelectDown(keyData)) this.#moveSelection(1);
+		else if (matchesSelectPageUp(keyData)) this.#scroll(-Math.max(1, this.#bodyRows - 1));
+		else if (matchesSelectPageDown(keyData)) this.#scroll(Math.max(1, this.#bodyRows - 1));
+		else if (getKeybindings().matches(keyData, "tui.input.submit")) {
+			// The highlighted answer confirms on Enter; the arming delay keeps an Enter
+			// meant for the composer from answering the prompt as it appears.
+			if (armed) this.#finish(this.#answers[this.#selected]?.id ?? "deny");
+		} else if (draft) this.#editDraft(draft, keyData);
+	}
+
+	/** Move the highlight by `delta` rows, stopping at the edges like the selector does. */
+	#moveSelection(delta: number): void {
+		const next = Math.max(0, Math.min(this.#answers.length - 1, this.#selected + delta));
+		if (next === this.#selected) return;
+		this.#selected = next;
+		this.options.tui?.requestRender();
 	}
 
 	#editDraft(draft: ApprovalDialogDraft, keyData: string): void {
@@ -254,8 +295,24 @@ export class ApprovalDialogComponent implements Component {
 			this.#body.setLines(lines);
 		}
 		this.#body.setHeight(rows);
+		this.#choices.setLines(this.#answerLines(width));
 		this.#footer.setLines([theme.fg("dim", this.#footerHint(overflows))]);
 		return this.#panel.render(width);
+	}
+
+	/**
+	 * The answer menu: a cursor row painted with the `selectedBg` band like any omp
+	 * selector, so the highlight survives themes whose accent is close to the text color.
+	 */
+	#answerLines(width: number): string[] {
+		const innerWidth = Math.max(1, width - 4);
+		return this.#answers.map((answer, index) => {
+			const selected = index === this.#selected;
+			const prefix = selected ? theme.fg("accent", `${theme.nav.cursor} `) : "  ";
+			const label = theme.fg(selected ? "accent" : "text", answer.label);
+			const row = truncateToWidth(prefix + label, innerWidth, Ellipsis.Unicode);
+			return selected ? theme.bg("selectedBg", row) : row;
+		});
 	}
 
 	/**
@@ -367,20 +424,14 @@ export class ApprovalDialogComponent implements Component {
 	}
 
 	#footerHint(overflows: boolean): string {
-		const approve = formatKeyHints(appApproveKeys());
-		const expand = this.#full
-			? ` · ${formatKeyHints([appToolsExpandKey()])} ${this.#expanded ? "less" : "details"}`
-			: "";
-		const directory =
-			this.options.folderLabel === undefined
-				? ""
-				: ` · ${formatKeyHints(appApproveFolderKeys())} approve dir · ${formatKeyHints(appAlwaysApproveFolderKeys())} always dir`;
-		const always = this.options.exactGrant === true ? ` · ${formatKeyHints(appAlwaysApproveKeys())} always` : "";
-		const hint = `${approve} approve${directory}${always} · ${editorKey("tui.select.cancel")} deny${expand}`;
+		const hint = `${editorKeys("tui.select.up", "tui.select.down")} choose · ${formatKeyHint("enter")} confirm · ${editorKey("tui.select.cancel")} deny`;
 		const draft = this.options.draft;
 		if (draft?.hasDraft()) return `${hint} · ${editorKey("tui.input.submit")} deny and send`;
-		const scroll = overflows ? ` · ${editorKeys("tui.select.up", "tui.select.down")} scroll` : "";
-		return `${hint}${scroll}${draft ? " · type to steer instead" : ""}`;
+		const scroll = overflows ? ` · ${editorKeys("tui.select.pageUp", "tui.select.pageDown")} scroll` : "";
+		const details = this.#full
+			? ` · ${formatKeyHints([appToolsExpandKey()])} ${this.#expanded ? "less" : "details"}`
+			: "";
+		return `${hint}${scroll}${details}${draft ? " · type to steer instead" : ""}`;
 	}
 
 	#scroll(delta: number): void {

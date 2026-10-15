@@ -9,12 +9,13 @@ import { APPROVE_ARM_MS, ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overla
 import { LoginDialogComponent } from "@oh-my-pi/pi-tui/overlays/login-dialog";
 import { PlanReviewOverlay } from "@oh-my-pi/pi-tui/overlays/plan-review-overlay";
 import { setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
+import { getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme";
 import { TspHarness } from "./native/tsp-harness";
 
 const ENTER = "\n";
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
+const PAGE_DOWN = "\x1b[6~";
 const RIGHT = "\x1b[C";
 const LEFT = "\x1b[D";
 const SHIFT_RIGHT = "\x1b[1;2C";
@@ -267,13 +268,6 @@ describe("dialogs under a native surface", () => {
 	});
 
 	it("approval: the grant answers fire from their keys and buttons, and stay hidden when not offered", () => {
-		const callbacks = {
-			onApprove: vi.fn(),
-			onApproveFolder: vi.fn(),
-			onAlwaysApprove: vi.fn(),
-			onAlwaysApproveFolder: vi.fn(),
-			onDeny: vi.fn(),
-		};
 		const root = "/tmp/project";
 		const directoryKey = process.platform === "win32" ? root.toLowerCase() : root;
 		const prompt = "Allow tool: write\nPath: /tmp/project/out.txt";
@@ -332,40 +326,91 @@ describe("dialogs under a native surface", () => {
 		}
 	});
 
-	it("approval: with a composer draft, typing edits it, an empty Enter is swallowed, and arrows scroll only while it is empty", () => {
+	it("approval: with a composer draft, typing edits it, and the answer menu answers only an empty composer", () => {
 		let draft = "";
 		const routed: string[] = [];
 		const callbacks = { onApprove: vi.fn(), onDeny: vi.fn() };
 		const details = Array.from({ length: 20 }, (_, i) => `Line ${i}`).join("\n");
-		const dialog = new ApprovalDialogComponent(`Allow tool: bash\n${details}`, callbacks, {
-			draft: {
-				hasDraft: () => draft.length > 0,
-				handleInput: key => {
-					routed.push(key);
-					if (key.length === 1 && key >= " ") draft += key;
+		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+		try {
+			const dialog = new ApprovalDialogComponent(`Allow tool: bash\n${details}`, callbacks, {
+				draft: {
+					hasDraft: () => draft.length > 0,
+					handleInput: key => {
+						routed.push(key);
+						if (key.length === 1 && key >= " ") draft += key;
+					},
 				},
-			},
-		});
-		// Empty composer: Enter neither submits nor interrupts, and Down scrolls the details.
-		dialog.handleInput(ENTER);
-		dialog.handleInput(DOWN);
-		expect(routed).toEqual([]);
-		expect(stripVTControlCharacters(dialog.render(60).join("\n"))).not.toContain("Line 0");
-		// Typing reaches the composer; once it holds text, arrows and Enter edit and send it.
-		dialog.handleInput("n");
-		dialog.handleInput("o");
-		dialog.handleInput(UP);
-		dialog.handleInput(ENTER);
-		// Ctrl+C is both a cancel key and the composer's clear key: with a draft it clears, never denies.
-		dialog.handleInput("\x03");
-		expect(routed).toEqual(["n", "o", UP, ENTER, "\x03"]);
-		expect(callbacks.onDeny).not.toHaveBeenCalled();
-		expect(stripVTControlCharacters(dialog.render(60).join("\n"))).not.toContain("Line 0");
-		// Esc stays the dialog's: it denies without touching the draft.
-		dialog.handleInput("\x1b");
-		expect(callbacks.onDeny).toHaveBeenCalledTimes(1);
-		expect(routed).toHaveLength(5);
-		expect(callbacks.onApprove).not.toHaveBeenCalled();
+			});
+			now.mockReturnValue(1_000 + APPROVE_ARM_MS);
+			// The arrows drive the answer menu (Deny highlighted), never the composer's history,
+			// while page keys scroll the details behind it.
+			dialog.handleInput(DOWN);
+			dialog.handleInput(PAGE_DOWN);
+			expect(routed).toEqual([]);
+			expect(stripVTControlCharacters(dialog.render(60).join("\n"))).not.toContain("Line 0");
+			// Typing reaches the composer; once it holds text, arrows and Enter edit and send it.
+			dialog.handleInput("n");
+			dialog.handleInput("o");
+			dialog.handleInput(UP);
+			dialog.handleInput(ENTER);
+			// Ctrl+C is both a cancel key and the composer's clear key: with a draft it clears, never denies.
+			dialog.handleInput("\x03");
+			expect(routed).toEqual(["n", "o", UP, ENTER, "\x03"]);
+			expect(callbacks.onDeny).not.toHaveBeenCalled();
+			// Esc stays the dialog's: it denies without touching the draft.
+			dialog.handleInput("\x1b");
+			expect(callbacks.onDeny).toHaveBeenCalledTimes(1);
+			expect(routed).toEqual(["n", "o", UP, ENTER, "\x03"]);
+		} finally {
+			now.mockRestore();
+		}
+	});
+
+	it("approval: the answer menu moves with the arrows and confirms with Enter", () => {
+		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+		try {
+			const callbacks = {
+				onApprove: vi.fn(),
+				onApproveFolder: vi.fn(),
+				onAlwaysApprove: vi.fn(),
+				onAlwaysApproveFolder: vi.fn(),
+				onDeny: vi.fn(),
+			};
+			const dialog = new ApprovalDialogComponent("Allow tool: write\nPath: /tmp/project/out.txt", callbacks, {
+				folderLabel: "/tmp/project",
+				exactGrant: true,
+			});
+			now.mockReturnValue(1_000 + APPROVE_ARM_MS);
+			// Every offered answer is listed, with the cursor (theme.nav.cursor) on the first row.
+			const lines = () =>
+				stripVTControlCharacters(dialog.render(80).join("\n"))
+					.split("\n")
+					.map(line => line.replace(/^[│╭╰─\s]+/, "").trimEnd());
+			const cursorRow = () => lines().find(line => line.startsWith(theme.nav.cursor));
+			const text = () => lines().join("\n");
+			for (const label of [
+				"Approve",
+				"Approve for directory (/tmp/project)",
+				"Always approve",
+				"Always approve for directory (/tmp/project)",
+				"Deny",
+			]) {
+				expect(text()).toContain(label);
+			}
+			expect(cursorRow()).toContain("Approve");
+			expect(cursorRow()).not.toContain("directory");
+			// Down twice lands on "Always approve"; Enter confirms it.
+			dialog.handleInput(DOWN);
+			dialog.handleInput(DOWN);
+			expect(cursorRow()).toContain("Always approve");
+			expect(cursorRow()).not.toContain("directory");
+			dialog.handleInput(ENTER);
+			expect(callbacks.onAlwaysApprove).toHaveBeenCalledTimes(1);
+			expect(callbacks.onApprove).not.toHaveBeenCalled();
+		} finally {
+			now.mockRestore();
+		}
 	});
 
 	it("approval: any key restarts the timeout (reporting start and reset), so a scroll before the deadline keeps it open", () => {
