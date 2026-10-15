@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `omp auth-gateway serve --attempt-hook=<url>`: the gateway asks that URL to approve every upstream request, retries included, and refuses the request when the hook declines, times out or is unreachable ([#15901](https://github.com/can1357/oh-my-pi/pull/15901) by [@alphastorm](https://github.com/alphastorm))
+
 ### Changed
 
 - Reduced status-line refresh overhead while subagents have long conversations ([#15874](https://github.com/can1357/oh-my-pi/pull/15874) by [@iliaal](https://github.com/iliaal)).

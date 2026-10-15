@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an upstream attempt hook to the auth gateway (`onUpstreamAttempt` route option): it is awaited before every request a provider sends upstream, retries and credential-recovery resends included, and a rejection refuses that request with a `403` before anything is sent ([#15901](https://github.com/can1357/oh-my-pi/pull/15901) by [@alphastorm](https://github.com/alphastorm))
+
 ### Fixed
 
 - Fixed error results from non-first-party providers regaining partial output the provider had discarded; an error with empty content now stays empty ([#14516](https://github.com/can1357/oh-my-pi/issues/14516), [#14572](https://github.com/can1357/oh-my-pi/pull/14572) by [@oleg494](https://github.com/oleg494))
