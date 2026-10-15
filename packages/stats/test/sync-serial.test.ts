@@ -12,15 +12,11 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-async function writeSessionFile(options?: { includeCost?: boolean }): Promise<void> {
-	const sessionDir = path.join(getSessionsDir(), "--tmp--sync-serial");
-	await fs.mkdir(sessionDir, { recursive: true });
+function sessionLine(id: string, includeCost = true): string {
 	const timestamp = new Date().toISOString();
-	const sessionFile = path.join(sessionDir, "session.jsonl");
-	const includeCost = options?.includeCost ?? true;
-	const assistant = {
+	return `${JSON.stringify({
 		type: "message",
-		id: "assistant-1",
+		id,
 		parentId: null,
 		timestamp,
 		message: {
@@ -42,8 +38,13 @@ async function writeSessionFile(options?: { includeCost?: boolean }): Promise<vo
 			duration: 10,
 			ttft: 5,
 		},
-	};
-	await Bun.write(sessionFile, `${JSON.stringify(assistant)}\n`);
+	})}\n`;
+}
+
+async function writeSessionFile(options?: { includeCost?: boolean }): Promise<void> {
+	const sessionDir = path.join(getSessionsDir(), "--tmp--sync-serial");
+	await fs.mkdir(sessionDir, { recursive: true });
+	await Bun.write(path.join(sessionDir, "session.jsonl"), sessionLine("assistant-1", options?.includeCost ?? true));
 }
 
 describe("stats sync serial mode", () => {
@@ -131,5 +132,18 @@ describe("stats sync serial mode", () => {
 
 		await expect(syncAllSessions({ workers: 2 })).rejects.toBe(workerProbe);
 		expect(workerSpy).toHaveBeenCalled();
+	});
+
+	it("processes every file when workers cross the 128-file metadata batch boundary", async () => {
+		// 200 files span the 128-file metadata window: the worker that opens the
+		// second batch must not re-index the first batch's in-flight results.
+		const sessionDir = path.join(getSessionsDir(), "--tmp--sync-serial-boundary");
+		await fs.mkdir(sessionDir, { recursive: true });
+		const filePaths = Array.from({ length: 200 }, (_, index) => path.join(sessionDir, `session-${index}.jsonl`));
+		await Promise.all(filePaths.map((file, index) => Bun.write(file, sessionLine(`assistant-${index}`))));
+
+		const synced = await syncAllSessions({ files: filePaths, workers: 4 });
+
+		expect(synced).toEqual({ processed: 200, files: 200 });
 	});
 });
