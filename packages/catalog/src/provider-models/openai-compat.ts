@@ -550,36 +550,6 @@ function mapWithBundledReference<TApi extends Api>(
 	};
 }
 
-function mapWithCanonicalRecovery(
-	providerId: string,
-	entry: OpenAICompatibleModelRecord,
-	defaults: ModelSpec<"openai-completions">,
-	reference: ModelSpec<"openai-completions"> | undefined,
-): ModelSpec<"openai-completions"> {
-	if (reference) return mapWithBundledReference(entry, defaults, reference);
-	if (!recoversCanonicalParams(providerId))
-		return { ...defaults, name: toModelName(entry.name, defaults.name) };
-
-	const canonical = resolveModelReference(defaults.id, getBundledModelReferenceIndex());
-	if (!canonical) return { ...defaults, name: toModelName(entry.name, defaults.name) };
-
-	const contextWindow = canonical.contextWindow ?? defaults.contextWindow;
-	const maxTokens =
-		canonical.maxTokens != null && contextWindow != null
-			? Math.min(canonical.maxTokens, contextWindow)
-			: (canonical.maxTokens ?? defaults.maxTokens);
-	const thinking = inheritReferenceThinking(defaults.thinking, canonical, providerId);
-	return {
-		...defaults,
-		name: toModelName(entry.name, canonical.name ?? defaults.name),
-		reasoning: canonical.reasoning,
-		input: canonical.input,
-		...(thinking && { thinking }),
-		contextWindow,
-		maxTokens,
-	};
-}
-
 function normalizeAnthropicBaseUrl(baseUrl: string | undefined, fallback: string): string {
 	const value = baseUrl?.trim();
 	if (!value) {
@@ -1184,10 +1154,9 @@ export interface GmiCloudModelManagerConfig {
  * reference exists (the seeded default) it supplies GMI's published tariff and
  * limits directly. Every other id is an open-weight model GMI resells under its
  * canonical id (`deepseek-ai/…`, `moonshotai/…`, `zai-org/…`, `Qwen/…`), so its
- * intrinsic capabilities — context window, output limit, reasoning, and input
- * modes — are recovered from any bundled upstream entry via the canonical
- * reference index. Provider-specific thinking routes and pricing are deliberately
- * never borrowed across providers:
+ * intrinsic capabilities — context window, output limit, reasoning, thinking
+ * ladder — are recovered from any bundled upstream entry via the canonical
+ * reference index. Pricing is deliberately never borrowed across providers:
  * GMI's per-model tariff is unknown for these ids, so cost stays zeroed rather
  * than inheriting another provider's rate.
  */
@@ -1196,7 +1165,29 @@ function mapGmiCloudModel(
 	defaults: ModelSpec<"openai-completions">,
 	reference: ModelSpec<"openai-completions"> | undefined,
 ): ModelSpec<"openai-completions"> {
-	return mapWithCanonicalRecovery("gmi-cloud", entry, defaults, reference);
+	if (reference) {
+		return mapWithBundledReference(entry, defaults, reference);
+	}
+	const canonical = resolveModelReference(defaults.id, getBundledModelReferenceIndex()) as
+		| ModelSpec<"openai-completions">
+		| undefined;
+	if (!canonical) {
+		return { ...defaults, name: toModelName(entry.name, defaults.name) };
+	}
+	const contextWindow = canonical.contextWindow ?? defaults.contextWindow;
+	const maxTokens =
+		canonical.maxTokens != null && contextWindow != null
+			? Math.min(canonical.maxTokens, contextWindow)
+			: (canonical.maxTokens ?? defaults.maxTokens);
+	return {
+		...defaults,
+		name: toModelName(entry.name, canonical.name ?? defaults.name),
+		reasoning: canonical.reasoning,
+		input: canonical.input,
+		...(canonical.thinking && { thinking: canonical.thinking }),
+		contextWindow,
+		maxTokens,
+	};
 }
 
 export function gmiCloudModelManagerOptions(
@@ -1212,7 +1203,6 @@ export function gmiCloudModelManagerOptions(
 		mapModel: mapGmiCloudModel,
 	});
 }
-
 
 // ---------------------------------------------------------------------------
 // 1c. Nous Portal
@@ -1231,7 +1221,27 @@ function mapNousPortalModel(
 	defaults: ModelSpec<"openai-completions">,
 	reference: ModelSpec<"openai-completions"> | undefined,
 ): ModelSpec<"openai-completions"> {
-	return mapWithCanonicalRecovery("nous-portal", entry, defaults, reference);
+	if (reference) return mapWithBundledReference(entry, defaults, reference);
+	if (!recoversCanonicalParams("nous-portal")) return { ...defaults, name: toModelName(entry.name, defaults.name) };
+
+	const canonical = resolveModelReference(defaults.id, getBundledModelReferenceIndex());
+	if (!canonical) return { ...defaults, name: toModelName(entry.name, defaults.name) };
+
+	const contextWindow = canonical.contextWindow ?? defaults.contextWindow;
+	const maxTokens =
+		canonical.maxTokens != null && contextWindow != null
+			? Math.min(canonical.maxTokens, contextWindow)
+			: (canonical.maxTokens ?? defaults.maxTokens);
+	const thinking = inheritReferenceThinking(defaults.thinking, canonical, "nous-portal");
+	return {
+		...defaults,
+		name: toModelName(entry.name, canonical.name ?? defaults.name),
+		reasoning: canonical.reasoning,
+		input: canonical.input,
+		...(thinking && { thinking }),
+		contextWindow,
+		maxTokens,
+	};
 }
 
 export function nousPortalModelManagerOptions(
