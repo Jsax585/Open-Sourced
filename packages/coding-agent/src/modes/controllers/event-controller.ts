@@ -2332,16 +2332,7 @@ export class EventController {
 				return;
 			}
 			this.#terminalSettleCount += 1;
-			this.#streamingReveal.stop();
-			this.#toolArgsReveal.flushAll();
-			if (this.ctx.loadingAnimation) {
-				this.ctx.loadingAnimation.stop();
-				this.ctx.loadingAnimation = undefined;
-				this.ctx.statusContainer.disposeChildren();
-			}
-			this.#runActive = this.ctx.viewSession.hasLogicalRunActivity;
-			this.#syncComposerActivity();
-			this.ctx.ui.requestRender();
+			this.#endViewedWorkerRun();
 			return;
 		}
 		if (event.isTerminal === false) {
@@ -2429,16 +2420,7 @@ export class EventController {
 					return;
 				}
 				if (this.ctx.session.isStreaming) {
-					this.#streamingReveal.stop();
-					this.#toolArgsReveal.flushAll();
-					if (this.ctx.loadingAnimation) {
-						this.ctx.loadingAnimation.stop();
-						this.ctx.loadingAnimation = undefined;
-						this.ctx.statusContainer.disposeChildren();
-					}
-					this.#runActive = this.ctx.viewSession.hasLogicalRunActivity;
-					this.#syncComposerActivity();
-					this.ctx.ui.requestRender();
+					this.#endViewedWorkerRun();
 					return;
 				}
 				setRunStatus(this.#settledRunStatus(event));
@@ -2469,10 +2451,7 @@ export class EventController {
 		return { state: "done" };
 	}
 
-	async #finishAgentEnd(event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
-		this.#setTerminalProgress(false);
-		this.ctx.statusLine.markActivityEnd();
-		this.#lastAgentEndAt = Date.now();
+	#stopViewedRunPresentation(): void {
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.flushAll();
 		if (this.ctx.loadingAnimation) {
@@ -2480,6 +2459,20 @@ export class EventController {
 			this.ctx.loadingAnimation = undefined;
 			this.ctx.statusContainer.disposeChildren();
 		}
+	}
+
+	#endViewedWorkerRun(): void {
+		this.#stopViewedRunPresentation();
+		this.#runActive = this.ctx.viewSession.hasLogicalRunActivity;
+		this.#syncComposerActivity();
+		this.ctx.ui.requestRender();
+	}
+
+	async #finishAgentEnd(event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
+		this.#setTerminalProgress(false);
+		this.ctx.statusLine.markActivityEnd();
+		this.#lastAgentEndAt = Date.now();
+		this.#stopViewedRunPresentation();
 		// A stale end landing after the viewed session started a new turn must
 		// not mark that live turn idle.
 		this.#runActive = this.ctx.viewSession.isStreaming;

@@ -5,6 +5,7 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { Loader, TERMINAL } from "@oh-my-pi/pi-tui";
 import * as runStatus from "@oh-my-pi/pi-coding-agent/utils/run-status";
+import { createAssistantMessage } from "../../helpers/agent-session-setup";
 import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
 
 /**
@@ -57,8 +58,8 @@ function createContext() {
 	return { ctx, streamState, loader };
 }
 
-const AGENT_START = { type: "agent_start" } as unknown as AgentSessionEvent;
-const AGENT_END = { type: "agent_end", messages: [] } as unknown as AgentSessionEvent;
+const AGENT_START = { type: "agent_start" } satisfies AgentSessionEvent;
+const AGENT_END = { type: "agent_end", messages: [] } satisfies AgentSessionEvent;
 
 describe("EventController superseded agent_end", () => {
 	beforeAll(async () => {
@@ -235,7 +236,7 @@ describe("EventController superseded agent_end", () => {
 			type: "auto_compaction_start",
 			reason: "idle",
 			action: "context-full",
-		} as unknown as AgentSessionEvent);
+		});
 		expect(ctx.composer.setRunActive).toHaveBeenLastCalledWith(true);
 
 		// An aborted compaction leaves no rebuilt transcript to refill the loader's row.
@@ -243,7 +244,9 @@ describe("EventController superseded agent_end", () => {
 			type: "auto_compaction_end",
 			action: "context-full",
 			aborted: true,
-		} as unknown as AgentSessionEvent);
+			result: undefined,
+			willRetry: false,
+		});
 		expect(ctx.composer.setRunActive).toHaveBeenLastCalledWith(false);
 	});
 
@@ -261,7 +264,7 @@ describe("EventController superseded agent_end", () => {
 			type: "agent_end",
 			messages: [],
 			isTerminal: false,
-		} as unknown as AgentSessionEvent);
+		});
 
 		expect(ctx.flushPendingModelSwitch).toHaveBeenCalled();
 		expect(ctx.flushPendingCommandOutput).toHaveBeenCalled();
@@ -306,8 +309,8 @@ describe("EventController superseded agent_end", () => {
 		streamState.hasPostPromptWork = false;
 		const failed = {
 			type: "agent_end",
-			messages: [{ role: "assistant", stopReason: "error", errorMessage: "boom", content: [] }],
-		} as unknown as AgentSessionEvent;
+			messages: [{ ...createAssistantMessage(""), stopReason: "error", errorMessage: "boom" }],
+		} satisfies AgentSessionEvent;
 		await controller.handleEvent(failed);
 		expect(report).toHaveBeenLastCalledWith({ state: "error", msg: "boom" });
 
@@ -330,8 +333,8 @@ describe("EventController superseded agent_end", () => {
 
 		const ended = controller.handleEvent({
 			type: "agent_end",
-			messages: [{ role: "assistant", stopReason: "error", errorMessage: "boom", content: [] }],
-		} as unknown as AgentSessionEvent);
+			messages: [{ ...createAssistantMessage(""), stopReason: "error", errorMessage: "boom" }],
+		});
 		await Promise.resolve();
 		expect(report).toHaveBeenCalledTimes(1);
 
@@ -362,8 +365,8 @@ describe("EventController superseded agent_end", () => {
 
 		const ended = controller.handleEvent({
 			type: "agent_end",
-			messages: [{ role: "assistant", stopReason: "stop", content: [] }],
-		} as unknown as AgentSessionEvent);
+			messages: [createAssistantMessage("")],
+		});
 		await Promise.resolve();
 
 		// The next prompt starts while the previous teardown still awaits the model switch.
@@ -386,8 +389,8 @@ describe("EventController superseded agent_end", () => {
 
 		const ended = controller.handleEvent({
 			type: "agent_end",
-			messages: [{ role: "assistant", stopReason: "stop", content: [] }],
-		} as unknown as AgentSessionEvent);
+			messages: [createAssistantMessage("")],
+		});
 		await Promise.resolve();
 
 		// Focus attaches a different session that is paused (post-prompt work, not streaming).
