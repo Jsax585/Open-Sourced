@@ -115,6 +115,7 @@ import {
 	MemorySessionStorage,
 	SESSION_HEADER_PREFIX_BYTES,
 	type SessionStorage,
+	type SessionStorageStat,
 	type SessionStorageWriter,
 	SessionWriteConflictError,
 	sessionHeaderIdInPrefix,
@@ -780,8 +781,8 @@ interface SessionManagerStateSnapshot {
 	hasTitleSlot: boolean;
 	onDisk: boolean;
 	needsRewrite: boolean;
-	/** Entries and bytes the session file durably held, when that was known exactly. */
-	durable: { count: number; size: number } | undefined;
+	/** Entries, bytes, and file identity the session file durably held, when that was known exactly. */
+	durable: { count: number; size: number; identity: SessionStorageStat["identity"] } | undefined;
 	draftOnlySessionCleanupArmed: boolean;
 	fallbackRuntimeOnly: boolean;
 	header: SessionHeader;
@@ -844,17 +845,24 @@ interface DurableFrontier {
 	confirmedSize: number;
 	issued: number;
 	issuedSize: number;
+	identity: SessionStorageStat["identity"];
 	readonly confirmedAhead: Map<number, { end: number; bytes: number }>;
 }
 
 /** A frontier proving the first `count` entries of `generation` occupy exactly `size` bytes, with nothing pending. */
-function durableFrontier(generation: number, count: number, size: number): DurableFrontier {
+function durableFrontier(
+	generation: number,
+	count: number,
+	size: number,
+	identity: SessionStorageStat["identity"] = undefined,
+): DurableFrontier {
 	return {
 		generation,
 		confirmed: count,
 		confirmedSize: size,
 		issued: count,
 		issuedSize: size,
+		identity,
 		confirmedAhead: new Map(),
 	};
 }
@@ -1411,7 +1419,7 @@ export class SessionManager {
 		this.#expectedDiskSize = diskSize;
 		this.#durable =
 			found.extendsFrontier && durable && kept.length === found.foreign.length
-				? durableFrontier(this.#entriesGeneration, found.shared + kept.length, diskSize)
+				? durableFrontier(this.#entriesGeneration, found.shared + kept.length, diskSize, durable.identity)
 				: undefined;
 		if (kept.length > 0)
 			logger.warn("Kept session entries another writer added", {
@@ -1433,9 +1441,25 @@ export class SessionManager {
 	 * conflict recovery keeps them or moves the session off a file that holds
 	 * another one.
 	 */
-	#adoptEntriesAppendedPastFrontier(sessionFile: string, durable: DurableFrontier, storedSize: number): boolean {
-		if (this.#storage.defersSyncPublish || !this.#storage.readTextRangeSync || durable.issued !== durable.confirmed)
+	#frontierMatchesStorageIdentity(durable: DurableFrontier, stat: SessionStorageStat): boolean {
+		const identity = stat.identity;
+		return (
+			identity === undefined ||
+			(durable.identity !== undefined &&
+				durable.identity.dev === identity.dev &&
+				durable.identity.ino === identity.ino)
+		);
+	}
+
+	#adoptEntriesAppendedPastFrontier(sessionFile: string, durable: DurableFrontier, stat: SessionStorageStat): boolean {
+		if (
+			!this.#frontierMatchesStorageIdentity(durable, stat) ||
+			this.#storage.defersSyncPublish ||
+			!this.#storage.readTextRangeSync ||
+			durable.issued !== durable.confirmed
+		)
 			return false;
+		const storedSize = stat.size;
 		let headerId: string | undefined;
 		try {
 			headerId = sessionHeaderIdInPrefix(
@@ -1859,12 +1883,32 @@ export class SessionManager {
 	 * change settles pending content and a latched failure.
 	 */
 	#recordPublish(stamp: SessionBodyStamp, bytes: number, atSessionFile = true): void {
+		let identity: SessionStorageStat["identity"];
+		if (atSessionFile) {
+			const sessionFile = this.#sessionFile;
+			if (!sessionFile) {
+				this.#durable = undefined;
+				return;
+			}
+			try {
+				const stat = this.#storage.statSync(sessionFile);
+				if (stat.size !== bytes) {
+					this.#expectedDiskSize = stat.size;
+					this.#durable = undefined;
+					return;
+				}
+				identity = stat.identity;
+			} catch {
+				this.#durable = undefined;
+				return;
+			}
+		}
 		this.#expectedDiskSize = bytes;
 		if (!atSessionFile || stamp.generation !== this.#entriesGeneration) {
 			this.#durable = undefined;
 			return;
 		}
-		this.#durable = durableFrontier(stamp.generation, stamp.entryCount, bytes);
+		this.#durable = durableFrontier(stamp.generation, stamp.entryCount, bytes, identity);
 		if (
 			stamp.entryCount === this.#entries.length &&
 			stamp.revision === this.#bodyRevision &&
@@ -2283,15 +2327,17 @@ export class SessionManager {
 		const durable = this.#durable;
 		if (!sessionFile || durable?.generation !== this.#entriesGeneration || this.#sessionOwnedElsewhere())
 			return undefined;
-		let storedSize: number;
+		let stat: SessionStorageStat;
 		try {
-			storedSize = this.#storage.statSync(sessionFile).size;
+			stat = this.#storage.statSync(sessionFile);
 		} catch {
 			// Absent or unreadable: nothing on disk is known.
 			return undefined;
 		}
+		if (!this.#frontierMatchesStorageIdentity(durable, stat)) return undefined;
+		const storedSize = stat.size;
 		if (storedSize === durable.issuedSize) return durable;
-		if (storedSize < durable.issuedSize || !this.#adoptEntriesAppendedPastFrontier(sessionFile, durable, storedSize))
+		if (storedSize < durable.issuedSize || !this.#adoptEntriesAppendedPastFrontier(sessionFile, durable, stat))
 			return undefined;
 		const adopted = this.#durable;
 		return adopted?.issuedSize === storedSize ? adopted : undefined;
@@ -2712,7 +2758,11 @@ export class SessionManager {
 			needsRewrite: this.#rewriteRequired,
 			durable:
 				this.#durable?.generation === this.#entriesGeneration && this.#durable.issued === this.#durable.confirmed
-					? { count: this.#durable.confirmed, size: this.#durable.confirmedSize }
+					? {
+							count: this.#durable.confirmed,
+							size: this.#durable.confirmedSize,
+							identity: this.#durable.identity,
+						}
 					: undefined,
 			draftOnlySessionCleanupArmed: this.#draftOnlySessionCleanupArmed,
 			fallbackRuntimeOnly: this.#fallbackRuntimeOnly,
@@ -2762,10 +2812,15 @@ export class SessionManager {
 		this.#draftOnlySessionCleanupArmed = snapshot.draftOnlySessionCleanupArmed;
 		this.#fallbackRuntimeOnly = snapshot.fallbackRuntimeOnly;
 		this.#applyEntries(snapshot.header, [...snapshot.entries]);
-		// The copy holds the same entries in the same order, so the file still
-		// holds the snapshot's durable prefix of it.
+		// The copy holds the same entries in the same order, and carries the
+		// identity proven for the snapshot's durable prefix.
 		this.#durable = snapshot.durable
-			? durableFrontier(this.#entriesGeneration, snapshot.durable.count, snapshot.durable.size)
+			? durableFrontier(
+					this.#entriesGeneration,
+					snapshot.durable.count,
+					snapshot.durable.size,
+					snapshot.durable.identity,
+				)
 			: undefined;
 		this.#additionalDirectories = snapshot.header.additionalDirectories ?? [];
 		this.#sessionName = snapshot.sessionName;
@@ -2838,12 +2893,10 @@ export class SessionManager {
 
 		const resolvedSessionFile = path.resolve(sessionFile);
 		const loaded = loadedSession ?? (await loadSessionFile(resolvedSessionFile, this.#storage));
-		const sourceSize =
-			loaded.sourceSize !== undefined
-				? loaded.sourceSize
-				: this.#storage.existsSync(resolvedSessionFile)
-					? this.#storage.statSync(resolvedSessionFile).size
-					: null;
+		const sourceStat = this.#storage.existsSync(resolvedSessionFile)
+			? this.#storage.statSync(resolvedSessionFile)
+			: undefined;
+		const sourceSize = loaded.sourceSize ?? sourceStat?.size ?? null;
 		if (loaded.invalidHeader) {
 			throw new Error(
 				`Cannot resume session "${resolvedSessionFile}": the session header is missing or malformed. The file was not modified.`,
@@ -2910,7 +2963,7 @@ export class SessionManager {
 		this.#durable =
 			migrated || loaded.malformedRecords > 0 || sourceSize === null
 				? undefined
-				: durableFrontier(this.#entriesGeneration, this.#entries.length, sourceSize);
+				: durableFrontier(this.#entriesGeneration, this.#entries.length, sourceSize, sourceStat?.identity);
 		this.#loadedMalformedRecords = loaded.malformedRecords;
 		this.#forceFileCreation = true;
 		this.#artifactManager = null;

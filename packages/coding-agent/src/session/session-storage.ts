@@ -36,10 +36,16 @@ export function sessionStagingPath(target: string): string {
 	return path.join(path.dirname(target), `.${path.basename(target)}.${Snowflake.next()}.tmp`);
 }
 
+export interface SessionStorageFileIdentity {
+	dev: bigint;
+	ino: bigint;
+}
+
 export interface SessionStorageStat {
 	size: number;
 	mtimeMs: number;
 	mtime: Date;
+	identity?: SessionStorageFileIdentity;
 }
 
 export interface SessionStorageWriter {
@@ -1017,8 +1023,13 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	statSync(path: string): SessionStorageStat {
-		const stats = fs.statSync(path);
-		return { size: stats.size, mtimeMs: stats.mtimeMs, mtime: stats.mtime };
+		const stats = fs.statSync(path, { bigint: true });
+		return {
+			size: Number(stats.size),
+			mtimeMs: Number(stats.mtimeMs),
+			mtime: stats.mtime,
+			identity: { dev: stats.dev, ino: stats.ino },
+		};
 	}
 
 	listFilesSync(dir: string, pattern: string): string[] {
