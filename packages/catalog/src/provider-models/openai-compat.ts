@@ -1222,7 +1222,8 @@ function mapNousPortalModel(
 	reference: ModelSpec<"openai-completions"> | undefined,
 ): ModelSpec<"openai-completions"> {
 	if (reference) return mapWithBundledReference(entry, defaults, reference);
-	if (!recoversCanonicalParams("nous-portal")) return { ...defaults, name: toModelName(entry.name, defaults.name) };
+	if (!recoversCanonicalParams("nous-portal"))
+		return { ...defaults, name: toModelName(entry.name, defaults.name) };
 
 	const canonical = resolveModelReference(defaults.id, getBundledModelReferenceIndex());
 	if (!canonical) return { ...defaults, name: toModelName(entry.name, defaults.name) };
