@@ -211,6 +211,7 @@ import type {
 	ToolResultMessage,
 	Usage,
 } from "../types";
+import { TOOL_RESULT_REWRITTEN } from "../types";
 import { normalizeSystemPrompts, normalizeToolCallId } from "../utils";
 import {
 	type CursorExecResolvedCarrier,
@@ -4008,6 +4009,9 @@ function buildGrepResultFromToolResult(
 	if (toolResult.isError) {
 		return buildGrepErrorResult(text || "Grep failed");
 	}
+	if (TOOL_RESULT_REWRITTEN in toolResult) {
+		return buildGrepTextResult(args, text);
+	}
 
 	const outputMode = args.outputMode || "content";
 	const clientTruncated = toolResultDetailBoolean(toolResult, "truncated");
@@ -4143,6 +4147,63 @@ function buildGrepResultFromToolResult(
 				path: args.path || "",
 				outputMode,
 				workspaceResults: { [workspaceKey]: unionResult },
+			}),
+		},
+	});
+}
+
+/**
+ * A grep result an extension replaced, forwarded as written.
+ *
+ * `GrepResult` has no text variant, and re-parsing the text as a listing keeps
+ * only its match lines: a note the handler added is dropped, and lines past a
+ * cut are filed under whichever header preceded the cut. The text rides in one
+ * path field of a listing. This relies on how Cursor's server renders listings
+ * to the model (seen 2026-10): it prints a content or files entry's path
+ * unchanged on its own line inside `<workspace_result>`, so an entry named by
+ * the whole text reaches the model verbatim. A count entry always prints as
+ * `path:count`, which would append to the text, and the server picks the
+ * renderer from `outputMode` (a files listing under "count" prints "Unknown
+ * output mode"), so count mode answers as content. If Cursor starts rewriting
+ * those paths, rewritten native grep results will break.
+ */
+function buildGrepTextResult(args: { pattern: string; path?: string; outputMode?: string }, text: string) {
+	const outputMode = args.outputMode === "files_with_matches" ? "files_with_matches" : "content";
+	let unionResult: GrepUnionResult;
+	if (outputMode === "files_with_matches") {
+		unionResult = create(GrepUnionResultSchema, {
+			result: {
+				case: "files",
+				value: create(GrepFilesResultSchema, {
+					files: [text],
+					totalFiles: 1,
+					clientTruncated: false,
+					ripgrepTruncated: false,
+				}),
+			},
+		});
+	} else {
+		unionResult = create(GrepUnionResultSchema, {
+			result: {
+				case: "content",
+				value: create(GrepContentResultSchema, {
+					matches: [create(GrepFileMatchSchema, { file: text, matches: [] })],
+					totalLines: 0,
+					totalMatchedLines: 0,
+					clientTruncated: false,
+					ripgrepTruncated: false,
+				}),
+			},
+		});
+	}
+	return create(GrepResultSchema, {
+		result: {
+			case: "success",
+			value: create(GrepSuccessSchema, {
+				pattern: args.pattern,
+				path: args.path || "",
+				outputMode,
+				workspaceResults: { [args.path || "."]: unionResult },
 			}),
 		},
 	});

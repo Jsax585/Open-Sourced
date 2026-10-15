@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `TOOL_RESULT_REWRITTEN` and `MaybeRewrittenToolResult`, which mark a tool result whose content an extension replaced ([#15835](https://github.com/can1357/oh-my-pi/pull/15835) by [@nhthung](https://github.com/nhthung))
+
+### Fixed
+
+- Fixed Cursor's built-in Grep dropping parts of a result an extension rewrote, such as a note about cut output; the rewritten text now reaches the model as written, in the output mode the model asked for ([#15817](https://github.com/can1357/oh-my-pi/issues/15817), [#15835](https://github.com/can1357/oh-my-pi/pull/15835) by [@nhthung](https://github.com/nhthung))
+
 ## [18.11.0] - 2026-10-14
 
 ### Fixed

@@ -1571,6 +1571,18 @@ export interface RegisteredCommand {
 /** Handler function type for events */
 export type ExtensionHandler<E, R = undefined> = (event: E, ctx: ExtensionContext) => Promise<R | void> | R | void;
 
+/** Options for `on("tool_result", ...)`. */
+export interface ToolResultHandlerOptions {
+	/**
+	 * The handler may replace a result's `content`. Cursor's native Shell streams
+	 * output to the model while the command runs, and a stream cannot be taken
+	 * back, so that output is held until the handlers have run only when some
+	 * handler declares this. An undeclared handler's replacement still becomes
+	 * the tool result, but not what Cursor's native Shell already streamed.
+	 */
+	rewrites?: boolean;
+}
+
 /** Service tiers accepted by each provider family. */
 export type ExtensionServiceTier<Family extends ServiceTierFamily> = Family extends "anthropic"
 	? "priority"
@@ -1674,7 +1686,11 @@ export interface ExtensionAPI {
 	on(event: "plan_review_requested", handler: ExtensionHandler<PlanReviewRequestedEvent>): void;
 	on(event: "plan_review_resolved", handler: ExtensionHandler<PlanReviewResolvedEvent>): void;
 	on(event: "tool_call", handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): void;
-	on(event: "tool_result", handler: ExtensionHandler<ToolResultEvent, ToolResultEventResult>): void;
+	on(
+		event: "tool_result",
+		handler: ExtensionHandler<ToolResultEvent, ToolResultEventResult>,
+		options?: ToolResultHandlerOptions,
+	): void;
 	on(event: "user_bash", handler: ExtensionHandler<UserBashEvent, UserBashEventResult>): void;
 	on(event: "user_python", handler: ExtensionHandler<UserPythonEvent, UserPythonEventResult>): void;
 	on(event: "mcp_notification", handler: ExtensionHandler<McpNotificationEvent>): void;
@@ -2167,6 +2183,8 @@ export interface Extension {
 	resolvedPath: string;
 	label?: string;
 	handlers: Map<string, HandlerFn[]>;
+	/** A `tool_result` handler was registered with `{ rewrites: true }`. */
+	rewritesToolResults?: boolean;
 	tools: Map<string, RegisteredTool<any, any>>;
 	toolRegistrationListeners?: Set<ToolRegistrationListener>;
 	assistantThinkingRenderers: AssistantThinkingRenderer[];

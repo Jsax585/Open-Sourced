@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a `rewrites` option to `pi.on("tool_result", handler, { rewrites: true })` for handlers that replace results; on Cursor, the built-in Shell holds its output for the model until such handlers have run ([#15835](https://github.com/can1357/oh-my-pi/pull/15835) by [@nhthung](https://github.com/nhthung))
+
+### Fixed
+
+- Fixed Cursor models getting the original output of their built-in Shell and Grep tools when an extension's `tool_result` handler rewrote it, such as one that shortens large results; they now get the rewritten result. For Shell, the handler must register with `{ rewrites: true }` ([#15817](https://github.com/can1357/oh-my-pi/issues/15817), [#15835](https://github.com/can1357/oh-my-pi/pull/15835) by [@nhthung](https://github.com/nhthung))
+
 ## [18.11.0] - 2026-10-14
 
 ### Added

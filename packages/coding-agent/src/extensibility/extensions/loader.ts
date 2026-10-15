@@ -54,6 +54,7 @@ import type {
 	SourceInfo,
 	ToolDefinition,
 	ToolInfo,
+	ToolResultHandlerOptions,
 } from "./types";
 
 installLegacyPiSpecifierShim();
@@ -207,10 +208,11 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 		}
 	}
 
-	on<F extends HandlerFn>(event: string, handler: F): void {
+	on<F extends HandlerFn>(event: string, handler: F, options?: ToolResultHandlerOptions): void {
 		const list = this.extension.handlers.get(event) ?? [];
 		list.push(handler);
 		this.extension.handlers.set(event, list);
+		if (event === "tool_result" && options?.rewrites === true) this.extension.rewritesToolResults = true;
 	}
 
 	registerTool<TParams extends TSchema = TSchema, TDetails = unknown>(tool: ToolDefinition<TParams, TDetails>): void {
