@@ -282,4 +282,35 @@ describe("auth-gateway upstream attempt hook", () => {
 		expect(asked.at(-1)).toBe("6 POST https://api.example/start");
 		storage.close();
 	});
+
+	it("sends Anthropic on its own transport when the gateway was given no fetch", async () => {
+		const storage = await AuthStorage.create(":memory:", { usageProviderResolver: () => undefined });
+		const nativeFetch = globalThis.fetch;
+		const viaGlobalFetch: string[] = [];
+		globalThis.fetch = (async (input: string | URL | Request) => {
+			viaGlobalFetch.push(String(input));
+			return new Response("sent with the global fetch");
+		}) as typeof globalThis.fetch;
+		try {
+			const hooked = gatewayUpstreamFetch(
+				{ storage, resolveModel: () => undefined, onUpstreamAttempt: async () => {} },
+				"req-1",
+				ANTHROPIC,
+			);
+			if (!hooked) throw new Error("expected a hooked fetch");
+			// Nothing listens on port 1: the Cowork transport fails to connect where
+			// the global fetch would have answered.
+			await expect(
+				hooked("https://127.0.0.1:1/v1/messages", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: "{}",
+				}),
+			).rejects.toThrow();
+			expect(viaGlobalFetch).toEqual([]);
+		} finally {
+			globalThis.fetch = nativeFetch;
+			storage.close();
+		}
+	});
 });

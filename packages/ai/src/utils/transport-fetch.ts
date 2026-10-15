@@ -11,6 +11,16 @@ const TRANSPORT_FETCH = Symbol("omp.transportFetch");
 type TransportFetch = FetchImpl & { [TRANSPORT_FETCH]?: true };
 
 /**
+ * The fetch a model's requests go out on when the caller supplies none: the
+ * Cowork transport for Anthropic Messages, the global fetch for the rest. A
+ * caller that wraps requests must end on this one to keep the provider's
+ * connection profile.
+ */
+export function defaultModelFetch(model: Model<Api>): FetchImpl {
+	return model.provider === "anthropic" && model.api === "anthropic-messages" ? coworkFetch : globalThis.fetch;
+}
+
+/**
  * The one fetch every inference request goes through. Per call it applies, in
  * order: the inference User-Agent default, `NODE_EXTRA_CA_CERTS`, the
  * per-provider proxy, and `PI_REQ_DEBUG` request/response recording — then
@@ -25,8 +35,7 @@ type TransportFetch = FetchImpl & { [TRANSPORT_FETCH]?: true };
 export function transportFetch(model: Model<Api>, fetchImpl: FetchImpl | undefined): FetchImpl {
 	const given = fetchImpl as TransportFetch | undefined;
 	if (given?.[TRANSPORT_FETCH]) return given;
-	const base =
-		given ?? (model.provider === "anthropic" && model.api === "anthropic-messages" ? coworkFetch : globalThis.fetch);
+	const base = given ?? defaultModelFetch(model);
 	const proxyUrl = getProxyForProvider(model.provider);
 
 	const fetch: TransportFetch = async (input, init) => {

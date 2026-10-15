@@ -20,6 +20,7 @@ import { isUsageLimitOutcome } from "../error/rate-limit";
 import type { Api, FetchImpl, Model, Usage } from "../types";
 import type { ClientUsageIdentity } from "../usage";
 import { extractProviderRetryHint } from "../utils/retry-after";
+import { defaultModelFetch } from "../utils/transport-fetch";
 import type { AuthGatewayServerOptions } from "./types";
 
 export type ModelResolver = (modelId: string) => Model<Api> | undefined;
@@ -285,7 +286,8 @@ const CROSS_ORIGIN_DROPPED_HEADERS = ["authorization", "cookie", "proxy-authoriz
  * The upstream fetch for one gateway request: `opts.fetch` as is, or, with an
  * attempt hook, a fetch that awaits the hook before every request it sends, so
  * a provider's own retries, alternate endpoints and credential-recovery
- * resends each reach it. `fetch` would follow a redirect without asking, so
+ * resends each reach it, and then sends on the transport the provider would
+ * have used without it. `fetch` would follow a redirect without asking, so
  * redirects come back here: a GET or HEAD follows them with each hop approved
  * on its own, and any other request hands the provider the redirect itself. A
  * refused request is answered locally and the hook's reason logged.
@@ -346,7 +348,7 @@ export function gatewayUpstreamFetch(
 		for (let hop = 0; ; hop++) {
 			const refused = await approve(url, method, signal);
 			if (refused) return refused;
-			const response = await (opts.fetch ?? fetch)(hopInput, hopInit);
+			const response = await (opts.fetch ?? defaultModelFetch(model))(hopInput, hopInit);
 			const location = response.headers.get("location");
 			if (!follows || !location || !REDIRECT_STATUSES.has(response.status) || hop === MAX_REDIRECTS) {
 				return response;
