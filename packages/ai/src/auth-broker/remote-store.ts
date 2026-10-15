@@ -199,7 +199,16 @@ function mergeUsageReports(base: UsageReport, overlay: UsageReport): UsageReport
 	for (const limit of base.limits) {
 		const replacement = overlayLimitsById.get(limit.id);
 		if (replacement) {
-			limits.push({ ...replacement, fetchedAt: overlay.fetchedAt });
+			// Preserve a finite per-limit stamp carried by the replacement: an
+			// overlay built from several partial ingests must not restamp older
+			// healthy limits with the newer report-wide maximum.
+			limits.push({
+				...replacement,
+				fetchedAt:
+					typeof replacement.fetchedAt === "number" && Number.isFinite(replacement.fetchedAt)
+						? replacement.fetchedAt
+						: overlay.fetchedAt,
+			});
 			overlayLimitsById.delete(limit.id);
 		} else {
 			// Retained from the older base snapshot: keep its own fetch time so
@@ -217,7 +226,13 @@ function mergeUsageReports(base: UsageReport, overlay: UsageReport): UsageReport
 		}
 	}
 	for (const limit of overlayLimitsById.values()) {
-		limits.push({ ...limit, fetchedAt: overlay.fetchedAt });
+		limits.push({
+			...limit,
+			fetchedAt:
+				typeof limit.fetchedAt === "number" && Number.isFinite(limit.fetchedAt)
+					? limit.fetchedAt
+					: overlay.fetchedAt,
+		});
 	}
 	const overlayMetadata = (overlay.metadata ?? {}) as Record<string, unknown>;
 	return {

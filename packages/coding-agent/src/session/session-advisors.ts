@@ -2206,7 +2206,14 @@ export class SessionAdvisors {
 		}
 		for (const role of chainKeys) {
 			for (const selector of this.#host.findRetryFallbackCandidates(role, currentSelector, currentModel)) {
-				if (await this.#host.isRetryFallbackSelectorSuppressed(selector, signal)) continue;
+				if (
+					await this.#host.isRetryFallbackSelectorSuppressed(
+						selector,
+						signal,
+						advisor.providerSessionId,
+					)
+				)
+					continue;
 				const resolved = resolveModelOverride([selector.raw], this.#host.modelRegistry, this.#host.settings);
 				const candidate = resolved.model ?? this.#host.modelRegistry.find(selector.provider, selector.id);
 				if (!candidate || modelsAreEqual(candidate, currentModel)) continue;
