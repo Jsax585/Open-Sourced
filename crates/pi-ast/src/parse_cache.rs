@@ -113,12 +113,16 @@ impl Cache {
 	}
 
 	fn get(&mut self, key: &Key, code: &str) -> Option<Tree> {
+		self.get_at(key, code, Instant::now())
+	}
+
+	fn get_at(&mut self, key: &Key, code: &str, now: Instant) -> Option<Tree> {
 		self.clock += 1;
 		let stamp = self.clock;
 		let tree = match self.entries.get_mut(key) {
 			Some(entry) if &*entry.source == code => {
 				entry.stamp = stamp;
-				entry.last_used = Instant::now();
+				entry.last_used = now;
 				// `ts_tree_copy`: an atomic refcount bump on immutable subtree
 				// data, so the clone can be walked off-lock on any thread.
 				entry.tree.clone()
@@ -476,14 +480,14 @@ mod tests {
 		let live = cache.get(&cold_key, cold).expect("tree is cached");
 		let expected = live.root_node().to_sexp();
 		let max_idle = Duration::from_secs(60);
-		let old = Instant::now() - max_idle;
+		let old = Instant::now();
 		for entry in cache.entries.values_mut() {
 			entry.last_used = old;
 		}
 		let hot_tree = cache
-			.get(&hot_key, hot)
+			.get_at(&hot_key, hot, old + max_idle)
 			.expect("hot read refreshes idle deadline");
-		drop(cache.evict_idle(Instant::now(), max_idle));
+		drop(cache.evict_idle(old + max_idle, max_idle));
 
 		assert!(cache.get(&cold_key, cold).is_none(), "idle entry must be released");
 		let reused = cache

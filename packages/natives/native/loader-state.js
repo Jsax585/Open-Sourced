@@ -1,4 +1,5 @@
 import * as childProcess from "node:child_process";
+import { channel } from "node:diagnostics_channel";
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
@@ -740,16 +741,22 @@ function startParseCacheMaintenance(bindings) {
 	const reclaim = bindings.reclaimIdleParseCache;
 	if (parseCacheMaintenanceStarted || typeof reclaim !== "function") return;
 	parseCacheMaintenanceStarted = true;
-	const schedule = () => {
+	const failures = channel("omp.native.parse-cache-maintenance");
+	const schedule = (delay = 30_000) => {
 		const timer = setTimeout(async () => {
+			let nextCheckMs = 30_000;
 			try {
-				await reclaim();
+				const result = await reclaim();
+				if (Number.isFinite(result?.nextCheckMs)) {
+					nextCheckMs = Math.min(30_000, Math.max(1, result.nextCheckMs));
+				}
 			} catch (err) {
+				failures.publish(err);
 				startupMarker(`native:parseCache:reclaimFailed:${err instanceof Error ? err.message : String(err)}`);
 			} finally {
-				schedule();
+				schedule(nextCheckMs);
 			}
-		}, 30_000);
+		}, delay);
 		timer.unref();
 	};
 	schedule();

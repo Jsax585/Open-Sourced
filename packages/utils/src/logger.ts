@@ -14,6 +14,7 @@
  * the levels written to the file (default: all).
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { channel } from "node:diagnostics_channel";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -37,6 +38,10 @@ export interface LogEvent {
 export type LogSink = (event: LogEvent) => void;
 
 const logSinks = new Set<LogSink>();
+
+channel("omp.native.parse-cache-maintenance").subscribe(error => {
+	warn("Native parse cache maintenance failed", { error });
+});
 
 /** Register an out-of-band log sink and return a disposer. */
 export function registerLogSink(sink: LogSink): () => void {

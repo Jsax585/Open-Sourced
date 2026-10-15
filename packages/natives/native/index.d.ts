@@ -2724,6 +2724,11 @@ export interface NodeSpan {
 /** Decode notebook JSON into the editable cell-marker text. */
 export declare function notebookToEditableText(json: string, displayPath: string): string
 
+export interface ParseCacheMaintenance {
+  evicted: number
+  nextCheckMs: number
+}
+
 /** Parsed Kitty keyboard protocol sequence result for a Kitty input sequence. */
 export interface ParsedKittyResult {
   /** Primary codepoint associated with the key. */
@@ -2971,8 +2976,9 @@ export declare function readTextFromClipboard(): Promise<string | undefined | nu
  *
  * Runs deallocation off the JavaScript thread. On glibc, also return freed
  * allocator pages to the OS after eviction. Live tree clones remain valid.
+ * Calls share a process-wide sweep deadline; retry after `nextCheckMs`.
  */
-export declare function reclaimIdleParseCache(): Promise<number>
+export declare function reclaimIdleParseCache(): Promise<ParseCacheMaintenance>
 
 /**
  * Render Mermaid diagram text (flowchart, state, sequence, class, ER, or
