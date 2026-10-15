@@ -2955,6 +2955,14 @@ export declare function readImageFromClipboard(): Promise<ClipboardImage | undef
 export declare function readTextFromClipboard(): Promise<string | undefined | null>
 
 /**
+ * Release structural parse trees unused for at least one minute.
+ *
+ * Runs deallocation off the JavaScript thread. On glibc, also return freed
+ * allocator pages to the OS after eviction. Live tree clones remain valid.
+ */
+export declare function reclaimIdleParseCache(): Promise<number>
+
+/**
  * Render Mermaid diagram text (flowchart, state, sequence, class, ER, or
  * xychart) to ASCII/Unicode art. Synchronous: callers render inside the
  * TUI compositor.

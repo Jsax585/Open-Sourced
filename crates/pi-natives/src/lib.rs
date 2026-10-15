@@ -62,6 +62,7 @@ pub mod utok;
 pub mod vcs;
 pub use pi_ast::language;
 
+pub mod parse_cache;
 pub mod power;
 
 pub mod iso;

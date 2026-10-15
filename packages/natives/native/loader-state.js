@@ -734,6 +734,27 @@ function installNativeTokioRuntime(bindings) {
 	}
 }
 
+let parseCacheMaintenanceStarted = false;
+
+function startParseCacheMaintenance(bindings) {
+	const reclaim = bindings.reclaimIdleParseCache;
+	if (parseCacheMaintenanceStarted || typeof reclaim !== "function") return;
+	parseCacheMaintenanceStarted = true;
+	const schedule = () => {
+		const timer = setTimeout(async () => {
+			try {
+				await reclaim();
+			} catch (err) {
+				startupMarker(`native:parseCache:reclaimFailed:${err instanceof Error ? err.message : String(err)}`);
+			} finally {
+				schedule();
+			}
+		}, 30_000);
+		timer.unref();
+	};
+	schedule();
+}
+
 /**
  * Point the addon at `<nativesDir>/grammars`, where the agent downloads the
  * tree-sitter grammars that load as WebAssembly on demand (pi-utils
@@ -880,6 +901,7 @@ export function loadNative() {
 			validateLoadedBindings(ctx, bindings, candidate);
 			installNativeTokioRuntime(bindings);
 			configureGrammarDir(bindings, ctx.nativesDir);
+			startParseCacheMaintenance(bindings);
 			loadedAddon = describeLoadedAddon(bindings, candidate, ctx);
 	        cleanupStaleNativeVersions({ nativesDir: ctx.nativesDir, currentVersion: ctx.packageVersion });
 			startupMarker("native:loadNative:done");

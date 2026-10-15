@@ -18,6 +18,7 @@
 use std::{
 	collections::HashMap,
 	sync::{LazyLock, Mutex, MutexGuard, PoisonError},
+	time::{Duration, Instant},
 };
 
 use anyhow::{Result, anyhow};
@@ -77,10 +78,11 @@ fn key_for(code: &str, lang: SupportLang) -> Key {
 struct Entry {
 	/// Retained verbatim so a hit is verified by comparison, not by trusting
 	/// the hash.
-	source: Box<str>,
-	tree:   Tree,
+	source:    Box<str>,
+	tree:      Tree,
 	/// Value of [`Cache::clock`] at last use; smallest wins eviction.
-	stamp:  u64,
+	stamp:     u64,
+	last_used: Instant,
 }
 
 struct Cache {
@@ -116,6 +118,7 @@ impl Cache {
 		let tree = match self.entries.get_mut(key) {
 			Some(entry) if &*entry.source == code => {
 				entry.stamp = stamp;
+				entry.last_used = Instant::now();
 				// `ts_tree_copy`: an atomic refcount bump on immutable subtree
 				// data, so the clone can be walked off-lock on any thread.
 				entry.tree.clone()
@@ -146,10 +149,25 @@ impl Cache {
 		self.clock += 1;
 		self.source_bytes += code.len();
 		self.entries.insert(key, Entry {
-			source: Box::from(code),
-			tree:   tree.clone(),
-			stamp:  self.clock,
+			source:    Box::from(code),
+			tree:      tree.clone(),
+			stamp:     self.clock,
+			last_used: Instant::now(),
 		});
+	}
+
+	fn evict_idle(&mut self, now: Instant, max_idle: Duration) -> Vec<Entry> {
+		let removed: Vec<Entry> = self
+			.entries
+			.extract_if(|_, entry| now.saturating_duration_since(entry.last_used) >= max_idle)
+			.map(|(_, entry)| entry)
+			.collect();
+		self.source_bytes -= removed
+			.iter()
+			.map(|entry| entry.source.len())
+			.sum::<usize>();
+		self.evictions += removed.len() as u64;
+		removed
 	}
 
 	/// Drop the least-recently-used slot. `false` when there was nothing left
@@ -253,6 +271,15 @@ pub fn parse_cache_stats() -> ParseCacheStats {
 /// Drop every cached tree and zero the counters.
 pub fn clear_parse_cache() {
 	lock().clear();
+}
+
+/// Drop trees unused for at least `max_idle`, leaving active clones valid.
+///
+/// Trees are destroyed after releasing the cache lock so deallocation never
+/// blocks other cache lookups. Returns the number of evicted entries.
+pub fn evict_idle_parse_cache(max_idle: Duration) -> usize {
+	let removed = lock().evict_idle(Instant::now(), max_idle);
+	removed.len()
 }
 
 #[cfg(test)]
@@ -435,5 +462,61 @@ mod tests {
 		assert_eq!(cache.entries.len(), 0);
 		assert_eq!((cache.source_bytes, cache.hits, cache.misses, cache.evictions), (0, 0, 0, 0));
 		assert_eq!((cache.max_entries, cache.max_total_bytes, cache.max_entry_bytes), (3, 1024, 512));
+	}
+
+	#[test]
+	fn idle_eviction_preserves_recently_used_trees_and_live_clones() {
+		let mut cache = cache(MAX_ENTRIES, MAX_TOTAL_SOURCE_BYTES, MAX_ENTRY_SOURCE_BYTES);
+		let cold = "function cold() { return 1; }\n";
+		let hot = "function hot() { return 2; }\n";
+		let cold_key = key_for(cold, TS);
+		let hot_key = key_for(hot, TS);
+		cache.insert(cold_key, cold, &tree_of(cold, TS));
+		cache.insert(hot_key, hot, &tree_of(hot, TS));
+		let live = cache.get(&cold_key, cold).expect("tree is cached");
+		let expected = live.root_node().to_sexp();
+		let max_idle = Duration::from_secs(60);
+		let old = Instant::now() - max_idle;
+		for entry in cache.entries.values_mut() {
+			entry.last_used = old;
+		}
+		let hot_tree = cache
+			.get(&hot_key, hot)
+			.expect("hot read refreshes idle deadline");
+		drop(cache.evict_idle(Instant::now(), max_idle));
+
+		assert!(cache.get(&cold_key, cold).is_none(), "idle entry must be released");
+		let reused = cache
+			.get(&hot_key, hot)
+			.expect("recently read tree survives maintenance");
+		assert_eq!(
+			reused.root_node().child(0).expect("declaration").id(),
+			hot_tree.root_node().child(0).expect("declaration").id(),
+			"hot reads keep sharing the cached parse"
+		);
+		assert_eq!(cache.source_bytes, hot.len());
+		assert_eq!(cache.evictions, 1);
+		assert_eq!(live.root_node().to_sexp(), expected, "an in-flight clone survives eviction");
+		assert_eq!(tree_of(cold, TS).root_node().to_sexp(), expected, "a later parse is identical");
+	}
+
+	#[test]
+	fn idle_entry_expires_at_the_deadline_and_is_only_evicted_once() {
+		let mut cache = cache(MAX_ENTRIES, MAX_TOTAL_SOURCE_BYTES, MAX_ENTRY_SOURCE_BYTES);
+		let code = "const value = 42;\n";
+		let key = key_for(code, TS);
+		cache.insert(key, code, &tree_of(code, TS));
+		let max_idle = Duration::from_secs(60);
+		let deadline = cache.entries[&key].last_used + max_idle;
+
+		assert!(
+			cache
+				.evict_idle(deadline - Duration::from_nanos(1), max_idle)
+				.is_empty()
+		);
+		assert_eq!(cache.evict_idle(deadline, max_idle).len(), 1);
+		assert!(cache.evict_idle(deadline + max_idle, max_idle).is_empty());
+		assert_eq!(cache.source_bytes, 0);
+		assert_eq!(cache.evictions, 1);
 	}
 }
