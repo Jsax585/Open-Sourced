@@ -25,6 +25,10 @@ declare module "@oh-my-pi/pi-agent-core" {
 		 *  result of its own (the Cursor exec bridge). Unset for a script bridge
 		 *  (eval's `tool.*`), whose results stay inside the script. */
 		bridgedResultShown?: boolean;
+		/** Set by the Cursor exec bridge, whose read frames compose `:raw` only to
+		 *  drop line gutters. `read` then still returns image files as images
+		 *  instead of their bytes decoded as text, which Cursor rejects (#15630). */
+		rawImages?: boolean;
 	}
 }
 
