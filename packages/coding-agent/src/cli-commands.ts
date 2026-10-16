@@ -166,6 +166,11 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.joinHelp,
 	},
 	{
+		name: "launchers",
+		load: () => import("./commands/launchers").then(m => m.default),
+		help: commandHelp.launchersHelp,
+	},
+	{
 		name: "login",
 		load: () => import("./commands/login").then(m => m.default),
 		help: commandHelp.loginHelp,

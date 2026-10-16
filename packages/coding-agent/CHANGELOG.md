@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `omp launchers`, which lists your profiles, `PI_CONFIG_FILES`/`--config` overlays (plus the files of a directory passed with `--overlay-dir`), and model presets with launch instructions; command hints identify their inferred shell dialect and use shell-specific quoting; `--json` supported ([#15893](https://github.com/can1357/oh-my-pi/pull/15893) by [@ian139](https://github.com/ian139))
 ### Breaking Changes
 
 - Extension `ui.approve()` hosts receive an optional `session` choice label and answer `"once"`, `"session"`, or `"deny"` instead of a boolean

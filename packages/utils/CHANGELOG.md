@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `getProfilesDir()` for the directory holding named profiles (`~/.omp/profiles`, following `PI_CONFIG_DIR`) ([#15893](https://github.com/can1357/oh-my-pi/pull/15893) by [@ian139](https://github.com/ian139))
 ### Fixed
 
 - Fixed Markdown fence info-string parsing to keep backtick-containing backtick openers as paragraph text while accepting backticks in tilde info strings and Unicode line separators in either fence's info string ([#15928](https://github.com/can1357/oh-my-pi/pull/15928) by [@jchanghong023](https://github.com/jchanghong023)).
