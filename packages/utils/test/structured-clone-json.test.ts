@@ -20,7 +20,11 @@ describe("structuredCloneJSON", () => {
 	it("re-attempts structuredClone after a member becomes cloneable on a mutable array", () => {
 		const value: unknown[] = [() => {}];
 
-		expect(() => structuredCloneJSON(value) as unknown).not.toThrow();
+		// A function member makes `structuredClone` throw, so this copy comes
+		// from the JSON fallback: array functions serialize to `null`, and an
+		// aliasing or absent fallback here would surface as a throw or a
+		// wrong shape rather than this exact value.
+		expect(structuredCloneJSON(value)).toEqual([null]);
 
 		value[0] = 10n;
 
