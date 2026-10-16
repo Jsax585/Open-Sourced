@@ -3,13 +3,14 @@
  *
  * - Profiles: directories under the profiles root (`omp --profile <name>`).
  * - Overlays: `config.yml`-style files (`omp --config <file>`). omp has no overlay
- *   directory; they are only the files named by `PI_CONFIG_FILES` plus, optionally,
- *   the `*.yml`/`*.yaml` files of a directory passed with `--overlay-dir`.
+ *   directory; they are the files named by `PI_CONFIG_FILES` and `--config`, plus,
+ *   optionally, the `*.yml`/`*.yaml` files of a directory passed with `--overlay-dir`.
  * - Presets: `modelPresets` from the effective config (`/modelpreset switch <name>`).
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
+	APP_NAME,
 	getActiveProfile,
 	getProfilesDir,
 	getProjectDir,
@@ -22,6 +23,7 @@ import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { getModelPreset, getModelPresetNames } from "../config/model-presets";
 import { Settings } from "../config/settings";
 import { expandTilde } from "../tools/path-utils";
+import { quotePosixArgument } from "../utils/shell-quote";
 import { CliUsageError } from "./usage-error";
 
 const OVERLAY_EXTENSION = /\.ya?ml$/;
@@ -37,8 +39,8 @@ export interface LauncherOverlay {
 	/** File name without its `.yml`/`.yaml` extension. */
 	name: string;
 	path: string;
-	/** `env`: listed in `PI_CONFIG_FILES`, so it loads on every launch; `dir`: found in `--overlay-dir`. */
-	source: "env" | "dir";
+	/** `env`: listed in `PI_CONFIG_FILES`; `flag`: passed via `--config`; `dir`: found in `--overlay-dir`. */
+	source: "env" | "flag" | "dir";
 	/** `PI_CONFIG_FILES` names a file that does not exist; omp refuses to start until it is fixed. */
 	missing: boolean;
 }
@@ -52,8 +54,6 @@ export interface LauncherPreset {
 	thinking?: string;
 	/** Why the preset cannot be applied (hand-edited config). */
 	error?: string;
-	/** Path of the same-named overlay file among the listed overlays. */
-	overlay?: string;
 }
 
 export interface LaunchersReport {
@@ -70,6 +70,7 @@ export interface LaunchersReport {
 export interface LaunchersCommandArgs {
 	flags: {
 		json?: boolean;
+		config?: string[];
 		overlayDir?: string;
 	};
 }
@@ -105,15 +106,26 @@ async function listProfiles(profilesDir: string): Promise<LauncherProfile[]> {
 	return profiles.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-async function listOverlays(cwd: string, overlayDir: string | undefined): Promise<LauncherOverlay[]> {
+async function listOverlays(
+	cwd: string,
+	configFiles: readonly string[],
+	overlayDir: string | undefined,
+): Promise<LauncherOverlay[]> {
 	const overlays: LauncherOverlay[] = [];
 	const seen = new Set<string>();
-	// Same resolution as Settings: path-list, `~` expansion, relative to the project directory.
-	for (const entry of process.env.PI_CONFIG_FILES?.split(path.delimiter).filter(Boolean) ?? []) {
+	// Same resolution as Settings: `PI_CONFIG_FILES` path-list, then `--config`, `~` expansion, relative to the project directory.
+	const entries: [LauncherOverlay["source"], string][] = [
+		...(process.env.PI_CONFIG_FILES?.split(path.delimiter).filter(Boolean) ?? []).map(
+			(entry): [LauncherOverlay["source"], string] => ["env", entry],
+		),
+		...configFiles.map((entry): [LauncherOverlay["source"], string] => ["flag", entry]),
+	];
+	for (const [source, entry] of entries) {
 		const file = path.resolve(cwd, expandTilde(entry));
+		if (seen.has(file)) continue;
 		seen.add(file);
 		const stat = await fs.stat(file).catch(() => undefined);
-		overlays.push({ name: overlayName(file), path: file, source: "env", missing: !stat?.isFile() });
+		overlays.push({ name: overlayName(file), path: file, source, missing: !stat?.isFile() });
 	}
 	if (overlayDir) {
 		const names = await fs.readdir(overlayDir).catch((error: unknown) => {
@@ -135,23 +147,21 @@ async function listOverlays(cwd: string, overlayDir: string | undefined): Promis
 
 async function listPresets(
 	cwd: string,
-	overlays: readonly LauncherOverlay[],
+	configFiles: string[],
 ): Promise<Pick<LaunchersReport, "presets" | "presetsError">> {
 	let settings: Settings;
 	try {
-		settings = await Settings.loadReadOnly({ cwd });
+		settings = await Settings.loadReadOnly({ cwd, configFiles });
 	} catch (error) {
 		return { presets: [], presetsError: error instanceof Error ? error.message : String(error) };
 	}
-	const overlayByName = new Map(overlays.filter(overlay => !overlay.missing).map(o => [o.name, o.path]));
 	const presets: LauncherPreset[] = [];
 	for (const name of getModelPresetNames(settings)) {
 		const source = settings.getOwnedModelPreset(name)?.source;
 		const lookup = getModelPreset(settings, name);
 		if (!source || lookup.kind === "missing") continue;
-		const overlay = overlayByName.get(name);
 		if (lookup.kind === "invalid") {
-			presets.push({ name, source, error: lookup.reason, overlay });
+			presets.push({ name, source, error: lookup.reason });
 			continue;
 		}
 		presets.push({
@@ -159,18 +169,25 @@ async function listPresets(
 			source,
 			defaultModel: lookup.preset.modelRoles.default,
 			thinking: lookup.preset.defaultThinkingLevel,
-			overlay,
 		});
 	}
 	return { presets };
 }
 
-export async function collectLaunchers(options: { cwd: string; overlayDir?: string }): Promise<LaunchersReport> {
+export async function collectLaunchers(options: {
+	cwd: string;
+	config?: string[];
+	overlayDir?: string;
+}): Promise<LaunchersReport> {
 	const { cwd } = options;
+	const configFiles = options.config ?? [];
 	const overlayDir = options.overlayDir ? path.resolve(cwd, expandTilde(options.overlayDir)) : undefined;
 	const profilesDir = getProfilesDir();
-	const [profiles, overlays] = await Promise.all([listProfiles(profilesDir), listOverlays(cwd, overlayDir)]);
-	return { profilesDir, profiles, overlayDir, overlays, ...(await listPresets(cwd, overlays)) };
+	const [profiles, overlays] = await Promise.all([
+		listProfiles(profilesDir),
+		listOverlays(cwd, configFiles, overlayDir),
+	]);
+	return { profilesDir, profiles, overlayDir, overlays, ...(await listPresets(cwd, configFiles)) };
 }
 
 function writeLine(line = ""): void {
@@ -186,12 +203,23 @@ function writeRows(rows: readonly (readonly [string, string])[], empty: string):
 	for (const [label, detail] of rows) writeLine(`  ${label.padEnd(width)}  ${chalk.dim(detail)}`);
 }
 
+/** Quote a value for copy-pasting into a shell command; plain words stay bare. */
+function shellArg(value: string): string {
+	return /^[\w@%+=:,./-]+$/.test(value) ? value : quotePosixArgument(value);
+}
+
+const OVERLAY_SOURCE_TAGS: Record<LauncherOverlay["source"], string> = {
+	env: "  [PI_CONFIG_FILES]",
+	flag: "  [--config]",
+	dir: "",
+};
+
 function renderText(report: LaunchersReport): void {
 	writeLine(chalk.bold(`Profiles (${shortenPath(report.profilesDir)})`));
 	writeRows(
 		report.profiles.map(profile => [
 			profile.name,
-			`omp --profile ${profile.name}${profile.active ? "  [active]" : ""}`,
+			`${APP_NAME} --profile ${shellArg(profile.name)}${profile.active ? "  [active]" : ""}`,
 		]),
 		"(none)",
 	);
@@ -200,14 +228,14 @@ function renderText(report: LaunchersReport): void {
 	writeLine(
 		chalk.bold(
 			report.overlayDir
-				? `Overlays (PI_CONFIG_FILES, ${shortenPath(report.overlayDir)})`
-				: "Overlays (PI_CONFIG_FILES)",
+				? `Overlays (PI_CONFIG_FILES, --config, ${shortenPath(report.overlayDir)})`
+				: "Overlays (PI_CONFIG_FILES, --config)",
 		),
 	);
 	writeRows(
 		report.overlays.map(overlay => [
 			overlay.name,
-			`omp --config ${shortenPath(overlay.path)}${overlay.source === "env" ? "  [PI_CONFIG_FILES]" : ""}${overlay.missing ? "  [missing]" : ""}`,
+			`${APP_NAME} --config ${shellArg(overlay.path)}${OVERLAY_SOURCE_TAGS[overlay.source]}${overlay.missing ? "  [missing]" : ""}`,
 		]),
 		report.overlayDir ? "(none)" : "(none; pass --overlay-dir <dir> to scan a directory of overlay files)",
 	);
@@ -224,7 +252,6 @@ function renderText(report: LaunchersReport): void {
 				preset.error ? `invalid: ${preset.error}` : `default ${preset.defaultModel ?? "?"}`,
 				preset.thinking ? `thinking ${preset.thinking}` : undefined,
 				`[${preset.source}]`,
-				preset.overlay ? "[has overlay]" : report.overlayDir ? "[no overlay]" : undefined,
 			];
 			return [preset.name, parts.filter(Boolean).join("  ")];
 		}),
@@ -233,7 +260,11 @@ function renderText(report: LaunchersReport): void {
 }
 
 export async function runLaunchersCommand(command: LaunchersCommandArgs): Promise<void> {
-	const report = await collectLaunchers({ cwd: getProjectDir(), overlayDir: command.flags.overlayDir });
+	const report = await collectLaunchers({
+		cwd: getProjectDir(),
+		config: command.flags.config,
+		overlayDir: command.flags.overlayDir,
+	});
 	if (command.flags.json) {
 		writeLine(JSON.stringify(report, null, 2));
 		return;

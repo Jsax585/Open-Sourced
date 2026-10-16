@@ -147,32 +147,30 @@ describe("collectLaunchers", () => {
 			]);
 		});
 
-		it("attributes an overlay's preset to the overlay and pairs same-named overlay files from --overlay-dir", async () => {
+		it("attributes presets to the overlay layer for both PI_CONFIG_FILES and --config overlays", async () => {
 			const overlayDir = path.join(tmp.path(), "overlays");
 			await fs.mkdir(overlayDir);
 			const deep = path.join(overlayDir, "deep.yml");
+			const flagged = path.join(overlayDir, "flagged.yml");
 			await Bun.write(
 				deep,
 				["modelPresets:", "  deep:", "    modelRoles:", "      default: openai/gpt-5", ""].join("\n"),
 			);
-			await Bun.write(path.join(overlayDir, "plain.yml"), "{}\n");
 			await Bun.write(
-				path.join(agentDir, "config.yml"),
-				["modelPresets:", "  plain:", "    modelRoles:", "      default: openai/gpt-5-mini", ""].join("\n"),
+				flagged,
+				["modelPresets:", "  flagged:", "    modelRoles:", "      default: openai/gpt-5-mini", ""].join("\n"),
 			);
 			process.env.PI_CONFIG_FILES = deep;
 
-			const report = await collectLaunchers({ cwd: project, overlayDir });
+			const report = await collectLaunchers({ cwd: project, config: [flagged, deep] });
 
+			expect(report.overlays.map(overlay => [overlay.name, overlay.source])).toEqual([
+				["deep", "env"],
+				["flagged", "flag"],
+			]);
 			expect(report.presets).toEqual([
-				{ name: "deep", source: "overlay", defaultModel: "openai/gpt-5", thinking: undefined, overlay: deep },
-				{
-					name: "plain",
-					source: "global",
-					defaultModel: "openai/gpt-5-mini",
-					thinking: undefined,
-					overlay: path.join(overlayDir, "plain.yml"),
-				},
+				{ name: "deep", source: "overlay", defaultModel: "openai/gpt-5", thinking: undefined },
+				{ name: "flagged", source: "overlay", defaultModel: "openai/gpt-5-mini", thinking: undefined },
 			]);
 		});
 

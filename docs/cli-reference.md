@@ -265,7 +265,7 @@ Run `omp <command> --help` for each command's own flags and examples.
 | `images`, `img` | Inspect, diagnose, probe, and purge image publication backends. | |
 | `install` | Install or link an extension package (alias of `plugin install` / `plugin link`). | [extensions](./extensions.md) |
 | `join` | Join a shared collab session (same as `/join`). | [collab](./collab.md) |
-| `launchers` | List the profiles (`omp --profile <name>`), `--config` overlays, and model presets (`/modelpreset switch <name>`) you can launch omp with, each with the command that starts it. omp has no overlay directory, so overlays are the files named by `PI_CONFIG_FILES` plus, with `--overlay-dir <dir>`, the `.yml`/`.yaml` files in that directory (presets with a same-named overlay file are marked). `--json` supported. | [profiles](./config-usage.md#profiles), [model presets](./models.md#model-presets) |
+| `launchers` | List the profiles (`omp --profile <name>`), `--config` overlays, and model presets (`/modelpreset switch <name>`) you can launch omp with, each with the command that starts it. omp has no overlay directory, so overlays are the files named by `PI_CONFIG_FILES` and `--config <file>` (repeatable; their presets are listed too) plus, with `--overlay-dir <dir>`, the `.yml`/`.yaml` files in that directory. `--json` supported. | [profiles](./config-usage.md#profiles), [model presets](./models.md#model-presets) |
 | `login` | Log in to a model provider from the terminal (counterpart of `/login`). | |
 | `models` | List, search, and refresh available models. | [models](./models.md) |
 | `plugin`, `plugins` | Manage plugins (install, uninstall, list, etc.). | [extensions](./extensions.md), [marketplace](./marketplace.md) |
