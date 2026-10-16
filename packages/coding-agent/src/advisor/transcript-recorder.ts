@@ -2,9 +2,20 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Message, UserMessage } from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
-import { visitEntriesFromFileStream } from "../session/session-loader";
-import { SessionManager } from "../session/session-manager";
+import { getBlobsDir, logger, Snowflake, stringifyJson } from "@oh-my-pi/pi-utils";
+import { BlobStore } from "../session/blob-store";
+import { currentRuntimeIdentity } from "../session/runtime-identity";
+import {
+	CURRENT_SESSION_VERSION,
+	type SessionHeader,
+	type SessionMessageEntry,
+	sessionEntryLeafId,
+} from "../session/session-entries";
+import { normalizeAssistantUsage, visitEntriesFromFileStream } from "../session/session-loader";
+import { mintSessionId, SessionManager } from "../session/session-manager";
+import { forgetExternalizedImages, prepareEntryForPersistence } from "../session/session-persistence";
+import { FileSessionStorage, type SessionStorageWriter } from "../session/session-storage";
+import { serializeTitleSlot } from "../session/session-title-slot";
 import { fingerprintMessage } from "./message-fingerprint";
 
 /**
@@ -145,6 +156,37 @@ export async function loadAdvisorTranscriptCosts(
 	return costs;
 }
 
+/** Result of one streaming pass over an existing transcript. */
+interface JournalScan {
+	sawEntry: boolean;
+	validHeader: boolean;
+	/** Header declares a version older than {@link CURRENT_SESSION_VERSION}. */
+	legacyVersion: boolean;
+	malformedRecords: number;
+	leafId: string | null;
+}
+
+/** Append position of one open advisor transcript; holds no persisted history. */
+interface TranscriptJournal {
+	file: string;
+	/** Per-file blob store, so image externalization matches the session writer's. */
+	blobs: BlobStore;
+	/** Append handle; dropped after a failed append because the writer latches its error. */
+	writer: SessionStorageWriter | undefined;
+	/** Id of the last entry admitted to the chain; the parent of the next one. */
+	leafId: string | null;
+	/** Serialized lines not yet appended, oldest first. */
+	unwritten: string[];
+	/**
+	 * `unwritten[0]` was handed to a writer whose append then threw, so its bytes
+	 * may have reached the file (the failure can follow the write, e.g. a publish
+	 * lock or stat error). Set only once an append was actually attempted — errors
+	 * from opening the file or writer leave it clear, as nothing was written — and
+	 * cleared when the line is acknowledged, found absent, or successfully appended.
+	 */
+	headAppendUncertain: boolean;
+}
+
 /**
  * Append-only persister for an advisor agent's transcript.
  *
@@ -165,12 +207,18 @@ export async function loadAdvisorTranscriptCosts(
  * On such a switch the previous writer is closed and the new file opened on the
  * next recorded turn. The recorder never truncates: the advisor's in-memory
  * context resets/compacts independently, but every billed turn is appended here.
+ *
+ * Memory stays independent of transcript length: opening an existing file
+ * streams it once to recover the last entry id, and an append only retains the
+ * serialized lines that could not be written yet (retried in order by the next
+ * record, flush or close) — never the persisted history or its message objects.
  */
 export class AdvisorTranscriptRecorder {
-	#manager: SessionManager | undefined;
+	readonly #storage = new FileSessionStorage();
+	#journal: TranscriptJournal | undefined;
 	#file: string | undefined;
 	#filename: string;
-	/** Serializes the async open/close against synchronous appends so records land in order. */
+	/** Serializes the async open/close against appends so records land in order. */
 	#queue: Promise<void>;
 	/**
 	 * Ordered fingerprints of user "session update" deltas persisted since the
@@ -268,14 +316,11 @@ export class AdvisorTranscriptRecorder {
 		const cwd = this.resolveCwd();
 		this.#enqueue(async () => {
 			if (file !== this.#file) {
-				await this.#closeManager();
-				this.#manager = await SessionManager.open(file, undefined, undefined, {
-					initialCwd: cwd,
-					suppressBreadcrumb: true,
-				});
+				await this.#closeJournal();
+				this.#journal = await this.#openJournal(file, cwd);
 				this.#file = file;
 			}
-			this.#manager?.appendMessage(persisted);
+			if (this.#journal) await this.#appendMessage(this.#journal, persisted);
 		});
 	}
 
@@ -321,28 +366,241 @@ export class AdvisorTranscriptRecorder {
 		this.#replayCursor = 0;
 	}
 
-	/** Flush pending writes (best-effort). */
+	/** Flush pending writes; rejects when a queued line still cannot be appended. */
 	flush(): Promise<void> {
 		return this.#enqueueResult(async () => {
-			if (this.#manager) await this.#manager.flush();
+			const journal = this.#journal;
+			if (!journal) return;
+			await this.#appendPending(journal);
+			await journal.writer?.flush();
 		});
 	}
 
 	/** Flush and close the writer, releasing the session file. */
 	close(): Promise<void> {
-		return this.#enqueueResult(() => this.#closeManager());
+		return this.#enqueueResult(() => this.#closeJournal());
 	}
 
-	async #closeManager(): Promise<void> {
-		const manager = this.#manager;
-		this.#manager = undefined;
+	async #closeJournal(): Promise<void> {
+		const journal = this.#journal;
+		this.#journal = undefined;
 		this.#file = undefined;
-		if (!manager) return;
+		if (!journal) return;
 		try {
-			await manager.close();
+			// Last attempt for lines an earlier transient failure left unwritten.
+			await this.#appendPending(journal);
+			await journal.writer?.close();
 		} catch (err) {
 			logger.debug("advisor transcript close failed", { err: String(err) });
 		}
+		forgetExternalizedImages(journal.blobs);
+	}
+
+	/**
+	 * Recover the append position of `file` without loading its history: stream
+	 * the existing records keeping only the last entry id, and create the title
+	 * slot + session header when the file is missing or empty. A file whose first
+	 * record is not a session header is left untouched and reported, matching the
+	 * session loader's invalid-header rule.
+	 */
+	async #openJournal(file: string, cwd: string): Promise<TranscriptJournal> {
+		let scan = await this.#scanJournal(file);
+		if (scan.legacyVersion) {
+			// One-time, conservative migration: the session manager's loader holds the
+			// whole transcript transiently while it normalizes v1/v2 entries to the
+			// current format, rewrites the file atomically, and closes. Appending v3
+			// entries under an older header would otherwise corrupt the file's version.
+			const manager = await SessionManager.open(file, path.dirname(file), this.#storage, {
+				initialCwd: cwd,
+				suppressBreadcrumb: true,
+			});
+			let migrationError: unknown;
+			let migrationFailed = false;
+			try {
+				await manager.rewriteEntries();
+				await manager.flush();
+			} catch (err) {
+				migrationFailed = true;
+				migrationError = err;
+			}
+			// close() before release: release seals the manager and only schedules the
+			// writer close, so closing first drains and releases the file handle.
+			try {
+				await manager.close();
+			} catch (closeErr) {
+				if (!migrationFailed) {
+					migrationFailed = true;
+					migrationError = closeErr;
+				} else {
+					// Never mask the original migration error.
+					logger.debug("advisor transcript migration close failed", { err: String(closeErr) });
+				}
+			}
+			manager.releaseRetainedEntries();
+			if (migrationFailed) throw migrationError;
+			scan = await this.#scanJournal(file);
+			if (scan.legacyVersion) {
+				throw new Error(`Cannot append to advisor transcript "${file}": legacy header migration did not complete.`);
+			}
+		}
+		return this.#finishOpen(file, cwd, scan);
+	}
+
+	/** Stream the transcript once, keeping only header validity/version, the last entry id and malformed count. */
+	async #scanJournal(file: string): Promise<JournalScan> {
+		const scan: JournalScan = {
+			sawEntry: false,
+			validHeader: true,
+			legacyVersion: false,
+			malformedRecords: 0,
+			leafId: null,
+		};
+		await visitEntriesFromFileStream(
+			file,
+			entry => {
+				if (!scan.sawEntry) {
+					scan.sawEntry = true;
+					scan.validHeader =
+						typeof entry === "object" &&
+						entry !== null &&
+						entry.type === "session" &&
+						typeof entry.id === "string";
+					// Same rule as migrateToCurrentVersion: a missing version means v1.
+					if (scan.validHeader && entry.type === "session") {
+						scan.legacyVersion = (entry.version ?? 1) < CURRENT_SESSION_VERSION;
+					}
+					return scan.validHeader;
+				}
+				if (
+					typeof entry === "object" &&
+					entry !== null &&
+					entry.type !== "session" &&
+					typeof entry.id === "string"
+				) {
+					scan.leafId = sessionEntryLeafId(entry);
+				}
+			},
+			{
+				onMalformedRecord: () => {
+					scan.malformedRecords++;
+				},
+			},
+		);
+		return scan;
+	}
+
+	#finishOpen(file: string, cwd: string, scan: JournalScan): TranscriptJournal {
+		if (scan.sawEntry ? !scan.validHeader : scan.malformedRecords > 0) {
+			throw new Error(
+				`Cannot append to advisor transcript "${file}": the session header is missing or malformed. The file was not modified.`,
+			);
+		}
+		if (!scan.sawEntry) {
+			const timestamp = new Date().toISOString();
+			const header: SessionHeader = {
+				type: "session",
+				version: CURRENT_SESSION_VERSION,
+				id: mintSessionId(),
+				timestamp,
+				cwd: path.resolve(cwd),
+			};
+			this.#storage.ensureDirSync(path.dirname(file));
+			this.#storage.writeTextSync(
+				file,
+				`${serializeTitleSlot({ updatedAt: timestamp })}${JSON.stringify(header)}\n`,
+				{
+					expectedSize: this.#storage.existsSync(file) ? this.#storage.statSync(file).size : null,
+				},
+			);
+		}
+		return {
+			file,
+			blobs: new BlobStore(getBlobsDir()),
+			writer: undefined,
+			leafId: scan.leafId,
+			unwritten: [],
+			headAppendUncertain: false,
+		};
+	}
+
+	/** Serialize one message as the next entry of the journal's chain and append it with every earlier unwritten line. */
+	async #appendMessage(journal: TranscriptJournal, message: Message): Promise<void> {
+		const entry: SessionMessageEntry = {
+			type: "message",
+			id: Snowflake.next(),
+			parentId: journal.leafId,
+			timestamp: new Date().toISOString(),
+			runtime: currentRuntimeIdentity(),
+			message,
+		};
+		if (message.role === "assistant" && normalizeAssistantUsage(message)) {
+			logger.warn("Assistant message recorded with incomplete usage", { id: entry.id });
+		}
+		const line = stringifyJson(prepareEntryForPersistence(entry, journal.blobs));
+		if (typeof line !== "string") throw new Error("Advisor transcript entry did not serialize to JSON");
+		// Admit the entry to the chain only after it serialized, so a failure
+		// cannot leave the next entry pointing at a parent that was never written.
+		journal.leafId = entry.id;
+		journal.unwritten.push(`${line}\n`);
+		await this.#appendPending(journal);
+	}
+
+	/**
+	 * Append the lines no earlier attempt managed to write, oldest first. A failed
+	 * append (the writer rolls back its partial bytes) discards the writer, whose
+	 * error is latched, and rethrows; the remaining lines stay queued so the next
+	 * record, flush or close retries them in order instead of losing billed turns.
+	 *
+	 * An append that threw may nevertheless have landed its whole line, so the
+	 * retry first reconciles that one line against the file tail rather than
+	 * writing a duplicate entry (which would double its billed usage).
+	 */
+	async #appendPending(journal: TranscriptJournal): Promise<void> {
+		if (journal.unwritten.length === 0) return;
+		let writer = journal.writer;
+		try {
+			if (journal.headAppendUncertain) {
+				await this.#reconcileUncertainHead(journal);
+				if (journal.unwritten.length === 0) return;
+			}
+			let separator = "";
+			if (!writer?.isOpen()) {
+				// A crash or unrolled failure can leave an unterminated record at the
+				// tail; end it so the next entry starts on its own line.
+				const [, tail] = await this.#storage.readTextSlices(journal.file, 0, 1);
+				separator = tail === "" || tail === "\n" ? "" : "\n";
+				writer = journal.writer = this.#storage.openWriter(journal.file, { flags: "a" });
+			}
+			while (journal.unwritten.length > 0) {
+				// Stays set if append throws: the bytes may have landed before the error.
+				journal.headAppendUncertain = true;
+				await writer.append(separator + journal.unwritten[0]);
+				journal.headAppendUncertain = false;
+				separator = "";
+				journal.unwritten.shift();
+			}
+		} catch (err) {
+			journal.writer = undefined;
+			await writer?.close().catch(() => {});
+			throw err;
+		}
+	}
+
+	/**
+	 * Resolve whether `unwritten[0]`, whose append threw, is already the last
+	 * record of the file. Entries carry a unique Snowflake id, so a byte-exact
+	 * match of the complete line at the tail can only be that attempt's own bytes:
+	 * acknowledge it without re-appending. Anything else (the writer rolled the
+	 * bytes back, or only part of the line survived) means it is absent and the
+	 * normal ordered retry applies. A failed read rethrows with the line still
+	 * pending and uncertain, so the next attempt reconciles again instead of
+	 * guessing.
+	 */
+	async #reconcileUncertainHead(journal: TranscriptJournal): Promise<void> {
+		const line = journal.unwritten[0];
+		const [, tail] = await this.#storage.readTextSlices(journal.file, 0, Buffer.byteLength(line, "utf8"));
+		if (tail === line) journal.unwritten.shift();
+		journal.headAppendUncertain = false;
 	}
 
 	#enqueue(work: () => Promise<void>): void {
