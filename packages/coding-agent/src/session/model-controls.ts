@@ -210,15 +210,15 @@ export class ModelControls {
 		this.#applyThinkingLevelToAgent(this.#thinkingLevel);
 	}
 
-	/** Restores an exact thinking snapshot after a failed session switch. */
+	/** Restores an exact thinking snapshot after a failed session switch; `auto` is the configured auto selector, if any. */
 	restoreThinkingSnapshot(
 		level: ThinkingLevel | undefined,
-		auto: boolean | AutoThinkingLevel,
+		auto: AutoThinkingLevel | undefined,
 		resolved: Effort | undefined,
 	): void {
 		this.#thinkingLevel = level;
-		this.#autoThinking = Boolean(auto);
-		this.#configuredAutoLevel = isAutoThinking(auto) ? auto : undefined;
+		this.#autoThinking = auto !== undefined;
+		this.#configuredAutoLevel = auto;
 		this.#autoResolvedLevel = resolved;
 		this.#applyThinkingLevelToAgent(level);
 	}

@@ -333,6 +333,21 @@ function compactionConfirmPending(strip: CompactionStrip): boolean {
 }
 
 /**
+ * Thinking strip levels with a stored `auto:<floor>[-<ceiling>]` selector kept as
+ * its own chip (after plain `auto`, else after `off`), so confirming the
+ * preselected chip writes the bounds back instead of plain `auto` or `inherit`.
+ */
+function withStoredAutoSelector(
+	options: readonly ConfiguredThinkingLevel[],
+	current: ConfiguredThinkingLevel,
+): ConfiguredThinkingLevel[] {
+	if (!isAutoThinking(current) || options.includes(current)) return [...options];
+	const anchor = options.includes(AUTO_THINKING) ? AUTO_THINKING : ThinkingLevel.Off;
+	const at = options.indexOf(anchor) + 1;
+	return [...options.slice(0, at), current, ...options.slice(at)];
+}
+
+/**
  * The note beside the compaction field: the last error, a pending warning, the
  * host's live preview of the typed limit, or (empty or unparsed input) the
  * input syntax. Host text embeds model ids and config text, so it is
@@ -1430,8 +1445,9 @@ export class ModelHubComponent implements Component {
 			(this.#settings.modelRoleStorage === "project" && scope !== undefined
 				? this.#thinkingLevelForScope(role, scope)
 				: (this.#roles[role]?.thinkingLevel ?? ThinkingLevel.Inherit));
-		const chips = this.#thinkingChips(options);
-		const preselect = options.findIndex(opt => opt === current || (isAutoThinking(opt) && isAutoThinking(current)));
+		const levels = withStoredAutoSelector(options, current);
+		const chips = this.#thinkingChips(levels);
+		const preselect = levels.indexOf(current);
 		this.#strip = {
 			kind: "thinking",
 			item,
@@ -1534,19 +1550,18 @@ export class ModelHubComponent implements Component {
 		const resolved = this.#resolveFallbackEntry(row.role, row.chainIndex);
 		if (!resolved) return;
 		const { item } = resolved;
-		// No `auto` chip: a hand-written `:auto` suffix collapses to inherit at
-		// apply time, so offering it would promise per-prompt classification the
-		// fallback never performs. A primary running `auto` is inherited anyway
-		// through the bare form.
-		const options: ConfiguredThinkingLevel[] = [
-			ThinkingLevel.Inherit,
-			ThinkingLevel.Off,
-			...getSupportedEfforts(item.model),
-		];
+		// No plain `auto` chip: a bare `:auto` suffix runs as inherit on a fallback,
+		// so offering it would promise per-prompt classification the fallback never
+		// performs. A bounded `auto:<floor>[-<ceiling>]` entry does bound the
+		// fallback's effort, so it stays on the strip and confirming it keeps it.
 		const current =
-			resolved.thinkingLevel === undefined || isAutoThinking(resolved.thinkingLevel)
+			resolved.thinkingLevel === undefined || resolved.thinkingLevel === AUTO_THINKING
 				? ThinkingLevel.Inherit
 				: resolved.thinkingLevel;
+		const options = withStoredAutoSelector(
+			[ThinkingLevel.Inherit, ThinkingLevel.Off, ...getSupportedEfforts(item.model)],
+			current,
+		);
 		const chips = this.#thinkingChips(options);
 		this.#strip = {
 			kind: "thinking",

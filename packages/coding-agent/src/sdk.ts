@@ -2145,7 +2145,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const adoptThinkingForModel = (selectedModel: Model): void => {
 		thinkingLevel = pickInitialThinkingLevel(selectedModel);
 		autoThinking = isAutoThinking(thinkingLevel);
-		effectiveThinkingLevel = concreteThinkingLevel(thinkingLevel);
 		effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
 			resolveInitialEffectiveThinkingLevel(selectedModel, thinkingLevel),
 		);

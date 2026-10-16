@@ -28,8 +28,7 @@ import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import {
 	AUTO_THINKING,
 	AUTO_THINKING_FLOORS,
-	AUTO_THINKING_RANGES,
-	type AutoThinkingFloor,
+	AUTO_THINKING_LEVELS,
 	getConfiguredThinkingLevelMetadata,
 	getThinkingLevelMetadata,
 } from "@oh-my-pi/pi-tui/thinking";
@@ -198,12 +197,6 @@ export const cfgImagesDescribeForTextModels = register({
 // ────────────────────────────────────────────────────────────────────────
 // Model
 // ────────────────────────────────────────────────────────────────────────
-
-export const AUTO_THINKING_LEVELS = [
-	AUTO_THINKING,
-	...AUTO_THINKING_FLOORS.map(effort => `auto:${effort}` as const),
-	...AUTO_THINKING_RANGES,
-] as const;
 
 // Reasoning and prompts
 export const cfgDefaultThinkingLevel = register({
@@ -1062,13 +1055,10 @@ export const cfgProvidersAutoThinkingMaxEffort = register({
 	},
 });
 
-export const AUTO_THINKING_MIN_EFFORT_VALUES = AUTO_THINKING_FLOORS;
-export type AutoThinkingMinEffort = AutoThinkingFloor;
-
 export const cfgProvidersAutoThinkingMinEffort = register({
 	id: "providers.autoThinkingMinEffort",
 	type: "enum",
-	values: AUTO_THINKING_MIN_EFFORT_VALUES,
+	values: AUTO_THINKING_FLOORS,
 	default: Effort.Low,
 	ui: {
 		tab: "model",

@@ -214,7 +214,6 @@ import { releaseSharpshooterSession } from "../sharpshooter/backend";
 import { flushSharpshooterExtraction } from "../sharpshooter/extract";
 import { toolReadsSkillUris } from "../system-prompt";
 import {
-	type AutoThinkingLevel,
 	type ConfiguredThinkingLevel,
 	isAutoThinking,
 	parseConfiguredThinkingLevel,
@@ -11712,9 +11711,8 @@ export class AgentSession implements SettingsScope {
 		const previousModel = this.model;
 		const previousThinkingLevel = this.thinkingLevel;
 		const previousConfiguredThinking = this.configuredThinkingLevel();
-		const previousAutoThinking: boolean | AutoThinkingLevel = isAutoThinking(previousConfiguredThinking)
-			? previousConfiguredThinking
-			: this.isAutoThinking;
+		// `configuredThinkingLevel()` is always an auto selector while auto is on.
+		const previousAutoThinking = isAutoThinking(previousConfiguredThinking) ? previousConfiguredThinking : undefined;
 		const previousAutoResolvedLevel = this.autoResolvedThinkingLevel();
 		const previousServiceTierByFamily = this.serviceTierByFamily;
 		const previousTools = [...this.agent.state.tools];

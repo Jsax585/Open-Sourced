@@ -1,21 +1,31 @@
 import type { ResolvedThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import {
+	AUTO_THINKING,
 	AUTO_THINKING_CEILINGS,
 	AUTO_THINKING_FLOORS,
+	AUTO_THINKING_LEVELS,
 	AUTO_THINKING_RANGES,
 	type AutoThinkingCeiling,
 	type AutoThinkingFloor,
 	type AutoThinkingLevel,
 	type AutoThinkingRange,
 	type ConfiguredThinkingLevel,
-} from "./render/render-utils";
+	isAutoThinking,
+} from "./thinking-levels";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import { Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
 import { clampThinkingLevelForModel, getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import type { Model } from "@oh-my-pi/pi-catalog/types";
 
-export { AUTO_THINKING_CEILINGS, AUTO_THINKING_FLOORS, AUTO_THINKING_RANGES };
+export {
+	AUTO_THINKING,
+	AUTO_THINKING_CEILINGS,
+	AUTO_THINKING_FLOORS,
+	AUTO_THINKING_LEVELS,
+	AUTO_THINKING_RANGES,
+	isAutoThinking,
+};
 export type { AutoThinkingCeiling, AutoThinkingFloor, AutoThinkingLevel, AutoThinkingRange, ConfiguredThinkingLevel };
 
 /** Thinking selectors accepted by CLI inputs, in display order. */
@@ -158,14 +168,6 @@ export function automaticThinkingLevel<T>(model: Model | undefined, fallback: T)
 	return model?.thinking?.unverified ? undefined : fallback;
 }
 
-/**
- * Sentinel selector for the coding-agent "auto" thinking mode. Kept entirely
- * inside the coding-agent layer: it is never an {@link Effort} or
- * {@link ThinkingLevel}, so provider mapping/clamping keeps seeing concrete
- * efforts. The session resolves `auto` to a concrete effort each turn.
- */
-export const AUTO_THINKING = "auto" as const;
-
 /** Bounds carried by an `auto:<floor>` or `auto:<floor>-<ceiling>` selector. */
 export interface AutoThinkingBounds {
 	floor: AutoThinkingFloor;
@@ -209,11 +211,6 @@ export function parseAutoThinkingFloor(level: string | null | undefined): AutoTh
 /** Parses the maximum effort level configured on an `auto:<floor>-<ceiling>` selector, if any. */
 export function parseAutoThinkingCeiling(level: string | null | undefined): AutoThinkingCeiling | undefined {
 	return parseAutoThinkingBounds(level)?.ceiling;
-}
-
-/** True when a configured thinking level is an auto selector (`auto`, `auto:<floor>`, or `auto:<floor>-<ceiling>`). */
-export function isAutoThinking(level: unknown): level is AutoThinkingLevel {
-	return level === AUTO_THINKING || (typeof level === "string" && parseAutoThinkingBounds(level) !== undefined);
 }
 
 /** Rebuilds an auto selector from parsed bounds; bounds that do not form a valid selector yield plain `auto`. */

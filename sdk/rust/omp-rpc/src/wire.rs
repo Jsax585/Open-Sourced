@@ -2487,8 +2487,6 @@ pub enum ConfiguredThinkingLevel {
 	AutoHigh,
 	#[serde(rename = "auto:xhigh")]
 	AutoXhigh,
-	#[serde(rename = "auto:max")]
-	AutoMax,
 	#[serde(rename = "auto:minimal-low")]
 	AutoMinimalLow,
 	#[serde(rename = "auto:minimal-medium")]
@@ -2547,7 +2545,6 @@ impl ConfiguredThinkingLevel {
 			Self::AutoMedium => "auto:medium",
 			Self::AutoHigh => "auto:high",
 			Self::AutoXhigh => "auto:xhigh",
-			Self::AutoMax => "auto:max",
 			Self::AutoMinimalLow => "auto:minimal-low",
 			Self::AutoMinimalMedium => "auto:minimal-medium",
 			Self::AutoMinimalHigh => "auto:minimal-high",
