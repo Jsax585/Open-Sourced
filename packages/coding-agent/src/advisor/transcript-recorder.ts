@@ -166,6 +166,12 @@ interface JournalScan {
 	leafId: string | null;
 }
 
+/** Original payload and exact serialized bytes, retained only until append acknowledgement. */
+interface PendingTranscriptEntry {
+	entry: SessionMessageEntry;
+	line: string;
+}
+
 /** Append position of one open advisor transcript; holds no persisted history. */
 interface TranscriptJournal {
 	file: string;
@@ -175,8 +181,8 @@ interface TranscriptJournal {
 	writer: SessionStorageWriter | undefined;
 	/** Id of the last entry admitted to the chain; the parent of the next one. */
 	leafId: string | null;
-	/** Serialized lines not yet appended, oldest first. */
-	unwritten: string[];
+	/** Entries not yet acknowledged, oldest first; raw images remain recoverable across retries. */
+	unwritten: PendingTranscriptEntry[];
 	/**
 	 * `unwritten[0]` was handed to a writer whose append then threw, so its bytes
 	 * may have reached the file (the failure can follow the write, e.g. a publish
@@ -210,8 +216,8 @@ interface TranscriptJournal {
  *
  * Memory stays independent of transcript length: opening an existing file
  * streams it once to recover the last entry id, and an append only retains the
- * serialized lines that could not be written yet (retried in order by the next
- * record, flush or close) — never the persisted history or its message objects.
+ * entries that could not be written yet (retried in order by the next record,
+ * flush or close) — never the persisted history or its message objects.
  */
 export class AdvisorTranscriptRecorder {
 	readonly #storage = new FileSessionStorage();
@@ -541,8 +547,8 @@ export class AdvisorTranscriptRecorder {
 		// Admit the entry to the chain only after it serialized, so a failure
 		// cannot leave the next entry pointing at a parent that was never written.
 		journal.leafId = entry.id;
-		journal.unwritten.push(`${line}\n`);
-		await this.#appendPending(journal);
+		journal.unwritten.push({ entry, line: `${line}\n` });
+		await this.#appendPending(journal, entry);
 	}
 
 	/**
@@ -555,12 +561,23 @@ export class AdvisorTranscriptRecorder {
 	 * retry first reconciles that one line against the file tail rather than
 	 * writing a duplicate entry (which would double its billed usage).
 	 */
-	async #appendPending(journal: TranscriptJournal): Promise<void> {
+	async #appendPending(journal: TranscriptJournal, newlyPrepared?: SessionMessageEntry): Promise<void> {
 		if (journal.unwritten.length === 0) return;
 		let writer = journal.writer;
 		try {
+			if (journal.unwritten[0].entry !== newlyPrepared) {
+				// A failed write may leave new blobs unreferenced beyond gc's grace.
+				// Re-check/recreate them through central persistence, including before
+				// acknowledging an uncertain landed line. Its original bytes stay
+				// authoritative; preparation does not re-normalize usage or mint ids.
+				forgetExternalizedImages(journal.blobs);
+				for (const pending of journal.unwritten) {
+					if (pending.entry !== newlyPrepared) prepareEntryForPersistence(pending.entry, journal.blobs);
+				}
+			}
+			let terminatorOnly = false;
 			if (journal.headAppendUncertain) {
-				await this.#reconcileUncertainHead(journal);
+				terminatorOnly = await this.#reconcileUncertainHead(journal);
 				if (journal.unwritten.length === 0) return;
 			}
 			let separator = "";
@@ -574,13 +591,15 @@ export class AdvisorTranscriptRecorder {
 			while (journal.unwritten.length > 0) {
 				// Stays set if append throws: the bytes may have landed before the error.
 				journal.headAppendUncertain = true;
-				await writer.append(separator + journal.unwritten[0]);
+				await writer.append(terminatorOnly ? "\n" : separator + journal.unwritten[0].line);
 				journal.headAppendUncertain = false;
 				separator = "";
+				terminatorOnly = false;
 				journal.unwritten.shift();
 			}
 		} catch (err) {
 			journal.writer = undefined;
+			forgetExternalizedImages(journal.blobs);
 			await writer?.close().catch(() => {});
 			throw err;
 		}
@@ -590,17 +609,25 @@ export class AdvisorTranscriptRecorder {
 	 * Resolve whether `unwritten[0]`, whose append threw, is already the last
 	 * record of the file. Entries carry a unique Snowflake id, so a byte-exact
 	 * match of the complete line at the tail can only be that attempt's own bytes:
-	 * acknowledge it without re-appending. Anything else (the writer rolled the
-	 * bytes back, or only part of the line survived) means it is absent and the
-	 * normal ordered retry applies. A failed read rethrows with the line still
-	 * pending and uncertain, so the next attempt reconciles again instead of
-	 * guessing.
+	 * acknowledge it without re-appending. If only its final newline is missing,
+	 * keep it uncertain and append just that terminator. Anything else (the writer
+	 * rolled the bytes back, or only part of the JSON survived) means it is absent
+	 * and the normal ordered retry applies. A failed read rethrows with the entry
+	 * still pending and uncertain, so the next attempt reconciles instead of guessing.
 	 */
-	async #reconcileUncertainHead(journal: TranscriptJournal): Promise<void> {
-		const line = journal.unwritten[0];
+	async #reconcileUncertainHead(journal: TranscriptJournal): Promise<boolean> {
+		const { line } = journal.unwritten[0];
 		const [, tail] = await this.#storage.readTextSlices(journal.file, 0, Buffer.byteLength(line, "utf8"));
-		if (tail === line) journal.unwritten.shift();
+		if (tail === line) {
+			journal.unwritten.shift();
+		} else if (tail === `\n${line.slice(0, -1)}`) {
+			// The preceding LF plus complete JSON occupies exactly the same UTF-8
+			// byte window as JSON plus its missing LF. Keep uncertainty through
+			// open/terminator failures so retries still compare the original entry.
+			return true;
+		}
 		journal.headAppendUncertain = false;
+		return false;
 	}
 
 	#enqueue(work: () => Promise<void>): void {

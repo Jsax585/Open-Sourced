@@ -23,8 +23,10 @@ import {
 	loadAdvisorTranscriptCosts,
 } from "@oh-my-pi/pi-coding-agent/advisor/transcript-recorder";
 import { CURRENT_SESSION_VERSION } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
-import { getBlobsDir, getConfigRootDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { BlobStore, resolveImageData } from "@oh-my-pi/pi-coding-agent/session/blob-store";
+import { FileSessionStorage, type SessionStorageWriter } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import * as utils from "@oh-my-pi/pi-utils";
+import { getBlobsDir, removeWithRetries } from "@oh-my-pi/pi-utils";
 
 interface AdvisorEntry {
 	type?: string;
@@ -48,6 +50,17 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 	} finally {
 		await removeWithRetries(dir);
 	}
+}
+
+async function withTempBlobsDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
+	return withTempDir(async dir => {
+		const spy = spyOn(utils, "getBlobsDir").mockReturnValue(path.join(dir, "blobs"));
+		try {
+			return await fn(dir);
+		} finally {
+			spy.mockRestore();
+		}
+	});
 }
 
 /** Parse the message entries (skipping the session header) from an advisor JSONL. */
@@ -455,46 +468,35 @@ describe("AdvisorTranscriptRecorder", () => {
 	});
 
 	it("externalizes images to blob references and completes partial assistant usage", async () => {
-		await withTempDir(async dir => {
-			const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-			setAgentDir(path.join(dir, "agent"));
-			try {
-				const sessionFile = path.join(dir, "sess.jsonl");
-				const recorder = new AdvisorTranscriptRecorder(
-					() => sessionFile,
-					() => dir,
-				);
-				const imageData = Buffer.alloc(1500, 1).toString("base64");
-				recorder.record({
-					role: "toolResult",
-					toolCallId: "call-1",
-					toolName: "read",
-					content: [
-						{ type: "text", text: "screenshot" },
-						{ type: "image", data: imageData, mimeType: "image/png" },
-					],
-					isError: false,
-					timestamp: 1,
-				} as AgentMessage);
-				recorder.record({ ...assistantMessage("partial", 5), usage: { input: 5, output: 1 } } as AgentMessage);
-				await recorder.close();
+		await withTempBlobsDir(async dir => {
+			const sessionFile = path.join(dir, "sess.jsonl");
+			const recorder = new AdvisorTranscriptRecorder(
+				() => sessionFile,
+				() => dir,
+			);
+			const imageData = Buffer.alloc(1500, 1).toString("base64");
+			recorder.record({
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "read",
+				content: [
+					{ type: "text", text: "screenshot" },
+					{ type: "image", data: imageData, mimeType: "image/png" },
+				],
+				isError: false,
+				timestamp: 1,
+			} as AgentMessage);
+			recorder.record({ ...assistantMessage("partial", 5), usage: { input: 5, output: 1 } } as AgentMessage);
+			await recorder.close();
 
-				const transcript = path.join(dir, "sess", ADVISOR_TRANSCRIPT_FILENAME);
-				const raw = await Bun.file(transcript).text();
-				expect(raw).not.toContain(imageData);
-				expect(raw).toContain("blob:sha256:");
-				const messages = await readMessageEntries(transcript);
-				expect(messages.map(entry => entry.message?.role)).toEqual(["toolResult", "assistant"]);
-				expect(messages[1].message?.usage?.totalTokens).toBe(6);
-				expect(messages[1].message?.usage?.cost?.total).toBe(0);
-			} finally {
-				if (originalAgentDir) {
-					setAgentDir(originalAgentDir);
-				} else {
-					setAgentDir(path.join(getConfigRootDir(), "agent"));
-					delete process.env.PI_CODING_AGENT_DIR;
-				}
-			}
+			const transcript = path.join(dir, "sess", ADVISOR_TRANSCRIPT_FILENAME);
+			const raw = await Bun.file(transcript).text();
+			expect(raw).not.toContain(imageData);
+			expect(raw).toContain("blob:sha256:");
+			const messages = await readMessageEntries(transcript);
+			expect(messages.map(entry => entry.message?.role)).toEqual(["toolResult", "assistant"]);
+			expect(messages[1].message?.usage?.totalTokens).toBe(6);
+			expect(messages[1].message?.usage?.cost?.total).toBe(0);
 		});
 	});
 
@@ -628,55 +630,44 @@ describe("AdvisorTranscriptRecorder", () => {
 	});
 
 	it("keeps the parent chain intact when serializing an entry fails", async () => {
-		await withTempDir(async dir => {
-			const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-			setAgentDir(path.join(dir, "agent"));
-			try {
-				// An image tool result is externalized to the blob store while the entry is
-				// serialized; a blob directory that cannot be created (here: a regular file
-				// in its place) fails that step deterministically.
-				const blobsDir = getBlobsDir();
-				await fs.mkdir(path.dirname(blobsDir), { recursive: true });
-				await Bun.write(blobsDir, "not a directory");
+		await withTempBlobsDir(async dir => {
+			// An image tool result is externalized to the blob store while the entry is
+			// serialized; a blob directory that cannot be created (here: a regular file
+			// in its place) fails that step deterministically.
+			const blobsDir = getBlobsDir();
+			await fs.mkdir(path.dirname(blobsDir), { recursive: true });
+			await Bun.write(blobsDir, "not a directory");
 
-				const sessionFile = path.join(dir, "sess.jsonl");
-				const transcript = path.join(dir, "sess", ADVISOR_TRANSCRIPT_FILENAME);
-				const recorder = new AdvisorTranscriptRecorder(
-					() => sessionFile,
-					() => dir,
-				);
-				recorder.record(assistantMessage("before", 1));
-				recorder.record({
-					role: "toolResult",
-					toolCallId: "call-1",
-					toolName: "read",
-					content: [{ type: "image", data: Buffer.alloc(1500, 1).toString("base64"), mimeType: "image/png" }],
-					isError: false,
-					timestamp: 1,
-				} as AgentMessage);
-				recorder.record(assistantMessage("after", 2));
-				await recorder.close();
+			const sessionFile = path.join(dir, "sess.jsonl");
+			const transcript = path.join(dir, "sess", ADVISOR_TRANSCRIPT_FILENAME);
+			const recorder = new AdvisorTranscriptRecorder(
+				() => sessionFile,
+				() => dir,
+			);
+			recorder.record(assistantMessage("before", 1));
+			recorder.record({
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "read",
+				content: [{ type: "image", data: Buffer.alloc(1500, 1).toString("base64"), mimeType: "image/png" }],
+				isError: false,
+				timestamp: 1,
+			} as AgentMessage);
+			recorder.record(assistantMessage("after", 2));
+			await recorder.close();
 
-				const entries = await readMessageEntries(transcript);
-				const before = entries.find(entry => entry.message?.usage?.input === 1);
-				const after = entries.find(entry => entry.message?.usage?.input === 2);
-				expect(before).toBeDefined();
-				expect(after).toBeDefined();
-				// No entry may name a parent that never reached the file.
-				const seen = new Set<unknown>();
-				for (const entry of entries) {
-					if (entry.parentId !== null) expect(seen.has(entry.parentId)).toBe(true);
-					seen.add(entry.id);
-				}
-				expect(entries[0].parentId).toBeNull();
-			} finally {
-				if (originalAgentDir) {
-					setAgentDir(originalAgentDir);
-				} else {
-					setAgentDir(path.join(getConfigRootDir(), "agent"));
-					delete process.env.PI_CODING_AGENT_DIR;
-				}
+			const entries = await readMessageEntries(transcript);
+			const before = entries.find(entry => entry.message?.usage?.input === 1);
+			const after = entries.find(entry => entry.message?.usage?.input === 2);
+			expect(before).toBeDefined();
+			expect(after).toBeDefined();
+			// No entry may name a parent that never reached the file.
+			const seen = new Set<unknown>();
+			for (const entry of entries) {
+				if (entry.parentId !== null) expect(seen.has(entry.parentId)).toBe(true);
+				seen.add(entry.id);
 			}
+			expect(entries[0].parentId).toBeNull();
 		});
 	});
 
@@ -778,9 +769,10 @@ describe("AdvisorTranscriptRecorder", () => {
 			let injected = false;
 			const spy = spyOn(FileSessionStorage.prototype, "openWriter").mockImplementation(function (
 				this: FileSessionStorage,
-				...args: Parameters<FileSessionStorage["openWriter"]>
-			) {
-				const writer = realOpenWriter.apply(this, args);
+				fpath: string,
+				options?: { flags?: "a" | "w"; onError?: (err: Error) => void },
+			): SessionStorageWriter {
+				const writer = realOpenWriter.call(this, fpath, options);
 				const realAppend = writer.append.bind(writer);
 				writer.append = async (line: string) => {
 					await realAppend(line);
@@ -813,4 +805,160 @@ describe("AdvisorTranscriptRecorder", () => {
 			}
 		});
 	});
+
+	for (const landed of [false, true]) {
+		it(`restores a queued image after blob removal when the failed append ${landed ? "landed" : "wrote no bytes"}`, async () => {
+			await withTempBlobsDir(async dir => {
+				const sessionFile = path.join(dir, "sess.jsonl");
+				const transcript = path.join(dir, "sess", ADVISOR_TRANSCRIPT_FILENAME);
+				const imageData = Buffer.alloc(1500, 7).toString("base64");
+				const realOpenWriter = FileSessionStorage.prototype.openWriter;
+				const realReadTextSlices = FileSessionStorage.prototype.readTextSlices;
+				let injected = false;
+				let blockReconciliation = false;
+				const writerSpy = spyOn(FileSessionStorage.prototype, "openWriter").mockImplementation(function (
+					this: FileSessionStorage,
+					fpath: string,
+					options?: { flags?: "a" | "w"; onError?: (err: Error) => void },
+				): SessionStorageWriter {
+					const writer = realOpenWriter.call(this, fpath, options);
+					const realAppend = writer.append.bind(writer);
+					writer.append = async (line: string) => {
+						if (fpath === transcript && !injected && line.includes('"type":"message"')) {
+							injected = true;
+							if (landed) await realAppend(line);
+							blockReconciliation = true;
+							throw new Error("injected image append failure");
+						}
+						await realAppend(line);
+					};
+					return writer;
+				});
+				const readSpy = spyOn(FileSessionStorage.prototype, "readTextSlices").mockImplementation(function (
+					this: FileSessionStorage,
+					fpath: string,
+					prefixBytes: number,
+					suffixBytes: number,
+				): Promise<[string, string]> {
+					if (fpath === transcript && blockReconciliation) {
+						return Promise.reject(new Error("injected reconciliation outage"));
+					}
+					return realReadTextSlices.call(this, fpath, prefixBytes, suffixBytes);
+				});
+				const recorder = new AdvisorTranscriptRecorder(
+					() => sessionFile,
+					() => dir,
+				);
+				try {
+					recorder.record({
+						role: "toolResult",
+						toolCallId: "image-retry",
+						toolName: "read",
+						content: [{ type: "image", data: imageData, mimeType: "image/png" }],
+						isError: false,
+						timestamp: 1,
+					} as AgentMessage);
+					await expect(recorder.flush()).rejects.toThrow("injected reconciliation outage");
+					expect(injected).toBe(true);
+					const hash = new Bun.SHA256().update(Buffer.from(imageData, "base64")).digest("hex");
+					const blobs = new BlobStore(getBlobsDir());
+					expect(await blobs.get(hash)).toEqual(Buffer.from(imageData, "base64"));
+					// Simulate GC after its grace period using only this test's isolated store.
+					await removeWithRetries(blobs.dir);
+					expect(await blobs.get(hash)).toBeNull();
+					blockReconciliation = false;
+					await recorder.flush();
+					recorder.record(assistantMessage("after image retry", 2, 0.5));
+					await recorder.close();
+
+					const entries = await readMessageEntries(transcript);
+					expect(entries).toHaveLength(2);
+					expect(new Set(entries.map(entry => entry.id)).size).toBe(2);
+					expect(entries[1].parentId).toBe(entries[0].id);
+					const content = entries[0].message?.content as { type: string; data?: string }[];
+					const image = content.find(part => part.type === "image");
+					expect(image?.data).toBe(`blob:sha256:${hash}`);
+					expect(await resolveImageData(blobs, image?.data ?? "")).toBe(imageData);
+					expect((await loadAdvisorTranscriptCosts(sessionFile)).get("")).toBeCloseTo(0.5, 8);
+				} finally {
+					blockReconciliation = false;
+					await recorder.close();
+					readSpy.mockRestore();
+					writerSpy.mockRestore();
+				}
+			});
+		});
+	}
+
+	for (const failTerminator of [false, true]) {
+		it(`does not duplicate complete UTF-8 JSON missing its newline${failTerminator ? " when the terminator also fails once" : ""}`, async () => {
+			await withTempDir(async dir => {
+				const sessionFile = path.join(dir, "sess.jsonl");
+				const transcript = path.join(dir, "sess", ADVISOR_TRANSCRIPT_FILENAME);
+				const realOpenWriter = FileSessionStorage.prototype.openWriter;
+				let jsonOnlyInjected = false;
+				let terminatorInjected = false;
+				let pendingId: unknown;
+				const spy = spyOn(FileSessionStorage.prototype, "openWriter").mockImplementation(function (
+					this: FileSessionStorage,
+					fpath: string,
+					options?: { flags?: "a" | "w"; onError?: (err: Error) => void },
+				): SessionStorageWriter {
+					const writer = realOpenWriter.call(this, fpath, options);
+					const realAppend = writer.append.bind(writer);
+					writer.append = async (line: string) => {
+						if (fpath === transcript && !jsonOnlyInjected && line.includes('"type":"message"')) {
+							jsonOnlyInjected = true;
+							expect(line.endsWith("\n")).toBe(true);
+							const json = line.slice(0, -1);
+							pendingId = (JSON.parse(json) as AdvisorEntry).id;
+							expect(Buffer.byteLength(json, "utf8")).toBeGreaterThan(json.length);
+							await fs.appendFile(fpath, json, "utf8");
+							throw new Error("injected missing terminator");
+						}
+						if (fpath === transcript && failTerminator && !terminatorInjected && line === "\n") {
+							terminatorInjected = true;
+							throw new Error("injected terminator append failure");
+						}
+						await realAppend(line);
+					};
+					return writer;
+				});
+				const recorder = new AdvisorTranscriptRecorder(
+					() => sessionFile,
+					() => dir,
+				);
+				try {
+					recorder.record(assistantMessage("ответ — 日本語 😀", 11, 0.25));
+					if (failTerminator) {
+						await expect(recorder.flush()).rejects.toThrow("injected terminator append failure");
+						const raw = await Bun.file(transcript).text();
+						expect(raw.endsWith("\n")).toBe(false);
+						// Unlike the malformed torn-tail case, this is complete parseable JSON.
+						expect((JSON.parse(raw.split("\n").at(-1) ?? "") as AdvisorEntry).id).toBe(pendingId);
+					}
+					await recorder.flush();
+					expect((await Bun.file(transcript).text()).endsWith("\n")).toBe(true);
+					recorder.record(assistantMessage("later é", 22, 0.5));
+					await recorder.flush();
+					recorder.record(assistantMessage("last 🌍", 33, 0.125));
+					await recorder.close();
+
+					expect(jsonOnlyInjected).toBe(true);
+					expect(terminatorInjected).toBe(failTerminator);
+					const entries = await readMessageEntries(transcript);
+					expect(entries.map(entry => entry.message?.usage?.input)).toEqual([11, 22, 33]);
+					expect(new Set(entries.map(entry => entry.id)).size).toBe(3);
+					expect(entries[0].id).toBe(pendingId);
+					expect(entries[0].parentId).toBeNull();
+					expect(entries[1].parentId).toBe(entries[0].id);
+					expect(entries[2].parentId).toBe(entries[1].id);
+					expect((await loadAdvisorTranscriptCosts(sessionFile)).get("")).toBeCloseTo(0.875, 8);
+				} finally {
+					await recorder.close();
+					spy.mockRestore();
+				}
+			});
+		});
+	}
 });
