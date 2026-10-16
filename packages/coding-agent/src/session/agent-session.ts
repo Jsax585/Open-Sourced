@@ -4517,6 +4517,11 @@ export class AgentSession implements SettingsScope {
 				await emitAgentEndNotification({ willContinue: true });
 				return;
 			}
+			// A terminal fallback response can restore only after unexpected-stop
+			// recovery accepts completion, never while its continuation is pending.
+			if (this.#recovery.hasRequestScopedRetryFallback()) {
+				await this.#recovery.maybeRestoreRetryFallbackPrimary({ afterSuccessOnly: true });
+			}
 
 			const resolvedInterruptedToolTurn = this.#recovery.classifyResolvedInterruptedToolTurn(msg);
 			if (this.#recovery.isRetryableReasonlessAbort(msg) || resolvedInterruptedToolTurn === "reasonless-abort") {

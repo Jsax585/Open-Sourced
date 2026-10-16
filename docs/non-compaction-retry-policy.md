@@ -227,6 +227,10 @@ turn. Failed, aborted, and empty responses do not restore the model. Same-model
 retries remain budget-bounded. A request-scoped content block does not
 create an availability cooldown for the model it restores.
 
+With unexpected-stop detection enabled, signed-thinking-only stops and Smart-mode
+incomplete text remain on the fallback through recovery. Restoration waits for an
+accepted complete response; canceling a pending verdict does not trigger it.
+
 Eligible Anthropic fallback credit is redeemed with either refusal restoration
 policy. Redemption is single-use and replays the frozen refused request only when
 the model swap leaves the system prompt, tools, and edit mode unchanged.

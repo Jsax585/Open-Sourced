@@ -14,6 +14,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { cfgRetryRefusalFallbackRevertPolicy } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TurnRecovery } from "@oh-my-pi/pi-coding-agent/session/turn-recovery";
+import * as unexpectedStopClassifier from "@oh-my-pi/pi-coding-agent/session/unexpected-stop-classifier";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -117,6 +118,121 @@ describe("AgentSession refusal fallback response settlement", () => {
 
 		expect(requestedModels).toEqual([primary, fallback, primary]);
 		expect(session.model?.id).toBe(primaryModel.id);
+	});
+
+	it.each(["thinking-only", "incomplete-text"] as const)(
+		"keeps the fallback active during unexpected-stop recovery for %s output",
+		async output => {
+			const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+			const fallbackModel = getBundledModel("anthropic", "claude-opus-4-1")!;
+			const primary = `${primaryModel.provider}/${primaryModel.id}`;
+			const fallback = `${fallbackModel.provider}/${fallbackModel.id}`;
+			const requestedModels: string[] = [];
+			vi.spyOn(unexpectedStopClassifier, "classifyUnexpectedStop")
+				.mockResolvedValue(false)
+				.mockResolvedValueOnce(true);
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.maxRetries": 0,
+				"retry.fallbackChains": { [primary]: [fallback] },
+				"retry.refusalFallbackRevertPolicy": "after-success",
+				"features.unexpectedStopDetection": output === "thinking-only" ? "mechanical" : "smart",
+			});
+			const parameters = type({});
+			let inspections = 0;
+			const tool: AgentTool<typeof parameters> = {
+				name: "inspect",
+				label: "Inspect",
+				description: "Inspect the fixture",
+				parameters,
+				async execute() {
+					inspections++;
+					return { content: [{ type: "text", text: "Inspection complete" }], details: {} };
+				},
+			};
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [tool], messages: [] },
+				streamFn: streamResponses(
+					[
+						{ stopReason: "error", stopDetails: { type: "refusal" }, errorMessage: "Classifier declined" },
+						output === "thinking-only"
+							? {
+									content: [
+										{ type: "thinking", thinking: "Inspect the fixture next", thinkingSignature: "signed" },
+									],
+									stopReason: "stop",
+								}
+							: { content: ["I will inspect the fixture next."], stopReason: "stop" },
+						{ content: [{ type: "toolCall", id: "inspect-recovered", name: "inspect", arguments: {} }] },
+						{ content: ["Completed using the inspection result"] },
+					],
+					requestedModels,
+				),
+			});
+			session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+
+			await session.prompt("Inspect the fixture and report the result");
+			await session.waitForIdle();
+
+			expect(requestedModels).toEqual([primary, fallback, fallback, primary]);
+			expect(inspections).toBe(1);
+			expect(session.model?.id).toBe(primaryModel.id);
+		},
+	);
+
+	it("waits for a complete-stop verdict before restoring the primary", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const fallbackModel = getBundledModel("anthropic", "claude-opus-4-1")!;
+		const primary = `${primaryModel.provider}/${primaryModel.id}`;
+		const fallback = `${fallbackModel.provider}/${fallbackModel.id}`;
+		const requestedModels: string[] = [];
+		const judging = Promise.withResolvers<void>();
+		const releaseVerdict = Promise.withResolvers<void>();
+		vi.spyOn(unexpectedStopClassifier, "classifyUnexpectedStop")
+			.mockResolvedValue(false)
+			.mockImplementationOnce(async () => {
+				judging.resolve();
+				await releaseVerdict.promise;
+				return false;
+			});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.maxRetries": 0,
+			"retry.fallbackChains": { [primary]: [fallback] },
+			"retry.refusalFallbackRevertPolicy": "after-success",
+			"features.unexpectedStopDetection": "smart",
+		});
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: streamResponses(
+				[
+					{ stopReason: "error", stopDetails: { type: "refusal" }, errorMessage: "Classifier declined" },
+					{ content: ["The fixture is already correct"] },
+					{ content: ["The primary handles the next request"] },
+				],
+				requestedModels,
+			),
+		});
+		session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+
+		const prompt = session.prompt("Inspect the fixture");
+		try {
+			await judging.promise;
+			expect(requestedModels).toEqual([primary, fallback]);
+			expect(session.model?.id).toBe(fallbackModel.id);
+			releaseVerdict.resolve();
+			await prompt;
+			await session.waitForIdle();
+			expect(session.model?.id).toBe(primaryModel.id);
+			await session.prompt("Continue");
+			await session.waitForIdle();
+			expect(requestedModels).toEqual([primary, fallback, primary]);
+		} finally {
+			releaseVerdict.resolve();
+			await prompt;
+		}
 	});
 
 	it("does not hold ordinary completion behind a message_end observer", async () => {

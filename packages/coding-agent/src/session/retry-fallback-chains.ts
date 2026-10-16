@@ -66,6 +66,8 @@ export interface ActiveRetryFallbackState {
 	 * model, so no observer may report the run as having used it.
 	 */
 	served?: boolean;
+	/** Completion must pass unexpected-stop recovery before restoring the primary. */
+	awaitingUnexpectedStop?: boolean;
 }
 
 /** Model a session's produced work is attributed to. */

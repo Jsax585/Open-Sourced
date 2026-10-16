@@ -556,6 +556,19 @@ export class TurnRecovery {
 		// shake-and-retry. Back-to-back timeouts never reach this point, so the
 		// one-shot bound on an unchanged-request loop is unaffected.
 		this.#requestBodyReadTimeoutRecoveryPromptSequence = undefined;
+		const fallback = this.#activeRetryFallback;
+		if (fallback?.restoreAfterSuccess) {
+			const mode = cfgFeaturesUnexpectedStopDetection.get(this.#host.settings);
+			fallback.awaitingUnexpectedStop = mode !== "none" && isUnexpectedStopCandidate(message);
+			if (fallback.awaitingUnexpectedStop && mode === "mechanical") {
+				for (const content of message.content) {
+					if (content.type === "text" && hasNonWhitespace(content.text)) {
+						fallback.awaitingUnexpectedStop = false;
+						break;
+					}
+				}
+			}
+		}
 		const model = this.#host.model();
 		if (model) {
 			const level = this.#host.thinkingLevel();
@@ -1211,8 +1224,14 @@ export class TurnRecovery {
 		});
 	}
 	async #handleUnexpectedAssistantStop(assistantMessage: AssistantMessage): Promise<boolean> {
+		const fallback = this.#activeRetryFallback;
+		const fallbackGeneration = this.#retryFallbackGeneration;
+		const promptGeneration = this.#host.promptGeneration();
 		const mode = cfgFeaturesUnexpectedStopDetection.get(this.#host.settings);
 		if (mode === "none") {
+			if (fallback?.awaitingUnexpectedStop && isUnexpectedStopCandidate(assistantMessage)) {
+				this.#acceptUnexpectedStopCompletion(fallback, fallbackGeneration, promptGeneration);
+			}
 			return false;
 		}
 		if (!isUnexpectedStopCandidate(assistantMessage)) {
@@ -1233,6 +1252,7 @@ export class TurnRecovery {
 		if (hasNonWhitespace(text)) {
 			if (mode === "mechanical") {
 				this.#unexpectedStopRetryCount = 0;
+				this.#acceptUnexpectedStopCompletion(fallback, fallbackGeneration, promptGeneration);
 				return false;
 			}
 			// This turn answers a stop nudge, which demands the next tool call or
@@ -1240,6 +1260,7 @@ export class TurnRecovery {
 			// answer; judging it again only chains no-op "nothing more to add" turns.
 			if (this.#unexpectedStopRetryCount > 0) {
 				this.#unexpectedStopRetryCount = 0;
+				this.#acceptUnexpectedStopCompletion(fallback, fallbackGeneration, promptGeneration);
 				return false;
 			}
 			const controller = new AbortController();
@@ -1272,6 +1293,9 @@ export class TurnRecovery {
 			// during the wait must also skip the retry counter and the nudge.
 			if (classification !== true || sessionSignal?.aborted === true) {
 				this.#unexpectedStopRetryCount = 0;
+				if (!sessionSignal?.aborted) {
+					this.#acceptUnexpectedStopCompletion(fallback, fallbackGeneration, promptGeneration);
+				}
 				return false;
 			}
 		}
@@ -1298,6 +1322,23 @@ export class TurnRecovery {
 			generation: this.#host.promptGeneration(),
 		});
 		return true;
+	}
+
+	#acceptUnexpectedStopCompletion(
+		fallback: ActiveRetryFallbackState | undefined,
+		fallbackGeneration: number,
+		promptGeneration: number,
+	): void {
+		if (
+			fallback &&
+			this.#activeRetryFallback === fallback &&
+			this.#retryFallbackGeneration === fallbackGeneration &&
+			this.#host.promptGeneration() === promptGeneration &&
+			!this.#host.abortInProgress() &&
+			!this.#host.isDisposed()
+		) {
+			fallback.awaitingUnexpectedStop = false;
+		}
 	}
 
 	/** The operator's latest typed request, which a text-only stop is judged against. */
@@ -2584,7 +2625,7 @@ export class TurnRecovery {
 		const fallback = this.#activeRetryFallback;
 		if (!fallback) return false;
 		if (fallback.restoreAfterSuccess) {
-			if (!fallback.served) return false;
+			if (!fallback.served || fallback.awaitingUnexpectedStop) return false;
 		} else {
 			if (options?.afterSuccessOnly || fallback.pinned) return false;
 			if (this.#getRetryFallbackRevertPolicy() !== "cooldown-expiry") return false;
