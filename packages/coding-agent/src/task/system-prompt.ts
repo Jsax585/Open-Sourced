@@ -20,7 +20,7 @@ export function buildSubagentSystemPrompt(
 	runtimeInstructions: readonly string[] = [],
 ): string[] {
 	const subagentPrompt = prompt.render(subagentSystemPromptTemplate, data);
-	if (systemPreset === "minimal-task") return [subagentPrompt, ...runtimeInstructions];
+	if (systemPreset === "minimal-task") return [...runtimeInstructions, subagentPrompt];
 	if (defaultPrompt.length === 0) return [subagentPrompt];
 	return [...defaultPrompt, subagentPrompt];
 }

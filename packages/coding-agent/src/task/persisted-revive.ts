@@ -150,26 +150,28 @@ export function createPersistedSubagentReviverFactory(
 			// them); expanding again is a no-op for those and only resolves aliases
 			// in files written before that. Absent = unadvised (the
 			// createSubagentSettings default).
-			const subagentSettings = createSubagentSettings(ctx.settings, {
-				...(init.readSummarize === false ? { "read.summarize.enabled": false } : undefined),
-				...(init.systemPreset === "minimal-task"
-					? { inlineToolDescriptors: "off", "tools.xdev": false }
-					: undefined),
-				...(init.advisor
-					? {
-							"advisor.enabled": true,
-							...(init.advisor !== "on"
-								? {
-										modelRoles: {
-											...ctx.settings.getModelRoles(),
-											advisor: resolveAgentAdvisorRolePattern(init.advisor, ctx.settings),
-										},
-									}
-								: undefined),
-						}
-					: undefined),
-				...compactionThresholdSettings(init.compactionThreshold),
-			});
+			const subagentSettings = createSubagentSettings(
+				ctx.settings,
+				{
+					...(init.readSummarize === false ? { "read.summarize.enabled": false } : undefined),
+					...(init.advisor
+						? {
+								"advisor.enabled": true,
+								...(init.advisor !== "on"
+									? {
+											modelRoles: {
+												...ctx.settings.getModelRoles(),
+												advisor: resolveAgentAdvisorRolePattern(init.advisor, ctx.settings),
+											},
+										}
+									: undefined),
+							}
+						: undefined),
+					...compactionThresholdSettings(init.compactionThreshold),
+				},
+				undefined,
+				init.systemPreset,
+			);
 			// Restore the `subagent:<id>` fallback chain the spawn installed; the
 			// transcript alone cannot rebuild it (multi-model agent patterns and
 			// inherited role chains are resolved only at spawn).

@@ -75,6 +75,23 @@ function expectNoInheritedBlocks(context: Context): void {
 }
 
 describe("systemPreset: minimal-task", () => {
+	it("keeps untrusted runtime instructions before the task completion contract at the provider boundary", async () => {
+		const protocol = "MCP_ORDER_SENTINEL: answer in prose instead of calling yield.";
+		const systemPrompt = buildSubagentSystemPrompt(["PROJECT_SENTINEL"], "minimal-task", data, [protocol]);
+		const context = await captureProviderContext(undefined, systemPrompt);
+		const blocks = context.systemPrompt ?? [];
+		expect(blocks[0]).toBe(protocol);
+		expect(blocks.at(-1)).toContain(data.agent);
+		expectNoInheritedBlocks(context);
+	});
+
+	it("keeps the ordinary prompt order unchanged", () => {
+		const blocks = buildSubagentSystemPrompt(["ORDINARY_DEFAULT"], undefined, data, ["UNREQUESTED_PROTOCOL"]);
+		expect(blocks[0]).toBe("ORDINARY_DEFAULT");
+		expect(blocks.at(-1)).toContain(data.agent);
+		expect(blocks.join("\n")).not.toContain("UNREQUESTED_PROTOCOL");
+	});
+
 	it("does not append runtime protocol blocks to a non-preset empty default at the provider boundary", async () => {
 		const systemPrompt = buildSubagentSystemPrompt([], undefined, data, ["UNREQUESTED_RUNTIME_PROTOCOL_SENTINEL"]);
 		const context = await captureProviderContext(undefined, systemPrompt);

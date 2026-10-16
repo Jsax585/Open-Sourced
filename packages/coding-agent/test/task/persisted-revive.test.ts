@@ -11,6 +11,7 @@ import type { EffectiveExtensionRoots } from "@oh-my-pi/pi-coding-agent/capabili
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgCompaction } from "@oh-my-pi/pi-coding-agent/session/context-settings";
+import { cfgToolsXdev } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { cfgInlineToolDescriptors } from "@oh-my-pi/pi-coding-agent/session/settings";
 import type { PreparedExtension } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
@@ -560,14 +561,24 @@ describe("persisted subagent revival", () => {
 			return { session: createRevivedSession([]).session } as CreateAgentSessionResult;
 		});
 
+		const rootSettings = Settings.isolated({ inlineToolDescriptors: "on", "tools.xdev": true });
 		const ref = createRef(sessionFile);
-		const reviver = await createFactory(cwd)(ref);
+		const reviver = await createFactory(cwd, undefined, { settings: rootSettings })(ref);
 		if (!reviver) throw new Error("Expected a persisted reviver");
 		await reviver(ref);
 
 		expect(cfgInlineToolDescriptors.get(capturedOptions?.settings ?? Settings.isolated())).toBe("off");
 		expect(capturedOptions?.skills).toEqual([]);
 		expect(capturedOptions?.rules).toEqual([]);
+		const revivedSettings = capturedOptions?.settings;
+		if (!revivedSettings) throw new Error("Expected revived settings");
+		const ordinaryChild = executorModule.createSubagentSettings(revivedSettings);
+		expect(cfgInlineToolDescriptors.get(ordinaryChild)).toBe("on");
+		expect(cfgToolsXdev.get(ordinaryChild)).toBe(true);
+		expect(cfgInlineToolDescriptors.get(revivedSettings)).toBe("off");
+		expect(cfgToolsXdev.get(revivedSettings)).toBe(false);
+		expect(cfgInlineToolDescriptors.get(rootSettings)).toBe("on");
+		expect(cfgToolsXdev.get(rootSettings)).toBe(true);
 	});
 
 	it("keeps project context out of an advisor after a minimal cold revival", async () => {
@@ -1769,5 +1780,51 @@ describe("buildWakeRelayBody", () => {
 			await expect(reviver(ref)).rejects.toThrow(/no persisted session contract/);
 			expect(await Bun.file(sessionFile).text()).toBe(withoutInit);
 		});
+	});
+});
+
+describe("minimal-task settings stay session-local", () => {
+	for (const inlineToolDescriptors of ["auto", "on", "off"] as const) {
+		for (const xdev of [true, false]) {
+			it(`restores ${inlineToolDescriptors}/${xdev} for an ordinary descendant`, () => {
+				const root = Settings.isolated({ inlineToolDescriptors, "tools.xdev": xdev });
+				const minimal = executorModule.createSubagentSettings(root, undefined, undefined, "minimal-task");
+				const nestedMinimal = executorModule.createSubagentSettings(minimal, undefined, undefined, "minimal-task");
+				for (const parent of [minimal, nestedMinimal]) {
+					const ordinary = executorModule.createSubagentSettings(parent);
+					const ordinaryGrandchild = executorModule.createSubagentSettings(ordinary);
+					for (const child of [ordinary, ordinaryGrandchild]) {
+						expect(cfgInlineToolDescriptors.get(child)).toBe(inlineToolDescriptors);
+						expect(cfgToolsXdev.get(child)).toBe(xdev);
+					}
+					expect(cfgInlineToolDescriptors.get(parent)).toBe("off");
+					expect(cfgToolsXdev.get(parent)).toBe(false);
+				}
+				expect(cfgInlineToolDescriptors.get(root)).toBe(inlineToolDescriptors);
+				expect(cfgToolsXdev.get(root)).toBe(xdev);
+			});
+		}
+	}
+
+	it("honors current parent preferences and explicit ordinary-child overrides", () => {
+		const root = Settings.isolated();
+		cfgInlineToolDescriptors.set(root, "on");
+		cfgToolsXdev.set(root, true);
+		const minimal = executorModule.createSubagentSettings(root, undefined, undefined, "minimal-task");
+		cfgInlineToolDescriptors.set(root, "auto");
+		cfgToolsXdev.set(root, false);
+		expect(cfgInlineToolDescriptors.get(root)).toBe("auto");
+		expect(cfgToolsXdev.get(root)).toBe(false);
+		const ordinary = executorModule.createSubagentSettings(minimal);
+		expect(cfgInlineToolDescriptors.get(ordinary)).toBe("auto");
+		expect(cfgToolsXdev.get(ordinary)).toBe(false);
+		const explicit = executorModule.createSubagentSettings(minimal, {
+			inlineToolDescriptors: "on",
+			"tools.xdev": true,
+		});
+		expect(cfgInlineToolDescriptors.get(explicit)).toBe("on");
+		expect(cfgToolsXdev.get(explicit)).toBe(true);
+		expect(cfgInlineToolDescriptors.get(minimal)).toBe("off");
+		expect(cfgToolsXdev.get(minimal)).toBe(false);
 	});
 });
