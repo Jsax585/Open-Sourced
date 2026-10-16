@@ -3,12 +3,20 @@ import * as fs from "node:fs/promises";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+import { type } from "@oh-my-pi/omptype";
 import { clearCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { startAuthGateway } from "@oh-my-pi/pi-ai/auth-gateway";
 import { AuthStorage } from "@oh-my-pi/pi-ai/auth-storage";
 import { convertAnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
-import { encodeStream, parseRequest } from "@oh-my-pi/pi-ai/providers/openai-codex-responses-server";
+import {
+	encodeResponse,
+	encodeStream,
+	parseRequest,
+	readRequest,
+} from "@oh-my-pi/pi-ai/providers/openai-codex-responses-server";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai/types";
+import { createOpenAIResponsesHistoryPayload } from "@oh-my-pi/pi-ai/utils";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { readSseJson } from "@oh-my-pi/pi-utils/stream";
@@ -57,6 +65,73 @@ async function gateway() {
 	return { server, model };
 }
 
+async function responsesGateway(outputItem?: Record<string, unknown>, argumentDone?: string) {
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gw-codex-replay-"));
+	cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
+	const storage = await AuthStorage.create(path.join(dir, "auth.db"));
+	cleanup.push(() => storage.close());
+	storage.keys.setRuntime("openai", "upstream-key");
+	const model = buildModel({
+		id: "gpt-5.3-codex",
+		name: "GPT-5.3 Codex",
+		api: "openai-responses",
+		provider: "openai",
+		baseUrl: "http://127.0.0.1:1/v1",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 272000,
+		maxTokens: 128000,
+	});
+	const requests: unknown[] = [];
+	const server = startAuthGateway({
+		bind: "127.0.0.1:0",
+		bearerTokens: ["gateway-token"],
+		storage,
+		resolveModel: id => (id === "choice-model" ? model : undefined),
+		async fetch(_input, init) {
+			if (typeof init?.body !== "string") throw new Error("Expected an upstream JSON request");
+			const body: unknown = JSON.parse(init.body);
+			requests.push(body);
+			const item = outputItem ?? {
+				type: "message",
+				id: "msg_choice",
+				role: "assistant",
+				content: [{ type: "output_text", text: "received" }],
+			};
+			const events = [
+				{ type: "response.created", response: { id: "resp_choice" } },
+				{ type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } },
+				...(argumentDone === undefined
+					? []
+					: [
+							{
+								type: "response.function_call_arguments.done",
+								output_index: 0,
+								item_id: item.id,
+								arguments: argumentDone,
+							},
+						]),
+				{ type: "response.output_item.done", output_index: 0, item },
+				{
+					type: "response.completed",
+					response: {
+						id: "resp_choice",
+						status: "completed",
+						output: [item],
+						usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+					},
+				},
+			];
+			return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+				headers: { "content-type": "text/event-stream" },
+			});
+		},
+	});
+	cleanup.push(() => server.close());
+	return { server, requests };
+}
+
 const headers = { "content-type": "application/json", authorization: "Bearer gateway-token" };
 const tools = [
 	{
@@ -74,7 +149,373 @@ const tools = [
 	},
 ];
 
+const functionTool = {
+	type: "function",
+	name: "apply_patch",
+	parameters: { type: "object", properties: {} },
+};
+const functionTools = [{ type: "namespace", name: "editor", tools: [functionTool] }];
+
 describe("auth-gateway Codex Responses", () => {
+	it("rejects decoded zstd data over a small caller-supplied limit", async () => {
+		const json = JSON.stringify({ model: "model", input: "hello" });
+		const bytes = new Uint8Array(await Bun.zstdCompress(json));
+		const request = () =>
+			new Request("http://localhost/v1/codex/responses", {
+				method: "POST",
+				headers: { "content-encoding": "zstd" },
+				body: bytes,
+			});
+		expect(await readRequest(request(), json.length)).toEqual({ model: "model", input: "hello" });
+		await expect(readRequest(request(), json.length - 1)).rejects.toThrow();
+	});
+
+	it.each([
+		{
+			label: "nonempty metadata, omitted format, late search discovery",
+			format: undefined,
+			encryptedArgs: ["opaque-text-args"],
+			discovery: "tool_search_output",
+		},
+		{
+			label: "empty metadata, text format, late additional tools",
+			format: { type: "text" },
+			encryptedArgs: [],
+			discovery: "additional_tools",
+		},
+		{
+			label: "absent metadata, text format, declared tools",
+			format: { type: "text" },
+			encryptedArgs: undefined,
+			discovery: undefined,
+		},
+	] as const)(
+		"round-trips text custom tools through the function bridge: $label",
+		async ({ format, encryptedArgs, discovery }) => {
+			const rawInput = "hello\nworld";
+			const metadata = encryptedArgs === undefined ? {} : { encrypted_function_args: encryptedArgs };
+			const { server, requests } = await responsesGateway({
+				type: "function_call",
+				id: "fc_text",
+				call_id: "call_text",
+				name: "editor__echo",
+				arguments: JSON.stringify({ input: rawInput }),
+				...metadata,
+			});
+			const input = [{ role: "user", content: "Echo this" }];
+			const offeredTools = [
+				{
+					type: "namespace",
+					name: "editor",
+					tools: [{ type: "custom", name: "echo", ...(format === undefined ? {} : { format }) }],
+				},
+			];
+			const discoveryItems =
+				discovery === "tool_search_output"
+					? [
+							{ type: "tool_search_call", call_id: "search_text", execution: "client", arguments: {} },
+							{ type: discovery, call_id: "search_text", execution: "client", tools: offeredTools },
+						]
+					: discovery === "additional_tools"
+						? [{ type: discovery, role: "developer", tools: offeredTools }]
+						: [];
+			const body = {
+				model: "choice-model",
+				input: [...input, ...discoveryItems],
+				stream: true,
+				tools: discovery === undefined ? offeredTools : undefined,
+				tool_choice: { type: "custom", name: "echo" },
+			};
+			const response = await fetch(`${server.url}/v1/codex/responses`, {
+				method: "POST",
+				headers,
+				body: JSON.stringify(body),
+			});
+			expect(response.status).toBe(200);
+			const events = await frames(response);
+			const done = events.find(event => event.type === "response.output_item.done")!.item!;
+			expect(done).toMatchObject({
+				type: "custom_tool_call",
+				id: "fc_text",
+				call_id: "call_text",
+				namespace: "editor",
+				name: "echo",
+				input: rawInput,
+				...metadata,
+			});
+			expect(done).not.toHaveProperty("arguments");
+			if (encryptedArgs === undefined) expect(done).not.toHaveProperty("encrypted_function_args");
+			expect(requests[0]).toMatchObject({
+				tool_choice: { type: "function", name: "editor__echo" },
+				tools: expect.arrayContaining([
+					expect.objectContaining({
+						type: "function",
+						name: "editor__echo",
+						parameters: expect.objectContaining({ required: ["input"] }),
+					}),
+				]),
+			});
+			const replayBody = {
+				...body,
+				stream: false,
+				input: [
+					...input,
+					done,
+					{ type: "custom_tool_call_output", call_id: done.call_id, output: "echoed" },
+					...discoveryItems,
+				],
+			};
+			const before = JSON.stringify(replayBody);
+			parseRequest(replayBody, undefined, createCodexModel("gpt-5.3-codex"));
+			expect(JSON.stringify(replayBody)).toBe(before);
+			const followup = await fetch(`${server.url}/v1/codex/responses`, {
+				method: "POST",
+				headers,
+				body: JSON.stringify(replayBody),
+			});
+			expect(followup.status).toBe(200);
+			const next = (await followup.json()) as { output: Record<string, unknown>[] };
+			expect(next.output).toEqual([
+				expect.objectContaining({
+					type: "custom_tool_call",
+					id: "fc_text",
+					call_id: "call_text",
+					namespace: "editor",
+					name: "echo",
+					input: rawInput,
+					...metadata,
+				}),
+			]);
+			if (encryptedArgs === undefined) expect(next.output[0]).not.toHaveProperty("encrypted_function_args");
+			expect(structuredClone(requests[1])).toMatchObject({
+				input: expect.arrayContaining([
+					expect.objectContaining({
+						type: "function_call",
+						call_id: "call_text",
+						name: "editor__echo",
+						arguments: JSON.stringify({ input: rawInput }),
+						...metadata,
+					}),
+					expect.objectContaining({ type: "function_call_output", call_id: "call_text", output: "echoed" }),
+				]),
+			});
+			const upstream = requests[1] as { input: Record<string, unknown>[] };
+			const replayed = upstream.input.filter(item => item.call_id === "call_text");
+			expect(replayed).toHaveLength(2);
+			expect(replayed.some(item => item.type === "custom_tool_call")).toBe(false);
+			if (encryptedArgs === undefined) {
+				for (const item of replayed) expect(item).not.toHaveProperty("encrypted_function_args");
+			}
+		},
+	);
+
+	it("keeps grammar custom replay native without injecting function metadata", async () => {
+		const { server, requests } = await responsesGateway();
+		const response = await fetch(`${server.url}/v1/codex/responses`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				model: "choice-model",
+				stream: false,
+				input: [
+					{ role: "user", content: "Apply and echo" },
+					{
+						type: "custom_tool_call",
+						id: "ctc_patch",
+						call_id: "call_patch",
+						name: "apply_patch",
+						namespace: "editor",
+						input: "patch",
+						encrypted_function_args: ["not-function-metadata"],
+					},
+					{
+						type: "custom_tool_call",
+						id: "fc_echo",
+						call_id: "call_echo",
+						name: "echo",
+						namespace: "editor",
+						input: "hello",
+						encrypted_function_args: ["text-function-metadata"],
+					},
+					{ type: "custom_tool_call_output", call_id: "call_patch", output: "applied" },
+					{ type: "custom_tool_call_output", call_id: "call_echo", output: "echoed" },
+					{
+						type: "additional_tools",
+						role: "developer",
+						tools: [...tools, { type: "namespace", name: "editor", tools: [{ type: "custom", name: "echo" }] }],
+					},
+				],
+			}),
+		});
+		expect(response.status).toBe(200);
+		await response.text();
+		const upstream = requests[0] as { input: Record<string, unknown>[] };
+		expect(upstream.input).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					type: "custom_tool_call",
+					call_id: "call_patch",
+					name: "editor__apply_patch",
+					input: "patch",
+				}),
+				expect.objectContaining({
+					type: "function_call",
+					call_id: "call_echo",
+					name: "editor__echo",
+					arguments: JSON.stringify({ input: "hello" }),
+					encrypted_function_args: ["text-function-metadata"],
+				}),
+				expect.objectContaining({ type: "custom_tool_call_output", call_id: "call_patch", output: "applied" }),
+				expect.objectContaining({ type: "function_call_output", call_id: "call_echo", output: "echoed" }),
+			]),
+		);
+		const grammarCall = upstream.input.find(item => item.type === "custom_tool_call");
+		expect(grammarCall).not.toHaveProperty("encrypted_function_args");
+		expect(grammarCall).not.toHaveProperty("arguments");
+	});
+
+	it.each([{ encryptedArgs: null }, { encryptedArgs: "opaque-not-an-array" }, { encryptedArgs: [42] }])(
+		"rejects malformed text bridge encrypted arguments $encryptedArgs before contacting the upstream",
+		async ({ encryptedArgs }) => {
+			const { server, requests } = await responsesGateway();
+			const response = await fetch(`${server.url}/v1/codex/responses`, {
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					model: "choice-model",
+					stream: false,
+					input: [
+						{
+							type: "custom_tool_call",
+							call_id: "call_text",
+							name: "echo",
+							namespace: "editor",
+							input: "hello",
+							encrypted_function_args: encryptedArgs,
+						},
+						{
+							type: "additional_tools",
+							role: "developer",
+							tools: [{ type: "namespace", name: "editor", tools: [{ type: "custom", name: "echo" }] }],
+						},
+					],
+				}),
+			});
+			expect(response.status).toBe(400);
+			expect(await response.json()).toMatchObject({ error: { type: "invalid_request_error" } });
+			expect(requests).toEqual([]);
+		},
+	);
+
+	it.each([
+		["short function name", functionTools, { type: "function", name: "apply_patch" }, "editor__apply_patch"],
+		["short custom name", tools, { type: "custom", name: "apply_patch" }, "editor__apply_patch"],
+		[
+			"explicit namespace among duplicate names",
+			[...functionTools, { ...functionTools[0], name: "files" }],
+			{ type: "function", name: "apply_patch", namespace: "files" },
+			"files__apply_patch",
+		],
+		["flattened name", tools, { type: "custom", name: "editor__apply_patch" }, "editor__apply_patch"],
+		[
+			"exact name before namespaced short names",
+			[functionTool, ...functionTools],
+			{ type: "function", name: "apply_patch" },
+			"apply_patch",
+		],
+		[
+			"default functions namespace",
+			[{ ...functionTools[0], name: "functions" }, ...functionTools],
+			{ type: "function", name: "apply_patch", namespace: "functions" },
+			"apply_patch",
+		],
+	] as const)("preserves the upstream forced choice for %s", async (_label, offeredTools, choice, name) => {
+		const { server, requests } = await responsesGateway();
+		const response = await fetch(`${server.url}/v1/codex/responses`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				model: "choice-model",
+				input: "Apply the patch",
+				stream: false,
+				tools: offeredTools,
+				tool_choice: choice,
+			}),
+		});
+		expect(response.status).toBe(200);
+		await response.text();
+		expect(requests[0]).toMatchObject({
+			tool_choice: { type: choice.type, name },
+			tools: expect.arrayContaining([expect.objectContaining({ type: choice.type, name })]),
+		});
+	});
+
+	it.each(["additional_tools", "tool_search_output"] as const)(
+		"resolves forced choices after collecting tools from %s",
+		async source => {
+			const { server, requests } = await responsesGateway();
+			const input =
+				source === "additional_tools"
+					? [{ type: source, role: "developer", tools }]
+					: [
+							{ type: "tool_search_call", call_id: "search_1", execution: "client", arguments: {} },
+							{ type: source, call_id: "search_1", execution: "client", tools },
+						];
+			const response = await fetch(`${server.url}/v1/codex/responses`, {
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					model: "choice-model",
+					input: [...input, { role: "user", content: "Apply the patch" }],
+					stream: false,
+					tool_choice: { type: "custom", name: "apply_patch" },
+				}),
+			});
+			expect(response.status).toBe(200);
+			await response.text();
+			expect(requests[0]).toMatchObject({
+				tool_choice: { type: "custom", name: "editor__apply_patch" },
+				tools: expect.arrayContaining([expect.objectContaining({ type: "custom", name: "editor__apply_patch" })]),
+			});
+		},
+	);
+
+	it.each([
+		[
+			"ambiguous short name",
+			[...functionTools, { ...functionTools[0], name: "files" }],
+			{ type: "function", name: "apply_patch" },
+		],
+		["unknown tool", functionTools, { type: "function", name: "missing" }],
+		["wrong tool type", functionTools, { type: "custom", name: "editor__apply_patch" }],
+		[
+			"unknown namespace without a short-name fallback",
+			[functionTool, ...functionTools],
+			{ type: "function", name: "apply_patch", namespace: "missing" },
+		],
+		[
+			"a namespace that only collides after flattening",
+			[{ type: "namespace", name: "editor__files", tools: [functionTool] }],
+			{ type: "function", name: "files__apply_patch", namespace: "editor" },
+		],
+		["malformed namespace", functionTools, { type: "function", name: "apply_patch", namespace: 42 }],
+	] as const)("rejects %s before contacting the upstream", async (_label, offeredTools, choice) => {
+		const { server, requests } = await responsesGateway();
+		const response = await fetch(`${server.url}/v1/codex/responses`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				model: "choice-model",
+				input: "Apply the patch",
+				tools: offeredTools,
+				tool_choice: choice,
+			}),
+		});
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({ error: { type: "invalid_request_error" } });
+		expect(requests).toEqual([]);
+	});
+
 	it("round-trips namespaced custom tools and encrypted reasoning through authoritative done items", async () => {
 		const { server, model } = await gateway();
 		model.push({
@@ -267,6 +708,21 @@ describe("auth-gateway Codex Responses", () => {
 		storage.keys.setRuntime(provider, "upstream-key");
 		const requests: Record<string, unknown>[] = [];
 		const encryptedContent = "opaque-replay";
+		const toolItem = {
+			type: "function_call",
+			id: "fc_message",
+			call_id: "call_message",
+			name: "editor__send_message",
+			arguments: JSON.stringify({ message: "hello" }),
+			encrypted_function_args: [],
+		};
+		const ordinaryToolItem = {
+			type: "function_call",
+			id: "fc_read",
+			call_id: "call_read",
+			name: "editor__send_message",
+			arguments: JSON.stringify({ message: "ordinary" }),
+		};
 		const upstream = Bun.serve({
 			hostname: "127.0.0.1",
 			port: 0,
@@ -302,12 +758,22 @@ describe("auth-gateway Codex Responses", () => {
 						delta: "continued",
 					},
 					{ type: "response.output_item.done", output_index: 1, item },
+					{ type: "response.output_item.added", output_index: 2, item: { ...toolItem, arguments: "" } },
+					{ type: "response.output_item.added", output_index: 3, item: { ...ordinaryToolItem, arguments: "" } },
+					{ type: "response.output_item.done", output_index: 3, item: ordinaryToolItem },
+					{
+						type: "response.function_call_arguments.delta",
+						output_index: 2,
+						item_id: toolItem.id,
+						delta: toolItem.arguments,
+					},
+					{ type: "response.output_item.done", output_index: 2, item: toolItem },
 					{
 						type: "response.completed",
 						response: {
 							id: "resp_upstream",
 							status: "completed",
-							output: [reasoning, item],
+							output: [reasoning, item, toolItem, ordinaryToolItem],
 							usage: { input_tokens: 4, output_tokens: 2, total_tokens: 6 },
 						},
 					},
@@ -365,6 +831,7 @@ describe("auth-gateway Codex Responses", () => {
 				},
 			},
 			input,
+			tools: [{ type: "namespace", name: "editor", tools: [{ ...functionTool, name: "send_message" }] }],
 		};
 		const response = await fetch(`${server.url}/v1/codex/responses`, {
 			method: "POST",
@@ -380,6 +847,16 @@ describe("auth-gateway Codex Responses", () => {
 		expect(done).toEqual(
 			expect.arrayContaining([expect.objectContaining({ type: "reasoning", encrypted_content: encryptedContent })]),
 		);
+		const doneCall = done.find(item => item.call_id === toolItem.call_id)!;
+		expect(doneCall).toMatchObject({
+			call_id: toolItem.call_id,
+			name: "send_message",
+			namespace: "editor",
+			encrypted_function_args: [],
+		});
+		expect(done.find(item => item.call_id === ordinaryToolItem.call_id)).not.toHaveProperty(
+			"encrypted_function_args",
+		);
 		const followup = await fetch(`${server.url}/v1/codex/responses`, {
 			method: "POST",
 			headers,
@@ -388,6 +865,8 @@ describe("auth-gateway Codex Responses", () => {
 				input: [
 					...input,
 					...done,
+					{ type: "function_call_output", call_id: toolItem.call_id, output: "delivered" },
+					{ type: "function_call_output", call_id: ordinaryToolItem.call_id, output: "read" },
 					{ type: "message", role: "user", content: [{ type: "input_text", text: "Finish" }] },
 				],
 			}),
@@ -399,8 +878,258 @@ describe("auth-gateway Codex Responses", () => {
 			text: { verbosity: "low", format: { type: "json_schema", name: "answer" } },
 			input: expect.arrayContaining([
 				expect.objectContaining({ type: "reasoning", encrypted_content: encryptedContent }),
+				expect.objectContaining({ type: "function_call", name: toolItem.name, encrypted_function_args: [] }),
 			]),
 		});
+		const nonstream = await fetch(`${server.url}/v1/codex/responses`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ ...body, stream: false }),
+		});
+		expect(nonstream.status).toBe(200);
+		expect(await nonstream.json()).toMatchObject({
+			output: expect.arrayContaining([
+				expect.objectContaining({
+					type: "function_call",
+					namespace: "editor",
+					name: "send_message",
+					encrypted_function_args: [],
+				}),
+			]),
+		});
+	});
+
+	it("keeps encrypted arguments on their own call when IDs repeat across turns", async () => {
+		const { server, requests } = await responsesGateway();
+		const input: Record<string, unknown>[] = [
+			{ role: "user", content: "Find tools" },
+			{ type: "tool_search_call", call_id: "search_1", execution: "client", arguments: {} },
+			{ type: "tool_search_output", call_id: "search_1", execution: "client", tools },
+			{
+				type: "custom_tool_call",
+				call_id: "call_patch",
+				name: "apply_patch",
+				namespace: "editor",
+				input: "patch",
+			},
+			{ type: "custom_tool_call_output", call_id: "call_patch", output: "applied" },
+		];
+		for (const [turn, encryptedArgs] of [
+			["first", ["first-opaque"]],
+			["ordinary", undefined],
+			["last", ["last-opaque"]],
+		] as const) {
+			input.push(
+				{ role: "user", content: turn },
+				{
+					type: "function_call",
+					call_id: "call_reused",
+					name: "send_message",
+					namespace: "editor",
+					arguments: JSON.stringify({ message: turn }),
+					...(encryptedArgs === undefined ? {} : { encrypted_function_args: encryptedArgs }),
+				},
+				{ type: "function_call_output", call_id: "call_reused", output: `delivered ${turn}` },
+			);
+		}
+		const response = await fetch(`${server.url}/v1/codex/responses`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				model: "choice-model",
+				stream: false,
+				input,
+				tools: [{ type: "namespace", name: "editor", tools: [{ ...functionTool, name: "send_message" }] }],
+			}),
+		});
+		expect(response.status).toBe(200);
+		await response.text();
+		const upstream = requests[0] as { input: Record<string, unknown>[] };
+		// Every repeated native call must keep its own metadata AND real result.
+		const calls = upstream.input.filter(
+			item => item.type === "function_call" && item.name === "editor__send_message",
+		);
+		expect(calls).toMatchObject([
+			{ arguments: JSON.stringify({ message: "first" }), encrypted_function_args: ["first-opaque"] },
+			{ arguments: JSON.stringify({ message: "ordinary" }) },
+			{ arguments: JSON.stringify({ message: "last" }), encrypted_function_args: ["last-opaque"] },
+		]);
+		expect(calls[1]).not.toHaveProperty("encrypted_function_args");
+		expect(new Set(calls.map(call => call.call_id)).size).toBe(3);
+		const outputs = upstream.input.filter(item => item.type === "function_call_output");
+		for (const [index, turn] of ["first", "ordinary", "last"].entries()) {
+			expect(outputs.filter(output => output.call_id === calls[index]!.call_id)).toEqual([
+				expect.objectContaining({ output: `delivered ${turn}` }),
+			]);
+		}
+		const nativeCallIds = new Set(
+			upstream.input
+				.filter(item => item.type === "function_call" || item.type === "custom_tool_call")
+				.map(item => item.call_id),
+		);
+		expect(outputs.every(output => nativeCallIds.has(output.call_id))).toBe(true);
+		expect(JSON.stringify(upstream.input)).not.toContain("No result provided");
+		expect(JSON.stringify(upstream.input)).not.toContain("[Orphan tool result");
+	});
+
+	it.each(["unrepairable", "completed arguments"] as const)(
+		"round-trips normalized %s through JSON and SSE without losing native metadata",
+		async scenario => {
+			const raw = scenario === "unrepairable" ? '{"tasks": [{"task": "x" "y"}]] }}' : "{}";
+			const completed = scenario === "completed arguments" ? '{"path":"README.md"}' : undefined;
+			const { server, requests } = await responsesGateway(
+				{
+					type: "function_call",
+					id: "fc_normalized",
+					call_id: "call_normalized",
+					name: "read",
+					arguments: raw,
+					encrypted_function_args: ["opaque-normalized"],
+				},
+				completed,
+			);
+			const callSchema = type({
+				type: "'function_call'",
+				"id?": "string",
+				call_id: "string",
+				name: "string",
+				arguments: "string",
+				"encrypted_function_args?": "string[]",
+			});
+			const responseSchema = type({ output: callSchema.array() });
+			const requestSchema = type({
+				input: callSchema.or(type({ type: "'function_call_output'", call_id: "string", output: "string" })).array(),
+			});
+			for (const stream of [false, true]) {
+				const response = await fetch(`${server.url}/v1/codex/responses`, {
+					method: "POST",
+					headers,
+					body: JSON.stringify({ model: "choice-model", input: "Read the file", stream }),
+				});
+				expect(response.status).toBe(200);
+				const items = stream
+					? (await frames(response))
+							.filter(frame => frame.type === "response.output_item.done")
+							.map(frame => callSchema.assert(frame.item))
+					: responseSchema.assert(await response.json()).output;
+				expect(items).toHaveLength(1);
+				const item = items[0]!;
+				const args = JSON.parse(String(item.arguments));
+				if (scenario === "unrepairable") {
+					expect(args).toEqual({ __parseError: expect.any(String), __rawJson: raw });
+				} else {
+					expect(args).toEqual({ path: "README.md" });
+				}
+				expect(item.call_id).toBe("call_normalized");
+				expect(item.encrypted_function_args).toEqual(["opaque-normalized"]);
+				// JSON preserves the native identity; SSE keeps its added identity stable.
+				if (!stream) expect(item.id).toBe("fc_normalized");
+				const replay = await fetch(`${server.url}/v1/codex/responses`, {
+					method: "POST",
+					headers,
+					body: JSON.stringify({
+						model: "choice-model",
+						input: [...items, { type: "function_call_output", call_id: item.call_id, output: "tool result" }],
+					}),
+				});
+				expect(replay.status).toBe(200);
+				await replay.text();
+				const input = requestSchema.assert(requests.at(-1)).input;
+				const calls = input.filter(entry => entry.type === "function_call");
+				expect(calls).toHaveLength(1);
+				expect(JSON.parse(String(calls[0]!.arguments))).toEqual(args);
+				expect(calls[0]!.encrypted_function_args).toEqual(["opaque-normalized"]);
+				expect(
+					input.filter(entry => entry.type === "function_call_output").map(entry => [entry.call_id, entry.output]),
+				).toEqual([[calls[0]!.call_id, "tool result"]]);
+			}
+		},
+	);
+
+	it.each([
+		["reversed native order", ["fc_first", "fc_second"], ["fc_second", "fc_first"], [1, 0]],
+		["anonymous before identified", [undefined, "fc_first"], ["fc_first", "fc_second"], [1, 0]],
+		["missing item IDs", [undefined, undefined, undefined], [undefined, undefined], [0, 1, undefined]],
+		["different known item IDs", ["fc_first", "fc_other"], ["fc_second", "fc_first"], [1, undefined]],
+		["duplicate full identities", ["fc_first", "fc_first"], ["fc_first", "fc_first"], [0, 1]],
+	] as const)("keeps repeated call metadata separate in JSON and SSE: %s", async (_label, ids, nativeIds, matches) => {
+		const nativeItems = nativeIds.map((id, index) => ({
+			type: "function_call",
+			...(id === undefined ? {} : { id }),
+			call_id: "call_reused",
+			name: `native_${index}`,
+			arguments: JSON.stringify({ source: "native", index }),
+			encrypted_function_args: [`opaque_${index}`],
+		}));
+		const message: AssistantMessage = {
+			role: "assistant",
+			api: "openai-responses",
+			provider: "openai",
+			model: "gpt-5.3-codex",
+			content: ids.map((id, index) => ({
+				type: "toolCall",
+				id: id === undefined ? "call_reused" : `call_reused|${id}`,
+				name: `generic_${index}`,
+				arguments: { source: "generic", index },
+			})),
+			providerPayload: createOpenAIResponsesHistoryPayload("openai", nativeItems),
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 1,
+		};
+		const jsonItems = encodeResponse(message, message.model).output as Record<string, unknown>[];
+		const outputs = [jsonItems];
+		for (const nativeAtStart of [false, true]) {
+			const partial = nativeAtStart ? message : { ...message, providerPayload: undefined };
+			const events = new AssistantMessageEventStream();
+			for (const [contentIndex, toolCall] of message.content.entries()) {
+				if (toolCall.type !== "toolCall") throw new Error("Expected tool call");
+				events.push({ type: "toolcall_start", contentIndex, partial });
+				events.push({ type: "toolcall_end", contentIndex, toolCall, partial });
+			}
+			events.push({ type: "done", reason: "toolUse", message });
+			const result = await frames(new Response(encodeStream(events, message.model)));
+			const added = result.filter(event => event.type === "response.output_item.added").map(event => event.item!);
+			const done = result.filter(event => event.type === "response.output_item.done").map(event => event.item!);
+			expect(done.map(item => item.id)).toEqual(added.map(item => item.id));
+			expect(result.at(-1)).toMatchObject({ type: "response.completed", response: { output: done } });
+			if (nativeAtStart) {
+				for (const [index, match] of matches.entries()) {
+					expect(added[index]).toMatchObject({
+						name: match === undefined ? `generic_${index}` : `native_${match}`,
+						arguments: "",
+					});
+					if (match === undefined) expect(added[index]).not.toHaveProperty("encrypted_function_args");
+					else expect(added[index].encrypted_function_args).toEqual([`opaque_${match}`]);
+					if (match !== undefined && nativeIds[match] !== undefined) {
+						expect(added[index].id).toBe(nativeIds[match]);
+					}
+				}
+			}
+			outputs.push(done);
+		}
+		for (const output of outputs) {
+			expect(output).toHaveLength(ids.length);
+			for (const [index, match] of matches.entries()) {
+				expect(output[index]).toMatchObject({
+					type: "function_call",
+					call_id: "call_reused",
+					name: match === undefined ? `generic_${index}` : `native_${match}`,
+				});
+				if (match === undefined) expect(output[index]).not.toHaveProperty("encrypted_function_args");
+				else expect(output[index].encrypted_function_args).toEqual([`opaque_${match}`]);
+			}
+		}
+		for (const [index, match] of matches.entries()) {
+			if (match !== undefined && nativeIds[match] !== undefined) expect(jsonItems[index].id).toBe(nativeIds[match]);
+		}
 	});
 
 	it("does not relabel Responses encrypted history as Anthropic signed thinking", () => {

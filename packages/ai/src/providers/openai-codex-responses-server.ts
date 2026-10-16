@@ -6,6 +6,7 @@
  */
 import { type } from "@oh-my-pi/omptype";
 import { structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import { zstdDecompress } from "@oh-my-pi/pi-utils/ar/codecs/zstd";
 import type { AuthGatewayParsedRequest, AuthGatewayStreamControl } from "../auth-gateway/types";
 import * as AIError from "../error";
 import { classifyGatewayError } from "../error/gateway";
@@ -17,19 +18,39 @@ import {
 	type Tool,
 	parseServiceTier,
 } from "../types";
+import { createOpenAIResponsesHistoryPayload, getOpenAIResponsesHistoryItems } from "../utils";
+import {
+	type ResponsesCallIdentity,
+	matchResponsesCallIdentities,
+	responsesItemComponent,
+} from "../utils/responses-call-identity";
 import * as responses from "./openai-responses-server";
+import { isResponsesFamilyApi, responsesCallComponent } from "./transform-messages";
 
 const customToolSchema = type({
 	type: "'custom'",
 	name: "string >= 1",
 	"description?": "string",
-	format: { type: "'grammar'", syntax: "'lark' | 'regex'", definition: "string" },
+	"format?": type({ type: "'text'" }).or({
+		type: "'grammar'",
+		syntax: "'lark' | 'regex'",
+		definition: "string",
+	}),
+});
+
+const encryptedFunctionArgsSchema = type("string[]");
+
+const namedToolChoiceSchema = type({
+	type: "'function' | 'custom'",
+	name: "string >= 1",
+	"namespace?": "string >= 1",
 });
 
 interface CodexToolIdentity {
 	name: string;
 	namespace?: string;
 	custom?: boolean;
+	textOnly?: boolean;
 	search?: boolean;
 }
 
@@ -50,12 +71,50 @@ function toolName(name: string, namespace: unknown): string {
 	return namespace.endsWith("_") || name.startsWith("_") ? `${namespace}${name}` : `${namespace}__${name}`;
 }
 
+function normalizeToolChoice(value: unknown, identities: Record<string, CodexToolIdentity>): unknown {
+	if (!isObject(value) || (value.type !== "function" && value.type !== "custom")) return value;
+	const choice = namedToolChoiceSchema(value);
+	if (choice instanceof type.errors) throw new AIError.ValidationError(choice.summary);
+	const custom = choice.type === "custom";
+	let name: string | undefined;
+	if (choice.namespace !== undefined) {
+		const namespace = choice.namespace === "functions" ? undefined : choice.namespace;
+		const candidate = toolName(choice.name, namespace);
+		const identity = identities[candidate];
+		if (
+			identity &&
+			identity.name === choice.name &&
+			identity.namespace === namespace &&
+			Boolean(identity.custom) === custom
+		) {
+			name = candidate;
+		}
+	} else if (identities[choice.name]) {
+		// An exact offered name takes precedence over short names in other namespaces.
+		if (Boolean(identities[choice.name].custom) === custom) name = choice.name;
+	} else {
+		for (const candidate in identities) {
+			const identity = identities[candidate];
+			if (identity.name !== choice.name || Boolean(identity.custom) !== custom) continue;
+			if (name !== undefined) {
+				throw new AIError.ValidationError(`Ambiguous Codex tool_choice: ${choice.name}; specify a namespace`);
+			}
+			name = candidate;
+		}
+	}
+	if (name === undefined) {
+		throw new AIError.ValidationError(`Unknown ${choice.type} tool_choice: ${choice.name}`);
+	}
+	return { type: choice.type, name };
+}
+
 /** Only this route accepts Codex's optional zstd request encoding. */
-export async function readRequest(req: Request): Promise<unknown> {
+export async function readRequest(req: Request, maxDecodedBytes = 32 * 1024 * 1024): Promise<unknown> {
 	const encoding = req.headers.get("content-encoding")?.trim().toLowerCase();
 	if (!encoding || encoding === "identity") return req.json();
 	if (encoding !== "zstd") throw new AIError.ValidationError(`Unsupported Content-Encoding: ${encoding}`);
-	return JSON.parse((await Bun.zstdDecompress(await req.arrayBuffer())).toString());
+	const decoded = await zstdDecompress(new Uint8Array(await req.arrayBuffer()), maxDecodedBytes);
+	return JSON.parse(new TextDecoder().decode(decoded));
 }
 
 export function parseRequest(body: unknown, headers: Headers | undefined, model: Model): CodexRequest {
@@ -102,6 +161,7 @@ export function parseRequest(body: unknown, headers: Headers | undefined, model:
 			if (entry.type === "custom") {
 				const custom = customToolSchema(entry);
 				if (custom instanceof type.errors) throw new AIError.ValidationError(custom.summary);
+				identities[name].textOnly = custom.format?.type !== "grammar";
 				customTools.push({
 					name,
 					description: custom.description ?? "",
@@ -111,8 +171,12 @@ export function parseRequest(body: unknown, headers: Headers | undefined, model:
 						required: ["input"],
 						additionalProperties: false,
 					} as Tool["parameters"],
-					customWireName: name,
-					customFormat: { syntax: custom.format.syntax, definition: custom.format.definition },
+					...(custom.format?.type === "grammar"
+						? {
+								customWireName: name,
+								customFormat: { syntax: custom.format.syntax, definition: custom.format.definition },
+							}
+						: {}),
 				});
 			} else {
 				tools.push({ ...entry, name });
@@ -121,23 +185,29 @@ export function parseRequest(body: unknown, headers: Headers | undefined, model:
 	};
 	if (normalized.tools !== undefined) addTools(normalized.tools);
 	const partialAnswerIds = new Set<string>();
+	// Call IDs may repeat across turns; metadata belongs to a call occurrence.
+	const functionArgs = new Map<number, string[]>();
+	let toolCallIndex = 0;
 	if (Array.isArray(normalized.input)) {
+		// Resolve discovery before inspecting calls: declarations may follow their history items.
+		for (const item of normalized.input) {
+			if (isObject(item) && (item.type === "additional_tools" || item.type === "tool_search_output")) {
+				addTools(item.tools);
+			}
+		}
 		const input: unknown[] = [];
 		for (const item of normalized.input) {
 			if (!isObject(item)) {
 				input.push(item);
 				continue;
 			}
-			if (item.type === "additional_tools") {
-				addTools(item.tools);
-				continue;
-			}
+			if (item.type === "additional_tools") continue;
 			if (item.type === "tool_search_output") {
-				addTools(item.tools);
 				input.push({ type: "function_call_output", call_id: item.call_id, output: JSON.stringify(item.tools) });
 				continue;
 			}
 			if (item.type === "tool_search_call") {
+				toolCallIndex++;
 				input.push({
 					type: "function_call",
 					...(typeof item.id === "string" ? { id: item.id } : {}),
@@ -149,6 +219,20 @@ export function parseRequest(body: unknown, headers: Headers | undefined, model:
 			}
 			if (item.type === "function_call" || item.type === "custom_tool_call") {
 				if (typeof item.name === "string") item.name = toolName(item.name, item.namespace);
+			}
+			if (
+				(item.type === "function_call" ||
+					(item.type === "custom_tool_call" &&
+						typeof item.name === "string" &&
+						identities[item.name]?.textOnly)) &&
+				item.encrypted_function_args !== undefined
+			) {
+				const args = encryptedFunctionArgsSchema(item.encrypted_function_args);
+				if (args instanceof type.errors) throw new AIError.ValidationError(args.summary);
+				functionArgs.set(toolCallIndex, args);
+			}
+			if (item.type === "function_call" || item.type === "custom_tool_call" || item.type === "computer_call") {
+				toolCallIndex++;
 			}
 			if (item.type === "reasoning" && Array.isArray(item.content)) {
 				item.content = item.content.map(part =>
@@ -173,6 +257,10 @@ export function parseRequest(body: unknown, headers: Headers | undefined, model:
 		normalized.input = input;
 	}
 	normalized.tools = tools;
+	// Resolve against declared and client-discovered tools before entering the shared codec.
+	if (normalized.tool_choice !== undefined) {
+		normalized.tool_choice = normalizeToolChoice(normalized.tool_choice, identities);
+	}
 	const parsed = responses.parseRequest(normalized, headers);
 	// Discovery output may repeat definitions already present in additional_tools.
 	parsed.context.tools = [
@@ -180,12 +268,8 @@ export function parseRequest(body: unknown, headers: Headers | undefined, model:
 	];
 	// Responses input items carry no source model. Treat them as replay for the
 	// resolved Responses upstream; never relabel foreign signatures for other APIs.
-	const replayModel =
-		model.api === "openai-responses" ||
-		model.api === "azure-openai-responses" ||
-		model.api === "openai-codex-responses"
-			? model
-			: undefined;
+	const replayModel = isResponsesFamilyApi(model.api) ? model : undefined;
+	toolCallIndex = 0;
 	for (const message of parsed.context.messages) {
 		if (message.role !== "assistant") continue;
 		if (replayModel) {
@@ -195,7 +279,15 @@ export function parseRequest(body: unknown, headers: Headers | undefined, model:
 		}
 		message.stopReason = message.content.some(part => part.type === "toolCall") ? "toolUse" : "stop";
 		let hasPartialAnswer = false;
+		let hasFunctionArgs = false;
+		const firstToolCallIndex = toolCallIndex;
 		for (const part of message.content) {
+			if (part.type === "toolCall") {
+				// Text-only custom tools use the same JSON function bridge on replay.
+				if (identities[part.name]?.textOnly) delete part.customWireName;
+				if (replayModel && functionArgs.has(toolCallIndex)) hasFunctionArgs = true;
+				toolCallIndex++;
+			}
 			if (part.type !== "text" || !part.textSignature) continue;
 			const signature = JSON.parse(part.textSignature) as { v: number; id: string; phase?: string };
 			if (partialAnswerIds.has(signature.id)) {
@@ -203,9 +295,19 @@ export function parseRequest(body: unknown, headers: Headers | undefined, model:
 				hasPartialAnswer = true;
 			}
 		}
-		if (hasPartialAnswer) {
+		if (hasPartialAnswer || hasFunctionArgs) {
 			const items = encodeResponse(message, parsed.modelId).output as Record<string, unknown>[];
-			message.providerPayload = { type: "openaiResponsesHistory", provider: message.provider, dt: true, items };
+			if (hasFunctionArgs) {
+				let itemToolCallIndex = firstToolCallIndex;
+				for (const item of items) {
+					if (item.type !== "function_call" && item.type !== "custom_tool_call" && item.type !== "computer_call") {
+						continue;
+					}
+					const args = functionArgs.get(itemToolCallIndex++);
+					if (args && item.type === "function_call") item.encrypted_function_args = args;
+				}
+			}
+			message.providerPayload = createOpenAIResponsesHistoryPayload(message.provider, items);
 		}
 	}
 	if (isObject(body.reasoning) && body.reasoning.effort === "none") parsed.options.forceReasoningOff = true;
@@ -227,12 +329,7 @@ export function configureOptions(parsed: AuthGatewayParsedRequest, options: Simp
 		options.textVerbosity = codex.codexText.verbosity;
 	}
 	options.onPayload = (payload, model) => {
-		if (
-			!isObject(payload) ||
-			!model ||
-			!["openai-responses", "azure-openai-responses", "openai-codex-responses"].includes(model.api)
-		)
-			return;
+		if (!isObject(payload) || !model || !isResponsesFamilyApi(model.api)) return;
 		if (parsed.options.parallelToolCalls !== undefined)
 			payload.parallel_tool_calls = parsed.options.parallelToolCalls;
 		if (codex.codexText) payload.text = { ...(isObject(payload.text) ? payload.text : {}), ...codex.codexText };
@@ -259,12 +356,51 @@ export function encodeResponse(
 ): Record<string, unknown> {
 	const identities = (options as CodexRequest["options"] | undefined)?.codexTools ?? {};
 	const envelope = responses.encodeResponse(message, requestedModelId);
+	const nativeCalls = matchNativeCalls(message);
 	envelope.output = message.content.flatMap((part, index) =>
 		part.type === "text" || part.type === "thinking" || part.type === "toolCall"
-			? [outputItem(message, index, requestedModelId, identities)]
+			? [outputItem(message, index, requestedModelId, identities, nativeCalls?.[index])]
 			: [],
 	);
 	return envelope;
+}
+
+function matchNativeCalls(message: AssistantMessage): Array<Record<string, unknown> | undefined> | undefined {
+	if (!isResponsesFamilyApi(message.api)) return;
+	const nativeItems = getOpenAIResponsesHistoryItems(message.providerPayload, message.provider)?.filter(
+		item => typeof item.call_id === "string" && typeof item.type === "string",
+	);
+	if (!nativeItems?.length) return;
+	const calls: ResponsesCallIdentity[] = [];
+	const contentIndices: number[] = [];
+	for (const [index, part] of message.content.entries()) {
+		if (part.type !== "toolCall") continue;
+		calls.push({
+			callId: responsesCallComponent(part.id),
+			itemId: responsesItemComponent(part.id),
+			type:
+				part.providerMetadata?.type === "computer"
+					? "computer_call"
+					: part.customWireName
+						? "custom_tool_call"
+						: "function_call",
+		});
+		contentIndices.push(index);
+	}
+	const matches = matchResponsesCallIdentities(
+		calls,
+		nativeItems.map(item => ({
+			callId: item.call_id as string,
+			itemId: typeof item.id === "string" ? item.id : undefined,
+			type: item.type as string,
+		})),
+	);
+	const matched: Array<Record<string, unknown> | undefined> = [];
+	for (let index = 0; index < matches.length; index++) {
+		const nativeIndex = matches[index];
+		if (nativeIndex !== undefined) matched[contentIndices[index]] = nativeItems[nativeIndex];
+	}
+	return matched;
 }
 
 function outputItem(
@@ -272,11 +408,18 @@ function outputItem(
 	contentIndex: number,
 	model: string,
 	identities: Record<string, CodexToolIdentity>,
+	native?: Record<string, unknown>,
 ): Record<string, unknown> {
 	const part = message.content[contentIndex];
 	const envelope = responses.encodeResponse({ ...message, content: [part] }, model);
-	const item = (envelope.output as Record<string, unknown>[])[0];
+	let item = (envelope.output as Record<string, unknown>[])[0];
 	if (!item) throw new Error(`Unsupported Codex output block: ${part.type}`);
+	if (native) {
+		const argumentsJson = item.arguments;
+		item = { ...item, ...native };
+		// Native identity/metadata must not replace the arguments the consumer received.
+		if (item.type === "function_call") item.arguments = argumentsJson;
+	}
 	if (part.type === "text" && part.textSignature?.startsWith("{")) {
 		try {
 			const signature: unknown = JSON.parse(part.textSignature);
@@ -341,10 +484,10 @@ export function encodeStream(
 			const finished: Record<string, unknown>[] = [];
 			let outputIndex = 0;
 			let terminal = false;
-			const finish = (message: AssistantMessage, index: number) => {
+			const finish = (message: AssistantMessage, index: number, native?: Record<string, unknown>) => {
 				const state = open.get(index);
 				if (!state) return;
-				const item = outputItem(message, index, requestedModelId, identities);
+				const item = outputItem(message, index, requestedModelId, identities, native);
 				// Keep added/delta/done identity stable, retaining encrypted_content.
 				item.id = state.item.id;
 				finished[state.index] = item;
@@ -365,7 +508,14 @@ export function encodeStream(
 				for await (const event of events) {
 					if (cancelled) break;
 					if (event.type === "text_start" || event.type === "thinking_start" || event.type === "toolcall_start") {
-						const item = outputItem(event.partial, event.contentIndex, requestedModelId, identities);
+						const nativeCalls = matchNativeCalls(event.partial);
+						const item = outputItem(
+							event.partial,
+							event.contentIndex,
+							requestedModelId,
+							identities,
+							nativeCalls?.[event.contentIndex],
+						);
 						item.status = "in_progress";
 						if (item.type === "message") item.content = [];
 						if (item.type === "reasoning") item.summary = [];
@@ -409,10 +559,15 @@ export function encodeStream(
 							delta: event.delta,
 						});
 					} else if (event.type === "text_end" || event.type === "thinking_end" || event.type === "toolcall_end") {
-						finish(event.partial, event.contentIndex);
+						// Responses providers attach authoritative native items only on the terminal message.
+						// Keep argument deltas live, but do not publish a lossy done item before that payload exists.
+						if (event.type !== "toolcall_end" || !isResponsesFamilyApi(event.partial.api)) {
+							finish(event.partial, event.contentIndex);
+						}
 					} else if (event.type === "done" || event.type === "error") {
 						const message = event.type === "done" ? event.message : event.error;
-						for (const index of open.keys()) finish(message, index);
+						const nativeCalls = matchNativeCalls(message);
+						for (const index of open.keys()) finish(message, index, nativeCalls?.[index]);
 						const envelope = responses.encodeResponse(message, requestedModelId);
 						const status =
 							message.stopReason === "length" ? "incomplete" : event.type === "error" ? "failed" : "completed";
