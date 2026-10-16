@@ -245,6 +245,11 @@ while an automatic swap is pending. Response attribution stays with the model
 that produced it. The restored model receives the continued conversation, so a
 later invocation can trigger another refusal and fallback.
 
+Automatic fallback installs and primary restorations accept session-scoped
+context-window refits without losing ownership, model/thinking persistence, or
+model-dependent prompt synchronization. Their provider/model and request target
+(API, endpoint, wire model, and selected upstream route) must still match.
+
 If the successful fallback response also starts prewalk, restoration settles
 before prewalk captures its planning source. The configured prewalk target still
 handles continuation; `/new` restores the planning model and its saved thinking

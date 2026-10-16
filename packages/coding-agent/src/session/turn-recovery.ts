@@ -26,7 +26,11 @@ import { isFireworksFastModelId, toFireworksBaseModelId } from "@oh-my-pi/pi-cat
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { isUnexpectedSocketCloseMessage, logger, prompt, sleepLong } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
-import { formatModelStringWithRouting, resolveModelOverride } from "../config/model-resolver";
+import {
+	formatModelStringWithRouting,
+	modelsHaveSameRequestTarget,
+	resolveModelOverride,
+} from "../config/model-resolver";
 
 import type { Settings } from "../config/settings";
 import type { RetryErrorUpdate } from "../extensibility/shared-events";
@@ -2278,12 +2282,12 @@ export class TurnRecovery {
 		this.#markFallbackRouted();
 		if (this.#activeRetryFallback && !startRequestScopedFallback) this.#activeRetryFallback.served = false;
 		await this.#host.setModelWithProviderSessionReset(candidate);
-		// An explicit re-selection can keep the same candidate object while
+		// An explicit re-selection can keep the same model identity while
 		// relinquishing automatic fallback ownership. Do not re-arm or roll it back.
 		if (this.#retryFallbackGeneration !== fallbackGeneration || this.#activeRetryFallback !== previousFallback) {
 			return false;
 		}
-		if (this.#host.model() !== candidate) {
+		if (!modelsHaveSameRequestTarget(this.#host.model(), candidate)) {
 			this.#fallbackRoutedFor = routedBeforeSwap;
 			this.#reanchorFallbackRouting(sessionIdBeforeSwap);
 			if (this.#activeRetryFallback) this.#activeRetryFallback.served = servedBeforeSwap;
@@ -2658,7 +2662,7 @@ export class TurnRecovery {
 		const committed =
 			this.#retryFallbackGeneration === fallbackGeneration &&
 			this.#activeRetryFallback === fallback.previousFallback &&
-			this.#host.model() === primaryModel &&
+			modelsHaveSameRequestTarget(this.#host.model(), primaryModel) &&
 			this.#host.sessionManager.getSessionId() === sessionId;
 		if (committed) {
 			this.#host.sessionManager.appendModelChange(primarySelector, EPHEMERAL_MODEL_CHANGE_ROLE);
@@ -2676,7 +2680,7 @@ export class TurnRecovery {
 			!committed ||
 			this.#retryFallbackGeneration !== fallbackGeneration ||
 			this.#activeRetryFallback !== fallback.previousFallback ||
-			this.#host.model() !== primaryModel ||
+			!modelsHaveSameRequestTarget(this.#host.model(), primaryModel) ||
 			this.#host.sessionGeneration() !== sessionGeneration ||
 			this.#host.isDisposed()
 		) {

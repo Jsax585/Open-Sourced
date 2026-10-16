@@ -4120,6 +4120,130 @@ describe("AgentSession retry fallback", () => {
 		},
 	);
 
+	it.each(["fallback", "primary"] as const)("commits a refitted %s model through refusal recovery", async refitted => {
+		const primary = "openai-codex/gpt-5.6-terra";
+		const fallback = "openai-codex/gpt-5.6-sol";
+		modelRegistry = new ModelRegistry(authStorage, tempDir.join(`refitted-${refitted}-models.yml`), {
+			settings: Settings.isolated({
+				"compaction.modelThresholds": { [refitted === "primary" ? primary : fallback]: 400_000 },
+			}),
+		});
+		const primaryModel = modelRegistry.find("openai-codex", "gpt-5.6-terra")!;
+		const fallbackModel = modelRegistry.find("openai-codex", "gpt-5.6-sol")!;
+		const settings = Settings.isolated({
+			extendedContext: false,
+			"compaction.enabled": false,
+			"compaction.modelThresholdsEnabled": false,
+			"retry.maxRetries": 0,
+			"retry.fallbackChains": { [primary]: [`${fallback}:low`] },
+			"retry.refusalFallbackRevertPolicy": "after-success",
+			"edit.modelVariants": { [primaryModel.id]: "hashline", [fallbackModel.id]: "replace" },
+		});
+		settings.setModelRole("default", `${primary}:high`);
+		const manager = SessionManager.create(tempDir.path(), tempDir.join(`refitted-${refitted}-sessions`));
+		manager.appendModelChange(`${primary}:high`);
+		manager.appendThinkingLevelChange(Effort.High, Effort.High);
+		await Bun.write(tempDir.join("refitted-read.txt"), "refitted-context-fixture\n");
+		const created = await createAgentSession({
+			cwd: tempDir.path(),
+			agentDir: tempDir.path(),
+			authStorage,
+			modelRegistry,
+			model: primaryModel,
+			thinkingLevel: Effort.High,
+			sessionManager: manager,
+			settings,
+			disableExtensionDiscovery: true,
+			skills: [],
+			rules: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			enableIrc: false,
+			skipPythonPreflight: true,
+			toolNames: ["read", "edit"],
+			restrictToolNames: false,
+			bindProcessState: false,
+			cacheWarming: false,
+		});
+		session = created.session;
+		const activeSession = session;
+		const responses: MockResponse[] = [
+			{ stopReason: "error", stopDetails: { type: "refusal" }, errorMessage: "Classifier declined" },
+			{
+				content: [
+					{
+						type: "toolCall",
+						id: "refitted-read",
+						name: "read",
+						arguments: { path: "refitted-read.txt", i: "Reading refit fixture" },
+					},
+				],
+			},
+			{ content: ["The primary continued with the read result"] },
+		];
+		const requests: {
+			model: string;
+			contextWindow: number | null;
+			thinkingLevel: string | undefined;
+			recordedModel: string | undefined;
+			recordedThinkingLevel: string | undefined;
+			editSchema: string | undefined;
+			systemPrompt: string[];
+		}[] = [];
+		let readSucceeded = false;
+		activeSession.agent.streamFn = (model, context, options) => {
+			const recorded = manager.getEntries().findLast(entry => entry.type === "model_change");
+			requests.push({
+				model: model.id,
+				contextWindow: model.contextWindow,
+				thinkingLevel: activeSession.configuredThinkingLevel(),
+				recordedModel: recorded
+					? parseModelPattern(recorded.model, [primaryModel, fallbackModel]).model?.id
+					: undefined,
+				recordedThinkingLevel: manager.buildSessionContext().thinkingLevel,
+				editSchema: JSON.stringify(context.tools?.find(tool => tool.name === "edit")?.parameters),
+				systemPrompt: context.systemPrompt ?? [],
+			});
+			readSucceeded ||= context.messages.some(
+				message =>
+					message.role === "toolResult" &&
+					message.toolName === "read" &&
+					!message.isError &&
+					message.content.some(block => block.type === "text" && block.text.includes("refitted-context-fixture")),
+			);
+			const response = responses.shift();
+			if (!response) throw new Error(`Unexpected refitted model request: ${model.provider}/${model.id}`);
+			return createMockModel({ provider: model.provider, id: model.id, responses: [response] }).stream(
+				model,
+				context,
+				options,
+			);
+		};
+
+		await activeSession.prompt("Read the fixture and continue after the refusal");
+		await activeSession.waitForIdle();
+
+		const expectedModels = [primaryModel.id, fallbackModel.id, primaryModel.id];
+		const expectedThinking = [Effort.High, Effort.Low, Effort.High];
+		expect(requests.map(request => request.model)).toEqual(expectedModels);
+		expect(requests.map(request => request.recordedModel)).toEqual(expectedModels);
+		expect(requests.map(request => request.thinkingLevel)).toEqual(expectedThinking);
+		expect(requests.map(request => request.recordedThinkingLevel)).toEqual(expectedThinking);
+		expect(requests.map(request => request.contextWindow)).toEqual([
+			modelRegistry.contextWindowTiers(primaryModel)!.standard,
+			modelRegistry.contextWindowTiers(fallbackModel)!.standard,
+			modelRegistry.contextWindowTiers(primaryModel)!.standard,
+		]);
+		expect(requests[1].editSchema).not.toBe(requests[0].editSchema);
+		expect(requests[2].editSchema).toBe(requests[0].editSchema);
+		expect(requests[1].systemPrompt).not.toEqual(requests[0].systemPrompt);
+		expect(requests[2].systemPrompt).toEqual(requests[0].systemPrompt);
+		expect(readSucceeded).toBe(true);
+	});
+
 	it("does not restore after an aborted refusal fallback response", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const fallbackModel = getBundledModel("openai", "gpt-4o-mini")!;
