@@ -169,6 +169,7 @@ describe("plan-yolo approval autosave", () => {
 			getActiveToolNames: () => [],
 			getEnabledToolNames: () => [],
 			getMountedXdevToolNames: () => [],
+			getToolByName: () => undefined,
 			hasBuiltInTool: () => false,
 			getPlanModeState: () => planModeState,
 			setPlanModeState: state => {
@@ -232,5 +233,20 @@ describe("plan-yolo approval autosave", () => {
 			message: expect.stringContaining("Plan autosave failed"),
 			source: "plan-yolo",
 		});
+	});
+
+	it("leaves an extension-shadowed write out of the plan-yolo tool set (#14030)", async () => {
+		const cwd = makeCwd();
+		const t = setupPlanYolo(cwd, path.join(cwd, "artifacts"), Settings.isolated({}));
+		const applied: string[][] = [];
+		t.host.getEnabledToolNames = () => ["read", "write"];
+		t.host.setActiveToolsByName = async names => {
+			applied.push(names);
+		};
+		const coordinator = new PrewalkCoordinator(t.host, { planYolo: { target } satisfies PlanYolo });
+
+		await coordinator.armPlanYoloIfNeeded();
+
+		expect(applied).toEqual([["read"]]);
 	});
 });

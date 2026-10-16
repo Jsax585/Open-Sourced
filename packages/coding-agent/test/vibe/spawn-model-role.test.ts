@@ -1,5 +1,6 @@
 /**
- * Contract: a vibe worker's spawn options carry what the child inherits from its parent.
+ * Contract: a vibe worker's spawn options carry what the child inherits from its parent
+ * and an id built from the worker name the user passed in.
  *
  * `#resolveWorker` expands the bundled worker's role alias (`good` -> `task` ->
  * `@task`, `fast` -> `sonic` -> `@smol`) into concrete patterns, so the role
@@ -7,6 +8,9 @@
  * `VibeRecord` -> `#buildSpawnOptions` -> `runSubprocess`. The executor keys the
  * child's inherited `retry.fallbackChains` entry off it; drop any link in that
  * chain and vibe children silently retry on the `default` role's chain.
+ *
+ * The id keeps only `[A-Za-z0-9_-]` from that name and falls back to a
+ * generated name when nothing survives.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
@@ -14,6 +18,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { ExecutorOptions } from "@oh-my-pi/pi-coding-agent/task/executor";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
+import * as nameGenerator from "@oh-my-pi/pi-coding-agent/task/name-generator";
 import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import type { VibeCli } from "@oh-my-pi/pi-tui/tools/vibe";
@@ -39,6 +44,7 @@ async function spawnAndCaptureOptions(
 	cli: VibeCli,
 	settings: Settings,
 	overrides: Partial<ToolSession> = {},
+	name?: string,
 ): Promise<ExecutorOptions> {
 	const captured = Promise.withResolvers<ExecutorOptions>();
 	vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
@@ -60,7 +66,7 @@ async function spawnAndCaptureOptions(
 	});
 
 	const registry = VibeSessionRegistry.global();
-	await registry.spawn(makeParentSession(settings, overrides), { cli, prompt: "work" });
+	await registry.spawn(makeParentSession(settings, overrides), { cli, name, prompt: "work" });
 	return captured.promise;
 }
 
@@ -136,5 +142,19 @@ describe("vibe worker spawn options", () => {
 		);
 
 		expect(options.additionalDirectories).toEqual(["/other"]);
+	});
+
+	it("keeps only [A-Za-z0-9_-] from a custom worker name", async () => {
+		const options = await spawnAndCaptureOptions("good", Settings.isolated(), {}, "../My Worker!");
+
+		expect(options.id).toBe("MyWorker");
+	});
+
+	it("falls back to a generated name when nothing in the custom name survives", async () => {
+		vi.spyOn(nameGenerator, "generateTaskName").mockReturnValue("GeneratedWorker");
+
+		const options = await spawnAndCaptureOptions("good", Settings.isolated(), {}, "!!!");
+
+		expect(options.id).toBe("GeneratedWorker");
 	});
 });
