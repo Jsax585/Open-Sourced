@@ -16,6 +16,7 @@
  *   POST /v1/chat/completions              → OpenAI chat-completions in/out
  *   POST /v1/messages                      → Anthropic messages in/out
  *   POST /v1/responses                     → OpenAI Responses in/out
+ *   POST /v1/codex/responses               → Codex Responses HTTP/SSE in/out
  *   POST /v1/pi/stream                     → native pi-ai stream in/out
  *   POST /v1/systemone | /alpha/decisions  → TypeSafe System One judgments (routes/systemone)
  *   POST /v1/images[/generations|/edits]   → image generation, OpenAI/OpenRouter wire (routes/images)
@@ -34,6 +35,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { classifyGatewayError } from "../error/gateway";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
 import * as openaiChat from "../providers/openai-chat-server";
+import * as openaiCodexResponses from "../providers/openai-codex-responses-server";
 import * as openaiResponses from "../providers/openai-responses-server";
 import * as piNative from "../providers/pi-native-server";
 import { completeSimple, streamSimple } from "../stream";
@@ -86,6 +88,7 @@ const FORMAT_ROUTES: Record<string, { module: FormatModule; label: string }> = {
 	"/v1/chat/completions": { module: openaiChat, label: "openai-chat" },
 	"/v1/messages": { module: anthropicMessages, label: "anthropic-messages" },
 	"/v1/responses": { module: openaiResponses, label: "openai-responses" },
+	"/v1/codex/responses": { module: openaiCodexResponses, label: "openai-codex-responses" },
 };
 
 // (passthrough fast-path removed — it bypassed pi-ai provider logic, in
@@ -276,14 +279,14 @@ async function handleFormatEndpoint(
 
 	let body: unknown;
 	try {
-		body = await req.json();
+		body = route.module === openaiCodexResponses ? await openaiCodexResponses.readRequest(req) : await req.json();
 	} catch (error) {
 		if (controller.signal.aborted) return clientClosedResponse(route);
 		return route.module.formatError(400, "invalid_request_error", `Invalid JSON body: ${String(error)}`);
 	}
 	if (controller.signal.aborted) return clientClosedResponse(route);
 
-	// All three supported wire formats put the model id on a top-level `model`
+	// All supported wire formats put the model id on a top-level `model`
 	// field. Read it without running the full strict schema so the route can
 	// produce a coherent error envelope when the model id is missing.
 	const modelId =
@@ -310,7 +313,7 @@ async function handleFormatEndpoint(
 	// credential it last handed out to that session).
 	let parsed: ParsedFormatRequest;
 	try {
-		parsed = route.module.parseRequest(body, req.headers);
+		parsed = route.module.parseRequest(body, req.headers, model);
 	} catch (error) {
 		if (controller.signal.aborted) return clientClosedResponse(route);
 		const message = error instanceof Error ? error.message : String(error);
@@ -331,7 +334,7 @@ async function handleFormatEndpoint(
 		model.api === "azure-openai-responses" ||
 		model.api === "openai-codex-responses";
 	if (
-		route.label === "openai-responses" &&
+		(route.label === "openai-responses" || route.label === "openai-codex-responses") &&
 		!supportsOpenAIImageFileReferences &&
 		parsed.context.messages.some(
 			message =>
@@ -366,6 +369,7 @@ async function handleFormatEndpoint(
 	if ("status" in apiKey) return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
 
 	const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
+	if (route.module === openaiCodexResponses) openaiCodexResponses.configureOptions(parsed, streamOpts);
 	if (bootOpts.fetch) streamOpts.fetch = bootOpts.fetch;
 	// Per-session provider learning (sticky strict-tools / fast-mode / thinking
 	// fallbacks, Codex transport sessions). Owned by this gateway instance: the
@@ -427,7 +431,9 @@ async function handleFormatEndpoint(
 			}
 			return json(
 				200,
-				route.module.encodeResponse(message, parsed.modelId),
+				route.module === openaiCodexResponses
+					? openaiCodexResponses.encodeResponse(message, parsed.modelId, parsed.options)
+					: route.module.encodeResponse(message, parsed.modelId),
 				gatewayResponseHeaders(model, { requestId, costUsd: message.usage.cost.total, startedAt }),
 			);
 		} catch (error) {
@@ -901,6 +907,14 @@ export function createAuthGatewayRouter(hostOpts: AuthGatewayRouteOptions): Auth
 
 			// Provider-format dispatch.
 			const formatRoute = FORMAT_ROUTES[pathname];
+			// Codex treats 426 as an immediate SSE fallback, without exhausting WS retries.
+			if (
+				formatRoute?.module === openaiCodexResponses &&
+				req.method === "GET" &&
+				req.headers.get("upgrade")?.toLowerCase() === "websocket"
+			) {
+				return openaiCodexResponses.formatError(426, "unsupported_transport", "Use POST with HTTP SSE");
+			}
 			if (formatRoute && req.method === "POST") {
 				return await handleFormatEndpoint(formatRoute, opts, req, peer, sessionStates);
 			}

@@ -18,6 +18,11 @@ import {
 	kSyntheticUser,
 	type SyntheticUserCarrier,
 } from "../utils/block-symbols";
+import {
+	matchResponsesCallIdentities,
+	type ResponsesCallIdentity,
+	responsesItemComponent,
+} from "../utils/responses-call-identity";
 
 const enum ToolCallStatus {
 	/** A tool result has already been emitted for this tool call; later duplicates must be skipped. */
@@ -141,11 +146,10 @@ function recordToolCallOriginScope(
  * Pairing keys are used only for lookup; the messages' own ids are left intact
  * so the provider encoder still receives the exact wire ids it expects.
  *
- * LOAD-BEARING INVARIANT: pairing correctness depends on the wire `call_id`
- * being unique per distinct tool call. The Codex Responses wire guarantees this
- * (distinct parallel calls carry distinct call_ids; only the `fc_` half varies),
- * and genuine cross-turn id reuse is `_dup`-suffixed on the call_ segment by
- * `deduplicateToolCallIds` (which this key preserves).
+ * Results may have their own item half, so missing exact identities still pair
+ * by call component and occurrence. When repeated Responses calls do carry
+ * matching composite result identities, dedup uses those before queue order.
+ * Its replacement call components then keep downstream pairing unambiguous.
  */
 function toolCallPairingKey(id: string, originScope: ToolCallOriginScope): string {
 	const pipe = id.indexOf("|");
@@ -176,7 +180,14 @@ function appendSegmentDuplicateSuffix(segment: string, suffix: string, maxLength
 	return `${segment.slice(0, prefixBudget)}${suffix}`;
 }
 
-type PendingToolResultRewrite = { replacementId: string } | undefined;
+interface PendingToolResultRewrite {
+	itemId?: string;
+	replacementId?: string;
+}
+
+interface ResponsesCallRewrite extends ResponsesCallIdentity {
+	replacementId: string;
+}
 
 /** A real (non-synthetic) tool result filed at its position in the transformed transcript. */
 interface IndexedToolResult {
@@ -221,6 +232,115 @@ interface DeduplicatedToolCallIds {
 	validToolUseIds: Set<string>;
 }
 
+/** Match native calls by identity; keep snapshot outputs in their native call-id domain. */
+function rewriteResponsesHistoryCallIds(
+	msg: AssistantMessage,
+	calls: readonly ResponsesCallRewrite[],
+	resultIds?: ReadonlyMap<string, string[]>,
+): AssistantMessage["providerPayload"] {
+	const payload = msg.providerPayload;
+	if (payload?.type !== "openaiResponsesHistory") return payload;
+	const nativeCalls: ResponsesCallIdentity[] = [];
+	const nativeCallIndexes: number[] = [];
+	for (let index = 0; index < payload.items.length; index++) {
+		const item = payload.items[index]!;
+		if (typeof item.call_id !== "string") continue;
+		switch (item.type) {
+			case "function_call":
+			case "custom_tool_call":
+			case "computer_call":
+			case "tool_search_call":
+				nativeCalls.push({ callId: item.call_id, itemId: typeof item.id === "string" ? item.id : undefined });
+				nativeCallIndexes.push(index);
+		}
+	}
+	let items: typeof payload.items | undefined;
+	let matches: Array<number | undefined> | undefined;
+	if (!payload.dt && calls.some(call => call.callId !== call.replacementId)) {
+		// A full snapshot may already use the deduplicated identities. Require a
+		// complete one-to-one match before selecting that ID domain: a generated
+		// suffix may also be another call's original ID in a raw or mixed snapshot.
+		const canonicalCalls = calls.map(call => ({ callId: call.replacementId, itemId: call.itemId }));
+		const canonicalMatches = matchResponsesCallIdentities(canonicalCalls, nativeCalls);
+		if (!canonicalMatches.includes(undefined)) matches = canonicalMatches;
+	}
+	matches ??= matchResponsesCallIdentities(calls, nativeCalls);
+	for (let index = 0; index < calls.length; index++) {
+		const match = matches[index];
+		if (match === undefined) continue;
+		const itemIndex = nativeCallIndexes[match]!;
+		const item = payload.items[itemIndex]!;
+		const callId = calls[index]!.replacementId;
+		if (callId !== item.call_id) (items ??= payload.items.slice())[itemIndex] = { ...item, call_id: callId };
+	}
+	let nativeResultIds: Map<string, string[]> | undefined;
+	let fallbackResultIds: Map<string, string[]> | undefined;
+	const resultOccurrences = new Map<string, number>();
+	for (let index = 0; index < payload.items.length; index++) {
+		const item = payload.items[index]!;
+		if (typeof item.call_id !== "string") continue;
+		switch (item.type) {
+			case "function_call_output":
+			case "custom_tool_call_output":
+			case "computer_call_output":
+			case "tool_search_output":
+				break;
+			default:
+				continue;
+		}
+		// An output's own id identifies the output, not the originating call item.
+		// Full snapshots may already contain normalized wire ids. Their outputs
+		// must follow the calls in that snapshot, not an unrelated raw occurrence.
+		if (resultIds && !nativeResultIds) {
+			nativeResultIds = new Map();
+			for (const itemIndex of nativeCallIndexes) {
+				const originalId = payload.items[itemIndex]!.call_id as string;
+				const replacementId = (items ?? payload.items)[itemIndex]!.call_id as string;
+				const ids = nativeResultIds.get(originalId);
+				if (ids) ids.push(replacementId);
+				else nativeResultIds.set(originalId, [replacementId]);
+			}
+			for (const [originalId, ids] of nativeResultIds) {
+				const resultOrder = resultIds.get(originalId);
+				if (ids.length < 2 || !resultOrder) continue;
+				// Only raw repeated calls need transcript result ordering. Exclude
+				// occurrences whose calls already have a separate normalized wire id.
+				const remaining = new Map<string, number>();
+				for (const id of ids) remaining.set(id, (remaining.get(id) ?? 0) + 1);
+				const ordered: string[] = [];
+				for (const id of resultOrder) {
+					const count = remaining.get(id) ?? 0;
+					if (count === 0) continue;
+					ordered.push(id);
+					remaining.set(id, count - 1);
+				}
+				for (const [id, count] of remaining) {
+					for (let occurrence = 0; occurrence < count; occurrence++) ordered.push(id);
+				}
+				nativeResultIds.set(originalId, ordered);
+			}
+		}
+		// Incremental native tool outputs retain the existing call-occurrence fallback.
+		if (!resultIds && !fallbackResultIds) {
+			fallbackResultIds = new Map();
+			for (const call of calls) {
+				const ids = fallbackResultIds.get(call.callId);
+				if (ids) ids.push(call.replacementId);
+				else fallbackResultIds.set(call.callId, [call.replacementId]);
+			}
+		}
+		const nativeIds = nativeResultIds?.get(item.call_id);
+		const replacements = nativeIds ?? (resultIds ?? fallbackResultIds)?.get(item.call_id);
+		if (!replacements) continue;
+		const occurrence = resultOccurrences.get(item.call_id) ?? 0;
+		resultOccurrences.set(item.call_id, occurrence + 1);
+		const callId = nativeIds?.length === 1 ? nativeIds[0] : replacements[occurrence];
+		if (callId === undefined || callId === item.call_id) continue;
+		(items ??= payload.items.slice())[index] = { ...item, call_id: callId };
+	}
+	return items ? { ...payload, items } : payload;
+}
+
 function deduplicateToolCallIds(
 	messages: Message[],
 	originScope: ToolCallOriginScope,
@@ -231,6 +351,16 @@ function deduplicateToolCallIds(
 	const pendingToolResultRewrites = new Map<string, PendingToolResultRewrite[]>();
 	const realToolResultsById = new Map<string, IndexedToolResult[]>();
 	const validToolUseIds = new Set<string>();
+	// Full snapshots replay the entire prefix, including earlier calls/results.
+	// Incremental payloads need only this turn's occurrences; avoid retaining a
+	// request-wide index unless a legacy snapshot will actually consume it.
+	const snapshotCallIds = messages.some(
+		msg =>
+			msg.role === "assistant" && msg.providerPayload?.type === "openaiResponsesHistory" && !msg.providerPayload.dt,
+	)
+		? ([] as ResponsesCallRewrite[])
+		: undefined;
+	const snapshotResultIds = snapshotCallIds ? new Map<string, string[]>() : undefined;
 
 	const enqueueToolResultRewrite = (id: string, rewrite: PendingToolResultRewrite): void => {
 		const rewrites = pendingToolResultRewrites.get(id);
@@ -250,25 +380,26 @@ function deduplicateToolCallIds(
 			// result is dropped downstream.
 			const key = toolCallPairingKey(msg.toolCallId, originScope);
 			const rewrites = pendingToolResultRewrites.get(key);
-			if (!rewrites || rewrites.length === 0) {
-				indexToolResult(msg, index, key, realToolResultsById);
-				return msg;
+			const itemId =
+				!originScope.opaqueCompositeCallIds.has(msg.toolCallId) && originScope.responsesComponents.has(key)
+					? responsesItemComponent(msg.toolCallId)
+					: undefined;
+			// Explicit Responses item identities outrank queue order. Older results
+			// may carry their own item id, so unmatched identities retain occurrence fallback.
+			const exactIndex =
+				itemId === undefined ? -1 : (rewrites?.findIndex(rewrite => rewrite.itemId === itemId) ?? -1);
+			const rewrite = rewrites?.splice(exactIndex < 0 ? 0 : exactIndex, 1)[0];
+			if (rewrites?.length === 0) pendingToolResultRewrites.delete(key);
+			const rewritten = rewrite?.replacementId ? { ...msg, toolCallId: rewrite.replacementId } : msg;
+			indexToolResult(rewritten, index, toolCallPairingKey(rewritten.toolCallId, originScope), realToolResultsById);
+			if (snapshotResultIds) {
+				const originalCallId = responsesCallComponent(msg.toolCallId);
+				const callId = responsesCallComponent(rewritten.toolCallId);
+				const ids = snapshotResultIds.get(originalCallId);
+				if (ids) ids.push(callId);
+				else snapshotResultIds.set(originalCallId, [callId]);
 			}
-
-			const rewrite = rewrites.shift();
-			if (rewrites.length === 0) pendingToolResultRewrites.delete(key);
-			if (rewrite) {
-				const rewritten = { ...msg, toolCallId: rewrite.replacementId };
-				indexToolResult(
-					rewritten,
-					index,
-					toolCallPairingKey(rewritten.toolCallId, originScope),
-					realToolResultsById,
-				);
-				return rewritten;
-			}
-			indexToolResult(msg, index, key, realToolResultsById);
-			return msg;
+			return rewritten;
 		}
 
 		if (msg.role !== "assistant") return msg;
@@ -304,7 +435,9 @@ function deduplicateToolCallIds(
 			const previousCount = seenToolCallIds.get(blockKey) ?? 0;
 			if (previousCount === 0) {
 				seenToolCallIds.set(blockKey, 1);
-				enqueueToolResultRewrite(blockKey, undefined);
+				enqueueToolResultRewrite(blockKey, {
+					itemId: isResponsesFamilyApi(msg.api) ? responsesItemComponent(block.id) : undefined,
+				});
 				return block;
 			}
 
@@ -324,7 +457,10 @@ function deduplicateToolCallIds(
 			}
 			seenToolCallIds.set(blockKey, duplicateIndex + 1);
 			seenToolCallIds.set(toolCallPairingKey(replacementId, originScope), 1);
-			enqueueToolResultRewrite(blockKey, { replacementId });
+			enqueueToolResultRewrite(blockKey, {
+				itemId: isResponsesFamilyApi(msg.api) ? responsesItemComponent(block.id) : undefined,
+				replacementId,
+			});
 			contentChanged = true;
 			return { ...block, id: replacementId };
 		});
@@ -333,13 +469,36 @@ function deduplicateToolCallIds(
 		// pass emits — a rewrite changes the id, so the keys must come from here and
 		// not from the input message. Recorded before the early-out because
 		// `!contentChanged` still returns element-identical content.
-		for (const block of content) {
+		const payload = msg.providerPayload;
+		const turnCallIds =
+			contentChanged && payload?.type === "openaiResponsesHistory" && payload.dt
+				? ([] as ResponsesCallRewrite[])
+				: undefined;
+		for (let blockIndex = 0; blockIndex < content.length; blockIndex++) {
+			const block = content[blockIndex]!;
 			if (block.type !== "toolCall") continue;
 			validToolUseIds.add(toolCallPairingKey(block.id, originScope));
+			if (!turnCallIds && !snapshotCallIds) continue;
+			const original = msg.content[blockIndex] as ToolCall;
+			const rewrite: ResponsesCallRewrite = {
+				callId: responsesCallComponent(original.id),
+				itemId: responsesItemComponent(original.id),
+				replacementId: responsesCallComponent(block.id),
+			};
+			turnCallIds?.push(rewrite);
+			snapshotCallIds?.push(rewrite);
 		}
 
-		if (!contentChanged) return msg;
-		return { ...msg, content };
+		const nativeCallIds = payload?.type === "openaiResponsesHistory" && payload.dt ? turnCallIds : snapshotCallIds;
+		const providerPayload = nativeCallIds
+			? rewriteResponsesHistoryCallIds(
+					msg,
+					nativeCallIds,
+					payload?.type === "openaiResponsesHistory" && payload.dt ? undefined : snapshotResultIds,
+				)
+			: payload;
+		if (!contentChanged && providerPayload === payload) return msg;
+		return { ...msg, content: contentChanged ? content : msg.content, providerPayload };
 	});
 
 	return { messages: transformed, realToolResultsById, validToolUseIds };

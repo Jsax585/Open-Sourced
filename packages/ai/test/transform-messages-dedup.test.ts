@@ -5,6 +5,7 @@
 // Regression for the suffix previously landing on the composite as a whole
 // (`call_x|fc_y` → `call_x|fc_y_dup1`, wire call_id `call_x` for both copies).
 import { describe, expect, it } from "bun:test";
+import { buildResponsesInput } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import type { AssistantMessage, Message, Model, ToolCall, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { normalizeResponsesToolCallId } from "@oh-my-pi/pi-ai/utils";
@@ -154,5 +155,328 @@ describe("deduplicateToolCallIds with composite Responses ids", () => {
 			[idB, [{ type: "text", text: "third" }]],
 			[`${idB}_dup1`, [{ type: "text", text: "fourth" }]],
 		]);
+	});
+
+	it.each([true, false])("pairs native repeated calls in incremental=%s history without mutating it", incremental => {
+		const originalId = "call_native|fc_first";
+		const makeNativeCall = (label: string): Record<string, unknown> => ({
+			type: "function_call",
+			id: `fc_${label}`,
+			call_id: "call_native",
+			name: "read",
+			arguments: JSON.stringify({ path: label }),
+			encrypted_function_args: [label],
+		});
+		const reasoning = { type: "reasoning", id: "rs_native", summary: [], encrypted_content: "opaque" };
+		const first = assistantWithCalls([originalId, "call_native|fc_second"]);
+		first.providerPayload = {
+			type: "openaiResponsesHistory",
+			provider: "openai",
+			...(incremental ? { dt: true } : {}),
+			items: [reasoning, makeNativeCall("first"), makeNativeCall("second")],
+		};
+		const last = assistantWithCall("call_native|fc_third");
+		last.providerPayload = {
+			type: "openaiResponsesHistory",
+			provider: "openai",
+			...(incremental ? { dt: true } : {}),
+			items: incremental
+				? [makeNativeCall("third")]
+				: [
+						...first.providerPayload.items,
+						{ type: "function_call_output", call_id: "call_native", output: "result first" },
+						{ type: "function_call_output", call_id: "call_native", output: "result second" },
+						makeNativeCall("third"),
+					],
+		};
+		const messages: Message[] = [
+			first,
+			toolResult(originalId, "result first"),
+			toolResult("call_native|fc_second", "result second"),
+			last,
+			toolResult("call_native|fc_third", "result third"),
+		];
+		// A later legacy snapshot must also rewrite the prefix when its own
+		// content has no calls and therefore needs no content-level deduplication.
+		if (!incremental) {
+			messages.push({
+				...assistantWithCall(originalId),
+				content: [{ type: "text", text: "Done" }],
+				stopReason: "stop",
+				providerPayload: {
+					...last.providerPayload,
+					items: [
+						...last.providerPayload.items,
+						{ type: "function_call_output", call_id: "call_native", output: "result third" },
+						{ type: "message", role: "assistant", content: [{ type: "output_text", text: "Done" }] },
+					],
+				},
+			});
+		}
+		const original = structuredClone(messages);
+		const input = buildResponsesInput({
+			model: makeModel(),
+			context: { messages },
+			strictResponsesPairing: true,
+			supportsImageDetailOriginal: true,
+			nativeHistory: { replay: true, filterReasoning: false },
+			repairOrphanOutputs: true,
+		});
+		const calls = input.filter(item => item.type === "function_call");
+		const outputs = input.filter(item => item.type === "function_call_output");
+		expect(calls.map(call => call.call_id)).toEqual(["call_native", "call_native_dup1", "call_native_dup2"]);
+		expect(outputs).toHaveLength(3);
+		for (const [index, label] of ["first", "second", "third"].entries()) {
+			expect(calls[index]).toMatchObject({
+				arguments: JSON.stringify({ path: label }),
+				encrypted_function_args: [label],
+			});
+			expect(outputs.filter(output => output.call_id === calls[index]!.call_id)).toEqual([
+				expect.objectContaining({ output: `result ${label}` }),
+			]);
+		}
+		expect(JSON.stringify(input)).not.toContain("No result provided");
+		expect(JSON.stringify(input)).not.toContain("[Orphan tool result");
+		expect(messages).toEqual(original);
+	});
+
+	it("reserves exact native identities before anonymous occurrence fallback", () => {
+		const assistant = assistantWithCalls(["call_mixed", "call_mixed|fc_exact"]);
+		assistant.providerPayload = {
+			type: "openaiResponsesHistory",
+			provider: "openai",
+			dt: true,
+			items: [
+				{
+					type: "function_call",
+					id: "fc_exact",
+					call_id: "call_mixed",
+					name: "read",
+					arguments: '{"path":"exact"}',
+				},
+				{ type: "function_call", call_id: "call_mixed", name: "read", arguments: '{"path":"anonymous"}' },
+			],
+		};
+		const messages = [assistant, toolResult("call_mixed", "anonymous"), toolResult("call_mixed|fc_exact", "exact")];
+		const original = structuredClone(messages);
+		const input = buildResponsesInput({
+			model: makeModel(),
+			context: { messages },
+			strictResponsesPairing: true,
+			supportsImageDetailOriginal: true,
+			nativeHistory: { replay: true, filterReasoning: false },
+			repairOrphanOutputs: true,
+		});
+		const calls = input.filter(item => item.type === "function_call");
+		const outputs = input.filter(item => item.type === "function_call_output");
+		for (const call of calls) {
+			expect(outputs.filter(output => output.call_id === call.call_id)).toEqual([
+				expect.objectContaining({ output: JSON.parse(call.arguments).path }),
+			]);
+		}
+		expect(calls.map(call => call.call_id)).toEqual(["call_mixed_dup1", "call_mixed"]);
+		expect(messages).toEqual(original);
+	});
+
+	it("uses occurrence fallback when native calls have no item ids", () => {
+		const assistant = assistantWithCalls(["call_missing|fc_first", "call_missing|fc_second"]);
+		assistant.providerPayload = {
+			type: "openaiResponsesHistory",
+			provider: "openai",
+			dt: true,
+			items: ["first", "second"].map(label => ({
+				type: "function_call",
+				call_id: "call_missing",
+				name: "read",
+				arguments: JSON.stringify({ path: label }),
+			})),
+		};
+		const input = buildResponsesInput({
+			model: makeModel(),
+			context: {
+				messages: [
+					assistant,
+					toolResult("call_missing|fc_first", "first"),
+					toolResult("call_missing|fc_second", "second"),
+				],
+			},
+			strictResponsesPairing: true,
+			supportsImageDetailOriginal: true,
+			nativeHistory: { replay: true, filterReasoning: false },
+			repairOrphanOutputs: true,
+		});
+		const calls = input.filter(item => item.type === "function_call");
+		const outputs = input.filter(item => item.type === "function_call_output");
+		expect(calls.map(call => call.call_id)).toEqual(["call_missing", "call_missing_dup1"]);
+		for (const call of calls) {
+			expect(outputs.filter(output => output.call_id === call.call_id)).toEqual([
+				expect.objectContaining({ output: JSON.parse(call.arguments).path }),
+			]);
+		}
+	});
+
+	it("keeps occurrence pairing for result-owned item ids across repeated Responses calls", () => {
+		const messages = [
+			assistantWithCalls(["call_legacy|fc_first", "call_legacy|fc_second"]),
+			toolResult("call_legacy|output_first", "first"),
+			toolResult("call_legacy|output_second", "second"),
+		];
+		const transformed = transformMessages(messages, makeModel());
+		const results = transformed.filter((message): message is ToolResultMessage => message.role === "toolResult");
+		expect(results.map(result => [normalizeResponsesToolCallId(result.toolCallId).callId, result.content])).toEqual([
+			["call_legacy", [{ type: "text", text: "first" }]],
+			["call_legacy_dup1", [{ type: "text", text: "second" }]],
+		]);
+	});
+
+	it.each([false, true])("preserves normalized snapshot results with mixed raw ids=%s", mixed => {
+		const labels = mixed ? ["first", "second", "third"] : ["first", "second"];
+		const assistant = assistantWithCalls(labels.map(label => `call_x|fc_${label}`));
+		assistant.content = labels.map(label => ({
+			type: "toolCall",
+			id: `call_x|fc_${label}`,
+			name: "read",
+			arguments: { path: label },
+		}));
+		const wireIds = mixed ? ["call_x", "call_x", "call_x_dup2"] : ["call_x", "call_x_dup1"];
+		const nativeCalls = labels.map((label, index) => ({
+			type: "function_call",
+			id: `fc_${label}`,
+			call_id: wireIds[index]!,
+			name: "read",
+			arguments: JSON.stringify({ path: label }),
+			encrypted_function_args: [`encrypted-${label}`],
+		}));
+		const resultOrder = mixed ? [1, 2, 0] : [1, 0];
+		const snapshot: AssistantMessage = {
+			...assistantWithCall("unused"),
+			content: [{ type: "text", text: "Done" }],
+			stopReason: "stop",
+			providerPayload: {
+				type: "openaiResponsesHistory",
+				provider: "openai",
+				...(mixed ? { dt: false } : {}),
+				items: [
+					...nativeCalls,
+					...resultOrder.map(index => ({
+						type: "function_call_output",
+						id: `output_${labels[index]}`,
+						call_id: wireIds[index]!,
+						output: labels[index]!,
+					})),
+					{ type: "message", role: "assistant", content: [{ type: "output_text", text: "Done" }] },
+				],
+			},
+		};
+		const messages: Message[] = [
+			assistant,
+			...resultOrder.map(index => toolResult(`call_x|fc_${labels[index]}`, labels[index]!)),
+			snapshot,
+		];
+		const original = structuredClone(messages);
+		const input = buildResponsesInput({
+			model: makeModel(),
+			context: { messages },
+			strictResponsesPairing: true,
+			supportsImageDetailOriginal: true,
+			nativeHistory: { replay: true, filterReasoning: false },
+			repairOrphanOutputs: true,
+		});
+		const calls = input.filter(item => item.type === "function_call");
+		const results = input.filter(item => item.type === "function_call_output");
+		expect(calls.map(call => call.call_id)).toEqual(
+			labels.map((_, index) => (index === 0 ? "call_x" : `call_x_dup${index}`)),
+		);
+		expect(results).toHaveLength(labels.length);
+		for (const [index, call] of calls.entries()) {
+			expect(call.arguments).toBe(JSON.stringify({ path: labels[index] }));
+			expect(call.encrypted_function_args).toEqual([`encrypted-${labels[index]}`]);
+			expect(results.filter(result => result.call_id === call.call_id).map(result => result.output)).toEqual([
+				labels[index],
+			]);
+		}
+		expect(JSON.stringify(input)).not.toContain("No result provided");
+		expect(JSON.stringify(input)).not.toContain("Orphan");
+		expect(messages).toEqual(original);
+	});
+
+	it.each([
+		["normalized", ["call_x", "call_x_dup1", "call_x_dup1_dup1"]],
+		["raw", ["call_x", "call_x", "call_x_dup1"]],
+		["mixed", ["call_x", "call_x", "call_x_dup1_dup1"]],
+	] as const)("keeps colliding suffixes paired in a %s snapshot without item IDs", (_, wireIds) => {
+		const rawIds = ["call_x", "call_x", "call_x_dup1"];
+		const canonicalIds = ["call_x", "call_x_dup1", "call_x_dup1_dup1"];
+		const labels = ["first", "second", "third"];
+		const assistant = assistantWithCalls(rawIds);
+		assistant.content = rawIds.map((id, index) => ({
+			type: "toolCall",
+			id,
+			name: "read",
+			arguments: { path: labels[index] },
+		}));
+		const resultOrder = [2, 0, 1];
+		const snapshot: AssistantMessage = {
+			...assistantWithCall("unused"),
+			content: [{ type: "text", text: "Done" }],
+			stopReason: "stop",
+			providerPayload: {
+				type: "openaiResponsesHistory",
+				provider: "openai",
+				items: [
+					...wireIds.map((callId, index) => ({
+						type: "function_call",
+						call_id: callId,
+						name: "read",
+						arguments: JSON.stringify({ path: labels[index] }),
+						encrypted_function_args: [`encrypted-${labels[index]}`],
+					})),
+					...resultOrder.map(index => ({
+						type: "function_call_output",
+						call_id: wireIds[index],
+						output: labels[index],
+					})),
+					{ type: "message", role: "assistant", content: [{ type: "output_text", text: "Done" }] },
+				],
+			},
+		};
+		const messages: Message[] = [
+			assistant,
+			...resultOrder.map(index => toolResult(rawIds[index]!, labels[index]!)),
+			snapshot,
+		];
+		const original = structuredClone(messages);
+		const input = buildResponsesInput({
+			model: makeModel(),
+			context: { messages },
+			strictResponsesPairing: true,
+			supportsImageDetailOriginal: true,
+			nativeHistory: { replay: true, filterReasoning: false },
+			repairOrphanOutputs: true,
+		});
+		const calls = input.filter(item => item.type === "function_call");
+		const results = input.filter(item => item.type === "function_call_output");
+		expect(calls.map(call => call.call_id)).toEqual(canonicalIds);
+		expect(results.map(result => [result.call_id, result.output])).toEqual(
+			resultOrder.map(index => [canonicalIds[index], labels[index]]),
+		);
+		for (const [index, call] of calls.entries()) {
+			expect(call.arguments).toBe(JSON.stringify({ path: labels[index] }));
+			expect(call.encrypted_function_args).toEqual([`encrypted-${labels[index]}`]);
+		}
+		expect(messages).toEqual(original);
+	});
+
+	it("leaves non-Responses payloads untouched when calls are deduplicated", () => {
+		const first = assistantWithCall("call_native");
+		const second = assistantWithCall("call_native");
+		second.providerPayload = { type: "anthropicMessage", effort: "high" };
+		const messages = [first, toolResult("call_native", "first"), second, toolResult("call_native", "second")];
+		const original = structuredClone(messages);
+		const transformed = transformMessages(messages, makeModel());
+		const assistants = transformed.filter((message): message is AssistantMessage => message.role === "assistant");
+		expect(assistants[1]!.providerPayload).toEqual(second.providerPayload);
+		expect(assistants[1]!.content).toMatchObject([{ type: "toolCall", id: "call_native_dup1" }]);
+		expect(messages).toEqual(original);
 	});
 });

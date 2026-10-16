@@ -10,7 +10,7 @@ import type {
 	StreamOptions,
 	ToolChoice,
 } from "../types";
-import { resolveCacheRetention } from "../utils";
+import { createOpenAIResponsesHistoryPayload, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { withReplaySafeStreamRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
@@ -206,9 +206,14 @@ const streamAzureOpenAIResponsesOnce = (
 				isProgressItem: isOpenAIResponsesProgressEvent,
 			});
 			let sawTerminalResponseEvent = false;
+			const nativeOutputItems: Array<Record<string, unknown>> = [];
 			await processResponsesStream(timedOpenaiStream, output, stream, model, {
 				onFirstToken: () => {
 					if (!firstTokenTime) firstTokenTime = performance.now();
+				},
+				onOutputItemDone: item => {
+					// The shared processor already owns a normalized clone, as on OpenAI Responses.
+					nativeOutputItems.push(item as unknown as Record<string, unknown>);
 				},
 				onCompleted: () => {
 					sawTerminalResponseEvent = true;
@@ -238,6 +243,7 @@ const streamAzureOpenAIResponsesOnce = (
 				});
 			}
 
+			output.providerPayload = createOpenAIResponsesHistoryPayload(model.provider, nativeOutputItems);
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "done", reason: output.stopReason, message: output });

@@ -214,6 +214,7 @@ omp auth-gateway check   [--strict] [--json]
 | `POST` | `/v1/chat/completions`  | bearer | OpenAI Chat Completions wire format                          |
 | `POST` | `/v1/messages`          | bearer | Anthropic Messages wire format                               |
 | `POST` | `/v1/responses`         | bearer | OpenAI Responses wire format                                 |
+| `POST` | `/v1/codex/responses`   | bearer | OpenAI Codex Responses wire format |
 | `POST` | `/v1/pi/stream`         | bearer | Native `pi-ai` stream wire format                            |
 | `POST` | `/v1/systemone`         | bearer | TypeSafe System One judgments (`judge` models, e.g. `typesafe/jev-latest`); `/alpha/decisions` is the OpenRouter Decisions alias |
 | `POST` | `/v1/images/generations` | bearer | Image generation, OpenAI Images JSON wire; `/v1/images` is the OpenRouter alias (`image` models) |

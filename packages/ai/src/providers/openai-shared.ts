@@ -3187,6 +3187,7 @@ function getOpenAIResponsesTerminalEvent(event: ResponseStreamEvent): OpenAIResp
 
 export interface ProcessResponsesStreamOptions {
 	onFirstToken?: () => void;
+	/** Normalized native history, delivered in output order when processing exits (including partial failures). */
 	onOutputItemDone?: (item: ResponseOutputItem) => void;
 	/**
 	 * Called when a terminal `response.completed`, `response.incomplete`, or
@@ -3246,6 +3247,11 @@ export async function processResponsesStream<TApi extends Api>(
 		[kStreamingLastParseLen]?: number;
 		[kStreamingArgumentsDone]?: boolean;
 	};
+	interface NativeOutputEntry {
+		order: number;
+		outputIndex?: number;
+		item?: ResponseOutputItem;
+	}
 	interface StreamingItem {
 		item:
 			| ResponseReasoningItem
@@ -3254,6 +3260,8 @@ export async function processResponsesStream<TApi extends Api>(
 			| ResponseCustomToolCall
 			| ResponseComputerToolCall;
 		block: ThinkingContent | TextContent | StreamingToolCallBlock;
+		nativeOutput?: NativeOutputEntry;
+		outputIndex?: number;
 	}
 
 	// Multiple items (parallel function_calls in particular) can be open at the same
@@ -3272,6 +3280,34 @@ export async function processResponsesStream<TApi extends Api>(
 	const openItemsByPrefixedCallId = new Map<string, StreamingItem>();
 	let lastOpenItem: StreamingItem | null = null;
 	const openItemsInOrder: StreamingItem[] = [];
+	const nativeOutputEntries: NativeOutputEntry[] = [];
+	const nativeOutputByKey = new Map<number | string, NativeOutputEntry>();
+	let nextNativeOutputOrder = 0;
+	const registerNativeOutput = (outputIndex?: number, itemId?: string): NativeOutputEntry | undefined => {
+		if (!options?.onOutputItemDone) return undefined;
+		const byId = itemId ? nativeOutputByKey.get(itemId) : undefined;
+		const existing =
+			(outputIndex === undefined ? undefined : nativeOutputByKey.get(outputIndex)) ??
+			(outputIndex === undefined || byId?.outputIndex === undefined || byId.outputIndex === outputIndex
+				? byId
+				: undefined);
+		if (existing) {
+			if (outputIndex !== undefined) {
+				existing.order = outputIndex;
+				existing.outputIndex = outputIndex;
+				nativeOutputByKey.set(outputIndex, existing);
+			}
+			if (itemId) nativeOutputByKey.set(itemId, existing);
+			return existing;
+		}
+		const order = outputIndex ?? nextNativeOutputOrder;
+		nextNativeOutputOrder = Math.max(nextNativeOutputOrder, order + 1);
+		const entry: NativeOutputEntry = { order, outputIndex };
+		nativeOutputEntries.push(entry);
+		if (outputIndex !== undefined) nativeOutputByKey.set(outputIndex, entry);
+		if (itemId) nativeOutputByKey.set(itemId, entry);
+		return entry;
+	};
 
 	const prefixedFunctionCallItemKey = (callId: string | undefined): string | undefined =>
 		callId ? `fc_${callId}` : undefined;
@@ -3283,6 +3319,8 @@ export async function processResponsesStream<TApi extends Api>(
 		alternateItemKey?: string,
 		prefixedAlternateItemKey?: string,
 	): void => {
+		entry.nativeOutput = registerNativeOutput(outputIndex, itemId);
+		entry.outputIndex = outputIndex;
 		if (typeof outputIndex === "number") openItemsByOutputIndex.set(outputIndex, entry);
 		if (itemId) openItemsByItemId.set(itemId, entry);
 		if (alternateItemKey && alternateItemKey !== itemId) openItemsByItemId.set(alternateItemKey, entry);
@@ -3310,6 +3348,53 @@ export async function processResponsesStream<TApi extends Api>(
 		// routing to a sibling. Only fully identifierless mock/proxy events use the
 		// legacy singleton fallback.
 		return hasKey ? undefined : (lastOpenItem ?? undefined);
+	};
+	const lookupCompletedCall = (
+		outputIndex: number | undefined,
+		item: ResponseFunctionToolCall | ResponseCustomToolCall | ResponseComputerToolCall,
+	): StreamingItem | undefined => {
+		const indexed = outputIndex === undefined ? undefined : openItemsByOutputIndex.get(outputIndex);
+		if (indexed) return indexed;
+		const exact = item.id ? openItemsByItemId.get(item.id) : undefined;
+		if (exact?.item.type === item.type && exact.item.id === item.id && exact.item.call_id === item.call_id) {
+			return exact;
+		}
+		const alias = exact ?? (item.id ? openItemsByPrefixedCallId.get(item.id) : undefined);
+		const registeredAlias = alias?.item.type === item.type && alias.item.call_id === item.call_id;
+		// Registered aliases may differ from the added item id, but must identify
+		// only one open call. Unregistered ids cannot claim a distinct known sibling.
+		let candidate: StreamingItem | undefined;
+		for (const entry of openItemsInOrder) {
+			if (
+				entry.item.type !== item.type ||
+				!("call_id" in entry.item) ||
+				entry.item.call_id !== item.call_id ||
+				(outputIndex !== undefined && entry.outputIndex !== undefined && entry.outputIndex !== outputIndex) ||
+				(item.id && entry.item.id && entry.item.id !== item.id && !registeredAlias)
+			) {
+				continue;
+			}
+			if (candidate) return undefined;
+			candidate = entry;
+		}
+		return candidate;
+	};
+	const lookupCompletedMessage = (
+		outputIndex: number | undefined,
+		item: ResponseOutputMessage,
+	): StreamingItem | undefined => {
+		const routed = lookupOpenItem({ output_index: outputIndex, item_id: item.id });
+		if (routed?.item.type === "message") return routed;
+		// A late id can identify one anonymous, indexless message. Never infer
+		// identity from text or consume an indexed/named sibling on a keyed miss.
+		if (routed || outputIndex !== undefined || !item.id || nativeOutputByKey.has(item.id)) return undefined;
+		let candidate: StreamingItem | undefined;
+		for (const entry of openItemsInOrder) {
+			if (entry.item.type !== "message" || entry.item.id || entry.outputIndex !== undefined) continue;
+			if (candidate) return undefined;
+			candidate = entry;
+		}
+		return candidate;
 	};
 	const hasOpenItemKey = (event: { output_index?: number; item_id?: string }): boolean =>
 		typeof event.output_index === "number" || event.item_id !== undefined;
@@ -3431,30 +3516,24 @@ export async function processResponsesStream<TApi extends Api>(
 		if (skippedStartedCandidate && startsJsonObjectDelta(event.delta)) return undefined;
 		return lastOpenItem?.item.type === "function_call" ? lastOpenItem : undefined;
 	};
-	const closeOpenItem = (
-		outputIndex: number | undefined,
-		itemId: string | undefined,
-		entry: StreamingItem | undefined,
-		alternateItemKey?: string,
-		prefixedAlternateItemKey?: string,
-	): void => {
-		if (typeof outputIndex === "number") openItemsByOutputIndex.delete(outputIndex);
-		if (itemId) openItemsByItemId.delete(itemId);
-		if (alternateItemKey && alternateItemKey !== itemId) openItemsByItemId.delete(alternateItemKey);
-		if (
-			prefixedAlternateItemKey &&
-			prefixedAlternateItemKey !== itemId &&
-			prefixedAlternateItemKey !== alternateItemKey &&
-			openItemsByPrefixedCallId.get(prefixedAlternateItemKey) === entry
-		) {
-			openItemsByPrefixedCallId.delete(prefixedAlternateItemKey);
+	const closeOpenItem = (entry: StreamingItem | undefined): void => {
+		if (!entry) return;
+		const { outputIndex, item } = entry;
+		if (outputIndex !== undefined && openItemsByOutputIndex.get(outputIndex) === entry) {
+			openItemsByOutputIndex.delete(outputIndex);
 		}
-		if (entry) {
-			const index = openItemsInOrder.indexOf(entry);
-			if (index >= 0) openItemsInOrder.splice(index, 1);
+		if (item.id && openItemsByItemId.get(item.id) === entry) openItemsByItemId.delete(item.id);
+		if ("call_id" in item) {
+			if (openItemsByItemId.get(item.call_id) === entry) openItemsByItemId.delete(item.call_id);
+			const prefixedKey = prefixedFunctionCallItemKey(item.call_id);
+			if (prefixedKey && openItemsByPrefixedCallId.get(prefixedKey) === entry) {
+				openItemsByPrefixedCallId.delete(prefixedKey);
+			}
 		}
-		if (entry && identifierlessFunctionDeltaTarget === entry) identifierlessFunctionDeltaTarget = undefined;
-		if (entry && lastOpenItem === entry) lastOpenItem = null;
+		const index = openItemsInOrder.indexOf(entry);
+		if (index >= 0) openItemsInOrder.splice(index, 1);
+		if (identifierlessFunctionDeltaTarget === entry) identifierlessFunctionDeltaTarget = undefined;
+		if (lastOpenItem === entry) lastOpenItem = null;
 	};
 	// Content blocks are append-only for the lifetime of the stream, so each
 	// block's index is stable once pushed. Map block → index to keep the
@@ -3480,447 +3559,514 @@ export async function processResponsesStream<TApi extends Api>(
 	// progress evidence: the turn should pause for continuation rather than end.
 	let sawCompletedWebSearchCall = false;
 
-	for await (const event of openaiStream) {
-		const terminalEvent = getOpenAIResponsesTerminalEvent(event);
-		if (event.type === "response.created") {
-			output.responseId = event.response.id;
-		} else if (event.type === "response.output_item.added") {
-			if (!sawFirstToken) {
-				sawFirstToken = true;
-				options?.onFirstToken?.();
-			}
-			const item = event.item;
-			if (item.type === "reasoning") {
-				const block: ThinkingContent = { type: "thinking", thinking: "", itemId: item.id };
-				pushContentBlock(block);
-				registerOpenItem(event.output_index, item.id, { item, block });
-				stream.push({ type: "thinking_start", contentIndex: contentIndexOf(block), partial: output });
-			} else if (item.type === "message") {
-				const block: TextContent = {
-					type: "text",
-					text: "",
-					textSignature: encodeTextSignatureV1(item.id, item.phase ?? undefined),
-				};
-				pushContentBlock(block);
-				registerOpenItem(event.output_index, item.id, { item, block });
-				stream.push({ type: "text_start", contentIndex: contentIndexOf(block), partial: output });
-			} else if (item.type === "function_call") {
-				const block: StreamingToolCallBlock = {
-					type: "toolCall",
-					id: encodeResponsesToolCallId(item.call_id, item.id),
-					name: item.name,
-					arguments: {},
-					[kStreamingPartialJson]: item.arguments || "",
-				};
-				pushContentBlock(block);
-				registerOpenItem(
-					event.output_index,
-					item.id,
-					{ item, block },
-					item.call_id,
-					prefixedFunctionCallItemKey(item.call_id),
-				);
-				stream.push({ type: "toolcall_start", contentIndex: contentIndexOf(block), partial: output });
-			} else if (item.type === "computer_call") {
-				const block: StreamingToolCallBlock = {
-					type: "toolCall",
-					id: encodeResponsesToolCallId(item.call_id, item.id),
-					name: "computer",
-					arguments: {},
-					providerMetadata: computerCallMetadata(item),
-					[kStreamingPartialJson]: "",
-				};
-				pushContentBlock(block);
-				registerOpenItem(event.output_index, item.id, { item, block }, item.call_id);
-				stream.push({ type: "toolcall_start", contentIndex: contentIndexOf(block), partial: output });
-			} else if (item.type === "custom_tool_call") {
-				const block: StreamingToolCallBlock = {
-					type: "toolCall",
-					id: encodeResponsesToolCallId(item.call_id, item.id),
-					// Preserve the raw wire name (e.g. `apply_patch`). The agent-loop
-					// dispatcher matches it against both `Tool.name` and
-					// `Tool.customWireName`, so this stays wire-accurate through
-					// history replay while still routing to the right handler.
-					name: item.name,
-					arguments: { input: item.input ?? "" },
-					customWireName: item.name,
-					// Custom tools stream a raw string, but we reuse `partialJson` as the
-					// accumulation buffer so later code that inspects the field still works.
-					[kStreamingPartialJson]: item.input ?? "",
-				};
-				pushContentBlock(block);
-				registerOpenItem(
-					event.output_index,
-					item.id,
-					{ item, block },
-					item.call_id,
-					prefixedFunctionCallItemKey(item.call_id),
-				);
-				stream.push({ type: "toolcall_start", contentIndex: contentIndexOf(block), partial: output });
-			}
-		} else if (event.type === "response.reasoning_summary_part.added") {
-			const entry = lookupOpenItem(event);
-			if (entry?.item.type === "reasoning") appendReasoningSummaryPart(entry.item, event.part);
-		} else if (event.type === "response.reasoning_summary_text.delta") {
-			const entry = lookupOpenItem(event);
-			if (entry?.item.type === "reasoning" && entry.block.type === "thinking") {
-				appendReasoningSummaryTextDelta(
-					entry.item,
-					entry.block,
-					event.delta,
-					stream,
-					output,
-					contentIndexOf(entry.block),
-					event.summary_index,
-				);
-			}
-		} else if (event.type === "response.reasoning_summary_text.done") {
-			const entry = lookupOpenItem(event);
-			if (entry?.item.type === "reasoning" && entry.block.type === "thinking") {
-				applyReasoningSummaryTextDone(
-					entry.item,
-					entry.block,
-					event.text,
-					event.summary_index,
-					stream,
-					output,
-					contentIndexOf(entry.block),
-				);
-			}
-		} else if (event.type === "response.reasoning_summary_part.done") {
-			const entry = lookupOpenItem(event);
-			if (entry?.item.type === "reasoning" && entry.block.type === "thinking") {
-				appendReasoningSummaryPartDone(entry.item, entry.block, stream, output, contentIndexOf(entry.block));
-			}
-		} else if (event.type === "response.reasoning_text.delta") {
-			// Raw reasoning text delta from local providers that stream thinking
-			// directly rather than via the OpenAI summary tracking protocol.
-			const entry = lookupOpenItem(event);
-			const delta = optionalResponsesText(event.delta, "reasoning delta");
-			if (entry?.item.type === "reasoning" && entry.block.type === "thinking" && delta) {
-				entry.block.thinking += delta;
-				stream.push({
-					type: "thinking_delta",
-					contentIndex: contentIndexOf(entry.block),
-					delta,
-					partial: output,
-				});
-			}
-		} else if (event.type === "response.content_part.added") {
-			const entry = lookupOpenItem(event);
-			if (entry?.item.type === "message") appendMessageContentPart(entry.item, event.part);
-		} else if (event.type === "response.output_text.delta") {
-			const entry = lookupOpenItem(event);
-			if (entry?.item.type === "message" && entry.block.type === "text") {
-				appendMessageTextDelta(
-					entry.item,
-					entry.block,
-					event.delta,
-					stream,
-					output,
-					contentIndexOf(entry.block),
-					"output_text",
-				);
-			}
-		} else if (event.type === "response.refusal.delta") {
-			const entry = lookupOpenItem(event);
-			if (entry?.item.type === "message" && entry.block.type === "text") {
-				appendMessageTextDelta(
-					entry.item,
-					entry.block,
-					event.delta,
-					stream,
-					output,
-					contentIndexOf(entry.block),
-					"refusal",
-				);
-			}
-		} else if (event.type === "response.output_text.done" || event.type === "response.refusal.done") {
-			const entry = lookupOpenItem(event);
-			if (entry?.item.type === "message" && entry.block.type === "text") {
-				applyMessageTextDone(
-					entry.item,
-					entry.block,
-					event.type === "response.output_text.done" ? event.text : event.refusal,
-					stream,
-					output,
-					contentIndexOf(entry.block),
-					event.type === "response.output_text.done" ? "output_text" : "refusal",
-				);
-			}
-		} else if (event.type === "response.function_call_arguments.delta") {
-			const entry = lookupOpenFunctionCallItem(event);
-			if (entry?.item.type === "function_call" && entry.block.type === "toolCall") {
-				accumulateToolCallArgumentsDelta(entry.block, event.delta, stream, output, contentIndexOf(entry.block));
-			}
-		} else if (event.type === "response.function_call_arguments.done") {
-			const entry = lookupOpenFunctionCallItem(event);
-			const args = optionalResponsesText(event.arguments, "function call arguments");
-			if (entry?.item.type === "function_call" && entry.block.type === "toolCall" && args !== undefined) {
-				finalizeToolCallArgumentsDone(entry.block, args);
-				entry.block[kStreamingArgumentsDone] = true;
-			}
-		} else if (event.type === "response.custom_tool_call_input.delta") {
-			const entry = lookupOpenToolCallAlias(event, "custom_tool_call");
-			if (entry?.item.type === "custom_tool_call" && entry.block.type === "toolCall") {
-				accumulateCustomToolCallInputDelta(entry.block, event.delta, stream, output, contentIndexOf(entry.block));
-			}
-		} else if (event.type === "response.custom_tool_call_input.done") {
-			const entry = lookupOpenToolCallAlias(event, "custom_tool_call");
-			const input = optionalResponsesText(event.input, "custom tool input");
-			if (entry?.item.type === "custom_tool_call" && entry.block.type === "toolCall" && input !== undefined) {
-				finalizeCustomToolCallInputDone(entry.block, input);
-				entry.block[kStreamingArgumentsDone] = true;
-			}
-		} else if (event.type === "response.output_item.done") {
-			const item = cloneJsonTree(event.item);
-			const entry =
-				item.type === "function_call" || item.type === "custom_tool_call"
-					? lookupOpenItem({ output_index: event.output_index, item_id: item.id ?? item.call_id })
-					: lookupOpenItem({ output_index: event.output_index, item_id: item.id });
-			if (item.type === "reasoning") {
-				// Prefer the routed entry; the bare itemId find misroutes when ids are
-				// absent (`undefined === undefined` matches the FIRST thinking block) and
-				// misses entirely when the done-event id drifts from the added-event id.
-				const reasoningBlock =
-					entry?.block.type === "thinking"
-						? entry.block
-						: (output.content.find(b => b.type === "thinking" && (b as ThinkingContent).itemId === item.id) as
-								| ThinkingContent
-								| undefined);
-				if (reasoningBlock) {
-					reasoningBlock.thinking = finalizeReasoningThinking(item, reasoningBlock.thinking);
-					reasoningBlock.thinkingSignature = JSON.stringify(item);
-					settleReasoningSummary(item, reasoningBlock);
-					if (!output.upstreamModel) output.upstreamModel = servedModelFromOpenRouterReasoning(item);
+	let completed = false;
+	try {
+		for await (const event of openaiStream) {
+			const terminalEvent = getOpenAIResponsesTerminalEvent(event);
+			if (event.type === "response.created") {
+				output.responseId = event.response.id;
+			} else if (event.type === "response.output_item.added") {
+				if (!sawFirstToken) {
+					sawFirstToken = true;
+					options?.onFirstToken?.();
+				}
+				const item = event.item;
+				if (item.type === "reasoning") {
+					const block: ThinkingContent = { type: "thinking", thinking: "", itemId: item.id };
+					pushContentBlock(block);
+					registerOpenItem(event.output_index, item.id, { item, block });
+					stream.push({ type: "thinking_start", contentIndex: contentIndexOf(block), partial: output });
+				} else if (item.type === "message") {
+					const block: TextContent = {
+						type: "text",
+						text: "",
+						textSignature: encodeTextSignatureV1(item.id, item.phase ?? undefined),
+					};
+					pushContentBlock(block);
+					registerOpenItem(event.output_index, item.id, { item, block });
+					stream.push({ type: "text_start", contentIndex: contentIndexOf(block), partial: output });
+				} else if (item.type === "function_call") {
+					const block: StreamingToolCallBlock = {
+						type: "toolCall",
+						id: encodeResponsesToolCallId(item.call_id, item.id),
+						name: item.name,
+						arguments: {},
+						[kStreamingPartialJson]: item.arguments || "",
+					};
+					pushContentBlock(block);
+					registerOpenItem(
+						event.output_index,
+						item.id,
+						{ item, block },
+						item.call_id,
+						prefixedFunctionCallItemKey(item.call_id),
+					);
+					stream.push({ type: "toolcall_start", contentIndex: contentIndexOf(block), partial: output });
+				} else if (item.type === "computer_call") {
+					const block: StreamingToolCallBlock = {
+						type: "toolCall",
+						id: encodeResponsesToolCallId(item.call_id, item.id),
+						name: "computer",
+						arguments: {},
+						providerMetadata: computerCallMetadata(item),
+						[kStreamingPartialJson]: "",
+					};
+					pushContentBlock(block);
+					registerOpenItem(event.output_index, item.id, { item, block }, item.call_id);
+					stream.push({ type: "toolcall_start", contentIndex: contentIndexOf(block), partial: output });
+				} else if (item.type === "custom_tool_call") {
+					const block: StreamingToolCallBlock = {
+						type: "toolCall",
+						id: encodeResponsesToolCallId(item.call_id, item.id),
+						// Preserve the raw wire name (e.g. `apply_patch`). The agent-loop
+						// dispatcher matches it against both `Tool.name` and
+						// `Tool.customWireName`, so this stays wire-accurate through
+						// history replay while still routing to the right handler.
+						name: item.name,
+						arguments: { input: item.input ?? "" },
+						customWireName: item.name,
+						// Custom tools stream a raw string, but we reuse `partialJson` as the
+						// accumulation buffer so later code that inspects the field still works.
+						[kStreamingPartialJson]: item.input ?? "",
+					};
+					pushContentBlock(block);
+					registerOpenItem(
+						event.output_index,
+						item.id,
+						{ item, block },
+						item.call_id,
+						prefixedFunctionCallItemKey(item.call_id),
+					);
+					stream.push({ type: "toolcall_start", contentIndex: contentIndexOf(block), partial: output });
+				} else {
+					registerNativeOutput(event.output_index, item.id);
+				}
+			} else if (event.type === "response.reasoning_summary_part.added") {
+				const entry = lookupOpenItem(event);
+				if (entry?.item.type === "reasoning") appendReasoningSummaryPart(entry.item, event.part);
+			} else if (event.type === "response.reasoning_summary_text.delta") {
+				const entry = lookupOpenItem(event);
+				if (entry?.item.type === "reasoning" && entry.block.type === "thinking") {
+					appendReasoningSummaryTextDelta(
+						entry.item,
+						entry.block,
+						event.delta,
+						stream,
+						output,
+						contentIndexOf(entry.block),
+						event.summary_index,
+					);
+				}
+			} else if (event.type === "response.reasoning_summary_text.done") {
+				const entry = lookupOpenItem(event);
+				if (entry?.item.type === "reasoning" && entry.block.type === "thinking") {
+					applyReasoningSummaryTextDone(
+						entry.item,
+						entry.block,
+						event.text,
+						event.summary_index,
+						stream,
+						output,
+						contentIndexOf(entry.block),
+					);
+				}
+			} else if (event.type === "response.reasoning_summary_part.done") {
+				const entry = lookupOpenItem(event);
+				if (entry?.item.type === "reasoning" && entry.block.type === "thinking") {
+					appendReasoningSummaryPartDone(entry.item, entry.block, stream, output, contentIndexOf(entry.block));
+				}
+			} else if (event.type === "response.reasoning_text.delta") {
+				// Raw reasoning text delta from local providers that stream thinking
+				// directly rather than via the OpenAI summary tracking protocol.
+				const entry = lookupOpenItem(event);
+				const delta = optionalResponsesText(event.delta, "reasoning delta");
+				if (entry?.item.type === "reasoning" && entry.block.type === "thinking" && delta) {
+					entry.block.thinking += delta;
 					stream.push({
-						type: "thinking_end",
-						contentIndex: contentIndexOf(reasoningBlock),
-						content: reasoningBlock.thinking,
+						type: "thinking_delta",
+						contentIndex: contentIndexOf(entry.block),
+						delta,
 						partial: output,
 					});
 				}
-				closeOpenItem(event.output_index, item.id, entry);
-			} else if (item.type === "message") {
-				const block = entry?.block.type === "text" ? entry.block : undefined;
-				const text = finalizeMessageText(item, block?.text ?? "");
-				const textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
-				let contentIndex: number;
-				if (block) {
-					block.text = text;
-					block.textSignature = textSignature;
-					contentIndex = contentIndexOf(block);
-				} else {
-					// `output_item.added` never arrived (lossy proxy) — synthesize the
-					// block so the final message still carries the authoritative text.
-					const synthesized: TextContent = { type: "text", text, textSignature };
-					pushContentBlock(synthesized);
-					contentIndex = output.content.length - 1;
+			} else if (event.type === "response.content_part.added") {
+				const entry = lookupOpenItem(event);
+				if (entry?.item.type === "message") appendMessageContentPart(entry.item, event.part);
+			} else if (event.type === "response.output_text.delta") {
+				const entry = lookupOpenItem(event);
+				if (entry?.item.type === "message" && entry.block.type === "text") {
+					appendMessageTextDelta(
+						entry.item,
+						entry.block,
+						event.delta,
+						stream,
+						output,
+						contentIndexOf(entry.block),
+						"output_text",
+					);
 				}
-				stream.push({ type: "text_end", contentIndex, content: text, partial: output });
-				closeOpenItem(event.output_index, item.id, entry);
-			} else if (item.type === "function_call") {
-				const block = entry?.block.type === "toolCall" ? entry.block : undefined;
-				// A blank `.done` leaves the delta buffer in place, so the item's own arguments still win.
-				const args =
-					block?.[kStreamingArgumentsDone] && block[kStreamingPartialJson] === undefined
-						? block.arguments
-						: item.arguments
-							? parseToolCallArguments(item.arguments)
-							: parseToolCallArguments(block?.[kStreamingPartialJson]);
-				item.arguments = replayableToolCallArguments(item.arguments, args);
-				const toolCall: ToolCall = {
-					type: "toolCall",
-					id: encodeResponsesToolCallId(item.call_id, item.id),
-					name: item.name,
-					arguments: args,
-				};
-				let contentIndex: number;
-				if (block) {
-					// Persist the authoritative final args on the stored block. The
-					// throttled delta parser may have skipped the last partial parse,
-					// leaving block.arguments stale (often `{}`); the emitted toolCall
-					// and the persisted block must agree.
-					block.arguments = args;
-					clearStreamingPartialJson(block);
-					contentIndex = contentIndexOf(block);
-				} else {
-					// `output_item.added` never arrived (lossy proxy) — synthesize the
-					// block so the final message carries the call the consumer was told
-					// completed (the agent loop executes tools from message.content).
-					pushContentBlock(toolCall);
-					contentIndex = output.content.length - 1;
+			} else if (event.type === "response.refusal.delta") {
+				const entry = lookupOpenItem(event);
+				if (entry?.item.type === "message" && entry.block.type === "text") {
+					appendMessageTextDelta(
+						entry.item,
+						entry.block,
+						event.delta,
+						stream,
+						output,
+						contentIndexOf(entry.block),
+						"refusal",
+					);
 				}
-				closeOpenItem(event.output_index, item.id, entry, item.call_id, prefixedFunctionCallItemKey(item.call_id));
-				stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
-			} else if (item.type === "computer_call") {
-				const block = entry?.block.type === "toolCall" ? entry.block : undefined;
-				const toolCall: ToolCall = {
-					type: "toolCall",
-					id: encodeResponsesToolCallId(item.call_id, item.id),
-					name: "computer",
-					arguments: {},
-					providerMetadata: computerCallMetadata(item),
-				};
-				let contentIndex: number;
-				if (block) {
-					block.id = toolCall.id;
-					block.providerMetadata = toolCall.providerMetadata;
-					clearStreamingPartialJson(block);
-					contentIndex = contentIndexOf(block);
-				} else {
-					pushContentBlock(toolCall);
-					contentIndex = output.content.length - 1;
+			} else if (event.type === "response.output_text.done" || event.type === "response.refusal.done") {
+				const entry = lookupOpenItem(event);
+				if (entry?.item.type === "message" && entry.block.type === "text") {
+					applyMessageTextDone(
+						entry.item,
+						entry.block,
+						event.type === "response.output_text.done" ? event.text : event.refusal,
+						stream,
+						output,
+						contentIndexOf(entry.block),
+						event.type === "response.output_text.done" ? "output_text" : "refusal",
+					);
 				}
-				closeOpenItem(event.output_index, item.id, entry, item.call_id);
-				stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
-			} else if (item.type === "custom_tool_call") {
-				const block = entry?.block.type === "toolCall" ? entry.block : undefined;
-				// A supplied null/non-string terminal input is malformed; an empty or
-				// omitted one must not wipe input already completed through
-				// `custom_tool_call_input.done` (mirrors the function-call path's
-				// completed-args precedence).
-				const terminalInput = optionalResponsesText(item.input, "custom tool input");
-				const completedInput = block?.[kStreamingArgumentsDone]
-					? optionalResponsesText(block.arguments.input, "custom tool input")
-					: undefined;
-				const streamedInput = block?.[kStreamingPartialJson];
-				const rawInput =
-					terminalInput !== undefined && terminalInput.length > 0
-						? terminalInput
-						: completedInput !== undefined && completedInput.length > 0
-							? completedInput
-							: streamedInput !== undefined && streamedInput.length > 0
-								? streamedInput
-								: "";
-				const toolCall: ToolCall = {
-					type: "toolCall",
-					id: encodeResponsesToolCallId(item.call_id, item.id),
-					name: item.name,
-					arguments: { input: rawInput },
-					customWireName: item.name,
-				};
-				let contentIndex: number;
-				if (block) {
-					// Persist the final input on the stored block and drop the transient
-					// accumulation buffer, mirroring the function_call branch above.
-					block.arguments = { input: rawInput };
-					clearStreamingPartialJson(block);
-					contentIndex = contentIndexOf(block);
-				} else {
-					pushContentBlock(toolCall);
-					contentIndex = output.content.length - 1;
+			} else if (event.type === "response.function_call_arguments.delta") {
+				const entry = lookupOpenFunctionCallItem(event);
+				if (entry?.item.type === "function_call" && entry.block.type === "toolCall") {
+					accumulateToolCallArgumentsDelta(entry.block, event.delta, stream, output, contentIndexOf(entry.block));
 				}
-				closeOpenItem(event.output_index, item.id, entry, item.call_id, prefixedFunctionCallItemKey(item.call_id));
-				stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
-			} else if (item.type === "web_search_call" && (item.status === undefined || item.status === "completed")) {
-				// A completed provider-hosted web search is progress evidence even when
-				// the model never surfaced an answer; the agent loop continues from it.
-				sawCompletedWebSearchCall = true;
-			} else if (item.type === "image_generation_call" && item.status === "completed" && item.result) {
-				appendResponsesImageResult(output, stream, item.result);
-			}
-			// After the branches so the native history item carries any normalization above.
-			options?.onOutputItemDone?.(item);
-		} else if (terminalEvent) {
-			const response = terminalEvent.response;
-			const shouldPromoteIncompleteToolUse =
-				response?.status === "incomplete" &&
-				response.incomplete_details?.reason === "max_output_tokens" &&
-				hasExecutableIncompleteResponsesToolCalls(output);
-			finalizePendingResponsesToolCalls(output);
-			if (response?.id) {
-				output.responseId = response.id;
-			}
-			populateResponsesUsageFromResponse(output, response?.usage);
-			calculateCost(model, output.usage, output.timestamp);
-			applyProviderReportedCost(model, output.usage, response?.usage);
-			output.serviceTier = applyOpenAIResponsesServiceTierCost(
-				model,
-				output.usage,
-				(response as { service_tier?: unknown } | undefined)?.service_tier,
-				options?.requestServiceTier,
-			);
-			output.stopReason = mapOpenAIResponsesStopReason(response?.status);
-			if (response?.status === "failed" || response?.status === "cancelled") {
-				const error = response?.error ?? (response as any)?.status_details?.error;
-				const details = response?.incomplete_details;
-				const statusDetailsReason = (response as any)?.status_details?.reason;
-				// A rate-limit/overload body inside a terminal response envelope must
-				// advance the fallback chain exactly like an HTTP-status 429 would
-				// (body-error.ts). The whole envelope goes to the probe so a status or
-				// code carried beside `error` is visible, not only the inner object.
-				// Non-retryable failures keep their existing message.
-				const inBand = details ? undefined : AIError.createInBandProviderError({ ...response, error });
+			} else if (event.type === "response.function_call_arguments.done") {
+				const entry = lookupOpenFunctionCallItem(event);
+				const args = optionalResponsesText(event.arguments, "function call arguments");
+				if (entry?.item.type === "function_call" && entry.block.type === "toolCall" && args !== undefined) {
+					finalizeToolCallArgumentsDone(entry.block, args);
+					entry.block[kStreamingArgumentsDone] = true;
+				}
+			} else if (event.type === "response.custom_tool_call_input.delta") {
+				const entry = lookupOpenToolCallAlias(event, "custom_tool_call");
+				if (entry?.item.type === "custom_tool_call" && entry.block.type === "toolCall") {
+					accumulateCustomToolCallInputDelta(
+						entry.block,
+						event.delta,
+						stream,
+						output,
+						contentIndexOf(entry.block),
+					);
+				}
+			} else if (event.type === "response.custom_tool_call_input.done") {
+				const entry = lookupOpenToolCallAlias(event, "custom_tool_call");
+				const input = optionalResponsesText(event.input, "custom tool input");
+				if (entry?.item.type === "custom_tool_call" && entry.block.type === "toolCall" && input !== undefined) {
+					finalizeCustomToolCallInputDone(entry.block, input);
+					entry.block[kStreamingArgumentsDone] = true;
+				}
+			} else if (event.type === "response.output_item.done") {
+				const item = cloneJsonTree(event.item);
+				const entry =
+					item.type === "function_call" || item.type === "custom_tool_call" || item.type === "computer_call"
+						? lookupCompletedCall(event.output_index, item)
+						: item.type === "message"
+							? lookupCompletedMessage(event.output_index, item)
+							: lookupOpenItem({ output_index: event.output_index, item_id: item.id });
+				if (
+					(item.type === "function_call" || item.type === "custom_tool_call" || item.type === "computer_call") &&
+					!item.id &&
+					entry?.item.id
+				) {
+					// Keep a real added identity in both canonical content and native replay.
+					// If neither event supplies one, leave native id absent as before.
+					item.id = entry.item.id;
+				}
+				if (item.type === "reasoning") {
+					// Prefer the routed entry; the bare itemId find misroutes when ids are
+					// absent (`undefined === undefined` matches the FIRST thinking block) and
+					// misses entirely when the done-event id drifts from the added-event id.
+					const reasoningBlock =
+						entry?.block.type === "thinking"
+							? entry.block
+							: (output.content.find(b => b.type === "thinking" && (b as ThinkingContent).itemId === item.id) as
+									| ThinkingContent
+									| undefined);
+					if (reasoningBlock) {
+						reasoningBlock.thinking = finalizeReasoningThinking(item, reasoningBlock.thinking);
+						reasoningBlock.thinkingSignature = JSON.stringify(item);
+						settleReasoningSummary(item, reasoningBlock);
+						if (!output.upstreamModel) output.upstreamModel = servedModelFromOpenRouterReasoning(item);
+						stream.push({
+							type: "thinking_end",
+							contentIndex: contentIndexOf(reasoningBlock),
+							content: reasoningBlock.thinking,
+							partial: output,
+						});
+					}
+					closeOpenItem(entry);
+				} else if (item.type === "message") {
+					const block = entry?.block.type === "text" ? entry.block : undefined;
+					if (!item.content?.length && entry?.item.type === "message") {
+						// Empty done snapshots do not supersede accumulated text/refusal parts.
+						item.content = cloneJsonTree(entry.item.content);
+					}
+					const text = finalizeMessageText(item, block?.text ?? "");
+					const textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
+					let contentIndex: number;
+					if (block) {
+						block.text = text;
+						block.textSignature = textSignature;
+						contentIndex = contentIndexOf(block);
+					} else {
+						// `output_item.added` never arrived (lossy proxy) — synthesize the
+						// block so the final message still carries the authoritative text.
+						const synthesized: TextContent = { type: "text", text, textSignature };
+						pushContentBlock(synthesized);
+						contentIndex = output.content.length - 1;
+					}
+					stream.push({ type: "text_end", contentIndex, content: text, partial: output });
+					closeOpenItem(entry);
+				} else if (item.type === "function_call") {
+					const block = entry?.block.type === "toolCall" ? entry.block : undefined;
+					// A blank `.done` leaves the delta buffer in place, so the item's own arguments still win.
+					const args =
+						block?.[kStreamingArgumentsDone] && block[kStreamingPartialJson] === undefined
+							? block.arguments
+							: item.arguments
+								? parseToolCallArguments(item.arguments)
+								: parseToolCallArguments(block?.[kStreamingPartialJson]);
+					item.arguments = replayableToolCallArguments(item.arguments, args);
+					const toolCall: ToolCall = {
+						type: "toolCall",
+						id: encodeResponsesToolCallId(item.call_id, item.id),
+						name: item.name,
+						arguments: args,
+					};
+					let contentIndex: number;
+					if (block) {
+						// Persist the authoritative final args on the stored block. The
+						// throttled delta parser may have skipped the last partial parse,
+						// leaving block.arguments stale (often `{}`); the emitted toolCall
+						// and the persisted block must agree.
+						block.id = toolCall.id;
+						block.arguments = args;
+						clearStreamingPartialJson(block);
+						contentIndex = contentIndexOf(block);
+					} else {
+						// `output_item.added` never arrived (lossy proxy) — synthesize the
+						// block so the final message carries the call the consumer was told
+						// completed (the agent loop executes tools from message.content).
+						pushContentBlock(toolCall);
+						contentIndex = output.content.length - 1;
+					}
+					closeOpenItem(entry);
+					stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
+				} else if (item.type === "computer_call") {
+					const block = entry?.block.type === "toolCall" ? entry.block : undefined;
+					const toolCall: ToolCall = {
+						type: "toolCall",
+						id: encodeResponsesToolCallId(item.call_id, item.id),
+						name: "computer",
+						arguments: {},
+						providerMetadata: computerCallMetadata(item),
+					};
+					let contentIndex: number;
+					if (block) {
+						block.id = toolCall.id;
+						block.providerMetadata = toolCall.providerMetadata;
+						clearStreamingPartialJson(block);
+						contentIndex = contentIndexOf(block);
+					} else {
+						pushContentBlock(toolCall);
+						contentIndex = output.content.length - 1;
+					}
+					closeOpenItem(entry);
+					stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
+				} else if (item.type === "custom_tool_call") {
+					const block = entry?.block.type === "toolCall" ? entry.block : undefined;
+					// A supplied null/non-string terminal input is malformed; an empty or
+					// omitted one must not wipe input already completed through
+					// `custom_tool_call_input.done` (mirrors the function-call path's
+					// completed-args precedence).
+					const terminalInput = optionalResponsesText(item.input, "custom tool input");
+					const completedInput = block?.[kStreamingArgumentsDone]
+						? optionalResponsesText(block.arguments.input, "custom tool input")
+						: undefined;
+					const streamedInput = block?.[kStreamingPartialJson];
+					const rawInput =
+						terminalInput !== undefined && terminalInput.length > 0
+							? terminalInput
+							: completedInput !== undefined && completedInput.length > 0
+								? completedInput
+								: streamedInput !== undefined && streamedInput.length > 0
+									? streamedInput
+									: "";
+					item.input = rawInput;
+					const toolCall: ToolCall = {
+						type: "toolCall",
+						id: encodeResponsesToolCallId(item.call_id, item.id),
+						name: item.name,
+						arguments: { input: rawInput },
+						customWireName: item.name,
+					};
+					let contentIndex: number;
+					if (block) {
+						// Persist the final input on the stored block and drop the transient
+						// accumulation buffer, mirroring the function_call branch above.
+						block.id = toolCall.id;
+						block.arguments = { input: rawInput };
+						clearStreamingPartialJson(block);
+						contentIndex = contentIndexOf(block);
+					} else {
+						pushContentBlock(toolCall);
+						contentIndex = output.content.length - 1;
+					}
+					closeOpenItem(entry);
+					stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
+				} else if (item.type === "web_search_call" && (item.status === undefined || item.status === "completed")) {
+					// A completed provider-hosted web search is progress evidence even when
+					// the model never surfaced an answer; the agent loop continues from it.
+					sawCompletedWebSearchCall = true;
+				} else if (item.type === "image_generation_call" && item.status === "completed" && item.result) {
+					appendResponsesImageResult(output, stream, item.result);
+				}
+				// After the branches so the native history item carries any normalization above.
+				const nativeEntry = entry?.nativeOutput ?? registerNativeOutput(event.output_index, item.id);
+				if (nativeEntry) {
+					if (typeof event.output_index === "number") nativeEntry.order = event.output_index;
+					nativeEntry.item = item;
+				}
+			} else if (terminalEvent) {
+				const response = terminalEvent.response;
+				const shouldPromoteIncompleteToolUse =
+					response?.status === "incomplete" &&
+					response.incomplete_details?.reason === "max_output_tokens" &&
+					hasExecutableIncompleteResponsesToolCalls(output);
+				finalizePendingResponsesToolCalls(output);
+				if (response?.id) {
+					output.responseId = response.id;
+				}
+				populateResponsesUsageFromResponse(output, response?.usage);
+				calculateCost(model, output.usage, output.timestamp);
+				applyProviderReportedCost(model, output.usage, response?.usage);
+				output.serviceTier = applyOpenAIResponsesServiceTierCost(
+					model,
+					output.usage,
+					(response as { service_tier?: unknown } | undefined)?.service_tier,
+					options?.requestServiceTier,
+				);
+				output.stopReason = mapOpenAIResponsesStopReason(response?.status);
+				if (response?.status === "failed" || response?.status === "cancelled") {
+					const error = response?.error ?? (response as any)?.status_details?.error;
+					const details = response?.incomplete_details;
+					const statusDetailsReason = (response as any)?.status_details?.reason;
+					// A rate-limit/overload body inside a terminal response envelope must
+					// advance the fallback chain exactly like an HTTP-status 429 would
+					// (body-error.ts). The whole envelope goes to the probe so a status or
+					// code carried beside `error` is visible, not only the inner object.
+					// Non-retryable failures keep their existing message.
+					const inBand = details ? undefined : AIError.createInBandProviderError({ ...response, error });
+					if (inBand) throw inBand;
+					const message = error
+						? `${error.code || "unknown"}: ${error.message || "no message"}`
+						: details?.reason
+							? `incomplete: ${details.reason}`
+							: typeof statusDetailsReason === "string" && statusDetailsReason.length > 0
+								? `status_details: ${statusDetailsReason}`
+								: "Unknown error (no error details in response)";
+					throw new AIError.ProviderResponseError(message, { provider: model.provider, kind: "output" });
+				}
+				if (response?.status === "incomplete" && response.incomplete_details?.reason === "content_filter") {
+					// A content-filtered turn is a failure, not a token-cap truncation —
+					// mapping it to "length" would route the agent loop into "shorten your
+					// output" recovery against a filtered prompt.
+					throw new AIError.ProviderResponseError("incomplete: content_filter", {
+						provider: model.provider,
+						kind: "content-blocked",
+					});
+				}
+				promoteResponsesToolUseStopReason(
+					output,
+					(response as { end_turn?: boolean } | undefined)?.end_turn,
+					shouldPromoteIncompleteToolUse,
+				);
+				// A completed provider-hosted web search that yielded no visible answer
+				// (no text, image, or client tool call) is progress, not a dead end:
+				// pause the turn so the agent loop re-samples with the search results
+				// instead of silently ending. Reasoning/native output items are preserved
+				// for replay. A search followed by visible output stays a normal stop.
+				if (sawCompletedWebSearchCall && output.stopReason === "stop" && !hasVisibleAssistantContent(output)) {
+					output.stopDetails = { type: "pause_turn" };
+				}
+				if (options?.onOutputItemDone) {
+					// Native history replaces the whole turn on replay. Preserve every pending
+					// item, not just calls, so completing a call cannot hide streamed text.
+					for (const { item, block, nativeOutput } of openItemsInOrder) {
+						const nativeItem = cloneJsonTree(item);
+						if (nativeItem.type === "function_call" && block.type === "toolCall") {
+							nativeItem.arguments = JSON.stringify(block.arguments);
+							nativeItem.status = output.stopReason === "length" ? "incomplete" : "completed";
+						} else if (nativeItem.type === "custom_tool_call" && block.type === "toolCall") {
+							nativeItem.input = typeof block.arguments.input === "string" ? block.arguments.input : "";
+						} else if (nativeItem.type === "message") {
+							nativeItem.status = output.stopReason === "length" ? "incomplete" : "completed";
+						} else if (
+							nativeItem.type === "reasoning" &&
+							block.type === "thinking" &&
+							!nativeItem.summary?.some(part => part.text) &&
+							block.thinking
+						) {
+							// Raw reasoning deltas accumulate on the block, unlike summary/text deltas.
+							nativeItem.content = [{ type: "reasoning_text", text: block.thinking }];
+						}
+						if (nativeOutput) nativeOutput.item = nativeItem;
+					}
+				}
+				completed = true;
+				// `response.completed`/`response.incomplete`/`response.done` is the last event of a
+				// Responses stream. Stop pulling instead of waiting for the server to
+				// close the connection: misbehaving providers keep the socket open
+				// after the terminal event, which would park this loop until the idle
+				// watchdog converts an already-successful turn into a timeout error.
+				// Breaking unwinds the iterator chain (the consumer's `.return()`
+				// reaches the SDK stream), actively releasing the connection.
+				break;
+			} else if (event.type === "error") {
+				const err = (event as any).error ?? event;
+				// An in-band rate-limit/overload `error` event advances the fallback chain
+				// like an HTTP-status 429 (body-error.ts); the whole event is passed so
+				// event-level status/code fields count too. Other codes keep the existing
+				// `Error Code <code>: <message>` message that error tests pin on.
+				const inBand = AIError.createInBandProviderError(event);
+				if (inBand) throw inBand;
+				const code = err.code ?? "unknown";
+				const message = err.message ?? "no message";
+				throw new AIError.ProviderResponseError(`Error Code ${code}: ${message}`, {
+					provider: model.provider,
+					kind: "output",
+				});
+			} else if (event.type === "response.failed") {
+				populateResponsesUsageFromResponse(output, event.response?.usage);
+				const error = event.response?.error ?? (event.response as any)?.status_details?.error;
+				const details = event.response?.incomplete_details;
+				const inBand = details ? undefined : AIError.createInBandProviderError({ ...event.response, error });
 				if (inBand) throw inBand;
 				const message = error
 					? `${error.code || "unknown"}: ${error.message || "no message"}`
 					: details?.reason
 						? `incomplete: ${details.reason}`
-						: typeof statusDetailsReason === "string" && statusDetailsReason.length > 0
-							? `status_details: ${statusDetailsReason}`
-							: "Unknown error (no error details in response)";
+						: "Unknown error (no error details in response)";
 				throw new AIError.ProviderResponseError(message, { provider: model.provider, kind: "output" });
 			}
-			if (response?.status === "incomplete" && response.incomplete_details?.reason === "content_filter") {
-				// A content-filtered turn is a failure, not a token-cap truncation —
-				// mapping it to "length" would route the agent loop into "shorten your
-				// output" recovery against a filtered prompt.
-				throw new AIError.ProviderResponseError("incomplete: content_filter", {
-					provider: model.provider,
-					kind: "content-blocked",
-				});
+		}
+	} finally {
+		// Completion order can differ from output order; retain finalized items even
+		// when the stream fails, but never invent terminal recovery on that path.
+		if (options?.onOutputItemDone) {
+			nativeOutputEntries.sort((a, b) => a.order - b.order);
+			for (const entry of nativeOutputEntries) {
+				if (entry.item) options.onOutputItemDone(entry.item);
 			}
-			promoteResponsesToolUseStopReason(
-				output,
-				(response as { end_turn?: boolean } | undefined)?.end_turn,
-				shouldPromoteIncompleteToolUse,
-			);
-			// A completed provider-hosted web search that yielded no visible answer
-			// (no text, image, or client tool call) is progress, not a dead end:
-			// pause the turn so the agent loop re-samples with the search results
-			// instead of silently ending. Reasoning/native output items are preserved
-			// for replay. A search followed by visible output stays a normal stop.
-			if (sawCompletedWebSearchCall && output.stopReason === "stop" && !hasVisibleAssistantContent(output)) {
-				output.stopDetails = { type: "pause_turn" };
-			}
-			options?.onCompleted?.();
-			// `response.completed`/`response.incomplete`/`response.done` is the last event of a
-			// Responses stream. Stop pulling instead of waiting for the server to
-			// close the connection: misbehaving providers keep the socket open
-			// after the terminal event, which would park this loop until the idle
-			// watchdog converts an already-successful turn into a timeout error.
-			// Breaking unwinds the iterator chain (the consumer's `.return()`
-			// reaches the SDK stream), actively releasing the connection.
-			break;
-		} else if (event.type === "error") {
-			const err = (event as any).error ?? event;
-			// An in-band rate-limit/overload `error` event advances the fallback chain
-			// like an HTTP-status 429 (body-error.ts); the whole event is passed so
-			// event-level status/code fields count too. Other codes keep the existing
-			// `Error Code <code>: <message>` message that error tests pin on.
-			const inBand = AIError.createInBandProviderError(event);
-			if (inBand) throw inBand;
-			const code = err.code ?? "unknown";
-			const message = err.message ?? "no message";
-			throw new AIError.ProviderResponseError(`Error Code ${code}: ${message}`, {
-				provider: model.provider,
-				kind: "output",
-			});
-		} else if (event.type === "response.failed") {
-			populateResponsesUsageFromResponse(output, event.response?.usage);
-			const error = event.response?.error ?? (event.response as any)?.status_details?.error;
-			const details = event.response?.incomplete_details;
-			const inBand = details ? undefined : AIError.createInBandProviderError({ ...event.response, error });
-			if (inBand) throw inBand;
-			const message = error
-				? `${error.code || "unknown"}: ${error.message || "no message"}`
-				: details?.reason
-					? `incomplete: ${details.reason}`
-					: "Unknown error (no error details in response)";
-			throw new AIError.ProviderResponseError(message, { provider: model.provider, kind: "output" });
 		}
 	}
+	if (completed) options?.onCompleted?.();
 }
 
 export function mapOpenAIResponsesStopReason(status: ResponseStatus | undefined): StopReason {

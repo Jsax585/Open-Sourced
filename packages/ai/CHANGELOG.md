@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `/v1/codex/responses` to auth-gateway for Codex HTTP/SSE clients, with namespaced grammar/text custom tools, forced tool choices, client-side tool discovery, bounded zstd requests, and native reasoning/tool-call history replay on OpenAI, Azure, and Codex Responses upstreams ([#15903](https://github.com/can1357/oh-my-pi/pull/15903) by [@kanren3](https://github.com/kanren3)).
+
 ## [18.11.2] - 2026-10-16
 
 ### Breaking Changes
