@@ -15,7 +15,7 @@ import {
 	parseRequest,
 	readRequest,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses-server";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessage, ToolCall } from "@oh-my-pi/pi-ai/types";
 import { createOpenAIResponsesHistoryPayload } from "@oh-my-pi/pi-ai/utils";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -24,6 +24,7 @@ import { createCodexModel } from "./helpers";
 
 interface Frame {
 	type: string;
+	item_id?: string;
 	item?: Record<string, unknown>;
 	response?: {
 		id: string;
@@ -1022,8 +1023,7 @@ describe("auth-gateway Codex Responses", () => {
 				}
 				expect(item.call_id).toBe("call_normalized");
 				expect(item.encrypted_function_args).toEqual(["opaque-normalized"]);
-				// JSON preserves the native identity; SSE keeps its added identity stable.
-				if (!stream) expect(item.id).toBe("fc_normalized");
+				expect(item.id).toBe("fc_normalized");
 				const replay = await fetch(`${server.url}/v1/codex/responses`, {
 					method: "POST",
 					headers,
@@ -1045,6 +1045,153 @@ describe("auth-gateway Codex Responses", () => {
 			}
 		},
 	);
+
+	it.each([
+		["function", "openai-responses", "fc_function"],
+		["native custom", "azure-openai-responses", "ctc_custom"],
+		["text custom bridge", "openai-codex-responses", "fc_text"],
+		["missing item ID", "openai-responses", undefined],
+		["empty item ID", "openai-responses", ""],
+		["opaque foreign ID", "openai-completions", "not_a_responses_item"],
+	] as const)("keeps %s identity stable when native history arrives after item-added", async (kind, api, itemId) => {
+		const nativeCustom = kind === "native custom";
+		const textCustom = kind === "text custom bridge";
+		const foreign = kind === "opaque foreign ID";
+		const model = buildModel({
+			id: "gpt-test",
+			name: "Identity test",
+			api,
+			provider: "openai",
+			baseUrl: "http://127.0.0.1:1/v1",
+			input: ["text"],
+			reasoning: false,
+			contextWindow: 8192,
+			maxTokens: 1024,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		});
+		const parsed = parseRequest(
+			{
+				model: model.id,
+				input: "Echo",
+				tools: [
+					{
+						type: "namespace",
+						name: "editor",
+						tools: [
+							nativeCustom
+								? {
+										type: "custom",
+										name: "echo",
+										format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+									}
+								: textCustom
+									? { type: "custom", name: "echo", format: { type: "text" } }
+									: { type: "function", name: "echo", parameters: { type: "object", properties: {} } },
+						],
+					},
+				],
+			},
+			undefined,
+			model,
+		);
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: itemId === undefined ? "call_identity" : `call_identity|${itemId}`,
+			name: "editor__echo",
+			arguments: { input: "hello" },
+			...(nativeCustom ? { customWireName: "editor__echo" } : {}),
+		};
+		const partial: AssistantMessage = {
+			role: "assistant",
+			api,
+			provider: model.provider,
+			model: model.id,
+			content: [toolCall],
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 0,
+		};
+		const original = structuredClone(partial);
+		const events = new AssistantMessageEventStream();
+		const stream = readSseJson<Frame>(encodeStream(events, model.id, parsed.options));
+		try {
+			events.push({ type: "toolcall_start", contentIndex: 0, partial });
+			expect((await stream.next()).value).toMatchObject({ type: "response.created" });
+			const added = (await stream.next()).value as Frame;
+			expect(added).toMatchObject({
+				type: "response.output_item.added",
+				item: {
+					type: nativeCustom || textCustom ? "custom_tool_call" : "function_call",
+					name: "echo",
+					namespace: "editor",
+				},
+			});
+			const emittedId = added.item!.id;
+			if (typeof emittedId !== "string") throw new Error("Expected a string SSE item ID");
+			if (itemId && !foreign) expect(emittedId).toBe(itemId);
+			else {
+				expect(emittedId).toMatch(/^fc_[a-f0-9]{32}$/);
+				if (foreign) expect(emittedId).not.toBe(itemId);
+			}
+			// Do not expose final native history until the client has consumed added.
+			const message: AssistantMessage = {
+				...partial,
+				providerPayload: foreign
+					? undefined
+					: createOpenAIResponsesHistoryPayload(model.provider, [
+							{
+								type: nativeCustom ? "custom_tool_call" : "function_call",
+								...(itemId ? { id: itemId } : {}),
+								call_id: "call_identity",
+								name: "editor__echo",
+								...(nativeCustom
+									? { input: "hello" }
+									: { arguments: JSON.stringify(toolCall.arguments), encrypted_function_args: [] }),
+							},
+						]),
+			};
+			events.push({
+				type: "toolcall_delta",
+				contentIndex: 0,
+				delta: nativeCustom ? "hello" : JSON.stringify(toolCall.arguments),
+				partial,
+			});
+			events.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial });
+			events.push({ type: "done", reason: "toolUse", message });
+			const remaining: Frame[] = [];
+			for await (const frame of stream) remaining.push(frame);
+			const deltas = remaining.filter(frame => frame.type.endsWith(".delta"));
+			if (textCustom) expect(deltas).toEqual([]);
+			else
+				expect(deltas.map(frame => [frame.type, frame.item_id])).toEqual([
+					[
+						nativeCustom ? "response.custom_tool_call_input.delta" : "response.function_call_arguments.delta",
+						emittedId,
+					],
+				]);
+			const done = remaining.filter(frame => frame.type === "response.output_item.done");
+			expect(done).toHaveLength(1);
+			expect(done[0]!.item).toMatchObject({
+				id: emittedId,
+				name: "echo",
+				namespace: "editor",
+				...(nativeCustom || textCustom ? { input: "hello" } : { arguments: JSON.stringify(toolCall.arguments) }),
+				...(!nativeCustom && !foreign ? { encrypted_function_args: [] } : {}),
+			});
+			expect(remaining.at(-1)).toMatchObject({ type: "response.completed", response: { output: [done[0]!.item] } });
+			expect(partial).toEqual(original);
+		} finally {
+			events.end();
+			await stream.return(undefined);
+		}
+	});
 
 	it.each([
 		["reversed native order", ["fc_first", "fc_second"], ["fc_second", "fc_first"], [1, 0]],

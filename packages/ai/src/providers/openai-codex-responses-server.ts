@@ -414,6 +414,12 @@ function outputItem(
 	const envelope = responses.encodeResponse({ ...message, content: [part] }, model);
 	let item = (envelope.output as Record<string, unknown>[])[0];
 	if (!item) throw new Error(`Unsupported Codex output block: ${part.type}`);
+	if (part.type === "toolCall" && isResponsesFamilyApi(message.api)) {
+		// Native history arrives at completion, but the composite ID is available
+		// when the call starts. Seed SSE identity before publishing item-added.
+		const itemId = responsesItemComponent(part.id);
+		if (itemId) item.id = itemId;
+	}
 	if (native) {
 		const argumentsJson = item.arguments;
 		item = { ...item, ...native };
