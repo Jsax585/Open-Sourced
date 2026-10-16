@@ -6,6 +6,7 @@ import type { Model } from "@oh-my-pi/pi-ai/types";
 import { opencodeGoUsageProvider } from "@oh-my-pi/pi-ai/usage/opencode-go";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
+	OPENCODE_SESSION_HEAD_LOW12_MIN,
 	OPENCODE_SESSION_TOKEN_PATTERN,
 	OPENCODE_USER_AGENT,
 	toOpenCodeSessionToken,
@@ -140,6 +141,18 @@ describe("opencode session token formatter", () => {
 		const tail = token.slice(16);
 		expect(head).toMatch(/^[0-9a-f]{12}$/);
 		expect(tail).toMatch(/^[0-9A-Za-z]{14}$/);
+	});
+
+	it("forces the head low 12 bits into the gateway-accepted range", () => {
+		// Live gateway rejects heads with low12 < 0xfc0 even when the shape
+		// is valid; the raw digest is uniform there, so only ~1.6% passed.
+		const ids = ["session-1", "session-2", ...Array.from({ length: 50 }, (_, i) => `probe-${i}`)];
+		for (const id of ids) {
+			const token = toOpenCodeSessionToken(id);
+			expect(token).toMatch(OPENCODE_SESSION_TOKEN_PATTERN);
+			const low = Number.parseInt(token.slice(4, 16).slice(9, 12), 16);
+			expect(low >= OPENCODE_SESSION_HEAD_LOW12_MIN).toBe(true);
+		}
 	});
 });
 

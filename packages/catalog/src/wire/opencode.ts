@@ -3,8 +3,9 @@
  *
  * The contributor free tier is gated on client identity: every request must
  * carry a `User-Agent` whose leading token is `opencode/<version>` and an
- * `x-opencode-session` matching `ses_<12 hex><14 alnum>`. Both are wire-shape
- * checks applied before credentials are evaluated
+ * `x-opencode-session` matching `ses_<12 hex><14 alnum>` whose head low 12
+ * bits are `>= 0xfc0`. Both are wire-shape checks applied before credentials
+ * are evaluated
  * ([#12306](https://github.com/can1357/oh-my-pi/issues/12306)).
  */
 
@@ -77,18 +78,33 @@ export function withOpenCodeGateTools<T extends { name: string }>(tools: readonl
 export const OPENCODE_SESSION_TOKEN_PATTERN = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 
 /**
+ * Minimum accepted value of the session head's low 12 bits. The gateway
+ * rejects heads with `low12 < 0xfc0` even when the overall shape is valid.
+ */
+export const OPENCODE_SESSION_HEAD_LOW12_MIN = 0xfc0;
+
+/**
  * Format a session identity as OpenCode's canonical session token
  * (`ses_` + 12 lowercase hex + 14 alphanumeric chars).
  *
- * Deterministic: the 12-hex head is the leading digest bits of the input and
- * the alphanumeric tail derives from the rest, so a conversation keeps one
- * token across turns — the gateway pins routing and prompt caching on the
- * value — while the shape always passes the gate's check. The tail is upper
- * base36 (digits `0` mapped to `O`) so no lowercase hex characters leak past
- * the head segment.
+ * Deterministic: the 12-hex head derives from the leading digest bits of the
+ * input and the alphanumeric tail derives from the rest, so a conversation
+ * keeps one token across turns — the gateway pins routing and prompt caching
+ * on the value. The head's low 12 bits are forced into the range the live
+ * gateway accepts (`low12 >= 0xfc0`; lower values 403 with FreeTierError even
+ * when the shape is otherwise valid — live re-measurement 2026-10-16,
+ * ([#12306](https://github.com/can1357/oh-my-pi/issues/12306))). The OR is
+ * identity for already-passing heads, so working tokens stay stable. The tail
+ * is upper base36 (digits `0` mapped to `O`) so no lowercase hex characters
+ * leak past the head segment.
  */
 export function toOpenCodeSessionToken(sessionId: string): string {
 	const digest = new Bun.CryptoHasher("sha256").update(sessionId).digest("hex");
+	const rawHead = digest.slice(0, 12);
+	const low = (Number.parseInt(rawHead.slice(9, 12), 16) | OPENCODE_SESSION_HEAD_LOW12_MIN)
+		.toString(16)
+		.padStart(3, "0");
+	const head = `${rawHead.slice(0, 9)}${low}`;
 	const tail = BigInt(`0x${digest}`).toString(36).toUpperCase().replace(/0/g, "O");
-	return `ses_${`${digest.slice(0, 12)}${tail}`.slice(0, 26)}`;
+	return `ses_${`${head}${tail}`.slice(0, 26)}`;
 }

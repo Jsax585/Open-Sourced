@@ -21,6 +21,11 @@ import type { Api, Context, Model, ToolChoice } from "../types";
  * off `openai-responses`, which 400s on anything but `"auto"`. Option types
  * without a `toolChoice` field get tools padded but no pin.
  *
+ * The gate also requires `stream: true` (a non-streaming request with an
+ * otherwise-valid fingerprint 403s). omp always streams, so this is not
+ * enforced here — but no future non-streaming dispatch path may send
+ * OpenCode traffic without it.
+ *
  * Returns the inputs unchanged (same identity) when nothing needs padding.
  */
 export function withOpenCodeGateShape<TContext extends Context, TOptions extends object>(

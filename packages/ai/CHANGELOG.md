@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenCode free-tier 403 on most conversations: the `x-opencode-session` head low 12 bits are now forced into the gateway-accepted range instead of raw digest bits the gate rejects ~98% of the time ([#12556](https://github.com/can1357/oh-my-pi/pull/12556) by [@palprateek](https://github.com/palprateek), gate range measured by [@jaskaran-ai](https://github.com/jaskaran-ai)).
+
 ## [18.11.1] - 2026-10-15
 
 ### Added
