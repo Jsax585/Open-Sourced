@@ -30,7 +30,8 @@ const SSN = /\b\d{3}-\d{2}-\d{4}\b/g;
 const PAW_TIMEOUT_MS = 5_000;
 
 export function regexRedact(text: string, placeholder: string): string {
-	return text.replace(EMAIL, placeholder).replace(PHONE, placeholder).replace(SSN, placeholder);
+	const replacement = () => placeholder;
+	return text.replace(EMAIL, replacement).replace(PHONE, replacement).replace(SSN, replacement);
 }
 
 /** Build argv for the linked paw-pii CLI (`--placeholder` is a root option). */
@@ -59,6 +60,9 @@ export function mapTextBlocks(content: unknown, redact: (text: string) => string
 export function redactStructuredPayload(value: unknown, placeholder: string, seen = new WeakSet<object>()): unknown {
 	if (typeof value === "string") return regexRedact(value, placeholder);
 	if (value == null || typeof value !== "object") return value;
+	// Binary fields and provider-native instances must retain their wire types.
+	const prototype = Object.getPrototypeOf(value);
+	if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return value;
 	if (seen.has(value)) return value;
 	seen.add(value);
 	if (Array.isArray(value)) {

@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Fixed the example PII redactor interpreting replacement tokens in configured placeholders and converting binary/provider-native payload values into plain objects ([#10829](https://github.com/can1357/oh-my-pi/pull/10829), by [@kvnloo](https://github.com/kvnloo)).
+
 - Read error and preview rendering now sanitizes tabs and Windows-style CRLF (e.g. ssh host-key failures, tab-indented fetched content) so raw output can no longer tear the result frame.
 
 ### Added

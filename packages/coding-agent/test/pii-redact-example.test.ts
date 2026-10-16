@@ -34,6 +34,14 @@ describe("pii-redact example helpers", () => {
 		expect(regexRedact(input, PLACEHOLDER)).toBe(`mail ${PLACEHOLDER} phone ${PLACEHOLDER} ssn ${PLACEHOLDER}`);
 	});
 
+	it("treats replacement tokens in configured placeholders literally", () => {
+		for (const placeholder of ["$&", "$`", "$'", "$$", "[PII $&]"]) {
+			expect(regexRedact("a@b.co | 555-123-4567 | 123-45-6789", placeholder)).toBe(
+				`${placeholder} | ${placeholder} | ${placeholder}`,
+			);
+		}
+	});
+
 	it("mapTextBlocks preserves multimodal block order", () => {
 		const content = [
 			{ type: "text", text: "before a@b.co" },
@@ -59,6 +67,26 @@ describe("pii-redact example helpers", () => {
 			input: [{ role: "user", content: `reach me at ${PLACEHOLDER}` }],
 			tools: [{ name: "bash", arguments: { cmd: `echo ${PLACEHOLDER}` } }],
 		});
+	});
+
+	it("preserves binary and non-plain provider values without copying them", () => {
+		const bytes = new Uint8Array([1, 2, 3]);
+		const buffer = new ArrayBuffer(4);
+		const view = new DataView(buffer);
+		const date = new Date(0);
+		const payload = { bytes, buffer, view, date, nested: [{ text: "a@b.co" }] };
+		const redacted = redactStructuredPayload(payload, PLACEHOLDER) as typeof payload;
+		expect(redacted.bytes).toBe(bytes);
+		expect(redacted.buffer).toBe(buffer);
+		expect(redacted.view).toBe(view);
+		expect(redacted.date).toBe(date);
+		expect(redacted.nested).toEqual([{ text: PLACEHOLDER }]);
+		expect(payload.nested).toEqual([{ text: "a@b.co" }]);
+	});
+
+	it("continues walking null-prototype JSON records", () => {
+		const record = Object.assign(Object.create(null), { email: "a@b.co" });
+		expect(redactStructuredPayload({ record }, PLACEHOLDER)).toEqual({ record: { email: PLACEHOLDER } });
 	});
 
 	it("redactText falls back to regex when PAW exec throws", async () => {
@@ -177,6 +205,17 @@ describe("pii-redact example extension events", () => {
 			messages: [{ role: "user", content: `call ${PLACEHOLDER}` }],
 			system: `never leak ${PLACEHOLDER}`,
 		});
+	});
+
+	it("preserves provider binary fields through the registered request handler", async () => {
+		const runner = await loadExampleRunner();
+		const bytes = new Uint8Array([1, 2, 3]);
+		const payload = (await runner.emitBeforeProviderRequest({
+			conversationState: { rootPromptMessagesJson: bytes },
+			system: "contact a@b.co",
+		})) as { conversationState: { rootPromptMessagesJson: Uint8Array }; system: string };
+		expect(payload.conversationState.rootPromptMessagesJson).toBe(bytes);
+		expect(payload.system).toBe(`contact ${PLACEHOLDER}`);
 	});
 
 	it("registers via default export factory", () => {
