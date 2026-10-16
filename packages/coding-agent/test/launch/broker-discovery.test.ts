@@ -16,6 +16,8 @@ import { WaitTool } from "../../src/tools/wait";
 import { IrcBus } from "../../src/irc/bus";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { daemonBrokerEndpoint } from "../../src/launch/paths";
+import { type DaemonOperation, type DaemonWireResponse, parseDaemonWireMessage } from "../../src/launch/protocol";
 
 interface Fixture {
 	client: DaemonBrokerClient;
@@ -941,4 +943,267 @@ describe("broker discovery and session generations", () => {
 			expect(await outcome).toBeInstanceOf(Error);
 			expect(services.hasLiveOwnedService(f.session)).toBe(false);
 		}));
+	test("interruptible readiness cancels only its wait and leaves the acknowledged service live", () =>
+		withBroker(async f => {
+			vi.spyOn(f.session.settings, "getShellConfig").mockReturnValue({
+				shell: process.execPath,
+				args: ["-e"],
+				env: {},
+				prefix: undefined,
+			});
+			const gate = holdConnection();
+			const interrupt = new AbortController();
+			const waitSent = Promise.withResolvers<string>();
+			const starting = services.startService(
+				f.session,
+				{
+					name: "ready-survivor",
+					command: "process.stdin.once('data', () => process.exit(0));",
+					pty: false,
+					ready: { log: "NEVER", timeout: 60 },
+				},
+				undefined,
+				interrupt.signal,
+			);
+			void starting.catch(() => undefined);
+			const connection = await gate.connected;
+			const send = connection.send.bind(connection);
+			vi.spyOn(connection, "send").mockImplementation(frame => {
+				const sent = send(frame);
+				if (typeof frame === "string") {
+					const request = JSON.parse(frame) as { id: string; operation: { op: string } };
+					if (request.operation.op === "wait") waitSent.resolve(request.id);
+				}
+				return sent;
+			});
+			try {
+				gate.release();
+				const requestId = await waitSent.promise;
+				await f.client.request({ op: "ping" });
+				interrupt.abort();
+				const result = await beforeRelease(() => interrupt.abort(), starting);
+				expect(result.readyInterrupted).toBe(true);
+				expect(result.readyTimedOut).toBe(false);
+				expect(services.hasLiveOwnedService(f.session)).toBe(true);
+				expect(await f.client.request({ op: "cancel", requestId })).toEqual({ op: "cancel", cancelled: false });
+				const live = await f.client.request({ op: "describe", name: "ready-survivor" });
+				if (live.op !== "describe") throw new Error("Expected service snapshot");
+				expect(live.daemon.id).toBe(result.daemon.id);
+				expect(live.daemon.state).toBe("starting");
+				// Use a fresh listener: the readiness-only interrupt has already fired.
+				const completionAbort = new AbortController();
+				const completion = services.waitForOwnedServiceCompletion(f.session, completionAbort.signal);
+				try {
+					await f.client.request({ op: "send", name: "ready-survivor", data: "finish\n" });
+					await beforeRelease(() => completionAbort.abort(), completion);
+					expect(services.hasLiveOwnedService(f.session)).toBe(false);
+				} finally {
+					completionAbort.abort();
+				}
+			} finally {
+				gate.release();
+				interrupt.abort();
+				await starting.catch(() => undefined);
+			}
+		}));
+	test("a delayed launch acknowledgement cannot wait on a same-name replacement", () =>
+		withBroker(async f => {
+			vi.spyOn(f.session.settings, "getShellConfig").mockReturnValue({
+				shell: process.execPath,
+				args: ["-e"],
+				env: {},
+				prefix: undefined,
+			});
+			const params = {
+				name: "ready-replaced",
+				command: "process.stdin.once('data', () => process.exit(0));",
+				pty: false,
+				ready: { log: "NEVER", timeout: 60 },
+			};
+			const gate = holdResponse(f.client, "start");
+			const interrupt = new AbortController();
+			const older = services.startService(f.session, params, undefined, interrupt.signal);
+			const outcome = older.catch((error: unknown) => error);
+			try {
+				await gate.received;
+				const replacement = await services.startService(f.session, { ...params, ready: undefined });
+				gate.release();
+				const error = await beforeRelease(() => interrupt.abort(), outcome);
+				expect(error).toBeInstanceOf(clients.DaemonBrokerRejectedError);
+				expect((error as Error).message).toContain("launch generation changed");
+				expect(services.hasLiveOwnedService(f.session)).toBe(true);
+				const current = await f.client.request({ op: "describe", name: params.name });
+				if (current.op !== "describe") throw new Error("Expected replacement snapshot");
+				expect(current.daemon.id).toBe(replacement.daemon.id);
+				expect(current.daemon.state).toBe("running");
+			} finally {
+				gate.release();
+				interrupt.abort();
+				await older.catch(() => undefined);
+			}
+		}));
+	test("a session change during readiness is not hidden by a concurrent ready interrupt", () =>
+		withBroker(async f => {
+			vi.spyOn(f.session.settings, "getShellConfig").mockReturnValue({
+				shell: process.execPath,
+				args: ["-e"],
+				env: {},
+				prefix: undefined,
+			});
+			const entered = Promise.withResolvers<void>();
+			const request = f.client.request.bind(f.client);
+			vi.spyOn(f.client, "request").mockImplementation((operation, signal) => {
+				const result = request(operation, signal);
+				if (operation.op === "wait") entered.resolve();
+				return result;
+			});
+			const interrupt = new AbortController();
+			const starting = services.startService(
+				f.session,
+				{
+					name: "old-readiness",
+					command: "process.stdin.resume();",
+					pty: false,
+					ready: { log: "NEVER", timeout: 60 },
+				},
+				undefined,
+				interrupt.signal,
+			);
+			const outcome = starting.catch((error: unknown) => error);
+			try {
+				await entered.promise;
+				for (const callback of f.change) callback();
+				interrupt.abort();
+				const error = await beforeRelease(() => interrupt.abort(), outcome);
+				expect(error).toBeInstanceOf(Error);
+				expect((error as Error).message).toContain("Service session changed");
+				expect(services.hasLiveOwnedService(f.session)).toBe(false);
+			} finally {
+				interrupt.abort();
+				await starting.catch(() => undefined);
+			}
+		}));
+	test("a wait bound to an acknowledged start rejects a restarted launch with the same daemon id", () =>
+		withBroker(async f => {
+			await startOwned(f, "restarted-ready");
+			const previous = await f.client.request({ op: "describe", name: "restarted-ready" });
+			if (previous.op !== "describe") throw new Error("Expected acknowledged launch");
+			const restarted = await f.client.request({ op: "restart", name: "restarted-ready" });
+			if (restarted.op !== "restart") throw new Error("Expected restarted launch");
+			expect(restarted.daemon.id).toBe(previous.daemon.id);
+			expect(restarted.daemon.startedAt).not.toBe(previous.daemon.startedAt);
+			await expect(
+				f.client.request({
+					op: "wait",
+					name: "restarted-ready",
+					for: "ready",
+					timeoutMs: 5000,
+					id: previous.daemon.id,
+					startedAt: previous.daemon.startedAt,
+				}),
+			).rejects.toThrow("launch generation changed before the wait");
+			const current = await f.client.request({
+				op: "wait",
+				name: "restarted-ready",
+				for: "ready",
+				timeoutMs: 5000,
+				id: restarted.daemon.id,
+				startedAt: restarted.daemon.startedAt,
+			});
+			if (current.op !== "wait") throw new Error("Expected current readiness");
+			expect(current.timedOut).toBe(false);
+			expect(current.daemon.state).toBe("ready");
+		}));
+	test.each(["wait", "logs"] as const)("cancels %s during real completion-owner persistence before polling", op =>
+		withBroker(async f => {
+			await startOwned(f, "metadata-survivor");
+			const connection = await IpcConnection.connect(daemonBrokerEndpoint(f.runtimeDir), {
+				framing: "lines",
+				timeoutMs: 1000,
+			});
+			const token = (await fs.readFile(path.join(f.runtimeDir, "broker.token"), "utf8")).trim();
+			const replies = new Map<string, { resolve: (response: DaemonWireResponse) => void }>();
+			connection.start(
+				line => {
+					const message = parseDaemonWireMessage(JSON.parse(line));
+					if (!("event" in message)) replies.get(message.id)?.resolve(message);
+				},
+				() => undefined,
+			);
+			const send = (id: string, operation: DaemonOperation, owners?: string[]) => {
+				const response = Promise.withResolvers<DaemonWireResponse>();
+				replies.set(id, response);
+				connection.send(
+					JSON.stringify({
+						id,
+						token,
+						operation,
+						owners,
+						completionEvents: owners !== undefined,
+						completionSubscriptionId: "persistence-regression",
+					}),
+				);
+				return response.promise;
+			};
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const rename = fs.rename;
+			let held = false;
+			const metadataPath = path.join(f.runtimeDir, "daemons", "metadata-survivor", "meta.json");
+			vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+				if (!held && to === metadataPath) {
+					held = true;
+					entered.resolve();
+					await release.promise;
+				}
+				return rename(from, to);
+			});
+			const operation: DaemonOperation =
+				op === "wait"
+					? { op, name: "metadata-survivor", for: "exit", timeoutMs: 60_000 }
+					: { op, name: "metadata-survivor", lines: 20, head: false, follow: true, timeoutMs: 60_000 };
+			const pending = send("held-request", operation, [f.owner]);
+			// A watchdog bounds real native IPC/filesystem failure; fake timers
+			// cannot drive the broker's child process or atomic-rename completion.
+			const watchdog = setTimeout(() => {
+				entered.reject(new Error("Completion-owner persistence gate was not reached"));
+				release.resolve();
+			}, 2000);
+			try {
+				await entered.promise;
+				clearTimeout(watchdog);
+				// Another socket cannot cancel this request, even with its exact id.
+				expect(await f.client.request({ op: "cancel", requestId: "held-request" })).toEqual({
+					op: "cancel",
+					cancelled: false,
+				});
+				// This response must arrive while the real metadata rename is still
+				// gated. The helper releases persistence only after receiving it.
+				const cancelled = await beforeRelease(
+					release.resolve,
+					send("cancel-request", { op: "cancel", requestId: "held-request" }),
+				);
+				expect(cancelled).toEqual({ id: "cancel-request", ok: true, result: { op: "cancel", cancelled: true } });
+				const result = await beforeRelease(release.resolve, pending);
+				expect(result.ok).toBe(false);
+				if (result.ok) throw new Error("Cancelled request unexpectedly succeeded");
+				expect(result.error).toContain("cancelled");
+				expect(await send("late-cancel", { op: "cancel", requestId: "held-request" })).toMatchObject({
+					ok: true,
+					result: { cancelled: false },
+				});
+				const live = await f.client.request({ op: "describe", name: "metadata-survivor" });
+				if (live.op !== "describe") throw new Error("Expected live service");
+				expect(live.daemon.state).toBe("ready");
+				await f.client.request({ op: "send", name: "metadata-survivor", data: "finish\n" });
+				const exited = await f.client.request({ op: "wait", name: "metadata-survivor", for: "exit", timeoutMs: 5000 });
+				if (exited.op !== "wait") throw new Error("Expected exited service");
+				expect(exited.daemon.state).toBe("exited");
+			} finally {
+				clearTimeout(watchdog);
+				release.resolve();
+				connection.destroy();
+			}
+		}),
+	);
 });
