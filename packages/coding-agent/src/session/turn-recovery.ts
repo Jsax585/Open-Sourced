@@ -2453,13 +2453,7 @@ export class TurnRecovery {
 					Bun.deepEquals(systemPrompt, previousSystemPrompt) &&
 					tools.length === previousTools.length &&
 					tools.every((tool, index) => tool === previousTools[index]);
-				if (
-					applied &&
-					options?.pinFallback === true &&
-					creditHandle !== undefined &&
-					canRedeemFallbackCredit &&
-					requestSurfaceUnchanged
-				) {
+				if (applied && creditHandle !== undefined && canRedeemFallbackCredit && requestSurfaceUnchanged) {
 					this.#activeFallbackCreditRedemption = {
 						targetSelector: `${candidate.provider}/${candidate.id}`,
 						handle: creditHandle,

@@ -227,6 +227,10 @@ turn. Failed, aborted, and empty responses do not restore the model. Same-model
 retries remain budget-bounded. A request-scoped content block does not
 create an availability cooldown for the model it restores.
 
+Eligible Anthropic fallback credit is redeemed with either refusal restoration
+policy. Redemption is single-use and replays the frozen refused request only when
+the model swap leaves the system prompt, tools, and edit mode unchanged.
+
 Restoration waits for that assistant response's transcript persistence and
 success bookkeeping, not unrelated message, tool, or turn-end extension handlers.
 The emitted message snapshot and the original turn-end response are matched by

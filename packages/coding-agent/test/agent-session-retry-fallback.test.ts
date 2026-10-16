@@ -3874,9 +3874,14 @@ describe("AgentSession retry fallback", () => {
 		]);
 	});
 
-	it.each([{ swapRebuildsPrompt: false }, { swapRebuildsPrompt: true }])(
+	it.each([
+		{ swapRebuildsPrompt: false, revertPolicy: "default" },
+		{ swapRebuildsPrompt: true, revertPolicy: "default" },
+		{ swapRebuildsPrompt: false, revertPolicy: "after-success" },
+		{ swapRebuildsPrompt: true, revertPolicy: "after-success" },
+	] as const)(
 		"redeems Anthropic fallback credit across a same-provider refusal fallback with signed thinking unless the swap rebuilt the prompt (%o)",
-		async ({ swapRebuildsPrompt }) => {
+		async ({ swapRebuildsPrompt, revertPolicy }) => {
 			// Fable → Opus 4.8 is a catalog-permitted fallback-credit target pair.
 			const primaryModel = getBundledModel("anthropic", "claude-fable-5");
 			const fallbackModel = getBundledModel("anthropic", "claude-opus-4-8");
@@ -3963,6 +3968,7 @@ describe("AgentSession retry fallback", () => {
 					default: [`${fallbackModel.provider}/${fallbackModel.id}`],
 				},
 				"retry.fallbackRevertPolicy": "cooldown-expiry",
+				"retry.refusalFallbackRevertPolicy": revertPolicy,
 			});
 			settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
 
@@ -4001,7 +4007,7 @@ describe("AgentSession retry fallback", () => {
 			]);
 			expect(fallbackAppliedEvents).toHaveLength(1);
 			expect(fallbackAppliedEvents[0].to).toBe(`${fallbackModel.provider}/${fallbackModel.id}`);
-			expect(session.model?.id).toBe(fallbackModel.id);
+			expect(session.model?.id).toBe(revertPolicy === "after-success" ? primaryModel.id : fallbackModel.id);
 			if (swapRebuildsPrompt) {
 				expect(fallbackTurnRedemption).toBeUndefined();
 			} else {
