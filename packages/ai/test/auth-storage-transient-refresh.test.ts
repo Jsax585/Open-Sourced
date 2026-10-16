@@ -88,6 +88,28 @@ describe("AuthStorage transient OAuth refresh failure", () => {
 		expect((await auth.keys.getWithCredential("anthropic", "session"))?.apiKey).toBe("sk-fallback");
 	});
 
+	it("does not block a credential when the caller aborts the refresh", async () => {
+		const auth = await open();
+		await auth.credentials.set("anthropic", [expiredOAuth()]);
+		const refresh = vi.spyOn(oauthUtils, "refreshOAuthToken").mockImplementation(async () => {
+			throw new AIError.AbortError("OAuth token refresh aborted by caller");
+		});
+
+		// The aborted resolve must surface as "no key" without writing the
+		// transient-failure auth block for the credential.
+		const apiKey = await auth.keys.get("anthropic", "session", { signal: new AbortController().signal });
+		expect(apiKey).toBeUndefined();
+		expect(refresh).toHaveBeenCalledTimes(1);
+
+		// A follow-up non-aborted resolve is not parked behind the 5-minute block.
+		refresh.mockResolvedValue({
+			access: "fresh-access",
+			refresh: "refresh-2",
+			expires: Date.now() + 3_600_000,
+		});
+		expect((await auth.keys.getWithCredential("anthropic", "session"))?.apiKey).toBe("fresh-access");
+	});
+
 	it("reports no key after a definitive refresh failure disables the only credential", async () => {
 		const auth = await open();
 		await auth.credentials.set("anthropic", [expiredOAuth()]);

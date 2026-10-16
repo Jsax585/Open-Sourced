@@ -3773,6 +3773,9 @@ export class ModelRegistry {
 			const selectedAccount = health.accounts.find(account => account.selected);
 			if (
 				options.sessionId &&
+				// An explicit pin is the user's durable account choice: release only
+				// automatic warm affinities here, never a user-set pin.
+				!this.authStorage.sessions.isExplicit(provider, options.sessionId) &&
 				selectedAccount?.state === "reserve" &&
 				health.accounts.some(account => account.state === "healthy")
 			) {

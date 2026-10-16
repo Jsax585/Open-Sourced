@@ -1934,6 +1934,9 @@ export class TurnRecovery {
 			// A healthy sibling does not end the selected account's reserve episode.
 			if (selectedAccount?.state === "healthy") this.#usageReserveApproval = undefined;
 			if (
+				// An explicit pin survives reserve recovery: release only automatic
+				// warm affinities when a sibling is healthy.
+				!this.#host.modelRegistry.authStorage.sessions.isExplicit(currentModel.provider, this.#host.sessionId()) &&
 				selectedAccount &&
 				selectedAccount.state !== "healthy" &&
 				health.accounts.some(account => account.state === "healthy")
@@ -1993,6 +1996,12 @@ export class TurnRecovery {
 					if (candidateHealth.state === "healthy") {
 						const selected = candidateHealth.accounts.find(account => account.selected);
 						if (
+							// An explicit pin survives reserve recovery: release only automatic
+							// warm affinities when a sibling is healthy.
+							!this.#host.modelRegistry.authStorage.sessions.isExplicit(
+								candidateModel.provider,
+								this.#host.sessionId(),
+							) &&
 							selected &&
 							selected.state !== "healthy" &&
 							candidateHealth.accounts.some(account => account.state === "healthy")

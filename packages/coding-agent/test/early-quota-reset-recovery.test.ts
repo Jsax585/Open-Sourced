@@ -412,6 +412,48 @@ describe("early quota reset recovery", () => {
 		}
 	});
 
+	it("keeps an explicit account pin when recovery evidence would release a warm affinity", async () => {
+		env = await createEnv();
+		const { registry, authStorage } = env;
+		const clock = useMockClock();
+		await authStorage.credentials.set("anthropic", [
+			{
+				type: "oauth",
+				access: "depleted-access",
+				refresh: "depleted-refresh",
+				expires: clock.now() + 3_600_000,
+				accountId: "acct-depleted",
+			},
+			{
+				type: "oauth",
+				access: "healthy-access",
+				refresh: "healthy-refresh",
+				expires: clock.now() + 3_600_000,
+				accountId: "acct-healthy",
+			},
+		]);
+		scriptedReports["acct-depleted"] = { status: "exhausted" };
+		scriptedReports["acct-healthy"] = { status: "healthy" };
+		const pinnedAccount = authStorage.oauth
+			.accounts("anthropic")
+			.find(account => account.accountId === "acct-depleted");
+		if (!pinnedAccount) throw new Error("expected pinned account");
+		expect(authStorage.sessions.pin("anthropic", "pinned-session", pinnedAccount.credentialId)).toBe(true);
+
+		registry.suppressSelector(PRIMARY_SELECTOR, clock.now() + 30 * 60_000, clock.now());
+		scriptedReports["acct-depleted"] = { status: "healthy" };
+		clock.advance(7 * 60_000);
+
+		// Recovery clears the suppression but must not evict the explicit pin.
+		expect(
+			await registry.isSelectorSuppressedWithRecovery(PRIMARY_SELECTOR, {
+				sessionId: "pinned-session",
+				reserveFraction: 0.1,
+			}),
+		).toBe(false);
+		expect(authStorage.sessions.isExplicit("anthropic", "pinned-session")).toBe(true);
+	});
+
 	it("bypasses a quota cooldown only while recovery evidence stays fresh", async () => {
 		env = await createEnv();
 		const { registry } = env;

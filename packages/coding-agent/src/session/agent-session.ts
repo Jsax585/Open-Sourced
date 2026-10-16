@@ -4708,9 +4708,7 @@ export class AgentSession implements SettingsScope {
 			// for retries; the primary can still be restored on the next user
 			// prompt or after the saga terminates.
 			const isAutomaticRetry = request.options.source === "automatic-retry";
-			const reverted = isAutomaticRetry
-				? false
-				: await this.#recovery.maybeRestoreRetryFallbackPrimary(signal);
+			const reverted = isAutomaticRetry ? false : await this.#recovery.maybeRestoreRetryFallbackPrimary(signal);
 			if (signal.aborted || this.#isDisposed || this.#abortInProgress) {
 				return { status: "skipped", reason: "post-restore-unavailable" };
 			}
