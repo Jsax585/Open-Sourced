@@ -11,6 +11,9 @@
 ### Added
 
 - Added `advisor.continueSeverity` (`nit`, `concern`, `blocker`) to choose the minimum advisor note severity that wakes the agent after it finished with a final answer; lower-severity notes stay as a card at the end of the transcript
+### Added
+
+- Added a Serply web-search provider (`web/serply`), authenticated with `SERPLY_API_KEY` or `/login serply`, that forwards Google search operators (`site:`, `filetype:`, `intitle:`, quoted phrases, `OR`, `-exclusions`, `after:`/`before:`) in the query instead of translating them onto vendor-specific filters; path-qualified `site:` filters are sent as plain terms and enforced by the result post-filter ([#12021](https://github.com/can1357/oh-my-pi/pull/12021) by [@googio](https://github.com/googio))
 
 ### Changed
 
