@@ -10,22 +10,49 @@ export function quotePosixArgv(argv: readonly string[]): string {
 	return argv.map(quotePosixArgument).join(" ");
 }
 
-/** Quote one argument for PowerShell: single quotes, with `'` doubled. */
+/** PowerShell treats ASCII and smart apostrophes as single-quote delimiters. */
 export function quotePowerShellArgument(value: string): string {
-	return `'${value.replace(/'/g, "''")}'`;
+	return `'${value.replace(/['\u2018-\u201b]/g, "$&$&")}'`;
 }
 
+export type InteractiveShell = "posix" | "fish" | "powershell" | "cmd" | "unknown";
+
 /**
- * Quote one argument for pasting into the user's interactive shell. Plain words
- * (including Windows drive paths) stay bare, which is valid in POSIX shells,
- * PowerShell, and cmd.exe alike. Anything else is quoted for PowerShell on
- * Windows (the only shell omp targets there, see `--alias`) and POSIX elsewhere.
+ * Best-effort command-hint selection, not parent-process detection: SHELL usually
+ * names the login shell, and PowerShell/MSYS variables can survive nested shells.
+ * Keep the inferred dialect visible to users rather than claiming certainty.
  */
-export function quoteShellArgument(value: string, platform: NodeJS.Platform = process.platform): string {
-	const win32 = platform === "win32";
-	const bare = win32 ? /^[\w@%+=:,./\\-]+$/ : /^[\w@%+=:,./-]+$/;
-	if (bare.test(value)) return value;
-	return win32 ? quotePowerShellArgument(value) : quotePosixArgument(value);
+export function detectInteractiveShell(
+	env: NodeJS.ProcessEnv = process.env,
+	platform: NodeJS.Platform = process.platform,
+): InteractiveShell {
+	const shell = (env.SHELL ?? "")
+		.split(/[\\/]/)
+		.at(-1)
+		?.toLowerCase()
+		.replace(/\.exe$/, "");
+	if (shell === "pwsh" || shell === "powershell") return "powershell";
+	// An explicit SHELL outranks inherited PowerShell environment variables.
+	if (shell && /^(?:ba|z|da|k|a)?sh$/.test(shell)) return "posix";
+	if (shell === "fish") return "fish";
+	if (shell === "cmd") return "cmd";
+	if (shell) return "unknown";
+	if (env.PSModulePath || env.PSMODULEPATH || env.psmodulepath || env.POWERSHELL_DISTRIBUTION_CHANNEL) {
+		return "powershell";
+	}
+	// Do not assume Windows means PowerShell. cmd needs a different quoting
+	// strategy, and arbitrary interactive cmd arguments cannot be quoted safely.
+	return platform === "win32" ? "cmd" : "unknown";
+}
+
+/** Quote one argument for an explicitly selected shell dialect. */
+export function quoteShellArgument(value: string, shell: Exclude<InteractiveShell, "cmd" | "unknown">): string {
+	// Restrict bare words to syntax shared by these shells (no PowerShell
+	// splatting, commas, smart quotes, or POSIX expansions).
+	if (/^[\w./:-]+$/.test(value)) return value;
+	if (shell === "powershell") return quotePowerShellArgument(value);
+	if (shell === "fish") return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+	return quotePosixArgument(value);
 }
 
 function quotePosixUtf8Run(value: string): string {

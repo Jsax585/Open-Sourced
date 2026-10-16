@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { TempDir } from "@oh-my-pi/pi-utils";
 import {
 	installProfileAlias,
 	readProfileAliasConfigFile,
@@ -481,3 +483,42 @@ describe("profile alias installer", () => {
 		expect(result.reloadedWith).toBe(". '//server/share/me/.bashrc'");
 	});
 });
+
+const pwsh = Bun.which("pwsh");
+
+it.skipIf(!pwsh)(
+	"reloads and executes a source alias whose script and profile paths contain smart apostrophes",
+	async () => {
+		const tmp = TempDir.createSync("@omp-alias-smart-quotes-");
+		try {
+			const homeDir = path.join(tmp.path(), "O‘Brien’s home");
+			const scriptPath = path.join(homeDir, "source‘’cli.ts");
+			await fs.mkdir(homeDir, { recursive: true });
+			await Bun.write(scriptPath, "console.log(JSON.stringify(process.argv.slice(2)));\n");
+			const result = await installProfileAlias({
+				profile: "work",
+				aliasName: "omp-work",
+				shellPath: pwsh!,
+				homeDir,
+				env: {},
+				command: resolveProfileAliasCommandFromProcess({
+					argv: [process.execPath, scriptPath],
+					compiled: false,
+				}),
+				writeFile: async (filePath, content) => {
+					await fs.mkdir(path.dirname(filePath), { recursive: true });
+					await Bun.write(filePath, content);
+				},
+			});
+			const execution = Bun.spawnSync(
+				[pwsh!, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `${result.reloadedWith}; omp-work payload`],
+				{ stdout: "pipe", stderr: "pipe" },
+			);
+			expect(execution.stderr.toString()).toBe("");
+			expect(execution.exitCode).toBe(0);
+			expect(JSON.parse(execution.stdout.toString().replace(/^\uFEFF/, ""))).toEqual(["--profile=work", "payload"]);
+		} finally {
+			await tmp.remove();
+		}
+	},
+);

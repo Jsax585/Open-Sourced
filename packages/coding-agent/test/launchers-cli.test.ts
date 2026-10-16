@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { collectLaunchers } from "@oh-my-pi/pi-coding-agent/cli/launchers-cli";
+import { collectLaunchers, formatLauncherHint } from "@oh-my-pi/pi-coding-agent/cli/launchers-cli";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getConfigRootDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getConfigRootDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { quotePosixArgument } from "../src/utils/shell-quote";
 
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
@@ -185,5 +186,65 @@ describe("collectLaunchers", () => {
 			expect(report.profiles.map(profile => profile.name)).toEqual(["work"]);
 			expect(report.overlays.map(overlay => overlay.missing)).toEqual([true]);
 		});
+	});
+});
+
+describe("launcher command hints", () => {
+	const bash = Bun.which("bash");
+
+	for (const [platform, value, expected] of [
+		["win32", "C:\\My Config\\O'Brien\\overlay.yml", "C:/My Config/O'Brien/overlay.yml"],
+		["win32", "\\\\server\\share\\My Config.yml", "//server/share/My Config.yml"],
+		["linux", "/tmp/My Config\\literal\\overlay.yml", "/tmp/My Config\\literal\\overlay.yml"],
+		["darwin", "/tmp/$(printf injected);O'Brien.yml", "/tmp/$(printf injected);O'Brien.yml"],
+	] as const) {
+		it.skipIf(!bash)(`round-trips ${platform} overlay paths with the correct separators: ${value}`, () => {
+			const runtime = process.platform === "win32" ? process.execPath.replace(/\\/g, "/") : process.execPath;
+			// Capture real argv from the rendered command, not an echo of its text.
+			const capture = `${quotePosixArgument(runtime)} -e 'console.log(JSON.stringify(process.argv.slice(1)))' -- "$@"`;
+			const hint = formatLauncherHint("--config", value, "posix", platform);
+			const result = Bun.spawnSync(
+				[bash!, "--noprofile", "--norc", "-c", `${APP_NAME}() { ${capture}; }; ${hint}`],
+				{
+					env: { ...process.env, BASH_ENV: "", ENV: "" },
+				},
+			);
+			expect(result.stderr.toString()).toBe("");
+			expect(result.exitCode).toBe(0);
+			expect(JSON.parse(result.stdout.toString())).toEqual(["--config", expected]);
+		});
+	}
+
+	for (const name of ["pwsh", "powershell"] as const) {
+		const executable = Bun.which(name);
+		it.skipIf(!executable)(`preserves native Windows separators in ${name} hints`, () => {
+			const value = "C:\\My Config\\O‘Brien’s\\overlay.yml";
+			const hint = formatLauncherHint("--config", value, "powershell", "win32");
+			const result = Bun.spawnSync(
+				[
+					executable!,
+					"-NoLogo",
+					"-NoProfile",
+					"-NonInteractive",
+					"-Command",
+					`function ${APP_NAME} { ConvertTo-Json -InputObject @($args) -Compress }; ${hint}`,
+				],
+				{ stdout: "pipe", stderr: "pipe" },
+			);
+			expect(result.stderr.toString()).toBe("");
+			expect(result.exitCode).toBe(0);
+			expect(JSON.parse(result.stdout.toString().replace(/^\uFEFF/, ""))).toEqual(["--config", value]);
+		});
+	}
+
+	it("does not offer misleading cmd or unknown-shell commands for expansion-sensitive paths", () => {
+		const value = "C:\\%PATH%\\!name!\\a&b.yml";
+		for (const shell of ["cmd", "unknown"] as const) {
+			const hint = formatLauncherHint("--config", value, shell, "win32");
+			expect(hint).not.toStartWith(`${APP_NAME} --config`);
+			expect(hint).toContain("Open PowerShell or bash");
+			expect(hint).toContain(JSON.stringify(value));
+			expect(hint).toContain(shell === "cmd" ? "cmd.exe command hints unavailable" : "shell not recognized");
+		}
 	});
 });

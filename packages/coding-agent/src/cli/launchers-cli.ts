@@ -23,7 +23,7 @@ import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { getModelPreset, getModelPresetNames } from "../config/model-presets";
 import { Settings } from "../config/settings";
 import { expandTilde } from "../tools/path-utils";
-import { quoteShellArgument } from "../utils/shell-quote";
+import { detectInteractiveShell, type InteractiveShell, quoteShellArgument } from "../utils/shell-quote";
 import { CliUsageError } from "./usage-error";
 
 const OVERLAY_EXTENSION = /\.ya?ml$/;
@@ -209,12 +209,31 @@ const OVERLAY_SOURCE_TAGS: Record<LauncherOverlay["source"], string> = {
 	dir: "",
 };
 
+/** Format a hint in one shell dialect; only filesystem paths get Windows separator normalization. */
+export function formatLauncherHint(
+	flag: "--profile" | "--config",
+	value: string,
+	shell: InteractiveShell,
+	platform: NodeJS.Platform = process.platform,
+): string {
+	if (shell === "cmd" || shell === "unknown") {
+		const reason = shell === "cmd" ? "cmd.exe command hints unavailable" : "shell not recognized";
+		return `Open PowerShell or bash; run ${APP_NAME} with ${flag} set to ${JSON.stringify(value)} (${reason})`;
+	}
+	const argument =
+		flag === "--config" && platform === "win32" && shell !== "powershell" ? value.replace(/\\/g, "/") : value;
+	return `${APP_NAME} ${flag} ${quoteShellArgument(argument, shell)}`;
+}
+
 function renderText(report: LaunchersReport): void {
+	const shell = detectInteractiveShell();
+	writeLine(chalk.dim(`Command hints: ${shell} (inferred from environment; nested shells may differ).`));
+	writeLine();
 	writeLine(chalk.bold(`Profiles (${shortenPath(report.profilesDir)})`));
 	writeRows(
 		report.profiles.map(profile => [
 			profile.name,
-			`${APP_NAME} --profile ${quoteShellArgument(profile.name)}${profile.active ? "  [active]" : ""}`,
+			`${formatLauncherHint("--profile", profile.name, shell)}${profile.active ? "  [active]" : ""}`,
 		]),
 		"(none)",
 	);
@@ -230,7 +249,7 @@ function renderText(report: LaunchersReport): void {
 	writeRows(
 		report.overlays.map(overlay => [
 			overlay.name,
-			`${APP_NAME} --config ${quoteShellArgument(overlay.path)}${OVERLAY_SOURCE_TAGS[overlay.source]}${overlay.missing ? "  [missing]" : ""}`,
+			`${formatLauncherHint("--config", overlay.path, shell)}${OVERLAY_SOURCE_TAGS[overlay.source]}${overlay.missing ? "  [missing]" : ""}`,
 		]),
 		report.overlayDir ? "(none)" : "(none; pass --overlay-dir <dir> to scan a directory of overlay files)",
 	);

@@ -1,13 +1,9 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { normalizeProfileName } from "@oh-my-pi/pi-utils/dirs";
-import { quotePosixArgument } from "../utils/shell-quote";
+import { quotePosixArgument, quotePowerShellArgument } from "../utils/shell-quote";
 
 export type ProfileAliasShell = "bash" | "zsh" | "fish" | "powershell" | "pwsh";
-
-function quoteForPowerShell(pathValue: string): string {
-	return `'${pathValue.replace(/'/g, `''`)}'`;
-}
 
 export interface ProfileAliasCommand {
 	display: string;
@@ -215,7 +211,7 @@ export function resolveProfileAliasCommandFromProcess({
 		display: `${posixRuntime} ${posixScriptPath}`,
 		posix,
 		fish: posix,
-		powerShell: `${quoteForPowerShell(runtime)} ${quoteForPowerShell(scriptPath)}`,
+		powerShell: `${quotePowerShellArgument(runtime)} ${quotePowerShellArgument(scriptPath)}`,
 	};
 }
 
@@ -371,7 +367,7 @@ export async function installProfileAlias(options: ProfileAliasInstallOptions): 
 			shell === "fish"
 				? `source ${quotePosixArgument(configPath)}`
 				: shell === "powershell" || shell === "pwsh"
-					? `. ${quoteForPowerShell(configPath)}`
+					? `. ${quotePowerShellArgument(configPath)}`
 					: `. ${quotePosixArgument(configPath)}`,
 	};
 }
