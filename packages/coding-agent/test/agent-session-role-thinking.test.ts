@@ -182,6 +182,29 @@ describe("AgentSession role model thinking behavior", () => {
 		expect(session.autoResolvedThinkingLevel()).toBe(Effort.Medium);
 	});
 
+	it("keeps classifier results inside an auto:<floor>-<ceiling> range", async () => {
+		const model = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		await createSession({
+			initialModelId: model.id,
+			initialThinkingLevel: Effort.High,
+			modelRoles: { default: `${model.provider}/${model.id}` },
+		});
+		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+		const classify = vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.XHigh);
+
+		session.setThinkingLevel("auto:low-medium");
+		// The provisional level already respects the ceiling before any turn is classified.
+		expect(session.thinkingLevel).toBe(Effort.Medium);
+
+		await session.prompt("Redesign the storage layer");
+		expect(session.configuredThinkingLevel()).toBe("auto:low-medium");
+		expect(session.thinkingLevel).toBe(Effort.Medium);
+
+		classify.mockResolvedValue(Effort.Minimal);
+		await session.prompt("Rename a variable");
+		expect(session.thinkingLevel).toBe(Effort.Low);
+	});
+
 	it("preserves current thinking when switching into default/no-suffix role", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
 		const slowModel = getAnthropicModelOrThrow("claude-sonnet-4-6");

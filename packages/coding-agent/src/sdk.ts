@@ -250,7 +250,7 @@ import {
 	type ConfiguredThinkingLevel,
 	concreteThinkingLevel,
 	isAutoThinking,
-	parseAutoThinkingFloor,
+	parseAutoThinkingBounds,
 	parseConfiguredThinkingLevel,
 	parseThinkingLevel,
 	resolveProvisionalAutoLevel,
@@ -2112,8 +2112,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		configuredLevel: ConfiguredThinkingLevel | undefined,
 	): ThinkingLevel | undefined => {
 		if (isAutoThinking(configuredLevel)) {
-			const floor = parseAutoThinkingFloor(configuredLevel) ?? cfgProvidersAutoThinkingMinEffort.get(settings);
-			return resolveProvisionalAutoLevel(selectedModel, floor);
+			const bounds = parseAutoThinkingBounds(configuredLevel);
+			const floor = bounds?.floor ?? cfgProvidersAutoThinkingMinEffort.get(settings);
+			return resolveProvisionalAutoLevel(selectedModel, floor, bounds?.ceiling);
 		}
 		return resolveThinkingLevelForModel(selectedModel, concreteThinkingLevel(configuredLevel));
 	};

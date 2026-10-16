@@ -2092,7 +2092,7 @@ export class TurnRecovery {
 		const active = this.#host.model();
 		if (!active || formatModelStringWithRouting(candidate) !== formatModelStringWithRouting(active)) return false;
 		const configured = this.#host.configuredThinkingLevel();
-		const requested = selector.thinkingLevel ?? configured;
+		const requested = selector.autoThinkingLevel ?? selector.thinkingLevel ?? configured;
 		if (isAutoThinking(requested) || isAutoThinking(configured)) return requested === configured;
 		const effective = resolveThinkingLevelForModel(
 			candidate,
@@ -2121,9 +2121,10 @@ export class TurnRecovery {
 		if (options?.signal?.aborted) return false;
 
 		// Capture the configured selector (auto-aware) so a fallback chain preserves
-		// `auto` instead of collapsing it to the level it resolved to this turn.
+		// `auto` instead of collapsing it to the level it resolved to this turn. An
+		// entry's own `:auto[:<floor>[-<ceiling>]]` suffix replaces it.
 		const currentThinkingLevel = this.#host.configuredThinkingLevel();
-		const requestedThinkingLevel = selector.thinkingLevel ?? currentThinkingLevel;
+		const requestedThinkingLevel = selector.autoThinkingLevel ?? selector.thinkingLevel ?? currentThinkingLevel;
 		// A fallback selector's explicit level (or the carried level after the
 		// replacement model's floor clamp) must never exceed the session's
 		// per-spawn effort ceiling.

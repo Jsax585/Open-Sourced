@@ -2489,6 +2489,36 @@ pub enum ConfiguredThinkingLevel {
 	AutoXhigh,
 	#[serde(rename = "auto:max")]
 	AutoMax,
+	#[serde(rename = "auto:minimal-low")]
+	AutoMinimalLow,
+	#[serde(rename = "auto:minimal-medium")]
+	AutoMinimalMedium,
+	#[serde(rename = "auto:minimal-high")]
+	AutoMinimalHigh,
+	#[serde(rename = "auto:minimal-xhigh")]
+	AutoMinimalXhigh,
+	#[serde(rename = "auto:minimal-max")]
+	AutoMinimalMax,
+	#[serde(rename = "auto:low-medium")]
+	AutoLowMedium,
+	#[serde(rename = "auto:low-high")]
+	AutoLowHigh,
+	#[serde(rename = "auto:low-xhigh")]
+	AutoLowXhigh,
+	#[serde(rename = "auto:low-max")]
+	AutoLowMax,
+	#[serde(rename = "auto:medium-high")]
+	AutoMediumHigh,
+	#[serde(rename = "auto:medium-xhigh")]
+	AutoMediumXhigh,
+	#[serde(rename = "auto:medium-max")]
+	AutoMediumMax,
+	#[serde(rename = "auto:high-xhigh")]
+	AutoHighXhigh,
+	#[serde(rename = "auto:high-max")]
+	AutoHighMax,
+	#[serde(rename = "auto:xhigh-max")]
+	AutoXhighMax,
 	#[serde(rename = "inherit")]
 	Inherit,
 	#[serde(rename = "off")]
@@ -2518,6 +2548,21 @@ impl ConfiguredThinkingLevel {
 			Self::AutoHigh => "auto:high",
 			Self::AutoXhigh => "auto:xhigh",
 			Self::AutoMax => "auto:max",
+			Self::AutoMinimalLow => "auto:minimal-low",
+			Self::AutoMinimalMedium => "auto:minimal-medium",
+			Self::AutoMinimalHigh => "auto:minimal-high",
+			Self::AutoMinimalXhigh => "auto:minimal-xhigh",
+			Self::AutoMinimalMax => "auto:minimal-max",
+			Self::AutoLowMedium => "auto:low-medium",
+			Self::AutoLowHigh => "auto:low-high",
+			Self::AutoLowXhigh => "auto:low-xhigh",
+			Self::AutoLowMax => "auto:low-max",
+			Self::AutoMediumHigh => "auto:medium-high",
+			Self::AutoMediumXhigh => "auto:medium-xhigh",
+			Self::AutoMediumMax => "auto:medium-max",
+			Self::AutoHighXhigh => "auto:high-xhigh",
+			Self::AutoHighMax => "auto:high-max",
+			Self::AutoXhighMax => "auto:xhigh-max",
 			Self::Inherit => "inherit",
 			Self::Off => "off",
 			Self::Minimal => "minimal",

@@ -35,6 +35,12 @@
 - Fixed `ast_grep` reporting a clean "No matches found" for a pattern that does not parse in the target language (e.g. a bare C# identifier); it now lists the pattern's ERROR node as a parse issue ([#15950](https://github.com/can1357/oh-my-pi/issues/15950))
 - Fixed `--resume <id>` and session listings skipping transcripts placed in the session directory as symlinks ([#15878](https://github.com/can1357/oh-my-pi/issues/15878), [#15884](https://github.com/can1357/oh-my-pi/pull/15884) by [@peda-cos](https://github.com/peda-cos))
 - Fixed sessions with a deferred-connecting MCP server listing every routed MCP tool twice, once as a mount notice and once in route guidance ([#15982](https://github.com/can1357/oh-my-pi/pull/15982) by [@zcyoung2000](https://github.com/zcyoung2000))
+- Added `providers.autoThinkingMinEffort` setting and `auto:<floor>` selector syntax to configure a minimum thinking effort floor for auto thinking ([#13836](https://github.com/can1357/oh-my-pi/pull/13836) by [@tuandinh0801](https://github.com/tuandinh0801))
+- Added `auto:<floor>-<ceiling>` thinking ranges (e.g. `auto:medium-xhigh`) for `defaultThinkingLevel`, `--thinking`, `/effort`, model roles, advisors and fallback-chain entries: auto thinking stays inside the range, and task `effort` hints map within it
+
+### Fixed
+
+- Fixed fallback-chain entries dropping an `:auto` thinking suffix; a session falling back to such an entry now applies its auto selector instead of keeping the previous level
 
 ## [18.11.2] - 2026-10-16
 

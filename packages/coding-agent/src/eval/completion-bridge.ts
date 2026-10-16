@@ -41,8 +41,10 @@ import {
 	resolveRetryFallbackChainKey,
 } from "../session/retry-fallback-chains";
 import {
+	clampAutoThinkingEffort,
 	isAutoThinking,
 	type ConfiguredThinkingLevel,
+	parseAutoThinkingBounds,
 	shouldDisableReasoning,
 	toReasoningEffort,
 } from "@oh-my-pi/pi-tui/thinking";
@@ -140,6 +142,25 @@ interface CompletionCandidate {
 }
 
 function reasoningForCandidate(
+	tier: CompletionTier,
+	model: Model<Api>,
+	level?: ConfiguredThinkingLevel,
+	parent?: Pick<CompletionCandidate, "reasoning" | "disableReasoning">,
+): Pick<CompletionCandidate, "reasoning" | "disableReasoning"> {
+	const resolved = unboundedReasoningForCandidate(tier, model, level, parent);
+	// completion() has no per-prompt classifier, but an `auto:<floor>[-<ceiling>]`
+	// selector's bounds are still the operator's limits: keep the default inside them.
+	const bounds = parseAutoThinkingBounds(level);
+	if (!bounds || resolved.disableReasoning || resolved.reasoning === undefined) return resolved;
+	return {
+		reasoning:
+			clampAutoThinkingEffort(model, resolved.reasoning, bounds.ceiling ?? Effort.Max, bounds.floor) ??
+			resolved.reasoning,
+		disableReasoning: false,
+	};
+}
+
+function unboundedReasoningForCandidate(
 	tier: CompletionTier,
 	model: Model<Api>,
 	level?: ConfiguredThinkingLevel,

@@ -26,8 +26,32 @@ export { replaceTabs, truncateToWidth, wrapTextWithAnsi } from "../utils";
 export const AUTO_THINKING_FLOORS = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as const;
 export type AutoThinkingFloor = (typeof AUTO_THINKING_FLOORS)[number];
 
-/** A thinking selector configured as a concrete level or automatic selection. */
-export type AutoThinkingLevel = "auto" | `auto:${AutoThinkingFloor}`;
+/** Effort levels that may serve as the maximum of an `auto:<floor>-<ceiling>` range. Excludes minimal. */
+export const AUTO_THINKING_CEILINGS = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max] as const;
+export type AutoThinkingCeiling = (typeof AUTO_THINKING_CEILINGS)[number];
+
+/** Every valid `auto:<floor>-<ceiling>` selector: floor strictly below ceiling, in ladder order. */
+export const AUTO_THINKING_RANGES = [
+	"auto:minimal-low",
+	"auto:minimal-medium",
+	"auto:minimal-high",
+	"auto:minimal-xhigh",
+	"auto:minimal-max",
+	"auto:low-medium",
+	"auto:low-high",
+	"auto:low-xhigh",
+	"auto:low-max",
+	"auto:medium-high",
+	"auto:medium-xhigh",
+	"auto:medium-max",
+	"auto:high-xhigh",
+	"auto:high-max",
+	"auto:xhigh-max",
+] as const;
+export type AutoThinkingRange = (typeof AUTO_THINKING_RANGES)[number];
+
+/** A thinking selector configured as automatic selection: `auto`, `auto:<floor>`, or `auto:<floor>-<ceiling>`. */
+export type AutoThinkingLevel = "auto" | `auto:${AutoThinkingFloor}` | AutoThinkingRange;
 export type ConfiguredThinkingLevel = ThinkingLevel | AutoThinkingLevel;
 
 /**

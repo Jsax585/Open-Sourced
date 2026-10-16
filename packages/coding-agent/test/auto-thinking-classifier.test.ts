@@ -9,9 +9,13 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	AUTO_THINKING,
+	AUTO_THINKING_CEILINGS,
+	AUTO_THINKING_FLOORS,
+	AUTO_THINKING_RANGES,
 	CLI_THINKING_LEVELS,
 	clampAutoThinkingEffort,
 	isAutoThinking,
+	parseAutoThinkingBounds,
 	parseAutoThinkingFloor,
 	parseConfiguredThinkingLevel,
 	parseEffort,
@@ -19,6 +23,8 @@ import {
 	resolveProvisionalAutoLevel,
 	resolveTaskEffortLevel,
 } from "@oh-my-pi/pi-tui/thinking";
+import { MAX_THINKING_SUFFIX_OPTIONS, splitThinkingSuffix } from "@oh-my-pi/pi-tui/overlays/model-selector";
+import { parseRetryFallbackSelector } from "@oh-my-pi/pi-coding-agent/session/retry-fallback-chains";
 import { cfgProvidersAutoThinkingMinEffort } from "@oh-my-pi/pi-coding-agent/session/settings";
 import type { TinyMemoryLocalModelKey } from "@oh-my-pi/pi-coding-agent/tiny/models";
 import { tinyModelClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
@@ -82,6 +88,42 @@ describe("auto thinking classifier helpers", () => {
 		expect(CLI_THINKING_LEVELS).toContain("auto");
 		expect(CLI_THINKING_LEVELS).toContain("auto:xhigh");
 		expect(CLI_THINKING_LEVELS).not.toContain("auto:max");
+	});
+
+	it("parses auto ranges into one canonical selector and rejects non-increasing bounds", () => {
+		expect(parseConfiguredThinkingLevel("auto:medium-xhigh")).toBe("auto:medium-xhigh");
+		// Abbreviations canonicalize, like the floor-only form.
+		expect(parseConfiguredThinkingLevel("auto:med-xhi")).toBe("auto:medium-xhigh");
+		expect(parseAutoThinkingBounds("auto:low-max")).toEqual({ floor: Effort.Low, ceiling: Effort.Max });
+		expect(parseAutoThinkingBounds("auto:high")).toEqual({ floor: Effort.High });
+		for (const invalid of ["auto:high-high", "auto:xhigh-medium", "auto:max-max", "auto:low-high-max", "auto:low-"]) {
+			expect(parseConfiguredThinkingLevel(invalid)).toBeUndefined();
+			expect(isAutoThinking(invalid)).toBe(false);
+		}
+		// The literal list the settings enum and RPC wire are built from is exactly the
+		// set of pairs the parser accepts; a drift either way silently rejects a valid
+		// config value or advertises one the session cannot honor.
+		const accepted = AUTO_THINKING_FLOORS.flatMap(floor =>
+			AUTO_THINKING_CEILINGS.map(ceiling => `auto:${floor}-${ceiling}`),
+		).filter(selector => parseConfiguredThinkingLevel(selector) !== undefined);
+		expect(accepted).toEqual([...AUTO_THINKING_RANGES]);
+	});
+
+	it("splits an auto range off model and fallback-chain selectors", () => {
+		expect(splitThinkingSuffix("openai-codex/gpt-6-luna:auto:medium-xhigh", -1, MAX_THINKING_SUFFIX_OPTIONS)).toEqual(
+			{ base: "openai-codex/gpt-6-luna", level: "auto:medium-xhigh" },
+		);
+		expect(parseRetryFallbackSelector("openai-codex/gpt-6-luna:auto:medium-xhigh")).toEqual({
+			raw: "openai-codex/gpt-6-luna:auto:medium-xhigh",
+			provider: "openai-codex",
+			id: "gpt-6-luna",
+			thinkingLevel: undefined,
+			autoThinkingLevel: "auto:medium-xhigh",
+		});
+		// An invalid range is not a suffix; the text stays part of the model id.
+		expect(splitThinkingSuffix("p/m:auto:high-low", -1, MAX_THINKING_SUFFIX_OPTIONS)).toEqual({
+			base: "p/m:auto:high-low",
+		});
 	});
 
 	it("expands the local reasoning classifier budget", async () => {
@@ -476,6 +518,60 @@ describe("auto thinking classifier helpers", () => {
 			{ ...fixture, settings: settingsWithFloor },
 		);
 		expect(mediumFloorEffort).toBe(Effort.Medium);
+	});
+
+	it("caps classification at a range ceiling and lets an auto:<floor>-max range offer max", async () => {
+		// Ceiling below the classifier's answer: the range wins over the global setting.
+		const capped = createOnlineFixture(buildLadderModel("mock-max", MAX_LADDER), "xhigh");
+		expect(
+			await classifyDifficulty(
+				{ request: "cut over the storage layer" },
+				{ ...capped.deps, maxEffort: Effort.Medium },
+			),
+		).toBe(Effort.Medium);
+
+		vi.restoreAllMocks();
+
+		// `providers.autoThinkingMaxEffort` is xhigh, so `max` is off-ladder by default
+		// (see the opt-in test above); a `-max` range ceiling offers it for this turn.
+		const lifted = createOnlineFixture(buildLadderModel("mock-max", MAX_LADDER), "max");
+		expect(
+			await classifyDifficulty(
+				{ request: "untangle this cross-service race" },
+				{ ...lifted.deps, maxEffort: Effort.Max },
+			),
+		).toBe(Effort.Max);
+
+		vi.restoreAllMocks();
+
+		// The local bucket question still respects a lower ceiling.
+		const local = createLocalClassifierFixture("qwen3-1.7b");
+		vi.spyOn(tinyModelClient, "complete").mockResolvedValue("hard");
+		expect(await classifyDifficulty({ request: "migrate the cluster" }, { ...local, maxEffort: Effort.High })).toBe(
+			Effort.High,
+		);
+	});
+
+	it("keeps the provisional auto level inside a range ceiling", () => {
+		const highDefault = buildLadderModel("mock-xhigh", XHIGH_LADDER);
+		// No selector ceiling: the High default stands.
+		expect(resolveProvisionalAutoLevel(highDefault, Effort.Low)).toBe(Effort.High);
+		expect(resolveProvisionalAutoLevel(highDefault, Effort.Low, Effort.Medium)).toBe(Effort.Medium);
+		// A ceiling above xhigh never lets the unclassified placeholder bill max.
+		expect(resolveProvisionalAutoLevel(buildLadderModel("mock-max", MAX_LADDER), Effort.Low, Effort.Max)).toBe(
+			Effort.High,
+		);
+	});
+
+	it("maps task effort hints inside the selector's range, under the task.maxEffort ceiling", () => {
+		const model = buildLadderModel("mock-max", MAX_LADDER);
+		const bounds = { floor: Effort.Medium, ceiling: Effort.XHigh } as const;
+		expect(resolveTaskEffortLevel(model, "lo", undefined, bounds)).toBe(Effort.Medium);
+		expect(resolveTaskEffortLevel(model, "med", undefined, bounds)).toBe(Effort.High);
+		expect(resolveTaskEffortLevel(model, "hi", undefined, bounds)).toBe(Effort.XHigh);
+		// The operator's hard ceiling still wins over a higher selector floor, and a
+		// floor above it lowers the spawn instead of failing it.
+		expect(resolveTaskEffortLevel(model, "lo", Effort.Low, bounds)).toBe(Effort.Low);
 	});
 
 	it("clamps max down to the ladder ceiling on models without a max tier", () => {

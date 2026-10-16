@@ -18,6 +18,10 @@
 ### Added
 
 - Added `auto:<floor>` thinking selector syntax support and minimum effort floor clamping ([#13836](https://github.com/can1357/oh-my-pi/pull/13836) by [@tuandinh0801](https://github.com/tuandinh0801))
+### Added
+
+- Added `auto:<floor>` thinking selector syntax support and minimum effort floor clamping ([#13836](https://github.com/can1357/oh-my-pi/pull/13836) by [@tuandinh0801](https://github.com/tuandinh0801))
+- Added `auto:<floor>-<ceiling>` thinking range selectors
 
 ## [18.11.2] - 2026-10-16
 

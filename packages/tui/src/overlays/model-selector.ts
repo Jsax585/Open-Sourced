@@ -1,5 +1,5 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
-import { AUTO_THINKING, type ConfiguredThinkingLevel, parseAutoThinkingFloor, parseThinkingLevel } from "../thinking";
+import { AUTO_THINKING, type ConfiguredThinkingLevel, parseAutoThinkingLevel, parseThinkingLevel } from "../thinking";
 
 /** Opt-in selectors that can otherwise be literal model-id suffixes. */
 export interface ThinkingSuffixOptions {
@@ -27,12 +27,8 @@ export function parseThinkingSuffix(
 	const level = parseThinkingLevel(value);
 	if (level === ThinkingLevel.Max) return options?.allowMaxSuffix === true ? level : undefined;
 	if (level !== undefined) return level;
-	if (options?.allowAutoAlias === true) {
-		if (value === AUTO_THINKING) return AUTO_THINKING;
-		if (value.startsWith("auto:")) {
-			const floor = parseAutoThinkingFloor(value);
-			return floor ? `auto:${floor}` : undefined;
-		}
+	if (options?.allowAutoAlias === true && (value === AUTO_THINKING || value.startsWith("auto:"))) {
+		return parseAutoThinkingLevel(value);
 	}
 	return undefined;
 }
@@ -53,16 +49,12 @@ export function splitThinkingSuffix(
 	options?: ThinkingSuffixOptions,
 ): { base: string; level?: ConfiguredThinkingLevel } {
 	if (options?.allowAutoAlias === true) {
-		const autoMatch = /:auto(?::([a-zA-Z]+))?$/i.exec(pattern);
+		// `:auto`, `:auto:<floor>`, or `:auto:<floor>-<ceiling>`. Matched as a whole because
+		// the selector carries its own colon, which the last-colon split below would cut.
+		const autoMatch = /:(auto(?::[a-zA-Z]+(?:-[a-zA-Z]+)?)?)$/i.exec(pattern);
 		if (autoMatch && autoMatch.index > minColonIndex) {
-			const floorPart = autoMatch[1];
-			if (!floorPart) {
-				return { base: pattern.slice(0, autoMatch.index), level: AUTO_THINKING };
-			}
-			const floor = parseAutoThinkingFloor(`auto:${floorPart}`);
-			if (floor) {
-				return { base: pattern.slice(0, autoMatch.index), level: `auto:${floor}` };
-			}
+			const level = parseAutoThinkingLevel(autoMatch[1].toLowerCase());
+			if (level) return { base: pattern.slice(0, autoMatch.index), level };
 		}
 	}
 	const colonIdx = pattern.lastIndexOf(":");

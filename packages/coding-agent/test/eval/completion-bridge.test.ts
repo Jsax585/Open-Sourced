@@ -628,6 +628,25 @@ describe("runEvalCompletion", () => {
 		]);
 	});
 
+	it("keeps the tier's default effort inside an auto range on the selector", async () => {
+		const model = makeReasoningModel("slow-range");
+		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "ok" }));
+
+		// The slow tier defaults to high (see above); the range caps it.
+		await runEvalCompletionAndWait(
+			{ prompt: "q", model: "slow" },
+			{
+				session: makeSession({
+					available: [SMOL, DEFAULT, model],
+					roles: { slow: "p/slow-range:auto:low-medium" },
+				}),
+			},
+		);
+
+		const opts = spy.mock.calls[0]?.[2] as { reasoning?: unknown };
+		expect(opts.reasoning).toBe(Effort.Medium);
+	});
+
 	it("does not parse :max from a literal model id as an effort selector", async () => {
 		const model = makeReasoningModel("slow:max");
 		const session = makeSession({ available: [SMOL, DEFAULT, model], roles: { slow: "p/slow:max" } });

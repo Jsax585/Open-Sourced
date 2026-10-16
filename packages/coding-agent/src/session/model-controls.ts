@@ -38,7 +38,7 @@ import {
 	clampAutoThinkingEffort,
 	clampThinkingLevelToCeiling,
 	isAutoThinking,
-	parseAutoThinkingFloor,
+	parseAutoThinkingBounds,
 	resolveProvisionalAutoLevel,
 	resolveThinkingLevelForModel,
 	shouldDisableReasoning,
@@ -94,11 +94,17 @@ export class ModelControls {
 	#autoResolvedLevel: Effort | undefined;
 	#serviceTierByFamily: ServiceTierByFamily;
 
-	#resolveAutoThinkingFloor(level?: ConfiguredThinkingLevel): Effort {
-		return (
-			parseAutoThinkingFloor(level ?? this.#configuredAutoLevel) ??
-			cfgProvidersAutoThinkingMinEffort.get(this.#host.settings)
-		);
+	/**
+	 * Bounds for auto resolution: the selector's floor (else `providers.autoThinkingMinEffort`)
+	 * and the selector's range ceiling, if it carries one. Without a selector ceiling the
+	 * classifier applies `providers.autoThinkingMaxEffort` itself.
+	 */
+	#resolveAutoThinkingBounds(level?: ConfiguredThinkingLevel): { floor: Effort; ceiling?: Effort } {
+		const bounds = parseAutoThinkingBounds(level ?? this.#configuredAutoLevel);
+		return {
+			floor: bounds?.floor ?? cfgProvidersAutoThinkingMinEffort.get(this.#host.settings),
+			ceiling: bounds?.ceiling,
+		};
 	}
 
 	constructor(
@@ -118,10 +124,10 @@ export class ModelControls {
 			// Keep auto pending until the first turn while exposing a valid wire effort.
 			this.#autoThinking = true;
 			this.#configuredAutoLevel = options.thinkingLevel;
-			const floor = this.#resolveAutoThinkingFloor(options.thinkingLevel);
+			const { floor, ceiling } = this.#resolveAutoThinkingBounds(options.thinkingLevel);
 			this.#thinkingLevel = clampThinkingLevelToCeiling(
 				this.#model,
-				resolveProvisionalAutoLevel(this.#model, floor),
+				resolveProvisionalAutoLevel(this.#model, floor, ceiling),
 				this.#thinkingLevelCeiling,
 			);
 		} else {
@@ -190,11 +196,11 @@ export class ModelControls {
 		this.#autoThinking = isAutoThinking(level);
 		this.#configuredAutoLevel = isAutoThinking(level) ? level : undefined;
 		this.#autoResolvedLevel = undefined;
-		const floor = this.#resolveAutoThinkingFloor(level);
+		const { floor, ceiling } = this.#resolveAutoThinkingBounds(level);
 		this.#thinkingLevel = isAutoThinking(level)
 			? clampThinkingLevelToCeiling(
 					this.#model,
-					resolveProvisionalAutoLevel(this.#model, floor),
+					resolveProvisionalAutoLevel(this.#model, floor, ceiling),
 					this.#thinkingLevelCeiling,
 				)
 			: resolveThinkingLevelForModel(
@@ -543,10 +549,10 @@ export class ModelControls {
 	 */
 	setThinkingLevel(level: ConfiguredThinkingLevel | undefined, persist: boolean = false): void {
 		if (isAutoThinking(level)) {
-			const floor = this.#resolveAutoThinkingFloor(level);
+			const { floor, ceiling } = this.#resolveAutoThinkingBounds(level);
 			const provisional = clampThinkingLevelToCeiling(
 				this.#model,
-				resolveProvisionalAutoLevel(this.#model, floor),
+				resolveProvisionalAutoLevel(this.#model, floor, ceiling),
 				this.#thinkingLevelCeiling,
 			);
 			const wasAuto = this.#autoThinking;
@@ -663,13 +669,14 @@ export class ModelControls {
 		// nothing to pick — skip classification rather than discard its result.
 		if (getSupportedEfforts(model).length === 0) return;
 
-		const floor = this.#resolveAutoThinkingFloor();
+		const { floor, ceiling } = this.#resolveAutoThinkingBounds();
 		let resolved: Effort | undefined;
 		if (this.#host.magicKeywordEnabled("ultrathink") && containsMagicKeyword(promptText, "ultrathink")) {
 			// The user explicitly asked for maximum thinking; bypass the classifier
 			// (and the `providers.autoThinkingMaxEffort` ceiling) and jump straight
-			// to the highest supported level for this model.
-			resolved = clampAutoThinkingEffort(model, Effort.Max, Effort.Max, floor);
+			// to the highest supported level for this model. A selector range ceiling
+			// is the operator's explicit bound and still applies.
+			resolved = clampAutoThinkingEffort(model, Effort.Max, ceiling ?? Effort.Max, floor);
 		} else {
 			const controller = new AbortController();
 			const timer = setTimeout(() => controller.abort(), ModelControls.#AUTO_THINKING_TIMEOUT_MS);
@@ -687,6 +694,7 @@ export class ModelControls {
 						sessionId: this.#host.sessionId(),
 						signal: controller.signal,
 						minEffort: floor,
+						maxEffort: ceiling,
 						metadataResolver: provider => this.#host.agent.metadataForProvider(provider),
 						onUsage: usage => {
 							const entryId = this.#host.sessionManager.appendModelUsage(usage, usageOwner);
@@ -711,8 +719,8 @@ export class ModelControls {
 		const rawEffort = resolved ?? this.#autoResolvedLevel;
 		const effectiveEffort =
 			rawEffort !== undefined
-				? clampAutoThinkingEffort(model, rawEffort, Effort.Max, floor)
-				: resolveProvisionalAutoLevel(model, floor);
+				? clampAutoThinkingEffort(model, rawEffort, ceiling ?? Effort.Max, floor)
+				: resolveProvisionalAutoLevel(model, floor, ceiling);
 		const effort = clampThinkingLevelToCeiling(model, effectiveEffort, this.#thinkingLevelCeiling);
 		if (effort === undefined) return;
 		const shouldPersistResolution = this.#thinkingLevel !== effort;

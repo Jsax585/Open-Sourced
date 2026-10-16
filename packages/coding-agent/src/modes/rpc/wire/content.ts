@@ -268,7 +268,7 @@ export const modelDefs = {
 		"Thinking selector; `inherit` defers to a higher-level selector.",
 	),
 	ConfiguredThinkingLevel: doc(
-		"'auto' | 'auto:minimal' | 'auto:low' | 'auto:medium' | 'auto:high' | 'auto:xhigh' | 'auto:max' | 'inherit' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'",
+		"'auto' | 'auto:minimal' | 'auto:low' | 'auto:medium' | 'auto:high' | 'auto:xhigh' | 'auto:max' | 'auto:minimal-low' | 'auto:minimal-medium' | 'auto:minimal-high' | 'auto:minimal-xhigh' | 'auto:minimal-max' | 'auto:low-medium' | 'auto:low-high' | 'auto:low-xhigh' | 'auto:low-max' | 'auto:medium-high' | 'auto:medium-xhigh' | 'auto:medium-max' | 'auto:high-xhigh' | 'auto:high-max' | 'auto:xhigh-max' | 'inherit' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'",
 		"User-configured thinking selector, including automatic selection.",
 	),
 	ModelCost: doc(

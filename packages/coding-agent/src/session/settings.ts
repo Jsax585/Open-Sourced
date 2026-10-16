@@ -28,6 +28,7 @@ import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import {
 	AUTO_THINKING,
 	AUTO_THINKING_FLOORS,
+	AUTO_THINKING_RANGES,
 	type AutoThinkingFloor,
 	getConfiguredThinkingLevelMetadata,
 	getThinkingLevelMetadata,
@@ -201,6 +202,7 @@ export const cfgImagesDescribeForTextModels = register({
 export const AUTO_THINKING_LEVELS = [
 	AUTO_THINKING,
 	...AUTO_THINKING_FLOORS.map(effort => `auto:${effort}` as const),
+	...AUTO_THINKING_RANGES,
 ] as const;
 
 // Reasoning and prompts
