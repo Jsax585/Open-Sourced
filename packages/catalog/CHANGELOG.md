@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added TokenRhythm (`tokenrhythm`) as a provider: `/login tokenrhythm` with an API key, the live `/v1/models` roster, and per-family reasoning controls verified against the host (DeepSeek V4 toggle plus low/high/max; Qwen and Seed toggle; GLM, Kimi, LongCat, MiniMax and MiMo always on with no disable field)
+
 ## [18.11.2] - 2026-10-16
 
 ### Added
