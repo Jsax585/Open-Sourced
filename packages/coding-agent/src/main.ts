@@ -445,7 +445,10 @@ export async function submitInteractiveInput(
 				display: input.display ?? false,
 				attribution: "agent" as const,
 			};
-			await session.promptCustomMessage(message, { streamingBehavior });
+			await session.promptCustomMessage(message, {
+				streamingBehavior,
+				...(input.admissionOrigin ? { admissionOrigin: input.admissionOrigin } : {}),
+			});
 		} else if (input.synthetic) {
 			// Synthetic continue shortcuts are hidden developer prompts. The streaming
 			// queue (#queueUserMessage) only carries user-attributed messages, so we do

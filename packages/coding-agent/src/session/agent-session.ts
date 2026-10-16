@@ -1847,6 +1847,7 @@ export class AgentSession implements SettingsScope {
 			unexpectedStopAbortSignal: () => this.#postPromptTasksAbortController.signal,
 			sessionId: () => this.sessionId,
 			emitSessionEvent: event => this.#emitSessionEvent(event),
+			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 			waitForSessionMessagePersistence: message => this.#waitForSessionMessagePersistence(message),
 			appendSessionMessage: message => this.#appendSessionMessage(message),
@@ -4912,6 +4913,7 @@ export class AgentSession implements SettingsScope {
 					synthetic: true,
 				},
 				autoContinuePrompt,
+				"continuation",
 				{
 					skipPostPromptRecoveryWait: true,
 					prependMessages: eagerNudges.length > 0 ? eagerNudges : undefined,
@@ -7580,7 +7582,7 @@ export class AgentSession implements SettingsScope {
 		let turnError: unknown;
 		let dispatched = false;
 		try {
-			dispatched = await this.#promptWithMessage(message, expandedText, {
+			dispatched = await this.#promptWithMessage(message, expandedText, options?.admissionOrigin ?? "new-turn", {
 				...options,
 				images: normalizedImages,
 				prependMessages:
@@ -7631,7 +7633,7 @@ export class AgentSession implements SettingsScope {
 	 */
 	async promptCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "onPromptAdmitted"> & {
+		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "onPromptAdmitted" | "admissionOrigin"> & {
 			queueChipText?: string;
 			queueOnly?: boolean;
 		},
@@ -7641,7 +7643,7 @@ export class AgentSession implements SettingsScope {
 
 	async #promptCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "onPromptAdmitted"> & {
+		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "onPromptAdmitted" | "admissionOrigin"> & {
 			queueChipText?: string;
 			queueOnly?: boolean;
 		},
@@ -7662,7 +7664,7 @@ export class AgentSession implements SettingsScope {
 	async #dispatchCustomPrompt<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
 		options:
-			| (Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "onPromptAdmitted"> & {
+			| (Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "onPromptAdmitted" | "admissionOrigin"> & {
 					queueChipText?: string;
 					queueOnly?: boolean;
 			  })
@@ -7757,13 +7759,18 @@ export class AgentSession implements SettingsScope {
 			outcome.sessionClaimed = true;
 			return true;
 		}
-		outcome.sessionClaimed = await this.#promptWithMessage(preparedMessage, textContent, {
-			...options,
-			prependMessages:
-				keywordNotices.length > 0 || descriptionNotice
-					? [...keywordNotices, ...(descriptionNotice ? [descriptionNotice] : [])]
-					: undefined,
-		});
+		outcome.sessionClaimed = await this.#promptWithMessage(
+			preparedMessage,
+			textContent,
+			options?.admissionOrigin ?? "new-turn",
+			{
+				...options,
+				prependMessages:
+					keywordNotices.length > 0 || descriptionNotice
+						? [...keywordNotices, ...(descriptionNotice ? [descriptionNotice] : [])]
+						: undefined,
+			},
+		);
 		return outcome.sessionClaimed;
 	}
 
@@ -7926,6 +7933,7 @@ export class AgentSession implements SettingsScope {
 	async #promptWithMessage(
 		message: AgentMessage,
 		expandedText: string,
+		origin: "new-turn" | "continuation",
 		options?: Pick<
 			PromptOptions,
 			"toolChoice" | "images" | "skipCompactionCheck" | "solutionSpace" | "onPromptAdmitted"
@@ -7946,7 +7954,7 @@ export class AgentSession implements SettingsScope {
 		this.#promptSetupAbortController = setupAbort;
 		try {
 			options?.onPromptAdmitted?.();
-			await this.#recovery.maybeRestoreRetryFallbackPrimary();
+			await this.#recovery.maybeRestoreRetryFallbackPrimary(origin);
 			if (!(await this.#runUsageAwarePreflightForNextModelCall())) return false;
 			// Flush any pending bash messages before the new prompt
 			await this.#bash.flushPending();
@@ -8673,7 +8681,7 @@ export class AgentSession implements SettingsScope {
 		const prependMessages = queuedMessages.slice(0, -1);
 		const textContent = this.#getCustomMessageTextContent(message);
 		try {
-			await this.#promptWithMessage(message, textContent, {
+			await this.#promptWithMessage(message, textContent, "continuation", {
 				prependMessages,
 				skipPostPromptRecoveryWait: true,
 			});
@@ -10252,12 +10260,14 @@ export class AgentSession implements SettingsScope {
 	/** Selects the session thinking level and optionally persists it as the default. */
 	setThinkingLevel(level: ConfiguredThinkingLevel | undefined, persist: boolean = false): void {
 		this.#prewalk.releaseHandoff();
+		this.#recovery.onThinkingLevelSelected();
 		this.#models.setThinkingLevel(level, persist);
 	}
 
 	/** Advances through the thinking selectors supported by the active model. */
 	cycleThinkingLevel(): ConfiguredThinkingLevel | undefined {
 		this.#prewalk.releaseHandoff();
+		this.#recovery.onThinkingLevelSelected();
 		return this.#models.cycleThinkingLevel();
 	}
 

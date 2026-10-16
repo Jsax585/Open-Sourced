@@ -2419,7 +2419,9 @@ async function driveSessionToResult(
 	/**
 	 * Send a headless prompt, retrying pre-provider drops (`PromptDroppedError`).
 	 * Local slash commands are disabled so an assignment always reaches the
-	 * model. `forceFinalYield` arms the monitor's forced-final latch only while
+	 * model. Only the first attempt admits an assignment; dropped-prompt retries
+	 * keep its recovery state as continuations.
+	 * `forceFinalYield` arms the monitor's forced-final latch only while
 	 * an attempt dispatches, so another turn's incremental `yield` during drop
 	 * recovery stays incremental.
 	 */
@@ -2432,7 +2434,14 @@ async function driveSessionToResult(
 		for (let attempt = 1; attempt <= MAX_PROMPT_DISPATCH_ATTEMPTS; attempt++) {
 			if (forceFinalYield) monitor.markFinalYieldForced(true);
 			try {
-				await awaitAbortable(session.prompt(text, { ...promptOptions, runCommands: false, throwOnDrop: true }));
+				await awaitAbortable(
+					session.prompt(text, {
+						...promptOptions,
+						admissionOrigin: attempt === 1 ? (promptOptions.admissionOrigin ?? "new-turn") : "continuation",
+						runCommands: false,
+						throwOnDrop: true,
+					}),
+				);
 				return;
 			} catch (err) {
 				if (!(err instanceof PromptDroppedError)) throw err;
@@ -2465,7 +2474,12 @@ async function driveSessionToResult(
 			for (;;) {
 				try {
 					if (restore) await awaitAbortable(session.restoreInterruptedTurn());
-					else await dispatchPrompt(task, { attribution: "agent", solutionSpace }, "initial prompt");
+					else
+						await dispatchPrompt(
+							task,
+							{ attribution: "agent", solutionSpace, admissionOrigin: "new-turn" },
+							"initial prompt",
+						);
 					break;
 				} catch (error) {
 					promptAttempts++;
@@ -2531,6 +2545,7 @@ async function driveSessionToResult(
 						{
 							attribution: "agent",
 							synthetic: true,
+							admissionOrigin: "continuation",
 							...(isFinalRetry && reminderToolChoice ? { toolChoice: reminderToolChoice } : {}),
 						},
 						"yield reminder",
@@ -2617,7 +2632,11 @@ async function driveSessionToResult(
 						jobs,
 					});
 					try {
-						await dispatchPrompt(notice, { attribution: "agent", synthetic: true }, "async-pending notice");
+						await dispatchPrompt(
+							notice,
+							{ attribution: "agent", synthetic: true, admissionOrigin: "continuation" },
+							"async-pending notice",
+						);
 						await awaitAbortable(session.waitForIdle());
 					} catch (err) {
 						if (abortSignal.aborted || err instanceof ToolAbortError || err instanceof PromptDispatchError)

@@ -26,7 +26,7 @@ import { isFireworksFastModelId, toFireworksBaseModelId } from "@oh-my-pi/pi-cat
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { isUnexpectedSocketCloseMessage, logger, prompt, sleepLong } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
-import { formatModelStringWithRouting, resolveModelOverride } from "../config/model-resolver";
+import { formatModelStringWithRouting, resolveExactModelReference, resolveModelOverride } from "../config/model-resolver";
 
 import type { Settings } from "../config/settings";
 import type { RetryErrorUpdate } from "../extensibility/shared-events";
@@ -244,6 +244,7 @@ export interface TurnRecoveryHost {
 	unexpectedStopAbortSignal?(): AbortSignal;
 	sessionId(): string;
 	emitSessionEvent(event: AgentSessionEvent): Promise<void>;
+	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
 	scheduleAgentContinue(options: {
 		source: string;
 		delayMs?: number;
@@ -347,6 +348,7 @@ export class TurnRecovery {
 	#retryPromise: Promise<void> | undefined;
 	#retryResolve: (() => void) | undefined;
 	#activeRetryFallback: ActiveRetryFallbackState | undefined;
+	#retryFallbackRestoreTriedThisTurn = false;
 	#activeFallbackCreditRedemption?: {
 		targetSelector: string;
 		handle: AnthropicFallbackCreditHandle;
@@ -742,13 +744,19 @@ export class TurnRecovery {
 	}
 
 	/**
-	 * Restores the configured primary after fallback cooldown expiry.
+	 * Restores the configured primary according to the fallback revert policy.
 	 * @returns true when the active model was actually switched back to the
 	 * primary, so callers can re-run the pre-send context-fit check against the
 	 * reverted (possibly smaller) window before issuing the next request.
 	 */
-	maybeRestoreRetryFallbackPrimary(): Promise<boolean> {
-		return this.#maybeRestoreRetryFallbackPrimary();
+	maybeRestoreRetryFallbackPrimary(origin: "new-turn" | "continuation" = "continuation"): Promise<boolean> {
+		if (origin === "new-turn") this.#retryFallbackRestoreTriedThisTurn = false;
+		return this.#maybeRestoreRetryFallbackPrimary(origin);
+	}
+
+	/** Records an explicit effort selection, including a same-value re-selection. */
+	onThinkingLevelSelected(): void {
+		if (this.#activeRetryFallback) this.#activeRetryFallback.effortTouchedSinceFallback = true;
 	}
 
 	/** Applies model fallback policy from live usage health before a turn starts. */
@@ -2422,16 +2430,22 @@ export class TurnRecovery {
 		return true;
 	}
 
-	async #maybeRestoreRetryFallbackPrimary(): Promise<boolean> {
+	async #maybeRestoreRetryFallbackPrimary(origin: "new-turn" | "continuation"): Promise<boolean> {
 		if (!this.#activeRetryFallback) return false;
 		if (this.#activeRetryFallback.pinned) return false;
-		if (this.#getRetryFallbackRevertPolicy() !== "cooldown-expiry") return false;
+		const policy = this.#getRetryFallbackRevertPolicy();
+		if (policy === "never") return false;
+		if (policy === "next-turn") {
+			if (origin !== "new-turn" || this.#retryFallbackRestoreTriedThisTurn) return false;
+			this.#retryFallbackRestoreTriedThisTurn = true;
+		}
 
+		const activeFallback = this.#activeRetryFallback;
 		const {
 			originalSelector: originalSelectorRaw,
 			originalThinkingLevel,
 			lastAppliedFallbackThinkingLevel,
-		} = this.#activeRetryFallback;
+		} = activeFallback;
 		const originalSelector = parseRetryFallbackSelector(originalSelectorRaw, this.#host.modelRegistry);
 		if (!originalSelector) {
 			// Defensive: the stored selector is always produced by
@@ -2447,27 +2461,46 @@ export class TurnRecovery {
 		if (!currentModel) return false;
 		const currentSelector = formatRetryFallbackSelector(currentModel, this.#host.thinkingLevel());
 		if (currentSelector === originalSelector.raw) {
-			if (!this.isRetryFallbackSelectorSuppressed(originalSelector)) {
+			if (policy === "next-turn" || !this.isRetryFallbackSelectorSuppressed(originalSelector)) {
 				this.clearActiveRetryFallback();
 			}
 			return false;
 		}
-		if (this.isRetryFallbackSelectorSuppressed(originalSelector)) return false;
+		if (policy === "cooldown-expiry" && this.isRetryFallbackSelectorSuppressed(originalSelector)) return false;
 
-		const resolvedPrimary = resolveModelOverride(
-			[originalSelector.raw],
+		const primaryModel = resolveExactModelReference(
+			formatRetryFallbackBaseSelector(originalSelector),
 			this.#host.modelRegistry,
-			this.#host.settings,
 		);
-		const primaryModel =
-			resolvedPrimary.model ?? this.#host.modelRegistry.find(originalSelector.provider, originalSelector.id);
-		if (!primaryModel) return false;
+		if (!primaryModel) {
+			if (policy === "next-turn") {
+				this.#host.emitNotice(
+					"warning",
+					`Cannot restore primary ${originalSelectorRaw}: model is unavailable. Continuing on the fallback.`,
+					"retry-fallback",
+				);
+			}
+			return false;
+		}
 		const apiKey = await this.#host.modelRegistry.getApiKey(primaryModel, this.#host.sessionId());
-		if (!apiKey) return false;
+		if (this.#activeRetryFallback !== activeFallback) return false;
+		if (!apiKey) {
+			if (policy === "next-turn") {
+				this.#host.emitNotice(
+					"warning",
+					`Cannot restore primary ${originalSelectorRaw}: credentials are unavailable. Continuing on the fallback.`,
+					"retry-fallback",
+				);
+			}
+			return false;
+		}
 
 		const currentThinkingLevel = this.#host.configuredThinkingLevel();
 		const thinkingToApply =
-			currentThinkingLevel === lastAppliedFallbackThinkingLevel ? originalThinkingLevel : currentThinkingLevel;
+			(policy !== "next-turn" || !activeFallback.effortTouchedSinceFallback) &&
+			currentThinkingLevel === lastAppliedFallbackThinkingLevel
+				? originalThinkingLevel
+				: currentThinkingLevel;
 		const primarySelector = formatModelStringWithRouting(primaryModel);
 		const previousEditMode = this.#host.resolveActiveEditMode();
 		// Clear before the swap: `setModelWithProviderSessionReset` and

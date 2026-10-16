@@ -24,11 +24,15 @@ import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { parseModelString } from "@oh-my-pi/pi-tui/overlays/model-selector";
-import { parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { formatModelStringWithRouting, parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { cfgGoalContinuationModes } from "@oh-my-pi/pi-coding-agent/goals/settings";
+import { submitInteractiveInput } from "@oh-my-pi/pi-coding-agent/main";
 import { editVariantForModel } from "@oh-my-pi/pi-coding-agent/utils/edit-mode";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import { RpcGoalController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal";
+import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -41,6 +45,7 @@ import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { mockSchedulerWaitWithClock } from "./helpers/mock-scheduler-clock";
+import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 
 import { cfgRetryUsageReservePolicy } from "@oh-my-pi/pi-coding-agent/session/settings";
 
@@ -5556,6 +5561,519 @@ describe("AgentSession retry fallback", () => {
 		expect(session.model?.provider).toBe(fallbackModel.provider);
 		expect(session.model?.id).toBe(fallbackModel.id);
 	});
+	describe("next-turn fallback restoration", () => {
+		const primary = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const fallback = getBundledModel("openai-codex", "gpt-5.6-sol")!;
+		const primaryId = `${primary.provider}/${primary.id}`;
+		const fallbackId = `${fallback.provider}/${fallback.id}`;
+
+		const setup = (
+			options: {
+				responses?: MockResponse[];
+				responseModel?: Model;
+				pinned?: boolean;
+				initial?: boolean;
+				tools?: AgentTool[];
+				onRequest?: (model: Model) => void;
+				compaction?: boolean;
+				extensionRunner?: ExtensionRunner;
+				sessionManager?: SessionManager;
+				policy?: "next-turn" | "cooldown-expiry";
+			} = {},
+		) => {
+			const requested: string[] = [];
+			const mock = createMockModel({
+				responses: options.responses,
+				provider: options.responseModel?.provider,
+				id: options.responseModel?.id,
+			});
+			const agent = options.responses
+				? new Agent({
+						getApiKey: model => `${model.provider}-test-key`,
+						initialState: {
+							model: options.initial ? fallback : primary,
+							systemPrompt: ["Test"],
+							tools: options.tools ?? [],
+							messages: [],
+						},
+						streamFn: (model, context, streamOptions) => {
+							requested.push(`${model.provider}/${model.id}`);
+							options.onRequest?.(model);
+							return mock.stream(model, context, streamOptions);
+						},
+					})
+				: createFallbackAgent(primary, requested);
+			const settings = Settings.isolated({
+				"compaction.enabled": options.compaction ?? false,
+				"compaction.thresholdTokens": 1_000,
+				"compaction.keepRecentTokens": 1,
+				"compaction.methodOrder": ["soft"],
+				"compaction.autoContinue": true,
+				"retry.baseDelayMs": 5,
+				"retry.fallbackChains": { default: [`${fallbackId}:low`] },
+				"retry.fallbackRevertPolicy": options.policy ?? "next-turn",
+			});
+			settings.setModelRole("default", `${primaryId}:high`);
+			session = new AgentSession({
+				agent,
+				sessionManager: options.sessionManager ?? SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+				extensionRunner: options.extensionRunner,
+				thinkingLevel: options.initial ? Effort.Low : Effort.High,
+				initialRetryFallback: options.initial
+					? {
+							role: "default",
+							originalSelector: `${primaryId}:high`,
+							originalThinkingLevel: Effort.High,
+							pinned: options.pinned,
+						}
+					: undefined,
+			});
+			return { requested, agent };
+		};
+
+		it.each([
+			"OpenRouter/z-ai/glm-4.7@cerebras",
+			"openrouter/z-ai/glm-4-7@cerebras",
+		])("restores a canonical routed primary from saved reference %s", async originalSelector => {
+			const routedPrimary = getBundledModel("openrouter", "z-ai/glm-4.7");
+			if (!routedPrimary) throw new Error("Expected bundled routed primary");
+			const requested: string[] = [];
+			const mock = createMockModel({ responses: [{ content: ["Restored routed primary"] }] });
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: fallback, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					requested.push(formatModelStringWithRouting(model));
+					return mock.stream(model, context, options);
+				},
+			});
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.fallbackRevertPolicy": "next-turn",
+			});
+			settings.setModelRole("default", originalSelector);
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+				initialRetryFallback: {
+					role: "default",
+					originalSelector,
+					originalThinkingLevel: undefined,
+				},
+			});
+			const notices: string[] = [];
+			session.subscribe(event => {
+				if (event.type === "notice") notices.push(event.message);
+			});
+			await session.prompt("Restore the exact routed primary");
+			await session.waitForIdle();
+			expect(requested).toEqual(["openrouter/z-ai/glm-4.7@cerebras"]);
+			expect(session.model?.id).toBe(routedPrimary.id);
+			expect(notices).toEqual([]);
+		});
+
+		it("keeps an interactive goal continuation on the fallback through input dispatch", async () => {
+			const { requested } = setup({
+				initial: true,
+				responses: [{ content: ["Goal continuation"] }, { content: ["New host turn"] }],
+			});
+			const mode = {
+				markPendingSubmissionStarted: () => true,
+				finishPendingSubmission: () => {},
+				showError: (error: string) => {
+					throw new Error(error);
+				},
+				checkShutdownRequested: async () => {},
+				skillCommands: new Map(),
+				optimisticSkillMessagePending: false,
+				renderOptimisticSkillMessage: () => {},
+				clearOptimisticSkillMessage: () => {},
+			};
+			await submitInteractiveInput(mode, session!, {
+				text: "Advance the active goal",
+				customType: "goal-continuation",
+				admissionOrigin: "continuation",
+				display: false,
+				cancelled: false,
+				started: false,
+			});
+			await session!.waitForIdle();
+			expect(requested).toEqual([fallbackId]);
+			await session!.prompt("New host turn");
+			await session!.waitForIdle();
+			expect(requested).toEqual([fallbackId, primaryId]);
+		});
+
+		it("retains legacy cooldown-expiry effort after explicitly reselecting fallback effort", async () => {
+			setup({ initial: true, policy: "cooldown-expiry", responses: [{ content: ["Restored"] }] });
+			session!.setThinkingLevel(Effort.Low);
+			await session!.prompt("Restore after cooldown");
+			await session!.waitForIdle();
+			expect(session!.model?.id).toBe(primary.id);
+			expect(session!.configuredThinkingLevel()).toBe(Effort.High);
+		});
+
+		it("reads explicit effort selection after deferred primary credential resolution", async () => {
+			setup({ initial: true, responses: [{ content: ["Restored"] }] });
+			const lookupStarted = Promise.withResolvers<void>();
+			const credentials = Promise.withResolvers<string>();
+			const originalGetApiKey = modelRegistry.getApiKey.bind(modelRegistry);
+			vi.spyOn(modelRegistry, "getApiKey").mockImplementation((model, ...args) => {
+				if (model.id !== primary.id) return originalGetApiKey(model, ...args);
+				lookupStarted.resolve();
+				return credentials.promise;
+			});
+			const prompt = session!.prompt("Restore with deferred credentials");
+			await lookupStarted.promise;
+			session!.setThinkingLevel(Effort.Low);
+			credentials.resolve("primary-key");
+			await prompt;
+			await session!.waitForIdle();
+			expect(session!.model?.id).toBe(primary.id);
+			expect(session!.configuredThinkingLevel()).toBe(Effort.Low);
+		});
+
+		it("does not restore a fallback record cleared during credential resolution", async () => {
+			setup({ initial: true, responses: [{ content: ["Selected fallback"] }] });
+			const lookupStarted = Promise.withResolvers<void>();
+			const credentials = Promise.withResolvers<string>();
+			const originalGetApiKey = modelRegistry.getApiKey.bind(modelRegistry);
+			vi.spyOn(modelRegistry, "getApiKey").mockImplementation((model, ...args) => {
+				if (model.id !== primary.id) return originalGetApiKey(model, ...args);
+				lookupStarted.resolve();
+				return credentials.promise;
+			});
+			const prompt = session!.prompt("Restore with deferred credentials");
+			await lookupStarted.promise;
+			await session!.setModel(fallback);
+			credentials.resolve("primary-key");
+			await prompt;
+			await session!.waitForIdle();
+			expect(session!.model?.id).toBe(fallback.id);
+		});
+
+		for (const unavailable of ["model", "credentials"] as const) {
+			it(`warns once per admitted turn when primary ${unavailable} are unavailable`, async () => {
+				const { requested } = setup({
+					initial: true,
+					responses: [
+						{ content: ["Fallback"] },
+						{ content: ["Continuation"] },
+						{ content: ["Fallback again"] },
+					],
+				});
+				const notices: string[] = [];
+				session!.subscribe(event => {
+					if (event.type === "notice") notices.push(event.message);
+				});
+				let primaryAttempts = 0;
+				if (unavailable === "model") {
+					const originalFind = modelRegistry.find.bind(modelRegistry);
+					const available = modelRegistry.getAvailable().filter(model => model.id !== primary.id);
+					vi.spyOn(modelRegistry, "getAvailable").mockReturnValue(available);
+					vi.spyOn(modelRegistry, "find").mockImplementation((provider, id) => {
+						if (provider === primary.provider && id === primary.id) {
+							primaryAttempts++;
+							return undefined;
+						}
+						return originalFind(provider, id);
+					});
+				} else {
+					const originalGetApiKey = modelRegistry.getApiKey.bind(modelRegistry);
+					vi.spyOn(modelRegistry, "getApiKey").mockImplementation((model, ...args) => {
+						if (model.id !== primary.id) return originalGetApiKey(model, ...args);
+						primaryAttempts++;
+						return Promise.resolve(undefined);
+					});
+				}
+				await session!.prompt("Attempt restore");
+				await session!.waitForIdle();
+				expect(notices).toHaveLength(1);
+				expect(notices[0]).toContain(primaryId);
+				expect(notices[0]).toContain(`${unavailable} ${unavailable === "model" ? "is" : "are"} unavailable`);
+				const firstAttempts = primaryAttempts;
+				await session!.prompt("Internal continuation", { admissionOrigin: "continuation" });
+				await session!.waitForIdle();
+				expect(primaryAttempts).toBe(firstAttempts);
+				expect(notices).toHaveLength(1);
+				await session!.prompt("Next real admission");
+				await session!.waitForIdle();
+				expect(primaryAttempts).toBeGreaterThan(firstAttempts);
+				expect(notices).toHaveLength(2);
+				expect(requested).toEqual([fallbackId, fallbackId, fallbackId]);
+			});
+		}
+
+		it("keeps an automatic RPC goal continuation on the fallback until a new host prompt", async () => {
+			const dispatched = Promise.withResolvers<void>();
+			const { requested } = setup({
+				initial: true,
+				responses: [{ content: ["Goal progress"] }, { content: ["New assignment"] }],
+				onRequest: () => dispatched.resolve(),
+			});
+			const activeSession = session!;
+			cfgGoalContinuationModes.set(activeSession.settings, ["rpc"]);
+			activeSession.setGoalModeState({
+				enabled: true,
+				mode: "active",
+				goal: {
+					id: "continuation-origin",
+					objective: "Finish the existing assignment",
+					status: "active",
+					tokensUsed: 0,
+					timeUsedSeconds: 0,
+					createdAt: Date.now(),
+					updatedAt: Date.now(),
+				},
+			});
+			const controller = new RpcGoalController(activeSession);
+			controller.observe({ type: "agent_end", messages: [], isTerminal: true });
+			await dispatched.promise;
+			await activeSession.waitForIdle();
+			controller.stopForHostAbort();
+
+			expect(requested).toEqual([fallbackId]);
+			expect(activeSession.model?.id).toBe(fallback.id);
+			expect(activeSession.messages).toContainEqual(
+				expect.objectContaining({ role: "custom", customType: "goal-continuation", display: false }),
+			);
+			await activeSession.prompt("New host assignment");
+			await activeSession.waitForIdle();
+			expect(requested).toEqual([fallbackId, primaryId]);
+		});
+
+		for (const skillReplay of [false, true]) {
+			it(`keeps compaction-queued ${skillReplay ? "skill" : "plain"} replay on the fallback`, async () => {
+				const dispatched = Promise.withResolvers<void>();
+				const { requested } = setup({
+					initial: true,
+					responses: [{ content: ["Queue drained"] }, { content: ["New assignment"] }],
+					onRequest: () => dispatched.resolve(),
+				});
+				const activeSession = session!;
+				const skillPath = path.join(tempDir.path(), "continuation-skill.md");
+				if (skillReplay) await Bun.write(skillPath, "Continue the existing assignment.");
+				const queuedText = skillReplay ? "/skill:continuation-skill queued args" : "Continue queued work";
+				const ctx = createInteractiveModeContext({
+					session: activeSession,
+					settings: activeSession.settings,
+					compactionQueuedMessages: [{ text: queuedText, mode: "followUp" }],
+					skillCommands: new Map(
+						skillReplay
+							? [["skill:continuation-skill", {
+									name: "continuation-skill",
+									description: "",
+									filePath: skillPath,
+									baseDir: tempDir.path(),
+									source: "test",
+								}]]
+							: [],
+					),
+					isKnownSlashCommand: () => false,
+					recordLocalSubmission: () => () => {},
+				});
+
+				await new UiHelpers(ctx).flushCompactionQueue({ willRetry: false });
+				await dispatched.promise;
+				await activeSession.waitForIdle();
+				expect(ctx.compactionQueuedMessages).toEqual([]);
+				expect(requested).toEqual([fallbackId]);
+				expect(activeSession.model?.id).toBe(fallback.id);
+				if (skillReplay) {
+					expect(activeSession.messages).toContainEqual(
+						expect.objectContaining({
+							role: "custom",
+							attribution: "user",
+							details: expect.objectContaining({ name: "continuation-skill", args: "queued args" }),
+						}),
+					);
+				} else {
+					expect(activeSession.messages).toContainEqual(
+						expect.objectContaining({ role: "user", content: [{ type: "text", text: queuedText }] }),
+					);
+				}
+				await activeSession.prompt("New host assignment");
+				await activeSession.waitForIdle();
+				expect(requested).toEqual([fallbackId, primaryId]);
+			});
+		}
+
+		it("restores on the next admitted prompt inside the cooldown window", async () => {
+			const { requested } = setup();
+			await session!.prompt("Trigger fallback");
+			await session!.waitForIdle();
+			expect(session!.model?.id).toBe(fallback.id);
+			expect(modelRegistry.isSelectorSuppressed(primaryId)).toBe(true);
+			await session!.prompt("New parent assignment");
+			await session!.waitForIdle();
+			expect(requested).toEqual([primaryId, fallbackId, primaryId]);
+		});
+
+		it("does not restore for queued steer and follow-up drains or delayed continuation", async () => {
+			let queued = false;
+			const { requested } = setup({
+				responses: [
+					{ throw: `rate limit exceeded retry-after-ms=${FALLBACK_TEST_RETRY_AFTER_MS}` },
+					{ content: ["Fallback response"], delayMs: 30 },
+					{ content: ["Drained response"] },
+					{ content: ["Delayed response"] },
+				],
+				onRequest: model => {
+					if (model.id !== fallback.id || queued) return;
+					queued = true;
+					void session!.steer("Queued steering");
+					void session!.followUp("Queued follow-up");
+				},
+			});
+			await session!.prompt("Trigger fallback");
+			await session!.waitForIdle();
+			await scheduler.wait(20);
+			await session!.followUp("Delayed asynchronous continuation");
+			await session!.waitForIdle();
+			expect(requested.slice(1).every(id => id === fallbackId)).toBe(true);
+			expect(requested.length).toBeGreaterThan(2);
+		});
+
+		it("keeps a same-turn tool loop and empty-response continuation on the fallback", async () => {
+			const schema = type({ value: "string" });
+			const tool: AgentTool<typeof schema, { value: string }> = {
+				name: "echo",
+				label: "Echo",
+				description: "Echo",
+				parameters: schema,
+				async execute(_id, params) {
+					return { content: [{ type: "text", text: params.value }], details: params };
+				},
+			};
+			const { requested } = setup({
+				tools: [tool],
+				responses: [
+					{ throw: `rate limit exceeded retry-after-ms=${FALLBACK_TEST_RETRY_AFTER_MS}` },
+					{ content: [{ type: "toolCall", id: "echo-1", name: "echo", arguments: { value: "ok" } }] },
+					{ content: [], stopReason: "stop" },
+					{ content: ["Done"] },
+				],
+			});
+			await session!.prompt("Run the tool");
+			await session!.waitForIdle();
+			expect(requested).toEqual([primaryId, fallbackId, fallbackId, fallbackId]);
+		});
+
+		it("does not restore on an automatic retry of the fallback", async () => {
+			const { requested } = setup({
+				responses: [
+					{ throw: `rate limit exceeded retry-after-ms=${FALLBACK_TEST_RETRY_AFTER_MS}` },
+					{ throw: "service unavailable: 503 overloaded" },
+					{ content: ["Recovered"] },
+				],
+			});
+			await session!.prompt("Retry");
+			await session!.waitForIdle();
+			expect(requested).toEqual([primaryId, fallbackId, fallbackId]);
+		});
+
+		it("restores after a cancelled turn when a new prompt is admitted", async () => {
+			const started = Promise.withResolvers<void>();
+			const { requested } = setup({
+				responses: [
+					{ throw: `rate limit exceeded retry-after-ms=${FALLBACK_TEST_RETRY_AFTER_MS}` },
+					{ content: ["Interrupted fallback"], delayMs: 10_000 },
+					{ content: ["New primary response"] },
+				],
+				onRequest: model => {
+					if (model.id === fallback.id) started.resolve();
+				},
+			});
+			const prompt = session!.prompt("Trigger fallback");
+			await started.promise;
+			await session!.abort();
+			await prompt;
+			await session!.prompt("New prompt after cancellation");
+			await session!.waitForIdle();
+			expect(requested.at(-1)).toBe(primaryId);
+		});
+
+		it("does not restore a pinned fallback", async () => {
+			const { requested } = setup({ initial: true, pinned: true, responses: [{ content: ["Pinned"] }] });
+			await session!.prompt("New prompt");
+			await session!.waitForIdle();
+			expect(requested).toEqual([fallbackId]);
+		});
+
+		it("does not restore after explicit same-selector model selection", async () => {
+			const { requested } = setup();
+			await session!.prompt("Trigger fallback");
+			await session!.waitForIdle();
+			await session!.setModel(session!.model!);
+			await session!.prompt("Keep my selection");
+			await session!.waitForIdle();
+			expect(requested.at(-1)).toBe(fallbackId);
+		});
+
+		it("preserves explicit same-value effort when restoring the primary", async () => {
+			setup();
+			await session!.prompt("Trigger fallback");
+			await session!.waitForIdle();
+			expect(session!.configuredThinkingLevel()).toBe(Effort.Low);
+			session!.setThinkingLevel(Effort.Low);
+			await session!.prompt("Restore model, keep effort");
+			await session!.waitForIdle();
+			expect(session!.model?.id).toBe(primary.id);
+			expect(session!.configuredThinkingLevel()).toBe(Effort.Low);
+		});
+
+		it("does not restore for post-compaction continuation", async () => {
+			const manager = SessionManager.inMemory();
+			const runtime = new ExtensionRuntime();
+			let compactions = 0;
+			const extension = await loadExtensionFromFactory(
+				pi => {
+					pi.on("session_before_compact", async event => {
+						compactions++;
+						return {
+							compaction: {
+								summary: "Compacted fallback history",
+								firstKeptEntryId: event.preparation.firstKeptEntryId,
+								tokensBefore: event.preparation.tokensBefore,
+								details: {},
+							},
+						};
+					});
+				},
+				tempDir.path(),
+				new EventBus(),
+				runtime,
+				"next-turn-compaction",
+			);
+			const runner = new ExtensionRunner([extension], runtime, tempDir.path(), manager, modelRegistry);
+			const { requested } = setup({
+				compaction: true,
+				responseModel: fallback,
+				extensionRunner: runner,
+				sessionManager: manager,
+				responses: [
+					{ throw: `rate limit exceeded retry-after-ms=${FALLBACK_TEST_RETRY_AFTER_MS}` },
+					// A truncated response with billed context over the threshold
+					// requires compaction retry, rather than output-cap recovery.
+					{
+						content: ["Fallback history ".repeat(2_000)],
+						stopReason: "length",
+						usage: { input: 2_000, totalTokens: 2_000 },
+					},
+					{ content: ["Done after compaction"] },
+				],
+			});
+			await session!.prompt("Trigger fallback and compaction");
+			await session!.waitForIdle();
+			expect(compactions).toBeGreaterThan(0);
+			expect(requested).toEqual([primaryId, fallbackId, fallbackId]);
+		});
+	});
+
 	it("suppresses cooled selectors and lazily reverts to the role primary after cooldown expiry", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");

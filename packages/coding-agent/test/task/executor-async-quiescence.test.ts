@@ -12,7 +12,7 @@ import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import type { LoadExtensionsResult } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type { CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
-import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { AgentSession, AgentSessionEvent, PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
@@ -43,6 +43,7 @@ function assistantStopMessage(text: string, totalTokens = 0): AssistantMessage {
 interface AsyncQuiescenceHarness {
 	session: AgentSession;
 	prompts: string[];
+	promptOptions: Array<PromptOptions | undefined>;
 	abortCalls: () => number;
 	settleCalls: () => number;
 	emitTerminalYield: (data: unknown) => void;
@@ -69,6 +70,7 @@ function createAsyncSession(
 	const listeners: Array<(event: AgentSessionEvent) => void> = [];
 	const state = { messages: [] as AssistantMessage[] };
 	const prompts: string[] = [];
+	const promptOptions: Array<PromptOptions | undefined> = [];
 	let abortCount = 0;
 	let settleCount = 0;
 	let pendingAsync = true;
@@ -122,6 +124,7 @@ function createAsyncSession(
 	const harness: AsyncQuiescenceHarness = {
 		session: undefined as unknown as AgentSession,
 		prompts,
+		promptOptions,
 		abortCalls: () => abortCount,
 		settleCalls: () => settleCount,
 		emitTerminalYield,
@@ -145,8 +148,9 @@ function createAsyncSession(
 				if (index >= 0) listeners.splice(index, 1);
 			};
 		},
-		prompt: async (text: string) => {
+		prompt: async (text: string, options?: PromptOptions) => {
 			prompts.push(text);
+			promptOptions.push(options);
 			onPrompt({ text, promptIndex: prompts.length, harness });
 			return true;
 		},
@@ -211,6 +215,11 @@ describe("runSubprocess async quiescence fresh-yield contract", () => {
 		// Run did not terminate on the parked yield: the barrier noticed, the
 		// job settled, and the ladder demanded exactly one more prompt.
 		expect(harness.prompts).toHaveLength(3);
+		expect(harness.promptOptions.map(options => options?.admissionOrigin)).toEqual([
+			"new-turn",
+			"continuation",
+			"continuation",
+		]);
 		expect(harness.settleCalls()).toBe(1);
 		// The parked yield stopped the turn without killing the run.
 		expect(harness.abortCalls()).toBeGreaterThanOrEqual(1);

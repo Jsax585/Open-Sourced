@@ -156,7 +156,11 @@ describe("submitInteractiveInput", () => {
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,
 		};
-		const input = createInput({ text: "continue goal", customType: "goal-continuation" });
+		const input = createInput({
+			text: "continue goal",
+			customType: "goal-continuation",
+			admissionOrigin: "continuation",
+		});
 
 		await submitInteractiveInput(mode, session, input);
 
@@ -170,7 +174,7 @@ describe("submitInteractiveInput", () => {
 				display: false,
 				attribution: "agent",
 			},
-			{ streamingBehavior: "followUp" },
+			{ streamingBehavior: "followUp", admissionOrigin: "continuation" },
 		);
 		expect(mode.finishPendingSubmission).toHaveBeenCalledWith(input);
 		expect(mode.showError).not.toHaveBeenCalled();

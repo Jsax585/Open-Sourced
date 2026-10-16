@@ -66,6 +66,7 @@ export type SubmittedUserInput = {
 	images?: ImageContent[];
 	imageLinks?: (string | undefined)[];
 	customType?: string;
+	admissionOrigin?: "new-turn" | "continuation";
 	/** Route through `session.prompt(text, { synthetic: true })` so the text lands
 	 *  as a hidden agent-authored `developer` message rather than a visible user
 	 *  turn. Used by the `c`/`.` continue shortcut. */
@@ -362,6 +363,7 @@ export interface InteractiveModeContext {
 			images?: ImageContent[];
 			imageLinks?: (string | undefined)[];
 			customType?: string;
+			admissionOrigin?: "new-turn" | "continuation";
 			display?: boolean;
 			streamingBehavior?: "steer" | "followUp";
 		},
