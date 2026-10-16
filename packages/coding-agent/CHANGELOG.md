@@ -423,6 +423,12 @@
 
 - Added `statusLine.segmentOptions.pi.showProfile`: set it to `false` to hide the profile name next to the `π` brand, for example when each profile already has its own theme ([#16063](https://github.com/can1357/oh-my-pi/pull/16063) by [@shgew](https://github.com/shgew))
 - Added `sharpshooter.minPromptLength` (default 16, minimum 2) to control the shortest prompt Sharpshooter extracts decisions from ([#16043](https://github.com/can1357/oh-my-pi/pull/16043) by [@bigHippoZz](https://github.com/bigHippoZz))
+### Added
+
+- Added `advisor.continueSeverity` (`nit`, `concern`, `blocker`) to choose the minimum advisor note severity that wakes the agent after it finished with a final answer; lower-severity notes stay as a card at the end of the transcript
+### Added
+
+- Added a Serply web-search provider (`web/serply`), authenticated with `SERPLY_API_KEY` or `/login serply`, that forwards Google search operators (`site:`, `filetype:`, `intitle:`, quoted phrases, `OR`, `-exclusions`, `after:`/`before:`) in the query instead of translating them onto vendor-specific filters; path-qualified `site:` filters are sent as plain terms and enforced by the result post-filter ([#12021](https://github.com/can1357/oh-my-pi/pull/12021) by [@googio](https://github.com/googio))
 
 ### Changed
 
