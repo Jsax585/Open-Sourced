@@ -23,7 +23,7 @@ import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { getModelPreset, getModelPresetNames } from "../config/model-presets";
 import { Settings } from "../config/settings";
 import { expandTilde } from "../tools/path-utils";
-import { quotePosixArgument } from "../utils/shell-quote";
+import { quoteShellArgument } from "../utils/shell-quote";
 import { CliUsageError } from "./usage-error";
 
 const OVERLAY_EXTENSION = /\.ya?ml$/;
@@ -203,11 +203,6 @@ function writeRows(rows: readonly (readonly [string, string])[], empty: string):
 	for (const [label, detail] of rows) writeLine(`  ${label.padEnd(width)}  ${chalk.dim(detail)}`);
 }
 
-/** Quote a value for copy-pasting into a shell command; plain words stay bare. */
-function shellArg(value: string): string {
-	return /^[\w@%+=:,./-]+$/.test(value) ? value : quotePosixArgument(value);
-}
-
 const OVERLAY_SOURCE_TAGS: Record<LauncherOverlay["source"], string> = {
 	env: "  [PI_CONFIG_FILES]",
 	flag: "  [--config]",
@@ -219,7 +214,7 @@ function renderText(report: LaunchersReport): void {
 	writeRows(
 		report.profiles.map(profile => [
 			profile.name,
-			`${APP_NAME} --profile ${shellArg(profile.name)}${profile.active ? "  [active]" : ""}`,
+			`${APP_NAME} --profile ${quoteShellArgument(profile.name)}${profile.active ? "  [active]" : ""}`,
 		]),
 		"(none)",
 	);
@@ -235,7 +230,7 @@ function renderText(report: LaunchersReport): void {
 	writeRows(
 		report.overlays.map(overlay => [
 			overlay.name,
-			`${APP_NAME} --config ${shellArg(overlay.path)}${OVERLAY_SOURCE_TAGS[overlay.source]}${overlay.missing ? "  [missing]" : ""}`,
+			`${APP_NAME} --config ${quoteShellArgument(overlay.path)}${OVERLAY_SOURCE_TAGS[overlay.source]}${overlay.missing ? "  [missing]" : ""}`,
 		]),
 		report.overlayDir ? "(none)" : "(none; pass --overlay-dir <dir> to scan a directory of overlay files)",
 	);

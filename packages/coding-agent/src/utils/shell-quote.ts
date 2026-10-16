@@ -10,6 +10,24 @@ export function quotePosixArgv(argv: readonly string[]): string {
 	return argv.map(quotePosixArgument).join(" ");
 }
 
+/** Quote one argument for PowerShell: single quotes, with `'` doubled. */
+export function quotePowerShellArgument(value: string): string {
+	return `'${value.replace(/'/g, "''")}'`;
+}
+
+/**
+ * Quote one argument for pasting into the user's interactive shell. Plain words
+ * (including Windows drive paths) stay bare, which is valid in POSIX shells,
+ * PowerShell, and cmd.exe alike. Anything else is quoted for PowerShell on
+ * Windows (the only shell omp targets there, see `--alias`) and POSIX elsewhere.
+ */
+export function quoteShellArgument(value: string, platform: NodeJS.Platform = process.platform): string {
+	const win32 = platform === "win32";
+	const bare = win32 ? /^[\w@%+=:,./\\-]+$/ : /^[\w@%+=:,./-]+$/;
+	if (bare.test(value)) return value;
+	return win32 ? quotePowerShellArgument(value) : quotePosixArgument(value);
+}
+
 function quotePosixUtf8Run(value: string): string {
 	const octalBytes = Array.from(Buffer.from(value, "utf8"), byte => `\\${byte.toString(8).padStart(3, "0")}`).join("");
 	// This run has no ASCII newline byte, so command substitution preserves it.
