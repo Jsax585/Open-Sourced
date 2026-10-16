@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import type { CollabSessionState } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { cfgGitEnabled, cfgStatusLinePets } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -18,7 +19,7 @@ const components = new StatusLineTestComponents();
 beforeEach(async () => {
 	settingsState = beginSettingsTest();
 	await Settings.init({ inMemory: true });
-	settings.set("git.enabled", false);
+	cfgGitEnabled.set(settings, false);
 	await initTheme();
 });
 
@@ -32,7 +33,7 @@ afterEach(() => {
 function fixture(createdAt = "2020-01-01T00:00:00Z", sessionId = "pet-session") {
 	const state = { tokens: 0, isStreaming: false, contextUsageRevision: 0 };
 	const session = {
-		state: {},
+		state: { messages: [] },
 		get isStreaming() {
 			return state.isStreaming;
 		},
@@ -44,8 +45,11 @@ function fixture(createdAt = "2020-01-01T00:00:00Z", sessionId = "pet-session") 
 		sessionManager: {
 			getSessionId: () => sessionId,
 			getHeader: () => ({ timestamp: createdAt }),
+			getUsageStatistics: () => undefined,
+			getSessionName: () => undefined,
 		},
 		getContextUsage: () => ({ tokens: state.tokens, contextWindow: 100_000 }),
+		isFastModeActive: () => false,
 	} as unknown as AgentSession;
 	const component = components.track(new StatusLineComponent(session, statusLineHost));
 	component.updateSettings({ preset: "custom", leftSegments: [], rightSegments: [], showHookStatus: true });
@@ -89,6 +93,17 @@ describe("native status-line pets", () => {
 		expect(render()[0]).toContain("(=^.w.^=)");
 	});
 
+	it("shows the pet as plain text on native composer surfaces only while enabled", async () => {
+		const { component, runtime } = fixture();
+		const facts = () => JSON.stringify(component.describeComposerFacts());
+		expect(facts()).not.toContain("=^");
+		await executeBuiltinSlashCommand("/pets on", runtime);
+		expect(facts()).toContain("(=^.w.^=)");
+		expect(facts()).not.toContain("\\u001b");
+		await executeBuiltinSlashCommand("/pets off", runtime);
+		expect(facts()).not.toContain("=^");
+	});
+
 	it("lets collaboration guests toggle their local pet through the builtin dispatcher", async () => {
 		const { render, runtime } = fixture();
 		const guestRuntime = {
@@ -104,7 +119,7 @@ describe("native status-line pets", () => {
 	});
 
 	it("reports when a higher-priority setting prevents a requested switch", async () => {
-		settings.override("statusLine.pets", true);
+		cfgStatusLinePets.override(settings, true);
 		const { render, runtime, showWarning, showStatus } = fixture();
 		await executeBuiltinSlashCommand("/pets off", runtime);
 		expect(render()[0]).toContain("(=^.w.^=)");
@@ -115,7 +130,7 @@ describe("native status-line pets", () => {
 	it("tracks fresh, running, overloaded, compacted and focused sessions with stable narrow rendering", () => {
 		let now = Date.parse("2026-09-16T00:00:00Z");
 		vi.spyOn(Date, "now").mockImplementation(() => now);
-		settings.set("statusLine.pets", true);
+		cfgStatusLinePets.set(settings, true);
 		const { state, component, render } = fixture(new Date(now).toISOString());
 		const fresh = render()[0];
 		expect(fresh).toContain("(=^-.-^=)zZ");
@@ -148,7 +163,7 @@ describe("native status-line pets", () => {
 	});
 
 	it("uses host context and activity for guests and falls back when host state is absent", () => {
-		settings.set("statusLine.pets", true);
+		cfgStatusLinePets.set(settings, true);
 		const { state, component, render } = fixture();
 		const host: CollabSessionState = {
 			isStreaming: false,
@@ -223,7 +238,7 @@ describe("native status-line pets", () => {
 	});
 
 	it("does not repaint unchanged text behind a menu and immediately releases the timer on a settings change", () => {
-		settings.set("statusLine.pets", true);
+		cfgStatusLinePets.set(settings, true);
 		vi.useFakeTimers();
 		let now = Date.parse("2026-09-16T00:00:00Z");
 		vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -240,10 +255,10 @@ describe("native status-line pets", () => {
 		vi.advanceTimersByTime(15_000);
 		expect(repaint).toHaveBeenCalledTimes(1);
 		// Settings menus update the component but do not render the underlying footer.
-		settings.set("statusLine.pets", false);
+		cfgStatusLinePets.set(settings, false);
 		component.updateSettings({ showHookStatus: true });
 		expect(vi.getTimerCount()).toBe(baselineTimers);
-		settings.set("statusLine.pets", true);
+		cfgStatusLinePets.set(settings, true);
 		component.updateSettings({ showHookStatus: true });
 		expect(vi.getTimerCount()).toBe(baselineTimers + 1);
 		component.dispose();

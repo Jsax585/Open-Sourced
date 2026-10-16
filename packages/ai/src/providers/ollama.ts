@@ -1,6 +1,8 @@
+import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { fetchWithRetry, parseStreamingJson, readJsonl } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
-import { getEnvApiKey } from "../stream";
+import { parseToolCallArguments } from "../utils/tool-call-arguments";
+import { getEnvApiKey } from "../env-api-key";
 import type {
 	Api,
 	AssistantMessage,
@@ -250,7 +252,10 @@ function convertMessages(model: Model<"ollama-chat">, context: Context): OllamaM
 		timestamp: Date.now(),
 	}));
 	const messages: Message[] = [...systemMessages, ...context.messages];
-	const isCloud = model.provider === "ollama-cloud";
+	// Model rows cached or bundled before Ollama had a compat record carry none;
+	// stripping is the replay-safe answer for them until they are rebuilt.
+	const compat: Partial<typeof model.compat> | undefined = model.compat;
+	const stripThinkingHistory = compat?.stripThinkingHistory ?? true;
 	const supportsImages = model.input.includes("image");
 	const converted = transformMessages(messages, model).map((msg, index) => {
 		// Real `systemPrompt` entries (always emitted first) stay on Ollama's
@@ -264,10 +269,9 @@ function convertMessages(model: Model<"ollama-chat">, context: Context): OllamaM
 		const developerRole =
 			msg.role === "developer" && (index < systemPrompts.length || msg.attribution !== "user") ? "system" : "user";
 		const converted = convertMessage(msg, supportsImages, developerRole);
-		// Ollama cloud rejects requests when assistant history messages contain the `thinking`
-		// field — it's valid in model responses but not accepted as a history input. Strip it
-		// to prevent HTTP 400 errors. Local Ollama instances are unaffected.
-		if (isCloud && converted.role === "assistant" && converted.thinking) {
+		// Some Ollama Cloud models historically rejected thinking in history (#1000).
+		// Preserve reasoning for the verified model without weakening that guard everywhere.
+		if (stripThinkingHistory && converted.role === "assistant" && converted.thinking) {
 			const { thinking: _t, ...rest } = converted;
 			return rest;
 		}
@@ -404,7 +408,7 @@ function endToolCallBlock(stream: AssistantMessageEventStream, output: Assistant
 	}
 	const toolCall = block as InternalToolCallBlock;
 	if (toolCall[kStreamingPartialJson]) {
-		toolCall.arguments = parseStreamingJson<Record<string, unknown>>(toolCall[kStreamingPartialJson]);
+		toolCall.arguments = parseToolCallArguments(toolCall[kStreamingPartialJson]);
 		clearStreamingPartialJson(toolCall);
 	}
 	stream.push({ type: "toolcall_end", contentIndex: index, toolCall, partial: output });
@@ -710,6 +714,7 @@ const streamOllamaOnce = (
 					output.usage.input = (chunk.prompt_eval_count ?? 0) - output.usage.cacheRead;
 					output.usage.output = chunk.eval_count ?? 0;
 					output.usage.totalTokens = output.usage.input + output.usage.output + output.usage.cacheRead;
+					calculateCost(model, output.usage, output.timestamp);
 				}
 			}
 			if (streamMarkupHealing) {
@@ -723,6 +728,7 @@ const streamOllamaOnce = (
 			}
 			endActiveThinkingBlock();
 			endActiveTextBlock();
+			for (const index of activeToolIndices) endToolCallBlock(stream, output, index);
 			if (output.stopReason === "length" && !hasVisibleAssistantContent(output)) {
 				output.stopReason = "error";
 				output.errorMessage = EMPTY_OLLAMA_LENGTH_COMPLETION_MESSAGE;

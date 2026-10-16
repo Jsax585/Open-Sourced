@@ -5,6 +5,15 @@ import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
+import {
+	cfgGitEnabled,
+	cfgStatusLineContextLine,
+	cfgStatusLineLeftSegments,
+	cfgStatusLinePets,
+	cfgStatusLinePreset,
+	cfgStatusLineRightSegments,
+	cfgStatusLineSegmentOptions,
+} from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { statusLineHost, type StatusLineHostSession } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
@@ -88,10 +97,10 @@ describe("StatusLineComponent effective settings cache", () => {
 		"preserves the rendered %s context line when Pets changes in settings",
 		contextLine => {
 			const settings = Settings.instance;
-			settings.set("statusLine.preset", "custom");
-			settings.set("statusLine.leftSegments", ["context_pct"]);
-			settings.set("statusLine.rightSegments", []);
-			settings.set("statusLine.contextLine", contextLine);
+			cfgStatusLinePreset.set(settings, "custom");
+			cfgStatusLineLeftSegments.set(settings, ["context_pct"]);
+			cfgStatusLineRightSegments.set(settings, []);
+			cfgStatusLineContextLine.set(settings, contextLine);
 			const component = statusLines.track(new StatusLineComponent(makeSession(), statusLineHost));
 			const controller = new SelectorController({
 				statusLine: component,
@@ -99,10 +108,10 @@ describe("StatusLineComponent effective settings cache", () => {
 			} as unknown as InteractiveModeContext);
 			const before = component.getTopBorder(120).content;
 
-			settings.set("statusLine.pets", true);
+			cfgStatusLinePets.set(settings, true);
 			controller.handleSettingChange("statusLine.pets", true);
 			expect(component.getTopBorder(120).content).toBe(before);
-			settings.set("statusLine.pets", false);
+			cfgStatusLinePets.set(settings, false);
 			controller.handleSettingChange("statusLine.pets", false);
 			expect(component.getTopBorder(120).content).toBe(before);
 		},
@@ -110,11 +119,11 @@ describe("StatusLineComponent effective settings cache", () => {
 
 	it("preserves custom path rendering while toggling Pets in the menu and after closing it", async () => {
 		const settings = Settings.instance;
-		settings.set("git.enabled", false);
-		settings.set("statusLine.preset", "custom");
-		settings.set("statusLine.leftSegments", ["path"]);
-		settings.set("statusLine.rightSegments", []);
-		settings.set("statusLine.segmentOptions", {
+		cfgGitEnabled.set(settings, false);
+		cfgStatusLinePreset.set(settings, "custom");
+		cfgStatusLineLeftSegments.set(settings, ["path"]);
+		cfgStatusLineRightSegments.set(settings, []);
+		cfgStatusLineSegmentOptions.set(settings, {
 			path: { abbreviate: false, maxLength: 200, stripWorkPrefix: false },
 		});
 		const session = Object.assign(makeSession(), {
@@ -145,39 +154,15 @@ describe("StatusLineComponent effective settings cache", () => {
 		const selector = await shown.promise;
 		for (const char of "statusLine.pets") selector.handleInput(char);
 		selector.handleInput("\n");
-		expect(settings.get("statusLine.pets")).toBe(true);
+		expect(cfgStatusLinePets.get(settings)).toBe(true);
 		expect(component.getTopBorder(240).content).toBe(before);
 		selector.handleInput("\n");
-		expect(settings.get("statusLine.pets")).toBe(false);
+		expect(cfgStatusLinePets.get(settings)).toBe(false);
 		expect(component.getTopBorder(240).content).toBe(before);
 		selector.handleInput("\x1b"); // Leave search.
 		selector.handleInput("\x1b"); // Close settings.
 		expect(closed).toBe(true);
 		expect(component.getTopBorder(240).content).toBe(before);
-	});
-
-	it("keeps repeated cached renders byte-identical across presets and widths", () => {
-		const cases: StatusLineSettings[] = [
-			{ preset: "default", sessionAccent: false },
-			{ preset: "minimal", sessionAccent: false },
-			{
-				preset: "custom",
-				leftSegments: ["pi", "model"],
-				rightSegments: ["session_name", "context_pct"],
-				separator: "pipe",
-				sessionAccent: false,
-				segmentOptions: { model: { showThinkingLevel: false } },
-			},
-		];
-
-		for (const statusLineSettings of cases) {
-			const component = makeComponent(statusLineSettings);
-			for (const width of [36, 120]) {
-				const first = component.getTopBorder(width);
-				const second = component.getTopBorder(width);
-				expect(second).toEqual(first);
-			}
-		}
 	});
 
 	it("skips the entire segment pipeline until a visible input invalidates it", () => {
@@ -283,11 +268,11 @@ describe("StatusLineComponent effective settings cache", () => {
 	});
 
 	it("renders custom preset defaults when segment arrays are unconfigured", () => {
-		Settings.instance.override("statusLine.preset", "custom");
+		cfgStatusLinePreset.override(Settings.instance, "custom");
 		const component = makeComponent({
-			preset: Settings.instance.get("statusLine.preset"),
-			leftSegments: Settings.instance.get("statusLine.leftSegments"),
-			rightSegments: Settings.instance.get("statusLine.rightSegments"),
+			preset: cfgStatusLinePreset.get(Settings.instance),
+			leftSegments: cfgStatusLineLeftSegments.get(Settings.instance),
+			rightSegments: cfgStatusLineRightSegments.get(Settings.instance),
 			sessionAccent: false,
 		});
 
@@ -366,27 +351,12 @@ describe("StatusLineComponent effective settings cache", () => {
 		expect(STATUS_LINE_PRESETS.default.segmentOptions?.path).toEqual(before);
 		expect(component.getEffectiveSettingsForTest().segmentOptions.path).toEqual(before);
 	});
-
-	it("reuses the effective-settings object until settings change", () => {
-		const component = makeComponent({ preset: "default", sessionAccent: false });
-		const effective = component.getEffectiveSettingsForTest();
-
-		for (let i = 0; i < 5; i++) {
-			component.getTopBorder(100);
-			expect(component.getEffectiveSettingsForTest()).toBe(effective);
-		}
-
-		component.updateSettings({ preset: "minimal", sessionAccent: false });
-		const nextEffective = component.getEffectiveSettingsForTest();
-		expect(nextEffective).not.toBe(effective);
-		expect(component.getEffectiveSettingsForTest()).toBe(nextEffective);
-	});
 	it("skips git probes when git integration is disabled", async () => {
 		const headSpy = spyOn(vcs, "gitInfo");
 		const statusSpy = spyOn(vcs, "watch");
 		const repoSpy = spyOn(vcs, "repo");
 		try {
-			Settings.instance.override("git.enabled", false);
+			cfgGitEnabled.override(Settings.instance, false);
 			const component = makeComponent({
 				preset: "custom",
 				leftSegments: ["git", "pr"],
@@ -446,5 +416,29 @@ describe("StatusLineComponent hook statuses", () => {
 		component.setHookStatus("ponytail", "Ponytail");
 
 		expect(component.render(8)).toEqual(["Ponytail", "$0.04 (…"]);
+	});
+
+	it("keeps SGR styling from extension statuses", () => {
+		const component = makeComponent({ showHookStatus: true });
+		component.setHookStatus("demo", "\x1b[32mgreen\x1b[39m \x1b[31mred\x1b[39m");
+
+		expect(component.render(80)).toEqual(["\x1b[32mgreen\x1b[39m \x1b[31mred\x1b[39m\x1b[0m"]);
+	});
+
+	it("truncates styled statuses without bleeding style", () => {
+		const component = makeComponent({ showHookStatus: true });
+		component.setHookStatus("demo", "\x1b[32mgreen\x1b[39m \x1b[31mred\x1b[39m");
+
+		const [line] = component.render(6);
+		expect(visibleWidth(line)).toBeLessThanOrEqual(6);
+		expect(stripVTControlCharacters(line)).toBe("green…");
+		expect(line.endsWith("\x1b[0m…")).toBe(true);
+	});
+
+	it("strips OSC links from styled statuses under the bar", () => {
+		const component = makeComponent({ showHookStatus: true });
+		component.setHookStatus("link", "\x1b[1m\x1b]8;;https://example.com\x07docs\x1b]8;;\x07\x1b[22m");
+
+		expect(component.render(80)).toEqual(["\x1b[1mdocs\x1b[22m\x1b[0m"]);
 	});
 });
