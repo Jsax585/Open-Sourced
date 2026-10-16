@@ -24,6 +24,18 @@ import {
 const SESSION_WRITE_FLAGS = fs.constants.O_WRONLY | fs.constants.O_CREAT;
 const utf8Decoder = new TextDecoder("utf-8");
 
+/**
+ * Basename of a rewrite staged by {@link sessionStagingPath}; group 1 is the
+ * target's basename. A live publish renames it away within milliseconds;
+ * `omp gc` reclaims one a killed writer left behind.
+ */
+export const SESSION_STAGING_RE = /^\.(.+)\.[0-9a-f]{16}\.tmp$/;
+
+/** Fresh staging path beside `target`, matching {@link SESSION_STAGING_RE}. */
+export function sessionStagingPath(target: string): string {
+	return path.join(path.dirname(target), `.${path.basename(target)}.${Snowflake.next()}.tmp`);
+}
+
 export interface SessionStorageStat {
 	size: number;
 	mtimeMs: number;
@@ -626,7 +638,12 @@ function writeLinesToFileSync(target: string, lines: readonly string[]): void {
 async function writeLinesToFile(target: string, lines: readonly string[]): Promise<void> {
 	const sink = Bun.file(target).writer({ highWaterMark: LINE_STREAM_CHUNK });
 	try {
-		for (const line of lines) sink.write(line);
+		for (const line of lines) {
+			// Backpressured writes can reject after end() has otherwise completed.
+			// Do not publish a partial transcript before every write is confirmed.
+			const written = sink.write(line);
+			if (typeof written !== "number") await written;
+		}
 	} catch (err) {
 		try {
 			// Release the descriptor so the caller can discard the staging file.
@@ -938,7 +955,7 @@ export class FileSessionStorage implements SessionStorage {
 	): void {
 		const dir = path.dirname(fpath);
 		this.ensureDirSync(dir);
-		const tempPath = path.join(dir, `.${path.basename(fpath)}.${Snowflake.next()}.tmp`);
+		const tempPath = sessionStagingPath(fpath);
 		try {
 			stage(tempPath);
 		} catch (err) {
@@ -990,7 +1007,9 @@ export class FileSessionStorage implements SessionStorage {
 
 	listFilesSync(dir: string, pattern: string): string[] {
 		try {
-			return Array.from(new Bun.Glob(pattern).scanSync(dir)).map(name => path.join(dir, name));
+			return Array.from(new Bun.Glob(pattern).scanSync({ cwd: dir, followSymlinks: true })).map(name =>
+				path.join(dir, name),
+			);
 		} catch {
 			return [];
 		}
@@ -1060,7 +1079,7 @@ export class FileSessionStorage implements SessionStorage {
 		options: WriteTextAtomicOptions | undefined,
 	): Promise<void> {
 		const dir = path.resolve(fpath, "..");
-		const tempPath = path.join(dir, `.${path.basename(fpath)}.${Snowflake.next()}.tmp`);
+		const tempPath = sessionStagingPath(fpath);
 		await fs.promises.mkdir(dir, { recursive: true });
 		try {
 			await stage(tempPath);
@@ -1216,6 +1235,22 @@ export class FileSessionStorage implements SessionStorage {
 	/** Run a synchronous session mutation under its cross-process lock. */
 	withSessionFileLockSync<T>(sessionPath: string, operation: () => T): T {
 		return withFileLockSync(sessionPath, operation);
+	}
+
+	/**
+	 * Rename `replacement` over the session file `fpath` under the
+	 * cross-process publish lock that serializes appends and rewrites, when
+	 * `unchanged` still accepts the file there. Returns whether it renamed.
+	 * Throws {@link SessionLockError} while another writer holds the lock.
+	 */
+	replaceSessionFileSync(fpath: string, replacement: string, unchanged: () => boolean): boolean {
+		let replaced = false;
+		this.#withPublishLock(fpath, () => {
+			if (!unchanged()) return;
+			this.renameSync(replacement, fpath);
+			replaced = true;
+		});
+		return replaced;
 	}
 
 	/**

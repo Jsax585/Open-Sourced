@@ -2,26 +2,116 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed `encodeSixel` and `encodeSixelAsync` to drop a partial last 6-pixel band, so an image never extends below the requested height and the caller no longer has to shrink it to a multiple of 6 ([#16007](https://github.com/can1357/oh-my-pi/issues/16007))
+
+## [18.11.2] - 2026-10-16
+
 ### Added
 
-- Added `applyBinaryPatch(oldPath, patchPath, outPath)`, which applies an HDiffPatch single-stream delta patch (zstd or uncompressed) to a file
-- macOS desktop sessions keep the display awake while in use (released five minutes after the last call or on close); capabilities report `screenLocked`/`displayAsleep`, `screenState` reads both without waiting on queued work, captures carry `screenLocked`, and failures name the state ([#15188](https://github.com/can1357/oh-my-pi/pull/15188) by [@will-bogusz](https://github.com/will-bogusz))
+- Added `parseCodeStatus` to check code syntax and its resolved language without generating a summary ([#15904](https://github.com/can1357/oh-my-pi/pull/15904) by [@iliaal](https://github.com/iliaal)).
+- Added `DesktopSession.holdDisplayUntilReleased()` and `releaseDisplayAwake()` to keep the display awake until the caller releases it, rather than for 5 minutes after the last request ([#15762](https://github.com/can1357/oh-my-pi/pull/15762) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Changed
 
-- Sped up external commands in the embedded shell on Linux (glibc 2.29+) by spawning them without copying the host's memory (~9 ms → ~0.8 ms per launch at ~450 MB RSS) ([#14847](https://github.com/can1357/oh-my-pi/issues/14847), [#14858](https://github.com/can1357/oh-my-pi/pull/14858) by [@farnoy](https://github.com/farnoy))
-- Reduced macOS computer-use screenshot latency by about 35 ms per window capture; a machine holding thousands of off-screen windows no longer takes seconds per screenshot ([#15291](https://github.com/can1357/oh-my-pi/pull/15291) by [@will-bogusz](https://github.com/will-bogusz))
-- `grep()` and `search()` cut a matching line wider than `maxColumns` around its first match, marking each cut side with `...`, and report that match's character column in `column` ([#15278](https://github.com/can1357/oh-my-pi/pull/15278) by [@will-bogusz](https://github.com/will-bogusz))
-- Sped up macOS accessibility reads (`ax()`, `find()` and single-element reads) by fetching each element's attributes in one round trip to the app ([#15275](https://github.com/can1357/oh-my-pi/pull/15275) by [@will-bogusz](https://github.com/will-bogusz))
+- Reduced idle memory on GNU/Linux: once native work has been quiet for 5 seconds, freed native heap pages are returned to the OS without evicting caches ([#15905](https://github.com/can1357/oh-my-pi/pull/15905) by [@iliaal](https://github.com/iliaal))
+- Reduced memory held by cached code-structure parses: the cache now caps estimated syntax-tree memory instead of source size, keeps only a file's current and previous parse, and reparses edited files incrementally ([#15886](https://github.com/can1357/oh-my-pi/pull/15886) by [@H4vC](https://github.com/H4vC))
+- Changed `warmBlockParse` to skip files over 2 MiB (was 4 MiB), the size above which a typical parse no longer fits the cache ([#15886](https://github.com/can1357/oh-my-pi/pull/15886) by [@H4vC](https://github.com/H4vC))
 
 ### Fixed
 
-- Fixed macOS window listing, `ax()`, `find()` and element clicks refusing without Screen Recording permission, which now only screenshots and display listing need (without it, other apps' window titles are blank), and missing windows behind the 48 frontmost ([#15158](https://github.com/can1357/oh-my-pi/pull/15158) by [@will-bogusz](https://github.com/will-bogusz))
-- Fixed macOS `menu.items()` and `menu.select()` failing with `AxFailed` on menus that hold an item whose title cannot be read, such as the Tags row in Finder's File menu and a row of Preview's Tools menu; such items are now skipped like separators ([#15223](https://github.com/can1357/oh-my-pi/pull/15223) by [@will-bogusz](https://github.com/will-bogusz))
-- Fixed TOML, PowerShell, SCSS, Less, Vim script, GraphQL, Protobuf, Terraform/HCL, Dockerfile, CMake, INI and gitignore code showing without syntax highlighting
-- Fixed Kotlin, Swift, Elixir and Sass code being highlighted with the Java, Objective-C, Ruby and Haml grammars
-- Fixed code inside string interpolations (Python f-strings, Julia `$(…)`, Elixir `#{…}`) being colored as part of the string
-- Fixed `supportsLanguage` returning `true` for languages `highlightCode` leaves unhighlighted
+- Fixed `listWorkspace({ reportDirectoryErrors: true, maxDepth: 0 })` returning an empty result for an unreadable root instead of failing the scan ([#15789](https://github.com/can1357/oh-my-pi/pull/15789))
+- Minimized cargo output now keeps one "Blocking waiting for file lock on …" line, so a build stuck behind another cargo process says why ([#14631](https://github.com/can1357/oh-my-pi/pull/14631) by [@jorgoose](https://github.com/jorgoose))
+- Fixed `grep` ignoring `maxCountPerFile` when the path is a single file, and single-file count mode stopping at the `maxCount` content cap ([#14162](https://github.com/can1357/oh-my-pi/issues/14162), [#14327](https://github.com/can1357/oh-my-pi/pull/14327) by [@F0Rextasy](https://github.com/F0Rextasy))
+
+## [18.11.1] - 2026-10-15
+
+### Added
+
+- Added `listWorkspace({ reportDirectoryErrors })`: an unreadable root fails the scan and unreadable subdirectories are returned in `unreadableDirectories` instead of being silently skipped ([#15769](https://github.com/can1357/oh-my-pi/issues/15769)).
+
+### Fixed
+
+- Fixed unnecessary worker scheduling overhead in `read` loops over regular files ([#15504](https://github.com/can1357/oh-my-pi/pull/15504) by [@mg-mg-mg](https://github.com/mg-mg-mg))
+- Fixed `astGrep` and `astEdit` missing parse errors when Tree-sitter recovered by inserting a missing token, so edits could rewrite files that do not parse; such files are now reported and skipped ([#15530](https://github.com/can1357/oh-my-pi/issues/15530), [#15851](https://github.com/can1357/oh-my-pi/pull/15851) by [@glyahh](https://github.com/glyahh))
+- Fixed `grep` and `astGrep` `glob` filters skipping the files under a directory the glob matches, so `{src,test}` or `sr?` found nothing; a matched directory now selects every file under it, so `dir/*` also matches files in `dir`'s subdirectories ([#15760](https://github.com/can1357/oh-my-pi/issues/15760))
+- Fixed `grep()` and `search()` showing the start of a line wider than `maxColumns`, with no `column`, when the only match was an empty one at the end of the file (`$` or `\z` on a last line without a newline); they now show the end of the line and its column ([#15411](https://github.com/can1357/oh-my-pi/pull/15411) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed embedded-shell `xargs` failing with "Argument list too long" on large input lists instead of splitting them into executable batches ([#15708](https://github.com/can1357/oh-my-pi/pull/15708) by [@mg-mg-mg](https://github.com/mg-mg-mg))
+- Fixed applying a submodule pin patch to the worktree failing with "does not exist" for a submodule directory or trying to write the pinned commit as a file; like `git apply`, the submodule's checkout is left untouched, an added pin creates its empty directory, and a removed one deletes only an empty (uninitialized) directory ([#15459](https://github.com/can1357/oh-my-pi/pull/15459))
+- Fixed `diffText`/`numstat` showing a moved submodule as a delete plus an add instead of Git's 100% rename, and `applyPatch` now applies such rename patches ([#15459](https://github.com/can1357/oh-my-pi/pull/15459))
+- Fixed `submodulePaths()` following `.gitmodules` paths that are absolute or contain `.`/`..`, which could point outside the repository or loop forever; like Git, such entries are ignored ([#15459](https://github.com/can1357/oh-my-pi/pull/15459))
+- Fixed `copyGitObjects` exposing partially copied objects and packs to concurrent Git readers and permanently skipping a file truncated by an interrupted copy; each file is now published atomically ([#15459](https://github.com/can1357/oh-my-pi/pull/15459))
+- Fixed embedded-shell `read` in a pipeline stage or async job queueing a second blocking worker while holding its own, which could hang every such read once the bounded blocking pool filled ([#15509](https://github.com/can1357/oh-my-pi/pull/15509))
+- Fixed Mermaid labels decoding legacy references such as `&#128;` or `#150;` to invisible C1 controls instead of the browser's `€` and `–` ([#15621](https://github.com/can1357/oh-my-pi/pull/15621))
+
+## [18.11.0] - 2026-10-14
+
+### Fixed
+
+- Fixed macOS `setValue` on native text fields in background apps such as Contacts, Reminders, Calendar, Font Book and System Settings returning success for text the app showed but never stored: it now enters the text the way `win.type` does, and a mismatch names what the field reads ([#15293](https://github.com/can1357/oh-my-pi/pull/15293) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed a macOS desktop session keeping the display awake for the rest of the process after a native request hung; the request's timeout or `close()` now releases it ([#15414](https://github.com/can1357/oh-my-pi/pull/15414) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed the macOS `computer` tool sometimes reading an empty page on its first read of a Chrome window, and leaving Electron apps it read in screen-reader mode until they quit ([#15604](https://github.com/can1357/oh-my-pi/pull/15604) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed macOS `press()` on a scrolled-out row in a Mac Catalyst app reporting success while nothing happened: the element is asked to scroll into view first ([#15607](https://github.com/can1357/oh-my-pi/pull/15607) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed shell builtins on Windows resolving drive-relative paths (`C:`, `C:name`) against the agent process's start directory instead of the shell's working directory, which let `cd /c/Temp/x && rm -rf C:` delete the start directory; `rm` now also refuses a bare drive operand like `.` ([#15511](https://github.com/can1357/oh-my-pi/issues/15511))
+- Fixed `renderMermaidAscii` printing character references in labels verbatim: HTML entities (`&lt;`, `&amp;`, `&#60;`, `&#x3C;`) and Mermaid entity codes (`#quot;`, `#60;`) now render as the characters they name ([#15619](https://github.com/can1357/oh-my-pi/issues/15619))
+- Fixed `read` and `while read` hanging on process-substitution input ([#15501](https://github.com/can1357/oh-my-pi/issues/15501))
+- Fixed standalone binaries extracting unused native addon variants on first launch ([#15462](https://github.com/can1357/oh-my-pi/issues/15462))
+- Fixed Git diffs failing when staged or committed changes update a submodule pin ([#15457](https://github.com/can1357/oh-my-pi/issues/15457))
+
+## [18.10.4] - 2026-10-13
+
+### Fixed
+
+- Fixed `pwsh` code blocks rendering without PowerShell syntax colors ([#15008](https://github.com/can1357/oh-my-pi/issues/15008)).
+
+## [18.10.2] - 2026-10-12
+
+### Added
+
+- Added in-process `env`, `du`, `chmod`, `fold`, `rmdir`, `od`, `df`, `uptime`, `id`, and `dd` shell builtins matching GNU coreutils 9.x options, output, and exit codes (`chmod` and `id` on Unix only; `dd` is disabled with the destructive set by `PI_DISABLE_UUTILS_DESTRUCTIVE`).
+- Added an in-process `nl` shell builtin (ported from uutils coreutils 0.8.0, matching GNU `nl`), with header/body/footer numbering styles including `pBRE` regex styles, logical-page section delimiters, `-l` blank-line grouping, and `ln`/`rn`/`rz` number formats.
+
+## [18.10.0] - 2026-10-12
+
+### Added
+
+- Added `IpcServer`, `IpcConnection`, and `ipcEndpoint`: a local IPC transport over Unix sockets and Windows named pipes with owner-only access, single-instance binding, stale-endpoint takeover, and newline framing.
+
+### Changed
+
+- Optimized transport performance with task-local write coalescing and batch-based newline processing
+
+## [18.9.2] - 2026-10-11
+
+### Fixed
+
+- Fixed stalls when highlighting Markdown tool previews containing many inline spans or backslash escapes.
+
+## [18.9.1] - 2026-10-11
+
+### Fixed
+
+- Fixed executable scripts without a `#!` line failing with "Exec format error" in the embedded shell ([#15271](https://github.com/can1357/oh-my-pi/pull/15271) by [@iliaal](https://github.com/iliaal)).
+
+## [18.9.0] - 2026-10-11
+
+### Added
+
+- Added `applyBinaryPatch(oldPath, patchPath, outPath)` for applying HDiffPatch single-stream delta patches, including zstd-compressed patches, to files.
+- macOS desktop sessions now keep the display awake while in use and expose screen-lock and display-sleep state through capabilities, `screenState`, and screen captures.
+
+### Changed
+
+- Improved Linux embedded-shell startup performance for external commands.
+- Improved macOS computer-use performance, including faster screenshots and accessibility queries, with better handling of large numbers of off-screen windows.
+- Updated `grep()` and `search()` to truncate matching lines around the first match when they exceed `maxColumns`, mark truncated sides with `...`, and report the match's character column.
+
+### Fixed
+
+- Fixed macOS accessibility and window-management operations requiring Screen Recording permission; only screenshots and display listing now require that permission, and window listing includes windows beyond the frontmost 48. Window titles from other applications remain unavailable without Screen Recording permission.
+- Fixed macOS menu inspection and selection for menus containing items whose titles cannot be read; those items are now skipped safely.
+- Fixed syntax highlighting and language detection for several languages, including TOML, PowerShell, SCSS, Less, Vim script, GraphQL, Protobuf, Terraform/HCL, Dockerfile, CMake, INI, gitignore, Kotlin, Swift, Elixir, Sass, Python f-strings, Julia interpolations, and Elixir interpolations.
 
 ## [18.8.8] - 2026-10-10
 

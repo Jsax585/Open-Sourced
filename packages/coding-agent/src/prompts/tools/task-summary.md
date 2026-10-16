@@ -1,5 +1,5 @@
 <task-result id="{{id}}" agent="{{agentName}}" status="{{status}}" duration="{{duration}}">
-{{#if meta}}<meta lines="{{meta.lineCount}}" size="{{meta.charSize}}" />{{/if}}
+{{#if truncated}}{{#if meta}}<meta lines="{{meta.lineCount}}" size="{{meta.charSize}}" />{{/if}}{{/if}}
 {{#if modelFallback}}
 <model served="{{modelFallback.served}}"{{#if modelFallback.requested}} requested="{{modelFallback.requested}}"{{/if}} fallback="true">{{modelFallback.reason}}</model>
 {{/if}}
