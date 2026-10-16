@@ -5,6 +5,8 @@
 ### Added
 
 - Added selection-only session and model picker actions for `/seance`, so choosing a source or model leaves the active session and model unchanged ([#15036](https://github.com/can1357/oh-my-pi/pull/15036) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy))
+- Added `auto:<floor>` thinking selector syntax support and minimum effort floor clamping ([#13836](https://github.com/can1357/oh-my-pi/pull/13836) by [@tuandinh0801](https://github.com/tuandinh0801))
+- Added `auto:<floor>-<ceiling>` thinking range selectors ([#16029](https://github.com/can1357/oh-my-pi/pull/16029) by [@troshab](https://github.com/troshab))
 
 ### Changed
 
@@ -14,14 +16,6 @@
 
 - Fixed a streamed Markdown list keeping every item out of native scrollback until the turn ended, so rows that scrolled off screen were unreachable mid-stream; items in front of the newest one now retire as soon as it begins ([#13676](https://github.com/can1357/oh-my-pi/issues/13676), [#15993](https://github.com/can1357/oh-my-pi/pull/15993) by [@shgew](https://github.com/shgew))
 - Fixed SIXEL charts and SVG figures being resampled before display, which softened their text, on terminals whose cell height is not a multiple of 6 such as Windows Terminal ([#16007](https://github.com/can1357/oh-my-pi/issues/16007))
-
-### Added
-
-- Added `auto:<floor>` thinking selector syntax support and minimum effort floor clamping ([#13836](https://github.com/can1357/oh-my-pi/pull/13836) by [@tuandinh0801](https://github.com/tuandinh0801))
-### Added
-
-- Added `auto:<floor>` thinking selector syntax support and minimum effort floor clamping ([#13836](https://github.com/can1357/oh-my-pi/pull/13836) by [@tuandinh0801](https://github.com/tuandinh0801))
-- Added `auto:<floor>-<ceiling>` thinking range selectors
 
 ## [18.11.2] - 2026-10-16
 
