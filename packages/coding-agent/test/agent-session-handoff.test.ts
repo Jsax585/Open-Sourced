@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent, type AgentMessage, type StreamFn } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage, type StreamFn, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, Model, ToolCall } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
@@ -1318,6 +1318,52 @@ describe("AgentSession handoff", () => {
 		// Side-request lineage stays unique so append-only provider state never mixes.
 		expect(streamOptions.sessionId).toContain(":side:");
 		expect(streamOptions.sessionId).not.toBe("shared-cache-key");
+	});
+
+	// Only anthropic/openai credentials are stored, so a google target falls back to the active model.
+	it.each([
+		[
+			"a credentialed handoffModel at its level",
+			{ handoffModel: "anthropic/claude-haiku-4-5:max" },
+			"anthropic/claude-haiku-4-5",
+			ThinkingLevel.Max,
+		],
+		[
+			"the active model without handoffModel credentials",
+			{ handoffModel: "google/gemini-2.5-pro:max" },
+			"anthropic/claude-sonnet-4-5",
+			undefined,
+		],
+		[
+			"the active model when only compactionModel is set",
+			{ compactionModel: "anthropic/claude-haiku-4-5" },
+			"anthropic/claude-sonnet-4-5",
+			undefined,
+		],
+	])("generates the handoff on %s", async (_case, targets, expected, explicitLevel) => {
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockResolvedValue("## Goal\nContinue");
+		session.agent.setModel({ ...model, ...targets });
+		session.agent.setTools([
+			{
+				name: "read",
+				label: "read",
+				description: "Read a file",
+				parameters: {},
+				execute: async () => ({ content: [] }),
+			},
+		]);
+
+		await session.handoff();
+
+		const [context, requestModel, options] = generateHandoffSpy.mock.calls[0] ?? [];
+		expect(requestModel && `${requestModel.provider}/${requestModel.id}`).toBe(expected);
+		expect(options?.thinkingLevel).toBe(explicitLevel ?? session.thinkingLevel);
+		// Another model cannot reuse the live cache, so it gets no tools to call and the summarization prompt.
+		const crossModel = expected !== `${model.provider}/${model.id}`;
+		expect(context?.tools?.length).toBe(crossModel ? 0 : 1);
+		expect(context?.systemPrompt?.includes(compactionModule.SUMMARIZATION_SYSTEM_PROMPT)).toBe(crossModel);
 	});
 
 	it("saves auto-handoff document to disk when enabled", async () => {

@@ -265,6 +265,7 @@ export interface ModelPatch {
 	compat?: ModelSpec<Api>["compat"];
 	contextPromotionTarget?: string;
 	compactionModel?: string;
+	handoffModel?: string;
 	remoteCompaction?: RemoteCompactionConfig<Api>;
 	premiumMultiplier?: number;
 }
@@ -305,6 +306,7 @@ export function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: 
 	if (patch.preferWebsockets !== undefined) result.preferWebsockets = patch.preferWebsockets;
 	if (patch.contextPromotionTarget !== undefined) result.contextPromotionTarget = patch.contextPromotionTarget;
 	if (patch.compactionModel !== undefined) result.compactionModel = patch.compactionModel;
+	if (patch.handoffModel !== undefined) result.handoffModel = patch.handoffModel;
 	if (patch.remoteCompaction !== undefined) {
 		result.remoteCompaction = mergeRemoteCompactionConfig(base.remoteCompaction, patch.remoteCompaction);
 	}

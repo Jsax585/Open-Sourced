@@ -232,6 +232,7 @@ export const getModelsConfigSchemaBundle = once(() => {
 		"compat?": ApiCompatSchema,
 		"contextPromotionTarget?": "string",
 		"compactionModel?": "string",
+		"handoffModel?": "string",
 		"remoteCompaction?": RemoteCompactionSchema,
 	}).narrow((value, ctx) => {
 		// Enforce id non-empty
@@ -257,6 +258,13 @@ export const getModelsConfigSchemaBundle = once(() => {
 			value.compactionModel.length === 0
 		) {
 			return ctx.mustBe("compactionModel a non-empty string");
+		}
+		if (
+			value.handoffModel !== undefined &&
+			typeof value.handoffModel === "string" &&
+			value.handoffModel.length === 0
+		) {
+			return ctx.mustBe("handoffModel a non-empty string");
 		}
 		return validateMaxContextWindow(value, ctx);
 	});
@@ -291,6 +299,7 @@ export const getModelsConfigSchemaBundle = once(() => {
 		"compat?": ApiCompatSchema,
 		"contextPromotionTarget?": "string",
 		"compactionModel?": "string",
+		"handoffModel?": "string",
 		"remoteCompaction?": RemoteCompactionSchema,
 	}).narrow((value, ctx) => {
 		if (value.name !== undefined && typeof value.name === "string" && value.name.length === 0) {
@@ -309,6 +318,13 @@ export const getModelsConfigSchemaBundle = once(() => {
 			value.compactionModel.length === 0
 		) {
 			return ctx.mustBe("compactionModel a non-empty string");
+		}
+		if (
+			value.handoffModel !== undefined &&
+			typeof value.handoffModel === "string" &&
+			value.handoffModel.length === 0
+		) {
+			return ctx.mustBe("handoffModel a non-empty string");
 		}
 		return validateMaxContextWindow(value, ctx);
 	});

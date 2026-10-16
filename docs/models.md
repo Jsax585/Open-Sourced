@@ -128,6 +128,7 @@ override matching model tags. These fields do not configure the Anthropic Messag
 ### Compaction options
 
 - `compactionModel` (per model, including `modelOverrides`) — preferred compaction model, tried before the active model, chat-role candidates, and a largest-context fallback. It does not switch the active conversation model.
+- `handoffModel` (per model, including `modelOverrides`) — model that generates handoff documents (`/handoff` and the `handoff` compaction method) when it has usable credentials; otherwise the active model does. An explicit thinking suffix (`provider/id:max`) sets the handoff effort; without one, the session thinking level applies. Independent of `compactionModel`, and it does not switch the active conversation model.
 - `remoteCompaction` (provider level or per model) — opts eligible models into provider-native compaction. Supported keys: `enabled`, `api`, `endpoint`, `model`, `v2StreamingEnabled`, `v2Endpoint`, `streamingEndpoint`. Provider-level settings are the baseline; per-model keys override them.
 
 ### Allowed provider/model `api` values
@@ -245,7 +246,7 @@ the V1 `/responses/compact` request. See [compaction](./compaction.md).
 
 ### Model value checks
 
-- `id` is required and non-empty; optional `name`, model `baseUrl`, `contextPromotionTarget`, and `compactionModel` must also be non-empty
+- `id` is required and non-empty; optional `name`, model `baseUrl`, `contextPromotionTarget`, `compactionModel`, and `handoffModel` must also be non-empty
 - custom `models` entries require positive `contextWindow` and `maxTokens` when provided; the current auxiliary positivity check does not cover `modelOverrides`
 - on both custom models and overrides, `maxContextWindow` must be a positive safe integer no smaller than `contextWindow` when both are set
 
@@ -322,7 +323,7 @@ Provider defaults vs per-model overrides:
 - `modelOverrides` can override model metadata (`name`, `api`, `kind`, `reasoning`, `thinking`, `input`,
   `imageInputDecoder`, `tokenizer`, `supportsTools`, `cost`, `promptCache`, `premiumMultiplier`, `contextWindow`,
   `maxContextWindow`, `maxTokens`, `omitMaxOutputTokens`, `preferWebsockets`, `headers`, `compat`,
-  `contextPromotionTarget`, `compactionModel`, and `remoteCompaction`).
+  `contextPromotionTarget`, `compactionModel`, `handoffModel`, and `remoteCompaction`).
 - `compat` is deep-merged for nested routing blocks (`openRouterRouting`, `vercelGatewayRouting`,
   `extraBody`, and `whenThinking`).
 

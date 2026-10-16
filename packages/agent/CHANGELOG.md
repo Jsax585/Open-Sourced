@@ -5,6 +5,7 @@
 ### Added
 
 - `agent_start` carries `resumedToolCallIds` when a continued run first executes the calls of an unpaired assistant tail
+- `Agent.buildSideRequestContext()` accepts an optional request model, so side requests to another model get messages, tools, and context transforms normalized for that model ([#15938](https://github.com/can1357/oh-my-pi/pull/15938) by [@lavinhoque33](https://github.com/lavinhoque33))
 
 ## [18.11.1] - 2026-10-15
 

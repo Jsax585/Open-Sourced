@@ -3785,6 +3785,7 @@ export interface ProviderConfigInput {
 		compat?: ModelSpec<Api>["compat"];
 		contextPromotionTarget?: string;
 		compactionModel?: string;
+		handoffModel?: string;
 		remoteCompaction?: RemoteCompactionConfig<Api>;
 		premiumMultiplier?: number;
 	}>;

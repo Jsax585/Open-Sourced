@@ -1047,17 +1047,19 @@ function retargetCollapsedModelReferences<TSpec extends VariantSpecLike>(specs: 
 			liveIdsByProvider,
 		);
 		const compactionModel = resolveCollapsedModelReference(spec.compactionModel, spec.provider, liveIdsByProvider);
+		const handoffModel = resolveCollapsedModelReference(spec.handoffModel, spec.provider, liveIdsByProvider);
 		const webSearchModel = resolveCollapsedModelReference(spec.webSearchModel, spec.provider, liveIdsByProvider);
 		const imageModel = resolveCollapsedModelReference(spec.imageModel, spec.provider, liveIdsByProvider);
 		if (
 			contextPromotionTarget === spec.contextPromotionTarget &&
 			compactionModel === spec.compactionModel &&
+			handoffModel === spec.handoffModel &&
 			webSearchModel === spec.webSearchModel &&
 			imageModel === spec.imageModel
 		) {
 			continue;
 		}
-		specs[index] = { ...spec, contextPromotionTarget, compactionModel, webSearchModel, imageModel };
+		specs[index] = { ...spec, contextPromotionTarget, compactionModel, handoffModel, webSearchModel, imageModel };
 	}
 }
 
