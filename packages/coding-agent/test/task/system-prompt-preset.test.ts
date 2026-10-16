@@ -27,7 +27,10 @@ function identityConverter(messages: AgentMessage[]): Message[] {
 	) as Message[];
 }
 
-async function captureProviderContext(dialect?: AgentLoopConfig["dialect"]): Promise<Context> {
+async function captureProviderContext(
+	dialect?: AgentLoopConfig["dialect"],
+	systemPrompt: string[] = buildSubagentSystemPrompt([], "minimal-task", data),
+): Promise<Context> {
 	const schema = type({ path: type("string").describe("path argument sentinel") });
 	const readTool: AgentTool<typeof schema, { path: string }> = {
 		name: "read_probe",
@@ -48,7 +51,7 @@ async function captureProviderContext(dialect?: AgentLoopConfig["dialect"]): Pro
 		],
 	});
 	const context: AgentContext = {
-		systemPrompt: buildSubagentSystemPrompt([], "minimal-task", data),
+		systemPrompt,
 		messages: [],
 		tools: [readTool],
 	};
@@ -72,6 +75,12 @@ function expectNoInheritedBlocks(context: Context): void {
 }
 
 describe("systemPreset: minimal-task", () => {
+	it("does not append runtime protocol blocks to a non-preset empty default at the provider boundary", async () => {
+		const systemPrompt = buildSubagentSystemPrompt([], undefined, data, ["UNREQUESTED_RUNTIME_PROTOCOL_SENTINEL"]);
+		const context = await captureProviderContext(undefined, systemPrompt);
+		expect((context.systemPrompt ?? []).join("\n")).not.toContain("UNREQUESTED_RUNTIME_PROTOCOL_SENTINEL");
+	});
+
 	for (const [dialect, grammar] of [
 		["xml", "<invoke name="],
 		["hermes", "<tool_call>"],

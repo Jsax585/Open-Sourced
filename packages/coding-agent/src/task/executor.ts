@@ -3783,31 +3783,36 @@ function buildSubagentSessionOptions(
 		expectedAgentRef,
 		resolveServiceTierByFamily: launch?.resolveServiceTierByFamily,
 		onFirstChatDispatch: launch?.onFirstChatDispatch,
-		systemPrompt: defaultPrompt => {
+		systemPrompt: (defaultPrompt, runtimeInstructions) => {
 			const ircRoster = inputs.ircEnabled
 				? collectIrcPeerRoster(AgentRegistry.global(), inputs.id, inputs.ircRoot.sessionFile)
 				: undefined;
-			const subagentPrompt = buildSubagentSystemPrompt(defaultPrompt, inputs.systemPreset, {
-				agent: inputs.agentSystemPrompt,
-				context: inputs.context,
-				planReference: inputs.planReference,
-				planReferencePath: inputs.planReferencePath,
-				worktree: inputs.worktree,
-				structured: inputs.structured,
-				outputSchema: inputs.outputSchema,
-				outputSchemaOverridesAgent: inputs.outputSchemaOverridesAgent,
-				// Read the live item set through the registry instead of capturing the session, which
-				// would pin its whole graph past park. A revive builds while the registry session is
-				// null, so it renders the cleared set rather than the launch-time pooled instructions.
-				workPoolYieldItems:
-					AgentRegistry.global().get(inputs.id)?.session?.getWorkPoolYieldItems?.() ??
-					launch?.workPoolYieldItems ??
-					[],
-				ircPeers: ircRoster?.peers ?? [],
-				ircParkedCount: ircRoster?.parkedCount ?? 0,
-				ircOmittedCount: ircRoster?.omittedCount ?? 0,
-				ircSelfId: inputs.ircEnabled ? inputs.id : "",
-			});
+			const subagentPrompt = buildSubagentSystemPrompt(
+				defaultPrompt,
+				inputs.systemPreset,
+				{
+					agent: inputs.agentSystemPrompt,
+					context: inputs.context,
+					planReference: inputs.planReference,
+					planReferencePath: inputs.planReferencePath,
+					worktree: inputs.worktree,
+					structured: inputs.structured,
+					outputSchema: inputs.outputSchema,
+					outputSchemaOverridesAgent: inputs.outputSchemaOverridesAgent,
+					// Read the live item set through the registry instead of capturing the session, which
+					// would pin its whole graph past park. A revive builds while the registry session is
+					// null, so it renders the cleared set rather than the launch-time pooled instructions.
+					workPoolYieldItems:
+						AgentRegistry.global().get(inputs.id)?.session?.getWorkPoolYieldItems?.() ??
+						launch?.workPoolYieldItems ??
+						[],
+					ircPeers: ircRoster?.peers ?? [],
+					ircParkedCount: ircRoster?.parkedCount ?? 0,
+					ircOmittedCount: ircRoster?.omittedCount ?? 0,
+					ircSelfId: inputs.ircEnabled ? inputs.id : "",
+				},
+				runtimeInstructions,
+			);
 			// Per-spawn text (context, worktree, IRC roster) goes after the trailing
 			// `<project-context>` block so spawns of the same agent share the static
 			// prompt prefix as a cache hit.

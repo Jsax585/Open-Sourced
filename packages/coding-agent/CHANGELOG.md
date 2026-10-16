@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added the opt-in `systemPreset: minimal-task` agent frontmatter setting for focused subagents, including faithful native and in-band tool guidance and cold-revival behavior ([#6548](https://github.com/can1357/oh-my-pi/pull/6548) by [@dexhunter](https://github.com/dexhunter)).
+- Added the opt-in `systemPreset: minimal-task` agent frontmatter setting for focused subagents, including faithful native and in-band tool guidance, MCP server instructions, opaque secret-token guidance, and cold-revival behavior ([#6548](https://github.com/can1357/oh-my-pi/pull/6548) by [@dexhunter](https://github.com/dexhunter)).
 - Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
 
 ### Changed
