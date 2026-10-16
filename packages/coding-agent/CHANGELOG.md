@@ -11,6 +11,7 @@
 
 ### Changed
 
+- Coalesced matching notes from different advisors reviewing the same turn in queued and terminal-boundary batches, retaining the strongest severity ([#14439](https://github.com/can1357/oh-my-pi/pull/14439) by [@Dante-dan](https://github.com/Dante-dan); [#9698](https://github.com/can1357/oh-my-pi/issues/9698)).
 - The `lsp` tool now uses `lsp.requestTimeout` to dynamically adjust both call deadlines and project-aware diagnostic wait times, with support for per-call overrides
 - Reduced CPU overhead during syntax checks and automatic edit repairs ([#15904](https://github.com/can1357/oh-my-pi/pull/15904) by [@iliaal](https://github.com/iliaal)).
 - Reduced status-line refresh overhead while subagents have long conversations ([#15874](https://github.com/can1357/oh-my-pi/pull/15874) by [@iliaal](https://github.com/iliaal)).
