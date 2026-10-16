@@ -6,12 +6,19 @@
 
 - Improved editor history handling: history can now refresh when its source context changes, while preserving drafts created within the editor; entries are also recorded under the context active when they are added ([#11995](https://github.com/can1357/oh-my-pi/pull/11995) by [@jerome-benoit](https://github.com/jerome-benoit)).
 
+### Changed
+
+- Improved nested tool status line rendering: moved preview content into a dedicated collapsible code block when expanded and limited field widths on the one-line summary
+- Suppressed typo highlighting for the word currently being typed to avoid distracting inline markers while composing
+
 ### Fixed
 
 - Editor history navigation now contains failed source-key resolution and retries on the next recall instead of letting the error escape the keystroke handler ([#11995](https://github.com/can1357/oh-my-pi/pull/11995) by [@jerome-benoit](https://github.com/jerome-benoit)).
 - Failed history refreshes no longer leave a recalled prompt from the previous scope in the composer, while edited drafts and canceled attachments remain recoverable ([#11995](https://github.com/can1357/oh-my-pi/pull/11995) by [@jerome-benoit](https://github.com/jerome-benoit)).
 - Native history search now exposes forward/backward scope cycling and refreshes its scope title, query highlights and rows even when sources reuse result arrays ([#11995](https://github.com/can1357/oh-my-pi/pull/11995) by [@jerome-benoit](https://github.com/jerome-benoit)).
 - Fixed rapid successive Escape keys on Windows failing to reach interrupt and backtracking handlers when the console host relays them as text records ([#11995](https://github.com/can1357/oh-my-pi/pull/11995) by [@jerome-benoit](https://github.com/jerome-benoit)).
+- Fixed double-clicking an extension switched off in `/extensions` in Tern not switching it back on
+- Fixed the queued-messages badge in Tern showing a bare count that read as the first message's number; it now reads `N queued`
 - Fixed table charts on TSP terminals to use SVG fences and respect terminal palette
 - Fixed table charts in Tern's native view drawing in the other appearance's colors (light labels on a light page) when omp's light/dark detection disagreed with Tern; Tern now colors them in the theme it shows, like the prose around them
 - Fixed the /btw history answer being stuck at the bottom while a follow-up is being written: Up/Down and Page Up/Down now scroll the answer without leaving the draft ([#15902](https://github.com/can1357/oh-my-pi/pull/15902) by [@H4vC](https://github.com/H4vC))
