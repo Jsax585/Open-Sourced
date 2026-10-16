@@ -1,0 +1,9 @@
+auth "bizrouter" {
+	name "BizRouter"
+	login "api-key" {
+		auth-url "https://bizrouter.ai/settings/keys"
+		instructions "Create a service API key under Settings > API Keys in the BizRouter console"
+		prompt "Paste your BizRouter API key" placeholder="sk-br-v1-..."
+		validate "models-endpoint" label="BizRouter" url="https://api.bizrouter.ai/v1/models"
+	}
+}

@@ -1,0 +1,66 @@
+// Provider-wire compat for "bizrouter". BizRouter (bizrouter.ai) is a
+// multi-vendor gateway: `/v1/chat/completions`, `/v1/responses`, and an
+// Anthropic-compatible `/v1/messages` behind one `sk-br-v1-` key. `/v1/models`
+// requires a key and lists only the models that key's organization policy
+// allows, so the live roster is authoritative. Its `models[]` rows carry the
+// transport (`api_type`), USD rate card, limits, modalities, and accepted
+// request parameters; the selectors below own only what the roster does not.
+
+provider "bizrouter" {
+	default-model "bizrouter/deepseek-v4.1-flash"
+	env "BIZROUTER_API_KEY"
+	discovery label="BizRouter"
+
+	dynamic-models-authoritative #true
+	skip-cross-provider-reference-fills #true
+
+	// Keeps the provider visible in `/model` before login; the first live
+	// roster replaces it. Rate card from https://bizrouter.ai/docs/models.
+	seed api="openai-completions" base-url="https://api.bizrouter.ai/v1" bundle="fallback" {
+		model "bizrouter/deepseek-v4.1-flash" name="DeepSeek V4.1 Flash" {
+			reasoning #true
+			input "text" "image"
+			cost input=0.9 output=3.6 cache-read=0.018 cache-write=0
+			limits context=1048576 max-tokens=393216
+		}
+	}
+
+	// Chat completions forwards `reasoning_effort` to the upstream vendor, which
+	// rejects levels outside its own ladder with a 400. Every level the class
+	// rules would send was probed against the live gateway (2026-10-16); these
+	// selectors drop the ones BizRouter's chat wire refuses.
+	class "openai" {
+		family "gpt" {
+			// `max` is Responses-only upstream.
+			revision ">=5.6" {
+				thinking-efforts "low" "medium" "high" "xhigh"
+			}
+			revision ">=5.1 <5.2" {
+				thinking-efforts "low" "medium" "high"
+			}
+		}
+		family "o-series" {
+			thinking-efforts "low" "medium" "high" "xhigh"
+		}
+	}
+	class "gemini" {
+		family "flash" {
+			revision ">=3.7" {
+				thinking-efforts "low" "medium" "high"
+			}
+		}
+		revision ">=4" {
+			thinking-efforts "low" "medium" "high"
+		}
+	}
+	// residue: GPT-6 Astra is Responses-only on BizRouter (`api_type`), and
+	// `/v1/responses` accepts `max`; the chat-wire cap above must not reach it.
+	models "openai/gpt-6-astra" {
+		thinking-efforts "low" "medium" "high" "xhigh" "max"
+	}
+	// residue: Perplexity's Sonar ids carry no class; both reasoning SKUs
+	// reject `xhigh`.
+	models "perplexity/sonar-reasoning-pro" "perplexity/sonar-deep-research" {
+		thinking-efforts "minimal" "low" "medium" "high"
+	}
+}

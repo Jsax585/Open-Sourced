@@ -6,6 +6,7 @@
 
 - Added `keep-bundled-names` catalog attribute to preserve static model display names during discovery
 - Updated `openai-codex` provider configuration to prevent model name regressions during live discovery
+- Added BizRouter (`bizrouter`) as a provider: `/login bizrouter` with an API key, and the key's live `/v1/models` roster with its prices, limits, and image input. Claude models run on BizRouter's Anthropic-compatible Messages endpoint and Responses-only GPT models on `/v1/responses` ([#15983](https://github.com/can1357/oh-my-pi/pull/15983) by [@latemonk](https://github.com/latemonk))
 
 ### Changed
 

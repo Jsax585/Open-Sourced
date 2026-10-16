@@ -250,6 +250,13 @@ behavior {
 	api-routes provider="zenmux" default="openai-completions" {
 		route "anthropic-messages" prefix="anthropic/"
 	}
+	// BizRouter serves Claude natively on its Anthropic-compatible `/v1/messages`
+	// (thinking blocks, signatures, and `cache_control` pass through); every
+	// other namespace stays on chat completions unless the roster's `api_type`
+	// names the Responses API.
+	api-routes provider="bizrouter" default="openai-completions" {
+		route "anthropic-messages" prefix="anthropic/"
+	}
 	// GLM-5.3-Flash is available on Z.AI's native chat-completions API but
 	// not its Anthropic-compatible coding endpoint (#10539).
 	api-routes provider="zai" default="anthropic-messages" {
