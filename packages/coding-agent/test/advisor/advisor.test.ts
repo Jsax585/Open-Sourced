@@ -2010,6 +2010,46 @@ describe("advisor", () => {
 			expect(runtime.backlog).toBe(0);
 		});
 
+		it("stamps a bounded batch with its own covered turn while a later delta stays queued", async () => {
+			const { promise: maintainStarted, resolve: startMaintain } = Promise.withResolvers<void>();
+			const { promise: finishMaintain, resolve: releaseMaintain } = Promise.withResolvers<boolean>();
+			const { promise: secondPrompt, resolve: finishSecondPrompt } = Promise.withResolvers<void>();
+			const updates: Array<[boolean, number | undefined]> = [];
+			let maintainCalls = 0;
+			let prompts = 0;
+			const agent: AdvisorAgent = {
+				prompt: async () => {
+					if (++prompts === 2) finishSecondPrompt();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "t1", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				maintainContext: async () => {
+					if (++maintainCalls > 1) return false;
+					startMaintain();
+					return await finishMaintain;
+				},
+				beginAdvisorUpdate: (inProgress, coveredTurn) => updates.push([inProgress, coveredTurn]),
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd(messages, { willContinue: true, coveredTurn: 1 });
+			await maintainStarted;
+			messages.push({ role: "user", content: "t2", timestamp: 2 } as AgentMessage);
+			runtime.onTurnEnd(messages, { coveredTurn: 2 });
+			releaseMaintain(true);
+			await secondPrompt;
+
+			expect(updates).toEqual([
+				[true, 1],
+				[false, 2],
+			]);
+		});
+
 		it("tags in-progress turns with [in progress] heading", async () => {
 			const promptInputs: Array<string | AgentMessage[]> = [];
 			const updateStates: boolean[] = [];
@@ -5973,6 +6013,47 @@ describe("advisor", () => {
 			expect(promptInputs).toHaveLength(2);
 			expect(promptText(promptInputs[1])).toContain("aaa");
 			expect(promptText(promptInputs[1])).toContain("bbb");
+		});
+
+		it("stamps a quarantine re-prime with the turn of the newest captured update", async () => {
+			const promptInputs: Array<string | AgentMessage[]> = [];
+			const updates: Array<number | undefined> = [];
+			const { promise: firstPromptStarted, resolve: startFirstPrompt } = Promise.withResolvers<void>();
+			const { promise: firstPrompt, reject: rejectFirstPrompt } = Promise.withResolvers<void>();
+			const agent: AdvisorAgent = {
+				prompt: input => {
+					promptInputs.push(input);
+					if (promptInputs.length === 1) {
+						startFirstPrompt();
+						return firstPrompt;
+					}
+					return Promise.resolve();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "aaa", timestamp: 1 } as AgentMessage];
+			const runtime = new AdvisorRuntime(
+				agent,
+				{
+					snapshotMessages: () => messages,
+					beginAdvisorUpdate: (_inProgress, coveredTurn) => updates.push(coveredTurn),
+				},
+				0,
+			);
+
+			runtime.onTurnEnd(messages, { willContinue: true, coveredTurn: 1 });
+			await firstPromptStarted;
+			messages.push({ role: "user", content: "bbb", timestamp: 2 } as AgentMessage);
+			runtime.onTurnEnd(messages, { willContinue: true, coveredTurn: 2 });
+			messages.push({ role: "user", content: "ccc", timestamp: 3 } as AgentMessage);
+			runtime.onTurnEnd(messages, { dispatch: false, coveredTurn: 3 });
+			rejectFirstPrompt(new AdvisorOutputQuarantinedError("quarantined"));
+			await settleUntil(() => promptInputs.length >= 2 && runtime.backlog === 0);
+
+			expect(promptText(promptInputs[1])).toContain("ccc");
+			expect(updates).toEqual([1, 3]);
 		});
 
 		it("notifies the host after the advisor persistently quarantines its output (issue #6661)", async () => {

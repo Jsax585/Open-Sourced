@@ -121,6 +121,7 @@ import { buildSessionMetadata } from "./session-metadata";
 import type { YieldQueue } from "./yield-queue";
 
 import {
+	cfgAdvisorContinueOnFinalConcern,
 	cfgAdvisorEvictStaleResults,
 	cfgAdvisorImmuneTurns,
 	cfgAdvisorMaxNotesPerUpdate,
@@ -341,10 +342,6 @@ interface ActiveAdvisor {
 	syncBacklog: AdvisorSyncBacklog | undefined;
 	/** Eligible updates since the last reset; a review is scheduled at each multiple of the interval. */
 	eligibleUpdates: number;
-	/** Primary-turn count when the latest review was scheduled; the update that
-	 *  runs from it covers work up to this turn. Notes stamped with it so merged
-	 *  deliveries can show how many turns old each review was. */
-	pendingCoveredTurn: number;
 	retryFallback?: AdvisorRetryFallbackState;
 	retryFallbackPendingSuccess: boolean;
 	/** Count of consecutive usage-limit block waits, bounded by retry.maxRetries; reset on turn success. */
@@ -676,10 +673,13 @@ export class SessionAdvisors {
 				if (scheduled) {
 					scheduledAdvisors ??= [];
 					scheduledAdvisors.push(advisor);
-					advisor.pendingCoveredTurn = this.#advisorPrimaryTurnsCompleted;
 				}
 				try {
-					advisor.runtime.onTurnEnd(messages, { willContinue, dispatch: scheduled });
+					advisor.runtime.onTurnEnd(messages, {
+						willContinue,
+						dispatch: scheduled,
+						coveredTurn: this.#advisorPrimaryTurnsCompleted,
+					});
 				} catch (error) {
 					logger.warn("advisor onTurnEnd threw; delta dropped", { advisor: advisor.name, err: String(error) });
 				}
@@ -712,8 +712,8 @@ export class SessionAdvisors {
 			// off the review drain can still emit after it returns; those late notes
 			// deliver individually through #routeAdvice, and `#terminalUnwindActive`
 			// (held until the next primary turn starts), not the merge window, is what
-			// keeps them from steering finished work — only a blocker or an
-			// agent-end reviewer's concern may still request a continuation.
+			// keeps them from steering finished work — only a blocker or a
+			// final-review concern may still request a continuation.
 			if (!terminalBoundary) this.#terminalUnwindActive = false;
 		}
 	}
@@ -1566,7 +1566,7 @@ export class SessionAdvisors {
 				maintainContext: (incoming, signal) => this.#maintainAdvisorContext(advisorRef, incoming, signal),
 				obfuscator: this.#host.obfuscator(),
 				getModelIdentity: () => formatModelString(advisorRef.agent.state.model),
-				beginAdvisorUpdate: inProgress => {
+				beginAdvisorUpdate: (inProgress, coveredTurn) => {
 					advisorRef.recorder.beginTurn();
 					// Flushes the deferred backlog on the in-progress→completed
 					// transition (notes already cleared admission when reserved) and
@@ -1574,10 +1574,7 @@ export class SessionAdvisors {
 					// notes — both owned by the tool now. A queued WIP review may
 					// start after a terminal boundary flushed deferred notes; do not
 					// re-arm in-progress deferral.
-					advisorRef.adviseTool.beginUpdate(
-						inProgress && this.#advisorPrimaryWillContinue,
-						advisorRef.pendingCoveredTurn,
-					);
+					advisorRef.adviseTool.beginUpdate(inProgress && this.#advisorPrimaryWillContinue, coveredTurn);
 				},
 				onTurnError: (error, failedMessages, signal) =>
 					this.#recoverAdvisorTurn(advisorRef, error, failedMessages, signal),
@@ -1644,7 +1641,6 @@ export class SessionAdvisors {
 				reviewInterval: descriptor.reviewInterval,
 				syncBacklog: descriptor.syncBacklog,
 				eligibleUpdates: carried?.get(slug)?.eligibleUpdates ?? 0,
-				pendingCoveredTurn: 0,
 				retryFallbackPendingSuccess: false,
 				usageLimitRetries: 0,
 				signature,
@@ -1734,9 +1730,12 @@ export class SessionAdvisors {
 		// (catch-up off, or a review slower than its wait) keeps the one
 		// continuation the merged boundary flush would have granted it.
 		const finalReviewConcern =
-			severity === "concern" &&
 			this.#terminalUnwindActive &&
-			(advisor.reviewMode ?? cfgAdvisorReviewMode.get(this.#host.settings)) === "agent-end";
+			this.#isFinalReviewConcern(
+				severity,
+				(advisor.reviewMode ?? cfgAdvisorReviewMode.get(this.#host.settings)) === "agent-end",
+				turn,
+			);
 		const terminalUnwindPreserve =
 			this.#terminalUnwindActive && severity !== "blocker" && !finalReviewConcern && terminalAnswerNoQueuedWork;
 		const channel = resolveAdvisorDeliveryChannel({
@@ -1772,7 +1771,8 @@ export class SessionAdvisors {
 	 * when a note qualifies on its own merits: a blocker, or a concern from an
 	 * agent-end advisor (it reviewed the complete run, so a material issue in
 	 * finished work deserves one steering turn — the sleep latch prevents
-	 * cascade). For those final-review concerns `allowTerminalConcernSteering`
+	 * cascade) or, with `advisor.continueOnFinalConcern`, from the review of the
+	 * final turn. For those final-review concerns `allowTerminalConcernSteering`
 	 * lifts ONLY the terminal-answer preservation — the turn they reviewed has
 	 * by definition just answered — never the stop/abort/preserve/cooldown
 	 * gates. Otherwise preserves as a single visible card.
@@ -1805,9 +1805,14 @@ export class SessionAdvisors {
 		const interruptImmuneTurnActive = this.#isAdvisorInterruptImmuneTurnActive();
 		const shouldSteer = notes.some(n => {
 			// Steering eligibility: a blocker, or a concern from an agent-end
-			// reviewer. A turn-mode concern at a terminal boundary still
-			// preserves: the work was already reviewed per-turn.
-			const finalReviewConcern = n.severity === "concern" && this.#noteAdvisorIsAgentEnd(n.advisor);
+			// reviewer or, with `advisor.continueOnFinalConcern`, from the review of
+			// the final turn. Other turn-mode concerns at a terminal boundary still
+			// preserve: the work was already reviewed per-turn.
+			const finalReviewConcern = this.#isFinalReviewConcern(
+				n.severity,
+				this.#noteAdvisorIsAgentEnd(n.advisor),
+				n.turn,
+			);
 			if (n.severity !== "blocker" && !finalReviewConcern) return false;
 			return (
 				resolveAdvisorDeliveryChannel({
@@ -1834,6 +1839,14 @@ export class SessionAdvisors {
 			}
 		}
 		return false;
+	}
+
+	#isFinalReviewConcern(severity: AdvisorSeverity | undefined, agentEnd: boolean, turn: number | undefined): boolean {
+		return (
+			severity === "concern" &&
+			(agentEnd ||
+				(cfgAdvisorContinueOnFinalConcern.get(this.#host.settings) && turn === this.#advisorPrimaryTurnsCompleted))
+		);
 	}
 
 	/**

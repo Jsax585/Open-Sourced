@@ -81,7 +81,7 @@ When no `WATCHDOG.yml` roster is present, the default advisor uses these setting
 
 Edits to these settings apply to the running advisor at its next primary boundary without rebuilding it.
 
-Roster entries set their own cadence: an omitted `reviewMode` means `turn` and an omitted `reviewInterval` means `1`, regardless of the settings above. An omitted `syncBacklog` inherits `advisor.syncBacklog`, and an omitted `maxNotesPerUpdate` inherits the shared `WATCHDOG.yml` top-level value, then `advisor.maxNotesPerUpdate`. An explicit `syncBacklog: off` overrides a global `strict`.
+Roster entries set their own cadence: an omitted `reviewMode` means `turn` and an omitted `reviewInterval` means `1`, regardless of the settings above. An omitted `syncBacklog` inherits `advisor.syncBacklog`, and an omitted `maxNotesPerUpdate` inherits the shared `WATCHDOG.yml` top-level value, then `advisor.maxNotesPerUpdate`. An explicit `syncBacklog: off` overrides a global `strict`. `advisor.continueOnFinalConcern` applies to every turn advisor, roster entries included.
 
 Rebuilding advisors (saving `/advisor configure`, model-role or context changes) keeps updates the cadence skipped: each rebuilt advisor receives them with its next scheduled review.
 
@@ -151,7 +151,7 @@ The `advise` tool accepts one note and an optional severity:
 | Severity        | Delivery                                                                                                                                                             | Intended use                                                                 |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | omitted / `nit` | Non-interrupting aside, batched into the primary transcript at the next turn boundary.                                                                               | Cleanup, simplification, low-risk edge cases.                                |
-| `concern`       | Interrupting steering when delivery constraints permit it. After a terminal answer, only an `agent-end` reviewer may request continuation; a turn reviewer leaves a visible card. | Material risk, likely wrong direction, missing constraint, hallucinated API. |
+| `concern`       | Interrupting steering when delivery constraints permit it. After a terminal answer, an `agent-end` reviewer may request continuation, as may a turn reviewer of the final turn with `advisor.continueOnFinalConcern`; other turn-reviewer concerns leave a visible card. | Material risk, likely wrong direction, missing constraint, hallucinated API. |
 | `blocker`       | Interrupting steering message when the delivery constraints below permit it. Unlike a `concern`, a terminal answer alone does not prevent it from triggering a turn. | Continuing would clearly waste work or produce broken output.                |
 
 Accepted notes are rendered into the primary transcript as XML-escaped `<advisory>` elements. Named roster advisors add an `advisor` attribute:
@@ -168,7 +168,7 @@ A normal yield the agent drove itself is treated differently from a deliberate i
 
 - **While the loop is still streaming**, blockers can steer into the live turn. Nits and concerns from an in-progress review remain deferred until a final boundary.
 - **Once the loop has yielded and gone idle**, delivery keys on how the turn ended:
-  - If the primary's tail is a **terminal text answer with no queued work**, a late turn-mode `concern` is preserved as a visible card rather than waking the agent to restate a completed turn (#4840). A `blocker`, or a concern from an `agent-end` reviewer, can request a continuation instead. All stop, cooldown, plan-mode, and client constraints still apply.
+  - If the primary's tail is a **terminal text answer with no queued work**, a late turn-mode `concern` is preserved as a visible card rather than waking the agent to restate a completed turn (#4840). A `blocker`, or a concern from an `agent-end` reviewer, can request a continuation instead; with `advisor.continueOnFinalConcern`, so can a turn reviewer's concern about the final turn. All stop, cooldown, plan-mode, and client constraints still apply.
   - Otherwise (the agent yielded mid-work, no terminal answer), an idle `concern`/`blocker` normally triggers a fresh turn so the advice is acted on immediately.
 
 Session/client constraints can preserve a note whose normal delivery path is steering:
@@ -224,7 +224,7 @@ Practical interpretation:
 
 `strict` with an `agent-end` advisor provides synchronous final review: the primary reaches its final boundary, the advisor reviews the accumulated run, then the primary can finish. Notes delivered at that boundary merge into one message, ordered newest turn first, then severity (`blocker` → `concern` → `nit`). Notes about earlier turns carry a `turns_ago` attribute and a dim `T-N` transcript marker between severity and advisor name. The first merged delivery, then at most once every 50 primary turns, includes guidance that findings may be outdated or wrong and may be ignored.
 
-A batch containing a blocker or an `agent-end` concern can request at most one permitted continuation, even when several advisors report findings together. Stop/abort suppression, concern cooldown, plan-mode policy, and client preservation constraints apply to both buffered and live delivery. Otherwise the notes remain visible without restarting the primary. A continuation an advisor delivery starts does not schedule another review or advance cadence; its updates are captured and sent with the next review, without feeding advisor notes back into them.
+A batch containing a blocker, an `agent-end` concern, or (with `advisor.continueOnFinalConcern`) a turn reviewer's concern about the final turn can request at most one permitted continuation, even when several advisors report findings together. Stop/abort suppression, concern cooldown, plan-mode policy, and client preservation constraints apply to both buffered and live delivery. Otherwise the notes remain visible without restarting the primary. A continuation an advisor delivery starts does not schedule another review or advance cadence; its updates are captured and sent with the next review, without feeding advisor notes back into them.
 
 Keep turn reviews asynchronous while waiting for final reviews:
 

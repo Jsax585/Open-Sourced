@@ -438,6 +438,78 @@ describe("advisor tool-call loop guard", () => {
 		expect(completions).toHaveLength(2);
 	});
 
+	it("steers one continuation for a turn advisor's final-turn concern at the boundary with continueOnFinalConcern", async () => {
+		createAdvisor(
+			{ "advisor.syncBacklog": "1", "advisor.continueOnFinalConcern": true },
+			0,
+			{ name: "Step reviewer", reviewMode: "turn" },
+			0,
+			"finished work has a null deref",
+			"concern",
+		);
+		if (!session) throw new Error("Expected live session");
+
+		await session.prompt("only update");
+		expect(await session.waitForAdvisorCatchup(2_000)).toBe(true);
+
+		const completions = session.agent.state.messages.filter(
+			message => message.role === "assistant" && JSON.stringify(message.content).includes("primary complete"),
+		);
+		expect(completions).toHaveLength(2);
+	});
+
+	it("steers one continuation for a turn advisor's late final-turn concern with continueOnFinalConcern", async () => {
+		createAdvisor(
+			{ "advisor.syncBacklog": "off", "advisor.continueOnFinalConcern": true },
+			0,
+			{ name: "Step reviewer", reviewMode: "turn" },
+			0,
+			"finished work has a null deref",
+			"concern",
+		);
+		if (!session) throw new Error("Expected live session");
+		const live = session;
+		const continuationEnded = Promise.withResolvers<void>();
+		let agentEnds = 0;
+		live.subscribe(event => {
+			if (event.type === "agent_end" && ++agentEnds === 2) continuationEnded.resolve();
+		});
+
+		await live.prompt("only update");
+		expect(await live.waitForAdvisorCatchup(2_000)).toBe(true);
+		await continuationEnded.promise;
+
+		const completions = live.agent.state.messages.filter(
+			message => message.role === "assistant" && JSON.stringify(message.content).includes("primary complete"),
+		);
+		expect(completions).toHaveLength(2);
+	});
+
+	it("preserves a turn advisor's earlier-step concern at the terminal boundary with continueOnFinalConcern", async () => {
+		createAdvisor(
+			{ "advisor.syncBacklog": "1", "advisor.continueOnFinalConcern": true },
+			0,
+			{ name: "Step reviewer", reviewMode: "turn" },
+			1,
+			undefined,
+			"nit",
+			[{ note: "the read step targets a missing file", severity: "concern" }],
+		);
+		if (!session) throw new Error("Expected live session");
+
+		await session.prompt("inspect missing file");
+		expect(await session.waitForAdvisorCatchup(2_000)).toBe(true);
+
+		const completions = session.agent.state.messages.filter(
+			message => message.role === "assistant" && JSON.stringify(message.content).includes("primary complete"),
+		);
+		expect(completions).toHaveLength(1);
+		const cards = session.agent.state.messages.filter(
+			message => message.role === "custom" && JSON.stringify(message).includes("targets a missing file"),
+		);
+		expect(cards).toHaveLength(1);
+	});
+
 	it("accumulates skipped final reviews until cadence interval", async () => {
 		const { contexts } = createAdvisor({ "advisor.syncBacklog": "1" }, 0, {
 			name: "Final reviewer",
