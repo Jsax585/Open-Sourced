@@ -178,7 +178,16 @@ export class RotatingFileSink {
 
 	#selectFile(day: string): void {
 		const dayChanged = day !== this.#activeDay;
-		if (!dayChanged && this.#activeBytes <= this.#maxBytes) return;
+		if (!dayChanged && this.#activePath) {
+			// fd 1/2 can be redirected onto the active log (terminal-output-guard);
+			// those raw writes bypass write(), so trust the file over the counter.
+			try {
+				this.#activeBytes = Math.max(this.#activeBytes, fs.statSync(this.#activePath).size);
+			} catch {
+				// Active file missing or not yet chosen; keep the counter.
+			}
+			if (this.#activeBytes <= this.#maxBytes) return;
+		}
 		// The buffered records belong to the current file: write them there, then
 		// close its descriptor BEFORE the next file is registered, because
 		// registration prunes beyond maxFiles — on Windows the pruned

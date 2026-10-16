@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed unmanaged stdout/stderr and inherited subprocess diagnostics corrupting the interactive viewport on Unix; diagnostics stay in the process log while rendering, resize, handoff, and shutdown retain terminal ownership ([#16159](https://github.com/can1357/oh-my-pi/pull/16159) by [@tommymorgan](https://github.com/tommymorgan)).
+
 ## [18.12.1] - 2026-10-17
 
 ### Breaking Changes

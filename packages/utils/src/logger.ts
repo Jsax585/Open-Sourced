@@ -20,7 +20,7 @@ import * as path from "node:path";
 import { isPromise } from "node:util/types";
 import { getLogsDir, localDay } from "./dirs";
 import { RotatingFileSink } from "./logger/rotating-file";
-import { setStderrRedirectTarget } from "./stderr-guard";
+import { setTerminalOutputRedirectTarget } from "./terminal-output-guard";
 import { drainModuleLoadEvents } from "./timing-buffer";
 /** Severity names accepted by the centralized logger. */
 export type LogLevel = "error" | "warn" | "info" | "debug";
@@ -309,8 +309,8 @@ function makeFileTransport(dir?: string): RotatingFileSink {
 		maxBytes: 10 * 1024 * 1024,
 		maxFiles: 5,
 		batch: { intervalMs: FILE_FLUSH_INTERVAL_MS, maxBytes: FILE_FLUSH_BYTES },
-		// Keep the stderr guard's fd 2 on the file this sink is writing.
-		onRotate: setStderrRedirectTarget,
+		// Keep unmanaged fd 1/2 writes on the file this sink is writing.
+		onRotate: setTerminalOutputRedirectTarget,
 	});
 }
 

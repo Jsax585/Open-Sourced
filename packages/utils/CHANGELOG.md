@@ -6,6 +6,10 @@
 
 - Added `readSalvageableRows()` to read the rows of a damaged SQLite table that are still readable, skipping only the damaged pages ([#15751](https://github.com/can1357/oh-my-pi/pull/15751) by [@Shadorain](https://github.com/Shadorain))
 
+### Fixed
+
+- Fixed unmanaged stdout and stderr corrupting interactive terminal displays, including inherited child-process output and log rotation ([#16159](https://github.com/can1357/oh-my-pi/pull/16159) by [@tommymorgan](https://github.com/tommymorgan)).
+
 ## [18.12.0] - 2026-10-17
 
 ### Added
@@ -32,7 +36,7 @@
 
 ### Fixed
 
-- Fixed an unhandled rejection when a subprocess is spawned with an already-aborted signal ([#15750](https://github.com/can1357/oh-my-pi/pull/15750) by [@harshaygadekar](https://github.com/harshaygadekar))
+- Fixed an unhandled rejection when a subprocess is spawned with an already-aborted signal ([#15750](https://github.com/can1357/oh-my-pi/pull/15750) by [@harshaygadekar](https://github.com/can1357))
 
 ## [18.10.0] - 2026-10-12
 

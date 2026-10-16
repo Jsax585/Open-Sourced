@@ -9,7 +9,7 @@
 import * as fs from "node:fs";
 import { APP_NAME } from "./dirs";
 import * as logger from "./logger";
-import { restoreTerminalStderr } from "./stderr-guard";
+import { restoreTerminalOutput } from "./terminal-output-guard";
 
 // Cleanup reasons, in order of priority/meaning.
 export enum Reason {
@@ -526,7 +526,7 @@ async function exitAfterFatal(output: string, logMessage: string, err: Error, re
 		// completion promise. TUI owners therefore hand the cursor back before the
 		// fatal report is written, while slower resource cleanup continues afterward.
 		const cleanup = runCleanup(reason);
-		restoreTerminalStderr();
+		restoreTerminalOutput(true);
 		// A revoked terminal can make stream writes raise another fatal error. Use
 		// the descriptor directly so failure stays synchronous and contained.
 		try {

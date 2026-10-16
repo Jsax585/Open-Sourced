@@ -1,11 +1,16 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as fs from "node:fs";
+import * as tty from "node:tty";
 import { TtyWriter } from "@oh-my-pi/pi-natives";
 import { $env, isBunTestRuntime, isTerminalHeadless, isWsl } from "@oh-my-pi/pi-utils/env";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils/loop-phase";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
-import { restoreTerminalStderr, suppressTerminalStderr } from "@oh-my-pi/pi-utils/stderr-guard";
+import {
+	duplicateTerminalOutput,
+	restoreTerminalOutput,
+	suppressTerminalOutput,
+} from "@oh-my-pi/pi-utils/terminal-output-guard";
 import { TSP_VERSION } from "@oh-my-pi/pi-wire";
 import { getActiveTerminal, registerStdoutErrorHandler, setActiveTerminal } from "./active-terminal";
 import {
@@ -456,10 +461,8 @@ function createConsoleCodepageGuard(): (() => void) | null {
  */
 export function emergencyTerminalRestore(): void {
 	try {
-		// Crash paths must surface subsequent stderr (fatal reports) on the
-		// real terminal; no-op when the stderr guard is inactive.
-		restoreTerminalStderr();
 		const terminal = getActiveTerminal();
+		if (!terminal) restoreTerminalOutput(true);
 		if (terminal) {
 			// Keyboard enhancement state is screen-local: pop the alt-screen
 			// frame before leaving it, then let stop() pop omp's main-screen frame.
@@ -501,6 +504,9 @@ export function emergencyTerminalRestore(): void {
 		}
 	} catch {
 		// Terminal may already be dead during crash cleanup - ignore errors
+	} finally {
+		// Teardown failures must not hide fatal reports on redirected fd 1/2.
+		restoreTerminalOutput(true);
 	}
 }
 /** Terminal-reported appearance (dark/light mode). */
@@ -906,6 +912,11 @@ export class ProcessTerminal implements Terminal {
 	// enqueues frames and performs the blocking write(2) on its own thread;
 	// `pendingOutputBytes` exposes the backlog for render-side frame skipping.
 	#outputPump?: TtyWriter;
+	#outputFd: number | null = null;
+	#outputStream?: tty.WriteStream;
+	// The descriptor #outputStream owns (not declared on the stream type); stop()
+	// closes it because destroy() leaves it open.
+	#outputStreamFd?: number;
 	// Upper bound on the pump's backlog: the count its last enqueue or read
 	// reported. Only #safeWrite enqueues and the pump thread only drains, so
 	// the live backlog cannot exceed this until the next enqueue refreshes it.
@@ -1121,6 +1132,7 @@ export class ProcessTerminal implements Terminal {
 		// escapes never reach the developer's terminal during `bun test`.
 		this.#headless = isTerminalHeadless();
 		if (this.#headless) return;
+		this.#wasRaw = process.stdin.isRaw || false;
 		registerPostmortemTerminalRestore();
 
 		// Own stdout: out-of-band writers route through this terminal, and the
@@ -1129,34 +1141,60 @@ export class ProcessTerminal implements Terminal {
 		// RGB belongs to this ownership session, including deferred-input prepaint.
 		setTerminalBackgroundColor(undefined);
 		terminalEverStarted = true;
-		// Own the blocking write(2) on a pump thread (unix TTYs only). A stale
-		// prebuilt natives module without the export falls back to direct writes.
-		// Test suites spy on `process.stdout.write` with a faked isTTY, so the
-		// pump stays off under `bun test` — same philosophy as isTerminalHeadless.
-		if (process.platform !== "win32" && process.stdout.isTTY && !isBunTestRuntime() && !this.#outputPump) {
-			try {
-				this.#outputPump = new TtyWriter(1);
-				this.#pumpBacklogBound = 0;
-			} catch (err) {
-				logger.debug("tty output pump unavailable; using direct stdout writes", { err: String(err) });
+		try {
+			this.#outputFd = suppressTerminalOutput();
+			if (this.#outputFd !== null) {
+				// The stream owns a separate duplicate, never the guard's saved fd.
+				const streamFd = duplicateTerminalOutput();
+				try {
+					this.#outputStream = new tty.WriteStream(streamFd);
+					this.#outputStreamFd = streamFd;
+				} catch (err) {
+					fs.closeSync(streamFd);
+					throw err;
+				}
+				this.#outputStream.on("error", this.#stdoutErrorHandler);
+				process.stdout.columns = this.#outputStream.columns;
+				process.stdout.rows = this.#outputStream.rows;
 			}
+			// TtyWriter duplicates its input fd and owns that duplicate. Keep the
+			// existing off-thread pump/backlog behavior on the private renderer fd.
+			if (process.platform !== "win32" && process.stdout.isTTY && !isBunTestRuntime() && !this.#outputPump) {
+				try {
+					this.#outputPump = new TtyWriter(this.#outputFd ?? 1);
+					this.#pumpBacklogBound = 0;
+				} catch (err) {
+					logger.debug("tty output pump unavailable; using private direct writes", { err: String(err) });
+				}
+			}
+		} catch (err) {
+			this.stop();
+			throw err;
 		}
 
-		// Keep unmanaged native fd-2 writes off the viewport while we own the
-		// terminal; released in stop(). See stderr-guard in pi-utils.
-		suppressTerminalStderr();
-
-		// Set up resize handler immediately. The OS refreshes process.stdout
-		// dimensions before firing `resize`, so it is authoritative for geometry:
-		// reconcile any stale cached DEC 2048 report before notifying the renderer.
+		// fd 1 now targets the log. Refresh geometry through the private TTY.
 		this.#stdoutResizeListener = () => {
+			const output = this.#outputStream;
+			if (output) {
+				const oldColumns = output.columns;
+				const oldRows = output.rows;
+				if ("_refreshSize" in output && typeof output._refreshSize === "function") output._refreshSize();
+				process.stdout.columns = output.columns;
+				process.stdout.rows = output.rows;
+				if (oldColumns === output.columns && oldRows === output.rows) return;
+				// fd 1 targets the log while isolated, so the runtime can never
+				// emit process.stdout's own "resize" event; event-keyed consumers
+				// (e.g. editor max-height sync) still need it after a change.
+				process.stdout.emit("resize");
+			}
 			// Conservative: some hosts reset modes across a resize/reattach, so
 			// re-establish cursor visibility on the next explicit call.
 			this.#cursorVisible = undefined;
 			this.#reconcileInBandGeometryOnResize();
 			this.#resizeHandler?.();
 		};
-		process.stdout.on("resize", this.#stdoutResizeListener);
+		if (this.#outputStream) process.on("SIGWINCH", this.#stdoutResizeListener);
+		else process.stdout.on("resize", this.#stdoutResizeListener);
 
 		// Refresh terminal dimensions - they may be stale after suspend/resume
 		// (SIGWINCH is lost while process is stopped). Unix only.
@@ -2328,10 +2366,26 @@ export class ProcessTerminal implements Terminal {
 		}
 		if (this.#headless) return;
 
-		// Release terminal ownership of fd 2 first so external programs,
-		// suspend, and shutdown see the real stderr even if a later teardown
-		// step throws.
-		restoreTerminalStderr();
+		// Release fd 1/2 first; the pump has its own duplicate for reset
+		// sequences. destroy() does not close the stream's descriptor, so close
+		// the duplicate this terminal owns instead of leaking it across
+		// stop/start cycles.
+		const outputStream = this.#outputStream;
+		const streamFd = this.#outputStreamFd;
+		this.#outputStream = undefined;
+		this.#outputStreamFd = undefined;
+		if (outputStream) {
+			outputStream.destroy();
+			if (streamFd !== undefined) {
+				try {
+					fs.closeSync(streamFd);
+				} catch {
+					// Descriptor already closed.
+				}
+			}
+		}
+		this.#outputFd = null;
+		restoreTerminalOutput();
 
 		this.#clearProgressTimer();
 		if (this.#progressActive) {
@@ -2456,6 +2510,7 @@ export class ProcessTerminal implements Terminal {
 		this.#appearance = undefined;
 		if (this.#stdoutResizeListener) {
 			process.stdout.removeListener("resize", this.#stdoutResizeListener);
+			process.removeListener("SIGWINCH", this.#stdoutResizeListener);
 			this.#stdoutResizeListener = undefined;
 		}
 		this.#disarmStdoutStallWatchdog();
@@ -2585,6 +2640,14 @@ export class ProcessTerminal implements Terminal {
 			// away from UTF-8; repair it before any bytes hit WriteFile so no frame
 			// is ever translated through an OEM codepage. See ensureWindowsConsoleUtf8.
 			if (process.platform === "win32") ensureWindowsConsoleUtf8();
+			if (this.#outputFd !== null) {
+				if (this.#conpty && Buffer.byteLength(data, "utf8") > MAX_CONPTY_WRITE_CHUNK_BYTES) {
+					for (const chunk of chunkForConPTY(data)) this.#writePrivateOutput(chunk);
+				} else {
+					this.#writePrivateOutput(data);
+				}
+				return;
+			}
 			// Windows ConPTY drops viewport tracking when a single write exceeds
 			// ~32-64 KB: the host UI's scroll position stays parked at wherever
 			// the write began, even though every byte landed in scrollback. Split
@@ -2615,6 +2678,17 @@ export class ProcessTerminal implements Terminal {
 			this.#markTerminalDisconnected("stdout failed", err);
 		} finally {
 			popLoopPhase();
+		}
+	}
+
+	#writePrivateOutput(data: string): void {
+		if (this.#outputFd === null) return;
+		const bytes = Buffer.from(data);
+		let offset = 0;
+		while (offset < bytes.length) {
+			const written = fs.writeSync(this.#outputFd, bytes, offset, bytes.length - offset);
+			if (written <= 0) throw new Error("terminal output made no progress");
+			offset += written;
 		}
 	}
 
