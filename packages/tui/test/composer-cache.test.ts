@@ -186,6 +186,36 @@ describe("composer startup cache", () => {
 		cache.close();
 	});
 
+	it("refreshes existing inherited project rows after a global config write", async () => {
+		const project = path.join(root, "project");
+		const globalConfig = path.join(root, "agent", "config.yml");
+		const projectConfig = path.join(project, ".omp", "config.yml");
+		await Bun.write(globalConfig, "autoResume: false\n");
+		const cache = ComposerCache.open(dbPath);
+		cache.writeAutoResume(project, false, false, [globalConfig], [projectConfig]);
+
+		await Bun.write(globalConfig, "autoResume: true\n");
+		cache.writeGlobalAutoResume(true, [globalConfig]);
+
+		expect(cache.cachedAutoResume(project)).toBeTrue();
+		cache.close();
+	});
+
+	it("leaves an inherited project row stale when a project override appears", async () => {
+		const project = path.join(root, "project");
+		const globalConfig = path.join(root, "agent", "config.yml");
+		const projectConfig = path.join(project, ".omp", "config.yml");
+		await Bun.write(globalConfig, "autoResume: false\n");
+		const cache = ComposerCache.open(dbPath);
+		cache.writeAutoResume(project, false, false, [globalConfig], [projectConfig]);
+
+		await Bun.write(projectConfig, "autoResume: true\n");
+		cache.writeGlobalAutoResume(false, [globalConfig]);
+
+		expect(cache.cachedAutoResume(project)).toBeUndefined();
+		cache.close();
+	});
+
 	it("rejects cached auto-resume intent after its config source changes on disk", async () => {
 		const project = path.join(root, "project");
 		const sessionFile = path.join(root, "sessions", "session.jsonl");

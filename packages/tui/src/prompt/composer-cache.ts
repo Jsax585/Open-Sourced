@@ -279,6 +279,7 @@ export function sharedComposerCache(): ComposerCache | undefined {
 export class ComposerCache {
 	readonly #db: Database;
 	readonly #select: Statement<{ project: string; kind: EntryKind; value: string }, [string, string]>;
+	readonly #selectKind: Statement<{ project: string; kind: EntryKind; value: string }, [EntryKind]>;
 	readonly #upsert: Statement<unknown, [string, EntryKind, string]>;
 	/**
 	 * Value this connection last read or wrote per `project\0kind`. Startup and
@@ -297,6 +298,7 @@ export class ComposerCache {
 			db.run(`PRAGMA user_version = ${FORMAT_VERSION}`);
 		}
 		this.#select = db.prepare("SELECT project, kind, value FROM entries WHERE project IN (?, ?)");
+		this.#selectKind = db.prepare("SELECT project, kind, value FROM entries WHERE kind = ?");
 		// The WHERE turns a byte-identical upsert into a no-op instead of a page rewrite.
 		this.#upsert = db.prepare(
 			"INSERT INTO entries (project, kind, value) VALUES (?, ?, ?) ON CONFLICT (project, kind) DO UPDATE SET value = excluded.value WHERE value IS NOT excluded.value",
@@ -511,10 +513,32 @@ export class ComposerCache {
 		};
 		const json = JSON.stringify(value);
 		const globalKey = `${ANY_PROJECT}\0auto-resume`;
-		if (this.#known.get(globalKey) === json) return;
 		try {
-			this.#upsert.run(ANY_PROJECT, "auto-resume", json);
+			const globalSources = new Set(sourcePaths.map(sourcePath => path.resolve(sourcePath)));
+			const inherited = this.#selectKind
+				.all("auto-resume")
+				.filter(row => row.project !== ANY_PROJECT)
+				.flatMap(row => {
+					const cached = parseCachedAutoResume(parseJson(row.value));
+					if (!cached || cached.projectScoped) return [];
+					const projectSources = (cached.sources ?? []).filter(source => !globalSources.has(source.path));
+					if (!cachedAutoResumeIsFresh({ ...cached, sources: projectSources })) return [];
+					const refreshed: CachedAutoResume = {
+						value: autoResume,
+						projectScoped: false,
+						sources:
+							sourcePaths.length + projectSources.length > 0
+								? snapshotSources([...sourcePaths, ...projectSources.map(source => source.path)])
+								: undefined,
+					};
+					return [{ project: row.project, json: JSON.stringify(refreshed) }];
+				});
+			this.#db.transaction(() => {
+				this.#upsert.run(ANY_PROJECT, "auto-resume", json);
+				for (const row of inherited) this.#upsert.run(row.project, "auto-resume", row.json);
+			})();
 			this.#known.set(globalKey, json);
+			for (const row of inherited) this.#known.set(`${row.project}\0auto-resume`, row.json);
 		} catch (error) {
 			logger.debug("composer cache write failed", { kind: "auto-resume", error: String(error) });
 		}
@@ -572,6 +596,7 @@ export class ComposerCache {
 	close(): void {
 		// Unfinalized statements keep the file handle open on Windows.
 		this.#select.finalize();
+		this.#selectKind.finalize();
 		this.#upsert.finalize();
 		this.#db.close();
 	}

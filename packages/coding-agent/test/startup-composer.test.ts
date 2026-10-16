@@ -122,6 +122,39 @@ describe("startup composer terminal session identity", () => {
 		}
 	});
 
+	it("follows a symlinked transcript like the live recent-session selector", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-startup-session-symlink-"));
+		const agentDir = path.join(root, "agent");
+		const project = path.join(root, "project");
+		const originalAgentDir = getAgentDir();
+		setAgentDir(agentDir);
+		const sessions = sessionDirForCwd(project);
+		const target = path.join(root, "target.jsonl");
+		const link = path.join(sessions, "linked.jsonl");
+		fs.mkdirSync(project);
+		fs.mkdirSync(sessions, { recursive: true });
+		fs.writeFileSync(
+			target,
+			`${JSON.stringify({ type: "session", id: "linked", cwd: project })}\n${JSON.stringify({
+				type: "message",
+				message: { role: "user", content: "linked work" },
+			})}\n`,
+		);
+		fs.symlinkSync(target, link);
+		try {
+			expect(resolveTerminalSessionPrepaint(project)?.sessionFile).toBe(link);
+			const live = await SessionManager.continueRecent(project);
+			try {
+				expect(live.getSessionFile()).toBe(link);
+			} finally {
+				await live.close();
+			}
+		} finally {
+			setAgentDir(originalAgentDir);
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("breaks equal session mtimes with the header creation time used by live resume", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-startup-session-created-"));
 		const agentDir = path.join(root, "agent");

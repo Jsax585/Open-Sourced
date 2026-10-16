@@ -111,7 +111,9 @@ function inspectSessionFileSync(sessionFile: string): { created: Date; resumable
 /** Synchronous, dependency-light form of the canonical recent nonempty-session selector. */
 export function findMostRecentNonEmptySessionSync(sessionDir: string): string | undefined {
 	try {
-		const entries = fs.readdirSync(sessionDir, { withFileTypes: true }).filter(entry => entry.isFile());
+		const entries = fs
+			.readdirSync(sessionDir, { withFileTypes: true })
+			.filter(entry => entry.isFile() || entry.isSymbolicLink());
 		const primaries = new Set(entries.filter(entry => entry.name.endsWith(".jsonl")).map(entry => entry.name));
 		const recoverableBackups = new Map<string, { file: string; modified: Date }>();
 		for (const entry of entries) {
