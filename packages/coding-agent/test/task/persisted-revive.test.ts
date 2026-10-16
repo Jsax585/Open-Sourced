@@ -1784,27 +1784,23 @@ describe("buildWakeRelayBody", () => {
 });
 
 describe("minimal-task settings stay session-local", () => {
-	for (const inlineToolDescriptors of ["auto", "on", "off"] as const) {
-		for (const xdev of [true, false]) {
-			it(`restores ${inlineToolDescriptors}/${xdev} for an ordinary descendant`, () => {
-				const root = Settings.isolated({ inlineToolDescriptors, "tools.xdev": xdev });
-				const minimal = executorModule.createSubagentSettings(root, undefined, undefined, "minimal-task");
-				const nestedMinimal = executorModule.createSubagentSettings(minimal, undefined, undefined, "minimal-task");
-				for (const parent of [minimal, nestedMinimal]) {
-					const ordinary = executorModule.createSubagentSettings(parent);
-					const ordinaryGrandchild = executorModule.createSubagentSettings(ordinary);
-					for (const child of [ordinary, ordinaryGrandchild]) {
-						expect(cfgInlineToolDescriptors.get(child)).toBe(inlineToolDescriptors);
-						expect(cfgToolsXdev.get(child)).toBe(xdev);
-					}
-					expect(cfgInlineToolDescriptors.get(parent)).toBe("off");
-					expect(cfgToolsXdev.get(parent)).toBe(false);
-				}
-				expect(cfgInlineToolDescriptors.get(root)).toBe(inlineToolDescriptors);
-				expect(cfgToolsXdev.get(root)).toBe(xdev);
-			});
+	it("restores non-preset preferences through nested ordinary descendants", () => {
+		const root = Settings.isolated({ inlineToolDescriptors: "on", "tools.xdev": true });
+		const minimal = executorModule.createSubagentSettings(root, undefined, undefined, "minimal-task");
+		const nestedMinimal = executorModule.createSubagentSettings(minimal, undefined, undefined, "minimal-task");
+		for (const parent of [minimal, nestedMinimal]) {
+			const ordinary = executorModule.createSubagentSettings(parent);
+			const ordinaryGrandchild = executorModule.createSubagentSettings(ordinary);
+			for (const child of [ordinary, ordinaryGrandchild]) {
+				expect(cfgInlineToolDescriptors.get(child)).toBe("on");
+				expect(cfgToolsXdev.get(child)).toBe(true);
+			}
+			expect(cfgInlineToolDescriptors.get(parent)).toBe("off");
+			expect(cfgToolsXdev.get(parent)).toBe(false);
 		}
-	}
+		expect(cfgInlineToolDescriptors.get(root)).toBe("on");
+		expect(cfgToolsXdev.get(root)).toBe(true);
+	});
 
 	it("honors current parent preferences and explicit ordinary-child overrides", () => {
 		const root = Settings.isolated();

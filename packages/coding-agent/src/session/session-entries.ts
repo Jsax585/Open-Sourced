@@ -12,6 +12,7 @@ import type { SystemPromptPreset } from "../task/types";
 import type { CompactionMethod } from "./compaction-methods";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { RetryFallbackRole } from "./retry-fallback-chains";
+import type { RuntimeIdentity } from "./runtime-identity";
 
 export const CURRENT_SESSION_VERSION = 3;
 
@@ -76,6 +77,11 @@ export interface SessionEntryBase {
 	id: string;
 	parentId: string | null;
 	timestamp: string;
+	/**
+	 * omp build that wrote this entry, set on every entry this session's process authors. Copies
+	 * (forks, branches, collab replicas) keep the original writer. Absent on older entries.
+	 */
+	runtime?: RuntimeIdentity;
 }
 
 export interface SessionMessageEntry extends SessionEntryBase {
