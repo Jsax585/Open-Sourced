@@ -32,6 +32,9 @@
 
 ### Fixed
 
+- Fixed subagents whose declared model has no working credentials or is not in the catalog silently running on the parent session's model: the model's `retry.fallbackChains` entry now decides (an empty chain refuses the spawn with an error naming the agent and model, a non-empty chain is walked), and any replacement is marked as a fallback in the session and task result
+- Fixed task results not saying which fallback model answered for a subagent and why: the `<task-result>` now carries a `<model served=… requested=… fallback="true">` line with the reason
+- Fixed subagents of a long-running session not seeing a provider added to `models.yml` after the session started
 - Fixed an unconfigured `judge` role falling back to a Google Vertex Claude model (any `…@default` id) instead of your `tiny`, `smol`, and `default` models when no TypeSafe judge is available
 - Fixed `omp --resume -p` continuing stale todos after answering instead of printing the answer and exiting ([#15320](https://github.com/can1357/oh-my-pi/issues/15320)).
 - Fixed `/btw`, IRC, and composer-prediction requests missing the conversation's prompt cache on Codex, and on GPT-6 models after a thinking-level change
