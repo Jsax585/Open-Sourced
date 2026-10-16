@@ -41,6 +41,7 @@ describe("history scope wiring", () => {
 		await fs.mkdir(other, { recursive: true });
 		const storage = HistoryStorage.open(tempDir!.join("history.db"));
 		await storage.add("PROMPT_OF_THIS_PROJECT", tempDir!.path(), "session-1");
+		await storage.add("PROMPT_OF_ANOTHER_SESSION", tempDir!.path(), "session-2");
 		await storage.add("PROMPT_OF_ANOTHER_PROJECT", other, "session-2");
 
 		const ctx = createInteractiveModeContext({
@@ -52,19 +53,26 @@ describe("history scope wiring", () => {
 		const panel = ctx.editorContainer.children[0] as unknown as HistorySearchComponent;
 		const shown = () => Bun.stripANSI(panel.render(100).join("\n"));
 
-		// The configured `cwd` start: the other project's prompt must not be in the list at all.
+		// Folder scope includes both local conversations, but not the other folder.
 		expect(shown()).toContain("PROMPT_OF_THIS_PROJECT");
+		expect(shown()).toContain("PROMPT_OF_ANOTHER_SESSION");
 		expect(shown()).not.toContain("PROMPT_OF_ANOTHER_PROJECT");
 
-		// Tab widens to `global`, and only then may the other project's prompt appear.
 		panel.handleInput("\t");
-		expect(panel.title).toBe("History (all projects)");
+		expect(shown()).toContain("PROMPT_OF_THIS_PROJECT");
+		expect(shown()).toContain("PROMPT_OF_ANOTHER_SESSION");
 		expect(shown()).toContain("PROMPT_OF_ANOTHER_PROJECT");
 
-		// The same has to hold for a typed query, which takes the `search` path.
+		// Session scope must now exclude even the other conversation in this folder.
 		panel.handleInput("\t");
-		expect(panel.title).toBe("History (this session)");
-		for (const char of "PROMPT_OF_ANOTHER") panel.handleInput(char);
+		expect(shown()).toContain("PROMPT_OF_THIS_PROJECT");
+		expect(shown()).not.toContain("PROMPT_OF_ANOTHER_SESSION");
+		expect(shown()).not.toContain("PROMPT_OF_ANOTHER_PROJECT");
+
+		// All three prompts match the query; search must still enforce the session boundary.
+		for (const char of "PROMPT_OF_") panel.handleInput(char);
+		expect(shown()).toContain("PROMPT_OF_THIS_PROJECT");
+		expect(shown()).not.toContain("PROMPT_OF_ANOTHER_SESSION");
 		expect(shown()).not.toContain("PROMPT_OF_ANOTHER_PROJECT");
 	});
 
