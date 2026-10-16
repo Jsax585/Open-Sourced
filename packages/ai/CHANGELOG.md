@@ -5,6 +5,9 @@
 ### Fixed
 
 - Fixed `tool_choice: "none"` being sent when the resolved `tools` array is empty, which caused LiteLLM/Bedrock 400 errors ([#1227](https://github.com/can1357/oh-my-pi/issues/1227))
+- Fixed OpenAI-compatible streaming usage parsing to read Vertex/Gemini cache hits reported in `cachedContentTokenCount`, so `cacheRead` and derived cost reflect prompt caching through gateways fronting Vertex AI (upstream [#9713](https://github.com/can1357/oh-my-pi/issues/9713))
+- Fixed cache-write pricing to honor the Anthropic 5m/1h TTL split, billing 1h writes at 2x the input rate and pricing any remainder the breakdown omits at the flat rate instead of making it free (upstream [#9691](https://github.com/can1357/oh-my-pi/pull/9691))
+- Fixed LiteLLM concurrency-admission 429s (`rate_limit_type: max_parallel_requests`) being slept-and-retried by the OpenAI SDK for up to ~5 minutes; they now surface on the first attempt so session recovery owns backoff and model fallback (upstream [#8854](https://github.com/can1357/oh-my-pi/issues/8854))
 
 ### Changed
 

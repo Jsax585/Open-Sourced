@@ -15,18 +15,21 @@
  *   /daybook last-week
  *   /daybook 3d            — last 3 days
  *
- * Output dir: ~/Obsidian/Daily Notes/ (override with --daybook-dir or
- * the OMP_DAYBOOK_DIR env var). Filenames: YYYY-MM-DD.md (daily),
- * YYYY-[W]ww.md (weekly).
+ * Output: the period's note (YYYY-MM-DD.md daily, YYYY-[W]ww.md weekly) in
+ * daybook.folder (override with --daybook-dir or OMP_DAYBOOK_DIR; default
+ * ~/Obsidian/Daily Notes). A missing note is created from daybook.template
+ * (Obsidian {{title}}/{{date}} variables). Only the `%% daybook %%` and
+ * `%% daybook-usage %%` regions are rewritten; hand-written content is kept.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { completeSimple } from "@oh-my-pi/pi-ai";
-import type { ExtensionAPI, ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, SessionInfo } from "@oh-my-pi/pi-coding-agent";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent";
 import { settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -52,7 +55,7 @@ type ContentBlock = {
 
 type PeriodKind = "daily" | "weekly";
 
-interface Period {
+export interface Period {
 	kind: PeriodKind;
 	label: string;
 	startMs: number;
@@ -71,6 +74,15 @@ interface TokenStats {
 
 interface ModelUsage {
 	sessions: Set<string>;
+	messages: number;
+	cost: number;
+	tokens: TokenStats;
+}
+
+interface SessionUsage {
+	title: string;
+	folder: string;
+	models: Set<string>;
 	messages: number;
 	cost: number;
 	tokens: TokenStats;
@@ -260,6 +272,18 @@ function emptyTokens(): TokenStats {
 	return { total: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 }
 
+type UsageTotals = { messages: number; cost: number; tokens: TokenStats };
+
+function addUsage(target: UsageTotals, messages: number, cost: number, t: TokenStats): void {
+	target.messages += messages;
+	target.cost += cost;
+	target.tokens.total += t.total;
+	target.tokens.input += t.input;
+	target.tokens.output += t.output;
+	target.tokens.cacheRead += t.cacheRead;
+	target.tokens.cacheWrite += t.cacheWrite;
+}
+
 /**
  * Parse a session file for assistant-message usage that falls within the window.
  * Uses the same `${timestamp}:${totalTokens}` dedupe as pi-usage to avoid
@@ -268,17 +292,26 @@ function emptyTokens(): TokenStats {
 async function accumulateUsage(
 	filePath: string,
 	sessionId: string,
+	folder: string,
+	title: string,
 	startMs: number,
 	endMs: number,
 	byModel: Map<string, ModelUsage>,
 	seenHashes: Set<string>,
-): Promise<boolean> {
-	let contributed = false;
+): Promise<SessionUsage | null> {
+	const sessionUsage: SessionUsage = {
+		title,
+		folder,
+		models: new Set(),
+		messages: 0,
+		cost: 0,
+		tokens: emptyTokens(),
+	};
 	let content: string;
 	try {
 		content = await readFile(filePath, "utf8");
 	} catch {
-		return false;
+		return null;
 	}
 	for (const line of content.split("\n")) {
 		if (!line.trim()) continue;
@@ -316,16 +349,12 @@ async function accumulateUsage(
 			byModel.set(model, m);
 		}
 		m.sessions.add(sessionId);
-		m.messages++;
-		m.cost += cost;
-		m.tokens.total += input + output + cacheWrite;
-		m.tokens.input += input;
-		m.tokens.output += output;
-		m.tokens.cacheRead += cacheRead;
-		m.tokens.cacheWrite += cacheWrite;
-		contributed = true;
+		sessionUsage.models.add(model);
+		const tokens = { total: input + output + cacheWrite, input, output, cacheRead, cacheWrite };
+		addUsage(m, 1, cost, tokens);
+		addUsage(sessionUsage, 1, cost, tokens);
 	}
-	return contributed;
+	return sessionUsage.messages > 0 ? sessionUsage : null;
 }
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
@@ -344,6 +373,11 @@ function formatTokens(count: number): string {
 	if (count < 1000000) return `${Math.round(count / 1000)}k`;
 	if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
 	return `${Math.round(count / 1000000)}M`;
+}
+
+/** Make a value safe for a Markdown table cell. */
+function escapeCell(s: string): string {
+	return s.replace(/\|/g, "\\|").replace(/\s+/g, " ").trim() || "-";
 }
 
 function formatCacheHitRate(tokens: TokenStats): string {
@@ -375,7 +409,8 @@ function sanitizeTags(rawTags: string[]): string[] {
 			.toLowerCase()
 			.replace(/^#+/, "")
 			.replace(/[^a-z0-9]/g, "");
-		if (!clean || seen.has(clean)) continue;
+		// Obsidian ignores all-digit tags (e.g. #2026), so drop them.
+		if (!clean || /^\d+$/.test(clean) || seen.has(clean)) continue;
 		seen.add(clean);
 		out.push(`#${clean}`);
 		if (out.length >= 10) break;
@@ -468,10 +503,29 @@ async function callModel(ctx: ExtensionCommandContext, prompt: string): Promise<
 		},
 		{ apiKey },
 	);
-	return response.content
+
+	const text = response.content
 		.filter((c): c is { type: "text"; text: string } => c.type === "text")
 		.map(c => c.text)
-		.join("");
+		.join("")
+		.trim();
+
+	logger.debug("daybook: model response", {
+		model: `${model.provider}/${model.id}`,
+		stopReason: response.stopReason,
+		errorMessage: response.errorMessage,
+		blocks: response.content.map(c => c.type),
+		textLength: text.length,
+		usage: response.usage,
+	});
+
+	if (response.stopReason === "error") {
+		throw new Error(response.errorMessage || "model request failed");
+	}
+	if (!text) {
+		throw new Error(`model returned no text (stopReason: ${response.stopReason})`);
+	}
+	return text;
 }
 
 /** Split the model output into a body (everything before ## Tags) and its tag list. */
@@ -493,13 +547,7 @@ function renderUsageTable(byModel: Map<string, ModelUsage>): string {
 			`| ${model} | ${formatNumber(u.sessions.size)} | ${formatNumber(u.messages)} | ${formatCost(u.cost)} | ${formatTokens(u.tokens.total)} | ${formatCacheHitRate(u.tokens)} |`,
 		);
 		for (const s of u.sessions) totals.sessions.add(s);
-		totals.messages += u.messages;
-		totals.cost += u.cost;
-		totals.tokens.total += u.tokens.total;
-		totals.tokens.input += u.tokens.input;
-		totals.tokens.output += u.tokens.output;
-		totals.tokens.cacheRead += u.tokens.cacheRead;
-		totals.tokens.cacheWrite += u.tokens.cacheWrite;
+		addUsage(totals, u.messages, u.cost, u.tokens);
 	}
 	rows.push(
 		`| **Total** | ${formatNumber(totals.sessions.size)} | ${formatNumber(totals.messages)} | ${formatCost(totals.cost)} | ${formatTokens(totals.tokens.total)} | ${formatCacheHitRate(totals.tokens)} |`,
@@ -507,47 +555,102 @@ function renderUsageTable(byModel: Map<string, ModelUsage>): string {
 	return rows.join("\n");
 }
 
-function assembleNote(
-	period: Period,
-	body: string,
-	tags: string[],
-	usageTable: string,
-): { filename: string; content: string } {
-	let title: string;
-	let filename: string;
-	let subtitle = "";
-	if (period.kind === "weekly") {
-		const { year, week } = isoWeekNumber(period.anchor);
-		title = `${year}-W${pad2(week)}`;
-		filename = `${title}.md`;
-		subtitle = `\n_${ymd(new Date(period.startMs))} – ${ymd(new Date(period.endMs))}_\n`;
-	} else {
-		title = ymd(period.anchor);
-		filename = `${title}.md`;
+function renderSessionUsageTable(sessions: SessionUsage[]): string {
+	const rows: string[] = [
+		"| Session | Folder | Models | Msgs | Input | Output | Cache Read | Cache Write | Tokens | Cache Hit | Cost |",
+		"|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+	];
+	const totals = { messages: 0, cost: 0, tokens: emptyTokens() };
+	const models = new Set<string>();
+	const sorted = [...sessions].sort((a, b) => b.cost - a.cost);
+	for (const s of sorted) {
+		const modelList = [...s.models].sort().join(", ");
+		rows.push(
+			`| ${escapeCell(s.title)} | ${escapeCell(s.folder)} | ${escapeCell(modelList)} | ${formatNumber(s.messages)} | ${formatTokens(s.tokens.input)} | ${formatTokens(s.tokens.output)} | ${formatTokens(s.tokens.cacheRead)} | ${formatTokens(s.tokens.cacheWrite)} | ${formatTokens(s.tokens.total)} | ${formatCacheHitRate(s.tokens)} | ${formatCost(s.cost)} |`,
+		);
+		for (const m of s.models) models.add(m);
+		addUsage(totals, s.messages, s.cost, s.tokens);
 	}
+	rows.push(
+		`| **Total** (${sorted.length} sessions) | ${new Set(sorted.map(s => s.folder)).size} folders | ${models.size} models | ${formatNumber(totals.messages)} | ${formatTokens(totals.tokens.input)} | ${formatTokens(totals.tokens.output)} | ${formatTokens(totals.tokens.cacheRead)} | ${formatTokens(totals.tokens.cacheWrite)} | ${formatTokens(totals.tokens.total)} | ${formatCacheHitRate(totals.tokens)} | ${formatCost(totals.cost)} |`,
+	);
+	return rows.join("\n");
+}
 
-	const noteType = period.kind === "weekly" ? "weekly-note" : "daily-note";
-	const frontmatterTags = tags.map(t => t.slice(1));
-	const tagsLine = tags.join(" ");
+function periodTitle(period: Period): string {
+	if (period.kind === "daily") return ymd(period.anchor);
+	const { year, week } = isoWeekNumber(period.anchor);
+	return `${year}-W${pad2(week)}`;
+}
 
-	// Ensure the model body always has the ## Tags section rendered by us.
-	const content = `---
-date: ${ymd(period.anchor)}
-type: ${noteType}
-tags: [${frontmatterTags.join(", ")}]
----
-# ${title}
-${subtitle}
-${body.trim()}
+/** A daybook-owned region of a note, delimited by Obsidian comments (hidden in reading view). */
+export interface NoteRegion {
+	name: string;
+	/** Heading inserted above the region when the note has no markers for it yet. */
+	heading: string;
+}
 
-## Usage
-${usageTable}
+export const SUMMARY_REGION: NoteRegion = { name: "daybook", heading: "# Agent Sessions" };
+export const USAGE_REGION: NoteRegion = { name: "daybook-usage", heading: "# Token Usage" };
 
-## Tags
-${tagsLine}
-`;
+/**
+ * Replace the content between `%% name %%` and `%% /name %%`, leaving everything else
+ * in the note byte-for-byte intact. Appends the region (with its heading) when the note
+ * has neither marker. Throws on a half-present or inverted pair rather than guessing,
+ * since a wrong guess would overwrite user-authored text.
+ */
+export function upsertRegion(note: string, region: NoteRegion, content: string): string {
+	const start = `%% ${region.name} %%`;
+	const end = `%% /${region.name} %%`;
+	const block = `${start}\n${content.trim()}\n${end}`;
+	const s = note.indexOf(start);
+	const e = note.indexOf(end);
+	if (s === -1 && e === -1) {
+		const base = note.trimEnd();
+		return `${base ? `${base}\n\n` : ""}${region.heading}\n${block}\n`;
+	}
+	if (s === -1 || e === -1 || e < s) {
+		throw new Error(`Malformed "${region.name}" markers in note: expected "${start}" followed by "${end}"`);
+	}
+	return note.slice(0, s) + block + note.slice(e + end.length);
+}
 
-	return { filename, content };
+/**
+ * Apply Obsidian core-template style `{{name}}` variables. Unknown names are left as-is so
+ * Obsidian's own Templates plugin can still fill them (e.g. {{time}}) when the note is opened.
+ */
+export function renderTemplate(template: string, vars: Record<string, string>): string {
+	return template.replace(/\{\{(\w+)\}\}/g, (match, name: string) => vars[name] ?? match);
+}
+
+/**
+ * Template variables for a period. {{title}} is the note name and {{date}} the anchor day.
+ * Weekly notes also get {{start}}/{{end}} (Mon/Sun) and {{days}}: wiki-links to each day's
+ * daily note, so the week shows up in Obsidian's graph and backlinks.
+ */
+export function templateVars(period: Period): Record<string, string> {
+	const vars: Record<string, string> = { title: periodTitle(period), date: ymd(period.anchor) };
+	if (period.kind !== "weekly") return vars;
+	const days: string[] = [];
+	const day = startOfIsoWeek(period.anchor);
+	for (let i = 0; i < 7; i++) {
+		days.push(ymd(day));
+		day.setDate(day.getDate() + 1);
+	}
+	vars.start = days[0]!;
+	vars.end = days[6]!;
+	vars.days = days.map(d => `[[${d}]]`).join(" · ");
+	return vars;
+}
+
+function renderUsageSection(period: Period, byModel: Map<string, ModelUsage>, sessions: SessionUsage[]): string {
+	return `_${ymd(new Date(period.startMs))} – ${ymd(new Date(period.endMs))} (${period.label})_
+
+## By model
+${renderUsageTable(byModel)}
+
+## By session
+${renderSessionUsageTable(sessions)}`;
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -568,13 +671,70 @@ function resolveOutputDir(pi: ExtensionAPI): string {
 	return DEFAULT_VAULT_DIR;
 }
 
-async function fileExists(path: string): Promise<boolean> {
-	try {
-		await readFile(path);
-		return true;
-	} catch {
-		return false;
+/** Weekly notes use `daybook.weeklyTemplate` when set; everything else (and unset weekly) uses `daybook.template`. */
+function resolveTemplatePath(kind: PeriodKind): string | undefined {
+	const keys =
+		kind === "weekly" ? (["daybook.weeklyTemplate", "daybook.template"] as const) : (["daybook.template"] as const);
+	for (const key of keys) {
+		const configured = settings.get(key);
+		if (typeof configured === "string" && configured.trim()) return expandHome(configured.trim());
 	}
+	return undefined;
+}
+
+/** Period from args, or an interactive pick when args are empty. Notifies and returns null on cancel/invalid. */
+async function resolvePeriod(rawArgs: string, ctx: ExtensionCommandContext, prompt: string): Promise<Period | null> {
+	let arg = rawArgs.trim();
+	if (!arg && ctx.hasUI) {
+		const choice = await ctx.ui.select(prompt, PERIOD_CHOICES);
+		if (!choice) return null;
+		arg = choice === "last 7 days" ? "7d" : choice;
+	}
+	const period = parsePeriod(arg);
+	if (!period) ctx.ui.notify(`Unknown period "${arg}". Try: today, yesterday, week, last-week, 3d`, "error");
+	return period;
+}
+
+/** Coarse overlap filter: session activity window intersects the period. */
+function sessionsInPeriod(infos: SessionInfo[], period: Period, excludeId?: string): SessionInfo[] {
+	return infos.filter(
+		info =>
+			info.id !== excludeId && info.modified.getTime() >= period.startMs && info.created.getTime() < period.endMs,
+	);
+}
+
+/**
+ * Current text of the period's note, or a fresh one rendered from the period's template
+ * (empty when no template is configured). A configured-but-unreadable template throws:
+ * an unmounted vault must fail loudly, not silently produce a template-less note.
+ */
+async function loadNote(outPath: string, period: Period): Promise<string> {
+	try {
+		return await Bun.file(outPath).text();
+	} catch (err) {
+		if (!isEnoent(err)) throw err;
+	}
+	const templatePath = resolveTemplatePath(period.kind);
+	if (!templatePath) return "";
+	return renderTemplate(await Bun.file(templatePath).text(), templateVars(period));
+}
+
+/** Merge `regions` into the period's note in the output dir. Only daybook-owned regions are rewritten. */
+async function saveRegions(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	statusKey: string,
+	label: string,
+	period: Period,
+	regions: [NoteRegion, string][],
+): Promise<void> {
+	const outPath = join(resolveOutputDir(pi), `${periodTitle(period)}.md`);
+	// ponytail: read-modify-write, not locked; an Obsidian edit landing between read and write is lost.
+	let note = await loadNote(outPath, period);
+	for (const [region, content] of regions) note = upsertRegion(note, region, content);
+	await Bun.write(outPath, note);
+	ctx.ui.setStatus(statusKey, undefined);
+	ctx.ui.notify(`✅ ${label} saved: ${outPath}`, "info");
 }
 
 async function runDaybook(pi: ExtensionAPI, rawArgs: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -583,33 +743,16 @@ async function runDaybook(pi: ExtensionAPI, rawArgs: string, ctx: ExtensionComma
 		return;
 	}
 
-	// ── Resolve period ──
-	let arg = rawArgs.trim();
-	if (!arg && ctx.hasUI) {
-		const choice = await ctx.ui.select("Daybook period", PERIOD_CHOICES);
-		if (!choice) return;
-		arg = choice === "last 7 days" ? "7d" : choice;
-	}
-	const period = parsePeriod(arg);
-	if (!period) {
-		ctx.ui.notify(`Unknown period "${arg}". Try: today, yesterday, week, last-week, 3d`, "error");
-		return;
-	}
+	const period = await resolvePeriod(rawArgs, ctx, "Daybook period");
+	if (!period) return;
 
 	ctx.ui.setStatus("daybook", `📓 Scanning sessions for ${period.label}...`);
 
 	const currentSessionId = ctx.sessionManager.getSessionId() ?? "";
-	const allInfos = await SessionManager.listAll();
-
-	// Coarse overlap filter: session activity window intersects the period.
-	const candidates = allInfos.filter(info => {
-		if (info.id === currentSessionId) return false;
-		const created = info.created.getTime();
-		const modified = info.modified.getTime();
-		return modified >= period.startMs && created < period.endMs;
-	});
+	const candidates = sessionsInPeriod(await SessionManager.listAll(), period, currentSessionId);
 
 	const summaries: SessionSummary[] = [];
+	const sessionUsages: SessionUsage[] = [];
 	const byModel = new Map<string, ModelUsage>();
 	const seenHashes = new Set<string>();
 
@@ -620,16 +763,19 @@ async function runDaybook(pi: ExtensionAPI, rawArgs: string, ctx: ExtensionComma
 			if (isMetaSession(entries)) continue;
 
 			// Only keep sessions that actually have assistant activity in the window.
-			const contributed = await accumulateUsage(
+			const sessionUsage = await accumulateUsage(
 				info.path,
 				info.id,
+				repoName(info.cwd),
+				info.title || "(untitled session)",
 				period.startMs,
 				period.endMs,
 				byModel,
 				seenHashes,
 			);
-			if (!contributed) continue;
+			if (!sessionUsage) continue;
 
+			sessionUsages.push(sessionUsage);
 			summaries.push(buildSessionSummary(info.id, info.title ?? "", info.cwd, entries));
 		} catch {
 			// Skip sessions that fail to load
@@ -647,28 +793,47 @@ async function runDaybook(pi: ExtensionAPI, rawArgs: string, ctx: ExtensionComma
 	const transcript = buildTranscript(summaries);
 	const modelText = await callModel(ctx, buildPrompt(period, transcript));
 	const { body, tags } = splitBodyAndTags(modelText);
-	const cleanTags = sanitizeTags(tags);
-	const usageTable = renderUsageTable(byModel);
-	const { filename, content } = assembleNote(period, body, cleanTags, usageTable);
+	const summary = `${body.trim()}\n\n${sanitizeTags(tags).join(" ")}`;
 
-	const outDir = resolveOutputDir(pi);
-	await mkdir(outDir, { recursive: true });
-	const outPath = join(outDir, filename);
+	await saveRegions(pi, ctx, "daybook", "Daybook note", period, [
+		[SUMMARY_REGION, summary],
+		[USAGE_REGION, renderUsageSection(period, byModel, sessionUsages)],
+	]);
+}
+async function runSessionUsage(pi: ExtensionAPI, rawArgs: string, ctx: ExtensionCommandContext): Promise<void> {
+	const period = await resolvePeriod(rawArgs, ctx, "Usage period");
+	if (!period) return;
 
-	if (await fileExists(outPath)) {
-		if (ctx.hasUI) {
-			const ok = await ctx.ui.confirm("Overwrite note?", `${outPath} already exists. Overwrite it?`);
-			if (!ok) {
-				ctx.ui.setStatus("daybook", undefined);
-				ctx.ui.notify("Daybook cancelled — existing note kept.", "info");
-				return;
-			}
-		}
+	ctx.ui.setStatus("daybook-usage", `📊 Scanning sessions for ${period.label}...`);
+
+	const candidates = sessionsInPeriod(await SessionManager.listAll(), period);
+	const seenHashes = new Set<string>();
+	const byModel = new Map<string, ModelUsage>();
+	const sessionUsages: SessionUsage[] = [];
+
+	for (const info of candidates) {
+		const sessionUsage = await accumulateUsage(
+			info.path,
+			info.id,
+			repoName(info.cwd),
+			info.title || "(untitled session)",
+			period.startMs,
+			period.endMs,
+			byModel,
+			seenHashes,
+		);
+		if (sessionUsage) sessionUsages.push(sessionUsage);
 	}
 
-	await writeFile(outPath, content, "utf8");
-	ctx.ui.setStatus("daybook", undefined);
-	ctx.ui.notify(`✅ Daybook note saved: ${outPath}`, "info");
+	if (sessionUsages.length === 0) {
+		ctx.ui.setStatus("daybook-usage", undefined);
+		ctx.ui.notify(`No session usage found for ${period.label}.`, "warning");
+		return;
+	}
+
+	await saveRegions(pi, ctx, "daybook-usage", "Usage report", period, [
+		[USAGE_REGION, renderUsageSection(period, byModel, sessionUsages)],
+	]);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -684,8 +849,23 @@ export default function (pi: ExtensionAPI) {
 			try {
 				await runDaybook(pi, args ?? "", ctx);
 			} catch (err) {
+				logger.error("daybook failed", { err: String(err) });
 				ctx.ui.setStatus("daybook", undefined);
 				ctx.ui.notify(`Daybook failed: ${(err as Error).message}`, "error");
+			}
+		},
+	});
+
+	pi.registerCommand("daybook-usage", {
+		description: "Update the Token Usage section of the period's note (today | yesterday | week | last-week | 3d)",
+		getArgumentCompletions: () => PERIOD_CHOICES.map(label => ({ value: label, label })),
+		handler: async (args, ctx) => {
+			try {
+				await runSessionUsage(pi, args ?? "", ctx);
+			} catch (err) {
+				logger.error("daybook-usage failed", { err: String(err) });
+				ctx.ui.setStatus("daybook-usage", undefined);
+				ctx.ui.notify(`Usage report failed: ${(err as Error).message}`, "error");
 			}
 		},
 	});

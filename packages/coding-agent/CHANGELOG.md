@@ -4,9 +4,11 @@
 ### Breaking Changes
 
 - Changed PR and task-isolation worktree directory layout to hash-based `~/.omp/wt/<identifier>-<path-hash>` style paths, replacing the previous nested encoded-repo layout
+- Changed `/daybook` and `/daybook-usage` to merge into the period's note (e.g. an Obsidian daily note) instead of writing standalone files: each owns a `%% daybook %%` / `%% daybook-usage %%` region and leaves the rest of the note untouched. `/daybook-usage` no longer writes `usage-*.md` files
 
 ### Added
 
+- Added `daybook.template` and `daybook.weeklyTemplate` settings: Obsidian templates used when `/daybook` creates a new daily / weekly note. Fills `{{title}}` and `{{date}}`, plus `{{start}}`, `{{end}}` and `{{days}}` (links to the week's daily notes) for weekly notes
 - Added `omp worktree` command (alias `wt`) to list and manage agent-managed worktrees under `~/.omp/wt`
 - Added `omp worktree clear` to remove orphaned worktree directories, with `--all` to include live PR-checkouts, `--dry-run` for preview, and `--json` reporting
 - Added machine-readable JSON output to `omp worktree list` for scripted inspection

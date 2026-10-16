@@ -1418,7 +1418,30 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "tools",
 			label: "Daybook Folder",
-			description: "Output directory for /daybook notes (default ~/Obsidian/Daily Notes)",
+			description:
+				"Output directory for /daybook notes, e.g. an Obsidian vault's daily-notes folder (default ~/Obsidian/Daily Notes)",
+		},
+	},
+
+	"daybook.template": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "tools",
+			label: "Daybook Template",
+			description:
+				"Obsidian template used when /daybook creates a new daily note ({{title}} and {{date}} are filled in)",
+		},
+	},
+
+	"daybook.weeklyTemplate": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "tools",
+			label: "Daybook Weekly Template",
+			description:
+				"Obsidian template for new weekly notes; also fills {{start}}, {{end}}, {{days}} (falls back to Daybook Template)",
 		},
 	},
 

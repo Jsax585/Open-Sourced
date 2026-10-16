@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { litellmModelManagerOptions } from "../src/provider-models/openai-compat";
+import { isConcurrencyAdmissionRejection } from "../src/providers/openai-completions";
 
 const originalLiteLLMApiKey = Bun.env.LITELLM_API_KEY;
 const originalFetch = global.fetch;
@@ -191,5 +192,26 @@ describe("litellm native provider routing", () => {
 		expect(model).toBeDefined();
 		expect(model?.api).toBe("openai-completions");
 		expect(model?.baseUrl).toBe("http://localhost:4000/v1");
+	});
+});
+
+describe("litellm concurrency-admission 429", () => {
+	const rejection = (headers: Record<string, string>, body?: string) =>
+		isConcurrencyAdmissionRejection(new Response(null, { status: 429, headers }), body);
+
+	test("detects the marker in the rate_limit_type response header", () => {
+		expect(rejection({ rate_limit_type: "max_parallel_requests" })).toBe(true);
+		expect(rejection({ rate_limit_type: " max_parallel_requests " })).toBe(true);
+	});
+
+	test("detects the marker in a structured error body", () => {
+		expect(rejection({}, '{"error":{"rate_limit_type":"max_parallel_requests"}}')).toBe(true);
+		expect(rejection({}, '{"rate_limit_type": "max_parallel_requests"}')).toBe(true);
+	});
+
+	test("leaves genuine RPM/quota 429s to the transport retry loop", () => {
+		expect(rejection({ "retry-after": "60" }, '{"error":{"message":"rate limit exceeded"}}')).toBe(false);
+		expect(rejection({ rate_limit_type: "requests_per_minute" })).toBe(false);
+		expect(rejection({})).toBe(false);
 	});
 });

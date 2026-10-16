@@ -90,6 +90,43 @@ describe("openai-completions parseChunkUsage", () => {
 		expect(usage.cacheWrite).toBe(0);
 		expect(usage.totalTokens).toBe(6_250);
 	});
+
+	it("reads Vertex/Gemini cachedContentTokenCount as a cache-read source", () => {
+		// Vertex AI (and gateways fronting it) report cache hits in
+		// usage.cachedContentTokenCount (camelCase) with no OpenAI-shaped
+		// cached_tokens field. prompt_tokens includes the cached portion,
+		// so input = prompt_tokens - cachedContentTokenCount.
+		const usage = parseChunkUsage(
+			{
+				prompt_tokens: 33_006,
+				completion_tokens: 110,
+				total_tokens: 33_116,
+				cachedContentTokenCount: 28_639,
+			},
+			OPENAI_MODEL,
+		);
+
+		expect(usage.cacheRead).toBe(28_639);
+		expect(usage.input).toBe(4_367);
+		expect(usage.totalTokens).toBe(33_116);
+	});
+
+	it("prefers an OpenAI-shaped cached_tokens count over cachedContentTokenCount", () => {
+		// A gateway that sends both must not have its authoritative OpenAI field
+		// shadowed by the Vertex-shaped fallback.
+		const usage = parseChunkUsage(
+			{
+				prompt_tokens: 1_000,
+				completion_tokens: 10,
+				prompt_tokens_details: { cached_tokens: 400 },
+				cachedContentTokenCount: 900,
+			},
+			OPENAI_MODEL,
+		);
+
+		expect(usage.cacheRead).toBe(400);
+		expect(usage.input).toBe(600);
+	});
 });
 
 describe("anthropic applyAnthropicUsageExtras", () => {

@@ -66,3 +66,6 @@ scripts/session-stats/edit-analysis.csv
 # parallel-agent worktrees
 .wt/
 CPU*.md
+
+# PR Lens writes its previews here. They are rebuilt on demand.
+.pr-lens/

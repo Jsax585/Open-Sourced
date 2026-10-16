@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { getPonytailInstructions, type PonytailMode } from "../src/extension";
+import { getPonytailInstructions, isDeactivationCommand, type PonytailMode } from "../src/extension";
 
 describe("getPonytailInstructions", () => {
 	it("returns empty string when off", () => {
@@ -40,5 +40,32 @@ describe("before_agent_start injection contract", () => {
 
 	it("no-ops when off", () => {
 		expect(inject(["a"], "off")).toBeUndefined();
+	});
+});
+
+describe("vendored ruleset text", () => {
+	// Vendoring regression pin: upstream #120 narrowed the `ponytail:` marker rule
+	// so only simplifications that cut a real corner get a comment. A future
+	// re-sync that restores the unconditional wording over-comments trivial code,
+	// and dropping the `ponytail:` prefix breaks /ponytail-debt's grep.
+	it("keeps the marker rule narrowed and its prefix grep-able", () => {
+		const body = getPonytailInstructions("full");
+		const markerRule = body.split("\n").find(line => line.includes("`ponytail:` comment"));
+		expect(markerRule).toBeDefined();
+		expect(markerRule).toMatch(/real corner/);
+		expect(markerRule).toMatch(/known ceiling/);
+		expect(body).toContain("ponytail: global lock");
+	});
+});
+
+describe("isDeactivationCommand", () => {
+	// The phrase must be the whole message: text that merely mentions it is a
+	// question about the feature, not a request to turn it off.
+	it("matches standalone deactivation phrases only", () => {
+		expect(isDeactivationCommand("stop ponytail")).toBe(true);
+		expect(isDeactivationCommand("Stop Ponytail.")).toBe(true);
+		expect(isDeactivationCommand("  normal mode  ")).toBe(true);
+		expect(isDeactivationCommand("how do I stop ponytail now")).toBe(false);
+		expect(isDeactivationCommand("stop ponytail and explain the diff")).toBe(false);
 	});
 });

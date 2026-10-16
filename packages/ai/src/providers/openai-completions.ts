@@ -36,11 +36,7 @@ import {
 import { normalizeSystemPrompts } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import {
-	type CapturedHttpErrorResponse,
-	finalizeErrorMessage,
-	type RawHttpRequestDump,
-} from "../utils/http-inspector";
+import { type CapturedHttpErrorResponse, finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	createWatchdog,
 	getOpenAIStreamIdleTimeoutMs,
@@ -48,8 +44,8 @@ import {
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
-import { extractHttpStatusFromError } from "../utils/retry";
 import { notifyProviderResponse } from "../utils/provider-response";
+import { extractHttpStatusFromError } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
 import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
 
@@ -423,7 +419,8 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			// NVIDIA NIM and similar OpenAI-compatible hosts return DeepSeek's chat-template
 			// tool-call markers in `delta.content` even though tool calls are also surfaced
 			// structurally. Strip the leaked markers so users don't see raw `<｜...｜>` tokens.
-			const stripDeepseekChatTemplateTokens = (model.provider === "nvidia" || (model.baseUrl?.includes("nvidia"))) && /deepseek/i.test(model.id);
+			const stripDeepseekChatTemplateTokens =
+				(model.provider === "nvidia" || model.baseUrl?.includes("nvidia")) && /deepseek/i.test(model.id);
 			type OpenAIStreamBlock = TextContent | ThinkingContent | (ToolCall & { partialArgs: string });
 			let currentBlock: OpenAIStreamBlock | undefined;
 			const blockIndex = (block: OpenAIStreamBlock | undefined): number => {
@@ -747,6 +744,19 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 	return stream;
 };
 
+/**
+ * LiteLLM concurrency-admission 429 (`rate_limit_type: max_parallel_requests`, header or body):
+ * the request never reached a model, so session recovery owns the backoff, not the transport.
+ */
+const CONCURRENCY_ADMISSION_BODY_PATTERN = /"rate_limit_type"\s*:\s*"max_parallel_requests"/;
+
+export function isConcurrencyAdmissionRejection(response: Response, bodyText: string | undefined): boolean {
+	return (
+		response.headers.get("rate_limit_type")?.trim() === "max_parallel_requests" ||
+		(bodyText !== undefined && CONCURRENCY_ADMISSION_BODY_PATTERN.test(bodyText))
+	);
+}
+
 async function createClient(
 	model: Model<"openai-completions">,
 	context: Context,
@@ -771,7 +781,7 @@ async function createClient(
 	}
 	const rawApiKey = apiKey;
 
-	let headers = { ...model.headers };
+	const headers = { ...model.headers };
 	if (model.provider === "openrouter") {
 		// App attribution — opts the agent into OpenRouter's public rankings and per-app
 		// analytics. `HTTP-Referer` is the unique app identifier; without it nothing is
@@ -826,6 +836,16 @@ async function createClient(
 				bodyText,
 				bodyJson,
 			};
+			if (response.status === 429 && isConcurrencyAdmissionRejection(response, bodyText)) {
+				// Stop the SDK from sleeping on `Retry-After: 60` for up to ~300s.
+				const headers = new Headers(response.headers);
+				headers.set("x-should-retry", "false");
+				return new Response(response.body, {
+					status: response.status,
+					statusText: response.statusText,
+					headers,
+				});
+			}
 			return response;
 		},
 		{ preconnect: fetch.preconnect },
@@ -1031,21 +1051,30 @@ function getOptionalObjectProperty(value: object, key: string): object | undefin
 	return typeof property === "object" && property !== null ? property : undefined;
 }
 
+/** First finite, positive candidate, or 0 when every candidate is absent or non-positive. */
+function firstPositiveNumber(...values: (number | undefined)[]): number {
+	for (const value of values) {
+		if (value !== undefined && Number.isFinite(value) && value > 0) return value;
+	}
+	return 0;
+}
+
 function getChoiceUsage(choice: ChatCompletionChunk.Choice): object | undefined {
 	return getOptionalObjectProperty(choice, "usage");
 }
 
-export function parseChunkUsage(
-	rawUsage: object,
-	model: Model<"openai-completions">,
-
-): AssistantMessage["usage"] {
+export function parseChunkUsage(rawUsage: object, model: Model<"openai-completions">): AssistantMessage["usage"] {
 	const promptTokenDetails = getOptionalObjectProperty(rawUsage, "prompt_tokens_details");
 	const completionTokenDetails = getOptionalObjectProperty(rawUsage, "completion_tokens_details");
-	const cachedTokens =
-		getOptionalNumberProperty(rawUsage, "cached_tokens") ??
-		(promptTokenDetails ? getOptionalNumberProperty(promptTokenDetails, "cached_tokens") : undefined) ??
-		0;
+	// Vertex/Gemini reports cache hits in `cachedContentTokenCount` (camelCase) when
+	// fronted by an OpenAI-compatible gateway, leaving the OpenAI-shaped cached fields
+	// absent. Pick the first positive candidate so a provider that sends an explicit
+	// zero does not mask a later field that carries the real count.
+	const cachedTokens = firstPositiveNumber(
+		getOptionalNumberProperty(rawUsage, "cached_tokens"),
+		promptTokenDetails ? getOptionalNumberProperty(promptTokenDetails, "cached_tokens") : undefined,
+		getOptionalNumberProperty(rawUsage, "cachedContentTokenCount"),
+	);
 	// OpenRouter exposes cache writes via `prompt_tokens_details.cache_write_tokens`
 	// and INCLUDES them in `prompt_tokens`. Without subtracting, cache-write tokens
 	// leak into `input` (e.g. GLM/Anthropic via OpenRouter on a fresh cache).
@@ -1069,7 +1098,6 @@ export function parseChunkUsage(
 		totalTokens: input + outputTokens + cachedTokens + cacheWriteTokens,
 		...(reasoningTokens > 0 ? { reasoningTokens } : {}),
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-
 	};
 	calculateCost(model, usage);
 	return usage;

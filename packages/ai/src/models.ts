@@ -21,7 +21,10 @@ for (const [provider, models] of Object.entries(MODELS)) {
 
 export type GeneratedProvider = keyof typeof MODELS;
 
-export function getBundledModel<TApi extends Api = Api>(provider: GeneratedProvider | (string & {}), modelId: string): Model<TApi> {
+export function getBundledModel<TApi extends Api = Api>(
+	provider: GeneratedProvider | (string & {}),
+	modelId: string,
+): Model<TApi> {
 	const providerModels = modelRegistry.get(provider);
 	return providerModels?.get(modelId) as Model<TApi>;
 }
@@ -35,11 +38,24 @@ export function getBundledModels(provider: GeneratedProvider | (string & {})): M
 	return models ? (Array.from(models.values()) as Model<Api>[]) : [];
 }
 
+/**
+ * 1h cache writes bill at 2x input; any remainder `cttl` doesn't attribute bills at the flat 5m rate.
+ */
+function cacheWriteCost<TApi extends Api>(model: Model<TApi>, usage: Usage): number {
+	const rate5m = model.cost.cacheWrite / 1000000;
+	const cttl = usage.cttl;
+	if (!cttl) return rate5m * usage.cacheWrite;
+	const fiveMinute = cttl.ephemeral5m ?? 0;
+	const oneHour = cttl.ephemeral1h ?? 0;
+	const residual = Math.max(0, usage.cacheWrite - fiveMinute - oneHour);
+	return rate5m * (fiveMinute + residual) + ((model.cost.input * 2) / 1000000) * oneHour;
+}
+
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
 	usage.cost.input = (model.cost.input / 1000000) * usage.input;
 	usage.cost.output = (model.cost.output / 1000000) * usage.output;
 	usage.cost.cacheRead = (model.cost.cacheRead / 1000000) * usage.cacheRead;
-	usage.cost.cacheWrite = (model.cost.cacheWrite / 1000000) * usage.cacheWrite;
+	usage.cost.cacheWrite = cacheWriteCost(model, usage);
 	usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
 	return usage.cost;
 }

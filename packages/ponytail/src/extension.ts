@@ -32,6 +32,21 @@ function isMode(value: string): value is PonytailMode {
 	return MODES.includes(value);
 }
 
+const DEACTIVATION_PHRASES: readonly string[] = ["stop ponytail", "normal mode"];
+
+/**
+ * Matches a standalone "stop ponytail" / "normal mode" message, ignoring case
+ * and trailing punctuation. Text that merely *mentions* the phrase is not a
+ * deactivation request.
+ */
+export function isDeactivationCommand(text: string): boolean {
+	const normalized = text
+		.trim()
+		.toLowerCase()
+		.replace(/[.!?\s]+$/, "");
+	return DEACTIVATION_PHRASES.includes(normalized);
+}
+
 // =============================================================================
 // Ruleset (vendored from ponytail skills/ponytail/SKILL.md, frontmatter stripped)
 // =============================================================================
@@ -72,7 +87,7 @@ guard in the shared function is a smaller diff than a guard in every caller.
 - Fewest files possible. Shortest working diff wins -- but only once you understand the problem. The smallest change in the wrong place isn't lazy, it's a second bug.
 - Complex request? Ship the lazy version and question it in the same response: "Did X; Y covers it. Need full X? Say so." Never stall on an answer you can default.
 - Two stdlib options, same size? Take the one that's correct on edge cases. Lazy means writing less code, not picking the flimsier algorithm.
-- Mark deliberate simplifications with a \`ponytail:\` comment naming the ceiling and the upgrade path.
+- Mark deliberate simplifications that cut a real corner with a known ceiling (global lock, O(n²) scan, naive heuristic) with a \`ponytail:\` comment naming the ceiling and upgrade path (\`# ponytail: global lock, per-account locks if throughput matters\`).
 
 ## Output
 
@@ -137,6 +152,16 @@ const createPonytailExtension: ExtensionFactory = (api: ExtensionAPI) => {
 	const setMode = (mode: PonytailMode): void => {
 		api.appendEntry(ENTRY_TYPE, { mode });
 	};
+
+	// "stop ponytail" / "normal mode" turn the ruleset off for the rest of the
+	// session (upstream parity). The message itself is not consumed; it still
+	// reaches the model.
+	api.on("input", (event, ctx) => {
+		if (event.source === "extension") return;
+		if (getMode(ctx) === "off") return;
+		if (!isDeactivationCommand(event.text)) return;
+		setMode("off");
+	});
 
 	api.on("before_agent_start", (event, ctx) => {
 		const mode = getMode(ctx);
