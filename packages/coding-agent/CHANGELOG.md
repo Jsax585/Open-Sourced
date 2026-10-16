@@ -190,6 +190,7 @@
 ### Changed
 
 - Tool approval prompts now replace the composer like `ask`, show one row per detail, and approve with `Ctrl+Enter` (or `Ctrl+Q`) instead of `Enter` ([#15548](https://github.com/can1357/oh-my-pi/pull/15548) by [@H4vC](https://github.com/H4vC))
+- Task results now tell the parent agent when a subagent ran on a different model or effort than it asked for: a `<model-receipt>` line names the model and thinking level that ran and a reason code (`model-auth-fallback`, `effort-unsupported`, `effort-clamped`, `model-retry-fallback`) ([#9647](https://github.com/can1357/oh-my-pi/issues/9647), [#9664](https://github.com/can1357/oh-my-pi/pull/9664) by [@aktanazat](https://github.com/aktanazat))
 
 ### Fixed
 

@@ -934,6 +934,8 @@ export interface CreateAgentSessionResult {
 	mcpManager?: MCPManager;
 	/** Warning if session was restored with a different model than saved */
 	modelFallbackMessage?: string;
+	/** True when a deferred `modelPattern` had no working credentials and resolved to `modelPatternAuthFallback`. */
+	modelPatternAuthFallbackUsed?: boolean;
 	/** LSP servers detected for startup; warmup may continue in the background */
 	lspServers?: LspStartupServerInfo[];
 	/** Start cache-aware online runtime model discovery after the first UI paint. */
@@ -2025,6 +2027,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	);
 	let model = options.model;
 	let modelFallbackMessage: string | undefined;
+	let modelPatternAuthFallbackUsed = false;
 	let initialRetryFallback: InitialRetryFallbackState | undefined;
 	// Identify session model strings to restore in fallback order. We do an
 	// initial pass here so model-dependent setup (thinking-level resolution,
@@ -3148,6 +3151,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					}
 				}
 				model = selectedModel;
+				modelPatternAuthFallbackUsed = authFallbackUsed;
 				initialRetryFallback =
 					retryFallback && usageFallbackTriggered ? { ...retryFallback, pinned: true } : retryFallback;
 				modelFallbackMessage = undefined;
@@ -5482,6 +5486,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			setToolUIContext,
 			mcpManager,
 			modelFallbackMessage,
+			modelPatternAuthFallbackUsed,
 			lspServers,
 			startBackgroundModelDiscovery: startRuntimeDiscovery,
 			eventBus,
