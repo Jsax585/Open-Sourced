@@ -1,5 +1,6 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
+import { resolveUsageReserve, type UsageReserve } from "./reserve";
 import type {
 	AuthAccountPolicies,
 	AuthAccountPolicy,
@@ -8,7 +9,7 @@ import type {
 	OAuthAccountIdentity,
 	OAuthCredential,
 } from "./types";
-import { DEFAULT_USAGE_RESERVE_PCT } from "./types";
+import { DEFAULT_USAGE_RESERVE_PCT, DEFAULT_USAGE_RESERVE_TAPER_HOURS } from "./types";
 
 /** Whether every identity field set on `selector` matches `identity`. */
 export function matchesAuthAccountSelector(selector: AuthAccountSelector, identity: OAuthAccountIdentity): boolean {
@@ -20,25 +21,39 @@ export function matchesAuthAccountSelector(selector: AuthAccountSelector, identi
 	);
 }
 
-/** Validated per-account routing policies (priority/reserve) plus the global reserve fallback. */
+/** Validated per-account routing policies (priority/reserve/taper) plus the global reserve fallbacks. */
 export class AccountPolicies {
 	#accountPolicies: AuthAccountPolicies;
 	#defaultReservePct: number;
 	/** Indexes of policies already warned as unmatched; validation runs on every selection. */
 	#warnedUnmatched = new Set<number>();
+	#defaultReserveTaperHours: number;
 
-	constructor(policies: AuthAccountPolicies, defaultReservePct: number | undefined) {
+	constructor(
+		policies: AuthAccountPolicies,
+		defaultReservePct: number | undefined,
+		defaultReserveTaperHours?: number,
+	) {
 		AccountPolicies.#validateAccountPolicyConfiguration(policies);
 		this.#accountPolicies = policies;
 		this.#defaultReservePct =
 			typeof defaultReservePct === "number" && Number.isFinite(defaultReservePct)
 				? Math.max(0, Math.min(100, defaultReservePct))
 				: DEFAULT_USAGE_RESERVE_PCT;
+		this.#defaultReserveTaperHours =
+			typeof defaultReserveTaperHours === "number" && Number.isFinite(defaultReserveTaperHours)
+				? Math.max(0, defaultReserveTaperHours)
+				: DEFAULT_USAGE_RESERVE_TAPER_HOURS;
 	}
 
 	/** Global usage reserve (0–100) for accounts without a per-account `reservePct`. */
 	get defaultReservePct(): number {
 		return this.#defaultReservePct;
+	}
+
+	/** Global reserve taper (hours before reset, 0 = static) for accounts without a per-account `taperHours`. */
+	get defaultReserveTaperHours(): number {
+		return this.#defaultReserveTaperHours;
 	}
 
 	/**
@@ -49,13 +64,15 @@ export class AccountPolicies {
 	replace(
 		policies: AuthAccountPolicies,
 		defaultReservePct: number | undefined,
+		defaultReserveTaperHours: number | undefined,
 		storedCredentials: ReadonlyMap<string, readonly AuthCredential[]> = new Map(),
 	): void {
-		const next = new AccountPolicies(policies, defaultReservePct);
+		const next = new AccountPolicies(policies, defaultReservePct, defaultReserveTaperHours);
 		for (const [provider, credentials] of storedCredentials) next.validateFor(provider, credentials);
 		this.#accountPolicies = next.#accountPolicies;
 		this.#defaultReservePct = next.#defaultReservePct;
 		this.#warnedUnmatched = next.#warnedUnmatched;
+		this.#defaultReserveTaperHours = next.#defaultReserveTaperHours;
 	}
 
 	static #validateAccountPolicyConfiguration(accountPolicies: AuthAccountPolicies): void {
@@ -94,6 +111,9 @@ export class AccountPolicies {
 				(!Number.isFinite(policy.reservePct) || policy.reservePct < 0 || policy.reservePct > 100)
 			) {
 				throw new AIError.ConfigurationError(`${path}.reservePct must be a finite number between 0 and 100`);
+			}
+			if (policy.taperHours !== undefined && (!Number.isFinite(policy.taperHours) || policy.taperHours < 0)) {
+				throw new AIError.ConfigurationError(`${path}.taperHours must be a finite number of at least 0`);
 			}
 		}
 	}
@@ -167,5 +187,22 @@ export class AccountPolicies {
 	/** Return the configured policy for a stored OAuth credential. */
 	forCredential(provider: string, credential: AuthCredential): AuthAccountPolicy | undefined {
 		return credential.type === "oauth" ? this.find(provider, credential) : undefined;
+	}
+
+	/**
+	 * Resolve the reserve protecting a stored credential: its account's
+	 * `reservePct` / `taperHours` win over `fallbackFraction` and the global taper.
+	 * `undefined` when neither the account nor the caller supplies a reserve.
+	 */
+	reserveFor(
+		provider: string,
+		credential: AuthCredential,
+		fallbackFraction: number | undefined,
+	): UsageReserve | undefined {
+		return resolveUsageReserve(
+			this.forCredential(provider, credential),
+			fallbackFraction,
+			this.#defaultReserveTaperHours,
+		);
 	}
 }
