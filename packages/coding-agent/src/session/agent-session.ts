@@ -6664,6 +6664,21 @@ export class AgentSession implements SettingsScope {
 		return { ...context, messages: [...context.messages, evalStateContext] };
 	}
 
+	/**
+	 * Writes the eval runtime snapshot `navigateTree` adds to `context` into the
+	 * session file at the new leaf, so a fork or reload of this branch rebuilds
+	 * the live request prefix (#15933). Always a fresh append, even when the
+	 * target already has an identical snapshot child: the leaf is restored from
+	 * the last journal entry, so only an append makes the jump durable. Returns
+	 * whether the leaf moved.
+	 */
+	#persistNavigationEvalStateContext(context: SessionContext): boolean {
+		const snapshot = this.#buildEvalStateContextMessage();
+		if (!snapshot || !this.#needsEvalStateContext(context.messages, snapshot.content)) return false;
+		this.sessionManager.appendMessage(snapshot);
+		return true;
+	}
+
 	#needsEvalStateContext(messages: AgentMessage[], content: CustomMessage["content"]): boolean {
 		const latest = messages.findLast(
 			message => message.role === "custom" && message.customType === "eval-state-context",
@@ -6680,6 +6695,10 @@ export class AgentSession implements SettingsScope {
 			if (message.role === "pythonExecution" || (message.role === "toolResult" && message.toolName === "eval")) {
 				return true;
 			}
+			// A persisted snapshot (e.g. written by `/tree` onto a pre-eval branch) may
+			// describe a kernel this process no longer has; count it as history so a
+			// fresh registry emits the "not restored" correction after it.
+			if (message.role === "custom" && message.customType === "eval-state-context") return true;
 			return (
 				message.role === "assistant" &&
 				message.content.some(block => block.type === "toolCall" && block.name === "eval")
@@ -12491,9 +12510,11 @@ export class AgentSession implements SettingsScope {
 		}
 
 		// Update agent state — build display context to populate agent messages.
-		const stateContext = this.sessionManager.buildSessionContext({
-			maxFrameDataBytes: frameDataBytesBudget(this.model),
-		});
+		const maxFrameDataBytes = frameDataBytesBudget(this.model);
+		let stateContext = this.sessionManager.buildSessionContext({ maxFrameDataBytes });
+		if (this.#persistNavigationEvalStateContext(deobfuscateSessionContext(stateContext, this.#obfuscator))) {
+			stateContext = this.sessionManager.buildSessionContext({ maxFrameDataBytes });
+		}
 		const displayContext = this.#withEvalStateContext(deobfuscateSessionContext(stateContext, this.#obfuscator));
 		this.agent.replaceMessages(displayContext.messages);
 		this.#rehydrateCheckpointRewindState();
