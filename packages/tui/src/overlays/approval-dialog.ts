@@ -247,7 +247,8 @@ export class ApprovalDialogComponent implements Component {
 			if (armed) this.#activate(this.#answers[this.#selected]?.id ?? "deny");
 		} else if (!menu && matchesSelectUp(keyData)) this.#scroll(-1);
 		else if (!menu && matchesSelectDown(keyData)) this.#scroll(1);
-		else if (draft) this.#editDraft(draft, keyData);
+		// An empty composer swallows Enter: it would otherwise submit nothing, or interrupt the run.
+		else if (draft && !getKeybindings().matches(keyData, "tui.input.submit")) this.#editDraft(draft, keyData);
 	}
 
 	/** Move the highlight by `delta` rows, stopping at the edges like the selector does. */
