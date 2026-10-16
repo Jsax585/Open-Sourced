@@ -11,6 +11,8 @@ import type { EffectiveExtensionRoots } from "@oh-my-pi/pi-coding-agent/capabili
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgCompaction } from "@oh-my-pi/pi-coding-agent/session/context-settings";
+import { cfgToolsXdev } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import { cfgInlineToolDescriptors } from "@oh-my-pi/pi-coding-agent/session/settings";
 import type { PreparedExtension } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import { RpcSubagentRegistry } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents";
@@ -59,6 +61,19 @@ function makeTempDir(prefix: string): string {
 function fakeMcpManager(getTools: () => Array<{ name: string; label: string }>): MCPManager {
 	return { getTools, addToolsChangedListener: () => () => {} } as unknown as MCPManager;
 }
+
+const revivedMcpTool = {
+	name: "mcp__server_probe",
+	label: "server/probe",
+	loadMode: "discoverable" as const,
+	description: "revived MCP probe description sentinel",
+	parameters: type({ value: type("string").describe("revived value sentinel") }),
+	mcpServerName: "server",
+	mcpToolName: "probe",
+	async execute() {
+		return { content: [{ type: "text" as const, text: "ok" }] };
+	},
+} as AgentTool & { mcpServerName: string; mcpToolName: string };
 
 function createRef(sessionFile: string): AgentRef {
 	return {
@@ -158,6 +173,7 @@ async function createPersistedSession(
 		isolated?: boolean;
 		retryFallback?: RetryFallbackRole;
 		compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
+		systemPreset?: "minimal-task";
 	},
 ): Promise<string> {
 	const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
@@ -175,6 +191,7 @@ async function createPersistedSession(
 		agent: contract?.agent,
 		isolated: contract?.isolated,
 		retryFallback: contract?.retryFallback,
+		systemPreset: contract?.systemPreset,
 		...(contract?.compactionThreshold !== undefined
 			? { compactionThreshold: contract.compactionThreshold }
 			: undefined),
@@ -531,6 +548,76 @@ describe("persisted subagent revival", () => {
 		expect(capturedOptions?.mcpManager).toBe(hostileMcp);
 		expect(capturedOptions?.mcpTools?.map(tool => tool.name)).toEqual(["mcp__server_read"]);
 		expect(capturedOptions?.customTools).toBeUndefined();
+	});
+
+	it("preserves minimal-task capability suppression during cold revival", async () => {
+		const cwd = makeTempDir("@pi-minimal-revive-");
+		const sessionFile = await createPersistedSession(cwd, undefined, undefined, undefined, {
+			systemPreset: "minimal-task",
+		});
+		let capturedOptions: CreateAgentSessionOptions | undefined;
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			capturedOptions = options;
+			return { session: createRevivedSession([]).session } as CreateAgentSessionResult;
+		});
+
+		const rootSettings = Settings.isolated({ inlineToolDescriptors: "on", "tools.xdev": true });
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd, undefined, { settings: rootSettings })(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+		await reviver(ref);
+
+		expect(cfgInlineToolDescriptors.get(capturedOptions?.settings ?? Settings.isolated())).toBe("off");
+		expect(capturedOptions?.skills).toEqual([]);
+		expect(capturedOptions?.rules).toEqual([]);
+		const revivedSettings = capturedOptions?.settings;
+		if (!revivedSettings) throw new Error("Expected revived settings");
+		const ordinaryChild = executorModule.createSubagentSettings(revivedSettings);
+		expect(cfgInlineToolDescriptors.get(ordinaryChild)).toBe("on");
+		expect(cfgToolsXdev.get(ordinaryChild)).toBe(true);
+		expect(cfgInlineToolDescriptors.get(revivedSettings)).toBe("off");
+		expect(cfgToolsXdev.get(revivedSettings)).toBe(false);
+		expect(cfgInlineToolDescriptors.get(rootSettings)).toBe("on");
+		expect(cfgToolsXdev.get(rootSettings)).toBe(true);
+	});
+
+	it("keeps project context out of an advisor after a minimal cold revival", async () => {
+		const cwd = makeTempDir("@pi-minimal-revive-context-");
+		await Bun.write(path.join(cwd, "AGENTS.md"), "PROJECT_CONTEXT_SENTINEL");
+		const sessionFile = await createPersistedSession(cwd, undefined, "default", "on", {
+			systemPreset: "minimal-task",
+			tools: ["read", "yield"],
+		});
+		const authStorage = await AuthStorage.create(":memory:");
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+		const settings = Settings.isolated({
+			modelRoles: {
+				default: "anthropic/claude-sonnet-4-5",
+				advisor: "anthropic/claude-sonnet-4-5",
+			},
+		});
+		MCPManager.setInstance(fakeMcpManager(() => [revivedMcpTool]));
+		const ref = AgentRegistry.global().register({
+			...createRef(sessionFile),
+			id: "minimal-revive-context",
+		});
+		let revived: AgentSession | undefined;
+		try {
+			const reviver = await createFactory(cwd, undefined, { authStorage, modelRegistry, settings })(ref);
+			if (!reviver) throw new Error("Expected a persisted reviver");
+			revived = await reviver(ref);
+			const advisor = revived.getAdvisorAgent();
+			if (!advisor) throw new Error("Expected a revived advisor");
+			expect(revived.getMountedXdevToolNames()).toEqual([]);
+			expect(revived.agent.state.tools.some(tool => tool.name === "mcp__server_probe")).toBe(false);
+			expect(revived.getMountedXdevToolNames()).not.toContain("mcp__server_probe");
+			expect(advisor.state.systemPrompt.join("\n")).not.toContain("PROJECT_CONTEXT_SENTINEL");
+		} finally {
+			await revived?.dispose();
+			AgentRegistry.global().unregister(ref.id);
+			authStorage.close();
+		}
 	});
 
 	it("leaves isolated sessions transcript-only even when the workspace still exists", async () => {
@@ -1315,10 +1402,18 @@ describe("cold revival replays the system prompt the last request sent", () => {
 		buildPrompt: (toolNames: string[]) => string[],
 		responses: MockResponseSource,
 		hooks?: ExtensionHooks,
+		sdkProtocolContext?: { defaultPrompt: string[]; runtimeInstructions: readonly string[] },
 	): Promise<RecordingSession> {
 		let spawned: RecordingSession | undefined;
 		vi.spyOn(sdkModule, "createAgentSession").mockImplementationOnce(async options => {
-			spawned = createRecordingSession(options!.sessionManager!, buildPrompt, responses, hooks);
+			let renderPrompt = buildPrompt;
+			if (sdkProtocolContext) {
+				const build = options!.systemPrompt;
+				if (typeof build !== "function") throw new Error("Expected the task prompt builder");
+				const { defaultPrompt, runtimeInstructions } = sdkProtocolContext;
+				renderPrompt = () => [build(defaultPrompt, runtimeInstructions)].flat();
+			}
+			spawned = createRecordingSession(options!.sessionManager!, renderPrompt, responses, hooks);
 			// The SDK registers a spawned child, which keeps it live after it yields.
 			AgentRegistry.global().register({
 				id: "prompt-blocks",
@@ -1332,7 +1427,13 @@ describe("cold revival replays the system prompt the last request sent", () => {
 		});
 		const result = await executorModule.runSubprocess({
 			cwd,
-			agent: { name: "task", description: "test", systemPrompt: "charter", source: "bundled" },
+			agent: {
+				name: "task",
+				description: "test",
+				systemPrompt: "charter",
+				source: "bundled",
+				...(sdkProtocolContext ? { systemPreset: "minimal-task" as const } : {}),
+			},
 			task: "do work",
 			index: 0,
 			id: "prompt-blocks",
@@ -1345,6 +1446,32 @@ describe("cold revival replays the system prompt the last request sent", () => {
 		if (!spawned) throw new Error("Expected the spawn to create a session");
 		return spawned;
 	}
+
+	it("keeps live SDK protocols in the provider prompt during a minimal cold revival", async () => {
+		const cwd = makeTempDir("@pi-minimal-protocol-revive-");
+		const protocols = [
+			"## MCP Server Instructions\n\n### fixture\nInitialize the fixture before calling its tools.",
+			"- `$$HASH$$`, `$$HASH:CASE$$`, `$$NAME_HASH:CASE$$` output tokens: opaque strings.",
+		];
+		// Produce the persisted prompt through the real executor callback first.
+		// Cold revival must replay that prompt, rather than rebuild a seeded transcript.
+		const spawned = await spawn(cwd, () => [], spawnResponses(), undefined, {
+			defaultPrompt: ["INHERITED_PROJECT_PROTOCOL_SENTINEL"],
+			runtimeInstructions: protocols,
+		});
+		const recordedPrompt = spawned.requests.at(-1);
+		if (!recordedPrompt) throw new Error("Expected a recorded provider request");
+		await spawned.session.dispose();
+
+		const replayed = await reviveAndFollowUp(cwd);
+		expect(replayed.system).toEqual(recordedPrompt);
+		const providerPrompt = replayed.system.join("\n");
+		expect(providerPrompt).toContain("Initialize the fixture before calling its tools.");
+		expect(providerPrompt).toContain(
+			"`$$HASH$$`, `$$HASH:CASE$$`, `$$NAME_HASH:CASE$$` output tokens: opaque strings.",
+		);
+		expect(providerPrompt).not.toContain("INHERITED_PROJECT_PROTOCOL_SENTINEL");
+	});
 
 	/** Cold-revives the parked transcript the way the Agent Hub does and returns the follow-up's request. */
 	async function reviveAndFollowUp(cwd: string, hooks?: ExtensionHooks): Promise<{ system: string[]; tools: string }> {
@@ -1653,5 +1780,47 @@ describe("buildWakeRelayBody", () => {
 			await expect(reviver(ref)).rejects.toThrow(/no persisted session contract/);
 			expect(await Bun.file(sessionFile).text()).toBe(withoutInit);
 		});
+	});
+});
+
+describe("minimal-task settings stay session-local", () => {
+	it("restores non-preset preferences through nested ordinary descendants", () => {
+		const root = Settings.isolated({ inlineToolDescriptors: "on", "tools.xdev": true });
+		const minimal = executorModule.createSubagentSettings(root, undefined, undefined, "minimal-task");
+		const nestedMinimal = executorModule.createSubagentSettings(minimal, undefined, undefined, "minimal-task");
+		for (const parent of [minimal, nestedMinimal]) {
+			const ordinary = executorModule.createSubagentSettings(parent);
+			const ordinaryGrandchild = executorModule.createSubagentSettings(ordinary);
+			for (const child of [ordinary, ordinaryGrandchild]) {
+				expect(cfgInlineToolDescriptors.get(child)).toBe("on");
+				expect(cfgToolsXdev.get(child)).toBe(true);
+			}
+			expect(cfgInlineToolDescriptors.get(parent)).toBe("off");
+			expect(cfgToolsXdev.get(parent)).toBe(false);
+		}
+		expect(cfgInlineToolDescriptors.get(root)).toBe("on");
+		expect(cfgToolsXdev.get(root)).toBe(true);
+	});
+
+	it("honors current parent preferences and explicit ordinary-child overrides", () => {
+		const root = Settings.isolated();
+		cfgInlineToolDescriptors.set(root, "on");
+		cfgToolsXdev.set(root, true);
+		const minimal = executorModule.createSubagentSettings(root, undefined, undefined, "minimal-task");
+		cfgInlineToolDescriptors.set(root, "auto");
+		cfgToolsXdev.set(root, false);
+		expect(cfgInlineToolDescriptors.get(root)).toBe("auto");
+		expect(cfgToolsXdev.get(root)).toBe(false);
+		const ordinary = executorModule.createSubagentSettings(minimal);
+		expect(cfgInlineToolDescriptors.get(ordinary)).toBe("auto");
+		expect(cfgToolsXdev.get(ordinary)).toBe(false);
+		const explicit = executorModule.createSubagentSettings(minimal, {
+			inlineToolDescriptors: "on",
+			"tools.xdev": true,
+		});
+		expect(cfgInlineToolDescriptors.get(explicit)).toBe("on");
+		expect(cfgToolsXdev.get(explicit)).toBe(true);
+		expect(cfgInlineToolDescriptors.get(minimal)).toBe("off");
+		expect(cfgToolsXdev.get(minimal)).toBe(false);
 	});
 });

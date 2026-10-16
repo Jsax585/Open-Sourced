@@ -5,11 +5,13 @@
  * and the parent's delivery sink receives the completion (#14428).
  */
 import { afterEach, beforeEach, expect, it, vi } from "bun:test";
+import { type } from "@oh-my-pi/omptype";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
+import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -18,12 +20,24 @@ import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
+import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
+import type { ContextFile } from "@oh-my-pi/pi-coding-agent/capability/context-file";
 import { __resetDirsFromEnvForTests, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
 const AGENT_ID = "FocusedYield";
 const PARENT_ID = "Main";
 const MOCK_API_SOURCE = "test/focused-subagent-manual-yield";
+const mountedTool: CustomTool = {
+	name: "mounted_probe",
+	label: "Mounted probe",
+	description: "mounted probe description sentinel",
+	parameters: type({ value: type("string").describe("mounted value sentinel") }),
+	loadMode: "discoverable",
+	async execute() {
+		return { content: [{ type: "text", text: "ok" }] };
+	},
+};
 const ENV_KEYS = ["HOME", "PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE"] as const;
 
 let savedEnv: Record<string, string | undefined> = {};
@@ -95,7 +109,7 @@ function resultForLatestPrompt(messages: ReadonlyArray<{ role: string; content: 
 }
 
 /** Runs `AGENT_ID` to a kept-alive idle state that yielded `initial result`, with the parent's delivery sink recording completions. */
-async function spawnKeptAliveChild() {
+async function spawnKeptAliveChild(systemPreset?: "minimal-task", agentId = AGENT_ID) {
 	// Under the isolated HOME: project discovery walks up from cwd and stops at os.homedir(). On Windows
 	// os.tmpdir() lives under the real home, so a cwd outside the fake HOME would walk into the real
 	// ~/.omp and load the developer's installed plugins as project plugins.
@@ -107,6 +121,27 @@ async function spawnKeptAliveChild() {
 	const authStorage = createInMemoryAuthStorage();
 	authStorage.keys.setRuntime("mock", "test-key");
 	const modelRegistry = new ModelRegistry(authStorage);
+	const inheritedContextFile = {
+		path: path.join(cwd, "PROJECT_SENTINEL.md"),
+		content: "PROJECT_SENTINEL",
+		level: "project",
+		_source: {} as never,
+	} as ContextFile;
+	const inheritedRule = {
+		name: "RULE_SENTINEL",
+		path: path.join(cwd, "RULE_SENTINEL.md"),
+		content: "RULE_SENTINEL",
+		alwaysApply: true,
+		_source: {} as never,
+	} as Rule;
+	const inheritedSkill = {
+		name: "SKILL_SENTINEL",
+		description: "SKILL_SENTINEL",
+		filePath: path.join(cwd, "SKILL_SENTINEL.md"),
+		baseDir: cwd,
+		source: "test",
+	};
+	await Bun.write(inheritedSkill.filePath, "# SKILL_SENTINEL\n\nSkill body sentinel.");
 	const mock = createMockModel({
 		handler: context => {
 			if (!(context.tools ?? []).some(tool => tool.name === "yield")) return { content: ["label"] };
@@ -133,10 +168,17 @@ async function spawnKeptAliveChild() {
 		const result = await runSubprocess({
 			cwd,
 			artifactsDir,
-			agent: { name: "task", description: "test", systemPrompt: "test", tools: ["read"], source: "bundled" },
+			agent: {
+				name: "task",
+				description: "test",
+				systemPrompt: "CHILD_ROLE_SENTINEL",
+				tools: ["read"],
+				systemPreset,
+				source: "bundled",
+			},
 			task: "report",
 			index: 0,
-			id: AGENT_ID,
+			id: agentId,
 			parentAgentId: PARENT_ID,
 			asyncJobManager: manager,
 			modelOverride: "mock/mock-model",
@@ -149,25 +191,31 @@ async function spawnKeptAliveChild() {
 				"todo.enabled": false,
 				"todo.reminders": false,
 				"advisor.enabled": false,
+				inlineToolDescriptors: "on",
 				modelRoles: { default: "mock/mock-model" },
 			}),
 			enableLsp: false,
 			enableMCP: false,
+			customTools: [mountedTool],
 			enableIrc: false,
+			contextFiles: [inheritedContextFile],
+			rules: [inheritedRule],
+			skills: [inheritedSkill],
+			autoloadSkills: [inheritedSkill],
 		});
 		expect(result.exitCode).toBe(0);
 	} catch (error) {
 		close();
 		throw error;
 	}
-	const artifact = path.join(artifactsDir, `${AGENT_ID}.md`);
+	const artifact = path.join(artifactsDir, agentId + ".md");
 	expect(await Bun.file(artifact).text()).toContain("initial result");
-	const session = AgentRegistry.global().get(AGENT_ID)?.session;
+	const session = AgentRegistry.global().get(agentId)?.session;
 	if (!session) {
 		close();
 		throw new Error("kept-alive subagent has no live session");
 	}
-	return { session, artifact, deliveries, firstDelivery: firstDelivery.promise, close };
+	return { session, artifact, deliveries, firstDelivery: firstDelivery.promise, close, calls: mock.calls };
 }
 
 it("a focused manual prompt's yield rewrites the artifact and notifies the parent", async () => {
@@ -181,6 +229,44 @@ it("a focused manual prompt's yield rewrites the artifact and notifies the paren
 		expect(await Bun.file(child.artifact).text()).toContain("manual result");
 	} finally {
 		child.close();
+	}
+}, 15_000);
+
+it("minimal-task omits inherited prompt and autoload skill content while default retains it", async () => {
+	const normal = await spawnKeptAliveChild();
+	const minimal = await spawnKeptAliveChild("minimal-task", "MinimalYield");
+	try {
+		const normalText = normal.calls.map(call => (call.context.systemPrompt ?? []).join("\n")).join("\n");
+		const minimalText = minimal.calls.map(call => (call.context.systemPrompt ?? []).join("\n")).join("\n");
+		const normalMessages = JSON.stringify(normal.calls.map(call => call.context.messages));
+		const minimalMessages = JSON.stringify(minimal.calls.map(call => call.context.messages));
+		expect(normalText).toContain("PROJECT_SENTINEL");
+		expect(normalText).toContain("RULE_SENTINEL");
+		expect(normalText).toContain("SKILL_SENTINEL");
+		expect(normalMessages).toContain("Skill body sentinel");
+		expect(normalText).toContain("CHILD_ROLE_SENTINEL");
+		expect(minimalText).not.toContain("PROJECT_SENTINEL");
+		expect(minimalText).not.toContain("RULE_SENTINEL");
+		expect(minimalText).not.toContain("SKILL_SENTINEL");
+		expect(minimalMessages).not.toContain("Skill body sentinel");
+		expect(minimalText).toContain("CHILD_ROLE_SENTINEL");
+		const normalTools = normal.calls.flatMap(call => call.context.tools ?? []);
+		const minimalTools = minimal.calls.flatMap(call => call.context.tools ?? []);
+		const normalYieldTool = normalTools.find(tool => tool.name === "yield");
+		const minimalYieldTool = minimalTools.find(tool => tool.name === "yield");
+		expect(normalYieldTool).toBeDefined();
+		expect(minimalYieldTool).toBeDefined();
+		expect(normalYieldTool?.description).toBe("");
+		expect(minimalYieldTool?.description).toContain("Submit subagent output");
+		expect(normalTools.some(tool => tool.name === "mounted_probe")).toBe(false);
+		const minimalMountedTool = minimalTools.find(tool => tool.name === "mounted_probe");
+		expect(minimalMountedTool).toBeDefined();
+		expect(minimalMountedTool?.description).toContain("mounted probe description sentinel");
+		expect(JSON.stringify(minimalMountedTool?.parameters)).toContain("mounted value sentinel");
+		expect(JSON.stringify(minimalYieldTool?.parameters)).toContain("Optional result type");
+	} finally {
+		normal.close();
+		minimal.close();
 	}
 }, 15_000);
 

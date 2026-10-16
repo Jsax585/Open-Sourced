@@ -37,6 +37,7 @@
 
 ### Added
 
+- Added the opt-in `systemPreset: minimal-task` agent frontmatter setting for focused subagents, including faithful native and in-band tool guidance, MCP server instructions, opaque secret-token guidance, and cold-revival behavior ([#6548](https://github.com/can1357/oh-my-pi/pull/6548) by [@dexhunter](https://github.com/dexhunter)).
 - Added `lsp.requestTimeout` setting to configure wait durations for language server diagnostics and requests
 - Added `omp auth-gateway serve --clients=<file>`: per-client bearer tokens, each limited to listed models and broker OAuth accounts with no fallback to other accounts or API keys, re-read while serving ([#5098](https://github.com/can1357/oh-my-pi/issues/5098), [#15900](https://github.com/can1357/oh-my-pi/pull/15900) by [@alphastorm](https://github.com/alphastorm))
 

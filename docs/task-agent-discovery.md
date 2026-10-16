@@ -27,7 +27,7 @@ It covers runtime behavior as implemented today, including precedence, invalid-d
 Task agents normalize into `AgentDefinition` (`src/task/types.ts`):
 
 - required `name`, `description`, and `systemPrompt`
-- optional `tools`, `spawns`, prioritized `model` list, `thinkingLevel`, `output`, `blocking`, `structured`, `autoloadSkills`, `readSummarize`, `prewalk`, `advisor`
+- optional `systemPreset`, `tools`, `spawns`, prioritized `model` list, `thinkingLevel`, `output`, `blocking`, `structured`, `autoloadSkills`, `readSummarize`, `prewalk`, `advisor`
 - `source`: `"bundled" | "user" | "project"` (extension agents are tagged with their extension root's project/user level)
 - optional `filePath`
 
@@ -47,6 +47,7 @@ Parsing comes from frontmatter via `parseAgentFields()` (`src/discovery/helpers.
 - `autoloadSkills` names skills from the parent session to inject before the first child prompt; unknown names are ignored
 - `prewalk: true` starts the subagent on its resolved model and hands off to the default prewalk target (the `smol` role) at its first edit/write, exactly like the session-level `--prewalk`; a string value (e.g. `prewalk: "@smol"` or `prewalk: "openai/gpt-5-mini"`) picks a custom target. The `task.agentPrewalk` settings record (agent name → `"on"` / `"off"` / pattern, configured per agent from the `/agents` hub via its prewalk strip) overrides the frontmatter. Resolution happens in `runSubprocess` (`src/task/executor.ts`). An unavailable target is skipped instead of failing the spawn. A resolved target is skipped only when both its model identity and its effective thinking mode/level match the starting selection after model clamping; a same-model effort downgrade is a real hand-off and still arms and switches at the first edit/write.
 - `advisor: true` pairs spawned sessions of the agent with an advisor running the model resolved for the `advisor` role; a string value (e.g. `advisor: "deepseek/deepseek-v4-flash"` or `advisor: "@smol:high"`) sets an explicit advisor model pattern (optional `:level` suffix), applied as the spawned session's `modelRoles.advisor`. The `task.agentAdvisor` settings record (agent name → `"on"` / `"off"` / pattern, configured per agent from the `/agents` hub via its advisor strip) overrides the frontmatter. Resolution happens in `runSubprocess` (`src/task/executor.ts`); subagents default to no advisor, and the effective opt-in is persisted in `session_init` so cold revival restores it.
+- `systemPreset: minimal-task` (the only accepted value; anything else is a parse error) keeps only the subagent role/context/plan/worktree/IRC/yield/output packet and suppresses inherited project prompt blocks, skills, rules, and skill autoload. Native tool schemas retain their descriptions, while owned XML/Hermes/MiniMax dialects still receive their full catalog and grammar. The preset is persisted so the same behavior survives cold revival; agents without it remain unchanged.
 
 ## Role-backed custom agents
 
@@ -70,7 +71,7 @@ Set the role mapping in `~/.omp/agent/config.yml`:
 
 ```yaml
 modelRoles:
-  review: openai/gpt-5.4:high
+   review: openai/gpt-5.4:high
 ```
 
 `@review` resolves through `modelRoles.review`. Each `modelRoles.<role>` value stores a concrete model selector and may append a thinking suffix such as `:high` (`src/config/model-resolver.ts`). Changing that mapping affects subsequent task resolutions without editing agent definitions. Task/eval preflight reloads the current global, project, and explicit overlay settings before rediscovering agents, so agent files and their role aliases added during a live session resolve from one refreshed configuration state.
@@ -79,14 +80,14 @@ With the default batched task schema, supply shared `context` and per-item `task
 
 ```json
 {
-  "context": "Review the current change in this repository.",
-  "tasks": [
-    {
-      "agent": "reviewer",
-      "task": "Report concrete correctness findings.",
-      "solutionSpace": "Review cause and failure modes are open; no known defect."
-    }
-  ]
+	"context": "Review the current change in this repository.",
+	"tasks": [
+		{
+			"agent": "reviewer",
+			"task": "Report concrete correctness findings.",
+			"solutionSpace": "Review cause and failure modes are open; no known defect."
+		}
+	]
 }
 ```
 
@@ -116,12 +117,12 @@ Route these tiers through roles by keeping aliases in `task.agentModelOverrides`
 
 ```yaml
 task:
-  agentModelOverrides:
-    sonic: "@fast_worker"
-    task: "@good_worker"
+   agentModelOverrides:
+      sonic: "@fast_worker"
+      task: "@good_worker"
 modelRoles:
-  fast_worker: openai/gpt-5-mini
-  good_worker: openai/gpt-5.4:high
+   fast_worker: openai/gpt-5-mini
+   good_worker: openai/gpt-5.4:high
 ```
 
 The `vibe_spawn` `cli` remains `fast` or `good`; update `modelRoles` to change the worker model.
@@ -155,7 +156,7 @@ Because bundled parsing uses `level: "fatal"`, unrecoverable YAML errors or inva
    - explicit CLI `--extension` / SDK `additionalExtensionPaths` directory roots
    - the session's effective `extensions:` array, in its configured order
    - installed npm/link plugins
-   Project and user `extensions:` arrays are not concatenated: settings use array-replacement precedence. Session overlays/runtime overrides and the configured array's project/user provenance are preserved. In `explicit-only` mode (`--no-extensions` or SDK `disableExtensionDiscovery`), only explicit roots contribute this package surface; file entrypoints have no `agents/` subdirectory to scan.
+     Project and user `extensions:` arrays are not concatenated: settings use array-replacement precedence. Session overlays/runtime overrides and the configured array's project/user provenance are preserved. In `explicit-only` mode (`--no-extensions` or SDK `disableExtensionDiscovery`), only explicit roots contribute this package surface; file entrypoints have no `agents/` subdirectory to scan.
 4. Claude marketplace plugin roots (`listClaudePluginRoots(home, cwd)`) with `agents/` subdirs — only when `isProviderEnabled("claude-plugins")`; project-scope plugins sort before user-scope. User-scope roots additionally require the `claude-plugins` or `claude` user source to be enabled (`isUserSourceEnabled`: normally via `enabledProviders`, e.g. `["claude-plugins"]`; `claude` is also enabled implicitly when `CLAUDE_CONFIG_DIR` is set), except roots whose origin is not the foreign `~/.claude/plugins` tree (omp's own installs with `origin: "omp"` and `--plugin-dir` roots) — mirroring the skills path's exemption.
 5. Bundled agents (`loadBundledAgents()`)
 

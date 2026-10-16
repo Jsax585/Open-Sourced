@@ -8,6 +8,7 @@ import type {
 	Usage,
 } from "@oh-my-pi/pi-ai";
 import type { StructuredSubagentSchemaMode } from "@oh-my-pi/pi-tui/tools/task";
+import type { SystemPromptPreset } from "../task/types";
 import type { CompactionMethod } from "./compaction-methods";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { RetryFallbackRole } from "./retry-fallback-chains";
@@ -252,6 +253,8 @@ export interface SessionInitEntry extends SessionEntryBase {
 	task: string;
 	/** Tools available to the agent */
 	tools: string[];
+	/** Prompt/capability preset; absent preserves historical session behavior. */
+	systemPreset?: SystemPromptPreset;
 	/** Agent definition name (for example `scout` or `reviewer`). */
 	agent?: string;
 	/** Semantic model role declared by the agent, retained even after concrete model resolution. */
