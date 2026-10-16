@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { YieldItem } from "@oh-my-pi/pi-tui/tools/task";
 import { assembleYieldResult } from "@oh-my-pi/pi-tui/tools/task-yield-assembly";
 import { enforceStrictSchema, validateJsonSchemaValue } from "@oh-my-pi/pi-ai/utils/schema";
@@ -6,6 +8,7 @@ import { isRecord } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../src/config/settings";
 import { finalizeSubprocessOutput } from "../../src/task/executor";
 import { subprocessToolRegistry } from "../../src/task/subprocess-tool-registry";
+import { buildWorkPoolOutputSchema } from "../../src/task/workpool-yield";
 import { yieldSectionShapes } from "../../src/task/yield-assembly";
 import type { ToolSession } from "../../src/tools";
 import { buildOutputValidator } from "../../src/tools/output-schema-validator";
@@ -50,6 +53,56 @@ function finalize(items: YieldItem[], outputSchema: unknown) {
 	});
 }
 
+interface AnthropicYieldWireTool {
+	name: string;
+	input_schema: Record<string, unknown>;
+	strict?: boolean;
+	eager_input_streaming?: boolean;
+}
+
+/** Build the real provider request, but abort before transport and forbid network access. */
+async function anthropicYieldWireTool(tool: YieldTool, supportsEagerToolInputStreaming = true) {
+	const model = buildModel({
+		id: "claude-sonnet-4-6",
+		name: "claude-sonnet-4-6",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 200_000,
+		maxTokens: 4096,
+		compat: { supportsEagerToolInputStreaming },
+	});
+	let wireTool: AnthropicYieldWireTool | undefined;
+	let transportCalls = 0;
+	const result = await streamAnthropic(
+		model,
+		{
+			messages: [{ role: "user", content: "fixture", timestamp: 0 }],
+			tools: [tool],
+		},
+		{
+			apiKey: "synthetic-fixture-key-not-a-real-credential",
+			isOAuth: false,
+			signal: AbortSignal.abort(),
+			fetch: async () => {
+				transportCalls++;
+				throw new Error("Network disabled in yield provider conversion fixture");
+			},
+			onPayload: payload => {
+				const request = payload as { tools?: AnthropicYieldWireTool[] };
+				wireTool = request.tools?.find(candidate => candidate.name === "yield");
+			},
+		},
+	).result();
+	expect(transportCalls).toBe(0);
+	expect(result.stopReason).toBe("aborted");
+	if (!wireTool) throw new Error("Anthropic yield wire tool unavailable");
+	return wireTool;
+}
+
 const findingSchema = {
 	type: "object",
 	properties: { title: { type: "string" }, detail: { type: "string" } },
@@ -64,6 +117,75 @@ const schema = {
 };
 
 describe("yield shape production consumers", () => {
+	it("keeps item, empty batch and multi-label results legal after real Anthropic strict buffered conversion", async () => {
+		const declaration = {
+			type: "object",
+			properties: {
+				rows: { type: "array", items: { type: "string" } },
+				note: { type: "string" },
+			},
+			required: ["rows", "note"],
+			additionalProperties: false,
+		};
+		const tool = new YieldTool(session(declaration));
+		const wire = await anthropicYieldWireTool(tool);
+		expect(wire.strict).toBe(true);
+		expect(wire.eager_input_streaming).toBe(false);
+		const items: YieldItem[] = [];
+		for (const args of [
+			{ type: ["rows"], data: "one" },
+			{ type: ["rows"], data: [] },
+			{ type: ["rows", "note"], data: { rows: ["two", "three"], note: "done" } },
+			{ type: "result" },
+		]) {
+			expect(validateJsonSchemaValue(wire.input_schema, args).success).toBe(true);
+			items.push(await submit(tool, args, typeof args.type === "string"));
+		}
+		const output = finalize(items, declaration);
+		expect(output.exitCode).toBe(0);
+		expect(output.structuredOutput?.status).toBe("valid");
+		expect(JSON.parse(output.rawOutput)).toEqual({ rows: ["one", "two", "three"], note: "done" });
+	});
+
+	it("buffers loose and workpool yields without imposing Anthropic strict decoding", async () => {
+		const loose = await anthropicYieldWireTool(new YieldTool(session(undefined)));
+		expect(loose.strict).toBeUndefined();
+		expect(loose.eager_input_streaming).toBe(false);
+		const pool = new YieldTool({
+			...session(undefined),
+			getWorkPoolYieldItems: () => [{ id: "review#1", index: 1 }],
+		});
+		const wire = await anthropicYieldWireTool(pool);
+		expect(wire.strict).toBeUndefined();
+		expect(wire.eager_input_streaming).toBe(false);
+		expect(validateJsonSchemaValue(wire.input_schema, { key: 1, error: "unavailable" }).success).toBe(true);
+		const withoutPerToolFlag = await anthropicYieldWireTool(pool, false);
+		expect(withoutPerToolFlag.strict).toBeUndefined();
+		expect(withoutPerToolFlag.eager_input_streaming).toBeUndefined();
+	});
+
+	it("keeps an item failure non-terminal until its workpool sibling completes through registry and finalizer", async () => {
+		const workPoolItems = [
+			{ id: "review#1", index: 1 },
+			{ id: "review#2", index: 2 },
+		];
+		const declaration = buildWorkPoolOutputSchema(workPoolItems);
+		const tool = new YieldTool({
+			...session(declaration),
+			getWorkPoolYieldItems: () => workPoolItems,
+		});
+		const failed = await submit(tool, { key: 1, error: "review unavailable" }, false);
+		const completed = await submit(tool, { key: 2, data: { outcome: "reviewed" } }, true);
+		const output = finalize([failed, completed], declaration);
+		expect(output.exitCode).toBe(0);
+		expect(output.abortedViaYield).toBe(false);
+		expect(output.structuredOutput?.status).toBe("valid");
+		expect(JSON.parse(output.rawOutput)).toEqual({
+			"review#1": { error: "review unavailable" },
+			"review#2": { outcome: "reviewed" },
+		});
+	});
+
 	it("flattens legal batches, including an empty batch, after a single item through registry and executor", async () => {
 		const tool = new YieldTool(session(schema));
 		const items = [
