@@ -1751,6 +1751,10 @@ async fn terminate_run(registry: &process::SpawnRegistry) {
 	}
 }
 
+#[cfg_attr(
+	not(unix),
+	expect(clippy::unused_async, reason = "the TERM grace wait only awaits on unix")
+)]
 async fn wait_for_term_grace(registry: &process::SpawnRegistry) {
 	// Windows TERM is already hard termination; there is no trap to wait for.
 	#[cfg(unix)]
@@ -6992,8 +6996,8 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		let root = tempfile::tempdir().expect("cleanup directory");
 		fs::write(
 			root.path().join("cleanup.sh"),
-			"trap 'sleep 0.7; echo flushing; printf cleaned > cleaned; exit 0' TERM\n: > ready\nwhile \
-			 :; do :; done\n",
+			"trap 'sleep 0.7; echo flushing; printf cleaned > cleaned; exit 0' TERM\n: > \
+			 ready\nwhile :; do :; done\n",
 		)
 		.expect("cleanup script");
 		let shell = Shell::new(None);
@@ -7028,7 +7032,8 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 			.expect("shell result");
 		assert!(result.cancelled);
 		assert_eq!(
-			fs::read_to_string(root.path().join("cleaned")).expect("TERM cleanup after writing output"),
+			fs::read_to_string(root.path().join("cleaned"))
+				.expect("TERM cleanup after writing output"),
 			"cleaned"
 		);
 	}
