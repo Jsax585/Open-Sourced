@@ -19,6 +19,7 @@
 ### Fixed
 
 - Fixed Ctrl+C printing `9;5u` in the shell after force-quitting omp with a third Ctrl+C while it was still closing the session
+- Fixed clean `session.dispose()` aborting in-flight auto-learn captures in `beginDispose()` instead of draining them before `session_shutdown` (bounded by `OMP_AUTOLEARN_DRAIN_MS`, default 30s with auto-learn enabled / 3s otherwise, 6s on signal exits) ([#15965](https://github.com/can1357/oh-my-pi/pull/15965) by [@Vignesh-285](https://github.com/Vignesh-285))
 - Fixed Smart unexpected-stop recovery continuing finished answers, which added extra "nothing more to add" turns
 - Fixed browser `uploadFile` failing with "Not allowed" through the relay or into a Chrome on another machine, stalling behind macOS folder-privacy prompts, and breaking the tab on large drop-zone files ([#15489](https://github.com/can1357/oh-my-pi/pull/15489) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed browser `uploadFile` sending a stale copy of a file rewritten without changing its size or timestamp, failing on folders that contain a symlink loop, and deleting copies a still-open attached page could read after a repeat upload

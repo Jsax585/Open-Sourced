@@ -112,6 +112,7 @@ import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display";
 import { loadAdvisorTranscriptCosts } from "../advisor";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } from "../async";
+import { cfgAutolearnEnabled } from "../autolearn/settings";
 import { reset as resetCapabilities } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import type { SessionAccountPoolScope } from "../config/account-pools";
@@ -560,6 +561,44 @@ const cfgWorkspacePromptInputs = combine({
 
 const PLAN_MODE_REMINDER_MAX = 3;
 const POST_PROMPT_DRAIN_TIMEOUT_MS = 5_000;
+/** Auto-learn capture drain budget when the session runs no captures (inert autolearn). */
+const AUTOLEARN_DRAIN_TIMEOUT_DEFAULT_MS = 3_000;
+/** Auto-learn capture drain budget when `autolearn.enabled` can produce captures. */
+const AUTOLEARN_DRAIN_TIMEOUT_CAPTURE_MS = 30_000;
+/** Ceiling for any `OMP_AUTOLEARN_DRAIN_MS` override so dispose stays bounded. */
+const AUTOLEARN_DRAIN_TIMEOUT_CEILING_MS = 60_000;
+/**
+ * Unwind grace for an already-aborted capture on interrupt paths (`abort()`,
+ * branch transitions): the capture was signaled, so the drain only waits for
+ * its cancellation to settle and MUST NOT borrow the clean-dispose budget.
+ */
+const AUTOLEARN_ABORTED_UNWIND_TIMEOUT_MS = 3_000;
+/**
+ * Signal exits (SIGTERM/SIGHUP/…) force-terminate `CLEANUP_DEADLINE_MS` (10s)
+ * after postmortem cleanup starts (`packages/utils/src/postmortem.ts`), and
+ * `session_shutdown` handlers run on a 2s cap (`SESSION_SHUTDOWN_HANDLER_TIMEOUT_MS`).
+ * Cap the capture drain to 6s so both the drain and the shutdown sweep/flush
+ * fit inside the forced-exit window instead of the process dying mid-drain.
+ */
+const AUTOLEARN_SIGNAL_EXIT_DRAIN_TIMEOUT_MS = 6_000;
+
+/**
+ * Clean-dispose drain budget for an in-flight auto-learn capture. `OMP_AUTOLEARN_DRAIN_MS`
+ * overrides the default (30s when auto-learn can produce captures, 3s otherwise);
+ * every value is clamped to {@link AUTOLEARN_DRAIN_TIMEOUT_CEILING_MS}.
+ */
+function resolveAutolearnDrainTimeoutMs(autolearnEnabled: boolean): number {
+	const raw = process.env.OMP_AUTOLEARN_DRAIN_MS?.trim();
+	const parsed = raw === undefined || raw === "" ? Number.NaN : Number(raw);
+	const base =
+		Number.isFinite(parsed) && parsed >= 0
+			? parsed
+			: autolearnEnabled
+				? AUTOLEARN_DRAIN_TIMEOUT_CAPTURE_MS
+				: AUTOLEARN_DRAIN_TIMEOUT_DEFAULT_MS;
+	return Math.min(base, AUTOLEARN_DRAIN_TIMEOUT_CEILING_MS);
+}
+
 const AGENT_START_POLICY_MAX_ATTEMPTS = 3;
 /**
  * How long the first turn waits for deferred UI/RPC MCP startup (the sdk's startup barrier
@@ -5539,12 +5578,21 @@ export class AgentSession implements SettingsScope {
 		this.#autolearnCaptureAbortController?.abort();
 	}
 
-	async #drainAutolearnCapture(): Promise<void> {
+	/**
+	 * Settle an in-flight auto-learn capture, bounded by `timeoutMs`. Returns
+	 * immediately in 0ms when no capture is in flight. A capture that outlives
+	 * the budget is aborted so it cannot outlive the teardown that triggered
+	 * the drain. Every caller states its budget: clean dispose resolves the
+	 * `OMP_AUTOLEARN_DRAIN_MS` default, while interrupt paths (which already
+	 * aborted the capture) only wait for it to unwind.
+	 */
+	async #drainAutolearnCapture(timeoutMs: number): Promise<void> {
 		const task = this.#autolearnCaptureTask;
 		if (!task) return;
 		try {
-			await withTimeout(task, 3_000, "Timed out draining auto-learn capture during dispose");
+			await withTimeout(task, timeoutMs, "Timed out draining auto-learn capture during dispose");
 		} catch (error) {
+			this.#abortAutolearnCapture();
 			logger.warn("Auto-learn capture did not settle during dispose", { error: String(error) });
 		}
 	}
@@ -5569,8 +5617,14 @@ export class AgentSession implements SettingsScope {
 	 * Wrappers that await other teardown before delegating to `dispose()` MUST
 	 * call this before their first await — otherwise work started in that async
 	 * gap slips past the disposal guards.
+	 *
+	 * An in-flight auto-learn capture is a pending product of the session and is
+	 * preserved for `dispose()` to drain before `session_shutdown` fires. Pass
+	 * `abortAutolearnCapture` only when the session is abandoned without a
+	 * following `dispose()` (e.g. a failed session-switch rollback), where no
+	 * drain will ever run.
 	 */
-	beginDispose(): void {
+	beginDispose(options?: { abortAutolearnCapture?: boolean }): void {
 		this.#isDisposed = true;
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.#modelDiscoveryAbortController.abort();
@@ -5585,7 +5639,7 @@ export class AgentSession implements SettingsScope {
 		}
 		this.#memory.cancelLocalMemoryStartup();
 		this.#titleGenerationAbortController.abort();
-		this.#abortAutolearnCapture();
+		if (options?.abortAutolearnCapture) this.#abortAutolearnCapture();
 		this.#irc.flushPending();
 		this.yieldQueue.clear();
 		this.agent.setAsideMessageProvider(undefined);
@@ -5753,6 +5807,19 @@ export class AgentSession implements SettingsScope {
 		this.#cancelExitRecorder = undefined;
 		this.#cancelFatalRecoveryHint?.();
 		this.#cancelFatalRecoveryHint = undefined;
+		// A clean dispose drains an in-flight auto-learn capture BEFORE the
+		// session_shutdown event: the capture is a pending product of the
+		// session, and shutdown handlers (e.g. the managed-skill collector's
+		// sweep/flush) must observe the SKILL.md it writes. beginDispose()
+		// preserved the capture for exactly this drain; a capture that outlives
+		// the drain budget is aborted there. A signal exit is force-terminated
+		// at postmortem's cleanup deadline, so its drain is capped to keep
+		// session_shutdown and the collector flush inside that window.
+		const autolearnDrainMs = resolveAutolearnDrainTimeoutMs(cfgAutolearnEnabled.get(this.settings));
+		const boundedAutolearnDrainMs = options.reason
+			? Math.min(autolearnDrainMs, AUTOLEARN_SIGNAL_EXIT_DRAIN_TIMEOUT_MS)
+			: autolearnDrainMs;
+		await this.#drainAutolearnCapture(boundedAutolearnDrainMs);
 		try {
 			await emitSessionShutdownEvent(this.#extensionRunner);
 		} catch (error) {
@@ -5774,7 +5841,6 @@ export class AgentSession implements SettingsScope {
 		} catch (error) {
 			logger.warn("Post-prompt tasks still draining at dispose deadline", { error: String(error) });
 		}
-		await this.#drainAutolearnCapture();
 		await this.#memory.transition;
 
 		const hindsightState = this.getHindsightSessionState();
@@ -9852,7 +9918,7 @@ export class AgentSession implements SettingsScope {
 			// Do not let abort-and-replace callers start a new prompt before that cleanup
 			// finishes, or the replacement turn's events are neither forwarded nor persisted.
 			await manualCompactionCleanup;
-			await this.#drainAutolearnCapture();
+			await this.#drainAutolearnCapture(AUTOLEARN_ABORTED_UNWIND_TIMEOUT_MS);
 			await this.#goalRuntime.onTaskAborted({ reason: options?.goalReason ?? "interrupted" });
 			// Clear prompt-in-flight state: waitForIdle resolves when the agent loop's finally
 			// block runs, but nested prompt setup/finalizers may still be unwinding. Without this,
@@ -11884,7 +11950,8 @@ export class AgentSession implements SettingsScope {
 					rollbackFailure = `cwd rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`;
 				}
 				if (rollbackFailure) {
-					this.beginDispose();
+					// Abandoned mid-transition: no dispose() will drain the capture.
+					this.beginDispose({ abortAutolearnCapture: true });
 					this.#bash.finishSessionTransition(bashTransition, false);
 					logger.warn("Failed to restore cwd after session switch", { cwd: previousSessionState.cwd });
 					const original = error instanceof Error ? error.message : String(error);
@@ -12002,7 +12069,7 @@ export class AgentSession implements SettingsScope {
 		const bashTransition = this.#bash.beginSessionTransition();
 		this.#cancelOwnAsyncJobs();
 		this.#abortAutolearnCapture();
-		await this.#drainAutolearnCapture();
+		await this.#drainAutolearnCapture(AUTOLEARN_ABORTED_UNWIND_TIMEOUT_MS);
 
 		let sessionTransitioned = false;
 		let advisorRecordersDetached = false;
@@ -12120,7 +12187,7 @@ export class AgentSession implements SettingsScope {
 		const bashTransition = this.#bash.beginSessionTransition();
 		this.#cancelOwnAsyncJobs();
 		this.#abortAutolearnCapture();
-		await this.#drainAutolearnCapture();
+		await this.#drainAutolearnCapture(AUTOLEARN_ABORTED_UNWIND_TIMEOUT_MS);
 
 		let sessionTransitioned = false;
 		let advisorRecordersDetached = false;
