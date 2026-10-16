@@ -774,6 +774,23 @@ Baseten provides high-performance infrastructure for hosting open-weight LLMs (i
 - **Dynamic Model Discovery & Pricing**: `fetchDynamicModels` queries `https://inference.baseten.co/v1/models`. `mapModel` parses raw record metadata including `supported_features`, `input_modalities` (`image` for vision capability), context and completion token bounds (`context_length`, `max_completion_tokens`), and per-million token pricing (`prompt`, `completion`, `input_cache_read`).
 - **Native Reasoning Identification**: Flags `reasoning: true` for `openai/gpt-oss-120b`, `deepseek-ai/DeepSeek-V4-Pro`, and `zai-org/GLM-5.2` when dynamic features list `reasoning` or `reasoning_effort`.
 
+## BizRouter (`bizrouter`)
+BizRouter is a multi-vendor gateway (Claude, GPT, Gemini, Grok, GLM, Kimi, DeepSeek, Solar, and its own Korea-hosted open-weight models) behind one `sk-br-v1-` key. It serves OpenAI Chat Completions and Responses at `https://api.bizrouter.ai/v1` and an Anthropic-compatible Messages API at `https://api.bizrouter.ai/v1/messages`.
+
+### Special casings
+- **Per-model transport**: Claude ids (`anthropic/*`) ride `anthropic-messages` against `https://api.bizrouter.ai` through `api-routes provider="bizrouter"` in `runtime/behavior.kdl`, so thinking blocks, signatures, and `cache_control` breakpoints pass through natively. Rows whose `api_type` is `responses` (GPT-6 Astra, the `-pro` SKUs, GPT-5.3-Codex) ride `openai-responses`; everything else rides `openai-completions`.
+- **Claude thinking**: BizRouter forwards `/v1/messages` to the Claude API, so `bizrouter` sits on the same `on` lists as `anthropic` in `classes/anthropic.kdl` for thinking modes, effort ladders, and Haiku 5.5's explicit `disabled` thinking.
+- **Chat-completions effort ladders**: `reasoning_effort` is forwarded to the upstream vendor, which rejects levels outside its own ladder with a 400. `providers/bizrouter.kdl` drops the levels the gateway refuses: `max` on GPT-5.6+/GPT-6 chat SKUs (accepted only on `/v1/responses`, so Responses-only GPT-6 Astra keeps it), `minimal` on GPT-5.1 and the o-series, `minimal`/`xhigh` on Gemini 3.7+ Flash and Gemini 4, and `xhigh` on the Perplexity Sonar reasoning SKUs.
+
+### Auth & usage
+- **API Key Login**: `packages/catalog/src/compat/rules/auth/bizrouter.kdl` declares a `login "api-key"` rule pointing at `https://bizrouter.ai/settings/keys` and validates the key against `https://api.bizrouter.ai/v1/models`. Environment key: `BIZROUTER_API_KEY`.
+- **Usage Accounting**: Chat Completions streams report `prompt_tokens` including cache reads and writes, plus `cache_read_input_tokens` / `cache_creation_input_tokens`; Messages streams report Anthropic usage. Both go through the standard accounting paths.
+
+### Catalog model handling
+- **Discovery**: `bizrouterModelManagerOptions` (`packages/catalog/src/provider-models/openai-compat.ts`) fetches `/v1/models` when a key is configured. The response carries a bare OpenAI `data` list beside a `models` list whose rows add `api_type`, the USD rate card (`*_price_per_1m_usd`), `context_length`, `max_output_tokens`, modalities, and `supported_parameters`; discovery reads `models` (`envelopeKey: "models"`). `reasoning` follows `reasoning` / `reasoning_effort` in `supported_parameters`, and rows without `tools` are marked `supportsTools: false`. Rows whose output is not text alone (image, video, audio, embedding, rerank) and non-chat `api_type`s are dropped.
+- **Credential scope**: `/v1/models` lists only the models the key's organization policy allows, so the live roster is authoritative (`dynamicModelsAuthoritative`, `dynamicCostAuthoritative`) and `bizrouter` is credential-scoped in `generate-models.ts`.
+- **Authored seed**: `bizrouter/deepseek-v4.1-flash` at its published $0.90 / $3.60 per 1M rate card; bundle policy `fallback`. It keeps the provider visible in `/model` before login and is replaced by the first live roster.
+
 ## Cerebras (`cerebras`)
 Cerebras provides ultra-fast inference on wafer-scale engine hardware for open-weights models such as `zai-glm-4.7`, `gpt-oss-120b`, `qwen-3-235b-a22b-instruct-2507`, and `gemma-4-31b`. It communicates via the OpenAI Chat Completions (`openai-completions`) transport.
 

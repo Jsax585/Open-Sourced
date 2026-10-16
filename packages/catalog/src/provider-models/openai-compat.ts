@@ -4031,6 +4031,120 @@ export function kiloModelManagerOptions(config?: KiloModelManagerConfig): ModelM
 }
 
 // ---------------------------------------------------------------------------
+// 10.7 BizRouter
+// ---------------------------------------------------------------------------
+
+const BIZROUTER_BASE_URL = "https://api.bizrouter.ai/v1";
+
+/** BizRouter discovery inputs: `apiKey` enables the live roster; `baseUrl` defaults to the OpenAI-compatible `/v1` root. */
+export interface BizRouterModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+/** The Anthropic-compatible `/v1/messages` hangs off the host root, beside the `/v1` base. */
+function toBizRouterAnthropicBaseUrl(baseUrl: string): string {
+	return baseUrl.replace(/\/v1\/?$/, "");
+}
+
+/**
+ * One BizRouter USD-per-million rate. `absent` is the value for a missing
+ * field; a present field that is not a nonnegative number yields `undefined`.
+ */
+function bizrouterRate(value: unknown, absent: number | undefined): number | undefined {
+	if (value === undefined || value === null) return absent;
+	const parsed = toNumber(value);
+	return parsed !== undefined && parsed >= 0 ? parsed : undefined;
+}
+
+/**
+ * Map a roster row's USD rate card. Input and output are required; the roster
+ * omits the cache legs a model does not price, which read as 0. An unreadable
+ * card stays unpriced (`unknown`) instead of reading as free, and an all-zero
+ * card is a declared free tier.
+ */
+function bizrouterPricing(
+	entry: OpenAICompatibleModelRecord,
+	fallback: TokenCost,
+): Pick<ModelSpec<Api>, "cost" | "pricingStatus"> {
+	const input = bizrouterRate(entry.input_price_per_1m_usd, undefined);
+	const output = bizrouterRate(entry.output_price_per_1m_usd, undefined);
+	const cacheRead = bizrouterRate(entry.cache_read_price_per_1m_usd, 0);
+	const cacheWrite = bizrouterRate(entry.cache_write_price_per_1m_usd, 0);
+	if (input === undefined || output === undefined || cacheRead === undefined || cacheWrite === undefined) {
+		return { cost: fallback, pricingStatus: "unknown" };
+	}
+	const cost = { input, output, cacheRead, cacheWrite };
+	return input + output + cacheRead + cacheWrite === 0 ? { cost, pricingStatus: "free" } : { cost };
+}
+
+/**
+ * Transport for one roster row, or `undefined` for rows a chat agent cannot
+ * drive: embeddings, rerank, realtime, and every generation SKU whose output
+ * is not text alone (image, video, speech, and the text+image/audio chat
+ * variants). The row's `api_type` names Responses-only SKUs; the remaining
+ * text models route through `api-routes provider="bizrouter"` (Claude to
+ * `/v1/messages`).
+ */
+function bizrouterApi(entry: OpenAICompatibleModelRecord, modelId: string): Api | undefined {
+	const outputs = entry.output_modalities;
+	if (!Array.isArray(outputs) || outputs.length !== 1 || outputs[0] !== "text") return undefined;
+	if (entry.api_type === "responses") return "openai-responses";
+	if (entry.api_type !== "chat_completions") return undefined;
+	return (apiRouteFor("bizrouter", modelId)?.api as Api | undefined) ?? "openai-completions";
+}
+
+/**
+ * BizRouter's model manager. `/v1/models` requires a key and lists only the
+ * models that key's organization policy allows, so a keyless manager serves
+ * only the bundled seed and a keyed one replaces it with the live roster.
+ * The response carries a bare OpenAI `data` list beside a `models` list whose
+ * rows add the transport, USD rate card, limits, modalities, and accepted
+ * request parameters (https://bizrouter.ai/docs/models); discovery reads the
+ * latter. Effort ladders and wire formats come from `providers/bizrouter.kdl`.
+ */
+export function bizrouterModelManagerOptions(config?: BizRouterModelManagerConfig): ModelManagerOptions<Api> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? BIZROUTER_BASE_URL;
+	const anthropicBaseUrl = toBizRouterAnthropicBaseUrl(baseUrl);
+	return {
+		providerId: "bizrouter",
+		dynamicModelsAuthoritative: true,
+		// The live rate card is the tariff: an explicit `0` must not revert to
+		// the bundled seed's rate.
+		dynamicCostAuthoritative: true,
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels<Api>({
+					api: "openai-completions",
+					provider: "bizrouter",
+					baseUrl,
+					apiKey,
+					envelopeKey: "models",
+					mapModel: (entry, defaults) => {
+						const api = bizrouterApi(entry, defaults.id);
+						if (!api) return null;
+						const parameters = Array.isArray(entry.supported_parameters) ? entry.supported_parameters : [];
+						return {
+							...defaults,
+							api,
+							baseUrl: api === "anthropic-messages" ? anthropicBaseUrl : baseUrl,
+							reasoning: parameters.includes("reasoning") || parameters.includes("reasoning_effort"),
+							input: toInputCapabilities(entry.input_modalities),
+							...(parameters.includes("tools") ? {} : { supportsTools: false }),
+							...bizrouterPricing(entry, defaults.cost),
+							contextWindow: toPositiveNumber(entry.context_length, defaults.contextWindow),
+							maxTokens: toPositiveNumber(entry.max_output_tokens, defaults.maxTokens),
+						};
+					},
+					fetch: config?.fetch,
+				}),
+		}),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // Alibaba Coding Plan
 // ---------------------------------------------------------------------------
 

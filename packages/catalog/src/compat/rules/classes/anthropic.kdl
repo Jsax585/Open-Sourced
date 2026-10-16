@@ -336,7 +336,7 @@ class "anthropic" {
 	on "aimlapi" "gitlab-duo" "kilo" "nanogpt" "venice" {
 		thinking-efforts "minimal" "low" "medium" "high" "xhigh"
 	}
-	on "amazon-bedrock" "anthropic" "cloudflare-ai-gateway" "github-copilot" "gitlab-duo" \
+	on "amazon-bedrock" "anthropic" "bizrouter" "cloudflare-ai-gateway" "github-copilot" "gitlab-duo" \
 		"google-antigravity" "google-vertex" "opencode-zen" "snowflake" "vercel-ai-gateway" "zenmux" {
 		family "sonnet" {
 			revision ">=3.7 <4.6" {
@@ -344,7 +344,7 @@ class "anthropic" {
 			}
 		}
 	}
-	on "amazon-bedrock" "anthropic" "cloudflare-ai-gateway" "github-copilot" "gitlab-duo" \
+	on "amazon-bedrock" "anthropic" "bizrouter" "cloudflare-ai-gateway" "github-copilot" "gitlab-duo" \
 		"google-vertex" "opencode-zen" "snowflake" "vercel-ai-gateway" {
 		family "haiku" {
 			thinking-mode "budget"
@@ -358,7 +358,7 @@ class "anthropic" {
 			}
 		}
 	}
-	on "amazon-bedrock" "anthropic" "cloudflare-ai-gateway" "github-copilot" "gitlab-duo" \
+	on "amazon-bedrock" "anthropic" "bizrouter" "cloudflare-ai-gateway" "github-copilot" "gitlab-duo" \
 		"google-vertex" "opencode-zen" "snowflake" "vercel-ai-gateway" "zenmux" {
 		family "opus" {
 			revision ">=4.5 <4.6" {
@@ -366,7 +366,7 @@ class "anthropic" {
 			}
 		}
 	}
-	on "amazon-bedrock" "anthropic" "cloudflare-ai-gateway" "github-copilot" "google-vertex" \
+	on "amazon-bedrock" "anthropic" "bizrouter" "cloudflare-ai-gateway" "github-copilot" "google-vertex" \
 		"opencode-zen" "openrouter" "snowflake" "vercel-ai-gateway" "zenmux" {
 		family "opus" {
 			revision ">=4.6 <4.7" {
@@ -374,13 +374,13 @@ class "anthropic" {
 			}
 		}
 	}
-	on "amazon-bedrock" "anthropic" "cloudflare-ai-gateway" "github-copilot" "google-vertex" \
+	on "amazon-bedrock" "anthropic" "bizrouter" "cloudflare-ai-gateway" "github-copilot" "google-vertex" \
 		"opencode-zen" "snowflake" "vercel-ai-gateway" "zenmux" {
 		revision ">=4.7 <45.1" {
 			thinking-mode "anthropic-adaptive"
 		}
 	}
-	on "amazon-bedrock" "anthropic" "cloudflare-ai-gateway" "opencode-zen" "vercel-ai-gateway" \
+	on "amazon-bedrock" "anthropic" "bizrouter" "cloudflare-ai-gateway" "opencode-zen" "vercel-ai-gateway" \
 		"zenmux" {
 		family "opus" {
 			revision ">=4 <4.5" {
@@ -405,13 +405,13 @@ class "anthropic" {
 			}
 		}
 	}
-	on "anthropic" "cloudflare-ai-gateway" "github-copilot" "google-vertex" "opencode-zen" \
+	on "anthropic" "bizrouter" "cloudflare-ai-gateway" "github-copilot" "google-vertex" "opencode-zen" \
 		"openrouter" "snowflake" "vercel-ai-gateway" "zenmux" {
 		revision ">=4.7 <45.1" {
 			thinking-efforts "low" "medium" "high" "xhigh" "max"
 		}
 	}
-	on "anthropic" "cloudflare-ai-gateway" "github-copilot" "google-vertex" "opencode-zen" \
+	on "anthropic" "bizrouter" "cloudflare-ai-gateway" "github-copilot" "google-vertex" "opencode-zen" \
 		"snowflake" "vercel-ai-gateway" "zenmux" {
 		family "sonnet" {
 			revision ">=4.6 <5" {

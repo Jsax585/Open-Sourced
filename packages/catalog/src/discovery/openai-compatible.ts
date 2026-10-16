@@ -66,6 +66,9 @@ export interface OpenAICompatibleModelsEnvelope {
 	[key: string]: unknown;
 }
 
+/** List-bearing keys of an {@link OpenAICompatibleModelsEnvelope}. */
+export type OpenAICompatibleEnvelopeKey = "data" | "models" | "result" | "items";
+
 const openAICompatibleModelRecordSchema = type({
 	id: "string >= 1",
 	"name?": "string | null",
@@ -108,6 +111,12 @@ export interface FetchOpenAICompatibleModelsOptions<TApi extends Api> {
 	headers?: Record<string, string>;
 	/** Query parameters appended to the `/models` probe (e.g. OpenRouter's `output_modalities` roster filter). */
 	query?: Record<string, string>;
+	/**
+	 * Envelope key the roster is read from, for payloads that carry more than one
+	 * list (BizRouter returns a bare `data` list beside a priced `models` list).
+	 * Defaults to the first of `data`, `models`, `result`, `items` that parses.
+	 */
+	envelopeKey?: OpenAICompatibleEnvelopeKey;
 	/** Optional AbortSignal for request cancellation; caller owns its lifecycle. */
 	signal?: AbortSignal;
 	/**
@@ -191,7 +200,7 @@ export async function fetchOpenAICompatibleModels<TApi extends Api>(
 		return null;
 	}
 
-	const entries = extractModelEntries(payload);
+	const entries = extractModelEntries(payload, options.envelopeKey);
 	if (entries === null) {
 		return null;
 	}
@@ -240,11 +249,17 @@ function normalizeBaseUrl(baseUrl: string): string {
 	return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
 }
 
-function extractModelEntries(payload: unknown): ParsedOpenAICompatibleModelRecord[] | null {
-	return extractModelEntriesFromNode(payload);
+function extractModelEntries(
+	payload: unknown,
+	envelopeKey?: OpenAICompatibleEnvelopeKey,
+): ParsedOpenAICompatibleModelRecord[] | null {
+	return extractModelEntriesFromNode(payload, envelopeKey);
 }
 
-function extractModelEntriesFromNode(node: unknown): ParsedOpenAICompatibleModelRecord[] | null {
+function extractModelEntriesFromNode(
+	node: unknown,
+	envelopeKey?: OpenAICompatibleEnvelopeKey,
+): ParsedOpenAICompatibleModelRecord[] | null {
 	const parsedPayload = openAICompatibleModelsPayloadSchema(node);
 	if (parsedPayload instanceof type.errors) {
 		return null;
@@ -255,7 +270,10 @@ function extractModelEntriesFromNode(node: unknown): ParsedOpenAICompatibleModel
 			.flatMap(entry => (entry instanceof type.errors ? [] : [entry]));
 		return parsedEntries;
 	}
-	for (const candidate of [parsedPayload.data, parsedPayload.models, parsedPayload.result, parsedPayload.items]) {
+	const candidates = envelopeKey
+		? [parsedPayload[envelopeKey]]
+		: [parsedPayload.data, parsedPayload.models, parsedPayload.result, parsedPayload.items];
+	for (const candidate of candidates) {
 		if (candidate === undefined) {
 			continue;
 		}
