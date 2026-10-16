@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added the `handoffModel` model field; variant collapsing retargets it like `compactionModel`
+- Added the `handoffModel` model field; variant collapsing retargets it like `compactionModel` ([#15938](https://github.com/can1357/oh-my-pi/pull/15938) by [@lavinhoque33](https://github.com/lavinhoque33))
 
 ### Changed
 

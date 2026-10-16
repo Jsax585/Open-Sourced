@@ -5,7 +5,7 @@
 ### Added
 
 - Added `omp auth-gateway serve --clients=<file>`: per-client bearer tokens, each limited to listed models and broker OAuth accounts with no fallback to other accounts or API keys, re-read while serving ([#5098](https://github.com/can1357/oh-my-pi/issues/5098), [#15900](https://github.com/can1357/oh-my-pi/pull/15900) by [@alphastorm](https://github.com/alphastorm))
-- Added a per-model `handoffModel` (models.yml, including `modelOverrides`) that generates handoff documents for `/handoff` and the automatic `handoff` method instead of the active model, when it has usable credentials. An explicit thinking suffix such as `provider/id:max` sets the handoff effort. That request uses the summarization system prompt and sends no tool definitions, so models that ignore `toolChoice: "none"` still return a document
+- Added a per-model `handoffModel` (models.yml, including `modelOverrides`) that generates handoff documents for `/handoff` and the automatic `handoff` method instead of the active model, when it has usable credentials. An explicit thinking suffix such as `provider/id:max` sets the handoff effort. That request uses the summarization system prompt and sends no tool definitions, so models that ignore `toolChoice: "none"` still return a document ([#15938](https://github.com/can1357/oh-my-pi/pull/15938) by [@lavinhoque33](https://github.com/lavinhoque33))
 
 ### Changed
 
