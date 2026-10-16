@@ -5,6 +5,7 @@
 ### Added
 
 - ANSI and TSP `/pause` screens show unsettled turns and jobs, hide settled counters, and preserve counts and resume controls on short terminals ([#17073](https://github.com/can1357/oh-my-pi/pull/17073) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+- Added `SessionSelectorComponent.showError()` so a host can show a retryable resume error inside the picker ([#16781](https://github.com/can1357/oh-my-pi/pull/16781) by [@ton-anywhere](https://github.com/ton-anywhere))
 
 ## [18.13.0] - 2026-10-26
 
