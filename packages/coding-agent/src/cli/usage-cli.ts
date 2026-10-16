@@ -15,7 +15,6 @@ import {
 	type OAuthAccountIdentity,
 	type OAuthAccountSummary,
 	type ResetCreditRedeemOutcome,
-	isWithinUsageReserve,
 	resolveCredentialIdentityKey,
 	resolveUsageReserve,
 	resolveUsedFraction,
