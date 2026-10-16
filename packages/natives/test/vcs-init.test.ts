@@ -18,6 +18,7 @@ test("initializes around user files, honors local identity, and rejects re-init 
 	await repo.configSet("user.name", "Initializer Fixture");
 	await repo.configSet("user.email", "initializer@example.test");
 	await repo.configSet("core.hooksPath", path.join(repo.info().gitDir, "unused-fixture-hooks"));
+	await repo.configSet("commit.gpgsign", "false");
 	const sha = await repo.commitCreate("initial empty commit", { allowEmpty: true });
 	expect((await repo.commitDetails(sha)).author).toMatchObject({
 		name: "Initializer Fixture",
