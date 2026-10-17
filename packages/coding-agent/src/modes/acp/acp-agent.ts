@@ -447,6 +447,7 @@ export function createAcpExtensionUiContext(
 ): ExtensionUIContext {
 	const supportsForm = clientCapabilities?.elicitation?.form != null;
 	return {
+		supportsEditor: false,
 		select: async (title, options, dialogOptions) => {
 			if (!supportsForm) return undefined;
 			const value = await elicitFromAcpClient(
@@ -597,6 +598,7 @@ export function createAcpExtensionUiContext(
 		},
 		addAutocompleteProvider: () => {},
 		setEditorComponent: () => {},
+		getEditorComponent: () => undefined,
 		get theme() {
 			return theme;
 		},
@@ -2407,7 +2409,7 @@ export class AcpAgent implements Agent {
 					notifications.push({
 						sessionId,
 						update: {
-							sessionUpdate: "agent_thought_chunk",
+							sessionUpdate: item.narration ? "agent_message_chunk" : "agent_thought_chunk",
 							content: { type: "text", text: thinking },
 							messageId,
 						},
