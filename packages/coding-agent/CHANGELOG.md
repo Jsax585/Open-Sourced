@@ -13,7 +13,7 @@
 - Added opt-in `prewalk.auto` (`off`, `suggest`, or `on`): the native judge decides per task whether to arm a prewalk handoff to `prewalk.autoTarget`, and the next task starts back on the planning model ([#16026](https://github.com/can1357/oh-my-pi/pull/16026) by [@taibenvenuti](https://github.com/taibenvenuti))
 - Added `/seance` and the task `seance` agent: consult a saved session read-only, in place, without resuming it or copying its artifacts; pick the source and an optional model from pickers, and send follow-ups to the consultant ([#15036](https://github.com/can1357/oh-my-pi/pull/15036) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy))
 - Added `providers.autoThinkingMinEffort` setting and `auto:<floor>` selector syntax to configure a minimum thinking effort floor for auto thinking ([#13836](https://github.com/can1357/oh-my-pi/pull/13836) by [@tuandinh0801](https://github.com/tuandinh0801))
-- Added `auto:<floor>-<ceiling>` thinking ranges (e.g. `auto:medium-xhigh`) for `defaultThinkingLevel`, `--thinking`, `/effort`, model roles, advisors and fallback-chain entries: auto thinking stays inside the range, and task `effort` hints map within it ([#16029](https://github.com/can1357/oh-my-pi/pull/16029) by [@troshab](https://github.com/troshab))
+- Added `auto:<floor>-<ceiling>` thinking ranges (e.g. `auto:medium-xhigh`) and ceiling-only `auto:-<ceiling>` selectors (e.g. `auto:-xhigh`) for `defaultThinkingLevel`, `--thinking`, `/effort`, model roles, advisors and fallback-chain entries: auto thinking stays inside the range, and task `effort` hints map within it ([#16029](https://github.com/can1357/oh-my-pi/pull/16029) by [@troshab](https://github.com/troshab))
 
 ### Changed
 

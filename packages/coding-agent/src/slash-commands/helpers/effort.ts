@@ -15,7 +15,7 @@ export function noThinkingMessage(session: AgentSession): string {
 /**
  * Resolve an `/effort <level>` argument to a selector the active model
  * accepts, or the message explaining why it cannot be applied. Shared by the
- * text/ACP handler and the TUI handler. `auto:<floor>` and `auto:<floor>-<ceiling>`
+ * text/ACP handler and the TUI handler. `auto:<floor>`, `auto:-<ceiling>` and `auto:<floor>-<ceiling>`
  * are accepted wherever plain `auto` is offered.
  */
 export function resolveThinkingArgument(

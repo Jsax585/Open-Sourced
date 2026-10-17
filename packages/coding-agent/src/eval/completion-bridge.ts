@@ -159,7 +159,13 @@ function reasoningForCandidate(
 	const bounds = parseAutoThinkingBounds(level);
 	if (!bounds || resolved.disableReasoning || resolved.reasoning === undefined) return resolved;
 	return {
-		reasoning: clampAutoThinkingEffort(model, resolved.reasoning, bounds.ceiling ?? Effort.Max, bounds.floor),
+		// A ceiling-only selector bounds from above only.
+		reasoning: clampAutoThinkingEffort(
+			model,
+			resolved.reasoning,
+			bounds.ceiling ?? Effort.Max,
+			bounds.floor ?? Effort.Minimal,
+		),
 		disableReasoning: false,
 	};
 }

@@ -1968,7 +1968,11 @@ export class SessionAdvisors {
 		const level: Effort = this.#host.agent.state.thinkingLevel ?? Effort.Medium;
 		const bounds = parseAutoThinkingBounds(auto);
 		if (!bounds) return level;
-		return clampAutoThinkingEffort(model, level, bounds.ceiling ?? Effort.Max, bounds.floor) ?? ThinkingLevel.Inherit;
+		// A ceiling-only selector bounds from above only.
+		return (
+			clampAutoThinkingEffort(model, level, bounds.ceiling ?? Effort.Max, bounds.floor ?? Effort.Minimal) ??
+			ThinkingLevel.Inherit
+		);
 	}
 
 	/**

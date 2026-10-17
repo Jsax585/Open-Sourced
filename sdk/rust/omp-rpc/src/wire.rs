@@ -2487,6 +2487,16 @@ pub enum ConfiguredThinkingLevel {
 	AutoHigh,
 	#[serde(rename = "auto:xhigh")]
 	AutoXhigh,
+	#[serde(rename = "auto:-low")]
+	AutoToLow,
+	#[serde(rename = "auto:-medium")]
+	AutoToMedium,
+	#[serde(rename = "auto:-high")]
+	AutoToHigh,
+	#[serde(rename = "auto:-xhigh")]
+	AutoToXhigh,
+	#[serde(rename = "auto:-max")]
+	AutoToMax,
 	#[serde(rename = "auto:minimal-low")]
 	AutoMinimalLow,
 	#[serde(rename = "auto:minimal-medium")]
@@ -2545,6 +2555,11 @@ impl ConfiguredThinkingLevel {
 			Self::AutoMedium => "auto:medium",
 			Self::AutoHigh => "auto:high",
 			Self::AutoXhigh => "auto:xhigh",
+			Self::AutoToLow => "auto:-low",
+			Self::AutoToMedium => "auto:-medium",
+			Self::AutoToHigh => "auto:-high",
+			Self::AutoToXhigh => "auto:-xhigh",
+			Self::AutoToMax => "auto:-max",
 			Self::AutoMinimalLow => "auto:minimal-low",
 			Self::AutoMinimalMedium => "auto:minimal-medium",
 			Self::AutoMinimalHigh => "auto:minimal-high",

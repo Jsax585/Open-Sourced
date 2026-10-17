@@ -1,11 +1,13 @@
 import type { ResolvedThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import {
 	AUTO_THINKING,
+	AUTO_THINKING_CEILING_SELECTORS,
 	AUTO_THINKING_CEILINGS,
 	AUTO_THINKING_FLOORS,
 	AUTO_THINKING_LEVELS,
 	AUTO_THINKING_RANGES,
 	type AutoThinkingCeiling,
+	type AutoThinkingCeilingSelector,
 	type AutoThinkingFloor,
 	type AutoThinkingLevel,
 	type AutoThinkingRange,
@@ -21,6 +23,7 @@ import type { Model } from "@oh-my-pi/pi-catalog/types";
 
 export {
 	AUTO_THINKING,
+	AUTO_THINKING_CEILING_SELECTORS,
 	AUTO_THINKING_CEILINGS,
 	AUTO_THINKING_FLOORS,
 	AUTO_THINKING_LEVELS,
@@ -28,7 +31,14 @@ export {
 	isAutoThinking,
 	withStoredAutoSelector,
 };
-export type { AutoThinkingCeiling, AutoThinkingFloor, AutoThinkingLevel, AutoThinkingRange, ConfiguredThinkingLevel };
+export type {
+	AutoThinkingCeiling,
+	AutoThinkingCeilingSelector,
+	AutoThinkingFloor,
+	AutoThinkingLevel,
+	AutoThinkingRange,
+	ConfiguredThinkingLevel,
+};
 
 /** Thinking selectors accepted by CLI inputs, in display order. */
 export const CLI_THINKING_LEVELS: readonly ConfiguredThinkingLevel[] = [
@@ -170,21 +180,29 @@ export function automaticThinkingLevel<T>(model: Model | undefined, fallback: T)
 	return model?.thinking?.unverified ? undefined : fallback;
 }
 
-/** Bounds carried by an `auto:<floor>` or `auto:<floor>-<ceiling>` selector. */
+/**
+ * Bounds carried by an `auto:<floor>`, `auto:-<ceiling>` or `auto:<floor>-<ceiling>`
+ * selector. At least one side is set; a missing floor defers to
+ * `providers.autoThinkingMinEffort`, a missing ceiling to `providers.autoThinkingMaxEffort`.
+ */
 export interface AutoThinkingBounds {
-	floor: AutoThinkingFloor;
+	floor?: AutoThinkingFloor;
 	ceiling?: AutoThinkingCeiling;
 }
 
 /**
- * Parses the bounds of an `auto:<floor>` or `auto:<floor>-<ceiling>` selector. The floor
- * excludes max and the ceiling excludes minimal; a range must be strictly increasing
- * (`auto:high-high` is a pinned level, not a range, and is rejected).
+ * Parses the bounds of an `auto:<floor>`, `auto:-<ceiling>` or `auto:<floor>-<ceiling>`
+ * selector. The floor excludes max and the ceiling excludes minimal; a range must be
+ * strictly increasing (`auto:high-high` is a pinned level, not a range, and is rejected).
  */
 export function parseAutoThinkingBounds(level: string | null | undefined): AutoThinkingBounds | undefined {
 	if (typeof level !== "string" || !level.startsWith("auto:")) return undefined;
 	const [floorText, ceilingText, ...rest] = level.slice(5).split("-");
 	if (rest.length > 0) return undefined;
+	if (floorText === "") {
+		const ceiling = AUTO_THINKING_CEILINGS.find(candidate => candidate === parseEffort(ceilingText ?? ""));
+		return ceiling === undefined ? undefined : { ceiling };
+	}
 	const floor = AUTO_THINKING_FLOORS.find(candidate => candidate === parseEffort(floorText));
 	if (floor === undefined) return undefined;
 	if (ceilingText === undefined) return { floor };
@@ -195,11 +213,15 @@ export function parseAutoThinkingBounds(level: string | null | undefined): AutoT
 	return { floor, ceiling };
 }
 
-/** Canonical form of an auto selector (`auto`, `auto:<floor>`, `auto:<floor>-<ceiling>`), if `level` is one. */
+/** Canonical form of an auto selector (`auto`, `auto:<floor>`, `auto:-<ceiling>`, `auto:<floor>-<ceiling>`), if `level` is one. */
 export function parseAutoThinkingLevel(level: string | null | undefined): AutoThinkingLevel | undefined {
 	if (level === AUTO_THINKING) return AUTO_THINKING;
 	const bounds = parseAutoThinkingBounds(level);
 	if (!bounds) return undefined;
+	if (bounds.floor === undefined) {
+		const canonical = `auto:-${bounds.ceiling}`;
+		return AUTO_THINKING_CEILING_SELECTORS.find(selector => selector === canonical);
+	}
 	if (!bounds.ceiling) return `auto:${bounds.floor}`;
 	const canonical = `auto:${bounds.floor}-${bounds.ceiling}`;
 	return AUTO_THINKING_RANGES.find(range => range === canonical);
@@ -210,15 +232,15 @@ export function parseAutoThinkingFloor(level: string | null | undefined): AutoTh
 	return parseAutoThinkingBounds(level)?.floor;
 }
 
-/** Parses the maximum effort level configured on an `auto:<floor>-<ceiling>` selector, if any. */
+/** Parses the maximum effort level configured on an `auto:[<floor>]-<ceiling>` selector, if any. */
 export function parseAutoThinkingCeiling(level: string | null | undefined): AutoThinkingCeiling | undefined {
 	return parseAutoThinkingBounds(level)?.ceiling;
 }
 
 /** Rebuilds an auto selector from parsed bounds; bounds that do not form a valid selector yield plain `auto`. */
 export function formatAutoThinkingLevel(floor?: Effort, ceiling?: Effort): AutoThinkingLevel {
-	if (floor === undefined) return AUTO_THINKING;
-	return parseAutoThinkingLevel(ceiling ? `auto:${floor}-${ceiling}` : `auto:${floor}`) ?? AUTO_THINKING;
+	if (floor === undefined && ceiling === undefined) return AUTO_THINKING;
+	return parseAutoThinkingLevel(`auto:${floor ?? ""}${ceiling ? `-${ceiling}` : ""}`) ?? AUTO_THINKING;
 }
 
 /** Maps the session-level `auto` sentinel to `undefined`; concrete levels pass through. */
@@ -279,8 +301,8 @@ const AUTO_THINKING_METADATA: ConfiguredThinkingLevelMetadata = {
 };
 
 /**
- * Parses a configured thinking selector, accepting `auto`, `auto:<floor>`, and
- * `auto:<floor>-<ceiling>` in addition to every value {@link parseThinkingLevel} accepts.
+ * Parses a configured thinking selector, accepting `auto`, `auto:<floor>`, `auto:-<ceiling>`
+ * and `auto:<floor>-<ceiling>` in addition to every value {@link parseThinkingLevel} accepts.
  * {@link parseThinkingLevel} itself stays strict so model-suffix parsing (`model:high`)
  * keeps rejecting `auto`.
  */
@@ -294,6 +316,13 @@ export function parseConfiguredThinkingLevel(value: string | null | undefined): 
 export function getConfiguredThinkingLevelMetadata(level: ConfiguredThinkingLevel): ConfiguredThinkingLevelMetadata {
 	if (isAutoThinking(level)) {
 		const bounds = parseAutoThinkingBounds(level);
+		if (bounds?.ceiling && bounds.floor === undefined) {
+			return {
+				value: level,
+				label: `auto (up to ${bounds.ceiling})`,
+				description: `Auto-detect per prompt (max: ${bounds.ceiling})`,
+			};
+		}
 		if (bounds?.ceiling) {
 			return {
 				value: level,
@@ -396,7 +425,7 @@ export function resolveTaskEffortLevel(
 ): Effort | undefined {
 	const ladder = model ? getSupportedEfforts(model) : THINKING_EFFORTS;
 	if (ladder.length === 0) return undefined;
-	const floorIndex = bounds ? THINKING_EFFORTS.indexOf(bounds.floor) : 0;
+	const floorIndex = bounds?.floor ? THINKING_EFFORTS.indexOf(bounds.floor) : 0;
 	const ceilingIndex = bounds?.ceiling ? THINKING_EFFORTS.indexOf(bounds.ceiling) : THINKING_EFFORTS.length - 1;
 	const bounded = ladder.filter(level => {
 		const index = THINKING_EFFORTS.indexOf(level);

@@ -1712,6 +1712,11 @@ const (
 	ConfiguredThinkingLevelAutoMedium        ConfiguredThinkingLevel = "auto:medium"
 	ConfiguredThinkingLevelAutoHigh          ConfiguredThinkingLevel = "auto:high"
 	ConfiguredThinkingLevelAutoXhigh         ConfiguredThinkingLevel = "auto:xhigh"
+	ConfiguredThinkingLevelAutoToLow         ConfiguredThinkingLevel = "auto:-low"
+	ConfiguredThinkingLevelAutoToMedium      ConfiguredThinkingLevel = "auto:-medium"
+	ConfiguredThinkingLevelAutoToHigh        ConfiguredThinkingLevel = "auto:-high"
+	ConfiguredThinkingLevelAutoToXhigh       ConfiguredThinkingLevel = "auto:-xhigh"
+	ConfiguredThinkingLevelAutoToMax         ConfiguredThinkingLevel = "auto:-max"
 	ConfiguredThinkingLevelAutoMinimalLow    ConfiguredThinkingLevel = "auto:minimal-low"
 	ConfiguredThinkingLevelAutoMinimalMedium ConfiguredThinkingLevel = "auto:minimal-medium"
 	ConfiguredThinkingLevelAutoMinimalHigh   ConfiguredThinkingLevel = "auto:minimal-high"
@@ -1743,7 +1748,7 @@ func (v *ConfiguredThinkingLevel) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	switch value := ConfiguredThinkingLevel(s); value {
-	case ConfiguredThinkingLevelAuto, ConfiguredThinkingLevelAutoMinimal, ConfiguredThinkingLevelAutoLow, ConfiguredThinkingLevelAutoMedium, ConfiguredThinkingLevelAutoHigh, ConfiguredThinkingLevelAutoXhigh, ConfiguredThinkingLevelAutoMinimalLow, ConfiguredThinkingLevelAutoMinimalMedium, ConfiguredThinkingLevelAutoMinimalHigh, ConfiguredThinkingLevelAutoMinimalXhigh, ConfiguredThinkingLevelAutoMinimalMax, ConfiguredThinkingLevelAutoLowMedium, ConfiguredThinkingLevelAutoLowHigh, ConfiguredThinkingLevelAutoLowXhigh, ConfiguredThinkingLevelAutoLowMax, ConfiguredThinkingLevelAutoMediumHigh, ConfiguredThinkingLevelAutoMediumXhigh, ConfiguredThinkingLevelAutoMediumMax, ConfiguredThinkingLevelAutoHighXhigh, ConfiguredThinkingLevelAutoHighMax, ConfiguredThinkingLevelAutoXhighMax, ConfiguredThinkingLevelInherit, ConfiguredThinkingLevelOff, ConfiguredThinkingLevelMinimal, ConfiguredThinkingLevelLow, ConfiguredThinkingLevelMedium, ConfiguredThinkingLevelHigh, ConfiguredThinkingLevelXhigh, ConfiguredThinkingLevelMax:
+	case ConfiguredThinkingLevelAuto, ConfiguredThinkingLevelAutoMinimal, ConfiguredThinkingLevelAutoLow, ConfiguredThinkingLevelAutoMedium, ConfiguredThinkingLevelAutoHigh, ConfiguredThinkingLevelAutoXhigh, ConfiguredThinkingLevelAutoToLow, ConfiguredThinkingLevelAutoToMedium, ConfiguredThinkingLevelAutoToHigh, ConfiguredThinkingLevelAutoToXhigh, ConfiguredThinkingLevelAutoToMax, ConfiguredThinkingLevelAutoMinimalLow, ConfiguredThinkingLevelAutoMinimalMedium, ConfiguredThinkingLevelAutoMinimalHigh, ConfiguredThinkingLevelAutoMinimalXhigh, ConfiguredThinkingLevelAutoMinimalMax, ConfiguredThinkingLevelAutoLowMedium, ConfiguredThinkingLevelAutoLowHigh, ConfiguredThinkingLevelAutoLowXhigh, ConfiguredThinkingLevelAutoLowMax, ConfiguredThinkingLevelAutoMediumHigh, ConfiguredThinkingLevelAutoMediumXhigh, ConfiguredThinkingLevelAutoMediumMax, ConfiguredThinkingLevelAutoHighXhigh, ConfiguredThinkingLevelAutoHighMax, ConfiguredThinkingLevelAutoXhighMax, ConfiguredThinkingLevelInherit, ConfiguredThinkingLevelOff, ConfiguredThinkingLevelMinimal, ConfiguredThinkingLevelLow, ConfiguredThinkingLevelMedium, ConfiguredThinkingLevelHigh, ConfiguredThinkingLevelXhigh, ConfiguredThinkingLevelMax:
 		*v = value
 		return nil
 	}

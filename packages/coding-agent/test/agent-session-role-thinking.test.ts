@@ -14,7 +14,7 @@ import { AUTO_THINKING, clampAutoThinkingEffort, resolveProvisionalAutoLevel } f
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
-import { cfgDefaultThinkingLevel } from "@oh-my-pi/pi-coding-agent/session/settings";
+import { cfgDefaultThinkingLevel, cfgProvidersAutoThinkingMinEffort } from "@oh-my-pi/pi-coding-agent/session/settings";
 
 describe("AgentSession role model thinking behavior", () => {
 	let tempDir: TempDir;
@@ -203,6 +203,29 @@ describe("AgentSession role model thinking behavior", () => {
 		classify.mockResolvedValue(Effort.Minimal);
 		await session.prompt("Rename a variable");
 		expect(session.thinkingLevel).toBe(Effort.Low);
+	});
+
+	it("caps an auto:-<ceiling> selector and keeps the floor from providers.autoThinkingMinEffort", async () => {
+		const model = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		await createSession({
+			initialModelId: model.id,
+			initialThinkingLevel: Effort.High,
+			modelRoles: { default: `${model.provider}/${model.id}` },
+		});
+		cfgProvidersAutoThinkingMinEffort.set(sessionSettings, Effort.Medium);
+		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+		const classify = vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.XHigh);
+
+		session.setThinkingLevel("auto:-high");
+		expect(session.configuredThinkingLevel()).toBe("auto:-high");
+
+		await session.prompt("Redesign the storage layer");
+		expect(session.thinkingLevel).toBe(Effort.High);
+		expect(classify.mock.calls.at(-1)?.[1]).toMatchObject({ minEffort: Effort.Medium, maxEffort: Effort.High });
+
+		classify.mockResolvedValue(Effort.Minimal);
+		await session.prompt("Rename a variable");
+		expect(session.thinkingLevel).toBe(Effort.Medium);
 	});
 
 	it("preserves current thinking when switching into default/no-suffix role", async () => {

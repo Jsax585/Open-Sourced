@@ -13,7 +13,7 @@ export const AUTO_THINKING = "auto" as const;
 export const AUTO_THINKING_FLOORS = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as const;
 export type AutoThinkingFloor = (typeof AUTO_THINKING_FLOORS)[number];
 
-/** Effort levels that may serve as the maximum of an `auto:<floor>-<ceiling>` range. Excludes minimal. */
+/** Effort levels that may serve as the maximum of an `auto:[<floor>]-<ceiling>` selector. Excludes minimal. */
 export const AUTO_THINKING_CEILINGS = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max] as const;
 export type AutoThinkingCeiling = (typeof AUTO_THINKING_CEILINGS)[number];
 
@@ -37,8 +37,24 @@ export const AUTO_THINKING_RANGES = [
 ] as const;
 export type AutoThinkingRange = (typeof AUTO_THINKING_RANGES)[number];
 
-/** A thinking selector configured as automatic selection: `auto`, `auto:<floor>`, or `auto:<floor>-<ceiling>`. */
-export type AutoThinkingLevel = "auto" | `auto:${AutoThinkingFloor}` | AutoThinkingRange;
+/**
+ * Every valid ceiling-only `auto:-<ceiling>` selector: the ceiling replaces
+ * `providers.autoThinkingMaxEffort`, the floor stays `providers.autoThinkingMinEffort`.
+ */
+export const AUTO_THINKING_CEILING_SELECTORS = [
+	"auto:-low",
+	"auto:-medium",
+	"auto:-high",
+	"auto:-xhigh",
+	"auto:-max",
+] as const;
+export type AutoThinkingCeilingSelector = (typeof AUTO_THINKING_CEILING_SELECTORS)[number];
+
+/**
+ * A thinking selector configured as automatic selection: `auto`, `auto:<floor>`,
+ * `auto:-<ceiling>`, or `auto:<floor>-<ceiling>`.
+ */
+export type AutoThinkingLevel = "auto" | `auto:${AutoThinkingFloor}` | AutoThinkingCeilingSelector | AutoThinkingRange;
 export type ConfiguredThinkingLevel = ThinkingLevel | AutoThinkingLevel;
 
 /**
@@ -48,6 +64,7 @@ export type ConfiguredThinkingLevel = ThinkingLevel | AutoThinkingLevel;
 export const AUTO_THINKING_LEVELS = [
 	AUTO_THINKING,
 	...AUTO_THINKING_FLOORS.map(effort => `auto:${effort}` as const),
+	...AUTO_THINKING_CEILING_SELECTORS,
 	...AUTO_THINKING_RANGES,
 ] as const;
 

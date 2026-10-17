@@ -9,7 +9,9 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	AUTO_THINKING,
+	AUTO_THINKING_CEILING_SELECTORS,
 	AUTO_THINKING_CEILINGS,
+	getConfiguredThinkingLevelMetadata,
 	AUTO_THINKING_FLOORS,
 	AUTO_THINKING_RANGES,
 	CLI_THINKING_LEVELS,
@@ -107,6 +109,32 @@ describe("auto thinking classifier helpers", () => {
 			AUTO_THINKING_CEILINGS.map(ceiling => `auto:${floor}-${ceiling}`),
 		).filter(selector => parseConfiguredThinkingLevel(selector) !== undefined);
 		expect(accepted).toEqual([...AUTO_THINKING_RANGES]);
+	});
+
+	it("parses a ceiling-only auto:-<ceiling> selector", () => {
+		expect(parseConfiguredThinkingLevel("auto:-xhigh")).toBe("auto:-xhigh");
+		expect(parseConfiguredThinkingLevel("auto:-hi")).toBe("auto:-high");
+		expect(parseAutoThinkingBounds("auto:-max")).toEqual({ ceiling: Effort.Max });
+		expect(parseAutoThinkingFloor("auto:-max")).toBeUndefined();
+		expect(isAutoThinking("auto:-medium")).toBe(true);
+		for (const invalid of ["auto:-minimal", "auto:-", "auto:--max", "auto:-bogus"]) {
+			expect(parseConfiguredThinkingLevel(invalid)).toBeUndefined();
+			expect(isAutoThinking(invalid)).toBe(false);
+		}
+		// The list the settings enum and RPC wire are built from matches what the parser accepts.
+		const accepted = AUTO_THINKING_CEILINGS.map(ceiling => `auto:-${ceiling}`).filter(
+			selector => parseConfiguredThinkingLevel(selector) !== undefined,
+		);
+		expect(accepted).toEqual([...AUTO_THINKING_CEILING_SELECTORS]);
+		expect(getConfiguredThinkingLevelMetadata("auto:-xhigh").label).toBe("auto (up to xhigh)");
+		expect(splitThinkingSuffix("openai-codex/gpt-6-luna:auto:-xhigh", -1, MAX_THINKING_SUFFIX_OPTIONS)).toEqual({
+			base: "openai-codex/gpt-6-luna",
+			level: "auto:-xhigh",
+		});
+		// Strict-first callers leave it whole for the opted-in pass.
+		expect(splitThinkingSuffix("openai-codex/gpt-6-luna:auto:-xhigh")).toEqual({
+			base: "openai-codex/gpt-6-luna:auto:-xhigh",
+		});
 	});
 
 	it("splits an auto range off model and fallback-chain selectors", () => {
