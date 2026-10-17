@@ -578,14 +578,21 @@ export class TinyTitleClient {
 		}
 		// Any answer settles the model's load, even for an abandoned request;
 		// MLX `chat` loads send no `ready` of their own.
-		if (message.type === "error") this.#downloads.observe({ modelKey, status: "error" }, message.error);
-		else this.#downloads.observe({ modelKey, status: "ready" });
+		if (message.type === "error") {
+			if (message.fatal !== false) this.#downloads.observe({ modelKey, status: "error" }, message.error);
+		} else {
+			this.#downloads.observe({ modelKey, status: "ready" });
+		}
 		const pending = this.#pending.get(message.id);
 		if (!pending) return;
 		this.#pending.delete(message.id);
 		this.#syncWorkerRef(modelKey);
 		if (message.type === "error") {
 			logger.debug("tiny-title: worker returned error", { modelKey, error: message.error });
+			if (message.fatal === false) {
+				this.#fail(pending, message.error);
+				return;
+			}
 			this.#markFailedModel(pending);
 			this.#fail(pending, message.error);
 			// One worker serves one model: a failed load/generation leaves nothing

@@ -43,21 +43,43 @@ function toPayload(id: string, question: Question): JudgeQuestionPayload {
 			const labels = Object.keys(question.criteria);
 			if (labels.length < 2 || labels.length > 20)
 				throw new JudgmentParseError(id, "", `choice needs 2-20 options, got ${labels.length}`);
-			const options = labels.map(label => {
+			const options = labels.map((label, index) => {
+				if (typeof label !== "string" || label.trim().length === 0) {
+					throw new JudgmentParseError(id, "", `empty choice option at index ${index}`);
+				}
 				const rubric = question.criteria[label];
-				return rubric ? `${label}: ${rubric}` : label;
+				const option = rubric ? `${label}: ${rubric}` : label;
+				if (typeof option !== "string" || option.trim().length === 0) {
+					throw new JudgmentParseError(id, "", `empty choice option at index ${index}`);
+				}
+				return option;
 			});
 			return { type: "choice", instructions: question.instructions, options };
 		}
-		case "noul":
+		case "noul": {
+			const falseLabel = question.criteria?.false ?? "no";
+			const trueLabel = question.criteria?.true ?? "yes";
+			if (typeof falseLabel !== "string" || falseLabel.trim().length === 0) {
+				throw new JudgmentParseError(id, "", "empty noul false label");
+			}
+			if (typeof trueLabel !== "string" || trueLabel.trim().length === 0) {
+				throw new JudgmentParseError(id, "", "empty noul true label");
+			}
 			return {
 				type: "noul",
 				instructions: question.instructions,
-				options: [question.criteria?.false ?? "no", question.criteria?.true ?? "yes"],
+				options: [falseLabel, trueLabel],
 			};
+		}
 		case "score": {
 			const levels = question.criteria.length;
 			if (levels < 2 || levels > 20) throw new JudgmentParseError(id, "", `score needs 2-20 options, got ${levels}`);
+			for (let index = 0; index < levels; index++) {
+				const option = question.criteria[index];
+				if (typeof option !== "string" || option.trim().length === 0) {
+					throw new JudgmentParseError(id, "", `empty score option at index ${index}`);
+				}
+			}
 			return { type: "score", instructions: question.instructions, options: [...question.criteria] };
 		}
 	}

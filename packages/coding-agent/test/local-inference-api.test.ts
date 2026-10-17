@@ -27,6 +27,11 @@ import type {
 	TinyWorkerRequest,
 	TinyWorkerResponse,
 } from "@oh-my-pi/pi-coding-agent/tiny/title-protocol";
+import {
+	isRequestScopedError,
+	markRequestScoped,
+	REQUEST_SCOPED_ERROR,
+} from "@oh-my-pi/pi-coding-agent/tiny/worker-server";
 
 const SOURCE_ID = "omp/local-inference";
 const model = getBundledModel("local", "lfm2.5-230m")!;
@@ -331,6 +336,126 @@ describe("tiny model chat client", () => {
 			await client.terminate();
 		}
 	});
+	it("returns error without poisoning model or dropping worker when fatal is false", async () => {
+		let callCount = 0;
+		const worker = new FakeTinyWorker((request, current) => {
+			callCount += 1;
+			if (request.type === "judge") {
+				if (request.state === "invalid") {
+					current.emit({
+						type: "error",
+						id: request.id,
+						error: 'judge question "q": empty option string at index 0',
+						fatal: false,
+					});
+				} else {
+					current.emit({
+						type: "judged",
+						id: request.id,
+						logits: { q: [0.2, 0.8] },
+					});
+				}
+			}
+		});
+		const client = new TinyTitleClient(async () => worker);
+
+		try {
+			const result1 = await client.judge("julia-1", "invalid", {
+				q: { type: "noul", instructions: "i", options: ["no", "yes"] },
+			});
+			expect(result1).toEqual({
+				logits: null,
+				error: 'judge question "q": empty option string at index 0',
+			});
+			expect(worker.terminated).toBe(false);
+
+			const result2 = await client.judge("julia-1", "valid", {
+				q: { type: "noul", instructions: "i", options: ["no", "yes"] },
+			});
+			expect(result2).toEqual({ logits: { q: [0.2, 0.8] } });
+			expect(callCount).toBe(2);
+			expect(worker.terminated).toBe(false);
+		} finally {
+			await client.terminate();
+		}
+	});
+
+	it("preserves sibling in-flight requests when one request fails non-fatally", async () => {
+		const requests: TinyWorkerRequest[] = [];
+		let currentWorker: FakeTinyWorker;
+		const worker = new FakeTinyWorker((request, current) => {
+			currentWorker = current;
+			requests.push(request);
+		});
+		const client = new TinyTitleClient(async () => worker);
+
+		try {
+			const req1 = client.judge("julia-1", "req1", {
+				q: { type: "noul", instructions: "i", options: ["no", "yes"] },
+			});
+			const req2 = client.judge("julia-1", "req2", {
+				q: { type: "noul", instructions: "i", options: ["no", "yes"] },
+			});
+
+			while (requests.length < 2) {
+				await new Promise(r => setTimeout(r, 1));
+			}
+			expect(requests.length).toBe(2);
+
+			currentWorker!.emit({
+				type: "error",
+				id: requests[0]!.id,
+				error: "validation failure",
+				fatal: false,
+			});
+			currentWorker!.emit({
+				type: "judged",
+				id: requests[1]!.id,
+				logits: { q: [0.3, 0.7] },
+			});
+
+			const [res1, res2] = await Promise.all([req1, req2]);
+			expect(res1).toEqual({ logits: null, error: "validation failure" });
+			expect(res2).toEqual({ logits: { q: [0.3, 0.7] } });
+			expect(worker.terminated).toBe(false);
+		} finally {
+			await client.terminate();
+		}
+	});
+
+	it("poisons model and drops worker when fatal error occurs", async () => {
+		let connectCount = 0;
+		const worker = new FakeTinyWorker((request, current) => {
+			if (request.type === "judge") {
+				current.emit({
+					type: "error",
+					id: request.id,
+					error: "CUDA out of memory",
+				});
+			}
+		});
+		const client = new TinyTitleClient(async () => {
+			connectCount += 1;
+			return worker;
+		});
+
+		try {
+			const result1 = await client.judge("julia-1", "state1", {
+				q: { type: "noul", instructions: "i", options: ["no", "yes"] },
+			});
+			expect(result1).toEqual({ logits: null, error: "CUDA out of memory" });
+			expect(worker.terminated).toBe(true);
+
+			// Subsequent request is poisoned - returns null logits immediately without reconnecting
+			const result2 = await client.judge("julia-1", "state2", {
+				q: { type: "noul", instructions: "i", options: ["no", "yes"] },
+			});
+			expect(result2).toEqual({ logits: null });
+			expect(connectCount).toBe(1);
+		} finally {
+			await client.terminate();
+		}
+	});
 });
 
 describe("judge worker device independence", () => {
@@ -352,5 +477,23 @@ describe("judge worker device independence", () => {
 
 	it("uses fixed 'judge' env key for judge models across device flips", () => {
 		expect(modelEnvKey("julia-1")).toBe("judge");
+	});
+});
+
+describe("worker request-scoped error marker", () => {
+	it("recognizes errors marked with markRequestScoped", () => {
+		const error = markRequestScoped(new Error("validation error"));
+		expect(isRequestScopedError(error)).toBe(true);
+		expect((error as unknown as Record<string, unknown>).requestScoped).toBe(true);
+		expect(REQUEST_SCOPED_ERROR in error).toBe(true);
+	});
+
+	it("duck-types error with requestScoped boolean property", () => {
+		expect(isRequestScopedError({ requestScoped: true })).toBe(true);
+		expect(isRequestScopedError({ requestScoped: false })).toBe(false);
+		expect(isRequestScopedError(new Error("plain error"))).toBe(false);
+		expect(isRequestScopedError(null)).toBe(false);
+		expect(isRequestScopedError(undefined)).toBe(false);
+		expect(isRequestScopedError("string")).toBe(false);
 	});
 });

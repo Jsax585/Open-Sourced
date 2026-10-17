@@ -104,4 +104,4 @@ export type TinyWorkerResponse =
 	| { type: "loaded"; id: string }
 	| { type: "text"; id: string; text: string }
 	| { type: "judged"; id: string; logits: Record<string, number[]> }
-	| { type: "error"; id: string; error: string };
+	| { type: "error"; id: string; error: string; fatal?: boolean };

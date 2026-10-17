@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import { JudgmentParseError } from "@oh-my-pi/pi-ai";
-import type { JudgeQuestionPayload } from "@oh-my-pi/pi-coding-agent/tiny/title-protocol";
+import type { JudgeQuestionPayload, TinyWorkerRequest } from "@oh-my-pi/pi-coding-agent/tiny/title-protocol";
 import { LocalJudge } from "@oh-my-pi/pi-coding-agent/judgment/local-judge";
 import { tinyModelClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
 import { getTinyLocalModelSpec, isTinyJudgeLocalModelKey } from "@oh-my-pi/pi-coding-agent/tiny/models";
+import { isRequestScopedError } from "@oh-my-pi/pi-coding-agent/tiny/worker-server";
 import { JuliaJudgeModel } from "@oh-my-pi/pi-coding-agent/tiny/worker";
 
 afterEach(() => {
@@ -206,6 +207,85 @@ describe("LocalJudge", () => {
 		expect(error).toBeInstanceOf(JudgmentParseError);
 		expect(mock.mock.calls.length).toBe(0);
 	});
+	it("rejects choice with empty or whitespace-only options pre-dispatch without calling the worker", async () => {
+		const mock = spyOn(tinyModelClient, "judge").mockResolvedValue({ logits: { q: [1, 2] } });
+		const judge = new LocalJudge("julia-1");
+
+		const testCases: Record<string, string | null>[] = [
+			{ "": null, opt: null },
+			{ "  ": null, opt: null },
+		];
+		for (const criteria of testCases) {
+			mock.mockClear();
+			let error: unknown;
+			try {
+				await judge.judge({
+					state: "test",
+					questions: {
+						q: { type: "choice", instructions: "pick", criteria },
+					},
+				});
+			} catch (caught) {
+				error = caught;
+			}
+			expect(error).toBeInstanceOf(JudgmentParseError);
+			expect(mock.mock.calls.length).toBe(0);
+		}
+	});
+
+	it("rejects noul with empty or whitespace-only false/true labels pre-dispatch without calling the worker", async () => {
+		const mock = spyOn(tinyModelClient, "judge").mockResolvedValue({ logits: { q: [1, 2] } });
+		const judge = new LocalJudge("julia-1");
+
+		const invalidLabels = [
+			{ false: "", true: "yes" },
+			{ false: "   ", true: "yes" },
+			{ false: "no", true: "" },
+			{ false: "no", true: "   " },
+		];
+		for (const criteria of invalidLabels) {
+			mock.mockClear();
+			let error: unknown;
+			try {
+				await judge.judge({
+					state: "test",
+					questions: {
+						q: { type: "noul", instructions: "verify", criteria },
+					},
+				});
+			} catch (caught) {
+				error = caught;
+			}
+			expect(error).toBeInstanceOf(JudgmentParseError);
+			expect(mock.mock.calls.length).toBe(0);
+		}
+	});
+
+	it("rejects score with empty or whitespace-only options pre-dispatch without calling the worker", async () => {
+		const mock = spyOn(tinyModelClient, "judge").mockResolvedValue({ logits: { q: [1, 2] } });
+		const judge = new LocalJudge("julia-1");
+
+		const testCases: [string, string][] = [
+			["good", ""],
+			["good", "   "],
+		];
+		for (const criteria of testCases) {
+			mock.mockClear();
+			let error: unknown;
+			try {
+				await judge.judge({
+					state: "test",
+					questions: {
+						q: { type: "score", instructions: "rate", criteria },
+					},
+				});
+			} catch (caught) {
+				error = caught;
+			}
+			expect(error).toBeInstanceOf(JudgmentParseError);
+			expect(mock.mock.calls.length).toBe(0);
+		}
+	});
 
 	it("routes julia-1 to the judge path and title keys away from it", () => {
 		expect(isTinyJudgeLocalModelKey("julia-1")).toBe(true);
@@ -248,6 +328,125 @@ describe("LocalJudge", () => {
 describe("JuliaJudgeModel", () => {
 	const spec = getTinyLocalModelSpec("julia-1")!;
 	const fakeReply = { send: vi.fn() };
+
+	it("rejects questions that are not a non-null object server-side with request-scoped error", async () => {
+		const model = new JuliaJudgeModel("julia-1", spec);
+		let error1: unknown;
+		try {
+			await model.judge(
+				{
+					type: "judge",
+					id: "1",
+					state: "test state",
+					questions: null as unknown as Record<string, JudgeQuestionPayload>,
+				},
+				fakeReply,
+			);
+		} catch (caught) {
+			error1 = caught;
+		}
+		expect(error1).toBeInstanceOf(Error);
+		expect((error1 as Error).message).toBe("judge request: questions must be a non-null object");
+		expect(isRequestScopedError(error1)).toBe(true);
+
+		let error2: unknown;
+		try {
+			await model.judge(
+				{
+					type: "judge",
+					id: "2",
+					state: "test state",
+					questions: [] as unknown as Record<string, JudgeQuestionPayload>,
+				},
+				fakeReply,
+			);
+		} catch (caught) {
+			error2 = caught;
+		}
+		expect(error2).toBeInstanceOf(Error);
+		expect((error2 as Error).message).toBe("judge request: questions must be a non-null object");
+		expect(isRequestScopedError(error2)).toBe(true);
+	});
+
+	it("rejects state that is not a string server-side with request-scoped error", async () => {
+		const model = new JuliaJudgeModel("julia-1", spec);
+		let error: unknown;
+		try {
+			await model.judge(
+				{
+					type: "judge",
+					id: "1",
+					state: 123 as unknown as string,
+					questions: {},
+				},
+				fakeReply,
+			);
+		} catch (caught) {
+			error = caught;
+		}
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toBe("judge request: state must be a string");
+		expect(isRequestScopedError(error)).toBe(true);
+	});
+
+	it("rejects question instructions that are not a string server-side with request-scoped error", async () => {
+		const model = new JuliaJudgeModel("julia-1", spec);
+		let error: unknown;
+		try {
+			await model.judge(
+				{
+					type: "judge",
+					id: "1",
+					state: "test state",
+					questions: {
+						q: {
+							type: "choice",
+							instructions: 456 as unknown as string,
+							options: ["a", "b"],
+						},
+					},
+				},
+				fakeReply,
+			);
+		} catch (caught) {
+			error = caught;
+		}
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toBe('judge question "q": instructions must be a string');
+		expect(isRequestScopedError(error)).toBe(true);
+	});
+	it("marks all question validation errors as request-scoped", async () => {
+		const model = new JuliaJudgeModel("julia-1", spec);
+		const testCases: Extract<TinyWorkerRequest, { type: "judge" }>[] = [
+			{
+				type: "judge",
+				id: "1",
+				state: "s",
+				questions: { q: { type: "unknown" as any, instructions: "i", options: ["a", "b"] } },
+			},
+			{
+				type: "judge",
+				id: "2",
+				state: "s",
+				questions: { q: { type: "noul", instructions: "i", options: ["a"] as any } },
+			},
+			{
+				type: "judge",
+				id: "3",
+				state: "s",
+				questions: { q: { type: "choice", instructions: "i", options: [""] } },
+			},
+		];
+		for (const req of testCases) {
+			let error: unknown;
+			try {
+				await model.judge(req, fakeReply);
+			} catch (caught) {
+				error = caught;
+			}
+			expect(isRequestScopedError(error)).toBe(true);
+		}
+	});
 
 	it("rejects unknown question.type server-side", async () => {
 		const model = new JuliaJudgeModel("julia-1", spec);

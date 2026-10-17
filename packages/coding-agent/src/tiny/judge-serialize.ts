@@ -200,9 +200,13 @@ export function sliceJudgeLogits(
 	values: readonly number[],
 	count: number,
 ): Record<string, number[]> {
-	const logits: Record<string, number[]> = {};
-	names.forEach((name, rowIndex) => {
+	const logits: Record<string, number[]> = Object.create(null);
+	for (let rowIndex = 0; rowIndex < names.length; rowIndex++) {
+		const name = names[rowIndex]!;
+		if (name === "__proto__") {
+			throw new Error("judge question id '__proto__' is not allowed");
+		}
 		logits[name] = values.slice(rowIndex * count, rowIndex * count + markersLengths[rowIndex]!);
-	});
+	}
 	return logits;
 }

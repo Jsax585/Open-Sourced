@@ -53,7 +53,11 @@ import {
 	type TinyWorkerRequest,
 	type TinyWorkerResponse,
 } from "./title-protocol";
-import { TinyWorkerServer } from "./worker-server";
+import { markRequestScoped, TinyWorkerServer } from "./worker-server";
+
+function requestScopedError(message: string): Error {
+	return markRequestScoped(new Error(message));
+}
 
 const STOP_DECODE_WINDOW_TOKENS = 32;
 
@@ -293,6 +297,12 @@ export class JuliaJudgeModel {
 		request: Extract<TinyWorkerRequest, { type: "judge" }>,
 		reply: ReplyTransport,
 	): Promise<Record<string, number[]>> {
+		if (typeof request.questions !== "object" || request.questions === null || Array.isArray(request.questions)) {
+			throw requestScopedError("judge request: questions must be a non-null object");
+		}
+		if (typeof request.state !== "string") {
+			throw requestScopedError("judge request: state must be a string");
+		}
 		const names = Object.keys(request.questions);
 		// Empty batch would build zero-dim ORT tensors that session.run rejects.
 		if (names.length === 0) return {};
@@ -302,28 +312,31 @@ export class JuliaJudgeModel {
 		for (const name of names) {
 			const question = request.questions[name];
 			if (!question) {
-				throw new Error(`judge question "${name}": missing question payload`);
+				throw requestScopedError(`judge question "${name}": missing question payload`);
+			}
+			if (typeof question.instructions !== "string") {
+				throw requestScopedError(`judge question "${name}": instructions must be a string`);
 			}
 			const type = question.type as unknown;
 			if (type !== "choice" && type !== "noul" && type !== "score") {
-				throw new Error(`judge question "${name}": unknown question type "${String(type)}"`);
+				throw requestScopedError(`judge question "${name}": unknown question type "${String(type)}"`);
 			}
 			const options = question.options;
 			if (!Array.isArray(options)) {
-				throw new Error(`judge question "${name}": options must be an array`);
+				throw requestScopedError(`judge question "${name}": options must be an array`);
 			}
 			const count = options.length;
 			if (type === "noul") {
 				if (count !== 2) {
-					throw new Error(`judge question "${name}": noul needs 2 options, got ${count}`);
+					throw requestScopedError(`judge question "${name}": noul needs 2 options, got ${count}`);
 				}
 			} else if (count < 2 || count > 20) {
-				throw new Error(`judge question "${name}": needs 2-20 options, got ${count}`);
+				throw requestScopedError(`judge question "${name}": needs 2-20 options, got ${count}`);
 			}
 			for (let i = 0; i < options.length; i++) {
 				const option = options[i];
 				if (typeof option !== "string" || option.trim().length === 0) {
-					throw new Error(`judge question "${name}": empty option string at index ${i}`);
+					throw requestScopedError(`judge question "${name}": empty option string at index ${i}`);
 				}
 			}
 		}
@@ -534,7 +547,7 @@ export async function startTinyWorkerFromEnvironment(): Promise<void> {
 					return;
 				}
 				if (request.type === "chat")
-					throw new Error(`${modelKey} is a judge model and does not serve chat requests`);
+					throw requestScopedError(`${modelKey} is a judge model and does not serve chat requests`);
 				const logits = await judge.judge(request, reply);
 				reply.send({ type: "judged", id: request.id, logits });
 			},
@@ -554,7 +567,7 @@ export async function startTinyWorkerFromEnvironment(): Promise<void> {
 				return;
 			}
 			if (request.type === "judge")
-				throw new Error(`${modelKey} is not a judge model and does not serve judge requests`);
+				throw requestScopedError(`${modelKey} is not a judge model and does not serve judge requests`);
 			const text = await model.chat(request, reply);
 			reply.send({ type: "text", id: request.id, text });
 		},
