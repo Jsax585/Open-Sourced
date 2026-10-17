@@ -553,6 +553,29 @@ describe("ExtensionUiController tool approval", () => {
 		expect(harness.getFocused()).toBe(harness.editor);
 	});
 
+	it("answers a directory-only prompt with Approve Once, so nothing is remembered for it", async () => {
+		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+		try {
+			const harness = makeHarness();
+			const pending = harness.controller.showCollabAwareApproval({
+				...prompt,
+				folderLabel: "C:\\Users\\KR\\omp-approval-lab",
+				exactGrant: true,
+				fileTarget: false,
+				exactAnswer: false,
+			});
+			now.mockReturnValue(2_000);
+			// Past the remember checkbox and the folder answer: Approve Once approves the call alone.
+			harness.handleInput("\x1b[B");
+			harness.handleInput("\x1b[B");
+			harness.handleInput("\r");
+			expect(await pending).toEqual({ approved: true, once: true });
+			expect(harness.editorContainer.children).toEqual([harness.editor]);
+		} finally {
+			now.mockRestore();
+		}
+	});
+
 	it("one steer denies every approval of the batch, including those queued behind the shown one", async () => {
 		const harness = makeHarness();
 		harness.editor.onSubmit = text => harness.queueSteer(text);
