@@ -6,6 +6,11 @@
 
 - With a first-party Anthropic model on the official API selected, the interactive UI opens the API connection at startup, on model switch, and when you start typing, so the next turn skips connection setup; third-party gateways and custom endpoints are never probed ([#16044](https://github.com/can1357/oh-my-pi/pull/16044) by [@H4vC](https://github.com/H4vC))
 
+### Fixed
+
+- Fixed `/settings`, `/model`, `/resume`, `/tree`, `/agents` and `/extensions` search finding nothing for a mistyped word (`temperatute`, `claude opsu`) ([#15579](https://github.com/can1357/oh-my-pi/pull/15579) by [@azain47](https://github.com/azain47))
+- Fixed "did you mean" suggestions for an unknown `--model`, `cfg://` setting or `agent://` id missing near-miss spellings ([#15579](https://github.com/can1357/oh-my-pi/pull/15579) by [@azain47](https://github.com/azain47))
+
 ## [18.11.3] - 2026-10-16
 
 ### Breaking Changes
@@ -74,8 +79,6 @@
 - Fixed startup skipping a configured default fallback whose provider authenticates only through another provider's key (e.g. `xai-oauth` via `XAI_API_KEY`) and picking an unrelated model instead ([#15781](https://github.com/can1357/oh-my-pi/pull/15781))
 - Fixed slower startup when the configured default model is unavailable and no fallback chain is configured ([#15781](https://github.com/can1357/oh-my-pi/pull/15781))
 - Fixed `read` directory listings printing a directory's raw listing error, whose tabs, newlines, or control characters could break the transcript; `[unreadable: …]` is now a single bounded line ([#15789](https://github.com/can1357/oh-my-pi/pull/15789))
-- Fixed `/settings`, `/model`, `/resume`, `/tree`, `/agents` and `/extensions` search finding nothing for a mistyped word (`temperatute`, `claude opsu`) ([#15579](https://github.com/can1357/oh-my-pi/pull/15579) by [@azain47](https://github.com/azain47))
-- Fixed "did you mean" suggestions for an unknown `--model`, `cfg://` setting or `agent://` id missing near-miss spellings ([#15579](https://github.com/can1357/oh-my-pi/pull/15579) by [@azain47](https://github.com/azain47))
 - Fixed a `^` model mention sent while the agent is working (steer, follow-up, or queued skill prompt) never announcing its new `m<N>` alias to the model ([#14093](https://github.com/can1357/oh-my-pi/issues/14093), [#14322](https://github.com/can1357/oh-my-pi/pull/14322) by [@holny](https://github.com/holny))
 - Fixed large session files ending in a truncated record not being repaired on load, unlike small ones ([#14582](https://github.com/can1357/oh-my-pi/pull/14582) by [@yshihao636](https://github.com/yshihao636))
 - Fixed a read-only subagent's rejected `write` reading as a dead end: when `yield` is available, the rejection now names it as the way to return the content ([#14308](https://github.com/can1357/oh-my-pi/issues/14308), [#14470](https://github.com/can1357/oh-my-pi/pull/14470) by [@F0Rextasy](https://github.com/F0Rextasy))
