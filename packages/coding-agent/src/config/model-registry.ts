@@ -300,6 +300,8 @@ interface SuppressedSelectorRecord {
 	untilMs: number;
 	nonQuotaUntilMs: number;
 	usageLimitFailureTime?: number;
+	/** Per-session quota-failure times: a sibling session's failure must not ratchet this session's recovery cutoff. */
+	usageLimitFailureTimeBySession?: Map<string, number>;
 }
 
 /** Loads models and resolves their credentials through AuthStorage. */
@@ -3695,12 +3697,22 @@ export class ModelRegistry {
 	}
 
 	/** Quota failures may recover early from usage evidence newer than `usageLimitFailureTime`. */
-	suppressSelector(selector: string, untilMs: number, usageLimitFailureTime?: number): void {
+	suppressSelector(selector: string, untilMs: number, usageLimitFailureTime?: number, sessionId?: string): void {
 		const normalizedSelector = normalizeSuppressedSelector(
 			selector,
 			(provider, id) => this.find(provider, id) !== undefined,
 		);
 		const previous = this.#activeSuppressedRecord(normalizedSelector)?.record;
+		const usageLimitFailureTimeBySession =
+			usageLimitFailureTime === undefined || sessionId === undefined
+				? previous?.usageLimitFailureTimeBySession
+				: new Map(previous?.usageLimitFailureTimeBySession).set(
+						sessionId,
+						Math.max(
+							previous?.usageLimitFailureTimeBySession?.get(sessionId) ?? usageLimitFailureTime,
+							usageLimitFailureTime,
+						),
+					);
 		this.#suppressedSelectors.set(normalizedSelector, {
 			untilMs: Math.max(previous?.untilMs ?? 0, untilMs),
 			nonQuotaUntilMs: Math.max(previous?.nonQuotaUntilMs ?? 0, usageLimitFailureTime === undefined ? untilMs : 0),
@@ -3708,6 +3720,7 @@ export class ModelRegistry {
 				usageLimitFailureTime === undefined
 					? previous?.usageLimitFailureTime
 					: Math.max(previous?.usageLimitFailureTime ?? usageLimitFailureTime, usageLimitFailureTime),
+			usageLimitFailureTimeBySession,
 		});
 	}
 
@@ -3741,7 +3754,10 @@ export class ModelRegistry {
 		const active = this.#activeSuppressedRecord(selector);
 		if (!active) return false;
 		const { selector: normalizedSelector, record } = active;
-		const failureTime = record.usageLimitFailureTime;
+		const failureTime =
+			(options.sessionId !== undefined
+				? record.usageLimitFailureTimeBySession?.get(options.sessionId)
+				: undefined) ?? record.usageLimitFailureTime;
 		if (failureTime === undefined || record.nonQuotaUntilMs > Date.now()) return true;
 		const separatorIndex = normalizedSelector.indexOf("/");
 		if (separatorIndex <= 0) return true;

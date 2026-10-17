@@ -642,6 +642,34 @@ describe("early quota reset recovery", () => {
 		expect(await second).toBe(false);
 	});
 
+	it("keeps a sibling session's quota failure from ratcheting this session's recovery cutoff", async () => {
+		env = await createEnv();
+		const { registry } = env;
+		const optionsA = { sessionId: "session-a", reserveFraction: 0.1 };
+		const clock = useMockClock();
+		// Session A hits a quota failure on the shared selector.
+		registry.suppressSelector(PRIMARY_SELECTOR, clock.now() + 30 * 60_000, clock.now(), "session-a");
+		clock.advance(60_000);
+		// A cached healthy report lands for A (within the usage cache TTL).
+		const cachedFetchedAt = clock.now();
+		clock.advance(60_000);
+		// Session B hits its own quota failure on the same selector: the selector-wide
+		// failure time advances past A's cached evidence, but A's own cutoff must not.
+		registry.suppressSelector(PRIMARY_SELECTOR, clock.now() + 30 * 60_000, clock.now(), "session-b");
+		scriptedReports.anthropic = { status: "healthy", fetchedAt: cachedFetchedAt };
+
+		// A's recovery probe uses A's own failure time, so its still-valid cached
+		// report counts as fresh recovery evidence and releases A; B's own, later
+		// failure time keeps its probe suppressed by the same evidence.
+		expect(await registry.isSelectorSuppressedWithRecovery(PRIMARY_SELECTOR, optionsA)).toBe(false);
+		expect(
+			await registry.isSelectorSuppressedWithRecovery(PRIMARY_SELECTOR, {
+				sessionId: "session-b",
+				reserveFraction: 0.1,
+			}),
+		).toBe(true);
+	});
+
 	it("preserves the quota suppression when the recovery probe aborts", async () => {
 		env = await createEnv();
 		const { registry } = env;

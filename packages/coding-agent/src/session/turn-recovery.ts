@@ -1845,7 +1845,12 @@ export class TurnRecovery {
 			const reason = parseRateLimitReason(errorMessage);
 			cooldownMs = reason === "UNKNOWN" ? 5 * 60 * 1000 : calculateRateLimitBackoffMs(reason);
 		}
-		this.#host.modelRegistry.suppressSelector(currentSelector, Date.now() + cooldownMs, usageLimitFailureTime);
+		this.#host.modelRegistry.suppressSelector(
+			currentSelector,
+			Date.now() + cooldownMs,
+			usageLimitFailureTime,
+			this.#host.sessionId(),
+		);
 	}
 
 	/**
@@ -2537,6 +2542,15 @@ export class TurnRecovery {
 		this.#host.settings.getStorage()?.recordModelUsage(primarySelector);
 		this.#host.setThinkingLevel(thinkingToApply);
 		await this.#host.syncAfterModelChange(previousEditMode);
+		if (signal?.aborted) {
+			// The swap landed but the prompt was cancelled while the post-swap
+			// synchronization awaited: restore the fallback selection so a cancelled
+			// prompt never leaves the primary selected and persisted.
+			this.#activeRetryFallback = activeFallback;
+			this.#fallbackRoutedFor = routedBeforeSwap;
+			await this.#host.setModelWithProviderSessionReset(currentModel);
+			return false;
+		}
 		return true;
 	}
 

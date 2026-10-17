@@ -101,13 +101,13 @@ describe("AuthStorage transient OAuth refresh failure", () => {
 		const refresh = vi.spyOn(oauthUtils, "refreshOAuthToken").mockImplementation((_provider, _credential, signal) => {
 			refreshSignals.push(signal);
 			refreshStarted.resolve();
-			return new Promise((_, reject) => {
-				signal?.addEventListener(
-					"abort",
-					() => reject(new AIError.AbortError("OAuth token refresh aborted by caller")),
-					{ once: true },
-				);
-			});
+			const { promise: refreshPending, reject: rejectRefresh } = Promise.withResolvers<never>();
+			signal?.addEventListener(
+				"abort",
+				() => rejectRefresh(new AIError.AbortError("OAuth token refresh aborted by caller")),
+				{ once: true },
+			);
+			return refreshPending;
 		});
 
 		const pending = auth.keys.get("anthropic", "session", { signal: controller.signal });
