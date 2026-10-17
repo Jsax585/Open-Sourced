@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the task tool's delegation guidance reading as a ban on naming any agent, which could send delegated work to the generic worker instead of the matching specialist ([#PR](https://github.com/can1357/oh-my-pi/pull/PR) by [@professor-sagittarius](https://github.com/professor-sagittarius))
+- Fixed the system prompt treating a user's account of a failure as ground truth, so a wrong premise could be acted on without being checked ([#PR](https://github.com/can1357/oh-my-pi/pull/PR) by [@professor-sagittarius](https://github.com/professor-sagittarius))
+
 ## [18.12.1] - 2026-10-17
 
 ### Breaking Changes
