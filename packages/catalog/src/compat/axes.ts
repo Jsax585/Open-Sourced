@@ -20,7 +20,15 @@ export type AxisShape = "scalar" | "array" | "object";
 export type AxisSet = "wire" | "thinking" | "catalog";
 
 /** Resolved compat record families a wire axis may be assigned onto. */
-export type CompatRecordName = "openai" | "openai-responses" | "anthropic" | "bedrock" | "devin" | "google" | "request";
+export type CompatRecordName =
+	| "openai"
+	| "openai-responses"
+	| "anthropic"
+	| "bedrock"
+	| "devin"
+	| "google"
+	| "request"
+	| "ollama";
 
 /** One axis definition: resolved key, namespace, shape, and applicability. */
 export interface AxisDef {
@@ -251,7 +259,7 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"requires-thinking-enabled": wire("requiresThinkingEnabled", ["anthropic"]),
 	"requires-tool-result-id": wire("requiresToolResultId", ["anthropic"]),
 	"signing-endpoint": wire("signingEndpoint", ["anthropic"]),
-	"strip-thinking-history": wire("stripThinkingHistory", ["anthropic"]),
+	"strip-thinking-history": wire("stripThinkingHistory", ["anthropic", "ollama"]),
 	"supports-context-management": wire("supportsContextManagement", ["anthropic"]),
 	"supports-output-effort": wire("supportsOutputEffort", ["anthropic"]),
 	"supports-eager-tool-input-streaming": wire("supportsEagerToolInputStreaming", ["anthropic"]),
@@ -340,12 +348,21 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 		values: ["freeform", "function"],
 	},
 	"requires-native-tools": { key: "requiresNativeTools", set: "catalog", shape: "scalar", values: [true, false] },
+	"tool-schemas-in-context": { key: "toolSchemasInContext", set: "catalog", shape: "scalar", values: [true, false] },
 	"requires-tool-free-history-for-tool-opt-out": {
 		key: "requiresToolFreeHistoryForToolOptOut",
 		set: "catalog",
 		shape: "scalar",
 		values: [true, false],
 	},
+	/** Replayed tool calls must satisfy the target wire's declaration charset and length. */
+	"tool-call-name-charset": {
+		key: "toolCallNameCharset",
+		set: "catalog",
+		shape: "scalar",
+		values: ["ascii", "google"],
+	},
+	"tool-call-name-max-length": { key: "toolCallNameMaxLength", set: "catalog", shape: "scalar" },
 	"preserves-max-output-tokens": {
 		key: "preservesMaxOutputTokens",
 		set: "catalog",
@@ -465,6 +482,11 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	/** Longest image edge the host passes to the model: it downscales larger images to fit first. */
 	"image-max-edge": { key: "imageMaxEdge", set: "catalog", shape: "scalar" },
 	"inline-image-byte-budget": { key: "inlineImageByteBudget", set: "catalog", shape: "scalar" },
+	/**
+	 * Supported formats and size bounds for judgment-request images; `mime-types`
+	 * is comma-separated because object payloads have no array shape.
+	 */
+	"judgment-image-input": { key: "judgmentImageInput", set: "catalog", shape: "object" },
 	/**
 	 * Most questions one System One judgment request may carry; the judge
 	 * splits larger requests. Unassigned: the endpoint takes any batch size.
@@ -597,6 +619,7 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 
 /** Records applicable to each API family; used by `resolve.ts` when applying wire axes. */
 export const API_COMPAT_RECORDS: Readonly<Record<string, readonly CompatRecordName[]>> = {
+	"ollama-chat": ["ollama"],
 	"openai-completions": ["openai"],
 	openrouter: ["openai", "openai-responses"],
 	"openai-responses": ["openai-responses"],

@@ -3,10 +3,11 @@
  * encodes, and decodes one request for each API it serves. Internal to the
  * judgment module; `native.ts` maps every judgment API to its dialect.
  */
+import type { ImageContent, Usage } from "../types";
+import type { JudgmentImageInput } from "@oh-my-pi/pi-catalog/compat/judgment-images";
 import type { JudgmentConfig } from "@oh-my-pi/pi-catalog/types";
 import * as AIError from "../error";
 import { isRecord } from "@oh-my-pi/pi-utils";
-import type { Usage } from "../types";
 import { type JudgmentRequest, type Questions, type WireQuestions, tokenUsage } from "./types";
 
 /** Where one attempt posts and which bearer token it sends. */
@@ -26,6 +27,9 @@ export interface DecodedJudgment {
 	usage: Usage;
 }
 
+/** Image assets kept separately from judgment state for asset-aware native wires. */
+export type JudgmentImageAssets = Readonly<Record<string, ImageContent>>;
+
 /** How one judgment API addresses, encodes, and decodes a request. */
 export interface JudgmentWire {
 	/**
@@ -33,8 +37,22 @@ export interface JudgmentWire {
 	 * Throws when the credential cannot address the endpoint (e.g. no account id).
 	 */
 	target(baseUrl: string, model: string, key: string): JudgmentTarget;
-	/** Request body for `model`. */
-	encode(request: JudgmentRequest<Questions | WireQuestions>, model: string): unknown;
+	/** Request body for `model`, with optional asset context for dialects that preserve references. */
+	encode(
+		request: JudgmentRequest<Questions | WireQuestions>,
+		model: string,
+		imageAssets?: JudgmentImageAssets,
+	): unknown;
+	/** Headers this dialect adds to requests that carry images. */
+	imageHeaders?: Readonly<Record<string, string>>;
+	/** Image input this dialect accepts; absent means text-only. */
+	images?: JudgmentImageInput;
+	/** Whether raw asset maps can be transported without loss by this dialect. */
+	supportsImageAssets?: boolean;
+	/** Whether image support must be enabled explicitly for direct NativeJudge construction. */
+	imagesRequireOptIn?: boolean;
+	/** Whether this wire drops per-image detail metadata. */
+	ignoresImageDetail?: boolean;
 	/** The response's answers and usage; `undefined` when the payload is not this API's response shape. */
 	decode(payload: unknown, questions?: Questions): DecodedJudgment | undefined;
 }
@@ -106,6 +124,7 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 	}
 
 	return {
+		...inner,
 		target(baseUrl, model, key) {
 			if (route !== undefined && !route.startsWith("/")) {
 				throw new AIError.ConfigurationError(`judgment.route must start with "/": ${route}`);
@@ -117,9 +136,9 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 				token: innerTarget.token,
 			};
 		},
-		encode(request: JudgmentRequest<Questions>, model) {
+		encode(request: JudgmentRequest<Questions>, model, imageAssets?: JudgmentImageAssets) {
 			if (typeMap === undefined && typeField === "type") {
-				return inner.encode(request, model);
+				return inner.encode(request, model, imageAssets);
 			}
 			const wireQuestions: WireQuestions = Object.create(null);
 			for (const id in request.questions) {
@@ -133,7 +152,11 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 				wireQuestions[id] = wireQuestion;
 			}
 			// Validated wire question envelope: wire-mapped discriminators replace canonical question types.
-			return inner.encode({ state: request.state, questions: wireQuestions }, model);
+			return inner.encode(
+				{ state: request.state, questions: wireQuestions, images: request.images },
+				model,
+				imageAssets,
+			);
 		},
 		decode(payload, questions) {
 			const decoded = inner.decode(payload, questions);
