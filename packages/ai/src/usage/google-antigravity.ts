@@ -288,6 +288,7 @@ function getQuotaSummaryCounterKeys(
 ): string[] {
 	const bucketId = bucket.bucketId?.toLowerCase() ?? "";
 	const groupName = group?.displayName?.toLowerCase() ?? "";
+	if (bucketId.startsWith("gemini-argon-")) return ["google-argon"];
 	if (bucketId.startsWith("gemini-") || groupName.includes("gemini")) return ["google"];
 	if (
 		bucketId.startsWith("3p-") ||
@@ -307,6 +308,8 @@ function getQuotaSummaryCounterName(counterKey: string): string | undefined {
 	switch (counterKey) {
 		case "google":
 			return "Google";
+		case "google-argon":
+			return "Gemini 4 Argon";
 		case "anthropic":
 			return "Anthropic";
 		case "openai":
@@ -649,7 +652,7 @@ async function fetchAntigravityUsage(params: UsageFetchParams, ctx: UsageFetchCo
 
 export const antigravityUsageProvider: UsageProvider = {
 	id: "google-antigravity",
-	cacheVersion: 2,
+	cacheVersion: 3,
 	fetchUsage: fetchAntigravityUsage,
 	supports: params => params.provider === "google-antigravity",
 };
@@ -666,8 +669,8 @@ function getAntigravityCounterLimits(report: UsageReport, counterKey: string): U
 
 /**
  * Scope an Antigravity report to the active model's backend counter, falling
- * back to legacy default counters only when that backend has no limits.
- *
+ * back to the general Gemini counter for Argon when its dedicated bucket is
+ * absent, then to legacy default counters only when the backend has no limits.
  * Exhaustion checks are only safe with a concrete backend counter. A no-model
  * credential lookup (for example image-provider discovery) must not turn one
  * exhausted family into a provider-wide block.
@@ -680,6 +683,10 @@ export function scopeAntigravityLimitsForModel(
 	if (!counterKey) return [];
 	const backendLimits = getAntigravityCounterLimits(report, counterKey);
 	if (backendLimits.length > 0) return backendLimits;
+	if (counterKey === "google-argon") {
+		const googleLimits = getAntigravityCounterLimits(report, "google");
+		if (googleLimits.length > 0) return googleLimits;
+	}
 	return getAntigravityCounterLimits(report, "default");
 }
 
@@ -713,19 +720,25 @@ export const antigravityRankingStrategy: CredentialRankingStrategy = {
 		return `counter:${counterKey ?? "unknown"}`;
 	},
 	// One scope per backend counter the report covers, judged by that
-	// counter's own windows. A 429 can carry a retry-after at the weekly reset
-	// while Google restores the quota days earlier; the next `/usage` fetch
-	// then lifts the block instead of the account idling until the clock runs out.
+	// counter's own windows. When Argon has no dedicated bucket, it uses
+	// Google's limits; healing must use those same limits for its block scope.
+	// A 429 can carry a retry-after at the weekly reset while Google restores
+	// the quota days earlier.
 	healableBlockScopes(report) {
 		const counterKeys = new Set<string>();
 		for (const limit of report.limits) {
 			const counterKey = limit.id.split(":")[1];
 			if (counterKey) counterKeys.add(counterKey.toLowerCase());
 		}
-		return [...counterKeys].map(counterKey => ({
+		const scopes = [...counterKeys].map(counterKey => ({
 			blockScope: `counter:${counterKey}`,
 			limits: getAntigravityCounterLimits(report, counterKey),
 		}));
+		if (!counterKeys.has("google-argon")) {
+			const googleScope = scopes.find(scope => scope.blockScope === "counter:google");
+			if (googleScope) scopes.push({ blockScope: "counter:google-argon", limits: googleScope.limits });
+		}
+		return scopes;
 	},
 	// Antigravity windows carry `durationMs` when the response identifies them
 	// as daily/weekly. Fall back to daily for legacy unlabelled quotaInfo
