@@ -667,14 +667,15 @@ export class ExtensionUiController {
 	}
 
 	/**
-	 * The tool-approval prompt in the composer's place; a collab guest answers it as an Approve/Deny
-	 * select over the full prompt. Locally it shows the compact prompt (the details summarized to a
-	 * row, so the composer beneath keeps its room), and the expand key swaps in the full one,
-	 * wrapped — even when the two match, since a row the summary kept whole can still clip.
-	 * The composer stays mounted beneath it and takes the typing: a user message queued as steering
-	 * while the call waits (sent here, from Tern, or by a collab guest) denies the call, so the
-	 * message tells the agent why instead of a bare denial. The watch starts with the request, so
-	 * approvals still queued behind another dialog are denied by the same message.
+	 * The tool-approval prompt in the composer's place; a collab guest answers it as a select over
+	 * the full prompt with the same choices: Approve, the prompt's "for this session" choice when it
+	 * offers one, and Deny. Locally it shows the compact prompt (the details summarized to a
+	 * row, so the composer beneath keeps its room) over that list, and the expand key
+	 * swaps in the full one, wrapped — even when the two match, since a row the summary kept whole
+	 * can still clip. The composer stays mounted beneath it and takes the typing: a user message
+	 * queued as steering while the call waits (sent here, from Tern, or by a collab guest) denies
+	 * the call, so the message tells the agent why instead of a bare denial. The watch starts with
+	 * the request, so approvals still queued behind another dialog are denied by the same message.
 	 */
 	async showCollabAwareApproval(
 		prompt: ExtensionApprovalPrompt,

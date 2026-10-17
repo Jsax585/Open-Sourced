@@ -113,7 +113,10 @@ export interface ResolvedApproval {
 	reason?: string;
 	override: boolean;
 	source?: "tool" | "user" | "mode";
-	/** User-policy key that produced `source: "user"` (defaults to the tool name). */
+	/**
+	 * User-policy key that produced `source: "user"` (defaults to the tool name), or the keyed
+	 * sub-tool (an `xd://` device) a tool-owned or mode decision is about.
+	 */
 	policyKey?: string;
 }
 
@@ -475,6 +478,7 @@ export function resolveApproval(
 		tier: decision.tier,
 		override: false,
 		source: "mode",
+		...(decision.policyKey ? { policyKey: decision.policyKey } : {}),
 		...(decision.reason ? { reason: decision.reason } : {}),
 	};
 }
@@ -619,6 +623,7 @@ export interface ApprovalOutcome {
 /**
  * Ask the user to approve a call: the host's approval dialog when it has one (it gets the full
  * prompt and a compact one with the details summarized to a row, so the composer beneath it
+<<<<<<< HEAD
  * keeps its room), else an Approve/Deny select with the full prompt (RPC, ACP, extension hosts).
  * `appendix` lines follow the prompt on both.
  *

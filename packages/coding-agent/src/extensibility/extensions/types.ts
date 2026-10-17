@@ -257,7 +257,7 @@ export interface ExtensionCustomOptions {
 /** Wrap the current autocomplete provider with additional behavior (pi-compatible). */
 export type AutocompleteProviderFactory = (current: AutocompleteProvider) => AutocompleteProvider;
 
-/** The two renderings of a tool-approval prompt passed to `ExtensionUIContext.approve()`. */
+/** The renderings of a tool-approval prompt passed to `ExtensionUIContext.approve()`. */
 export interface ExtensionApprovalPrompt {
 	full: string;
 	compact: string;

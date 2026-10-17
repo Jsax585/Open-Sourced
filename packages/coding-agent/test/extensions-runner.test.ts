@@ -2628,6 +2628,7 @@ describe("ExtensionRunner", () => {
 			]);
 			delete globalState.__approvalEvents;
 		});
+
 		it("runs bridged preflight before approval and cancels denied state", async () => {
 			const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
 			const order: string[] = [];
