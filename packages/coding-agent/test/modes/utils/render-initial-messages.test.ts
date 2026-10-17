@@ -21,6 +21,9 @@ import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-containe
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext, RenderSessionContextOptions } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
+import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
 import type { SessionContext, StrippedToolCallsMarker } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { type Component, Container, Image, ImageProtocol, setTerminalImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
@@ -975,32 +978,66 @@ describe("UiHelpers.renderInitialMessages — redraw window", () => {
 	});
 
 	it("reaches back to a still-running background task so its card keeps receiving progress", async () => {
+		const taskDetails = (state: "running" | "completed") => ({
+			projectAgentsDir: null,
+			results: [],
+			totalDurationMs: 5,
+			async: { state, jobId: "job-1", type: "task" as const },
+		});
 		const messages: AgentMessage[] = [
 			{ role: "user", content: "question old", timestamp: 0 },
 			reply("answer old"),
 			{ role: "user", content: "question task", timestamp: 1 },
-			assistantToolCall("task-1", "task", { description: "background work" }),
+			assistantToolCall("task-1", "task", { tasks: [{ task: "work" }] }),
 			{
 				role: "toolResult",
 				toolCallId: "task-1",
 				toolName: "task",
 				content: [{ type: "text", text: "Spawned background worker." }],
-				details: { async: { state: "running", jobId: "job-1" } },
+				details: taskDetails("running"),
 				isError: false,
 				timestamp: 2,
 			},
 			...turns(3),
 		];
-		const rendered = makeRenderCtx(transcriptWith(messages), true, false, { "display.transcriptReplayLimit": 2 });
-		Object.assign(rendered.ctx.viewSession, { getAsyncJobSnapshot: () => ({ running: [{ id: "job-1" }] }) });
+		const transcript = transcriptWith(messages);
+		const ctx = createInteractiveModeContext({
+			settings: Settings.isolated({ "display.transcriptReplayLimit": 2 }),
+			viewSession: {
+				isStreaming: false,
+				buildTranscriptSessionContext: () => transcript,
+				getAsyncJobSnapshot: () => ({ running: [{ id: "job-1" }] }) as never,
+			},
+		});
+		const helpers = new UiHelpers(ctx);
+		ctx.addMessageToChat = helpers.addMessageToChat.bind(helpers);
+		ctx.renderSessionContext = helpers.renderSessionContext.bind(helpers);
+		ctx.renderSessionContextIncrementally = helpers.renderSessionContextIncrementally.bind(helpers);
+		const controller = new EventController(ctx);
+		ctx.eventController = controller;
+		const chatContainer = ctx.chatContainer;
 
-		await new UiHelpers(rendered.ctx).renderInitialMessages({ clearTerminalHistory: true });
-		const text = Bun.stripANSI(rendered.chatContainer.render(120).join("\n"));
+		await helpers.renderInitialMessages({ clearTerminalHistory: true });
+		const text = Bun.stripANSI(chatContainer.render(120).join("\n"));
 
 		expect(text).toContain("2 earlier messages not shown");
 		expect(text).not.toContain("question old");
 		expect(text).toContain("question task");
-		expect(rendered.ctx.pendingTools.has("task-1")).toBeTrue();
+
+		for (const component of chatContainer.children) {
+			if (component instanceof ToolExecutionComponent) component.setExpanded(true);
+		}
+		await controller.handleEvent({
+			type: "tool_execution_update",
+			toolCallId: "task-1",
+			toolName: "task",
+			args: {},
+			partialResult: {
+				content: [{ type: "text", text: "Worker produced the final report." }],
+				details: taskDetails("completed"),
+			},
+		});
+		expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).toContain("Worker produced the final report.");
 	});
 
 	it("does not reach back to a background task whose last frame says it finished", async () => {
