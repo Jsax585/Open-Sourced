@@ -5,7 +5,6 @@
 ### Added
 
 - The tool-approval prompt's answers are a navigable menu on classic terminals — the arrows move the highlight, `Enter` confirms it, and the **Remember** checkbox toggles in place — and stay clickable buttons on Tern's native surface. The answers keep one order everywhere: the remember checkbox, **Approve Directory**, **Approve <tool> for session**, **Approve File**/**Approve**, **Approve Once**, and **Deny**, each with a tooltip naming exactly what its grant covers.
-- Added the `app.approval.approveFolder` (`F6`) and `app.approval.remember` (`F7`) keybindings, so the directory answer and the remember checkbox stay reachable while a prompt shows: `F6` approves the folder the prompt names, `F7` flips *This Session* ↔ *Always*, and the approve key (`Ctrl+Enter`/`Ctrl+Q`) runs the highlighted exact answer — or **Approve Once** when the call has nothing to name. Details (`Ctrl+O`) and page scrolling keep working, and typing still steers the turn, where sending the message denies the call.
 - Settings action rows can label their control through the new `ui.actionLabel` metadata; **Forget Remembered Approvals** uses it to read **Clear cache**.
 
 ### Fixed
@@ -13,6 +12,10 @@
 - Fixed Enter on an empty composer answering a prompt whose answer menu is not shown: without the menu the key no longer activates an invisible selection.
 - Fixed the arrow-key answer menu showing on surfaces that render the answers as buttons; the menu is classic-terminal only, and native surfaces keep their buttons and key hints.
 - Approval buttons on Tern's native surface now use the accent tone like the primary answer, so the row reads as one set of controls.
+
+### Removed
+
+- Removed the answer accelerators from the approval prompt: `app.approval.approve` (`Ctrl+Enter`/`Ctrl+Q`), `app.approval.approveFolder` (`F6`), and `app.approval.remember` (`F7`) are gone, since the prompt is answered only by choosing with the arrows and confirming with `Enter` (`Esc` denies) — a stray chord can no longer approve a call.
 
 ## [18.11.3] - 2026-10-16
 

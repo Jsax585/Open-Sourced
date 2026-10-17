@@ -38,9 +38,6 @@ interface AppKeybindings {
 	"app.tools.expand": true;
 	"app.tools.toggleVisibility": true;
 	"app.ask.hide": true;
-	"app.approval.approve": true;
-	"app.approval.approveFolder": true;
-	"app.approval.remember": true;
 	"app.editor.external": true;
 	"app.message.followUp": true;
 	"app.retry": true;
@@ -145,25 +142,6 @@ export const KEYBINDINGS = {
 	"app.ask.hide": {
 		defaultKeys: "alt+h",
 		description: "Hide or show a pending ask dialog",
-	},
-	"app.approval.approve": {
-		// A chord, not Enter: an Enter typed for the composer as the prompt appears must not approve.
-		// Ctrl+Q backs up Ctrl+Enter, which Windows Terminal cannot deliver (#1903).
-		defaultKeys: ["ctrl+enter", "ctrl+q"],
-		description: "Approve a pending tool call",
-	},
-	"app.approval.approveFolder": {
-		// An F-key leads: like F5, it is delivered verbatim by every terminal, unlike modified
-		// Enter/letter chords some terminals swallow. Offered only while the approval prompt shows
-		// a folder to remember.
-		defaultKeys: "f6",
-		description: "Approve a pending tool call for its directory",
-	},
-	"app.approval.remember": {
-		// An F-key leads for the same reason the folder answer does; it is offered only while the
-		// prompt has something to remember, and flips the "Remember: …" checkbox the answers use.
-		defaultKeys: "f7",
-		description: "Toggle remembering approvals for every session",
 	},
 	"app.editor.external": {
 		defaultKeys: "ctrl+g",

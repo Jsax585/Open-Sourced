@@ -1,15 +1,16 @@
 /**
  * Tool-approval prompt in the composer's place, presented like the ask
- * dialog: the approval title and its details over an action bar. Approving
- * takes a deliberate chord (`app.approval.approve`, Ctrl+Enter by default),
- * so an Enter typed for the composer as the prompt appears never approves a
- * call, and the chord itself only arms {@link APPROVE_ARM_MS} after mount: it
- * is also the follow-up key, pressed mid-run exactly when prompts appear.
+ * dialog: the approval title and its details over the answers. The answers are
+ * chosen with the arrows and confirmed with Enter — no key approves a call
+ * outright, so an Enter typed for the composer as the prompt appears never
+ * answers it; that confirm only arms {@link APPROVE_ARM_MS} after mount, when
+ * it is also the follow-up key, pressed mid-run exactly when prompts appear.
  * Esc denies. With an {@link ApprovalDialogDraft}, every other key edits the
  * composer mounted beneath the dialog, so a message can steer the turn while
- * the call waits; an empty composer ignores Enter and arrows scroll the details.
- * The prompt stays a few rows so the composer keeps its room; with a full
- * prompt, the expand key (`app.tools.expand`) swaps it in, wrapped.
+ * the call waits; an empty composer ignores Enter and the arrows scroll the
+ * details. Tern's native surface shows the answers as clickable buttons
+ * instead. The prompt stays a few rows so the composer keeps its room; with a
+ * full prompt, the expand key (`app.tools.expand`) swaps it in, wrapped.
  */
 import { type Component, Ellipsis, ScrollView, type TUI, truncateToWidth, wrapTextWithAnsi } from "../index";
 import { formatKeyHint, formatKeyHints, formatTooltipKey } from "../app-keybindings";
@@ -18,13 +19,7 @@ import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { getKeybindings } from "../keybindings";
 import { isNativeRendering } from "../native/state";
 import {
-	appApproveFolderKeys,
-	appApproveKeys,
-	appRememberKeys,
 	appToolsExpandKey,
-	matchesAppApprove,
-	matchesAppApproveFolder,
-	matchesAppRemember,
 	matchesAppToolsExpand,
 	matchesSelectCancel,
 	matchesSelectDown,
@@ -87,15 +82,6 @@ function approvalDialogOffersGrants(options: ApprovalDialogOptions): boolean {
 }
 
 /**
- * The answer the approve accelerator runs: the exact one when the call records a target, the
- * once answer when grants are offered without one, and the plain answer otherwise.
- */
-function approvalDialogPrimaryApproval(options: ApprovalDialogOptions): "approve" | "once" {
-	if (approvalDialogExactAnswer(options)) return "approve";
-	return approvalDialogOffersGrants(options) ? "once" : "approve";
-}
-
-/**
  * Menu rows: the remember checkbox leads (it changes what the answers record), then the answers
  * themselves — the directory one when the call has a folder to grant, the by-name tool one when
  * the call proposes a tool, the exact one when the call records a target, the once-only one
@@ -117,6 +103,9 @@ function approvalDialogAnswers(
 	}
 	if (approvalDialogExactAnswer(options)) {
 		answers.push({ id: "approve", label: options.fileTarget === false ? "Approve" : "Approve File" });
+	} else if (!approvalDialogOffersGrants(options)) {
+		// A prompt with nothing to record (a forced policy or safety check) keeps the plain answer.
+		answers.push({ id: "approve", label: "Approve" });
 	}
 	if (approvalDialogOffersGrants(options)) {
 		answers.push({ id: "once", label: "Approve Once" });
@@ -183,8 +172,6 @@ export class ApprovalDialogComponent implements Component {
 	#bodyRows = MAX_DETAIL_ROWS;
 	#closed = false;
 	#native: NativeNode | undefined;
-	/** The answer the approve accelerator runs; see {@link approvalDialogPrimaryApproval}. */
-	readonly #primaryApproval: "approve" | "once";
 	readonly #armedAt = performance.now() + APPROVE_ARM_MS;
 	readonly #countdown: CountdownTimer | undefined;
 
@@ -202,7 +189,6 @@ export class ApprovalDialogComponent implements Component {
 			options.fullPrompt === undefined ? undefined : promptDetails(sanitizeDisplayLines(options.fullPrompt));
 		this.#panel = new OverlayPanel(title, "omp.overlay.approval");
 		this.#answers = approvalDialogAnswers(options, this.#rememberAlways);
-		this.#primaryApproval = approvalDialogPrimaryApproval(options);
 		this.#footer.setHeight(1);
 		this.#panel.addChild(this.#body);
 		this.#choices.setHeight(this.#answers.length);
@@ -237,30 +223,18 @@ export class ApprovalDialogComponent implements Component {
 	}
 
 	/**
-	 * The arrow-key answer menu is the classic-terminal presentation; a native surface (Tern)
-	 * shows the same answers as clickable buttons, so the selection stays invisible there and
-	 * the arrows keep scrolling. Prompts that offer only Approve/Deny keep the key hints.
+	 * The arrow-key answer menu is the classic-terminal presentation of every answer set — choose
+	 * with the arrows, confirm with Enter; a native surface (Tern) shows the same answers as
+	 * clickable buttons instead, so the arrows keep scrolling there.
 	 */
 	get #menuEnabled(): boolean {
-		return this.#answers.length > 2 && !isNativeRendering();
+		return !isNativeRendering();
 	}
 
 	handleInput(keyData: string): void {
 		if (this.#closed) return;
 		this.#restartCountdown();
 		const armed = performance.now() >= this.#armedAt;
-		if (matchesAppApprove(keyData)) {
-			if (armed) this.#finish(this.#primaryApproval);
-			return;
-		}
-		if (approvalDialogCanRemember(this.options) && matchesAppRemember(keyData)) {
-			this.#toggleRemember();
-			return;
-		}
-		if (this.options.folderLabel !== undefined && matchesAppApproveFolder(keyData)) {
-			if (armed) this.#finish("folder");
-			return;
-		}
 		if (this.#full && matchesAppToolsExpand(keyData)) {
 			this.#toggleExpanded();
 			return;
@@ -410,12 +384,11 @@ export class ApprovalDialogComponent implements Component {
 	 * In the dock, in the composer's place and framed as the composer is (an
 	 * `omp.editor.*` root role), like the ask dialog, rather than a card over
 	 * the transcript: the title, the details, then Details (with a full prompt),
-	 * Deny, and the primary Approve, whose keys show in their tooltips.
+	 * Deny, whose keys show in their tooltips.
 	 */
 	describe(): NativeNode {
 		if (this.#native) return this.#native;
 		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
-		const approveKey = appApproveKeys()[0];
 		const deny = actionButton("Deny", "deny", {
 			...(cancelKey ? { keys: cancelKey } : {}),
 			tone: "error",
@@ -430,22 +403,18 @@ export class ApprovalDialogComponent implements Component {
 					}),
 				]
 			: [];
-		const folderKey = appApproveFolderKeys()[0];
-		const rememberKey = appRememberKeys()[0];
 		const folderLabel = this.options.folderLabel;
 		// The read/write answers describe the reads and writes they grant; a command's folder answer
 		// approves running commands inside it, so it keeps the folder wording instead.
 		const fileGrant = this.options.exactGrant === true && this.options.fileTarget !== false;
 		const grantScope = this.#rememberAlways ? "for every session" : "for this session only";
-		const approveSuffix = approveKey ? `  ${formatTooltipKey(approveKey)}` : "";
 		const directory =
 			folderLabel === undefined
 				? []
 				: [
 						actionButton("Approve Directory", "folder", {
-							...(folderKey ? { keys: folderKey } : {}),
 							tone: "accent",
-							title: `${this.options.exactGrant === true ? "Approve reads and writes within entire directory" : `Approve this call and remember ${folderLabel}`} ${grantScope}${folderKey ? `  ${formatTooltipKey(folderKey)}` : ""}`,
+							title: `${this.options.exactGrant === true ? "Approve reads and writes within entire directory" : `Approve this call and remember ${folderLabel}`} ${grantScope}`,
 						}),
 					];
 		const toolName = this.options.toolName;
@@ -464,18 +433,18 @@ export class ApprovalDialogComponent implements Component {
 		const approve = approvalDialogExactAnswer(this.options)
 			? [
 					actionButton(fileGrant ? "Approve File" : "Approve", "approve", {
-						...(approveKey ? { keys: approveKey } : {}),
 						tone: "accent",
-						title: `${fileGrant ? `Approve reads and writes to this file ${grantScope}` : `Approve this call and remember what it touched ${grantScope}`}${approveSuffix}`,
+						title: fileGrant
+							? `Approve reads and writes to this file ${grantScope}`
+							: `Approve this call and remember what it touched ${grantScope}`,
 					}),
 				]
 			: approvalDialogOffersGrants(this.options)
 				? []
 				: [
 						actionButton("Approve", "approve", {
-							...(approveKey ? { keys: approveKey } : {}),
 							tone: "accent",
-							title: `Approve this call without remembering it${approveSuffix}`,
+							title: "Approve this call without remembering it",
 						}),
 					];
 		const once = approvalDialogOffersGrants(this.options)
@@ -489,8 +458,9 @@ export class ApprovalDialogComponent implements Component {
 		const remember = approvalDialogCanRemember(this.options)
 			? [
 					actionButton(approvalDialogRememberLabel(this.#rememberAlways), "remember", {
-						...(rememberKey ? { keys: rememberKey } : {}),
-						title: `${this.#rememberAlways ? "Remember approvals for this session only" : "Remember approvals for every session, not just this one"}${rememberKey ? `  ${formatTooltipKey(rememberKey)}` : ""}`,
+						title: this.#rememberAlways
+							? "Remember approvals for this session only"
+							: "Remember approvals for every session, not just this one",
 					}),
 				]
 			: [];
@@ -548,10 +518,8 @@ export class ApprovalDialogComponent implements Component {
 
 	#footerHint(overflows: boolean, menu: boolean): string {
 		const draft = this.options.draft;
-		const canRemember = approvalDialogCanRemember(this.options);
 		if (menu) {
-			const remember = canRemember ? ` · ${formatKeyHints(appRememberKeys())} remember` : "";
-			const hint = `${editorKeys("tui.select.up", "tui.select.down")} choose · ${formatKeyHint("enter")} confirm${remember} · ${editorKey("tui.select.cancel")} deny`;
+			const hint = `${editorKeys("tui.select.up", "tui.select.down")} choose · ${formatKeyHint("enter")} confirm · ${editorKey("tui.select.cancel")} deny`;
 			if (draft?.hasDraft()) return `${hint} · ${editorKey("tui.input.submit")} deny and send`;
 			const scroll = overflows ? ` · ${editorKeys("tui.select.pageUp", "tui.select.pageDown")} scroll` : "";
 			const details = this.#full
@@ -559,14 +527,10 @@ export class ApprovalDialogComponent implements Component {
 				: "";
 			return `${hint}${scroll}${details}${draft ? " · type to steer instead" : ""}`;
 		}
-		const approve = formatKeyHints(appApproveKeys());
 		const expand = this.#full
 			? ` · ${formatKeyHints([appToolsExpandKey()])} ${this.#expanded ? "less" : "details"}`
 			: "";
-		const directory =
-			this.options.folderLabel === undefined ? "" : ` · ${formatKeyHints(appApproveFolderKeys())} approve dir`;
-		const remember = canRemember ? ` · ${formatKeyHints(appRememberKeys())} remember` : "";
-		const hint = `${approve} approve${directory}${remember} · ${editorKey("tui.select.cancel")} deny${expand}`;
+		const hint = `${editorKey("tui.select.cancel")} deny${expand}`;
 		if (draft?.hasDraft()) return `${hint} · ${editorKey("tui.input.submit")} deny and send`;
 		const scroll = overflows ? ` · ${editorKeys("tui.select.up", "tui.select.down")} scroll` : "";
 		return `${hint}${scroll}${draft ? " · type to steer instead" : ""}`;

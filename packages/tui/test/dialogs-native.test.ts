@@ -234,20 +234,21 @@ describe("dialogs under a native surface", () => {
 		expect(dialog.render(200).length).toBeGreaterThan(1);
 	});
 
-	it("approval: Enter never approves; the follow-up chord is ignored until armed, then approves; Esc denies", () => {
+	it("approval: Enter confirms only after arming; Esc denies, clicks are deliberate", () => {
 		const prompt = "Allow tool: write\nPath: /tmp/out.txt";
 		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
 		try {
 			const keyed = { onApprove: vi.fn(), onDeny: vi.fn() };
 			const dialog = new ApprovalDialogComponent(prompt, keyed);
-			// An Enter typed for the composer, and a follow-up (Ctrl+Enter, Ctrl+Q) sent as the prompt mounts.
+			// Enter typed for the composer, a follow-up (Ctrl+Enter, Ctrl+Q), and any other key
+			// sent as the prompt mounts are ignored: only the confirm after arming answers.
 			for (const key of [ENTER, "\r", "\x1b[13;5u", "\x11"]) dialog.handleInput(key);
 			now.mockReturnValue(1_000 + APPROVE_ARM_MS - 1);
-			dialog.handleInput("\x1b[13;5u");
+			dialog.handleInput(ENTER);
 			expect(keyed.onApprove).not.toHaveBeenCalled();
 			expect(keyed.onDeny).not.toHaveBeenCalled();
 			now.mockReturnValue(1_000 + APPROVE_ARM_MS);
-			dialog.handleInput("\x1b[13;5u");
+			dialog.handleInput(ENTER);
 			// Settled once: a later Esc does not also deny.
 			dialog.handleInput("\x1b");
 			expect(keyed.onApprove).toHaveBeenCalledTimes(1);
@@ -267,33 +268,39 @@ describe("dialogs under a native surface", () => {
 		}
 	});
 
-	it("approval: the grants fire from their keys and buttons, with the remember checkbox naming the mode", () => {
+	it("approval: the grants fire from their menu rows and buttons, with the remember checkbox naming the mode", () => {
 		const root = "/tmp/project";
 		const directoryKey = process.platform === "win32" ? root.toLowerCase() : root;
 		const prompt = "Allow tool: write\nPath: /tmp/project/out.txt";
 		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
 		try {
-			// F6 answers with the directory; F7 flips the checkbox first, so the next F6 grants it
-			// for every session; F8 answers nothing at all.
+			// The answers are chosen with the arrows and confirmed with Enter: the directory row
+			// answers with the folder, and after the checkbox row toggles, the same answer grants
+			// it for every session. Nothing else is bound — F6 and F7 press unbound keys.
 			const callbacks = { onApprove: vi.fn(), onApproveFolder: vi.fn(), onDeny: vi.fn() };
 			now.mockReturnValue(1_000);
 			const dialog = new ApprovalDialogComponent(prompt, callbacks, { folderLabel: directoryKey, exactGrant: true });
 			now.mockReturnValue(1_000 + APPROVE_ARM_MS);
-			dialog.handleInput("\x1b[17~"); // F6
+			dialog.handleInput(DOWN); // the checkbox row → Approve Directory
+			dialog.handleInput(ENTER);
 			expect(callbacks.onApproveFolder).toHaveBeenCalledWith(false);
 			const toggled = { onApprove: vi.fn(), onApproveFolder: vi.fn(), onDeny: vi.fn() };
 			now.mockReturnValue(1_000);
 			const flipped = new ApprovalDialogComponent(prompt, toggled, { folderLabel: directoryKey, exactGrant: true });
 			now.mockReturnValue(1_000 + APPROVE_ARM_MS);
-			flipped.handleInput("\x1b[18~"); // F7
+			flipped.handleInput(ENTER); // the highlighted checkbox row toggles in place
 			expect(toggled.onApprove).not.toHaveBeenCalled();
 			expect(toggled.onApproveFolder).not.toHaveBeenCalled();
-			flipped.handleInput("\x1b[17~"); // F6, now for every session
+			flipped.handleInput(DOWN);
+			flipped.handleInput(ENTER); // now for every session
 			expect(toggled.onApproveFolder).toHaveBeenCalledWith(true);
 			const untouched = { onApprove: vi.fn(), onApproveFolder: vi.fn(), onDeny: vi.fn() };
-			new ApprovalDialogComponent(prompt, untouched, { folderLabel: directoryKey, exactGrant: true }).handleInput(
-				"\x1b[19~", // F8: no answer is bound to it
-			);
+			const unbound = new ApprovalDialogComponent(prompt, untouched, {
+				folderLabel: directoryKey,
+				exactGrant: true,
+			});
+			unbound.handleInput("\x1b[17~"); // F6: not bound to an answer
+			unbound.handleInput("\x1b[18~"); // F7: not bound either
 			expect(untouched.onApprove).not.toHaveBeenCalled();
 			expect(untouched.onApproveFolder).not.toHaveBeenCalled();
 			expect(untouched.onDeny).not.toHaveBeenCalled();
@@ -335,16 +342,19 @@ describe("dialogs under a native surface", () => {
 			now.mockRestore();
 		}
 
-		// Without a file target or a folder there is nothing to remember: the checkbox is neither
-		// rendered nor bound, and F7 leaves the prompt untouched.
+		// Without a file target or a folder there is nothing to remember: the checkbox is not
+		// rendered, and its would-be key is unbound, leaving the prompt untouched.
 		const clicked = { onApprove: vi.fn(), onDeny: vi.fn() };
-		const plain = new ApprovalDialogComponent("Allow tool: eval", clicked);
-		expect(find(plain.describe(), node => node.p?.role === "omp.btn" && node.key === "remember")).toBeUndefined();
 		const armed = vi.spyOn(performance, "now").mockReturnValue(1_000);
 		try {
-			plain.handleInput("\x1b[18~"); // F7 without a grant to record: no answer
+			const plain = new ApprovalDialogComponent("Allow tool: eval", clicked);
+			expect(find(plain.describe(), node => node.p?.role === "omp.btn" && node.key === "remember")).toBeUndefined();
+			plain.handleInput("\x1b[18~"); // F7: unbound on this prompt
 			expect(clicked.onApprove).not.toHaveBeenCalled();
 			expect(clicked.onDeny).not.toHaveBeenCalled();
+			armed.mockReturnValue(1_000 + APPROVE_ARM_MS);
+			plain.handleInput(ENTER); // the highlighted Approve row still answers
+			expect(clicked.onApprove).toHaveBeenCalledTimes(1);
 		} finally {
 			armed.mockRestore();
 		}
@@ -580,7 +590,7 @@ describe("dialogs under a native surface", () => {
 		}
 	});
 
-	it("approval: the arrow menu is classic-terminal only; a native surface keeps buttons and keys", () => {
+	it("approval: the arrow menu is classic-terminal only; a native surface keeps its buttons", () => {
 		setNativeRendering(true);
 		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
 		try {
@@ -597,17 +607,19 @@ describe("dialogs under a native surface", () => {
 			for (const key of ["remember", "folder", "approve", "deny"]) {
 				expect(find(dialog.describe(), node => node.p?.role === "omp.btn" && node.key === key)).toBeDefined();
 			}
-			// Enter must not answer from an invisible selection; the accelerators still work.
+			// Enter must not answer from an invisible selection, and no key approves outright:
+			// only the buttons answer, so an Enter aimed at the composer can never approve a call.
 			dialog.handleInput(ENTER);
 			dialog.handleInput(DOWN);
 			dialog.handleInput(ENTER);
+			dialog.handleInput("\x1b[18~"); // F7: not bound to anything
+			dialog.handleInput("\x1b[17~"); // F6: not bound either
 			expect(callbacks.onApprove).not.toHaveBeenCalled();
-			expect(callbacks.onDeny).not.toHaveBeenCalled();
-			// F7 flips the checkbox (no answer of its own); F6's grant then carries that mode.
-			dialog.handleInput("\x1b[18~");
 			expect(callbacks.onApproveFolder).not.toHaveBeenCalled();
-			dialog.handleInput("\x1b[17~");
-			expect(callbacks.onApproveFolder).toHaveBeenCalledWith(true);
+			expect(callbacks.onDeny).not.toHaveBeenCalled();
+			const folder = find(dialog.describe(), node => node.p?.role === "omp.btn" && node.key === "folder");
+			dialog.handleNativeEvent({ type: "action", key: folder!.path, act: "folder", mods: [] });
+			expect(callbacks.onApproveFolder).toHaveBeenCalledWith(false);
 		} finally {
 			now.mockRestore();
 			setNativeRendering(false);
