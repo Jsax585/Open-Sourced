@@ -191,6 +191,8 @@ export interface AnthropicNativeCompactionRequest {
 	filesDueBefore?: number;
 	maxTokens: number;
 	reasoning?: Effort;
+	disableReasoning?: boolean;
+	forceReasoningOff?: boolean;
 }
 
 export interface AnthropicNativeCompactionResponse {
@@ -237,7 +239,12 @@ export async function requestAnthropicNativeCompaction(
 			apiKey,
 			signal,
 			maxTokens: request.maxTokens,
-			reasoning: resolveAnthropicCompactionEffort(model, request.context.messages, request.reasoning),
+			reasoning:
+				request.disableReasoning || request.forceReasoningOff
+					? undefined
+					: resolveAnthropicCompactionEffort(model, request.context.messages, request.reasoning),
+			disableReasoning: request.disableReasoning,
+			forceReasoningOff: request.forceReasoningOff,
 			initiatorOverride: options.initiatorOverride,
 			metadata: options.metadata,
 			fetch: options.fetch,

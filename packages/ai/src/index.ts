@@ -14,6 +14,7 @@ export * from "./speech";
 export * from "./transcription";
 export * from "./video";
 export * from "./oneshot-retry";
+export * from "./model-policy";
 export * from "./provider-details";
 export * from "./provider-session-state";
 // Provider-specific runtime APIs are imported from their providers/* subpaths.

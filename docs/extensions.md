@@ -127,6 +127,7 @@ Core methods:
 - `setModel`, `getThinkingLevel`, `setThinkingLevel`
 - `getServiceTiers`, `setServiceTier`
 - `registerProvider`, `unregisterProvider`
+- `registerModelPolicy`, `getModelPolicyCandidates`
 - `registerFileWriteFallback`, `registerFileDeleteFallback`
 - `events` (shared event bus)
 
@@ -135,8 +136,58 @@ Core methods:
 `setLabel(label)` sets the extension's display label. It is not a session-entry
 labeling action. `getAllTools()` returns tool schemas and source metadata, while
 `getActiveTools()` returns enabled names.
-
 `getServiceTiers()` returns a detached snapshot of the session's live per-family tier map. `setServiceTier(family, tier)` changes one family for subsequent requests; pass `undefined` to clear that session override. OpenAI accepts `auto`, `default`, `flex`, `scale`, `priority`, or `ultrafast`; Anthropic accepts `priority`; Google accepts `flex` or `priority`. Changes made while a response is streaming do not alter that in-flight request.
+
+### Model admission policies
+
+`registerModelPolicy({ id, allowedEfforts, rank? })` installs a session-owned
+admission policy. `allowedEfforts(model)` returns canonical `Effort` values or
+`"off"`; an empty list denies that model. `rank(model, effort)` is an optional
+finite ascending preference. Policies intersect with native supported controls
+and inherited parent policies; ranking cannot grant admission.
+
+Register the policy during extension initialization, before starting asynchronous
+work. Keep changing evidence/settings in the policy's own state instead of
+rewriting global model metadata or maintaining a second fallback loop.
+`getModelPolicyCandidates(models, effort?)` returns admitted, ranked tuples.
+An already-admitted effective effort is preserved.
+
+Required policies must also be declared in the nearest extension package manifest:
+
+```json
+{
+  "omp": {
+    "requiredModelPolicies": ["model-quality"]
+  }
+}
+```
+
+The host reads this declaration before importing the extension. Import/factory
+failure, missing registration, invalid policy output, or an exhausted admitted
+catalog denies inference rather than silently reverting to an unrestricted model.
+This contract requires a host containing the model-policy API; older hosts cannot
+enforce an unknown manifest field.
+
+Native main turns, helpers, inherited subagents, automatic fallback/revert,
+thinking/model controls, context promotion, and compaction use the same policy.
+Automatic replacements remain inside configured enabled-model scopes and native
+approval, auth, and scheduling controls. Final supported transport gates check the
+actual serialized model and forward-mapped reasoning controls after payload hooks.
+Canonical effort and provider wire vocabulary are distinct.
+
+Verified native policy transports are OpenAI chat/Responses/Codex/Azure,
+OpenRouter, Anthropic Messages, and Google Gemini API/CLI/Vertex. Other transports
+deny under a policy until their final request can be verified. An extension-owned
+custom transport can declare `modelPolicyEffort: true` in `registerProvider` only
+if it faithfully transports canonical reasoning and explicit off controls through
+final serialization, including payload hooks. A CLI fallback that cannot attest
+the exact requested model/effort must not declare this capability. Re-registration
+without the capability revokes admission.
+
+Prepared extension factories bind fresh per-session runtimes. An unrebindable
+shared preload cannot install a policy later; extension callback inference,
+including file-write/delete fallbacks, runs in its owning policy scope.
+
 
 ### Provider registration
 
@@ -434,6 +485,11 @@ const contrasting = ctx.models
   .list()
   .find((m) => current && ctx.models.family(m) !== ctx.models.family(current));
 ```
+
+`ctx.modelRegistry.getCacheDbPath()` returns the resolved native model-discovery
+database path. Extensions may use their own namespaced tables for regenerable
+public metadata; do not modify native tables, schema version, journal mode, or
+recovery behavior, and never store credentials in benchmark/cache metadata.
 
 ## 3) Command context (`ExtensionCommandContext`)
 

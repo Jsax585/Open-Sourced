@@ -16,6 +16,9 @@
  */
 
 import { attach, create, Flag, ProviderHttpError } from "@oh-my-pi/pi-ai/error";
+import { assertModelPolicyAdmission, getModelPolicyScope, ModelPolicyError } from "@oh-my-pi/pi-ai";
+import { assertOpenAIModelPolicyRequest } from "@oh-my-pi/pi-ai/model-policy";
+import { resolveWireModelId } from "@oh-my-pi/pi-catalog/model-thinking";
 import { getCodexAttestationHeader } from "@oh-my-pi/pi-ai/providers/openai-codex-attestation";
 import { createOpenAICodexCompactionRequestContext } from "@oh-my-pi/pi-ai/providers/openai-codex-compaction";
 import { applyCodexResponsesLiteShape } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
@@ -426,8 +429,10 @@ function resolveAzureOpenAiCompactEndpoint(model: Model, configuredEndpoint: str
 	return appendAzureApiVersion(endpoint);
 }
 
-function resolveOpenAiCompactModel(model: Model): string {
-	const requestModel = model.remoteCompaction?.model ?? model.requestModelId ?? model.id;
+function resolveOpenAiCompactModel(model: Model, policyEnabled = false): string {
+	const requestModel =
+		model.remoteCompaction?.model ??
+		(policyEnabled ? resolveWireModelId(model, undefined) : (model.requestModelId ?? model.id));
 	const compactionApi = model.remoteCompaction?.api ?? model.api;
 	if (compactionApi !== "azure-openai-responses") return requestModel;
 	const mappedDeployment = parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(requestModel);
@@ -864,12 +869,24 @@ export async function requestOpenAiRemoteCompaction(
 		rewriteOutputs?: boolean;
 	},
 ): Promise<OpenAiRemoteCompactionResponse> {
+	// This endpoint exposes no effort control; never attest an invented thinking level.
+	const scope = getModelPolicyScope(undefined, opts?.sessionId);
+	assertModelPolicyAdmission(model, "off", scope);
+	if (scope?.enabled && model.reasoning)
+		throw new ModelPolicyError("Remote compaction endpoint has no verifiable thinking effort");
+	if (
+		scope?.enabled &&
+		((model.remoteCompaction?.api && model.remoteCompaction.api !== model.api) ||
+			(model.remoteCompaction?.model && model.remoteCompaction.model !== resolveWireModelId(model, undefined)))
+	) {
+		throw new ModelPolicyError("Remote compaction changed the admitted model identity");
+	}
 	let fetchImpl: FetchImpl = opts?.fetch ?? fetch;
 	if (isBedrockOpenAIUrl(model.baseUrl)) {
 		({ model, apiKey, fetch: fetchImpl } = await prepareBedrockCompactionRequest(model, apiKey, opts?.fetch, signal));
 	}
 	const endpoint = resolveOpenAiCompactEndpoint(model);
-	const requestModel = resolveOpenAiCompactModel(model);
+	const requestModel = resolveOpenAiCompactModel(model, scope?.enabled);
 	const trimmed = trimRemoteCompactionInputToContextWindow(
 		compactInput,
 		new Tokenizer(model),
@@ -955,10 +972,19 @@ export async function requestOpenAiRemoteCompaction(
 		}
 	}
 
+	const serializedRequest = stringifyJson(request);
+	if (scope?.enabled) {
+		assertOpenAIModelPolicyRequest(
+			model,
+			JSON.parse(serializedRequest ?? "null"),
+			{ sessionId: opts?.sessionId },
+			requestModel,
+		);
+	}
 	const response = await fetchImpl(endpoint, {
 		method: "POST",
 		headers,
-		body: stringifyJson(request),
+		body: serializedRequest,
 		signal: ptree.combineSignals(signal, opts?.timeoutMs ?? REMOTE_COMPACTION_TIMEOUT_MS),
 	});
 
@@ -1029,6 +1055,8 @@ export async function requestRemoteCompaction(
 	signal?: AbortSignal,
 	opts?: { fetch?: FetchImpl; timeoutMs?: number; model?: Model; apiKey?: string },
 ): Promise<RemoteCompactionResponse> {
+	if (getModelPolicyScope()?.enabled)
+		throw new ModelPolicyError("Custom remote compaction cannot attest a catalog model and effort");
 	let endpointPath = endpoint;
 	try {
 		endpointPath = new URL(endpoint).pathname;

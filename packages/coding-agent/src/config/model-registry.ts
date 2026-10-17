@@ -49,6 +49,7 @@ import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-refere
 import { apiServesKind, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import { isOfficialCodexApiUrl } from "@oh-my-pi/pi-catalog/wire/codex";
 import { getAgentDir, isBunTestRuntime, logger, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
+import { getModelDbPath } from "@oh-my-pi/pi-utils";
 import { resolveProviderModelReference } from "../config/model-resolver";
 import { generateCodexAttestation } from "../live/attestation";
 import { redactUrlForLog } from "../mcp/json-rpc";
@@ -2969,6 +2970,11 @@ export class ModelRegistry {
 		return models;
 	}
 
+	/** Resolved database shared by native model discovery and extension-owned tables. */
+	getCacheDbPath(): string {
+		return this.#cacheDbPath ?? getModelDbPath();
+	}
+
 	/**
 	 * Get all models (built-in + custom) of one catalog kind.
 	 * If custom config had errors, returns only built-in models. The default
@@ -3470,8 +3476,12 @@ export class ModelRegistry {
 
 		if (config.streamSimple && config.api) {
 			const streamSimple = config.streamSimple;
-			registerCustomApi(config.api, streamSimple, sourceId, (model, context, options) =>
-				streamSimple(model, context, options as SimpleStreamOptions),
+			registerCustomApi(
+				config.api,
+				streamSimple,
+				sourceId,
+				(model, context, options) => streamSimple(model, context, options as SimpleStreamOptions),
+				{ modelPolicyEffort: config.modelPolicyEffort },
 			);
 		}
 
@@ -3741,6 +3751,8 @@ export interface ProviderConfigInput {
 	apiKey?: string;
 	api?: Api;
 	streamSimple?: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
+	/** Guarantees the custom adapter preserves canonical reasoning efforts and explicit reasoning-off flags. */
+	modelPolicyEffort?: boolean;
 	headers?: Record<string, string>;
 	compat?: ModelSpec<Api>["compat"];
 	remoteCompaction?: RemoteCompactionConfig<Api>;

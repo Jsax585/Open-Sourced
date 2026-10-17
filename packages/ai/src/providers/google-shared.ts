@@ -8,6 +8,7 @@ import { readSseJson, type SseEventObserver } from "@oh-my-pi/pi-utils";
 import { renderDemotedThinking } from "../dialect/demotion";
 import { ThinkingFenceStripper } from "../dialect/thinking-fence-strip";
 import * as AIError from "../error";
+import { assertGoogleModelPolicyRequest, getModelPolicyScope } from "../model-policy";
 import type {
 	Api,
 	AssistantMessage,
@@ -1004,6 +1005,8 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 			};
 
 			const bodyJson = JSON.stringify(paramsToWireBody(params));
+			if (getModelPolicyScope(undefined, options?.sessionId)?.enabled)
+				assertGoogleModelPolicyRequest(model, JSON.parse(bodyJson), options, params.model);
 			const fetchImpl = plan.fetch ?? options?.fetch ?? (globalThis.fetch.bind(globalThis) as FetchImpl);
 			const openStreamAt = async (requestUrl: string): Promise<ReadableStream<Uint8Array>> => {
 				const response = await fetchImpl(requestUrl, {

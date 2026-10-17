@@ -1,3 +1,4 @@
+import { allowedModelEfforts, getModelPolicyScope } from "@oh-my-pi/pi-ai";
 /** Context maintenance for an active coding-agent session. */
 
 import { scheduler } from "node:timers/promises";
@@ -3457,10 +3458,14 @@ export class SessionMaintenance {
 		contextWindow: number,
 		signal?: AbortSignal,
 	): Promise<Model | undefined> {
+		const policyScope = getModelPolicyScope(this.#host.settings, this.#host.sessionId());
 		const availableModels = this.#host.modelRegistry.getAvailable();
+		const admissibleModels = policyScope?.enabled
+			? availableModels.filter(model => allowedModelEfforts(model, policyScope).length > 0)
+			: availableModels;
 		if (availableModels.length === 0) return undefined;
 
-		const configured = resolveContextPromotionConfiguredTarget(currentModel, availableModels);
+		const configured = resolveContextPromotionConfiguredTarget(currentModel, admissibleModels);
 		// Judge the window this session would actually run the target with.
 		const candidate = configured && this.#host.modelRegistry.fitContextWindow(configured, this.#host.settings);
 		if (!candidate) return undefined;
@@ -3485,6 +3490,10 @@ export class SessionMaintenance {
 		const registry = this.#host.modelRegistry;
 		const settings = this.#host.settings;
 		availableModels = availableModels.map(model => registry.fitContextWindow(model, settings));
+		const policyScope = getModelPolicyScope(settings, this.#host.sessionId());
+		const admissible = (model: Model): boolean =>
+			(!policyScope?.enabled || allowedModelEfforts(model, policyScope).length > 0) && (!filter || filter(model));
+		availableModels = availableModels.filter(admissible);
 		const candidates: Model[] = [];
 		const seen = new Set<string>();
 
@@ -3496,7 +3505,7 @@ export class SessionMaintenance {
 			// `seen` still tracks rejected models so the largest-context fallback
 			// scan below doesn't reintroduce them; the filter just suppresses
 			// inclusion in this caller's candidate chain.
-			if (filter && !filter(model)) return;
+			if (!admissible(model)) return;
 			candidates.push(model);
 		};
 

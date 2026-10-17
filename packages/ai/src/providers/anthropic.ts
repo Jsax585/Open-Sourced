@@ -19,6 +19,7 @@ import {
 import { NO_AUTH_SENTINEL } from "../auth-retry";
 import { renderDemotedThinking } from "../dialect/demotion";
 import * as AIError from "../error";
+import { assertAnthropicModelPolicyRequest, getModelPolicyScope } from "../model-policy";
 import { parseToolCallArguments } from "../utils/tool-call-arguments";
 import { waitForRetry } from "../utils/retry-wait";
 import { getEnvApiKey } from "../env-api-key";
@@ -2833,6 +2834,10 @@ const streamAnthropicOnce = (
 					maxRetries: 0,
 					...(perRequestHeaders ? { headers: perRequestHeaders } : {}),
 				};
+				if (getModelPolicyScope(undefined, options?.sessionId)?.enabled) {
+					params = JSON.parse(JSON.stringify(params)) as typeof params;
+					assertAnthropicModelPolicyRequest(model, params, options);
+				}
 				const anthropicRequest: unknown =
 					isOAuthToken && client.beta
 						? client.beta.messages.create({ ...params, stream: true }, requestOptions)

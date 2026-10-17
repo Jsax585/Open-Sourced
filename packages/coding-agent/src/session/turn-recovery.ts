@@ -18,6 +18,15 @@ import type {
 	AnthropicFallbackCreditHandle,
 } from "@oh-my-pi/pi-ai";
 import { calculateRateLimitBackoffMs, parseRateLimitReason } from "@oh-my-pi/pi-ai";
+import {
+	allowedModelEfforts,
+	effectiveModelEffort,
+	getModelPolicyCandidates,
+	getModelPolicyScope,
+	ModelPolicyError,
+	type ModelPolicyEffort,
+} from "@oh-my-pi/pi-ai";
+import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { extractProviderRetryHint } from "@oh-my-pi/pi-ai/utils/retry-after";
 import { fallbackCreditTargets } from "@oh-my-pi/pi-catalog/compat/fallback-credit";
@@ -26,7 +35,12 @@ import { isFireworksFastModelId, toFireworksBaseModelId } from "@oh-my-pi/pi-cat
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { isUnexpectedSocketCloseMessage, logger, prompt, sleepLong } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
-import { formatModelStringWithRouting, resolveModelOverride } from "../config/model-resolver";
+import {
+	filterAvailableModelsByEnabledPatterns,
+	formatModelStringWithRouting,
+	resolveModelOverride,
+} from "../config/model-resolver";
+import { cfgEnabledModels } from "../config/model-settings";
 
 import type { Settings } from "../config/settings";
 import type { RetryErrorUpdate } from "../extensibility/shared-events";
@@ -1873,6 +1887,7 @@ export class TurnRecovery {
 		currentModel: Model | null | undefined = this.#host.model(),
 		options?: { pinnedRole?: string; roleHint?: string },
 	): string[] {
+		if (getModelPolicyScope(this.#host.settings, this.#host.sessionId())?.enabled) return ["@model-policy"];
 		const pinned = options?.pinnedRole ?? this.#activeRetryFallback?.role;
 		const current = this.resolveRetryFallbackRole(currentSelector, currentModel, options?.roleHint);
 		if (!pinned) return current ? [current] : [];
@@ -1896,6 +1911,32 @@ export class TurnRecovery {
 		currentModel: Model | null | undefined = this.#host.model(),
 		options?: { wrapAround?: boolean },
 	): RetryFallbackSelector[] {
+		const scope = getModelPolicyScope(this.#host.settings, this.#host.sessionId());
+		if (scope?.enabled) {
+			const ceiling = this.#host.thinkingLevelCeiling();
+			return getModelPolicyCandidates(
+				filterAvailableModelsByEnabledPatterns(
+					this.#host.modelRegistry.getAvailable(),
+					cfgEnabledModels.get(this.#host.settings) ?? [],
+					this.#host.settings,
+				),
+				undefined,
+				scope,
+			)
+				.filter(
+					pair =>
+						ceiling === undefined ||
+						pair.effort === "off" ||
+						THINKING_EFFORTS.indexOf(pair.effort) <= THINKING_EFFORTS.indexOf(ceiling),
+				)
+				.map(({ model, effort }) =>
+					parseRetryFallbackSelector(
+						formatRetryFallbackSelector(model, effort as ThinkingLevel),
+						this.#host.modelRegistry,
+					)!,
+				)
+				.filter(selector => selector.raw !== currentSelector);
+		}
 		return findRetryFallbackCandidates(
 			this.#getRetryFallbackResolutionContext(),
 			role,
@@ -1903,6 +1944,67 @@ export class TurnRecovery {
 			currentModel,
 			options,
 		);
+	}
+
+	/** Admit the current request or use the same native model-swap path as retries. */
+	async ensureModelPolicyAdmission(signal?: AbortSignal): Promise<void> {
+		const scope = getModelPolicyScope(this.#host.settings, this.#host.sessionId());
+		if (!scope?.enabled) return;
+		scope.assertReady();
+		const current = this.#host.model();
+		const requested = this.#host.thinkingLevel() as ModelPolicyEffort | undefined;
+		if (current) {
+			const allowed = allowedModelEfforts(current, scope);
+			const effective = effectiveModelEffort(current, requested);
+			if (allowed.includes(effective)) return;
+			const ceiling = this.#host.thinkingLevelCeiling();
+			const sameModel = getModelPolicyCandidates([current], undefined, scope).find(
+				pair =>
+					ceiling === undefined ||
+					pair.effort === "off" ||
+					THINKING_EFFORTS.indexOf(pair.effort) <= THINKING_EFFORTS.indexOf(ceiling),
+			);
+			if (sameModel) {
+				this.#host.setThinkingLevel(sameModel.effort as ThinkingLevel);
+				return;
+			}
+		}
+		const currentSelector = current ? formatRetryFallbackSelector(current, this.#host.thinkingLevel()) : "";
+		for (const pair of getModelPolicyCandidates(
+			filterAvailableModelsByEnabledPatterns(
+				this.#host.modelRegistry.getAvailable(),
+				cfgEnabledModels.get(this.#host.settings) ?? [],
+				this.#host.settings,
+			),
+			undefined,
+			scope,
+		)) {
+			if (signal?.aborted) signal.throwIfAborted();
+			if (!this.#host.contextFitsModel(pair.model)) continue;
+			const ceiling = this.#host.thinkingLevelCeiling();
+			if (
+				ceiling !== undefined &&
+				pair.effort !== "off" &&
+				THINKING_EFFORTS.indexOf(pair.effort) > THINKING_EFFORTS.indexOf(ceiling)
+			)
+				continue;
+			const selector = parseRetryFallbackSelector(
+				formatRetryFallbackSelector(pair.model, pair.effort as ThinkingLevel),
+				this.#host.modelRegistry,
+			)!;
+			if (this.isRetryFallbackSelectorSuppressed(selector)) continue;
+			let apiKey: string | undefined;
+			try {
+				apiKey = await this.#host.modelRegistry.getApiKey(pair.model, this.#host.sessionId(), { signal });
+			} catch {
+				signal?.throwIfAborted();
+				continue;
+			}
+			if (!apiKey) continue;
+			if (await this.applyRetryFallbackCandidate("@model-policy", selector, currentSelector, { apiKey, signal }))
+				return;
+		}
+		throw new ModelPolicyError("Model policy exhausted authenticated native candidates");
 	}
 
 	async #maybeApplyUsageAwareFallback(signal: AbortSignal, confirmer?: UsageFallbackConfirmer): Promise<boolean> {
@@ -2112,14 +2214,6 @@ export class TurnRecovery {
 		if (!candidate) {
 			throw new Error(`Retry fallback model not found: ${selector.raw}`);
 		}
-		const apiKey =
-			options?.apiKey ??
-			(await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId(), { signal: options?.signal }));
-		if (!apiKey) {
-			throw new Error(`No API key for retry fallback ${selector.raw}`);
-		}
-		if (options?.signal?.aborted) return false;
-
 		// Capture the configured selector (auto-aware) so a fallback chain preserves
 		// `auto` instead of collapsing it to the level it resolved to this turn.
 		const currentThinkingLevel = this.#host.configuredThinkingLevel();
@@ -2131,6 +2225,21 @@ export class TurnRecovery {
 			requestedThinkingLevel === AUTO_THINKING
 				? requestedThinkingLevel
 				: clampThinkingLevelToCeiling(candidate, requestedThinkingLevel, this.#host.thinkingLevelCeiling());
+		const policyScope = getModelPolicyScope(this.#host.settings, this.#host.sessionId());
+		if (policyScope?.enabled) {
+			const requested =
+				nextThinkingLevel === AUTO_THINKING ? undefined : (nextThinkingLevel as ModelPolicyEffort | undefined);
+			if (!allowedModelEfforts(candidate, policyScope).includes(effectiveModelEffort(candidate, requested)))
+				return false;
+		}
+		const apiKey =
+			options?.apiKey ??
+			(await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId(), { signal: options?.signal }));
+		if (!apiKey) {
+			throw new Error(`No API key for retry fallback ${selector.raw}`);
+		}
+		if (options?.signal?.aborted) return false;
+
 		const candidateSelector = formatModelStringWithRouting(candidate);
 		const previousModel = this.#host.model();
 		// Capture the edit mode under the outgoing model so the base system prompt
@@ -2401,6 +2510,14 @@ export class TurnRecovery {
 		if (!model) return false;
 		const baseModel = this.#host.modelRegistry.find("fireworks", toFireworksBaseModelId(model.id));
 		if (!baseModel) return false;
+		const policyScope = getModelPolicyScope(this.#host.settings, this.#host.sessionId());
+		if (
+			policyScope?.enabled &&
+			!allowedModelEfforts(baseModel, policyScope).includes(
+				effectiveModelEffort(baseModel, this.#host.thinkingLevel() as ModelPolicyEffort | undefined),
+			)
+		)
+			return false;
 		const apiKey = await this.#host.modelRegistry.getApiKey(baseModel, this.#host.sessionId());
 		if (!apiKey) return false;
 		const baseSelector = formatModelStringWithRouting(baseModel);
@@ -2462,6 +2579,17 @@ export class TurnRecovery {
 		const primaryModel =
 			resolvedPrimary.model ?? this.#host.modelRegistry.find(originalSelector.provider, originalSelector.id);
 		if (!primaryModel) return false;
+		const policyScope = getModelPolicyScope(this.#host.settings, this.#host.sessionId());
+		if (policyScope?.enabled) {
+			if (primaryModel.provider !== originalSelector.provider || primaryModel.id !== originalSelector.id)
+				return false;
+			const requested =
+				originalThinkingLevel === AUTO_THINKING
+					? undefined
+					: (originalThinkingLevel as ModelPolicyEffort | undefined);
+			if (!allowedModelEfforts(primaryModel, policyScope).includes(effectiveModelEffort(primaryModel, requested)))
+				return false;
+		}
 		const apiKey = await this.#host.modelRegistry.getApiKey(primaryModel, this.#host.sessionId());
 		if (!apiKey) return false;
 

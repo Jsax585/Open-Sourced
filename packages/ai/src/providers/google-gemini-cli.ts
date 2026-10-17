@@ -15,6 +15,7 @@ import {
 } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import { extractHttpStatusFromError, fetchWithRetry, readSseJson } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
+import { assertGoogleModelPolicyRequest, getModelPolicyScope } from "../model-policy";
 import type {
 	Api,
 	AssistantMessage,
@@ -604,6 +605,8 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				...options?.headers,
 			};
 			const requestBodyJson = JSON.stringify(requestBody);
+			if (getModelPolicyScope(undefined, options?.sessionId)?.enabled)
+				assertGoogleModelPolicyRequest(model, JSON.parse(requestBodyJson), options);
 			rawRequestDump = {
 				provider: model.provider,
 				api: output.api,

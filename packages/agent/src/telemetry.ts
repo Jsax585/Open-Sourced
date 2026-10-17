@@ -39,6 +39,7 @@ import {
 	type ToolChoice,
 	type Usage,
 } from "@oh-my-pi/pi-ai";
+import { applyModelPolicyOptions } from "@oh-my-pi/pi-ai";
 import {
 	type Attributes,
 	type AttributeValue,
@@ -1840,6 +1841,7 @@ export async function instrumentedCompleteSimple<TApi extends Api>(
 	options: SimpleStreamOptions,
 	span: InstrumentedChatSpanOptions,
 ): Promise<AssistantMessage> {
+	options = applyModelPolicyOptions(model, options)!;
 	// Oneshot LLM calls (handoff, compaction/branch summaries) run outside the
 	// agent `#runLoop`, which is where the EventLoopKeepalive normally lives.
 	// Without it, Bun's JSC loop stops servicing timers while parked on the
