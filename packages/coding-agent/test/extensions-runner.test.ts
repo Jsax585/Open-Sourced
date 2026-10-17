@@ -4548,6 +4548,27 @@ describe("ExtensionRunner", () => {
 			expect(seen.onUpdate).toBe(innerOnUpdate);
 		});
 
+		it("runs the native call under the wrapper call's id", async () => {
+			const ids: string[] = [];
+			const native = {
+				...nativeProbe({}),
+				execute: async (id: string) => {
+					ids.push(id);
+					return { content: [{ type: "text" as const, text: "native ran" }], details: {} };
+				},
+			} as AgentTool;
+			const runner = await runnerWithNative(native);
+
+			await runner
+				.createContext(undefined, { toolName: "bash", toolCallId: "call_1" })
+				.invokeTool?.({ command: "echo hi" });
+			// Without a caller id (direct host calls) the native call still gets a synthetic one.
+			await runner.invokeNativeTool("bash", { command: "echo hi" });
+
+			expect(ids[0]).toBe("call_1");
+			expect(ids[1]).toStartWith("invoke-bash-");
+		});
+
 		it("omits invokeTool when no native built-in of that name exists", async () => {
 			const runner = await runnerWithNative(nativeProbe({}));
 			expect(runner.createContext(undefined, { toolName: "not_a_builtin" }).invokeTool).toBeUndefined();

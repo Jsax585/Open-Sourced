@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `concurrency` to extension `ToolDefinition` and to the `ToolInfo` entries returned by `getAllTools()`, so a tool that re-registers a built-in can keep the built-in's scheduling mode
+
+### Changed
+
+- `ctx.invokeTool` runs the native built-in under the wrapper call's own tool call id instead of a synthetic `invoke-*` id
+
 ### Fixed
 
 - Fixed a Codex turn stopping on "Request failed … unsupported_native_inflight_message" when you sent a message while the response was writing text; the session now keeps the partial reply and continues with your message

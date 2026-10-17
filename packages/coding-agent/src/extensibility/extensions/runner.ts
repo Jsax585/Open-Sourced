@@ -716,6 +716,8 @@ export class ExtensionRunner {
 			 * context only when the caller had none.
 			 */
 			callerContext?: AgentToolContext;
+			/** The caller tool's own call id; the native call reuses it so it is the same logical call. */
+			toolCallId?: string;
 		},
 	): Promise<AgentToolResult<TDetails>> {
 		const resolved = this.#nativeToolResolver?.(name);
@@ -724,7 +726,9 @@ export class ExtensionRunner {
 		if (depth >= 8) {
 			throw new Error(`invokeTool: delegation depth exceeded 8 (recursive invokeTool for "${name}"?)`);
 		}
-		const toolCallId = `invoke-${name}-${Date.now().toString(36)}-${depth}`;
+		// Native per-call state (artifacts, async job ids, streamed arguments) is keyed by the call id,
+		// so a same-tool delegation keeps the outer call's id; direct calls get a synthetic one.
+		const toolCallId = options?.toolCallId ?? `invoke-${name}-${Date.now().toString(36)}-${depth}`;
 		return (await resolved.tool.execute(
 			toolCallId,
 			params as never,
@@ -1408,6 +1412,7 @@ export class ExtensionRunner {
 		model?: Model,
 		delegation?: {
 			toolName: string;
+			toolCallId?: string;
 			depth?: number;
 			context?: AgentToolContext;
 			signal?: AbortSignal;
@@ -1492,6 +1497,7 @@ export class ExtensionRunner {
 								onUpdate: options?.onUpdate ?? delegation.onUpdate,
 								depth: (delegation.depth ?? 0) + 1,
 								callerContext: delegation.context,
+								toolCallId: delegation.toolCallId,
 							})
 					: undefined,
 		};

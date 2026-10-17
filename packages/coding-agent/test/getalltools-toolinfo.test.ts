@@ -42,6 +42,7 @@ describe("AgentSession.getAllToolInfos", () => {
 			maxTokens: 2048,
 		});
 		const read = createTool("read");
+		const write: AgentTool = { ...createTool("write"), concurrency: "exclusive" };
 		const custom = createTool("my_ext_tool");
 		const agent = new Agent({
 			getApiKey: () => "test-key",
@@ -52,6 +53,7 @@ describe("AgentSession.getAllToolInfos", () => {
 		// built-in, so it must classify as an extension-sourced tool.
 		const toolRegistry = new Map<string, AgentTool>([
 			[read.name, read],
+			[write.name, write],
 			[custom.name, custom],
 		]);
 		const session = new AgentSession({
@@ -60,7 +62,7 @@ describe("AgentSession.getAllToolInfos", () => {
 			settings,
 			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml")),
 			toolRegistry,
-			builtInToolNames: [read.name],
+			builtInToolNames: [read.name, write.name],
 			rebuildSystemPrompt: async toolNames => ({ systemPrompt: [toolNames.join(",")] }),
 		});
 
@@ -73,6 +75,9 @@ describe("AgentSession.getAllToolInfos", () => {
 			// ToolInfo carries schema + description, not just a name.
 			expect(byName.get("read")?.description).toBe("read tool");
 			expect(byName.get("read")?.parameters).toBeDefined();
+			// A wrapper re-registering a built-in forwards its scheduling mode from here.
+			expect(byName.get("write")?.concurrency).toBe("exclusive");
+			expect(byName.get("read") && "concurrency" in byName.get("read")!).toBe(false);
 
 			// gentle-pi's startup-banner.ts filter must not throw and must treat
 			// only non-builtin/non-sdk tools as "custom".

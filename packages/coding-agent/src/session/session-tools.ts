@@ -770,7 +770,13 @@ export class SessionTools {
 				scope: "temporary",
 				origin: "top-level",
 			};
-			return { name, description: tool.description, parameters: tool.parameters, sourceInfo };
+			return {
+				name,
+				description: tool.description,
+				parameters: tool.parameters,
+				sourceInfo,
+				...(tool.concurrency === undefined ? {} : { concurrency: tool.concurrency }),
+			};
 		});
 	}
 
