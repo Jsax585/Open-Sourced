@@ -50,6 +50,7 @@ import { invalidateAwsCredentialCache, resolveAwsCredentials } from "./aws-crede
 import { decodeEventStream } from "./aws-eventstream";
 import { signRequest } from "./aws-sigv4";
 import { isThinkingPrefixBindingError } from "./anthropic";
+import { isAnthropicNarrationSignature } from "./anthropic-signature";
 import { parseAnthropicInputTransformations, THINKING_BINDING_CONTROLS_BETA } from "./anthropic-wire";
 import { isBedrockRequestMetadataValue } from "./bedrock-request-metadata";
 import { transformMessages } from "./transform-messages";
@@ -454,7 +455,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				isRecord(additionalModelRequestFields?.thinking) &&
 				additionalModelRequestFields.thinking.type === "disabled";
 			const prefixMismatchBehavior =
-				!thinkingDisabled && model.thinking?.prefixBinding
+				!thinkingDisabled && model.thinking?.prefixBinding && model.compat.supportsThinkingBindingControls
 					? (options.anthropicPrefixMismatchBehavior ?? "drop_block")
 					: undefined;
 
@@ -463,10 +464,11 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 			const forcedChoice = toolConfig?.toolChoice?.any || toolConfig?.toolChoice?.tool;
 			if (toolConfig && forcedChoice && !model.compat.supportsForcedToolChoice) {
 				toolConfig = { ...toolConfig, toolChoice: { auto: {} } };
-			} else if (toolConfig && forcedChoice && additionalModelRequestFields && !thinkingDisabled) {
-				// Bedrock rejects thinking + forced tool_choice. Fable's adaptive
-				// thinking cannot be disabled, so downgrade its forced choice instead.
-				if (prefixMismatchBehavior) toolConfig = { ...toolConfig, toolChoice: { auto: {} } };
+			} else if (toolConfig && forcedChoice && !thinkingDisabled) {
+				// Bedrock rejects thinking + forced tool_choice. Prefix-bound lines (Fable)
+				// think adaptively even when no thinking field is sent, so downgrade their
+				// forced choice regardless of the binding controls; elsewhere drop thinking.
+				if (model.thinking?.prefixBinding) toolConfig = { ...toolConfig, toolChoice: { auto: {} } };
 				else additionalModelRequestFields = undefined;
 			}
 			if (prefixMismatchBehavior) {
@@ -976,6 +978,8 @@ function handleContentBlockStop(
 			stream.push({ type: "text_end", contentIndex: index, content: block.text, partial: output });
 			break;
 		case "thinking":
+			// Claude on Bedrock carries Anthropic's signature format, narration kind included.
+			if (block.thinkingSignature && isAnthropicNarrationSignature(block.thinkingSignature)) block.narration = true;
 			stream.push({ type: "thinking_end", contentIndex: index, content: block.thinking, partial: output });
 			break;
 		case "toolCall":
@@ -1086,7 +1090,7 @@ function convertMessages(
 	promptCachePolicy: BedrockPromptCachePolicy,
 ): WireMessage[] {
 	const result: WireMessage[] = [];
-	const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
+	const transformedMessages = transformMessages(context.messages, model, id => normalizeToolCallId(id));
 
 	for (let i = 0; i < transformedMessages.length; i++) {
 		const m = transformedMessages[i];
