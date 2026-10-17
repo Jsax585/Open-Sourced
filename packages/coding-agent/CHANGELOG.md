@@ -1718,4 +1718,53 @@
 - Fixed native judges failing to honor configured request headers, enabling authenticated and header-routed judge providers to work as configured.
 - Fixed LSP requests hanging when aborted while waiting for an earlier write to complete.
 
-Older entries are archived in [packages/coding-agent/CHANGELOG.md@3a05c7321d8e](https://github.com/can1357/oh-my-pi/blob/3a05c7321d8efe9731f8417ee2e0d34a0b049a16/packages/coding-agent/CHANGELOG.md).
+## [18.2.7] - 2026-09-21
+
+### Breaking Changes
+
+- Image-generation overrides now use model selectors, and web-search CLI overrides use --model instead of --provider.
+- Removed the bash tool's env parameter.
+- Eval judge(state, questions) is now awaited and returns answers directly; JudgmentHandle and judgment support in wait() have been removed.
+
+### Added
+
+- Added `find` tool for semantic workspace searching, allowing agents to locate behaviors and symbols using natural language
+- Added `find` CLI command for performing semantic workspace searches
+- Added batch evaluation with judge_batch(states, questions) / judgeBatch(...), including bounded background execution, incremental result and status access, per-item failure reporting, and the ability to wait for or reattach to jobs across turns or after a reset.
+- Added the jevify magic keyword to have the agent establish an evaluation rubric before classifying bulk items and inspect only items flagged by the judge.
+- Added omp web-search as an alias for omp search.
+- Added tui.titleSpinner configuration to select the terminal-title working-state spinner (braille, dots, or line).
+- Added Handlebars-based system prompt templates through SYSTEM_TEMPLATE.md, --system-prompt-template, and the SDK, with access to live settings and tool data.
+- Added configurable image, web, speech, dictation, judge, and memory model roles with ordered fallbacks, legacy backend-setting migration, and omp models --kind filtering.
+- Added native OpenRouter image generation, model-selected web-plugin search, and live discovery of TypeSafe judge models.
+
+### Changed
+
+- Updated agent system prompts to prioritize the `find` tool over `grep` and `glob` for behavioral lookups
+- Refined system prompt instructions for XML tag handling and agent persona
+- Updated sloppy edit tool syntax to use plain text headers instead of XML tags
+- Improved startup performance by validating provider-qualified model selectors against only the relevant provider catalog.
+- Reduced launch time for npm and compiled builds by embedding the model catalog more efficiently.
+
+### Fixed
+
+- Fixed system prompt configuration validation so systemPromptTemplate and customSystemPrompt cannot conflict with a full systemPrompt replacement, including when values are empty.
+- Added browser-relay support for listing eligible pages without attaching to or claiming them.
+- Fixed Codex compatibility with the sloppy edit tool.
+- Capped concurrent eval judge and completion requests to prevent large fan-outs from overwhelming judge and fallback models.
+- Temporarily avoids retrying judgment requests with credentials that recently failed due to authorization or billing errors.
+- Fixed image and speech fallback models disappearing after discovery and eliminated incorrect incompatibility warnings for providers without credentials.
+- Fixed resume and continue flows to hide empty sessions.
+- Fixed edit operations that could loop after empty insertions or fail on Unicode no-op and overlapping duplicate matches.
+- Fixed live subagent messages being delayed by agent discovery and roster discovery looping on dot-named transcripts.
+- Fixed llama.cpp discovery and routing for PrismML Bonsai 2 27B GGUF models, including support for cached models and the Qwen 3.8 thinking-level ladder.
+
+## [18.2.6] - 2026-09-18
+
+### Fixed
+
+- Fixed clipboard paste stalling on an empty clipboard; image and text clipboard reads now run concurrently so the empty-clipboard status surfaces after the slower read instead of the sum of both.
+- Fixed memory recall blocks carrying a minute-resolution `Current time` stamp that dirtied the cached system prompt on every refresh; recall rows already carry dates, so the stamp is removed.
+- Fixed `omp auth-broker token` and `omp auth-gateway token` exiting silently without creating a token on Windows when no token file exists yet; token and config reads now use `node:fs` instead of `Bun.file`.
+
+Older entries are archived in [packages/coding-agent/CHANGELOG.md@2a4691429ee6](https://github.com/can1357/oh-my-pi/blob/2a4691429ee6cc22be24b566e2f5e0ad96b208f1/packages/coding-agent/CHANGELOG.md).
