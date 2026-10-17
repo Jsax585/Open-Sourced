@@ -223,9 +223,23 @@ export class HistorySearchComponent extends OverlayPanel {
 	#searchTimer: NodeJS.Timeout | undefined;
 	#onRequestRender?: () => void;
 
-	/** Sources are host-bound and ordered for Tab cycling, with the initial scope first. */
-	constructor(scopes: readonly HistorySearchScope[], onSelect: (prompt: string) => void, onCancel: () => void) {
+	/** Accept a single source, or labeled host-bound sources ordered for Tab cycling. */
+	constructor(
+		source: HistorySource | readonly HistorySearchScope[],
+		onSelect: (prompt: string) => void,
+		onCancel: () => void,
+	) {
 		super("History", "omp.overlay.history");
+		const scopes: readonly HistorySearchScope[] =
+			"getRecent" in source
+				? [
+						{
+							label: "",
+							getRecent: limit => source.getRecent(limit),
+							search: (query, limit) => source.search(query, limit),
+						},
+					]
+				: source;
 		if (scopes.length === 0) throw new RangeError("History search requires at least one source");
 		this.#scopes = scopes;
 		this.#onSelect = prompt => {
@@ -276,7 +290,7 @@ export class HistorySearchComponent extends OverlayPanel {
 	#updateChrome(): void {
 		this.#nativeHints = undefined;
 		const label = this.#scopeAt(this.#scopeIndex).label;
-		this.title = `History (${label})`;
+		this.title = label ? `History (${label})` : "History";
 		const dot = theme.fg("dim", theme.sep.dot);
 		const navigate = theme.fg("dim", editorKeys("tui.select.up", "tui.select.down")) + theme.fg("muted", " navigate");
 		const hints = [navigate, rawKeyHint("enter", "select")];
@@ -573,11 +587,15 @@ export class HistorySearchComponent extends OverlayPanel {
 		}
 		this.#menu.setItems(results);
 		this.#menu.moveToBoundary("first");
-		const nextScope = this.#scopeAt(this.#scopeIndex + 1).label;
-		const widen = this.#scopes.length > 1 ? ` Press Tab for ${nextScope}.` : "";
-		this.#emptyMessage = query
-			? `No matching history in ${scope.label}.${widen}`
-			: `No history in ${scope.label}.${widen}`;
+		if (scope.label) {
+			const nextScope = this.#scopeAt(this.#scopeIndex + 1).label;
+			const widen = this.#scopes.length > 1 ? ` Press Tab for ${nextScope}.` : "";
+			this.#emptyMessage = query
+				? `No matching history in ${scope.label}.${widen}`
+				: `No history in ${scope.label}.${widen}`;
+		} else {
+			this.#emptyMessage = query ? "No matching history" : "No history yet";
+		}
 		this.#resultsList.setQuery(query ? queryTokens(query) : [], this.#emptyMessage);
 	}
 }

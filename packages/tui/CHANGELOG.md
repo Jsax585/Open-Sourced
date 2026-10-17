@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- Fixed existing `HistorySearchComponent` callers passing a single history source crashing on upgrade; labeled scope arrays remain supported ([#11995](https://github.com/can1357/oh-my-pi/pull/11995) by [@jerome-benoit](https://github.com/jerome-benoit)).
 - Editor history navigation now contains failed source-key resolution and retries on the next recall instead of letting the error escape the keystroke handler ([#11995](https://github.com/can1357/oh-my-pi/pull/11995) by [@jerome-benoit](https://github.com/jerome-benoit)).
 - Failed history refreshes no longer leave a recalled prompt from the previous scope in the composer, while edited drafts and canceled attachments remain recoverable ([#11995](https://github.com/can1357/oh-my-pi/pull/11995) by [@jerome-benoit](https://github.com/jerome-benoit)).
 - Native history search now exposes forward/backward scope cycling and refreshes its scope title, query highlights and rows even when sources reuse result arrays ([#11995](https://github.com/can1357/oh-my-pi/pull/11995) by [@jerome-benoit](https://github.com/jerome-benoit)).

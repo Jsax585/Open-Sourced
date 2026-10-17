@@ -174,6 +174,35 @@ describe("history search picker", () => {
 		search: (query: string) => entries.filter(e => e.prompt.includes(query)),
 	};
 
+	it("searches and activates a single source while preserving its method receiver", () => {
+		class Source {
+			#entries = entries;
+
+			getRecent(limit: number): HistorySearchEntry[] {
+				return this.#entries.slice(0, limit);
+			}
+
+			search(query: string, limit: number): HistorySearchEntry[] {
+				return this.#entries.filter(entry => entry.prompt.includes(query)).slice(0, limit);
+			}
+		}
+		const inserted: string[] = [];
+		const search = new HistorySearchComponent(
+			new Source(),
+			prompt => inserted.push(prompt),
+			() => {},
+		);
+		const sheet = () => props((search.describe(withPicker).c as NativeNode[])[0]!);
+		expect(sheet().items?.map(item => item.label)).toEqual(["deploy the release", "routine status"]);
+		type(search, "deploy");
+		const result = sheet();
+		expect(result.items?.map(item => item.label)).toEqual(["deploy the release"]);
+		expect(result.actions?.some(action => action.id === "scope" || action.id === "scope-back")).toBe(false);
+		search.handleNativeEvent({ type: "activate", key: "^picker", item: result.items![0]!.id });
+		expect(inserted).toEqual(["deploy the release\nwith notes"]);
+		search.dispose();
+	});
+
 	it("hoists a keyed picker from the dock and inserts on activate", () => {
 		const inserted: string[] = [];
 		const search = new HistorySearchComponent(
