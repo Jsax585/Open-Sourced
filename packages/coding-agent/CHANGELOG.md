@@ -1,9 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+- Fixed isolated task spawn freezing the host when the checkout contains gitignored linked worktrees — nested-repo discovery now skips gitignored directories and baseline capture is bounded ([#16068](https://github.com/can1357/oh-my-pi/issues/16068))
+
+### Changed
+
+- Improved agent and session database SQLite reads by binding row types at prepare time with `db.query<Row, Params>()` instead of unchecked `as` casts ([#15437](https://github.com/can1357/oh-my-pi/pull/15437) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ### Added
-
 - Added a Copy button that leads the turn footer under an answer in Tern (`⧉ · 2m13s · 71K tok · $0.85 this turn`, in place of the clock), which copies that answer
 
 ## [18.10.0] - 2026-10-12

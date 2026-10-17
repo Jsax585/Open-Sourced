@@ -1,4 +1,5 @@
 import { type NestedRepoPatch } from "@oh-my-pi/pi-tui/tools/task";
+import { $ } from "bun";
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -11,7 +12,7 @@ import type { SettingValueOf } from "../config/registry";
 
 import { withRepoLock } from "../utils/repo-lock";
 import { writeIsolationOwner } from "./isolation-ownership";
-import { mapWithConcurrencyLimit } from "./parallel";
+import { mapWithConcurrencyLimit, mapWithConcurrencyLimitAllSettled } from "./parallel";
 import type { cfgIsolationBackend } from "./settings";
 
 const { IsoBackendKind } = natives;
@@ -69,6 +70,16 @@ export function getGitNoIndexNullPath(): string {
 	return GIT_NO_INDEX_NULL_PATH;
 }
 
+/** Check if a path is excluded by .gitignore rules. */
+async function isGitIgnored(repoRoot: string, relPath: string): Promise<boolean> {
+	try {
+		const result = await $`git check-ignore --quiet ${relPath}`.cwd(repoRoot).quiet().nothrow();
+		return result.exitCode === 0;
+	} catch {
+		return false;
+	}
+}
+
 /** Find nested git repositories (non-submodule) under the given root. */
 async function discoverNestedRepos(repoRoot: string): Promise<string[]> {
 	// Get submodule paths so we can exclude them
@@ -88,7 +99,9 @@ async function discoverNestedRepos(repoRoot: string): Promise<string[]> {
 			if (!entry.isDirectory()) continue;
 			const full = path.join(dir, entry.name);
 			const rel = path.relative(repoRoot, full);
-			// Check if this directory is itself a git repo
+			// Skip gitignored directories entirely — linked worktrees and other
+			// ignored content must not count as nested repos (issue #16068).
+			if (await isGitIgnored(repoRoot, rel)) continue;
 			const gitDir = path.join(full, ".git");
 			let hasGit = false;
 			try {
@@ -272,13 +285,15 @@ export async function captureBaseline(
 		captureRepoBaseline(repoRoot, budgetBytes),
 		discoverNestedRepos(repoRoot),
 	]);
-	const nested = await Promise.all(
-		nestedPaths.map(async relativePath => ({
+	const { results: nested } = await mapWithConcurrencyLimitAllSettled(
+		nestedPaths,
+		4,
+		async relativePath => ({
 			relativePath,
 			baseline: await captureRepoBaseline(path.join(repoRoot, relativePath), budgetBytes),
-		})),
+		}),
 	);
-	return { root, nested };
+	return { root, nested: nested.filter((n): n is NonNullable<typeof n> => n !== undefined) };
 }
 
 /**

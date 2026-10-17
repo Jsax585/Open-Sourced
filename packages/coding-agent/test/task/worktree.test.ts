@@ -105,6 +105,59 @@ describe("worktree isolation helpers", () => {
 		expect((error as Error).message).toContain("task.isolation.enabled: false");
 	});
 
+
+	// Regression for #16068: discoverNestedRepos walked into gitignored
+	// directories (e.g. `.claude/worktrees/`), so each linked worktree counted
+	// as a nested repo and captureBaseline ran all their baselines at once —
+	// unbounded git diff + stat-cache misses drove the parent to OOM on macOS.
+	// The walk now skips gitignored directories entirely, and nested baselines
+	// are captured with a bounded concurrency limit.
+	it("does not count gitignored linked worktrees as nested repos", async () => {
+		const repo = await createGitRepo();
+		await runGit(repo, ["config", "user.email", "test@example.com"]);
+		await runGit(repo, ["config", "user.name", "Test User"]);
+		await fs.writeFile(path.join(repo, "README.md"), "hi\n");
+		await runGit(repo, ["add", "README.md"]);
+		await runGit(repo, ["commit", "-q", "-m", "init"]);
+
+		// Create a gitignored linked worktree (the #16068 scenario)
+		const worktreesDir = path.join(repo, ".claude", "worktrees");
+		await fs.mkdir(worktreesDir, { recursive: true });
+		await fs.writeFile(path.join(repo, ".gitignore"), ".claude/worktrees/\n");
+		await runGit(repo, ["add", ".gitignore"]);
+		await runGit(repo, ["commit", "-q", "-m", "ignore worktrees"]);
+		await runGit(repo, ["worktree", "add", "-q", path.join(worktreesDir, "wt1"), "main"]);
+
+		// The gitignored worktree must not appear as a nested repo
+		const baseline = await captureBaseline(repo);
+		expect(baseline.nested).toEqual([]);
+	});
+
+	// Guard against over-filtering: a non-gitignored nested repo must still be
+	// discovered and baselined (the gitignore filter must not hide real repos).
+	it("still discovers non-gitignored nested repos", async () => {
+		const repo = await createGitRepo();
+		await runGit(repo, ["config", "user.email", "test@example.com"]);
+		await runGit(repo, ["config", "user.name", "Test User"]);
+		await fs.writeFile(path.join(repo, "README.md"), "hi\n");
+		await runGit(repo, ["add", "README.md"]);
+		await runGit(repo, ["commit", "-q", "-m", "init"]);
+
+		// Create a non-gitignored nested repo
+		const nestedDir = path.join(repo, "sub");
+		await fs.mkdir(nestedDir, { recursive: true });
+		await initRepo(nestedDir);
+		await runGit(nestedDir, ["config", "user.email", "test@example.com"]);
+		await runGit(nestedDir, ["config", "user.name", "Test User"]);
+		await fs.writeFile(path.join(nestedDir, "nested.txt"), "nested content\n");
+		await runGit(nestedDir, ["add", "."]);
+		await runGit(nestedDir, ["commit", "-q", "-m", "nested init"]);
+
+		const baseline = await captureBaseline(repo);
+		expect(baseline.nested).toHaveLength(1);
+		expect(baseline.nested[0].relativePath).toBe("sub");
+	});
+
 	// Regression: the staged and unstaged diffs were rendered in full before the
 	// #8939 gate ran, so a working tree whose index-vs-HEAD diff was enormous
 	// (a jj conflict commit exported to git materialises every side as a
