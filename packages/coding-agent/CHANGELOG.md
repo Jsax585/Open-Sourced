@@ -4,6 +4,9 @@
 ### Fixed
 - Fixed isolated task spawn freezing the host when the checkout contains gitignored linked worktrees — nested-repo discovery now skips gitignored directories and baseline capture is bounded ([#16068](https://github.com/can1357/oh-my-pi/issues/16068))
 - Fixed streaming write/edit preview height jumping line-by-line during fast streams — the collapsed window now uses a viewport-sized budget (matching the edit tool) and no trailing line is shown when the content ends with a newline ([#16033](https://github.com/can1357/oh-my-pi/issues/16033))
+- Fixed `find` on a single explicit file judging only the first ~375 bytes and reporting a clean "no hits" — single-file searches now verify the entire file directly instead of relying on sketch routing ([#16027](https://github.com/can1357/oh-my-pi/issues/16027))
+- Fixed `read` on a one-line value over the display limit returning "0B" as success instead of an explicit truncation error, and a bare archive path auto-opening its only member instead of showing the archive directory ([#16018](https://github.com/can1357/oh-my-pi/issues/16018))
+- Fixed `read` directory listings silently omitting sockets, FIFOs, and device files — directory listings now include all file types via a supplementary readdir pass ([#16014](https://github.com/can1357/oh-my-pi/issues/16014))
 
 ### Changed
 

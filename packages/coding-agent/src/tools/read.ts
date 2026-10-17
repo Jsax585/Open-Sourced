@@ -2493,7 +2493,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						} else {
 							outputText = formatText(snippet.text, startLineDisplay);
 						}
-						if (snippet.text.length === 0) {
+						if (snippet.bytes === 0) {
 							outputText = `[Line ${startLineDisplay} is ${formatBytes(
 								firstLineBytes,
 							)}, exceeds ${formatBytes(maxBytesForRead)} limit. Unable to display a valid UTF-8 snippet.]`;

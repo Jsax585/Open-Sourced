@@ -108,6 +108,9 @@ export async function resolveArchiveReadPath(
 ): Promise<ResolvedArchiveReadPath | null> {
 	const candidates = parseArchivePathCandidates(readPath);
 	for (const candidate of candidates) {
+		// A bare archive path (no subPath) shows the archive directory listing,
+		// not its first member. Only explicit `archive.ext:member` paths auto-open.
+		if (candidate.subPath === "") continue;
 		let absolutePath = resolveReadPath(candidate.archivePath, session.cwd);
 		let suffixResolution: { from: string; to: string } | undefined;
 
@@ -116,7 +119,7 @@ export async function resolveArchiveReadPath(
 			if (stat.isDirectory()) continue;
 			return {
 				absolutePath,
-				archiveSubPath: candidate.archivePath === readPath ? "" : candidate.subPath,
+				archiveSubPath: candidate.subPath,
 				suffixResolution,
 			};
 		} catch (error) {
@@ -133,7 +136,7 @@ export async function resolveArchiveReadPath(
 				suffixResolution = { from: candidate.archivePath, to: suffixMatch.displayPath };
 				return {
 					absolutePath,
-					archiveSubPath: candidate.archivePath === readPath ? "" : candidate.subPath,
+					archiveSubPath: candidate.subPath,
 					suffixResolution,
 				};
 			} catch (retryError) {

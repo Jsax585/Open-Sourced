@@ -82,6 +82,8 @@ interface FilePlan {
 	node: number;
 	total: number;
 	truncated: boolean;
+	/** Full file text, used for single-file whole-file verification. */
+	fullText: string;
 	passages: Passage[];
 }
 
@@ -238,7 +240,7 @@ class Cascade {
 					const read = await readText(filesystem, entry.path, READ_LIMIT);
 					const passages = selectWindows(windows(read.text, WINDOW_BYTES, keywords, weights), WINDOWS);
 					if (passages.length === 0) return undefined;
-					return { node, total: lines(read.text).length, truncated: read.truncated, passages };
+					return { node, total: lines(read.text).length, truncated: read.truncated, fullText: read.text, passages };
 				} catch (error) {
 					// Binary and blank files are expected misses, not failures worth reporting.
 					if (!(error instanceof ReadTextError) || error.kind === "io") this.#fail(`read ${entry.rel}`, error);
@@ -247,6 +249,72 @@ class Cascade {
 			}),
 		);
 		const files = plans.filter((plan): plan is FilePlan => plan !== undefined);
+
+		// For a single explicit file, bypass sketch routing: create one passage
+		// covering the entire file and verify it directly. The sketch phase is
+		// designed for searching across many files — its 384-byte budget cannot
+		// represent a whole file, so relevant lines beyond the sketch are never
+		// verified (issue #16027).
+		if (root.type === "file" && files.length === 1) {
+			const plan = files[0]!;
+			const wholeFile: Passage = {
+				start: 1,
+				end: plan.total,
+				text: plan.fullText,
+				score: 0,
+			};
+			const verifyJobs: { f: number; passages: Passage[]; request: Request }[] = [
+				{ f: 0, passages: [wholeFile], request: passageBatch(query, entries[plan.node]!.rel, [wholeFile]) },
+			];
+			const results = new Map<number, { score: number; heat: HeatRange[]; lines: number; bytes: number }>();
+			await this.#dispatch(verifyJobs, (job, outcome) => {
+				if (!outcome.ok) {
+					this.#fail("verification", outcome.error);
+					return;
+				}
+				let entry = results.get(job.f);
+				if (!entry) {
+					entry = { score: 0, heat: [], lines: 0, bytes: 0 };
+					results.set(job.f, entry);
+				}
+				job.passages.forEach((passage, k) => {
+					const score = noul(outcome, passageKey(k));
+					if (score === undefined) {
+						this.stats.errors++;
+						return;
+					}
+					const text = plainContent(passage);
+					entry.score = Math.max(entry.score, score);
+					entry.heat.push({
+						start: passage.start,
+						end: passage.end,
+						p: score,
+						snippet: takeChars(lines(text).find(line => line.trim().length > 0) ?? "", 100),
+					});
+					entry.lines += passage.end - passage.start + 1;
+					entry.bytes += Buffer.byteLength(text);
+					this.stats.windowsJudged++;
+				});
+			});
+			const hits: FindHit[] = [];
+			for (const [f, entry] of results) {
+				const plan = files[f]!;
+				this.stats.filesRead++;
+				this.stats.fileBytes += entry.bytes;
+				if (entry.score < THRESHOLD) continue;
+				hits.push({
+					rel: entries[plan.node]!.rel,
+					nameScore: nameScore[plan.node],
+					contentScore: entry.score,
+					ranges: mergeHeat(entry.heat, THRESHOLD),
+					linesSeen: entry.lines,
+					truncated: plan.truncated || entry.lines < plan.total,
+				});
+			}
+			hits.sort((a, b) => b.contentScore - a.contentScore);
+			return { hits, threshold: THRESHOLD, keywords, stats: this.stats };
+		}
+
 
 		// Wave 2: sketch routing over mixed-file cards.
 		const cards: { f: number; p: number }[] = [];

@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { FileType, type GlobMatch, listWorkspace } from "@oh-my-pi/pi-natives";
 import { formatAge, formatBytes } from "@oh-my-pi/pi-utils";
@@ -68,6 +69,28 @@ export async function buildDirectoryTree(cwd: string, options: BuildDirectoryTre
 		nativeTruncated = result.truncated;
 	} catch {
 		return emptyTree(rootPath);
+	}
+
+	// The native walker skips sockets, FIFOs, and devices. Supplement with a
+	// readdir pass so directory listings are complete (issue #16014).
+	try {
+		const dirents = await fs.readdir(rootPath, { withFileTypes: true });
+		const existingPaths = new Set(entries.map(e => e.path));
+		const supplemented = [...entries];
+		for (const dirent of dirents) {
+			if (existingPaths.has(dirent.name)) continue;
+			if (dirent.isDirectory() || dirent.isFile() || dirent.isSymbolicLink()) continue;
+			// Socket, FIFO, or device — the native walker skipped these.
+			supplemented.push({
+				path: dirent.name,
+				fileType: FileType.File,
+				mtime: 0,
+				size: 0,
+			});
+		}
+		entries = supplemented;
+	} catch {
+		// readdir failure is non-fatal; the native scan results stand.
 	}
 
 	return assembleTree(rootPath, entries, {
