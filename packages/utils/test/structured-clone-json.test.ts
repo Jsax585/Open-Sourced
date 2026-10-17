@@ -49,42 +49,33 @@ describe("structuredCloneJSON", () => {
 
 		delete child.bad; // the child is natively cloneable again
 
-		const copy = structuredCloneJSON(frozen) as { child: { when: unknown; keep: unknown } };
+		const copy = structuredCloneJSON(frozen);
 		expect(copy.child.when).toBeInstanceOf(Date);
 		expect("keep" in copy.child).toBe(true);
 	});
 
-	// A remembered failure must never outlive the value it was recorded on.
-	// Object.isFrozen(root) proves only that the root's own bindings cannot
-	// change — it says nothing about what the root yields or wraps, so neither
-	// shape below is a sound cache key. Observable through getter read counts:
-	// a cache hit means the getter is never re-read by a clone attempt, so a
-	// value that becomes cloneable stays pinned to the degraded JSON shape.
-	it("re-attempts structuredClone for frozen values on every call", () => {
-		let frozenReads = 0;
-		const frozen = Object.freeze({
-			get bad(): unknown {
-				frozenReads++;
-				return () => {};
+	// A remembered failure must never outlive the value it was recorded on, and
+	// `Object.isFrozen(root)` is not a sound cache key for one: it proves only
+	// that the root's own bindings cannot change, not what the root yields. A
+	// frozen getter can stop yielding an uncloneable member, and the value then
+	// stays pinned to the degraded JSON shape (a `Date` member serializes to a
+	// string) even though `structuredClone` can copy it natively again.
+	it("retries the native clone for a frozen value whose getter stops yielding an uncloneable member", () => {
+		let reads = 0;
+		const value = Object.freeze({
+			get member(): unknown {
+				reads++;
+				return reads === 1 ? () => {} : new Date(0);
 			},
 		});
-		let mutableReads = 0;
-		const mutable = {
-			get bad(): unknown {
-				mutableReads++;
-				return () => {};
-			},
-		};
 
-		expect(structuredCloneJSON(frozen)).toEqual({});
-		expect(structuredCloneJSON(mutable)).toEqual({});
-		expect(frozenReads).toBe(2); // structuredClone + JSON fallback
-		expect(mutableReads).toBe(2);
+		// The first read yields a function, so `structuredClone` throws and the
+		// JSON fallback reads the getter again, serializing the `Date` to a string.
+		expect(structuredCloneJSON(value)).toEqual({ member: "1970-01-01T00:00:00.000Z" });
 
-		structuredCloneJSON(frozen);
-		expect(frozenReads).toBe(4); // no remembered failure: both paths run again
-
-		structuredCloneJSON(mutable);
-		expect(mutableReads).toBe(4);
+		// A remembered failure would send this call straight to the JSON fallback,
+		// which reads the getter a third time and returns that string shape again.
+		const copy = structuredCloneJSON(value);
+		expect(copy.member).toBeInstanceOf(Date);
 	});
 });
