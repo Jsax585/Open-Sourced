@@ -595,4 +595,55 @@ describe("Vercel AI Gateway provider", () => {
 			route: "/v1/custom-evaluate",
 		});
 	});
+
+	test("resolveProviderModels drops static judgment when the live row moves to a new api", async () => {
+		await using tempDir = await TempDir.create("@pi-catalog-vercel-apiswitch-");
+		const jev = buildModel({
+			id: "typesafe-ai/jev",
+			name: "Jev",
+			baseUrl: "https://ai-gateway.vercel.sh",
+			provider: "vercel-ai-gateway",
+			api: "typesafe",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0.042, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 32_000,
+			maxTokens: 8192,
+		});
+		expect(jev.judgment?.route).toBe("/v1/evaluate");
+
+		const result = await resolveProviderModels(
+			{
+				providerId: "vercel-ai-gateway",
+				cacheProviderId: "vercel-ai-gateway-api-switch-test",
+				staticModels: [jev],
+				fetchDynamicModels: async () => [
+					{
+						id: "typesafe-ai/jev",
+						name: "Jev (chat)",
+						api: "anthropic-messages",
+						provider: "vercel-ai-gateway",
+						baseUrl: "https://ai-gateway.vercel.sh",
+						kind: "chat",
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 32_000,
+						maxTokens: 8192,
+					},
+				],
+				cacheDbPath: tempDir.join("models.db"),
+			},
+			"online",
+		);
+
+		expect(result.source).toBe("provider");
+		const row = result.models.find(model => model.id === "typesafe-ai/jev");
+		expect(row).toBeDefined();
+		expect(row?.api).toBe("anthropic-messages");
+		expect(row?.kind).toBe("chat");
+		// The static row carries a /v1/evaluate judgment contract for api
+		// typesafe; the live row moved apis, so no stale contract may survive.
+		expect(row?.judgment).toBeUndefined();
+	});
 });

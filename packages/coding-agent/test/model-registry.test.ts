@@ -2284,6 +2284,37 @@ describe("ModelRegistry", () => {
 				name: "Small embeddings",
 			});
 		});
+		test("an api override drops the prior api's judgment contract", () => {
+			const registry = readonlyRegistry({
+				providers: {
+					"vercel-ai-gateway": {
+						modelOverrides: { "typesafe-ai/jev": { api: "openai-decisions" } },
+					},
+				},
+			});
+			expect(registry.getError()).toBeUndefined();
+			const moved = registry.find("vercel-ai-gateway", "typesafe-ai/jev");
+			expect(moved?.api).toBe("openai-decisions");
+			expect(moved?.judgment).toBeUndefined();
+
+			const kept = readonlyRegistry({ providers: {} }).find("vercel-ai-gateway", "typesafe-ai/jev");
+			expect(kept?.judgment).toMatchObject({ route: "/v1/evaluate" });
+		});
+		test("a same-id definition on a new api drops the prior api's judgment contract", () => {
+			const registry = readonlyRegistry({
+				providers: {
+					"vercel-ai-gateway": {
+						baseUrl: "https://ai-gateway.vercel.sh",
+						apiKey: "test-key",
+						models: [{ id: "typesafe-ai/jev", api: "openai-decisions" }],
+					},
+				},
+			});
+			expect(registry.getError()).toBeUndefined();
+			const moved = registry.find("vercel-ai-gateway", "typesafe-ai/jev");
+			expect(moved?.api).toBe("openai-decisions");
+			expect(moved?.judgment).toBeUndefined();
+		});
 	});
 
 	describe("github-copilot oauth endpoint alignment", () => {

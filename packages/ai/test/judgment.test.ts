@@ -1214,6 +1214,42 @@ describe("NativeJudge", () => {
 		expect(result.usage.cost.total).toBe(0);
 	});
 
+	it("forwards images and mapped types through the decorated encode path", async () => {
+		const calls: { url: string; init: RequestInit | undefined }[] = [];
+		const judge = new NativeJudge({
+			apiKey: "v-key",
+			baseUrl: "https://gateway.example",
+			model: "eval-model",
+			supportsImages: true,
+			judgment: VERCEL_JUDGMENT,
+			fetch: async (url, init) => {
+				calls.push({ url: String(url), init });
+				return Response.json({
+					model: "eval-model",
+					answers: { urgent: { type: "boolean", probability: 0.9 } },
+					usage: { inputTokens: 12, outputTokens: 3 },
+				});
+			},
+		});
+
+		const result = await judge.judge({ ...request, images: [TINY_PNG] });
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0].url).toBe("https://gateway.example/v1/evaluate");
+		expect(new Headers(calls[0].init?.headers).get("TypeSafe-Danger-Zone-Images")).toBe("true");
+		const sent = JSON.parse(String(calls[0].init?.body));
+		expect(sent.questions.urgent.type).toBe("boolean");
+		expect(sent.model).toBe("eval-model");
+		const assets = sent.assets as Record<string, { type: string; format: string; data_base64: string }>;
+		expect(Object.keys(assets)).toHaveLength(1);
+		const reference = Object.keys(assets)[0];
+		expect(assets[reference]).toEqual({ type: "image", format: "png", data_base64: TINY_PNG.data });
+		expect(sent.state).toEqual([request.state, reference]);
+		expect(result.answers.urgent).toEqual({ type: "noul", noul: 0.9 });
+		expect(result.usage.input).toBe(12);
+		expect(result.usage.output).toBe(3);
+	});
+
 	it("maps a mixed request through a noul-only partial map and drops wire keys", async () => {
 		// The exact Vercel configuration: typeMap/valueMap cover noul only, but
 		// choice/score questions go out with canonical types and come back the
@@ -1300,13 +1336,15 @@ describe("NativeJudge", () => {
 		expect(result.answers["__proto__"]).toEqual({ type: "noul", noul: 0.95 });
 	});
 
-	it("rejects a route override that does not start with a slash", async () => {
-		const judge = new NativeJudge({
-			apiKey: "v-key",
-			baseUrl: "https://gateway.example",
-			judgment: { route: "v1/evaluate" },
-		});
-		await expect(judge.judge(request)).rejects.toBeInstanceOf(ConfigurationError);
+	it("rejects a route override that does not start with a slash", () => {
+		expect(
+			() =>
+				new NativeJudge({
+					apiKey: "v-key",
+					baseUrl: "https://gateway.example",
+					judgment: { route: "v1/evaluate" },
+				}),
+		).toThrow(ConfigurationError);
 	});
 
 	it("reads the discriminator from a custom typeField", async () => {

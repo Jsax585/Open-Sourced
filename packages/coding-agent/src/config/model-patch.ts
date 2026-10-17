@@ -282,6 +282,10 @@ export function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: 
 	const result = { ...base };
 	if (patch.name !== undefined) result.name = patch.name;
 	if (patch.api !== undefined) result.api = patch.api;
+	// Judgment wire policy is api-scoped (see mergeDynamicModel): a patch that
+	// moves the row to a new api must not inherit the prior api's contract.
+	// Patches cannot author judgment, so an outright drop is correct.
+	if (patch.api !== undefined && patch.api !== base.api) delete result.judgment;
 	if (patch.kind !== undefined) {
 		result.kind = patch.kind;
 		result.kindConfig = patch.kind;
@@ -335,6 +339,10 @@ export function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: 
 		result.headers = patch.headers;
 		result.resolveHeaders = patch.resolveHeaders;
 		compat = patch.compat;
+		// Judgment wire policy is api-scoped (see mergeDynamicModel); transport is
+		// rebuilt wholesale here, so the previous route's contract must not carry
+		// over — buildModel reapplies policy for the new route below.
+		delete result.judgment;
 		// A same-id definition that omits a lifetime or kind must not carry the
 		// previous route's configuration; buildModel reapplies policy for the new route.
 		if (patch.promptCache === undefined) {

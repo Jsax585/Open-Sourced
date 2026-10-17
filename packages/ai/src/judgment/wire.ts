@@ -96,6 +96,9 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 	const typeMap = config.typeMap;
 	const valueMap = config.valueMap;
 	const usageMap = config.usageMap;
+	if (route !== undefined && !route.startsWith("/")) {
+		throw new AIError.ConfigurationError(`judgment.route must start with "/": ${route}`);
+	}
 	if (RESERVED_TYPE_FIELDS.has(typeField)) {
 		throw new AIError.ConfigurationError(`judgment.typeField must not name reserved key "${typeField}"`);
 	}
@@ -126,9 +129,6 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 	return {
 		...inner,
 		target(baseUrl, model, key) {
-			if (route !== undefined && !route.startsWith("/")) {
-				throw new AIError.ConfigurationError(`judgment.route must start with "/": ${route}`);
-			}
 			const innerTarget = inner.target(baseUrl, model, key);
 			if (route === undefined) return innerTarget;
 			return {
