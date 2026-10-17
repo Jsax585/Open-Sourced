@@ -16,6 +16,7 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { ToolTier } from "@oh-my-pi/pi-agent-core";
 import { getAgentDir, logger, normalizePathForComparison } from "@oh-my-pi/pi-utils";
 
 /** File name of the approval cache inside the agent directory. */
@@ -26,6 +27,16 @@ const LEGACY_JSON_FILENAME = "approval-cache.json";
 
 /** `busy_timeout` for the rare case of two sessions writing at the same time. */
 const BUSY_TIMEOUT_MS = 5000;
+
+/**
+ * Grant key for one capability tier: a subject — an exact target, a directory key, or a
+ * `tool:<name>` subject — behind the tier that earned it, so a grant records what its approval
+ * actually authorized. Coverage runs from the call's tier upward, so approving a write also
+ * covers reads of that target, while approving a read never authorizes writes or exec calls.
+ */
+export function approvalGrantKey(capability: ToolTier, subject: string): string {
+	return `${capability}\0${subject}`;
+}
 
 /**
  * One remembered approval, in the same record shape in both tiers: a grant in
@@ -286,7 +297,7 @@ export class ApprovalCache implements ApprovalGrantStore {
 			db.run("PRAGMA synchronous = NORMAL");
 			db.run(SCHEMA);
 			migrateLegacyJson(db, this.filePath);
-			purgeCommandGrants(db);
+			purgeLegacyGrants(db);
 			return db;
 		} catch (err) {
 			db.close();
@@ -299,18 +310,35 @@ export class ApprovalCache implements ApprovalGrantStore {
 const migratedDirs = new Set<string>();
 
 /**
- * Drop grants keyed by command text (`bash: …`), which briefly recorded exact
- * commands. Only files and folders are remembered now, so those rows would sit
- * in the database doing nothing.
+ * Drop grants in shapes nothing checks any more: rows keyed by command text
+ * (`bash: …`), which briefly recorded exact commands, and rows without a
+ * capability-tier prefix, which predate tier-keyed grants (a read grant used to
+ * cover writes). Left in place they would sit in the database doing nothing.
  */
-function purgeCommandGrants(db: Database): void {
+function purgeLegacyGrants(db: Database): void {
 	try {
-		const stale = db.query("SELECT 1 FROM grants WHERE key LIKE 'bash: %' LIMIT 1").get();
+		const stale = db.query("SELECT 1 FROM grants WHERE key LIKE 'bash: %' OR instr(key, char(0)) = 0 LIMIT 1").get();
 		if (stale === null) return;
-		db.query("DELETE FROM grants WHERE key LIKE 'bash: %'").run();
-		logger.info("approval cache: dropped command-text grants");
+		db.query("DELETE FROM grants WHERE key LIKE 'bash: %' OR instr(key, char(0)) = 0").run();
+		logger.info("approval cache: dropped legacy grants");
 	} catch (err) {
-		logger.debug("approval cache: command-grant purge failed", { err: String(err) });
+		logger.debug("approval cache: legacy-grant purge failed", { err: String(err) });
+	}
+}
+
+/**
+ * Capability a pre-SQLite grant's tool implies, for the one-time JSON import: write tools
+ * authorized a write, the shell an exec call, everything else the read it was recorded under.
+ */
+function legacyCapability(tool: string): ToolTier {
+	switch (tool) {
+		case "write":
+		case "edit":
+			return "write";
+		case "bash":
+			return "exec";
+		default:
+			return "read";
 	}
 }
 
@@ -354,7 +382,9 @@ function migrateLegacyJson(db: Database, filePath: string): void {
 							? value.approvedAt
 							: new Date().toISOString();
 					const scope = "scope" in value && value.scope === "directory" ? "directory" : null;
-					insert.run(key, tool, approvedAt, scope);
+					// The old cache stored no capability: infer it from the tool that recorded the
+					// grant, falling back to read — the tightest reading of what it authorized.
+					insert.run(approvalGrantKey(legacyCapability(tool), key), tool, approvedAt, scope);
 					imported++;
 				}
 			}

@@ -2,18 +2,27 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Extension `ui.approve()` hosts now receive the grant answers' metadata (`folderLabel`, `exactGrant`, `fileTarget`, `exactAnswer`, `toolName`) and answer with `true` or `{ approved: true, scope?: "target" | "folder" | "tool", global?: boolean, once?: boolean }`, replacing the `"once" | "session" | "deny"` answer strings — which are still honored at runtime, so hosts that return them keep working.
+
 ### Added
 
-- Added the **Ask and remember** tool approval mode (`tools.approvalMode: always-ask-cached`, `--approval-mode always-ask-cached`): the first `read`, `write`, or `edit` touching a file asks once, and so does the first call of each exec tool; depending on the options selected by the user, approved targets skip their later prompts. Each read/write prompt carries a **Remember** checkbox beside its answers — *This Session* keeps the grant in this instance's memory, *Always* writes it to the `grants` table of `approval-cache.db` under the agent directory, where it covers every later session — and offers **Approve Directory** (the folder around the operation: every read and write below it), **Approve File** (the exact file), and **Approve Once** (this call only, nothing remembered). Prompts forced by a dangerous-command override or an explicit `prompt` policy still ask every call, and plain Approve/Deny prompts stay unchanged in every other mode.
+- Added the **Ask and remember** tool approval mode (`tools.approvalMode: always-ask-cached`, `--approval-mode always-ask-cached`): the first `read`, `write`, or `edit` touching a file asks once, and so does the first call of each exec tool; depending on the options selected by the user, approved targets skip their later prompts. Each read/write prompt carries a **Remember** checkbox beside its answers — *This Session* keeps the grant in this instance's memory, *Always* writes it to the `grants` table of `approval-cache.db` under the agent directory, where it covers every later session — and offers **Approve Directory** (the folder around the operation: every read and write below it), **Approve File** (the exact file), and **Approve Once** (this call only, nothing remembered). Prompts forced by a dangerous-command override, an explicit `prompt` policy, or a provider safety check still ask every call, and plain Approve/Deny prompts stay unchanged in every other mode.
 
 ### Changed
 
+- Grants are keyed by the capability they authorized, and cover that tier and the lower ones: approving a write also clears reads of that target, while a read approval never lets a write or an exec call through — folder grants included. Grants recorded before this keying are dropped once (they prompt again) instead of being read as broader than they were.
+- A directory read offers its own directory, never the parent that holds every sibling: `read ~/Desktop` answers with `Approve Directory: ~/Desktop`, where it used to grant all of `~`.
+- `grep` and `glob` report the folder (or file) they search, so a read grant covers them and a search is no longer a way around a read prompt.
 - With a first-party Anthropic model on the official API selected, the interactive UI opens the API connection at startup, on model switch, and when you start typing, so the next turn skips connection setup; third-party gateways and custom endpoints are never probed ([#16044](https://github.com/can1357/oh-my-pi/pull/16044) by [@H4vC](https://github.com/H4vC))
 
 ### Fixed
 
 - Fixed **Approve File** appearing for targets that are not files: a directory read (e.g. `read C:\Users\KR\Desktop`) no longer offers it — only a file target is named for a file.
 - Fixed the **Approve File** and **Approve Directory** tooltips describing themselves as "Approve this call and remember it": they now name the reads and writes each grant covers, for the session or for every session, and a non-file exact target reads "Approve this call and remember what it touched".
+- Fixed prompts raised by a provider safety check offering grant answers: they keep plain Approve/Deny, since a per-call check can never be remembered.
+- Fixed the ACP shell gate resolving approvals against the default agent directory instead of the active profile's `approval-cache.db`.
 - Fixed remembered approvals surviving a cache deletion until restart: every check re-reads `approval-cache.db`, so deleting the database, clearing its table, or using **Forget Remembered Approvals** revokes the grants immediately.
 
 ## [18.11.3] - 2026-10-16

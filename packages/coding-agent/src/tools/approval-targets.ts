@@ -9,6 +9,7 @@
  */
 import { isReadableUrlPath } from "@oh-my-pi/pi-tui/tools/read";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { InternalUrlRouter } from "../internal-urls/router";
 import { approvalCacheKeyForPath } from "./approval-cache";
 import { resolveToCwd } from "./path-utils";
@@ -27,6 +28,25 @@ export function approvalTargetNamesFile(target: string): boolean {
 		return !fs.statSync(target).isDirectory();
 	} catch {
 		return true;
+	}
+}
+
+/**
+ * The directory an exact target covers for a folder answer: a directory target is
+ * the folder itself (a directory read must offer its own directory, never the
+ * parent that would grant every sibling), a file target's parent is, and a path
+ * nothing occupies yet counts as a file so its parent is offered. `undefined`
+ * when the target names no filesystem path.
+ */
+export function approvalTargetDirectory(target: string): string | undefined {
+	const trimmed = target.replace(/[\\/]+$/, "");
+	if (trimmed.length === 0) return undefined;
+	const router = InternalUrlRouter.instance();
+	if (router.canHandle(router.normalize(trimmed)) || isReadableUrlPath(trimmed)) return undefined;
+	try {
+		return fs.statSync(trimmed).isDirectory() ? trimmed : path.dirname(trimmed);
+	} catch {
+		return path.dirname(trimmed);
 	}
 }
 

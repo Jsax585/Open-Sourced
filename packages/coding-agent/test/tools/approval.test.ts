@@ -272,6 +272,21 @@ describe("MCP fallback and prompt formatting", () => {
 		expect(selects[1]).toEqual(["Approve", "Deny"]);
 	});
 
+	it("honors the pre-grant answer strings hosts still send", async () => {
+		const write = tool("mcp__server__legacy", undefined, () => ["Path: /tmp/out"]);
+		const once = { select: async () => undefined, approve: async () => "once" as const };
+		const onceOutcome = await requestApproval(once, write, {}, "Critical pattern", []);
+		expect(onceOutcome).toMatchObject({ approved: true, once: true });
+
+		const session = { select: async () => undefined, approve: async () => "session" as const };
+		const sessionOutcome = await requestApproval(session, write, {}, "Critical pattern", []);
+		expect(sessionOutcome).toMatchObject({ approved: true });
+		expect(sessionOutcome.once).toBeUndefined();
+
+		const denied = { select: async () => undefined, approve: async () => "deny" as const };
+		expect((await requestApproval(denied, write, {}, "Critical pattern", [])).approved).toBe(false);
+	});
+
 	it("the dialog's compact prompt summarizes the details to one row, keeping origin, reason, and appendix", async () => {
 		const prompts: { full: string; compact: string }[] = [];
 		const ui = {

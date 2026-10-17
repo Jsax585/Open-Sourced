@@ -16,12 +16,13 @@ import {
 	type ApprovalGrants,
 	type ApprovalTier,
 	approvalAncestorDirectoryKeys,
+	approvalGrantKey,
 	commonApprovalDirectoryKey,
 	getApprovalGrants,
 } from "./approval-cache";
 
 import { cfgToolsApproval, cfgToolsApprovalMode } from "./settings";
-import { approvalTargetNamesFile } from "./approval-targets";
+import { approvalTargetDirectory, approvalTargetNamesFile } from "./approval-targets";
 
 export type { ToolApproval, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
 export type { ApprovalGrantStore, ApprovalGrant, ApprovalTier } from "./approval-cache";
@@ -29,6 +30,7 @@ export {
 	approvalAncestorDirectoryKeys,
 	approvalDirectoryCovers,
 	approvalDirectoryKey,
+	approvalGrantKey,
 	commonApprovalDirectoryKey,
 	getApprovalGrants,
 } from "./approval-cache";
@@ -174,10 +176,25 @@ function approvalCacheScopes(tool: ApprovalSubject, args: unknown): string[] {
 	return scopes;
 }
 
-/** Whether a grant covers a target key: exact, or through a granted ancestor directory. */
-function grantCovers(grants: ApprovalGrantStore, target: string): boolean {
-	if (grants.has(target)) return true;
-	return approvalAncestorDirectoryKeys(target).some(directory => grants.has(directory));
+/** Every capability tier, least to most privileged (the ordering {@link TIER_RANK} ranks). */
+const CAPABILITY_TIERS: readonly ToolTier[] = ["read", "write", "exec"];
+
+/** Capability tiers a grant at `capability` covers: itself and every more privileged one. */
+function grantTiersFor(capability: ToolTier): readonly ToolTier[] {
+	return CAPABILITY_TIERS.filter(tier => TIER_RANK[tier] >= TIER_RANK[capability]);
+}
+
+/**
+ * Whether a grant covers a call at `capability`: the subject's key at the call's tier or a more
+ * privileged one, or a granted ancestor directory at any of those tiers.
+ */
+function grantCovers(grants: ApprovalGrantStore, subject: string, capability: ToolTier): boolean {
+	const ancestors = approvalAncestorDirectoryKeys(subject);
+	return grantTiersFor(capability).some(
+		tier =>
+			grants.has(approvalGrantKey(tier, subject)) ||
+			ancestors.some(directory => grants.has(approvalGrantKey(tier, directory))),
+	);
 }
 
 /**
@@ -213,9 +230,9 @@ function resolveCachedModeApproval(
 		...(decision.policyKey ? { policyKey: decision.policyKey } : {}),
 	};
 	// The tool answer remembers the tool by name for this session, whatever the call.
-	if (grants.has(approvalToolKey(tool.name))) return { ...base, policy: "allow" };
+	if (grantCovers(grants, approvalToolKey(tool.name), decision.tier)) return { ...base, policy: "allow" };
 	const scopes = approvalCacheScopes(tool, args);
-	if (scopes.length > 0 && scopes.every(scope => grantCovers(grants, scope))) {
+	if (scopes.length > 0 && scopes.every(scope => grantCovers(grants, scope, decision.tier))) {
 		return { ...base, policy: "allow" };
 	}
 	const promptReason = decision.reason ?? (scopes.length > 0 ? "folder not yet approved" : "target not yet approved");
@@ -224,14 +241,16 @@ function resolveCachedModeApproval(
 		if (decision.tier === "read") return { ...base, policy: "allow" };
 		return { ...base, policy: "prompt", reason: promptReason };
 	}
-	if (targets.every(target => grantCovers(grants, target))) return { ...base, policy: "allow" };
+	if (targets.every(target => grantCovers(grants, target, decision.tier))) return { ...base, policy: "allow" };
 	return { ...base, policy: "prompt", reason: promptReason };
 }
 
 /**
  * The folder a "remember this folder" approval would grant for this call: the
- * shared directory of its path targets, or the directory scope a tool reports
- * (a shell command's cwd). `undefined` when the call names no filesystem path.
+ * shared directory of its path targets — a directory target is that directory
+ * itself, a file target's parent — or the directory scope a tool reports (a
+ * tool that scopes its approvals to a folder). `undefined` when the call names
+ * no filesystem path.
  */
 export function approvalFolderCandidate(
 	tool: ApprovalSubject,
@@ -240,7 +259,8 @@ export function approvalFolderCandidate(
 	const directories: string[] = approvalCacheScopes(tool, args).map(scope => scope.replace(/[\\/]+$/, ""));
 	for (const target of approvalCacheTargets(tool, args)) {
 		if (!path.isAbsolute(target)) continue;
-		directories.push(path.dirname(target));
+		const directory = approvalTargetDirectory(target);
+		if (directory !== undefined) directories.push(directory);
 	}
 	const key = commonApprovalDirectoryKey(directories);
 	if (key === undefined) return undefined;
@@ -249,34 +269,38 @@ export function approvalFolderCandidate(
 
 /**
  * Record every cache target of a call the user just approved into `tier`
- * (`session` for a plain approval, `global` for an "Always …" one). No-op for
- * tools without targets and for blank keys, so an approved call never widens a
- * grant beyond the target the prompt showed.
+ * (`session` for a plain approval, `global` for an "Always …" one), keyed by the
+ * capability the approval covered. No-op for tools without targets and for blank
+ * keys, so an approved call never widens a grant beyond the target the prompt showed.
  */
 export function recordApprovalCacheTargets(
 	tool: ApprovalSubject,
 	args: unknown,
 	grants: ApprovalGrants,
+	capability: ToolTier,
 	tier: ApprovalTier = "session",
 ): void {
-	for (const target of approvalCacheTargets(tool, args)) grants.record(target, tool.name, undefined, tier);
+	for (const target of approvalCacheTargets(tool, args)) {
+		grants.record(approvalGrantKey(capability, target), tool.name, undefined, tier);
+	}
 }
 
 /**
  * Record the folder grant a directory answer approved: every read or write
- * below that directory then skips its prompt. Returns the folder's label, or
- * `undefined` when the call names no filesystem path (the caller then falls
- * back to the exact targets).
+ * below that directory, at the approving tier and below, then skips its prompt.
+ * Returns the folder's label, or `undefined` when the call names no filesystem
+ * path (the caller then falls back to the exact targets).
  */
 export function recordApprovalFolderGrant(
 	tool: ApprovalSubject,
 	args: unknown,
 	grants: ApprovalGrants,
+	capability: ToolTier,
 	tier: ApprovalTier = "session",
 ): string | undefined {
 	const folder = approvalFolderCandidate(tool, args);
 	if (folder === undefined) return undefined;
-	grants.record(folder.key, tool.name, "directory", tier);
+	grants.record(approvalGrantKey(capability, folder.key), tool.name, "directory", tier);
 	return folder.label;
 }
 
@@ -668,6 +692,10 @@ export async function requestApproval(
 			...(toolName === undefined ? {} : { toolName }),
 		});
 		if (answer === true) return { approved: true };
+		// Hosts built against the pre-grant vocabulary still work: they approve a single call
+		// ("once"), approve it and record the grant the prompt named ("session"), or deny.
+		if (answer === "once") return { approved: true, once: true };
+		if (answer === "session") return { approved: true };
 		if (typeof answer === "object" && answer.approved === true) {
 			return {
 				approved: true,

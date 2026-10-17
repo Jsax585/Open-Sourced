@@ -289,6 +289,14 @@ export interface ExtensionApprovalPrompt {
 /** What an `approve()` dialog answered: denied, or approved with where the grant goes. */
 export type ExtensionApprovalAnswer =
 	| boolean
+	/**
+	 * Legacy answers from hosts written against the 18.11.3 vocabulary, still honored:
+	 * `"once"` approves this call only, `"session"` approves it and records the grant the
+	 * prompt named, and `"deny"` (like `false`) denies. New hosts answer {@link unknown}.
+	 */
+	| "once"
+	| "session"
+	| "deny"
 	| {
 			approved: true;
 			/**

@@ -16,6 +16,7 @@ import nativeDelegationTemplate from "../../prompts/tools/native-delegation.md" 
 import {
 	type ApprovalOutcome,
 	type ApprovalTier,
+	approvalGrantKey,
 	approvalToolKey,
 	denyError,
 	recordApprovalCacheTargets,
@@ -427,8 +428,10 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				pendingSafetyChecks.length > 0 ? ["Provider safety checks:", ...safetyCheckLines(pendingSafetyChecks)] : [];
 			// The grant answers are only meaningful for prompts this mode raised: policy-forced prompts
 			// (critical commands, explicit `prompt` rules) are never recorded, so they keep the plain
-			// Approve/Deny options.
-			const modeRaised = approvalMode === "always-ask-cached" && resolved.source === "mode";
+			// Approve/Deny options, and provider safety checks are per-call, so they never offer grants
+			// even when the mode itself raised the prompt.
+			const modeRaised =
+				approvalMode === "always-ask-cached" && resolved.source === "mode" && pendingSafetyChecks.length === 0;
 			let outcome: ApprovalOutcome;
 			try {
 				outcome = await requestApproval(uiContext, this.tool, resolvedArgs, approvalCheck.reason, safetyAppendix, {
@@ -454,16 +457,17 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			if (modeRaised && resolved.policy === "prompt" && outcome.once !== true) {
 				const tier: ApprovalTier = outcome.global === true ? "global" : "session";
 				if (outcome.scope === "tool") {
-					// The tool answer remembers the tool's name for this session — nothing else, and
-					// since it is never offered as an "Always …" answer it never reaches the global cache.
-					approvalGrants.record(approvalToolKey(this.tool.name), this.tool.name);
+					// The tool answer remembers the tool's name for this session, at the tier the call
+					// resolved to; since it is never offered as an "Always …" answer it never reaches
+					// the global cache.
+					approvalGrants.record(approvalGrantKey(resolved.tier, approvalToolKey(this.tool.name)), this.tool.name);
 				} else {
 					const folderGranted =
 						outcome.scope === "folder"
-							? recordApprovalFolderGrant(this.tool, resolvedArgs, approvalGrants, tier)
+							? recordApprovalFolderGrant(this.tool, resolvedArgs, approvalGrants, resolved.tier, tier)
 							: undefined;
 					if (folderGranted === undefined) {
-						recordApprovalCacheTargets(this.tool, resolvedArgs, approvalGrants, tier);
+						recordApprovalCacheTargets(this.tool, resolvedArgs, approvalGrants, resolved.tier, tier);
 					}
 				}
 			}
