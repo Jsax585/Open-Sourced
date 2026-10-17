@@ -51,6 +51,7 @@ import {
 	type ConfiguredThinkingLevel,
 	getConfiguredThinkingLevelMetadata,
 	isAutoThinking,
+	withStoredAutoSelector,
 } from "../thinking";
 import { sanitizeDisplayWarning, thinkingLevelGlyph } from "../render/render-utils";
 import { theme } from "../theme/theme";
@@ -330,21 +331,6 @@ type CompactionStrip = Extract<StripState, { purpose: "compaction" }>;
 /** Whether the compaction field still holds the text its pending warning was raised for. */
 function compactionConfirmPending(strip: CompactionStrip): boolean {
 	return strip.confirm !== undefined && strip.confirm.value === strip.input.getValue();
-}
-
-/**
- * Thinking strip levels with a stored `auto:<floor>[-<ceiling>]` selector kept as
- * its own chip (after plain `auto`, else after `off`), so confirming the
- * preselected chip writes the bounds back instead of plain `auto` or `inherit`.
- */
-function withStoredAutoSelector(
-	options: readonly ConfiguredThinkingLevel[],
-	current: ConfiguredThinkingLevel,
-): ConfiguredThinkingLevel[] {
-	if (!isAutoThinking(current) || options.includes(current)) return [...options];
-	const anchor = options.includes(AUTO_THINKING) ? AUTO_THINKING : ThinkingLevel.Off;
-	const at = options.indexOf(anchor) + 1;
-	return [...options.slice(0, at), current, ...options.slice(at)];
 }
 
 /**

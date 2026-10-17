@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 
 /**
@@ -57,4 +57,19 @@ export const AUTO_THINKING_LEVELS = [
  */
 export function isAutoThinking(level: unknown): level is AutoThinkingLevel {
 	return AUTO_THINKING_LEVELS.some(selector => selector === level);
+}
+
+/**
+ * Picker levels with a stored `auto:<floor>[-<ceiling>]` selector kept as its own
+ * entry (after plain `auto`, else after `off`), so confirming the preselected entry
+ * writes the bounds back instead of plain `auto`, `off` or `inherit`.
+ */
+export function withStoredAutoSelector(
+	options: readonly ConfiguredThinkingLevel[],
+	current: ConfiguredThinkingLevel | undefined,
+): ConfiguredThinkingLevel[] {
+	if (!isAutoThinking(current) || options.includes(current)) return [...options];
+	const anchor = options.includes(AUTO_THINKING) ? AUTO_THINKING : ThinkingLevel.Off;
+	const at = options.indexOf(anchor) + 1;
+	return [...options.slice(0, at), current, ...options.slice(at)];
 }

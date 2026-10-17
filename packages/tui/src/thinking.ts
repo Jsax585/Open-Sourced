@@ -11,6 +11,7 @@ import {
 	type AutoThinkingRange,
 	type ConfiguredThinkingLevel,
 	isAutoThinking,
+	withStoredAutoSelector,
 } from "./thinking-levels";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import { Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
@@ -25,6 +26,7 @@ export {
 	AUTO_THINKING_LEVELS,
 	AUTO_THINKING_RANGES,
 	isAutoThinking,
+	withStoredAutoSelector,
 };
 export type { AutoThinkingCeiling, AutoThinkingFloor, AutoThinkingLevel, AutoThinkingRange, ConfiguredThinkingLevel };
 

@@ -48,14 +48,16 @@ export function splitThinkingSuffix(
 	minColonIndex = -1,
 	options?: ThinkingSuffixOptions,
 ): { base: string; level?: ConfiguredThinkingLevel } {
-	if (options?.allowAutoAlias === true) {
-		// `:auto`, `:auto:<floor>`, or `:auto:<floor>-<ceiling>`. Matched as a whole because
-		// the selector carries its own colon, which the last-colon split below would cut.
-		const autoMatch = /:(auto(?::[a-zA-Z]+(?:-[a-zA-Z]+)?)?)$/i.exec(pattern);
-		if (autoMatch && autoMatch.index > minColonIndex) {
-			const level = parseAutoThinkingLevel(autoMatch[1].toLowerCase());
-			if (level) return { base: pattern.slice(0, autoMatch.index), level };
-		}
+	// `:auto`, `:auto:<floor>`, or `:auto:<floor>-<ceiling>`. Matched as a whole because
+	// the selector carries its own colon, which the last-colon split below would cut.
+	const autoMatch = /:(auto(?::[a-zA-Z]+(?:-[a-zA-Z]+)?)?)$/i.exec(pattern);
+	const autoLevel =
+		autoMatch && autoMatch.index > minColonIndex ? parseAutoThinkingLevel(autoMatch[1].toLowerCase()) : undefined;
+	if (autoMatch && autoLevel) {
+		if (options?.allowAutoAlias === true) return { base: pattern.slice(0, autoMatch.index), level: autoLevel };
+		// Without the auto opt-in, `:auto:<floor>` must not split as base `…:auto` plus a fixed
+		// `<floor>` effort: the whole selector belongs to the opted-in pass callers run next.
+		if (autoLevel !== AUTO_THINKING) return { base: pattern };
 	}
 	const colonIdx = pattern.lastIndexOf(":");
 	if (colonIdx <= minColonIndex) return { base: pattern };

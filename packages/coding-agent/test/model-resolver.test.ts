@@ -4,7 +4,12 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog/provider-models";
 import { logger } from "@oh-my-pi/pi-utils";
-import { parseModelString, splitThinkingSuffix } from "@oh-my-pi/pi-tui/overlays/model-selector";
+import {
+	MAX_THINKING_SUFFIX_OPTIONS,
+	parseModelString,
+	splitThinkingSuffix,
+} from "@oh-my-pi/pi-tui/overlays/model-selector";
+import { parseRetryFallbackSelector } from "@oh-my-pi/pi-coding-agent/session/retry-fallback-chains";
 import {
 	expandRoleAlias,
 	extractExplicitThinkingSelector,
@@ -1136,6 +1141,23 @@ describe("resolveModelRoleValue", () => {
 			allowAutoAlias: true,
 		});
 		expect(splitInvalidFloor.level).not.toBe("auto:invalid");
+	});
+
+	test("keeps a floor-only auto selector whole on strict-first paths", () => {
+		// Without the opt-in, `:auto:medium` must not split into id `…:auto` plus a fixed `medium`.
+		expect(splitThinkingSuffix("anthropic/claude-sonnet-4-5:auto:medium")).toEqual({
+			base: "anthropic/claude-sonnet-4-5:auto:medium",
+		});
+		expect(parseModelString("anthropic/claude-sonnet-4-5:auto:medium", MAX_THINKING_SUFFIX_OPTIONS)).toEqual({
+			provider: "anthropic",
+			id: "claude-sonnet-4-5",
+			thinkingLevel: "auto:medium",
+		});
+		expect(extractExplicitThinkingSelector("anthropic/claude-sonnet-4-5:auto:medium")).toBe("auto:medium");
+		const fallback = parseRetryFallbackSelector("anthropic/claude-sonnet-4-5:auto:medium");
+		expect(fallback?.id).toBe("claude-sonnet-4-5");
+		expect(fallback?.thinkingLevel).toBeUndefined();
+		expect(fallback?.autoThinkingLevel).toBe("auto:medium");
 	});
 });
 describe("resolveAgentPrewalkPattern", () => {
