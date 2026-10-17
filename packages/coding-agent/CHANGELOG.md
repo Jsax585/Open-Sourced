@@ -2,23 +2,12 @@
 
 ## [Unreleased]
 
-### Breaking Changes
-
-- Extension `ui.approve()` hosts now receive the grant answers' metadata (`folderLabel`, `exactGrant`, `fileTarget`, `exactAnswer`, `toolName`) and answer with `true` or `{ approved: true, scope?: "target" | "folder" | "tool", global?: boolean, once?: boolean }`, replacing the `"once" | "session" | "deny"` answer strings.
-
 ### Added
 
-- Added the **Ask and remember** tool approval mode (`tools.approvalMode: always-ask-cached`, `--approval-mode always-ask-cached`): the first `read`, `write`, or `edit` touching a file asks once, and so does the first call of each exec tool; approved targets skip their later prompts. Each prompt carries a **Remember** checkbox beside its answers — *This Session* keeps the grant in this instance's memory, *Always* writes it to the `grants` table of `approval-cache.db` under the agent directory, where it covers every later session — and offers **Approve Directory** (the folder around the call: every read and write below it), **Approve File** (the exact file), and **Approve Once** (this call only, nothing remembered). Prompts forced by a dangerous-command override or an explicit `prompt` policy still ask every call, and plain Approve/Deny prompts stay unchanged in every other mode.
-- Added an **Approve <tool> for session** answer to **Ask and remember** prompts for calls that are not file reads or writes (`bash`, `eval`, `browser`, `task`, …): one grant remembers that tool by name for the rest of the session — arguments never enter the key, nothing reaches `approval-cache.db`, and prompts forced by a tool or user `prompt` policy never offer it. A call with nothing to remember shows **Approve Once** in place of the plain approve answer.
-- Added the **Forget Remembered Approvals** settings action (Interaction → Approvals), shown as a **Clear cache** button: acting on the row empties the global `approval-cache.db` and forgets the session's approvals too, so the next read, write, or command asks again.
-- Reads of public web URLs (`http://`, `https://`, `www.`) never prompt in **Ask and remember** — their contents are already public, so there is nothing to remember; registered internal URLs (`xd://…`, `local://…`) still prompt once per normalized URL.
-- Tools opt into the mode through the new optional `AgentTool.approvalCacheTargets` and `approvalCacheScopes` hooks: the first reports the paths (or URL targets) a call touches, the second the directories it runs inside.
+- Added the **Ask and remember** tool approval mode (`tools.approvalMode: always-ask-cached`, `--approval-mode always-ask-cached`): the first `read`, `write`, or `edit` touching a file asks once, and so does the first call of each exec tool; depending on the options selected by the user, approved targets skip their later prompts. Each read/write prompt carries a **Remember** checkbox beside its answers — *This Session* keeps the grant in this instance's memory, *Always* writes it to the `grants` table of `approval-cache.db` under the agent directory, where it covers every later session — and offers **Approve Directory** (the folder around the operation: every read and write below it), **Approve File** (the exact file), and **Approve Once** (this call only, nothing remembered). Prompts forced by a dangerous-command override or an explicit `prompt` policy still ask every call, and plain Approve/Deny prompts stay unchanged in every other mode.
 
 ### Changed
 
-- Approval answers are named for what they grant: **Approve File** for a file target, **Approve** for a non-file exact target (a directory read, a registered internal URL), **Approve Directory** for a folder, **Approve <tool> for session** for a tool, and **Approve Once** when nothing is recorded. A call whose only target is a directory offers just **Approve Directory** and **Approve Once** — the exact answer would have repeated the directory grant — and hosts without the checkbox spell the cross-instance forms out as **Always Approve Directory** and **Always Approve**/**Always Approve File**.
-- Folder grants cover every read and write below them, and nothing else: the shell is an ordinary exec tool — `bash` prompts unless **Approve bash for session** approves it, and command text is never remembered — and speculative execution honors remembered grants before deciding a call is auto-allowed.
-- Session approvals are kept in the same record shape as the global cache: the in-memory tier stores the key, the tool, the approval time, and the folder scope exactly as a `grants` row does, so both tiers read one grant identically.
 - With a first-party Anthropic model on the official API selected, the interactive UI opens the API connection at startup, on model switch, and when you start typing, so the next turn skips connection setup; third-party gateways and custom endpoints are never probed ([#16044](https://github.com/can1357/oh-my-pi/pull/16044) by [@H4vC](https://github.com/H4vC))
 
 ### Fixed
