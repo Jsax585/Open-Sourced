@@ -98,6 +98,7 @@ export interface InternalUrlCallerContext {
 	cwd?: string;
 	sessionFile?: string;
 	sessionId?: string;
+	seanceSourceArtifactsDir?: string;
 }
 
 /**
