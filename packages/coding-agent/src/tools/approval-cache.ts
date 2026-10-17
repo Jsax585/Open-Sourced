@@ -27,7 +27,15 @@ const LEGACY_JSON_FILENAME = "approval-cache.json";
 /** `busy_timeout` for the rare case of two sessions writing at the same time. */
 const BUSY_TIMEOUT_MS = 5000;
 
+/**
+ * One remembered approval, in the same record shape in both tiers: a grant in
+ * this instance's memory and a row of the global `approval-cache.db` describe
+ * the same thing — the key that covers the call, the tool that recorded it,
+ * when it was approved, and whether it is a whole folder.
+ */
 export interface ApprovalGrant {
+	/** Cache key of the grant: a target path or URL, or a directory key with its trailing separator. */
+	key: string;
 	/** Tool whose call the user approved for this target (`read`, `write`, `edit`, …). */
 	tool: string;
 	/** ISO timestamp of the approving decision. */
@@ -64,14 +72,16 @@ export class SessionApprovals implements ApprovalGrantStore {
 		return this.#grants.has(key);
 	}
 
+	/** The grant behind `key`, in the same record shape {@link ApprovalCache.get} answers. */
+	get(key: string): ApprovalGrant | undefined {
+		return this.#grants.get(key);
+	}
+
 	record(key: string, tool = "", scope?: "directory"): void {
 		if (key.length === 0 || this.#grants.has(key)) return;
-		this.#grants.set(
-			key,
-			scope === "directory"
-				? { tool, approvedAt: new Date().toISOString(), scope }
-				: { tool, approvedAt: new Date().toISOString() },
-		);
+		const grant: ApprovalGrant = { key, tool, approvedAt: new Date().toISOString() };
+		if (scope !== undefined) grant.scope = scope;
+		this.#grants.set(key, grant);
 	}
 
 	/** Number of in-memory grants. */
@@ -146,6 +156,29 @@ export class ApprovalCache implements ApprovalGrantStore {
 		} catch (err) {
 			logger.debug("approval cache: read failed", { err: String(err), path: this.filePath });
 			return false;
+		} finally {
+			db.close();
+		}
+	}
+
+	/** The stored grant for `key`, in the same record shape {@link SessionApprovals.get} answers. */
+	get(key: string): ApprovalGrant | undefined {
+		const db = this.#open(false);
+		if (!db) return undefined;
+		try {
+			const row = db
+				.query<GrantRow, [string]>("SELECT key, tool, approved_at, scope FROM grants WHERE key = ?")
+				.get(key);
+			if (row === null) return undefined;
+			return {
+				key: row.key,
+				tool: row.tool,
+				approvedAt: row.approved_at,
+				...(row.scope === "directory" ? { scope: "directory" as const } : {}),
+			};
+		} catch (err) {
+			logger.debug("approval cache: read failed", { err: String(err), path: this.filePath });
+			return undefined;
 		} finally {
 			db.close();
 		}

@@ -424,11 +424,30 @@ describe("approval cache store", () => {
 		session.record("C:/work/notes.txt", "read");
 		expect(session.has("C:/work/notes.txt")).toBe(true);
 		expect(session.size).toBe(1);
+		// The in-memory record is the same shape a global row answers.
+		expect(session.get("C:/work/notes.txt")).toEqual({
+			key: "C:/work/notes.txt",
+			tool: "read",
+			approvedAt: expect.any(String),
+		});
 		// Nothing reached the global database, so a new instance (or a restarted one) sees no file.
 		expect(fs.existsSync(path.join(tempDir.path(), APPROVAL_CACHE_FILENAME))).toBe(false);
 		expect(new ApprovalCache(tempDir.path()).has("C:/work/notes.txt")).toBe(false);
 		session.clear();
 		expect(session.has("C:/work/notes.txt")).toBe(false);
+	});
+
+	it("stores one grant in the same record shape in memory and in the database", () => {
+		const session = new SessionApprovals();
+		const global = new ApprovalCache(tempDir.path());
+		for (const store of [session, global]) store.record("C:/work/dir/", "write", "directory");
+		const inMemory = session.get("C:/work/dir/")!;
+		const inDatabase = global.get("C:/work/dir/")!;
+		expect(inDatabase).toEqual({ ...inMemory, approvedAt: expect.any(String) });
+		expect(inDatabase.scope).toBe("directory");
+		// A key no tier holds answers undefined in both.
+		expect(session.get("C:/work/other")).toBeUndefined();
+		expect(global.get("C:/work/other")).toBeUndefined();
 	});
 
 	it("allows a key from either tier through the composite store", () => {
