@@ -19,6 +19,7 @@ import {
 import type { ToolSession } from "./index";
 import { renderCallChain, renderFunctionRun } from "./run-code";
 import { throwIfAborted } from "./tool-errors";
+import { formatModelData } from "../utils/tonl-tool-text";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { clampTimeout } from "./tool-timeouts";
 
@@ -304,11 +305,7 @@ async function runComputer(
 
 function stringifyReturnValue(value: unknown): string {
 	if (typeof value === "string") return value;
-	try {
-		return JSON.stringify(value, null, 2) ?? String(value);
-	} catch {
-		return String(value);
-	}
+	return formatModelData(value);
 }
 
 function populateCapabilityDetails(

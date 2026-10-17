@@ -10,6 +10,7 @@ import type { CustomTool } from "../extensibility/custom-tools/types";
 import type { ToolSession } from "../tools";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { schemaDeclaresIntentField } from "../utils/tool-schema";
+import { formatModelData } from "../utils/tonl-tool-text";
 
 import { cfgEvalToolsEnabled } from "../eval/settings";
 
@@ -129,7 +130,7 @@ function stripHarnessIntent(
 function resultText(value: unknown): string {
 	if (typeof value === "string") return value || "(empty result)";
 	if (value === null || value === undefined) return "(no result)";
-	return JSON.stringify(value, null, 2) ?? String(value);
+	return formatModelData(value);
 }
 
 function errorResult(

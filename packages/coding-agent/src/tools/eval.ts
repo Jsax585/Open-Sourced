@@ -38,6 +38,7 @@ import { resolveSpawnPolicy } from "../task/spawn-policy";
 import { canSpawnAtDepth } from "../task/types";
 import { webpExclusionForModel } from "@oh-my-pi/pi-tui/chat/image-loading";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
+import { formatModelData } from "../utils/tonl-tool-text";
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
 import { type EvalBackendsAllowance, resolveEvalBackends } from "./eval-backends";
@@ -164,12 +165,7 @@ interface FormattedDisplayJson {
  * the caller mirrors the full value to the session output artifact.
  */
 function formatDisplayJson(value: unknown, canSpill: boolean): FormattedDisplayJson {
-	let fullText: string;
-	try {
-		fullText = JSON.stringify(value, null, 2) ?? String(value);
-	} catch {
-		fullText = String(value);
-	}
+	const fullText = formatModelData(value);
 	const totalBytes = Buffer.byteLength(fullText, "utf-8");
 	if (totalBytes <= MAX_DISPLAY_TEXT_BYTES) {
 		return { fullText, previewText: fullText, detailsValue: value, spillFullValue: false };

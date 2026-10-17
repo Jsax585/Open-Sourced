@@ -1,6 +1,6 @@
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import type { JsDisplayOutput } from "../../eval/js/shared/types";
-
+import { formatModelData } from "../../utils/tonl-tool-text";
 /**
  * Accumulates a browser run's result entries: explicit `display()` payloads,
  * screenshot captions/images, and buffered stream text (`console.*`, `print`,
@@ -55,11 +55,7 @@ export class RunOutput {
 
 /** JSON.stringify that never throws (cycles/BigInt → String(value)). */
 export function safeJsonStringify(value: unknown): string {
-	try {
-		return JSON.stringify(value, null, 2);
-	} catch {
-		return String(value);
-	}
+	return formatModelData(value);
 }
 
 /** Pass a return value across the run boundary: structured-cloneable as-is, else JSON round-trip, else String. */
