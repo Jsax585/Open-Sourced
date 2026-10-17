@@ -235,7 +235,7 @@ export class ApprovalDialogComponent implements Component {
 		if (this.#closed) return;
 		this.#restartCountdown();
 		const armed = performance.now() >= this.#armedAt;
-		if (this.#full && matchesAppToolsExpand(keyData)) {
+		if (this.#hasMoreDetails && matchesAppToolsExpand(keyData)) {
 			this.#toggleExpanded();
 			return;
 		}
@@ -308,7 +308,7 @@ export class ApprovalDialogComponent implements Component {
 	 * changes) without a full prompt, so the host's own expand handling (tool previews) can run.
 	 */
 	toggleDetails(): boolean {
-		if (this.#closed || !this.#full) return false;
+		if (this.#closed || !this.#hasMoreDetails) return false;
 		this.#restartCountdown();
 		this.#toggleExpanded();
 		return true;
@@ -330,6 +330,19 @@ export class ApprovalDialogComponent implements Component {
 	}
 
 	/** The rows on show: the summary, or every detail once expanded. */
+	/**
+	 * Whether expanding shows anything the summary row does not: the full prompt is only worth a
+	 * Details option when it differs from what is already on screen.
+	 */
+	get #hasMoreDetails(): boolean {
+		if (!this.#full) return false;
+		// Compare the words, not the layout: a full prompt that only re-lays-out the summary row —
+		// the same details, one per line — has nothing extra to expand.
+		const words = (lines: readonly string[]): string =>
+			lines.join(" ").replaceAll("·", " ").replaceAll(/\s+/g, " ").trim();
+		return words(this.#full) !== words(this.#summary);
+	}
+
 	get #details(): readonly string[] {
 		return this.#expanded && this.#full ? this.#full : this.#summary;
 	}
@@ -395,7 +408,7 @@ export class ApprovalDialogComponent implements Component {
 			title: `Deny this call${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`,
 		});
 		const expandKey = appToolsExpandKey();
-		const expand = this.#full
+		const expand = this.#hasMoreDetails
 			? [
 					actionButton(this.#expanded ? "Less" : "Details", "expand", {
 						keys: expandKey,
@@ -522,12 +535,12 @@ export class ApprovalDialogComponent implements Component {
 			const hint = `${editorKeys("tui.select.up", "tui.select.down")} choose · ${formatKeyHint("enter")} confirm · ${editorKey("tui.select.cancel")} deny`;
 			if (draft?.hasDraft()) return `${hint} · ${editorKey("tui.input.submit")} deny and send`;
 			const scroll = overflows ? ` · ${editorKeys("tui.select.pageUp", "tui.select.pageDown")} scroll` : "";
-			const details = this.#full
+			const details = this.#hasMoreDetails
 				? ` · ${formatKeyHints([appToolsExpandKey()])} ${this.#expanded ? "less" : "details"}`
 				: "";
 			return `${hint}${scroll}${details}${draft ? " · type to steer instead" : ""}`;
 		}
-		const expand = this.#full
+		const expand = this.#hasMoreDetails
 			? ` · ${formatKeyHints([appToolsExpandKey()])} ${this.#expanded ? "less" : "details"}`
 			: "";
 		const hint = `${editorKey("tui.select.cancel")} deny${expand}`;

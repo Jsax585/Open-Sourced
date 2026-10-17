@@ -34,6 +34,7 @@
 - Fixed approval keys colliding on whitespace and literal selector paths: `" secret "` no longer shares a key with `secret`, and an existing literal `notes:1` keys as itself.
 - Fixed new files under a symlinked folder changing key once created: the key resolves a path's deepest existing ancestor and keeps the missing suffix.
 - Fixed the folder a prompt lists being read synchronously and without bound: the listing is asynchronous, capped at 200 entries (its counts then read as lower bounds), sanitized, and rendered from `src/prompts/tools/approval-folder.md`.
+- Fixed the approval prompt offering **Details** (`Ctrl+O`) when there was nothing more to show: the option and its hint now appear only when the full prompt carries content the summary row does not, and a prompt whose details already fit leaves `Ctrl+O` to tool-output expansion.
 - Fixed extension tools being unable to declare the per-target grant hooks: `ToolDefinition` and `CustomTool` now expose `approvalCacheTargets` and `approvalCacheScopes`, forwarded through the custom-tool bridge.
 
 ## [18.11.3] - 2026-10-16
