@@ -48,13 +48,6 @@ function getNestedObject(value: unknown, key: string): Record<string, unknown> |
 	return toObject(obj[key]);
 }
 
-function getNestedBoolean(value: unknown, key: string): boolean | undefined {
-	const obj = toObject(value);
-	if (!obj) return undefined;
-	const nested = obj[key];
-	return typeof nested === "boolean" ? nested : undefined;
-}
-
 function createSseResponse(events: unknown[]): Response {
 	const payload = `${events.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`).join("\n\n")}\n\n`;
 	return new Response(payload, {
@@ -970,8 +963,9 @@ describe("openai-completions compatibility", () => {
 
 		expect(payload?.enable_thinking).toBe(true);
 		expect(payload?.reasoning_effort).toBe("low");
-		const templateKwargs = getNestedObject(payload, "chat_template_kwargs");
-		expect(getNestedBoolean(templateKwargs, "reasoning_effort")).toBeUndefined();
+		// OpenAI-dialect siblings must not emit any chat-template kwargs copy:
+		// effort rides the top-level field only.
+		expect(payload).not.toHaveProperty("chat_template_kwargs");
 	});
 
 	it("replays reasoning history for a discovered Qwen 3.8 sibling", async () => {

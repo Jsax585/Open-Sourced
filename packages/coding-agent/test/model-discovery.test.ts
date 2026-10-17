@@ -4075,4 +4075,40 @@ describe("ModelRegistry runtime discovery", () => {
 			qwenPreserveThinking: true,
 		});
 	});
+
+	test("models config rejects wrong-typed replay compat overrides with a schema error", async () => {
+		// The schema declares replayReasoningContent/qwenPreserveThinking as
+		// booleans: a mistyped value ("yes") must fail config load with a
+		// schema error naming the key, not pass raw into model.compat. Without
+		// the schema declaration omptype keeps the unknown key and the raw
+		// string lands on compat (no error, model resolves).
+		writeRawModelsJson({
+			"custom-dashscope": {
+				baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+				api: "openai-completions",
+				auth: "none",
+				compat: {
+					replayReasoningContent: "yes",
+					qwenPreserveThinking: "yes",
+				},
+				models: [
+					{
+						id: "qwen-max",
+						name: "Qwen Max",
+						reasoning: true,
+					},
+				],
+			},
+		});
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+			fetch: async () => Response.json({}, { status: 200 }),
+		});
+		await registry.refresh();
+
+		const error = registry.getError();
+		expect(error?.message).toContain("Schema error");
+		expect(error?.message).toContain("replayReasoningContent");
+		expect(registry.find("custom-dashscope", "qwen-max")).toBeUndefined();
+	});
 });
