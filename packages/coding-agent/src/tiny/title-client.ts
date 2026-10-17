@@ -156,6 +156,14 @@ export function tinyModelEnvKey(): string {
 	const env = tinyModelEnv();
 	return `${env.PI_TINY_DEVICE ?? ""}|${env.PI_TINY_DTYPE ?? ""}`;
 }
+/**
+ * Resolved env key for a model; judge keys use a fixed "judge" key so device
+ * flips never invalidate them or un-fail them.
+ * @internal
+ */
+export function modelEnvKey(modelKey: TinyLocalModelKey): string {
+	return isTinyJudgeLocalModelKey(modelKey) ? "judge" : tinyModelEnvKey();
+}
 
 /**
  * Env for an ONNX inference subprocess with the resolved device/dtype —
@@ -187,7 +195,12 @@ export interface TinyWorkerLaunch extends SharedWorkerLaunch {
 
 /** How to start the ONNX worker for `modelKey` with the resolved device/dtype env. @internal */
 export function onnxLaunch(modelKey: TinyLocalModelKey, modelEnv: Record<string, string>): TinyWorkerLaunch {
-	const tag = `${packageJson.version}|onnx|${modelEnv.PI_TINY_DEVICE ?? ""}|${modelEnv.PI_TINY_DTYPE ?? ""}`;
+	const effectiveEnv = isTinyJudgeLocalModelKey(modelKey)
+		? Object.fromEntries(
+				Object.entries(modelEnv).filter(([key]) => key !== "PI_TINY_DEVICE" && key !== "PI_TINY_DTYPE"),
+			)
+		: modelEnv;
+	const tag = `${packageJson.version}|onnx|${effectiveEnv.PI_TINY_DEVICE ?? ""}|${effectiveEnv.PI_TINY_DTYPE ?? ""}`;
 	return {
 		label: `tiny onnx worker for ${modelKey}`,
 		backend: "onnx",
@@ -195,7 +208,7 @@ export function onnxLaunch(modelKey: TinyLocalModelKey, modelEnv: Record<string,
 		spawn(endpoint, logPath) {
 			const command = resolveWorkerSpawnCmd(TINY_WORKER_ARG);
 			const env = inferenceWorkerEnv({
-				...modelEnv,
+				...effectiveEnv,
 				[TINY_WORKER_SOCKET_ENV]: endpoint,
 				[TINY_WORKER_MODEL_ENV]: modelKey,
 				[TINY_WORKER_TAG_ENV]: tag,
@@ -336,7 +349,10 @@ export class TinyTitleClient {
 				this.#downloads.observe({ modelKey, status: "error" }, `MLX unavailable: ${message}`);
 			}
 		}
-		return connectTinyWorker(onnxLaunch(modelKey, tinyModelEnv()), modelKey);
+		return connectTinyWorker(
+			onnxLaunch(modelKey, isTinyJudgeLocalModelKey(modelKey) ? {} : tinyModelEnv()),
+			modelKey,
+		);
 	}
 
 	onProgress(listener: (event: TinyTitleProgressEvent) => void): () => void {
@@ -513,7 +529,7 @@ export class TinyTitleClient {
 		// Judge keys force the ONNX CPU backend (the MLX layout lacks the judge
 		// head): device/dtype settings never apply, so they must not respawn the
 		// 577MB worker either.
-		const envKey = isTinyJudgeLocalModelKey(modelKey) ? "judge" : tinyModelEnvKey();
+		const envKey = modelEnvKey(modelKey);
 		const existing = this.#workers.get(modelKey);
 		if (existing) {
 			// Device/dtype changed since connecting: reconnect once idle so in-flight
@@ -597,7 +613,7 @@ export class TinyTitleClient {
 	}
 
 	#hasFailed(modelKey: TinyLocalModelKey): boolean {
-		return this.#failedModels.get(modelKey) === tinyModelEnvKey();
+		return this.#failedModels.get(modelKey) === modelEnvKey(modelKey);
 	}
 
 	#fail(pending: PendingRequest, error: string | undefined): void {
@@ -608,7 +624,7 @@ export class TinyTitleClient {
 	}
 
 	#markFailedModel(pending: PendingRequest): void {
-		if (pending.kind !== "load") this.#failedModels.set(pending.modelKey, tinyModelEnvKey());
+		if (pending.kind !== "load") this.#failedModels.set(pending.modelKey, modelEnvKey(pending.modelKey));
 	}
 
 	#emitProgress(event: TinyTitleProgressEvent, error?: string): void {

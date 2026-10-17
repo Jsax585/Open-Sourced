@@ -24,6 +24,9 @@ import { tinyModelClient } from "../tiny/title-client";
 
 /** Plain softmax, no temperature (Julia-1 v1 raw softmax). */
 function softmax(logits: readonly number[]): number[] {
+	if (logits.some(logit => !Number.isFinite(logit))) {
+		throw new TypeError("non-finite logits in softmax");
+	}
 	const max = Math.max(...logits);
 	let sum = 0;
 	const exps = logits.map(logit => {
@@ -62,6 +65,9 @@ function toPayload(id: string, question: Question): JudgeQuestionPayload {
 
 function toAnswer(id: string, question: Question, logits: number[] | undefined): Answer {
 	if (logits === undefined) throw new JudgmentParseError(id, "", "no logits for question");
+	if (logits.some(logit => !Number.isFinite(logit))) {
+		throw new JudgmentParseError(id, "", "non-finite logits for question");
+	}
 	switch (question.type) {
 		case "choice": {
 			const labels = Object.keys(question.criteria);

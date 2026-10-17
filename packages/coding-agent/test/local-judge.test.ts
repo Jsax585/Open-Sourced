@@ -3,7 +3,8 @@ import { JudgmentParseError } from "@oh-my-pi/pi-ai";
 import type { JudgeQuestionPayload } from "@oh-my-pi/pi-coding-agent/tiny/title-protocol";
 import { LocalJudge } from "@oh-my-pi/pi-coding-agent/judgment/local-judge";
 import { tinyModelClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
-import { isTinyJudgeLocalModelKey } from "@oh-my-pi/pi-coding-agent/tiny/models";
+import { getTinyLocalModelSpec, isTinyJudgeLocalModelKey } from "@oh-my-pi/pi-coding-agent/tiny/models";
+import { JuliaJudgeModel } from "@oh-my-pi/pi-coding-agent/tiny/worker";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -209,5 +210,217 @@ describe("LocalJudge", () => {
 	it("routes julia-1 to the judge path and title keys away from it", () => {
 		expect(isTinyJudgeLocalModelKey("julia-1")).toBe(true);
 		expect(isTinyJudgeLocalModelKey("lfm2.5-230m")).toBe(false);
+	});
+
+	it("rejects non-finite logits with JudgmentParseError instead of returning NaN probabilities", async () => {
+		spyOn(tinyModelClient, "judge").mockResolvedValue({ logits: { q: [NaN, 1] } });
+		const judge = new LocalJudge("julia-1");
+
+		await expect(
+			judge.judge({
+				state: "refactor the scheduler",
+				questions: {
+					q: {
+						type: "choice",
+						instructions: "pick a tier",
+						criteria: { low: null, high: null },
+					},
+				},
+			}),
+		).rejects.toThrow(JudgmentParseError);
+
+		spyOn(tinyModelClient, "judge").mockResolvedValue({ logits: { q: [Infinity, 1] } });
+		await expect(
+			judge.judge({
+				state: "refactor the scheduler",
+				questions: {
+					q: {
+						type: "choice",
+						instructions: "pick a tier",
+						criteria: { low: null, high: null },
+					},
+				},
+			}),
+		).rejects.toThrow(JudgmentParseError);
+	});
+});
+
+describe("JuliaJudgeModel", () => {
+	const spec = getTinyLocalModelSpec("julia-1")!;
+	const fakeReply = { send: vi.fn() };
+
+	it("rejects unknown question.type server-side", async () => {
+		const model = new JuliaJudgeModel("julia-1", spec);
+		await expect(
+			model.judge(
+				{
+					type: "judge",
+					id: "1",
+					state: "test state",
+					questions: {
+						q: { type: "unknown" as unknown as "choice", instructions: "i", options: ["a", "b"] },
+					},
+				},
+				fakeReply,
+			),
+		).rejects.toThrow('judge question "q": unknown question type "unknown"');
+	});
+
+	it("rejects noul with options.length !== 2 server-side", async () => {
+		const model = new JuliaJudgeModel("julia-1", spec);
+		await expect(
+			model.judge(
+				{
+					type: "judge",
+					id: "1",
+					state: "test state",
+					questions: {
+						q: { type: "noul", instructions: "i", options: ["only_one"] as unknown as [string, string] },
+					},
+				},
+				fakeReply,
+			),
+		).rejects.toThrow('judge question "q": noul needs 2 options, got 1');
+
+		await expect(
+			model.judge(
+				{
+					type: "judge",
+					id: "2",
+					state: "test state",
+					questions: {
+						q: {
+							type: "noul",
+							instructions: "i",
+							options: ["no", "yes", "extra"] as unknown as [string, string],
+						},
+					},
+				},
+				fakeReply,
+			),
+		).rejects.toThrow('judge question "q": noul needs 2 options, got 3');
+	});
+
+	it("rejects empty option strings server-side", async () => {
+		const model = new JuliaJudgeModel("julia-1", spec);
+		await expect(
+			model.judge(
+				{
+					type: "judge",
+					id: "1",
+					state: "test state",
+					questions: {
+						q: { type: "choice", instructions: "i", options: ["valid", ""] },
+					},
+				},
+				fakeReply,
+			),
+		).rejects.toThrow('judge question "q": empty option string at index 1');
+
+		await expect(
+			model.judge(
+				{
+					type: "judge",
+					id: "2",
+					state: "test state",
+					questions: {
+						q: { type: "choice", instructions: "i", options: ["   ", "valid"] },
+					},
+				},
+				fakeReply,
+			),
+		).rejects.toThrow('judge question "q": empty option string at index 0');
+	});
+
+	it("rejects choice/score questions outside 2-20 options range", async () => {
+		const model = new JuliaJudgeModel("julia-1", spec);
+		await expect(
+			model.judge(
+				{
+					type: "judge",
+					id: "1",
+					state: "test state",
+					questions: {
+						q: { type: "choice", instructions: "i", options: ["only_one"] },
+					},
+				},
+				fakeReply,
+			),
+		).rejects.toThrow('judge question "q": needs 2-20 options, got 1');
+
+		await expect(
+			model.judge(
+				{
+					type: "judge",
+					id: "2",
+					state: "test state",
+					questions: {
+						q: {
+							type: "score",
+							instructions: "i",
+							options: Array.from({ length: 21 }, (_, index) => `level_${index}`),
+						},
+					},
+				},
+				fakeReply,
+			),
+		).rejects.toThrow('judge question "q": needs 2-20 options, got 21');
+	});
+
+	it("throws clear error when session output lacks logits tensor naming actual output keys", async () => {
+		const model = new JuliaJudgeModel("julia-1", spec);
+		const mockSession = {
+			run: vi.fn().mockResolvedValue({}),
+		};
+		const mockTokenizer = Object.assign(
+			(text: string) => ({
+				input_ids: { data: [...text].map(char => char.charCodeAt(0)) },
+			}),
+			{
+				mask_token: "<extra_id_0>",
+				mask_token_id: 4,
+				cls_token_id: 2,
+				sep_token_id: 1,
+				bos_token_id: 2,
+			},
+		);
+		spyOn(model, "load").mockResolvedValue({
+			tokenizer: mockTokenizer as never,
+			ort: {
+				Tensor: class {
+					constructor() {}
+				},
+			} as never,
+			session: mockSession as never,
+		});
+
+		await expect(
+			model.judge(
+				{
+					type: "judge",
+					id: "1",
+					state: "test state",
+					questions: {
+						q: { type: "choice", instructions: "i", options: ["a", "b"] },
+					},
+				},
+				fakeReply,
+			),
+		).rejects.toThrow("judge session output lacks logits tensor (got: [])");
+
+		mockSession.run.mockResolvedValue({ other_output: {} });
+		await expect(
+			model.judge(
+				{
+					type: "judge",
+					id: "2",
+					state: "test state",
+					questions: {
+						q: { type: "choice", instructions: "i", options: ["a", "b"] },
+					},
+				},
+				fakeReply,
+			),
+		).rejects.toThrow("judge session output lacks logits tensor (got: [other_output])");
 	});
 });

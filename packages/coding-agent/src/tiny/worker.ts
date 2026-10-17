@@ -193,7 +193,7 @@ function toJudgeSerializeRow(
  * (`encoder/config.json` + `julia_config.json`) does not match
  * `mlx-server.py` DOWNLOAD_PATTERNS, so the client forces the ONNX backend.
  */
-class JuliaJudgeModel {
+export class JuliaJudgeModel {
 	#modelKey: TinyLocalModelKey;
 	#spec: TinyTitleLocalModelSpec;
 	#runtime = new MemoizedRuntime<JuliaTransformersRuntime>();
@@ -300,8 +300,32 @@ class JuliaJudgeModel {
 		// the worker is reachable over the socket — 0 options divides by zero in
 		// serializeJudgeRow, 100+ options blows up batch memory.
 		for (const name of names) {
-			const count = request.questions[name]?.options.length ?? 0;
-			if (count < 2 || count > 20) throw new Error(`judge question "${name}" needs 2-20 options, got ${count}`);
+			const question = request.questions[name];
+			if (!question) {
+				throw new Error(`judge question "${name}": missing question payload`);
+			}
+			const type = question.type as unknown;
+			if (type !== "choice" && type !== "noul" && type !== "score") {
+				throw new Error(`judge question "${name}": unknown question type "${String(type)}"`);
+			}
+			const options = question.options;
+			if (!Array.isArray(options)) {
+				throw new Error(`judge question "${name}": options must be an array`);
+			}
+			const count = options.length;
+			if (type === "noul") {
+				if (count !== 2) {
+					throw new Error(`judge question "${name}": noul needs 2 options, got ${count}`);
+				}
+			} else if (count < 2 || count > 20) {
+				throw new Error(`judge question "${name}": needs 2-20 options, got ${count}`);
+			}
+			for (let i = 0; i < options.length; i++) {
+				const option = options[i];
+				if (typeof option !== "string" || option.trim().length === 0) {
+					throw new Error(`judge question "${name}": empty option string at index ${i}`);
+				}
+			}
 		}
 		const { tokenizer, ort, session } = await this.load(reply, request.id);
 		// Matches the reference clean(): scrub the marker string so id 4 appears only at option markers.
@@ -345,7 +369,12 @@ class JuliaJudgeModel {
 			marker_mask: new ort.Tensor("bool", mask, [names.length, count]),
 			qtype: new ort.Tensor("int64", qtype, [names.length]),
 		});
-		const values = Array.from(await output.logits!.getData());
+		const logitsTensor = output.logits;
+		if (!logitsTensor) {
+			const actualKeys = Object.keys(output).join(", ");
+			throw new Error(`judge session output lacks logits tensor (got: [${actualKeys}])`);
+		}
+		const values = Array.from(await logitsTensor.getData());
 		return sliceJudgeLogits(
 			names,
 			rows.map(row => row.markers.length),

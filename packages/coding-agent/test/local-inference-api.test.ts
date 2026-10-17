@@ -18,6 +18,8 @@ import { TINY_LOCAL_MODELS, isTinyJudgeLocalModelKey } from "@oh-my-pi/pi-coding
 import {
 	type TinyModelChatOptions,
 	TinyTitleClient,
+	modelEnvKey,
+	onnxLaunch,
 	tinyModelClient,
 } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
 import type {
@@ -328,5 +330,27 @@ describe("tiny model chat client", () => {
 		} finally {
 			await client.terminate();
 		}
+	});
+});
+
+describe("judge worker device independence", () => {
+	it("proves judge launch tag ignores device/dtype env", () => {
+		const judgeDefault = onnxLaunch("julia-1", {});
+		const judgeWithDevice = onnxLaunch("julia-1", {
+			PI_TINY_DEVICE: "webgpu",
+			PI_TINY_DTYPE: "fp16",
+		});
+		expect(judgeWithDevice.tag).toBe(judgeDefault.tag);
+		expect(judgeWithDevice.tag).toMatch(/\|onnx\|\|$/);
+
+		const chatWithDevice = onnxLaunch("lfm2.5-230m", {
+			PI_TINY_DEVICE: "webgpu",
+			PI_TINY_DTYPE: "fp16",
+		});
+		expect(chatWithDevice.tag).toMatch(/\|onnx\|webgpu\|fp16$/);
+	});
+
+	it("uses fixed 'judge' env key for judge models across device flips", () => {
+		expect(modelEnvKey("julia-1")).toBe("judge");
 	});
 });

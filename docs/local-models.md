@@ -24,7 +24,7 @@ An explicit empty chain keeps each workload local. Leaving a model-kind chain un
 
 Inspect the catalog with `omp models --kind tiny`, `omp models --kind tts`, and `omp models --kind stt`. Download tiny models with `omp tiny-models list`, `omp tiny-models download <model-id>`, or `omp tiny-models download all`. Run `omp setup speech` to choose, persist, and download the local speech and dictation models selected by their roles.
 
-The tiny-model CLI and source registry retain **title** and **memory** groupings because those are the workloads used to benchmark and recommend model sizes. They are not runtime model classes: every entry in both groups has catalog kind `tiny`, and any compatible entry can be assigned to `tiny`, `memory`, or `judge`. Choose based on quality and resource needs rather than the CLI grouping alone.
+The tiny-model CLI and source registry organize models into three groups: **title**, **memory**, and **judge**. The judge-group entry (catalog kind `judge`) is assignable only to `judge`, while title and memory entries (catalog kind `tiny`) accept `tiny`, `memory`, or `judge`. Choose based on quality and resource needs rather than the CLI grouping alone.
 
 ## Runtime / environment findings
 
