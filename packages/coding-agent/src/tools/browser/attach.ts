@@ -7,6 +7,7 @@ import type { Socket } from "bun";
 import type { Browser, Page, Target } from "puppeteer-core";
 import { throwIfAborted } from "../tool-errors";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { isPuppeteerTimeout } from "./launch";
 
 const ATTACH_TARGET_SKIP_PATTERN =
 	/request[\s_-]?handler|devtools|background[\s_-]?(?:page|host)|service[\s_-]?worker/i;
@@ -625,6 +626,7 @@ function selectRelayEntry(entries: RelayJsonEntry[], options: PickTargetOptions)
 /** Select relay pages from /json metadata before probing pages; enumerate targets when metadata offers no selection. */
 export async function pickElectronTarget(browser: Browser, options: PickTargetOptions = {}): Promise<Page> {
 	throwIfAborted(options.signal);
+	let noRelayPages = false;
 	if (options.relayJson) {
 		let entries = await fetchRelayEntries(options.relayJson, options.signal);
 		const needle = options.matcher?.toLowerCase();
@@ -647,6 +649,7 @@ export async function pickElectronTarget(browser: Browser, options: PickTargetOp
 		}
 		if (entries) {
 			const pageEntries = entries.filter(e => e.type === "page");
+			noRelayPages = !pageEntries.some(isAdoptableRelayEntry);
 			const selected = pageEntries.length > 0 ? selectRelayEntry(pageEntries, options) : null;
 			const targets = browser.targets();
 			if (options.preferVisible && !options.matcher) {
@@ -690,7 +693,7 @@ export async function pickElectronTarget(browser: Browser, options: PickTargetOp
 						);
 					} catch (error) {
 						throwIfAborted(options.signal);
-						if (error instanceof Error && error.name === "TimeoutError") {
+						if (isPuppeteerTimeout(error)) {
 							throw new ToolError(
 								"Selected tab did not become available before omp could attach; retry, or reopen it if it closed",
 							);
@@ -722,7 +725,25 @@ export async function pickElectronTarget(browser: Browser, options: PickTargetOp
 			);
 		} catch (error) {
 			throwIfAborted(options.signal);
-			if (error instanceof Error && error.name === "TimeoutError") {
+			if (isPuppeteerTimeout(error)) {
+				if (options.relayJson && noRelayPages) {
+					const status = await probeCdpStatus(`${options.relayJson.replace(/\/$/, "")}/json/version`, {
+						timeoutMs: RELAY_JSON_TIMEOUT_MS,
+						signal: options.signal,
+					});
+					throwIfAborted(options.signal);
+					if (status === 200) {
+						throw new ToolError(
+							"The browser relay is connected, but has no eligible tabs to adopt. Open a normal web page in the connected browser (internal pages such as edge://newtab cannot be adopted), then retry browser.open().",
+						);
+					}
+					if (status === 503) {
+						throw new ToolError(
+							"The browser relay extension disconnected. Reconnect it, then retry browser.open().",
+						);
+					}
+					throw new ToolError("The browser relay is unreachable. Check its endpoint, then retry browser.open().");
+				}
 				throw new ToolError("No page targets available on the attached browser");
 			}
 			throw error;
