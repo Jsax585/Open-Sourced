@@ -10,6 +10,7 @@ import type {
 } from "@oh-my-pi/pi-agent-core";
 import type { ToolExample } from "@oh-my-pi/pi-ai";
 import { isEnoent, prompt } from "@oh-my-pi/pi-utils";
+import { formatModelData } from "../utils/tonl-tool-text";
 import {
 	type DapBreakpointRecord,
 	type DapCapabilities,
@@ -398,13 +399,7 @@ function formatDataBreakpoints(breakpoints: DapDataBreakpointRecord[]): string {
 }
 
 function formatCustomResponse(command: string, body: unknown): string {
-	let serialized = "";
-	try {
-		serialized = JSON.stringify(body, null, 2) ?? "null";
-	} catch {
-		serialized = Bun.inspect(body);
-	}
-	return `${command} response:\n${serialized}`;
+	return `${command} response:\n${formatModelData(body)}`;
 }
 
 function formatSessions(sessions: DapSessionSummary[]): string {

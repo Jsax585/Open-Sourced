@@ -21,7 +21,7 @@ import { InternalUrlRouter } from "../internal-urls/router";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
 import { schemaDeclaresIntentField } from "../utils/tool-schema";
-import { callTool } from "./client";
+import { formatModelData, formatModelText } from "../utils/tonl-tool-text";
 import { formatMCPToolFailure, MCPTransportError } from "./errors";
 import { describeMCPCall, describeMCPResult, renderMCPCall, renderMCPResult } from "@oh-my-pi/pi-tui/tools/mcp";
 import type {
@@ -210,7 +210,7 @@ function formatMCPContent(content: MCPContent[]): Array<TextContent | ImageConte
 	for (const item of content) {
 		switch (item.type) {
 			case "text":
-				appendText(item.text);
+				appendText(formatModelText(item.text));
 				break;
 			case "image":
 				flushText();
@@ -230,20 +230,16 @@ function formatMCPContent(content: MCPContent[]): Array<TextContent | ImageConte
 }
 
 /**
- * Serialize an MCP result's structured payload as a fenced JSON block so it
- * reaches the model through the standard content channel — and the eval
- * `tool.*` and subagent proxy bridges that read the same result. Subject to the
- * usual spill/byte-cap machinery like any other text block.
- * Programmatic consumers use details.structuredContent instead of parsing this rendering.
+ * Serialize an MCP result's structured payload so it reaches the model through
+ * the standard content channel. Uniform record arrays are TONL when that is
+ * shorter; everything else stays fenced JSON. Programmatic consumers use
+ * details.structuredContent instead of parsing this rendering.
  */
 function formatStructuredContent(structured: Record<string, unknown>): string {
-	let json: string;
-	try {
-		json = JSON.stringify(structured, null, 2);
-	} catch {
-		return "";
-	}
-	return `\`\`\`json\n${json}\n\`\`\``;
+	const rendered = formatModelData(structured);
+	if (!rendered) return "";
+	const fence = /\[\d+\]\{/.test(rendered) ? "tonl" : "json";
+	return `\`\`\`${fence}\n${rendered}\n\`\`\``;
 }
 
 /**
