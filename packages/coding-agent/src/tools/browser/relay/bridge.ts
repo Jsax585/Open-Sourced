@@ -1066,7 +1066,7 @@ export class RelayBridge {
 					// The user detached while the extension socket was down. Invalidate
 					// the relay's stale sessions without fighting the explicit opt-out.
 					tab.forceFreshRootBeforeReplay = false;
-					this.#onTabDetached(tab.tabKey, "detached_while_disconnected", false);
+					this.#onTabDetached(tab.tabKey, "canceled_by_user", false);
 					continue;
 				}
 			}

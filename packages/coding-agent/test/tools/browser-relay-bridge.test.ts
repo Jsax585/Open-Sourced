@@ -573,13 +573,16 @@ describe("RelayBridge tab grouping", () => {
 		expect(cdp.messages.filter(message => message.method === "Target.attachedToTarget")).toHaveLength(3);
 	});
 
-	it("preserves a user's debugger detach while disconnected", async () => {
+	it("preserves a user's debugger detach while disconnected with auto-attach enabled", async () => {
 		const bridge = new RelayBridge({});
 		const ext = new FakeExtSocket();
 		connect(bridge, ext, [tab({ tabId: 1 })]);
 		const cdp = new FakeCdpSocket();
 		const connId = bridge.cdpConnected(cdp);
 		await attachPage(bridge, ext, cdp, connId, 1);
+		const autoAttachId = ++msgSeq;
+		bridge.cdpMessage(connId, JSON.stringify({ id: autoAttachId, method: "Target.setAutoAttach" }));
+		await waitFor(() => cdp.messages.some(message => message.id === autoAttachId), "initial auto-attach reply");
 
 		bridge.extClosed(ext);
 
