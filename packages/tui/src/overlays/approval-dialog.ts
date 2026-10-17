@@ -159,6 +159,8 @@ export class ApprovalDialogComponent implements Component {
 	readonly #summary: readonly string[];
 	readonly #full: readonly string[] | undefined;
 	#expanded = false;
+	/** Body width of the last render, or `undefined` before the first one. */
+	#renderedWidth: number | undefined;
 	readonly #panel: OverlayPanel;
 	readonly #body = new PanelRows();
 	readonly #choices = new PanelRows();
@@ -340,7 +342,13 @@ export class ApprovalDialogComponent implements Component {
 		// the same details, one per line — has nothing extra to expand.
 		const words = (lines: readonly string[]): string =>
 			lines.join(" ").replaceAll("·", " ").replaceAll(/\s+/g, " ").trim();
-		return words(this.#full) !== words(this.#summary);
+		if (words(this.#full) !== words(this.#summary)) return true;
+		// The same words, but a summary row the body clips: expanding wraps the full text, so what
+		// the row cut off is still worth a Details option.
+		const width = this.#renderedWidth;
+		if (width === undefined) return false;
+		const innerWidth = Math.max(1, width - 4);
+		return this.#summary.some(line => truncateToWidth(line, innerWidth) !== line);
 	}
 
 	get #details(): readonly string[] {
@@ -348,6 +356,9 @@ export class ApprovalDialogComponent implements Component {
 	}
 
 	render(width: number): readonly string[] {
+		// Remembered so {@link ApprovalDialogComponent.#hasMoreDetails} can tell whether the summary
+		// row is clipped at this width.
+		this.#renderedWidth = width;
 		const innerWidth = Math.max(1, width - 4);
 		let lines = this.#detailLines(innerWidth);
 		const rows = Math.max(1, Math.min(lines.length, MAX_DETAIL_ROWS));
