@@ -46,6 +46,7 @@ import {
 import { approvalTargetKey } from "@oh-my-pi/pi-coding-agent/tools/approval-targets";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { getAgentDir, isRecord, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
@@ -257,13 +258,17 @@ describe("always-ask-cached resolution", () => {
 		};
 		expect(approvalFolderCandidate(single, {})).toEqual({
 			key: approvalDirectoryKey(path.join(cwd, "TestDir")),
-			label: approvalDirectoryKey(path.join(cwd, "TestDir")).replace(/[\\/]+$/, ""),
+			label: shortenPath(approvalDirectoryKey(path.join(cwd, "TestDir")).replace(/[\\/]+$/, "")),
 		});
 		const command: AgentTool = {
 			...single,
 			approvalCacheScopes: () => [approvalDirectoryKey(path.join(cwd, "TestDir"))],
 		};
 		expect(approvalFolderCandidate(command, {})).toBeDefined();
+		// A filesystem root keeps its own name: stripping the separator would leave an empty label.
+		const rootKey = approvalDirectoryKey(path.parse(cwd).root);
+		const atRoot: AgentTool = { ...single, approvalCacheTargets: () => [path.parse(cwd).root] };
+		expect(approvalFolderCandidate(atRoot, {})).toEqual({ key: rootKey, label: rootKey });
 		const urls: AgentTool = {
 			...single,
 			approvalCacheTargets: () => ["xd://todo"],
@@ -926,7 +931,7 @@ describe("always-ask-cached wrapper cycle", () => {
 		);
 		expect(approve).toHaveBeenCalledTimes(1);
 		const [prompt] = approve.mock.calls[0] as unknown as [{ folderLabel?: string }];
-		expect(prompt.folderLabel).toBe(approvalDirectoryKey(dir).replace(/[\\/]+$/, ""));
+		expect(prompt.folderLabel).toBe(shortenPath(approvalDirectoryKey(dir).replace(/[\\/]+$/, "")));
 		expect(
 			getApprovalGrants(settings.getAgentDir()).session.has(approvalGrantKey("write", approvalDirectoryKey(dir))),
 		).toBe(true);
@@ -952,7 +957,9 @@ describe("always-ask-cached wrapper cycle", () => {
 		);
 		expect(approve).toHaveBeenCalledTimes(2);
 		const [nestedPrompt] = (approve.mock.calls[1] ?? []) as unknown as [{ folderLabel?: string }];
-		expect(nestedPrompt?.folderLabel).toBe(approvalDirectoryKey(path.join(dir, "sub")).replace(/[\\/]+$/, ""));
+		expect(nestedPrompt?.folderLabel).toBe(
+			shortenPath(approvalDirectoryKey(path.join(dir, "sub")).replace(/[\\/]+$/, "")),
+		);
 		expect(
 			getApprovalGrants(settings.getAgentDir()).session.has(
 				approvalGrantKey("write", approvalDirectoryKey(path.join(dir, "sub"))),
@@ -1027,8 +1034,8 @@ describe("always-ask-cached wrapper cycle", () => {
 		// The exact answer would only repeat the directory grant, so the folder answers and the
 		// one-shot are all the prompt offers (hosts without the checkbox spell both lifetimes out).
 		expect(select.mock.calls[0]![1]).toEqual([
-			`Approve Directory: ${approvalDirectoryKey(dir).replace(/[\\/]+$/, "")}`,
-			`Always Approve Directory: ${approvalDirectoryKey(dir).replace(/[\\/]+$/, "")}`,
+			`Approve Directory: ${shortenPath(approvalDirectoryKey(dir).replace(/[\\/]+$/, ""))}`,
+			`Always Approve Directory: ${shortenPath(approvalDirectoryKey(dir).replace(/[\\/]+$/, ""))}`,
 			APPROVAL_ONCE_LABEL,
 			APPROVAL_DENY_LABEL,
 		]);
@@ -1156,7 +1163,7 @@ describe("always-ask-cached wrapper cycle", () => {
 
 		await wrapper.execute("always-dir", { path: path.join(dir, "One.txt") }, undefined, undefined, context(settings));
 		expect(select.mock.calls[0]![1][2]).toBe(
-			`Always Approve Directory: ${approvalDirectoryKey(dir).replace(/[\\/]+$/, "")}`,
+			`Always Approve Directory: ${shortenPath(approvalDirectoryKey(dir).replace(/[\\/]+$/, ""))}`,
 		);
 		expect(readGrants(tempDir.path())).toEqual([
 			expect.objectContaining({ key: approvalGrantKey("write", approvalDirectoryKey(dir)), scope: "directory" }),
@@ -1236,7 +1243,7 @@ describe("always-ask-cached wrapper cycle", () => {
 		await wrapper.execute("exec-folder-answer", { command: "npm test" }, undefined, undefined, context(settings));
 		expect(select).toHaveBeenCalledTimes(1);
 		expect(select.mock.calls[0]![1][0]).toBe(
-			`Approve Directory: ${approvalDirectoryKey(dir).replace(/[\\/]+$/, "")}`,
+			`Approve Directory: ${shortenPath(approvalDirectoryKey(dir).replace(/[\\/]+$/, ""))}`,
 		);
 		expect(
 			getApprovalGrants(settings.getAgentDir()).session.has(approvalGrantKey("exec", approvalDirectoryKey(dir))),

@@ -17,6 +17,7 @@ import { approvalDirectoryKey } from "@oh-my-pi/pi-coding-agent/tools/approval-c
 import { approvalTargetKey } from "@oh-my-pi/pi-coding-agent/tools/approval-targets";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { Settings } from "../../src/config/settings";
 import { EditTool } from "../../src/edit";
 import type { ToolSession } from "../../src/tools";
@@ -289,6 +290,17 @@ describe("MCP fallback and prompt formatting", () => {
 		expect((await requestApproval(denied, write, {}, "Critical pattern", [])).approved).toBe(false);
 	});
 
+	it("keeps the host's once answer, so Approve Once records nothing", async () => {
+		const write = tool("mcp__server__write", undefined, () => ["Path: /tmp/out"]);
+		const once = { select: async () => undefined, approve: async () => ({ approved: true, once: true }) as const };
+		expect(await requestApproval(once, write, {})).toMatchObject({ approved: true, once: true });
+		// A host approving without `once` keeps the grant the prompt named.
+		const plain = { select: async () => undefined, approve: async () => ({ approved: true }) as const };
+		const outcome = await requestApproval(plain, write, {});
+		expect(outcome.approved).toBe(true);
+		expect(outcome.once).toBeUndefined();
+	});
+
 	it("the dialog's compact prompt summarizes the details to one row, keeping origin, reason, and appendix", async () => {
 		const prompts: { full: string; compact: string }[] = [];
 		const ui = {
@@ -343,7 +355,7 @@ describe("MCP fallback and prompt formatting", () => {
 				approvalCacheTargets: () => [path.join(desktop, "notes.txt")],
 			};
 			await requestApproval(ui, read, {});
-			const label = approvalDirectoryKey(desktop).replace(/[\\/]+$/, "");
+			const label = shortenPath(approvalDirectoryKey(desktop).replace(/[\\/]+$/, ""));
 			expect(prompts[0]!.full.split("\n")).toEqual([
 				"Allow tool: read",
 				`Folder: ${label} — 3 entries (1 folder, 2 files)`,
@@ -389,7 +401,7 @@ describe("MCP fallback and prompt formatting", () => {
 			await requestApproval(ui, write, {});
 			expect(prompts[0]!.compact.split("\n")).toEqual([
 				"Allow tool: write",
-				`Folder: ${approvalDirectoryKey(folder).replace(/[\\/]+$/, "")} — 6 entries (0 folders, 6 files)`,
+				`Folder: ${shortenPath(approvalDirectoryKey(folder).replace(/[\\/]+$/, ""))} — 6 entries (0 folders, 6 files)`,
 				"  - a.txt",
 				"  - b.txt",
 				"  - c.txt",

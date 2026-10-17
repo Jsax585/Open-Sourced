@@ -43,6 +43,9 @@ export function approvalTargetDirectory(target: string): string | undefined {
 	if (trimmed.length === 0) return undefined;
 	const router = InternalUrlRouter.instance();
 	if (router.canHandle(router.normalize(trimmed)) || isReadableUrlPath(trimmed)) return undefined;
+	// A filesystem root is its own directory: stripping its separator leaves POSIX "" and Windows
+	// "C:", which names the drive's current directory rather than the root.
+	if (path.parse(target).root === target) return target;
 	try {
 		return fs.statSync(trimmed).isDirectory() ? trimmed : path.dirname(trimmed);
 	} catch {

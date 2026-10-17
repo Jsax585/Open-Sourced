@@ -6,6 +6,7 @@
  * - compare a tool capability tier against the active approval mode,
  * - format the generic approval prompt body.
  */
+import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { AgentTool, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
 import * as path from "node:path";
 import type { Settings } from "../config/settings";
@@ -274,7 +275,11 @@ export function approvalFolderCandidate(
 	}
 	const key = commonApprovalDirectoryKey(directories);
 	if (key === undefined) return undefined;
-	return { key, label: key.replace(/[\\/]+$/, "") };
+	// A filesystem root keeps its own name: stripping the separator would leave POSIX "" or a
+	// drive-relative "C:". The label is display-only — the key is what the grant records — so it
+	// shortens a home prefix.
+	const label = shortenPath(path.parse(key).root === key ? key : key.replace(/[\\/]+$/, ""));
+	return { key, label };
 }
 
 /**
@@ -708,9 +713,10 @@ export async function requestApproval(
 	const folder = cacheAnswers ? approvalFolderCandidate(tool, args) : undefined;
 	const folderLabel = folder?.label;
 	// What an "Approve Directory" answer would cover: the folder's own entries, shown in the
-	// prompt so the folder is never approved unseen.
+	// prompt so the folder is never approved unseen. Reads through the grant key (a real path),
+	// not the display label, which may be home-shortened.
 	const folderListing =
-		folderLabel === undefined ? undefined : approvalFolderListing(folderLabel, APPROVAL_FOLDER_FULL_LISTING);
+		folder === undefined ? undefined : approvalFolderListing(folder.key, APPROVAL_FOLDER_FULL_LISTING);
 	const targets = cacheAnswers ? approvalCacheTargets(tool, args) : [];
 	const exactGrant = targets.length > 0;
 	// The file name is for file targets only: a directory or URL target keeps the plain
@@ -747,6 +753,7 @@ export async function requestApproval(
 		if (typeof answer === "object" && answer.approved === true) {
 			return {
 				approved: true,
+				...(answer.once === true ? { once: true } : {}),
 				...(answer.scope === undefined ? {} : { scope: answer.scope }),
 				...(answer.global === true ? { global: true } : {}),
 			};
