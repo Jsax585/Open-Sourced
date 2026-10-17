@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Serply as a web search provider; authenticate with `SERPLY_API_KEY` or `/login serply` ([#12021](https://github.com/can1357/oh-my-pi/pull/12021) by [@googio](https://github.com/googio))
+
 ## [18.12.0] - 2026-10-17
 
 ### Added
