@@ -4,9 +4,8 @@
  * The first read/write operation on a target prompts. When the user approves it,
  * the resolved target key is recorded in `approval-cache.db` (SQLite) under the
  * active agent directory (e.g. `~/.omp/agent/approval-cache.db`) so later
- * operations on the same target run without asking again. Exec-tier calls are
- * cached per exact command, and a "remember this folder" answer records the
- * directory instead; see `tools.approvalScope`.
+ * operations on the same target run without asking again. A directory answer
+ * records the folder around the call instead.
  *
  * IO is best-effort: an unreadable or corrupt database degrades to "nothing
  * approved" — prompting more, never allowing more — and a failed write logs and

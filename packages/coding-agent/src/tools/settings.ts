@@ -332,7 +332,7 @@ export const cfgToolsApprovalMode = register({
 				value: "always-ask-cached",
 				label: "Ask and remember",
 				description:
-					"Prompt once per file or folder, then remember it; commands are covered through their folder. 'Approve File' keeps the grant for this session, 'Always Approve File' keeps it for good. Dangerous commands and explicit prompt policies still ask every time.",
+					"Ask to approve reads, writes and executes. Options will appear to remember these approvals and not ask again.",
 			},
 			{
 				value: "write",
@@ -345,35 +345,6 @@ export const cfgToolsApprovalMode = register({
 				label: "Yolo",
 				description:
 					"Auto-approve read, write, and exec tools. User policy can still require confirmation or block calls.",
-			},
-		],
-	},
-});
-
-// What 'Ask and remember' records when a call is approved without the folder answer.
-//   "target" — the exact file path or command text (each needs its own approval).
-//   "folder" — the whole folder around the call: every read/write below it, and every
-//              command that runs inside it.
-export const cfgToolsApprovalScope = register({
-	id: "tools.approvalScope",
-	type: "enum",
-	values: ["target", "folder"] as const,
-	default: "target",
-	ui: {
-		tab: "interaction",
-		group: "Approvals",
-		label: "Remembered Scope",
-		description: "What a plain approval remembers in 'Ask and remember': the exact file, or the folder around it.",
-		options: [
-			{
-				value: "target",
-				label: "Exact item",
-				description: "Remember the approved file; the directory answers grant its folder instead.",
-			},
-			{
-				value: "folder",
-				label: "Whole folder",
-				description: "Remember the folder around the approved file (or a command's working directory).",
 			},
 		],
 	},
@@ -393,6 +364,7 @@ export const cfgToolsForgetApprovals = register({
 		description:
 			"Delete every file and folder remembered in approval-cache.db, and forget the approvals remembered in this session too. The next read, write, or command asks again.",
 		action: true,
+		actionLabel: "Clear cache",
 	},
 });
 

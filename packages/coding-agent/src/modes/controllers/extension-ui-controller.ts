@@ -44,7 +44,13 @@ import type { InteractiveModeContext, InteractiveSelectorDialogOptions } from ".
 import { normalizeCustomMessagePayload, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { disambiguateDisplayLabels, sanitizeCarriageReturns } from "@oh-my-pi/pi-tui/render/render-utils";
 import { setExtensionTerminalTitle, setSessionTerminalTitle } from "../../utils/title-generator";
-import { APPROVAL_DENY_LABEL, approvalApproveOptionLabel, approvalDirectoryOptionLabel } from "../../tools/approval";
+import {
+	APPROVAL_DENY_LABEL,
+	APPROVAL_ONCE_LABEL,
+	approvalApproveOptionLabel,
+	approvalDirectoryOptionLabel,
+	approvalToolOptionLabel,
+} from "../../tools/approval";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { launchTerminal } from "../../subprocess/terminal-launch";
 
@@ -676,19 +682,30 @@ export class ExtensionUiController {
 	): Promise<ExtensionApprovalAnswer> {
 		const folderLabel = prompt.folderLabel;
 		const exactGrant = prompt.exactGrant === true;
-		const fileOption = approvalApproveOptionLabel(exactGrant, false);
-		const alwaysFileOption = exactGrant ? approvalApproveOptionLabel(exactGrant, true) : undefined;
+		const fileGrant = exactGrant && prompt.fileTarget !== false;
+		const exactAnswer = prompt.exactAnswer ?? exactGrant;
+		const fileOption = approvalApproveOptionLabel(fileGrant, false);
+		const alwaysFileOption = exactAnswer ? approvalApproveOptionLabel(fileGrant, true) : undefined;
 		const directoryOption = folderLabel === undefined ? undefined : approvalDirectoryOptionLabel(folderLabel, false);
 		const alwaysDirectoryOption =
 			folderLabel === undefined ? undefined : approvalDirectoryOptionLabel(folderLabel, true);
+		const toolName = prompt.toolName;
+		const toolOption = toolName === undefined ? undefined : approvalToolOptionLabel(toolName);
+		// "Approve Once" accompanies the grant answers, and stands in for the plain answer when the
+		// call records no exact target — that answer would record just as little.
+		const offersGrants = folderLabel !== undefined || exactGrant || toolName !== undefined;
+		const onceOption = offersGrants ? APPROVAL_ONCE_LABEL : undefined;
+		const plainOption = exactAnswer || onceOption === undefined ? fileOption : undefined;
 		const request: CollabUiRequestDraft = {
 			kind: "select",
 			title: prompt.full,
 			options: [
 				...(directoryOption === undefined ? [] : [directoryOption]),
-				fileOption,
+				...(toolOption === undefined ? [] : [toolOption]),
+				...(plainOption === undefined ? [] : [plainOption]),
 				...(alwaysDirectoryOption === undefined ? [] : [alwaysDirectoryOption]),
 				...(alwaysFileOption === undefined ? [] : [alwaysFileOption]),
+				...(onceOption === undefined ? [] : [onceOption]),
 				APPROVAL_DENY_LABEL,
 			],
 		};
@@ -723,7 +740,9 @@ export class ExtensionUiController {
 					const dialog = new ApprovalDialogComponent(
 						prompt.compact,
 						{
-							onApprove: always => settle(approvalApproveOptionLabel(exactGrant, always)),
+							onApprove: always => settle(approvalApproveOptionLabel(fileGrant, always)),
+							...(toolOption === undefined ? {} : { onApproveTool: () => settle(toolOption) }),
+							...(onceOption === undefined ? {} : { onApproveOnce: () => settle(onceOption) }),
 							...(folderLabel === undefined
 								? {}
 								: {
@@ -736,7 +755,8 @@ export class ExtensionUiController {
 							tui: this.ctx.ui,
 							fullPrompt: prompt.full,
 							...(prompt.folderLabel === undefined ? {} : { folderLabel: prompt.folderLabel }),
-							...(prompt.exactGrant === true ? { exactGrant: true } : {}),
+							...(prompt.exactGrant === true ? { exactGrant: true, fileTarget: fileGrant, exactAnswer } : {}),
+							...(toolName === undefined ? {} : { toolName }),
 							timeout: dialogOptions?.timeout,
 							onTimeout: dialogOptions?.onTimeout,
 							onTimeoutStart: dialogOptions?.onTimeoutStart,
@@ -768,6 +788,8 @@ export class ExtensionUiController {
 				}),
 			);
 			if (choice === fileOption) return true;
+			if (onceOption !== undefined && choice === onceOption) return { approved: true, once: true };
+			if (toolOption !== undefined && choice === toolOption) return { approved: true, scope: "tool" };
 			if (directoryOption !== undefined && choice === directoryOption) return { approved: true, scope: "folder" };
 			if (alwaysFileOption !== undefined && choice === alwaysFileOption) return { approved: true, global: true };
 			if (alwaysDirectoryOption !== undefined && choice === alwaysDirectoryOption) {

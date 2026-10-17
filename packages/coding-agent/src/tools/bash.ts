@@ -35,7 +35,6 @@ import { resolveCliEntryCmd } from "../subprocess/worker-client";
 import { TerminalGraphicsDecoder } from "../utils/terminal-graphics";
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
-import { approvalDirectoryKey } from "./approval-cache";
 import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-interactive";
 import { checkBashInterception } from "./bash-interceptor";
 import { rewriteGitWorktreeAdd } from "./bash-worktree-rewrite";
@@ -586,23 +585,6 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			};
 		}
 		return "exec";
-	};
-	/**
-	 * `always-ask-cached` scope: the directory this command runs in (its `cwd`
-	 * argument, else the session cwd). Commands are never remembered by their
-	 * text — only a folder grant for this scope (or the prompt's folder answer)
-	 * pre-approves them, and it is only checked, never recorded by a plain
-	 * approval.
-	 */
-	readonly approvalCacheScopes = (args: unknown): readonly string[] | undefined => {
-		const rawCwd = (args as Partial<BashToolInput>).cwd;
-		const cwd = typeof rawCwd === "string" && rawCwd.length > 0 ? rawCwd : this.session.cwd;
-		try {
-			return [approvalDirectoryKey(resolveToCwd(cwd, this.session.cwd))];
-		} catch {
-			// A URL working directory is not a filesystem scope; fall back to prompting.
-			return undefined;
-		}
 	};
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const rawCommand = (args as Partial<BashToolInput>).command;

@@ -20,7 +20,10 @@ import {
 	APPROVAL_ALWAYS_FILE_LABEL,
 	APPROVAL_APPROVE_FILE_LABEL,
 	APPROVAL_APPROVE_LABEL,
+	APPROVAL_DENY_LABEL,
+	APPROVAL_ONCE_LABEL,
 	approvalFolderCandidate,
+	approvalToolKey,
 	recordApprovalCacheTargets,
 	resolveApproval,
 	resolveApprovalFromContext,
@@ -536,15 +539,24 @@ describe("approval target keys", () => {
 		expect(read.approvalCacheTargets?.({})).toBeUndefined();
 	});
 
-	it("reports a shell command's working directory as its scope and no targets", () => {
+	it("leaves the shell approved by name alone, with no folder to cover its commands", () => {
 		const bash = new BashTool(createToolSession(cwd));
-		expect(bash.approvalCacheScopes?.({ command: "git status" })).toEqual([approvalDirectoryKey(cwd)]);
-		const elsewhere = path.resolve("/elsewhere");
-		expect(bash.approvalCacheScopes?.({ command: "git status", cwd: elsewhere })).toEqual([
-			approvalDirectoryKey(elsewhere),
-		]);
-		// Command text is never a cache target: only files and folders are remembered.
+		// Neither a cache target nor a directory scope: a folder grant never covers a command,
+		// and command text is never remembered — the prompt offers the shell's own by-name grant.
 		expect("approvalCacheTargets" in bash).toBe(false);
+		expect("approvalCacheScopes" in bash).toBe(false);
+		const folderGranted = testGrants([approvalDirectoryKey(cwd)]);
+		expect(resolveApproval(bash, { command: "git status" }, "always-ask-cached", {}, folderGranted)).toMatchObject({
+			policy: "prompt",
+			tier: "exec",
+			source: "mode",
+		});
+		const toolGranted = testGrants([approvalToolKey("bash")]);
+		expect(resolveApproval(bash, { command: "git status" }, "always-ask-cached", {}, toolGranted)).toMatchObject({
+			policy: "allow",
+			tier: "exec",
+			source: "mode",
+		});
 	});
 
 	it("derives directory keys, ancestors, and shared folders", () => {
@@ -814,58 +826,95 @@ describe("always-ask-cached wrapper cycle", () => {
 		expect(select).not.toHaveBeenCalled();
 	});
 
-	it("records the whole folder on plain approval when the scope prefers folders", async () => {
-		const select = vi.fn(async _title => APPROVAL_APPROVE_FILE_LABEL);
+	it("remembers a tool by name for the session when the tool answer approves it", async () => {
+		const select = vi.fn(async (_title: string, options: string[]) =>
+			options.find(
+				option => option === "Approve exec_scope for session" || option === "Approve other_exec for session",
+			),
+		);
 		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
 		initializeRunner(runner, select);
-		const settings = Settings.isolated({
-			"tools.approvalMode": "always-ask-cached",
-			"tools.approvalScope": "folder",
-		});
-		const dir = path.join(tempDir.path(), "ScopedDir");
-		const tool: AgentTool = {
-			name: "write_scope",
-			label: "Write",
-			description: "file tool",
+		const settings = Settings.isolated({ "tools.approvalMode": "always-ask-cached" });
+		const execTool: AgentTool = {
+			name: "exec_scope",
+			label: "Exec",
+			description: "exec call with nothing to cache",
 			parameters: {} as never,
-			approval: "write",
+			approval: "exec",
+			execute: async () => ({ content: [{ type: "text" as const, text: "executed" }] }),
+		};
+		const wrapper = new ExtensionToolWrapper(execTool, runner);
+
+		await wrapper.execute("tool-first", {}, undefined, undefined, context(settings));
+		expect(select).toHaveBeenCalledTimes(1);
+		// The answer names the tool the prompt proposed; the name alone is the key, so a later
+		// call of that tool skips whatever its arguments.
+		expect(select.mock.calls[0]?.[1]).toContain("Approve exec_scope for session");
+		await wrapper.execute("tool-second", { command: "anything else" }, undefined, undefined, context(settings));
+		expect(select).toHaveBeenCalledTimes(1);
+		expect(getApprovalGrants(settings.getAgentDir()).session.has("tool:exec_scope")).toBe(true);
+		expect(getApprovalCache(settings.getAgentDir()).size).toBe(0);
+
+		// A sibling tool offers its own answer and is not covered by the first grant.
+		const other: AgentTool = { ...execTool, name: "other_exec" };
+		await new ExtensionToolWrapper(other, runner).execute("tool-other", {}, undefined, undefined, context(settings));
+		expect(select).toHaveBeenCalledTimes(2);
+		expect(select.mock.calls[1]?.[1]).toContain("Approve other_exec for session");
+	});
+
+	it("offers only the directory and once answers when the call names just a directory", async () => {
+		const select = vi.fn(async (_title: string, options: string[]) =>
+			options.find(option => option.startsWith("Approve Directory")),
+		);
+		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
+		initializeRunner(runner, select);
+		const settings = cachedSettings();
+		const dir = path.join(tempDir.path(), "ListedDir");
+		fs.mkdirSync(dir, { recursive: true });
+		const tool: AgentTool = {
+			name: "read_dir",
+			label: "Read",
+			description: "directory listing",
+			parameters: {} as never,
+			approval: "read",
 			approvalCacheTargets: (args: unknown) =>
 				isRecord(args) && typeof args.path === "string"
 					? [approvalTargetKey(tempDir.path(), args.path)!]
 					: undefined,
-			execute: async () => ({ content: [{ type: "text" as const, text: "executed" }] }),
+			execute: async () => ({ content: [{ type: "text" as const, text: "listed" }] }),
 		};
 		const wrapper = new ExtensionToolWrapper(tool, runner);
 
-		await wrapper.execute(
-			"scope-first",
-			{ path: path.join(dir, "One.txt") },
-			undefined,
-			undefined,
-			context(settings),
-		);
+		await wrapper.execute("list-dir", { path: dir }, undefined, undefined, context(settings));
 		expect(select).toHaveBeenCalledTimes(1);
-		const cache = getApprovalCache(settings.getAgentDir());
-		expect(getApprovalGrants(settings.getAgentDir()).session.has(approvalDirectoryKey(dir))).toBe(true);
-		expect(cache.size).toBe(0);
+		// The exact answer would only repeat the directory grant, so the folder answers and the
+		// one-shot are all the prompt offers (hosts without the checkbox spell both lifetimes out).
+		expect(select.mock.calls[0]![1]).toEqual([
+			`Approve Directory: ${approvalDirectoryKey(path.dirname(dir)).replace(/[\\/]+$/, "")}`,
+			`Always Approve Directory: ${approvalDirectoryKey(path.dirname(dir)).replace(/[\\/]+$/, "")}`,
+			APPROVAL_ONCE_LABEL,
+			APPROVAL_DENY_LABEL,
+		]);
+		expect(getApprovalGrants(settings.getAgentDir()).session.has(approvalDirectoryKey(path.dirname(dir)))).toBe(true);
+	});
 
-		// A sibling file is covered by the recorded folder, without a prompt.
-		await wrapper.execute(
-			"scope-second",
-			{ path: path.join(dir, "Two.txt") },
-			undefined,
-			undefined,
-			context(settings),
-		);
+	it("records nothing when the once answer approves the call", async () => {
+		const select = vi.fn(async (_title: string, options: string[]) => {
+			expect(options).toContain(APPROVAL_ONCE_LABEL);
+			return APPROVAL_ONCE_LABEL;
+		});
+		const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
+		initializeRunner(runner, select);
+		const settings = cachedSettings();
+		const wrapper = new ExtensionToolWrapper(pathTool("write", "write", tempDir.path()), runner);
+		const key = approvalTargetKey(tempDir.path(), path.join(tempDir.path(), "once.txt"))!;
+
+		await wrapper.execute("once-first", { path: "once.txt" }, undefined, undefined, context(settings));
 		expect(select).toHaveBeenCalledTimes(1);
-		// Outside the folder it still asks.
-		await wrapper.execute(
-			"scope-outside",
-			{ path: path.join(tempDir.path(), "Elsewhere.txt") },
-			undefined,
-			undefined,
-			context(settings),
-		);
+		expect(getApprovalGrants(settings.getAgentDir()).session.has(key)).toBe(false);
+		expect(getApprovalCache(settings.getAgentDir()).size).toBe(0);
+		// Nothing was remembered, so the same call asks again.
+		await wrapper.execute("once-again", { path: "once.txt" }, undefined, undefined, context(settings));
 		expect(select).toHaveBeenCalledTimes(2);
 	});
 

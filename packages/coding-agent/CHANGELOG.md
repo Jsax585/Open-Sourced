@@ -4,9 +4,17 @@
 
 ### Added
 
-- Added a **Forget Remembered Approvals** action to the settings panel (Interaction → Approvals): acting on the row empties the global `approval-cache.db` and forgets the session's approvals too, so the next read, write, or command asks again.
-- Added the **Ask and remember** tool approval mode (`tools.approvalMode: always-ask-cached`, `--approval-mode always-ask-cached`): the first `read`, `write`, or `edit` touching a file asks for approval. Each prompt offers **Approve Directory** (`F6`) and **Approve File** answers plus a **Remember** checkbox the `F7` key, the arrows and Enter, or a click flips between *This Session* (in memory, per instance) and *Always* (the `grants` table of `approval-cache.db` under the agent directory, covering every later session). Directory grants cover every read/write below them and every command that runs inside them; command text is never remembered, so `bash` prompts unless its folder is approved. `tools.approvalScope` (`target`, the default, or `folder`) picks what the exact approval remembers. Dangerous commands and explicit prompt policies still ask every call.
+- Added a **Forget Remembered Approvals** action to the settings panel (Interaction → Approvals), shown as a **Clear cache** button: acting on the row empties the global `approval-cache.db` and forgets the session's approvals too, so the next read, write, or command asks again.
+- Added the **Ask and remember** tool approval mode (`tools.approvalMode: always-ask-cached`, `--approval-mode always-ask-cached`): the first `read`, `write`, or `edit` touching a file asks for approval. Each prompt offers **Approve Directory** (`F6`) and **Approve File** answers plus a **Remember** checkbox the `F7` key, the arrows and Enter, or a click flips between *This Session* (in memory, per instance) and *Always* (the `grants` table of `approval-cache.db` under the agent directory, covering every later session). Directory grants cover every read/write below them; a command is never covered by a folder or remembered by its text, so `bash` prompts unless its **Approve bash for session** answer approves the shell for the session. Dangerous commands and explicit prompt policies still ask every call.
 - Reads of public web URLs (`http://`, `https://`, `www.`) never prompt in **Ask and remember** — their contents are already public, so there is nothing to remember.
+- Added an **Approve <tool> for session** answer to **Ask and remember** prompts raised for calls that are not file reads or writes (`bash`, `eval`, `browser`, `task`, …): one grant remembers the tool by name alone for the rest of the session — arguments never enter the key, nothing is written to `approval-cache.db`, and prompts forced by a tool or user `prompt` policy never offer it.
+- Added an **Approve Once** answer to **Ask and remember** prompts that offer grants: it approves the call and records nothing. Calls with nothing else to remember (a command, an eval) show it in place of the plain `Approve` that recorded just as little.
+
+### Fixed
+
+- Fixed the **Approve File** and **Approve Directory** answers in **Ask and remember** prompts describing themselves as "Approve this call and remember it": file prompts (read/write/edit) now read "Approve reads and writes to this file" and "Approve reads and writes within entire directory" for the session or every session, while command prompts keep the folder wording since their grant covers running commands, not just reads and writes.
+- Fixed the **Approve File** answer appearing for targets that are not files: a directory read (e.g. `read C:\Users\KR\Desktop`) now offers only **Approve Directory** and **Approve Once** — the exact answer would have repeated the directory grant — while a URL target keeps **Approve** and spells its cross-instance form out as **Always Approve**.
+
 ## [18.11.2] - 2026-10-16
 
 ### Added

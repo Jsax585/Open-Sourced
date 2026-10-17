@@ -268,6 +268,22 @@ export interface ExtensionApprovalPrompt {
 	folderLabel?: string;
 	/** The call can record an exact grant; hosts may offer the file-scoped (and always) answers. */
 	exactGrant?: boolean;
+	/**
+	 * Tool the prompt proposes — a command or another non-read/write call. Hosts may
+	 * offer an "Approve <tool> for session" answer: one grant remembers that tool by
+	 * name for the rest of this session, whatever the call's arguments, and nothing else.
+	 */
+	toolName?: string;
+	/**
+	 * The exact grant names files, so hosts may name the exact answer "Approve File"; `false`
+	 * keeps the plain "Approve" (a directory or URL target). Absent means files.
+	 */
+	fileTarget?: boolean;
+	/**
+	 * Whether the exact answer applies at all; a call whose only target is a directory answers
+	 * through `folderLabel` instead. Absent means it does whenever {@link exactGrant} is set.
+	 */
+	exactAnswer?: boolean;
 }
 
 /** What an `approve()` dialog answered: denied, or approved with where the grant goes. */
@@ -275,10 +291,15 @@ export type ExtensionApprovalAnswer =
 	| boolean
 	| {
 			approved: true;
-			/** Directory-scoped rather than exact. */
-			scope?: "target" | "folder";
+			/**
+			 * `"folder"` scopes the grant to the directory, `"tool"` remembers the whole tool by
+			 * name for this session (never persisted); absent scopes it to the exact targets.
+			 */
+			scope?: "target" | "folder" | "tool";
 			/** Remember in the global, cross-instance cache rather than this session's. */
 			global?: boolean;
+			/** The call is approved and nothing is remembered (the "Approve Once" answer). */
+			once?: boolean;
 	  };
 
 /**

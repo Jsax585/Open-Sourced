@@ -265,6 +265,7 @@ describe("MCP fallback and prompt formatting", () => {
 			"Approve File",
 			`Always Approve Directory: ${label}`,
 			"Always Approve File",
+			"Approve Once",
 			"Deny",
 		]);
 		expect((await requestApproval(ui, write, {}, undefined, [], { cacheAnswers: false })).approved).toBe(true);

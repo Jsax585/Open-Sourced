@@ -21,6 +21,7 @@ import {
 } from "./approval-cache";
 
 import { cfgToolsApproval, cfgToolsApprovalMode } from "./settings";
+import { approvalTargetNamesFile } from "./approval-targets";
 
 export type { ToolApproval, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
 export type { ApprovalGrantStore, ApprovalGrant, ApprovalTier } from "./approval-cache";
@@ -159,7 +160,7 @@ function approvalCacheTargets(tool: ApprovalSubject, args: unknown): string[] {
 	return targets;
 }
 
-/** Directory scopes a tool reports for this call (e.g. a shell command's cwd); blanks dropped. */
+/** Directory scopes a tool reports for this call (a tool scoping its approvals to a folder); blanks dropped. */
 function approvalCacheScopes(tool: ApprovalSubject, args: unknown): string[] {
 	const raw = tool.approvalCacheScopes?.(args);
 	if (!raw) return [];
@@ -177,15 +178,24 @@ function grantCovers(grants: ApprovalGrantStore, target: string): boolean {
 }
 
 /**
+ * Key of an "Approve <tool> for session" grant: the tool's name and nothing
+ * else, so no argument or call shape ever enters it.
+ */
+export function approvalToolKey(toolName: string): string {
+	return `tool:${toolName}`;
+}
+
+/**
  * Fallback decision for `always-ask-cached` (reached only when no tool or user
  * policy already decided). Grants remember the *file* a read/write touched or a
  * *folder*; command text is never remembered. A call runs without asking when
- * every cache target is approved, or — for tools that report directory scopes —
- * when every scope is covered by a folder grant, which is how a shell command
- * inside an approved folder skips its prompt. Anything else prompts, and the
- * recording helpers remember the targets (or the folder) when the user
- * approves. Read-tier tools without cache targets (searches, listings) stay
- * auto-approved exactly as in `always-ask`.
+ * every cache target is approved, when the tool itself is approved by name for
+ * the session, or — for tools that opt into directory scopes — when every scope
+ * is covered by a folder grant. Anything else prompts, and the recording
+ * helpers remember the targets (or the folder) when the user approves. Read-tier tools without cache targets (searches, listings) stay
+ * auto-approved exactly as in `always-ask`. An `Approve <tool> for session`
+ * grant (see {@link approvalToolKey}) allows every later call of that tool by
+ * name; it never covers another tool's calls.
  */
 function resolveCachedModeApproval(
 	tool: ApprovalSubject,
@@ -199,6 +209,8 @@ function resolveCachedModeApproval(
 		source: "mode" as const,
 		...(decision.policyKey ? { policyKey: decision.policyKey } : {}),
 	};
+	// The tool answer remembers the tool by name for this session, whatever the call.
+	if (grants.has(approvalToolKey(tool.name))) return { ...base, policy: "allow" };
 	const scopes = approvalCacheScopes(tool, args);
 	if (scopes.length > 0 && scopes.every(scope => grantCovers(grants, scope))) {
 		return { ...base, policy: "allow" };
@@ -249,9 +261,9 @@ export function recordApprovalCacheTargets(
 
 /**
  * Record the folder grant a directory answer approved: every read or write
- * below that directory, and every exec call that runs inside it, then skips its
- * prompt. Returns the folder's label, or `undefined` when the call names no
- * filesystem path (the caller then falls back to the exact targets).
+ * below that directory then skips its prompt. Returns the folder's label, or
+ * `undefined` when the call names no filesystem path (the caller then falls
+ * back to the exact targets).
  */
 export function recordApprovalFolderGrant(
 	tool: ApprovalSubject,
@@ -554,8 +566,10 @@ function approvalSummary(details: readonly string[]): string | undefined {
 	return omitted ? `${row} …` : row;
 }
 
-/** Label of the once-only answer for a call with no file target (a command). */
+/** Label of the session-scoped answer for an exact target that is not a file (a directory or URL). */
 export const APPROVAL_APPROVE_LABEL = "Approve";
+/** Label of the cross-instance answer for an exact target that is not a file. */
+export const APPROVAL_ALWAYS_LABEL = "Always Approve";
 /** Label of the session-scoped answer for a file. */
 export const APPROVAL_APPROVE_FILE_LABEL = "Approve File";
 /** Label of the cross-instance answer for a file. */
@@ -564,15 +578,17 @@ export const APPROVAL_ALWAYS_FILE_LABEL = "Always Approve File";
 export const APPROVAL_DIRECTORY_LABEL = "Approve Directory";
 /** Label of the cross-instance directory answer. */
 export const APPROVAL_ALWAYS_DIRECTORY_LABEL = "Always Approve Directory";
+/** Label of the approve-once answer, which runs the call and records nothing. */
+export const APPROVAL_ONCE_LABEL = "Approve Once";
 /** Label of the denial option. */
 export const APPROVAL_DENY_LABEL = "Deny";
 
 /**
- * The exact answer's label: files are named for what the grant covers, commands (never remembered
- * by their text) keep the plain name however the remember toggle reads.
+ * The exact answer's label: a file target is named for what the grant covers, other targets keep
+ * the plain name, and the remember toggle names the cross-instance form in both cases.
  */
 export function approvalApproveOptionLabel(fileTarget: boolean, always: boolean): string {
-	if (!fileTarget) return APPROVAL_APPROVE_LABEL;
+	if (!fileTarget) return always ? APPROVAL_ALWAYS_LABEL : APPROVAL_APPROVE_LABEL;
 	return always ? APPROVAL_ALWAYS_FILE_LABEL : APPROVAL_APPROVE_FILE_LABEL;
 }
 
@@ -581,16 +597,23 @@ export function approvalDirectoryOptionLabel(folderLabel: string, always: boolea
 	return `${always ? APPROVAL_ALWAYS_DIRECTORY_LABEL : APPROVAL_DIRECTORY_LABEL}: ${folderLabel}`;
 }
 
+/** Label of the tool answer, which approves every later call of that tool in this session. */
+export function approvalToolOptionLabel(toolName: string): string {
+	return `Approve ${toolName} for session`;
+}
+
 /** What an approval prompt answered: denied, or approved with where the grant goes. */
 export interface ApprovalOutcome {
 	approved: boolean;
 	/**
-	 * The answer was a directory one. Absent means the scope follows
-	 * `tools.approvalScope` (`target` by default).
+	 * Where the approval's grant goes: `"folder"` for a directory answer, `"tool"` for the
+	 * by-name session answer; absent means the call's exact targets are recorded.
 	 */
-	scope?: "target" | "folder";
+	scope?: "target" | "folder" | "tool";
 	/** The user chose an "Always …" answer: the grant goes to the global, persistent cache. */
 	global?: boolean;
+	/** The "Approve Once" answer: the call runs and no grant is recorded. */
+	once?: boolean;
 }
 
 /**
@@ -600,9 +623,10 @@ export interface ApprovalOutcome {
  * `appendix` lines follow the prompt on both.
  *
  * With `options.cacheAnswers`, the prompt also offers grant answers, each gated by what the call
- * can record: the directory answers need a folder candidate, and the "Always …" answers need a
- * cache target. Prompts a tool or user policy forced pass `cacheAnswers: false` — they are never
- * recorded, so they keep plain Approve/Deny.
+ * can record: the directory answers need a folder candidate, the "Always …" answers need a
+ * cache target, and the tool answer needs a call that is not a file read/write. Prompts a tool
+ * or user policy forced pass `cacheAnswers: false` — they are never recorded, so they keep plain
+ * Approve/Deny.
  */
 export async function requestApproval(
 	ui: Pick<ExtensionUIContext, "select" | "approve">,
@@ -616,7 +640,17 @@ export async function requestApproval(
 	const details = approvalDetails(tool, args);
 	const cacheAnswers = options.cacheAnswers !== false;
 	const folderLabel = cacheAnswers ? approvalFolderCandidate(tool, args)?.label : undefined;
-	const exactGrant = cacheAnswers && approvalCacheTargets(tool, args).length > 0;
+	const targets = cacheAnswers ? approvalCacheTargets(tool, args) : [];
+	const exactGrant = targets.length > 0;
+	// The file name is for file targets only: a directory or URL target keeps the plain
+	// "Approve" (it still remembers that target), and only a file names "Approve File".
+	const fileGrant = exactGrant && targets.every(approvalTargetNamesFile);
+	// A call that names only a directory answers through the directory itself; offering the
+	// exact "Approve" beside it would only repeat that grant.
+	const exactAnswer = exactGrant && (fileGrant || folderLabel === undefined);
+	// Exec and other non-read/write calls without a directory of their own can be remembered by
+	// tool name for this session; a command's folder answer already carries its grant.
+	const toolName = cacheAnswers && !exactGrant && folderLabel === undefined ? tool.name : undefined;
 	const full = [...header, ...details, ...appendix].join("\n");
 	if (ui.approve) {
 		const summary = approvalSummary(details);
@@ -625,7 +659,8 @@ export async function requestApproval(
 			full,
 			compact,
 			...(folderLabel === undefined ? {} : { folderLabel }),
-			...(exactGrant ? { exactGrant } : {}),
+			...(exactGrant ? { exactGrant, fileTarget: fileGrant, exactAnswer } : {}),
+			...(toolName === undefined ? {} : { toolName }),
 		});
 		if (answer === true) return { approved: true };
 		if (typeof answer === "object" && answer.approved === true) {
@@ -637,23 +672,32 @@ export async function requestApproval(
 		}
 		return { approved: false };
 	}
-	const approveOption = approvalApproveOptionLabel(exactGrant, false);
-	if (folderLabel === undefined && !exactGrant) {
+	const approveOption = approvalApproveOptionLabel(fileGrant, false);
+	if (folderLabel === undefined && !exactGrant && toolName === undefined) {
 		return { approved: (await ui.select(full, [approveOption, APPROVAL_DENY_LABEL])) === approveOption };
 	}
-	const alwaysFileOption = exactGrant ? approvalApproveOptionLabel(true, true) : undefined;
+	const alwaysFileOption = exactAnswer ? approvalApproveOptionLabel(fileGrant, true) : undefined;
 	const directoryOption = folderLabel === undefined ? undefined : approvalDirectoryOptionLabel(folderLabel, false);
 	const alwaysDirectoryOption =
 		folderLabel === undefined ? undefined : approvalDirectoryOptionLabel(folderLabel, true);
+	const toolOption = toolName === undefined ? undefined : approvalToolOptionLabel(toolName);
+	// "Approve Once" is the approve answer every prompt with grants carries: it records nothing,
+	// where a plain "Approve" remembers the call's exact target.
+	const onceOption =
+		folderLabel !== undefined || exactGrant || toolName !== undefined ? APPROVAL_ONCE_LABEL : undefined;
 	const choices = [
 		...(directoryOption === undefined ? [] : [directoryOption]),
-		approveOption,
+		...(toolOption === undefined ? [] : [toolOption]),
+		...(exactAnswer ? [approveOption] : []),
 		...(alwaysDirectoryOption === undefined ? [] : [alwaysDirectoryOption]),
 		...(alwaysFileOption === undefined ? [] : [alwaysFileOption]),
+		...(onceOption === undefined ? [] : [onceOption]),
 		APPROVAL_DENY_LABEL,
 	];
 	const choice = await ui.select(full, choices);
 	if (choice === approveOption) return { approved: true };
+	if (onceOption !== undefined && choice === onceOption) return { approved: true, once: true };
+	if (toolOption !== undefined && choice === toolOption) return { approved: true, scope: "tool" };
 	if (directoryOption !== undefined && choice === directoryOption) return { approved: true, scope: "folder" };
 	if (alwaysFileOption !== undefined && choice === alwaysFileOption) return { approved: true, global: true };
 	if (alwaysDirectoryOption !== undefined && choice === alwaysDirectoryOption) {

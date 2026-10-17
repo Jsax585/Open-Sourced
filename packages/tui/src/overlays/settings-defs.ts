@@ -136,6 +136,11 @@ export type AnyUiMetadata = UiBase & {
 	 * row carries no changed marker; its label and description say what it does.
 	 */
 	action?: true;
+	/**
+	 * Label standing in for an action row's default "Run…" control, e.g. "Clear
+	 * cache" — names what the row does without making the description repeat it.
+	 */
+	actionLabel?: string;
 };
 
 /** Structural schema entries supplied by the application host. */
@@ -223,6 +228,8 @@ export interface ProviderLimitsSettingDef extends BaseSettingDef {
  */
 export interface ActionSettingDef extends BaseSettingDef {
 	type: "action";
+	/** Label of the row's control; omitted rows read "Run…". */
+	actionLabel?: string;
 }
 
 /** Array-of-enum setting edited as a toggle list; `ordered` lists render positions and support reordering. */
@@ -269,7 +276,7 @@ function entryToSettingDef(entry: SettingsDisplayEntry): SettingDef | null {
 		// An action owns its effects and stores nothing usable, so it never
 		// consults the schema type: the row is the label, the description, and
 		// the host's runner.
-		return { ...base, type: "action" };
+		return { ...base, type: "action", actionLabel: ui.actionLabel };
 	}
 
 	if (schemaType === "boolean") {

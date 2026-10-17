@@ -322,7 +322,7 @@ describe("dialogs under a native surface", () => {
 				for (const child of node.c ?? []) if (isNode(child)) collect(child);
 			};
 			collect(buttons.describe());
-			expect(keys).toEqual(["remember", "folder", "approve", "deny"]);
+			expect(keys).toEqual(["remember", "folder", "approve", "once", "deny"]);
 			// Clicking the checkbox flips it; the next click on Approve then carries that mode.
 			const remember = find(buttons.describe(), node => node.p?.role === "omp.btn" && node.key === "remember");
 			expect(remember?.node.p?.title).toContain("every session");
@@ -442,6 +442,139 @@ describe("dialogs under a native surface", () => {
 			reopen.handleInput(DOWN);
 			reopen.handleInput(ENTER);
 			expect(fresh.onApproveFolder).toHaveBeenCalledWith(false);
+		} finally {
+			now.mockRestore();
+		}
+	});
+
+	it("approval: the by-name tool answer approves the whole tool for the session", () => {
+		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+		try {
+			const callbacks = {
+				onApprove: vi.fn(),
+				onApproveFolder: vi.fn(),
+				onApproveTool: vi.fn(),
+				onDeny: vi.fn(),
+			};
+			const prompt = "Allow tool: bash\nCommand: ls -la";
+			const dialog = new ApprovalDialogComponent(prompt, callbacks, {
+				folderLabel: "/tmp/project",
+				toolName: "bash",
+			});
+			now.mockReturnValue(1_000 + APPROVE_ARM_MS);
+			const lines = () =>
+				stripVTControlCharacters(dialog.render(80).join("\n"))
+					.split("\n")
+					.map(line => line.replace(/^[│╭╰─\s]+/, "").trimEnd());
+			const cursorRow = () => lines().find(line => line.startsWith(theme.nav.cursor));
+			// It sits between the directory answer and the plain one, and the checkbox never
+			// rewrites it: the grant is session-scoped by name, so there is no "Always" form.
+			expect(lines().join("\n")).toContain("Approve bash for session");
+			dialog.handleInput(DOWN);
+			dialog.handleInput(DOWN);
+			expect(cursorRow()).toContain("Approve bash for session");
+			dialog.handleInput(ENTER);
+			expect(callbacks.onApproveTool).toHaveBeenCalledTimes(1);
+			expect(callbacks.onApprove).not.toHaveBeenCalled();
+			expect(callbacks.onDeny).not.toHaveBeenCalled();
+
+			// The native bar carries it as its own button, not as an Approve variant.
+			const bar = new ApprovalDialogComponent(
+				prompt,
+				{ onApprove: vi.fn(), onApproveFolder: vi.fn(), onApproveTool: vi.fn(), onDeny: vi.fn() },
+				{ folderLabel: "/tmp/project", toolName: "bash" },
+			);
+			const button = find(bar.describe(), node => node.p?.role === "omp.btn" && node.key === "tool")?.node;
+			expect(button?.p?.tone).toBe("accent");
+			expect(button?.p?.title).toBe("Approve every bash call for the rest of this session");
+		} finally {
+			now.mockRestore();
+		}
+	});
+
+	it("approval: the exact answer is named for its target, with approve-once beside it", () => {
+		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+		try {
+			const callbacks = { onApprove: vi.fn(), onApproveOnce: vi.fn(), onDeny: vi.fn() };
+			// A directory target (fileTarget false) keeps the plain name.
+			const dialog = new ApprovalDialogComponent("Allow tool: read\nPath: /tmp/project", callbacks, {
+				exactGrant: true,
+				fileTarget: false,
+			});
+			now.mockReturnValue(1_000 + APPROVE_ARM_MS);
+			const lines = () =>
+				stripVTControlCharacters(dialog.render(80).join("\n"))
+					.split("\n")
+					.map(line => line.replace(/^[│╭╰─\s]+/, "").trimEnd());
+			const text = () => lines().join("\n");
+			const cursorRow = () => lines().find(line => line.startsWith(theme.nav.cursor));
+			expect(text()).toContain("Approve");
+			expect(text()).not.toContain("Approve File");
+			expect(text()).toContain("Approve Once");
+			// Approve Once sits below the exact answer; Enter on it approves without a grant.
+			dialog.handleInput(DOWN);
+			dialog.handleInput(DOWN);
+			expect(cursorRow()).toContain("Approve Once");
+			dialog.handleInput(ENTER);
+			expect(callbacks.onApproveOnce).toHaveBeenCalledTimes(1);
+			expect(callbacks.onApprove).not.toHaveBeenCalled();
+
+			// The native bar carries both, and the exact button keeps the target's name.
+			const bar = new ApprovalDialogComponent(
+				"Allow tool: read\nPath: /tmp/project",
+				{ onApprove: vi.fn(), onApproveOnce: vi.fn(), onDeny: vi.fn() },
+				{ exactGrant: true, fileTarget: false },
+			);
+			const button = (key: string) =>
+				find(bar.describe(), node => node.p?.role === "omp.btn" && node.key === key)?.node;
+			expect(button("approve")).toBeDefined();
+			expect(button("once")?.p?.title).toBe("Approve this call without remembering it");
+		} finally {
+			now.mockRestore();
+		}
+	});
+
+	it("approval: a directory-only call offers the directory answer and approve-once alone", () => {
+		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+		try {
+			const callbacks = {
+				onApprove: vi.fn(),
+				onApproveFolder: vi.fn(),
+				onApproveOnce: vi.fn(),
+				onDeny: vi.fn(),
+			};
+			const prompt = "Allow tool: read\nPath: /tmp/project";
+			const options = { exactGrant: true, fileTarget: false, exactAnswer: false, folderLabel: "/tmp/project" };
+			const dialog = new ApprovalDialogComponent(prompt, callbacks, options);
+			now.mockReturnValue(1_000 + APPROVE_ARM_MS);
+			const lines = () =>
+				stripVTControlCharacters(dialog.render(80).join("\n"))
+					.split("\n")
+					.map(line => line.replace(/^[│╭╰─\s]+/, "").trimEnd());
+			const text = () => lines().join("\n");
+			expect(text()).toContain("Approve Directory (/tmp/project)");
+			expect(text()).toContain("Approve Once");
+			expect(text()).not.toContain("Approve File");
+			// No bare exact row: the directory answer carries the whole grant.
+			expect(lines().some(line => line.trim() === "Approve")).toBe(false);
+			dialog.handleInput(DOWN);
+			dialog.handleInput(DOWN);
+			expect(lines().find(line => line.startsWith(theme.nav.cursor))).toContain("Approve Once");
+			dialog.handleInput(ENTER);
+			expect(callbacks.onApproveOnce).toHaveBeenCalledTimes(1);
+			expect(callbacks.onApproveFolder).not.toHaveBeenCalled();
+
+			// The native bar mirrors it: folder and once buttons, no exact one.
+			const bar = new ApprovalDialogComponent(
+				prompt,
+				{ onApprove: vi.fn(), onApproveFolder: vi.fn(), onApproveOnce: vi.fn(), onDeny: vi.fn() },
+				options,
+			);
+			const button = (key: string) =>
+				find(bar.describe(), node => node.p?.role === "omp.btn" && node.key === key)?.node;
+			expect(button("folder")).toBeDefined();
+			expect(button("once")).toBeDefined();
+			expect(button("approve")).toBeUndefined();
 		} finally {
 			now.mockRestore();
 		}

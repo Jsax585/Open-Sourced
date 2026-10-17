@@ -16,6 +16,7 @@ import nativeDelegationTemplate from "../../prompts/tools/native-delegation.md" 
 import {
 	type ApprovalOutcome,
 	type ApprovalTier,
+	approvalToolKey,
 	denyError,
 	recordApprovalCacheTargets,
 	recordApprovalFolderGrant,
@@ -26,7 +27,6 @@ import {
 } from "../../tools/approval";
 import { getApprovalGrants } from "../../tools/approval-cache";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
-import { cfgToolsApprovalScope } from "../../tools/settings";
 import { withFileMutationSession } from "../../tools/file-write-fallback";
 import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-input";
 import { applyToolProxy } from "../tool-proxy";
@@ -445,24 +445,26 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				cancelPreflight();
 				throw new Error(`Tool call denied by user: ${this.tool.name}`);
 			}
-			// `always-ask-cached`: a prompt the mode itself raised, now approved, remembers the file or
-			// the directory it covers. A directory answer (or `tools.approvalScope: folder` for a plain
-			// approval) grants the folder; an "Always …" answer puts the grant in the global cache
-			// instead of this instance's memory. Calls with no folder candidate fall back to their
-			// exact targets, and a command with neither records nothing.
-			if (modeRaised && resolved.policy === "prompt") {
-				const scope =
-					outcome.scope ??
-					(effectiveSettings !== undefined && cfgToolsApprovalScope.get(effectiveSettings) === "folder"
-						? "folder"
-						: "target");
+			// `always-ask-cached`: a prompt the mode itself raised, now approved, remembers the exact
+			// targets it touched; a directory answer grants the folder instead, and an "Always …"
+			// answer puts the grant in the global cache rather than this instance's memory. Calls
+			// with no folder candidate fall back to their exact targets, and a command with neither
+			// records nothing.
+			// "Approve Once" records nothing at all, so no branch below runs for it.
+			if (modeRaised && resolved.policy === "prompt" && outcome.once !== true) {
 				const tier: ApprovalTier = outcome.global === true ? "global" : "session";
-				const folderGranted =
-					scope === "folder"
-						? recordApprovalFolderGrant(this.tool, resolvedArgs, approvalGrants, tier)
-						: undefined;
-				if (folderGranted === undefined) {
-					recordApprovalCacheTargets(this.tool, resolvedArgs, approvalGrants, tier);
+				if (outcome.scope === "tool") {
+					// The tool answer remembers the tool's name for this session — nothing else, and
+					// since it is never offered as an "Always …" answer it never reaches the global cache.
+					approvalGrants.record(approvalToolKey(this.tool.name), this.tool.name);
+				} else {
+					const folderGranted =
+						outcome.scope === "folder"
+							? recordApprovalFolderGrant(this.tool, resolvedArgs, approvalGrants, tier)
+							: undefined;
+					if (folderGranted === undefined) {
+						recordApprovalCacheTargets(this.tool, resolvedArgs, approvalGrants, tier);
+					}
 				}
 			}
 			if (pendingSafetyChecks.length > 0) {

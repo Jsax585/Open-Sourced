@@ -8,9 +8,27 @@
  * form, or a readable web URL kept as written.
  */
 import { isReadableUrlPath } from "@oh-my-pi/pi-tui/tools/read";
+import * as fs from "node:fs";
 import { InternalUrlRouter } from "../internal-urls/router";
 import { approvalCacheKeyForPath } from "./approval-cache";
 import { resolveToCwd } from "./path-utils";
+
+/**
+ * Whether an exact grant target names a file rather than a directory or a
+ * non-filesystem target (an internal or web URL) — the file-flavoured answer is
+ * only named for a file. A path nothing occupies yet still counts as a file:
+ * approving a write is how its file comes to exist.
+ */
+export function approvalTargetNamesFile(target: string): boolean {
+	const router = InternalUrlRouter.instance();
+	const normalized = router.normalize(target);
+	if (router.canHandle(normalized) || isReadableUrlPath(target)) return false;
+	try {
+		return !fs.statSync(target).isDirectory();
+	} catch {
+		return true;
+	}
+}
 
 /**
  * Normalize one tool argument into an approval-cache key, or `undefined` when

@@ -49,11 +49,15 @@ interface ApprovalDialogCallbacks {
 	onApprove(always: boolean): void;
 	/** The directory answer; only reachable when the dialog was given a folder label. */
 	onApproveFolder?(always: boolean): void;
+	/** The tool answer; a by-name grant for this session, so the remember checkbox never applies. */
+	onApproveTool?(): void;
+	/** The approve-once answer; it records nothing, so the remember checkbox never applies. */
+	onApproveOnce?(): void;
 	onDeny(): void;
 }
 
 /** The answers the dock's menu can offer, in display order. */
-type ApprovalDialogAnswerId = "remember" | "folder" | "approve" | "deny";
+type ApprovalDialogAnswerId = "remember" | "folder" | "tool" | "approve" | "once" | "deny";
 
 /** The remember checkbox's text names the mode it currently holds. */
 function approvalDialogRememberLabel(always: boolean): string {
@@ -67,8 +71,35 @@ function approvalDialogCanRemember(options: ApprovalDialogOptions): boolean {
 }
 
 /**
+ * Whether the exact answer applies at all: hosts that omit {@link ApprovalDialogOptions.exactAnswer}
+ * keep it for every exact grant, as they did before the field existed.
+ */
+function approvalDialogExactAnswer(options: ApprovalDialogOptions): boolean {
+	return options.exactAnswer ?? options.exactGrant === true;
+}
+
+/**
+ * Whether the prompt offers any grant answer. "Approve Once" accompanies them, and stands in for
+ * the plain answer when there is no exact target — that answer would record just as little.
+ */
+function approvalDialogOffersGrants(options: ApprovalDialogOptions): boolean {
+	return approvalDialogCanRemember(options) || options.toolName !== undefined;
+}
+
+/**
+ * The answer the approve accelerator runs: the exact one when the call records a target, the
+ * once answer when grants are offered without one, and the plain answer otherwise.
+ */
+function approvalDialogPrimaryApproval(options: ApprovalDialogOptions): "approve" | "once" {
+	if (approvalDialogExactAnswer(options)) return "approve";
+	return approvalDialogOffersGrants(options) ? "once" : "approve";
+}
+
+/**
  * Menu rows: the remember checkbox leads (it changes what the answers record), then the answers
- * themselves — the directory one when the call has a folder to grant, the exact one, and Deny.
+ * themselves — the directory one when the call has a folder to grant, the by-name tool one when
+ * the call proposes a tool, the exact one when the call records a target, the once-only one
+ * wherever grants are offered, and Deny.
  */
 function approvalDialogAnswers(
 	options: ApprovalDialogOptions,
@@ -81,7 +112,15 @@ function approvalDialogAnswers(
 	if (options.folderLabel !== undefined) {
 		answers.push({ id: "folder", label: `Approve Directory (${options.folderLabel})` });
 	}
-	answers.push({ id: "approve", label: options.exactGrant === true ? "Approve File" : "Approve" });
+	if (options.toolName !== undefined) {
+		answers.push({ id: "tool", label: `Approve ${options.toolName} for session` });
+	}
+	if (approvalDialogExactAnswer(options)) {
+		answers.push({ id: "approve", label: options.fileTarget === false ? "Approve" : "Approve File" });
+	}
+	if (approvalDialogOffersGrants(options)) {
+		answers.push({ id: "once", label: "Approve Once" });
+	}
 	answers.push({ id: "deny", label: "Deny" });
 	return answers;
 }
@@ -101,6 +140,12 @@ interface ApprovalDialogOptions {
 	folderLabel?: string;
 	/** Whether the call can be remembered by file, which adds the exact answer and the checkbox. */
 	exactGrant?: boolean;
+	/** Tool the prompt proposes (a command or another non-read/write call); adds the by-name session answer. */
+	toolName?: string;
+	/** Whether the exact grant names files; `false` keeps the plain `Approve` (a directory or URL target). */
+	fileTarget?: boolean;
+	/** Whether the exact answer applies; a directory-only call answers through the folder label instead. */
+	exactAnswer?: boolean;
 	/** Deny once this many ms pass without input (any key restarts the countdown). */
 	timeout?: number;
 	/** Called when {@link timeout} expires, before the dialog denies. */
@@ -138,6 +183,8 @@ export class ApprovalDialogComponent implements Component {
 	#bodyRows = MAX_DETAIL_ROWS;
 	#closed = false;
 	#native: NativeNode | undefined;
+	/** The answer the approve accelerator runs; see {@link approvalDialogPrimaryApproval}. */
+	readonly #primaryApproval: "approve" | "once";
 	readonly #armedAt = performance.now() + APPROVE_ARM_MS;
 	readonly #countdown: CountdownTimer | undefined;
 
@@ -155,6 +202,7 @@ export class ApprovalDialogComponent implements Component {
 			options.fullPrompt === undefined ? undefined : promptDetails(sanitizeDisplayLines(options.fullPrompt));
 		this.#panel = new OverlayPanel(title, "omp.overlay.approval");
 		this.#answers = approvalDialogAnswers(options, this.#rememberAlways);
+		this.#primaryApproval = approvalDialogPrimaryApproval(options);
 		this.#footer.setHeight(1);
 		this.#panel.addChild(this.#body);
 		this.#choices.setHeight(this.#answers.length);
@@ -202,7 +250,7 @@ export class ApprovalDialogComponent implements Component {
 		this.#restartCountdown();
 		const armed = performance.now() >= this.#armedAt;
 		if (matchesAppApprove(keyData)) {
-			if (armed) this.#finish("approve");
+			if (armed) this.#finish(this.#primaryApproval);
 			return;
 		}
 		if (approvalDialogCanRemember(this.options) && matchesAppRemember(keyData)) {
@@ -385,6 +433,11 @@ export class ApprovalDialogComponent implements Component {
 		const folderKey = appApproveFolderKeys()[0];
 		const rememberKey = appRememberKeys()[0];
 		const folderLabel = this.options.folderLabel;
+		// The read/write answers describe the reads and writes they grant; a command's folder answer
+		// approves running commands inside it, so it keeps the folder wording instead.
+		const fileGrant = this.options.exactGrant === true && this.options.fileTarget !== false;
+		const grantScope = this.#rememberAlways ? "for every session" : "for this session only";
+		const approveSuffix = approveKey ? `  ${formatTooltipKey(approveKey)}` : "";
 		const directory =
 			folderLabel === undefined
 				? []
@@ -392,14 +445,47 @@ export class ApprovalDialogComponent implements Component {
 						actionButton("Approve Directory", "folder", {
 							...(folderKey ? { keys: folderKey } : {}),
 							tone: "accent",
-							title: `Approve this call and remember ${folderLabel} ${this.#rememberAlways ? "for every session" : "for this session only"}${folderKey ? `  ${formatTooltipKey(folderKey)}` : ""}`,
+							title: `${this.options.exactGrant === true ? "Approve reads and writes within entire directory" : `Approve this call and remember ${folderLabel}`} ${grantScope}${folderKey ? `  ${formatTooltipKey(folderKey)}` : ""}`,
 						}),
 					];
-		const approve = actionButton(this.options.exactGrant === true ? "Approve File" : "Approve", "approve", {
-			...(approveKey ? { keys: approveKey } : {}),
-			tone: "accent",
-			title: `${this.options.exactGrant === true ? `Approve this call and remember it ${this.#rememberAlways ? "for every session" : "for this session only"}` : "Approve this call (a command is never remembered by its text)"}${approveKey ? `  ${formatTooltipKey(approveKey)}` : ""}`,
-		});
+		const toolName = this.options.toolName;
+		const tool =
+			toolName === undefined
+				? []
+				: [
+						actionButton(`Approve ${toolName} for session`, "tool", {
+							tone: "accent",
+							title: `Approve every ${toolName} call for the rest of this session`,
+						}),
+					];
+		// The exact answer is named for what it records — "Approve File" only for a file target —
+		// and prompts that offer grants without an exact answer carry "Approve Once" instead of a
+		// plain "Approve" that would record just as little.
+		const approve = approvalDialogExactAnswer(this.options)
+			? [
+					actionButton(fileGrant ? "Approve File" : "Approve", "approve", {
+						...(approveKey ? { keys: approveKey } : {}),
+						tone: "accent",
+						title: `${fileGrant ? `Approve reads and writes to this file ${grantScope}` : `Approve this call and remember what it touched ${grantScope}`}${approveSuffix}`,
+					}),
+				]
+			: approvalDialogOffersGrants(this.options)
+				? []
+				: [
+						actionButton("Approve", "approve", {
+							...(approveKey ? { keys: approveKey } : {}),
+							tone: "accent",
+							title: `Approve this call without remembering it${approveSuffix}`,
+						}),
+					];
+		const once = approvalDialogOffersGrants(this.options)
+			? [
+					actionButton("Approve Once", "once", {
+						tone: "accent",
+						title: "Approve this call without remembering it",
+					}),
+				]
+			: [];
 		const remember = approvalDialogCanRemember(this.options)
 			? [
 					actionButton(approvalDialogRememberLabel(this.#rememberAlways), "remember", {
@@ -419,7 +505,8 @@ export class ApprovalDialogComponent implements Component {
 			children.push(node("col", { role: "omp.approval.details" }, rows, "details"));
 		}
 		// The countdown, when one runs, leads the bar like the ask dialog's. The answers keep the
-		// menu's order — the remember checkbox, then Approve Directory, Approve File, and Deny.
+		// menu's order — the remember checkbox, then Approve Directory, the by-name tool answer,
+		// the exact answer, Approve Once, and Deny.
 		children.push(
 			actionBar([
 				...(this.#countdown ? [this.#countdown.describe()] : []),
@@ -427,7 +514,9 @@ export class ApprovalDialogComponent implements Component {
 				...expand,
 				...remember,
 				...directory,
-				approve,
+				...tool,
+				...approve,
+				...once,
 				deny,
 			]),
 		);
@@ -442,6 +531,8 @@ export class ApprovalDialogComponent implements Component {
 		if (this.#closed || event.type !== "action") return;
 		if (event.act === "approve") this.#finish("approve");
 		else if (event.act === "folder") this.#finish("folder");
+		else if (event.act === "tool") this.#finish("tool");
+		else if (event.act === "once") this.#finish("once");
 		else if (event.act === "remember") this.#toggleRemember();
 		else if (event.act === "deny") this.#finish("deny");
 		else if (event.act === "expand") this.toggleDetails();
@@ -486,12 +577,14 @@ export class ApprovalDialogComponent implements Component {
 		this.options.tui?.requestRender();
 	}
 
-	#finish(outcome: "approve" | "folder" | "deny"): void {
+	#finish(outcome: "approve" | "folder" | "tool" | "once" | "deny"): void {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#countdown?.dispose();
 		if (outcome === "approve") this.callbacks.onApprove(this.#rememberAlways);
 		else if (outcome === "folder") this.callbacks.onApproveFolder?.(this.#rememberAlways);
+		else if (outcome === "tool") this.callbacks.onApproveTool?.();
+		else if (outcome === "once") this.callbacks.onApproveOnce?.();
 		else this.callbacks.onDeny();
 	}
 }

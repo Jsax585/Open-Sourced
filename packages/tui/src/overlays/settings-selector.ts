@@ -957,7 +957,7 @@ export class SettingsSelectorComponent implements Component {
 			case "providerLimits":
 				return { k: "action", label: "Edit…", act: "edit" };
 			case "action":
-				return { k: "action", label: "Run…", act: "run" };
+				return { k: "action", label: def.actionLabel ?? "Run…", act: "run" };
 			case "multiselect":
 				return {
 					k: "multi",
@@ -1529,7 +1529,7 @@ export class SettingsSelectorComponent implements Component {
 			case "action":
 				return {
 					...item,
-					currentValue: "Run…",
+					currentValue: def.actionLabel ?? "Run…",
 					submenu: (_cv, done) => this.#createActionMenu(def, done),
 				};
 
