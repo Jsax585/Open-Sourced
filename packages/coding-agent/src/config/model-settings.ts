@@ -27,8 +27,8 @@ export interface ModelPreset {
 	/** `defaultThinkingLevel` at save time; absent in hand-written presets that leave it alone. */
 	defaultThinkingLevel?: SettingValueOf<typeof cfgDefaultThinkingLevel>;
 	/**
-	 * Role-keyed `retry.fallbackChains` entries at save time. Absent in presets saved before chains
-	 * were recorded; applying such a preset clears every role chain.
+	 * Role-keyed `retry.fallbackChains` entries at save time; `[]` is an explicit "no fallbacks".
+	 * Absent in presets saved before chains were recorded; applying such a preset leaves chains alone.
 	 */
 	fallbackChains?: Record<string, string[]>;
 }

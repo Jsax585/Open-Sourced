@@ -1841,12 +1841,14 @@ export class Settings {
 
 	/**
 	 * Get the layer supplying the `retry.fallbackChains` entry for `key`, with the
-	 * same layer order as {@link getModelRoleProvenance}.
+	 * same layer order as {@link getModelRoleProvenance}. A `null` tombstone on
+	 * `retry` or on the whole chain map owns every key, as it masks lower layers.
 	 */
 	getFallbackChainProvenance(key: string): SettingProvenance {
 		const owns = (layer: RawSettings): boolean => {
+			if (layer.retry === null) return true;
 			const chains = getByPath(layer, ["retry", "fallbackChains"]);
-			return isRecord(chains) && Object.hasOwn(chains, key);
+			return chains === null || (isRecord(chains) && Object.hasOwn(chains, key));
 		};
 		if (owns(this.#overrides)) return "runtime";
 		if (owns(this.#configOverlay)) return "overlay";

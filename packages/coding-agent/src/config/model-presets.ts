@@ -10,8 +10,9 @@
  * role overrides like hub edits do. Roles still decided by another layer (a
  * `--config` overlay, a project config in global mode, or the global config in
  * project mode) are reported back instead of being silently kept. Role fallback
- * chains are written to the global config like model hub chain edits; chains
- * keyed by model or provider selector are not part of a preset.
+ * chains are written to the global config like model hub chain edits, and only in
+ * global storage mode; chains keyed by model or provider selector are not part of
+ * a preset. An empty chain (`[]`) is kept as "no fallbacks", unlike an absent one.
  */
 import type { Model } from "@oh-my-pi/pi-ai";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
@@ -64,21 +65,23 @@ function parseModelPreset(raw: unknown): ModelPreset | string {
 			if (!Array.isArray(chain) || !chain.every(entry => typeof entry === "string" && entry.trim() !== "")) {
 				return `fallback chain \`${role}\` is not a list of model selectors`;
 			}
-			// An empty chain means "no chain", as in the model hub; keep it out so matching stays exact.
-			if (chain.length > 0) fallbackChains[role] = [...chain];
+			fallbackChains[role] = [...chain];
 		}
 		preset.fallbackChains = fallbackChains;
 	}
 	return preset;
 }
 
-/** Effective non-empty fallback chains keyed by role; model- and provider-keyed chains are left out. */
+/**
+ * Effective fallback chains keyed by role, including explicit empty ones (`[]` disables
+ * fallbacks, while an absent chain inherits defaults); model- and provider-keyed chains are left out.
+ */
 function getRoleFallbackChains(settings: Settings): Record<string, string[]> {
 	const chains = cfgRetryFallbackChains.get(settings);
 	const roleChains: Record<string, string[]> = {};
 	for (const key of Object.keys(chains)) {
 		const chain = chains[key];
-		if (!isRetryFallbackModelKey(key) && chain && chain.length > 0) roleChains[key] = [...chain];
+		if (!isRetryFallbackModelKey(key) && Array.isArray(chain)) roleChains[key] = [...chain];
 	}
 	return roleChains;
 }
@@ -118,9 +121,9 @@ export function getModelPresetNames(settings: Settings): string[] {
 
 /**
  * First saved preset (by name) the current setup matches: identical effective
- * role assignments and role fallback chains (none for a preset saved without
- * them, as applying it clears them) and, when the preset records one, the same
- * default thinking level. Undefined when the setup was edited past every preset.
+ * role assignments, the same role fallback chains when the preset records them
+ * (a preset without them leaves chains alone) and, when the preset records one,
+ * the same default thinking level. Undefined when the setup was edited past every preset.
  */
 export function findActiveModelPreset(settings: Settings): string | undefined {
 	const roles = settings.getModelRoles();
@@ -133,7 +136,7 @@ export function findActiveModelPreset(settings: Settings): string | undefined {
 		if (lookup.kind !== "found") return false;
 		const { modelRoles, defaultThinkingLevel, fallbackChains } = lookup.preset;
 		if (defaultThinkingLevel !== undefined && defaultThinkingLevel !== thinking) return false;
-		if (!sameChains(fallbackChains ?? {}, chains)) return false;
+		if (fallbackChains !== undefined && !sameChains(fallbackChains, chains)) return false;
 		const presetIds = Object.keys(modelRoles);
 		return (
 			presetIds.length === roleIds.length &&
@@ -355,11 +358,14 @@ function writePresetRoles(settings: Settings, preset: ModelPreset): void {
 
 /**
  * Replace the global role fallback chains with the preset's, clearing role chains it
- * leaves out. A preset without recorded chains clears them all, so the previous setup's
- * backups never outlive a switch. Model- and provider-keyed chains stay as they are.
+ * leaves out. Model- and provider-keyed chains stay as they are. A preset without
+ * recorded chains leaves them alone. In project storage mode nothing is written:
+ * chains have no project-scoped write, and rewriting global chains would change
+ * every other project; chains that then differ are reported as shadowed.
  */
 function writePresetFallbackChains(settings: Settings, preset: ModelPreset): void {
-	const chains = preset.fallbackChains ?? {};
+	const chains = preset.fallbackChains;
+	if (chains === undefined || cfgModelRoleStorage.get(settings) === "project") return;
 	const retry = settings.getGlobalSettings().retry;
 	const global = isRecord(retry) ? retry.fallbackChains : undefined;
 	const globalRoles = isRecord(global) ? Object.keys(global).filter(key => !isRetryFallbackModelKey(key)) : [];
@@ -367,18 +373,18 @@ function writePresetFallbackChains(settings: Settings, preset: ModelPreset): voi
 		if (!Object.hasOwn(chains, role)) cfgRetryFallbackChains.setEntry(settings, role, undefined);
 	}
 	for (const role of Object.keys(chains)) {
-		const chain = chains[role];
-		cfgRetryFallbackChains.setEntry(settings, role, chain.length > 0 ? chain : undefined);
+		cfgRetryFallbackChains.setEntry(settings, role, chains[role]);
 	}
 }
 
 function shadowedChains(settings: Settings, preset: ModelPreset): ModelPresetShadowedChain[] {
-	const expectedChains = preset.fallbackChains ?? {};
+	const expectedChains = preset.fallbackChains;
+	if (expectedChains === undefined) return [];
 	const effective = getRoleFallbackChains(settings);
 	const roles = new Set([...Object.keys(effective), ...Object.keys(expectedChains)]);
 	const shadowed: ModelPresetShadowedChain[] = [];
 	for (const role of [...roles].sort((a, b) => a.localeCompare(b))) {
-		const expected = expectedChains[role]?.length ? expectedChains[role] : undefined;
+		const expected = Object.hasOwn(expectedChains, role) ? expectedChains[role] : undefined;
 		const actual = Object.hasOwn(effective, role) ? effective[role] : undefined;
 		if (!sameChain(expected, actual)) {
 			shadowed.push({ role, expected, actual, source: settings.getFallbackChainProvenance(role) });
@@ -495,7 +501,8 @@ function describeRoleValue(value: string | undefined): string {
 }
 
 function describeChain(chain: readonly string[] | undefined): string {
-	return chain ? chain.join(" → ") : "(none)";
+	if (!chain) return "(none)";
+	return chain.length > 0 ? chain.join(" → ") : "(no fallbacks)";
 }
 
 /** One line per role, the thinking level and each role fallback chain the preset could not set, for status output. */
