@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Extensions can declare `requiredModelPolicies` in their package manifest and register session-scoped admission policies via `registerModelPolicy`; `getModelPolicyCandidates` returns the admitted, ranked models, and policy-carrying preloads rebind fresh per session ([#16070](https://github.com/can1357/oh-my-pi/pull/16070) by [@hanthor](https://github.com/hanthor))
+
 ### Changed
 
 - With a first-party Anthropic model on the official API selected, the interactive UI opens the API connection at startup, on model switch, and when you start typing, so the next turn skips connection setup; third-party gateways and custom endpoints are never probed ([#16044](https://github.com/can1357/oh-my-pi/pull/16044) by [@H4vC](https://github.com/H4vC))

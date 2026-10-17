@@ -7,7 +7,21 @@
  * compaction item as replacement history.
  */
 
-import type { Api, CodexCompactionContext, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
+import type {
+	Api,
+	CodexCompactionContext,
+	FetchImpl,
+	Model,
+	ProviderSessionState,
+	SimpleStreamOptions,
+} from "@oh-my-pi/pi-ai";
+import {
+	assertModelPolicyAdmission,
+	getModelPolicyScope,
+	ModelPolicyError,
+	type ModelPolicyEffort,
+} from "@oh-my-pi/pi-ai";
+import { assertOpenAIModelPolicyRequest, attestModelPolicyOptions } from "@oh-my-pi/pi-ai/model-policy";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { createOpenAICodexCompactionRequestContext } from "@oh-my-pi/pi-ai/providers/openai-codex-compaction";
 import { applyCodexResponsesLiteShape } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
@@ -24,6 +38,7 @@ import {
 	resolveOpenAIRequestSetup,
 } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { captureOpenAIHttpError } from "@oh-my-pi/pi-ai/utils/openai-http";
+import { resolveWireModelId } from "@oh-my-pi/pi-catalog/model-thinking";
 import { isBedrockOpenAIUrl } from "@oh-my-pi/pi-catalog/hosts";
 import {
 	applyCodexResidencyHeader,
@@ -82,6 +97,8 @@ export interface CompactionV2Request {
 	retainedMessageBudget: number;
 	sessionId?: string;
 	promptCacheKey?: string;
+	/** Canonical normalized controls, kept separate from wire-encoded `body.reasoning`. */
+	policyOptions?: SimpleStreamOptions;
 }
 
 /** Response collected from the V2 stream and converted into replacement history. */
@@ -164,8 +181,12 @@ function resolveOpenAiCodexResponsesEndpoint(baseUrl: string | undefined): strin
 	return `${normalizedBase}/codex/responses`;
 }
 
-function resolveCompactionV2Model(model: Model): string {
-	const requestModel = model.remoteCompaction?.model ?? model.requestModelId ?? model.id;
+function resolveCompactionV2Model(model: Model, effort?: ModelPolicyEffort): string {
+	const requestModel =
+		model.remoteCompaction?.model ??
+		(effort === undefined
+			? (model.requestModelId ?? model.id)
+			: resolveWireModelId(model, effort === "off" ? undefined : effort));
 	if (compactionV2Api(model) !== "azure-openai-responses") return requestModel;
 	const mappedDeployment = parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(requestModel);
 	return mappedDeployment ?? requestModel;
@@ -193,6 +214,7 @@ export function buildCompactionV2Request(
 		promptCacheKey?: string;
 		retainedMessageBudget?: number;
 		retainedUserItems?: unknown[];
+		policyOptions?: SimpleStreamOptions;
 	},
 ): CompactionV2Request {
 	const cacheOptions = { sessionId: options?.sessionId, promptCacheKey: options?.promptCacheKey };
@@ -227,16 +249,20 @@ export function buildCompactionV2RequestFromBody(
 		promptCacheKey?: string;
 		retainedMessageBudget?: number;
 		retainedUserItems?: unknown[];
+		policyOptions?: SimpleStreamOptions;
 	},
 ): CompactionV2Request {
 	const input = Array.isArray(body.input) ? body.input : [];
+	const controls = options?.policyOptions;
+	const effort = controls?.disableReasoning || controls?.forceReasoningOff ? "off" : controls?.reasoning;
 	return {
-		body: { ...body, model: resolveCompactionV2Model(model), input },
+		body: { ...body, model: resolveCompactionV2Model(model, effort), input },
 		input,
 		retainedUserItems: options?.retainedUserItems ?? input,
 		retainedMessageBudget: resolveCompactionV2RetainedMessageBudget(options?.retainedMessageBudget),
 		sessionId: options?.sessionId,
 		promptCacheKey: options?.promptCacheKey,
+		policyOptions: controls,
 	};
 }
 
@@ -259,6 +285,29 @@ export async function requestCompactionV2Streaming(
 		preferWebsockets?: boolean;
 	},
 ): Promise<CompactionV2Response> {
+	const scope = getModelPolicyScope(undefined, request.sessionId);
+	const controls = request.policyOptions;
+	if (
+		scope?.enabled &&
+		model.reasoning &&
+		!controls?.disableReasoning &&
+		!controls?.forceReasoningOff &&
+		controls?.reasoning === undefined
+	) {
+		throw new ModelPolicyError("Unverifiable compaction thinking effort");
+	}
+	const effort = controls?.disableReasoning || controls?.forceReasoningOff ? "off" : (controls?.reasoning ?? "off");
+	assertModelPolicyAdmission(model, effort, scope);
+	if (scope?.enabled) {
+		const nativeWireModel = resolveWireModelId(model, effort === "off" ? undefined : effort);
+		if (
+			(model.remoteCompaction?.api && model.remoteCompaction.api !== model.api) ||
+			(model.remoteCompaction?.model && model.remoteCompaction.model !== nativeWireModel) ||
+			request.body.model !== resolveCompactionV2Model(model, effort)
+		) {
+			throw new ModelPolicyError("Remote compaction changed the admitted model identity");
+		}
+	}
 	let fetchImpl: FetchImpl = options?.fetch ?? globalThis.fetch;
 	if (isBedrockOpenAIUrl(model.baseUrl)) {
 		({
@@ -347,27 +396,63 @@ async function attemptCompactionV2Streaming(
 		body.client_metadata = options.codexMetadata.clientMetadata;
 	}
 
-	if (shouldUseCodexProviderTransport(model)) {
-		const eventStream = await openCodexCompactionEventStream(model, body, {
-			apiKey,
-			signal,
-			fetch: fetchImpl,
-			sessionId: request.sessionId,
-			providerSessionState: options.providerSessionState,
-			preferWebsockets: options.preferWebsockets,
-			responsesLite: model.useResponsesLite,
-			codexCompaction: createOpenAICodexCompactionRequestContext({
-				context: options.codexCompaction,
-				implementation: "responses_compaction_v2",
-			}),
-		});
+	const nativeTransport = shouldUseCodexProviderTransport(model);
+	const policyEnabled = getModelPolicyScope(undefined, request.sessionId)?.enabled;
+	const transportOptions =
+		nativeTransport || policyEnabled
+			? {
+					...request.policyOptions,
+					apiKey,
+					signal,
+					fetch: fetchImpl,
+					sessionId: request.sessionId,
+					providerSessionState: options.providerSessionState,
+					preferWebsockets: options.preferWebsockets,
+					responsesLite: model.useResponsesLite,
+					codexCompaction: createOpenAICodexCompactionRequestContext({
+						context: options.codexCompaction,
+						implementation: "responses_compaction_v2",
+					}),
+				}
+			: undefined;
+	if (transportOptions && policyEnabled) {
+		attestModelPolicyOptions(transportOptions, model, transportOptions);
+	}
+
+	if (shouldUseCodexProviderTransport(model) && transportOptions) {
+		assertOpenAIModelPolicyRequest(
+			model,
+			body,
+			transportOptions,
+			resolveCompactionV2Model(
+				model,
+				request.policyOptions?.disableReasoning || request.policyOptions?.forceReasoningOff
+					? "off"
+					: request.policyOptions?.reasoning,
+			),
+		);
+		const eventStream = await openCodexCompactionEventStream(model, body, transportOptions);
 		return collectCompactionV2Events(eventStream, request);
 	}
 
+	const serializedBody = stringifyJson(body);
+	if (policyEnabled) {
+		assertOpenAIModelPolicyRequest(
+			model,
+			JSON.parse(serializedBody ?? "null"),
+			transportOptions,
+			resolveCompactionV2Model(
+				model,
+				request.policyOptions?.disableReasoning || request.policyOptions?.forceReasoningOff
+					? "off"
+					: request.policyOptions?.reasoning,
+			),
+		);
+	}
 	const response = await fetchImpl(endpoint, {
 		method: "POST",
 		headers: buildCompactionV2Headers(model, apiKey, request, options.codexMetadata),
-		body: stringifyJson(body),
+		body: serializedBody,
 		signal,
 	});
 

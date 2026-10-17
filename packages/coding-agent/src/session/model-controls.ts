@@ -8,6 +8,14 @@ import {
 	shouldSendServiceTier,
 } from "@oh-my-pi/pi-ai";
 import {
+	allowedModelEfforts,
+	effectiveModelEffort,
+	getModelPolicyCandidates,
+	getModelPolicyScope,
+	ModelPolicyError,
+	type ModelPolicyEffort,
+} from "@oh-my-pi/pi-ai";
+import {
 	clearAnthropicFastModeFallback,
 	isAnthropicFastModeFallbackDisabled,
 } from "@oh-my-pi/pi-ai/providers/anthropic-state";
@@ -510,6 +518,24 @@ export class ModelControls {
 	// Thinking Level Management
 	// =========================================================================
 
+	#policyThinkingLevel(level: ThinkingLevel | undefined): ThinkingLevel | undefined {
+		const model = this.#model;
+		const scope = getModelPolicyScope(this.#host.settings, this.#host.sessionId());
+		if (!model || !scope?.enabled) return level;
+		const effective = effectiveModelEffort(model, level as ModelPolicyEffort | undefined);
+		if (allowedModelEfforts(model, scope).includes(effective)) return effective as ThinkingLevel;
+		const ceiling = this.#thinkingLevelCeiling;
+		const candidate = getModelPolicyCandidates([model], undefined, scope).find(
+			pair =>
+				ceiling === undefined ||
+				pair.effort === "off" ||
+				THINKING_EFFORTS.indexOf(pair.effort) <= THINKING_EFFORTS.indexOf(ceiling),
+		);
+		if (!candidate)
+			throw new ModelPolicyError(`Model policy denied thinking selection for ${model.provider}/${model.id}`);
+		return candidate.effort as ThinkingLevel;
+	}
+
 	#applyThinkingLevelToAgent(level: ThinkingLevel | undefined): void {
 		this.#host.agent.setThinkingLevel(toReasoningEffort(level));
 		this.#host.agent.setDisableReasoning(shouldDisableReasoning(level));
@@ -523,10 +549,12 @@ export class ModelControls {
 	 */
 	setThinkingLevel(level: ConfiguredThinkingLevel | undefined, persist: boolean = false): void {
 		if (level === AUTO_THINKING) {
-			const provisional = clampThinkingLevelToCeiling(
-				this.#model,
-				resolveProvisionalAutoLevel(this.#model),
-				this.#thinkingLevelCeiling,
+			const provisional = this.#policyThinkingLevel(
+				clampThinkingLevelToCeiling(
+					this.#model,
+					resolveProvisionalAutoLevel(this.#model),
+					this.#thinkingLevelCeiling,
+				),
 			);
 			const wasAuto = this.#autoThinking;
 			const previousLevel = this.#thinkingLevel;
@@ -551,9 +579,11 @@ export class ModelControls {
 		const wasAuto = this.#autoThinking;
 		this.#autoThinking = false;
 		this.#autoResolvedLevel = undefined;
-		const effectiveLevel = resolveThinkingLevelForModel(
-			this.#model,
-			clampThinkingLevelToCeiling(this.#model, level, this.#thinkingLevelCeiling),
+		const effectiveLevel = this.#policyThinkingLevel(
+			resolveThinkingLevelForModel(
+				this.#model,
+				clampThinkingLevelToCeiling(this.#model, level, this.#thinkingLevelCeiling),
+			),
 		);
 		// Leaving auto must persist even when the resolved effort is unchanged (e.g.
 		// auto resolved to medium, then the user pins medium): otherwise the latest
@@ -566,7 +596,12 @@ export class ModelControls {
 		if (isChanging) {
 			this.#host.clearInheritedProviderPromptCacheKey();
 			this.#host.sessionManager.appendThinkingLevelChange(effectiveLevel, effectiveLevel);
-			if (persist && effectiveLevel !== undefined && effectiveLevel !== ThinkingLevel.Off) {
+			if (
+				persist &&
+				effectiveLevel !== undefined &&
+				effectiveLevel !== ThinkingLevel.Off &&
+				effectiveLevel !== ThinkingLevel.Inherit
+			) {
 				cfgDefaultThinkingLevel.set(this.#host.settings, effectiveLevel);
 			}
 			this.#host.emit({ type: "thinking_level_changed", thinkingLevel: effectiveLevel });
@@ -589,6 +624,21 @@ export class ModelControls {
 	/** All selectable effort selectors for the active model, in cycle order. */
 	getAvailableEffortSelectors(): ConfiguredThinkingLevel[] {
 		if (!this.#model?.reasoning) return [];
+		const scope = getModelPolicyScope(this.#host.settings, this.#host.sessionId());
+		if (scope?.enabled) {
+			const allowed = allowedModelEfforts(this.#model, scope);
+			const ceiling = this.#thinkingLevelCeiling;
+			const selectable = allowed.filter(
+				effort =>
+					effort === "off" ||
+					ceiling === undefined ||
+					THINKING_EFFORTS.indexOf(effort) <= THINKING_EFFORTS.indexOf(ceiling),
+			);
+			const selectors = selectable as ConfiguredThinkingLevel[];
+			if (selectable.some(effort => effort !== "off") && !this.#model.thinking?.unverified)
+				selectors.push(AUTO_THINKING);
+			return selectors;
+		}
 		const efforts = this.getAvailableThinkingLevels();
 		const ceiling = this.#thinkingLevelCeiling;
 		const selectable =
@@ -627,7 +677,7 @@ export class ModelControls {
 	 * only); when non-blank it is classified instead of `promptText`.
 	 * Bounded by a timeout + abort; on failure it preserves the last classified
 	 * level, or uses the provisional concrete level before the first resolution.
-	 * Never throws into the turn, and never clears `#autoThinking`.
+	 * Classifier failures preserve auto; model-policy denials still propagate before inference.
 	 */
 	async applyAutoThinkingLevel(promptText: string, generation: number, solutionSpace?: string): Promise<void> {
 		const model = this.#model;
@@ -679,14 +729,16 @@ export class ModelControls {
 		// Drop the result if the turn was aborted/superseded while classifying.
 		if (this.#host.promptGeneration() !== generation || !this.#autoThinking) return;
 
-		const effort = clampThinkingLevelToCeiling(
-			model,
-			resolved ?? this.#autoResolvedLevel ?? resolveProvisionalAutoLevel(model),
-			this.#thinkingLevelCeiling,
+		const effort = this.#policyThinkingLevel(
+			clampThinkingLevelToCeiling(
+				model,
+				resolved ?? this.#autoResolvedLevel ?? resolveProvisionalAutoLevel(model),
+				this.#thinkingLevelCeiling,
+			),
 		);
 		if (effort === undefined) return;
 		const shouldPersistResolution = this.#thinkingLevel !== effort;
-		this.#autoResolvedLevel = effort;
+		this.#autoResolvedLevel = effort === ThinkingLevel.Off || effort === ThinkingLevel.Inherit ? undefined : effort;
 		this.#thinkingLevel = effort;
 		this.#applyThinkingLevelToAgent(effort);
 		if (shouldPersistResolution) {
@@ -696,7 +748,7 @@ export class ModelControls {
 			type: "thinking_level_changed",
 			thinkingLevel: effort,
 			configured: AUTO_THINKING,
-			resolved: effort,
+			resolved: this.#autoResolvedLevel,
 		});
 	}
 

@@ -9,6 +9,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { getEnvApiKey } from "../env-api-key";
+import { assertOpenAIModelPolicyRequest } from "../model-policy";
 import type {
 	AssistantMessage,
 	CacheRetention,
@@ -850,10 +851,12 @@ const streamOpenAIResponsesOnce = (
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			const requestUrl = `${resolvedBaseUrl}/responses`;
 			const applyPayloadReplacement = async (requestParams: OpenAIResponsesSamplingParams) => {
+				const expectedModel = requestParams.model;
 				const replacementPayload = await options?.onPayload?.(requestParams, model);
 				const payload =
 					replacementPayload !== undefined ? (replacementPayload as OpenAIResponsesSamplingParams) : requestParams;
 				applyReasoningEffortFallbackForRequest(payload);
+				assertOpenAIModelPolicyRequest(model, payload, options, expectedModel);
 				return payload;
 			};
 			chained = { ...chained, params: await applyPayloadReplacement(chained.params) };

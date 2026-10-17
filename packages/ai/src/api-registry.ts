@@ -58,6 +58,8 @@ export interface RegisteredCustomApi {
 	stream: CustomStreamFn;
 	streamSimple: CustomStreamSimpleFn;
 	sourceId?: string;
+	/** The adapter preserves canonical SimpleStreamOptions reasoning and explicit reasoning-off flags. */
+	modelPolicyEffort?: boolean;
 }
 
 const customApiRegistry = new Map<string, RegisteredCustomApi>();
@@ -76,12 +78,14 @@ export function registerCustomApi(
 	streamSimple: CustomStreamSimpleFn,
 	sourceId?: string,
 	stream?: CustomStreamFn,
+	options?: { modelPolicyEffort?: boolean },
 ): void {
 	assertCustomApiName(api);
 	customApiRegistry.set(api, {
 		stream: stream ?? ((model, context, options) => streamSimple(model, context, options as SimpleStreamOptions)),
 		streamSimple,
 		sourceId,
+		modelPolicyEffort: options?.modelPolicyEffort === true,
 	});
 }
 
@@ -90,6 +94,23 @@ export function registerCustomApi(
  */
 export function getCustomApi(api: string): RegisteredCustomApi | undefined {
 	return customApiRegistry.get(api);
+}
+
+const VERIFIED_MODEL_POLICY_APIS: Readonly<Record<string, boolean>> = {
+	"openai-completions": true,
+	"openai-responses": true,
+	openrouter: true,
+	"openai-codex-responses": true,
+	"azure-openai-responses": true,
+	"anthropic-messages": true,
+	"google-generative-ai": true,
+	"google-gemini-cli": true,
+	"google-vertex": true,
+};
+
+/** Unknown/custom transports must explicitly opt in to canonical effort admission. */
+export function supportsModelPolicyEffort(api: string): boolean {
+	return VERIFIED_MODEL_POLICY_APIS[api] === true || customApiRegistry.get(api)?.modelPolicyEffort === true;
 }
 
 /**

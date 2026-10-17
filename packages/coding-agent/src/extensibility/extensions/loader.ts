@@ -16,6 +16,13 @@ import type {
 	TextContent,
 	TSchema,
 } from "@oh-my-pi/pi-ai";
+import {
+	getModelPolicyCandidates,
+	ModelPolicyScope,
+	withModelPolicyScope,
+	type ModelPolicy,
+	type ModelPolicyEffort,
+} from "@oh-my-pi/pi-ai";
 import { isBuiltinComposerStyle, type KeyId } from "@oh-my-pi/pi-tui";
 import { hasFsCode, isEacces, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { type ExtensionModule, extensionModuleCapability } from "../../capability/extension-module";
@@ -38,6 +45,7 @@ import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "../plugins/leg
 import { getAllPluginExtensionPaths } from "../plugins/loader";
 
 import { resolvePath, withHostGuard } from "../utils";
+
 import type { ComposerShapeDefinition } from "@oh-my-pi/pi-tui/overlays/composer-shape-registry";
 import type {
 	AssistantThinkingRenderer,
@@ -55,6 +63,12 @@ import type {
 	ToolDefinition,
 	ToolInfo,
 } from "./types";
+const sharedPolicyRuntimes = new WeakSet<IExtensionRuntime>();
+
+/** Unrebindable preloads cannot safely acquire session-specific policies later. */
+export function preventSharedRuntimeModelPolicyRegistration(runtime: IExtensionRuntime): void {
+	sharedPolicyRuntimes.add(runtime);
+}
 
 installLegacyPiSpecifierShim();
 
@@ -99,6 +113,7 @@ export class ExtensionRuntimeNotInitializedError extends Error {
  */
 export class ExtensionRuntime implements IExtensionRuntime {
 	flagValues = new Map<string, boolean | string>();
+	readonly modelPolicyScope = new ModelPolicyScope();
 	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; sourceId: string }> = [];
 
 	registerProvider(name: string, config: ProviderConfig, sourceId: string): void {
@@ -328,6 +343,17 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 		return this.runtime.getCommands();
 	}
 
+	registerModelPolicy(policy: ModelPolicy): void {
+		if (sharedPolicyRuntimes.has(this.runtime))
+			throw new Error("Shared preloaded extensions require rebindable factories to register model policies");
+		if (!this.runtime.modelPolicyScope) throw new Error("Model policy runtime unavailable");
+		this.runtime.modelPolicyScope.register(policy);
+	}
+
+	getModelPolicyCandidates(models: readonly Model[], effort?: ModelPolicyEffort) {
+		return getModelPolicyCandidates(models, effort, this.runtime.modelPolicyScope);
+	}
+
 	setModel(model: Model): Promise<boolean> {
 		return this.runtime.setModel(model);
 	}
@@ -393,6 +419,7 @@ function createExtension(extensionPath: string, resolvedPath: string): Extension
  * Runs an extension factory with provider registration rollback on failure.
  * Restores the complete registration queue when the factory throws because an
  * extension may unregister entries queued by an earlier extension.
+ * A factory that registers a policy cannot fail back to an unprotected runtime.
  */
 async function runExtensionFactory(
 	factory: ExtensionFactory,
@@ -400,10 +427,14 @@ async function runExtensionFactory(
 	runtime: IExtensionRuntime,
 ): Promise<void> {
 	const providerRegistrationCheckpoint = [...runtime.pendingProviderRegistrations];
+	const policyRegistrationCheckpoint = runtime.modelPolicyScope?.policies.size ?? 0;
 
 	try {
-		await factory(api);
+		await withModelPolicyScope(runtime.modelPolicyScope, () => factory(api));
 	} catch (error) {
+		if (runtime.modelPolicyScope && runtime.modelPolicyScope.policies.size !== policyRegistrationCheckpoint) {
+			runtime.modelPolicyScope.failure = "Model policy extension initialization failed";
+		}
 		runtime.pendingProviderRegistrations.splice(
 			0,
 			runtime.pendingProviderRegistrations.length,
@@ -414,24 +445,63 @@ async function runExtensionFactory(
 }
 
 async function importExtensionModule(extensionPath: string, cwd: string): Promise<PreparedExtension> {
+	const requiredModelPolicies: string[] = [];
 	const resolvedPath = resolvePath(extensionPath, cwd);
 	try {
+		// Inspect the nearest package before evaluating any extension code. Manifest
+		// inspection is best-effort: an unreadable or unparsable manifest must not
+		// break extensions that load without it. Only a readable manifest that
+		// declares a malformed requirement fails here.
+		const stat = await fs.stat(resolvedPath).catch(() => undefined);
+		let directory = stat?.isDirectory() ? resolvedPath : path.dirname(resolvedPath);
+		while (true) {
+			let raw: string;
+			try {
+				raw = await fs.readFile(path.join(directory, "package.json"), "utf8");
+			} catch (error) {
+				if (!isEnoent(error)) break;
+				const parent = path.dirname(directory);
+				if (parent === directory) break;
+				directory = parent;
+				continue;
+			}
+			let manifest: { omp?: { requiredModelPolicies?: unknown } };
+			try {
+				manifest = JSON.parse(raw);
+			} catch {
+				break;
+			}
+			const required = manifest.omp?.requiredModelPolicies;
+			if (required !== undefined) {
+				if (!Array.isArray(required) || required.some(id => typeof id !== "string" || !id.trim()))
+					throw new Error("Invalid omp.requiredModelPolicies");
+				requiredModelPolicies.push(...required);
+			}
+			break;
+		}
 		const module = (await withHostGuard(() => loadLegacyPiModule(resolvedPath))) as LoadedExtensionModule;
 		const factory = getExtensionFactory(module);
 
 		if (typeof factory !== "function") {
 			return {
 				path: extensionPath,
+				requiredModelPolicies,
 				factory: null,
 				resolvedPath,
 				error: `Extension does not export a valid factory function: ${extensionPath}`,
 			};
 		}
 
-		return { path: extensionPath, factory, resolvedPath, error: null };
+		return { path: extensionPath, factory, resolvedPath, error: null, requiredModelPolicies };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		return { path: extensionPath, factory: null, resolvedPath, error: `Failed to load extension: ${message}` };
+		return {
+			path: extensionPath,
+			factory: null,
+			resolvedPath,
+			error: `Failed to load extension: ${message}`,
+			requiredModelPolicies,
+		};
 	}
 }
 
@@ -443,17 +513,26 @@ async function bindExtension(
 	runtime: IExtensionRuntime,
 ): Promise<{ extension: Extension | null; error: string | null }> {
 	const factory = imported.factory;
+	for (const id of imported.requiredModelPolicies ?? []) runtime.modelPolicyScope?.required.add(id);
 	if (imported.error !== null || factory === null) {
+		if (imported.requiredModelPolicies?.length && runtime.modelPolicyScope)
+			runtime.modelPolicyScope.failure = `Required model policy extension failed: ${imported.error}`;
 		return { extension: null, error: imported.error };
 	}
 	try {
 		const extension = createExtension(extensionPath, imported.resolvedPath);
 		const api = new ConcreteExtensionAPI(PiCodingAgent, extension, runtime, cwd, eventBus);
 		await withHostGuard(() => runExtensionFactory(factory, api, runtime));
+		for (const id of imported.requiredModelPolicies ?? []) {
+			if (!runtime.modelPolicyScope?.policies.has(id))
+				throw new Error(`Required model policy not registered: ${id}`);
+		}
 
 		return { extension, error: null };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
+		if (runtime.modelPolicyScope && imported.requiredModelPolicies?.length)
+			runtime.modelPolicyScope.failure = `Model policy extension initialization failed: ${message}`;
 		return { extension: null, error: `Failed to load extension: ${message}` };
 	}
 }

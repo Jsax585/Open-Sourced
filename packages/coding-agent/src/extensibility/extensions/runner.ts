@@ -19,6 +19,7 @@ import type {
 	ProviderResponseMetadata,
 	TextContent,
 } from "@oh-my-pi/pi-ai";
+import { withModelPolicyScope } from "@oh-my-pi/pi-ai";
 import {
 	clearContextHistoryIndex,
 	getContextHistoryIndex,
@@ -900,7 +901,7 @@ export class ExtensionRunner {
 						const ctx = this.createContext();
 						for (const handler of ext.fileWriteFallbackHandlers) {
 							try {
-								if (await handler(req, ctx)) return true;
+								if (await this.runScoped(() => handler(req, ctx))) return true;
 							} catch (error) {
 								logger.warn("Extension file write fallback handler threw; trying next handler", {
 									extension: ext.path,
@@ -919,7 +920,7 @@ export class ExtensionRunner {
 						const ctx = this.createContext();
 						for (const handler of ext.fileDeleteFallbackHandlers) {
 							try {
-								if (await handler(req, ctx)) return true;
+								if (await this.runScoped(() => handler(req, ctx))) return true;
 							} catch (error) {
 								logger.warn("Extension file delete fallback handler threw; trying next handler", {
 									extension: ext.path,
@@ -1387,7 +1388,7 @@ export class ExtensionRunner {
 	 * invoked directly by their controllers and route through here instead.
 	 */
 	runScoped<T>(fn: () => T): T {
-		return withActiveSettings(this.settings, fn);
+		return withModelPolicyScope(this.runtime.modelPolicyScope, () => withActiveSettings(this.settings, fn));
 	}
 
 	/**
@@ -1573,7 +1574,7 @@ export class ExtensionRunner {
 		let handlerResult: R | typeof EXTENSION_HANDLER_TIMEOUT | typeof EXTENSION_HANDLER_ABORTED | undefined;
 		let handlerFailure: { error: unknown } | undefined;
 		try {
-			handlerResult = await withActiveSettings(this.settings, () =>
+			handlerResult = await this.runScoped(() =>
 				raceHandlerWithTimeout(
 					async (handlerSignal, budget) => {
 						registrationScope.signal = handlerSignal;

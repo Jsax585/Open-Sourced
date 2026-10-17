@@ -46,6 +46,10 @@ import type {
 	Context,
 	ImageContent,
 	Model,
+	ModelPolicy,
+	ModelPolicyCandidate,
+	ModelPolicyEffort,
+	ModelPolicyScope,
 	ModelSpec,
 	ProviderResponseMetadata,
 	ServiceTier,
@@ -1864,6 +1868,12 @@ export interface ExtensionAPI {
 	/** Set the current model. Returns false if no API key available. */
 	setModel(model: Model): Promise<boolean>;
 
+	/** Register a synchronous, session-scoped, fail-closed model/effort restriction. */
+	registerModelPolicy(policy: ModelPolicy): void;
+
+	/** Native-supported admissible pairs, ordered by registered policy preferences. */
+	getModelPolicyCandidates(models: readonly Model[], effort?: ModelPolicyEffort): ModelPolicyCandidate[];
+
 	/** Get current thinking level. */
 	getThinkingLevel(): ThinkingLevel | undefined;
 
@@ -1959,6 +1969,8 @@ export interface ProviderConfig {
 	api?: Api;
 	/** Custom streaming function for non-built-in APIs. */
 	streamSimple?: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
+	/** Opt in only when the adapter preserves canonical reasoning efforts and explicit reasoning-off flags. */
+	modelPolicyEffort?: boolean;
 	/** Custom headers to include in requests. */
 	headers?: Record<string, string>;
 	/** If true, adds Authorization: Bearer header with the resolved API key. */
@@ -2106,6 +2118,7 @@ export type SetServiceTierHandler = (family: ServiceTierFamily, tier: ServiceTie
 /** Shared state created by loader, used during registration and runtime. */
 export interface ExtensionRuntimeState {
 	flagValues: Map<string, boolean | string>;
+	readonly modelPolicyScope?: ModelPolicyScope;
 	/** Provider registrations queued during extension loading, processed during session initialization */
 	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; sourceId: string }>;
 	/** Queue a provider registration until initialization, then apply it immediately. */
@@ -2202,6 +2215,8 @@ export interface PreparedExtension {
 	resolvedPath: string;
 	factory: ExtensionFactory | null;
 	error: string | null;
+	/** Read before importing the module; inherited when factories are rebound in children. */
+	requiredModelPolicies?: readonly string[];
 }
 
 /** Result of loading extensions. */

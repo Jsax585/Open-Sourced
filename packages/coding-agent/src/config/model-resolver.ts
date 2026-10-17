@@ -25,6 +25,13 @@ import {
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ModelRoleLookup } from "@oh-my-pi/pi-tui/overlays/model-browser";
 import type { Api, Effort, KnownProvider, Model, ModelSpec } from "@oh-my-pi/pi-ai";
+import {
+	allowedModelEfforts,
+	effectiveModelEffort,
+	getModelPolicyCandidates,
+	getModelPolicyScope,
+	type ModelPolicyEffort,
+} from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { resolveBareVariantSelector, resolveVariantSelector } from "@oh-my-pi/pi-catalog/compat/collapse";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
@@ -1429,6 +1436,38 @@ export function resolveModelRoleValue(
 	availableModels: Model<Api>[],
 	options?: { settings?: Settings; roleLookup?: ModelRoleLookup; matchPreferences?: ModelMatchPreferences },
 ): ResolvedModelRoleValue {
+	const resolved = resolveModelRoleValueUnchecked(roleValue, availableModels, options);
+	const scope = getModelPolicyScope(options?.settings);
+	if (!scope?.enabled) return resolved;
+	if (resolved.model) {
+		const requested =
+			resolved.thinkingLevel === AUTO_THINKING
+				? undefined
+				: (resolved.thinkingLevel as ModelPolicyEffort | undefined);
+		const effective = effectiveModelEffort(resolved.model, requested);
+		if (allowedModelEfforts(resolved.model, scope).includes(effective)) return resolved;
+		const sameModel = getModelPolicyCandidates([resolved.model], undefined, scope)[0];
+		if (sameModel)
+			return {
+				...resolved,
+				thinkingLevel: sameModel.effort as ConfiguredThinkingLevel,
+				explicitThinkingLevel: true,
+			};
+	}
+	const replacement = getModelPolicyCandidates(availableModels, undefined, scope)[0];
+	return {
+		model: replacement?.model,
+		thinkingLevel: replacement?.effort as ConfiguredThinkingLevel | undefined,
+		explicitThinkingLevel: !!replacement,
+		warning: resolved.warning,
+	};
+}
+
+function resolveModelRoleValueUnchecked(
+	roleValue: string | undefined,
+	availableModels: Model<Api>[],
+	options?: { settings?: Settings; roleLookup?: ModelRoleLookup; matchPreferences?: ModelMatchPreferences },
+): ResolvedModelRoleValue {
 	if (!roleValue) {
 		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
 	}
@@ -1572,6 +1611,32 @@ export interface RoleChainCandidate {
 
 /** Resolve a role's primary and retry candidates in effective attempt order. */
 export function resolveRoleChain(role: string, settings: Settings, pool: Model<Api>[]): RoleChainCandidate[] {
+	const scope = getModelPolicyScope(settings);
+	if (scope?.enabled) {
+		const primary = resolveModelRoleValueUnchecked(settings.getModelRole(role), pool, { settings });
+		const pairs = getModelPolicyCandidates(pool, undefined, scope);
+		const candidates: RoleChainCandidate[] = pairs.map(pair => ({
+			model: pair.model,
+			thinkingLevel: pair.effort as ConfiguredThinkingLevel,
+			explicit: false,
+		}));
+		if (primary.model) {
+			const requested =
+				primary.thinkingLevel === AUTO_THINKING
+					? undefined
+					: (primary.thinkingLevel as ModelPolicyEffort | undefined);
+			const effort = effectiveModelEffort(primary.model, requested);
+			const index = candidates.findIndex(
+				candidate => candidate.model === primary.model && candidate.thinkingLevel === effort,
+			);
+			if (index >= 0) {
+				const [preferred] = candidates.splice(index, 1);
+				preferred.explicit = true;
+				candidates.unshift(preferred);
+			}
+		}
+		return candidates;
+	}
 	const configuredRoles = settings.getModelRoles();
 	const configured = settings.getModelRole(role)?.trim();
 	const primarySelector = configured || formatModelRoleAlias(role);

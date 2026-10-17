@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getModelPolicyScope, withModelPolicyScope } from "@oh-my-pi/pi-ai";
 import {
 	getAgentDbPath,
 	getAgentDir,
@@ -3968,7 +3969,9 @@ const activeSettingsScope = new AsyncLocalStorage<Settings>();
  * identity without process-global mutation.
  */
 export function withActiveSettings<T>(instance: Settings | undefined, fn: () => T): T {
-	return instance ? activeSettingsScope.run(instance, fn) : fn();
+	return instance
+		? activeSettingsScope.run(instance, () => withModelPolicyScope(getModelPolicyScope(instance), fn))
+		: fn();
 }
 
 let globalInstance: Settings | null = null;

@@ -5,6 +5,7 @@
 ### Added
 
 - Added `prewarmAnthropicConnection(model)`, which opens the official Anthropic API connection for a first-party `anthropic` model ahead of a request, using the same transport and TLS settings so the request reuses it instead of paying the connection handshake ([#16044](https://github.com/can1357/oh-my-pi/pull/16044) by [@H4vC](https://github.com/H4vC))
+- Added session-owned model admission policies: extensions admit models by canonical reasoning effort and rank candidates, and the final serialized model and reasoning controls are verified on OpenAI-family, Anthropic, and Gemini transports while a policy is active; unverifiable transports deny ([#16070](https://github.com/can1357/oh-my-pi/pull/16070) by [@hanthor](https://github.com/hanthor))
 
 ### Changed
 

@@ -23,6 +23,15 @@ import { getEnvApiKey } from "./env-api-key";
 import * as AIError from "./error";
 import { ProviderHttpError } from "./error";
 import { isConcurrencyCapExclusion, isUsageLimitOutcome } from "./error/rate-limit";
+import {
+	applyModelPolicyOptions,
+	assertRawModelPolicyAdmission,
+	attestModelPolicyOptions,
+	getModelPolicyScope,
+	ModelPolicyError,
+} from "./model-policy";
+import { ANTHROPIC_THINKING, GOOGLE_THINKING } from "./thinking-budgets";
+export { ANTHROPIC_THINKING } from "./thinking-budgets";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
 import type { AppleFoundationModelsOptions } from "./providers/apple-foundation-models";
@@ -880,6 +889,7 @@ export function stream<TApi extends Api>(
 	context: Context,
 	options?: OptionsForApi<TApi>,
 ): AssistantMessageEventStream {
+	assertRawModelPolicyAdmission(model, options);
 	if (model.resolveHeaders) {
 		return withResolvedModelHeaders(model, options?.signal, resolvedModel => stream(resolvedModel, context, options));
 	}
@@ -959,6 +969,7 @@ function streamDispatch<TApi extends Api>(
 	const prepared = providerDefinition?.prepareRequest?.(requestModel, requestOptions as StreamOptions);
 	const providerModel = prepared?.model ?? requestModel;
 	const preparedOptions = prepared?.options ?? (requestOptions as StreamOptions);
+	assertRawModelPolicyAdmission(providerModel, preparedOptions);
 	const apiKey = preparedOptions.apiKey || getEnvApiKey(providerModel.provider);
 	if (!apiKey) {
 		throw new AIError.MissingApiKeyError(providerModel.provider);
@@ -1220,6 +1231,7 @@ export function streamSimple<TApi extends Api>(
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
+	options = applyModelPolicyOptions(model, options);
 	const sessionOptions = withInferenceSessionId(options);
 	// Unverified thinking is opt-in: without a requested effort the request is
 	// byte-identical to a non-reasoning model's.
@@ -1268,6 +1280,7 @@ function streamSimpleRequest<TApi extends Api>(
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
+	options = applyModelPolicyOptions(model, options);
 	const requestOptions = withSupportedSamplingParams(
 		model,
 		withTransportFetch(model, (options || {}) as SimpleStreamOptions),
@@ -1587,24 +1600,6 @@ function maxTokensWithThinkingBudget(
 export const OUTPUT_FALLBACK_BUFFER = 4000;
 const ANTHROPIC_USE_INTERLEAVED_THINKING = Bun.env.PI_NO_INTERLEAVED_THINKING !== "1";
 
-export const ANTHROPIC_THINKING: Record<Effort, number> = {
-	minimal: 1024,
-	low: 4096,
-	medium: 8192,
-	high: 16384,
-	xhigh: 32768,
-	max: 32768,
-};
-
-const GOOGLE_THINKING: Record<Effort, number> = {
-	minimal: 1024,
-	low: 4096,
-	medium: 8192,
-	high: 16384,
-	xhigh: 24575,
-	max: 32768,
-};
-
 const BEDROCK_CLAUDE_THINKING: Record<Effort, number> = {
 	minimal: 1024,
 	low: 2048,
@@ -1801,6 +1796,34 @@ function assertExplicitOpenAIResponsesPromptCacheSupport<TApi extends Api>(
 }
 
 function mapOptionsForApi<TApi extends Api>(
+	model: Model<TApi>,
+	rawOptions?: SimpleStreamOptions,
+	apiKey?: string,
+): OptionsForApi<TApi> {
+	const mapped = mapOptionsForApiUnchecked(model, rawOptions, apiKey);
+	if (getModelPolicyScope(undefined, rawOptions?.sessionId)?.enabled && rawOptions?.reasoning) {
+		const effort = rawOptions.reasoning;
+		const anthropicBudget = (mapped as AnthropicOptions).thinkingBudgetTokens;
+		const googleBudget = (mapped as GoogleOptions).thinking?.budgetTokens;
+		if (
+			(anthropicBudget !== undefined && anthropicBudget !== ANTHROPIC_THINKING[effort]) ||
+			(googleBudget !== undefined &&
+				googleBudget !==
+					(model.api === "google-gemini-cli"
+						? (model.thinking?.effortBudgets?.[effort] ?? GOOGLE_THINKING[effort])
+						: getGoogleBudget(model as Model<"google-generative-ai">, effort))) ||
+			(model.api === "bedrock-converse-stream" &&
+				model.thinking?.mode !== "effort" &&
+				(mapped as BedrockOptions).thinkingBudgets?.[effort] !== undefined &&
+				(mapped as BedrockOptions).thinkingBudgets?.[effort] !== BEDROCK_CLAUDE_THINKING[effort])
+		) {
+			throw new ModelPolicyError("Custom or clamped thinking budget cannot attest the admitted effort");
+		}
+	}
+	return attestModelPolicyOptions(mapped, model, rawOptions);
+}
+
+function mapOptionsForApiUnchecked<TApi extends Api>(
 	model: Model<TApi>,
 	rawOptions?: SimpleStreamOptions,
 	apiKey?: string,

@@ -1,6 +1,7 @@
 import { $env, type ServerSentEvent } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { getEnvApiKey } from "../env-api-key";
+import { assertOpenAIModelPolicyRequest } from "../model-policy";
 import type {
 	AssistantMessage,
 	Context,
@@ -128,6 +129,7 @@ const streamAzureOpenAIResponsesOnce = (
 			const { url, headers, baseUrl } = buildAzureResponsesRequest(model, apiKey, options);
 			const requestModel = modelForAzureEndpoint(model, baseUrl);
 			let params = buildParams(requestModel, context, options, deploymentName);
+			const expectedModel = params.model;
 			const replacementPayload = await options?.onPayload?.(params, requestModel);
 			if (replacementPayload !== undefined) {
 				params = replacementPayload as typeof params;
@@ -153,6 +155,7 @@ const streamAzureOpenAIResponsesOnce = (
 			const attemptedReasoningEffortFallbacks = new Set<string>();
 			let openaiStream: AsyncIterable<ResponseStreamEvent>;
 			while (true) {
+				assertOpenAIModelPolicyRequest(model, params, options, expectedModel);
 				let requestTimeout: NodeJS.Timeout | undefined;
 				if (requestTimeoutMs !== undefined) {
 					requestTimeout = setTimeout(

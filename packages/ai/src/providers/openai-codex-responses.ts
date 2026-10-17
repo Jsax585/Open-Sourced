@@ -25,6 +25,7 @@ import {
 	USER_AGENT,
 } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
+import { assertOpenAIModelPolicyRequest } from "../model-policy";
 import { parseToolCallArguments, replayableToolCallArguments } from "../utils/tool-call-arguments";
 import { getEnvApiKey } from "../env-api-key";
 import type {
@@ -1873,6 +1874,7 @@ async function openCodexWebSocketTransport(
 	websocketState.acceptedSteering = undefined;
 	const canAppendBeforeRequest = websocketState.canAppend === true;
 	let chainedBody = buildCodexChainedRequestBody(requestContext.transformedBody, websocketState);
+	assertOpenAIModelPolicyRequest(model, chainedBody, options, chainedBody.model);
 	const websocketHeaders = createCodexHeaders(
 		requestContext.requestHeaders,
 		requestContext.accountId,
@@ -1957,10 +1959,12 @@ async function openCodexWebSocketTransport(
 		...chainedBody,
 		client_metadata: websocketClientMetadata,
 	};
+	const expectedModel = websocketRequest.model;
 	const replacementWebsocketRequest = await options?.onPayload?.(websocketRequest, model);
 	if (replacementWebsocketRequest !== undefined) {
 		websocketRequest = replacementWebsocketRequest as typeof websocketRequest;
 	}
+	assertOpenAIModelPolicyRequest(model, websocketRequest, options, expectedModel);
 	recordCodexTurnRequestDiagnostics(websocketState, websocketRequest, "websocket", canAppendBeforeRequest);
 	const requestBodyForState = cloneJsonTree(requestContext.transformedBody);
 	// `onPayload` may rewrite the outgoing frame (e.g. drop `stream_options` or
@@ -2066,10 +2070,12 @@ async function openCodexSseTransport(
 	};
 	const canAppendBeforeRequest = state?.canAppend === true;
 	let wireBody = body;
+	const expectedModel = body.model;
 	const replacementWireBody = await options?.onPayload?.(wireBody, model);
 	if (replacementWireBody !== undefined) {
 		wireBody = replacementWireBody as RequestBody;
 	}
+	assertOpenAIModelPolicyRequest(model, wireBody, options, expectedModel);
 	recordCodexTurnRequestDiagnostics(state, wireBody, "sse", canAppendBeforeRequest);
 	// SSE turns never chain, so later reads need only the per-turn knobs (summary
 	// delivery, service tier); copying the whole transcript would be wasted work.

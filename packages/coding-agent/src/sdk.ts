@@ -24,6 +24,7 @@ import type {
 	ServiceTierByFamily,
 	SimpleStreamOptions,
 } from "@oh-my-pi/pi-ai";
+import { bindModelPolicyScope, ModelPolicyError, withModelPolicyScope } from "@oh-my-pi/pi-ai";
 import { resolveApiKeyOnce } from "@oh-my-pi/pi-ai/auth-retry";
 import type { DiscoverAuthStorageOptions } from "@oh-my-pi/pi-ai/auth-broker/discover";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
@@ -126,6 +127,7 @@ import {
 	type ToolDefinition,
 	wrapRegisteredTools,
 } from "./extensibility/extensions";
+import { preventSharedRuntimeModelPolicyRegistration } from "./extensibility/extensions/loader";
 import type { UserWaitTracker } from "./extensibility/extensions/user-wait";
 import {
 	createSkillDescriptionCompressor,
@@ -2695,10 +2697,29 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		let extensionPaths: string[];
 		let extensionsResult: LoadExtensionsResult;
 		if (!restrictToolNames && options.preloadedExtensions) {
-			extensionsResult = {
-				...options.preloadedExtensions,
-				extensions: [...options.preloadedExtensions.extensions],
-			};
+			// Rebinding re-runs every factory: only policy-carrying preloads need
+			// fresh per-session scopes. Plain preloads reuse the shared result,
+			// exactly as before, with late policy registration fenced off.
+			if (
+				options.preloadedExtensions.preparedExtensions &&
+				(options.preloadedExtensions.runtime.modelPolicyScope?.policies.size ?? 0) > 0
+			) {
+				extensionsResult = await bindPreparedExtensions(
+					options.preloadedExtensions.preparedExtensions,
+					cwd,
+					eventBus,
+				);
+				for (const [name, value] of options.preloadedExtensions.runtime.flagValues)
+					extensionsResult.runtime.flagValues.set(name, value);
+			} else {
+				if (options.preloadedExtensions.runtime.modelPolicyScope?.enabled)
+					throw new ModelPolicyError("Preloaded model-policy extensions require rebindable factories");
+				preventSharedRuntimeModelPolicyRegistration(options.preloadedExtensions.runtime);
+				extensionsResult = {
+					...options.preloadedExtensions,
+					extensions: [...options.preloadedExtensions.extensions],
+				};
+			}
 			// Capture paths for downstream forwarding; filter inline-factory
 			// entries (`<inline-N>`) — those are per-session, not source paths.
 			extensionPaths = extensionsResult.extensions
@@ -2772,6 +2793,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 		}
 		toolSession.preparedExtensions = extensionsResult.preparedExtensions;
+		const modelPolicyScope = extensionsResult.runtime.modelPolicyScope;
+		if (modelPolicyScope) bindModelPolicyScope(settings, modelPolicyScope, providerSessionId);
 
 		// Process provider registrations queued during extension loading.
 		// This must happen before the runner is created so that models registered by
@@ -4402,10 +4425,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// Outbound credential-pattern redaction follows THIS session's `secrets.enabled` per
 		// request, not the process-wide switch (the newest effect holder's): concurrent ACP/SDK
 		// sessions in one process each keep their own policy.
-		const settingsAwareStreamFn: StreamFn = (streamModel, context, streamOptions) =>
+		const redactedStreamFn: StreamFn = (streamModel, context, streamOptions) =>
 			withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>
 				settingsBoundStreamFn(streamModel, context, streamOptions),
 			);
+		const settingsAwareStreamFn: StreamFn = (streamModel, context, streamOptions) =>
+			modelPolicyScope?.enabled
+				? withModelPolicyScope(modelPolicyScope, () => redactedStreamFn(streamModel, context, streamOptions))
+				: redactedStreamFn(streamModel, context, streamOptions);
 		// Primary-agent (and its auto-learn capture twin) provider options read per
 		// request, so `/settings` changes to budgets, Kimi format, or the Codex
 		// websocket policy reach the next call without a session recreate.

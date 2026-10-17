@@ -24,6 +24,7 @@ import {
 	type Usage,
 	withAuth,
 } from "@oh-my-pi/pi-ai";
+import { applyModelPolicyOptions, getModelPolicyScope, withModelPolicyScope } from "@oh-my-pi/pi-ai";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { createOpenAICodexCompactionRequestContext } from "@oh-my-pi/pi-ai/providers/openai-codex-compaction";
@@ -634,9 +635,10 @@ function effortFromThinkingLevel(level: ThinkingLevel): Effort {
 }
 
 /**
- * Resolves the reasoning effort to send on a compaction LLM call.
+ * Resolves complete canonical reasoning controls for a compaction LLM call.
  *
- * - Explicit `Off` → `undefined` (omit reasoning entirely; the user said no thinking).
+ * - Explicit `Off` → disable reasoning explicitly, but only while a model
+ *   policy is registered; otherwise omit reasoning exactly as before.
  * - `undefined` / `Inherit` → historical `Effort.High` default → clamped per model
  *   (preserves current behavior for users who never touched the dial).
  * - Explicit effort → respect user choice → clamped per model.
@@ -648,11 +650,24 @@ function effortFromThinkingLevel(level: ThinkingLevel): Effort {
  * openai-responses mapper, which omits the wire param — no
  * `requireSupportedEffort` throw.
  */
-function resolveCompactionEffort(model: Model, level: ThinkingLevel | undefined): Effort | undefined {
-	if (level === ThinkingLevel.Off) return undefined;
-	const requested: Effort =
-		level === undefined || level === ThinkingLevel.Inherit ? Effort.High : effortFromThinkingLevel(level);
-	return clampThinkingLevelForModel(model, requested);
+function resolveCompactionEffort(
+	model: Model,
+	level: ThinkingLevel | undefined,
+	sessionId?: string,
+): SimpleStreamOptions {
+	const requested: Effort | undefined =
+		level === ThinkingLevel.Off
+			? undefined
+			: level === undefined || level === ThinkingLevel.Inherit
+				? Effort.High
+				: effortFromThinkingLevel(level);
+	const policyEnabled = getModelPolicyScope(undefined, sessionId)?.enabled === true;
+	const controls: SimpleStreamOptions = {
+		reasoning: clampThinkingLevelForModel(model, requested),
+		disableReasoning: policyEnabled && level === ThinkingLevel.Off,
+		forceReasoningOff: policyEnabled && level === ThinkingLevel.Off,
+	};
+	return applyModelPolicyOptions(model, controls) ?? controls;
 }
 
 /**
@@ -721,7 +736,7 @@ export interface SummaryOptions {
 	 * compaction honors the user's `/model` thinking selection instead of
 	 * silently overriding it with `Effort.High` (the historical default).
 	 * `undefined` / `ThinkingLevel.Inherit` falls back to that historical
-	 * default; `ThinkingLevel.Off` omits reasoning entirely. See
+	 * default; `ThinkingLevel.Off` explicitly disables reasoning. See
 	 * `resolveCompactionEffort` for the conversion contract.
 	 */
 	thinkingLevel?: ThinkingLevel;
@@ -899,6 +914,20 @@ export async function generateSummary(
 	previousSummary?: string,
 	options?: SummaryOptions,
 ): Promise<string> {
+	const scope = getModelPolicyScope(undefined, options?.sessionId);
+	if (scope && scope !== getModelPolicyScope())
+		return withModelPolicyScope(scope, () =>
+			generateSummary(
+				currentMessages,
+				model,
+				reserveTokens,
+				apiKey,
+				signal,
+				customInstructions,
+				previousSummary,
+				options,
+			),
+		);
 	const maxTokens = Math.min(Math.floor(0.8 * reserveTokens), MAX_SUMMARY_TOKENS);
 
 	// Serialize conversation to text so model doesn't try to continue it
@@ -1031,7 +1060,7 @@ async function summarizeConversationWindow(
 			maxTokens,
 			signal,
 			apiKey,
-			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
+			...resolveCompactionEffort(model, options?.thinkingLevel, options?.sessionId),
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
 			fetch: options?.fetch,
@@ -1137,7 +1166,7 @@ export async function generateHandoffFromContext(
 ): Promise<string> {
 	const requestOptions = {
 		...options.streamOptions,
-		reasoning: resolveCompactionEffort(model, options.thinkingLevel),
+		...resolveCompactionEffort(model, options.thinkingLevel, options.streamOptions.sessionId),
 		toolChoice: "none" as const,
 	};
 	let response = await instrumentedCompleteSimple(model, context, requestOptions, {
@@ -1245,7 +1274,7 @@ async function generateShortSummary(
 			maxTokens,
 			signal,
 			apiKey,
-			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
+			...resolveCompactionEffort(model, options?.thinkingLevel, options?.sessionId),
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
 			fetch: options?.fetch,
@@ -1566,16 +1595,18 @@ function buildOpenAiResponsesCompactionInput(
  * Resolve the Responses `reasoning` param for a V2 compaction request the same
  * way a normal turn does — through {@link resolveOpenAICompatPolicy}, so it
  * honors per-model effort support, `omitReasoningEffort`, disable modes, and the
- * wire-effort mapping. Returns `undefined` for non-reasoning models or when the
- * user selected `Off` (matching the normal-turn omission, not a fabricated shape).
+ * wire-effort mapping. An explicit off selection sends `none`, never the
+ * provider's implicit default effort.
  */
 function buildCompactionV2Reasoning(
 	model: Model<"openai-responses" | "azure-openai-responses" | "openai-codex-responses">,
-	thinkingLevel: ThinkingLevel | undefined,
+	controls: SimpleStreamOptions,
 ): { effort: string; summary: string } | undefined {
+	if (controls.forceReasoningOff) return { effort: "none", summary: "auto" };
 	const policy = resolveOpenAICompatPolicy(model, {
 		endpoint: "responses",
-		reasoning: resolveCompactionEffort(model, thinkingLevel),
+		reasoning: controls.reasoning,
+		disableReasoning: controls.disableReasoning,
 	});
 	const reasoning = policy.reasoning;
 	if (!reasoning.modelSupported || reasoning.disabled || reasoning.omitReasoningEffort) return undefined;
@@ -1631,6 +1662,11 @@ export async function compact(
 	signal?: AbortSignal,
 	options?: SummaryOptions,
 ): Promise<CompactionResult> {
+	const scope = getModelPolicyScope(undefined, options?.sessionId);
+	if (scope && scope !== getModelPolicyScope())
+		return withModelPolicyScope(scope, () =>
+			compact(preparation, model, apiKey, customInstructions, signal, options),
+		);
 	const {
 		firstKeptEntryId,
 		messagesToSummarize,
@@ -1779,6 +1815,7 @@ export async function compact(
 		// then serialize each one exactly as the request does.
 		const isUserAuthored = summaryOptions.isUserAuthored ?? ((message: AgentMessage) => message.role === "user");
 		const remoteSystemPrompt = summaryOptions.remoteSystemPrompt ?? [SUMMARIZATION_SYSTEM_PROMPT];
+		const policyOptions = resolveCompactionEffort(model, summaryOptions.thinkingLevel, summaryOptions.sessionId);
 		const buildV2Input = async (includeTail: boolean): Promise<RemoteCompactionV2Input> => {
 			const messages = convertToLlm(includeTail ? remoteMessages : remotePrefixMessages);
 			const userMessages = convertToLlm(
@@ -1801,8 +1838,8 @@ export async function compact(
 					model,
 					{ systemPrompt: remoteSystemPrompt, messages, tools: summaryOptions.tools },
 					{
-						reasoning: resolveCompactionEffort(model, summaryOptions.thinkingLevel),
-						forceReasoningOff: summaryOptions.thinkingLevel === ThinkingLevel.Off,
+						...policyOptions,
+						apiKey: undefined, // Auth resolves via withAuth; never forward a resolver into the body builder.
 						responsesLite: model.useResponsesLite,
 						sessionId: summaryOptions.sessionId,
 						promptCacheKey: summaryOptions.promptCacheKey,
@@ -1881,13 +1918,14 @@ export async function compact(
 				promptCacheKey: summaryOptions.promptCacheKey,
 				retainedMessageBudget: settings.v2RetainedMessageBudget,
 				retainedUserItems,
+				policyOptions,
 			};
 			const request = codexBody
 				? buildCompactionV2RequestFromBody(model, { ...codexBody, input: trimmed.input }, requestOptions)
 				: buildCompactionV2Request(model, trimmed.input, instructions, {
 						...requestOptions,
 						tools,
-						reasoning: buildCompactionV2Reasoning(model, summaryOptions.thinkingLevel),
+						reasoning: buildCompactionV2Reasoning(model, policyOptions),
 					});
 			const remote = await withAuth(
 				apiKey,
@@ -2121,7 +2159,7 @@ export async function compact(
 						formatAdditionalContext(summaryOptions.extraContext).trim() || undefined,
 					),
 					maxTokens: Math.min(Math.floor(0.8 * reserveTokens), MAX_SUMMARY_TOKENS),
-					reasoning: resolveCompactionEffort(model, summaryOptions.thinkingLevel),
+					...resolveCompactionEffort(model, summaryOptions.thinkingLevel, summaryOptions.sessionId),
 				},
 				signal,
 				{
@@ -2297,7 +2335,7 @@ async function generateTurnPrefixSummary(
 			maxTokens,
 			signal,
 			apiKey,
-			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
+			...resolveCompactionEffort(model, options?.thinkingLevel, options?.sessionId),
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
 			fetch: options?.fetch,
