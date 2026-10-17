@@ -10,6 +10,7 @@
 
 import { describe, expect, it } from "bun:test";
 import { reportPassesUsageCutoff } from "../src/auth/usage";
+import { dedupeUsageReports } from "../src/auth/usage-report";
 import type { UsageReport } from "../src/usage";
 
 function report(overrides: Partial<UsageReport>): UsageReport {
@@ -85,5 +86,39 @@ describe("reportPassesUsageCutoff", () => {
 	it("ignores limits without a stamped fetchedAt", () => {
 		const legacy = report({ fetchedAt: now + 100 });
 		expect(reportPassesUsageCutoff(legacy, now)).toBe(true);
+	});
+});
+
+describe("dedupeUsageReports aggregate merge stamping", () => {
+	const now = 1_000_000;
+
+	function limit(id: string, fetchedAt?: number): UsageReport["limits"][number] {
+		return {
+			id,
+			label: id,
+			scope: { provider: "anthropic", accountId: "acct-shared" },
+			amount: { unit: "percent" },
+			...(fetchedAt === undefined ? {} : { fetchedAt }),
+		};
+	}
+
+	it("stamps limits merged from an older report with their source snapshot time", () => {
+		const olderFull = report({ fetchedAt: now - 500, limits: [limit("anthropic/session")] });
+		const newerPartial = report({ fetchedAt: now + 100, limits: [limit("anthropic/window")] });
+
+		const [merged] = dedupeUsageReports([olderFull, newerPartial]);
+		expect(merged.fetchedAt).toBe(now + 100);
+		expect(merged.limits.find(row => row.id === "anthropic/session")?.fetchedAt).toBe(now - 500);
+		expect(merged.limits.find(row => row.id === "anthropic/window")?.fetchedAt).toBe(now + 100);
+		// The composite must not pass a cutoff newer than the stale retained row.
+		expect(reportPassesUsageCutoff(merged, now)).toBe(false);
+	});
+
+	it("keeps an explicit per-limit stamp over the source report time", () => {
+		const older = report({ fetchedAt: now - 500, limits: [limit("anthropic/session", now + 100)] });
+		const newer = report({ fetchedAt: now + 100, limits: [limit("anthropic/window")] });
+
+		const [merged] = dedupeUsageReports([older, newer]);
+		expect(merged.limits.find(row => row.id === "anthropic/session")?.fetchedAt).toBe(now + 100);
 	});
 });

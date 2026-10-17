@@ -13,7 +13,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
-type ScriptedReport = { status: "exhausted" | "healthy"; fetchedAt?: number };
+type ScriptedReport = { status: "exhausted" | "healthy" | "reserve"; fetchedAt?: number };
 
 let scriptedReports: Record<string, ScriptedReport | undefined> = {};
 const usageFetches: Array<{ provider: string; fetchedAt: number }> = [];
@@ -24,7 +24,8 @@ function exhausted(status: ScriptedReport["status"]): boolean {
 }
 
 function claudeReport(scripted: ScriptedReport): UsageReport {
-	const amount = { usedFraction: exhausted(scripted.status) ? 1 : 0.1, unit: "percent" as const };
+	const usedFraction = scripted.status === "reserve" ? 0.95 : exhausted(scripted.status) ? 1 : 0.1;
+	const amount = { usedFraction, unit: "percent" as const };
 	const status = exhausted(scripted.status) ? ("exhausted" as const) : ("ok" as const);
 	const limit = (id: string, windowId: string, label: string): UsageReport["limits"][number] => ({
 		id,
@@ -42,7 +43,8 @@ function claudeReport(scripted: ScriptedReport): UsageReport {
 }
 
 function codexReport(scripted: ScriptedReport): UsageReport {
-	const amount = { usedFraction: exhausted(scripted.status) ? 1 : 0.1, unit: "percent" as const };
+	const usedFraction = scripted.status === "reserve" ? 0.95 : exhausted(scripted.status) ? 1 : 0.1;
+	const amount = { usedFraction, unit: "percent" as const };
 	const status = exhausted(scripted.status) ? ("exhausted" as const) : ("ok" as const);
 	const limit = (id: string, windowId: string, label: string): UsageReport["limits"][number] => ({
 		id,
@@ -441,7 +443,11 @@ describe("early quota reset recovery", () => {
 		expect(authStorage.sessions.pin("anthropic", "pinned-session", pinnedAccount.credentialId)).toBe(true);
 
 		registry.suppressSelector(PRIMARY_SELECTOR, clock.now() + 30 * 60_000, clock.now());
-		scriptedReports["acct-depleted"] = { status: "healthy" };
+		// The pinned account recovers only into reserve while the sibling is
+		// healthy: this is the path whose automatic release branch must skip
+		// explicit pins. If the isExplicit guard regressed, recovery would evict
+		// the durable pin here.
+		scriptedReports["acct-depleted"] = { status: "reserve" };
 		clock.advance(7 * 60_000);
 
 		// Recovery clears the suppression but must not evict the explicit pin.
