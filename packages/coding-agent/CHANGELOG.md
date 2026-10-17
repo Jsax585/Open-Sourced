@@ -14,7 +14,7 @@
 
 ### Fixed
 
-- Fixed `edit` on a bare file name answering "Use the write tool" when the tag matches a file read outside the workspace; the error now names that file's full path so the retry needs no re-read
+- Fixed `edit` on a bare file name answering "Use the write tool" when the tag matches a file read outside the workspace; the error now names that file's full path so the retry needs no re-read ([#16087](https://github.com/can1357/oh-my-pi/pull/16087) by [@nick-maderight](https://github.com/nick-maderight))
 - Fixed the RPC frame codec (`modes/rpc/rpc-frame`) failing to bundle for Node because it pulled in Bun-only modules and the native addon ([#16072](https://github.com/can1357/oh-my-pi/pull/16072) by [@oyty](https://github.com/oyty))
 - Fixed a prompt sent while Esc was still interrupting the previous turn never settling, so a message steered in as it ended stayed queued instead of running ([#16038](https://github.com/can1357/oh-my-pi/pull/16038) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed isolated tasks freezing the host when the checkout holds linked worktrees of the same repository (e.g. gitignored `.claude/worktrees/`); those worktrees are no longer snapshotted as nested repos ([#16068](https://github.com/can1357/oh-my-pi/issues/16068))
