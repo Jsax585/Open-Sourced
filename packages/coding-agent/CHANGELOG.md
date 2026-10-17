@@ -18,6 +18,7 @@
 
 - Approval answers are named for what they grant: **Approve File** for a file target, **Approve** for a non-file exact target (a directory read, a registered internal URL), **Approve Directory** for a folder, **Approve <tool> for session** for a tool, and **Approve Once** when nothing is recorded. A call whose only target is a directory offers just **Approve Directory** and **Approve Once** — the exact answer would have repeated the directory grant — and hosts without the checkbox spell the cross-instance forms out as **Always Approve Directory** and **Always Approve**/**Always Approve File**.
 - Folder grants cover every read and write below them, and nothing else: the shell is an ordinary exec tool — `bash` prompts unless **Approve bash for session** approves it, and command text is never remembered — and speculative execution honors remembered grants before deciding a call is auto-allowed.
+- Session approvals are kept in the same record shape as the global cache: the in-memory tier stores the key, the tool, the approval time, and the folder scope exactly as a `grants` row does, so both tiers read one grant identically.
 - With a first-party Anthropic model on the official API selected, the interactive UI opens the API connection at startup, on model switch, and when you start typing, so the next turn skips connection setup; third-party gateways and custom endpoints are never probed ([#16044](https://github.com/can1357/oh-my-pi/pull/16044) by [@H4vC](https://github.com/H4vC))
 
 ### Fixed
