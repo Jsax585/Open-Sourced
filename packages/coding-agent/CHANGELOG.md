@@ -2,21 +2,29 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Extension `ui.approve()` hosts now receive the grant answers' metadata (`folderLabel`, `exactGrant`, `fileTarget`, `exactAnswer`, `toolName`) and answer with `true` or `{ approved: true, scope?: "target" | "folder" | "tool", global?: boolean, once?: boolean }`, replacing the `"once" | "session" | "deny"` answer strings.
+
 ### Added
 
-- Added a **Forget Remembered Approvals** action to the settings panel (Interaction → Approvals), shown as a **Clear cache** button: acting on the row empties the global `approval-cache.db` and forgets the session's approvals too, so the next read, write, or command asks again.
-- Added the **Ask and remember** tool approval mode (`tools.approvalMode: always-ask-cached`, `--approval-mode always-ask-cached`): the first `read`, `write`, or `edit` touching a file asks for approval. Each prompt offers **Approve Directory** (`F6`) and **Approve File** answers plus a **Remember** checkbox the `F7` key, the arrows and Enter, or a click flips between *This Session* (in memory, per instance) and *Always* (the `grants` table of `approval-cache.db` under the agent directory, covering every later session). Directory grants cover every read/write below them; a command is never covered by a folder or remembered by its text, so `bash` prompts unless its **Approve bash for session** answer approves the shell for the session. Dangerous commands and explicit prompt policies still ask every call.
-- Reads of public web URLs (`http://`, `https://`, `www.`) never prompt in **Ask and remember** — their contents are already public, so there is nothing to remember.
-- Added an **Approve <tool> for session** answer to **Ask and remember** prompts raised for calls that are not file reads or writes (`bash`, `eval`, `browser`, `task`, …): one grant remembers the tool by name alone for the rest of the session — arguments never enter the key, nothing is written to `approval-cache.db`, and prompts forced by a tool or user `prompt` policy never offer it.
-- Added an **Approve Once** answer to **Ask and remember** prompts that offer grants: it approves the call and records nothing. Calls with nothing else to remember (a command, an eval) show it in place of the plain `Approve` that recorded just as little.
+- Added the **Ask and remember** tool approval mode (`tools.approvalMode: always-ask-cached`, `--approval-mode always-ask-cached`): the first `read`, `write`, or `edit` touching a file asks once, and so does the first call of each exec tool; approved targets skip their later prompts. Each prompt carries a **Remember** checkbox beside its answers — *This Session* keeps the grant in this instance's memory, *Always* writes it to the `grants` table of `approval-cache.db` under the agent directory, where it covers every later session — and offers **Approve Directory** (`F6`, the folder around the call: every read and write below it), **Approve File** (the exact file), and **Approve Once** (this call only, nothing remembered). Prompts forced by a dangerous-command override or an explicit `prompt` policy still ask every call, and plain Approve/Deny prompts stay unchanged in every other mode.
+- Added an **Approve <tool> for session** answer to **Ask and remember** prompts for calls that are not file reads or writes (`bash`, `eval`, `browser`, `task`, …): one grant remembers that tool by name for the rest of the session — arguments never enter the key, nothing reaches `approval-cache.db`, and prompts forced by a tool or user `prompt` policy never offer it. A call with nothing to remember shows **Approve Once** in place of the plain approve answer.
+- Added the **Forget Remembered Approvals** settings action (Interaction → Approvals), shown as a **Clear cache** button: acting on the row empties the global `approval-cache.db` and forgets the session's approvals too, so the next read, write, or command asks again.
+- Reads of public web URLs (`http://`, `https://`, `www.`) never prompt in **Ask and remember** — their contents are already public, so there is nothing to remember; registered internal URLs (`xd://…`, `local://…`) still prompt once per normalized URL.
+- Tools opt into the mode through the new optional `AgentTool.approvalCacheTargets` and `approvalCacheScopes` hooks: the first reports the paths (or URL targets) a call touches, the second the directories it runs inside.
+
+### Changed
+
+- Approval answers are named for what they grant: **Approve File** for a file target, **Approve** for a non-file exact target (a directory read, a registered internal URL), **Approve Directory** for a folder, **Approve <tool> for session** for a tool, and **Approve Once** when nothing is recorded. A call whose only target is a directory offers just **Approve Directory** and **Approve Once** — the exact answer would have repeated the directory grant — and hosts without the checkbox spell the cross-instance forms out as **Always Approve Directory** and **Always Approve**/**Always Approve File**.
+- Folder grants cover every read and write below them, and nothing else: the shell is an ordinary exec tool — `bash` prompts unless **Approve bash for session** approves it, and command text is never remembered — and speculative execution honors remembered grants before deciding a call is auto-allowed.
+- With a first-party Anthropic model on the official API selected, the interactive UI opens the API connection at startup, on model switch, and when you start typing, so the next turn skips connection setup; third-party gateways and custom endpoints are never probed ([#16044](https://github.com/can1357/oh-my-pi/pull/16044) by [@H4vC](https://github.com/H4vC))
 
 ### Fixed
 
-- Fixed the **Approve File** and **Approve Directory** answers in **Ask and remember** prompts describing themselves as "Approve this call and remember it": file prompts (read/write/edit) now read "Approve reads and writes to this file" and "Approve reads and writes within entire directory" for the session or every session, while command prompts keep the folder wording since their grant covers running commands, not just reads and writes.
-- Fixed the **Approve File** answer appearing for targets that are not files: a directory read (e.g. `read C:\Users\KR\Desktop`) now offers only **Approve Directory** and **Approve Once** — the exact answer would have repeated the directory grant — while a URL target keeps **Approve** and spells its cross-instance form out as **Always Approve**.
-### Changed
-
-- With a first-party Anthropic model on the official API selected, the interactive UI opens the API connection at startup, on model switch, and when you start typing, so the next turn skips connection setup; third-party gateways and custom endpoints are never probed ([#16044](https://github.com/can1357/oh-my-pi/pull/16044) by [@H4vC](https://github.com/H4vC))
+- Fixed **Approve File** appearing for targets that are not files: a directory read (e.g. `read C:\Users\KR\Desktop`) no longer offers it — only a file target is named for a file.
+- Fixed the **Approve File** and **Approve Directory** tooltips describing themselves as "Approve this call and remember it": they now name the reads and writes each grant covers, for the session or for every session, and a non-file exact target reads "Approve this call and remember what it touched".
+- Fixed remembered approvals surviving a cache deletion until restart: every check re-reads `approval-cache.db`, so deleting the database, clearing its table, or using **Forget Remembered Approvals** revokes the grants immediately.
 
 ## [18.11.3] - 2026-10-16
 
@@ -1709,53 +1717,4 @@
 - Fixed native judges failing to honor configured request headers, enabling authenticated and header-routed judge providers to work as configured.
 - Fixed LSP requests hanging when aborted while waiting for an earlier write to complete.
 
-## [18.2.7] - 2026-09-21
-
-### Breaking Changes
-
-- Image-generation overrides now use model selectors, and web-search CLI overrides use --model instead of --provider.
-- Removed the bash tool's env parameter.
-- Eval judge(state, questions) is now awaited and returns answers directly; JudgmentHandle and judgment support in wait() have been removed.
-
-### Added
-
-- Added `find` tool for semantic workspace searching, allowing agents to locate behaviors and symbols using natural language
-- Added `find` CLI command for performing semantic workspace searches
-- Added batch evaluation with judge_batch(states, questions) / judgeBatch(...), including bounded background execution, incremental result and status access, per-item failure reporting, and the ability to wait for or reattach to jobs across turns or after a reset.
-- Added the jevify magic keyword to have the agent establish an evaluation rubric before classifying bulk items and inspect only items flagged by the judge.
-- Added omp web-search as an alias for omp search.
-- Added tui.titleSpinner configuration to select the terminal-title working-state spinner (braille, dots, or line).
-- Added Handlebars-based system prompt templates through SYSTEM_TEMPLATE.md, --system-prompt-template, and the SDK, with access to live settings and tool data.
-- Added configurable image, web, speech, dictation, judge, and memory model roles with ordered fallbacks, legacy backend-setting migration, and omp models --kind filtering.
-- Added native OpenRouter image generation, model-selected web-plugin search, and live discovery of TypeSafe judge models.
-
-### Changed
-
-- Updated agent system prompts to prioritize the `find` tool over `grep` and `glob` for behavioral lookups
-- Refined system prompt instructions for XML tag handling and agent persona
-- Updated sloppy edit tool syntax to use plain text headers instead of XML tags
-- Improved startup performance by validating provider-qualified model selectors against only the relevant provider catalog.
-- Reduced launch time for npm and compiled builds by embedding the model catalog more efficiently.
-
-### Fixed
-
-- Fixed system prompt configuration validation so systemPromptTemplate and customSystemPrompt cannot conflict with a full systemPrompt replacement, including when values are empty.
-- Added browser-relay support for listing eligible pages without attaching to or claiming them.
-- Fixed Codex compatibility with the sloppy edit tool.
-- Capped concurrent eval judge and completion requests to prevent large fan-outs from overwhelming judge and fallback models.
-- Temporarily avoids retrying judgment requests with credentials that recently failed due to authorization or billing errors.
-- Fixed image and speech fallback models disappearing after discovery and eliminated incorrect incompatibility warnings for providers without credentials.
-- Fixed resume and continue flows to hide empty sessions.
-- Fixed edit operations that could loop after empty insertions or fail on Unicode no-op and overlapping duplicate matches.
-- Fixed live subagent messages being delayed by agent discovery and roster discovery looping on dot-named transcripts.
-- Fixed llama.cpp discovery and routing for PrismML Bonsai 2 27B GGUF models, including support for cached models and the Qwen 3.8 thinking-level ladder.
-
-## [18.2.6] - 2026-09-18
-
-### Fixed
-
-- Fixed clipboard paste stalling on an empty clipboard; image and text clipboard reads now run concurrently so the empty-clipboard status surfaces after the slower read instead of the sum of both.
-- Fixed memory recall blocks carrying a minute-resolution `Current time` stamp that dirtied the cached system prompt on every refresh; recall rows already carry dates, so the stamp is removed.
-- Fixed `omp auth-broker token` and `omp auth-gateway token` exiting silently without creating a token on Windows when no token file exists yet; token and config reads now use `node:fs` instead of `Bun.file`.
-
-Older entries are archived in [packages/coding-agent/CHANGELOG.md@2a4691429ee6](https://github.com/can1357/oh-my-pi/blob/2a4691429ee6cc22be24b566e2f5e0ad96b208f1/packages/coding-agent/CHANGELOG.md).
+Older entries are archived in [packages/coding-agent/CHANGELOG.md@3a05c7321d8e](https://github.com/can1357/oh-my-pi/blob/3a05c7321d8efe9731f8417ee2e0d34a0b049a16/packages/coding-agent/CHANGELOG.md).

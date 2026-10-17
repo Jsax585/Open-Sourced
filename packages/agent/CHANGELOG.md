@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `AgentTool` gained the optional `approvalCacheTargets` and `approvalCacheScopes` hooks: the seams the `always-ask-cached` approval mode uses to check a call against remembered grants and to record them when the user approves.
+
 ## [18.11.3] - 2026-10-16
 
 ### Added

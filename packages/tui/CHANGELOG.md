@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- The tool-approval prompt's answers are a navigable menu on classic terminals — the arrows move the highlight, `Enter` confirms it, and the **Remember** checkbox toggles in place — and stay clickable buttons on Tern's native surface. The answers keep one order everywhere: the remember checkbox, **Approve Directory**, **Approve <tool> for session**, **Approve File**/**Approve**, **Approve Once**, and **Deny**, each with a tooltip naming exactly what its grant covers.
+- Added the `app.approval.approveFolder` (`F6`) and `app.approval.remember` (`F7`) keybindings, so the directory answer and the remember checkbox stay reachable while a prompt shows: `F6` approves the folder the prompt names, `F7` flips *This Session* ↔ *Always*, and the approve key (`Ctrl+Enter`/`Ctrl+Q`) runs the highlighted exact answer — or **Approve Once** when the call has nothing to name. Details (`Ctrl+O`) and page scrolling keep working, and typing still steers the turn, where sending the message denies the call.
+- Settings action rows can label their control through the new `ui.actionLabel` metadata; **Forget Remembered Approvals** uses it to read **Clear cache**.
+
+### Fixed
+
+- Fixed Enter on an empty composer answering a prompt whose answer menu is not shown: without the menu the key no longer activates an invisible selection.
+- Fixed the arrow-key answer menu showing on surfaces that render the answers as buttons; the menu is classic-terminal only, and native surfaces keep their buttons and key hints.
+- Approval buttons on Tern's native surface now use the accent tone like the primary answer, so the row reads as one set of controls.
+
 ## [18.11.3] - 2026-10-16
 
 ### Added
@@ -2521,68 +2533,4 @@
 
 - Updated tab replacement in editor text sanitization to respect configured tab width setting
 
-## [13.15.0] - 2026-03-23
-
-### Added
-
-- Added `renderInlineMarkdown()` function to render inline markdown (bold, italic, code, links, strikethrough) to styled strings
-
-### Fixed
-
-- Fixed editor consuming user-rebound copy keys, preventing custom keybindings from working in the editor
-
-## [13.14.1] - 2026-03-21
-
-### Added
-
-- Added Ctrl+_ as an additional default shortcut for undo
-
-### Fixed
-
-- Ensured undo functionality respects user-configured keybindings
-
-## [13.12.0] - 2026-03-14
-
-### Added
-
-- Added `moveToMessageStart()` and `moveToMessageEnd()` methods to move cursor to the beginning and end of the entire message
-
-### Fixed
-
-- Fixed autocomplete to preserve `./` prefix when completing relative file and directory paths
-- Fixed paste marker expansion to handle special regex replacement tokens ($1, $2, $&, $$, $`, $') literally in pasted content
-
-## [13.11.0] - 2026-03-12
-
-### Fixed
-
-- Fixed OSC 11 background color detection to correctly handle partial escape sequences that arrive mid-buffer, preventing user input from being swallowed
-- Fixed race condition where overlapping OSC 11 queries would be incorrectly cancelled by DA1 sentinels from previous queries
-
-## [13.7.5] - 2026-03-04
-
-### Changed
-
-- Extracted word navigation logic into reusable `moveWordLeft` and `moveWordRight` utility functions for consistent cursor movement across components
-
-## [13.6.2] - 2026-03-03
-
-### Fixed
-
-- Fixed cursor positioning when content shrinks to empty without clearOnShrink enabled
-
-## [13.5.4] - 2026-03-01
-
-### Fixed
-
-- Fixed viewport repaint scrollback accounting during resize oscillation to avoid double-scrolling on height shrink and added exact-row scrollback assertions in overlay regression coverage ([#228](https://github.com/can1357/oh-my-pi/issues/228), [#234](https://github.com/can1357/oh-my-pi/issues/234))
-
-## [13.5.3] - 2026-03-01
-
-### Fixed
-
-- Fixed append rendering logic to correctly handle offscreen header changes during content overflow growth, preserving scroll history integrity
-- Fixed visible tail line updates when appending new content during viewport overflow conditions
-- Fixed cursor positioning instability when appending content under external cursor relocation by using absolute screen addressing instead of relative cursor movement
-
-Older entries are archived in [packages/tui/CHANGELOG.md@20c388be2131](https://github.com/can1357/oh-my-pi/blob/20c388be2131e06f731a8759ec3ab6121d6ada1c/packages/tui/CHANGELOG.md).
+Older entries are archived in [packages/tui/CHANGELOG.md@0adf7d315e4b](https://github.com/can1357/oh-my-pi/blob/0adf7d315e4b8b0740d9190efba78dafc6c7016c/packages/tui/CHANGELOG.md).
