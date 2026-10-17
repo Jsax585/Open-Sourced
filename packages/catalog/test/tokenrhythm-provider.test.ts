@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
 import { getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
 import { tokenrhythmModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { FetchImpl, Model } from "@oh-my-pi/pi-catalog/types";
@@ -64,8 +68,31 @@ describe("TokenRhythm discovery", () => {
 		expect(getModelPricingStatus(models[0])).not.toBe("fixed");
 	});
 
-	test("a keyless manager does not fetch", () => {
-		expect(tokenrhythmModelManagerOptions({}).fetchDynamicModels).toBeUndefined();
+	test("the seed shows without a key and the live roster replaces it", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-tokenrhythm-"));
+		try {
+			// No staticModels: resolution falls back to the committed bundle, so
+			// this fails if the generated catalog lacks the seed row.
+			const withoutKey = await resolveProviderModels(
+				{ ...tokenrhythmModelManagerOptions({}), cacheDbPath: path.join(tempDir, "keyless.db") },
+				"online-if-uncached",
+			);
+			expect(withoutKey.models.map(model => model.id)).toEqual(["deepseek-v4-pro-0813"]);
+
+			const withLive = await resolveProviderModels(
+				{
+					...tokenrhythmModelManagerOptions({
+						apiKey: "test-key",
+						fetch: rosterFetch([{ id: "glm-5.3", context_length: 1_048_576, max_completion_tokens: 131_072 }]),
+					}),
+					cacheDbPath: path.join(tempDir, "live.db"),
+				},
+				"online",
+			);
+			expect(withLive.models.map(model => model.id)).toEqual(["glm-5.3"]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
 	});
 });
 
