@@ -4024,4 +4024,55 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(registry.find("github-copilot", cachedAlias.id)).toBeUndefined();
 		expect(registry.find("github-copilot", bundledBase.id)?.headers).toEqual(bundledBase.headers);
 	});
+
+	test("models config compat overrides for reasoning history replay flow into resolved model", async () => {
+		// Regression for #12376: models.yml compat overrides for replayReasoningContent
+		// and qwenPreserveThinking must round-trip into the resolved model policy so
+		// remote endpoints requiring historical reasoning content can opt in.
+		writeRawModelsJson({
+			"custom-dashscope": {
+				baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+				api: "openai-completions",
+				auth: "none",
+				compat: {
+					replayReasoningContent: true,
+					qwenPreserveThinking: true,
+				},
+				models: [
+					{
+						id: "qwen-max",
+						name: "Qwen Max",
+						reasoning: true,
+					},
+				],
+			},
+			"alibaba-token-plan": {
+				modelOverrides: {
+					"qwen3.8-max-preview": {
+						compat: {
+							replayReasoningContent: true,
+							qwenPreserveThinking: true,
+						},
+					},
+				},
+			},
+		});
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+			fetch: async () => Response.json({}, { status: 200 }),
+		});
+		await registry.refresh();
+
+		const customModel = registry.find("custom-dashscope", "qwen-max");
+		expect(customModel?.compat).toMatchObject({
+			replayReasoningContent: true,
+			qwenPreserveThinking: true,
+		});
+
+		const overridden = registry.find("alibaba-token-plan", "qwen3.8-max-preview");
+		expect(overridden?.compat).toMatchObject({
+			replayReasoningContent: true,
+			qwenPreserveThinking: true,
+		});
+	});
 });

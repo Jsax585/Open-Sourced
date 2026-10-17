@@ -64,7 +64,7 @@ describe("QwenCloud Token Plan provider", () => {
 			} satisfies ModelSpec<"openai-completions">);
 			expect(sibling.compat?.thinkingFormat).toBe("qwen");
 			expect(sibling.compat?.replayReasoningContent).toBe(false);
-			expect(sibling.compat?.whenThinking?.thinkingFormat ?? "qwen").toBe("qwen");
+			expect(sibling.compat?.whenThinking).toBeUndefined();
 		}
 	});
 

@@ -141,9 +141,30 @@ describe("compat parity", () => {
 					// for discovered siblings (OpenAI dialect); preview re-pins the Qwen
 					// dialect, so its resolved policy materializes a `whenThinking` variant
 					// that is wire-identical (only binary toggle emitted) while the baked
-					// row records no whenThinking object. Exempt the structural diff.
+					// row records no whenThinking object. Exemption is conditional on
+					// wire-identity: thinkingFormat === 'qwen', extraBody === undefined,
+					// and reasoningEffortMap deep-equals {}.
 					if (provider === "alibaba-token-plan" && modelId === "qwen3.8-max-preview") {
-						delete engineCompat.whenThinking;
+						const wt = engineCompat.whenThinking as Record<string, unknown> | undefined;
+						const wtMismatches: string[] = [];
+						if (!wt) {
+							wtMismatches.push("whenThinking is missing");
+						} else {
+							if (wt.thinkingFormat !== "qwen") {
+								wtMismatches.push(`thinkingFormat=${JSON.stringify(wt.thinkingFormat)} (expected "qwen")`);
+							}
+							if (wt.extraBody !== undefined) {
+								wtMismatches.push(`extraBody=${JSON.stringify(wt.extraBody)} (expected undefined)`);
+							}
+							if (!Bun.deepEquals(wt.reasoningEffortMap, {}, true)) {
+								wtMismatches.push(`reasoningEffortMap=${JSON.stringify(wt.reasoningEffortMap)} (expected {})`);
+							}
+						}
+						if (wtMismatches.length > 0) {
+							diffs.push(`${label}: preview whenThinking diverged: ${wtMismatches.join(", ")}`);
+						} else {
+							delete engineCompat.whenThinking;
+						}
 					}
 					diffValues(`${label}.compat`, jsonClone(row.compat), engineCompat, diffs);
 				}
