@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it, spyOn } from "bun:test";
 import { customToolToDefinition } from "@oh-my-pi/pi-coding-agent/sdk";
@@ -15,6 +16,7 @@ import {
 import { approvalDirectoryKey } from "@oh-my-pi/pi-coding-agent/tools/approval-cache";
 import { approvalTargetKey } from "@oh-my-pi/pi-coding-agent/tools/approval-targets";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
+import { TempDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../src/config/settings";
 import { EditTool } from "../../src/edit";
 import type { ToolSession } from "../../src/tools";
@@ -318,6 +320,88 @@ describe("MCP fallback and prompt formatting", () => {
 			{},
 		);
 		expect(prompts[1]!.compact).toBe("Allow tool: bash\nCommand: git push");
+	});
+
+	it("names the folder a grant would cover, and lists the entries it reaches", async () => {
+		const root = TempDir.createSync("@pi-approval-folder-prompt-");
+		try {
+			const desktop = path.join(root.path(), "Desktop");
+			fs.mkdirSync(path.join(desktop, "TestFolder"), { recursive: true });
+			fs.writeFileSync(path.join(desktop, "notes.txt"), "x");
+			fs.writeFileSync(path.join(desktop, "alpha.txt"), "x");
+			const prompts: { full: string; compact: string }[] = [];
+			const ui = {
+				select: async () => undefined,
+				approve: async (prompt: { full: string; compact: string }) => {
+					prompts.push(prompt);
+					return true;
+				},
+			};
+			const read = {
+				name: "read",
+				approval: "read" as const,
+				approvalCacheTargets: () => [path.join(desktop, "notes.txt")],
+			};
+			await requestApproval(ui, read, {});
+			const label = approvalDirectoryKey(desktop).replace(/[\\/]+$/, "");
+			expect(prompts[0]!.full.split("\n")).toEqual([
+				"Allow tool: read",
+				`Folder: ${label} — 3 entries (1 folder, 2 files)`,
+				"  - TestFolder/",
+				"  - alpha.txt",
+				"  - notes.txt",
+			]);
+			expect(prompts[0]!.compact).toContain("  - notes.txt");
+			// A target no folder holds (an internal URL) offers no folder answer, so no listing.
+			const urlRead = {
+				name: "read",
+				approval: "read" as const,
+				approvalCacheTargets: () => ["xd://todo"],
+			};
+			await requestApproval(ui, urlRead, {});
+			expect(prompts[1]!.full).not.toContain("Folder:");
+		} finally {
+			root.removeSync();
+		}
+	});
+
+	it("caps the listed entries and counts the rest", async () => {
+		const root = TempDir.createSync("@pi-approval-folder-cap-");
+		try {
+			const folder = path.join(root.path(), "Data");
+			fs.mkdirSync(folder, { recursive: true });
+			for (const name of ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "f.txt"]) {
+				fs.writeFileSync(path.join(folder, name), "x");
+			}
+			const prompts: { full: string; compact: string }[] = [];
+			const ui = {
+				select: async () => undefined,
+				approve: async (prompt: { full: string; compact: string }) => {
+					prompts.push(prompt);
+					return true;
+				},
+			};
+			const write = {
+				name: "write",
+				approval: "write" as const,
+				approvalCacheTargets: () => [path.join(folder, "a.txt")],
+			};
+			await requestApproval(ui, write, {});
+			expect(prompts[0]!.compact.split("\n")).toEqual([
+				"Allow tool: write",
+				`Folder: ${approvalDirectoryKey(folder).replace(/[\\/]+$/, "")} — 6 entries (0 folders, 6 files)`,
+				"  - a.txt",
+				"  - b.txt",
+				"  - c.txt",
+				"  - d.txt",
+				"  … 2 more",
+			]);
+			// The full prompt, which the expand key shows, lists them all.
+			expect(prompts[0]!.full).toContain("  - f.txt");
+			expect(prompts[0]!.full).not.toContain("more");
+		} finally {
+			root.removeSync();
+		}
 	});
 
 	it("does not add MCP origin for annotated MCP tools", () => {

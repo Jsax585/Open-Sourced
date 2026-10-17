@@ -22,7 +22,12 @@ import {
 } from "./approval-cache";
 
 import { cfgToolsApproval, cfgToolsApprovalMode } from "./settings";
-import { approvalTargetDirectory, approvalTargetNamesFile } from "./approval-targets";
+import {
+	approvalFolderListing,
+	type ApprovalFolderListing,
+	approvalTargetDirectory,
+	approvalTargetNamesFile,
+} from "./approval-targets";
 
 export type { ToolApproval, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
 export type { ApprovalGrantStore, ApprovalGrant, ApprovalTier } from "./approval-cache";
@@ -599,6 +604,34 @@ function approvalSummary(details: readonly string[]): string | undefined {
 	return omitted ? `${row} …` : row;
 }
 
+/** Entries the full prompt lists for the folder a grant would cover; the rest are counted, not named. */
+const APPROVAL_FOLDER_FULL_LISTING = 24;
+/** Entries the compact prompt lists before the count takes over. */
+const APPROVAL_FOLDER_COMPACT_LISTING = 4;
+/** Counts one entry, one folder, one file — "1 folder", "3 files". */
+const count = (n: number, singular: string, plural: string): string => `${n} ${n === 1 ? singular : plural}`;
+
+/**
+ * Lines naming the folder a grant would cover and listing its own entries — the whole reach of a
+ * folder grant — so the prompt shows what it is about to allow before the user approves it. A
+ * folder nothing occupies yet still gets its name, with no counts. Empty without a folder answer.
+ */
+function approvalFolderPromptLines(
+	folder: string | undefined,
+	listing: ApprovalFolderListing | undefined,
+	limit: number,
+): string[] {
+	if (folder === undefined) return [];
+	if (listing === undefined) return [`Folder: ${folder}`];
+	const lines = [
+		`Folder: ${folder} — ${count(listing.total, "entry", "entries")} (${count(listing.folders, "folder", "folders")}, ${count(listing.files, "file", "files")})`,
+	];
+	const shown = listing.entries.slice(0, limit);
+	for (const entry of shown) lines.push(`  - ${entry}`);
+	if (listing.total > shown.length) lines.push(`  … ${count(listing.total - shown.length, "more", "more")}`);
+	return lines;
+}
+
 /** Label of the session-scoped answer for an exact target that is not a file (a directory or URL). */
 export const APPROVAL_APPROVE_LABEL = "Approve";
 /** Label of the cross-instance answer for an exact target that is not a file. */
@@ -672,7 +705,12 @@ export async function requestApproval(
 	const header = approvalHeader(tool, reason);
 	const details = approvalDetails(tool, args);
 	const cacheAnswers = options.cacheAnswers !== false;
-	const folderLabel = cacheAnswers ? approvalFolderCandidate(tool, args)?.label : undefined;
+	const folder = cacheAnswers ? approvalFolderCandidate(tool, args) : undefined;
+	const folderLabel = folder?.label;
+	// What an "Approve Directory" answer would cover: the folder's own entries, shown in the
+	// prompt so the folder is never approved unseen.
+	const folderListing =
+		folderLabel === undefined ? undefined : approvalFolderListing(folderLabel, APPROVAL_FOLDER_FULL_LISTING);
 	const targets = cacheAnswers ? approvalCacheTargets(tool, args) : [];
 	const exactGrant = targets.length > 0;
 	// The file name is for file targets only: a directory or URL target keeps the plain
@@ -684,10 +722,16 @@ export async function requestApproval(
 	// Exec and other non-read/write calls without a directory of their own can be remembered by
 	// tool name for this session; a command's folder answer already carries its grant.
 	const toolName = cacheAnswers && !exactGrant && folderLabel === undefined ? tool.name : undefined;
-	const full = [...header, ...details, ...appendix].join("\n");
+	const folderLines = approvalFolderPromptLines(folderLabel, folderListing, APPROVAL_FOLDER_FULL_LISTING);
+	const full = [...header, ...details, ...folderLines, ...appendix].join("\n");
 	if (ui.approve) {
 		const summary = approvalSummary(details);
-		const compact = [...header, ...(summary === undefined ? [] : [summary]), ...appendix].join("\n");
+		const compact = [
+			...header,
+			...(summary === undefined ? [] : [summary]),
+			...approvalFolderPromptLines(folderLabel, folderListing, APPROVAL_FOLDER_COMPACT_LISTING),
+			...appendix,
+		].join("\n");
 		const answer = await ui.approve({
 			full,
 			compact,

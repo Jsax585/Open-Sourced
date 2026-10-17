@@ -69,3 +69,45 @@ export function approvalTargetKey(cwd: string, target: string): string | undefin
 		return trimmed;
 	}
 }
+
+/** What a folder grant on a directory reaches: its own entries, `limit` of them named. */
+export interface ApprovalFolderListing {
+	/** Entry names in sort order, a trailing slash marking a folder, `limit` of them at most. */
+	readonly entries: readonly string[];
+	/** Entries past `limit`, counted but not named. */
+	readonly rest: number;
+	readonly folders: number;
+	readonly files: number;
+	readonly total: number;
+}
+
+/**
+ * The entries directly inside `directory`, as a folder grant covers them — one
+ * level deep, since that is as far as a folder grant reaches — for the approval
+ * prompt to show what it is about to allow. Directories are marked with a
+ * trailing slash (they need their own approval). `undefined` when `directory`
+ * is not a readable directory.
+ */
+export function approvalFolderListing(directory: string, limit: number): ApprovalFolderListing | undefined {
+	let dirents: fs.Dirent[];
+	try {
+		dirents = fs.readdirSync(directory, { withFileTypes: true });
+	} catch {
+		return undefined;
+	}
+	const sorted = [...dirents].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+	const entries: string[] = [];
+	let folders = 0;
+	for (const dirent of sorted) {
+		const isFolder = dirent.isDirectory();
+		if (isFolder) folders++;
+		if (entries.length < limit) entries.push(isFolder ? `${dirent.name}/` : dirent.name);
+	}
+	return {
+		entries,
+		rest: sorted.length - entries.length,
+		folders,
+		files: sorted.length - folders,
+		total: sorted.length,
+	};
+}

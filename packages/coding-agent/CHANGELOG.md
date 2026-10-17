@@ -9,6 +9,7 @@
 ### Added
 
 - Added the **Ask and remember** tool approval mode (`tools.approvalMode: always-ask-cached`, `--approval-mode always-ask-cached`): the first `read`, `write`, or `edit` touching a file asks once, and so does the first call of each exec tool; depending on the options selected by the user, approved targets skip their later prompts. Each read/write prompt carries a **Remember** checkbox beside its answers — *This Session* keeps the grant in this instance's memory, *Always* writes it to the `grants` table of `approval-cache.db` under the agent directory, where it covers every later session — and offers **Approve Directory** (the folder around the operation: its own entries, one level deep), **Approve File** (the exact file), and **Approve Once** (this call only, nothing remembered). Prompts forced by a dangerous-command override, an explicit `prompt` policy, or a provider safety check still ask every call, and plain Approve/Deny prompts stay unchanged in every other mode.
+- The approval prompt now names the folder an `Approve Directory` answer would cover and lists that folder's own entries — directories marked with a trailing slash, up to 24 in the full prompt, the first 4 in the dock's summarised one, the rest counted — so a folder grant is never approved unseen.
 
 ### Changed
 
