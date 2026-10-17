@@ -166,10 +166,11 @@ describe("always-ask-cached resolution", () => {
 			tier: "exec",
 			reason: "folder not yet approved",
 		});
-		// A granted folder (or any ancestor of it) covers the call, whatever the command.
+		// A granted folder covers the call, whatever the command.
 		const covered = testGrants([approvalGrantKey("exec", approvalDirectoryKey(path.join(cwd, "TestDir")))]);
 		expect(resolveApproval(bash, { command: "npm test" }, "always-ask-cached", {}, covered).policy).toBe("allow");
 		expect(resolveApproval(bash, { command: "rm -rf build" }, "always-ask-cached", {}, covered).policy).toBe("allow");
+		// A grant on the parent folder never covers a call scoped to a subfolder.
 		const ancestor = testGrants([approvalGrantKey("exec", approvalDirectoryKey(cwd))]);
 		expect(
 			resolveApproval(
@@ -179,7 +180,7 @@ describe("always-ask-cached resolution", () => {
 				{},
 				ancestor,
 			).policy,
-		).toBe("allow");
+		).toBe("prompt");
 	});
 
 	it("keeps prompting exec tools that declare no scope or target", () => {
@@ -192,26 +193,36 @@ describe("always-ask-cached resolution", () => {
 		});
 	});
 
-	it("covers read targets below a read-granted folder at any depth, and never writes", () => {
+	it("covers a read-granted folder's own entries, nothing below a subfolder, and never writes", () => {
 		const cwd = path.resolve("/work/project");
 		const key = (target: string) => approvalTargetKey(cwd, target)!;
 		const granted = testGrants([approvalGrantKey("read", approvalDirectoryKey(path.join(cwd, "TestDir")))]);
 		const read = targetTool("read", "read");
 		const write = targetTool("write", "write");
 		// The tool reports keys, so feed it pre-derived ones through a wrapper.
-		const keyed: AgentTool = { ...read, approvalCacheTargets: () => [key("TestDir/TestFile.exe")] };
-		expect(resolveApproval(keyed, {}, "always-ask-cached", {}, granted).policy).toBe("allow");
+		const direct: AgentTool = { ...read, approvalCacheTargets: () => [key("TestDir/TestFile.exe")] };
+		expect(resolveApproval(direct, {}, "always-ask-cached", {}, granted).policy).toBe("allow");
+		// A subfolder is its own grant: neither it nor anything below it rides on the parent's.
+		const subfolder: AgentTool = {
+			...read,
+			approvalCacheTargets: () => [approvalDirectoryKey(path.join(cwd, "TestDir", "sub"))],
+		};
+		expect(resolveApproval(subfolder, {}, "always-ask-cached", {}, granted).policy).toBe("prompt");
 		const nested: AgentTool = { ...read, approvalCacheTargets: () => [key("TestDir/sub/deep/file.ts")] };
-		expect(resolveApproval(nested, {}, "always-ask-cached", {}, granted).policy).toBe("allow");
+		expect(resolveApproval(nested, {}, "always-ask-cached", {}, granted).policy).toBe("prompt");
+		const subGranted = testGrants([approvalGrantKey("read", approvalDirectoryKey(path.join(cwd, "TestDir", "sub")))]);
+		const inSub: AgentTool = { ...read, approvalCacheTargets: () => [key("TestDir/sub/entry.ts")] };
+		expect(resolveApproval(inSub, {}, "always-ask-cached", {}, subGranted).policy).toBe("allow");
+		expect(resolveApproval(nested, {}, "always-ask-cached", {}, subGranted).policy).toBe("prompt");
 		// Outside the granted folder it still asks, and the read grant never covers a write below it.
 		const outside: AgentTool = { ...read, approvalCacheTargets: () => [key("OtherDir/file.ts")] };
 		expect(resolveApproval(outside, {}, "always-ask-cached", {}, granted).policy).toBe("prompt");
 		expect(resolveApproval(write, { path: "TestDir/x.txt" }, "always-ask-cached", {}, granted).policy).toBe("prompt");
 	});
 
-	it("covers an exec call whose working directory is inside a granted folder", () => {
+	it("covers an exec call scoped to the granted folder itself, not its subfolder", () => {
 		const cwd = path.resolve("/work/project");
-		const granted = testGrants([approvalGrantKey("exec", approvalDirectoryKey(path.join(cwd, "TestDir")))]);
+		const sub = approvalDirectoryKey(path.join(cwd, "TestDir", "sub"));
 		const scoped: AgentTool = {
 			name: "bash",
 			label: "Bash",
@@ -219,15 +230,18 @@ describe("always-ask-cached resolution", () => {
 			parameters: {} as never,
 			approval: "exec",
 			approvalCacheTargets: () => ["bash: anything goes"],
-			approvalCacheScopes: () => [approvalDirectoryKey(path.join(cwd, "TestDir", "sub"))],
+			approvalCacheScopes: () => [sub],
 			execute: async () => ({ content: [{ type: "text" as const, text: "executed" }] }),
 		};
-		expect(resolveApproval(scoped, {}, "always-ask-cached", {}, granted).policy).toBe("allow");
+		const parentGranted = testGrants([approvalGrantKey("exec", approvalDirectoryKey(path.join(cwd, "TestDir")))]);
+		expect(resolveApproval(scoped, {}, "always-ask-cached", {}, parentGranted).policy).toBe("prompt");
+		const subGranted = testGrants([approvalGrantKey("exec", sub)]);
+		expect(resolveApproval(scoped, {}, "always-ask-cached", {}, subGranted).policy).toBe("allow");
 		const elsewhere: AgentTool = {
 			...scoped,
 			approvalCacheScopes: () => [approvalDirectoryKey(path.join(cwd, "Other"))],
 		};
-		expect(resolveApproval(elsewhere, {}, "always-ask-cached", {}, granted).policy).toBe("prompt");
+		expect(resolveApproval(elsewhere, {}, "always-ask-cached", {}, subGranted).policy).toBe("prompt");
 	});
 
 	it("offers the shared folder as the approval candidate", () => {
@@ -604,6 +618,40 @@ describe("approval target keys", () => {
 		});
 	});
 
+	it("covers a read-granted folder's own entries, never a subfolder's contents", () => {
+		const root = TempDir.createSync("@pi-approval-folder-depth-");
+		try {
+			const desktop = path.join(root.path(), "Desktop");
+			const nested = path.join(desktop, "TestFolder");
+			fs.mkdirSync(nested, { recursive: true });
+			fs.writeFileSync(path.join(desktop, "notes.txt"), "x");
+			fs.writeFileSync(path.join(nested, "inner.txt"), "x");
+			const read = new ReadTool(createToolSession(root.path()));
+			const granted = testGrants([approvalGrantKey("read", approvalDirectoryKey(desktop))]);
+			// A file directly inside the granted folder is covered.
+			expect(resolveApproval(read, { path: "Desktop/notes.txt" }, "always-ask-cached", {}, granted).policy).toBe(
+				"allow",
+			);
+			// The subfolder and its contents are not: they need the subfolder's own grant.
+			expect(resolveApproval(read, { path: "Desktop/TestFolder" }, "always-ask-cached", {}, granted).policy).toBe(
+				"prompt",
+			);
+			expect(
+				resolveApproval(read, { path: "Desktop/TestFolder/inner.txt" }, "always-ask-cached", {}, granted).policy,
+			).toBe("prompt");
+			// Approving the subfolder covers it and its own entries, and nothing back up the tree.
+			const subGranted = testGrants([approvalGrantKey("read", approvalDirectoryKey(nested))]);
+			expect(resolveApproval(read, { path: "Desktop/TestFolder" }, "always-ask-cached", {}, subGranted).policy).toBe(
+				"allow",
+			);
+			expect(
+				resolveApproval(read, { path: "Desktop/TestFolder/inner.txt" }, "always-ask-cached", {}, subGranted).policy,
+			).toBe("allow");
+		} finally {
+			root.removeSync();
+		}
+	});
+
 	it("shares one key between read selectors and write hashline headers", () => {
 		const session = createToolSession(cwd);
 		const read = new ReadTool(session);
@@ -884,7 +932,7 @@ describe("always-ask-cached wrapper cycle", () => {
 		).toBe(true);
 		expect(getApprovalCache(settings.getAgentDir()).size).toBe(0);
 
-		// A different file in the folder, and a nested one, run without asking.
+		// A different file in the folder runs without asking; a file in a subfolder is its own folder.
 		const second = new ExtensionToolWrapper(write("write"), runner);
 		await second.execute(
 			"folder-second",
@@ -893,14 +941,23 @@ describe("always-ask-cached wrapper cycle", () => {
 			undefined,
 			context(settings),
 		);
-		await second.execute(
+		expect(approve).toHaveBeenCalledTimes(1);
+		const third = new ExtensionToolWrapper(write("write"), runner);
+		await third.execute(
 			"folder-third",
 			{ path: path.join(dir, "sub", "deep.txt") },
 			undefined,
 			undefined,
 			context(settings),
 		);
-		expect(approve).toHaveBeenCalledTimes(1);
+		expect(approve).toHaveBeenCalledTimes(2);
+		const [nestedPrompt] = (approve.mock.calls[1] ?? []) as unknown as [{ folderLabel?: string }];
+		expect(nestedPrompt?.folderLabel).toBe(approvalDirectoryKey(path.join(dir, "sub")).replace(/[\\/]+$/, ""));
+		expect(
+			getApprovalGrants(settings.getAgentDir()).session.has(
+				approvalGrantKey("write", approvalDirectoryKey(path.join(dir, "sub"))),
+			),
+		).toBe(true);
 		expect(select).not.toHaveBeenCalled();
 	});
 

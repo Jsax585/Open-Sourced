@@ -15,7 +15,7 @@ import {
 	type ApprovalGrantStore,
 	type ApprovalGrants,
 	type ApprovalTier,
-	approvalAncestorDirectoryKeys,
+	approvalDirectoryKey,
 	approvalGrantKey,
 	commonApprovalDirectoryKey,
 	getApprovalGrants,
@@ -185,15 +185,20 @@ function grantTiersFor(capability: ToolTier): readonly ToolTier[] {
 }
 
 /**
- * Whether a grant covers a call at `capability`: the subject's key at the call's tier or a more
- * privileged one, or a granted ancestor directory at any of those tiers.
+ * Whether a grant covers a call at `capability`: the subject's own key at the call's tier or a more
+ * privileged one, or a folder grant on the folder the subject sits in. Folder grants stop at their
+ * own entries — only a plain file (or not-yet-existing) key inherits its parent folder's grant, so
+ * a subfolder and anything below it need that subfolder's own grant.
  */
 function grantCovers(grants: ApprovalGrantStore, subject: string, capability: ToolTier): boolean {
-	const ancestors = approvalAncestorDirectoryKeys(subject);
+	const folderKey =
+		subject.endsWith("/") || subject.endsWith("\\") || !path.isAbsolute(subject)
+			? undefined
+			: approvalDirectoryKey(path.dirname(subject));
 	return grantTiersFor(capability).some(
 		tier =>
 			grants.has(approvalGrantKey(tier, subject)) ||
-			ancestors.some(directory => grants.has(approvalGrantKey(tier, directory))),
+			(folderKey !== undefined && grants.has(approvalGrantKey(tier, folderKey))),
 	);
 }
 
@@ -647,7 +652,6 @@ export interface ApprovalOutcome {
 /**
  * Ask the user to approve a call: the host's approval dialog when it has one (it gets the full
  * prompt and a compact one with the details summarized to a row, so the composer beneath it
-<<<<<<< HEAD
  * keeps its room), else an Approve/Deny select with the full prompt (RPC, ACP, extension hosts).
  * `appendix` lines follow the prompt on both.
  *

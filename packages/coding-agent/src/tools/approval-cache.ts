@@ -53,7 +53,7 @@ export interface ApprovalGrant {
 	approvedAt: string;
 	/**
 	 * `"directory"` for a folder grant: the key is a directory (trailing
-	 * separator) and covers every target below it, at any depth.
+	 * separator) and covers the folder's own entries, one level deep.
 	 */
 	scope?: "directory";
 }
@@ -426,13 +426,17 @@ export function approvalCacheKeyForPath(target: string): string {
 /**
  * Cache key for a granted directory: the same normalization as
  * {@link approvalCacheKeyForPath} plus a trailing separator, so a folder grant
- * reads as one in the database and covers every target below it.
+ * reads as one in the database and covers the folder's own entries.
  */
 export function approvalDirectoryKey(directory: string): string {
 	return withTrailingSeparator(normalizePathForComparison(path.resolve(directory)));
 }
 
-/** Whether a directory grant covers a normalized target key (the directory itself or anything below it). */
+/**
+ * Whether `directoryKey` contains `targetKey` (the key itself or anything below it) — containment math
+ * for {@link commonApprovalDirectoryKey} and the "folder around the call" candidate. Grant coverage is
+ * stricter and lives in the resolver: a folder grant covers its own entries, not its whole tree.
+ */
 export function approvalDirectoryCovers(directoryKey: string, targetKey: string): boolean {
 	return targetKey === directoryKey || targetKey.startsWith(directoryKey);
 }

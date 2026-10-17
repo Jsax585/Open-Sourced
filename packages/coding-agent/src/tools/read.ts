@@ -83,7 +83,8 @@ import {
 	scanFileForConflicts,
 } from "./conflict-detect";
 import { executeReadUrl, fetchReadUrl, parseReadUrlTarget } from "./fetch";
-import { approvalTargetKey } from "./approval-targets";
+import { approvalDirectoryKey } from "./approval-cache";
+import { approvalTargetKey, approvalTargetNamesFile } from "./approval-targets";
 import { postProcessToolResult, resolveOutputMaxColumns } from "./output-meta";
 import {
 	expandPath,
@@ -1005,7 +1006,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			return undefined;
 		}
 		const key = approvalTargetKey(this.session.cwd, selectorless);
-		return key === undefined ? undefined : [key];
+		if (key === undefined) return undefined;
+		// A directory read lists that folder itself, so it keys as the folder grant: approving it
+		// covers the folder's own entries, and a parent folder's grant never authorizes reading a
+		// subfolder's contents.
+		if (path.isAbsolute(key) && !approvalTargetNamesFile(key)) return [approvalDirectoryKey(key)];
+		return [key];
 	};
 	readonly label = "Read";
 	readonly loadMode = "essential";
