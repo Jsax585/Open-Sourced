@@ -230,16 +230,19 @@ export class HistorySearchComponent extends OverlayPanel {
 		onCancel: () => void,
 	) {
 		super("History", "omp.overlay.history");
-		const scopes: readonly HistorySearchScope[] =
-			"getRecent" in source
-				? [
-						{
-							label: "",
-							getRecent: limit => source.getRecent(limit),
-							search: (query, limit) => source.search(query, limit),
-						},
-					]
-				: source;
+		let scopes: readonly HistorySearchScope[];
+		if (Array.isArray(source)) {
+			scopes = source;
+		} else {
+			const historySource = source as HistorySource;
+			scopes = [
+				{
+					label: "",
+					getRecent: limit => historySource.getRecent(limit),
+					search: (query, limit) => historySource.search(query, limit),
+				},
+			];
+		}
 		if (scopes.length === 0) throw new RangeError("History search requires at least one source");
 		this.#scopes = scopes;
 		this.#onSelect = prompt => {

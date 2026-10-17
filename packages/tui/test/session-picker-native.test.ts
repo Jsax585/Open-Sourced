@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeNode } from "../src/native/node";
-import { type HistorySearchEntry, HistorySearchComponent } from "../src/overlays/history-search";
+import { type HistorySearchEntry, HistorySearchComponent, type HistorySource } from "../src/overlays/history-search";
 import { type SessionSelectorEntry, SessionSelectorComponent } from "../src/overlays/session-selector";
 import { initTheme } from "../src/theme";
 
@@ -198,6 +198,26 @@ describe("history search picker", () => {
 		const result = sheet();
 		expect(result.items?.map(item => item.label)).toEqual(["deploy the release"]);
 		expect(result.actions?.some(action => action.id === "scope" || action.id === "scope-back")).toBe(false);
+		search.handleNativeEvent({ type: "activate", key: "^picker", item: result.items![0]!.id });
+		expect(inserted).toEqual(["deploy the release\nwith notes"]);
+		search.dispose();
+	});
+
+	it("searches and activates a source with virtual methods", () => {
+		const virtualSource = new Proxy<HistorySource>(Object.create(null), {
+			get: (_target, key) => Reflect.get(source, key),
+		});
+		const inserted: string[] = [];
+		const search = new HistorySearchComponent(
+			virtualSource,
+			prompt => inserted.push(prompt),
+			() => {},
+		);
+		const sheet = () => props((search.describe(withPicker).c as NativeNode[])[0]!);
+		expect(sheet().items?.map(item => item.label)).toEqual(["deploy the release", "routine status"]);
+		type(search, "deploy");
+		const result = sheet();
+		expect(result.items?.map(item => item.label)).toEqual(["deploy the release"]);
 		search.handleNativeEvent({ type: "activate", key: "^picker", item: result.items![0]!.id });
 		expect(inserted).toEqual(["deploy the release\nwith notes"]);
 		search.dispose();

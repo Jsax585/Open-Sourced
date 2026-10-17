@@ -168,7 +168,8 @@ The constructor accepts either:
 - `new HistorySearchComponent(source, onSelect, onCancel)`, where `source` is a
   `HistorySource` providing `getRecent(limit)` and `search(query, limit)`. Existing
   single-source callers require no migration. Source methods retain their original
-  receiver, including when the source is a class instance.
+  receiver, including when the source is a class instance. Sources may also provide
+  methods dynamically through a `Proxy`.
 - `new HistorySearchComponent(scopes, onSelect, onCancel)`, where `scopes` is a
   non-empty `readonly HistorySearchScope[]`. Each scope provides the same methods
   plus a `label`; the host binds those methods to the intended data set. The first
