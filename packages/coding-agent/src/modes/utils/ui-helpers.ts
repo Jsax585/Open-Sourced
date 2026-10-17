@@ -962,20 +962,20 @@ export class UiHelpers {
 	}
 
 	/**
-	 * Snapshot of background job calls whose persisted result is only the
-	 * "still running" state while the job keeps streaming progress (#10447):
-	 * the same rule the replay uses to park their cards.
+	 * Snapshot of background job calls whose card the replay parks (#10447):
+	 * the persisted result is only the "still running" state, and the job's
+	 * latest frame, if any, has not settled. A finished job keeps its last
+	 * frame cached, so a frame alone does not make the job live.
 	 */
 	#liveBackgroundJobCheck(): (message: ToolResultMessage) => boolean {
 		const activeToolExecutionUpdates = this.ctx.viewSession.activeToolExecutionUpdates?.() ?? [];
 		const runningAsyncJobs = this.ctx.viewSession.getAsyncJobSnapshot?.()?.running ?? [];
 		return message => {
 			if (!parksAsBackground(message.toolName, message.details)) return false;
+			const frame = activeToolExecutionUpdates.find(event => event.toolCallId === message.toolCallId)?.partialResult;
+			if (frame !== undefined) return !isSettledJobFrame(frame.details);
 			const jobId = (message.details as { async?: { jobId?: string } } | undefined)?.async?.jobId;
-			return (
-				activeToolExecutionUpdates.some(event => event.toolCallId === message.toolCallId) ||
-				runningAsyncJobs.some(job => job.id === jobId)
-			);
+			return runningAsyncJobs.some(job => job.id === jobId);
 		};
 	}
 
@@ -999,11 +999,13 @@ export class UiHelpers {
 		const limit = Math.trunc(cfgDisplayTranscriptReplayLimit.get(this.ctx.settings));
 		if (limit <= 0 || messages.length <= limit) return 0;
 		// Same turn anchors as the replay's turn timer: an agent-attributed
-		// `user` message (a mid-run steer) does not open a turn.
+		// `user` message (a mid-run steer) does not open a turn; a synthetic
+		// developer message (`.`/`c` continue, auto-continue, /goal) does.
 		const turnStartAtOrBefore = (index: number): number => {
 			for (let i = index; i > 0; i--) {
 				const message = messages[i]!;
 				if (message.role === "user" && message.attribution !== "agent") return i;
+				if (message.role === "developer" && message.synthetic) return i;
 				if (message.role === "custom" && isUserTurnInitiator(message as CustomMessage)) return i;
 			}
 			return 0;

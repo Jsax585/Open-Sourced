@@ -931,6 +931,32 @@ describe("UiHelpers.renderInitialMessages — redraw window", () => {
 		expect(text).toContain("question 1");
 	});
 
+	it("starts at a continue, which opens its own run, instead of walking back to the last typed prompt", async () => {
+		const continueRun = (index: number): AgentMessage[] => [
+			{
+				role: "developer",
+				content: ".",
+				synthetic: true,
+				userInitiated: true,
+				timestamp: 10 + index,
+			} as AgentMessage,
+			reply(`continued ${index}`),
+		];
+		const { text } = await redraw(
+			[
+				{ role: "user", content: "question 0", timestamp: 0 },
+				reply("answer 0"),
+				...[0, 1, 2, 3].flatMap(continueRun),
+			],
+			{ "display.transcriptReplayLimit": 3 },
+		);
+
+		expect(text).toContain("earlier messages not shown");
+		expect(text).not.toContain("question 0");
+		expect(text).not.toContain("continued 1");
+		expect(text).toContain("continued 3");
+	});
+
 	it("marks a cache miss on the first drawn turn against the hidden warm turn", async () => {
 		const warm: Usage = { ...emptyUsage, input: 100, cacheRead: 50_000 };
 		const cold: Usage = { ...emptyUsage, input: 100, cacheWrite: 50_000 };
@@ -975,6 +1001,41 @@ describe("UiHelpers.renderInitialMessages — redraw window", () => {
 		expect(text).not.toContain("question old");
 		expect(text).toContain("question task");
 		expect(rendered.ctx.pendingTools.has("task-1")).toBeTrue();
+	});
+
+	it("does not reach back to a background task whose last frame says it finished", async () => {
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "question task", timestamp: 1 },
+			assistantToolCall("task-1", "task", { description: "background work" }),
+			{
+				role: "toolResult",
+				toolCallId: "task-1",
+				toolName: "task",
+				content: [{ type: "text", text: "Spawned background worker." }],
+				details: { async: { state: "running", jobId: "job-1" } },
+				isError: false,
+				timestamp: 2,
+			},
+			...turns(3),
+		];
+		const rendered = makeRenderCtx(transcriptWith(messages), true, false, { "display.transcriptReplayLimit": 2 });
+		// A finished job leaves its terminal frame cached; it is no longer running.
+		Object.assign(rendered.ctx.viewSession, {
+			activeToolExecutionUpdates: () => [
+				{
+					toolCallId: "task-1",
+					partialResult: { content: [], details: { async: { state: "completed", jobId: "job-1" } } },
+				},
+			],
+			getAsyncJobSnapshot: () => ({ running: [] }),
+		});
+
+		await new UiHelpers(rendered.ctx).renderInitialMessages({ clearTerminalHistory: true });
+		const text = Bun.stripANSI(rendered.chatContainer.render(120).join("\n"));
+
+		expect(text).toContain("earlier messages not shown");
+		expect(text).not.toContain("question task");
+		expect(text).toContain("question 2");
 	});
 
 	it("gives up the in-place rewind when the shorter transcript would start earlier", async () => {
