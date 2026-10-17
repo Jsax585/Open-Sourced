@@ -15,7 +15,9 @@ const hasLine = (lines: readonly string[], n: number): boolean =>
 function referenceWindow(content: string): { total: number; start: number; visible: string[] } {
 	const lines = content.replace(/\r/g, "").split("\n");
 	const total = lines.length;
-	const start = Math.max(0, total - 12);
+	const rows = process.stdout.rows || 30;
+	const windowRows = Math.max(6, rows - 20);
+	const start = Math.max(0, total - Math.min(12, windowRows));
 	return { total, start, visible: lines.slice(start) };
 }
 
@@ -208,10 +210,10 @@ describe("write streaming preview incremental line tracking", () => {
 		const rendered = await renderCollapsed(content, options);
 		const text = stripAnsi(rendered.join("\n"));
 		expect(text).not.toContain("\r");
-		// 20 lines → window is lines 9..20.
-		expect(text).toContain("… (8 earlier lines)");
-		expect(hasLine(rendered, 8)).toBe(false);
-		expect(hasLine(rendered, 9)).toBe(true);
+		// 20 lines → window is lines 11..20 (viewport-sized).
+		expect(text).toContain("… (10 earlier lines)");
+		expect(hasLine(rendered, 10)).toBe(false);
+		expect(hasLine(rendered, 11)).toBe(true);
 		expect(hasLine(rendered, 20)).toBe(true);
 	});
 
@@ -221,11 +223,11 @@ describe("write streaming preview incremental line tracking", () => {
 		const rendered = await renderCollapsed(content, options);
 		const { total, start } = referenceWindow(content);
 		expect(total).toBe(14);
-		expect(start).toBe(2);
+		expect(start).toBe(4);
 		const text = stripAnsi(rendered.join("\n"));
-		expect(text).toContain("… (2 earlier lines)");
+		expect(text).toContain("… (4 earlier lines)");
 		expect(hasLine(rendered, 13)).toBe(true);
-		expect(hasLine(rendered, 2)).toBe(false);
+		expect(hasLine(rendered, 4)).toBe(false);
 	});
 
 	it("renders carriage-return-only content like the previous normalized empty payload", async () => {

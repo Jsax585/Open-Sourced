@@ -3,6 +3,7 @@
 ## [Unreleased]
 ### Fixed
 - Fixed isolated task spawn freezing the host when the checkout contains gitignored linked worktrees — nested-repo discovery now skips gitignored directories and baseline capture is bounded ([#16068](https://github.com/can1357/oh-my-pi/issues/16068))
+- Fixed streaming write/edit preview height jumping line-by-line during fast streams — the collapsed window now uses a viewport-sized budget (matching the edit tool) and no trailing line is shown when the content ends with a newline ([#16033](https://github.com/can1357/oh-my-pi/issues/16033))
 
 ### Changed
 
