@@ -925,6 +925,11 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	/** Tool approval tier. Defaults to `"exec"` when omitted.
 	 *  `"read"`: read-only operations. `"write"`: mutations. `"exec"`: code execution. */
 	approval?: ToolApproval;
+	/** Exact targets an approval mode may remember for this call (`always-ask-cached`), one key per
+	 *  target, derived from the call's args. Omit it and approvals are never remembered per target. */
+	approvalCacheTargets?: (args: unknown) => readonly string[] | undefined;
+	/** Folder scopes for exec-style tools: the directories a folder grant can cover. */
+	approvalCacheScopes?: (args: unknown) => readonly string[] | undefined;
 	/** Structured-output strict grammar opt-in/out. `false` is meaningful: OpenAI-family
 	 *  serializers preserve an explicit `strict: false` on the wire (#4336/#4340). */
 	strict?: boolean;

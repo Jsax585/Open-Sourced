@@ -131,6 +131,12 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 			toPathList(a?.path),
 			this.session.cwd,
 			entry => parseFindPattern(entry).basePath,
+			entry => {
+				const { globPattern } = parseFindPattern(entry);
+				// A bare pattern recurses (`*.ts` matches at any depth); only a one-segment pattern
+				// under an explicit base (`dir/*.ts`) stays inside the folder's own entries.
+				return globPattern === "" || globPattern.includes("**");
+			},
 		);
 	};
 	readonly loadMode = "essential";

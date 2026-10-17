@@ -19,7 +19,7 @@ import {
 	approvalDirectoryKey,
 	SessionApprovals,
 } from "@oh-my-pi/pi-coding-agent/tools/approval-cache";
-import { approvalTargetKey } from "@oh-my-pi/pi-coding-agent/tools/approval-targets";
+import { approvalTargetKey, approvalTreeSearchKey } from "@oh-my-pi/pi-coding-agent/tools/approval-targets";
 import { GlobTool } from "@oh-my-pi/pi-coding-agent/tools/glob";
 import { GrepTool } from "@oh-my-pi/pi-coding-agent/tools/grep";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/sdk";
@@ -67,16 +67,34 @@ describe("search tool approval cache targets", () => {
 
 	afterEach(() => temp.removeSync());
 
-	it("reports a searched folder as the directory key both tools share", () => {
+	it("reports a recursive search as the tree key, a one-level one as the folder key", () => {
 		const grep = new GrepTool(createToolSession(cwd));
 		const glob = new GlobTool(createToolSession(cwd));
 		const folderKey = approvalDirectoryKey(srcDir);
+		const treeKey = approvalTreeSearchKey(folderKey);
 
-		expect(grep.approvalCacheTargets?.({ pattern: "hello", path: "src" })).toEqual([folderKey]);
-		expect(glob.approvalCacheTargets?.({ path: "src" })).toEqual([folderKey]);
+		// grep walks below subfolders, so a folder grant on the same folder is not enough for it.
+		expect(grep.approvalCacheTargets?.({ pattern: "hello", path: "src" })).toEqual([treeKey]);
+		expect(grep.approvalCacheTargets?.({ pattern: "hello", path: "src/*.txt" })).toEqual([treeKey]);
+		// A `**` pattern recurses too; a one-segment pattern under an explicit base does not.
+		expect(glob.approvalCacheTargets?.({ path: "src/**/*.txt" })).toEqual([treeKey]);
+		expect(glob.approvalCacheTargets?.({ path: "src/*.txt" })).toEqual([folderKey]);
 		// A glob root reports the folder the tool walks, never the pattern itself.
-		expect(grep.approvalCacheTargets?.({ pattern: "hello", path: "src/*.txt" })).toEqual([folderKey]);
-		expect(glob.approvalCacheTargets?.({ path: "src/**/*.txt" })).toEqual([folderKey]);
+		expect(glob.approvalCacheTargets?.({ path: "src" })).toEqual([treeKey]);
+	});
+
+	it("splits a semicolon-delimited root list the way execution does", () => {
+		const grep = new GrepTool(createToolSession(cwd));
+		const glob = new GlobTool(createToolSession(cwd));
+		const srcKey = approvalTreeSearchKey(approvalDirectoryKey(srcDir));
+		const otherKey = approvalTreeSearchKey(approvalDirectoryKey(otherDir));
+
+		// Execution fans `a;b` into two roots; keying the unsplit string would report nothing and
+		// leave the search auto-allowed, so both roots are keyed.
+		expect(grep.approvalCacheTargets?.({ pattern: "hello", path: "src;other" })).toEqual([srcKey, otherKey]);
+		expect(glob.approvalCacheTargets?.({ path: "src/**/*.txt;other/**/*.txt" })).toEqual([srcKey, otherKey]);
+		// A root that exists literally keeps its own key beside the split parts.
+		expect(grep.approvalCacheTargets?.({ pattern: "hello", path: "src;missing" })).toEqual([srcKey]);
 	});
 
 	it("reports a file root as the file key a read of it would mint", () => {
@@ -94,21 +112,23 @@ describe("search tool approval cache targets", () => {
 		const grep = new GrepTool(createToolSession(cwd));
 
 		expect(grep.approvalCacheTargets?.({ pattern: "hello", path: ["src", "src/notes.txt", "src"] })).toEqual([
-			approvalDirectoryKey(srcDir),
+			approvalTreeSearchKey(approvalDirectoryKey(srcDir)),
 			approvalTargetKey(cwd, "src/notes.txt")!,
 		]);
 		// `paths` is the legacy alias the approval tier already reads.
-		expect(grep.approvalCacheTargets?.({ pattern: "hello", paths: "src" })).toEqual([approvalDirectoryKey(srcDir)]);
+		expect(grep.approvalCacheTargets?.({ pattern: "hello", paths: "src" })).toEqual([
+			approvalTreeSearchKey(approvalDirectoryKey(srcDir)),
+		]);
 	});
 
 	it("falls back to the session cwd with no path, and reports nothing unusable", () => {
 		const grep = new GrepTool(createToolSession(cwd));
 		const glob = new GlobTool(createToolSession(cwd));
-		const cwdKey = approvalDirectoryKey(cwd);
+		const cwdTreeKey = approvalTreeSearchKey(approvalDirectoryKey(cwd));
 
-		// No path argument: both tools search the session cwd, so that is the target.
-		expect(grep.approvalCacheTargets?.({ pattern: "hello" })).toEqual([cwdKey]);
-		expect(glob.approvalCacheTargets?.({ path: "*.txt" })).toEqual([cwdKey]);
+		// No path argument: both tools search the session cwd recursively, so that is the target.
+		expect(grep.approvalCacheTargets?.({ pattern: "hello" })).toEqual([cwdTreeKey]);
+		expect(glob.approvalCacheTargets?.({ path: "*.txt" })).toEqual([cwdTreeKey]);
 		// Public web contents are public already: nothing to approve, nothing to remember.
 		expect(grep.approvalCacheTargets?.({ pattern: "hello", path: "https://example.com/a.txt" })).toBeUndefined();
 		expect(glob.approvalCacheTargets?.({ path: "https://example.com/*.txt" })).toBeUndefined();
@@ -135,13 +155,20 @@ describe("search tool approval cache targets", () => {
 		});
 		expect(resolveApproval(glob, globArgs, "always-ask-cached", {}, readTierGrants()).policy).toBe("prompt");
 
+		// A folder grant covers the folder's own entries, which is one level — not a recursive
+		// search that reads below its subfolders.
 		const folderGrant = readTierGrants([approvalDirectoryKey(srcDir)]);
-		expect(resolveApproval(grep, grepArgs, "always-ask-cached", {}, folderGrant).policy).toBe("allow");
-		expect(resolveApproval(glob, globArgs, "always-ask-cached", {}, folderGrant).policy).toBe("allow");
-		// The folder grant reaches a file search inside it, at any depth.
+		expect(resolveApproval(grep, grepArgs, "always-ask-cached", {}, folderGrant).policy).toBe("prompt");
+		expect(resolveApproval(glob, globArgs, "always-ask-cached", {}, folderGrant).policy).toBe("prompt");
+		expect(resolveApproval(glob, { path: "src/*.txt" }, "always-ask-cached", {}, folderGrant).policy).toBe("allow");
+		// It reaches a file search inside the folder too.
 		expect(resolveApproval(glob, { path: "src/notes.txt" }, "always-ask-cached", {}, folderGrant).policy).toBe(
 			"allow",
 		);
+		// The tree grant the search's own prompt records is what silences a recursive search.
+		const treeGrant = readTierGrants([approvalTreeSearchKey(approvalDirectoryKey(srcDir))]);
+		expect(resolveApproval(grep, grepArgs, "always-ask-cached", {}, treeGrant).policy).toBe("allow");
+		expect(resolveApproval(glob, globArgs, "always-ask-cached", {}, treeGrant).policy).toBe("allow");
 
 		// A grant for a different folder never covers this search.
 		const elsewhere = readTierGrants([approvalDirectoryKey(otherDir)]);
@@ -158,6 +185,8 @@ describe("search tool approval cache targets", () => {
 			const folderKey = approvalDirectoryKey(srcDir);
 
 			recordApprovalCacheTargets(grep, grepArgs, store, "read");
+			// The answer that silences the recursive search, plus the folder grant it subsumes.
+			expect(store.session.has(approvalGrantKey("read", approvalTreeSearchKey(folderKey)))).toBe(true);
 			expect(store.session.has(approvalGrantKey("read", folderKey))).toBe(true);
 
 			const glob = new GlobTool(createToolSession(cwd));

@@ -535,6 +535,19 @@ describe("approval cache store", () => {
 		expect(readGrants(tempDir.path())).toEqual([expect.objectContaining({ key: globalKey, scope: null })]);
 	});
 
+	it("keeps a conversation's session grants out of another conversation", () => {
+		const dir = tempDir.path();
+		const first = getApprovalGrants(dir, "session-one");
+		first.record(approvalGrantKey("read", "target:x"), "read");
+		expect(getApprovalGrants(dir, "session-one").has(approvalGrantKey("read", "target:x"))).toBe(true);
+		// Another conversation in the same process, and the anonymous scope, start without it.
+		expect(getApprovalGrants(dir, "session-two").has(approvalGrantKey("read", "target:x"))).toBe(false);
+		expect(getApprovalGrants(dir).has(approvalGrantKey("read", "target:x"))).toBe(false);
+		// "Always …" grants stay shared by every conversation under the directory.
+		getApprovalGrants(dir, "session-two").record(approvalGrantKey("read", "target:y"), "read", undefined, "global");
+		expect(getApprovalGrants(dir, "session-one").has(approvalGrantKey("read", "target:y"))).toBe(true);
+	});
+
 	it("returns one shared store per agent directory", () => {
 		expect(getApprovalCache(tempDir.path())).toBe(getApprovalCache(tempDir.path()));
 		expect(getApprovalCache(path.join(tempDir.path(), "nested-other"))).not.toBe(getApprovalCache(tempDir.path()));
@@ -595,6 +608,12 @@ describe("approval target keys", () => {
 		);
 		expect(approvalTargetKey(cwd, "   ")).toBeUndefined();
 		expect(approvalTargetKey(cwd, "")).toBeUndefined();
+	});
+
+	it("keeps significant whitespace in one target key", () => {
+		// Leading and trailing spaces are real filename bytes: two distinct files must not share a key.
+		expect(approvalTargetKey(cwd, " secret ")).not.toBe(approvalTargetKey(cwd, "secret"));
+		expect(approvalTargetKey(cwd, " secret ")).toBe(approvalTargetKey(cwd, " secret "));
 	});
 
 	it("keeps URL targets in their normalized form", () => {
@@ -825,7 +844,7 @@ describe("always-ask-cached wrapper cycle", () => {
 		await wrapper.execute("cached-first", { path: "notes.txt" }, undefined, undefined, context(settings));
 		expect(select).toHaveBeenCalledTimes(1);
 
-		const grants = getApprovalGrants(settings.getAgentDir());
+		const grants = getApprovalGrants(settings.getAgentDir(), runner.sessionId);
 		expect(grants.session.has(approvalGrantKey("write", "target:notes.txt"))).toBe(true);
 		// A plain approval stays in this instance's memory: nothing reached the global database.
 		expect(grants.global.size).toBe(0);
@@ -933,7 +952,9 @@ describe("always-ask-cached wrapper cycle", () => {
 		const [prompt] = approve.mock.calls[0] as unknown as [{ folderLabel?: string }];
 		expect(prompt.folderLabel).toBe(shortenPath(approvalDirectoryKey(dir).replace(/[\\/]+$/, "")));
 		expect(
-			getApprovalGrants(settings.getAgentDir()).session.has(approvalGrantKey("write", approvalDirectoryKey(dir))),
+			getApprovalGrants(settings.getAgentDir(), runner.sessionId).session.has(
+				approvalGrantKey("write", approvalDirectoryKey(dir)),
+			),
 		).toBe(true);
 		expect(getApprovalCache(settings.getAgentDir()).size).toBe(0);
 
@@ -961,7 +982,7 @@ describe("always-ask-cached wrapper cycle", () => {
 			shortenPath(approvalDirectoryKey(path.join(dir, "sub")).replace(/[\\/]+$/, "")),
 		);
 		expect(
-			getApprovalGrants(settings.getAgentDir()).session.has(
+			getApprovalGrants(settings.getAgentDir(), runner.sessionId).session.has(
 				approvalGrantKey("write", approvalDirectoryKey(path.join(dir, "sub"))),
 			),
 		).toBe(true);
@@ -994,9 +1015,11 @@ describe("always-ask-cached wrapper cycle", () => {
 		expect(select.mock.calls[0]?.[1]).toContain("Approve exec_scope for session");
 		await wrapper.execute("tool-second", { command: "anything else" }, undefined, undefined, context(settings));
 		expect(select).toHaveBeenCalledTimes(1);
-		expect(getApprovalGrants(settings.getAgentDir()).session.has(approvalGrantKey("exec", "tool:exec_scope"))).toBe(
-			true,
-		);
+		expect(
+			getApprovalGrants(settings.getAgentDir(), runner.sessionId).session.has(
+				approvalGrantKey("exec", "tool:exec_scope"),
+			),
+		).toBe(true);
 		expect(getApprovalCache(settings.getAgentDir()).size).toBe(0);
 
 		// A sibling tool offers its own answer and is not covered by the first grant.
@@ -1041,7 +1064,9 @@ describe("always-ask-cached wrapper cycle", () => {
 		]);
 		// The directory read grants its own directory, never the parent that holds every sibling.
 		expect(
-			getApprovalGrants(settings.getAgentDir()).session.has(approvalGrantKey("read", approvalDirectoryKey(dir))),
+			getApprovalGrants(settings.getAgentDir(), runner.sessionId).session.has(
+				approvalGrantKey("read", approvalDirectoryKey(dir)),
+			),
 		).toBe(true);
 	});
 
@@ -1058,7 +1083,9 @@ describe("always-ask-cached wrapper cycle", () => {
 
 		await wrapper.execute("once-first", { path: "once.txt" }, undefined, undefined, context(settings));
 		expect(select).toHaveBeenCalledTimes(1);
-		expect(getApprovalGrants(settings.getAgentDir()).session.has(approvalGrantKey("write", key))).toBe(false);
+		expect(
+			getApprovalGrants(settings.getAgentDir(), runner.sessionId).session.has(approvalGrantKey("write", key)),
+		).toBe(false);
 		expect(getApprovalCache(settings.getAgentDir()).size).toBe(0);
 		// Nothing was remembered, so the same call asks again.
 		await wrapper.execute("once-again", { path: "once.txt" }, undefined, undefined, context(settings));
@@ -1091,7 +1118,7 @@ describe("always-ask-cached wrapper cycle", () => {
 		expect(select).toHaveBeenCalledTimes(1);
 		// A safety check is per-call: the prompt keeps plain Approve/Deny and records nothing.
 		expect(select.mock.calls[0]![1]).toEqual(["Approve", "Deny"]);
-		expect(getApprovalGrants(settings.getAgentDir()).session.size).toBe(0);
+		expect(getApprovalGrants(settings.getAgentDir(), runner.sessionId).session.size).toBe(0);
 		expect(getApprovalCache(settings.getAgentDir()).size).toBe(0);
 	});
 
@@ -1117,7 +1144,7 @@ describe("always-ask-cached wrapper cycle", () => {
 			undefined,
 			context(settings),
 		);
-		const grants = getApprovalGrants(settings.getAgentDir());
+		const grants = getApprovalGrants(settings.getAgentDir(), runner.sessionId);
 		const sessionKey = approvalGrantKey("write", approvalTargetKey(tempDir.path(), path.join(dir, "Session.txt"))!);
 		expect(grants.session.has(sessionKey)).toBe(true);
 
@@ -1246,7 +1273,9 @@ describe("always-ask-cached wrapper cycle", () => {
 			`Approve Directory: ${shortenPath(approvalDirectoryKey(dir).replace(/[\\/]+$/, ""))}`,
 		);
 		expect(
-			getApprovalGrants(settings.getAgentDir()).session.has(approvalGrantKey("exec", approvalDirectoryKey(dir))),
+			getApprovalGrants(settings.getAgentDir(), runner.sessionId).session.has(
+				approvalGrantKey("exec", approvalDirectoryKey(dir)),
+			),
 		).toBe(true);
 		expect(getApprovalCache(settings.getAgentDir()).size).toBe(0);
 

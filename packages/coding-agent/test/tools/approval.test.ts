@@ -227,8 +227,13 @@ describe("MCP fallback and prompt formatting", () => {
 			parameters: { type: "object" },
 			legacyName: "mcp__context_query_docs",
 			approval: "write",
+			approvalCacheTargets: () => ["target:notes.txt"],
+			approvalCacheScopes: () => ["scope:src"],
 		} as never);
 		expect(definition.legacyName).toBe("mcp__context_query_docs");
+		// The per-target grant hooks cross the same bridge, so extension tools take part in grants.
+		expect(definition.approvalCacheTargets?.({})).toEqual(["target:notes.txt"]);
+		expect(definition.approvalCacheScopes?.({})).toEqual(["scope:src"]);
 		expect(resolveApproval(definition, {}, "yolo", { mcp__context_query_docs: "deny" }).policy).toBe("deny");
 	});
 
@@ -372,6 +377,37 @@ describe("MCP fallback and prompt formatting", () => {
 			};
 			await requestApproval(ui, urlRead, {});
 			expect(prompts[1]!.full).not.toContain("Folder:");
+		} finally {
+			root.removeSync();
+		}
+	});
+
+	it("bounds the folder scan, so a huge folder cannot stall the prompt", async () => {
+		const root = TempDir.createSync("@pi-approval-folder-bound-");
+		try {
+			const folder = path.join(root.path(), "Huge");
+			fs.mkdirSync(folder, { recursive: true });
+			for (let index = 0; index < 205; index += 1) {
+				fs.writeFileSync(path.join(folder, `entry-${String(index).padStart(3, "0")}.txt`), "x");
+			}
+			const prompts: { full: string; compact: string }[] = [];
+			const ui = {
+				select: async () => undefined,
+				approve: async (prompt: { full: string; compact: string }) => {
+					prompts.push(prompt);
+					return true;
+				},
+			};
+			const read = {
+				name: "read",
+				approval: "read" as const,
+				approvalCacheTargets: () => [path.join(folder, "entry-000.txt")],
+			};
+			await requestApproval(ui, read, {});
+			// The scan stops at its bound, so the count is a lower bound rather than a full walk.
+			const lines = prompts[0]!.full.split("\n");
+			expect(lines[1]).toContain("200+ entries");
+			expect(lines[2]).toBe("  - entry-000.txt");
 		} finally {
 			root.removeSync();
 		}

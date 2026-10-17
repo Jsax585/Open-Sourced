@@ -264,7 +264,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		);
 		// `always-ask-cached` grants live behind one session+global store per agent directory; one
 		// instance is shared by the pre-check, the full gate, and the post-approval record below.
-		const approvalGrants = getApprovalGrants(effectiveSettings?.getAgentDir());
+		const approvalGrants = getApprovalGrants(effectiveSettings?.getAgentDir(), this.runner.sessionId);
 		const preResolved = resolveApproval(
 			this.tool,
 			approvalArgs(params, context),

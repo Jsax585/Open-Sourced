@@ -84,6 +84,7 @@ import {
 } from "./conflict-detect";
 import { executeReadUrl, fetchReadUrl, parseReadUrlTarget } from "./fetch";
 import { approvalDirectoryKey } from "./approval-cache";
+import { isApprovalPublicUrl } from "./approval-targets";
 import { approvalTargetKey, approvalTargetNamesFile } from "./approval-targets";
 import { postProcessToolResult, resolveOutputMaxColumns } from "./output-meta";
 import {
@@ -95,6 +96,7 @@ import {
 	splitDelimitedPathEntry,
 	splitMixedUrlPathList,
 	splitPathAndSelPreferringLiteral,
+	splitPathAndSelPreferringLiteralSync,
 } from "./path-utils";
 import { type LineRange } from "@oh-my-pi/pi-tui/tools/line-ranges";
 import { splitPathAndSel } from "@oh-my-pi/pi-tui/tools/read";
@@ -1001,9 +1003,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const rawPath = args && typeof args === "object" && "path" in args ? String(args.path ?? "") : "";
 		if (rawPath.length === 0) return undefined;
 		const withoutImageQuestion = splitImageQuestionTarget(rawPath).path;
-		const { path: selectorless, sel } = splitPathAndSel(withoutImageQuestion);
+		// Authorization must key what execution reads: an existing literal file like `notes:1` is
+		// read literally, so its grant belongs to `notes:1`, not to `notes`.
+		const { path: selectorless, sel } = splitPathAndSelPreferringLiteralSync(withoutImageQuestion, this.session.cwd);
 		if (isReadableUrlPath(selectorless) && !(sel === undefined && splitPdfImageReadPath(withoutImageQuestion))) {
-			return undefined;
+			// Nobody needs permission to read a public page, so those stay ungated. A private host —
+			// loopback, a private or link-local address, a single-label intranet name — is reachable
+			// only from inside this machine or network, so it is gated like a file.
+			if (isApprovalPublicUrl(selectorless)) return undefined;
 		}
 		const key = approvalTargetKey(this.session.cwd, selectorless);
 		if (key === undefined) return undefined;

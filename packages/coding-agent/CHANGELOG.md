@@ -26,6 +26,15 @@
 - Fixed prompts raised by a provider safety check offering grant answers: they keep plain Approve/Deny, since a per-call check can never be remembered.
 - Fixed the ACP shell gate resolving approvals against the default agent directory instead of the active profile's `approval-cache.db`.
 - Fixed remembered approvals surviving a cache deletion until restart: every check re-reads `approval-cache.db`, so deleting the database, clearing its table, or using **Forget Remembered Approvals** revokes the grants immediately.
+- Fixed approval grants leaking across conversations: the in-memory "This Session" tier is now scoped to the conversation it was approved in, so `/new`, a session switch, or a second session in the same process starts without it.
+- Fixed a recursive `grep` or `glob` running on a plain folder grant: a recursive search reads below subfolders, so it carries its own tree grant (approving that tree also records the folder grant it includes), while a one-level search stays covered by the folder's grant.
+- Fixed search root lists being unkeyed: a root list such as `src;other` now keys every root the way execution fans it out, instead of reporting nothing and running unapproved.
+- Fixed reads of private endpoints being ungated: `localhost`, private, link-local and reserved hosts prompt like a file, while public web URLs stay exempt.
+- Fixed remembered eval-prelude approvals: choosing "Approve <prelude> for session" now records the grant and honors it on the next call.
+- Fixed approval keys colliding on whitespace and literal selector paths: `" secret "` no longer shares a key with `secret`, and an existing literal `notes:1` keys as itself.
+- Fixed new files under a symlinked folder changing key once created: the key resolves a path's deepest existing ancestor and keeps the missing suffix.
+- Fixed the folder a prompt lists being read synchronously and without bound: the listing is asynchronous, capped at 200 entries (its counts then read as lower bounds), sanitized, and rendered from `src/prompts/tools/approval-folder.md`.
+- Fixed extension tools being unable to declare the per-target grant hooks: `ToolDefinition` and `CustomTool` now expose `approvalCacheTargets` and `approvalCacheScopes`, forwarded through the custom-tool bridge.
 
 ## [18.11.3] - 2026-10-16
 

@@ -485,31 +485,50 @@ export function commonApprovalDirectoryKey(directories: readonly string[]): stri
 
 const cachesByDir = new Map<string, ApprovalCache>();
 
-/** One instance-wide session tier: every agent directory in this process shares it. */
-const sessionApprovals = new SessionApprovals();
+/** Scope prefix for one agent directory: every conversation under it shares this prefix. */
+function directoryScopeKey(resolvedDir: string): string {
+	const folded = process.platform === "win32" ? resolvedDir.toLowerCase() : resolvedDir;
+	return `${folded}\0`;
+}
+
+/**
+ * In-memory session tiers, keyed by agent directory and conversation. A grant approved "for this
+ * session" belongs to the conversation it was approved in, so `/new`, a session switch, another
+ * agent directory, or a second session in the same process starts without it.
+ */
+const sessionApprovalsByScope = new Map<string, SessionApprovals>();
 
 const grantsByDir = new Map<string, ApprovalGrants>();
 
 /**
- * Session plus global grants for an agent directory. The session tier is this
- * process's memory (cleared when omp exits, never shared between instances);
- * the global tier is `approval-cache.db` in that directory and outlives every
- * instance. Both the resolver's checks and the wrapper's records go through it.
+ * Session plus global grants for an agent directory and conversation. The session tier is this
+ * process's memory, isolated per conversation — cleared when omp exits, never shared between
+ * instances, never carried into another session in the same process; the global tier is
+ * `approval-cache.db` in that directory and outlives every instance. Both the resolver's checks and
+ * the wrapper's records go through it.
  */
-export function getApprovalGrants(agentDir: string = getAgentDir()): ApprovalGrants {
+export function getApprovalGrants(agentDir: string = getAgentDir(), sessionId?: string): ApprovalGrants {
 	const resolved = path.resolve(agentDir);
-	const directoryKey = process.platform === "win32" ? resolved.toLowerCase() : resolved;
-	let grants = grantsByDir.get(directoryKey);
+	const scopeKey = `${directoryScopeKey(resolved)}${sessionId ?? ""}`;
+	let grants = grantsByDir.get(scopeKey);
 	if (!grants) {
-		grants = new ApprovalGrants(sessionApprovals, getApprovalCache(resolved));
-		grantsByDir.set(directoryKey, grants);
+		let approvals = sessionApprovalsByScope.get(scopeKey);
+		if (!approvals) {
+			approvals = new SessionApprovals();
+			sessionApprovalsByScope.set(scopeKey, approvals);
+		}
+		grants = new ApprovalGrants(approvals, getApprovalCache(resolved));
+		grantsByDir.set(scopeKey, grants);
 	}
 	return grants;
 }
 
 /** Drop every in-memory grant, simulating a fresh instance (tests only). */
 export function __resetSessionApprovalsForTests(): void {
-	sessionApprovals.clear();
+	// Clear the stores too: a caller holding one keeps seeing revoked grants otherwise.
+	for (const approvals of sessionApprovalsByScope.values()) approvals.clear();
+	sessionApprovalsByScope.clear();
+	grantsByDir.clear();
 }
 
 /**
@@ -519,9 +538,13 @@ export function __resetSessionApprovalsForTests(): void {
  * read, write, or command asks again.
  */
 export function clearApprovalGrants(agentDir: string = getAgentDir()): void {
-	const grants = getApprovalGrants(agentDir);
-	grants.session.clear();
-	grants.global.clear();
+	const resolved = path.resolve(agentDir);
+	// Every conversation's in-memory tier for this directory, plus the persistent database.
+	const scopePrefix = directoryScopeKey(resolved);
+	for (const [scope, approvals] of sessionApprovalsByScope) {
+		if (scope.startsWith(scopePrefix)) approvals.clear();
+	}
+	getApprovalCache(resolved).clear();
 }
 
 /**

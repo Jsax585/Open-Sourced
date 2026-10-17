@@ -1985,7 +1985,13 @@ export class EventController {
 		if (!tool) return undefined;
 		const mode = cfgToolsApprovalMode.get(settings);
 		const userPolicies: Record<string, unknown> = cfgToolsApproval.get(settings);
-		const approval = resolveApproval(tool, args, mode, userPolicies, getApprovalGrants(settings.getAgentDir()));
+		const approval = resolveApproval(
+			tool,
+			args,
+			mode,
+			userPolicies,
+			getApprovalGrants(settings.getAgentDir(), this.ctx.sessionManager.getSessionId()),
+		);
 		if (approval.policy !== "prompt") return undefined;
 		return { state: "blocked", kind: "permission", msg: formatApprovalPrompt(tool, args, approval.reason) };
 	}

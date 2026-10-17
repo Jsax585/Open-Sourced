@@ -6,7 +6,9 @@
  * - compare a tool capability tier against the active approval mode,
  * - format the generic approval prompt body.
  */
+import { prompt, sanitizeText } from "@oh-my-pi/pi-utils";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
+import approvalFolderTemplate from "../prompts/tools/approval-folder.md" with { type: "text" };
 import type { AgentTool, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
 import * as path from "node:path";
 import type { Settings } from "../config/settings";
@@ -25,6 +27,7 @@ import {
 import { cfgToolsApproval, cfgToolsApprovalMode } from "./settings";
 import {
 	approvalFolderListing,
+	approvalTreeSearchFolderKey,
 	type ApprovalFolderListing,
 	approvalTargetDirectory,
 	approvalTargetNamesFile,
@@ -279,7 +282,7 @@ export function approvalFolderCandidate(
 	// drive-relative "C:". The label is display-only — the key is what the grant records — so it
 	// shortens a home prefix.
 	const label = shortenPath(path.parse(key).root === key ? key : key.replace(/[\\/]+$/, ""));
-	return { key, label };
+	return { key, label: sanitizeText(label) };
 }
 
 /**
@@ -297,6 +300,10 @@ export function recordApprovalCacheTargets(
 ): void {
 	for (const target of approvalCacheTargets(tool, args)) {
 		grants.record(approvalGrantKey(capability, target), tool.name, undefined, tier);
+		// A tree grant (a recursive search) reaches everything a folder grant for the same folder
+		// does, so record that folder grant with it: one answer covers both kinds of search.
+		const folderKey = approvalTreeSearchFolderKey(target);
+		if (folderKey !== undefined) grants.record(approvalGrantKey(capability, folderKey), tool.name, "directory", tier);
 	}
 }
 
@@ -617,24 +624,32 @@ const APPROVAL_FOLDER_COMPACT_LISTING = 4;
 const count = (n: number, singular: string, plural: string): string => `${n} ${n === 1 ? singular : plural}`;
 
 /**
- * Lines naming the folder a grant would cover and listing its own entries — the whole reach of a
- * folder grant — so the prompt shows what it is about to allow before the user approves it. A
- * folder nothing occupies yet still gets its name, with no counts. Empty without a folder answer.
+ * The prompt section naming the folder a grant would cover and listing its own entries — the whole
+ * reach of a folder grant — so the prompt shows what it is about to allow before the user approves
+ * it. Names come from the filesystem, so they are sanitized; a folder nothing occupies yet still
+ * gets its name, with no counts. `undefined` without a folder answer.
  */
-function approvalFolderPromptLines(
+function approvalFolderPromptBlock(
 	folder: string | undefined,
 	listing: ApprovalFolderListing | undefined,
 	limit: number,
-): string[] {
-	if (folder === undefined) return [];
-	if (listing === undefined) return [`Folder: ${folder}`];
-	const lines = [
-		`Folder: ${folder} — ${count(listing.total, "entry", "entries")} (${count(listing.folders, "folder", "folders")}, ${count(listing.files, "file", "files")})`,
-	];
-	const shown = listing.entries.slice(0, limit);
-	for (const entry of shown) lines.push(`  - ${entry}`);
-	if (listing.total > shown.length) lines.push(`  … ${count(listing.total - shown.length, "more", "more")}`);
-	return lines;
+): string | undefined {
+	if (folder === undefined) return undefined;
+	const entries = listing === undefined ? [] : listing.entries.slice(0, limit).map(entry => sanitizeText(entry));
+	const hidden = listing === undefined ? 0 : listing.total - entries.length;
+	const summary =
+		listing === undefined
+			? undefined
+			: listing.truncated
+				? `${listing.total}+ entries`
+				: `${count(listing.total, "entry", "entries")} (${count(listing.folders, "folder", "folders")}, ${count(listing.files, "file", "files")})`;
+	const block = prompt.render(approvalFolderTemplate, {
+		folder: sanitizeText(folder),
+		summary,
+		entries,
+		more: hidden > 0 ? count(hidden, "more", "more") : undefined,
+	});
+	return block.trimEnd() || undefined;
 }
 
 /** Label of the session-scoped answer for an exact target that is not a file (a directory or URL). */
@@ -716,7 +731,7 @@ export async function requestApproval(
 	// prompt so the folder is never approved unseen. Reads through the grant key (a real path),
 	// not the display label, which may be home-shortened.
 	const folderListing =
-		folder === undefined ? undefined : approvalFolderListing(folder.key, APPROVAL_FOLDER_FULL_LISTING);
+		folder === undefined ? undefined : await approvalFolderListing(folder.key, APPROVAL_FOLDER_FULL_LISTING);
 	const targets = cacheAnswers ? approvalCacheTargets(tool, args) : [];
 	const exactGrant = targets.length > 0;
 	// The file name is for file targets only: a directory or URL target keeps the plain
@@ -728,14 +743,15 @@ export async function requestApproval(
 	// Exec and other non-read/write calls without a directory of their own can be remembered by
 	// tool name for this session; a command's folder answer already carries its grant.
 	const toolName = cacheAnswers && !exactGrant && folderLabel === undefined ? tool.name : undefined;
-	const folderLines = approvalFolderPromptLines(folderLabel, folderListing, APPROVAL_FOLDER_FULL_LISTING);
-	const full = [...header, ...details, ...folderLines, ...appendix].join("\n");
+	const folderBlock = approvalFolderPromptBlock(folderLabel, folderListing, APPROVAL_FOLDER_FULL_LISTING);
+	const full = [...header, ...details, ...(folderBlock === undefined ? [] : [folderBlock]), ...appendix].join("\n");
 	if (ui.approve) {
 		const summary = approvalSummary(details);
+		const compactBlock = approvalFolderPromptBlock(folderLabel, folderListing, APPROVAL_FOLDER_COMPACT_LISTING);
 		const compact = [
 			...header,
 			...(summary === undefined ? [] : [summary]),
-			...approvalFolderPromptLines(folderLabel, folderListing, APPROVAL_FOLDER_COMPACT_LISTING),
+			...(compactBlock === undefined ? [] : [compactBlock]),
 			...appendix,
 		].join("\n");
 		const answer = await ui.approve({

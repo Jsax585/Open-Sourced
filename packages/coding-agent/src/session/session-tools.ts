@@ -923,7 +923,7 @@ export class SessionTools {
 							args,
 							mode,
 							userPolicies,
-							getApprovalGrants(this.#host.settings.getAgentDir()),
+							getApprovalGrants(this.#host.settings.getAgentDir(), this.#host.sessionManager.getSessionId()),
 						);
 						if (resolved.policy === "deny") throw denyError(resolved, target.name);
 						if (resolved.policy === "allow") {
