@@ -1130,13 +1130,14 @@ describe("HostedClientLink", () => {
 
 		ui!.notify("careful\u001b[31m", "warning");
 		ui!.setStatus("build", "ok\n\u001b[2Jbad");
-		ui!.setWidget("todo", ["one", "two"], { placement: "belowEditor" });
+		ui!.setWidget("todo", ["  one\tdone", "two\n\u001b[2Jbad"], { placement: "belowEditor" });
 		ui!.setEditorText("drafted by an extension");
 
 		await waitFor(() => a.setEditorText.mock.calls.length === 1);
 		expect(a.showHookNotify).toHaveBeenCalledWith("careful", "warning");
 		expect(a.setHookStatus).toHaveBeenCalledWith("build", "ok bad");
-		expect(a.setHookWidget).toHaveBeenCalledWith("todo", ["one", "two"], { placement: "belowEditor" });
+		// Indentation survives; tabs expand, and control sequences and embedded newlines cannot reach the terminal.
+		expect(a.setHookWidget).toHaveBeenCalledWith("todo", ["  one   done", "two bad"], { placement: "belowEditor" });
 		expect(a.setEditorText).toHaveBeenCalledWith("drafted by an extension");
 	});
 

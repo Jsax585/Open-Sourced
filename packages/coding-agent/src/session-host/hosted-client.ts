@@ -29,7 +29,11 @@ import * as crypto from "node:crypto";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
-import { sanitizeDisplayLine, sanitizeDisplayText } from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
+import {
+	sanitizeDisplayLine,
+	sanitizeDisplaySingleLine,
+	sanitizeDisplayText,
+} from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
 import type { ContextUsage } from "@oh-my-pi/pi-tui/status-line/types";
 import { clearAssistantMessageLinkTargets } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
 import { logger, toError } from "@oh-my-pi/pi-utils";
@@ -850,7 +854,10 @@ export class HostedClientLink {
 			case "setWidget":
 				if (request.widgetLines === undefined) this.#hostWidgetKeys.delete(request.widgetKey);
 				else this.#hostWidgetKeys.add(request.widgetKey);
-				ctx.setHookWidget(request.widgetKey, request.widgetLines, { placement: request.widgetPlacement });
+				// Untrusted host text, like the status above; indentation is kept, so no trim.
+				ctx.setHookWidget(request.widgetKey, request.widgetLines?.map(sanitizeDisplaySingleLine), {
+					placement: request.widgetPlacement,
+				});
 				return;
 			case "setTitle":
 				setExtensionTerminalTitle(request.title);
