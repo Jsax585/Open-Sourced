@@ -14,7 +14,6 @@ import {
 import type { ContextWindowTiers } from "../config/model-registry";
 import type { ScopeLike } from "../config/registry";
 import type { Settings } from "../config/settings";
-import { resolveCompactionMethodOrder } from "./compaction-methods";
 import {
 	type CompactionSettings,
 	cfgCompaction,
@@ -32,23 +31,6 @@ export function resolveModelCompactionSettings(
 		? cfgCompactionModelThresholds.get(scope)
 		: undefined;
 	return applyModelCompactionThreshold(cfgCompaction.get(scope), thresholds, model);
-}
-
-/**
- * Where a Cursor turn is asked to wrap up so compaction can run. Cursor runs the
- * tool loop server-side, which leaves mid-turn compaction no boundary inside the
- * turn. Undefined when nothing would compact and continue once the turn ends.
- */
-export function resolveCursorContextBudgetTokens(scope: ScopeLike, model: Model): number | undefined {
-	const contextWindow = model.contextWindow ?? 0;
-	if (model.api !== "cursor-agent" || contextWindow <= 0) return undefined;
-	const settings = resolveModelCompactionSettings(scope, model);
-	const compactsAndContinues =
-		settings.enabled &&
-		settings.midTurnEnabled !== false &&
-		settings.autoContinue !== false &&
-		resolveCompactionMethodOrder(settings.methodOrder).length > 0;
-	return compactsAndContinues ? resolveThresholdTokens(contextWindow, settings) : undefined;
 }
 
 /** Where auto-compaction triggers for `model` and which setting decides it, for the model hub preview. */
