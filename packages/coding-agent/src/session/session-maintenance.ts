@@ -3390,14 +3390,11 @@ export class SessionMaintenance {
 			contextPromotionEnabled: cfgContextPromotionEnabled.get(this.#host.settings) === true,
 		});
 		if (shouldThresholdCompact) {
-			// A budgeted Cursor turn was asked to stop here so the host could compact.
-			// Its tool loop ran server-side, so no later boundary in this run picks the
-			// work back up: it must neither wait for a speculative summary nor end on a
-			// promotion.
-			const cursorWrapUp =
-				sameModel === true &&
-				this.#model !== undefined &&
-				resolveCursorContextBudgetTokens(this.#host.settings, this.#model) !== undefined;
+			// A budgeted Cursor turn that was asked to stop here so the host could
+			// compact. Its tool loop ran server-side, so no later boundary in this run
+			// picks the work back up: it must neither wait for a speculative summary
+			// nor end on a promotion.
+			const cursorWrapUp = sameModel === true && assistantMessage.contextBudgetWrapUp === true;
 			const terminalTextAnswer = isTerminalTextAssistantAnswer(assistantMessage);
 			// Grace band: a live (or just-started) background speculation absorbs
 			// the blocking summarization; the session stays responsive and the
