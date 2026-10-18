@@ -403,7 +403,7 @@ This is the part that usually trips people up.
 
 ### Discovery-time `${...}` expansion
 
-OMP expands `${VAR}` and `${VAR:-default}` placeholders while discovering MCP configs from OMP-native files and standalone fallback files. Expansion applies recursively to string values in `command`, `args`, `env`, `cwd`, `url`, `headers`, `auth`, and `oauth`, plus the scalar `enabled`, `timeout`, and `requestIdFormat` fields (a non-numeric `timeout` expansion falls back to the default); unresolved placeholders remain literal strings. Tool-filter entries (`enabledTools`/`disabledTools`) are tool-name patterns and are never expanded, in every config source. Standalone root `mcp.json`/`.mcp.json` fallbacks expand the recursive set but pass `enabled` through unexpanded (boolean or ignored).
+OMP expands `${VAR}` and `${VAR:-default}` placeholders while discovering MCP configs from OMP-native files and standalone fallback files. In OMP-native files, expansion applies recursively to string values in `command`, `args`, `env`, `cwd`, `url`, `headers`, `auth`, and `oauth`, plus the scalar `enabled`, `timeout`, and `requestIdFormat` fields (a non-numeric `timeout` expansion falls back to the default); unresolved placeholders remain literal strings. Tool-filter entries (`enabledTools`/`disabledTools`) are tool-name patterns and are never expanded, in every config source. Standalone root `mcp.json`/`.mcp.json` fallbacks expand the recursive set (`command`, `args`, `env`, `cwd`, `url`, `headers`, `auth`, `oauth`), but do not expand scalar fields (`enabled`, `timeout`, `requestIdFormat`).
 
 Example:
 
