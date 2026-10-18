@@ -443,14 +443,17 @@ export interface PromptOptions {
 	/** Delegator's open-endedness description (task tool `solutionSpace`); replaces the prompt as `auto` thinking classification input. */
 	solutionSpace?: string;
 	/**
-	 * Called synchronously once this prompt is admitted: idle, at the start of
-	 * #promptWithMessage's own turn setup (before preflight, image
-	 * normalization, or provider dispatch); while streaming, once the message
-	 * is pushed onto its steer/follow-up/aside queue (after image
-	 * normalization and vision-description preprocessing for that prompt); or
-	 * is routed to an extension command, before its handler runs. Admission is
-	 * not proof that a model call will occur. A prompt dropped, cancelled, or
-	 * failed before admission still only settles through the returned promise.
+	 * Called synchronously once this prompt is admitted: idle, once
+	 * #promptWithMessage's turn setup has selected any auto-prewalk planning
+	 * model, passed the usage preflight, and prepared the message for the
+	 * selected model (image normalization and vision description), before
+	 * memory recall, extension hooks, or provider dispatch; while streaming,
+	 * once the message is pushed onto its steer/follow-up/aside queue (after its
+	 * image preprocessing, unless a configured planning model defers that to
+	 * delivery); or is routed to an extension command, before its handler runs.
+	 * Admission is not proof that a model call will occur. A prompt dropped,
+	 * cancelled, or failed before admission still only settles through the
+	 * returned promise.
 	 */
 	onPromptAdmitted?: () => void;
 }

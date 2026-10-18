@@ -1,6 +1,7 @@
 import type { Agent, AgentMessage, AgentToolResult, AgentTurnEndContext } from "@oh-my-pi/pi-agent-core";
 import { invalidateMessageCache } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { AutoPrewalkDecision } from "../auto-prewalk/classifier";
 import type { Settings } from "../config/settings";
@@ -72,17 +73,24 @@ export interface PrewalkCoordinatorHost {
 	settings: Settings;
 	model(): Model | undefined;
 	configuredThinkingLevel(): ConfiguredThinkingLevel | undefined;
-	restoreThinkingLevel(level: ConfiguredThinkingLevel | undefined): void;
 	resolveDefaultPrewalk(): Prewalk | undefined;
 	/** Resolves `prewalk.autoTarget`; warns and returns undefined when it cannot be used. */
-	resolveAutoPrewalkTarget(): Prewalk | undefined;
+	resolveAutoPrewalkTarget(baseline?: Prewalk): Prewalk | undefined;
+	resolveAutoPrewalkPlanningModel(): Prewalk | undefined;
+	prepareAutoPrewalkModel(model: Model): Promise<Model>;
 	/** Judges a new task for `prewalk.auto`; undefined when there is nothing to judge. */
 	classifyAutoPrewalk(request: string, signal: AbortSignal): Promise<AutoPrewalkDecision | undefined>;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
 	setModelTemporary(
 		model: Model,
 		thinkingLevel?: ConfiguredThinkingLevel,
-		options?: { ephemeral?: boolean },
+		options?: {
+			ephemeral?: boolean;
+			commitIf?: () => boolean;
+			onSelected?: () => void;
+			metadataResolved?: boolean;
+			restoreThinkingLevel?: boolean;
+		},
 	): Promise<void>;
 	setActiveToolsByName(names: string[]): Promise<void>;
 	restoreNonMCPToolPresentation(nonMCPToolNames: string[], nonMCPMountedToolNames: string[]): Promise<void>;
@@ -131,8 +139,11 @@ export class PrewalkCoordinator {
 	#handoff: PrewalkHandoff | undefined;
 	/** The pending arm `prewalk.auto` made, as opposed to a manual or configured one. */
 	#autoArm: Prewalk | undefined;
+	#autoTargetRestoresThinking = false;
 	/** Session-local opt-out from auto-prewalk: `/prewalk off`, or `--no-prewalk` at startup. `/new` clears it. */
 	#autoSuppressed: boolean;
+	#selectionGeneration = 0;
+	#sourceRestoration: { promise: Promise<void>; resolve(): void } | undefined;
 
 	constructor(host: PrewalkCoordinatorHost, options: PrewalkCoordinatorOptions = {}) {
 		this.#host = host;
@@ -164,24 +175,35 @@ export class PrewalkCoordinator {
 	#clearPrewalkState(): void {
 		this.#prewalk = undefined;
 		this.#autoArm = undefined;
+		this.#autoTargetRestoresThinking = false;
 		this.#planInjected = false;
 		this.#continuePending = false;
 		this.#todoSeen = false;
 	}
 
+	/** An explicit publication invalidates decisions even while model reconciliation is pending. */
+	invalidateAutoSelection(): void {
+		this.#selectionGeneration++;
+		this.#sourceRestoration?.resolve();
+		this.#sourceRestoration = undefined;
+		if (this.#autoArm === this.#prewalk && this.#autoArm) {
+			this.#scrubPlanNudge(undefined, true);
+			this.#clearPrewalkState();
+		}
+	}
+
 	/** A later model/effort selection owns the active model, even if its identity is unchanged. */
 	releaseHandoff(): void {
+		this.invalidateAutoSelection();
 		this.#handoff = undefined;
 	}
 
 	/** Retire the outgoing cycle and prepare a configured prewalk for a fresh main session. */
 	async resetForNewSession(enabled: boolean): Promise<void> {
+		if (this.#sourceRestoration) await this.#sourceRestoration.promise;
 		const handoff = this.#handoff;
 		this.#autoSuppressed = false;
-		const restoreSource =
-			handoff !== undefined &&
-			(enabled || (handoff.auto && this.#autoMode() === "on")) &&
-			this.#onHandoffTarget(handoff);
+		const restoreSource = handoff !== undefined && (enabled || handoff.auto) && this.#onHandoffTarget(handoff);
 		this.#scrubPlanNudge(undefined, true);
 		this.#clearPrewalkState();
 		this.releaseHandoff();
@@ -210,11 +232,14 @@ export class PrewalkCoordinator {
 	}
 
 	async #restoreSource(handoff: PrewalkHandoff): Promise<void> {
+		const generation = this.#selectionGeneration;
+		const current = () => generation === this.#selectionGeneration;
 		try {
-			await this.#host.setModelTemporary(handoff.source, handoff.sourceThinkingLevel, { ephemeral: true });
-			// Temporary selection treats undefined as "keep/default"; restoration must preserve
-			// the original selector, including auto or an explicitly inherited effort.
-			this.#host.restoreThinkingLevel(handoff.sourceThinkingLevel);
+			await this.#host.setModelTemporary(handoff.source, handoff.sourceThinkingLevel, {
+				ephemeral: true,
+				commitIf: current,
+				restoreThinkingLevel: true,
+			});
 		} catch (error) {
 			this.#host.emitNotice(
 				"warning",
@@ -231,17 +256,21 @@ export class PrewalkCoordinator {
 
 	/** Effective `prewalk.auto` mode: session opt-outs and plan mode (whose plan-file write would trip a handoff) turn it off. */
 	#autoMode(): "off" | "suggest" | "on" {
-		if (this.#autoSuppressed || this.#host.getPlanModeState()?.enabled === true) return "off";
+		if (this.#autoSuppressed || this.#planYolo !== undefined || this.#host.getPlanModeState()?.enabled === true) {
+			return "off";
+		}
 		return cfgPrewalkAuto.get(this.#host.settings);
 	}
 
 	/**
 	 * Starts a new user task under `prewalk.auto: on`. An auto handoff belongs to the task that armed it, so the
-	 * session returns to that task's planning model unless a later explicit selection took ownership. An auto arm
-	 * the previous task never used is dropped so this task is judged on its own. Manual and configured arms stay.
+	 * session returns to the model and thinking level that task started on unless a later explicit selection took
+	 * ownership. An auto arm the previous task never used is dropped so this task is judged on its own. Manual and
+	 * configured arms stay.
 	 */
 	async beginAutoTask(): Promise<void> {
-		if (this.#autoMode() !== "on") return;
+		if (this.#sourceRestoration) await this.#sourceRestoration.promise;
+		this.#selectionGeneration++;
 		if (this.#autoArm && this.#autoArm === this.#prewalk) {
 			this.#scrubPlanNudge(undefined, true);
 			this.#clearPrewalkState();
@@ -249,7 +278,16 @@ export class PrewalkCoordinator {
 		const handoff = this.#handoff;
 		if (!handoff?.auto) return;
 		this.releaseHandoff();
-		if (this.#onHandoffTarget(handoff)) await this.#restoreSource(handoff);
+		if (this.#onHandoffTarget(handoff)) {
+			const restoration = Promise.withResolvers<void>();
+			this.#sourceRestoration = restoration;
+			try {
+				await this.#restoreSource(handoff);
+			} finally {
+				restoration.resolve();
+				if (this.#sourceRestoration === restoration) this.#sourceRestoration = undefined;
+			}
+		}
 	}
 
 	/**
@@ -267,11 +305,111 @@ export class PrewalkCoordinator {
 	}
 
 	/**
+	 * Judge a new task. A pending planner switch is judged and published before any model-dependent preparation;
+	 * otherwise judgment runs alongside preparation, so `decided` settles only when the caller awaits it before
+	 * dispatch. `arm` is synchronous, so nothing interleaves between it and the request that carries its nudge.
+	 */
+	async prepareAuto(
+		request: string,
+		signal: AbortSignal,
+		isCurrent: () => boolean,
+	): Promise<{ decided: Promise<unknown>; arm(): AgentMessage | undefined }> {
+		if (this.#autoMode() === "on") await this.beginAutoTask();
+		const generation = this.#selectionGeneration;
+		const mode = this.#autoMode();
+		const current = () =>
+			!signal.aborted &&
+			isCurrent() &&
+			generation === this.#selectionGeneration &&
+			mode === this.#autoMode() &&
+			this.#prewalk === undefined;
+		const skipped = { decided: Promise.resolve(), arm: () => undefined };
+		const judgment = this.classifyAuto(request, signal);
+		const source = this.#host.model();
+		const sourceThinkingLevel = this.#host.configuredThinkingLevel();
+		let planner: Prewalk | undefined;
+		try {
+			planner = mode === "on" ? this.#host.resolveAutoPrewalkPlanningModel() : undefined;
+		} catch (error) {
+			logger.debug("auto-prewalk: preparation failed", { error: String(error) });
+			return skipped;
+		}
+		if (!planner || !source || this.#isNoop(planner)) {
+			let decision: AutoPrewalkDecision | undefined;
+			return {
+				decided: Promise.resolve(judgment).then(result => {
+					decision = result;
+				}),
+				arm: () => (current() ? this.applyAuto(decision) : undefined),
+			};
+		}
+		const decision = await judgment;
+		if (!current()) return skipped;
+		if (!decision?.arm || this.#autoMode() !== "on") {
+			return { decided: Promise.resolve(), arm: () => (current() ? this.applyAuto(decision) : undefined) };
+		}
+		let target: Prewalk | undefined;
+		let restoresThinking = false;
+		try {
+			const changesModel = !modelsAreEqual(planner.target, source);
+			const baselineTarget = changesModel ? { target: source, thinkingLevel: sourceThinkingLevel } : undefined;
+			target = this.#host.resolveAutoPrewalkTarget(baselineTarget);
+			restoresThinking = baselineTarget !== undefined && target === baselineTarget;
+			if (!target) return skipped;
+			target = { ...target, target: await this.#host.prepareAutoPrewalkModel(target.target) };
+			planner.target = await this.#host.prepareAutoPrewalkModel(planner.target);
+			if (!current()) return skipped;
+			const selected = planner;
+			await this.#host.setModelTemporary(selected.target, selected.thinkingLevel, {
+				ephemeral: true,
+				metadataResolved: true,
+				commitIf: current,
+				onSelected: () => {
+					if (generation !== this.#selectionGeneration || this.#prewalk !== undefined) return;
+					this.#handoff = {
+						source,
+						sourceThinkingLevel,
+						target: selected.target,
+						targetThinkingLevel: this.#host.configuredThinkingLevel(),
+						auto: true,
+					};
+					if (signal.aborted) {
+						void this.beginAutoTask();
+						return;
+					}
+					signal.addEventListener(
+						"abort",
+						() => {
+							if (generation === this.#selectionGeneration) void this.beginAutoTask();
+						},
+						{ once: true },
+					);
+				},
+			});
+			if (!current()) return skipped;
+			if (this.#handoff?.auto) this.#handoff.targetThinkingLevel = this.#host.configuredThinkingLevel();
+		} catch (error) {
+			logger.debug("auto-prewalk: preparation failed", { error: String(error) });
+			if (generation === this.#selectionGeneration && this.#handoff?.auto) await this.beginAutoTask();
+			return skipped;
+		}
+		return {
+			decided: Promise.resolve(),
+			arm: () => {
+				if (!current()) return undefined;
+				const message = this.applyAuto(decision, target);
+				if (message) this.#autoTargetRestoresThinking = restoresThinking;
+				return message;
+			},
+		};
+	}
+
+	/**
 	 * Applies a decision right before its task is dispatched; synchronous, so nothing can interleave before the
 	 * request carries it. `suggest` reports the decision. Under `on`, a confident prewalk arms a handoff from the
 	 * active model to the auto target and returns the plan nudge for the caller to deliver with the task.
 	 */
-	applyAuto(decision: AutoPrewalkDecision | undefined): AgentMessage | undefined {
+	applyAuto(decision: AutoPrewalkDecision | undefined, preparedTarget?: Prewalk): AgentMessage | undefined {
 		const mode = this.#autoMode();
 		if (!decision || mode === "off" || this.#prewalk !== undefined) return undefined;
 		if (mode === "suggest" || !decision.arm) {
@@ -286,7 +424,7 @@ export class PrewalkCoordinator {
 			else logger.debug("auto-prewalk: not armed", { decision: summary });
 			return undefined;
 		}
-		const target = this.#host.resolveAutoPrewalkTarget();
+		const target = preparedTarget ?? this.#host.resolveAutoPrewalkTarget();
 		// Already on the target: nothing to hand off, and nothing worth reporting on every task.
 		if (!target || this.#isNoop(target)) return undefined;
 		const planMessage = this.#armPending(target.target, target.thinkingLevel);
@@ -363,17 +501,27 @@ export class PrewalkCoordinator {
 		const source = this.#host.model();
 		const sourceThinkingLevel = this.#host.configuredThinkingLevel();
 		const auto = this.#autoArm === prewalk;
-		await this.#host.setModelTemporary(target, prewalk.thinkingLevel, { ephemeral: true });
+		const baseline = auto && this.#handoff?.auto ? this.#handoff : undefined;
+		const generation = this.#selectionGeneration;
+		const current = () => generation === this.#selectionGeneration && this.#prewalk === prewalk;
+		await this.#host.setModelTemporary(target, prewalk.thinkingLevel, {
+			ephemeral: true,
+			commitIf: current,
+			restoreThinkingLevel: auto && this.#autoTargetRestoresThinking,
+			onSelected: () => {
+				if (!source) return;
+				this.#handoff = {
+					source: baseline?.source ?? source,
+					sourceThinkingLevel: baseline ? baseline.sourceThinkingLevel : sourceThinkingLevel,
+					target,
+					targetThinkingLevel: this.#host.configuredThinkingLevel(),
+					auto,
+				};
+			},
+		});
+		if (!current()) return;
 		this.#clearPrewalkState();
-		if (source) {
-			this.#handoff = {
-				source,
-				sourceThinkingLevel,
-				target,
-				targetThinkingLevel: this.#host.configuredThinkingLevel(),
-				auto,
-			};
-		}
+		if (this.#handoff) this.#handoff.targetThinkingLevel = this.#host.configuredThinkingLevel();
 		this.#host.emitNotice(
 			"info",
 			`Prewalk: switched to ${target.provider}/${target.id} after first ${action.toolName} call.`,
@@ -404,6 +552,7 @@ export class PrewalkCoordinator {
 
 	/** Arms a prewalk immediately for an explicit slash-command request; it takes over a matching auto arm. */
 	arm(target: Model, thinkingLevel?: ConfiguredThinkingLevel): boolean {
+		this.#selectionGeneration++;
 		const active = this.#prewalk;
 		if (active) {
 			this.#host.emitNotice(
@@ -415,11 +564,15 @@ export class PrewalkCoordinator {
 				active.target.provider === target.provider &&
 				active.target.id === target.id &&
 				active.thinkingLevel === thinkingLevel;
-			if (matches) this.#autoArm = undefined;
+			if (matches) {
+				this.#autoArm = undefined;
+				this.#handoff = undefined;
+			}
 			return matches;
 		}
 		const planMessage = this.#armPending(target, thinkingLevel);
 		if (!planMessage) return false;
+		this.#handoff = undefined;
 		this.#host.agent.steer(planMessage);
 		return true;
 	}
@@ -471,7 +624,12 @@ export class PrewalkCoordinator {
 			return "rejected";
 		}
 
+		this.#selectionGeneration++;
+		this.#sourceRestoration?.resolve();
+		this.#sourceRestoration = undefined;
 		await this.#host.setModelTemporary(source, sourceThinkingLevel, { ephemeral: true });
+		this.#autoArm = undefined;
+		this.#handoff = undefined;
 		if (!active) return this.arm(target, targetThinkingLevel) ? "armed" : "reset";
 		if (this.#isNoop(active)) {
 			this.#scrubPlanNudge();

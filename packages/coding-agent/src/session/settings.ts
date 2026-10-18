@@ -110,6 +110,18 @@ export const cfgPrewalkAuto = register({
 	},
 });
 
+export const cfgPrewalkAutoPlanningModel = register({
+	id: "prewalk.autoPlanningModel",
+	type: "string",
+	default: "",
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "Auto-prewalk planning model",
+		description: "Optional model or role selected before preparing a confidently front-loaded task.",
+	},
+});
+
 export const cfgPrewalkAutoTarget = register({
 	id: "prewalk.autoTarget",
 	type: "string",

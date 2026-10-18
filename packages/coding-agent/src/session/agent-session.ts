@@ -505,6 +505,7 @@ import {
 	cfgDefaultThinkingLevel,
 	cfgExternalThinking,
 	cfgPowerSleepPrevention,
+	cfgPrewalkAutoPlanningModel,
 	cfgPrewalkAutoTarget,
 	cfgPrewalkEnabled,
 	cfgProviderAppendOnlyContext,
@@ -905,6 +906,11 @@ export class AgentSession implements SettingsScope {
 	 * command.
 	 */
 	readonly #queuedMessageRawText = new WeakMap<AgentMessage, string>();
+	readonly #queuedMessageDeferredImages = new WeakSet<AgentMessage>();
+	readonly #queuedMessageImageSources = new WeakMap<
+		AgentMessage,
+		{ message: AgentMessage; model: Model | undefined; described: boolean }
+	>();
 
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
@@ -1187,6 +1193,8 @@ export class AgentSession implements SettingsScope {
 		},
 	};
 	#promptSequence = 0;
+	/** Explicit model selections; only these, not context promotion, supersede a prompt prepared for the planner. */
+	#explicitModelSelections = 0;
 	#skippedPostTurnSpeculationCompletion: Promise<void> | undefined;
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
 	#inFlightSettledCallbacks: Array<() => void | Promise<void>> = [];
@@ -1822,9 +1830,22 @@ export class AgentSession implements SettingsScope {
 			settings: this.settings,
 			model: () => this.model,
 			configuredThinkingLevel: () => this.configuredThinkingLevel(),
-			restoreThinkingLevel: level => this.#models.restoreThinkingLevel(level),
 			resolveDefaultPrewalk: () => this.#resolveDefaultPrewalk(),
-			resolveAutoPrewalkTarget: () => this.#resolveAutoPrewalkTarget(),
+			resolveAutoPrewalkTarget: baseline => this.#resolveAutoPrewalkTarget(baseline),
+			resolveAutoPrewalkPlanningModel: () => {
+				const selector = cfgPrewalkAutoPlanningModel.get(this.settings).trim();
+				if (!selector) return undefined;
+				const resolved = this.#resolvePrewalkTarget(selector);
+				if (typeof resolved === "string") throw new Error(`Planning model "${selector}": ${resolved}`);
+				return resolved;
+			},
+			prepareAutoPrewalkModel: async model => {
+				const target = await this.#modelRegistry.refreshSelectedModelMetadata(model);
+				if (!(await this.#modelRegistry.getApiKey(target, this.sessionId))) {
+					throw new Error(`No API key for ${target.provider}/${target.id}`);
+				}
+				return target;
+			},
 			classifyAutoPrewalk: (request, signal) =>
 				classifyAutoPrewalk(
 					{ request, history: this.agent.state.messages },
@@ -1894,10 +1915,14 @@ export class AgentSession implements SettingsScope {
 			model: () => this.model,
 			sessionId: () => this.sessionId,
 			promptGeneration: () => this.#promptGeneration,
-			resolveActiveEditMode: () => this.#tools.resolveActiveEditMode(),
-			syncAfterModelChange: previousEditMode => this.#tools.syncAfterModelChange(previousEditMode),
-			setModelWithProviderSessionReset: async (model, selection = "explicit") => {
-				await this.#setModelWithProviderSessionReset(model);
+			syncAfterModelChange: commitIf => this.#tools.syncAfterModelChange(commitIf),
+			setModelWithProviderSessionReset: async (model, selection = "explicit", commitIf, onSelected) => {
+				if (commitIf && !commitIf()) return;
+				if (selection === "explicit") {
+					this.#explicitModelSelections++;
+					this.#prewalk.invalidateAutoSelection();
+				}
+				await this.#setModelWithProviderSessionReset(model, commitIf, onSelected);
 				// Only a completed explicit selection, including same-model reselection, takes ownership.
 				if (selection === "explicit") this.#prewalk.releaseHandoff();
 			},
@@ -1962,7 +1987,7 @@ export class AgentSession implements SettingsScope {
 			sessionMessageAlreadyPersisted: message => this.#sessionMessageAlreadyPersisted(message),
 			setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 			resolveActiveEditMode: () => this.#tools.resolveActiveEditMode(),
-			syncAfterModelChange: previousEditMode => this.#tools.syncAfterModelChange(previousEditMode),
+			syncAfterModelChange: () => this.#tools.syncAfterModelChange(),
 			resetCurrentResponsesProviderSession: reason => this.#resetCurrentResponsesProviderSession(reason),
 			maybeAutoRedeemReset: activeBlockUnblockAtMs => this.#maybeAutoRedeemReset(activeBlockUnblockAtMs),
 			runAutoCompaction: (reason, willRetry, options) =>
@@ -2709,7 +2734,8 @@ export class AgentSession implements SettingsScope {
 		return undefined;
 	}
 
-	#resolveAutoPrewalkTarget(): Prewalk | undefined {
+	#resolveAutoPrewalkTarget(baseline?: Prewalk): Prewalk | undefined {
+		if (baseline && !this.settings.isConfigured(cfgPrewalkAutoTarget)) return baseline;
 		const selector = cfgPrewalkAutoTarget.get(this.settings);
 		const resolved = this.#resolvePrewalkTarget(selector);
 		if (typeof resolved !== "string") return resolved;
@@ -7679,110 +7705,69 @@ export class AgentSession implements SettingsScope {
 			return true;
 		}
 
-		// Captured before the normalization/vision-description awaits below so an
-		// abort() landing during either can be told apart from a fresh submission —
-		// see the drop check right after those awaits.
-		const preflightGeneration = this.#promptGeneration;
-		// Skip eager preludes when the user has already queued a directive
-		const hasPendingUserDirective = this.#toolChoiceQueue.inspect().includes("user-force");
-		const activeModel = this.agent.state.model;
-		const externalThinkingToolChoice =
-			!options?.synthetic &&
-			!hasPendingUserDirective &&
-			cfgExternalThinking.get(this.settings) &&
-			this.getEnabledToolNames().includes("think") &&
-			supportsExternalThinking(activeModel)
-				? buildNamedToolChoice("think", activeModel)
-				: undefined;
-		const eagerTodoPrelude =
-			!options?.synthetic && !hasPendingUserDirective ? this.#todo.createEagerTodoPrelude(expandedText) : undefined;
-		const eagerTaskPrelude =
-			!options?.synthetic && !hasPendingUserDirective ? this.#todo.createEagerTaskPrelude(expandedText) : undefined;
-		const attachmentSourceNotices = this.#createAttachmentSourceNotices(options?.images, submittedAt);
-		const normalizedImages = await this.#normalizeImagesForModel(options?.images);
-
 		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
-		if (normalizedImages?.length) {
-			userContent.push(...normalizedImages);
-		}
-		// Text-only model + image attachment: describe via a vision model and inject the
-		// description as a hidden companion (the image stays in the visible user message).
-		const imageDescriptionNotice = normalizedImages?.length
-			? await this.#buildImageDescriptionNotice(normalizedImages)
-			: undefined;
-
-		// abort() bumps #promptGeneration and can land while normalization and the
-		// vision-description call above are still in flight. #promptWithMessage below
-		// captures its own generation fresh at entry, so it cannot see this race and
-		// would dispatch a brand-new turn as if the abort never happened. Drop the
-		// prompt here instead — same contract as #promptWithMessage's own
-		// generation-race checks further down.
-		if (this.#promptGeneration !== preflightGeneration) {
-			outcome.sessionClaimed = false;
-			if (!options?.synthetic) {
-				this.#promptDropped?.({ text: typedText, images: options?.images });
-			}
-			return true;
-		}
-
-		// A concurrent prompt() can start a turn during the awaits above: image
-		// normalization and the vision-description call suspend after the
-		// isStreaming check at the top, so two callers — the CLI initial message
-		// and a freshly typed submission — can both observe an idle session.
-		// Re-check before dispatch so the loser queues exactly like the early
-		// branch instead of racing #promptWithMessage into AgentBusyError. No
-		// await sits between this check and #beginInFlight, so the winner's
-		// in-flight increment is visible to every later re-check.
-		if (this.isStreaming) {
-			const streamingBehavior = options?.streamingBehavior;
-			if (!streamingBehavior) {
-				outcome.sessionClaimed = this.agent.state.isStreaming;
-				throw new AgentBusyError();
-			}
-			await this.#queueUserMessage(expandedText, options?.images, streamingBehavior, {
-				timestamp: submittedAt,
-				attribution: promptAttribution,
-				prependMessages: prependNotices,
-				rawText: typedText,
-				preprocessed: {
-					images: normalizedImages,
-					descriptionNotice: imageDescriptionNotice,
-				},
-				onPromptAdmitted: options?.onPromptAdmitted,
-			});
-			outcome.sessionClaimed = true;
-			return true;
-		}
-
-		if (externalThinkingToolChoice) {
-			this.#toolChoiceQueue.pushOnce(externalThinkingToolChoice, {
-				label: "external-thinking",
-				now: true,
-			});
-		}
 		const message = options?.synthetic
 			? {
 					role: "developer" as const,
-					content: userContent,
+					content: [...userContent, ...(options?.images ?? [])],
 					attribution: promptAttribution,
 					timestamp: submittedAt,
 					synthetic: true,
 					userInitiated: options?.userInitiated === true ? true : undefined,
 				}
-			: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: submittedAt };
+			: {
+					role: "user" as const,
+					content: [...userContent, ...(options?.images ?? [])],
+					attribution: promptAttribution,
+					timestamp: submittedAt,
+				};
 
-		const preludeMessages: AgentMessage[] = [];
-		if (eagerTodoPrelude) {
-			if (eagerTodoPrelude.toolChoice) {
-				this.#toolChoiceQueue.pushOnce(eagerTodoPrelude.toolChoice, {
-					label: "eager-todo",
+		const prepareMessage = async (isCurrent: () => boolean) => {
+			const normalizedImages = await this.#normalizeImagesForModel(options?.images);
+			if (!isCurrent()) return {};
+			const imageDescriptionNotice = normalizedImages?.length
+				? await this.#buildImageDescriptionNotice(normalizedImages)
+				: undefined;
+			if (!isCurrent()) return {};
+			const hasPendingUserDirective = this.#toolChoiceQueue.inspect().includes("user-force");
+			const activeModel = this.agent.state.model;
+			const externalThinkingToolChoice =
+				!options?.synthetic &&
+				!hasPendingUserDirective &&
+				cfgExternalThinking.get(this.settings) &&
+				this.getEnabledToolNames().includes("think") &&
+				supportsExternalThinking(activeModel)
+					? buildNamedToolChoice("think", activeModel)
+					: undefined;
+			if (externalThinkingToolChoice) {
+				this.#toolChoiceQueue.pushOnce(externalThinkingToolChoice, {
+					label: "external-thinking",
+					now: true,
 				});
 			}
-			preludeMessages.push(eagerTodoPrelude.message);
-		}
-		if (eagerTaskPrelude) {
-			preludeMessages.push(eagerTaskPrelude);
-		}
+			const eagerTodoPrelude =
+				!options?.synthetic && !hasPendingUserDirective
+					? this.#todo.createEagerTodoPrelude(expandedText)
+					: undefined;
+			const eagerTaskPrelude =
+				!options?.synthetic && !hasPendingUserDirective
+					? this.#todo.createEagerTaskPrelude(expandedText)
+					: undefined;
+			if (eagerTodoPrelude?.toolChoice) {
+				this.#toolChoiceQueue.pushOnce(eagerTodoPrelude.toolChoice, { label: "eager-todo" });
+			}
+			return {
+				message: { ...message, content: [...userContent, ...(normalizedImages ?? [])] },
+				images: normalizedImages,
+				prependMessages: [
+					...(eagerTodoPrelude ? [eagerTodoPrelude.message] : []),
+					...(eagerTaskPrelude ? [eagerTaskPrelude] : []),
+					...keywordNotices,
+					...this.#createAttachmentSourceNotices(options?.images, submittedAt),
+					...(imageDescriptionNotice ? [imageDescriptionNotice] : []),
+				],
+			};
+		};
 
 		// A user prompt on a kept-alive subagent (focused-session steering) starts a
 		// turn no task executor drives: observe it like an IRC wake so an accepted
@@ -7798,19 +7783,7 @@ export class AgentSession implements SettingsScope {
 		try {
 			dispatched = await this.#promptWithMessage(message, expandedText, {
 				...options,
-				images: normalizedImages,
-				prependMessages:
-					preludeMessages.length > 0 ||
-					keywordNotices.length > 0 ||
-					attachmentSourceNotices.length > 0 ||
-					imageDescriptionNotice
-						? [
-								...preludeMessages,
-								...keywordNotices,
-								...attachmentSourceNotices,
-								...(imageDescriptionNotice ? [imageDescriptionNotice] : []),
-							]
-						: undefined,
+				prepareMessage,
 			});
 		} catch (error) {
 			turnError = error;
@@ -7941,45 +7914,64 @@ export class AgentSession implements SettingsScope {
 			isUserInvokedSkillPrompt(customMessage) &&
 			Array.isArray(customMessage.content) &&
 			customMessage.content.some(part => part.type === "image");
-		const preparationGeneration = this.#promptGeneration;
-		const preparedMessage = hasSkillImages ? await this.#normalizeAgentMessageImages(customMessage) : customMessage;
-		const descriptionNotice = hasSkillImages
-			? await this.#buildSkillImageDescriptionNotice(preparedMessage)
-			: undefined;
-		// Same drop as #dispatchPrompt: abort() during normalization or the vision
-		// description must not publish the skill or start a turn afterwards.
-		if (hasSkillImages && (this.#promptGeneration !== preparationGeneration || this.#isDisposed)) {
-			outcome.sessionClaimed = false;
-			return true;
-		}
-
-		// Image normalization and the vision-description call suspend after the
-		// isStreaming check above, so a concurrent submission can start a turn in
-		// between. Re-check before dispatch and queue with the already-prepared
-		// content, mirroring #dispatchPrompt; no await sits between this check and
-		// #promptWithMessage's in-flight increment.
-		if (this.isStreaming) {
-			const streamingBehavior = options?.streamingBehavior;
-			if (!streamingBehavior) {
-				outcome.sessionClaimed = this.agent.state.isStreaming;
-				throw new AgentBusyError();
+		const prepareMessage = async (isCurrent: () => boolean) => {
+			const preparedMessage = hasSkillImages
+				? await this.#normalizeAgentMessageImages(customMessage)
+				: customMessage;
+			if (!isCurrent()) return {};
+			const descriptionNotice = hasSkillImages
+				? await this.#buildSkillImageDescriptionNotice(preparedMessage)
+				: undefined;
+			if (!isCurrent()) return {};
+			return {
+				message: preparedMessage,
+				prependMessages: [...keywordNotices, ...(descriptionNotice ? [descriptionNotice] : [])],
+				descriptionNotice,
+			};
+		};
+		if (hasSkillImages && !cfgPrewalkAutoPlanningModel.get(this.settings).trim()) {
+			const generation = this.#promptGeneration;
+			const isCurrent = () => generation === this.#promptGeneration && !this.#isDisposed;
+			const prepared = await prepareMessage(isCurrent);
+			if (!isCurrent()) {
+				outcome.sessionClaimed = false;
+				return true;
 			}
-			await this.#queueCustomMessage(message, streamingBehavior, {
-				queueChipText: options?.queueChipText,
-				preprocessed: { content: preparedMessage.content, descriptionNotice },
-				prependMessages: queuedNotices,
-				onPromptAdmitted: options?.onPromptAdmitted,
+			if (this.isStreaming) {
+				const streamingBehavior = options?.streamingBehavior;
+				if (!streamingBehavior) {
+					outcome.sessionClaimed = this.agent.state.isStreaming;
+					throw new AgentBusyError();
+				}
+				await this.#queueCustomMessage(message, streamingBehavior, {
+					queueChipText: options?.queueChipText,
+					prependMessages: queuedNotices,
+					preprocessed: {
+						content: prepared.message?.content ?? customMessage.content,
+						descriptionNotice: prepared.descriptionNotice,
+					},
+					onPromptAdmitted: options?.onPromptAdmitted,
+				});
+				outcome.sessionClaimed = true;
+				return true;
+			}
+			if (cfgPrewalkAutoPlanningModel.get(this.settings).trim()) {
+				outcome.sessionClaimed = await this.#promptWithMessage(customMessage, textContent, {
+					...options,
+					prepareMessage,
+				});
+			} else {
+				outcome.sessionClaimed = await this.#promptWithMessage(prepared.message ?? customMessage, textContent, {
+					...options,
+					prependMessages: prepared.prependMessages,
+				});
+			}
+		} else {
+			outcome.sessionClaimed = await this.#promptWithMessage(customMessage, textContent, {
+				...options,
+				prepareMessage,
 			});
-			outcome.sessionClaimed = true;
-			return true;
 		}
-		outcome.sessionClaimed = await this.#promptWithMessage(preparedMessage, textContent, {
-			...options,
-			prependMessages:
-				keywordNotices.length > 0 || descriptionNotice
-					? [...keywordNotices, ...(descriptionNotice ? [descriptionNotice] : [])]
-					: undefined,
-		});
 		return outcome.sessionClaimed;
 	}
 
@@ -8000,7 +7992,6 @@ export class AgentSession implements SettingsScope {
 		const first = userMessages[0];
 		if (!first) return undefined;
 		const text: string[] = [];
-		const images: ImageContent[] = [];
 		for (const message of userMessages) {
 			if (!("content" in message)) continue;
 			if (typeof message.content === "string") {
@@ -8010,40 +8001,98 @@ export class AgentSession implements SettingsScope {
 			const parts: string[] = [];
 			for (const part of message.content) {
 				if (part.type === "text") parts.push(part.text);
-				else if (part.type === "image") images.push(part);
 			}
 			text.push(parts.join(""));
 		}
 		const promptText = text.join("\n\n");
-		const preparationImages = images.length > 0 ? images : undefined;
-		// Steering amends the running task; only a follow-up starts a new one worth routing.
-		if (queue === "followUp" && userMessages.some(message => this.#isAutoPrewalkTask(message))) {
-			return this.#prepareQueuedAutoPrewalkTask(first, promptText, preparationImages, signal);
-		}
-		return this.#prepareAgentStart(first, promptText, preparationImages, this.#promptGeneration, signal, "queued");
+		return this.#prepareQueuedAutoPrewalkTask(
+			userMessages,
+			promptText,
+			signal,
+			queue === "followUp" && userMessages.some(message => this.#isAutoPrewalkTask(message)),
+		);
 	};
 
-	/**
-	 * A queued follow-up starts a new task: leave the previous task's auto handoff, judge this one alongside its
-	 * preparation, and arm in the synchronous commit so the plan nudge is delivered with the task it belongs to.
-	 */
+	/** Route follow-ups before staging model-dependent attachments and submission policy. */
 	async #prepareQueuedAutoPrewalkTask(
-		message: AgentMessage,
+		messages: readonly AgentMessage[],
 		prompt: string,
-		images: ImageContent[] | undefined,
 		signal: AbortSignal,
+		route: boolean,
 	): Promise<QueuedMessagePreparation> {
 		const generation = this.#promptGeneration;
-		await this.#prewalk.beginAutoTask();
-		const autoPrewalk = this.#prewalk.classifyAuto(prompt, signal);
-		const preparation = await this.#prepareAgentStart(message, prompt, images, generation, signal, "queued");
-		const decision = await autoPrewalk;
+		const previousModel = this.model;
+		const autoPrewalk = route
+			? await this.#prewalk.prepareAuto(
+					prompt,
+					signal,
+					() => this.#promptGeneration === generation && !this.#isDisposed,
+				)
+			: undefined;
+		const preparationModel = this.model;
+		const retainPlanningModel =
+			!!cfgPrewalkAutoPlanningModel.get(this.settings).trim() && previousModel !== preparationModel;
+		const explicitSelections = this.#explicitModelSelections;
+		const isCurrent = () =>
+			!signal.aborted &&
+			this.#promptGeneration === generation &&
+			!this.#isDisposed &&
+			(!retainPlanningModel ||
+				this.model === preparationModel ||
+				explicitSelections === this.#explicitModelSelections);
+		const staged: { message: AgentMessage; prepared: AgentMessage }[] = [];
+		const descriptions: AgentMessage[] = [];
+		const preparationImages: ImageContent[] = [];
+		for (const message of messages) {
+			if (!isCurrent()) return { commit: () => undefined };
+			let prepared = message;
+			const source = this.#queuedMessageImageSources.get(message);
+			if (this.#queuedMessageDeferredImages.has(message) || (source && source.model !== preparationModel)) {
+				prepared = await this.#normalizeAgentMessageImages(source?.message ?? message);
+				if (!isCurrent()) return { commit: () => undefined };
+				if (!source?.described && "content" in prepared && Array.isArray(prepared.content)) {
+					const normalizedImages: ImageContent[] = [];
+					for (const part of prepared.content) {
+						if (part.type === "image") normalizedImages.push(part);
+					}
+					const description = normalizedImages.length
+						? await this.#buildImageDescriptionNotice(normalizedImages)
+						: undefined;
+					if (!isCurrent()) return { commit: () => undefined };
+					if (description) descriptions.push(description);
+				}
+				staged.push({ message, prepared });
+			}
+			if ("content" in prepared && Array.isArray(prepared.content)) {
+				for (const part of prepared.content) {
+					if (part.type === "image") preparationImages.push(part);
+				}
+			}
+		}
+		const first = staged.find(entry => entry.message === messages[0])?.prepared ?? messages[0];
+		const preparation = await this.#prepareAgentStart(
+			first,
+			prompt,
+			preparationImages.length ? preparationImages : undefined,
+			generation,
+			signal,
+			"queued",
+			retainPlanningModel ? isCurrent : undefined,
+		);
+		await autoPrewalk?.decided;
 		return {
 			commit: () => {
+				if (!isCurrent()) return undefined;
 				const additional = preparation.commit();
 				if (additional === undefined) return undefined;
-				const planMessage = this.#prewalk.applyAuto(decision);
-				return planMessage ? [...additional, planMessage] : additional;
+				for (const { message, prepared } of staged) {
+					if (message.role === "user" && prepared.role === "user") message.content = prepared.content;
+					else if (message.role === "custom" && prepared.role === "custom") message.content = prepared.content;
+					this.#queuedMessageDeferredImages.delete(message);
+					this.#queuedMessageImageSources.delete(message);
+				}
+				const planMessage = autoPrewalk?.arm();
+				return [...descriptions, ...additional, ...(planMessage ? [planMessage] : [])];
 			},
 		};
 	}
@@ -8069,6 +8118,7 @@ export class AgentSession implements SettingsScope {
 		generation: number,
 		signal: AbortSignal | undefined,
 		origin: "direct" | "queued",
+		commitIf?: () => boolean,
 	): Promise<QueuedMessagePreparation & { baseXdevCatalogDelivered: boolean }> {
 		const sessionGeneration = this.#sessionGeneration;
 		const alreadyDisposing = this.#isDisposed && origin === "direct";
@@ -8076,7 +8126,8 @@ export class AgentSession implements SettingsScope {
 			this.#promptGeneration === generation &&
 			this.#sessionGeneration === sessionGeneration &&
 			(!this.#isDisposed || alreadyDisposing) &&
-			!signal?.aborted;
+			!signal?.aborted &&
+			(!commitIf || commitIf());
 		const cancelled = { baseXdevCatalogDelivered: false, commit: () => undefined };
 		const pendingMCPDiscovery = this.#pendingMCPDiscovery;
 		if (pendingMCPDiscovery) {
@@ -8179,6 +8230,11 @@ export class AgentSession implements SettingsScope {
 			"toolChoice" | "images" | "skipCompactionCheck" | "solutionSpace" | "onPromptAdmitted"
 		> & {
 			prependMessages?: AgentMessage[];
+			prepareMessage?: (isCurrent: () => boolean) => Promise<{
+				message?: AgentMessage;
+				images?: ImageContent[];
+				prependMessages?: AgentMessage[];
+			}>;
 			skipPostPromptRecoveryWait?: boolean;
 			acceptTerminalEmptyStop?: boolean;
 		},
@@ -8192,15 +8248,40 @@ export class AgentSession implements SettingsScope {
 		this.#promptSequence++;
 		const setupAbort = new AbortController();
 		this.#promptSetupAbortController = setupAbort;
+		let dispatched = false;
+		let supersededByExplicitSelection: (() => boolean) | undefined;
 		try {
-			options?.onPromptAdmitted?.();
 			await this.#recovery.maybeRestoreRetryFallbackPrimary();
-			// Auto-prewalk: return from the previous task's handoff before the usage preflight checks the model,
-			// then judge this task alongside the rest of setup; the decision is applied right before dispatch.
 			const autoPrewalkTask = this.#isAutoPrewalkTask(message);
-			if (autoPrewalkTask) await this.#prewalk.beginAutoTask();
-			const autoPrewalk = autoPrewalkTask ? this.#prewalk.classifyAuto(expandedText, setupAbort.signal) : undefined;
+			const previousModel = this.model;
+			const autoPrewalk = autoPrewalkTask
+				? await this.#prewalk.prepareAuto(
+						expandedText,
+						setupAbort.signal,
+						() => this.#promptGeneration === generation && !this.#isDisposed,
+					)
+				: undefined;
+			// Disposal stays #prepareAgentStart's call: a direct prompt on an already-disposing session settles its turn.
+			if (setupAbort.signal.aborted || this.#promptGeneration !== generation) return false;
+			const retainPlanningModel =
+				!!cfgPrewalkAutoPlanningModel.get(this.settings).trim() && previousModel !== this.model;
 			if (!(await this.#runUsageAwarePreflightForNextModelCall())) return false;
+			const preparationModel = this.model;
+			const explicitSelections = this.#explicitModelSelections;
+			// The turn's own context promotion keeps upstream dispatch; a user's explicit pick drops the staged prompt.
+			const superseded = () =>
+				retainPlanningModel &&
+				this.model !== preparationModel &&
+				explicitSelections !== this.#explicitModelSelections;
+			supersededByExplicitSelection = superseded;
+			const isCurrent = () => !setupAbort.signal.aborted && this.#promptGeneration === generation && !superseded();
+			const preparedMessage = await options?.prepareMessage?.(isCurrent);
+			if (!isCurrent()) return false;
+			if (preparedMessage) {
+				message = preparedMessage.message ?? message;
+				options = { ...options, images: preparedMessage.images, prependMessages: preparedMessage.prependMessages };
+			}
+			options?.onPromptAdmitted?.();
 			// Flush any pending bash messages before the new prompt
 			await this.#bash.flushPending();
 			this.#eval.flushPending();
@@ -8267,7 +8348,7 @@ export class AgentSession implements SettingsScope {
 
 			// Early bail-out: if a newer abort/prompt cycle started during setup,
 			// return before mutating shared state (nextTurn messages, system prompt).
-			if (this.#promptGeneration !== generation) {
+			if (!isCurrent()) {
 				return false;
 			}
 
@@ -8298,6 +8379,7 @@ export class AgentSession implements SettingsScope {
 				}
 			}
 
+			if (!isCurrent()) return false;
 			const preparation = await this.#prepareAgentStart(
 				message,
 				expandedText,
@@ -8305,7 +8387,9 @@ export class AgentSession implements SettingsScope {
 				generation,
 				setupAbort.signal,
 				"direct",
+				retainPlanningModel ? isCurrent : undefined,
 			);
+			if (!isCurrent()) return false;
 			const preparedMessages = preparation.commit();
 			if (!preparedMessages) return false;
 			messages.push(...preparedMessages);
@@ -8321,7 +8405,7 @@ export class AgentSession implements SettingsScope {
 			const isUserTurn = message.role === "user" || (message.role === "custom" && isUserInvokedSkillPrompt(message));
 			if (this.isAutoThinking && isUserTurn) {
 				await this.#models.applyAutoThinkingLevel(expandedText, generation, options?.solutionSpace);
-				if (this.#promptGeneration !== generation) {
+				if (!isCurrent()) {
 					return false;
 				}
 			}
@@ -8340,16 +8424,14 @@ export class AgentSession implements SettingsScope {
 				maintenanceMessages.splice(xdevMountNoticeIndex, 0, previewXdevMountNotice.notice);
 			}
 			await this.#maintenance.runPrePromptCompactionIfNeeded(maintenanceMessages);
-			if (this.#promptGeneration !== generation) {
+			if (!isCurrent()) {
 				return false;
 			}
 			if (autoPrewalk) {
-				const decision = await autoPrewalk;
-				if (this.#promptGeneration !== generation) {
-					return false;
-				}
+				await autoPrewalk.decided;
+				if (!isCurrent()) return false;
 				// Synchronous from here to dispatch, so the arm and its plan nudge travel with this task.
-				const planMessage = this.#prewalk.applyAuto(decision);
+				const planMessage = autoPrewalk.arm();
 				if (planMessage) {
 					messages.push(planMessage);
 					// The first-turn eager todo reminder was built before this task armed. Like a configured
@@ -8416,6 +8498,7 @@ export class AgentSession implements SettingsScope {
 				this.#planReferenceSent = true;
 			}
 			try {
+				dispatched = true;
 				await this.#recovery.promptAgentWithIdleRetry(messages, agentPromptOptions);
 			} finally {
 				this.#stats.setPendingSnapshot(undefined);
@@ -8425,6 +8508,16 @@ export class AgentSession implements SettingsScope {
 			}
 			return true;
 		} finally {
+			if (!dispatched) {
+				if (supersededByExplicitSelection?.() && this.#promptGeneration === generation && !this.#isDisposed) {
+					this.emitNotice(
+						"warning",
+						"Prompt not sent: the model was changed while the planning model prepared it. Send it again to run it on the selected model.",
+						"prewalk",
+					);
+				}
+				setupAbort.abort();
+			}
 			// The per-turn before_agent_start override lives only for this turn.
 			this.#tools.clearTurnSystemPromptOverride();
 			this.#usagePreflightReadyForNextModelCall = false;
@@ -8712,16 +8805,6 @@ export class AgentSession implements SettingsScope {
 			 *  it later. Defaults to `text` (the common case: no transformation ran,
 			 *  so raw and queued content are identical). */
 			rawText?: string;
-			/**
-			 * Set only when image normalization and the vision description already
-			 * ran for this prompt; its presence suppresses both here. Companions
-			 * travel in `prependMessages` so a notice-only caller cannot claim
-			 * attachments were prepared (they would be silently dropped).
-			 */
-			preprocessed?: {
-				images?: ImageContent[];
-				descriptionNotice?: CustomMessage;
-			};
 			/** Called synchronously once the message is pushed onto its queue. See {@link PromptOptions.onPromptAdmitted}. */
 			onPromptAdmitted?: () => void;
 			/**
@@ -8735,7 +8818,6 @@ export class AgentSession implements SettingsScope {
 		const attribution = options?.attribution ?? "user";
 		const timestamp = options?.timestamp;
 		const rawText = options?.rawText ?? text;
-		const preprocessed = options?.preprocessed;
 		const prependMessages = options?.prependMessages ?? [];
 		// Captured before any await below so the aside branch can detect a
 		// newSession()/switchSession() that completed while normalization/vision
@@ -8750,20 +8832,23 @@ export class AgentSession implements SettingsScope {
 		// branch) until the next deliberate steer/follow-up/prompt, matching the
 		// sendCustomMessage aside path (queueAside), which never touches this flag.
 		if (mode !== "aside") this.#advisors.autoResumeSuppressed = false;
-		// The pre-dispatch re-check in prompt() arrives with normalization and the
-		// vision description already done — reuse them instead of paying a second
-		// vision-model request for the same attachment.
 		const attachmentSourceNotices = this.#createAttachmentSourceNotices(images, timestamp ?? Date.now());
-		const normalizedImages = preprocessed ? preprocessed.images : await this.#normalizeImagesForModel(images);
+		const imagePreparationModel = this.model;
+		const deferImages =
+			!!images?.length &&
+			attribution !== "agent" &&
+			this.#agentKind === "main" &&
+			!!cfgPrewalkAutoPlanningModel.get(this.settings).trim() &&
+			(mode === "followUp" || (mode === "steer" && this.isStreaming && !this.agent.state.isStreaming));
+		const normalizedImages = deferImages ? images : await this.#normalizeImagesForModel(images);
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (normalizedImages?.length) {
 			content.push(...normalizedImages);
 		}
 		// Text-only model + image attachment: describe via a vision model and enqueue the
 		// description as a hidden companion immediately before the user message.
-		const imageDescriptionNotice = preprocessed
-			? preprocessed.descriptionNotice
-			: normalizedImages?.length
+		const imageDescriptionNotice =
+			!deferImages && normalizedImages?.length
 				? await this.#buildImageDescriptionNotice(normalizedImages)
 				: undefined;
 		if (options?.promptGeneration !== undefined && this.#promptGeneration !== options.promptGeneration) {
@@ -8800,6 +8885,14 @@ export class AgentSession implements SettingsScope {
 				timestamp: timestamp ?? Date.now(),
 			};
 			this.#queuedMessageRawText.set(userMessage, rawText);
+			if (deferImages) this.#queuedMessageDeferredImages.add(userMessage);
+			if (images?.length && attribution !== "agent") {
+				this.#queuedMessageImageSources.set(userMessage, {
+					message: { ...userMessage, content: [{ type: "text", text }, ...images] },
+					model: imagePreparationModel,
+					described: imageDescriptionNotice !== undefined,
+				});
+			}
 			this.agent.followUp(userMessage);
 		} else {
 			for (const notice of prependMessages) this.agent.steer(notice);
@@ -8813,6 +8906,7 @@ export class AgentSession implements SettingsScope {
 				timestamp: timestamp ?? Date.now(),
 			};
 			this.#queuedMessageRawText.set(userMessage, rawText);
+			if (deferImages) this.#queuedMessageDeferredImages.add(userMessage);
 			this.agent.steer(userMessage);
 		}
 		options?.onPromptAdmitted?.();
@@ -9013,7 +9107,6 @@ export class AgentSession implements SettingsScope {
 		deliverAs: "steer" | "followUp" | "aside",
 		options?: {
 			queueChipText?: string;
-			/** Content and vision companion already prepared by the caller; skips re-normalizing and re-describing. */
 			preprocessed?: { content: CustomMessage<T>["content"]; descriptionNotice?: CustomMessage };
 			/** Hidden notices published immediately before this message, in the same synchronous group. */
 			prependMessages?: readonly CustomMessage[];
@@ -9042,15 +9135,39 @@ export class AgentSession implements SettingsScope {
 			attribution: message.attribution ?? "agent",
 			timestamp: Date.now(),
 		};
-		const preprocessed = options?.preprocessed;
 		const prependMessages = options?.prependMessages ?? [];
 		const onPromptAdmitted = options?.onPromptAdmitted;
-		const normalizedAppMessage = preprocessed
-			? { ...appMessage, content: preprocessed.content }
-			: await this.#normalizeAgentMessageImages(appMessage);
-		const descriptionNotice = preprocessed
-			? preprocessed.descriptionNotice
-			: await this.#buildSkillImageDescriptionNotice(normalizedAppMessage);
+		const imagePreparationModel = this.model;
+		const deferImages =
+			(deliverAs === "followUp" || (deliverAs === "steer" && this.isStreaming && !this.agent.state.isStreaming)) &&
+			this.#agentKind === "main" &&
+			!!cfgPrewalkAutoPlanningModel.get(this.settings).trim() &&
+			isUserInvokedSkillPrompt(appMessage) &&
+			Array.isArray(appMessage.content) &&
+			appMessage.content.some(part => part.type === "image");
+		const normalizedAppMessage = deferImages
+			? appMessage
+			: options?.preprocessed
+				? { ...appMessage, content: options.preprocessed.content }
+				: await this.#normalizeAgentMessageImages(appMessage);
+		const descriptionNotice = deferImages
+			? undefined
+			: options?.preprocessed
+				? options.preprocessed.descriptionNotice
+				: await this.#buildSkillImageDescriptionNotice(normalizedAppMessage);
+		if (deferImages) this.#queuedMessageDeferredImages.add(normalizedAppMessage);
+		if (
+			deliverAs === "followUp" &&
+			isUserInvokedSkillPrompt(appMessage) &&
+			Array.isArray(appMessage.content) &&
+			appMessage.content.some(part => part.type === "image")
+		) {
+			this.#queuedMessageImageSources.set(normalizedAppMessage, {
+				message: appMessage,
+				model: imagePreparationModel,
+				described: descriptionNotice !== undefined,
+			});
+		}
 		if (deliverAs === "aside") {
 			if (await this.#sessionGenerationChanged(sessionGeneration)) return;
 			// Non-interrupting: rides the same step-boundary aside poll as
@@ -11105,7 +11222,12 @@ export class AgentSession implements SettingsScope {
 		}
 	}
 
-	async #setModelWithProviderSessionReset(model: Model): Promise<void> {
+	async #setModelWithProviderSessionReset(
+		model: Model,
+		commitIf?: () => boolean,
+		onSelected?: () => void,
+	): Promise<void> {
+		if (commitIf && !commitIf()) return;
 		const currentModel = this.model;
 		const isChanging = !currentModel || !modelsAreEqual(currentModel, model);
 		if (currentModel) {
@@ -11115,6 +11237,7 @@ export class AgentSession implements SettingsScope {
 			}
 		}
 		this.agent.setModel(model);
+		onSelected?.();
 		// Model mutations driven through ModelControls (explicit /model, prewalk
 		// hand-offs, retry-fallback, model cycling) funnel through this method,
 		// so this is the single point that notifies subscribers (ACP config
@@ -11132,10 +11255,11 @@ export class AgentSession implements SettingsScope {
 			this.#emit({ type: "model_changed" });
 		}
 
-		await this.#reconcileModelDependentState(model);
+		await this.#reconcileModelDependentState(model, commitIf);
 	}
 
-	async #reconcileModelDependentState(model: Model): Promise<void> {
+	async #reconcileModelDependentState(model: Model, commitIf?: () => boolean): Promise<void> {
+		if (commitIf && !commitIf()) return;
 		// Re-evaluate append-only context mode — provider or setting may have changed
 		this.#syncAppendOnlyContext(model);
 
@@ -11144,9 +11268,10 @@ export class AgentSession implements SettingsScope {
 		} catch (error) {
 			logger.warn("snapcompact archive view after model change failed", { error: String(error) });
 		}
+		if (commitIf && !commitIf()) return;
 
 		try {
-			await this.#tools.reconcileThinkTool();
+			await this.#tools.reconcileThinkTool(commitIf);
 		} catch (error) {
 			logger.warn("think tool reconcile after model change failed", { error: String(error) });
 		}

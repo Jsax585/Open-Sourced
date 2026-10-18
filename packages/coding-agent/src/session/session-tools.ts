@@ -384,7 +384,8 @@ export class SessionTools {
 	 */
 	#promptSurfaceScope = new AsyncLocalStorage<PromptSurface>();
 	#toolRegistryMutationTail: Promise<void> = Promise.resolve();
-	#promptModelKey: string | undefined;
+	/** Model policy and edit mode the published base prompt was rendered for. */
+	#promptPolicyKey: string | undefined;
 	#rebuildSystemPrompt: SessionToolsOptions["rebuildSystemPrompt"];
 	#getMcpServerInstructions: SessionToolsOptions["getMcpServerInstructions"];
 	/**
@@ -486,7 +487,7 @@ export class SessionTools {
 		// no tools and the prompt rebuild without `read` empties the skill list.
 		for (const tool of host.agent.state.tools) this.#enabledToolNames.add(tool.name);
 		for (const name of this.#xdev?.mountedNames ?? []) this.#enabledToolNames.add(name);
-		this.#promptModelKey = this.#currentPromptModelKey();
+		this.#promptPolicyKey = this.#currentPromptPolicyKey(this.getActiveToolNames());
 	}
 
 	/** Mutable registry shared with controller hosts that inspect available tools. */
@@ -846,27 +847,27 @@ export class SessionTools {
 		return resolveEditMode(this.#getEditModeSession());
 	}
 
-	#currentPromptModelKey(): string | undefined {
+	#currentPromptPolicyKey(toolNames: readonly string[]): string | undefined {
 		const activeModel = this.#host.model();
 		if (!activeModel) return undefined;
-		if (cfgIncludeModelInPrompt.get(this.#host.settings)) return formatModelString(activeModel);
+		const editMode = toolNames.includes("edit") ? this.resolveActiveEditMode() : "none";
+		if (cfgIncludeModelInPrompt.get(this.#host.settings)) return `${formatModelString(activeModel)}|edit:${editMode}`;
 		// The inline-descriptor decision is per model and selects both the prompt's
 		// tool catalog and provider-side description pruning (see `sdk.ts`).
 		const inlineDescriptors = shouldInlineToolDescriptors(
 			cfgInlineToolDescriptors.get(this.#host.settings),
 			activeModel.id,
 		);
-		return `delegation-bias:${resolveDelegationBias(activeModel)}|inline-descriptors:${inlineDescriptors}`;
+		return `delegation-bias:${resolveDelegationBias(activeModel)}|inline-descriptors:${inlineDescriptors}|edit:${editMode}`;
 	}
 
-	/** Rebuilds model-dependent tool prompts after a model change. */
-	async syncAfterModelChange(previousEditMode: EditMode): Promise<void> {
-		const currentEditMode = this.resolveActiveEditMode();
-		const editModeChanged = previousEditMode !== currentEditMode && this.getActiveToolNames().includes("edit");
-		// The system prompt selects model-specific policy even when it does not display the model id.
-		const modelChanged = this.#currentPromptModelKey() !== this.#promptModelKey;
-		if (editModeChanged || modelChanged) {
-			await this.refreshBaseSystemPrompt();
+	/** Rebuilds model-dependent tool prompts when the published prompt no longer matches the active model. */
+	async syncAfterModelChange(commitIf?: () => boolean): Promise<void> {
+		if (commitIf && !commitIf()) return;
+		// Compare with the published prompt, not this switch's own before/after state: a superseded
+		// switch may have changed the edit mode or model policy without publishing its prompt.
+		if (this.#currentPromptPolicyKey(this.getActiveToolNames()) !== this.#promptPolicyKey) {
+			await this.refreshBaseSystemPrompt(commitIf);
 		}
 	}
 
@@ -1024,7 +1025,13 @@ export class SessionTools {
 		);
 	}
 
-	async #applyActiveToolsByName(toolNames: string[], forcePromptRefresh = false, signal?: AbortSignal): Promise<void> {
+	async #applyActiveToolsByName(
+		toolNames: string[],
+		forcePromptRefresh = false,
+		signal?: AbortSignal,
+		commitIf?: () => boolean,
+	): Promise<void> {
+		if (commitIf && !commitIf()) return;
 		signal?.throwIfAborted();
 		toolNames = normalizeToolNames(toolNames);
 		let builtInWriteAvailable = this.#builtInToolNames.has("write");
@@ -1121,6 +1128,7 @@ export class SessionTools {
 			!this.#deviceOnlyWriteTransportAvailable &&
 			this.#isDeviceOnlyWrite?.() === true &&
 			this.#setDeviceOnlyWrite !== undefined;
+		if (commitIf && !commitIf()) return;
 		const previousMounted = new Set(this.#xdev?.mountedNames ?? []);
 		const previousActiveToolNames = this.getActiveToolNames();
 		const previousEnabledToolNames = this.#enabledToolNames;
@@ -1135,6 +1143,7 @@ export class SessionTools {
 		let implicitRebuildSignature: string | undefined;
 		let rebuiltXdevCatalogNames: readonly string[] | undefined;
 		let candidateSurface: PromptSurface | undefined;
+		let rebuiltPromptPolicyKey: string | undefined;
 		try {
 			if (restrictDeviceOnlyWrite) this.#setDeviceOnlyWrite?.(true);
 			if (upgradeDeviceOnlyWrite) this.#setPendingFullWriteDescription?.(true);
@@ -1172,6 +1181,7 @@ export class SessionTools {
 					frozenSignature = triggerSignature;
 				} else if (forcePromptRefresh || triggerSignature !== this.#lastAppliedToolSignature) {
 					const signature = computeSignature(candidate);
+					const promptPolicyKey = this.#currentPromptPolicyKey(validToolNames);
 					const built = await untilAborted(
 						signal,
 						this.#promptSurfaceScope.run(candidate, () =>
@@ -1183,9 +1193,18 @@ export class SessionTools {
 					rebuiltSignature = signature;
 					rebuiltXdevCatalogNames = built.xdevCatalogNames;
 					candidateSurface = candidate;
+					rebuiltPromptPolicyKey = promptPolicyKey;
 				}
 			}
 			signal?.throwIfAborted();
+			if (commitIf && !commitIf()) {
+				if (restrictDeviceOnlyWrite) this.#setDeviceOnlyWrite?.(false);
+				if (upgradeDeviceOnlyWrite) this.#setPendingFullWriteDescription?.(false);
+				this.#setMountedNames(previousMounted);
+				this.#setActiveToolNames?.(previousActiveToolNames);
+				this.#enabledToolNames = previousEnabledToolNames;
+				return;
+			}
 		} catch (error) {
 			if (restrictDeviceOnlyWrite) this.#setDeviceOnlyWrite?.(false);
 			if (upgradeDeviceOnlyWrite) this.#setPendingFullWriteDescription?.(false);
@@ -1235,7 +1254,7 @@ export class SessionTools {
 				this.#applyAgentSystemPrompt(this.#baseSystemPrompt);
 				invalidateToolSchemaMetadata(this.#host.agent.state.tools);
 				this.#lastAppliedToolSignature = rebuiltSignature;
-				this.#promptModelKey = this.#currentPromptModelKey();
+				this.#promptPolicyKey = rebuiltPromptPolicyKey;
 				this.#setBasePromptXdevNames(rebuiltXdevCatalogNames);
 				// The rebuilt prompt is a fresh roster snapshot. Keep the complete
 				// pending delta for a turn override that hides it, while separately
@@ -1931,30 +1950,38 @@ export class SessionTools {
 	 *
 	 * @returns false when enabling was requested but this session cannot build the tool.
 	 */
-	reconcileThinkTool(): Promise<boolean> {
+	reconcileThinkTool(commitIf?: () => boolean): Promise<boolean> {
 		return this.#setThinkToolActive(
 			cfgExternalThinking.get(this.#host.settings) && supportsExternalThinking(this.#host.model()),
+			commitIf,
 		);
 	}
 
-	#setThinkToolActive(enabled: boolean): Promise<boolean> {
+	#setThinkToolActive(enabled: boolean, commitIf?: () => boolean): Promise<boolean> {
 		return this.runToolRegistryMutation(async () => {
+			if (commitIf && !commitIf()) return false;
 			const active = this.getEnabledToolNames();
 			if (!enabled) {
 				if (active.includes("think")) {
-					await this.#applyActiveToolsByName(active.filter(name => name !== "think"));
+					await this.#applyActiveToolsByName(
+						active.filter(name => name !== "think"),
+						false,
+						undefined,
+						commitIf,
+					);
 				}
 				return true;
 			}
 			if (!this.#toolRegistry.has("think")) {
 				const tool = await this.#createThinkTool?.();
+				if (commitIf && !commitIf()) return false;
 				if (tool?.name !== "think") return false;
 				const wrapped = this.#wrapRuntimeTool(tool);
 				this.#toolRegistry.set(wrapped.name, wrapped);
 				this.#builtInToolNames.add(wrapped.name);
 			}
 			if (!active.includes("think")) {
-				await this.#applyActiveToolsByName([...active, "think"]);
+				await this.#applyActiveToolsByName([...active, "think"], false, undefined, commitIf);
 			}
 			return true;
 		});
@@ -2012,6 +2039,7 @@ export class SessionTools {
 		// Local alias: closures below cannot observe the field narrowing.
 		const rebuildSystemPrompt = this.#rebuildSystemPrompt;
 		const activeToolNames = this.getActiveToolNames();
+		const promptPolicyKey = this.#currentPromptPolicyKey(activeToolNames);
 		this.#setActiveToolNames?.(activeToolNames);
 		const previousBaseSystemPrompt = this.#baseSystemPrompt;
 		// Derive the candidate and run the awaited render inside its scope: the
@@ -2062,7 +2090,7 @@ export class SessionTools {
 				// later frozen changes that must follow a delivered base.
 				this.#basePromptReflectsRosterDelta = true;
 				this.#pendingToolRosterDeltaAfterBase = undefined;
-				this.#promptModelKey = this.#currentPromptModelKey();
+				this.#promptPolicyKey = promptPolicyKey;
 				this.#lastAppliedToolSignature = signature;
 				return true;
 			},
