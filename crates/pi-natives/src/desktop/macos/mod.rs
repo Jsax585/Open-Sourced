@@ -2,23 +2,27 @@ mod ax;
 mod capture;
 mod date;
 mod input;
+mod permission;
 mod process;
+mod session;
 mod skylight;
 mod spaces;
 
 pub(super) use ax::menus;
 use image::RgbaImage;
 use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+pub(super) use session::screen_state;
 
 use self::{ax::MacAx, capture::MacCapture, input::MacInput};
 use super::{
-	backend::{AxBackend, Backend, DeliveryMode, PointerEvent},
+	backend::{AxBackend, Backend, DeliveryMode, DisplayAwakeHold, PointerEvent},
 	control::OperationToken,
 	error::{CoreResult, DesktopError},
 	frame::FrameGeometry,
 	keys::KeyName,
 	types::{
-		CaptureCaps, DesktopCapabilities, DesktopDisplay, DesktopWindow, DisplaySelector, Target,
+		CaptureCaps, DesktopCapabilities, DesktopDisplay, DesktopWindow, DisplaySelector,
+		ScreenState, Target,
 	},
 };
 
@@ -41,9 +45,7 @@ impl MacosBackend {
 		if ax::is_trusted() {
 			Ok(())
 		} else {
-			Err(DesktopError::permission_denied(
-				"macOS Accessibility permission is required for native input",
-			))
+			Err(permission::denied("Accessibility"))
 		}
 	}
 }
@@ -51,7 +53,7 @@ impl MacosBackend {
 impl Backend for MacosBackend {
 	fn capabilities(&mut self) -> DesktopCapabilities {
 		let capture_permission = capture::capture_permission();
-		let input_permission = ax::is_trusted();
+		let ax_trusted = ax::is_trusted();
 		let display_count = if capture_permission {
 			self
 				.capture
@@ -60,23 +62,26 @@ impl Backend for MacosBackend {
 		} else {
 			0
 		};
+		let screen = session::screen_state(self.capture.selector());
 		DesktopCapabilities {
 			backend: "quartz".to_string(),
 			display_server: Some("Quartz WindowServer".to_string()),
 			capture: capture::capture_available() && capture_permission && display_count > 0,
-			input: input_permission,
-			ax: input_permission,
-			background_window_input: input_permission && skylight::is_available(),
+			input: ax_trusted,
+			ax: ax_trusted,
+			background_window_input: ax_trusted && skylight::is_available(),
 			takeover: skylight::takeover_available(),
 			applications: super::applications::supported(),
-			menus: input_permission,
-			held_input: input_permission,
+			menus: ax_trusted,
+			held_input: ax_trusted,
 			spaces: spaces::supported(),
-			global_escape: true,
+			global_escape: permission::listen_events(),
 			capture_permission: permission_label(capture_permission),
-			input_permission: permission_label(input_permission),
-			ax_permission: permission_label(input_permission),
+			input_permission: permission_label(permission::post_events()),
+			ax_permission: permission_label(ax_trusted),
 			display_count,
+			screen_locked: screen.locked,
+			display_asleep: screen.display_asleep,
 		}
 	}
 
@@ -86,6 +91,14 @@ impl Backend for MacosBackend {
 
 	fn windows(&mut self) -> CoreResult<Vec<DesktopWindow>> {
 		self.capture.windows()
+	}
+
+	fn screen_state(&mut self, display: Option<&DisplaySelector>) -> ScreenState {
+		session::screen_state(display.unwrap_or_else(|| self.capture.selector()))
+	}
+
+	fn hold_display_awake(&mut self) -> Option<DisplayAwakeHold> {
+		session::hold_display_awake().map(|hold| Box::new(hold) as DisplayAwakeHold)
 	}
 
 	fn capture(

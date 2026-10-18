@@ -44,7 +44,7 @@ const displays = await computer.displays();
 const win = await computer.window({ app: "Code" });
 await win.screenshot();
 const tree = await win.ax({ maxDepth: 6 });
-await (await win.ref("e12")).press();
+await win.ref("e12").press();
 await computer.capabilities();
 await computer.close();
 ```
@@ -56,13 +56,13 @@ displays = await computer.displays()
 win = await computer.window(app="Code")
 await win.screenshot(silent=True)
 tree = await win.ax(maxDepth=6)
-await (await win.ref("e12")).press()
+await win.ref("e12").press()
 await win.click(120, 48, button="right")
 ```
 
 `await computer.window(idOrFilter)` returns a `ComputerWindow` handle carrying `id`, `app`, `title`, `pid`, `bounds`, and `focused` as captured at resolution; `await win.ref("e5")`, `win.find(...)`, `computer.elementAt(x, y)`, `computer.focusedElement()`, and `computer.ref("e5")` return `ComputerElement` handles carrying `ref`, `role`, `nativeRole`, `title`, `description`, `enabled`, `focused`, and `childCount`. Every method on a handle re-resolves it by id or ref, so a closed window or expired ref fails on the call, not on the handle.
 
-For multi-step sequences, `computer.run(fnOrCode, { args?, read_only?, timeout? })` runs a function or JavaScript string inside the same session. The function receives `{ desktop, wait, assert }`, where `desktop` has the same helpers as `computer`; it is serialized, so it cannot capture Eval-cell closures. Pass plain data, functions, or `RegExp` values through `{ args: [...] }`. Python `computer.run(code, read_only=..., timeout=...)` accepts a JavaScript string only. The run returns the code's real structured value; nonempty text emitted by inner `display(...)` calls prints in the outer Eval cell, while screenshots surface as Eval images. Code runs with top-level `await` in a persistent, full-host-access Bun session. Window handles, screenshot frames, and recent AX references survive between calls. Ordinary Eval helpers such as `display`, `print`, `read`, `write`, and `tool.*` remain available.
+For multi-step sequences, `computer.run(fnOrCode, { args?, read_only?, timeout? })` runs a function or JavaScript string inside the same session. The function receives `{ desktop, wait, assert }`, where `desktop` has the same helpers as `computer`; it is serialized, so it cannot capture Eval-cell closures. Pass plain data, functions, or `RegExp` values through `{ args: [...] }`. Python `computer.run(code, read_only=..., timeout=...)` accepts a JavaScript string only. The run returns the code's real structured value; nonempty text printed inside the run prints in the outer Eval cell, while screenshots surface as Eval images. Code runs with top-level `await` in a persistent, full-host-access Bun session. Window handles, screenshot frames, and recent AX references survive between calls. Ordinary Eval helpers such as `print`, `read`, `write`, and `tool.*` remain available.
 
 Direct inspection helpers run read-only automatically. In `computer.run`, use `read_only: true` to declare an inspection-only call for approval and to block mutation through the `desktop` facade: screenshots and AX reads work, while facade input and clipboard-write methods reject the call. This is **not a sandbox**. The evaluated code still has full Bun/Node host access, including `process`, `require`, and `fs`, so `read_only` does not prevent mutation through arbitrary host APIs.
 
@@ -72,11 +72,11 @@ One lazy worker accepts one active run; overlapping runs fail with `Computer wor
 
 ```js
 const matches = await computer.windows({ app: "Code" });
-display(await computer.displays());
-display(await computer.capabilities());
+console.log(await computer.displays());
+console.log(await computer.capabilities());
 ```
 
-`computer.windows({ app?, title? })` returns window IDs, app/title, PID, logical bounds, and focus state. Select exactly one target with `computer.window(idOrFilter)`; an ambiguous filter throws and lists candidates. `computer.focusedWindow()` returns the current target or `null`.
+`computer.windows({ app?, title? })` returns window IDs, app/title, PID, logical bounds, and focus state for up to 48 matching windows. Select exactly one target with `computer.window(idOrFilter)`; an ambiguous filter throws and lists candidates. `computer.focusedWindow()` returns the current target or `null`.
 
 ### Applications and live display targets
 
@@ -130,13 +130,17 @@ await buttons[0].press();
 ```
 
 - `win.ax({ all?, maxDepth? })` returns a textual tree with `[ref=eN]` references; default depth is 24 and native snapshots visit at most 800 nodes.
-- `win.find({ role?, title?, value?, limit? })` matches case-insensitive substrings and returns up to `limit` elements (default 100, maximum 5000), from a walk bounded to 5000 nodes and depth 24.
-- `await win.ref("e5")`, `computer.elementAt(x, y)`, `computer.focusedElement()`, and `computer.ref("e5")` return live elements.
-- Elements expose `value`, `setValue`, `bounds`, `attributes`, `actions`, `perform`, `press`, `click`, `focus`, `parent`, and `children` operations.
+- `win.find({ role?, title?, value?, limit? })` matches case-insensitive substrings and returns an array of up to `limit` elements (default 100, maximum 5000), from a walk bounded to 5000 nodes and depth 24. Element methods and fields used on the array itself throw an error saying to pick one first: `const [el] = await win.find(...)`, or `el = (await win.find(...))[0]` in Python.
+- `await win.ref("e5")`, `computer.elementAt(x, y)`, `computer.focusedElement()`, and `computer.ref("e5")` return live elements. The handle `ref()` returns also takes element methods directly: `await win.ref("e5").click({ count: 2 })`.
+- Elements expose `value`, `setValue`, `bounds`, `attributes`, `actions`, `perform`, `press`, `click({ button?, count?, modifiers? })`, `doubleClick({ button?, modifiers? })`, `focus`, `parent`, and `children` operations.
 
 AX element actions need no screenshot. AX bounds and `computer.elementAt` use platform-native global desktop coordinates, not screenshot pixels: Windows uses physical desktop pixels; macOS uses logical points. Element clicks resolve the live element's owning window and refuse missing or ambiguous ownership rather than clicking an overlapping window. An element keeps the same reference across its window's AX snapshots and `find()` (desktop lookups such as `computer.focusedElement()` keep their own); a reference expires once its element is missing from the window's current and previous AX snapshots. An element whose role or label changes gets a new reference, and the old reference keeps naming the element it was read from until it expires the same way. On Windows, an element that takes over the UI Automation `RuntimeId` of one that is gone also gets a new reference, and an element whose `RuntimeId` cannot be read gets a new one on every read. The registry also caps references at 5000 and can evict a target's oldest generation earlier. Recover from `StaleRef` by taking a new AX snapshot and reacquiring the element.
 
 On macOS, `press()` requires the element to advertise `AXPress` in `actions()`; unsupported actions throw `AxFailed` even if the application would silently accept the request. Use `el.click()` for a coordinate click when the control has no press action.
+
+On macOS, a reference whose element the application has since removed throws `StaleRef` from every element operation, without waiting for the snapshots to expire it.
+
+On macOS, `press()`, `perform()` and `raise()` throw `AxUnconfirmed` when the action was requested but the app did not reply in time or messaging failed, for example because the action opened a modal dialog. The action may already have taken effect, so observe the window before repeating it.
 
 On macOS, native text fields support verified whole-value replacement and exact-window selected-text insertion, including when an app has multiple windows. Web-content or unidentifiable AX value writes refuse before mutation rather than trusting stale accessibility echoes. On Linux, generic `press()` selects an advertised activation action, never an arbitrary first action. On Windows, known self-activating UIA hosts may require explicit takeover coordinate input; background automation does not disable another application's windows or mutate their styles.
 
@@ -166,7 +170,7 @@ Inside `computer.run`, `wait(milliseconds)` sleeps and `wait(predicate, { timeou
 
 | Platform                | Current backend                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| macOS x64/arm64         | ScreenCaptureKit in a persistent native event-loop worker on macOS 14+, in-process CoreGraphics on macOS 12/13, plus native AX and input. Grant Screen Recording for capture and Accessibility for input/AX, then restart the launching host.                                                                                                                                                                                                                                                                                      |
+| macOS x64/arm64         | ScreenCaptureKit in a persistent native event-loop worker on macOS 14+, in-process CoreGraphics on macOS 12/13, plus native AX and input. macOS charges permissions to the app that launched omp (the terminal or IDE): grant it Screen Recording for capture and Accessibility for input/AX, then restart it. Without Screen Recording, other apps' window titles read as empty.                                                                                                                                                  |
 | Linux X11 x64/arm64     | X11 capture/input and AT-SPI accessibility. Requires a readable display plus RandR/XTEST.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Linux Wayland x64/arm64 | RemoteDesktop portal or `LIBEI_SOCKET` input and AT-SPI accessibility. ScreenCast portal/PipeWire capture ships only in builds compiled with the `wayland-pipewire` Cargo feature; released binaries omit it, so `capabilities()` reports `capture: false` there. RemoteDesktop permission is requested lazily on first native input, is not persisted, and closes with the desktop session; read-only window/AX inspection does not request it. Compositor restrictions apply; background per-window native input is unavailable. |
 | Windows x64/arm64       | Native display/window capture, Win32 input, and UI Automation accessibility.                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -178,11 +182,24 @@ X11 background input uses an independent XI2 pointer/keyboard and requires writa
 
 Inspect `computer.capabilities()` rather than assuming capture, input, AX, or permission state. On Wayland, input reports `prompt-or-granted` before first native input without opening a RemoteDesktop session. Released builds are compiled without the `wayland-pipewire` feature, so `capabilities()` reports `capture: false`; where the feature is present, a missing portal/PipeWire feature or denied RemoteDesktop portal is reported as a capture/input/permission failure rather than falling back to X11.
 
+### macOS display sleep and the lock screen
+
+While the agent uses the desktop, the macOS session holds a `PreventUserIdleDisplaySleep` power assertion, shown by `pmset -g assertions` as "oh-my-pi computer tool is operating the desktop". The first desktop call of an agent turn, other than `capabilities()`, takes it, and it lasts however long the turn spends on other work, until the agent waits for you: the turn ends (an interrupt included), or a question, approval or other prompt asks for your answer. A question or `cfg://` approval bounded by `ask.timeout` keeps it, since the turn goes on by itself when the deadline passes. Once you answer, the turn's next desktop call takes it again, as does the next turn's first. Closing the session also releases it. Without an agent turn (SDK or eval use) or in a subagent, each call holds it until five minutes after the last call instead. Releasing it restarts the system's display-sleep countdown, so the display, and an idle lock tied to it, can arrive no sooner than your display-sleep setting after the agent starts waiting.
+
+The assertion does not wake a display that is already asleep or unlock a locked screen. `capabilities()` reports `screenLocked` and `displayAsleep`, a screenshot taken behind the lock screen carries `screenLocked: true` and a note, any failed call names the state, and a run that ends locked or asleep starts with a `Note:` line. Input is never refused because of the lock; measured on macOS 26, it behaves as follows:
+
+| State | Screenshots | Background click | Keystrokes, takeover, AX actions |
+| --- | --- | --- | --- |
+| Locked, display on | A display capture shows the lock screen; a window capture shows the window's last frame behind it. | Reaches the app behind the lock screen. | Fail: apps expose no AX windows or elements while locked. |
+| Locked, display asleep | Fail: no active displays. | Fails: no display layout. | Fail, as above. |
+
+No agent input reached the lock screen's password field.
+
 ## Safety and troubleshooting
 
 Native mutations acquire an OS-backed input/focus lock shared across processes. Contention returns `InputBusy` before sending input; screenshots and inspection remain available. The lock is released after the operation and its cleanup, not held for the whole conversation.
 
-On macOS, physical `Esc` interrupts the current native input operation without swallowing the key. Synthetic Escape chords do not trigger the emergency stop. Event-tap permission is required; an unavailable monitor fails closed with `PermissionDenied`. Cancellation releases held buttons and modifiers before ownership is released. Synchronous OS/AX calls already in progress cannot be undone: inspect the UI after `Cancelled` or a partial-delivery error before retrying.
+On macOS, physical `Esc` interrupts the current native input operation without swallowing the key. Synthetic Escape chords do not trigger the emergency stop. The stop needs event-listening access, which Accessibility provides unless Input Monitoring is turned off for the launching app; then the stop sees no input and `capabilities()` reports `globalEscape: false`. A stop that fails to start refuses input with `PermissionDenied`. `inputPermission` reports event-posting access for information only: AX text input works without it, and `input` follows Accessibility. Cancellation releases held buttons and modifiers before ownership is released. Synchronous OS/AX calls already in progress cannot be undone: inspect the UI after `Cancelled` or a partial-delivery error before retrying.
 
 - Prefer direct inspection helpers, and use `read_only: true` for `computer.run` whenever no mutation is required.
 - Prefer AX actions because they target a semantic element and do not depend on a stale screenshot.
