@@ -691,6 +691,8 @@ interface CursorMessageWriter {
 
 interface CursorRunTransport extends CursorMessageWriter {
 	readonly closed: boolean;
+	/** Whether `write` still sends: false once the transport ended or closed. */
+	readonly writable: boolean;
 	close(): void;
 	/**
 	 * Stop sending after the server's end frame. HTTP/2 half-closes the request
@@ -710,6 +712,9 @@ function wrapHttp2RunTransport(request: http2.ClientHttp2Stream): CursorRunTrans
 	return {
 		get closed() {
 			return request.closed;
+		},
+		get writable() {
+			return !request.writableEnded && !request.closed;
 		},
 		write(frame) {
 			if (!request.writableEnded) request.write(frame);
@@ -868,6 +873,9 @@ function createHttp1RunTransport(options: CursorHttp1RunTransportOptions): Curso
 	};
 	void run();
 	return {
+		get writable() {
+			return !closed && !ended;
+		},
 		get closed() {
 			return closed;
 		},
@@ -1411,6 +1419,9 @@ function streamCursorWithWireMode(
 					resultTransport.write(frame);
 				},
 				takeAdditionalContext: () => {
+					// A result written after the server's end is dropped; the notice
+					// would never reach the model, so it stays pending.
+					if (!resultTransport.writable) return undefined;
 					const notice = contextBudget?.takeNotice(output.usage.contextTokens);
 					if (notice !== undefined) output.contextBudgetWrapUp = true;
 					return notice;

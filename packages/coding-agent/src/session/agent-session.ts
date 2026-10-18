@@ -444,6 +444,7 @@ import { SessionHandoff, type SessionHandoffHost } from "./session-handoff";
 import {
 	COMPACTION_CHECK_NONE,
 	createCodexCompactionContext as createMaintenanceCodexCompactionContext,
+	resolveCursorContextBudgetTokens,
 	SessionMaintenance,
 	type SessionMaintenanceHost,
 } from "./session-maintenance";
@@ -6781,6 +6782,20 @@ export class AgentSession implements SettingsScope {
 	/** Background speculative-compaction state, for UI indicators. */
 	get compactionSpeculation(): "idle" | "running" | "armed" {
 		return this.#maintenance.speculationState;
+	}
+
+	/**
+	 * The context budget for a Cursor turn about to start on `model`. A turn that
+	 * opens past the threshold is one compaction could not bring under it, and
+	 * stopping it would stall the work without freeing anything; the exception is
+	 * a start the threshold pass deferred to a running speculative summary, which
+	 * can only land at the boundary the wrap-up provides.
+	 */
+	cursorContextBudgetTokens(model: Model): number | undefined {
+		const budgetTokens = resolveCursorContextBudgetTokens(this.settings, model);
+		if (budgetTokens === undefined) return undefined;
+		const opensUnderBudget = (this.getContextUsage()?.tokens ?? 0) <= budgetTokens;
+		return opensUnderBudget || this.compactionSpeculation === "running" ? budgetTokens : undefined;
 	}
 	/** Strip image content from the current branch and persist the rewrite. */
 	dropImages(): Promise<{ removed: number; tokensFreed: number }> {
