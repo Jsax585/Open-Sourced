@@ -12,6 +12,7 @@ import type { Context, Model, ModelSpec, OpenAICompat } from "@oh-my-pi/pi-ai/ty
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import type { ResolvedOpenAICompat } from "@oh-my-pi/pi-catalog/types";
 
 function chatModel(compat: OpenAICompat): Model<"openai-completions"> {
 	return buildModel({
@@ -230,7 +231,7 @@ describe("OpenAI compat policy", () => {
 				{ role: "user", content: "Continue.", timestamp: 3 },
 			],
 		};
-		const wireMessages = convertMessages(model, context, activePolicy.compat);
+		const wireMessages = convertMessages(model, context, activePolicy.compat as ResolvedOpenAICompat);
 		const assistant = wireMessages.find(m => m.role === "assistant") as Record<string, unknown> | undefined;
 		expect(assistant?.content).toBe("I chose the indexed path.");
 		expect(assistant?.reasoning_content).toBeUndefined();
