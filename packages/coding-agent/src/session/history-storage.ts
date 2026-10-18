@@ -1,4 +1,4 @@
-import type { Database, SQLQueryBindings, Statement } from "bun:sqlite";
+import { Database, type SQLQueryBindings, type Statement } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
@@ -8,8 +8,10 @@ import {
 	normalizePathForComparison,
 	openSqliteDatabaseSync,
 	postmortem,
+	readSalvageableRows,
 } from "@oh-my-pi/pi-utils";
 import { primaryRootOrCwd } from "../utils/active-repo-context";
+import { closeSessionIndex, salvageSessionIndex } from "./session-index";
 
 /** A unique prompt with provenance from its most recent submission. */
 export interface HistoryEntry {
@@ -63,18 +65,26 @@ type HistoryRow = {
 	use_count: number;
 };
 
-/** Rendered scope predicate: `where` for statements without a `WHERE`, `and` for the others. */
-type ScopeClause = { where: string; and: string; params: SQLQueryBindings[] };
+/** Bound scope predicate appended after each read's row-validity guard. */
+type ScopeClause = { and: string; params: SQLQueryBindings[] };
 
-const EMPTY_SCOPE_CLAUSE: ScopeClause = { where: "", and: "", params: [] };
+const EMPTY_SCOPE_CLAUSE: ScopeClause = { and: "", params: [] };
 
 // A bare directory is not a list, so directory scopes expand to stored spellings and bind them
 // with `json_each`; the array travels as JSON, keeping the statement text (and its cache key)
 // constant no matter how many directories match.
-const DIRS_WHERE = "WHERE cwd IN (SELECT value FROM json_each(?))";
 const DIRS_AND = "AND cwd IN (SELECT value FROM json_each(?))";
 
 const SQLITE_NOW_EPOCH = "CAST(strftime('%s','now') AS INTEGER)";
+
+/**
+ * Rows a reader may hand to callers. A damaged page cross-linked into
+ * `history` decodes foreign bytes as rows (BLOB prompts and counters), which
+ * would reach the editor as `Uint8Array`s.
+ */
+function readableRowClause(table: string): string {
+	return `typeof(${table}prompt) = 'text' AND typeof(${table}created_at) = 'integer' AND typeof(${table}use_count) = 'integer'`;
+}
 
 // Escape LIKE wildcards so user input is treated as literal text.
 // Matches the `ESCAPE '\\'` clause used by substring-search statements.
@@ -114,6 +124,9 @@ CREATE TABLE IF NOT EXISTS history (
 CREATE INDEX IF NOT EXISTS idx_history_created_at ON history(created_at DESC);
 `;
 
+/** Rows {@link HistoryStorage.getRecent} reads first; checked on open for decoded foreign rows. */
+const RECENT_WINDOW = 100;
+
 let cancelExitCleanup: (() => void) | undefined;
 
 /** Stores searchable prompts with only their latest project and session metadata. */
@@ -142,9 +155,9 @@ export class HistoryStorage {
 		// stray prepare() would turn close() into a zombie that keeps the files open.
 		const hadFts = this.#db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history_fts'").get();
 		this.#db.run(`
-PRAGMA journal_mode=WAL;
-PRAGMA synchronous=NORMAL;
-${HISTORY_TABLE_DDL}
+	PRAGMA journal_mode=WAL;
+	PRAGMA synchronous=NORMAL;
+	${HISTORY_TABLE_DDL}
 		`);
 
 		// Additive column on stores created before the counter existed; runs before
@@ -159,11 +172,11 @@ ${HISTORY_TABLE_DDL}
 		this.#db.run("CREATE INDEX IF NOT EXISTS idx_history_session ON history(session_id, created_at DESC, id DESC)");
 
 		this.#db.run(`
-CREATE VIRTUAL TABLE IF NOT EXISTS history_fts USING fts5(prompt, content='history', content_rowid='id');
+	CREATE VIRTUAL TABLE IF NOT EXISTS history_fts USING fts5(prompt, content='history', content_rowid='id');
 
-CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
+	CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
 	INSERT INTO history_fts(rowid, prompt) VALUES (new.id, new.prompt);
-END;
+	END;
 		`);
 
 		if (rebuilt || !hadFts) {
@@ -173,10 +186,11 @@ END;
 				logger.warn("HistoryStorage FTS rebuild failed", { error: String(error) });
 			}
 		}
+		this.#assertRecentWindowReadable();
 		this.#upsertRowStmt = this.#db.prepare(`
-INSERT INTO history (prompt, created_at, cwd, session_id)
-VALUES (?, ${SQLITE_NOW_EPOCH}, ?, ?)
-ON CONFLICT(prompt) DO UPDATE SET
+	INSERT INTO history (prompt, created_at, cwd, session_id)
+	VALUES (?, ${SQLITE_NOW_EPOCH}, ?, ?)
+	ON CONFLICT(prompt) DO UPDATE SET
 	created_at = excluded.created_at,
 	cwd = excluded.cwd,
 	session_id = excluded.session_id,
@@ -184,13 +198,20 @@ ON CONFLICT(prompt) DO UPDATE SET
 		`);
 	}
 
-	/** Opens the process-wide prompt history database, quarantining a corrupt store once. */
+	/**
+	 * Opens the process-wide prompt history database. A corrupt store is
+	 * quarantined once and the rows it can still decode are copied into the
+	 * replacement.
+	 */
 	static open(dbPath: string = getHistoryDbPath()): HistoryStorage {
 		const existing = HistoryStorage.#instance;
 		if (existing) return existing;
 
 		fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-		return openSqliteDatabaseSync(
+		// Windows cannot move history.db aside while the session index holds it open.
+		closeSessionIndex();
+		let backupPath = undefined as string | undefined;
+		const instance = openSqliteDatabaseSync(
 			dbPath,
 			db => {
 				const instance = new HistoryStorage(db);
@@ -203,8 +224,15 @@ ON CONFLICT(prompt) DO UPDATE SET
 				HistoryStorage.#instance = instance;
 				return instance;
 			},
-			{ recoverCorruption: true },
+			{
+				recoverCorruption: true,
+				onCorruptionPreserved: preserved => {
+					backupPath = preserved;
+				},
+			},
 		);
+		if (backupPath) instance.#salvage(backupPath);
+		return instance;
 	}
 
 	/** Checkpoints and closes the process-wide database, and permits reopening it. */
@@ -293,7 +321,7 @@ ON CONFLICT(prompt) DO UPDATE SET
 
 		const clause = this.#scopeClause(scope);
 		const rows = this.#prepare(
-			`SELECT id, prompt, created_at, cwd, session_id, use_count FROM history ${clause.where} ORDER BY created_at DESC, id DESC LIMIT ?`,
+			`SELECT id, prompt, created_at, cwd, session_id, use_count FROM history WHERE ${readableRowClause("")} ${clause.and} ORDER BY created_at DESC, id DESC LIMIT ?`,
 		).all(...clause.params, safeLimit) as HistoryRow[];
 		return rows.map(row => this.#toEntry(row));
 	}
@@ -328,7 +356,7 @@ ON CONFLICT(prompt) DO UPDATE SET
 		let ftsRows: HistoryRow[] = [];
 		try {
 			ftsRows = this.#prepare(
-				`SELECT h.id, h.prompt, h.created_at, h.cwd, h.session_id, h.use_count FROM history_fts f JOIN history h ON h.id = f.rowid WHERE history_fts MATCH ? ${clause.and} ORDER BY h.created_at DESC, h.id DESC LIMIT ?`,
+				`SELECT h.id, h.prompt, h.created_at, h.cwd, h.session_id, h.use_count FROM history_fts f JOIN history h ON h.id = f.rowid WHERE history_fts MATCH ? AND ${readableRowClause("h.")} ${clause.and} ORDER BY h.created_at DESC, h.id DESC LIMIT ?`,
 			).all(ftsQuery, ...clause.params, safeLimit) as HistoryRow[];
 		} catch (error) {
 			// Malformed FTS expression - fall through to substring path.
@@ -409,7 +437,9 @@ ON CONFLICT(prompt) DO UPDATE SET
 		try {
 			const sessionIdSelection = this.#historySchemaHasColumn("session_id") ? "session_id" : "NULL AS session_id";
 			rows = this.#db
-				.query(`SELECT id, prompt, created_at, cwd, ${sessionIdSelection}, use_count FROM history`)
+				.query(
+					`SELECT id, prompt, created_at, cwd, ${sessionIdSelection}, use_count FROM history WHERE typeof(prompt) = 'text'`,
+				)
 				.all() as HistoryRow[];
 		} catch (error) {
 			logger.error("HistoryStorage rebuild dump failed", { error: String(error) });
@@ -451,6 +481,94 @@ ON CONFLICT(prompt) DO UPDATE SET
 		return true;
 	}
 
+	/**
+	 * Recall reads the newest window first, so foreign rows there are what crash
+	 * the editor. When the window holds any and `quick_check` confirms damage,
+	 * failing with SQLITE_CORRUPT hands the store to quarantine and salvage.
+	 * A clean check means only odd but intact values, which reads filter.
+	 */
+	#assertRecentWindowReadable(): void {
+		const window = this.#db
+			.query(
+				`SELECT count(*) AS foreign_rows FROM (SELECT prompt, created_at, use_count FROM history ORDER BY created_at DESC, id DESC LIMIT ${RECENT_WINDOW}) WHERE NOT (${readableRowClause("")})`,
+			)
+			.get() as { foreign_rows: number };
+		if (window.foreign_rows === 0) return;
+		const check = this.#db.query("PRAGMA quick_check(1)").get() as { quick_check: string };
+		if (check.quick_check === "ok") return;
+		throw Object.assign(new Error(`database disk image is malformed (${check.quick_check})`), {
+			code: "SQLITE_CORRUPT",
+		});
+	}
+
+	/**
+	 * Copies every prompt, session title, and recap the quarantined store at
+	 * `backupPath` can still decode into this replacement. Runs once per
+	 * quarantine; a peer that wrote to the replacement first keeps its rows, and
+	 * a prompt both hold merges like a resubmission. Best-effort: the backup
+	 * stays on disk whatever happens here.
+	 */
+	#salvage(backupPath: string): void {
+		let source: Database | undefined;
+		try {
+			source = new Database(backupPath, { readonly: true });
+			const prompts = readSalvageableRows<Record<keyof HistoryRow, unknown>>(
+				source,
+				"history",
+				"id, prompt, created_at, cwd, session_id, use_count",
+			).filter(
+				row =>
+					Number.isSafeInteger(row.id) &&
+					typeof row.prompt === "string" &&
+					row.prompt.trim() !== "" &&
+					Number.isSafeInteger(row.created_at) &&
+					Number.isSafeInteger(row.use_count),
+			);
+			let sequence: number | undefined;
+			try {
+				sequence = source
+					.query<{ seq: number }, []>("SELECT seq FROM sqlite_sequence WHERE name = 'history'")
+					.get()?.seq;
+			} catch {}
+			const target = this.#db;
+			const counts = target.transaction(() => {
+				using insert = target.prepare(`
+INSERT INTO history (id, prompt, created_at, cwd, session_id, use_count)
+VALUES (CASE WHEN EXISTS (SELECT 1 FROM history WHERE id = ?1) THEN NULL ELSE ?1 END, ?2, ?3, ?4, ?5, ?6)
+ON CONFLICT(prompt) DO UPDATE SET
+	use_count = history.use_count + excluded.use_count,
+	created_at = max(history.created_at, excluded.created_at),
+	cwd = iif(excluded.created_at > history.created_at, excluded.cwd, history.cwd),
+	session_id = iif(excluded.created_at > history.created_at, excluded.session_id, history.session_id)
+				`);
+				for (const row of prompts) {
+					insert.run(
+						row.id as number,
+						row.prompt as string,
+						row.created_at as number,
+						typeof row.cwd === "string" ? row.cwd : null,
+						typeof row.session_id === "string" ? row.session_id : null,
+						row.use_count as number,
+					);
+				}
+				// Keep ids above every id the damaged store handed out: the prediction
+				// daemon's cursor reads `id > cursor` and would skip lower new ids.
+				if (Number.isSafeInteger(sequence)) {
+					target.run("UPDATE sqlite_sequence SET seq = max(seq, ?) WHERE name = 'history'", [sequence as number]);
+				}
+				return { prompts: prompts.length, ...salvageSessionIndex(source as Database, target) };
+			})();
+			logger.warn("Salvaged readable rows from a damaged history database", { backupPath, ...counts });
+		} catch (error) {
+			logger.error("HistoryStorage salvage failed; the damaged store is preserved", {
+				backupPath,
+				error: String(error),
+			});
+		} finally {
+			source?.close();
+		}
+	}
+
 	#normalizeLimit(limit: number): number {
 		if (!Number.isFinite(limit)) return 0;
 		const clamped = Math.max(0, Math.floor(limit));
@@ -476,7 +594,7 @@ ON CONFLICT(prompt) DO UPDATE SET
 		// this scan already costs, so caching it bought nothing and retained a statement per token
 		// count ever searched.
 		const stmt = this.#db.prepare(
-			`SELECT id, prompt, created_at, cwd, session_id, use_count FROM history WHERE ${whereClause} ${clause.and} ORDER BY created_at DESC, id DESC LIMIT ?`,
+			`SELECT id, prompt, created_at, cwd, session_id, use_count FROM history WHERE ${readableRowClause("")} AND ${whereClause} ${clause.and} ORDER BY created_at DESC, id DESC LIMIT ?`,
 		);
 		try {
 			const params: SQLQueryBindings[] = tokens.map(tok => `%${escapeLikePattern(tok)}%`);
@@ -496,16 +614,15 @@ ON CONFLICT(prompt) DO UPDATE SET
 		if (!scope || scope.kind === "global") return EMPTY_SCOPE_CLAUSE;
 		switch (scope.kind) {
 			case "session":
-				return { where: "WHERE session_id = ?", and: "AND session_id = ?", params: [scope.value ?? ""] };
+				return { and: "AND session_id = ?", params: [scope.value ?? ""] };
 			case "cwd":
 			case "repo":
 				return {
-					where: DIRS_WHERE,
 					and: DIRS_AND,
 					params: [JSON.stringify(this.#scopeDirs(scope.kind, scope.value))],
 				};
 			default:
-				return { where: "WHERE 1 = 0", and: "AND 1 = 0", params: [] };
+				return { and: "AND 1 = 0", params: [] };
 		}
 	}
 
@@ -540,9 +657,9 @@ ON CONFLICT(prompt) DO UPDATE SET
 			// Own writes invalidate explicitly; data_version tracks other connections.
 			const version = (this.#prepare("PRAGMA data_version").get() as { data_version: number }).data_version;
 			if (this.#storedDirsCache?.dataVersion === version) return this.#storedDirsCache.dirs;
-			const rows = this.#prepare("SELECT DISTINCT cwd FROM history WHERE cwd IS NOT NULL AND cwd <> ''").all() as {
-				cwd: string;
-			}[];
+			const rows = this.#prepare(
+				`SELECT DISTINCT cwd FROM history WHERE ${readableRowClause("")} AND typeof(cwd) = 'text' AND cwd <> ''`,
+			).all() as { cwd: string }[];
 			const dirs = rows.map(row => row.cwd);
 			// Stamp the version sampled before SELECT, never a later commit onto older rows.
 			this.#storedDirsCache = { dataVersion: version, dirs };

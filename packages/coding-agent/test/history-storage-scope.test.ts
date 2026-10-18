@@ -64,6 +64,43 @@ afterEach(async () => {
 });
 
 describe("HistoryStorage scope filtering", () => {
+	it("keeps damaged rows out of scoped recall and prefix or infix search", async () => {
+		const dir = tempDir!;
+		const fixtures = await createFixtures(dir.path());
+		const dbPath = dir.join("history.db");
+		const storage = HistoryStorage.open(dbPath);
+		await storage.add("deploy readable", fixtures.repoASub, "s1");
+		await storage.add("deploy unrelated", fixtures.repoB, "s2");
+
+		const raw = new Database(dbPath);
+		try {
+			raw.run(
+				"INSERT INTO history (prompt, created_at, cwd, session_id) VALUES (x'6465706c6f7920636f7272757074', 4102444800, ?, 's1')",
+				[fixtures.repoASub],
+			);
+			raw.run(
+				"INSERT INTO history (prompt, created_at, cwd, session_id, use_count) VALUES ('deploy broken counter', 4102444800, ?, 's1', x'01')",
+				[fixtures.repoASub],
+			);
+			raw.run(
+				"INSERT INTO history (prompt, created_at, cwd, session_id) VALUES ('deploy unknown location', 4102444800, x'0001', 'foreign')",
+			);
+		} finally {
+			raw.close();
+		}
+
+		const scopes: HistoryScope[] = [
+			{ kind: "session", value: "s1" },
+			{ kind: "cwd", value: fixtures.repoASub },
+			{ kind: "repo", value: fixtures.repoA },
+		];
+		for (const scope of scopes) {
+			expect(storage.getRecent(1, scope).map(entry => entry.prompt)).toEqual(["deploy readable"]);
+			expect(storage.search("deploy", 1, scope).map(entry => entry.prompt)).toEqual(["deploy readable"]);
+			expect(storage.search("ploy", 1, scope).map(entry => entry.prompt)).toEqual(["deploy readable"]);
+		}
+	});
+
 	it("filters recent reads by session, keeping prompts without a session id out", async () => {
 		const dir = tempDir!;
 		const fixtures = await createFixtures(dir.path());
