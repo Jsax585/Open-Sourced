@@ -1,6 +1,152 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+- Fixed isolated task spawn freezing the host when the checkout contains gitignored linked worktrees — nested-repo discovery now skips gitignored directories and baseline capture is bounded ([#16068](https://github.com/can1357/oh-my-pi/issues/16068))
+- Fixed `@` imports in context files failing to resolve paths with spaces — `\ ` (backslash-space) now works as an escape, matching Claude Code's behavior ([#16090](https://github.com/can1357/oh-my-pi/issues/16090))
+### Changed
+
+- Improved agent and session database SQLite reads by binding row types at prepare time with `db.query<Row, Params>()` instead of unchecked `as` casts ([#15437](https://github.com/can1357/oh-my-pi/pull/15437) by [@yuzu-octopus](https://github.com/yuzu-octopus))
+
+### Added
+- Added a Copy button that leads the turn footer under an answer in Tern (`⧉ · 2m13s · 71K tok · $0.85 this turn`, in place of the clock), which copies that answer
+
+## [18.10.0] - 2026-10-12
+
+### Added
+
+- Added `/fork` support for creating a new Tern pane while a turn is streaming, preserving the original session
+- Added `omp session pack`, `omp session unpack` and `omp session moved` to move a session with its artifacts to another machine and continue it there; resuming the copy left behind forks it instead of continuing it
+- Added `omp auth export` and `omp auth import` to carry model sign-ins to another machine
+- Added hiding a pending `ask` question without answering it: `Alt+H` (`app.ask.hide`) or the Hide button in Tern collapses the dialog to one line; the same key, `Enter`, or Show brings it back ([#15400](https://github.com/can1357/oh-my-pi/pull/15400) by [@H4vC](https://github.com/H4vC))
+
+### Changed
+
+- Local IPC endpoints (daemon broker, LSP mux, IDA hosts, text prediction, `omp stream`, Collab discovery, local model workers) now run on a native transport: owner-only on every platform, including Windows named pipes; on Windows, daemons started by an older omp are not reused, so close older sessions after upgrading.
+- Output hidden behind an open `ask` dialog, command report or todo list now reaches terminal scrollback once it closes, rather than while it is still open ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
+
+### Fixed
+
+- Fixed every session loading its own copy of the local mnemopi embedding model and keeping it in memory until exit; one server per model is shared across sessions and exits after 15 idle minutes ([#9908](https://github.com/can1357/oh-my-pi/issues/9908))
+- Fixed the first-use mnemopi embedding-model download never completing for sessions shorter than the download; it now finishes in the shared embedding server after the session exits ([#10240](https://github.com/can1357/oh-my-pi/issues/10240))
+- Fixed `RpcClient.stop()` occasionally waiting forever because the agent process was never signaled.
+- Fixed blank rows opening under the input after an `ask` dialog, command report or todo list closed in a session that had filled the screen; the transcript now refills the screen ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
+- Fixed blank rows appearing between the last paragraphs of a streamed answer when the turn ended ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
+
+## [18.9.2] - 2026-10-11
+
+### Fixed
+
+- Improved responsiveness when adding assistant text after tool calls in long transcripts.
+- Fixed `apply_patch` handling of context-free hunks when the target text appears multiple times.
+- Fixed `find` filename ranking and sketch scoring with judge endpoints that limit the number of questions per request.
+- Fixed `omp gc --apply` leaving temporary session files after an interrupted save.
+- Fixed `omp auth-gateway serve` handling of OpenRouter routing variants such as `:floor` and `:nitro`.
+- Improved validation errors for `computer` helpers with missing or non-string text arguments by identifying the helper and argument involved.
+- Fixed `/tan` forks incorrectly inheriting the parent task's subagent spending while preserving token counts.
+- Fixed `omp://` documentation links so they open the corresponding files in source checkouts.
+- Fixed bare model IDs in `models.yml` incorrectly resolving to auto-discovered Ollama, llama.cpp, or LM Studio providers.
+- Added warnings when configured Ollama, llama.cpp, or LM Studio endpoints cannot be reached, identifying the relevant environment variable.
+
+## [18.9.1] - 2026-10-11
+
+### Added
+
+- Added `supportsThinkingBindingControls` to Bedrock `compat` in `models.yml`, so a Bedrock gateway or region that rejects Claude thinking-binding controls can turn them off ([#15316](https://github.com/can1357/oh-my-pi/pull/15316) by [@harshaygadekar](https://github.com/harshaygadekar))
+
+## [18.9.0] - 2026-10-11
+
+### Added
+
+- Added browser target discovery and control, allowing agents to list the user's available pages and operate an already-open Tern browser block instead of opening a new view.
+- Added the `ctx.annotations` extension API for submitting and collecting `/annotate` feedback on text and diffs.
+- Added configurable Extra Context Files under `/settings` → Context, allowing custom instruction filenames without editing YAML.
+- Added optional composer predictions via `composer.predictions`, which suggest the user's next message as ghost text after each turn and support Tab or Right to accept the suggestion. Predictions use an additional model request and are included in session usage and `/stats`.
+- Added structured async job metadata exposing native job status and child-agent identity alongside the job ID.
+- Enhanced `tui.autoGraph: smart` with data-aware chart recommendations, including labels, grouping, ordering, shading, reference rows, measure direction, and suitable chart types.
+- Added `retry.fallbackOn` to restrict model fallback to quota errors (`usage-limit`) or to non-quota errors (`except-usage-limit`), while retaining `any` as the default.
+- Added `omp usage reset` commands to list saved Codex and Claude rate-limit resets and redeem a selected reset from the CLI, scripts, or auth-broker clients.
+- Added warnings for saved Codex and Claude resets that are nearing expiry, including affected accounts and redemption targets; interactive sessions also show a one-time conversation warning.
+- On macOS, the `computer` tool now keeps the display awake while operating and reports when the screen is locked or asleep.
+- Tern browser open results now indicate when a page is not currently visible, helping agents direct users to hidden picture-in-picture or omp-tab views.
+
+### Changed
+
+- Improved `computer.window()` failure messages by listing open windows grouped by application, with the requested application shown first.
+- Standalone binary updates and installers now use Stencil's build service with SHA-256 verification; recent updates use substantially smaller verified patches, and `--binary --ref` accepts release tags.
+- After an omp upgrade, an unused older browser relay started by omp is automatically replaced on the next browser call so relay fixes take effect without manual shutdown.
+- Saved Codex and Claude resets in non-interactive sessions are now automatically redeemed when they are about to expire, unless `autoRedeem: no` is configured.
+- Background Claude reset salvage now checks only accounts with eligible usage, reducing unnecessary usage-limit traffic.
+- Reasoning provenance is preserved when `/btw` answers are promoted or turns are moved, preventing provider summaries from being sent as model-generated reasoning.
+
+### Fixed
+
+- Fixed unconfigured judge roles incorrectly falling back to a Google Vertex Claude model instead of the configured `tiny`, `smol`, or `default` models.
+- Fixed `omp --resume -p` continuing stale todos instead of printing the answer and exiting.
+- Fixed `/btw`, IRC, and composer-prediction requests losing the conversation prompt cache on Codex and after thinking-level changes on GPT-6 models.
+- Fixed Tern browser operations on `about:blank` and no-op navigations hanging until timeout.
+- Fixed SDK and RPC sessions using stale MCP tool lists when servers changed during extension loading.
+- Fixed installing plugins from non-GitHub Git URLs and prevented inline credentials from being persisted in plugin metadata or lockfiles.
+- Improved recovery from repeated OpenAI Responses request timeouts during productive long-running sessions.
+- Fixed JavaScript eval syntax errors lacking source location and a useful code frame.
+- Fixed Collab sessions failing to reconnect after network interruptions or device sleep.
+- Fixed ACP and browser diagnostics and SSH listings using default paths instead of configured paths.
+- Fixed advisors repeatedly returning to models that refused reviewed content; they now remain on the fallback until the conversation changes state.
+- Plugin registry discovery warnings are now reported instead of silently ignored.
+- Fixed OpenRouter Decisions judge requests through custom provider base URLs returning 404 errors.
+- Fixed Codex configuration files being rejected and prevented supported settings from being ignored.
+- Fixed secrets appearing in advisor previews when a preview was truncated.
+- Restored public compatibility exports required by tools, legacy Pi extensions, and plugins.
+- Fixed slow completions ignoring explicitly configured thinking levels, including `:max` and `:off`.
+- Fixed session writes failing on Windows FSLogix profile disks.
+- Limited persisted eval status history so long-running eval cells do not excessively enlarge session files or slow resume.
+- Fixed Codex session prewarming from using a different model or service tier than the resolved session.
+- Fixed subagent completion-probe usage disappearing after parking or restarting.
+- Fixed Python eval processes hanging while waiting on the kernel control channel.
+- Corrected the custom-tool quickstart to use the supported discovery flow and shipped example.
+- Fixed browser screenshots providing incorrect coordinate-scaling guidance on high-device-scale displays.
+- Fixed browser calls hanging when a tab renderer crashed; they now fail promptly and reload or close the affected tab as appropriate.
+- Fixed sessions becoming permanently busy when retry-related session writes failed.
+- Fixed collapsed todo lists wasting a row on the hidden-item indicator.
+- Fixed concurrent SDK sessions interfering with one another's async jobs and subagent follow-up results.
+- Fixed duplicate accessibility-tree output from computer-use eval cells.
+- Fixed chained element actions such as `win.ref("e5").click()` throwing errors; element interaction options are now supported and documented.
+- Fixed JavaScript and Python `read("artifact://N")` calls returning a capped preview instead of the artifact's selected text.
+- Improved guidance for retrieving complete lines when `read`, `eval`, or `bash` output is truncated by the column limit.
+- Fixed resumed, switched, and forked sessions losing the prompt cache when Mnemopi or Hindsight auto-recall was enabled.
+- Fixed the first prompt losing provider prompt-cache coverage while MCP servers were still starting.
+- Fixed coordinate clicks being dropped after password-form submission in omp-launched Chromium.
+- Fixed classifier refusals ending fallback chains prematurely when the retry budget was exhausted.
+- Fixed reading MCP-advertised `skill://` resources and other MCP resources, including discovery order, loading state, and clean shutdown of stalled servers.
+- Fixed smart unexpected-stop detection missing slow judge results, allowing premature stops to recover correctly.
+- The `cfg://` settings approval prompt now honors `ask.timeout` rather than always expiring after ten seconds.
+- Fixed custom LiteLLM providers not receiving the built-in provider behavior and model/session handling.
+- Fixed resumed Cursor sessions losing earlier reasoning after transcript truncation.
+- Fixed `computer.window()` failing to find windows by ID or application when many windows were open.
+- Fixed `grep` hiding matches that appeared beyond the first 512 bytes of a long line.
+- Fixed snapcompaction leaving too little context room after compaction.
+- Fixed usage-limited account pools redeeming saved resets for accounts outside the configured pool.
+
+## [18.8.9] - 2026-10-10
+
+### Added
+
+- Added capability-driven extension terminal launches for tmux, Zellij, Herdr, and CMUX, with consolidated multiplexer detection, provider/shell capability feedback, and required POSIX-shell confirmation for shell-input launches; CMUX shell input preserves non-ASCII arguments and pane working directories ([#13620](https://github.com/can1357/oh-my-pi/pull/13620) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+- Added `/fork pane|window|tab` to open a fork of the session in a new multiplexer pane or window while this session keeps running; bare `/fork` still forks in place ([#13620](https://github.com/can1357/oh-my-pi/pull/13620) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+- Added Orca CLI-based launches for `/fork pane|window|tab` and `ctx.ui.openTerminal()`, with POSIX-shell confirmation; when Orca can only start a tab as a background terminal, the launch reports a warning instead of a visible tab ([#13620](https://github.com/can1357/oh-my-pi/pull/13620) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+
+### Changed
+
+- CLI `--fork` now pairs tool calls the source session left unresolved with an unknown-outcome result, and `/tan` clones report such calls as unknown-outcome instead of aborted; forking a source whose process already exited keeps the process-exit recovery and pending-tool warning ([#13620](https://github.com/can1357/oh-my-pi/pull/13620) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+- Table charts (`tui.autoGraph`) now cover before/after tables whose rows are different metrics (time, memory, counts): each row's change is drawn as a factor of its "before" value (`48× less`, `+27%`), and rows written in prose are skipped and named under the chart. A single column of scores like `12/12` is drawn as bars filling toward 100%
+- In terminals that speak the Tern Surface Protocol (Tern), the composer's bottom bar shows the git branch and its status beside the model chip when the status line has the `git` segment; it outlasts the other facts as the bar narrows, and clicking it opens `/git` ([#15220](https://github.com/can1357/oh-my-pi/pull/15220) by [@H4vC](https://github.com/H4vC))
+- Table charts plot scores like `154/160` as the share of their total instead of the first number, and tables comparing two or three columns across four or more metrics now get a chart: a grid of one small panel per metric
+
+### Fixed
+
+- Fixed table charts failing on a table cell such as `3 constructor` or `2 valueOf calls`
+
+## [18.8.8] - 2026-10-10
 
 ### Added
 
