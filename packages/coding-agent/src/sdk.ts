@@ -204,7 +204,6 @@ import {
 	USER_INTERRUPT_LABEL,
 	wrapSteeringForModel,
 } from "./session/messages";
-import { resolveCursorContextBudgetTokens } from "./session/session-maintenance";
 import {
 	capArchiveFrameBytes,
 	clampProviderContextImageBytes,
@@ -4496,17 +4495,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					agent.state.tools.some(tool => tool.name === "think") &&
 					supportsExternalThinking(streamModel);
 				const fallbackCreditRedemption = session?.consumeActiveFallbackCreditRedemption(streamModel);
-				const cursorBudgetTokens = resolveCursorContextBudgetTokens(settings, streamModel);
 				const merged: SimpleStreamOptions = {
 					...streamOptions,
 					promptCacheKey: streamOptions?.promptCacheKey ?? session?.getPromptCacheKeyForModel(streamModel),
 					forceReasoningOff: externalThinking || streamOptions?.forceReasoningOff,
-					// A turn that opens past the threshold is one compaction could not bring
-					// under it: stopping it would stall the work without freeing anything.
-					cursorContextBudgetTokens:
-						cursorBudgetTokens !== undefined && (session?.getContextUsage()?.tokens ?? 0) <= cursorBudgetTokens
-							? cursorBudgetTokens
-							: undefined,
+					cursorContextBudgetTokens: session?.cursorContextBudgetTokens(streamModel),
 				};
 				const stream = primaryStreamFn(streamModel, context, {
 					...merged,

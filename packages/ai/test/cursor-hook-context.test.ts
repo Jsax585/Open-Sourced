@@ -60,6 +60,9 @@ function turnEndedFrame(): Buffer {
 	});
 }
 
+/** Connect's clean end-of-stream frame: the server's last message. */
+const END_STREAM_FRAME = Buffer.concat([Buffer.from([0x02, 0, 0, 0, 2]), Buffer.from("{}")]);
+
 /** Exec results in the complete frames of `buffer`, plus the bytes of a trailing partial frame. */
 function takeExecResults(buffer: Buffer): { results: ExecClientMessage[]; rest: Buffer } {
 	const results: ExecClientMessage[] = [];
@@ -106,7 +109,8 @@ async function runTurn(
 		let nextStep = 0;
 		const sendNextStep = () => {
 			const step = steps[nextStep++];
-			if (step) providerStream.write(Buffer.concat(step));
+			if (step?.at(-1) === END_STREAM_FRAME) providerStream.end(Buffer.concat(step));
+			else if (step) providerStream.write(Buffer.concat(step));
 			else providerStream.end(turnEndedFrame());
 		};
 		providerStream.respond({ ":status": 200, "content-type": "application/connect+proto" });
@@ -271,5 +275,25 @@ it("leaves steering with an image for the next request instead of dropping the i
 	});
 
 	expect([...contexts.values()]).toEqual([[], []]);
+	expect(steering.outcomes).toEqual(["rejected"]);
+});
+
+it("keeps the notice when the server ends the stream before the result can be written", async () => {
+	// The exec handler is still running when the end frame arrives; its result,
+	// written after the transport ended, is dropped, so the model never reads it.
+	const { contexts, wrappedUp } = await runTurn([[checkpointFrame(70_000), execReadFrame(1, true), END_STREAM_FRAME]]);
+
+	expect(contexts.has(1)).toBe(false);
+	expect(wrappedUp).toBe(false);
+});
+
+it("hands steering back when the server ends the stream before the result can be written", async () => {
+	const steering = queuedSteering("also check the logs");
+
+	const { contexts } = await runTurn([[execReadFrame(1, true), END_STREAM_FRAME]], {
+		liveSteering: steering.source,
+	});
+
+	expect(contexts.has(1)).toBe(false);
 	expect(steering.outcomes).toEqual(["rejected"]);
 });
