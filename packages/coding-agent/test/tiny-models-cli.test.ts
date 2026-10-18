@@ -23,8 +23,7 @@ describe("tiny-models download model resolution", () => {
 		// excluded from `all` by design, still explicitly resolvable.
 		const usable = TINY_LOCAL_MODELS.filter(
 			spec =>
-				(!("onnxUnsupportedReason" in spec) || !spec.onnxUnsupportedReason) &&
-				!isTinyJudgeLocalModelKey(spec.key),
+				(!("onnxUnsupportedReason" in spec) || !spec.onnxUnsupportedReason) && !isTinyJudgeLocalModelKey(spec.key),
 		).map(spec => spec.key);
 		for (const key of usable) expect(all).toContain(key);
 		for (const spec of TINY_LOCAL_MODELS.filter(spec => isTinyJudgeLocalModelKey(spec.key))) {

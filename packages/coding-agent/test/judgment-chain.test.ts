@@ -326,9 +326,7 @@ describe("ChainJudge", () => {
 				});
 			}),
 		);
-		const logits = vi
-			.spyOn(tinyModelClient, "judge")
-			.mockResolvedValue({ logits: { level: [0.2, 2.1] } });
+		const logits = vi.spyOn(tinyModelClient, "judge").mockResolvedValue({ logits: { level: [0.2, 2.1] } });
 		const local = vi.spyOn(tinyModelClient, "complete");
 		const online = vi.spyOn(ai, "completeSimple");
 
