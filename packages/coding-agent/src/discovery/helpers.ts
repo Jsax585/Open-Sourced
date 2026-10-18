@@ -265,7 +265,7 @@ function parseVisibilityField(field: string, value: unknown, agent: string): str
 	if (parsed !== undefined || value == null) return parsed;
 	const isBlank =
 		(typeof value === "string" && value.trim() === "") ||
-		(Array.isArray(value) && value.every(item => typeof item !== "string" || item.trim() === ""));
+		(Array.isArray(value) && value.every(item => typeof item === "string" && item.trim() === ""));
 	if (!isBlank) {
 		logger.warn(`Agent ${field} declaration is not a string or string array; ignoring it`, {
 			agent,

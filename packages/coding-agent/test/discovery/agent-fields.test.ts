@@ -313,7 +313,12 @@ describe("parseAgentFields", () => {
 		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
 		try {
 			for (const bad of [5, true, { globs: "*" }, [123], [null]]) {
+				warnSpy.mockClear();
 				expect(parseAgentFields({ name: "worker", description: "desc", skills: bad })?.skills).toBeUndefined();
+				expect(warnSpy).toHaveBeenCalledWith(
+					expect.stringContaining("skills declaration is not a string or string array"),
+					expect.objectContaining({ agent: "worker" }),
+				);
 				expect(
 					parseAgentFields({ name: "worker", description: "desc", hideSkills: bad })?.hideSkills,
 				).toBeUndefined();
@@ -321,10 +326,6 @@ describe("parseAgentFields", () => {
 					parseAgentFields({ name: "worker", description: "desc", unhideSkills: bad })?.unhideSkills,
 				).toBeUndefined();
 			}
-			expect(warnSpy).toHaveBeenCalledWith(
-				expect.stringContaining("skills declaration is not a string or string array"),
-				expect.objectContaining({ agent: "worker" }),
-			);
 		} finally {
 			warnSpy.mockRestore();
 		}
