@@ -1617,7 +1617,7 @@ function streamCursorWithWireMode(
 			for (const [callId, stored] of turnRecords.stored) {
 				if (hashCursorToolResult(stored) !== turnRecords.given.get(callId)) keptAsSent = false;
 			}
-			output.providerPayload =
+			const historyPayload =
 				checkpointCoversTurn && latestCheckpoint && keptAsSent
 					? captureCursorHistoryPayload(latestCheckpoint, blobStore, turnRequestIds, {
 							wireRoute: builtRequest.wireRoute,
@@ -1626,6 +1626,10 @@ function streamCursorWithWireMode(
 							toolResults: turnRecords.stored,
 						})
 					: undefined;
+			output.providerPayload =
+				historyPayload && steering && steering.absorbed.length > 0
+					? { ...historyPayload, answeredSteering: [...steering.absorbed] }
+					: historyPayload;
 
 			// Settle steering before the result: whatever no tool result carried
 			// must be back with the caller when it reads this response's outcome.
@@ -5784,6 +5788,23 @@ interface CursorRecordReplay {
 	records: Uint8Array[];
 	/** Calls whose results the records already carry. */
 	toolCallIds: string[];
+	/** Steering the records already carry; see {@link isAnsweredSteering}. */
+	answeredSteering: ReadonlySet<string>;
+}
+
+/**
+ * Whether `messages[index]` is steering a record-replayed turn absorbed. The
+ * host records such steering after the turn that answered it; its records carry
+ * it where it was delivered, so replaying the copy would present it as new input.
+ */
+function isAnsweredSteering(
+	messages: Message[],
+	index: number,
+	replays: ReadonlyMap<number, CursorRecordReplay>,
+): boolean {
+	let turnIndex = index - 1;
+	while (turnIndex >= 0 && messages[turnIndex].role !== "assistant") turnIndex--;
+	return replays.get(turnIndex)?.answeredSteering.has(extractUserMessageText(messages[index])) === true;
 }
 
 /**
@@ -5816,6 +5837,7 @@ function resolveCursorRecordReplays(
 			toolCallIds: msg.content.flatMap(block =>
 				block.type === "toolCall" && toolResults.has(block.id) ? [block.id] : [],
 			),
+			answeredSteering: new Set(msg.providerPayload.answeredSteering),
 		});
 	}
 	return replays;
@@ -6200,6 +6222,7 @@ function buildRootPromptMessagesJson(
 	for (let i = 0; i < historyEnd; i++) {
 		const msg = messages[i];
 		if (msg.role === "user" || msg.role === "developer") {
+			if (isAnsweredSteering(messages, i, replays)) continue;
 			const content = buildCursorRootPromptContent(msg.content);
 			if (content.length === 0) continue;
 			pushJson({ role: "user", content });
@@ -6376,6 +6399,10 @@ function buildConversationTurns(
 			continue;
 		}
 		if (i === activeUserMessageIndex) break;
+		if (isAnsweredSteering(messages, i, replays)) {
+			i++;
+			continue;
+		}
 
 		const userText = extractUserMessageText(msg);
 		if (userText.length === 0 && !hasUserMessageImages(msg)) {

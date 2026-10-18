@@ -385,6 +385,28 @@ describe("Cursor server records", () => {
 		expect(records.slice(2).map(record => JSON.parse(record).role)).toEqual(["assistant", "tool", "assistant"]);
 	});
 
+	it("replays steering a turn absorbed only inside that turn's records", async () => {
+		// The host records absorbed steering after the turn that answered it; the
+		// turn's records already carry it, so a trailing copy would read as new input.
+		const recorded = await recordK3Turn();
+		const payload = recorded.assistant.providerPayload;
+		if (payload?.type !== "cursorHistory") throw new Error("turn was not recorded");
+		const assistant: AssistantMessage = {
+			...recorded.assistant,
+			providerPayload: { ...payload, answeredSteering: ["use tabs"] },
+		};
+		const steer: Message = { role: "user", content: "use tabs", timestamp: 2 };
+		const history = [firstUser, assistant, recorded.toolResult, steer, secondUser];
+
+		const replayed = await rootPromptIds(model("kimi-k3"), history);
+		const rebuilt = await rootPromptIds(model("composer-2.5"), history);
+
+		expect(replayed.ids.slice(2, 2 + SPAN.length)).toEqual(SPAN_IDS);
+		expect(replayed.records.filter(record => record.includes("use tabs"))).toEqual([]);
+		// Without the records, the copy is the only place the steering survives.
+		expect(rebuilt.records.filter(record => record.includes("use tabs"))).toHaveLength(1);
+	});
+
 	it("rebuilds a turn whose tool result changed after it was recorded", async () => {
 		const { assistant, toolResult } = await recordK3Turn();
 		const pruned: ToolResultMessage = { ...toolResult, content: [{ type: "text", text: "[pruned]" }] };

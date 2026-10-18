@@ -198,14 +198,16 @@ it("waits until the conversation is past the budget, like the host's compaction 
 });
 
 /** A steering queue holding one user message; records how its claim was settled. */
-function queuedSteering(text: string): { source: LiveSteering; outcomes: string[] } {
+function queuedSteering(content: UserMessage["content"]): { source: LiveSteering; outcomes: string[] } {
 	const outcomes: string[] = [];
-	let queued: UserMessage[] = [{ role: "user", content: text, timestamp: 2 }];
+	let queued: UserMessage[] = [{ role: "user", content, timestamp: 2 }];
 	const source: LiveSteering = {
-		wait: signal =>
-			queued.length > 0
-				? Promise.resolve()
-				: new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true })),
+		wait: signal => {
+			if (queued.length > 0) return Promise.resolve();
+			const idle = Promise.withResolvers<void>();
+			signal.addEventListener("abort", () => idle.resolve(), { once: true });
+			return idle.promise;
+		},
 		claim: async (): Promise<LiveSteerClaim | undefined> => {
 			const messages = queued;
 			queued = [];
@@ -245,4 +247,18 @@ it("hands undelivered steering back before the turn reports its outcome", async 
 	});
 
 	expect(outcomesAtTerminalEvent).toEqual(["rejected"]);
+});
+
+it("leaves steering with an image for the next request instead of dropping the image", async () => {
+	const steering = queuedSteering([
+		{ type: "text", text: "inspect this screenshot" },
+		{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
+	]);
+
+	const contexts = await runTurn([[execReadFrame(1, true)], [execReadFrame(2, true)]], {
+		liveSteering: steering.source,
+	});
+
+	expect([...contexts.values()]).toEqual([[], []]);
+	expect(steering.outcomes).toEqual(["rejected"]);
 });

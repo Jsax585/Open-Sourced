@@ -11,6 +11,8 @@ const EMPTY_CLAIM_BACKOFF_MS = 25;
  * waiting for the whole turn to end.
  */
 export class CursorSteeringRelay {
+	/** Text of every steering message this turn absorbed, trimmed, in delivery order. */
+	readonly absorbed: string[] = [];
 	readonly #stop = new AbortController();
 	readonly #run: Promise<void>;
 	#held: LiveSteerClaim | undefined;
@@ -27,7 +29,9 @@ export class CursorSteeringRelay {
 		this.#held = undefined;
 		claim.absorb();
 		this.#handedOver?.resolve();
-		return claim.messages.map(messageText).join("\n\n");
+		const texts = claim.messages.map(messageText);
+		this.absorbed.push(...texts.map(text => text.trim()));
+		return texts.join("\n\n");
 	}
 
 	/** Stops claiming; steering still held goes back to the caller for its next request. */
@@ -50,7 +54,9 @@ export class CursorSteeringRelay {
 					await Bun.sleep(EMPTY_CLAIM_BACKOFF_MS);
 					continue;
 				}
-				if (signal.aborted) {
+				if (signal.aborted || !claim.messages.every(isTextOnly)) {
+					// Hook context is text: steering it cannot carry whole, and all
+					// input queued behind it, waits for the next request.
 					claim.reject();
 					return;
 				}
@@ -65,6 +71,10 @@ export class CursorSteeringRelay {
 			});
 		}
 	}
+}
+
+function isTextOnly(message: UserMessage): boolean {
+	return typeof message.content === "string" || message.content.every(part => part.type === "text");
 }
 
 function messageText(message: UserMessage): string {
