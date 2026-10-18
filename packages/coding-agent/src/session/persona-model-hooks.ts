@@ -138,7 +138,10 @@ export function createDefaultPersonaModelHooks(session: AgentSession): PersonaMo
 					await session.setModel(resolved.model);
 					resolvedThinking.push(resolved.thinkingLevel);
 				} else {
-					logger.warn(`Agent persona "${agent.name}": explicit model pattern did not resolve; keeping the session model`, { pattern: explicitModelPattern });
+					logger.warn(
+						`Agent persona "${agent.name}": explicit model pattern did not resolve; keeping the session model`,
+						{ pattern: explicitModelPattern },
+					);
 				}
 			} else if (agent.model && agent.model.length > 0) {
 				const resolved = await resolveWithDiscoveryRetry(agent.model, session);
@@ -146,7 +149,10 @@ export function createDefaultPersonaModelHooks(session: AgentSession): PersonaMo
 					await session.setModel(resolved.model);
 					resolvedThinking.push(resolved.thinkingLevel);
 				} else {
-					logger.warn(`Agent persona "${agent.name}": model frontmatter did not resolve; keeping the session model`, { patterns: agent.model });
+					logger.warn(
+						`Agent persona "${agent.name}": model frontmatter did not resolve; keeping the session model`,
+						{ patterns: agent.model },
+					);
 				}
 			}
 			const explicitThinking =

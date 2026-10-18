@@ -584,9 +584,12 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 					// ACP degrades to persona-less (the name may exist only in
 					// another workspace), but never silently: the miss is logged
 					// with the names this workspace does offer.
-					logger.warn(`Unknown --agent "${args.parsedArgs.agent}" for this workspace; starting without a persona`, {
-						available: agents.map(candidate => candidate.name),
-					});
+					logger.warn(
+						`Unknown --agent "${args.parsedArgs.agent}" for this workspace; starting without a persona`,
+						{
+							available: agents.map(candidate => candidate.name),
+						},
+					);
 				}
 			}
 			// fwdEb/fwu7x: pin the workspace-scoped view on the CREATED session

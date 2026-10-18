@@ -427,10 +427,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 		const eagerDelegation = sessionDelegationBias(this.session) === "eager";
 		const scoutAvailable =
 			this.session.isScoutSpawnable?.() ??
-			isScoutSpawnable(
-				cfgTaskDisabledAgents.get(this.session.settings),
-				this.session.getSessionSpawns?.() ?? "*",
-			);
+			isScoutSpawnable(cfgTaskDisabledAgents.get(this.session.settings), this.session.getSessionSpawns?.() ?? "*");
 		// Every render input is a boolean; pack them so repeat reads skip the template render.
 		const key =
 			(isHlMode ? 1 : 0) |
