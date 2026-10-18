@@ -303,14 +303,19 @@ async function rootPromptIds(
 	target: Model<"cursor-agent">,
 	messages: Message[],
 	options?: CursorOptions,
-): Promise<{ ids: string[]; records: string[] }> {
+): Promise<{ ids: string[]; records: string[]; action: string | undefined }> {
 	const blobStore = new Map<string, Uint8Array>();
-	const { conversationState } = await buildGrpcRequest(target, { messages } satisfies Context, options, {
+	const { conversationState, requestBytes } = await buildGrpcRequest(target, { messages } satisfies Context, options, {
 		conversationId: `records-${crypto.randomUUID()}`,
 		blobStore,
 	});
 	const ids = conversationState.rootPromptMessagesJson.map(hex);
-	return { ids, records: ids.map(id => new TextDecoder().decode(blobStore.get(id))) };
+	const request = fromBinary(AgentClientMessageSchema, requestBytes).message;
+	return {
+		ids,
+		records: ids.map(id => new TextDecoder().decode(blobStore.get(id))),
+		action: request.case === "runRequest" ? request.value.action?.action.case : undefined,
+	};
 }
 
 const k3Payload = {
@@ -383,6 +388,103 @@ describe("Cursor server records", () => {
 
 		expect(ids.filter(id => SPAN_IDS.includes(id))).toEqual([]);
 		expect(records.slice(2).map(record => JSON.parse(record).role)).toEqual(["assistant", "tool", "assistant"]);
+	});
+
+	/** A recorded K3 turn that absorbed `answered` as steering, and its tool result. */
+	async function steeredK3Turn(answered: string[]): Promise<[AssistantMessage, ToolResultMessage]> {
+		const recorded = await recordK3Turn();
+		if (recorded.assistant.providerPayload?.type !== "cursorHistory") throw new Error("turn was not recorded");
+		return [{ ...recorded.assistant, answeredSteering: answered }, recorded.toolResult];
+	}
+
+	const userText = (content: string): Message => ({ role: "user", content, timestamp: 2 });
+	const recordsWith = (records: string[], text: string) => records.filter(record => record.includes(text));
+
+	it("replays steering a turn absorbed only inside that turn's records", async () => {
+		// The host records absorbed steering after the turn that answered it; the
+		// turn's records already carry it, so a trailing copy would read as new input.
+		const [assistant, toolResult] = await steeredK3Turn(["use tabs"]);
+		const history = [firstUser, assistant, toolResult, userText("use tabs"), secondUser];
+
+		const replayed = await rootPromptIds(model("kimi-k3"), history);
+		const rebuilt = await rootPromptIds(model("composer-2.5"), history);
+
+		expect(replayed.ids.slice(2, 2 + SPAN.length)).toEqual(SPAN_IDS);
+		expect(recordsWith(replayed.records, "use tabs")).toEqual([]);
+		// Without the records, the copy is the only place the steering survives.
+		expect(recordsWith(rebuilt.records, "use tabs")).toHaveLength(1);
+	});
+
+	it("places absorbed steering inside a turn that has no server records", async () => {
+		// Without records the copy is the steering's only text; after the turn it
+		// would read as new input, so it goes back before the round that answered it.
+		const [{ providerPayload: _records, ...assistant }, toolResult] = await steeredK3Turn(["use tabs"]);
+		const history = [firstUser, assistant, toolResult, userText("use tabs"), secondUser];
+
+		const { records } = await rootPromptIds(model("kimi-k3"), history);
+
+		expect(records.map(record => JSON.parse(record).role)).toEqual([
+			"system",
+			"user",
+			"assistant",
+			"tool",
+			"user",
+			"assistant",
+		]);
+		expect(recordsWith(records, "use tabs")).toEqual([records[4]]);
+	});
+
+	it("resumes instead of resending steering the last response answered", async () => {
+		// A forced continuation (e.g. a soft tool requirement) re-samples with no
+		// new input, leaving the absorbed copy as the last message.
+		const [assistant, toolResult] = await steeredK3Turn(["use tabs"]);
+		const history = [firstUser, assistant, toolResult, userText("use tabs")];
+
+		const { ids, records, action } = await rootPromptIds(model("kimi-k3"), history);
+
+		expect(action).toBe("resumeAction");
+		expect(ids.slice(2, 2 + SPAN.length)).toEqual(SPAN_IDS);
+		expect(recordsWith(records, "use tabs")).toEqual([]);
+	});
+
+	it("matches absorbed steering past the passive context the turn's tools reported", async () => {
+		// The agent appends tool context after the results and before it records
+		// the steering; a rebuilt turn would send the answered steering again.
+		const [assistant, toolResult] = await steeredK3Turn(["use tabs"]);
+		const passiveContext: Message = {
+			role: "developer",
+			content: [{ type: "text", text: "lint config changed" }],
+			attribution: "agent",
+			timestamp: 2,
+		};
+		const history = [firstUser, assistant, toolResult, passiveContext, userText("use tabs"), secondUser];
+
+		const { ids, records } = await rootPromptIds(model("kimi-k3"), history);
+
+		expect(ids.slice(2, 2 + SPAN.length)).toEqual(SPAN_IDS);
+		expect(recordsWith(records, "use tabs")).toEqual([]);
+		expect(recordsWith(records, "lint config changed")).toHaveLength(1);
+	});
+
+	it("rebuilds a steered turn whose steering was edited after it was recorded", async () => {
+		// The records would still carry the old text alongside the edited copy.
+		const [assistant, toolResult] = await steeredK3Turn(["use tabs"]);
+		const history = [firstUser, assistant, toolResult, userText("use spaces"), secondUser];
+
+		const { ids, records } = await rootPromptIds(model("kimi-k3"), history);
+
+		expect(ids.slice(2, 2 + SPAN.length)).not.toEqual(SPAN_IDS);
+		expect(recordsWith(records, "use spaces")).toHaveLength(1);
+	});
+
+	it("skips one host copy per absorbed steering and keeps a repeated instruction", async () => {
+		const [assistant, toolResult] = await steeredK3Turn(["use tabs"]);
+		const history = [firstUser, assistant, toolResult, userText("use tabs"), userText("use tabs"), secondUser];
+
+		const { ids, records } = await rootPromptIds(model("kimi-k3"), history);
+
+		expect(ids.slice(2, 2 + SPAN.length)).toEqual(SPAN_IDS);
+		expect(recordsWith(records, "use tabs")).toHaveLength(1);
 	});
 
 	it("rebuilds a turn whose tool result changed after it was recorded", async () => {

@@ -11,6 +11,7 @@
 - Added a `menu` option to the `computer` tool's `win.click`, `el.click`, `el.press` and `el.perform`, so on macOS the call that opens a menu also chooses its item, e.g. `menu: ["Add to", "Fonts"]` ([#15185](https://github.com/can1357/oh-my-pi/pull/15185) by [@will-bogusz](https://github.com/will-bogusz))
 - Added `el.type(text)` and `el.press(chord)` to the `computer` tool, which send text and keys to that element instead of wherever its window's focus is; on macOS and Windows nothing is sent when the element cannot be addressed without taking your focus ([#15563](https://github.com/can1357/oh-my-pi/pull/15563) by [@will-bogusz](https://github.com/will-bogusz))
 - Added: pressing Escape during takeover input now stops computer use for the rest of the turn, and that session's later `computer` calls are refused, unsent, until your next message ([#15564](https://github.com/can1357/oh-my-pi/pull/15564) by [@will-bogusz](https://github.com/will-bogusz))
+- Added mid-turn steering on Cursor models: a message you send while a Cursor turn runs reaches the model with its next tool result instead of waiting for the whole server-side tool loop to finish ([#16184](https://github.com/can1357/oh-my-pi/pull/16184) by [@joseotaviorf](https://github.com/joseotaviorf))
 - Added the `computer` tool's `UserIntervened` error on macOS: input into an app you have used since the agent last read its window fails without sending, and the agent is told to read the window again and keep your edits ([#15562](https://github.com/can1357/oh-my-pi/pull/15562) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Changed
@@ -30,6 +31,7 @@
 
 ### Fixed
 
+- Fixed Cursor turns growing past `compaction.thresholdTokens`: Cursor runs its tool loop server-side, so a single turn could replay millions of tokens before omp could compact. A turn that crosses the threshold is now asked to wrap up, and omp compacts and continues the task ([#16181](https://github.com/can1357/oh-my-pi/pull/16181) by [@joseotaviorf](https://github.com/joseotaviorf))
 - Fixed repeated status commands such as `/goal show` showing nothing after the first few times in a native terminal when the text had not changed
 - Fixed browser relay tabs that a browser already had open when its extension connected staying invisible to omp until they changed; opening such a tab by `app.target` could fail with "Selected tab did not become available before omp could attach"
 - Fixed Ollama Cloud sessions compacting too early on stripped thinking or too late after switching from another model ([#16164](https://github.com/can1357/oh-my-pi/issues/16164))
