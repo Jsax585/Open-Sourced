@@ -141,6 +141,10 @@
 - Fixed generated titles that come out without an icon and code (a subagent's title, a title-model fallback, a malformed card reply) staying plain: they now get a card like `/rename` titles do
 - Fixed running the test suite adding fixture titles (`PLAN`, `renamed session`, …) to your real `~/.omp/agent/history.db`
 
+### Fixed
+
+- Fixed the changes an isolated task agent makes after you message it never reaching your checkout while the session ran, and the leftover `omp/task/<id>` branch then repeating work that had already landed; each follow-up turn's changes now land when that turn ends, like its first run's, and its task result says what was merged or applied ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
+
 ## [18.12.2] - 2026-10-18
 
 ### Added
@@ -192,7 +196,6 @@
 - Fixed `omp --restore` and `/retry` reporting nothing to retry for a turn cut off by a process exit in a session that had used `eval`; the interrupted turn now continues ([#16195](https://github.com/can1357/oh-my-pi/issues/16195))
 - Fixed session loading on Windows treating a session path with a regular-file component as a missing session (an empty session) instead of rejecting it with `ENOTDIR` like POSIX does ([#16145](https://github.com/can1357/oh-my-pi/pull/16145) by [@jchanghong023](https://github.com/jchanghong023))
 - Fixed models from extension providers listed in `enabledModels` or `--models` missing from `/model`, the Ctrl+P cycle and the startup model scope notice until the background catalog refresh finished ([#16096](https://github.com/can1357/oh-my-pi/pull/16096) by [@skipper019](https://github.com/skipper019))
-- Fixed the changes an isolated task agent makes after you message it never reaching your checkout while the session ran, and the leftover `omp/task/<id>` branch then repeating work that had already landed; each follow-up turn's changes now land when that turn ends, like its first run's, and its task result says what was merged or applied
 
 ## [18.12.1] - 2026-10-17
 
