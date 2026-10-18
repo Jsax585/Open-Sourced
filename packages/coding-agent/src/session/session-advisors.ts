@@ -439,6 +439,11 @@ export interface SessionAdvisorsOptions {
 	 * advertises nothing.
 	 */
 	mcpResources?: CursorMcpResourceAdapter;
+	/** Owning session scope for advisor resource frames (absent = unrestricted). */
+	sessionScope?: {
+		isMCPServerResourceAllowed(serverName: string): boolean;
+		mcpManagerTools(): Iterable<{ readonly name?: string; readonly mcpServerName?: unknown }>;
+	};
 	watchdogPrompt?: string;
 	sharedInstructions?: string;
 	sharedMaxNotesPerUpdate?: number;
@@ -541,6 +546,7 @@ export class SessionAdvisors {
 	#advisorCreateEditTool: SessionAdvisorsOptions["createEditTool"];
 	#advisorGetToolContext: SessionAdvisorsOptions["getToolContext"];
 	#advisorMcpResources: SessionAdvisorsOptions["mcpResources"];
+	#advisorSessionScope: SessionAdvisorsOptions["sessionScope"];
 	#advisorWatchdogPrompt: string | undefined;
 	#advisorSharedInstructions: string | undefined;
 	#advisorSharedMaxNotesPerUpdate: number | undefined;
@@ -614,6 +620,7 @@ export class SessionAdvisors {
 		this.#advisorCreateEditTool = options.createEditTool;
 		this.#advisorGetToolContext = options.getToolContext;
 		this.#advisorMcpResources = options.mcpResources;
+		this.#advisorSessionScope = options.sessionScope;
 		this.#advisorWatchdogPrompt = options.watchdogPrompt;
 		this.#advisorSharedInstructions = options.sharedInstructions;
 		this.#advisorSharedMaxNotesPerUpdate = options.sharedMaxNotesPerUpdate;
@@ -1386,6 +1393,19 @@ export class SessionAdvisors {
 				cwd: this.#host.sessionManager.getCwd(),
 				getCwd: () => this.#host.sessionManager.getCwd(),
 				tools: bridgeToolMap(advisorToolMap, this.#advisorCreateEditTool),
+				// Resource frames answer by server name and never run a roster tool, so
+				// gate them on the owning session scope (not the roster): without this a
+				// scoped subagent's advisor lists every connected server's resources.
+				// The session decision already covers both its registry and the
+				// manager's tools; passing the manager roster here would make
+				// `#serverScopedIn` judge those MCP tools against the advisor roster
+				// (which never contains them) and reject every server.
+				allowToollessMcpServers: serverName =>
+					this.#advisorSessionScope?.isMCPServerResourceAllowed(serverName) ?? true,
+				// The advisor roster is its grant: frames cannot execute tools outside
+				// it. `todo` is absent from advisor rosters, so the in-band todo-mirror
+				// suppression engages via the same predicate.
+				isToolExecutable: name => advisorToolMap.has(name),
 				// Approval mode, per-tool policies and `autoApprove` live only on
 				// this context; without it every bridge tool fails closed to
 				// `always-ask`.

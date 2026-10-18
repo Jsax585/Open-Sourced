@@ -2,9 +2,14 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Subagents that declare `tools:` now receive exactly that list: custom, extension, and MCP proxy tools not named in it are excluded from the active set and the `xd://` catalog instead of being force-included. This includes the bundled `scout`/`reviewer`/`security-reviewer` agents (they declare `tools:`), which no longer inherit MCP/extension/custom tools, and session-managed builtins (`manage_skill`, `learn`, `context_notes`, `new_context`) plus the `checkpoint`/`rewind` sister are no longer force-added to declared lists. The scope also gates MCP server instructions, MCP resource listing/reads, and Cursor-provider frame execution for scoped subagents ([#8599](https://github.com/can1357/oh-my-pi/issues/8599)).
+
 ### Added
 - Added `computer.backgroundFallback` (`takeover` by default, or `refuse`): when a `computer` window input call has no background route, the tool reruns that one call in takeover, hands focus back to your app and says so in its result; `refuse` fails the call instead and also refuses the agent's own foreground requests (`takeover: true`, `raise()`, an activating `apps.open`, desktop input, and on macOS menus and `AXOpen`) ([#15191](https://github.com/can1357/oh-my-pi/pull/15191) by [@will-bogusz](https://github.com/will-bogusz))
 
+- Added the `disallowedTools:` frontmatter field for agent definitions: it removes tools by exact name or `Bun.Glob` pattern (`*`, `?`, `[...]`, `{a,b}`), including bare `*` deny-all; `tools:` entries accept the same globs, so `tools: ["mcp__db_*"]` grants a whole server ([#8599](https://github.com/can1357/oh-my-pi/issues/8599)).
 - Added DeepSeek as a web search engine (`web/deepseek`), using DeepSeek's new Search API with your existing `DEEPSEEK_API_KEY` or stored `deepseek` credential
 - Added `el.selectText(text, { prefix?, suffix?, select? })` to the macOS `computer` tool: it selects text (or places a caret) in a background app's text field without taking focus, moving the pointer or sending keys, so typing into that field replaces it ([#15175](https://github.com/can1357/oh-my-pi/pull/15175) by [@will-bogusz](https://github.com/will-bogusz))
 - Added `{ takeover: true }` to computer-use `win.move`, so a hover that a window refuses in the background can be retried in the foreground ([#15173](https://github.com/can1357/oh-my-pi/pull/15173) by [@will-bogusz](https://github.com/will-bogusz))
