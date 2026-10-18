@@ -967,7 +967,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			mergeSummary = landing.summary;
 			changesApplied = landing.changesApplied;
 			requiresRecoveryArtifacts ||= landing.nestedFailed;
-		} else if (policy.isIsolated && isolationContext && result.exitCode === 0 && result.error && !result.aborted) {
+		} else if (policy.isIsolated && isolationContext && result.isolationCaptureFailed && result.error) {
 			// The agent finished but the runner could not capture, persist, or
 			// commit its changes. `result.error` names the recovery route (retained
 			// workspace, rescued branch); it is the parent's only way to find it.

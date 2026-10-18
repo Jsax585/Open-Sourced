@@ -239,6 +239,7 @@ describe("task spawn routing", () => {
 			label: "does not claim the worktree is gone when the runner retained it",
 			runnerOverrides: {
 				patchPath: undefined,
+				isolationCaptureFailed: true,
 				error: "Patch capture failed: EACCES. Isolation workspace retained at /wt/sandboxed/m — recover the changes from it; `omp worktree clear` reclaims it once this session has exited.",
 			},
 			expectRetained: true,

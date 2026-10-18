@@ -610,21 +610,21 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 						}),
 					);
 				}
-				// Branch mode lands on the last landed commit. Patch mode landed as
-				// uncommitted edits with no such commit, so its release branch is
-				// cumulative from the run's start, as it was before any landing.
-				const commitResult =
-					landed && opts.mergeMode === "branch"
-						? await commitDeltaToBranch(
-								handle.mergedDir,
-								taskBaseline,
-								opts.agentId,
-								landed.tip ?? taskBaseline.root.headCommit,
-								delta,
-								landed.state.head,
-								opts.description,
-							)
-						: await commitToBranch(handle.mergedDir, taskBaseline, opts.agentId, opts.description, undefined);
+				// Patch mode landed as uncommitted edits, with no commit to build on,
+				// and a branch from the run's start would repeat them: the delta patch
+				// above is the artifact. Branch mode lands on the last landed commit.
+				if (landed && opts.mergeMode === "patch") return;
+				const commitResult = landed
+					? await commitDeltaToBranch(
+							handle.mergedDir,
+							taskBaseline,
+							opts.agentId,
+							landed.tip ?? taskBaseline.root.headCommit,
+							delta,
+							landed.state.head,
+							opts.description,
+						)
+					: await commitToBranch(handle.mergedDir, taskBaseline, opts.agentId, opts.description, undefined);
 				AgentRegistry.global().setHistory(opts.agentId, { branchName: commitResult?.branchName });
 			} finally {
 				await cleanupHandle();
@@ -711,6 +711,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					return rememberAgentArtifacts({
 						...result,
 						...capture.artifacts,
+						isolationCaptureFailed: true,
 						error: renderIsolationError({ kind: "merge-failed", message: msg, rescueBranch }),
 					});
 				} catch (patchErr) {
@@ -718,6 +719,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					const retained = await retainIsolationWorkspace(isolationDir, isolationBackend);
 					return rememberAgentArtifacts({
 						...result,
+						isolationCaptureFailed: true,
 						error: renderIsolationError({
 							kind: "merge-failed",
 							message: msg,
@@ -750,6 +752,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				const retained = await retainIsolationWorkspace(isolationDir, isolationBackend);
 				return rememberAgentArtifacts({
 					...result,
+					isolationCaptureFailed: true,
 					branchName: commitResult?.branchName,
 					branchBaseSha: commitResult?.baseSha,
 					nestedPatches: commitResult?.nestedPatches,
@@ -772,6 +775,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				const retained = await retainIsolationWorkspace(isolationDir, isolationBackend);
 				return rememberAgentArtifacts({
 					...result,
+					isolationCaptureFailed: true,
 					error: renderIsolationError({
 						kind: "patch-capture-failed",
 						message: patchErr instanceof Error ? patchErr.message : String(patchErr),

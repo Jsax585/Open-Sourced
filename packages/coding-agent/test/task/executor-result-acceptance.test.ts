@@ -858,4 +858,116 @@ describe("runSubprocess result acceptance", () => {
 		expect(body).not.toContain("Running the tests.");
 		expect(body).toContain("produced no output");
 	});
+
+	describe("follow-up turn settle hook", () => {
+		const NOTICE = "\n\nMerged branch: omp/task/accepted-result";
+
+		function ircRecord(from: string, message: string): AgentMessage {
+			return {
+				role: "custom",
+				customType: "irc:incoming",
+				content: message,
+				display: false,
+				details: { id: `msg-${from}`, from, message },
+				attribution: "agent",
+				timestamp: Date.now(),
+			} as unknown as AgentMessage;
+		}
+
+		/** A kept-alive subagent owned by `Parent`, a registered peer, and a settle hook that reports {@link NOTICE}. */
+		function setUp() {
+			const manager = new AsyncJobManager({});
+			const harness = createHarness({ asyncJobManager: manager });
+			const registry = AgentRegistry.global();
+			for (const id of ["Parent", "Peer"]) {
+				registry.register({
+					id,
+					displayName: id,
+					kind: "main",
+					session: createHarness().session,
+					status: "running",
+				});
+			}
+			registry.register({
+				id: AGENT_ID,
+				displayName: AGENT_ID,
+				kind: "sub",
+				parentId: "Parent",
+				session: harness.session,
+				status: "idle",
+			});
+			const settle = vi.fn(async (_result: unknown) => NOTICE);
+			attachIrcWakeTurnMonitor(harness.session, { id: AGENT_ID, agent: baseAgent, onTurnSettled: settle });
+			const observer = harness.wakeObserver();
+			if (!observer) throw new Error("wake-turn observer was not registered");
+			const parent = {
+				cwd: "/tmp",
+				settings: Settings.isolated({ "launch.enabled": false }),
+				agentRegistry: registry,
+				asyncJobManager: manager,
+				getAgentId: () => "Parent",
+			} as unknown as ToolSession;
+			return { manager, harness, observer, settle, parent };
+		}
+
+		it("does not settle a turn whose outcome only reaches a peer", async () => {
+			const { manager, harness, observer, settle } = setUp();
+			try {
+				const relayed = IrcBus.global().wait("Peer", { from: AGENT_ID }, 1000);
+				const finish = observer([ircRecord("Peer", "is line 42 fine?")]);
+				harness.emitAssistantText("line 42 is fine");
+				await finish?.(undefined);
+
+				// The owner hears nothing of this turn, so its checkout must not change.
+				expect(settle).not.toHaveBeenCalled();
+				expect(manager.getRunningJobs({ ownerId: "Parent" })).toEqual([]);
+				const relay = await relayed;
+				expect(relay?.body).toContain("line 42 is fine");
+				expect(relay?.body).not.toContain("Merged branch");
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("settles a turn the owner woke and appends the notice to the owner's job", async () => {
+			const { manager, harness, observer, settle, parent } = setUp();
+			try {
+				const finish = observer([ircRecord("Parent", "fix the mask path too")]);
+				const waiting = new WaitTool(parent).execute("parent-wait", {});
+				harness.emitAssistantText("mask path fixed too");
+				await finish?.(undefined);
+
+				expect(settle).toHaveBeenCalledTimes(1);
+				const job = (await waiting).details?.jobs?.[0];
+				expect(job?.status).toBe("completed");
+				expect(job?.resultText).toContain("mask path fixed too");
+				expect(job?.resultText?.endsWith(NOTICE)).toBe(true);
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("still tells a peer the agent already answered what became of the turn's changes", async () => {
+			const { manager, harness, observer, settle, parent } = setUp();
+			try {
+				const bus = IrcBus.global();
+				const finish = observer([ircRecord("Parent", "fix it"), ircRecord("Peer", "ping me when done")]);
+				const waiting = new WaitTool(parent).execute("parent-wait", {});
+				// The agent answers the peer itself during the turn.
+				const answered = bus.wait("Peer", { from: AGENT_ID }, 1000);
+				expect((await bus.send({ from: AGENT_ID, to: "Peer", body: "done" })).outcome).not.toBe("failed");
+				expect((await answered)?.body).toBe("done");
+				const relayed = bus.wait("Peer", { from: AGENT_ID }, 1000);
+				harness.emitAssistantText("fixed");
+				await finish?.(undefined);
+
+				expect(settle).toHaveBeenCalledTimes(1);
+				// Only the notice: repeating the answer would duplicate the agent's own message.
+				expect((await relayed)?.body).toBe(NOTICE.trim());
+				expect((await waiting).details?.jobs?.[0]?.resultText?.endsWith(NOTICE)).toBe(true);
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+	});
 });

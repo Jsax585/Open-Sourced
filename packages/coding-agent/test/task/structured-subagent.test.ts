@@ -1214,6 +1214,7 @@ describe("structured subagent primitive", () => {
 			branchName: "omp/task/Worker",
 			branchBaseSha: "base",
 			nestedPatches: [{ relativePath: "inner", patch: "diff --git a/b.txt b/b.txt\n" }],
+			isolationCaptureFailed: true,
 			error: "Nested patch capture failed: ENOSPC. Isolation workspace retained at /wt/abc.",
 		}));
 

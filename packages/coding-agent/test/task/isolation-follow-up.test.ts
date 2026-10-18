@@ -360,4 +360,136 @@ describe("isolated agent follow-up turns", () => {
 		expect(await Bun.file(path.join(repo, "a.txt")).text()).toBe("zero\n");
 		await AgentLifecycleManager.global().release("FollowUpUnlanded");
 	});
+
+	it("leaves only the unlanded work, as a patch, when released after a patch-mode landing", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "patch");
+		const run = await runKeptAlive({
+			id: "FollowUpPatchRelease",
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		const firstLanding = await mergeIsolatedChanges({ result: run.first, repoRoot: repo, mergeMode: "patch" });
+		firstRun.resolve(firstLanding.changesApplied === true);
+		await commitIn(iso, "two\n", "review fix");
+		expect(await run.settleFollowUp?.(result("FollowUpPatchRelease"))).toContain("Applied patches: yes");
+
+		// Work whose turn never reported to the parent is left for release.
+		await commitIn(iso, "three\n", "unreported");
+		await AgentLifecycleManager.global().release("FollowUpPatchRelease");
+
+		// The parent holds the landed edits uncommitted: a branch from the run's
+		// start would repeat them and conflict with them.
+		expect(await taskBranches(repo)).toBe("");
+		const leftover = await Bun.file(run.first.patchPath ?? "").text();
+		expect(leftover).toContain("-two");
+		expect(leftover).toContain("+three");
+		expect(leftover).not.toContain("-zero");
+		expect(await Bun.file(path.join(repo, "a.txt")).text()).toBe("two\n");
+	});
+
+	/**
+	 * A parent with uncommitted edits to `w.txt` (line 1) and `u.txt`, an
+	 * isolation started from that working tree, and a first run that commits
+	 * only `a.txt` and has landed.
+	 */
+	async function landedRunOnDirtyParent(id: string) {
+		const { repo, iso } = await createRepoAndIsolation();
+		await Bun.write(path.join(repo, "w.txt"), "1\n2\n3\n");
+		await Bun.write(path.join(repo, "u.txt"), "u0\n");
+		await git(repo, ["add", "w.txt", "u.txt"]);
+		await git(repo, ["commit", "-q", "-m", "tracked"]);
+		await git(iso, ["pull", "-q", "--ff-only"]);
+		for (const dir of [repo, iso]) {
+			await Bun.write(path.join(dir, "w.txt"), "1-wip\n2\n3\n");
+			await Bun.write(path.join(dir, "u.txt"), "u-wip\n");
+		}
+		const commitOnly = async (file: string, content: string, message: string) => {
+			await Bun.write(path.join(iso, file), content);
+			await git(iso, ["commit", "-q", "-m", message, "--", file]);
+		};
+		const { firstRun, followUps } = landingFollowUps(repo, "branch");
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps,
+			firstRun: () => commitOnly("a.txt", "one\n", "first run"),
+		});
+		const firstLanding = await mergeIsolatedChanges({ result: run.first, repoRoot: repo, mergeMode: "branch" });
+		firstRun.resolve(firstLanding.changesApplied === true);
+		expect(firstLanding.changesApplied).toBe(true);
+		return { repo, run, commitOnly, landedTip: await git(repo, ["rev-parse", "HEAD"]) };
+	}
+
+	it("lands only the agent's edit when a follow-up touches a file the parent has uncommitted edits in", async () => {
+		const { repo, run, commitOnly, landedTip } = await landedRunOnDirtyParent("FollowUpDirtyParent");
+
+		await commitOnly("w.txt", "1-wip\n2\n3-agent\n", "review fix");
+		const summary = await run.settleFollowUp?.(result("FollowUpDirtyParent"));
+
+		expect(summary).toContain("Merged branch");
+		expect(await git(repo, ["log", "--format=%s", `${landedTip}..HEAD`])).toBe("review fix");
+		// The commit carries the agent's line on the committed file, none of the
+		// parent's uncommitted work, and leaves that work in the working tree.
+		expect(await git(repo, ["show", "--format=", "--name-only", "HEAD"])).toBe("w.txt");
+		expect(await git(repo, ["show", "HEAD:w.txt"])).toBe("1\n2\n3-agent");
+		expect(await git(repo, ["show", "HEAD:u.txt"])).toBe("u0");
+		expect(await Bun.file(path.join(repo, "w.txt")).text()).toBe("1-wip\n2\n3-agent\n");
+		expect(await Bun.file(path.join(repo, "u.txt")).text()).toBe("u-wip\n");
+		await AgentLifecycleManager.global().release("FollowUpDirtyParent");
+		expect(await taskBranches(repo)).toBe("");
+	});
+
+	it("keeps a follow-up that rewrites the parent's uncommitted line on its branch, like a first run", async () => {
+		const { repo, run, commitOnly, landedTip } = await landedRunOnDirtyParent("FollowUpDirtyOverlap");
+
+		await commitOnly("w.txt", "1-agent\n2\n3\n", "review fix");
+		const summary = await run.settleFollowUp?.(result("FollowUpDirtyOverlap"));
+
+		// A pick onto a dirty path is refused, as for a first run, and the branch kept.
+		expect(summary).toContain("Branch merge failed");
+		expect(await git(repo, ["rev-parse", "HEAD"])).toBe(landedTip);
+		const branch = "omp/task/FollowUpDirtyOverlap";
+		expect(await git(repo, ["rev-parse", `${branch}^`])).toBe(landedTip);
+		expect(await git(repo, ["log", "--format=%s", `${landedTip}..${branch}`])).toBe("review fix");
+		// The agent's version of the file it touched, and the parent's committed
+		// version of the uncommitted file it did not touch.
+		expect(await git(repo, ["show", "--format=", "--name-only", branch])).toBe("w.txt");
+		expect(await git(repo, ["show", `${branch}:w.txt`])).toBe("1-agent\n2\n3");
+		expect(await git(repo, ["show", `${branch}:u.txt`])).toBe("u0");
+		expect(await Bun.file(path.join(repo, "w.txt")).text()).toBe("1-wip\n2\n3\n");
+		expect(await Bun.file(path.join(repo, "u.txt")).text()).toBe("u-wip\n");
+		// Nothing new since the refused landing: release leaves that branch as it is.
+		await AgentLifecycleManager.global().release("FollowUpDirtyOverlap");
+		expect(await git(repo, ["log", "--format=%s", `${landedTip}..${branch}`])).toBe("review fix");
+	});
+
+	it("marks a first run whose changes could not be captured and lands none of its follow-ups", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "patch");
+		const land = vi.spyOn(followUps, "land");
+		vi.spyOn(worktreeModule, "captureDeltaPatch").mockRejectedValueOnce(new Error("EACCES"));
+		const run = await runKeptAlive({
+			id: "FollowUpCaptureFailed",
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		firstRun.resolve(false);
+
+		expect(run.first.exitCode).toBe(0);
+		expect(run.first.isolationCaptureFailed).toBe(true);
+		expect(run.first.error).toContain("EACCES");
+		// The workspace was retained for recovery, so nothing more is captured from it.
+		expect(await run.settleFollowUp?.(result("FollowUpCaptureFailed"))).toBe("");
+		expect(land).not.toHaveBeenCalled();
+		await AgentLifecycleManager.global().release("FollowUpCaptureFailed");
+	});
 });

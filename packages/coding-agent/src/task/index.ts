@@ -1541,7 +1541,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					await reportProgress(statusText, buildDetails() as unknown as Record<string, unknown>);
 					const isolationFailed =
 						spawnParams.isolated === true &&
-						(singleResult === undefined || (singleResult.exitCode === 0 && singleResult.error !== undefined));
+						(singleResult === undefined || singleResult.isolationCaptureFailed === true);
 					const deliveryText = `${finalText}${await buildFollowUpHint(singleResult?.aborted === true, isolationFailed)}`;
 					const structured = singleResult?.structuredOutput;
 					if (resultFailed) {
