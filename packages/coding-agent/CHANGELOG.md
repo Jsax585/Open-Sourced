@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the `web/deepseek` web-search engine, using DeepSeek's in-house Search API (`/v1/tools/search`) with the existing DeepSeek API key instead of a Responses or Messages API grounding
+
 ### Fixed
 
 - Fixed a Codex turn stopping on "Request failed … unsupported_native_inflight_message" when you sent a message while the response was writing text; the session now keeps the partial reply and continues with your message

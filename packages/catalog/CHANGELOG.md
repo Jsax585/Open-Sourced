@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the `web/deepseek` search model for DeepSeek's in-house Search API
+
 ## [18.12.1] - 2026-10-17
 
 ### Fixed

@@ -17,6 +17,7 @@
   - `packages/coding-agent/src/web/search/providers/anthropic.ts` — Claude web-search provider.
   - `packages/coding-agent/src/web/search/providers/brave.ts` — Brave Search API adapter.
   - `packages/coding-agent/src/web/search/providers/codex.ts` — OpenAI Codex SSE adapter.
+  - `packages/coding-agent/src/web/search/providers/deepseek.ts` — DeepSeek Search API adapter.
   - `packages/coding-agent/src/web/search/providers/openai.ts` — billed OpenAI API Responses adapter, separate from Codex OAuth.
   - `packages/coding-agent/src/web/search/providers/openrouter.ts` — chat-completions grounding through OpenRouter's web plugin.
   - `packages/coding-agent/src/web/search/providers/duckduckgo.ts` — DuckDuckGo HTML frontend scraper.
@@ -178,6 +179,13 @@ Each provider search transport receives a hard timeout from `providers.webSearch
     - Fallback chain inside the provider: tries `{query,count}`, then `{search_query,count}`, then `{search_query, search_engine:"search-prime", count}` when earlier attempts fail with argument-shape errors.
     - `limit` and `num_search_results` are collapsed together before dispatch.
     - Output may include parsed free-text `answer`, `sources`, `requestId`.
+  - **DeepSeek** — `packages/coding-agent/src/web/search/providers/deepseek.ts`
+    - Availability: `DEEPSEEK_API_KEY` or a configured/stored `deepseek` credential. This is the same key the DeepSeek chat provider uses; no Responses or Messages API grounding is involved.
+    - Querying: POST `https://api.deepseek.com/v1/tools/search` with `{query, count}` and bearer auth.
+    - Query operators (`site:`, `-site:`, quotes, `OR`, `lang:`, `after:`/`before:`) are forwarded intact; `recency` has no native parameter and is ignored rather than rewritten into the query.
+    - `limit` / `num_search_results`: `params.numSearchResults ?? params.limit`, clamped to `1..50`, default `10`. Queries longer than 128 Unicode characters are rejected before dispatch.
+    - Sources prefer DeepSeek's model-facing `summary` over the UI `snippet`; `date` becomes `publishedDate`/`ageSeconds`.
+    - Output: `sources`, `authMode: "api_key"`.
   - **Exa** — `packages/coding-agent/src/web/search/providers/exa.ts`
     - Availability: available unless `exa.enabled=false`. `EXA_API_KEY` or a stored credential for `exa` selects the API; otherwise search uses the public MCP.
     - Querying: POST `https://api.exa.ai/search` with the resolved Exa API key, otherwise JSON-RPC `tools/call` against `https://mcp.exa.ai/mcp` for remote MCP tool `web_search_exa`.
@@ -288,6 +296,7 @@ Each provider search transport receives a hard timeout from `providers.webSearch
 - Tavily result count: default `5`, max `20` (`packages/coding-agent/src/web/search/providers/tavily.ts`).
 - Firecrawl result count: default `10`, max `100` (`packages/coding-agent/src/web/search/providers/firecrawl.ts`).
 - Kimi result count: default `10`, max `20`; request timeout field fixed to `30` seconds (`packages/coding-agent/src/web/search/providers/kimi.ts`).
+- DeepSeek result count: default `10`, max `50`; queries are capped at `128` Unicode characters (`packages/coding-agent/src/web/search/providers/deepseek.ts`).
 - Parallel result count: default `10`, max `40`; per-result excerpt cap `10_000` chars (`packages/coding-agent/src/web/search/providers/parallel.ts`, `packages/coding-agent/src/web/parallel.ts`).
 - Kagi result count: default `10`, max `40` (`packages/coding-agent/src/web/search/providers/kagi.ts`).
 - SearXNG result count: default `10`, max `20` (`packages/coding-agent/src/web/search/providers/searxng.ts`).

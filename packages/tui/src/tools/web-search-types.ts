@@ -19,6 +19,7 @@ export const SEARCH_PROVIDER_LABELS = {
 	xai: "xAI",
 	openrouter: "OpenRouter",
 	zai: "Z.AI",
+	deepseek: "DeepSeek",
 	exa: "Exa",
 	tinyfish: "TinyFish",
 	jina: "Jina",
