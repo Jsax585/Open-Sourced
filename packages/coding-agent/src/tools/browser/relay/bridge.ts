@@ -53,6 +53,7 @@ type RuntimeState = "default" | "enabled" | "disabled";
 
 interface SessionRef {
 	kind: "tab" | "page";
+	origin: "auto" | "explicit";
 	/** Registry key of the owning tab (`<instance code>:<chrome tabId>`). */
 	tabKey: string;
 	tabId: number;
@@ -358,10 +359,12 @@ class CdpConnection {
 		readonly socket: RelaySocket,
 	) {}
 
-	sessionsForTab(tabKey: string, kind?: "tab" | "page"): string[] {
+	sessionsForTab(tabKey: string, kind?: "tab" | "page", origin?: "auto" | "explicit"): string[] {
 		const out: string[] = [];
 		for (const [sessionId, ref] of this.sessions) {
-			if (ref.tabKey === tabKey && (!kind || ref.kind === kind)) out.push(sessionId);
+			if (ref.tabKey === tabKey && (!kind || ref.kind === kind) && (!origin || ref.origin === origin)) {
+				out.push(sessionId);
+			}
 		}
 		return out;
 	}
@@ -971,7 +974,7 @@ export class RelayBridge {
 			if (!sameSocketReplay) tab.recoveryStartFrameLoaderIds = msg.recoveryFrameLoaderIds?.[String(tab.tabId)];
 			if (!sameSocketReplay) tab.restoring = null;
 			const holders = this.#sessionHolders(tab.tabKey);
-			const preserve = holders.filter(conn => !conn.autoAttach && conn.sessionsForTab(tab.tabKey).length > 0);
+			const preserve = holders.filter(conn => conn.sessionsForTab(tab.tabKey, undefined, "explicit").length > 0);
 			if (freshRootRequiredNow.has(tab.tabId) && holders.length > 0) {
 				tab.forceFreshRootBeforeReplay = true;
 				tab.restorePending = true;
@@ -2507,7 +2510,9 @@ export class RelayBridge {
 							// guessed value would leak synthetic state to surviving holders.
 							// Replace the debugger root instead, preserving explicit page
 							// sessions and replaying only their still-owned journal entries.
-							const preserve = this.#sessionHolders(tab.tabKey).filter(conn => !conn.autoAttach);
+							const preserve = this.#sessionHolders(tab.tabKey).filter(
+								conn => conn.sessionsForTab(tab.tabKey, undefined, "explicit").length > 0,
+							);
 							tab.forceFreshRootBeforeReplay = true;
 							tab.restorePending = preserve.length > 0;
 							tab.resumeSubscriptionReconcileAfterRestore = tab.pendingSubscriptionReconcile.length > 0;
@@ -2571,7 +2576,9 @@ export class RelayBridge {
 	#pruneSubscriptions(tab: TabState, keepPageSessions: CdpConnection[]): void {
 		const liveSessions = new Set<string>();
 		for (const conn of keepPageSessions) {
-			for (const pageSession of conn.sessionsForTab(tab.tabKey, "page")) liveSessions.add(pageSession);
+			for (const pageSession of conn.sessionsForTab(tab.tabKey, "page", "explicit")) {
+				liveSessions.add(pageSession);
+			}
 		}
 		if (liveSessions.size === 0) {
 			tab.subscriptions.clear();
@@ -2588,7 +2595,9 @@ export class RelayBridge {
 	#prunePreloadScripts(tab: TabState, keepPageSessions: CdpConnection[]): void {
 		const liveSessions = new Set<string>();
 		for (const conn of keepPageSessions) {
-			for (const pageSession of conn.sessionsForTab(tab.tabKey, "page")) liveSessions.add(pageSession);
+			for (const pageSession of conn.sessionsForTab(tab.tabKey, "page", "explicit")) {
+				liveSessions.add(pageSession);
+			}
 		}
 		if (liveSessions.size === 0) {
 			tab.preloadScripts.clear();
@@ -2607,7 +2616,7 @@ export class RelayBridge {
 
 	#recoverAfterAmbiguousPreloadMutation(tab: TabState): void {
 		const holders = this.#sessionHolders(tab.tabKey);
-		const preserve = holders.filter(conn => !conn.autoAttach && conn.sessionsForTab(tab.tabKey).length > 0);
+		const preserve = holders.filter(conn => conn.sessionsForTab(tab.tabKey, undefined, "explicit").length > 0);
 		tab.forceFreshRootBeforeReplay = true;
 		tab.restorePending = preserve.length > 0;
 		if (holders.length === 0 || tab.restoring !== null) return;
@@ -2622,7 +2631,7 @@ export class RelayBridge {
 
 	#sessionOwnsTab(conn: CdpConnection, tabKey: string, sessionId: string): boolean {
 		const ref = conn.sessions.get(sessionId);
-		return ref?.kind === "page" && ref.tabKey === tabKey;
+		return ref?.kind === "page" && ref.origin === "explicit" && ref.tabKey === tabKey;
 	}
 
 	#latestSubscriptionForKey(tab: TabState, key: string): SessionRootSubscription | undefined {
@@ -3089,7 +3098,7 @@ export class RelayBridge {
 				}
 				// Emit before replying: puppeteer's TargetManager counts page
 				// children attached before the setAutoAttach response resolves.
-				const pageSession = this.#mintSession(conn, "page", tab);
+				const pageSession = this.#mintSession(conn, "page", tab, "auto");
 				this.#emit(
 					conn,
 					"Target.attachedToTarget",
@@ -3208,7 +3217,7 @@ export class RelayBridge {
 					this.#replyError(conn, msg, `Cannot attach to tab ${currentTab.tabId} (${currentTab.url})`);
 					return;
 				}
-				const sessionId = this.#mintSession(conn, parsed.kind, currentTab);
+				const sessionId = this.#mintSession(conn, parsed.kind, currentTab, "explicit");
 				const info = parsed.kind === "tab" ? this.#tabInfo(currentTab, true) : this.#pageInfo(currentTab, true);
 				this.#emit(conn, "Target.attachedToTarget", {
 					sessionId,
@@ -3887,7 +3896,7 @@ export class RelayBridge {
 	): Promise<void> {
 		const refs: SessionRef[] = [];
 		for (const conn of conns) {
-			for (const pageSession of conn.sessionsForTab(tab.tabKey, "page")) {
+			for (const pageSession of conn.sessionsForTab(tab.tabKey, "page", "explicit")) {
 				const ref = conn.sessions.get(pageSession);
 				if (ref) refs.push(ref);
 			}
@@ -4656,9 +4665,9 @@ export class RelayBridge {
 
 	/**
 	 * Tear a tab out of every downstream connection (closed, detached, or now
-	 * ineligible). Connections in `keepPageSessions` retain their page
-	 * pseudo-session: a bare attachToTarget holder routes by tabId, so its
-	 * session survives a Chrome root swap and must not be destroyed on recovery.
+	 * ineligible). Connections in `keepPageSessions` retain only explicit
+	 * `Target.attachToTarget` pseudo-sessions: those route by tabId, so they
+	 * survive a Chrome root swap. Auto-attached sessions are reminted afterward.
 	 */
 	#retractTab(tab: TabState, keepPageSessions: CdpConnection[] = []): void {
 		this.#pruneSubscriptions(tab, keepPageSessions);
@@ -4671,19 +4680,23 @@ export class RelayBridge {
 		for (const conn of this.#conns.values()) {
 			const preservePages = keepPageSessions.includes(conn);
 			const tabSessions = conn.sessionsForTab(tab.tabKey, "tab");
-			if (!preservePages) {
-				const pageSessions = conn.sessionsForTab(tab.tabKey, "page");
-				this.#forgetSessionSubscriptions(tab.tabKey, pageSessions);
-				for (const pageSession of pageSessions) {
-					conn.sessions.delete(pageSession);
-					this.#emit(
-						conn,
-						"Target.detachedFromTarget",
-						{ sessionId: pageSession, targetId: pageTargetIdFromKey(tab.tabKey) },
-						tabSessions[0],
-					);
-				}
-			} else {
+			const explicitPageSessions = preservePages
+				? new Set(conn.sessionsForTab(tab.tabKey, "page", "explicit"))
+				: new Set<string>();
+			const removedPageSessions = conn
+				.sessionsForTab(tab.tabKey, "page")
+				.filter(sessionId => !explicitPageSessions.has(sessionId));
+			this.#forgetSessionSubscriptions(tab.tabKey, removedPageSessions);
+			for (const pageSession of removedPageSessions) {
+				conn.sessions.delete(pageSession);
+				this.#emit(
+					conn,
+					"Target.detachedFromTarget",
+					{ sessionId: pageSession, targetId: pageTargetIdFromKey(tab.tabKey) },
+					tabSessions[0],
+				);
+			}
+			if (explicitPageSessions.size > 0) {
 				// The page session survives, but the Chrome root it was riding was
 				// swapped by the guard detach. Explicitly invalidate real child sessions
 				// from that old root, then clear Runtime context bookkeeping and abandon
@@ -4691,7 +4704,7 @@ export class RelayBridge {
 				// recovery continuation replays enabled domains on the fresh root before
 				// forwarding another command, while an explicit Runtime.disable remains
 				// a per-session opt-out.
-				for (const pageSession of conn.sessionsForTab(tab.tabKey, "page")) {
+				for (const pageSession of explicitPageSessions) {
 					const ref = conn.sessions.get(pageSession);
 					if (!ref) continue;
 					ref.runtimeContexts.clear();
@@ -4706,8 +4719,11 @@ export class RelayBridge {
 			// id" and, once its last session is gone, prevents cdpClosed from ever
 			// detaching the debugger. Preserve it through the retract for a preserved
 			// connection; only tear down tab sessions on connections being reset.
-			if (!preservePages) {
-				for (const tabSession of tabSessions) {
+			const explicitTabSessions = preservePages
+				? new Set(conn.sessionsForTab(tab.tabKey, "tab", "explicit"))
+				: new Set<string>();
+			for (const tabSession of tabSessions) {
+				if (!explicitTabSessions.has(tabSession)) {
 					conn.sessions.delete(tabSession);
 					this.#emit(conn, "Target.detachedFromTarget", {
 						sessionId: tabSession,
@@ -4729,10 +4745,11 @@ export class RelayBridge {
 
 	// ---- session + attach bookkeeping --------------------------------------------
 
-	#mintSession(conn: CdpConnection, kind: "tab" | "page", tab: TabState): string {
+	#mintSession(conn: CdpConnection, kind: "tab" | "page", tab: TabState, origin: "auto" | "explicit"): string {
 		const sessionId = `S${kind === "tab" ? "T" : "P"}${tab.tabId}.${conn.id}.${++this.#sessionSeq}`;
 		conn.sessions.set(sessionId, {
 			kind,
+			origin,
 			tabKey: tab.tabKey,
 			tabId: tab.tabId,
 			runtimeState: "default",
@@ -4892,8 +4909,8 @@ export class RelayBridge {
 	}
 
 	#emitTabAttached(conn: CdpConnection, tab: TabState): void {
-		if (conn.sessionsForTab(tab.tabKey, "tab").length > 0) return;
-		const sessionId = this.#mintSession(conn, "tab", tab);
+		if (conn.sessionsForTab(tab.tabKey, "tab", "auto").length > 0) return;
+		const sessionId = this.#mintSession(conn, "tab", tab, "auto");
 		this.#emit(conn, "Target.attachedToTarget", {
 			sessionId,
 			targetInfo: this.#tabInfo(tab, true),

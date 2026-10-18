@@ -563,13 +563,13 @@ describe("RelayBridge tab grouping", () => {
 		expect(attaches).toHaveLength(1);
 		expect(attaches[0]!.tabId).toBe(1);
 		expect(ext2.rpcs("send")).toHaveLength(0);
-		expect(cdp.messages.find(message => message.id === staleCommandId)?.error).toEqual({
-			code: -32000,
-			message: `Unknown session id ${oldPageSession}`,
-		});
+		expect(cdp.messages.some(message => message.id === staleCommandId)).toBe(false);
 
 		ack(bridge, ext2, "attach");
+		await waitFor(() => ext2.pending("send").length === 1, "preserved claimed-session command");
+		ack(bridge, ext2, "send", { result: { type: "undefined" } });
 		await flush();
+		expect(cdp.messages.find(message => message.id === staleCommandId)?.error).toBeUndefined();
 		expect(cdp.messages.filter(message => message.method === "Target.attachedToTarget")).toHaveLength(3);
 	});
 
@@ -906,6 +906,82 @@ describe("RelayBridge tab grouping", () => {
 		await flush();
 		expect(ext2.rpcs("detach")).toHaveLength(1);
 		expect(ext2.rpcs("detach")[0]!.tabId).toBe(1);
+	});
+
+	it("preserves an explicit page session on a browser auto-attach connection", async () => {
+		const bridge = new RelayBridge({});
+		const ext = new FakeExtSocket();
+		connect(bridge, ext, [tab({ tabId: 1 })]);
+		const cdp = new FakeCdpSocket();
+		const connId = bridge.cdpConnected(cdp);
+
+		const browserAutoAttachId = ++msgSeq;
+		bridge.cdpMessage(
+			connId,
+			JSON.stringify({
+				id: browserAutoAttachId,
+				method: "Target.setAutoAttach",
+				params: { autoAttach: true, flatten: true, waitForDebuggerOnStart: false },
+			}),
+		);
+		await waitFor(() => ext.pending("attach").length === 1, "browser auto-attach root");
+		ack(bridge, ext, "attach");
+		await waitFor(
+			() => cdp.messages.some(message => message.id === browserAutoAttachId),
+			"browser auto-attach reply",
+		);
+		const autoTabSession = cdp.attachedSessions().find(sessionId => sessionId.startsWith("ST"));
+		expect(autoTabSession).toBeDefined();
+		if (!autoTabSession) throw new Error("browser auto-attach did not create a tab session");
+
+		const tabAutoAttachId = ++msgSeq;
+		bridge.cdpMessage(
+			connId,
+			JSON.stringify({
+				id: tabAutoAttachId,
+				sessionId: autoTabSession,
+				method: "Target.setAutoAttach",
+				params: { autoAttach: true, flatten: true, waitForDebuggerOnStart: false },
+			}),
+		);
+		await flush();
+		const autoPageSession = cdp.attachedSessions().find(sessionId => sessionId.startsWith("SP"));
+		expect(autoPageSession).toBeDefined();
+		const explicitPageSession = await attachPage(bridge, ext, cdp, connId, 1);
+		expect(explicitPageSession).not.toBe(autoPageSession);
+
+		const recoveryMessageStart = cdp.messages.length;
+		bridge.extClosed(ext);
+		const ext2 = new FakeExtSocket();
+		connect(bridge, ext2, [tab({ tabId: 1, groupId: -1 })], {
+			recoverableTabIds: [1],
+		});
+		await waitFor(() => ext2.pending("attach").length === 1, "mixed-session recovery attach");
+		ack(bridge, ext2, "attach");
+		await flush();
+
+		const recoveryMessages = cdp.messages.slice(recoveryMessageStart);
+		const detachedSessions = recoveryMessages
+			.filter(message => message.method === "Target.detachedFromTarget")
+			.map(message => (message.params as { sessionId?: string } | undefined)?.sessionId);
+		expect(detachedSessions).toContain(autoTabSession);
+		expect(detachedSessions).toContain(autoPageSession);
+		expect(detachedSessions).not.toContain(explicitPageSession);
+
+		const commandId = ++msgSeq;
+		bridge.cdpMessage(
+			connId,
+			JSON.stringify({
+				id: commandId,
+				sessionId: explicitPageSession,
+				method: "Runtime.evaluate",
+				params: { expression: "1" },
+			}),
+		);
+		await waitFor(() => ext2.pending("send").length === 1, "preserved explicit-session command");
+		ack(bridge, ext2, "send", { result: { type: "number", value: 1 } });
+		await flush();
+		expect(cdp.messages.find(message => message.id === commandId)?.error).toBeUndefined();
 	});
 
 	it("keeps a bare TAB-target holder's tab pseudo-session usable across recovery", async () => {
@@ -7097,9 +7173,23 @@ describe("RelayBridge tab grouping", () => {
 			await waitFor(() => ext.pending("attach").length === 1, "initial auto-attach");
 			ack(bridge, ext, "attach");
 			await flush();
+			const autoTabSession = cdp.attachedSessions()[0];
+			expect(autoTabSession).toBeDefined();
+			bridge.cdpMessage(
+				connId,
+				JSON.stringify({
+					id: ++msgSeq,
+					sessionId: autoTabSession,
+					method: "Target.setAutoAttach",
+					params: { autoAttach: true, flatten: true, waitForDebuggerOnStart: false },
+				}),
+			);
+			await flush();
 			const oldAutoAttachSessions = cdp.attachedSessions();
-			expect(oldAutoAttachSessions).toHaveLength(1);
-			const pageSession = await attachPage(bridge, ext, cdp, connId, 1);
+			expect(oldAutoAttachSessions).toHaveLength(2);
+			const pageSession = oldAutoAttachSessions.find(sessionId => sessionId.startsWith("SP"));
+			expect(pageSession).toBeDefined();
+			if (!pageSession) throw new Error("tab auto-attach did not create a page session");
 
 			const addId = ++msgSeq;
 			bridge.cdpMessage(
@@ -11134,9 +11224,26 @@ describe("RelayBridge tab grouping", () => {
 		connect(bridge, ext, [tab({ tabId: 1 })]);
 		const cdp = new FakeCdpSocket();
 		const connId = bridge.cdpConnected(cdp);
-		const oldPageSession = await attachPage(bridge, ext, cdp, connId, 1);
 		bridge.cdpMessage(connId, JSON.stringify({ id: ++msgSeq, method: "Target.setAutoAttach" }));
+		await waitFor(() => ext.pending("attach").length === 1, "initial auto-attach root");
+		ack(bridge, ext, "attach");
 		await flush();
+		const autoTabSession = cdp.attachedSessions().find(sessionId => sessionId.startsWith("ST"));
+		expect(autoTabSession).toBeDefined();
+		if (!autoTabSession) throw new Error("browser auto-attach did not create a tab session");
+		bridge.cdpMessage(
+			connId,
+			JSON.stringify({
+				id: ++msgSeq,
+				sessionId: autoTabSession,
+				method: "Target.setAutoAttach",
+				params: { autoAttach: true, flatten: true, waitForDebuggerOnStart: false },
+			}),
+		);
+		await flush();
+		const oldPageSession = cdp.attachedSessions().find(sessionId => sessionId.startsWith("SP"));
+		expect(oldPageSession).toBeDefined();
+		if (!oldPageSession) throw new Error("tab auto-attach did not create a page session");
 
 		bridge.extClosed(ext);
 		const ext2 = new FakeExtSocket();
