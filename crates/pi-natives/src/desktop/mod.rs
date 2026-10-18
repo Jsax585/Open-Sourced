@@ -28,9 +28,11 @@ use std::{
 	time::{Duration, Instant},
 };
 
-pub use applications::{Application, ApplicationOpenOptions, ApplicationQuery};
+pub use applications::{Application, ApplicationOpenOptions, ApplicationQuery, OpenedApplication};
 use ax::{AxRegistry, register_node};
-use backend::{Backend, DeliveryMode, DisplayAwakeHold, MouseButton, PointerEvent};
+use backend::{
+	Backend, DeliveryMode, DisplayAwakeHold, MouseButton, PointerEvent, is_raise_action,
+};
 use control::{CancellationSource, InputLease, OperationToken};
 use error::{CoreResult, DesktopError, ErrorCode};
 use frame::{FrameGeometry, apply_capture_caps, encode_png};
@@ -153,7 +155,7 @@ enum Response {
 	Capture(DesktopCapture),
 	Observation(DesktopObservation),
 	Applications(Vec<Application>),
-	Application(Application),
+	OpenedApplication(OpenedApplication),
 	MenuItems(Vec<DesktopMenuItem>),
 	Unit,
 	Snapshot(AxSnapshot),
@@ -387,6 +389,8 @@ impl Request {
 		reply.send(result).is_ok()
 	}
 
+	/// Requests that can send input or move focus, which hold the input lease.
+	/// A menu read counts: on macOS it makes its window key first.
 	const fn is_mutation(&self) -> bool {
 		matches!(
 			self,
@@ -403,11 +407,62 @@ impl Request {
 				| Self::AxFocus { .. }
 				| Self::AxClick { .. }
 				| Self::OpenApplication { .. }
+				| Self::MenuItems { .. }
 				| Self::MenuSelect { .. }
 				| Self::BringToCurrentSpace { .. }
 				| Self::HoldKeys { .. }
 				| Self::HoldMouse { .. }
 		)
+	}
+
+	/// Whether this mutation takes over the user's own input or foreground,
+	/// which arms the physical-Escape stop: `takeover: true` delivery, input
+	/// to a desktop or display target (it drives the user's real pointer and
+	/// keyboard), an explicit raise, and an activating launch. Held control
+	/// armed the stop when it was granted, so every operation under it keeps
+	/// the stop.
+	fn takes_over(&self) -> bool {
+		let (target, takeover) = match self {
+			Self::HoldKeys { target, takeover, .. }
+			| Self::HoldMouse { target, takeover, .. }
+			| Self::MoveMouse { target, takeover, .. }
+			| Self::Scroll { target, takeover, .. }
+			| Self::TypeText { target, takeover, .. }
+			| Self::KeyChord { target, takeover, .. } => (Some(target), *takeover),
+			Self::Click { target, options, .. } | Self::Drag { target, options, .. } => {
+				(Some(target), options.takeover)
+			},
+			Self::AxClick { options, .. } => (None, options.takeover),
+			Self::RaiseWindow { .. } => return true,
+			Self::OpenApplication { options, .. } => return options.activate.unwrap_or(false),
+			Self::AxPerform { action, .. } => return is_raise_action(action),
+			// Background-only mutations and reads: listed by name so a new
+			// request variant must decide whether it arms the stop.
+			Self::MenuItems { .. }
+			| Self::MenuSelect { .. }
+			| Self::BringToCurrentSpace { .. }
+			| Self::AxSetValue { .. }
+			| Self::AxSelectText { .. }
+			| Self::AxFocus { .. }
+			| Self::Capabilities { .. }
+			| Self::ListDisplays { .. }
+			| Self::ListWindows { .. }
+			| Self::Capture { .. }
+			| Self::CaptureRegion { .. }
+			| Self::Observe { .. }
+			| Self::ListApplications { .. }
+			| Self::AxSnapshot { .. }
+			| Self::AxQuery { .. }
+			| Self::AxElementAt { .. }
+			| Self::AxFocused { .. }
+			| Self::AxNode { .. }
+			| Self::AxAttributes { .. }
+			| Self::AxChildren { .. }
+			| Self::AxParent { .. }
+			| Self::Close { .. } => return false,
+		};
+		target.is_some_and(|target| !matches!(target, Target::Window(_)))
+			|| DeliveryMode::from_takeover(takeover) == DeliveryMode::Foreground
 	}
 
 	const fn frame_target(&self) -> Option<&Target> {
@@ -803,7 +858,7 @@ impl Worker {
 		let _scope = token.enter();
 		let lease = request
 			.is_mutation()
-			.then(|| InputLease::acquire(token))
+			.then(|| InputLease::acquire(token, request.takes_over()))
 			.transpose()?;
 		token.check()?;
 		// A full capture replaces coordinates only if it completes in its
@@ -914,7 +969,7 @@ impl Worker {
 				Ok(Response::Applications(applications::list(options.clone())?))
 			},
 			Request::OpenApplication { id, options, .. } => {
-				Ok(Response::Application(applications::open(id, options.clone())?))
+				Ok(Response::OpenedApplication(applications::open(id, options.clone())?))
 			},
 			Request::MenuItems { target, path, .. } => {
 				let window = self.explicit_window(target)?;
@@ -1535,7 +1590,7 @@ impl DesktopSession {
 		&self,
 		id: String,
 		options: Option<ApplicationOpenOptions>,
-	) -> Result<task::Promise<Application>> {
+	) -> Result<task::Promise<OpenedApplication>> {
 		let c = Arc::clone(&self.core);
 		let token = c.cancellation.token();
 		Ok(task::blocking("desktop.openApplication", (), move |_| {
@@ -1544,7 +1599,7 @@ impl DesktopSession {
 				options: options.unwrap_or_default(),
 				reply,
 			})? {
-				Response::Application(value) => Ok(value),
+				Response::OpenedApplication(value) => Ok(value),
 				_ => Err(DesktopError::internal("unexpected response")),
 			}
 			.map_err(Into::into)
@@ -2164,6 +2219,8 @@ mod capture_tests {
 		/// Each window listing signals the sender, then blocks until the
 		/// receiver's sender drops.
 		hang_windows:           Option<(flume::Sender<()>, flume::Receiver<()>)>,
+		/// Runs as each menu read is served.
+		on_menu_read:           Option<Box<dyn Fn() + Send>>,
 	}
 
 	impl FakeWaylandBackend {
@@ -2210,6 +2267,7 @@ mod capture_tests {
 				awake:                  Arc::new(Mutex::new(Vec::new())),
 				unlock_on_layout:       Arc::new(Mutex::new(false)),
 				hang_windows:           None,
+				on_menu_read:           None,
 			}
 		}
 	}
@@ -2508,7 +2566,10 @@ mod capture_tests {
 			_: &DesktopWindow,
 			_: &[String],
 		) -> CoreResult<Vec<DesktopMenuItem>> {
-			unreachable!("menu_items not exercised")
+			if let Some(on_menu_read) = &self.on_menu_read {
+				on_menu_read();
+			}
+			Ok(Vec::new())
 		}
 
 		fn menu_select(
@@ -3233,6 +3294,25 @@ mod capture_tests {
 	}
 
 	#[test]
+	fn a_menu_read_holds_the_input_lease() {
+		let source = CancellationSource::default();
+		// Whether another call of the session could take input during the read.
+		let free = Arc::new(AtomicBool::new(true));
+		let (other, seen) = (source.clone(), Arc::clone(&free));
+		let mut backend = FakeWaylandBackend::new();
+		backend.on_menu_read = Some(Box::new(move || {
+			seen.store(InputLease::acquire(&other.token(), false).is_ok(), Ordering::SeqCst);
+		}));
+		// The worker holds the ownership tests' lock, which the grant needs.
+		let mut worker = worker_with(backend);
+		control::grant_for_test(&source);
+		let target = Target::Window(WAYLAND_ID.to_string());
+		call(&mut worker, |reply| Request::MenuItems { target, path: Vec::new(), reply }, &source)
+			.unwrap();
+		assert!(!free.load(Ordering::SeqCst), "the menu read ran without the input lease");
+	}
+
+	#[test]
 	fn a_stale_ref_search_runs_with_input_released() {
 		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
 		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
@@ -3241,7 +3321,7 @@ mod capture_tests {
 		let free = Arc::new(AtomicBool::new(false));
 		let (other, seen) = (source.clone(), Arc::clone(&free));
 		tree.lock().on_call = Some(Box::new(move |_| {
-			seen.store(InputLease::acquire(&other.token()).is_ok(), Ordering::SeqCst);
+			seen.store(InputLease::acquire(&other.token(), false).is_ok(), Ordering::SeqCst);
 		}));
 		let error = call(&mut worker, press_request("e2"), &source)
 			.err()
@@ -3715,6 +3795,148 @@ mod capture_tests {
 			background, background, background, background, foreground, foreground, foreground,
 			foreground
 		]);
+	}
+
+	/// A raise takes the user's foreground, so the worker serves it under the
+	/// physical-Escape stop; a press stays background input the user's Escape
+	/// leaves alone. Tests start no event tap, so a takeover lease is refused
+	/// after arming, as it is without the permission.
+	#[cfg(target_os = "macos")]
+	#[test]
+	fn a_raise_runs_under_the_escape_stop_and_a_press_does_not() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go")]);
+		control::press_escape_for_test();
+		let perform = |action: &'static str| {
+			move |reply| Request::AxPerform {
+				reference: "e2".to_string(),
+				action: action.to_string(),
+				reply,
+			}
+		};
+		for action in ["press", "AXPress", "axraise"] {
+			let source = CancellationSource::default();
+			let result = call(&mut worker, perform(action), &source);
+			assert!(
+				result
+					.as_ref()
+					.err()
+					.is_none_or(|error| error.code != ErrorCode::PermissionDenied),
+				"{action} needs no Escape stop"
+			);
+			let token = source.token();
+			assert_eq!(control::press_escape_for_test(), 0, "{action} arms no Escape stop");
+			assert!(token.check().is_ok(), "the user's Escape leaves {action} running");
+		}
+		assert_eq!(tree.lock().pressed, [2], "the fake tree runs only `press`");
+		for action in ["raise", " Raise ", "AXRaise"] {
+			let source = CancellationSource::default();
+			let error = call(&mut worker, perform(action), &source)
+				.err()
+				.expect("no Escape stop starts in tests");
+			assert_eq!(error.code, ErrorCode::PermissionDenied, "{action}");
+			let token = source.token();
+			assert_eq!(control::press_escape_for_test(), 1, "{action} arms the Escape stop");
+			assert!(token.check().is_err(), "physical Escape stops {action}");
+		}
+	}
+
+	/// Background input runs without the physical-Escape stop; takeover input,
+	/// desktop and display input, raises and activating launches run under it,
+	/// so a physical Escape cancels them. Served through the worker against
+	/// the test Escape monitor, which refuses a lease after arming it.
+	#[cfg(target_os = "macos")]
+	#[test]
+	fn only_takeover_requests_run_under_the_physical_escape_stop() {
+		let (mut worker, _tree) = read_buttons(&[(2, "Go")]);
+		control::press_escape_for_test();
+		let window = Target::Window("42".to_string());
+		let reply = || flume::unbounded().0;
+		let typing = |target: &Target, takeover| Request::TypeText {
+			target: target.clone(),
+			text: "abc".to_string(),
+			takeover,
+			reply: reply(),
+		};
+		let holding = |target: &Target, takeover| Request::HoldKeys {
+			target: target.clone(),
+			keys: parse_keys(&["shift".to_string()]).unwrap(),
+			duration: Duration::ZERO,
+			takeover,
+			reply: reply(),
+		};
+		let clicking = |target: &Target, takeover| Request::Click {
+			target:  target.clone(),
+			x:       0.0,
+			y:       0.0,
+			options: ParsedPointerOptions::parse(Some(PointerOptions {
+				takeover,
+				..PointerOptions::default()
+			}))
+			.unwrap(),
+			reply:   reply(),
+		};
+		let perform = |action: &str| Request::AxPerform {
+			reference: "e1".to_string(),
+			action:    action.to_string(),
+			reply:     reply(),
+		};
+		let open = |activate| Request::OpenApplication {
+			id:      "com.apple.TextEdit".to_string(),
+			options: ApplicationOpenOptions { activate },
+			reply:   reply(),
+		};
+		// Held keys reach the fake backend only as takeover, which the test
+		// Escape monitor refuses before they are sent.
+		let background = [
+			typing(&window, None),
+			typing(&window, Some(false)),
+			clicking(&window, Some(false)),
+			perform("AXPress"),
+			perform("showMenu"),
+			open(None),
+			open(Some(false)),
+		];
+		for request in background {
+			let source = CancellationSource::default();
+			let result = worker.execute(&request, &source.token());
+			assert!(
+				result
+					.err()
+					.is_none_or(|error| error.code != ErrorCode::PermissionDenied),
+				"background input needs no Escape stop"
+			);
+			let token = source.token();
+			assert_eq!(control::press_escape_for_test(), 0, "background input arms no Escape stop");
+			assert!(token.check().is_ok(), "the user's Escape leaves background input running");
+		}
+		let display = Target::parse("display:screen-1");
+		let takeover = [
+			typing(&window, Some(true)),
+			holding(&window, Some(true)),
+			clicking(&window, Some(true)),
+			typing(&Target::Desktop, None),
+			holding(&Target::Desktop, Some(false)),
+			clicking(&display, None),
+			Request::RaiseWindow { id: "42".to_string(), reply: reply() },
+			perform("raise"),
+			perform("AXRaise"),
+			open(Some(true)),
+		];
+		for request in takeover {
+			let source = CancellationSource::default();
+			let error = worker
+				.execute(&request, &source.token())
+				.err()
+				.expect("no Escape stop starts in tests");
+			assert_eq!(
+				error.code,
+				ErrorCode::PermissionDenied,
+				"takeover input needs the Escape stop"
+			);
+			let token = source.token();
+			assert_eq!(control::press_escape_for_test(), 1, "takeover input arms the Escape stop");
+			assert!(token.check().is_err(), "physical Escape stops takeover input");
+		}
 	}
 
 	#[test]
