@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `providers.cursor.teamsTokenRatePerMillion` in `models.yml` to include Cursor's Teams/Enterprise token rate in session cost for third-party Cursor models (default off; use `0.25` to match Cursor billing)
+- Added `providers.cursor.teamsTokenRatePerMillion` in `models.yml` to include Cursor's Teams/Enterprise token rate in session cost for third-party Cursor models (default off; use `0.25` to match Cursor billing) ([#16183](https://github.com/can1357/oh-my-pi/pull/16183) by [@joseotaviorf](https://github.com/joseotaviorf))
 - Added DeepSeek as a web search engine (`web/deepseek`), using DeepSeek's new Search API with your existing `DEEPSEEK_API_KEY` or stored `deepseek` credential
 - Added `el.selectText(text, { prefix?, suffix?, select? })` to the macOS `computer` tool: it selects text (or places a caret) in a background app's text field without taking focus, moving the pointer or sending keys, so typing into that field replaces it ([#15175](https://github.com/can1357/oh-my-pi/pull/15175) by [@will-bogusz](https://github.com/will-bogusz))
 - Added `{ takeover: true }` to computer-use `win.move`, so a hover that a window refuses in the background can be retried in the foreground ([#15173](https://github.com/can1357/oh-my-pi/pull/15173) by [@will-bogusz](https://github.com/will-bogusz))
