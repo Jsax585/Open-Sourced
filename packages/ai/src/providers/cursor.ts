@@ -1638,10 +1638,8 @@ function streamCursorWithWireMode(
 							toolResults: turnRecords.stored,
 						})
 					: undefined;
-			output.providerPayload =
-				historyPayload && steering && steering.absorbed.length > 0
-					? { ...historyPayload, answeredSteering: [...steering.absorbed] }
-					: historyPayload;
+			output.providerPayload = historyPayload;
+			if (steering && steering.absorbed.length > 0) output.answeredSteering = [...steering.absorbed];
 
 			// Settle steering before the result: whatever no tool result carried
 			// must be back with the caller when it reads this response's outcome.
@@ -5800,47 +5798,46 @@ interface CursorRecordReplay {
 	records: Uint8Array[];
 	/** Calls whose results the records already carry. */
 	toolCallIds: string[];
-	/** Indexes of the host's copies of steering the records already carry; see {@link isAnsweredSteering}. */
-	steeringCopies: ReadonlySet<number>;
 }
 
 /**
- * Whether `messages[index]` is the host's copy of steering a record-replayed
- * turn absorbed. The host records such steering after the turn that answered
- * it; its records carry it where it was delivered, so replaying the copy would
- * present it as new input.
+ * The host's copies of steering a turn absorbed, by copy index, each mapped to
+ * the turn's index. The host records absorbed steering after the response that
+ * answered it, so a copy is history that belongs inside its turn, never input.
  */
-function isAnsweredSteering(
-	messages: Message[],
-	index: number,
-	replays: ReadonlyMap<number, CursorRecordReplay>,
-): boolean {
-	let turnIndex = index - 1;
-	while (turnIndex >= 0 && messages[turnIndex].role !== "assistant") turnIndex--;
-	return replays.get(turnIndex)?.steeringCopies.has(index) === true;
+type AnsweredSteering = ReadonlyMap<number, number>;
+
+function findAnsweredSteering(messages: Message[]): AnsweredSteering {
+	const answered = new Map<number, number>();
+	for (const [turnIndex, message] of messages.entries()) {
+		if (message.role !== "assistant" || !message.answeredSteering) continue;
+		for (const copy of findSteeringCopies(messages, turnIndex, message.answeredSteering) ?? []) {
+			answered.set(copy, turnIndex);
+		}
+	}
+	return answered;
 }
 
 /**
  * The host's copies of a turn's absorbed steering: the user or developer
  * messages that follow the turn (past its tool results and the passive context
  * its tools reported), one per absorbed text, in delivery order. Undefined when
- * they no longer match, e.g. after an edit or removal, since the records would
- * then replay the old text.
+ * they no longer match, e.g. after an edit or removal: the edited text is then
+ * the user's newer input.
  */
 function findSteeringCopies(
 	messages: Message[],
 	turnIndex: number,
-	historyEnd: number,
 	answeredSteering: readonly string[],
-): Set<number> | undefined {
-	const copies = new Set<number>();
+): number[] | undefined {
+	const copies: number[] = [];
 	let index = turnIndex + 1;
 	for (const text of answeredSteering) {
-		while (index < historyEnd && precedesSteeringCopy(messages[index], text)) index++;
+		while (index < messages.length && precedesSteeringCopy(messages[index], text)) index++;
 		const copy = messages[index];
-		if (index >= historyEnd || (copy.role !== "user" && copy.role !== "developer")) return undefined;
+		if (index >= messages.length || (copy.role !== "user" && copy.role !== "developer")) return undefined;
 		if (extractUserMessageText(copy) !== text) return undefined;
-		copies.add(index++);
+		copies.push(index++);
 	}
 	return copies;
 }
@@ -5867,8 +5864,10 @@ function resolveCursorRecordReplays(
 	modelId: string | undefined,
 	wireRoute: string,
 	{ toolResults }: CursorToolHistory,
+	answered: AnsweredSteering,
 ): Map<number, CursorRecordReplay> {
 	const historyEnd = activeUserMessageIndex >= 0 ? activeUserMessageIndex : messages.length;
+	const answeredTurns = new Set(answered.values());
 	const replays = new Map<number, CursorRecordReplay>();
 	let userMessage: Message | undefined;
 	for (let index = 0; index < historyEnd; index++) {
@@ -5880,19 +5879,13 @@ function resolveCursorRecordReplays(
 		if (cursorTurnDigest({ userMessage, content: msg.content, toolResults }) !== msg.providerPayload.digest) {
 			continue;
 		}
-		const steeringCopies = findSteeringCopies(
-			messages,
-			index,
-			historyEnd,
-			msg.providerPayload.answeredSteering ?? [],
-		);
-		if (!steeringCopies) continue;
+		// The records carry the steering as first read; an edited copy would contradict them.
+		if (msg.answeredSteering && !answeredTurns.has(index)) continue;
 		replays.set(index, {
 			records: msg.providerPayload.records.map(record => new TextEncoder().encode(record)),
 			toolCallIds: msg.content.flatMap(block =>
 				block.type === "toolCall" && toolResults.has(block.id) ? [block.id] : [],
 			),
-			steeringCopies,
 		});
 	}
 	return replays;
@@ -6242,6 +6235,7 @@ function buildRootPromptMessagesJson(
 	activeUserMessageIndex: number,
 	targetModelId: string | undefined,
 	replays: ReadonlyMap<number, CursorRecordReplay>,
+	answered: AnsweredSteering,
 	{ toolResults, pairedToolCallIds }: CursorToolHistory,
 ): Uint8Array[] {
 	assertCursorKimiK3HistoryReplayable(messages, activeUserMessageIndex, targetModelId, replays);
@@ -6250,6 +6244,10 @@ function buildRootPromptMessagesJson(
 	const pushJson = (obj: unknown) => {
 		const bytes = new TextEncoder().encode(JSON.stringify(obj));
 		entries.push(storeCursorBlob(blobStore, bytes));
+	};
+	const pushUserContent = (content: string | (TextContent | ImageContent)[]) => {
+		const parts = buildCursorRootPromptContent(content);
+		if (parts.length > 0) pushJson({ role: "user", content: parts });
 	};
 	// Results already replayed under the step that issued their call; the
 	// message-order pass below skips them.
@@ -6277,10 +6275,7 @@ function buildRootPromptMessagesJson(
 	for (let i = 0; i < historyEnd; i++) {
 		const msg = messages[i];
 		if (msg.role === "user" || msg.role === "developer") {
-			if (isAnsweredSteering(messages, i, replays)) continue;
-			const content = buildCursorRootPromptContent(msg.content);
-			if (content.length === 0) continue;
-			pushJson({ role: "user", content });
+			if (!answered.has(i)) pushUserContent(msg.content);
 		} else if (msg.role === "assistant") {
 			const replay = replays.get(i);
 			if (replay) {
@@ -6290,6 +6285,16 @@ function buildRootPromptMessagesJson(
 			}
 			const steps = buildCursorAssistantSteps(msg, targetModelId);
 			for (const [stepIndex, step] of steps.entries()) {
+				if (stepIndex === steps.length - 1) {
+					// Absorbed steering reached the model with an earlier round's results,
+					// and the final round answered it; the copies after the turn hold its text.
+					for (const [copy, turn] of answered) {
+						const steer = messages[copy];
+						if (turn === i && (steer.role === "user" || steer.role === "developer")) {
+							pushUserContent(steer.content);
+						}
+					}
+				}
 				pushJson({ role: "assistant", content: step.content });
 				// The final step's results stay in message order below: they are
 				// what the following turn responds to, and may arrive out of order.
@@ -6442,8 +6447,12 @@ function buildConversationTurns(
 	activeUserMessageIndex: number,
 	targetModelId: string | undefined,
 	replays: ReadonlyMap<number, CursorRecordReplay>,
+	answered: AnsweredSteering,
 	{ toolResults, pairedToolCallIds }: CursorToolHistory,
 ): Uint8Array[] {
+	// Answered steering belongs to the turn that absorbed it and does not open a new one.
+	const continuesTurn = (index: number) =>
+		answered.has(index) || (messages[index].role !== "user" && messages[index].role !== "developer");
 	const turns: Uint8Array[] = [];
 
 	let i = 0;
@@ -6454,7 +6463,7 @@ function buildConversationTurns(
 			continue;
 		}
 		if (i === activeUserMessageIndex) break;
-		if (isAnsweredSteering(messages, i, replays)) {
+		if (answered.has(i)) {
 			i++;
 			continue;
 		}
@@ -6474,7 +6483,7 @@ function buildConversationTurns(
 		const stepBlobIds: Uint8Array[] = [];
 		i++;
 
-		while (i < messages.length && messages[i].role !== "user" && messages[i].role !== "developer") {
+		while (i < messages.length && continuesTurn(i)) {
 			const stepMsg = messages[i];
 			if (stepMsg.role === "assistant") {
 				// Mirrors `buildCursorAssistantSteps`: a repeated call id is issued once.
@@ -6552,6 +6561,7 @@ export function buildCursorHistoryForTest(
 	const toolHistory = collectCursorToolHistory(messages, activeUserMessageIndex);
 	// Server records replay only on a resolved wire route, which this helper does not build: every turn rebuilds.
 	const replays = new Map<number, CursorRecordReplay>();
+	const answered = findAnsweredSteering(messages);
 	const rootPromptMessagesJson = buildRootPromptMessagesJson(
 		messages,
 		[],
@@ -6559,6 +6569,7 @@ export function buildCursorHistoryForTest(
 		activeUserMessageIndex,
 		targetModelId,
 		replays,
+		answered,
 		toolHistory,
 	).map(blobId => JSON.parse(new TextDecoder().decode(readCursorBlob(blobStore, blobId))));
 	const turnUserMessagesJson: JsonValue[] = [];
@@ -6569,6 +6580,7 @@ export function buildCursorHistoryForTest(
 		activeUserMessageIndex,
 		targetModelId,
 		replays,
+		answered,
 		toolHistory,
 	)) {
 		const turn = fromBinary(ConversationTurnStructureSchema, readCursorBlob(blobStore, turnBlobId));
@@ -6769,12 +6781,16 @@ async function buildGrpcRequestForWireMode(
 	);
 
 	// The trailing user/developer message rides in the action; anything else
-	// (trailing tool results, a checkpoint resume) is a resumeAction over the
-	// full history.
-	const lastMessage = context.messages.at(-1);
+	// (trailing tool results, a checkpoint resume, steering the last response
+	// already answered) is a resumeAction over the full history.
+	const answered = findAnsweredSteering(context.messages);
+	const lastIndex = context.messages.length - 1;
+	const lastMessage = context.messages[lastIndex];
 	const activeUserMessage =
-		!state.resume && (lastMessage?.role === "user" || lastMessage?.role === "developer") ? lastMessage : undefined;
-	const historyEndIndex = activeUserMessage ? context.messages.length - 1 : -1;
+		!state.resume && (lastMessage?.role === "user" || lastMessage?.role === "developer") && !answered.has(lastIndex)
+			? lastMessage
+			: undefined;
+	const historyEndIndex = activeUserMessage ? lastIndex : -1;
 	let userContent: string | (TextContent | ImageContent)[] | undefined;
 	let userText = "";
 	let hasUserImages = false;
@@ -6829,7 +6845,16 @@ async function buildGrpcRequestForWireMode(
 				// its turns hold the partial turn the server resumes from, which
 				// `context.messages` cannot rebuild.
 				{ conversationState: state.conversationState, replayed: false }
-			: buildCursorConversationState(model, context, state, blobStore, systemPromptIds, historyEndIndex, builtRoute);
+			: buildCursorConversationState(
+					model,
+					context,
+					state,
+					blobStore,
+					systemPromptIds,
+					historyEndIndex,
+					answered,
+					builtRoute,
+				);
 	const { conversationState } = built;
 	// Fingerprints of the history as built, to tell which field the hook below edited.
 	const builtRootHash = built.replayed ? hashCursorBlobIds(conversationState.rootPromptMessagesJson) : undefined;
@@ -6871,6 +6896,7 @@ async function buildGrpcRequestForWireMode(
 				blobStore,
 				systemPromptIds,
 				historyEndIndex,
+				answered,
 				wireRoute,
 			).conversationState;
 			if (rootAsBuilt) sentState.rootPromptMessagesJson = rebuilt.rootPromptMessagesJson;
@@ -6929,6 +6955,7 @@ function buildCursorConversationState(
 	blobStore: Map<string, Uint8Array>,
 	systemPromptIds: Uint8Array[],
 	historyEndIndex: number,
+	answered: AnsweredSteering,
 	wireRoute: string,
 ): { conversationState: ConversationStateStructure; replayed: boolean } {
 	const toolHistory = collectCursorToolHistory(context.messages, historyEndIndex);
@@ -6939,6 +6966,7 @@ function buildCursorConversationState(
 		model.id,
 		wireRoute,
 		toolHistory,
+		answered,
 	);
 	if (replays.size > 0) {
 		log("info", "replayedServerRecords", {
@@ -6948,7 +6976,15 @@ function buildCursorConversationState(
 	}
 	// Build conversation turns from prior messages, excluding only the active user message
 	// when the request is sending one. Resume actions must preserve trailing tool results.
-	const turns = buildConversationTurns(context.messages, blobStore, historyEndIndex, model.id, replays, toolHistory);
+	const turns = buildConversationTurns(
+		context.messages,
+		blobStore,
+		historyEndIndex,
+		model.id,
+		replays,
+		answered,
+		toolHistory,
+	);
 
 	// Build `rootPromptMessagesJson` from prior messages. Cursor's server uses this
 	// field (not `turns[]`) to construct the actual model prompt; if we only send the
@@ -6961,6 +6997,7 @@ function buildCursorConversationState(
 		historyEndIndex,
 		model.id,
 		replays,
+		answered,
 		toolHistory,
 	);
 

@@ -303,14 +303,19 @@ async function rootPromptIds(
 	target: Model<"cursor-agent">,
 	messages: Message[],
 	options?: CursorOptions,
-): Promise<{ ids: string[]; records: string[] }> {
+): Promise<{ ids: string[]; records: string[]; action: string | undefined }> {
 	const blobStore = new Map<string, Uint8Array>();
-	const { conversationState } = await buildGrpcRequest(target, { messages } satisfies Context, options, {
+	const { conversationState, requestBytes } = await buildGrpcRequest(target, { messages } satisfies Context, options, {
 		conversationId: `records-${crypto.randomUUID()}`,
 		blobStore,
 	});
 	const ids = conversationState.rootPromptMessagesJson.map(hex);
-	return { ids, records: ids.map(id => new TextDecoder().decode(blobStore.get(id))) };
+	const request = fromBinary(AgentClientMessageSchema, requestBytes).message;
+	return {
+		ids,
+		records: ids.map(id => new TextDecoder().decode(blobStore.get(id))),
+		action: request.case === "runRequest" ? request.value.action?.action.case : undefined,
+	};
 }
 
 const k3Payload = {
@@ -388,12 +393,8 @@ describe("Cursor server records", () => {
 	/** A recorded K3 turn that absorbed `answered` as steering, and its tool result. */
 	async function steeredK3Turn(answered: string[]): Promise<[AssistantMessage, ToolResultMessage]> {
 		const recorded = await recordK3Turn();
-		const payload = recorded.assistant.providerPayload;
-		if (payload?.type !== "cursorHistory") throw new Error("turn was not recorded");
-		return [
-			{ ...recorded.assistant, providerPayload: { ...payload, answeredSteering: answered } },
-			recorded.toolResult,
-		];
+		if (recorded.assistant.providerPayload?.type !== "cursorHistory") throw new Error("turn was not recorded");
+		return [{ ...recorded.assistant, answeredSteering: answered }, recorded.toolResult];
 	}
 
 	const userText = (content: string): Message => ({ role: "user", content, timestamp: 2 });
@@ -412,6 +413,38 @@ describe("Cursor server records", () => {
 		expect(recordsWith(replayed.records, "use tabs")).toEqual([]);
 		// Without the records, the copy is the only place the steering survives.
 		expect(recordsWith(rebuilt.records, "use tabs")).toHaveLength(1);
+	});
+
+	it("places absorbed steering inside a turn that has no server records", async () => {
+		// Without records the copy is the steering's only text; after the turn it
+		// would read as new input, so it goes back before the round that answered it.
+		const [{ providerPayload: _records, ...assistant }, toolResult] = await steeredK3Turn(["use tabs"]);
+		const history = [firstUser, assistant, toolResult, userText("use tabs"), secondUser];
+
+		const { records } = await rootPromptIds(model("kimi-k3"), history);
+
+		expect(records.map(record => JSON.parse(record).role)).toEqual([
+			"system",
+			"user",
+			"assistant",
+			"tool",
+			"user",
+			"assistant",
+		]);
+		expect(recordsWith(records, "use tabs")).toEqual([records[4]]);
+	});
+
+	it("resumes instead of resending steering the last response answered", async () => {
+		// A forced continuation (e.g. a soft tool requirement) re-samples with no
+		// new input, leaving the absorbed copy as the last message.
+		const [assistant, toolResult] = await steeredK3Turn(["use tabs"]);
+		const history = [firstUser, assistant, toolResult, userText("use tabs")];
+
+		const { ids, records, action } = await rootPromptIds(model("kimi-k3"), history);
+
+		expect(action).toBe("resumeAction");
+		expect(ids.slice(2, 2 + SPAN.length)).toEqual(SPAN_IDS);
+		expect(recordsWith(records, "use tabs")).toEqual([]);
 	});
 
 	it("matches absorbed steering past the passive context the turn's tools reported", async () => {

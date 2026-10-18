@@ -1175,12 +1175,6 @@ export interface CursorHistoryPayload {
 	digest: string;
 	/** Record bytes (UTF-8 JSON) in conversation order; each blob id is the SHA-256 of its bytes. */
 	records: string[];
-	/**
-	 * Steering the turn absorbed as hook context, as the model read it (trimmed).
-	 * The records already carry it, so replaying them skips the copy the host
-	 * recorded after this turn.
-	 */
-	answeredSteering?: string[];
 }
 
 export type ProviderPayload =
@@ -1363,6 +1357,12 @@ export interface AssistantMessage {
 	 * can compact between turns (Cursor). Set only when the notice reached the model.
 	 */
 	contextBudgetWrapUp?: boolean;
+	/**
+	 * Steering this response absorbed mid-stream as tool-result context, as the
+	 * model read it (trimmed), in delivery order (Cursor). The host records copies
+	 * after the response; history builders place them inside it, not as new input.
+	 */
+	answeredSteering?: string[];
 	/** In-memory fallback credit handle attached when a refusal response carries a fallback credit token. */
 	fallbackCreditHandle?: AnthropicFallbackCreditHandle;
 	timestamp: number; // Unix timestamp in milliseconds
