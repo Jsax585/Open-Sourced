@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import { JudgmentParseError } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import type { JudgeQuestionPayload, TinyWorkerRequest } from "@oh-my-pi/pi-coding-agent/tiny/title-protocol";
 import { LocalJudge } from "@oh-my-pi/pi-coding-agent/judgment/local-judge";
 import { tinyModelClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
@@ -322,6 +323,18 @@ describe("LocalJudge", () => {
 				},
 			}),
 		).rejects.toThrow(JudgmentParseError);
+	});
+
+	it("rejects box questions with ValidationError", async () => {
+		const judge = new LocalJudge("julia-1");
+		await expect(
+			judge.judge({
+				state: "find target",
+				questions: {
+					q: { type: "box", instructions: "find target", image: 0 },
+				},
+			}),
+		).rejects.toThrow(AIError.ValidationError);
 	});
 });
 

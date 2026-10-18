@@ -18,6 +18,7 @@ import {
 	type Questions,
 	tokenUsage,
 } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import type { JudgeQuestionPayload } from "../tiny/title-protocol";
 import { renderJudgeStateValue } from "../tiny/judge-serialize";
 import { tinyModelClient } from "../tiny/title-client";
@@ -82,6 +83,12 @@ function toPayload(id: string, question: Question): JudgeQuestionPayload {
 			}
 			return { type: "score", instructions: question.instructions, options: [...question.criteria] };
 		}
+		default: {
+			const unsupported = question as { type: string };
+			throw new AIError.ValidationError(
+				`judgment "${id}": local judge does not answer ${unsupported.type} questions`,
+			);
+		}
 	}
 }
 
@@ -126,6 +133,12 @@ function toAnswer(id: string, question: Question, logits: number[] | undefined):
 				if (probability > confidence) confidence = probability;
 			}
 			return { type: "score", score, probabilities, confidence };
+		}
+		default: {
+			const unsupported = question as { type: string };
+			throw new AIError.ValidationError(
+				`judgment "${id}": local judge does not answer ${unsupported.type} questions`,
+			);
 		}
 	}
 }
