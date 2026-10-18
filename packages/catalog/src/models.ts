@@ -1,4 +1,5 @@
 import { classifyModel } from "./compat/taxonomy";
+import { resolveTeamsTokenRatePerMillion } from "./cursor-teams-token-rate";
 import MODELS from "./models.json" with { type: "json" };
 import { dueEffectiveRate } from "./pricing";
 import type {
@@ -82,6 +83,16 @@ export function getEffectiveTokenCost(cost: ModelCost, timestamp = Date.now()): 
 	return resolveTokenCost(cost, 0, timestamp);
 }
 
+function withTeamsTokenRate(rates: TokenCost, perMillion: number): TokenCost {
+	if (perMillion === 0) return rates;
+	return {
+		input: rates.input + perMillion,
+		output: rates.output + perMillion,
+		cacheRead: rates.cacheRead + perMillion,
+		cacheWrite: rates.cacheWrite + perMillion,
+	};
+}
+
 function resolveTokenCost(cost: ModelCost, promptInputTokens: number, timestamp: number | undefined): TokenCost {
 	const rates: ModelCost | EffectiveTokenCost =
 		(timestamp === undefined ? undefined : dueEffectiveRate(cost.timeBased, timestamp)) ?? cost;
@@ -162,12 +173,20 @@ export function calculateUncachedInputCost(cost: ModelCost, promptInputTokens: n
 }
 
 /** Price usage at its request timestamp (Unix ms); only scheduled prices default to now. */
-export function calculateUsageCost(cost: ModelCost, usage: Usage, timestamp?: number): Usage["cost"] {
+export function calculateUsageCost(
+	cost: ModelCost,
+	usage: Usage,
+	timestamp?: number,
+	teamsTokenRatePerMillion = 0,
+): Usage["cost"] {
 	const orchestration = usage.orchestration;
 	const promptInputTokens =
 		usage.input + usage.cacheRead + usage.cacheWrite + (orchestration?.input ?? 0) + (orchestration?.cacheRead ?? 0);
 	const pricingTimestamp = cost.timeBased ? (timestamp ?? Date.now()) : undefined;
-	const rates = resolveTokenCost(cost, promptInputTokens, pricingTimestamp);
+	const rates = withTeamsTokenRate(
+		resolveTokenCost(cost, promptInputTokens, pricingTimestamp),
+		teamsTokenRatePerMillion,
+	);
 	const multiplier = timeBasedMultiplier(cost.timeBased, pricingTimestamp);
 	usage.cost.input = (rates.input / 1000000) * (usage.input + (orchestration?.input ?? 0)) * multiplier;
 	usage.cost.output = (rates.output / 1000000) * (usage.output + (orchestration?.output ?? 0)) * multiplier;
@@ -180,7 +199,7 @@ export function calculateUsageCost(cost: ModelCost, usage: Usage, timestamp?: nu
 
 /** Price usage at its request timestamp (Unix ms); preserve the resulting monetary amounts for display. */
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage, timestamp?: number): Usage["cost"] {
-	return calculateUsageCost(model.cost, usage, timestamp);
+	return calculateUsageCost(model.cost, usage, timestamp, resolveTeamsTokenRatePerMillion(model));
 }
 
 /**

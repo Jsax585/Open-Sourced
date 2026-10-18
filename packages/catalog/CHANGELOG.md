@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added opt-in Cursor Teams/Enterprise Cursor Token Rate pricing: set `teamsTokenRatePerMillion` on the `cursor` provider in `models.yml` to add the per-million surcharge on input, output, cache read, and cache write; Grok and Composer stay exempt
+
 ### Changed
 
 - Seeded TypeSafe `jev-1.14.0` and OpenRouter `typesafe/jev-1.14`, and made them the `judge` role defaults and TypeSafe's default model; TypeSafe discovery keeps seeded ids its alias-only `/v1/models` listing omits

@@ -35,6 +35,7 @@ export interface ProviderValidationConfig {
 	disableStrictTools?: boolean;
 	guardrailIdentifier?: string;
 	requestMetadata?: Record<string, string>;
+	teamsTokenRatePerMillion?: number;
 	modelOverrides?: Record<string, { api?: Api; kind?: ModelKind }>;
 	models: ProviderValidationModel[];
 }
@@ -62,6 +63,7 @@ export function validateProviderConfiguration(
 				!config.guardrailIdentifier &&
 				!config.requestMetadata &&
 				!config.remoteCompaction &&
+				config.teamsTokenRatePerMillion === undefined &&
 				!hasModelOverrides &&
 				!config.discovery
 			) {
@@ -215,6 +217,7 @@ export const ModelsConfigFile = new ConfigFile<ModelsConfig>("models", {
 				disableStrictTools: providerConfig.disableStrictTools,
 				guardrailIdentifier: providerConfig.guardrailIdentifier,
 				requestMetadata: providerConfig.requestMetadata,
+				teamsTokenRatePerMillion: providerConfig.teamsTokenRatePerMillion,
 				modelOverrides: providerConfig.modelOverrides,
 				models: (providerConfig.models ?? []) as ProviderValidationModel[],
 			},
