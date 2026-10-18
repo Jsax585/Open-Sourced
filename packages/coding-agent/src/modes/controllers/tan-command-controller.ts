@@ -320,7 +320,10 @@ export class TanCommandController {
 			},
 			{ triggerTurn: false, deliverAs: "nextTurn" },
 		);
-		if (!wasStreaming) this.ctx.rebuildChatFromMessages();
+		if (!wasStreaming) {
+			this.ctx.rebuildChatFromMessages();
+			this.ctx.ui.requestRender(true, { clearScrollback: true });
+		}
 		this.ctx.showStatus(`Dispatched background tan ${jobId}`);
 	}
 }

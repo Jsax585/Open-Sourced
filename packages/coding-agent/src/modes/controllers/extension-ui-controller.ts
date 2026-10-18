@@ -1493,6 +1493,7 @@ export class ExtensionUiController {
 			}
 		}
 		this.ctx.rebuildChatFromMessages();
+		this.ctx.ui.requestRender(true, { clearScrollback: true });
 	}
 
 	/**

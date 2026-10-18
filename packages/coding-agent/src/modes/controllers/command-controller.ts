@@ -2162,7 +2162,7 @@ export class CommandController {
 
 			// Rebuild chat from the session, which now shows the handoff compaction divider.
 			this.ctx.clearTransientSessionUi();
-			await this.ctx.renderInitialMessages();
+			await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
 			await this.ctx.reloadTodos();
@@ -2195,7 +2195,7 @@ export class CommandController {
 			this.#finishHandoffUi(handoffLoader);
 			await this.ctx.flushCompactionQueue({ willRetry: false });
 		}
-		this.ctx.ui.requestRender(true, { clearScrollback: true });
+		this.ctx.ui.requestRender();
 	}
 
 	#finishHandoffUi(handoffLoader: Loader): void {
