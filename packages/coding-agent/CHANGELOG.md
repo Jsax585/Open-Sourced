@@ -404,7 +404,6 @@
 - `RpcClient.steer()`, `followUp()`, and `setThinkingLevel()` now reject with `RpcCommandError` when the server reports a failure instead of resolving silently ([#14166](https://github.com/can1357/oh-my-pi/pull/14166) by [@andrebrait](https://github.com/andrebrait)).
 - Idle recap and idle compaction now run from one session-owned scheduler. Clearing a draft re-arms the recap and compaction that the stretch still owes, and a view that is returned to receives the recap it still owed; the former per-terminal timers dropped both ([can1357/oh-my-pi#14468](https://github.com/can1357/oh-my-pi/pull/14468) by [@andrebrait](https://github.com/andrebrait)).
 - Goal mode runs in the session: a session host continues an active goal with default settings (`goal.continuationModes` counts `--mode host` as `"interactive"`), with or without attached clients and once per idle however many are attached; `--mode rpc` stays opt-in with `"rpc"`
-- The terminal's goal mode uses the same session-owned controller: a goal continuation is no longer a pending submission that Esc can cancel before it starts. Typing a draft during the 800 ms wait still holds it back, and Esc once it has started still pauses the goal
 - A goal continuation in the terminal no longer shows as a pending prompt that Esc can cancel before it starts; typing a draft or having a dialog open still holds it back, and Esc after it starts still pauses the goal. In a hosted terminal, a draft does not hold back a continuation yet
 
 ### Fixed
