@@ -5789,14 +5789,15 @@ interface CursorRecordReplay {
 	records: Uint8Array[];
 	/** Calls whose results the records already carry. */
 	toolCallIds: string[];
-	/** Steering the records already carry; see {@link isAnsweredSteering}. */
-	answeredSteering: ReadonlySet<string>;
+	/** Indexes of the host's copies of steering the records already carry; see {@link isAnsweredSteering}. */
+	steeringCopies: ReadonlySet<number>;
 }
 
 /**
- * Whether `messages[index]` is steering a record-replayed turn absorbed. The
- * host records such steering after the turn that answered it; its records carry
- * it where it was delivered, so replaying the copy would present it as new input.
+ * Whether `messages[index]` is the host's copy of steering a record-replayed
+ * turn absorbed. The host records such steering after the turn that answered
+ * it; its records carry it where it was delivered, so replaying the copy would
+ * present it as new input.
  */
 function isAnsweredSteering(
 	messages: Message[],
@@ -5805,7 +5806,31 @@ function isAnsweredSteering(
 ): boolean {
 	let turnIndex = index - 1;
 	while (turnIndex >= 0 && messages[turnIndex].role !== "assistant") turnIndex--;
-	return replays.get(turnIndex)?.answeredSteering.has(extractUserMessageText(messages[index])) === true;
+	return replays.get(turnIndex)?.steeringCopies.has(index) === true;
+}
+
+/**
+ * The host's copies of a turn's absorbed steering: the user or developer
+ * messages that follow the turn (past its tool results), one per absorbed
+ * text, in delivery order. Undefined when they no longer match, e.g. after an
+ * edit or removal, since the records would then replay the old text.
+ */
+function findSteeringCopies(
+	messages: Message[],
+	turnIndex: number,
+	historyEnd: number,
+	answeredSteering: readonly string[],
+): Set<number> | undefined {
+	const copies = new Set<number>();
+	let index = turnIndex + 1;
+	for (const text of answeredSteering) {
+		while (index < historyEnd && messages[index].role === "toolResult") index++;
+		const copy = messages[index];
+		if (index >= historyEnd || (copy.role !== "user" && copy.role !== "developer")) return undefined;
+		if (extractUserMessageText(copy) !== text) return undefined;
+		copies.add(index++);
+	}
+	return copies;
 }
 
 /**
@@ -5833,12 +5858,19 @@ function resolveCursorRecordReplays(
 		if (cursorTurnDigest({ userMessage, content: msg.content, toolResults }) !== msg.providerPayload.digest) {
 			continue;
 		}
+		const steeringCopies = findSteeringCopies(
+			messages,
+			index,
+			historyEnd,
+			msg.providerPayload.answeredSteering ?? [],
+		);
+		if (!steeringCopies) continue;
 		replays.set(index, {
 			records: msg.providerPayload.records.map(record => new TextEncoder().encode(record)),
 			toolCallIds: msg.content.flatMap(block =>
 				block.type === "toolCall" && toolResults.has(block.id) ? [block.id] : [],
 			),
-			answeredSteering: new Set(msg.providerPayload.answeredSteering),
+			steeringCopies,
 		});
 	}
 	return replays;
