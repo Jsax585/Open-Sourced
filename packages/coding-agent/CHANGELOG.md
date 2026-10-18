@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added per-server `enabledTools`/`disabledTools` MCP tool filtering (literal names or globs, applied at reception so session, `/mcp test`, and cache agree) ([#6299](https://github.com/can1357/oh-my-pi/issues/6299))
 
 ### Fixed
 
@@ -16,7 +19,6 @@
 
 ### Added
 
-- Added per-server `enabledTools`/`disabledTools` MCP tool filtering (literal names or globs, applied at reception so session, `/mcp test`, and cache agree) ([#6299](https://github.com/can1357/oh-my-pi/issues/6299))
 - `computer` elements gain `doubleClick()`, and using an element method or field on the array `win.find(…)` returns, in JavaScript, Python or `computer.run`, says to pick one element first instead of failing with "is not a function" or reading `undefined` ([#15312](https://github.com/can1357/oh-my-pi/pull/15312) by [@will-bogusz](https://github.com/will-bogusz))
 - Added `advisor.continueSeverity` (`nit`, `concern`, `blocker`) to choose the minimum advisor note severity that wakes the agent after it finished with a final answer; lower-severity notes stay as a card at the end of the transcript
 - Printed DataFrames/Series render as tables, large dicts/lists and objects as JSON trees, and Markdown objects as Markdown for the user, while the model sees the printed text
