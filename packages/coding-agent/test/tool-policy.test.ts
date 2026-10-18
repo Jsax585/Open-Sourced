@@ -215,4 +215,14 @@ describe("SessionToolPolicy", () => {
 		policy.enterPersona(makeAgent({ spawns: [] }), NO_EXPLICIT);
 		expect(policy.effective("task")).toBe(false);
 	});
+
+	it("journal ceiling allows hidden mode-essential tools (goal, think, yield)", () => {
+		const policy = makePolicy();
+		policy.installJournalCeiling(["read"]);
+		expect(policy.granted("read")).toBe(true);
+		expect(policy.granted("write")).toBe(false);
+		expect(policy.granted("think")).toBe(true);
+		expect(policy.granted("yield")).toBe(true);
+		expect(policy.granted("goal")).toBe(true);
+	});
 });

@@ -24,7 +24,11 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { PersonaRuntime } from "@oh-my-pi/pi-coding-agent/session/persona-runtime";
 import { SessionToolPolicy } from "@oh-my-pi/pi-coding-agent/session/tool-policy";
-import { reconcileSessionPersona } from "@oh-my-pi/pi-coding-agent/session/persisted-persona";
+import {
+	appendPersonaJournalEntry,
+	readPersistedAgentPersona,
+	reconcileSessionPersona,
+} from "@oh-my-pi/pi-coding-agent/session/persisted-persona";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -386,5 +390,17 @@ You are the wide fixture persona.`,
 		// Rolled back INTO the persona, so its ceiling must still govern it.
 		expect(runtime.policy.isPersonaActive()).toBe(true);
 		expect([...(created.getToolPolicy()!.cliGrant ?? [])]).toEqual(["read"]);
+	});
+
+	it("appendPersonaJournalEntry preserves an already-serialized baseline string", () => {
+		const manager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "sessions"));
+		const created = createSession(manager);
+		appendPersonaJournalEntry(created, {
+			name: "fixture-reader",
+			baseline: { model: "anthropic/claude-3-5-sonnet", thinkingLevel: "high" },
+		});
+		const read = readPersistedAgentPersona(created.sessionManager.getBranch());
+		expect(read?.baseline?.model).toBe("anthropic/claude-3-5-sonnet");
+		expect(read?.baseline?.thinkingLevel).toBe("high");
 	});
 });

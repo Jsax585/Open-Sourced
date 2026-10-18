@@ -173,7 +173,7 @@ export function validateRestorePrompt(args: Args): void {
  */
 /**
  * Reject a `--agent` launch that cannot host a persona: an empty name silently
- * starts a plain session (falsy `parsed.agent`), and `--goal`/`--plan`
+ * starts a plain session (falsy `parsed.agent`), and `--goal`/`--plan-yolo`
  * startups refuse persona entry at runtime — fail at parse instead of
  * launching into a refused state.
  */
@@ -183,6 +183,11 @@ export function validateAgentLaunch(args: Args): void {
 	}
 	if (args.agent !== undefined && args.goal !== undefined) {
 		throw new CliUsageError("--agent cannot be combined with --goal; personas and goal mode are mutually exclusive.");
+	}
+	if (args.agent !== undefined && args.planYolo) {
+		throw new CliUsageError(
+			"--agent cannot be combined with --plan-yolo; personas and plan yolo are mutually exclusive.",
+		);
 	}
 }
 

@@ -20,7 +20,7 @@ export const launchHelp = {
 		}),
 		agent: Flags.string({
 			description:
-				"Run the session as a discovered task agent (persona): system prompt, tools, and model come from the agent definition. See docs/task-agent-discovery.md#using-agents-as-a-main-session-persona",
+				"Run the session as a discovered task agent (persona): system prompt, tools, and model come from the agent definition.",
 		}),
 		smol: Flags.string({ description: "Smol/fast model for lightweight tasks (or PI_SMOL_MODEL env)" }),
 		slow: Flags.string({ description: "Slow/reasoning model for thorough analysis (or PI_SLOW_MODEL env)" }),

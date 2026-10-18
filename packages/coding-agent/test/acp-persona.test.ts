@@ -522,6 +522,43 @@ describe("ACP persona reconciliation", () => {
 		expect(entry?.data.name).toBe("acp-launch");
 	});
 
+	it("launch --agent re-assert preserves transparent outer plan marker as the mode tail", async () => {
+		const launchAgent: DiscoveredAgent = {
+			name: "acp-launch",
+			description: "launch-flag persona",
+			systemPrompt: "You are the launch-flag persona.",
+			source: "bundled",
+			tools: ["read"],
+		};
+		const harness = await createPersonaHarness({ agent: launchAgent });
+		const source = new PersonaStubSession(harness.cwd);
+		harness.sessions.push(source);
+		source.sessionManager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+		source.sessionManager.appendModeChange("agent", { name: "acp-testa" });
+		source.sessionManager.appendModeChange("plan", { planFilePath: "local://PLAN.md" });
+		await source.sessionManager.ensureOnDisk();
+		await source.sessionManager.flush();
+
+		await harness.agent.loadSession({
+			sessionId: source.sessionId,
+			cwd: harness.cwd,
+			mcpServers: [],
+		});
+
+		const stored = harness.sessions.at(-1)!;
+		const modes = stored.sessionManager
+			.getEntries()
+			.filter(entry => entry.type === "mode_change")
+			.map(entry => (entry as { mode: string }).mode);
+		expect(modes.at(-1)).toBe("plan");
+		expect(stored.sessionManager.buildSessionContext().mode).toBe("plan");
+		const agentEntries = stored.sessionManager
+			.getEntries()
+			.filter(entry => entry.type === "mode_change" && (entry as { mode?: string }).mode === "agent")
+			.map(entry => entry as { mode: string; data?: Record<string, unknown> });
+		expect(agentEntries.at(-1)?.data?.name).toBe("acp-launch");
+	});
+
 	it("resolves the persona from the session cwd's project agents dir", async () => {
 		const harness = await createPersonaHarness();
 		const projectAgentsDir = path.join(harness.cwd, ".omp", "agents");

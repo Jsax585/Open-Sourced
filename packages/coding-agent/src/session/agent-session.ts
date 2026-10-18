@@ -3075,6 +3075,7 @@ export class AgentSession implements SettingsScope {
 				session.emitNotice(
 					"warning",
 					`Agent persona "${persona}" is no longer available; session resumed without it.`,
+					"persona",
 				);
 			},
 			onError: (_session, persona, error) => {

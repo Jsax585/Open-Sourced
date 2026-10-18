@@ -2,7 +2,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
+import { parseArgs, validateAgentLaunch } from "@oh-my-pi/pi-coding-agent/cli/args";
+import { CliUsageError } from "@oh-my-pi/pi-coding-agent/cli/usage-error";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { buildSessionOptions } from "@oh-my-pi/pi-coding-agent/main";
@@ -438,5 +439,10 @@ You are the wide persona.`,
 		);
 		expect(desired?.name).toBe("fixture-wide");
 		expect(desired?.explicit?.tools).toEqual(["read", "write"]);
+	});
+
+	it("validateAgentLaunch rejects combining --agent with --goal or --plan-yolo", () => {
+		expect(() => validateAgentLaunch(parseArgs(["--agent", "foo", "--goal", "do something"]))).toThrow(CliUsageError);
+		expect(() => validateAgentLaunch(parseArgs(["--agent", "foo", "--plan-yolo"]))).toThrow(CliUsageError);
 	});
 });

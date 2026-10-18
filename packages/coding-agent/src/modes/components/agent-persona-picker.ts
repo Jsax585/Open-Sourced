@@ -26,7 +26,7 @@ export class AgentPersonaPickerComponent extends OverlayPanel {
 			description: agent.description,
 		}));
 
-		this.#selectList = new SelectList(items, items.length, getSelectListTheme());
+		this.#selectList = new SelectList(items, Math.min(items.length, 8), getSelectListTheme());
 		this.#selectList.onSelect = item => {
 			onSelect(item.value as string);
 		};

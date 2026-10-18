@@ -5195,7 +5195,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				// capture would restore the persona model. Read it from the target
 				// journal and pass it through `enter`, exactly as
 				// reconcileSessionPersona does for the resume path.
-				const persisted = readPersistedAgentPersona(sessionManager.getEntries());
+				const persisted = readPersistedAgentPersona(sessionManager.getBranch());
 				const deserialized = persisted?.baseline
 					? deserializePersonaBaseline(session, persisted.baseline)
 					: undefined;

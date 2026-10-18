@@ -110,7 +110,7 @@ export function deserializePersonaBaseline(session: AgentSession, baseline: Agen
  * identity; only an explicit persona exit (`none`) or an unrecognized mode
  * clears it.
  */
-const PERSONA_TRANSPARENT_MODES = new Set(["plan", "plan_paused", "goal", "goal_paused", "vibe"]);
+export const PERSONA_TRANSPARENT_MODES = new Set(["plan", "plan_paused", "goal", "goal_paused", "vibe"]);
 
 /**
  * Extracts the desired persona from a session journal's LAST agent mode_change
@@ -383,7 +383,10 @@ export async function reconcileSessionPersona(
 			// same persona) must still adopt the target branch's baseline —
 			// the later activation's `activeBaseline` would otherwise restore
 			// the wrong model on exit.
-			if (baselineOverride && (baselineOverride.model !== undefined || baselineOverride.thinkingLevel !== undefined)) {
+			if (
+				baselineOverride &&
+				(baselineOverride.model !== undefined || baselineOverride.thinkingLevel !== undefined)
+			) {
 				runtime.adoptBaselineOverride(baselineOverride);
 			}
 			return { entered: true };
@@ -423,10 +426,24 @@ export function appendPersonaJournalEntry(
 	session: AgentSession,
 	entry: { name: string; explicit?: PersonaExplicitOverrides; baseline?: unknown },
 ): void {
-	const baseline =
-		entry.baseline === undefined
-			? undefined
-			: serializePersonaBaseline(entry.baseline as { model: unknown; thinkingLevel: unknown });
+	let baseline: AgentPersonaBaseline | undefined;
+	if (entry.baseline !== undefined) {
+		const raw = entry.baseline as Record<string, unknown>;
+		if (
+			typeof raw === "object" &&
+			raw !== null &&
+			typeof raw.model === "string" &&
+			!("id" in raw) &&
+			!("provider" in raw)
+		) {
+			baseline = {
+				model: raw.model,
+				...(typeof raw.thinkingLevel === "string" ? { thinkingLevel: raw.thinkingLevel } : {}),
+			};
+		} else {
+			baseline = serializePersonaBaseline(entry.baseline as { model: unknown; thinkingLevel: unknown });
+		}
+	}
 	session.sessionManager.appendModeChange("agent", {
 		name: entry.name,
 		...(entry.explicit && Object.keys(entry.explicit).length > 0 ? { explicit: entry.explicit } : {}),

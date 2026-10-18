@@ -356,7 +356,7 @@ omp --agent reviewer --resume <id>
 
 - `--agent <name>` looks up the agent through normal discovery (project,
   user, extension, bundled). Unknown names fail loudly before the session is
-  built: `Unknown --agent "<name>". Run "omp agents" to list discovered agents.`
+  built: `Unknown --agent "<name>". Available: <inline list>.`
   (task dispatch phrases its own `Unknown agent "..."` error separately).
 - The persona's frontmatter `model` and thinking level become the session's
   starting selection unless you pass `--model` / `--thinking` explicitly:

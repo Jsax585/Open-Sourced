@@ -118,4 +118,18 @@ describe("SessionToolPolicy baseline restriction and persona grants", () => {
 		expect(policy.effective("checkpoint")).toBe(false);
 		expect(policy.effective("rewind")).toBe(false);
 	});
+
+	it("declared [checkpoint] with explicit [checkpoint] does not resurrect rewind past ceiling", () => {
+		const policy = new SessionToolPolicy({ registry: () => REGISTRY, isDefaultActive: DEFAULT_ACTIVE });
+		policy.enterPersona(makePersona({ tools: ["checkpoint"] }), { tools: ["checkpoint"] });
+		expect(policy.effective("checkpoint")).toBe(true);
+		expect(policy.effective("rewind")).toBe(false);
+	});
+
+	it("declared [checkpoint] with NO explicit pairs rewind in grant", () => {
+		const policy = new SessionToolPolicy({ registry: () => REGISTRY, isDefaultActive: DEFAULT_ACTIVE });
+		policy.enterPersona(makePersona({ tools: ["checkpoint"] }), {});
+		expect(policy.effective("checkpoint")).toBe(true);
+		expect(policy.effective("rewind")).toBe(true);
+	});
 });

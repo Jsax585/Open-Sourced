@@ -72,6 +72,7 @@ import {
 	deserializePersonaBaseline,
 	reconcileSessionPersona,
 	readPersistedAgentPersona,
+	PERSONA_TRANSPARENT_MODES,
 } from "../../session/persisted-persona";
 import { createDefaultPersonaModelHooks, type PersonaModelApplyHooks } from "../../session/persona-model-hooks";
 import type { UsageStatistics } from "../../session/session-entries";
@@ -235,6 +236,16 @@ export async function reconcileAcpSessionPersona(
 	emitNotice: (text: string) => void | Promise<void>,
 	launchPersona?: { agent: DiscoveredAgent; explicit?: PersonaExplicitOverrides },
 ): Promise<void> {
+	const initialBranch = session.sessionManager.getBranch();
+	let outerMode: { mode: string; data?: Record<string, unknown> } | undefined;
+	for (let index = initialBranch.length - 1; index >= 0; index--) {
+		const entry = initialBranch[index];
+		if (entry.type !== "mode_change") continue;
+		if (PERSONA_TRANSPARENT_MODES.has(entry.mode as string)) {
+			outerMode = { mode: entry.mode as string, data: entry.data as Record<string, unknown> | undefined };
+		}
+		break;
+	}
 	const result = await reconcileSessionPersona(session, {
 		buildHooks: current => createAcpPersonaModelHooks(current, emitNotice),
 		onGone: (_current, name) => emitNotice(PERSONA_GONE_NOTICE_TEMPLATE.replace("{name}", name)),
@@ -296,6 +307,9 @@ export async function reconcileAcpSessionPersona(
 		explicit: launchPersona.explicit,
 		baseline: runtime.getActiveBaseline(),
 	});
+	if (outerMode) {
+		session.sessionManager.appendModeChange(outerMode.mode, outerMode.data);
+	}
 }
 
 type AgentImageContent = {
@@ -1643,6 +1657,7 @@ export class AcpAgent implements Agent {
 		// channel #emitPersonaNotices uses, so the text is never silently
 		// swallowed by the generic reconcile path.
 		if (event.type === "notice") {
+			if (event.source !== "persona") return;
 			try {
 				await this.#emitPersonaNotices([event.message], record.session.sessionId);
 			} catch (error) {

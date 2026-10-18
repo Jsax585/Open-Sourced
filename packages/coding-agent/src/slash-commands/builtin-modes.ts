@@ -570,8 +570,8 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		acpDescription: "Toggle slow mode",
 		acpInputHint: "[on|off|status]",
 		subcommands: [
-			{ name: "on", description: "Flex tier, or Anthropic lower priority at the session limit (auto)" },
-			{ name: "off", description: "Standard service; stop Anthropic lower-priority mode" },
+			{ name: "on", description: "Flex tier, or Anthropic low priority at the session limit (auto)" },
+			{ name: "off", description: "Standard service; stop Anthropic low priority" },
 			{ name: "status", description: "Show slow mode status" },
 		],
 		allowArgs: true,
@@ -721,7 +721,8 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "agent",
 		icon: "agents",
-		description: "Switch agent persona for this session (/agent <name>; bare /agent clears the active persona)",
+		description:
+			"Switch agent persona for this session (/agent <name>; bare /agent clears the active persona, or opens the picker in TUI when no persona active)",
 		acpDescription: "Switch agent persona for this session",
 		acpInputHint: "<name>",
 		inlineHint: "<name>",
@@ -733,7 +734,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 		handle: handleAgentCommand,
 		handleTui: async (command, runtime) => {
-			runtime.ctx.editor.setText("");
+			clearSubmittedText(runtime);
 			const name = command.args.trim();
 			if (name) {
 				// Error boundary: a failed enter throws (the runtime rolls back),
@@ -1069,13 +1070,17 @@ async function handleAgentCommandNoName(runtime: SlashCommandRuntime): Promise<S
 		// refuses entry under plan mode, so the two cannot co-activate here).
 		const blocker = personaModeBlocker(session);
 		if (blocker) return usage(blocker, runtime);
-		await session.getPersonaRuntime()?.exit(createDefaultPersonaModelHooks(session));
-		clearPersonaJournalEntry(session);
-		// Exit reverts the model/thinking/toolset to the pre-persona baseline;
-		// ACP and text-mode clients must see the reverted configuration.
-		await runtime.notifyConfigChanged?.();
-		await runtime.output("Agent persona cleared.");
-		return commandConsumed();
+		try {
+			await session.getPersonaRuntime()?.exit(createDefaultPersonaModelHooks(session));
+			clearPersonaJournalEntry(session);
+			// Exit reverts the model/thinking/toolset to the pre-persona baseline;
+			// ACP and text-mode clients must see the reverted configuration.
+			await runtime.notifyConfigChanged?.();
+			await runtime.output("Agent persona cleared.");
+			return commandConsumed();
+		} catch (error) {
+			return usage(errorMessage(error), runtime);
+		}
 	}
 	await runtime.output("Usage: /agent <name> to activate an agent persona.");
 	return commandConsumed();

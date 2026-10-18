@@ -8643,14 +8643,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		const cliGrant = this.session.getToolPolicy()?.cliGrant ?? null;
 		const explicitOverrides: PersonaExplicitOverrides = cliGrant ? { tools: [...cliGrant] } : {};
 		await this.#applyPersonaSwitch(agent, explicitOverrides);
-		// Caller-owned journal persistence (runtime stays pure; resume reconcile reads).
-		// j2g: the runtime's captured pre-persona baseline rides the entry so a
-		// resume can re-enter with it as the authoritative exit baseline.
-		appendPersonaJournalEntry(this.session, {
-			name: agent.name,
-			explicit: explicitOverrides,
-			baseline: runtime.getActiveBaseline(),
-		});
 		this.showStatus(`Agent persona: ${agent.name}`);
 	}
 
@@ -8860,6 +8852,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			// predictably invalidates the provider prompt cache (plan §9).
 			this.lastAssistantUsage = undefined;
 			await runtime.enter(agent, explicit, hooks);
+			// Caller-owned journal persistence (runtime stays pure; resume reconcile reads).
+			// j2g: the runtime's captured pre-persona baseline rides the entry so a
+			// resume can re-enter with it as the authoritative exit baseline.
+			appendPersonaJournalEntry(this.session, {
+				name: agent.name,
+				explicit,
+				baseline: runtime.getActiveBaseline(),
+			});
 			await this.#loadPersonaPickerAgents();
 			// The activation notice runs only on success — an enter failure
 			// surfaces as the error; a success notice on top would claim the
@@ -8879,7 +8879,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.updateEditorBorderColor();
 		this.ui.requestRender();
 		if (agentName !== undefined) {
-			this.session.emitNotice("info", `Agent persona: ${agentName}`);
+			this.session.emitNotice("info", `Agent persona: ${agentName}`, "persona");
 		}
 	}
 

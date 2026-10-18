@@ -1,4 +1,5 @@
 import { expandExecToolShorthand, normalizeToolNames, withPairedCheckpointRewind } from "../tools/builtin-names";
+import { HIDDEN_TOOLS } from "../tools/index";
 
 import type { AgentDefinition } from "../task/types";
 
@@ -13,7 +14,6 @@ export type DiscoveredAgent = AgentDefinition;
  * take precedence over the agent definition's own frontmatter.
  */
 export interface PersonaExplicitOverrides {
-
 	model?: string;
 	thinking?: string;
 	tools?: readonly string[];
@@ -182,7 +182,9 @@ export class SessionToolPolicy {
 		// presentation-level `write` surfacing (xd:// transport upgrade,
 		// plan-mode augmentation) live-flag sessions keep — is intended: an
 		// active tool is executable, so the ceiling has to bound the surface.
-		if (this.#cliGrantSource === "journal" && this.cliGrant && !this.cliGrant.has(name)) return false;
+		if (this.#cliGrantSource === "journal" && this.cliGrant && !this.cliGrant.has(name) && !(name in HIDDEN_TOOLS)) {
+			return false;
+		}
 		if (this.#persona === null) return true;
 		return (
 			(this.#persona.grant === null || this.#persona.grant.has(name)) &&
@@ -334,8 +336,8 @@ export class SessionToolPolicy {
 		// first). expandExecToolShorthand passes unknown names through.
 		const declaredOrInherited =
 			declared !== undefined
-				? withPairedCheckpointRewind(normalizeToolNames(expandExecToolShorthand(declared)))
-				: withPairedCheckpointRewind(normalizeToolNames(this.cliGrant ?? explicit.tools ?? []));
+				? normalizeToolNames(expandExecToolShorthand(declared))
+				: normalizeToolNames(this.cliGrant ?? explicit.tools ?? []);
 		const grant = new Set(declaredOrInherited);
 
 		// fo80e: a persona that declares a usable spawns list needs `task` to
@@ -364,6 +366,20 @@ export class SessionToolPolicy {
 			const explicitSet = new Set(normalizeToolNames(explicit.tools));
 			for (const name of grant) {
 				if (!explicitSet.has(name)) grant.delete(name);
+			}
+		}
+		// Pair checkpoint and rewind after explicit intersect, bounded by explicit
+		// ceiling: pairing must not resurrect a paired tool past an explicit ceiling
+		// that omitted it.
+		const explicitCeiling = explicit.tools
+			? new Set(normalizeToolNames(explicit.tools))
+			: (this.cliGrant ?? undefined);
+		const paired = withPairedCheckpointRewind([...grant]);
+		for (const name of paired) {
+			if (!grant.has(name)) {
+				if (explicitCeiling === undefined || explicitCeiling.has(name)) {
+					grant.add(name);
+				}
 			}
 		}
 		// An empty grant stays an EMPTY SET (deny-all): collapsing it to `null`

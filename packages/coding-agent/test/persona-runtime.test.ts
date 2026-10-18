@@ -88,7 +88,7 @@ describe("PersonaRuntime", () => {
 	it("enter throws PersonaSwitchError when session.isStreaming", async () => {
 		const { session } = makeSessionStub({ isStreaming: true });
 		const runtime = makeRuntime(session);
-		expect(runtime.enter(makeAgent(), {}, makeHooks())).rejects.toThrow(PersonaSwitchError);
+		await expect(runtime.enter(makeAgent(), {}, makeHooks())).rejects.toThrow(PersonaSwitchError);
 		expect(runtime.policy.isPersonaActive()).toBe(false);
 	});
 
