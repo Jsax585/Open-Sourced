@@ -85,6 +85,9 @@ export function getEffectiveTokenCost(cost: ModelCost, timestamp = Date.now()): 
 
 function withTeamsTokenRate(rates: TokenCost, perMillion: number): TokenCost {
 	if (perMillion === 0) return rates;
+	if (rates.input === 0 && rates.output === 0 && rates.cacheRead === 0 && rates.cacheWrite === 0) {
+		return rates;
+	}
 	return {
 		input: rates.input + perMillion,
 		output: rates.output + perMillion,
@@ -166,9 +169,17 @@ export function getNextTimeBasedPricingTransition(cost: ModelCost, timestamp?: n
 }
 
 /** Price a fully uncached prompt at its request timestamp (Unix ms); scheduled prices default to now. */
-export function calculateUncachedInputCost(cost: ModelCost, promptInputTokens: number, timestamp?: number): number {
+export function calculateUncachedInputCost(
+	cost: ModelCost,
+	promptInputTokens: number,
+	timestamp?: number,
+	teamsTokenRatePerMillion = 0,
+): number {
 	const pricingTimestamp = cost.timeBased ? (timestamp ?? Date.now()) : undefined;
-	const rates = resolveTokenCost(cost, promptInputTokens, pricingTimestamp);
+	const rates = withTeamsTokenRate(
+		resolveTokenCost(cost, promptInputTokens, pricingTimestamp),
+		teamsTokenRatePerMillion,
+	);
 	return (rates.input / 1_000_000) * promptInputTokens * timeBasedMultiplier(cost.timeBased, pricingTimestamp);
 }
 

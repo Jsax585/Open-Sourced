@@ -17,7 +17,7 @@ export function applyTeamsTokenRateConfig(
 		if (rate === model.teamsTokenRatePerMillion) return model;
 		if (rate === undefined) {
 			const { teamsTokenRatePerMillion: _cleared, ...rest } = model;
-			return rest as Model<Api>;
+			return rest;
 		}
 		return { ...model, teamsTokenRatePerMillion: rate };
 	});

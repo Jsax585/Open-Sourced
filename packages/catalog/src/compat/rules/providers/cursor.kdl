@@ -92,8 +92,10 @@ provider "cursor" {
 	models "grok-4" "grok-4.*" "grok-4-*" "grok-4:*" "grok-4_*" {
 		input-modalities "text" "image"
 	}
-	models "composer-2.5" "composer-2.5.*" "composer-2.5-*" "composer-2.5:*" "composer-2.5_*" {
+	models "composer-*" "composer*" {
 		cursor-token-rate-exempt #true
+	}
+	models "composer-2.5" "composer-2.5.*" "composer-2.5-*" "composer-2.5:*" "composer-2.5_*" {
 		input-modalities "text" "image"
 	}
 	// residue: taxonomy ranks and exact globs do not isolate these models.

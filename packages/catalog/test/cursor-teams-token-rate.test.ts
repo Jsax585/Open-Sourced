@@ -33,11 +33,28 @@ describe("Cursor Teams token rate", () => {
 			...getBundledModel("cursor", "composer-2.5"),
 			teamsTokenRatePerMillion: 0.25,
 		};
+		const composer1 = {
+			...getBundledModel("cursor", "composer-1"),
+			teamsTokenRatePerMillion: 0.25,
+		};
 		const grokUsage = sampleUsage(10_000);
 		const composerUsage = sampleUsage(10_000);
+		const composer1Usage = sampleUsage(10_000);
 		calculateCost(grok, grokUsage);
 		calculateCost(composer, composerUsage);
+		calculateCost(composer1, composer1Usage);
 		expect(grokUsage.cost.input).toBeCloseTo(0.02, 8);
 		expect(composerUsage.cost.input).toBeCloseTo(0.005, 8);
+		expect(composer1Usage.cost.total).toBe(0);
+	});
+
+	it("does not add a surcharge-only cost on unpriced Cursor rows", () => {
+		const model = {
+			...getBundledModel("cursor", "default"),
+			teamsTokenRatePerMillion: 0.25,
+		};
+		const usage = sampleUsage(1_000_000);
+		calculateCost(model, usage);
+		expect(usage.cost.total).toBe(0);
 	});
 });

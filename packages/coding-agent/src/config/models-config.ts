@@ -47,6 +47,12 @@ export function validateProviderConfiguration(
 	config: ProviderValidationConfig,
 	mode: ProviderValidationMode,
 ): void {
+	if (config.teamsTokenRatePerMillion !== undefined && providerName !== "cursor") {
+		throw new Error(
+			`Provider ${providerName}: "teamsTokenRatePerMillion" is only supported for the "cursor" provider.`,
+		);
+	}
+
 	const hasProviderApi = !!config.api;
 	const models = config.models;
 
