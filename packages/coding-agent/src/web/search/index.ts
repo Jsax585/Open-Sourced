@@ -260,6 +260,7 @@ async function executeSearch(
 				modelRegistry,
 				explicit: candidate.explicit,
 				sessionId,
+				sessionModel: options.sessionModel,
 				antigravityEndpointMode,
 			});
 

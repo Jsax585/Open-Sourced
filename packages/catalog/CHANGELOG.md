@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the `web/factory` search engine model (Factory-hosted web search through a Factory Droid login)
+
 ## [18.12.2] - 2026-10-18
 
 ### Changed

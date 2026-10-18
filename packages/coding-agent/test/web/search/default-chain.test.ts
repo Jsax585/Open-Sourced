@@ -124,4 +124,18 @@ describe("default web chain", () => {
 		expect(attempted).toEqual([]);
 		expect(result.details.error).toContain("no web search grounding");
 	});
+
+	it("does not search through a Factory login unless web/factory is selected", async () => {
+		await authStorage.credentials.set("factory-droid", {
+			type: "oauth",
+			access: "factory-access",
+			refresh: "factory-refresh",
+			expires: Date.now() + 3_600_000,
+		});
+
+		await runSearchQuery({ query: "anything" }, { authStorage, modelRegistry });
+
+		expect(attempted.length).toBeGreaterThan(0);
+		expect(attempted).not.toContain("web/factory");
+	});
 });

@@ -67,6 +67,8 @@ export interface SearchParams {
 	authStorage: AuthStorage;
 	/** Selected catalog model that chose this engine or grounding backend. */
 	model: Model<Api>;
+	/** The session's active chat model, when the search runs inside a session. */
+	sessionModel?: Model<Api>;
 	/** Thinking selector resolved from the model-role candidate. */
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Provider/model transport settings used by native search endpoints. */

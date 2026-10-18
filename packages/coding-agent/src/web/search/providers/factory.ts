@@ -24,14 +24,25 @@ import { classifyProviderHttpError, normalizeSearchText, withHardTimeout } from 
 const FACTORY_PROVIDER = "factory-droid";
 const DEFAULT_NUM_RESULTS = 10;
 const MAX_NUM_RESULTS = 20;
-/** How long an organization's `webSearchDisabled` answer is reused. */
+/**
+ * How long an organization's `webSearchDisabled` answer is reused: a policy
+ * change in either direction takes effect within this window.
+ */
 const ORG_POLICY_TTL_MS = 5 * 60_000;
 /** `fetch` rejects header values that are not Latin-1; droid sends optional headers only when printable ASCII. */
 const HEADER_SAFE_VALUE = /^[\x20-\x7e]+$/;
 
 const orgPolicyCache = new Map<string, { disabled: boolean; expiresAt: number }>();
 
-/** Whether the organization's managed settings turn Factory web search off. Unknown policy allows. */
+/** Test seam: forget cached organization policy answers. */
+export function clearFactoryOrgPolicyCache(): void {
+	orgPolicyCache.clear();
+}
+
+/**
+ * Whether the organization's managed settings turn Factory web search off.
+ * An unreadable policy allows, as droid's degraded policy load does.
+ */
 async function isWebSearchDisabledForOrg(
 	access: OAuthAccess,
 	fetchImpl: FetchImpl,
@@ -145,6 +156,7 @@ async function callFactorySearch(
 		query: string;
 		numResults: number;
 		sessionId?: string;
+		clientModel?: string;
 		signal?: AbortSignal;
 		timeoutMs?: number;
 		fetch: FetchImpl;
@@ -152,7 +164,9 @@ async function callFactorySearch(
 ): Promise<{ sources: SearchSource[]; requestId?: string }> {
 	const signal = withHardTimeout(params.signal, params.timeoutMs);
 	if (await isWebSearchDisabledForOrg(access, params.fetch, signal)) {
-		throw new SearchProviderError("factory", "Factory web search is disabled by your organization's settings.", 403);
+		// No HTTP status: a policy refusal is not a credential failure, so the
+		// login is neither rotated nor blocked, and the message reaches the user as-is.
+		throw new SearchProviderError("factory", "Factory web search is disabled by your organization's settings.");
 	}
 
 	const response = await params.fetch(`${factoryDroidApiBaseUrl(access.region)}/api/tools/web-search`, {
@@ -163,6 +177,9 @@ async function callFactorySearch(
 			Authorization: `Bearer ${access.accessToken}`,
 			...factoryDroidClientHeaders(access.orgId),
 			...(params.sessionId && HEADER_SAFE_VALUE.test(params.sessionId) ? { "x-session-id": params.sessionId } : {}),
+			...(params.clientModel && HEADER_SAFE_VALUE.test(params.clientModel)
+				? { "x-client-model": params.clientModel }
+				: {}),
 		},
 		body: JSON.stringify({ query: params.query, numResults: params.numResults }),
 		signal,
@@ -185,7 +202,10 @@ async function callFactorySearch(
 
 /** Execute a Factory-hosted web search with the stored Factory Droid login. */
 export async function searchFactory(
-	params: Pick<SearchParams, "query" | "limit" | "numSearchResults" | "signal" | "timeoutMs" | "sessionId"> & {
+	params: Pick<
+		SearchParams,
+		"query" | "limit" | "numSearchResults" | "signal" | "timeoutMs" | "sessionId" | "sessionModel"
+	> & {
 		authStorage: AuthStorage;
 		fetch?: FetchImpl;
 	},
@@ -199,6 +219,7 @@ export async function searchFactory(
 				query: params.query,
 				numResults,
 				sessionId: params.sessionId,
+				clientModel: params.sessionModel?.id,
 				signal: params.signal,
 				timeoutMs: params.timeoutMs,
 				fetch: params.fetch ?? fetch,
