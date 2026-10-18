@@ -23,7 +23,7 @@ import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { cfgCompactionIdleEnabled } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
-import { listSessionRecaps, resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
+import { listSessionRecaps, closeSessionIndex } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as imageLoading from "@oh-my-pi/pi-coding-agent/utils/image-loading";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
@@ -96,7 +96,7 @@ describe("AgentSession idle maintenance", () => {
 		fs.mkdirSync(path.join(root, "cwd"), { recursive: true });
 		// Recaps are journaled in the process-wide history.db under the agent dir.
 		restoreAgentDir = isolateAgentDir(path.join(root, "agent"));
-		resetSessionIndexForTests();
+		closeSessionIndex();
 		authStorage = createInMemoryAuthStorage();
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(root, "models.yml"));
@@ -109,7 +109,7 @@ describe("AgentSession idle maintenance", () => {
 		vi.restoreAllMocks();
 		AsyncJobManager.resetForTests();
 		authStorage.close();
-		resetSessionIndexForTests();
+		closeSessionIndex();
 		restoreAgentDir();
 		removeSyncWithRetries(root);
 	});

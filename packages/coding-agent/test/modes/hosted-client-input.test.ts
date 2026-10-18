@@ -34,7 +34,7 @@ import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { listSessionRecaps, resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
+import { listSessionRecaps, closeSessionIndex } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { HostedClientLink } from "@oh-my-pi/pi-coding-agent/session-host/hosted-client";
 import { newHostId, type SessionHostEntry } from "@oh-my-pi/pi-coding-agent/session-host/registry";
@@ -1396,10 +1396,10 @@ describe("a hosted client's automation", () => {
 		 */
 		describe("idle recap", () => {
 			beforeEach(() => {
-				resetSessionIndexForTests();
+				closeSessionIndex();
 			});
 			afterEach(() => {
-				resetSessionIndexForTests();
+				closeSessionIndex();
 			});
 
 			/** An initialized TUI (its startup is done) over a session whose turns and recaps come from scripted providers. */
@@ -1659,11 +1659,11 @@ describe("a hosted client's automation", () => {
  */
 describe("a hosted client's idle activity", () => {
 	beforeEach(() => {
-		resetSessionIndexForTests();
+		closeSessionIndex();
 	});
 	afterEach(() => {
 		vi.useRealTimers();
-		resetSessionIndexForTests();
+		closeSessionIndex();
 	});
 
 	const hostJournal = (): string[] => listSessionRecaps().map(row => row.recap);

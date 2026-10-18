@@ -23,7 +23,7 @@ import {
 	cfgCompactionAutoContinue,
 	cfgCompactionKeepRecentTokens,
 } from "@oh-my-pi/pi-coding-agent/session/context-settings";
-import { listSessionRecaps, resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
+import { listSessionRecaps, closeSessionIndex } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { SessionMaintenance } from "@oh-my-pi/pi-coding-agent/session/session-maintenance";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { tryAcquireSessionLease } from "@oh-my-pi/pi-coding-agent/session/session-storage";
@@ -912,11 +912,11 @@ describe("session host idle recap", () => {
 
 	beforeEach(() => {
 		// Recaps are journaled in history.db under the agent dir the file-level hook just isolated.
-		resetSessionIndexForTests();
+		closeSessionIndex();
 	});
 	afterEach(() => {
 		vi.useRealTimers();
-		resetSessionIndexForTests();
+		closeSessionIndex();
 	});
 
 	interface RecapHost {
