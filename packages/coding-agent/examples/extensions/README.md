@@ -55,7 +55,7 @@ Load `examples/extensions/session-tree.ts` with `--extension`, then run `/ts` or
 - `Space` shares pins with `/resume`; `s` cycles activity, size, and turn-count sorting within each group of siblings.
 - `c`, `i`, `p`, and `y` copy the title, ID, path, or all three.
 
-Missing or ambiguous parents are marked unavailable without hiding the child or rewriting session logs. The view uses the existing picker metadata APIs; it adds no polling or model calls.
+Parents outside the current scope are marked as out of scope; missing or ambiguous parents are marked unavailable. Children stay visible and session logs are not rewritten. The view uses the existing picker metadata APIs; it adds no polling or model calls.
 
 
 ### Git Integration

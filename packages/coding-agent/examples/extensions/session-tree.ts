@@ -14,7 +14,7 @@ import {
 	truncateToWidth,
 	type TUI,
 } from "@oh-my-pi/pi-tui";
-import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
+import { shortenPath } from "@oh-my-pi/pi-tui/render";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 
 export type SessionTreeSort = "time" | "size" | "turns";
@@ -170,7 +170,11 @@ class SessionTreeView implements Component {
 						? " [current]"
 						: "";
 				const pin = this.pinned.has(session.id) ? "[pinned] " : "";
-				const unresolved = node.unresolvedParent ? " [parent unavailable]" : "";
+				const unresolved = node.unresolvedParent
+					? this.#scope === "folder"
+						? " [parent outside scope]"
+						: " [parent unavailable]"
+					: "";
 				return `${pin}${sanitizeText(sessionDisplayName(session))}${current}${unresolved} ${this.theme.fg("dim", sanitizeText(session.id.slice(0, 8)))}`;
 			},
 		});
@@ -272,7 +276,9 @@ class SessionTreeView implements Component {
 				: "Forked sessions and their available ancestors only",
 			selected
 				? sanitizeText(shortenPath(selected.path))
-				: "Missing or ambiguous parents stay as roots; no logs are changed",
+				: this.#scope === "folder"
+					? "Parents outside this scope stay as roots; Tab loads all projects"
+					: "Missing or ambiguous parents stay as roots; no logs are changed",
 			"↑↓ move · Enter resume · Esc close · Tab scope · / search · Space pin · s sort · c/i/p/y copy",
 		].map(line => truncateToWidth(line, Math.max(1, width)));
 	}
