@@ -26,6 +26,7 @@ import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as pluginHelpers from "@oh-my-pi/pi-coding-agent/discovery/helpers";
+import type { ExtensionUIContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { runRootCommand } from "@oh-my-pi/pi-coding-agent/main";
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
@@ -400,6 +401,49 @@ describe("interactive collaboration startup", () => {
 
 		expect((await write).details?.cfg?.outcome).toBe("applied");
 		expect(cfgAdvisorEnabled.get(settings)).toBe(true);
+	});
+
+	it("mirrors an extension's ui.confirm and ui.input to a writer guest and returns the guest's answers", async () => {
+		let ui: ExtensionUIContext | undefined;
+		mode = new InteractiveMode(
+			testSession.session,
+			"test",
+			undefined,
+			uiContext => {
+				ui = uiContext;
+			},
+			undefined,
+			undefined,
+			undefined,
+			new Composer({ terminal: new VirtualTerminal(200, 60) }),
+		);
+		spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
+		await mode.init({ suppressWelcomeIntro: true });
+		const host = await mode.collabController.start({ access: "control" });
+		const requests: (CollabFrame & { t: "ui-request" })[] = [];
+		let nextRequest = Promise.withResolvers<void>();
+		const guest = await joinAsWriter(host, frame => {
+			if (frame.t !== "ui-request") return;
+			requests.push(frame);
+			nextRequest.resolve();
+		});
+
+		const confirmed = ui!.confirm("Cook Space", 'Deploy "x" to production?');
+		await nextRequest.promise;
+		const confirm = requests[0]!.request;
+		expect(confirm.kind).toBe("select");
+		expect(confirm.title).toBe('Cook Space\nDeploy "x" to production?');
+		guest.send({ t: "ui-response", reqId: confirm.reqId, value: "No" });
+		expect(await confirmed).toBe(false);
+
+		nextRequest = Promise.withResolvers<void>();
+		const typed = ui!.input("Commit message", "what changed");
+		await nextRequest.promise;
+		const input = requests[1]!.request;
+		expect(input.kind).toBe("editor");
+		expect(input.title).toBe("Commit message");
+		guest.send({ t: "ui-response", reqId: input.reqId, value: "ship it" });
+		expect(await typed).toBe("ship it");
 	});
 
 	it("restores the local session and saved hosting policy after dedicated CLI join activation fails", async () => {

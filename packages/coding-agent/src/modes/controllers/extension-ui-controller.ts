@@ -155,8 +155,8 @@ export class ExtensionUiController {
 			timeoutStartsOnPresentation: true,
 			supportsEditor: true,
 			select: (title, options, dialogOptions) => this.showCollabAwareSelector(title, options, dialogOptions),
-			confirm: (title, message, dialogOptions) => this.showHookConfirm(title, message, dialogOptions),
-			input: (title, placeholder, dialogOptions) => this.showHookInput(title, placeholder, dialogOptions),
+			confirm: (title, message, dialogOptions) => this.showCollabAwareConfirm(title, message, dialogOptions),
+			input: (title, placeholder, dialogOptions) => this.showCollabAwareInput(title, placeholder, dialogOptions),
 			askDialog: (questions, dialogOptions) => this.showAskDialog(questions, dialogOptions),
 			approve: (prompt, dialogOptions) => this.showCollabAwareApproval(prompt, dialogOptions),
 			notify: (message, type) => this.showHookNotify(message, type),
@@ -205,7 +205,7 @@ export class ExtensionUiController {
 				confirmation.remainingPercent === undefined
 					? "inside the configured reserve margin"
 					: `${confirmation.remainingPercent.toFixed(1)}% remaining`;
-			return this.showHookConfirm(
+			return this.showCollabAwareConfirm(
 				"Coding-plan reserve reached",
 				`${confirmation.from} has ${reserve}. Switch to ${confirmation.to}? Choose No to keep using the current plan.`,
 				{ signal },
@@ -1178,6 +1178,31 @@ export class ExtensionUiController {
 	): Promise<boolean> {
 		const result = await this.showHookSelector(`${title}\n${message}`, ["Yes", "No"], dialogOptions);
 		return result === "Yes";
+	}
+
+	/**
+	 * The confirmation an extension or the agent's own turn raises: a collab
+	 * guest answers it as a Yes/No select, so a headless host (driven only
+	 * through collab) never blocks on a dialog nobody can see.
+	 */
+	async showCollabAwareConfirm(
+		title: string,
+		message: string,
+		dialogOptions?: InteractiveSelectorDialogOptions,
+	): Promise<boolean> {
+		const result = await this.showCollabAwareSelector(`${title}\n${message}`, ["Yes", "No"], dialogOptions);
+		return result === "Yes";
+	}
+
+	/** An extension's text input; a collab guest answers it in its editor. */
+	showCollabAwareInput(
+		title: string,
+		placeholder?: string,
+		dialogOptions?: ExtensionUIDialogOptions,
+	): Promise<string | undefined> {
+		return this.#raceCollabDialog({ kind: "editor", title }, dialogOptions?.signal, signal =>
+			this.showHookInput(title, placeholder, { ...dialogOptions, signal }),
+		);
 	}
 
 	/**
