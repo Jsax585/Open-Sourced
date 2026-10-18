@@ -7,6 +7,10 @@
 - Added `nativeJudgmentImageBounds()`: the image bounds a native judge enforces, its wire's transport limits tightened by the catalog's model bounds
 - Added Box judgment questions (`BoxQuestion`/`BoxAnswer`, TypeSafe Jev 1.14+ direct or through OpenRouter): each names the request image it searches by `image` index, and comes back as that image's edges as 0–1 fractions; text, OpenAI Decisions, and Workers AI judges reject them
 
+### Fixed
+
+- Fixed Vertex API-key requests (`GOOGLE_CLOUD_API_KEY`) for models published only in `global`: when a project is configured, the URL includes `projects/{project}/locations/{location}` on that location's host, instead of the project-less publisher path Google routes to `us-central1`. Requests with no project keep the previous URL.
+
 ## [18.12.1] - 2026-10-17
 
 ### Fixed
