@@ -1412,10 +1412,11 @@ function streamCursorWithWireMode(
 					checkpointCoversTurn = false;
 					resultTransport.write(frame);
 				},
-				takeAdditionalContexts: () =>
-					[contextBudget?.takeNotice(output.usage.contextTokens), steering?.take()].filter(
-						context => context !== undefined,
-					),
+				takeAdditionalContexts: () => {
+					const notice = contextBudget?.takeNotice(output.usage.contextTokens);
+					if (notice !== undefined) output.contextBudgetWrapUp = true;
+					return [notice, steering?.take()].filter(context => context !== undefined);
+				},
 			};
 
 			runTransport.onResponse(headers => {

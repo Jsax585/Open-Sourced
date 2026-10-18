@@ -1358,6 +1358,11 @@ export interface AssistantMessage {
 	requestControls?: AnthropicRequestControls;
 	/** Provider-specific opaque payload used to reconstruct transport-native history. */
 	providerPayload?: ProviderPayload;
+	/**
+	 * The provider asked this response to end at `contextBudgetTokens` so the host
+	 * can compact between turns (Cursor). Set only when the notice reached the model.
+	 */
+	contextBudgetWrapUp?: boolean;
 	/** In-memory fallback credit handle attached when a refusal response carries a fallback credit token. */
 	fallbackCreditHandle?: AnthropicFallbackCreditHandle;
 	timestamp: number; // Unix timestamp in milliseconds

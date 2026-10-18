@@ -85,15 +85,16 @@ afterEach(() => {
 /**
  * One Cursor turn scripted as steps: each step's frames go out after the
  * client answers the previous step's exec. Returns the hook contexts the
- * client attached to each exec result, keyed by exec id. `onTerminalEvent`
- * runs when the stream reports its outcome, which is when the agent loop reads
- * what live steering delivered.
+ * client attached to each exec result, keyed by exec id, and whether the
+ * response reports that it was asked to wrap up. `onTerminalEvent` runs when
+ * the stream reports its outcome, which is when the agent loop reads what live
+ * steering delivered.
  */
 async function runTurn(
 	steps: Buffer[][],
 	options: Partial<CursorOptions> = {},
 	onTerminalEvent: () => void = () => {},
-): Promise<Map<number, string[]>> {
+): Promise<{ contexts: Map<number, string[]>; wrappedUp: boolean }> {
 	const contextsByExecId = new Map<number, string[]>();
 	const server = http2.createServer();
 	servers.push(server);
@@ -155,12 +156,12 @@ async function runTurn(
 	for await (const event of response) {
 		if (event.type === "done" || event.type === "error") onTerminalEvent();
 	}
-	await response.result();
-	return contextsByExecId;
+	const message = await response.result();
+	return { contexts: contextsByExecId, wrappedUp: message.contextBudgetWrapUp === true };
 }
 
 it("asks the turn to wrap up once, on the first accepting result past the budget", async () => {
-	const contexts = await runTurn([
+	const { contexts, wrappedUp } = await runTurn([
 		[checkpointFrame(40_000), execReadFrame(1, true)],
 		// Crossed, but this frame cannot carry context: the notice must wait, not vanish.
 		[checkpointFrame(70_000), execReadFrame(2, false)],
@@ -172,13 +173,14 @@ it("asks the turn to wrap up once, on the first accepting result past the budget
 	expect(contexts.get(2)).toEqual([]);
 	expect(contexts.get(3)).toEqual([expect.stringContaining("70000")]);
 	expect(contexts.get(4)).toEqual([]);
+	expect(wrappedUp).toBe(true);
 });
 
 it("asks a turn whose first step already crossed the budget to wrap up", async () => {
 	// The turn opened below the budget (the host decides that before the
 	// request); its first checkpoint is past it and its first result cannot
 	// carry context, so the first accepting result must still get the notice.
-	const contexts = await runTurn([
+	const { contexts } = await runTurn([
 		[checkpointFrame(70_000), execReadFrame(1, false)],
 		[checkpointFrame(90_000), execReadFrame(2, true)],
 	]);
@@ -188,13 +190,22 @@ it("asks a turn whose first step already crossed the budget to wrap up", async (
 });
 
 it("waits until the conversation is past the budget, like the host's compaction check", async () => {
-	const contexts = await runTurn([
+	const { contexts } = await runTurn([
 		[checkpointFrame(BUDGET_TOKENS), execReadFrame(1, true)],
 		[checkpointFrame(BUDGET_TOKENS + 1), execReadFrame(2, true)],
 	]);
 
 	expect(contexts.get(1)).toEqual([]);
 	expect(contexts.get(2)).toEqual([expect.stringContaining(String(BUDGET_TOKENS + 1))]);
+});
+
+it("does not report a wrap-up when the turn ended before any result could carry the notice", async () => {
+	// The host must not treat this turn as budget-stopped: the model never saw
+	// the notice and ended on its own.
+	const { contexts, wrappedUp } = await runTurn([[checkpointFrame(70_000), execReadFrame(1, false)]]);
+
+	expect(contexts.get(1)).toEqual([]);
+	expect(wrappedUp).toBe(false);
 });
 
 /** A steering queue holding one user message; records how its claim was settled. */
@@ -226,7 +237,7 @@ function queuedSteering(content: UserMessage["content"]): { source: LiveSteering
 it("delivers user steering with the next tool result that accepts context", async () => {
 	const steering = queuedSteering("stop and use the staging bucket");
 
-	const contexts = await runTurn([[execReadFrame(1, false)], [execReadFrame(2, true)], [execReadFrame(3, true)]], {
+	const { contexts } = await runTurn([[execReadFrame(1, false)], [execReadFrame(2, true)], [execReadFrame(3, true)]], {
 		liveSteering: steering.source,
 	});
 
@@ -255,7 +266,7 @@ it("leaves steering with an image for the next request instead of dropping the i
 		{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
 	]);
 
-	const contexts = await runTurn([[execReadFrame(1, true)], [execReadFrame(2, true)]], {
+	const { contexts } = await runTurn([[execReadFrame(1, true)], [execReadFrame(2, true)]], {
 		liveSteering: steering.source,
 	});
 
