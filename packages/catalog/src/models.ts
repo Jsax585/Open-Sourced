@@ -82,6 +82,27 @@ export function getEffectiveTokenCost(cost: ModelCost, timestamp = Date.now()): 
 	return resolveTokenCost(cost, 0, timestamp);
 }
 
+type PricedModel = Pick<Model<Api>, "cost" | "cursorTokenRateExempt" | "teamsTokenRatePerMillion">;
+
+/**
+ * A model's whole rate card as charged: its Teams token rate on every card it
+ * can bill at (base, long-context tier, scheduled effective rates), each priced
+ * card on its own, as {@link calculateCost} applies it before any peak/off-peak
+ * multiplier. Unrated models return their card unchanged.
+ */
+export function getChargedModelCost(model: PricedModel): ModelCost {
+	const perMillion = resolveTeamsTokenRatePerMillion(model);
+	if (perMillion === 0) return model.cost;
+	const rated = <Card extends TokenCost>(card: Card): Card => ({ ...card, ...withTeamsTokenRate(card, perMillion) });
+	const withTier = <Card extends ModelCost | EffectiveTokenCost>(card: Card): Card =>
+		card.longContext ? { ...rated(card), longContext: rated(card.longContext) } : rated(card);
+	const { timeBased } = model.cost;
+	const effectiveRates = timeBased?.effectiveRates;
+	return effectiveRates
+		? { ...withTier(model.cost), timeBased: { ...timeBased, effectiveRates: effectiveRates.map(withTier) } }
+		: withTier(model.cost);
+}
+
 /**
  * What a model charges per million tokens at `timestamp`, as displayed: the
  * effective card plus its Teams token rate on priced rows, so a displayed price
@@ -89,11 +110,8 @@ export function getEffectiveTokenCost(cost: ModelCost, timestamp = Date.now()): 
  * than the scalar legs, which keep the card current when the row was built
  * while bundles, caches, and long sessions outlive it.
  */
-export function getModelTokenCost(
-	model: Pick<Model<Api>, "cost" | "cursorTokenRateExempt" | "teamsTokenRatePerMillion">,
-	timestamp = Date.now(),
-): TokenCost {
-	return withTeamsTokenRate(getEffectiveTokenCost(model.cost, timestamp), resolveTeamsTokenRatePerMillion(model));
+export function getModelTokenCost(model: PricedModel, timestamp = Date.now()): TokenCost {
+	return getEffectiveTokenCost(getChargedModelCost(model), timestamp);
 }
 
 function withTeamsTokenRate(rates: TokenCost, perMillion: number): TokenCost {

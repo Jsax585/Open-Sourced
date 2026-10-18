@@ -13,7 +13,7 @@
  */
 import type { Api, Effort, Model } from "@oh-my-pi/pi-ai";
 import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
-import { getModelPricingStatus, getModelTokenCost } from "@oh-my-pi/pi-catalog/models";
+import { getChargedModelCost, getEffectiveTokenCost, getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { type ModelKind, type ModelPricingStatus, modelKind } from "@oh-my-pi/pi-catalog/types";
 import { formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
@@ -114,9 +114,10 @@ function byProviderThenId(left: Model<Api>, right: Model<Api>): number {
 }
 
 function toModelJson(model: Model<Api>): ModelJson {
-	// Scalar legs report what the model charges now (card in force plus any
-	// Teams token rate), not the card current when the row was built.
-	const { input, output, cacheRead, cacheWrite } = getModelTokenCost(model);
+	// Every card carries any Teams token rate, so the JSON prices usage as billed;
+	// scalar legs report the card in force now, not the one current when the row was built.
+	const charged = getChargedModelCost(model);
+	const { input, output, cacheRead, cacheWrite } = getEffectiveTokenCost(charged);
 	return {
 		provider: model.provider,
 		kind: modelKind(model),
@@ -128,7 +129,7 @@ function toModelJson(model: Model<Api>): ModelJson {
 		reasoning: model.reasoning,
 		thinking: model.thinking ? getSupportedEfforts(model) : null,
 		input: model.input,
-		cost: { ...model.cost, input, output, cacheRead, cacheWrite },
+		cost: { ...charged, input, output, cacheRead, cacheWrite },
 		pricingStatus: getModelPricingStatus(model),
 	};
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { Usage } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { calculateCost, getBundledModel, getModelTokenCost } from "@oh-my-pi/pi-catalog/models";
+import { calculateCost, getBundledModel, getChargedModelCost, getModelTokenCost } from "@oh-my-pi/pi-catalog/models";
 
 const sampleUsage = (input: number, cacheRead = 0): Usage => ({
 	input,
@@ -71,5 +71,17 @@ describe("Cursor Teams token rate", () => {
 			calculateCost(model, usage);
 			expect((getModelTokenCost(model).input * 10_000) / 1e6).toBeCloseTo(usage.cost.input, 10);
 		}
+	});
+
+	it("charges the long-context tier of the published card as billing does", () => {
+		// `omp models --json` publishes the whole charged card; a consumer pricing
+		// a long prompt reads the tier, which must carry the rate too.
+		const model = { ...getBundledModel("cursor", "gpt-5.6-luna"), teamsTokenRatePerMillion: 0.25 };
+		const tier = getChargedModelCost(model).longContext;
+		if (!tier) throw new Error("gpt-5.6-luna lost its long-context tier");
+		const promptTokens = tier.inputThreshold + 28_000;
+		const usage = sampleUsage(promptTokens);
+		calculateCost(model, usage);
+		expect((tier.input * promptTokens) / 1e6).toBeCloseTo(usage.cost.input, 10);
 	});
 });
