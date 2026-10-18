@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Usage } from "@oh-my-pi/pi-ai/types";
-import { calculateCost } from "@oh-my-pi/pi-catalog/models";
+import { calculateCost, calculateUsageCost } from "@oh-my-pi/pi-catalog/models";
 import type { ModelCost } from "@oh-my-pi/pi-catalog/types";
 import { renderProviderModels } from "@oh-my-pi/pi-coding-agent/cli/models-cli";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -67,7 +67,9 @@ describe("Cursor Teams token rate (models.yml → registry)", () => {
 		expect(clearedUsage.cost.input).toBeCloseTo(0.75, 8);
 	});
 
-	test("publishes the long-context tier in `omp models --json` with the rate billing charges", () => {
+	test("lets `omp models --json` reprice usage exactly as billing charges it", () => {
+		// A long-context prompt with one-hour cache writes: the tier and the 2x write
+		// multiplier must apply to the list card, with the token rate added flat.
 		fs.writeFileSync(modelsPath, "providers:\n  cursor:\n    teamsTokenRatePerMillion: 0.25\n");
 		const model = new ModelRegistry(authStorage, modelsPath).find("cursor", "gpt-5.6-luna")!;
 		let stdout = "";
@@ -80,11 +82,18 @@ describe("Cursor Teams token rate (models.yml → registry)", () => {
 		} finally {
 			vi.restoreAllMocks();
 		}
-		const tier = (JSON.parse(stdout).models[0].cost as ModelCost).longContext;
-		if (!tier) throw new Error("gpt-5.6-luna lost its long-context tier");
-		const promptTokens = tier.inputThreshold + 28_000;
-		const usage = sampleUsage(promptTokens);
-		calculateCost(model, usage);
-		expect((tier.input * promptTokens) / 1e6).toBeCloseTo(usage.cost.input, 10);
+		const published: { cost: ModelCost; teamsTokenRatePerMillion?: number } = JSON.parse(stdout).models[0];
+		const threshold = published.cost.longContext?.inputThreshold;
+		if (threshold === undefined) throw new Error("gpt-5.6-luna lost its long-context tier");
+		const usage = (): Usage => ({
+			...sampleUsage(threshold + 28_000),
+			cacheWrite: 10_000,
+			cttl: { ephemeral5m: 0, ephemeral1h: 10_000 },
+		});
+		const billed = calculateCost(model, usage());
+		const repriced = calculateUsageCost(published.cost, usage(), undefined, published.teamsTokenRatePerMillion);
+		expect(published.teamsTokenRatePerMillion).toBe(0.25);
+		expect(repriced.total).toBeCloseTo(billed.total, 10);
+		expect(repriced.cacheWrite).toBeCloseTo(billed.cacheWrite, 10);
 	});
 });

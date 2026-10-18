@@ -85,25 +85,6 @@ export function getEffectiveTokenCost(cost: ModelCost, timestamp = Date.now()): 
 type PricedModel = Pick<Model<Api>, "cost" | "cursorTokenRateExempt" | "teamsTokenRatePerMillion">;
 
 /**
- * A model's whole rate card as charged: its Teams token rate on every card it
- * can bill at (base, long-context tier, scheduled effective rates), each priced
- * card on its own. {@link calculateCost} adds the rate flat, outside any
- * peak/off-peak multiplier. Unrated models return their card unchanged.
- */
-export function getChargedModelCost(model: PricedModel): ModelCost {
-	const perMillion = resolveTeamsTokenRatePerMillion(model);
-	if (perMillion === 0) return model.cost;
-	const rated = <Card extends TokenCost>(card: Card): Card => ({ ...card, ...withTeamsTokenRate(card, perMillion) });
-	const withTier = <Card extends ModelCost | EffectiveTokenCost>(card: Card): Card =>
-		card.longContext ? { ...rated(card), longContext: rated(card.longContext) } : rated(card);
-	const { timeBased } = model.cost;
-	const effectiveRates = timeBased?.effectiveRates;
-	return effectiveRates
-		? { ...withTier(model.cost), timeBased: { ...timeBased, effectiveRates: effectiveRates.map(withTier) } }
-		: withTier(model.cost);
-}
-
-/**
  * What a model charges per million tokens at `timestamp`, as displayed: the
  * effective card plus its Teams token rate on priced rows, so a displayed price
  * matches what {@link calculateCost} records. Price displays read this rather
@@ -111,7 +92,7 @@ export function getChargedModelCost(model: PricedModel): ModelCost {
  * while bundles, caches, and long sessions outlive it.
  */
 export function getModelTokenCost(model: PricedModel, timestamp = Date.now()): TokenCost {
-	return getEffectiveTokenCost(getChargedModelCost(model), timestamp);
+	return withTeamsTokenRate(getEffectiveTokenCost(model.cost, timestamp), resolveTeamsTokenRatePerMillion(model));
 }
 
 function withTeamsTokenRate(rates: TokenCost, perMillion: number): TokenCost {
