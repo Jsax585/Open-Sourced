@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added the `web/deepseek` web-search engine, using DeepSeek's own Search API with the existing DeepSeek API key
+- Added the `web/deepseek` web-search engine, using DeepSeek's own Search API with the existing DeepSeek API key ([#16130](https://github.com/can1357/oh-my-pi/pull/16130) by [@Vertsineu](https://github.com/Vertsineu))
 
 ### Fixed
 
