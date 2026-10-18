@@ -574,7 +574,7 @@ function stripDataUriImages(markdown: string): string {
 	return markdown.replace(DATA_URI_IMAGE_RE, (_match, alt: string) => (alt.trim() ? `![${alt}]` : ""));
 }
 
-/** Reader backends for {@link renderHtmlToText}, in default priority order. */
+/** Reader backends for {@link renderHtmlToText}, including explicit-only DeepSeek. */
 export type FetchProvider = "native" | "trafilatura" | "lynx" | "parallel" | "firecrawl" | "deepseek" | "jina";
 
 const FETCH_PROVIDER_ORDER: readonly FetchProvider[] = [
@@ -583,15 +583,15 @@ const FETCH_PROVIDER_ORDER: readonly FetchProvider[] = [
 	"lynx",
 	"parallel",
 	"firecrawl",
-	"deepseek",
 	"jina",
 ];
 
 /**
  * Render HTML to markdown by trying reader backends in priority order: native
- * (in-process), trafilatura, lynx, Parallel, Firecrawl, DeepSeek, then Jina. The
+ * (in-process), trafilatura, lynx, Parallel, Firecrawl, then Jina. The
  * `providers.fetch` setting picks the order — `auto` uses the default above; any
- * specific backend is tried first, then the remaining backends as fallbacks.
+ * specific backend is tried first, then the default backends as fallbacks.
+ * DeepSeek is only tried when explicitly selected, never in `auto`.
  * Every backend's output must clear the same quality gate (>100 non-whitespace
  * chars and not {@link isLowQualityOutput}) before it is accepted, otherwise the
  * next backend is tried.

@@ -1282,7 +1282,7 @@ export const cfgProvidersFetch = register({
 			{
 				value: "auto",
 				label: "Auto",
-				description: "Priority: native > trafilatura > lynx > parallel > firecrawl > deepseek > jina",
+				description: "Priority: native > trafilatura > lynx > parallel > firecrawl > jina",
 			},
 			{ value: "native", label: "Native", description: "In-process HTML→Markdown converter (always available)" },
 			{ value: "trafilatura", label: "Trafilatura", description: "Auto-installs via uv/pip" },
@@ -1292,7 +1292,8 @@ export const cfgProvidersFetch = register({
 			{
 				value: "deepseek",
 				label: "DeepSeek",
-				description: "Uses DEEPSEEK_API_KEY or /login deepseek; successful requests may be billed",
+				description:
+					"Explicit opt-in; tries first with normal fallbacks; uses DEEPSEEK_API_KEY or /login deepseek; successful requests may be billed",
 			},
 			{ value: "jina", label: "Jina", description: "Uses r.jina.ai reader (JINA_API_KEY optional)" },
 		],

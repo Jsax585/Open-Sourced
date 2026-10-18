@@ -295,29 +295,34 @@ describe("DeepSeek reader fallback chain", () => {
 		expect(result.method).toBe("native");
 	});
 
-	it("tries DeepSeek after Firecrawl fails and before Jina in auto mode", async () => {
-		vi.spyOn(toolsManager, "ensureTool").mockResolvedValue(undefined);
-		vi.spyOn(utils, "$which").mockReturnValue(null);
-		process.env.FIRECRAWL_API_KEY = "firecrawl-test-key";
-		const requests: string[] = [];
-		const result = await renderHtmlToText(
-			ARTICLE_URL,
-			"<html><body>short</body></html>",
-			1,
-			Settings.isolated(),
-			undefined,
-			null,
-			mockFetch(input => {
-				requests.push(String(input));
-				return String(input) === API_URL
-					? Response.json({ content: MARKDOWN })
-					: Response.json({ error: "Rejected" }, { status: 403 });
-			}),
-		);
-		expect(result.method).toBe("deepseek");
-		expect(result.content).toBe(MARKDOWN);
-		expect(requests).toEqual(["https://api.firecrawl.dev/v2/scrape", API_URL]);
-	});
+	it.each(["environment", "stored"] as const)(
+		"excludes DeepSeek from auto with %s credentials",
+		async credentialSource => {
+			vi.spyOn(toolsManager, "ensureTool").mockResolvedValue(undefined);
+			vi.spyOn(utils, "$which").mockReturnValue(null);
+			process.env.FIRECRAWL_API_KEY = "firecrawl-test-key";
+			if (credentialSource === "stored") delete process.env.DEEPSEEK_API_KEY;
+			const requests: string[] = [];
+			const result = await renderHtmlToText(
+				ARTICLE_URL,
+				"<html><body>short</body></html>",
+				1,
+				Settings.isolated({ "providers.fetch": "auto" }),
+				undefined,
+				credentialSource === "stored" ? storage : null,
+				mockFetch(input => {
+					requests.push(String(input));
+					if (String(input) === API_URL) return Response.json({ content: MARKDOWN });
+					return String(input) === `https://r.jina.ai/${ARTICLE_URL}`
+						? new Response(`Markdown Content:\n${MARKDOWN}`)
+						: Response.json({ error: "Rejected" }, { status: 403 });
+				}),
+			);
+			expect(result.method).toBe("jina");
+			expect(result.content).toBe(MARKDOWN);
+			expect(requests).toEqual(["https://api.firecrawl.dev/v2/scrape", `https://r.jina.ai/${ARTICLE_URL}`]);
+		},
+	);
 
 	it("skips DeepSeek without credentials and continues to Jina in auto mode", async () => {
 		vi.spyOn(toolsManager, "ensureTool").mockResolvedValue(undefined);
