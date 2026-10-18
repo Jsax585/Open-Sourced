@@ -27,8 +27,9 @@ import { create, fromBinary } from "@oh-my-pi/pi-catalog/discovery/protobuf";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { SessionTools } from "@oh-my-pi/pi-coding-agent/session/session-tools";
-import { CursorExecHandlers, mcpServerResourcesAllowed } from "@oh-my-pi/pi-coding-agent/cursor";
-import { isToolScopedIn } from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
+import { CursorExecHandlers } from "@oh-my-pi/pi-coding-agent/cursor";
+import { mcpServerResourcesAllowed } from "@oh-my-pi/pi-coding-agent/mcp/resource-scope";
+import { ToolScope } from "@oh-my-pi/pi-coding-agent/tools/tool-scope";
 import { registerArtifactsDir } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
 import {
 	bridgeToolMap,
@@ -1441,7 +1442,7 @@ describe("CursorExecHandlers mounted tool bridge", () => {
 					baseSystemPrompt: [],
 					toolRegistry: registry,
 					mcpManagerTools: () => [winnerTool, loserTool],
-					disallowedToolPatterns,
+					toolScope: new ToolScope({ disallowedTools: disallowedToolPatterns }),
 				},
 			);
 
@@ -1460,7 +1461,7 @@ describe("CursorExecHandlers mounted tool bridge", () => {
 		// When two servers mint the same public name, an MCP-server disallow pattern
 		// targeting the loser must deny the loser's resources while allowing the winner.
 		// Judging executability by per-source owner (passing mcpServerName through to
-		// isToolExecutable / isToolScopedIn) ensures the loser's tool is evaluated
+		// isToolExecutable / toolScope.isScopedIn) ensures the loser's tool is evaluated
 		// against the loser's identity rather than falling back to the winner's registry entry.
 		const sharedName = "mcp__collide_bank";
 		const registryMap = new Map<string, AgentTool>([
@@ -1471,11 +1472,12 @@ describe("CursorExecHandlers mounted tool bridge", () => {
 			{ name: sharedName, mcpServerName: "loser" },
 		];
 		const disallowedPatterns = ["mcp__loser_*"];
+		const toolScope = new ToolScope({ disallowedTools: disallowedPatterns });
 
-		// Unit-level resource gate check with isToolScopedIn owner override
+		// Unit-level resource gate check with tool scope owner override
 		const gate = (name: string, mcpServerName?: string): boolean => {
 			const regOwner = (registryMap.get(name) as { mcpServerName?: unknown } | undefined)?.mcpServerName;
-			return isToolScopedIn(name, disallowedPatterns, {}, (mcpServerName ?? regOwner) as string | undefined);
+			return toolScope.isScopedIn(name, (mcpServerName ?? regOwner) as string | undefined);
 		};
 		expect(mcpServerResourcesAllowed([registryMap.values(), managerTools], gate, () => true, "winner")).toBe(true);
 		expect(mcpServerResourcesAllowed([registryMap.values(), managerTools], gate, () => true, "loser")).toBe(false);
@@ -1487,7 +1489,7 @@ describe("CursorExecHandlers mounted tool bridge", () => {
 			mcpManagerTools: () => managerTools,
 			isToolExecutable: (name, mcpServerName) => {
 				const regOwner = (registryMap.get(name) as { mcpServerName?: unknown } | undefined)?.mcpServerName;
-				return isToolScopedIn(name, disallowedPatterns, {}, (mcpServerName ?? regOwner) as string | undefined);
+				return toolScope.isScopedIn(name, (mcpServerName ?? regOwner) as string | undefined);
 			},
 			mcpResources: {
 				serverNames: () => ["winner", "loser"],

@@ -441,7 +441,6 @@ export interface SessionAdvisorsOptions {
 	mcpResources?: CursorMcpResourceAdapter;
 	/** Owning session scope for advisor resource frames (absent = unrestricted). */
 	sessionScope?: {
-		isToolScopedIn(name: string, mcpServerName?: string): boolean;
 		isMCPServerResourceAllowed(serverName: string): boolean;
 		mcpManagerTools(): Iterable<{ readonly name?: string; readonly mcpServerName?: unknown }>;
 	};
@@ -485,9 +484,6 @@ export interface SessionAdvisorsHost {
 	allowAgentInitiatedTurns(): boolean;
 	planModeState(): PlanModeState | undefined;
 	clientBridge(): ClientBridge | undefined;
-	/** Session tool scope for advisor Cursor bridges (absent = unrestricted). */
-	isToolScopedIn?(name: string): boolean;
-	isMCPServerResourceAllowed?(serverName: string): boolean;
 	emitSessionEvent(event: AgentSessionEvent): Promise<void>;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
 	sendCustomMessage(message: CustomMessagePayload, options?: AdvisorMessageDeliveryOptions): Promise<boolean>;

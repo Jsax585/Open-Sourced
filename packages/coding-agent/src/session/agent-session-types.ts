@@ -45,6 +45,7 @@ import type { SecretObfuscator } from "../secrets/obfuscator";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { ToolSession } from "../tools";
 import type { XdevState } from "../tools/xdev";
+import type { ToolScope } from "../tools/tool-scope";
 import type { CodexAutoRedeemCoordinator } from "./codex-auto-reset";
 import type { SettingsGatedToolDelta } from "./session-tools";
 import type { SessionManager } from "./session-manager";
@@ -332,15 +333,8 @@ export interface AgentSessionConfig {
 	xdev?: XdevState;
 	/** Names pinned top-level during runtime repartitioning. */
 	presentationPinnedToolNames?: ReadonlySet<string>;
-	/** Subagent tool scoping: every runtime active-set mutation preserves the startup scope. */
-	enforceToolAllowlist?: boolean;
-	/** Exact names the enforced `tools:` allowlist permits. Hidden protocol tools
-	 * (`yield`, `goal`, `think`) stay permitted only when built-in provenance
-	 * holds (an extension-defined same-named tool is still gated); wildcards
-	 * are not expanded here. */
-	allowedToolNames?: ReadonlySet<string>;
-	/** Disallow patterns removed from every runtime selection (trailing `*` = prefix wildcard). */
-	disallowedToolPatterns?: readonly string[];
+	/** Subagent tool scope; absent = unrestricted. */
+	toolScope?: ToolScope;
 	/** Accessor for live MCP server instructions. */
 	getMcpServerInstructions?: () => Map<string, string> | undefined;
 	/** Time-traveling stream-rule manager. */
@@ -396,7 +390,6 @@ export interface AgentSessionConfig {
 	advisorMcpResources?: CursorMcpResourceAdapter;
 	/** Owning session scope for advisor Cursor resource frames. */
 	advisorSessionScope?: {
-		isToolScopedIn(name: string, mcpServerName?: string): boolean;
 		isMCPServerResourceAllowed(serverName: string): boolean;
 		mcpManagerTools(): Iterable<{ readonly name?: string; readonly mcpServerName?: unknown }>;
 	};

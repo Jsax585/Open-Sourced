@@ -48,6 +48,7 @@ import { AstEditTool } from "./ast-edit";
 import { AstGrepTool } from "./ast-grep";
 import { BashTool } from "./bash";
 import { type BuiltinToolName, type HiddenToolName, normalizeToolNames, withSiblingTools } from "./builtin-names";
+import { compileNamePatterns, hasGlobChars } from "./name-patterns";
 import { type CheckpointState, CheckpointTool, type CompletedRewindState, RewindTool } from "./checkpoint";
 import { ContextNotesTool, NewContextTool } from "./context-notes";
 import { DebugTool } from "./debug";
@@ -637,6 +638,19 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		: toolNames
 			? normalizeToolNames(toolNames)
 			: undefined;
+	if (requestedTools) {
+		const universe = Object.keys(BUILTIN_TOOLS);
+		const expanded: string[] = [];
+		for (const entry of requestedTools) {
+			if (!hasGlobChars(entry)) {
+				expanded.push(entry);
+				continue;
+			}
+			const matcher = compileNamePatterns([entry]);
+			for (const name of universe) if (matcher.matches(name)) expanded.push(name);
+		}
+		requestedTools = normalizeToolNames(expanded);
+	}
 	const goalEnabled = cfgGoalEnabled.get(session.settings);
 	const goalModeActive = !restrictToolNames && goalEnabled && session.getGoalModeState?.()?.enabled === true;
 	const externalThinkingActive =

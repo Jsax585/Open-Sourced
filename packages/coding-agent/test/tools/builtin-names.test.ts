@@ -1,18 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import { sanitizeNamePart } from "@oh-my-pi/pi-coding-agent/mcp/name-sanitize";
 import { createMCPToolName } from "@oh-my-pi/pi-coding-agent/mcp/tool-bridge";
 import {
 	expandDisallowedTools,
 	isToolDisallowed,
-	isToolScopedIn,
-	mcpDisallowTargetsServer,
-	sanitizeMCPToolNamePart,
+	mcpWildcardServerSegment,
 } from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
 
 // A raw config server name whose minted tool name exceeds the 64-char cap:
 // `createMCPToolName` truncates the whole name and appends a hash suffix, so
 // the `mcp__<server>_` prefix is no longer present in the registry key.
 const LONG_SERVER_NAME = "very long server name that gets truncated at the 64 character cap boundary for testing";
-const LONG_SERVER_PATTERN = `mcp__${sanitizeMCPToolNamePart(LONG_SERVER_NAME, "server")}_*`;
+const LONG_SERVER_PATTERN = `mcp__${sanitizeNamePart(LONG_SERVER_NAME, "server", { domain: "mint" })}_*`;
 const CAPPED_MINTED_NAME = createMCPToolName(LONG_SERVER_NAME, "query_special_tool_name");
 
 describe("isToolDisallowed", () => {
@@ -52,26 +51,50 @@ describe("isToolDisallowed", () => {
 		expect(isToolDisallowed("think", ["think"])).toBe(false);
 	});
 
-	test("disallows eval and bash when pattern is exec", () => {
-		expect(isToolDisallowed("eval", ["exec"])).toBe(true);
-		expect(isToolDisallowed("bash", ["exec"])).toBe(true);
-		expect(isToolDisallowed("read", ["exec"])).toBe(false);
+	test("matches exec as an exact name without implicit eval/bash alias mapping", () => {
+		expect(isToolDisallowed("exec", ["exec"])).toBe(true);
+		expect(isToolDisallowed("eval", ["exec"])).toBe(false);
+		expect(isToolDisallowed("bash", ["exec"])).toBe(false);
 	});
 
-	test("non-built-in hidden tool names are not exempt when isBuiltIn is false", () => {
-		expect(isToolDisallowed("yield", ["*"], { isBuiltIn: false })).toBe(true);
-		expect(isToolDisallowed("yield", ["yield"], { isBuiltIn: false })).toBe(true);
-		expect(isToolDisallowed("goal", ["*"], { isBuiltIn: false })).toBe(true);
-		expect(isToolDisallowed("think", ["*"], { isBuiltIn: false })).toBe(true);
-		// Built-in or unspecified stays exempt:
+	test("hidden protocol tools remain exempt even when isBuiltIn is false", () => {
+		expect(isToolDisallowed("yield", ["*"], { isBuiltIn: false })).toBe(false);
+		expect(isToolDisallowed("yield", ["yield"], { isBuiltIn: false })).toBe(false);
+		expect(isToolDisallowed("goal", ["*"], { isBuiltIn: false })).toBe(false);
+		expect(isToolDisallowed("think", ["*"], { isBuiltIn: false })).toBe(false);
 		expect(isToolDisallowed("yield", ["*"], { isBuiltIn: true })).toBe(false);
-		expect(isToolDisallowed("yield", ["*"])).toBe(false);
+	});
+
+	test("matches glob patterns with single-char wildcard ? and brace expansion {a,b}", () => {
+		expect(isToolDisallowed("mcp__db_1", ["mcp__db_?"])).toBe(true);
+		expect(isToolDisallowed("mcp__db_a", ["mcp__db_?"])).toBe(true);
+		expect(isToolDisallowed("mcp__db_10", ["mcp__db_?"])).toBe(false);
+
+		expect(isToolDisallowed("read", ["{read,grep}"])).toBe(true);
+		expect(isToolDisallowed("grep", ["{read,grep}"])).toBe(true);
+		expect(isToolDisallowed("bash", ["{read,grep}"])).toBe(false);
+
+		expect(isToolDisallowed("mcp__api_get", ["mcp__{api,web}_*"])).toBe(true);
+		expect(isToolDisallowed("mcp__web_post", ["mcp__{api,web}_*"])).toBe(true);
+		expect(isToolDisallowed("mcp__db_query", ["mcp__{api,web}_*"])).toBe(false);
+	});
+
+	test("bare * blanket denies names containing / and leading ! matches literal name only", () => {
+		expect(isToolDisallowed("custom/tool", ["*"])).toBe(true);
+		expect(isToolDisallowed("mcp/server/tool", ["*"])).toBe(true);
+
+		expect(isToolDisallowed("!special", ["!special"])).toBe(true);
+		expect(isToolDisallowed("other", ["!special"])).toBe(false);
+		expect(isToolDisallowed("!special_tool", ["!special_*"])).toBe(true);
+		expect(isToolDisallowed("other_tool", ["!special_*"])).toBe(false);
 	});
 
 	test("capped minted names need mcpServerName metadata to match a server wildcard", () => {
 		// Sanity: the fixture really is a capped name whose prefix no longer matches.
 		expect(CAPPED_MINTED_NAME.length).toBe(64);
-		expect(CAPPED_MINTED_NAME.startsWith(`mcp__${sanitizeMCPToolNamePart(LONG_SERVER_NAME, "server")}_`)).toBe(false);
+		expect(
+			CAPPED_MINTED_NAME.startsWith(`mcp__${sanitizeNamePart(LONG_SERVER_NAME, "server", { domain: "mint" })}_`),
+		).toBe(false);
 		// Name-only: the truncated + hashed name misses the prefix match.
 		expect(isToolDisallowed(CAPPED_MINTED_NAME, [LONG_SERVER_PATTERN])).toBe(false);
 		// Ownership metadata (raw config server name) restores the one-server match.
@@ -118,6 +141,14 @@ describe("isToolDisallowed", () => {
 		expect(isToolDisallowed("mcp__foo_other", ["mcp__foo_*"], "foo")).toBe(true);
 	});
 
+	test("owner-consistent matching for tool-prefix wildcards and neighbouring servers", () => {
+		expect(isToolDisallowed("mcp__github_issue_search", ["mcp__github_issue_*"], "github")).toBe(true);
+		expect(isToolDisallowed("mcp__github_repo_list", ["mcp__github_issue_*"], "github")).toBe(false);
+		expect(isToolDisallowed("mcp__foo_bar_q", ["mcp__foo_*"], "foo_bar")).toBe(false);
+		expect(isToolDisallowed("mcp__foo_bar_q", ["mcp__foo_*"], "foo")).toBe(true);
+		expect(isToolDisallowed("mcp__foo_query_x", ["mcp__foo_query*"], "foo")).toBe(true);
+	});
+
 	test("a server wildcard decides by ownership before the lossy name prefix", () => {
 		// Server `foo` and server `foo_bar` both mint names starting `mcp__foo_`,
 		// so the prefix test alone stripped the unrelated server's tools — and its
@@ -142,69 +173,6 @@ describe("isToolDisallowed", () => {
 	});
 });
 
-describe("isToolScopedIn", () => {
-	test("forwards mcpServerName metadata to the disallow check", () => {
-		expect(isToolScopedIn(CAPPED_MINTED_NAME, [LONG_SERVER_PATTERN], {}, LONG_SERVER_NAME)).toBe(false);
-		expect(isToolScopedIn(CAPPED_MINTED_NAME, [LONG_SERVER_PATTERN], {}, "other-server")).toBe(true);
-		expect(isToolScopedIn(CAPPED_MINTED_NAME, [LONG_SERVER_PATTERN], {}, undefined)).toBe(true);
-	});
-
-	test("hidden protocol tools stay scoped in under an enforced allowlist with metadata", () => {
-		expect(isToolScopedIn("yield", ["*"], { enforceToolAllowlist: true }, LONG_SERVER_NAME)).toBe(true);
-	});
-
-	test("non-built-in hidden tool names are not exempt when isBuiltIn is false", () => {
-		expect(isToolScopedIn("yield", ["*"], { enforceToolAllowlist: true, isBuiltIn: false })).toBe(false);
-		expect(
-			isToolScopedIn("yield", [], {
-				enforceToolAllowlist: true,
-				allowedToolNames: new Set(["read"]),
-				isBuiltIn: false,
-			}),
-		).toBe(false);
-		expect(
-			isToolScopedIn("yield", [], {
-				enforceToolAllowlist: true,
-				allowedToolNames: new Set(["yield"]),
-				isBuiltIn: false,
-			}),
-		).toBe(true);
-	});
-});
-describe("mcpDisallowTargetsServer", () => {
-	test("blanket mcp__* targets every server", () => {
-		expect(mcpDisallowTargetsServer(["mcp__*"], "foo")).toBe(true);
-		expect(mcpDisallowTargetsServer(["mcp__*"], "bar")).toBe(true);
-	});
-	test("bare deny-all (*) targets every server, including resource-only ones", () => {
-		// `["*"]` must close a resource-only server's list/read surface too —
-		// `isToolDisallowed` matches "*" for registered tools but never runs for
-		// a server with no owned registry tool, so the server-level predicate is
-		// the only gate. Omitting it contradicted read-only-policy classification.
-		expect(mcpDisallowTargetsServer(["*"], "foo")).toBe(true);
-		expect(mcpDisallowTargetsServer(["*", "bash"], "bar")).toBe(true);
-	});
-
-	test("bare mcp__<server>_* targets only the server whose sanitized segment matches", () => {
-		expect(mcpDisallowTargetsServer(["mcp__foo_*"], "foo")).toBe(true);
-		expect(mcpDisallowTargetsServer(["mcp__foo_*"], "bar")).toBe(false);
-		// Raw config names sanitize exactly like minted tool-name prefixes.
-		expect(mcpDisallowTargetsServer(["mcp__db2_*"], "DB2")).toBe(true);
-		expect(mcpDisallowTargetsServer(["mcp__foo_bar_*"], "Foo Bar")).toBe(true);
-		// A capped server name still matches through the sanitized segment.
-		expect(mcpDisallowTargetsServer([LONG_SERVER_PATTERN], LONG_SERVER_NAME)).toBe(true);
-	});
-
-	test("unrelated patterns never target a server", () => {
-		expect(mcpDisallowTargetsServer(["bash"], "foo")).toBe(false);
-		expect(mcpDisallowTargetsServer([], "foo")).toBe(false);
-		// A tool-prefix wildcard is not a server wildcard.
-		expect(mcpDisallowTargetsServer(["mcp__foo_query*"], "foo")).toBe(false);
-		// An exact tool name is not a server target.
-		expect(mcpDisallowTargetsServer(["mcp__foo_query"], "foo")).toBe(false);
-	});
-});
-
 describe("expandDisallowedTools", () => {
 	test("expands exec alias to include eval and bash", () => {
 		const expanded = expandDisallowedTools(["exec", "mcp__*"]);
@@ -217,5 +185,13 @@ describe("expandDisallowedTools", () => {
 	test("leaves patterns without exec unchanged", () => {
 		expect(expandDisallowedTools(["bash", "read"])).toEqual(["bash", "read"]);
 		expect(expandDisallowedTools([])).toEqual([]);
+	});
+});
+
+describe("mcpWildcardServerSegment", () => {
+	test("identifies server wildcard segment only for trailing-* patterns", () => {
+		expect(mcpWildcardServerSegment("mcp__github_a")).toBeUndefined();
+		expect(mcpWildcardServerSegment("mcp__github_*")).toBe("github");
+		expect(mcpWildcardServerSegment("mcp__foo_query*")).toBeUndefined();
 	});
 });

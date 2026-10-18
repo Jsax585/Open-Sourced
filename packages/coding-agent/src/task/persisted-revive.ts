@@ -22,6 +22,7 @@ import {
 	type PersistedSessionInit,
 	SessionManager,
 } from "../session/session-manager";
+import { ToolScope } from "../tools/tool-scope";
 import type { EventBus } from "../utils/event-bus";
 import {
 	attachIrcWakeTurnMonitor,
@@ -304,26 +305,33 @@ export function createPersistedSubagentReviverFactory(
 			// snapshot predates tools that registered late originally and would
 			// drop one that is available again at revival time with no later
 			// registration event to re-activate it.
-			// Under an enforced `tools:` allowlist the declared list is exact:
-			// session creation no longer force-adds session-managed builtins or
-			// the checkpoint/rewind sister, so the clamp must not union them
-			// back — the cold path reproduces the declaration, matching what a
-			// fresh spawn carries. (`yield` is appended to the clamp set for structured sessions.)
-			//
-			// MCP entries are canonicalized against the live registry first. The
-			// declaration may name a tool the Claude Code way
-			// (`mcp__srv-x__tool`), while `declaredTools` persists that original
-			// spelling: session creation resolves it to the minted key, and
-			// clamping to the raw persisted name would then drop the very tool the
-			// agent declared. An unresolvable spelling is left untouched.
-			const declaredScope = (init.declaredTools ?? revivedToolNames).map(name => {
-				if (name.endsWith("*")) return name;
-				return (
-					resolveMCPToolAlias(name, candidate =>
-						session.getToolByName(candidate) ? { name: candidate } : undefined,
-					)?.name ?? name
+			// Two paths for determining the clamped declared scope:
+			// 1. Enforced allowlist (`init.enforceToolAllowlist === true`): the revived
+			//    session's own scope IS the declaration (session creation configured it
+			//    with full owner metadata, case folding, and server-wildcard support).
+			//    Filtering by `session.isToolScopedIn(name)` reproduces the exact grant directly,
+			//    ensuring capped or hyphenated MCP tools are kept without raw matcher drops.
+			// 2. Non-enforced host list / enabled snapshot: filter with a declaration
+			//    `ToolScope` so owner metadata and alias resolution apply, expanding
+			//    globs against the live registry without passing raw patterns to
+			//    `setActiveToolsByName`.
+			let declaredScope: string[];
+			if (init.enforceToolAllowlist === true) {
+				declaredScope = session.getAllToolNames().filter(name => session.isToolScopedIn(name));
+			} else {
+				const declaredPatterns = init.declaredTools ?? revivedToolNames;
+				const revivalScope = new ToolScope({ allowedToolNames: declaredPatterns }).setAliasResolver(
+					entry =>
+						resolveMCPToolAlias(entry, candidate =>
+							session.getToolByName(candidate) ? { name: candidate } : undefined,
+						)?.name,
 				);
-			});
+				declaredScope = session.getAllToolNames().filter(name => {
+					if (!session.isToolScopedIn(name)) return false;
+					const owner = (session.getToolByName(name) as { mcpServerName?: unknown } | undefined)?.mcpServerName;
+					return revivalScope.isExplicitlyAllowed(name, typeof owner === "string" ? owner : undefined);
+				});
+			}
 			const reviveScope =
 				structured && !declaredScope.includes("yield") ? [...declaredScope, "yield"] : declaredScope;
 			await session.setActiveToolsByName(

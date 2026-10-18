@@ -1,4 +1,6 @@
 import type { EvalBackendsAllowance } from "./eval-backends";
+import { sanitizeNamePart } from "../mcp/name-sanitize";
+import { compileNamePatterns, hasGlobChars } from "./name-patterns";
 
 export const BUILTIN_TOOL_NAMES = [
 	"read",
@@ -122,8 +124,8 @@ export function withoutSiblingTools(names: readonly string[], isDisallowed: (nam
  * Expand the `exec` tool alias into its concrete backends: `eval` (kept only
  * when at least one eval backend is allowed per `backends`) and `bash`. A deny
  * on the alias itself blocks the whole expansion; a deny on a child is applied
- * by the caller's later disallow filter (or by {@link isToolDisallowed} here
- * under an explicit `patterns`). Shared by the executor spawn path and
+ * by the caller's later disallow filter (callers must expand before matching;
+ * `isToolDisallowed` does not re-expand). Shared by the executor spawn path and
  * read-only classification so both see the same effective set.
  */
 export function expandDisallowedTools(patterns: readonly string[]): string[] {
@@ -160,29 +162,14 @@ export function isMCPToolName(name: string): boolean {
 }
 
 /**
- * Sanitize an MCP server/tool name into the lowercase `[a-z0-9_]` fragment used by
- * minted tool names (`createMCPToolName`). Canonical definition:
- * `isToolDisallowed`'s ownership fallback matches a pattern's server segment
- * against this, so raw config server names (registry `mcpServerName` metadata)
- * map to the exact segment a user writes in `mcp__<server>_*`.
- * `keepDigits: false` reproduces the pre-rename mint for the legacy-name fallback.
- */
-export function sanitizeMCPToolNamePart(value: string, fallback: string, keepDigits = true): string {
-	const sanitized = value
-		.toLowerCase()
-		.replace(keepDigits ? /[^a-z0-9_]+/g : /[^a-z_]+/g, "_")
-		.replace(/_+/g, "_")
-		.replace(/^_+|_+$/g, "");
-
-	return sanitized.length > 0 ? sanitized : fallback;
-}
-
-/**
  * Server segment of an `mcp__<server>_*` wildcard pattern (text after `mcp__`
- * up to the trailing `_` before the `*`). A pattern not starting with `mcp__`
- * has no server segment.
+ * up to the trailing `_` before the `*`). Applies to trailing-`*` entries only.
+ * The pattern grammar is glob-based; the helper extracts the server segment of
+ * a trailing-`*` `mcp__<server>_*` entry for ownership matching. A pattern not
+ * starting with `mcp__` or not ending with `*` has no server segment.
  */
-function mcpWildcardServerSegment(pattern: string): string | undefined {
+export function mcpWildcardServerSegment(pattern: string): string | undefined {
+	if (!pattern.endsWith("*")) return undefined;
 	const base = pattern.slice(0, -1);
 	if (!base.startsWith("mcp__")) return undefined;
 	// Only the bare `mcp__<server>_*` form (pattern ends with `_` before the
@@ -197,48 +184,21 @@ function mcpWildcardServerSegment(pattern: string): string | undefined {
 }
 
 /**
- * Whether a disallow pattern set targets a whole MCP server by name: the
- * blanket `mcp__*` or a bare `mcp__<server>_*` wildcard whose server segment
- * matches {@link sanitizeMCPToolNamePart} of the raw server name. Used to
- * decide whether a resource-only server (advertises resources, no tools — no
- * registry tool to gate on) is scoped out: an unrelated disallow
- * (`disallowedTools: [bash]`) or a pattern for a different server must not
- * strip its resources/instructions, while `mcp__*` or `mcp__<server>_*`
- * naming it must.
- */
-export function mcpDisallowTargetsServer(patterns: readonly string[], serverName: string): boolean {
-	const sanitized = sanitizeMCPToolNamePart(serverName, "server");
-	for (const pattern of patterns) {
-		if (pattern === "mcp__*" || pattern === "*") return true; // `mcp__*` = all MCP tools; bare `*` is deny-all and must close resource-only servers too.
-		const serverSegment = mcpWildcardServerSegment(pattern);
-		if (serverSegment !== undefined && serverSegment === sanitized) return true;
-	}
-	return false;
-}
-
-/**
- * Match a tool name against disallow patterns: a trailing `*` is a prefix
- * wildcard (`mcp__*` = all MCP tools, `mcp__<server>_*` = one server), any
- * other pattern matches the exact name.
+ * Match a tool name against disallow patterns using glob semantics:
+ * `Bun.Glob` matching, exact-first, leading `!` escaped, bare `*` = deny all.
  *
  * Hidden protocol tools (`yield`, `goal`, `think`) are never disallowable:
  * stripping the subagent terminator would leave a `requireYieldTool` session
- * unable to yield. The `<server>` in an `mcp__<server>_*` pattern is the
- * sanitized tool-name prefix (`createMCPToolName` lowercases, keeps digits,
- * and collapses other non-`[a-z0-9_]` characters), not the raw config server
- * name — a server named `db-2` mints `mcp__db_2_query`, so the pattern is
- * `mcp__db_2_*`.
+ * unable to yield.
  *
- * Minted names over 64 chars are length-capped (`capMCPToolNameLength`), so the
- * `mcp__<server>_` prefix is truncated and hash-suffixed — a plain prefix match
- * then silently retains that server's tools. When the caller knows the tool's
- * raw `mcpServerName` (registry metadata), pass it as `mcpServerName`: each
- * `mcp__<server>_*` pattern then also disallows when the pattern's server
- * segment equals {@link sanitizeMCPToolNamePart} of the raw name, matching by
- * ownership instead of the lossy prefix.
+ * When the caller knows the tool's raw `mcpServerName` (registry metadata),
+ * pass it as `mcpServerName`: `mcp__<server>_*` ownership is matched against
+ * the sanitized raw server name when the caller knows it, preventing prefix collisions
+ * between servers like `foo` and `foo_bar`.
  */
 export interface ToolDisallowOptions {
 	mcpServerName?: string;
+	/** @deprecated Ignored: reserved protocol names are rejected at registration, so a hidden-named tool is always built-in. */
 	isBuiltIn?: boolean;
 }
 
@@ -248,49 +208,43 @@ export function isToolDisallowed(
 	options?: string | ToolDisallowOptions,
 ): boolean {
 	const mcpServerName = typeof options === "string" ? options : options?.mcpServerName;
-	const isBuiltIn = typeof options === "object" ? options?.isBuiltIn : undefined;
-	if (HIDDEN_TOOL_NAMES.includes(name as HiddenToolName) && isBuiltIn !== false) return false;
-	for (const pattern of patterns) {
-		if (pattern.endsWith("*")) {
-			// When the tool's raw server is known, ownership decides a
-			// `mcp__<server>_*` pattern BEFORE the name-prefix fallback. The prefix is
-			// lossy — server `foo` and server `foo_bar` both produce names starting
-			// `mcp__foo_`, so the prefix test would strip an unrelated server's tools,
-			// resources, and instructions with them.
-			const serverSegment = mcpWildcardServerSegment(pattern);
-			if (mcpServerName !== undefined && serverSegment !== undefined) {
-				// Decided by ownership: a match denies, a mismatch moves on to the
-				// remaining patterns WITHOUT the lossy prefix test.
-				if (sanitizeMCPToolNamePart(mcpServerName, "server") === serverSegment) return true;
-				continue;
-			}
-			if (name.startsWith(pattern.slice(0, -1))) return true;
-		} else if (name === pattern || (pattern.toLowerCase() === "exec" && (name === "eval" || name === "bash"))) {
-			return true;
+	if (HIDDEN_TOOL_NAMES.includes(name as HiddenToolName)) return false;
+	const compiledPatterns = compileNamePatterns(patterns);
+	if (compiledPatterns.blanket) return true;
+
+	const serverEntries: {
+		pattern: string;
+		segment: string;
+		segmentGlob: Bun.Glob;
+		matcher: ReturnType<typeof compileNamePatterns>;
+	}[] = [];
+	const plainEntries: string[] = [];
+
+	for (const entry of compiledPatterns.entries) {
+		const segment = mcpWildcardServerSegment(entry);
+		if (segment !== undefined && segment.length > 0) {
+			serverEntries.push({
+				pattern: entry,
+				segment,
+				segmentGlob: new Bun.Glob(segment.startsWith("!") ? `\\${segment}` : segment),
+				matcher: compileNamePatterns([entry]),
+			});
+		} else {
+			plainEntries.push(entry);
 		}
 	}
-	return false;
-}
 
-/**
- * Single scope predicate for subagent tool grants: a tool is effectively scoped
- * in when it is not disallowed and, under an enforced `tools:` allowlist, is
- * either a hidden protocol tool (`yield`, `goal`, `think`) or named in the
- * allowlist. Hidden protocol tools are never removable by scoping — stripping
- * the subagent terminator would leave a `requireYieldTool` session unable to
- * yield. Shared by the session active-set invariant, the Cursor bridge grant,
- * and the MCP-instructions prompt filter so all three cannot drift apart.
- * `mcpServerName` (raw server of the tool, when known) is forwarded to
- * {@link isToolDisallowed} so capped minted names still match `mcp__<server>_*`.
- */
-export function isToolScopedIn(
-	name: string,
-	disallowedPatterns: readonly string[],
-	options: { enforceToolAllowlist?: boolean; allowedToolNames?: ReadonlySet<string>; isBuiltIn?: boolean },
-	mcpServerName?: string,
-): boolean {
-	if (isToolDisallowed(name, disallowedPatterns, { mcpServerName, isBuiltIn: options.isBuiltIn })) return false;
-	if (!options.enforceToolAllowlist) return true;
-	const isCanonicalHidden = options.isBuiltIn !== false && HIDDEN_TOOL_NAMES.includes(name as HiddenToolName);
-	return isCanonicalHidden || options.allowedToolNames?.has(name) === true;
+	if (mcpServerName !== undefined) {
+		const ownerSegment = sanitizeNamePart(mcpServerName, "server", { domain: "mint" });
+		for (const entry of serverEntries) {
+			const isWholeServer = entry.pattern === `mcp__${entry.segment}_*` && entry.segmentGlob.match(ownerSegment);
+			if (isWholeServer) return true;
+			const isOwnerConsistent =
+				entry.segmentGlob.match(ownerSegment) ||
+				(!hasGlobChars(entry.segment) && entry.segment.startsWith(`${ownerSegment}_`));
+			if (isOwnerConsistent && entry.matcher.matches(name)) return true;
+		}
+		return compileNamePatterns(plainEntries).matches(name);
+	}
+	return compiledPatterns.matches(name);
 }

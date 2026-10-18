@@ -28,7 +28,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { sanitizeMCPToolNamePart } from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
+import { sanitizeNamePart } from "@oh-my-pi/pi-coding-agent/mcp/name-sanitize";
 import { VIBE_TOOL_NAMES } from "@oh-my-pi/pi-coding-agent/tools/vibe";
 import { resetYieldTurnState } from "@oh-my-pi/pi-coding-agent/tools/yield";
 import { logger, removeSyncWithRetries, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
@@ -39,7 +39,7 @@ import { SERVER_INSTRUCTIONS } from "./fixtures/instructions-mcp";
 // truncates the whole name and appends a hash suffix, so `mcp__<server>_*`
 // cannot match by name prefix and must match by `mcpServerName` ownership.
 const LONG_SERVER_NAME = "very long server name that gets truncated at the 64 character cap boundary for testing";
-const LONG_SERVER_DISALLOW_PATTERN = `mcp__${sanitizeMCPToolNamePart(LONG_SERVER_NAME, "server")}_*`;
+const LONG_SERVER_DISALLOW_PATTERN = `mcp__${sanitizeNamePart(LONG_SERVER_NAME, "server", { domain: "mint" })}_*`;
 
 import { cfgExternalThinking } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { cfgPlanEnabled } from "@oh-my-pi/pi-coding-agent/plan-mode/settings";
@@ -3835,5 +3835,96 @@ describe("createAgentSession defaultInactive tool activation", () => {
 				await session.dispose();
 			}
 		});
+	});
+
+	it("activates tools matching a glob allowlist", async () => {
+		const tempDir = makeTempDir();
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			toolNames: ["rea*"],
+			enforceToolAllowlist: true,
+		});
+
+		try {
+			expect(session.getActiveToolNames()).toContain("read");
+			expect(session.getActiveToolNames()).not.toContain("write");
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("does not force-activate defaultInactive tools when using a wildcard allowlist", async () => {
+		const tempDir = makeTempDir();
+		const normalTool: CustomTool = {
+			name: "normal_custom_tool",
+			label: "Normal Custom Tool",
+			description: "Normal custom tool",
+			parameters: type({}),
+			loadMode: "essential",
+			async execute() {
+				return { content: [{ type: "text", text: "normal" }] };
+			},
+		};
+		const inactiveToolExtension: ExtensionFactory = pi => {
+			pi.registerTool({
+				name: "inactive_tool",
+				label: "Inactive Tool",
+				description: "Default inactive tool",
+				parameters: type({}),
+				defaultInactive: true,
+				loadMode: "essential",
+				async execute() {
+					return { content: [{ type: "text", text: "inactive" }] };
+				},
+			});
+		};
+
+		const { session: wildcardSession } = await createAgentSession({
+			...baseOptions(tempDir),
+			extensions: [inactiveToolExtension],
+			customTools: [normalTool],
+			toolNames: ["*"],
+			enforceToolAllowlist: true,
+		});
+
+		try {
+			expect(wildcardSession.getActiveToolNames()).toContain("normal_custom_tool");
+			expect(wildcardSession.getActiveToolNames()).not.toContain("inactive_tool");
+		} finally {
+			await wildcardSession.dispose();
+		}
+
+		const { session: literalSession } = await createAgentSession({
+			...baseOptions(tempDir),
+			extensions: [inactiveToolExtension],
+			customTools: [normalTool],
+			toolNames: ["inactive_tool"],
+			enforceToolAllowlist: true,
+		});
+
+		try {
+			expect(literalSession.getActiveToolNames()).toContain("inactive_tool");
+		} finally {
+			await literalSession.dispose();
+		}
+	});
+
+	it("mounts discoverable tools under xd:// when a wildcard allowlist is used", async () => {
+		const tempDir = makeTempDir();
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			extensions: [toolActivationExtension],
+			toolNames: ["*"],
+			enforceToolAllowlist: true,
+		});
+
+		try {
+			expect(session.getMountedXdevToolNames()).toContain("default_active_tool");
+			expect(session.getActiveToolNames()).not.toContain("default_active_tool");
+			expect(session.getActiveToolNames()).toContain("read");
+			expect(session.getActiveToolNames()).toContain("write");
+		} finally {
+			await session.dispose();
+		}
 	});
 });

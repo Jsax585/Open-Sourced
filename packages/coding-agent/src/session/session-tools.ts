@@ -27,14 +27,9 @@ import evalPreludeNoticePrompt from "../prompts/system/eval-prelude-notice.md" w
 import sessionAgentNoticePrompt from "../prompts/system/session-agent-notice.md" with { type: "text" };
 import toolRosterNoticePrompt from "../prompts/system/tool-roster-notice.md" with { type: "text" };
 import xdevMountNoticePrompt from "../prompts/system/xdev-mount-notice.md" with { type: "text" };
-import { mcpServerResourcesAllowed } from "../cursor";
-import {
-	isMCPToolName,
-	isToolScopedIn,
-	mcpDisallowTargetsServer,
-	normalizeToolNames,
-	withoutSiblingTools,
-} from "../tools/builtin-names";
+import { mcpServerResourcesAllowed } from "../mcp/resource-scope";
+import { ToolScope } from "../tools/tool-scope";
+import { isMCPToolName, normalizeToolNames, withoutSiblingTools } from "../tools/builtin-names";
 import { denyError, resolveApproval, resolveApprovalFromContext } from "../tools/approval";
 import { wrapToolWithMetaNotice } from "../tools/output-meta";
 import { isFilesystemSourcePath } from "../tools/path-utils";
@@ -119,15 +114,8 @@ interface SessionToolsOptions {
 	createThinkTool?: () => Promise<AgentTool | null>;
 	builtInToolNames?: Iterable<string>;
 	presentationPinnedToolNames?: ReadonlySet<string>;
-	/** Subagent tool scoping: every runtime active-set mutation preserves the startup scope. */
-	enforceToolAllowlist?: boolean;
-	/** Exact names the enforced `tools:` allowlist permits. Hidden protocol tools
-	 * (`yield`, `goal`, `think`) stay permitted only when built-in provenance
-	 * holds (an extension-defined same-named tool is still gated); wildcards
-	 * are not expanded here. */
-	allowedToolNames?: ReadonlySet<string>;
-	/** Disallow patterns removed from every runtime selection (trailing `*` = prefix wildcard). */
-	disallowedToolPatterns?: readonly string[];
+	/** Subagent tool scope; every active-set mutation preserves it. Absent = unrestricted. */
+	toolScope?: ToolScope;
 	/** MCP tool names whose current registry entries came from the manager snapshot. */
 	mcpManagerToolNames?: Iterable<string>;
 	/** Live manager tool records (carry raw mcpServerName) for dual-source resource gating. */
@@ -371,9 +359,7 @@ export class SessionTools {
 	#presentationPinnedToolNames: ReadonlySet<string> | undefined;
 	#runtimeSelectedToolNames: ReadonlySet<string> | undefined;
 	/** Enforced subagent scope (`tools:` allowlist + `disallowedTools:`) applied to every active-set mutation. */
-	#enforceToolAllowlist: boolean;
-	#allowedToolNames: ReadonlySet<string> | undefined;
-	#disallowedToolPatterns: readonly string[];
+	#toolScope: ToolScope;
 	#baseSystemPrompt: string[];
 	/**
 	 * Per-turn system prompt returned by a `before_agent_start` extension hook
@@ -475,11 +461,7 @@ export class SessionTools {
 			}
 		}
 		this.#presentationPinnedToolNames = options.presentationPinnedToolNames;
-		this.#enforceToolAllowlist = options.enforceToolAllowlist === true;
-		// Copy caller-owned collections: a post-construction mutation must not
-		// silently change enforcement.
-		this.#allowedToolNames = options.allowedToolNames === undefined ? undefined : new Set(options.allowedToolNames);
-		this.#disallowedToolPatterns = [...(options.disallowedToolPatterns ?? [])];
+		this.#toolScope = options.toolScope ?? new ToolScope({});
 		this.#ensureWriteRegistered = options.ensureWriteRegistered;
 		this.#isDeviceOnlyWrite = options.isDeviceOnlyWrite;
 		this.#deviceOnlyWriteTransportAvailable = this.#isDeviceOnlyWrite?.() === true;
@@ -663,7 +645,7 @@ export class SessionTools {
 	 * keeps the registry entry but removes it from every active-set mutation,
 	 * so hashline anchors must be suppressed for the subagent (the
 	 * `resolveFileDisplayMode` contract). No-op for unrestricted sessions:
-	 * ``isToolScopedIn` admits everything then.
+	 * `isToolScopedIn` admits everything then.
 	 */
 	get hasEditTool(): boolean {
 		return this.#toolRegistry.has("edit") && this.isToolScopedIn("edit");
@@ -1079,7 +1061,7 @@ export class SessionTools {
 		return mcpServerResourcesAllowed(
 			sources,
 			(name, owner) => this.isToolScopedIn(name, owner),
-			server => !this.#enforceToolAllowlist && !mcpDisallowTargetsServer(this.#disallowedToolPatterns, server),
+			server => !this.#toolScope.enforced && !this.#toolScope.deniesServer(server),
 			serverName,
 		);
 	}
@@ -1090,46 +1072,13 @@ export class SessionTools {
 	 * When `mcpServerName` is provided, it overrides the registry lookup. This
 	 * allows callers judging candidate or deduplicated MCP tools (such as dedup
 	 * losers that are absent from the registry) to evaluate disallow patterns
-	 * against the tool's actual owning server.
+	 * against the tool's actual owning server. Alias resolution lives in `ToolScope`.
 	 */
 	isToolScopedIn(name: string, mcpServerName?: string): boolean {
-		// Metadata-aware disallow: pass the registered tool's raw `mcpServerName`
-		// so `mcp__<server>_*` still matches length-capped minted names (a plain
-		// name-prefix match misses the truncated + hashed registry key). Callers
-		// judging candidate or deduplication-loser tools may pass `mcpServerName`
-		// directly to override the registry lookup.
 		const registryServerName = (this.#toolRegistry.get(name) as { mcpServerName?: unknown } | undefined)
 			?.mcpServerName;
-		const resolvedServerName =
-			mcpServerName ?? (typeof registryServerName === "string" ? registryServerName : undefined);
-		const isBuiltIn = this.#builtInToolNames.has(name);
-		// A Claude-spelled allowlist entry (`mcp__srv-x__tool`) stays raw in the
-		// stored set when the tool was absent at startup; resolve declared entries
-		// against the live registry so the grant does not depend on registration
-		// timing. The set itself is left untouched — resolution is per-judgment.
-		let allowedToolNames = this.#allowedToolNames;
-		if (this.#enforceToolAllowlist && allowedToolNames?.has(name) !== true) {
-			const resolved = new Set(allowedToolNames ?? []);
-			for (const entry of allowedToolNames ?? []) {
-				if (entry.endsWith("*")) continue;
-				const canonical =
-					resolveMCPToolAlias(entry, candidate =>
-						this.#toolRegistry.has(candidate) ? { name: candidate } : undefined,
-					)?.name ?? entry;
-				if (canonical !== entry) resolved.add(canonical);
-			}
-			allowedToolNames = resolved;
-		}
-		return isToolScopedIn(
-			name,
-			this.#disallowedToolPatterns,
-			{
-				enforceToolAllowlist: this.#enforceToolAllowlist,
-				allowedToolNames,
-				isBuiltIn,
-			},
-			resolvedServerName,
-		);
+		const owner = mcpServerName ?? (typeof registryServerName === "string" ? registryServerName : undefined);
+		return this.#toolScope.isScopedIn(name, owner);
 	}
 
 	/**
@@ -1139,7 +1088,7 @@ export class SessionTools {
 	 * {@link setActiveToolsByName}, extension hooks, or internal toggles.
 	 */
 	#scopeActiveToolSelection(toolNames: string[]): string[] {
-		if (!this.#enforceToolAllowlist && this.#disallowedToolPatterns.length === 0) return toolNames;
+		if (!this.#toolScope.restricted) return toolNames;
 		// Pair-aware, like the startup scope: a runtime mutation (extension
 		// hook, internal toggle, cold-revive clamp) must not readmit one half of
 		// a sibling pair whose other half the scope removed — the survivor's
