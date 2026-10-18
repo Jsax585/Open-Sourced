@@ -760,6 +760,12 @@ export interface LiveSteerClaim {
 	readonly messages: readonly UserMessage[];
 	/** The server owns the input: the caller records it right after the current response. */
 	accept(): void;
+	/**
+	 * The input reached the model inside the current response, which already
+	 * answers it: the caller records it right after that response and does not
+	 * ask the model again.
+	 */
+	absorb(): void;
 	/** Not delivered: the caller sends the input with its next request. */
 	reject(): void;
 }

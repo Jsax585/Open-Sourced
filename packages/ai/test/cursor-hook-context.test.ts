@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "bun:test";
 import * as http2 from "node:http2";
-import { streamCursor } from "@oh-my-pi/pi-ai/providers/cursor";
-import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import { type CursorOptions, streamCursor } from "@oh-my-pi/pi-ai/providers/cursor";
+import type { Context, LiveSteerClaim, LiveSteering, Model, UserMessage } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
 	AgentClientMessageSchema,
@@ -85,9 +85,15 @@ afterEach(() => {
 /**
  * One Cursor turn scripted as steps: each step's frames go out after the
  * client answers the previous step's exec. Returns the hook contexts the
- * client attached to each exec result, keyed by exec id.
+ * client attached to each exec result, keyed by exec id. `onTerminalEvent`
+ * runs when the stream reports its outcome, which is when the agent loop reads
+ * what live steering delivered.
  */
-async function runTurn(steps: Buffer[][]): Promise<Map<number, string[]>> {
+async function runTurn(
+	steps: Buffer[][],
+	options: Partial<CursorOptions> = {},
+	onTerminalEvent: () => void = () => {},
+): Promise<Map<number, string[]>> {
 	const contextsByExecId = new Map<number, string[]>();
 	const server = http2.createServer();
 	servers.push(server);
@@ -141,8 +147,14 @@ async function runTurn(steps: Buffer[][]): Promise<Map<number, string[]>> {
 		maxTokens: 1,
 	});
 	const context: Context = { messages: [{ role: "user", content: "read files", timestamp: 1 }] };
-	const response = streamCursor(model, context, { apiKey: "test-token", contextBudgetTokens: BUDGET_TOKENS });
-	for await (const _event of response);
+	const response = streamCursor(model, context, {
+		apiKey: "test-token",
+		contextBudgetTokens: BUDGET_TOKENS,
+		...options,
+	});
+	for await (const event of response) {
+		if (event.type === "done" || event.type === "error") onTerminalEvent();
+	}
 	await response.result();
 	return contextsByExecId;
 }
@@ -171,4 +183,54 @@ it("leaves a turn alone when it opened past the budget", async () => {
 	]);
 
 	expect([...contexts.values()]).toEqual([[], []]);
+});
+
+/** A steering queue holding one user message; records how its claim was settled. */
+function queuedSteering(text: string): { source: LiveSteering; outcomes: string[] } {
+	const outcomes: string[] = [];
+	let queued: UserMessage[] = [{ role: "user", content: text, timestamp: 2 }];
+	const source: LiveSteering = {
+		wait: signal =>
+			queued.length > 0
+				? Promise.resolve()
+				: new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true })),
+		claim: async (): Promise<LiveSteerClaim | undefined> => {
+			const messages = queued;
+			queued = [];
+			if (messages.length === 0) return undefined;
+			return {
+				messages,
+				accept: () => outcomes.push("accepted"),
+				absorb: () => outcomes.push("absorbed"),
+				reject: () => outcomes.push("rejected"),
+			};
+		},
+	};
+	return { source, outcomes };
+}
+
+it("delivers user steering with the next tool result that accepts context", async () => {
+	const steering = queuedSteering("stop and use the staging bucket");
+
+	const contexts = await runTurn([[execReadFrame(1, false)], [execReadFrame(2, true)], [execReadFrame(3, true)]], {
+		liveSteering: steering.source,
+	});
+
+	expect(contexts.get(1)).toEqual([]);
+	expect(contexts.get(2)).toEqual(["stop and use the staging bucket"]);
+	expect(contexts.get(3)).toEqual([]);
+	expect(steering.outcomes).toEqual(["absorbed"]);
+});
+
+it("hands undelivered steering back before the turn reports its outcome", async () => {
+	// The agent loop collects declined steering when the outcome arrives; a
+	// rejection after that point would drop the user's message.
+	const steering = queuedSteering("also check the logs");
+	let outcomesAtTerminalEvent: string[] = [];
+
+	await runTurn([[execReadFrame(1, false)]], { liveSteering: steering.source }, () => {
+		outcomesAtTerminalEvent = [...steering.outcomes];
+	});
+
+	expect(outcomesAtTerminalEvent).toEqual(["rejected"]);
 });

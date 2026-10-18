@@ -230,6 +230,7 @@ import { waitForRetry } from "../utils/retry-wait";
 import { sanitizeSchemaForCursor, toolWireSchema } from "../utils/schema";
 import { formatConnectEndStreamError, hasRetryableCursorErrorDetail } from "./connect-error-detail";
 import { CONNECT_END_STREAM_FLAG, ConnectFrameDecoder, frameConnectMessage } from "./connect-frame";
+import { CursorSteeringRelay } from "./cursor/steering-relay";
 import { CursorContextBudget } from "./cursor/context-budget";
 import mcpExternalHandoffMessage from "./cursor-external-tool-handoff.md" with { type: "text" };
 import {
@@ -686,7 +687,7 @@ function parseConnectEndStream(data: Uint8Array): Error | null {
 interface CursorMessageWriter {
 	write(frame: Uint8Array): void;
 	/** Context the host wants the model to read with the next tool result that accepts it. */
-	takeAdditionalContext?(): string | undefined;
+	takeAdditionalContexts?(): string[];
 }
 
 interface CursorRunTransport extends CursorMessageWriter {
@@ -1056,6 +1057,7 @@ function streamCursorWithWireMode(
 	options: CursorOptions | undefined,
 	wireMode: CursorWireMode,
 	timing?: CursorStreamTiming,
+	steering?: CursorSteeringRelay,
 ): AssistantMessageEventStream {
 	const stream = new AssistantMessageEventStream();
 
@@ -1410,7 +1412,10 @@ function streamCursorWithWireMode(
 					checkpointCoversTurn = false;
 					resultTransport.write(frame);
 				},
-				takeAdditionalContext: () => contextBudget?.takeNotice(output.usage.contextTokens),
+				takeAdditionalContexts: () =>
+					[contextBudget?.takeNotice(output.usage.contextTokens), steering?.take()].filter(
+						context => context !== undefined,
+					),
 			};
 
 			runTransport.onResponse(headers => {
@@ -1622,6 +1627,9 @@ function streamCursorWithWireMode(
 						})
 					: undefined;
 
+			// Settle steering before the result: whatever no tool result carried
+			// must be back with the caller when it reads this response's outcome.
+			await steering?.close();
 			calculateCost(model, output.usage, output.timestamp);
 
 			output.duration = performance.now() - startTime;
@@ -1653,28 +1661,35 @@ function streamCursorWithWireMode(
 				h2Client?.close();
 				logger.debug("cursor transport falling back to RunSSE", { baseUrl: model.baseUrl || CURSOR_API_URL });
 
-				const http1Stream = streamCursorWithWireMode(model, context, options, wireMode, {
-					startTime,
-					timestamp: output.timestamp,
-					transport: "http1",
-					retry: {
-						attempt: retryContext?.attempt ?? 0,
-						originalRequestId,
-						requestIds: turnRequestIds,
-						checkpoint: retryContext?.checkpoint,
-						checkpointHash: retryContext?.checkpointHash,
-						noProgressResumes: retryContext?.noProgressResumes ?? 0,
-						output,
-						blockState: openBlockState,
-						usageState,
-						baseConversationId,
-						conversationId,
-						blobStore: activeBlobStore,
-						turnRecords,
-						contextBudget,
-						firstTokenTime,
+				const http1Stream = streamCursorWithWireMode(
+					model,
+					context,
+					options,
+					wireMode,
+					{
+						startTime,
+						timestamp: output.timestamp,
+						transport: "http1",
+						retry: {
+							attempt: retryContext?.attempt ?? 0,
+							originalRequestId,
+							requestIds: turnRequestIds,
+							checkpoint: retryContext?.checkpoint,
+							checkpointHash: retryContext?.checkpointHash,
+							noProgressResumes: retryContext?.noProgressResumes ?? 0,
+							output,
+							blockState: openBlockState,
+							usageState,
+							baseConversationId,
+							conversationId,
+							blobStore: activeBlobStore,
+							turnRecords,
+							contextBudget,
+							firstTokenTime,
+						},
 					},
-				});
+					steering,
+				);
 				stream.forwardLocalWorkFrom(http1Stream);
 				try {
 					for await (const event of http1Stream) {
@@ -1704,11 +1719,18 @@ function streamCursorWithWireMode(
 				runTransport?.close();
 				h2Client?.close();
 
-				const fallbackStream = streamCursorWithWireMode(model, context, options, "discovered", {
-					startTime,
-					timestamp: output.timestamp,
-					transport: transportMode,
-				});
+				const fallbackStream = streamCursorWithWireMode(
+					model,
+					context,
+					options,
+					"discovered",
+					{
+						startTime,
+						timestamp: output.timestamp,
+						transport: transportMode,
+					},
+					steering,
+				);
 				// The lazy watchdog observes THIS outer stream; the fallback's exec
 				// bridge marks the inner stream busy via `trackLocalWork`. Forward
 				// that busy state so a local tool on the retry turn is not aborted as
@@ -1791,28 +1813,35 @@ function streamCursorWithWireMode(
 					error = waitError;
 				}
 				if (retryDelayCompleted) {
-					const retryStream = streamCursorWithWireMode(model, context, options, wireMode, {
-						startTime,
-						timestamp: output.timestamp,
-						transport: transportMode,
-						retry: {
-							attempt: retryAttempt + 1,
-							originalRequestId: retryOriginalRequestId,
-							requestIds: turnRequestIds,
-							checkpoint: retryCheckpoint,
-							checkpointHash,
-							noProgressResumes,
-							output,
-							blockState: retryBlockState,
-							usageState: retryUsageState,
-							baseConversationId: retryBaseConversationId,
-							conversationId: retryConversationId,
-							blobStore: retryBlobStore,
-							turnRecords,
-							contextBudget,
-							firstTokenTime,
+					const retryStream = streamCursorWithWireMode(
+						model,
+						context,
+						options,
+						wireMode,
+						{
+							startTime,
+							timestamp: output.timestamp,
+							transport: transportMode,
+							retry: {
+								attempt: retryAttempt + 1,
+								originalRequestId: retryOriginalRequestId,
+								requestIds: turnRequestIds,
+								checkpoint: retryCheckpoint,
+								checkpointHash,
+								noProgressResumes,
+								output,
+								blockState: retryBlockState,
+								usageState: retryUsageState,
+								baseConversationId: retryBaseConversationId,
+								conversationId: retryConversationId,
+								blobStore: retryBlobStore,
+								turnRecords,
+								contextBudget,
+								firstTokenTime,
+							},
 						},
-					});
+						steering,
+					);
 					stream.forwardLocalWorkFrom(retryStream);
 					try {
 						for await (const event of retryStream) {
@@ -1883,6 +1912,7 @@ function streamCursorWithWireMode(
 			}
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
+			await steering?.close();
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		} finally {
@@ -1913,7 +1943,14 @@ function streamCursorWithWireMode(
 
 /** Streams a Cursor Agent turn, retrying a discovered effort id when its normalized wire id is unavailable. */
 export const streamCursor: StreamFunction<"cursor-agent"> = (model, context, options) =>
-	streamCursorWithWireMode(model, context, options, "normalized");
+	streamCursorWithWireMode(
+		model,
+		context,
+		options,
+		"normalized",
+		undefined,
+		options?.liveSteering ? new CursorSteeringRelay(options.liveSteering) : undefined,
+	);
 
 export type ToolCallState = ToolCall & {
 	[kStreamingBlockIndex]: number;
@@ -3429,17 +3466,18 @@ function sendExecClientMessage<TCase extends NonNullable<ExecClientMessage["mess
 	value: Extract<ExecClientMessage["message"], { case: TCase }>["value"],
 ): void {
 	// Stream deltas are not results: a shell's context rides on its final `shellResult`.
-	const additionalContext =
+	const additionalContexts =
 		execMsg.acceptHookAdditionalContexts && messageCase !== "shellStream"
-			? runTransport.takeAdditionalContext?.()
-			: undefined;
+			? (runTransport.takeAdditionalContexts?.() ?? [])
+			: [];
 	const execClientMessage = create(ExecClientMessageSchema, {
 		id: execMsg.id,
 		execId: execMsg.execId,
 		message: { case: messageCase, value } as ExecClientMessage["message"],
-		hookAdditionalContexts: additionalContext ? [{ hookEventName: "postToolUse", content: additionalContext }] : [],
+		hookAdditionalContexts: additionalContexts.map(content => ({ hookEventName: "postToolUse", content })),
 	});
-	if (additionalContext) log("execClientMessage", "additionalContext", { id: execMsg.id, additionalContext });
+	if (additionalContexts.length > 0)
+		log("execClientMessage", "additionalContext", { id: execMsg.id, additionalContexts });
 
 	const clientMessage = create(AgentClientMessageSchema, {
 		message: { case: "execClientMessage", value: execClientMessage },

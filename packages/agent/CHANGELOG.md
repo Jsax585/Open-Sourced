@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `LiveSteerClaim.absorb()` handling: steering a provider delivered and answered inside one response is recorded after that response without another provider request
+
 ## [18.12.0] - 2026-10-17
 
 ### Fixed
