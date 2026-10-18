@@ -20,6 +20,7 @@ import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { handleMcpAcp } from "./helpers/mcp";
 import { markdownFenceFor } from "../utils/markdown-fence";
 import { parseCommandArgs } from "../utils/command-args";
+import { normalizeSessionTitle } from "../session/session-title";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import {
 	describeRedeemOutcome,
@@ -632,8 +633,14 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			let placement: "pane" | "window" | undefined;
 			let name: string | undefined;
 			const keyword = args[0];
-			if (keyword === "--name" && args.length === 2 && args[1]!.trim()) {
-				name = args[1];
+			if (keyword === "--name" && args.length === 2) {
+				const title = normalizeSessionTitle(args[1]!);
+				if (!title) {
+					clearSubmittedText(runtime);
+					runtime.ctx.showError("Session title cannot be empty.");
+					return;
+				}
+				name = title;
 			} else if (args.length > 0) {
 				if (args.length !== 1) {
 					clearSubmittedText(runtime);

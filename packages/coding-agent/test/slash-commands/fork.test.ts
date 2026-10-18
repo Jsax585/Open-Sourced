@@ -246,8 +246,8 @@ describe("/fork slash command", () => {
 		},
 	);
 
-	it.each(["/fork --name", '/fork --name ""', '/fork --name "unfinished'])(
-		"rejects a missing, empty, or unfinished title before forking: %s",
+	it.each(["/fork --name", '/fork --name ""', '/fork --name "unfinished', '/fork --name "\u0085"'])(
+		"rejects a missing, empty, unfinished, or normalization-empty title before forking: %s",
 		async command => {
 			const harness = createRuntime();
 
@@ -258,6 +258,28 @@ describe("/fork slash command", () => {
 			expect(harness.setText).toHaveBeenCalledWith("");
 		},
 	);
+
+	it("does not create or switch to a fork when the title normalizes to empty", async () => {
+		const harness = await createSessionRuntime();
+		const sourceId = harness.sessionManager.getSessionId();
+		const sourceFile = harness.sessionManager.getSessionFile();
+
+		await executeBuiltinSlashCommand('/fork --name "\u0085"', harness.runtime);
+
+		expect(harness.showError).toHaveBeenCalledTimes(1);
+		expect(harness.sessionManager.getSessionId()).toBe(sourceId);
+		expect(harness.sessionManager.getSessionFile()).toBe(sourceFile);
+		expect(harness.sessionManager.getSessionName()).toBe("Original branch");
+	});
+
+	it("stores the normalized title when a control character separates words", async () => {
+		const harness = await createSessionRuntime();
+
+		await executeBuiltinSlashCommand('/fork --name "A\u0085B"', harness.runtime);
+
+		expect(harness.showError).not.toHaveBeenCalled();
+		expect(harness.sessionManager.getSessionName()).toBe("A B");
+	});
 
 	it("consumes invalid placement without submitting it as a prompt", async () => {
 		const harness = createRuntime();
