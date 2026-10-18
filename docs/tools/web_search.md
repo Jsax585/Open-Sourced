@@ -23,6 +23,7 @@
   - `packages/coding-agent/src/web/search/providers/duckduckgo.ts` — DuckDuckGo HTML frontend scraper.
   - `packages/coding-agent/src/web/search/providers/ecosia.ts` — Ecosia browser-backed scraper.
   - `packages/coding-agent/src/web/search/providers/exa.ts` — Exa API or MCP adapter.
+  - `packages/coding-agent/src/web/search/providers/factory.ts` — Factory-hosted search through the Factory Droid login.
   - `packages/coding-agent/src/web/search/providers/firecrawl.ts` — Firecrawl search adapter.
   - `packages/coding-agent/src/web/search/providers/gemini.ts` — Gemini grounding SSE adapter.
   - `packages/coding-agent/src/web/search/providers/google.ts` — Google browser-backed SERP scraper.
@@ -220,6 +221,11 @@ Each provider search transport receives a hard timeout from `providers.webSearch
     - Querying: POST `https://api.deepseek.com/v1/tools/search` with `{ query, count }` and `Authorization: Bearer <key>`. Directives are rewritten into DeepSeek's operator set: quoted phrases, `-term`, `site:` hosts joined with `OR`, `-site:`, `lang:` (primary subtag), and `after:`/`before:`. `recency` becomes an `after:` date unless the query already has one. Queries over 128 characters (the API limit) fail before the request.
     - `limit` / `num_search_results`: `params.numSearchResults ?? params.limit`, clamped to `1..50`, default `10`.
     - Output: `sources` (snippet is the model-oriented `summary`, falling back to `snippet`), `authMode: "api_key"`. Billed per successful non-empty request.
+  - **Factory** — `packages/coding-agent/src/web/search/providers/factory.ts`
+    - Availability: a stored `factory-droid` OAuth login (`/login factory-droid`). Not in the default `web` role chain; select `web/factory` explicitly.
+    - Querying: first reads `GET /api/organization/managed-settings` (cached five minutes per org) and fails with a 403 `SearchProviderError` when `settings.webSearchDisabled` is `true`; then POSTs `{ query, numResults }` to `/api/tools/web-search` on the account's Factory API host with the login's bearer and org header, as the `droid` CLI does. Factory picks the search vendor; You.com (`results.web`/`results.news`), Parallel (`results[].excerpts`) and Exa (`results[]`) responses are all normalized.
+    - `limit` / `num_search_results`: `params.numSearchResults ?? params.limit`, clamped to `1..20`, default `10`.
+    - Output: `sources`, `requestId`, `authMode: "oauth"`.
   - **Kimi** — `packages/coding-agent/src/web/search/providers/kimi.ts`
     - Availability: `MOONSHOT_SEARCH_API_KEY`, `KIMI_SEARCH_API_KEY`, or an `agent.db` credential for `kimi-code`. `MOONSHOT_API_KEY` and stored `moonshot` credentials are intentionally rejected because the Open Platform key does not authenticate the Kimi Code search service.
     - Querying: POST to `MOONSHOT_SEARCH_BASE_URL` / `KIMI_SEARCH_BASE_URL` / default `https://api.kimi.com/coding/v1/search` with `text_query`, `limit`, `enable_page_crawling`, `timeout_seconds: 30`.
