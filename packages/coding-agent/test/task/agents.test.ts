@@ -158,15 +158,10 @@ describe("resolveAgentSkills", () => {
 		// Plain grandchild keeps both the parent's hide and its unhide.
 		expect(listed(resolveAgentSkills(child, agent()))).toEqual(["beta", "gamma"]);
 		// Grandchild unhideSkills re-lists a parent-hidden skill.
-		expect(listed(resolveAgentSkills(child, agent({ unhideSkills: ["alpha"] })))).toEqual([
-			"alpha",
-			"beta",
-			"gamma",
-		]);
+		expect(listed(resolveAgentSkills(child, agent({ unhideSkills: ["alpha"] })))).toEqual(["alpha", "beta", "gamma"]);
 		// Grandchild hideSkills re-hides a parent-unhidden skill.
 		expect(listed(resolveAgentSkills(child, agent({ hideSkills: ["beta"] })))).toEqual(["gamma"]);
 	});
-
 });
 
 describe("agent frontmatter template", () => {
