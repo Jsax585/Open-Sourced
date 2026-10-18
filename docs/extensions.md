@@ -1060,7 +1060,7 @@ backends turn argv into shell text, under the required POSIX grammar assertion.
 
 - dialog methods (`select`, `confirm`, `input`, `editor`) round-trip to client responses
 - fire-and-forget methods emit requests (`notify`, `setStatus`, `setWidget` for string arrays or removal, and `setEditorText` as `method: "set_editor_text"`); `pasteToEditor` falls back to `setEditorText`
-- `setTitle` emits only when `PI_RPC_EMIT_TITLE` is `1`, `true`, `yes`, or `on` (case-insensitive)
+- `setTitle` emits only when `PI_RPC_EMIT_TITLE` is `1`, `true`, `yes`, or `on` (case-insensitive), except in a session host (`--mode host`), which always forwards it to attached terminals
 
 Unsupported/no-op in RPC implementation:
 

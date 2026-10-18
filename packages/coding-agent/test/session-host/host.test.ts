@@ -623,6 +623,11 @@ describe("session host", () => {
 			method: "notify",
 			message: "hello",
 		});
+		// Titles too, which a plain RPC server sends only with PI_RPC_EMIT_TITLE: attached terminals show them.
+		ui!.setTitle("building");
+		expect(await withUi.next(f => f.type === "extension_ui_request" && f.method === "setTitle")).toMatchObject({
+			title: "building",
+		});
 		// One connection's frames arrive in order: this response follows any UI frame sent to it before.
 		withoutUi.write({ id: "s", type: "get_state" });
 		await withoutUi.next(f => f.type === "response" && f.id === "s");

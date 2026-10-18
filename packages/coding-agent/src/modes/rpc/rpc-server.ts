@@ -598,7 +598,8 @@ export class RpcServer {
 	readonly #options: RpcServerOptions;
 	readonly #connections = new Set<RpcConnection>();
 	readonly #dispatchers = new Map<RpcConnection, RpcInputDispatcher>();
-	readonly #emitRpcTitles = shouldEmitRpcTitles();
+	/** Session hosts always forward titles: attached terminals show them. A plain RPC server opts in via the env. */
+	readonly #emitRpcTitles: boolean;
 	readonly #extensionUserMessageTracker = new RpcExtensionUserMessageTracker();
 	readonly #settleWatcher: RpcSessionSettleWatcher;
 	/**
@@ -695,6 +696,7 @@ export class RpcServer {
 	constructor(session: AgentSession, options: RpcServerOptions) {
 		this.session = session;
 		this.#options = options;
+		this.#emitRpcTitles = options.hostId !== undefined || shouldEmitRpcTitles();
 		this.#unsubscribeEntries = session.sessionManager.subscribeEntryAppended((entry, leafId) =>
 			this.#broadcast({ type: "entry", entry, leafId } satisfies Omit<RpcEntryFrame, "seq">, toSequenced),
 		);

@@ -1251,7 +1251,8 @@ Runtime note:
 - Automatic session title generation is disabled in RPC mode, and `setTitle` UI
   requests are also suppressed by default because most hosts do not have a
   meaningful terminal-title surface. Set `PI_RPC_EMIT_TITLE=1` to opt back in to
-  the UI event only.
+  the UI event only. Session hosts (`--mode host`) always send it, because attached
+  terminals show it.
 
 Example:
 
