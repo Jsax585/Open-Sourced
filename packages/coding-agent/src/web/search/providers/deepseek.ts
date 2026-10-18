@@ -40,9 +40,12 @@ export interface DeepSeekSearchBody {
  * parameter and is deliberately ignored rather than rewritten into the query.
  */
 export function buildRequestBody(params: { query: string; num_results?: number }): DeepSeekSearchBody {
+	const requested = params.num_results;
 	return {
 		query: params.query,
-		count: Math.floor(clampNumResults(params.num_results, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS)),
+		// `clampNumResults` treats a supplied 0 as "absent"; the API's floor is 1,
+		// so an explicit 0 must clamp instead of widening to the default.
+		count: Math.floor(requested === 0 ? 1 : clampNumResults(requested, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS)),
 	};
 }
 

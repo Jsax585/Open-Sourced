@@ -60,7 +60,7 @@ describe("DeepSeek request body", () => {
 		expect(buildRequestBody({ query: "q" }).count).toBe(10);
 		expect(buildRequestBody({ query: "q", num_results: 7 }).count).toBe(7);
 		expect(buildRequestBody({ query: "q", num_results: 500 }).count).toBe(50);
-		expect(buildRequestBody({ query: "q", num_results: 0 }).count).toBe(10);
+		expect(buildRequestBody({ query: "q", num_results: 0 }).count).toBe(1);
 	});
 
 	it("forwards search operators intact and never rewrites recency into the query", async () => {
