@@ -47,6 +47,8 @@ export type WorkerInitPayload =
 			mode: "headless";
 			browserWSEndpoint: string;
 			safeDir: string;
+			/** The tab's upload staging folder, which outlives a recycled worker; see `UploadStaging`. */
+			uploadDir: string;
 			/** Keep the page tied to an OMP-owned worker without pinning a visible window's layout viewport. */
 			emulateViewport?: boolean;
 			viewport?: { width: number; height: number; deviceScaleFactor?: number };
@@ -66,6 +68,8 @@ export type WorkerInitPayload =
 			mode: "attach";
 			browserWSEndpoint: string;
 			safeDir: string;
+			/** The tab's upload staging folder, which outlives a recycled worker; see `UploadStaging`. */
+			uploadDir: string;
 			targetId: string;
 			dialogs?: "accept" | "dismiss";
 			/** Hostname patterns allowed for every page request. */
@@ -86,11 +90,6 @@ export type WorkerInitPayload =
 			recover?: boolean;
 			/** Restore focus emulation when recycling an OMP-owned tab, never a borrowed user tab. */
 			emulateFocus?: boolean;
-			/**
-			 * Whether the worker may raise this tab before capturing a screenshot. Unset
-			 * behaves as `true`; the supervisor clears it for browsers we did not launch.
-			 */
-			activateForScreenshot?: boolean;
 			/**
 			 * The user drives this browser (connected, relay): downloads keep its one browser-wide folder and real file
 			 * names, since the user's own downloads land there too. Unset means an OMP-launched browser.
@@ -135,6 +134,12 @@ export interface RunErrorPayload {
 	navigationTimeout?: boolean;
 	/** The page's renderer crashed; the worker runs nothing more and must be recycled. */
 	rendererCrashed?: boolean;
+	/**
+	 * Chrome ended the debugger attachment the page is driven through (omp browser relay) `during` this run, after
+	 * its code started, or `before` it, so nothing ran; the worker runs nothing more. `reason` is Chrome's
+	 * (`target_closed`, `canceled_by_user`): after a user cancel the relay hides the tab, otherwise it is re-adopted.
+	 */
+	debuggerDetached?: { when: "during" | "before"; reason: string };
 }
 
 export type WorkerOutbound =

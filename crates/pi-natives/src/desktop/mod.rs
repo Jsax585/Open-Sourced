@@ -12,6 +12,7 @@ mod macos;
 mod menus;
 #[cfg(target_os = "macos")]
 mod native_helper;
+mod text_range;
 mod types;
 #[cfg(any(target_os = "windows", test))]
 mod win32;
@@ -31,7 +32,7 @@ pub use applications::{Application, ApplicationOpenOptions, ApplicationQuery};
 use ax::{AxRegistry, register_node};
 use backend::{Backend, DeliveryMode, DisplayAwakeHold, MouseButton, PointerEvent};
 use control::{CancellationSource, InputLease, OperationToken};
-use error::{CoreResult, DesktopError};
+use error::{CoreResult, DesktopError, ErrorCode};
 use frame::{FrameGeometry, apply_capture_caps, encode_png};
 use keys::{parse_keys, parse_modifiers};
 pub use menus::DesktopMenuItem;
@@ -44,7 +45,8 @@ use crate::task;
 
 const OPERATION_TIMEOUT: Duration = Duration::from_mins(3);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
-/// How long the display stays awake after the last desktop request. Releasing
+/// How long the display stays awake after the last desktop request, unless an
+/// agent turn holds it (see [`DisplayAwake::hold_until_released`]). Releasing
 /// the assertion restarts the OS display-sleep countdown, so the display can
 /// sleep this long plus the user's display-sleep setting after the agent's
 /// last action, and never sooner while the agent keeps acting.
@@ -52,9 +54,20 @@ const DISPLAY_AWAKE_GRACE: Duration = Duration::from_mins(5);
 
 /// The display-awake assertion, shared by the worker that takes it for
 /// activity and the session, which drops it when a caller gives up (timeout,
-/// close) while the worker may still be blocked inside a request.
+/// close) while the worker may still be blocked inside a request, or when the
+/// agent's turn ends.
 #[derive(Default)]
-struct DisplayAwake(Mutex<Option<DisplayAwakeHold>>);
+struct DisplayAwake(Mutex<AwakeState>);
+
+#[derive(Default)]
+struct AwakeState {
+	hold:       Option<DisplayAwakeHold>,
+	/// An agent turn is acting: activity from now on holds for the turn.
+	armed:      bool,
+	/// Activity came while `armed`: the grace period does not end the
+	/// hold; only [`DisplayAwake::release_turn`] or closing the session does.
+	turn_holds: bool,
+}
 
 impl DisplayAwake {
 	/// Takes the assertion for a request unless its caller has given up. The
@@ -65,18 +78,58 @@ impl DisplayAwake {
 		token: &OperationToken,
 		start: impl FnOnce() -> Option<DisplayAwakeHold>,
 	) -> bool {
-		let mut held = self.0.lock();
+		let mut state = self.0.lock();
 		if token.check().is_err() {
 			return false;
 		}
-		if held.is_none() {
-			*held = start();
+		if state.hold.is_none() {
+			state.hold = start();
+		}
+		if state.armed {
+			state.turn_holds = true;
 		}
 		true
 	}
 
+	/// Keeps the hold that activity takes from now on until
+	/// [`Self::release_turn`], instead of for the grace period. A hold taken
+	/// earlier keeps its grace until the turn's first request.
+	fn hold_until_released(&self) {
+		self.0.lock().armed = true;
+	}
+
+	/// Drops a turn's hold now and returns later activity to the grace period.
+	/// A hold no turn request took (activity outside a turn, or a turn that
+	/// made no request) keeps its grace.
+	fn release_turn(&self) {
+		let released = {
+			let mut state = self.0.lock();
+			state.armed = false;
+			if std::mem::take(&mut state.turn_holds) {
+				state.hold.take()
+			} else {
+				None
+			}
+		};
+		drop(released);
+	}
+
+	/// The grace period after the last activity ran out: drops the hold unless
+	/// a turn holds it.
+	fn expire(&self) {
+		let released = {
+			let mut state = self.0.lock();
+			if state.turn_holds {
+				None
+			} else {
+				state.hold.take()
+			}
+		};
+		drop(released);
+	}
+
 	fn release(&self) {
-		let released = self.0.lock().take();
+		let released = self.0.lock().hold.take();
 		drop(released);
 	}
 
@@ -85,9 +138,9 @@ impl DisplayAwake {
 	/// than reusing the one dropped here.
 	fn cancel_and_release(&self, cancellation: &CancellationSource) {
 		let released = {
-			let mut held = self.0.lock();
+			let mut state = self.0.lock();
 			cancellation.cancel();
-			held.take()
+			state.hold.take()
 		};
 		drop(released);
 	}
@@ -107,6 +160,7 @@ enum Response {
 	Nodes(Vec<AxNode>),
 	Node(Option<AxNode>),
 	Attributes(Vec<(String, String)>),
+	TextSelection(AxTextSelection),
 }
 
 type Reply = flume::Sender<CoreResult<Response>>;
@@ -273,6 +327,11 @@ enum Request {
 		value:     String,
 		reply:     Reply,
 	},
+	AxSelectText {
+		reference: String,
+		request:   text_range::TextSelectRequest,
+		reply:     Reply,
+	},
 	AxFocus {
 		reference: String,
 		reply:     Reply,
@@ -320,6 +379,7 @@ impl Request {
 			| Self::AxParent { reply, .. }
 			| Self::AxPerform { reply, .. }
 			| Self::AxSetValue { reply, .. }
+			| Self::AxSelectText { reply, .. }
 			| Self::AxFocus { reply, .. }
 			| Self::AxClick { reply, .. }
 			| Self::Close { reply } => reply,
@@ -339,6 +399,7 @@ impl Request {
 				| Self::RaiseWindow { .. }
 				| Self::AxPerform { .. }
 				| Self::AxSetValue { .. }
+				| Self::AxSelectText { .. }
 				| Self::AxFocus { .. }
 				| Self::AxClick { .. }
 				| Self::OpenApplication { .. }
@@ -379,6 +440,23 @@ impl Request {
 		}
 	}
 
+	/// The element ref the request acts on or reads, for requests that name
+	/// one.
+	fn reference(&self) -> Option<&str> {
+		match self {
+			Self::AxNode { reference, .. }
+			| Self::AxAttributes { reference, .. }
+			| Self::AxChildren { reference, .. }
+			| Self::AxParent { reference, .. }
+			| Self::AxPerform { reference, .. }
+			| Self::AxSetValue { reference, .. }
+			| Self::AxSelectText { reference, .. }
+			| Self::AxFocus { reference, .. }
+			| Self::AxClick { reference, .. } => Some(reference),
+			_ => None,
+		}
+	}
+
 	const fn is_close(&self) -> bool {
 		matches!(self, Self::Close { .. })
 	}
@@ -410,13 +488,9 @@ impl ParsedPointerOptions {
 		})
 	}
 
-	fn mode(&self, token: &OperationToken) -> DeliveryMode {
-		delivery_mode(self.takeover, token)
+	const fn mode(&self) -> DeliveryMode {
+		DeliveryMode::from_takeover(self.takeover)
 	}
-}
-
-fn delivery_mode(takeover: Option<bool>, token: &OperationToken) -> DeliveryMode {
-	DeliveryMode::from_takeover(Some(takeover.unwrap_or_else(|| token.control_active())))
 }
 
 fn hold_duration(seconds: f64) -> CoreResult<Duration> {
@@ -690,7 +764,8 @@ impl Worker {
 
 	/// Serves requests until close or disconnect. Each activity request whose
 	/// caller is still waiting holds the display awake until `grace` passes
-	/// with no further activity; the hold is released before the loop returns.
+	/// with no further activity, or until the turn holding it is released; the
+	/// hold is released before the loop returns.
 	fn serve(mut self, rx: &flume::Receiver<QueuedRequest>, grace: Duration) {
 		let mut awake_until: Option<Instant> = None;
 		loop {
@@ -701,7 +776,7 @@ impl Worker {
 			let QueuedRequest { request, token } = match next {
 				Ok(queued) => queued,
 				Err(flume::RecvTimeoutError::Timeout) => {
-					self.display_awake.release();
+					self.display_awake.expire();
 					awake_until = None;
 					continue;
 				},
@@ -726,7 +801,7 @@ impl Worker {
 		}
 		token.check()?;
 		let _scope = token.enter();
-		let _lease = request
+		let lease = request
 			.is_mutation()
 			.then(|| InputLease::acquire(token))
 			.transpose()?;
@@ -753,7 +828,58 @@ impl Worker {
 				},
 			}
 		}
-		result
+		// A `StaleRef` search reads the whole window, which can take long
+		// enough to keep other sessions from input: it runs once the call has
+		// released it.
+		drop(lease);
+		match (result, request.reference()) {
+			(Err(error), Some(reference)) => Err(self.name_match(reference, error, token)),
+			(result, _) => result,
+		}
+	}
+
+	/// Names, in a `StaleRef` from `reference`'s element, the one element of
+	/// its window with the fields the ref was read with ([`ax::refind`]),
+	/// registered as a new ref. Nothing is sent to that element: equal fields
+	/// do not prove it is the same control, so the caller decides. Searches
+	/// only for a ref read with such fields, and only once its element is
+	/// provably destroyed.
+	fn name_match(
+		&mut self,
+		reference: &str,
+		error: DesktopError,
+		token: &OperationToken,
+	) -> DesktopError {
+		if error.code != ErrorCode::StaleRef
+			|| !self.registry.has_proof(reference)
+			|| token.check().is_err()
+		{
+			return error;
+		}
+		let Ok(handle) = self.registry.resolve(reference) else {
+			return error;
+		};
+		let Ok(target) = self.registry.target(reference) else {
+			return error;
+		};
+		let Ok(window) = self.window(&Target::Window(target)) else {
+			return error;
+		};
+		let (backend, registry) = (&mut self.backend, &mut self.registry);
+		let Some(ax) = backend.as_mut().ok().and_then(|backend| backend.ax()) else {
+			return error;
+		};
+		if !ax.destroyed(&handle) {
+			return error;
+		}
+		match ax::refind(ax, registry, &window, reference) {
+			Ok(Some(found)) => DesktopError::stale_ref(format!(
+				"{reference} destroyed; {found} is the one element in the window with the role, \
+				 labels and value {reference} was read with. Equal fields do not prove it is the same \
+				 control: check {found} before acting on it, or re-run ax()/find()"
+			)),
+			_ => error,
+		}
 	}
 
 	fn ax(&mut self) -> CoreResult<&mut dyn backend::AxBackend> {
@@ -815,7 +941,7 @@ impl Worker {
 					target,
 					keys,
 					*duration,
-					delivery_mode(*takeover, token),
+					DeliveryMode::from_takeover(*takeover),
 					token,
 				)?;
 				Ok(Response::Unit)
@@ -835,7 +961,7 @@ impl Worker {
 						duration: *duration,
 					},
 					&frame,
-					delivery_mode(*takeover, token),
+					DeliveryMode::from_takeover(*takeover),
 					token,
 				)?;
 				Ok(Response::Unit)
@@ -899,7 +1025,7 @@ impl Worker {
 						modifiers: options.modifiers,
 					},
 					&frame,
-					options.mode(token),
+					options.mode(),
 					token,
 				)?;
 				Ok(Response::Unit)
@@ -910,7 +1036,7 @@ impl Worker {
 					target,
 					PointerEvent::Move { x, y },
 					&frame,
-					delivery_mode(*takeover, token),
+					DeliveryMode::from_takeover(*takeover),
 					token,
 				)?;
 				Ok(Response::Unit)
@@ -933,7 +1059,7 @@ impl Worker {
 						keys:      options.keys.clone(),
 					},
 					&frame,
-					options.mode(token),
+					options.mode(),
 					token,
 				)?;
 				Ok(Response::Unit)
@@ -944,23 +1070,29 @@ impl Worker {
 					target,
 					PointerEvent::Scroll { x, y, dx: *dx, dy: *dy },
 					&frame,
-					delivery_mode(*takeover, token),
+					DeliveryMode::from_takeover(*takeover),
 					token,
 				)?;
 				Ok(Response::Unit)
 			},
 			Request::TypeText { target, text, takeover, .. } => {
 				self.validate_keyboard_target(target)?;
-				self
-					.backend()?
-					.type_text(target, text, delivery_mode(*takeover, token), token)?;
+				self.backend()?.type_text(
+					target,
+					text,
+					DeliveryMode::from_takeover(*takeover),
+					token,
+				)?;
 				Ok(Response::Unit)
 			},
 			Request::KeyChord { target, keys, takeover, .. } => {
 				self.validate_keyboard_target(target)?;
-				self
-					.backend()?
-					.key_chord(target, keys, delivery_mode(*takeover, token), token)?;
+				self.backend()?.key_chord(
+					target,
+					keys,
+					DeliveryMode::from_takeover(*takeover),
+					token,
+				)?;
 				Ok(Response::Unit)
 			},
 			Request::RaiseWindow { id, .. } => {
@@ -1072,6 +1204,10 @@ impl Worker {
 				self.ax()?.set_value(&h, value)?;
 				Ok(Response::Unit)
 			},
+			Request::AxSelectText { reference, request, .. } => {
+				let h = self.registry.resolve(reference)?;
+				Ok(Response::TextSelection(self.ax()?.select_text(&h, request)?))
+			},
 			Request::AxFocus { reference, .. } => {
 				let h = self.registry.resolve(reference)?;
 				self.ax()?.focus(&h)?;
@@ -1099,7 +1235,7 @@ impl Worker {
 						modifiers: options.modifiers,
 					},
 					&FrameGeometry::identity_global(),
-					options.mode(token),
+					options.mode(),
 					token,
 				)?;
 				Ok(Response::Unit)
@@ -1330,6 +1466,23 @@ impl DesktopSession {
 	#[napi(getter)]
 	pub fn screen_state(&self) -> ScreenState {
 		read_screen_state(&self.core.selector)
+	}
+
+	/// Keeps the display awake from the next activity request until
+	/// `releaseDisplayAwake()`, however long the session sits idle in between,
+	/// instead of for the grace period after the last request. An agent calls
+	/// this when it acts inside a turn.
+	#[napi]
+	pub fn hold_display_until_released(&self) {
+		self.core.display_awake.hold_until_released();
+	}
+
+	/// Lets the display sleep now if a turn holds it, without waiting behind
+	/// queued requests, and returns later activity to the grace period. Activity
+	/// outside a turn keeps its grace. An agent calls this when its turn ends.
+	#[napi]
+	pub fn release_display_awake(&self) {
+		self.core.display_awake.release_turn();
 	}
 
 	#[napi]
@@ -1818,6 +1971,33 @@ impl DesktopSession {
 		}))
 	}
 
+	/// Selects `text` in the element's value by accessibility, or places a
+	/// caret at its start or end, without focus change or keystrokes.
+	#[napi]
+	pub fn ax_select_text(
+		&self,
+		reference: String,
+		text: String,
+		opts: Option<AxSelectTextOptions>,
+	) -> Result<task::Promise<AxTextSelection>> {
+		let opts = opts.unwrap_or_default();
+		let request = text_range::TextSelectRequest {
+			text,
+			prefix: opts.prefix.unwrap_or_default(),
+			suffix: opts.suffix.unwrap_or_default(),
+			part: text_range::SelectPart::parse(opts.select.as_deref()).map_err(napi::Error::from)?,
+		};
+		let c = Arc::clone(&self.core);
+		let token = c.cancellation.token();
+		Ok(task::blocking("desktop.axSelectText", (), move |_| {
+			match c.call(token, |reply| Request::AxSelectText { reference, request, reply })? {
+				Response::TextSelection(v) => Ok(v),
+				_ => Err(DesktopError::internal("unexpected response")),
+			}
+			.map_err(Into::into)
+		}))
+	}
+
 	#[napi]
 	pub fn ax_focus(&self, reference: String) -> Result<task::Promise<()>> {
 		Ok(self.unit("desktop.axFocus", move |reply| Request::AxFocus { reference, reply }))
@@ -1901,6 +2081,8 @@ impl DesktopSession {
 
 #[cfg(test)]
 mod capture_tests {
+	use std::{collections::HashSet, sync::atomic::AtomicBool};
+
 	use image::RgbaImage;
 
 	use super::*;
@@ -1913,13 +2095,58 @@ mod capture_tests {
 
 	const WAYLAND_ID: &str = "atspi::1.31:/org/a11y/atspi/accessible/1";
 
+	/// Elements by test id under the window root, id 1. A destroyed element
+	/// answers every request as gone.
+	#[derive(Default)]
+	struct FakeTree {
+		titles:            HashMap<u64, &'static str>,
+		children:          Vec<u64>,
+		destroyed:         HashSet<u64>,
+		pressed:           Vec<u64>,
+		/// A press is delivered, then the app replaces the pressed element with
+		/// an identical one under this id and the press answers as stale.
+		press_rebuilds_as: Option<u64>,
+		/// A press answers as stale while its element stays, as one that met
+		/// another element the app destroyed would.
+		stale_presses:     bool,
+		/// Calls that asked whether an element was destroyed.
+		probes:            u32,
+		/// Calls that read an element's fields.
+		reads:             u32,
+		/// Runs as each press is delivered and as each probe asks.
+		on_call:           Option<Box<dyn Fn(Call) + Send>>,
+	}
+
+	#[derive(Clone, Copy, PartialEq, Eq)]
+	enum Call {
+		Press,
+		Probe,
+	}
+
+	impl FakeTree {
+		fn element(&self, h: &AxHandle) -> CoreResult<u64> {
+			let AxHandle::Test(id) = h else {
+				unreachable!("test handles only")
+			};
+			if self.destroyed.contains(id) {
+				Err(DesktopError::stale_ref("the element no longer exists"))
+			} else {
+				Ok(*id)
+			}
+		}
+	}
+
 	/// Backend that mints a composite AT-SPI window id, mirroring the Wayland
 	/// `AtSpiAx` path. Exists to exercise `Worker::process` without a display.
 	struct FakeWaylandBackend {
 		window:                 DesktopWindow,
 		overlap:                Option<DesktopWindow>,
 		window_present:         bool,
+		/// An AX tree the app can rebuild; `None` answers every element as one
+		/// button.
+		tree:                   Option<Arc<Mutex<FakeTree>>>,
 		clicks:                 Arc<Mutex<Vec<String>>>,
+		modes:                  Arc<Mutex<Vec<DeliveryMode>>>,
 		layout:                 Arc<Mutex<Vec<DesktopDisplay>>>,
 		active_display:         Arc<Mutex<String>>,
 		captures:               Arc<Mutex<u8>>,
@@ -1955,7 +2182,9 @@ mod capture_tests {
 				},
 				overlap:                None,
 				window_present:         true,
+				tree:                   None,
 				clicks:                 Arc::new(Mutex::new(Vec::new())),
+				modes:                  Arc::new(Mutex::new(Vec::new())),
 				layout:                 Arc::new(Mutex::new(vec![DesktopDisplay {
 					id:           "screen-1".to_string(),
 					name:         "Test screen".to_string(),
@@ -2005,38 +2234,108 @@ mod capture_tests {
 				.ok_or_else(|| DesktopError::window_not_found("the element's window closed"))
 		}
 
-		fn props(&mut self, _: &AxHandle) -> CoreResult<AxProps> {
+		fn props(&mut self, h: &AxHandle) -> CoreResult<AxProps> {
+			let (role, title) = match &self.tree {
+				Some(tree) => {
+					let mut tree = tree.lock();
+					tree.reads += 1;
+					let id = tree.element(h)?;
+					if id == 1 {
+						("window", None)
+					} else {
+						("button", tree.titles.get(&id).map(|title| (*title).to_string()))
+					}
+				},
+				None => ("button", None),
+			};
 			Ok(AxProps {
-				role:        "button".to_string(),
-				native_role: "button".to_string(),
-				title:       None,
-				value:       None,
+				role: role.to_string(),
+				native_role: role.to_string(),
+				identity: Some(ax::test_identity((role, &title))),
+				partial: false,
+				title,
+				value: None,
 				description: None,
-				enabled:     true,
-				focused:     false,
-				bounds:      Some(AxBounds { x: 10.0, y: 10.0, width: 20.0, height: 20.0 }),
-				actions:     Vec::new(),
+				enabled: true,
+				focused: false,
+				bounds: Some(AxBounds { x: 10.0, y: 10.0, width: 20.0, height: 20.0 }),
+				actions: Vec::new(),
 				child_count: 0,
 			})
 		}
 
-		fn children(&mut self, _: &AxHandle) -> CoreResult<Vec<AxHandle>> {
-			Ok(Vec::new())
+		fn children(&mut self, h: &AxHandle) -> CoreResult<Vec<AxHandle>> {
+			let Some(tree) = &self.tree else {
+				return Ok(Vec::new());
+			};
+			let tree = tree.lock();
+			Ok(if tree.element(h)? == 1 {
+				tree.children.iter().map(|id| AxHandle::Test(*id)).collect()
+			} else {
+				Vec::new()
+			})
 		}
 
-		fn parent(&mut self, _: &AxHandle) -> CoreResult<Option<AxHandle>> {
+		fn parent(&mut self, h: &AxHandle) -> CoreResult<Option<AxHandle>> {
+			if let Some(tree) = &self.tree {
+				tree.lock().element(h)?;
+			}
 			unreachable!("tree traversal not exercised")
 		}
 
-		fn perform(&mut self, _: &AxHandle, _: &str) -> CoreResult<()> {
-			unreachable!("semantic actions not exercised")
+		fn perform(&mut self, h: &AxHandle, action: &str) -> CoreResult<()> {
+			let mut tree = self
+				.tree
+				.as_ref()
+				.expect("semantic actions need a tree")
+				.lock();
+			let id = tree.element(h)?;
+			if action != "press" {
+				return Err(DesktopError::ax_failed(format!("no action {action}")));
+			}
+			if let Some(on_call) = &tree.on_call {
+				on_call(Call::Press);
+			}
+			tree.pressed.push(id);
+			if tree.stale_presses {
+				return Err(DesktopError::stale_ref("the element no longer exists"));
+			}
+			let Some(copy) = tree.press_rebuilds_as else {
+				return Ok(());
+			};
+			tree.destroyed.insert(id);
+			let title = tree.titles[&id];
+			tree.titles.insert(copy, title);
+			for child in &mut tree.children {
+				if *child == id {
+					*child = copy;
+				}
+			}
+			Err(DesktopError::stale_ref("the element no longer exists"))
 		}
 
-		fn set_value(&mut self, _: &AxHandle, _: &str) -> CoreResult<()> {
+		fn select_text(
+			&mut self,
+			h: &AxHandle,
+			_: &text_range::TextSelectRequest,
+		) -> CoreResult<AxTextSelection> {
+			if let Some(tree) = &self.tree {
+				tree.lock().element(h)?;
+			}
+			unreachable!("text selection not exercised")
+		}
+
+		fn set_value(&mut self, h: &AxHandle, _: &str) -> CoreResult<()> {
+			if let Some(tree) = &self.tree {
+				tree.lock().element(h)?;
+			}
 			unreachable!("text input not exercised")
 		}
 
-		fn focus(&mut self, _: &AxHandle) -> CoreResult<()> {
+		fn focus(&mut self, h: &AxHandle) -> CoreResult<()> {
+			if let Some(tree) = &self.tree {
+				tree.lock().element(h)?;
+			}
 			unreachable!("focus not exercised")
 		}
 
@@ -2048,8 +2347,23 @@ mod capture_tests {
 			unreachable!("focus not exercised")
 		}
 
-		fn attributes(&mut self, _: &AxHandle) -> CoreResult<Vec<(String, String)>> {
-			unreachable!("attributes not exercised")
+		fn attributes(&mut self, h: &AxHandle) -> CoreResult<Vec<(String, String)>> {
+			let tree = self.tree.as_ref().expect("attributes need a tree").lock();
+			let id = tree.element(h)?;
+			let title = tree.titles.get(&id).copied().unwrap_or_default();
+			Ok(vec![("AXTitle".to_string(), title.to_string())])
+		}
+
+		fn destroyed(&mut self, h: &AxHandle) -> bool {
+			let AxHandle::Test(id) = h else { return false };
+			self.tree.as_ref().is_some_and(|tree| {
+				let mut tree = tree.lock();
+				tree.probes += 1;
+				if let Some(on_call) = &tree.on_call {
+					on_call(Call::Probe);
+				}
+				tree.destroyed.contains(id)
+			})
 		}
 	}
 
@@ -2148,10 +2462,11 @@ mod capture_tests {
 			target: &Target,
 			_: PointerEvent,
 			_: &FrameGeometry,
-			_: DeliveryMode,
+			mode: DeliveryMode,
 			_: &OperationToken,
 		) -> CoreResult<()> {
 			self.clicks.lock().push(target.key().to_string());
+			self.modes.lock().push(mode);
 			Ok(())
 		}
 
@@ -2159,20 +2474,22 @@ mod capture_tests {
 			&mut self,
 			_: &Target,
 			_: &str,
-			_: DeliveryMode,
+			mode: DeliveryMode,
 			_: &OperationToken,
 		) -> CoreResult<()> {
-			unreachable!("type_text not exercised")
+			self.modes.lock().push(mode);
+			Ok(())
 		}
 
 		fn key_chord(
 			&mut self,
 			_: &Target,
 			_: &[KeyName],
-			_: DeliveryMode,
+			mode: DeliveryMode,
 			_: &OperationToken,
 		) -> CoreResult<()> {
-			unreachable!("key_chord not exercised")
+			self.modes.lock().push(mode);
+			Ok(())
 		}
 
 		fn hold_keys(
@@ -2336,6 +2653,103 @@ mod capture_tests {
 		drop(tx);
 		serving.join().unwrap();
 		assert_eq!(*awake.lock(), [true, false]);
+	}
+
+	/// A worker serving with `grace`, sharing the returned hold as a session's
+	/// does, so the test can hold and release it for a turn.
+	fn serving_with_turns(
+		backend: FakeWaylandBackend,
+		grace: Duration,
+	) -> (Arc<DisplayAwake>, flume::Sender<QueuedRequest>, thread::JoinHandle<()>) {
+		let display_awake = Arc::new(DisplayAwake::default());
+		let (tx, rx) = flume::unbounded();
+		let serving = thread::spawn({
+			let display_awake = Arc::clone(&display_awake);
+			move || Worker { display_awake, ..unlocked_worker(backend) }.serve(&rx, grace)
+		});
+		(display_awake, tx, serving)
+	}
+
+	#[test]
+	fn a_turn_keeps_the_display_awake_past_the_grace_until_it_ends() {
+		let backend = FakeWaylandBackend::new();
+		let awake = Arc::clone(&backend.awake);
+		let grace = Duration::from_millis(100);
+		let (turn, tx, serving) = serving_with_turns(backend, grace);
+
+		turn.hold_until_released();
+		send_and_wait(&tx, |reply| Request::ListWindows { reply });
+		// The turn goes on without desktop work for many grace periods.
+		thread::sleep(grace * 10);
+		assert_eq!(*awake.lock(), [true], "the grace ended the turn's hold");
+
+		turn.release_turn();
+		assert_eq!(*awake.lock(), [true, false], "the turn's end released nothing");
+
+		send_and_wait(&tx, |reply| Request::Close { reply });
+		serving.join().unwrap();
+		assert_eq!(*awake.lock(), [true, false]);
+	}
+
+	#[test]
+	fn the_next_turn_holds_the_display_again_from_its_first_request() {
+		let backend = FakeWaylandBackend::new();
+		let awake = Arc::clone(&backend.awake);
+		let grace = Duration::from_millis(100);
+		let (turn, tx, serving) = serving_with_turns(backend, grace);
+
+		turn.hold_until_released();
+		send_and_wait(&tx, |reply| Request::ListWindows { reply });
+		turn.release_turn();
+		assert_eq!(*awake.lock(), [true, false]);
+
+		// A turn that has not acted yet holds nothing.
+		turn.hold_until_released();
+		thread::sleep(grace * 3);
+		assert_eq!(*awake.lock(), [true, false]);
+		send_and_wait(&tx, |reply| Request::ListWindows { reply });
+		thread::sleep(grace * 10);
+		assert_eq!(*awake.lock(), [true, false, true], "the next turn's hold ended before the turn");
+		turn.release_turn();
+		assert_eq!(*awake.lock(), [true, false, true, false]);
+
+		send_and_wait(&tx, |reply| Request::Close { reply });
+		serving.join().unwrap();
+	}
+
+	#[test]
+	fn activity_after_a_turn_ends_is_held_only_for_the_grace() {
+		let backend = FakeWaylandBackend::new();
+		let awake = Arc::clone(&backend.awake);
+		let (turn, tx, serving) = serving_with_turns(backend, Duration::from_millis(100));
+
+		turn.hold_until_released();
+		send_and_wait(&tx, |reply| Request::ListWindows { reply });
+		turn.release_turn();
+		// Work that outlives its turn, such as a background job.
+		send_and_wait(&tx, |reply| Request::ListWindows { reply });
+		wait_for_awake(&awake, &[true, false, true, false]);
+
+		send_and_wait(&tx, |reply| Request::Close { reply });
+		serving.join().unwrap();
+	}
+
+	#[test]
+	fn a_turn_end_leaves_the_grace_of_activity_outside_a_turn() {
+		let backend = FakeWaylandBackend::new();
+		let awake = Arc::clone(&backend.awake);
+		let (turn, tx, serving) = serving_with_turns(backend, Duration::from_millis(300));
+
+		// A background job acts between turns; a later turn's run makes no
+		// request, and the turn ends.
+		send_and_wait(&tx, |reply| Request::ListWindows { reply });
+		turn.hold_until_released();
+		turn.release_turn();
+		assert_eq!(*awake.lock(), [true], "the turn's end cut the grace short");
+		wait_for_awake(&awake, &[true, false]);
+
+		send_and_wait(&tx, |reply| Request::Close { reply });
+		serving.join().unwrap();
 	}
 
 	/// Logs the release of the fake display-awake assertion.
@@ -2637,6 +3051,219 @@ mod capture_tests {
 		};
 		assert_eq!(error.code, ErrorCode::WindowNotFound);
 		assert!(clicks.lock().is_empty(), "no input may reach the overlapping window");
+	}
+
+	/// A worker whose window holds one button per `(id, title)`, read once by
+	/// `ax()`: the window is `e1` and the buttons `e2`, `e3`, … in order.
+	fn read_buttons(buttons: &[(u64, &'static str)]) -> (TestWorker, Arc<Mutex<FakeTree>>) {
+		let tree = Arc::new(Mutex::new(FakeTree {
+			titles: buttons.iter().copied().collect(),
+			children: buttons.iter().map(|(id, _)| *id).collect(),
+			..FakeTree::default()
+		}));
+		let mut backend = FakeWaylandBackend::new();
+		backend.tree = Some(Arc::clone(&tree));
+		let mut worker = worker_with(backend);
+		let target = Target::Window(WAYLAND_ID.to_string());
+		worker
+			.snapshot(&target, &AxSnapshotOptions::default())
+			.unwrap();
+		(worker, tree)
+	}
+
+	/// The app destroys `old` and puts `buttons` in the window instead.
+	fn rebuild(tree: &Mutex<FakeTree>, old: u64, buttons: &[(u64, &'static str)]) {
+		let mut tree = tree.lock();
+		tree.destroyed.insert(old);
+		tree.titles.extend(buttons.iter().copied());
+		tree.children = buttons.iter().map(|(id, _)| *id).collect();
+	}
+
+	/// A source holding this process's input ownership as `acquireControl()`
+	/// grants it, without the Escape monitor a test host may refuse.
+	fn granted() -> CancellationSource {
+		let source = CancellationSource::default();
+		control::grant_for_test(&source);
+		source
+	}
+
+	/// Runs the request `make` builds under a fresh token of `source`, as the
+	/// worker serves it.
+	fn call(
+		worker: &mut Worker,
+		make: impl FnOnce(Reply) -> Request,
+		source: &CancellationSource,
+	) -> CoreResult<Response> {
+		let (reply, _rx) = flume::bounded(1);
+		worker.execute(&make(reply), &source.token())
+	}
+
+	fn press_request(reference: &str) -> impl FnOnce(Reply) -> Request {
+		let reference = reference.to_string();
+		move |reply| Request::AxPerform { reference, action: "press".to_string(), reply }
+	}
+
+	fn press(worker: &mut Worker, reference: &str) -> CoreResult<()> {
+		call(worker, press_request(reference), &granted()).map(drop)
+	}
+
+	/// The ref a `StaleRef` from `reference` names as the one element left
+	/// with the fields `reference` was read with, if any.
+	fn named(error: &DesktopError, reference: &str) -> Option<String> {
+		assert_eq!(error.code, ErrorCode::StaleRef, "{}", error.message);
+		let rest = error
+			.message
+			.strip_prefix(&format!("{reference} destroyed; "))?;
+		rest.split_whitespace().next().map(str::to_string)
+	}
+
+	#[test]
+	fn a_press_on_a_rebuilt_element_names_its_one_copy_and_presses_nothing() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
+		let error = press(&mut worker, "e2").unwrap_err();
+		assert_eq!(named(&error, "e2").as_deref(), Some("e4"));
+		assert!(tree.lock().pressed.is_empty());
+		// The named ref works, and `e2` still names the destroyed element.
+		press(&mut worker, "e4").unwrap();
+		let error = press(&mut worker, "e2").unwrap_err();
+		assert_eq!(named(&error, "e2").as_deref(), Some("e4"));
+		assert_eq!(tree.lock().pressed, [4]);
+	}
+
+	#[test]
+	fn every_call_on_a_rebuilt_element_names_its_copy() {
+		fn e2() -> String {
+			"e2".to_string()
+		}
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
+		let requests: [fn(Reply) -> Request; 9] = [
+			|reply| Request::AxNode { reference: e2(), reply },
+			|reply| Request::AxAttributes { reference: e2(), reply },
+			|reply| Request::AxChildren { reference: e2(), reply },
+			|reply| Request::AxParent { reference: e2(), reply },
+			|reply| Request::AxPerform { reference: e2(), action: "press".to_string(), reply },
+			|reply| Request::AxSetValue { reference: e2(), value: "Stop".to_string(), reply },
+			|reply| Request::AxSelectText {
+				reference: e2(),
+				request: text_range::TextSelectRequest { text: "Go".to_string(), ..Default::default() },
+				reply,
+			},
+			|reply| Request::AxFocus { reference: e2(), reply },
+			|reply| Request::AxClick {
+				reference: e2(),
+				options: ParsedPointerOptions::parse(None).unwrap(),
+				reply,
+			},
+		];
+		for make in requests {
+			let error = call(&mut worker, make, &granted())
+				.err()
+				.expect("the element is gone");
+			assert_eq!(named(&error, "e2").as_deref(), Some("e4"));
+		}
+		assert!(tree.lock().pressed.is_empty());
+	}
+
+	#[test]
+	fn a_rebuilt_element_with_two_identical_copies_names_neither() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		rebuild(&tree, 2, &[(4, "Go"), (5, "Go"), (3, "Stop")]);
+		assert_eq!(named(&press(&mut worker, "e2").unwrap_err(), "e2"), None);
+		assert!(tree.lock().pressed.is_empty());
+	}
+
+	#[test]
+	fn an_element_that_had_a_twin_when_read_names_nothing() {
+		// The other "Go" may be the one left, not a copy of the destroyed one.
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Go")]);
+		rebuild(&tree, 2, &[(3, "Go")]);
+		assert_eq!(named(&press(&mut worker, "e2").unwrap_err(), "e2"), None);
+		assert!(tree.lock().pressed.is_empty());
+		// Its ref has no fields that tell it apart, so nothing probed it.
+		assert_eq!(tree.lock().probes, 0);
+	}
+
+	#[test]
+	fn a_changed_or_removed_element_names_nothing() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		rebuild(&tree, 2, &[(4, "Going"), (3, "Stop")]);
+		assert_eq!(named(&press(&mut worker, "e2").unwrap_err(), "e2"), None);
+		rebuild(&tree, 4, &[(3, "Stop")]);
+		assert_eq!(named(&press(&mut worker, "e2").unwrap_err(), "e2"), None);
+		assert!(tree.lock().pressed.is_empty());
+	}
+
+	#[test]
+	fn a_press_that_destroys_its_element_is_sent_once() {
+		// The press may have acted before the app rebuilt the button.
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		tree.lock().press_rebuilds_as = Some(4);
+		let error = press(&mut worker, "e2").unwrap_err();
+		assert_eq!(named(&error, "e2").as_deref(), Some("e4"));
+		assert_eq!(tree.lock().pressed, [2]);
+	}
+
+	#[test]
+	fn only_a_stale_ref_read_with_telling_fields_probes_its_element() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		// A call that succeeds never probes.
+		press(&mut worker, "e2").unwrap();
+		assert_eq!(tree.lock().probes, 0);
+		// A stale answer for an element still there names nothing.
+		tree.lock().stale_presses = true;
+		assert_eq!(named(&press(&mut worker, "e2").unwrap_err(), "e2"), None);
+		assert_eq!(tree.lock().probes, 1);
+		tree.lock().stale_presses = false;
+		// A call cancelled while it ran neither probes nor searches.
+		let source = granted();
+		let canceller = source.clone();
+		{
+			let mut tree = tree.lock();
+			tree.press_rebuilds_as = Some(4);
+			tree.on_call = Some(Box::new(move |_| canceller.cancel()));
+		}
+		let error = call(&mut worker, press_request("e2"), &source)
+			.err()
+			.expect("the element is gone");
+		assert_eq!(named(&error, "e2"), None);
+		assert_eq!(tree.lock().pressed, [2, 2, 2]);
+		assert_eq!(tree.lock().probes, 1);
+	}
+
+	#[test]
+	fn a_stale_ref_search_runs_with_input_released() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
+		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
+		let source = granted();
+		// Whether another call of the session could take input during the search.
+		let free = Arc::new(AtomicBool::new(false));
+		let (other, seen) = (source.clone(), Arc::clone(&free));
+		tree.lock().on_call = Some(Box::new(move |_| {
+			seen.store(InputLease::acquire(&other.token()).is_ok(), Ordering::SeqCst);
+		}));
+		let error = call(&mut worker, press_request("e2"), &source)
+			.err()
+			.expect("the element is gone");
+		assert_eq!(named(&error, "e2").as_deref(), Some("e4"));
+		assert!(free.load(Ordering::SeqCst), "the search held the call's input lease");
+	}
+
+	#[test]
+	fn a_cancel_during_a_stale_ref_search_stops_its_walk() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop"), (5, "Next")]);
+		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop"), (5, "Next")]);
+		let source = granted();
+		let canceller = source.clone();
+		tree.lock().on_call = Some(Box::new(move |_| canceller.cancel()));
+		let reads = tree.lock().reads;
+		let error = call(&mut worker, press_request("e2"), &source)
+			.err()
+			.expect("the element is gone");
+		assert_eq!(named(&error, "e2"), None);
+		assert_eq!(tree.lock().probes, 1);
+		assert_eq!(tree.lock().reads, reads, "the walk read on after the cancel");
 	}
 
 	fn capture_request(target: Target) -> Request {
@@ -3014,10 +3641,9 @@ mod capture_tests {
 		}
 		assert_eq!(hold_duration(0.0).unwrap(), Duration::ZERO);
 		assert_eq!(hold_duration(100.0).unwrap(), Duration::from_secs(100));
-		let token = CancellationSource::default().token();
 		let default = ParsedPointerOptions::parse(None).unwrap();
 		assert_eq!(default.takeover, None);
-		assert_eq!(default.mode(&token), DeliveryMode::Background);
+		assert_eq!(default.mode(), DeliveryMode::Background);
 		for (takeover, expected) in
 			[(false, DeliveryMode::Background), (true, DeliveryMode::Foreground)]
 		{
@@ -3027,8 +3653,68 @@ mod capture_tests {
 			}))
 			.unwrap();
 			assert_eq!(options.takeover, Some(takeover));
-			assert_eq!(options.mode(&token), expected);
+			assert_eq!(options.mode(), expected);
 		}
+	}
+
+	#[test]
+	fn held_control_leaves_omitted_takeover_in_the_background() {
+		// Holding control takes this process's one input ownership, which the
+		// other worker tests here take to send input, so the test runs alone in
+		// a child test process.
+		const ALONE: &str = "PI_DESKTOP_TEST_ALONE";
+		if std::env::var_os(ALONE).is_none() {
+			let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+				.args([
+					"--exact",
+					"desktop::capture_tests::held_control_leaves_omitted_takeover_in_the_background",
+				])
+				.env(ALONE, "1")
+				.output()
+				.expect("child test");
+			let stdout = String::from_utf8_lossy(&output.stdout);
+			assert!(output.status.success() && stdout.contains(" 1 passed;"), "{stdout}");
+			return;
+		}
+		let backend = FakeWaylandBackend::new();
+		let modes = Arc::clone(&backend.modes);
+		let mut worker = worker_with(backend);
+		let source = CancellationSource::default();
+		control::grant_for_test(&source);
+		assert!(source.control_active());
+		let token = source.token();
+		let target = Target::Window(WAYLAND_ID.to_string());
+		worker
+			.process(&capture_request(target.clone()), &token)
+			.unwrap();
+		for takeover in [None, Some(true)] {
+			let options = ParsedPointerOptions::parse(Some(PointerOptions {
+				takeover,
+				..PointerOptions::default()
+			}))
+			.unwrap();
+			let (reply, _rx) = flume::bounded(1);
+			let click = Request::Click { target: target.clone(), x: 10.0, y: 10.0, options, reply };
+			worker.process(&click, &token).unwrap();
+			let (reply, _rx) = flume::bounded(1);
+			let text = "a".to_string();
+			let typed = Request::TypeText { target: target.clone(), text, takeover, reply };
+			worker.process(&typed, &token).unwrap();
+			let (reply, _rx) = flume::bounded(1);
+			let keys = parse_keys(&["a".to_string()]).unwrap();
+			let chord = Request::KeyChord { target: target.clone(), keys, takeover, reply };
+			worker.process(&chord, &token).unwrap();
+			let (reply, _rx) = flume::bounded(1);
+			let hover =
+				Request::MoveMouse { target: target.clone(), x: 10.0, y: 10.0, takeover, reply };
+			worker.process(&hover, &token).unwrap();
+		}
+		source.release_control();
+		let (background, foreground) = (DeliveryMode::Background, DeliveryMode::Foreground);
+		assert_eq!(*modes.lock(), [
+			background, background, background, background, foreground, foreground, foreground,
+			foreground
+		]);
 	}
 
 	#[test]
