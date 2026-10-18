@@ -224,17 +224,24 @@ function hasUsableCompactionMethod(
  * Where a Cursor turn is asked to wrap up so compaction can run. Cursor runs the
  * tool loop server-side, which leaves mid-turn compaction no boundary inside the
  * turn. Undefined when the post-turn threshold check would not compact and
- * continue, so stopping the turn would only stall the work.
+ * continue, so stopping the turn would only stall the work. Notes-backed rollover
+ * runs ahead of method selection, so it counts without a usable method when the
+ * session carries the tools it needs.
  */
-export function resolveCursorContextBudgetTokens(settings: Settings, model: Model): number | undefined {
+export function resolveCursorContextBudgetTokens(
+	settings: Settings,
+	model: Model,
+	hasRolloverTools: boolean,
+): number | undefined {
 	const contextWindow = model.contextWindow ?? 0;
 	if (model.api !== "cursor-agent" || contextWindow <= 0) return undefined;
 	const compaction = resolveModelCompactionSettings(settings, model);
+	const rollsOver = compaction.experimentalContextManagement === true && hasRolloverTools;
 	const compactsAndContinues =
 		compaction.enabled &&
 		compaction.midTurnEnabled !== false &&
 		compaction.autoContinue !== false &&
-		hasUsableCompactionMethod("threshold", model, compaction);
+		(rollsOver || hasUsableCompactionMethod("threshold", model, compaction));
 	return compactsAndContinues ? resolveThresholdTokens(contextWindow, compaction) : undefined;
 }
 

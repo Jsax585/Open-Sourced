@@ -22,13 +22,13 @@ describe("resolveCursorContextBudgetTokens", () => {
 			resolveModelCompactionSettings(settings, cursor),
 		);
 
-		expect(resolveCursorContextBudgetTokens(settings, cursor)).toBe(threshold);
+		expect(resolveCursorContextBudgetTokens(settings, cursor, false)).toBe(threshold);
 	});
 
 	it("leaves models whose tool loop runs on the client alone", () => {
-		expect(resolveCursorContextBudgetTokens(Settings.isolated(), bundled("anthropic", "claude-opus-5-5"))).toBe(
-			undefined,
-		);
+		expect(
+			resolveCursorContextBudgetTokens(Settings.isolated(), bundled("anthropic", "claude-opus-5-5"), false),
+		).toBe(undefined);
 	});
 
 	it("stays off when the post-turn check would not compact and continue", () => {
@@ -40,7 +40,24 @@ describe("resolveCursorContextBudgetTokens", () => {
 			// so a threshold pass never selects it.
 			{ "compaction.methodOrder": ["remote"] },
 		]) {
-			expect(resolveCursorContextBudgetTokens(Settings.isolated(overrides), cursor)).toBe(undefined);
+			expect(resolveCursorContextBudgetTokens(Settings.isolated(overrides), cursor, false)).toBe(undefined);
 		}
+	});
+
+	it("budgets on notes-backed rollover when no ordinary method is usable", () => {
+		// The threshold pass enters rollover before it selects a method, so an
+		// unusable method list does not stop it from compacting and continuing.
+		const settings = Settings.isolated({
+			"compaction.experimentalContextManagement": true,
+			"compaction.methodOrder": ["remote"],
+		});
+		const threshold = resolveThresholdTokens(
+			cursor.contextWindow ?? 0,
+			resolveModelCompactionSettings(settings, cursor),
+		);
+
+		expect(resolveCursorContextBudgetTokens(settings, cursor, true)).toBe(threshold);
+		// Without the tools that recover its state, rollover does not run.
+		expect(resolveCursorContextBudgetTokens(settings, cursor, false)).toBe(undefined);
 	});
 });
