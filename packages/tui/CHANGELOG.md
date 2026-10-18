@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Model browser prices for Cursor models now include the Cursor Teams/Enterprise token rate when `teamsTokenRatePerMillion` is set for the `cursor` provider in `models.yml` ([#16183](https://github.com/can1357/oh-my-pi/pull/16183) by [@joseotaviorf](https://github.com/joseotaviorf))
+
 ### Fixed
 
 - Fixed table charts picking the wrong label and measure columns when numbers group thousands with spaces (`1 988`, `17 083`); they now read like `1,988` ([#16175](https://github.com/can1357/oh-my-pi/issues/16175))
