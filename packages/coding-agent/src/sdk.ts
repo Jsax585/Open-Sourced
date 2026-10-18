@@ -2586,7 +2586,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// internal-urls/mcp-protocol.ts): judge the owning server against this
 		// session, or a scoped subagent reads any connected server's resources.
 		toolSession.isMCPServerResourceAllowed = serverName => session?.isMCPServerResourceAllowed(serverName) ?? true;
-		toolSession.isToolScopedIn = name => session?.isToolScopedIn(name) ?? true;
+		toolSession.isToolScopedIn = (name, mcpServerName) => session?.isToolScopedIn(name, mcpServerName) ?? true;
 		toolSession.enableMCP = enableMCP;
 		const deferMCPDiscoveryForUI = enableMCP && !mcpManager && options.hasUI === true;
 		const customTools: CustomTool[] = [];
@@ -3877,7 +3877,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// Subagent tool scoping: frames resolve through the session scope, so a
 			// scoped subagent on the Cursor provider cannot execute scoped-out tools.
 			// Closures read the live session (built below); frames run after it exists.
-			isToolExecutable: name => session?.isToolScopedIn(name) ?? true,
+			isToolExecutable: (name, mcpServerName) => session?.isToolScopedIn(name, mcpServerName) ?? true,
 			isToolActive: name => toolSession.isToolActive?.(name) === true,
 			allowToollessMcpServers: serverName => session?.isMCPServerResourceAllowed(serverName) ?? true,
 			mcpManagerTools: () => toolSession.mcpManager?.getTools() ?? [],
@@ -4128,20 +4128,46 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							continue;
 						if (typeof mcpServerName === "string") scopedInServerNames.add(mcpServerName);
 					}
+					// Dual-source: manager tools include dedup losers whose public name
+					// is identical to a winning tool from another server. A dedup loser is
+					// never independently active (activeNames only covers registry keys),
+					// but its server keeps instructions iff the shared name is scoped in.
+					for (const managerTool of toolSession.mcpManager?.getTools() ?? []) {
+						const mcpServerName = (managerTool as { mcpServerName?: unknown }).mcpServerName;
+						const serverName = typeof mcpServerName === "string" ? mcpServerName : undefined;
+						if (!managerTool.name || !serverName) continue;
+						if (
+							isToolScopedIn(
+								managerTool.name,
+								disallowedPatterns,
+								{
+									enforceToolAllowlist,
+									allowedToolNames: canonicalRequestedToolNames,
+								},
+								serverName,
+							)
+						) {
+							scopedInServerNames.add(serverName);
+						}
+					}
 				}
 				const resourceOnlyServerAllowed = (serverName: string): boolean =>
 					!enforceToolAllowlist && !mcpDisallowTargetsServer(disallowedPatterns, serverName);
 				const ownsAnyRegistryTool = (serverName: string): boolean =>
 					Array.from(tools.values()).some(
 						tool => (tool as { mcpServerName?: unknown }).mcpServerName === serverName,
+					) ||
+					(toolSession.mcpManager?.getTools() ?? []).some(
+						tool => (tool as { mcpServerName?: unknown }).mcpServerName === serverName,
 					);
 				const keptServerInstructions: [string, string][] = [];
 				for (const [srvName, srvInstructions] of serverInstructions) {
 					if (scopedInServerNames) {
-						// A server with owned tools is kept only when at least one is
-						// scoped in. A resource-only server (no owned registry tool)
-						// has no ownership entry; keep it when the scope does not
-						// target THIS server — an unrelated disallow or a pattern for
+						// A server with owned tools (checked across both the deduplicated
+						// registry and the manager's pre-dedup tool list) is kept only when
+						// at least one is scoped in. A resource-only server (no owned tool in
+						// either source) has no ownership entry; keep it when the scope does
+						// not target THIS server — an unrelated disallow or a pattern for
 						// a different server must not strip its instructions.
 						const ownsAnyTool = ownsAnyRegistryTool(srvName);
 						if (ownsAnyTool ? !scopedInServerNames.has(srvName) : !resourceOnlyServerAllowed(srvName))
@@ -5067,6 +5093,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// Same live connections the primary bridge reads; an advisor's
 			// resource frame would otherwise report every server as empty.
 			advisorMcpResources: cursorMcpResources,
+			advisorSessionScope: {
+				isToolScopedIn: (name, mcpServerName) => session?.isToolScopedIn(name, mcpServerName) ?? true,
+				isMCPServerResourceAllowed: serverName => session?.isMCPServerResourceAllowed(serverName) ?? true,
+				mcpManagerTools: () => toolSession.mcpManager?.getTools() ?? [],
+			},
 			titleSystemPrompt: options.titleSystemPrompt,
 			autoTitle: options.autoTitle === true && !isSubagentSession,
 		});

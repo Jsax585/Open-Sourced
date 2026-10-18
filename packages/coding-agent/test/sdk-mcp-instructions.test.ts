@@ -806,4 +806,72 @@ describe("createAgentSession MCP server instructions (deferred UI)", () => {
 		expect(lateAlpha.indexOf("### alpha\n")).toBeLessThan(lateAlpha.indexOf("### zeta\n"));
 		expect(await renderSection(["alpha", "zeta"])).toBe(lateAlpha);
 	}, 30_000);
+
+	it("retains instructions of a deduplication-loser server when the shared tool is scoped in", async () => {
+		const config: MCPStdioServerConfig = { type: "stdio", command: process.execPath, args: [FIXTURE_PATH] };
+		const manager = new MCPManager(tempDir, null, async () => ({ configs: {}, sources: {}, exaApiKeys: [] }));
+		try {
+			await manager.connectServers({ "foo.bar": config, foo_bar: config }, {}, undefined, 0);
+			const { session } = await createAgentSession({
+				cwd: tempDir,
+				agentDir: tempDir,
+				modelRegistry,
+				sessionManager: SessionManager.inMemory(),
+				settings: Settings.isolated({}),
+				model: getBundledModel("openai", "gpt-4o-mini"),
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableLsp: false,
+				skipPythonPreflight: true,
+				enableMCP: true,
+				mcpManager: manager,
+				disallowedTools: ["mcp__other_*"],
+			});
+			try {
+				await session.refreshMCPTools(manager.getTools());
+				const prompt = session.systemPrompt.join("\n");
+				expect(prompt).toContain("### foo.bar\n");
+				expect(prompt).toContain("### foo_bar\n");
+			} finally {
+				await session.dispose();
+			}
+			try {
+				// Also verify when an enforced allowlist explicitly grants the shared tool name
+				const { session: allowlistSession } = await createAgentSession({
+					cwd: tempDir,
+					agentDir: tempDir,
+					modelRegistry,
+					sessionManager: SessionManager.inMemory(),
+					settings: Settings.isolated({}),
+					model: getBundledModel("openai", "gpt-4o-mini"),
+					disableExtensionDiscovery: true,
+					skills: [],
+					contextFiles: [],
+					promptTemplates: [],
+					slashCommands: [],
+					enableLsp: false,
+					skipPythonPreflight: true,
+					enableMCP: true,
+					mcpManager: manager,
+					enforceToolAllowlist: true,
+					toolNames: ["read", "mcp__foo_bar_do_thing"],
+				});
+				try {
+					await allowlistSession.refreshMCPTools(manager.getTools());
+					const allowlistPrompt = allowlistSession.systemPrompt.join("\n");
+					expect(allowlistPrompt).toContain("### foo.bar\n");
+					expect(allowlistPrompt).toContain("### foo_bar\n");
+				} finally {
+					await allowlistSession.dispose();
+				}
+			} finally {
+				// outer try block closes below
+			}
+		} finally {
+			await manager.disconnectAll();
+		}
+	}, 30_000);
 });

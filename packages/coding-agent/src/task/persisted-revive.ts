@@ -308,7 +308,7 @@ export function createPersistedSubagentReviverFactory(
 			// session creation no longer force-adds session-managed builtins or
 			// the checkpoint/rewind sister, so the clamp must not union them
 			// back — the cold path reproduces the declaration, matching what a
-			// fresh spawn carries. (`yield` rides `requireYieldTool` in both.)
+			// fresh spawn carries. (`yield` is appended to the clamp set for structured sessions.)
 			//
 			// MCP entries are canonicalized against the live registry first. The
 			// declaration may name a tool the Claude Code way
@@ -324,8 +324,10 @@ export function createPersistedSubagentReviverFactory(
 					)?.name ?? name
 				);
 			});
+			const reviveScope =
+				structured && !declaredScope.includes("yield") ? [...declaredScope, "yield"] : declaredScope;
 			await session.setActiveToolsByName(
-				restoredSeance ? declaredScope : [...declaredScope, ...session.getMountedXdevToolNames()],
+				restoredSeance ? reviveScope : [...reviveScope, ...session.getMountedXdevToolNames()],
 			);
 			// The yield tool's schema carries the last batch's items; the replayed prefix must match it.
 			if (init.workPoolYieldItems) await session.setWorkPoolYieldItems(init.workPoolYieldItems);

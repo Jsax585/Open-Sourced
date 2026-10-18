@@ -34,7 +34,7 @@ function getUriTemplateMatchScore(
 }
 
 /** The resource URI an internal `mcp://` URL addresses, unwrapped from the scheme. */
-export function extractResourceUri(url: InternalUrl): string {
+function extractResourceUri(url: InternalUrl): string {
 	const scheme = url.protocol.replace(/:$/, "").toLowerCase();
 	if (scheme !== "mcp") {
 		// Server-advertised native URI (hierarchical or opaque). Preserve the
@@ -55,12 +55,9 @@ export function extractResourceUri(url: InternalUrl): string {
 }
 
 /**
- * The server a resource URI belongs to, by exact URI match or template. Shared
- * with the read-tool scope gate so both decide "which server owns this URI"
- * identically — a divergent second implementation would let a scoped read
- * resolve a server the router's own lookup would not.
+ * The server a resource URI belongs to, by exact URI match or template.
  */
-export function resolveTargetServer(mcpManager: MCPManager, uri: string, exact = false): string | undefined {
+function resolveTargetServer(mcpManager: MCPManager, uri: string, exact = false): string | undefined {
 	const servers = mcpManager.getConnectedServers();
 	for (const name of servers) {
 		const serverResources = mcpManager.getServerResources(name);
@@ -113,18 +110,22 @@ export function resolveTargetServer(mcpManager: MCPManager, uri: string, exact =
 	return bestTemplateMatch?.serverName;
 }
 
-function formatAvailableResources(mcpManager: MCPManager): string {
-	const available = mcpManager
-		.getConnectedServers()
-		.flatMap(name => {
-			const serverResources = mcpManager.getServerResources(name);
-			if (!serverResources) return [];
-			const concrete = serverResources.resources.map(r => `  ${r.uri} (${name})`);
-			const templates = serverResources.templates.map(t => `  ${t.uriTemplate} (${name}, template)`);
-			return [...concrete, ...templates];
-		})
-		.join("\n");
-	return available || "  (none)";
+function formatAvailableResources(
+	mcpManager: MCPManager,
+	isServerAllowed?: (serverName: string) => boolean,
+): string | undefined {
+	const servers = mcpManager.getConnectedServers().filter(name => !isServerAllowed || isServerAllowed(name));
+	const entries = servers.flatMap(name => {
+		const serverResources = mcpManager.getServerResources(name);
+		if (!serverResources) return [];
+		const concrete = serverResources.resources.map(r => `  ${r.uri} (${name})`);
+		const templates = serverResources.templates.map(t => `  ${t.uriTemplate} (${name}, template)`);
+		return [...concrete, ...templates];
+	});
+	if (entries.length === 0) {
+		return isServerAllowed ? undefined : "  (none)";
+	}
+	return entries.join("\n");
 }
 
 /** Load connected catalogs before waiting on unrelated servers; check again after pending connects settle. */
@@ -240,8 +241,11 @@ export class McpProtocolHandler implements ProtocolHandler {
 			throw new Error(`No MCP server has resource "${uri}".`);
 		}
 
-		throw new Error(
-			`No MCP server has resource "${uri}".\n\nAvailable resources:\n${formatAvailableResources(mcpManager)}`,
-		);
+		const isServerAllowed = context?.session?.isMCPServerResourceAllowed
+			? (server: string) => context.session!.isMCPServerResourceAllowed!(server) !== false
+			: undefined;
+		const available = formatAvailableResources(mcpManager, isServerAllowed);
+		const suffix = available ? `\n\nAvailable resources:\n${available}` : "";
+		throw new Error(`No MCP server has resource "${uri}".${suffix}`);
 	}
 }

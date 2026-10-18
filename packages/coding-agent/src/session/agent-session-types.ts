@@ -396,7 +396,7 @@ export interface AgentSessionConfig {
 	advisorMcpResources?: CursorMcpResourceAdapter;
 	/** Owning session scope for advisor Cursor resource frames. */
 	advisorSessionScope?: {
-		isToolScopedIn(name: string): boolean;
+		isToolScopedIn(name: string, mcpServerName?: string): boolean;
 		isMCPServerResourceAllowed(serverName: string): boolean;
 		mcpManagerTools(): Iterable<{ readonly name?: string; readonly mcpServerName?: unknown }>;
 	};

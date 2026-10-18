@@ -3785,4 +3785,56 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			}
 		});
 	});
+
+	it("denies scoped-out MCP server resources in advisor Cursor handlers", async () => {
+		const tempDir = makeTempDir();
+		const mockMcpManager = {
+			getConnectedServers: () => ["denied", "allowed"],
+			getServerResources: (name: string) => ({ resources: [{ uri: `${name}://res`, name }], templates: [] }),
+			readServerResource: (name: string, uri: string) => ({ contents: [{ uri, text: `hello from ${name}` }] }),
+			ensureServerResources: async () => {},
+			getTools: () => [],
+			getServerInstructions: () => new Map(),
+			disconnectAll: () => {},
+			addNotificationListener: () => () => {},
+		} as unknown as MCPManager;
+
+		await withProviderAuth(["openai"], async () => {
+			const { session } = await createAgentSession({
+				...baseOptions(tempDir),
+				enableMCP: true,
+				settings: Settings.isolated({ "advisor.enabled": true }),
+				mcpManager: mockMcpManager,
+				disallowedTools: ["mcp__denied_*"],
+			});
+			try {
+				session.applyAdvisorConfigs([{ name: "reviewer", model: "gpt-4o-mini" }], undefined);
+				const advisor = session.getAdvisorAgent();
+				if (!advisor) throw new Error("expected an advisor agent");
+
+				let capturedHandlers: CursorExecHandlers | undefined;
+				(advisor as unknown as { streamFn: unknown }).streamFn = (
+					_model: unknown,
+					_context: unknown,
+					options: { cursorExecHandlers?: CursorExecHandlers } | undefined,
+				) => {
+					capturedHandlers = options?.cursorExecHandlers;
+					return (async function* () {
+						yield { type: "done", reason: "stop" };
+					})() as never;
+				};
+
+				await advisor.prompt("hello");
+				if (!capturedHandlers) throw new Error("expected captured cursorExecHandlers");
+
+				const allowed = await capturedHandlers.readMcpResource({ server: "allowed", uri: "allowed://res" });
+				const denied = await capturedHandlers.readMcpResource({ server: "denied", uri: "denied://res" });
+				expect(allowed?.text).toBe("hello from allowed");
+				expect(denied).toBeNull();
+				expect((await capturedHandlers.listMcpResources({})).map(r => r.uri)).toEqual(["allowed://res"]);
+			} finally {
+				await session.dispose();
+			}
+		});
+	});
 });

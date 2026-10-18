@@ -371,6 +371,8 @@ export interface ToolSession {
 	getEvalBridgeToolNames?: () => readonly string[];
 	/** Return whether a built-in tool is active in this turn's tool set. */
 	isToolActive?: (name: string) => boolean;
+	/** Whether a tool survives this session's tool scope (allowlist + disallow patterns). */
+	isToolScopedIn?: (name: string, mcpServerName?: string) => boolean;
 	/**
 	 * Whether an MCP server's resources may be listed or read under this
 	 * session's tool scope. `read mcp://…` resolves through a process-global
@@ -378,8 +380,6 @@ export interface ToolSession {
 	 * session the read tool is bound to — otherwise a scoped subagent can read
 	 * any connected server's resources by URI despite the scope.
 	 */
-	/** Whether a tool survives this session's tool scope (allowlist + disallow patterns). */
-	isToolScopedIn?: (name: string) => boolean;
 	isMCPServerResourceAllowed?: (serverName: string) => boolean;
 	/** Update the active built-in tool predicate when a session changes tools mid-run. */
 	setActiveToolNames?: (names: Iterable<string>) => void;

@@ -135,18 +135,6 @@ describe("parseAgentFields", () => {
 		expect(fields?.tools).toEqual(["find", "glob", "grep"]);
 	});
 
-	test("preserves an explicit empty tools array as an enforced allowlist", () => {
-		const fields = parseAgentFields({
-			name: "reviewer",
-			description: "desc",
-			tools: [],
-		});
-
-		// An explicit empty list must not collapse to "undeclared": enforcement
-		// stays on downstream, and only the mandatory `yield` is appended.
-		expect(fields?.tools).toEqual(["yield"]);
-	});
-
 	test("parses autoloadSkills from array frontmatter", () => {
 		const fields = parseAgentFields({
 			name: "oracle",

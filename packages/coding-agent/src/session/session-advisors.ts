@@ -441,7 +441,7 @@ export interface SessionAdvisorsOptions {
 	mcpResources?: CursorMcpResourceAdapter;
 	/** Owning session scope for advisor resource frames (absent = unrestricted). */
 	sessionScope?: {
-		isToolScopedIn(name: string): boolean;
+		isToolScopedIn(name: string, mcpServerName?: string): boolean;
 		isMCPServerResourceAllowed(serverName: string): boolean;
 		mcpManagerTools(): Iterable<{ readonly name?: string; readonly mcpServerName?: unknown }>;
 	};
@@ -1400,7 +1400,8 @@ export class SessionAdvisors {
 				// Resource frames answer by server name and never run a roster tool, so
 				// gate them on the owning session scope (not the roster): without this a
 				// scoped subagent's advisor lists every connected server's resources.
-				allowToollessMcpServers: serverName => this.#advisorSessionScope?.isMCPServerResourceAllowed(serverName) ?? true,
+				allowToollessMcpServers: serverName =>
+					this.#advisorSessionScope?.isMCPServerResourceAllowed(serverName) ?? true,
 				mcpManagerTools: () => this.#advisorSessionScope?.mcpManagerTools() ?? [],
 				// The advisor roster is its grant: frames cannot execute tools outside
 				// it. `todo` is absent from advisor rosters, so the in-band todo-mirror

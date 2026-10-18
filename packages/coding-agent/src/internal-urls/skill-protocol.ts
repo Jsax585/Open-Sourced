@@ -162,6 +162,7 @@ export class SkillProtocolHandler implements ProtocolHandler {
 					exact: true,
 					waitMs: Math.max(0, deadline - Date.now()),
 					signal: context?.signal,
+					isMCPServerResourceAllowed: context?.session?.isMCPServerResourceAllowed?.bind(context.session),
 				}));
 			if (!resource) throw error;
 			// The server, not a loaded skill, sizes this text: keep `read`'s normal result limits.

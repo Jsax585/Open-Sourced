@@ -6552,8 +6552,8 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/** Whether a tool survives this session's tool scope (allowlist + disallow patterns). */
-	isToolScopedIn(name: string): boolean {
-		return this.#tools.isToolScopedIn(name);
+	isToolScopedIn(name: string, mcpServerName?: string): boolean {
+		return this.#tools.isToolScopedIn(name, mcpServerName);
 	}
 
 	/** Whether an MCP server's resources may be listed/read under this session's tool scope. */

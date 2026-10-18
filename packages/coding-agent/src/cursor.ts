@@ -365,7 +365,7 @@ export function mcpServerResourcesAllowed(
 	 * whose only tool the same disallow matches — stayed listable and readable.
 	 */
 	sources: readonly Iterable<McpOwnedToolRef>[],
-	isToolExecutable: ((name: string) => boolean) | undefined,
+	isToolExecutable: ((name: string, mcpServerName?: string) => boolean) | undefined,
 	allowToollessServers: ((serverName: string) => boolean) | undefined,
 	serverName: string,
 ): boolean {

@@ -1068,8 +1068,6 @@ export class SessionTools {
 	 * survives unless the scope targets it by name.
 	 */
 	isMCPServerResourceAllowed(serverName: string): boolean {
-		const ownsAnyTool = (toolName: string): boolean =>
-			(this.#toolRegistry.get(toolName) as { mcpServerName?: unknown } | undefined)?.mcpServerName === serverName;
 		// Dual-source: the registry alone misreads a dedup loser (its server owns
 		// no registry tool) as resource-only. The manager list keeps the loser's
 		// ownership visible so an exact disallow of the shared name strips both
@@ -1080,18 +1078,30 @@ export class SessionTools {
 		];
 		return mcpServerResourcesAllowed(
 			sources,
-			name => ownsAnyTool(name) && this.isToolScopedIn(name),
+			(name, owner) => this.isToolScopedIn(name, owner),
 			server => !this.#enforceToolAllowlist && !mcpDisallowTargetsServer(this.#disallowedToolPatterns, server),
 			serverName,
 		);
 	}
 
-	/** Whether a tool survives this session's tool scope (allowlist + disallow patterns). */
-	isToolScopedIn(name: string): boolean {
+	/**
+	 * Whether a tool survives this session's tool scope (allowlist + disallow patterns).
+	 *
+	 * When `mcpServerName` is provided, it overrides the registry lookup. This
+	 * allows callers judging candidate or deduplicated MCP tools (such as dedup
+	 * losers that are absent from the registry) to evaluate disallow patterns
+	 * against the tool's actual owning server.
+	 */
+	isToolScopedIn(name: string, mcpServerName?: string): boolean {
 		// Metadata-aware disallow: pass the registered tool's raw `mcpServerName`
 		// so `mcp__<server>_*` still matches length-capped minted names (a plain
-		// name-prefix match misses the truncated + hashed registry key).
-		const mcpServerName = (this.#toolRegistry.get(name) as { mcpServerName?: unknown } | undefined)?.mcpServerName;
+		// name-prefix match misses the truncated + hashed registry key). Callers
+		// judging candidate or deduplication-loser tools may pass `mcpServerName`
+		// directly to override the registry lookup.
+		const registryServerName = (this.#toolRegistry.get(name) as { mcpServerName?: unknown } | undefined)
+			?.mcpServerName;
+		const resolvedServerName =
+			mcpServerName ?? (typeof registryServerName === "string" ? registryServerName : undefined);
 		const isBuiltIn = this.#builtInToolNames.has(name);
 		// A Claude-spelled allowlist entry (`mcp__srv-x__tool`) stays raw in the
 		// stored set when the tool was absent at startup; resolve declared entries
@@ -1118,7 +1128,7 @@ export class SessionTools {
 				allowedToolNames,
 				isBuiltIn,
 			},
-			typeof mcpServerName === "string" ? mcpServerName : undefined,
+			resolvedServerName,
 		);
 	}
 

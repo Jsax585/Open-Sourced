@@ -84,6 +84,42 @@ describe("McpProtocolHandler", () => {
 		await expect(router.resolve("mcp://test://missing")).rejects.toThrow("server-a");
 	});
 
+	it("filters available resources in error listing by session scope", async () => {
+		const resources = new Map<string, { resources: MCPResource[]; templates: MCPResourceTemplate[] }>();
+		resources.set("allowed-server", {
+			resources: [{ uri: "allowed://res", name: "allowed-resource" }],
+			templates: [],
+		});
+		resources.set("denied-server", {
+			resources: [{ uri: "denied://secret", name: "secret-resource" }],
+			templates: [],
+		});
+		const manager = createMockManager({ servers: ["allowed-server", "denied-server"], resources });
+		MCPManager.setInstance(manager);
+		const router = InternalUrlRouter.instance();
+
+		const session = createToolSession(server => server !== "denied-server");
+		let caughtError: Error | undefined;
+		try {
+			await router.resolve("mcp://test://missing", { session });
+		} catch (err) {
+			caughtError = err as Error;
+		}
+
+		expect(caughtError).toBeDefined();
+		expect(caughtError!.message).toContain('No MCP server has resource "test://missing".');
+		expect(caughtError!.message).toContain("Available resources:");
+		expect(caughtError!.message).toContain("allowed://res (allowed-server)");
+		expect(caughtError!.message).not.toContain("denied://secret");
+		expect(caughtError!.message).not.toContain("denied-server");
+
+		// When session allows nothing, Available resources section is omitted
+		const denyAllSession = createToolSession(() => false);
+		await expect(router.resolve("mcp://test://missing", { session: denyAllSession })).rejects.toThrow(
+			/^No MCP server has resource "test:\/\/missing"\.$/,
+		);
+	});
+
 	it("lists resource templates alongside concrete resources when no server matches", async () => {
 		const resources = new Map<string, { resources: MCPResource[]; templates: MCPResourceTemplate[] }>();
 		resources.set("server-a", {
@@ -803,6 +839,22 @@ describe("skill:// falls back to an MCP resource with the same URI", () => {
 		const resource = await router.resolve(skillUri, { skills });
 		expect(resource.content).toBe("local copy");
 		expect(resource.notes ?? []).not.toContain("MCP server: figma");
+	});
+
+	it("refuses an MCP-advertised skill when the session scope denies the owning server", async () => {
+		MCPManager.setInstance(figmaManager("mcp copy"));
+		const router = InternalUrlRouter.instance();
+
+		// Allowed server resolves the MCP skill
+		const allowedSession = createToolSession(server => server === "figma");
+		const allowed = await router.resolve(skillUri, { skills: [], session: allowedSession });
+		expect(allowed.content).toBe("mcp copy");
+
+		// Denied server refuses the MCP skill, throwing Unknown skill
+		const deniedSession = createToolSession(server => server !== "figma");
+		await expect(router.resolve(skillUri, { skills: [], session: deniedSession })).rejects.toThrow(
+			"Unknown skill: figma",
+		);
 	});
 
 	it("reports Unknown skill to local-file actions without contacting MCP", async () => {

@@ -25,7 +25,10 @@ import {
 } from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
 import { create, fromBinary } from "@oh-my-pi/pi-catalog/discovery/protobuf";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { SessionTools } from "@oh-my-pi/pi-coding-agent/session/session-tools";
 import { CursorExecHandlers, mcpServerResourcesAllowed } from "@oh-my-pi/pi-coding-agent/cursor";
+import { isToolScopedIn } from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
 import { registerArtifactsDir } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
 import {
 	bridgeToolMap,
@@ -379,9 +382,7 @@ describe("scope gates on override tools", () => {
 			rawArgs: {},
 		});
 		expect(await Bun.file(target).text()).toBe("alpha\nbeta\n");
-		expect(
-			result.content.map(part => (part.type === "text" ? part.text : "")).join(""),
-		).toMatch(/not available/i);
+		expect(result.content.map(part => (part.type === "text" ? part.text : "")).join("")).toMatch(/not available/i);
 	});
 });
 describe("bridge tool resolution beyond the model-facing registry", () => {
@@ -1393,6 +1394,112 @@ describe("CursorExecHandlers mounted tool bridge", () => {
 		expect(mcpServerResourcesAllowed([registrySource, managerSource], denyShared, () => true, "winner")).toBe(false);
 		// With no scope naming the shared tool, both servers stay readable.
 		expect(mcpServerResourcesAllowed([registrySource, managerSource], undefined, () => true, "loser")).toBe(true);
+	});
+
+	it("denies both dedup winner and loser resources under SessionTools isMCPServerResourceAllowed when shared name is disallowed", () => {
+		const sharedName = "mcp__collide_bank";
+		const winnerTool = {
+			name: sharedName,
+			mcpServerName: "winner",
+			execute: async () => ({}),
+		} as unknown as AgentTool;
+		const loserTool = {
+			name: sharedName,
+			mcpServerName: "loser",
+			execute: async () => ({}),
+		} as unknown as AgentTool;
+
+		const registry = new Map([[sharedName, winnerTool]]);
+		const makeSessionTools = (disallowedToolPatterns: string[]) =>
+			new SessionTools(
+				{
+					agent: { state: { messages: [], tools: [] } } as never,
+					sessionManager: SessionManager.inMemory(),
+					settings: Settings.isolated(),
+					effectiveExtensionRoots: () => ({}) as never,
+					modelRegistry: {} as never,
+					extensionRunner: () => undefined,
+					clientBridge: () => undefined,
+					agentKind: () => "main",
+					isDisposed: () => false,
+					isStreaming: () => false,
+					queuedMessageCount: () => 0,
+					planModeEnabled: () => false,
+					model: () => undefined,
+					memoryBackendSession: () => ({}) as never,
+					clearInheritedProviderPromptCacheKey: () => {},
+					clearMemoryPromotionSnapshot: () => {},
+					captureMemoryPromotionSnapshot: () => {},
+					emitNotice: () => {},
+					notifyCommandMetadataChanged: () => {},
+					localProtocolOptions: () => ({}),
+					evalPreludes: () => [],
+					sessionAgents: () => [],
+					waitForUser: dialog => dialog(),
+				},
+				{
+					baseSystemPrompt: [],
+					toolRegistry: registry,
+					mcpManagerTools: () => [winnerTool, loserTool],
+					disallowedToolPatterns,
+				},
+			);
+
+		// With no disallow, both servers are allowed
+		const openTools = makeSessionTools([]);
+		expect(openTools.isMCPServerResourceAllowed("winner")).toBe(true);
+		expect(openTools.isMCPServerResourceAllowed("loser")).toBe(true);
+
+		// Exact disallow of the shared name denies BOTH servers' resources
+		const disallowedTools = makeSessionTools([sharedName]);
+		expect(disallowedTools.isMCPServerResourceAllowed("winner")).toBe(false);
+		expect(disallowedTools.isMCPServerResourceAllowed("loser")).toBe(false);
+	});
+
+	it("judges Cursor MCP resource executability by per-source owner when public tool names collide", async () => {
+		// When two servers mint the same public name, an MCP-server disallow pattern
+		// targeting the loser must deny the loser's resources while allowing the winner.
+		// Judging executability by per-source owner (passing mcpServerName through to
+		// isToolExecutable / isToolScopedIn) ensures the loser's tool is evaluated
+		// against the loser's identity rather than falling back to the winner's registry entry.
+		const sharedName = "mcp__collide_bank";
+		const registryMap = new Map<string, AgentTool>([
+			[sharedName, { name: sharedName, mcpServerName: "winner" } as unknown as AgentTool],
+		]);
+		const managerTools = [
+			{ name: sharedName, mcpServerName: "winner" },
+			{ name: sharedName, mcpServerName: "loser" },
+		];
+		const disallowedPatterns = ["mcp__loser_*"];
+
+		// Unit-level resource gate check with isToolScopedIn owner override
+		const gate = (name: string, mcpServerName?: string): boolean => {
+			const regOwner = (registryMap.get(name) as { mcpServerName?: unknown } | undefined)?.mcpServerName;
+			return isToolScopedIn(name, disallowedPatterns, {}, (mcpServerName ?? regOwner) as string | undefined);
+		};
+		expect(mcpServerResourcesAllowed([registryMap.values(), managerTools], gate, () => true, "winner")).toBe(true);
+		expect(mcpServerResourcesAllowed([registryMap.values(), managerTools], gate, () => true, "loser")).toBe(false);
+
+		// Full CursorExecHandlers integration
+		const handlers = new CursorExecHandlers({
+			cwd: ".",
+			tools: registryMap,
+			mcpManagerTools: () => managerTools,
+			isToolExecutable: (name, mcpServerName) => {
+				const regOwner = (registryMap.get(name) as { mcpServerName?: unknown } | undefined)?.mcpServerName;
+				return isToolScopedIn(name, disallowedPatterns, {}, (mcpServerName ?? regOwner) as string | undefined);
+			},
+			mcpResources: {
+				serverNames: () => ["winner", "loser"],
+				getServerResources: async server => ({ resources: [{ uri: `${server}://entry`, name: server }] }) as never,
+				readServerResource: async (server, uri) =>
+					({ contents: [{ uri, text: `content from ${server}` }] }) as never,
+			},
+		});
+
+		expect((await handlers.listMcpResources({})).map(r => r.uri)).toEqual(["winner://entry"]);
+		expect(await handlers.readMcpResource({ server: "winner", uri: "winner://entry" })).not.toBeNull();
+		expect(await handlers.readMcpResource({ server: "loser", uri: "loser://entry" })).toBeNull();
 	});
 
 	it("waits for a server's catalog instead of reporting it empty", async () => {
