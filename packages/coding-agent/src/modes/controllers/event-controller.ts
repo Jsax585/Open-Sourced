@@ -1883,6 +1883,8 @@ export class EventController {
 		const blocked = this.#blockingPrompt(renderToolName, event.args);
 		if (blocked) {
 			this.#blockingPrompts.set(event.toolCallId, blocked);
+			// Keep the interrupt affordance visible without repainting while waiting.
+			this.ctx.loadingAnimation?.stop();
 			setRunStatus(blocked);
 		}
 		this.#resolveDisplaceablePoll(renderToolName);
@@ -2119,6 +2121,7 @@ export class EventController {
 		// (added at tool_execution_start), so the delete also covers them without
 		// leaking ids until turn end.
 		if (this.#blockingPrompts.delete(event.toolCallId)) {
+			if (this.#blockingPrompts.size === 0) this.ctx.loadingAnimation?.start();
 			setRunStatus(this.#blockingPrompts.values().next().value ?? { state: "working" });
 		}
 		if (event.toolName === "read") {
@@ -2449,6 +2452,8 @@ export class EventController {
 		if (!this.ctx.viewSession.isStreaming) return;
 		if (this.ctx.autoCompactionLoader || this.ctx.retryLoader) return;
 		this.ctx.ensureLoadingAnimation();
+		// Recovery may recreate a loader while another question/approval still waits.
+		if (this.#blockingPrompts.size > 0) this.ctx.loadingAnimation?.stop();
 	}
 
 	/**

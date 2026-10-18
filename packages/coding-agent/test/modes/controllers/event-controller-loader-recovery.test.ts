@@ -22,7 +22,7 @@ import { cfgTerminalShowProgress } from "@oh-my-pi/pi-coding-agent/modes/setting
  * kept streaming. The fix tears the working loader down (stop + dereference) so
  * the next `agent_start` recreates and re-attaches it.
  */
-function createContext(options: { terminalProgress?: boolean } = {}) {
+function createContext(options: { terminalProgress?: boolean; animated?: boolean } = {}) {
 	// `continuation`: a scheduled retry/continuation the session still owes.
 	const streamState: { isStreaming: boolean; continuation?: PromiseWithResolvers<void> } = { isStreaming: false };
 	if (options.terminalProgress) cfgTerminalShowProgress.set(settings, true);
@@ -31,7 +31,7 @@ function createContext(options: { terminalProgress?: boolean } = {}) {
 		if (!active) progressCleared.resolve();
 	});
 	const ctx = createInteractiveModeContext({
-		ui: { terminal: { setProgress } },
+		ui: { terminal: { setProgress }, synchronizedOutput: true },
 		session: {
 			get isStreaming() {
 				return streamState.isStreaming;
@@ -52,7 +52,7 @@ function createContext(options: { terminalProgress?: boolean } = {}) {
 		const working = new Loader(
 			ctx.ui,
 			text => text,
-			text => text,
+			Object.assign((text: string) => text, { animated: options.animated ? (true as const) : undefined }),
 			"Working…",
 		);
 		vi.spyOn(working, "stop");
@@ -102,6 +102,59 @@ const TASK_TOOL_EXECUTION_END = {
 } as unknown as AgentSessionEvent;
 
 describe("EventController loader recovery after overflow maintenance", () => {
+	for (const animated of [false, true]) {
+		it(`pauses paints for pending asks and resumes after the last answer (shimmer=${animated})`, async () => {
+			const { ctx, streamState, statusContainer } = createContext({ animated });
+			const controller = new EventController(ctx);
+			streamState.isStreaming = true;
+			await controller.handleEvent(AGENT_START);
+			const working = ctx.loadingAnimation!;
+			const paints = vi.spyOn(ctx.ui, "requestComponentRender");
+			paints.mockClear();
+			vi.advanceTimersByTime(240);
+			expect(paints).toHaveBeenCalled();
+
+			const startAsk = (toolCallId: string): AgentSessionEvent => ({
+				type: "tool_execution_start",
+				toolCallId,
+				toolName: "ask",
+				args: { questions: [{ id: "q", question: "Continue?" }] },
+			});
+			const endAsk = (toolCallId: string): AgentSessionEvent => ({
+				type: "tool_execution_end",
+				toolCallId,
+				toolName: "ask",
+				result: { content: [], details: {} },
+				isError: false,
+			});
+			try {
+				await controller.handleEvent(startAsk("ask-1"));
+				expect(ctx.loadingAnimation).toBe(working);
+				expect(statusContainer.children).toContain(working);
+				paints.mockClear();
+				vi.advanceTimersByTime(10_000);
+				expect(paints).not.toHaveBeenCalled();
+				expect(working.debugState().running).toBe(false);
+
+				// More tool events must not restart a paused loader.
+				await controller.handleEvent(startAsk("ask-2"));
+				await controller.handleEvent(endAsk("ask-1"));
+				paints.mockClear();
+				vi.advanceTimersByTime(10_000);
+				expect(paints).not.toHaveBeenCalled();
+
+				await controller.handleEvent(endAsk("ask-2"));
+				expect(ctx.loadingAnimation).toBe(working);
+				paints.mockClear();
+				vi.advanceTimersByTime(240);
+				expect(paints).toHaveBeenCalled();
+				expect(working.debugState().running).toBe(true);
+			} finally {
+				working.stop();
+			}
+		});
+	}
+
 	beforeAll(async () => {
 		await initTheme(false);
 	});
