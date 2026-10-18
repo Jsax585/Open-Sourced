@@ -69,12 +69,12 @@ function resolveTargetServer(mcpManager: MCPManager, uri: string, exact = false)
 
 	let bestTemplateMatch:
 		| {
-			serverName: string;
-			literalChars: number;
-			expressionCount: number;
-			serverIndex: number;
-			templateIndex: number;
-		}
+				serverName: string;
+				literalChars: number;
+				expressionCount: number;
+				serverIndex: number;
+				templateIndex: number;
+		  }
 		| undefined;
 
 	for (const [serverIndex, name] of servers.entries()) {
@@ -159,7 +159,7 @@ export async function readMcpResource(
 		// `settleCatalogs` never rejects, so the only rejection to swallow is the spent budget.
 		await untilAborted(
 			signal,
-			waitMs === undefined ? settling : withTimeout(settling, waitMs, "MCP wait budget spent").catch(() => { }),
+			waitMs === undefined ? settling : withTimeout(settling, waitMs, "MCP wait budget spent").catch(() => {}),
 		);
 		targetServer = resolveTargetServer(mcpManager, uri, exact);
 	}

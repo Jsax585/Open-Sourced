@@ -1356,9 +1356,9 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const toolMap = options.tools ? new Map(options.tools.map(tool => [tool.name, tool])) : undefined;
 	const promptTools = toolMap
 		? projectSystemPromptToolMetadata(
-			toolMap,
-			options.inlineToolDescriptors ? { mode: "full" } : { mode: "compact", toolNames: toolNames ?? [] },
-		)
+				toolMap,
+				options.inlineToolDescriptors ? { mode: "full" } : { mode: "compact", toolNames: toolNames ?? [] },
+			)
 		: undefined;
 	return await buildSystemPromptInternal({
 		cwd: options.cwd,
@@ -1458,14 +1458,14 @@ export function customToolToDefinition(tool: CustomTool, sourcePath?: string): T
 		renderCall: tool.renderCall,
 		renderResult: tool.renderResult
 			? (result, options, theme): Component => {
-				const component = tool.renderResult?.(
-					result,
-					{ expanded: options.expanded, isPartial: options.isPartial, spinnerFrame: options.spinnerFrame },
-					theme,
-				);
-				// Return empty component if undefined to match Component type requirement
-				return component ?? ({ render: () => [] } as unknown as Component);
-			}
+					const component = tool.renderResult?.(
+						result,
+						{ expanded: options.expanded, isPartial: options.isPartial, spinnerFrame: options.spinnerFrame },
+						theme,
+					);
+					// Return empty component if undefined to match Component type requirement
+					return component ?? ({ render: () => [] } as unknown as Component);
+				}
 			: undefined,
 		[TOOL_DEFINITION_MARKER]: true,
 	};
@@ -1860,7 +1860,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const scan = logger.time("buildWorkspaceTree", () =>
 			buildWorkspaceTree(cwd, { timeoutMs: STARTUP_SCAN_DEADLINE_MS }),
 		);
-		scan.catch(() => { });
+		scan.catch(() => {});
 		return scan;
 	};
 	// Undefined until needed: enabling `includeWorkspaceTree` mid-session scans
@@ -1879,7 +1879,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const contextFilesPromise = options.contextFiles
 		? Promise.resolve(options.contextFiles)
 		: logger.time("discoverContextFiles", discoverContextFiles, cwd, agentDir);
-	contextFilesPromise.catch(() => { });
+	contextFilesPromise.catch(() => {});
 	const resolveRepoContext = async (repoCwd: string) => {
 		try {
 			return await resolveActiveRepoContext(repoCwd);
@@ -1889,34 +1889,34 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		}
 	};
 	const activeRepoContextPromise = logger.time("resolveActiveRepoContext", resolveRepoContext, cwd);
-	activeRepoContextPromise.catch(() => { });
+	activeRepoContextPromise.catch(() => {});
 	const watchdogFilesPromise = logger.time("discoverWatchdogFiles", () => discoverWatchdogFiles(cwd, agentDir));
-	watchdogFilesPromise.catch(() => { });
+	watchdogFilesPromise.catch(() => {});
 	const advisorConfigsPromise = logger.time("discoverAdvisorConfigs", () => discoverAdvisorConfigs(cwd, agentDir));
-	advisorConfigsPromise.catch(() => { });
+	advisorConfigsPromise.catch(() => {});
 	const promptTemplatesPromise = options.promptTemplates
 		? Promise.resolve(options.promptTemplates)
 		: logger.time("discoverPromptTemplates", discoverPromptTemplates, cwd, agentDir);
-	promptTemplatesPromise.catch(() => { });
+	promptTemplatesPromise.catch(() => {});
 	const slashCommandsPromise = options.slashCommands
 		? Promise.resolve(options.slashCommands)
 		: logger.time("discoverSlashCommands", discoverSlashCommands, cwd);
-	slashCommandsPromise.catch(() => { });
+	slashCommandsPromise.catch(() => {});
 	const customCommandsPromise =
 		options.disableExtensionDiscovery || options.restrictToolNames === true
 			? Promise.resolve<CustomCommandsLoadResult>({ commands: [], errors: [] })
 			: logger.time("discoverCustomCommands", loadCustomCommandsInternal, { cwd, agentDir });
-	customCommandsPromise.catch(() => { });
+	customCommandsPromise.catch(() => {});
 	const skillsSettings = cfgSkills.get(settings);
 	const disabledExtensionIds = cfgDisabledExtensions.get(settings);
 	const discoveredSkillsPromise =
 		options.skills === undefined
 			? logger.time("discoverSkills", discoverSkills, cwd, agentDir, {
-				...skillsSettings,
-				disabledExtensions: disabledExtensionIds,
-			})
+					...skillsSettings,
+					disabledExtensions: disabledExtensionIds,
+				})
 			: undefined;
-	discoveredSkillsPromise?.catch(() => { });
+	discoveredSkillsPromise?.catch(() => {});
 
 	const sessionManager =
 		options.sessionManager ??
@@ -2370,13 +2370,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					// Construction time: the registry and active set are still empty and
 					// ReadTool caches its description here. Answer from the requested
 					// scope, like the pre-scope getter, plus the disallow filter.
-					const requestedToolNames = options.toolNames
-						? normalizeToolNames(options.toolNames)
-						: undefined;
+					const requestedToolNames = options.toolNames ? normalizeToolNames(options.toolNames) : undefined;
 					return restrictToolNames
 						? requestedToolNames?.includes("edit") === true
 						: (!requestedToolNames || requestedToolNames.includes("edit")) &&
-						!isToolDisallowed("edit", disallowedPatterns);
+								!isToolDisallowed("edit", disallowedPatterns);
 				}
 				// Effective grant, not mere registration: the active set is filtered
 				// by `disallowedTools:` and an enforced `tools:` allowlist after
@@ -3780,9 +3778,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				// force-includes and the checkpoint/rewind pair; other auto-includes stay inactive.
 				const activate = explicitToolNames
 					? explicitToolNames.has(name) ||
-					SESSION_MANAGED_BUILTIN_TOOL_NAMES.includes(name) ||
-					name === "checkpoint" ||
-					name === "rewind"
+						SESSION_MANAGED_BUILTIN_TOOL_NAMES.includes(name) ||
+						name === "checkpoint" ||
+						name === "rewind"
 					: native.hidden !== true;
 				added.push({ name, builtIn: true, activate });
 			}
@@ -4048,11 +4046,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			const autoLearnInstructions = restrictToolNames
 				? undefined
 				: buildAutoLearnInstructions({
-					manageSkill: hasSession
-						? session.hasBuiltInTool("manage_skill")
-						: builtInRegistryToolNames.has("manage_skill"),
-					learn: hasSession ? session.hasBuiltInTool("learn") : builtInRegistryToolNames.has("learn"),
-				});
+						manageSkill: hasSession
+							? session.hasBuiltInTool("manage_skill")
+							: builtInRegistryToolNames.has("manage_skill"),
+						learn: hasSession ? session.hasBuiltInTool("learn") : builtInRegistryToolNames.has("learn"),
+					});
 			const appendParts: string[] = [];
 			if (memoryInstructions) appendParts.push(memoryInstructions);
 			if (autoLearnInstructions) appendParts.push(autoLearnInstructions);
@@ -4061,10 +4059,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// catalog line; a tool the route bound omits keeps its catalog line.
 			const xdevPromptDocs = toolSession.xdev
 				? planXdevPromptDocs(
-					toolSession.xdev,
-					cfgToolsXdevDocs.get(settings),
-					cfgToolsXdevInlineDevices.get(settings),
-				)
+						toolSession.xdev,
+						cfgToolsXdevDocs.get(settings),
+						cfgToolsXdevInlineDevices.get(settings),
+					)
 				: undefined;
 			const projection = projectMountedMCPXdevGuidance(
 				collectMountedMCPToolRoutes(toolSession.xdev ? listXdevTools(toolSession.xdev) : []),
@@ -4103,7 +4101,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				// server's instructions (resource-only servers have no owned tool
 				// to match).
 				const scopeTargetsMcp =
-					enforceToolAllowlist || disallowedPatterns.some(pattern => pattern.startsWith("mcp__") || pattern === "*");
+					enforceToolAllowlist ||
+					disallowedPatterns.some(pattern => pattern.startsWith("mcp__") || pattern === "*");
 				let scopedInServerNames: Set<string> | undefined;
 				if (scopeTargetsMcp) {
 					scopedInServerNames = new Set();
@@ -4170,8 +4169,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						// not target THIS server — an unrelated disallow or a pattern for
 						// a different server must not strip its instructions.
 						const ownsAnyTool = ownsAnyRegistryTool(srvName);
-						if (ownsAnyTool ? !scopedInServerNames.has(srvName) : !resourceOnlyServerAllowed(srvName))
-							continue;
+						if (ownsAnyTool ? !scopedInServerNames.has(srvName) : !resourceOnlyServerAllowed(srvName)) continue;
 					}
 					keptServerInstructions.push([srvName, srvInstructions]);
 				}
@@ -4200,7 +4198,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					tree => {
 						lateWorkspaceTree = tree;
 					},
-					() => { },
+					() => {},
 				);
 			}
 			// Mounted xd:// readers stay out of the direct inventory, but their skill
@@ -4364,7 +4362,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			for (const entry of explicitlyRequestedToolNameSet) {
 				if (entry.endsWith("*")) continue;
 				const canonical =
-					resolveMCPToolAlias(entry, candidate => (toolRegistry.has(candidate) ? { name: candidate } : undefined))?.name ?? entry;
+					resolveMCPToolAlias(entry, candidate => (toolRegistry.has(candidate) ? { name: candidate } : undefined))
+						?.name ?? entry;
 				if (canonical !== entry) resolved.add(canonical);
 			}
 			return resolved;
@@ -4378,14 +4377,17 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				name => name.includes("*") || !toolRegistry.has(name),
 			);
 			if (unresolvable.length > 0) {
-				logger.warn("Subagent tools: allowlist entries match no registered tool (allowlist is exact-names-only; wildcards expand only in disallowedTools)", { entries: unresolvable });
+				logger.warn(
+					"Subagent tools: allowlist entries match no registered tool (allowlist is exact-names-only; wildcards expand only in disallowedTools)",
+					{ entries: unresolvable },
+				);
 			}
 		}
 		const inheritedMountedNames = options.mountedToolNames && new Set(options.mountedToolNames);
 		const presentationPinnedToolNames =
 			explicitlyRequestedToolNames && inheritedMountedNames
 				? new Set(explicitlyRequestedToolNames.filter(name => !inheritedMountedNames.has(name)))
-				: canonicalRequestedToolNames ?? explicitlyRequestedToolNameSet;
+				: (canonicalRequestedToolNames ?? explicitlyRequestedToolNameSet);
 		const xdevReadAvailable =
 			builtInRegistryToolNames.has("read") &&
 			(explicitlyRequestedToolNameSet === undefined || explicitlyRequestedToolNameSet.has("read")) &&
@@ -4408,14 +4410,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const alwaysInclude: string[] = restrictToolNames
 			? []
 			: [
-				...sdkCustomTools.map(t => t.name),
-				...registeredTools.map(t => t.definition.name),
-				...settingsGatedCustomEntries.keys(),
-			].filter(
-				name =>
-					!defaultInactiveToolNames.has(name) &&
-					(!enforceToolAllowlist || explicitlyRequestedToolNameSet?.has(name) === true),
-			);
+					...sdkCustomTools.map(t => t.name),
+					...registeredTools.map(t => t.definition.name),
+					...settingsGatedCustomEntries.keys(),
+				].filter(
+					name =>
+						!defaultInactiveToolNames.has(name) &&
+						(!enforceToolAllowlist || explicitlyRequestedToolNameSet?.has(name) === true),
+				);
 		for (const name of alwaysInclude) {
 			if (toolRegistry.has(name) && !initialToolNames.includes(name)) {
 				initialToolNames.push(name);
@@ -4631,10 +4633,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			(hasServiceTierEntry
 				? (existingSession.serviceTier ?? {})
 				: buildServiceTierByFamily(
-					cfgTierOpenai.get(settings),
-					cfgTierAnthropic.get(settings),
-					cfgTierGoogle.get(settings),
-				));
+						cfgTierOpenai.get(settings),
+						cfgTierAnthropic.get(settings),
+						cfgTierGoogle.get(settings),
+					));
 		const persistInitialServiceTier =
 			options.openAIServiceTier !== undefined || resolvedServiceTierByFamily !== undefined;
 		const initialServiceTierByFamily = { ...configuredServiceTierByFamily };
@@ -5008,9 +5010,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			toolRegistry,
 			reconcileBrowserMcpFilter: mcpManager
 				? async enabled => {
-					await mcpManager.reconcileBrowserFilter(enabled);
-					return mcpManager.getTools();
-				}
+						await mcpManager.reconcileBrowserFilter(enabled);
+						return mcpManager.getTools();
+					}
 				: undefined,
 			memoryEnabled: !restrictToolNames,
 			memoryAgentDir: agentDir,
@@ -5018,11 +5020,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			createMemoryTools: restrictToolNames
 				? undefined
 				: async () => {
-					const tools = await Promise.all(
-						MEMORY_BACKEND_TOOL_NAMES.map(name => BUILTIN_TOOLS[name](toolSession)),
-					);
-					return tools.filter((tool): tool is AgentTool => tool !== null);
-				},
+						const tools = await Promise.all(
+							MEMORY_BACKEND_TOOL_NAMES.map(name => BUILTIN_TOOLS[name](toolSession)),
+						);
+						return tools.filter((tool): tool is AgentTool => tool !== null);
+					},
 			createThinkTool: async () => (await HIDDEN_TOOLS.think(toolSession)) ?? null,
 			createVibeTools:
 				(options.taskDepth ?? 0) === 0 && !options.parentTaskPrefix
@@ -5058,17 +5060,17 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			reconcileSettingsGatedTools,
 			getMcpServerInstructions: mcpManager
 				? () => {
-					const raw = mcpManager.getServerInstructions();
-					if (!raw || raw.size === 0) return raw;
-					const out = new Map<string, string>();
-					for (const [name, text] of raw) {
-						out.set(
-							name,
-							text.length > MAX_MCP_INSTRUCTIONS_LENGTH ? text.slice(0, MAX_MCP_INSTRUCTIONS_LENGTH) : text,
-						);
+						const raw = mcpManager.getServerInstructions();
+						if (!raw || raw.size === 0) return raw;
+						const out = new Map<string, string>();
+						for (const [name, text] of raw) {
+							out.set(
+								name,
+								text.length > MAX_MCP_INSTRUCTIONS_LENGTH ? text.slice(0, MAX_MCP_INSTRUCTIONS_LENGTH) : text,
+							);
+						}
+						return out;
 					}
-					return out;
-				}
 				: undefined,
 			disconnectOwnedMcpManager: ownedMcpManager ? () => ownedMcpManager.disconnectAll() : undefined,
 			ttsrManager,
@@ -5252,9 +5254,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							entry.endsWith("*") ? [entry] : [entry, canonicalScopeEntry(entry)],
 						),
 					);
-					const allowlisted =
-						!enforceToolAllowlist ||
-						canonicalRequested.has(name);
+					const allowlisted = !enforceToolAllowlist || canonicalRequested.has(name);
 					const scopedOut =
 						!allowlisted ||
 						isToolDisallowed(
@@ -5263,7 +5263,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							registered.definition.mcpServerName,
 						);
 					if (
-						((registered.definition.defaultInactive || registered.definition.hidden) && !canonicalRequested.has(name)) ||
+						((registered.definition.defaultInactive || registered.definition.hidden) &&
+							!canonicalRequested.has(name)) ||
 						scopedOut
 					) {
 						if (!alreadyEnabled) return;
@@ -5406,7 +5407,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			};
 			cfgExtensionSources.listen(session, () => {
 				const next = extensionReconcile
-					.catch(() => { })
+					.catch(() => {})
 					.then(reconcileExtensionSources)
 					.then(() => session.refreshSkillsAndCommands());
 				extensionReconcile = next;
@@ -5512,8 +5513,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					try {
 						const codexPrewarmApiKey = options.getApiKey
 							? // `getApiKey` returns a value-or-promise union; unwrap the promise,
-							// then resolve the result if it is itself an ApiKeyResolver.
-							await resolveApiKeyOnce(await options.getApiKey(codexModel))
+								// then resolve the result if it is itself an ApiKeyResolver.
+								await resolveApiKeyOnce(await options.getApiKey(codexModel))
 							: await modelRegistry.getApiKey(codexModel, providerSessionId);
 						if (!codexPrewarmApiKey) return;
 						await logger.time("prewarmOpenAICodexResponses", prewarmOpenAICodexResponses, codexModel, {

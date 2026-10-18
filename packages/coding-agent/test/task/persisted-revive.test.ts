@@ -58,7 +58,7 @@ function makeTempDir(prefix: string): string {
 
 /** Inert shared manager exposing the members a revived subagent reads: its tools and change feed. */
 function fakeMcpManager(getTools: () => Array<{ name: string; label: string }>): MCPManager {
-	return { getTools, addToolsChangedListener: () => () => { } } as unknown as MCPManager;
+	return { getTools, addToolsChangedListener: () => () => {} } as unknown as MCPManager;
 }
 
 function createRef(sessionFile: string): AgentRef {
@@ -105,13 +105,13 @@ function createRevivedSession(
 	let observer: IrcWakeObserver | undefined;
 	let lastAssistant:
 		| {
-			role: "assistant";
-			content: Array<{ type: string; text?: string }>;
-			stopReason: string;
-			errorMessage?: string;
-			provider?: string;
-			model?: string;
-		}
+				role: "assistant";
+				content: Array<{ type: string; text?: string }>;
+				stopReason: string;
+				errorMessage?: string;
+				provider?: string;
+				model?: string;
+		  }
 		| undefined;
 	const trackedReplies: Promise<void>[] = [];
 	const session = {
@@ -124,14 +124,14 @@ function createRevivedSession(
 		setActiveToolsByName: async (names: string[]) => {
 			activeToolNames.push(names);
 		},
-		subscribe: (_listener: (event: AgentSessionEvent) => void) => () => { },
+		subscribe: (_listener: (event: AgentSessionEvent) => void) => () => {},
 		setIrcWakeTurnObserver: (next: IrcWakeObserver | undefined) => {
 			observer = next;
 		},
 		trackIrcReply: (pending: Promise<void>) => {
 			trackedReplies.push(pending);
 		},
-		subscribeRunState: () => () => { },
+		subscribeRunState: () => () => {},
 		getLastAssistantMessage: () => lastAssistant,
 		extensionRunner,
 	} as unknown as AgentSession;
@@ -1293,8 +1293,8 @@ describe("cold revival replays the system prompt the last request sent", () => {
 			} as never,
 			toolRegistry: new Map(tools.map(tool => [tool.name, tool])),
 			extensionRunner: {
-				initialize: () => { },
-				onError: () => () => { },
+				initialize: () => {},
+				onError: () => () => {},
 				hasHandlers: () => false,
 				emit: async (event: { type: string }) => {
 					if (event.type === "session_start") hooks.sessionStart?.();
@@ -1346,7 +1346,7 @@ describe("cold revival replays the system prompt the last request sent", () => {
 			index: 0,
 			id: "prompt-blocks",
 			settings: Settings.isolated(),
-			modelRegistry: { refresh: async () => { } } as unknown as ModelRegistry,
+			modelRegistry: { refresh: async () => {} } as unknown as ModelRegistry,
 			enableLsp: false,
 			artifactsDir: cwd,
 		});
@@ -1521,7 +1521,7 @@ describe("cold revival replays the system prompt the last request sent", () => {
 			index: 0,
 			id: "prompt-blocks",
 			settings: Settings.isolated(),
-			modelRegistry: { refresh: async () => { } } as unknown as ModelRegistry,
+			modelRegistry: { refresh: async () => {} } as unknown as ModelRegistry,
 			enableLsp: false,
 			sessionFile: parentFile,
 			artifactsDir: childrenDir,
@@ -1618,7 +1618,7 @@ describe("buildWakeRelayBody", () => {
 			// of reviving stale history. Single-shot: only the snapshot read
 			// mutates, so the publish-time re-read observes the deletion.
 			const originalReadText = FileSessionStorage.prototype.readText;
-			const readTextSpy = vi.spyOn(FileSessionStorage.prototype, "readText").mockImplementationOnce(async function(
+			const readTextSpy = vi.spyOn(FileSessionStorage.prototype, "readText").mockImplementationOnce(async function (
 				this: FileSessionStorage,
 				p: string,
 			) {

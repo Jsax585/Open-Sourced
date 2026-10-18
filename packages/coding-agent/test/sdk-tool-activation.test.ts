@@ -2213,7 +2213,6 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			enforceToolAllowlist: true,
 		});
 
-
 		try {
 			// Closed set: a leaked extra tool (e.g. a force-added managed
 			// builtin) fails here — `arrayContaining` would not catch it.
