@@ -216,11 +216,8 @@ export async function estimateFrustrationRun(range?: string | null): Promise<Fru
 	const { cutoff } = getTimeRangeConfig(range);
 	const { messages, chars } = getPendingFrustrationTotals(cutoff);
 	const inputTokens = messages * REQUEST_OVERHEAD_TOKENS + Math.ceil(chars / CHARS_PER_TOKEN);
-	const rates = getEffectiveTokenCost(model.cost);
-	const teamsRate = resolveTeamsTokenRatePerMillion(model);
-	const cost =
-		(inputTokens * (rates.input + teamsRate)) / 1e6 +
-		(messages * OUTPUT_TOKENS_PER_REQUEST * (rates.output + teamsRate)) / 1e6;
+	const rates = getEffectiveTokenCost(model.cost, Date.now(), resolveTeamsTokenRatePerMillion(model));
+	const cost = (inputTokens * rates.input) / 1e6 + (messages * OUTPUT_TOKENS_PER_REQUEST * rates.output) / 1e6;
 	return { available: true, messages, chars, inputTokens, cost, judge: `${model.provider}/${model.id}` };
 }
 

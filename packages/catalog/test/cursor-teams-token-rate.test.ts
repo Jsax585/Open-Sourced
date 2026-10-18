@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { Usage } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { calculateCost, getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 const sampleUsage = (input: number, cacheRead = 0): Usage => ({
@@ -33,8 +34,21 @@ describe("Cursor Teams token rate", () => {
 			...getBundledModel("cursor", "composer-2.5"),
 			teamsTokenRatePerMillion: 0.25,
 		};
+		// Priced on purpose: the bundled composer-1 row is all-zero and would pass
+		// whether or not the family rule exempts it.
 		const composer1 = {
-			...getBundledModel("cursor", "composer-1"),
+			...buildModel({
+				id: "composer-1",
+				name: "Composer 1",
+				api: "cursor-agent",
+				provider: "cursor",
+				baseUrl: "https://api2.cursor.sh",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
+				contextWindow: 200_000,
+				maxTokens: 64_000,
+			}),
 			teamsTokenRatePerMillion: 0.25,
 		};
 		const grokUsage = sampleUsage(10_000);
@@ -45,7 +59,7 @@ describe("Cursor Teams token rate", () => {
 		calculateCost(composer1, composer1Usage);
 		expect(grokUsage.cost.input).toBeCloseTo(0.02, 8);
 		expect(composerUsage.cost.input).toBeCloseTo(0.005, 8);
-		expect(composer1Usage.cost.total).toBe(0);
+		expect(composer1Usage.cost.input).toBeCloseTo(0.0125, 8);
 	});
 
 	it("does not add a surcharge-only cost on unpriced Cursor rows", () => {

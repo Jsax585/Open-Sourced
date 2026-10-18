@@ -74,13 +74,18 @@ export function getModelPricingStatus(model: Pick<Model<Api>, "cost" | "pricingS
 
 /**
  * The base token card in force at `timestamp` (Unix ms, default now): the
- * latest due `timeBased` effective rate, else the row's own legs. Price
- * displays read this rather than the scalar legs, which keep the card current
- * when the row was built while bundles, caches, and long sessions outlive it.
- * Applies no long-context tier or peak/off-peak multiplier.
+ * latest due `timeBased` effective rate, else the row's own legs, plus
+ * `teamsTokenRatePerMillion` on priced rows. Price displays read this rather
+ * than the scalar legs, which keep the card current when the row was built
+ * while bundles, caches, and long sessions outlive it. Applies no long-context
+ * tier or peak/off-peak multiplier.
  */
-export function getEffectiveTokenCost(cost: ModelCost, timestamp = Date.now()): TokenCost {
-	return resolveTokenCost(cost, 0, timestamp);
+export function getEffectiveTokenCost(
+	cost: ModelCost,
+	timestamp = Date.now(),
+	teamsTokenRatePerMillion = 0,
+): TokenCost {
+	return withTeamsTokenRate(resolveTokenCost(cost, 0, timestamp), teamsTokenRatePerMillion);
 }
 
 function withTeamsTokenRate(rates: TokenCost, perMillion: number): TokenCost {
