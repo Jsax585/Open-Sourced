@@ -7,6 +7,7 @@
 - Fixed `find` on a single explicit file judging only the first ~375 bytes and reporting a clean "no hits" — single-file searches now verify the entire file directly instead of relying on sketch routing ([#16027](https://github.com/can1357/oh-my-pi/issues/16027))
 - Fixed `read` on a one-line value over the display limit returning "0B" as success instead of an explicit truncation error, and a bare archive path auto-opening its only member instead of showing the archive directory ([#16018](https://github.com/can1357/oh-my-pi/issues/16018))
 - Fixed `read` directory listings silently omitting sockets, FIFOs, and device files — directory listings now include all file types via a supplementary readdir pass ([#16014](https://github.com/can1357/oh-my-pi/issues/16014))
+- Fixed switching from a subagent back to main corrupting the screen — transcript rebuilds now run one at a time and a superseded replay rolls back without committing or clearing scrollback ([#16066](https://github.com/can1357/oh-my-pi/issues/16066))
 
 ### Changed
 

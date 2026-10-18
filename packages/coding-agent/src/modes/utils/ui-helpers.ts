@@ -220,6 +220,10 @@ function imageLinksForMessage(
 
 export class UiHelpers {
 	constructor(private ctx: InteractiveModeContext) {}
+	/** Serializes transcript replays so two never hold ctx.chatContainer simultaneously. */
+	#replayTail: Promise<void> = Promise.resolve();
+	/** Bumped on each renderInitialMessages request; replays abort when superseded. */
+	#replayGeneration = 0;
 
 	/**
 	 * Show a status message in the chat.
@@ -1005,6 +1009,26 @@ export class UiHelpers {
 	}
 
 	async renderInitialMessages(options: RenderInitialMessagesOptions = {}): Promise<void> {
+		const generation = ++this.#replayGeneration;
+		const chatWasAlreadyRendered = this.ctx.initialChatRendered;
+		this.ctx.initialChatRendered = false;
+		const run = this.#replayTail.then(() => this.#renderInitialMessages(generation, options));
+		this.#replayTail = run.then(
+			() => {
+				if (generation === this.#replayGeneration) {
+					this.ctx.initialChatRendered = true;
+				}
+			},
+			() => {
+				if (generation === this.#replayGeneration) {
+					this.ctx.initialChatRendered = chatWasAlreadyRendered;
+				}
+			},
+		);
+		return run;
+	}
+
+	async #renderInitialMessages(generation: number, options: RenderInitialMessagesOptions): Promise<void> {
 		// Collapsed replay keeps in-flight calls so pending tools remain routable during mid-turn rebuilds.
 		let context = this.ctx.viewSession.buildTranscriptSessionContext({
 			collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
@@ -1025,19 +1049,18 @@ export class UiHelpers {
 		const previousPendingPythonComponents = this.ctx.pendingPythonComponents;
 		const previousLastAssistantUsage = this.ctx.lastAssistantUsage;
 		const previousServedModelTracker = this.ctx.servedModelTracker;
-		const chatWasAlreadyRendered = this.ctx.initialChatRendered;
 		const renderOptions = {
 			updateFooter: true,
 		};
 		let committed = false;
 		let replayAttempts = 0;
-		this.ctx.initialChatRendered = false;
 		try {
 			// Resolve before replacing live component maps: streaming events may arrive during filesystem I/O.
 			await refreshAssistantMessageLinkTargets(
 				this.ctx,
 				context.messages.filter((message): message is AssistantMessage => message.role === "assistant"),
 			);
+			if (generation !== this.#replayGeneration) return;
 
 			this.ctx.chatContainer = stagedChatContainer;
 			this.ctx.transcriptMessageComponents = new WeakMap<AgentMessage, Component>();
@@ -1056,6 +1079,7 @@ export class UiHelpers {
 				} else {
 					await this.ctx.renderSessionContextIncrementally(context, renderOptions);
 				}
+				if (generation !== this.#replayGeneration) return;
 				if (this.ctx.viewSession.sessionManager.getEntries().length === replayEntryCount) {
 					break;
 				}
@@ -1084,6 +1108,7 @@ export class UiHelpers {
 					this.ctx,
 					context.messages.filter((message): message is AssistantMessage => message.role === "assistant"),
 				);
+				if (generation !== this.#replayGeneration) return;
 				stagedChatContainer.disposeChildren();
 				this.ctx.transcriptMessageComponents = new WeakMap<AgentMessage, Component>();
 				this.ctx.pendingTools.clear();
@@ -1137,7 +1162,6 @@ export class UiHelpers {
 				this.ctx.servedModelTracker = previousServedModelTracker;
 				stagedChatContainer.disposeChildren();
 			}
-			this.ctx.initialChatRendered = committed ? true : chatWasAlreadyRendered;
 		}
 	}
 

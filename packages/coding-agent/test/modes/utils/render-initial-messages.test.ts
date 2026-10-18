@@ -835,3 +835,63 @@ describe("UiHelpers.renderInitialMessages — prompt history isolation", () => {
 		expect(ctx.editor.addToHistory).not.toHaveBeenCalled();
 	});
 });
+
+
+describe("UiHelpers.renderInitialMessages — replay serialization (#16066)", () => {
+	it("commits only the latest replay when a second one starts mid-replay", async () => {
+		// Regression: two concurrent renderInitialMessages calls both held
+		// ctx.chatContainer, causing the stale replay to commit its rows into
+		// the container the newer replay had already disposed — corrupting
+		// the screen on subagent→main focus switches.
+		const bigTranscript = makeEmptyContext();
+		bigTranscript.messages = Array.from({ length: 320 }, (_, i) => ({
+			role: "user",
+			content: `SUBAGENT-${i}`,
+			timestamp: i,
+		}));
+		const smallTranscript = makeEmptyContext();
+		smallTranscript.messages = Array.from({ length: 3 }, (_, i) => ({
+			role: "user",
+			content: `MAIN-${i}`,
+			timestamp: 1000 + i,
+		}));
+
+		let currentTranscript = bigTranscript;
+		const { ctx } = makeRenderCtx(bigTranscript);
+		(
+			ctx.viewSession as unknown as { buildTranscriptSessionContext: () => SessionContext }
+		).buildTranscriptSessionContext = () => currentTranscript;
+
+		const helpers = new UiHelpers(ctx);
+		let replayBRequested = false;
+		let replayBPromise: Promise<void> | undefined;
+		const originalRender = ctx.renderSessionContextIncrementally;
+		ctx.renderSessionContextIncrementally = ((
+			context: SessionContext,
+			options: RenderSessionContextOptions,
+			renderChunk?: () => void,
+		) => {
+			const wrapped = () => {
+				renderChunk?.();
+				if (!replayBRequested) {
+					replayBRequested = true;
+					currentTranscript = smallTranscript;
+					replayBPromise = helpers.renderInitialMessages({ clearTerminalHistory: true });
+				}
+			};
+			return originalRender(context, options, wrapped);
+		}) as typeof ctx.renderSessionContextIncrementally;
+
+		await helpers.renderInitialMessages({ clearTerminalHistory: true });
+		await replayBPromise;
+
+		const visibleText = ctx.chatContainer.children
+			.map(c => (c as { render: (w: number) => string[] }).render(100).join("\n"))
+			.join("\n");
+		expect(visibleText).toContain("MAIN-0");
+		expect(visibleText).toContain("MAIN-1");
+		expect(visibleText).toContain("MAIN-2");
+		expect(visibleText).not.toContain("SUBAGENT-");
+		expect(ctx.initialChatRendered).toBeTrue();
+	});
+});
