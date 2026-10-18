@@ -143,7 +143,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "Per-server tool allowlist: only tools whose raw advertised name matches one entry are contributed to the session. Entries are literal tool names or glob patterns (`*`, `?`, `[...]`, `{a,b}`). OMP-specific; servers translated from other tools' configs ignore it. Duplicate entries are legal and harmless: each entry compiles to its own matcher."
+          "description": "Per-server tool allowlist: only tools matching one entry are contributed to the session. Each entry is tested against the raw advertised name and its sanitized spelling. Entries are literal tool names or glob patterns (`*`, `?`, `[...]`, `{a,b}`). OMP-specific; servers translated from other tools' configs ignore it. Duplicate entries are legal and harmless: each entry compiles to its own matcher."
         },
         "disabledTools": {
           "type": "array",

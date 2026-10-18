@@ -108,6 +108,17 @@ describe("MCP tool filtering at reception boundary (listTools)", () => {
 		});
 	});
 
+	it("counts excluded from filtered definitions when roster repeats a name", async () => {
+		const listResult: MCPToolsListResult = { tools: [...FIXTURE_TOOLS, { ...FIXTURE_TOOLS[1] }] };
+		const transport = createMockTransport(new Map([["tools/list", [listResult]]]));
+		const conn = createMockConnection({ tools: {} }, transport);
+		conn.config = { ...conn.config, enabledTools: ["read_*"] };
+		const tools = await listTools(conn);
+
+		expect(tools.map(t => t.name)).toEqual(["read_file", "read_file"]);
+		expect(conn.lastFilterDiagnostics).toEqual({ unmatched: [], excluded: 3 });
+	});
+
 	it("leaves lastFilterDiagnostics undefined when no filter is configured", async () => {
 		const conn = createConnectionWithTools({});
 		const tools = await listTools(conn);

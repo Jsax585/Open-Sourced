@@ -110,7 +110,8 @@ interface MCPServerConfigBase {
 	enabledTools?: string[];
 	/**
 	 * Per-server tool denylist: matching tools are excluded. When both filters
-	 * are set the denylist wins (deny subtracts from allow).
+	 * are set the denylist wins (deny subtracts from allow). OMP-specific;
+	 * only OMP-owned discovery providers parse it.
 	 */
 	disabledTools?: string[];
 }

@@ -150,8 +150,9 @@ export function applyMCPToolFilterWithDiagnostics(
 	}
 
 	const allowedSet = new Set(allowed);
+	const filtered = tools.filter(t => allowedSet.has(t.name));
 	return {
-		filtered: tools.filter(t => allowedSet.has(t.name)),
-		diagnostics: { unmatched, excluded: tools.length - allowedSet.size },
+		filtered,
+		diagnostics: { unmatched, excluded: tools.length - filtered.length },
 	};
 }
