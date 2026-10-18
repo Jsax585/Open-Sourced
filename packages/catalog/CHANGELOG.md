@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the `web/deepseek` search model for DeepSeek's in-house Search API ([#16130](https://github.com/can1357/oh-my-pi/pull/16130) by [@Vertsineu](https://github.com/Vertsineu))
+
 ## [18.12.1] - 2026-10-17
 
 ### Fixed

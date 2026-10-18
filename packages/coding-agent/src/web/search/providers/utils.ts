@@ -138,6 +138,21 @@ export function normalizeSearchText(value: unknown): string | undefined {
 }
 
 /**
+ * Accept only absolute `http:`/`https:` URLs, rejecting malformed values and
+ * oversized strings before they reach the transcript renderer.
+ */
+export function normalizeUrl(value: unknown): string | undefined {
+	if (typeof value !== "string" || value.length > 2048) return undefined;
+	try {
+		const url = new URL(value);
+		if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+		return url.toString();
+	} catch {
+		return undefined;
+	}
+}
+
+/**
  * Bare, deduplicated hosts from `site:` values (`github.com/anthropics` → `github.com`)
  * for provider domain filters; path parts are enforced by the central lenient post-filter.
  */
