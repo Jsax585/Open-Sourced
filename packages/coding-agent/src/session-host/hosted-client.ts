@@ -1187,6 +1187,16 @@ export class HostedClientLink {
 			this.#reconnecting = false;
 			this.#reconnectAttempt = undefined;
 			void this.#refreshHostContext();
+			// The new connection has no draft report, and any report made while reconnecting was never sent.
+			this.#idleActivity = undefined;
+			this.setIdleActivity(this.#ctx.editor.getText().trim() !== "").catch(reportError => {
+				if (this.#open && !this.#reconnecting) {
+					logger.warn("Hosted client could not report its draft state", {
+						hostId: this.hostId,
+						error: String(reportError),
+					});
+				}
+			});
 			this.#ctx.showStatus(`Reconnected to session host ${this.hostId}`, { dim: true });
 			return;
 		}
