@@ -626,7 +626,9 @@ export async function renderHtmlToText(
 	const runners: Record<FetchProvider, () => Promise<string | null>> = {
 		// Purely local, no network/subprocess: still works on already-loaded HTML
 		// even after remote/subprocess attempts are aborted by the budget.
-		native: () => htmlToMarkdown(html, { cleanContent: true }),
+		// Collapsed panels (product specs, FAQ answers, inactive tabs) ship in the HTML
+		// with inline display:none; a reader can open them, so keep their text.
+		native: () => htmlToMarkdown(html, { cleanContent: true, hiddenContent: "reachable" }),
 		trafilatura: async () => {
 			if (overallSignal?.aborted) return null;
 			const trafilatura = await ensureTool("trafilatura", { signal: overallSignal, silent: true });

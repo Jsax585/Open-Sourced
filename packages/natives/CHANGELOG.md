@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a `hiddenContent` option to `htmlToMarkdown` (`"drop"` by default, `"reachable"`, or `"all"`): `"reachable"` keeps collapsed sections and inactive tab panels hidden with inline `display:none` ([#16246](https://github.com/can1357/oh-my-pi/issues/16246), [#16247](https://github.com/can1357/oh-my-pi/pull/16247) by [@HarshalRathore](https://github.com/HarshalRathore))
+
 ## [18.12.2] - 2026-10-18
 
 ### Added

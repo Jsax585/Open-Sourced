@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `read` omitting content in collapsed web-page sections, such as Amazon's Product information tables ([#16246](https://github.com/can1357/oh-my-pi/issues/16246), [#16247](https://github.com/can1357/oh-my-pi/pull/16247) by [@HarshalRathore](https://github.com/HarshalRathore))
+
 ## [18.12.2] - 2026-10-18
 
 ### Added
