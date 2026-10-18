@@ -87,8 +87,8 @@ type PricedModel = Pick<Model<Api>, "cost" | "cursorTokenRateExempt" | "teamsTok
 /**
  * A model's whole rate card as charged: its Teams token rate on every card it
  * can bill at (base, long-context tier, scheduled effective rates), each priced
- * card on its own, as {@link calculateCost} applies it before any peak/off-peak
- * multiplier. Unrated models return their card unchanged.
+ * card on its own. {@link calculateCost} adds the rate flat, outside any
+ * peak/off-peak multiplier. Unrated models return their card unchanged.
  */
 export function getChargedModelCost(model: PricedModel): ModelCost {
 	const perMillion = resolveTeamsTokenRatePerMillion(model);
@@ -115,16 +115,20 @@ export function getModelTokenCost(model: PricedModel, timestamp = Date.now()): T
 }
 
 function withTeamsTokenRate(rates: TokenCost, perMillion: number): TokenCost {
-	if (perMillion === 0) return rates;
-	if (rates.input === 0 && rates.output === 0 && rates.cacheRead === 0 && rates.cacheWrite === 0) {
-		return rates;
-	}
+	const tokenRate = chargedTokenRate(rates, perMillion);
+	if (tokenRate === 0) return rates;
 	return {
-		input: rates.input + perMillion,
-		output: rates.output + perMillion,
-		cacheRead: rates.cacheRead + perMillion,
-		cacheWrite: rates.cacheWrite + perMillion,
+		input: rates.input + tokenRate,
+		output: rates.output + tokenRate,
+		cacheRead: rates.cacheRead + tokenRate,
+		cacheWrite: rates.cacheWrite + tokenRate,
 	};
+}
+
+/** The Teams token rate a card bills: none on unpriced cards, which must not show a surcharge-only cost. */
+function chargedTokenRate(rates: TokenCost, perMillion: number): number {
+	const priced = rates.input !== 0 || rates.output !== 0 || rates.cacheRead !== 0 || rates.cacheWrite !== 0;
+	return priced ? perMillion : 0;
 }
 
 function resolveTokenCost(cost: ModelCost, promptInputTokens: number, timestamp: number | undefined): TokenCost {
@@ -207,11 +211,9 @@ export function calculateUncachedInputCost(
 	teamsTokenRatePerMillion = 0,
 ): number {
 	const pricingTimestamp = cost.timeBased ? (timestamp ?? Date.now()) : undefined;
-	const rates = withTeamsTokenRate(
-		resolveTokenCost(cost, promptInputTokens, pricingTimestamp),
-		teamsTokenRatePerMillion,
-	);
-	return (rates.input / 1_000_000) * promptInputTokens * timeBasedMultiplier(cost.timeBased, pricingTimestamp);
+	const rates = resolveTokenCost(cost, promptInputTokens, pricingTimestamp);
+	const listPerToken = (rates.input / 1_000_000) * timeBasedMultiplier(cost.timeBased, pricingTimestamp);
+	return (listPerToken + chargedTokenRate(rates, teamsTokenRatePerMillion) / 1_000_000) * promptInputTokens;
 }
 
 /** Price usage at its request timestamp (Unix ms); only scheduled prices default to now. */
@@ -225,16 +227,17 @@ export function calculateUsageCost(
 	const promptInputTokens =
 		usage.input + usage.cacheRead + usage.cacheWrite + (orchestration?.input ?? 0) + (orchestration?.cacheRead ?? 0);
 	const pricingTimestamp = cost.timeBased ? (timestamp ?? Date.now()) : undefined;
-	const listed = resolveTokenCost(cost, promptInputTokens, pricingTimestamp);
-	const rates = withTeamsTokenRate(listed, teamsTokenRatePerMillion);
+	const rates = resolveTokenCost(cost, promptInputTokens, pricingTimestamp);
 	const multiplier = timeBasedMultiplier(cost.timeBased, pricingTimestamp);
-	usage.cost.input = (rates.input / 1000000) * (usage.input + (orchestration?.input ?? 0)) * multiplier;
-	usage.cost.output = (rates.output / 1000000) * (usage.output + (orchestration?.output ?? 0)) * multiplier;
-	usage.cost.cacheRead =
-		(rates.cacheRead / 1000000) * (usage.cacheRead + (orchestration?.cacheRead ?? 0)) * multiplier;
-	// The token rate is one flat addition per token, so the write multipliers apply to the list price only.
-	const writeSurcharge = ((rates.cacheWrite - listed.cacheWrite) / 1000000) * usage.cacheWrite;
-	usage.cost.cacheWrite = (cacheWriteCost(listed, usage) + writeSurcharge) * multiplier;
+	// The token rate is one flat addition per token, outside the tariff and cache-write multipliers.
+	const tokenRate = chargedTokenRate(rates, teamsTokenRatePerMillion) / 1000000;
+	const inputTokens = usage.input + (orchestration?.input ?? 0);
+	const outputTokens = usage.output + (orchestration?.output ?? 0);
+	const cacheReadTokens = usage.cacheRead + (orchestration?.cacheRead ?? 0);
+	usage.cost.input = ((rates.input / 1000000) * multiplier + tokenRate) * inputTokens;
+	usage.cost.output = ((rates.output / 1000000) * multiplier + tokenRate) * outputTokens;
+	usage.cost.cacheRead = ((rates.cacheRead / 1000000) * multiplier + tokenRate) * cacheReadTokens;
+	usage.cost.cacheWrite = cacheWriteCost(rates, usage) * multiplier + tokenRate * usage.cacheWrite;
 	usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
 	return usage.cost;
 }

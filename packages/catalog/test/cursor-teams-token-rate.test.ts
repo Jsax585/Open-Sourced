@@ -77,6 +77,25 @@ describe("Cursor Teams token rate", () => {
 		expect(rated.cost.cacheWrite - atList.cost.cacheWrite).toBeCloseTo(0.25, 8);
 	});
 
+	it("adds the rate outside an off-peak tariff", () => {
+		// The tariff discounts the provider's list price; Cursor's token rate is
+		// its own flat charge and stays whole off-peak.
+		const offPeak = {
+			...getBundledModel("cursor", "gemini-3.8-flash"),
+			cost: {
+				input: 1,
+				output: 1,
+				cacheRead: 1,
+				cacheWrite: 1,
+				timeBased: { offPeakMultiplier: 0.5, peakWindows: [] },
+			},
+			teamsTokenRatePerMillion: 0.25,
+		};
+		const usage = sampleUsage(1_000_000);
+		calculateCost(offPeak, usage, Date.UTC(2026, 9, 18));
+		expect(usage.cost.input).toBeCloseTo(0.75, 8);
+	});
+
 	it("displays the per-million price that billing records", () => {
 		// Model pickers and `omp models --json` read the displayed card; it must
 		// not advertise the list price while sessions record the surcharge.
