@@ -43,6 +43,19 @@ export declare class DesktopSession {
    * behind the worker, so it answers at once even while a request is stuck.
    */
   get screenState(): DesktopScreenState
+  /**
+   * Keeps the display awake from the next activity request until
+   * `releaseDisplayAwake()`, however long the session sits idle in between,
+   * instead of for the grace period after the last request. An agent calls
+   * this when it acts inside a turn.
+   */
+  holdDisplayUntilReleased(): void
+  /**
+   * Lets the display sleep now if a turn holds it, without waiting behind
+   * queued requests, and returns later activity to the grace period. Activity
+   * outside a turn keeps its grace. An agent calls this when its turn ends.
+   */
+  releaseDisplayAwake(): void
   listDisplays(): Promise<Array<DesktopDisplay>>
   listWindows(): Promise<Array<DesktopWindow>>
   listApplications(options?: ApplicationQuery | undefined | null): Promise<Array<Application>>
@@ -93,6 +106,11 @@ export declare class DesktopSession {
   axParent(reference: string): Promise<AxNode | undefined | null>
   axPerform(reference: string, action: string): Promise<undefined>
   axSetValue(reference: string, value: string): Promise<undefined>
+  /**
+   * Selects `text` in the element's value by accessibility, or places a
+   * caret at its start or end, without focus change or keystrokes.
+   */
+  axSelectText(reference: string, text: string, opts?: AxSelectTextOptions | undefined | null): Promise<AxTextSelection>
   axFocus(reference: string): Promise<undefined>
   axClick(reference: string, opts?: PointerOptions | undefined | null): Promise<undefined>
   /**
@@ -1171,6 +1189,16 @@ export interface AxQuery {
   limit?: number
 }
 
+/** Where `axSelectText` looks for its text and what it selects there. */
+export interface AxSelectTextOptions {
+  /** Text that must directly precede the match. */
+  prefix?: string
+  /** Text that must directly follow the match. */
+  suffix?: string
+  /** `text` (default) selects the match; `start` and `end` place a caret. */
+  select?: string
+}
+
 export interface AxSnapshot {
   text: string
   nodeCount: number
@@ -1181,6 +1209,19 @@ export interface AxSnapshotOptions {
   maxDepth?: number
   maxNodes?: number
   all?: boolean
+}
+
+/** The selection read back after `axSelectText`, in UTF-16 code units. */
+export interface AxTextSelection {
+  start: number
+  length: number
+  /** The selected text, empty for a caret. */
+  text: string
+  /**
+   * Whether the element is focused in its app: typing and AX insertion
+   * act on the focused element.
+   */
+  focused: boolean
 }
 
 export interface BlockParseOptions {
@@ -1781,13 +1822,17 @@ export interface EnclosingBoundaryOptions {
  * the calling thread.
  *
  * The input image is decoded and resized to the requested pixel dimensions
- * before encoding. Prefer [`encode_sixel_async`] unless the caller cannot
- * wait: the decode, resize and dither block the JS thread.
+ * (not resampled when it already has them), then partial alpha is composited
+ * against `background_rgb` (packed `0xRRGGBB`). Fully transparent pixels
+ * remain transparent. Encoding uses whole 6-pixel bands: a partial last band
+ * is dropped, see [`band_rows`]. Prefer
+ * [`encode_sixel_async`] unless the caller cannot wait: the decode, resize
+ * and dither block the JS thread.
  *
  * # Errors
  * Returns an error if decoding, resizing, or SIXEL encoding fails.
  */
-export declare function encodeSixel(bytes: Uint8Array, targetWidthPx: number, targetHeightPx: number): string
+export declare function encodeSixel(bytes: Uint8Array, targetWidthPx: number, targetHeightPx: number, backgroundRgb: number): string
 
 /**
  * Same result as [`encode_sixel`], but the decode, resize and dither run on
@@ -1796,7 +1841,7 @@ export declare function encodeSixel(bytes: Uint8Array, targetWidthPx: number, ta
  * # Errors
  * Rejects if decoding, resizing, or SIXEL encoding fails.
  */
-export declare function encodeSixelAsync(bytes: Uint8Array, targetWidthPx: number, targetHeightPx: number): Promise<string>
+export declare function encodeSixelAsync(bytes: Uint8Array, targetWidthPx: number, targetHeightPx: number, backgroundRgb: number): Promise<string>
 
 /** Tokenizer encoding to use. */
 export declare enum Encoding {
@@ -2058,7 +2103,10 @@ export interface GrepOptions {
   pattern: string
   /** Directory or file to search: a host path or an absolute `scheme://` URL. */
   path: string
-  /** Glob filter for filenames (e.g., "*.ts"). */
+  /**
+   * Glob filter for file paths (e.g., "*.ts"); a matched directory selects
+   * every file under it.
+   */
   glob?: string
   /**
    * Match simple glob patterns at any depth (default: true; `*.ts` ->
@@ -2459,6 +2507,13 @@ export interface ListWorkspaceOptions {
    * to find them. Default: false.
    */
   collectAgentsMd?: boolean
+  /**
+   * Report unreadable directories instead of silently skipping them: an
+   * unreadable root fails the scan, and unreadable subdirectories are
+   * returned in `unreadableDirectories` while the walk continues. Default:
+   * false (startup discovery stays best-effort).
+   */
+  reportDirectoryErrors?: boolean
   /** Timeout in milliseconds for the operation. */
   timeoutMs?: number
   /** Abort signal for cancelling the operation. */
@@ -2476,6 +2531,11 @@ export interface ListWorkspaceResult {
   agentsMdFiles: Array<string>
   /** True when any output cap was hit. */
   truncated: boolean
+  /**
+   * Subdirectories whose contents could not be listed. Always empty unless
+   * `reportDirectoryErrors` is set.
+   */
+  unreadableDirectories: Array<WorkspaceDirectoryError>
 }
 
 /**
@@ -2709,6 +2769,9 @@ export interface NodeSpan {
 /** Decode notebook JSON into the editable cell-marker text. */
 export declare function notebookToEditableText(json: string, displayPath: string): string
 
+/** Check syntax through the shared parse cache without constructing a summary. */
+export declare function parseCodeStatus(options: ParseStatusOptions): ParseStatus
+
 /** Parsed Kitty keyboard protocol sequence result for a Kitty input sequence. */
 export interface ParsedKittyResult {
   /** Primary codepoint associated with the key. */
@@ -2736,6 +2799,23 @@ export declare function parseKey(data: string, kittyProtocolActive: boolean): st
  * Returns a structured parse result when the input is a valid Kitty sequence.
  */
 export declare function parseKittySequence(data: string): ParsedKittyResult | null
+
+export interface ParseStatus {
+  /** Canonical language name only when parsing succeeded. */
+  language?: string
+  /** True when non-empty source parses without syntax errors. */
+  parsed: boolean
+}
+
+/** Options for checking source syntax without generating a summary. */
+export interface ParseStatusOptions {
+  /** Source code to parse; empty input is not parsed. */
+  code: string
+  /** Language alias; a non-blank value overrides path-based detection. */
+  lang?: string
+  /** File path used to infer language when `lang` is omitted or blank. */
+  path?: string
+}
 
 /** One hunk of a unified diff, matching jsdiff `structuredPatch` hunks. */
 export interface PatchHunk {
@@ -3850,8 +3930,8 @@ export declare function visibleWidth(text: string, tabWidth: number): number
  * [`enclosing_block_boundaries`], [`block_range_at`] and [`node_chain_at`]
  * are synchronous and parse on the JS thread when their source is not
  * cached; awaiting this first makes that parse a cache hit. Resolves without
- * parsing when the language is unrecognized or the source is too large for
- * the cache to keep.
+ * parsing when the language is unrecognized or the source is over 2 MiB,
+ * where a typical tree would not fit the cache's memory budget.
  */
 export declare function warmBlockParse(options: BlockParseOptions): Promise<undefined>
 
@@ -3906,6 +3986,14 @@ export interface WorkProfile {
   totalMs: number
   /** Number of samples collected. */
   sampleCount: number
+}
+
+/** A subdirectory the scan could not list. */
+export interface WorkspaceDirectoryError {
+  /** Forward-slash path relative to the scan root. */
+  path: string
+  /** Platform error, e.g. `Permission denied (os error 13)`. */
+  message: string
 }
 
 /**

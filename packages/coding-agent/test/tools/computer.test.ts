@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from "bun:test";
 import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import { inspect } from "node:util";
 import { createContext, runInContext } from "node:vm";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { EvalPreludeDefinition } from "@oh-my-pi/pi-coding-agent/eval/preludes";
@@ -15,15 +16,19 @@ import {
 	SCREEN_LOCKED_CAPTURE_NOTE,
 } from "@oh-my-pi/pi-coding-agent/tools/computer/protocol";
 import {
+	beginComputerTurnForOwner,
 	type ComputerController,
 	ComputerSupervisor,
 	type ComputerWorkerHandle,
+	endComputerTurnForOwner,
 } from "@oh-my-pi/pi-coding-agent/tools/computer/supervisor";
 import { ComputerWorkerCore, type NativeDesktopSession } from "@oh-my-pi/pi-coding-agent/tools/computer/worker";
 import type {
 	AxNode,
 	AxQuery,
+	AxSelectTextOptions,
 	AxSnapshotOptions,
+	AxTextSelection,
 	CaptureRegion,
 	DesktopCapabilities,
 	DesktopCapture,
@@ -123,7 +128,7 @@ class FakeNativeSession implements NativeDesktopSession {
 	controlActive = false;
 	acquireCount = 0;
 	readonly operations: string[] = [];
-	readonly inputModes: boolean[] = [];
+	readonly takeovers: (boolean | undefined)[] = [];
 	sourceWidth = 64;
 	sourceHeight = 32;
 
@@ -157,6 +162,14 @@ class FakeNativeSession implements NativeDesktopSession {
 	}
 	retire(): void {
 		this.retireCount += 1;
+	}
+	/** Display-hold calls in order: `turn` for holdDisplayUntilReleased, `release` for releaseDisplayAwake. */
+	readonly displayHolds: string[] = [];
+	holdDisplayUntilReleased(): void {
+		this.displayHolds.push("turn");
+	}
+	releaseDisplayAwake(): void {
+		this.displayHolds.push("release");
 	}
 	async listApplications() {
 		return [{ id: "test.editor", name: "Editor", path: "/Applications/Editor.app", running: true, pid: 123 }];
@@ -199,9 +212,11 @@ class FakeNativeSession implements NativeDesktopSession {
 	}
 	async click(_target: string, _x: number, _y: number, _opts?: PointerOptions | null): Promise<void> {
 		this.clickCount += 1;
-		this.inputModes.push(_opts?.takeover ?? this.controlActive);
+		this.takeovers.push(_opts?.takeover);
 	}
-	async moveMouse(_target: string, _x: number, _y: number, _opts?: PointerOptions | null): Promise<void> {}
+	async moveMouse(_target: string, _x: number, _y: number, _opts?: PointerOptions | null): Promise<void> {
+		this.takeovers.push(_opts?.takeover);
+	}
 	async drag(_target: string, _points: DesktopPoint[], _opts?: PointerOptions | null): Promise<void> {}
 	async scroll(
 		_target: string,
@@ -240,6 +255,11 @@ class FakeNativeSession implements NativeDesktopSession {
 	}
 	async axPerform(_ref: string, _action: string): Promise<void> {}
 	async axSetValue(_ref: string, _value: string): Promise<void> {}
+	readonly selections: string[] = [];
+	async axSelectText(_ref: string, text: string, _opts?: AxSelectTextOptions | null): Promise<AxTextSelection> {
+		this.selections.push(text);
+		return { start: 0, length: text.length, text, focused: true };
+	}
 	async axFocus(_ref: string): Promise<void> {}
 	async axClick(_ref: string, _opts?: PointerOptions | null): Promise<void> {}
 	async close(): Promise<void> {
@@ -320,13 +340,14 @@ class MemoryTransport implements ComputerWorkerTransport {
 	}
 }
 
-const snapshot = (readOnly = false): ComputerSessionSnapshot => ({
+const snapshot = (readOnly = false, displayTurn?: number): ComputerSessionSnapshot => ({
 	cwd: import.meta.dir,
 	sessionId: crypto.randomUUID(),
 	captureMaxWidth: 1280,
 	captureMaxHeight: 896,
 	display: "active",
 	readOnly,
+	displayTurn,
 });
 
 async function runWorker(
@@ -591,7 +612,7 @@ describe("computer prelude", () => {
 			"clipboard.read": "copied",
 		};
 		const realm = createContext({
-			__omp_display__: (value: unknown) => displays.push(value),
+			__omp_log__: (_level: string, value: unknown) => displays.push(value),
 			__omp_prelude__: async (name: unknown, parameters: unknown) => {
 				expect(name).toBe("computer");
 				calls.push(parameters);
@@ -748,6 +769,7 @@ describe("computer prelude", () => {
 			ax: "- button [ref=e1]",
 			ref: { ref: "e1", role: "button", nativeRole: "AXButton", enabled: true, focused: false, childCount: 0 },
 			press: undefined,
+			selectText: { start: 7, length: 0, text: "", focused: true },
 			raise: undefined,
 			click: undefined,
 		};
@@ -780,6 +802,7 @@ describe("computer prelude", () => {
 				'el = await win.ref("e1")',
 				"print(repr(el))",
 				"await el.press()",
+				'print((await el.selectText("cat", prefix="red ", select="end"))["start"])',
 				"await win.raise_()",
 				"await win.click(10, 20, button='right', takeover=None)",
 			].join("\n"),
@@ -799,6 +822,7 @@ describe("computer prelude", () => {
 			"<computer.Window id='42' app='Code'> {'x': 1, 'y': 2, 'width': 3, 'height': 4}",
 			"- button [ref=e1]",
 			"<computer.Element ref='e1' role='button'>",
+			"7",
 		]);
 		expect(calls).toEqual([
 			{ action: "run", code: "return 6 * 7;", read_only: true, timeout: 3 },
@@ -816,6 +840,13 @@ describe("computer prelude", () => {
 				chain: [
 					{ method: "ref", args: ["e1"] },
 					{ method: "press", args: [] },
+				],
+			},
+			{
+				action: "call",
+				chain: [
+					{ method: "ref", args: ["e1"] },
+					{ method: "selectText", args: ["cat", { prefix: "red ", select: "end" }] },
 				],
 			},
 			{
@@ -842,7 +873,7 @@ describe("computer prelude", () => {
 		const emitted: unknown[] = [];
 		const context = { session, toolCallId: "zoom-js" };
 		const realm = createContext({
-			__omp_display__: () => {},
+			__omp_log__: () => {},
 			__omp_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				emitted.push(...result.content);
@@ -991,7 +1022,7 @@ describe("computer prelude", () => {
 		const prelude = workerPrelude(session, native);
 		const context = { session, toolCallId: "ref-chain-js" };
 		const realm = createContext({
-			__omp_display__: () => {},
+			__omp_log__: () => {},
 			__omp_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				return { text: "", details: result.details };
@@ -1076,7 +1107,7 @@ describe("computer prelude", () => {
 		const prelude = workerPrelude(session, native);
 		const context = { session, toolCallId: "element-shape-js" };
 		const realm = createContext({
-			__omp_display__: () => {},
+			__omp_log__: () => {},
 			__omp_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				return { text: "", details: result.details };
@@ -1732,6 +1763,37 @@ describe("computer worker round trips", () => {
 		if (result.ok) expect(result.payload.returnValue).toEqual({ role: "button", count: 1 });
 	});
 
+	it("blocks read-only selectText before invoking the native session", async () => {
+		const transport = new MemoryTransport();
+		const native = new FakeNativeSession();
+		new ComputerWorkerCore(transport, () => native);
+		const result = await runWorker(
+			transport,
+			"select-text-read-only",
+			'await (await desktop.window("42")).ref("e1").selectText("cat")',
+			true,
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error.message).toContain("read-only run: 'selectText'");
+		expect(native.selections).toEqual([]);
+	});
+
+	it("names selectText's text argument on a resolved element before the native call", async () => {
+		const transport = new MemoryTransport();
+		const native = new FakeNativeSession();
+		new ComputerWorkerCore(transport, () => native);
+		const result = await runWorker(
+			transport,
+			"select-text-resolved-argument",
+			'const el = await (await desktop.window("42")).ref("e1"); await el.selectText(7)',
+		);
+		expect(result.ok ? undefined : result.error).toMatchObject({
+			isToolError: true,
+			message: "selectText(text) requires a string, got number",
+		});
+		expect(native.selections).toEqual([]);
+	});
+
 	describe("numeric window ids", () => {
 		class TwoWindowSession extends FakeNativeSession {
 			override async listWindows(): Promise<DesktopWindow[]> {
@@ -2101,11 +2163,12 @@ describe("expanded computer APIs", () => {
 				).toEqual({ active: approved });
 				expect(native.acquireCount).toBe(approved ? 1 : 0);
 				await supervisor.run(
-					"const win = await desktop.window(42); await win.click(1, 2); await win.click(1, 2, { takeover: false });",
+					"const win = await desktop.window(42); await win.click(1, 2); await win.click(1, 2, { takeover: false }); await win.click(1, 2, { takeover: true }); await win.move(1, 2); await win.move(1, 2, { takeover: true });",
 					2000,
 					snapshot(),
 				);
-				expect(native.inputModes).toEqual([approved, false]);
+				// The grant never fills in an omitted takeover; only the call decides.
+				expect(native.takeovers).toEqual([undefined, false, true, undefined, true]);
 				await supervisor.revokeControl();
 				expect(native.controlActive).toBe(false);
 				expect(
@@ -2182,7 +2245,7 @@ describe("expanded computer APIs", () => {
 		const context = { session, toolCallId: "expanded-js" };
 		const images: unknown[] = [];
 		const realm = createContext({
-			__omp_display__: () => {},
+			__omp_log__: () => {},
 			__omp_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				images.push(...result.content.filter(block => block.type === "image"));
@@ -2290,7 +2353,7 @@ describe("expanded computer APIs", () => {
 		const prelude = workerPrelude(session, native);
 		const context = { session, toolCallId: "menu-path-js" };
 		const realm = createContext({
-			__omp_display__: () => {},
+			__omp_log__: () => {},
 			__omp_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				return { text: "", details: result.details };
@@ -2361,6 +2424,14 @@ describe("expanded computer APIs", () => {
 			override async axSetValue(ref: string, _value: string): Promise<void> {
 				this.calls.push(`axSetValue:${ref}`);
 			}
+			override async axSelectText(
+				ref: string,
+				text: string,
+				opts?: AxSelectTextOptions | null,
+			): Promise<AxTextSelection> {
+				this.calls.push(`axSelectText:${ref}`);
+				return super.axSelectText(ref, text, opts);
+			}
 			override async axPerform(ref: string, _action: string): Promise<void> {
 				this.calls.push(`axPerform:${ref}`);
 			}
@@ -2381,6 +2452,8 @@ describe("expanded computer APIs", () => {
 		for (const [code, message] of [
 			['await desktop.ref("e1").setValue()', "setValue(value) requires a string, got undefined"],
 			['await desktop.ref("e1").setValue(42)', "setValue(value) requires a string, got number"],
+			['await desktop.ref("e1").selectText()', "selectText(text) requires a string, got undefined"],
+			['await desktop.ref("e1").selectText(["cat"])', "selectText(text) requires a string, got an array"],
 			['await desktop.ref("e1").perform("")', 'perform(action) requires a non-empty string, got ""'],
 			["desktop.ref()", "ref(ref) requires a non-empty string, got undefined"],
 			["(await desktop.window(42)).ref(null)", "ref(ref) requires a non-empty string, got null"],
@@ -2411,7 +2484,7 @@ describe("expanded computer APIs", () => {
 		const prelude = workerPrelude(session, native);
 		const context = { session, toolCallId: "argument-facade" };
 		const realm = createContext({
-			__omp_display__: () => {},
+			__omp_log__: () => {},
 			__omp_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				return { text: "", details: result.details };
@@ -2425,20 +2498,23 @@ describe("expanded computer APIs", () => {
 			await expect(runInContext('computer.ref("e1").perform()', realm)).rejects.toThrow(
 				"perform(action) requires a non-empty string, got undefined",
 			);
+			await expect(runInContext('computer.ref("e1").selectText()', realm)).rejects.toThrow(
+				"selectText(text) requires a string, got undefined",
+			);
 		} finally {
 			await prelude.invoke({ action: "close" }, context);
 		}
 		expect(native.calls).toEqual([]);
 	});
 
-	it("leaves a printed observe() tree out of the JavaScript value's display, but keeps ax readable", async () => {
+	it("leaves a printed observe() tree out of the JavaScript value's echo, but keeps ax readable", async () => {
 		const session = toolSession();
 		const native = new ZoomNativeSession();
 		const prelude = workerPrelude(session, native);
 		const context = { session, toolCallId: "observe-once-js" };
 		const printed: string[] = [];
 		const realm = createContext({
-			__omp_display__: (text: string) => printed.push(text),
+			__omp_log__: (_level: string, text: string) => printed.push(text),
 			__omp_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				const text = result.content.flatMap(block => (block.type === "text" ? [block.text] : [])).join("\n");
@@ -2460,8 +2536,8 @@ describe("expanded computer APIs", () => {
 			);
 			expect(printed.join("\n").split("- button [ref=e1]")).toHaveLength(2);
 			expect(observation.ax).toBe("- button [ref=e1]");
-			// Eval displays a trailing value as its structured clone.
-			expect(structuredClone(observation)).not.toHaveProperty("ax");
+			// Eval echoes a trailing value the way console.log prints it.
+			expect(inspect(observation)).not.toContain("- button [ref=e1]");
 			expect(structuredClone(observation)).toMatchObject({ nodeCount: 1, truncated: false });
 			expect({ ...observation }).not.toHaveProperty("ax");
 			expect(JSON.parse(JSON.stringify(observation))).not.toHaveProperty("ax");
@@ -2486,16 +2562,17 @@ describe("expanded computer APIs", () => {
 				toolSession: session,
 				kernelMode: "per-call",
 			});
-		// Everything the model reads from a cell: printed text and structured displays.
+		// Everything the model reads from a cell: printed text and non-view outputs (views are user-only).
 		const trees = async (call: string) => {
 			const result = await run(`win = await computer.window(42)\n${call}`);
 			expect(result.exitCode).toBe(0);
-			return `${result.output}${JSON.stringify(result.displayOutputs)}`.split("- button [ref=e1]").length - 1;
+			const modelOutputs = result.displayOutputs.filter(output => output.type !== "view");
+			return `${result.output}${JSON.stringify(modelOutputs)}`.split("- button [ref=e1]").length - 1;
 		};
 		try {
 			for (const call of [
 				"await win.observe()",
-				"display(await win.observe())",
+				"print(await win.observe())",
 				"await win.observe(silent=True)",
 				"await win.observe({'silent': True})",
 				"await win.observe({'silent': True}, silent=None)",
@@ -2636,6 +2713,198 @@ describe("computer supervisor recovery", () => {
 		// cache, so a fresh session yielded undefined until a run happened.
 		const direct = await supervisor.capabilities(snapshot(true));
 		expect(direct).toEqual(capabilities);
+		await supervisor.close();
+	});
+});
+
+describe("display hold follows the agent turn", () => {
+	async function runTurn(transport: MemoryTransport, id: string, code: string, displayTurn?: number) {
+		transport.inbound({ type: "run", id, code, timeoutMs: 2_000, session: snapshot(false, displayTurn) });
+		const message = await transport.waitFor(candidate => candidate.type === "result" && candidate.id === id);
+		if (message.type !== "result" || !message.ok) throw new Error(`run ${id} failed`);
+		return message.payload.returnValue;
+	}
+
+	it("holds the display for a run inside a turn, and the turn's end releases only the hold", async () => {
+		const native = new FakeNativeSession();
+		const transport = new MemoryTransport();
+		new ComputerWorkerCore(transport, () => native);
+
+		expect(
+			await runTurn(transport, "turn-1", "globalThis.kept = (await desktop.windows())[0].id; return kept;", 1),
+		).toBe("42");
+		expect(native.displayHolds).toEqual(["turn"]);
+		await native.acquireControl();
+		const before = { cancel: native.cancelCount, retire: native.retireCount, close: native.closeCount };
+
+		transport.inbound({ type: "release-display", turn: 1 });
+		expect(native.displayHolds).toEqual(["turn", "release"]);
+		expect({ cancel: native.cancelCount, retire: native.retireCount, close: native.closeCount }).toEqual(before);
+		expect(native.controlState()).toEqual({ active: true });
+
+		// A run of the ended turn that arrives after its end (work outliving the turn) is left to the grace period.
+		await runTurn(transport, "turn-1-late", "return kept;", 1);
+		expect(native.displayHolds).toEqual(["turn", "release"]);
+
+		// The next turn's first run holds it again, in the same native session and runtime.
+		expect(await runTurn(transport, "turn-2", "return kept;", 2)).toBe("42");
+		expect(native.displayHolds).toEqual(["turn", "release", "turn"]);
+	});
+
+	it("leaves a run outside any turn to the native grace period", async () => {
+		const native = new FakeNativeSession();
+		const transport = new MemoryTransport();
+		new ComputerWorkerCore(transport, () => native);
+		await runTurn(transport, "no-turn", "return (await desktop.windows()).length;");
+		expect(native.displayHolds).toEqual([]);
+	});
+
+	it("holds the display again for a run whose turn goes on after a dialog", async () => {
+		const native = new FakeNativeSession();
+		const transport = new MemoryTransport();
+		new ComputerWorkerCore(transport, () => native);
+		transport.inbound({
+			type: "run",
+			id: "confirming",
+			code: 'await desktop.control.acquire({ reason: "Edit" }); return 1;',
+			timeoutMs: 2_000,
+			session: snapshot(false, 1),
+		});
+		const confirm = await transport.waitFor(
+			message => message.type === "control-request" && message.runId === "confirming",
+		);
+		if (confirm.type !== "control-request") throw new Error("Expected the run's control confirmation");
+		expect(native.displayHolds).toEqual(["turn"]);
+		// The confirmation dialog ends turn 1; the answer resumes it as turn 2.
+		transport.inbound({ type: "release-display", turn: 1 });
+		transport.inbound({ type: "resume-display", from: 5, turn: 6 });
+		expect(native.displayHolds).toEqual(["turn", "release"]);
+		transport.inbound({ type: "resume-display", from: 1, turn: 2 });
+		expect(native.displayHolds).toEqual(["turn", "release", "turn"]);
+		transport.inbound({ type: "tool-reply", id: confirm.id, reply: { ok: true, value: true } });
+		await transport.waitFor(message => message.type === "result" && message.id === "confirming");
+
+		// With no run of that turn active, a resume holds nothing.
+		transport.inbound({ type: "resume-display", from: 2, turn: 3 });
+		expect(native.displayHolds).toEqual(["turn", "release", "turn"]);
+	});
+
+	it("carries a turn resumed while a cold run starts into that run's hold", async () => {
+		const native = new FakeNativeSession();
+		const transport = new MemoryTransport();
+		const created = Promise.withResolvers<void>();
+		new ComputerWorkerCore(transport, async () => {
+			await created.promise;
+			return native;
+		});
+		transport.inbound({ type: "run", id: "cold", code: "return 1;", timeoutMs: 2_000, session: snapshot(false, 1) });
+		// A dialog opens and is answered while the native session is still being created.
+		transport.inbound({ type: "release-display", turn: 1 });
+		transport.inbound({ type: "resume-display", from: 1, turn: 2 });
+		created.resolve();
+		await transport.waitFor(message => message.type === "result" && message.id === "cold");
+		expect(native.displayHolds).toEqual(["turn"]);
+	});
+
+	it("numbers runs by the owner's turn and releases the owner's sessions once when it ends", async () => {
+		const owner = `computer-turn-${crypto.randomUUID()}`;
+		const snapshots: ComputerSessionSnapshot[] = [];
+		const releases: number[] = [];
+		const session: ToolSession = { ...toolSession(), getEvalKernelOwnerId: () => owner };
+		const prelude = createComputerPrelude(session, () => ({
+			async run(_code, _timeoutMs, runSnapshot) {
+				snapshots.push(runSnapshot);
+				return { displays: [], returnValue: undefined, screenshots: [] };
+			},
+			async capabilities() {
+				return capabilities;
+			},
+			releaseDisplay(turn) {
+				releases.push(turn);
+			},
+			async close() {},
+		}));
+		const context = { session, toolCallId: "computer-turn", signal: new AbortController().signal };
+		const run = () => prelude.invoke({ action: "run", code: "await desktop.windows()" }, context);
+
+		// No agent turn (SDK or eval use): the run keeps the grace period.
+		await run();
+		beginComputerTurnForOwner(owner);
+		await run();
+		await run();
+		expect(releases).toEqual([]);
+		endComputerTurnForOwner(owner);
+		expect(releases).toEqual([1]);
+		endComputerTurnForOwner(owner);
+		expect(releases).toEqual([1]);
+		await run();
+		beginComputerTurnForOwner(owner);
+		await run();
+		endComputerTurnForOwner(owner);
+		expect(snapshots.map(entry => entry.displayTurn)).toEqual([undefined, 1, 1, undefined, 2]);
+		expect(releases).toEqual([1, 2]);
+		await prelude.invoke({ action: "close" }, context);
+	});
+
+	it("sends the turn's end to a running worker and starts none for it", async () => {
+		const sent: ComputerWorkerInbound[] = [];
+		let workers = 0;
+		const supervisor = new ComputerSupervisor(
+			toolSession(),
+			() => {
+				workers += 1;
+				const worker = new SupervisorWorker(true);
+				const send = worker.send.bind(worker);
+				worker.send = message => {
+					sent.push(message);
+					send(message);
+				};
+				return worker;
+			},
+			{ startMs: 200, closeMs: 200 },
+		);
+		supervisor.releaseDisplay(1);
+		expect(workers).toBe(0);
+		await supervisor.run("1", 1_000, snapshot(false, 2));
+		supervisor.releaseDisplay(2);
+		expect(sent.map(message => message.type)).toEqual(["run", "release-display"]);
+		expect(sent[1]).toEqual({ type: "release-display", turn: 2 });
+		expect(workers).toBe(1);
+		await supervisor.close();
+	});
+
+	it("holds the display for a run whose turn goes on while its worker is still starting", async () => {
+		const native = new FakeNativeSession();
+		const ready = Promise.withResolvers<void>();
+		const supervisor = new ComputerSupervisor(
+			toolSession(),
+			() => {
+				const transport = new MemoryTransport();
+				new ComputerWorkerCore(transport, () => native);
+				return {
+					send: message => transport.inbound(message),
+					onMessage: handler => {
+						transport.listeners.add(handler);
+						void ready.promise.then(() => handler({ type: "ready" }));
+						return () => {
+							transport.listeners.delete(handler);
+						};
+					},
+					onError: () => () => {},
+					terminate: async () => {
+						transport.inbound({ type: "close" });
+					},
+				};
+			},
+			{ startMs: 1_000, closeMs: 200 },
+		);
+		const run = supervisor.run("return 1;", 2_000, snapshot(false, 1));
+		// A dialog opens and is answered before the cold worker's handshake, so before the run reaches it.
+		supervisor.releaseDisplay(1);
+		supervisor.resumeDisplay(1, 2);
+		ready.resolve();
+		await run;
+		expect(native.displayHolds).toEqual(["turn"]);
 		await supervisor.close();
 	});
 });

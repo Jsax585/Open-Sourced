@@ -9,9 +9,10 @@ use super::{
 	frame::FrameGeometry,
 	keys::KeyName,
 	menus::DesktopMenuItem,
+	text_range::TextSelectRequest,
 	types::{
-		CaptureCaps, DesktopCapabilities, DesktopDisplay, DesktopWindow, DisplaySelector,
-		ScreenState, Target,
+		AxTextSelection, CaptureCaps, DesktopCapabilities, DesktopDisplay, DesktopWindow,
+		DisplaySelector, ScreenState, Target,
 	},
 };
 
@@ -101,6 +102,9 @@ pub enum PointerEvent {
 	},
 }
 
+/// A held prevent-idle-display-sleep assertion; dropping it releases it.
+pub type DisplayAwakeHold = Box<dyn Send>;
+
 pub trait Backend: Send {
 	fn capabilities(&mut self) -> DesktopCapabilities;
 	fn displays(&mut self) -> CoreResult<Vec<DesktopDisplay>>;
@@ -111,9 +115,11 @@ pub trait Backend: Send {
 	fn screen_state(&mut self, _display: Option<&DisplaySelector>) -> ScreenState {
 		ScreenState::default()
 	}
-	/// Hold (`true`) or release (`false`) the platform's prevent-idle-display-
-	/// sleep assertion. Idempotent; backends without one ignore it.
-	fn keep_display_awake(&mut self, _awake: bool) {}
+	/// Start the platform's prevent-idle-display-sleep assertion, held until the
+	/// returned guard drops. Backends without one return `None`.
+	fn hold_display_awake(&mut self) -> Option<DisplayAwakeHold> {
+		None
+	}
 	/// Explicit display keyboard input must establish the focused surface's
 	/// real global monitor, not infer it from window-relative coordinates.
 	fn focused_keyboard_window(&mut self) -> CoreResult<DesktopWindow> {
@@ -211,6 +217,18 @@ pub trait AxBackend {
 	fn perform(&mut self, h: &AxHandle, action: &str) -> CoreResult<()>;
 	fn set_value(&mut self, h: &AxHandle, value: &str) -> CoreResult<()>;
 	fn focus(&mut self, h: &AxHandle) -> CoreResult<()>;
+	/// Selects the text `request` names in the element's value, leaving the
+	/// value unchanged, and returns the selection read back.
+	fn select_text(
+		&mut self,
+		_h: &AxHandle,
+		_request: &TextSelectRequest,
+	) -> CoreResult<AxTextSelection> {
+		Err(DesktopError::new(
+			super::error::ErrorCode::Unsupported,
+			"selecting text by accessibility is available only on macOS",
+		))
+	}
 	fn element_at(&mut self, x: f64, y: f64) -> CoreResult<Option<AxHandle>>;
 	fn focused_element(&mut self) -> CoreResult<Option<AxHandle>>;
 	fn attributes(&mut self, h: &AxHandle) -> CoreResult<Vec<(String, String)>>;
@@ -219,5 +237,11 @@ pub trait AxBackend {
 	/// it, so a ref is never renewed onto the newcomer.
 	fn alive(&mut self, _h: &AxHandle) -> bool {
 		true
+	}
+	/// Whether the app has provably destroyed the element `h` was read from,
+	/// rather than a request on it failing on another element. Only then does
+	/// a `StaleRef` name the one element left with its fields.
+	fn destroyed(&mut self, _h: &AxHandle) -> bool {
+		false
 	}
 }
