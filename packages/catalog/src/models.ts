@@ -225,16 +225,16 @@ export function calculateUsageCost(
 	const promptInputTokens =
 		usage.input + usage.cacheRead + usage.cacheWrite + (orchestration?.input ?? 0) + (orchestration?.cacheRead ?? 0);
 	const pricingTimestamp = cost.timeBased ? (timestamp ?? Date.now()) : undefined;
-	const rates = withTeamsTokenRate(
-		resolveTokenCost(cost, promptInputTokens, pricingTimestamp),
-		teamsTokenRatePerMillion,
-	);
+	const listed = resolveTokenCost(cost, promptInputTokens, pricingTimestamp);
+	const rates = withTeamsTokenRate(listed, teamsTokenRatePerMillion);
 	const multiplier = timeBasedMultiplier(cost.timeBased, pricingTimestamp);
 	usage.cost.input = (rates.input / 1000000) * (usage.input + (orchestration?.input ?? 0)) * multiplier;
 	usage.cost.output = (rates.output / 1000000) * (usage.output + (orchestration?.output ?? 0)) * multiplier;
 	usage.cost.cacheRead =
 		(rates.cacheRead / 1000000) * (usage.cacheRead + (orchestration?.cacheRead ?? 0)) * multiplier;
-	usage.cost.cacheWrite = cacheWriteCost(rates, usage) * multiplier;
+	// The token rate is one flat addition per token, so the write multipliers apply to the list price only.
+	const writeSurcharge = ((rates.cacheWrite - listed.cacheWrite) / 1000000) * usage.cacheWrite;
+	usage.cost.cacheWrite = (cacheWriteCost(listed, usage) + writeSurcharge) * multiplier;
 	usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
 	return usage.cost;
 }

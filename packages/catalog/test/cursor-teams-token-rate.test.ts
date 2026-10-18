@@ -61,6 +61,22 @@ describe("Cursor Teams token rate", () => {
 		expect(usage.cost.total).toBe(0);
 	});
 
+	it("adds the rate once to one-hour cache writes", () => {
+		// One-hour writes bill at twice the list input price; the token rate is a
+		// flat per-token addition and must not be doubled with it.
+		const listed = getBundledModel("cursor", "gemini-3.8-flash");
+		const writes = (): Usage => ({
+			...sampleUsage(0),
+			cacheWrite: 1_000_000,
+			cttl: { ephemeral5m: 0, ephemeral1h: 1_000_000 },
+		});
+		const atList = writes();
+		const rated = writes();
+		calculateCost(listed, atList);
+		calculateCost({ ...listed, teamsTokenRatePerMillion: 0.25 }, rated);
+		expect(rated.cost.cacheWrite - atList.cost.cacheWrite).toBeCloseTo(0.25, 8);
+	});
+
 	it("displays the per-million price that billing records", () => {
 		// Model pickers and `omp models --json` read the displayed card; it must
 		// not advertise the list price while sessions record the surcharge.
