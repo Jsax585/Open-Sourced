@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added the `web/deepseek` web-search engine, using DeepSeek's in-house Search API (`/v1/tools/search`) with the existing DeepSeek API key instead of a Responses or Messages API grounding
+- Added the `web/deepseek` web-search engine, using DeepSeek's own Search API with the existing DeepSeek API key
 
 ### Fixed
 
