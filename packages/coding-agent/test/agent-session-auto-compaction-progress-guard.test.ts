@@ -455,6 +455,28 @@ describe("AgentSession auto-compaction progress guard", () => {
 		expect(compactEvents[0]?.compactionEntry).toMatchObject({ summary: "compacted", fromExtension: true });
 	});
 
+	it("auto-continues after compaction of a status reply the context budget asked for", async () => {
+		// A budgeted Cursor turn ends with a text-only status because the
+		// provider told it to stop for compaction; the work is not done.
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session.agent, "continue").mockResolvedValue();
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 1000, contextWindow: 200000, percent: 0.5 });
+
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") onCompactionDone();
+		});
+
+		const assistantMsg = { ...highUsageAssistant(), contextBudgetWrapUp: true };
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await compactionDone;
+		await session.waitForIdle();
+
+		expect(promptSpy).toHaveBeenCalledTimes(1);
+	});
+
 	it("auto-continues after compaction while an active goal still needs work", async () => {
 		activateOngoingGoal("headroom");
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);

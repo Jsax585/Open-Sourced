@@ -3393,9 +3393,9 @@ export class SessionMaintenance {
 			// A budgeted Cursor turn that was asked to stop here so the host could
 			// compact. Its tool loop ran server-side, so no later boundary in this run
 			// picks the work back up: it must neither wait for a speculative summary
-			// nor end on a promotion.
+			// nor end on a promotion, and its status-only reply is not a final answer.
 			const cursorWrapUp = sameModel === true && assistantMessage.contextBudgetWrapUp === true;
-			const terminalTextAnswer = isTerminalTextAssistantAnswer(assistantMessage);
+			const terminalTextAnswer = !cursorWrapUp && isTerminalTextAssistantAnswer(assistantMessage);
 			// Grace band: a live (or just-started) background speculation absorbs
 			// the blocking summarization; the session stays responsive and the
 			// armed result lands at the next boundary. Deferral delays promotion
