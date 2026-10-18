@@ -4175,10 +4175,7 @@ export function vercelAiGatewayModelManagerOptions(
 			const discovered = await fetchDiscovered();
 			if (!discovered) return null;
 			if (discovered.length === 0) return [];
-			const models = appendUnbundledSeedModels<"anthropic-messages" | "typesafe">(
-				"vercel-ai-gateway",
-				discovered,
-			);
+			const models = appendUnbundledSeedModels<"anthropic-messages" | "typesafe">("vercel-ai-gateway", discovered);
 			if (!models) return null;
 			const discoveredCount = discovered.length;
 			return models.map((model, index): ModelSpec<"anthropic-messages" | "typesafe"> => {
