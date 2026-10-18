@@ -1,6 +1,6 @@
 import type { EvalBackendsAllowance } from "./eval-backends";
 import { sanitizeNamePart } from "../mcp/name-sanitize";
-import { compileNamePatterns, hasGlobChars } from "./name-patterns";
+import { classifyServerPatterns, compileNamePatterns, matchesServerPatterns } from "./name-patterns";
 
 export const BUILTIN_TOOL_NAMES = [
 	"read",
@@ -162,28 +162,6 @@ export function isMCPToolName(name: string): boolean {
 }
 
 /**
- * Server segment of an `mcp__<server>_*` wildcard pattern (text after `mcp__`
- * up to the trailing `_` before the `*`). Applies to trailing-`*` entries only.
- * The pattern grammar is glob-based; the helper extracts the server segment of
- * a trailing-`*` `mcp__<server>_*` entry for ownership matching. A pattern not
- * starting with `mcp__` or not ending with `*` has no server segment.
- */
-export function mcpWildcardServerSegment(pattern: string): string | undefined {
-	if (!pattern.endsWith("*")) return undefined;
-	const base = pattern.slice(0, -1);
-	if (!base.startsWith("mcp__")) return undefined;
-	// Only the bare `mcp__<server>_*` form (pattern ends with `_` before the
-	// `*`) applies the ownership fallback. A tool-prefix wildcard like
-	// `mcp__foo_query*` matches by name prefix alone — its last underscore is a
-	// tool-name separator, not the server/tool boundary, and the fallback must
-	// not overmatch the server's whole tool set.
-	if (!base.endsWith("_")) return undefined;
-	const afterPrefix = base.slice("mcp__".length);
-	const sep = afterPrefix.lastIndexOf("_");
-	return sep < 0 ? undefined : afterPrefix.slice(0, sep);
-}
-
-/**
  * Match a tool name against disallow patterns using glob semantics:
  * `Bun.Glob` matching, exact-first, leading `!` escaped, bare `*` = deny all.
  *
@@ -196,55 +174,12 @@ export function mcpWildcardServerSegment(pattern: string): string | undefined {
  * the sanitized raw server name when the caller knows it, preventing prefix collisions
  * between servers like `foo` and `foo_bar`.
  */
-export interface ToolDisallowOptions {
-	mcpServerName?: string;
-	/** @deprecated Ignored: reserved protocol names are rejected at registration, so a hidden-named tool is always built-in. */
-	isBuiltIn?: boolean;
-}
-
-export function isToolDisallowed(
-	name: string,
-	patterns: readonly string[],
-	options?: string | ToolDisallowOptions,
-): boolean {
-	const mcpServerName = typeof options === "string" ? options : options?.mcpServerName;
+export function isToolDisallowed(name: string, patterns: readonly string[], mcpServerName?: string): boolean {
 	if (HIDDEN_TOOL_NAMES.includes(name as HiddenToolName)) return false;
 	const compiledPatterns = compileNamePatterns(patterns);
 	if (compiledPatterns.blanket) return true;
-
-	const serverEntries: {
-		pattern: string;
-		segment: string;
-		segmentGlob: Bun.Glob;
-		matcher: ReturnType<typeof compileNamePatterns>;
-	}[] = [];
-	const plainEntries: string[] = [];
-
-	for (const entry of compiledPatterns.entries) {
-		const segment = mcpWildcardServerSegment(entry);
-		if (segment !== undefined && segment.length > 0) {
-			serverEntries.push({
-				pattern: entry,
-				segment,
-				segmentGlob: new Bun.Glob(segment.startsWith("!") ? `\\${segment}` : segment),
-				matcher: compileNamePatterns([entry]),
-			});
-		} else {
-			plainEntries.push(entry);
-		}
-	}
-
-	if (mcpServerName !== undefined) {
-		const ownerSegment = sanitizeNamePart(mcpServerName, "server", { domain: "mint" });
-		for (const entry of serverEntries) {
-			const isWholeServer = entry.pattern === `mcp__${entry.segment}_*` && entry.segmentGlob.match(ownerSegment);
-			if (isWholeServer) return true;
-			const isOwnerConsistent =
-				entry.segmentGlob.match(ownerSegment) ||
-				(!hasGlobChars(entry.segment) && entry.segment.startsWith(`${ownerSegment}_`));
-			if (isOwnerConsistent && entry.matcher.matches(name)) return true;
-		}
-		return compileNamePatterns(plainEntries).matches(name);
-	}
-	return compiledPatterns.matches(name);
+	if (mcpServerName === undefined) return compiledPatterns.matches(name);
+	const { servers, plain } = classifyServerPatterns(compiledPatterns);
+	const ownerSegment = sanitizeNamePart(mcpServerName, "server", { domain: "mint" });
+	return matchesServerPatterns(servers, plain, ownerSegment, name);
 }

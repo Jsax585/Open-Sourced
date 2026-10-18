@@ -312,10 +312,12 @@ Only after work capable of appending session entries has settled does disposal c
   commands, and LSP by default.
 - Restricted children retain hooks/providers from the parent's
   `preloadedPreparedExtensions`, rebound to their own session. Contributed tools
-  cannot extend or replace the restricted tool set, even when registered later.
-- In a restricted session, SDK-supplied `customTools` are excluded unless
-  `allowRestrictedCustomTools: true` and their names also appear in
-  `toolNames`.
+  register normally — the extension knows the agent identity and decides what to
+  register — while the declared `toolNames` list decides the initial active set
+  and `xd://` mounting; a registered extension may activate its own tools at runtime.
+- SDK-supplied `customTools` register in restricted sessions too; only names in
+  `toolNames` enter the active set. Settings-gated SDK capabilities and ambient
+  filesystem discovery stay disabled.
 - Hidden tools (for example `yield`) are opt-in unless required by options.
 
 ```ts

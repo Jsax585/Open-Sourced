@@ -2058,7 +2058,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
-	it("keeps restricted host tool lists isolated from configured custom capabilities", async () => {
+	it("keeps a restricted host tool list closed over registered custom capabilities", async () => {
 		const restrictedDir = makeTempDir();
 		const normalDir = makeTempDir();
 		const configuredSettings = () =>
@@ -2108,7 +2108,12 @@ describe("createAgentSession defaultInactive tool activation", () => {
 				reportSendError: vi.fn(),
 				reportRuntimeError: vi.fn(),
 			});
-			expect(restricted.getAllToolNames()).toEqual(["read", "lsp", "yield"]);
+			// Registration is identity-driven: the SDK custom tool is registered even
+			// for a restricted session, but the declared tool list stays closed and
+			// settings-gated capabilities are never installed. Extension entries passed
+			// via `extensions:` are replaced by prepared parent hooks for restricted
+			// children, so the late extension tool never registers here.
+			expect(restricted.getAllToolNames()).toEqual(["read", "lsp", "yield", "sdk_custom_tool"]);
 			expect(restricted.getActiveToolNames()).toEqual(["read", "lsp", "yield"]);
 			for (const name of [
 				"generate_image",
@@ -2120,7 +2125,6 @@ describe("createAgentSession defaultInactive tool activation", () => {
 				"manage_skill",
 				"default_active_tool",
 				"default_inactive_tool",
-				"sdk_custom_tool",
 				"restricted_late_extension_tool",
 			]) {
 				expect(restricted.getToolByName(name)).toBeUndefined();
@@ -2172,14 +2176,13 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
-	it("permits only explicitly named SDK custom tools when a restricted caller opts in", async () => {
+	it("activates explicitly named SDK custom tools in a restricted session", async () => {
 		const tempDir = makeTempDir();
 		const { session } = await createAgentSession({
 			...baseOptions(tempDir),
 			customTools: [sdkCustomTool],
 			toolNames: ["read", "sdk_custom_tool"],
 			restrictToolNames: true,
-			allowRestrictedCustomTools: true,
 		});
 
 		try {

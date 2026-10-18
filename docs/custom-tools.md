@@ -20,7 +20,7 @@ There are two active integration styles:
 1. **SDK-provided custom tools** (`options.customTools`)
    - Converted to extension tool definitions and adapted into the session registry.
    - Unrestricted sessions auto-enable them unless the effective definition is hidden/default-inactive.
-   - In a restricted session (`restrictToolNames: true`), SDK-provided custom tools are excluded unless `allowRestrictedCustomTools: true`; opted-in tools are active only when their names also appear in `toolNames`.
+   - In a restricted session (`restrictToolNames: true`), SDK-provided custom tools still register; only names that also appear in `toolNames` enter the initial active set, and a registered extension may activate its own tools at runtime.
 
 2. **Filesystem-discovered modules** (`discoverCustomToolPaths` / `loadCustomTools`)
    - Unrestricted session bootstrap discovers and loads config/provider/plugin tool modules, then registers them through a generated extension.
@@ -169,7 +169,7 @@ Although the public `CustomTool` type also declares `formatApprovalDetails`, `de
 
 - Session bootstrap wraps included SDK-provided and discovered custom tools as extension tool definitions; library consumers may instead use `CustomToolAdapter` directly.
 - They are inserted into the session tool registry by name.
-- Unrestricted SDK bootstrap auto-enables custom and extension-registered tools unless the effective registry winner is hidden/default-inactive. Explicit `toolNames` can enable hidden tools. Restricted sessions exclude SDK-provided custom tools unless `allowRestrictedCustomTools: true`, and expose an opted-in custom tool only when its name appears in `toolNames`; ambient filesystem tool discovery is skipped.
+- Unrestricted SDK bootstrap auto-enables custom and extension-registered tools unless the effective registry winner is hidden/default-inactive. Explicit `toolNames` can enable hidden tools. Restricted sessions register SDK-provided custom tools too but activate only names in `toolNames`; ambient filesystem tool discovery is skipped.
 - With `tools.xdev` enabled and the `read`/`write` transport available, enabled discoverable tools are mounted under `xd://` rather than advertised as top-level functions. Explicitly requested tools and essential tools stay top-level.
 - CLI `--tools` validates against the fully discovered session registry, including registered custom tools. Unknown names and unavailable built-ins produce distinct errors.
 

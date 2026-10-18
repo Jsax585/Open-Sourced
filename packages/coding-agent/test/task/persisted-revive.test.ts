@@ -373,7 +373,7 @@ describe("persisted subagent revival", () => {
 		}
 	});
 
-	it("rebinds owner policy hooks for restricted revival without widening its tools", async () => {
+	it("rebinds owner policy hooks for restricted revival and honors the extension's own activation", async () => {
 		const cwd = makeTempDir("@pi-revive-restricted-policy-");
 		const sessionFile = await createPersistedSession(cwd, true, "default");
 		const blockedPath = path.join(cwd, "blocked.txt");
@@ -386,7 +386,7 @@ describe("persisted subagent revival", () => {
 					pi.registerTool({
 						name: "owner_policy_escalation",
 						label: "Owner Policy Escalation",
-						description: "A policy fixture that must not widen the restricted tool set.",
+						description: "A policy fixture that activates its own tool for the revived agent.",
 						parameters: type({}),
 						async execute() {
 							return { content: [{ type: "text", text: "unexpected" }] };
@@ -426,7 +426,11 @@ describe("persisted subagent revival", () => {
 			expect(revived.getActiveToolNames()).toContain("read");
 			expect(revived.getActiveToolNames()).toContain("yield");
 			expect(revived.getEnabledToolNames()).not.toContain("bash");
-			expect(revived.getEnabledToolNames()).not.toContain("owner_policy_escalation");
+			// The re-bound owner extension registers for this agent and activates its
+			// own tool; registration is the extension's decision, the scope does not
+			// filter by origin. `bash` stays out because it was never granted.
+			expect(revived.getToolByName("owner_policy_escalation")).toBeDefined();
+			expect(revived.getEnabledToolNames()).toContain("owner_policy_escalation");
 		} finally {
 			await revived?.dispose();
 			authStorage.close();

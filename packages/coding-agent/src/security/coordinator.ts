@@ -259,7 +259,6 @@ async function createDefaultSecuritySession(input: SecurityScanSessionFactoryInp
 		customTools: [input.publicationTool],
 		toolNames: SECURITY_SESSION_TOOLS,
 		restrictToolNames: true,
-		allowRestrictedCustomTools: true,
 		spawns: "security-reviewer",
 		appendSystemPrompt: securityCoordinatorPrompt.trim(),
 		disableExtensionDiscovery: true,

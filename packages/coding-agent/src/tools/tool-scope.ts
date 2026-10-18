@@ -1,12 +1,13 @@
 import { sanitizeNamePart } from "../mcp/name-sanitize";
+import { expandDisallowedTools, HIDDEN_TOOL_NAMES, type HiddenToolName, normalizeToolNames } from "./builtin-names";
 import {
-	expandDisallowedTools,
-	HIDDEN_TOOL_NAMES,
-	type HiddenToolName,
-	mcpWildcardServerSegment,
-	normalizeToolNames,
-} from "./builtin-names";
-import { compileNamePatterns, hasGlobChars, type NamePatternSet } from "./name-patterns";
+	classifyServerPatterns,
+	compileNamePatterns,
+	hasGlobChars,
+	matchesServerPatterns,
+	type NamePatternSet,
+	type ServerPatternEntry,
+} from "./name-patterns";
 
 /**
  * Declaration inputs for constructing a {@link ToolScope}.
@@ -18,29 +19,6 @@ export interface ToolScopeDeclaration {
 	readonly disallowedTools?: readonly string[];
 	/** Resolves a declared entry in the Claude `mcp__<server>__<tool>` spelling to its live registry key. */
 	readonly resolveAlias?: (entry: string) => string | undefined;
-}
-
-interface ServerEntry {
-	readonly pattern: string;
-	readonly segment: string;
-	readonly segmentGlob: Bun.Glob;
-	readonly matcher: NamePatternSet;
-}
-
-function matchServerEntries(entries: readonly ServerEntry[], ownerSegment: string, name: string): boolean {
-	for (const entry of entries) {
-		const isWholeServer = entry.pattern === `mcp__${entry.segment}_*` && entry.segmentGlob.match(ownerSegment);
-		if (isWholeServer) {
-			return true;
-		}
-		const isOwnerConsistent =
-			entry.segmentGlob.match(ownerSegment) ||
-			(!hasGlobChars(entry.segment) && entry.segment.startsWith(`${ownerSegment}_`));
-		if (isOwnerConsistent && entry.matcher.matches(name)) {
-			return true;
-		}
-	}
-	return false;
 }
 
 /**
@@ -80,59 +58,25 @@ function matchServerEntries(entries: readonly ServerEntry[], ownerSegment: strin
 export class ToolScope {
 	#allow: NamePatternSet | undefined;
 	#allowPlain: NamePatternSet;
-	#allowServerEntries: readonly ServerEntry[];
+	#allowServerEntries: readonly ServerPatternEntry[];
 	#deny: NamePatternSet;
 	#denyPlain: NamePatternSet;
-	#denyServerEntries: readonly ServerEntry[];
+	#denyServerEntries: readonly ServerPatternEntry[];
 	#resolveAlias: ((entry: string) => string | undefined) | undefined;
 
 	constructor(declaration: ToolScopeDeclaration) {
 		const normalizedAllows =
 			declaration.allowedToolNames !== undefined ? normalizeToolNames(declaration.allowedToolNames) : undefined;
 		this.#allow = normalizedAllows !== undefined ? compileNamePatterns(normalizedAllows) : undefined;
-
-		const plainAllows: string[] = [];
-		const allowServerEntries: ServerEntry[] = [];
-		if (this.#allow !== undefined) {
-			for (const entry of this.#allow.entries) {
-				const segment = mcpWildcardServerSegment(entry);
-				if (segment !== undefined && segment.length > 0) {
-					allowServerEntries.push({
-						pattern: entry,
-						segment,
-						segmentGlob: new Bun.Glob(segment.startsWith("!") ? `\\${segment}` : segment),
-						matcher: compileNamePatterns([entry]),
-					});
-				} else {
-					plainAllows.push(entry);
-				}
-			}
-		}
-		this.#allowPlain = compileNamePatterns(plainAllows);
-		this.#allowServerEntries = allowServerEntries;
+		const allowEntries = this.#allow !== undefined ? classifyServerPatterns(this.#allow) : undefined;
+		this.#allowPlain = allowEntries?.plain ?? compileNamePatterns([]);
+		this.#allowServerEntries = allowEntries?.servers ?? [];
 
 		const expandedDenies = normalizeToolNames(expandDisallowedTools(declaration.disallowedTools ?? []));
 		this.#deny = compileNamePatterns(expandedDenies);
-
-		const plainDenies: string[] = [];
-		const denyServerEntries: ServerEntry[] = [];
-
-		for (const entry of this.#deny.entries) {
-			const segment = mcpWildcardServerSegment(entry);
-			if (segment !== undefined && segment.length > 0) {
-				denyServerEntries.push({
-					pattern: entry,
-					segment,
-					segmentGlob: new Bun.Glob(segment.startsWith("!") ? `\\${segment}` : segment),
-					matcher: compileNamePatterns([entry]),
-				});
-			} else {
-				plainDenies.push(entry);
-			}
-		}
-
-		this.#denyPlain = compileNamePatterns(plainDenies);
-		this.#denyServerEntries = denyServerEntries;
+		const denyEntries = classifyServerPatterns(this.#deny);
+		this.#denyPlain = denyEntries.plain;
+		this.#denyServerEntries = denyEntries.servers;
 		this.#resolveAlias = declaration.resolveAlias;
 	}
 
@@ -186,10 +130,7 @@ export class ToolScope {
 		if (this.#allow === undefined) return false;
 		if (mcpServerName !== undefined) {
 			const ownerSegment = sanitizeNamePart(mcpServerName, "server", { domain: "mint" });
-			if (matchServerEntries(this.#allowServerEntries, ownerSegment, name)) {
-				return true;
-			}
-			if (this.#allowPlain.matches(name)) {
+			if (matchesServerPatterns(this.#allowServerEntries, this.#allowPlain, ownerSegment, name)) {
 				return true;
 			}
 		} else if (this.#allow.matches(name)) {
@@ -208,13 +149,12 @@ export class ToolScope {
 		if (this.#deny.blanket) return true;
 		if (mcpServerName !== undefined) {
 			const ownerSegment = sanitizeNamePart(mcpServerName, "server", { domain: "mint" });
-			if (matchServerEntries(this.#denyServerEntries, ownerSegment, name)) {
+			// Owner-scoped entries are decided inside the match; judging the plain
+			// patterns separately would let `mcp__foo_*` strip server `foo_bar`'s
+			// tools, whose public names share the `mcp__foo_` prefix.
+			if (matchesServerPatterns(this.#denyServerEntries, this.#denyPlain, ownerSegment, name)) {
 				return true;
 			}
-			// Owner-scoped entries were decided above. Judging them again by name
-			// would let `mcp__foo_*` strip server `foo_bar`'s tools, whose public
-			// names share the `mcp__foo_` prefix.
-			if (this.#denyPlain.matches(name)) return true;
 		} else if (this.#deny.matches(name)) {
 			// No owner metadata (a tool that never carried `mcpServerName`): fall
 			// back to matching the public name, as a caller-less declaration must.

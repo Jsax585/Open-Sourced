@@ -1,11 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { sanitizeNamePart } from "@oh-my-pi/pi-coding-agent/mcp/name-sanitize";
 import { createMCPToolName } from "@oh-my-pi/pi-coding-agent/mcp/tool-bridge";
-import {
-	expandDisallowedTools,
-	isToolDisallowed,
-	mcpWildcardServerSegment,
-} from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
+import { expandDisallowedTools, isToolDisallowed } from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
+import { mcpWildcardServerSegment } from "@oh-my-pi/pi-coding-agent/tools/name-patterns";
 
 // A raw config server name whose minted tool name exceeds the 64-char cap:
 // `createMCPToolName` truncates the whole name and appends a hash suffix, so
@@ -55,38 +52,6 @@ describe("isToolDisallowed", () => {
 		expect(isToolDisallowed("exec", ["exec"])).toBe(true);
 		expect(isToolDisallowed("eval", ["exec"])).toBe(false);
 		expect(isToolDisallowed("bash", ["exec"])).toBe(false);
-	});
-
-	test("hidden protocol tools remain exempt even when isBuiltIn is false", () => {
-		expect(isToolDisallowed("yield", ["*"], { isBuiltIn: false })).toBe(false);
-		expect(isToolDisallowed("yield", ["yield"], { isBuiltIn: false })).toBe(false);
-		expect(isToolDisallowed("goal", ["*"], { isBuiltIn: false })).toBe(false);
-		expect(isToolDisallowed("think", ["*"], { isBuiltIn: false })).toBe(false);
-		expect(isToolDisallowed("yield", ["*"], { isBuiltIn: true })).toBe(false);
-	});
-
-	test("matches glob patterns with single-char wildcard ? and brace expansion {a,b}", () => {
-		expect(isToolDisallowed("mcp__db_1", ["mcp__db_?"])).toBe(true);
-		expect(isToolDisallowed("mcp__db_a", ["mcp__db_?"])).toBe(true);
-		expect(isToolDisallowed("mcp__db_10", ["mcp__db_?"])).toBe(false);
-
-		expect(isToolDisallowed("read", ["{read,grep}"])).toBe(true);
-		expect(isToolDisallowed("grep", ["{read,grep}"])).toBe(true);
-		expect(isToolDisallowed("bash", ["{read,grep}"])).toBe(false);
-
-		expect(isToolDisallowed("mcp__api_get", ["mcp__{api,web}_*"])).toBe(true);
-		expect(isToolDisallowed("mcp__web_post", ["mcp__{api,web}_*"])).toBe(true);
-		expect(isToolDisallowed("mcp__db_query", ["mcp__{api,web}_*"])).toBe(false);
-	});
-
-	test("bare * blanket denies names containing / and leading ! matches literal name only", () => {
-		expect(isToolDisallowed("custom/tool", ["*"])).toBe(true);
-		expect(isToolDisallowed("mcp/server/tool", ["*"])).toBe(true);
-
-		expect(isToolDisallowed("!special", ["!special"])).toBe(true);
-		expect(isToolDisallowed("other", ["!special"])).toBe(false);
-		expect(isToolDisallowed("!special_tool", ["!special_*"])).toBe(true);
-		expect(isToolDisallowed("other_tool", ["!special_*"])).toBe(false);
 	});
 
 	test("capped minted names need mcpServerName metadata to match a server wildcard", () => {

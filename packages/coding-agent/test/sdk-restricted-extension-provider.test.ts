@@ -234,36 +234,41 @@ describe("restricted sessions sharing extension providers", () => {
 		});
 	});
 
-	test("ignores inherited extension tools and replacements, including late registration", async () => {
+	test("registers inherited extension tools, replacing same-named builtins like unrestricted sessions", async () => {
 		const allowed = path.join(tempDir, "allowed.txt");
 		await Bun.write(allowed, "built-in reader");
 		await withRestrictedChild(
 			pi => {
-				const register = (name: string) =>
+				const register = (name: string, text: string) =>
 					pi.registerTool({
 						name,
 						label: name,
-						description: "Must not replace or expand restricted tools",
+						description: "Extension tool competing with the restricted tool set",
 						parameters: type({}),
 						async execute() {
-							throw new Error("Extension tool escaped the restriction");
+							return { content: [{ type: "text" as const, text }] };
 						},
 					});
-				register("extra");
-				register("read");
+				register("extra", "extension extra");
+				register("read", "extension reader");
 				pi.on("session_start", () => {
-					register("late_extra");
-					register("read");
+					register("late_extra", "late extension extra");
+					register("read", "late extension reader");
 				});
 			},
 			async child => {
-				expect(child.getAllToolNames()).toEqual(["read"]);
+				// Registration is identity-driven even for restricted children, so the
+				// extension's tools exist and a same-named registration wins over the
+				// builtin exactly as in an unrestricted session; the default active set
+				// stays closed, so only declared tools are visible.
+				expect(child.getAllToolNames()).toEqual(["read", "extra"]);
+				expect(child.getActiveToolNames()).toEqual(["read"]);
 				const read = child.getToolByName("read");
 				if (!read) throw new Error("Missing restricted read tool");
 				const result = await read.execute("allowed", { path: allowed });
 				expect(result.content).toEqual(
 					expect.arrayContaining([
-						expect.objectContaining({ type: "text", text: expect.stringContaining("built-in reader") }),
+						expect.objectContaining({ type: "text", text: expect.stringContaining("extension reader") }),
 					]),
 				);
 			},

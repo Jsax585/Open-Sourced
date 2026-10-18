@@ -723,8 +723,9 @@ export interface CreateAgentSessionOptions {
 	/**
 	 * Session-independent imported extension factories. Child sessions, including
 	 * restricted children, rebind these to their own ExtensionAPI without
-	 * re-evaluating the module graph. Restricted children retain hooks/providers,
-	 * but never expose extension-contributed tools.
+	 * re-evaluating the module graph. Restricted children retain hooks/providers
+	 * and rebind extension-contributed tools to their own session; the scope
+	 * still decides which of them enter the active set.
 	 * @internal
 	 */
 	preloadedPreparedExtensions?: readonly PreparedExtension[];
@@ -778,7 +779,8 @@ export interface CreateAgentSessionOptions {
 	 * wholesale by `refreshMCPTools` — so a parent `/mcp reload` can both add
 	 * and remove them. Passed as `customTools` they would instead be retained as
 	 * extension-owned tools across every refresh. A same-named `customTools`
-	 * entry keeps precedence and drops the proxy. Ignored for restricted sessions.
+	 * entry keeps precedence and drops the proxy. Registered in restricted
+	 * sessions too; the scope decides activation.
 	 */
 	mcpTools?: CustomTool[];
 
@@ -803,21 +805,16 @@ export interface CreateAgentSessionOptions {
 	 */
 	enforceToolAllowlist?: boolean;
 	/**
-	 * Tool-name patterns removed from the active set: trailing `*` is a prefix
-	 * wildcard (`mcp__*` = all MCP tools, `mcp__<server>_*` = one server), any
-	 * other pattern matches the exact name (bare `*` denies all). The `<server>`
-	 * is the sanitized tool-name prefix (`createMCPToolName` lowercases, keeps
-	 * digits, and collapses other non-`[a-z0-9_]` characters). Hidden protocol
-	 * tools (`yield`, `goal`, `think`) are never disallowed; `disallowedTools:`
-	 * `['exec*']` blocks the alias without expanding it to `eval`/`bash`.
+	 * Tool-name patterns removed from the active set, with the same `Bun.Glob`
+	 * semantics as {@link toolNames}: `*`, `?`, `[...]`, and `{a,b}` are globs,
+	 * a literal name is matched exactly first, a leading `!` is literal (no
+	 * negation), and bare `*`/`**` denies all. `mcp__*` denies every MCP tool and
+	 * `mcp__<server>_*` one server (owner-matched, so `foo` never strips `foo_bar`).
+	 * Hidden protocol tools (`yield`, `goal`, `think`) are never disallowed;
+	 * `disallowedTools:` `['exec*']` blocks the alias without expanding it to
+	 * `eval`/`bash`.
 	 */
 	disallowedTools?: string[];
-	/**
-	 * Permit only caller-supplied SDK custom tools inside a restricted session.
-	 * They must still be named in {@link toolNames}; discovered extensions, MCP,
-	 * and ambient custom tools remain disabled. Default: false.
-	 */
-	allowRestrictedCustomTools?: boolean;
 
 	/** Output schema for structured completion (subagents). */
 	outputSchema?: unknown;
@@ -1402,7 +1399,7 @@ const TOOL_DEFINITION_MARKER = Symbol("__isToolDefinition");
 /** Matches the truncation applied to per-server instructions inside `rebuildSystemPrompt`. */
 const MAX_MCP_INSTRUCTIONS_LENGTH = 4000;
 /** Built-ins `createTools` force-includes into explicit tool lists; the active set mirrors them. */
-export const SESSION_MANAGED_BUILTIN_TOOL_NAMES = ["manage_skill", "learn", "context_notes", "new_context"];
+const SESSION_MANAGED_BUILTIN_TOOL_NAMES = ["manage_skill", "learn", "context_notes", "new_context"];
 
 let sshCleanupRegistered = false;
 
@@ -3532,20 +3529,19 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// stay unwrapped. The extension runner exposes it to re-registered tools via createContext.
 		const nativeToolsByName = new Map<string, Tool>(toolSession.xdev?.tools ?? undefined);
 
-		const registeredTools = restrictToolNames ? [] : extensionRunner.getAllRegisteredTools();
+		// Extension and caller-supplied tools register regardless of the tool scope:
+		// an extension knows the agent identity (`before_agent_start`/`session_start`)
+		// and decides what to register itself. The scope still decides activation,
+		// mounting, and deny-list membership by name below.
+		const registeredTools = extensionRunner.getAllRegisteredTools();
 		const initialRegisteredTools = new WeakSet(registeredTools);
 		// Manager-owned proxies register like SDK custom tools but are classified
 		// as manager tools via their origins. An explicitly supplied custom tool
 		// keeps its name: the proxy is dropped rather than registered as a loser
 		// whose manager classification would let a refresh replace the winner.
-		const explicitCustomTools =
-			restrictToolNames && options.allowRestrictedCustomTools !== true
-				? []
-				: (options.customTools?.filter(tool => !isLegacyBuiltinToolDefinition(tool)) ?? []);
+		const explicitCustomTools = options.customTools?.filter(tool => !isLegacyBuiltinToolDefinition(tool)) ?? [];
 		const explicitCustomToolNames = new Set(explicitCustomTools.map(tool => tool.name));
-		const sdkMcpTools = restrictToolNames
-			? []
-			: (options.mcpTools ?? []).filter(tool => !explicitCustomToolNames.has(tool.name));
+		const sdkMcpTools = (options.mcpTools ?? []).filter(tool => !explicitCustomToolNames.has(tool.name));
 		initialMcpManagerTools.push(...sdkMcpTools);
 		const sdkCustomTools = [...sdkMcpTools, ...explicitCustomTools];
 		const sdkCustomToolNames = new Set(sdkCustomTools.map(tool => tool.name));
@@ -3676,8 +3672,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		//
 		// The grant is captured here, independently of the session's provider:
 		// a session that starts on another provider can switch to Cursor later,
-		// and the roster is built once, at session creation.
-		const editWasGranted = toolRegistry.has("edit");
+		// and the roster is built once, at session creation. Restricted sessions
+		// also register extension-registered tools, so registry presence alone is
+		// not a grant there: only a declared (and not denied) name arms the bridge.
+		const editWasGranted = restrictToolNames
+			? declaredAtConstruction?.matches("edit") === true && toolScope.isScopedIn("edit")
+			: toolRegistry.has("edit");
+		const grepWasGranted = restrictToolNames
+			? declaredAtConstruction?.matches("grep") === true && toolScope.isScopedIn("grep")
+			: toolRegistry.has("grep");
 		// Built on first use rather than eagerly: a session that never reaches
 		// Cursor never constructs it.
 		let cursorBridgeEditTool: AgentTool | undefined;
@@ -3884,8 +3887,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			tools: toolRegistry,
 			// Subagent tool scoping: frames resolve through the session scope, so a
 			// scoped subagent on the Cursor provider cannot execute scoped-out tools.
+			// Restricted sessions register extension tools too and have no `xd://`
+			// partition, so there the active set — not registration — is the grant.
 			// Closures read the live session (built below); frames run after it exists.
-			isToolExecutable: (name, mcpServerName) => toolScope.isScopedIn(name, mcpServerName),
+			isToolExecutable: (name, mcpServerName) =>
+				toolScope.isScopedIn(name, mcpServerName) &&
+				(!restrictToolNames || toolSession.isToolActive?.(name) === true),
 			isToolActive: name => toolSession.isToolActive?.(name) === true,
 			allowToollessMcpServers: serverName => !toolScope.enforced && !toolScope.deniesServer(serverName),
 			mcpManagerTools: () => toolSession.mcpManager?.getTools() ?? [],
@@ -3905,7 +3912,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// the grant: the factory builds a fresh tool and `executeTool` prefers
 			// it over the registry, so installing it unconditionally would let a
 			// session without `grep` search anyway.
-			createGrepTool: toolRegistry.has("grep") ? createBridgeGrepFactory(toolSession, extensionRunner) : undefined,
+			createGrepTool: grepWasGranted ? createBridgeGrepFactory(toolSession, extensionRunner) : undefined,
 			// Native delete and resource-download frames mutate files without a
 			// registry tool. Resolve both the transactional active predicate and
 			// live access mode: Agent.state.tools commits only after prompt rebuilding,
@@ -4299,9 +4306,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			const mcpServerName = (toolRegistry.get(name) as { mcpServerName?: unknown } | undefined)?.mcpServerName;
 			return typeof mcpServerName === "string" ? mcpServerName : undefined;
 		};
+		const resolveScopeAlias = (entry: string): string | undefined =>
+			hasGlobChars(entry)
+				? undefined
+				: resolveMCPToolAlias(entry, candidate => (toolRegistry.has(candidate) ? { name: candidate } : undefined))
+						?.name;
 		if (enforceToolAllowlist && explicitlyRequestedToolNames) {
 			const unresolvable = explicitlyRequestedToolNames.filter(entry => {
-				const entryScope = new ToolScope({ allowedToolNames: [entry] });
+				const entryScope = new ToolScope({ allowedToolNames: [entry] }).setAliasResolver(resolveScopeAlias);
 				return !toolNamesFromRegistry.some(name => entryScope.isExplicitlyAllowed(name, ownerOf(name)));
 			});
 			if (unresolvable.length > 0) {
@@ -4309,13 +4321,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 		}
 		const declaredScope = explicitlyRequestedToolNames
-			? new ToolScope({ allowedToolNames: explicitlyRequestedToolNames }).setAliasResolver(entry =>
-					hasGlobChars(entry)
-						? undefined
-						: resolveMCPToolAlias(entry, candidate =>
-								toolRegistry.has(candidate) ? { name: candidate } : undefined,
-							)?.name,
-				)
+			? new ToolScope({ allowedToolNames: explicitlyRequestedToolNames }).setAliasResolver(resolveScopeAlias)
 			: undefined;
 		const requestsTool = (name: string): boolean =>
 			enforceToolAllowlist
@@ -4344,30 +4350,34 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			!toolScope.isDenied("write");
 		const isActivatable = (name: string): boolean =>
 			name !== "goal" && (!defaultInactiveToolNames.has(name) || isNamedLiterally(name));
+		// Custom and extension-registered tools are force-included for unrestricted
+		// callers unless the effective registry winner is hidden / defaultInactive.
+		// Restricted callers own the active list: registration is identity-driven and
+		// may include restricted tools, but nothing extra becomes visible by default —
+		// a declared name (or an extension's own `setActiveTools`) must opt it in.
+		const extraToolNames = new Set(
+			[
+				...sdkCustomTools.map(t => t.name),
+				...registeredTools.map(t => t.definition.name),
+				...settingsGatedCustomEntries.keys(),
+			].filter(
+				name =>
+					!defaultInactiveToolNames.has(name) &&
+					(!enforceToolAllowlist || toolScope.isExplicitlyAllowed(name, ownerOf(name))),
+			),
+		);
 		const initialRequestedActiveToolNames = enforceToolAllowlist
 			? toolNamesFromRegistry.filter(name => isActivatable(name) && toolScope.isScopedIn(name, ownerOf(name)))
 			: options.toolNames
 				? toolNamesFromRegistry.filter(
 						name => isActivatable(name) && declaredScope?.isExplicitlyAllowed(name, ownerOf(name)),
 					)
-				: toolNamesFromRegistry.filter(name => isActivatable(name));
+				: toolNamesFromRegistry.filter(
+						name => isActivatable(name) && !(restrictToolNames && extraToolNames.has(name)),
+					);
 		let initialToolNames = [...initialRequestedActiveToolNames];
 
-		// Custom tools and extension-registered tools are always included
-		// unless the effective registry winner is hidden / defaultInactive. Restricted callers own the list.
-		// When the caller enforces a tool allowlist (subagent `tools:` frontmatter),
-		// custom/extension/MCP tools not named in the list are excluded too.
-		const alwaysInclude: string[] = restrictToolNames
-			? []
-			: [
-					...sdkCustomTools.map(t => t.name),
-					...registeredTools.map(t => t.definition.name),
-					...settingsGatedCustomEntries.keys(),
-				].filter(
-					name =>
-						!defaultInactiveToolNames.has(name) &&
-						(!enforceToolAllowlist || toolScope.isExplicitlyAllowed(name, ownerOf(name))),
-				);
+		const alwaysInclude: string[] = restrictToolNames ? [] : [...extraToolNames];
 		for (const name of alwaysInclude) {
 			if (toolRegistry.has(name) && !initialToolNames.includes(name)) {
 				initialToolNames.push(name);
