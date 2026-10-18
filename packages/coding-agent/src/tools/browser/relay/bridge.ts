@@ -1081,6 +1081,9 @@ export class RelayBridge {
 				tab.forceFreshRootBeforeReplay = true;
 				tab.restorePending = true;
 			}
+			// A tab the hello brings that no client was told about, such as one a browser opened before its
+			// extension connected, is announced now: no later change has to happen for Puppeteer to see it.
+			if (!tab.announced && this.#eligible(tab)) this.#announceTab(tab);
 			if (tab.attached) {
 				// An interrupted preload add/remove can leave Chrome's surviving root
 				// carrying an orphaned (or already-removed) registration we cannot
