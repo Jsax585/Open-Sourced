@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Vercel AI Gateway `type: "evaluation"` discovery as `api: typesafe` judge models with a KDL-driven `judgment` contract ([#15613](https://github.com/can1357/oh-my-pi/pull/15613) by [@szavadsky](https://github.com/szavadsky)).
+
 ## [18.12.1] - 2026-10-17
 
 ### Fixed
@@ -84,7 +88,6 @@
 
 ### Added
 
-- Added Vercel AI Gateway `type: "evaluation"` discovery as `api: typesafe` judge models with a KDL-driven `judgment` contract ([#15613](https://github.com/can1357/oh-my-pi/pull/15613) by [@szavadsky](https://github.com/szavadsky)).
 - Added Muse Code's subscription-only Muse Wonder Full and Wonder contributor tiers with the `max` effort, recording API-equivalent cost instead of $0: Wonder Full at Muse Wonder's $4 input / $0.20 cached / $20 output per 1M tokens, contributor tiers at the measured $1.60 / $0.08 / $8 ([#15522](https://github.com/can1357/oh-my-pi/pull/15522) by [@eggpeat](https://github.com/eggpeat))
 - Added the `classifier-cot-extraction` rule axis, set for Claude, marking models whose classifier refuses earlier reasoning quoted back into their input ([#15436](https://github.com/can1357/oh-my-pi/pull/15436) by [@will-bogusz](https://github.com/will-bogusz))
 - Added Gemini 4 Argon pricing on Cursor ($2 input / $0.10 cached / $10 output per 1M tokens) and Google Antigravity, which now uses Google's first-party rate instead of showing $0 ([#15620](https://github.com/can1357/oh-my-pi/pull/15620) by [@eggpeat](https://github.com/eggpeat))
