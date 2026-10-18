@@ -254,6 +254,27 @@ export function parseGlobArrayOrCSV(value: unknown): string[] | undefined {
 	return undefined;
 }
 
+/**
+ * Parse one skill-visibility field (`skills`, `hideSkills`, `unhideSkills`).
+ * Wrong-typed values (numbers, objects, arrays without strings) warn and read
+ * as absent, mirroring the `tools` no-names warning; deliberate blanks (empty
+ * string, whitespace, arrays of blanks) stay silent.
+ */
+function parseVisibilityField(field: string, value: unknown, agent: string): string[] | undefined {
+	const parsed = parseGlobArrayOrCSV(value);
+	if (parsed !== undefined || value == null) return parsed;
+	const isBlank =
+		(typeof value === "string" && value.trim() === "") ||
+		(Array.isArray(value) && value.every(item => typeof item !== "string" || item.trim() === ""));
+	if (!isBlank) {
+		logger.warn(`Agent ${field} declaration is not a string or string array; ignoring it`, {
+			agent,
+			valueType: Array.isArray(value) ? "array" : typeof value,
+		});
+	}
+	return undefined;
+}
+
 interface RuleMarkdownOptions {
 	ruleName?: string;
 	stripNamePattern?: RegExp;
@@ -453,7 +474,7 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 	const rawSkillsValue =
 		typeof frontmatter.skills === "string" && frontmatter.skills.trim().toLowerCase() === "none"
 			? []
-			: parseGlobArrayOrCSV(frontmatter.skills);
+			: parseVisibilityField("skills", frontmatter.skills, name);
 	// Only the `[]` literal counts as explicit: `parseGlobArrayOrCSV` drops
 	// blank items, so distinguish a present-but-empty allowlist (`skills: []`
 	// lists nothing) from a malformed blank (`skills: [""]` = absent).
@@ -461,10 +482,10 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 		Array.isArray(frontmatter.skills) && frontmatter.skills.length === 0
 			? []
 			: rawSkillsValue?.map(s => s.trim()).filter(Boolean);
-	const hideSkills = parseGlobArrayOrCSV(frontmatter.hideSkills)
+	const hideSkills = parseVisibilityField("hideSkills", frontmatter.hideSkills, name)
 		?.map(s => s.trim())
 		.filter(Boolean);
-	const unhideSkills = parseGlobArrayOrCSV(frontmatter.unhideSkills)
+	const unhideSkills = parseVisibilityField("unhideSkills", frontmatter.unhideSkills, name)
 		?.map(s => s.trim())
 		.filter(Boolean);
 	return {

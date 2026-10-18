@@ -29,6 +29,9 @@ interface AgentFrontmatter {
 	blocking?: boolean;
 	prewalk?: boolean | string;
 	advisor?: boolean | string;
+	skills?: string[];
+	hideSkills?: string[];
+	unhideSkills?: string[];
 }
 
 interface EmbeddedAgentDef {

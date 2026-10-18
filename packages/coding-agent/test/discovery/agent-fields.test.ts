@@ -1,9 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, vi } from "bun:test";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { parseAgentFields } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { resolveBuiltinToolPlan, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
+import { logger } from "@oh-my-pi/pi-utils";
 
 describe("parseAgentFields", () => {
 	test("rejects the reserved `main` and `sub` agent definition names", () => {
@@ -291,6 +292,42 @@ describe("parseAgentFields", () => {
 		expect(fields).toBeDefined();
 		expect(fields?.hideSkills).toEqual(["internal-*"]);
 		expect(fields?.unhideSkills).toEqual(["internal-tools"]);
+	});
+
+	test("treats array-form none as a literal skill name, not the sentinel", () => {
+		// Only the exact string "none" lists nothing; ["none"] is one glob.
+		expect(parseAgentFields({ name: "worker", description: "desc", skills: ["none"] })?.skills).toEqual(["none"]);
+	});
+
+	test("keeps an unclosed brace group whole in the visibility CSV form", () => {
+		// splitGlobCSV suppresses splitting once a group opens without
+		// closing, so the malformed pattern stays one glob.
+		expect(parseAgentFields({ name: "worker", description: "desc", skills: "{alpha, beta" })?.skills).toEqual([
+			"{alpha, beta",
+		]);
+	});
+
+	test("treats wrong-typed visibility values as absent", () => {
+		// Numbers, objects, and arrays without strings are never meaningful
+		// glob lists; they read as absent (unrestricted) with a warning.
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		try {
+			for (const bad of [5, true, { globs: "*" }, [123], [null]]) {
+				expect(parseAgentFields({ name: "worker", description: "desc", skills: bad })?.skills).toBeUndefined();
+				expect(
+					parseAgentFields({ name: "worker", description: "desc", hideSkills: bad })?.hideSkills,
+				).toBeUndefined();
+				expect(
+					parseAgentFields({ name: "worker", description: "desc", unhideSkills: bad })?.unhideSkills,
+				).toBeUndefined();
+			}
+			expect(warnSpy).toHaveBeenCalledWith(
+				expect.stringContaining("skills declaration is not a string or string array"),
+				expect.objectContaining({ agent: "worker" }),
+			);
+		} finally {
+			warnSpy.mockRestore();
+		}
 	});
 
 	test("parses readSummarize from boolean frontmatter", () => {

@@ -146,6 +146,27 @@ describe("resolveAgentSkills", () => {
 		const resolved = resolveAgentSkills(skills, agent({ hideSkills: ["[invalid"] }));
 		expect(listed(resolved)).toEqual(["alpha"]);
 	});
+	test("inherits hides across two levels unless the grandchild overrides them", () => {
+		// A grandchild resolves against the list its parent handed down: the
+		// parent's hides (and unhides) are starting state, and the
+		// grandchild's own frontmatter can flip either direction.
+		const child = resolveAgentSkills(
+			[skill("alpha"), skill("beta", true), skill("gamma")],
+			agent({ hideSkills: ["alpha"], unhideSkills: ["beta"] }),
+		);
+		expect(listed(child)).toEqual(["beta", "gamma"]);
+		// Plain grandchild keeps both the parent's hide and its unhide.
+		expect(listed(resolveAgentSkills(child, agent()))).toEqual(["beta", "gamma"]);
+		// Grandchild unhideSkills re-lists a parent-hidden skill.
+		expect(listed(resolveAgentSkills(child, agent({ unhideSkills: ["alpha"] })))).toEqual([
+			"alpha",
+			"beta",
+			"gamma",
+		]);
+		// Grandchild hideSkills re-hides a parent-unhidden skill.
+		expect(listed(resolveAgentSkills(child, agent({ hideSkills: ["beta"] })))).toEqual(["gamma"]);
+	});
+
 });
 
 describe("agent frontmatter template", () => {
