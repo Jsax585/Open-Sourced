@@ -519,6 +519,7 @@ export interface SessionAdvisorsHost {
 		retryAfterMs: number | undefined,
 		errorMessage: string,
 		usageLimitFailureTime?: number,
+		sessionIdOverride?: string,
 	): void;
 	createCodexCompactionContext(options: {
 		trigger: CodexCompactionContext["trigger"];
@@ -2184,6 +2185,11 @@ export class SessionAdvisors {
 				retryAfterMs,
 				message,
 				usageLimit ? Date.now() : undefined,
+				// Attribute the cooldown to the advisor's own provider session so the
+				// per-session suppression map matches the probes that read it back;
+				// the primary session id would leave advisor entries missing and let
+				// a later failure's cooldown suppress an unrelated healthy session.
+				advisor.providerSessionId,
 			);
 		}
 		for (const role of chainKeys) {

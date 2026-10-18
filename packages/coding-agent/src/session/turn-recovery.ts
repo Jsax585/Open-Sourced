@@ -1841,6 +1841,7 @@ export class TurnRecovery {
 		retryAfterMs: number | undefined,
 		errorMessage: string,
 		usageLimitFailureTime?: number,
+		sessionIdOverride?: string,
 	): void {
 		let cooldownMs = retryAfterMs;
 		if (!cooldownMs || cooldownMs <= 0) {
@@ -1851,7 +1852,7 @@ export class TurnRecovery {
 			currentSelector,
 			Date.now() + cooldownMs,
 			usageLimitFailureTime,
-			this.#host.sessionId(),
+			sessionIdOverride ?? this.#host.sessionId(),
 		);
 	}
 
@@ -2179,6 +2180,7 @@ export class TurnRecovery {
 		// names the last model that served, which this swap has not changed.
 		const routedBeforeSwap = this.#fallbackRoutedFor;
 		const servedBeforeSwap = this.#activeRetryFallback?.served;
+		const activeFallbackBefore = this.#activeRetryFallback;
 		this.#markFallbackRouted();
 		if (this.#activeRetryFallback) this.#activeRetryFallback.served = false;
 		await this.#host.setModelWithProviderSessionReset(candidate);
@@ -2196,6 +2198,7 @@ export class TurnRecovery {
 			if (this.#activeRetryFallback) this.#activeRetryFallback.served = servedBeforeSwap;
 			return false;
 		}
+		const leafBeforeAppend = this.#host.sessionManager.getLeafId();
 		this.#host.sessionManager.appendModelChange(candidateSelector, EPHEMERAL_MODEL_CHANGE_ROLE, true);
 		this.#host.settings.getStorage()?.recordModelUsage(candidateSelector);
 		this.#host.setThinkingLevel(nextThinkingLevel);
@@ -2212,6 +2215,37 @@ export class TurnRecovery {
 			this.#activeRetryFallback.pinned = this.#activeRetryFallback.pinned || options?.pinFallback === true;
 		}
 		await this.#host.syncAfterModelChange(previousEditMode);
+		if (options?.signal?.aborted || generation !== this.#fallbackGeneration) {
+			// Cancellation or an explicit model change landed while the post-swap
+			// synchronization awaited. Roll back only what this apply still owns:
+			// a generation change means a newer explicit selection owns the model,
+			// and reinstating the old fallback there would overwrite the user's
+			// choice, so leave that newer state untouched.
+			if (
+				options?.signal?.aborted &&
+				generation === this.#fallbackGeneration &&
+				previousModel !== undefined &&
+				this.#host.model() === candidate
+			) {
+				this.#fallbackRoutedFor = routedBeforeSwap;
+				if (this.#activeRetryFallback) {
+					if (activeFallbackBefore) {
+						this.#activeRetryFallback.served = servedBeforeSwap;
+						this.#activeRetryFallback.lastAppliedFallbackThinkingLevel =
+							activeFallbackBefore.lastAppliedFallbackThinkingLevel;
+						this.#activeRetryFallback.pinned = activeFallbackBefore.pinned;
+					} else {
+						this.#activeRetryFallback = undefined;
+					}
+				}
+				this.#host.setThinkingLevel(currentThinkingLevel);
+				if (leafBeforeAppend !== null && this.#host.sessionManager.getLeafId() !== leafBeforeAppend) {
+					this.#host.sessionManager.rewindLeafTo(leafBeforeAppend);
+				}
+				await this.#host.setModelWithProviderSessionReset(previousModel);
+			}
+			return false;
+		}
 		await this.#host.emitSessionEvent({
 			type: "retry_fallback_applied",
 			from: currentSelector,
