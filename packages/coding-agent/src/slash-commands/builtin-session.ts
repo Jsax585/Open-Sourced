@@ -19,6 +19,7 @@ import { theme } from "@oh-my-pi/pi-tui/theme";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { handleMcpAcp } from "./helpers/mcp";
 import { markdownFenceFor } from "../utils/markdown-fence";
+import { parseCommandArgs } from "../utils/command-args";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import {
 	describeRedeemOutcome,
@@ -614,17 +615,29 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "pane", description: "Open the fork in a new terminal pane" },
 			{ name: "window", description: "Open the fork in a new multiplexer window" },
 			{ name: "tab", description: "Alias for window" },
+			{ name: "--name", description: "Fork in this terminal with an explicit session title" },
 		],
 		subcommandOptional: true,
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
-			const args = command.args.trim();
+			const usageText = "Usage: /fork [pane|window|tab] or /fork --name <title>";
+			let args: string[];
+			try {
+				args = parseCommandArgs(command.args.trim(), { strict: true });
+			} catch {
+				clearSubmittedText(runtime);
+				runtime.ctx.showError(usageText);
+				return;
+			}
 			let placement: "pane" | "window" | undefined;
-			if (args) {
-				const [keyword, ...extra] = args.split(/\s+/);
-				if (extra.length > 0) {
+			let name: string | undefined;
+			const keyword = args[0];
+			if (keyword === "--name" && args.length === 2 && args[1]!.trim()) {
+				name = args[1];
+			} else if (args.length > 0) {
+				if (args.length !== 1) {
 					clearSubmittedText(runtime);
-					runtime.ctx.showError("Usage: /fork [pane|window|tab]");
+					runtime.ctx.showError(usageText);
 					return;
 				}
 				switch (keyword?.toLowerCase()) {
@@ -637,12 +650,13 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 						break;
 					default:
 						clearSubmittedText(runtime);
-						runtime.ctx.showError("Usage: /fork [pane|window|tab]");
+						runtime.ctx.showError(usageText);
 						return;
 				}
 			}
 			clearSubmittedText(runtime);
-			if (placement) await runtime.ctx.handleForkCommand(placement);
+			if (name !== undefined) await runtime.ctx.handleForkCommand(undefined, name);
+			else if (placement) await runtime.ctx.handleForkCommand(placement);
 			else await runtime.ctx.handleForkCommand();
 		},
 	},
