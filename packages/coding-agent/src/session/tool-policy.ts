@@ -1,5 +1,9 @@
-import { expandExecToolShorthand, normalizeToolNames, withPairedCheckpointRewind } from "../tools/builtin-names";
-import { HIDDEN_TOOLS } from "../tools/index";
+import {
+	HIDDEN_TOOL_NAMES,
+	expandExecToolShorthand,
+	normalizeToolNames,
+	withPairedCheckpointRewind,
+} from "../tools/builtin-names";
 
 import type { AgentDefinition } from "../task/types";
 
@@ -182,7 +186,17 @@ export class SessionToolPolicy {
 		// presentation-level `write` surfacing (xd:// transport upgrade,
 		// plan-mode augmentation) live-flag sessions keep — is intended: an
 		// active tool is executable, so the ceiling has to bound the surface.
-		if (this.#cliGrantSource === "journal" && this.cliGrant && !this.cliGrant.has(name) && !(name in HIDDEN_TOOLS)) {
+		// Mode-essential hidden tools (goal/think/yield) pass the durable ceiling:
+		// they carry no filesystem capability and mode entry filters its own tool
+		// out of the funnel without this. Membership via the leaf const (not the
+		// tools/index barrel: avoids a session→tools runtime edge and `in` also
+		// matches Object.prototype members).
+		if (
+			this.#cliGrantSource === "journal" &&
+			this.cliGrant &&
+			!this.cliGrant.has(name) &&
+			!(HIDDEN_TOOL_NAMES as readonly string[]).includes(name)
+		) {
 			return false;
 		}
 		if (this.#persona === null) return true;
