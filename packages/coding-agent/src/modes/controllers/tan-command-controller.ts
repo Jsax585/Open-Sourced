@@ -183,6 +183,7 @@ export class TanCommandController {
 								// marker so the clone's own spawns stay gated by
 								// `task.isolation.allowNested`.
 								isIsolated: session.isIsolated === true,
+								// `[]` is truthy and would make the child pick bindPreparedExtensions([])
 								// over a populated path fallback, so collapse an empty list to undefined.
 								preloadedPreparedExtensions: parentPreparedExtensions?.length
 									? parentPreparedExtensions

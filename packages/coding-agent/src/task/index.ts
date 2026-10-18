@@ -373,7 +373,18 @@ function planSpawns(
 	defaultAgent: string,
 	seanceAdvertised: boolean,
 ): SpawnPlan | string {
-	const params = repairTaskParams(rawParams as TaskParams);
+	let params = repairTaskParams(rawParams as TaskParams);
+	if (batchEnabled && Array.isArray(params.tasks) && params.tasks.length > 0 && params.isolated === false) {
+		// The batch shape carries isolation per item; a top-level `false` is the
+		// schema-aware no-op. Drop it here so the final spawn plan matches the
+		// speculative path, which reconstructs prefixes as `{ context, tasks }`
+		// and never sees the flag — otherwise `finalize()`/`adopt()` observe a
+		// canonical mismatch and abort already-started agents. Clone first:
+		// `repairTaskParams` returns its input by reference when nothing needs
+		// repair, and mutating the caller's args would corrupt transcript state.
+		params = { ...params };
+		delete params.isolated;
+	}
 	const error =
 		validateShapeParams(batchEnabled, params) ??
 		validateSpawnParams(params, batchEnabled) ??

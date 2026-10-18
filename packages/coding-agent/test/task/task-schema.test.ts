@@ -515,4 +515,37 @@ describe("nested isolation gating", () => {
 		const text = result.content.find(part => part.type === "text")?.text ?? "";
 		expect(text).toContain("Top-level `isolated` is not part of the batch shape.");
 	});
+
+	it("rejects per-item isolated:true in batch execute() inside an isolated session unless task.isolation.allowNested", async () => {
+		const batchArgs = {
+			context: "ctx",
+			tasks: [{ task: "x", solutionSpace: "probe", isolated: true }],
+		};
+		const batchSession = (allowNested: boolean) =>
+			({
+				...nestedSession(),
+				settings: Settings.isolated({
+					"task.isolation.enabled": true,
+					"task.batch": true,
+					"task.isolation.allowNested": allowNested,
+				}),
+			}) as unknown as ToolSession;
+
+		mockAgents([taskDefinition]);
+		const gated = await TaskTool.create(batchSession(false));
+		const gatedText = gated
+			.execute("tool-call", batchArgs)
+			.then(result => result.content.find(part => part.type === "text")?.text ?? "");
+		expect(await gatedText).toContain(
+			"Subagent isolated execution inside an already-isolated agent requires task.isolation.allowNested to be enabled.",
+		);
+
+		mockAgents([taskDefinition]);
+		const open = await TaskTool.create(batchSession(true));
+		const openResult = await open.execute("tool-call", batchArgs);
+		const openText = openResult.content.find(part => part.type === "text")?.text ?? "";
+		// The nested-isolation preflight passes; execution then fails later on
+		// worktree setup (`/tmp` is not a git repository) rather than on the gate.
+		expect(openText).toContain("Git");
+	});
 });

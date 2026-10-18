@@ -210,6 +210,28 @@ describe("task speculative launch", () => {
 		expect([...startedIds]).toEqual(["Alpha"]);
 	});
 
+	it("keeps launched agents when the finished call only adds top-level isolated: false", async () => {
+		const { tool, manager, session } = await openSession();
+		session.update(toolCall, alphaClosed);
+		await spawn("Alpha").started.promise;
+
+		const withNoop = { ...args, isolated: false };
+		expect(session.matchesFinalArgs(withNoop)).toBe(true);
+		session.finalize({ toolCall, args: withNoop });
+		await spawn("Beta").started.promise;
+
+		const result = await tool.execute(toolCall.id, withNoop);
+
+		expect(executorModule.runSubprocess).toHaveBeenCalledTimes(2);
+		expect(result.details?.progress?.map(progress => progress.id)).toEqual(["Alpha", "Beta"]);
+		spawn("Alpha").release.resolve();
+		spawn("Beta").release.resolve();
+		await manager.getJob("Alpha")!.promise;
+		await manager.getJob("Beta")!.promise;
+		expect(manager.getJob("Alpha")!.status).toBe("completed");
+		expect(manager.getJob("Beta")!.status).toBe("completed");
+	});
+
 	it("aborts launched agents when finished items differ from what launched", async () => {
 		const { session } = await openSession();
 		session.update(toolCall, alphaClosed);

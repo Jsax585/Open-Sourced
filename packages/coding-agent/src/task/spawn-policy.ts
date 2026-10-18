@@ -92,12 +92,9 @@ export function isolationUnavailableReason(
 	if (session.isIsolated === true && cfgTaskIsolationAllowNested.get(session.settings) !== true) return "nested";
 	return undefined;
 }
+/** Whether isolation controls are offered: the single-predicate form of {@link isolationUnavailableReason}. */
 export function isIsolationAvailable(session: IsolationGateSession, planMode: boolean): boolean {
-	return (
-		!planMode &&
-		cfgTaskIsolationEnabled.get(session.settings) === true &&
-		(cfgTaskIsolationAllowNested.get(session.settings) === true || session.isIsolated !== true)
-	);
+	return isolationUnavailableReason(session, planMode) === undefined;
 }
 
 /**
