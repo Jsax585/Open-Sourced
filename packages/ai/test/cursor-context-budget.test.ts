@@ -162,13 +162,25 @@ it("asks the turn to wrap up once, on the first accepting result past the budget
 	expect(contexts.get(4)).toEqual([]);
 });
 
-it("leaves a turn alone when it opened past the budget", async () => {
-	// The host could not compact below its threshold before this turn; stopping
-	// it would stall the work without freeing anything.
+it("asks a turn whose first step already crossed the budget to wrap up", async () => {
+	// The turn opened below the budget (the host decides that before the
+	// request); its first checkpoint is past it and its first result cannot
+	// carry context, so the first accepting result must still get the notice.
 	const contexts = await runTurn([
-		[checkpointFrame(70_000), execReadFrame(1, true)],
+		[checkpointFrame(70_000), execReadFrame(1, false)],
 		[checkpointFrame(90_000), execReadFrame(2, true)],
 	]);
 
-	expect([...contexts.values()]).toEqual([[], []]);
+	expect(contexts.get(1)).toEqual([]);
+	expect(contexts.get(2)).toEqual([expect.stringContaining("90000")]);
+});
+
+it("waits until the conversation is past the budget, like the host's compaction check", async () => {
+	const contexts = await runTurn([
+		[checkpointFrame(BUDGET_TOKENS), execReadFrame(1, true)],
+		[checkpointFrame(BUDGET_TOKENS + 1), execReadFrame(2, true)],
+	]);
+
+	expect(contexts.get(1)).toEqual([]);
+	expect(contexts.get(2)).toEqual([expect.stringContaining(String(BUDGET_TOKENS + 1))]);
 });
