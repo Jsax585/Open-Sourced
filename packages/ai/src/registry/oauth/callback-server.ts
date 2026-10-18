@@ -74,10 +74,22 @@ function serializeCallbackState(state: unknown): string {
  * {@link isAddressInUse} cannot distinguish from a real collision — Bun reuses
  * its "Is port X in use?" message for every listen failure (oven-sh/bun#7187) —
  * so the dual-bind path must be skipped up front rather than misread as a
- * conflict (issue #8814).
+ * conflict (issue #8814). Denied interface enumeration (Android/Termux, issue
+ * #16127) proves nothing about IPv6, and a `localhost` redirect may still
+ * resolve to `::1`, so that case probes `::1` with an ephemeral bind instead.
  */
 function ipv6LoopbackAvailable(): boolean {
-	const interfaces = os.networkInterfaces();
+	let interfaces;
+	try {
+		interfaces = os.networkInterfaces();
+	} catch {
+		try {
+			Bun.serve({ hostname: IPV6_LOOPBACK, port: 0, fetch: () => new Response(null, { status: 404 }) }).stop(true);
+			return true;
+		} catch {
+			return false;
+		}
+	}
 	for (const name in interfaces) {
 		const addresses = interfaces[name];
 		if (!addresses) continue;
