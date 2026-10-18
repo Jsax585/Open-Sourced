@@ -32,6 +32,7 @@
 - Fixed reading `proc://<id>/kill` or `proc://<id>/mode` answering only "writable only", so agents often moved on with the job still running; the error now names the `write` call that cancels the job or sets the mode, with the real id ([#16580](https://github.com/can1357/oh-my-pi/pull/16580) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed `history://<id>` failing with "has no transcript: session is gone" for a worker that is still running but has not created its session or transcript file yet; it now answers "No transcript has been written yet". ([#16645](https://github.com/can1357/oh-my-pi/pull/16645) by [@Komzpa](https://github.com/Komzpa))
 - Fixed the `eval` tool telling sessions with only the Python runtime to call `tool.<name>(args)` without `await`, which returns a coroutine and never runs the tool ([#16578](https://github.com/can1357/oh-my-pi/pull/16578) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed agents on models that send one tool call per response, namely ChatGPT-login Codex models with `PI_CODEX_RESPONSES_LITE=1` and Devin models that do not report parallel tool calls, being told to always send `todo` beside another call; they now skip the redundant `start` after a `done` instead of spending a turn on it ([#16231](https://github.com/can1357/oh-my-pi/pull/16231) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.12.6] - 2026-10-21
 
@@ -228,9 +229,6 @@
 
 - Fixed repeated status commands such as `/goal show` showing nothing after the first few times in a native terminal when the text had not changed
 - Fixed browser relay tabs that a browser already had open when its extension connected staying invisible to omp until they changed; opening such a tab by `app.target` could fail with "Selected tab did not become available before omp could attach"
-- Fixed agents on models that send one tool call per response, such as ChatGPT-login GPT-6.1 Sol, being told to always send `todo` beside another call; they now skip `start` updates instead of spending a turn on each
-- Fixed agents on models that send one tool call per response, such as ChatGPT-login GPT-6.1 Sol, being told to always send `todo` beside another call; they now skip `start` updates instead of spending a turn on each ([#16231](https://github.com/can1357/oh-my-pi/pull/16231) by [@will-bogusz](https://github.com/will-bogusz))
-- Fixed agents on models that send one tool call per response, such as ChatGPT-login GPT-6.1 Sol, being told to always send `todo` beside another call; they now skip the redundant `start` after a `done` instead of spending a turn on it ([#16231](https://github.com/can1357/oh-my-pi/pull/16231) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed Ollama Cloud sessions compacting too early on stripped thinking or too late after switching from another model ([#16164](https://github.com/can1357/oh-my-pi/issues/16164))
 - Fixed Google sign-in rejecting the `/login perplexity` SSO browser window with "This browser or app may not be secure"; the sign-in browser no longer runs in automation mode ([#16141](https://github.com/can1357/oh-my-pi/issues/16141))
 - Fixed `task.softRequestBudget` never stopping Cursor subagents ([#16182](https://github.com/can1357/oh-my-pi/pull/16182) by [@joseotaviorf](https://github.com/joseotaviorf))
