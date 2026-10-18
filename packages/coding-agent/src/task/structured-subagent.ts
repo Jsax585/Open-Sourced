@@ -38,6 +38,7 @@ import { type ExecutorOptions, runSubprocess, type SubagentToolResult } from "./
 import {
 	applyEligibleNestedPatches,
 	type IsolationContext,
+	type IsolationFollowUps,
 	makeIsolationCommitMessage,
 	mergeIsolatedChanges,
 	persistNestedPatches,
@@ -755,6 +756,36 @@ async function isolationRecoveryHint(result: SingleResult, artifactsDir: string)
 }
 
 /**
+ * Merge an isolated run's captured changes into the parent repo, then apply
+ * its nested-repo patches. `nestedFailed` reports that nested patches were
+ * captured but not all applied, so their files must survive cleanup.
+ */
+async function landCapturedChanges(
+	result: SingleResult,
+	repoRoot: string,
+	mergeMode: "patch" | "branch",
+	session: ToolSession,
+): Promise<{ summary: string; changesApplied: boolean | null; nestedFailed: boolean }> {
+	const outcome = await mergeIsolatedChanges({ result, repoRoot, mergeMode });
+	if (outcome.changesApplied === false) {
+		return { summary: outcome.summary, changesApplied: false, nestedFailed: false };
+	}
+	const nestedPatchSummary = await applyEligibleNestedPatches({
+		result,
+		repoRoot,
+		mergeMode,
+		changesApplied: outcome.changesApplied,
+		mergedBranchForNestedPatches: outcome.mergedBranchForNestedPatches,
+		commitMessage: makeIsolationCommitMessage(session)(),
+	});
+	return {
+		summary: outcome.summary + nestedPatchSummary,
+		changesApplied: outcome.changesApplied,
+		nestedFailed: nestedPatchSummary.includes("<system-notification>") && (result.nestedPatches?.length ?? 0) > 0,
+	};
+}
+
+/**
  * Summary for an isolated run whose changes are captured but deliberately not
  * applied (`task.isolation.apply=false`). Every captured artifact is named:
  * the root patch only when it holds changes, and each nested-repo patch file,
@@ -836,6 +867,9 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 	// failure must carry the exit status and artifact the child produced.
 	let settled: SingleResult | undefined;
 	let retainSalvagedArtifact = false;
+	// Follow-up turns of an isolated agent wait on this before their capture, so
+	// they never race the first run's landing below.
+	const firstRunLanding = Promise.withResolvers<boolean>();
 	const onSubprocessResult =
 		request.invocationKind === "eval"
 			? (result: SingleResult) => request.session.recordEvalSubagentUsage?.(result.usage?.output ?? 0)
@@ -880,6 +914,17 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 				result = await runSubprocess(baseOptions);
 				onSubprocessResult?.(result);
 			} else {
+				const repoRoot = isolationContext.repoRoot;
+				const followUps: IsolationFollowUps = {
+					firstRunLanded: firstRunLanding.promise,
+					land: async captured => {
+						if (!policy.applyChanges) {
+							return { summary: describeCapturedChanges(captured), landed: false };
+						}
+						const landing = await landCapturedChanges(captured, repoRoot, policy.mergeMode, request.session);
+						return { summary: landing.summary, landed: landing.changesApplied === true };
+					},
+				};
 				result = await runIsolatedSubprocess({
 					baseOptions,
 					context: isolationContext,
@@ -891,6 +936,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 					buildCommitMessage: makeIsolationCommitMessage(request.session),
 					buildFailureResult: buildFailureResult(request, policy, id, Date.now()),
 					onSubprocessResult,
+					followUps,
 				});
 			}
 		} finally {
@@ -912,26 +958,15 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			!result.error &&
 			!result.aborted
 		) {
-			const outcome = await mergeIsolatedChanges({
+			const landing = await landCapturedChanges(
 				result,
-				repoRoot: isolationContext.repoRoot,
-				mergeMode: policy.mergeMode,
-			});
-			mergeSummary = outcome.summary;
-			changesApplied = outcome.changesApplied;
-			if (outcome.changesApplied !== false) {
-				const nestedPatchSummary = await applyEligibleNestedPatches({
-					result,
-					repoRoot: isolationContext.repoRoot,
-					mergeMode: policy.mergeMode,
-					changesApplied: outcome.changesApplied,
-					mergedBranchForNestedPatches: outcome.mergedBranchForNestedPatches,
-					commitMessage: makeIsolationCommitMessage(request.session)(),
-				});
-				mergeSummary += nestedPatchSummary;
-				requiresRecoveryArtifacts ||=
-					nestedPatchSummary.includes("<system-notification>") && (result.nestedPatches?.length ?? 0) > 0;
-			}
+				isolationContext.repoRoot,
+				policy.mergeMode,
+				request.session,
+			);
+			mergeSummary = landing.summary;
+			changesApplied = landing.changesApplied;
+			requiresRecoveryArtifacts ||= landing.nestedFailed;
 		} else if (policy.isIsolated && isolationContext && result.exitCode === 0 && result.error && !result.aborted) {
 			// The agent finished but the runner could not capture, persist, or
 			// commit its changes. `result.error` names the recovery route (retained
@@ -967,6 +1002,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			{ cause: error, result: settled },
 		);
 	} finally {
+		firstRunLanding.resolve(changesApplied === true);
 		const shouldRetainArtifacts =
 			request.detached === true ||
 			retainSalvagedArtifact ||

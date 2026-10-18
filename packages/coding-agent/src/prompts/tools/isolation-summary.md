@@ -79,3 +79,7 @@ Nested repository patches (not applied):
 {{#list nestedPatchPaths prefix="- "}}{{this}}{{/list}}
 {{/if}}
 {{/when}}
+{{#when kind "==" "follow-up-pending"}}
+<system-notification>Isolation: this turn's changes were not captured: {{error}}
+They stay in the isolated workspace and are committed to branch {{branchName}} when the agent is released.</system-notification>
+{{/when}}

@@ -601,6 +601,12 @@ export interface ExecutorOptions {
 	onCleanupDeferred?: (completion: Promise<void>) => void;
 	/** Releases resources retained for a kept-alive agent when its lifecycle ends. */
 	onRelease?: () => Promise<void>;
+	/**
+	 * Runs after each follow-up turn of a kept-alive agent (an IRC wake or a
+	 * user prompt) is finalized, before anyone is told the turn's outcome; the
+	 * returned text is appended to what they are told.
+	 */
+	onFollowUpTurnSettled?: (result: SingleResult) => Promise<string>;
 	/** Internal cleanup grace override for deterministic lifecycle tests. */
 	cleanupGraceMs?: number;
 }
@@ -3050,6 +3056,8 @@ export interface IrcWakeTurnMonitorOptions {
 	outputSchemaMode?: StructuredSubagentSchemaMode;
 	outputSchemaSource?: StructuredSubagentSchemaSource;
 	artifactsDir?: string;
+	/** See {@link ExecutorOptions.onFollowUpTurnSettled}. */
+	onTurnSettled?: (result: SingleResult) => Promise<string>;
 }
 
 /** Sender + message id of one `irc:incoming` record that woke a turn. */
@@ -3103,6 +3111,8 @@ async function relayWakeTurnOutput(args: {
 	finalizeError: unknown;
 	/** Waker already receiving this turn's outcome as an async job delivery. */
 	jobOwnerId: string | undefined;
+	/** Appended to every relay: what became of the turn's changes (see {@link IrcWakeTurnMonitorOptions.onTurnSettled}). */
+	notice: string;
 }): Promise<void> {
 	const bus = IrcBus.global();
 	const sources = wakeSources(args.records, args.id);
@@ -3117,8 +3127,12 @@ async function relayWakeTurnOutput(args: {
 		// "pinged you 'on it'", and suppressing the failure notice on a mere ping
 		// strands the waker exactly as before — one message later. So the failure
 		// lane always notifies, flavoured to acknowledge the earlier message.
-		if (alreadyMessaged && !failed) continue;
-		const body = buildWakeRelayBody({ ...args, alreadyMessaged });
+		// The agent's own message may already have answered, but not said
+		// where its changes went; the notice still has to reach the waker.
+		const body =
+			alreadyMessaged && !failed
+				? args.notice.trim()
+				: `${buildWakeRelayBody({ ...args, alreadyMessaged })}${args.notice}`;
 		if (!body) continue;
 		const receipt = await bus.send({
 			from: args.id,
@@ -3452,8 +3466,24 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				// enqueue its delivery without reserving an execution slot.
 				const messageResult =
 					(userPrompted || ownerPrompted) && options.structured === false && result?.outputPath !== undefined;
+				// What became of the turn's changes is part of its outcome, so it is
+				// settled before anyone is told the turn ended, and only for a turn
+				// whose outcome reaches the owner: a change to the owner's checkout
+				// must not land behind its back.
+				const ownerTold = wakeJob !== undefined || (messageResult && !!ownerId && !!session.asyncJobManager);
+				let notice = "";
+				if (result && options.onTurnSettled && ownerTold) {
+					try {
+						notice = await options.onTurnSettled(result);
+					} catch (error) {
+						logger.warn("Follow-up turn settle hook failed", {
+							id,
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
+				}
 				if (messageResult && !wakeJob && ownerId && session.asyncJobManager && result) {
-					const text = formatTaskResultSummary(result, { totalDurationMs: result.durationMs });
+					const text = `${formatTaskResultSummary(result, { totalDurationMs: result.durationMs })}${notice}`;
 					try {
 						session.asyncJobManager.publishCompleted("task", id, { text }, { id, agentId: id, ownerId });
 					} catch (error) {
@@ -3468,7 +3498,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				// superseded it, or, for a turn that never yielded, the answer a
 				// relay would have carried.
 				if (wakeJob && (yielded || messageResult) && result) {
-					const text = formatTaskResultSummary(result, { totalDurationMs: result.durationMs });
+					const text = `${formatTaskResultSummary(result, { totalDurationMs: result.durationMs })}${notice}`;
 					const structured = result.structuredOutput;
 					if (result.aborted || result.exitCode !== 0 || result.error !== undefined) {
 						wakeJob.outcome.reject(new AsyncJobError(text, structured));
@@ -3480,7 +3510,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					wakeJob.outcome.reject(new Error(`Wake turn of ${id} failed to finalize: ${message}`));
 				} else if (wakeJob) {
 					const outcome = { error: errorForPeer, aborted, finalizeError };
-					const text = buildWakeRelayBody({
+					const text = `${buildWakeRelayBody({
 						...outcome,
 						id,
 						yielded,
@@ -3488,7 +3518,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 						turnText,
 						abortReason,
 						alreadyMessaged: IrcBus.global().sentSince(id, wakeJob.ownerId, turnStartTime),
-					});
+					})}${notice}`;
 					if (wakeTurnFailed(outcome)) wakeJob.outcome.reject(new Error(text));
 					else wakeJob.outcome.resolve({ text });
 				}
@@ -3508,6 +3538,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 						abortReason,
 						finalizeError,
 						jobOwnerId: wakeJob?.ownerId,
+						notice,
 					});
 				} catch (relayError) {
 					logger.warn("IRC wake-turn relay threw", {
@@ -4352,6 +4383,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		outputSchemaMode: options.outputSchemaMode,
 		outputSchemaSource: options.outputSchemaSource,
 		artifactsDir: options.artifactsDir,
+		onTurnSettled: options.onFollowUpTurnSettled,
 	};
 
 	const runSubagent = async (): Promise<{

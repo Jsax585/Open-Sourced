@@ -226,7 +226,8 @@ describe("task spawn routing", () => {
 
 	for (const { label, runnerOverrides, expectRetained } of [
 		{
-			label: "tells the parent an isolated agent cannot be messaged instead of calling it idle",
+			// Follow-up turns of a healthy isolated agent land like its first run.
+			label: "tells the parent a finished isolated agent can be messaged",
 			runnerOverrides: {},
 			expectRetained: false,
 		},
@@ -272,11 +273,15 @@ describe("task spawn routing", () => {
 			await job!.promise;
 
 			const delivered = `${job!.resultText ?? ""}${job!.errorText ?? ""}`;
-			expect(delivered).toContain("Sandboxed ran isolated and cannot be resumed or messaged");
 			expect(delivered).toContain("history://Sandboxed");
-			expect(delivered).not.toContain("is now idle");
-			expect(delivered).not.toContain("message it via");
 			expect(delivered).not.toContain("removed");
+			if (expectRetained) {
+				expect(delivered).toContain("Sandboxed ran isolated and cannot be resumed or messaged");
+				expect(delivered).not.toContain("message it via");
+			} else {
+				expect(delivered).toContain("Sandboxed is now idle");
+				expect(delivered).toContain("message it via `write agent://Sandboxed`");
+			}
 			if (expectRetained) {
 				expect(job!.status).toBe("failed");
 				expect(delivered).toContain("Isolation workspace retained at /wt/sandboxed/m");

@@ -41,11 +41,16 @@ import {
 	cleanupIsolation,
 	cleanupTaskBranches,
 	type CommitToBranchResult,
+	commitDeltaToBranch,
 	commitToBranch,
+	type DeltaPatchResult,
+	diffIsolationStates,
 	ensureIsolation,
 	getRepoRoot,
 	type IsolationHandle,
+	type IsolationState,
 	mergeTaskBranches,
+	sameIsolationState,
 	type WorktreeBaseline,
 } from "./worktree";
 
@@ -61,7 +66,8 @@ export type IsolationSummaryKind =
 	| "not-applied"
 	| "branch-merge-failed"
 	| "branch-capture-failed"
-	| "merge-error";
+	| "merge-error"
+	| "follow-up-pending";
 
 /** Context for `isolation-summary.md`; unused fields are simply absent. */
 export interface IsolationSummaryContext {
@@ -146,13 +152,6 @@ export async function prepareIsolationContext(cwd: string): Promise<IsolationCon
 	return { repoRoot: await getRepoRoot(cwd) };
 }
 
-/** Fingerprint of a captured delta, used to skip re-committing an unchanged workspace on release. */
-function deltaFingerprint(rootPatch: string, nestedPatches: readonly NestedRepoPatch[]): bigint | number {
-	let key = rootPatch;
-	for (const { relativePath, patch } of nestedPatches) key += `\0${relativePath}\0${patch}`;
-	return Bun.hash(key);
-}
-
 /** Build a commit-message callback for branch/nested commits; `undefined` ⇒ fall back to generic message. */
 export type BuildCommitMessage = () => undefined | ((diff: string) => Promise<string | null>);
 
@@ -176,6 +175,28 @@ export function makeIsolationCommitMessage(session: ToolSession): BuildCommitMes
 		const sessionId = session.getSessionId?.() ?? undefined;
 		return async (diff: string) => generateCommitMessage(diff, registry, settings, sessionId);
 	};
+}
+
+/**
+ * How the caller lands a kept-alive isolated agent's follow-up turns (IRC
+ * messages, user prompts), so their changes reach the parent the way the first
+ * run's did instead of waiting in the workspace until release.
+ */
+export interface IsolationFollowUps {
+	/**
+	 * Settles once the caller has landed (`true`) or given up on (`false`) the
+	 * first run's changes. Follow-up captures wait for it, so they never race
+	 * that landing.
+	 */
+	readonly firstRunLanded: Promise<boolean>;
+	/**
+	 * Land one follow-up turn's captured changes. `summary` is appended to that
+	 * turn's result. `landed: false` keeps them pending: the next capture carries
+	 * them again. As for a first run, nested-repo patches that fail to apply
+	 * after the root changes landed are reported in `summary` and not retried;
+	 * each capture writes them to files of its own, so none is overwritten.
+	 */
+	land(captured: SingleResult): Promise<{ summary: string; landed: boolean }>;
 }
 
 export interface IsolatedRunOptions {
@@ -208,6 +229,8 @@ export interface IsolatedRunOptions {
 	buildFailureResult: (err: unknown) => SingleResult;
 	/** Observe the real child result before post-run isolation work. */
 	onSubprocessResult?: (result: SingleResult) => void;
+	/** Lands follow-up turns of a kept-alive run; absent ⇒ their changes are captured only on release. */
+	followUps?: IsolationFollowUps;
 }
 
 /**
@@ -253,14 +276,42 @@ interface IsolationPatchArtifacts {
 
 interface IsolationPatchCapture {
 	artifacts: IsolationPatchArtifacts;
-	/** {@link deltaFingerprint} of the written delta. */
-	fingerprint: bigint | number;
+	/** The capture the files were written from. */
+	state: IsolationState;
+}
+
+/** One capture handed to the caller: its artifacts, the state it saw, and its task branch tip (branch mode). */
+interface IsolationHandoff {
+	artifacts: Partial<SingleResult>;
+	state: IsolationState;
+	tip: string | undefined;
 }
 
 /**
- * Capture the isolation delta and write every part of it to disk — the root
- * patch and one file per nested repo — before the caller tears the workspace
- * down. Throws when any write fails so nothing captured is ever the only copy.
+ * Write a captured delta to disk: the root patch, and one file per nested repo
+ * named after `nestedPatchPrefix`. Throws when any write fails so nothing
+ * captured is ever the only copy.
+ */
+async function writeDeltaPatches(
+	delta: DeltaPatchResult,
+	artifactsDir: string,
+	agentId: string,
+	nestedPatchPrefix: string,
+): Promise<IsolationPatchArtifacts> {
+	const patchPath = path.join(artifactsDir, `${agentId}.patch`);
+	await Bun.write(patchPath, delta.rootPatch);
+	const nestedPatchPaths = await persistNestedPatches(artifactsDir, nestedPatchPrefix, delta.nestedPatches);
+	return {
+		patchPath,
+		hasRootChanges: delta.rootPatch.trim().length > 0,
+		nestedPatches: delta.nestedPatches,
+		nestedPatchPaths,
+	};
+}
+
+/**
+ * Capture the isolation delta and write every part of it to disk before the
+ * caller tears the workspace down (see {@link writeDeltaPatches}).
  */
 async function writeIsolationPatch(
 	isolationDir: string,
@@ -269,18 +320,7 @@ async function writeIsolationPatch(
 	agentId: string,
 ): Promise<IsolationPatchCapture> {
 	const delta = await captureDeltaPatch(isolationDir, baseline);
-	const patchPath = path.join(artifactsDir, `${agentId}.patch`);
-	await Bun.write(patchPath, delta.rootPatch);
-	const nestedPatchPaths = await persistNestedPatches(artifactsDir, agentId, delta.nestedPatches);
-	return {
-		artifacts: {
-			patchPath,
-			hasRootChanges: delta.rootPatch.trim().length > 0,
-			nestedPatches: delta.nestedPatches,
-			nestedPatchPaths,
-		},
-		fingerprint: deltaFingerprint(delta.rootPatch, delta.nestedPatches),
-	};
+	return { artifacts: await writeDeltaPatches(delta, artifactsDir, agentId, agentId), state: delta.state };
 }
 
 /**
@@ -375,15 +415,38 @@ function renderIsolationError(context: IsolationErrorContext): string {
  * itself routes through {@link IsolatedRunOptions.buildFailureResult}.
  *
  * Kept-alive runs retain the isolation handle through idle/parked lifecycle
- * transitions, then capture final changes and clean up on release. One-shot
- * and failed startup paths clean up in `finally`. If captured changes cannot
- * be written to disk, the workspace is retained under a unique `.retained-*`
- * sibling and its path is named in the resulting error.
+ * transitions, then capture final changes and clean up on release. With
+ * {@link IsolatedRunOptions.followUps}, each successful follow-up turn is also
+ * captured as it ends and handed to the caller to land, relative to the last
+ * landed state so landed work is never handed over twice. One-shot and failed
+ * startup paths clean up in `finally`. If captured changes cannot be written
+ * to disk, the workspace is retained under a unique `.retained-*` sibling and
+ * its path is named in the resulting error.
  */
 export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<SingleResult> {
 	let taskBaseline: WorktreeBaseline | undefined;
-	/** Fingerprint of the delta already handed to the caller at run end; release only re-captures on change. */
-	let handedOff: bigint | number | undefined;
+	/** The last capture handed to the caller; a capture that matches it has nothing new. */
+	let handedOff: IsolationState | undefined;
+	/**
+	 * The last capture the caller landed, and in branch mode the parent-repo
+	 * commit holding it. Once set, captures carry only what changed since.
+	 */
+	let landed: { state: IsolationState; tip: string | undefined } | undefined;
+	/** The last handed-off capture while the caller is still landing it. */
+	let pending: { state: IsolationState; tip: string | undefined; landing: Promise<boolean> } | undefined;
+	// Settles once this function is done with the first run. Follow-up turns
+	// wait for it, so they never capture before the first run's handoff.
+	const firstRunDone = Promise.withResolvers<void>();
+	/** Set while the first run's capture runs, so a release waits for it instead of tearing the workspace down. */
+	let firstRunCapturing = false;
+	// Follow-up captures and the release capture read and move the same
+	// handoff state, so they run one at a time.
+	let captureQueue: Promise<unknown> = Promise.resolve();
+	const serialize = <T>(work: () => Promise<T>): Promise<T> => {
+		const run = captureQueue.then(work);
+		captureQueue = run.catch(() => undefined);
+		return run;
+	};
 	let handle: IsolationHandle | undefined;
 	let deferredCleanup: Promise<void> | undefined;
 	let retainWorkspace = false;
@@ -401,16 +464,140 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		})();
 		return cleanupPromise;
 	};
+	/**
+	 * Fold the pending handoff into {@link landed} once the caller reports it.
+	 * Work the caller did not land stays out, so the next capture carries it
+	 * again.
+	 */
+	const settlePending = async (): Promise<void> => {
+		const settled = pending;
+		pending = undefined;
+		if (!settled || !(await settled.landing)) return;
+		// A capture with no root changes made no branch: the previous tip still holds everything.
+		landed = { state: settled.state, tip: settled.tip ?? landed?.tip };
+	};
+	/** Nested-repo patch file prefix for a capture after the first run's, so no capture overwrites another's files. */
+	let laterCaptures = 0;
+	const nextNestedPatchPrefix = (): string => `${opts.agentId}.${++laterCaptures}`;
+	/**
+	 * Capture the workspace for the caller: the work since the last landed
+	 * capture, or since the run began while nothing has landed. `undefined`
+	 * when nothing changed since the last handoff.
+	 */
+	const captureHandoff = async (
+		isolationDir: string,
+		baseline: WorktreeBaseline,
+		commitMessage: ((diff: string) => Promise<string | null>) | undefined,
+	): Promise<IsolationHandoff | undefined> => {
+		const current = await captureDeltaPatch(isolationDir, baseline);
+		if (handedOff && sameIsolationState(handedOff, current.state)) return undefined;
+		const delta = landed ? await diffIsolationStates(baseline, landed.state, current.state) : current;
+		if (!delta.rootPatch.trim() && delta.nestedPatches.length === 0) {
+			handedOff = current.state;
+			return undefined;
+		}
+		if (opts.mergeMode === "patch") {
+			const artifacts = await writeDeltaPatches(delta, opts.artifactsDir, opts.agentId, nextNestedPatchPrefix());
+			handedOff = current.state;
+			return { artifacts, state: current.state, tip: undefined };
+		}
+		// With nothing landed yet the branch carries the agent's own commits,
+		// like the first run's; `commitToBranch` reads the workspace itself.
+		const branch = landed
+			? await commitDeltaToBranch(
+					isolationDir,
+					baseline,
+					opts.agentId,
+					landed.tip ?? baseline.root.headCommit,
+					delta,
+					landed.state.head,
+					opts.description,
+					commitMessage,
+				)
+			: await commitToBranch(isolationDir, baseline, opts.agentId, opts.description, commitMessage);
+		// `commitToBranch` found nothing in its own read: hand nothing over and look again next turn.
+		if (!branch) return undefined;
+		const nestedPatchPaths = await persistNestedPatches(
+			opts.artifactsDir,
+			nextNestedPatchPrefix(),
+			branch.nestedPatches,
+		);
+		handedOff = branch.state;
+		return {
+			artifacts: {
+				branchName: branch.branchName,
+				branchBaseSha: branch.baseSha,
+				nestedPatches: branch.nestedPatches,
+				nestedPatchPaths,
+			},
+			state: branch.state,
+			tip: branch.headSha,
+		};
+	};
+	/** Capture a finished follow-up turn, have the caller land it, and return the text for that turn's result. */
+	const landFollowUpTurn = async (turn: SingleResult): Promise<string> => {
+		const followUps = opts.followUps;
+		if (!followUps || !handle || !taskBaseline || retainWorkspace || releasePromise) return "";
+		// Like a failed first run, a failed turn hands nothing over; its work
+		// rides along in the next capture.
+		if (turn.exitCode !== 0 || turn.error !== undefined || turn.aborted) return "";
+		await settlePending();
+		let handoff: IsolationHandoff | undefined;
+		try {
+			handoff = await captureHandoff(handle.mergedDir, taskBaseline, opts.buildCommitMessage?.());
+		} catch (error) {
+			return renderIsolationSummary({
+				kind: "follow-up-pending",
+				error: error instanceof Error ? error.message : String(error),
+				branchName: `omp/task/${opts.agentId}`,
+			});
+		}
+		if (!handoff) return "";
+		const captured = rememberAgentArtifacts({ ...turn, ...handoff.artifacts });
+		const landing = Promise.withResolvers<boolean>();
+		pending = { state: handoff.state, tip: handoff.tip, landing: landing.promise };
+		try {
+			const outcome = await followUps.land(captured);
+			landing.resolve(outcome.landed);
+			return outcome.summary;
+		} catch (error) {
+			landing.resolve(false);
+			return renderIsolationSummary({
+				kind: "merge-error",
+				error: error instanceof Error ? error.message : String(error),
+				branchName: captured.branchName,
+				rootPatchPath: captured.hasRootChanges === false ? undefined : captured.patchPath,
+				nestedPatchPaths: captured.nestedPatchPaths,
+			});
+		}
+	};
 	const releaseIsolation = (): Promise<void> => {
-		releasePromise ??= (async () => {
+		releasePromise ??= serialize(async () => {
+			if (firstRunCapturing) await firstRunDone.promise;
 			if (!handle || !taskBaseline || retainWorkspace) {
 				await cleanupHandle();
 				return;
 			}
 			try {
-				let capture: IsolationPatchCapture;
+				await settlePending();
+				let delta: DeltaPatchResult;
 				try {
-					capture = await writeIsolationPatch(handle.mergedDir, taskBaseline, opts.artifactsDir, opts.agentId);
+					const current = await captureDeltaPatch(handle.mergedDir, taskBaseline);
+					// Nothing changed since the last capture the caller got: new
+					// artifacts now would only duplicate that work.
+					if (handedOff && sameIsolationState(handedOff, current.state)) return;
+					delta = landed ? await diffIsolationStates(taskBaseline, landed.state, current.state) : current;
+					if (!delta.rootPatch.trim() && delta.nestedPatches.length === 0) return;
+					const patchResult = await writeDeltaPatches(
+						delta,
+						opts.artifactsDir,
+						opts.agentId,
+						nextNestedPatchPrefix(),
+					);
+					AgentRegistry.global().setHistory(opts.agentId, {
+						patchPath: patchResult.patchPath,
+						nestedPatchPaths: patchResult.nestedPatchPaths,
+					});
 				} catch (captureErr) {
 					retainWorkspace = true;
 					const retained = await retainIsolationWorkspace(handle.mergedDir, handle.backend);
@@ -423,31 +610,35 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 						}),
 					);
 				}
-				const patchResult = capture.artifacts;
-				AgentRegistry.global().setHistory(opts.agentId, {
-					patchPath: patchResult.patchPath,
-					nestedPatchPaths: patchResult.nestedPatchPaths,
-				});
-				// Nothing changed since the run-end capture the caller already
-				// merged or applied: a branch now would only duplicate that work.
-				if (capture.fingerprint === handedOff) return;
-				const commitResult = await commitToBranch(
-					handle.mergedDir,
-					taskBaseline,
-					opts.agentId,
-					opts.description,
-					undefined,
-				);
-				AgentRegistry.global().setHistory(opts.agentId, {
-					patchPath: patchResult.patchPath,
-					branchName: commitResult?.branchName,
-					nestedPatchPaths: patchResult.nestedPatchPaths,
-				});
+				// Branch mode lands on the last landed commit. Patch mode landed as
+				// uncommitted edits with no such commit, so its release branch is
+				// cumulative from the run's start, as it was before any landing.
+				const commitResult =
+					landed && opts.mergeMode === "branch"
+						? await commitDeltaToBranch(
+								handle.mergedDir,
+								taskBaseline,
+								opts.agentId,
+								landed.tip ?? taskBaseline.root.headCommit,
+								delta,
+								landed.state.head,
+								opts.description,
+							)
+						: await commitToBranch(handle.mergedDir, taskBaseline, opts.agentId, opts.description, undefined);
+				AgentRegistry.global().setHistory(opts.agentId, { branchName: commitResult?.branchName });
 			} finally {
 				await cleanupHandle();
 			}
-		})();
+		});
 		return releasePromise;
+	};
+	/** Record the first run's capture for follow-ups and release. */
+	const recordFirstRunHandoff = (state: IsolationState, tip: string | undefined): void => {
+		handedOff = state;
+		const followUps = opts.followUps;
+		if (followUps && opts.baseOptions.keepAlive !== false && AgentLifecycleManager.global().has(opts.agentId)) {
+			pending = { state, tip, landing: followUps.firstRunLanded };
+		}
 	};
 	try {
 		handle = await ensureIsolation(opts.context.repoRoot, opts.agentId, opts.preferredBackend);
@@ -471,7 +662,18 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			// below cleans it up. Only kept-alive runs hand full capture+cleanup
 			// (`releaseIsolation`) to the agent lifecycle.
 			onRelease: opts.baseOptions.keepAlive === false ? releaseBase : releaseIsolation,
+			onFollowUpTurnSettled:
+				opts.followUps && opts.baseOptions.keepAlive !== false
+					? async turn => {
+							// Wait outside the queue: the lifecycle may release this agent
+							// from inside `runSubprocess`, and that release must not queue
+							// behind a turn waiting for this function to finish.
+							await firstRunDone.promise;
+							return serialize(() => landFollowUpTurn(turn));
+						}
+					: undefined,
 		});
+		firstRunCapturing = true;
 		opts.onSubprocessResult?.(result);
 		// A successful result cannot be captured while deferred owner jobs or
 		// shutdown hooks may still write the worktree. Failed runs skip capture,
@@ -527,7 +729,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					});
 				}
 			}
-			handedOff = deltaFingerprint(commitResult?.rootPatch ?? "", commitResult?.nestedPatches ?? []);
+			if (commitResult) recordFirstRunHandoff(commitResult.state, commitResult.headSha);
 			// The branch holds the root-repo work, but nested-repo patches exist
 			// only in memory until written; the workspace goes away in `finally`.
 			try {
@@ -563,7 +765,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		if (result.exitCode === 0) {
 			try {
 				const capture = await writeIsolationPatch(isolationDir, baseline, opts.artifactsDir, opts.agentId);
-				handedOff = capture.fingerprint;
+				recordFirstRunHandoff(capture.state, undefined);
 				return rememberAgentArtifacts({ ...result, ...capture.artifacts });
 			} catch (patchErr) {
 				retainWorkspace = true;
@@ -583,6 +785,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	} catch (err) {
 		return rememberAgentArtifacts(opts.buildFailureResult(err));
 	} finally {
+		firstRunDone.resolve();
 		if (
 			handle &&
 			!retainWorkspace &&

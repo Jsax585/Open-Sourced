@@ -334,7 +334,31 @@ export async function captureIsolationBaseline(
 	};
 }
 
-async function captureRepoDeltaPatch(repoDir: string, rb: RepoBaseline, objectRepoDir = repoDir): Promise<string> {
+/** One repository at a capture: synthetic trees in its parent-side object store. */
+export interface RepoCaptureState {
+	/** Tree of the baseline the capture was diffed from. */
+	baseTree: string;
+	/** Tree of the repository as captured. */
+	tree: string;
+}
+
+/**
+ * An isolation as one capture saw it, so a later capture can hand over only
+ * what changed since (see {@link diffIsolationStates}).
+ */
+export interface IsolationState {
+	/** Isolation HEAD when captured. */
+	head: string;
+	root: RepoCaptureState;
+	/** Nested repositories by path relative to the root. */
+	nested: Record<string, RepoCaptureState>;
+}
+
+async function captureRepoState(
+	repoDir: string,
+	rb: RepoBaseline,
+	objectRepoDir = repoDir,
+): Promise<RepoCaptureState & { patch: string; head: string }> {
 	const repo = vcs.requireGit(repoDir);
 	const objectRepo = objectRepoDir === repoDir ? repo : vcs.requireGit(objectRepoDir);
 	const currentHead = (await repo.headSha()) ?? "";
@@ -357,7 +381,8 @@ async function captureRepoDeltaPatch(repoDir: string, rb: RepoBaseline, objectRe
 		currentUntrackedPatch,
 	]);
 
-	return diffTreeOrEmpty(objectRepo, baselineTree, currentTree);
+	const patch = await diffTreeOrEmpty(objectRepo, baselineTree, currentTree);
+	return { patch, baseTree: baselineTree, tree: currentTree, head: currentHead };
 }
 
 function unquoteGitDiffPath(rawPath: string): string {
@@ -396,6 +421,8 @@ function patchTouchedFiles(patch: string): string[] {
 export interface DeltaPatchResult {
 	rootPatch: string;
 	nestedPatches: NestedRepoPatch[];
+	/** The state the patches lead to. */
+	state: IsolationState;
 }
 
 async function hasGitEntry(dir: string): Promise<boolean> {
@@ -426,8 +453,13 @@ export async function captureDeltaPatch(isolationDir: string, baseline: Worktree
 		if (!(await hasGitEntry(isolatedDir))) continue;
 		await vcs.copyGitObjects(isolatedDir, (await hasGitEntry(sourceDir)) ? sourceDir : sourceRoot);
 	}
-	const rootPatch = await captureRepoDeltaPatch(isolationDir, baseline.root, baseline.root.repoRoot);
+	const {
+		patch: rootPatch,
+		head,
+		...root
+	} = await captureRepoState(isolationDir, baseline.root, baseline.root.repoRoot);
 	const nestedPatches: NestedRepoPatch[] = [];
+	const nested: Record<string, RepoCaptureState> = {};
 
 	for (const { relativePath, baseline: nb } of baseline.nested) {
 		const nestedDir = path.join(isolationDir, relativePath);
@@ -436,11 +468,45 @@ export async function captureDeltaPatch(isolationDir: string, baseline: Worktree
 		} catch {
 			continue;
 		}
-		const patch = await captureRepoDeltaPatch(nestedDir, nb, nb.repoRoot);
+		const { patch, baseTree, tree } = await captureRepoState(nestedDir, nb, nb.repoRoot);
+		nested[relativePath] = { baseTree, tree };
 		if (patch.trim()) nestedPatches.push({ relativePath, patch });
 	}
 
-	return { rootPatch, nestedPatches };
+	return { rootPatch, nestedPatches, state: { head, root, nested } };
+}
+
+/**
+ * The patches leading from capture `from` to the later capture `to` of the
+ * same isolation. A nested repository `from` did not see is diffed from its
+ * baseline. Throws when a tree is gone (a prune in the parent repo): an empty
+ * patch would read as "nothing changed" and the work would be dropped.
+ */
+export async function diffIsolationStates(
+	baseline: WorktreeBaseline,
+	from: IsolationState,
+	to: IsolationState,
+): Promise<DeltaPatchResult> {
+	const rootPatch = await vcs.requireGit(baseline.root.repoRoot).diffTree(from.root.tree, to.root.tree, true);
+	const nestedPatches: NestedRepoPatch[] = [];
+	for (const { relativePath, baseline: nb } of baseline.nested) {
+		const current = to.nested[relativePath];
+		if (!current) continue;
+		const previous = from.nested[relativePath]?.tree ?? current.baseTree;
+		const patch = await vcs.requireGit(nb.repoRoot).diffTree(previous, current.tree, true);
+		if (patch.trim()) nestedPatches.push({ relativePath, patch });
+	}
+	return { rootPatch, nestedPatches, state: to };
+}
+
+/** Whether two captures saw the same content in every repository. */
+export function sameIsolationState(a: IsolationState, b: IsolationState): boolean {
+	const nestedPaths = Object.keys(a.nested);
+	return (
+		a.root.tree === b.root.tree &&
+		nestedPaths.length === Object.keys(b.nested).length &&
+		nestedPaths.every(relativePath => a.nested[relativePath]?.tree === b.nested[relativePath]?.tree)
+	);
 }
 
 /**
@@ -731,6 +797,10 @@ export interface CommitToBranchResult {
 	 * and preserve every agent commit's message and author.
 	 */
 	baseSha?: string;
+	/** SHA the task branch points at, set whenever `branchName` is. */
+	headSha?: string;
+	/** The capture the branch was built from. */
+	state: IsolationState;
 }
 
 function baselineHasRootWip(baseline: RepoBaseline): boolean {
@@ -739,7 +809,7 @@ function baselineHasRootWip(baseline: RepoBaseline): boolean {
 
 /**
  * Baseline WIP context needed to safely apply a delta patch whose hunks were
- * captured against `HEAD + WIP` (see {@link captureRepoDeltaPatch}). Passed
+ * captured against `HEAD + WIP` (see {@link captureRepoState}). Passed
  * whenever {@link baselineHasRootWip} is true so {@link patchTree} can replay
  * the WIP first, then rewind WIP-only files after applying the delta.
  */
@@ -948,9 +1018,9 @@ export async function commitToBranch(
 	const isolationHead = (await isolationRepo.headSha()) ?? "";
 	const agentCommitted = isolationHead !== "" && isolationHead !== baselineSha;
 
-	const { rootPatch, nestedPatches } = await captureDeltaPatch(isolationDir, baseline);
+	const { rootPatch, nestedPatches, state } = await captureDeltaPatch(isolationDir, baseline);
 	if (!rootPatch.trim() && nestedPatches.length === 0) return null;
-	if (!rootPatch.trim()) return { rootPatch, nestedPatches };
+	if (!rootPatch.trim()) return { rootPatch, nestedPatches, state };
 
 	const repoRoot = baseline.root.repoRoot;
 	const repo = vcs.requireGit(repoRoot);
@@ -979,7 +1049,7 @@ export async function commitToBranch(
 		// Leftover = anything still uncommitted in isolation on top of the
 		// agent's last commit (staged, unstaged, untracked). The agent didn't
 		// commit it, so it goes in as one AI-summarized trailing commit.
-		const leftoverPatch = await captureRepoDeltaPatch(isolationDir, {
+		const { patch: leftoverPatch } = await captureRepoState(isolationDir, {
 			repoRoot: isolationDir,
 			headCommit: isolationHead,
 			staged: "",
@@ -997,9 +1067,53 @@ export async function commitToBranch(
 		tip = await commitPatch(repoRoot, baselineSha, taskId, rootPatch, msg, undefined, wip);
 	}
 
-	if (tip === baselineSha) return { rootPatch, baseSha: baselineSha, nestedPatches };
+	if (tip === baselineSha) return { rootPatch, baseSha: baselineSha, nestedPatches, state };
 	await repo.createBranch(branchName, tip, true);
-	return { branchName, baseSha: baselineSha, rootPatch, nestedPatches };
+	return { branchName, baseSha: baselineSha, headSha: tip, rootPatch, nestedPatches, state };
+}
+
+/**
+ * Commit a follow-up capture as one commit on top of `parentSha`, the
+ * parent-repo commit holding everything landed so far, and point
+ * `omp/task/${taskId}` at it.
+ *
+ * `delta` comes from {@link diffIsolationStates}, which compares whole
+ * workspace states, so it holds exactly the work since the last landed
+ * capture however the agent rearranged its own history: amends, resets, or
+ * commits of work the parent received uncommitted. Replaying the agent's
+ * commits cannot promise that. Agent commits made since `since` lend the
+ * commit their messages and their last author.
+ */
+export async function commitDeltaToBranch(
+	isolationDir: string,
+	baseline: WorktreeBaseline,
+	taskId: string,
+	parentSha: string,
+	delta: DeltaPatchResult,
+	since: string,
+	description: string | undefined,
+	commitMessage?: (diff: string) => Promise<string | null>,
+): Promise<CommitToBranchResult> {
+	const { rootPatch, nestedPatches, state } = delta;
+	if (!rootPatch.trim()) return { rootPatch, nestedPatches, state };
+	const isolationRepo = vcs.requireGit(isolationDir);
+	const agentCommits =
+		since && state.head && since !== state.head ? await isolationRepo.revListRange(since, state.head) : [];
+	const details = await Promise.all(agentCommits.map(sha => isolationRepo.commitDetails(sha)));
+	const message =
+		details
+			.map(detail => detail.message.trim())
+			.filter(Boolean)
+			.join("\n\n") ||
+		(commitMessage && (await commitMessage(rootPatch))) ||
+		description ||
+		taskId;
+	const repoRoot = baseline.root.repoRoot;
+	const wip = baselineHasRootWip(baseline.root) ? baseline.root : undefined;
+	const tip = await commitPatch(repoRoot, parentSha, taskId, rootPatch, message, details.at(-1)?.author, wip);
+	const branchName = `omp/task/${taskId}`;
+	await vcs.requireGit(repoRoot).createBranch(branchName, tip, true);
+	return { branchName, baseSha: parentSha, headSha: tip, rootPatch, nestedPatches, state };
 }
 
 export interface MergeBranchResult {
