@@ -83,6 +83,8 @@ const ORPHAN_GRACE_MS = 30_000;
 const KEEPALIVE_ALARM = "omp-relay-keepalive";
 const ORPHAN_SWEEP_ALARM = "omp-relay-orphan-sweep";
 const ORPHAN_SWEEP_DEADLINE_KEY = "ompOrphanSweepDeadlineMs";
+const REMOVE_TAB_ATTEMPTS = 3;
+const REMOVE_TAB_RETRY_MS = 500;
 
 let ws: WebSocket | null = null;
 // The socket on which a hello has actually reached the relay. An OPEN socket is
@@ -793,6 +795,23 @@ function post(msg: ExtToRelayMessage): void {
 	if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 
+/** Chrome can refuse a tab close for a moment (a tab being dragged, an unload in progress); try again before failing. */
+async function removeTab(tabId: number): Promise<void> {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			await chrome.tabs.remove(tabId);
+			return;
+		} catch (error) {
+			// Already closed: the close the relay asked for has happened.
+			if (/No tab with id/.test(String(error))) return;
+			if (attempt >= REMOVE_TAB_ATTEMPTS) throw error;
+			const pause = Promise.withResolvers<void>();
+			setTimeout(pause.resolve, REMOVE_TAB_RETRY_MS);
+			await pause.promise;
+		}
+	}
+}
+
 async function setBadge(connected: boolean): Promise<void> {
 	try {
 		await chrome.action.setBadgeText({ text: connected ? "on" : "off" });
@@ -1326,7 +1345,7 @@ async function runRpc(
 			return { tab: snap };
 		}
 		case "removeTab":
-			await chrome.tabs.remove(msg.tabId);
+			await removeTab(msg.tabId);
 			return {};
 		case "activateTab": {
 			const tab = await chrome.tabs.get(msg.tabId);

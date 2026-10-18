@@ -427,6 +427,8 @@ var ORPHAN_GRACE_MS = 30000;
 var KEEPALIVE_ALARM = "omp-relay-keepalive";
 var ORPHAN_SWEEP_ALARM = "omp-relay-orphan-sweep";
 var ORPHAN_SWEEP_DEADLINE_KEY = "ompOrphanSweepDeadlineMs";
+var REMOVE_TAB_ATTEMPTS = 3;
+var REMOVE_TAB_RETRY_MS = 500;
 var ws = null;
 var helloDeliveredSocket = null;
 var initializedRelayClearedOrphanSweep = false;
@@ -855,6 +857,22 @@ function post(msg) {
   if (ws?.readyState === WebSocket.OPEN)
     ws.send(JSON.stringify(msg));
 }
+async function removeTab(tabId) {
+  for (let attempt = 1;; attempt++) {
+    try {
+      await chrome.tabs.remove(tabId);
+      return;
+    } catch (error) {
+      if (/No tab with id/.test(String(error)))
+        return;
+      if (attempt >= REMOVE_TAB_ATTEMPTS)
+        throw error;
+      const pause = Promise.withResolvers();
+      setTimeout(pause.resolve, REMOVE_TAB_RETRY_MS);
+      await pause.promise;
+    }
+  }
+}
 async function setBadge(connected) {
   try {
     await chrome.action.setBadgeText({ text: connected ? "on" : "off" });
@@ -1095,7 +1113,7 @@ async function runRpc(msg, socket) {
       return { tab: snap };
     }
     case "removeTab":
-      await chrome.tabs.remove(msg.tabId);
+      await removeTab(msg.tabId);
       return {};
     case "activateTab": {
       const tab = await chrome.tabs.get(msg.tabId);
