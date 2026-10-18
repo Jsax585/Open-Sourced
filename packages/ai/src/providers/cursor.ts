@@ -5822,9 +5822,10 @@ function isAnsweredSteering(
 
 /**
  * The host's copies of a turn's absorbed steering: the user or developer
- * messages that follow the turn (past its tool results), one per absorbed
- * text, in delivery order. Undefined when they no longer match, e.g. after an
- * edit or removal, since the records would then replay the old text.
+ * messages that follow the turn (past its tool results and the passive context
+ * its tools reported), one per absorbed text, in delivery order. Undefined when
+ * they no longer match, e.g. after an edit or removal, since the records would
+ * then replay the old text.
  */
 function findSteeringCopies(
 	messages: Message[],
@@ -5835,13 +5836,23 @@ function findSteeringCopies(
 	const copies = new Set<number>();
 	let index = turnIndex + 1;
 	for (const text of answeredSteering) {
-		while (index < historyEnd && messages[index].role === "toolResult") index++;
+		while (index < historyEnd && precedesSteeringCopy(messages[index], text)) index++;
 		const copy = messages[index];
 		if (index >= historyEnd || (copy.role !== "user" && copy.role !== "developer")) return undefined;
 		if (extractUserMessageText(copy) !== text) return undefined;
 		copies.add(index++);
 	}
 	return copies;
+}
+
+/** What the host appends between a turn and its steering copies: tool results and passive tool context. */
+function precedesSteeringCopy(message: Message, steeringText: string): boolean {
+	if (message.role === "toolResult") return true;
+	return (
+		message.role === "developer" &&
+		message.attribution === "agent" &&
+		extractUserMessageText(message) !== steeringText
+	);
 }
 
 /**

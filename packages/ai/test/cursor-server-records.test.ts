@@ -414,6 +414,25 @@ describe("Cursor server records", () => {
 		expect(recordsWith(rebuilt.records, "use tabs")).toHaveLength(1);
 	});
 
+	it("matches absorbed steering past the passive context the turn's tools reported", async () => {
+		// The agent appends tool context after the results and before it records
+		// the steering; a rebuilt turn would send the answered steering again.
+		const [assistant, toolResult] = await steeredK3Turn(["use tabs"]);
+		const passiveContext: Message = {
+			role: "developer",
+			content: [{ type: "text", text: "lint config changed" }],
+			attribution: "agent",
+			timestamp: 2,
+		};
+		const history = [firstUser, assistant, toolResult, passiveContext, userText("use tabs"), secondUser];
+
+		const { ids, records } = await rootPromptIds(model("kimi-k3"), history);
+
+		expect(ids.slice(2, 2 + SPAN.length)).toEqual(SPAN_IDS);
+		expect(recordsWith(records, "use tabs")).toEqual([]);
+		expect(recordsWith(records, "lint config changed")).toHaveLength(1);
+	});
+
 	it("rebuilds a steered turn whose steering was edited after it was recorded", async () => {
 		// The records would still carry the old text alongside the edited copy.
 		const [assistant, toolResult] = await steeredK3Turn(["use tabs"]);
