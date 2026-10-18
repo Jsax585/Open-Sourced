@@ -19,6 +19,7 @@ import { webpExclusionForModel } from "@oh-my-pi/pi-tui/chat/image-loading";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { CONVERTIBLE_EXTENSIONS } from "../utils/markit";
 import { ensureTool } from "../utils/tools-manager";
+import { fetchWithDeepSeek, findDeepSeekApiKey } from "../web/deepseek";
 import { decodeBody } from "../web/response-body";
 import { findFirecrawlApiKey, scrapeWithFirecrawl } from "../web/firecrawl";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "../web/parallel";
@@ -535,7 +536,7 @@ async function parseFeedToMarkdown(content: string, maxItems = 10): Promise<stri
 }
 
 /**
- * Cap on any single remote reader-mode request (Parallel, Firecrawl, Jina) so a
+ * Cap on any single remote reader-mode request (Parallel, Firecrawl, DeepSeek, Jina) so a
  * stalled remote endpoint cannot consume the whole reader-mode budget and starve
  * the local fallback renderers (trafilatura, lynx, native). See #1449.
  */
@@ -574,7 +575,7 @@ function stripDataUriImages(markdown: string): string {
 }
 
 /** Reader backends for {@link renderHtmlToText}, in default priority order. */
-export type FetchProvider = "native" | "trafilatura" | "lynx" | "parallel" | "firecrawl" | "jina";
+export type FetchProvider = "native" | "trafilatura" | "lynx" | "parallel" | "firecrawl" | "deepseek" | "jina";
 
 const FETCH_PROVIDER_ORDER: readonly FetchProvider[] = [
 	"native",
@@ -582,12 +583,13 @@ const FETCH_PROVIDER_ORDER: readonly FetchProvider[] = [
 	"lynx",
 	"parallel",
 	"firecrawl",
+	"deepseek",
 	"jina",
 ];
 
 /**
  * Render HTML to markdown by trying reader backends in priority order: native
- * (in-process), trafilatura, lynx, Parallel, Firecrawl, then Jina. The
+ * (in-process), trafilatura, lynx, Parallel, Firecrawl, DeepSeek, then Jina. The
  * `providers.fetch` setting picks the order — `auto` uses the default above; any
  * specific backend is tried first, then the remaining backends as fallbacks.
  * Every backend's output must clear the same quality gate (>100 non-whitespace
@@ -595,7 +597,7 @@ const FETCH_PROVIDER_ORDER: readonly FetchProvider[] = [
  * next backend is tried.
  *
  * The overall `timeout` budget bounds the whole call; remote backends (Parallel,
- * Firecrawl, Jina) are additionally capped at `REMOTE_READER_MAX_MS` so a hung
+ * Firecrawl, DeepSeek, Jina) are additionally capped at `REMOTE_READER_MAX_MS` so a hung
  * endpoint cannot starve later renderers — especially the purely-local native
  * converter, which always works on already-loaded HTML. Only a real `userSignal`
  * cancellation aborts the chain (#1449).
@@ -658,6 +660,10 @@ export async function renderHtmlToText(
 		firecrawl: async () => {
 			if (!findFirecrawlApiKey(storage)) return null;
 			return scrapeWithFirecrawl(url, { signal: remoteSignal(), fetch: fetchImpl }, storage);
+		},
+		deepseek: async () => {
+			if (!findDeepSeekApiKey(storage)) return null;
+			return fetchWithDeepSeek(url, { signal: remoteSignal(), fetch: fetchImpl }, storage);
 		},
 		jina: async () => {
 			const apiKey = findCredential(storage, getEnvApiKey("jina"), "jina");
@@ -1488,7 +1494,7 @@ async function renderUrl(
 		}
 
 		// 5E: Render HTML via the reader-backend chain
-		// (native/trafilatura/lynx/parallel/firecrawl/jina)
+		// (native/trafilatura/lynx/parallel/firecrawl/deepseek/jina)
 		const htmlResult = await renderHtmlToText(
 			finalUrl,
 			rawContent,

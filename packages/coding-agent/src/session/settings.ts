@@ -1271,7 +1271,7 @@ export const cfgProvidersOpenrouterVariant = register({
 export const cfgProvidersFetch = register({
 	id: "providers.fetch",
 	type: "enum",
-	values: ["auto", "native", "trafilatura", "lynx", "parallel", "firecrawl", "jina"] as const,
+	values: ["auto", "native", "trafilatura", "lynx", "parallel", "firecrawl", "deepseek", "jina"] as const,
 	default: "auto",
 	ui: {
 		tab: "providers",
@@ -1282,13 +1282,18 @@ export const cfgProvidersFetch = register({
 			{
 				value: "auto",
 				label: "Auto",
-				description: "Priority: native > trafilatura > lynx > parallel > firecrawl > jina",
+				description: "Priority: native > trafilatura > lynx > parallel > firecrawl > deepseek > jina",
 			},
 			{ value: "native", label: "Native", description: "In-process HTML→Markdown converter (always available)" },
 			{ value: "trafilatura", label: "Trafilatura", description: "Auto-installs via uv/pip" },
 			{ value: "lynx", label: "Lynx", description: "Requires lynx system package" },
 			{ value: "parallel", label: "Parallel", description: "Requires PARALLEL_API_KEY" },
 			{ value: "firecrawl", label: "Firecrawl", description: "Requires FIRECRAWL_API_KEY" },
+			{
+				value: "deepseek",
+				label: "DeepSeek",
+				description: "Uses DEEPSEEK_API_KEY or /login deepseek; successful requests may be billed",
+			},
 			{ value: "jina", label: "Jina", description: "Uses r.jina.ai reader (JINA_API_KEY optional)" },
 		],
 	},
