@@ -1,9 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Usage } from "@oh-my-pi/pi-ai/types";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
+import type { ModelCost } from "@oh-my-pi/pi-catalog/types";
+import { renderProviderModels } from "@oh-my-pi/pi-coding-agent/cli/models-cli";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -63,5 +65,26 @@ describe("Cursor Teams token rate (models.yml → registry)", () => {
 		const clearedUsage = sampleUsage(1_000_000);
 		calculateCost(cleared!, clearedUsage);
 		expect(clearedUsage.cost.input).toBeCloseTo(0.75, 8);
+	});
+
+	test("publishes the long-context tier in `omp models --json` with the rate billing charges", () => {
+		fs.writeFileSync(modelsPath, "providers:\n  cursor:\n    teamsTokenRatePerMillion: 0.25\n");
+		const model = new ModelRegistry(authStorage, modelsPath).find("cursor", "gpt-5.6-luna")!;
+		let stdout = "";
+		vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+			stdout += String(chunk);
+			return true;
+		});
+		try {
+			renderProviderModels({ getAvailable: () => [model], getError: () => undefined }, "ls", undefined, true);
+		} finally {
+			vi.restoreAllMocks();
+		}
+		const tier = (JSON.parse(stdout).models[0].cost as ModelCost).longContext;
+		if (!tier) throw new Error("gpt-5.6-luna lost its long-context tier");
+		const promptTokens = tier.inputThreshold + 28_000;
+		const usage = sampleUsage(promptTokens);
+		calculateCost(model, usage);
+		expect((tier.input * promptTokens) / 1e6).toBeCloseTo(usage.cost.input, 10);
 	});
 });
