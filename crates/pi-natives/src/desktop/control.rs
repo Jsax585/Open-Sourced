@@ -113,10 +113,6 @@ pub(crate) struct OperationToken {
 }
 
 impl OperationToken {
-	pub(crate) fn control_active(&self) -> bool {
-		self.source.control_active()
-	}
-
 	pub(crate) fn enter(&self) -> OperationScope {
 		let previous = CURRENT.with_borrow_mut(|current| current.replace(self.clone()));
 		OperationScope { previous, _thread: PhantomData }
@@ -288,6 +284,11 @@ pub(crate) fn user_activity() -> u64 {
 }
 
 static OWNED: AtomicBool = AtomicBool::new(false);
+
+/// Serializes tests that take this process's input ownership, which is one
+/// per process: the ownership tests here and worker tests that send input.
+#[cfg(test)]
+pub(crate) static OWNERSHIP_TEST: Mutex<()> = Mutex::new(());
 
 struct ProcessLease;
 impl ProcessLease {
@@ -555,22 +556,21 @@ impl Drop for KernelLease {
 	}
 }
 
+/// Real ownership without OS event monitoring: lifecycle regressions must
+/// not depend on an interactive desktop or Accessibility permissions.
+#[cfg(test)]
+pub(crate) fn grant_for_test(source: &CancellationSource) {
+	let owner = ControlLease {
+		_escape: None,
+		_kernel: KernelOwner::acquire().expect("test kernel owner"),
+		running: AtomicBool::new(false),
+	};
+	*source.0.state.lock() = Some(Arc::new(owner));
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
-
-	static OWNERSHIP_TEST: Mutex<()> = Mutex::new(());
-
-	/// Real ownership without OS event monitoring: lifecycle regressions must
-	/// not depend on an interactive desktop or Accessibility permissions.
-	fn grant_for_test(source: &CancellationSource) {
-		let owner = ControlLease {
-			_escape: None,
-			_kernel: KernelOwner::acquire().expect("test kernel owner"),
-			running: AtomicBool::new(false),
-		};
-		*source.0.state.lock() = Some(Arc::new(owner));
-	}
 
 	/// Removes this process's private kernel lock (see `KernelLease::path`).
 	fn remove_test_lock() {

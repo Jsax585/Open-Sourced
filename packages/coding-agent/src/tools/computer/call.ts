@@ -85,12 +85,14 @@ export const WINDOW_METHODS: MethodPolicies = {
 export const ELEMENT_METHODS: MethodPolicies = {
 	value: "read",
 	setValue: "exec",
+	selectText: "exec",
 	bounds: "read",
 	attributes: "read",
 	actions: "read",
 	perform: "exec",
 	press: "exec",
 	click: "exec",
+	doubleClick: "exec",
 	focus: "exec",
 	parent: "read",
 	children: "read",
@@ -148,5 +150,7 @@ export function renderComputerCall(chain: readonly ComputerCallStep[]): string {
 	validateChain(chain);
 	const root = chain[0]!;
 	if (chain.length === 1) return `return await desktop.${renderCallChain([root])};`;
+	// `desktop.ref(id)` returns a thenable handle whose element methods check their arguments before the lookup.
+	if (root.method === "ref") return `return await desktop.${renderCallChain(chain)};`;
 	return `return await (await desktop.${renderCallChain([root])}).${renderCallChain([chain[1]!])};`;
 }

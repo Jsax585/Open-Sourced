@@ -63,6 +63,10 @@ pub struct DesktopCapture {
 	pub displays:          Vec<DesktopDisplay>,
 	pub backend:           String,
 	pub display_server:    Option<String>,
+	/// The user session was locked when this frame was taken: a display
+	/// capture shows the lock screen, and a window capture shows the window's
+	/// last frame behind it. Only macOS detects this; others report `false`.
+	pub screen_locked:     bool,
 }
 
 #[napi(object)]
@@ -88,6 +92,12 @@ pub struct DesktopCapabilities {
 	pub input_permission: String,
 	pub ax_permission: String,
 	pub display_count: u32,
+	/// The user session is locked (lock screen up). Only macOS detects this;
+	/// other backends report `false`.
+	pub screen_locked: bool,
+	/// The display is asleep, so nothing can be captured until it wakes. Only
+	/// macOS detects this; other backends report `false`.
+	pub display_asleep: bool,
 }
 
 impl DesktopCapabilities {
@@ -109,6 +119,31 @@ impl DesktopCapabilities {
 			input_permission: "unavailable".to_string(),
 			ax_permission: "unavailable".to_string(),
 			display_count: 0,
+			screen_locked: false,
+			display_asleep: false,
+		}
+	}
+}
+
+/// Lock and display-sleep state of the user session, read live per call.
+/// Only macOS detects either; other platforms report both as `false`.
+#[napi(object, js_name = "DesktopScreenState")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScreenState {
+	#[napi(js_name = "screenLocked")]
+	pub locked:         bool,
+	pub display_asleep: bool,
+}
+
+impl ScreenState {
+	/// Sentence appended to a failure while the session is locked or the
+	/// display is asleep, so the model learns why instead of guessing.
+	pub(crate) const fn failure_note(self) -> Option<&'static str> {
+		match (self.locked, self.display_asleep) {
+			(true, true) => Some("the screen is locked and the display is asleep"),
+			(true, false) => Some("the screen is locked"),
+			(false, true) => Some("the display is asleep"),
+			(false, false) => None,
 		}
 	}
 }
@@ -221,6 +256,31 @@ pub struct AxQuery {
 	pub title: Option<String>,
 	pub value: Option<String>,
 	pub limit: Option<u32>,
+}
+
+/// Where `axSelectText` looks for its text and what it selects there.
+#[napi(object)]
+#[derive(Debug, Clone, Default)]
+pub struct AxSelectTextOptions {
+	/// Text that must directly precede the match.
+	pub prefix: Option<String>,
+	/// Text that must directly follow the match.
+	pub suffix: Option<String>,
+	/// `text` (default) selects the match; `start` and `end` place a caret.
+	pub select: Option<String>,
+}
+
+/// The selection read back after `axSelectText`, in UTF-16 code units.
+#[napi(object)]
+#[derive(Debug, Clone)]
+pub struct AxTextSelection {
+	pub start:   u32,
+	pub length:  u32,
+	/// The selected text, empty for a caret.
+	pub text:    String,
+	/// Whether the element is focused in its app: typing and AX insertion
+	/// act on the focused element.
+	pub focused: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
