@@ -810,6 +810,12 @@ export interface SimpleStreamOptions extends Omit<StreamOptions, "apiKey"> {
 	/** Cursor hands unhandled MCP calls to an external executor instead of reporting them as missing. */
 	cursorExternalToolExecutor?: boolean;
 	/**
+	 * Conversation size at which a Cursor turn is asked to wrap up. Cursor runs
+	 * its tool loop server-side, so the host's compaction threshold only takes
+	 * effect between turns; omit to let a turn run until it ends on its own.
+	 */
+	cursorContextBudgetTokens?: number;
+	/**
 	 * Amazon Bedrock Guardrail settings forwarded through transports that do not
 	 * dispatch directly to the Bedrock provider. Model-level values take
 	 * precedence when both are present.

@@ -230,6 +230,7 @@ import { waitForRetry } from "../utils/retry-wait";
 import { sanitizeSchemaForCursor, toolWireSchema } from "../utils/schema";
 import { formatConnectEndStreamError, hasRetryableCursorErrorDetail } from "./connect-error-detail";
 import { CONNECT_END_STREAM_FLAG, ConnectFrameDecoder, frameConnectMessage } from "./connect-frame";
+import { CursorContextBudget } from "./cursor/context-budget";
 import mcpExternalHandoffMessage from "./cursor-external-tool-handoff.md" with { type: "text" };
 import {
 	buildMcpStateResult,
@@ -401,6 +402,11 @@ export interface CursorOptions extends StreamOptions {
 	wireModelId?: string;
 	/** Run transport. `auto` starts with HTTP/2 and falls back on failed ALPN negotiation. */
 	transport?: "auto" | "http2" | "http1";
+	/**
+	 * Conversation size at which a turn is asked to wrap up so the host can
+	 * compact between turns; see {@link CursorContextBudget}.
+	 */
+	contextBudgetTokens?: number;
 }
 
 type CursorWireMode = "normalized" | "discovered";
@@ -419,6 +425,7 @@ interface CursorRetryContext {
 	conversationId: string;
 	blobStore: Map<string, Uint8Array>;
 	turnRecords: CursorTurnRecordState;
+	contextBudget: CursorContextBudget | undefined;
 	firstTokenTime?: number;
 }
 
@@ -678,6 +685,8 @@ function parseConnectEndStream(data: Uint8Array): Error | null {
 
 interface CursorMessageWriter {
 	write(frame: Uint8Array): void;
+	/** Context the host wants the model to read with the next tool result that accepts it. */
+	takeAdditionalContext?(): string | undefined;
 }
 
 interface CursorRunTransport extends CursorMessageWriter {
@@ -1209,6 +1218,9 @@ function streamCursorWithWireMode(
 			stored: new Map(),
 			given: new Map(),
 		};
+		const contextBudget =
+			retryContext?.contextBudget ??
+			(options?.contextBudgetTokens ? new CursorContextBudget(options.contextBudgetTokens) : undefined);
 		const hostOnToolResult = options?.onToolResult;
 		const onToolResult: CursorToolResultHandler | undefined = hostOnToolResult
 			? result => {
@@ -1398,6 +1410,7 @@ function streamCursorWithWireMode(
 					checkpointCoversTurn = false;
 					resultTransport.write(frame);
 				},
+				takeAdditionalContext: () => contextBudget?.takeNotice(output.usage.contextTokens),
 			};
 
 			runTransport.onResponse(headers => {
@@ -1658,6 +1671,7 @@ function streamCursorWithWireMode(
 						conversationId,
 						blobStore: activeBlobStore,
 						turnRecords,
+						contextBudget,
 						firstTokenTime,
 					},
 				});
@@ -1795,6 +1809,7 @@ function streamCursorWithWireMode(
 							conversationId: retryConversationId,
 							blobStore: retryBlobStore,
 							turnRecords,
+							contextBudget,
 							firstTokenTime,
 						},
 					});
@@ -3413,11 +3428,18 @@ function sendExecClientMessage<TCase extends NonNullable<ExecClientMessage["mess
 	messageCase: TCase,
 	value: Extract<ExecClientMessage["message"], { case: TCase }>["value"],
 ): void {
+	// Stream deltas are not results: a shell's context rides on its final `shellResult`.
+	const additionalContext =
+		execMsg.acceptHookAdditionalContexts && messageCase !== "shellStream"
+			? runTransport.takeAdditionalContext?.()
+			: undefined;
 	const execClientMessage = create(ExecClientMessageSchema, {
 		id: execMsg.id,
 		execId: execMsg.execId,
 		message: { case: messageCase, value } as ExecClientMessage["message"],
+		hookAdditionalContexts: additionalContext ? [{ hookEventName: "postToolUse", content: additionalContext }] : [],
 	});
+	if (additionalContext) log("execClientMessage", "additionalContext", { id: execMsg.id, additionalContext });
 
 	const clientMessage = create(AgentClientMessageSchema, {
 		message: { case: "execClientMessage", value: execClientMessage },
