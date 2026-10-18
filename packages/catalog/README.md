@@ -48,6 +48,7 @@ The `models` subpath (also exported from the root) provides timestamp-aware pric
 | `calculateUsageCost(cost, usage, timestamp?, teamsTokenRatePerMillion?)`                     | Updates and returns `usage.cost` using a `ModelCost`; optional per-million Teams token surcharge on every leg. |
 | `calculateUncachedInputCost(cost, promptInputTokens, timestamp?, teamsTokenRatePerMillion?)` | Returns the cost of a fully uncached prompt; optional Teams surcharge matches `calculateUsageCost`.            |
 | `getEffectiveTokenCost(cost, timestamp?)`                                                    | Returns the base card in force: the latest due effective rate, else the row's own legs.                        |
+| `getModelTokenCost(model, timestamp?)`                                                       | Returns what the model charges per million as displayed: the effective card plus its Teams token rate.         |
 | `getTimeBasedPricingPeriod(cost, timestamp?)`                                                | Returns `"peak"`, `"off-peak"`, or `undefined` without a recurring tariff.                                     |
 | `hasRecurringTariff(schedule)`                                                               | Whether a `TimeBasedCost` carries a peak/off-peak tariff rather than only dated rate cards.                    |
 | `getNextTimeBasedPricingTransition(cost, timestamp?)`                                        | Returns the next actual peak/off-peak change strictly after the timestamp, or `undefined` if none exists.      |

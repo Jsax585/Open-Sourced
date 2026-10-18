@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { Usage } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { calculateCost, getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { calculateCost, getBundledModel, getModelTokenCost } from "@oh-my-pi/pi-catalog/models";
 
 const sampleUsage = (input: number, cacheRead = 0): Usage => ({
 	input,
@@ -25,41 +25,30 @@ describe("Cursor Teams token rate", () => {
 		expect(usage.cost.cacheRead).toBeCloseTo(0.325, 8);
 	});
 
-	it("does not surcharge Cursor first-party Grok or Composer models", () => {
-		const grok = {
-			...getBundledModel("cursor", "grok-4.7"),
-			teamsTokenRatePerMillion: 0.25,
-		};
-		const composer = {
-			...getBundledModel("cursor", "composer-2.5"),
-			teamsTokenRatePerMillion: 0.25,
-		};
-		// Priced on purpose: the bundled composer-1 row is all-zero and would pass
-		// whether or not the family rule exempts it.
-		const composer1 = {
-			...buildModel({
-				id: "composer-1",
-				name: "Composer 1",
-				api: "cursor-agent",
-				provider: "cursor",
-				baseUrl: "https://api2.cursor.sh",
-				reasoning: false,
-				input: ["text"],
-				cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
-				contextWindow: 200_000,
-				maxTokens: 64_000,
-			}),
-			teamsTokenRatePerMillion: 0.25,
-		};
-		const grokUsage = sampleUsage(10_000);
-		const composerUsage = sampleUsage(10_000);
-		const composer1Usage = sampleUsage(10_000);
-		calculateCost(grok, grokUsage);
-		calculateCost(composer, composerUsage);
-		calculateCost(composer1, composer1Usage);
-		expect(grokUsage.cost.input).toBeCloseTo(0.02, 8);
-		expect(composerUsage.cost.input).toBeCloseTo(0.005, 8);
-		expect(composer1Usage.cost.input).toBeCloseTo(0.0125, 8);
+	it.each(["grok-4.7", "composer-2.5", "composer-1"])("does not surcharge Cursor first-party %s", id => {
+		// Built from a priced spec, not read from the bundle: the exemption must
+		// come from the catalog rules, and bundled rows like composer-1 are
+		// unpriced, which would pass with no exemption at all. Cursor's own cost
+		// patches may replace the spec's card, so compare against the same model
+		// without the rate.
+		const model = buildModel({
+			id,
+			name: id,
+			api: "cursor-agent",
+			provider: "cursor",
+			baseUrl: "https://api2.cursor.sh",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
+			contextWindow: 200_000,
+			maxTokens: 64_000,
+		});
+		const listed = sampleUsage(10_000);
+		const rated = sampleUsage(10_000);
+		calculateCost(model, listed);
+		calculateCost({ ...model, teamsTokenRatePerMillion: 0.25 }, rated);
+		expect(listed.cost.input).toBeGreaterThan(0);
+		expect(rated.cost.input).toBe(listed.cost.input);
 	});
 
 	it("does not add a surcharge-only cost on unpriced Cursor rows", () => {
@@ -70,5 +59,17 @@ describe("Cursor Teams token rate", () => {
 		const usage = sampleUsage(1_000_000);
 		calculateCost(model, usage);
 		expect(usage.cost.total).toBe(0);
+	});
+
+	it("displays the per-million price that billing records", () => {
+		// Model pickers and `omp models --json` read the displayed card; it must
+		// not advertise the list price while sessions record the surcharge.
+		for (const id of ["gemini-3.8-flash", "grok-4.7"]) {
+			const model = { ...getBundledModel("cursor", id), teamsTokenRatePerMillion: 0.25 };
+			// Below every long-context tier, where the per-million card applies as displayed.
+			const usage = sampleUsage(10_000);
+			calculateCost(model, usage);
+			expect((getModelTokenCost(model).input * 10_000) / 1e6).toBeCloseTo(usage.cost.input, 10);
+		}
 	});
 });

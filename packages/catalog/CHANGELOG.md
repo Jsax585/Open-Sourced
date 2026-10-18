@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added opt-in Cursor Teams/Enterprise Cursor Token Rate pricing: set `teamsTokenRatePerMillion` on the `cursor` provider in `models.yml` to add the per-million surcharge on input, output, cache read, and cache write for priced third-party models; unpriced rows stay at zero; Grok and the Composer family stay exempt ([#16183](https://github.com/can1357/oh-my-pi/pull/16183) by [@joseotaviorf](https://github.com/joseotaviorf))
+- Added opt-in Cursor Teams/Enterprise Cursor Token Rate pricing: set `teamsTokenRatePerMillion` on the `cursor` provider in `models.yml` to add the per-million surcharge on input, output, cache read, and cache write for priced third-party models; unpriced rows stay at zero; Grok and the Composer family stay exempt. `getModelTokenCost(model)` returns a model's displayed per-million price including the rate ([#16183](https://github.com/can1357/oh-my-pi/pull/16183) by [@joseotaviorf](https://github.com/joseotaviorf))
 
 ### Changed
 
