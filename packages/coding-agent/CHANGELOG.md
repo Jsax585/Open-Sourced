@@ -9,7 +9,7 @@
 - Added `{ takeover: true }` to computer-use `win.move`, so a hover that a window refuses in the background can be retried in the foreground ([#15173](https://github.com/can1357/oh-my-pi/pull/15173) by [@will-bogusz](https://github.com/will-bogusz))
 - Added `el.type(text)` and `el.press(chord)` to the `computer` tool, which send text and keys to that element instead of wherever its window's focus is; on macOS and Windows nothing is sent when the element cannot be addressed without taking your focus ([#15563](https://github.com/can1357/oh-my-pi/pull/15563) by [@will-bogusz](https://github.com/will-bogusz))
 - Added: pressing Escape during takeover input now stops computer use for the rest of the turn, and that session's later `computer` calls are refused, unsent, until your next message ([#15564](https://github.com/can1357/oh-my-pi/pull/15564) by [@will-bogusz](https://github.com/will-bogusz))
-- Added mid-turn steering on Cursor models: a message you send while a Cursor turn runs reaches the model with its next tool result instead of waiting for the whole server-side tool loop to finish
+- Added mid-turn steering on Cursor models: a message you send while a Cursor turn runs reaches the model with its next tool result instead of waiting for the whole server-side tool loop to finish ([#16184](https://github.com/can1357/oh-my-pi/pull/16184) by [@joseotaviorf](https://github.com/joseotaviorf))
 
 ### Changed
 
@@ -24,7 +24,7 @@
 
 ### Fixed
 
-- Fixed Cursor turns growing past `compaction.thresholdTokens`: Cursor runs its tool loop server-side, so a single turn could replay millions of tokens before omp could compact. A turn that crosses the threshold is now asked to wrap up, and omp compacts and continues the task
+- Fixed Cursor turns growing past `compaction.thresholdTokens`: Cursor runs its tool loop server-side, so a single turn could replay millions of tokens before omp could compact. A turn that crosses the threshold is now asked to wrap up, and omp compacts and continues the task ([#16181](https://github.com/can1357/oh-my-pi/pull/16181) by [@joseotaviorf](https://github.com/joseotaviorf))
 - Fixed image judgments (`judge()`/`judge_batch()` with images) leaving TypeSafe Jev for the local `tiny` model whenever an image fell outside Jev's 280–1568 px bounds, which most screenshots do: images are now resized into the bounds, and strips padded, before Jev sees them
 - Fixed a Codex turn stopping on "Request failed … unsupported_native_inflight_message" when you sent a message while the response was writing text; the session now keeps the partial reply and continues with your message
 - Fixed the macOS `computer` tool's `StaleRef` for an element the app rebuilt in place, such as an Automator rule popup after its neighbour changed, leaving the agent to re-read the window: it now names the one element of the window with the fields the ref was read with, for the agent to check before acting on it ([#15574](https://github.com/can1357/oh-my-pi/pull/15574) by [@will-bogusz](https://github.com/will-bogusz))
