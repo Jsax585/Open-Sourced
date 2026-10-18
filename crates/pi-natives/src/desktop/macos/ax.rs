@@ -32,7 +32,9 @@ use super::{
 		text_range::{TextSelectRequest, Utf16Range, utf16_byte_range, utf16_slice},
 		types::{AxTextSelection, DesktopWindow},
 	},
-	capture, date, input, permission, process, skylight,
+	capture, date, input, permission, process,
+	release_guard::{self, Presses},
+	skylight,
 };
 
 const AX_TIMEOUT_SECONDS: f32 = 2.0;
@@ -564,6 +566,29 @@ fn target_window<E>(
 		.or_else(find)
 }
 
+/// How an error names a window: its id, title and, for anything but a
+/// standard window, its AX subrole or role (`AXDialog`, `AXSheet`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct WindowLabel {
+	pub(super) id:    Option<u32>,
+	pub(super) title: Option<String>,
+	pub(super) kind:  Option<String>,
+}
+
+/// `pid`'s `AXFocusedWindow`, labelled for an error message.
+pub(super) fn focused_window_label(pid: libc::pid_t) -> Option<WindowLabel> {
+	let app = probe_application(pid)?;
+	let window = copy_element(&app, "AXFocusedWindow")?;
+	let kind = copy_string(&window, "AXSubrole")
+		.filter(|subrole| subrole != "AXStandardWindow")
+		.or_else(|| copy_string(&window, "AXRole").filter(|role| role != "AXWindow"));
+	Some(WindowLabel {
+		id: window_id(&window),
+		title: nonempty(copy_string(&window, "AXTitle")),
+		kind,
+	})
+}
+
 /// The window that should regain key status when `pid` is handed keyboard
 /// focus back: its focused window, else its main window.
 pub(super) fn key_window_id(pid: libc::pid_t) -> Option<u32> {
@@ -1006,12 +1031,18 @@ impl AxBackend for MacAx {
 			.map(AxHandle::Mac))
 	}
 
+	/// An action that may open a menu can post the press that makes its window
+	/// key and the Escape that closes the menu; their release helper starts
+	/// only then.
 	fn perform(&mut self, h: &AxHandle, action: &str) -> CoreResult<()> {
-		perform_choosing(mac_handle(h)?, action, None)
+		release_guard::scope(Presses::Nothing, || perform_choosing(mac_handle(h)?, action, None))
 	}
 
+	/// A menu path always waits for a menu, so the helper starts up front.
 	fn perform_menu(&mut self, h: &AxHandle, action: &str, path: &[String]) -> CoreResult<()> {
-		perform_choosing(mac_handle(h)?, action, Some(path))
+		release_guard::scope(Presses::Process, || {
+			perform_choosing(mac_handle(h)?, action, Some(path))
+		})
 	}
 
 	fn set_value(&mut self, h: &AxHandle, value: &str) -> CoreResult<()> {
@@ -1022,8 +1053,10 @@ impl AxBackend for MacAx {
 		let role = copy_held_attribute(element, "AXRole")?
 			.and_then(|value| value.downcast::<CFString>().ok());
 		if role.is_some_and(|role| role.to_string() == "AXPopUpButton") {
-			return skylight::with_background_guard(element_pid(element)?, || {
-				popup::choose(element, value)
+			// Choosing opens the popup's menu, so the release helper starts
+			// up front.
+			return release_guard::scope(Presses::Process, || {
+				skylight::with_background_guard(element_pid(element)?, || popup::choose(element, value))
 			});
 		}
 		// Web AXValue can echo a write without the renderer accepting it. The
@@ -1422,14 +1455,13 @@ fn text_surface(element: &AXUIElement) -> TextSurface {
 fn ensure_native_text_target(element: &AXUIElement) -> CoreResult<()> {
 	if process::is_terminal(element_pid(element)?) {
 		return Err(DesktopError::ax_failed(
-			"terminal AX text represents its rendered grid, not terminal input; use win.type or \
-			 takeover:true instead",
+			"terminal AX text represents its rendered grid, not terminal input; use win.type instead",
 		));
 	}
 	if text_surface(element) != TextSurface::Native {
 		return Err(DesktopError::ax_failed(
 			"AX text writes cannot be verified in web content or an incomplete AX ancestry; use a \
-			 pixel click followed by win.type, or takeover:true input instead",
+			 pixel click followed by win.type instead",
 		));
 	}
 	Ok(())
