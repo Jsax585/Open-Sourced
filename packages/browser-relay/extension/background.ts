@@ -675,6 +675,25 @@ async function ensureInstanceId(): Promise<string> {
 	return instanceId;
 }
 
+/**
+ * Identity of this browser run, in `chrome.storage.session`. Chrome clears it on restart, when it also reuses tab
+ * ids, so the relay retires the previous run's targets instead of resolving an old target id to a new tab. An
+ * extension reload clears it too: omp then loses its handles to the tabs it opened, which stay open.
+ */
+let browserSession: Promise<string> | null = null;
+function ensureBrowserSession(): Promise<string> {
+	browserSession ??= (async () => {
+		const key = "relayBrowserSession";
+		const stored = await chrome.storage.session.get({ [key]: "" });
+		const existing = stored[key];
+		if (typeof existing === "string" && existing.length > 0) return existing;
+		const created = crypto.randomUUID();
+		await chrome.storage.session.set({ [key]: created } as Record<string, string>);
+		return created;
+	})();
+	return browserSession;
+}
+
 interface RelaySettings {
 	port: number;
 	token: string;
@@ -1132,6 +1151,7 @@ async function buildHello(): Promise<
 	return {
 		t: "hello",
 		instanceId: await ensureInstanceId(),
+		browserSession: await ensureBrowserSession(),
 		userAgent: navigator.userAgent,
 		browserVersion: versionMatch?.[0] ?? "Chrome/unknown",
 		hardwareConcurrency,
@@ -1342,6 +1362,8 @@ async function runRpc(
 			const tab = await chrome.tabs.create({ url: msg.url, active: msg.active ?? true });
 			const snap = snapshot(tab);
 			if (!snap) throw new Error("created tab has no id");
+			// The relay failed this call when its socket closed, so nobody learns this tab's id to close it later.
+			if (socket.readyState !== WebSocket.OPEN) void removeTab(snap.tabId).catch(() => {});
 			return { tab: snap };
 		}
 		case "removeTab":
@@ -1373,30 +1395,15 @@ function handleRelayMessage(socket: WebSocket, raw: string): void {
 		return;
 	}
 	if (msg.t === "pong") return;
+	// Answer only on the socket the RPC came in on: RPC ids are local to that connection, and the relay already
+	// failed the call when it closed.
+	const answer = (reply: ExtToRelayMessage): void => {
+		if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(reply));
+	};
 	void runRpc(msg, socket)
-		.then((result) => {
-			if (ws === socket && socket.readyState === WebSocket.OPEN) {
-				socket.send(
-					JSON.stringify({
-						t: "rpcResult",
-						id: msg.id,
-						ok: true,
-						result,
-					} satisfies ExtToRelayMessage),
-				);
-			}
-		})
+		.then(result => answer({ t: "rpcResult", id: msg.id, ok: true, result }))
 		.catch((err: unknown) => {
-			if (ws === socket && socket.readyState === WebSocket.OPEN) {
-				socket.send(
-					JSON.stringify({
-						t: "rpcResult",
-						id: msg.id,
-						ok: false,
-						error: err instanceof Error ? err.message : String(err),
-					} satisfies ExtToRelayMessage),
-				);
-			}
+			answer({ t: "rpcResult", id: msg.id, ok: false, error: err instanceof Error ? err.message : String(err) });
 		});
 }
 

@@ -770,6 +770,20 @@ async function ensureInstanceId() {
   await chrome.storage.local.set({ [key]: instanceId });
   return instanceId;
 }
+var browserSession = null;
+function ensureBrowserSession() {
+  browserSession ??= (async () => {
+    const key = "relayBrowserSession";
+    const stored = await chrome.storage.session.get({ [key]: "" });
+    const existing = stored[key];
+    if (typeof existing === "string" && existing.length > 0)
+      return existing;
+    const created = crypto.randomUUID();
+    await chrome.storage.session.set({ [key]: created });
+    return created;
+  })();
+  return browserSession;
+}
 async function loadSettings() {
   const stored = await chrome.storage.local.get({
     port: DEFAULT_PORT,
@@ -989,6 +1003,7 @@ async function buildHello() {
   return {
     t: "hello",
     instanceId: await ensureInstanceId(),
+    browserSession: await ensureBrowserSession(),
     userAgent: navigator.userAgent,
     browserVersion: versionMatch?.[0] ?? "Chrome/unknown",
     hardwareConcurrency,
@@ -1110,6 +1125,8 @@ async function runRpc(msg, socket) {
       const snap = snapshot(tab);
       if (!snap)
         throw new Error("created tab has no id");
+      if (socket.readyState !== WebSocket.OPEN)
+        removeTab(snap.tabId).catch(() => {});
       return { tab: snap };
     }
     case "removeTab":
@@ -1137,24 +1154,12 @@ function handleRelayMessage(socket, raw) {
   }
   if (msg.t === "pong")
     return;
-  runRpc(msg, socket).then((result) => {
-    if (ws === socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({
-        t: "rpcResult",
-        id: msg.id,
-        ok: true,
-        result
-      }));
-    }
-  }).catch((err) => {
-    if (ws === socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({
-        t: "rpcResult",
-        id: msg.id,
-        ok: false,
-        error: err instanceof Error ? err.message : String(err)
-      }));
-    }
+  const answer = (reply) => {
+    if (socket.readyState === WebSocket.OPEN)
+      socket.send(JSON.stringify(reply));
+  };
+  runRpc(msg, socket).then((result) => answer({ t: "rpcResult", id: msg.id, ok: true, result })).catch((err) => {
+    answer({ t: "rpcResult", id: msg.id, ok: false, error: err instanceof Error ? err.message : String(err) });
   });
 }
 function scheduleReconnect() {
