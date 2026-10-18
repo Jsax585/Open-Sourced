@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.12.2] - 2026-10-18
+
 ### Fixed
 
 - Fixed orphaned debugger attachments and the Chrome debugging infobar surviving relay outages or extension restarts ([#8930](https://github.com/can1357/oh-my-pi/issues/8930)).
