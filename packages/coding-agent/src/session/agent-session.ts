@@ -2444,13 +2444,7 @@ export class AgentSession implements SettingsScope {
 			goalModeState: () => this.#goalModeState,
 			planReferencePath: () => this.#planReferencePath,
 			nonMessageTokenSource: () => this,
-			hasExperimentalContextRolloverTools: () => {
-				const enabled = this.#tools.getEnabledToolNames();
-				for (const name in EXPERIMENTAL_CONTEXT_REQUIRED_TOOLS) {
-					if (!enabled.includes(name) || !this.#tools.getToolByName(name)) return false;
-				}
-				return true;
-			},
+			hasExperimentalContextRolloverTools: () => this.#hasExperimentalContextRolloverTools(),
 			takeExperimentalContextRolloverRequest: context => {
 				for (const toolResult of context?.toolResults ?? []) {
 					if (toolResult.isError) continue;
@@ -6792,11 +6786,24 @@ export class AgentSession implements SettingsScope {
 	 * can only land at the boundary the wrap-up provides.
 	 */
 	cursorContextBudgetTokens(model: Model): number | undefined {
-		const budgetTokens = resolveCursorContextBudgetTokens(this.settings, model);
+		const budgetTokens = resolveCursorContextBudgetTokens(
+			this.settings,
+			model,
+			this.#hasExperimentalContextRolloverTools(),
+		);
 		if (budgetTokens === undefined) return undefined;
 		const opensUnderBudget = (this.getContextUsage()?.tokens ?? 0) <= budgetTokens;
 		return opensUnderBudget || this.compactionSpeculation === "running" ? budgetTokens : undefined;
 	}
+
+	#hasExperimentalContextRolloverTools(): boolean {
+		const enabled = this.#tools.getEnabledToolNames();
+		for (const name in EXPERIMENTAL_CONTEXT_REQUIRED_TOOLS) {
+			if (!enabled.includes(name) || !this.#tools.getToolByName(name)) return false;
+		}
+		return true;
+	}
+
 	/** Strip image content from the current branch and persist the rewrite. */
 	dropImages(): Promise<{ removed: number; tokensFreed: number }> {
 		return this.#maintenance.dropImages();
