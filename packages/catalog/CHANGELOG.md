@@ -5,6 +5,9 @@
 ### Added
 
 - Added Vercel AI Gateway `type: "evaluation"` discovery as `api: typesafe` judge models with a KDL-driven `judgment` contract ([#15613](https://github.com/can1357/oh-my-pi/pull/15613) by [@szavadsky](https://github.com/szavadsky)).
+### Changed
+
+- Seeded TypeSafe `jev-1.14.0` and OpenRouter `typesafe/jev-1.14`, and made them the `judge` role defaults and TypeSafe's default model; TypeSafe discovery keeps seeded ids its alias-only `/v1/models` listing omits
 
 ## [18.12.1] - 2026-10-17
 

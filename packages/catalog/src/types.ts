@@ -1386,11 +1386,11 @@ export type CompatOf<TApi extends Api> = TApi extends "openrouter"
 								? ResolvedOllamaCompat
 								: undefined;
 
-/** Wire type overrides for judgment question types. Defaults: canonical names `noul`, `choice`, `score`. */
-export type JudgmentTypeMap = Partial<Record<"noul" | "choice" | "score", string>>;
+/** Wire type overrides for judgment question types. Defaults: canonical names `noul`, `choice`, `score`, `box`. */
+export type JudgmentTypeMap = Partial<Record<"noul" | "choice" | "score" | "box", string>>;
 
-/** Wire key overrides for judgment answer values. Defaults: canonical names `noul`, `choice`, `score`. */
-export type JudgmentValueMap = Partial<Record<"noul" | "choice" | "score", string>>;
+/** Wire key overrides for judgment answer values. Defaults: canonical names `noul`, `choice`, `score`, `box`. */
+export type JudgmentValueMap = Partial<Record<"noul" | "choice" | "score" | "box", string>>;
 
 /** Wire key overrides for judgment usage fields. Defaults: `input_tokens`, `output_tokens`. */
 export type JudgmentUsageMap = Partial<Record<"input" | "output", string>>;
