@@ -62,6 +62,12 @@ export interface AuthAccountPolicy {
 	readonly priority?: number;
 	/** Protected remaining quota percentage for this account. */
 	readonly reservePct?: number;
+	/**
+	 * Serve routed requests only from the plan's included allowance. When the allowance is spent,
+	 * a hard limit is reached, the account is blocked, or its usage cannot be measured, the account
+	 * is skipped, even as a last resort, so it never draws on paid overage such as Claude extra usage.
+	 */
+	readonly includedOnly?: boolean;
 }
 
 /** Read-only set of per-account routing policies. */

@@ -69,6 +69,8 @@ export type TryOAuthOptions = {
 	allowFallback?: boolean;
 	/** Receives a non-definitive refresh failure that left this credential unusable; the caller filters for retryable ones. */
 	onTransientRefreshFailure?: (error: unknown) => void;
+	/** Serve only while measured included allowance is left, in every pass (`auth.accountPolicies[].includedOnly`). */
+	includedOnly?: boolean;
 };
 
 /** Services consulted by CredentialSelector for policy, usage, blocks, refresh, and session affinity. */
@@ -926,6 +928,7 @@ export class CredentialSelector {
 					blockScope,
 					blockScopes,
 					onTransientRefreshFailure: recordTransientRefreshFailure,
+					includedOnly: this.#deps.policies.forCredential(provider, candidate.selection.credential)?.includedOnly,
 				});
 				if (resolved) return resolved;
 			}
@@ -986,6 +989,21 @@ export class CredentialSelector {
 		return this.#syncOAuthSelectionFromStore(provider, selection, selected.id);
 	}
 
+	/**
+	 * An `includedOnly` account serves only while its included allowance is measured and left.
+	 * Past it, a provider with paid overage enabled bills instead of refusing, so a spent,
+	 * exhausted or unmeasured account is never a last resort.
+	 */
+	#includedAllowanceLeft(
+		usage: UsageReport | null,
+		strategy: CredentialRankingStrategy | undefined,
+		rankingContext: CredentialRankingContext | undefined,
+	): boolean {
+		if (!usage || !rankingContext) return false;
+		if (strategy && isUsageLimitReached(scopedUsageLimits(strategy, usage, rankingContext))) return false;
+		return (remainingUsageFraction(strategy, usage, rankingContext, Date.now()) ?? 0) > 0;
+	}
+
 	/** Attempts to use a single OAuth credential, checking usage and refreshing token. */
 	async tryOAuth(
 		provider: Provider,
@@ -1007,9 +1025,10 @@ export class CredentialSelector {
 			blockScope,
 			blockScopes,
 			allowFallback = true,
+			includedOnly = false,
 		} = usageOptions;
 		if (
-			!allowBlocked &&
+			(!allowBlocked || includedOnly) &&
 			this.#deps.blocks.isBlocked(provider, providerKey, selection.index, blockScopes ?? blockScope)
 		) {
 			return undefined;
@@ -1030,7 +1049,7 @@ export class CredentialSelector {
 		let usage: UsageReport | null = null;
 		let usageChecked = false;
 
-		if ((checkUsage && !allowBlocked) || hasPlanRequirement) {
+		if ((checkUsage && !allowBlocked) || hasPlanRequirement || includedOnly) {
 			if (usagePrechecked) {
 				usage = prefetchedUsage;
 				usageChecked = true;
@@ -1042,6 +1061,9 @@ export class CredentialSelector {
 				usageChecked = true;
 			}
 			if (applyPlanFilter && planGate?.(usage) !== true) {
+				return undefined;
+			}
+			if (includedOnly && !this.#includedAllowanceLeft(usage, strategy, rankingContext)) {
 				return undefined;
 			}
 			if (checkUsage && !allowBlocked && usage && strategy && rankingContext) {
@@ -1101,7 +1123,7 @@ export class CredentialSelector {
 				const rowId = this.#deps.pool.entries(provider)[selection.index]?.id;
 				if (rowId !== undefined) this.#deps.pool.replaceById(provider, rowId, updated);
 			}
-			if ((checkUsage && !allowBlocked) || hasPlanRequirement) {
+			if ((checkUsage && !allowBlocked) || hasPlanRequirement || includedOnly) {
 				const sameAccount = selection.credential.accountId === updated.accountId;
 				if (!usageChecked || !sameAccount) {
 					usage = await this.#deps.usage.report(provider, updated, {
@@ -1111,6 +1133,9 @@ export class CredentialSelector {
 					usageChecked = true;
 				}
 				if (applyPlanFilter && planGate?.(usage) !== true) {
+					return undefined;
+				}
+				if (includedOnly && !this.#includedAllowanceLeft(usage, strategy, rankingContext)) {
 					return undefined;
 				}
 				if (checkUsage && !allowBlocked && usage && strategy && rankingContext) {
