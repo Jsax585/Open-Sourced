@@ -189,6 +189,9 @@ fn check_apply(source: &str, case_name: &str, call: &Value) {
 
 #[test]
 fn legacy_parser_and_applier_cases_match_byte_for_byte() {
+	// The Lua boundary-repair cases need a grammar; Lua's is downloaded on
+	// demand in production, so link the native crate instead.
+	pi_ast::language::wasm_grammars::LUA.register(tree_sitter_lua::LANGUAGE.into());
 	let mut covered_names = 0_usize;
 	let mut calls = 0_usize;
 	for fixture_name in FIXTURES {
@@ -559,7 +562,7 @@ fn pure_format_input_and_streaming_contracts_cover_uncaptured_cases() {
 #[test]
 fn hashline_inspection_matches_streaming_matcher_cases() {
 	let root = fixture("parity_streaming_matcher_paths.json");
-	let engine = engine_for(EditMode::Hashline, true, 0.95, false);
+	let engine = engine_for(EditMode::Hashline, true, 0.95, false, 512);
 	for case in root["cases"].as_array().expect("matcher cases") {
 		let name = case["name"].as_str().expect("matcher name");
 		let args = json!({ "input": case["input"].as_str().expect("matcher input") }).to_string();
@@ -1274,7 +1277,7 @@ fn hashline_streaming_preview_cases_preserve_partial_and_final_contracts() {
 	let batch = preview_for(&workspace, format!("{header_a}\nPUT 2-2:\n"), false);
 	assert!(batch.files.is_empty(), "{}", scenarios["empty-body"]);
 
-	let engine = engine_for(EditMode::Hashline, true, 0.95, false);
+	let engine = engine_for(EditMode::Hashline, true, 0.95, false, 512);
 	let digest_args =
 		json!({ "input": "[a.ts#AB12]\nPUT 1-2:\n+const x = 1;\n+const y = 2;\nCUT 5\n" })
 			.to_string();
