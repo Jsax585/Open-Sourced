@@ -83,6 +83,22 @@ function redirectedWrite(
 	return true;
 }
 
+const REDIRECTED_WRITE_ERROR = Symbol("omp.redirectedWriteError");
+
+/**
+ * Whether an error came from the guard's redirected log target rather than
+ * the terminal stream itself. Consumers that treat stdout errors as terminal
+ * disconnects use this to leave a healthy terminal alone when only the log
+ * storage (ENOSPC/EIO) failed.
+ */
+export function isRedirectedWriteError(err: unknown): boolean {
+	return (
+		typeof err === "object" &&
+		err !== null &&
+		(err as { [REDIRECTED_WRITE_ERROR]?: boolean })[REDIRECTED_WRITE_ERROR] === true
+	);
+}
+
 interface GuardedWrite {
 	(chunk: string | Uint8Array, encodingOrCallback?: BufferEncoding | WriteCallback, callback?: WriteCallback): boolean;
 	__ompGuardProxy?: boolean;
@@ -106,7 +122,10 @@ function installStreamWriteProxy(stream: NodeJS.WriteStream, fd: 1 | 2): void {
 		if (redirected) {
 			return redirectedWrite(fd, chunk, encodingOrCallback, callback, error => {
 				// No completion callback: report through the stream's
-				// asynchronous error path, as the platform writer would.
+				// asynchronous error path, as the platform writer would. The
+				// marker lets terminal-disconnect consumers tell log-storage
+				// failures from a terminal that actually died.
+				Object.defineProperty(error, REDIRECTED_WRITE_ERROR, { value: true });
 				queueMicrotask(() => stream.emit("error", error));
 			});
 		}

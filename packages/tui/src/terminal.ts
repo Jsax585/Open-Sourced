@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as tty from "node:tty";
 import { TtyWriter } from "@oh-my-pi/pi-natives";
 import { $env, isBunTestRuntime, isTerminalHeadless, isWsl } from "@oh-my-pi/pi-utils/env";
-import { restoreTerminalStderr } from "@oh-my-pi/pi-utils";
+import { isRedirectedWriteError, restoreTerminalStderr } from "@oh-my-pi/pi-utils";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils/loop-phase";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
@@ -907,6 +907,12 @@ export class ProcessTerminal implements Terminal {
 	#writeLogPath = $env.PI_TUI_WRITE_LOG || "";
 	#stdoutErrorCleanup?: () => void;
 	#stdoutErrorHandler = (err: Error) => {
+		if (isRedirectedWriteError(err)) {
+			// The redirected log target failed, not the terminal; the UI and
+			// the terminal stay up while diagnostics storage is degraded.
+			logger.warn("redirected log write failed; terminal unaffected", { err: String(err) });
+			return;
+		}
 		this.#markTerminalDisconnected("stdout failed", err);
 	};
 	// Bounds the stdout backlog against a stalled PTY consumer without killing a
