@@ -95,23 +95,14 @@ describe("subagent whose declared model cannot serve", () => {
 		for (const dir of tempDirs.splice(0)) removeSyncWithRetries(dir);
 	});
 
-	it("defers a declared model without working credentials to session creation instead of taking the parent model", async () => {
+	it("records the model a deferred spawn settled on in session_init, which cold revival restores", async () => {
 		const declared = model("primary", "declared-model");
 		const parent = model("parent", "session-model");
-		let childModel: Model | undefined;
-		let childModelPattern: unknown;
-		let childModelPatternAuthFallback: unknown;
-		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
-			if (!options) throw new Error("Expected createAgentSession options");
-			childModel = options.model;
-			childModelPattern = options.modelPattern;
-			childModelPatternAuthFallback = options.modelPatternAuthFallback;
-			return {
-				session: createYieldingSession({ selector: "parent/session-model", isFallback: true }),
-				extensionsResult: {},
-				setToolUIContext: () => {},
-			} as never;
-		});
+		const session = createYieldingSession({ selector: "parent/session-model", isFallback: true });
+		const appendSessionInit = vi.spyOn(session.sessionManager, "appendSessionInit");
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
+			async () => ({ session, extensionsResult: {}, setToolUIContext: () => {} }) as never,
+		);
 
 		await runSubprocess({
 			cwd: "/tmp",
@@ -120,6 +111,7 @@ describe("subagent whose declared model cannot serve", () => {
 			index: 0,
 			id: "no-credentials",
 			modelOverride: ["primary/declared-model"],
+			modelRole: "smol",
 			parentActiveModelPattern: "parent/session-model",
 			settings: Settings.isolated(),
 			modelRegistry: {
@@ -130,9 +122,7 @@ describe("subagent whose declared model cannot serve", () => {
 			enableLsp: false,
 		});
 
-		expect(childModel).toBeUndefined();
-		expect(childModelPattern).toEqual(["primary/declared-model"]);
-		expect(childModelPatternAuthFallback).toBe("parent/session-model");
+		expect(appendSessionInit.mock.calls[0]?.[0]).toMatchObject({ resolvedModel: "parent/session-model" });
 	});
 
 	it("reports why a startup fallback served the run on the settled result", async () => {

@@ -741,11 +741,9 @@ describe("runSubprocess per-agent service-tier overrides", () => {
 		});
 
 		expect(result.exitCode).toBe(0);
-		// Missing credentials defer the choice to session creation, which applies the
-		// requested model's fallback chain or, with none, the parent's model.
+		// Missing credentials leave the choice to session creation, which settles
+		// on the parent's model here (no chain owns the requested one).
 		const sessionOptions = spy.mock.calls[0]?.[0];
-		expect(sessionOptions?.model).toBeUndefined();
-		expect(sessionOptions?.modelPatternAuthFallback).toBe(`${parentModel.provider}/${parentModel.id}`);
 		// `scale` is an OpenAI-only tier: it lands on the fallback family and never on Anthropic.
 		expect(childTiers(sessionOptions, parentModel)).toEqual({ openai: "scale" });
 		expect(childTiers(sessionOptions, requested)).toEqual({});

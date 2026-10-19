@@ -4715,7 +4715,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				tools: persistedSubagentTools,
 				agent: agent.name,
 				modelRole: modelRole ?? resolveExplicitModelRole(modelOverride ?? agent.model, subagentSettings),
-				resolvedModel: progress.resolvedModel,
+				// Cold revival restores this model. A model dispatch deferred is
+				// known only once the session settled on it, and the monitor has
+				// not published it yet.
+				resolvedModel: progress.resolvedModel ?? session.servingModel?.selector,
 				// Deferred model resolution installs this role inside createAgentSession,
 				// so read it back from the settings both install paths write.
 				retryFallback: getRetryFallbackRole(subagentSettings, subagentRetryFallbackRole(id)),
