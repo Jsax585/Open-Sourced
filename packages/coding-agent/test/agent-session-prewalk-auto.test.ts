@@ -77,6 +77,15 @@ describe("AgentSession auto-prewalk", () => {
 		return model;
 	}
 
+	const OPENROUTER_SONNET = "anthropic/claude-sonnet-4.5";
+	/** The bundled OpenRouter row pinned to one upstream route. */
+	function routed(upstream: string): Model<Api> {
+		const row = getBundledModel("openrouter", OPENROUTER_SONNET);
+		const model = row && parseModelPattern(`openrouter/${row.id}@${upstream}`, [row]).model;
+		if (!model) throw new Error(`Expected ${OPENROUTER_SONNET}@${upstream} to resolve`);
+		return model;
+	}
+
 	const toolSchema = type({});
 	const todoTool: AgentTool<typeof toolSchema, undefined> = {
 		name: "todo",
@@ -488,34 +497,49 @@ describe("AgentSession auto-prewalk", () => {
 			expect(f.efforts[0]).toBe(Effort.Low);
 		});
 
-		it("context promotion during the planner's preparation dispatches the task instead of dropping it", async () => {
-			const calls = stubJudge([PREWALK]);
-			const f = createFixture([done("promoted")], {
-				auto: "on",
-				planningModel: "@slow",
-				// Only the pre-prompt pass should see the tiny threshold.
-				beforeStream: async () => {
-					cfgCompactionEnabled.override(f.settings, false);
-				},
-			});
-			const dropped: string[] = [];
-			f.session.setPromptDropped(prompt => dropped.push(prompt.text));
-			cfgCompactionEnabled.override(f.settings, true);
-			cfgCompactionThresholdTokens.override(f.settings, 1);
-			cfgContextPromotionEnabled.override(f.settings, true);
-			vi.spyOn(SessionMaintenance.prototype, "deferThresholdCompactionToSpeculation").mockReturnValue(false);
-			const promotion = vi
-				.spyOn(SessionMaintenance.prototype, "resolveContextPromotionTarget")
-				.mockImplementation(async current => (current.id === f.planner.id ? f.target : undefined));
+		it.each(["succeeds", "rejects after publication"] as const)(
+			"a promoted planner dispatches and the next task restores the baseline when prompt rebuilding %s",
+			async rebuild => {
+				const calls = stubJudge([PREWALK]);
+				let rejected = false;
+				const f = createFixture([done("promoted"), done("continued"), done("next")], {
+					auto: "on",
+					planningModel: "@slow",
+					rebuildSystemPrompt: async () => {
+						if (rebuild === "rejects after publication" && !rejected && session?.model?.id === f.target.id) {
+							rejected = true;
+							throw new Error("prompt rebuild failed after promotion");
+						}
+						return { systemPrompt: ["Test"] };
+					},
+					// Only the pre-prompt pass should see the tiny threshold.
+					beforeStream: async () => {
+						cfgCompactionEnabled.override(f.settings, false);
+					},
+				});
+				const dropped: string[] = [];
+				f.session.setPromptDropped(prompt => dropped.push(prompt.text));
+				cfgCompactionEnabled.override(f.settings, true);
+				cfgCompactionThresholdTokens.override(f.settings, 1);
+				cfgContextPromotionEnabled.override(f.settings, true);
+				vi.spyOn(SessionMaintenance.prototype, "deferThresholdCompactionToSpeculation").mockReturnValue(false);
+				vi.spyOn(SessionMaintenance.prototype, "resolveContextPromotionTarget").mockImplementation(async current =>
+					current.id === f.planner.id ? f.target : undefined,
+				);
 
-			await f.session.prompt(TASK);
+				await f.session.prompt(TASK);
 
-			expect(asked(calls).map(call => call.model)).toEqual([f.primary.id]);
-			expect(promotion).toHaveBeenCalled();
-			expect(dropped).toEqual([]);
-			expect(f.warnings).toEqual([]);
-			expect(f.requested[0]).toBe(f.target.id);
-		});
+				expect(rejected).toBe(rebuild === "rejects after publication");
+				expect(dropped).toEqual([]);
+				expect(f.warnings).toEqual([]);
+				expect(f.requested[0]).toBe(f.target.id);
+
+				const boundary = f.requested.length;
+				await f.session.prompt("explain the cache policy");
+				expect(asked(calls).map(call => call.model)).toEqual([f.primary.id, f.primary.id]);
+				expect(f.requested.slice(boundary)).toEqual([f.primary.id]);
+			},
+		);
 
 		it.each([
 			["no planning model", undefined],
@@ -1651,13 +1675,6 @@ describe("AgentSession auto-prewalk", () => {
 	});
 
 	it("plans on a model that differs from the active one only by its upstream route, and hands back to that route", async () => {
-		const row = getBundledModel("openrouter", "anthropic/claude-sonnet-4.5");
-		if (!row) throw new Error("Expected the bundled OpenRouter row");
-		const routed = (upstream: string): Model<Api> => {
-			const model = parseModelPattern(`openrouter/${row.id}@${upstream}`, [row]).model;
-			if (!model) throw new Error(`Expected ${row.id}@${upstream} to resolve`);
-			return model;
-		};
 		let active = routed("google");
 		const planner = routed("anthropic");
 		const selected: string[] = [];
@@ -1685,8 +1702,53 @@ describe("AgentSession auto-prewalk", () => {
 		const coordinator = new PrewalkCoordinator(host);
 		const prepared = await coordinator.prepareAuto(TASK, new AbortController().signal, () => true);
 		expect(prepared.selected).toBe(true);
-		expect(selected).toEqual([`openrouter/${row.id}@anthropic`]);
+		expect(selected).toEqual([`openrouter/${OPENROUTER_SONNET}@anthropic`]);
 		expect(prepared.arm()).toBeDefined();
-		expect(formatModelStringWithRouting(coordinator.state!.target)).toBe(`openrouter/${row.id}@google`);
+		expect(formatModelStringWithRouting(coordinator.state!.target)).toBe(`openrouter/${OPENROUTER_SONNET}@google`);
 	});
+
+	it.each(["arm", "restart"] as const)(
+		"rejects an explicit %s for another route during promotion without losing the automatic baseline",
+		async action => {
+			const baseline = routed("google");
+			const armed = routed("anthropic");
+			const requested = routed("amazon-bedrock");
+			let active = baseline;
+			const decision = {
+				route: "prewalk",
+				probabilities: PREWALK.probabilities,
+				confidence: PREWALK.confidence,
+				arm: true,
+			} as const;
+			const host = {
+				settings: Settings.isolated({ "prewalk.auto": "on" }),
+				agent: { state: { messages: [] }, peekSteeringQueue: () => [] },
+				model: () => active,
+				configuredThinkingLevel: () => Effort.High,
+				getPlanModeState: () => undefined,
+				resolveAutoPrewalkPlanningModel: () => ({ target: modelOrThrow("claude-opus-4-6") }),
+				resolveAutoPrewalkTarget: () => ({ target: armed }),
+				prepareAutoPrewalkModel: async (model: Model) => model,
+				classifyAutoPrewalk: async () => decision,
+				setModelTemporary: async (model: Model, _level: unknown, options?: { onSelected?: () => void }) => {
+					active = model;
+					options?.onSelected?.();
+				},
+				emitNotice: () => {},
+			} as unknown as PrewalkCoordinatorHost;
+			const coordinator = new PrewalkCoordinator(host);
+			const prepared = await coordinator.prepareAuto(TASK, new AbortController().signal, () => true);
+			expect(prepared.arm()).toBeDefined();
+
+			await coordinator.followContextPromotion(async () => {
+				active = modelOrThrow("claude-sonnet-4-6");
+				if (action === "arm") expect(coordinator.arm(requested)).toBe(false);
+				else expect(await coordinator.restart(baseline, Effort.High, requested, undefined)).toBe("rejected");
+			});
+			expect(formatModelStringWithRouting(coordinator.state!.target)).toBe(formatModelStringWithRouting(armed));
+			await coordinator.beginAutoTask();
+			expect(coordinator.state).toBeUndefined();
+			expect(formatModelStringWithRouting(active)).toBe(formatModelStringWithRouting(baseline));
+		},
+	);
 });

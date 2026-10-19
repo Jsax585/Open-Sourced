@@ -232,6 +232,21 @@ export class PrewalkCoordinator {
 		);
 	}
 
+	/** Promotion keeps automatic ownership so the next task still restores its original baseline. */
+	async followContextPromotion(promote: () => Promise<void>): Promise<void> {
+		const handoff = this.#handoff?.auto && this.#onHandoffTarget(this.#handoff) ? this.#handoff : undefined;
+		const generation = this.#selectionGeneration;
+		try {
+			await promote();
+		} finally {
+			const model = this.#host.model();
+			if (handoff && handoff === this.#handoff && generation === this.#selectionGeneration && model) {
+				handoff.target = model;
+				handoff.targetThinkingLevel = this.#host.configuredThinkingLevel();
+			}
+		}
+	}
+
 	async #restoreSource(handoff: PrewalkHandoff): Promise<void> {
 		const generation = this.#selectionGeneration;
 		const current = () => generation === this.#selectionGeneration;
@@ -571,7 +586,6 @@ export class PrewalkCoordinator {
 
 	/** Arms a prewalk immediately for an explicit slash-command request; it takes over a matching auto arm. */
 	arm(target: Model, thinkingLevel?: ConfiguredThinkingLevel): boolean {
-		this.#selectionGeneration++;
 		const active = this.#prewalk;
 		if (active) {
 			this.#host.emitNotice(
@@ -580,15 +594,16 @@ export class PrewalkCoordinator {
 				"prewalk",
 			);
 			const matches =
-				active.target.provider === target.provider &&
-				active.target.id === target.id &&
+				formatModelStringWithRouting(active.target) === formatModelStringWithRouting(target) &&
 				active.thinkingLevel === thinkingLevel;
 			if (matches) {
+				this.#selectionGeneration++;
 				this.#autoArm = undefined;
 				this.#handoff = undefined;
 			}
 			return matches;
 		}
+		this.#selectionGeneration++;
 		const planMessage = this.#armPending(target, thinkingLevel);
 		if (!planMessage) return false;
 		this.#handoff = undefined;
@@ -635,8 +650,7 @@ export class PrewalkCoordinator {
 		const active = this.#prewalk;
 		if (
 			active &&
-			(active.target.provider !== target.provider ||
-				active.target.id !== target.id ||
+			(formatModelStringWithRouting(active.target) !== formatModelStringWithRouting(target) ||
 				active.thinkingLevel !== targetThinkingLevel)
 		) {
 			this.arm(target, targetThinkingLevel);

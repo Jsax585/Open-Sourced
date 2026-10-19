@@ -2566,8 +2566,11 @@ export class AgentSession implements SettingsScope {
 			runRecoveryCompactionWithRollback: (reason, message, options) =>
 				this.#recovery.runRecoveryCompactionWithRollback(reason, message, options),
 			parseRetryAfterMsFromError: errorMessage => this.#recovery.parseRetryAfterMsFromError(errorMessage),
+			// Maintenance switches models only to promote context.
 			setModelTemporary: (model, thinkingLevel, options) =>
-				this.#models.setModelTemporary(model, thinkingLevel, options, "automatic"),
+				this.#prewalk.followContextPromotion(() =>
+					this.#models.setModelTemporary(model, thinkingLevel, options, "automatic"),
+				),
 			abort: options => this.abort(options),
 			abortHandoff: () => this.abortHandoff(),
 		};
