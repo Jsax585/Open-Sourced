@@ -25,6 +25,8 @@ export interface RotatingFileOptions {
 	 * Without it every record is written as it arrives.
 	 */
 	readonly batch?: RotatingFileBatchOptions;
+	/** Test seam: clock for day keys and rollover decisions. */
+	readonly now?: () => Date;
 	/**
 	 * Called with the new active file path whenever the sink opens a different
 	 * file — first write, local-day rotation, and size rotation alike.
@@ -57,6 +59,7 @@ export class RotatingFileSink {
 	readonly #maxBytes: number;
 	readonly #maxFiles: number;
 	readonly #batch: RotatingFileBatchOptions | undefined;
+	readonly #now: () => Date;
 	readonly #onRotate: ((filePath: string) => void) | undefined;
 	/** Files this sink created, oldest first. */
 	readonly #files: string[] = [];
@@ -87,6 +90,10 @@ export class RotatingFileSink {
 		this.#maxFiles = options.maxFiles;
 		this.#batch = options.batch;
 		this.#onRotate = options.onRotate;
+		this.#now = options.now ?? (() => new Date());
+		// A guarded terminal may redirect fd 1/2 onto the day's log before any
+		// logger record exists; the cap watch must not wait for the first write.
+		this.#startExternalWatch();
 	}
 
 	#openFd(filePath: string): void {
@@ -117,7 +124,7 @@ export class RotatingFileSink {
 	 * record's `localDay` key, so callers that already took the record's `Date`
 	 * reuse it.
 	 */
-	write(line: string, flushNow = false, day = localDay(new Date())): void {
+	write(line: string, flushNow = false, day = localDay(this.#now())): void {
 		if (this.#closed) return;
 		this.#selectFile(day);
 		const record = `${line}${os.EOL}`;
@@ -186,6 +193,7 @@ export class RotatingFileSink {
 
 	#selectFile(day: string): void {
 		const dayChanged = day !== this.#activeDay;
+		const hadPriorSelection = this.#activeDay !== undefined;
 		if (!dayChanged && this.#activePath) {
 			// fd 1/2 can be redirected onto the active log (terminal-output-guard);
 			// those raw writes bypass write(), so the real file must be trusted over
@@ -217,11 +225,12 @@ export class RotatingFileSink {
 			this.#activeIndex++;
 			this.#setActivePath(day, this.#activeIndex);
 		}
-		if (this.#activeIndex > 0 && this.#activePath) {
+		if (this.#activePath && (this.#activeIndex > 0 || (dayChanged && hadPriorSelection))) {
 			// Rotation may have been triggered by the external-growth watch with
-			// no logger record behind it; open the new file and notify onRotate
-			// immediately so redirected fd 1/2 re-point without waiting for the
-			// next write, and the rotated-to file exists for retention accounting.
+			// no logger record behind it — size rollover or a timer-driven local-day
+			// change alike; open the new file and notify onRotate immediately so
+			// redirected fd 1/2 re-point without waiting for the next write, and
+			// the rotated-to file exists for retention accounting.
 			this.#registerFile(this.#activePath);
 			this.#openFd(this.#activePath);
 		}
@@ -266,7 +275,7 @@ export class RotatingFileSink {
 	/** Run the external-size sample and rotate if the cap is exceeded. */
 	checkExternalGrowth(): void {
 		if (this.#closed) return;
-		this.#selectFile(localDay(new Date()));
+		this.#selectFile(localDay(this.#now()));
 	}
 
 	#registerFile(filePath: string): void {

@@ -372,6 +372,16 @@ function getLocalTransports(): LocalTransports {
 	return activeTransports;
 }
 
+/**
+ * Build the file transport (and its external-growth watch) before any record
+ * exists. A guarded terminal redirects fd 1/2 onto the day's log at start and
+ * an inherited child can be the only producer, so the cap watch must not wait
+ * for the first logger record. No-op once local transports exist.
+ */
+export function ensureFileTransport(): void {
+	getLocalTransports();
+}
+
 function emitLocally(level: LogLevel, message: string, context: Record<string, unknown> | undefined): void {
 	const transports = getLocalTransports();
 	const rank = LOG_LEVEL_RANK[level];

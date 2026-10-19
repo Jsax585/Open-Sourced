@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as logger from "../src/logger";
 import { type RotatingFileBatchOptions, RotatingFileSink } from "../src/logger/rotating-file";
+import { localDay } from "../src/dirs";
 
 const FLUSH_BYTES = 64 * 1024;
 
@@ -121,6 +122,69 @@ describe("logger file batching", () => {
 });
 
 describe("RotatingFileSink batching", () => {
+	test("external growth is watched without any logger record at all", () => {
+		vi.useFakeTimers();
+		try {
+			const bareDir = path.join(dir, "bare");
+			fs.mkdirSync(bareDir);
+			const rotations: string[] = [];
+			// A TUI can start suppression before any logger record exists; the
+			// guard has already opened the day's log and an inherited child can
+			// be the only producer. The sink must watch from construction.
+			const sink = new RotatingFileSink({
+				directory: bareDir,
+				filenamePrefix: "omp",
+				filenameSuffix: "1234",
+				maxBytes: 1_000,
+				maxFiles: 5,
+				batch: { intervalMs: 300, maxBytes: FLUSH_BYTES },
+				onRotate: p => rotations.push(path.basename(p)),
+			});
+			fs.writeFileSync(path.join(bareDir, `omp.${localDay(new Date())}.1234.log`), "z".repeat(5_000));
+			vi.advanceTimersByTime(700);
+			expect(rotations.length).toBeGreaterThan(0);
+			expect(fs.readdirSync(bareDir).length).toBeGreaterThanOrEqual(2);
+			sink.close();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("a timer-driven day rollover re-points redirected descriptors", async () => {
+		vi.useFakeTimers();
+		try {
+			const rolloverDir = path.join(dir, "rollover");
+			fs.mkdirSync(rolloverDir);
+			const rotations: string[] = [];
+			const clock = { now: Date.now() };
+			const sink = new RotatingFileSink({
+				directory: rolloverDir,
+				filenamePrefix: "omp",
+				filenameSuffix: "1234",
+				maxBytes: 1_000,
+				maxFiles: 5,
+				batch: { intervalMs: 1_000, maxBytes: FLUSH_BYTES },
+				now: () => new Date(clock.now),
+				onRotate: p => rotations.push(path.basename(p)),
+			});
+			sink.write("day one record");
+			sink.flush();
+			const first = fs.readdirSync(rolloverDir).sort()[0];
+			// External writers keep appending through fd 1/2 with no records.
+			fs.appendFileSync(path.join(rolloverDir, first), "y".repeat(5_000));
+			// Cross local midnight without any logger record.
+			clock.now += 36 * 60 * 60 * 1000;
+			vi.advanceTimersByTime(1_100);
+			// The new day's file must be open and onRotate fired, so redirected
+			// descriptors follow it; otherwise they stay on yesterday's file.
+			expect(rotations.length).toBeGreaterThan(0);
+			expect(fs.readdirSync(rolloverDir).length).toBeGreaterThanOrEqual(2);
+			sink.close();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	test("external growth rotates on the watch cadence without further records", async () => {
 		const watchDir = path.join(dir, "watch");
 		fs.mkdirSync(watchDir);
