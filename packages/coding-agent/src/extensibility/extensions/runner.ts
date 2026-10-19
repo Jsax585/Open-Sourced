@@ -126,8 +126,18 @@ export interface ToolCallPreflight {
 		toolCallId: string,
 		result: AgentToolResult,
 		context?: AgentToolContext,
-		isError?: boolean,
 	) => Promise<AgentToolResult | undefined> | AgentToolResult | undefined;
+	/**
+	 * Runs once `tool_result` handlers have had the result: `result` and
+	 * `isError` are what the call returns. A block or deny never reaches it;
+	 * {@link cancel} runs instead.
+	 */
+	settled?: (
+		toolCallId: string,
+		result: AgentToolResult,
+		isError: boolean,
+		context?: AgentToolContext,
+	) => Promise<void> | void;
 	cancel?: (toolCallId: string) => void;
 }
 
@@ -677,9 +687,17 @@ export class ExtensionRunner {
 		toolCallId: string,
 		result: AgentToolResult,
 		context?: AgentToolContext,
-		isError?: boolean,
 	): Promise<AgentToolResult | undefined> {
-		return this.#toolCallPreflight?.after?.(toolCallId, result, context, isError);
+		return this.#toolCallPreflight?.after?.(toolCallId, result, context);
+	}
+
+	async runToolCallPreflightSettled(
+		toolCallId: string,
+		result: AgentToolResult,
+		isError: boolean,
+		context?: AgentToolContext,
+	): Promise<void> {
+		await this.#toolCallPreflight?.settled?.(toolCallId, result, isError, context);
 	}
 
 	cancelToolCallPreflight(toolCallId: string): void {

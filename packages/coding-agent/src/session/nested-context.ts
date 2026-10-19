@@ -14,10 +14,11 @@
  * context still holds its `<nested-context path="…">` block in a developer
  * message (keyed by absolute path, so a cwd change cannot alias it) with the
  * body the file would be delivered with now, or a full read of it without `@`
- * imports whose result still shows every line. Comparing the body means a
- * block-shaped string elsewhere (tool output, a reminder quoting model text)
- * never stands in for the file, and a file edited since it was delivered loads
- * again. Compaction that drops the block re-arms the file without bookkeeping.
+ * imports whose result still shows every line of the file as it is now.
+ * Comparing content means a block-shaped string elsewhere (tool output, a
+ * reminder quoting model text) never stands in for the file, and a file edited
+ * since it was delivered or read loads again, even within the batch that edits
+ * it. Compaction that drops the block re-arms the file without bookkeeping.
  * Subagents inherit the parent's loaded files, delivered or fully read, through
  * {@link NestedContextInjector.carried}, which lands them in the child's system
  * prompt and so in its context files.
@@ -108,10 +109,14 @@ interface QueuedBlock {
 	block: string;
 	/** Path relative to cwd, for the notice. */
 	display: string;
+	/** The directory the file governs. */
+	owner: string;
 	/** Path segments of the owning directory: shallower files are delivered first. */
 	depth: number;
-	/** Whether a full read of the file shows what the block would: it has no `@` imports. */
-	plain: boolean;
+	/** The file as a whole read shows it, when that is what the block holds: it has no `@` imports. */
+	shown: string | undefined;
+	/** Order of the touch whose discovery rendered the block: a later discovery renders it again. */
+	touch: number;
 }
 
 /**
@@ -132,8 +137,10 @@ interface BatchState {
 	executing: boolean;
 	/** Files claimed for delivery. */
 	claimed: Set<string>;
-	/** Context files a read of this batch showed whole. */
-	fullReads: Set<string>;
+	/** Context files a read of this batch showed whole, with the text it showed. */
+	fullReads: Map<string, string>;
+	/** Files an edit of this batch changed, with the order of the newest such touch. */
+	edits: Map<string, number>;
 	queue: QueuedBlock[];
 }
 
@@ -156,6 +163,8 @@ export class NestedContextInjector {
 	#batch: BatchState | undefined;
 	/** Bridged calls between their preflight and postflight: tool name and final arguments. */
 	readonly #bridged = new Map<string, { toolName: string; args: unknown }>();
+	/** Touches so far, in the order they began: orders discoveries that overlap an edit. */
+	#touches = 0;
 
 	constructor(host: NestedContextHost) {
 		this.#host = host;
@@ -318,7 +327,8 @@ export class NestedContextInjector {
 			outstanding: new Set(),
 			executing: false,
 			claimed: new Set(queue.map(queued => queued.path)),
-			fullReads: new Set(),
+			fullReads: new Map(),
+			edits: new Map(),
 			queue,
 		};
 		return this.#batch;
@@ -326,27 +336,47 @@ export class NestedContextInjector {
 
 	#touch(touch: Touch): Promise<void> | undefined {
 		if (TRIGGER_TOOLS[touch.toolName] !== true) return undefined;
+		const { batch } = touch;
+		const order = ++this.#touches;
 		// A whole read of a context file puts it in context: tool results precede
 		// the batch's developer message. Recorded before any await, and checked
 		// again when the queue is handed over, so a parallel call cannot claim the
 		// file first. A script's read reaches the model only if the script prints
 		// it, so it does not count.
-		const fullRead =
-			touch.toolName === "read" && !touch.hidden ? fullReadPath(touch.details, touch.content) : undefined;
-		if (fullRead) touch.batch.fullReads.add(fullRead);
+		const shown = touch.toolName === "read" && !touch.hidden ? fullRead(touch.details, touch.content) : undefined;
+		if (shown) batch.fullReads.set(shown.path, shown.text);
 		const cwd = path.resolve(this.#host.cwd());
 		const edited = editedFiles(touch, cwd);
 		// Discovery reads through the capability fs cache, which would still hold
 		// the directory listing and content from before this edit.
 		for (const file of edited) invalidateCapabilityCache(file);
 		const targets = touchedTargets(touch, cwd, edited);
+		if (edited.length > 0) targets.push(...this.#reopen(batch, edited, order));
 		const roots = this.#roots(cwd);
 		// A known file only touches its parent; an unknown target may be a directory itself.
 		const reachable = targets.some(
 			target => rootOf(roots, target.isDirectory === false ? path.dirname(target.path) : target.path) !== undefined,
 		);
 		if (!reachable) return undefined;
-		return this.#load(touch, cwd, roots, targets);
+		return this.#load(touch, order, cwd, roots, targets);
+	}
+
+	/**
+	 * Re-opens the batch's queue to an edit, before any await: each queued block
+	 * holds its file as it was when discovered. An edited file loses its block
+	 * and claim, so the edit's own discovery claims it as it is now, or not at
+	 * all once moved or deleted. Every other queued block's directory is probed
+	 * again, since editing a file one imports changes it too; returns those.
+	 */
+	#reopen(batch: BatchState, edited: readonly string[], order: number): TouchedTarget[] {
+		for (const file of edited) {
+			batch.edits.set(file, order);
+			const index = batch.queue.findIndex(queued => queued.path === file);
+			if (index === -1) continue;
+			batch.queue.splice(index, 1);
+			batch.claimed.delete(file);
+		}
+		return batch.queue.map(queued => ({ path: queued.owner, isDirectory: true }));
 	}
 
 	/** Workspace roots: cwd and the additional directories, whose own context files the system prompt was built with. */
@@ -354,7 +384,13 @@ export class NestedContextInjector {
 		return [cwd, ...this.#host.additionalDirectories().map(dir => path.resolve(dir))];
 	}
 
-	async #load(touch: Touch, cwd: string, roots: readonly string[], targets: readonly TouchedTarget[]): Promise<void> {
+	async #load(
+		touch: Touch,
+		order: number,
+		cwd: string,
+		roots: readonly string[],
+		targets: readonly TouchedTarget[],
+	): Promise<void> {
 		let files: NestedContextFile[];
 		let inPrompt: ReadonlySet<string>;
 		try {
@@ -374,19 +410,39 @@ export class NestedContextInjector {
 		const window = scanWindow(touch.messages);
 		// Claims and queueing stay synchronous, so the queue is in claim order.
 		for (const file of files) {
-			if (batch.claimed.has(file.path) || inPrompt.has(file.path)) continue;
+			// A discovery that began before an edit of the file may have read it as it
+			// was, even once moved or deleted; the edit's own discovery decides it.
+			if (inPrompt.has(file.path) || (batch.edits.get(file.path) ?? 0) > order) continue;
+			// A block an earlier discovery queued is rendered again: the file is as of now.
+			const index = batch.queue.findIndex(queued => queued.path === file.path);
+			const queued = index === -1 ? undefined : batch.queue[index];
+			if (batch.claimed.has(file.path) && (queued === undefined || queued.touch > order)) continue;
 			// A raw read shows `@` imports unexpanded, so it only stands in for a file without them.
-			const plain = file.content === file.raw;
-			if (plain && (window.fullReads.has(file.path) || batch.fullReads.has(file.path))) continue;
+			const shown = file.content === file.raw ? readText(file.raw) : undefined;
 			const block = renderBlock(cwd, file);
-			if (window.blocks.get(file.path) === blockBody(block)) continue;
+			const held =
+				(shown !== undefined &&
+					(window.fullReads.get(file.path) === shown || batch.fullReads.get(file.path) === shown)) ||
+				window.blocks.get(file.path) === blockBody(block);
+			if (queued !== undefined) {
+				if (held) {
+					batch.queue.splice(index, 1);
+					batch.claimed.delete(file.path);
+				} else {
+					batch.queue[index] = { ...queued, block, shown, touch: order };
+				}
+				continue;
+			}
+			if (held) continue;
 			batch.claimed.add(file.path);
 			batch.queue.push({
 				path: file.path,
 				block,
 				display: displayPath(cwd, file.path),
+				owner: file.owner,
 				depth: segmentCount(file.owner),
-				plain,
+				shown,
+				touch: order,
 			});
 		}
 	}
@@ -407,7 +463,7 @@ export class NestedContextInjector {
 	#drain(batch: BatchState): string | undefined {
 		const delivered = batch.queue
 			.splice(0)
-			.filter(queued => !(queued.plain && batch.fullReads.has(queued.path)))
+			.filter(queued => queued.shown === undefined || batch.fullReads.get(queued.path) !== queued.shown)
 			.sort((a, b) => a.depth - b.depth);
 		if (delivered.length === 0) return undefined;
 		this.#host.emitNotice("info", `Loaded ${delivered.map(queued => queued.display).join(", ")}`, NOTICE_SOURCE);
@@ -472,7 +528,7 @@ export class NestedContextInjector {
 		const roots = this.#roots(cwd);
 		const window = scanWindow(messages);
 		const owners = new Set<string>();
-		for (const filePath of [...window.blocks.keys(), ...window.fullReads]) {
+		for (const filePath of [...window.blocks.keys(), ...window.fullReads.keys()]) {
 			const owner = ownerDirectory(filePath);
 			if (rootOf(roots, owner) !== undefined) owners.add(owner);
 		}
@@ -582,13 +638,17 @@ function capContent(content: string, display: string): string {
 /**
  * Context files the live window may already hold, by absolute path: blocks
  * delivered as developer messages, with their delivered body, and files read
- * in full. A block-shaped string in tool output is the tool's output, never a
- * delivered file. Other developer messages can quote model-written text, so a
- * block found here only counts once its body matches the file's.
+ * in full, with the text the newest such read showed. A block-shaped string in
+ * tool output is the tool's output, never a delivered file. Other developer
+ * messages can quote model-written text, so a block found here only counts
+ * once its body matches the file's, and a read only while the file is as read.
  */
-function scanWindow(messages: readonly AgentMessage[]): { blocks: Map<string, string>; fullReads: Set<string> } {
+function scanWindow(messages: readonly AgentMessage[]): {
+	blocks: Map<string, string>;
+	fullReads: Map<string, string>;
+} {
 	const blocks = new Map<string, string>();
-	const fullReads = new Set<string>();
+	const fullReads = new Map<string, string>();
 	for (const message of messages) {
 		if (message.role === "developer") {
 			for (const match of messageText(message.content).matchAll(BLOCK_RE)) {
@@ -596,8 +656,8 @@ function scanWindow(messages: readonly AgentMessage[]): { blocks: Map<string, st
 				if (path.isAbsolute(blockPath)) blocks.set(blockPath, match[2]);
 			}
 		} else if (message.role === "toolResult" && message.toolName === "read" && !message.isError) {
-			const readPath = fullReadPath(message.details, message.content);
-			if (readPath) fullReads.add(readPath);
+			const shown = fullRead(message.details, message.content);
+			if (shown) fullReads.set(shown.path, shown.text);
 		}
 	}
 	return { blocks, fullReads };
@@ -626,14 +686,15 @@ function readDetailsPath(details: Record<string, unknown>): string | undefined {
 }
 
 /**
- * Absolute path of a read that showed the whole file: every line from 1 to the
- * end, in order, with nothing truncated, elided, summarised or cut at a column.
- * A tail or range read can start at line 1 and still skip the middle, so the
- * displayed line numbers are the proof. Details outlive their content: pruning
- * blanks a result in place, and an extension's `tool_result` handler can
- * replace the content alone, so the visible content must still show each line.
+ * A read that showed the whole file: its absolute path, and the text it showed
+ * as {@link readText} compares it. Every line from 1 to the end, in order,
+ * with nothing truncated, elided, summarised or cut at a column. A tail or
+ * range read can start at line 1 and still skip the middle, so the displayed
+ * line numbers are the proof. Details outlive their content: pruning blanks a
+ * result in place, and an extension's `tool_result` handler can replace the
+ * content alone, so the visible content must still show each line.
  */
-function fullReadPath(details: unknown, content: unknown): string | undefined {
+function fullRead(details: unknown, content: unknown): { path: string; text: string } | undefined {
 	if (!isRecord(details) || details.isDirectory === true) return undefined;
 	if (details.truncation !== undefined || details.summary !== undefined) return undefined;
 	const meta = isRecord(details.meta) ? details.meta : {};
@@ -647,7 +708,20 @@ function fullReadPath(details: unknown, content: unknown): string | undefined {
 	if (typeof display.text !== "string" || !showsInOrder(messageText(content), display.text.split("\n"))) {
 		return undefined;
 	}
-	return readDetailsPath(details);
+	const readPath = readDetailsPath(details);
+	return readPath === undefined ? undefined : { path: readPath, text: readText(display.text) };
+}
+
+/**
+ * Text as a whole read shows it, so a read compares with the file it read: LF
+ * line ends, no byte-order mark, no final newline. A file edited since the
+ * read no longer compares equal.
+ */
+function readText(text: string): string {
+	return text
+		.replace(/^\uFEFF/, "")
+		.replace(/\r\n/g, "\n")
+		.replace(/\n$/, "");
 }
 
 /** Whether `shown` contains every one of `lines`, in order (a line prefix may precede each). */

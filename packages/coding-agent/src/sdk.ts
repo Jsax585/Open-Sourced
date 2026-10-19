@@ -4127,7 +4127,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (typeof options.systemPrompt !== "function") {
 				return defaultPrompt;
 			}
-			const customPrompt = options.systemPrompt(defaultPrompt.systemPrompt);
+			// A copy: a callback that edits the array in place must not edit the
+			// baseline its result is compared against.
+			const customPrompt = options.systemPrompt([...defaultPrompt.systemPrompt]);
 			const systemPrompt = typeof customPrompt === "string" ? [customPrompt] : customPrompt;
 			return { systemPrompt, contextFilePaths: keptContextFilePaths(defaultPrompt, systemPrompt) };
 		};

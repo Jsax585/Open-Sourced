@@ -2260,10 +2260,9 @@ export class AgentSession implements SettingsScope {
 				if (!verdict?.block) this.#nestedContext.beforeBridgedToolCall(toolCallId, tool.name, args);
 				return verdict;
 			},
-			after: async (toolCallId, result, context, isError) => {
-				await this.#nestedContext.afterBridgedToolCall(toolCallId, result, isError === true, context);
-				return this.#ttsr.afterBridgedToolCall(toolCallId, result, context);
-			},
+			after: (toolCallId, result, context) => this.#ttsr.afterBridgedToolCall(toolCallId, result, context),
+			settled: (toolCallId, result, isError, context) =>
+				this.#nestedContext.afterBridgedToolCall(toolCallId, result, isError, context),
 			cancel: toolCallId => {
 				this.#ttsr.cancelBridgedToolCall(toolCallId);
 				this.#nestedContext.cancelBridgedToolCall(toolCallId);

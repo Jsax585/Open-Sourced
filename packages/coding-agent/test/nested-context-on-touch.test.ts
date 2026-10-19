@@ -99,8 +99,8 @@ async function run(
 	followUp?: FollowUp,
 	/** Index of a turn whose tool calls a user steer arrives behind, before any executes. */
 	steerOnTurn?: number,
-	/** The session's `systemPrompt` override. */
-	systemPrompt?: CreateAgentSessionOptions["systemPrompt"],
+	/** Session options under test: a `systemPrompt` override, inline extensions. */
+	overrides?: Pick<CreateAgentSessionOptions, "systemPrompt" | "extensions">,
 ): Promise<RunResult> {
 	const api = `test-nested-context-${++apiCounter}`;
 	const contexts: Context[] = [];
@@ -173,7 +173,7 @@ async function run(
 		disableExtensionDiscovery: true,
 		skills: [],
 		contextFiles,
-		systemPrompt,
+		...overrides,
 		promptTemplates: [],
 		slashCommands: [],
 		enableMCP: false,
@@ -331,6 +331,58 @@ describe("contextFiles.onTouch", () => {
 		expect(result.developerTexts).toEqual([]);
 	});
 
+	it("treats a full read of a file ending in a newline as loaded", async () => {
+		// Guards full-read matching: a read shows lines, not the file's bytes, so the final
+		// newline must not make an unchanged file look edited since the read and load a second copy.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY\n", "pkg/a.ts": "a" });
+		const result = await run(
+			tempDir,
+			repo,
+			[
+				[{ name: "read", arguments: { path: "pkg/AGENTS.md" } }],
+				[{ name: "read", arguments: { path: "pkg/a.ts" } }],
+			],
+			ON,
+		);
+		expect(result.developerTexts).toEqual([]);
+	});
+
+	it("loads a context file again once it changes after an earlier batch read it in full", async () => {
+		// Guards full-read dedupe against edits: the read shows the old rules, so once the file
+		// changes it no longer stands in for it and the new rules must reach the model.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "a" });
+		const result = await run(
+			tempDir,
+			repo,
+			[
+				[{ name: "read", arguments: { path: "pkg/AGENTS.md" } }],
+				[{ name: "write", arguments: { path: "pkg/AGENTS.md", content: "PKG-NEW" } }],
+			],
+			ON,
+		);
+		expect(result.developerTexts).toHaveLength(1);
+		expect(result.developerTexts[0]).toContain("PKG-NEW");
+	});
+
+	it("loads a context file a call of the same batch read in full and a later one changed", async () => {
+		// Guards the batch's full reads against edits: the read precedes the write, so its
+		// result shows the old rules and the batch's developer message must carry the new ones.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "a" });
+		const result = await run(
+			tempDir,
+			repo,
+			[
+				[
+					{ name: "read", arguments: { path: "pkg/AGENTS.md" } },
+					{ name: "write", arguments: { path: "pkg/AGENTS.md", content: "PKG-NEW" } },
+				],
+			],
+			ON,
+		);
+		expect(result.developerTexts).toHaveLength(1);
+		expect(result.developerTexts[0]).toContain("PKG-NEW");
+	});
+
 	it("caps each file and points at the rest", async () => {
 		// Guards the per-file cost bound: an oversized file is truncated, not dropped or delivered whole.
 		const big = `HEAD-CANARY\n${"x".repeat(NESTED_CONTEXT_FILE_MAX_CHARS)}TAIL-CANARY`;
@@ -423,10 +475,38 @@ describe("contextFiles.onTouch", () => {
 		// prompt only while the callback's output still carries their block.
 		setup({ "a.ts": "a" });
 		const touch: ScriptedCall[][] = [[{ name: "read", arguments: { path: "a.ts" } }]];
-		const dropped = await run(tempDir, repo, touch, ON, undefined, undefined, undefined, () => ["CUSTOM"]);
+		const dropped = await run(tempDir, repo, touch, ON, undefined, undefined, undefined, {
+			systemPrompt: () => ["CUSTOM"],
+		});
 		expect(blockPaths(dropped.developerTexts, repo)).toEqual(["AGENTS.md"]);
-		const kept = await run(tempDir, repo, touch, ON, undefined, undefined, undefined, base => [...base, "EXTRA"]);
+		const kept = await run(tempDir, repo, touch, ON, undefined, undefined, undefined, {
+			systemPrompt: base => [...base, "EXTRA"],
+		});
 		expect(kept.developerTexts).toEqual([]);
+	});
+
+	it("loads a root's file a systemPrompt callback removed from the array it was given", async () => {
+		// Guards the prompt snapshot against in-place edits: removing a block from the array the
+		// callback receives must not remove it from the default prompt its result is compared with.
+		setup({ "a.ts": "a" });
+		const result = await run(
+			tempDir,
+			repo,
+			[[{ name: "read", arguments: { path: "a.ts" } }]],
+			ON,
+			undefined,
+			undefined,
+			undefined,
+			{
+				systemPrompt: base => {
+					const at = base.findIndex(block => block.includes("ROOT-CANARY"));
+					expect(at).toBeGreaterThan(-1);
+					base.splice(at, 1);
+					return base;
+				},
+			},
+		);
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["AGENTS.md"]);
 	});
 
 	it("hands loaded files to subagents, and a session already holding a file does not load it again", async () => {
@@ -774,6 +854,70 @@ describe("contextFiles.onTouch", () => {
 		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
 	});
 
+	it("delivers a context file as a later write of the same batch left it", async () => {
+		// Guards same-batch edits: an earlier call queued the old rules, and the batch's developer
+		// message follows the write, so it must carry the rules as written.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "a" });
+		const result = await run(
+			tempDir,
+			repo,
+			[
+				[
+					{ name: "read", arguments: { path: "pkg/a.ts" } },
+					{ name: "write", arguments: { path: "pkg/AGENTS.md", content: "PKG-NEW" } },
+				],
+			],
+			ON,
+		);
+		expect(result.developerTexts).toHaveLength(1);
+		expect(result.developerTexts[0]).toContain("PKG-NEW");
+		expect(result.developerTexts[0]).not.toContain("PKG-CANARY");
+	});
+
+	it("delivers a queued context file as a later write of the same batch to a file it imports left it", async () => {
+		// Guards same-batch edits through imports: the written file sits outside the queued
+		// file's directory, yet the block holds it expanded, so the block must be rendered again.
+		setup({
+			"pkg/AGENTS.md": "PKG-CANARY\n@../docs/rules.md",
+			"docs/rules.md": "RULES-OLD",
+			"pkg/a.ts": "a",
+		});
+		const result = await run(
+			tempDir,
+			repo,
+			[
+				[
+					{ name: "read", arguments: { path: "pkg/a.ts" } },
+					{ name: "write", arguments: { path: "docs/rules.md", content: "RULES-NEW" } },
+				],
+			],
+			ON,
+		);
+		expect(blockPaths(result.developerTexts, repo)).toEqual(["pkg/AGENTS.md"]);
+		expect(result.developerTexts[0]).toContain("RULES-NEW");
+		expect(result.developerTexts[0]).not.toContain("RULES-OLD");
+	});
+
+	it("drops a queued context file a later edit of the same batch deletes", async () => {
+		// Guards same-batch edits that remove the file: its queued rules no longer exist, so the
+		// batch must not deliver them.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "pkg/a.ts": "a" });
+		const input = "*** Begin Patch\n*** Delete File: pkg/AGENTS.md\n*** End Patch\n";
+		const result = await run(
+			tempDir,
+			repo,
+			[
+				[
+					{ name: "read", arguments: { path: "pkg/a.ts" } },
+					{ name: "edit", arguments: { input } },
+				],
+			],
+			{ ...ON, "edit.mode": "apply_patch" },
+		);
+		expect(fs.existsSync(path.join(repo, "pkg/AGENTS.md"))).toBe(false);
+		expect(result.developerTexts).toEqual([]);
+	});
+
 	it("triggers on an edit called by its apply_patch wire name", async () => {
 		// Guards custom-format tools: in apply_patch mode the model calls `edit` as `apply_patch`,
 		// and the message keeps that name, so matching on it would miss every edit.
@@ -870,6 +1014,53 @@ describe("contextFiles.onTouch", () => {
 		// The second read shows the bridge does deliver context; the first, a full read, needs none.
 		expect(delivered[0]).toBeUndefined();
 		expect(blockPaths([delivered[1] ?? ""], repo)).toEqual(["other/AGENTS.md"]);
+	});
+
+	it("judges a Cursor exec call by the result its tool_result handlers leave", async () => {
+		// Guards bridged postflight order: a handler can replace the read the model sees or flag
+		// the call failed, so a context file whose read was replaced must still load and a call
+		// a handler failed must load none.
+		setup({ "pkg/AGENTS.md": "PKG-CANARY", "other/AGENTS.md": "OTHER-CANARY", "other/b.ts": "b" });
+		const delivered: Array<string | undefined> = [];
+		await run(
+			tempDir,
+			repo,
+			[],
+			ON,
+			undefined,
+			{
+				before: async session => {
+					const handlers = new CursorExecHandlers({
+						cwd: repo,
+						tools: new Map([["read", session.getToolByName("read") as unknown as Tool]]),
+						getToolContext: () =>
+							({ settings: session.settings, autoApprove: true }) as unknown as AgentToolContext,
+					});
+					for (const [index, file] of ["pkg/AGENTS.md", "other/b.ts"].entries()) {
+						const message = (await handlers.piRead({
+							toolCallId: `cursor-read-${index}`,
+							args: { path: path.join(repo, file) },
+						} as never)) as ToolResultWithAdditionalContext;
+						delivered.push(message[TOOL_RESULT_ADDITIONAL_CONTEXT]);
+					}
+				},
+				turns: [],
+			},
+			undefined,
+			{
+				extensions: [
+					pi => {
+						pi.on("tool_result", event =>
+							JSON.stringify(event.input).includes("AGENTS.md")
+								? { content: [{ type: "text", text: "[REDACTED]" }] }
+								: { isError: true },
+						);
+					},
+				],
+			},
+		);
+		expect(blockPaths([delivered[0] ?? ""], repo)).toEqual(["pkg/AGENTS.md"]);
+		expect(delivered[1]).toBeUndefined();
 	});
 
 	it("loads a file again once compaction drops it from the window", async () => {
