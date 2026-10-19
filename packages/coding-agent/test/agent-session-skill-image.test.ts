@@ -114,42 +114,29 @@ it("describes a queued user-invoked skill image before delivery", async () => {
 	expectDescriptionBeforeSkill(skillRequest?.context.messages ?? []);
 });
 
-it("queues an image-bearing skill when another turn starts during vision preprocessing", async () => {
+it("queues a prompt sent during an image-bearing skill's vision preprocessing behind the skill", async () => {
 	const visionStarted = Promise.withResolvers<void>();
 	const releaseVision = Promise.withResolvers<void>();
-	const otherStarted = Promise.withResolvers<void>();
-	const releaseOther = Promise.withResolvers<void>();
 	const { session, mock, visionCalls } = setup({
 		beforeVisionReply: async () => {
 			visionStarted.resolve();
 			await releaseVision.promise;
 		},
-		responses: [
-			async () => {
-				otherStarted.resolve();
-				await releaseOther.promise;
-				return { content: ["other done"] };
-			},
-		],
 	});
 	const skillDispatch = session.promptCustomMessage(skill, { streamingBehavior: "followUp" });
 	await visionStarted.promise;
-	const otherTurn = session.prompt("other turn");
-	await otherStarted.promise;
+	// Like a typed prompt, the skill claims the session before preparing its image, so this
+	// submission queues behind it instead of starting a second turn.
+	const otherTurn = session.prompt("other turn", { streamingBehavior: "followUp" });
 	releaseVision.resolve();
-	// Queued into the running turn, the skill settles while that turn is still blocked;
-	// dispatching it as its own turn would wait for the other turn and never settle here.
-	await skillDispatch;
-	expect(session.agent.state.isStreaming).toBe(true);
-	releaseOther.resolve();
-	await otherTurn;
+	await Promise.all([skillDispatch, otherTurn]);
 	await session.waitForIdle();
 	expect(visionCalls()).toBe(1);
-	const skillRequest = mock.calls.find(call =>
-		call.context.messages.some(message => JSON.stringify(message.content).includes("Expanded skill.")),
-	);
-	expect(JSON.stringify(skillRequest?.context.messages)).toContain("other turn");
-	expectDescriptionBeforeSkill(skillRequest?.context.messages ?? []);
+	const skillCall = mock.calls.findIndex(call => JSON.stringify(call.context.messages).includes("Expanded skill."));
+	const otherCall = mock.calls.findIndex(call => JSON.stringify(call.context.messages).includes("other turn"));
+	expect(skillCall).toBe(0);
+	expect(otherCall).toBeGreaterThan(skillCall);
+	expectDescriptionBeforeSkill(mock.calls[skillCall]?.context.messages ?? []);
 });
 
 it("drops an image-bearing skill when aborted during vision preprocessing", async () => {
@@ -170,4 +157,22 @@ it("drops an image-bearing skill when aborted during vision preprocessing", asyn
 	expect(visionCalls()).toBe(1);
 	expect(mock.calls.length).toBe(0);
 	expect(session.messages.length).toBe(0);
+});
+
+it("drops an image-bearing skill when the session starts closing during vision preprocessing", async () => {
+	const visionStarted = Promise.withResolvers<void>();
+	const releaseVision = Promise.withResolvers<void>();
+	const { session, mock, visionCalls } = setup({
+		beforeVisionReply: async () => {
+			visionStarted.resolve();
+			await releaseVision.promise;
+		},
+	});
+	const skillDispatch = session.promptCustomMessage(skill);
+	await visionStarted.promise;
+	session.beginDispose();
+	releaseVision.resolve();
+	expect(await skillDispatch).toBe(false);
+	expect(visionCalls()).toBe(1);
+	expect(mock.calls.length).toBe(0);
 });

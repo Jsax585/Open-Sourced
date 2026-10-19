@@ -104,9 +104,21 @@ export const cfgPrewalkAuto = register({
 				value: "on",
 				label: "On",
 				description:
-					"For confidently front-loaded tasks, arm a handoff from the active model to the auto target; the next task starts back on the planning model",
+					"For confidently front-loaded tasks, arm a handoff to the auto target; the next task starts back on the model the previous task started on",
 			},
 		],
+	},
+});
+
+export const cfgPrewalkAutoPlanningModel = register({
+	id: "prewalk.autoPlanningModel",
+	type: "string",
+	default: "",
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "Auto-prewalk planning model",
+		description: "Optional model or role selected before preparing a confidently front-loaded task.",
 	},
 });
 
@@ -118,7 +130,8 @@ export const cfgPrewalkAutoTarget = register({
 		tab: "model",
 		group: "Prewalk",
 		label: "Auto-prewalk target",
-		description: "Model or role (default '@smol') auto-prewalk hands off to at the first edit/write.",
+		description:
+			"Model or role (default '@smol') auto-prewalk hands off to at the first edit/write. 'initial' hands back to the model a task started on when the planning model replaced it.",
 	},
 });
 

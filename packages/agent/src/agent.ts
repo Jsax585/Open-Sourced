@@ -1019,14 +1019,18 @@ export class Agent {
 				throw new DOMException("Queued message preparation cancelled", "AbortError");
 			}
 			delete this.#queuedMessageClaims[queue];
+			const before = preparation?.before;
+			const delivered = before?.size
+				? messages.flatMap(message => [...(before.get(message) ?? []), message])
+				: messages;
 			this.#queuedMessageDeliveries.add({
 				queue,
 				controller: runController,
-				messages,
+				messages: delivered,
 				next: 0,
 				additional: additional ?? [],
 			});
-			return additional?.length ? [...messages, ...additional] : messages;
+			return additional?.length ? [...delivered, ...additional] : delivered;
 		} catch (error) {
 			if (signal.aborted) throw error;
 			if (preparationSignal.aborted || this.#queuedMessageClaims[queue] !== claim) return [];

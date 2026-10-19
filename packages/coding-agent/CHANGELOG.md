@@ -2,12 +2,26 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added optional `prewalk.autoPlanningModel`: when auto-prewalk arms a task, OMP switches to that planning model before preparing the task, and `prewalk.autoTarget: initial` hands implementation back to the model the task started on ([#16243](https://github.com/can1357/oh-my-pi/pull/16243) by [@taibenvenuti](https://github.com/taibenvenuti))
+
+### Changed
+
+- A typed or `/skill:` prompt with images now holds the session while its images are prepared, so a prompt sent meanwhile queues behind it instead of starting first ([#16243](https://github.com/can1357/oh-my-pi/pull/16243) by [@taibenvenuti](https://github.com/taibenvenuti))
+- An idle prompt is now acknowledged (RPC `prompt`) after a retry-fallback or auto-prewalk model restore instead of before it, and, when `prewalk.autoPlanningModel` switches models, after the task is judged ([#16243](https://github.com/can1357/oh-my-pi/pull/16243) by [@taibenvenuti](https://github.com/taibenvenuti))
+
 ### Fixed
 
 - Fixed `read` middle-eliding large file pages into an artifact; a page past the output spill threshold now stops at a line boundary with an exact `:N` continuation ([#16277](https://github.com/can1357/oh-my-pi/issues/16277))
 - Fixed an edit after a restart replacing a line that `read` or `grep` had shown cut at the column cap and silently dropping the rest of that line; such edits now ask for a full `:raw` read of the line first, while edits to lines within the cap still apply ([#16171](https://github.com/can1357/oh-my-pi/issues/16171))
 - Fixed Enter on an unknown slash command such as `/not-a-command` running a command whose description happened to match it (e.g. `/loop`, which then resent every later prompt after each turn); Enter now sends what you typed, including as the deny-and-steer message for a pending tool approval, unless you select a suggestion first ([#16265](https://github.com/can1357/oh-my-pi/issues/16265))
 - Fixed `read` of web pages dropping collapsed sections such as accordion and expander panels (e.g. a product page's "Item details" table); content in `<template>`, `<noscript>` and scripts stays out ([#16246](https://github.com/can1357/oh-my-pi/issues/16246))
+- Fixed a slow automatic thinking classification overriding a model or thinking level you selected meanwhile ([#16243](https://github.com/can1357/oh-my-pi/pull/16243) by [@taibenvenuti](https://github.com/taibenvenuti))
+- Fixed an explicit model or thinking selection leaving a pending auto-prewalk handoff that later switched away from your choice ([#16243](https://github.com/can1357/oh-my-pi/pull/16243) by [@taibenvenuti](https://github.com/taibenvenuti))
+- Fixed prewalk skipping a handoff to a target that differs from the active model only by its upstream route (for example `openrouter/x@anthropic` to `openrouter/x@google`), and `/prewalk` treating another route of the armed target as the same target ([#16243](https://github.com/can1357/oh-my-pi/pull/16243) by [@taibenvenuti](https://github.com/taibenvenuti))
+- Fixed auto-prewalk leaving later tasks on a context-promoted handoff model instead of returning to the model the task started on ([#16243](https://github.com/can1357/oh-my-pi/pull/16243) by [@taibenvenuti](https://github.com/taibenvenuti))
+- Fixed auto-prewalk undoing, at the next task, a thinking level that an SDK subscriber selected while the handoff was switching models ([#16243](https://github.com/can1357/oh-my-pi/pull/16243) by [@taibenvenuti](https://github.com/taibenvenuti))
 
 ## [18.12.2] - 2026-10-18
 
