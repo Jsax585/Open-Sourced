@@ -953,6 +953,21 @@ describe("runSubprocess result acceptance", () => {
 			}
 		});
 
+		it("does not land a turn whose owner cancelled the wake job before settlement", async () => {
+			const { manager, harness, observer, settle } = setUp();
+			try {
+				const finish = observer([ircRecord("Parent", "fix the mask path too")]);
+				harness.emitAssistantText("mask path fixed too");
+				expect(manager.cancel(AGENT_ID, { ownerId: "Parent" })).toBe(true);
+				await finish?.(undefined);
+
+				expect(settle).not.toHaveBeenCalled();
+				expect(manager.getJob(AGENT_ID)?.status).toBe("cancelled");
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
 		it("settles an owner-woken turn and relays the notice when the owner's job cannot be registered", async () => {
 			const { manager, harness, observer, settle } = setUp();
 			vi.spyOn(manager, "register").mockImplementation(() => {

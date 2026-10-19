@@ -101,7 +101,8 @@ async function runKeptAlive(opts: {
 	 * right after the run.
 	 */
 	afterRun?: (turnStarted: (() => void) | undefined) => Promise<void>;
-	onReleaseArtifacts?: () => void;
+	/** When set, release actually removes the isolation instead of the default no-op. */
+	deleteIsolationOnCleanup?: boolean;
 }): Promise<KeptAliveRun> {
 	const artifactsDir = await tempDir("omp-follow-up-artifacts-");
 	vi.spyOn(worktreeModule, "ensureIsolation").mockResolvedValue({
@@ -110,7 +111,9 @@ async function runKeptAlive(opts: {
 		fellBack: false,
 		fallbackReason: null,
 	});
-	vi.spyOn(worktreeModule, "cleanupIsolation").mockResolvedValue();
+	vi.spyOn(worktreeModule, "cleanupIsolation").mockImplementation(async () => {
+		if (opts.deleteIsolationOnCleanup) await fs.rm(opts.iso, { recursive: true, force: true });
+	});
 	const session = {
 		prepareForHeadlessAdvisorDrain: () => {},
 		waitForAdvisorCatchup: async () => true,
@@ -138,6 +141,7 @@ async function runKeptAlive(opts: {
 			agentIdleTtlMs: 0,
 			reviveSession: async () => session,
 			onRelease: options.onRelease,
+			onAdopted: options.onAdopted,
 		});
 		await opts.afterRun?.(options.onFollowUpTurnStarted);
 		return result(options.id);
@@ -762,6 +766,83 @@ describe("isolated agent follow-up turns", () => {
 		expect(await run.settleFollowUp?.(result("FirstRunRetry"))).toBe("");
 		await AgentLifecycleManager.global().release("FirstRunRetry");
 		expect(await taskBranches(repo)).toBe("");
+	});
+
+	it("keeps an unlanded apply=false handoff when the agent is released", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const released: string[] = [];
+		const { firstRun, followUps } = landingFollowUps(repo, "patch");
+		// The task tool's apply=false path: the landing resolves null, so nothing is applied.
+		followUps.land = async () => ({ summary: "not applied", landed: null });
+		const run = await runKeptAlive({
+			id: "FollowUpUnlandedRelease",
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+			onReleaseArtifacts: () => released.push("released"),
+		});
+		firstRun.resolve(null);
+		await commitIn(iso, "two\n", "review fix");
+		expect(await run.settleFollowUp?.(result("FollowUpUnlandedRelease"))).toContain("not applied");
+
+		await AgentLifecycleManager.global().release("FollowUpUnlandedRelease");
+
+		// The handoff was deliberately left unapplied. Release must not delete the only copy.
+		expect(released).toEqual(["released"]);
+		expect(await Bun.file(run.first.patchPath ?? "").text()).toContain("+two");
+	});
+
+	it("does not delete the isolation while the first capture is still writing", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "patch");
+		const run = await runKeptAlive({
+			id: "FollowUpReleaseDuringCapture",
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps,
+			deleteIsolationOnCleanup: true,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+			// A release that starts during adoption must wait out the first capture.
+			// The agent does not await it: the parent does, from outside this run.
+			afterRun: async () => {
+				void AgentLifecycleManager.global().release("FollowUpReleaseDuringCapture");
+				const { promise, resolve } = Promise.withResolvers<void>();
+				setTimeout(resolve, 100);
+				await promise;
+			},
+		});
+		firstRun.resolve(run.first.isolationCaptureFailed ? null : true);
+
+		expect(run.first.isolationCaptureFailed).not.toBe(true);
+		expect(run.first.patchPath && (await Bun.file(run.first.patchPath).text())).toContain("+one");
+	});
+
+	it("restores the task branch when a follow-up commit is superseded before it lands", async () => {
+		const { repo, iso, baseSha } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "branch");
+		const run = await runKeptAlive({
+			id: "FollowUpSupersededBranch",
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		const firstLanding = await mergeIsolatedChanges({ result: run.first, repoRoot: repo, mergeMode: "branch" });
+		firstRun.resolve(firstLanding.changesApplied === true);
+		await commitIn(iso, "two\n", "review fix");
+		// The first superseded() check is before the branch write; the second is after it.
+		let checks = 0;
+		expect(await run.settleFollowUp?.(result("FollowUpSupersededBranch"), () => ++checks >= 2)).toContain(
+			"not captured",
+		);
+
+		// The follow-up commit must not survive on the branch the first run already published.
+		expect(await git(repo, ["log", "--format=%s", `${baseSha}..omp/task/FollowUpSupersededBranch`])).toBe("first run");
+		await AgentLifecycleManager.global().release("FollowUpSupersededBranch");
 	});
 
 	it("marks a first run whose changes could not be captured and lands none of its follow-ups", async () => {

@@ -452,6 +452,10 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	let pending: { state: IsolationState; tip: string | undefined; landing: Promise<boolean | null> } | undefined;
 	/** Set when the caller refused the last handoff, so the next capture hands it over again even if unchanged. */
 	let retryRefused = false;
+	// A handoff the caller deliberately left unapplied (apply=false resolves
+	// null). Its files are the only copy until a later turn lands them, so a
+	// release must not let the no-session lease delete them.
+	let preserveUnlanded = false;
 	// Settles once this function is done with the first run. Follow-up turns
 	// wait for it, so they never capture before the first run's handoff.
 	const firstRunDone = Promise.withResolvers<void>();
@@ -493,7 +497,9 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		if (!settled) return;
 		const outcome = await settled.landing;
 		retryRefused = outcome === false;
+		preserveUnlanded = outcome === null;
 		if (outcome !== true) return;
+		preserveUnlanded = false;
 		// A capture with no root changes made no branch: the previous tip still holds everything.
 		landed = { state: settled.state, tip: settled.tip ?? landed?.tip };
 	};
@@ -504,6 +510,28 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	 */
 	let laterCaptures = 0;
 	const nextNestedPatchPrefix = (): string => `${opts.agentId}.nested-${++laterCaptures}`;
+	/**
+	 * A follow-up wrote the task branch, then the caller said the capture was
+	 * superseded before it landed. Put the branch back: restore the tip the
+	 * caller already has, or delete a branch this capture created from scratch.
+	 */
+	const discardSupersededBranch = async (
+		branchName: string | undefined,
+		restoreTip: string | undefined,
+	): Promise<void> => {
+		if (!branchName) return;
+		try {
+			const repo = vcs.requireGit(opts.context.repoRoot);
+			if (restoreTip) await repo.createBranch(branchName, restoreTip, true);
+			else await repo.deleteBranch(branchName, true);
+		} catch (error) {
+			logger.warn("Could not undo a superseded task branch", {
+				branch: branchName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	};
+
 	/**
 	 * Capture the workspace for the caller: the work since the last landed
 	 * capture, or since the run began while nothing has landed. `"unchanged"`
@@ -549,8 +577,12 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		// `commitToBranch` found nothing in its own read: hand nothing over and look again next turn.
 		if (!branch) return "unchanged";
 		// `commitToBranch` read the workspace again; a branch built from that read
-		// is replaced by the next capture's.
-		if (superseded()) return "superseded";
+		// is replaced by the next capture's. Undo the write first: a follow-up
+		// that never lands must not stay on the branch the caller already has.
+		if (superseded()) {
+			await discardSupersededBranch(branch.branchName, landed?.tip);
+			return "superseded";
+		}
 		const nestedPatchPaths = await persistNestedPatches(
 			opts.artifactsDir,
 			nextNestedPatchPrefix(),
@@ -631,12 +663,12 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					// only copy, and skipping the callback lets a no-session
 					// lease delete them.
 					if (handedOff && sameIsolationState(handedOff, current.state)) {
-						if (retryRefused) opts.onReleaseArtifacts?.();
+						if (retryRefused || preserveUnlanded) opts.onReleaseArtifacts?.();
 						return;
 					}
 					delta = landed ? await diffIsolationStates(taskBaseline, landed.state, current.state) : current;
 					if (!delta.rootPatch.trim() && delta.nestedPatches.length === 0) {
-						if (retryRefused) opts.onReleaseArtifacts?.();
+						if (retryRefused || preserveUnlanded) opts.onReleaseArtifacts?.();
 						return;
 					}
 					opts.onReleaseArtifacts?.();
@@ -727,6 +759,13 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			// below cleans it up. Only kept-alive runs hand full capture+cleanup
 			// (`releaseIsolation`) to the agent lifecycle.
 			onRelease: opts.baseOptions.keepAlive === false ? releaseBase : releaseIsolation,
+			// Set before `runSubprocess` returns. A release that starts during
+			// adoption otherwise deletes the isolation while this function is
+			// still writing the first capture.
+			onAdopted: () => {
+				firstRunCapturing = true;
+				opts.baseOptions.onAdopted?.();
+			},
 			onFollowUpTurnSettled:
 				opts.followUps && opts.baseOptions.keepAlive !== false
 					? async (turn, superseded) => {

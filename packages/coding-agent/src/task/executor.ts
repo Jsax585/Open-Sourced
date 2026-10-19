@@ -3494,8 +3494,11 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				// must not land behind its back. The owner hears it through its wake
 				// job, through the relay below when it woke the agent but no job
 				// could be registered, or through a user-prompted result's delivery.
+				// A cancelled wake job is not a delivery: the owner already gave up
+				// the turn, so its checkout must not change behind that decision.
 				const ownerTold =
-					wakeJob !== undefined || ownerWoken || (messageResult && !!ownerId && !!session.asyncJobManager);
+					!jobCancel.signal.aborted &&
+					(wakeJob !== undefined || ownerWoken || (messageResult && !!ownerId && !!session.asyncJobManager));
 				let notice = "";
 				if (result && options.onTurnSettled && ownerTold) {
 					try {

@@ -148,6 +148,10 @@
 - Fixed a refused follow-up of an isolated task deleting the only copy of that patch when the agent was released and the session had no session file, and follow-up nested-repo patches missing from `agent://` after a restart ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 - Fixed an isolated task losing the only copy of a nested repository patch when that patch failed to apply after the root changes landed and the agent was later released ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 - Fixed the leftover patch from an isolated task disappearing when the agent was released while its first run was still landing ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
+- Fixed an isolated task's follow-up that you left unapplied disappearing when the agent was released and the session had no session file ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
+- Fixed releasing an isolated task while its first run was still being captured deleting that capture ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
+- Fixed a follow-up an isolated task made after you had already moved on staying on the task branch ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
+- Fixed cancelling a message to an isolated task still landing that turn's changes in your checkout ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 
 ## [18.12.2] - 2026-10-18
 
