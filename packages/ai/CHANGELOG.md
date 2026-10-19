@@ -4,8 +4,7 @@
 
 ### Fixed
 
-- Fixed Anthropic responses through a custom `baseUrl` (a gateway in front of Anthropic) losing their server-side fallback marker and redacted thinking from the saved turn, so the next request no longer fails with `thinking … blocks in the latest assistant message cannot be modified` and drops that turn's reasoning ([#12352](https://github.com/can1357/oh-my-pi/pull/12352) by [@sjawhar](https://github.com/sjawhar))
-- Fixed sessions failing every request with `thinking … blocks in the latest assistant message cannot be modified` when a user message follows the refused turn's tool results; the request now retries once without replayed thinking ([#12352](https://github.com/can1357/oh-my-pi/pull/12352) by [@sjawhar](https://github.com/sjawhar))
+- Fixed Anthropic responses through a custom `baseUrl` (a gateway in front of Anthropic) losing their server-side fallback marker and redacted thinking from the saved turn, so the next request replays that turn's reasoning instead of being refused and retried without it ([#12352](https://github.com/can1357/oh-my-pi/pull/12352) by [@sjawhar](https://github.com/sjawhar))
 
 ## [18.12.3] - 2026-10-19
 

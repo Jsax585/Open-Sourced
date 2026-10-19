@@ -816,57 +816,6 @@ describe("mid-turn fallback a gateway opted into", () => {
 		expect(requests).toHaveLength(2);
 		expect(JSON.stringify(requests[1]!.messages)).not.toContain('"type":"thinking"');
 	});
-
-	// A user message sent while the tool ran follows the refused turn's tool
-	// results. The request still returns tool results, so the API checks that
-	// turn, but the latest-turn retry finds no assistant turn after the last
-	// user message and leaves it alone.
-	it("recovers a refused turn followed by its tool results and a user message", async () => {
-		const requests: Array<{ messages: MessageParam[] }> = [];
-		refuseLatestTurnThinking(requests);
-		const steered: Message[] = [...markerlessHistory, { role: "user", content: "Also read b.txt", timestamp: 0 }];
-
-		const recovered = await streamAnthropic(
-			gatewayModel,
-			{ messages: steered },
-			{ apiKey: "sk-gateway", thinkingEnabled: true, providerSessionState: new Map() },
-		).result();
-		expect(recovered.stopReason).toBe("stop");
-		expect(requests).toHaveLength(2);
-		expect(JSON.stringify(requests[1]!.messages)).not.toContain('"type":"thinking"');
-	});
-
-	it("surfaces the refusal instead of resending a request with no replayed thinking", async () => {
-		const requests: unknown[] = [];
-		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation((params: unknown) => {
-			requests.push(params);
-			const rejection = Object.assign(
-				new Error(
-					'400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified. These blocks must remain as they were in the original response."}}',
-				),
-				{ status: 400 },
-			);
-			return {
-				async withResponse() {
-					throw rejection;
-				},
-			} as never;
-		});
-		const withoutThinking = markerlessHistory.map(message =>
-			message.role === "assistant"
-				? { ...message, content: message.content.filter(block => block.type !== "thinking") }
-				: message,
-		);
-
-		const result = await streamAnthropic(
-			gatewayModel,
-			{ messages: [...withoutThinking, { role: "user", content: "Also read b.txt", timestamp: 0 }] },
-			{ apiKey: "sk-gateway", thinkingEnabled: true },
-		).result();
-		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toContain("latest assistant message cannot be modified");
-		expect(requests).toHaveLength(1);
-	});
 });
 
 describe("fallback-credit continuation after a mid-turn fallback", () => {
