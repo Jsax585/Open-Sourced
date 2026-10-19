@@ -10,6 +10,7 @@
  */
 
 import { type } from "@oh-my-pi/omptype";
+import { OPENAI_HEADERS } from "@oh-my-pi/pi-catalog/wire/codex";
 import { logger, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import { resolvePromptCacheKey } from "../auth-gateway/http";
 import type { AuthGatewayStreamControl, AuthGatewayParsedRequest as ParsedRequest } from "../auth-gateway/types";
@@ -40,8 +41,8 @@ import {
 	type OpenAIResponsesInputImageBlock,
 	type OpenAIResponsesOutputContent,
 	type OpenAIResponsesReasoningItem,
-	type OpenAIResponsesTool,
 	openaiResponsesRequestSchema,
+	responsesToolSchema,
 } from "./openai-responses-server-schema";
 import { coerceNullMessageContentInPlace, encodeTextSignatureV1, parseTextSignature } from "./openai-shared";
 
@@ -218,7 +219,7 @@ type ParsedToolChoice =
 	| "auto"
 	| "none"
 	| "required"
-	| { type: "function"; name: string }
+	| { type: "function"; name: string; namespace?: string }
 	| { type: "custom"; name: string }
 	| {
 			type:
@@ -236,7 +237,11 @@ function mapToolChoice(value: ParsedToolChoice | undefined): ParsedRequest["opti
 	if (value === undefined) return undefined;
 	if (value === "auto" || value === "none" || value === "required") return value;
 	if ("type" in value) {
-		if (value.type === "function" || value.type === "custom") return { name: value.name };
+		if (value.type === "function") {
+			if (value.namespace) return { name: `${value.namespace}.${value.name}` };
+			return { name: value.name };
+		}
+		if (value.type === "custom") return { name: value.name };
 		if (value.type === "computer") return { type: "computer" };
 		// Other hosted tools + allowed_tools are not surfaced to pi-ai.
 		return "auto";
@@ -244,10 +249,24 @@ function mapToolChoice(value: ParsedToolChoice | undefined): ParsedRequest["opti
 	return undefined;
 }
 
-function buildTools(tools: Array<OpenAIResponsesTool | { type: string }> | undefined): Tool[] | undefined {
+function projectNamespaceLeafParameters(value: unknown): Tool["parameters"] {
+	if (value === false) return { not: {} } as Tool["parameters"];
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return {} as Tool["parameters"];
+	return value as Tool["parameters"];
+}
+
+function buildTools(tools: unknown[] | undefined): Tool[] | undefined {
 	if (!tools) return undefined;
 	const out: Tool[] = [];
-	for (const t of tools) {
+	for (const raw of tools) {
+		const validated = responsesToolSchema(raw);
+		if (validated instanceof type.errors) {
+			throw new AIError.ValidationError(`openai-responses: invalid tool declaration: ${validated.summary}`);
+		}
+		const t: typeof responsesToolSchema.infer = validated;
+		// Hosted/built-in entries (web_search_preview, file_search, …) validate via
+		// the opaque fallback and are skipped by this bridge.
+		if (t.type !== "function" && t.type !== "custom" && t.type !== "namespace" && t.type !== "computer") continue;
 		if (t.type === "computer") {
 			out.push({
 				name: "computer",
@@ -257,15 +276,78 @@ function buildTools(tools: Array<OpenAIResponsesTool | { type: string }> | undef
 			});
 			continue;
 		}
-		// Skip non-function tools (web_search, file_search, …).
-		if (t.type !== "function") continue;
-		const fn = t as Extract<OpenAIResponsesTool, { type: "function" }>;
+		if (t.type === "namespace" && "tools" in t && "name" in t) {
+			for (const fn of t.tools) {
+				if (typeof fn !== "object" || fn === null || !("type" in fn) || fn.type !== "function" || !("name" in fn)) {
+					throw new AIError.ValidationError("openai-responses: namespace custom tools are unsupported");
+				}
+				const leafName = fn.name;
+				if (typeof leafName !== "string") {
+					throw new AIError.ValidationError("openai-responses: namespace custom tools are unsupported");
+				}
+				const leafDescription =
+					"description" in fn && (typeof fn.description === "string" || fn.description === null)
+						? fn.description
+						: undefined;
+				const leafParameters = "parameters" in fn ? fn.parameters : undefined;
+				const leafStrict =
+					"strict" in fn && (typeof fn.strict === "boolean" || fn.strict === null) ? fn.strict : undefined;
+				out.push({
+					name: `${t.name}.${leafName}`,
+					description: leafDescription ?? t.description ?? "",
+					parameters: projectNamespaceLeafParameters(leafParameters),
+					strict: leafStrict ?? undefined,
+					namespace: t.name,
+					responsesDefinition: fn as Tool["responsesDefinition"] & { type: "function" },
+					responsesNamespaceDefinition: {
+						...t,
+						description: t.description ?? undefined,
+					} as Tool["responsesNamespaceDefinition"] & {},
+				});
+			}
+			continue;
+		}
+		if (t.type === "custom" && "name" in t) {
+			out.push({
+				name: t.name,
+				description: "description" in t && typeof t.description === "string" ? t.description : "",
+				parameters: {} as Tool["parameters"],
+				customWireName: t.name,
+				customFormat:
+					"format" in t &&
+					typeof t.format === "object" &&
+					t.format !== null &&
+					"type" in t.format &&
+					t.format.type === "grammar" &&
+					"syntax" in t.format &&
+					"definition" in t.format
+						? { syntax: t.format.syntax as "lark" | "regex", definition: t.format.definition as string }
+						: undefined,
+				responsesDefinition: t as Extract<Tool["responsesDefinition"], { type: "custom" }>,
+			});
+			continue;
+		}
+		// Skip hosted tools that this bridge cannot execute.
+		if (t.type !== "function" || !("name" in t)) continue;
+		const fn = t;
+		const fnName = fn.name;
+		if (typeof fnName !== "string") continue;
+		const fnDescription = "description" in fn && typeof fn.description === "string" ? fn.description : "";
+		const fnParameters =
+			"parameters" in fn &&
+			typeof fn.parameters === "object" &&
+			fn.parameters !== null &&
+			!Array.isArray(fn.parameters)
+				? fn.parameters
+				: {};
 		const tool: Tool = {
-			name: fn.name,
-			description: fn.description ?? "",
-			parameters: (fn.parameters ?? {}) as Tool["parameters"],
+			name: fnName,
+			description: fnDescription,
+			parameters: fnParameters as Tool["parameters"],
 		};
-		if (fn.strict !== undefined && fn.strict !== null) tool.strict = fn.strict;
+		if ("strict" in fn && (typeof fn.strict === "boolean" || fn.strict === null)) {
+			if (fn.strict !== undefined && fn.strict !== null) tool.strict = fn.strict;
+		}
 		out.push(tool);
 	}
 	return out.length > 0 ? out : undefined;
@@ -371,9 +453,11 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 		throw new AIError.ValidationError(`openai-responses: ${data.summary}`);
 	}
 
-	const now = Date.now();
 	const messages: Message[] = [];
+	const now = Date.now();
 	const systemPrompt: string[] = [];
+	let additionalTools: unknown[] | undefined;
+	let responsesLite = headers?.get(OPENAI_HEADERS.RESPONSES_LITE) === "true";
 
 	if (typeof data.instructions === "string" && data.instructions.length > 0) {
 		systemPrompt.push(data.instructions);
@@ -385,6 +469,11 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 		for (const item of data.input) {
 			// Items may omit `type` and rely on `role` (the convenience shape).
 			const effectiveType = item.type ?? ("role" in item ? "message" : undefined);
+			if (effectiveType === "additional_tools") {
+				additionalTools = (item as { tools: unknown[] }).tools;
+				responsesLite = true;
+				continue;
+			}
 			if (effectiveType === "message") {
 				const msg = item as {
 					role?: string;
@@ -483,22 +572,25 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 					id: call.call_id,
 					name: call.name,
 					arguments: args,
+					namespace: call.namespace,
+					responsesArguments: argsRaw,
+					responsesItemId: call.id,
 					...(call.id ? { thoughtSignature: call.id } : {}),
 				};
 				ensureAssistantPlaceholder(messages, data.model, now).content.push(toolCall);
 				continue;
 			}
 			if (effectiveType === "custom_tool_call") {
-				const call = item as { id?: string; call_id: string; name: string; input: string };
-				// Custom tools carry a raw input string. We stash it in `arguments.input`
-				// matching pi-ai's openai-shared convention, and tag the call
-				// with `customWireName` so encoders re-emit it as `custom_tool_call`.
+				const call = item as { id?: string; call_id: string; name: string; input: string; namespace?: string };
 				const toolCall: ToolCall = {
 					type: "toolCall",
 					id: call.call_id,
 					name: call.name,
-					arguments: { input: call.input ?? "" },
+					arguments: { input: call.input },
 					customWireName: call.name,
+					namespace: call.namespace,
+					responsesArguments: call.input,
+					responsesItemId: call.id,
 					...(call.id ? { thoughtSignature: call.id } : {}),
 				};
 				ensureAssistantPlaceholder(messages, data.model, now).content.push(toolCall);
@@ -531,6 +623,7 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 					toolCallId: output.call_id,
 					toolName: findToolNameById(messages, output.call_id),
 					content: functionOutputContent(output.output),
+					responsesOutput: structuredCloneJSON(output.output ?? "") as string | unknown[],
 					isError: false,
 					timestamp: now,
 				});
@@ -561,15 +654,20 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 					toolCallId: output.call_id,
 					toolName,
 					content: functionOutputContent(output.output),
+					responsesOutput: structuredCloneJSON(output.output),
 					isError: false,
 					timestamp: now,
 				});
+				continue;
 			}
 			// Other item types are tolerated but not bridged.
 		}
 	}
 
-	const tools = buildTools(data.tools);
+	if (additionalTools && data.tools) {
+		throw new AIError.ValidationError("openai-responses: top-level tools cannot be mixed with additional_tools");
+	}
+	const tools = buildTools(additionalTools ?? data.tools);
 	const context: Context = {
 		...(systemPrompt.length > 0 ? { systemPrompt } : {}),
 		messages,
@@ -583,6 +681,7 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 	if (data.stop !== undefined && data.stop !== null) {
 		options.stopSequences = typeof data.stop === "string" ? [data.stop] : data.stop;
 	}
+	if (responsesLite) options.responsesLite = true;
 	const toolChoice = mapToolChoice(data.tool_choice as ParsedToolChoice | undefined);
 	if (toolChoice !== undefined) options.toolChoice = toolChoice;
 	if (data.reasoning?.effort && isReasoningEffort(data.reasoning.effort)) {
@@ -671,6 +770,7 @@ type FunctionCallOutputItem = {
 	call_id: string;
 	name: string;
 	arguments: string;
+	namespace?: string;
 	status: "completed";
 };
 
@@ -680,6 +780,7 @@ type CustomToolCallOutputItem = {
 	call_id: string;
 	name: string;
 	input: string;
+	namespace?: string;
 	status: "completed";
 };
 
@@ -818,22 +919,27 @@ function buildOutputItems(message: AssistantMessage): OutputItem[] {
 			}
 			if (part.customWireName) {
 				const input = part.arguments?.input;
-				const rawInput = typeof input === "string" ? input : "";
+				const rawInput = part.responsesArguments ?? (typeof input === "string" ? input : "");
 				out.push({
 					type: "custom_tool_call",
-					id: part.thoughtSignature ?? makeCustomCallId(),
+					id: part.responsesItemId ?? part.thoughtSignature ?? makeCustomCallId(),
 					call_id: wireCallId(part.id),
 					name: part.customWireName,
 					input: rawInput,
+					...(part.namespace ? { namespace: part.namespace } : {}),
 					status: "completed",
 				});
 			} else {
 				out.push({
 					type: "function_call",
-					id: part.thoughtSignature ?? makeFuncCallId(),
+					id: part.responsesItemId ?? part.thoughtSignature ?? makeFuncCallId(),
 					call_id: wireCallId(part.id),
-					name: part.name,
-					arguments: JSON.stringify(part.arguments ?? {}),
+					name:
+						part.namespace && part.name.startsWith(`${part.namespace}.`)
+							? part.name.slice(part.namespace.length + 1)
+							: part.name,
+					arguments: part.responsesArguments ?? JSON.stringify(part.arguments ?? {}),
+					...(part.namespace ? { namespace: part.namespace } : {}),
 					status: "completed",
 				});
 			}
@@ -916,6 +1022,7 @@ interface OpenFunctionCall {
 	callId: string;
 	name: string;
 	argsText: string;
+	namespace?: string;
 	/** Set when the underlying ToolCall is a custom-tool emission. */
 	customWireName?: string;
 }
@@ -1070,9 +1177,14 @@ export function encodeStream(
 						? tc.customWireName
 						: undefined;
 				const isCustom = customWireName !== undefined;
-				const itemId = tc?.thoughtSignature ?? (isCustom ? makeCustomCallId() : makeFuncCallId());
+				const itemId =
+					tc?.responsesItemId ?? tc?.thoughtSignature ?? (isCustom ? makeCustomCallId() : makeFuncCallId());
 				const callId = wireCallId(tc?.id ?? "");
-				const name = customWireName ?? tc?.name ?? "";
+				const namespace = tc?.namespace;
+				const name =
+					customWireName ??
+					(namespace && tc?.name.startsWith(`${namespace}.`) ? tc.name.slice(namespace.length + 1) : tc?.name) ??
+					"";
 				const item = isCustom
 					? {
 							type: "custom_tool_call" as const,
@@ -1087,6 +1199,7 @@ export function encodeStream(
 							id: itemId,
 							call_id: callId,
 							name,
+							...(namespace ? { namespace } : {}),
 							arguments: "",
 							status: "in_progress",
 						};
@@ -1099,6 +1212,7 @@ export function encodeStream(
 					callId,
 					name,
 					argsText: "",
+					...(namespace ? { namespace } : {}),
 					...(isCustom ? { customWireName } : {}),
 				};
 				openToolCalls.set(contentIndex, next);
@@ -1149,18 +1263,12 @@ export function encodeStream(
 						id: call.itemId,
 						call_id: call.callId ?? "",
 						name: call.name ?? "",
+						...(call.namespace ? { namespace: call.namespace } : {}),
 						arguments: text,
 						status: "completed",
 					};
 					emit("response.output_item.done", { output_index: call.outputIndex, item });
-					finishedItems.push({
-						type: "function_call",
-						id: call.itemId,
-						call_id: call.callId ?? "",
-						name: call.name ?? "",
-						arguments: text,
-						status: "completed",
-					});
+					finishedItems.push(item as OutputItem);
 				}
 				openToolCalls.delete(call.contentIndex);
 				removeOpenItem(call);
@@ -1371,35 +1479,45 @@ export function encodeStream(
 								closeComputerCall(cur);
 								break;
 							}
-							// Promote possibly-late info from the canonical ToolCall.
 							if (tc.customWireName && !cur.customWireName) cur.customWireName = tc.customWireName;
-							if (tc.thoughtSignature) cur.itemId = tc.thoughtSignature;
+							if (tc.responsesItemId ?? tc.thoughtSignature)
+								cur.itemId = tc.responsesItemId ?? tc.thoughtSignature!;
 							cur.callId = wireCallId(tc.id);
-							cur.name = cur.customWireName ?? tc.name;
+							cur.namespace = tc.namespace;
+							cur.name =
+								cur.customWireName ??
+								(cur.namespace && tc.name.startsWith(`${cur.namespace}.`)
+									? tc.name.slice(cur.namespace.length + 1)
+									: tc.name);
 							if (cur.customWireName) {
 								// Custom tool: raw input string. Streamed deltas accumulated
 								// the wire-level body; fall back to `arguments.input` from
 								// the finalized ToolCall when nothing streamed (rare).
+								const terminalInput = tc.responsesArguments;
 								const rawInput =
-									cur.argsText ||
-									(typeof tc.arguments?.input === "string" ? (tc.arguments.input as string) : "");
+									terminalInput && terminalInput.length > 0
+										? terminalInput
+										: cur.argsText || (typeof tc.arguments?.input === "string" ? tc.arguments.input : "");
 								cur.argsText = rawInput;
 								emit("response.custom_tool_call_input.done", {
-									item_id: cur.itemId,
+									item_id: tc.responsesItemId ?? cur.itemId,
 									output_index: cur.outputIndex,
 									input: rawInput,
 									name: cur.name,
 								});
 							} else {
-								// Standard JSON tool: arguments object on the omp side, the
-								// wire wants the JSON string the model emitted (= streamed deltas).
-								const argsJson = cur.argsText || JSON.stringify(tc.arguments ?? {});
+								const terminalArguments = tc.responsesArguments;
+								const argsJson =
+									terminalArguments && terminalArguments.length > 0
+										? terminalArguments
+										: cur.argsText || JSON.stringify(tc.arguments ?? {});
 								cur.argsText = argsJson;
 								emit("response.function_call_arguments.done", {
-									item_id: cur.itemId,
+									item_id: tc.responsesItemId ?? cur.itemId,
 									output_index: cur.outputIndex,
 									arguments: argsJson,
 									name: cur.name,
+									...(cur.namespace ? { namespace: cur.namespace } : {}),
 								});
 							}
 							closeFunctionCall(cur);

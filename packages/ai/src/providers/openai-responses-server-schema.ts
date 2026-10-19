@@ -123,6 +123,7 @@ const functionCallItemSchema = type({
 	call_id: "string >= 1",
 	name: "string >= 1",
 	"arguments?": "string",
+	"namespace?": "string",
 });
 
 const functionCallOutputItemSchema = type({
@@ -140,6 +141,7 @@ const customToolCallItemSchema = type({
 	// Raw input string — NOT JSON.stringified. apply_patch flow streams a
 	// freeform body and reading it as JSON would corrupt it.
 	input: "string",
+	"namespace?": "string",
 });
 
 const customToolCallOutputItemSchema = type({
@@ -248,11 +250,18 @@ const BRIDGED_INPUT_ITEM_TYPES: Record<string, true> = {
 	custom_tool_call_output: true,
 	computer_call: true,
 	computer_call_output: true,
+	additional_tools: true,
 };
 
 const unbridgedInputItemSchema = type({ type: "string" }).narrow((value, ctx) =>
 	value.type in BRIDGED_INPUT_ITEM_TYPES ? ctx.mustBe("a valid bridged Responses input item") : true,
 );
+
+const additionalToolsItemSchema = type({
+	type: "'additional_tools'",
+	role: "'developer'",
+	tools: type("unknown[]"),
+});
 
 /**
  * Direct mapping to standard types.
@@ -267,6 +276,7 @@ export const inputItemSchema = userMessageItemSchema
 	.or(customToolCallOutputItemSchema)
 	.or(computerCallItemSchema)
 	.or(computerCallOutputItemSchema)
+	.or(additionalToolsItemSchema)
 	// Tolerated but not bridged (file_search_call, web_search_call, …).
 	.or(unbridgedInputItemSchema);
 
@@ -295,19 +305,47 @@ export const toolSchema = type({
 	type: "'function'",
 	name: "string >= 1",
 	"description?": "string",
-	"parameters?": type({ "[string]": "unknown" }),
-	"strict?": "boolean",
+	"parameters?": type({ "[string]": "unknown" }).or(type("null")),
+	"strict?": "boolean | null",
+});
+const customToolSchema = type({
+	type: "'custom'",
+	name: "string >= 1",
+	"description?": "string",
+	"defer_loading?": "boolean",
+	"format?": type({ type: "'text'" }).or(
+		type({ type: "'grammar'", syntax: "'lark' | 'regex'", definition: "string" }),
+	),
+});
+
+const namespaceFunctionLeafSchema = type({
+	type: "'function'",
+	name: "string >= 1",
+	"description?": "string | null",
+	"parameters?": "unknown | null",
+	"strict?": "boolean | null",
+	"defer_loading?": "boolean",
+});
+const namespaceToolSchema = type({
+	type: "'namespace'",
+	name: "string >= 1",
+	"description?": "string | null",
+	tools: namespaceFunctionLeafSchema.or(customToolSchema).array(),
 });
 
 const computerToolSchema = type({ type: "'computer'" });
-
-const BRIDGED_TOOL_TYPES: Record<string, true> = { function: true, computer: true };
+const BRIDGED_TOOL_TYPES: Record<string, true> = { function: true, computer: true, custom: true, namespace: true };
 
 // Built-in / hosted tool entries (web_search_preview, file_search, …) — accepted
 // but skipped by the walker.
 const builtinToolSchema = type({ type: "string" }).narrow((value, ctx) =>
 	value.type in BRIDGED_TOOL_TYPES ? ctx.mustBe("a valid bridged Responses tool") : true,
 );
+export const responsesToolSchema = toolSchema
+	.or(customToolSchema)
+	.or(namespaceToolSchema)
+	.or(computerToolSchema)
+	.or(builtinToolSchema);
 
 // ─── Tool choice ────────────────────────────────────────────────────────────
 
@@ -325,6 +363,7 @@ export const toolChoiceSchema = type("'auto' | 'none' | 'required'")
 		type({
 			type: "'function'",
 			name: "string >= 1",
+			"namespace?": "string >= 1",
 		}),
 	)
 	.or(
@@ -366,7 +405,7 @@ export const openaiResponsesRequestSchema = type({
 	model: "string >= 1",
 	"input?": type("string").or(inputItemSchema.array()),
 	"instructions?": "string | null",
-	"tools?": toolSchema.or(computerToolSchema).or(builtinToolSchema).array(),
+	"tools?": responsesToolSchema.array(),
 	"tool_choice?": toolChoiceSchema,
 	"max_output_tokens?": "number",
 	"temperature?": "number",

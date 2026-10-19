@@ -230,6 +230,8 @@ provider "openai-codex" {
 
 // The Codex backend rejects every sampling control (`temperature`, `top_p`,
 // penalties, stop sequences), whichever model it serves (#3117).
-on-api "openai-codex-responses" {
-	supports-sampling-params #false
-}
+	on-api "openai-codex-responses" {
+		supports-sampling-params #false
+		supports-responses-namespaces #true
+		supports-native-responses-output #true
+	}

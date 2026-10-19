@@ -607,6 +607,8 @@ function detectOpenAICompat(
 		rejectRootObjectUnion: false,
 		retryWithoutStrictOnGrammarError: false,
 		supportsPromptCacheKey: false,
+		supportsResponsesNamespaces: false,
+		supportsNativeResponsesOutput: false,
 	};
 }
 
@@ -760,6 +762,8 @@ function resolveOpenAIResponsesPolicy(
 		supportsConfigurationUpdate: false,
 		supportsSteering: false,
 		requiresReasoningOffJuiceInstruction: false,
+		supportsResponsesNamespaces: false,
+		supportsNativeResponsesOutput: false,
 		stripImageInput: false,
 		thinkingLoopGuard: undefined,
 		reasoningEffortMap: {},
@@ -869,6 +873,8 @@ function pickResponsesOnly(compat: ResolvedOpenAIResponsesCompat): ResponsesOnly
 		supportsLongPromptCacheRetention: compat.supportsLongPromptCacheRetention,
 		strictResponsesPairing: compat.strictResponsesPairing,
 		supportsImageDetailOriginal: compat.supportsImageDetailOriginal,
+		supportsResponsesNamespaces: compat.supportsResponsesNamespaces,
+		supportsNativeResponsesOutput: compat.supportsNativeResponsesOutput,
 		supportsObfuscationOptOut: compat.supportsObfuscationOptOut,
 		storeResponses: compat.storeResponses,
 		connectionBoundNativeHistory: compat.connectionBoundNativeHistory,

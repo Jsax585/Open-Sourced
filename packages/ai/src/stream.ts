@@ -860,7 +860,7 @@ function streamDispatch<TApi extends Api>(
 		withTransportFetch(model, (options || {}) as StreamOptions),
 	) as OptionsForApi<TApi>;
 	assertExplicitOpenAIResponsesPromptCacheSupport(model, requestOptions);
-
+	assertSupportedResponsesNamespaces(model, context);
 	// Check custom API registry first (extension-provided APIs like "vertex-claude-api")
 	const customApiProvider = getCustomApi(model.api);
 	if (customApiProvider) {
@@ -1748,6 +1748,21 @@ function assertExplicitOpenAIResponsesPromptCacheSupport<TApi extends Api>(
 	throw new AIError.ConfigurationError(
 		`OpenAI explicit prompt caching is unsupported for ${model.provider}/${model.id}; enable compat.supportsPromptCacheBreakpoints only for a compatible endpoint.`,
 	);
+}
+
+function assertSupportedResponsesNamespaces<TApi extends Api>(model: Model<TApi>, context: Context): void {
+	const namespaced = context.tools?.find(tool => tool.namespace !== undefined);
+	if (!namespaced) return;
+	const supported =
+		typeof model.compat === "object" &&
+		model.compat !== null &&
+		"supportsResponsesNamespaces" in model.compat &&
+		model.compat.supportsResponsesNamespaces === true;
+	if (!supported) {
+		throw new AIError.ValidationError(
+			`openai-responses: namespaced tool ${namespaced.name} requires a transport with namespace support`,
+		);
+	}
 }
 
 function mapOptionsForApi<TApi extends Api>(

@@ -1,6 +1,7 @@
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import { $env } from "@oh-my-pi/pi-utils";
+import * as AIError from "../../error";
 import type { Model } from "../../types";
 import { mapOpenAIReasoningEffort } from "../openai-shared";
 
@@ -43,6 +44,8 @@ export interface CodexRequestOptions {
 	 * Responses so the model can emit independent tool calls in parallel.
 	 */
 	responsesLite?: boolean;
+	/** Native item IDs from validated Responses tool calls; never serialized as an option. */
+	nativeResponsesItemIds?: ReadonlySet<string>;
 }
 
 export interface InputItem {
@@ -174,13 +177,23 @@ function getReasoningConfig(
 	}
 	return config;
 }
-function filterInput(input: InputItem[] | undefined): InputItem[] | undefined {
+function filterInput(
+	input: InputItem[] | undefined,
+	nativeResponsesItemIds?: ReadonlySet<string>,
+): InputItem[] | undefined {
 	if (!Array.isArray(input)) return input;
 
 	return input
 		.filter(item => item.type !== "item_reference")
 		.map(item => {
-			if (item.type === "computer_call") return item;
+			if (
+				item.type === "computer_call" ||
+				((item.type === "function_call" || item.type === "custom_tool_call") &&
+					typeof item.id === "string" &&
+					nativeResponsesItemIds?.has(item.id))
+			) {
+				return item;
+			}
 			if (item.id != null) {
 				const { id: _id, ...rest } = item;
 				return rest as InputItem;
@@ -378,22 +391,67 @@ export function applyCodexResponsesLiteShape(body: CodexLiteShapedBody): void {
 	const declaredTools = Array.isArray(body.tools) ? body.tools : [];
 	let additionalTools = declaredTools;
 	if (body.tool_choice && typeof body.tool_choice === "object" && "type" in body.tool_choice) {
-		const choice = body.tool_choice;
-		const selected = declaredTools.find(tool => {
+		const choice = body.tool_choice as { type?: unknown; name?: unknown; namespace?: unknown };
+		const selected = declaredTools.find((tool): boolean => {
 			if (tool === null || typeof tool !== "object" || !("type" in tool)) return false;
 			if (choice.type === "computer") return tool.type === "computer";
-			return (
-				choice.type === "function" &&
-				tool.type === "function" &&
-				"name" in choice &&
-				typeof choice.name === "string" &&
-				"name" in tool &&
-				tool.name === choice.name
-			);
+			if (choice.type === "custom") {
+				return (
+					tool.type === "custom" &&
+					"name" in choice &&
+					typeof choice.name === "string" &&
+					"name" in tool &&
+					tool.name === choice.name
+				);
+			}
+			if (choice.type === "function" && "name" in choice && typeof choice.name === "string") {
+				const namespace =
+					"namespace" in choice && typeof choice.namespace === "string" ? choice.namespace : undefined;
+				if (namespace) {
+					if (tool.type !== "namespace" || !("name" in tool) || tool.name !== namespace) return false;
+					const leaves = "tools" in tool && Array.isArray(tool.tools) ? tool.tools : [];
+					return leaves.some(
+						(leaf: unknown) =>
+							leaf !== null &&
+							typeof leaf === "object" &&
+							"type" in leaf &&
+							leaf.type === "function" &&
+							"name" in leaf &&
+							leaf.name === choice.name,
+					);
+				}
+				return tool.type === "function" && "name" in tool && tool.name === choice.name;
+			}
+			return false;
 		});
-		if (selected) {
-			additionalTools = [selected];
+		if (selected && typeof selected === "object" && "type" in selected) {
+			if (
+				choice.type === "function" &&
+				"namespace" in choice &&
+				typeof choice.namespace === "string" &&
+				selected.type === "namespace" &&
+				"tools" in selected &&
+				Array.isArray(selected.tools)
+			) {
+				const leaves = selected.tools.filter(
+					(leaf: unknown) =>
+						leaf !== null &&
+						typeof leaf === "object" &&
+						"type" in leaf &&
+						leaf.type === "function" &&
+						"name" in leaf &&
+						leaf.name === choice.name,
+				);
+				if (leaves.length !== 1) {
+					throw new AIError.ValidationError("Codex Lite namespace tool choice must select exactly one leaf");
+				}
+				additionalTools = [{ ...selected, tools: leaves }];
+			} else {
+				additionalTools = [selected];
+			}
 			body.tool_choice = "required";
+		} else if (choice.type === "custom" || choice.type === "function") {
+			throw new AIError.ValidationError("Codex Lite tool choice has no matching declaration");
 		}
 	}
 	const prefix: InputItem[] = [{ type: "additional_tools", role: "developer", tools: additionalTools }];
@@ -422,7 +480,7 @@ export async function transformRequestBody(
 	body.stream = true;
 
 	if (body.input && Array.isArray(body.input)) {
-		body.input = filterInput(body.input);
+		body.input = filterInput(body.input, options.nativeResponsesItemIds);
 		if (body.input) {
 			sanitizeInputCallIds(body.input);
 			body.input = repairToolCallPairs(body.input);

@@ -2488,8 +2488,18 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 		assistantMsg.content.some(
 			block => block.type === "thinking" && parseResponseReasoningReplayItem(block.thinkingSignature) !== undefined,
 		);
-	const isDifferentModel =
-		assistantMsg.model !== model.id && assistantMsg.provider === model.provider && assistantMsg.api === model.api;
+	// Validated gateway parser placeholders mint provider openai, api
+	// openai-responses, stopReason stop turns for the requested model string,
+	// which may carry the exact provider-qualified form. Treat the bare model
+	// ID and exactly `${model.provider}/${model.id}` as the same model here
+	// and in native ID eligibility below; never suffix matching.
+	const parserPlaceholder =
+		assistantMsg.stopReason === "stop" &&
+		assistantMsg.provider === "openai" &&
+		assistantMsg.api === "openai-responses";
+	const sameModel =
+		assistantMsg.model === model.id || (parserPlaceholder && assistantMsg.model === `${model.provider}/${model.id}`);
+	const isDifferentModel = !sameModel && assistantMsg.provider === model.provider && assistantMsg.api === model.api;
 	// DeepSeek-family Responses targets (e.g. opencode-go) reject a thinking-mode
 	// continuation whose replayed assistant turns carry no reasoning item: "The
 	// reasoning_text in the thinking mode must be passed back to the API." After a
@@ -2602,29 +2612,45 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 		) {
 			itemId = undefined;
 		}
+		// Validated native item IDs win only at matching model/provenance: the
+		// same-model replay (including validated gateway parser placeholders,
+		// which mint provider openai/api openai-responses turns for the requested
+		// model) retains exact identity, while cross-model and cross-provider
+		// replays never revive a foreign native ID.
+		const sameProvenance = assistantMsg.provider === model.provider && assistantMsg.api === model.api;
+		const nativeItemId = sameModel && (sameProvenance || parserPlaceholder) ? block.responsesItemId : undefined;
 		knownCallIds.add(normalized.callId);
 		if (block.customWireName && supportsCustomToolCalls) {
 			const rawInput = typeof block.arguments?.input === "string" ? block.arguments.input : "";
 			customCallIds?.add(normalized.callId);
 			outputItems.push({
 				type: "custom_tool_call",
-				...(itemId ? { id: itemId } : {}),
+				...(nativeItemId ? { id: nativeItemId } : itemId ? { id: itemId } : {}),
 				call_id: normalized.callId,
 				name: block.customWireName,
-				input: rawInput,
+				input: block.responsesArguments ?? rawInput,
+				...(block.namespace ? { namespace: block.namespace } : {}),
 			} as ResponseInput[number]);
 			continue;
 		}
+		const fallsBackToFunction = block.customWireName !== undefined && !supportsCustomToolCalls;
 		const functionName =
-			block.customWireName && !supportsCustomToolCalls
+			fallsBackToFunction && block.customWireName
 				? resolveReplayCustomToolName(block.customWireName, customToolWireNameMap)
-				: block.name;
+				: block.namespace && block.name.startsWith(`${block.namespace}.`)
+					? block.name.slice(block.namespace.length + 1)
+					: block.name;
 		outputItems.push({
 			type: "function_call",
-			...(itemId ? { id: itemId } : {}),
+			...(nativeItemId ? { id: nativeItemId } : itemId ? { id: itemId } : {}),
 			call_id: normalized.callId,
 			name: functionName,
-			arguments: stringifyJson(block.arguments) ?? "null",
+			// A custom call falling back to a JSON function call must serialize
+			// `{ input }` as JSON; its plaintext raw input is not valid arguments.
+			arguments: fallsBackToFunction
+				? (stringifyJson(block.arguments) ?? "null")
+				: (block.responsesArguments ?? stringifyJson(block.arguments) ?? "null"),
+			...(block.namespace ? { namespace: block.namespace } : {}),
 		});
 	}
 
@@ -2720,7 +2746,19 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 	supportsCustomToolCalls = true,
 	computerCallIds?: ReadonlySet<string>,
 ): void {
-	const { output, outputText } = encodeResponsesToolResultOutput(toolResult, model, supportsImageDetailOriginal);
+	const { output: encodedOutput, outputText } = encodeResponsesToolResultOutput(
+		toolResult,
+		model,
+		supportsImageDetailOriginal,
+	);
+	const supportsNativeResponsesOutput =
+		!!model.compat &&
+		"supportsNativeResponsesOutput" in model.compat &&
+		model.compat.supportsNativeResponsesOutput === true;
+	const output =
+		supportsNativeResponsesOutput && toolResult.responsesOutput !== undefined
+			? (toolResult.responsesOutput as ResponseInputItem.FunctionCallOutput["output"])
+			: encodedOutput;
 	const normalized = normalizeResponsesToolCallId(toolResult.toolCallId);
 	if (toolResult.providerMetadata?.type === "computer" && model.supportsComputerUse !== true) {
 		messages.push({
@@ -3505,11 +3543,27 @@ export async function processResponsesStream<TApi extends Api>(
 				registerOpenItem(event.output_index, item.id, { item, block });
 				stream.push({ type: "text_start", contentIndex: contentIndexOf(block), partial: output });
 			} else if (item.type === "function_call") {
+				const namespace = item.namespace;
+				const qualifiedName =
+					namespace && !item.name.startsWith(`${namespace}.`) ? `${namespace}.${item.name}` : item.name;
 				const block: StreamingToolCallBlock = {
 					type: "toolCall",
 					id: encodeResponsesToolCallId(item.call_id, item.id),
-					name: item.name,
+					name: qualifiedName,
 					arguments: {},
+					...(namespace ? { namespace } : {}),
+					...(item.id ? { responsesItemId: item.id } : {}),
+					// Store only the replayable form: an empty payload carries no
+					// arguments, and malformed text must never shadow what the
+					// tool actually receives.
+					...(typeof item.arguments === "string" && item.arguments.length > 0
+						? {
+								responsesArguments: replayableToolCallArguments(
+									item.arguments,
+									parseToolCallArguments(item.arguments),
+								),
+							}
+						: {}),
 					[kStreamingPartialJson]: item.arguments || "",
 				};
 				pushContentBlock(block);
@@ -3544,6 +3598,13 @@ export async function processResponsesStream<TApi extends Api>(
 					name: item.name,
 					arguments: { input: item.input ?? "" },
 					customWireName: item.name,
+					...("namespace" in item && typeof item.namespace === "string" && item.namespace
+						? { namespace: item.namespace }
+						: {}),
+					...(item.id ? { responsesItemId: item.id } : {}),
+					// An empty added-item payload carries no input; storing it
+					// would shadow delta-accumulated input on replay.
+					...(typeof item.input === "string" && item.input.length > 0 ? { responsesArguments: item.input } : {}),
 					// Custom tools stream a raw string, but we reuse `partialJson` as the
 					// accumulation buffer so later code that inspects the field still works.
 					[kStreamingPartialJson]: item.input ?? "",
@@ -3722,18 +3783,26 @@ export async function processResponsesStream<TApi extends Api>(
 			} else if (item.type === "function_call") {
 				const block = entry?.block.type === "toolCall" ? entry.block : undefined;
 				// A blank `.done` leaves the delta buffer in place, so the item's own arguments still win.
+				const terminalArguments =
+					typeof item.arguments === "string" && item.arguments.length > 0 ? item.arguments : undefined;
 				const args =
 					block?.[kStreamingArgumentsDone] && block[kStreamingPartialJson] === undefined
 						? block.arguments
-						: item.arguments
-							? parseToolCallArguments(item.arguments)
+						: terminalArguments
+							? parseToolCallArguments(terminalArguments)
 							: parseToolCallArguments(block?.[kStreamingPartialJson]);
 				item.arguments = replayableToolCallArguments(item.arguments, args);
+				const namespace = item.namespace;
+				const qualifiedName =
+					namespace && !item.name.startsWith(`${namespace}.`) ? `${namespace}.${item.name}` : item.name;
 				const toolCall: ToolCall = {
 					type: "toolCall",
 					id: encodeResponsesToolCallId(item.call_id, item.id),
-					name: item.name,
+					name: qualifiedName,
 					arguments: args,
+					...(namespace ? { namespace } : {}),
+					...(item.id ? { responsesItemId: item.id } : {}),
+					responsesArguments: item.arguments,
 				};
 				let contentIndex: number;
 				if (block) {
@@ -3742,6 +3811,10 @@ export async function processResponsesStream<TApi extends Api>(
 					// leaving block.arguments stale (often `{}`); the emitted toolCall
 					// and the persisted block must agree.
 					block.arguments = args;
+					block.name = qualifiedName;
+					if (namespace) block.namespace = namespace;
+					if (item.id) block.responsesItemId = item.id;
+					block.responsesArguments = item.arguments;
 					clearStreamingPartialJson(block);
 					contentIndex = contentIndexOf(block);
 				} else {
@@ -3799,12 +3872,25 @@ export async function processResponsesStream<TApi extends Api>(
 					name: item.name,
 					arguments: { input: rawInput },
 					customWireName: item.name,
+					...("namespace" in item && typeof item.namespace === "string" && item.namespace
+						? { namespace: item.namespace }
+						: {}),
+					...(item.id ? { responsesItemId: item.id } : {}),
+					...(terminalInput !== undefined && terminalInput.length > 0
+						? { responsesArguments: terminalInput }
+						: {}),
 				};
 				let contentIndex: number;
 				if (block) {
 					// Persist the final input on the stored block and drop the transient
 					// accumulation buffer, mirroring the function_call branch above.
 					block.arguments = { input: rawInput };
+					if ("namespace" in item && typeof item.namespace === "string" && item.namespace) {
+						block.namespace = item.namespace;
+					}
+					if (item.id) block.responsesItemId = item.id;
+					if (terminalInput !== undefined && terminalInput.length > 0) block.responsesArguments = terminalInput;
+					else delete block.responsesArguments;
 					clearStreamingPartialJson(block);
 					contentIndex = contentIndexOf(block);
 				} else {
