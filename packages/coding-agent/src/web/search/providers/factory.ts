@@ -2,7 +2,7 @@
  * Factory Web Search Provider
  *
  * Searches through Factory's hosted web-search tool with the Factory Droid
- * login (`omp /login factory-droid`), the same route the `droid` CLI's
+ * login (`omp login factory-droid`), the same route the `droid` CLI's
  * WebSearch tool calls. Factory picks the upstream vendor (You.com, Parallel
  * or Exa) server-side, so the response is one of three shapes.
  * Endpoint: POST {api host}/api/tools/web-search
@@ -19,7 +19,7 @@ import {
 } from "@oh-my-pi/pi-catalog/wire/factory-droid";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { SearchResponse, SearchSource } from "../types";
-import { SearchProviderError } from "../types";
+import { FACTORY_LOGIN_HINT, SearchProviderError } from "../types";
 import { clampNumResults, dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
@@ -191,12 +191,18 @@ async function callFactorySearch(
 	});
 
 	if (!response.ok) {
-		// Factory enforces the org setting server-side too; a 403 after the cached
-		// policy said "allowed" is re-checked so a fresh disable stays off the credential path.
-		if (response.status === 403 && (await isWebSearchDisabledForOrg(access, params.fetch, signal, { fresh: true }))) {
-			throw new SearchProviderError("factory", ORG_REFUSAL);
-		}
 		const errorText = await readLimitedText(response, "factory", MAX_ERROR_BODY_BYTES, true);
+		// Factory enforces the org setting server-side too, and a 403 from this route
+		// is a refusal for the org, not for this credential: report it without a status
+		// so the login is never rotated or blocked, naming the org setting when a fresh
+		// policy read confirms it.
+		if (response.status === 403) {
+			const disabled = await isWebSearchDisabledForOrg(access, params.fetch, signal, { fresh: true });
+			throw new SearchProviderError(
+				"factory",
+				disabled ? ORG_REFUSAL : `Factory web search was refused (403): ${errorText}`,
+			);
+		}
 		const classified = classifyProviderHttpError("factory", response.status, errorText);
 		if (classified) throw classified;
 		throw new SearchProviderError(
@@ -245,7 +251,7 @@ export async function searchFactory(
 		{
 			sessionId: params.sessionId,
 			signal: params.signal,
-			missingAccessMessage: "Factory web search needs a Factory login: run 'omp /login factory-droid'.",
+			missingAccessMessage: `Factory web search needs a Factory login: ${FACTORY_LOGIN_HINT}.`,
 		},
 	);
 	return { provider: "factory", sources: sources.slice(0, numResults), requestId, authMode: "oauth" };

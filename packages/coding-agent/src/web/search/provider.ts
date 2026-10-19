@@ -1,6 +1,6 @@
 import type { WebSearchGrounding } from "@oh-my-pi/pi-catalog/types";
 import type { SearchProvider } from "./providers/base";
-import { getSearchProviderLabel, type SearchEngineId, SearchProviderError } from "./types";
+import { FACTORY_LOGIN_HINT, getSearchProviderLabel, type SearchEngineId, SearchProviderError } from "./types";
 
 export type { SearchParams } from "./providers/base";
 export { SearchProvider } from "./providers/base";
@@ -69,6 +69,9 @@ export function formatSearchProviderFailure(error: unknown, provider: { id: stri
 		if (error.status === 401 || error.status === 403) {
 			if (error.provider === "zai") {
 				return error.message;
+			}
+			if (error.provider === "factory") {
+				return `Factory rejected the login (${error.status}): ${FACTORY_LOGIN_HINT} again.`;
 			}
 			return `${getSearchProviderLabel(error.provider)} authorization failed (${error.status}). Check API key or base URL.`;
 		}

@@ -298,6 +298,25 @@ describe("searchFactory organization policy", () => {
 });
 
 describe("searchFactory errors", () => {
+	it("keeps a search-route 403 off the credential path when the policy cannot be re-read", async () => {
+		const fetchMock = factoryFetch([], {
+			settings: () => new Response("down", { status: 503 }),
+			search: () => Response.json({ detail: "Forbidden" }, { status: 403 }),
+		});
+
+		const { error, rotations } = await withLocalAuthStorage(async authStorage => {
+			await storeFactoryLogin(authStorage);
+			const rotate = vi.spyOn(authStorage.limits, "rotate");
+			const error = await rejectionOf(searchFactory({ query: "q", authStorage, fetch: fetchMock }));
+			return { error, rotations: rotate.mock.calls.length };
+		});
+
+		expect(error).toBeInstanceOf(SearchProviderError);
+		expect((error as SearchProviderError).status).toBeUndefined();
+		expect(String(error)).toContain("refused (403)");
+		expect(rotations).toBe(0);
+	});
+
 	it("refuses an oversized success body instead of buffering it", async () => {
 		const huge = JSON.stringify({ results: [{ url: "https://e.example", text: "x".repeat(3 * 1024 * 1024) }] });
 		const fetchMock = factoryFetch([], { search: () => new Response(huge, { status: 200 }) });
@@ -367,12 +386,15 @@ describe("searchFactory authentication", () => {
 
 		expect(error).toBeInstanceOf(SearchProviderError);
 		expect((error as SearchProviderError).status).toBe(401);
+		const message = formatSearchProviderFailure(error, { id: "factory", label: "Factory" });
+		expect(message).toContain("omp login factory-droid");
+		expect(message).not.toContain("API key");
 	});
 
 	it("asks for a Factory login when none is stored", async () => {
 		const error = await withLocalAuthStorage(authStorage =>
 			rejectionOf(searchFactory({ query: "q", authStorage, fetch: factoryFetch([], {}) })),
 		);
-		expect(String(error)).toMatch(/login factory-droid/);
+		expect(String(error)).toContain("omp login factory-droid");
 	});
 });

@@ -14,6 +14,9 @@ export const DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS = 60;
 /** Maximum configurable hard timeout for each web-search provider transport. */
 export const MAX_WEB_SEARCH_TIMEOUT_SECONDS = 300;
 
+/** How to sign in to Factory for `web/factory`, from a shell or inside a session. */
+export const FACTORY_LOGIN_HINT = "run `omp login factory-droid` (or `/login factory-droid` in a session)";
+
 /** Pure search engines represented by `web/*` catalog models. */
 export type SearchEngineId = Exclude<SearchProviderId, WebSearchGrounding>;
 

@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `readBodyCapped` (`@oh-my-pi/pi-utils/response-body`), which reads a response body up to a byte cap into one buffer and stops there
+- Added `readBodyCapped` (`@oh-my-pi/pi-utils/response-body`), which reads a response body up to a byte cap into one buffer and stops there ([#16326](https://github.com/can1357/oh-my-pi/pull/16326) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.12.2] - 2026-10-18
 
