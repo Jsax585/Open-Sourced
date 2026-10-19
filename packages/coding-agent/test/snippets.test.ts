@@ -231,6 +231,18 @@ describe("buildSnippetChoices", () => {
 		expect(choice?.label).toBe("a b c");
 		expect(`${choice?.label}${choice?.description}`).not.toMatch(/[\t\n]/);
 	});
+
+	test("names that clean up to the same text still get distinct labels the picker can return", () => {
+		const choices = buildSnippetChoices([template("a b", "one"), template("a\tb", "two")], start);
+		const labels = choices.map(c => c.label);
+		expect(new Set(labels).size).toBe(2);
+		expect(choices.map(c => c.insertText).sort()).toEqual(["one", "two"]);
+	});
+
+	test("a template literally named snippet:<name> reserves that token, so the alias is not emitted", () => {
+		const choices = buildSnippetChoices([template("foo", "Say $1"), template("snippet:foo", "Other $1")], start);
+		expect(choices.find(c => c.label === "foo")?.insertText).toBe("Say $1");
+	});
 });
 
 describe("snippet: command namespace", () => {

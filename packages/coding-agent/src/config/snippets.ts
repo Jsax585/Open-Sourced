@@ -209,6 +209,8 @@ export function buildSnippetChoices(
 	for (const template of templates) counts.set(template.name, (counts.get(template.name) ?? 0) + 1);
 
 	const sorted = [...templates].sort((a, b) => a.name.localeCompare(b.name) || a.source.localeCompare(b.source));
+	// The picker returns only the label, so labels must stay unique even when different raw names clean up alike.
+	const usedLabels = new Set<string>();
 	return sorted.map(template => {
 		const { content } = template;
 		const name = displayText(template.name);
@@ -221,13 +223,19 @@ export function buildSnippetChoices(
 			!duplicated &&
 			name === template.name &&
 			/^\S+$/.test(name) &&
+			// `findPromptTemplate` prefers an exact raw name, so a template literally named `snippet:<name>` would win.
+			!counts.has(commandName) &&
 			!context.reservedCommands.has(commandName) &&
 			templateUsesInlineArgPlaceholders(content);
 		const command = `/${commandName}`;
 		const preview = truncateToWidth(displayText(content), TRUNCATE_LENGTHS.RECAP);
 		const hint = invocation ? `takes arguments, inserts ${command} · ` : "";
+		const baseLabel = duplicated ? `${name} ${source}` : name;
+		let label = baseLabel;
+		for (let n = 2; usedLabels.has(label); n++) label = `${baseLabel} (${n})`;
+		usedLabels.add(label);
 		return {
-			label: duplicated ? `${name} ${source}` : name,
+			label,
 			description: `${source} · ${hint}${preview}`,
 			// The editor's programmatic insert does not strip controls or tabs the way typing and paste do.
 			insertText: invocation ? `${command} ` : replaceTabs(sanitizeText(content)),

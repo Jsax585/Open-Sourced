@@ -1,3 +1,4 @@
+import { sanitizeErrorLine } from "@oh-my-pi/pi-tui/chrome/error-block";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { SNIPPET_COMMAND_PREFIX } from "../config/prompt-templates";
 import {
@@ -12,7 +13,7 @@ import {
 	snippetsDir,
 } from "../config/snippets";
 import { clearSubmittedText } from "./helpers/draft";
-import { errorMessage, parseSubcommand } from "./helpers/parse";
+import { parseSubcommand } from "./helpers/parse";
 import type { SlashCommandSpec } from "./types";
 
 export const BUILTIN_SNIPPETS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
@@ -104,7 +105,7 @@ export const BUILTIN_SNIPPETS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = 
 						return;
 				}
 			} catch (error) {
-				ctx.showError(`Snippets: ${errorMessage(error)}`);
+				ctx.showError(`Snippets: ${sanitizeErrorLine(error)}`);
 			}
 		},
 	},
