@@ -473,7 +473,13 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 				return {
 					header,
 					phase: options.spinnerFrame !== undefined ? "running" : "pending",
-					sections: [{ content: capPreviewLines(cmdLines, uiTheme, { expanded: options.expanded }) }],
+					sections: [
+						{
+							content: capPreviewLines(cmdLines, uiTheme, { expanded: options.expanded }),
+							verbatim: true,
+							expanded: options.expanded,
+						},
+					],
 				};
 			});
 		},
@@ -625,6 +631,8 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 									uiTheme,
 									{ expanded },
 								),
+								verbatim: true,
+								expanded,
 							},
 							{ label: uiTheme.fg("toolTitle", "Output"), content: outputLines },
 						],
