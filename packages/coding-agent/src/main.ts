@@ -25,7 +25,14 @@ import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
 import chalk from "@oh-my-pi/pi-utils/chalk";
-import { reset as resetCapabilities } from "./capability";
+import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
+import { projectTrustRoot, reset as resetCapabilities, setProjectTrustCheck } from "./capability";
+import {
+	listProjectCodeSources,
+	loadTrustedProjects,
+	type ProjectCodeSource,
+	trustProject,
+} from "./config/project-trust";
 import {
 	type Args,
 	reportInvalidFlagValues,
@@ -845,6 +852,62 @@ async function promptMoveSession(session: SessionInfo): Promise<SessionPromptRes
 		rl.close();
 		resumeStartupWatchdog();
 	}
+}
+
+const TRUST_PROMPT_MAX_SOURCES = 10;
+
+async function promptTrustProject(projectRoot: string, sources: ProjectCodeSource[]): Promise<boolean> {
+	const lines = sources
+		.slice(0, TRUST_PROMPT_MAX_SOURCES)
+		.map(source => `  ${source.kind}: ${shortenPath(source.path)}`);
+	if (sources.length > TRUST_PROMPT_MAX_SOURCES)
+		lines.push(`  ...and ${sources.length - TRUST_PROMPT_MAX_SOURCES} more`);
+	process.stdout.write(`${chalk.yellow("This project can run code on your machine:")}\n${lines.join("\n")}\n`);
+	pauseStartupWatchdog();
+	const createInterface = await loadReadlineInterface();
+	const rl = createInterface({ input: process.stdin, output: process.stdout });
+	try {
+		const answer = (await rl.question(`Trust ${shortenPath(projectRoot)}? Only trust projects you know. [y/N] `))
+			.trim()
+			.toLowerCase();
+		return answer === "y" || answer === "yes";
+	} finally {
+		rl.close();
+		resumeStartupWatchdog();
+	}
+}
+
+/**
+ * Decide whether the session's project may run its project-level code: stored
+ * trust, `--trust-project`, or an interactive prompt. Headless launches never
+ * prompt; they skip the code and say so on stderr.
+ */
+async function resolveProjectTrust(
+	cwd: string,
+	trustedProjects: Set<string>,
+	parsedArgs: Pick<Args, "trustProject">,
+	isInteractive: boolean,
+): Promise<void> {
+	const root = await projectTrustRoot(cwd);
+	if (trustedProjects.has(root)) return;
+	if (parsedArgs.trustProject) {
+		trustedProjects.add(root);
+	} else {
+		const sources = await listProjectCodeSources(cwd);
+		if (sources.length === 0) return;
+		if (!isInteractive) {
+			const kinds = [...new Set(sources.map(source => source.kind))].join(", ");
+			process.stderr.write(
+				`${chalk.yellow(`Skipped untrusted project code in ${shortenPath(root)} (${kinds}). Pass --trust-project to load it.`)}\n`,
+			);
+			return;
+		}
+		if (!(await promptTrustProject(root, sources))) return;
+		await trustProject(root);
+		trustedProjects.add(root);
+	}
+	// Plugin lookups cached while untrusted would keep hiding the project's plugins.
+	clearPluginRootsAndCaches();
 }
 
 /**
@@ -1834,6 +1897,11 @@ export async function runRootCommand(
 		// RPC owns stdin. Claim its singleton stream before plugin/extension discovery can load an in-process consumer.
 		const rpcInput = mode === "rpc" || mode === "rpc-ui" ? claimRpcInput() : undefined;
 
+		// Project-level code loads only for trusted roots. Installed before plugin
+		// preload so no cache fills with an untrusted project's plugins.
+		const trustedProjects = deps === DEFAULT_RUN_ROOT_DEPENDENCIES ? await loadTrustedProjects() : undefined;
+		if (trustedProjects) setProjectTrustCheck(root => trustedProjects.has(root));
+
 		// Kick off plugin-root preload in parallel with the remaining startup work.
 		// Awaited later (before extension/skill discovery in createAgentSession needs it).
 		const home = os.homedir();
@@ -2251,6 +2319,7 @@ export async function runRootCommand(
 			}
 		}
 		await pluginPreloadPromise;
+		if (trustedProjects) await resolveProjectTrust(cwd, trustedProjects, parsedArgs, isInteractive);
 		// Pure file I/O: overlap it with session-option building, but land it before
 		// extensions load or the session can start project daemons.
 		const daemonPresencePromise =
