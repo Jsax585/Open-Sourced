@@ -302,6 +302,8 @@ interface SuppressedSelectorRecord {
 	usageLimitFailureTime?: number;
 	/** Per-session quota-failure times: a sibling session's failure must not ratchet this session's recovery cutoff. */
 	usageLimitFailureTimeBySession?: Map<string, number>;
+	/** Per-session cooldown deadlines: a sibling session's longer quota cooldown must not extend this session's own. */
+	untilMsBySession?: Map<string, number>;
 }
 
 /** Loads models and resolves their credentials through AuthStorage. */
@@ -3736,6 +3738,13 @@ export class ModelRegistry {
 							usageLimitFailureTime,
 						),
 					);
+		const untilMsBySession =
+			sessionId === undefined
+				? previous?.untilMsBySession
+				: new Map(previous?.untilMsBySession).set(
+						sessionId,
+						Math.max(previous?.untilMsBySession?.get(sessionId) ?? untilMs, untilMs),
+					);
 		this.#suppressedSelectors.set(normalizedSelector, {
 			untilMs: Math.max(previous?.untilMs ?? 0, untilMs),
 			nonQuotaUntilMs: Math.max(previous?.nonQuotaUntilMs ?? 0, usageLimitFailureTime === undefined ? untilMs : 0),
@@ -3744,6 +3753,7 @@ export class ModelRegistry {
 					? previous?.usageLimitFailureTime
 					: Math.max(previous?.usageLimitFailureTime ?? usageLimitFailureTime, usageLimitFailureTime),
 			usageLimitFailureTimeBySession,
+			untilMsBySession,
 		});
 	}
 
@@ -3777,6 +3787,12 @@ export class ModelRegistry {
 		const active = this.#activeSuppressedRecord(selector);
 		if (!active) return false;
 		const { selector: normalizedSelector, record } = active;
+		// A session whose own cooldown deadline has passed is no longer suppressed
+		// for that session, even while a sibling session's longer cooldown keeps
+		// the selector-wide record active.
+		const sessionUntilMs =
+			options.sessionId !== undefined ? record.untilMsBySession?.get(options.sessionId) : undefined;
+		if (sessionUntilMs !== undefined && sessionUntilMs <= Date.now()) return false;
 		const failureTime =
 			(options.sessionId !== undefined
 				? record.usageLimitFailureTimeBySession?.get(options.sessionId)

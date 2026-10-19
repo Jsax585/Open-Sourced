@@ -2180,7 +2180,12 @@ export class TurnRecovery {
 		// names the last model that served, which this swap has not changed.
 		const routedBeforeSwap = this.#fallbackRoutedFor;
 		const servedBeforeSwap = this.#activeRetryFallback?.served;
-		const activeFallbackBefore = this.#activeRetryFallback;
+		const activeFallbackBefore = this.#activeRetryFallback
+			? {
+					lastAppliedFallbackThinkingLevel: this.#activeRetryFallback.lastAppliedFallbackThinkingLevel,
+					pinned: this.#activeRetryFallback.pinned,
+				}
+			: undefined;
 		this.#markFallbackRouted();
 		if (this.#activeRetryFallback) this.#activeRetryFallback.served = false;
 		await this.#host.setModelWithProviderSessionReset(candidate);
@@ -2239,7 +2244,10 @@ export class TurnRecovery {
 					}
 				}
 				this.#host.setThinkingLevel(currentThinkingLevel);
-				if (leafBeforeAppend !== null && this.#host.sessionManager.getLeafId() !== leafBeforeAppend) {
+				if (this.#host.sessionManager.getLeafId() !== leafBeforeAppend) {
+					// Compare against the captured leaf even when it was null: a fresh
+					// session has no leaf before the apply, and the appended fallback
+					// `model_change` must not remain on the active branch.
 					this.#host.sessionManager.rewindLeafTo(leafBeforeAppend);
 				}
 				await this.#host.setModelWithProviderSessionReset(previousModel);
@@ -2662,6 +2670,10 @@ export class TurnRecovery {
 
 		const errorMessage = message.errorMessage || "Unknown error";
 		const id = this.#classifyRetryMessage(message);
+		// Capture the quota failure time before any recovery await: a healthy usage
+		// snapshot fetched during the redemption retry loop must still qualify as
+		// evidence newer than the failure when a fallback cooldown is recorded.
+		const quotaFailureAtMs = AIError.is(id, AIError.Flag.UsageLimit) ? Date.now() : undefined;
 		const preserveFailedTurn =
 			options?.preserveFailedTurn === true ||
 			((classifierRefusal || AIError.is(id, AIError.Flag.MalformedFunctionCall) || AIError.retriable(id)) &&
@@ -2908,7 +2920,7 @@ export class TurnRecovery {
 					// to a still-exhausted primary. A switched credential means a
 					// sibling is free now, and that wait covers only the spent one.
 					const usageCooldownMs = recordedUsageLimitOutcome?.switchedCredential ? undefined : usageLimitWaitMs;
-					const quotaFailureTime = AIError.is(id, AIError.Flag.UsageLimit) ? Date.now() : undefined;
+					const quotaFailureTime = quotaFailureAtMs;
 					this.noteRetryFallbackCooldown(
 						currentSelector,
 						usageCooldownMs ?? parsedRetryAfterMs,

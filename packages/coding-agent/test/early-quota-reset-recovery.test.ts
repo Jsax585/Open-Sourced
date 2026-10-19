@@ -670,6 +670,33 @@ describe("early quota reset recovery", () => {
 		).toBe(true);
 	});
 
+	it("releases a session whose own cooldown expired while a sibling's longer cooldown stays active", async () => {
+		env = await createEnv();
+		const { registry } = env;
+		const clock = useMockClock();
+		// Session A records a long quota cooldown on the shared selector.
+		registry.suppressSelector(PRIMARY_SELECTOR, clock.now() + 30 * 60_000, clock.now(), "session-a");
+		clock.advance(60_000);
+		// Session B records a much shorter cooldown on the same selector.
+		registry.suppressSelector(PRIMARY_SELECTOR, clock.now() + 2 * 60_000, clock.now(), "session-b");
+		clock.advance(3 * 60_000);
+
+		// B's own deadline passed even though A's selector-wide record is still
+		// active, so B is no longer suppressed; A remains on its own cooldown.
+		expect(
+			await registry.isSelectorSuppressedWithRecovery(PRIMARY_SELECTOR, {
+				sessionId: "session-b",
+				reserveFraction: 0.1,
+			}),
+		).toBe(false);
+		expect(
+			await registry.isSelectorSuppressedWithRecovery(PRIMARY_SELECTOR, {
+				sessionId: "session-a",
+				reserveFraction: 0.1,
+			}),
+		).toBe(true);
+	});
+
 	it("preserves the quota suppression when the recovery probe aborts", async () => {
 		env = await createEnv();
 		const { registry } = env;
