@@ -3,6 +3,7 @@
  * provider, OAuth login and account usage: client identity, upstream/region
  * vocabulary, API hosts and the account-scoped model-cache namespace.
  */
+import type { FetchImpl } from "../types";
 import { isRecord } from "../utils";
 
 /**
@@ -95,6 +96,37 @@ export function factoryDroidClientHeaders(orgId: string | undefined): Record<str
 		"X-Factory-Client": "cli",
 		...(orgId ? { "X-Factory-Org-Id": orgId } : {}),
 	};
+}
+
+/**
+ * Org managed settings (`GET /api/organization/managed-settings`): the
+ * `settings` record, or null when the request fails or the body is not the
+ * expected envelope. Callers treat null as "policy unknown". Cancellation via
+ * `signal` still rejects.
+ */
+export async function fetchFactoryDroidManagedSettings(
+	accessToken: string,
+	options: { orgId?: string; region?: string; fetch?: FetchImpl; signal?: AbortSignal } = {},
+): Promise<Record<string, unknown> | null> {
+	try {
+		const response = await (options.fetch ?? fetch)(
+			`${factoryDroidApiBaseUrl(options.region)}/api/organization/managed-settings`,
+			{
+				headers: {
+					Accept: "application/json",
+					Authorization: `Bearer ${accessToken}`,
+					...factoryDroidClientHeaders(options.orgId),
+				},
+				signal: options.signal,
+			},
+		);
+		if (!response.ok) return null;
+		const body: unknown = await response.json();
+		return isRecord(body) && isRecord(body.settings) ? body.settings : null;
+	} catch (error) {
+		if (options.signal?.aborted) throw error;
+		return null;
+	}
 }
 
 /** Model-cache namespace for a Factory credential and its account scope. */

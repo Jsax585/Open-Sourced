@@ -14,6 +14,7 @@ import {
 	type FactoryDroidWire,
 	factoryDroidApiBaseUrl,
 	factoryDroidClientHeaders,
+	fetchFactoryDroidManagedSettings,
 	factoryDroidWireBaseUrl,
 	resolveFactoryDroidInferenceRegion,
 } from "../wire/factory-droid";
@@ -52,9 +53,8 @@ function canonicalPolicyId(id: string): string {
 	);
 }
 
-function readModelPolicy(body: unknown): FactoryModelPolicy | null {
-	if (!isRecord(body) || !isRecord(body.settings)) return null;
-	const policy = body.settings.modelPolicy;
+function readModelPolicy(settings: Record<string, unknown> | null): FactoryModelPolicy | null {
+	const policy = settings?.modelPolicy;
 	if (!isRecord(policy)) return null;
 	const ids = (key: "allowedModelIds" | "blockedModelIds" | "requireExplicitOptInModelIds"): string[] | undefined => {
 		const value = policy[key];
@@ -170,9 +170,9 @@ export async function fetchFactoryDroidModels(
 	let routing: FactoryProviderRouting | null = null;
 	const servingRegion = resolveFactoryDroidInferenceRegion(options);
 	try {
-		const [flagsResponse, settingsResponse] = await Promise.all([
+		const [flagsResponse, settings] = await Promise.all([
 			fetchImpl(`${apiBaseUrl}/api/feature-flags`, { headers }),
-			fetchImpl(`${apiBaseUrl}/api/organization/managed-settings`, { headers }).catch(() => null),
+			fetchFactoryDroidManagedSettings(token, { orgId: options.orgId, region: options.region, fetch: fetchImpl }),
 		]);
 		if (!flagsResponse.ok) return null;
 		const body: unknown = await flagsResponse.json();
@@ -180,9 +180,7 @@ export async function fetchFactoryDroidModels(
 		const raw = body.flags;
 		if (raw == null || typeof raw !== "object" || Array.isArray(raw)) return null;
 		flags = Object.fromEntries(Object.entries(raw).map(([key, value]) => [key, value === true]));
-		if (settingsResponse?.ok) {
-			policy = readModelPolicy(await settingsResponse.json());
-		}
+		policy = readModelPolicy(settings);
 		routing = readProviderRouting(body as Record<string, unknown>);
 	} catch {
 		return null;

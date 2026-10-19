@@ -121,7 +121,7 @@ describe("searchFactory request", () => {
 					{ headers: { "x-request-id": "req-1" } },
 				),
 		});
-		const sessionModel = { id: "session-model-id" } as Model<Api>;
+		const sessionModel = { provider: "factory-droid", id: "session-model-id" } as Model<Api>;
 
 		const result = await withLocalAuthStorage(async authStorage => {
 			await storeFactoryLogin(authStorage, "eu");
@@ -156,17 +156,23 @@ describe("searchFactory request", () => {
 		expect(result.sources[0]?.publishedDate).toBe("2026-10-01T00:00:00Z");
 	});
 
-	it("omits x-client-model outside a session and defaults then clamps the result count", async () => {
+	it("omits x-client-model outside a Factory session model and defaults then clamps the result count", async () => {
 		const captured: CapturedRequest[] = [];
 		await withLocalAuthStorage(async authStorage => {
 			await storeFactoryLogin(authStorage);
 			await searchFactory({ query: "q", authStorage, fetch: factoryFetch(captured, {}) });
-			await searchFactory({ query: "q", limit: 99, authStorage, fetch: factoryFetch(captured, {}) });
+			await searchFactory({
+				query: "q",
+				limit: 99,
+				sessionModel: { provider: "anthropic", id: "claude-sonnet-4-5" } as Model<Api>,
+				authStorage,
+				fetch: factoryFetch(captured, {}),
+			});
 		});
 
 		const searches = captured.filter(isSearch);
 		expect(searches[0]?.url).toBe("https://api.factory.ai/api/tools/web-search");
-		expect(searches[0]?.headers.has("x-client-model")).toBe(false);
+		expect(searches.map(request => request.headers.has("x-client-model"))).toEqual([false, false]);
 		expect(searches.map(request => request.body)).toMatchObject([{ numResults: 10 }, { numResults: 20 }]);
 	});
 });
@@ -237,18 +243,71 @@ describe("searchFactory organization policy", () => {
 		expect(captured.filter(isSearch)).toHaveLength(3);
 	});
 
-	it("allows the search when the policy cannot be read", async () => {
+	it("allows the search when the policy cannot be read, and reuses that answer for a minute", async () => {
 		const captured: CapturedRequest[] = [];
+		const fetchMock = factoryFetch(captured, { settings: () => new Response("upstream down", { status: 500 }) });
 		await withLocalAuthStorage(async authStorage => {
 			await storeFactoryLogin(authStorage);
-			await searchFactory({
-				query: "q",
-				authStorage,
-				fetch: factoryFetch(captured, { settings: () => new Response("upstream down", { status: 500 }) }),
-			});
+			await searchFactory({ query: "one", authStorage, fetch: fetchMock });
+			await searchFactory({ query: "two", authStorage, fetch: fetchMock });
+		});
+
+		expect(captured.filter(isSettings)).toHaveLength(1);
+		expect(captured.filter(isSearch)).toHaveLength(2);
+	});
+
+	it("allows the search when the policy request fails to connect", async () => {
+		const captured: CapturedRequest[] = [];
+		const fetchMock = factoryFetch(captured, {
+			settings: () => {
+				throw new TypeError("socket reset");
+			},
+		});
+		await withLocalAuthStorage(async authStorage => {
+			await storeFactoryLogin(authStorage);
+			await searchFactory({ query: "q", authStorage, fetch: fetchMock });
 		});
 
 		expect(captured.filter(isSearch)).toHaveLength(1);
+	});
+
+	it("treats a server 403 as the org refusal when a fresh policy read says disabled", async () => {
+		let settingsReads = 0;
+		const fetchMock = factoryFetch([], {
+			settings: () => {
+				settingsReads += 1;
+				return settingsReads === 1
+					? Response.json({ success: true, settings: {} })
+					: Response.json({ success: true, settings: { webSearchDisabled: true } });
+			},
+			search: () => Response.json({ detail: "Web search is disabled" }, { status: 403 }),
+		});
+
+		const { error, rotations } = await withLocalAuthStorage(async authStorage => {
+			await storeFactoryLogin(authStorage);
+			const rotate = vi.spyOn(authStorage.limits, "rotate");
+			const error = await rejectionOf(searchFactory({ query: "q", authStorage, fetch: fetchMock }));
+			return { error, rotations: rotate.mock.calls.length };
+		});
+
+		expect(error).toBeInstanceOf(SearchProviderError);
+		expect((error as SearchProviderError).status).toBeUndefined();
+		expect(String(error)).toContain("disabled by your organization's settings");
+		expect(rotations).toBe(0);
+	});
+});
+
+describe("searchFactory errors", () => {
+	it("truncates a large error body instead of embedding it whole", async () => {
+		const fetchMock = factoryFetch([], { search: () => new Response("x".repeat(200_000), { status: 502 }) });
+
+		const error = await withLocalAuthStorage(async authStorage => {
+			await storeFactoryLogin(authStorage);
+			return rejectionOf(searchFactory({ query: "q", authStorage, fetch: fetchMock }));
+		});
+
+		expect(error).toBeInstanceOf(SearchProviderError);
+		expect(String(error).length).toBeLessThan(10_000);
 	});
 });
 
