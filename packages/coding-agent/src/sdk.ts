@@ -614,8 +614,10 @@ export interface CreateAgentSessionOptions {
 	 * catalog, or without working credentials — through its own
 	 * `retry.fallbackChains` key, refusing the session when that chain is empty
 	 * or exhausted, and record any replacement (`modelPatternAuthFallback`
-	 * included) as a fallback. Task spawns set it; cold revival leaves it unset
-	 * and keeps the plain credential fallback to its last served model.
+	 * included) as a fallback. Task spawns set it, and warm revival, which
+	 * rebuilds the session from the spawn's own options, repeats that decision.
+	 * Cold revival leaves it unset and keeps the plain credential fallback to
+	 * the model session_init recorded.
 	 */
 	modelPatternChainFallback?: boolean;
 	/** Thinking selector. Default: from settings, else unset */
@@ -3220,7 +3222,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 									if (chainFallback) {
 										startupReplacement = {
 											from: pattern,
-											reason: `${pattern} ${cause} and retry.fallbackChains has no key for it, so the parent session's model serves instead`,
+											reason: `${pattern} ${cause} and ${cfgRetryModelFallback.get(settings) ? "retry.fallbackChains has no key for it" : "retry.modelFallback is off"}, so the parent session's model serves instead`,
 											role: options.modelPatternFallbackRole ?? "default",
 										};
 									}
