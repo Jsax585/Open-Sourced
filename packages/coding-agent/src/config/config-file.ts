@@ -57,6 +57,14 @@ export type ConfigSchemaSource =
 	| { readonly kind: "eager"; readonly schema: Type }
 	| { readonly kind: "deferred"; readonly resolve: () => Type };
 
+/**
+ * Rewrites the parsed file content before schema validation. A file may spell
+ * something the schema cannot express (an enum value the schema does not know
+ * yet), and a normalizer may drop it and report what it dropped so the file
+ * still loads instead of failing the whole config.
+ */
+export type ConfigNormalizer = (value: unknown, report: (message: string) => void) => unknown;
+
 export interface IConfigFile<T> {
 	readonly id: string;
 	readonly schema: Type;
@@ -133,6 +141,8 @@ export class ConfigFile<T> implements IConfigFile<T> {
 	#resolvedSchema?: Type;
 	#cache?: LoadResult<T>;
 	#auxValidate?: (value: T) => void;
+	#normalize?: ConfigNormalizer;
+	#warnings: string[] = [];
 
 	constructor(
 		readonly id: string,
@@ -179,6 +189,7 @@ export class ConfigFile<T> implements IConfigFile<T> {
 		if (!configPath || configPath === this.#basePath) return this;
 		const result = new ConfigFile<T>(this.id, this.#schemaSource, configPath);
 		result.#auxValidate = this.#auxValidate;
+		result.#normalize = this.#normalize;
 		result.#resolvedSchema = this.#resolvedSchema;
 		result.#ensureMigrated();
 		return result;
@@ -216,6 +227,37 @@ export class ConfigFile<T> implements IConfigFile<T> {
 		return this;
 	}
 
+	/**
+	 * Normalize the parsed file before schema validation. The normalizer may
+	 * rewrite the value — a file may spell something the schema cannot express
+	 * — and report what it dropped, so the file still loads instead of failing
+	 * the whole config. The reported findings are drained with
+	 * {@link drainWarnings}.
+	 */
+	withNormalization(name: string, normalize: ConfigNormalizer): this {
+		const prev = this.#normalize;
+		this.#normalize = (value: unknown, report: (message: string) => void) => {
+			const normalized = prev ? prev(value, report) : value;
+			try {
+				return normalize(normalized, report);
+			} catch (error) {
+				throw new ConfigError(this.id, undefined, { err: error, stage: `Normalize(${name})` });
+			}
+		};
+		return this;
+	}
+
+	/**
+	 * Drain the findings the normalizer reported for the last parse. Empty when
+	 * the file loaded without a normalizer, or when the parse was served from
+	 * the cache (the findings were drained already).
+	 */
+	drainWarnings(): string[] {
+		const warnings = this.#warnings;
+		this.#warnings = [];
+		return warnings;
+	}
+
 	createDefault(): T {
 		const parsed = this.schema({});
 		if (!(parsed instanceof Error)) return parsed as T;
@@ -242,6 +284,18 @@ export class ConfigFile<T> implements IConfigFile<T> {
 				parsed = YAML.parse(content);
 			} else {
 				throw new Error(`Invalid config file path: ${readPath}`);
+			}
+
+			if (this.#normalize) {
+				try {
+					parsed = this.#normalize(parsed, message => this.#warnings.push(message));
+				} catch (error) {
+					const wrapped =
+						error instanceof ConfigError
+							? error
+							: new ConfigError(this.id, undefined, { err: error, stage: "Normalize" });
+					return this.#storeCache({ error: wrapped, status: "error" });
+				}
 			}
 
 			const checked = this.schema(parsed);

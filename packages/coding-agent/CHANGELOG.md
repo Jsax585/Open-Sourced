@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a `models.yml` naming an input modality the catalog does not know yet (e.g. `video`) aborting startup with a schema-path error; the modality is now ignored with a warning naming the provider and model, and the rest of the file loads ([#16366](https://github.com/can1357/oh-my-pi/pull/16366) by [@jonasboos](https://github.com/jonasboos))
+
 ## [18.12.3] - 2026-10-19
 
 ### Added
