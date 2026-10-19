@@ -1823,4 +1823,60 @@ describe("LiteLLM declared reasoning ladder", () => {
 		if (!spec) throw new Error("expected the M3.1 spec");
 		expect(buildModel(spec).thinking?.efforts).toEqual(expected);
 	});
+
+	test("preserves a declared none level for Off", async () => {
+		const specs = await fetchLiteLLMRichModels({
+			api: "openai-completions",
+			provider: "litellm",
+			baseUrl: "http://primary:4000/v1",
+			apiKey: "sk-rich",
+			fetch: vi.fn(async (input: string | URL | Request) => {
+				const url = inputUrl(input);
+				if (url === "http://primary:4000/model/info") {
+					return Response.json({
+						data: [
+							{
+								model_name: "MiniMax-M3.1-Flash",
+								supports_reasoning: true,
+								supports_vision: true,
+								model_info: { reasoning_effort_levels: ["none", "low", "high"] },
+							},
+						],
+					});
+				}
+				return new Response("{}", { status: 404 });
+			}) as FetchImpl,
+		});
+		const spec = specs?.find(model => model.id === "MiniMax-M3.1-Flash");
+		expect(spec?.thinking).toMatchObject({ efforts: [Effort.Low, Effort.High], requiresEffort: false });
+		expect(spec?.compat).toMatchObject({ reasoningDisableMode: "none-effort" });
+	});
+
+	test("derives the adaptive mode from the configured anthropic route", async () => {
+		const specs = await fetchLiteLLMRichModels({
+			api: "anthropic-messages",
+			provider: "litellm",
+			baseUrl: "http://primary:4000/v1",
+			apiKey: "sk-rich",
+			fetch: vi.fn(async (input: string | URL | Request) => {
+				const url = inputUrl(input);
+				if (url === "http://primary:4000/model/info") {
+					return Response.json({
+						data: [
+							{
+								model_name: "MiniMax-M3.1-Flash",
+								supports_reasoning: true,
+								model_info: { reasoning_effort_levels: ["low", "medium", "high"] },
+							},
+						],
+					});
+				}
+				return new Response("{}", { status: 404 });
+			}) as FetchImpl,
+		});
+		const spec = specs?.find(model => model.id === "MiniMax-M3.1-Flash");
+		expect(spec?.thinking?.mode).toBe("anthropic-adaptive");
+		if (!spec) throw new Error("expected the M3.1 spec");
+		expect(buildModel(spec).thinking?.mode).toBe("anthropic-adaptive");
+	});
 });

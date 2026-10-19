@@ -5887,9 +5887,18 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 		return null;
 	}
 	const reference = options.referenceResolver?.(id);
+	const api = options.resolveApi?.(entry, id) ?? options.api;
 	const declaredEfforts = getLiteLLMDeclaredReasoningEfforts(entry);
-	const thinking = declaredEfforts
-		? { mode: reference?.thinking?.mode ?? "effort", efforts: declaredEfforts }
+	const rawLevels = getLiteLLMMetadataValue(entry, "reasoning_effort_levels");
+	const allowsNone =
+		Array.isArray(rawLevels) &&
+		rawLevels.some(level => typeof level === "string" && level.trim().toLowerCase() === "none");
+	const thinking: ThinkingConfig | undefined = declaredEfforts
+		? {
+				mode: api === "anthropic-messages" ? "anthropic-adaptive" : "effort",
+				efforts: declaredEfforts,
+				...(allowsNone ? { requiresEffort: false } : {}),
+			}
 		: reference?.thinking;
 	const modelName = toNonEmptyString(entry.model_name);
 	const contextWindow = toPositiveNumber(
@@ -5955,11 +5964,16 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 		// in place. `mergeLiteLLMCompat` keeps it when another endpoint wins the
 		// compat merge (issue #11982).
 		...(supportsVision === true ? { stripImageInput: false } : {}),
+		// A declared `none` level is only usable when the OpenAI-compatible
+		// transport sends `reasoning_effort: "none"` for Off.
+		...(allowsNone && (api === "openai-completions" || api === "openai-responses")
+			? { reasoningDisableMode: "none-effort" as const }
+			: {}),
 	};
 	return {
 		id,
 		name: toLiteLLMDisplayName(modelName, reference?.name, id),
-		api: options.resolveApi?.(entry, id) ?? options.api,
+		api,
 		provider: options.provider,
 		baseUrl: runtimeBaseUrl,
 		contextWindow,
