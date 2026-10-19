@@ -113,14 +113,26 @@ export interface WorkerSpawnCommand {
 export const SMOKE_TEST_TIMEOUT_MS = 30_000;
 
 /**
- * Resolve the current executable path, falling back to finding the binary on
- * PATH if the original physical path was unlinked on disk (e.g. Homebrew or a
- * package manager pruned the prior version directory during an in-flight
- * upgrade, leaving `process.execPath` pointing at a missing path).
+ * Resolve the current executable path, preferring the launcher the user ran.
+ *
+ * `process.execPath` in a compiled binary is the realpath'd binary file, which
+ * is not always the path the user invoked: manager installs (Tern) store each
+ * build as `<root>/versions/<version>` with a `bin/omp` symlink, and Homebrew
+ * links `bin/omp` into the Cellar. Exec'ing the resolved path makes the child
+ * process's `comm` the binary's basename — literally `18.8.9` under Tern — so
+ * `ps`, Activity Monitor, and `pgrep omp` can't identify workers or the
+ * daemon broker. `comm` comes from the exec path's basename, not argv[0], so
+ * re-entering through a launcher that resolves to this exact binary keeps the
+ * same bits while naming the process `omp`.
+ *
+ * Falls back to finding the binary on PATH if the original physical path was
+ * unlinked on disk (e.g. Homebrew or a package manager pruned the prior
+ * version directory during an in-flight upgrade, leaving `process.execPath`
+ * pointing at a missing path).
  */
 export function resolveExecutablePath(): string {
 	const executable = stripWindowsExtendedLengthPathPrefix(process.execPath);
-	if (isCompiledBinary() && !isExecutable(executable)) {
+	if (isCompiledBinary()) {
 		const argv0 = stripWindowsExtendedLengthPathPrefix(process.argv0);
 		const isPath = argv0.includes("/") || argv0.includes("\\") || argv0.includes(":");
 		const candidates = [
@@ -130,9 +142,23 @@ export function resolveExecutablePath(): string {
 			// Generic fallback to finding "omp" on PATH
 			$which("omp", { requireAbsolutePaths: true, cache: WhichCachePolicy.Bypass }),
 		];
+		const executableExists = isExecutable(executable);
 		for (const candidate of candidates) {
-			if (candidate && isExecutable(candidate)) {
+			if (!candidate || candidate === executable || !isExecutable(candidate)) {
+				continue;
+			}
+			if (!executableExists) {
 				return candidate;
+			}
+			// A launcher is only safe to re-enter while it resolves to the
+			// running binary; after an upgrade repoints the link it names a
+			// different file and re-entering it would silently swap versions.
+			try {
+				if (fs.realpathSync.native(candidate) === fs.realpathSync.native(executable)) {
+					return candidate;
+				}
+			} catch {
+				// Unresolvable candidate: not this binary, keep looking.
 			}
 		}
 	}

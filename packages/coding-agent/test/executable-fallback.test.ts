@@ -1,9 +1,10 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import * as utils from "@oh-my-pi/pi-utils";
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { resolveCliEntryCmd, resolveExecutablePath, resolveWorkerSpawnCmd } from "../src/subprocess/worker-client";
 
-describe("executable fallback on unlinked binary", () => {
+describe("executable path resolution", () => {
 	const originalExecPathDesc = Object.getOwnPropertyDescriptor(process, "execPath");
 	const originalArgv0Desc = Object.getOwnPropertyDescriptor(process, "argv0");
 
@@ -26,16 +27,58 @@ describe("executable fallback on unlinked binary", () => {
 		});
 	}
 
-	it("launches the healthy compiled binary without invoking fallback lookups", () => {
+	it("keeps execPath when no launcher resolves to the same binary", () => {
 		vi.spyOn(utils, "isCompiledBinary").mockReturnValue(true);
 		vi.spyOn(utils, "isExecutable").mockReturnValue(true);
-		const whichSpy = vi.spyOn(utils, "$which");
+		vi.spyOn(utils, "$which").mockReturnValue(null);
+		// No launcher resolves to execPath (bun test's own execPath is bun's,
+		// so realpathSync never matches a fake candidate anyway).
+		vi.spyOn(fs.realpathSync, "native").mockImplementation((p: fs.PathLike) => String(p));
 
 		expect(resolveCliEntryCmd()).toEqual([process.execPath]);
 		expect(resolveWorkerSpawnCmd("__omp_worker_test")).toEqual({
 			cmd: [process.execPath, "__omp_worker_test"],
 		});
-		expect(whichSpy).not.toHaveBeenCalled();
+	});
+
+	it("re-enters through a launcher symlink that resolves to the running binary", () => {
+		vi.spyOn(utils, "isCompiledBinary").mockReturnValue(true);
+		const versionedBinary = "/Users/x/Library/Application Support/Tern/omp/versions/18.8.9";
+		const launcher = "/Users/x/.local/bin/omp";
+		setProcessProp("execPath", versionedBinary);
+		setProcessProp("argv0", "omp");
+
+		vi.spyOn(utils, "$which").mockImplementation((cmd: string) => (cmd === "omp" ? launcher : null));
+		vi.spyOn(utils, "isExecutable").mockReturnValue(true);
+		// realpath collapses the launcher to the versioned binary: identity holds,
+		// so workers spawn via the launcher and get `comm` = "omp" instead of "18.8.9".
+		vi.spyOn(fs.realpathSync, "native").mockImplementation((p: fs.PathLike) =>
+			String(p) === launcher ? versionedBinary : String(p),
+		);
+
+		expect(resolveCliEntryCmd()).toEqual([launcher]);
+		expect(resolveWorkerSpawnCmd("__omp_worker_test")).toEqual({
+			cmd: [launcher, "__omp_worker_test"],
+		});
+	});
+
+	it("does not re-enter a launcher repointed at a different binary after upgrade", () => {
+		vi.spyOn(utils, "isCompiledBinary").mockReturnValue(true);
+		const runningBinary = "/Users/x/Library/Application Support/Tern/omp/versions/18.8.9";
+		const nextBinary = "/Users/x/Library/Application Support/Tern/omp/versions/18.9.0";
+		const launcher = "/Users/x/.local/bin/omp";
+		setProcessProp("execPath", runningBinary);
+		setProcessProp("argv0", "omp");
+
+		vi.spyOn(utils, "$which").mockImplementation((cmd: string) => (cmd === "omp" ? launcher : null));
+		vi.spyOn(utils, "isExecutable").mockReturnValue(true);
+		vi.spyOn(fs.realpathSync, "native").mockImplementation((p: fs.PathLike) =>
+			String(p) === launcher ? nextBinary : String(p),
+		);
+
+		// The link now names a different file: re-entering it would silently
+		// swap the worker's version, so the running binary wins.
+		expect(resolveExecutablePath()).toBe(runningBinary);
 	});
 
 	it("prefers original absolute launcher path over generic PATH match when executable", () => {
