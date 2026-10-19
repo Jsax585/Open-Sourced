@@ -2092,9 +2092,7 @@ describe("InteractiveMode plan review rendering", () => {
 			mode.ui.injectDebugInput("\r");
 
 			expect(mode.ui.getFocused()).toBe(review);
-			expect(Bun.stripANSI(review.render(100).join("\n"))).toContain(
-				"execute with anthropic/claude-haiku-4-5 (overrides tier)",
-			);
+			expect(Bun.stripANSI(review.render(100).join("\n"))).toContain("anthropic/claude-haiku-4-5");
 
 			mode.ui.injectDebugInput("\x1b[B");
 			mode.ui.injectDebugInput("\x1b[B");

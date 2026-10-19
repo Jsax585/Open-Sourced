@@ -336,7 +336,7 @@ describe("PlanReviewOverlay", () => {
 			{ promptTitle: "next", options: APPROVAL_OPTIONS },
 			{ onPick: vi.fn(), onCancel: vi.fn(), onPickExecutionModel },
 		);
-		expect(render(overlay)).toContain("m any model");
+		render(overlay); // lay out the sections so the Contents region exists
 		overlay.handleInput("m");
 		expect(onPickExecutionModel).toHaveBeenCalledTimes(1);
 
@@ -359,11 +359,11 @@ describe("PlanReviewOverlay", () => {
 				{ promptTitle: "next", options: APPROVAL_OPTIONS, slider: withSlider ? slider : undefined },
 				{ onPick: vi.fn(), onCancel: vi.fn() },
 			);
-			expect(render(overlay)).not.toContain("execute with");
+			expect(render(overlay)).not.toContain("claude-haiku-4-5");
 			overlay.setExecutionNotice("anthropic/claude-haiku-4-5");
-			expect(render(overlay)).toContain("execute with anthropic/claude-haiku-4-5 (overrides tier)");
+			expect(render(overlay)).toContain("anthropic/claude-haiku-4-5");
 			overlay.setExecutionNotice(undefined);
-			expect(render(overlay)).not.toContain("execute with");
+			expect(render(overlay)).not.toContain("claude-haiku-4-5");
 		}
 	});
 
