@@ -63,9 +63,11 @@ export interface AuthAccountPolicy {
 	/** Protected remaining quota percentage for this account. */
 	readonly reservePct?: number;
 	/**
-	 * Serve routed requests only from the plan's included allowance. When the allowance is spent,
-	 * a hard limit is reached, the account is blocked, or its usage cannot be measured, the account
-	 * is skipped, even as a last resort, so it never draws on paid overage such as Claude extra usage.
+	 * Stop routing requests to this account once its measured included allowance is spent. While the
+	 * allowance is spent, a hard limit is reached, the account is blocked, or its usage cannot be
+	 * measured, the account is skipped, even as a last resort. This is not a hard billing cap: the
+	 * check reads a cached usage report, so requests already in flight when the allowance runs out
+	 * can still bill paid overage such as Claude extra usage.
 	 */
 	readonly includedOnly?: boolean;
 }
