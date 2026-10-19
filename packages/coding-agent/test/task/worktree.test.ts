@@ -16,6 +16,7 @@ import {
 	IsolationBaselineTooLargeError,
 	mergeTaskBranches,
 	parseIsolationBackend,
+	sameIsolationState,
 } from "@oh-my-pi/pi-coding-agent/task/worktree";
 import * as natives from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
@@ -1030,6 +1031,34 @@ describe("captureIsolationBaseline", () => {
 
 		const baseline = await captureIsolationBaseline(iso, repo);
 		expect(baseline.nested.map(n => n.relativePath)).toEqual([path.join("vendor", "lib")]);
+	});
+});
+
+describe("captureDeltaPatch state", () => {
+	it("tracks a nested repository named __proto__", async () => {
+		const repo = await createGitRepo();
+		const nestedDir = path.join(repo, "__proto__");
+		await fs.mkdir(nestedDir);
+		await initRepo(nestedDir);
+		for (const dir of [repo, nestedDir]) {
+			await runGit(dir, ["config", "user.email", "test@example.com"]);
+			await runGit(dir, ["config", "user.name", "Test User"]);
+		}
+		await fs.writeFile(path.join(nestedDir, "n.txt"), "n0\n");
+		await runGit(nestedDir, ["add", "n.txt"]);
+		await runGit(nestedDir, ["commit", "-q", "-m", "nested"]);
+		await fs.writeFile(path.join(repo, ".gitignore"), "__proto__/\n");
+		await runGit(repo, ["add", ".gitignore"]);
+		await runGit(repo, ["commit", "-q", "-m", "base"]);
+		const baseline = await captureIsolationBaseline(repo, repo);
+		const before = await captureDeltaPatch(repo, baseline);
+
+		await fs.writeFile(path.join(nestedDir, "n.txt"), "n1\n");
+		const after = await captureDeltaPatch(repo, baseline);
+
+		// Kept-alive captures skip a workspace whose state matches the last one handed over.
+		expect(Object.keys(after.state.nested)).toEqual(["__proto__"]);
+		expect(sameIsolationState(before.state, after.state)).toBe(false);
 	});
 });
 

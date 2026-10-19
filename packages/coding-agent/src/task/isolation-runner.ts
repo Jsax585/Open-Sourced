@@ -67,7 +67,8 @@ export type IsolationSummaryKind =
 	| "branch-merge-failed"
 	| "branch-capture-failed"
 	| "merge-error"
-	| "follow-up-pending";
+	| "follow-up-pending"
+	| "follow-up-superseded";
 
 /** Context for `isolation-summary.md`; unused fields are simply absent. */
 export interface IsolationSummaryContext {
@@ -481,20 +482,24 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	const nextNestedPatchPrefix = (): string => `${opts.agentId}.${++laterCaptures}`;
 	/**
 	 * Capture the workspace for the caller: the work since the last landed
-	 * capture, or since the run began while nothing has landed. `undefined`
-	 * when nothing changed since the last handoff.
+	 * capture, or since the run began while nothing has landed. `"unchanged"`
+	 * when nothing changed since the last handoff; `"superseded"` when the
+	 * agent started another turn before the workspace was read, so the read may
+	 * hold part of that turn's edits and nothing is recorded or written.
 	 */
 	const captureHandoff = async (
 		isolationDir: string,
 		baseline: WorktreeBaseline,
 		commitMessage: ((diff: string) => Promise<string | null>) | undefined,
-	): Promise<IsolationHandoff | undefined> => {
+		superseded: () => boolean,
+	): Promise<IsolationHandoff | "unchanged" | "superseded"> => {
 		const current = await captureDeltaPatch(isolationDir, baseline);
-		if (handedOff && sameIsolationState(handedOff, current.state)) return undefined;
+		if (superseded()) return "superseded";
+		if (handedOff && sameIsolationState(handedOff, current.state)) return "unchanged";
 		const delta = landed ? await diffIsolationStates(baseline, landed.state, current.state) : current;
 		if (!delta.rootPatch.trim() && delta.nestedPatches.length === 0) {
 			handedOff = current.state;
-			return undefined;
+			return "unchanged";
 		}
 		if (opts.mergeMode === "patch") {
 			const artifacts = await writeDeltaPatches(delta, opts.artifactsDir, opts.agentId, nextNestedPatchPrefix());
@@ -516,7 +521,10 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				)
 			: await commitToBranch(isolationDir, baseline, opts.agentId, opts.description, commitMessage);
 		// `commitToBranch` found nothing in its own read: hand nothing over and look again next turn.
-		if (!branch) return undefined;
+		if (!branch) return "unchanged";
+		// `commitToBranch` read the workspace again; a branch built from that read
+		// is replaced by the next capture's.
+		if (superseded()) return "superseded";
 		const nestedPatchPaths = await persistNestedPatches(
 			opts.artifactsDir,
 			nextNestedPatchPrefix(),
@@ -535,24 +543,30 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		};
 	};
 	/** Capture a finished follow-up turn, have the caller land it, and return the text for that turn's result. */
-	const landFollowUpTurn = async (turn: SingleResult): Promise<string> => {
+	const landFollowUpTurn = async (turn: SingleResult, superseded: () => boolean): Promise<string> => {
 		const followUps = opts.followUps;
 		if (!followUps || !handle || !taskBaseline || retainWorkspace || releasePromise) return "";
 		// Like a failed first run, a failed turn hands nothing over; its work
 		// rides along in the next capture.
 		if (turn.exitCode !== 0 || turn.error !== undefined || turn.aborted) return "";
 		await settlePending();
-		let handoff: IsolationHandoff | undefined;
+		let handoff: IsolationHandoff | "unchanged" | "superseded";
 		try {
-			handoff = await captureHandoff(handle.mergedDir, taskBaseline, opts.buildCommitMessage?.());
+			handoff = await captureHandoff(handle.mergedDir, taskBaseline, opts.buildCommitMessage?.(), superseded);
 		} catch (error) {
+			// Name what release will write: after a patch-mode landing that is the
+			// patch alone, otherwise the task branch.
+			const patchOnly = landed !== undefined && opts.mergeMode === "patch";
 			return renderIsolationSummary({
 				kind: "follow-up-pending",
 				error: error instanceof Error ? error.message : String(error),
-				branchName: `omp/task/${opts.agentId}`,
+				branchName: patchOnly ? undefined : `omp/task/${opts.agentId}`,
+				rootPatchPath: patchOnly ? path.join(opts.artifactsDir, `${opts.agentId}.patch`) : undefined,
 			});
 		}
-		if (!handoff) return "";
+		if (handoff === "unchanged") return "";
+		// Its work rides along in the next capture, like a failed turn's.
+		if (handoff === "superseded") return renderIsolationSummary({ kind: "follow-up-superseded" });
 		const captured = rememberAgentArtifacts({ ...turn, ...handoff.artifacts });
 		const landing = Promise.withResolvers<boolean>();
 		pending = { state: handoff.state, tip: handoff.tip, landing: landing.promise };
@@ -664,12 +678,12 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			onRelease: opts.baseOptions.keepAlive === false ? releaseBase : releaseIsolation,
 			onFollowUpTurnSettled:
 				opts.followUps && opts.baseOptions.keepAlive !== false
-					? async turn => {
+					? async (turn, superseded) => {
 							// Wait outside the queue: the lifecycle may release this agent
 							// from inside `runSubprocess`, and that release must not queue
 							// behind a turn waiting for this function to finish.
 							await firstRunDone.promise;
-							return serialize(() => landFollowUpTurn(turn));
+							return serialize(() => landFollowUpTurn(turn, superseded));
 						}
 					: undefined,
 		});

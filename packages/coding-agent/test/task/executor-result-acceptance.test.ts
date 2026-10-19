@@ -875,7 +875,7 @@ describe("runSubprocess result acceptance", () => {
 		}
 
 		/** A kept-alive subagent owned by `Parent`, a registered peer, and a settle hook that reports {@link NOTICE}. */
-		function setUp() {
+		function setUp(onSettled: (superseded: () => boolean) => Promise<string> = async () => NOTICE) {
 			const manager = new AsyncJobManager({});
 			const harness = createHarness({ asyncJobManager: manager });
 			const registry = AgentRegistry.global();
@@ -896,7 +896,7 @@ describe("runSubprocess result acceptance", () => {
 				session: harness.session,
 				status: "idle",
 			});
-			const settle = vi.fn(async (_result: unknown) => NOTICE);
+			const settle = vi.fn((_result: unknown, superseded: () => boolean) => onSettled(superseded));
 			attachIrcWakeTurnMonitor(harness.session, { id: AGENT_ID, agent: baseAgent, onTurnSettled: settle });
 			const observer = harness.wakeObserver();
 			if (!observer) throw new Error("wake-turn observer was not registered");
@@ -965,6 +965,35 @@ describe("runSubprocess result acceptance", () => {
 				// Only the notice: repeating the answer would duplicate the agent's own message.
 				expect((await relayed)?.body).toBe(NOTICE.trim());
 				expect((await waiting).details?.jobs?.[0]?.resultText?.endsWith(NOTICE)).toBe(true);
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("tells the settle hook once the agent's next turn has started", async () => {
+			const checks: Array<() => boolean> = [];
+			const settling = Promise.withResolvers<void>();
+			const proceed = Promise.withResolvers<void>();
+			const { manager, harness, observer } = setUp(async superseded => {
+				checks.push(superseded);
+				settling.resolve();
+				await proceed.promise;
+				return NOTICE;
+			});
+			try {
+				const finish = observer([ircRecord("Parent", "fix it")]);
+				harness.emitAssistantText("fixed");
+				const finished = finish?.(undefined);
+				await settling.promise;
+				expect(checks[0]?.()).toBe(false);
+				// The session lets the next turn begin while the last one's observation finishes.
+				const next = observer([ircRecord("Peer", "one more thing")]);
+				expect(checks[0]?.()).toBe(true);
+				proceed.resolve();
+				await finished;
+				harness.emitAssistantText("done");
+				await next?.(undefined);
+				expect(checks).toHaveLength(1);
 			} finally {
 				await manager.dispose({ timeoutMs: 1000 });
 			}

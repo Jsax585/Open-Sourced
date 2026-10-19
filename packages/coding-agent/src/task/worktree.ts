@@ -459,7 +459,8 @@ export async function captureDeltaPatch(isolationDir: string, baseline: Worktree
 		...root
 	} = await captureRepoState(isolationDir, baseline.root, baseline.root.repoRoot);
 	const nestedPatches: NestedRepoPatch[] = [];
-	const nested: Record<string, RepoCaptureState> = {};
+	// No prototype: a nested repo may be named `__proto__`.
+	const nested: Record<string, RepoCaptureState> = Object.create(null);
 
 	for (const { relativePath, baseline: nb } of baseline.nested) {
 		const nestedDir = path.join(isolationDir, relativePath);

@@ -80,8 +80,8 @@ function result(id: string): SingleResult {
 
 interface KeptAliveRun {
 	first: SingleResult;
-	/** The hook the runner handed the executor for follow-up turns. */
-	settleFollowUp: ((turn: SingleResult) => Promise<string>) | undefined;
+	/** The hook the runner handed the executor for follow-up turns; by default no later turn has started. */
+	settleFollowUp: ((turn: SingleResult, superseded?: () => boolean) => Promise<string>) | undefined;
 }
 
 /**
@@ -112,7 +112,8 @@ async function runKeptAlive(opts: {
 	let settleFollowUp: KeptAliveRun["settleFollowUp"];
 	vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 		await opts.firstRun();
-		settleFollowUp = options.onFollowUpTurnSettled;
+		const hook = options.onFollowUpTurnSettled;
+		settleFollowUp = hook && ((turn, superseded = () => false) => hook(turn, superseded));
 		AgentRegistry.global().register({
 			id: options.id,
 			displayName: options.id,
@@ -204,6 +205,43 @@ describe("isolated agent follow-up turns", () => {
 		await AgentLifecycleManager.global().release("FollowUpBranch");
 		expect(await taskBranches(repo)).toBe("");
 		expect(await git(repo, ["status", "--porcelain"])).toBe("");
+	});
+
+	it("lands nothing from a turn whose capture overlapped the agent's next turn", async () => {
+		const { repo, iso, baseSha } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "branch");
+		const run = await runKeptAlive({
+			id: "FollowUpSuperseded",
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		const firstLanding = await mergeIsolatedChanges({ result: run.first, repoRoot: repo, mergeMode: "branch" });
+		firstRun.resolve(firstLanding.changesApplied === true);
+		await commitIn(iso, "two\n", "review fix");
+		// The agent's next turn starts while this turn's workspace is being read.
+		let nextTurnStarted = false;
+		const capture = worktreeModule.captureDeltaPatch;
+		vi.spyOn(worktreeModule, "captureDeltaPatch").mockImplementationOnce(async (dir, baseline) => {
+			const captured = await capture(dir, baseline);
+			nextTurnStarted = true;
+			return captured;
+		});
+
+		const summary = await run.settleFollowUp?.(result("FollowUpSuperseded"), () => nextTurnStarted);
+
+		expect(summary).toContain("the agent started another turn before they were captured");
+		expect(await Bun.file(path.join(repo, "a.txt")).text()).toBe("one\n");
+		expect(await taskBranches(repo)).toBe("");
+		// The next turn's capture carries both turns' work.
+		await commitIn(iso, "three\n", "next turn");
+		expect(await run.settleFollowUp?.(result("FollowUpSuperseded"))).toContain("Merged branch");
+		expect(await Bun.file(path.join(repo, "a.txt")).text()).toBe("three\n");
+		expect(await git(repo, ["log", "-1", "--format=%B", "HEAD"])).toBe("review fix\n\nnext turn");
+		expect(await git(repo, ["rev-list", "--count", `${baseSha}..HEAD`])).toBe("2");
+		await AgentLifecycleManager.global().release("FollowUpSuperseded");
 	});
 
 	it("holds a follow-up that ends before the first run has landed until it has", async () => {
@@ -389,6 +427,34 @@ describe("isolated agent follow-up turns", () => {
 		expect(leftover).toContain("+three");
 		expect(leftover).not.toContain("-zero");
 		expect(await Bun.file(path.join(repo, "a.txt")).text()).toBe("two\n");
+	});
+
+	it("names the patch, not a branch, when a follow-up after a patch-mode landing cannot be captured", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "patch");
+		const run = await runKeptAlive({
+			id: "FollowUpPatchPending",
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		const firstLanding = await mergeIsolatedChanges({ result: run.first, repoRoot: repo, mergeMode: "patch" });
+		firstRun.resolve(firstLanding.changesApplied === true);
+		await commitIn(iso, "two\n", "review fix");
+		vi.spyOn(worktreeModule, "captureDeltaPatch").mockRejectedValueOnce(new Error("ENOSPC"));
+
+		const summary = await run.settleFollowUp?.(result("FollowUpPatchPending"));
+
+		// Release after a patch-mode landing writes the patch and no branch.
+		expect(summary).toContain("ENOSPC");
+		expect(summary).toContain(run.first.patchPath ?? "<no patch>");
+		expect(summary).not.toContain("omp/task/");
+		// The work stays pending and lands with the next turn.
+		expect(await run.settleFollowUp?.(result("FollowUpPatchPending"))).toContain("Applied patches: yes");
+		expect(await Bun.file(path.join(repo, "a.txt")).text()).toBe("two\n");
+		await AgentLifecycleManager.global().release("FollowUpPatchPending");
 	});
 
 	/**

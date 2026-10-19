@@ -604,9 +604,10 @@ export interface ExecutorOptions {
 	/**
 	 * Runs after each follow-up turn of a kept-alive agent (an IRC wake or a
 	 * user prompt) is finalized, before anyone is told the turn's outcome; the
-	 * returned text is appended to what they are told.
+	 * returned text is appended to what they are told. The session may start
+	 * the agent's next turn while this runs; `superseded()` says whether it has.
 	 */
-	onFollowUpTurnSettled?: (result: SingleResult) => Promise<string>;
+	onFollowUpTurnSettled?: (result: SingleResult, superseded: () => boolean) => Promise<string>;
 	/** Internal cleanup grace override for deterministic lifecycle tests. */
 	cleanupGraceMs?: number;
 }
@@ -3057,7 +3058,7 @@ export interface IrcWakeTurnMonitorOptions {
 	outputSchemaSource?: StructuredSubagentSchemaSource;
 	artifactsDir?: string;
 	/** See {@link ExecutorOptions.onFollowUpTurnSettled}. */
-	onTurnSettled?: (result: SingleResult) => Promise<string>;
+	onTurnSettled?: (result: SingleResult, superseded: () => boolean) => Promise<string>;
 }
 
 /** Sender + message id of one `irc:incoming` record that woke a turn. */
@@ -3246,7 +3247,11 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 	const { id, agent } = options;
 	const index = options.index ?? 0;
 	const maxRuntimeMs = options.maxRuntimeMs ?? 0;
+	// Counts turns this observer has started. The session releases a turn before
+	// its observation finishes, so the next turn can begin during `onTurnSettled`.
+	let turnsStarted = 0;
 	session.setIrcWakeTurnObserver(records => {
+		const turn = ++turnsStarted;
 		// Autonomous IRC wake turns reuse the session's YieldTool just like
 		// runSubagentFollowUpTurn; clear the prior run's incremental-section flag
 		// and retry counters so this wake turn's guards see only its own state.
@@ -3474,7 +3479,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				let notice = "";
 				if (result && options.onTurnSettled && ownerTold) {
 					try {
-						notice = await options.onTurnSettled(result);
+						notice = await options.onTurnSettled(result, () => turnsStarted !== turn);
 					} catch (error) {
 						logger.warn("Follow-up turn settle hook failed", {
 							id,
