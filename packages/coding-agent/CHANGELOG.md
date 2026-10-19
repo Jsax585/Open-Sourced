@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `/exec-model` and the Plan Review `m` key to pick any model, through the `/switch` model picker, as the plan's execution model; it applies when you approve the plan and overrides the tier slider
+
+### Changed
+
+- `/plan-review` and `/exec-model` are now listed in slash-command autocomplete only while plan mode is on
+
 ### Fixed
 
 - Fixed `read` middle-eliding large file pages into an artifact; a page past the output spill threshold now stops at a line boundary with an exact `:N` continuation ([#16277](https://github.com/can1357/oh-my-pi/issues/16277))
