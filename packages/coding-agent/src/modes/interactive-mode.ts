@@ -1271,6 +1271,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#ownsStartedUi: boolean;
 	session: AgentSession;
 	sessionManager: SessionManager;
+	refreshScopedModelsAfterLogin?: () => Promise<void>;
 	settings: Settings;
 	keybindings: KeybindingsManager;
 	agent: Agent;
@@ -1865,7 +1866,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		eventBus?: EventBus,
 		composer?: Composer,
 		subagentEventBus?: EventBus,
+		refreshScopedModelsAfterLogin?: () => Promise<void>,
 	) {
+		this.refreshScopedModelsAfterLogin = refreshScopedModelsAfterLogin;
 		this.session = session;
 		this.sessionManager = session.sessionManager;
 		this.settings = session.settings;
