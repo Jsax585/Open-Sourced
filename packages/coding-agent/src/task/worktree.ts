@@ -582,9 +582,14 @@ export async function applyNestedPatches(
 			const stashed = (await repository.isDirty())
 				? await repository.stashPush(`omp-isolation-${Snowflake.next()}`)
 				: false;
+			// Patches applied to the checkout and not yet committed. A failure before the
+			// commit completes must undo them, or the next attempt finds them and mistakes
+			// them for the user's own work.
+			const applied: string[] = [];
 			try {
 				for (const { patch } of repoPatches) {
 					await repository.applyPatch(patch, {});
+					applied.push(patch);
 				}
 				if (await repository.isDirty()) {
 					if (touchedFiles.length === 0) {
@@ -594,6 +599,10 @@ export async function applyNestedPatches(
 					await repository.stageFiles(touchedFiles);
 					await repository.commitCreate(msg, {});
 				}
+			} catch (error) {
+				// Before the stash is restored, so the user's work lands on a clean checkout.
+				await rollBackAppliedPatches(repository, nestedDir, applied, touchedFiles);
+				throw error;
 			} finally {
 				if (stashed) {
 					const restored = await repository.stashTryPop(true).catch(() => false);
@@ -620,6 +629,35 @@ export async function applyNestedPatches(
 		}
 	}
 	return warnings;
+}
+
+/**
+ * Undo patches applied to a nested checkout whose commit did not happen, so
+ * the checkout is back at HEAD. It reverses exactly what was applied and
+ * unstages the touched paths; a hard reset or clean would also discard the
+ * user's own untracked files when nothing had to be stashed. A failure here
+ * is logged and not thrown: the error that caused the rollback is the one
+ * the caller needs to see.
+ */
+async function rollBackAppliedPatches(
+	repository: VcsGitRepo,
+	nestedDir: string,
+	applied: readonly string[],
+	touchedFiles: readonly string[],
+): Promise<void> {
+	if (applied.length === 0) return;
+	try {
+		// The patch may already have been staged when the commit failed.
+		await repository.unstage([...touchedFiles]);
+		for (const patch of [...applied].reverse()) {
+			await repository.applyPatch(patch, { reverse: true });
+		}
+	} catch (error) {
+		logger.warn("Could not roll back a nested patch whose commit failed", {
+			nestedDir,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

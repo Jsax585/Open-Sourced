@@ -777,25 +777,22 @@ async function isolationRecoveryHint(result: SingleResult, artifactsDir: string)
 
 /**
  * Merge an isolated run's captured changes into the parent repo, then apply
- * its nested-repo patches. `nestedFailed` reports that nested patches were
- * captured but not all applied, so their files must survive cleanup.
- * `unappliedNested` names the repositories whose patch did not apply, so the
- * runner keeps them out of what counts as landed.
+ * its nested-repo patches. `unappliedNested` names the repositories whose
+ * patch did not apply: their patch files are then the only copy of that work,
+ * so they must survive cleanup, and the runner keeps them out of what counts
+ * as landed. It is empty when every patch applied, even if restoring a user's
+ * stashed work warned: the summary then carries a notification, but nothing
+ * is left to recover.
  */
 async function landCapturedChanges(
 	result: SingleResult,
 	repoRoot: string,
 	mergeMode: "patch" | "branch",
 	session: ToolSession,
-): Promise<{
-	summary: string;
-	changesApplied: boolean | null;
-	nestedFailed: boolean;
-	unappliedNested: readonly string[];
-}> {
+): Promise<{ summary: string; changesApplied: boolean | null; unappliedNested: readonly string[] }> {
 	const outcome = await mergeIsolatedChanges({ result, repoRoot, mergeMode });
 	if (outcome.changesApplied === false) {
-		return { summary: outcome.summary, changesApplied: false, nestedFailed: false, unappliedNested: [] };
+		return { summary: outcome.summary, changesApplied: false, unappliedNested: [] };
 	}
 	let unappliedNested: readonly string[] = [];
 	const nestedPatchSummary = await applyEligibleNestedPatches({
@@ -812,7 +809,6 @@ async function landCapturedChanges(
 	return {
 		summary: outcome.summary + nestedPatchSummary,
 		changesApplied: outcome.changesApplied,
-		nestedFailed: nestedPatchSummary.includes("<system-notification>") && (result.nestedPatches?.length ?? 0) > 0,
 		unappliedNested,
 	};
 }
@@ -974,7 +970,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 						// Nested patch files are the only recovery copy when apply fails
 						// after the root lands. Release cannot see that failure. A later
 						// turn does not clear this: it may not re-apply the same patches.
-						if (landing.nestedFailed) releaseLeftArtifacts = true;
+						if (landing.unappliedNested.length > 0) releaseLeftArtifacts = true;
 						return {
 							summary: landing.summary,
 							landed: landing.changesApplied,
@@ -1031,7 +1027,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			mergeSummary = landing.summary;
 			changesApplied = landing.changesApplied;
 			firstRunUnappliedNested = landing.unappliedNested;
-			requiresRecoveryArtifacts ||= landing.nestedFailed;
+			requiresRecoveryArtifacts ||= landing.unappliedNested.length > 0;
 		} else if (policy.isIsolated && isolationContext && result.isolationCaptureFailed && result.error) {
 			// The agent finished but the runner could not capture, persist, or
 			// commit its changes. `result.error` names the recovery route (retained

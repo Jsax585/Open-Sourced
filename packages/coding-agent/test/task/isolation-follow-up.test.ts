@@ -105,6 +105,8 @@ interface KeptAliveRun {
 	first: SingleResult;
 	/** The hook the runner handed the executor for follow-up turns; by default no later turn has started. */
 	settleFollowUp: ((turn: SingleResult, superseded?: () => boolean) => Promise<string>) | undefined;
+	/** Where the runner writes the agent's patch files. */
+	artifactsDir: string;
 }
 
 /**
@@ -189,7 +191,7 @@ async function runKeptAlive(opts: {
 		buildFailureResult: error => ({ ...result(opts.id), exitCode: 1, error: String(error) }),
 		onReleaseArtifacts: opts.onReleaseArtifacts,
 	});
-	return { first, settleFollowUp };
+	return { first, settleFollowUp, artifactsDir };
 }
 
 /** Lands captured changes the way the task tool does; `firstRun` reports the first run's landing. */
@@ -1059,6 +1061,179 @@ describe("isolated agent follow-up turns", () => {
 
 		expect(await taskBranches(repo)).toBe("");
 		expect(AgentRegistry.global().get(id)?.history?.branchName).toBeUndefined();
+	});
+
+	it("keeps the handed-over task branch when a nested-only replacement cannot be written", async () => {
+		const id = "FollowUpReplacementWriteFails";
+		const { repo, run } = await refusedBranchWithNested(id);
+		expect(await taskBranches(repo)).toContain(`omp/task/${id}`);
+
+		// The agent has dropped its root work (the helper did that), so the replacement is nested-only
+		// and would delete the old branch. Its nested patch cannot be written.
+		await fs.mkdir(path.join(run.artifactsDir, `${id}.nested-1.nested-0-sub.patch`));
+		expect(await run.settleFollowUp?.(result(id))).toContain("not captured");
+
+		// Nothing was handed over, so the caller still has the branch it was told about.
+		expect(await taskBranches(repo)).toContain(`omp/task/${id}`);
+		expect(AgentRegistry.global().get(id)?.history?.branchName).toBe(`omp/task/${id}`);
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	it("restores the task branch when writing a follow-up's nested patches fails", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		await addNestedRepo(repo, iso);
+		const { firstRun, followUps } = landingFollowUps(repo, "branch");
+		const id = "FollowUpBranchNestedWriteFails";
+		const branch = `omp/task/${id}`;
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		// Left unapplied: the branch is what the caller has been handed.
+		firstRun.resolve(null);
+		const handedOverTip = await git(repo, ["rev-parse", branch]);
+
+		// The next turn changes root and nested work, and its nested patch cannot be written.
+		await commitIn(iso, "two\n", "later fix");
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+		await fs.mkdir(path.join(run.artifactsDir, `${id}.nested-1.nested-0-sub.patch`));
+		expect(await run.settleFollowUp?.(result(id))).toContain("not captured");
+		// The branch was moved before the write failed, and the caller was handed none of it.
+		expect(await git(repo, ["rev-parse", branch])).toBe(handedOverTip);
+
+		// The agent then undoes that turn entirely: its state is the one already handed over, so
+		// the capture takes the unchanged path and never rewrites the branch.
+		await commitIn(iso, "one\n", "undo later fix");
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n0\n");
+		expect(await run.settleFollowUp?.(result(id))).toBe("");
+		expect(await git(repo, ["rev-parse", branch])).toBe(handedOverTip);
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	it("deletes the task branch when the first handoff's nested write fails", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		await addNestedRepo(repo, iso);
+		const { followUps } = landingFollowUps(repo, "branch");
+		const id = "FollowUpBranchNothingHandedOver";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps,
+			// The first run changed nothing, so no branch was ever handed over.
+			firstRun: async () => {},
+		});
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+		await commitIn(iso, "one\n", "later fix");
+		await fs.mkdir(path.join(run.artifactsDir, `${id}.nested-1.nested-0-sub.patch`));
+		expect(await run.settleFollowUp?.(result(id))).toContain("not captured");
+
+		// No tip was ever handed over, so there is nothing to restore: the branch must not stay behind.
+		expect(await taskBranches(repo)).toBe("");
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	it("withdraws a follow-up's nested patch that did not apply when the agent later undoes it", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		await addNestedRepo(repo, iso);
+		const firstRun = Promise.withResolvers<boolean | null>();
+		const handedOver: SingleResult[] = [];
+		const id = "FollowUpNestedUndone";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps: {
+				firstRunLanded: firstRun.promise,
+				// The root lands; the nested patch for `sub` does not.
+				land: async captured => {
+					handedOver.push(captured);
+					return { summary: "landed", landed: true, unappliedNested: ["sub"] };
+				},
+			},
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		firstRun.resolve(true);
+
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+		await run.settleFollowUp?.(result(id));
+		// The root landed, so its file is a record. The nested patch never applied: its file is the only copy.
+		const nestedPatch = handedOver[0]?.nestedPatchPaths?.[0] ?? "";
+		expect(await Bun.file(nestedPatch).exists()).toBe(true);
+
+		// The agent undoes that edit in a later turn. The parent never got it, so there is nothing to recover.
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n0\n");
+		expect(await run.settleFollowUp?.(result(id))).toContain("undid");
+		expect(await Bun.file(nestedPatch).exists()).toBe(false);
+		expect(AgentRegistry.global().get(id)?.history?.nestedPatchPaths ?? []).not.toContain(nestedPatch);
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	it("withdraws the first run's nested patch that did not apply when the agent later undoes it", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		await addNestedRepo(repo, iso);
+		const firstRun = Promise.withResolvers<boolean | null>();
+		const id = "FirstRunNestedUndone";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps: {
+				firstRunLanded: firstRun.promise,
+				firstRunUnappliedNested: () => ["sub"],
+				land: async () => ({ summary: "landed", landed: true, unappliedNested: [] }),
+			},
+			firstRun: async () => {
+				await commitIn(iso, "one\n", "first run");
+				await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+			},
+		});
+		firstRun.resolve(true);
+		const nestedPatch = run.first.nestedPatchPaths?.[0] ?? "";
+		expect(await Bun.file(nestedPatch).exists()).toBe(true);
+
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n0\n");
+		expect(await run.settleFollowUp?.(result(id))).toContain("undid");
+		expect(await Bun.file(nestedPatch).exists()).toBe(false);
+		expect(AgentRegistry.global().get(id)?.history?.nestedPatchPaths ?? []).not.toContain(nestedPatch);
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	it("withdraws the first run's branch-mode nested patch that did not apply when the agent later undoes it", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		await addNestedRepo(repo, iso);
+		const firstRun = Promise.withResolvers<boolean | null>();
+		const id = "FirstRunBranchNestedUndone";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps: {
+				firstRunLanded: firstRun.promise,
+				firstRunUnappliedNested: () => ["sub"],
+				land: async () => ({ summary: "landed", landed: true, unappliedNested: [] }),
+			},
+			firstRun: async () => {
+				await commitIn(iso, "one\n", "first run");
+				await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+			},
+		});
+		firstRun.resolve(true);
+		const nestedPatch = run.first.nestedPatchPaths?.[0] ?? "";
+		expect(await Bun.file(nestedPatch).exists()).toBe(true);
+
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n0\n");
+		expect(await run.settleFollowUp?.(result(id))).toContain("undid");
+		expect(await Bun.file(nestedPatch).exists()).toBe(false);
+		await AgentLifecycleManager.global().release(id);
 	});
 
 	it("keeps a nested repository cumulative after a landing could not apply its patch", async () => {

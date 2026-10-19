@@ -1386,11 +1386,12 @@ describe("structured subagent primitive", () => {
 			hadAnyChanges: true,
 			mergedBranchForNestedPatches: true,
 		} as never);
-		vi.spyOn(isolationRunner, "applyEligibleNestedPatches").mockImplementation(async opts =>
-			(opts.result.nestedPatches?.length ?? 0) > 0
-				? "\n\n<system-notification>Some nested repository patches failed to apply.</system-notification>"
-				: "",
-		);
+		vi.spyOn(isolationRunner, "applyEligibleNestedPatches").mockImplementation(async opts => {
+			if ((opts.result.nestedPatches?.length ?? 0) === 0) return "";
+			// A real failure: the producer names the repository that did not apply.
+			opts.onUnapplied?.(["sub"]);
+			return "\n\n<system-notification>Some nested repository patches failed to apply.</system-notification>";
+		});
 		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts => {
 			agent = opts.agentId;
 			nestedPatch = path.join(opts.artifactsDir, `${opts.agentId}.nested-1-sub.patch`);
@@ -1416,6 +1417,47 @@ describe("structured subagent primitive", () => {
 			expect(await Bun.file(nestedPatch).text()).toBe("diff\n");
 			expect(artifactsDirsFromRegistry()).toContain(settled.artifactsDir);
 			await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+		} finally {
+			await AgentLifecycleManager.global()
+				.release(agent)
+				.catch(() => {});
+			AgentRegistry.resetGlobalForTests();
+		}
+	});
+
+	it("does not keep the agent's files after release when a follow-up's nested apply only warned", async () => {
+		mockDiscovery();
+		let agent = "";
+		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot: "/tmp" } as never);
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "Applied patches: yes",
+			changesApplied: true,
+			hadAnyChanges: true,
+			mergedBranchForNestedPatches: true,
+		} as never);
+		// Every patch applied and committed; restoring the user's stashed work warned. The producer
+		// reports no unapplied repository, so the patch files are not the only copy of anything.
+		vi.spyOn(isolationRunner, "applyEligibleNestedPatches").mockResolvedValue(
+			"\n\n<system-notification>Pre-existing dirty state could not be auto-restored.</system-notification>",
+		);
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts => {
+			agent = opts.agentId;
+			await keptAliveRun({ id: opts.agentId, artifactsDir: opts.artifactsDir }, async () => {
+				await opts.baseOptions.onRelease?.();
+			});
+			await opts.followUps?.land({
+				...result(),
+				id: opts.agentId,
+				nestedPatches: [{ relativePath: "sub", patch: "diff\n" }],
+			});
+			return { ...result(), isolated: true };
+		});
+		try {
+			const settled = await runStructuredSubagent(
+				request({ keepAlive: true, session: session({ isolationEnabled: true }), isolation: { requested: true } }),
+			);
+			await AgentLifecycleManager.global().release(agent);
+			expect(await removedSoon(settled.artifactsDir)).toBe(true);
 		} finally {
 			await AgentLifecycleManager.global()
 				.release(agent)
@@ -1531,6 +1573,46 @@ describe("structured subagent primitive", () => {
 			);
 			expect(landed?.unappliedNested).toEqual(["sub"]);
 			await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+		} finally {
+			AgentRegistry.resetGlobalForTests();
+		}
+	});
+
+	it("keeps the folder when the first run's nested apply fails", async () => {
+		mockNestedApplyFailingFor("sub");
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockResolvedValue({
+			...result(),
+			isolated: true,
+			nestedPatches: [{ relativePath: "sub", patch: "diff\n" }],
+		});
+		try {
+			const settled = await runStructuredSubagent(
+				request({ session: session({ isolationEnabled: true }), isolation: { requested: true } }),
+			);
+			// The patch files are the only copy of the nested work that did not apply.
+			await expect(fs.stat(settled.artifactsDir)).resolves.toBeDefined();
+			await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+		} finally {
+			AgentRegistry.resetGlobalForTests();
+		}
+	});
+
+	it("does not keep the folder when the first run's nested apply only warned", async () => {
+		mockNestedApplyFailingFor("sub");
+		// Every patch applied and committed; restoring the user's stashed work warned. Nothing is unapplied.
+		vi.spyOn(isolationRunner, "applyEligibleNestedPatches").mockResolvedValue(
+			"\n\n<system-notification>Pre-existing dirty state could not be auto-restored.</system-notification>",
+		);
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockResolvedValue({
+			...result(),
+			isolated: true,
+			nestedPatches: [{ relativePath: "sub", patch: "diff\n" }],
+		});
+		try {
+			const settled = await runStructuredSubagent(
+				request({ session: session({ isolationEnabled: true }), isolation: { requested: true } }),
+			);
+			expect(await removedSoon(settled.artifactsDir)).toBe(true);
 		} finally {
 			AgentRegistry.resetGlobalForTests();
 		}

@@ -1245,6 +1245,89 @@ describe("applyNestedPatches", () => {
 		expect(failure).toBeInstanceOf(Error);
 		expect(unappliedOf(failure)).toEqual(["second-fails", "second-last"]);
 	});
+
+	describe("when a failure comes after a patch applied", () => {
+		const failCommitMessage = async (): Promise<string | null> => {
+			throw new Error("commit message backend down");
+		};
+		const stashes = (): Promise<string> => runGit(nestedDir, ["stash", "list"]);
+		const status = (): Promise<string> => runGit(nestedDir, ["status", "--porcelain=v1"]);
+		const lastSubject = async (): Promise<string> =>
+			(await runGit(nestedDir, ["log", "-1", "--pretty=format:%s"])).trim();
+
+		it("rolls back the applied patch when the commit that follows it fails", async () => {
+			await expect(
+				applyNestedPatches(parentRepo, [{ relativePath: nestedRel, patch: applies }], failCommitMessage),
+			).rejects.toThrow("commit message backend down");
+
+			// Left in the checkout, the patch would look like the user's own work on the next attempt.
+			expect(await fs.readFile(path.join(nestedDir, "file.txt"), "utf8")).toBe("v1\n");
+			expect(await status()).toBe("");
+			expect(await lastSubject()).toBe("nested-init");
+		});
+
+		it("rolls back every patch applied so far when a later patch of the same repository fails", async () => {
+			// The second patch no longer matches once the first has applied.
+			await expect(
+				applyNestedPatches(parentRepo, [
+					{ relativePath: nestedRel, patch: applies },
+					{ relativePath: nestedRel, patch: applies },
+				]),
+			).rejects.toBeInstanceOf(Error);
+
+			expect(await fs.readFile(path.join(nestedDir, "file.txt"), "utf8")).toBe("v1\n");
+			expect(await status()).toBe("");
+			expect(await lastSubject()).toBe("nested-init");
+		});
+
+		it("leaves the user's own uncommitted work exactly as it was", async () => {
+			await fs.writeFile(path.join(nestedDir, "other.txt"), "user wip\n");
+
+			await expect(
+				applyNestedPatches(parentRepo, [{ relativePath: nestedRel, patch: applies }], failCommitMessage),
+			).rejects.toThrow("commit message backend down");
+
+			expect(await fs.readFile(path.join(nestedDir, "file.txt"), "utf8")).toBe("v1\n");
+			expect(await fs.readFile(path.join(nestedDir, "other.txt"), "utf8")).toBe("user wip\n");
+			expect(await status()).toBe("?? other.txt");
+			// The user's work was stashed and restored; nothing is left in the stash.
+			expect(await stashes()).toBe("");
+		});
+
+		it("lets the retry land cleanly, without stashing the agent's own delta as the user's work", async () => {
+			await expect(
+				applyNestedPatches(parentRepo, [{ relativePath: nestedRel, patch: applies }], failCommitMessage),
+			).rejects.toBeInstanceOf(Error);
+
+			// The runner keeps a repository cumulative and tries again. The agent has kept editing, so
+			// the retry is the earlier edit and the later one together, not a copy of the first patch.
+			const cumulative = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-v1\n+v3\n";
+			const warnings = await applyNestedPatches(parentRepo, [{ relativePath: nestedRel, patch: cumulative }]);
+
+			// A leftover `v2` would be stashed as the user's work and then conflict with the `v3` commit.
+			expect(warnings).toEqual([]);
+			expect(await fs.readFile(path.join(nestedDir, "file.txt"), "utf8")).toBe("v3\n");
+			expect(await status()).toBe("");
+			expect(await stashes()).toBe("");
+			expect(await runGit(nestedDir, ["rev-list", "--count", "HEAD"])).toBe("2");
+		});
+
+		it.skipIf(process.platform === "win32")("unstages the patch when a hook rejects the commit", async () => {
+			// `stageFiles` has run by the time the hook does: the patch is in the index as well as the checkout.
+			const hook = path.join(nestedDir, ".git", "hooks", "pre-commit");
+			await fs.mkdir(path.dirname(hook), { recursive: true });
+			await fs.writeFile(hook, "#!/bin/sh\necho rejected >&2\nexit 1\n", { mode: 0o755 });
+
+			await expect(
+				applyNestedPatches(parentRepo, [{ relativePath: nestedRel, patch: applies }]),
+			).rejects.toBeInstanceOf(Error);
+
+			expect(await fs.readFile(path.join(nestedDir, "file.txt"), "utf8")).toBe("v1\n");
+			// Reversing the working tree alone would leave `MM file.txt`: staged `v2` over a `v1` file.
+			expect(await status()).toBe("");
+			expect(await lastSubject()).toBe("nested-init");
+		});
+	});
 });
 
 describe("commitToBranch preserves agent commits", () => {

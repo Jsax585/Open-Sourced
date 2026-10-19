@@ -489,6 +489,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		for (const file of files) unlandedFiles.add(file);
 		if (hasWork) unlandedWork = true;
 	};
+	/** A nested-repo patch file this runner wrote. The roster scanner only accepts the `<id>.nested-` prefix. */
+	const isNestedPatchFile = (file: string): boolean => path.basename(file).startsWith(`${opts.agentId}.nested-`);
 	/**
 	 * Record the files of a capture that replaces the unlanded handoff before it.
 	 * A capture is cumulative since the last landing, so a file of the earlier
@@ -546,13 +548,21 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		preserveUnlanded = outcome === null;
 		if (outcome !== true) return;
 		preserveUnlanded = false;
+		const unapplied = settled.unapplied();
+		// A landing that could not apply a nested patch leaves that patch file the
+		// only copy of the work. It stays tracked as unlanded: a later turn that
+		// undoes the work must withdraw it, or the registry and the release
+		// artifacts keep offering a patch for work the agent removed. Everything
+		// else of the handoff landed and is a record only.
+		const unappliedNestedFiles = unapplied.length > 0 ? [...unlandedFiles].filter(isNestedPatchFile) : [];
 		unlandedFiles.clear();
 		unlandedWork = false;
+		if (unappliedNestedFiles.length > 0) trackUnlanded(unappliedNestedFiles, true);
 		// A landing deletes the task branch, so there is no published tip any more.
 		publishedBranchTip = undefined;
 		// A capture with no root changes made no branch: the previous tip still holds everything.
 		landed = {
-			state: keepUnappliedNested(settled.state, landed?.state, settled.unapplied()),
+			state: keepUnappliedNested(settled.state, landed?.state, unapplied),
 			tip: settled.tip ?? landed?.tip,
 		};
 	};
@@ -696,15 +706,27 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			if (branch.branchName) await resetTaskBranch(branch.branchName, publishedBranchTip);
 			return "superseded";
 		}
+		let nestedPatchPaths: string[];
+		try {
+			nestedPatchPaths = await persistNestedPatches(
+				opts.artifactsDir,
+				nextNestedPatchPrefix(),
+				branch.nestedPatches,
+			);
+		} catch (error) {
+			// `commitToBranch` has already moved the task branch to this capture, but
+			// nothing was handed over: the state and tip the caller knows are unchanged.
+			// Left moved, a later turn that undoes this one takes the unchanged path and
+			// the branch keeps work the agent removed. Put it back; a later capture or
+			// the release writes it again from the workspace as it is then.
+			if (branch.branchName) await resetTaskBranch(branch.branchName, publishedBranchTip);
+			throw error;
+		}
 		// The replacement holds no root work (the agent dropped it and kept nested
 		// work), so `commitToBranch` wrote no branch and left the old one alone.
-		// That branch holds root changes the agent removed.
+		// That branch holds root changes the agent removed. Dropped only now: a
+		// failed write above must leave what the caller was handed as it was.
 		if (!branch.branchName) await dropPublishedBranch();
-		const nestedPatchPaths = await persistNestedPatches(
-			opts.artifactsDir,
-			nextNestedPatchPrefix(),
-			branch.nestedPatches,
-		);
 		await replaceUnlanded(nestedPatchPaths, true);
 		handedOff = branch.state;
 		publishedBranchTip = branch.headSha;
