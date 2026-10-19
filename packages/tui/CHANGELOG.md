@@ -5,6 +5,15 @@
 ### Fixed
 
 - Fixed unmanaged stdout/stderr and inherited subprocess diagnostics corrupting the interactive viewport on Unix; diagnostics stay in the process log while rendering, resize, handoff, and shutdown retain terminal ownership ([#16159](https://github.com/can1357/oh-my-pi/pull/16159) by [@tommymorgan](https://github.com/tommymorgan)).
+### Added
+
+- `AutocompleteItem.descriptionMatch` marks a slash command matched only through its description; `Editor` Enter no longer applies such a row unless the user moved the selection onto it ([#16265](https://github.com/can1357/oh-my-pi/issues/16265))
+
+### Fixed
+
+- Fixed the composer caret drifting one cell left per pasted image or video chip in terminals that draw the chip icon as a wide emoji (JetBrains terminal); the `unicode` preset now uses `📷`/`🎬` chip icons ([#16270](https://github.com/can1357/oh-my-pi/issues/16270))
+- Fixed Tern hiding user text sent with `/skill:<name>` inside a collapsed skill card; only the loaded skill prompt is hidden ([#16311](https://github.com/can1357/oh-my-pi/issues/16311))
+
 ## [18.12.2] - 2026-10-18
 
 ### Added
