@@ -628,9 +628,10 @@ export class SelectorController {
 		await this.ctx.refreshPromptTemplates();
 		const { line, col } = this.ctx.editor.getCursor();
 		const lines = this.ctx.editor.getLines();
-		// A focused subagent view rejects every slash-prefixed draft, so there the body is inserted instead.
+		// A focused subagent view and a collab guest both reject slash-prefixed drafts, so there the body is inserted.
 		const atDraftStart =
 			!this.ctx.focusedAgentId &&
+			!this.ctx.collabGuest &&
 			lines.slice(0, line).every(l => l === "") &&
 			(lines[line] ?? "").slice(0, col) === "";
 		const choices = buildSnippetChoices(this.ctx.session.promptTemplates, { atDraftStart, reservedCommands });

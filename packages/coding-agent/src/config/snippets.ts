@@ -2,6 +2,7 @@ import { getProjectPromptsDir, getPromptsDir, isEnoent, sanitizeText } from "@oh
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
+import { replaceFileAtomically } from "../utils/atomic-file";
 import { type PromptTemplate, promptTemplateCommandName, templateUsesInlineArgPlaceholders } from "./prompt-templates";
 
 /** Where a snippet file lives: the user's agent dir (global) or the project's `.omp/prompts`. */
@@ -142,10 +143,11 @@ export async function saveSnippet(options: {
 		}
 		return { kind: "saved", path: file };
 	}
-	const temp = `${file}.${crypto.randomUUID()}.tmp`;
+	// Short hidden sibling name: `<name>.md` can already sit at the filesystem's component limit.
+	const temp = path.join(options.dir, `.snippet-${crypto.randomUUID().slice(0, 8)}.tmp`);
 	try {
 		await fs.writeFile(temp, content, { flag: "wx" });
-		await fs.rename(temp, file);
+		await replaceFileAtomically(temp, file);
 	} catch (err) {
 		await fs.rm(temp, { force: true });
 		throw err;
