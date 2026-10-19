@@ -613,7 +613,6 @@ describe("OpenCode provider discovery", () => {
 			expect(flash?.thinking).toEqual({
 				mode: "effort",
 				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
-				defaultLevel: Effort.Max,
 				requiresEffort: true,
 			});
 		} finally {

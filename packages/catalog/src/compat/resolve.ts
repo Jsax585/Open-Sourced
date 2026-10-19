@@ -1277,7 +1277,10 @@ function fillExplicitThinking<TApi extends Api>(
 		thinking.requiresEffort === undefined &&
 		(rule.requiresEffort ??
 			(impliesMandatoryReasoning(facts, spec.id) || isQwenTemplateReasoningEffortCompat(compat)));
-	const needsDefaultLevel = thinking.defaultLevel === undefined && rule.defaultLevel !== undefined;
+	const needsDefaultLevel =
+		thinking.defaultLevel === undefined &&
+		rule.defaultLevel !== undefined &&
+		thinking.efforts.includes(rule.defaultLevel);
 	const needsPrefixBinding = thinking.prefixBinding === undefined && rule.prefixBinding === true;
 	const needsEffortBudgets = thinking.effortBudgets === undefined && rule.effortBudgets !== undefined;
 	if (

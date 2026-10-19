@@ -1941,4 +1941,33 @@ describe("LiteLLM declared reasoning ladder", () => {
 		if (!spec) throw new Error("expected the M3.1 spec");
 		expect(buildModel(spec).thinking?.requiresEffort).toBe(true);
 	});
+
+	test("does not backfill a KDL default outside the declared ladder", async () => {
+		const specs = await fetchLiteLLMRichModels({
+			api: "openai-completions",
+			provider: "litellm",
+			baseUrl: "http://primary:4000/v1",
+			apiKey: "sk-rich",
+			fetch: vi.fn(async (input: string | URL | Request) => {
+				const url = inputUrl(input);
+				if (url === "http://primary:4000/model/info") {
+					return Response.json({
+						data: [
+							{
+								model_name: "kimi-k3",
+								supports_reasoning: true,
+								model_info: { reasoning_effort_levels: ["low", "high"] },
+							},
+						],
+					});
+				}
+				return new Response("{}", { status: 404 });
+			}) as FetchImpl,
+		});
+		const spec = specs?.find(model => model.id === "kimi-k3");
+		expect(spec?.thinking?.efforts).toEqual([Effort.Low, Effort.High]);
+		expect(spec?.thinking?.defaultLevel).toBeUndefined();
+		if (!spec) throw new Error("expected the Kimi spec");
+		expect(buildModel(spec).thinking?.defaultLevel).toBeUndefined();
+	});
 });
