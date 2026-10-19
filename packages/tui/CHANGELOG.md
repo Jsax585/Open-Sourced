@@ -4,6 +4,7 @@
 
 ### Added
 
+- Slash-command autocomplete now treats `snippet:<name>` commands like `skill:<name>`: they collapse into a `/snippet:` row until you type the namespace, and still surface directly when a bare name matches more strongly than any ordinary command
 - `AutocompleteItem.descriptionMatch` marks a slash command matched only through its description; `Editor` Enter no longer applies such a row unless the user moved the selection onto it ([#16265](https://github.com/can1357/oh-my-pi/issues/16265))
 
 ### Fixed
