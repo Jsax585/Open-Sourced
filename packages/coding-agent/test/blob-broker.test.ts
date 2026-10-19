@@ -5,10 +5,11 @@ import * as path from "node:path";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir, TempDir } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { LocalBlobBackend } from "../src/blob-broker/broker";
 import { contextHasImageUrls, supportsRemoteImageUrls } from "../src/blob-broker/context-images";
+import { blobBrokerEndpoint } from "../src/blob-broker/protocol";
 import { ImageUrlService } from "../src/blob-broker/service";
 import { type BlobPersistence, BlobRegistry } from "../src/blob-broker/store";
 import { wrapStreamFnWithBlobUrlFallback } from "../src/blob-broker/stream-fallback";
@@ -73,6 +74,30 @@ function makeService(): ImageUrlService {
 
 afterAll(() => {
 	for (const cleanup of cleanups) cleanup();
+});
+
+describe("blobBrokerEndpoint", () => {
+	it.skipIf(process.platform === "win32")(
+		"relocates long namespaced roots to distinct bounded Unix sockets",
+		async () => {
+			using tempDir = TempDir.createSync("@omp-blob-endpoint-");
+			const root = path.join(tempDir.path(), "x".repeat(80), "daemons");
+			const runtime = path.join(root, "ns-0123456789abcdef", "aaaaaaaaaaaaaaaa");
+			const endpoint = blobBrokerEndpoint(runtime);
+			expect(Buffer.byteLength(path.join(runtime, "blob-broker.sock"))).toBeGreaterThan(108);
+			expect(Buffer.byteLength(endpoint)).toBeLessThan(104);
+			expect(blobBrokerEndpoint(runtime)).toBe(endpoint);
+			expect(blobBrokerEndpoint(path.join(root, "ns-fedcba9876543210", "aaaaaaaaaaaaaaaa"))).not.toBe(endpoint);
+			fs.mkdirSync(path.dirname(endpoint), { recursive: true, mode: 0o700 });
+			const server = Bun.serve({ unix: endpoint, fetch: () => new Response("blob endpoint ready") });
+			try {
+				expect(await (await fetch("http://localhost/", { unix: endpoint })).text()).toBe("blob endpoint ready");
+			} finally {
+				await server.stop(true);
+				fs.rmSync(endpoint, { force: true });
+			}
+		},
+	);
 });
 
 describe("LocalBlobBackend (serve mode)", () => {

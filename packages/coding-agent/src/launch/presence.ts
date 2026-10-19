@@ -7,10 +7,9 @@ import { canonicalProjectDir, daemonRuntimeDir } from "./paths";
 const CLIENTS_DIR = "clients";
 const BROKER_PID_FILE = "broker.pid";
 /**
- * Basename of the container holding per-project daemon scopes
- * (`<state>/run/daemons`). {@link pruneDeadDaemonRuntimeDirs} refuses to sweep
- * any other root so a runtime dir passed from outside the state tree cannot
- * turn the reclaim into an rm -rf of unrelated neighbours (issue #8721).
+ * Containers holding per-project daemon scopes (`<state>/run/daemons`, or
+ * its `ns-<hash>` child). Refuse any other root so a runtime dir passed from
+ * outside the state tree cannot reclaim unrelated neighbours (issue #8721).
  */
 const DAEMONS_DIR = "daemons";
 /**
@@ -122,13 +121,16 @@ export async function readLiveDaemonBrokerPid(runtimeDir: string): Promise<numbe
  * is absent/dead, no live client presence remains, and it has been untouched
  * for {@link DAEMON_RUNTIME_STALE_GRACE_MS}. The caller's own `currentRuntimeDir`
  * is always skipped, and the sweep runs only inside the {@link DAEMONS_DIR}
- * container over entries named like a {@link DAEMON_SCOPE_KEY} — so a runtime
- * dir relocated elsewhere (e.g. the smoke test under `os.tmpdir()`) never
- * reclaims unrelated neighbours (issue #8721).
+ * container or one namespace child over entries named like a
+ * {@link DAEMON_SCOPE_KEY} — so a runtime dir relocated elsewhere (e.g. the
+ * smoke test under `os.tmpdir()`) never reclaims unrelated neighbours (issue #8721).
  */
 export async function pruneDeadDaemonRuntimeDirs(currentRuntimeDir: string): Promise<void> {
 	const root = path.dirname(currentRuntimeDir);
-	if (path.basename(root) !== DAEMONS_DIR) return;
+	const isNamespaceRoot = /^ns-[0-9a-f]{16}$/.test(path.basename(root));
+	if (path.basename(root) !== DAEMONS_DIR && !(isNamespaceRoot && path.basename(path.dirname(root)) === DAEMONS_DIR)) {
+		return;
+	}
 	const current = path.resolve(currentRuntimeDir);
 	let entries: Dirent[];
 	try {

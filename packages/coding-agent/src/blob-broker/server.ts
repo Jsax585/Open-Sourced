@@ -9,6 +9,7 @@
  */
 
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import { isUploaderKind, LocalBlobBackend } from "./broker";
 import {
@@ -159,6 +160,8 @@ export async function startBlobBrokerFromEnvironment(): Promise<void> {
 	if (baseUrl === null) {
 		throw new Error("blob broker exposure failed to start");
 	}
+	// The bounded endpoint may be outside the daemon runtime directory.
+	fs.mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 });
 	try {
 		fs.rmSync(socketPath, { force: true });
 	} catch {

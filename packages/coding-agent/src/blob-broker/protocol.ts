@@ -4,10 +4,10 @@
  * One blob daemon runs per project scope (launched through the same daemon
  * broker that owns the shared Chromium and LSP mux), so every omp process in
  * the project shares one exposure (tunnel or uploader) and one URL per blob.
- * Control traffic rides HTTP over a Unix socket in the daemon runtime dir;
+ * Control traffic rides HTTP over a project-scoped Unix socket;
  * public traffic reaches the same store through the exposure.
  */
-import * as path from "node:path";
+import { ipcEndpoint } from "@oh-my-pi/pi-natives";
 export { BLOB_BROKER_WORKER_ARG } from "../cli/worker-selectors";
 import type { BlobDestinationId } from "./destinations";
 import type { BlobPublication, RemoteDeleteAction } from "./publication";
@@ -33,7 +33,7 @@ export function blobBrokerReadyBanner(baseUrl: string): string {
 
 /** Resolve the control socket path for one project scope. */
 export function blobBrokerEndpoint(runtimeDir: string): string {
-	return path.join(runtimeDir, "blob-broker.sock");
+	return ipcEndpoint(runtimeDir, "blob-broker");
 }
 
 /** Exposure or upload configuration serialized into the worker environment. */
