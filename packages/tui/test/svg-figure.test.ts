@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { SvgFigure } from "@oh-my-pi/pi-tui/chat/svg-figure";
+import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { getKittyGraphics, setKittyGraphics } from "@oh-my-pi/pi-tui/kitty-graphics";
 import {
 	type CellDimensions,
@@ -10,8 +11,9 @@ import {
 	setTerminalImageProtocol,
 	TERMINAL,
 } from "@oh-my-pi/pi-tui/terminal-capabilities";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { getThemeByName, initTheme, setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme";
 import { TUI } from "@oh-my-pi/pi-tui/tui";
+import type { Component } from "@oh-my-pi/pi-tui";
 import { withoutTerminalMultiplexer } from "./helpers/terminal-multiplexer";
 import { VirtualRenderScheduler } from "./virtual-render-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
@@ -23,10 +25,10 @@ const CELL: CellDimensions = { widthPx: 16, heightPx: 36 };
 const SVG = `<svg viewBox="0 0 838 200"><rect width="838" height="200" fill="var(--accent)"/></svg>`;
 
 /** A final figure whose raster landings resolve `landed()`. */
-function figure(): { figure: SvgFigure; landed: () => Promise<void> } {
+function figure(source: string = SVG): { figure: SvgFigure; landed: () => Promise<void> } {
 	let resolve = () => {};
 	const svg = new SvgFigure({ onChange: () => resolve() });
-	svg.update(SVG, true);
+	svg.update(source, true);
 	return {
 		figure: svg,
 		landed: () => {
@@ -144,6 +146,110 @@ describe("SvgFigure", () => {
 		const shown = placement(svg, 80);
 		expect(shown.columns).toBe(78);
 		expect(shown.box).toBe(shown.raster);
+	});
+
+	it("holds a final raster pending through cell, width, and theme replacements", async () => {
+		const { figure: svg, landed } = figure();
+		let next = landed();
+		svg.render(200);
+		await next;
+		expect(svg.pending).toBe(false);
+		expect(svg.debugState().current).toBe(true);
+
+		setCellDimensions({ widthPx: 12, heightPx: 24 });
+		expect(svg.pending).toBe(true);
+		expect(svg.debugState().current).toBe(false);
+		next = landed();
+		expect(svg.render(200).some(row => TERMINAL.isImageLine(row))).toBe(true);
+		await next;
+		expect(svg.pending).toBe(false);
+		expect(svg.debugState().current).toBe(true);
+
+		next = landed();
+		svg.render(40);
+		expect(svg.pending).toBe(true);
+		expect(svg.debugState().current).toBe(false);
+		await next;
+		expect(svg.pending).toBe(false);
+
+		const previousTheme = theme;
+		const previousImage = svg.render(40).join("");
+		try {
+			const otherTheme = await getThemeByName(previousTheme.isLight ? "dark" : "light");
+			if (!otherTheme) throw new Error("Expected alternate built-in theme");
+			setThemeInstance(otherTheme);
+			expect(svg.pending).toBe(true);
+			expect(svg.debugState().current).toBe(false);
+			next = landed();
+			svg.render(40);
+			await next;
+			expect(svg.pending).toBe(false);
+			expect(svg.debugState().current).toBe(true);
+			expect(svg.render(40).join("")).not.toBe(previousImage);
+		} finally {
+			setThemeInstance(previousTheme);
+			svg.dispose();
+		}
+	});
+
+	it("never retires an obsolete raster after a finalized figure changes cell geometry", async () => {
+		const { figure: svg, landed } = figure();
+		const next = landed();
+		svg.render(80);
+		await next;
+		const transcript = new TranscriptContainer();
+		const block: Component & { isTranscriptBlockPending(): boolean } = {
+			render: width => svg.render(width),
+			isTranscriptBlockPending: () => svg.pending,
+		};
+		transcript.addChild(block);
+		const obsolete = transcript.peekFlushBatch(80)!;
+		expect(obsolete.rows.some(row => TERMINAL.isImageLine(row))).toBe(true);
+		expect(transcript.blockStates()).toEqual(["settled"]);
+
+		setCellDimensions({ widthPx: 12, heightPx: 24 });
+		expect(svg.pending).toBe(true);
+		expect(svg.debugState().current).toBe(false);
+		expect(transcript.peekFlushBatch(80)).toBeUndefined();
+		expect(transcript.blockStates()).toEqual(["active"]);
+		transcript.acknowledgeFinalizedBatch(obsolete.id);
+		expect(transcript.blockStates()).toEqual(["active"]);
+
+		const replaced = landed();
+		svg.render(80);
+		await replaced;
+		const current = transcript.peekFlushBatch(80)!;
+		expect(current.rows.some(row => TERMINAL.isImageLine(row))).toBe(true);
+		expect(current.rows).not.toEqual(obsolete.rows);
+		expect(svg.pending).toBe(false);
+		transcript.acknowledgeFinalizedBatch(current.id);
+		expect(transcript.blockStates()).toEqual(["committed"]);
+		svg.dispose();
+	});
+
+	it("retries a failed final raster when its drawing room or cell size changes", async () => {
+		const { figure: svg, landed } = figure("<svg><rect></svg>");
+		let next = landed();
+		svg.render(80);
+		await next;
+		expect(svg.debugState().failed).toBe(true);
+		expect(svg.pending).toBe(false);
+
+		next = landed();
+		svg.render(40);
+		expect(svg.pending).toBe(true);
+		await next;
+		expect(svg.debugState().failed).toBe(true);
+		expect(svg.pending).toBe(false);
+
+		setCellDimensions({ widthPx: 12, heightPx: 24 });
+		expect(svg.debugState().failed).toBe(false);
+		expect(svg.pending).toBe(true);
+		next = landed();
+		svg.render(40);
+		await next;
+		expect(svg.debugState().failed).toBe(true);
+		svg.dispose();
 	});
 
 	// Regression (#15660): with no theme installed the palette threw inside the

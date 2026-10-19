@@ -998,6 +998,15 @@ export function directPlacementLift(line: string): number {
 }
 
 /**
+ * An {@link Image} direct-placement line re-anchored `rows` above its own
+ * line, for a renderer that clipped the image's top. Lines without the lead-in
+ * are returned unchanged.
+ */
+export function withDirectPlacementLift(line: string, rows: number): string {
+	return line.replace(DIRECT_PLACEMENT_LIFT, rows > 0 ? `\x1b7\x1b[${rows}A` : "\x1b7");
+}
+
+/**
  * Rebuild an {@link Image} direct-placement line for the viewport row it is
  * written at. The component-rendered line encodes `CUU(rows-1)`, which clamps
  * at the viewport top once the block's leading rows have scrolled out — the

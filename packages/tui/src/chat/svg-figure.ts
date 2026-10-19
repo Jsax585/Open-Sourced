@@ -167,8 +167,8 @@ export class SvgFigure implements Component {
 	#revision = 0;
 	#raster: Raster | undefined;
 	#attempt: Attempt | undefined;
-	/** Final source that could not be drawn; rendered as a fenced code block. */
-	#failed: string | undefined;
+	/** Final drawing attempt that could not be rasterized. */
+	#failed: Attempt | undefined;
 	#rasterizing = false;
 	#startedAt = Number.NEGATIVE_INFINITY;
 	#timer: NodeJS.Timeout | undefined;
@@ -201,16 +201,16 @@ export class SvgFigure implements Component {
 		});
 	}
 
-	/** Whether the final source still waits for its raster (or for failing to render). */
+	/** Whether the final drawing inputs still wait for a raster (or for a failed attempt). */
 	get pending(): boolean {
-		return this.#final && this.#raster?.source !== this.#source && this.#failed !== this.#source;
+		return this.#final && !this.#currentFailure() && !this.#currentRaster();
 	}
 
 	render(width: number): readonly string[] {
-		// Width, cell size and theme are render-time inputs; a change re-rasterizes.
+		// Width, cell size and theme are render-time drawing inputs.
 		this.#width = width;
 		this.#schedule();
-		if (this.#failed === this.#source) return this.#fallbackRows(width);
+		if (this.#currentFailure()) return this.#fallbackRows(width);
 		const raster = this.#raster;
 		if (!raster) {
 			if (!this.#options.markdown) return [];
@@ -236,16 +236,47 @@ export class SvgFigure implements Component {
 	debugState(): Record<string, unknown> {
 		return {
 			final: this.#final,
-			failed: this.#failed === this.#source,
+			failed: this.#currentFailure(),
 			raster: this.#raster ? `${this.#raster.widthPx}x${this.#raster.heightPx}` : null,
-			current: this.#raster?.source === this.#source,
+			current: this.#currentRaster(),
 		};
 	}
 
-	/** Whether the current source, cell size, theme or room at `width` has not been attempted yet. */
+	#matchesDrawing(attempt: Attempt | Raster): boolean {
+		const width = this.#width;
+		if (width === undefined || attempt.source !== this.#source) return false;
+		const cell = getCellDimensions();
+		const limits = limitsFor(width, cell);
+		return (
+			attempt.cell.widthPx === cell.widthPx &&
+			attempt.cell.heightPx === cell.heightPx &&
+			attempt.themeEpoch === getThemeEpoch() &&
+			attempt.limits.columns === limits.columns &&
+			attempt.limits.rows === limits.rows
+		);
+	}
+
+	#currentFailure(): boolean {
+		return this.#failed !== undefined && this.#matchesDrawing(this.#failed);
+	}
+
+	#currentRaster(): boolean {
+		const raster = this.#raster;
+		const width = this.#width;
+		if (!raster || width === undefined || raster.source !== this.#source) return false;
+		const cell = getCellDimensions();
+		return (
+			raster.cell.widthPx === cell.widthPx &&
+			raster.cell.heightPx === cell.heightPx &&
+			raster.themeEpoch === getThemeEpoch() &&
+			!this.#outgrown(limitsFor(width, cell))
+		);
+	}
+
+	/** Whether the current source, cell size, theme or room has not been attempted yet. */
 	#stale(width: number): boolean {
 		const attempt = this.#attempt;
-		if (this.#failed === this.#source) return false;
+		if (this.#currentFailure()) return false;
 		const cell = getCellDimensions();
 		const limits = limitsFor(width, cell);
 		return (
@@ -255,8 +286,9 @@ export class SvgFigure implements Component {
 			attempt.cell.heightPx !== cell.heightPx ||
 			attempt.themeEpoch !== getThemeEpoch() ||
 			// A streaming attempt that failed is retried once as final.
-			(this.#final && !attempt.final && this.#raster?.source !== this.#source) ||
-			((attempt.limits.columns !== limits.columns || attempt.limits.rows !== limits.rows) && this.#outgrown(limits))
+			(this.#final && !attempt.final && !this.#currentRaster()) ||
+			((attempt.limits.columns !== limits.columns || attempt.limits.rows !== limits.rows) &&
+				(this.#failed === attempt || this.#outgrown(limits)))
 		);
 	}
 
@@ -334,15 +366,16 @@ export class SvgFigure implements Component {
 		if (data && size) {
 			this.#show(attempt, data, size.widthPx, size.heightPx);
 		} else if (attempt.final) {
-			this.#failed = attempt.source;
+			this.#failed = attempt;
 			this.#options.onChange();
 		}
-		// The source, cell size, theme or room moved on while this raster ran.
+		// Drawing inputs may have moved on while this raster ran.
 		this.#schedule();
 	}
 
 	#show(attempt: Attempt, data: string, widthPx: number, heightPx: number): void {
 		const previous = this.#raster;
+		this.#failed = undefined;
 		this.#raster = {
 			source: attempt.source,
 			cell: attempt.cell,

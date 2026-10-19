@@ -16,6 +16,7 @@ import * as fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { getDebugLogPath } from "@oh-my-pi/pi-utils/dirs";
 import { $flag } from "@oh-my-pi/pi-utils/env";
+import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import type { TspFrame, TspNode, TspText } from "@oh-my-pi/pi-wire";
@@ -37,6 +38,7 @@ import {
 	encodeKittyDeleteImage,
 	encodeKittyDeletePlacement,
 	encodeKittyPlacementLine,
+	type CellDimensions,
 	getCellDimensions,
 	getTerminalBackgroundColor,
 	ImageProtocol,
@@ -48,9 +50,11 @@ import {
 	shouldEnableSynchronizedOutputByDefault,
 	synchronizedOutputUserOverride,
 	TERMINAL,
+	withDirectPlacementLift,
 } from "./terminal-capabilities";
 import { onTerminalBackgroundFallbackChange } from "./theme/theme";
 import { compositeLineAt } from "./render/composite";
+import { cropPngTop } from "./render/png";
 import { tmuxMultiplexer } from "./multiplexers/tmux";
 import {
 	Ellipsis,
@@ -658,6 +662,40 @@ interface LiveImagePlacement {
 	line: string;
 }
 
+/** One iTerm2 placement crop: the source rows a cell row covers depend on the cell's aspect ratio. */
+interface ITerm2Crop {
+	hiddenRows: number;
+	cell: CellDimensions;
+}
+
+/** Cache key of an {@link ITerm2Crop} within one source line. */
+function iterm2CropKey(crop: ITerm2Crop): string {
+	return `${crop.hiddenRows}:${crop.cell.widthPx}x${crop.cell.heightPx}`;
+}
+
+/**
+ * Re-encode an `Image` iTerm2 direct-placement line with its top
+ * `hiddenRows` cell rows cut out of the PNG, anchored at its first visible row
+ * so the rest lands on its own rows at the original scale; iTerm2 cannot clip
+ * a placement. Resolves `null` when the line is not a PNG placement this can
+ * crop; the caller then drops it rather than paint over foreign rows.
+ */
+async function cropITerm2Placement(line: string, { hiddenRows, cell }: ITerm2Crop): Promise<string | null> {
+	const match = /^\x1b7\x1b\[(\d+)A\x1b\]1337;File=([^:\x07]*):([A-Za-z0-9+/=]+)\x07\x1b8$/.exec(line);
+	const columns = match ? Number(/(?:^|;)width=(\d+)(?:;|$)/.exec(match[2])?.[1]) : 0;
+	if (!match || !(columns > 0) || cell.widthPx <= 0 || cell.heightPx <= 0) return null;
+	const png = Buffer.from(match[3], "base64");
+	const sourceWidth = png.byteLength >= 24 ? png.readUInt32BE(16) : 0;
+	if (sourceWidth <= 0) return null;
+	// Source pixel rows one cell row shows at `width=columns`, rounded up so
+	// the kept slice never reaches past the placement row.
+	const skip = Math.ceil((hiddenRows * cell.heightPx * sourceWidth) / (columns * cell.widthPx));
+	const data = await cropPngTop(png, skip);
+	if (!data) return null;
+	const lift = Number(match[1]) - hiddenRows;
+	return `\x1b7${lift > 0 ? `\x1b[${lift}A` : ""}\x1b]1337;File=${match[2]}:${data.toBase64()}\x07\x1b8`;
+}
+
 interface PreparedLine {
 	raw: string;
 	width: number;
@@ -1006,6 +1044,11 @@ export class TUI extends Container {
 	#screenImagePlacements = new Map<number, LiveImagePlacement>();
 	#altImagePlacements = new Map<number, LiveImagePlacement>();
 	#nextImagePlacementId = 1;
+	/** Cropped iTerm2 placement lines: source line, then {@link iterm2CropKey}, to the crop (`null`: cannot crop). */
+	#iterm2Crops = new LRUCache<string, Map<string, string | null>>({ max: 16 });
+	/** Crops a frame asked for but has not got yet: source line to its latest request. */
+	#iterm2Wanted = new Map<string, ITerm2Crop>();
+	#iterm2Cropping = false;
 	/** Last top-clipped SIXEL crop; only the block straddling row 0 is ever cropped. */
 	#sixelCrop: { source: string; pixels: number; maxHeightPixels: number; output: string } | undefined;
 	#ghosttyInitialImageDelayDone = false;
@@ -3291,30 +3334,44 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Clip direct placements to the visible source slice: Kitty tracks a live
-	 * placement owner, while SIXEL crops the encoded raster (iTerm2 images are
-	 * not cropped). SIXEL and iTerm2 have no delete command and composite over
-	 * existing pixels, so erase the visible rows they paint above `screenRow`
-	 * before repainting.
+	 * Clip direct placements to their visible owner, not merely to the top of
+	 * the physical screen: a mutable image must not repaint committed history.
+	 * Kitty tracks a live placement owner, SIXEL crops the encoded raster and
+	 * iTerm2 re-sends a cropped PNG. SIXEL and iTerm2 have no delete command and
+	 * composite over existing pixels, so erase the visible rows they paint above
+	 * `screenRow` before repainting.
 	 */
 	#imageLineSequence(
 		line: string,
 		screenRow: number,
 		placements: Map<number, LiveImagePlacement> | undefined,
 		placementRow: number,
+		ownerRow: number,
 	): string {
 		if (screenRow < 0) return line;
 		const parsed = parseKittyDirectPlacementLine(line);
 		if (!parsed) {
 			const requestedLift = directPlacementLift(line);
-			const lift = Math.min(requestedLift, screenRow);
-			if (requestedLift > lift) {
+			const lift = Math.min(requestedLift, screenRow, ownerRow);
+			if (lift < requestedLift && TERMINAL.imageProtocol === ImageProtocol.Sixel) {
 				const cellHeight = getCellDimensions().heightPx;
 				const cropPixels = Math.round((requestedLift - lift) * cellHeight);
-				const maxHeightPixels = Math.floor((screenRow + 1) * cellHeight);
-				line = line.replace(/\x1bP[0-9;]*q[\s\S]*?\x1b\\/g, sequence =>
-					this.#cropSixel(sequence, cropPixels, maxHeightPixels),
+				const maxHeightPixels = Math.floor((lift + 1) * cellHeight);
+				// Re-anchor too: the line's own CUU would climb past the owner into committed rows.
+				line = withDirectPlacementLift(
+					line.replace(/\x1bP[0-9;]*q[\s\S]*?\x1b\\/g, sequence =>
+						this.#cropSixel(sequence, cropPixels, maxHeightPixels),
+					),
+					lift,
 				);
+			} else if (lift < requestedLift && TERMINAL.imageProtocol === ImageProtocol.Iterm2) {
+				// Paint nothing until the crop lands; a forced frame then places it.
+				const cropped = this.#croppedITerm2(line, requestedLift - lift);
+				if (!cropped) return "";
+				line = cropped;
+			} else if (lift < requestedLift && TERMINAL.imageProtocol !== ImageProtocol.Kitty) {
+				// An unknown non-Kitty raster cannot be re-anchored safely.
+				return "";
 			}
 			return lift > 0 ? `\x1b[${lift}A${`${ERASE_LINE}\x1b[B`.repeat(lift)}${line}` : line;
 		}
@@ -3329,14 +3386,51 @@ export class TUI extends Container {
 				placementId,
 				columns: parsed.columns,
 				rows: parsed.rows,
-				screenRow,
+				screenRow: Math.min(screenRow, ownerRow),
 				imageHeightPx: this.#imageBudget.getPlacementGeometry(parsed.imageId)?.heightPx ?? 0,
 			})
 		);
 	}
 
 	/**
-	 * Crop a SIXEL raster whose top rows lie above the viewport. A raster the
+	 * The iTerm2 placement `line` with its top `hiddenRows` cell rows cropped
+	 * off at the current cell geometry, `null` when it cannot be cropped, or
+	 * `undefined` while the crop runs off the paint path. Decoding and
+	 * re-encoding a large PNG per newly hidden row would otherwise stall every
+	 * frame of a scroll.
+	 */
+	#croppedITerm2(line: string, hiddenRows: number): string | null | undefined {
+		const crop = { hiddenRows, cell: { ...getCellDimensions() } };
+		const cached = this.#iterm2Crops.get(line)?.get(iterm2CropKey(crop));
+		if (cached !== undefined) return cached;
+		this.#iterm2Wanted.set(line, crop);
+		if (!this.#iterm2Cropping) void this.#runITerm2Crops();
+		return undefined;
+	}
+
+	/** Crop every wanted placement, the latest request per line, then repaint the viewport once. */
+	async #runITerm2Crops(): Promise<void> {
+		this.#iterm2Cropping = true;
+		try {
+			for (const [line, crop] of this.#iterm2Wanted) {
+				this.#iterm2Wanted.delete(line);
+				const cropped = await cropITerm2Placement(line, crop).catch(() => null);
+				let crops = this.#iterm2Crops.get(line);
+				if (!crops) {
+					crops = new Map();
+					this.#iterm2Crops.set(line, crops);
+				}
+				crops.set(iterm2CropKey(crop), cropped);
+			}
+		} finally {
+			this.#iterm2Cropping = false;
+		}
+		// The placement rows are byte-identical to the frame that skipped them.
+		if (!this.#stopped) this.requestRender(true);
+	}
+
+	/**
+	 * Crop a SIXEL raster whose top rows lie above its owner. A raster the
 	 * cropper cannot parse is dropped: painting it whole would overwrite the
 	 * rows below the visible slice.
 	 */
@@ -3635,10 +3729,10 @@ export class TUI extends Container {
 			for (const id of this.#imageBudget.takeResetPurgeIds()) buffer += encodeKittyDeleteImage(id);
 			this.#screenImagePlacements.clear();
 		}
+		const purgeIds = this.#imageBudget.takePurgeIds();
+		const repaintPurgedImages = TERMINAL.imageProtocol !== ImageProtocol.Kitty && purgeIds.length > 0;
 		if (TERMINAL.imageProtocol === ImageProtocol.Kitty) {
-			for (const id of this.#imageBudget.takePurgeIds()) buffer += encodeKittyDeleteImage(id);
-		} else {
-			this.#imageBudget.takePurgeIds();
+			for (const id of purgeIds) buffer += encodeKittyDeleteImage(id);
 		}
 		// ED2 MUST precede ED3: tmux implements ED2 by scrolling the live screen
 		// into pane history (so cleared content stays reachable), so erasing
@@ -3661,13 +3755,18 @@ export class TUI extends Container {
 			historyRows.length === 0 &&
 			startTop === newTop &&
 			!this.#forceViewportRepaintOnNextRender &&
+			!repaintPurgedImages &&
 			!destructiveReset &&
 			this.#providerWindow.length > 0;
 		buffer += this.#retireImagePlacements(this.#screenImagePlacements, prepared.lines, newTop, !diffable);
 		for (const sequence of this.#imageBudget.takeTransmits()) append(sequence);
+		const retiredImageRows = diffable
+			? this.#retiredImageRows(this.#providerPreparedRows, prepared.lines)
+			: undefined;
 		if (diffable) {
 			for (let index = 0; index < rows; index++) {
 				if (
+					!retiredImageRows?.has(index) &&
 					!this.#rowNeedsRewrite(
 						this.#providerWindow,
 						this.#providerPreparedRows,
@@ -3684,7 +3783,7 @@ export class TUI extends Container {
 					width,
 					newTop + index,
 					this.#osc66SpacerGlyphWidth(prepared.lines, index),
-					{ imagePlacements: this.#screenImagePlacements },
+					{ imagePlacements: this.#screenImagePlacements, imageOwnerRow: index },
 				)}`;
 			}
 			if (this.#providerWindow.length > rows && newTop + rows < height) {
@@ -3727,6 +3826,7 @@ export class TUI extends Container {
 							blankRow: compactReplay,
 							imagePlacements: index < replayViewportRows ? undefined : this.#screenImagePlacements,
 							imageRow: newTop + index,
+							imageOwnerRow: index < replayViewportRows ? undefined : index - replayViewportRows,
 						},
 					),
 				);
@@ -4321,6 +4421,21 @@ export class TUI extends Container {
 		return visibleWidth(above);
 	}
 
+	/** Obsolete raster pixels survive byte-identical reserved rows unless those rows are erased. */
+	#retiredImageRows(previous: readonly PreparedLine[], lines: readonly string[]): Set<number> | undefined {
+		if (TERMINAL.imageProtocol === ImageProtocol.Kitty) return undefined;
+		let retired: Set<number> | undefined;
+		for (let index = 0; index < previous.length; index++) {
+			const row = previous[index]!;
+			if (!row.isImage || row.line === lines[index]) continue;
+			retired ??= new Set();
+			for (let first = Math.max(0, index - directPlacementLift(row.line)); first <= index; first++) {
+				retired.add(first);
+			}
+		}
+		return retired;
+	}
+
 	/**
 	 * Whether screen row `index` must be rewritten to turn the previously painted
 	 * frame into this one: its line, or the preparation it was painted with,
@@ -4349,7 +4464,13 @@ export class TUI extends Container {
 		width: number,
 		screenRow = -1,
 		spacerGlyphWidth = -1,
-		options?: { blankRow?: boolean; imagePlacements?: Map<number, LiveImagePlacement>; imageRow?: number },
+		options?: {
+			blankRow?: boolean;
+			imagePlacements?: Map<number, LiveImagePlacement>;
+			imageRow?: number;
+			/** Row within this image's owner, not the physical screen. */
+			imageOwnerRow?: number;
+		},
 	): string {
 		// End every rewrite at column zero. ConPTY can materialize a pending
 		// wrap before a following cursor-addressing sequence even while DECAWM is
@@ -4368,7 +4489,13 @@ export class TUI extends Container {
 		} else if (line.isImage) {
 			rewrite =
 				ERASE_LINE +
-				this.#imageLineSequence(line.line, screenRow, options?.imagePlacements, options?.imageRow ?? screenRow);
+				this.#imageLineSequence(
+					line.line,
+					screenRow,
+					options?.imagePlacements,
+					options?.imageRow ?? screenRow,
+					options?.imageOwnerRow ?? screenRow,
+				);
 		} else {
 			const terminalLine = this.#terminalLine(line);
 			if (options?.blankRow) {
@@ -4511,17 +4638,20 @@ export class TUI extends Container {
 		this.#forceViewportRepaintOnNextRender = false;
 		const full =
 			force ||
+			(TERMINAL.imageProtocol !== ImageProtocol.Kitty && purgeIds.length > 0) ||
 			this.#altPreviousLines.length !== height ||
 			((this.#altPreviousLines.some(isOsc66Line) || prepared.lines.some(isOsc66Line)) &&
 				prepared.rows.some((_row, r) =>
 					this.#rowNeedsRewrite(this.#altPreviousLines, this.#altPreparedRows, prepared.lines, prepared.rows, r),
 				));
 		prelude += this.#retireImagePlacements(this.#altImagePlacements, prepared.lines, 0, full);
+		const retiredImageRows = full ? undefined : this.#retiredImageRows(this.#altPreparedRows, prepared.lines);
 		let rowsBuffer = "";
 		for (let r = 0; r < height; r++) {
 			if (full) {
 				if (r > 0) rowsBuffer += "\n";
 			} else if (
+				retiredImageRows?.has(r) ||
 				this.#rowNeedsRewrite(this.#altPreviousLines, this.#altPreparedRows, prepared.lines, prepared.rows, r)
 			) {
 				rowsBuffer += `\x1b[${r + 1};1H`;
@@ -4533,7 +4663,7 @@ export class TUI extends Container {
 				width,
 				r,
 				this.#osc66SpacerGlyphWidth(prepared.lines, r),
-				{ imagePlacements: this.#altImagePlacements },
+				{ imagePlacements: this.#altImagePlacements, imageOwnerRow: r },
 			);
 		}
 		this.#altPreviousLines = prepared.lines;

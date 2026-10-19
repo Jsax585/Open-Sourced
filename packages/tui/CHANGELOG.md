@@ -10,6 +10,7 @@
 
 - Fixed the composer caret drifting one cell left per pasted image or video chip in terminals that draw the chip icon as a wide emoji (JetBrains terminal); the `unicode` preset now uses `📷`/`🎬` chip icons ([#16270](https://github.com/can1357/oh-my-pi/issues/16270))
 - Fixed Tern hiding user text sent with `/skill:<name>` inside a collapsed skill card; only the loaded skill prompt is hidden ([#16311](https://github.com/can1357/oh-my-pi/issues/16311))
+- Fixed partially clipped SIXEL and iTerm2 charts painting over committed history, demoted images leaving raster pixels in the viewport, and SVG figures retiring before their replacement raster is ready ([#16005](https://github.com/can1357/oh-my-pi/issues/16005))
 
 ## [18.12.2] - 2026-10-18
 
