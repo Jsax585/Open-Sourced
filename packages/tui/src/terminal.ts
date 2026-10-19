@@ -1160,6 +1160,11 @@ export class ProcessTerminal implements Terminal {
 		// Own stdout: out-of-band writers route through this terminal, and the
 		// emergency restore finds it on crash.
 		setActiveTerminal(this);
+		// A deferInput start returns before any frame is written, so the lazy
+		// first-write registration would leave redirected-write failures in
+		// that window as unhandled stream errors; install both shared stream
+		// error listeners as soon as this terminal takes ownership.
+		this.#ensureStdoutErrorHandler();
 		// RGB belongs to this ownership session, including deferred-input prepaint.
 		setTerminalBackgroundColor(undefined);
 		terminalEverStarted = true;

@@ -69,4 +69,34 @@ describe.skipIf(process.platform !== "linux")("redirected write errors vs termin
 			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	it("installs stream error handlers before a deferred start returns", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "deferred-start-redirect-"));
+		const state = path.join(root, "state.txt");
+		const child = Bun.spawn(
+			[process.execPath, path.resolve(import.meta.dir, "fixtures/deferred-start-redirect-probe.ts"), state],
+			{
+				env: { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
+				terminal: {},
+				timeout: 10_000,
+			},
+		);
+		try {
+			expect(await child.exited).toBe(0);
+			const lines = Object.fromEntries(
+				fs
+					.readFileSync(state, "utf8")
+					.split("\n")
+					.filter(Boolean)
+					.map(line => line.split("=") as [string, string]),
+			);
+			expect(lines["suppressed-start"]).toBe("true");
+			expect(lines["write-returned"]).toBe("false");
+			expect(lines["suppressed-after"]).toBe("true");
+			expect(lines["stopped-cleanly"]).toBe("true");
+		} finally {
+			child.kill();
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
