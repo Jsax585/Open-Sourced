@@ -862,6 +862,9 @@ async function promptTrustProject(projectRoot: string, sources: ProjectCodeSourc
 		.map(source => `  ${source.kind}: ${shortenPath(source.path)}`);
 	if (sources.length > TRUST_PROMPT_MAX_SOURCES)
 		lines.push(`  ...and ${sources.length - TRUST_PROMPT_MAX_SOURCES} more`);
+	// The prepaint composer owns the screen and stdin; readline needs both.
+	stopPendingStartupComposer();
+	process.stdout.write("\x1b[2J\x1b[H");
 	process.stdout.write(`${chalk.yellow("This project can run code on your machine:")}\n${lines.join("\n")}\n`);
 	pauseStartupWatchdog();
 	const createInterface = await loadReadlineInterface();
