@@ -118,6 +118,8 @@ export interface SelectOnlyModelSelectorOptions {
 	onSelect: (selector: string) => void | Promise<void>;
 	/** `provider/id` initially highlighted in the picker. */
 	currentSelector?: string;
+	/** Component to focus once the picker closes; undefined (or omitted) falls back to the editor area. */
+	focusAfter?: () => Component | undefined;
 }
 
 export interface AgentHubOpenOptions {
@@ -619,6 +621,12 @@ export interface InteractiveModeContext {
 	resolvePlanReview(reviewId: string, choice: PlanReviewChoice, input?: { feedback?: string; role?: string }): boolean;
 	getPendingPlanReview(): PlanReviewRequestedEvent | undefined;
 	openPlanReview(options?: { fromExtension?: boolean }): Promise<boolean>;
+	/** Pin any model as the plan's execution model; applied on approval. False (with a warning) outside plan mode. */
+	setPlanExecutionModel(model: Model, thinkingLevel?: ConfiguredThinkingLevel): boolean;
+	/** Drop the pinned execution model so approval falls back to the slider tier. */
+	clearPlanExecutionModel(): void;
+	/** Open the model picker in select-only mode to pin the plan's execution model. */
+	showPlanExecutionModelPicker(): void;
 
 	// Hook UI methods
 	initHooksAndCustomTools(): Promise<void>;
