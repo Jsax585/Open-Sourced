@@ -67,15 +67,28 @@ export const streamGoogleVertex: StreamFunction<"google-vertex"> = (
 				// a 404 surface. An ambient env-derived region falls back to the global
 				// endpoint so a stray GOOGLE_*_LOCATION never breaks a previously-working
 				// global-only request.
+				//
+				// A configured project is written into both URLs. The project-less
+				// publisher path is what Google treats as us-central1, including on the
+				// global host, so global-only models 404 unless the path names the project
+				// and location. With no project, keep that publisher path.
 				const explicitLocation = options?.location;
 				const location = explicitLocation ?? resolveAmbientLocation() ?? "global";
+				const project = resolveOptionalProject(options);
 				const host = resolveVertexEndpointHost(location);
-				const path = `${API_VERSION}/publishers/google/models/${model.id}:streamGenerateContent?alt=sse`;
-				const useGlobalFallback = !explicitLocation && host !== "aiplatform.googleapis.com";
+				const globalHost = resolveVertexEndpointHost("global");
+				const scope = project === undefined ? undefined : { project, location };
+				const useGlobalFallback = !explicitLocation && host !== globalHost;
 				return {
 					params,
-					url: `https://${host}/${path}`,
-					fallbackUrl: useGlobalFallback ? `https://aiplatform.googleapis.com/${path}` : undefined,
+					url: vertexGenerateContentUrl(host, model.id, scope),
+					fallbackUrl: useGlobalFallback
+						? vertexGenerateContentUrl(
+								globalHost,
+								model.id,
+								project === undefined ? undefined : { project, location: "global" },
+							)
+						: undefined,
 					headers: {
 						...baseHeaders,
 						"x-goog-api-key": apiKey,
@@ -88,10 +101,9 @@ export const streamGoogleVertex: StreamFunction<"google-vertex"> = (
 			const location = resolveLocation(options);
 			const accessToken = await getVertexAccessToken({ signal: options?.signal, fetch: options?.fetch });
 			const host = resolveVertexEndpointHost(location);
-			const url = `https://${host}/${API_VERSION}/projects/${project}/locations/${location}/publishers/google/models/${model.id}:streamGenerateContent?alt=sse`;
 			return {
 				params,
-				url,
+				url: vertexGenerateContentUrl(host, model.id, { project, location }),
 				headers: { ...baseHeaders, Authorization: `Bearer ${accessToken}` },
 				fetch: options?.fetch,
 			};
@@ -107,8 +119,26 @@ function resolveApiKey(options?: GoogleVertexOptions): string | undefined {
 	return realKey || $env.GOOGLE_CLOUD_API_KEY;
 }
 
-function resolveProject(options?: GoogleVertexOptions): string {
+/** Project-less express URL, or the ADC-shaped project/location URL when `scope` is set. */
+function vertexGenerateContentUrl(
+	host: string,
+	modelId: string,
+	scope?: { project: string; location: string },
+): string {
+	const resource =
+		scope === undefined
+			? `${API_VERSION}/publishers/google/models/${modelId}`
+			: `${API_VERSION}/projects/${scope.project}/locations/${scope.location}/publishers/google/models/${modelId}`;
+	return `https://${host}/${resource}:streamGenerateContent?alt=sse`;
+}
+
+function resolveOptionalProject(options?: GoogleVertexOptions): string | undefined {
 	const project = options?.project || $env.GOOGLE_CLOUD_PROJECT || $env.GCP_PROJECT || $env.GCLOUD_PROJECT;
+	return project || undefined;
+}
+
+function resolveProject(options?: GoogleVertexOptions): string {
+	const project = resolveOptionalProject(options);
 	if (!project) {
 		throw new AIError.ConfigurationError(
 			"Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCP_PROJECT/GCLOUD_PROJECT or pass project in options.",

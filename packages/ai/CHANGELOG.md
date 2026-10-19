@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed Vertex API-key requests (`GOOGLE_CLOUD_API_KEY`) for models published only in `global`: when a project is configured, the URL includes `projects/{project}/locations/{location}` on that location's host, instead of the project-less publisher path Google routes to `us-central1`. Requests with no project keep the previous URL ([#16178](https://github.com/can1357/oh-my-pi/pull/16178) by [@stabey](https://github.com/stabey)).
 - Fixed finalized signed reasoning disappearing from displayed thinking when no deltas streamed ([#16227](https://github.com/can1357/oh-my-pi/issues/16227))
 
 ## [18.12.2] - 2026-10-18
