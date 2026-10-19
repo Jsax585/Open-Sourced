@@ -815,6 +815,9 @@ describe("isolated agent follow-up turns", () => {
 		firstRun.resolve(null);
 		const patchPath = run.first.patchPath ?? "";
 		expect(await Bun.file(patchPath).text()).toContain("+one");
+		// The Agent Hub lists these from registry history; they must exist before, or the
+		// check after the withdrawal proves nothing.
+		expect(AgentRegistry.global().get("FollowUpUndone")?.history?.patchPath).toBe(patchPath);
 
 		// The agent deliberately puts the workspace back to its starting content.
 		await commitIn(iso, "zero\n", "undo");
@@ -822,6 +825,8 @@ describe("isolated agent follow-up turns", () => {
 
 		// A leftover patch would let someone apply work the agent removed.
 		expect(await Bun.file(patchPath).exists()).toBe(false);
+		expect(AgentRegistry.global().get("FollowUpUndone")?.history?.patchPath).toBeUndefined();
+		expect(AgentRegistry.global().get("FollowUpUndone")?.history?.nestedPatchPaths).toBeUndefined();
 		expect(notice).toContain("undid");
 		await AgentLifecycleManager.global().release("FollowUpUndone");
 		expect(await Bun.file(patchPath).exists()).toBe(false);
@@ -840,11 +845,15 @@ describe("isolated agent follow-up turns", () => {
 		});
 		firstRun.resolve(false);
 		expect(await taskBranches(repo)).toContain("omp/task/FollowUpBranchUndone");
+		expect(AgentRegistry.global().get("FollowUpBranchUndone")?.history?.branchName).toBe(
+			"omp/task/FollowUpBranchUndone",
+		);
 
 		await commitIn(iso, "zero\n", "undo");
 		const notice = await run.settleFollowUp?.(result("FollowUpBranchUndone"));
 
 		expect(await taskBranches(repo)).toBe("");
+		expect(AgentRegistry.global().get("FollowUpBranchUndone")?.history?.branchName).toBeUndefined();
 		expect(notice).toContain("undid");
 		await AgentLifecycleManager.global().release("FollowUpBranchUndone");
 		expect(await taskBranches(repo)).toBe("");

@@ -235,6 +235,21 @@ export class AgentRegistry {
 		return true;
 	}
 
+	/**
+	 * Drop history fields that no longer describe anything real, such as a patch
+	 * or branch that was removed. {@link setHistory} cannot do this: it skips
+	 * undefined values, so an omitted field keeps its old value.
+	 */
+	clearHistory(id: string, keys: readonly (keyof AgentHistorySummary)[]): boolean {
+		const ref = this.#refs.get(id);
+		if (!ref?.history) return false;
+		const next: AgentHistorySummary = { ...ref.history };
+		for (const key of keys) delete next[key];
+		ref.history = next;
+		this.#emit({ type: "metadata_changed", ref });
+		return true;
+	}
+
 	setStatus(id: string, status: AgentStatus, expected?: AgentRefExpectation): boolean {
 		const ref = this.#refs.get(id);
 		if (!ref) return this.#rejectStatusUpdate(id, status, "missing-ref");

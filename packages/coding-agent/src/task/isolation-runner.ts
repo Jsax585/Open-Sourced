@@ -26,7 +26,7 @@ import { logger, prompt } from "@oh-my-pi/pi-utils";
 import isolationErrorTemplate from "../prompts/tools/isolation-error.md" with { type: "text" };
 import isolationSummaryTemplate from "../prompts/tools/isolation-summary.md" with { type: "text" };
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
-import { AgentRegistry } from "../registry/agent-registry";
+import { type AgentHistorySummary, AgentRegistry } from "../registry/agent-registry";
 import type { ToolSession } from "../tools";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import { trackLateCleanup } from "../utils/late-cleanup";
@@ -548,10 +548,15 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	/** Remove what the caller was handed and did not land, after the agent undid all of it. */
 	const withdrawUnlanded = async (): Promise<void> => {
 		await Promise.all([...unlandedFiles].map(file => fs.rm(file, { force: true })));
+		// What the Agent Hub lists: stop naming files and a branch that are gone.
+		const stale: (keyof AgentHistorySummary)[] = ["patchPath", "nestedPatchPaths"];
 		if (opts.mergeMode === "branch") {
 			await resetTaskBranch(`omp/task/${opts.agentId}`, landed?.tip);
 			publishedBranchTip = landed?.tip;
+			// A landed tip keeps the branch at what the caller already has.
+			if (!landed?.tip) stale.push("branchName");
 		}
+		AgentRegistry.global().clearHistory(opts.agentId, stale);
 		unlandedFiles.clear();
 		unlandedWork = false;
 		retryRefused = false;
