@@ -181,6 +181,60 @@ describe("AgentSession refusal fallback response settlement", () => {
 		},
 	);
 
+	it("restores the primary when unexpected-stop recovery reaches its cap", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const fallbackModel = getBundledModel("anthropic", "claude-opus-4-1")!;
+		const primary = `${primaryModel.provider}/${primaryModel.id}`;
+		const fallback = `${fallbackModel.provider}/${fallbackModel.id}`;
+		const requestedModels: string[] = [];
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.maxRetries": 0,
+			"retry.fallbackChains": { [primary]: [fallback] },
+			"retry.refusalFallbackRevertPolicy": "after-success",
+			"features.unexpectedStopDetection": "mechanical",
+		});
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (model, context, options) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				if (requestedModels.length > 16) throw new Error("Unexpected-stop recovery exceeded the fixture budget");
+				const response: MockResponse =
+					requestedModels.length === 1
+						? { stopReason: "error", stopDetails: { type: "refusal" }, errorMessage: "Classifier declined" }
+						: model.id === fallbackModel.id
+							? {
+									content: [
+										{
+											type: "thinking",
+											thinking: "Still considering the request",
+											thinkingSignature: "signed",
+										},
+									],
+									stopReason: "stop",
+								}
+							: { content: ["The primary handles the next request"] };
+				return createMockModel({ provider: model.provider, id: model.id, responses: [response] }).stream(
+					model,
+					context,
+					options,
+				);
+			},
+		});
+		session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+
+		await session.prompt("Handle a request that exhausts unexpected-stop recovery");
+		await session.waitForIdle();
+
+		expect(new Set(requestedModels.slice(1))).toEqual(new Set([fallback]));
+		expect(session.getLastAssistantMessage()?.stopReason).toBe("stop");
+		expect(session.model?.id).toBe(primaryModel.id);
+		await session.prompt("Start a new request after recovery stops");
+		await session.waitForIdle();
+		expect(requestedModels.at(-1)).toBe(primary);
+	});
+
 	it("waits for a complete-stop verdict before restoring the primary", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const fallbackModel = getBundledModel("anthropic", "claude-opus-4-1")!;

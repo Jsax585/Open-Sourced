@@ -1322,6 +1322,7 @@ export class TurnRecovery {
 				provider: assistantMessage.provider,
 			});
 			this.#unexpectedStopRetryCount = 0;
+			this.#acceptUnexpectedStopCompletion(fallback, fallbackGeneration, promptGeneration);
 			return false;
 		}
 
