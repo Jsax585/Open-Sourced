@@ -8,7 +8,7 @@ import { dlopen, FFIType } from "bun:ffi";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as tty from "node:tty";
-import { getLogPath } from "./dirs";
+import { acquireProcessLogTarget, onProcessLogTargetChanged, type ProcessLogTargetLease } from "./logger/process-log";
 
 export interface LibcFdOps {
 	dup(fd: number): number;
@@ -36,6 +36,7 @@ let libcFdOpsCache: LibcFdOps | null | undefined;
 let savedStdoutFd: number | null = null;
 let savedStderrFd: number | null = null;
 let redirectTarget: string | undefined;
+let canonicalLease: ProcessLogTargetLease | undefined;
 // Nested acquisitions share one isolated state; only the final release (or a
 // forced restore on a fatal path) puts the terminal descriptors back.
 let activeSuppressions = 0;
@@ -209,12 +210,14 @@ export function suppressTerminalOutput(): number | null {
 	void process.stderr;
 	const redirectStderr = stderrSharesStdoutTerminal();
 	const libc = libcFdOps();
-	const redirectPath = redirectTarget ?? getLogPath();
-	fs.mkdirSync(path.dirname(redirectPath), { recursive: true });
-	const redirectFd = fs.openSync(redirectPath, "a", 0o600);
+	const lease = redirectTarget === undefined ? acquireProcessLogTarget() : undefined;
+	const redirectPath = redirectTarget ?? lease!.path;
+	let redirectFd = -1;
 	let stdoutFd = -1;
 	let stderrFd = -1;
 	try {
+		fs.mkdirSync(path.dirname(redirectPath), { recursive: true });
+		redirectFd = fs.openSync(redirectPath, "a", 0o600);
 		stdoutFd = libc.dup(1);
 		if (stdoutFd === -1) throw new Error("Cannot save terminal stdout");
 		markTerminalFdCloexec(libc, stdoutFd);
@@ -231,19 +234,24 @@ export function suppressTerminalOutput(): number | null {
 		savedStdoutFd = stdoutFd;
 		savedStderrFd = stderrFd === -1 ? null : stderrFd;
 		activeSuppressions = 1;
+		canonicalLease = lease;
 		return stdoutFd;
 	} catch (err) {
 		if (stdoutFd !== -1) {
-			libc.dup2(stdoutFd, 1);
-			fs.closeSync(stdoutFd);
+			if (libc.dup2(stdoutFd, 1) === -1) savedStdoutFd = stdoutFd;
+			else fs.closeSync(stdoutFd);
 		}
 		if (stderrFd !== -1) {
-			libc.dup2(stderrFd, 2);
-			fs.closeSync(stderrFd);
+			if (libc.dup2(stderrFd, 2) === -1) savedStderrFd = stderrFd;
+			else fs.closeSync(stderrFd);
 		}
+		// A failed rollback remains owned and retryable; never retire its sink
+		// while a descriptor may still be routed there.
+		if (savedStdoutFd !== null || savedStderrFd !== null) canonicalLease = lease;
+		else lease?.release();
 		throw err;
 	} finally {
-		fs.closeSync(redirectFd);
+		if (redirectFd !== -1) fs.closeSync(redirectFd);
 	}
 }
 
@@ -269,6 +277,8 @@ export function restoreTerminalOutput(force = false): void {
 		savedStderrFd = null;
 	}
 	if (!stdoutRestored || !stderrRestored) throw new Error("Cannot restore terminal output descriptors");
+	canonicalLease?.release();
+	canonicalLease = undefined;
 	for (const listener of [...restoreListeners]) {
 		try {
 			listener();
@@ -314,20 +324,34 @@ export function terminalStderrIsGuarded(): boolean {
 	return savedStderrFd !== null;
 }
 
-/** Follow logger rotation for this process; already-running children retain their inherited file. */
+/** Explicitly route output to a caller-owned sink, which manages its own watch. */
 export function setTerminalOutputRedirectTarget(logPath: string): void {
-	redirectTarget = logPath;
-	if (savedStdoutFd === null && savedStderrFd === null) return;
+	if (repointTerminalOutput(logPath)) {
+		redirectTarget = logPath;
+		canonicalLease?.release();
+		canonicalLease = undefined;
+	}
+}
+
+onProcessLogTargetChanged(logPath => {
+	if (canonicalLease && redirectTarget === undefined && !repointTerminalOutput(logPath)) {
+		throw new Error("Cannot redirect terminal output to the canonical process log");
+	}
+});
+
+function repointTerminalOutput(logPath: string): boolean {
+	if (savedStdoutFd === null && savedStderrFd === null) return true;
 	let fd: number;
 	try {
 		fd = fs.openSync(logPath, "a", 0o600);
 	} catch {
-		return;
+		return false;
 	}
 	try {
 		const libc = libcFdOps();
-		if (savedStdoutFd !== null) libc.dup2(fd, 1);
-		if (savedStderrFd !== null) libc.dup2(fd, 2);
+		const stdoutRedirected = savedStdoutFd === null || libc.dup2(fd, 1) !== -1;
+		const stderrRedirected = savedStderrFd === null || libc.dup2(fd, 2) !== -1;
+		return stdoutRedirected && stderrRedirected;
 	} finally {
 		fs.closeSync(fd);
 	}

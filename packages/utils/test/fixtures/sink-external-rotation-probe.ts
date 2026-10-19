@@ -20,6 +20,7 @@ const sink = new RotatingFileSink({
 	maxFiles: 5,
 	onRotate: setStderrRedirectTarget,
 });
+sink.openForExternalWrites();
 
 sink.write(JSON.stringify({ message: "startup record" }));
 const isolated = suppressTerminalOutput() !== null;
@@ -32,4 +33,5 @@ sink.write(JSON.stringify({ message: "post-junk record" }));
 fs.writeSync(1, "post-rotation-stdout-marker\n");
 sink.flush();
 restoreTerminalOutput();
+sink.close();
 note(`isolated=${isolated}`);

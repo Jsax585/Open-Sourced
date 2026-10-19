@@ -1171,9 +1171,6 @@ export class ProcessTerminal implements Terminal {
 		try {
 			this.#outputFd = suppressTerminalOutput();
 			if (this.#outputFd !== null) {
-				// fd 1/2 now point at the day's log; create the sink up front so its
-				// external-growth watch runs even if no logger record ever arrives.
-				logger.ensureFileTransport();
 				// The stream owns a separate duplicate, never the guard's saved fd.
 				const streamFd = duplicateTerminalOutput();
 				try {

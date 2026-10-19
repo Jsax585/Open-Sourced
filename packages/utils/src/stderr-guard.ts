@@ -12,7 +12,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getLogPath } from "./dirs";
+import { acquireProcessLogTarget, onProcessLogTargetChanged, type ProcessLogTargetLease } from "./logger/process-log";
 import {
 	isTerminalOutputSuppressed,
 	markTerminalFdCloexec,
@@ -34,11 +34,12 @@ let savedStderrFd: number | null = null;
 
 /** Newest log file the legacy guard knows about; see {@link setStderrRedirectTarget}. */
 let redirectTarget: string | null = null;
+let canonicalLease: ProcessLogTargetLease | undefined;
 
 export interface SuppressTerminalStderrOptions {
 	/**
-	 * Redirect target path; defaults to the log file the rotating sink last
-	 * reported (see {@link setStderrRedirectTarget}), then today's omp log.
+	 * Redirect target path; defaults to an explicitly selected target, then the
+	 * canonical process log target.
 	 */
 	redirectPath?: string;
 	/** Bypass the same-terminal gate. Tests only, as in 16.5.1. */
@@ -68,14 +69,17 @@ export function suppressTerminalStderr(options?: SuppressTerminalStderrOptions):
 	if (!libc) return false;
 
 	let redirectFd: number;
+	let lease: ProcessLogTargetLease | undefined;
 	try {
-		const redirectPath = options?.redirectPath ?? redirectTarget ?? getLogPath();
-		// The logger creates the logs directory lazily; on a fresh profile it
-		// may not exist yet, so diagnostics land in the log instead of /dev/null.
+		const explicitPath = options?.redirectPath ?? redirectTarget;
+		if (explicitPath === null) lease = acquireProcessLogTarget();
+		const redirectPath = explicitPath ?? lease!.path;
 		fs.mkdirSync(path.dirname(redirectPath), { recursive: true });
 		redirectFd = fs.openSync(redirectPath, "a");
-		redirectTarget = redirectPath;
+		if (options?.redirectPath !== undefined) redirectTarget = options.redirectPath;
 	} catch {
+		lease?.release();
+		lease = undefined;
 		try {
 			redirectFd = fs.openSync("/dev/null", "w");
 		} catch {
@@ -86,40 +90,51 @@ export function suppressTerminalStderr(options?: SuppressTerminalStderrOptions):
 	const saved = libc.dup(2);
 	if (saved === -1) {
 		fs.closeSync(redirectFd);
+		lease?.release();
 		return false;
 	}
 	if (libc.dup2(redirectFd, 2) === -1) {
 		fs.closeSync(redirectFd);
 		fs.closeSync(saved);
+		lease?.release();
 		return false;
 	}
 	fs.closeSync(redirectFd);
 	markTerminalFdCloexec(libc, saved);
 	savedStderrFd = saved;
+	canonicalLease = lease;
 	return true;
 }
 
-/**
- * Point fd 2 at `logPath`, the log file the rotating sink is currently
- * writing; the logger calls this on every rotation, and eagerly once when
- * the sink opens its file. The unified guard always records the path (its
- * suppression adopts the live file later); an active legacy suppression is
- * re-pointed here directly.
- */
+/** Explicitly select a caller-owned sink for both guard APIs. */
 export function setStderrRedirectTarget(logPath: string): void {
-	redirectTarget = logPath;
 	setTerminalOutputRedirectTarget(logPath);
-	if (savedStderrFd === null) return;
+	if (repointStderr(logPath)) {
+		redirectTarget = logPath;
+		canonicalLease?.release();
+		canonicalLease = undefined;
+	}
+}
+
+onProcessLogTargetChanged(logPath => {
+	if (canonicalLease && redirectTarget === null && !terminalStderrIsGuarded() && !repointStderr(logPath)) {
+		throw new Error("Cannot redirect terminal stderr to the canonical process log");
+	}
+});
+
+function repointStderr(logPath: string): boolean {
+	if (savedStderrFd === null) return true;
 	const libc = tryLibcFdOps();
-	if (!libc) return;
+	if (!libc) return false;
 	let redirectFd: number;
 	try {
 		redirectFd = fs.openSync(logPath, "a");
 	} catch {
-		return;
+		return false;
 	}
-	libc.dup2(redirectFd, 2);
+	const redirected = libc.dup2(redirectFd, 2) !== -1;
 	fs.closeSync(redirectFd);
+	return redirected;
 }
 
 /**
@@ -142,13 +157,16 @@ let pendingRelease = false;
 function performLegacyRestore(): void {
 	if (savedStderrFd === null) return;
 	const saved = savedStderrFd;
+	const libc = tryLibcFdOps();
+	if (!libc || libc.dup2(saved, 2) === -1) return;
 	savedStderrFd = null;
-	tryLibcFdOps()?.dup2(saved, 2);
 	try {
 		fs.closeSync(saved);
 	} catch {
 		// The dup'ed fd is process-owned; a close failure leaves nothing to recover.
 	}
+	canonicalLease?.release();
+	canonicalLease = undefined;
 }
 
 onTerminalOutputRestored(() => {

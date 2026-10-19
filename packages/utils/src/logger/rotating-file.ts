@@ -41,11 +41,11 @@ export interface RotatingFileOptions {
 /**
  * Synchronous append sink with local-day and size rotation plus bounded retention.
  *
- * Construction performs no filesystem I/O: the first file is created when the
- * first record is written out, so a process that never logs leaves nothing on
- * disk. Every file name embeds the owning process's suffix (its PID), so the
- * set of files this sink created is tracked in memory; files left by earlier
- * processes are pruned by name pattern in the logger, not by this sink.
+ * Construction performs no filesystem I/O. Files are opened when records are
+ * flushed or an external writer explicitly acquires a target. Every file name
+ * embeds the owning process's suffix (its PID); created and adopted files are
+ * tracked in memory. Shared retention for earlier processes lives in
+ * process-log.ts.
  *
  * With {@link RotatingFileOptions.batch}, records are buffered and written in
  * one `write` per batch. Buffered bytes already count toward the active file's
@@ -61,7 +61,7 @@ export class RotatingFileSink {
 	readonly #batch: RotatingFileBatchOptions | undefined;
 	readonly #now: () => Date;
 	readonly #onRotate: ((filePath: string) => void) | undefined;
-	/** Files this sink created, oldest first. */
+	/** Files this sink created or adopted, oldest first. */
 	readonly #files: string[] = [];
 	#activeDay: string | undefined;
 	#activeIndex = 0;
@@ -91,14 +91,11 @@ export class RotatingFileSink {
 		this.#batch = options.batch;
 		this.#onRotate = options.onRotate;
 		this.#now = options.now ?? (() => new Date());
-		// A guarded terminal may redirect fd 1/2 onto the day's log before any
-		// logger record exists; the cap watch must not wait for the first write.
-		this.#startExternalWatch();
 	}
 
 	#openFd(filePath: string): void {
 		this.#closeFd();
-		this.#fd = openCloexecSync(filePath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND);
+		this.#fd = openCloexecSync(filePath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND, 0o600);
 		try {
 			this.#onRotate?.(filePath);
 		} catch {
@@ -178,10 +175,7 @@ export class RotatingFileSink {
 	/** Write buffered records, then stop accepting records. */
 	close(): void {
 		if (this.#closed) return;
-		if (this.#externalWatchTimer !== undefined) {
-			clearInterval(this.#externalWatchTimer);
-			this.#externalWatchTimer = undefined;
-		}
+		this.stopWatchingExternalWrites();
 		try {
 			this.flush();
 		} catch {
@@ -226,11 +220,6 @@ export class RotatingFileSink {
 			this.#setActivePath(day, this.#activeIndex);
 		}
 		if (this.#activePath && (this.#activeIndex > 0 || (dayChanged && hadPriorSelection))) {
-			// Rotation may have been triggered by the external-growth watch with
-			// no logger record behind it — size rollover or a timer-driven local-day
-			// change alike; open the new file and notify onRotate immediately so
-			// redirected fd 1/2 re-point without waiting for the next write, and
-			// the rotated-to file exists for retention accounting.
 			this.#registerFile(this.#activePath);
 			this.#openFd(this.#activePath);
 		}
@@ -244,13 +233,45 @@ export class RotatingFileSink {
 		);
 		try {
 			this.#activeBytes = fs.statSync(this.#activePath).size;
+			// A guard or earlier owner may have created this path before the sink.
+			// Adopt it before selection can advance, so retention counts it too.
+			this.#registerFile(this.#activePath);
 		} catch {
 			this.#activeBytes = 0;
 		}
 		// The fresh file's authoritative size was just sampled; start the
 		// external-check window here so following records stay on the counter.
 		this.#lastExternalCheckMs = Date.now();
+	}
+
+	/** Select/open the canonical file before an external writer receives its path. */
+	openForExternalWrites(): string {
+		if (this.#closed) throw new Error("Cannot acquire a closed log sink");
+		this.#selectFile(localDay(this.#now()));
+		const activePath = this.#activePath!;
+		if (this.#fd === undefined) {
+			this.#registerFile(activePath);
+			this.#openFd(activePath);
+		}
 		this.#startExternalWatch();
+		return activePath;
+	}
+
+	/** Stop idle sampling; diagnostic-only owners may also retire the held fd. */
+	stopWatchingExternalWrites(closeFile = false): void {
+		if (this.#externalWatchTimer !== undefined) {
+			clearInterval(this.#externalWatchTimer);
+			this.#externalWatchTimer = undefined;
+		}
+		if (closeFile) {
+			try {
+				this.flush();
+			} catch {
+				// A failed diagnostic flush must not prevent releasing its descriptor.
+			} finally {
+				this.#closeFd();
+			}
+		}
 	}
 
 	/**

@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as logger from "../../src/logger";
+import { getLogsDir } from "../../src/dirs";
+import { acquireProcessLogTarget, getProcessLogSink, onProcessLogTargetChanged } from "../../src/logger/process-log";
 
 const scenario = process.argv[2];
 const primaryDir = process.argv[3];
@@ -157,6 +159,45 @@ switch (scenario) {
 		logger.info("directory-b", { destination: "b" });
 		disableTransports();
 		break;
+	case "leased-disabled": {
+		logger.setTransports({ file: true });
+		const first = acquireProcessLogTarget();
+		const sink = getProcessLogSink();
+		let activePath = first.path;
+		onProcessLogTargetChanged(filePath => {
+			activePath = filePath;
+		});
+		logger.setTransports({ file: false });
+		const reusedOnDisable = getProcessLogSink() === sink;
+		logger.warn("must-not-be-structured");
+		for (let index = 0; index < 6; index++) {
+			fs.appendFileSync(activePath, "x".repeat(10 * 1024 * 1024 + 1));
+			process.env.OMP_LOGGER_TEST_NOW = new Date(Date.now() + 1_100).toISOString();
+			sink.checkExternalGrowth();
+		}
+		const retainedBeforeRelease = fs.readdirSync(getLogsDir()).sort();
+		first.release();
+		const restarted = acquireProcessLogTarget();
+		const reusedOnRestart = getProcessLogSink() === sink && restarted.path === activePath;
+		fs.appendFileSync(restarted.path, "y".repeat(10 * 1024 * 1024 + 1));
+		process.env.OMP_LOGGER_TEST_NOW = new Date(Date.now() + 1_100).toISOString();
+		sink.checkExternalGrowth();
+		const retainedAfterRestart = fs.readdirSync(getLogsDir()).sort();
+		restarted.release();
+		process.env.OMP_LOGGER_TEST_NOW = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
+		await Bun.sleep(1_100);
+		writeResult({
+			reusedOnDisable,
+			reusedOnRestart,
+			retainedBeforeRelease,
+			retainedAfterRestart,
+			retainedAfterIdle: fs.readdirSync(getLogsDir()).sort(),
+			structuredOutputAbsent: fs
+				.readdirSync(getLogsDir())
+				.every(name => !fs.readFileSync(path.join(getLogsDir(), name), "utf8").includes("must-not-be-structured")),
+		});
+		break;
+	}
 	case "reconfigure-failure": {
 		logger.setTransports({ console: false, file: primaryDir });
 		logger.info("before-failed-reconfigure");

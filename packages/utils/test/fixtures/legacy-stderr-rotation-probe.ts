@@ -22,6 +22,7 @@ const sink = new RotatingFileSink({
 	maxFiles: 5,
 	onRotate: setStderrRedirectTarget,
 });
+sink.openForExternalWrites();
 
 sink.write(JSON.stringify({ message: "first record" }));
 sink.flush();
@@ -45,3 +46,4 @@ const files = fs
 const current = files.length > 0 ? fs.readFileSync(path.join(directory, files[files.length - 1]), "utf8") : "";
 note(`marker-followed-rotation=${current.includes("post-rotation-stderr-marker")}`);
 restoreTerminalStderr();
+sink.close();

@@ -22,6 +22,7 @@ const sink = new RotatingFileSink({
 	maxFiles: 5,
 	onRotate: setStderrRedirectTarget,
 });
+sink.openForExternalWrites();
 
 sink.write(JSON.stringify({ message: "startup-day record" }));
 const startupFile = fs.readdirSync(directory).find(name => name.endsWith(".log"))!;

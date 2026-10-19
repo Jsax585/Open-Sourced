@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as logger from "../src/logger";
 import { type RotatingFileBatchOptions, RotatingFileSink } from "../src/logger/rotating-file";
-import { localDay } from "../src/dirs";
+import { acquireProcessLogTarget, getProcessLogSink, onProcessLogTargetChanged } from "../src/logger/process-log";
 
 const FLUSH_BYTES = 64 * 1024;
 
@@ -121,6 +121,109 @@ describe("logger file batching", () => {
 	});
 });
 
+describe("canonical process log targets", () => {
+	test("cold custom leases share a target, retain it through nested owners, and stop watching on final release", () => {
+		vi.useFakeTimers();
+		logger.setTransports({ file: dir });
+		const first = acquireProcessLogTarget();
+		const second = acquireProcessLogTarget();
+		try {
+			expect(path.dirname(first.path)).toBe(dir);
+			expect(second.path).toBe(first.path);
+			expect(fs.readFileSync(first.path, "utf8")).toBe("");
+			first.release();
+			first.release();
+			fs.appendFileSync(second.path, "x".repeat(10 * 1024 * 1024 + 1));
+			vi.advanceTimersByTime(1_100);
+			expect(fs.existsSync(`${second.path}.1`)).toBe(true);
+			second.release();
+			fs.appendFileSync(`${second.path}.1`, "y".repeat(10 * 1024 * 1024 + 1));
+			vi.advanceTimersByTime(2_000);
+			expect(fs.existsSync(`${second.path}.2`)).toBe(false);
+		} finally {
+			first.release();
+			second.release();
+		}
+	});
+
+	test("live reconfiguration opens and announces the replacement before retiring the previous sink", () => {
+		logger.setTransports({ file: dir });
+		const first = acquireProcessLogTarget();
+		const previous = getProcessLogSink();
+		const destination = path.join(dir, "replacement");
+		const notifications: string[] = [];
+		let replacementWasOpen = false;
+		onProcessLogTargetChanged(filePath => {
+			if (path.dirname(filePath) !== destination) return;
+			replacementWasOpen = fs.existsSync(filePath);
+			// The old sink must still accept records during the handoff.
+			previous.write("handoff-before-retire");
+			notifications.push(filePath);
+		});
+		try {
+			logger.setTransports({ file: destination });
+			expect(replacementWasOpen).toBe(true);
+			expect(notifications).toHaveLength(1);
+			expect(fs.readFileSync(first.path, "utf8")).toBe(`handoff-before-retire${os.EOL}`);
+			expect(fs.readFileSync(notifications[0], "utf8")).toBe("");
+			logger.warn("replacement-record");
+			expect(messages(destination)).toEqual(["replacement-record"]);
+			const second = acquireProcessLogTarget();
+			expect(second.path).toBe(notifications[0]);
+			second.release();
+		} finally {
+			first.release();
+		}
+	});
+
+	test("failed replacement preparation preserves the old configuration and leased target", () => {
+		logger.setTransports({ file: dir });
+		const first = acquireProcessLogTarget();
+		const blocker = path.join(dir, "blocked");
+		fs.writeFileSync(blocker, "not a directory");
+		try {
+			expect(() => logger.setTransports({ file: path.join(blocker, "child") })).toThrow();
+			const second = acquireProcessLogTarget();
+			expect(second.path).toBe(first.path);
+			second.release();
+			logger.warn("still-on-original");
+			expect(JSON.parse(fs.readFileSync(first.path, "utf8")).message).toBe("still-on-original");
+		} finally {
+			first.release();
+		}
+	});
+
+	test("a failed canonical rebind rolls earlier observers back and keeps the original sink writable", () => {
+		vi.useFakeTimers();
+		logger.setTransports({ file: dir });
+		const first = acquireProcessLogTarget();
+		const destination = path.join(dir, "rebind-failure");
+		const replacementPath = path.join(destination, path.basename(first.path));
+		const observed: string[] = [];
+		onProcessLogTargetChanged(filePath => {
+			if (filePath === first.path || path.dirname(filePath) === destination) observed.push(filePath);
+		});
+		onProcessLogTargetChanged(filePath => {
+			if (path.dirname(filePath) === destination) throw new Error("canonical rebind failed");
+		});
+		try {
+			expect(() => logger.setTransports({ file: destination })).toThrow("canonical rebind failed");
+			expect(observed).toEqual([replacementPath, first.path]);
+			const second = acquireProcessLogTarget();
+			expect(second.path).toBe(first.path);
+			second.release();
+			logger.warn("survives-rebind-failure");
+			expect(JSON.parse(fs.readFileSync(first.path, "utf8")).message).toBe("survives-rebind-failure");
+			// Failed candidates cannot retain an idle rotation watch.
+			fs.appendFileSync(replacementPath, "x".repeat(10 * 1024 * 1024 + 1));
+			vi.advanceTimersByTime(1_100);
+			expect(fs.existsSync(`${replacementPath}.1`)).toBe(false);
+		} finally {
+			first.release();
+		}
+	});
+});
+
 describe("RotatingFileSink batching", () => {
 	test("external growth is watched without any logger record at all", () => {
 		vi.useFakeTimers();
@@ -128,9 +231,7 @@ describe("RotatingFileSink batching", () => {
 			const bareDir = path.join(dir, "bare");
 			fs.mkdirSync(bareDir);
 			const rotations: string[] = [];
-			// A TUI can start suppression before any logger record exists; the
-			// guard has already opened the day's log and an inherited child can
-			// be the only producer. The sink must watch from construction.
+			// External ownership eagerly opens the target before handing it to a guard.
 			const sink = new RotatingFileSink({
 				directory: bareDir,
 				filenamePrefix: "omp",
@@ -140,23 +241,26 @@ describe("RotatingFileSink batching", () => {
 				batch: { intervalMs: 300, maxBytes: FLUSH_BYTES },
 				onRotate: p => rotations.push(path.basename(p)),
 			});
-			fs.writeFileSync(path.join(bareDir, `omp.${localDay(new Date())}.1234.log`), "z".repeat(5_000));
+			const target = sink.openForExternalWrites();
+			expect(rotations).toEqual([path.basename(target)]);
+			rotations.length = 0;
+			fs.appendFileSync(target, "z".repeat(5_000));
 			vi.advanceTimersByTime(700);
-			expect(rotations.length).toBeGreaterThan(0);
-			expect(fs.readdirSync(bareDir).length).toBeGreaterThanOrEqual(2);
+			expect(rotations).toEqual([`${path.basename(target)}.1`]);
+			expect(fs.readdirSync(bareDir).sort()).toEqual([path.basename(target), `${path.basename(target)}.1`]);
 			sink.close();
 		} finally {
 			vi.useRealTimers();
 		}
 	});
 
-	test("a timer-driven day rollover re-points redirected descriptors", async () => {
+	test("an external owner follows midnight without a record or size overflow", () => {
 		vi.useFakeTimers();
 		try {
 			const rolloverDir = path.join(dir, "rollover");
 			fs.mkdirSync(rolloverDir);
 			const rotations: string[] = [];
-			const clock = { now: Date.now() };
+			const clock = { now: new Date(2026, 0, 1, 23, 59, 59).getTime() };
 			const sink = new RotatingFileSink({
 				directory: rolloverDir,
 				filenamePrefix: "omp",
@@ -167,18 +271,16 @@ describe("RotatingFileSink batching", () => {
 				now: () => new Date(clock.now),
 				onRotate: p => rotations.push(path.basename(p)),
 			});
-			sink.write("day one record");
-			sink.flush();
-			const first = fs.readdirSync(rolloverDir).sort()[0];
-			// External writers keep appending through fd 1/2 with no records.
-			fs.appendFileSync(path.join(rolloverDir, first), "y".repeat(5_000));
-			// Cross local midnight without any logger record.
-			clock.now += 36 * 60 * 60 * 1000;
+			const first = sink.openForExternalWrites();
+			fs.appendFileSync(first, "raw day one");
+			expect(rotations).toEqual(["omp.2026-01-01.1234.log"]);
+			rotations.length = 0;
+			// Stay below maxBytes: only the calendar boundary can cause this change.
+			clock.now = new Date(2026, 0, 2, 0, 0, 1).getTime();
 			vi.advanceTimersByTime(1_100);
-			// The new day's file must be open and onRotate fired, so redirected
-			// descriptors follow it; otherwise they stay on yesterday's file.
-			expect(rotations.length).toBeGreaterThan(0);
-			expect(fs.readdirSync(rolloverDir).length).toBeGreaterThanOrEqual(2);
+			expect(rotations).toEqual(["omp.2026-01-02.1234.log"]);
+			expect(fs.readdirSync(rolloverDir).sort()).toEqual(["omp.2026-01-01.1234.log", "omp.2026-01-02.1234.log"]);
+			expect(fs.readFileSync(path.join(rolloverDir, "omp.2026-01-02.1234.log"), "utf8")).toBe("");
 			sink.close();
 		} finally {
 			vi.useRealTimers();
@@ -189,6 +291,7 @@ describe("RotatingFileSink batching", () => {
 		const watchDir = path.join(dir, "watch");
 		fs.mkdirSync(watchDir);
 		const sink = makeSink(watchDir, { intervalMs: 300, maxBytes: FLUSH_BYTES });
+		sink.openForExternalWrites();
 		sink.write("only record");
 		sink.flush();
 		const active = fs.readdirSync(watchDir).sort()[0];
@@ -230,6 +333,61 @@ describe("RotatingFileSink batching", () => {
 		sink.flush();
 		expect(rotations).toHaveLength(1);
 		sink.close();
+	});
+
+	test("counts a guard-created oversized base file toward retention before selecting its successor", () => {
+		const clock = new Date(2026, 0, 1, 12);
+		const base = "omp.2026-01-01.1234.log";
+		fs.writeFileSync(path.join(dir, base), "x".repeat(1_001));
+		const sink = new RotatingFileSink({
+			directory: dir,
+			filenamePrefix: "omp",
+			filenameSuffix: "1234",
+			maxBytes: 1_000,
+			maxFiles: 5,
+			now: () => clock,
+		});
+		try {
+			for (let index = 0; index < 5; index++) sink.write("y".repeat(1_001));
+			expect(fs.readdirSync(dir).sort()).toEqual([1, 2, 3, 4, 5].map(index => `${base}.${index}`));
+			expect(fs.existsSync(path.join(dir, base))).toBe(false);
+		} finally {
+			sink.close();
+		}
+	});
+
+	test("ordinary idle sinks and released external writers do not create next-day files", () => {
+		vi.useFakeTimers();
+		const clock = { now: new Date(2026, 0, 1, 23, 59, 59).getTime() };
+		const rotations: string[] = [];
+		const sink = new RotatingFileSink({
+			directory: dir,
+			filenamePrefix: "omp",
+			filenameSuffix: "1234",
+			maxBytes: 1_000,
+			maxFiles: 5,
+			now: () => new Date(clock.now),
+			onRotate: filePath => rotations.push(path.basename(filePath)),
+		});
+		try {
+			sink.write("first");
+			const first = "omp.2026-01-01.1234.log";
+			expect(fs.readdirSync(dir)).toEqual([first]);
+			clock.now = new Date(2026, 0, 2, 0, 0, 1).getTime();
+			vi.advanceTimersByTime(2_000);
+			expect(fs.readdirSync(dir)).toEqual([first]);
+			const second = sink.openForExternalWrites();
+			expect(path.basename(second)).toBe("omp.2026-01-02.1234.log");
+			sink.stopWatchingExternalWrites(true);
+			rotations.length = 0;
+			clock.now = new Date(2026, 0, 3, 0, 0, 1).getTime();
+			vi.advanceTimersByTime(2_000);
+			expect(rotations).toEqual([]);
+			expect(fs.readdirSync(dir).sort()).toEqual([first, path.basename(second)]);
+		} finally {
+			sink.close();
+			vi.useRealTimers();
+		}
 	});
 
 	function makeSink(directory: string, batch?: RotatingFileBatchOptions): RotatingFileSink {

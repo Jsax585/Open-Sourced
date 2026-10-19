@@ -15,8 +15,22 @@ ownership through `packages/utils/src/terminal-output-guard.ts`. Unmanaged
 stdout, same-terminal stderr, and newly inherited child output go to the
 process log instead of the viewport. Cached Node stream writes are redirected
 too; piped stdout and a separately redirected stderr retain their destinations.
-The guard follows logger rotation for this process; existing children retain
-the file descriptors they inherited.
+The guards acquire the canonical process-log target before redirecting either
+descriptor. `packages/utils/src/logger/process-log.ts` owns file selection,
+retention, and configuration changes; guards own only descriptor redirection
+and restoration. A replacement target is opened and active guards are notified
+before the previous sink is retired. Recovery uses the last successfully opened
+target, so a failed rollover cannot block switching to a healthy directory.
+Only the active sink publishes rotation targets; retiring sinks still flush
+buffered records without moving guards back to an old destination.
+New log files are created with owner-only read/write permissions; existing file
+permissions are preserved.
+
+External-writer leases keep size/day sampling active without structured records.
+The final release stops sampling; disabled structured file output still retains
+raw diagnostics in a bounded default sink while a guard owns it, then closes
+that diagnostic-only descriptor. Ordinary idle logging does not create new-day
+files. Existing children retain the file descriptors they inherited.
 
 The renderer retains a private stdout descriptor. The native output pump owns
 its own duplicate, preserving off-thread draining and backlog detection; a
