@@ -222,4 +222,34 @@ describe("terminal output guard", () => {
 			}
 		},
 	);
+
+	it.skipIf(process.platform === "win32")(
+		"a callback-free redirected write survives an unwritable log target",
+		async () => {
+			const root = fs.mkdtempSync(path.join(os.tmpdir(), "redirect-write-error-"));
+			temporaryDirectories.push(root);
+			const child = Bun.spawn(
+				[
+					process.execPath,
+					path.resolve(import.meta.dir, "fixtures/redirect-write-error-probe.ts"),
+					path.join(root, "state.txt"),
+				],
+				{
+					env: { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
+					terminal: {},
+					timeout: 10_000,
+				},
+			);
+			try {
+				expect(await child.exited).toBe(0);
+				const state = fs.readFileSync(path.join(root, "state.txt"), "utf8");
+				expect(state).toContain("suppressed=true");
+				expect(state).toContain("survived=true ret=false");
+				expect(state).toContain("error-delivered=true");
+				expect(state).toContain("callback-error=true");
+			} finally {
+				child.kill();
+			}
+		},
+	);
 });

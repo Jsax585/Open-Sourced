@@ -47,6 +47,7 @@ function redirectedWrite(
 	chunk: string | Uint8Array,
 	encodingOrCallback?: BufferEncoding | WriteCallback,
 	callback?: WriteCallback,
+	reportStreamError?: (error: Error) => void,
 ): boolean {
 	const done = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
 	const bytes =
@@ -63,10 +64,17 @@ function redirectedWrite(
 	} catch (err) {
 		// Deliver log-write failures (ENOSPC/EIO/...) asynchronously like the
 		// platform streams do, so completion callbacks see the error instead
-		// of a synchronous throw escaping write(). Fire-and-forget callers
-		// keep the previous synchronous-throw behavior.
+		// of a synchronous throw escaping write(). Callback-free callers get
+		// the stream error path too: a sync throw from an incidental
+		// diagnostic write would trigger fatal teardown exactly when the
+		// log storage failed.
+		const error = err instanceof Error ? err : new Error(String(err));
 		if (done) {
-			queueMicrotask(() => done(err instanceof Error ? err : new Error(String(err))));
+			queueMicrotask(() => done(error));
+			return false;
+		}
+		if (reportStreamError) {
+			reportStreamError(error);
 			return false;
 		}
 		throw err;
@@ -96,7 +104,11 @@ function installStreamWriteProxy(stream: NodeJS.WriteStream, fd: 1 | 2): void {
 	const proxy: GuardedWrite = (chunk, encodingOrCallback, callback) => {
 		const redirected = fd === 1 ? savedStdoutFd !== null : savedStderrFd !== null;
 		if (redirected) {
-			return redirectedWrite(fd, chunk, encodingOrCallback, callback);
+			return redirectedWrite(fd, chunk, encodingOrCallback, callback, error => {
+				// No completion callback: report through the stream's
+				// asynchronous error path, as the platform writer would.
+				queueMicrotask(() => stream.emit("error", error));
+			});
 		}
 		return originalWrite(chunk, encodingOrCallback, callback);
 	};
