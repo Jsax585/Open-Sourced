@@ -280,9 +280,8 @@ describe("anthropic server-side fallback opt-in", () => {
 describe("anthropic fallback content-block replay policy", () => {
 	// A prior assistant turn that took a fallback carries a persisted `fallback`
 	// content block. On the next request the outgoing wire body must strip it
-	// UNLESS the current request also opts into the beta chain — the endpoint
-	// that accepts `fallbacks` accepts the marker, whether it is
-	// api.anthropic.com or a transparent gateway in front of it.
+	// UNLESS the current request also opts into the beta chain AND the target
+	// is official Anthropic.
 
 	function priorFallbackAssistant(
 		content: AssistantMessage["content"] = [
@@ -332,20 +331,14 @@ describe("anthropic fallback content-block replay policy", () => {
 		expect(params[0]?.content).toEqual([{ type: "text", text: "continued" }]);
 	});
 
-	it("keeps the fallback block on a non-official Anthropic target when the request opts in", () => {
-		// A gateway relaying to Anthropic returned this marker; stripping it on
-		// replay while keeping the thinking around it rewrites the latest turn
-		// and Anthropic rejects the request.
+	it("drops the fallback block on non-official Anthropic targets even when opted in", () => {
 		const params = convertAnthropicMessages(
 			[priorFallbackAssistant(), { role: "user", content: "next", timestamp: 0 }],
 			umansModel,
 			false,
 			{ serverSideFallbackEnabled: true },
 		);
-		expect(params[0]?.content).toEqual([
-			{ type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" } },
-			{ type: "text", text: "continued" },
-		]);
+		expect(params[0]?.content).toEqual([{ type: "text", text: "continued" }]);
 	});
 
 	it("keeps one model's reasoning when the marker cannot go on the wire", () => {
@@ -462,7 +455,7 @@ describe("anthropic assistant replay block ordering (tool_use partition)", () =>
 		]);
 	});
 
-	it("opt-out drops the latest turn's thinking chain with its fallback marker and still defers tool_use", () => {
+	it("opt-out drops the fallback marker but still defers tool_use to the tail", () => {
 		const params = convertAnthropicMessages(
 			[
 				assistant([
@@ -481,10 +474,10 @@ describe("anthropic assistant replay block ordering (tool_use partition)", () =>
 			],
 			fableModel,
 			false,
-			// serverSideFallbackEnabled omitted → fallback marker and the
-			// latest turn's native thinking chain are dropped together
+			// serverSideFallbackEnabled omitted → fallback block dropped
 		);
 		expect(assistantParam(params).content).toEqual([
+			{ type: "thinking", thinking: "plan", signature: "sig-1" },
 			{ type: "text", text: "before" },
 			{ type: "text", text: "after" },
 			{ type: "tool_use", id: "call_a", name: "read", input: {} },
@@ -822,6 +815,57 @@ describe("mid-turn fallback a gateway opted into", () => {
 		expect(recovered.stopReason).toBe("stop");
 		expect(requests).toHaveLength(2);
 		expect(JSON.stringify(requests[1]!.messages)).not.toContain('"type":"thinking"');
+	});
+
+	// A user message sent while the tool ran follows the refused turn's tool
+	// results. The request still returns tool results, so the API checks that
+	// turn, but the latest-turn retry finds no assistant turn after the last
+	// user message and leaves it alone.
+	it("recovers a refused turn followed by its tool results and a user message", async () => {
+		const requests: Array<{ messages: MessageParam[] }> = [];
+		refuseLatestTurnThinking(requests);
+		const steered: Message[] = [...markerlessHistory, { role: "user", content: "Also read b.txt", timestamp: 0 }];
+
+		const recovered = await streamAnthropic(
+			gatewayModel,
+			{ messages: steered },
+			{ apiKey: "sk-gateway", thinkingEnabled: true, providerSessionState: new Map() },
+		).result();
+		expect(recovered.stopReason).toBe("stop");
+		expect(requests).toHaveLength(2);
+		expect(JSON.stringify(requests[1]!.messages)).not.toContain('"type":"thinking"');
+	});
+
+	it("surfaces the refusal instead of resending a request with no replayed thinking", async () => {
+		const requests: unknown[] = [];
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation((params: unknown) => {
+			requests.push(params);
+			const rejection = Object.assign(
+				new Error(
+					'400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified. These blocks must remain as they were in the original response."}}',
+				),
+				{ status: 400 },
+			);
+			return {
+				async withResponse() {
+					throw rejection;
+				},
+			} as never;
+		});
+		const withoutThinking = markerlessHistory.map(message =>
+			message.role === "assistant"
+				? { ...message, content: message.content.filter(block => block.type !== "thinking") }
+				: message,
+		);
+
+		const result = await streamAnthropic(
+			gatewayModel,
+			{ messages: [...withoutThinking, { role: "user", content: "Also read b.txt", timestamp: 0 }] },
+			{ apiKey: "sk-gateway", thinkingEnabled: true },
+		).result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("latest assistant message cannot be modified");
+		expect(requests).toHaveLength(1);
 	});
 });
 

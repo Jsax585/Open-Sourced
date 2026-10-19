@@ -2066,6 +2066,20 @@ function reportedDropKey(params: MessageCreateParamsStreaming, path: string | un
 }
 
 /**
+ * Whether the request still replays any native thinking. A retry that drops
+ * all replayed thinking changes nothing on the wire without it.
+ */
+function hasReplayableThinking(params: MessageCreateParamsStreaming): boolean {
+	for (const message of params.messages) {
+		if (!message || !Array.isArray(message.content)) continue;
+		if (message.content.some(block => block.type === "thinking" || block.type === "redacted_thinking")) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
  * Record server-reported input rewrites on the response. A `drop_block`
  * request keeps replaying the transcript verbatim afterwards: the API drops
  * the same invalid blocks again on every later request (unbilled), while
@@ -3625,7 +3639,13 @@ const streamAnthropicOnce = (
 						firstTokenTime === undefined &&
 						!streamedReplayUnsafeContent &&
 						!isThinkingPrefixBindingError(streamFailureMessage) &&
-						isInvalidThinkingSignatureError(streamFailureMessage)
+						(isInvalidThinkingSignatureError(streamFailureMessage) ||
+							// The latest-turn retry above covers a refused turn followed only
+							// by its tool results. A refusal it cannot act on (a user message
+							// follows those tool results, so it finds no latest turn) or that
+							// repeats after it escalates here, only while some replayed thinking
+							// remains; otherwise the retry would resend the same body.
+							(AIError.isImmutableLatestThinkingText(streamFailureMessage) && hasReplayableThinking(params)))
 					) {
 						// The unsigned-demotion retry only rewrites UNSIGNED blocks;
 						// when every replayed block carries a signature the signer no
