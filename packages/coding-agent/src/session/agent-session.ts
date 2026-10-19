@@ -410,6 +410,7 @@ import {
 	type PrewalkRestartResult,
 } from "./prewalk";
 import {
+	IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
 	isAdvisorCard,
 	isDisplayableQueuedMessage,
 	isHiddenUserCompanion,
@@ -7513,19 +7514,25 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/**
-	 * Every caller runs this before its message is admitted (queued or dispatched), and
-	 * RPC acknowledges `prompt` only after admission. Bound the vision call so a slow
-	 * provider cannot hold admission past the bundled clients' 30 s request timeout, and
-	 * let abort() cancel it. Either way the image stays saved and the notice says the
-	 * description is unavailable.
+	 * Admission waits for this (RPC acknowledges `prompt` only after admission), and so does delivering a queued
+	 * follow-up to a planner that cannot see its images. Bound the vision call so a slow provider cannot hold
+	 * admission past the bundled clients' 30 s request timeout, and let abort() cancel it. Either way the image stays
+	 * saved and the notice says the description is unavailable.
 	 */
-	async #buildImageDescriptionNotice(normalizedImages: ImageContent[]): Promise<CustomMessage | undefined> {
+	async #buildImageDescriptionNotice(
+		normalizedImages: ImageContent[],
+		signal?: AbortSignal,
+	): Promise<CustomMessage | undefined> {
 		const controller = new AbortController();
 		this.#imageDescriptionAbortControllers.add(controller);
 		try {
 			return await this.#providerBoundary.buildImageDescriptionNotice(
 				normalizedImages,
-				AbortSignal.any([controller.signal, AbortSignal.timeout(IMAGE_DESCRIPTION_ADMISSION_TIMEOUT_MS)]),
+				AbortSignal.any([
+					controller.signal,
+					AbortSignal.timeout(IMAGE_DESCRIPTION_ADMISSION_TIMEOUT_MS),
+					...(signal ? [signal] : []),
+				]),
 			);
 		} finally {
 			this.#imageDescriptionAbortControllers.delete(controller);
@@ -7973,7 +7980,7 @@ export class AgentSession implements SettingsScope {
 		const preparationImages = images.length > 0 ? images : undefined;
 		// Steering amends the running task; only a follow-up starts a new one worth routing.
 		if (queue === "followUp" && userMessages.some(message => this.#isAutoPrewalkTask(message))) {
-			return this.#prepareQueuedAutoPrewalkTask(first, promptText, preparationImages, signal);
+			return this.#prepareQueuedAutoPrewalkTask(messages, first, promptText, preparationImages, signal);
 		}
 		return this.#prepareAgentStart(first, promptText, preparationImages, this.#promptGeneration, signal, "queued");
 	};
@@ -7984,6 +7991,7 @@ export class AgentSession implements SettingsScope {
 	 * with the task it belongs to.
 	 */
 	async #prepareQueuedAutoPrewalkTask(
+		batch: readonly AgentMessage[],
 		message: AgentMessage,
 		prompt: string,
 		images: ImageContent[] | undefined,
@@ -7996,6 +8004,8 @@ export class AgentSession implements SettingsScope {
 			() => this.#promptGeneration === generation && !this.#isDisposed,
 		);
 		const superseded = this.#explicitPickSupersedes(autoPrewalk.selected);
+		// Its images were prepared when it was queued, for a model that may have seen them without a description.
+		const before = autoPrewalk.selected ? await this.#describeQueuedImages(batch, signal) : undefined;
 		let preparation = await this.#prepareAgentStart(
 			message,
 			prompt,
@@ -8011,6 +8021,7 @@ export class AgentSession implements SettingsScope {
 		}
 		await autoPrewalk.decided;
 		return {
+			before,
 			commit: () => {
 				const additional = preparation.commit();
 				if (additional === undefined) return undefined;
@@ -8018,6 +8029,32 @@ export class AgentSession implements SettingsScope {
 				return planMessage ? [...additional, planMessage] : additional;
 			},
 		};
+	}
+
+	/** Describes queued images the active model cannot see, unless a companion of their message already does. */
+	async #describeQueuedImages(
+		batch: readonly AgentMessage[],
+		signal: AbortSignal,
+	): Promise<Map<AgentMessage, AgentMessage[]>> {
+		const before = new Map<AgentMessage, AgentMessage[]>();
+		for (const [index, message] of batch.entries()) {
+			if (signal.aborted) break;
+			if (!isUserAuthoredQueuedMessage(message) || !("content" in message) || !Array.isArray(message.content)) {
+				continue;
+			}
+			const images: ImageContent[] = [];
+			for (const part of message.content) if (part.type === "image") images.push(part);
+			if (images.length === 0) continue;
+			const described = batch
+				.slice(this.#queuedUserGroupStart(batch, index), index)
+				.some(
+					companion => companion.role === "custom" && companion.customType === IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
+				);
+			if (described) continue;
+			const description = await this.#buildImageDescriptionNotice(images, signal);
+			if (description) before.set(message, [description]);
+		}
+		return before;
 	}
 
 	/** A new top-level task the user authored: a typed prompt or a user-invoked skill, never injected or delegated. */

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `QueuedMessagePreparation.before`: context delivered immediately before a specific queued message, and requeued with it if delivery is interrupted ([#16243](https://github.com/can1357/oh-my-pi/pull/16243) by [@taibenvenuti](https://github.com/taibenvenuti))
+
 ## [18.12.2] - 2026-10-18
 
 ### Changed

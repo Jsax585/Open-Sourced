@@ -34,6 +34,8 @@ export type StreamFn = (
 
 /** Staged queue preparation; commit synchronously only while the batch is still owned. */
 export interface QueuedMessagePreparation {
+	/** Context delivered immediately before an original; an interrupted delivery requeues it with that original. */
+	before?: ReadonlyMap<AgentMessage, readonly AgentMessage[]>;
 	/** Append context after the originals; undefined stops this attempt, retaining originals unless explicitly removed. */
 	commit(): readonly AgentMessage[] | undefined;
 }

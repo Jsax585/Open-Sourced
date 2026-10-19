@@ -21,6 +21,7 @@
 - Fixed an explicit model or thinking selection leaving a pending auto-prewalk handoff that later switched away from your choice ([#16243](https://github.com/can1357/oh-my-pi/pull/16243) by [@taibenvenuti](https://github.com/taibenvenuti))
 - Fixed prewalk skipping a handoff to a target that differs from the active model only by its upstream route (for example `openrouter/x@anthropic` to `openrouter/x@google`), and `/prewalk` treating another route of the armed target as the same target ([#16243](https://github.com/can1357/oh-my-pi/pull/16243) by [@taibenvenuti](https://github.com/taibenvenuti))
 - Fixed auto-prewalk leaving later tasks on a context-promoted handoff model instead of returning to the model the task started on ([#16243](https://github.com/can1357/oh-my-pi/pull/16243) by [@taibenvenuti](https://github.com/taibenvenuti))
+- Fixed auto-prewalk undoing, at the next task, a thinking level that an SDK subscriber selected while the handoff was switching models ([#16243](https://github.com/can1357/oh-my-pi/pull/16243) by [@taibenvenuti](https://github.com/taibenvenuti))
 
 ## [18.12.2] - 2026-10-18
 

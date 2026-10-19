@@ -538,7 +538,8 @@ export class PrewalkCoordinator {
 			commitIf: current,
 			restoreThinkingLevel: auto && this.#autoTargetRestoresThinking,
 			onSelected: () => {
-				if (!source) return;
+				// An explicit selection made while this switch published (e.g. from its thinking event) owns the session.
+				if (!source || !current()) return;
 				// Back on the model and effort the task started on: there is nothing left to restore.
 				if (baseline && this.#autoTargetRestoresThinking) {
 					this.#handoff = undefined;

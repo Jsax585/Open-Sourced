@@ -39,6 +39,7 @@ import { SessionMaintenance } from "@oh-my-pi/pi-coding-agent/session/session-ma
 import { cfgPrewalkAuto } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { EAGER_TODO_PRELUDE_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/todo-tracker";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
+import * as imageVisionFallback from "@oh-my-pi/pi-coding-agent/utils/image-vision-fallback";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { TempDir, withTimeout } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
@@ -419,6 +420,50 @@ describe("AgentSession auto-prewalk", () => {
 			expect(description).toBeGreaterThanOrEqual(0);
 			expect(description).toBeLessThan(followUp);
 		});
+
+		it.each([
+			["an image-capable starting model, which needed no description", false],
+			["a text-only starting model, which already described them", true],
+		] as const)(
+			"a text-only planner gets each queued image described once, ahead of its own follow-up, from %s",
+			async (_label, textOnlyBaseline) => {
+				stubJudge([DIRECT, PREWALK]);
+				const texts = ["inspect the first cursor snapshot", "then fix the race the second one shows"];
+				let queued = false;
+				const f = createFixture([done("initial"), done("images"), done("continued")], {
+					auto: "on",
+					planningModel: "@slow",
+					textOnlyBaseline,
+					beforeStream: async () => {
+						if (queued) return;
+						queued = true;
+						for (const text of texts) {
+							await f.session.prompt(text, { images: [image], streamingBehavior: "followUp" });
+						}
+					},
+				});
+				f.session.setFollowUpMode("all", false);
+				vi.spyOn(f.modelRegistry, "refreshSelectedModelMetadata").mockImplementation(async model =>
+					model.id === f.planner.id ? { ...model, input: ["text"] } : model,
+				);
+				let descriptions = 0;
+				vi.spyOn(imageVisionFallback, "describeAttachedImagesForTextModel").mockImplementation(async images =>
+					images.map(() => ({ type: "text", text: `description ${++descriptions}` })),
+				);
+
+				await f.session.prompt(TASK);
+				await f.session.waitForIdle();
+
+				expect(f.requested.at(-1)).toBe(f.planner.id);
+				expect(descriptions).toBe(2);
+				const labels = ["description 1", "description 2", ...texts];
+				const messages = JSON.parse(f.contexts.at(-1) ?? "[]") as Context["messages"];
+				const order = messages.flatMap(message =>
+					labels.filter(label => JSON.stringify(message.content).includes(label)),
+				);
+				expect(order).toEqual(["description 1", texts[0], "description 2", texts[1]]);
+			},
+		);
 
 		it.each(["same model", "other model", "same auto effort"] as const)(
 			"discards a delayed auto-thinking judgment after explicit %s selection",
@@ -1540,6 +1585,24 @@ describe("AgentSession auto-prewalk", () => {
 			const f = createFixture([...cycle(), done("two")], { auto: "on" });
 			await f.session.prompt("task one");
 			f.session.setThinkingLevel(Effort.Medium);
+
+			await f.session.prompt("task two");
+
+			expect(f.requested.at(-1)).toBe(f.target.id);
+			expect(f.efforts.at(-1)).toBe(Effort.Medium);
+		});
+
+		it("an effort a subscriber selects while the handoff publishes its own stays at the next task", async () => {
+			stubJudge([PREWALK, DIRECT]);
+			const f = createFixture([...cycle(), done("two")], { auto: "on" });
+			let picked = false;
+			f.session.subscribe(event => {
+				if (event.type !== "thinking_level_changed" || picked || f.session.model?.id !== f.target.id) return;
+				picked = true;
+				f.session.setThinkingLevel(Effort.Medium);
+			});
+			await f.session.prompt("task one");
+			expect(picked).toBe(true);
 
 			await f.session.prompt("task two");
 
