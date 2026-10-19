@@ -1970,4 +1970,45 @@ describe("LiteLLM declared reasoning ladder", () => {
 		if (!spec) throw new Error("expected the Kimi spec");
 		expect(buildModel(spec).thinking?.defaultLevel).toBeUndefined();
 	});
+
+	test("re-derives the merged mode from the selected route", async () => {
+		const specs = await fetchLiteLLMRichModels({
+			api: "anthropic-messages",
+			provider: "litellm",
+			baseUrl: "http://primary:4000/v1",
+			apiKey: "sk-rich",
+			resolveApi: (entry, id) => resolveLiteLLMApi(entry, id, "anthropic-messages"),
+			fetch: vi.fn(async (input: string | URL | Request) => {
+				const url = inputUrl(input);
+				if (url === "http://primary:4000/model_group/info") {
+					return Response.json({
+						data: [
+							{
+								model_name: "proxy-alias",
+								providers: ["openai"],
+								supports_reasoning: true,
+								supports_vision: true,
+								max_input_tokens: 128_000,
+								max_output_tokens: 16_000,
+							},
+						],
+					});
+				}
+				if (url === "http://primary:4000/model/info") {
+					return Response.json({
+						data: [
+							{
+								model_name: "proxy-alias",
+								model_info: { reasoning_effort_levels: ["low", "high"] },
+							},
+						],
+					});
+				}
+				return new Response("{}", { status: 404 });
+			}) as FetchImpl,
+		});
+		const spec = specs?.find(model => model.id === "proxy-alias");
+		expect(spec?.api).toBe("openai-responses");
+		expect(spec?.thinking?.mode).toBe("effort");
+	});
 });

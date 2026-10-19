@@ -6068,14 +6068,6 @@ function mergeLiteLLMRichEndpointModels<TApi extends Api>(
 				? existing.allowsNone
 				: existing.allowsNone && next.allowsNone;
 	const baseThinking = next.model.thinking ?? existing.model.thinking;
-	const thinking =
-		declaredEfforts && declaredEfforts.length > 0
-			? {
-					mode: baseThinking?.mode ?? "effort",
-					efforts: declaredEfforts,
-					...(allowsNone === true ? { requiresEffort: false } : {}),
-				}
-			: baseThinking;
 	const mergedCompat = mergeLiteLLMCompat(existing.model.compat, next.model.compat, {
 		existingReportedParams: existing.hasSupportedOpenAIParams,
 		nextReportedParams: next.hasSupportedOpenAIParams,
@@ -6088,6 +6080,36 @@ function mergeLiteLLMRichEndpointModels<TApi extends Api>(
 			delete compat.reasoningDisableMode;
 		}
 	}
+	// The merged api can differ from the row that contributed the declaration
+	// (`/model_group/info` may identify an OpenAI route while `/model/info` only
+	// supplies the ladder). Re-derive the mode for the selected route so a
+	// Responses/OpenAI model does not inherit Anthropic budget thinking.
+	const declaredMode =
+		declaredEfforts && declaredEfforts.length > 0
+			? (resolveModelPolicy({
+					id: next.model.id,
+					name: next.model.name,
+					api,
+					provider: next.model.provider,
+					baseUrl: next.model.baseUrl,
+					reasoning: true,
+					input: next.model.input,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: next.hasContextWindow ? next.model.contextWindow : existing.model.contextWindow,
+					maxTokens: next.hasMaxTokens ? next.model.maxTokens : existing.model.maxTokens,
+					compat: compat as ModelSpec<TApi>["compat"],
+				}).thinking?.mode ??
+				baseThinking?.mode ??
+				"effort")
+			: undefined;
+	const thinking: ThinkingConfig | undefined =
+		declaredEfforts && declaredEfforts.length > 0
+			? {
+					mode: declaredMode ?? "effort",
+					efforts: declaredEfforts,
+					...(allowsNone === true ? { requiresEffort: false } : {}),
+				}
+			: baseThinking;
 	const model: ModelSpec<TApi> = {
 		...existing.model,
 		api,
