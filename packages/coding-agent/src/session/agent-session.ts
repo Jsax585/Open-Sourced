@@ -7280,6 +7280,11 @@ export class AgentSession implements SettingsScope {
 		return this.#promptTemplates;
 	}
 
+	/** Replace the prompt templates used for `/name args` expansion. */
+	setPromptTemplates(templates: PromptTemplate[]): void {
+		this.#promptTemplates = [...templates];
+	}
+
 	/** Replace file-based slash commands used for prompt expansion. */
 	setSlashCommands(slashCommands: FileSlashCommand[]): void {
 		this.#slashCommands = [...slashCommands];

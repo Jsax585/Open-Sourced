@@ -39,6 +39,8 @@ import {
 	saveModelPreset,
 } from "../../config/model-presets";
 import { resolveAdvisorRoleSelection, resolveModelRoleValue } from "../../config/model-resolver";
+import { loadPromptTemplates } from "../../config/prompt-templates";
+import { buildSnippetChoices, NO_SNIPPETS_MESSAGE } from "../../config/snippets";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { getRoleInfo } from "../../config/model-roles";
 import { settings } from "../../config/settings";
@@ -616,6 +618,24 @@ export class SelectorController {
 			component.setOnRequestRender(() => this.ctx.ui.requestRender());
 			return { component, focus: component };
 		});
+	}
+
+	/** Fuzzy-pick a saved snippet (prompt template) and insert it into the editor at the cursor. */
+	async showSnippetPicker(): Promise<void> {
+		const templates = await loadPromptTemplates({ cwd: this.ctx.sessionManager.getCwd() });
+		const choices = buildSnippetChoices(templates);
+		if (choices.length === 0) {
+			this.ctx.showStatus(NO_SNIPPETS_MESSAGE);
+			return;
+		}
+		const picked = await this.ctx.showHookSelector(
+			"Insert snippet",
+			choices.map(({ label, description }) => ({ label, description })),
+		);
+		const choice = choices.find(c => c.label === picked);
+		if (!choice) return;
+		this.ctx.editor.insertText(choice.insertText);
+		this.ctx.ui.requestRender();
 	}
 
 	/**
