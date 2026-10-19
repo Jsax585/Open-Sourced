@@ -7,11 +7,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getLogPath } from "../../src/dirs";
 import { RotatingFileSink } from "../../src/logger/rotating-file";
-import {
-	restoreTerminalOutput,
-	setTerminalOutputRedirectTarget,
-	suppressTerminalOutput,
-} from "../../src/terminal-output-guard";
+import { setStderrRedirectTarget } from "../../src/stderr-guard";
+import { restoreTerminalOutput, suppressTerminalOutput } from "../../src/terminal-output-guard";
 
 const directory = process.argv[2];
 const nextDay = process.argv[3];
@@ -23,7 +20,7 @@ const sink = new RotatingFileSink({
 	filenameSuffix: String(process.pid),
 	maxBytes: 10 * 1024 * 1024,
 	maxFiles: 5,
-	onRotate: setTerminalOutputRedirectTarget,
+	onRotate: setStderrRedirectTarget,
 });
 
 sink.write(JSON.stringify({ message: "startup-day record" }));

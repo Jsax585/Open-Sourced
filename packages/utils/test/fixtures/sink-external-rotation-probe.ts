@@ -6,11 +6,8 @@
  */
 import * as fs from "node:fs";
 import { RotatingFileSink } from "../../src/logger/rotating-file";
-import {
-	restoreTerminalOutput,
-	setTerminalOutputRedirectTarget,
-	suppressTerminalOutput,
-} from "../../src/terminal-output-guard";
+import { setStderrRedirectTarget } from "../../src/stderr-guard";
+import { restoreTerminalOutput, suppressTerminalOutput } from "../../src/terminal-output-guard";
 
 const directory = process.argv[2];
 const state = process.argv[3] ?? "/tmp/sink-probe-state.txt";
@@ -21,7 +18,7 @@ const sink = new RotatingFileSink({
 	filenameSuffix: String(process.pid),
 	maxBytes: 4096,
 	maxFiles: 5,
-	onRotate: setTerminalOutputRedirectTarget,
+	onRotate: setStderrRedirectTarget,
 });
 
 sink.write(JSON.stringify({ message: "startup record" }));

@@ -10,12 +10,12 @@ import * as path from "node:path";
 import * as tty from "node:tty";
 import { getLogPath } from "./dirs";
 
-interface LibcFdOps {
+export interface LibcFdOps {
 	dup(fd: number): number;
 	dup2(oldFd: number, newFd: number): number;
 }
 
-let libcFdOpsCache: LibcFdOps | undefined;
+let libcFdOpsCache: LibcFdOps | null | undefined;
 let savedStdoutFd: number | null = null;
 let savedStderrFd: number | null = null;
 let stdoutWriteDescriptor: PropertyDescriptor | undefined;
@@ -66,8 +66,13 @@ function restoreStreamWrite(stream: NodeJS.WriteStream, descriptor: PropertyDesc
 	else Reflect.deleteProperty(stream, "write");
 }
 
-function libcFdOps(): LibcFdOps {
-	if (libcFdOpsCache) return libcFdOpsCache;
+/**
+ * Load dup/dup2 from libc, or null when no candidate soname resolves.
+ * Darwin: dyld resolves libSystem from the shared cache. Linux: glibc
+ * first, then the generic soname for musl-style layouts.
+ */
+export function tryLibcFdOps(): LibcFdOps | null {
+	if (libcFdOpsCache !== undefined) return libcFdOpsCache;
 	const candidates =
 		process.platform === "darwin" ? ["libSystem.B.dylib", "/usr/lib/libSystem.B.dylib"] : ["libc.so.6", "libc.so"];
 	for (const candidate of candidates) {
@@ -79,10 +84,19 @@ function libcFdOps(): LibcFdOps {
 			libcFdOpsCache = libc.symbols;
 			return libcFdOpsCache;
 		} catch {
-			// Try the next libc soname; never start an unprotected Unix TUI.
+			// Try the next libc soname.
 		}
 	}
-	throw new Error("Cannot isolate terminal output: libc descriptor operations are unavailable");
+	libcFdOpsCache = null;
+	return null;
+}
+
+function libcFdOps(): LibcFdOps {
+	const ops = libcFdOpsCache ?? tryLibcFdOps();
+	if (!ops) {
+		throw new Error("Cannot isolate terminal output: libc descriptor operations are unavailable");
+	}
+	return ops;
 }
 
 function stderrSharesStdoutTerminal(): boolean {

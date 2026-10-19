@@ -376,227 +376,230 @@ afterEach(async () => {
 	}
 });
 
-describe("terminal output isolation (real ProcessTerminal + TUI in a native PTY)", () => {
-	it("starts inline without inventing a resize when dimensions are unchanged", async () => {
-		const fixture = launchFixture();
-		await fixture.waitFor("ST_READY");
-
-		// Startup with unchanged geometry must not manufacture a resize
-		// transaction (the self-SIGWINCH dim-refresh path): no alt-buffer
-		// entry and no CPR query may appear in the startup byte stream — the
-		// fixture has no fullscreen overlay, so inline start is the contract.
-		const viewport = fixture.snapshotViewport();
-		expect(viewport).toContain(TITLE_SENTINEL);
-		const startup = fixture.rawStream();
-		expect(startup).not.toContain("\x1b[?1049h");
-		expect(startup).not.toContain("\x1b[6n");
-	}, 30_000);
-	it("keeps the viewport clean and preserves inherited child and in-process diagnostics in the omp log while the TUI owns the terminal", async () => {
-		const fixture = launchFixture();
-		await fixture.waitFor("ST_READY");
-
-		// Inherited grandchild diagnostics to fd 1/fd 2 plus ordinary
-		// in-process process.stdout/process.stderr/raw-fd writes, while the
-		// TUI owns the terminal; the fixture then performs an ordinary
-		// (differential) render — not a forced repaint.
-		fixture.session.write("c");
-		await fixture.waitFor("ST_INHERITED_1");
-
-		const viewport = fixture.snapshotViewport();
-		expect(viewport).toContain(TITLE_SENTINEL);
-		expect(viewport).not.toContain(OUT_SENTINEL);
-		expect(viewport).not.toContain(ERR_SENTINEL);
-		expect(viewport).not.toContain(PARENT_OUT_SENTINEL);
-		expect(viewport).not.toContain(PARENT_RAWFD_SENTINEL);
-		expect(viewport).not.toContain(PARENT_ERR_SENTINEL);
-		expect(viewport).not.toContain(PARENT_RAWFD_ERR_SENTINEL);
-		expect(fixture.rawStream()).not.toContain(BUN_OUT_SENTINEL);
-		expect(fixture.rawStream()).not.toContain(BUN_ERR_SENTINEL);
-
-		// The diagnostics must survive, greppable, in the child's isolated
-		// getLogPath() log rather than being discarded. The fixture fences its
-		// in-process writes by flush callback, so every sentinel is on the
-		// redirected fd before the ST_INHERITED_1 marker renders.
-		const log = fixture.logContents();
-		expect(log).toContain(OUT_SENTINEL);
-		expect(log).toContain(ERR_SENTINEL);
-		expect(log).toContain(PARENT_OUT_SENTINEL);
-		expect(log).toContain(PARENT_RAWFD_SENTINEL);
-		expect(log).toContain(PARENT_ERR_SENTINEL);
-		expect(log).toContain(PARENT_RAWFD_ERR_SENTINEL);
-		expect(log).toContain(BUN_OUT_SENTINEL);
-		expect(log).toContain(BUN_ERR_SENTINEL);
-	}, 30_000);
-
-	it("keeps the viewport clean when the child's output is captured", async () => {
-		const fixture = launchFixture();
-		await fixture.waitFor("ST_READY");
-
-		// Control for the regression above: the same diagnostic payload, but
-		// piped and drained by the fixture. Capture must never disturb the
-		// viewport, before or after the isolation fix.
-		fixture.session.write("p");
-		await fixture.waitFor("ST_CAPTURED_1");
-
-		const viewport = fixture.snapshotViewport();
-		expect(viewport).toContain(TITLE_SENTINEL);
-		expect(viewport).not.toContain(OUT_SENTINEL);
-		expect(viewport).not.toContain(ERR_SENTINEL);
-	}, 30_000);
-
-	it("re-isolates inherited child output after an editor-style stop/handoff/restart", async () => {
-		const fixture = launchFixture();
-		await fixture.waitFor("ST_READY");
-
-		// Editor/suspend handoff: the TUI stops (releasing the terminal), an
-		// external program writes through the inherited fds, the TUI restarts.
-		fixture.session.write("e");
-		await fixture.waitFor("ST_HANDOFF_1");
-		// While ownership is released, the external program's bytes must reach
-		// the real terminal — isolation must not swallow released-fd output.
-		expect(fixture.rawStream()).toContain(HANDOFF_OUT_SENTINEL);
-		expect(fixture.rawStream()).toContain(HANDOFF_ERR_SENTINEL);
-
-		// After the restart the TUI owns the terminal again: a further
-		// inherited child must be isolated exactly like before the handoff.
-		fixture.session.write("i");
-		await fixture.waitFor("ST_RESTART_1");
-
-		const viewport = fixture.snapshotViewport();
-		expect(viewport).toContain(TITLE_SENTINEL);
-		expect(viewport).not.toContain(OUT_SENTINEL);
-		expect(viewport).not.toContain(ERR_SENTINEL);
-		expect(viewport).not.toContain(HANDOFF_OUT_SENTINEL);
-
-		// Post-restart inherited diagnostics land in the log; the handoff
-		// program's output must NOT (it had the real terminal).
-		const log = fixture.logContents();
-		expect(log).toContain(OUT_SENTINEL);
-		expect(log).not.toContain(HANDOFF_OUT_SENTINEL);
-	}, 30_000);
-
-	it("leaves a caller-redirected stderr alone: inherited child stderr stays in the caller's file, stdout stays isolated", async () => {
-		const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-isolation-test-"));
-		const callerStderr = path.join(testDir, "caller-stderr.txt");
-		const fixture = launchFixture({ stderrFile: callerStderr });
-		try {
+describe.skipIf(process.platform === "win32")(
+	"terminal output isolation (real ProcessTerminal + TUI in a native PTY)",
+	() => {
+		it("starts inline without inventing a resize when dimensions are unchanged", async () => {
+			const fixture = launchFixture();
 			await fixture.waitFor("ST_READY");
 
-			// The child's fd 2 is the caller's file, NOT the PTY: the guard's
-			// stderrSharesStdoutTerminal branch must be false, so fd 2 must
-			// never be redirected to the log. fd 1 isolation still applies.
+			// Startup with unchanged geometry must not manufacture a resize
+			// transaction (the self-SIGWINCH dim-refresh path): no alt-buffer
+			// entry and no CPR query may appear in the startup byte stream — the
+			// fixture has no fullscreen overlay, so inline start is the contract.
+			const viewport = fixture.snapshotViewport();
+			expect(viewport).toContain(TITLE_SENTINEL);
+			const startup = fixture.rawStream();
+			expect(startup).not.toContain("\x1b[?1049h");
+			expect(startup).not.toContain("\x1b[6n");
+		}, 30_000);
+		it("keeps the viewport clean and preserves inherited child and in-process diagnostics in the omp log while the TUI owns the terminal", async () => {
+			const fixture = launchFixture();
+			await fixture.waitFor("ST_READY");
+
+			// Inherited grandchild diagnostics to fd 1/fd 2 plus ordinary
+			// in-process process.stdout/process.stderr/raw-fd writes, while the
+			// TUI owns the terminal; the fixture then performs an ordinary
+			// (differential) render — not a forced repaint.
 			fixture.session.write("c");
 			await fixture.waitFor("ST_INHERITED_1");
-
-			const callerStderrText = await Bun.file(callerStderr).text();
-			expect(callerStderrText).toContain(ERR_SENTINEL);
-			// The in-process process.stderr write shares the child's fd 2, so
-			// it must also land in the caller's file rather than the log.
-			expect(callerStderrText).toContain(PARENT_ERR_SENTINEL);
-			expect(callerStderrText).toContain(PARENT_RAWFD_ERR_SENTINEL);
-			expect(callerStderrText).toContain(BUN_ERR_SENTINEL);
 
 			const viewport = fixture.snapshotViewport();
 			expect(viewport).toContain(TITLE_SENTINEL);
 			expect(viewport).not.toContain(OUT_SENTINEL);
 			expect(viewport).not.toContain(ERR_SENTINEL);
+			expect(viewport).not.toContain(PARENT_OUT_SENTINEL);
+			expect(viewport).not.toContain(PARENT_RAWFD_SENTINEL);
+			expect(viewport).not.toContain(PARENT_ERR_SENTINEL);
+			expect(viewport).not.toContain(PARENT_RAWFD_ERR_SENTINEL);
+			expect(fixture.rawStream()).not.toContain(BUN_OUT_SENTINEL);
+			expect(fixture.rawStream()).not.toContain(BUN_ERR_SENTINEL);
+
+			// The diagnostics must survive, greppable, in the child's isolated
+			// getLogPath() log rather than being discarded. The fixture fences its
+			// in-process writes by flush callback, so every sentinel is on the
+			// redirected fd before the ST_INHERITED_1 marker renders.
 			const log = fixture.logContents();
 			expect(log).toContain(OUT_SENTINEL);
+			expect(log).toContain(ERR_SENTINEL);
 			expect(log).toContain(PARENT_OUT_SENTINEL);
 			expect(log).toContain(PARENT_RAWFD_SENTINEL);
-			expect(log).not.toContain(ERR_SENTINEL);
-			expect(log).not.toContain(PARENT_ERR_SENTINEL);
-			expect(log).not.toContain(PARENT_RAWFD_ERR_SENTINEL);
+			expect(log).toContain(PARENT_ERR_SENTINEL);
+			expect(log).toContain(PARENT_RAWFD_ERR_SENTINEL);
 			expect(log).toContain(BUN_OUT_SENTINEL);
-			expect(log).not.toContain(BUN_ERR_SENTINEL);
-		} finally {
-			fs.rmSync(testDir, { recursive: true, force: true });
-		}
-	}, 30_000);
+			expect(log).toContain(BUN_ERR_SENTINEL);
+		}, 30_000);
 
-	it("keeps live stdout geometry updating across a native PTY resize while isolated", async () => {
-		const fixture = launchFixture();
-		await fixture.waitFor("ST_READY");
-
-		// After fd 1 is redirected, a cached TTY stream keeps isTTY=true but
-		// stops seeing kernel size updates, so the fixture reports
-		// LIVE_<cols>x<rows> from its own process.stdout every frame. A native
-		// PTY resize must flow through to that public surface and the TUI must
-		// repaint clean at the new size.
-		fixture.session.write("c");
-		await fixture.waitFor("ST_INHERITED_1");
-
-		fixture.session.resize(120, 30);
-		await fixture.waitFor("LIVE_120x30");
-
-		const viewport = fixture.snapshotViewport(120, 30);
-		expect(viewport).toContain(TITLE_SENTINEL);
-		expect(viewport).toContain("LIVE_120x30");
-		expect(viewport).not.toContain(OUT_SENTINEL);
-		expect(viewport).not.toContain(ERR_SENTINEL);
-	}, 30_000);
-
-	it("isolates inherited child and in-process output through the pump-less fallback render path", async () => {
-		const fixture = launchFixture({ fallback: true });
-		await fixture.waitFor("ST_READY");
-
-		// Same contract as the first regression, but the child runs with
-		// PI_TEST_RUNTIME=1, where production intentionally keeps the native
-		// output pump off: the fallback render path (private saved fd) must
-		// keep the viewport clean and diagnostics in the log.
-		fixture.session.write("c");
-		await fixture.waitFor("ST_INHERITED_1");
-
-		const viewport = fixture.snapshotViewport();
-		expect(viewport).toContain(TITLE_SENTINEL);
-		expect(viewport).not.toContain(OUT_SENTINEL);
-		expect(viewport).not.toContain(ERR_SENTINEL);
-		expect(viewport).not.toContain(PARENT_OUT_SENTINEL);
-		expect(viewport).not.toContain(PARENT_RAWFD_SENTINEL);
-		expect(viewport).not.toContain(PARENT_ERR_SENTINEL);
-		expect(viewport).not.toContain(PARENT_RAWFD_ERR_SENTINEL);
-		expect(fixture.rawStream()).not.toContain(BUN_OUT_SENTINEL);
-		expect(fixture.rawStream()).not.toContain(BUN_ERR_SENTINEL);
-		const log = fixture.logContents();
-		expect(log).toContain(OUT_SENTINEL);
-		expect(log).toContain(ERR_SENTINEL);
-		expect(log).toContain(PARENT_OUT_SENTINEL);
-		expect(log).toContain(PARENT_RAWFD_SENTINEL);
-		expect(log).toContain(PARENT_ERR_SENTINEL);
-		expect(log).toContain(PARENT_RAWFD_ERR_SENTINEL);
-		expect(log).toContain(BUN_OUT_SENTINEL);
-		expect(log).toContain(BUN_ERR_SENTINEL);
-	}, 30_000);
-
-	it("restores both descriptors during emergency teardown, including without the pump", async () => {
-		for (const fallback of [false, true]) {
-			const fixture = launchFixture({ fallback });
+		it("keeps the viewport clean when the child's output is captured", async () => {
+			const fixture = launchFixture();
 			await fixture.waitFor("ST_READY");
-			fixture.session.write("x");
-			await fixture.waitFor("OMP_ISOLATION_EMERGENCY_RESTORED stdout");
-			await fixture.waitFor("OMP_ISOLATION_EMERGENCY_RESTORED stderr");
-			expect(fixture.logContents()).not.toContain("OMP_ISOLATION_EMERGENCY_RESTORED");
-			await fixture.shutdown();
-		}
-	}, 30_000);
 
-	it("passes inherited child output straight through the caller's pipes when stdout is not a TTY", async () => {
-		const smoke = await runPipeSmoke();
-		try {
-			// Piped stdout is never isolated: the grandchild's bytes belong to
-			// the caller's pipes, and no omp log may be created.
-			expect(smoke.code).toBe(0);
-			expect(smoke.stdout).toContain(OUT_SENTINEL);
-			expect(smoke.stdout).toContain(PARENT_OUT_SENTINEL);
-			expect(smoke.stdout).toContain(PARENT_RAWFD_SENTINEL);
-			expect(smoke.stderr).toContain(ERR_SENTINEL);
-			expect(smoke.stderr).toContain(PARENT_ERR_SENTINEL);
-			expect(smoke.stderr).toContain(PARENT_RAWFD_ERR_SENTINEL);
-			expect(smoke.stdout).toContain(BUN_OUT_SENTINEL);
-			expect(smoke.stderr).toContain(BUN_ERR_SENTINEL);
-			expect(fs.existsSync(path.join(smoke.home, ".omp", "logs"))).toBe(false);
-		} finally {
-			fs.rmSync(smoke.home, { recursive: true, force: true });
-		}
-	}, 30_000);
-});
+			// Control for the regression above: the same diagnostic payload, but
+			// piped and drained by the fixture. Capture must never disturb the
+			// viewport, before or after the isolation fix.
+			fixture.session.write("p");
+			await fixture.waitFor("ST_CAPTURED_1");
+
+			const viewport = fixture.snapshotViewport();
+			expect(viewport).toContain(TITLE_SENTINEL);
+			expect(viewport).not.toContain(OUT_SENTINEL);
+			expect(viewport).not.toContain(ERR_SENTINEL);
+		}, 30_000);
+
+		it("re-isolates inherited child output after an editor-style stop/handoff/restart", async () => {
+			const fixture = launchFixture();
+			await fixture.waitFor("ST_READY");
+
+			// Editor/suspend handoff: the TUI stops (releasing the terminal), an
+			// external program writes through the inherited fds, the TUI restarts.
+			fixture.session.write("e");
+			await fixture.waitFor("ST_HANDOFF_1");
+			// While ownership is released, the external program's bytes must reach
+			// the real terminal — isolation must not swallow released-fd output.
+			expect(fixture.rawStream()).toContain(HANDOFF_OUT_SENTINEL);
+			expect(fixture.rawStream()).toContain(HANDOFF_ERR_SENTINEL);
+
+			// After the restart the TUI owns the terminal again: a further
+			// inherited child must be isolated exactly like before the handoff.
+			fixture.session.write("i");
+			await fixture.waitFor("ST_RESTART_1");
+
+			const viewport = fixture.snapshotViewport();
+			expect(viewport).toContain(TITLE_SENTINEL);
+			expect(viewport).not.toContain(OUT_SENTINEL);
+			expect(viewport).not.toContain(ERR_SENTINEL);
+			expect(viewport).not.toContain(HANDOFF_OUT_SENTINEL);
+
+			// Post-restart inherited diagnostics land in the log; the handoff
+			// program's output must NOT (it had the real terminal).
+			const log = fixture.logContents();
+			expect(log).toContain(OUT_SENTINEL);
+			expect(log).not.toContain(HANDOFF_OUT_SENTINEL);
+		}, 30_000);
+
+		it("leaves a caller-redirected stderr alone: inherited child stderr stays in the caller's file, stdout stays isolated", async () => {
+			const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-isolation-test-"));
+			const callerStderr = path.join(testDir, "caller-stderr.txt");
+			const fixture = launchFixture({ stderrFile: callerStderr });
+			try {
+				await fixture.waitFor("ST_READY");
+
+				// The child's fd 2 is the caller's file, NOT the PTY: the guard's
+				// stderrSharesStdoutTerminal branch must be false, so fd 2 must
+				// never be redirected to the log. fd 1 isolation still applies.
+				fixture.session.write("c");
+				await fixture.waitFor("ST_INHERITED_1");
+
+				const callerStderrText = await Bun.file(callerStderr).text();
+				expect(callerStderrText).toContain(ERR_SENTINEL);
+				// The in-process process.stderr write shares the child's fd 2, so
+				// it must also land in the caller's file rather than the log.
+				expect(callerStderrText).toContain(PARENT_ERR_SENTINEL);
+				expect(callerStderrText).toContain(PARENT_RAWFD_ERR_SENTINEL);
+				expect(callerStderrText).toContain(BUN_ERR_SENTINEL);
+
+				const viewport = fixture.snapshotViewport();
+				expect(viewport).toContain(TITLE_SENTINEL);
+				expect(viewport).not.toContain(OUT_SENTINEL);
+				expect(viewport).not.toContain(ERR_SENTINEL);
+				const log = fixture.logContents();
+				expect(log).toContain(OUT_SENTINEL);
+				expect(log).toContain(PARENT_OUT_SENTINEL);
+				expect(log).toContain(PARENT_RAWFD_SENTINEL);
+				expect(log).not.toContain(ERR_SENTINEL);
+				expect(log).not.toContain(PARENT_ERR_SENTINEL);
+				expect(log).not.toContain(PARENT_RAWFD_ERR_SENTINEL);
+				expect(log).toContain(BUN_OUT_SENTINEL);
+				expect(log).not.toContain(BUN_ERR_SENTINEL);
+			} finally {
+				fs.rmSync(testDir, { recursive: true, force: true });
+			}
+		}, 30_000);
+
+		it("keeps live stdout geometry updating across a native PTY resize while isolated", async () => {
+			const fixture = launchFixture();
+			await fixture.waitFor("ST_READY");
+
+			// After fd 1 is redirected, a cached TTY stream keeps isTTY=true but
+			// stops seeing kernel size updates, so the fixture reports
+			// LIVE_<cols>x<rows> from its own process.stdout every frame. A native
+			// PTY resize must flow through to that public surface and the TUI must
+			// repaint clean at the new size.
+			fixture.session.write("c");
+			await fixture.waitFor("ST_INHERITED_1");
+
+			fixture.session.resize(120, 30);
+			await fixture.waitFor("LIVE_120x30");
+
+			const viewport = fixture.snapshotViewport(120, 30);
+			expect(viewport).toContain(TITLE_SENTINEL);
+			expect(viewport).toContain("LIVE_120x30");
+			expect(viewport).not.toContain(OUT_SENTINEL);
+			expect(viewport).not.toContain(ERR_SENTINEL);
+		}, 30_000);
+
+		it("isolates inherited child and in-process output through the pump-less fallback render path", async () => {
+			const fixture = launchFixture({ fallback: true });
+			await fixture.waitFor("ST_READY");
+
+			// Same contract as the first regression, but the child runs with
+			// PI_TEST_RUNTIME=1, where production intentionally keeps the native
+			// output pump off: the fallback render path (private saved fd) must
+			// keep the viewport clean and diagnostics in the log.
+			fixture.session.write("c");
+			await fixture.waitFor("ST_INHERITED_1");
+
+			const viewport = fixture.snapshotViewport();
+			expect(viewport).toContain(TITLE_SENTINEL);
+			expect(viewport).not.toContain(OUT_SENTINEL);
+			expect(viewport).not.toContain(ERR_SENTINEL);
+			expect(viewport).not.toContain(PARENT_OUT_SENTINEL);
+			expect(viewport).not.toContain(PARENT_RAWFD_SENTINEL);
+			expect(viewport).not.toContain(PARENT_ERR_SENTINEL);
+			expect(viewport).not.toContain(PARENT_RAWFD_ERR_SENTINEL);
+			expect(fixture.rawStream()).not.toContain(BUN_OUT_SENTINEL);
+			expect(fixture.rawStream()).not.toContain(BUN_ERR_SENTINEL);
+			const log = fixture.logContents();
+			expect(log).toContain(OUT_SENTINEL);
+			expect(log).toContain(ERR_SENTINEL);
+			expect(log).toContain(PARENT_OUT_SENTINEL);
+			expect(log).toContain(PARENT_RAWFD_SENTINEL);
+			expect(log).toContain(PARENT_ERR_SENTINEL);
+			expect(log).toContain(PARENT_RAWFD_ERR_SENTINEL);
+			expect(log).toContain(BUN_OUT_SENTINEL);
+			expect(log).toContain(BUN_ERR_SENTINEL);
+		}, 30_000);
+
+		it("restores both descriptors during emergency teardown, including without the pump", async () => {
+			for (const fallback of [false, true]) {
+				const fixture = launchFixture({ fallback });
+				await fixture.waitFor("ST_READY");
+				fixture.session.write("x");
+				await fixture.waitFor("OMP_ISOLATION_EMERGENCY_RESTORED stdout");
+				await fixture.waitFor("OMP_ISOLATION_EMERGENCY_RESTORED stderr");
+				expect(fixture.logContents()).not.toContain("OMP_ISOLATION_EMERGENCY_RESTORED");
+				await fixture.shutdown();
+			}
+		}, 30_000);
+
+		it("passes inherited child output straight through the caller's pipes when stdout is not a TTY", async () => {
+			const smoke = await runPipeSmoke();
+			try {
+				// Piped stdout is never isolated: the grandchild's bytes belong to
+				// the caller's pipes, and no omp log may be created.
+				expect(smoke.code).toBe(0);
+				expect(smoke.stdout).toContain(OUT_SENTINEL);
+				expect(smoke.stdout).toContain(PARENT_OUT_SENTINEL);
+				expect(smoke.stdout).toContain(PARENT_RAWFD_SENTINEL);
+				expect(smoke.stderr).toContain(ERR_SENTINEL);
+				expect(smoke.stderr).toContain(PARENT_ERR_SENTINEL);
+				expect(smoke.stderr).toContain(PARENT_RAWFD_ERR_SENTINEL);
+				expect(smoke.stdout).toContain(BUN_OUT_SENTINEL);
+				expect(smoke.stderr).toContain(BUN_ERR_SENTINEL);
+				expect(fs.existsSync(path.join(smoke.home, ".omp", "logs"))).toBe(false);
+			} finally {
+				fs.rmSync(smoke.home, { recursive: true, force: true });
+			}
+		}, 30_000);
+	},
+);

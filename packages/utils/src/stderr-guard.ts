@@ -10,40 +10,10 @@
  * legacy calls report suppression and leave the descriptors alone; the
  * unified release path restores them.
  */
-import { dlopen, FFIType } from "bun:ffi";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getLogPath } from "./dirs";
-import { isTerminalOutputSuppressed, setTerminalOutputRedirectTarget } from "./terminal-output-guard";
-
-interface LibcFdOps {
-	dup(fd: number): number;
-	dup2(oldFd: number, newFd: number): number;
-}
-
-let libcFdOpsCache: LibcFdOps | null = null;
-
-function libcFdOps(): LibcFdOps | null {
-	if (libcFdOpsCache !== null) return libcFdOpsCache;
-	if (process.platform === "win32") return null;
-	// Darwin: dyld resolves libSystem from the shared cache. Linux: glibc
-	// first, then the generic soname for musl-style layouts.
-	const candidates =
-		process.platform === "darwin" ? ["libSystem.B.dylib", "/usr/lib/libSystem.B.dylib"] : ["libc.so.6", "libc"];
-	for (const candidate of candidates) {
-		try {
-			const libc = dlopen(candidate, {
-				dup: { args: [FFIType.i32], returns: FFIType.i32 },
-				dup2: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
-			});
-			libcFdOpsCache = libc.symbols as LibcFdOps;
-			return libcFdOpsCache;
-		} catch {
-			// Try the next candidate; the guard stays inert if none load.
-		}
-	}
-	return null;
-}
+import { isTerminalOutputSuppressed, setTerminalOutputRedirectTarget, tryLibcFdOps } from "./terminal-output-guard";
 
 /**
  * True when fd 2 writes would land on the same terminal the caller prints
@@ -89,7 +59,7 @@ export function suppressTerminalStderr(options?: SuppressTerminalStderrOptions):
 	if (isTerminalOutputSuppressed()) return true;
 	if (savedStderrFd !== null) return true;
 	if (!options?.force && !stderrSharesStdoutTerminal()) return false;
-	const libc = libcFdOps();
+	const libc = tryLibcFdOps();
 	if (!libc) return false;
 
 	let redirectFd: number;
@@ -125,17 +95,16 @@ export function suppressTerminalStderr(options?: SuppressTerminalStderrOptions):
 
 /**
  * Point fd 2 at `logPath`, the log file the rotating sink is currently
- * writing; the logger calls this on every sink rotation. With the unified
- * guard active this forwards to it (both descriptors follow the live file).
+ * writing; the logger calls this on every rotation, and eagerly once when
+ * the sink opens its file. The unified guard always records the path (its
+ * suppression adopts the live file later); an active legacy suppression is
+ * re-pointed here directly.
  */
 export function setStderrRedirectTarget(logPath: string): void {
 	redirectTarget = logPath;
-	if (isTerminalOutputSuppressed()) {
-		setTerminalOutputRedirectTarget(logPath);
-		return;
-	}
+	setTerminalOutputRedirectTarget(logPath);
 	if (savedStderrFd === null) return;
-	const libc = libcFdOps();
+	const libc = tryLibcFdOps();
 	if (!libc) return;
 	let redirectFd: number;
 	try {
@@ -157,7 +126,7 @@ export function restoreTerminalStderr(): void {
 	if (isTerminalOutputSuppressed()) return;
 	const saved = savedStderrFd;
 	savedStderrFd = null;
-	libcFdOps()?.dup2(saved, 2);
+	tryLibcFdOps()?.dup2(saved, 2);
 	try {
 		fs.closeSync(saved);
 	} catch {

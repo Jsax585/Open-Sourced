@@ -2,15 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed unmanaged stdout and stderr corrupting interactive terminal displays, including inherited child-process output and log rotation ([#16159](https://github.com/can1357/oh-my-pi/pull/16159) by [@tommymorgan](https://github.com/tommymorgan)).
+
 ## [18.12.2] - 2026-10-18
 
 ### Added
 
 - Added `readSalvageableRows()` to read the rows of a damaged SQLite table that are still readable, skipping only the damaged pages ([#15751](https://github.com/can1357/oh-my-pi/pull/15751) by [@Shadorain](https://github.com/Shadorain))
-
-### Fixed
-
-- Fixed unmanaged stdout and stderr corrupting interactive terminal displays, including inherited child-process output and log rotation ([#16159](https://github.com/can1357/oh-my-pi/pull/16159) by [@tommymorgan](https://github.com/tommymorgan)).
 
 ## [18.12.0] - 2026-10-17
 

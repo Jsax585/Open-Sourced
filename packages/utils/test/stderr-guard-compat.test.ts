@@ -78,4 +78,76 @@ describe("stderr-guard compatibility surface", () => {
 			}
 		},
 	);
+
+	it.skipIf(process.platform === "win32")(
+		"fd 2 follows log rotation while only the legacy guard is active",
+		async () => {
+			const root = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-stderr-rotation-"));
+			temporaryDirectories.push(root);
+			const child = Bun.spawn(
+				[
+					process.execPath,
+					path.resolve(import.meta.dir, "fixtures/legacy-stderr-rotation-probe.ts"),
+					root,
+					path.join(root, "state.txt"),
+				],
+				{
+					env: { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
+					terminal: {},
+					timeout: 10_000,
+				},
+			);
+			try {
+				expect(await child.exited).toBe(0);
+				const state = fs.readFileSync(path.join(root, "state.txt"), "utf8");
+				expect(state).toContain("has-active=true");
+				expect(state).toContain("suppressed=true");
+				expect(state).toContain("marker-followed-rotation=true");
+			} finally {
+				child.kill();
+			}
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"the postmortem fatal-restore sequence returns fd 2 under legacy suppression",
+		async () => {
+			const root = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-fatal-restore-"));
+			temporaryDirectories.push(root);
+			const chunks: Buffer[] = [];
+			const terminalExited = Promise.withResolvers<void>();
+			const child = Bun.spawn(
+				[
+					process.execPath,
+					path.resolve(import.meta.dir, "fixtures/legacy-fatal-restore-probe.ts"),
+					root,
+					path.join(root, "state.txt"),
+				],
+				{
+					env: { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
+					terminal: {
+						data(_terminal, data) {
+							chunks.push(Buffer.from(data));
+						},
+						exit() {
+							terminalExited.resolve();
+						},
+					},
+					timeout: 10_000,
+				},
+			);
+			try {
+				expect(await child.exited).toBe(0);
+				await terminalExited.promise;
+				const state = fs.readFileSync(path.join(root, "state.txt"), "utf8");
+				expect(state).toContain("suppressed=true");
+				const output = Buffer.concat(chunks).toString("utf8");
+				expect(output).toContain("fatal-report-marker");
+				const redirected = fs.readFileSync(path.join(root, "legacy-stderr.log"), "utf8");
+				expect(redirected).not.toContain("fatal-report-marker");
+			} finally {
+				child.kill();
+			}
+		},
+	);
 });
