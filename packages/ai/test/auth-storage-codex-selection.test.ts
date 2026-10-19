@@ -15,6 +15,7 @@ import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from
 import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/registry/oauth/types";
 import type { UsageLimit, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai/usage";
+import { logger } from "@oh-my-pi/pi-utils";
 import { OAuthRefresher } from "../src/auth/refresh";
 import { removeWithRetries } from "../../utils/src/temp";
 
@@ -4543,6 +4544,27 @@ describe("AuthStorage claude oauth ranking", () => {
 			usageByAccount.set("acct-paid", usage("acct-paid", 1));
 
 			expect(await storage.keys.get("anthropic", "included-spent")).toBeUndefined();
+		});
+
+		test("logs which includedOnly account was withheld, why, and when it resets", async () => {
+			const storage = await openWithPolicy(["paid@example.com"]);
+			await storage.credentials.set("anthropic", [
+				{ type: "oauth", ...createCredential("acct-paid", "paid@example.com") },
+			]);
+			const report = usage("acct-paid", 1);
+			usageByAccount.set("acct-paid", report);
+			const resetsAt = report.limits.find(limit => limit.status === "exhausted")?.window?.resetsAt;
+			if (resetsAt === undefined) throw new Error("expected an exhausted window with a reset");
+			const debug = vi.spyOn(logger, "debug");
+
+			expect(await storage.keys.get("anthropic", "included-withheld-log")).toBeUndefined();
+			expect(debug).toHaveBeenCalledWith("includedOnly policy withheld OAuth account", {
+				provider: "anthropic",
+				index: 0,
+				account: "paid@example.com",
+				reason: "included usage spent",
+				resetsAt: new Date(resetsAt).toISOString(),
+			});
 		});
 
 		test("skips an includedOnly account whose usage cannot be measured", async () => {
