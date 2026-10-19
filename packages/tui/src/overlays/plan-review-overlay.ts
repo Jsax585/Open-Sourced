@@ -1261,7 +1261,6 @@ export class PlanReviewOverlay implements Component {
 		switch (this.#focus) {
 			case "actions":
 				parts.push(`${upDown} select`, `${enter} confirm`);
-				if (this.callbacks.onPickExecutionModel) parts.push(`${formatKeyHint("m")} any model`);
 				if (this.#slider) parts.push(`${formatKeyHints(["left", "right"])} model`);
 				break;
 			case "toc":
@@ -1287,6 +1286,7 @@ export class PlanReviewOverlay implements Component {
 				break;
 		}
 		if (this.callbacks.onCopyPlan) parts.push(`${formatKeyHint("c")} copy`);
+		if (this.callbacks.onPickExecutionModel) parts.push(`${formatKeyHint("m")} any model`);
 		parts.push(`${formatKeyHint("tab")} regions`);
 		if (this.#externalEditorLabel && this.#focus !== "toc") parts.push(`${this.#externalEditorLabel} editor`);
 		parts.push(this.#helpSuffix ?? `${editorKey("tui.select.cancel")} cancel`);
@@ -1862,7 +1862,6 @@ export class PlanReviewOverlay implements Component {
 			case "actions":
 				hints.push(key(["left", "right"], "select"), key("enter", "confirm"));
 				if (this.#slider) hints.push(key(["shift+left", "shift+right"], "model"));
-				if (this.callbacks.onPickExecutionModel) hints.push(key("m", "any model"));
 				break;
 			case "toc":
 				hints.push(
@@ -1886,6 +1885,7 @@ export class PlanReviewOverlay implements Component {
 				);
 				break;
 		}
+		if (this.callbacks.onPickExecutionModel) hints.push(key("m", "any model"));
 		// Copy and the external editor are head buttons with their keycaps; the hints skip them.
 		hints.push(key("tab", "regions"));
 		hints.push(this.#helpSuffix ? { keys: [], label: this.#helpSuffix } : actionHint("tui.select.cancel", "cancel"));

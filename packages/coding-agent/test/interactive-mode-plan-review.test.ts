@@ -2018,6 +2018,44 @@ describe("InteractiveMode plan review rendering", () => {
 			expect(session.model?.id).toBe(def.id);
 		});
 
+		it("applies the pin on Approve and compact context when no plan role is configured", async () => {
+			authStorage.keys.setRuntime("anthropic", "test-key");
+			const haiku = session.modelRegistry.find("anthropic", "claude-haiku-4-5");
+			if (!haiku) throw new Error("Expected haiku to exist in registry");
+			// No plan role: plan-mode entry records no pre-plan model state, so the
+			// deferred compact-path transition must not depend on it.
+			session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
+			const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+				getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+				getSessionId: () => session.sessionManager.getSessionId(),
+			});
+			await Bun.write(resolvedPlanPath, "# Plan\n\nCompact then run on haiku.");
+			await mode.handlePlanModeCommand();
+			expect(session.getPlanModeState()?.enabled).toBe(true);
+			vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
+			vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+			vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and compact context");
+			vi.spyOn(mode, "handleCompactCommand").mockResolvedValue("ok");
+
+			expect(mode.setPlanExecutionModel(haiku)).toBe(true);
+			await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+
+			expect(session.model?.id).toBe(haiku.id);
+		});
+
+		it("refuses to pin a model whose provider has no credentials", async () => {
+			await enterPlanModeOnSonnet();
+			const unauthenticated = session.modelRegistry
+				.getAll()
+				.find(model => !session.modelRegistry.hasConfiguredAuth(model));
+			if (!unauthenticated) throw new Error("Expected a model without configured auth in the registry");
+
+			expect(mode.setPlanExecutionModel(unauthenticated)).toBe(false);
+
+			vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and keep context");
+			await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+			expect(session.model?.id).toBe("claude-sonnet-4-5");
+		});
 		it("picks through the picker opened from the review with m and hands the keys back to the review", async () => {
 			const haiku = session.modelRegistry.find("anthropic", "claude-haiku-4-5");
 			if (!haiku) throw new Error("Expected haiku to exist in registry");

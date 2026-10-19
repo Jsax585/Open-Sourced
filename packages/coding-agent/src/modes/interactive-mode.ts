@@ -83,7 +83,12 @@ import { CollabController } from "../collab/controller";
 import type { CollabHost } from "../collab/host";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey, rawKeyHint } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
-import { formatModelString, type ResolvedModelRoleValue, resolveSessionModelSelector } from "../config/model-resolver";
+import {
+	formatModelString,
+	formatModelStringWithRouting,
+	type ResolvedModelRoleValue,
+	resolveSessionModelSelector,
+} from "../config/model-resolver";
 import { isSettingsInitialized, Settings, settings } from "../config/settings";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
@@ -5245,21 +5250,26 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/**
 	 * Idempotent post-compaction model transition for the plan-approval compact
-	 * path. The deferred pre-plan state is consumed on first application, so a
-	 * second call (the before-flush hook vs. the short-circuit fallback) is a
-	 * no-op. "failed" intentionally stays on the plan model — the context is
-	 * intact and we dispatch best-effort.
+	 * path. `transition.done` is set on first application, so a second call (the
+	 * before-flush hook vs. the short-circuit fallback) is a no-op. An execution
+	 * target applies even with no recorded pre-plan state (no `plan` role, or a
+	 * resumed plan session); the pre-plan state only drives the restore fallback.
+	 * "failed" intentionally stays on the plan model — the context is intact and
+	 * we dispatch best-effort.
 	 */
 	async #applyDeferredPlanModelTransition(
 		outcome: CompactionOutcome | undefined,
 		executionModel: PlanExecutionTarget | undefined,
+		transition: { done: boolean },
 	): Promise<void> {
 		const deferredPrev = this.#planModePreviousModelState;
-		if (deferredPrev === undefined || outcome === "failed") return;
+		if (transition.done || outcome === "failed") return;
+		if (deferredPrev === undefined && !executionModel) return;
+		transition.done = true;
 		this.#planModePreviousModelState = undefined;
 		if (executionModel) {
 			await this.#applyPlanExecutionModel(executionModel);
-		} else {
+		} else if (deferredPrev) {
 			await this.#restorePlanPreviousModel(deferredPrev);
 		}
 	}
@@ -5630,7 +5640,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#getPlanApprovalContextUsage(): ContextUsage | undefined {
-		const executionModel = this.#planModePreviousModelState?.model ?? this.session.model;
+		const executionModel =
+			this.#planExecutionPin?.model ?? this.#planModePreviousModelState?.model ?? this.session.model;
 		const contextWindow = executionModel?.contextWindow;
 		if (typeof contextWindow === "number") {
 			return this.session.getContextUsage({ contextWindow });
@@ -5866,37 +5877,34 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #applyPlanExecutionModel(target: PlanExecutionTarget | undefined): Promise<void> {
 		if (!target) return;
+		let label: string;
+		let apply: () => Promise<void>;
 		if (target.kind === "role") {
 			const entry = target.entry;
-			try {
-				await this.session.applyRoleModel(entry);
-				this.statusLine.invalidate();
-				this.updateEditorBorderColor();
-				this.showStatus(`Continuing with ${entry.role}: ${entry.model.name || entry.model.id}`);
-			} catch (error) {
-				this.showWarning(
-					`Could not switch to the ${entry.role} model: ${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
-			return;
-		}
-		try {
-			if (modelsAreEqual(this.session.model, target.model)) {
-				// Same model — only thinking level may differ; avoid resetting the provider session.
-				if (target.thinkingLevel !== undefined) this.session.setThinkingLevel(target.thinkingLevel);
-			} else {
+			label = `${entry.role}: ${entry.model.name || entry.model.id}`;
+			apply = () => this.session.applyRoleModel(entry);
+		} else {
+			label = target.label;
+			apply = async () => {
+				const current = this.session.model;
+				if (current && formatModelStringWithRouting(current) === formatModelStringWithRouting(target.model)) {
+					// Same model and route — only thinking level may differ; avoid resetting the provider session.
+					if (target.thinkingLevel !== undefined) this.session.setThinkingLevel(target.thinkingLevel);
+					return;
+				}
 				await this.session.setModelTemporary(
 					target.model,
 					target.thinkingLevel ?? this.session.resolveTemporaryModelThinkingLevel(target.model),
 				);
-			}
+			};
+		}
+		try {
+			await apply();
 			this.statusLine.invalidate();
 			this.updateEditorBorderColor();
-			this.showStatus(`Continuing with ${target.label}`);
+			this.showStatus(`Continuing with ${label}`);
 		} catch (error) {
-			this.showWarning(
-				`Could not switch to ${target.label}: ${error instanceof Error ? error.message : String(error)}`,
-			);
+			this.showWarning(`Could not switch to ${label}: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
@@ -5935,6 +5943,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.session.markPlanInternalAbortPending();
 		}
 		let compactOutcome: CompactionOutcome | undefined;
+		const transition = { done: false };
 		try {
 			await this.#exitPlanMode({
 				silent: true,
@@ -5976,7 +5985,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				compactOutcome = await this.handleCompactCommand(
 					undefined,
 					undefined,
-					outcome => this.#applyDeferredPlanModelTransition(outcome, options.executionModel),
+					outcome => this.#applyDeferredPlanModelTransition(outcome, options.executionModel, transition),
 					compactionPrompt,
 				);
 			}
@@ -6027,7 +6036,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// lands on the plan model. "failed" stays on the plan model (context
 		// intact) and dispatches best-effort.
 		if (options.compactBeforeExecute) {
-			await this.#applyDeferredPlanModelTransition(compactOutcome, options.executionModel);
+			await this.#applyDeferredPlanModelTransition(compactOutcome, options.executionModel, transition);
 		} else {
 			await this.#applyPlanExecutionModel(options.executionModel);
 		}
@@ -6812,12 +6821,22 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning("Plan mode is not active.");
 			return false;
 		}
-		const label = formatModelString(model);
+		if (!this.session.modelRegistry.hasConfiguredAuth(model)) {
+			this.showError(`No credentials configured for ${formatModelString(model)}.`);
+			return false;
+		}
+		const label = `${formatModelStringWithRouting(model)}${thinkingLevel === undefined ? "" : `:${thinkingLevel}`}`;
 		this.#planExecutionPin = { model, thinkingLevel, label };
 		this.#planReviewOverlay?.setExecutionNotice(label);
 		this.ui.requestRender();
 		const planning = this.session.model ? formatModelString(this.session.model) : "the current model";
 		this.showStatus(`Execution model: ${label} — applies when you approve the plan; planning stays on ${planning}.`);
+		const tokens = this.session.getContextUsage()?.tokens ?? 0;
+		if (typeof model.contextWindow === "number" && tokens > model.contextWindow) {
+			this.showWarning(
+				`${label} has a smaller context window than this session; use "Approve and compact context" to execute on it.`,
+			);
+		}
 		return true;
 	}
 
