@@ -121,6 +121,22 @@ describe("logger file batching", () => {
 });
 
 describe("RotatingFileSink batching", () => {
+	test("external growth rotates on the watch cadence without further records", async () => {
+		const watchDir = path.join(dir, "watch");
+		fs.mkdirSync(watchDir);
+		const sink = makeSink(watchDir, { intervalMs: 300, maxBytes: FLUSH_BYTES });
+		sink.write("only record");
+		sink.flush();
+		const active = fs.readdirSync(watchDir).sort()[0];
+		// An inherited child keeps appending through fd 1/2 with no logger
+		// records in between; rotation must still happen on its own cadence.
+		fs.appendFileSync(path.join(watchDir, active), "z".repeat(5_000));
+		await Bun.sleep(800);
+		const names = fs.readdirSync(watchDir);
+		expect(names.length).toBeGreaterThanOrEqual(2);
+		sink.close();
+	});
+
 	test("external file growth is sampled on a throttled cadence, not per record", async () => {
 		const externalDir = path.join(dir, "external");
 		fs.mkdirSync(externalDir);

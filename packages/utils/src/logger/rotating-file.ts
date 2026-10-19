@@ -67,6 +67,8 @@ export class RotatingFileSink {
 	#activeBytes = 0;
 	/** Last wall-clock external-size sample; see #selectFile. */
 	#lastExternalCheckMs = 0;
+	/** Cadence timer so external growth rotates even with no records. */
+	#externalWatchTimer: NodeJS.Timeout | undefined;
 	#closed = false;
 	// Held append fd: one descriptor per active file instead of
 	// open+write+close per line. It is reopened on rotation and closed on
@@ -169,6 +171,10 @@ export class RotatingFileSink {
 	/** Write buffered records, then stop accepting records. */
 	close(): void {
 		if (this.#closed) return;
+		if (this.#externalWatchTimer !== undefined) {
+			clearInterval(this.#externalWatchTimer);
+			this.#externalWatchTimer = undefined;
+		}
 		try {
 			this.flush();
 		} catch {
@@ -211,6 +217,14 @@ export class RotatingFileSink {
 			this.#activeIndex++;
 			this.#setActivePath(day, this.#activeIndex);
 		}
+		if (this.#activeIndex > 0 && this.#activePath) {
+			// Rotation may have been triggered by the external-growth watch with
+			// no logger record behind it; open the new file and notify onRotate
+			// immediately so redirected fd 1/2 re-point without waiting for the
+			// next write, and the rotated-to file exists for retention accounting.
+			this.#registerFile(this.#activePath);
+			this.#openFd(this.#activePath);
+		}
 	}
 
 	#setActivePath(day: string, index: number): void {
@@ -227,6 +241,32 @@ export class RotatingFileSink {
 		// The fresh file's authoritative size was just sampled; start the
 		// external-check window here so following records stay on the counter.
 		this.#lastExternalCheckMs = Date.now();
+		this.#startExternalWatch();
+	}
+
+	/**
+	 * fd 1/2 redirected onto the active log keep appending even when no logger
+	 * record arrives (an inherited child can be the only producer), so the
+	 * size cap needs a cadence independent of `write()`. Each tick runs the
+	 * same throttled sample `#selectFile` applies per record.
+	 */
+	#startExternalWatch(): void {
+		if (this.#externalWatchTimer !== undefined || this.#closed) return;
+		const intervalMs = this.#batch?.intervalMs ?? 1_000;
+		this.#externalWatchTimer = setInterval(() => {
+			try {
+				this.checkExternalGrowth();
+			} catch {
+				// A background check has no caller to report to; logging never throws.
+			}
+		}, intervalMs);
+		this.#externalWatchTimer.unref();
+	}
+
+	/** Run the external-size sample and rotate if the cap is exceeded. */
+	checkExternalGrowth(): void {
+		if (this.#closed) return;
+		this.#selectFile(localDay(new Date()));
 	}
 
 	#registerFile(filePath: string): void {
