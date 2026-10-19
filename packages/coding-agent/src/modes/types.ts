@@ -114,8 +114,8 @@ export interface ShowStatusOptions {
 }
 
 export interface SelectOnlyModelSelectorOptions {
-	/** Use the selected `provider/id` for the caller's operation without mutating session defaults. */
-	onSelect: (selector: string) => void | Promise<void>;
+	/** Use the selected `provider/id` for the caller's operation without mutating session defaults. `model` is the picked entry, route variant included. */
+	onSelect: (selector: string, model: Model) => void | Promise<void>;
 	/** `provider/id` initially highlighted in the picker. */
 	currentSelector?: string;
 	/** Component to focus once the picker closes; undefined (or omitted) falls back to the editor area. */

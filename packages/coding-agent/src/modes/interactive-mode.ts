@@ -6869,13 +6869,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			selectOnly: {
 				currentSelector: preselect ? formatModelString(preselect) : undefined,
 				focusAfter: () => this.#planReviewOverlay,
-				onSelect: selector => {
-					const resolved = resolveSessionModelSelector(this.session.modelRegistry, selector);
-					if (!resolved) {
+				onSelect: (selector, picked) => {
+					const parsed = resolveSessionModelSelector(this.session.modelRegistry, selector);
+					if (!parsed) {
 						this.showError(`Unknown model: ${selector}`);
 						return;
 					}
-					this.setPlanExecutionModel(resolved.model, resolved.thinkingLevel);
+					// Keep the picker's model object: re-resolving `provider/id` drops an upstream route.
+					this.setPlanExecutionModel(picked, parsed.thinkingLevel);
 				},
 			},
 		});

@@ -869,7 +869,7 @@ export class SelectorController {
 					if (selectOnly) {
 						done();
 						try {
-							await selectOnly.onSelect(selector);
+							await selectOnly.onSelect(selector, model);
 						} catch (error) {
 							this.ctx.showError(sanitizeErrorLine(error));
 						}
