@@ -96,7 +96,16 @@ class "minimax" {
 	// as litellm whose provider id never matches a native MiniMax host. Keep the
 	// rules at class scope so dynamic providers inherit them; a host that
 	// genuinely differs can override them with a provider-scoped rule.
-	models "MiniMax-M3.1-Flash" "MiniMax-M3.1-Flash-Preview" {
+	// Glob selectors match the lowercased id, so one rule covers every served
+	// spelling of the model (`MiniMax-M3.1-Flash`, `-Preview`, Ollama Cloud's
+	// `minimax-m3.1-flash`, OpenRouter/OpenCode's `minimax/...` and `-free`/`:free`
+	// routing variants) without enumerating ids. The `flash` token keeps the rule
+	// off other M3.1 SKUs such as SambaNova's `MiniMax-M3.1`. Limits stay with
+	// each catalog row; this rule only owns thinking.
+	//
+	// Sampling rejection is narrower: only ids ending in the launch spelling.
+	// Preview and the free routing variants keep whatever their host declares.
+	models "*m3.1*flash*" {
 		thinking-requires-effort #true
 		thinking-efforts "low" "medium" "high" "xhigh" "max"
 		thinking-effort-map {
@@ -105,7 +114,7 @@ class "minimax" {
 			high "high"
 		}
 	}
-	models "MiniMax-M3.1-Flash" {
+	models "*m3.1-flash" {
 		supports-sampling-params #false
 	}
 	// Token Plan rows ride the Anthropic route; these OpenAI-only wire axes

@@ -76,18 +76,26 @@ describe("outlier catalog policies", () => {
 	});
 
 	test("MiniMax M3.1 keeps its model-intrinsic rules on proxy providers", () => {
-		for (const id of ["MiniMax-M3.1-Flash", "MiniMax-M3.1-Flash-Preview"]) {
-			const model = buildModel({
-				...chatSpec("litellm", "anthropic-messages", id),
-				reasoning: true,
-			});
+		const cases = [
+			["litellm", "anthropic-messages", "MiniMax-M3.1-Flash"],
+			["litellm", "anthropic-messages", "MiniMax-M3.1-Flash-Preview"],
+			["ollama-cloud", "ollama-chat", "minimax-m3.1-flash"],
+			["opencode-go", "openai-completions", "minimax-m3.1-flash-free"],
+			["openrouter", "openrouter", "minimax/minimax-m3.1-flash:free"],
+		] as const;
+		for (const [provider, api, id] of cases) {
+			const model = buildModel({ ...chatSpec(provider, api, id), reasoning: true });
 			expect(model.thinking).toMatchObject({
-				mode: "anthropic-adaptive",
 				efforts: ["low", "medium", "high", "xhigh", "max"],
 				requiresEffort: true,
 			});
+			if (api === "anthropic-messages") {
+				expect(model.thinking?.mode).toBe("anthropic-adaptive");
+			}
 		}
 
+		// The sampling axis is not part of the Ollama compat record; Ollama's
+		// native API owns that surface rather than the model-row declaration.
 		const launch = buildModel({
 			...chatSpec("litellm", "anthropic-messages", "MiniMax-M3.1-Flash"),
 			reasoning: true,
