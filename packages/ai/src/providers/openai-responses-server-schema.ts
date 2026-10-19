@@ -320,7 +320,7 @@ const customToolSchema = type({
 const namespaceToolSchema = type({
 	type: "'namespace'",
 	name: "string >= 1",
-	description: "string",
+	"description?": "string",
 	tools: toolSchema.or(customToolSchema).array(),
 });
 

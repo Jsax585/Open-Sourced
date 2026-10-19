@@ -560,7 +560,7 @@ export interface NamespaceTool {
 	/**
 	 * A description of the namespace shown to the model.
 	 */
-	description: string;
+	description?: string;
 	/**
 	 * The namespace name used in tool calls (for example, `crm`).
 	 */

@@ -353,7 +353,6 @@ describe("openai-codex Responses Lite input shaping", () => {
 			{
 				type: "namespace",
 				name: "clock",
-				description: "Time tools",
 				tools: [
 					{
 						type: "function",
@@ -404,7 +403,6 @@ describe("openai-codex Responses Lite input shaping", () => {
 				{
 					type: "namespace",
 					name: "clock",
-					description: "Time tools",
 					tools: [
 						{
 							type: "function",

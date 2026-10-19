@@ -5157,7 +5157,7 @@ type CodexToolPayload =
 			type: "function";
 			name: string;
 			namespace?: string;
-			description: string;
+			description?: string;
 			parameters: Record<string, unknown>;
 			strict?: boolean;
 	  }
@@ -5165,10 +5165,10 @@ type CodexToolPayload =
 			type: "custom";
 			name: string;
 			namespace?: string;
-			description: string;
+			description?: string;
 			format: { type: "grammar" | "text"; syntax?: "lark" | "regex"; definition?: string };
 	  }
-	| { type: "namespace"; name: string; description: string; tools: unknown[] };
+	| { type: "namespace"; name: string; description?: string; tools: unknown[] };
 
 /** @internal Exported for tests. */
 export function convertOpenAICodexResponsesTools(
@@ -5177,7 +5177,7 @@ export function convertOpenAICodexResponsesTools(
 ): CodexToolPayload[] {
 	if (tools.some(tool => tool.responsesDefinition !== undefined)) {
 		const payloads: CodexToolPayload[] = [];
-		const namespaces = new Map<string, { type: "namespace"; name: string; description: string; tools: unknown[] }>();
+		const namespaces = new Map<string, { type: "namespace"; name: string; description?: string; tools: unknown[] }>();
 		for (const tool of tools) {
 			if (tool.namespace) {
 				const namespace = tool.responsesNamespaceDefinition;
@@ -5192,7 +5192,7 @@ export function convertOpenAICodexResponsesTools(
 				const group = namespaces.get(tool.namespace) ?? {
 					type: "namespace" as const,
 					name: namespace.name,
-					description: namespace.description,
+					...(namespace.description !== undefined ? { description: namespace.description } : {}),
 					tools: [],
 				};
 				if (group.description !== namespace.description) {

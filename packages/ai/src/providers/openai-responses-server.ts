@@ -269,7 +269,7 @@ function buildTools(tools: unknown[] | undefined): Tool[] | undefined {
 					throw new AIError.ValidationError("openai-responses: namespace custom tools are unsupported");
 				out.push({
 					name: `${t.name}.${fn.name}`,
-					description: fn.description ?? t.description,
+					description: fn.description ?? t.description ?? "",
 					parameters: (fn.parameters ?? {}) as Tool["parameters"],
 					strict: fn.strict ?? undefined,
 					namespace: t.name,
