@@ -194,4 +194,45 @@ describe("stderr-guard compatibility surface", () => {
 			}
 		},
 	);
+
+	it.skipIf(process.platform === "win32")(
+		"suppressTerminalStderr reports false when fd 2 was redirected before the unified guard",
+		async () => {
+			const root = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-unshared-stderr-"));
+			temporaryDirectories.push(root);
+			const chunks: Buffer[] = [];
+			const terminalExited = Promise.withResolvers<void>();
+			const child = Bun.spawn(
+				[
+					process.execPath,
+					path.resolve(import.meta.dir, "fixtures/legacy-unshared-stderr-probe.ts"),
+					root,
+					path.join(root, "state.txt"),
+				],
+				{
+					env: { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
+					terminal: {
+						data(_terminal, data) {
+							chunks.push(Buffer.from(data));
+						},
+						exit() {
+							terminalExited.resolve();
+						},
+					},
+					timeout: 10_000,
+				},
+			);
+			try {
+				expect(await child.exited).toBe(0);
+				await terminalExited.promise;
+				const state = fs.readFileSync(path.join(root, "state.txt"), "utf8");
+				expect(state).toContain("unified=true");
+				// fd 2 never shared the terminal, so neither guard fenced it;
+				// the default legacy call must not claim coverage it does not have.
+				expect(state).toContain("default=false");
+			} finally {
+				child.kill();
+			}
+		},
+	);
 });

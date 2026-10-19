@@ -17,6 +17,7 @@ import {
 	isTerminalOutputSuppressed,
 	onTerminalOutputRestored,
 	setTerminalOutputRedirectTarget,
+	terminalStderrIsGuarded,
 	tryLibcFdOps,
 } from "./terminal-output-guard";
 
@@ -61,7 +62,7 @@ export interface SuppressTerminalStderrOptions {
  * unavailable.
  */
 export function suppressTerminalStderr(options?: SuppressTerminalStderrOptions): boolean {
-	if (isTerminalOutputSuppressed()) return true;
+	if (isTerminalOutputSuppressed() && terminalStderrIsGuarded()) return true;
 	if (savedStderrFd !== null) return true;
 	if (!options?.force && !stderrSharesStdoutTerminal()) return false;
 	const libc = tryLibcFdOps();
@@ -129,7 +130,7 @@ export function setStderrRedirectTarget(logPath: string): void {
  */
 export function restoreTerminalStderr(): void {
 	if (savedStderrFd === null) return;
-	if (isTerminalOutputSuppressed()) {
+	if (isTerminalOutputSuppressed() && terminalStderrIsGuarded()) {
 		pendingRelease = true;
 		return;
 	}
@@ -161,5 +162,5 @@ onTerminalOutputRestored(() => {
  * or by the unified terminal-output guard.
  */
 export function isTerminalStderrSuppressed(): boolean {
-	return savedStderrFd !== null || isTerminalOutputSuppressed();
+	return savedStderrFd !== null || (isTerminalOutputSuppressed() && terminalStderrIsGuarded());
 }

@@ -234,6 +234,16 @@ export function isTerminalOutputSuppressed(): boolean {
 	return savedStdoutFd !== null;
 }
 
+/**
+ * Whether this guard actually saved and owns fd 2. Suppression can be
+ * active while fd 2 was left untouched (stderr did not share the terminal),
+ * so callers deciding whether the unified guard fences stderr check this,
+ * not `isTerminalOutputSuppressed()`.
+ */
+export function terminalStderrIsGuarded(): boolean {
+	return savedStderrFd !== null;
+}
+
 /** Follow logger rotation for this process; already-running children retain their inherited file. */
 export function setTerminalOutputRedirectTarget(logPath: string): void {
 	redirectTarget = logPath;
