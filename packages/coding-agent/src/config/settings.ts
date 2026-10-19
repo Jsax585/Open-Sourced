@@ -1832,8 +1832,9 @@ export class Settings {
 		this.#modifiedProjectModelRoles.add(role);
 		this.#persistedMutationGeneration++;
 		this.#rebuildMerged();
-		this.#fireIfChanged(cfgModelRoles, prev);
 		this.#queueProjectSave();
+		this.#notifyProjectChange(cfgModelRoles);
+		this.#fireIfChanged(cfgModelRoles, prev);
 	}
 
 	/**
@@ -1871,6 +1872,7 @@ export class Settings {
 			this.#persistedMutationGeneration++;
 			this.#rebuildMerged();
 			this.#queueSave();
+			this.#notifyGlobalChange(cfgModelRoles);
 		}
 		this.#fireIfChanged(cfgModelRoles, prev);
 		if (this.isProjectModelRoleRuntimeOverrideActive(role)) {

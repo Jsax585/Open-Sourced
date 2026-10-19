@@ -1416,6 +1416,29 @@ describe("Settings", () => {
 	});
 
 	describe("handle listeners", () => {
+		it("reports specialized model-role writes to their persisted layers", async () => {
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			let globalChanges = 0;
+			let projectChanges = 0;
+			const stopGlobal = settings.onGlobalChange([cfgModelRoles], () => {
+				globalChanges++;
+			});
+			const stopProject = settings.onProjectChange([cfgModelRoles], () => {
+				projectChanges++;
+			});
+
+			try {
+				settings.setModelRole("smol", "anthropic/claude-haiku-4-5");
+				settings.setProjectModelRole("advisor", "moonshot/kimi-k3:max");
+
+				expect(globalChanges).toBe(1);
+				expect(projectChanges).toBe(1);
+			} finally {
+				stopGlobal();
+				stopProject();
+			}
+		});
+
 		it("reports a project change masked by an equal global value", async () => {
 			await writeSettings({ autoResume: true });
 			const settings = await Settings.init({ cwd: projectDir, agentDir });

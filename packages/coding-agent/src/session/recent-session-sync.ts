@@ -133,30 +133,39 @@ export function findMostRecentNonEmptySessionSync(sessionDir: string): string | 
 		const candidates = [
 			...entries
 				.filter(entry => entry.name.endsWith(".jsonl"))
-				.map(entry => ({
-					file: path.join(sessionDir, entry.name),
-					path: path.join(sessionDir, entry.name),
-					modified: undefined as Date | undefined,
-				})),
+				.flatMap(entry => {
+					const file = path.join(sessionDir, entry.name);
+					try {
+						return [{ file, path: file, modified: fs.statSync(file).mtime }];
+					} catch {
+						return [];
+					}
+				}),
 			...[...recoverableBackups].map(([primaryName, backup]) => ({
 				file: backup.file,
 				path: path.join(sessionDir, primaryName),
 				modified: backup.modified,
 			})),
-		];
-		return candidates
-			.flatMap(candidate => {
+		].sort((a, b) => b.modified.getTime() - a.modified.getTime());
+		for (let start = 0; start < candidates.length;) {
+			const modified = candidates[start]!.modified.getTime();
+			let end = start + 1;
+			while (end < candidates.length && candidates[end]!.modified.getTime() === modified) end++;
+			const resumable = candidates.slice(start, end).flatMap(candidate => {
 				const inspected = inspectSessionFileSync(candidate.file);
 				if (!inspected.resumable) return [];
 				return [
 					{
 						path: candidate.path,
-						modified: candidate.modified ?? fs.statSync(candidate.file).mtime,
+						modified: candidate.modified,
 						created: inspected.created,
 					},
 				];
-			})
-			.sort(compareSessionRecency)[0]?.path;
+			});
+			if (resumable.length > 0) return resumable.sort(compareSessionRecency)[0]!.path;
+			start = end;
+		}
+		return undefined;
 	} catch {
 		return undefined;
 	}

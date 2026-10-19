@@ -29,6 +29,7 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { findMostRecentNonEmptySessionSync } from "@oh-my-pi/pi-coding-agent/session/recent-session-sync";
 import { SESSION_RESUMABILITY_PREFIX_BYTES } from "@oh-my-pi/pi-coding-agent/session/session-resumability";
 import { sessionDirForCwd, writeTerminalBreadcrumb } from "@oh-my-pi/pi-coding-agent/session/session-paths";
 import { getAgentDir, getProjectDir, setAgentDir, setProjectDir } from "@oh-my-pi/pi-utils";
@@ -57,6 +58,33 @@ import {
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
 describe("startup composer terminal session identity", () => {
+	it("stops transcript inspection after the newest resumable mtime group", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-startup-bounded-session-scan-"));
+		const newest = path.join(root, "newest.jsonl");
+		fs.writeFileSync(
+			newest,
+			`${JSON.stringify({ type: "session", id: "newest", timestamp: "2026-01-03T00:00:00Z" })}\n${JSON.stringify({
+				type: "message",
+				message: { role: "user", content: "resumable work" },
+			})}\n`,
+		);
+		fs.utimesSync(newest, new Date("2026-01-03T00:00:00Z"), new Date("2026-01-03T00:00:00Z"));
+		const older = Array.from({ length: 20 }, (_, index) => path.join(root, `older-${index}.jsonl`));
+		for (const file of older) {
+			fs.writeFileSync(file, `${JSON.stringify({ type: "session", id: path.basename(file) })}\n`);
+			fs.utimesSync(file, new Date("2026-01-02T00:00:00Z"), new Date("2026-01-02T00:00:00Z"));
+		}
+		fs.symlinkSync(path.join(root, "missing.jsonl"), path.join(root, "broken.jsonl"));
+		const open = vi.spyOn(fs, "openSync");
+		try {
+			expect(findMostRecentNonEmptySessionSync(root)).toBe(newest);
+			expect(open.mock.calls.map(call => call[0])).toEqual([newest]);
+		} finally {
+			open.mockRestore();
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("selects the newest nonempty transcript instead of the last cache writer", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-startup-newest-session-"));
 		const agentDir = path.join(root, "agent");

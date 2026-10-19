@@ -298,7 +298,7 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 	try {
 		def.setting.set(settings, def.setting.parse(value));
 		await settings.flush();
-		syncAutoResumeCache(def.setting);
+		syncAutoResumeCache();
 	} catch (err) {
 		console.error(chalk.red(String(err)));
 		process.exit(1);
@@ -325,8 +325,7 @@ function globalValue(setting: AnySetting): unknown {
 }
 
 /** Keep one-shot config writes coherent with the next launch's speculative status-line cache. */
-function syncAutoResumeCache(setting: AnySetting): void {
-	if (setting !== cfgAutoResume) return;
+function syncAutoResumeCache(): void {
 	sharedComposerCache()?.writeGlobalAutoResume(
 		settings.globalValue(cfgAutoResume) ?? cfgAutoResume.default,
 		settings.settingCacheSourcePaths("global"),
@@ -389,7 +388,7 @@ async function handleReset(key: string | undefined, flags: { json?: boolean }): 
 		// Remove the key rather than writing the default, so later default changes still apply.
 		def.setting.unset(settings);
 		await settings.flush();
-		syncAutoResumeCache(def.setting);
+		syncAutoResumeCache();
 	} catch (err) {
 		console.error(chalk.red(String(err)));
 		process.exit(1);
