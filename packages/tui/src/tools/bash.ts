@@ -214,9 +214,20 @@ function formatWallTimeSeconds(wallTimeMs: number): string {
 /** Minimum duration for a model-facing wall-time notice; shorter runs keep timing only in details. */
 export const WALL_TIME_NOTICE_MIN_MS = 1000;
 
-/** Formats the model-facing command duration notice. */
-export function formatWallTimeNotice(wallTimeMs: number): string {
-	return `Wall time: ${formatWallTimeSeconds(wallTimeMs)} seconds`;
+/**
+ * Formats the model-facing command duration notice: the elapsed seconds and the UTC wall-clock
+ * second the command ended, so an agent can copy a real time instead of recalling one.
+ */
+export function formatWallTimeNotice(wallTimeMs: number, endedAtMs: number = Date.now()): string {
+	const endedAt = new Date(endedAtMs).toISOString().replace(/\.\d{3}Z$/u, "Z");
+	return `Wall time: ${formatWallTimeSeconds(wallTimeMs)} seconds, ended ${endedAt}`;
+}
+
+const WALL_TIME_NOTICE_RE = /^Wall time: \d+(?:\.\d+)? seconds(?:, ended \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)?$/u;
+
+/** Whether a line is a bash wall-time notice, with or without the end time older results lack. */
+export function isWallTimeNoticeLine(line: string): boolean {
+	return WALL_TIME_NOTICE_RE.test(line);
 }
 
 /** Formats the model-facing command exit status notice. */
@@ -323,10 +334,11 @@ function stripBashNotices(
 		details?.exitCode === undefined
 			? strippedOutput
 			: stripTrailingNotice(strippedOutput, formatExitCodeNotice(details.exitCode));
-	const withoutWall =
+	const wallNotice =
 		details?.wallTimeMs === undefined || details.wallTimeNoticeEmitted === false
-			? withoutExit
-			: stripTrailingNotice(withoutExit, formatWallTimeNotice(details.wallTimeMs));
+			? undefined
+			: withoutExit.split("\n").findLast(isWallTimeNoticeLine);
+	const withoutWall = wallNotice === undefined ? withoutExit : stripTrailingNotice(withoutExit, wallNotice);
 	return stripRawOutputArtifactNotice(withoutWall);
 }
 /** `Wall: 1.20s`, `Timeout: 30s`, … metadata parts shown under bash output. */

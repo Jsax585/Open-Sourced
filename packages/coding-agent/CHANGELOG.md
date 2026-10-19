@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The bash tool's result footer now states the UTC second the command ended (`Wall time: 3.69 seconds, ended 2026-10-19T02:58:12Z`), so an agent can copy a real clock time into notes and records instead of recalling one
+
 ## [18.12.2] - 2026-10-18
 
 ### Added

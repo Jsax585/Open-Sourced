@@ -2349,9 +2349,17 @@ function b() {
 		});
 
 		it("retains wall time and exit status for slow failed commands", async () => {
+			const before = Math.floor(Date.now() / 1000) * 1000;
 			const result = await bashTool.execute("test-call-walltime-slow", { command: "sleep 1.1; echo wt; exit 7" });
+			const after = Date.now();
 			expect(getTextOutput(result)).toContain("wt");
-			expect(getTextOutput(result)).toMatch(/Wall time: \d+\.\d{2} seconds/);
+			const footer = getTextOutput(result).match(
+				/Wall time: \d+\.\d{2} seconds, ended (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)/,
+			);
+			expect(footer).not.toBeNull();
+			const endedAt = Date.parse(footer![1]!);
+			expect(endedAt).toBeGreaterThanOrEqual(before);
+			expect(endedAt).toBeLessThanOrEqual(after);
 			expect(result.details?.wallTimeMs).toBeGreaterThanOrEqual(1000);
 			expect(result.details?.exitCode).toBe(7);
 			expect(result.isError).toBe(true);
