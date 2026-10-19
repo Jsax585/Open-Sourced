@@ -194,7 +194,10 @@ export function createPersistedSubagentReviverFactory(
 				installRetryFallbackRole(subagentSettings, subagentRetryFallbackRole(ref.id), init.retryFallback);
 				if (init.retryFallback.exhausted === "fail") {
 					const lastModelChange = reopened.getEntries().findLast(entry => entry.type === "model_change");
-					if (lastModelChange?.type === "model_change" && lastModelChange.role !== subagentRetryFallbackRole(ref.id)) {
+					if (
+						lastModelChange?.type === "model_change" &&
+						lastModelChange.role !== subagentRetryFallbackRole(ref.id)
+					) {
 						reopened.appendModelChange(lastModelChange.model, subagentRetryFallbackRole(ref.id), true);
 					}
 				}
@@ -204,11 +207,15 @@ export function createPersistedSubagentReviverFactory(
 			const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(ctx.settings));
 			const oauthAccountPools =
 				init.agent && Object.hasOwn(agentAccountPools, init.agent) ? agentAccountPools[init.agent] : undefined;
+			const containedRole =
+				!restoredSeance && init.retryFallback?.exhausted === "fail" ? subagentRetryFallbackRole(ref.id) : undefined;
 			const persistedModelPattern = restoredSeance
 				? restoredSeance.modelPattern
-				: init.modelRole && init.modelRole !== "default"
-					? [formatModelRoleAlias(init.modelRole), ...(init.resolvedModel ? [init.resolvedModel] : [])]
-					: init.resolvedModel;
+				: containedRole
+					? formatModelRoleAlias(containedRole)
+					: init.modelRole && init.modelRole !== "default"
+						? [formatModelRoleAlias(init.modelRole), ...(init.resolvedModel ? [init.resolvedModel] : [])]
+						: init.resolvedModel;
 			// Older session files persisted the synthetic xd:// write transport in the
 			// enabled set. A read-only agent definition could never grant full write,
 			// so remove that transport name before replaying tools as explicit grants.
@@ -239,6 +246,12 @@ export function createPersistedSubagentReviverFactory(
 					subagentEventBus: ctx.subagentEventBus,
 					modelRegistry: ctx.modelRegistry,
 					...(persistedModelPattern ? { modelPattern: persistedModelPattern } : {}),
+					...(containedRole
+						? {
+								modelPatternFallbackRole: containedRole,
+								modelPatternDefaultFallbackChain: init.retryFallback?.chain,
+							}
+						: {}),
 					modelPatternAuthFallback:
 						restoredSeance || init.retryFallback?.exhausted === "fail" ? undefined : init.resolvedModel,
 					settings: subagentSettings,

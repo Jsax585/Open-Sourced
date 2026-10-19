@@ -155,7 +155,11 @@ import {
 	cfgDefaultThinkingLevel,
 } from "../session/settings";
 import { cfgDisabledProviders } from "../config/model-settings";
-import { getRetryFallbackRole, installRetryFallbackRole } from "../session/retry-fallback-chains";
+import {
+	findRetryFallbackCandidates,
+	getRetryFallbackRole,
+	installRetryFallbackRole,
+} from "../session/retry-fallback-chains";
 import {
 	cfgCompactionModelThresholdsEnabled,
 	cfgCompactionThresholdPercent,
@@ -260,6 +264,7 @@ function resolveSubagentRetryFallbackCandidates(
 	modelPatterns: string[],
 	modelRegistry: ModelRegistry,
 	settings: Settings,
+	inheritedFallbackChain?: string[],
 ): SubagentRetryFallbackCandidate[] {
 	const candidates: SubagentRetryFallbackCandidate[] = [];
 	const seen = new Set<string>();
@@ -274,6 +279,34 @@ function resolveSubagentRetryFallbackCandidates(
 		if (seen.has(selector)) continue;
 		seen.add(selector);
 		candidates.push({ model: resolved.model, selector });
+	}
+	if (inheritedFallbackChain?.length && modelPatterns.length === 1) {
+		// Retry wildcards swap providers while retaining the primary's model id;
+		// generic model overrides do not implement that selector contract.
+		const primary = candidates[0];
+		const primarySelector = primary?.selector ?? modelPatterns[0];
+		const available = modelRegistry.getAvailable();
+		const find = (provider: string, id: string) =>
+			available.find(model => model.provider === provider && model.id === id);
+		const inherited = findRetryFallbackCandidates(
+			{
+				chains: { subagent: inheritedFallbackChain },
+				getModelRole: () => primarySelector,
+				modelLookup: { find, hasProvider: provider => available.some(model => model.provider === provider) },
+			},
+			"subagent",
+			primarySelector,
+			primary?.model,
+			{ allowMissingPrimary: true },
+		);
+		for (const candidate of inherited) {
+			const model = find(candidate.provider, candidate.id);
+			if (!model || disabledProviders.has(model.provider) || seen.has(candidate.raw)) continue;
+			const resolved = resolveModelOverride([candidate.raw], modelRegistry, settings);
+			if (!resolved.model) continue;
+			seen.add(candidate.raw);
+			candidates.push({ model: resolved.model, selector: candidate.raw });
+		}
 	}
 	return candidates;
 }
@@ -303,7 +336,9 @@ function resolveSubagentInheritedRetryFallbackChain(
 	// An explicitly emptied role chain means "no fallbacks", not "inherit
 	// default" — mirrors expandDefaultRetryFallbackChains.
 	const contained = role !== undefined && cfgRetryFallbackChainExhausted.get(settings)[role] === "fail";
-	const fallbackChain = (role !== undefined ? configuredChains?.[role] : undefined) ?? (contained ? undefined : configuredChains?.default);
+	const fallbackChain =
+		(role !== undefined ? configuredChains?.[role] : undefined) ??
+		(contained ? undefined : configuredChains?.default);
 	if (
 		!Array.isArray(fallbackChain) ||
 		fallbackChain.length === 0 ||
@@ -337,7 +372,8 @@ function installSubagentRetryFallbackChain(args: {
 	if (selectedIndex < 0) return undefined;
 	const fallbackSelectors = candidates.slice(selectedIndex + 1).map(candidate => candidate.selector);
 	// A single configured model may reuse its role's (or the default) configured chain, but never an implicit parent fallback.
-	const fallbackChain = fallbackSelectors.length > 0 ? fallbackSelectors : (inheritedFallbackChain ?? (contained ? [] : undefined));
+	const fallbackChain =
+		fallbackSelectors.length > 0 ? fallbackSelectors : (inheritedFallbackChain ?? (contained ? [] : undefined));
 	if (
 		!Array.isArray(fallbackChain) ||
 		(fallbackChain.length === 0 && !contained) ||
@@ -4400,14 +4436,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							modelRole ?? resolveExplicitModelRole(modelPatterns, subagentSettings),
 						)
 					: undefined;
-			const contained = requestedRole !== undefined &&
+			const contained =
+				requestedRole !== undefined &&
 				cfgRetryFallbackChainExhausted.get(subagentSettings)[requestedRole] === "fail";
 			let resolutionPatterns = modelPatterns;
 			if (contained) {
 				const candidates = resolveSubagentRetryFallbackCandidates(
-					[...configuredModelPatterns, ...(inheritedRetryFallbackChain ?? [])],
+					configuredModelPatterns,
 					modelRegistry,
 					subagentSettings,
+					inheritedRetryFallbackChain,
 				);
 				const authenticated: string[] = [];
 				for (const candidate of candidates) {
@@ -4467,9 +4505,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				settings: subagentSettings,
 				id,
 				candidates: resolveSubagentRetryFallbackCandidates(
-					contained ? [...configuredModelPatterns, ...(inheritedRetryFallbackChain ?? [])] : modelPatterns,
+					contained ? configuredModelPatterns : modelPatterns,
 					modelRegistry,
 					subagentSettings,
+					contained ? inheritedRetryFallbackChain : undefined,
 				),
 				inheritedFallbackChain: inheritedRetryFallbackChain,
 				model,

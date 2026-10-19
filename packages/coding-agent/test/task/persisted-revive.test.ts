@@ -158,6 +158,7 @@ async function createPersistedSession(
 		agent?: string;
 		isolated?: boolean;
 		retryFallback?: RetryFallbackRole;
+		resolvedModel?: string;
 		compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
 	},
 ): Promise<string> {
@@ -170,7 +171,7 @@ async function createPersistedSession(
 		tools: contract?.tools ?? ["read", "yield"],
 		restrictToolNames,
 		modelRole,
-		resolvedModel: modelRole ? "anthropic/claude-sonnet-4-5" : undefined,
+		resolvedModel: contract?.resolvedModel ?? (modelRole ? "anthropic/claude-sonnet-4-5" : undefined),
 		advisor,
 		readOnly: contract?.readOnly,
 		agent: contract?.agent,
@@ -800,6 +801,107 @@ describe("persisted subagent revival", () => {
 		]);
 	});
 
+	for (const fallbackAuthenticated of [true, false]) {
+		it(`cold-revives a contained role through real SDK auth selection (${fallbackAuthenticated ? "own fallback" : "no own credentials"})`, async () => {
+			const cwd = makeTempDir("@pi-revive-contained-auth-");
+			const primary = "revive-primary/A";
+			const fallback = "revive-fallback/B";
+			const parent = "revive-parent/C";
+			const sessionFile = await createPersistedSession(cwd, true, "task", undefined, {
+				tools: [],
+				resolvedModel: primary,
+				retryFallback: { primary, chain: [fallback], exhausted: "fail" },
+			});
+			const requests: string[] = [];
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				async fetch(request) {
+					const body = (await request.json()) as { model: string };
+					requests.push(body.model);
+					return new Response(
+						`data: ${JSON.stringify({
+							id: "revival-auth",
+							object: "chat.completion.chunk",
+							created: 0,
+							model: body.model,
+							choices: [
+								{
+									index: 0,
+									delta: { role: "assistant", content: "authenticated fallback" },
+									finish_reason: "stop",
+								},
+							],
+						})}\n\ndata: [DONE]\n\n`,
+						{ headers: { "content-type": "text/event-stream" } },
+					);
+				},
+			});
+			const auth = await AuthStorage.create(path.join(cwd, "auth.db"));
+			const registry = new ModelRegistry(auth, path.join(cwd, "models.yml"));
+			for (const [provider, id] of [
+				["revive-primary", "A"],
+				["revive-fallback", "B"],
+				["revive-parent", "C"],
+			] as const) {
+				registry.registerProvider(provider, {
+					api: "openai-completions",
+					apiKey: "!true",
+					baseUrl: `http://127.0.0.1:${server.port}/v1`,
+					models: [
+						{
+							id,
+							name: id,
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 128000,
+							maxTokens: 8192,
+						},
+					],
+				});
+			}
+			if (fallbackAuthenticated) auth.keys.setRuntime("revive-fallback", "fallback-key");
+			auth.keys.setRuntime("revive-parent", "parent-key");
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				modelRoles: { task: primary, default: parent },
+				"retry.fallbackChains": { default: [parent] },
+			});
+			const ref = AgentRegistry.global().register(createRef(sessionFile));
+			const reviver = await createFactory(cwd, undefined, {
+				authStorage: auth,
+				modelRegistry: registry,
+				settings,
+				extensionRoots: () => ({ explicit: [], mode: "explicit-only", configured: [], configuredLevel: "user" }),
+			})(ref);
+			if (!reviver) throw new Error("Expected persisted reviver");
+			let revived: AgentSession | undefined;
+			try {
+				if (!fallbackAuthenticated) {
+					await expect(reviver(ref)).rejects.toThrow(
+						'No model with usable credentials in contained role "subagent:persisted-restricted"',
+					);
+					expect(requests).toEqual([]);
+					return;
+				}
+				revived = await reviver(ref);
+				expect(`${revived.model?.provider}/${revived.model?.id}`).toBe(fallback);
+				await revived.prompt("Use the authenticated restored worker candidate");
+				await revived.waitForIdle();
+				expect(requests).toEqual(["B"]);
+				const last = revived.messages.at(-1);
+				expect(last?.role === "assistant" ? last.stopReason : undefined).toBe("stop");
+			} finally {
+				await revived?.dispose();
+				auth.close();
+				server.stop(true);
+				AgentLifecycleManager.resetGlobalForTests();
+				AgentRegistry.resetGlobalForTests();
+			}
+		});
+	}
+
 	it("retains contained routing when cold revival follows an ephemeral fallback hop", async () => {
 		const cwd = makeTempDir("@pi-revive-contained-hop-");
 		const sessionFile = await createPersistedSession(cwd, false, "task", undefined, {
@@ -852,7 +954,9 @@ describe("persisted subagent revival", () => {
 		});
 		try {
 			const ref = createRef(sessionFile);
-			const reviver = await createFactory(cwd, undefined, { authStorage: auth, modelRegistry: registry, settings })(ref);
+			const reviver = await createFactory(cwd, undefined, { authStorage: auth, modelRegistry: registry, settings })(
+				ref,
+			);
 			if (!reviver) throw new Error("Expected persisted reviver");
 			await reviver(ref);
 			if (!revived) throw new Error("Expected revived session");

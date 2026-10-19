@@ -818,6 +818,88 @@ describe("title generator", () => {
 		);
 	});
 
+	it.each([true, false])("does not escape a contained title chain through the current model (%s)", async contained => {
+		const primary = getModelOrThrow("claude-haiku-4-5");
+		const secondary = getModelOrThrow("claude-sonnet-4-5");
+		const current = getModelFor("openai", "gpt-4o-mini");
+		const currentFallback = getModelOrThrow("claude-opus-4-8");
+		const primarySelector = formatModelStringWithRouting(primary);
+		const secondarySelector = formatModelStringWithRouting(secondary);
+		const currentSelector = formatModelStringWithRouting(current);
+		const currentFallbackSelector = formatModelStringWithRouting(currentFallback);
+		const settings = Settings.isolated({
+			modelRoles: {
+				tiny: "missing/unavailable",
+				commit: "missing/unavailable",
+				smol: primarySelector,
+			},
+			"retry.modelFallback": true,
+			"retry.fallbackChains": {
+				smol: [secondarySelector],
+				[currentSelector]: [currentFallbackSelector],
+			},
+			...(contained ? { "retry.fallbackChainExhausted": { smol: "fail" as const } } : {}),
+		});
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "error",
+			errorMessage: "title model unavailable",
+			content: [],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"Investigate fallback containment",
+			createRegistry(primary, [primary, secondary, current, currentFallback]),
+			settings,
+			undefined,
+			current,
+		);
+
+		expect(title).toBeNull();
+		expect(completeSimpleMock.mock.calls.map(call => formatModelStringWithRouting(call[0]))).toEqual(
+			contained
+				? [primarySelector, secondarySelector]
+				: [primarySelector, secondarySelector, currentSelector, currentFallbackSelector],
+		);
+	});
+
+	it.each([true, false])(
+		"does not escape an unavailable contained title primary through the current model (%s)",
+		async contained => {
+			const current = getModelFor("openai", "gpt-4o-mini");
+			const currentFallback = getModelOrThrow("claude-sonnet-4-5");
+			const currentSelector = formatModelStringWithRouting(current);
+			const currentFallbackSelector = formatModelStringWithRouting(currentFallback);
+			const settings = Settings.isolated({
+				modelRoles: {
+					tiny: "missing/unavailable",
+					commit: "missing/unavailable",
+					smol: "missing/unavailable",
+				},
+				"retry.modelFallback": true,
+				"retry.fallbackChains": { [currentSelector]: [currentFallbackSelector] },
+				...(contained ? { "retry.fallbackChainExhausted": { smol: "fail" as const } } : {}),
+			});
+			const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+				stopReason: "error",
+				errorMessage: "title model unavailable",
+				content: [],
+			} as never);
+
+			const title = await generateSessionTitle(
+				"Investigate fallback containment",
+				createRegistry(current, [current, currentFallback]),
+				settings,
+				undefined,
+				current,
+			);
+
+			expect(title).toBeNull();
+			expect(completeSimpleMock.mock.calls.map(call => formatModelStringWithRouting(call[0]))).toEqual(
+				contained ? [] : [currentSelector, currentFallbackSelector],
+			);
+		},
+	);
+
 	it.each([true, false])("honors modelFallback=%s when the title model returns a provider error", async enabled => {
 		const smolModel = getModelOrThrow("claude-opus-4-8");
 		const fallbackModel = getModelOrThrow("claude-sonnet-4-5");

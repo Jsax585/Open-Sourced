@@ -32,7 +32,7 @@ import { formatTitleUserMessage } from "../tiny/message-preproc";
 import { isLowSignalTitleInput, normalizeGeneratedTitle } from "../tiny/text";
 import { tinyTitleClient } from "../tiny/title-client";
 
-import { cfgRetryModelFallback } from "../session/settings";
+import { cfgRetryFallbackChainExhausted, cfgRetryModelFallback } from "../session/settings";
 
 const TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
 const TITLE_MARKER_INSTRUCTION = prompt.render(titleMarkerInstruction);
@@ -121,16 +121,17 @@ function getTitleModels(registry: ModelRegistry, settings: Settings, currentMode
 	const availableModels = roleCandidatePool("tiny", settings, registry);
 	if (availableModels.length === 0) return [];
 
-	const models = collectOnlineTinyCandidates(["tiny", "commit", "smol"], settings, availableModels).map(
-		candidate => candidate.model,
-	);
+	const roles = ["tiny", "commit", "smol"];
+	const models = collectOnlineTinyCandidates(roles, settings, availableModels).map(candidate => candidate.model);
+	const fallbackChainExhausted = cfgRetryFallbackChainExhausted.get(settings);
 	if (
 		currentModel &&
+		!roles.some(role => fallbackChainExhausted?.[role] === "fail") &&
 		(models.length === 0 || cfgRetryModelFallback.get(settings) !== false) &&
 		!models.some(model => formatModelStringWithRouting(model) === formatModelStringWithRouting(currentModel))
 	) {
-		// Append currentModel and expand its own chain separately — never merge it
-		// into the tiny/commit/smol role collection (that would apply role defaults).
+		// Append currentModel only outside contained role walks, then expand its
+		// own chain separately without applying tiny/commit/smol role defaults.
 		const seen = new Set(models.map(formatModelStringWithRouting));
 		for (const model of expandOnlineTinyModelFallbacks(currentModel, settings, availableModels)) {
 			const key = formatModelStringWithRouting(model);

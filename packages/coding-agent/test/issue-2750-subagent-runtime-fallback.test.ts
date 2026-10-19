@@ -1,15 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import type { RetryFallbackRole, ServingModel } from "@oh-my-pi/pi-coding-agent/session/retry-fallback-chains";
 import { TurnRecovery, type TurnRecoveryHost } from "@oh-my-pi/pi-coding-agent/session/turn-recovery";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { TempDir } from "@oh-my-pi/pi-utils";
 import { createSessionDefaults } from "./helpers/session-defaults";
 
 import { cfgRetryFallbackChains } from "@oh-my-pi/pi-coding-agent/session/settings";
@@ -85,7 +90,10 @@ function createYieldingSession(
 				type: "tool_execution_end",
 				toolCallId: "tool-yield",
 				toolName: "yield",
-				result: { content: [{ type: "text", text: "Result submitted." }], details: { status: "success", data: { ok: true } } },
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
 				isError: false,
 			});
 		},
@@ -107,21 +115,31 @@ describe("subagent runtime model resolution", () => {
 				"retry.fallbackChains": { task: ["global/main-fallback"], advisor: ["global/advisor-fallback"] },
 				"retry.fallbackChainExhausted": policies,
 			});
-			const recovery = new TurnRecovery({
-				model: () => primary,
-				configuredThinkingLevel: () => undefined,
-				sessionManager: { getSessionId: () => "no-containment" },
-				settings,
-				modelRegistry: {
-					find: (provider: string, id: string) => [primary, advisor].find(m => m.provider === provider && m.id === id),
-					hasProvider: () => true,
+			const recovery = new TurnRecovery(
+				{
+					model: () => primary,
+					configuredThinkingLevel: () => undefined,
+					sessionManager: { getSessionId: () => "no-containment" },
+					settings,
+					modelRegistry: {
+						find: (provider: string, id: string) =>
+							[primary, advisor].find(m => m.provider === provider && m.id === id),
+						hasProvider: () => true,
+					},
+				} as unknown as TurnRecoveryHost,
+				{
+					initialRetryFallback: {
+						role: "task",
+						originalSelector: "primary/worker-model",
+						originalThinkingLevel: undefined,
+					},
+					deferFallbackChainValidation: true,
 				},
-			} as unknown as TurnRecoveryHost, {
-				initialRetryFallback: { role: "task", originalSelector: "primary/worker-model", originalThinkingLevel: undefined },
-				deferFallbackChainValidation: true,
-			});
-			expect(recovery.retryFallbackChainKeys("advisor/advisor-model", advisor, { roleHint: "advisor" }))
-				.toEqual(["task", "advisor"]);
+			);
+			expect(recovery.retryFallbackChainKeys("advisor/advisor-model", advisor, { roleHint: "advisor" })).toEqual([
+				"task",
+				"advisor",
+			]);
 		}
 	});
 
@@ -269,9 +287,14 @@ describe("subagent runtime model resolution", () => {
 					},
 					configWarnings: [],
 				} as unknown as TurnRecoveryHost);
-				expect(recovery.retryFallbackChainKeys("fallback/working-model", fallback, { pinnedRole: dynamicRole }))
-					.toEqual([dynamicRole]);
-				return { session: createYieldingSession("none"), extensionsResult: {}, setToolUIContext: () => {} } as never;
+				expect(
+					recovery.retryFallbackChainKeys("fallback/working-model", fallback, { pinnedRole: dynamicRole }),
+				).toEqual([dynamicRole]);
+				return {
+					session: createYieldingSession("none"),
+					extensionsResult: {},
+					setToolUIContext: () => {},
+				} as never;
 			});
 			await runSubprocess({
 				cwd: "/tmp",
@@ -295,6 +318,140 @@ describe("subagent runtime model resolution", () => {
 		});
 	}
 
+	for (const scenario of [
+		{
+			name: "serves the wildcard fallback before a later explicit selector",
+			contained: true,
+			alternateSucceeds: true,
+		},
+		{
+			name: "fails after the wildcard and explicit fallbacks without calling default",
+			contained: true,
+			alternateSucceeds: false,
+		},
+		{
+			name: "retains default escape after an uncontained wildcard chain exhausts",
+			contained: false,
+			alternateSucceeds: false,
+		},
+	]) {
+		it(
+			scenario.name,
+			async () => {
+				await initTheme();
+				const temp = TempDir.createSync("subagent-wildcard-");
+				const auth = await AuthStorage.create(path.join(temp.path(), "auth.db"));
+				const requested: string[] = [];
+				// Provider cooldowns outlive individual registries; each scenario must
+				// exercise fresh identities rather than inherit the previous 429.
+				const suffix = scenario.alternateSucceeds ? "success" : scenario.contained ? "contained" : "default";
+				const primaryProvider = `wildcard-primary-${suffix}`;
+				const alternateProvider = `wildcard-alternate-${suffix}`;
+				const explicitProvider = `wildcard-explicit-${suffix}`;
+				const defaultProvider = `wildcard-default-${suffix}`;
+				const providers = [primaryProvider, alternateProvider, explicitProvider, defaultProvider];
+				const server = Bun.serve({
+					hostname: "127.0.0.1",
+					port: 0,
+					async fetch(request) {
+						const provider = new URL(request.url).pathname.split("/")[1];
+						const body = (await request.json()) as { model: string };
+						requested.push(`${provider}/${body.model}`);
+						if (provider !== defaultProvider && !(provider === alternateProvider && scenario.alternateSucceeds)) {
+							return Response.json(
+								{ error: { message: "child quota exhausted", type: "rate_limit_error" } },
+								{
+									status: 429,
+									headers: { "retry-after": "11180" },
+								},
+							);
+						}
+						const chunk = {
+							id: "child-wildcard",
+							object: "chat.completion.chunk",
+							created: 0,
+							model: body.model,
+							choices: [
+								{
+									index: 0,
+									delta: { role: "assistant", content: "wildcard child answer" },
+									finish_reason: "stop",
+								},
+							],
+						};
+						return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+							headers: { "content-type": "text/event-stream" },
+						});
+					},
+				});
+				const registry = new ModelRegistry(auth, path.join(temp.path(), "models.yml"));
+				try {
+					for (const provider of providers) {
+						registry.registerProvider(provider, {
+							api: "openai-completions",
+							apiKey: "loopback-key",
+							baseUrl: `http://127.0.0.1:${server.port}/${provider}/v1`,
+							models: [
+								{
+									id: provider === explicitProvider ? "last-resort" : "worker",
+									name: "worker",
+									reasoning: false,
+									input: ["text"],
+									cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+									contextWindow: 128000,
+									maxTokens: 8192,
+								},
+							],
+						});
+					}
+					const result = await runSubprocess({
+						cwd: temp.path(),
+						agent: { name: "task", description: "test", systemPrompt: "test", source: "bundled", tools: [] },
+						task: "Return the answer",
+						index: 0,
+						id: `wildcard-child-${suffix}`,
+						modelOverride: "@task",
+						parentActiveModelPattern: `${defaultProvider}/worker`,
+						modelRegistry: registry,
+						settings: Settings.isolated({
+							modelRoles: { task: `${primaryProvider}/worker`, default: `${primaryProvider}/worker` },
+							"compaction.enabled": false,
+							"retry.baseDelayMs": 1,
+							"retry.maxDelayMs": 100,
+							"retry.fallbackChains": {
+								task: [`${alternateProvider}/*`, `${explicitProvider}/last-resort`],
+								default: [`${defaultProvider}/worker`],
+							},
+							...(scenario.contained ? { "retry.fallbackChainExhausted": { task: "fail" } } : {}),
+						}),
+						structured: false,
+						restrictToolNames: true,
+						enableMCP: false,
+						enableLsp: false,
+						contextFiles: [],
+						skills: [],
+						promptTemplates: [],
+					});
+					const expected = [`${primaryProvider}/worker`, `${alternateProvider}/worker`];
+					if (!scenario.alternateSucceeds) expected.push(`${explicitProvider}/last-resort`);
+					if (!scenario.contained) expected.push(`${defaultProvider}/worker`);
+					expect(requested, result.stderr).toEqual(expected);
+					expect(result.exitCode).toBe(scenario.contained && !scenario.alternateSucceeds ? 1 : 0);
+					if (scenario.alternateSucceeds) {
+						expect(result.resolvedModel).toBe(`${alternateProvider}/worker`);
+						expect(result.resolvedModelIsFallback).toBe(true);
+					}
+				} finally {
+					for (const provider of providers) registry.unregisterProvider(provider);
+					server.stop(true);
+					auth.close();
+					temp.removeSync();
+				}
+			},
+			30_000,
+		);
+	}
+
 	for (const fallbackAuthenticated of [false, true]) {
 		it(`does not authenticate a contained worker through its parent (${fallbackAuthenticated ? "own fallback available" : "no own credentials"})`, async () => {
 			const primary = model("primary", "bad-runtime-model");
@@ -303,7 +460,11 @@ describe("subagent runtime model resolution", () => {
 			const create = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
 				expect(options?.model?.provider).toBe("fallback");
 				expect(options?.settings?.getModelRole("subagent:contained-auth")).toBe("fallback/working-model");
-				return { session: createYieldingSession("none"), extensionsResult: {}, setToolUIContext: () => {} } as never;
+				return {
+					session: createYieldingSession("none"),
+					extensionsResult: {},
+					setToolUIContext: () => {},
+				} as never;
 			});
 			const result = await runSubprocess({
 				cwd: "/tmp",
@@ -323,7 +484,8 @@ describe("subagent runtime model resolution", () => {
 					getAvailable: () => [primary, fallback, parent],
 					getApiKey: async (candidate: Model) =>
 						candidate.provider === "global" || (fallbackAuthenticated && candidate.provider === "fallback")
-							? "test-key" : undefined,
+							? "test-key"
+							: undefined,
 				} as never,
 				enableLsp: false,
 			});
