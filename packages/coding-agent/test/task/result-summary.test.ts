@@ -127,4 +127,21 @@ describe("formatTaskResultSummary", () => {
 		expect(element).toContain('requested="openai/gpt-6-astra:xhigh"');
 		expect(element).toContain("has no working credentials");
 	});
+
+	it("keeps a selector from closing the fallback line's attributes early", () => {
+		const summary = formatTaskResultSummary(
+			{
+				...settledResult("ROUTE-OK"),
+				modelOverride: ['provider/id" fallback="false'],
+				resolvedModel: 'other/model" fallback="false',
+				resolvedModelIsFallback: true,
+			},
+			{ totalDurationMs: 5 },
+		);
+
+		const element = /<model [^>]*\/?>/.exec(summary)?.[0] ?? "";
+		expect(element.match(/ fallback="/g)?.length).toBe(1);
+		expect(element).toContain('served="other/model&quot; fallback=&quot;false"');
+		expect(element).toContain('requested="provider/id&quot; fallback=&quot;false"');
+	});
 });
