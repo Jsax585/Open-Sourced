@@ -90,19 +90,23 @@ class "minimax" {
 	// level and clamps forced-off requests to the lowest effort instead of
 	// sending `disabled`. The launch id also rejects sampling params
 	// (`temperature`, `top_p`, `top_k`).
-	on "minimax" "minimax-cn" "minimax-code" "minimax-code-cn" {
-		models "MiniMax-M3.1-Flash" "MiniMax-M3.1-Flash-Preview" {
-			thinking-requires-effort #true
-			thinking-efforts "low" "medium" "high" "xhigh" "max"
-			thinking-effort-map {
-				low "low"
-				medium "medium"
-				high "high"
-			}
+	// The thinking surface and sampling rejection below are model-intrinsic,
+	// not host-intrinsic: every deployment serving these ids forces thinking on
+	// and accepts the same `output_config.effort` ladder, including proxies such
+	// as litellm whose provider id never matches a native MiniMax host. Keep the
+	// rules at class scope so dynamic providers inherit them; a host that
+	// genuinely differs can override them with a provider-scoped rule.
+	models "MiniMax-M3.1-Flash" "MiniMax-M3.1-Flash-Preview" {
+		thinking-requires-effort #true
+		thinking-efforts "low" "medium" "high" "xhigh" "max"
+		thinking-effort-map {
+			low "low"
+			medium "medium"
+			high "high"
 		}
-		models "MiniMax-M3.1-Flash" {
-			supports-sampling-params #false
-		}
+	}
+	models "MiniMax-M3.1-Flash" {
+		supports-sampling-params #false
 	}
 	// Token Plan rows ride the Anthropic route; these OpenAI-only wire axes
 	// serve the legacy lightning rows that stay on the OpenAI-compatible one.

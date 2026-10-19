@@ -74,4 +74,24 @@ describe("outlier catalog policies", () => {
 		expect(buildModel(chatSpec("openai", "openai-responses", "gpt-6-luna")).webSearch).toBe("openai");
 		expect(buildModel(chatSpec("openai", "openai-responses", "gpt-realtime-2.1")).webSearch).toBeUndefined();
 	});
+
+	test("MiniMax M3.1 keeps its model-intrinsic rules on proxy providers", () => {
+		for (const id of ["MiniMax-M3.1-Flash", "MiniMax-M3.1-Flash-Preview"]) {
+			const model = buildModel({
+				...chatSpec("litellm", "anthropic-messages", id),
+				reasoning: true,
+			});
+			expect(model.thinking).toMatchObject({
+				mode: "anthropic-adaptive",
+				efforts: ["low", "medium", "high", "xhigh", "max"],
+				requiresEffort: true,
+			});
+		}
+
+		const launch = buildModel({
+			...chatSpec("litellm", "anthropic-messages", "MiniMax-M3.1-Flash"),
+			reasoning: true,
+		});
+		expect(launch.compat).toMatchObject({ supportsSamplingParams: false });
+	});
 });
