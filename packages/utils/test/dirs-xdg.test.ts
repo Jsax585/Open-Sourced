@@ -5,6 +5,7 @@ import * as path from "node:path";
 import {
 	__resetProfileSnapshotForTests,
 	getAgentDir,
+	getDaemonRuntimeDir,
 	getGlobalDaemonRuntimeDir,
 	getPredictStateDir,
 	getSkillDescriptionsDbPath,
@@ -14,6 +15,7 @@ import {
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 
 const ENV_KEYS = [
+	"OMP_DAEMON_NAMESPACE",
 	"OMP_PROFILE",
 	"PI_PROFILE",
 	"PI_CONFIG_DIR",
@@ -42,6 +44,7 @@ describe("XDG-aware runtime paths", () => {
 		defaultAgentDir = path.join(os.homedir(), configDir, "agent");
 		await fs.mkdir(tempRoot, { recursive: true });
 		process.env.PI_CONFIG_DIR = configDir;
+		delete process.env.OMP_DAEMON_NAMESPACE;
 		delete process.env.PI_CODING_AGENT_DIR;
 		delete process.env.XDG_DATA_HOME;
 		delete process.env.XDG_STATE_HOME;
@@ -108,6 +111,38 @@ describe("XDG-aware runtime paths", () => {
 		setProfile(undefined);
 		setAgentDir(path.join(tempRoot, "custom-agent"));
 		expect(getGlobalDaemonRuntimeDir("text-predict")).toBe(shared);
+	});
+
+	it("isolates project and global brokers by namespace without moving agent data", () => {
+		setAgentDir(defaultAgentDir);
+		const project = path.join(tempRoot, "project");
+		const projectDefault = getDaemonRuntimeDir(project);
+		const globalDefault = getGlobalDaemonRuntimeDir("text-predict");
+		const dataDefault = getPredictStateDir(undefined, "ngram");
+		process.env.OMP_DAEMON_NAMESPACE = "";
+		expect(getDaemonRuntimeDir(project)).toBe(projectDefault);
+		expect(getGlobalDaemonRuntimeDir("text-predict")).toBe(globalDefault);
+
+		process.env.OMP_DAEMON_NAMESPACE = "seat/a";
+		const projectA = getDaemonRuntimeDir(project);
+		const globalA = getGlobalDaemonRuntimeDir("text-predict");
+		expect(projectA).not.toBe(projectDefault);
+		expect(globalA).not.toBe(globalDefault);
+		expect(path.relative(path.dirname(path.dirname(projectA)), projectA)).toMatch(
+			/^ns-[0-9a-f]{16}[/\\][0-9a-f]{16}$/,
+		);
+		expect(getPredictStateDir(undefined, "ngram")).toBe(dataDefault);
+		expect(getAgentDir()).toBe(defaultAgentDir);
+
+		process.env.OMP_DAEMON_NAMESPACE = "seat-a";
+		expect(getDaemonRuntimeDir(project)).not.toBe(projectA);
+		expect(getGlobalDaemonRuntimeDir("text-predict")).not.toBe(globalA);
+		process.env.OMP_DAEMON_NAMESPACE = "seat/a";
+		expect(getDaemonRuntimeDir(project)).toBe(projectA);
+		expect(getGlobalDaemonRuntimeDir("text-predict")).toBe(globalA);
+		delete process.env.OMP_DAEMON_NAMESPACE;
+		expect(getDaemonRuntimeDir(project)).toBe(projectDefault);
+		expect(getGlobalDaemonRuntimeDir("text-predict")).toBe(globalDefault);
 	});
 
 	it("keeps paths under an explicit custom agent dir, ignoring XDG", async () => {

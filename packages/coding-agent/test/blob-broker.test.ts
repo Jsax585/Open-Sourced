@@ -5,10 +5,13 @@ import * as path from "node:path";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir, TempDir } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { LocalBlobBackend } from "../src/blob-broker/broker";
 import { contextHasImageUrls, supportsRemoteImageUrls } from "../src/blob-broker/context-images";
+import { smokeTestBlobBroker } from "../src/blob-broker/daemon";
+import { BLOB_BROKER_CONFIG_ENV, BLOB_BROKER_SOCKET_ENV, blobBrokerEndpoint } from "../src/blob-broker/protocol";
+import { startBlobBrokerFromEnvironment } from "../src/blob-broker/server";
 import { ImageUrlService } from "../src/blob-broker/service";
 import { type BlobPersistence, BlobRegistry } from "../src/blob-broker/store";
 import { wrapStreamFnWithBlobUrlFallback } from "../src/blob-broker/stream-fallback";
@@ -73,6 +76,94 @@ function makeService(): ImageUrlService {
 
 afterAll(() => {
 	for (const cleanup of cleanups) cleanup();
+});
+
+describe("blobBrokerEndpoint", () => {
+	it.skipIf(process.platform === "win32")(
+		"relocates long namespaced roots to distinct bounded Unix sockets",
+		async () => {
+			using tempDir = TempDir.createSync("@omp-blob-endpoint-");
+			const root = path.join(tempDir.path(), "x".repeat(80), "daemons");
+			const runtime = path.join(root, "ns-0123456789abcdef", "aaaaaaaaaaaaaaaa");
+			const endpoint = blobBrokerEndpoint(runtime);
+			expect(Buffer.byteLength(path.join(runtime, "blob-broker.sock"))).toBeGreaterThan(108);
+			expect(Buffer.byteLength(endpoint)).toBeLessThan(104);
+			expect(blobBrokerEndpoint(runtime)).toBe(endpoint);
+			expect(blobBrokerEndpoint(path.join(root, "ns-fedcba9876543210", "aaaaaaaaaaaaaaaa"))).not.toBe(endpoint);
+			fs.mkdirSync(path.dirname(endpoint), { recursive: true, mode: 0o700 });
+			const server = Bun.serve({ unix: endpoint, fetch: () => new Response("blob endpoint ready") });
+			try {
+				expect(await (await fetch("http://localhost/", { unix: endpoint })).text()).toBe("blob endpoint ready");
+			} finally {
+				await server.stop(true);
+				fs.rmSync(endpoint, { force: true });
+			}
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"starts the standalone smoke broker with a private socket parent",
+		smokeTestBlobBroker,
+	);
+});
+
+describe.skipIf(process.platform === "win32")("blob broker socket parent trust", () => {
+	async function expectRefused(parent: string): Promise<void> {
+		const socket = path.join(parent, "blob-broker.sock");
+		fs.writeFileSync(socket, "must not unlink");
+		const previousSocket = process.env[BLOB_BROKER_SOCKET_ENV];
+		const previousConfig = process.env[BLOB_BROKER_CONFIG_ENV];
+		process.env[BLOB_BROKER_SOCKET_ENV] = socket;
+		process.env[BLOB_BROKER_CONFIG_ENV] = JSON.stringify({
+			kind: "direct",
+			options: {},
+			credentials: {},
+			bindHost: "127.0.0.1",
+		});
+		try {
+			await expect(startBlobBrokerFromEnvironment()).rejects.toThrow("private directory owned by this user");
+			expect(fs.readFileSync(socket, "utf8")).toBe("must not unlink");
+		} finally {
+			if (previousSocket === undefined) delete process.env[BLOB_BROKER_SOCKET_ENV];
+			else process.env[BLOB_BROKER_SOCKET_ENV] = previousSocket;
+			if (previousConfig === undefined) delete process.env[BLOB_BROKER_CONFIG_ENV];
+			else process.env[BLOB_BROKER_CONFIG_ENV] = previousConfig;
+		}
+	}
+
+	it("refuses a symlink parent without binding or unlinking", async () => {
+		using tempDir = TempDir.createSync("@omp-blob-parent-symlink-");
+		const target = path.join(tempDir.path(), "target");
+		const parent = path.join(tempDir.path(), "parent");
+		fs.mkdirSync(target, { mode: 0o700 });
+		fs.symlinkSync(target, parent);
+		await expectRefused(parent);
+		expect(fs.lstatSync(parent).isSymbolicLink()).toBe(true);
+	});
+
+	it("refuses a parent owned by another uid without binding or unlinking", async () => {
+		using tempDir = TempDir.createSync("@omp-blob-parent-owner-");
+		const parent = path.join(tempDir.path(), "parent");
+		fs.mkdirSync(parent, { mode: 0o700 });
+		const foreignStat = Object.assign(fs.lstatSync(parent), { uid: process.geteuid!() + 1 });
+		const stat = vi.spyOn(fs, "lstatSync").mockReturnValue(foreignStat);
+		try {
+			await expectRefused(parent);
+		} finally {
+			stat.mockRestore();
+		}
+	});
+
+	it("refuses group/world-accessible parents without chmod, binding, or unlinking", async () => {
+		using tempDir = TempDir.createSync("@omp-blob-parent-mode-");
+		for (const mode of [0o770, 0o707, 0o777]) {
+			const parent = path.join(tempDir.path(), mode.toString(8));
+			fs.mkdirSync(parent, { mode: 0o700 });
+			fs.chmodSync(parent, mode);
+			await expectRefused(parent);
+			expect(fs.lstatSync(parent).mode & 0o777).toBe(mode);
+		}
+	});
 });
 
 describe("LocalBlobBackend (serve mode)", () => {

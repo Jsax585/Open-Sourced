@@ -9,7 +9,8 @@
  */
 
 import * as fs from "node:fs";
-import { logger } from "@oh-my-pi/pi-utils";
+import * as path from "node:path";
+import { isEexist, logger } from "@oh-my-pi/pi-utils";
 import { isUploaderKind, LocalBlobBackend } from "./broker";
 import {
 	BLOB_BROKER_CONFIG_ENV,
@@ -144,6 +145,20 @@ export function createControlHandler(
 	};
 }
 
+/** Refuse to expose the unauthenticated control socket through an untrusted parent. */
+function prepareSocketParent(socketPath: string): void {
+	const parent = path.dirname(socketPath);
+	try {
+		fs.mkdirSync(parent, { mode: 0o700 });
+	} catch (error) {
+		if (!isEexist(error)) throw error;
+	}
+	const stat = fs.lstatSync(parent);
+	if (!stat.isDirectory() || stat.uid !== process.geteuid?.() || (stat.mode & 0o077) !== 0) {
+		throw new Error(`Blob broker socket parent must be a private directory owned by this user: ${parent}`);
+	}
+}
+
 /** Boot the blob daemon from worker environment variables and serve forever. */
 export async function startBlobBrokerFromEnvironment(): Promise<void> {
 	const socketPath = Bun.env[BLOB_BROKER_SOCKET_ENV];
@@ -151,6 +166,8 @@ export async function startBlobBrokerFromEnvironment(): Promise<void> {
 	if (!socketPath || !configJson) {
 		throw new Error(`blob broker worker requires ${BLOB_BROKER_SOCKET_ENV} and ${BLOB_BROKER_CONFIG_ENV}`);
 	}
+	// Validate before starting the exposure or unlinking an existing endpoint.
+	prepareSocketParent(socketPath);
 	const config = JSON.parse(configJson) as BlobBrokerWorkerConfig;
 	const backend = new LocalBlobBackend(config);
 	// Bring the exposure up before advertising readiness so a ready daemon is a

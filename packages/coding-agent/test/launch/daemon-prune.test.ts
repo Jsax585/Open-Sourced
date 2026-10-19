@@ -61,6 +61,38 @@ describe("pruneDeadDaemonRuntimeDirs", () => {
 		expect(remaining.has("global")).toBe(true); // non-scope name skipped
 	});
 
+	it("prunes only dead project scopes within the current namespace", async () => {
+		using tempDir = TempDir.createSync("@omp-daemon-prune-namespace-");
+		const daemons = path.join(tempDir.path(), "run", "daemons");
+		const namespace = path.join(daemons, "ns-0123456789abcdef");
+		const current = await scope(namespace, "aaaaaaaaaaaaaaaa", { pid: "dead", stale: true });
+		const dead = await scope(namespace, "bbbbbbbbbbbbbbbb", { pid: "dead", stale: true });
+		const live = await scope(namespace, "cccccccccccccccc", { clients: [process.pid], stale: true });
+		const otherNamespace = await scope(path.join(daemons, "ns-fedcba9876543210"), "bbbbbbbbbbbbbbbb", {
+			pid: "dead",
+			stale: true,
+		});
+		const legacy = await scope(daemons, "bbbbbbbbbbbbbbbb", { pid: "dead", stale: true });
+
+		await pruneDeadDaemonRuntimeDirs(current);
+
+		expect(await fs.exists(dead)).toBe(false);
+		for (const dir of [current, live, otherNamespace, legacy]) expect(await fs.exists(dir)).toBe(true);
+	});
+
+	it("refuses namespace-shaped overrides outside daemons and malformed namespace roots", async () => {
+		using tempDir = TempDir.createSync("@omp-daemon-prune-namespace-override-");
+		for (const root of [
+			path.join(tempDir.path(), "ns-0123456789abcdef"),
+			path.join(tempDir.path(), "daemons", "ns-invalid"),
+		]) {
+			const current = await scope(root, "aaaaaaaaaaaaaaaa", { pid: "dead", stale: true });
+			const sibling = await scope(root, "bbbbbbbbbbbbbbbb", { pid: "dead", stale: true });
+			await pruneDeadDaemonRuntimeDirs(current);
+			expect(await fs.exists(sibling)).toBe(true);
+		}
+	});
+
 	it("does not sweep sibling machine-global service runtimes", async () => {
 		using tempDir = TempDir.createSync("@omp-daemon-prune-global-");
 		const globalRoot = path.join(tempDir.path(), "run", "daemons", "global");
