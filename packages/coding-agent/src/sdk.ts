@@ -78,6 +78,7 @@ import {
 	resolveCliModel,
 	type ResolveCliModelResult,
 	resolveConfiguredModelPatterns,
+	resolveModelOverride,
 	resolveModelRoleValue,
 	resolveSessionModelSelector,
 	sessionModelDiscoveryProviders,
@@ -3066,6 +3067,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						modelLookup: modelRegistry,
 					},
 					{ selector: requestedSelector, model: requestedModel },
+					// Resolved as runtime fallback recovery resolves an entry, so a
+					// routed (`@upstream`) or fuzzy entry names the same model here.
+					selector =>
+						resolveModelOverride([selector.raw], modelRegistry, settings).model ??
+						modelRegistry.find(selector.provider, selector.id),
 					// The side-effect-free check the deferred chain walk below uses
 					// (no OAuth refresh or `!command` key runs per candidate), plus
 					// the effort ceiling runtime fallback recovery also skips on.

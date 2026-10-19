@@ -1078,6 +1078,25 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
+	test("resolves a routed chain entry for a subagent model without working credentials as runtime recovery does", async () => {
+		const { authStorage, modelRegistry, parentPattern } = registryWithKeys([]);
+		authStorage.keys.setRuntime("openrouter", "openrouter-key");
+		const settings = Settings.isolated({
+			"retry.fallbackChains": { "runtime-provider/runtime-model": ["openrouter/z-ai/glm-4.7@chutes"] },
+		});
+
+		const { session, startupModelFallback } = await createAgentSession(
+			subagentSessionOptions(modelRegistry, authStorage, settings, "runtime-provider/runtime-model", parentPattern),
+		);
+
+		try {
+			expect(`${session.model?.provider}/${session.model?.id}`).toBe("openrouter/z-ai/glm-4.7");
+			expect(startupModelFallback?.model).toBe("openrouter/z-ai/glm-4.7@chutes");
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	test("refuses a subagent model absent from the catalog whose fallback chain is empty", async () => {
 		const { authStorage, modelRegistry, parentPattern } = registryWithKeys(["runtime-model"]);
 		const settings = Settings.isolated({ "retry.fallbackChains": { "nosuch-provider/never-model": [] } });

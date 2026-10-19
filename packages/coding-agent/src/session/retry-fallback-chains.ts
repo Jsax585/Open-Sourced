@@ -687,15 +687,17 @@ export type UnavailableModelReplacement =
  * catalog, or without working credentials — through its own
  * `retry.fallbackChains` entry: an exact `provider/id` key, else the most
  * specific `provider/*` or prefixed wildcard key. Wildcard entries in that
- * chain expand against the requested model, as they do for a runtime failure.
- * The first candidate `isUsable` accepts replaces it; an empty chain, or one
- * with no usable candidate, refuses it. Role and `default` chains do not decide
- * startup: `undefined` when no key of the model's own owns it, so the caller
- * keeps its own default.
+ * chain expand against the requested model, as they do for a runtime failure,
+ * and `resolveCandidate` resolves each entry to a model the way runtime
+ * recovery does (routes, fuzzy ids). The first candidate `isUsable` accepts
+ * replaces it; an empty chain, or one with no usable candidate, refuses it.
+ * Role and `default` chains do not decide startup: `undefined` when no key of
+ * the model's own owns it, so the caller keeps its own default.
  */
 export function resolveUnavailableModelReplacement(
 	context: RetryFallbackResolutionContext,
 	requested: { selector: string; model: Model | undefined },
+	resolveCandidate: (selector: RetryFallbackSelector) => Model | undefined,
 	isUsable: (candidate: Model, selector: RetryFallbackSelector) => boolean,
 ): UnavailableModelReplacement | undefined {
 	const chainKey = resolveRetryFallbackChainKey(context, requested.selector, requested.model);
@@ -705,7 +707,7 @@ export function resolveUnavailableModelReplacement(
 	});
 	const requestedThinkingLevel = parseRetryFallbackSelector(requested.selector, context.modelLookup)?.thinkingLevel;
 	for (const candidate of candidates) {
-		const model = context.modelLookup.find(candidate.provider, candidate.id);
+		const model = resolveCandidate(candidate);
 		if (!model) continue;
 		if (requested.model && model.provider === requested.model.provider && model.id === requested.model.id) continue;
 		if (!isUsable(model, candidate)) continue;
