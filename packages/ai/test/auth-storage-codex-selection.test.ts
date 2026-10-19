@@ -4573,6 +4573,25 @@ describe("AuthStorage claude oauth ranking", () => {
 			expect(countFor(counts, "api-acct-free")).toBe(30);
 		});
 
+		test("a blocked includedOnly account with allowance left is not a last resort", async () => {
+			const storage = await openWithPolicy(["paid@example.com"]);
+			await storage.credentials.set("anthropic", [
+				{ type: "oauth", ...createCredential("acct-paid", "paid@example.com") },
+				{ type: "oauth", ...createCredential("acct-free", "free@example.com") },
+			]);
+			usageByAccount.set("acct-paid", usage("acct-paid", 0.4));
+			usageByAccount.set("acct-free", usage("acct-free", 1, 1));
+			const sessionId = "included-blocked";
+			expect(await storage.keys.get("anthropic", sessionId)).toBe("api-acct-paid");
+
+			// A 429 blocks the account while its cached report still shows allowance left.
+			await storage.limits.markReached("anthropic", sessionId, { retryAfterMs: HOUR_MS });
+
+			const counts = await countApiKeySelections(storage, "anthropic", "included-blocked-pick", 30);
+			expect(countFor(counts, "api-acct-paid")).toBe(0);
+			expect(countFor(counts, "api-acct-free")).toBe(30);
+		});
+
 		test("exact-account access still resolves a spent includedOnly account", async () => {
 			const storage = await openWithPolicy(["paid@example.com"]);
 			await storage.credentials.set("anthropic", [
