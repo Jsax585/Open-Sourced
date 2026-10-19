@@ -1316,6 +1316,8 @@ interface SubagentRunMonitor {
 	 * further work started. Source for `yield`'s data-less finalize.
 	 */
 	lastReportTurnText(): string | undefined;
+	/** Whether any assistant message ended while this monitor was attached. */
+	sawAssistantMessage(): boolean;
 	/** Final raw output: end-of-run assistant text when available, else accumulated chunks. */
 	rawOutput(): string;
 	scheduleProgress(flush?: boolean): void;
@@ -1425,6 +1427,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	// following the last such call qualifies. A text-less yield turn may still
 	// finalize the preceding report.
 	let lastReportTurnText: string | undefined;
+	let sawAssistantMessage = false;
 	let activeSessionAbortPromise: Promise<void> | undefined;
 
 	const abortActiveSession = (): Promise<void> => {
@@ -2073,6 +2076,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 				const role = event.message?.role;
 				if (role === "assistant") {
 					assistantStreaming = false;
+					sawAssistantMessage = true;
 					progress.requests += 1;
 					const eventContent = isRecord(event) && "content" in event ? event.content : undefined;
 					const messageContent = getMessageContent(event.message) || eventContent;
@@ -2368,6 +2372,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		captureSalvage,
 		lastAssistantSalvageText: () => lastAssistantSalvageText,
 		lastReportTurnText: () => lastReportTurnText,
+		sawAssistantMessage: () => sawAssistantMessage,
 		rawOutput: () => (finalOutputChunks.length > 0 ? finalOutputChunks.join("") : outputChunks.join("")),
 		scheduleProgress,
 		finish: () => {
@@ -3213,9 +3218,9 @@ function extractIrcRecordText(content: string | ReadonlyArray<{ type: string; te
  * blind spots. The observer runs after the session has flushed its post-prompt
  * settle (see {@link AgentSession.setIrcWakeTurnObserver}).
  *
- * The turn's output reaches the parent as an async job when the parent's
- * message woke the turn, the turn yielded, or a user prompt completed a
- * message result, and the other waking peers via
+ * The turn's output reaches the parent as an async job when its message woke
+ * the turn, its mid-turn request was consumed, the turn yielded, or a user
+ * prompt completed a message result, and the other waking peers via
  * {@link relayWakeTurnOutput}; the relay is registered as a pending reply on
  * the session up front so a `send await:true` waiter holds its "stopped
  * without replying" verdict until the relay has been delivered.
@@ -3250,12 +3255,11 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 		const relay = Promise.withResolvers<void>();
 		session.trackIrcReply(relay.promise);
 		const sessionFile = AgentRegistry.global().get(id)?.sessionFile ?? options.sessionFile ?? undefined;
-		// The parent receives this turn's outcome through an owner-routed job: the
-		// ordinary async-result delivery, and what its `wait` blocks on. A turn
-		// woken by the parent's own message is work the parent started, so the job
-		// spans the whole turn. Otherwise only a yield is a completion the parent
-		// must receive like the first run's, so the job registers the moment the
-		// yield is accepted, before the ref goes idle.
+		// The parent receives this turn's outcome through an owner-routed job:
+		// ordinary async-result delivery, and what its `wait` blocks on. A
+		// parent wake owns the whole turn; a mid-turn parent request owns it only
+		// after its steer is consumed. Otherwise only an accepted yield registers
+		// a job, before the ref goes idle.
 		const ownerId = AgentRegistry.global().get(id)?.parentId;
 		const ownerWoken = wakeSources(records, id).some(source => source.from === ownerId);
 		// Cancelling the job cancels the turn it stands for.
@@ -3342,6 +3346,14 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 		turnMonitor.setActiveSession(session);
 		const unsubscribeTurn = turnMonitor.attach(session);
 		if (ownerWoken) registerWakeJob();
+		// Only a message_end from the agent loop proves the queued parent steer
+		// entered this turn. Receipt alone cannot claim a peer's earlier answer.
+		let ownerPrompted = false;
+		const unsubscribeParentSteer = session.subscribe(event => {
+			if (event.type !== "message_end" || !session.isParentIrcSteer(event.message)) return;
+			ownerPrompted = true;
+			registerWakeJob();
+		});
 		// A focused-session user prompt is the operator driving this agent (#14428):
 		// like a parent follow-up, its message-result reply is the agent's new result.
 		const userPrompted = records.some(record =>
@@ -3349,6 +3361,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 		);
 		return async turnError => {
 			unsubscribeTurn();
+			unsubscribeParentSteer();
 			const activeSession = turnMonitor.takeActiveSession();
 			if (activeSession) turnMonitor.captureSalvage(activeSession);
 			const lastAssistant = session.getLastAssistantMessage();
@@ -3383,7 +3396,13 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 			}
 			// Read before finalization: a schema-bearing agent that answered in
 			// prose gets a missing-yield warning prepended to `result.output`.
-			const turnText = turnMonitor.rawOutput() || (turnMonitor.lastAssistantSalvageText() ?? "");
+			// Like a first run's message result, the answer is the final report
+			// turn; the session's last assistant text stands in only when the
+			// monitor saw no assistant message, never for narration it set aside.
+			const turnText =
+				turnMonitor.lastReportTurnText() ??
+				(turnMonitor.sawAssistantMessage() ? undefined : turnMonitor.lastAssistantSalvageText()) ??
+				"";
 			const abortReason = aborted ? turnMonitor.resolveAbortReasonText() : undefined;
 			let result: SingleResult | undefined;
 			let finalizeError: unknown;
@@ -3413,7 +3432,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					parentToolCallId: options.parentToolCallId,
 					detached: true,
 					followUpTurn: true,
-					publishMessageResult: ownerWoken || userPrompted,
+					publishMessageResult: ownerWoken || ownerPrompted || userPrompted,
 					// A cancelled wake job must not replace the accepted result.
 					signal: jobCancel.signal,
 					sessionFile,
@@ -3426,9 +3445,10 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					error: caught instanceof Error ? caught.message : String(caught),
 				});
 			} finally {
-				// A user-driven message result is already complete: enqueue its
-				// delivery without reserving an execution slot (which may be full).
-				const messageResult = userPrompted && options.structured === false && result?.outputPath !== undefined;
+				// A focused-user result can complete without a registered wake job;
+				// enqueue its delivery without reserving an execution slot.
+				const messageResult =
+					(userPrompted || ownerPrompted) && options.structured === false && result?.outputPath !== undefined;
 				if (messageResult && !wakeJob && ownerId && session.asyncJobManager && result) {
 					const text = formatTaskResultSummary(result, { totalDurationMs: result.durationMs });
 					try {
