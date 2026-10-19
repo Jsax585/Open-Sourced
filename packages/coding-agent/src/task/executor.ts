@@ -3474,8 +3474,11 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				// What became of the turn's changes is part of its outcome, so it is
 				// settled before anyone is told the turn ended, and only for a turn
 				// whose outcome reaches the owner: a change to the owner's checkout
-				// must not land behind its back.
-				const ownerTold = wakeJob !== undefined || (messageResult && !!ownerId && !!session.asyncJobManager);
+				// must not land behind its back. The owner hears it through its wake
+				// job, through the relay below when it woke the agent but no job
+				// could be registered, or through a user-prompted result's delivery.
+				const ownerTold =
+					wakeJob !== undefined || ownerWoken || (messageResult && !!ownerId && !!session.asyncJobManager);
 				let notice = "";
 				if (result && options.onTurnSettled && ownerTold) {
 					try {

@@ -869,7 +869,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 	let retainSalvagedArtifact = false;
 	// Follow-up turns of an isolated agent wait on this before their capture, so
 	// they never race the first run's landing below.
-	const firstRunLanding = Promise.withResolvers<boolean>();
+	const firstRunLanding = Promise.withResolvers<boolean | null>();
 	const onSubprocessResult =
 		request.invocationKind === "eval"
 			? (result: SingleResult) => request.session.recordEvalSubagentUsage?.(result.usage?.output ?? 0)
@@ -919,10 +919,10 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 					firstRunLanded: firstRunLanding.promise,
 					land: async captured => {
 						if (!policy.applyChanges) {
-							return { summary: describeCapturedChanges(captured), landed: false };
+							return { summary: describeCapturedChanges(captured), landed: null };
 						}
 						const landing = await landCapturedChanges(captured, repoRoot, policy.mergeMode, request.session);
-						return { summary: landing.summary, landed: landing.changesApplied === true };
+						return { summary: landing.summary, landed: landing.changesApplied };
 					},
 				};
 				result = await runIsolatedSubprocess({
@@ -1002,7 +1002,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			{ cause: error, result: settled },
 		);
 	} finally {
-		firstRunLanding.resolve(changesApplied === true);
+		firstRunLanding.resolve(changesApplied);
 		const shouldRetainArtifacts =
 			request.detached === true ||
 			retainSalvagedArtifact ||

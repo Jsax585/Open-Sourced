@@ -185,19 +185,23 @@ export function makeIsolationCommitMessage(session: ToolSession): BuildCommitMes
  */
 export interface IsolationFollowUps {
 	/**
-	 * Settles once the caller has landed (`true`) or given up on (`false`) the
-	 * first run's changes. Follow-up captures wait for it, so they never race
-	 * that landing.
+	 * Settles once the caller is done with the first run's changes: `true`
+	 * landed, `false` the landing was attempted and refused, `null` kept them
+	 * without landing (`task.isolation.apply=false`). Follow-up captures wait
+	 * for it, so they never race that landing.
 	 */
-	readonly firstRunLanded: Promise<boolean>;
+	readonly firstRunLanded: Promise<boolean | null>;
 	/**
 	 * Land one follow-up turn's captured changes. `summary` is appended to that
-	 * turn's result. `landed: false` keeps them pending: the next capture carries
-	 * them again. As for a first run, nested-repo patches that fail to apply
-	 * after the root changes landed are reported in `summary` and not retried;
-	 * each capture writes them to files of its own, so none is overwritten.
+	 * turn's result; `landed` reads like {@link firstRunLanded}. Work that did
+	 * not land stays pending: the next capture carries it again, and after a
+	 * refusal it is handed over again even if the workspace did not change, so
+	 * clearing what blocked it lets the next turn land it. As for a first run,
+	 * nested-repo patches that fail to apply after the root changes landed are
+	 * reported in `summary` and not retried; each capture writes them to files
+	 * of its own, so none is overwritten.
 	 */
-	land(captured: SingleResult): Promise<{ summary: string; landed: boolean }>;
+	land(captured: SingleResult): Promise<{ summary: string; landed: boolean | null }>;
 }
 
 export interface IsolatedRunOptions {
@@ -439,7 +443,9 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	 */
 	let landed: { state: IsolationState; tip: string | undefined } | undefined;
 	/** The last handed-off capture while the caller is still landing it. */
-	let pending: { state: IsolationState; tip: string | undefined; landing: Promise<boolean> } | undefined;
+	let pending: { state: IsolationState; tip: string | undefined; landing: Promise<boolean | null> } | undefined;
+	/** Set when the caller refused the last handoff, so the next capture hands it over again even if unchanged. */
+	let retryRefused = false;
 	// Settles once this function is done with the first run. Follow-up turns
 	// wait for it, so they never capture before the first run's handoff.
 	const firstRunDone = Promise.withResolvers<void>();
@@ -473,12 +479,15 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	/**
 	 * Fold the pending handoff into {@link landed} once the caller reports it.
 	 * Work the caller did not land stays out, so the next capture carries it
-	 * again.
+	 * again; after a refused landing, even an unchanged capture does.
 	 */
 	const settlePending = async (): Promise<void> => {
 		const settled = pending;
 		pending = undefined;
-		if (!settled || !(await settled.landing)) return;
+		if (!settled) return;
+		const outcome = await settled.landing;
+		retryRefused = outcome === false;
+		if (outcome !== true) return;
 		// A capture with no root changes made no branch: the previous tip still holds everything.
 		landed = { state: settled.state, tip: settled.tip ?? landed?.tip };
 	};
@@ -500,15 +509,17 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	): Promise<IsolationHandoff | "unchanged" | "superseded"> => {
 		const current = await captureDeltaPatch(isolationDir, baseline);
 		if (superseded()) return "superseded";
-		if (handedOff && sameIsolationState(handedOff, current.state)) return "unchanged";
+		if (!retryRefused && handedOff && sameIsolationState(handedOff, current.state)) return "unchanged";
 		const delta = landed ? await diffIsolationStates(baseline, landed.state, current.state) : current;
 		if (!delta.rootPatch.trim() && delta.nestedPatches.length === 0) {
 			handedOff = current.state;
+			retryRefused = false;
 			return "unchanged";
 		}
 		if (opts.mergeMode === "patch") {
 			const artifacts = await writeDeltaPatches(delta, opts.artifactsDir, opts.agentId, nextNestedPatchPrefix());
 			handedOff = current.state;
+			retryRefused = false;
 			return { artifacts, state: current.state, tip: undefined };
 		}
 		// With nothing landed yet the branch carries the agent's own commits,
@@ -536,6 +547,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			branch.nestedPatches,
 		);
 		handedOff = branch.state;
+		retryRefused = false;
 		return {
 			artifacts: {
 				branchName: branch.branchName,
@@ -559,21 +571,22 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		try {
 			handoff = await captureHandoff(handle.mergedDir, taskBaseline, opts.buildCommitMessage?.(), superseded);
 		} catch (error) {
-			// Name what release will write: after a patch-mode landing that is the
-			// patch alone, otherwise the task branch.
+			// Name what release will write: patch files always, and the task
+			// branch for root changes unless a patch-mode landing left nothing to
+			// build it on.
 			const patchOnly = landed !== undefined && opts.mergeMode === "patch";
 			return renderIsolationSummary({
 				kind: "follow-up-pending",
 				error: error instanceof Error ? error.message : String(error),
 				branchName: patchOnly ? undefined : `omp/task/${opts.agentId}`,
-				rootPatchPath: patchOnly ? rootPatchPath(opts.artifactsDir, opts.agentId) : undefined,
+				rootPatchPath: rootPatchPath(opts.artifactsDir, opts.agentId),
 			});
 		}
 		if (handoff === "unchanged") return "";
 		// Its work rides along in the next capture, like a failed turn's.
 		if (handoff === "superseded") return renderIsolationSummary({ kind: "follow-up-superseded" });
 		const captured = rememberAgentArtifacts({ ...turn, ...handoff.artifacts });
-		const landing = Promise.withResolvers<boolean>();
+		const landing = Promise.withResolvers<boolean | null>();
 		pending = { state: handoff.state, tip: handoff.tip, landing: landing.promise };
 		try {
 			const outcome = await followUps.land(captured);

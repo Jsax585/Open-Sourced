@@ -1542,7 +1542,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					const isolationFailed =
 						spawnParams.isolated === true &&
 						(singleResult === undefined || singleResult.isolationCaptureFailed === true);
-					const deliveryText = `${finalText}${await buildFollowUpHint(singleResult?.aborted === true, isolationFailed)}`;
+					// Like the thrown path below: a run that failed before registering
+					// (isolation setup, for one) has no agent to message or transcript.
+					const hint = AgentRegistry.global().get(agentId)
+						? await buildFollowUpHint(singleResult?.aborted === true, isolationFailed)
+						: "";
+					const deliveryText = `${finalText}${hint}`;
 					const structured = singleResult?.structuredOutput;
 					if (resultFailed) {
 						// Mark the job itself failed; the failed agent stays interrogable.

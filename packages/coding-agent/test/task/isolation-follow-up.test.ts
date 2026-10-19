@@ -155,12 +155,12 @@ async function runKeptAlive(opts: {
 
 /** Lands captured changes the way the task tool does; `firstRun` reports the first run's landing. */
 function landingFollowUps(repo: string, mergeMode: "patch" | "branch") {
-	const firstRun = Promise.withResolvers<boolean>();
+	const firstRun = Promise.withResolvers<boolean | null>();
 	const followUps: IsolationFollowUps = {
 		firstRunLanded: firstRun.promise,
 		land: async captured => {
 			const outcome = await mergeIsolatedChanges({ result: captured, repoRoot: repo, mergeMode });
-			return { summary: outcome.summary, landed: outcome.changesApplied === true };
+			return { summary: outcome.summary, landed: outcome.changesApplied };
 		},
 	};
 	return { firstRun, followUps };
@@ -253,11 +253,11 @@ describe("isolated agent follow-up turns", () => {
 		const waitedOn = Promise.withResolvers<void>();
 		const firstRunLanded = {
 			// oxlint-disable-next-line unicorn/no-thenable -- the await on it is the signal under test
-			then: (onLanded: (landed: boolean) => unknown, onFailed?: (reason: unknown) => unknown) => {
+			then: (onLanded: (landed: boolean | null) => unknown, onFailed?: (reason: unknown) => unknown) => {
 				waitedOn.resolve();
 				return firstRun.promise.then(onLanded, onFailed);
 			},
-		} as unknown as Promise<boolean>;
+		} as unknown as Promise<boolean | null>;
 		const run = await runKeptAlive({
 			id: "FollowUpEarly",
 			repo,
@@ -372,10 +372,10 @@ describe("isolated agent follow-up turns", () => {
 		// apply=false: nothing lands, so each capture must carry all work since the run began.
 		const handedOver: SingleResult[] = [];
 		const followUps: IsolationFollowUps = {
-			firstRunLanded: Promise.resolve(false),
+			firstRunLanded: Promise.resolve(null),
 			land: async captured => {
 				handedOver.push(captured);
-				return { summary: "captured", landed: false };
+				return { summary: "captured", landed: null };
 			},
 		};
 		const run = await runKeptAlive({
@@ -390,6 +390,8 @@ describe("isolated agent follow-up turns", () => {
 
 		await commitIn(iso, "two\n", "review fix");
 		expect(await run.settleFollowUp?.(result("FollowUpUnlanded"))).toBe("captured");
+		// Kept on purpose, not refused: an unchanged turn hands nothing over again.
+		expect(await run.settleFollowUp?.(result("FollowUpUnlanded"))).toBe("");
 
 		expect(handedOver.map(captured => captured.branchBaseSha)).toEqual([baseSha]);
 		expect(await git(repo, ["log", "--format=%s", `${baseSha}..omp/task/FollowUpUnlanded`])).toBe(
@@ -455,6 +457,34 @@ describe("isolated agent follow-up turns", () => {
 		expect(await run.settleFollowUp?.(result("FollowUpPatchPending"))).toContain("Applied patches: yes");
 		expect(await Bun.file(path.join(repo, "a.txt")).text()).toBe("two\n");
 		await AgentLifecycleManager.global().release("FollowUpPatchPending");
+	});
+
+	it("names the patch files as well as the branch when a branch-mode follow-up cannot be captured", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "branch");
+		const run = await runKeptAlive({
+			id: "FollowUpBranchPending",
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		const firstLanding = await mergeIsolatedChanges({ result: run.first, repoRoot: repo, mergeMode: "branch" });
+		firstRun.resolve(firstLanding.changesApplied);
+		await commitIn(iso, "two\n", "review fix");
+		vi.spyOn(worktreeModule, "captureDeltaPatch").mockRejectedValueOnce(new Error("ENOSPC"));
+
+		const summary = await run.settleFollowUp?.(result("FollowUpBranchPending"));
+
+		// Release always writes patch files; the branch holds root-repository changes only,
+		// so a turn that changed only a nested repository is still accounted for.
+		expect(summary).toContain("ENOSPC");
+		expect(summary).toContain("/FollowUpBranchPending.patch");
+		expect(summary).toContain("omp/task/FollowUpBranchPending");
+		expect(await run.settleFollowUp?.(result("FollowUpBranchPending"))).toContain("Merged branch");
+		expect(await Bun.file(path.join(repo, "a.txt")).text()).toBe("two\n");
+		await AgentLifecycleManager.global().release("FollowUpBranchPending");
 	});
 
 	/**
@@ -535,6 +565,25 @@ describe("isolated agent follow-up turns", () => {
 		expect(await git(repo, ["log", "--format=%s", `${landedTip}..${branch}`])).toBe("review fix");
 	});
 
+	it("lands a refused follow-up with the next turn once its block is cleared, even if that turn edits nothing", async () => {
+		const { repo, run, commitOnly, landedTip } = await landedRunOnDirtyParent("FollowUpRetry");
+		await commitOnly("w.txt", "1-agent\n2\n3\n", "review fix");
+		expect(await run.settleFollowUp?.(result("FollowUpRetry"))).toContain("Branch merge failed");
+
+		// The user drops the uncommitted line the pick was refused on.
+		await git(repo, ["checkout", "--", "w.txt"]);
+		const summary = await run.settleFollowUp?.(result("FollowUpRetry"));
+
+		expect(summary).toContain("Merged branch");
+		expect(await git(repo, ["log", "--format=%s", `${landedTip}..HEAD`])).toBe("review fix");
+		expect(await git(repo, ["show", "HEAD:w.txt"])).toBe("1-agent\n2\n3");
+		expect(await Bun.file(path.join(repo, "u.txt")).text()).toBe("u-wip\n");
+		// Landed now: a further unchanged turn has nothing to hand over.
+		expect(await run.settleFollowUp?.(result("FollowUpRetry"))).toBe("");
+		await AgentLifecycleManager.global().release("FollowUpRetry");
+		expect(await taskBranches(repo)).toBe("");
+	});
+
 	it("marks a first run whose changes could not be captured and lands none of its follow-ups", async () => {
 		const { repo, iso } = await createRepoAndIsolation();
 		const { firstRun, followUps } = landingFollowUps(repo, "patch");
@@ -548,7 +597,8 @@ describe("isolated agent follow-up turns", () => {
 			followUps,
 			firstRun: () => commitIn(iso, "one\n", "first run"),
 		});
-		firstRun.resolve(false);
+		// As the task tool reports it: nothing was captured, so no landing was attempted.
+		firstRun.resolve(null);
 
 		expect(run.first.exitCode).toBe(0);
 		expect(run.first.isolationCaptureFailed).toBe(true);

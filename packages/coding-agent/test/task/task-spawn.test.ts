@@ -73,6 +73,11 @@ function makeResult(id: string, overrides: Partial<SingleResult> = {}): SingleRe
 	};
 }
 
+/** What `runSubprocess` does once the agent has run: leave it registered for follow-ups. */
+function registerFinishedAgent(id: string): void {
+	AgentRegistry.global().register({ id, displayName: id, kind: "sub", session: null, status: "idle" });
+}
+
 function getJobProgress(job: AsyncJob): AgentProgress | undefined {
 	const progress = job.latestDetails?.progress;
 	return Array.isArray(progress) ? progress[0] : undefined;
@@ -127,6 +132,7 @@ describe("task spawn routing", () => {
 		const gate = deferred();
 		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			await gate.promise;
+			registerFinishedAgent(options.id ?? "?");
 			return makeResult(options.id ?? "?");
 		});
 
@@ -224,12 +230,13 @@ describe("task spawn routing", () => {
 		expect(runSpy.mock.calls[0]?.[0].modelRoute).toBe("pool 1");
 	});
 
-	for (const { label, runnerOverrides, expectRetained } of [
+	for (const { label, runnerOverrides, started, outcome } of [
 		{
 			// Follow-up turns of a healthy isolated agent land like its first run.
 			label: "tells the parent a finished isolated agent can be messaged",
 			runnerOverrides: {},
-			expectRetained: false,
+			started: true,
+			outcome: "messageable",
 		},
 		{
 			// The runner keeps the workspace when captured changes could not be
@@ -242,9 +249,17 @@ describe("task spawn routing", () => {
 				isolationCaptureFailed: true,
 				error: "Patch capture failed: EACCES. Isolation workspace retained at /wt/sandboxed/m — recover the changes from it; `omp worktree clear` reclaims it once this session has exited.",
 			},
-			expectRetained: true,
+			started: true,
+			outcome: "retained",
 		},
-	]) {
+		{
+			// Isolation setup failed before any agent ran: there is nobody to message.
+			label: "offers no follow-up when isolation failed before the agent started",
+			runnerOverrides: { patchPath: undefined, exitCode: 1, error: "Isolation setup failed: ENOSPC" },
+			started: false,
+			outcome: "never-started",
+		},
+	] as const) {
 		it(label, async () => {
 			vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
 				agents: [{ ...taskAgent, model: ["anthropic/claude-sonnet-4"] }],
@@ -252,12 +267,15 @@ describe("task spawn routing", () => {
 			});
 			const repoRoot = "/repo-root";
 			vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot });
-			vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts => ({
-				...makeResult(opts.agentId),
-				isolated: true,
-				patchPath: `${opts.artifactsDir}/${opts.agentId}.patch`,
-				...runnerOverrides,
-			}));
+			vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts => {
+				if (started) registerFinishedAgent(opts.agentId);
+				return {
+					...makeResult(opts.agentId),
+					isolated: true,
+					patchPath: `${opts.artifactsDir}/${opts.agentId}.patch`,
+					...runnerOverrides,
+				};
+			});
 
 			const manager = createManager();
 			const tool = await TaskTool.create(
@@ -271,23 +289,25 @@ describe("task spawn routing", () => {
 				isolated: true,
 			} as TaskParams);
 			const job = manager.getJob(result.details?.async?.jobId ?? "");
-			await job!.promise;
+			await job!.promise.catch(() => undefined);
 
 			const delivered = `${job!.resultText ?? ""}${job!.errorText ?? ""}`;
-			expect(delivered).toContain("history://Sandboxed");
 			expect(delivered).not.toContain("removed");
-			if (expectRetained) {
-				expect(delivered).toContain("Sandboxed ran isolated and cannot be resumed or messaged");
-				expect(delivered).not.toContain("message it via");
-			} else {
+			if (outcome === "messageable") {
 				expect(delivered).toContain("Sandboxed is now idle");
 				expect(delivered).toContain("message it via `write agent://Sandboxed`");
-			}
-			if (expectRetained) {
-				expect(job!.status).toBe("failed");
-				expect(delivered).toContain("Isolation workspace retained at /wt/sandboxed/m");
-			} else {
 				expect(job!.status).toBe("completed");
+			} else if (outcome === "retained") {
+				expect(delivered).toContain("Sandboxed ran isolated and cannot be resumed or messaged");
+				expect(delivered).toContain("history://Sandboxed");
+				expect(delivered).not.toContain("message it via");
+				expect(delivered).toContain("Isolation workspace retained at /wt/sandboxed/m");
+				expect(job!.status).toBe("failed");
+			} else {
+				expect(delivered).toContain("Isolation setup failed: ENOSPC");
+				expect(delivered).not.toContain("is now idle");
+				expect(delivered).not.toContain("write agent://Sandboxed");
+				expect(job!.status).toBe("failed");
 			}
 		});
 	}

@@ -947,6 +947,27 @@ describe("runSubprocess result acceptance", () => {
 			}
 		});
 
+		it("settles an owner-woken turn and relays the notice when the owner's job cannot be registered", async () => {
+			const { manager, harness, observer, settle } = setUp();
+			vi.spyOn(manager, "register").mockImplementation(() => {
+				throw new Error("running-job limit reached");
+			});
+			try {
+				const relayed = IrcBus.global().wait("Parent", { from: AGENT_ID }, 1000);
+				const finish = observer([ircRecord("Parent", "fix the mask path too")]);
+				harness.emitAssistantText("mask path fixed too");
+				await finish?.(undefined);
+
+				// The relay is the owner's only word of this turn, so it carries the notice.
+				expect(settle).toHaveBeenCalledTimes(1);
+				const relay = await relayed;
+				expect(relay?.body).toContain("mask path fixed too");
+				expect(relay?.body?.endsWith(NOTICE)).toBe(true);
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
 		it("still tells a peer the agent already answered what became of the turn's changes", async () => {
 			const { manager, harness, observer, settle, parent } = setUp();
 			try {
