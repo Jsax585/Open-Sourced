@@ -584,6 +584,36 @@ describe("isolated agent follow-up turns", () => {
 		expect(await taskBranches(repo)).toBe("");
 	});
 
+	it("lands a refused first run with the next turn once its block is cleared, even if that turn edits nothing", async () => {
+		const { repo, iso, baseSha } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "branch");
+		const run = await runKeptAlive({
+			id: "FirstRunRetry",
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		// An uncommitted edit in the parent blocks the first run's pick.
+		await Bun.write(path.join(repo, "a.txt"), "stray\n");
+		const firstLanding = await mergeIsolatedChanges({ result: run.first, repoRoot: repo, mergeMode: "branch" });
+		expect(firstLanding.changesApplied).toBe(false);
+		firstRun.resolve(firstLanding.changesApplied);
+
+		// The user drops that edit; the agent's next turn changes nothing.
+		await git(repo, ["checkout", "--", "a.txt"]);
+		const summary = await run.settleFollowUp?.(result("FirstRunRetry"));
+
+		expect(summary).toContain("Merged branch");
+		expect(await git(repo, ["log", "--format=%s", `${baseSha}..HEAD`])).toBe("first run");
+		expect(await Bun.file(path.join(repo, "a.txt")).text()).toBe("one\n");
+		// Landed now: a further unchanged turn has nothing to hand over.
+		expect(await run.settleFollowUp?.(result("FirstRunRetry"))).toBe("");
+		await AgentLifecycleManager.global().release("FirstRunRetry");
+		expect(await taskBranches(repo)).toBe("");
+	});
+
 	it("marks a first run whose changes could not be captured and lands none of its follow-ups", async () => {
 		const { repo, iso } = await createRepoAndIsolation();
 		const { firstRun, followUps } = landingFollowUps(repo, "patch");
