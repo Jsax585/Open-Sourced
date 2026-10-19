@@ -138,6 +138,19 @@ describe("AttachmentGuard", () => {
 		expect(guard.attachedTabIds()).toEqual([]);
 	});
 
+	it("refreshes a targeted retry after attachment ownership advances", () => {
+		const { guard, timers, detached } = makeGuard();
+		let epoch = 1;
+		guard.retry(1, () => epoch === 1);
+
+		epoch = 2;
+		guard.rearmRetry(1, () => epoch === 2);
+		timers.flush();
+
+		expect(detached).toEqual([{ tabIds: [1], source: "retry" }]);
+		expect(guard.attachedTabIds()).toEqual([]);
+	});
+
 	it("re-arms targeted cleanup when a retry detach leaves the attachment alive", () => {
 		const timers = new FakeTimers();
 		const detached: Array<{ tabIds: number[]; source: "sweep" | "retry" }> = [];

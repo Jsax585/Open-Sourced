@@ -73,6 +73,13 @@ export class AttachmentGuard<H> {
 		this.#targetedRetries.set(tabId, pending);
 	}
 
+	/** Refresh an already-armed cleanup retry after attachment ownership advances. */
+	rearmRetry(tabId: number, isFresh: () => boolean): void {
+		if (!this.#targetedRetries.has(tabId)) return;
+		this.#cancelRetry(tabId);
+		this.retry(tabId, isFresh);
+	}
+
 	/** Tabs currently believed to hold an extension-owned attachment. */
 	attachedTabIds(): number[] {
 		return [...this.#attached];

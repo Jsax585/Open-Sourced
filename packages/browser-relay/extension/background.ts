@@ -1198,7 +1198,18 @@ async function attachTabOperation(
 	// cancellation look stale and let the delayed persistence restore ownership.
 	noteAttachmentStateChange(attachmentStateEpochs, tabId);
 	const attachmentEpoch = attachmentStateEpochs.get(tabId) ?? 0;
-	await chrome.debugger.attach({ tabId }, "1.3");
+	try {
+		await chrome.debugger.attach({ tabId }, "1.3");
+	} catch (error) {
+		// A targeted cleanup may still own a live debugger attachment after its
+		// detach failed. This attach attempt advanced the epoch, so refresh that
+		// retry's freshness snapshot before propagating Chrome's rejection.
+		attachmentGuard.rearmRetry(
+			tabId,
+			() => (attachmentStateEpochs.get(tabId) ?? 0) === attachmentEpoch,
+		);
+		throw error;
+	}
 	freshRootRequiredTabIds.delete(tabId);
 	// The relay that requested this attachment disappeared while Chrome was
 	// still resolving attach(). Its pending RPC was rejected by RelayBridge,

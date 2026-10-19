@@ -14621,6 +14621,31 @@ describe("RelayBridge file chooser interception", () => {
 		expect(sent(ext)).toEqual([true, false, true, false]);
 	});
 
+	it("switches interception off when the remaining page owner detaches after another owner disables it", async () => {
+		const bridge = new RelayBridge({ group: { title: "omp", color: "cyan" } });
+		const ext = new FakeExtSocket();
+		connect(bridge, ext, [tab({ tabId: 1 })]);
+		const holderCdp = new FakeCdpSocket();
+		const holderId = bridge.cdpConnected(holderCdp);
+		await attachPage(bridge, ext, holderCdp, holderId, 1);
+		const cdp = new FakeCdpSocket();
+		const connId = bridge.cdpConnected(cdp);
+		const remaining = await attachPage(bridge, ext, cdp, connId, 1);
+		const departing = await attachPage(bridge, ext, cdp, connId, 1);
+
+		await intercept(bridge, ext, connId, remaining, true);
+		await intercept(bridge, ext, connId, departing, true);
+		await intercept(bridge, ext, connId, departing, false);
+		bridge.cdpMessage(
+			connId,
+			JSON.stringify({ id: ++msgSeq, method: "Target.detachFromTarget", params: { sessionId: remaining } }),
+		);
+		await flush();
+		ack(bridge, ext, "send");
+
+		expect(sent(ext)).toEqual([true, true, true, false]);
+	});
+
 	/** Send an interception command without answering it; returns its CDP id. */
 	function request(bridge: RelayBridge, connId: number, sessionId: string, enabled: boolean): number {
 		const id = ++msgSeq;

@@ -2537,9 +2537,9 @@ export class RelayBridge {
 		this.#enqueuePreloadScriptCleanup(tab, removed);
 	}
 
-	#forgetSessionSubscriptions(tabKey: string, sessionIds: Iterable<string>): void {
+	#forgetSessionSubscriptions(tabKey: string, sessionIds: Iterable<string>): boolean {
 		const tab = this.#tabs.get(tabKey);
-		if (!tab) return;
+		if (!tab) return false;
 		const previousByKey = new Map<string, SessionRootSubscription | undefined>();
 		for (const key of tab.subscriptions.keys()) {
 			previousByKey.set(key, this.#latestSubscriptionForKey(tab, key));
@@ -2558,6 +2558,7 @@ export class RelayBridge {
 			}))
 			.filter(({ previous, next }) => !subscriptionEquals(previous, next));
 		this.#scheduleLiveSubscriptionReconcile(tab, changes);
+		return changes.some(({ key }) => key === "Page.setInterceptFileChooserDialog");
 	}
 
 	#scheduleLiveSubscriptionReconcile(
@@ -4894,10 +4895,12 @@ export class RelayBridge {
 		const ref = conn.sessions.get(sessionId);
 		if (!ref) return;
 		conn.sessions.delete(sessionId);
+		let fileChooserReconciled = false;
 		if (ref.kind === "page") {
-			this.#forgetSessionSubscriptions(ref.tabKey, [sessionId]);
+			fileChooserReconciled = this.#forgetSessionSubscriptions(ref.tabKey, [sessionId]);
 			this.#forgetSessionPreloadScripts(ref.tabKey, [sessionId]);
-		} else if (ref.interceptsFileChooser) this.#releaseFileChooserInterception(ref.tabKey);
+		}
+		if (ref.interceptsFileChooser && !fileChooserReconciled) this.#releaseFileChooserInterception(ref.tabKey);
 		const targetId = ref.kind === "tab" ? tabTargetIdFromKey(ref.tabKey) : pageTargetIdFromKey(ref.tabKey);
 		this.#emit(conn, "Target.detachedFromTarget", { sessionId, targetId }, parentSessionId);
 		// An explicit release of the last session must drop the attachment too,
