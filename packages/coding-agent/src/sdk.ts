@@ -3085,6 +3085,18 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				reason: `${requestedSelector} ${cause}; retry.fallbackChains["${chainKey}"] chose the replacement`,
 				role: chainKey,
 			});
+			// Every deferred selection ends the same way: the session adopts the
+			// model's thinking level, says why a fallback replaced the request,
+			// and warms the model's connection.
+			const settleDeferredModel = (
+				selected: Model,
+				fallback: { from: string; reason: string } | undefined,
+			): void => {
+				adoptThinkingForModel(selected);
+				const target = formatModelSelectorValue(formatModelStringWithRouting(selected), effectiveThinkingLevel);
+				modelFallbackMessage = fallback ? `Fallback: ${fallback.from} -> ${target}\n${fallback.reason}` : undefined;
+				void prewarmModelConnection(selected);
+			};
 			for (let patternIndex = 0; patternIndex < expandedModelPatterns.length; patternIndex += 1) {
 				const { pattern, retryFallback } = expandedModelPatterns[patternIndex];
 				const primary = parseModelPattern(pattern, resolutionModels, matchPreferences);
@@ -3259,20 +3271,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					: retryFallback && usageFallbackTriggered
 						? { ...retryFallback, pinned: true }
 						: retryFallback;
-				modelFallbackMessage = undefined;
 				if (selectedExplicitThinkingLevel) {
 					restoredSessionThinkingLevel = selectedThinkingLevel;
 				}
-				adoptThinkingForModel(selectedModel);
-				const fallbackReason = startupReplacement ?? usageFallbackReason;
-				if (fallbackReason) {
-					const target = formatModelSelectorValue(
-						formatModelStringWithRouting(selectedModel),
-						effectiveThinkingLevel,
-					);
-					modelFallbackMessage = `Fallback: ${fallbackReason.from} -> ${target}\n${fallbackReason.reason}`;
-				}
-				void prewarmModelConnection(selectedModel);
+				settleDeferredModel(selectedModel, startupReplacement ?? usageFallbackReason);
 				break;
 			}
 			if (!model && chainFallback) {
@@ -3285,22 +3287,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					initialRetryFallback = {
 						role: startupReplacement.role,
 						originalSelector: requestedSelector,
-						originalThinkingLevel: parseModelString(requestedSelector, {
-							allowMaxSuffix: true,
-							allowAutoAlias: true,
-							isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
-						})?.thinkingLevel,
+						originalThinkingLevel: replacement.requestedThinkingLevel,
 					};
 					if (replacement.thinkingLevel !== undefined) {
 						restoredSessionThinkingLevel = replacement.thinkingLevel;
 					}
-					adoptThinkingForModel(replacement.model);
-					const target = formatModelSelectorValue(
-						formatModelStringWithRouting(replacement.model),
-						effectiveThinkingLevel,
-					);
-					modelFallbackMessage = `Fallback: ${requestedSelector} -> ${target}\n${startupReplacement.reason}`;
-					void prewarmModelConnection(replacement.model);
+					settleDeferredModel(replacement.model, startupReplacement);
 				}
 			}
 			if (startupReplacement) {
