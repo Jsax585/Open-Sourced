@@ -13,7 +13,12 @@ import {
 	suppressTerminalOutput,
 } from "@oh-my-pi/pi-utils/terminal-output-guard";
 import { TSP_VERSION } from "@oh-my-pi/pi-wire";
-import { getActiveTerminal, registerStdoutErrorHandler, setActiveTerminal } from "./active-terminal";
+import {
+	getActiveTerminal,
+	registerStderrErrorHandler,
+	registerStdoutErrorHandler,
+	setActiveTerminal,
+} from "./active-terminal";
 import {
 	encodeBundledGlyphRegistrations,
 	encodeGlyphCoverageQuery,
@@ -906,6 +911,7 @@ export class ProcessTerminal implements Terminal {
 	readonly #nativeWindowsConsole: boolean;
 	#writeLogPath = $env.PI_TUI_WRITE_LOG || "";
 	#stdoutErrorCleanup?: () => void;
+	#stderrErrorCleanup?: () => void;
 	#stdoutErrorHandler = (err: Error) => {
 		if (isRedirectedWriteError(err)) {
 			// The redirected log target failed, not the terminal; the UI and
@@ -2571,6 +2577,8 @@ export class ProcessTerminal implements Terminal {
 		}
 		this.#stdoutErrorCleanup?.();
 		this.#stdoutErrorCleanup = undefined;
+		this.#stderrErrorCleanup?.();
+		this.#stderrErrorCleanup = undefined;
 		// After stop() the terminal is shared with other writers; visibility
 		// tracking is only meaningful while this instance owns the TTY.
 		this.#cursorVisible = undefined;
@@ -2578,6 +2586,16 @@ export class ProcessTerminal implements Terminal {
 
 	#ensureStdoutErrorHandler(): void {
 		this.#stdoutErrorCleanup ??= registerStdoutErrorHandler(this.#stdoutErrorHandler);
+		// stderr is the diagnostics channel, never the render path: a failure
+		// there (EIO, or the redirected log target rejecting writes) must not
+		// crash the process as an unhandled stream error or disconnect the UI.
+		this.#stderrErrorCleanup ??= registerStderrErrorHandler(err => {
+			if (isRedirectedWriteError(err)) {
+				logger.warn("redirected log write failed on stderr; terminal unaffected", { err: String(err) });
+				return;
+			}
+			logger.error("stderr stream failed; continuing without diagnostics", { err: String(err) });
+		});
 	}
 
 	#markTerminalDisconnected(reason: string, err?: unknown): void {

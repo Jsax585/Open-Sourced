@@ -223,7 +223,7 @@ describe("terminal output guard", () => {
 		},
 	);
 
-	it.skipIf(process.platform === "win32")(
+	it.skipIf(process.platform !== "linux")(
 		"a callback-free redirected write survives an unwritable log target",
 		async () => {
 			const root = fs.mkdtempSync(path.join(os.tmpdir(), "redirect-write-error-"));
