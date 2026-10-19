@@ -560,6 +560,18 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			});
 		}
 	};
+	/**
+	 * Delete the task branch this runner published and stop listing it. A
+	 * replacement handoff with no root work leaves the old branch in place, and
+	 * it would keep offering root changes the agent removed. A no-op when no
+	 * branch was published.
+	 */
+	const dropPublishedBranch = async (): Promise<void> => {
+		if (publishedBranchTip === undefined) return;
+		await resetTaskBranch(`omp/task/${opts.agentId}`, undefined);
+		publishedBranchTip = undefined;
+		AgentRegistry.global().clearHistory(opts.agentId, ["branchName"]);
+	};
 	/** Remove what the caller was handed and did not land, after the agent undid all of it. */
 	const withdrawUnlanded = async (): Promise<void> => {
 		await Promise.all([...unlandedFiles].map(file => fs.rm(file, { force: true })));
@@ -640,6 +652,10 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			if (branch.branchName) await resetTaskBranch(branch.branchName, publishedBranchTip);
 			return "superseded";
 		}
+		// The replacement holds no root work (the agent dropped it and kept nested
+		// work), so `commitToBranch` wrote no branch and left the old one alone.
+		// That branch holds root changes the agent removed.
+		if (!branch.branchName) await dropPublishedBranch();
 		const nestedPatchPaths = await persistNestedPatches(
 			opts.artifactsDir,
 			nextNestedPatchPrefix(),
@@ -779,6 +795,9 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 							opts.description,
 						)
 					: await commitToBranch(handle.mergedDir, taskBaseline, opts.agentId, opts.description, undefined);
+				// No root branch: an earlier unlanded handoff's branch holds root work
+				// the agent has since removed.
+				if (!commitResult?.branchName) await dropPublishedBranch();
 				AgentRegistry.global().setHistory(opts.agentId, { branchName: commitResult?.branchName });
 			} finally {
 				await cleanupHandle();

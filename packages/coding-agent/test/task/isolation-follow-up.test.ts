@@ -1009,6 +1009,58 @@ describe("isolated agent follow-up turns", () => {
 		expect(await Bun.file(run.first.patchPath ?? "").text()).toContain("+two");
 	});
 
+	/** A refused branch handoff holding root work plus nested work in `sub/`. */
+	async function refusedBranchWithNested(id: string) {
+		const { repo, iso } = await createRepoAndIsolation();
+		await addNestedRepo(repo, iso);
+		const { firstRun, followUps } = landingFollowUps(repo, "branch");
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps,
+			firstRun: async () => {
+				await commitIn(iso, "one\n", "first run");
+				await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+			},
+		});
+		firstRun.resolve(false);
+		expect(await taskBranches(repo)).toContain(`omp/task/${id}`);
+		expect(AgentRegistry.global().get(id)?.history?.branchName).toBe(`omp/task/${id}`);
+		// The agent drops its root change and keeps the nested one.
+		await commitIn(iso, "zero\n", "drop root work");
+		return { repo, iso, run };
+	}
+
+	it("removes a refused task branch when a later turn drops all its root work but keeps nested work", async () => {
+		const id = "FollowUpRootDropped";
+		const { repo, run } = await refusedBranchWithNested(id);
+
+		await run.settleFollowUp?.(result(id));
+
+		// The branch held only root changes the agent has since removed.
+		expect(await taskBranches(repo)).toBe("");
+		expect(AgentRegistry.global().get(id)?.history?.branchName).toBeUndefined();
+		// The nested work is still real and still offered.
+		const nested = AgentRegistry.global().get(id)?.history?.nestedPatchPaths ?? [];
+		expect(nested).toHaveLength(1);
+		expect(await Bun.file(nested[0] ?? "").text()).toContain("+n1");
+		await AgentLifecycleManager.global().release(id);
+		expect(await taskBranches(repo)).toBe("");
+	});
+
+	it("removes a refused task branch on release when the agent dropped all its root work but kept nested work", async () => {
+		const id = "ReleaseRootDropped";
+		const { repo } = await refusedBranchWithNested(id);
+
+		// That turn is never captured: release is the first code to see it.
+		await AgentLifecycleManager.global().release(id);
+
+		expect(await taskBranches(repo)).toBe("");
+		expect(AgentRegistry.global().get(id)?.history?.branchName).toBeUndefined();
+	});
+
 	it("does not announce a withdrawal when the first run handed over nothing", async () => {
 		const { repo, iso } = await createRepoAndIsolation();
 		const { firstRun, followUps } = landingFollowUps(repo, "patch");
