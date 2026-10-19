@@ -71,8 +71,11 @@ export function formatTaskResultSummary(
 	const modelFallback =
 		result.resolvedModelIsFallback && result.resolvedModel
 			? {
-					served: result.resolvedModel,
-					requested: result.modelOverride === undefined ? undefined : [result.modelOverride].flat().join(", "),
+					served: escapeHarnessTags(result.resolvedModel),
+					requested:
+						result.modelOverride === undefined
+							? undefined
+							: escapeHarnessTags([result.modelOverride].flat().join(", ")),
 					reason:
 						result.resolvedModelFallbackReason === undefined
 							? undefined
