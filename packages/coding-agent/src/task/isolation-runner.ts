@@ -456,6 +456,10 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	// null). Its files are the only copy until a later turn lands them, so a
 	// release must not let the no-session lease delete them.
 	let preserveUnlanded = false;
+	// Tip of omp/task/<id> the caller has already been handed, including a
+	// branch they refused to merge. A superseded follow-up must restore this,
+	// not delete it: the branch is the only copy of that work.
+	let publishedBranchTip: string | undefined;
 	// Settles once this function is done with the first run. Follow-up turns
 	// wait for it, so they never capture before the first run's handoff.
 	const firstRunDone = Promise.withResolvers<void>();
@@ -512,8 +516,9 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	const nextNestedPatchPrefix = (): string => `${opts.agentId}.nested-${++laterCaptures}`;
 	/**
 	 * A follow-up wrote the task branch, then the caller said the capture was
-	 * superseded before it landed. Put the branch back: restore the tip the
-	 * caller already has, or delete a branch this capture created from scratch.
+	 * superseded before it landed. Put the branch back to the tip already
+	 * handed over. Delete it only when this capture created it and nothing
+	 * was ever published.
 	 */
 	const discardSupersededBranch = async (
 		branchName: string | undefined,
@@ -580,7 +585,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		// is replaced by the next capture's. Undo the write first: a follow-up
 		// that never lands must not stay on the branch the caller already has.
 		if (superseded()) {
-			await discardSupersededBranch(branch.branchName, landed?.tip);
+			await discardSupersededBranch(branch.branchName, publishedBranchTip);
 			return "superseded";
 		}
 		const nestedPatchPaths = await persistNestedPatches(
@@ -589,6 +594,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			branch.nestedPatches,
 		);
 		handedOff = branch.state;
+		publishedBranchTip = branch.headSha;
 		retryRefused = false;
 		return {
 			artifacts: {
@@ -732,6 +738,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	/** Record the first run's capture for follow-ups and release. */
 	const recordFirstRunHandoff = (state: IsolationState, tip: string | undefined): void => {
 		handedOff = state;
+		if (tip) publishedBranchTip = tip;
 		const followUps = opts.followUps;
 		if (followUps && opts.baseOptions.keepAlive !== false && AgentLifecycleManager.global().has(opts.agentId)) {
 			pending = { state, tip, landing: followUps.firstRunLanded };

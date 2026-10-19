@@ -151,6 +151,7 @@
 - Fixed an isolated task's follow-up that you left unapplied disappearing when the agent was released and the session had no session file ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 - Fixed releasing an isolated task while its first run was still being captured deleting that capture ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 - Fixed a follow-up an isolated task made after you had already moved on staying on the task branch ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
+- Fixed a refused isolated task's branch being deleted when a later follow-up was superseded before it landed ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 - Fixed cancelling a message to an isolated task still landing that turn's changes in your checkout ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 
 ## [18.12.2] - 2026-10-18
