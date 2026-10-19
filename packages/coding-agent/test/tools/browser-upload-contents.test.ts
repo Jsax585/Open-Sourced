@@ -23,7 +23,8 @@ import { chromiumAvailable } from "./chromium-probe";
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
 
 // File inputs reached by selector, by handle and inside a shadow root; buttons whose click opens a hidden input's
-// chooser, one of which turns its input into a text field once the chooser is open; a drop zone.
+// chooser, one of which turns its input into a text field once the chooser is open; drop zones in the document and in
+// the shadow root, and an element that takes no drop though the document cancels drops everywhere.
 const html = `<!doctype html>
 <style>button, #drop { display: block; margin: 8px; padding: 8px; }</style>
 <input id="direct" type="file" multiple>
@@ -33,11 +34,19 @@ const html = `<!doctype html>
 <button id="other" type="button">Upload another</button><input id="other-input" type="file" hidden>
 <button id="swap" type="button">Upload, then swap</button><input id="swap-input" type="file" hidden>
 <div id="drop">Drop files here</div>
+<div id="inert">Not a drop zone</div>
 <input id="folder" type="file" webkitdirectory>
 <script>
 window.composedInputs = [];
 window.dropped = [];
-document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = '<input id="shadow" type="file">';
+const shadow = document.getElementById("host").attachShadow({ mode: "open" });
+shadow.innerHTML = '<input id="shadow" type="file"><div id="shadow-drop">Drop files here</div>';
+shadow.getElementById("shadow-drop").addEventListener("drop", event => {
+  event.preventDefault();
+  window.dropped = [...event.dataTransfer.files];
+});
+document.addEventListener("dragover", event => event.preventDefault());
+document.addEventListener("drop", event => event.preventDefault());
 document.addEventListener("input", event => composedInputs.push(event.composedPath()[0].id));
 for (const id of ["trigger", "other"])
   document.getElementById(id).addEventListener("click", () => document.getElementById(id + "-input").click());
@@ -187,6 +196,7 @@ async function openConnectedTab(toolCallId: string, options: { page?: string; pr
 		[
 			exe,
 			"--headless=new",
+			"--no-sandbox",
 			"--no-first-run",
 			"--use-mock-keychain",
 			`--user-data-dir=${root}`,
@@ -401,6 +411,28 @@ return {
 				await close();
 			}
 		}, 60_000);
+
+		test("fails a drop that nothing on the page reads", async () => {
+			const { run, close } = await openConnectedTab(`browser-upload-inert-${route}`, {
+				proxy: routeProxy(route),
+			});
+			try {
+				await Bun.write(path.join(tempDir, "alpha.txt"), "alpha");
+				const result = await run(`const errors = [];
+for (const selector of ["#inert", "pierce/#shadow-drop"]) {
+	try { await tab.uploadFile(selector, "alpha.txt"); errors.push(null); }
+	catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
+}
+return { errors, dropped: await tab.evaluate(() => window.dropped.map(file => file.name)) };`);
+				// The document cancels the inert element's drop but never reads its files; the shadow root's zone does.
+				expect(result).toEqual({
+					errors: [expect.stringContaining("nothing on the page took the dropped files"), null],
+					dropped: ["alpha.txt"],
+				});
+			} finally {
+				await close();
+			}
+		}, 60_000);
 	});
 
 	test("stages a folder whole for a directory input", async () => {
@@ -446,17 +478,19 @@ return {
 		try {
 			// Base64 in a single message would come to 4/3 of the file, over the cap.
 			const digest = await writeRandomFile(path.join(tempDir, "large.bin"), maxMessageBytes);
+			// Three 16 MiB uploads: the budget covers slow hosts, since this checks chunking, not throughput.
 			const errors = await run(
 				collectErrors(`() => tab.uploadFile("#direct", "large.bin"),
 	() => tab.uploadFile("#trigger", "large.bin"),
 	() => tab.uploadFile("#drop", "large.bin"),`),
+				60,
 			);
 			expect(errors).toEqual([]);
 			expect(await run(readDigests)).toEqual([digest, digest, digest]);
 		} finally {
 			await close();
 		}
-	}, 90_000);
+	}, 120_000);
 
 	test("gives streaming contents the cell's budget, not the action deadline", async () => {
 		// Each chunk takes longer than the 8 s action deadline to arrive; finding the target does not.
@@ -637,4 +671,47 @@ test("stages a symlinked file's contents, once while the file is unchanged", asy
 	const [changed] = await staging.stage([await openUploadSource(link)]);
 	expect(changed).not.toBe(first);
 	expect(await Bun.file(changed!).text()).toBe("changed");
+});
+
+test("stages a file again when it changes without moving its size or mtime", async () => {
+	const file = path.join(tempDir, "same-stamp.txt");
+	const stamp = new Date(1_900_000_000_000);
+	await Bun.write(file, "before");
+	await fs.utimes(file, stamp, stamp);
+	const staging = new UploadStaging(path.join(tempDir, "same-stamp-staging"));
+	await staging.stage([await openUploadSource(file)]);
+	// ctime cannot be set and Linux stamps it from a coarse clock; a real tick apart keeps the rewrite distinguishable.
+	await Bun.sleep(20);
+	await Bun.write(file, "after!");
+	await fs.utimes(file, stamp, stamp);
+	const [second] = await staging.stage([await openUploadSource(file)]);
+	expect(await Bun.file(second!).text()).toBe("after!");
+});
+
+test("marks the staging folder used when an upload reuses a copy, so the sweep keeps it", async () => {
+	const file = path.join(tempDir, "reused.txt");
+	await Bun.write(file, "reused");
+	const directory = path.join(os.tmpdir(), `omp-uploads-${process.pid}-reuse-${crypto.randomUUID().slice(0, 8)}`);
+	const staging = new UploadStaging(directory);
+	try {
+		await staging.stage([await openUploadSource(file)]);
+		const dayAgo = new Date(Date.now() - 25 * 60 * 60 * 1000);
+		await fs.utimes(directory, dayAgo, dayAgo);
+		await staging.stage([await openUploadSource(file)]);
+		// The tab was released after that upload; its page may still read the copy.
+		await sweepUploadStaging(new Set());
+		expect((await stagingFolders()).has(path.basename(directory))).toBe(true);
+	} finally {
+		await fs.rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("stages a folder holding a link back to itself, leaving the loop out", async () => {
+	const album = path.join(tempDir, "looped-album");
+	await Bun.write(path.join(album, "nested", "one.txt"), "one");
+	await fs.symlink(album, path.join(album, "nested", "loop"), "junction");
+	const staging = new UploadStaging(path.join(tempDir, "loop-staging"));
+	const [copy] = await staging.stage([await openUploadSource(album)]);
+	expect(await Bun.file(path.join(copy!, "nested", "one.txt")).text()).toBe("one");
+	expect(await fs.readdir(path.join(copy!, "nested"))).toEqual(["one.txt"]);
 });
