@@ -4,7 +4,11 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { historyScopeRing } from "@oh-my-pi/pi-coding-agent/modes/history-scope";
-import { HistoryStorage, type HistoryScope } from "@oh-my-pi/pi-coding-agent/session/history-storage";
+import {
+	type HistoryFilter,
+	HistoryStorage,
+	type HistoryScope,
+} from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { initGitFixture } from "./helpers/git";
 
@@ -64,6 +68,49 @@ afterEach(async () => {
 });
 
 describe("HistoryStorage scope filtering", () => {
+	it("preserves exact metadata filters and their intersection for recent and search reads", async () => {
+		const dir = tempDir!;
+		const a = dir.join("a");
+		const b = dir.join("b");
+		await fs.mkdir(a);
+		await fs.mkdir(b);
+		const storage = HistoryStorage.open(dir.join("history.db"));
+		await storage.add("deploy alpha", a, "s1");
+		await storage.add("deploy beta", a, "s2");
+		await storage.add("deploy gamma", b, "s1");
+		await storage.add("deploy alias", `${a}${path.sep}.`, "s1");
+		await storage.add("deploy anonymous");
+		await storage.add("deploy empty directory", "");
+
+		const cases: { filter: HistoryFilter; expected: string[] }[] = [
+			{
+				filter: {},
+				expected: [
+					"deploy alpha",
+					"deploy beta",
+					"deploy gamma",
+					"deploy alias",
+					"deploy anonymous",
+					"deploy empty directory",
+				],
+			},
+			{ filter: { cwd: a }, expected: ["deploy alpha", "deploy beta"] },
+			{ filter: { sessionId: "s1" }, expected: ["deploy alpha", "deploy gamma", "deploy alias"] },
+			{ filter: { cwd: a, sessionId: "s1" }, expected: ["deploy alpha"] },
+			{ filter: { cwd: "" }, expected: ["deploy empty directory"] },
+			{ filter: { sessionId: "" }, expected: [] },
+		];
+		for (const { filter, expected } of cases) {
+			expect(new Set(storage.getRecent(100, filter).map(entry => entry.prompt))).toEqual(new Set(expected));
+			expect(new Set(storage.search("deploy", 100, filter).map(entry => entry.prompt))).toEqual(new Set(expected));
+			expect(new Set(storage.search("ploy", 100, filter).map(entry => entry.prompt))).toEqual(new Set(expected));
+		}
+		// Metadata filters preserve stored spelling; directory scopes group normalized aliases.
+		expect(new Set(promptsOf(storage, { kind: "cwd", value: a }))).toEqual(
+			new Set(["deploy alpha", "deploy beta", "deploy alias"]),
+		);
+	});
+
 	it("keeps damaged rows out of scoped recall and prefix or infix search", async () => {
 		const dir = tempDir!;
 		const fixtures = await createFixtures(dir.path());

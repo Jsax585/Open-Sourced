@@ -29,6 +29,14 @@ export interface HistoryEntry {
 	useCount: number;
 }
 
+/** Narrows history reads by exact metadata; omitted fields match every prompt. */
+export interface HistoryFilter {
+	/** Exact stored project directory, without path normalization. */
+	cwd?: string;
+	/** Exact session id of the prompt's latest submission. */
+	sessionId?: string;
+}
+
 /**
  * Recall scopes, narrowest first. Single source for the settings enum, the Ctrl+R scope ring
  * and the labels both render, so they never drift apart.
@@ -308,14 +316,14 @@ export class HistoryStorage {
 	}
 
 	/**
-	 * Returns unique prompts ordered by their most recent submission, restricted to `scope`.
+	 * Returns unique prompts ordered by their most recent submission, restricted to a scope or exact metadata filter.
 	 *
 	 * Throws when the handle is unusable or the statement fails, so a caller that can recover
 	 * does: the editor's history seed retries on the next browse instead of replacing the list
 	 * with an empty one. {@link search} deliberately keeps degrading to no results — its
 	 * `matchingSessionIds` caller ranks a picker and has nothing to retry.
 	 */
-	getRecent(limit: number, scope?: HistoryScope): HistoryEntry[] {
+	getRecent(limit: number, scope?: HistoryScope | HistoryFilter): HistoryEntry[] {
 		const safeLimit = this.#normalizeLimit(limit);
 		if (safeLimit === 0) return [];
 
@@ -331,8 +339,8 @@ export class HistoryStorage {
 		return JSON.stringify(this.#scopeDirs(kind, target).sort());
 	}
 
-	/** Finds unique prompts matching every query token, newest first, restricted to `scope`. */
-	search(query: string, limit: number, scope?: HistoryScope): HistoryEntry[] {
+	/** Finds unique prompts matching every query token, newest first, restricted to a scope or exact metadata filter. */
+	search(query: string, limit: number, scope?: HistoryScope | HistoryFilter): HistoryEntry[] {
 		const safeLimit = this.#normalizeLimit(limit);
 		if (safeLimit === 0) return [];
 
@@ -606,20 +614,31 @@ ON CONFLICT(prompt) DO UPDATE SET
 	}
 
 	/**
-	 * SQL fragment (and its bound values) restricting a read to `scope`.
-	 * `undefined` and `global` read the whole table; every other kind either filters or
-	 * matches nothing — a configured scope never silently widens to the full history.
+	 * SQL fragment (and its bound values) restricting a read to a scope or exact metadata filter.
+	 * Omitted filters and `global` read the whole table; unknown scope kinds match nothing.
 	 */
-	#scopeClause(scope?: HistoryScope): ScopeClause {
-		if (!scope || scope.kind === "global") return EMPTY_SCOPE_CLAUSE;
-		switch (scope.kind) {
+	#scopeClause(scope?: HistoryScope | HistoryFilter): ScopeClause {
+		if (!scope) return EMPTY_SCOPE_CLAUSE;
+		const selection: Partial<HistoryScope> & HistoryFilter = scope;
+		const kind = selection.kind;
+		if (kind === undefined) {
+			const cwd = selection.cwd ?? null;
+			const sessionId = selection.sessionId ?? null;
+			if (cwd === null && sessionId === null) return EMPTY_SCOPE_CLAUSE;
+			if (cwd === null) return { and: "AND session_id = ?", params: [sessionId] };
+			if (sessionId === null) return { and: "AND cwd = ?", params: [cwd] };
+			return { and: "AND cwd = ? AND session_id = ?", params: [cwd, sessionId] };
+		}
+		switch (kind) {
+			case "global":
+				return EMPTY_SCOPE_CLAUSE;
 			case "session":
-				return { and: "AND session_id = ?", params: [scope.value ?? ""] };
+				return { and: "AND session_id = ?", params: [selection.value ?? ""] };
 			case "cwd":
 			case "repo":
 				return {
 					and: DIRS_AND,
-					params: [JSON.stringify(this.#scopeDirs(scope.kind, scope.value))],
+					params: [JSON.stringify(this.#scopeDirs(kind, selection.value))],
 				};
 			default:
 				return { and: "AND 1 = 0", params: [] };

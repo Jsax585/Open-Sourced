@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Fixed SDK prompt history reads returning no results when passed existing `{ cwd }`, `{ sessionId }`, combined, or empty filter objects; scoped reads remain supported ([#11995](https://github.com/can1357/oh-my-pi/pull/11995) by [@jerome-benoit](https://github.com/jerome-benoit)).
 - Fixed collaboration guests losing a newer composer draft when a Ctrl+Enter slash command is refused ([#11995](https://github.com/can1357/oh-my-pi/pull/11995) by [@jerome-benoit](https://github.com/jerome-benoit)).
 - Directory-scoped prompt recall now follows retargeted directory symlinks without another history write ([#11995](https://github.com/can1357/oh-my-pi/pull/11995) by [@jerome-benoit](https://github.com/jerome-benoit)).
 - Skill invocations returned by `/loop` and `/force` are now retained in prompt history without double-counting direct submissions ([#11995](https://github.com/can1357/oh-my-pi/pull/11995) by [@jerome-benoit](https://github.com/jerome-benoit)).
