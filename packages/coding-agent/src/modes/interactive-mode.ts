@@ -83,12 +83,7 @@ import { CollabController } from "../collab/controller";
 import type { CollabHost } from "../collab/host";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey, rawKeyHint } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
-import {
-	formatModelString,
-	formatModelStringWithRouting,
-	type ResolvedModelRoleValue,
-	resolveSessionModelSelector,
-} from "../config/model-resolver";
+import { formatModelString, formatModelStringWithRouting, type ResolvedModelRoleValue } from "../config/model-resolver";
 import { isSettingsInitialized, Settings, settings } from "../config/settings";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
@@ -6869,14 +6864,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			selectOnly: {
 				currentSelector: preselect ? formatModelString(preselect) : undefined,
 				focusAfter: () => this.#planReviewOverlay,
-				onSelect: (selector, picked) => {
-					const parsed = resolveSessionModelSelector(this.session.modelRegistry, selector);
-					if (!parsed) {
-						this.showError(`Unknown model: ${selector}`);
-						return;
-					}
-					// Keep the picker's model object: re-resolving `provider/id` drops an upstream route.
-					this.setPlanExecutionModel(picked, parsed.thinkingLevel);
+				// The picker's model object is authoritative: it keeps an upstream route and covers
+				// synthetic scoped models that a registry lookup would reject.
+				onSelect: (_selector, picked) => {
+					this.setPlanExecutionModel(picked);
 				},
 			},
 		});
