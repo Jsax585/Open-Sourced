@@ -22,6 +22,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import {
 	attachIrcWakeTurnMonitor,
+	type IrcWakeTurnMonitorOptions,
 	runSubagentFollowUpTurn,
 	runSubprocess,
 } from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -901,13 +902,14 @@ describe("runSubprocess result acceptance", () => {
 			});
 			const settle = vi.fn((_result: unknown, superseded: () => boolean) => onSettled(superseded));
 			const started = vi.fn();
-			attachIrcWakeTurnMonitor(harness.session, {
+			const monitor: IrcWakeTurnMonitorOptions = {
 				id: AGENT_ID,
 				agent: baseAgent,
 				onTurnSettled: settle,
 				onTurnStarted: started,
 				...monitorOptions,
-			});
+			};
+			attachIrcWakeTurnMonitor(harness.session, monitor);
 			const observer = harness.wakeObserver();
 			if (!observer) throw new Error("wake-turn observer was not registered");
 			const parent = {
@@ -917,7 +919,7 @@ describe("runSubprocess result acceptance", () => {
 				asyncJobManager: manager,
 				getAgentId: () => "Parent",
 			} as unknown as ToolSession;
-			return { manager, harness, observer, settle, started, parent };
+			return { manager, harness, observer, settle, started, parent, monitor };
 		}
 
 		it("does not settle a turn whose outcome only reaches a peer", async () => {
@@ -1091,6 +1093,43 @@ describe("runSubprocess result acceptance", () => {
 				harness.emitAssistantText("done");
 				await next?.(undefined);
 				expect(checks).toHaveLength(1);
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("tells the settle hook about a turn the warm-revived session starts", async () => {
+			const checks: Array<() => boolean> = [];
+			const settling = Promise.withResolvers<void>();
+			const proceed = Promise.withResolvers<void>();
+			const { manager, harness, observer, monitor } = setUp(async superseded => {
+				checks.push(superseded);
+				settling.resolve();
+				await proceed.promise;
+				return NOTICE;
+			});
+			try {
+				const finish = observer([ircRecord("Parent", "fix it")]);
+				harness.emitAssistantText("fixed");
+				const finished = finish?.(undefined);
+				await settling.promise;
+				expect(checks[0]?.()).toBe(false);
+
+				// The idle TTL parked the agent while its last turn was still settling, and
+				// a peer message revived it. The warm reviver attaches a new monitor with
+				// the same options object, on a new session.
+				const revived = createHarness({ asyncJobManager: manager });
+				attachIrcWakeTurnMonitor(revived.session, monitor);
+				const revivedObserver = revived.wakeObserver();
+				if (!revivedObserver) throw new Error("revived wake-turn observer was not registered");
+				const next = revivedObserver([ircRecord("Peer", "one more thing")]);
+
+				// The old turn's capture would read the workspace the new turn is editing.
+				expect(checks[0]?.()).toBe(true);
+				proceed.resolve();
+				await finished;
+				revived.emitAssistantText("done");
+				await next?.(undefined);
 			} finally {
 				await manager.dispose({ timeoutMs: 1000 });
 			}

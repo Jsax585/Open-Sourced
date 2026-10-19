@@ -779,17 +779,25 @@ async function isolationRecoveryHint(result: SingleResult, artifactsDir: string)
  * Merge an isolated run's captured changes into the parent repo, then apply
  * its nested-repo patches. `nestedFailed` reports that nested patches were
  * captured but not all applied, so their files must survive cleanup.
+ * `unappliedNested` names the repositories whose patch did not apply, so the
+ * runner keeps them out of what counts as landed.
  */
 async function landCapturedChanges(
 	result: SingleResult,
 	repoRoot: string,
 	mergeMode: "patch" | "branch",
 	session: ToolSession,
-): Promise<{ summary: string; changesApplied: boolean | null; nestedFailed: boolean }> {
+): Promise<{
+	summary: string;
+	changesApplied: boolean | null;
+	nestedFailed: boolean;
+	unappliedNested: readonly string[];
+}> {
 	const outcome = await mergeIsolatedChanges({ result, repoRoot, mergeMode });
 	if (outcome.changesApplied === false) {
-		return { summary: outcome.summary, changesApplied: false, nestedFailed: false };
+		return { summary: outcome.summary, changesApplied: false, nestedFailed: false, unappliedNested: [] };
 	}
+	let unappliedNested: readonly string[] = [];
 	const nestedPatchSummary = await applyEligibleNestedPatches({
 		result,
 		repoRoot,
@@ -797,11 +805,15 @@ async function landCapturedChanges(
 		changesApplied: outcome.changesApplied,
 		mergedBranchForNestedPatches: outcome.mergedBranchForNestedPatches,
 		commitMessage: makeIsolationCommitMessage(session)(),
+		onUnapplied: relativePaths => {
+			unappliedNested = relativePaths;
+		},
 	});
 	return {
 		summary: outcome.summary + nestedPatchSummary,
 		changesApplied: outcome.changesApplied,
 		nestedFailed: nestedPatchSummary.includes("<system-notification>") && (result.nestedPatches?.length ?? 0) > 0,
+		unappliedNested,
 	};
 }
 
@@ -899,6 +911,9 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 	// Follow-up turns of an isolated agent wait on this before their capture, so
 	// they never race the first run's landing below.
 	const firstRunLanding = Promise.withResolvers<boolean | null>();
+	// Nested repositories the first run's landing could not apply. Set before
+	// `firstRunLanding` settles, which is when the runner reads it.
+	let firstRunUnappliedNested: readonly string[] = [];
 	const onSubprocessResult =
 		request.invocationKind === "eval"
 			? (result: SingleResult) => request.session.recordEvalSubagentUsage?.(result.usage?.output ?? 0)
@@ -950,6 +965,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 				const repoRoot = isolationContext.repoRoot;
 				const followUps: IsolationFollowUps = {
 					firstRunLanded: firstRunLanding.promise,
+					firstRunUnappliedNested: () => firstRunUnappliedNested,
 					land: async captured => {
 						if (!policy.applyChanges) {
 							return { summary: describeCapturedChanges(captured), landed: null };
@@ -959,7 +975,11 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 						// after the root lands. Release cannot see that failure. A later
 						// turn does not clear this: it may not re-apply the same patches.
 						if (landing.nestedFailed) releaseLeftArtifacts = true;
-						return { summary: landing.summary, landed: landing.changesApplied };
+						return {
+							summary: landing.summary,
+							landed: landing.changesApplied,
+							unappliedNested: landing.unappliedNested,
+						};
 					},
 				};
 				result = await runIsolatedSubprocess({
@@ -1010,6 +1030,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			);
 			mergeSummary = landing.summary;
 			changesApplied = landing.changesApplied;
+			firstRunUnappliedNested = landing.unappliedNested;
 			requiresRecoveryArtifacts ||= landing.nestedFailed;
 		} else if (policy.isIsolated && isolationContext && result.isolationCaptureFailed && result.error) {
 			// The agent finished but the runner could not capture, persist, or

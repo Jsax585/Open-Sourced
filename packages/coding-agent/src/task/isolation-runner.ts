@@ -50,6 +50,7 @@ import {
 	type IsolationHandle,
 	type IsolationState,
 	mergeTaskBranches,
+	NestedPatchApplyError,
 	sameIsolationState,
 	type WorktreeBaseline,
 } from "./worktree";
@@ -193,16 +194,25 @@ export interface IsolationFollowUps {
 	 */
 	readonly firstRunLanded: Promise<boolean | null>;
 	/**
+	 * Nested repositories (relative paths) whose captured patch did not apply in
+	 * the landing {@link firstRunLanded} reports. Read once that has settled.
+	 */
+	readonly firstRunUnappliedNested?: () => readonly string[];
+	/**
 	 * Land one follow-up turn's captured changes. `summary` is appended to that
 	 * turn's result; `landed` reads like {@link firstRunLanded}. Work that did
 	 * not land stays pending: the next capture carries it again, and after a
 	 * refusal it is handed over again even if the workspace did not change, so
-	 * clearing what blocked it lets the next turn land it. As for a first run,
-	 * nested-repo patches that fail to apply after the root changes landed are
-	 * reported in `summary` and not retried; each capture writes them to files
-	 * of its own, so none is overwritten.
+	 * clearing what blocked it lets the next turn land it. A nested repository
+	 * whose patch did not apply after the root changes landed is reported in
+	 * `summary` and listed in `unappliedNested`: it counts as not landed, so the
+	 * next capture carries its changes again from where the parent last
+	 * received them. A patch of only the later edit would apply onto a
+	 * repository that never got the earlier one.
 	 */
-	land(captured: SingleResult): Promise<{ summary: string; landed: boolean | null }>;
+	land(
+		captured: SingleResult,
+	): Promise<{ summary: string; landed: boolean | null; unappliedNested?: readonly string[] }>;
 }
 
 export interface IsolatedRunOptions {
@@ -450,7 +460,15 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	 */
 	let landed: { state: IsolationState; tip: string | undefined } | undefined;
 	/** The last handed-off capture while the caller is still landing it. */
-	let pending: { state: IsolationState; tip: string | undefined; landing: Promise<boolean | null> } | undefined;
+	let pending:
+		| {
+				state: IsolationState;
+				tip: string | undefined;
+				landing: Promise<boolean | null>;
+				/** Nested repositories the landing could not apply; read once `landing` has settled. */
+				unapplied: () => readonly string[];
+		  }
+		| undefined;
 	/** Set when the caller refused the last handoff, so the next capture hands it over again even if unchanged. */
 	let retryRefused = false;
 	// A handoff the caller deliberately left unapplied (apply=false resolves
@@ -533,7 +551,33 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		// A landing deletes the task branch, so there is no published tip any more.
 		publishedBranchTip = undefined;
 		// A capture with no root changes made no branch: the previous tip still holds everything.
-		landed = { state: settled.state, tip: settled.tip ?? landed?.tip };
+		landed = {
+			state: keepUnappliedNested(settled.state, landed?.state, settled.unapplied()),
+			tip: settled.tip ?? landed?.tip,
+		};
+	};
+	/**
+	 * `next` with each repository in `unapplied` left as the parent last
+	 * received it: its entry in `previous`, or none, which diffs from the
+	 * baseline. A nested patch that did not apply must not count as landed,
+	 * or the next capture would hold only the later edit and apply it onto a
+	 * repository that never got the earlier one.
+	 */
+	const keepUnappliedNested = (
+		next: IsolationState,
+		previous: IsolationState | undefined,
+		unapplied: readonly string[],
+	): IsolationState => {
+		if (unapplied.length === 0) return next;
+		// No prototype: a nested repo may be named `__proto__`.
+		const nested: IsolationState["nested"] = Object.create(null);
+		for (const relativePath of Object.keys(next.nested)) nested[relativePath] = next.nested[relativePath];
+		for (const relativePath of unapplied) {
+			const before = previous?.nested[relativePath];
+			if (before) nested[relativePath] = before;
+			else delete nested[relativePath];
+		}
+		return { ...next, nested };
 	};
 	/**
 	 * Nested-repo patch file prefix for a capture after the first run's, so no
@@ -705,9 +749,17 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		if (handoff === "superseded") return renderIsolationSummary({ kind: "capture-superseded" });
 		const captured = rememberAgentArtifacts({ ...turn, ...handoff.artifacts });
 		const landing = Promise.withResolvers<boolean | null>();
-		pending = { state: handoff.state, tip: handoff.tip, landing: landing.promise };
+		let unappliedNested: readonly string[] = [];
+		pending = {
+			state: handoff.state,
+			tip: handoff.tip,
+			landing: landing.promise,
+			unapplied: () => unappliedNested,
+		};
 		try {
 			const outcome = await followUps.land(captured);
+			// Before resolving: `settlePending` reads it as soon as the landing settles.
+			unappliedNested = outcome.unappliedNested ?? [];
 			landing.resolve(outcome.landed);
 			return outcome.summary;
 		} catch (error) {
@@ -824,7 +876,12 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		if (tip) publishedBranchTip = tip;
 		const followUps = opts.followUps;
 		if (followUps && opts.baseOptions.keepAlive !== false && AgentLifecycleManager.global().has(opts.agentId)) {
-			pending = { state, tip, landing: followUps.firstRunLanded };
+			pending = {
+				state,
+				tip,
+				landing: followUps.firstRunLanded,
+				unapplied: () => followUps.firstRunUnappliedNested?.() ?? [],
+			};
 		}
 	};
 	try {
@@ -1216,6 +1273,13 @@ export interface NestedPatchApplyOptions {
 	mergedBranchForNestedPatches: boolean;
 	/** Optional AI commit-message callback for nested commits; falls back to a generic message. */
 	commitMessage?: (diff: string) => Promise<string | null>;
+	/**
+	 * Called when the apply failed, with the nested repositories (relative paths)
+	 * whose patch did not apply. A caller that tracks what it has landed leaves
+	 * exactly these out. Not called when every patch applied, even if a stash
+	 * restore warned.
+	 */
+	onUnapplied?: (relativePaths: readonly string[]) => void;
 }
 
 /**
@@ -1242,6 +1306,13 @@ export async function applyEligibleNestedPatches(opts: NestedPatchApplyOptions):
 		if (warnings.length === 0) return "";
 		return `\n\n<system-notification>${warnings.join("\n")}</system-notification>`;
 	} catch (applyErr) {
+		// An error that does not say which repository failed leaves every one in the
+		// capture unapplied: keeping too many cumulative is safe, too few is not.
+		opts.onUnapplied?.(
+			applyErr instanceof NestedPatchApplyError
+				? applyErr.unapplied
+				: [...new Set(nestedPatches.map(patch => patch.relativePath))],
+		);
 		// Nested patch failures are non-fatal to the parent merge, but the patch
 		// files are the only surviving copy of that work — name them.
 		return renderIsolationSummary({

@@ -1061,6 +1061,114 @@ describe("isolated agent follow-up turns", () => {
 		expect(AgentRegistry.global().get(id)?.history?.branchName).toBeUndefined();
 	});
 
+	it("keeps a nested repository cumulative after a landing could not apply its patch", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		await addNestedRepo(repo, iso);
+		const firstRun = Promise.withResolvers<boolean | null>();
+		const handedOver: SingleResult[] = [];
+		const id = "FollowUpNestedKept";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps: {
+				firstRunLanded: firstRun.promise,
+				// Every turn's root lands. The first turn's patch for `sub` does not.
+				land: async captured => {
+					handedOver.push(captured);
+					return { summary: "landed", landed: true, unappliedNested: handedOver.length === 1 ? ["sub"] : [] };
+				},
+			},
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		firstRun.resolve(true);
+
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+		await run.settleFollowUp?.(result(id));
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n2\n");
+		await run.settleFollowUp?.(result(id));
+
+		expect(handedOver).toHaveLength(2);
+		const second = handedOver[1]?.nestedPatches?.[0]?.patch ?? "";
+		// The parent never received the first turn's edit to `sub`, so the second capture must
+		// carry it. A patch of only the later edit would apply onto a repository lacking its
+		// prerequisite.
+		expect(second).toContain("-n0");
+		expect(second).toContain("+n2");
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	it("hands over only the later nested edit when the landing applied the earlier one", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		await addNestedRepo(repo, iso);
+		const firstRun = Promise.withResolvers<boolean | null>();
+		const handedOver: SingleResult[] = [];
+		const id = "FollowUpNestedApplied";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps: {
+				firstRunLanded: firstRun.promise,
+				land: async captured => {
+					handedOver.push(captured);
+					return { summary: "landed", landed: true, unappliedNested: [] };
+				},
+			},
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		firstRun.resolve(true);
+
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+		await run.settleFollowUp?.(result(id));
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n2\n");
+		await run.settleFollowUp?.(result(id));
+
+		const second = handedOver[1]?.nestedPatches?.[0]?.patch ?? "";
+		// The earlier edit landed, so repeating it would only fail to apply.
+		expect(second).toContain("-n1");
+		expect(second).toContain("+n2");
+		expect(second).not.toContain("-n0");
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	it("keeps a nested repository cumulative after the first run's landing could not apply its patch", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		await addNestedRepo(repo, iso);
+		const firstRun = Promise.withResolvers<boolean | null>();
+		const handedOver: SingleResult[] = [];
+		const id = "FirstRunNestedKept";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps: {
+				firstRunLanded: firstRun.promise,
+				firstRunUnappliedNested: () => ["sub"],
+				land: async captured => {
+					handedOver.push(captured);
+					return { summary: "landed", landed: true, unappliedNested: [] };
+				},
+			},
+			firstRun: async () => {
+				await commitIn(iso, "one\n", "first run");
+				await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+			},
+		});
+		firstRun.resolve(true);
+
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n2\n");
+		await run.settleFollowUp?.(result(id));
+
+		const first = handedOver[0]?.nestedPatches?.[0]?.patch ?? "";
+		expect(first).toContain("-n0");
+		expect(first).toContain("+n2");
+		await AgentLifecycleManager.global().release(id);
+	});
+
 	it("does not announce a withdrawal when the first run handed over nothing", async () => {
 		const { repo, iso } = await createRepoAndIsolation();
 		const { firstRun, followUps } = landingFollowUps(repo, "patch");

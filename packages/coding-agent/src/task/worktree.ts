@@ -511,6 +511,23 @@ export function sameIsolationState(a: IsolationState, b: IsolationState): boolea
 }
 
 /**
+ * A nested repository's patch did not apply. {@link applyNestedPatches} stops
+ * at the first failure, so `unapplied` is that repository and every one after
+ * it, in apply order: none of them received its patch. Repositories before it
+ * were applied and committed. A caller that tracks what it has landed needs this
+ * to leave exactly those repositories out of the landed state.
+ */
+export class NestedPatchApplyError extends Error {
+	readonly unapplied: string[];
+
+	constructor(cause: unknown, unapplied: string[]) {
+		super(cause instanceof Error ? cause.message : String(cause), { cause });
+		this.name = "NestedPatchApplyError";
+		this.unapplied = unapplied;
+	}
+}
+
+/**
  * Apply nested repo patches directly to their working directories after parent merge.
  *
  * Pre-existing dirty state in a nested repo is stashed before the patch is
@@ -523,7 +540,8 @@ export function sameIsolationState(a: IsolationState, b: IsolationState): boolea
  * see, not a thrown failure.
  *
  * Returns the collected stash-restore warnings (empty when every nested repo
- * was restored cleanly). Throws when the patch apply itself fails.
+ * was restored cleanly). Throws a {@link NestedPatchApplyError} when the patch
+ * apply itself fails.
  *
  * @param commitMessage Optional async function to generate a commit message from the combined diff.
  *                      If omitted or returns null, falls back to a generic message.
@@ -542,48 +560,55 @@ export async function applyNestedPatches(
 		group.push(p);
 		byRepo.set(p.relativePath, group);
 	}
+	const order = [...byRepo.keys()];
 
 	for (const [relativePath, repoPatches] of byRepo) {
-		const nestedDir = path.join(repoRoot, relativePath);
 		try {
-			await fs.access(path.join(nestedDir, ".git"));
-		} catch {
-			continue;
-		}
-		const repository = vcs.requireGit(nestedDir);
+			const nestedDir = path.join(repoRoot, relativePath);
+			try {
+				await fs.access(path.join(nestedDir, ".git"));
+			} catch {
+				continue;
+			}
+			const repository = vcs.requireGit(nestedDir);
 
-		const combinedDiff = repoPatches.map(p => p.patch).join("\n");
-		const touchedFiles = [...new Set(repoPatches.flatMap(p => patchTouchedFiles(p.patch)))];
+			const combinedDiff = repoPatches.map(p => p.patch).join("\n");
+			const touchedFiles = [...new Set(repoPatches.flatMap(p => patchTouchedFiles(p.patch)))];
 
-		// Preserve any pre-existing dirty state (tracked + untracked) so we
-		// commit only the agent delta, not the user's in-flight work.
-		const stashed = (await repository.isDirty())
-			? await repository.stashPush(`omp-isolation-${Snowflake.next()}`)
-			: false;
-		try {
-			for (const { patch } of repoPatches) {
-				await repository.applyPatch(patch, {});
-			}
-			if (await repository.isDirty()) {
-				if (touchedFiles.length === 0) {
-					throw new Error(`Nested repo patch for ${relativePath} did not include stageable file paths.`);
+			// Preserve any pre-existing dirty state (tracked + untracked) so we
+			// commit only the agent delta, not the user's in-flight work.
+			const stashed = (await repository.isDirty())
+				? await repository.stashPush(`omp-isolation-${Snowflake.next()}`)
+				: false;
+			try {
+				for (const { patch } of repoPatches) {
+					await repository.applyPatch(patch, {});
 				}
-				const msg = (await commitMessage?.(combinedDiff)) ?? "changes from isolated task(s)";
-				await repository.stageFiles(touchedFiles);
-				await repository.commitCreate(msg, {});
-			}
-		} finally {
-			if (stashed) {
-				const restored = await repository.stashTryPop(true).catch(() => false);
-				if (!restored) {
-					logger.warn("Pre-existing nested-repo dirty state could not be auto-restored", {
-						nestedDir,
-					});
-					warnings.push(
-						`Pre-existing dirty state in nested repo \`${relativePath}\` could not be auto-restored after the agent commit; stash entry preserved.`,
-					);
+				if (await repository.isDirty()) {
+					if (touchedFiles.length === 0) {
+						throw new Error(`Nested repo patch for ${relativePath} did not include stageable file paths.`);
+					}
+					const msg = (await commitMessage?.(combinedDiff)) ?? "changes from isolated task(s)";
+					await repository.stageFiles(touchedFiles);
+					await repository.commitCreate(msg, {});
+				}
+			} finally {
+				if (stashed) {
+					const restored = await repository.stashTryPop(true).catch(() => false);
+					if (!restored) {
+						logger.warn("Pre-existing nested-repo dirty state could not be auto-restored", {
+							nestedDir,
+						});
+						warnings.push(
+							`Pre-existing dirty state in nested repo \`${relativePath}\` could not be auto-restored after the agent commit; stash entry preserved.`,
+						);
+					}
 				}
 			}
+		} catch (error) {
+			// The apply stops at the first failure: this repository did not apply, and
+			// the ones after it were never attempted. Earlier ones are applied and committed.
+			throw new NestedPatchApplyError(error, order.slice(order.indexOf(relativePath)));
 		}
 	}
 	return warnings;

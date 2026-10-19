@@ -3243,6 +3243,26 @@ function extractIrcRecordText(content: string | ReadonlyArray<{ type: string; te
 }
 
 /**
+ * Turn counters shared by every monitor attached with the same options object.
+ * A warm revival attaches a new monitor on the revived session with the options
+ * of the original spawn. The idle TTL can park the agent while a turn is still
+ * inside `onTurnSettled`, so a counter local to one monitor would start again
+ * at zero and the settling turn would never see a turn the revived session
+ * starts. The options object is the one thing both monitors share, and it lives
+ * exactly as long as the agent's revival state does.
+ */
+const wakeTurnCounters = new WeakMap<IrcWakeTurnMonitorOptions, { started: number }>();
+
+function sharedWakeTurnCounter(options: IrcWakeTurnMonitorOptions): { started: number } {
+	let counter = wakeTurnCounters.get(options);
+	if (!counter) {
+		counter = { started: 0 };
+		wakeTurnCounters.set(options, counter);
+	}
+	return counter;
+}
+
+/**
  * Bracket a kept-alive subagent's undriven turns — autonomous IRC wakes and
  * user prompts from focused-session steering — with a task run monitor so
  * RPC/collab subscribers see the same `subagent_lifecycle` /
@@ -3263,11 +3283,12 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 	const { id, agent } = options;
 	const index = options.index ?? 0;
 	const maxRuntimeMs = options.maxRuntimeMs ?? 0;
-	// Counts turns this observer has started. The session releases a turn before
-	// its observation finishes, so the next turn can begin during `onTurnSettled`.
-	let turnsStarted = 0;
+	// Counts turns started under these options. The session releases a turn
+	// before its observation finishes, so the next turn can begin during
+	// `onTurnSettled`. See {@link wakeTurnCounters}: a revived session shares it.
+	const counter = sharedWakeTurnCounter(options);
 	session.setIrcWakeTurnObserver(records => {
-		const turn = ++turnsStarted;
+		const turn = ++counter.started;
 		options.onTurnStarted?.();
 		// Autonomous IRC wake turns reuse the session's YieldTool just like
 		// runSubagentFollowUpTurn; clear the prior run's incremental-section flag
@@ -3507,7 +3528,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				let notice = "";
 				if (result && options.onTurnSettled && ownerTold) {
 					try {
-						notice = await options.onTurnSettled(result, () => turnsStarted !== turn);
+						notice = await options.onTurnSettled(result, () => counter.started !== turn);
 					} catch (error) {
 						logger.warn("Follow-up turn settle hook failed", {
 							id,

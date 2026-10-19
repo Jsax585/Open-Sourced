@@ -1479,6 +1479,63 @@ describe("structured subagent primitive", () => {
 		}
 	});
 
+	/** Make the nested apply fail for repository `sub`, the way the real one reports it. */
+	function mockNestedApplyFailingFor(relativePath: string): void {
+		mockDiscovery();
+		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot: "/tmp" } as never);
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "Applied patches: yes",
+			changesApplied: true,
+			hadAnyChanges: true,
+			mergedBranchForNestedPatches: true,
+		} as never);
+		vi.spyOn(isolationRunner, "applyEligibleNestedPatches").mockImplementation(async opts => {
+			opts.onUnapplied?.([relativePath]);
+			return "\n\n<system-notification>nested failed</system-notification>";
+		});
+	}
+
+	it("tells the runner which nested repositories the first run's landing could not apply", async () => {
+		mockNestedApplyFailingFor("sub");
+		let followUps: { firstRunUnappliedNested?: () => readonly string[] } | undefined;
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts => {
+			followUps = opts.followUps;
+			return { ...result(), isolated: true, nestedPatches: [{ relativePath: "sub", patch: "diff\n" }] };
+		});
+		try {
+			const settled = await runStructuredSubagent(
+				request({ keepAlive: true, session: session({ isolationEnabled: true }), isolation: { requested: true } }),
+			);
+			// Read after the landing settled, as the runner does when it folds the handoff.
+			expect(followUps?.firstRunUnappliedNested?.()).toEqual(["sub"]);
+			await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+		} finally {
+			AgentRegistry.resetGlobalForTests();
+		}
+	});
+
+	it("tells the runner which nested repositories a follow-up landing could not apply", async () => {
+		mockNestedApplyFailingFor("sub");
+		let landed: { unappliedNested?: readonly string[] } | undefined;
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts => {
+			landed = await opts.followUps?.land({
+				...result(),
+				id: opts.agentId,
+				nestedPatches: [{ relativePath: "sub", patch: "diff\n" }],
+			});
+			return { ...result(), isolated: true };
+		});
+		try {
+			const settled = await runStructuredSubagent(
+				request({ keepAlive: true, session: session({ isolationEnabled: true }), isolation: { requested: true } }),
+			);
+			expect(landed?.unappliedNested).toEqual(["sub"]);
+			await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+		} finally {
+			AgentRegistry.resetGlobalForTests();
+		}
+	});
+
 	it("defaults task isolation to auto-apply and lets config retain artifacts", async () => {
 		mockDiscovery();
 		const defaultPolicy = await resolveEffectiveSubagentPolicy(
