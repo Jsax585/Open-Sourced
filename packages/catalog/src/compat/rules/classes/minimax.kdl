@@ -107,6 +107,7 @@ class "minimax" {
 	// Preview and the free routing variants keep whatever their host declares.
 	models "*m3.1*flash*" {
 		thinking-requires-effort #true
+		thinking-upgrade-neutral #true
 		thinking-efforts "low" "medium" "high" "xhigh" "max"
 		thinking-effort-map {
 			low "low"

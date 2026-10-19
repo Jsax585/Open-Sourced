@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import {
 	fetchLiteLLMRichModels,
 	litellmModelManagerOptions,
@@ -690,7 +691,7 @@ describe("LiteLLM provider discovery", () => {
 					],
 				});
 			}
-			throw new Error(`Unexpected URL: ${url}`);
+			return new Response("{}", { status: 404 });
 		}) as FetchImpl;
 
 		const models = await fetchLiteLLMRichModels({
@@ -700,7 +701,12 @@ describe("LiteLLM provider discovery", () => {
 			fetch: fetchMock,
 		});
 
-		expect(calls).toEqual(["http://primary:4000/model_group/info", "http://primary:4000/v2/model/info"]);
+		expect(calls).toEqual([
+			"http://primary:4000/model_group/info",
+			"http://primary:4000/v2/model/info",
+			"http://primary:4000/model/info",
+			"http://primary:4000/v1/model/info",
+		]);
 		expect(models?.map(model => model.id)).toEqual(["keep-chat"]);
 	});
 
@@ -1042,8 +1048,12 @@ describe("LiteLLM provider discovery", () => {
 					],
 				});
 			}
-			if (url === "http://primary:4000/v2/model/info") {
-				throw new Error("/v2/model/info should not be called when model_group info has a real model");
+			if (
+				url === "http://primary:4000/v2/model/info" ||
+				url === "http://primary:4000/model/info" ||
+				url === "http://primary:4000/v1/model/info"
+			) {
+				return new Response("{}", { status: 404 });
 			}
 			if (url === "http://primary:4000/v1/models") {
 				throw new Error("/v1/models should not be called when model_group info has a real model");
@@ -1059,7 +1069,7 @@ describe("LiteLLM provider discovery", () => {
 		const models = await options.fetchDynamicModels?.();
 
 		expect(calls).toContain("http://primary:4000/model_group/info");
-		expect(calls).not.toContain("http://primary:4000/v2/model/info");
+		expect(calls).toContain("http://primary:4000/v2/model/info");
 		expect(calls).not.toContain("http://primary:4000/v1/models");
 		expect(models?.map(model => model.id)).toEqual(["example-real-model"]);
 		expect(models?.[0]).toMatchObject({
@@ -1776,5 +1786,41 @@ describe("LiteLLM declared model capabilities", () => {
 		);
 
 		expect(effortOf(spec)).toBe(true);
+	});
+});
+
+describe("LiteLLM declared reasoning ladder", () => {
+	test("a restricted deployment declaration overrides the catalog ladder", async () => {
+		const specs = await fetchLiteLLMRichModels({
+			api: "openai-completions",
+			provider: "litellm",
+			baseUrl: "http://primary:4000/v1",
+			apiKey: "sk-rich",
+			fetch: vi.fn(async (input: string | URL | Request) => {
+				const url = inputUrl(input);
+				if (url === "http://primary:4000/model/info") {
+					return Response.json({
+						data: [
+							{
+								model_name: "MiniMax-M3.1-Flash",
+								supports_reasoning: true,
+								supports_vision: true,
+								max_input_tokens: 1_000_000,
+								max_output_tokens: 524_288,
+								model_info: {
+									reasoning_effort_levels: ["low", "medium", "high", "xhigh"],
+								},
+							},
+						],
+					});
+				}
+				return new Response("{}", { status: 404 });
+			}) as FetchImpl,
+		});
+		const spec = specs?.find(model => model.id === "MiniMax-M3.1-Flash");
+		const expected = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh];
+		expect(spec?.thinking?.efforts).toEqual(expected);
+		if (!spec) throw new Error("expected the M3.1 spec");
+		expect(buildModel(spec).thinking?.efforts).toEqual(expected);
 	});
 });

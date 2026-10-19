@@ -5567,6 +5567,7 @@ type LiteLLMRichEndpointModel<TApi extends Api> = {
 	hasMaxTokens: boolean;
 	hasToolMetadata: boolean;
 	hasSupportedOpenAIParams: boolean;
+	declaredEfforts: Effort[] | undefined;
 	hasCost: boolean;
 	reportedCost: Partial<ModelSpec<Api>["cost"]>;
 };
@@ -5755,6 +5756,27 @@ function getSupportedOpenAIParams(entry: LiteLLMRichModelEntry): string[] | unde
 	return value.flatMap(item => (typeof item === "string" ? [item] : []));
 }
 
+/**
+ * The reasoning-effort ladder the deployment declares for itself in
+ * `model_info.reasoning_effort_levels`. It is operator evidence, so it replaces
+ * the catalog/reference ladder instead of being overwritten by it; the derived
+ * `supported_reasoning_efforts` on `/model_group/info` is advisory and is not
+ * read here.
+ */
+function getLiteLLMDeclaredReasoningEfforts(entry: LiteLLMRichModelEntry): Effort[] | undefined {
+	const raw = getLiteLLMMetadataValue(entry, "reasoning_effort_levels");
+	if (!Array.isArray(raw)) {
+		return undefined;
+	}
+	const declared = new Set<string>();
+	for (const level of raw) {
+		const normalized = typeof level === "string" ? level.trim().toLowerCase() : "";
+		if (normalized) declared.add(normalized);
+	}
+	const efforts = THINKING_EFFORTS.filter(effort => declared.has(effort));
+	return efforts.length > 0 ? efforts : undefined;
+}
+
 function getLiteLLMProviders(entry: LiteLLMRichModelEntry): string[] | undefined {
 	if (!Array.isArray(entry.providers)) {
 		return undefined;
@@ -5865,6 +5887,10 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 		return null;
 	}
 	const reference = options.referenceResolver?.(id);
+	const declaredEfforts = getLiteLLMDeclaredReasoningEfforts(entry);
+	const thinking = declaredEfforts
+		? { mode: reference?.thinking?.mode ?? "effort", efforts: declaredEfforts }
+		: reference?.thinking;
 	const modelName = toNonEmptyString(entry.model_name);
 	const contextWindow = toPositiveNumber(
 		getLiteLLMMetadataValue(entry, "max_input_tokens"),
@@ -5876,6 +5902,10 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 	);
 	const supportsVision = getLiteLLMMetadataValue(entry, "supports_vision");
 	const supportsReasoning = getLiteLLMMetadataValue(entry, "supports_reasoning");
+	const reasoning =
+		typeof supportsReasoning === "boolean"
+			? supportsReasoning
+			: declaredEfforts !== undefined || reference?.reasoning === true;
 	const supportedOpenAIParams = getSupportedOpenAIParams(entry);
 	const supportsFunctionCalling = getLiteLLMMetadataValue(entry, "supports_function_calling");
 	const supportsTools =
@@ -5940,8 +5970,8 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 				: supportsVision === false
 					? ["text"]
 					: (reference?.input ?? ["text"]),
-		reasoning: typeof supportsReasoning === "boolean" ? supportsReasoning : (reference?.reasoning ?? false),
-		thinking: reference?.thinking,
+		reasoning,
+		thinking,
 		cost: getLiteLLMCost(entry) ?? reference?.cost ?? UNKNOWN_PROXY_COST,
 		...(supportsTools !== undefined ? { supportsTools } : {}),
 		compat: compat as ModelSpec<TApi>["compat"],
@@ -5996,6 +6026,17 @@ function mergeLiteLLMRichEndpointModels<TApi extends Api>(
 				? "openai"
 				: "unknown";
 	const api = next.apiRoute === apiRoute ? next.model.api : existing.model.api;
+	const declaredEfforts =
+		existing.declaredEfforts && next.declaredEfforts
+			? THINKING_EFFORTS.filter(
+					effort => existing.declaredEfforts!.includes(effort) && next.declaredEfforts!.includes(effort),
+				)
+			: (next.declaredEfforts ?? existing.declaredEfforts);
+	const baseThinking = next.model.thinking ?? existing.model.thinking;
+	const thinking =
+		declaredEfforts && declaredEfforts.length > 0
+			? { mode: baseThinking?.mode ?? "effort", efforts: declaredEfforts }
+			: baseThinking;
 	const model: ModelSpec<TApi> = {
 		...existing.model,
 		api,
@@ -6003,7 +6044,13 @@ function mergeLiteLLMRichEndpointModels<TApi extends Api>(
 		contextWindow: next.hasContextWindow ? next.model.contextWindow : existing.model.contextWindow,
 		maxTokens: next.hasMaxTokens ? next.model.maxTokens : existing.model.maxTokens,
 		input: next.supportsVision === true || next.supportsVision === false ? next.model.input : existing.model.input,
-		reasoning: typeof next.supportsReasoning === "boolean" ? next.model.reasoning : existing.model.reasoning,
+		reasoning:
+			typeof next.supportsReasoning === "boolean"
+				? next.model.reasoning
+				: typeof existing.supportsReasoning === "boolean"
+					? existing.model.reasoning
+					: existing.model.reasoning || next.model.reasoning,
+		thinking,
 		cost: { ...existing.model.cost, ...existing.reportedCost, ...next.reportedCost },
 		compat: mergeLiteLLMCompat(existing.model.compat, next.model.compat, {
 			existingReportedParams: existing.hasSupportedOpenAIParams,
@@ -6022,6 +6069,7 @@ function mergeLiteLLMRichEndpointModels<TApi extends Api>(
 		hasMaxTokens: existing.hasMaxTokens || next.hasMaxTokens,
 		hasToolMetadata: existing.hasToolMetadata || next.hasToolMetadata,
 		hasSupportedOpenAIParams: existing.hasSupportedOpenAIParams || next.hasSupportedOpenAIParams,
+		declaredEfforts,
 		hasCost: existing.hasCost || next.hasCost,
 	};
 }
@@ -6099,6 +6147,7 @@ async function fetchLiteLLMRichEndpoint<TApi extends Api>(
 					supportsFunctionCalling === false ||
 					supportedOpenAIParams !== undefined,
 				hasSupportedOpenAIParams: supportedOpenAIParams !== undefined,
+				declaredEfforts: getLiteLLMDeclaredReasoningEfforts(entry),
 				hasCost: getLiteLLMCost(entry) !== undefined,
 				reportedCost: getLiteLLMReportedCost(entry),
 			};
@@ -6185,7 +6234,13 @@ async function fetchLiteLLMRichModelsInternal<TApi extends Api>(
 					break;
 				}
 			}
-			if (!needsMoreMetadata) {
+			// `/model_group/info` drops per-deployment `model_info` (including the
+			// declared reasoning ladder); read a deployment endpoint before the early
+			// exit so a restricted ladder can override the catalog rule.
+			const sawDeploymentInfo = endpoint === "/model/info" || endpoint === "/v1/model/info";
+			const needsDeploymentThinking =
+				!sawDeploymentInfo && [...deduped.values()].some(entry => entry.supportsReasoning !== false);
+			if (!needsMoreMetadata && !needsDeploymentThinking) {
 				break;
 			}
 		}

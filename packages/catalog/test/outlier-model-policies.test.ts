@@ -94,6 +94,13 @@ describe("outlier catalog policies", () => {
 			}
 		}
 
+		const neutral = buildModel(chatSpec("litellm", "anthropic-messages", "MiniMax-M3.1-Flash"));
+		expect(neutral.reasoning).toBe(true);
+		expect(neutral.thinking).toMatchObject({
+			efforts: ["low", "medium", "high", "xhigh", "max"],
+			requiresEffort: true,
+		});
+
 		// The sampling axis is not part of the Ollama compat record; Ollama's
 		// native API owns that surface rather than the model-row declaration.
 		const launch = buildModel({
