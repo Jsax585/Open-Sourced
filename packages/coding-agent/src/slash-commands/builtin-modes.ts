@@ -349,6 +349,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "plan-review",
 		icon: "plan",
 		description: "Re-open the plan review for the latest plan (plan mode only)",
+		isTuiAvailable: runtime => runtime.ctx.planModeEnabled,
 		handleTui: async (_command, runtime) => {
 			await runtime.ctx.openPlanReview();
 			clearSubmittedText(runtime);
@@ -361,6 +362,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		inlineHint: "[model|clear]",
 		allowArgs: true,
 		subcommands: [{ name: "clear", description: "Drop the pinned model; approval uses the slider tier" }],
+		isTuiAvailable: runtime => runtime.ctx.planModeEnabled,
 		handleTui: (command, runtime) => {
 			clearSubmittedText(runtime);
 			const { ctx } = runtime;
