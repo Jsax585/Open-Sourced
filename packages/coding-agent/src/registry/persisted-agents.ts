@@ -306,7 +306,11 @@ function nestedPatchFilesFor(dir: string, transcriptName: string, entries: reado
 	return entries
 		.filter(entry => entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(".patch"))
 		.map(entry => entry.name)
-		.sort((a, b) => Number.parseInt(a.slice(prefix.length), 10) - Number.parseInt(b.slice(prefix.length), 10))
+		.sort((a, b) => {
+			const byCapture =
+				Number.parseInt(a.slice(prefix.length), 10) - Number.parseInt(b.slice(prefix.length), 10);
+			return byCapture || a.localeCompare(b);
+		})
 		.map(name => path.join(dir, name));
 }
 

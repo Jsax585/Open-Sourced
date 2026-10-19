@@ -504,6 +504,79 @@ describe("isolated agent follow-up turns", () => {
 			expect(left).toHaveBeenCalledTimes(unreported ? 1 : 0);
 		});
 	}
+	it("tells the caller to keep artifacts when a refused patch-mode follow-up is released with no later turn", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const firstRun = Promise.withResolvers<boolean | null>();
+		const left = vi.fn();
+		const id = "RefusedFollowUpRelease";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps: {
+				firstRunLanded: firstRun.promise,
+				land: async () => ({ summary: "refused", landed: false }),
+			},
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+			onReleaseArtifacts: left,
+		});
+		const firstLanding = await mergeIsolatedChanges({ result: run.first, repoRoot: repo, mergeMode: "patch" });
+		firstRun.resolve(firstLanding.changesApplied === true);
+		await commitIn(iso, "two\n", "review fix");
+		expect(await run.settleFollowUp?.(result(id))).toBe("refused");
+
+		await AgentLifecycleManager.global().release(id);
+
+		// The refused capture already wrote the only copy. Release must say so,
+		// or a no-session lease deletes the directory when the agent goes.
+		expect(left).toHaveBeenCalledTimes(1);
+		expect(await Bun.file(run.first.patchPath ?? "").text()).toContain("+two");
+	});
+
+	it("names a follow-up nested patch so the roster scanner can find it", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		// The capture writes nested trees into the parent checkout's copy of the
+		// nested repo. That copy has to exist, or the first capture retains the
+		// workspace and the follow-up never writes a patch file.
+		for (const root of [repo, iso]) {
+			const nested = path.join(root, "sub");
+			await fs.mkdir(nested);
+			await git(nested, ["init", "-q", "-b", "main"]);
+			await configureIdentity(nested);
+			await Bun.write(path.join(nested, "n.txt"), "n0\n");
+			await git(nested, ["add", "n.txt"]);
+			await git(nested, ["commit", "-q", "-m", "nested"]);
+			await Bun.write(path.join(root, ".gitignore"), "sub/\n");
+			await git(root, ["add", ".gitignore"]);
+			await git(root, ["commit", "-q", "-m", "ignore nested"]);
+		}
+		const firstRun = Promise.withResolvers<boolean | null>();
+		const id = "FollowUpNestedName";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps: {
+				firstRunLanded: firstRun.promise,
+				land: async () => ({ summary: "refused", landed: false }),
+			},
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		firstRun.resolve(true);
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+		expect(await run.settleFollowUp?.(result(id))).toBe("refused");
+
+		const artifactsDir = path.dirname(run.first.patchPath ?? "");
+		const names = (await fs.readdir(artifactsDir)).filter(name => name.includes("nested") && name.endsWith(".patch"));
+		// The scanner accepts `<id>.nested-…` only. `<id>.<n>.nested-…` is invisible after a restart.
+		expect(names.length).toBeGreaterThan(0);
+		expect(names.every(name => name.startsWith(`${id}.nested-`))).toBe(true);
+		await AgentLifecycleManager.global().release(id);
+	});
+
+
 
 	it("names the patch, not a branch, when a follow-up after a patch-mode landing cannot be captured", async () => {
 		const { repo, iso } = await createRepoAndIsolation();

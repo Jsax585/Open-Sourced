@@ -947,6 +947,9 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 							return { summary: describeCapturedChanges(captured), landed: null };
 						}
 						const landing = await landCapturedChanges(captured, repoRoot, policy.mergeMode, request.session);
+						// The refused capture already wrote the only copy. Keep the
+						// directory even when release writes nothing new.
+						if (landing.changesApplied === false || landing.nestedFailed) releaseLeftArtifacts = true;
 						return { summary: landing.summary, landed: landing.changesApplied };
 					},
 				};

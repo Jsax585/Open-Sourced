@@ -497,9 +497,13 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		// A capture with no root changes made no branch: the previous tip still holds everything.
 		landed = { state: settled.state, tip: settled.tip ?? landed?.tip };
 	};
-	/** Nested-repo patch file prefix for a capture after the first run's, so no capture overwrites another's files. */
+	/**
+	 * Nested-repo patch file prefix for a capture after the first run's, so no
+	 * capture overwrites another's files. The number stays inside `<id>.nested-`
+	 * because the roster scanner only accepts that prefix.
+	 */
 	let laterCaptures = 0;
-	const nextNestedPatchPrefix = (): string => `${opts.agentId}.${++laterCaptures}`;
+	const nextNestedPatchPrefix = (): string => `${opts.agentId}.nested-${++laterCaptures}`;
 	/**
 	 * Capture the workspace for the caller: the work since the last landed
 	 * capture, or since the run began while nothing has landed. `"unchanged"`
@@ -622,10 +626,19 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				try {
 					const current = await captureDeltaPatch(handle.mergedDir, taskBaseline);
 					// Nothing changed since the last capture the caller got: new
-					// artifacts now would only duplicate that work.
-					if (handedOff && sameIsolationState(handedOff, current.state)) return;
+					// artifacts now would only duplicate that work. A refused
+					// landing is the exception: its patch files are already the
+					// only copy, and skipping the callback lets a no-session
+					// lease delete them.
+					if (handedOff && sameIsolationState(handedOff, current.state)) {
+						if (retryRefused) opts.onReleaseArtifacts?.();
+						return;
+					}
 					delta = landed ? await diffIsolationStates(taskBaseline, landed.state, current.state) : current;
-					if (!delta.rootPatch.trim() && delta.nestedPatches.length === 0) return;
+					if (!delta.rootPatch.trim() && delta.nestedPatches.length === 0) {
+						if (retryRefused) opts.onReleaseArtifacts?.();
+						return;
+					}
 					opts.onReleaseArtifacts?.();
 					const patchResult = await writeDeltaPatches(
 						delta,
