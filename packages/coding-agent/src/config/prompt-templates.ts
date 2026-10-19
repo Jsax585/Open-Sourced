@@ -21,6 +21,16 @@ export interface PromptTemplate {
 	source: string; // e.g., "(user)", "(project)", "(project:frontend)"
 }
 
+const discoveredTemplates = new WeakSet<PromptTemplate>();
+
+/**
+ * Whether `template` was produced by {@link loadPromptTemplates} (as opposed to supplied by an SDK
+ * caller). Lets a reload replace discovered templates without discarding supplied ones.
+ */
+export function isDiscoveredPromptTemplate(template: PromptTemplate): boolean {
+	return discoveredTemplates.has(template);
+}
+
 prompt.registerHelper("jtdToTypeScript", (schema: unknown): string => {
 	try {
 		return jtdToTypeScript(schema);
@@ -129,12 +139,14 @@ async function loadTemplatesFromDir(
 					// Append source to description
 					description = description ? `${description} ${sourceStr}` : sourceStr;
 
-					templates.push({
+					const template: PromptTemplate = {
 						name,
 						description,
 						content: body,
 						source: sourceStr,
-					});
+					};
+					discoveredTemplates.add(template);
+					templates.push(template);
 				}
 			} catch (error) {
 				logger.warn("Failed to load prompt template", { path: fullPath, error: String(error) });

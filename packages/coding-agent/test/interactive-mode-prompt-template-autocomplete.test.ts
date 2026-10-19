@@ -231,4 +231,16 @@ describe("InteractiveMode prompt-template autocomplete (#2462)", () => {
 		expect(models).toContain("snippet:models");
 		expect(models).not.toContain("models");
 	});
+
+	it("keeps SDK-supplied templates when the templates are reloaded from disk", async () => {
+		const created = createHarness([
+			{ name: "supplied", description: "From the SDK caller", content: "body", source: "sdk" },
+		]);
+		const slot = captureAutocompleteProvider(created.mode);
+
+		await created.mode.refreshPromptTemplates();
+
+		expect(created.session.promptTemplates.map(t => t.name)).toContain("supplied");
+		expect(await fetchSlashSuggestions(slot.current!, "/snippet:supp")).toContain("snippet:supplied");
+	});
 });

@@ -84,7 +84,7 @@ import type { CollabHost } from "../collab/host";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey, rawKeyHint } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { formatModelString, type ResolvedModelRoleValue } from "../config/model-resolver";
-import { loadPromptTemplates, promptTemplateCommandName } from "../config/prompt-templates";
+import { isDiscoveredPromptTemplate, loadPromptTemplates, promptTemplateCommandName } from "../config/prompt-templates";
 import { isSettingsInitialized, Settings, settings } from "../config/settings";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
@@ -2821,7 +2821,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	async refreshPromptTemplates(): Promise<void> {
 		const basePath = this.sessionManager.getCwd();
 		const agentDir = this.settings.getAgentDir();
-		this.session.setPromptTemplates(await loadPromptTemplates({ cwd: basePath, agentDir }));
+		// Templates an SDK caller supplied are not on disk; keep them across the reload.
+		const supplied = this.session.promptTemplates.filter(template => !isDiscoveredPromptTemplate(template));
+		const discovered = await loadPromptTemplates({ cwd: basePath, agentDir });
+		this.session.setPromptTemplates([...discovered, ...supplied]);
 		this.#rebuildSlashCommandAutocomplete(basePath);
 	}
 

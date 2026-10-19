@@ -8,7 +8,7 @@ import {
 	SNIPPETS_USAGE,
 	type SnippetScope,
 	saveSnippet,
-	snippetPath,
+	snippetExists,
 	snippetsDir,
 } from "../config/snippets";
 import { clearSubmittedText } from "./helpers/draft";
@@ -83,8 +83,7 @@ export const BUILTIN_SNIPPETS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = 
 						const candidates: SnippetScope[] = parsed.scope ? [parsed.scope] : ["user", "project"];
 						const found: SnippetScope[] = [];
 						for (const scope of candidates) {
-							if (await Bun.file(snippetPath(snippetsDir(scope, cwd, agentDir), parsed.name)).exists())
-								found.push(scope);
+							if (await snippetExists(snippetsDir(scope, cwd, agentDir), parsed.name)) found.push(scope);
 						}
 						if (found.length === 0) {
 							ctx.showError(`No snippet "${parsed.name}" in ${parsed.scope ?? "user or project"} prompts.`);

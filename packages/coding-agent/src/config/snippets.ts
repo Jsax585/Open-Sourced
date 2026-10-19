@@ -1,6 +1,7 @@
 import { getProjectPromptsDir, getPromptsDir, isEnoent, sanitizeText } from "@oh-my-pi/pi-utils";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { type PromptTemplate, promptTemplateCommandName, templateUsesInlineArgPlaceholders } from "./prompt-templates";
 
 /** Where a snippet file lives: the user's agent dir (global) or the project's `.omp/prompts`. */
@@ -18,8 +19,6 @@ const SAVE_USAGE = "Usage: /snippets save <name> [--scope user|project] [--force
 const DELETE_USAGE = "Usage: /snippets delete <name> [--scope user|project]";
 const SCOPE_ERROR = "--scope must be user or project";
 const INVALID_NAME_HINT = "use a letter, then letters, digits, - or _";
-const DESCRIPTION_LIMIT = 80;
-const PREVIEW_LIMIT = 400;
 
 function isValidSnippetName(name: string): boolean {
 	return SNIPPET_NAME_PATTERN.test(name);
@@ -110,13 +109,9 @@ export function resolveSnippetText(inline: string, userMessages: ReadonlyArray<{
 	return last ? last : undefined;
 }
 
-function truncate(text: string, limit: number): string {
-	return text.length > limit ? `${text.slice(0, limit)}…` : text;
-}
-
 function deriveDescription(text: string): string {
 	const firstLine = text.split("\n").find(line => line.trim()) ?? "";
-	return truncate(firstLine.replace(/\s+/g, " ").trim(), DESCRIPTION_LIMIT);
+	return truncateToWidth(firstLine.replace(/\s+/g, " ").trim(), TRUNCATE_LENGTHS.CONTENT);
 }
 
 /** `exists` means the file was already there and `force` was not set; nothing was written. */
@@ -169,6 +164,17 @@ export async function deleteSnippet(dir: string, name: string): Promise<"deleted
 	}
 }
 
+/** Whether `<dir>/<name>.md` exists as a directory entry; a dangling symlink counts (`lstat`, not a followed stat). */
+export async function snippetExists(dir: string, name: string): Promise<boolean> {
+	try {
+		await fs.lstat(snippetPath(dir, name));
+		return true;
+	} catch (err) {
+		if (isEnoent(err)) return false;
+		throw err;
+	}
+}
+
 /** One picker row: `label` is what the picker returns, `description` its preview, `insertText` what goes in the editor. */
 export interface SnippetChoice {
 	label: string;
@@ -195,14 +201,19 @@ export function buildSnippetChoices(templates: readonly PromptTemplate[], atDraf
 		const duplicated = (counts.get(template.name) ?? 0) > 1;
 		// A name the sanitizer altered cannot be typed back, so it never gets an invocation form.
 		const invocation =
-			atDraftStart && !duplicated && name === template.name && templateUsesInlineArgPlaceholders(content);
+			atDraftStart &&
+			!duplicated &&
+			name === template.name &&
+			/^\S+$/.test(name) &&
+			templateUsesInlineArgPlaceholders(content);
 		const command = `/${promptTemplateCommandName(template)}`;
-		const preview = truncate(sanitizeText(content).replace(/\s+/g, " ").trim(), PREVIEW_LIMIT);
+		const preview = truncateToWidth(sanitizeText(content).replace(/\s+/g, " ").trim(), TRUNCATE_LENGTHS.RECAP);
 		const hint = invocation ? `takes arguments, inserts ${command} · ` : "";
 		return {
 			label: duplicated ? `${name} ${source}` : name,
 			description: `${source} · ${hint}${preview}`,
-			insertText: invocation ? `${command} ` : content,
+			// The editor's programmatic insert does not strip controls or tabs the way typing and paste do.
+			insertText: invocation ? `${command} ` : replaceTabs(sanitizeText(content)),
 		};
 	});
 }

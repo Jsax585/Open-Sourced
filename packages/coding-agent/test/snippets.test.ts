@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	expandPromptTemplate,
+	isDiscoveredPromptTemplate,
 	loadPromptTemplates,
 	type PromptTemplate,
 } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
@@ -21,6 +22,7 @@ import {
 	parseSaveArgs,
 	resolveSnippetText,
 	saveSnippet,
+	snippetExists,
 	snippetPath,
 } from "@oh-my-pi/pi-coding-agent/config/snippets";
 
@@ -93,6 +95,23 @@ describe("saveSnippet", () => {
 		expect((await saveSnippet({ dir, name: "linked", text: "new body", force: false })).kind).toBe("exists");
 		expect(await Bun.file(outside).text()).toBe("precious");
 	});
+
+	test("a long first line of wide characters is cut on a character boundary", async () => {
+		const dir = path.join(tmp, "prompts");
+		await saveSnippet({ dir, name: "wide", text: "😀".repeat(100), force: false });
+		const [template] = await loadPromptTemplates({ cwd: path.join(tmp, "project"), agentDir: tmp });
+		const saved = await Bun.file(path.join(dir, "wide.md")).text();
+		expect(saved).not.toContain("\ufffd");
+		expect(saved.isWellFormed()).toBe(true);
+		expect(template?.description).toContain("…");
+	});
+
+	test("loaded templates are tracked as discovered; caller-supplied ones are not", async () => {
+		await saveSnippet({ dir: path.join(tmp, "prompts"), name: "disk", text: "x", force: false });
+		const [loaded] = await loadPromptTemplates({ cwd: path.join(tmp, "project"), agentDir: tmp });
+		expect(isDiscoveredPromptTemplate(loaded!)).toBe(true);
+		expect(isDiscoveredPromptTemplate({ name: "mine", description: "", content: "x", source: "sdk" })).toBe(false);
+	});
 });
 
 describe("deleteSnippet", () => {
@@ -100,6 +119,14 @@ describe("deleteSnippet", () => {
 		await saveSnippet({ dir: tmp, name: "gone", text: "x", force: false });
 		expect(await deleteSnippet(tmp, "gone")).toBe("deleted");
 		expect(await deleteSnippet(tmp, "gone")).toBe("missing");
+	});
+
+	test("a dangling symlink counts as present and is removed itself", async () => {
+		await fs.symlink(path.join(tmp, "missing-target"), path.join(tmp, "dangling.md"));
+		expect(await snippetExists(tmp, "dangling")).toBe(true);
+		expect(await snippetExists(tmp, "absent")).toBe(false);
+		expect(await deleteSnippet(tmp, "dangling")).toBe("deleted");
+		expect(await snippetExists(tmp, "dangling")).toBe(false);
 	});
 });
 
@@ -177,6 +204,16 @@ describe("buildSnippetChoices", () => {
 		expect(choice?.description).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
 		expect(choice?.description).toContain("before");
 		expect(choice?.description).toContain("red");
+	});
+
+	test("a name with a space never gets the invocation form, which would split at the space", () => {
+		const [choice] = buildSnippetChoices([template("code review", "Review $1")], true);
+		expect(choice?.insertText).toBe("Review $1");
+	});
+
+	test("the inserted body is stripped of control sequences and tabs, like typed or pasted text", () => {
+		const [choice] = buildSnippetChoices([template("raw", "a\x1b]0;x\x07b\tc\x1b[31md")], true);
+		expect(choice?.insertText).toMatch(/^ab +cd$/);
 	});
 });
 
