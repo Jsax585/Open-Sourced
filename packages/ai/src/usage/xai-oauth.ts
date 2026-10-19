@@ -447,21 +447,28 @@ export const xaiOauthUsageProvider: UsageProvider = {
 	},
 };
 
+/** Weekly credits and monthly included quota; none while enforcement is uncertain. */
+function xaiIncludedLimits(report: UsageReport): UsageLimit[] {
+	if (report.metadata?.monthlyQuotaAdvisory === true) return [];
+	return report.limits.filter(
+		limit => limit.id === `${PROVIDER_ID}:credits:1w` || limit.id === `${PROVIDER_ID}:included:1mo`,
+	);
+}
+
 /**
  * Ranks SuperGrok accounts by weekly credits (or unified monthly included quota).
  * xAI reports no short window, so the meter maps to `secondary`, which drives drain ranking.
  */
 export const xaiOauthRankingStrategy: CredentialRankingStrategy = {
 	scopeLimits(report) {
-		if (report.metadata?.monthlyQuotaAdvisory === true) return [];
 		// Spent credits/included quota keeps serving on the on-demand cap; only hard-block
 		// the credential once no on-demand headroom remains.
 		const onDemand = report.limits.find(limit => limit.id === `${PROVIDER_ID}:on-demand`);
 		if (onDemand && !isUsageLimitExhausted(onDemand)) return [];
-		return report.limits.filter(
-			limit => limit.id === `${PROVIDER_ID}:credits:1w` || limit.id === `${PROVIDER_ID}:included:1mo`,
-		);
+		return xaiIncludedLimits(report);
 	},
+	// The renewable quota, measured even while on-demand headroom keeps the account serving.
+	scopeLimitsForIncluded: xaiIncludedLimits,
 	findWindowLimits(report) {
 		if (report.metadata?.monthlyQuotaAdvisory === true) return {};
 		const credits = report.limits.find(limit => limit.id === `${PROVIDER_ID}:credits:1w`);

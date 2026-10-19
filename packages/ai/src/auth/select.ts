@@ -39,8 +39,10 @@ import {
 } from "./types";
 import type { UsageService } from "./usage";
 import {
+	includedUsageLimits,
 	isUsageLimitReached,
 	normalizeUsageFraction,
+	remainingLimitsFraction,
 	remainingUsageFraction,
 	scopedUsageLimits,
 	usageResetAtMs,
@@ -52,6 +54,9 @@ export const OAUTH_REFRESH_FAILURE_BACKOFF_MS = 5 * 60 * 1000;
 
 /** OAuth bearer and credential chosen for a request, with its durable row id when available. */
 export type OAuthResolutionResult = { apiKey: string; credential: OAuthCredential; credentialId?: number };
+
+/** Why the `includedOnly` policy withheld an account, with the reset time when known. */
+type IncludedOnlyWithheld = { reason: "included usage spent" | "blocked" | "usage unknown"; resetsAt?: number };
 
 /** Options for CredentialSelector.tryOAuth when evaluating one OAuth credential. */
 export type TryOAuthOptions = {
@@ -69,6 +74,8 @@ export type TryOAuthOptions = {
 	allowFallback?: boolean;
 	/** Receives a non-definitive refresh failure that left this credential unusable; the caller filters for retryable ones. */
 	onTransientRefreshFailure?: (error: unknown) => void;
+	/** Serve only while measured included allowance is left, in every pass (`auth.accountPolicies[].includedOnly`). */
+	includedOnly?: boolean;
 };
 
 /** Services consulted by CredentialSelector for policy, usage, blocks, refresh, and session affinity. */
@@ -926,6 +933,7 @@ export class CredentialSelector {
 					blockScope,
 					blockScopes,
 					onTransientRefreshFailure: recordTransientRefreshFailure,
+					includedOnly: this.#deps.policies.forCredential(provider, candidate.selection.credential)?.includedOnly,
 				});
 				if (resolved) return resolved;
 			}
@@ -986,6 +994,42 @@ export class CredentialSelector {
 		return this.#syncOAuthSelectionFromStore(provider, selection, selected.id);
 	}
 
+	/**
+	 * Why an `includedOnly` account must not serve, or `undefined` while its included allowance is
+	 * measured and left. Past it, a provider with paid overage enabled bills instead of refusing,
+	 * so a spent, exhausted or unmeasured account is never a last resort.
+	 */
+	#includedOnlyWithholdReason(
+		usage: UsageReport | null,
+		strategy: CredentialRankingStrategy | undefined,
+		rankingContext: CredentialRankingContext | undefined,
+	): IncludedOnlyWithheld | undefined {
+		if (!usage || !rankingContext) return { reason: "usage unknown" };
+		const nowMs = Date.now();
+		const hardLimits = strategy ? scopedUsageLimits(strategy, usage, rankingContext) : [];
+		const included = includedUsageLimits(strategy, usage, rankingContext);
+		const remaining = remainingLimitsFraction(included, usage, nowMs);
+		if (isUsageLimitReached(hardLimits) || remaining === 0) {
+			return { reason: "included usage spent", resetsAt: usageResetAtMs([...hardLimits, ...included], nowMs) };
+		}
+		return remaining === undefined ? { reason: "usage unknown" } : undefined;
+	}
+
+	/** Routed resolution reports a withheld account only as "no key", so record which one and why. */
+	#logIncludedOnlyWithheld(
+		provider: string,
+		selection: { credential: OAuthCredential; index: number },
+		{ reason, resetsAt }: IncludedOnlyWithheld,
+	): void {
+		logger.debug("includedOnly policy withheld OAuth account", {
+			provider,
+			index: selection.index,
+			account: selection.credential.email ?? oauthAccountKey(selection.credential),
+			reason,
+			resetsAt: resetsAt === undefined ? undefined : new Date(resetsAt).toISOString(),
+		});
+	}
+
 	/** Attempts to use a single OAuth credential, checking usage and refreshing token. */
 	async tryOAuth(
 		provider: Provider,
@@ -1007,11 +1051,15 @@ export class CredentialSelector {
 			blockScope,
 			blockScopes,
 			allowFallback = true,
+			includedOnly = false,
 		} = usageOptions;
-		if (
-			!allowBlocked &&
-			this.#deps.blocks.isBlocked(provider, providerKey, selection.index, blockScopes ?? blockScope)
-		) {
+		const blockedUntil =
+			!allowBlocked || includedOnly
+				? this.#deps.blocks.blockedUntil(provider, providerKey, selection.index, blockScopes ?? blockScope)
+				: undefined;
+		if (blockedUntil !== undefined) {
+			if (allowBlocked)
+				this.#logIncludedOnlyWithheld(provider, selection, { reason: "blocked", resetsAt: blockedUntil });
 			return undefined;
 		}
 
@@ -1030,7 +1078,7 @@ export class CredentialSelector {
 		let usage: UsageReport | null = null;
 		let usageChecked = false;
 
-		if ((checkUsage && !allowBlocked) || hasPlanRequirement) {
+		if ((checkUsage && !allowBlocked) || hasPlanRequirement || includedOnly) {
 			if (usagePrechecked) {
 				usage = prefetchedUsage;
 				usageChecked = true;
@@ -1042,6 +1090,11 @@ export class CredentialSelector {
 				usageChecked = true;
 			}
 			if (applyPlanFilter && planGate?.(usage) !== true) {
+				return undefined;
+			}
+			const withheld = includedOnly ? this.#includedOnlyWithholdReason(usage, strategy, rankingContext) : undefined;
+			if (withheld) {
+				this.#logIncludedOnlyWithheld(provider, selection, withheld);
 				return undefined;
 			}
 			if (checkUsage && !allowBlocked && usage && strategy && rankingContext) {
@@ -1101,7 +1154,7 @@ export class CredentialSelector {
 				const rowId = this.#deps.pool.entries(provider)[selection.index]?.id;
 				if (rowId !== undefined) this.#deps.pool.replaceById(provider, rowId, updated);
 			}
-			if ((checkUsage && !allowBlocked) || hasPlanRequirement) {
+			if ((checkUsage && !allowBlocked) || hasPlanRequirement || includedOnly) {
 				const sameAccount = selection.credential.accountId === updated.accountId;
 				if (!usageChecked || !sameAccount) {
 					usage = await this.#deps.usage.report(provider, updated, {
@@ -1111,6 +1164,13 @@ export class CredentialSelector {
 					usageChecked = true;
 				}
 				if (applyPlanFilter && planGate?.(usage) !== true) {
+					return undefined;
+				}
+				const withheld = includedOnly
+					? this.#includedOnlyWithholdReason(usage, strategy, rankingContext)
+					: undefined;
+				if (withheld) {
+					this.#logIncludedOnlyWithheld(provider, selection, withheld);
 					return undefined;
 				}
 				if (checkUsage && !allowBlocked && usage && strategy && rankingContext) {

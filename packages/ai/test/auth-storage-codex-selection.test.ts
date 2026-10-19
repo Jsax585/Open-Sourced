@@ -15,6 +15,7 @@ import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from
 import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/registry/oauth/types";
 import type { UsageLimit, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai/usage";
+import { logger } from "@oh-my-pi/pi-utils";
 import { OAuthRefresher } from "../src/auth/refresh";
 import { removeWithRetries } from "../../utils/src/temp";
 
@@ -4506,5 +4507,167 @@ describe("AuthStorage claude oauth ranking", () => {
 		// so the pin must win the tie rather than churn to the sibling.
 		clockOffset = HOUR_MS + 1;
 		expect(await storage.keys.get("anthropic", "claude-idle-tie")).toBe(first);
+	});
+
+	describe("includedOnly account policy", () => {
+		const openWithPolicy = async (emails: string[]) => {
+			if (!store) throw new Error("test setup failed");
+			const storage = new AuthStorage(store, {
+				usageProviderResolver: provider => (provider === "anthropic" ? usageProvider : undefined),
+				accountPolicies: emails.map(email => ({ provider: "anthropic", account: { email }, includedOnly: true })),
+			});
+			await storage.credentials.reload();
+			return storage;
+		};
+		const usage = (accountId: string, primary: number, secondary = 0.3) =>
+			createClaudeUsageReport({
+				accountId,
+				primary: { usedFraction: primary, resetInMs: 2 * HOUR_MS },
+				secondary: { usedFraction: secondary, resetInMs: 3 * 24 * HOUR_MS },
+			});
+
+		test("serves an includedOnly account while its allowance is left", async () => {
+			const storage = await openWithPolicy(["paid@example.com"]);
+			await storage.credentials.set("anthropic", [
+				{ type: "oauth", ...createCredential("acct-paid", "paid@example.com") },
+			]);
+			usageByAccount.set("acct-paid", usage("acct-paid", 0.4));
+
+			expect(await storage.keys.get("anthropic", "included-left")).toBe("api-acct-paid");
+		});
+
+		test("never falls back to a spent includedOnly account, even as the last account", async () => {
+			const storage = await openWithPolicy(["paid@example.com"]);
+			await storage.credentials.set("anthropic", [
+				{ type: "oauth", ...createCredential("acct-paid", "paid@example.com") },
+			]);
+			usageByAccount.set("acct-paid", usage("acct-paid", 1));
+
+			expect(await storage.keys.get("anthropic", "included-spent")).toBeUndefined();
+		});
+
+		test("logs which includedOnly account was withheld, why, and when it resets", async () => {
+			const storage = await openWithPolicy(["paid@example.com"]);
+			await storage.credentials.set("anthropic", [
+				{ type: "oauth", ...createCredential("acct-paid", "paid@example.com") },
+			]);
+			const report = usage("acct-paid", 1);
+			usageByAccount.set("acct-paid", report);
+			const resetsAt = report.limits.find(limit => limit.status === "exhausted")?.window?.resetsAt;
+			if (resetsAt === undefined) throw new Error("expected an exhausted window with a reset");
+			const debug = vi.spyOn(logger, "debug");
+
+			expect(await storage.keys.get("anthropic", "included-withheld-log")).toBeUndefined();
+			expect(debug).toHaveBeenCalledWith("includedOnly policy withheld OAuth account", {
+				provider: "anthropic",
+				index: 0,
+				account: "paid@example.com",
+				reason: "included usage spent",
+				resetsAt: new Date(resetsAt).toISOString(),
+			});
+		});
+
+		test("skips an includedOnly account whose usage cannot be measured", async () => {
+			const storage = await openWithPolicy(["paid@example.com"]);
+			await storage.credentials.set("anthropic", [
+				{ type: "oauth", ...createCredential("acct-paid", "paid@example.com") },
+				{ type: "oauth", ...createCredential("acct-free", "free@example.com") },
+			]);
+			// The only measured sibling is spent, so without the policy the unmeasured account would win.
+			usageByAccount.set("acct-free", usage("acct-free", 1, 1));
+
+			const counts = await countApiKeySelections(storage, "anthropic", "included-unknown", 30);
+			expect(countFor(counts, "api-acct-paid")).toBe(0);
+			expect(countFor(counts, "api-acct-free")).toBe(30);
+		});
+
+		test("when every account is spent, only accounts without the policy remain a last resort", async () => {
+			const storage = await openWithPolicy(["paid@example.com"]);
+			await storage.credentials.set("anthropic", [
+				{ type: "oauth", ...createCredential("acct-paid", "paid@example.com") },
+				{ type: "oauth", ...createCredential("acct-free", "free@example.com") },
+			]);
+			usageByAccount.set("acct-paid", usage("acct-paid", 1, 1));
+			usageByAccount.set("acct-free", usage("acct-free", 1, 1));
+
+			const counts = await countApiKeySelections(storage, "anthropic", "included-all-spent", 30);
+			expect(countFor(counts, "api-acct-paid")).toBe(0);
+			expect(countFor(counts, "api-acct-free")).toBe(30);
+		});
+
+		test("a blocked includedOnly account with allowance left is not a last resort", async () => {
+			const storage = await openWithPolicy(["paid@example.com"]);
+			await storage.credentials.set("anthropic", [
+				{ type: "oauth", ...createCredential("acct-paid", "paid@example.com") },
+				{ type: "oauth", ...createCredential("acct-free", "free@example.com") },
+			]);
+			usageByAccount.set("acct-paid", usage("acct-paid", 0.4));
+			usageByAccount.set("acct-free", usage("acct-free", 1, 1));
+			const sessionId = "included-blocked";
+			expect(await storage.keys.get("anthropic", sessionId)).toBe("api-acct-paid");
+
+			// A 429 blocks the account while its cached report still shows allowance left.
+			await storage.limits.markReached("anthropic", sessionId, { retryAfterMs: HOUR_MS });
+
+			const counts = await countApiKeySelections(storage, "anthropic", "included-blocked-pick", 30);
+			expect(countFor(counts, "api-acct-paid")).toBe(0);
+			expect(countFor(counts, "api-acct-free")).toBe(30);
+		});
+
+		test("an xAI account serves from its weekly credits, not its unspent on-demand cap", async () => {
+			if (!store) throw new Error("test setup failed");
+			const xaiLimit = (id: string, usedFraction: number): UsageLimit => ({
+				id: `xai-oauth:${id}`,
+				label: id,
+				scope: { provider: "xai-oauth", shared: true },
+				window: { id, label: id, durationMs: WEEK_MS, resetsAt: Date.now() + 3 * 24 * HOUR_MS },
+				amount: { unit: "percent", used: usedFraction * 100, limit: 100, usedFraction },
+				status: usedFraction >= 1 ? "exhausted" : "ok",
+			});
+			let creditsUsed = 0.4;
+			const xaiUsage: UsageProvider = {
+				id: "xai-oauth",
+				async fetchUsage() {
+					return {
+						provider: "xai-oauth",
+						fetchedAt: Date.now(),
+						limits: [xaiLimit("credits:1w", creditsUsed), xaiLimit("on-demand", 0)],
+					};
+				},
+			};
+			vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (provider, credentials) => {
+				const credential = credentials[provider] as OAuthCredentials | undefined;
+				return credential?.accountId ? { apiKey: `api-${credential.accountId}`, newCredentials: credential } : null;
+			});
+			const storage = new AuthStorage(store, {
+				usageProviderResolver: provider => (provider === "xai-oauth" ? xaiUsage : undefined),
+				accountPolicies: [{ provider: "xai-oauth", account: { email: "grok@example.com" }, includedOnly: true }],
+			});
+			await storage.credentials.reload();
+			await storage.credentials.set("xai-oauth", [
+				{ type: "oauth", ...createCredential("acct-grok", "grok@example.com") },
+			]);
+
+			expect(await storage.keys.get("xai-oauth", "xai-included-left")).toBe("api-acct-grok");
+
+			// Spent weekly credits would now bill the on-demand cap.
+			creditsUsed = 1;
+			await storage.usage.invalidate("xai-oauth");
+			expect(await storage.keys.get("xai-oauth", "xai-included-spent")).toBeUndefined();
+		});
+
+		test("exact-account access still resolves a spent includedOnly account", async () => {
+			const storage = await openWithPolicy(["paid@example.com"]);
+			await storage.credentials.set("anthropic", [
+				{ type: "oauth", ...createCredential("acct-paid", "paid@example.com") },
+			]);
+			usageByAccount.set("acct-paid", usage("acct-paid", 1, 1));
+			const [account] = storage.oauth.accounts("anthropic");
+			if (!account) throw new Error("expected a stored account");
+
+			// Saved-reset redemption and model discovery address one row directly; they send no routed request.
+			const access = await storage.oauth.accessById("anthropic", account.credentialId);
+			expect(access?.ok).toBe(true);
+		});
 	});
 });

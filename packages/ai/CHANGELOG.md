@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the `includedOnly` account policy (`auth.accountPolicies[].includedOnly: true`): routing stops using the account once its measured included allowance is spent, and never falls back to it while it is spent, exhausted, blocked, or unmeasured. It is not a hard billing cap: requests already in flight when the allowance runs out can still bill paid overage such as Claude extra usage ([#16290](https://github.com/can1357/oh-my-pi/pull/16290) by [@Khang5687](https://github.com/Khang5687))
+
 ## [18.12.2] - 2026-10-18
 
 ### Added
