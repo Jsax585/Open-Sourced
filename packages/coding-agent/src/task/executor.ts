@@ -371,9 +371,15 @@ function installSubagentRetryFallbackChain(args: {
 	);
 	if (selectedIndex < 0) return undefined;
 	const fallbackSelectors = candidates.slice(selectedIndex + 1).map(candidate => candidate.selector);
-	// A single configured model may reuse its role's (or the default) configured chain, but never an implicit parent fallback.
+	// Credential selection may expand wildcards against the startup model. Keep
+	// inherited runtime selectors intact: a later wildcard must instead use the
+	// model id of the fallback that just failed.
 	const fallbackChain =
-		fallbackSelectors.length > 0 ? fallbackSelectors : (inheritedFallbackChain ?? (contained ? [] : undefined));
+		contained && inheritedFallbackChain !== undefined
+			? inheritedFallbackChain
+			: fallbackSelectors.length > 0
+				? fallbackSelectors
+				: (inheritedFallbackChain ?? (contained ? [] : undefined));
 	if (
 		!Array.isArray(fallbackChain) ||
 		(fallbackChain.length === 0 && !contained) ||

@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added opt-in `retry.fallbackChainExhausted` role policies: `"fail"` contains worker, title-helper, and revived-child routing within the role's own chain, including wildcard retry selectors and authenticated fallback selection ([#15741](https://github.com/can1357/oh-my-pi/pull/15741) by [@schickling-assistant](https://github.com/schickling-assistant); fixes [#15341](https://github.com/can1357/oh-my-pi/issues/15341)).
+- Added opt-in `retry.fallbackChainExhausted` role policies: `"fail"` contains worker, title-helper, and revived-child routing within the role's own chain, including runtime-relative wildcard retry selectors and authenticated fallback selection ([#15741](https://github.com/can1357/oh-my-pi/pull/15741) by [@schickling-assistant](https://github.com/schickling-assistant); fixes [#15341](https://github.com/can1357/oh-my-pi/issues/15341)).
 
 ## [18.12.3] - 2026-10-19
 

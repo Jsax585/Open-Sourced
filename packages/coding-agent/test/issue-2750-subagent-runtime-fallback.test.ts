@@ -323,16 +323,25 @@ describe("subagent runtime model resolution", () => {
 			name: "serves the wildcard fallback before a later explicit selector",
 			contained: true,
 			alternateSucceeds: true,
+			changesModelId: false,
 		},
 		{
 			name: "fails after the wildcard and explicit fallbacks without calling default",
 			contained: true,
 			alternateSucceeds: false,
+			changesModelId: false,
 		},
 		{
 			name: "retains default escape after an uncontained wildcard chain exhausts",
 			contained: false,
 			alternateSucceeds: false,
+			changesModelId: false,
+		},
+		{
+			name: "resolves a later wildcard against the failing explicit fallback model",
+			contained: true,
+			alternateSucceeds: false,
+			changesModelId: true,
 		},
 	]) {
 		it(
@@ -344,12 +353,21 @@ describe("subagent runtime model resolution", () => {
 				const requested: string[] = [];
 				// Provider cooldowns outlive individual registries; each scenario must
 				// exercise fresh identities rather than inherit the previous 429.
-				const suffix = scenario.alternateSucceeds ? "success" : scenario.contained ? "contained" : "default";
+				const suffix = scenario.changesModelId
+					? "model-hop"
+					: scenario.alternateSucceeds
+						? "success"
+						: scenario.contained
+							? "contained"
+							: "default";
 				const primaryProvider = `wildcard-primary-${suffix}`;
 				const alternateProvider = `wildcard-alternate-${suffix}`;
 				const explicitProvider = `wildcard-explicit-${suffix}`;
 				const defaultProvider = `wildcard-default-${suffix}`;
 				const providers = [primaryProvider, alternateProvider, explicitProvider, defaultProvider];
+				const primaryId = scenario.changesModelId ? "A" : "worker";
+				const alternateId = scenario.changesModelId ? "B" : "worker";
+				const explicitId = scenario.changesModelId ? "B" : "last-resort";
 				const server = Bun.serve({
 					hostname: "127.0.0.1",
 					port: 0,
@@ -357,7 +375,11 @@ describe("subagent runtime model resolution", () => {
 						const provider = new URL(request.url).pathname.split("/")[1];
 						const body = (await request.json()) as { model: string };
 						requested.push(`${provider}/${body.model}`);
-						if (provider !== defaultProvider && !(provider === alternateProvider && scenario.alternateSucceeds)) {
+						if (
+							provider !== defaultProvider &&
+							!(provider === alternateProvider && scenario.alternateSucceeds) &&
+							!(provider === explicitProvider && scenario.changesModelId)
+						) {
 							return Response.json(
 								{ error: { message: "child quota exhausted", type: "rate_limit_error" } },
 								{
@@ -393,7 +415,14 @@ describe("subagent runtime model resolution", () => {
 							baseUrl: `http://127.0.0.1:${server.port}/${provider}/v1`,
 							models: [
 								{
-									id: provider === explicitProvider ? "last-resort" : "worker",
+									id:
+										provider === primaryProvider
+											? primaryId
+											: provider === alternateProvider
+												? alternateId
+												: provider === explicitProvider
+													? explicitId
+													: "worker",
 									name: "worker",
 									reasoning: false,
 									input: ["text"],
@@ -414,12 +443,17 @@ describe("subagent runtime model resolution", () => {
 						parentActiveModelPattern: `${defaultProvider}/worker`,
 						modelRegistry: registry,
 						settings: Settings.isolated({
-							modelRoles: { task: `${primaryProvider}/worker`, default: `${primaryProvider}/worker` },
+							modelRoles: {
+								task: `${primaryProvider}/${primaryId}`,
+								default: `${primaryProvider}/${primaryId}`,
+							},
 							"compaction.enabled": false,
 							"retry.baseDelayMs": 1,
 							"retry.maxDelayMs": 100,
 							"retry.fallbackChains": {
-								task: [`${alternateProvider}/*`, `${explicitProvider}/last-resort`],
+								task: scenario.changesModelId
+									? [`${alternateProvider}/${alternateId}`, `${explicitProvider}/*`]
+									: [`${alternateProvider}/*`, `${explicitProvider}/${explicitId}`],
 								default: [`${defaultProvider}/worker`],
 							},
 							...(scenario.contained ? { "retry.fallbackChainExhausted": { task: "fail" } } : {}),
@@ -432,13 +466,19 @@ describe("subagent runtime model resolution", () => {
 						skills: [],
 						promptTemplates: [],
 					});
-					const expected = [`${primaryProvider}/worker`, `${alternateProvider}/worker`];
-					if (!scenario.alternateSucceeds) expected.push(`${explicitProvider}/last-resort`);
+					const expected = [`${primaryProvider}/${primaryId}`, `${alternateProvider}/${alternateId}`];
+					if (!scenario.alternateSucceeds) expected.push(`${explicitProvider}/${explicitId}`);
 					if (!scenario.contained) expected.push(`${defaultProvider}/worker`);
 					expect(requested, result.stderr).toEqual(expected);
-					expect(result.exitCode).toBe(scenario.contained && !scenario.alternateSucceeds ? 1 : 0);
+					expect(result.exitCode).toBe(
+						scenario.contained && !scenario.alternateSucceeds && !scenario.changesModelId ? 1 : 0,
+					);
 					if (scenario.alternateSucceeds) {
 						expect(result.resolvedModel).toBe(`${alternateProvider}/worker`);
+						expect(result.resolvedModelIsFallback).toBe(true);
+					}
+					if (scenario.changesModelId) {
+						expect(result.resolvedModel).toBe(`${explicitProvider}/${explicitId}`);
 						expect(result.resolvedModelIsFallback).toBe(true);
 					}
 				} finally {
