@@ -98,6 +98,32 @@ export function factoryDroidClientHeaders(orgId: string | undefined): Record<str
 	};
 }
 
+/** Managed settings are a small JSON document; anything larger is not one. */
+const MANAGED_SETTINGS_MAX_BYTES = 1024 * 1024;
+
+/** Response text, or null once it passes `maxBytes` (reading stops there). */
+async function readTextCapped(response: Response, maxBytes: number): Promise<string | null> {
+	const reader = response.body?.getReader();
+	if (!reader) return "";
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			size += value.byteLength;
+			if (size > maxBytes) {
+				await reader.cancel().catch(() => undefined);
+				return null;
+			}
+			chunks.push(value);
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	return Buffer.concat(chunks).toString("utf8");
+}
+
 /**
  * Org managed settings (`GET /api/organization/managed-settings`): the
  * `settings` record, or null when the request fails or the body is not the
@@ -121,7 +147,9 @@ export async function fetchFactoryDroidManagedSettings(
 			},
 		);
 		if (!response.ok) return null;
-		const body: unknown = await response.json();
+		const text = await readTextCapped(response, MANAGED_SETTINGS_MAX_BYTES);
+		if (text === null) return null;
+		const body: unknown = JSON.parse(text);
 		return isRecord(body) && isRecord(body.settings) ? body.settings : null;
 	} catch (error) {
 		if (options.signal?.aborted) throw error;
