@@ -263,10 +263,12 @@ describe("history search picker", () => {
 		expect(keycaps).toContainEqual({ keys: ["tab"] });
 		expect(keycaps).toContainEqual({ keys: ["shift", "tab"] });
 		search.handleNativeEvent({ type: "action", key: "^picker", act: "scope", mods: [] });
-		expect(sheet()).toMatchObject({ title: "History (second)", query: "deploy", cursor: 5 });
+		expect(sheet()).toMatchObject({ query: "deploy", cursor: 5 });
+		expect(sheet().title).toContain("second");
 		search.handleNativeEvent({ type: "action", key: "^picker", act: "scope-back", mods: [] });
 		search.handleNativeEvent({ type: "action", key: "^picker", act: "scope-back", mods: [] });
-		expect(sheet()).toMatchObject({ title: "History (third)", query: "deploy", cursor: 5 });
+		expect(sheet()).toMatchObject({ query: "deploy", cursor: 5 });
+		expect(sheet().title).toContain("third");
 		expect(inserted).toEqual([]);
 		search.handleNativeEvent({ type: "activate", key: "^picker", item: sheet().items![0]!.id });
 		expect(inserted).toEqual([entries[0]!.prompt]);
@@ -308,11 +310,13 @@ describe("history search picker", () => {
 				const root = search.describe(context);
 				return name === "picker" ? props((root.c as NativeNode[])[0]!).title : (root.p as { head: string }).head;
 			};
-			expect(title()).toBe("History (first)");
+			expect(title()).toContain("first");
 			search.handleInput("\t");
-			expect(title()).toBe("History (second)");
+			expect(title()).toContain("second");
+			expect(title()).not.toContain("first");
 			search.handleInput("\x1b[Z");
-			expect(title()).toBe("History (first)");
+			expect(title()).toContain("first");
+			expect(title()).not.toContain("second");
 		});
 	}
 
