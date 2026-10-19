@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added bounded response reading and an opt-in `fetchWithRetry` body limit so oversized retryable errors can be returned without buffering the full body or issuing another request ([#16186](https://github.com/can1357/oh-my-pi/pull/16186) by [@stabey](https://github.com/stabey)).
 - Added `readSalvageableRows()` to read the rows of a damaged SQLite table that are still readable, skipping only the damaged pages ([#15751](https://github.com/can1357/oh-my-pi/pull/15751) by [@Shadorain](https://github.com/Shadorain))
 
 ## [18.12.0] - 2026-10-17

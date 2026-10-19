@@ -1,6 +1,5 @@
 import { type ApiKey, type FetchImpl, getEnvApiKey, withAuth } from "@oh-my-pi/pi-ai";
-import { fetchWithRetry, untilAborted } from "@oh-my-pi/pi-utils";
-import { readBodyCapped } from "./response-body";
+import { fetchWithRetry, readBodyCapped, untilAborted } from "@oh-my-pi/pi-utils";
 import { withHardTimeout } from "./search/providers/utils";
 
 const DEEPSEEK_FETCH_URL = "https://api.deepseek.com/v1/tools/fetch";
@@ -61,6 +60,7 @@ export async function fetchWithDeepSeek(url: string, options: DeepSeekFetchOptio
 						fetch: options.fetch,
 						maxAttempts: 2,
 						maxDelayMs: RETRY_MAX_DELAY_MS,
+						maxRetryBodyBytes: MAX_RESPONSE_BYTES,
 					});
 					// Bound both payloads before decoding; truncated JSON is never parsed.
 					const body = await readBodyCapped(response, MAX_RESPONSE_BYTES);

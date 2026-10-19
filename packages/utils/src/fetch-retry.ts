@@ -1,4 +1,5 @@
 import { scheduler } from "node:timers/promises";
+import { readBodyCapped } from "./response-body";
 
 // "reset after 1h2m3s" / "10m15s" / "39s"
 const QUOTA_RESET_PATTERN = /reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/i;
@@ -308,6 +309,12 @@ export interface FetchWithRetryOptions extends RequestInit {
 	 */
 	shouldRetryResponse?: (response: Response, bodyText: string, attempt: number) => boolean | Promise<boolean>;
 	/**
+	 * Maximum bytes inspected for retry hints/gates. Overflow returns the original
+	 * response without retrying; its body remains readable by the caller.
+	 * Omitted preserves the unbounded inspection used by existing callers.
+	 */
+	maxRetryBodyBytes?: number;
+	/**
 	 * Bun extension forwarded verbatim to the underlying `fetch` call. `false`
 	 * disables Bun's native ~300s pre-response timeout (callers that own a
 	 * configurable first-event/idle watchdog or an external `AbortSignal`
@@ -339,6 +346,7 @@ export async function fetchWithRetry(
 		defaultDelayMs,
 		prepareInit,
 		shouldRetryResponse,
+		maxRetryBodyBytes,
 		fetch: fetchImpl = fetch,
 		timeout = false,
 		...baseInit
@@ -375,7 +383,19 @@ export async function fetchWithRetry(
 		if (!isRetryableStatus(response.status)) return response;
 		if (attempt + 1 >= maxAttempts) return response;
 
-		const retryBody = await response.clone().text();
+		let retryBody: string;
+		if (maxRetryBodyBytes === undefined) {
+			retryBody = await response.clone().text();
+		} else {
+			try {
+				const body = await readBodyCapped(response.clone(), maxRetryBodyBytes);
+				if (body?.truncated) return response;
+				retryBody = body ? new TextDecoder().decode(body.bytes) : "";
+			} catch (error) {
+				if (!response.bodyUsed) void response.body?.cancel().catch(() => undefined);
+				throw error;
+			}
+		}
 		if (shouldRetryResponse && !(await shouldRetryResponse(response, retryBody, attempt))) return response;
 
 		const hint = extractRetryHint(response, retryBody);

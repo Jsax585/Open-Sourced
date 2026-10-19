@@ -182,21 +182,35 @@ describe("DeepSeek fetch client", () => {
 		expect(cancelled).toBe(true);
 	});
 
-	it("keeps the deadline bounded when cancelling an oversized body stalls", async () => {
-		const response = new Response(
-			new ReadableStream<Uint8Array>({
-				start(controller) {
-					controller.enqueue(new Uint8Array(MAX_RESPONSE_BYTES + 1));
-				},
-				cancel() {
-					return new Promise<void>(() => {});
-				},
-			}),
+	it("returns no Markdown and falls back promptly when cancelling an oversized body stalls", async () => {
+		let cancellations = 0;
+		const fetchImpl = mockFetch(
+			() =>
+				new Response(
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(new Uint8Array(MAX_RESPONSE_BYTES + 1));
+						},
+						cancel() {
+							cancellations++;
+							return Promise.withResolvers<void>().promise;
+						},
+					}),
+				),
 		);
-		await expect(
-			fetchWithDeepSeek(ARTICLE_URL, { timeoutMs: 10, fetch: mockFetch(() => response) }),
-		).rejects.toMatchObject({ name: "TimeoutError" });
-	});
+		const result = await renderHtmlToText(
+			ARTICLE_URL,
+			HTML,
+			30,
+			Settings.isolated({ "providers.fetch": "deepseek" }),
+			undefined,
+			null,
+			fetchImpl,
+		);
+		expect(result.method).toBe("native");
+		expect(result.content).toContain("Local fallback article");
+		expect(cancellations).toBe(1);
+	}, 1_000);
 
 	it("propagates cancellation while reading a response body", async () => {
 		const controller = new AbortController();
@@ -206,7 +220,7 @@ describe("DeepSeek fetch client", () => {
 				{
 					pull() {
 						reading.resolve();
-						return new Promise<void>(() => {});
+						return Promise.withResolvers<void>().promise;
 					},
 				},
 				{ highWaterMark: 0 },
@@ -221,20 +235,63 @@ describe("DeepSeek fetch client", () => {
 		await expect(pending).rejects.toMatchObject({ name: "AbortError" });
 	});
 
-	it("recovers from a temporary server failure before falling back to another reader", async () => {
+	it("caps the first retryable response before reading retry hints or making another request", async () => {
+		let calls = 0;
+		let pulls = 0;
+		let cancelled = false;
+		const prefix = JSON.stringify({ error: { message: "retry-after-ms=0" } });
+		const response = new Response(
+			new ReadableStream<Uint8Array>(
+				{
+					pull(controller) {
+						pulls++;
+						if (pulls === 1) controller.enqueue(Buffer.from(prefix.padEnd(MAX_RESPONSE_BYTES)));
+						else if (pulls === 2) controller.enqueue(new Uint8Array([32]));
+						else return Promise.withResolvers<void>().promise;
+					},
+					cancel() {
+						cancelled = true;
+						return Promise.withResolvers<void>().promise;
+					},
+				},
+				{ highWaterMark: 0 },
+			),
+			{ status: 429 },
+		);
+		await expect(
+			fetchWithDeepSeek(ARTICLE_URL, {
+				fetch: mockFetch(() => {
+					calls++;
+					return calls === 1 ? response : Response.json({ content: MARKDOWN });
+				}),
+			}),
+		).rejects.toMatchObject({
+			name: "DeepSeekApiError",
+			statusCode: 429,
+			message: "DeepSeek API error (429): response body too large",
+		});
+		expect(calls).toBe(1);
+		expect(pulls).toBeGreaterThanOrEqual(2);
+		expect(pulls).toBeLessThanOrEqual(3);
+		expect(cancelled).toBe(true);
+	}, 1_000);
+
+	it.each(["header", "body"])("recovers from a temporary failure using a within-limit %s retry hint", async hint => {
 		let calls = 0;
 		const result = await renderHtmlToText(
 			ARTICLE_URL,
 			HTML,
-			1,
+			0.25,
 			Settings.isolated({ "providers.fetch": "deepseek" }),
 			undefined,
 			null,
 			mockFetch(() => {
 				calls++;
-				return calls === 1
-					? Response.json({ error: { message: "Unavailable" } }, { status: 503, headers: { "Retry-After": "0" } })
-					: Response.json({ content: MARKDOWN });
+				if (calls > 1) return Response.json({ content: MARKDOWN });
+				return Response.json(
+					{ error: { message: hint === "body" ? "retry-after-ms=0" : "Unavailable" } },
+					{ status: 503, headers: hint === "header" ? { "Retry-After": "0" } : undefined },
+				);
 			}),
 		);
 		expect(result.method).toBe("deepseek");
