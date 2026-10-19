@@ -6837,7 +6837,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const tokens = this.session.getContextUsage()?.tokens ?? 0;
 		if (typeof model.contextWindow === "number" && tokens > model.contextWindow) {
 			this.showWarning(
-				`${label} has a smaller context window than this session; use "Approve and compact context" to execute on it.`,
+				`${label} has a smaller context window than this session, so execution may overflow it; compaction runs on the planning model first.`,
 			);
 		}
 		return true;
@@ -7066,6 +7066,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			() => requestDelivered.resolve(),
 		);
 		const choice = await choicePromise;
+		// Freeze the pin at commit: an already-open picker can still complete during the
+		// async plan-file read below and must not override the committed review.
+		const pinAtCommit = this.#planExecutionPin;
 		if (this.#pendingPlanReview === pending) this.#pendingPlanReview = undefined;
 		const remote = pending.remote;
 		const closePlanReview = (): void => {
@@ -7135,7 +7138,7 @@ export class InteractiveMode implements InteractiveModeContext {
 						: -1;
 				// A pinned model wins over the slider tier; capture it before #approvePlan,
 				// whose #exitPlanMode clears the pin.
-				const pin = this.#planExecutionPin;
+				const pin = pinAtCommit;
 				const executionModel: PlanExecutionTarget | undefined = pin
 					? { kind: "model", ...pin }
 					: slider && cycle && selectedTierIndex !== restoredIndex
