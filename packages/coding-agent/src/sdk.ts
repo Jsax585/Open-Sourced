@@ -962,6 +962,12 @@ export interface CreateAgentSessionResult {
 	mcpManager?: MCPManager;
 	/** Warning if session was restored with a different model than saved */
 	modelFallbackMessage?: string;
+	/**
+	 * Set when startup replaced a requested subagent model (`modelPatternChainFallback`):
+	 * the model that serves instead (provider/id with routing) and the `Fallback:` notice
+	 * saying why. A run's result reports the substitution while that model serves.
+	 */
+	startupModelFallback?: { model: string; reason: string };
 	/** LSP servers detected for startup; warmup may continue in the background */
 	lspServers?: LspStartupServerInfo[];
 	/** Start cache-aware online runtime model discovery after the first UI paint. */
@@ -2054,6 +2060,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	);
 	let model = options.model;
 	let modelFallbackMessage: string | undefined;
+	let startupModelFallback: { model: string; reason: string } | undefined;
 	let initialRetryFallback: InitialRetryFallbackState | undefined;
 	// Identify session model strings to restore in fallback order. We do an
 	// initial pass here so model-dependent setup (thinking-level resolution,
@@ -3076,8 +3083,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					`Agent "${options.agentName ?? "subagent"}" requested model "${requestedSelector}", which ${cause}, and retry.fallbackChains["${replacement.chainKey}"] ${chainState}, so the subagent was not started.`,
 				);
 			};
-			/** Why a subagent's requested model was replaced at startup; becomes the session's initial retry fallback. */
-			let startupReplacement: { from: string; reason: string; role: string } | undefined;
+			/**
+			 * Why a subagent's requested model was replaced at startup. A chain
+			 * replacement names the chain (`role`), which becomes the session's
+			 * initial retry fallback; the parent-model fallback names none and arms
+			 * no retry fallback, so a runtime hop away from it restores to it as
+			 * it would for any primary.
+			 */
+			let startupReplacement: { from: string; reason: string; role?: string } | undefined;
 			const describeStartupReplacement = (
 				requestedSelector: string,
 				chainKey: string,
@@ -3097,6 +3110,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				adoptThinkingForModel(selected);
 				const target = formatModelSelectorValue(formatModelStringWithRouting(selected), effectiveThinkingLevel);
 				modelFallbackMessage = fallback ? `Fallback: ${fallback.from} -> ${target}\n${fallback.reason}` : undefined;
+				startupModelFallback =
+					fallback && fallback === startupReplacement && modelFallbackMessage
+						? { model: formatModelStringWithRouting(selected), reason: modelFallbackMessage }
+						: undefined;
 				void prewarmModelConnection(selected);
 			};
 			for (let patternIndex = 0; patternIndex < expandedModelPatterns.length; patternIndex += 1) {
@@ -3223,7 +3240,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 										startupReplacement = {
 											from: pattern,
 											reason: `${pattern} ${cause} and ${cfgRetryModelFallback.get(settings) ? "retry.fallbackChains has no key for it" : "retry.modelFallback is off"}, so the parent session's model serves instead`,
-											role: options.modelPatternFallbackRole ?? "default",
 										};
 									}
 								}
@@ -3264,7 +3280,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					}
 				}
 				model = selectedModel;
-				initialRetryFallback = startupReplacement
+				initialRetryFallback = startupReplacement?.role
 					? {
 							role: startupReplacement.role,
 							originalSelector: startupReplacement.from,
@@ -3281,13 +3297,16 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 			if (!model && chainFallback) {
 				const requestedSelector = expandedModelPatterns[0]?.pattern ?? deferredModelPatterns[0];
-				const cause = "matches no available model";
+				// Every pattern either matched no model or, under usage-aware
+				// fallback, had no usage left.
+				const cause = usageFallbackTriggered ? "has run out of usage" : "matches no available model";
 				const replacement = replaceUnavailableSubagentModel(requestedSelector, undefined, cause);
 				if (replacement) {
-					startupReplacement = describeStartupReplacement(requestedSelector, replacement.chainKey, cause);
+					const chainReplacement = describeStartupReplacement(requestedSelector, replacement.chainKey, cause);
+					startupReplacement = chainReplacement;
 					model = replacement.model;
 					initialRetryFallback = {
-						role: startupReplacement.role,
+						role: chainReplacement.role,
 						originalSelector: requestedSelector,
 						originalThinkingLevel: replacement.requestedThinkingLevel,
 					};
@@ -4717,7 +4736,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				sessionManager.appendModelChange(
 					`${model.provider}/${model.id}`,
 					undefined,
-					initialRetryFallback !== undefined,
+					initialRetryFallback !== undefined || startupModelFallback !== undefined,
 				);
 			}
 			if (!autoThinking) {
@@ -5630,6 +5649,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			setToolUIContext,
 			mcpManager,
 			modelFallbackMessage,
+			startupModelFallback,
 			lspServers,
 			startBackgroundModelDiscovery: startRuntimeDiscovery,
 			eventBus,

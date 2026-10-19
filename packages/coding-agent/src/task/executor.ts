@@ -241,6 +241,15 @@ function normalizeModelPatterns(value: string | string[] | undefined): string[] 
 		.filter(Boolean);
 }
 
+/**
+ * The model session creation started a subagent session on in place of the
+ * one it requested, and the `Fallback:` notice saying why
+ * (`startupModelFallback`). Kept with the session, not one run, so every
+ * monitor that attaches to it (the spawn's, a follow-up turn's, an IRC
+ * wake's) reports the substitution whenever that model serves.
+ */
+const startupModelFallbacks = new WeakMap<AgentSession, { model: string; reason: string }>();
+
 /** Session-scoped role owning subagent `id`'s retry fallback chain; cold revival reinstalls it under this name. */
 export function subagentRetryFallbackRole(id: string): string {
 	return `subagent:${id}`;
@@ -1290,8 +1299,6 @@ interface SubagentRunMonitor {
 	takeActiveSession(): AgentSession | null;
 	/** Subscribe the monitor to a session's events. Returns the unsubscribe function. */
 	attach(session: AgentSession): () => void;
-	/** Record why session creation started the run on a fallback instead of the requested model. */
-	noteStartupModelFallback(reason: string | undefined): void;
 	/** Best-effort capture of the last assistant text for cancelled-run salvage. */
 	captureSalvage(session: AgentSession): void;
 	lastAssistantSalvageText(): string | undefined;
@@ -1385,10 +1392,6 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	let yieldAcceptedAt: number | undefined;
 	let yieldTurnStopRequested = false;
 	let yieldTurnStopPromise: Promise<void> | null = null;
-	/** Why session creation started on a fallback (`modelFallbackMessage`); reported while the start model serves. */
-	let startupFallbackReason: string | undefined;
-	/** Why the latest runtime retry fallback was applied; reported once its target serves. */
-	let runtimeFallbackReason: string | undefined;
 
 	// Accumulate usage incrementally from message_end events (no memory for streaming events)
 	const accumulatedUsage: Usage = {
@@ -2157,6 +2160,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	};
 
 	const attach = (session: AgentSession): (() => void) => {
+		const startupFallback = startupModelFallbacks.get(session);
 		// The session owns attribution: it knows which model produced its output
 		// and withholds an armed-but-unproven fallback. Re-deriving that here from
 		// the event stream got it wrong twice over — the stream also carries
@@ -2165,16 +2169,19 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		const publishServingModel = (): void => {
 			const serving = session.servingModel;
 			if (!serving) return;
-			const isFallback = serving.isFallback;
+			// The startup replacement stays a fallback for the requested model
+			// whenever it serves, including after a runtime hop away and back has
+			// cleared the session's own retry-fallback state. Only its own reason
+			// is reported; a runtime hop's target serves with none.
+			const onStartupFallback = startupFallback !== undefined && serving.modelIdentity === startupFallback.model;
+			const isFallback = serving.isFallback || onStartupFallback;
 			// A model swap moves the window the usage gauge divides by. Without
 			// this the Agent Hub kept the startup model's window while labelling
 			// the row with the fallback that replaced it. Models with no declared
 			// window keep the last known one rather than blanking the gauge.
 			const contextWindow =
 				serving.contextWindow && serving.contextWindow > 0 ? serving.contextWindow : progress.contextWindow;
-			// The newest reason wins: a runtime fallback replaces the model a
-			// startup fallback chose. No reason survives a restored primary.
-			const fallbackReason = isFallback ? (runtimeFallbackReason ?? startupFallbackReason) : undefined;
+			const fallbackReason = onStartupFallback ? startupFallback.reason : undefined;
 			if (
 				serving.selector === progress.resolvedModel &&
 				serving.modelIdentity === progress.resolvedModelIdentity &&
@@ -2194,9 +2201,6 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 			scheduleProgress(true);
 		};
 		return session.subscribe(event => {
-			if (event.type === "retry_fallback_applied") {
-				runtimeFallbackReason = `Fallback: ${event.from} -> ${event.to}${event.reason ? `\n${event.reason}` : ""}`;
-			}
 			emitSubagentEvent(event);
 			publishAdvisorState(session);
 			publishServingModel();
@@ -2340,9 +2344,6 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 			return session;
 		},
 		attach,
-		noteStartupModelFallback: reason => {
-			startupFallbackReason = reason;
-		},
 		captureSalvage,
 		lastAssistantSalvageText: () => lastAssistantSalvageText,
 		lastReportTurnText: () => lastReportTurnText,
@@ -3979,11 +3980,12 @@ function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 		const mcpManager = capture.spec.options.mcpManager;
 		const mcpFollower = mcpManager ? followMCPTools(mcpManager, explicitSubagentToolNames(capture.spec)) : undefined;
 		let revived: AgentSession;
+		let startupModelFallback: CreateAgentSessionResult["startupModelFallback"];
 		// Account pools are owner policy: take the live exact-name entry, as
 		// dispatch and persisted revival do, never the spawn-time copy.
 		const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(capture.settings.parent));
 		try {
-			({ session: revived } = await createAgentSession({
+			({ session: revived, startupModelFallback } = await createAgentSession({
 				...buildSubagentSessionOptions(
 					capture.spec,
 					restoreSubagentSettings(capture.settings),
@@ -3999,6 +4001,7 @@ function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 			throw error;
 		}
 		mcpFollower?.bind(revived);
+		if (startupModelFallback) startupModelFallbacks.set(revived, startupModelFallback);
 		trackSubagentSettings(revived, capture);
 		// Re-run the executor's extension wiring on the rebuilt session. Skipping it leaves the
 		// runner pre-init, so a `tool_call` handler touching a runtime action trips the
@@ -4601,10 +4604,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						},
 					}),
 				);
-				let modelFallbackMessage: string | undefined;
-				({ session, modelFallbackMessage } = await awaitAbortable(sessionPromise));
+				let startupModelFallback: CreateAgentSessionResult["startupModelFallback"];
+				({ session, startupModelFallback } = await awaitAbortable(sessionPromise));
 				if (preparedSession) untrackedSession = session;
-				monitor.noteStartupModelFallback(modelFallbackMessage);
+				if (startupModelFallback) startupModelFallbacks.set(session, startupModelFallback);
 			} catch (err) {
 				mcpFollower?.dispose();
 				// Abort raced session startup. The session may still resolve later

@@ -851,7 +851,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	test("marks the parent-model fallback for a subagent model without working credentials that no chain key owns", async () => {
 		const { authStorage, modelRegistry, parentPattern } = registryWithKeys([]);
 
-		const { session, modelFallbackMessage } = await createAgentSession(
+		const { session, modelFallbackMessage, startupModelFallback } = await createAgentSession(
 			subagentSessionOptions(
 				modelRegistry,
 				authStorage,
@@ -863,11 +863,15 @@ describe("createAgentSession deferred model pattern resolution", () => {
 
 		try {
 			expect(`${session.model?.provider}/${session.model?.id}`).toBe(parentPattern);
-			expect(session.servingModel?.isFallback).toBe(true);
 			const modelChange = session.sessionManager.getEntries().find(entry => entry.type === "model_change");
 			expect(modelChange).toMatchObject({ resolvedModelIsFallback: true });
 			expect(modelFallbackMessage).toContain("runtime-provider/runtime-model");
 			expect(modelFallbackMessage).toContain(parentPattern);
+			expect(startupModelFallback?.model).toBe(parentPattern);
+			expect(startupModelFallback?.reason).toBe(modelFallbackMessage);
+			// No retry fallback of the requested model is armed: the parent model is
+			// this session's primary, so a runtime hop away from it restores to it.
+			expect(session.servingModel?.isFallback).toBe(false);
 		} finally {
 			await session.dispose();
 		}
@@ -1013,7 +1017,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			"retry.fallbackChains": { default: ["runtime-provider/runtime-fallback-model"] },
 		});
 
-		const { session } = await createAgentSession({
+		const { session, startupModelFallback } = await createAgentSession({
 			...subagentSessionOptions(
 				modelRegistry,
 				authStorage,
@@ -1026,7 +1030,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 
 		try {
 			expect(`${session.model?.provider}/${session.model?.id}`).toBe(parentPattern);
-			expect(session.servingModel?.isFallback).toBe(true);
+			expect(startupModelFallback?.model).toBe(parentPattern);
 		} finally {
 			await session.dispose();
 		}

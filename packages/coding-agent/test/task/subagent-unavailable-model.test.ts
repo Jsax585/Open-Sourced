@@ -6,10 +6,11 @@ import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { ServingModel } from "@oh-my-pi/pi-coding-agent/session/retry-fallback-chains";
-import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
+import { runSubagentFollowUpTurn, runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
@@ -52,12 +53,17 @@ function createYieldingSession(
 		model: model("primary", "declared-model"),
 		servingModel,
 		extensionRunner: undefined,
+		isStreaming: false,
+		setWorkPoolYieldItems: async () => {},
 		sessionManager: { appendSessionInit: () => {} },
 		getActiveToolNames: () => ["yield"],
 		getEnabledToolNames: () => ["yield"],
 		subscribe: (listener: (event: { type: string; [key: string]: unknown }) => void) => {
 			listeners.push(listener);
-			return () => {};
+			return () => {
+				const index = listeners.indexOf(listener);
+				if (index >= 0) listeners.splice(index, 1);
+			};
 		},
 		prompt: async () => {
 			if (runtimeFallback) {
@@ -95,7 +101,7 @@ describe("subagent whose declared model cannot serve", () => {
 		for (const dir of tempDirs.splice(0)) removeSyncWithRetries(dir);
 	});
 
-	it("records the model a deferred spawn settled on in session_init, which cold revival restores", async () => {
+	it("records the model a deferred spawn settled on in session_init", async () => {
 		const declared = model("primary", "declared-model");
 		const parent = model("parent", "session-model");
 		const session = createYieldingSession({ selector: "parent/session-model", isFallback: true });
@@ -125,15 +131,29 @@ describe("subagent whose declared model cannot serve", () => {
 		expect(appendSessionInit.mock.calls[0]?.[0]).toMatchObject({ resolvedModel: "parent/session-model" });
 	});
 
+	const parentFallback: ServingModel = {
+		selector: "parent/session-model",
+		modelIdentity: "parent/session-model",
+		isFallback: false,
+	};
+	const startupModelFallback = {
+		model: "parent/session-model",
+		reason:
+			"Fallback: primary/declared-model -> parent/session-model\nprimary/declared-model has no working credentials",
+	};
+	const unauthenticatedRegistry = {
+		refresh: async () => {},
+		getAvailable: () => [model("primary", "declared-model")],
+		getApiKey: async () => undefined,
+	};
+
 	it("reports why a startup fallback served the run on the settled result", async () => {
-		const declared = model("primary", "declared-model");
-		const reason =
-			"Fallback: primary/declared-model -> parent/session-model\nprimary/declared-model has no working credentials";
 		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
 			async () =>
 				({
-					session: createYieldingSession({ selector: "parent/session-model", isFallback: true }),
-					modelFallbackMessage: reason,
+					// The parent-model fallback arms no retry fallback in the session itself.
+					session: createYieldingSession(parentFallback),
+					startupModelFallback,
 					extensionsResult: {},
 					setToolUIContext: () => {},
 				}) as never,
@@ -147,28 +167,68 @@ describe("subagent whose declared model cannot serve", () => {
 			id: "startup-fallback",
 			modelOverride: ["primary/declared-model"],
 			settings: Settings.isolated(),
-			modelRegistry: {
-				refresh: async () => {},
-				getAvailable: () => [declared],
-				getApiKey: async () => undefined,
-			} as never,
+			modelRegistry: unauthenticatedRegistry as never,
 			enableLsp: false,
 		});
 
 		expect(result.resolvedModel).toBe("parent/session-model");
 		expect(result.resolvedModelIsFallback).toBe(true);
-		expect(result.resolvedModelFallbackReason).toBe(reason);
+		expect(result.resolvedModelFallbackReason).toBe(startupModelFallback.reason);
 	});
 
-	it("reports why a runtime retry fallback served the run on the settled result", async () => {
-		const declared = model("primary", "declared-model");
+	it("reports the startup fallback on a follow-up turn of the same live session", async () => {
+		const session = createYieldingSession(parentFallback);
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
+			async () => ({ session, startupModelFallback, extensionsResult: {}, setToolUIContext: () => {} }) as never,
+		);
+		await runSubprocess({
+			cwd: "/tmp",
+			agent,
+			task: "work",
+			index: 0,
+			id: "startup-follow-up",
+			modelOverride: ["primary/declared-model"],
+			settings: Settings.isolated(),
+			modelRegistry: unauthenticatedRegistry as never,
+			enableLsp: false,
+		});
+		AgentRegistry.global().unregister("startup-follow-up");
+		AgentRegistry.global().register({
+			id: "startup-follow-up",
+			displayName: "startup-follow-up",
+			kind: "sub",
+			status: "idle",
+			session,
+		});
+
+		try {
+			const followUp = await runSubagentFollowUpTurn({
+				cwd: "/tmp",
+				agent,
+				index: 0,
+				id: "startup-follow-up",
+				message: "continue",
+				settings: Settings.isolated(),
+				enableLsp: false,
+			} as never);
+
+			expect(followUp.resolvedModel).toBe("parent/session-model");
+			expect(followUp.resolvedModelIsFallback).toBe(true);
+			expect(followUp.resolvedModelFallbackReason).toBe(startupModelFallback.reason);
+		} finally {
+			AgentRegistry.global().unregister("startup-follow-up");
+		}
+	});
+
+	it("stops giving the startup reason once a runtime hop moves the run to another model", async () => {
 		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
 			async () =>
 				({
-					session: createYieldingSession(
-						{ selector: "primary/declared-model", isFallback: false },
-						{ to: { selector: "fallback/working-model", isFallback: true }, reason: "429 usage limit reached" },
-					),
+					session: createYieldingSession(parentFallback, {
+						to: { selector: "fallback/working-model", modelIdentity: "fallback/working-model", isFallback: true },
+						reason: "429 usage limit reached",
+					}),
+					startupModelFallback,
 					extensionsResult: {},
 					setToolUIContext: () => {},
 				}) as never,
@@ -179,21 +239,16 @@ describe("subagent whose declared model cannot serve", () => {
 			agent,
 			task: "work",
 			index: 0,
-			id: "runtime-fallback",
+			id: "runtime-hop",
 			modelOverride: ["primary/declared-model"],
 			settings: Settings.isolated(),
-			modelRegistry: {
-				refresh: async () => {},
-				getAvailable: () => [declared],
-				getApiKey: async () => "key",
-			} as never,
+			modelRegistry: unauthenticatedRegistry as never,
 			enableLsp: false,
 		});
 
 		expect(result.resolvedModel).toBe("fallback/working-model");
 		expect(result.resolvedModelIsFallback).toBe(true);
-		expect(result.resolvedModelFallbackReason).toContain("primary/declared-model");
-		expect(result.resolvedModelFallbackReason).toContain("429 usage limit reached");
+		expect(result.resolvedModelFallbackReason).toBeUndefined();
 	});
 
 	it("leaves the parent's registry intact when models.yml no longer parses at spawn time", async () => {
