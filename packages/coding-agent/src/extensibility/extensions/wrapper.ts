@@ -26,6 +26,7 @@ import {
 	resolveApprovalFromContext,
 	truncateForPrompt,
 } from "../../tools/approval";
+import { cfgToolsRestrictedFolders } from "../../tools/settings";
 import { getApprovalGrants } from "../../tools/approval-cache";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import { withFileMutationSession } from "../../tools/file-write-fallback";
@@ -265,12 +266,17 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		// `always-ask-cached` grants live behind one session+global store per agent directory; one
 		// instance is shared by the pre-check, the full gate, and the post-approval record below.
 		const approvalGrants = getApprovalGrants(effectiveSettings?.getAgentDir(), this.runner.sessionId);
+		const restrictions = {
+			restrictedFolders: effectiveSettings ? cfgToolsRestrictedFolders.get(effectiveSettings) : undefined,
+			cwd: this.runner.cwd,
+		};
 		const preResolved = resolveApproval(
 			this.tool,
 			approvalArgs(params, context),
 			approvalMode,
 			userPolicies,
 			approvalGrants,
+			restrictions,
 		);
 		if (preResolved.policy === "deny") {
 			throw denyError(preResolved, this.tool.name);
@@ -343,7 +349,14 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		// input that newly resolves to `deny` is caught here even though the original passed the
 		// short-circuit above.
 		const resolvedArgs = approvalArgs(effectiveParams, context);
-		const resolved = resolveApproval(this.tool, resolvedArgs, approvalMode, userPolicies, approvalGrants);
+		const resolved = resolveApproval(
+			this.tool,
+			resolvedArgs,
+			approvalMode,
+			userPolicies,
+			approvalGrants,
+			restrictions,
+		);
 		context?.xdevTierResolved?.(resolved.tier);
 		if (resolved.policy === "deny") {
 			cancelPreflight();

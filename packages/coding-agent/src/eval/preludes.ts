@@ -10,6 +10,7 @@ import {
 	resolveApproval,
 	resolveApprovalFromContext,
 } from "../tools/approval";
+import { cfgToolsRestrictedFolders } from "../tools/settings";
 
 /** Host context supplied when an eval prelude calls back out of its language VM. */
 export interface EvalPreludeContext {
@@ -104,7 +105,10 @@ async function approvePreludeInvocation(
 	if (definition.approval !== undefined) subject.approval = definition.approval;
 	const settings = context.context?.settings ?? context.session.settings;
 	const grants = getApprovalGrants(settings.getAgentDir(), context.session.sessionManager?.getSessionId?.());
-	const resolved = resolveApproval(subject, parameters, mode, policies, grants);
+	const resolved = resolveApproval(subject, parameters, mode, policies, grants, {
+		restrictedFolders: cfgToolsRestrictedFolders.get(settings),
+		cwd: context.session.cwd,
+	});
 	if (resolved.policy === "deny") throw denyError(resolved, definition.name);
 	if (resolved.policy !== "prompt") return;
 

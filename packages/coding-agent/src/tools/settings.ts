@@ -1000,6 +1000,19 @@ export const cfgToolsXdevDocs = register({
 	},
 });
 
+export const cfgToolsRestrictedFolders = register({
+	id: "tools.restrictedFolders",
+	type: "array",
+	default: EMPTY_STRING_ARRAY,
+	ui: {
+		tab: "interaction",
+		group: "Approvals",
+		label: "Restricted Folders",
+		description:
+			"Folders where every read, write, edit, search, or command needs an explicit approval, whatever the approval mode or a remembered grant. The folder and everything under it is restricted; commands are matched by the directory they run in.",
+	},
+});
+
 export const cfgToolsXdevInlineDevices = register({
 	id: "tools.xdevInlineDevices",
 	type: "array",

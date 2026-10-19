@@ -6,11 +6,18 @@
  * - compare a tool capability tier against the active approval mode,
  * - format the generic approval prompt body.
  */
-import { isRecord, prompt, sanitizeText } from "@oh-my-pi/pi-utils";
+import {
+	isRecord,
+	normalizePathForComparison,
+	prompt,
+	relativePathWithinNormalizedRoot,
+	sanitizeText,
+} from "@oh-my-pi/pi-utils";
 import { replaceTabs } from "@oh-my-pi/pi-tui";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import approvalFolderTemplate from "../prompts/tools/approval-folder.md" with { type: "text" };
 import type { AgentTool, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { Settings } from "../config/settings";
 import { normalizeToLF } from "../edit/normalize";
@@ -125,7 +132,7 @@ export interface ResolvedApproval {
 	tier: ToolTier;
 	reason?: string;
 	override: boolean;
-	source?: "tool" | "user" | "mode";
+	source?: "tool" | "user" | "mode" | "restriction";
 	/**
 	 * User-policy key that produced `source: "user"` (defaults to the tool name), or the keyed
 	 * sub-tool (an `xd://` device) a tool-owned or mode decision is about.
@@ -408,7 +415,31 @@ function modeApprovesTier(mode: ApprovalMode, tier: ToolTier): boolean {
  * In yolo mode, override-based tool prompts are ignored; user `tools.approval`
  * settings remain authoritative.
  */
+export interface ApprovalRestrictionOptions {
+	/** Folders where every action needs an explicit approval, whatever the mode or a grant. */
+	restrictedFolders?: readonly string[];
+	/** Working directory of the call, matched for tools that name no path of their own. */
+	cwd?: string;
+}
+
 export function resolveApproval(
+	tool: ApprovalSubject,
+	args: unknown,
+	mode: ApprovalMode,
+	userConfig: Record<string, unknown> = {},
+	grants: ApprovalGrantStore = getApprovalGrants(),
+	options?: ApprovalRestrictionOptions,
+): ResolvedApproval {
+	const resolved = resolveApprovalPolicy(tool, args, mode, userConfig, grants);
+	if (resolved.policy === "deny") return resolved;
+	const restriction = restrictedFolderReason(tool, args, options);
+	if (restriction === undefined) return resolved;
+	// A restricted folder outranks every mode, policy, and grant: the call always asks, and the
+	// wrapper records nothing for it (its source is not the mode), so no answer silences it.
+	return { policy: "prompt", tier: resolved.tier, override: true, source: "restriction", reason: restriction };
+}
+
+function resolveApprovalPolicy(
 	tool: ApprovalSubject,
 	args: unknown,
 	mode: ApprovalMode,
@@ -529,6 +560,65 @@ export function resolveApproval(
 		...(decision.policyKey ? { policyKey: decision.policyKey } : {}),
 		...(decision.reason ? { reason: decision.reason } : {}),
 	};
+}
+
+/** Expand a leading `~` so configured folders line up with the keys tools report. */
+function expandConfiguredFolder(folder: string): string {
+	const trimmed = folder.trim();
+	if (trimmed === "~") return os.homedir();
+	if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) return path.join(os.homedir(), trimmed.slice(2));
+	return trimmed;
+}
+
+/** Case-folded, absolute form of a path or key, with tree keys unwrapped to their folder. */
+function normalizedRestrictionPath(value: string): string {
+	const folder = approvalTreeSearchFolderKey(value) ?? value;
+	return normalizePathForComparison(path.resolve(folder));
+}
+
+/**
+ * Reason text for a call that touches a restricted folder, or `undefined` when it does not. A
+ * restricted folder blocks itself and everything under it; a recursive search rooted above one is
+ * blocked too, because it reaches into the restricted tree. Tools that name no path (commands and
+ * other exec tools) are matched by the directory they run in.
+ */
+function restrictedFolderReason(
+	tool: ApprovalSubject,
+	args: unknown,
+	options: ApprovalRestrictionOptions | undefined,
+): string | undefined {
+	const configured = options?.restrictedFolders;
+	if (!configured || configured.length === 0) return undefined;
+	const folders = configured
+		.map(expandConfiguredFolder)
+		.filter(folder => folder.length > 0)
+		.map(normalizedRestrictionPath);
+	if (folders.length === 0) return undefined;
+	const targets = approvalCacheTargets(tool, args);
+	const scopes = approvalCacheScopes(tool, args);
+	const subjects =
+		targets.length > 0 || scopes.length > 0
+			? [...targets, ...scopes].map(normalizedRestrictionPath)
+			: options?.cwd === undefined
+				? []
+				: [normalizedRestrictionPath(options.cwd)];
+	const recursive = [...targets, ...scopes].map(target => approvalTreeSearchFolderKey(target) !== undefined);
+	for (const [index, subject] of subjects.entries()) {
+		for (const folder of folders) {
+			// The folder itself or anything under it.
+			if (relativePathWithinNormalizedRoot(folder, subject) !== null) return restrictedReason(folder);
+			// A recursive search of an ancestor reads the restricted tree below it.
+			if (recursive[index] === true && relativePathWithinNormalizedRoot(subject, folder) !== null) {
+				return restrictedReason(folder);
+			}
+		}
+	}
+	return undefined;
+}
+
+/** The prompt's reason line: the folder, shortened and sanitized like every other path shown. */
+function restrictedReason(folder: string): string {
+	return `Restricted folder: ${sanitizeText(shortenPath(folder))}`;
 }
 
 /**

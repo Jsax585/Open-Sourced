@@ -29,6 +29,7 @@ import toolRosterNoticePrompt from "../prompts/system/tool-roster-notice.md" wit
 import xdevMountNoticePrompt from "../prompts/system/xdev-mount-notice.md" with { type: "text" };
 import { isMCPToolName, normalizeToolNames } from "../tools/builtin-names";
 import { denyError, resolveApproval, resolveApprovalFromContext } from "../tools/approval";
+import { cfgToolsRestrictedFolders } from "../tools/settings";
 import { getApprovalGrants } from "../tools/approval-cache";
 import { wrapToolWithMetaNotice } from "../tools/output-meta";
 import { isFilesystemSourcePath } from "../tools/path-utils";
@@ -924,6 +925,10 @@ export class SessionTools {
 							mode,
 							userPolicies,
 							getApprovalGrants(this.#host.settings.getAgentDir(), this.#host.sessionManager.getSessionId()),
+							{
+								restrictedFolders: cfgToolsRestrictedFolders.get(this.#host.settings),
+								cwd: this.#host.sessionManager.getCwd(),
+							},
 						);
 						if (resolved.policy === "deny") throw denyError(resolved, target.name);
 						if (resolved.policy === "allow") {

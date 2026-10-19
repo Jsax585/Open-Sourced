@@ -44,6 +44,7 @@ import {
 	resolveAbortLabel,
 } from "../../session/messages";
 import { formatApprovalPrompt, resolveApproval } from "../../tools/approval";
+import { cfgToolsRestrictedFolders } from "../../tools/settings";
 import { getApprovalGrants } from "../../tools/approval-cache";
 import { recoverAskQuestions } from "../../tools/ask";
 import { previewLine, PREVIEW_LIMITS, TRUNCATE_LENGTHS } from "@oh-my-pi/pi-tui/render/render-utils";
@@ -1997,6 +1998,7 @@ export class EventController {
 			mode,
 			userPolicies,
 			getApprovalGrants(settings.getAgentDir(), this.ctx.sessionManager.getSessionId()),
+			{ restrictedFolders: cfgToolsRestrictedFolders.get(settings), cwd: this.ctx.sessionManager.getCwd() },
 		);
 		if (approval.policy !== "prompt") return undefined;
 		return { state: "blocked", kind: "permission", msg: formatApprovalPrompt(tool, args, approval.reason) };

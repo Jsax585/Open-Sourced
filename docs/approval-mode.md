@@ -33,6 +33,22 @@ The **Ask and remember** mode (`always-ask-cached`) turns file operations and sh
 - **Remember: This Session** (the default). The grant is kept in memory for the conversation it was approved in: nothing is written to disk, `/new`, a session switch, or another session in the same process starts without it, and two open omp instances never share these grants.
 - **Remember: Always.** The same grant is written to `approval-cache.db` under the active agent directory (`~/.omp/agent/approval-cache.db`, or the profile's equivalent), where it outlives every instance and covers later sessions. A grant is honored when either tier holds it.
 
+## Folder restricting
+
+`tools.restrictedFolders` lists folders where every action needs an explicit approval, whatever the active approval mode is — `yolo` included — and whatever grants were remembered:
+
+```yaml
+tools:
+  restrictedFolders:
+    - ~/secrets
+    - C:/work/payments
+```
+
+- A restricted folder blocks the folder itself and everything under it. `read`, `write`, and `edit` naming a path inside it, and `grep`/`glob` rooted inside it, prompt with `Reason: Restricted folder: <folder>`. A recursive search rooted *above* a restricted folder prompts too, because it reads into the restricted tree.
+- Remembered approvals never bypass a restriction: the prompt offers plain **Approve** / **Deny** — no Remember checkbox and no grant answers — so a restricted action asks again on every call. A `tools.approval.<tool>: deny` policy still denies, which is stricter.
+- Commands and other exec tools that name no path are matched by the directory they run in: a `bash` call whose working directory is inside a restricted folder asks. Exec tools that name files ask for those files.
+- Without an interactive UI the action is refused instead of run, exactly like any other prompt with no host to answer it.
+
 Prompts, per call class:
 
 - The first `read`, `write`, or `edit` touching a file prompts (`Reason: target not yet approved`) unless that file, or the folder holding it, is already approved.
