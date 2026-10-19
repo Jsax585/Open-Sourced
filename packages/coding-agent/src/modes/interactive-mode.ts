@@ -5886,8 +5886,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			apply = async () => {
 				const current = this.session.model;
 				if (current && formatModelStringWithRouting(current) === formatModelStringWithRouting(target.model)) {
-					// Same model and route — only thinking level may differ; avoid resetting the provider session.
-					if (target.thinkingLevel !== undefined) this.session.setThinkingLevel(target.thinkingLevel);
+					// Same model and route — only thinking level may differ; avoid resetting the provider
+					// session, but still resolve the role-configured effort like the switch path does.
+					const level = target.thinkingLevel ?? this.session.resolveTemporaryModelThinkingLevel(target.model);
+					if (level !== undefined) this.session.setThinkingLevel(level);
 					return;
 				}
 				await this.session.setModelTemporary(

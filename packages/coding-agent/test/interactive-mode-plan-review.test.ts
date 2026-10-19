@@ -2043,6 +2043,21 @@ describe("InteractiveMode plan review rendering", () => {
 			expect(session.model?.id).toBe(haiku.id);
 		});
 
+		it("applies the role-configured effort when the pin is the model plan exit already restores", async () => {
+			const sonnet = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
+			if (!sonnet) throw new Error("Expected sonnet to exist in registry");
+			await enterPlanModeOnSonnet();
+			session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5:high");
+			session.setThinkingLevel(ThinkingLevel.Low);
+
+			expect(mode.setPlanExecutionModel(sonnet)).toBe(true);
+			vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and keep context");
+			await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+
+			expect(session.model?.id).toBe(sonnet.id);
+			expect(session.configuredThinkingLevel()).toBe(ThinkingLevel.High);
+		});
+
 		it("refuses to pin a model whose provider has no credentials", async () => {
 			await enterPlanModeOnSonnet();
 			const unauthenticated = session.modelRegistry
