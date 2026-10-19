@@ -3013,74 +3013,50 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			let usageFallbackTriggered = false;
 			let usageFallbackReason: { from: string; reason: string } | undefined;
 			// A subagent spawn names the parent's model as its credential fallback.
-			// When the model it requested cannot serve, that model's
+			// When the model it requested cannot serve, that model's own
 			// retry.fallbackChains entry decides what replaces it, as it would for
 			// a runtime failure: an empty or exhausted chain refuses the spawn
 			// instead of letting another model answer as the one requested.
 			const subagentRequest =
 				options.modelPatternAuthFallback !== undefined || options.modelPatternFallbackRole !== undefined;
-			const replaceUnavailableSubagentModel = async (
+			const replaceUnavailableSubagentModel = (
 				requestedSelector: string,
 				requestedModel: Model | undefined,
 				cause: string,
 			) => {
 				if (!cfgRetryModelFallback.get(settings)) return undefined;
-				const replacement = await resolveUnavailableModelReplacement(
+				const replacement = resolveUnavailableModelReplacement(
 					{
 						chains: cfgRetryFallbackChains.get(settings),
 						getModelRole: role => settings.getModelRole(role),
 						modelLookup: modelRegistry,
 					},
 					{ selector: requestedSelector, model: requestedModel },
-					options.modelPatternDefaultFallbackChain,
-					async (candidate, selector) => {
-						if (disabledProviders.has(candidate.provider) || modelRegistry.isSelectorSuppressed(selector.raw)) {
-							return false;
-						}
-						const candidateKey = await modelRegistry.getApiKey(candidate);
-						return candidateKey === kNoAuth || isAuthenticated(candidateKey);
-					},
+					// The side-effect-free check the deferred chain walk below uses:
+					// no OAuth refresh or `!command` key runs per candidate.
+					(candidate, selector) =>
+						!disabledProviders.has(candidate.provider) &&
+						!modelRegistry.isSelectorSuppressed(selector.raw) &&
+						hasModelAuth(candidate),
 				);
 				if (replacement?.kind !== "refused") return replacement;
-				const chain =
-					replacement.chainKey === undefined
-						? "the fallback chain it inherits"
-						: `retry.fallbackChains["${replacement.chainKey}"]`;
 				const chainState =
 					replacement.tried.length === 0 ? "is empty" : `has no usable model (${replacement.tried.join(", ")})`;
 				throw new Error(
-					`Agent "${options.agentName ?? "subagent"}" requested model "${requestedSelector}", which ${cause}, and ${chain} ${chainState}, so the subagent was not started.`,
+					`Agent "${options.agentName ?? "subagent"}" requested model "${requestedSelector}", which ${cause}, and retry.fallbackChains["${replacement.chainKey}"] ${chainState}, so the subagent was not started.`,
 				);
 			};
 			/** Why a subagent's requested model was replaced at startup; becomes the session's initial retry fallback. */
 			let startupReplacement: { from: string; reason: string; role: string } | undefined;
 			const describeStartupReplacement = (
 				requestedSelector: string,
-				replacement: { chainKey: string | undefined },
+				chainKey: string,
 				cause: string,
-			): { from: string; reason: string; role: string } => {
-				if (replacement.chainKey !== undefined) {
-					return {
-						from: requestedSelector,
-						reason: `${requestedSelector} ${cause}; retry.fallbackChains["${replacement.chainKey}"] chose the replacement`,
-						role: replacement.chainKey,
-					};
-				}
-				// The inherited chain becomes this spawn's own role, so a failure of
-				// the replacement keeps walking the rest of it.
-				const role = options.modelPatternFallbackRole ?? "default";
-				if (options.modelPatternFallbackRole && options.modelPatternDefaultFallbackChain) {
-					installRetryFallbackRole(settings, options.modelPatternFallbackRole, {
-						primary: requestedSelector,
-						chain: [...options.modelPatternDefaultFallbackChain],
-					});
-				}
-				return {
-					from: requestedSelector,
-					reason: `${requestedSelector} ${cause}; the fallback chain it inherits chose the replacement`,
-					role,
-				};
-			};
+			): { from: string; reason: string; role: string } => ({
+				from: requestedSelector,
+				reason: `${requestedSelector} ${cause}; retry.fallbackChains["${chainKey}"] chose the replacement`,
+				role: chainKey,
+			});
 			for (let patternIndex = 0; patternIndex < expandedModelPatterns.length; patternIndex += 1) {
 				const { pattern, retryFallback } = expandedModelPatterns[patternIndex];
 				const primary = parseModelPattern(pattern, resolutionModels, matchPreferences);
@@ -3174,16 +3150,18 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				}
 				let authFallbackUsed = false;
 				if (options.modelPatternAuthFallback) {
-					const primaryKey = await modelRegistry.getApiKey(primary.model);
+					// The session id lets session-sticky OAuth accounts resolve (#5325):
+					// a false "no credentials" here now walks or refuses the chain.
+					const primaryKey = await modelRegistry.getApiKey(primary.model, providerSessionId);
 					if (primaryKey !== kNoAuth && !isAuthenticated(primaryKey)) {
 						const cause = "has no working credentials";
-						const replacement = await replaceUnavailableSubagentModel(pattern, primary.model, cause);
+						const replacement = replaceUnavailableSubagentModel(pattern, primary.model, cause);
 						if (replacement) {
 							selectedModel = replacement.model;
 							selectedThinkingLevel = replacement.thinkingLevel;
 							selectedExplicitThinkingLevel = replacement.thinkingLevel !== undefined;
 							authFallbackUsed = true;
-							startupReplacement = describeStartupReplacement(pattern, replacement, cause);
+							startupReplacement = describeStartupReplacement(pattern, replacement.chainKey, cause);
 						} else {
 							const fallback = parseModelPattern(
 								options.modelPatternAuthFallback,
@@ -3191,7 +3169,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 								matchPreferences,
 							);
 							if (fallback.model) {
-								const fallbackKey = await modelRegistry.getApiKey(fallback.model);
+								const fallbackKey = await modelRegistry.getApiKey(fallback.model, providerSessionId);
 								if (isAuthenticated(fallbackKey)) {
 									selectedModel = fallback.model;
 									selectedThinkingLevel = fallback.thinkingLevel;
@@ -3268,9 +3246,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (!model && subagentRequest) {
 				const requestedSelector = expandedModelPatterns[0]?.pattern ?? deferredModelPatterns[0];
 				const cause = "matches no available model";
-				const replacement = await replaceUnavailableSubagentModel(requestedSelector, undefined, cause);
+				const replacement = replaceUnavailableSubagentModel(requestedSelector, undefined, cause);
 				if (replacement) {
-					startupReplacement = describeStartupReplacement(requestedSelector, replacement, cause);
+					startupReplacement = describeStartupReplacement(requestedSelector, replacement.chainKey, cause);
 					model = replacement.model;
 					initialRetryFallback = {
 						role: startupReplacement.role,

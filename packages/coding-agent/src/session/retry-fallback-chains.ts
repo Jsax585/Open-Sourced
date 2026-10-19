@@ -662,60 +662,60 @@ export function findRetryFallbackCandidates(
 	return chain;
 }
 
-/** Outcome of {@link resolveUnavailableModelReplacement} for a model that owns a chain. */
+/** Outcome of {@link resolveUnavailableModelReplacement} when the requested model's own chain owns it. */
 export type UnavailableModelReplacement =
 	| {
 			kind: "replaced";
-			/** Configured model key that owned the requested model; `undefined` for the inherited chain. */
-			chainKey: string | undefined;
+			/** The requested model's own key: exact `provider/id`, else a `provider/*` or prefixed wildcard. */
+			chainKey: string;
 			model: Model;
 			/** The candidate's own thinking level, else the requested selector's (bare entries inherit it). */
 			thinkingLevel: ThinkingLevel | undefined;
+			/** The requested selector's thinking level, restored if the requested model later serves again. */
+			requestedThinkingLevel: ThinkingLevel | undefined;
 	  }
 	| {
 			kind: "refused";
-			/** Configured model key that owned the requested model; `undefined` for the inherited chain. */
-			chainKey: string | undefined;
+			/** The requested model's own key: exact `provider/id`, else a `provider/*` or prefixed wildcard. */
+			chainKey: string;
 			/** Every candidate the chain named, none usable; empty for an empty chain. */
 			tried: string[];
 	  };
 
 /**
  * Replace a requested model that cannot serve at startup — absent from the
- * catalog, or without working credentials — the way a runtime failure of that
- * model would be replaced: an exact `provider/id` or `provider/*` key owns it
- * outright; failing that, `inheritedChain` (the role or default chain a
- * single-model subagent inherits) does. The first candidate `isUsable` accepts
- * replaces it; an owning chain that is empty or has no usable candidate refuses
- * it. `undefined` when no chain owns the model, so the caller keeps its own
- * default.
+ * catalog, or without working credentials — through its own
+ * `retry.fallbackChains` entry: an exact `provider/id` key, else the most
+ * specific `provider/*` or prefixed wildcard key. Wildcard entries in that
+ * chain expand against the requested model, as they do for a runtime failure.
+ * The first candidate `isUsable` accepts replaces it; an empty chain, or one
+ * with no usable candidate, refuses it. Role and `default` chains do not decide
+ * startup: `undefined` when no key of the model's own owns it, so the caller
+ * keeps its own default.
  */
-export async function resolveUnavailableModelReplacement(
+export function resolveUnavailableModelReplacement(
 	context: RetryFallbackResolutionContext,
 	requested: { selector: string; model: Model | undefined },
-	inheritedChain: readonly string[] | undefined,
-	isUsable: (candidate: Model, selector: RetryFallbackSelector) => Promise<boolean>,
-): Promise<UnavailableModelReplacement | undefined> {
-	const ownerKey = resolveRetryFallbackChainKey(context, requested.selector, requested.model);
-	let chainKey: string | undefined;
-	let candidates: RetryFallbackSelector[];
-	if (ownerKey !== undefined && isRetryFallbackModelKey(ownerKey)) {
-		chainKey = ownerKey;
-		candidates = findRetryFallbackCandidates(context, ownerKey, requested.selector, requested.model, {
-			allowMissingPrimary: true,
-		});
-	} else if (inheritedChain && inheritedChain.length > 0) {
-		candidates = inheritedChain.flatMap(entry => parseRetryFallbackSelector(entry, context.modelLookup) ?? []);
-	} else {
-		return undefined;
-	}
+	isUsable: (candidate: Model, selector: RetryFallbackSelector) => boolean,
+): UnavailableModelReplacement | undefined {
+	const chainKey = resolveRetryFallbackChainKey(context, requested.selector, requested.model);
+	if (chainKey === undefined || !isRetryFallbackModelKey(chainKey)) return undefined;
+	const candidates = findRetryFallbackCandidates(context, chainKey, requested.selector, requested.model, {
+		allowMissingPrimary: true,
+	});
 	const requestedThinkingLevel = parseRetryFallbackSelector(requested.selector, context.modelLookup)?.thinkingLevel;
 	for (const candidate of candidates) {
 		const model = context.modelLookup.find(candidate.provider, candidate.id);
 		if (!model) continue;
 		if (requested.model && model.provider === requested.model.provider && model.id === requested.model.id) continue;
-		if (!(await isUsable(model, candidate))) continue;
-		return { kind: "replaced", chainKey, model, thinkingLevel: candidate.thinkingLevel ?? requestedThinkingLevel };
+		if (!isUsable(model, candidate)) continue;
+		return {
+			kind: "replaced",
+			chainKey,
+			model,
+			thinkingLevel: candidate.thinkingLevel ?? requestedThinkingLevel,
+			requestedThinkingLevel,
+		};
 	}
 	return { kind: "refused", chainKey, tried: candidates.map(candidate => candidate.raw) };
 }

@@ -893,14 +893,17 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
-	test("walks the inherited role chain for a single subagent model without working credentials", async () => {
+	test("keeps the marked parent-model fallback when only a default chain names a subagent model without working credentials", async () => {
 		const { authStorage, modelRegistry, parentPattern } = registryWithKeys(["runtime-fallback-model"]);
+		const settings = Settings.isolated({
+			"retry.fallbackChains": { default: ["runtime-provider/runtime-fallback-model"] },
+		});
 
 		const { session } = await createAgentSession({
 			...subagentSessionOptions(
 				modelRegistry,
 				authStorage,
-				Settings.isolated(),
+				settings,
 				"runtime-provider/runtime-model",
 				parentPattern,
 			),
@@ -908,8 +911,50 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		});
 
 		try {
-			expect(session.model?.id).toBe("runtime-fallback-model");
+			expect(`${session.model?.provider}/${session.model?.id}`).toBe(parentPattern);
 			expect(session.servingModel?.isFallback).toBe(true);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("expands the provider wildcard chain that owns a subagent model without working credentials", async () => {
+		const { authStorage, modelRegistry, parentPattern } = registryWithKeys([]);
+		const settings = Settings.isolated({ "retry.fallbackChains": { "runtime-provider/*": ["mirror-provider/*"] } });
+		const mirrorProviderExtension: ExtensionFactory = pi => {
+			pi.registerProvider("mirror-provider", {
+				baseUrl: "https://mirror.example.com/v1",
+				apiKey: "MIRROR_KEY",
+				api: "openai-completions",
+				models: [
+					{
+						id: "runtime-model",
+						name: "Mirrored Runtime Model",
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 128000,
+						maxTokens: 8192,
+					},
+				],
+			});
+		};
+
+		const { session, modelFallbackMessage } = await createAgentSession({
+			...subagentSessionOptions(
+				modelRegistry,
+				authStorage,
+				settings,
+				"runtime-provider/runtime-model",
+				parentPattern,
+			),
+			extensions: [providerExtension, mirrorProviderExtension],
+		});
+
+		try {
+			expect(`${session.model?.provider}/${session.model?.id}`).toBe("mirror-provider/runtime-model");
+			expect(session.servingModel?.isFallback).toBe(true);
+			expect(modelFallbackMessage).toContain('retry.fallbackChains["runtime-provider/*"]');
 		} finally {
 			await session.dispose();
 		}
