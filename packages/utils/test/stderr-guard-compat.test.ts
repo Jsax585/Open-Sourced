@@ -237,4 +237,47 @@ describe("stderr-guard compatibility surface", () => {
 			}
 		},
 	);
+
+	it.skipIf(process.platform === "win32")("a legacy re-suppression cancels a queued release", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-resuppress-"));
+		temporaryDirectories.push(root);
+		const chunks: Buffer[] = [];
+		const terminalExited = Promise.withResolvers<void>();
+		const child = Bun.spawn(
+			[
+				process.execPath,
+				path.resolve(import.meta.dir, "fixtures/legacy-resuppress-probe.ts"),
+				root,
+				path.join(root, "state.txt"),
+			],
+			{
+				env: { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
+				terminal: {
+					data(_terminal, data) {
+						chunks.push(Buffer.from(data));
+					},
+					exit() {
+						terminalExited.resolve();
+					},
+				},
+				timeout: 10_000,
+			},
+		);
+		try {
+			expect(await child.exited).toBe(0);
+			await terminalExited.promise;
+			const state = fs.readFileSync(path.join(root, "state.txt"), "utf8");
+			expect(state).toContain("resuppressed=true");
+			expect(state).toContain("still-suppressed-after-tui=true");
+			expect(state).toContain("final-restored=true");
+			const output = Buffer.concat(chunks).toString("utf8");
+			expect(output).not.toContain("after-tui-stop-marker");
+			expect(output).toContain("after-final-restore-marker");
+			const redirected = fs.readFileSync(path.join(root, "legacy-stderr.log"), "utf8");
+			expect(redirected).toContain("after-tui-stop-marker");
+			expect(redirected).not.toContain("after-final-restore-marker");
+		} finally {
+			child.kill();
+		}
+	});
 });

@@ -13,6 +13,15 @@ import { getLogPath } from "./dirs";
 export interface LibcFdOps {
 	dup(fd: number): number;
 	dup2(oldFd: number, newFd: number): number;
+	fcntlSetFd(fd: number, flags: number): number;
+}
+
+const F_SETFD = 2;
+const FD_CLOEXEC = 1;
+
+/** Mark a saved/render descriptor close-on-exec: dup() clears the flag, and an exec'd child inheriting a writable terminal fd would bypass the isolation. */
+export function markTerminalFdCloexec(ops: LibcFdOps, fd: number): void {
+	ops.fcntlSetFd(fd, FD_CLOEXEC);
 }
 
 let libcFdOpsCache: LibcFdOps | null | undefined;
@@ -104,8 +113,16 @@ export function tryLibcFdOps(): LibcFdOps | null {
 			const libc = dlopen(candidate, {
 				dup: { args: [FFIType.i32], returns: FFIType.i32 },
 				dup2: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
-			});
-			libcFdOpsCache = libc.symbols;
+				// fcntl is variadic in C, but every supported ABI passes the fixed
+				// (fd, F_SETFD, flags) integer triple in the regular argument
+				// registers, so a three-arg declaration is safe for this use.
+				fcntl: { args: [FFIType.i32, FFIType.i32, FFIType.i32], returns: FFIType.i32 },
+			}).symbols;
+			libcFdOpsCache = {
+				dup: libc.dup,
+				dup2: libc.dup2,
+				fcntlSetFd: (fd, flags) => libc.fcntl(fd, F_SETFD, flags),
+			};
 			return libcFdOpsCache;
 		} catch {
 			// Try the next libc soname.
@@ -151,9 +168,11 @@ export function suppressTerminalOutput(): number | null {
 	try {
 		stdoutFd = libc.dup(1);
 		if (stdoutFd === -1) throw new Error("Cannot save terminal stdout");
+		markTerminalFdCloexec(libc, stdoutFd);
 		if (redirectStderr) {
 			stderrFd = libc.dup(2);
 			if (stderrFd === -1) throw new Error("Cannot save terminal stderr");
+			markTerminalFdCloexec(libc, stderrFd);
 			if (libc.dup2(redirectFd, 2) === -1) throw new Error("Cannot redirect terminal stderr");
 		}
 		if (libc.dup2(redirectFd, 1) === -1) throw new Error("Cannot redirect terminal stdout");
@@ -224,8 +243,10 @@ export function onTerminalOutputRestored(listener: () => void): void {
 /** Give a private stream its own descriptor; it must never own the guard's saved fd. */
 export function duplicateTerminalOutput(): number {
 	if (savedStdoutFd === null) throw new Error("Terminal output is not isolated");
-	const fd = libcFdOps().dup(savedStdoutFd);
+	const ops = libcFdOps();
+	const fd = ops.dup(savedStdoutFd);
 	if (fd === -1) throw new Error("Cannot duplicate private terminal output");
+	markTerminalFdCloexec(ops, fd);
 	return fd;
 }
 

@@ -194,4 +194,32 @@ describe("terminal output guard", () => {
 			}
 		},
 	);
+
+	it.skipIf(process.platform === "win32")(
+		"does not leak saved or render terminal descriptors into exec'd children",
+		async () => {
+			const root = fs.mkdtempSync(path.join(os.tmpdir(), "cloexec-inheritance-"));
+			temporaryDirectories.push(root);
+			const child = Bun.spawn(
+				[
+					process.execPath,
+					path.resolve(import.meta.dir, "fixtures/cloexec-inheritance-probe.ts"),
+					path.join(root, "state.txt"),
+				],
+				{
+					env: { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
+					terminal: {},
+					timeout: 10_000,
+				},
+			);
+			try {
+				expect(await child.exited).toBe(0);
+				const state = fs.readFileSync(path.join(root, "state.txt"), "utf8");
+				expect(state).toContain("suppressed=true");
+				expect(state).toContain("leaked=0");
+			} finally {
+				child.kill();
+			}
+		},
+	);
 });

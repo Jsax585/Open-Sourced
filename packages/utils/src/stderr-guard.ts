@@ -15,6 +15,7 @@ import * as path from "node:path";
 import { getLogPath } from "./dirs";
 import {
 	isTerminalOutputSuppressed,
+	markTerminalFdCloexec,
 	onTerminalOutputRestored,
 	setTerminalOutputRedirectTarget,
 	terminalStderrIsGuarded,
@@ -62,8 +63,16 @@ export interface SuppressTerminalStderrOptions {
  * unavailable.
  */
 export function suppressTerminalStderr(options?: SuppressTerminalStderrOptions): boolean {
-	if (isTerminalOutputSuppressed() && terminalStderrIsGuarded()) return true;
-	if (savedStderrFd !== null) return true;
+	if (isTerminalOutputSuppressed() && terminalStderrIsGuarded()) {
+		// Still fenced by the unified guard; a queued release from an earlier
+		// restore call is stale now that suppression is being reasserted.
+		pendingRelease = false;
+		return true;
+	}
+	if (savedStderrFd !== null) {
+		pendingRelease = false;
+		return true;
+	}
 	if (!options?.force && !stderrSharesStdoutTerminal()) return false;
 	const libc = tryLibcFdOps();
 	if (!libc) return false;
@@ -95,6 +104,7 @@ export function suppressTerminalStderr(options?: SuppressTerminalStderrOptions):
 		return false;
 	}
 	fs.closeSync(redirectFd);
+	markTerminalFdCloexec(libc, saved);
 	savedStderrFd = saved;
 	return true;
 }
