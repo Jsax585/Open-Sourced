@@ -4592,6 +4592,48 @@ describe("AuthStorage claude oauth ranking", () => {
 			expect(countFor(counts, "api-acct-free")).toBe(30);
 		});
 
+		test("an xAI account serves from its weekly credits, not its unspent on-demand cap", async () => {
+			if (!store) throw new Error("test setup failed");
+			const xaiLimit = (id: string, usedFraction: number): UsageLimit => ({
+				id: `xai-oauth:${id}`,
+				label: id,
+				scope: { provider: "xai-oauth", shared: true },
+				window: { id, label: id, durationMs: WEEK_MS, resetsAt: Date.now() + 3 * 24 * HOUR_MS },
+				amount: { unit: "percent", used: usedFraction * 100, limit: 100, usedFraction },
+				status: usedFraction >= 1 ? "exhausted" : "ok",
+			});
+			let creditsUsed = 0.4;
+			const xaiUsage: UsageProvider = {
+				id: "xai-oauth",
+				async fetchUsage() {
+					return {
+						provider: "xai-oauth",
+						fetchedAt: Date.now(),
+						limits: [xaiLimit("credits:1w", creditsUsed), xaiLimit("on-demand", 0)],
+					};
+				},
+			};
+			vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (provider, credentials) => {
+				const credential = credentials[provider] as OAuthCredentials | undefined;
+				return credential?.accountId ? { apiKey: `api-${credential.accountId}`, newCredentials: credential } : null;
+			});
+			const storage = new AuthStorage(store, {
+				usageProviderResolver: provider => (provider === "xai-oauth" ? xaiUsage : undefined),
+				accountPolicies: [{ provider: "xai-oauth", account: { email: "grok@example.com" }, includedOnly: true }],
+			});
+			await storage.credentials.reload();
+			await storage.credentials.set("xai-oauth", [
+				{ type: "oauth", ...createCredential("acct-grok", "grok@example.com") },
+			]);
+
+			expect(await storage.keys.get("xai-oauth", "xai-included-left")).toBe("api-acct-grok");
+
+			// Spent weekly credits would now bill the on-demand cap.
+			creditsUsed = 1;
+			await storage.usage.invalidate("xai-oauth");
+			expect(await storage.keys.get("xai-oauth", "xai-included-spent")).toBeUndefined();
+		});
+
 		test("exact-account access still resolves a spent includedOnly account", async () => {
 			const storage = await openWithPolicy(["paid@example.com"]);
 			await storage.credentials.set("anthropic", [

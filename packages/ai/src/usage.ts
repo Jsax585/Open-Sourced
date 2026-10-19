@@ -481,6 +481,14 @@ export interface CredentialRankingStrategy {
 	 */
 	scopeLimitsForReserve?(report: UsageReport, context?: CredentialRankingContext): UsageLimit[];
 	/**
+	 * Restrict limits to the plan's included allowance for the `includedOnly`
+	 * account policy. A provider that keeps serving on paid on-demand credit
+	 * after the included allowance is spent hides the included windows from
+	 * {@link scopeLimits} and must expose them here. Falls back to
+	 * {@link scopeLimitsForReserve}, then {@link scopeLimits}.
+	 */
+	scopeLimitsForIncluded?(report: UsageReport, context?: CredentialRankingContext): UsageLimit[];
+	/**
 	 * Return a provider-local backoff scope for the requested model. Providers
 	 * with backend-specific quotas use this so one exhausted model family does
 	 * not block unrelated families on the same OAuth credential.

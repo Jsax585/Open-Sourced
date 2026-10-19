@@ -227,6 +227,17 @@ export function reserveUsageLimits(
 	});
 }
 
+/** Select usage limits that measure the plan's included allowance (`includedOnly` account policy). */
+export function includedUsageLimits(
+	strategy: CredentialRankingStrategy | undefined,
+	report: UsageReport,
+	rankingContext: CredentialRankingContext,
+): UsageLimit[] {
+	return (
+		strategy?.scopeLimitsForIncluded?.(report, rankingContext) ?? reserveUsageLimits(strategy, report, rankingContext)
+	);
+}
+
 /** Measure currently available quota outside expired windows. */
 export function remainingUsageFraction(
 	strategy: CredentialRankingStrategy | undefined,
@@ -235,7 +246,12 @@ export function remainingUsageFraction(
 	nowMs: number,
 ): number | undefined {
 	if (!report) return undefined;
-	const usedFractions = reserveUsageLimits(strategy, report, rankingContext)
+	return remainingLimitsFraction(reserveUsageLimits(strategy, report, rankingContext), report, nowMs);
+}
+
+/** Measure available quota across `limits` from `report`, ignoring expired windows. */
+export function remainingLimitsFraction(limits: UsageLimit[], report: UsageReport, nowMs: number): number | undefined {
+	const usedFractions = limits
 		.filter(limit => {
 			const resetsAt = limit.window?.resetsAt;
 			return resetsAt === undefined || resetsAt > nowMs || report.fetchedAt >= resetsAt;

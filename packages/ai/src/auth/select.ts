@@ -39,8 +39,10 @@ import {
 } from "./types";
 import type { UsageService } from "./usage";
 import {
+	includedUsageLimits,
 	isUsageLimitReached,
 	normalizeUsageFraction,
+	remainingLimitsFraction,
 	remainingUsageFraction,
 	scopedUsageLimits,
 	usageResetAtMs,
@@ -1001,7 +1003,8 @@ export class CredentialSelector {
 	): boolean {
 		if (!usage || !rankingContext) return false;
 		if (strategy && isUsageLimitReached(scopedUsageLimits(strategy, usage, rankingContext))) return false;
-		return (remainingUsageFraction(strategy, usage, rankingContext, Date.now()) ?? 0) > 0;
+		const included = includedUsageLimits(strategy, usage, rankingContext);
+		return (remainingLimitsFraction(included, usage, Date.now()) ?? 0) > 0;
 	}
 
 	/** Attempts to use a single OAuth credential, checking usage and refreshing token. */
