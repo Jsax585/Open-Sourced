@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `OMP_DAEMON_NAMESPACE` to isolate project and global daemon broker sockets, leases, and metadata while preserving shared configuration and credentials ([#14125](https://github.com/can1357/oh-my-pi/issues/14125)).
+- Added `OMP_DAEMON_NAMESPACE` to isolate project and global daemon broker sockets, leases, and metadata while preserving shared configuration and credentials ([#16345](https://github.com/can1357/oh-my-pi/pull/16345) by [@schickling-assistant](https://github.com/schickling-assistant))
 
 ## [18.12.2] - 2026-10-18
 
