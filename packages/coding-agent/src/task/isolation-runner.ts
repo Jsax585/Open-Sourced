@@ -620,7 +620,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		// is replaced by the next capture's. Undo the write first: a follow-up
 		// that never lands must not stay on the branch the caller already has.
 		if (superseded()) {
-			await resetTaskBranch(branch.branchName, publishedBranchTip);
+			if (branch.branchName) await resetTaskBranch(branch.branchName, publishedBranchTip);
 			return "superseded";
 		}
 		const nestedPatchPaths = await persistNestedPatches(
@@ -711,6 +711,13 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					}
 					delta = landed ? await diffIsolationStates(taskBaseline, landed.state, current.state) : current;
 					if (!delta.rootPatch.trim() && delta.nestedPatches.length === 0) {
+						// The agent put back everything it had handed over, in a turn that was
+						// never captured. Release is the first code to see that, so the stale
+						// patch or branch is withdrawn here, as a captured turn would have.
+						if (unlandedWork) {
+							await withdrawUnlanded();
+							return;
+						}
 						if (retryRefused || preserveUnlanded) opts.onReleaseArtifacts?.();
 						return;
 					}

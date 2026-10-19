@@ -154,6 +154,8 @@
 - Fixed a refused isolated task's branch being deleted when a later follow-up was superseded before it landed ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 - Fixed an isolated task's unapplied patch or branch staying behind after the agent later undid all of that work; it is now removed and the result says so ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 - Fixed cancelling a message to an isolated task still landing that turn's changes in your checkout ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
+- Fixed an isolated task's unapplied patch or branch still being left behind when the agent undid that work in a turn that was never captured and was then released ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
+- Fixed a message you typed straight to an isolated task landing its changes in your checkout when the session that owns the task was already shutting down and could not receive the result ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 
 ## [18.12.2] - 2026-10-18
 

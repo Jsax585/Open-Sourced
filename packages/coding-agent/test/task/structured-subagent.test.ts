@@ -1271,9 +1271,7 @@ describe("structured subagent primitive", () => {
 			sessionFile: transcript,
 			status: "running",
 		});
-		// Extra `onAdopted` is ignored until finalize starts calling it. A
-		// variable, not a fresh literal, so the current args type still accepts it.
-		const finalizeArgs = {
+		await executorModule.finalizeSubagentLifecycle({
 			id,
 			session: agentSession,
 			aborted: false,
@@ -1283,15 +1281,8 @@ describe("structured subagent primitive", () => {
 			reviveSession: async () => agentSession,
 			onRelease,
 			onAdopted: options.onAdopted,
-		};
-		await executorModule.finalizeSubagentLifecycle(finalizeArgs);
+		});
 		return transcript;
-	}
-
-	function adoptedCallback(options: object): (() => void) | undefined {
-		if (!("onAdopted" in options)) return undefined;
-		const callback = options.onAdopted;
-		return typeof callback === "function" ? callback : undefined;
 	}
 
 	/** Whether `dir` is gone within a short wait: cleanup after a release runs on its own. */
@@ -1426,7 +1417,9 @@ describe("structured subagent primitive", () => {
 			expect(artifactsDirsFromRegistry()).toContain(settled.artifactsDir);
 			await fs.rm(settled.artifactsDir, { recursive: true, force: true });
 		} finally {
-			await AgentLifecycleManager.global().release(agent).catch(() => {});
+			await AgentLifecycleManager.global()
+				.release(agent)
+				.catch(() => {});
 			AgentRegistry.resetGlobalForTests();
 		}
 	});
@@ -1452,7 +1445,7 @@ describe("structured subagent primitive", () => {
 				{
 					id: opts.agentId,
 					artifactsDir: opts.artifactsDir,
-					onAdopted: adoptedCallback(opts.baseOptions),
+					onAdopted: opts.baseOptions.onAdopted,
 				},
 				async () => {
 					started.resolve();

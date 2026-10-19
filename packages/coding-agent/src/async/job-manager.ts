@@ -334,6 +334,16 @@ export class AsyncJobManager {
 		return Math.max(1, Math.floor(value ?? DEFAULT_MAX_RUNNING_JOBS));
 	}
 
+	/**
+	 * True once {@link dispose} has begun. A disposed manager refuses
+	 * {@link register} and {@link publishCompleted}, so a caller that must know
+	 * a result can still be delivered before it acts checks this, not whether a
+	 * manager exists.
+	 */
+	get disposed(): boolean {
+		return this.#disposed;
+	}
+
 	/** True when the running-job count has reached the configured cap. */
 	get atCapacity(): boolean {
 		if (this.#disposed) return true;

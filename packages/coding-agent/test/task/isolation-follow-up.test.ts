@@ -100,10 +100,7 @@ async function runKeptAlive(opts: {
 	 * run. `turnStarted` is the hook the executor calls when a turn starts.
 	 * `release` is the runner's own onRelease, not the lifecycle wrapper.
 	 */
-	afterRun?: (
-		turnStarted: (() => void) | undefined,
-		release: (() => Promise<void>) | undefined,
-	) => Promise<void>;
+	afterRun?: (turnStarted: (() => void) | undefined, release: (() => Promise<void>) | undefined) => Promise<void>;
 	onReleaseArtifacts?: () => void;
 	/** When set, release actually removes the isolation instead of the default no-op. */
 	deleteIsolationOnCleanup?: boolean;
@@ -589,8 +586,6 @@ describe("isolated agent follow-up turns", () => {
 		await AgentLifecycleManager.global().release(id);
 	});
 
-
-
 	it("names the patch, not a branch, when a follow-up after a patch-mode landing cannot be captured", async () => {
 		const { repo, iso } = await createRepoAndIsolation();
 		const { firstRun, followUps } = landingFollowUps(repo, "patch");
@@ -859,6 +854,52 @@ describe("isolated agent follow-up turns", () => {
 		expect(await taskBranches(repo)).toBe("");
 	});
 
+	it("withdraws an unlanded patch on release when the agent undid it in a turn nobody captured", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "patch");
+		const run = await runKeptAlive({
+			id: "ReleaseUndonePatch",
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		firstRun.resolve(null);
+		const patchPath = run.first.patchPath ?? "";
+		expect(await Bun.file(patchPath).text()).toContain("+one");
+		expect(AgentRegistry.global().get("ReleaseUndonePatch")?.history?.patchPath).toBe(patchPath);
+
+		// The agent puts everything back, but that turn is never captured: it failed, or only a peer heard it.
+		await commitIn(iso, "zero\n", "undo");
+		await AgentLifecycleManager.global().release("ReleaseUndonePatch");
+
+		// Release is the first code to see the reverted workspace. A leftover patch would offer removed work.
+		expect(await Bun.file(patchPath).exists()).toBe(false);
+		expect(AgentRegistry.global().get("ReleaseUndonePatch")?.history?.patchPath).toBeUndefined();
+	});
+
+	it("withdraws a refused task branch on release when the agent undid it in a turn nobody captured", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "branch");
+		await runKeptAlive({
+			id: "ReleaseUndoneBranch",
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		firstRun.resolve(false);
+		expect(await taskBranches(repo)).toContain("omp/task/ReleaseUndoneBranch");
+
+		await commitIn(iso, "zero\n", "undo");
+		await AgentLifecycleManager.global().release("ReleaseUndoneBranch");
+
+		expect(await taskBranches(repo)).toBe("");
+		expect(AgentRegistry.global().get("ReleaseUndoneBranch")?.history?.branchName).toBeUndefined();
+	});
+
 	it("does not announce a withdrawal when the first run handed over nothing", async () => {
 		const { repo, iso } = await createRepoAndIsolation();
 		const { firstRun, followUps } = landingFollowUps(repo, "patch");
@@ -933,7 +974,9 @@ describe("isolated agent follow-up turns", () => {
 		);
 
 		// The follow-up commit must not survive on the branch the first run already published.
-		expect(await git(repo, ["log", "--format=%s", `${baseSha}..omp/task/FollowUpSupersededBranch`])).toBe("first run");
+		expect(await git(repo, ["log", "--format=%s", `${baseSha}..omp/task/FollowUpSupersededBranch`])).toBe(
+			"first run",
+		);
 		await AgentLifecycleManager.global().release("FollowUpSupersededBranch");
 	});
 

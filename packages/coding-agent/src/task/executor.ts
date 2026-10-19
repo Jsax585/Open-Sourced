@@ -3496,9 +3496,14 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				// could be registered, or through a user-prompted result's delivery.
 				// A cancelled wake job is not a delivery: the owner already gave up
 				// the turn, so its checkout must not change behind that decision.
+				// A user-prompted result is delivered through the owner's job
+				// manager, so settlement needs one that can still take it. A manager
+				// that is disposing refuses the delivery, and the changes would
+				// then land with no way to tell the owner.
+				const manager = session.asyncJobManager;
+				const ownerCanHear = !!ownerId && manager !== undefined && !manager.disposed;
 				const ownerTold =
-					!jobCancel.signal.aborted &&
-					(wakeJob !== undefined || ownerWoken || (messageResult && !!ownerId && !!session.asyncJobManager));
+					!jobCancel.signal.aborted && (wakeJob !== undefined || ownerWoken || (messageResult && ownerCanHear));
 				let notice = "";
 				if (result && options.onTurnSettled && ownerTold) {
 					try {

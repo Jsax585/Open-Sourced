@@ -875,7 +875,10 @@ describe("runSubprocess result acceptance", () => {
 		}
 
 		/** A kept-alive subagent owned by `Parent`, a registered peer, and a settle hook that reports {@link NOTICE}. */
-		function setUp(onSettled: (superseded: () => boolean) => Promise<string> = async () => NOTICE) {
+		function setUp(
+			onSettled: (superseded: () => boolean) => Promise<string> = async () => NOTICE,
+			monitorOptions: { structured?: boolean; artifactsDir?: string } = {},
+		) {
 			const manager = new AsyncJobManager({});
 			const harness = createHarness({ asyncJobManager: manager });
 			const registry = AgentRegistry.global();
@@ -903,6 +906,7 @@ describe("runSubprocess result acceptance", () => {
 				agent: baseAgent,
 				onTurnSettled: settle,
 				onTurnStarted: started,
+				...monitorOptions,
 			});
 			const observer = harness.wakeObserver();
 			if (!observer) throw new Error("wake-turn observer was not registered");
@@ -950,6 +954,57 @@ describe("runSubprocess result acceptance", () => {
 				expect(job?.resultText?.endsWith(NOTICE)).toBe(true);
 			} finally {
 				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		/** A turn the operator typed to the agent directly, as the Agent Hub focus does. */
+		function userRecord(message: string): AgentMessage {
+			return {
+				role: "user",
+				content: [{ type: "text", text: message }],
+				attribution: "user",
+				timestamp: Date.now(),
+			} as unknown as AgentMessage;
+		}
+
+		it("settles an operator-prompted turn and delivers the notice while the owner's job manager is live", async () => {
+			const tempDir = TempDir.createSync("@omp-user-prompted-settle-");
+			const { manager, harness, observer, settle } = setUp(undefined, {
+				structured: false,
+				artifactsDir: tempDir.path(),
+			});
+			harness.session.sessionManager.getArtifactsDir = () => tempDir.path();
+			try {
+				const finish = observer([userRecord("fix it")]);
+				harness.emitAssistantText("fixed");
+				await finish?.(undefined);
+
+				expect(settle).toHaveBeenCalledTimes(1);
+				expect(manager.getJob(AGENT_ID)?.resultText?.endsWith(NOTICE)).toBe(true);
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+				tempDir.removeSync();
+			}
+		});
+
+		it("does not land an operator-prompted turn when the owner's job manager can no longer take the result", async () => {
+			const tempDir = TempDir.createSync("@omp-user-prompted-disposed-");
+			const { manager, harness, observer, settle } = setUp(undefined, {
+				structured: false,
+				artifactsDir: tempDir.path(),
+			});
+			harness.session.sessionManager.getArtifactsDir = () => tempDir.path();
+			try {
+				const finish = observer([userRecord("fix it")]);
+				harness.emitAssistantText("fixed");
+				// The owner is shutting down while the turn finishes: publishCompleted would throw.
+				await manager.dispose({ timeoutMs: 1000 });
+				await finish?.(undefined);
+
+				// Landing now would change the checkout with no way to tell the owner.
+				expect(settle).not.toHaveBeenCalled();
+			} finally {
+				tempDir.removeSync();
 			}
 		});
 
