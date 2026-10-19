@@ -182,32 +182,49 @@ export interface SnippetChoice {
 	insertText: string;
 }
 
+/** Where and how a picked snippet will be inserted, which decides whether its `/snippet:<name>` form is usable. */
+export interface SnippetInsertContext {
+	/** The cursor sits at the very start of the draft: the one place a slash command expands. */
+	atDraftStart: boolean;
+	/** Command tokens an extension, custom, or file command already owns; those run before a template does. */
+	reservedCommands: ReadonlySet<string>;
+}
+
+/** Display text: control sequences stripped and every whitespace run (tabs, newlines) collapsed to one space. */
+function displayText(text: string): string {
+	return sanitizeText(text).replace(/\s+/g, " ").trim();
+}
+
 /**
  * Picker rows for `templates`. An argument-taking template (`$1`, `$ARGUMENTS`, …) inserts its
- * `/snippet:<name> ` invocation only when `atDraftStart` (the cursor sits at the very start of the
- * draft, the one place a slash command expands) and the name is unique (a duplicated name resolves to
- * the first-loaded template at send time); otherwise it inserts the raw body. Everything shown is
- * sanitized: template files are untrusted and the picker renders ANSI-aware text.
+ * `/snippet:<name> ` invocation only where that command would expand (`context`) and the name is unique
+ * (a duplicated name resolves to the first-loaded template at send time); otherwise it inserts the raw
+ * body. Everything shown is sanitized: template files are untrusted and the picker renders ANSI-aware text.
  */
-export function buildSnippetChoices(templates: readonly PromptTemplate[], atDraftStart: boolean): SnippetChoice[] {
+export function buildSnippetChoices(
+	templates: readonly PromptTemplate[],
+	context: SnippetInsertContext,
+): SnippetChoice[] {
 	const counts = new Map<string, number>();
 	for (const template of templates) counts.set(template.name, (counts.get(template.name) ?? 0) + 1);
 
 	const sorted = [...templates].sort((a, b) => a.name.localeCompare(b.name) || a.source.localeCompare(b.source));
 	return sorted.map(template => {
 		const { content } = template;
-		const name = sanitizeText(template.name);
-		const source = sanitizeText(template.source);
+		const name = displayText(template.name);
+		const source = displayText(template.source);
 		const duplicated = (counts.get(template.name) ?? 0) > 1;
-		// A name the sanitizer altered cannot be typed back, so it never gets an invocation form.
+		const commandName = promptTemplateCommandName(template);
+		// A name the display cleanup altered, or one with whitespace, cannot be typed back as a command token.
 		const invocation =
-			atDraftStart &&
+			context.atDraftStart &&
 			!duplicated &&
 			name === template.name &&
 			/^\S+$/.test(name) &&
+			!context.reservedCommands.has(commandName) &&
 			templateUsesInlineArgPlaceholders(content);
-		const command = `/${promptTemplateCommandName(template)}`;
-		const preview = truncateToWidth(sanitizeText(content).replace(/\s+/g, " ").trim(), TRUNCATE_LENGTHS.RECAP);
+		const command = `/${commandName}`;
+		const preview = truncateToWidth(displayText(content), TRUNCATE_LENGTHS.RECAP);
 		const hint = invocation ? `takes arguments, inserts ${command} · ` : "";
 		return {
 			label: duplicated ? `${name} ${source}` : name,

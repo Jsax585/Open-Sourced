@@ -2852,22 +2852,37 @@ export class InteractiveMode implements InteractiveModeContext {
 				getInlineHint: argumentHint ? buildStaticInlineHint(argumentHint) : undefined,
 			};
 		});
-		// Prompt templates (snippets) live under `/snippet:<name>`, like `/skill:<name>`, so they can
-		// never collide with builtin, hook, custom, or file commands. The bare `/<name>` form still
-		// expands at submit but is no longer advertised.
-		const promptTemplateCommands: SlashCommand[] = this.session.promptTemplates.map(template => ({
-			name: promptTemplateCommandName(template),
-			// `PromptTemplate.description` from `loadTemplatesFromDir` already includes the
-			// source suffix (e.g. "Review code (project)"), so pass it through verbatim.
-			description: template.description,
-			icon: promptIcon,
-			iconName: "prompt",
-		}));
+		// Prompt templates (snippets) live under `/snippet:<name>`, like `/skill:<name>`, so they cannot
+		// collide with ordinary command names. A hook, custom, or file command that itself claims a
+		// `snippet:<name>` token runs before template expansion, so that token is not advertised for the template.
+		// The bare `/<name>` form still expands at submit but is no longer advertised.
+		const reservedNames = this.#reservedSlashCommandNames();
+		const promptTemplateCommands: SlashCommand[] = this.session.promptTemplates
+			.filter(template => !reservedNames.has(promptTemplateCommandName(template)))
+			.map(template => ({
+				name: promptTemplateCommandName(template),
+				// `PromptTemplate.description` from `loadTemplatesFromDir` already includes the
+				// source suffix (e.g. "Review code (project)"), so pass it through verbatim.
+				description: template.description,
+				icon: promptIcon,
+				iconName: "prompt",
+			}));
 		this.#baseAutocompleteProvider = this.#inputController.createAutocompleteProvider(
 			[...this.#pendingSlashCommands, ...fileSlashCommands, ...promptTemplateCommands],
 			basePath,
 		);
 		this.#applyAutocompleteProvider();
+	}
+
+	/** Command tokens (names and aliases) that run a command before a prompt template of the same token. */
+	#reservedSlashCommandNames(): Set<string> {
+		const reservedNames = new Set<string>();
+		for (const command of this.#pendingSlashCommands) {
+			reservedNames.add(command.name);
+			for (const alias of command.aliases ?? []) reservedNames.add(alias);
+		}
+		for (const command of this.session.slashCommands) reservedNames.add(command.name);
+		return reservedNames;
 	}
 
 	/**
@@ -8428,7 +8443,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	showSnippetPicker(): Promise<void> {
-		return this.#selectorController.showSnippetPicker();
+		return this.#selectorController.showSnippetPicker(this.#reservedSlashCommandNames());
 	}
 
 	showExtensionsDashboard(): void {

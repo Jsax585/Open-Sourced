@@ -166,6 +166,9 @@ describe("resolveSnippetText", () => {
 	});
 });
 
+const start = { atDraftStart: true, reservedCommands: new Set<string>() };
+const midDraft = { atDraftStart: false, reservedCommands: new Set<string>() };
+
 describe("buildSnippetChoices", () => {
 	const template = (name: string, content: string, source = "(user)"): PromptTemplate => ({
 		name,
@@ -175,45 +178,58 @@ describe("buildSnippetChoices", () => {
 	});
 
 	test("argument templates insert the namespaced /snippet:name invocation at the draft start", () => {
-		const choices = buildSnippetChoices([template("hello", "Say hello to $1")], true);
+		const choices = buildSnippetChoices([template("hello", "Say hello to $1")], start);
 		expect(choices[0]?.insertText).toBe("/snippet:hello ");
 		expect(choices[0]?.description).toContain("/snippet:hello");
 	});
 
 	test("argument templates insert their body mid-draft, where a slash command would not expand", () => {
-		const choices = buildSnippetChoices([template("hello", "Say hello to $1")], false);
+		const choices = buildSnippetChoices([template("hello", "Say hello to $1")], midDraft);
 		expect(choices[0]?.insertText).toBe("Say hello to $1");
 		expect(choices[0]?.description).not.toContain("/snippet:hello");
 	});
 
 	test("templates without placeholders insert their body", () => {
-		expect(buildSnippetChoices([template("plain", "just text")], true)[0]?.insertText).toBe("just text");
+		expect(buildSnippetChoices([template("plain", "just text")], start)[0]?.insertText).toBe("just text");
 	});
 
 	test("duplicate names get unique source-qualified labels and raw bodies", () => {
 		const choices = buildSnippetChoices(
 			[template("dup", "a $1", "(project)"), template("dup", "b $1", "(user)")],
-			true,
+			start,
 		);
 		expect(choices.map(c => c.label)).toEqual(["dup (project)", "dup (user)"]);
 		expect(choices.map(c => c.insertText)).toEqual(["a $1", "b $1"]);
 	});
 
 	test("terminal control sequences in a template never reach the picker text", () => {
-		const [choice] = buildSnippetChoices([template("evil", "before \x1b]0;pwned\x07 after \x1b[31mred")], true);
+		const [choice] = buildSnippetChoices([template("evil", "before \x1b]0;pwned\x07 after \x1b[31mred")], start);
 		expect(choice?.description).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
 		expect(choice?.description).toContain("before");
 		expect(choice?.description).toContain("red");
 	});
 
 	test("a name with a space never gets the invocation form, which would split at the space", () => {
-		const [choice] = buildSnippetChoices([template("code review", "Review $1")], true);
+		const [choice] = buildSnippetChoices([template("code review", "Review $1")], start);
 		expect(choice?.insertText).toBe("Review $1");
 	});
 
 	test("the inserted body is stripped of control sequences and tabs, like typed or pasted text", () => {
-		const [choice] = buildSnippetChoices([template("raw", "a\x1b]0;x\x07b\tc\x1b[31md")], true);
+		const [choice] = buildSnippetChoices([template("raw", "a\x1b]0;x\x07b\tc\x1b[31md")], start);
 		expect(choice?.insertText).toMatch(/^ab +cd$/);
+	});
+
+	test("a command that already owns the snippet: token keeps the invocation form out of the editor", () => {
+		const reserved = { atDraftStart: true, reservedCommands: new Set(["snippet:hello"]) };
+		expect(buildSnippetChoices([template("hello", "Say hello to $1")], reserved)[0]?.insertText).toBe(
+			"Say hello to $1",
+		);
+	});
+
+	test("tabs and newlines in a name or source cannot add rows or leave tabs in the picker text", () => {
+		const [choice] = buildSnippetChoices([template("a\tb\nc", "body", "(project:x\ty)")], start);
+		expect(choice?.label).toBe("a b c");
+		expect(`${choice?.label}${choice?.description}`).not.toMatch(/[\t\n]/);
 	});
 });
 

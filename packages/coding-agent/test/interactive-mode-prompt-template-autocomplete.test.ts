@@ -243,4 +243,18 @@ describe("InteractiveMode prompt-template autocomplete (#2462)", () => {
 		expect(created.session.promptTemplates.map(t => t.name)).toContain("supplied");
 		expect(await fetchSlashSuggestions(slot.current!, "/snippet:supp")).toContain("snippet:supplied");
 	});
+
+	it("does not advertise a template under a snippet: token another command already owns", async () => {
+		const created = createHarness([{ name: "foo", description: "Template foo", content: "body", source: "(user)" }]);
+		const slot = captureAutocompleteProvider(created.mode);
+
+		await created.mode.refreshSlashCommandState(tempDir.path(), [
+			{ name: "snippet:foo", description: "File command", content: "x", source: "test" },
+		]);
+
+		const matches = await fetchSlashItems(slot.current!, "/snippet:foo");
+		expect(matches.filter(item => item.value === "snippet:foo").map(item => item.description)).toEqual([
+			"File command",
+		]);
+	});
 });

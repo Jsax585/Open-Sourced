@@ -622,14 +622,18 @@ export class SelectorController {
 	/**
 	 * Fuzzy-pick a saved snippet (prompt template) and insert it into the editor at the cursor.
 	 * Reloads the session's templates first, so a picked `/snippet:<name>` invocation expands the
-	 * same body the picker previewed.
+	 * same body the picker previewed. `reservedCommands` are the command tokens other commands own.
 	 */
-	async showSnippetPicker(): Promise<void> {
+	async showSnippetPicker(reservedCommands: ReadonlySet<string>): Promise<void> {
 		await this.ctx.refreshPromptTemplates();
 		const { line, col } = this.ctx.editor.getCursor();
 		const lines = this.ctx.editor.getLines();
-		const atDraftStart = lines.slice(0, line).every(l => l === "") && (lines[line] ?? "").slice(0, col) === "";
-		const choices = buildSnippetChoices(this.ctx.session.promptTemplates, atDraftStart);
+		// A focused subagent view rejects every slash-prefixed draft, so there the body is inserted instead.
+		const atDraftStart =
+			!this.ctx.focusedAgentId &&
+			lines.slice(0, line).every(l => l === "") &&
+			(lines[line] ?? "").slice(0, col) === "";
+		const choices = buildSnippetChoices(this.ctx.session.promptTemplates, { atDraftStart, reservedCommands });
 		if (choices.length === 0) {
 			this.ctx.showStatus(NO_SNIPPETS_MESSAGE);
 			return;
