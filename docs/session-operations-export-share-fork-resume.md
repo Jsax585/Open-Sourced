@@ -372,7 +372,10 @@ In-place `/fork`, with or without `--name`, uses `AgentSession.fork()`:
 
 After a successful `--name` fork, the UI calls `SessionManager.setSessionName()`
 on the new session with source `"user"`. The title survives reopening and is
-not replaced by automatic naming. No additional model request is made. Without
+not replaced by automatic naming. No additional model request is made. The
+supplied title is normalized with the same rules `setSessionName()` applies
+before the fork starts; a title that normalizes to empty (for example only
+control characters) is rejected with an error and no fork is created. Without
 `--name`, the fork retains its inherited title. If forking is cancelled or
 fails, the source title is untouched. If saving the title fails after the fork,
 the new session remains active and the UI reports that the name was not saved.
