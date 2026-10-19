@@ -1753,6 +1753,12 @@ export class ModelRegistry {
 			);
 		}
 
+		// Findings the file normalizer reported (an input modality the catalog
+		// cannot express, say): the file loaded with them dropped.
+		for (const warning of this.#modelsConfigFile.drainWarnings()) {
+			this.#configWarnings.push(`${this.#modelsConfigFile.path()}: ${warning}`);
+		}
+
 		const overrides = new Map<string, ProviderOverride>();
 		const allModelOverrides = new Map<string, Map<string, ModelOverride>>();
 		const keylessProviders = new Set<string>();

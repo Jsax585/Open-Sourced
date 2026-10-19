@@ -1,11 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { AuthStorage } from "@oh-my-pi/pi-ai";
 import { OmpErrors } from "@oh-my-pi/omptype";
+import { ModelsConfigFile } from "@oh-my-pi/pi-coding-agent/config/models-config";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { getModelsConfigSchema } from "@oh-my-pi/pi-coding-agent/config/models-config-schema-bundle";
 import {
 	type ProviderValidationConfig,
 	validateProviderConfiguration,
 } from "@oh-my-pi/pi-coding-agent/config/models-config";
 import { type ModelsConfig, ModelsConfigSchema } from "@oh-my-pi/pi-coding-agent/config/models-config-schema";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
 const models = [{ id: "grok-4", api: "openai-completions" as const }];
 const baseUrl = "https://api.example.invalid/v1";
@@ -216,5 +222,74 @@ describe("model kind must match its api", () => {
 				"runtime-register",
 			),
 		).not.toThrow();
+	});
+});
+
+describe("models.yml input modality the catalog cannot express (#16342)", () => {
+	/** A models.yml with one provider whose models declare the given `input` lists. */
+	function writeModelsFile(models: readonly { id: string; input: string }[]): string {
+		const dir = TempDir.createSync("@models-config-input-");
+		const file = path.join(dir.path(), "models.yml");
+		const body = [
+			"providers:",
+			"  openrouter:",
+			"    baseUrl: https://api.example.invalid/v1",
+			"    apiKey: sk-test",
+			"    api: openai-completions",
+			"    models:",
+			...models.flatMap(model => [`      - id: "${model.id}"`, `        input: [${model.input}]`]),
+			"",
+		].join("\n");
+		fs.writeFileSync(file, body);
+		return file;
+	}
+
+	test("an unsupported input modality is dropped and the file still loads", () => {
+		// A models.yml naming a modality the catalog does not know must not take
+		// the whole config down: the file loads with the modality dropped.
+		const file = writeModelsFile([{ id: "some/video-capable-model", input: "text, image, video" }]);
+		const config = ModelsConfigFile.relocate(file);
+		const result = config.tryLoad();
+		expect(result.status).toBe("ok");
+		expect(result.value?.providers?.openrouter?.models?.[0]?.input).toEqual(["text", "image"]);
+		expect(config.drainWarnings()).toEqual([
+			'provider "openrouter", model "some/video-capable-model": input modality "video" is not supported yet (allowed: text, image) — ignoring',
+		]);
+	});
+
+	test("a model whose only modality is unsupported keeps the catalog default", () => {
+		// Dropping every modality must not leave the model with an empty input
+		// list: the key goes away so the catalog's own default applies.
+		const file = writeModelsFile([{ id: "only-video", input: "video" }]);
+		const config = ModelsConfigFile.relocate(file);
+		const result = config.tryLoad();
+		expect(result.status).toBe("ok");
+		expect(result.value?.providers?.openrouter?.models?.[0]?.input).toBeUndefined();
+	});
+
+	test("a malformed input entry stays a schema error", () => {
+		// Only an unknown modality is forgiven; a list the schema cannot read at
+		// all is still a configuration mistake worth reporting.
+		const file = writeModelsFile([{ id: "bad-entry", input: "text, 7" }]);
+		const result = ModelsConfigFile.relocate(file).tryLoad();
+		expect(result.status).toBe("error");
+		if (result.status !== "error") throw new Error("expected the file to fail validation");
+		expect(result.error.message).toContain('must be "text" or "image"');
+	});
+
+	test("the registry loads the model and reports the dropped modality", async () => {
+		const file = writeModelsFile([{ id: "some/video-capable-model", input: "text, image, video" }]);
+		const authStorage = await AuthStorage.create(":memory:");
+		try {
+			const registry = new ModelRegistry(authStorage, file);
+			expect(registry.getError()).toBeUndefined();
+			const model = registry.getAll().find(entry => entry.id === "some/video-capable-model");
+			expect(model?.input).toEqual(["text", "image"]);
+			expect(registry.drainConfigWarnings().join("\n")).toContain(
+				'model "some/video-capable-model": input modality "video" is not supported yet',
+			);
+		} finally {
+			authStorage.close();
+		}
 	});
 });
