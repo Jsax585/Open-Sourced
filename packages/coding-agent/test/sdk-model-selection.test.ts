@@ -916,6 +916,75 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		expect(message).toContain("runtime-provider/runtime-model");
 	});
 
+	const highOnlyProviderExtension: ExtensionFactory = pi => {
+		pi.registerProvider("effort-provider", {
+			baseUrl: "https://effort.example.com/v1",
+			apiKey: "EFFORT_KEY",
+			api: "openai-completions",
+			models: [
+				{
+					id: "high-only",
+					name: "High Only",
+					reasoning: true,
+					thinking: { mode: "effort", efforts: [Effort.High] },
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 128000,
+					maxTokens: 8192,
+				},
+			],
+		});
+	};
+
+	test("rejects a subagent spawn whose parent-model fallback has no effort under task.maxEffort", async () => {
+		const { authStorage, modelRegistry } = registryWithKeys(["high-only"]);
+
+		const message = await creationError(
+			createAgentSession({
+				...subagentSessionOptions(
+					modelRegistry,
+					authStorage,
+					Settings.isolated(),
+					"runtime-provider/runtime-model",
+					"effort-provider/high-only",
+				),
+				extensions: [providerExtension, highOnlyProviderExtension],
+				taskEffort: "lo",
+				thinkingLevelCeiling: Effort.Low,
+			}),
+		);
+
+		expect(message).toContain("task.maxEffort=low");
+	});
+
+	test("skips a fallback chain candidate for a subagent model that cannot honor task.maxEffort", async () => {
+		const { authStorage, modelRegistry, parentPattern } = registryWithKeys([]);
+		const settings = Settings.isolated({
+			"retry.fallbackChains": {
+				"runtime-provider/runtime-model": ["effort-provider/high-only", "runtime-provider/runtime-fallback-model"],
+			},
+		});
+
+		const { session } = await createAgentSession({
+			...subagentSessionOptions(
+				modelRegistry,
+				authStorage,
+				settings,
+				"runtime-provider/runtime-model",
+				parentPattern,
+			),
+			extensions: [providerExtension, highOnlyProviderExtension],
+			taskEffort: "lo",
+			thinkingLevelCeiling: Effort.Low,
+		});
+
+		try {
+			expect(`${session.model?.provider}/${session.model?.id}`).toBe("runtime-provider/runtime-fallback-model");
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	test("walks a non-empty fallback chain for a subagent model without working credentials and marks the fallback", async () => {
 		const { authStorage, modelRegistry, parentPattern } = registryWithKeys(["runtime-fallback-model"]);
 		const settings = Settings.isolated({

@@ -4379,12 +4379,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// Caller-requested coarse effort maps onto the resolved model's
 			// supported range, then respects the operator-configured ceiling.
 			// Undefined (no effort, or no controllable effort surface) falls
-			// through to the normal selectors below.
+			// through to the normal selectors below. A model dispatch could not
+			// resolve gets the effort mapped by session creation, onto the model
+			// it settles on (`taskEffort`), never onto the generic ladder.
 			// The ceiling outlives initial resolution: it rides into the session so
 			// retry-fallback recovery can never clamp effort back up past it.
 			const spawnEffortCeiling = options.effort !== undefined ? cfgTaskMaxEffort.get(settings) : undefined;
 			const effortLevel =
-				options.effort !== undefined
+				options.effort !== undefined && model
 					? resolveTaskEffortLevel(model, options.effort, spawnEffortCeiling)
 					: undefined;
 			if (model) {
@@ -4525,6 +4527,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					modelPatternChainFallback: deferModelPatterns || undefined,
 					thinkingLevel: effectiveThinkingLevel,
 					thinkingLevelCeiling: spawnEffortCeiling,
+					taskEffort: model ? undefined : options.effort,
 					// Subagents are short-lived; never schedule background warm requests.
 					cacheWarming: false,
 					toolNames,

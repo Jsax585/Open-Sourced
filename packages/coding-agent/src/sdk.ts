@@ -252,11 +252,14 @@ import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
 	concreteThinkingLevel,
+	modelSupportsEffortCeiling,
 	parseConfiguredThinkingLevel,
 	parseThinkingLevel,
 	resolveProvisionalAutoLevel,
+	resolveTaskEffortLevel,
 	resolveThinkingLevelForModel,
 	shouldDisableReasoning,
+	type TaskEffort,
 	toReasoningEffort,
 	automaticThinkingLevel,
 } from "@oh-my-pi/pi-tui/thinking";
@@ -619,6 +622,15 @@ export interface CreateAgentSessionOptions {
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Hard ceiling on the session's thinking effort (e.g. a task spawn's `task.maxEffort`-capped hint); retry-fallback recovery re-clamps to it. */
 	thinkingLevelCeiling?: Effort;
+	/**
+	 * Coarse task-spawn effort mapped onto the effort ladder of the model the
+	 * session settles on, capped by `thinkingLevelCeiling`, for a caller that
+	 * could not resolve the model itself. Takes precedence over `thinkingLevel`
+	 * unless that model has no controllable effort. Session creation throws when
+	 * the model has no effort at or below the ceiling, and a startup fallback
+	 * chain skips such candidates.
+	 */
+	taskEffort?: TaskEffort;
 	/** OpenAI service-tier override for this session. `null` omits `service_tier`. */
 	openAIServiceTier?: ServiceTier | null;
 	/**
@@ -2086,13 +2098,18 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const taskDepth = options.taskDepth ?? 0;
 
 	// Resolves the session/agent thinking level using the same precedence we
-	// apply at startup: explicit option → persisted session entry → restored
-	// model selector suffix → default role's explicit selector → selected
-	// model's defaultLevel → global settings default. Run again after extension
-	// role reclaim so the final model's own defaults aren't masked by an earlier
-	// fallback model's.
+	// apply at startup: task effort mapped onto the selected model → explicit
+	// option → persisted session entry → restored model selector suffix →
+	// default role's explicit selector → selected model's defaultLevel → global
+	// settings default. Run again after extension role reclaim so the final
+	// model's own defaults aren't masked by an earlier fallback model's.
 	const pickInitialThinkingLevel = (selectedModel: Model | undefined): ConfiguredThinkingLevel | undefined => {
-		let level = options.thinkingLevel;
+		// Throws when the model has nothing at or below the ceiling, exactly as
+		// a spawn whose model was known at dispatch is rejected.
+		let level =
+			(selectedModel && options.taskEffort !== undefined
+				? resolveTaskEffortLevel(selectedModel, options.taskEffort, options.thinkingLevelCeiling)
+				: undefined) ?? options.thinkingLevel;
 		if (level === undefined && hasExistingSession && hasThinkingEntry) {
 			level =
 				parseConfiguredThinkingLevel(existingSession.configuredThinkingLevel) ??
@@ -3040,12 +3057,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						modelLookup: modelRegistry,
 					},
 					{ selector: requestedSelector, model: requestedModel },
-					// The side-effect-free check the deferred chain walk below uses:
-					// no OAuth refresh or `!command` key runs per candidate.
+					// The side-effect-free check the deferred chain walk below uses
+					// (no OAuth refresh or `!command` key runs per candidate), plus
+					// the effort ceiling runtime fallback recovery also skips on.
 					(candidate, selector) =>
 						!disabledProviders.has(candidate.provider) &&
 						!modelRegistry.isSelectorSuppressed(selector.raw) &&
-						hasModelAuth(candidate),
+						hasModelAuth(candidate) &&
+						(options.thinkingLevelCeiling === undefined ||
+							modelSupportsEffortCeiling(candidate, options.thinkingLevelCeiling)),
 				);
 				if (replacement?.kind !== "refused") return replacement;
 				const chainState =
