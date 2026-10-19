@@ -5,7 +5,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { type FetchImpl, getEnvApiKey, type ImageContent, type TextContent } from "@oh-my-pi/pi-ai";
+import { type ApiKey, type FetchImpl, getEnvApiKey, type ImageContent, type TextContent } from "@oh-my-pi/pi-ai";
 import { htmlToMarkdown, notebookToEditableText } from "@oh-my-pi/pi-natives";
 import { $which, ptree } from "@oh-my-pi/pi-utils";
 import { type ArchiveFormat, listArchiveRoot, sniffArchiveFormat } from "@oh-my-pi/pi-utils/ar";
@@ -19,7 +19,7 @@ import { webpExclusionForModel } from "@oh-my-pi/pi-tui/chat/image-loading";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { CONVERTIBLE_EXTENSIONS } from "../utils/markit";
 import { ensureTool } from "../utils/tools-manager";
-import { fetchWithDeepSeek, findDeepSeekApiKey } from "../web/deepseek";
+import { fetchWithDeepSeek } from "../web/deepseek";
 import { decodeBody } from "../web/response-body";
 import { findFirecrawlApiKey, scrapeWithFirecrawl } from "../web/firecrawl";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "../web/parallel";
@@ -536,9 +536,9 @@ async function parseFeedToMarkdown(content: string, maxItems = 10): Promise<stri
 }
 
 /**
- * Cap on any single remote reader-mode request (Parallel, Firecrawl, DeepSeek, Jina) so a
- * stalled remote endpoint cannot consume the whole reader-mode budget and starve
- * the local fallback renderers (trafilatura, lynx, native). See #1449.
+ * Cap on any single remote reader-mode request (Parallel, Firecrawl, DeepSeek, Jina)
+ * within the shared reader-mode deadline. Native rendering of already-loaded HTML
+ * remains available even after that deadline. See #1449.
  */
 const REMOTE_READER_MAX_MS = 10_000;
 const JINA_MARKDOWN_MARKER = "Markdown Content:";
@@ -596,11 +596,10 @@ const FETCH_PROVIDER_ORDER: readonly FetchProvider[] = [
  * chars and not {@link isLowQualityOutput}) before it is accepted, otherwise the
  * next backend is tried.
  *
- * The overall `timeout` budget bounds the whole call; remote backends (Parallel,
- * Firecrawl, DeepSeek, Jina) are additionally capped at `REMOTE_READER_MAX_MS` so a hung
- * endpoint cannot starve later renderers — especially the purely-local native
- * converter, which always works on already-loaded HTML. Only a real `userSignal`
- * cancellation aborts the chain (#1449).
+ * The overall `timeout` budget bounds network requests and subprocesses; remote
+ * backends are additionally capped at `REMOTE_READER_MAX_MS`. The purely-local
+ * native converter can still render already-loaded HTML after that deadline.
+ * Only a real `userSignal` cancellation aborts the chain (#1449).
  */
 export async function renderHtmlToText(
 	url: string,
@@ -610,6 +609,7 @@ export async function renderHtmlToText(
 	userSignal: AbortSignal | undefined,
 	storage: AgentStorage | null,
 	fetchOverride?: FetchImpl,
+	deepseekApiKey?: ApiKey,
 ): Promise<{ content: string; ok: boolean; method: string }> {
 	const overallSignal = ptree.combineSignals(userSignal, timeout * 1000);
 	const execOptions = {
@@ -619,10 +619,8 @@ export async function renderHtmlToText(
 		stderr: "full" as const,
 		signal: overallSignal,
 	};
-	const remoteBudgetMs = Math.min(timeout * 1000, REMOTE_READER_MAX_MS);
-	// Per-attempt budget for remote endpoints so one stall cannot consume the
-	// whole reader-mode budget and starve the local fallbacks.
-	const remoteSignal = () => ptree.combineSignals(userSignal, remoteBudgetMs);
+	// Each remote attempt shares the overall deadline as well as its own cap.
+	const remoteSignal = () => ptree.combineSignals(overallSignal, REMOTE_READER_MAX_MS);
 	const fetchImpl = fetchOverride ?? fetch;
 
 	const runners: Record<FetchProvider, () => Promise<string | null>> = {
@@ -661,10 +659,8 @@ export async function renderHtmlToText(
 			if (!findFirecrawlApiKey(storage)) return null;
 			return scrapeWithFirecrawl(url, { signal: remoteSignal(), fetch: fetchImpl }, storage);
 		},
-		deepseek: async () => {
-			if (!findDeepSeekApiKey(storage)) return null;
-			return fetchWithDeepSeek(url, { signal: remoteSignal(), fetch: fetchImpl }, storage);
-		},
+		deepseek: async () =>
+			fetchWithDeepSeek(url, { apiKey: deepseekApiKey, signal: remoteSignal(), fetch: fetchImpl }),
 		jina: async () => {
 			const apiKey = findCredential(storage, getEnvApiKey("jina"), "jina");
 			const headers: Record<string, string> = {
@@ -699,8 +695,10 @@ export async function renderHtmlToText(
 		// Honour real user cancellation between attempts; remote per-attempt and
 		// overall-budget timeouts still fall through to later (local) renderers.
 		userSignal?.throwIfAborted();
+		if (method !== "native" && overallSignal?.aborted) continue;
 		try {
 			const rendered = await runners[method]();
+			userSignal?.throwIfAborted();
 			if (!rendered) continue;
 			const content = stripDataUriImages(rendered);
 			if (content.trim().length <= 100) continue;
@@ -1102,6 +1100,7 @@ async function renderUrl(
 	modelRegistry: ModelRegistry | undefined,
 	fetchOverride?: FetchImpl,
 	excludeWebP?: true,
+	deepseekApiKey?: ApiKey,
 ): Promise<FetchRenderResult> {
 	const notes: string[] = [];
 	const fetchedAt = new Date().toISOString();
@@ -1493,8 +1492,7 @@ async function renderUrl(
 			throw new ToolAbortError();
 		}
 
-		// 5E: Render HTML via the reader-backend chain
-		// (native/trafilatura/lynx/parallel/firecrawl/deepseek/jina)
+		// 5E: Render HTML via the configured reader-backend chain (DeepSeek is explicit-only).
 		const htmlResult = await renderHtmlToText(
 			finalUrl,
 			rawContent,
@@ -1503,6 +1501,7 @@ async function renderUrl(
 			signal,
 			storage,
 			fetchOverride,
+			deepseekApiKey,
 		);
 		if (!htmlResult.ok) {
 			notes.push("html rendering failed (no reader backend produced usable output)");
@@ -1697,6 +1696,7 @@ export async function fetchReadUrl(
 	}
 
 	const storage = session.settings.getStorage();
+	const authStorage = session.authStorage ?? session.modelRegistry?.authStorage;
 	let result = await renderUrl(
 		url,
 		effectiveTimeout,
@@ -1707,6 +1707,7 @@ export async function fetchReadUrl(
 		session.modelRegistry,
 		session.fetch,
 		webpExclusionForModel(session.getActiveModel?.()),
+		authStorage?.keys.resolver("deepseek", { sessionId: session.getSessionId?.() ?? undefined }),
 	);
 	if (result.truncated) {
 		// Covers special handlers and every renderUrl branch, whichever response supplied the content.

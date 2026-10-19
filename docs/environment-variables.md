@@ -385,7 +385,7 @@ therefore completes through the paste-code path.
 | `EXA_API_KEY`                                       | Exa search/MCP; alternatively use `/login exa`                            |
 | `TINYFISH_API_KEY`                                  | TinyFish search provider (required)                                       |
 | `BRAVE_API_KEY`                                     | Brave search provider                                                     |
-| `DEEPSEEK_API_KEY`                                  | DeepSeek search and Fetch, sharing the model credential; saved `/login deepseek` credentials also work. Fetch requires explicit `providers.fetch: deepseek` to try it first with normal reader fallbacks, never participates in `auto`, and successful requests may be billed. Neither environment nor saved credentials alone select the Fetch reader. |
+| `DEEPSEEK_API_KEY`                                  | DeepSeek search and Fetch use the normal model credential resolver, including runtime/configured keys and saved `/login deepseek` credentials with the normal precedence. Fetch requires explicit `providers.fetch: deepseek` to try it first with normal reader fallbacks, never participates in `auto`, and successful requests may be billed. Credentials alone do not select the Fetch reader. |
 | `PERPLEXITY_API_KEY`                                | Perplexity search provider API-key mode                                   |
 | `PERPLEXITY_COOKIES`                                | Perplexity cookie-auth search mode                                        |
 | `PI_PERPLEXITY_RESPONSES`                           | `1` selects the Perplexity Responses endpoint instead of Chat Completions |

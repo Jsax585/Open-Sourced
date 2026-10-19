@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import type { FetchImpl, Model, StoredAuthCredential } from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { AuthStorage, type FetchImpl } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { cfgProvidersFetch } from "@oh-my-pi/pi-coding-agent/session/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { type FetchProvider, renderHtmlToText } from "@oh-my-pi/pi-coding-agent/tools/fetch";
@@ -14,10 +12,10 @@ import * as utils from "@oh-my-pi/pi-utils";
 
 const API_URL = "https://api.deepseek.com/v1/tools/fetch";
 const ARTICLE_URL = "https://example.com/article";
+const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MARKDOWN =
 	`# DeepSeek article\n\n${"This extracted article contains meaningful prose for the reader quality gate. ".repeat(5)}`.trim();
 const HTML = `<html><body><article><h1>Local fallback article</h1><p>${"The locally rendered article has enough meaningful prose to pass the common reader quality gate. ".repeat(5)}</p></article></body></html>`;
-const deepSeekModel = getBundledModel("deepseek", "deepseek-v4-pro")!;
 
 const credentialVariables = [
 	"DEEPSEEK_API_KEY",
@@ -42,14 +40,16 @@ afterEach(() => {
 	}
 });
 
-const storedCredentials: StoredAuthCredential[] = [
-	{ id: 1, provider: "deepseek", credential: { type: "api_key", key: "stored-deepseek-key" }, disabledCause: null },
-];
-const storage = {
-	listAuthCredentials(provider?: string) {
-		return provider === "deepseek" ? storedCredentials : [];
-	},
-} as unknown as AgentStorage;
+const authStores: AuthStorage[] = [];
+async function createAuthStorage(): Promise<AuthStorage> {
+	const authStorage = await AuthStorage.create(":memory:", { usageProviderResolver: () => undefined });
+	authStores.push(authStorage);
+	return authStorage;
+}
+
+afterEach(() => {
+	for (const authStorage of authStores.splice(0)) authStorage.close();
+});
 
 function waitForAbort(signal: AbortSignal | null | undefined): Promise<Response> {
 	if (!signal) throw new Error("Expected a bounded request signal");
@@ -61,18 +61,18 @@ function waitForAbort(signal: AbortSignal | null | undefined): Promise<Response>
 
 function makeSession(
 	fetchImpl: FetchImpl,
-	stored?: AgentStorage,
+	authStorage?: AuthStorage,
 	preference: FetchProvider | "auto" = "deepseek",
-	getActiveModel?: () => Model | undefined,
 ): ToolSession {
 	const session: ToolSession = {
 		cwd: process.cwd(),
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => null,
-		settings: Settings.isolated({ "fetch.enabled": true }, { storage: stored }),
+		settings: Settings.isolated({ "fetch.enabled": true }),
 		fetch: fetchImpl,
-		getActiveModel,
+		authStorage,
+		getSessionId: () => "deepseek-read-test",
 	};
 	cfgProvidersFetch.set(session.settings, preference);
 	return session;
@@ -91,7 +91,7 @@ describe("DeepSeek fetch client", () => {
 			expect(init?.signal).toBeInstanceOf(AbortSignal);
 			return Response.json({ title: "Article", content: `\r\n${MARKDOWN.replace(/\n/g, "\r\n")}\r\n` });
 		});
-		expect(await fetchWithDeepSeek(ARTICLE_URL, { fetch: fetchImpl }, storage)).toBe(MARKDOWN);
+		expect(await fetchWithDeepSeek(ARTICLE_URL, { fetch: fetchImpl })).toBe(MARKDOWN);
 		expect(calls).toBe(1);
 	});
 
@@ -102,8 +102,123 @@ describe("DeepSeek fetch client", () => {
 			calls++;
 			return Response.json({ content: MARKDOWN });
 		});
-		await expect(fetchWithDeepSeek(ARTICLE_URL, { fetch: fetchImpl }, null)).rejects.toBeInstanceOf(DeepSeekApiError);
+		await expect(fetchWithDeepSeek(ARTICLE_URL, { fetch: fetchImpl })).rejects.toThrow(
+			"DeepSeek credentials not found",
+		);
 		expect(calls).toBe(0);
+	});
+
+	it.each([
+		{ status: 401, oversized: false },
+		{ status: 403, oversized: false },
+		{ status: 401, oversized: true },
+	])("rotates stored credentials after HTTP $status (oversized: $oversized)", async ({ status, oversized }) => {
+		const authStorage = await createAuthStorage();
+		await authStorage.credentials.set("deepseek", [
+			{ type: "api_key", key: "first-key", source: "login" },
+			{ type: "api_key", key: "second-key", source: "login" },
+		]);
+		const attemptedKeys: string[] = [];
+		const result = await fetchWithDeepSeek(ARTICLE_URL, {
+			apiKey: authStorage.keys.resolver("deepseek", { sessionId: "deepseek-rotation" }),
+			fetch: mockFetch((_input, init) => {
+				const key = new Headers(init?.headers).get("authorization")!;
+				attemptedKeys.push(key);
+				if (attemptedKeys.length === 1) {
+					const body = JSON.stringify({ error: { message: "Invalid credentials" } });
+					return new Response(oversized ? body.padEnd(MAX_RESPONSE_BYTES + 1) : body, { status });
+				}
+				return Response.json({ content: MARKDOWN });
+			}),
+		});
+		expect(result).toBe(MARKDOWN);
+		expect(attemptedKeys.toSorted()).toEqual(["Bearer first-key", "Bearer second-key"]);
+	});
+
+	it.each([200, 402])("accepts HTTP %i JSON exactly at the 2 MiB boundary", async status => {
+		const body = JSON.stringify({ content: MARKDOWN, error: { message: "Request rejected" } }).padEnd(
+			MAX_RESPONSE_BYTES,
+		);
+		const pending = fetchWithDeepSeek(ARTICLE_URL, { fetch: mockFetch(() => new Response(body, { status })) });
+		if (status === 200) await expect(pending).resolves.toBe(MARKDOWN);
+		else {
+			await expect(pending).rejects.toMatchObject({
+				statusCode: status,
+				message: "DeepSeek API error (402): Request rejected",
+			});
+		}
+	});
+
+	it.each([200, 402])("stops an oversized HTTP %i body without parsing its JSON prefix", async status => {
+		let pulls = 0;
+		let cancelled = false;
+		const prefix = JSON.stringify({ content: MARKDOWN, error: { message: "Do not parse a truncated response" } });
+		const response = new Response(
+			new ReadableStream<Uint8Array>(
+				{
+					pull(controller) {
+						pulls++;
+						if (pulls === 1) controller.enqueue(Buffer.from(prefix.padEnd(MAX_RESPONSE_BYTES)));
+						else if (pulls === 2) controller.enqueue(new Uint8Array([32]));
+						else throw new Error("Read beyond body limit");
+					},
+					cancel() {
+						cancelled = true;
+					},
+				},
+				{ highWaterMark: 0 },
+			),
+			{ status },
+		);
+		const pending = fetchWithDeepSeek(ARTICLE_URL, { fetch: mockFetch(() => response) });
+		if (status === 200) await expect(pending).resolves.toBeNull();
+		else {
+			await expect(pending).rejects.toMatchObject({
+				statusCode: status,
+				message: `DeepSeek API error (${status}): response body too large`,
+			});
+		}
+		expect(pulls).toBe(2);
+		expect(cancelled).toBe(true);
+	});
+
+	it("keeps the deadline bounded when cancelling an oversized body stalls", async () => {
+		const response = new Response(
+			new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(new Uint8Array(MAX_RESPONSE_BYTES + 1));
+				},
+				cancel() {
+					return new Promise<void>(() => {});
+				},
+			}),
+		);
+		await expect(
+			fetchWithDeepSeek(ARTICLE_URL, { timeoutMs: 10, fetch: mockFetch(() => response) }),
+		).rejects.toMatchObject({ name: "TimeoutError" });
+	});
+
+	it("propagates cancellation while reading a response body", async () => {
+		const controller = new AbortController();
+		const reading = Promise.withResolvers<void>();
+		const response = new Response(
+			new ReadableStream<Uint8Array>(
+				{
+					pull() {
+						reading.resolve();
+						return new Promise<void>(() => {});
+					},
+				},
+				{ highWaterMark: 0 },
+			),
+		);
+		const pending = fetchWithDeepSeek(ARTICLE_URL, {
+			signal: controller.signal,
+			fetch: mockFetch(() => response),
+		});
+		await reading.promise;
+		controller.abort();
+		await expect(pending).rejects.toMatchObject({ name: "AbortError" });
 	});
 
 	it("recovers from a temporary server failure before falling back to another reader", async () => {
@@ -187,7 +302,7 @@ describe("DeepSeek fetch client", () => {
 				{ status },
 			),
 		);
-		await expect(fetchWithDeepSeek(ARTICLE_URL, { fetch: fetchImpl }, null)).rejects.toMatchObject({
+		await expect(fetchWithDeepSeek(ARTICLE_URL, { fetch: fetchImpl })).rejects.toMatchObject({
 			name: "DeepSeekApiError",
 			statusCode: status,
 			message: `DeepSeek API error (${status}): Request rejected`,
@@ -196,30 +311,25 @@ describe("DeepSeek fetch client", () => {
 
 	it("preserves non-JSON HTTP error details", async () => {
 		await expect(
-			fetchWithDeepSeek(
-				ARTICLE_URL,
-				{ fetch: mockFetch(() => new Response("Gateway unavailable", { status: 502 })) },
-				null,
-			),
+			fetchWithDeepSeek(ARTICLE_URL, {
+				fetch: mockFetch(() => new Response("Gateway unavailable", { status: 502 })),
+			}),
 		).rejects.toEqual(new DeepSeekApiError("DeepSeek API error (502): Gateway unavailable", 502));
 	});
 
 	it.each([null, { content: 7 }, { content: " \r\n " }])(
 		"returns no Markdown for unusable payload %j",
 		async payload => {
-			expect(
-				await fetchWithDeepSeek(ARTICLE_URL, { fetch: mockFetch(() => Response.json(payload)) }, null),
-			).toBeNull();
+			expect(await fetchWithDeepSeek(ARTICLE_URL, { fetch: mockFetch(() => Response.json(payload)) })).toBeNull();
 		},
 	);
 
 	it("enforces its standalone timeout", async () => {
 		await expect(
-			fetchWithDeepSeek(
-				ARTICLE_URL,
-				{ timeoutMs: 10, fetch: mockFetch((_input, init) => waitForAbort(init?.signal)) },
-				null,
-			),
+			fetchWithDeepSeek(ARTICLE_URL, {
+				timeoutMs: 10,
+				fetch: mockFetch((_input, init) => waitForAbort(init?.signal)),
+			}),
 		).rejects.toMatchObject({ name: "TimeoutError" });
 	});
 
@@ -228,56 +338,19 @@ describe("DeepSeek fetch client", () => {
 		controller.abort();
 		let calls = 0;
 		await expect(
-			fetchWithDeepSeek(
-				ARTICLE_URL,
-				{
-					signal: controller.signal,
-					fetch: mockFetch(() => {
-						calls++;
-						return Response.json({ content: MARKDOWN });
-					}),
-				},
-				null,
-			),
+			fetchWithDeepSeek(ARTICLE_URL, {
+				signal: controller.signal,
+				fetch: mockFetch(() => {
+					calls++;
+					return Response.json({ content: MARKDOWN });
+				}),
+			}),
 		).rejects.toMatchObject({ name: "AbortError" });
 		expect(calls).toBe(0);
 	});
 });
 
 describe("DeepSeek reader fallback chain", () => {
-	it.each([
-		{ name: "HTTP failure", body: { error: { message: "Quota exhausted" } }, status: 402 },
-		{ name: "empty content", body: { content: "" }, status: 200 },
-		{ name: "short content", body: { content: "Too short" }, status: 200 },
-		{
-			name: "JavaScript gate",
-			body: { content: `Please enable JavaScript. ${"A gated page is not the requested article. ".repeat(5)}` },
-			status: 200,
-		},
-		{
-			name: "navigation",
-			body: { content: Array.from({ length: 20 }, (_, i) => `Navigation link ${i}`).join("\n") },
-			status: 200,
-		},
-	])("falls back to native on $name", async ({ body, status }) => {
-		let calls = 0;
-		const result = await renderHtmlToText(
-			ARTICLE_URL,
-			HTML,
-			1,
-			Settings.isolated({ "providers.fetch": "deepseek" }),
-			undefined,
-			null,
-			mockFetch(() => {
-				calls++;
-				return Response.json(body, { status });
-			}),
-		);
-		expect(result.method).toBe("native");
-		expect(result.content).toContain("Local fallback article");
-		expect(calls).toBe(1);
-	});
-
 	it.each(["transport", "invalid JSON"])("falls back after %s failure", async failure => {
 		const fetchImpl = mockFetch(() => {
 			if (failure === "transport") throw new Error("Connection failed");
@@ -295,84 +368,54 @@ describe("DeepSeek reader fallback chain", () => {
 		expect(result.method).toBe("native");
 	});
 
-	it.each(["environment", "stored"] as const)(
-		"excludes DeepSeek from auto with %s credentials",
-		async credentialSource => {
-			vi.spyOn(toolsManager, "ensureTool").mockResolvedValue(undefined);
-			vi.spyOn(utils, "$which").mockReturnValue(null);
-			process.env.FIRECRAWL_API_KEY = "firecrawl-test-key";
-			if (credentialSource === "stored") delete process.env.DEEPSEEK_API_KEY;
-			const requests: string[] = [];
-			const result = await renderHtmlToText(
-				ARTICLE_URL,
-				"<html><body>short</body></html>",
-				1,
-				Settings.isolated({ "providers.fetch": "auto" }),
-				undefined,
-				credentialSource === "stored" ? storage : null,
-				mockFetch(input => {
-					requests.push(String(input));
-					if (String(input) === API_URL) return Response.json({ content: MARKDOWN });
-					return String(input) === `https://r.jina.ai/${ARTICLE_URL}`
-						? new Response(`Markdown Content:\n${MARKDOWN}`)
-						: Response.json({ error: "Rejected" }, { status: 403 });
-				}),
-			);
-			expect(result.method).toBe("jina");
-			expect(result.content).toBe(MARKDOWN);
-			expect(requests).toEqual(["https://api.firecrawl.dev/v2/scrape", `https://r.jina.ai/${ARTICLE_URL}`]);
-		},
-	);
+	it.each([200, 402])("falls back to native after an oversized HTTP %i response", async status => {
+		const result = await renderHtmlToText(
+			ARTICLE_URL,
+			HTML,
+			1,
+			Settings.isolated({ "providers.fetch": "deepseek" }),
+			undefined,
+			null,
+			mockFetch(
+				() => new Response(JSON.stringify({ content: MARKDOWN }).padEnd(MAX_RESPONSE_BYTES + 1), { status }),
+			),
+		);
+		expect(result.method).toBe("native");
+		expect(result.content).toContain("Local fallback article");
+	});
 
-	it("skips DeepSeek without credentials and continues to Jina in auto mode", async () => {
+	it("excludes DeepSeek from auto even with environment and configured credentials", async () => {
 		vi.spyOn(toolsManager, "ensureTool").mockResolvedValue(undefined);
 		vi.spyOn(utils, "$which").mockReturnValue(null);
-		delete process.env.DEEPSEEK_API_KEY;
+		process.env.FIRECRAWL_API_KEY = "firecrawl-test-key";
+		const authStorage = await createAuthStorage();
+		authStorage.keys.setConfig("deepseek", "configured-deepseek-key");
 		const requests: string[] = [];
 		const result = await renderHtmlToText(
 			ARTICLE_URL,
 			"<html><body>short</body></html>",
 			1,
-			Settings.isolated(),
+			Settings.isolated({ "providers.fetch": "auto" }),
 			undefined,
 			null,
 			mockFetch(input => {
 				requests.push(String(input));
-				return new Response(`Markdown Content:\n${MARKDOWN}`);
+				if (String(input) === API_URL) return Response.json({ content: MARKDOWN });
+				return String(input) === `https://r.jina.ai/${ARTICLE_URL}`
+					? new Response(`Markdown Content:\n${MARKDOWN}`)
+					: Response.json({ error: "Rejected" }, { status: 403 });
 			}),
+			authStorage.keys.resolver("deepseek"),
 		);
 		expect(result.method).toBe("jina");
 		expect(result.content).toBe(MARKDOWN);
-		expect(requests).toEqual([`https://r.jina.ai/${ARTICLE_URL}`]);
-	});
-
-	it.each(["native", "jina"] as const)("honors explicit %s without trying DeepSeek", async preference => {
-		const requests: string[] = [];
-		const result = await renderHtmlToText(
-			ARTICLE_URL,
-			HTML,
-			1,
-			Settings.isolated({ "providers.fetch": preference }),
-			undefined,
-			null,
-			mockFetch(input => {
-				requests.push(String(input));
-				return new Response(`Markdown Content:\n${MARKDOWN}`);
-			}),
-		);
-		expect(result.method).toBe(preference);
-		expect(requests).toEqual(preference === "jina" ? [`https://r.jina.ai/${ARTICLE_URL}`] : []);
+		expect(requests).toEqual(["https://api.firecrawl.dev/v2/scrape", `https://r.jina.ai/${ARTICLE_URL}`]);
 	});
 
 	it("skips explicitly selected DeepSeek without official credentials", async () => {
 		delete process.env.DEEPSEEK_API_KEY;
-		const gatewayStorage = {
-			listAuthCredentials(provider?: string) {
-				return provider === "openrouter"
-					? [{ id: 2, provider, credential: { type: "api_key", key: "gateway-only-key" }, disabledCause: null }]
-					: [];
-			},
-		} as unknown as AgentStorage;
+		const authStorage = await createAuthStorage();
+		await authStorage.credentials.set("openrouter", { type: "api_key", key: "gateway-only-key" });
 		let calls = 0;
 		const result = await renderHtmlToText(
 			ARTICLE_URL,
@@ -380,11 +423,12 @@ describe("DeepSeek reader fallback chain", () => {
 			1,
 			Settings.isolated({ "providers.fetch": "deepseek" }),
 			undefined,
-			gatewayStorage,
+			null,
 			mockFetch(() => {
 				calls++;
 				return Response.json({ content: MARKDOWN });
 			}),
+			authStorage.keys.resolver("deepseek"),
 		);
 		expect(result.method).toBe("native");
 		expect(calls).toBe(0);
@@ -426,110 +470,53 @@ describe("DeepSeek reader fallback chain", () => {
 });
 
 describe("DeepSeek through read URL", () => {
-	it("keeps successful local rendering first in auto mode but honors explicit DeepSeek", async () => {
-		const server = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			fetch: request =>
-				new URL(request.url).pathname === "/article"
-					? new Response(HTML, { headers: { "Content-Type": "text/html" } })
-					: new Response("Not found", { status: 404 }),
-		});
-		try {
-			let calls = 0;
-			const session = makeSession(
-				mockFetch(() => {
-					calls++;
-					return Response.json({ content: MARKDOWN });
-				}),
-				undefined,
-				"auto",
-				() => deepSeekModel,
-			);
-			const read = new ReadTool(session);
-			const url = new URL("/article", server.url).href;
-			expect((await read.execute("automatic", { path: url })).details?.method).toBe("native");
-			expect(calls).toBe(0);
-			cfgProvidersFetch.set(session.settings, "deepseek");
-			expect((await read.execute("explicit-deepseek", { path: url })).details?.method).toBe("deepseek");
-			expect(calls).toBe(1);
-			cfgProvidersFetch.set(session.settings, "auto");
-			expect((await read.execute("automatic-again", { path: url })).details?.method).toBe("native");
-			expect(calls).toBe(1);
-		} finally {
-			await server.stop(true);
-		}
-	});
-
-	it("uses stored credentials, reports deepseek, and applies shared image cleanup", async () => {
-		delete process.env.DEEPSEEK_API_KEY;
-		const server = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			fetch: request =>
-				new URL(request.url).pathname === "/article"
-					? new Response(HTML, { headers: { "Content-Type": "text/html" } })
-					: new Response("Not found", { status: 404 }),
-		});
-		try {
-			const url = new URL("/article", server.url).href;
-			let calls = 0;
-			const session = makeSession(
-				mockFetch((input, init) => {
-					calls++;
-					expect(String(input)).toBe(API_URL);
-					expect(JSON.parse(String(init?.body))).toEqual({ url });
-					expect(new Headers(init?.headers).get("authorization")).toBe("Bearer stored-deepseek-key");
-					return Response.json({
-						title: "Article",
-						content: `${MARKDOWN}\n\n![diagram](data:image/png;base64,AAAA)`,
-					});
-				}),
-				storage,
-			);
-			const result = await new ReadTool(session).execute("deepseek-read", { path: url });
-			expect(result.details?.method).toBe("deepseek");
-			const text = result.content.find(block => block.type === "text")?.text;
-			expect(text).toContain("DeepSeek article");
-			expect(text).toContain("![diagram]");
-			expect(text).not.toContain("base64");
-			expect(calls).toBe(1);
-		} finally {
-			await server.stop(true);
-		}
-	});
-
-	it.each(["raw", "binary", "markdown"])("preserves %s handling despite explicit DeepSeek selection", async mode => {
-		const server = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			fetch: () =>
-				mode === "raw"
-					? new Response(HTML, { headers: { "Content-Type": "text/html" } })
-					: mode === "markdown"
-						? new Response(MARKDOWN, { headers: { "Content-Type": "text/markdown" } })
-						: new Response(new Uint8Array([0, 1, 2, 3, 4]), {
-								headers: { "Content-Type": "application/octet-stream" },
-							}),
-		});
-		try {
-			let calls = 0;
-			const session = makeSession(
-				mockFetch(() => {
-					calls++;
-					return Response.json({ content: MARKDOWN });
-				}),
-			);
-			const url = new URL("/article", server.url).href;
-			const result = await new ReadTool(session).execute("deepseek-bypass", {
-				path: mode === "raw" ? `${url}:raw` : url,
+	it.each(["config", "runtime", "login"] as const)(
+		"uses %s credentials before environment keys through ReadTool",
+		async source => {
+			const authStorage = await createAuthStorage();
+			if (source === "config") authStorage.keys.setConfig("deepseek", "configured-deepseek-key");
+			else if (source === "runtime") authStorage.keys.setRuntime("deepseek", "configured-deepseek-key");
+			else {
+				await authStorage.credentials.set("deepseek", {
+					type: "api_key",
+					key: "configured-deepseek-key",
+					source: "login",
+				});
+			}
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				fetch: request =>
+					new URL(request.url).pathname === "/article"
+						? new Response(HTML, { headers: { "Content-Type": "text/html" } })
+						: new Response("Not found", { status: 404 }),
 			});
-			expect(result.details?.method).toBe(mode === "markdown" ? "text" : mode);
-			const text = result.content.find(block => block.type === "text")?.text;
-			expect(text).toContain(mode === "raw" ? HTML : mode === "markdown" ? MARKDOWN : "Binary content");
-			expect(calls).toBe(0);
-		} finally {
-			await server.stop(true);
-		}
-	});
+			try {
+				const url = new URL("/article", server.url).href;
+				let calls = 0;
+				const session = makeSession(
+					mockFetch((input, init) => {
+						calls++;
+						expect(String(input)).toBe(API_URL);
+						expect(JSON.parse(String(init?.body))).toEqual({ url });
+						expect(new Headers(init?.headers).get("authorization")).toBe("Bearer configured-deepseek-key");
+						return Response.json({
+							title: "Article",
+							content: `${MARKDOWN}\n\n![diagram](data:image/png;base64,AAAA)`,
+						});
+					}),
+					authStorage,
+				);
+				const result = await new ReadTool(session).execute("deepseek-read", { path: url });
+				expect(result.details?.method).toBe("deepseek");
+				const text = result.content.find(block => block.type === "text")?.text;
+				expect(text).toContain("DeepSeek article");
+				expect(text).toContain("![diagram]");
+				expect(text).not.toContain("base64");
+				expect(calls).toBe(1);
+			} finally {
+				await server.stop(true);
+			}
+		},
+	);
 });

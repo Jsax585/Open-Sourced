@@ -1293,7 +1293,7 @@ export const cfgProvidersFetch = register({
 				value: "deepseek",
 				label: "DeepSeek",
 				description:
-					"Explicit opt-in; tries first with normal fallbacks; uses DEEPSEEK_API_KEY or /login deepseek; successful requests may be billed",
+					"Explicit opt-in; uses configured DeepSeek credentials with normal fallbacks; successful requests may be billed",
 			},
 			{ value: "jina", label: "Jina", description: "Uses r.jina.ai reader (JINA_API_KEY optional)" },
 		],
