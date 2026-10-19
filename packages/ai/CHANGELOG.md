@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed custom and namespaced Responses tools losing their declarations and call data when the existing gateway route replays requests to Codex ([#16261](https://github.com/can1357/oh-my-pi/issues/16261)).
+- Fixed custom and namespaced Responses tools losing their declarations and call data when the existing gateway route replays requests to Codex ([#16272](https://github.com/can1357/oh-my-pi/pull/16272) by [@mgpai22](https://github.com/mgpai22); fixes [#16261](https://github.com/can1357/oh-my-pi/issues/16261)).
 
 ## [18.12.2] - 2026-10-18
 
