@@ -250,6 +250,7 @@ const BRIDGED_INPUT_ITEM_TYPES: Record<string, true> = {
 	custom_tool_call_output: true,
 	computer_call: true,
 	computer_call_output: true,
+	additional_tools: true,
 };
 
 const unbridgedInputItemSchema = type({ type: "string" }).narrow((value, ctx) =>
@@ -317,11 +318,19 @@ const customToolSchema = type({
 	),
 });
 
+const namespaceFunctionLeafSchema = type({
+	type: "'function'",
+	name: "string >= 1",
+	"description?": "string | null",
+	"parameters?": "unknown | null",
+	"strict?": "boolean | null",
+	"defer_loading?": "boolean",
+});
 const namespaceToolSchema = type({
 	type: "'namespace'",
 	name: "string >= 1",
-	"description?": "string",
-	tools: toolSchema.or(customToolSchema).array(),
+	"description?": "string | null",
+	tools: namespaceFunctionLeafSchema.or(customToolSchema).array(),
 });
 
 const computerToolSchema = type({ type: "'computer'" });
@@ -354,6 +363,7 @@ export const toolChoiceSchema = type("'auto' | 'none' | 'required'")
 		type({
 			type: "'function'",
 			name: "string >= 1",
+			"namespace?": "string >= 1",
 		}),
 	)
 	.or(

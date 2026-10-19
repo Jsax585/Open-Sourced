@@ -10,6 +10,7 @@
  */
 
 import { type } from "@oh-my-pi/omptype";
+import { OPENAI_HEADERS } from "@oh-my-pi/pi-catalog/wire/codex";
 import { logger, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import { resolvePromptCacheKey } from "../auth-gateway/http";
 import type { AuthGatewayStreamControl, AuthGatewayParsedRequest as ParsedRequest } from "../auth-gateway/types";
@@ -40,7 +41,6 @@ import {
 	type OpenAIResponsesInputImageBlock,
 	type OpenAIResponsesOutputContent,
 	type OpenAIResponsesReasoningItem,
-	type OpenAIResponsesTool,
 	openaiResponsesRequestSchema,
 	responsesToolSchema,
 } from "./openai-responses-server-schema";
@@ -219,7 +219,7 @@ type ParsedToolChoice =
 	| "auto"
 	| "none"
 	| "required"
-	| { type: "function"; name: string }
+	| { type: "function"; name: string; namespace?: string }
 	| { type: "custom"; name: string }
 	| {
 			type:
@@ -237,12 +237,22 @@ function mapToolChoice(value: ParsedToolChoice | undefined): ParsedRequest["opti
 	if (value === undefined) return undefined;
 	if (value === "auto" || value === "none" || value === "required") return value;
 	if ("type" in value) {
-		if (value.type === "function" || value.type === "custom") return { name: value.name };
+		if (value.type === "function") {
+			if (value.namespace) return { name: `${value.namespace}.${value.name}` };
+			return { name: value.name };
+		}
+		if (value.type === "custom") return { name: value.name };
 		if (value.type === "computer") return { type: "computer" };
 		// Other hosted tools + allowed_tools are not surfaced to pi-ai.
 		return "auto";
 	}
 	return undefined;
+}
+
+function projectNamespaceLeafParameters(value: unknown): Tool["parameters"] {
+	if (value === false) return { not: {} } as Tool["parameters"];
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return {} as Tool["parameters"];
+	return value as Tool["parameters"];
 }
 
 function buildTools(tools: unknown[] | undefined): Tool[] | undefined {
@@ -253,7 +263,10 @@ function buildTools(tools: unknown[] | undefined): Tool[] | undefined {
 		if (validated instanceof type.errors) {
 			throw new AIError.ValidationError(`openai-responses: invalid tool declaration: ${validated.summary}`);
 		}
-		const t = validated as unknown as OpenAIResponsesTool;
+		const t: typeof responsesToolSchema.infer = validated;
+		// Hosted/built-in entries (web_search_preview, file_search, …) validate via
+		// the opaque fallback and are skipped by this bridge.
+		if (t.type !== "function" && t.type !== "custom" && t.type !== "namespace" && t.type !== "computer") continue;
 		if (t.type === "computer") {
 			out.push({
 				name: "computer",
@@ -263,43 +276,78 @@ function buildTools(tools: unknown[] | undefined): Tool[] | undefined {
 			});
 			continue;
 		}
-		if (t.type === "namespace") {
+		if (t.type === "namespace" && "tools" in t && "name" in t) {
 			for (const fn of t.tools) {
-				if (fn.type !== "function")
+				if (typeof fn !== "object" || fn === null || !("type" in fn) || fn.type !== "function" || !("name" in fn)) {
 					throw new AIError.ValidationError("openai-responses: namespace custom tools are unsupported");
+				}
+				const leafName = fn.name;
+				if (typeof leafName !== "string") {
+					throw new AIError.ValidationError("openai-responses: namespace custom tools are unsupported");
+				}
+				const leafDescription =
+					"description" in fn && (typeof fn.description === "string" || fn.description === null)
+						? fn.description
+						: undefined;
+				const leafParameters = "parameters" in fn ? fn.parameters : undefined;
+				const leafStrict =
+					"strict" in fn && (typeof fn.strict === "boolean" || fn.strict === null) ? fn.strict : undefined;
 				out.push({
-					name: `${t.name}.${fn.name}`,
-					description: fn.description ?? t.description ?? "",
-					parameters: (fn.parameters ?? {}) as Tool["parameters"],
-					strict: fn.strict ?? undefined,
+					name: `${t.name}.${leafName}`,
+					description: leafDescription ?? t.description ?? "",
+					parameters: projectNamespaceLeafParameters(leafParameters),
+					strict: leafStrict ?? undefined,
 					namespace: t.name,
-					responsesDefinition: fn as Extract<OpenAIResponsesTool, { type: "function" }>,
-					responsesNamespaceDefinition: t,
+					responsesDefinition: fn as Tool["responsesDefinition"] & { type: "function" },
+					responsesNamespaceDefinition: {
+						...t,
+						description: t.description ?? undefined,
+					} as Tool["responsesNamespaceDefinition"] & {},
 				});
 			}
 			continue;
 		}
-		if (t.type === "custom") {
+		if (t.type === "custom" && "name" in t) {
 			out.push({
 				name: t.name,
-				description: t.description ?? "",
+				description: "description" in t && typeof t.description === "string" ? t.description : "",
 				parameters: {} as Tool["parameters"],
 				customWireName: t.name,
 				customFormat:
-					t.format?.type === "grammar" ? { syntax: t.format.syntax, definition: t.format.definition } : undefined,
-				responsesDefinition: t,
+					"format" in t &&
+					typeof t.format === "object" &&
+					t.format !== null &&
+					"type" in t.format &&
+					t.format.type === "grammar" &&
+					"syntax" in t.format &&
+					"definition" in t.format
+						? { syntax: t.format.syntax as "lark" | "regex", definition: t.format.definition as string }
+						: undefined,
+				responsesDefinition: t as Extract<Tool["responsesDefinition"], { type: "custom" }>,
 			});
 			continue;
 		}
 		// Skip hosted tools that this bridge cannot execute.
-		if (t.type !== "function") continue;
-		const fn = t as Extract<OpenAIResponsesTool, { type: "function" }>;
+		if (t.type !== "function" || !("name" in t)) continue;
+		const fn = t;
+		const fnName = fn.name;
+		if (typeof fnName !== "string") continue;
+		const fnDescription = "description" in fn && typeof fn.description === "string" ? fn.description : "";
+		const fnParameters =
+			"parameters" in fn &&
+			typeof fn.parameters === "object" &&
+			fn.parameters !== null &&
+			!Array.isArray(fn.parameters)
+				? fn.parameters
+				: {};
 		const tool: Tool = {
-			name: fn.name,
-			description: fn.description ?? "",
-			parameters: (fn.parameters ?? {}) as Tool["parameters"],
+			name: fnName,
+			description: fnDescription,
+			parameters: fnParameters as Tool["parameters"],
 		};
-		if (fn.strict !== undefined && fn.strict !== null) tool.strict = fn.strict;
+		if ("strict" in fn && (typeof fn.strict === "boolean" || fn.strict === null)) {
+			if (fn.strict !== undefined && fn.strict !== null) tool.strict = fn.strict;
+		}
 		out.push(tool);
 	}
 	return out.length > 0 ? out : undefined;
@@ -409,7 +457,7 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 	const now = Date.now();
 	const systemPrompt: string[] = [];
 	let additionalTools: unknown[] | undefined;
-	let responsesLite = headers?.get("x-openai-internal-codex-responses-lite") === "true";
+	let responsesLite = headers?.get(OPENAI_HEADERS.RESPONSES_LITE) === "true";
 
 	if (typeof data.instructions === "string" && data.instructions.length > 0) {
 		systemPrompt.push(data.instructions);

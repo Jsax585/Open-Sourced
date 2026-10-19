@@ -75,6 +75,8 @@ const compat: ResolvedOpenAICompat = {
 	rejectRootObjectUnion: false,
 	retryWithoutStrictOnGrammarError: false,
 	supportsPromptCacheKey: false,
+	supportsResponsesNamespaces: false,
+	supportsNativeResponsesOutput: false,
 };
 
 function makeModel<TApi extends Api>(api: TApi, provider: Model["provider"]): Model<TApi> {

@@ -1247,15 +1247,27 @@ export function normalizeCodexToolChoice(
 	if (typeof choice === "string") return choice;
 	const allowFreeform = model ? model.applyPatchToolType === "freeform" : false;
 	const mapName = (name: string): Record<string, string> | undefined => {
-		const directTool = tools.find(tool => tool.name === name);
-		if (!directTool) return undefined;
+		const directTool =
+			tools.find(tool => tool.name === name) ??
+			(allowFreeform
+				? tools.find(tool => tool.customWireName === name && tool.customFormat !== undefined)
+				: undefined);
+		if (!directTool) {
+			const leafCandidates = tools.filter(
+				tool => tool.namespace !== undefined && tool.name === `${tool.namespace}.${name}`,
+			);
+			if (leafCandidates.length > 1) {
+				throw new AIError.ValidationError(`Codex tool choice ${name} is ambiguous across namespaces`);
+			}
+			return undefined;
+		}
 		if (directTool.responsesDefinition?.type === "namespace") {
 			throw new AIError.ValidationError("Codex namespace tool choice must select a leaf tool");
 		}
 		if (directTool.responsesDefinition?.type === "custom")
-			return { type: "custom", name: directTool.customWireName ?? name };
+			return { type: "custom", name: directTool.customWireName ?? directTool.name };
 		if (allowFreeform && directTool.customFormat) {
-			return { type: "custom", name: directTool.customWireName ?? name };
+			return { type: "custom", name: directTool.customWireName ?? directTool.name };
 		}
 		if (directTool.native?.type === "computer" && model?.supportsComputerUse === true) return { type: "computer" };
 		return {
@@ -1605,6 +1617,12 @@ export async function buildTransformedCodexRequestBody(
 			const toolChoice = normalizeCodexToolChoice(options.toolChoice, context.tools, model);
 			if (toolChoice) {
 				params.tool_choice = toolChoice;
+			} else if (
+				context.tools.some(tool => tool.responsesDefinition !== undefined || tool.namespace !== undefined) &&
+				typeof options.toolChoice === "object" &&
+				"name" in options.toolChoice
+			) {
+				throw new AIError.ValidationError("Codex tool choice has no matching declaration");
 			}
 		}
 	}
@@ -2105,6 +2123,11 @@ function isJsonWhitespaceOnly(value: string): boolean {
 	return true;
 }
 
+function qualifiedNamespacedToolName(leaf: string, namespace: string | undefined): string {
+	if (!namespace) return leaf;
+	return leaf.startsWith(`${namespace}.`) ? leaf : `${namespace}.${leaf}`;
+}
+
 function createOutputBlockForItem(item: CodexEventItem): CodexOutputBlock | null {
 	if (item.type === "reasoning") {
 		return { type: "thinking", thinking: "" };
@@ -2114,11 +2137,19 @@ function createOutputBlockForItem(item: CodexEventItem): CodexOutputBlock | null
 		return { type: "text", text: "", textSignature: encodeTextSignatureV1(item.id, phase) };
 	}
 	if (item.type === "function_call") {
+		const namespace = item.namespace;
 		return {
 			type: "toolCall",
 			id: encodeResponsesToolCallId(item.call_id, item.id),
-			name: item.name,
+			name: qualifiedNamespacedToolName(item.name, namespace),
 			arguments: {},
+			...(namespace ? { namespace } : {}),
+			...(item.id ? { responsesItemId: item.id } : {}),
+			// An empty added-item payload carries no arguments; storing it would
+			// shadow delta-accumulated arguments on replay.
+			...(typeof item.arguments === "string" && item.arguments.length > 0
+				? { responsesArguments: item.arguments }
+				: {}),
 			[kStreamingPartialJson]: item.arguments || "",
 		};
 	}
@@ -2136,12 +2167,18 @@ function createOutputBlockForItem(item: CodexEventItem): CodexOutputBlock | null
 		// Wire name flows through unchanged; the agent-loop dispatcher also
 		// matches `Tool.customWireName`. Reuse `partialJson` as the
 		// accumulation buffer for the raw input string.
+		const namespace = "namespace" in item ? item.namespace : undefined;
 		return {
 			type: "toolCall",
 			id: encodeResponsesToolCallId(item.call_id, item.id),
 			name: item.name,
 			arguments: { input: item.input ?? "" },
 			customWireName: item.name,
+			...(typeof namespace === "string" && namespace ? { namespace } : {}),
+			...(item.id ? { responsesItemId: item.id } : {}),
+			// An empty added-item payload carries no input; storing it would
+			// shadow delta-accumulated input on replay.
+			...(typeof item.input === "string" && item.input.length > 0 ? { responsesArguments: item.input } : {}),
 			[kStreamingPartialJson]: item.input ?? "",
 		};
 	}
@@ -2675,22 +2712,33 @@ class CodexStreamProcessor {
 
 		if (item.type === "function_call") {
 			const partial = block?.type === "toolCall" ? block[kStreamingPartialJson] : undefined;
+			const namespace = item.namespace;
+			const authoritativeArguments =
+				typeof item.arguments === "string" && item.arguments.length > 0 ? item.arguments : undefined;
 			const toolCall: ToolCall = {
 				type: "toolCall",
 				id: encodeResponsesToolCallId(item.call_id, item.id),
-				name: item.name,
+				name: qualifiedNamespacedToolName(item.name, namespace),
 				// An empty terminal item falls back to what `.delta`/`.done` already delivered.
-				arguments: item.arguments
-					? parseToolCallArguments(item.arguments)
+				arguments: authoritativeArguments
+					? parseToolCallArguments(authoritativeArguments)
 					: block?.type === "toolCall" && !partial
 						? block.arguments
 						: parseToolCallArguments(partial),
+				...(namespace ? { namespace } : {}),
+				...(item.id ? { responsesItemId: item.id } : {}),
+				...(authoritativeArguments ? { responsesArguments: authoritativeArguments } : {}),
 			};
 			item.arguments = replayableToolCallArguments(item.arguments, toolCall.arguments);
 			if (block?.type === "toolCall") {
 				// Persist the authoritative final args on the stored block; the throttled
 				// delta parser may have left block.arguments stale (often `{}`).
 				block.arguments = toolCall.arguments;
+				block.name = toolCall.name;
+				if (namespace) block.namespace = namespace;
+				if (item.id) block.responsesItemId = item.id;
+				if (authoritativeArguments) block.responsesArguments = authoritativeArguments;
+				else delete block.responsesArguments;
 				clearStreamingPartialJson(block);
 			}
 			// Detach so a late/duplicate arguments.delta cannot append to the
@@ -2726,16 +2774,25 @@ class CodexStreamProcessor {
 
 		if (item.type === "custom_tool_call") {
 			const partial = block?.type === "toolCall" ? block[kStreamingPartialJson] : undefined;
-			const rawInput = partial && partial.length > 0 ? partial : (item.input ?? "");
+			const terminalInput = typeof item.input === "string" && item.input.length > 0 ? item.input : undefined;
+			const rawInput = terminalInput ?? (partial && partial.length > 0 ? partial : (item.input ?? ""));
+			const namespace = "namespace" in item && typeof item.namespace === "string" ? item.namespace : undefined;
 			const toolCall: ToolCall = {
 				type: "toolCall",
 				id: encodeResponsesToolCallId(item.call_id, item.id),
 				name: item.name,
 				arguments: { input: rawInput },
 				customWireName: item.name,
+				...(namespace ? { namespace } : {}),
+				...(item.id ? { responsesItemId: item.id } : {}),
+				...(terminalInput ? { responsesArguments: terminalInput } : {}),
 			};
 			if (block?.type === "toolCall") {
 				block.arguments = { input: rawInput };
+				if (namespace) block.namespace = namespace;
+				if (item.id) block.responsesItemId = item.id;
+				if (terminalInput) block.responsesArguments = terminalInput;
+				else delete block.responsesArguments;
 				clearStreamingPartialJson(block);
 			}
 			runtime.closeOpenItem(entry);
@@ -5166,7 +5223,8 @@ type CodexToolPayload =
 			name: string;
 			namespace?: string;
 			description?: string;
-			format: { type: "grammar" | "text"; syntax?: "lark" | "regex"; definition?: string };
+			defer_loading?: boolean;
+			format?: { type: "grammar" | "text"; syntax?: "lark" | "regex"; definition?: string };
 	  }
 	| { type: "namespace"; name: string; description?: string; tools: unknown[] };
 
@@ -5201,7 +5259,34 @@ export function convertOpenAICodexResponsesTools(
 				group.tools.push(tool.responsesDefinition);
 				namespaces.set(tool.namespace, group);
 			} else if (tool.responsesDefinition) {
-				payloads.push(tool.responsesDefinition as unknown as CodexToolPayload);
+				const definition = tool.responsesDefinition;
+				if (definition.type === "function") {
+					const parameters = definition.parameters;
+					payloads.push({
+						type: "function",
+						name: definition.name,
+						...(typeof definition.description === "string" ? { description: definition.description } : {}),
+						parameters:
+							typeof parameters === "object" && parameters !== null && !Array.isArray(parameters)
+								? (parameters as Record<string, unknown>)
+								: parameters === false
+									? { not: {} }
+									: {},
+						...(definition.strict === true
+							? { strict: true }
+							: definition.strict === false
+								? { strict: false }
+								: {}),
+					});
+				} else if (definition.type === "custom") {
+					payloads.push({
+						type: "custom",
+						name: definition.name,
+						...(typeof definition.description === "string" ? { description: definition.description } : {}),
+						...(definition.defer_loading === true ? { defer_loading: true } : {}),
+						...(definition.format ? { format: definition.format } : {}),
+					});
+				} else throw new AIError.ValidationError(`Codex: unsupported tool definition for ${tool.name}`);
 			} else {
 				payloads.push(...convertOpenAICodexResponsesTools([tool], model));
 			}

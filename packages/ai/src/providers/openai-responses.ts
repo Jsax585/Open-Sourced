@@ -1891,6 +1891,12 @@ export function convertTools(
 	const allowFreeform = supportsFreeformApplyPatch(model);
 	const rejectRootObjectUnion = model.compat.rejectRootObjectUnion;
 	const out: OpenAITool[] = [];
+	const namespaced = tools.find(tool => tool.namespace !== undefined);
+	if (namespaced) {
+		throw new AIError.ValidationError(
+			`openai-responses: namespaced tool ${namespaced.name} requires a transport with namespace support`,
+		);
+	}
 	for (const tool of tools) {
 		if (tool.native?.type === "computer" && model.supportsComputerUse === true) {
 			out.push({ type: "computer" });

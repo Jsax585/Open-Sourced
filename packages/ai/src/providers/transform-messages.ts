@@ -391,6 +391,38 @@ function isMalformedToolCall(block: { id: string; name: string }, allowedName: R
 	return isMalformedToolCallId(block.id) || isMalformedToolCallName(block.name, allowedName, maxLength);
 }
 
+function supportsNamespacedToolCalls(model: Model): boolean {
+	return (
+		"compat" in model &&
+		!!model.compat &&
+		"supportsResponsesNamespaces" in model.compat &&
+		model.compat.supportsResponsesNamespaces === true
+	);
+}
+
+function isMalformedReplayToolCall(
+	block: { id: string; name: string; namespace?: string },
+	model: Model,
+	allowedName: RegExp,
+	maxLength: number,
+): boolean {
+	if (block.namespace !== undefined) {
+		if (!supportsNamespacedToolCalls(model)) return true;
+		// Internal calls may carry the qualified name (`clock.sleep`) or the
+		// wire leaf (`sleep`); both are valid beside the namespace.
+		const leaf = block.name.startsWith(`${block.namespace}.`)
+			? block.name.slice(block.namespace.length + 1)
+			: block.name;
+		return (
+			isMalformedToolCallId(block.id) ||
+			isMalformedToolCallName(block.namespace, allowedName, maxLength) ||
+			leaf.length === 0 ||
+			isMalformedToolCallName(leaf, allowedName, maxLength)
+		);
+	}
+	return isMalformedToolCall(block, allowedName, maxLength);
+}
+
 /**
  * Drop assistant `toolCall` blocks with an empty / whitespace-only `id` or a `name`
  * the target provider cannot declare (see {@link isMalformedToolCallName}),
@@ -422,7 +454,7 @@ function sanitizeMalformedToolCalls(messages: Message[], model: Model): Message[
 	outer: for (const msg of messages) {
 		if (msg.role !== "assistant") continue;
 		for (const block of msg.content) {
-			if (block.type === "toolCall" && isMalformedToolCall(block, allowedName, maxLength)) {
+			if (block.type === "toolCall" && isMalformedReplayToolCall(block, model, allowedName, maxLength)) {
 				hasMalformed = true;
 				break outer;
 			}
@@ -448,7 +480,7 @@ function sanitizeMalformedToolCalls(messages: Message[], model: Model): Message[
 			const filtered: AssistantMessage["content"] = [];
 			for (const block of msg.content) {
 				if (block.type === "toolCall") {
-					const malformed = isMalformedToolCall(block, allowedName, maxLength);
+					const malformed = isMalformedReplayToolCall(block, model, allowedName, maxLength);
 					const queue = dropQueues.get(block.id);
 					if (queue) queue.push(malformed);
 					else dropQueues.set(block.id, [malformed]);
@@ -499,7 +531,9 @@ export function isSurvivingAssistant(msg: AssistantMessage, model?: Model): bool
 	const { allowedName, maxLength } = toolCallNameLimits(model);
 	return msg.content.some(block =>
 		block.type === "toolCall"
-			? !isMalformedToolCall(block, allowedName, maxLength)
+			? model
+				? !isMalformedReplayToolCall(block, model, allowedName, maxLength)
+				: !isMalformedToolCall(block, allowedName, maxLength)
 			: !isTruncatedStop || block.type === "text",
 	);
 }

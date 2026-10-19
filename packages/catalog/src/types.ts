@@ -550,6 +550,10 @@ export interface OpenAICompat {
 	strictResponsesPairing?: boolean;
 	/** Whether the Responses API accepts the `detail: "original"` image hint. Default: true for OpenAI, Azure OpenAI, and Codex; false for other hosts. Explicit overrides win. */
 	supportsImageDetailOriginal?: boolean;
+	/** Whether the Responses transport supports namespaced tool declarations and namespaced call identity. Default: rule-detected (true for the Codex transport). */
+	supportsResponsesNamespaces?: boolean;
+	/** Whether replay may reuse the client's native Responses `output` for tool results. Default: rule-detected (true for the Codex transport). */
+	supportsNativeResponsesOutput?: boolean;
 	/**
 	 * Whether the Responses endpoint accepts `configuration_update` input items
 	 * that change `reasoning.effort` mid-conversation while the request-level
@@ -1101,6 +1105,8 @@ export interface ResolvedOpenAIResponsesCompat extends ResolvedOpenAISharedCompa
 	supportsLongPromptCacheRetention: boolean;
 	strictResponsesPairing: boolean;
 	supportsImageDetailOriginal: boolean;
+	supportsResponsesNamespaces: boolean;
+	supportsNativeResponsesOutput: boolean;
 	supportsObfuscationOptOut: boolean;
 	/**
 	 * Whether `reasoning.context: "all_turns"` (full cross-turn reasoning
