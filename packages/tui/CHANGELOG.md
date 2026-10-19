@@ -4,9 +4,9 @@
 
 ### Added
 
-- Added `PlanReviewOverlayCallbacks.onPickExecutionModel` (`m` key) and `PlanReviewOverlay.setExecutionNotice()` to show a host-pinned execution model under the tier slider
+- Added `PlanReviewOverlayCallbacks.onPickExecutionModel` (`m` key) and `PlanReviewOverlay.setExecutionNotice()` to show a host-pinned execution model under the tier slider ([#16358](https://github.com/can1357/oh-my-pi/pull/16358) by [@Shadorain](https://github.com/Shadorain))
 - `AutocompleteItem.descriptionMatch` marks a slash command matched only through its description; `Editor` Enter no longer applies such a row unless the user moved the selection onto it ([#16265](https://github.com/can1357/oh-my-pi/issues/16265))
-- Added `SlashCommand.isAvailable`: a live gate that hides a command from the name list while it returns `false`
+- Added `SlashCommand.isAvailable`: a live gate that hides a command from the name list while it returns `false` ([#16358](https://github.com/can1357/oh-my-pi/pull/16358) by [@Shadorain](https://github.com/Shadorain))
 
 ### Fixed
 

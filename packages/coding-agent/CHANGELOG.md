@@ -4,11 +4,11 @@
 
 ### Added
 
-- Added `/exec-model` and the Plan Review `m` key to pick any model, through the `/switch` model picker, as the plan's execution model; it applies when you approve the plan and overrides the tier slider
+- Added `/exec-model` and the Plan Review `m` key to pick any model, through the `/switch` model picker, as the plan's execution model; it applies when you approve the plan and overrides the tier slider ([#16358](https://github.com/can1357/oh-my-pi/pull/16358) by [@Shadorain](https://github.com/Shadorain))
 
 ### Changed
 
-- `/plan-review` and `/exec-model` are now listed in slash-command autocomplete only while plan mode is on
+- `/plan-review` and `/exec-model` are now listed in slash-command autocomplete only while plan mode is on ([#16358](https://github.com/can1357/oh-my-pi/pull/16358) by [@Shadorain](https://github.com/Shadorain))
 
 ### Fixed
 
