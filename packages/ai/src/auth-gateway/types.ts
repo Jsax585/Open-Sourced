@@ -55,6 +55,8 @@ export interface AuthGatewayParsedRequestOptions {
 	parallelToolCalls?: boolean;
 	/** OpenAI Responses fields requested in the response payload. */
 	include?: OpenAIResponseInclude[];
+	/** Explicit OpenAI Responses Lite transport request. */
+	responsesLite?: boolean;
 	// ── Reasoning ─────────────────────────────────────────────────────────
 	/** Effort-level reasoning request (OpenAI Responses / Chat `reasoning_effort`). */
 	reasoning?: Effort;

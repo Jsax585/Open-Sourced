@@ -18,6 +18,7 @@ import type {
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import { createCodexModel } from "./helpers";
+import { parseRequest } from "@oh-my-pi/pi-ai/providers/openai-responses-server";
 
 beforeAll(() => configureCredentialRedaction(true));
 afterAll(() => configureCredentialRedaction(false));
@@ -330,6 +331,115 @@ describe("openai-codex Responses Lite input shaping", () => {
 
 		const noTools = await transformRequestBody({ model: model.id }, model, { responsesLite: true });
 		expect(noTools.parallel_tool_calls).toBe(false);
+	});
+	it("keeps explicitly marked native item IDs but strips generated replay IDs", async () => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const input = [
+			{ type: "function_call", id: "fc_native", call_id: "call_native", name: "sleep", arguments: "{}" },
+			{ type: "function_call_output", call_id: "call_native", output: "done" },
+		];
+		const native = await transformRequestBody({ model: model.id, input: structuredClone(input) }, model, {
+			nativeResponsesItemIds: new Set(["fc_native"]),
+		});
+		expect(native.input?.[0]?.id).toBe("fc_native");
+
+		const generated = await transformRequestBody({ model: model.id, input: structuredClone(input) }, model, {});
+		expect(generated.input?.[0]).not.toHaveProperty("id");
+	});
+	it("preserves custom and namespaced inventory through Lite parsing and Codex serialization", async () => {
+		const model = createCodexModel("gpt-5.6-terra");
+		const tools = [
+			{ type: "custom", name: "exec", format: { type: "text" } },
+			{
+				type: "namespace",
+				name: "clock",
+				description: "Time tools",
+				tools: [
+					{
+						type: "function",
+						name: "sleep",
+						parameters: { type: "object", properties: { ms: { type: "number" } } },
+					},
+				],
+			},
+		];
+		const parsed = parseRequest({
+			model: model.id,
+			input: [
+				{ type: "additional_tools", role: "developer", tools },
+				{ type: "custom_tool_call", id: "item_exec", call_id: "call_exec", name: "exec", input: "echo hi" },
+				{ type: "custom_tool_call_output", call_id: "call_exec", output: "ok" },
+				{
+					type: "function_call",
+					id: "item_sleep",
+					call_id: "call_sleep",
+					namespace: "clock",
+					name: "sleep",
+					arguments: '{ "ms" : 3 }',
+				},
+				{ type: "function_call_output", call_id: "call_sleep", output: "slept" },
+			],
+		});
+		const calls = parsed.context.messages.flatMap(message =>
+			message.role === "assistant" ? message.content.filter(part => part.type === "toolCall") : [],
+		);
+		expect(calls.map(call => call.responsesItemId)).toEqual(["item_exec", "item_sleep"]);
+		expect(parsed.options.responsesLite).toBe(true);
+		expect(convertCodexResponsesMessages(model, parsed.context)).toContainEqual({
+			type: "custom_tool_call",
+			id: "item_exec",
+			call_id: "call_exec",
+			name: "exec",
+			input: "echo hi",
+		});
+		const body = await buildTransformedCodexRequestBody(model, parsed.context, {
+			responsesLite: parsed.options.responsesLite,
+		});
+		const input = body.input as unknown[];
+		expect(body.tools).toBeUndefined();
+		expect(input[0]).toMatchObject({
+			type: "additional_tools",
+			tools: [
+				{ type: "custom", name: "exec", format: { type: "text" } },
+				{
+					type: "namespace",
+					name: "clock",
+					description: "Time tools",
+					tools: [
+						{
+							type: "function",
+							name: "sleep",
+							parameters: { type: "object", properties: { ms: { type: "number" } } },
+						},
+					],
+				},
+			],
+		});
+		expect(input).toContainEqual({
+			type: "custom_tool_call",
+			id: "item_exec",
+			call_id: "call_exec",
+			name: "exec",
+			input: "echo hi",
+		});
+		expect(input).toContainEqual({
+			type: "custom_tool_call_output",
+			call_id: "call_exec",
+			output: "ok",
+		});
+		expect(input).toContainEqual({
+			type: "function_call",
+			id: "item_sleep",
+			call_id: "call_sleep",
+			namespace: "clock",
+			name: "sleep",
+			arguments: '{ "ms" : 3 }',
+		});
+		expect(input).toContainEqual({
+			type: "function_call_output",
+			call_id: "call_sleep",
+			output: "slept",
+		});
 	});
 
 	it("falls back from forced hosted tool choices without weakening explicit tool-use constraints", async () => {

@@ -43,6 +43,8 @@ export interface CodexRequestOptions {
 	 * Responses so the model can emit independent tool calls in parallel.
 	 */
 	responsesLite?: boolean;
+	/** Native item IDs from validated Responses tool calls; never serialized as an option. */
+	nativeResponsesItemIds?: ReadonlySet<string>;
 }
 
 export interface InputItem {
@@ -174,13 +176,23 @@ function getReasoningConfig(
 	}
 	return config;
 }
-function filterInput(input: InputItem[] | undefined): InputItem[] | undefined {
+function filterInput(
+	input: InputItem[] | undefined,
+	nativeResponsesItemIds?: ReadonlySet<string>,
+): InputItem[] | undefined {
 	if (!Array.isArray(input)) return input;
 
 	return input
 		.filter(item => item.type !== "item_reference")
 		.map(item => {
-			if (item.type === "computer_call") return item;
+			if (
+				item.type === "computer_call" ||
+				((item.type === "function_call" || item.type === "custom_tool_call") &&
+					typeof item.id === "string" &&
+					nativeResponsesItemIds?.has(item.id))
+			) {
+				return item;
+			}
 			if (item.id != null) {
 				const { id: _id, ...rest } = item;
 				return rest as InputItem;
@@ -422,7 +434,7 @@ export async function transformRequestBody(
 	body.stream = true;
 
 	if (body.input && Array.isArray(body.input)) {
-		body.input = filterInput(body.input);
+		body.input = filterInput(body.input, options.nativeResponsesItemIds);
 		if (body.input) {
 			sanitizeInputCallIds(body.input);
 			body.input = repairToolCallPairs(body.input);

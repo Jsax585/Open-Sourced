@@ -741,6 +741,80 @@ describe("openai-responses parseRequest", () => {
 		});
 		expect(systemReplay).toEqual([nativeSystemItem]);
 	});
+	it("preserves custom and namespace declarations and native call metadata", () => {
+		const parsed = parseRequest({
+			model: "gpt-5.6-codex",
+			tools: [
+				{ type: "custom", name: "exec", description: "Run commands", format: { type: "text" } },
+				{
+					type: "namespace",
+					name: "clock",
+					description: "Time tools",
+					tools: [{ type: "function", name: "sleep", parameters: { type: "object" } }],
+				},
+			],
+			input: [
+				{ type: "custom_tool_call", id: "item_exec", call_id: "call_exec", name: "exec", input: "echo hi" },
+				{ type: "custom_tool_call_output", call_id: "call_exec", output: "ok" },
+				{
+					type: "function_call",
+					id: "item_clock",
+					call_id: "call_clock",
+					name: "sleep",
+					namespace: "clock",
+					arguments: '{ "ms" : 3 }',
+				},
+				{ type: "function_call_output", call_id: "call_clock", output: "slept" },
+			],
+		});
+		expect(parsed.context.tools?.map(tool => [tool.name, tool.responsesDefinition?.type])).toEqual([
+			["exec", "custom"],
+			["clock.sleep", "function"],
+		]);
+		const calls = parsed.context.messages.flatMap(message =>
+			message.role === "assistant" ? message.content.filter(part => part.type === "toolCall") : [],
+		);
+		expect(calls.map(call => [call.id, call.customWireName, call.namespace, call.responsesArguments])).toEqual([
+			["call_exec", "exec", undefined, "echo hi"],
+			["call_clock", undefined, "clock", '{ "ms" : 3 }'],
+		]);
+	});
+
+	it("rejects unsupported namespace custom-tool combinations instead of dropping them", () => {
+		expect(() =>
+			parseRequest({
+				model: "gpt-5.6",
+				tools: [
+					{
+						type: "namespace",
+						name: "clock",
+						description: "Time tools",
+						tools: [{ type: "custom", name: "sleep" }],
+					},
+				],
+			}),
+		).toThrow(/namespace custom tools are unsupported/);
+	});
+
+	it("rejects ambiguous top-level and Lite tool inventories", () => {
+		expect(() =>
+			parseRequest({
+				model: "gpt-5.6",
+				tools: [{ type: "function", name: "legacy" }],
+				input: [{ type: "additional_tools", role: "developer", tools: [{ type: "custom", name: "exec" }] }],
+			}),
+		).toThrow(/top-level tools cannot be mixed with additional_tools/);
+	});
+
+	it("preserves legacy function and computer declarations", () => {
+		const parsed = parseRequest({
+			model: "gpt-5.4",
+			tools: [{ type: "function", name: "lookup", parameters: null, strict: null }, { type: "computer" }],
+		});
+		expect(parsed.context.tools?.map(tool => tool.name)).toEqual(["lookup", "computer"]);
+		expect(parsed.context.tools?.[0]?.responsesDefinition).toBeUndefined();
+		expect(parsed.context.tools?.[0]?.parameters).toEqual({});
+	});
 
 	it("rejects malformed known computer items instead of accepting them as opaque hosted items", () => {
 		expect(() =>
@@ -945,6 +1019,98 @@ describe("openai-responses encodeResponse", () => {
 });
 
 describe("openai-responses encodeStream", () => {
+	it("uses a nonempty terminal argument string and preserves streamed namespace identity", async () => {
+		const run = async (terminalArguments: string) => {
+			const stream = new AssistantMessageEventStream();
+			const call = {
+				type: "toolCall" as const,
+				id: "call_sleep",
+				name: "clock.sleep",
+				arguments: { ms: 2 },
+				namespace: "clock",
+				responsesItemId: "item_sleep",
+			};
+			const partial: AssistantMessage = {
+				role: "assistant",
+				api: "openai-responses",
+				provider: "openai",
+				model: "gpt-5",
+				content: [call],
+				usage: zeroUsage(),
+				stopReason: "toolUse",
+				timestamp: 1_700_000_000_000,
+			};
+			queueMicrotask(() => {
+				stream.push({ type: "start", partial });
+				stream.push({ type: "toolcall_start", contentIndex: 0, partial });
+				stream.push({ type: "toolcall_delta", contentIndex: 0, delta: '{"ms":1}', partial });
+				stream.push({
+					type: "toolcall_end",
+					contentIndex: 0,
+					toolCall: { ...call, responsesArguments: terminalArguments },
+					partial,
+				});
+				stream.push({ type: "done", reason: "toolUse", message: partial });
+			});
+			return parseSse(await collectStream(encodeStream(stream, "gpt-5-requested")));
+		};
+		const frames = await run('{ "ms" : 2 }');
+		const done = frames.find(frame => frame.event === "response.output_item.done")!.data as {
+			item: Record<string, unknown>;
+		};
+		expect(done.item).toMatchObject({
+			type: "function_call",
+			id: "item_sleep",
+			call_id: "call_sleep",
+			namespace: "clock",
+			name: "sleep",
+			arguments: '{ "ms" : 2 }',
+		});
+	});
+
+	it("does not replace streamed arguments with an empty terminal representation", async () => {
+		const stream = new AssistantMessageEventStream();
+		const call = {
+			type: "toolCall" as const,
+			id: "call_sleep",
+			name: "clock.sleep",
+			arguments: { ms: 2 },
+			namespace: "clock",
+			responsesItemId: "item_sleep",
+		};
+		const partial: AssistantMessage = {
+			role: "assistant",
+			api: "openai-responses",
+			provider: "openai",
+			model: "gpt-5",
+			content: [call],
+			usage: zeroUsage(),
+			stopReason: "toolUse",
+			timestamp: 1_700_000_000_000,
+		};
+		queueMicrotask(() => {
+			stream.push({ type: "start", partial });
+			stream.push({ type: "toolcall_start", contentIndex: 0, partial });
+			stream.push({ type: "toolcall_delta", contentIndex: 0, delta: '{"ms":1}', partial });
+			stream.push({
+				type: "toolcall_end",
+				contentIndex: 0,
+				toolCall: { ...call, responsesArguments: "" },
+				partial,
+			});
+			stream.push({ type: "done", reason: "toolUse", message: partial });
+		});
+		const frames = parseSse(await collectStream(encodeStream(stream, "gpt-5-requested")));
+		const done = frames.find(frame => frame.event === "response.output_item.done")!.data as {
+			item: Record<string, unknown>;
+		};
+		expect(done.item).toMatchObject({
+			id: "item_sleep",
+			namespace: "clock",
+			name: "sleep",
+			arguments: '{"ms":1}',
+		});
+	});
 	it("emits response.created, reasoning_summary_text.delta, output_text.delta, function_call_arguments.delta, response.completed, [DONE]", async () => {
 		const stream = new AssistantMessageEventStream();
 

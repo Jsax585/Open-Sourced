@@ -1248,17 +1248,21 @@ export function normalizeCodexToolChoice(
 	const allowFreeform = model ? model.applyPatchToolType === "freeform" : false;
 	const mapName = (name: string): Record<string, string> | undefined => {
 		const directTool = tools.find(tool => tool.name === name);
-		const customTool = allowFreeform
-			? tools.find(tool => tool.customFormat && (tool.name === name || tool.customWireName === name))
-			: undefined;
-		const offeredTool = customTool ?? directTool;
-		if (!offeredTool) return undefined;
-		if (offeredTool.native?.type === "computer" && model?.supportsComputerUse === true) {
-			return { type: "computer" };
+		if (!directTool) return undefined;
+		if (directTool.responsesDefinition?.type === "namespace") {
+			throw new AIError.ValidationError("Codex namespace tool choice must select a leaf tool");
 		}
-		return customTool
-			? { type: "custom", name: customTool.customWireName ?? customTool.name }
-			: { type: "function", name: offeredTool.name };
+		if (directTool.responsesDefinition?.type === "custom")
+			return { type: "custom", name: directTool.customWireName ?? name };
+		if (allowFreeform && directTool.customFormat) {
+			return { type: "custom", name: directTool.customWireName ?? name };
+		}
+		if (directTool.native?.type === "computer" && model?.supportsComputerUse === true) return { type: "computer" };
+		return {
+			type: "function",
+			name: directTool.responsesDefinition?.type === "function" ? directTool.responsesDefinition.name : name,
+			...(directTool.namespace ? { namespace: directTool.namespace } : {}),
+		};
 	};
 	if (choice.type === "computer") {
 		const computer = tools.find(tool => tool.native?.type === "computer");
@@ -1613,6 +1617,15 @@ export async function buildTransformedCodexRequestBody(
 	if (options?.clientMetadata && Object.keys(options.clientMetadata).length > 0) {
 		params.client_metadata = { ...options.clientMetadata };
 	}
+	const nativeResponsesItemIds = new Set<string>();
+	for (const message of context.messages) {
+		if (message.role !== "assistant") continue;
+		for (const block of message.content) {
+			if (block.type === "toolCall" && block.responsesItemId) {
+				nativeResponsesItemIds.add(block.responsesItemId);
+			}
+		}
+	}
 	const codexOptions: CodexRequestOptions = {
 		...codexReasoningControls(model, options),
 		reasoningSummary: options?.reasoningSummary,
@@ -1620,6 +1633,7 @@ export async function buildTransformedCodexRequestBody(
 		textVerbosity: options?.textVerbosity,
 		include: options?.include,
 		responsesLite: options?.responsesLite,
+		nativeResponsesItemIds,
 	};
 
 	const body = await transformRequestBody(params, model, codexOptions, { developerMessages });
@@ -5142,6 +5156,7 @@ type CodexToolPayload =
 	| {
 			type: "function";
 			name: string;
+			namespace?: string;
 			description: string;
 			parameters: Record<string, unknown>;
 			strict?: boolean;
@@ -5149,17 +5164,53 @@ type CodexToolPayload =
 	| {
 			type: "custom";
 			name: string;
+			namespace?: string;
 			description: string;
-			format: { type: "grammar"; syntax: "lark" | "regex"; definition: string };
-	  };
+			format: { type: "grammar" | "text"; syntax?: "lark" | "regex"; definition?: string };
+	  }
+	| { type: "namespace"; name: string; description: string; tools: unknown[] };
 
 /** @internal Exported for tests. */
 export function convertOpenAICodexResponsesTools(
 	tools: Tool[],
 	model: Model<"openai-codex-responses">,
 ): CodexToolPayload[] {
-	const allowFreeform = model.applyPatchToolType === "freeform";
+	if (tools.some(tool => tool.responsesDefinition !== undefined)) {
+		const payloads: CodexToolPayload[] = [];
+		const namespaces = new Map<string, { type: "namespace"; name: string; description: string; tools: unknown[] }>();
+		for (const tool of tools) {
+			if (tool.namespace) {
+				const namespace = tool.responsesNamespaceDefinition;
+				if (
+					!namespace ||
+					namespace.name !== tool.namespace ||
+					!tool.responsesDefinition ||
+					tool.responsesDefinition.type !== "function"
+				) {
+					throw new AIError.ValidationError(`Codex: unsupported namespace tool ${tool.name}`);
+				}
+				const group = namespaces.get(tool.namespace) ?? {
+					type: "namespace" as const,
+					name: namespace.name,
+					description: namespace.description,
+					tools: [],
+				};
+				if (group.description !== namespace.description) {
+					throw new AIError.ValidationError(`Codex: conflicting namespace declarations for ${tool.namespace}`);
+				}
+				group.tools.push(tool.responsesDefinition);
+				namespaces.set(tool.namespace, group);
+			} else if (tool.responsesDefinition) {
+				payloads.push(tool.responsesDefinition as unknown as CodexToolPayload);
+			} else {
+				payloads.push(...convertOpenAICodexResponsesTools([tool], model));
+			}
+		}
+		payloads.push(...namespaces.values());
+		return payloads;
+	}
 	const payloads: CodexToolPayload[] = [];
+	const allowFreeform = model.applyPatchToolType === "freeform";
 	for (const tool of tools) {
 		// Subscription models default to the function fallback. Explicit metadata
 		// remains authoritative for future Codex endpoints that implement GA computer use.

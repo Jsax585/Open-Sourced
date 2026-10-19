@@ -2608,10 +2608,11 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 			customCallIds?.add(normalized.callId);
 			outputItems.push({
 				type: "custom_tool_call",
-				...(itemId ? { id: itemId } : {}),
+				...(itemId ? { id: itemId } : block.responsesItemId ? { id: block.responsesItemId } : {}),
 				call_id: normalized.callId,
 				name: block.customWireName,
-				input: rawInput,
+				input: block.responsesArguments ?? rawInput,
+				...(block.namespace ? { namespace: block.namespace } : {}),
 			} as ResponseInput[number]);
 			continue;
 		}
@@ -2621,10 +2622,11 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 				: block.name;
 		outputItems.push({
 			type: "function_call",
-			...(itemId ? { id: itemId } : {}),
+			...(itemId ? { id: itemId } : block.responsesItemId ? { id: block.responsesItemId } : {}),
 			call_id: normalized.callId,
 			name: functionName,
-			arguments: stringifyJson(block.arguments) ?? "null",
+			arguments: block.responsesArguments ?? stringifyJson(block.arguments) ?? "null",
+			...(block.namespace ? { namespace: block.namespace } : {}),
 		});
 	}
 
@@ -2720,7 +2722,15 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 	supportsCustomToolCalls = true,
 	computerCallIds?: ReadonlySet<string>,
 ): void {
-	const { output, outputText } = encodeResponsesToolResultOutput(toolResult, model, supportsImageDetailOriginal);
+	const { output: encodedOutput, outputText } = encodeResponsesToolResultOutput(
+		toolResult,
+		model,
+		supportsImageDetailOriginal,
+	);
+	const output =
+		model.provider === "openai-codex" && toolResult.responsesOutput !== undefined
+			? (toolResult.responsesOutput as ResponseInputItem.FunctionCallOutput["output"])
+			: encodedOutput;
 	const normalized = normalizeResponsesToolCallId(toolResult.toolCallId);
 	if (toolResult.providerMetadata?.type === "computer" && model.supportsComputerUse !== true) {
 		messages.push({

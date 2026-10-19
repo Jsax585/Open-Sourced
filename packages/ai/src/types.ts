@@ -53,6 +53,7 @@ import type { GoogleVertexOptions } from "./providers/google-vertex";
 import type { OllamaChatOptions } from "./providers/ollama";
 import type { OpenAICodexResponsesOptions } from "./providers/openai-codex-responses";
 import type { OpenAICompletionsOptions } from "./providers/openai-completions";
+import type { Tool as OpenAIResponsesTool } from "./providers/openai-responses-wire";
 import type { OpenAIResponsesOptions } from "./providers/openai-responses";
 import type { kStreamingPartialJson } from "./utils/block-symbols";
 import type { AssistantMessageEventStream } from "./utils/event-stream";
@@ -833,6 +834,8 @@ export interface SimpleStreamOptions extends Omit<StreamOptions, "apiKey"> {
 	/** API format for Synthetic provider: "openai" or "anthropic" (default: "openai") */
 	syntheticApiFormat?: "openai" | "anthropic";
 	/** Hint that websocket transport should be preferred when supported by the provider implementation. */
+	/** OpenAI Codex Responses Lite protocol selection. */
+	responsesLite?: boolean;
 	preferWebsockets?: boolean;
 	/**
 	 * OpenRouter routing-variant suffix automatically appended to model IDs when
@@ -1045,6 +1048,12 @@ export interface ToolCall {
 	 * JSON function tools.
 	 */
 	customWireName?: string;
+	/** Exact Responses call arguments, retained for lossless native replay. */
+	responsesArguments?: string;
+	/** Native Responses namespace for function/custom tool calls. */
+	namespace?: string;
+	/** Native Responses item ID, distinct from the public call ID. */
+	responsesItemId?: string;
 	/** Provider-native metadata required to execute and faithfully replay this call. */
 	providerMetadata?: ToolCallProviderMetadata;
 }
@@ -1356,6 +1365,8 @@ export interface ToolResultMessage<TDetails = unknown> {
 	content: (TextContent | ImageContent)[]; // Supports text and images
 	details?: TDetails;
 	isError: boolean;
+	/** Native Responses output retained when generic content would lose structure. */
+	responsesOutput?: unknown;
 	/** Who initiated this message for billing/attribution semantics. */
 	attribution?: MessageAttribution;
 	/** Timestamp when output was pruned (ms since epoch). Undefined if unpruned. */
@@ -1635,7 +1646,13 @@ export interface Tool<TParameters extends TSchema = TSchema> {
 	 * calls route correctly. Absent for regular JSON function tools.
 	 */
 	customWireName?: string;
+	/** Namespace used by native Responses declarations. */
+	namespace?: string;
 	/** Selects a provider-native hosted tool instead of a JSON-schema function tool. */
+	/** Original Responses declaration for lossless Codex request reconstruction. */
+	responsesDefinition?: OpenAIResponsesTool;
+	/** Original Responses namespace declaration for lossless Codex reconstruction. */
+	responsesNamespaceDefinition?: Extract<OpenAIResponsesTool, { type: "namespace" }>;
 	native?: NativeToolMarker;
 	/**
 	 * Illustrative calls/notes; the AI layer renders them into an `<examples>`
