@@ -96,6 +96,9 @@
 - Fixed supported Bedrock Claude models falling back to soft instead of remote compaction ([#16343](https://github.com/can1357/oh-my-pi/pull/16343) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy))
 - Fixed browser `tab.run(fn, [url])` and `browser.open("https://…")` failing with a bare "expects an options object"; the errors now say to pass `{ args: [...] }` and `browser.open({ url, name })` ([#16236](https://github.com/can1357/oh-my-pi/pull/16236) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed the built-in `ts-set-map`, `ts-import-type` and `ts-no-any` rules reminding you about code they allow: an empty or computed `Set`/`Map`, a runtime `await import()`, or the word "any" in a comment ([#16242](https://github.com/can1357/oh-my-pi/pull/16242) by [@will-bogusz](https://github.com/will-bogusz))
+### Added
+
+- Added `/mcp reauth <name>` in ACP, RPC, and print mode: it opens the browser and stores credentials through the same engine as the TUI flow, prints the authorization URL as a fallback, reconnects the live server when the host keeps one, keeps multi-word server names intact, resolves the ACP session's own server on name collisions, reports failed `/compact`, `/handoff`, and `/stats` runs with a nonzero print-mode exit code, and never writes a client-declared server's definition or bearer header into the global user config ([#16046](https://github.com/can1357/oh-my-pi/pull/16046) by [@marcintustin](https://github.com/marcintustin))
 
 ## [18.12.3] - 2026-10-19
 
@@ -113,7 +116,6 @@
 ### Changed
 
 - While a subagent is focused, `/model`, `/switch`, `/effort`, `Alt+P`, `Ctrl+P`, and `Shift+Tab` change that subagent's model and thinking level (session-only) instead of telling you to return to the main session; `/model` and `Alt+M` open the session-only picker there, since role assignments configure the main session
-- Added `/mcp reauth <name>` in ACP, RPC, and print mode: it opens the browser and stores credentials through the same engine as the TUI flow, prints the authorization URL as a fallback, and reconnects the live server when the host keeps one ([#16046](https://github.com/can1357/oh-my-pi/pull/16046) by [@marcintustin](https://github.com/marcintustin))
 
 ### Fixed
 
