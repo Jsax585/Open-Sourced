@@ -288,6 +288,11 @@ interface IsolationHandoff {
 	tip: string | undefined;
 }
 
+/** Where every capture of `agentId` writes its root patch. */
+function rootPatchPath(artifactsDir: string, agentId: string): string {
+	return path.join(artifactsDir, `${agentId}.patch`);
+}
+
 /**
  * Write a captured delta to disk: the root patch, and one file per nested repo
  * named after `nestedPatchPrefix`. Throws when any write fails so nothing
@@ -299,7 +304,7 @@ async function writeDeltaPatches(
 	agentId: string,
 	nestedPatchPrefix: string,
 ): Promise<IsolationPatchArtifacts> {
-	const patchPath = path.join(artifactsDir, `${agentId}.patch`);
+	const patchPath = rootPatchPath(artifactsDir, agentId);
 	await Bun.write(patchPath, delta.rootPatch);
 	const nestedPatchPaths = await persistNestedPatches(artifactsDir, nestedPatchPrefix, delta.nestedPatches);
 	return {
@@ -561,7 +566,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				kind: "follow-up-pending",
 				error: error instanceof Error ? error.message : String(error),
 				branchName: patchOnly ? undefined : `omp/task/${opts.agentId}`,
-				rootPatchPath: patchOnly ? path.join(opts.artifactsDir, `${opts.agentId}.patch`) : undefined,
+				rootPatchPath: patchOnly ? rootPatchPath(opts.artifactsDir, opts.agentId) : undefined,
 			});
 		}
 		if (handoff === "unchanged") return "";
