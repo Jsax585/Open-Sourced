@@ -387,8 +387,18 @@ export interface MCPResourceContent {
 	};
 }
 
+/** Link to a server resource returned by an MCP tool; the client fetches it separately. */
+export interface MCPResourceLinkContent {
+	type: "resource_link";
+	uri: string;
+	name: string;
+	title?: string;
+	description?: string;
+	mimeType?: string;
+}
+
 /** Supported MCP result content blocks retained in display metadata. */
-export type MCPContent = MCPTextContent | MCPImageContent | MCPResourceContent;
+export type MCPContent = MCPTextContent | MCPImageContent | MCPResourceContent | MCPResourceLinkContent;
 
 /** Server-reported progress of an in-flight MCP request. */
 export interface MCPProgress {

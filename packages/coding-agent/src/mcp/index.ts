@@ -33,5 +33,6 @@ export type {
 	MCPTextContent,
 	MCPImageContent,
 	MCPResourceContent,
+	MCPResourceLinkContent,
 	MCPContent,
 } from "@oh-my-pi/pi-tui/tools/mcp";

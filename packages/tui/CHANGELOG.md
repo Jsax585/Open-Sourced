@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `MCPResourceLinkContent` to the `MCPContent` union, so `MCPToolDetails.rawContent` can hold MCP `resource_link` tool-result blocks ([#16561](https://github.com/can1357/oh-my-pi/pull/16561) by [@mottopanikeiku](https://github.com/mottopanikeiku))
+
 ## [18.12.4] - 2026-10-20
 
 ### Added
