@@ -897,7 +897,13 @@ describe("runSubprocess result acceptance", () => {
 				status: "idle",
 			});
 			const settle = vi.fn((_result: unknown, superseded: () => boolean) => onSettled(superseded));
-			attachIrcWakeTurnMonitor(harness.session, { id: AGENT_ID, agent: baseAgent, onTurnSettled: settle });
+			const started = vi.fn();
+			attachIrcWakeTurnMonitor(harness.session, {
+				id: AGENT_ID,
+				agent: baseAgent,
+				onTurnSettled: settle,
+				onTurnStarted: started,
+			});
 			const observer = harness.wakeObserver();
 			if (!observer) throw new Error("wake-turn observer was not registered");
 			const parent = {
@@ -907,7 +913,7 @@ describe("runSubprocess result acceptance", () => {
 				asyncJobManager: manager,
 				getAgentId: () => "Parent",
 			} as unknown as ToolSession;
-			return { manager, harness, observer, settle, parent };
+			return { manager, harness, observer, settle, started, parent };
 		}
 
 		it("does not settle a turn whose outcome only reaches a peer", async () => {
@@ -1015,6 +1021,24 @@ describe("runSubprocess result acceptance", () => {
 				harness.emitAssistantText("done");
 				await next?.(undefined);
 				expect(checks).toHaveLength(1);
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("reports each turn as it starts, including one only a peer hears of", async () => {
+			const { manager, harness, observer, started } = setUp();
+			try {
+				// Any turn may edit the workspace, so the owner of the run is told before it does.
+				const peerTurn = observer([ircRecord("Peer", "is line 42 fine?")]);
+				expect(started).toHaveBeenCalledTimes(1);
+				harness.emitAssistantText("line 42 is fine");
+				await peerTurn?.(undefined);
+				const ownerTurn = observer([ircRecord("Parent", "fix it")]);
+				expect(started).toHaveBeenCalledTimes(2);
+				harness.emitAssistantText("fixed");
+				await ownerTurn?.(undefined);
+				expect(started).toHaveBeenCalledTimes(2);
 			} finally {
 				await manager.dispose({ timeoutMs: 1000 });
 			}

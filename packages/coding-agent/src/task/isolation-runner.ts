@@ -22,7 +22,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type * as natives from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { logger, prompt } from "@oh-my-pi/pi-utils";
 import isolationErrorTemplate from "../prompts/tools/isolation-error.md" with { type: "text" };
 import isolationSummaryTemplate from "../prompts/tools/isolation-summary.md" with { type: "text" };
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
@@ -68,7 +68,7 @@ export type IsolationSummaryKind =
 	| "branch-capture-failed"
 	| "merge-error"
 	| "follow-up-pending"
-	| "follow-up-superseded";
+	| "capture-superseded";
 
 /** Context for `isolation-summary.md`; unused fields are simply absent. */
 export interface IsolationSummaryContext {
@@ -236,6 +236,12 @@ export interface IsolatedRunOptions {
 	onSubprocessResult?: (result: SingleResult) => void;
 	/** Lands follow-up turns of a kept-alive run; absent ⇒ their changes are captured only on release. */
 	followUps?: IsolationFollowUps;
+	/**
+	 * Called when release is about to write the agent's remaining work into
+	 * `artifactsDir`; the directory then holds that work and must outlive the
+	 * agent.
+	 */
+	onReleaseArtifacts?: () => void;
 }
 
 /**
@@ -584,7 +590,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		}
 		if (handoff === "unchanged") return "";
 		// Its work rides along in the next capture, like a failed turn's.
-		if (handoff === "superseded") return renderIsolationSummary({ kind: "follow-up-superseded" });
+		if (handoff === "superseded") return renderIsolationSummary({ kind: "capture-superseded" });
 		const captured = rememberAgentArtifacts({ ...turn, ...handoff.artifacts });
 		const landing = Promise.withResolvers<boolean | null>();
 		pending = { state: handoff.state, tip: handoff.tip, landing: landing.promise };
@@ -620,6 +626,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					if (handedOff && sameIsolationState(handedOff, current.state)) return;
 					delta = landed ? await diffIsolationStates(taskBaseline, landed.state, current.state) : current;
 					if (!delta.rootPatch.trim() && delta.nestedPatches.length === 0) return;
+					opts.onReleaseArtifacts?.();
 					const patchResult = await writeDeltaPatches(
 						delta,
 						opts.artifactsDir,
@@ -664,6 +671,19 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		});
 		return releasePromise;
 	};
+	/**
+	 * Turns the agent has started since its first run ended. A turn that
+	 * starts before the first run's capture finishes may be read into it.
+	 */
+	let turnsStartedSinceRun = 0;
+	/**
+	 * The first run's result when one of the agent's turns overlapped its
+	 * capture: the capture could hold part of that turn, whose result has not
+	 * reached the caller, so nothing is handed over and no handoff is recorded.
+	 * The next capture carries everything since the run began.
+	 */
+	const supersededFirstRun = (result: SingleResult): SingleResult =>
+		rememberAgentArtifacts({ ...result, isolationCaptureSuperseded: true });
 	/** Record the first run's capture for follow-ups and release. */
 	const recordFirstRunHandoff = (state: IsolationState, tip: string | undefined): void => {
 		handedOff = state;
@@ -702,6 +722,12 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 							// behind a turn waiting for this function to finish.
 							await firstRunDone.promise;
 							return serialize(() => landFollowUpTurn(turn, superseded));
+						}
+					: undefined,
+			onFollowUpTurnStarted:
+				opts.followUps && opts.baseOptions.keepAlive !== false
+					? () => {
+							turnsStartedSinceRun += 1;
 						}
 					: undefined,
 		});
@@ -763,6 +789,21 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					});
 				}
 			}
+			if (turnsStartedSinceRun > 0) {
+				// Later captures recreate the branch; one built from this read must not be landed.
+				if (commitResult?.branchName) {
+					await vcs
+						.requireGit(opts.context.repoRoot)
+						.deleteBranch(commitResult.branchName, true)
+						.catch(error => {
+							logger.warn("Could not delete a superseded task branch", {
+								branch: commitResult?.branchName,
+								error: error instanceof Error ? error.message : String(error),
+							});
+						});
+				}
+				return supersededFirstRun(result);
+			}
 			if (commitResult) recordFirstRunHandoff(commitResult.state, commitResult.headSha);
 			// The branch holds the root-repo work, but nested-repo patches exist
 			// only in memory until written; the workspace goes away in `finally`.
@@ -800,6 +841,12 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		if (result.exitCode === 0) {
 			try {
 				const capture = await writeIsolationPatch(isolationDir, baseline, opts.artifactsDir, opts.agentId);
+				if (turnsStartedSinceRun > 0) {
+					// The next capture writes its own patch files; these must not be applied.
+					const { patchPath, nestedPatchPaths } = capture.artifacts;
+					await Promise.all([patchPath, ...nestedPatchPaths].map(file => fs.rm(file, { force: true })));
+					return supersededFirstRun(result);
+				}
 				recordFirstRunHandoff(capture.state, undefined);
 				return rememberAgentArtifacts({ ...result, ...capture.artifacts });
 			} catch (patchErr) {

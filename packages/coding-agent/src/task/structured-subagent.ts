@@ -27,6 +27,7 @@ import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" wit
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import isolationRecoveryHintTemplate from "../prompts/tools/isolation-recovery-hint.md" with { type: "text" };
 import salvagedChildHintTemplate from "../prompts/tools/salvaged-child-hint.md" with { type: "text" };
+import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import type { TaskEffort } from "@oh-my-pi/pi-tui/thinking";
 import type { ToolSession } from "../tools";
@@ -537,6 +538,12 @@ interface ArtifactLease {
 	artifactsDir: string;
 	temporary: boolean;
 	unregister: (() => void) | undefined;
+	/**
+	 * Settles when the agent's lifecycle ends (`onRelease`). A kept-alive agent
+	 * is revived from its transcript in this directory after it is parked, so a
+	 * temporary directory is not removed before then.
+	 */
+	released: PromiseWithResolvers<void>;
 }
 
 async function leaseArtifacts(
@@ -547,14 +554,26 @@ async function leaseArtifacts(
 	if (sessionFile) {
 		const artifactsDir = sessionFile.slice(0, -6);
 		await fs.mkdir(artifactsDir, { recursive: true });
-		return { sessionFile, artifactsDir, temporary: false, unregister: undefined };
+		return {
+			sessionFile,
+			artifactsDir,
+			temporary: false,
+			unregister: undefined,
+			released: Promise.withResolvers<void>(),
+		};
 	}
 	const artifactsDir = path.join(
 		os.tmpdir(),
 		`${invocationKind === "eval" ? "omp-eval-agent" : "omp-task"}-${Snowflake.next()}`,
 	);
 	await fs.mkdir(artifactsDir, { recursive: true });
-	return { sessionFile: null, artifactsDir, temporary: true, unregister: registerArtifactsDir(artifactsDir) };
+	return {
+		sessionFile: null,
+		artifactsDir,
+		temporary: true,
+		unregister: registerArtifactsDir(artifactsDir),
+		released: Promise.withResolvers<void>(),
+	};
 }
 
 /**
@@ -670,13 +689,14 @@ function buildExecutorOptions(
 		parentArtifactManager: preparedSession ? undefined : (session.getArtifactManager?.() ?? undefined),
 		parentHindsightSessionState: session.getHindsightSessionState?.(),
 		parentMnemopiSessionState: session.getMnemopiSessionState?.(),
-		onRelease:
-			preparedSession !== undefined && lease.temporary
-				? async () => {
-						await fs.rm(lease.artifactsDir, { recursive: true, force: true });
-						lease.unregister?.();
-					}
-				: undefined,
+		onRelease: lease.temporary
+			? async () => {
+					lease.released.resolve();
+					if (preparedSession === undefined) return;
+					await fs.rm(lease.artifactsDir, { recursive: true, force: true });
+					lease.unregister?.();
+				}
+			: undefined,
 		parentTelemetry: session.getTelemetry?.(),
 		parentAgentId: session.getAgentId?.() ?? MAIN_AGENT_ID,
 		parentPromptCacheKey: session.getPromptCacheKey?.(),
@@ -867,6 +887,10 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 	// failure must carry the exit status and artifact the child produced.
 	let settled: SingleResult | undefined;
 	let retainSalvagedArtifact = false;
+	/** Set once the agent's id is reserved; the cleanup below waits for that agent's release. */
+	let agentId: string | undefined;
+	/** Set when an isolated agent's release leaves its remaining work in the artifacts directory. */
+	let releaseLeftArtifacts = false;
 	// Follow-up turns of an isolated agent wait on this before their capture, so
 	// they never race the first run's landing below.
 	const firstRunLanding = Promise.withResolvers<boolean | null>();
@@ -879,6 +903,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			...request.identity,
 			label: request.identity?.label ?? (request.invocationKind === "eval" ? "EvalAgent" : undefined),
 		});
+		agentId = id;
 		if (policy.preparedSession === undefined) await refreshSkillsForAutoload(request.session, policy.agent);
 		const baseOptions = buildExecutorOptions(request, policy, lease, id);
 		baseOptions.onCleanupDeferred = completion => {
@@ -937,6 +962,9 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 					buildFailureResult: buildFailureResult(request, policy, id, Date.now()),
 					onSubprocessResult,
 					followUps,
+					onReleaseArtifacts: () => {
+						releaseLeftArtifacts = true;
+					},
 				});
 			}
 		} finally {
@@ -950,7 +978,11 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			(result.exitCode !== 0 || result.error !== undefined || result.aborted === true) &&
 			(result.patchPath !== undefined || result.branchName !== undefined || (result.nestedPatches?.length ?? 0) > 0);
 
-		if (
+		if (policy.isIsolated && isolationContext && result.isolationCaptureSuperseded) {
+			// Another turn of the agent overlapped the capture: nothing was handed
+			// over, and the changes go with that turn's capture (apply or not).
+			mergeSummary = renderIsolationSummary({ kind: "capture-superseded" });
+		} else if (
 			policy.isIsolated &&
 			isolationContext &&
 			policy.applyChanges &&
@@ -1010,13 +1042,19 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 				(completedSuccessfully || hasValidStructuredOutput)) ||
 			(policy.isIsolated && (!policy.applyChanges || changesApplied === false || requiresRecoveryArtifacts));
 		const shouldCleanup = lease.temporary && !shouldRetainArtifacts;
+		const keptAlive = (): boolean => agentId !== undefined && AgentLifecycleManager.global().has(agentId);
 		const cleanupArtifacts = async (): Promise<void> => {
+			// A kept-alive agent is revived from its transcript here once it is
+			// parked, so the directory goes only after the agent is released, and
+			// stays when that release left the agent's remaining work in it.
+			if (keptAlive()) await lease.released.promise;
+			if (releaseLeftArtifacts) return;
 			await fs.rm(lease.artifactsDir, { recursive: true, force: true });
 			lease.unregister?.();
 		};
 		if (shouldCleanup) {
-			if (deferredCleanup) {
-				trackLateCleanup(deferredCleanup.then(cleanupArtifacts), {
+			if (deferredCleanup || keptAlive()) {
+				trackLateCleanup((deferredCleanup ?? Promise.resolve()).then(cleanupArtifacts), {
 					resource: "artifacts",
 					artifactsDir: lease.artifactsDir,
 				});

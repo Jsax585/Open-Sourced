@@ -95,6 +95,13 @@ async function runKeptAlive(opts: {
 	mergeMode: "patch" | "branch";
 	followUps: IsolationFollowUps;
 	firstRun: () => Promise<void>;
+	/**
+	 * Runs once the agent is idle and before the runner captures the first
+	 * run, given the hook the executor calls when a turn starts: a turn woken
+	 * right after the run.
+	 */
+	afterRun?: (turnStarted: (() => void) | undefined) => Promise<void>;
+	onReleaseArtifacts?: () => void;
 }): Promise<KeptAliveRun> {
 	const artifactsDir = await tempDir("omp-follow-up-artifacts-");
 	vi.spyOn(worktreeModule, "ensureIsolation").mockResolvedValue({
@@ -132,6 +139,7 @@ async function runKeptAlive(opts: {
 			reviveSession: async () => session,
 			onRelease: options.onRelease,
 		});
+		await opts.afterRun?.(options.onFollowUpTurnStarted);
 		return result(options.id);
 	});
 	const first = await runIsolatedSubprocess({
@@ -149,6 +157,7 @@ async function runKeptAlive(opts: {
 		artifactsDir,
 		followUps: opts.followUps,
 		buildFailureResult: error => ({ ...result(opts.id), exitCode: 1, error: String(error) }),
+		onReleaseArtifacts: opts.onReleaseArtifacts,
 	});
 	return { first, settleFollowUp };
 }
@@ -232,7 +241,7 @@ describe("isolated agent follow-up turns", () => {
 
 		const summary = await run.settleFollowUp?.(result("FollowUpSuperseded"), () => nextTurnStarted);
 
-		expect(summary).toContain("the agent started another turn before they were captured");
+		expect(summary).toContain("the agent started another turn before the capture finished");
 		expect(await Bun.file(path.join(repo, "a.txt")).text()).toBe("one\n");
 		expect(await taskBranches(repo)).toBe("");
 		// The next turn's capture carries both turns' work.
@@ -243,6 +252,45 @@ describe("isolated agent follow-up turns", () => {
 		expect(await git(repo, ["rev-list", "--count", `${baseSha}..HEAD`])).toBe("2");
 		await AgentLifecycleManager.global().release("FollowUpSuperseded");
 	});
+
+	for (const [mergeMode, landedSummary] of [
+		["branch", "Merged branch"],
+		["patch", "Applied patches: yes"],
+	] as const) {
+		it(`hands over nothing from a first run whose capture a turn overlapped, in ${mergeMode} mode`, async () => {
+			const { repo, iso } = await createRepoAndIsolation();
+			const { firstRun, followUps } = landingFollowUps(repo, mergeMode);
+			const id = `FirstRunOverlapped-${mergeMode}`;
+			const run = await runKeptAlive({
+				id,
+				repo,
+				iso,
+				mergeMode,
+				followUps,
+				firstRun: () => commitIn(iso, "one\n", "first run"),
+				// A message wakes the agent as soon as it is idle; its turn edits the workspace.
+				afterRun: async turnStarted => {
+					turnStarted?.();
+					await commitIn(iso, "two\n", "review fix");
+				},
+			});
+
+			// The capture may hold part of that turn, whose result has not reached the parent.
+			expect(run.first.isolationCaptureSuperseded).toBe(true);
+			expect(run.first.branchName).toBeUndefined();
+			expect(run.first.patchPath).toBeUndefined();
+			expect(await taskBranches(repo)).toBe("");
+			// As the task tool reports it: nothing was handed over, so no landing was attempted.
+			firstRun.resolve(null);
+			expect(await Bun.file(path.join(repo, "a.txt")).text()).toBe("zero\n");
+
+			// Both runs' work lands with the turn's result.
+			expect(await run.settleFollowUp?.(result(id))).toContain(landedSummary);
+			expect(await Bun.file(path.join(repo, "a.txt")).text()).toBe("two\n");
+			await AgentLifecycleManager.global().release(id);
+			expect(await taskBranches(repo)).toBe("");
+		});
+	}
 
 	it("holds a follow-up that ends before the first run has landed until it has", async () => {
 		const { repo, iso, baseSha } = await createRepoAndIsolation();
@@ -430,6 +478,32 @@ describe("isolated agent follow-up turns", () => {
 		expect(leftover).not.toContain("-zero");
 		expect(await Bun.file(path.join(repo, "a.txt")).text()).toBe("two\n");
 	});
+
+	for (const unreported of [true, false]) {
+		it(`tells the caller ${unreported ? "when" : "only when"} release leaves remaining work in the artifacts directory`, async () => {
+			const { repo, iso } = await createRepoAndIsolation();
+			const { firstRun, followUps } = landingFollowUps(repo, "branch");
+			const left = vi.fn();
+			const id = unreported ? "ReleaseLeavesWork" : "ReleaseLeavesNothing";
+			const run = await runKeptAlive({
+				id,
+				repo,
+				iso,
+				mergeMode: "branch",
+				followUps,
+				firstRun: () => commitIn(iso, "one\n", "first run"),
+				onReleaseArtifacts: left,
+			});
+			const firstLanding = await mergeIsolatedChanges({ result: run.first, repoRoot: repo, mergeMode: "branch" });
+			firstRun.resolve(firstLanding.changesApplied);
+			if (unreported) await commitIn(iso, "two\n", "unreported");
+
+			await AgentLifecycleManager.global().release(id);
+
+			// The caller keeps that directory past the agent's release, so it must not be told otherwise.
+			expect(left).toHaveBeenCalledTimes(unreported ? 1 : 0);
+		});
+	}
 
 	it("names the patch, not a branch, when a follow-up after a patch-mode landing cannot be captured", async () => {
 		const { repo, iso } = await createRepoAndIsolation();

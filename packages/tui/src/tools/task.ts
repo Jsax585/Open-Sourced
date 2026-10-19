@@ -2502,6 +2502,13 @@ export interface SingleResult {
 	 * at that recovery route instead of offering follow-ups.
 	 */
 	isolationCaptureFailed?: boolean;
+	/**
+	 * Set by the isolation runner when the agent started another turn before
+	 * this run's changes were captured, so a capture could hold part of that
+	 * turn. Nothing is handed over: the changes go with the capture of the
+	 * agent's next turn whose result reaches the parent, or with its release.
+	 */
+	isolationCaptureSuperseded?: boolean;
 	/** Patch path for isolated worktree output */
 	patchPath?: string;
 	/**

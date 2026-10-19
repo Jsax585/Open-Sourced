@@ -1226,6 +1226,154 @@ describe("structured subagent primitive", () => {
 		await fs.rm(settled.artifactsDir, { recursive: true, force: true });
 	});
 
+	it("reports a first run whose capture a later turn overlapped instead of landing it", async () => {
+		mockDiscovery();
+		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot: "/tmp" } as never);
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async () => ({
+			...result(),
+			isolated: true,
+			isolationCaptureSuperseded: true,
+		}));
+		const merge = vi.spyOn(isolationRunner, "mergeIsolatedChanges");
+
+		const settled = await runStructuredSubagent(
+			request({ session: session({ isolationEnabled: true }), isolation: { requested: true } }),
+		);
+
+		expect(merge).not.toHaveBeenCalled();
+		expect(settled.mergeSummary).toContain("the agent started another turn before the capture finished");
+		await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+	});
+
+	/**
+	 * Stand in for a kept-alive run: write the transcript where the executor
+	 * does, then hand the agent to the lifecycle with `onRelease`. Returns the
+	 * transcript path; the agent is registered under the id the task tool gave.
+	 */
+	async function keptAliveRun(
+		options: { id?: string; artifactsDir?: string },
+		onRelease: (() => Promise<void>) | undefined,
+	): Promise<string> {
+		const id = options.id;
+		if (!id) throw new Error("the task tool reserves an agent id before running it");
+		const transcript = path.join(options.artifactsDir ?? "", `${id}.jsonl`);
+		await Bun.write(transcript, "{}\n");
+		const agentSession = {
+			prepareForHeadlessAdvisorDrain: () => {},
+			waitForAdvisorCatchup: async () => true,
+			dispose: async () => {},
+		} as never;
+		AgentRegistry.global().register({
+			id,
+			displayName: id,
+			kind: "sub",
+			session: agentSession,
+			sessionFile: transcript,
+			status: "running",
+		});
+		await executorModule.finalizeSubagentLifecycle({
+			id,
+			session: agentSession,
+			aborted: false,
+			keepAlive: true,
+			isolated: false,
+			agentIdleTtlMs: 0,
+			reviveSession: async () => agentSession,
+			onRelease,
+		});
+		return transcript;
+	}
+
+	/** Whether `dir` is gone within a short wait: cleanup after a release runs on its own. */
+	async function removedSoon(dir: string): Promise<boolean> {
+		for (let attempt = 0; attempt < 100; attempt++) {
+			if (
+				!(await fs.stat(dir).then(
+					() => true,
+					() => false,
+				))
+			)
+				return true;
+			await Bun.sleep(5);
+		}
+		return false;
+	}
+
+	for (const background of [false, true]) {
+		it(`keeps a kept-alive agent's temporary transcript until it is released (${background ? "background" : "blocking"})`, async () => {
+			mockDiscovery();
+			let transcript = "";
+			let agent = "";
+			vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+				agent = options.id ?? "";
+				transcript = await keptAliveRun(options, options.onRelease);
+				return result();
+			});
+			let jobCleanup: (() => Promise<void>) | undefined;
+			try {
+				await runStructuredSubagent(
+					request({
+						keepAlive: true,
+						...(background
+							? { detached: true, onArtifactsRetained: cleanup => void (jobCleanup = cleanup) }
+							: {}),
+					}),
+				);
+				// A background job lets go of the directory once its result is delivered.
+				const jobLetGo = jobCleanup?.();
+				// Long enough for a cleanup that does not wait for the release to have run.
+				await Bun.sleep(50);
+				// Parked agents are revived from this file.
+				expect(await Bun.file(transcript).exists()).toBe(true);
+
+				await AgentLifecycleManager.global().release(agent);
+				await jobLetGo;
+				expect(await removedSoon(path.dirname(transcript))).toBe(true);
+			} finally {
+				await AgentLifecycleManager.global().release(agent);
+				AgentRegistry.resetGlobalForTests();
+			}
+		});
+	}
+
+	it("keeps the folder when an isolated agent's release leaves its remaining work there", async () => {
+		mockDiscovery();
+		let transcript = "";
+		let agent = "";
+		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot: "/tmp" } as never);
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts => {
+			agent = opts.agentId;
+			transcript = await keptAliveRun({ id: opts.agentId, artifactsDir: opts.artifactsDir }, async () => {
+				// As the runner's release does with work that never landed.
+				await Bun.write(path.join(opts.artifactsDir, `${opts.agentId}.patch`), "leftover\n");
+				opts.onReleaseArtifacts?.();
+				await opts.baseOptions.onRelease?.();
+			});
+			return { ...result(), isolated: true };
+		});
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "Merged branch: omp/task/Worker",
+			changesApplied: true,
+			hadAnyChanges: true,
+			mergedBranchForNestedPatches: true,
+		} as never);
+		vi.spyOn(isolationRunner, "applyEligibleNestedPatches").mockResolvedValue("");
+		try {
+			const settled = await runStructuredSubagent(
+				request({ keepAlive: true, session: session({ isolationEnabled: true }), isolation: { requested: true } }),
+			);
+			expect(await Bun.file(transcript).exists()).toBe(true);
+
+			await AgentLifecycleManager.global().release(agent);
+			// Long enough for a cleanup scheduled by the release to have run.
+			await Bun.sleep(50);
+			expect(await Bun.file(path.join(settled.artifactsDir, `${agent}.patch`)).text()).toBe("leftover\n");
+			await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+		} finally {
+			AgentRegistry.resetGlobalForTests();
+		}
+	});
+
 	it("defaults task isolation to auto-apply and lets config retain artifacts", async () => {
 		mockDiscovery();
 		const defaultPolicy = await resolveEffectiveSubagentPolicy(

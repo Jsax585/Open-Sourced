@@ -608,6 +608,13 @@ export interface ExecutorOptions {
 	 * the agent's next turn while this runs; `superseded()` says whether it has.
 	 */
 	onFollowUpTurnSettled?: (result: SingleResult, superseded: () => boolean) => Promise<string>;
+	/**
+	 * Called as each turn of a kept-alive agent after its run starts (an IRC
+	 * wake or a user prompt), before it can touch the workspace. The agent is
+	 * idle and wakeable before `runSubprocess` returns, so a turn can start
+	 * while the caller is still handling the run's result.
+	 */
+	onFollowUpTurnStarted?: () => void;
 	/** Internal cleanup grace override for deterministic lifecycle tests. */
 	cleanupGraceMs?: number;
 }
@@ -3059,6 +3066,8 @@ export interface IrcWakeTurnMonitorOptions {
 	artifactsDir?: string;
 	/** See {@link ExecutorOptions.onFollowUpTurnSettled}. */
 	onTurnSettled?: (result: SingleResult, superseded: () => boolean) => Promise<string>;
+	/** See {@link ExecutorOptions.onFollowUpTurnStarted}. */
+	onTurnStarted?: () => void;
 }
 
 /** Sender + message id of one `irc:incoming` record that woke a turn. */
@@ -3252,6 +3261,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 	let turnsStarted = 0;
 	session.setIrcWakeTurnObserver(records => {
 		const turn = ++turnsStarted;
+		options.onTurnStarted?.();
 		// Autonomous IRC wake turns reuse the session's YieldTool just like
 		// runSubagentFollowUpTurn; clear the prior run's incremental-section flag
 		// and retry counters so this wake turn's guards see only its own state.
@@ -4392,6 +4402,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		outputSchemaSource: options.outputSchemaSource,
 		artifactsDir: options.artifactsDir,
 		onTurnSettled: options.onFollowUpTurnSettled,
+		onTurnStarted: options.onFollowUpTurnStarted,
 	};
 
 	const runSubagent = async (): Promise<{

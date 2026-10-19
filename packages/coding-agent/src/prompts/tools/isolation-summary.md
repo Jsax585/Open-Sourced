@@ -83,6 +83,6 @@ Nested repository patches (not applied):
 <system-notification>Isolation: this turn's changes were not captured: {{error}}
 They stay in the isolated workspace until the agent is released, which writes root-repository changes to {{rootPatchPath}} and nested-repository changes to patch files beside it{{#if branchName}}, and commits root-repository changes to branch {{branchName}}{{/if}}.</system-notification>
 {{/when}}
-{{#when kind "==" "follow-up-superseded"}}
-<system-notification>Isolation: this turn's changes were not landed: the agent started another turn before they were captured. They land with its next turn whose result reaches you, or stay in the isolated workspace until it is released.</system-notification>
+{{#when kind "==" "capture-superseded"}}
+<system-notification>Isolation: these changes were not captured: the agent started another turn before the capture finished. They are captured with its next turn whose result reaches you, or when it is released.</system-notification>
 {{/when}}
