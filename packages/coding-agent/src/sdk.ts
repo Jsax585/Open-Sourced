@@ -238,6 +238,7 @@ import {
 	buildSystemPrompt as buildSystemPromptInternal,
 	cfgSystemPromptInputs,
 	composeAppendPrompt,
+	keptContextFilePaths,
 	loadProjectContextFiles as loadContextFilesInternal,
 	projectSystemPromptToolMetadata,
 } from "./system-prompt";
@@ -4085,10 +4086,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				return defaultPrompt;
 			}
 			const customPrompt = options.systemPrompt(defaultPrompt.systemPrompt);
-			return {
-				systemPrompt: typeof customPrompt === "string" ? [customPrompt] : customPrompt,
-				contextFilePaths: defaultPrompt.contextFilePaths,
-			};
+			const systemPrompt = typeof customPrompt === "string" ? [customPrompt] : customPrompt;
+			return { systemPrompt, contextFilePaths: keptContextFilePaths(defaultPrompt, systemPrompt) };
 		};
 
 		const toolNamesFromRegistry = Array.from(toolRegistry.keys());

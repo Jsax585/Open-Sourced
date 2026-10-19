@@ -7177,6 +7177,8 @@ export class AgentSession implements SettingsScope {
 		// still-cached background-task snapshot from the old conversation must not
 		// survive to be replayed by a focus rebuild in the reset session (#10447).
 		this.#activeToolExecutionUpdates.clear();
+		// Nested context blocks a batch could not hand over belong to the old conversation.
+		this.#nestedContext.reset();
 	}
 
 	/**

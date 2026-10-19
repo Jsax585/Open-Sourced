@@ -5,14 +5,19 @@
  * subdirectory's own AGENTS.md (or CLAUDE.md, …) is only listed there by path.
  * With the setting on, the first successful read/write/edit/ast_edit below
  * such a directory delivers that file as trusted passive context: a developer
- * message after the tool batch, never part of the tool result.
+ * message after the tool batch, never part of the tool result. A file at a
+ * workspace root that the prompt was built without (created since) loads the
+ * same way.
  *
  * Dedupe state is the conversation itself: a file is loaded when it is one of
  * the context files the session's system prompt is built from, or the live
  * context still holds its `<nested-context path="…">` block in a developer
- * message (keyed by absolute path, so a cwd change cannot alias it; tool output
- * is never trusted to carry one) or a full read of it without `@` imports.
- * Compaction that drops the block re-arms the file without bookkeeping.
+ * message (keyed by absolute path, so a cwd change cannot alias it) with the
+ * body the file would be delivered with now, or a full read of it without `@`
+ * imports whose result still shows every line. Comparing the body means a
+ * block-shaped string elsewhere (tool output, a reminder quoting model text)
+ * never stands in for the file, and a file edited since it was delivered loads
+ * again. Compaction that drops the block re-arms the file without bookkeeping.
  * Subagents inherit the parent's loaded files, delivered or fully read, through
  * {@link NestedContextInjector.carried}, which lands them in the child's system
  * prompt and so in its context files.
@@ -75,7 +80,7 @@ export interface NestedContextHost {
 interface NestedContextFile {
 	/** Absolute path of the context file. */
 	path: string;
-	/** Directory the file governs, strictly below cwd. */
+	/** Directory the file governs, at or below a workspace root. */
 	owner: string;
 	/** The file as stored, before `@` imports expand. */
 	raw: string;
@@ -88,6 +93,8 @@ interface Touch {
 	toolName: string;
 	args: unknown;
 	details: unknown;
+	/** The result content the model sees, which must still show a full read's lines. */
+	content: unknown;
 	/** The batch whose developer message the call's blocks join. */
 	batch: BatchState;
 	messages: readonly AgentMessage[];
@@ -115,6 +122,8 @@ interface QueuedBlock {
  */
 interface BatchState {
 	key: string;
+	/** For a batch of out-of-loop calls: the newest message before their response, which identifies it. */
+	owner?: AgentMessage;
 	/** Calls registered through `beforeToolCall`, with the tool each dispatches to. */
 	registered: Map<string, string>;
 	/** Calls past `beforeToolCall` whose `afterToolCall` has not run. */
@@ -129,10 +138,10 @@ interface BatchState {
 }
 
 /**
- * Prefix of the key of a batch for out-of-loop calls (Cursor exec). Tool-call
- * ids never contain a NUL, so such a key never matches a loop batch's.
+ * Key of a batch for out-of-loop calls (Cursor exec). Tool-call ids never
+ * contain a NUL, so it never matches a loop batch's key.
  */
-const BRIDGED_BATCH_PREFIX = "\0bridged\n";
+const BRIDGED_BATCH_KEY = "\0bridged";
 
 /** A batch's identity: the tool-call ids of its assistant message. */
 function toolCallKey(message: AgentMessage | undefined): string {
@@ -186,6 +195,7 @@ export class NestedContextInjector {
 					toolName: batch.registered.get(id) ?? ctx.toolCall.name,
 					args: ctx.args,
 					details: ctx.result.details,
+					content: ctx.result.content,
 					batch,
 					messages: ctx.context.messages,
 				});
@@ -218,10 +228,11 @@ export class NestedContextInjector {
 		this.#bridged.delete(toolCallId);
 		if (!call || isError) return;
 		const messages = this.#host.window();
-		const batch = this.#bridgedBatch(messages.findLast(message => message.role === "assistant"));
+		const batch = this.#bridgedBatch(messages);
 		await this.#touch({
 			...call,
 			details: result.details,
+			content: result.content,
 			batch,
 			messages,
 			hidden: context?.bridgedResultShown !== true,
@@ -233,6 +244,16 @@ export class NestedContextInjector {
 
 	cancelBridgedToolCall(toolCallId: string): void {
 		this.#bridged.delete(toolCallId);
+	}
+
+	/**
+	 * Forgets every batch and bridged call: the conversation they belonged to is
+	 * gone (`/new`, a session switch, tree navigation, a context reset), so blocks
+	 * it queued must not reach the next one.
+	 */
+	reset(): void {
+		this.#batch = undefined;
+		this.#bridged.clear();
 	}
 
 	/**
@@ -273,22 +294,26 @@ export class NestedContextInjector {
 	 * outstanding. Cursor exec runs before its response joins the window, so the
 	 * newest assistant message there is the previous response, whose batch has
 	 * handed its blocks over and whose claims a compaction may since have made
-	 * stale. Each response's out-of-loop calls share a batch of their own,
-	 * keyed off that previous message.
+	 * stale. Each response's out-of-loop calls share a batch of their own, owned
+	 * by that previous message object (the window's first message before any
+	 * response): every response follows a different one, even a text-only one
+	 * with no tool-call ids to tell it apart.
 	 */
-	#bridgedBatch(previous: AgentMessage | undefined): BatchState {
-		const key = toolCallKey(previous);
+	#bridgedBatch(messages: readonly AgentMessage[]): BatchState {
+		const previous = messages.findLast(message => message.role === "assistant");
 		const current = this.#batch;
-		if (current?.key === key && current.outstanding.size > 0) return current;
-		const bridgedKey = `${BRIDGED_BATCH_PREFIX}${key}`;
-		return current?.key === bridgedKey ? current : this.#newBatch(bridgedKey);
+		if (current?.key === toolCallKey(previous) && current.outstanding.size > 0) return current;
+		const owner = previous ?? messages[0];
+		if (current?.key === BRIDGED_BATCH_KEY && current.owner === owner) return current;
+		return this.#newBatch(BRIDGED_BATCH_KEY, owner);
 	}
 
-	#newBatch(key: string): BatchState {
+	#newBatch(key: string, owner?: AgentMessage): BatchState {
 		// Blocks a batch could not hand over (a call never settled) move on with their claims.
 		const queue = this.#batch?.queue ?? [];
 		this.#batch = {
 			key,
+			owner,
 			registered: new Map(),
 			outstanding: new Set(),
 			executing: false,
@@ -306,7 +331,8 @@ export class NestedContextInjector {
 		// again when the queue is handed over, so a parallel call cannot claim the
 		// file first. A script's read reaches the model only if the script prints
 		// it, so it does not count.
-		const fullRead = touch.toolName === "read" && !touch.hidden ? fullReadPath(touch.details) : undefined;
+		const fullRead =
+			touch.toolName === "read" && !touch.hidden ? fullReadPath(touch.details, touch.content) : undefined;
 		if (fullRead) touch.batch.fullReads.add(fullRead);
 		const cwd = path.resolve(this.#host.cwd());
 		const edited = editedFiles(touch, cwd);
@@ -323,7 +349,7 @@ export class NestedContextInjector {
 		return this.#load(touch, cwd, roots, targets);
 	}
 
-	/** Workspace roots: cwd and the additional directories, whose own context files are in the system prompt. */
+	/** Workspace roots: cwd and the additional directories, whose own context files the system prompt was built with. */
 	#roots(cwd: string): string[] {
 		return [cwd, ...this.#host.additionalDirectories().map(dir => path.resolve(dir))];
 	}
@@ -348,19 +374,20 @@ export class NestedContextInjector {
 		const window = scanWindow(touch.messages);
 		// Claims and queueing stay synchronous, so the queue is in claim order.
 		for (const file of files) {
-			if (batch.claimed.has(file.path) || window.blocks.has(file.path)) continue;
+			if (batch.claimed.has(file.path) || inPrompt.has(file.path)) continue;
 			// A raw read shows `@` imports unexpanded, so it only stands in for a file without them.
 			const plain = file.content === file.raw;
 			if (plain && (window.fullReads.has(file.path) || batch.fullReads.has(file.path))) continue;
-			if (inPrompt.has(file.path)) continue;
+			const block = renderBlock(cwd, file);
+			if (window.blocks.get(file.path) === blockBody(block)) continue;
 			batch.claimed.add(file.path);
-			const display = displayPath(cwd, file.path);
-			const block = prompt.render(nestedContextFileTemplate, {
-				path: escapeAttribute(file.path),
-				dir: escapeAttribute(`${displayPath(cwd, file.owner)}/`),
-				content: escapeBlockTags(capContent(file.content, display)),
+			batch.queue.push({
+				path: file.path,
+				block,
+				display: displayPath(cwd, file.path),
+				depth: segmentCount(file.owner),
+				plain,
 			});
-			batch.queue.push({ path: file.path, block, display, depth: segmentCount(file.owner), plain });
 		}
 	}
 
@@ -390,19 +417,21 @@ export class NestedContextInjector {
 	/**
 	 * Context files governing `directories`, shallowest first, each once.
 	 * Discovery is the context-file capability itself, run from each touched
-	 * directory and every ancestor below its workspace root. Each probe contributes only the
+	 * directory and every ancestor up to its workspace root, the root included,
+	 * since a file created there after the prompt was built is in no prompt; the
+	 * caller drops the files the prompt has. Each probe contributes only the
 	 * files of its own directory: some providers look nowhere else, so only the
 	 * exact probe sees every candidate. Provider priority, one-file-per-directory
 	 * shadowing and `contextFiles.extra` ordering are then exactly as the system
 	 * prompt has them for that directory.
 	 */
 	async #discover(directories: readonly string[], roots: readonly string[]): Promise<NestedContextFile[]> {
-		// Each probe, with the workspace root it sits below.
+		// Each probe, with the workspace root it sits at or below.
 		const probes = new Map<string, string>();
 		for (const dir of directories) {
 			const root = rootOf(roots, dir);
 			if (root === undefined) continue;
-			for (let current = dir; isStrictlyWithinNormalizedRoot(root, current); current = path.dirname(current)) {
+			for (let current = dir; isAtOrBelow(root, current); current = path.dirname(current)) {
 				probes.set(current, root);
 			}
 		}
@@ -425,10 +454,13 @@ export class NestedContextInjector {
 	}
 
 	/**
-	 * Nested context files the live window holds, as system-prompt context file
-	 * entries for a subagent: delivered blocks with the content as delivered, and
-	 * full reads of a nested context file with the content discovery loads (the
-	 * read result itself carries line prefixes). Shallowest first and in
+	 * Context files the live window holds, as system-prompt context file entries
+	 * for a subagent: delivered blocks with the content as delivered, and full
+	 * reads of a context file with the content discovery loads (the read result
+	 * itself carries line prefixes). Discovery decides which window paths are
+	 * context files, and a block counts only while its body is the one the file
+	 * would be delivered with now, as for touches. Files the parent's system
+	 * prompt has are left to the child's own discovery. Shallowest first and in
 	 * capability order within a directory, as the system prompt keeps them, not
 	 * in the order the window gained them. Each carries a negative depth, levels
 	 * below the root it sits under, so the child's prompt ranks it after every
@@ -439,48 +471,47 @@ export class NestedContextInjector {
 		const cwd = path.resolve(this.#host.cwd());
 		const roots = this.#roots(cwd);
 		const window = scanWindow(messages);
-		const byPath = new Map(window.blocks);
-		const unread = [...window.fullReads].filter(
-			filePath => !byPath.has(filePath) && rootOf(roots, ownerDirectory(filePath)) !== undefined,
-		);
-		if (byPath.size === 0 && unread.length === 0) return [];
-		// Discovery decides which read files are context files, as it does for
-		// touches, and gives every file its owner and capability rank.
-		let files: NestedContextFile[] = [];
+		const owners = new Set<string>();
+		for (const filePath of [...window.blocks.keys(), ...window.fullReads]) {
+			const owner = ownerDirectory(filePath);
+			if (rootOf(roots, owner) !== undefined) owners.add(owner);
+		}
+		if (owners.size === 0) return [];
+		let files: NestedContextFile[];
 		try {
-			files = await this.#discover([...new Set([...byPath.keys(), ...unread].map(ownerDirectory))], roots);
+			files = await this.#discover([...owners], roots);
 		} catch (error) {
 			logger.warn("Nested context discovery failed", { error: String(error) });
+			return [];
 		}
+		const inPrompt = new Set(this.#host.promptContextFiles());
+		const carried: ContextFileEntry[] = [];
 		for (const file of files) {
-			if (unread.includes(file.path)) byPath.set(file.path, capContent(file.content, displayPath(cwd, file.path)));
+			if (inPrompt.has(file.path)) continue;
+			const delivered = window.blocks.get(file.path);
+			let content: string;
+			if (delivered !== undefined && delivered === blockBody(renderBlock(cwd, file))) content = delivered;
+			else if (window.fullReads.has(file.path)) content = capContent(file.content, displayPath(cwd, file.path));
+			else continue;
+			carried.push({ path: file.path, content, depth: nestedDepth(cwd, roots, file.owner) });
 		}
-		const ranks = new Map(files.map((file, index) => [file.path, { depth: segmentCount(file.owner), index }]));
-		// A delivered file discovery no longer finds keeps its place among its directory's files.
-		const rank = (filePath: string) =>
-			ranks.get(filePath) ?? { depth: segmentCount(ownerDirectory(filePath)), index: Number.MAX_SAFE_INTEGER };
-		return [...byPath]
-			.map(([filePath, content]) => ({ path: filePath, content, rank: rank(filePath) }))
-			.sort((a, b) => a.rank.depth - b.rank.depth || a.rank.index - b.rank.index)
-			.map(({ path: filePath, content }) => ({
-				path: filePath,
-				content,
-				depth: nestedDepth(cwd, roots, ownerDirectory(filePath)),
-			}));
+		return carried;
 	}
 }
 
+/** Whether `dir` is `root` itself or below it; both normalized. */
+function isAtOrBelow(root: string, dir: string): boolean {
+	return dir === root || isStrictlyWithinNormalizedRoot(root, dir);
+}
+
 /**
- * The deepest workspace root `dir` is strictly below, which bounds discovery
- * for it; undefined when it is below none.
+ * The deepest workspace root `dir` is at or below, which bounds discovery for
+ * it; undefined when it is under none.
  */
 function rootOf(roots: readonly string[], dir: string): string | undefined {
 	let deepest: string | undefined;
 	for (const root of roots) {
-		if (
-			isStrictlyWithinNormalizedRoot(root, dir) &&
-			(deepest === undefined || isStrictlyWithinNormalizedRoot(deepest, root))
-		) {
+		if (isAtOrBelow(root, dir) && (deepest === undefined || isStrictlyWithinNormalizedRoot(deepest, root))) {
 			deepest = root;
 		}
 	}
@@ -488,17 +519,31 @@ function rootOf(roots: readonly string[], dir: string): string | undefined {
 }
 
 /**
- * Context-file depth of a nested file owned by `owner`: levels below cwd as a
- * negative number, since `ContextFile.depth` counts levels above it, so a
- * system prompt ranks it after every file it loaded itself. Owners outside cwd
- * count from the workspace root they sit under, as that root's own files count
- * from it; one outside every root (the session moved since) ranks just below cwd.
+ * Context-file depth of a file owned by `owner`: levels below cwd as a
+ * negative number (zero at cwd itself), since `ContextFile.depth` counts
+ * levels above it, so a system prompt ranks it after every file it loaded
+ * itself. Owners outside cwd count from the workspace root they sit under, as
+ * that root's own files count from it; one outside every root (the session
+ * moved since) ranks just below cwd.
  */
 function nestedDepth(cwd: string, roots: readonly string[], owner: string): number {
 	const base = isStrictlyWithinNormalizedRoot(cwd, owner) ? cwd : rootOf(roots, owner);
 	return base === undefined ? -1 : segmentCount(base) - segmentCount(owner);
 }
 
+/** The block delivering `file`, as the session's cwd displays it. */
+function renderBlock(cwd: string, file: NestedContextFile): string {
+	return prompt.render(nestedContextFileTemplate, {
+		path: escapeAttribute(file.path),
+		dir: escapeAttribute(`${displayPath(cwd, file.owner) || "."}/`),
+		content: escapeBlockTags(capContent(file.content, displayPath(cwd, file.path))),
+	});
+}
+
+/** A rendered block's body, as {@link scanWindow} parses it back from the window. */
+function blockBody(block: string): string | undefined {
+	return [...block.matchAll(BLOCK_RE)][0]?.[2];
+}
 /**
  * A file's own `<nested-context` tags, neutralised: the window is parsed back
  * from delivered blocks, so a body must not be able to end its block early or
@@ -535,10 +580,11 @@ function capContent(content: string, display: string): string {
 }
 
 /**
- * Context files the live window already holds, by absolute path: blocks
- * delivered as developer messages, with their delivered content, and files read
- * in full. Only the harness writes developer messages; a block-shaped string in
- * tool output is the tool's output, never a delivered file.
+ * Context files the live window may already hold, by absolute path: blocks
+ * delivered as developer messages, with their delivered body, and files read
+ * in full. A block-shaped string in tool output is the tool's output, never a
+ * delivered file. Other developer messages can quote model-written text, so a
+ * block found here only counts once its body matches the file's.
  */
 function scanWindow(messages: readonly AgentMessage[]): { blocks: Map<string, string>; fullReads: Set<string> } {
 	const blocks = new Map<string, string>();
@@ -550,7 +596,7 @@ function scanWindow(messages: readonly AgentMessage[]): { blocks: Map<string, st
 				if (path.isAbsolute(blockPath)) blocks.set(blockPath, match[2]);
 			}
 		} else if (message.role === "toolResult" && message.toolName === "read" && !message.isError) {
-			const readPath = fullReadPath(message.details);
+			const readPath = fullReadPath(message.details, message.content);
 			if (readPath) fullReads.add(readPath);
 		}
 	}
@@ -583,9 +629,11 @@ function readDetailsPath(details: Record<string, unknown>): string | undefined {
  * Absolute path of a read that showed the whole file: every line from 1 to the
  * end, in order, with nothing truncated, elided, summarised or cut at a column.
  * A tail or range read can start at line 1 and still skip the middle, so the
- * displayed line numbers are the proof.
+ * displayed line numbers are the proof. Details outlive their content: pruning
+ * blanks a result in place, and an extension's `tool_result` handler can
+ * replace the content alone, so the visible content must still show each line.
  */
-function fullReadPath(details: unknown): string | undefined {
+function fullReadPath(details: unknown, content: unknown): string | undefined {
 	if (!isRecord(details) || details.isDirectory === true) return undefined;
 	if (details.truncation !== undefined || details.summary !== undefined) return undefined;
 	const meta = isRecord(details.meta) ? details.meta : {};
@@ -596,7 +644,21 @@ function fullReadPath(details: unknown): string | undefined {
 	const lines = display.lineNumbers;
 	if (!Array.isArray(lines) || lines.length !== details.totalLines) return undefined;
 	if (lines.some((line, index) => line !== index + 1)) return undefined;
+	if (typeof display.text !== "string" || !showsInOrder(messageText(content), display.text.split("\n"))) {
+		return undefined;
+	}
 	return readDetailsPath(details);
+}
+
+/** Whether `shown` contains every one of `lines`, in order (a line prefix may precede each). */
+function showsInOrder(shown: string, lines: readonly string[]): boolean {
+	let from = 0;
+	for (const line of lines) {
+		const at = shown.indexOf(line, from);
+		if (at === -1) return false;
+		from = at + line.length;
+	}
+	return true;
 }
 
 /** Absolute paths a write, edit or ast_edit changed, from the tool's own resolved paths where it reports them. */
