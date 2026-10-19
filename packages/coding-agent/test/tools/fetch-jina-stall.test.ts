@@ -1,15 +1,16 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { renderHtmlToText } from "@oh-my-pi/pi-coding-agent/tools/fetch";
+import * as toolsManager from "@oh-my-pi/pi-coding-agent/utils/tools-manager";
+import * as utils from "@oh-my-pi/pi-utils";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { asGlobalFetch } from "../helpers/fetch-mock";
 
 /**
  * Regression test for #1449: a stalled Jina reader request must not prevent
- * local fallback renderers (trafilatura/lynx/native) from running within the
- * overall reader-mode budget.
+ * native rendering of already-loaded HTML after the shared reader-mode deadline.
  */
 describe("renderHtmlToText: jina stall does not starve local fallbacks (#1449)", () => {
 	it("falls back to native renderer when jina hangs until aborted", async () => {
@@ -25,9 +26,11 @@ describe("renderHtmlToText: jina stall does not starve local fallbacks (#1449)",
 		).join("");
 		const html = `<!doctype html><html><head><title>Example</title></head><body><article><h1>Example article</h1>${paragraphs}</article></body></html>`;
 
+		let requestSignal: AbortSignal | null | undefined;
 		const fetchMock = asGlobalFetch((input, init) => {
 			const url = String(input);
 			if (url.startsWith("https://r.jina.ai/")) {
+				requestSignal = init?.signal;
 				return new Promise<Response>((_resolve, reject) => {
 					const signal = init?.signal;
 					if (!signal) return;
@@ -56,7 +59,61 @@ describe("renderHtmlToText: jina stall does not starve local fallbacks (#1449)",
 		);
 
 		expect(result.ok).toBe(true);
-		expect(["native", "trafilatura", "lynx"]).toContain(result.method);
+		expect(requestSignal?.aborted).toBe(true);
+		expect(result.method).toBe("native");
+	});
+
+	it("shares the render deadline across sequential remote fallbacks and skips later requests", async () => {
+		const originalFirecrawlKey = process.env.FIRECRAWL_API_KEY;
+		const originalParallelKey = process.env.PARALLEL_API_KEY;
+		process.env.FIRECRAWL_API_KEY = "firecrawl-test-key";
+		process.env.PARALLEL_API_KEY = "parallel-test-key";
+		const deadline = new AbortController();
+		// Control only the whole-render clock; per-provider signal composition stays real.
+		const clock = vi.spyOn(utils.ptree, "combineSignals").mockReturnValueOnce(deadline.signal);
+		const ensureTool = vi.spyOn(toolsManager, "ensureTool").mockResolvedValue(undefined);
+		const which = vi.spyOn(utils, "$which").mockReturnValue(null);
+		const requests: string[] = [];
+		const signals: Array<AbortSignal | null | undefined> = [];
+		const paragraph =
+			"Please enable JavaScript to view this article. This locally available text is substantial but fails the reader quality gate. ";
+		const html = `<html><body><article><h1>Fallback article</h1><p>${paragraph.repeat(4)}</p></article></body></html>`;
+		try {
+			const result = await renderHtmlToText(
+				"https://example.com/article",
+				html,
+				30,
+				Settings.isolated({ "providers.fetch": "firecrawl" }),
+				undefined,
+				null,
+				asGlobalFetch((input, init) => {
+					requests.push(String(input));
+					signals.push(init?.signal);
+					if (requests.length === 1) {
+						return Response.json({ success: true, data: { markdown: "Too short" } });
+					}
+					// The second provider starts before the deadline, then exhausts the
+					// remaining shared budget. Neither it nor Jina gets a fresh budget.
+					deadline.abort(new DOMException("Render deadline expired", "TimeoutError"));
+					return Promise.reject(deadline.signal.reason);
+				}),
+			);
+
+			expect(requests).toEqual(["https://api.firecrawl.dev/v2/scrape", "https://api.parallel.ai/v1beta/extract"]);
+			expect(signals).toHaveLength(2);
+			expect(signals.every(signal => signal?.aborted)).toBe(true);
+			expect(result.ok).toBe(true);
+			expect(result.method).toBe("native");
+			expect(result.content).toContain("Fallback article");
+		} finally {
+			clock.mockRestore();
+			ensureTool.mockRestore();
+			which.mockRestore();
+			if (originalFirecrawlKey === undefined) delete process.env.FIRECRAWL_API_KEY;
+			else process.env.FIRECRAWL_API_KEY = originalFirecrawlKey;
+			if (originalParallelKey === undefined) delete process.env.PARALLEL_API_KEY;
+			else process.env.PARALLEL_API_KEY = originalParallelKey;
+		}
 	});
 
 	it("re-throws when the user signal is aborted, not when Jina sub-budget expires", async () => {

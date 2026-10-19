@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added bounded response reading and an opt-in `fetchWithRetry` body limit so oversized retryable errors can be returned without buffering the full body or issuing another request ([#16186](https://github.com/can1357/oh-my-pi/pull/16186) by [@stabey](https://github.com/stabey)).
+
 ## [18.12.2] - 2026-10-18
 
 ### Added

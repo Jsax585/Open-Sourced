@@ -101,6 +101,11 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 		// resolving anything (issue #11338), and X reads report missing xAI
 		// credentials.
 		const urlTarget = parseReadUrlTarget(cmd.path);
+		// HTML reader backends need saved/configured credentials, but no model registry.
+		if (urlTarget) {
+			authStorage ??= await discoverAuthStorage(undefined, { settings });
+			session.authStorage = authStorage;
+		}
 		if (splitImageQuestionTarget(cmd.path).question || (urlTarget && parseXUrl(urlTarget.path))) {
 			authStorage ??= await discoverAuthStorage(undefined, { settings });
 			const modelRegistry = new ModelRegistry(authStorage);

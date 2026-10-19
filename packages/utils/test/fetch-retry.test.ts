@@ -102,6 +102,98 @@ describe("fetchWithRetry", () => {
 		expect(attempt).toBe(1);
 	});
 
+	it("returns the original oversized retryable response without draining its retry body", async () => {
+		const status = 503;
+		let pulls = 0;
+		let attempts = 0;
+		let retryGateCalls = 0;
+		const chunk = new TextEncoder().encode("body");
+		const totalChunks = 64;
+		const original = new Response(
+			new ReadableStream<Uint8Array>({
+				pull(controller) {
+					pulls++;
+					controller.enqueue(chunk);
+					if (pulls === totalChunks) controller.close();
+				},
+			}),
+			{ status, statusText: "Retry later", headers: { "Retry-After": "0", "X-Request-Id": "first" } },
+		);
+
+		const response = await fetchWithRetry("https://example.invalid/oversized-retry", {
+			fetch: async () => {
+				attempts++;
+				return original;
+			},
+			maxAttempts: 3,
+			maxRetryBodyBytes: 8,
+			shouldRetryResponse: () => {
+				retryGateCalls++;
+				return true;
+			},
+		});
+
+		expect(response).toBe(original);
+		expect(response.status).toBe(status);
+		expect(response.statusText).toBe("Retry later");
+		expect(response.headers.get("X-Request-Id")).toBe("first");
+		expect(response.bodyUsed).toBe(false);
+		expect(attempts).toBe(1);
+		expect(retryGateCalls).toBe(0);
+		expect(pulls).toBeLessThanOrEqual(6);
+		expect(await response.text()).toBe("body".repeat(totalChunks));
+	}, 1_000);
+
+	it.each(["header", "body"])("retains bounded %s retry hints that exceed the delay cap", async source => {
+		let attempts = 0;
+		const body = source === "body" ? "Please retry in 3600s" : "slow down";
+		const inspectedBodies: string[] = [];
+		const original = new Response(body, {
+			status: 429,
+			headers: source === "header" ? { "Retry-After": "3600" } : {},
+		});
+
+		const response = await fetchWithRetry("https://example.invalid/bounded-hint", {
+			fetch: async () => {
+				attempts++;
+				return original;
+			},
+			maxAttempts: 3,
+			maxDelayMs: 10,
+			maxRetryBodyBytes: body.length,
+			shouldRetryResponse: (_response, bodyText) => {
+				inspectedBodies.push(bodyText);
+				return true;
+			},
+		});
+
+		expect(response).toBe(original);
+		expect(attempts).toBe(1);
+		expect(inspectedBodies).toEqual([body]);
+		expect(await response.text()).toBe(body);
+	});
+
+	it.each(["header", "body"])("retries using a complete bounded %s hint", async source => {
+		let attempts = 0;
+		const body = source === "body" ? "retry-after-ms=0" : "retry";
+		const response = await fetchWithRetry("https://example.invalid/bounded-retry", {
+			fetch: async () => {
+				attempts++;
+				return attempts === 1
+					? new Response(body, { status: 503, headers: source === "header" ? { "Retry-After": "0" } : {} })
+					: new Response("done");
+			},
+			maxAttempts: 2,
+			maxRetryBodyBytes: body.length,
+			defaultDelayMs: () => {
+				throw new Error("Complete retry hints must override the fallback delay");
+			},
+		});
+
+		expect(attempts).toBe(2);
+		expect(await response.text()).toBe("done");
+	});
+
 	it("normalizes aborts during response backoff", async () => {
 		const request = fetchWithRetry("https://example.invalid/response-backoff", {
 			fetch: async () => new Response("retry", { status: 503 }),
