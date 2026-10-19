@@ -5568,6 +5568,7 @@ type LiteLLMRichEndpointModel<TApi extends Api> = {
 	hasToolMetadata: boolean;
 	hasSupportedOpenAIParams: boolean;
 	declaredEfforts: Effort[] | undefined;
+	allowsNone: boolean | undefined;
 	hasCost: boolean;
 	reportedCost: Partial<ModelSpec<Api>["cost"]>;
 };
@@ -5777,6 +5778,14 @@ function getLiteLLMDeclaredReasoningEfforts(entry: LiteLLMRichModelEntry): Effor
 	return efforts.length > 0 ? efforts : undefined;
 }
 
+function getLiteLLMAllowsNone(entry: LiteLLMRichModelEntry): boolean | undefined {
+	const raw = getLiteLLMMetadataValue(entry, "reasoning_effort_levels");
+	if (!Array.isArray(raw)) {
+		return undefined;
+	}
+	return raw.some(level => typeof level === "string" && level.trim().toLowerCase() === "none");
+}
+
 function getLiteLLMProviders(entry: LiteLLMRichModelEntry): string[] | undefined {
 	if (!Array.isArray(entry.providers)) {
 		return undefined;
@@ -5889,17 +5898,7 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 	const reference = options.referenceResolver?.(id);
 	const api = options.resolveApi?.(entry, id) ?? options.api;
 	const declaredEfforts = getLiteLLMDeclaredReasoningEfforts(entry);
-	const rawLevels = getLiteLLMMetadataValue(entry, "reasoning_effort_levels");
-	const allowsNone =
-		Array.isArray(rawLevels) &&
-		rawLevels.some(level => typeof level === "string" && level.trim().toLowerCase() === "none");
-	const thinking: ThinkingConfig | undefined = declaredEfforts
-		? {
-				mode: api === "anthropic-messages" ? "anthropic-adaptive" : "effort",
-				efforts: declaredEfforts,
-				...(allowsNone ? { requiresEffort: false } : {}),
-			}
-		: reference?.thinking;
+	const allowsNone = getLiteLLMAllowsNone(entry);
 	const modelName = toNonEmptyString(entry.model_name);
 	const contextWindow = toPositiveNumber(
 		getLiteLLMMetadataValue(entry, "max_input_tokens"),
@@ -5964,12 +5963,28 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 		// in place. `mergeLiteLLMCompat` keeps it when another endpoint wins the
 		// compat merge (issue #11982).
 		...(supportsVision === true ? { stripImageInput: false } : {}),
-		// A declared `none` level is only usable when the OpenAI-compatible
-		// transport sends `reasoning_effort: "none"` for Off.
-		...(allowsNone && (api === "openai-completions" || api === "openai-responses")
-			? { reasoningDisableMode: "none-effort" as const }
-			: {}),
 	};
+	const compatWithNone: OpenAICompat =
+		allowsNone === true && (api === "openai-completions" || api === "openai-responses")
+			? { ...compat, reasoningDisableMode: "none-effort" }
+			: compat;
+	const policy = resolveModelPolicy({
+		id,
+		name: id,
+		api,
+		provider: options.provider,
+		baseUrl: runtimeBaseUrl,
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow,
+		maxTokens,
+		compat: compatWithNone as ModelSpec<TApi>["compat"],
+	});
+	const mode = policy.thinking?.mode ?? reference?.thinking?.mode ?? "effort";
+	const thinking: ThinkingConfig | undefined = declaredEfforts
+		? { mode, efforts: declaredEfforts, ...(allowsNone === true ? { requiresEffort: false } : {}) }
+		: reference?.thinking;
 	return {
 		id,
 		name: toLiteLLMDisplayName(modelName, reference?.name, id),
@@ -5988,7 +6003,7 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 		thinking,
 		cost: getLiteLLMCost(entry) ?? reference?.cost ?? UNKNOWN_PROXY_COST,
 		...(supportsTools !== undefined ? { supportsTools } : {}),
-		compat: compat as ModelSpec<TApi>["compat"],
+		compat: compatWithNone as ModelSpec<TApi>["compat"],
 	};
 }
 
@@ -6046,11 +6061,33 @@ function mergeLiteLLMRichEndpointModels<TApi extends Api>(
 					effort => existing.declaredEfforts!.includes(effort) && next.declaredEfforts!.includes(effort),
 				)
 			: (next.declaredEfforts ?? existing.declaredEfforts);
+	const allowsNone =
+		existing.allowsNone === undefined
+			? next.allowsNone
+			: next.allowsNone === undefined
+				? existing.allowsNone
+				: existing.allowsNone && next.allowsNone;
 	const baseThinking = next.model.thinking ?? existing.model.thinking;
 	const thinking =
 		declaredEfforts && declaredEfforts.length > 0
-			? { mode: baseThinking?.mode ?? "effort", efforts: declaredEfforts }
+			? {
+					mode: baseThinking?.mode ?? "effort",
+					efforts: declaredEfforts,
+					...(allowsNone === true ? { requiresEffort: false } : {}),
+				}
 			: baseThinking;
+	const mergedCompat = mergeLiteLLMCompat(existing.model.compat, next.model.compat, {
+		existingReportedParams: existing.hasSupportedOpenAIParams,
+		nextReportedParams: next.hasSupportedOpenAIParams,
+	}) as OpenAICompat | undefined;
+	const compat = mergedCompat ? { ...mergedCompat } : mergedCompat;
+	if (compat) {
+		if (allowsNone === true && (api === "openai-completions" || api === "openai-responses")) {
+			compat.reasoningDisableMode = "none-effort";
+		} else {
+			delete compat.reasoningDisableMode;
+		}
+	}
 	const model: ModelSpec<TApi> = {
 		...existing.model,
 		api,
@@ -6066,10 +6103,7 @@ function mergeLiteLLMRichEndpointModels<TApi extends Api>(
 					: existing.model.reasoning || next.model.reasoning,
 		thinking,
 		cost: { ...existing.model.cost, ...existing.reportedCost, ...next.reportedCost },
-		compat: mergeLiteLLMCompat(existing.model.compat, next.model.compat, {
-			existingReportedParams: existing.hasSupportedOpenAIParams,
-			nextReportedParams: next.hasSupportedOpenAIParams,
-		}),
+		compat: compat as ModelSpec<TApi>["compat"],
 	};
 	if (next.hasToolMetadata) {
 		model.supportsTools = next.model.supportsTools;
@@ -6084,6 +6118,7 @@ function mergeLiteLLMRichEndpointModels<TApi extends Api>(
 		hasToolMetadata: existing.hasToolMetadata || next.hasToolMetadata,
 		hasSupportedOpenAIParams: existing.hasSupportedOpenAIParams || next.hasSupportedOpenAIParams,
 		declaredEfforts,
+		allowsNone,
 		hasCost: existing.hasCost || next.hasCost,
 	};
 }
@@ -6162,6 +6197,7 @@ async function fetchLiteLLMRichEndpoint<TApi extends Api>(
 					supportedOpenAIParams !== undefined,
 				hasSupportedOpenAIParams: supportedOpenAIParams !== undefined,
 				declaredEfforts: getLiteLLMDeclaredReasoningEfforts(entry),
+				allowsNone: getLiteLLMAllowsNone(entry),
 				hasCost: getLiteLLMCost(entry) !== undefined,
 				reportedCost: getLiteLLMReportedCost(entry),
 			};

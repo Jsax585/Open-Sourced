@@ -1879,4 +1879,66 @@ describe("LiteLLM declared reasoning ladder", () => {
 		if (!spec) throw new Error("expected the M3.1 spec");
 		expect(buildModel(spec).thinking?.mode).toBe("anthropic-adaptive");
 	});
+
+	test("uses the model policy mode for budget-based Anthropic models", async () => {
+		const specs = await fetchLiteLLMRichModels({
+			api: "anthropic-messages",
+			provider: "litellm",
+			baseUrl: "http://primary:4000/v1",
+			apiKey: "sk-rich",
+			fetch: vi.fn(async (input: string | URL | Request) => {
+				const url = inputUrl(input);
+				if (url === "http://primary:4000/model/info") {
+					return Response.json({
+						data: [
+							{
+								model_name: "claude-sonnet-4-5",
+								supports_reasoning: true,
+								model_info: { reasoning_effort_levels: ["low", "medium", "high"] },
+							},
+						],
+					});
+				}
+				return new Response("{}", { status: 404 });
+			}) as FetchImpl,
+		});
+		const spec = specs?.find(model => model.id === "claude-sonnet-4-5");
+		expect(spec?.thinking?.mode).toBe("budget");
+		if (!spec) throw new Error("expected the Claude spec");
+		expect(buildModel(spec).thinking?.mode).toBe("budget");
+	});
+
+	test("intersects a declared none state across deployments", async () => {
+		const specs = await fetchLiteLLMRichModels({
+			api: "openai-completions",
+			provider: "litellm",
+			baseUrl: "http://primary:4000/v1",
+			apiKey: "sk-rich",
+			fetch: vi.fn(async (input: string | URL | Request) => {
+				const url = inputUrl(input);
+				if (url === "http://primary:4000/model/info") {
+					return Response.json({
+						data: [
+							{
+								model_name: "MiniMax-M3.1-Flash",
+								supports_reasoning: true,
+								model_info: { reasoning_effort_levels: ["none", "low"] },
+							},
+							{
+								model_name: "MiniMax-M3.1-Flash",
+								supports_reasoning: true,
+								model_info: { reasoning_effort_levels: ["low", "high"] },
+							},
+						],
+					});
+				}
+				return new Response("{}", { status: 404 });
+			}) as FetchImpl,
+		});
+		const spec = specs?.find(model => model.id === "MiniMax-M3.1-Flash");
+		expect(spec?.thinking?.efforts).toEqual([Effort.Low]);
+		expect(spec?.compat).not.toMatchObject({ reasoningDisableMode: "none-effort" });
+		if (!spec) throw new Error("expected the M3.1 spec");
+		expect(buildModel(spec).thinking?.requiresEffort).toBe(true);
+	});
 });
