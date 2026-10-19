@@ -117,7 +117,6 @@ function createModelRegistry(
 	return {
 		authStorage: {},
 		refresh: async () => {},
-		refreshIfStale: async () => false,
 		getAvailable: () => available,
 		getApiKey,
 	} as unknown as ModelRegistry;

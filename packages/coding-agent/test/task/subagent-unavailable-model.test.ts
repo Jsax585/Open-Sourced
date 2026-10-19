@@ -124,7 +124,6 @@ describe("subagent whose declared model cannot serve", () => {
 			settings: Settings.isolated(),
 			modelRegistry: {
 				refresh: async () => {},
-				refreshIfStale: async () => false,
 				getAvailable: () => [declared, parent],
 				getApiKey: async (requested: Model) => (requested.provider === "primary" ? undefined : "parent-key"),
 			} as never,
@@ -134,59 +133,6 @@ describe("subagent whose declared model cannot serve", () => {
 		expect(childModel).toBeUndefined();
 		expect(childModelPattern).toEqual(["primary/declared-model"]);
 		expect(childModelPatternAuthFallback).toBe("parent/session-model");
-	});
-
-	it("re-reads models.yml when the reused registry predates the declared model's provider", async () => {
-		const dir = path.join(os.tmpdir(), `omp-subagent-late-provider-${Snowflake.next()}`);
-		tempDirs.push(dir);
-		fs.mkdirSync(dir, { recursive: true });
-		const modelsPath = path.join(dir, "models.yml");
-		fs.writeFileSync(modelsPath, "providers: {}\n");
-		const authStorage = createInMemoryAuthStorage();
-		try {
-			const modelRegistry = new ModelRegistry(authStorage, modelsPath);
-			expect(modelRegistry.find("late-provider", "late-model")).toBeUndefined();
-			fs.writeFileSync(
-				modelsPath,
-				[
-					"providers:",
-					"  late-provider:",
-					"    baseUrl: https://late.example.test/v1",
-					"    auth: none",
-					"    api: openai-completions",
-					"    models:",
-					"      - id: late-model",
-				].join("\n"),
-			);
-			const later = new Date(Date.now() + 1000);
-			fs.utimesSync(modelsPath, later, later);
-			let childModel: Model | undefined;
-			vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
-				childModel = options?.model;
-				return {
-					session: createYieldingSession({ selector: "late-provider/late-model", isFallback: false }),
-					extensionsResult: {},
-					setToolUIContext: () => {},
-				} as never;
-			});
-
-			await runSubprocess({
-				cwd: "/tmp",
-				agent,
-				task: "work",
-				index: 0,
-				id: "late-provider",
-				modelOverride: ["late-provider/late-model"],
-				settings: Settings.isolated(),
-				modelRegistry,
-				enableLsp: false,
-			});
-
-			expect(childModel?.provider).toBe("late-provider");
-			expect(childModel?.id).toBe("late-model");
-		} finally {
-			authStorage.close();
-		}
 	});
 
 	it("reports why a startup fallback served the run on the settled result", async () => {
@@ -213,7 +159,6 @@ describe("subagent whose declared model cannot serve", () => {
 			settings: Settings.isolated(),
 			modelRegistry: {
 				refresh: async () => {},
-				refreshIfStale: async () => false,
 				getAvailable: () => [declared],
 				getApiKey: async () => undefined,
 			} as never,
@@ -259,5 +204,60 @@ describe("subagent whose declared model cannot serve", () => {
 		expect(result.resolvedModelIsFallback).toBe(true);
 		expect(result.resolvedModelFallbackReason).toContain("primary/declared-model");
 		expect(result.resolvedModelFallbackReason).toContain("429 usage limit reached");
+	});
+
+	it("leaves the parent's registry intact when models.yml no longer parses at spawn time", async () => {
+		const dir = path.join(os.tmpdir(), `omp-subagent-malformed-models-${Snowflake.next()}`);
+		tempDirs.push(dir);
+		fs.mkdirSync(dir, { recursive: true });
+		const modelsPath = path.join(dir, "models.yml");
+		fs.writeFileSync(
+			modelsPath,
+			[
+				"providers:",
+				"  parent-provider:",
+				"    baseUrl: https://parent.example.test/v1",
+				"    apiKey: PARENT_KEY_LITERAL",
+				"    api: openai-completions",
+				"    models:",
+				"      - id: parent-model",
+			].join("\n"),
+		);
+		const authStorage = createInMemoryAuthStorage();
+		try {
+			const modelRegistry = new ModelRegistry(authStorage, modelsPath);
+			expect(modelRegistry.find("parent-provider", "parent-model")).toBeDefined();
+			// A save caught mid-edit: newer on disk and no longer valid YAML.
+			fs.writeFileSync(modelsPath, "providers:\n  parent-provider: [unclosed\n");
+			const later = new Date(Date.now() + 1000);
+			fs.utimesSync(modelsPath, later, later);
+			vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
+				async () =>
+					({
+						session: createYieldingSession({ selector: "parent-provider/parent-model", isFallback: true }),
+						extensionsResult: {},
+						setToolUIContext: () => {},
+					}) as never,
+			);
+
+			await runSubprocess({
+				cwd: "/tmp",
+				agent,
+				task: "work",
+				index: 0,
+				id: "malformed-models-yml",
+				modelOverride: ["missing-provider/missing-model"],
+				parentActiveModelPattern: "parent-provider/parent-model",
+				settings: Settings.isolated(),
+				modelRegistry,
+				enableLsp: false,
+			});
+
+			const parent = modelRegistry.find("parent-provider", "parent-model");
+			if (!parent) throw new Error("The parent session's models.yml provider was dropped from its registry");
+			expect(await modelRegistry.getApiKey(parent)).toBe("PARENT_KEY_LITERAL");
+		} finally {
+			authStorage.close();
+		}
 	});
 });

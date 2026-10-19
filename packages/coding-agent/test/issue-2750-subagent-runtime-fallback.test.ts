@@ -697,7 +697,6 @@ describe("subagent runtime model resolution", () => {
 			}),
 			modelRegistry: {
 				refresh: async () => {},
-				refreshIfStale: async () => false,
 				getAvailable: () => [defaultModel],
 				getApiKey: async () => "test-key",
 			} as never,

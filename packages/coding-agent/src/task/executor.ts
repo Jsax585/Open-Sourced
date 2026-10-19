@@ -4300,7 +4300,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							modelRole ?? resolveExplicitModelRole(modelPatterns, subagentSettings),
 						)
 					: undefined;
-			let resolution = await awaitAbortable(
+			const resolution = await awaitAbortable(
 				resolveModelOverrideWithAuthFallback(
 					modelPatterns,
 					options.parentActiveModelPattern,
@@ -4309,25 +4309,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					id,
 				),
 			);
-			// The parent's registry was loaded when the parent started. A provider,
-			// or a provider key, added to models.yml since then is missing from it,
-			// so catch the catalog up before deciding the requested model is absent.
-			if (
-				registryFromParent &&
-				modelPatterns.length > 0 &&
-				(!resolution.model || resolution.authFallbackUsed) &&
-				(await awaitAbortable(modelRegistry.refreshIfStale()))
-			) {
-				resolution = await awaitAbortable(
-					resolveModelOverrideWithAuthFallback(
-						modelPatterns,
-						options.parentActiveModelPattern,
-						modelRegistry,
-						settings,
-						id,
-					),
-				);
-			}
 			// A requested model without working credentials is left to
 			// createAgentSession's deferred resolution, the one place that applies
 			// the model's retry.fallbackChains entry (an empty chain refuses the
