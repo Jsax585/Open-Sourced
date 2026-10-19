@@ -1027,10 +1027,12 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					const displayOut: string[] = [];
 					let cutLines: Set<number> | undefined;
 					const fileMatches = matchesByFile.get(relativePath) ?? [];
+					// A cross-line match arrives as one block; give each line it spans its own numbered row.
+					const matchRows = fileMatches.map(match => match.line.split(/\r?\n/));
 					const hashContext = hashContexts.get(relativePath);
 					const useHashLines = hashContext !== undefined;
-					const lineNumberWidth = fileMatches.reduce((width, match) => {
-						let nextWidth = Math.max(width, String(match.lineNumber).length);
+					const lineNumberWidth = fileMatches.reduce((width, match, index) => {
+						let nextWidth = Math.max(width, String(match.lineNumber + matchRows[index].length - 1).length);
 						for (const ctx of match.contextBefore ?? []) {
 							nextWidth = Math.max(nextWidth, String(ctx.lineNumber).length);
 						}
@@ -1041,7 +1043,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					}, 0);
 					let lastEmittedLine: number | undefined;
 					const gutterPad = " ".repeat(lineNumberWidth + 1);
-					for (const match of fileMatches) {
+					for (const [index, match] of fileMatches.entries()) {
 						const pushLine = (lineNumber: number, line: string, isMatch: boolean) => {
 							if (lastEmittedLine !== undefined && lineNumber > lastEmittedLine + 1) {
 								modelOut.push("...");
@@ -1059,11 +1061,17 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 								pushLine(ctx.lineNumber, ctx.line, false);
 							}
 						}
+						const rows = matchRows[index];
 						// A cut line shows a window around its first match; name where that match sits.
-						const matchLine = match.column === undefined ? match.line : `${match.line} [col ${match.column}]`;
-						if (match.truncated) (cutLines ??= new Set()).add(match.lineNumber);
-						pushLine(match.lineNumber, matchLine, true);
-						if (match.truncated) linesTruncated = true;
+						if (match.column !== undefined) rows[0] = `${rows[0]} [col ${match.column}]`;
+						if (match.truncated) {
+							linesTruncated = true;
+							// The cut window is contiguous, so only the block's first and last rows can be partial.
+							(cutLines ??= new Set()).add(match.lineNumber).add(match.lineNumber + rows.length - 1);
+						}
+						for (let row = 0; row < rows.length; row++) {
+							pushLine(match.lineNumber + row, rows[row], row === 0);
+						}
 						if (match.contextAfter) {
 							for (const ctx of match.contextAfter) {
 								pushLine(ctx.lineNumber, ctx.line, false);
