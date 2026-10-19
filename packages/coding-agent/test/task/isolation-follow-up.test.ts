@@ -60,6 +60,29 @@ async function createRepoAndIsolation(): Promise<{ repo: string; iso: string; ba
 	return { repo, iso, baseSha: await git(repo, ["rev-parse", "HEAD"]) };
 }
 
+/**
+ * Add a nested git repository `sub/` holding `n.txt`, in the parent and cloned
+ * into the isolation. Every commit exists once, in the parent, and the isolation
+ * only fetches it. A capture reads the isolation's HEAD from the parent's
+ * object store, so a second commit made there would be a different object
+ * whenever the two commits straddle a second boundary: identical content and
+ * message still hash differently with a different timestamp.
+ */
+async function addNestedRepo(repo: string, iso: string): Promise<void> {
+	const parentNested = path.join(repo, "sub");
+	await fs.mkdir(parentNested);
+	await git(parentNested, ["init", "-q", "-b", "main"]);
+	await configureIdentity(parentNested);
+	await Bun.write(path.join(parentNested, "n.txt"), "n0\n");
+	await git(parentNested, ["add", "n.txt"]);
+	await git(parentNested, ["commit", "-q", "-m", "nested"]);
+	await Bun.write(path.join(repo, ".gitignore"), "sub/\n");
+	await git(repo, ["add", ".gitignore"]);
+	await git(repo, ["commit", "-q", "-m", "ignore nested"]);
+	await git(iso, ["pull", "-q", "--ff-only"]);
+	await git(iso, ["clone", "-q", parentNested, "sub"]);
+}
+
 function result(id: string): SingleResult {
 	return {
 		index: 0,
@@ -543,23 +566,7 @@ describe("isolated agent follow-up turns", () => {
 
 	it("names a follow-up nested patch so the roster scanner can find it", async () => {
 		const { repo, iso } = await createRepoAndIsolation();
-		// One history, cloned into the isolation. Two independent inits would
-		// give the parent object store a different commit than the one the
-		// capture asks it to read.
-		const parentNested = path.join(repo, "sub");
-		await fs.mkdir(parentNested);
-		await git(parentNested, ["init", "-q", "-b", "main"]);
-		await configureIdentity(parentNested);
-		await Bun.write(path.join(parentNested, "n.txt"), "n0\n");
-		await git(parentNested, ["add", "n.txt"]);
-		await git(parentNested, ["commit", "-q", "-m", "nested"]);
-		await Bun.write(path.join(repo, ".gitignore"), "sub/\n");
-		await git(repo, ["add", ".gitignore"]);
-		await git(repo, ["commit", "-q", "-m", "ignore nested"]);
-		await git(iso, ["clone", "-q", parentNested, "sub"]);
-		await Bun.write(path.join(iso, ".gitignore"), "sub/\n");
-		await git(iso, ["add", ".gitignore"]);
-		await git(iso, ["commit", "-q", "-m", "ignore nested"]);
+		await addNestedRepo(repo, iso);
 
 		const firstRun = Promise.withResolvers<boolean | null>();
 		const id = "FollowUpNestedName";
@@ -900,6 +907,108 @@ describe("isolated agent follow-up turns", () => {
 		expect(AgentRegistry.global().get("ReleaseUndoneBranch")?.history?.branchName).toBeUndefined();
 	});
 
+	it("removes a nested patch the agent undid when the rest of an unlanded handoff is replaced", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		await addNestedRepo(repo, iso);
+		const { firstRun, followUps } = landingFollowUps(repo, "patch");
+		// apply=false: nothing lands, so every capture is cumulative since the run began.
+		followUps.land = async () => ({ summary: "not applied", landed: null });
+		const id = "FollowUpPartialUndo";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps,
+			firstRun: async () => {
+				await commitIn(iso, "one\n", "first run");
+				await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+			},
+		});
+		firstRun.resolve(null);
+		const [firstNested] = run.first.nestedPatchPaths ?? [];
+		expect(await Bun.file(firstNested ?? "").text()).toContain("+n1");
+
+		// The agent puts the nested repository back but keeps changing the root.
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n0\n");
+		await commitIn(iso, "two\n", "later fix");
+		await run.settleFollowUp?.(result(id));
+
+		// The replacement handoff holds no nested work. The first one's file would
+		// still offer, and after a restart rediscover, a patch for work that is gone.
+		expect(await Bun.file(firstNested ?? "").exists()).toBe(false);
+		expect(AgentRegistry.global().get(id)?.history?.nestedPatchPaths ?? []).not.toContain(firstNested);
+		await AgentLifecycleManager.global().release(id);
+		const names = await fs.readdir(path.dirname(run.first.patchPath ?? ""));
+		expect(names.filter(name => name.includes(".nested-"))).toEqual([]);
+		expect(await Bun.file(run.first.patchPath ?? "").text()).toContain("+two");
+	});
+
+	it("deletes the task branch when a refused follow-up is undone after an earlier one landed", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "branch");
+		const id = "FollowUpLandedThenUndone";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		const firstLanding = await mergeIsolatedChanges({ result: run.first, repoRoot: repo, mergeMode: "branch" });
+		firstRun.resolve(firstLanding.changesApplied === true);
+		// A landing removes the task branch.
+		expect(await taskBranches(repo)).toBe("");
+
+		// A follow-up the caller refuses to merge: its branch is the only copy of that work.
+		followUps.land = async () => ({ summary: "refused", landed: false });
+		await commitIn(iso, "two\n", "review fix");
+		await run.settleFollowUp?.(result(id));
+		expect(await taskBranches(repo)).toContain(`omp/task/${id}`);
+
+		// The agent puts the workspace back to exactly what landed.
+		await commitIn(iso, "one\n", "undo");
+		await run.settleFollowUp?.(result(id));
+
+		// Restoring the landed tip would recreate a branch of work already applied.
+		expect(await taskBranches(repo)).toBe("");
+		expect(AgentRegistry.global().get(id)?.history?.branchName).toBeUndefined();
+		await AgentLifecycleManager.global().release(id);
+		expect(await taskBranches(repo)).toBe("");
+	});
+
+	it("removes a nested patch the agent undid when release replaces an unlanded handoff", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		await addNestedRepo(repo, iso);
+		const { firstRun, followUps } = landingFollowUps(repo, "patch");
+		followUps.land = async () => ({ summary: "not applied", landed: null });
+		const id = "ReleasePartialUndo";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps,
+			firstRun: async () => {
+				await commitIn(iso, "one\n", "first run");
+				await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+			},
+		});
+		firstRun.resolve(null);
+		const [firstNested] = run.first.nestedPatchPaths ?? [];
+		expect(await Bun.file(firstNested ?? "").exists()).toBe(true);
+
+		// A later turn nobody captured: the nested repository goes back, the root keeps changing.
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n0\n");
+		await commitIn(iso, "two\n", "later fix");
+		await AgentLifecycleManager.global().release(id);
+
+		expect(await Bun.file(firstNested ?? "").exists()).toBe(false);
+		expect(AgentRegistry.global().get(id)?.history?.nestedPatchPaths ?? []).not.toContain(firstNested);
+		expect(await Bun.file(run.first.patchPath ?? "").text()).toContain("+two");
+	});
+
 	it("does not announce a withdrawal when the first run handed over nothing", async () => {
 		const { repo, iso } = await createRepoAndIsolation();
 		const { firstRun, followUps } = landingFollowUps(repo, "patch");
@@ -953,8 +1062,8 @@ describe("isolated agent follow-up turns", () => {
 		expect(run.first.isolationCaptureFailed).not.toBe(true);
 		expect(run.first.patchPath && (await Bun.file(run.first.patchPath).text())).toContain("+one");
 	});
-	it("restores the task branch when a follow-up commit is superseded before it lands", async () => {
-		const { repo, iso, baseSha } = await createRepoAndIsolation();
+	it("leaves no task branch when a follow-up is superseded after the first run landed", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
 		const { firstRun, followUps } = landingFollowUps(repo, "branch");
 		const run = await runKeptAlive({
 			id: "FollowUpSupersededBranch",
@@ -973,10 +1082,9 @@ describe("isolated agent follow-up turns", () => {
 			"not captured",
 		);
 
-		// The follow-up commit must not survive on the branch the first run already published.
-		expect(await git(repo, ["log", "--format=%s", `${baseSha}..omp/task/FollowUpSupersededBranch`])).toBe(
-			"first run",
-		);
+		// The landing removed the branch, and a superseded capture must not bring it back:
+		// it would hold work the caller already has.
+		expect(await taskBranches(repo)).toBe("");
 		await AgentLifecycleManager.global().release("FollowUpSupersededBranch");
 	});
 

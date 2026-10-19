@@ -471,6 +471,19 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		for (const file of files) unlandedFiles.add(file);
 		if (hasWork) unlandedWork = true;
 	};
+	/**
+	 * Record the files of a capture that replaces the unlanded handoff before it.
+	 * A capture is cumulative since the last landing, so a file of the earlier
+	 * handoff that this one did not write describes work the agent has since
+	 * removed. Left in place, the roster scanner would still offer it after a restart.
+	 */
+	const replaceUnlanded = async (files: readonly string[], hasWork: boolean): Promise<void> => {
+		const keep = new Set(files);
+		const stale = [...unlandedFiles].filter(file => !keep.has(file));
+		await Promise.all(stale.map(file => fs.rm(file, { force: true }).catch(() => undefined)));
+		for (const file of stale) unlandedFiles.delete(file);
+		trackUnlanded(files, hasWork);
+	};
 	// Settles once this function is done with the first run. Follow-up turns
 	// wait for it, so they never capture before the first run's handoff.
 	const firstRunDone = Promise.withResolvers<void>();
@@ -517,6 +530,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		preserveUnlanded = false;
 		unlandedFiles.clear();
 		unlandedWork = false;
+		// A landing deletes the task branch, so there is no published tip any more.
+		publishedBranchTip = undefined;
 		// A capture with no root changes made no branch: the previous tip still holds everything.
 		landed = { state: settled.state, tip: settled.tip ?? landed?.tip };
 	};
@@ -551,10 +566,12 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		// What the Agent Hub lists: stop naming files and a branch that are gone.
 		const stale: (keyof AgentHistorySummary)[] = ["patchPath", "nestedPatchPaths"];
 		if (opts.mergeMode === "branch") {
-			await resetTaskBranch(`omp/task/${opts.agentId}`, landed?.tip);
-			publishedBranchTip = landed?.tip;
-			// A landed tip keeps the branch at what the caller already has.
-			if (!landed?.tip) stale.push("branchName");
+			// A landing deletes the task branch, so the branch that exists now is
+			// the unlanded one. Restoring a landed tip would recreate a branch of
+			// work the caller already has.
+			await resetTaskBranch(`omp/task/${opts.agentId}`, undefined);
+			publishedBranchTip = undefined;
+			stale.push("branchName");
 		}
 		AgentRegistry.global().clearHistory(opts.agentId, stale);
 		unlandedFiles.clear();
@@ -595,7 +612,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		}
 		if (opts.mergeMode === "patch") {
 			const artifacts = await writeDeltaPatches(delta, opts.artifactsDir, opts.agentId, nextNestedPatchPrefix());
-			trackUnlanded([artifacts.patchPath, ...artifacts.nestedPatchPaths], true);
+			await replaceUnlanded([artifacts.patchPath, ...artifacts.nestedPatchPaths], true);
 			handedOff = current.state;
 			retryRefused = false;
 			return { artifacts, state: current.state, tip: undefined };
@@ -628,7 +645,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			nextNestedPatchPrefix(),
 			branch.nestedPatches,
 		);
-		trackUnlanded(nestedPatchPaths, true);
+		await replaceUnlanded(nestedPatchPaths, true);
 		handedOff = branch.state;
 		publishedBranchTip = branch.headSha;
 		retryRefused = false;
@@ -728,6 +745,9 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 						opts.agentId,
 						nextNestedPatchPrefix(),
 					);
+					// This capture is cumulative; files of an earlier unlanded handoff it did
+					// not rewrite describe work the agent has since removed.
+					await replaceUnlanded([patchResult.patchPath, ...patchResult.nestedPatchPaths], true);
 					AgentRegistry.global().setHistory(opts.agentId, {
 						patchPath: patchResult.patchPath,
 						nestedPatchPaths: patchResult.nestedPatchPaths,
