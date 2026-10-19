@@ -158,6 +158,8 @@ describe("plan-yolo approval autosave", () => {
 			configuredThinkingLevel: () => undefined,
 			restoreThinkingLevel: () => {},
 			resolveDefaultPrewalk: () => undefined,
+			resolveAutoPrewalkTarget: () => undefined,
+			classifyAutoPrewalk: async () => undefined,
 			emitNotice: (level, message, source) => {
 				notices.push({ level, message, source });
 			},
@@ -169,7 +171,6 @@ describe("plan-yolo approval autosave", () => {
 			getActiveToolNames: () => [],
 			getEnabledToolNames: () => [],
 			getMountedXdevToolNames: () => [],
-			getToolByName: () => undefined,
 			hasBuiltInTool: () => false,
 			getPlanModeState: () => planModeState,
 			setPlanModeState: state => {
