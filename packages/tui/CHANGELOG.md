@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Markdown task lists dropping their checkboxes, so done (`- [x]`) and open (`- [ ]`) items looked the same in the transcript ([#16557](https://github.com/can1357/oh-my-pi/pull/16557) by [@mottopanikeiku](https://github.com/mottopanikeiku))
+
 ## [18.12.4] - 2026-10-20
 
 ### Added

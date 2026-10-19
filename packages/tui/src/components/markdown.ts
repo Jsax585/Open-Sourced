@@ -4275,7 +4275,11 @@ export class Markdown implements Component {
 				continue;
 			}
 			const rowStart = lines.length;
-			const bullet = token.ordered ? `${startNumber + i}. ` : "- ";
+			const marker = token.ordered ? `${startNumber + i}. ` : "- ";
+			// A task item's leading checkbox token draws nothing in #renderListItem;
+			// draw it as part of the marker so wrapped rows hang under the task text.
+			const checkbox = item.tokens?.[0];
+			const bullet = checkbox?.type === "checkbox" ? `${marker}[${checkbox.checked ? "x" : " "}] ` : marker;
 			const firstPrefix = indent + this.#theme.listBullet(bullet);
 			// Continuation rows align under the item text, so the hang matches the
 			// actual bullet width (`10. ` is 4 cells, not 2).

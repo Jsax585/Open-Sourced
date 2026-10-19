@@ -180,6 +180,25 @@ describe("Markdown component", () => {
 			expect(plainLines.every(line => visibleWidth(line) <= 16)).toBe(true);
 		});
 
+		it("keeps task-list checkbox state in the marker and hangs wrapped rows under the task text", () => {
+			const markdown = new Markdown(
+				"- [x] Ship the fix today\n- [ ] Add a regression test",
+				0,
+				0,
+				defaultMarkdownTheme,
+			);
+
+			const plainLines = markdown.render(20).map(line => stripVTControlCharacters(line).trimEnd());
+
+			expect(plainLines).toEqual([
+				"- [x] Ship the fix",
+				"      today",
+				"- [ ] Add a",
+				"      regression",
+				"      test",
+			]);
+		});
+
 		it("keeps list rows within width when the marker consumes the line", () => {
 			const markdown = new Markdown("123456789. x", 0, 0, defaultMarkdownTheme);
 
