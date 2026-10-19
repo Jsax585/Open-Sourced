@@ -18,53 +18,77 @@ export interface LibcFdOps {
 let libcFdOpsCache: LibcFdOps | null | undefined;
 let savedStdoutFd: number | null = null;
 let savedStderrFd: number | null = null;
-let stdoutWriteDescriptor: PropertyDescriptor | undefined;
 let redirectTarget: string | undefined;
-let stderrWriteDescriptor: PropertyDescriptor | undefined;
 // Nested acquisitions share one isolated state; only the final release (or a
 // forced restore on a fatal path) puts the terminal descriptors back.
 let activeSuppressions = 0;
 
-function redirectStreamWrites(stream: NodeJS.WriteStream, fd: number): PropertyDescriptor | undefined {
-	const descriptor = Object.getOwnPropertyDescriptor(stream, "write");
-	stream.write = (
-		chunk: string | Uint8Array,
-		encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
-		callback?: (error?: Error | null) => void,
-	): boolean => {
-		const done = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
-		const bytes =
-			typeof chunk === "string"
-				? Buffer.from(chunk, typeof encodingOrCallback === "string" ? encodingOrCallback : "utf8")
-				: chunk;
-		let offset = 0;
-		try {
-			while (offset < bytes.byteLength) {
-				const written = fs.writeSync(fd, bytes, offset, bytes.byteLength - offset);
-				if (written === 0) throw new Error("Cannot write isolated terminal output");
-				offset += written;
-			}
-		} catch (err) {
-			// Deliver log-write failures (ENOSPC/EIO/...) asynchronously like the
-			// platform streams do, so completion callbacks see the error instead
-			// of a synchronous throw escaping write(). Fire-and-forget callers
-			// keep the previous synchronous-throw behavior.
-			if (done) {
-				queueMicrotask(() => done(err instanceof Error ? err : new Error(String(err))));
-				return false;
-			}
-			throw err;
+type WriteCallback = (error?: Error | null) => void;
+
+function redirectedWrite(
+	fd: number,
+	chunk: string | Uint8Array,
+	encodingOrCallback?: BufferEncoding | WriteCallback,
+	callback?: WriteCallback,
+): boolean {
+	const done = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
+	const bytes =
+		typeof chunk === "string"
+			? Buffer.from(chunk, typeof encodingOrCallback === "string" ? encodingOrCallback : "utf8")
+			: chunk;
+	let offset = 0;
+	try {
+		while (offset < bytes.byteLength) {
+			const written = fs.writeSync(fd, bytes, offset, bytes.byteLength - offset);
+			if (written === 0) throw new Error("Cannot write isolated terminal output");
+			offset += written;
 		}
-		if (done) queueMicrotask(() => done(null));
-		return true;
-	};
-	return descriptor;
+	} catch (err) {
+		// Deliver log-write failures (ENOSPC/EIO/...) asynchronously like the
+		// platform streams do, so completion callbacks see the error instead
+		// of a synchronous throw escaping write(). Fire-and-forget callers
+		// keep the previous synchronous-throw behavior.
+		if (done) {
+			queueMicrotask(() => done(err instanceof Error ? err : new Error(String(err))));
+			return false;
+		}
+		throw err;
+	}
+	if (done) queueMicrotask(() => done(null));
+	return true;
 }
 
-function restoreStreamWrite(stream: NodeJS.WriteStream, descriptor: PropertyDescriptor | undefined): void {
-	if (descriptor) Object.defineProperty(stream, "write", descriptor);
-	else Reflect.deleteProperty(stream, "write");
+interface GuardedWrite {
+	(chunk: string | Uint8Array, encodingOrCallback?: BufferEncoding | WriteCallback, callback?: WriteCallback): boolean;
+	__ompGuardProxy?: boolean;
 }
+
+/**
+ * Replace `stream.write` with a stable proxy once, at module load. Extensions
+ * that cache `process.stdout.write.bind(process.stdout)` before the guard
+ * activates keep calling this proxy, which routes through the (dup2-redirected)
+ * descriptor while suppression is active and defers to the platform writer
+ * otherwise. Property swaps at activation time cannot reach those cached
+ * bound references.
+ */
+function installStreamWriteProxy(stream: NodeJS.WriteStream, fd: 1 | 2): void {
+	const descriptor = Object.getOwnPropertyDescriptor(stream, "write");
+	if (!descriptor || typeof descriptor.value !== "function") return;
+	const originalWrite = descriptor.value.bind(stream) as GuardedWrite;
+	if (originalWrite.__ompGuardProxy) return;
+	const proxy: GuardedWrite = (chunk, encodingOrCallback, callback) => {
+		const redirected = fd === 1 ? savedStdoutFd !== null : savedStderrFd !== null;
+		if (redirected) {
+			return redirectedWrite(fd, chunk, encodingOrCallback, callback);
+		}
+		return originalWrite(chunk, encodingOrCallback, callback);
+	};
+	proxy.__ompGuardProxy = true;
+	Object.defineProperty(stream, "write", { ...descriptor, value: proxy });
+}
+
+installStreamWriteProxy(process.stdout, 1);
+installStreamWriteProxy(process.stderr, 2);
 
 /**
  * Load dup/dup2 from libc, or null when no candidate soname resolves.
@@ -124,7 +148,6 @@ export function suppressTerminalOutput(): number | null {
 	const redirectFd = fs.openSync(redirectPath, "a", 0o600);
 	let stdoutFd = -1;
 	let stderrFd = -1;
-	let stdoutWritesRedirected = false;
 	try {
 		stdoutFd = libc.dup(1);
 		if (stdoutFd === -1) throw new Error("Cannot save terminal stdout");
@@ -134,17 +157,14 @@ export function suppressTerminalOutput(): number | null {
 			if (libc.dup2(redirectFd, 2) === -1) throw new Error("Cannot redirect terminal stderr");
 		}
 		if (libc.dup2(redirectFd, 1) === -1) throw new Error("Cannot redirect terminal stdout");
-		// Bun caches private TTY descriptors inside these streams; dup2 alone
-		// does not intercept extension writes through their cached write methods.
-		stdoutWriteDescriptor = redirectStreamWrites(process.stdout, 1);
-		stdoutWritesRedirected = true;
-		if (redirectStderr) stderrWriteDescriptor = redirectStreamWrites(process.stderr, 2);
+		// Stream writes route through the module-load proxies above: once the
+		// descriptors are swapped, both direct and pre-bound stream writers go
+		// to the redirect target.
 		savedStdoutFd = stdoutFd;
 		savedStderrFd = stderrFd === -1 ? null : stderrFd;
 		activeSuppressions = 1;
 		return stdoutFd;
 	} catch (err) {
-		if (stdoutWritesRedirected) restoreStreamWrite(process.stdout, stdoutWriteDescriptor);
 		if (stdoutFd !== -1) {
 			libc.dup2(stdoutFd, 1);
 			fs.closeSync(stdoutFd);
@@ -173,18 +193,32 @@ export function restoreTerminalOutput(force = false): void {
 	const stdoutRestored = savedStdoutFd === null || libc.dup2(savedStdoutFd, 1) !== -1;
 	const stderrRestored = savedStderrFd === null || libc.dup2(savedStderrFd, 2) !== -1;
 	if (stdoutRestored && savedStdoutFd !== null) {
-		restoreStreamWrite(process.stdout, stdoutWriteDescriptor);
-		stdoutWriteDescriptor = undefined;
 		fs.closeSync(savedStdoutFd);
 		savedStdoutFd = null;
 	}
 	if (stderrRestored && savedStderrFd !== null) {
-		restoreStreamWrite(process.stderr, stderrWriteDescriptor);
-		stderrWriteDescriptor = undefined;
 		fs.closeSync(savedStderrFd);
 		savedStderrFd = null;
 	}
 	if (!stdoutRestored || !stderrRestored) throw new Error("Cannot restore terminal output descriptors");
+	for (const listener of [...restoreListeners]) {
+		try {
+			listener();
+		} catch {
+			// A listener failing must not break the release for others.
+		}
+	}
+}
+
+const restoreListeners = new Set<() => void>();
+
+/**
+ * Be notified whenever a restore completes (final refcount release or forced).
+ * The compatibility stderr guard uses this to flush a release that arrived
+ * while this guard held the descriptors.
+ */
+export function onTerminalOutputRestored(listener: () => void): void {
+	restoreListeners.add(listener);
 }
 
 /** Give a private stream its own descriptor; it must never own the guard's saved fd. */

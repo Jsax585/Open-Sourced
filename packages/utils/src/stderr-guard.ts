@@ -13,7 +13,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getLogPath } from "./dirs";
-import { isTerminalOutputSuppressed, setTerminalOutputRedirectTarget, tryLibcFdOps } from "./terminal-output-guard";
+import {
+	isTerminalOutputSuppressed,
+	onTerminalOutputRestored,
+	setTerminalOutputRedirectTarget,
+	tryLibcFdOps,
+} from "./terminal-output-guard";
 
 /**
  * True when fd 2 writes would land on the same terminal the caller prints
@@ -118,12 +123,23 @@ export function setStderrRedirectTarget(logPath: string): void {
 
 /**
  * Re-point fd 2 at the saved terminal stderr. Safe to call unconditionally:
- * no-op when this guard is inactive, and no-op while the unified guard owns
- * the descriptors (its own release path restores them).
+ * no-op when this guard is inactive. A release that arrives while the unified
+ * guard owns the descriptors is recorded and takes effect when that guard
+ * finishes restoring, so a consumer's single restore call still completes.
  */
 export function restoreTerminalStderr(): void {
 	if (savedStderrFd === null) return;
-	if (isTerminalOutputSuppressed()) return;
+	if (isTerminalOutputSuppressed()) {
+		pendingRelease = true;
+		return;
+	}
+	performLegacyRestore();
+}
+
+let pendingRelease = false;
+
+function performLegacyRestore(): void {
+	if (savedStderrFd === null) return;
 	const saved = savedStderrFd;
 	savedStderrFd = null;
 	tryLibcFdOps()?.dup2(saved, 2);
@@ -133,6 +149,12 @@ export function restoreTerminalStderr(): void {
 		// The dup'ed fd is process-owned; a close failure leaves nothing to recover.
 	}
 }
+
+onTerminalOutputRestored(() => {
+	if (!pendingRelease) return;
+	pendingRelease = false;
+	performLegacyRestore();
+});
 
 /**
  * Whether fd 2 is currently redirected away from the terminal, by this guard
