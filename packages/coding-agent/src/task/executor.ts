@@ -4522,6 +4522,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					modelPatternAuthFallback: deferModelPatterns ? options.parentActiveModelPattern : undefined,
 					modelPatternFallbackRole: deferModelPatterns ? subagentRetryFallbackRole(id) : undefined,
 					modelPatternDefaultFallbackChain: deferModelPatterns ? inheritedRetryFallbackChain : undefined,
+					modelPatternChainFallback: deferModelPatterns || undefined,
 					thinkingLevel: effectiveThinkingLevel,
 					thinkingLevelCeiling: spawnEffortCeiling,
 					// Subagents are short-lived; never schedule background warm requests.

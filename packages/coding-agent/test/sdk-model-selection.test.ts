@@ -742,7 +742,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
-	test("marks the parent-model fallback for a subagent model without working credentials that no chain owns", async () => {
+	test("uses auth fallback when deferred subagent modelPattern resolves without working credentials", async () => {
 		const parentModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!parentModel) {
 			throw new Error("Expected bundled anthropic parent model");
@@ -781,11 +781,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		try {
 			expect(session.model?.provider).toBe(parentModel.provider);
 			expect(session.model?.id).toBe(parentModel.id);
-			expect(session.servingModel?.isFallback).toBe(true);
-			const modelChange = session.sessionManager.getEntries().find(entry => entry.type === "model_change");
-			expect(modelChange).toMatchObject({ resolvedModelIsFallback: true });
-			expect(modelFallbackMessage).toContain("runtime-provider/runtime-model");
-			expect(modelFallbackMessage).toContain(`${parentModel.provider}/${parentModel.id}`);
+			expect(modelFallbackMessage).toBeUndefined();
 		} finally {
 			await session.dispose();
 			getApiKeySpy.mockRestore();
@@ -822,6 +818,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			modelPattern,
 			modelPatternAuthFallback: parentPattern,
 			modelPatternFallbackRole: "subagent:unavailable",
+			modelPatternChainFallback: true,
 		};
 	}
 
@@ -850,6 +847,54 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 		throw new Error("Expected session creation to be refused");
 	}
+
+	test("marks the parent-model fallback for a subagent model without working credentials that no chain key owns", async () => {
+		const { authStorage, modelRegistry, parentPattern } = registryWithKeys([]);
+
+		const { session, modelFallbackMessage } = await createAgentSession(
+			subagentSessionOptions(
+				modelRegistry,
+				authStorage,
+				Settings.isolated(),
+				"runtime-provider/runtime-model",
+				parentPattern,
+			),
+		);
+
+		try {
+			expect(`${session.model?.provider}/${session.model?.id}`).toBe(parentPattern);
+			expect(session.servingModel?.isFallback).toBe(true);
+			const modelChange = session.sessionManager.getEntries().find(entry => entry.type === "model_change");
+			expect(modelChange).toMatchObject({ resolvedModelIsFallback: true });
+			expect(modelFallbackMessage).toContain("runtime-provider/runtime-model");
+			expect(modelFallbackMessage).toContain(parentPattern);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("keeps the plain credential fallback for a subagent without the spawn opt-in, as cold revival does, under an empty chain", async () => {
+		const { authStorage, modelRegistry, parentPattern } = registryWithKeys([]);
+		const settings = Settings.isolated({ "retry.fallbackChains": { "runtime-provider/runtime-model": [] } });
+
+		const { session } = await createAgentSession({
+			...subagentSessionOptions(
+				modelRegistry,
+				authStorage,
+				settings,
+				"runtime-provider/runtime-model",
+				parentPattern,
+			),
+			modelPatternFallbackRole: undefined,
+			modelPatternChainFallback: undefined,
+		});
+
+		try {
+			expect(`${session.model?.provider}/${session.model?.id}`).toBe(parentPattern);
+		} finally {
+			await session.dispose();
+		}
+	});
 
 	test("refuses a subagent model without working credentials whose fallback chain is empty", async () => {
 		const { authStorage, modelRegistry, parentPattern } = registryWithKeys([]);

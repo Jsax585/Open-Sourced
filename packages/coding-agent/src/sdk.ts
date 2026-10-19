@@ -606,6 +606,15 @@ export interface CreateAgentSessionOptions {
 	modelPatternFallbackRole?: string;
 	/** Validated default retry chain to install when a deferred singleton pattern resolves. */
 	modelPatternDefaultFallbackChain?: string[];
+	/**
+	 * Replace a deferred subagent pattern that cannot serve — absent from the
+	 * catalog, or without working credentials — through its own
+	 * `retry.fallbackChains` key, refusing the session when that chain is empty
+	 * or exhausted, and record any replacement (`modelPatternAuthFallback`
+	 * included) as a fallback. Task spawns set it; cold revival leaves it unset
+	 * and keeps the plain credential fallback to its last served model.
+	 */
+	modelPatternChainFallback?: boolean;
 	/** Thinking selector. Default: from settings, else unset */
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Hard ceiling on the session's thinking effort (e.g. a task spawn's `task.maxEffort`-capped hint); retry-fallback recovery re-clamps to it. */
@@ -3012,13 +3021,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				: allEnabledModels;
 			let usageFallbackTriggered = false;
 			let usageFallbackReason: { from: string; reason: string } | undefined;
-			// A subagent spawn names the parent's model as its credential fallback.
-			// When the model it requested cannot serve, that model's own
-			// retry.fallbackChains entry decides what replaces it, as it would for
-			// a runtime failure: an empty or exhausted chain refuses the spawn
-			// instead of letting another model answer as the one requested.
-			const subagentRequest =
-				options.modelPatternAuthFallback !== undefined || options.modelPatternFallbackRole !== undefined;
+			// A task spawn opts in (`modelPatternChainFallback`): when the model it
+			// requested cannot serve, that model's own retry.fallbackChains entry
+			// decides what replaces it, as it would for a runtime failure, and an
+			// empty or exhausted chain refuses the spawn instead of letting another
+			// model answer as the one requested.
+			const chainFallback = options.modelPatternChainFallback === true;
 			const replaceUnavailableSubagentModel = (
 				requestedSelector: string,
 				requestedModel: Model | undefined,
@@ -3155,7 +3163,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					const primaryKey = await modelRegistry.getApiKey(primary.model, providerSessionId);
 					if (primaryKey !== kNoAuth && !isAuthenticated(primaryKey)) {
 						const cause = "has no working credentials";
-						const replacement = replaceUnavailableSubagentModel(pattern, primary.model, cause);
+						const replacement = chainFallback
+							? replaceUnavailableSubagentModel(pattern, primary.model, cause)
+							: undefined;
 						if (replacement) {
 							selectedModel = replacement.model;
 							selectedThinkingLevel = replacement.thinkingLevel;
@@ -3175,11 +3185,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 									selectedThinkingLevel = fallback.thinkingLevel;
 									selectedExplicitThinkingLevel = fallback.explicitThinkingLevel;
 									authFallbackUsed = true;
-									startupReplacement = {
-										from: pattern,
-										reason: `${pattern} ${cause} and no retry.fallbackChains entry owns it, so the parent session's model serves instead`,
-										role: options.modelPatternFallbackRole ?? "default",
-									};
+									if (chainFallback) {
+										startupReplacement = {
+											from: pattern,
+											reason: `${pattern} ${cause} and retry.fallbackChains has no key for it, so the parent session's model serves instead`,
+											role: options.modelPatternFallbackRole ?? "default",
+										};
+									}
 								}
 							}
 						}
@@ -3243,7 +3255,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				void prewarmModelConnection(selectedModel);
 				break;
 			}
-			if (!model && subagentRequest) {
+			if (!model && chainFallback) {
 				const requestedSelector = expandedModelPatterns[0]?.pattern ?? deferredModelPatterns[0];
 				const cause = "matches no available model";
 				const replacement = replaceUnavailableSubagentModel(requestedSelector, undefined, cause);
