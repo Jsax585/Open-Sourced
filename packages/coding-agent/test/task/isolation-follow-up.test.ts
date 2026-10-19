@@ -536,21 +536,24 @@ describe("isolated agent follow-up turns", () => {
 
 	it("names a follow-up nested patch so the roster scanner can find it", async () => {
 		const { repo, iso } = await createRepoAndIsolation();
-		// The capture writes nested trees into the parent checkout's copy of the
-		// nested repo. That copy has to exist, or the first capture retains the
-		// workspace and the follow-up never writes a patch file.
-		for (const root of [repo, iso]) {
-			const nested = path.join(root, "sub");
-			await fs.mkdir(nested);
-			await git(nested, ["init", "-q", "-b", "main"]);
-			await configureIdentity(nested);
-			await Bun.write(path.join(nested, "n.txt"), "n0\n");
-			await git(nested, ["add", "n.txt"]);
-			await git(nested, ["commit", "-q", "-m", "nested"]);
-			await Bun.write(path.join(root, ".gitignore"), "sub/\n");
-			await git(root, ["add", ".gitignore"]);
-			await git(root, ["commit", "-q", "-m", "ignore nested"]);
-		}
+		// One history, cloned into the isolation. Two independent inits would
+		// give the parent object store a different commit than the one the
+		// capture asks it to read.
+		const parentNested = path.join(repo, "sub");
+		await fs.mkdir(parentNested);
+		await git(parentNested, ["init", "-q", "-b", "main"]);
+		await configureIdentity(parentNested);
+		await Bun.write(path.join(parentNested, "n.txt"), "n0\n");
+		await git(parentNested, ["add", "n.txt"]);
+		await git(parentNested, ["commit", "-q", "-m", "nested"]);
+		await Bun.write(path.join(repo, ".gitignore"), "sub/\n");
+		await git(repo, ["add", ".gitignore"]);
+		await git(repo, ["commit", "-q", "-m", "ignore nested"]);
+		await git(iso, ["clone", "-q", parentNested, "sub"]);
+		await Bun.write(path.join(iso, ".gitignore"), "sub/\n");
+		await git(iso, ["add", ".gitignore"]);
+		await git(iso, ["commit", "-q", "-m", "ignore nested"]);
+
 		const firstRun = Promise.withResolvers<boolean | null>();
 		const id = "FollowUpNestedName";
 		const run = await runKeptAlive({

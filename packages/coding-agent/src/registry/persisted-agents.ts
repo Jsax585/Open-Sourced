@@ -298,18 +298,26 @@ async function readPersistedAgentHistory(
 
 /**
  * Nested-repo patch files the isolation runner wrote beside a transcript,
- * picked out of the directory listing the scan already holds:
- * `<id>.nested-<n>-<path>.patch`, in capture order.
+ * picked out of the directory listing the scan already holds, in capture order.
+ * The first run writes `<id>.nested-<index>-<path>.patch`. A later capture
+ * writes `<id>.nested-<capture>.nested-<index>-<path>.patch`, so it sorts
+ * after every first-run file instead of between them.
  */
 function nestedPatchFilesFor(dir: string, transcriptName: string, entries: readonly fs.Dirent[]): string[] {
 	const prefix = `${transcriptName.slice(0, -".jsonl".length)}.nested-`;
+	const order = (rest: string): [number, number] => {
+		const followUp = /^(\d+)\.nested-(\d+)-/.exec(rest);
+		if (followUp?.[1] !== undefined && followUp[2] !== undefined) return [Number(followUp[1]), Number(followUp[2])];
+		const firstRun = /^(\d+)-/.exec(rest);
+		return [0, firstRun?.[1] !== undefined ? Number(firstRun[1]) : Number.MAX_SAFE_INTEGER];
+	};
 	return entries
 		.filter(entry => entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(".patch"))
 		.map(entry => entry.name)
 		.sort((a, b) => {
-			const byCapture =
-				Number.parseInt(a.slice(prefix.length), 10) - Number.parseInt(b.slice(prefix.length), 10);
-			return byCapture || a.localeCompare(b);
+			const [aCapture, aIndex] = order(a.slice(prefix.length));
+			const [bCapture, bIndex] = order(b.slice(prefix.length));
+			return aCapture - bCapture || aIndex - bIndex || a.localeCompare(b);
 		})
 		.map(name => path.join(dir, name));
 }

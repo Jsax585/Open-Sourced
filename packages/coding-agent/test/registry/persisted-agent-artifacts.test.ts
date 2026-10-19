@@ -26,11 +26,12 @@ describe("persisted agent isolation artifacts", () => {
 		await Bun.write(path.join(dir, "main.jsonl"), "");
 		await Bun.write(path.join(agentDir, "Worker.jsonl"), `${transcript()}\n`);
 		await Bun.write(path.join(agentDir, "Worker.patch"), "");
-		// Written out of lexical order on purpose: index 10 sorts before 2 as text.
+		// Written out of lexical order on purpose: index 10 sorts before 2 as text,
+		// and a follow-up capture numbered 1 must not land between first-run indexes.
 		await Bun.write(path.join(agentDir, "Worker.nested-10-vendor_tools.patch"), "diff --git a/z b/z\n");
-		await Bun.write(path.join(agentDir, "Worker.nested-2-lib.patch"), "diff --git a/y b/y\n");
+		await Bun.write(path.join(agentDir, "Worker.nested-1-lib.patch"), "diff --git a/y b/y\n");
+		await Bun.write(path.join(agentDir, "Worker.nested-2-lib.patch"), "diff --git a/w b/w\n");
 		await Bun.write(path.join(agentDir, "Worker.nested-0-engine.patch"), "diff --git a/x b/x\n");
-		// A follow-up capture numbers inside the same prefix: `<id>.nested-<n>.nested-<index>-…`.
 		await Bun.write(path.join(agentDir, "Worker.nested-1.nested-0-sub.patch"), "diff --git a/s b/s\n");
 		// A sibling agent's nested patch must not be attributed to Worker.
 		await Bun.write(path.join(agentDir, "Other.nested-0-engine.patch"), "diff --git a/o b/o\n");
@@ -42,9 +43,10 @@ describe("persisted agent isolation artifacts", () => {
 		expect(history?.patchPath).toBe(path.join(agentDir, "Worker.patch"));
 		expect(history?.nestedPatchPaths).toEqual([
 			path.join(agentDir, "Worker.nested-0-engine.patch"),
-			path.join(agentDir, "Worker.nested-1.nested-0-sub.patch"),
+			path.join(agentDir, "Worker.nested-1-lib.patch"),
 			path.join(agentDir, "Worker.nested-2-lib.patch"),
 			path.join(agentDir, "Worker.nested-10-vendor_tools.patch"),
+			path.join(agentDir, "Worker.nested-1.nested-0-sub.patch"),
 		]);
 	});
 });
