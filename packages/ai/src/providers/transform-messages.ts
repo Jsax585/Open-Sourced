@@ -407,12 +407,13 @@ function isMalformedReplayToolCall(
 	maxLength: number,
 ): boolean {
 	if (block.namespace !== undefined) {
-		if (!supportsNamespacedToolCalls(model)) return true;
 		// Internal calls may carry the qualified name (`clock.sleep`) or the
-		// wire leaf (`sleep`); both are valid beside the namespace.
-		const leaf = block.name.startsWith(`${block.namespace}.`)
-			? block.name.slice(block.namespace.length + 1)
-			: block.name;
+		// wire leaf (`sleep`); both are valid beside the namespace. The leaf
+		// form is an ordinary Responses item on any target; only the qualified
+		// form requires namespace-aware dispatch.
+		const qualified = block.name.startsWith(`${block.namespace}.`);
+		const leaf = qualified ? block.name.slice(block.namespace.length + 1) : block.name;
+		if (qualified && !supportsNamespacedToolCalls(model)) return true;
 		return (
 			isMalformedToolCallId(block.id) ||
 			isMalformedToolCallName(block.namespace, allowedName, maxLength) ||

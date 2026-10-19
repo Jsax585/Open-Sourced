@@ -2488,8 +2488,18 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 		assistantMsg.content.some(
 			block => block.type === "thinking" && parseResponseReasoningReplayItem(block.thinkingSignature) !== undefined,
 		);
-	const isDifferentModel =
-		assistantMsg.model !== model.id && assistantMsg.provider === model.provider && assistantMsg.api === model.api;
+	// Validated gateway parser placeholders mint provider openai, api
+	// openai-responses, stopReason stop turns for the requested model string,
+	// which may carry the exact provider-qualified form. Treat the bare model
+	// ID and exactly `${model.provider}/${model.id}` as the same model here
+	// and in native ID eligibility below; never suffix matching.
+	const parserPlaceholder =
+		assistantMsg.stopReason === "stop" &&
+		assistantMsg.provider === "openai" &&
+		assistantMsg.api === "openai-responses";
+	const sameModel =
+		assistantMsg.model === model.id || (parserPlaceholder && assistantMsg.model === `${model.provider}/${model.id}`);
+	const isDifferentModel = !sameModel && assistantMsg.provider === model.provider && assistantMsg.api === model.api;
 	// DeepSeek-family Responses targets (e.g. opencode-go) reject a thinking-mode
 	// continuation whose replayed assistant turns carry no reasoning item: "The
 	// reasoning_text in the thinking mode must be passed back to the API." After a
@@ -2607,14 +2617,8 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 		// which mint provider openai/api openai-responses turns for the requested
 		// model) retains exact identity, while cross-model and cross-provider
 		// replays never revive a foreign native ID.
-		const sameModel = assistantMsg.model === model.id;
 		const sameProvenance = assistantMsg.provider === model.provider && assistantMsg.api === model.api;
-		const parserPlaceholder =
-			assistantMsg.stopReason === "stop" &&
-			assistantMsg.provider === "openai" &&
-			assistantMsg.api === "openai-responses";
-		const nativeItemId =
-			!isDifferentModel && sameModel && (sameProvenance || parserPlaceholder) ? block.responsesItemId : undefined;
+		const nativeItemId = sameModel && (sameProvenance || parserPlaceholder) ? block.responsesItemId : undefined;
 		knownCallIds.add(normalized.callId);
 		if (block.customWireName && supportsCustomToolCalls) {
 			const rawInput = typeof block.arguments?.input === "string" ? block.arguments.input : "";
@@ -3549,10 +3553,16 @@ export async function processResponsesStream<TApi extends Api>(
 					arguments: {},
 					...(namespace ? { namespace } : {}),
 					...(item.id ? { responsesItemId: item.id } : {}),
-					// An empty added-item payload carries no arguments; storing it
-					// would shadow delta-accumulated arguments on replay.
+					// Store only the replayable form: an empty payload carries no
+					// arguments, and malformed text must never shadow what the
+					// tool actually receives.
 					...(typeof item.arguments === "string" && item.arguments.length > 0
-						? { responsesArguments: item.arguments }
+						? {
+								responsesArguments: replayableToolCallArguments(
+									item.arguments,
+									parseToolCallArguments(item.arguments),
+								),
+							}
 						: {}),
 					[kStreamingPartialJson]: item.arguments || "",
 				};
@@ -3792,7 +3802,7 @@ export async function processResponsesStream<TApi extends Api>(
 					arguments: args,
 					...(namespace ? { namespace } : {}),
 					...(item.id ? { responsesItemId: item.id } : {}),
-					...(terminalArguments ? { responsesArguments: terminalArguments } : {}),
+					responsesArguments: item.arguments,
 				};
 				let contentIndex: number;
 				if (block) {
@@ -3804,8 +3814,7 @@ export async function processResponsesStream<TApi extends Api>(
 					block.name = qualifiedName;
 					if (namespace) block.namespace = namespace;
 					if (item.id) block.responsesItemId = item.id;
-					if (terminalArguments) block.responsesArguments = terminalArguments;
-					else delete block.responsesArguments;
+					block.responsesArguments = item.arguments;
 					clearStreamingPartialJson(block);
 					contentIndex = contentIndexOf(block);
 				} else {

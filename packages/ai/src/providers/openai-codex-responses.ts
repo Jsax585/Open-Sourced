@@ -2145,10 +2145,16 @@ function createOutputBlockForItem(item: CodexEventItem): CodexOutputBlock | null
 			arguments: {},
 			...(namespace ? { namespace } : {}),
 			...(item.id ? { responsesItemId: item.id } : {}),
-			// An empty added-item payload carries no arguments; storing it would
-			// shadow delta-accumulated arguments on replay.
+			// Store only the replayable form: an empty payload carries no
+			// arguments, and malformed text must never shadow what the
+			// tool actually receives.
 			...(typeof item.arguments === "string" && item.arguments.length > 0
-				? { responsesArguments: item.arguments }
+				? {
+						responsesArguments: replayableToolCallArguments(
+							item.arguments,
+							parseToolCallArguments(item.arguments),
+						),
+					}
 				: {}),
 			[kStreamingPartialJson]: item.arguments || "",
 		};
@@ -2715,21 +2721,24 @@ class CodexStreamProcessor {
 			const namespace = item.namespace;
 			const authoritativeArguments =
 				typeof item.arguments === "string" && item.arguments.length > 0 ? item.arguments : undefined;
+			// Replay the repaired arguments that the tool receives, while keeping
+			// already-valid JSON formatting and unrepairable diagnostics intact.
+			const args = authoritativeArguments
+				? parseToolCallArguments(authoritativeArguments)
+				: // An empty terminal item falls back to what `.delta`/`.done` already delivered.
+					block?.type === "toolCall" && !partial
+					? block.arguments
+					: parseToolCallArguments(partial);
+			item.arguments = replayableToolCallArguments(item.arguments, args);
 			const toolCall: ToolCall = {
 				type: "toolCall",
 				id: encodeResponsesToolCallId(item.call_id, item.id),
 				name: qualifiedNamespacedToolName(item.name, namespace),
-				// An empty terminal item falls back to what `.delta`/`.done` already delivered.
-				arguments: authoritativeArguments
-					? parseToolCallArguments(authoritativeArguments)
-					: block?.type === "toolCall" && !partial
-						? block.arguments
-						: parseToolCallArguments(partial),
+				arguments: args,
 				...(namespace ? { namespace } : {}),
 				...(item.id ? { responsesItemId: item.id } : {}),
-				...(authoritativeArguments ? { responsesArguments: authoritativeArguments } : {}),
+				responsesArguments: item.arguments,
 			};
-			item.arguments = replayableToolCallArguments(item.arguments, toolCall.arguments);
 			if (block?.type === "toolCall") {
 				// Persist the authoritative final args on the stored block; the throttled
 				// delta parser may have left block.arguments stale (often `{}`).
@@ -2737,8 +2746,7 @@ class CodexStreamProcessor {
 				block.name = toolCall.name;
 				if (namespace) block.namespace = namespace;
 				if (item.id) block.responsesItemId = item.id;
-				if (authoritativeArguments) block.responsesArguments = authoritativeArguments;
-				else delete block.responsesArguments;
+				block.responsesArguments = item.arguments;
 				clearStreamingPartialJson(block);
 			}
 			// Detach so a late/duplicate arguments.delta cannot append to the

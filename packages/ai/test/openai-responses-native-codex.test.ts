@@ -837,4 +837,148 @@ describe("native Responses tools for Codex", () => {
 			}),
 		).toBeDefined();
 	});
+
+	it("replays the repaired arguments the tool receives, not the malformed raw text", async () => {
+		const model = createCodexModel("gpt-5.6-terra");
+		const raw = '{"name": , "count":1}';
+		const sse = codexSse([
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { type: "function_call", id: "fc_repair", call_id: "call_repair", name: "probe", arguments: "" },
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: { type: "function_call", id: "fc_repair", call_id: "call_repair", name: "probe", arguments: raw },
+			},
+		]);
+		const message = await streamOpenAICodexResponses(
+			model,
+			{ messages: [{ role: "user", content: "go", timestamp: Date.now() }] },
+			{ apiKey: testToken(), fetch: codexFetch(sse) },
+		).result();
+		const call = message.content.find(part => part.type === "toolCall");
+		expect(call).toMatchObject({ name: "probe", arguments: { name: "", count: 1 } });
+		expect(call?.type === "toolCall" ? call.responsesArguments : undefined).toBe('{"name":"","count":1}');
+		const replayed = convertResponsesAssistantMessage(message, model, 0, new Set());
+		expect(replayed.find(item => item.type === "function_call")).toMatchObject({
+			id: "fc_repair",
+			name: "probe",
+			arguments: '{"name":"","count":1}',
+		});
+	});
+
+	it("preserves valid JSON formatting and unrepairable diagnostics in replayed raw arguments", async () => {
+		const model = createCodexModel("gpt-5.6-terra");
+		const formatted = '{ "ms" : 3 }';
+		const broken = '{"a":';
+		const sse = codexSse([
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: {
+					type: "function_call",
+					id: "fc_fmt",
+					call_id: "call_fmt",
+					name: "sleep",
+					namespace: "clock",
+					arguments: "",
+				},
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: {
+					type: "function_call",
+					id: "fc_fmt",
+					call_id: "call_fmt",
+					name: "sleep",
+					namespace: "clock",
+					arguments: formatted,
+				},
+			},
+			{
+				type: "response.output_item.added",
+				output_index: 1,
+				item: {
+					type: "function_call",
+					id: "fc_broken",
+					call_id: "call_broken",
+					name: "sleep",
+					namespace: "clock",
+					arguments: "",
+				},
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 1,
+				item: {
+					type: "function_call",
+					id: "fc_broken",
+					call_id: "call_broken",
+					name: "sleep",
+					namespace: "clock",
+					arguments: broken,
+				},
+			},
+		]);
+		const message = await streamOpenAICodexResponses(
+			model,
+			{ messages: [{ role: "user", content: "go", timestamp: Date.now() }] },
+			{ apiKey: testToken(), fetch: codexFetch(sse) },
+		).result();
+		const replayed = convertResponsesAssistantMessage(message, model, 0, new Set());
+		expect(replayed.find(item => item.type === "function_call" && item.call_id === "call_fmt")).toMatchObject({
+			namespace: "clock",
+			arguments: formatted,
+		});
+		const brokenCall = message.content.find(part => part.type === "toolCall" && part.id === "call_broken|fc_broken");
+		expect(brokenCall).toMatchObject({ arguments: { __parseError: expect.any(String), __rawJson: broken } });
+		expect(replayed.find(item => item.type === "function_call" && item.call_id === "call_broken")).toMatchObject({
+			arguments: broken,
+		});
+	});
+
+	it("treats bare and exact provider-qualified parser placeholders as the same model", () => {
+		const model = createCodexModel("gpt-5.6-terra");
+		const placeholder = (modelId: string): AssistantMessage => ({
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "call_sleep",
+					name: "sleep",
+					namespace: "clock",
+					arguments: { ms: 3 },
+					responsesArguments: '{"ms":3}',
+					responsesItemId: "item_sleep",
+					thoughtSignature: "item_sleep",
+				},
+			],
+			api: "openai-responses",
+			provider: "openai",
+			model: modelId,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		for (const modelId of [model.id, `${model.provider}/${model.id}`]) {
+			const replayed = convertResponsesAssistantMessage(placeholder(modelId), model, 0, new Set());
+			expect(replayed.find(item => item.type === "function_call")).toMatchObject({
+				id: "item_sleep",
+				name: "sleep",
+				namespace: "clock",
+			});
+		}
+		const foreign = convertResponsesAssistantMessage(placeholder(`other-provider/${model.id}`), model, 0, new Set());
+		expect(foreign.find(item => item.type === "function_call")).not.toMatchObject({ id: "item_sleep" });
+	});
 });
