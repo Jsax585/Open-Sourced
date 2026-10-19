@@ -1,6 +1,7 @@
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { sanitizeErrorLine } from "@oh-my-pi/pi-tui/chrome/error-block";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
-import { SNIPPET_COMMAND_PREFIX } from "../config/prompt-templates";
+import { findPromptTemplate, SNIPPET_COMMAND_PREFIX } from "../config/prompt-templates";
 import {
 	deleteSnippet,
 	parseDeleteArgs,
@@ -70,8 +71,14 @@ export const BUILTIN_SNIPPETS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = 
 							return;
 						}
 						await ctx.refreshPromptTemplates();
+						// Only promise `/snippet:<name>` when it resolves to the file just saved (the same name in the
+						// other scope, or a template named like the token, can win instead).
+						const token = `${SNIPPET_COMMAND_PREFIX}${parsed.name}`;
+						const runnable =
+							findPromptTemplate(ctx.session.promptTemplates, token)?.source === `(${parsed.scope})`;
+						const shownPath = sanitizeText(shortenPath(result.path)).replace(/\s+/g, " ");
 						ctx.showStatus(
-							`Saved snippet "${parsed.name}" (${parsed.scope}): ${shortenPath(result.path)}. Run /${SNIPPET_COMMAND_PREFIX}${parsed.name} or insert it with /snippets.`,
+							`Saved snippet "${parsed.name}" (${parsed.scope}): ${shownPath}. ${runnable ? `Run /${token} or insert` : "Insert"} it with /snippets.`,
 						);
 						return;
 					}

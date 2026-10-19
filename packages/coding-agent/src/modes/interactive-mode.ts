@@ -2827,7 +2827,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Templates an SDK caller supplied are not on disk; keep them across the reload.
 		const supplied = this.session.promptTemplates.filter(template => !isDiscoveredPromptTemplate(template));
 		const discovered = await loadPromptTemplates({ cwd: basePath, agentDir });
-		this.session.setPromptTemplates([...discovered, ...supplied]);
+		this.session.setPromptTemplates([...supplied, ...discovered]);
 		this.#rebuildSlashCommandAutocomplete(basePath);
 	}
 
