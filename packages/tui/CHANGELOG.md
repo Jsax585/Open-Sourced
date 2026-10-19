@@ -2,14 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `PlanReviewOverlayCallbacks.onPickExecutionModel` (`m` key) and `PlanReviewOverlay.setExecutionNotice()` to show a host-pinned execution model under the tier slider ([#16358](https://github.com/can1357/oh-my-pi/pull/16358) by [@Shadorain](https://github.com/Shadorain))
+- Added `SlashCommand.isAvailable`: a live gate that hides a command from the name list while it returns `false` ([#16358](https://github.com/can1357/oh-my-pi/pull/16358) by [@Shadorain](https://github.com/Shadorain))
+
 ## [18.12.3] - 2026-10-19
 
 ### Added
 
-- Added `PlanReviewOverlayCallbacks.onPickExecutionModel` (`m` key) and `PlanReviewOverlay.setExecutionNotice()` to show a host-pinned execution model under the tier slider ([#16358](https://github.com/can1357/oh-my-pi/pull/16358) by [@Shadorain](https://github.com/Shadorain))
 - Added `IrcMessage.broadcast`, set on each copy of an `agent://all` broadcast so recipients can tell it from a direct message ([#16312](https://github.com/can1357/oh-my-pi/pull/16312) by [@will-bogusz](https://github.com/will-bogusz))
 - `AutocompleteItem.descriptionMatch` marks a slash command matched only through its description; `Editor` Enter no longer applies such a row unless the user moved the selection onto it ([#16265](https://github.com/can1357/oh-my-pi/issues/16265))
-- Added `SlashCommand.isAvailable`: a live gate that hides a command from the name list while it returns `false` ([#16358](https://github.com/can1357/oh-my-pi/pull/16358) by [@Shadorain](https://github.com/Shadorain))
 - `ApprovalDialogComponent` accepts `grants` and `onGrant`: grant choices above **Approve Once**, led by a toggle that keeps them across sessions ([#16049](https://github.com/can1357/oh-my-pi/pull/16049) by [@Peribunt](https://github.com/Peribunt))
 - Added `describeJobWidget`/`renderJobWidgetLines` to draw a background job's widget natively and as terminal lines, `describeJobTiles`/`renderJobTileLines` to draw jobs as tiles (status, title, figure, widget), and `renderSparkline` (with `peakBuckets`/`fitSparkValues`) for one-row block sparklines
 

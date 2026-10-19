@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-## [18.12.3] - 2026-10-19
-
 ### Added
 
 - Added `/exec-model` and the Plan Review `m` key to pick any model, through the `/switch` model picker, as the plan's execution model; it applies when you approve the plan and overrides the tier slider ([#16358](https://github.com/can1357/oh-my-pi/pull/16358) by [@Shadorain](https://github.com/Shadorain))
@@ -11,6 +9,11 @@
 ### Changed
 
 - `/plan-review` and `/exec-model` are now listed in slash-command autocomplete only while plan mode is on ([#16358](https://github.com/can1357/oh-my-pi/pull/16358) by [@Shadorain](https://github.com/Shadorain))
+
+## [18.12.3] - 2026-10-19
+
+### Added
+
 - Added the **Ask and remember** approval mode (`tools.approvalMode: always-ask-cached`, `--approval-mode always-ask-cached`): it also asks before file reads, and file prompts can remember the folder or the file, for this session or across sessions, through `approval-cache.db` ([#16049](https://github.com/can1357/oh-my-pi/pull/16049) by [@Peribunt](https://github.com/Peribunt))
 - Added `/forget-approvals` to forget every file and folder approval Ask and remember has recorded ([#16049](https://github.com/can1357/oh-my-pi/pull/16049) by [@Peribunt](https://github.com/Peribunt))
 - Extension `ui.approve()` hosts can render the new `prompt.grants` choices and answer `{ grant, always }`; hosts that ignore them keep answering `once`/`session`/`deny` ([#16049](https://github.com/can1357/oh-my-pi/pull/16049) by [@Peribunt](https://github.com/Peribunt))
