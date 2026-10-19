@@ -84,20 +84,17 @@ prewalk:
   enabled: false
   auto: on
   autoPlanningModel: "@slow"
+  autoTarget: initial
 ```
 
 `prewalk.autoPlanningModel` is an optional model pattern or role. Leaving it empty keeps planning on the active model. When configured, a confident positive judgment selects it before model-dependent attachments, tools, prompt policy, memory recall, extension hooks, and auto-thinking are prepared. Model selectors use the normal role, model-matching, and authentication rules.
 
-`prewalk.autoTarget` retains its `@smol` schema default and accepts the same selectors. Its effective target depends on whether it was explicitly configured:
+`prewalk.autoTarget` (default `@smol`) takes the same selectors, or `initial`:
 
-| Configuration | Handoff target |
+| `prewalk.autoTarget` | Handoff target |
 | --- | --- |
-| `autoTarget` explicitly set, including `"@smol"` | That selector, unchanged. |
-| `autoTarget` unset and planning changes the model | The exact model and configured thinking level active before escalation. |
-| `autoTarget` unset and already on the planning model | `@smol`, even if the planning selector changes only the thinking level. |
-| `autoPlanningModel` unset | Existing active-model planning and the normal `@smol` default. |
-
-A stored explicit `"@smol"` remains an override, even if it was originally saved as a default. Remove that setting to use the dynamic return target with a configured planning model.
+| `@smol` (default), or any model or role | That target. |
+| `initial` | The model and configured thinking level the task started on, when the planning model is a different model; otherwise, including a planner that only changes the thinking level, the default `@smol`. |
 
 | `prewalk.auto` | Behavior |
 | --- | --- |
@@ -105,7 +102,7 @@ A stored explicit `"@smol"` remains an override, even if it was originally saved
 | `suggest` | Classifies each new task and reports the decision only. Never arms prewalk or switches models. |
 | `on` | Classifies each new task. A confident positive judgment resolves the planning and handoff models and their credentials, optionally selects the planner before preparation, then arms the existing handoff. Failed resolution leaves the active model unchanged. |
 
-Run `suggest` for a while to see how it judges your prompts, then set `auto: on`. Configure `autoPlanningModel: "@slow"` to delegate the up-front planning phase without manually changing your baseline model for each task.
+Run `suggest` for a while to see how it judges your prompts, then set `auto: on`. Configure `autoPlanningModel: "@slow"` with `autoTarget: initial` to delegate the up-front planning phase to a stronger model and hand implementation back to your everyday one, without switching models for each task yourself.
 
 `prewalk.enabled` keeps its meaning: unconditional prewalk, independent of `prewalk.auto`.
 
@@ -138,15 +135,15 @@ Under `on`, a confident decision shows the usual `Prewalk: armed for …` notice
 
 ### One task at a time
 
-Automatic routing belongs to one task. Before the next independent task is judged, OMP restores the baseline model and configured thinking level from before that task's automatic routing—not a temporary planner or an unrelated explicit handoff target. If the baseline already was the planner, it naturally returns there. `/new` restores that baseline the same way, even if automatic routing has since been turned off. An auto arm that its task never used is dropped at the next task.
+Automatic routing belongs to one task. Before the next independent task is judged, OMP restores the baseline model and configured thinking level from before that task's automatic routing—not a temporary planner or an unrelated explicit handoff target. If the baseline already was the planner, it naturally returns there. `/new` restores it the same way while automatic routing is on. An auto arm that its task never used is dropped at the next task.
 
-An explicit model or thinking-level selection during or after automatic routing takes ownership: the session stays where you put it. Handoffs made by `/prewalk`, `--prewalk`, or `prewalk.enabled` are never restored by auto-prewalk. After an early planner selection, an explicit selection of another model during preparation drops the staged prompt through the normal dropped-prompt contract—typed text returns to the editor and a warning explains why—rather than dispatching the planner's policy on your model. Context promotion during the task's own preparation is not a selection: the task dispatches on the promoted model, as it does without a planner.
+An explicit model or thinking-level selection during or after automatic routing takes ownership: the session stays where you put it. Handoffs made by `/prewalk`, `--prewalk`, or `prewalk.enabled` are never restored by auto-prewalk. If you pick another model while a selected planner prepares a task, the planner's policy is never sent to your model: a typed or `/skill:` prompt is dropped with a warning (typed text returns to the editor), and sending the same prompt again runs it on your pick without automatic routing; a queued follow-up is prepared again for your pick and continues there. Context promotion during the task's own preparation is not a selection: the task dispatches on the promoted model, as it does without a planner.
 
 ### What is classified
 
 Only new, user-authored tasks in the top-level session: typed prompts, user-invoked `/skill:` prompts, and queued follow-ups when they are delivered. Steering is never classified, since it amends the task already running. Acknowledgements such as `ok` or `thanks`, synthetic continuation turns, agent-attributed messages, subagents, plan mode, and tasks where prewalk is already armed are skipped.
 
-When a configured planning model would change the active model or thinking level, routing completes after input expansion and before model-dependent preparation. Recall, hooks, and auto-thinking therefore observe the selected planner once rather than being rebuilt after a late switch; that judgment adds sequential setup latency, bounded by the native four-second judgment timeout. Otherwise—no planning model, `suggest`, or the planner already active—judgment runs alongside recall and hooks and is applied right before dispatch. Queued follow-ups use the same ordering; steering stays with the current task.
+When a configured planning model would change the active model or thinking level, routing completes after input expansion and before model-dependent preparation. Recall, hooks, and auto-thinking therefore observe the selected planner once rather than being rebuilt after a late switch; that judgment adds sequential setup latency, bounded by the native four-second judgment timeout. Otherwise—no planning model, `suggest`, or the planner already active—judgment runs alongside recall and hooks and is applied right before dispatch. Queued follow-ups are judged the same way when they are delivered, but their attachments are prepared when they are queued, for the model active then; steering stays with the current task.
 
 A follow-up such as `do that` or `continue` cannot be judged alone, so the judge also sees the previous substantive user request and the agent's last reply, each truncated like other small-model input. The current request stays authoritative: the context only resolves what it points at.
 
@@ -158,7 +155,7 @@ A pending prewalk from `/prewalk`, `prewalk.enabled`, or `--prewalk` is never re
 
 ### Failure behavior
 
-Auto-prewalk is an optimization and fails open. A missing native judge, a judge error or malformed answer, the four-second timeout, invalid selectors, or unavailable planning/handoff credentials leaves routing unapplied. Answers with invalid probabilities, an inconsistent winning route, or invalid confidence are rejected. Cancellation before selection cannot publish it later; cancellation after an early selection retires only that task's owned baseline, without overriding a newer explicit choice. Judge failures are logged rather than shown; an unusable target reports an `Auto-prewalk not armed: target …` warning. Judgments are journaled as model usage under the purpose `auto-prewalk`.
+Auto-prewalk is an optimization and fails open. A missing native judge, a judge error or malformed answer, the four-second timeout, invalid selectors, or unavailable planning/handoff credentials leaves routing unapplied. Answers with invalid probabilities, an inconsistent winning route, or invalid confidence are rejected. Cancelling a task before its planner is selected cannot publish the planner later; cancelling after the selection but before the task is sent restores the starting model unless you chose another one meanwhile; aborting the sent turn leaves the planner and its handoff in place until the next task. Judge failures are logged rather than shown; an unusable target reports an `Auto-prewalk not armed: target …` warning. Judgments are journaled as model usage under the purpose `auto-prewalk`.
 
 ## Subagent prewalk
 

@@ -1,13 +1,14 @@
 /**
  * Two concurrent `prompt()` calls must serialize instead of racing dispatch.
  *
- * `prompt()` checks `isStreaming` at the top, but image normalization (and the
- * vision-description call) suspend before `#promptWithMessage` increments the
- * in-flight count. Two callers that both saw an idle session — the CLI initial
- * message of an `omp "prompt"` launch and a submission typed right after the
- * startup composer opens its submit gate — used to both dispatch: the loser
- * died with AgentBusyError and the prompts could land out of order. The
- * post-await re-check queues the loser as a steer into the winner's turn.
+ * `prompt()` checks `isStreaming` at the top, and image normalization (and the
+ * vision-description call) used to suspend before `#promptWithMessage`
+ * incremented the in-flight count. Two callers that both saw an idle session —
+ * the CLI initial message of an `omp "prompt"` launch and a submission typed
+ * right after the startup composer opens its submit gate — used to both
+ * dispatch: the loser died with AgentBusyError and the prompts could land out of
+ * order. The prompt now claims the session before preparing its images, so the
+ * loser queues as a steer into the winner's turn.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";

@@ -712,7 +712,7 @@ export class ModelControls {
 		if (
 			this.#host.promptGeneration() !== generation ||
 			!this.#autoThinking ||
-			this.#model !== model ||
+			!modelsAreEqual(this.#model, model) ||
 			selectionGeneration !== this.#thinkingSelectionGeneration
 		) {
 			return;

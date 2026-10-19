@@ -13,6 +13,7 @@ import {
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { AUTO_PREWALK_TIMEOUT_MS, type PrewalkRoute } from "@oh-my-pi/pi-coding-agent/auto-prewalk/classifier";
+import { formatModelStringWithRouting, parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
@@ -23,11 +24,11 @@ import { HindsightSessionState } from "@oh-my-pi/pi-coding-agent/hindsight/state
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import type { AgentSessionConfig } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
+import type { AgentSessionConfig, Prewalk } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
-import { ModelControls } from "@oh-my-pi/pi-coding-agent/session/model-controls";
 import { SessionTools } from "@oh-my-pi/pi-coding-agent/session/session-tools";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { PrewalkCoordinator, type PrewalkCoordinatorHost } from "@oh-my-pi/pi-coding-agent/session/prewalk";
 import { SessionProviderBoundary } from "@oh-my-pi/pi-coding-agent/session/session-provider-boundary";
 import {
 	cfgCompactionEnabled,
@@ -39,7 +40,7 @@ import { cfgPrewalkAuto } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { EAGER_TODO_PRELUDE_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/todo-tracker";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { TempDir, withTimeout } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 import { asGlobalFetch } from "./helpers/fetch-mock";
 
@@ -121,6 +122,12 @@ describe("AgentSession auto-prewalk", () => {
 	const DIRECT = verdict(0.05, 0.1, 0.85);
 	const WEAK_PREWALK = verdict(0.55, 0.35, 0.1);
 	const MALFORMED = { type: "choice", choice: "prewalk" };
+	const LOW_EFFORT = {
+		type: "choice",
+		choice: "low",
+		probabilities: { low: 0.97, medium: 0.01, high: 0.01, xhigh: 0.01 },
+		confidence: 0.97,
+	};
 
 	type Reply = "http-400" | { type: string; [key: string]: unknown };
 	interface JudgeCall {
@@ -368,85 +375,40 @@ describe("AgentSession auto-prewalk", () => {
 			},
 		);
 
-		it.each(["follow-up", "promoted steering"] as const)(
-			"defers %s image decisions until delivery and does not classify promoted steering",
-			async delivery => {
-				const calls = stubJudge(delivery === "follow-up" ? [DIRECT, PREWALK] : [PREWALK]);
-				const text = "inspect the attached cursor state and fix the race";
-				const observed: string[] = [];
-				let queued = false;
-				const f = createFixture([done("initial"), done("image")], {
-					auto: "on",
-					planningModel: "@slow",
-					textOnlyBaseline: true,
-					beforeStream: async () => {
-						if (queued) return;
-						queued = true;
-						await f.session.prompt(text, { images: [image], streamingBehavior: "followUp" });
-						expect(observed).toEqual([]);
-						if (delivery === "promoted steering") expect(f.session.promoteQueuedMessage(text)).toBe(true);
-					},
-				});
-				const describe = SessionProviderBoundary.prototype.buildImageDescriptionNotice;
-				vi.spyOn(SessionProviderBoundary.prototype, "buildImageDescriptionNotice").mockImplementation(
-					async function (this: SessionProviderBoundary, ...args) {
-						observed.push(f.session.model!.id);
-						const result = await describe.apply(this, args);
-						expect(result).toBeUndefined();
-						return result;
-					},
-				);
-				await f.session.prompt(TASK);
-				await f.session.waitForIdle();
-				expect(asked(calls).map(call => call.state.request)).toEqual(
-					delivery === "follow-up" ? [TASK, text] : [TASK],
-				);
-				expect(observed).toEqual([f.planner.id]);
-				expect(f.requested[0]).toBe(delivery === "follow-up" ? f.primary.id : f.planner.id);
-				expect(f.requested.slice(1).length).toBeGreaterThan(0);
-				expect(f.requested.slice(1).every(id => id === f.planner.id)).toBe(true);
-				await expectAttachedImage(f.contexts.at(-1));
-			},
-		);
-
-		it("defers setup-time steering images until the planner is selected without classifying steering", async () => {
-			const hold = Promise.withResolvers<void>();
-			const requested = Promise.withResolvers<void>();
-			const calls = stubJudge([PREWALK], { hold: hold.promise, requested: requested.resolve });
-			const observed: string[] = [];
-			const f = createFixture([done("initial"), done("steered image")], {
+		it("keeps a queued image follow-up's description ahead of it when the follow-up selects the planner", async () => {
+			stubJudge([DIRECT, PREWALK]);
+			const text = "inspect the attached cursor state and fix the race";
+			let queued = false;
+			const f = createFixture([done("initial"), done("image")], {
 				auto: "on",
 				planningModel: "@slow",
 				textOnlyBaseline: true,
+				beforeStream: async () => {
+					if (queued) return;
+					queued = true;
+					await f.session.prompt(text, { images: [image], streamingBehavior: "followUp" });
+				},
 			});
-			const describe = SessionProviderBoundary.prototype.buildImageDescriptionNotice;
-			vi.spyOn(SessionProviderBoundary.prototype, "buildImageDescriptionNotice").mockImplementation(async function (
-				this: SessionProviderBoundary,
-				...args
-			) {
-				observed.push(f.session.model!.id);
-				const result = await describe.apply(this, args);
-				expect(result).toBeUndefined();
-				return result;
-			});
-			const task = f.session.prompt(TASK);
-			try {
-				await requested.promise;
-				await f.session.prompt("also inspect this cursor snapshot", {
-					images: [image],
-					streamingBehavior: "steer",
-				});
-				expect(observed).toEqual([]);
-			} finally {
-				hold.resolve();
-			}
-			await task;
+			vi.spyOn(SessionProviderBoundary.prototype, "buildImageDescriptionNotice").mockImplementation(async () => ({
+				role: "custom",
+				customType: "image-attachment-description",
+				content: [{ type: "text", text: "A described cursor snapshot." }],
+				display: false,
+				attribution: "user",
+				timestamp: Date.now(),
+			}));
+			await f.session.prompt(TASK);
 			await f.session.waitForIdle();
-			expect(asked(calls).map(call => call.state.request)).toEqual([TASK]);
-			expect(observed).toEqual([f.planner.id]);
-			expect(f.requested.length).toBeGreaterThan(0);
-			expect(f.requested.every(id => id === f.planner.id)).toBe(true);
-			await expectAttachedImage(f.contexts.find(context => context.includes('"type":"image"')));
+			expect(f.requested.at(-1)).toBe(f.planner.id);
+			const messages = JSON.parse(f.contexts.at(-1) ?? "[]") as Context["messages"];
+			const description = messages.findIndex(message =>
+				JSON.stringify(message.content).includes("A described cursor snapshot."),
+			);
+			const followUp = messages.findIndex(
+				message => message.role === "user" && JSON.stringify(message.content).includes(text),
+			);
+			expect(description).toBeGreaterThanOrEqual(0);
+			expect(description).toBeLessThan(followUp);
 		});
 
 		it.each(["same model", "other model", "same auto effort"] as const)(
@@ -458,12 +420,7 @@ describe("AgentSession auto-prewalk", () => {
 					hold: hold.promise,
 					requested: requested.resolve,
 					question: "level",
-					reply: {
-						type: "choice",
-						choice: "low",
-						probabilities: { low: 0.97, medium: 0.01, high: 0.01, xhigh: 0.01 },
-						confidence: 0.97,
-					},
+					reply: LOW_EFFORT,
 				});
 				const f = createFixture([done("selected")], { auto: "on", planningModel: "@slow" });
 				f.settings.setModelRole("slow", `${f.planner.provider}/${f.planner.id}:auto`);
@@ -510,6 +467,26 @@ describe("AgentSession auto-prewalk", () => {
 				expect(f.session.getPrewalkState()).toBeUndefined();
 			},
 		);
+
+		it("applies a delayed auto-thinking judgment across a refit of the same model", async () => {
+			const hold = Promise.withResolvers<void>();
+			const requested = Promise.withResolvers<void>();
+			stubJudge([PREWALK], {
+				hold: hold.promise,
+				requested: requested.resolve,
+				question: "level",
+				reply: LOW_EFFORT,
+			});
+			const f = createFixture([done("refit")], { auto: "on", planningModel: "@slow" });
+			f.settings.setModelRole("slow", `${f.planner.provider}/${f.planner.id}:auto`);
+			const task = f.session.prompt(TASK);
+			await requested.promise;
+			// Model discovery or a context-window refit republishes a copy of the active model.
+			f.session.agent.setModel({ ...f.session.model! });
+			hold.resolve();
+			await task;
+			expect(f.efforts[0]).toBe(Effort.Low);
+		});
 
 		it("context promotion during the planner's preparation dispatches the task instead of dropping it", async () => {
 			const calls = stubJudge([PREWALK]);
@@ -594,15 +571,15 @@ describe("AgentSession auto-prewalk", () => {
 			return { entered: entered.promise, release: release.resolve };
 		}
 
-		it("does not judge or select an automatic planner while plan-yolo is pending activation", async () => {
-			const calls = stubJudge([PREWALK]);
+		it("plan-yolo's first prompt never selects the planner or arms a handoff", async () => {
+			stubJudge([PREWALK]);
 			const f = createFixture([done("plan")], { auto: "on", planningModel: "@slow", planYolo: true });
 			expect(f.session.getPlanModeState()?.enabled).not.toBe(true);
 			await f.session.prompt(TASK);
-			expect(calls).toEqual([]);
 			expect(f.requested.length).toBeGreaterThan(0);
 			expect(f.requested.every(id => id === f.primary.id)).toBe(true);
 			expect(f.sequence.some(event => event === `model:${f.planner.id}`)).toBe(false);
+			expect(f.session.getPrewalkState()).toBeUndefined();
 		});
 
 		it.each([Effort.Medium, "auto"] as const)(
@@ -809,7 +786,7 @@ describe("AgentSession auto-prewalk", () => {
 		});
 
 		it("publishes the planner before tools, recall, policy hooks, auto-thinking, and the first stream, once each", async () => {
-			const calls = stubJudge([PREWALK]);
+			const calls = stubJudge([PREWALK, LOW_EFFORT]);
 			const f = createFixture([done("planned")], {
 				auto: "on",
 				planningModel: "@slow",
@@ -837,61 +814,42 @@ describe("AgentSession auto-prewalk", () => {
 					banksSet: new Set(["test-bank"]),
 				}),
 			);
-			const recall = vi.spyOn(client, "recall").mockImplementation(async () => {
+			vi.spyOn(client, "recall").mockImplementation(async () => {
 				f.sequence.push(`recall:${f.session.model?.id}`);
 				return { results: [{ id: "planning-memory", text: "planner-only memory" }] };
 			});
-			const reconcile = SessionTools.prototype.reconcileThinkTool;
-			vi.spyOn(SessionTools.prototype, "reconcileThinkTool").mockImplementation(async function (
-				this: SessionTools,
-				...args
-			) {
-				f.sequence.push(`tools:${f.session.model?.id}`);
-				return reconcile.apply(this, args);
+			vi.spyOn(f.runner, "emitBeforeAgentStart").mockImplementation(async (_prompt, _images, systemPrompt) => {
+				f.sequence.push(`hook:${f.session.model?.id}`);
+				expect(systemPrompt.join("\n")).toContain(`model:${f.planner.id}`);
+				expect(systemPrompt.join("\n")).toContain("planner-only memory");
+				return { systemPrompt: [...systemPrompt, `policy:${f.session.model?.id}`] };
 			});
-			const hook = vi
-				.spyOn(f.runner, "emitBeforeAgentStart")
-				.mockImplementation(async (_prompt, _images, systemPrompt) => {
-					f.sequence.push(`hook:${f.session.model?.id}`);
-					expect(systemPrompt.join("\n")).toContain(`model:${f.planner.id}`);
-					expect(systemPrompt.join("\n")).toContain("planner-only memory");
-					return { systemPrompt: [...systemPrompt, `policy:${f.session.model?.id}`] };
-				});
-			const autoThinking = ModelControls.prototype.applyAutoThinkingLevel;
-			const thinking = vi
-				.spyOn(ModelControls.prototype, "applyAutoThinkingLevel")
-				.mockImplementation(async function (this: ModelControls, ...args) {
-					f.sequence.push(`thinking:${f.session.model?.id}`);
-					return autoThinking.apply(this, args);
-				});
 
-			await f.session.prompt(`ultrathink ${TASK}`);
+			await f.session.prompt(TASK);
 
 			expect(asked(calls).map(call => call.model)).toEqual([f.primary.id]);
+			expect(calls.filter(call => call.questions.includes("level")).map(call => call.model)).toEqual([f.planner.id]);
 			expect(f.sequence[0]).toBe(`model:${f.planner.id}`);
-			for (const consumer of ["tools", "recall", "hook", "thinking", "stream"]) {
-				const events = f.sequence.filter(event => event.startsWith(`${consumer}:`));
-				expect(events.length).toBeGreaterThan(0);
-				expect(events.every(event => event === `${consumer}:${f.planner.id}`)).toBe(true);
+			for (const consumer of ["recall", "hook"]) {
+				expect(f.sequence.filter(event => event.startsWith(`${consumer}:`))).toEqual([
+					`${consumer}:${f.planner.id}`,
+				]);
 			}
-			expect(f.sequence.indexOf(`recall:${f.planner.id}`)).toBeLessThan(f.sequence.indexOf(`hook:${f.planner.id}`));
-			expect(f.sequence.indexOf(`hook:${f.planner.id}`)).toBeLessThan(
-				f.sequence.indexOf(`thinking:${f.planner.id}`),
-			);
-			expect(f.sequence.at(-1)).toBe(`stream:${f.planner.id}`);
-			expect(recall).toHaveBeenCalledTimes(1);
-			expect(hook).toHaveBeenCalledTimes(1);
-			expect(thinking).toHaveBeenCalledTimes(1);
+			expect(f.requested[0]).toBe(f.planner.id);
+			expect(f.efforts[0]).toBe(Effort.Low);
 			expect(f.nudges[0]).toContain("prewalk-plan");
 		});
 
 		it("hands todo-gated implementation back to the exact baseline model and configured effort", async () => {
-			stubJudge([PREWALK]);
-			const f = createFixture([toolCall("early", "write"), ...cycle()], {
+			stubJudge([PREWALK, DIRECT]);
+			const f = createFixture([toolCall("early", "write"), ...cycle(), done("next")], {
 				auto: "on",
 				planningModel: "@slow",
+				autoTarget: "initial",
 				thinkingLevel: Effort.Medium,
 			});
+			const modelChanges = () =>
+				f.session.sessionManager.getEntries().filter(entry => entry.type === "model_change").length;
 
 			await f.session.prompt(TASK);
 
@@ -899,32 +857,36 @@ describe("AgentSession auto-prewalk", () => {
 			expect(f.efforts.at(-1)).toBe(Effort.Medium);
 			expect(f.session.configuredThinkingLevel()).toBe(Effort.Medium);
 			expect(f.nudges[3]).toContain("prewalk-checklist");
+			// Already back on its baseline, the next task has nothing to restore.
+			const changes = modelChanges();
+			await f.session.prompt("explain the cursor next");
+			expect(modelChanges()).toBe(changes);
+			expect(f.requested.at(-1)).toBe(f.primary.id);
 		});
 
-		it.each(["@smol", "anthropic/claude-sonnet-4-6:low"])(
-			"honors an explicitly configured target %s instead of the dynamic baseline",
-			async autoTarget => {
-				stubJudge([PREWALK]);
-				const f = createFixture(cycle(), { auto: "on", planningModel: "@slow", autoTarget });
-				await f.session.prompt(TASK);
-				expect(f.requested).toEqual([f.planner.id, f.planner.id, f.target.id]);
-				expect(f.efforts.at(-1)).toBe(Effort.Low);
-			},
-		);
-
-		it("already on the planner still makes a useful handoff to the default smol role", async () => {
+		it("hands an escalated task off to the default @smol target while autoTarget is unset", async () => {
 			stubJudge([PREWALK]);
-			const f = createFixture(cycle(), { auto: "on", planningModel: "@slow", initialPlanner: true });
+			const f = createFixture(cycle(), { auto: "on", planningModel: "@slow" });
+			await f.session.prompt(TASK);
+			expect(f.requested).toEqual([f.planner.id, f.planner.id, f.target.id]);
+			expect(f.efforts.at(-1)).toBe(Effort.Low);
+		});
+
+		it("autoTarget initial still hands off to the default smol role when the planner kept the starting model", async () => {
+			stubJudge([PREWALK]);
+			const f = createFixture(cycle(), {
+				auto: "on",
+				planningModel: "@slow",
+				autoTarget: "initial",
+				initialPlanner: true,
+			});
 			await f.session.prompt(TASK);
 			expect(f.requested).toEqual([f.planner.id, f.planner.id, f.target.id]);
 		});
 
 		it.each([
-			["primary", PRIMARY],
-			["direct", DIRECT],
-			["weak prewalk", WEAK_PREWALK],
-			["malformed verdict", MALFORMED],
-			["judgment failure", "http-400"],
+			["a prewalk below the threshold", WEAK_PREWALK],
+			["a failed judgment", "http-400"],
 		] as const)("leaves the baseline unchanged for %s", async (_label, reply) => {
 			stubJudge([reply]);
 			const f = createFixture([done("baseline")], { auto: "on", planningModel: "@slow" });
@@ -945,7 +907,11 @@ describe("AgentSession auto-prewalk", () => {
 
 		it("restores the next task's baseline despite an unrelated settings override", async () => {
 			const calls = stubJudge([PREWALK, DIRECT]);
-			const f = createFixture([done("plan only"), done("next")], { auto: "on", planningModel: "@slow" });
+			const f = createFixture([done("plan only"), done("next")], {
+				auto: "on",
+				planningModel: "@slow",
+				autoTarget: "initial",
+			});
 			cfgPrewalkAuto.override(f.settings, "on");
 			await f.session.prompt(TASK);
 			expect(f.session.model?.id).toBe(f.planner.id);
@@ -977,8 +943,6 @@ describe("AgentSession auto-prewalk", () => {
 		});
 
 		it.each([
-			["missing planner", "planner"],
-			["missing target", "target"],
 			["planner credential lookup failure", "planner-key"],
 			["target credential lookup failure", "target-key"],
 			["unavailable planner selector", "planner-selector"],
@@ -990,12 +954,6 @@ describe("AgentSession auto-prewalk", () => {
 				planningModel: failure === "planner-selector" ? "missing-provider/missing-model" : "@slow",
 				autoTarget: failure === "target-selector" ? "missing-provider/missing-model" : "@smol",
 			});
-			const hasAuth = f.modelRegistry.hasConfiguredAuth.bind(f.modelRegistry);
-			vi.spyOn(f.modelRegistry, "hasConfiguredAuth").mockImplementation(model =>
-				(failure === "planner" && model.id === f.planner.id) || (failure === "target" && model.id === f.target.id)
-					? false
-					: hasAuth(model),
-			);
 			const getApiKey = f.modelRegistry.getApiKey.bind(f.modelRegistry);
 			vi.spyOn(f.modelRegistry, "getApiKey").mockImplementation(async (model, sessionId) =>
 				(failure === "planner-key" && model.id === f.planner.id) ||
@@ -1018,6 +976,7 @@ describe("AgentSession auto-prewalk", () => {
 			const f = createFixture([...cycle(), done("negative"), ...cycle()], {
 				auto: "on",
 				planningModel: "@slow",
+				autoTarget: "initial",
 				beforeStream: async context => {
 					const current = context.messages.findLast(message => message.role === "user");
 					const text =
@@ -1048,6 +1007,187 @@ describe("AgentSession auto-prewalk", () => {
 				positive: [f.planner.id, f.planner.id, f.primary.id],
 			});
 			expect(f.contexts.some(context => context.includes("also preserve the retry cursor"))).toBe(true);
+		});
+
+		it("an abort during the planner's turn stops the turn without restoring the starting model", async () => {
+			stubJudge([PREWALK]);
+			const streaming = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const f = createFixture([done("aborted")], {
+				auto: "on",
+				planningModel: "@slow",
+				beforeStream: async () => {
+					streaming.resolve();
+					await release.promise;
+				},
+			});
+			const task = f.session.prompt(TASK);
+			await streaming.promise;
+			const aborted = f.session.abort();
+			release.resolve();
+			await aborted;
+			await task.catch(() => {});
+			expect(f.session.model?.id).toBe(f.planner.id);
+			expect(f.session.getPrewalkState()?.target.id).toBe(f.target.id);
+		});
+
+		it("an abort keeps the planner of a task sent after auto-prewalk was turned off during its selection", async () => {
+			stubJudge([PREWALK]);
+			const streaming = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const f = createFixture([done("aborted")], {
+				auto: "on",
+				planningModel: "@slow",
+				beforeStream: async () => {
+					streaming.resolve();
+					await release.promise;
+				},
+			});
+			const selection = pausePlannerSelection(f, "reconciliation");
+			const task = f.session.prompt(TASK);
+			await selection.entered;
+			expect(await executeBuiltinSlashCommand("/prewalk off", { ctx: f.ctx })).toBe(true);
+			selection.release();
+			await streaming.promise;
+			const aborted = f.session.abort();
+			release.resolve();
+			await aborted;
+			await task.catch(() => {});
+			expect(f.session.model?.id).toBe(f.planner.id);
+		});
+
+		it("an explicit pick during a later task's preparation dispatches there when no planner was selected", async () => {
+			stubJudge([PREWALK, DIRECT]);
+			const f = createFixture([done("plan only"), done("picked")], { auto: "on", planningModel: "@slow" });
+			await f.session.prompt(TASK);
+			expect(f.session.model?.id).toBe(f.planner.id);
+			const dropped: string[] = [];
+			f.session.setPromptDropped(prompt => dropped.push(prompt.text));
+			let picked = false;
+			// The next task first restores the starting model, then a negative judgment selects nothing.
+			vi.spyOn(f.runner, "emitBeforeAgentStart").mockImplementation(async () => {
+				if (!picked) {
+					picked = true;
+					await f.session.setModelTemporary(f.target);
+				}
+				return undefined;
+			});
+			await f.session.prompt("explain the cursor next");
+			expect(dropped).toEqual([]);
+			expect(f.warnings).toEqual([]);
+			expect(f.requested.at(-1)).toBe(f.target.id);
+		});
+
+		it("an effort-only planner owns its preparation against an explicit model pick", async () => {
+			stubJudge([PREWALK]);
+			const f = createFixture([done("never sent")], {
+				auto: "on",
+				planningModel: "anthropic/claude-sonnet-4-5:low",
+			});
+			// Real sessions start on the registry row the planner selector resolves to, so selecting it republishes that row.
+			const row = f.modelRegistry.find(f.primary.provider, f.primary.id);
+			if (!row) throw new Error("Expected the registry row for the starting model");
+			await f.session.setModelTemporary(row, Effort.High);
+			const dropped: string[] = [];
+			f.session.setPromptDropped(prompt => dropped.push(prompt.text));
+			let picked = false;
+			vi.spyOn(f.runner, "emitBeforeAgentStart").mockImplementation(async () => {
+				if (!picked) {
+					picked = true;
+					await f.session.setModelTemporary(f.target);
+				}
+				return undefined;
+			});
+			await f.session.prompt(TASK);
+			expect(dropped).toEqual([TASK]);
+			expect(f.warnings).toHaveLength(1);
+			expect(f.requested).toEqual([]);
+		});
+
+		it("runs a prompt sent again after an explicit pick dropped it on that pick", async () => {
+			const calls = stubJudge([PREWALK, PREWALK]);
+			const f = createFixture([done("on the pick")], { auto: "on", planningModel: "@slow" });
+			const dropped: string[] = [];
+			f.session.setPromptDropped(prompt => dropped.push(prompt.text));
+			let picked = false;
+			vi.spyOn(f.runner, "emitBeforeAgentStart").mockImplementation(async () => {
+				if (!picked) {
+					picked = true;
+					await f.session.setModelTemporary(f.target);
+				}
+				return undefined;
+			});
+			await f.session.prompt(TASK);
+			expect(dropped).toEqual([TASK]);
+			await f.session.prompt(TASK);
+			expect(asked(calls)).toHaveLength(1);
+			expect(f.requested).toEqual([f.target.id]);
+			expect(f.session.getPrewalkState()).toBeUndefined();
+		});
+
+		it("exempts only the next prompt from routing after an explicit pick handed one back", async () => {
+			const calls = stubJudge([PREWALK, DIRECT, DIRECT]);
+			const f = createFixture([done("other"), done("routed again")], { auto: "on", planningModel: "@slow" });
+			let picked = false;
+			vi.spyOn(f.runner, "emitBeforeAgentStart").mockImplementation(async () => {
+				if (!picked) {
+					picked = true;
+					await f.session.setModelTemporary(f.target);
+				}
+				return undefined;
+			});
+			await f.session.prompt(TASK);
+			await f.session.prompt("explain the cursor next");
+			await f.session.prompt(TASK);
+			expect(asked(calls).map(call => call.state.request)).toEqual([TASK, "explain the cursor next", TASK]);
+		});
+
+		it("restores the starting model when a branch drops a task whose planner was just selected", async () => {
+			stubJudge([DIRECT, PREWALK]);
+			const f = createFixture([done("first")], { auto: "on", planningModel: "@slow" });
+			await f.session.prompt("explain the sync engine");
+			const firstUser = f.session.sessionManager
+				.getEntries()
+				.find(entry => entry.type === "message" && entry.message.role === "user");
+			if (!firstUser) throw new Error("Expected the first user entry");
+			const restored = Promise.withResolvers<void>();
+			const selection = pausePlannerSelection(f, "reconciliation");
+			const task = f.session.prompt(TASK);
+			await selection.entered;
+			await f.session.branch(firstUser.id);
+			f.session.subscribe(event => {
+				if (event.type === "model_changed" && f.session.model?.id === f.primary.id) restored.resolve();
+			});
+			selection.release();
+			await task;
+			await withTimeout(restored.promise, 2_000, "The dropped task did not restore its starting model");
+			expect(f.requested).toEqual([f.primary.id]);
+		});
+
+		it("prepares a queued follow-up again for a model picked while the planner prepared it", async () => {
+			const calls = stubJudge([DIRECT, PREWALK]);
+			const f = createFixture([done("first"), done("follow-up")], { auto: "on", planningModel: "@slow" });
+			let queued = false;
+			f.session.agent.setOnBeforeYield(async () => {
+				if (queued) return;
+				queued = true;
+				await f.session.followUp(TASK);
+			});
+			const hooks: string[] = [];
+			vi.spyOn(f.runner, "emitBeforeAgentStart").mockImplementation(async () => {
+				hooks.push(f.session.model!.id);
+				if (f.session.model?.id === f.planner.id) await f.session.setModelTemporary(f.target);
+				return undefined;
+			});
+			await f.session.prompt("explain the sync engine");
+			await f.session.waitForIdle();
+			expect(asked(calls).map(call => call.state.request)).toEqual(["explain the sync engine", TASK]);
+			expect(hooks).toEqual([f.primary.id, f.planner.id, f.target.id]);
+			expect(f.requested).toEqual([f.primary.id, f.target.id]);
+			expect(
+				f.session.messages.some(message => message.role === "assistant" && message.stopReason === "aborted"),
+			).toBe(false);
+			expect(f.session.getPrewalkState()).toBeUndefined();
 		});
 	});
 
@@ -1479,6 +1619,24 @@ describe("AgentSession auto-prewalk", () => {
 
 			expect(f.requested.slice(boundary)).toEqual([f.primary.id, f.primary.id, f.target.id]);
 		});
+
+		it("an explicit pick after a task armed drops its pending auto handoff", async () => {
+			stubJudge([PREWALK]);
+			let picked = false;
+			const f = createFixture(cycle(), {
+				auto: "on",
+				beforeStream: async () => {
+					if (picked) return;
+					picked = true;
+					await f.session.setModelTemporary(f.planner);
+				},
+			});
+			await f.session.prompt(TASK);
+			expect(f.nudges[0]).toContain("prewalk-plan");
+			expect(f.requested).toEqual([f.primary.id, f.planner.id, f.planner.id]);
+			expect(f.nudges.flat()).not.toContain("prewalk-checklist");
+			expect(f.session.getPrewalkState()).toBeUndefined();
+		});
 	});
 
 	it("never judges a subagent's tasks", async () => {
@@ -1490,5 +1648,45 @@ describe("AgentSession auto-prewalk", () => {
 
 		expect(asked(calls)).toHaveLength(0);
 		expect(f.requested).toEqual([f.primary.id, f.primary.id]);
+	});
+
+	it("plans on a model that differs from the active one only by its upstream route, and hands back to that route", async () => {
+		const row = getBundledModel("openrouter", "anthropic/claude-sonnet-4.5");
+		if (!row) throw new Error("Expected the bundled OpenRouter row");
+		const routed = (upstream: string): Model<Api> => {
+			const model = parseModelPattern(`openrouter/${row.id}@${upstream}`, [row]).model;
+			if (!model) throw new Error(`Expected ${row.id}@${upstream} to resolve`);
+			return model;
+		};
+		let active = routed("google");
+		const planner = routed("anthropic");
+		const selected: string[] = [];
+		const host = {
+			settings: Settings.isolated({ "prewalk.auto": "on" }),
+			model: () => active,
+			configuredThinkingLevel: () => Effort.High,
+			getPlanModeState: () => undefined,
+			resolveAutoPrewalkTarget: (initial?: Prewalk) => initial,
+			resolveAutoPrewalkPlanningModel: (): Prewalk => ({ target: planner }),
+			prepareAutoPrewalkModel: async (model: Model) => model,
+			classifyAutoPrewalk: async () => ({
+				route: "prewalk",
+				probabilities: PREWALK.probabilities,
+				confidence: PREWALK.confidence,
+				arm: true,
+			}),
+			setModelTemporary: async (model: Model, _level: unknown, options?: { onSelected?: () => void }) => {
+				active = model;
+				selected.push(formatModelStringWithRouting(model));
+				options?.onSelected?.();
+			},
+			emitNotice: () => {},
+		} as unknown as PrewalkCoordinatorHost;
+		const coordinator = new PrewalkCoordinator(host);
+		const prepared = await coordinator.prepareAuto(TASK, new AbortController().signal, () => true);
+		expect(prepared.selected).toBe(true);
+		expect(selected).toEqual([`openrouter/${row.id}@anthropic`]);
+		expect(prepared.arm()).toBeDefined();
+		expect(formatModelStringWithRouting(coordinator.state!.target)).toBe(`openrouter/${row.id}@google`);
 	});
 });

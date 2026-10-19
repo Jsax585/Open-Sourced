@@ -444,13 +444,14 @@ export interface PromptOptions {
 	solutionSpace?: string;
 	/**
 	 * Called synchronously once this prompt is admitted: idle, once
-	 * #promptWithMessage's turn setup has selected any auto-prewalk planning
-	 * model, passed the usage preflight, and prepared the message for the
-	 * selected model (image normalization and vision description), before
-	 * memory recall, extension hooks, or provider dispatch; while streaming,
-	 * once the message is pushed onto its steer/follow-up/aside queue (after its
-	 * image preprocessing, unless a configured planning model defers that to
-	 * delivery); or is routed to an extension command, before its handler runs.
+	 * #promptWithMessage's turn setup has restored any retry-fallback or
+	 * auto-prewalk baseline, selected any auto-prewalk planning model, and
+	 * prepared the message for the resulting model (image normalization and
+	 * vision description), before the usage preflight, memory recall,
+	 * extension hooks, or provider dispatch; while streaming, once the message
+	 * is pushed onto its steer/follow-up/aside queue (after its image
+	 * preprocessing); or is routed to an extension command, before its handler
+	 * runs.
 	 * Admission is not proof that a model call will occur. A prompt dropped,
 	 * cancelled, or failed before admission still only settles through the
 	 * returned promise.
