@@ -86,3 +86,6 @@ They stay in the isolated workspace until the agent is released, which writes ro
 {{#when kind "==" "capture-superseded"}}
 <system-notification>Isolation: these changes were not captured: the agent started another turn before the capture finished. They are captured with its next turn whose result reaches you, or when it is released.</system-notification>
 {{/when}}
+{{#when kind "==" "handoff-withdrawn"}}
+<system-notification>Isolation: the agent undid the changes it had handed over that were not applied, so what was captured for them (patch files, task branch) was removed. Nothing is left to apply.</system-notification>
+{{/when}}

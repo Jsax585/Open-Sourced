@@ -68,7 +68,8 @@ export type IsolationSummaryKind =
 	| "branch-capture-failed"
 	| "merge-error"
 	| "follow-up-pending"
-	| "capture-superseded";
+	| "capture-superseded"
+	| "handoff-withdrawn";
 
 /** Context for `isolation-summary.md`; unused fields are simply absent. */
 export interface IsolationSummaryContext {
@@ -460,6 +461,16 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	// branch they refused to merge. A superseded follow-up must restore this,
 	// not delete it: the branch is the only copy of that work.
 	let publishedBranchTip: string | undefined;
+	// What the caller was handed and has not landed: the files written for it,
+	// and whether any of it holds work. A later turn that undoes all of it must
+	// withdraw it. Otherwise the recovery artifacts keep offering work the
+	// agent deliberately removed.
+	const unlandedFiles = new Set<string>();
+	let unlandedWork = false;
+	const trackUnlanded = (files: readonly string[], hasWork: boolean): void => {
+		for (const file of files) unlandedFiles.add(file);
+		if (hasWork) unlandedWork = true;
+	};
 	// Settles once this function is done with the first run. Follow-up turns
 	// wait for it, so they never capture before the first run's handoff.
 	const firstRunDone = Promise.withResolvers<void>();
@@ -504,6 +515,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		preserveUnlanded = outcome === null;
 		if (outcome !== true) return;
 		preserveUnlanded = false;
+		unlandedFiles.clear();
+		unlandedWork = false;
 		// A capture with no root changes made no branch: the previous tip still holds everything.
 		landed = { state: settled.state, tip: settled.tip ?? landed?.tip };
 	};
@@ -515,26 +528,34 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	let laterCaptures = 0;
 	const nextNestedPatchPrefix = (): string => `${opts.agentId}.nested-${++laterCaptures}`;
 	/**
-	 * A follow-up wrote the task branch, then the caller said the capture was
-	 * superseded before it landed. Put the branch back to the tip already
-	 * handed over. Delete it only when this capture created it and nothing
-	 * was ever published.
+	 * Point the task branch back at `restoreTip`, the tip the caller already
+	 * has, or delete it when no tip was ever handed over. Used when a capture
+	 * is superseded after it wrote the branch, and when the agent undoes
+	 * everything the branch held.
 	 */
-	const discardSupersededBranch = async (
-		branchName: string | undefined,
-		restoreTip: string | undefined,
-	): Promise<void> => {
-		if (!branchName) return;
+	const resetTaskBranch = async (branchName: string, restoreTip: string | undefined): Promise<void> => {
 		try {
 			const repo = vcs.requireGit(opts.context.repoRoot);
 			if (restoreTip) await repo.createBranch(branchName, restoreTip, true);
-			else await repo.deleteBranch(branchName, true);
+			else if (await repo.refExists(`refs/heads/${branchName}`)) await repo.deleteBranch(branchName, true);
 		} catch (error) {
-			logger.warn("Could not undo a superseded task branch", {
+			logger.warn("Could not reset the task branch", {
 				branch: branchName,
 				error: error instanceof Error ? error.message : String(error),
 			});
 		}
+	};
+	/** Remove what the caller was handed and did not land, after the agent undid all of it. */
+	const withdrawUnlanded = async (): Promise<void> => {
+		await Promise.all([...unlandedFiles].map(file => fs.rm(file, { force: true })));
+		if (opts.mergeMode === "branch") {
+			await resetTaskBranch(`omp/task/${opts.agentId}`, landed?.tip);
+			publishedBranchTip = landed?.tip;
+		}
+		unlandedFiles.clear();
+		unlandedWork = false;
+		retryRefused = false;
+		preserveUnlanded = false;
 	};
 
 	/**
@@ -549,18 +570,27 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		baseline: WorktreeBaseline,
 		commitMessage: ((diff: string) => Promise<string | null>) | undefined,
 		superseded: () => boolean,
-	): Promise<IsolationHandoff | "unchanged" | "superseded"> => {
+	): Promise<IsolationHandoff | "unchanged" | "superseded" | "withdrawn"> => {
 		const current = await captureDeltaPatch(isolationDir, baseline);
 		if (superseded()) return "superseded";
 		if (!retryRefused && handedOff && sameIsolationState(handedOff, current.state)) return "unchanged";
 		const delta = landed ? await diffIsolationStates(baseline, landed.state, current.state) : current;
 		if (!delta.rootPatch.trim() && delta.nestedPatches.length === 0) {
+			// The agent put everything it had handed over back as it was. Work the
+			// caller never landed is withdrawn. Otherwise its patch or branch
+			// would still offer changes the agent removed.
+			if (unlandedWork) {
+				await withdrawUnlanded();
+				handedOff = current.state;
+				return "withdrawn";
+			}
 			handedOff = current.state;
 			retryRefused = false;
 			return "unchanged";
 		}
 		if (opts.mergeMode === "patch") {
 			const artifacts = await writeDeltaPatches(delta, opts.artifactsDir, opts.agentId, nextNestedPatchPrefix());
+			trackUnlanded([artifacts.patchPath, ...artifacts.nestedPatchPaths], true);
 			handedOff = current.state;
 			retryRefused = false;
 			return { artifacts, state: current.state, tip: undefined };
@@ -585,7 +615,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		// is replaced by the next capture's. Undo the write first: a follow-up
 		// that never lands must not stay on the branch the caller already has.
 		if (superseded()) {
-			await discardSupersededBranch(branch.branchName, publishedBranchTip);
+			await resetTaskBranch(branch.branchName, publishedBranchTip);
 			return "superseded";
 		}
 		const nestedPatchPaths = await persistNestedPatches(
@@ -593,6 +623,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			nextNestedPatchPrefix(),
 			branch.nestedPatches,
 		);
+		trackUnlanded(nestedPatchPaths, true);
 		handedOff = branch.state;
 		publishedBranchTip = branch.headSha;
 		retryRefused = false;
@@ -615,7 +646,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		// rides along in the next capture.
 		if (turn.exitCode !== 0 || turn.error !== undefined || turn.aborted) return "";
 		await settlePending();
-		let handoff: IsolationHandoff | "unchanged" | "superseded";
+		let handoff: IsolationHandoff | "unchanged" | "superseded" | "withdrawn";
 		try {
 			handoff = await captureHandoff(handle.mergedDir, taskBaseline, opts.buildCommitMessage?.(), superseded);
 		} catch (error) {
@@ -631,6 +662,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			});
 		}
 		if (handoff === "unchanged") return "";
+		if (handoff === "withdrawn") return renderIsolationSummary({ kind: "handoff-withdrawn" });
 		// Its work rides along in the next capture, like a failed turn's.
 		if (handoff === "superseded") return renderIsolationSummary({ kind: "capture-superseded" });
 		const captured = rememberAgentArtifacts({ ...turn, ...handoff.artifacts });
@@ -863,7 +895,10 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				}
 				return supersededFirstRun(result);
 			}
-			if (commitResult) recordFirstRunHandoff(commitResult.state, commitResult.headSha);
+			if (commitResult) {
+				recordFirstRunHandoff(commitResult.state, commitResult.headSha);
+				trackUnlanded([], true);
+			}
 			// The branch holds the root-repo work, but nested-repo patches exist
 			// only in memory until written; the workspace goes away in `finally`.
 			try {
@@ -872,6 +907,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					opts.agentId,
 					commitResult?.nestedPatches ?? [],
 				);
+				trackUnlanded(nestedPatchPaths, false);
 				return rememberAgentArtifacts({
 					...result,
 					branchName: commitResult?.branchName,
@@ -907,6 +943,10 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					return supersededFirstRun(result);
 				}
 				recordFirstRunHandoff(capture.state, undefined);
+				trackUnlanded(
+					[capture.artifacts.patchPath, ...capture.artifacts.nestedPatchPaths],
+					capture.artifacts.hasRootChanges || capture.artifacts.nestedPatches.length > 0,
+				);
 				return rememberAgentArtifacts({ ...result, ...capture.artifacts });
 			} catch (patchErr) {
 				retainWorkspace = true;

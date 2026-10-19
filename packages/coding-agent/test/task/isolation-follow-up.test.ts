@@ -800,6 +800,74 @@ describe("isolated agent follow-up turns", () => {
 		expect(await Bun.file(run.first.patchPath ?? "").text()).toContain("+two");
 	});
 
+	it("withdraws an unlanded patch the agent later undoes", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "patch");
+		const run = await runKeptAlive({
+			id: "FollowUpUndone",
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		// apply=false: the first result advertised this patch as the way to recover the work.
+		firstRun.resolve(null);
+		const patchPath = run.first.patchPath ?? "";
+		expect(await Bun.file(patchPath).text()).toContain("+one");
+
+		// The agent deliberately puts the workspace back to its starting content.
+		await commitIn(iso, "zero\n", "undo");
+		const notice = await run.settleFollowUp?.(result("FollowUpUndone"));
+
+		// A leftover patch would let someone apply work the agent removed.
+		expect(await Bun.file(patchPath).exists()).toBe(false);
+		expect(notice).toContain("undid");
+		await AgentLifecycleManager.global().release("FollowUpUndone");
+		expect(await Bun.file(patchPath).exists()).toBe(false);
+	});
+
+	it("withdraws a refused task branch the agent later undoes", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "branch");
+		const run = await runKeptAlive({
+			id: "FollowUpBranchUndone",
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		firstRun.resolve(false);
+		expect(await taskBranches(repo)).toContain("omp/task/FollowUpBranchUndone");
+
+		await commitIn(iso, "zero\n", "undo");
+		const notice = await run.settleFollowUp?.(result("FollowUpBranchUndone"));
+
+		expect(await taskBranches(repo)).toBe("");
+		expect(notice).toContain("undid");
+		await AgentLifecycleManager.global().release("FollowUpBranchUndone");
+		expect(await taskBranches(repo)).toBe("");
+	});
+
+	it("does not announce a withdrawal when the first run handed over nothing", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "patch");
+		const run = await runKeptAlive({
+			id: "FollowUpNothingHandedOver",
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps,
+			firstRun: async () => {},
+		});
+		firstRun.resolve(null);
+
+		// Nothing was ever offered, so there is nothing to withdraw and no notice to give.
+		expect(await run.settleFollowUp?.(result("FollowUpNothingHandedOver"))).toBe("");
+		await AgentLifecycleManager.global().release("FollowUpNothingHandedOver");
+	});
+
 	it("does not delete the isolation while the first capture is still writing", async () => {
 		const { repo, iso } = await createRepoAndIsolation();
 		const { firstRun, followUps } = landingFollowUps(repo, "patch");
