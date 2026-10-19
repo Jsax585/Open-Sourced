@@ -5973,6 +5973,7 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 		name: id,
 		api,
 		provider: options.provider,
+		providerType: "litellm",
 		baseUrl: runtimeBaseUrl,
 		reasoning: true,
 		input: ["text"],
@@ -6091,6 +6092,7 @@ function mergeLiteLLMRichEndpointModels<TApi extends Api>(
 					name: next.model.name,
 					api,
 					provider: next.model.provider,
+					providerType: "litellm",
 					baseUrl: next.model.baseUrl,
 					reasoning: true,
 					input: next.model.input,
@@ -6160,14 +6162,21 @@ async function fetchLiteLLMRichEndpoint<TApi extends Api>(
 	if (options.apiKey) {
 		requestHeaders.Authorization = `Bearer ${options.apiKey}`;
 	}
+	const timeoutSignal = AbortSignal.timeout(2_000);
+	const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 	let response: Response;
 	try {
 		response = await fetchImpl(`${managementBaseUrl}${endpoint}`, {
 			method: "GET",
 			headers: requestHeaders,
-			signal,
+			signal: requestSignal,
 		});
 	} catch (error) {
+		// A hanging optional management endpoint must not discard the rows already
+		// collected from earlier endpoints.
+		if (requestSignal.aborted) {
+			return null;
+		}
 		return { failure: { endpoint, reason: "network-error", error } };
 	}
 	if (!response.ok) {

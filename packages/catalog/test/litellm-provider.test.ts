@@ -2011,4 +2011,65 @@ describe("LiteLLM declared reasoning ladder", () => {
 		expect(spec?.api).toBe("openai-responses");
 		expect(spec?.thinking?.mode).toBe("effort");
 	});
+
+	test("resolves the declared mode under the litellm provider type", async () => {
+		const specs = await fetchLiteLLMRichModels({
+			api: "anthropic-messages",
+			provider: "commandcode",
+			baseUrl: "http://primary:4000/v1",
+			apiKey: "sk-rich",
+			fetch: vi.fn(async (input: string | URL | Request) => {
+				const url = inputUrl(input);
+				if (url === "http://primary:4000/model/info") {
+					return Response.json({
+						data: [
+							{
+								model_name: "claude-sonnet-4-5",
+								supports_reasoning: true,
+								model_info: { reasoning_effort_levels: ["low", "high"] },
+							},
+						],
+					});
+				}
+				return new Response("{}", { status: 404 });
+			}) as FetchImpl,
+		});
+		const spec = specs?.find(model => model.id === "claude-sonnet-4-5");
+		expect(spec?.thinking?.mode).toBe("budget");
+	});
+
+	test("keeps collected rows when an optional probe hangs", async () => {
+		const specs = await fetchLiteLLMRichModels({
+			api: "openai-completions",
+			provider: "litellm",
+			baseUrl: "http://primary:4000/v1",
+			apiKey: "sk-rich",
+			timeoutMs: 8_000,
+			fetch: vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+				const url = inputUrl(input);
+				if (url === "http://primary:4000/model_group/info") {
+					return Response.json({
+						data: [
+							{
+								model_group: "proxy-timeout",
+								model_name: "proxy-timeout",
+								providers: ["anthropic"],
+								supports_reasoning: true,
+								supports_vision: true,
+								max_input_tokens: 128_000,
+								max_output_tokens: 16_000,
+							},
+						],
+					});
+				}
+				if (url === "http://primary:4000/v2/model/info") {
+					return new Promise<Response>((_resolve, reject) => {
+						init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+					});
+				}
+				return new Response("{}", { status: 404 });
+			}) as FetchImpl,
+		});
+		expect(specs?.map(model => model.id)).toContain("proxy-timeout");
+	});
 });
