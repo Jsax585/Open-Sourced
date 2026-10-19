@@ -298,6 +298,19 @@ describe("searchFactory organization policy", () => {
 });
 
 describe("searchFactory errors", () => {
+	it("refuses an oversized success body instead of buffering it", async () => {
+		const huge = JSON.stringify({ results: [{ url: "https://e.example", text: "x".repeat(3 * 1024 * 1024) }] });
+		const fetchMock = factoryFetch([], { search: () => new Response(huge, { status: 200 }) });
+
+		const error = await withLocalAuthStorage(async authStorage => {
+			await storeFactoryLogin(authStorage);
+			return rejectionOf(searchFactory({ query: "q", authStorage, fetch: fetchMock }));
+		});
+
+		expect(error).toBeInstanceOf(SearchProviderError);
+		expect(String(error)).toContain("exceeded");
+	});
+
 	it("truncates a large error body instead of embedding it whole", async () => {
 		const fetchMock = factoryFetch([], { search: () => new Response("x".repeat(200_000), { status: 502 }) });
 

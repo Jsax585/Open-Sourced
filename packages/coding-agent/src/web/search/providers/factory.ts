@@ -35,6 +35,8 @@ const MAX_NUM_RESULTS = 20;
 const ORG_POLICY_TTL_MS = 5 * 60_000;
 /** How long an unreadable policy (allowed) is reused, so an outage does not add a request to every search. */
 const UNKNOWN_POLICY_TTL_MS = 60_000;
+/** Successful bodies beyond this fail instead of being buffered whole. */
+const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 /** Error bodies beyond this are truncated before they reach the tool result. */
 const MAX_ERROR_BODY_BYTES = 4 * 1024;
 const ORG_REFUSAL = "Factory web search is disabled by your organization's settings.";
@@ -204,7 +206,14 @@ async function callFactorySearch(
 		);
 	}
 
-	const sources = parseFactorySearchResults(await response.json());
+	const raw = await readLimitedText(response, "factory", MAX_RESPONSE_BYTES);
+	let body: unknown;
+	try {
+		body = JSON.parse(raw);
+	} catch {
+		throw new SearchProviderError("factory", "Factory web search returned invalid JSON", 500);
+	}
+	const sources = parseFactorySearchResults(body);
 	return { sources, requestId: response.headers.get("x-request-id") ?? undefined };
 }
 
