@@ -146,6 +146,8 @@
 - Fixed the changes an isolated task agent makes after you message it never reaching your checkout while the session ran, and the leftover `omp/task/<id>` branch then repeating work that had already landed; each follow-up turn's changes now land when that turn ends, like its first run's, and its task result says what was merged or applied ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 - Fixed messaging a subagent spawned from a session without a session file (`--no-session`, SDK embeddings) failing once it had been idle long enough to be parked: its transcript was deleted when its run ended, and is now kept until the agent is released ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 - Fixed a refused follow-up of an isolated task deleting the only copy of that patch when the agent was released and the session had no session file, and follow-up nested-repo patches missing from `agent://` after a restart ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
+- Fixed an isolated task losing the only copy of a nested repository patch when that patch failed to apply after the root changes landed and the agent was later released ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
+- Fixed the leftover patch from an isolated task disappearing when the agent was released while its first run was still landing ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 
 ## [18.12.2] - 2026-10-18
 

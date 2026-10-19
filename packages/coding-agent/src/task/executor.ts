@@ -599,6 +599,13 @@ export interface ExecutorOptions {
 	keepAlive?: boolean;
 	/** Internal ownership handoff for cleanup that outlives the visible Task result. */
 	onCleanupDeferred?: (completion: Promise<void>) => void;
+	/**
+	 * Called synchronously once a kept-alive agent is adopted, before
+	 * {@link finalizeSubagentLifecycle} returns. `release()` deletes that
+	 * adoption before its first await, so a later `has()` check cannot tell
+	 * cleanup to wait for `onRelease`.
+	 */
+	onAdopted?: () => void;
 	/** Releases resources retained for a kept-alive agent when its lifecycle ends. */
 	onRelease?: () => Promise<void>;
 	/**
@@ -3591,6 +3598,12 @@ export async function finalizeSubagentLifecycle(args: {
 	reviveSession: AgentReviver | null;
 	cleanupDeadlineAt?: number;
 	onCleanupDeferred?: (completion: Promise<void>) => void;
+	/**
+	 * Called synchronously once a kept-alive agent is adopted, before this
+	 * function returns. See {@link ExecutorOptions.onAdopted}.
+	 */
+	onAdopted?: () => void;
+	/** Releases resources retained for a kept-alive agent when its lifecycle ends. */
 	onRelease?: () => Promise<void>;
 }): Promise<void> {
 	const registry = AgentRegistry.global();
@@ -3695,6 +3708,9 @@ export async function finalizeSubagentLifecycle(args: {
 		},
 		ref,
 	);
+	// Synchronous: release() deletes this adoption before it awaits, so the
+	// caller must already know the agent was adopted by the time adopt() returns.
+	args.onAdopted?.();
 }
 
 /** Options for {@link runSubagentFollowUpTurn}. */
@@ -5075,6 +5091,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					reviveSession,
 					cleanupDeadlineAt,
 					onRelease: options.onRelease,
+					onAdopted: options.onAdopted,
 					onCleanupDeferred: completion => {
 						deferredSessionShutdown = completion;
 						deferCleanup(completion);

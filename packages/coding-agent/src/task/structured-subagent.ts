@@ -891,6 +891,11 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 	let agentId: string | undefined;
 	/** Set when an isolated agent's release leaves its remaining work in the artifacts directory. */
 	let releaseLeftArtifacts = false;
+	/**
+	 * Set synchronously when the lifecycle adopts the agent. `release()` deletes
+	 * that adoption before `onRelease` writes, so cleanup cannot trust `has()`.
+	 */
+	let adoptedForRelease = false;
 	// Follow-up turns of an isolated agent wait on this before their capture, so
 	// they never race the first run's landing below.
 	const firstRunLanding = Promise.withResolvers<boolean | null>();
@@ -906,6 +911,9 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 		agentId = id;
 		if (policy.preparedSession === undefined) await refreshSkillsForAutoload(request.session, policy.agent);
 		const baseOptions = buildExecutorOptions(request, policy, lease, id);
+		baseOptions.onAdopted = () => {
+			adoptedForRelease = true;
+		};
 		baseOptions.onCleanupDeferred = completion => {
 			deferredCleanup = completion;
 		};
@@ -947,6 +955,10 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 							return { summary: describeCapturedChanges(captured), landed: null };
 						}
 						const landing = await landCapturedChanges(captured, repoRoot, policy.mergeMode, request.session);
+						// Nested patch files are the only recovery copy when apply fails
+						// after the root lands. Release cannot see that failure. A later
+						// turn does not clear this: it may not re-apply the same patches.
+						if (landing.nestedFailed) releaseLeftArtifacts = true;
 						return { summary: landing.summary, landed: landing.changesApplied };
 					},
 				};
@@ -1047,13 +1059,15 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			// A kept-alive agent is revived from its transcript here once it is
 			// parked, so the directory goes only after the agent is released, and
 			// stays when that release left the agent's remaining work in it.
-			if (keptAlive()) await lease.released.promise;
+			// Adoption is gone as soon as release() starts, before onRelease writes,
+			// so the latch — not a live has() check — is what keeps cleanup waiting.
+			if (adoptedForRelease || keptAlive()) await lease.released.promise;
 			if (releaseLeftArtifacts) return;
 			await fs.rm(lease.artifactsDir, { recursive: true, force: true });
 			lease.unregister?.();
 		};
 		if (shouldCleanup) {
-			if (deferredCleanup || keptAlive()) {
+			if (deferredCleanup || keptAlive() || adoptedForRelease) {
 				trackLateCleanup((deferredCleanup ?? Promise.resolve()).then(cleanupArtifacts), {
 					resource: "artifacts",
 					artifactsDir: lease.artifactsDir,
