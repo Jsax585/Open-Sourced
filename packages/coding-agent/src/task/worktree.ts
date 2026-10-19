@@ -561,15 +561,17 @@ export async function applyNestedPatches(
 		byRepo.set(p.relativePath, group);
 	}
 	const order = [...byRepo.keys()];
+	/** A repository with no checkout in the parent is skipped, whether the apply succeeds or fails. */
+	const hasCheckout = (relativePath: string): Promise<boolean> =>
+		fs.access(path.join(repoRoot, relativePath, ".git")).then(
+			() => true,
+			() => false,
+		);
 
 	for (const [relativePath, repoPatches] of byRepo) {
 		try {
 			const nestedDir = path.join(repoRoot, relativePath);
-			try {
-				await fs.access(path.join(nestedDir, ".git"));
-			} catch {
-				continue;
-			}
+			if (!(await hasCheckout(relativePath))) continue;
 			const repository = vcs.requireGit(nestedDir);
 
 			const combinedDiff = repoPatches.map(p => p.patch).join("\n");
@@ -608,7 +610,13 @@ export async function applyNestedPatches(
 		} catch (error) {
 			// The apply stops at the first failure: this repository did not apply, and
 			// the ones after it were never attempted. Earlier ones are applied and committed.
-			throw new NestedPatchApplyError(error, order.slice(order.indexOf(relativePath)));
+			// A later repository with no checkout would be skipped by a successful apply too,
+			// so it is not left waiting for a patch that can never land.
+			const later: string[] = [];
+			for (const rel of order.slice(order.indexOf(relativePath) + 1)) {
+				if (await hasCheckout(rel)) later.push(rel);
+			}
+			throw new NestedPatchApplyError(error, [relativePath, ...later]);
 		}
 	}
 	return warnings;

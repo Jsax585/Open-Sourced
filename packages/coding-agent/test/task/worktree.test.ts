@@ -1191,21 +1191,24 @@ describe("applyNestedPatches", () => {
 		expect(stashList).toContain("omp-isolation-");
 	});
 
+	/** A nested repo at `dir` holding `file.txt` committed as `v1`. */
+	async function initNestedRepo(dir: string): Promise<void> {
+		await fs.mkdir(dir, { recursive: true });
+		await initRepo(dir);
+		await runGit(dir, ["config", "user.email", "test@example.com"]);
+		await runGit(dir, ["config", "user.name", "Test User"]);
+		await fs.writeFile(path.join(dir, "file.txt"), "v1\n");
+		await runGit(dir, ["add", "."]);
+		await runGit(dir, ["commit", "-q", "-m", "init"]);
+	}
+	const applies = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-v1\n+v2\n";
+	const doesNotApply =
+		"diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-not-there\n+v2\n";
+	const unappliedOf = (failure: unknown): string[] | undefined => (failure as { unapplied?: string[] }).unapplied;
+
 	it("names the repositories whose patch did not apply when one fails", async () => {
 		// `sub` applies, `other` cannot, and `last` is never attempted: the apply stops at the first failure.
-		for (const rel of ["other", "last"]) {
-			const dir = path.join(parentRepo, rel);
-			await fs.mkdir(dir, { recursive: true });
-			await initRepo(dir);
-			await runGit(dir, ["config", "user.email", "test@example.com"]);
-			await runGit(dir, ["config", "user.name", "Test User"]);
-			await fs.writeFile(path.join(dir, "file.txt"), "v1\n");
-			await runGit(dir, ["add", "."]);
-			await runGit(dir, ["commit", "-q", "-m", "init"]);
-		}
-		const applies = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-v1\n+v2\n";
-		const doesNotApply =
-			"diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-not-there\n+v2\n";
+		for (const rel of ["other", "last"]) await initNestedRepo(path.join(parentRepo, rel));
 
 		let failure: unknown;
 		await applyNestedPatches(parentRepo, [
@@ -1218,10 +1221,29 @@ describe("applyNestedPatches", () => {
 
 		expect(failure).toBeInstanceOf(Error);
 		// What a landing needs to keep cumulative: the repository that failed and every one after it.
-		expect((failure as { unapplied?: string[] }).unapplied).toEqual(["other", "last"]);
+		expect(unappliedOf(failure)).toEqual(["other", "last"]);
 		// `sub` was applied and committed before the failure; `last` was never touched.
 		expect(await fs.readFile(path.join(nestedDir, "file.txt"), "utf8")).toBe("v2\n");
 		expect(await fs.readFile(path.join(parentRepo, "last", "file.txt"), "utf8")).toBe("v1\n");
+	});
+
+	it("leaves out a later repository the apply would skip for having no checkout", async () => {
+		// A successful apply skips `gone` too and lets its state advance. Naming it here would keep it
+		// cumulative, waiting for a patch that can never land, until the next clean landing.
+		await initNestedRepo(path.join(parentRepo, "second-fails"));
+		await initNestedRepo(path.join(parentRepo, "second-last"));
+
+		let failure: unknown;
+		await applyNestedPatches(parentRepo, [
+			{ relativePath: "second-fails", patch: doesNotApply },
+			{ relativePath: "second-gone", patch: applies },
+			{ relativePath: "second-last", patch: applies },
+		]).catch(error => {
+			failure = error;
+		});
+
+		expect(failure).toBeInstanceOf(Error);
+		expect(unappliedOf(failure)).toEqual(["second-fails", "second-last"]);
 	});
 });
 
