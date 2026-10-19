@@ -55,8 +55,29 @@ function initEntry(modelRole: string, parentId: string | null = null): SessionEn
 	};
 }
 
-function modelChangeEntry(id: string, parentId: string | null, model: string, role: string): SessionEntry {
-	return { type: "model_change", id, parentId, timestamp: "2026-01-01T00:00:01.000Z", model, role };
+function modelChangeEntry(id: string, parentId: string | null, model: string, role?: string): SessionEntry {
+	return {
+		type: "model_change",
+		id,
+		parentId,
+		timestamp: "2026-01-01T00:00:01.000Z",
+		model,
+		...(role !== undefined ? { role } : {}),
+	};
+}
+
+/**
+ * A child session's real branch: the SDK's role-less initial model, the
+ * executor's `subagent:<id>` pin, the `session_init` contract, then one
+ * ephemeral retry-fallback hop.
+ */
+function subagentBranch(selector: string, declaredRole: string): SessionEntry[] {
+	return [
+		modelChangeEntry("sdk-initial", null, selector),
+		modelChangeEntry("pin", "sdk-initial", selector, "subagent:child"),
+		initEntry(declaredRole, "pin"),
+		modelChangeEntry("hop", `init-${declaredRole}`, selector, "fallback"),
+	];
 }
 
 function createHost(
@@ -82,6 +103,13 @@ function createHost(
 			settings.setModelRole(role, selector);
 		}
 	}
+	// `lastModelChangeRole` is shorthand for a one-entry branch; the recovery
+	// reads roles only from the branch, as on a real SessionManager.
+	const branch =
+		options.branch ??
+		(options.lastModelChangeRole
+			? [modelChangeEntry("last", null, `${model.provider}/${model.id}`, options.lastModelChangeRole)]
+			: []);
 	const agentState = { messages: options.messages ?? [] };
 	return {
 		agent: {
@@ -91,9 +119,8 @@ function createHost(
 			},
 		} as never,
 		sessionManager: {
-			getLastModelChangeRole: () => options.lastModelChangeRole,
-			getBranch: () => [...(options.branch ?? [])],
-			getBranchView: () => options.branch ?? [],
+			getBranch: () => [...branch],
+			getBranchView: () => branch,
 			getSessionId: () => "test-session",
 		} as never,
 		persistedAssistantEntryId: () => undefined,
@@ -1140,66 +1167,75 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 		expect(recovery.resolveRetryFallbackRole(`${other.provider}/${other.id}`, other)).toBe("default");
 	});
 
-	it("keeps a subagent's declared role after an ephemeral fallback hop erases it", () => {
-		// A subagent pinned to the `task` role shares its model with `web`, and
-		// `web` is listed FIRST in fallbackChains. Once the failing turn hops
-		// through a `fallback` model_change, the recorded role is ephemeral. The
-		// declared `session_init.modelRole` must still name `task`; falling back
-		// to yaml order would hand the child to `web`.
+	describe("subagent declared role after an ephemeral fallback hop", () => {
 		const selector = `${model.provider}/${model.id}`;
-		const webModel = getBundledModel("openai", "gpt-4o-mini");
-		if (!webModel) throw new Error("Expected bundled model gpt-4o-mini");
-		const recovery = new TurnRecovery(
-			createHost(model, modelRegistry, {
-				lastModelChangeRole: "fallback",
-				branch: [initEntry("task"), modelChangeEntry("hop", "init-task", selector, "fallback")],
-				modelRoles: { web: selector, task: selector },
-				fallbackChains: {
-					web: [`${webModel.provider}/${webModel.id}`],
-					task: [`${model.provider}/${model.id}`],
-				},
-			}),
-		);
-		expect(recovery.resolveRetryFallbackRole(selector, model)).toBe("task");
-	});
+		const other = getBundledModel("openai", "gpt-4o-mini");
+		if (!other) throw new Error("Expected bundled model gpt-4o-mini");
+		const otherSelector = `${other.provider}/${other.id}`;
 
-	it("prefers a recorded non-ephemeral role over the declared one", () => {
-		// An explicit `/model` switch records its role; that newer intent must
-		// outrank the role the session was spawned with.
-		const selector = `${model.provider}/${model.id}`;
-		const slowModel = getBundledModel("openai", "gpt-4o-mini");
-		if (!slowModel) throw new Error("Expected bundled model gpt-4o-mini");
-		const recovery = new TurnRecovery(
-			createHost(model, modelRegistry, {
-				lastModelChangeRole: "fallback",
-				branch: [initEntry("task"), modelChangeEntry("switch", "init-task", selector, "slow")],
-				modelRoles: { slow: selector, task: selector },
-				fallbackChains: {
-					slow: [`${slowModel.provider}/${slowModel.id}`],
-					task: [`${model.provider}/${model.id}`],
-				},
-			}),
-		);
-		expect(recovery.resolveRetryFallbackRole(selector, model)).toBe("slow");
-	});
+		it("keeps `task` when `default`, `web` and `task` all share the model", () => {
+			// `web` and `default` are listed before `task`; neither yaml order nor
+			// the SDK's role-less initial `model_change` may claim the child.
+			const recovery = new TurnRecovery(
+				createHost(model, modelRegistry, {
+					branch: subagentBranch(selector, "task"),
+					modelRoles: { default: selector, web: selector, task: selector },
+					fallbackChains: { web: [otherSelector], default: [otherSelector], task: [otherSelector] },
+				}),
+			);
+			expect(recovery.resolveRetryFallbackRole(selector, model)).toBe("task");
+		});
 
-	it("ignores a declared role whose assignment is no longer the active model", () => {
-		const selector = `${model.provider}/${model.id}`;
-		const webModel = getBundledModel("openai", "gpt-4o-mini");
-		if (!webModel) throw new Error("Expected bundled model gpt-4o-mini");
-		const recovery = new TurnRecovery(
-			createHost(model, modelRegistry, {
-				lastModelChangeRole: "fallback",
-				branch: [initEntry("task")],
-				modelRoles: { task: `${webModel.provider}/${webModel.id}` },
-				fallbackChains: {
-					task: [`${webModel.provider}/${webModel.id}`],
-					default: [`${webModel.provider}/${webModel.id}`],
-				},
-			}),
-		);
-		// `task` no longer owns this model, so it must not capture the chain.
-		expect(recovery.resolveRetryFallbackRole(selector, model)).toBe("default");
+		it("keeps `task` when a model-sharing `default` has no chain of its own", () => {
+			// A chain-less candidate is ignored by the resolver, so it must not
+			// hide `task` and hand the child to yaml order (`web`).
+			const recovery = new TurnRecovery(
+				createHost(model, modelRegistry, {
+					branch: subagentBranch(selector, "task"),
+					modelRoles: { default: selector, web: selector, task: selector },
+					fallbackChains: { web: [otherSelector], task: [otherSelector] },
+				}),
+			);
+			expect(recovery.resolveRetryFallbackRole(selector, model)).toBe("task");
+		});
+
+		it("keeps the `subagent:<id>` pin ahead of the declared alias", () => {
+			const recovery = new TurnRecovery(
+				createHost(model, modelRegistry, {
+					branch: subagentBranch(selector, "task"),
+					modelRoles: { "subagent:child": selector, web: selector, task: selector },
+					fallbackChains: { web: [otherSelector], task: [otherSelector], "subagent:child": [otherSelector] },
+				}),
+			);
+			expect(recovery.resolveRetryFallbackRole(selector, model)).toBe("subagent:child");
+		});
+
+		it("lets a role recorded after `session_init` outrank the declared one", () => {
+			const branch = [
+				...subagentBranch(selector, "task"),
+				modelChangeEntry("switch", "hop", selector, "slow"),
+				modelChangeEntry("hop-2", "switch", selector, "fallback"),
+			];
+			const recovery = new TurnRecovery(
+				createHost(model, modelRegistry, {
+					branch,
+					modelRoles: { slow: selector, task: selector },
+					fallbackChains: { task: [otherSelector], slow: [otherSelector] },
+				}),
+			);
+			expect(recovery.resolveRetryFallbackRole(selector, model)).toBe("slow");
+		});
+
+		it("ignores a declared role whose assignment is no longer the active model", () => {
+			const recovery = new TurnRecovery(
+				createHost(model, modelRegistry, {
+					branch: subagentBranch(selector, "task"),
+					modelRoles: { task: otherSelector },
+					fallbackChains: { task: [otherSelector], default: [otherSelector] },
+				}),
+			);
+			expect(recovery.resolveRetryFallbackRole(selector, model)).toBe("default");
+		});
 	});
 
 	// Gemini reports MALFORMED_FUNCTION_CALL when the model transcribes the call

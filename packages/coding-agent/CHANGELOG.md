@@ -11,7 +11,7 @@
 
 ### Fixed
 
-- Fixed retry fallback handing a subagent's failing model to the wrong role's chain: once a hop recorded its `model_change` under the ephemeral `fallback` role, the live-role hint was lost, so a model shared by several roles was claimed by the first one in yaml order instead of the role the session actually runs as (a subagent's `task` role losing to `web`)
+- Fixed a subagent whose model is shared by several roles falling back along the wrong role's chain after its first fallback hop ([#16357](https://github.com/can1357/oh-my-pi/pull/16357) by [@elian37](https://github.com/elian37))
 - Fixed `read` middle-eliding large file pages into an artifact; a page past the output spill threshold now stops at a line boundary with an exact `:N` continuation ([#16277](https://github.com/can1357/oh-my-pi/issues/16277))
 - Fixed an edit after a restart replacing a line that `read` or `grep` had shown cut at the column cap and silently dropping the rest of that line; such edits now ask for a full `:raw` read of the line first, while edits to lines within the cap still apply ([#16171](https://github.com/can1357/oh-my-pi/issues/16171))
 - Fixed Enter on an unknown slash command such as `/not-a-command` running a command whose description happened to match it (e.g. `/loop`, which then resent every later prompt after each turn); Enter now sends what you typed, including as the deny-and-steer message for a pending tool approval, unless you select a suggestion first ([#16265](https://github.com/can1357/oh-my-pi/issues/16265))
