@@ -18,6 +18,7 @@ import {
 	markTerminalFdCloexec,
 	onTerminalOutputRestored,
 	setTerminalOutputRedirectTarget,
+	stderrSharesStdoutTerminal,
 	terminalStderrIsGuarded,
 	tryLibcFdOps,
 } from "./terminal-output-guard";
@@ -28,17 +29,6 @@ import {
  * stderr the caller already redirected (`2>file`, `2>/dev/null`, a different
  * tty) must keep flowing untouched — as in 16.5.1.
  */
-function stderrSharesStdoutTerminal(): boolean {
-	if (!process.stdout.isTTY || !process.stderr.isTTY) return false;
-	try {
-		const stdoutStat = fs.fstatSync(1);
-		const stderrStat = fs.fstatSync(2);
-		return stdoutStat.dev === stderrStat.dev && stdoutStat.ino === stderrStat.ino;
-	} catch {
-		return false;
-	}
-}
-
 /** Saved dup of the real stderr while legacy suppression is active, else null. */
 let savedStderrFd: number | null = null;
 

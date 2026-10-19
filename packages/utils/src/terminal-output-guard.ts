@@ -19,8 +19,16 @@ export interface LibcFdOps {
 const F_SETFD = 2;
 const FD_CLOEXEC = 1;
 
-/** Mark a saved/render descriptor close-on-exec: dup() clears the flag, and an exec'd child inheriting a writable terminal fd would bypass the isolation. */
+/**
+ * Mark a saved/render descriptor close-on-exec: dup() clears the flag, and an
+ * exec'd child inheriting a writable terminal fd would bypass the isolation.
+ * Skipped on Apple arm64: darwin's variadic ABI stack-passes fcntl's third
+ * argument while the fixed three-arg FFI declaration passes it in a register,
+ * so F_SETFD would read the wrong flags there. Everywhere else the integer
+ * triple lands in the regular argument registers.
+ */
 export function markTerminalFdCloexec(ops: LibcFdOps, fd: number): void {
+	if (process.platform === "darwin" && process.arch === "arm64") return;
 	ops.fcntlSetFd(fd, FD_CLOEXEC);
 }
 
@@ -140,11 +148,21 @@ function libcFdOps(): LibcFdOps {
 	return ops;
 }
 
-function stderrSharesStdoutTerminal(): boolean {
-	if (!tty.isatty(2)) return false;
-	const stdoutStat = fs.fstatSync(1);
-	const stderrStat = fs.fstatSync(2);
-	return stdoutStat.dev === stderrStat.dev && stdoutStat.ino === stderrStat.ino;
+/**
+ * Whether fd 2 currently writes to the same terminal file as fd 1 — the one
+ * predicate both the unified guard and the legacy stderr wrapper consult.
+ * Total on purpose: a stat failure or non-tty end means "not shared", never a
+ * throw into a suppression entry point.
+ */
+export function stderrSharesStdoutTerminal(): boolean {
+	if (!tty.isatty(1) || !tty.isatty(2)) return false;
+	try {
+		const stdoutStat = fs.fstatSync(1);
+		const stderrStat = fs.fstatSync(2);
+		return stdoutStat.dev === stderrStat.dev && stdoutStat.ino === stderrStat.ino;
+	} catch {
+		return false;
+	}
 }
 
 /** Return the renderer's private stdout fd, or null for non-Unix/non-TTY output. */

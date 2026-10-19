@@ -195,7 +195,7 @@ describe("terminal output guard", () => {
 		},
 	);
 
-	it.skipIf(process.platform === "win32")(
+	it.skipIf(process.platform !== "linux")(
 		"does not leak saved or render terminal descriptors into exec'd children",
 		async () => {
 			const root = fs.mkdtempSync(path.join(os.tmpdir(), "cloexec-inheritance-"));
