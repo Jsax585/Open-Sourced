@@ -2,7 +2,6 @@
 //!
 //! Accessibility text ranges count UTF-16 code units, so every offset here is
 //! in UTF-16 units, never UTF-8 bytes or Unicode scalars.
-
 #[cfg(any(target_os = "macos", test))]
 use std::fmt::Write as _;
 
