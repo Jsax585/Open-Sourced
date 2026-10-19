@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added the `web/factory` search engine model (Factory-hosted web search through a Factory Droid login)
+- Added the `web/factory` search engine model (Factory-hosted web search through a Factory Droid login) ([#16326](https://github.com/can1357/oh-my-pi/pull/16326) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.12.2] - 2026-10-18
 

@@ -5,7 +5,7 @@
 ### Added
 
 - `AutocompleteItem.descriptionMatch` marks a slash command matched only through its description; `Editor` Enter no longer applies such a row unless the user moved the selection onto it ([#16265](https://github.com/can1357/oh-my-pi/issues/16265))
-- Added the Factory label for web search results from `web/factory`
+- Added the Factory label for web search results from `web/factory` ([#16326](https://github.com/can1357/oh-my-pi/pull/16326) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
 

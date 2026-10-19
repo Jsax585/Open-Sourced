@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added Factory web search (`web/factory`): a Factory Droid login searches the web with no other key, unless your org disables it
+- Added Factory web search (`web/factory`): a Factory Droid login searches the web with no other key, unless your org disables it ([#16326](https://github.com/can1357/oh-my-pi/pull/16326) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
 
