@@ -1893,14 +1893,62 @@ export class TurnRecovery {
 		return current && current !== pinned ? [pinned, current] : [pinned];
 	}
 
-	/** Live session role for chain lookup, provided its assignment still matches the active model. */
+	/**
+	 * Live session role for chain lookup: the first role the session has run as
+	 * whose current assignment still IS the active model and that owns a chain.
+	 *
+	 * A retry-fallback hop records its `model_change` under the ephemeral
+	 * `fallback` role, so the newest record alone loses the live role after the
+	 * first hop and a model shared by several roles falls to yaml order. Walk the
+	 * branch instead. A chain-less role is skipped: the resolver ignores such a
+	 * hint, so it must not hide a later role that has one.
+	 */
 	#liveRetryRoleHint(currentModel: Model | null | undefined): string | undefined {
-		const role = this.#host.sessionManager?.getLastModelChangeRole?.();
-		if (!role || role === EPHEMERAL_MODEL_CHANGE_ROLE || !currentModel) return undefined;
+		if (!currentModel) return undefined;
+		const chains = this.#getRetryFallbackChains();
+		for (const role of this.#liveRetryRoleCandidates()) {
+			if (Array.isArray(chains[role]) && this.#roleOwnsModel(role, currentModel)) return role;
+		}
+		return undefined;
+	}
+
+	/**
+	 * Roles the session has run as: recorded `model_change` roles newest first,
+	 * then the role declared at `session_init` (a subagent's `modelRole`).
+	 *
+	 * A child session's spawn writes a role-less `model_change` (SDK initial
+	 * model) and its `subagent:<id>` pin before `session_init`. The role-less
+	 * entry there is bookkeeping, not a role the session chose, so it is skipped;
+	 * reading it as `default` would outrank the declared role. The explicit pin
+	 * keeps precedence over the declared alias, as before this walk existed.
+	 */
+	#liveRetryRoleCandidates(): string[] {
+		const sessionManager = this.#host.sessionManager;
+		const changeRoles: string[] = [];
+		let declaredRole: string | undefined;
+		// `getBranchView` is the manager's live memo; fall back to the copying
+		// accessor for hosts that expose only `getBranch`.
+		const branch = sessionManager?.getBranchView?.() ?? sessionManager?.getBranch?.() ?? [];
+		for (let index = branch.length - 1; index >= 0; index--) {
+			const entry = branch[index];
+			if (entry.type === "session_init") {
+				declaredRole ??= entry.modelRole;
+			} else if (entry.type === "model_change") {
+				if (entry.role === undefined && declaredRole !== undefined) continue;
+				const role = entry.role ?? "default";
+				if (role !== EPHEMERAL_MODEL_CHANGE_ROLE && !changeRoles.includes(role)) changeRoles.push(role);
+			}
+		}
+		if (declaredRole && !changeRoles.includes(declaredRole)) changeRoles.push(declaredRole);
+		return changeRoles;
+	}
+
+	/** Whether `role`'s current assignment resolves to the active model. */
+	#roleOwnsModel(role: string, currentModel: Model): boolean {
 		const configured = this.#host.settings.getModelRole(role);
-		if (!configured) return undefined;
+		if (!configured) return false;
 		const resolved = resolveModelOverride([configured], this.#host.modelRegistry, this.#host.settings);
-		return resolved.model && modelsAreEqual(resolved.model, currentModel) ? role : undefined;
+		return resolved.model !== undefined && modelsAreEqual(resolved.model, currentModel);
 	}
 
 	/** Finds fallback candidates that follow the active selector. */
