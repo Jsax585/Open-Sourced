@@ -362,6 +362,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		inlineHint: "[model|clear]",
 		allowArgs: true,
 		subcommands: [{ name: "clear", description: "Drop the pinned model; approval uses the slider tier" }],
+		subcommandOptional: true,
 		isTuiAvailable: runtime => runtime.ctx.planModeEnabled,
 		handleTui: (command, runtime) => {
 			clearSubmittedText(runtime);

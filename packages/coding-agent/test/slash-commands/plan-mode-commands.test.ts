@@ -29,4 +29,12 @@ describe("plan-mode-only slash commands", () => {
 		expect(await suggested(provider, "/exec-model")).toContain("exec-model");
 		expect(await suggested(provider, "/plan-review")).toContain("plan-review");
 	});
+
+	it("keeps bare /exec-model a complete invocation: no subcommand popup until a prefix is typed", async () => {
+		const runtime = { ctx: { planModeEnabled: true } } as unknown as TuiSlashCommandRuntime;
+		const command = buildTuiBuiltinSlashCommands(runtime).find(entry => entry.name === "exec-model");
+
+		expect(await command?.getArgumentCompletions?.("")).toBeNull();
+		expect((await command?.getArgumentCompletions?.("cl"))?.map(item => item.value)).toEqual(["clear "]);
+	});
 });
