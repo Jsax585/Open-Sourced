@@ -8,7 +8,8 @@ import type TurndownService from "@oh-my-pi/pi-utils/turndown";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { AgentStorage } from "../../session/agent-storage";
 import { ToolAbortError } from "../../tools/tool-errors";
-import { decodeBody, readBodyCapped } from "../response-body";
+import { readBodyCapped } from "@oh-my-pi/pi-utils/response-body";
+import { decodeBody } from "../response-body";
 
 export { formatNumber } from "@oh-my-pi/pi-utils";
 

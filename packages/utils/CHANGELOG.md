@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `readBodyCapped` (`@oh-my-pi/pi-utils/response-body`), which reads a response body up to a byte cap into one buffer and stops there
+
 ## [18.12.2] - 2026-10-18
 
 ### Added

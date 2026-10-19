@@ -1,7 +1,8 @@
 import type { AgentStorage } from "../../../session/agent-storage";
 import { DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS, SearchProviderError } from "../../../web/search/types";
 import { SEARCH_PROVIDER_LABELS, type SearchProviderId, type SearchSource } from "../types";
-import { decodeBody, readBodyCapped } from "../../response-body";
+import { readBodyCapped } from "@oh-my-pi/pi-utils/response-body";
+import { decodeBody } from "../../response-body";
 import { dateToAgeSeconds } from "../utils";
 
 /**
