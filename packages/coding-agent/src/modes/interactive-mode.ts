@@ -2820,7 +2820,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Re-discover prompt templates (snippets) from disk and refresh `/snippet:<name>` autocomplete. */
 	async refreshPromptTemplates(): Promise<void> {
 		const basePath = this.sessionManager.getCwd();
-		this.session.setPromptTemplates(await loadPromptTemplates({ cwd: basePath }));
+		const agentDir = this.settings.getAgentDir();
+		this.session.setPromptTemplates(await loadPromptTemplates({ cwd: basePath, agentDir }));
 		this.#rebuildSlashCommandAutocomplete(basePath);
 	}
 

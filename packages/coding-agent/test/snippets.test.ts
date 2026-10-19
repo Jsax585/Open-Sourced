@@ -7,6 +7,13 @@ import {
 	loadPromptTemplates,
 	type PromptTemplate,
 } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
+import { Agent } from "@oh-my-pi/pi-agent-core";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	buildSnippetChoices,
 	deleteSnippet,
@@ -59,6 +66,32 @@ describe("saveSnippet", () => {
 			expect(() => snippetPath(tmp, name)).toThrow("Invalid snippet name");
 			await expect(saveSnippet({ dir: tmp, name, text: "x", force: false })).rejects.toThrow("Invalid snippet name");
 		}
+	});
+
+	test("force replaces a symlinked snippet instead of writing through it", async () => {
+		const dir = path.join(tmp, "prompts");
+		await fs.mkdir(dir, { recursive: true });
+		const outside = path.join(tmp, "outside.txt");
+		await Bun.write(outside, "precious");
+		await fs.symlink(outside, path.join(dir, "linked.md"));
+
+		expect((await saveSnippet({ dir, name: "linked", text: "new body", force: true })).kind).toBe("saved");
+
+		expect(await Bun.file(outside).text()).toBe("precious");
+		expect(await Bun.file(path.join(dir, "linked.md")).text()).toContain("new body");
+		expect((await fs.lstat(path.join(dir, "linked.md"))).isSymbolicLink()).toBe(false);
+		expect((await fs.readdir(dir)).filter(f => f.endsWith(".tmp"))).toEqual([]);
+	});
+
+	test("without force a symlinked snippet reports exists and its target is untouched", async () => {
+		const dir = path.join(tmp, "prompts");
+		await fs.mkdir(dir, { recursive: true });
+		const outside = path.join(tmp, "outside.txt");
+		await Bun.write(outside, "precious");
+		await fs.symlink(outside, path.join(dir, "linked.md"));
+
+		expect((await saveSnippet({ dir, name: "linked", text: "new body", force: false })).kind).toBe("exists");
+		expect(await Bun.file(outside).text()).toBe("precious");
 	});
 });
 
@@ -114,20 +147,36 @@ describe("buildSnippetChoices", () => {
 		source,
 	});
 
-	test("argument templates insert the namespaced /snippet:name invocation", () => {
-		const choices = buildSnippetChoices([template("hello", "Say hello to $1")]);
+	test("argument templates insert the namespaced /snippet:name invocation at the draft start", () => {
+		const choices = buildSnippetChoices([template("hello", "Say hello to $1")], true);
 		expect(choices[0]?.insertText).toBe("/snippet:hello ");
 		expect(choices[0]?.description).toContain("/snippet:hello");
 	});
 
+	test("argument templates insert their body mid-draft, where a slash command would not expand", () => {
+		const choices = buildSnippetChoices([template("hello", "Say hello to $1")], false);
+		expect(choices[0]?.insertText).toBe("Say hello to $1");
+		expect(choices[0]?.description).not.toContain("/snippet:hello");
+	});
+
 	test("templates without placeholders insert their body", () => {
-		expect(buildSnippetChoices([template("plain", "just text")])[0]?.insertText).toBe("just text");
+		expect(buildSnippetChoices([template("plain", "just text")], true)[0]?.insertText).toBe("just text");
 	});
 
 	test("duplicate names get unique source-qualified labels and raw bodies", () => {
-		const choices = buildSnippetChoices([template("dup", "a $1", "(project)"), template("dup", "b $1", "(user)")]);
+		const choices = buildSnippetChoices(
+			[template("dup", "a $1", "(project)"), template("dup", "b $1", "(user)")],
+			true,
+		);
 		expect(choices.map(c => c.label)).toEqual(["dup (project)", "dup (user)"]);
 		expect(choices.map(c => c.insertText)).toEqual(["a $1", "b $1"]);
+	});
+
+	test("terminal control sequences in a template never reach the picker text", () => {
+		const [choice] = buildSnippetChoices([template("evil", "before \x1b]0;pwned\x07 after \x1b[31mred")], true);
+		expect(choice?.description).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
+		expect(choice?.description).toContain("before");
+		expect(choice?.description).toContain("red");
 	});
 });
 
@@ -141,5 +190,33 @@ describe("snippet: command namespace", () => {
 		expect(expandPromptTemplate("/hello world", templates)).toBe("Say hello to world");
 		expect(expandPromptTemplate("/snippet:nope world", templates)).toBe("/snippet:nope world");
 		expect(expandPromptTemplate("/skill:hello world", templates)).toBe("/skill:hello world");
+	});
+});
+
+describe("default save text after branching", () => {
+	test("the active-branch listing excludes prompts from an abandoned branch", async () => {
+		const authStorage = await AuthStorage.create(path.join(tmp, "testauth.db"));
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Test model not found in registry");
+		const session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated(),
+			modelRegistry: new ModelRegistry(authStorage, path.join(tmp, "models.yml")),
+		});
+		try {
+			const first = session.sessionManager.appendMessage({ role: "user", content: "active prompt", timestamp: 1 });
+			session.sessionManager.appendMessage({ role: "user", content: "abandoned prompt", timestamp: 2 });
+			session.sessionManager.branch(first);
+
+			expect(session.getUserMessagesForBranching().map(m => m.text)).toEqual(["active prompt", "abandoned prompt"]);
+			const active = session.getUserMessagesForBranching({ activeBranchOnly: true });
+			expect(active.map(m => m.text)).toEqual(["active prompt"]);
+			expect(resolveSnippetText("", active)).toBe("active prompt");
+		} finally {
+			await session.dispose();
+			authStorage.close();
+		}
 	});
 });

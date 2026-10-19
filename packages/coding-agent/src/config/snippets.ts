@@ -1,39 +1,51 @@
-import { getProjectPromptsDir, getPromptsDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { getProjectPromptsDir, getPromptsDir, isEnoent, sanitizeText } from "@oh-my-pi/pi-utils";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type PromptTemplate, promptTemplateCommandName, templateUsesInlineArgPlaceholders } from "./prompt-templates";
 
+/** Where a snippet file lives: the user's agent dir (global) or the project's `.omp/prompts`. */
 export type SnippetScope = "user" | "project";
 
 /** Letter, then letters/digits/_/-. Doubles as the path-traversal guard. */
-export const SNIPPET_NAME_PATTERN = /^[a-zA-Z][\w-]*$/;
+const SNIPPET_NAME_PATTERN = /^[a-zA-Z][\w-]*$/;
+/** Status shown by the picker when no prompt templates exist. */
 export const NO_SNIPPETS_MESSAGE = "No snippets saved. Use /snippets save <name> [text] to create one.";
+/** Usage text for `/snippets`, shown after an unknown subcommand. */
 export const SNIPPETS_USAGE =
 	"Usage: /snippets [save <name> [--scope user|project] [--force] [text] | delete <name> [--scope user|project]]";
 
 const SAVE_USAGE = "Usage: /snippets save <name> [--scope user|project] [--force] [text]";
 const DELETE_USAGE = "Usage: /snippets delete <name> [--scope user|project]";
 const SCOPE_ERROR = "--scope must be user or project";
+const INVALID_NAME_HINT = "use a letter, then letters, digits, - or _";
 const DESCRIPTION_LIMIT = 80;
 const PREVIEW_LIMIT = 400;
 
-export function isValidSnippetName(name: string): boolean {
+function isValidSnippetName(name: string): boolean {
 	return SNIPPET_NAME_PATTERN.test(name);
 }
 
-export function snippetsDir(scope: SnippetScope, cwd: string): string {
-	return scope === "user" ? getPromptsDir() : getProjectPromptsDir(cwd);
+/**
+ * Prompts directory a snippet scope writes to. `agentDir` is the session's configured agent
+ * directory (not the process default), so a profile-scoped session saves where it loads from.
+ */
+export function snippetsDir(scope: SnippetScope, cwd: string, agentDir: string): string {
+	return scope === "user" ? getPromptsDir(agentDir) : getProjectPromptsDir(cwd);
 }
 
+/** `<dir>/<name>.md`; throws on a name that is not a plain identifier, so it cannot escape `dir`. */
 export function snippetPath(dir: string, name: string): string {
 	if (!isValidSnippetName(name)) throw new Error(`Invalid snippet name "${name}"`);
 	return path.join(dir, `${name}.md`);
 }
 
-const INVALID_NAME_HINT = "use a letter, then letters, digits, - or _";
-
+/** Parsed `/snippets save` arguments, or the usage/validation error to show. */
 export type SaveArgs = { name: string; scope: SnippetScope; force: boolean; text: string } | { error: string };
 
+/**
+ * Parse the text after `/snippets save`: `<name> [--scope user|project] [--force] [text]`. Options are
+ * consumed by index so the remaining text keeps its newlines; the first non-option token starts the text.
+ */
 export function parseSaveArgs(rest: string): SaveArgs {
 	const tokenPattern = /\s*(\S+)/y;
 	let position = 0;
@@ -68,8 +80,10 @@ export function parseSaveArgs(rest: string): SaveArgs {
 	return { name, scope, force, text: rest.slice(position).trim() };
 }
 
+/** Parsed `/snippets delete` arguments, or the usage/validation error to show. `scope` is unset when omitted. */
 export type DeleteArgs = { name: string; scope?: SnippetScope } | { error: string };
 
+/** Parse the text after `/snippets delete`: `<name> [--scope user|project]`. */
 export function parseDeleteArgs(rest: string): DeleteArgs {
 	const tokens = rest.split(/\s+/).filter(Boolean);
 	const name = tokens[0];
@@ -88,6 +102,7 @@ export function parseDeleteArgs(rest: string): DeleteArgs {
 	return scope ? { name, scope } : { name };
 }
 
+/** Text to save: the inline text when given, else the last of `userMessages`; `undefined` when both are blank. */
 export function resolveSnippetText(inline: string, userMessages: ReadonlyArray<{ text: string }>): string | undefined {
 	const trimmed = inline.trim();
 	if (trimmed) return trimmed;
@@ -104,8 +119,14 @@ function deriveDescription(text: string): string {
 	return truncate(firstLine.replace(/\s+/g, " ").trim(), DESCRIPTION_LIMIT);
 }
 
+/** `exists` means the file was already there and `force` was not set; nothing was written. */
 export type SaveResult = { kind: "saved"; path: string } | { kind: "exists"; path: string };
 
+/**
+ * Write `text` as `<dir>/<name>.md` prompt-template file. Without `force` an existing entry (including a
+ * symlink) is never touched. With `force` the entry is replaced by renaming a temp file over it, so a
+ * symlinked snippet is swapped out rather than followed and its target left alone.
+ */
 export async function saveSnippet(options: {
 	dir: string;
 	name: string;
@@ -117,15 +138,27 @@ export async function saveSnippet(options: {
 	// Frontmatter is always written: a body that itself starts with `---` would otherwise be parsed as frontmatter.
 	const content = `---\ndescription: ${JSON.stringify(deriveDescription(body))}\n---\n${body}\n`;
 	await fs.mkdir(options.dir, { recursive: true });
+	if (!options.force) {
+		try {
+			await fs.writeFile(file, content, { flag: "wx" });
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code === "EEXIST") return { kind: "exists", path: file };
+			throw err;
+		}
+		return { kind: "saved", path: file };
+	}
+	const temp = `${file}.${crypto.randomUUID()}.tmp`;
 	try {
-		await fs.writeFile(file, content, { flag: options.force ? "w" : "wx" });
+		await fs.writeFile(temp, content, { flag: "wx" });
+		await fs.rename(temp, file);
 	} catch (err) {
-		if ((err as NodeJS.ErrnoException).code === "EEXIST") return { kind: "exists", path: file };
+		await fs.rm(temp, { force: true });
 		throw err;
 	}
 	return { kind: "saved", path: file };
 }
 
+/** Delete `<dir>/<name>.md`; a symlink is removed itself, never its target. */
 export async function deleteSnippet(dir: string, name: string): Promise<"deleted" | "missing"> {
 	try {
 		await fs.rm(snippetPath(dir, name));
@@ -136,23 +169,35 @@ export async function deleteSnippet(dir: string, name: string): Promise<"deleted
 	}
 }
 
+/** One picker row: `label` is what the picker returns, `description` its preview, `insertText` what goes in the editor. */
 export interface SnippetChoice {
 	label: string;
 	description: string;
 	insertText: string;
 }
 
-export function buildSnippetChoices(templates: readonly PromptTemplate[]): SnippetChoice[] {
+/**
+ * Picker rows for `templates`. An argument-taking template (`$1`, `$ARGUMENTS`, …) inserts its
+ * `/snippet:<name> ` invocation only when `atDraftStart` (the cursor sits at the very start of the
+ * draft, the one place a slash command expands) and the name is unique (a duplicated name resolves to
+ * the first-loaded template at send time); otherwise it inserts the raw body. Everything shown is
+ * sanitized: template files are untrusted and the picker renders ANSI-aware text.
+ */
+export function buildSnippetChoices(templates: readonly PromptTemplate[], atDraftStart: boolean): SnippetChoice[] {
 	const counts = new Map<string, number>();
 	for (const template of templates) counts.set(template.name, (counts.get(template.name) ?? 0) + 1);
 
 	const sorted = [...templates].sort((a, b) => a.name.localeCompare(b.name) || a.source.localeCompare(b.source));
 	return sorted.map(template => {
-		const { name, source, content } = template;
-		const duplicated = (counts.get(name) ?? 0) > 1;
-		const invocation = !duplicated && templateUsesInlineArgPlaceholders(content);
+		const { content } = template;
+		const name = sanitizeText(template.name);
+		const source = sanitizeText(template.source);
+		const duplicated = (counts.get(template.name) ?? 0) > 1;
+		// A name the sanitizer altered cannot be typed back, so it never gets an invocation form.
+		const invocation =
+			atDraftStart && !duplicated && name === template.name && templateUsesInlineArgPlaceholders(content);
 		const command = `/${promptTemplateCommandName(template)}`;
-		const preview = truncate(content.replace(/\s+/g, " ").trim(), PREVIEW_LIMIT);
+		const preview = truncate(sanitizeText(content).replace(/\s+/g, " ").trim(), PREVIEW_LIMIT);
 		const hint = invocation ? `takes arguments, inserts ${command} · ` : "";
 		return {
 			label: duplicated ? `${name} ${source}` : name,

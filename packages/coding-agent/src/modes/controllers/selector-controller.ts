@@ -39,7 +39,6 @@ import {
 	saveModelPreset,
 } from "../../config/model-presets";
 import { resolveAdvisorRoleSelection, resolveModelRoleValue } from "../../config/model-resolver";
-import { loadPromptTemplates } from "../../config/prompt-templates";
 import { buildSnippetChoices, NO_SNIPPETS_MESSAGE } from "../../config/snippets";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { getRoleInfo } from "../../config/model-roles";
@@ -620,10 +619,17 @@ export class SelectorController {
 		});
 	}
 
-	/** Fuzzy-pick a saved snippet (prompt template) and insert it into the editor at the cursor. */
+	/**
+	 * Fuzzy-pick a saved snippet (prompt template) and insert it into the editor at the cursor.
+	 * Reloads the session's templates first, so a picked `/snippet:<name>` invocation expands the
+	 * same body the picker previewed.
+	 */
 	async showSnippetPicker(): Promise<void> {
-		const templates = await loadPromptTemplates({ cwd: this.ctx.sessionManager.getCwd() });
-		const choices = buildSnippetChoices(templates);
+		await this.ctx.refreshPromptTemplates();
+		const { line, col } = this.ctx.editor.getCursor();
+		const lines = this.ctx.editor.getLines();
+		const atDraftStart = lines.slice(0, line).every(l => l === "") && (lines[line] ?? "").slice(0, col) === "";
+		const choices = buildSnippetChoices(this.ctx.session.promptTemplates, atDraftStart);
 		if (choices.length === 0) {
 			this.ctx.showStatus(NO_SNIPPETS_MESSAGE);
 			return;

@@ -35,6 +35,7 @@ export const BUILTIN_SNIPPETS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = 
 			clearSubmittedText(runtime);
 			const { verb, rest } = parseSubcommand(command.args);
 			const cwd = ctx.sessionManager.getCwd();
+			const agentDir = ctx.settings.getAgentDir();
 			try {
 				switch (verb) {
 					case "": {
@@ -47,13 +48,16 @@ export const BUILTIN_SNIPPETS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = 
 							ctx.showError(parsed.error);
 							return;
 						}
-						const text = resolveSnippetText(parsed.text, ctx.session.getUserMessagesForBranching());
+						const text = resolveSnippetText(
+							parsed.text,
+							ctx.session.getUserMessagesForBranching({ activeBranchOnly: true }),
+						);
 						if (!text) {
 							ctx.showError("Nothing to save: add text after the name, or send a prompt first.");
 							return;
 						}
 						const result = await saveSnippet({
-							dir: snippetsDir(parsed.scope, cwd),
+							dir: snippetsDir(parsed.scope, cwd, agentDir),
 							name: parsed.name,
 							text,
 							force: parsed.force,
@@ -79,7 +83,8 @@ export const BUILTIN_SNIPPETS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = 
 						const candidates: SnippetScope[] = parsed.scope ? [parsed.scope] : ["user", "project"];
 						const found: SnippetScope[] = [];
 						for (const scope of candidates) {
-							if (await Bun.file(snippetPath(snippetsDir(scope, cwd), parsed.name)).exists()) found.push(scope);
+							if (await Bun.file(snippetPath(snippetsDir(scope, cwd, agentDir), parsed.name)).exists())
+								found.push(scope);
 						}
 						if (found.length === 0) {
 							ctx.showError(`No snippet "${parsed.name}" in ${parsed.scope ?? "user or project"} prompts.`);
@@ -90,7 +95,7 @@ export const BUILTIN_SNIPPETS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = 
 							return;
 						}
 						const scope = found[0]!;
-						await deleteSnippet(snippetsDir(scope, cwd), parsed.name);
+						await deleteSnippet(snippetsDir(scope, cwd, agentDir), parsed.name);
 						await ctx.refreshPromptTemplates();
 						ctx.showStatus(`Deleted snippet "${parsed.name}" (${scope}).`);
 						return;
