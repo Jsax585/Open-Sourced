@@ -121,6 +121,37 @@ describe("logger file batching", () => {
 });
 
 describe("RotatingFileSink batching", () => {
+	test("external file growth is sampled on a throttled cadence, not per record", async () => {
+		const externalDir = path.join(dir, "external");
+		fs.mkdirSync(externalDir);
+		const rotations: string[] = [];
+		const sink = new RotatingFileSink({
+			directory: externalDir,
+			filenamePrefix: "omp",
+			filenameSuffix: "1234",
+			maxBytes: 2_000,
+			maxFiles: 5,
+			batch: { intervalMs: 1_000, maxBytes: FLUSH_BYTES },
+			onRotate: filePath => rotations.push(filePath),
+		});
+		sink.write("first record");
+		sink.flush();
+		const active = fs.readdirSync(externalDir).sort()[0];
+		rotations.length = 0; // onRotate also fires on the initial open
+		// An external writer (fd 1/2 redirected onto the log) pushes past the cap.
+		fs.appendFileSync(path.join(externalDir, active), "y".repeat(5_000));
+		// Steady-state records inside the throttle window must not rotate yet...
+		for (let index = 0; index < 20; index++) sink.write(`record ${index}`);
+		sink.flush();
+		expect(rotations).toHaveLength(0);
+		// ...and the next window still honors the external growth.
+		await Bun.sleep(1_100);
+		sink.write("after interval");
+		sink.flush();
+		expect(rotations).toHaveLength(1);
+		sink.close();
+	});
+
 	function makeSink(directory: string, batch?: RotatingFileBatchOptions): RotatingFileSink {
 		return new RotatingFileSink({
 			directory,

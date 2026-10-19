@@ -309,7 +309,7 @@ function makeFileTransport(dir?: string): RotatingFileSink {
 		maxBytes: 10 * 1024 * 1024,
 		maxFiles: 5,
 		batch: { intervalMs: FILE_FLUSH_INTERVAL_MS, maxBytes: FILE_FLUSH_BYTES },
-		// Keep the stderr guard's fd 2 on the file this sink is writing.
+		// Keep unmanaged fd 1/2 writes on the file this sink is writing.
 		onRotate: setStderrRedirectTarget,
 	});
 }

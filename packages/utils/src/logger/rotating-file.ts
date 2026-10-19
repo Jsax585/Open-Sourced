@@ -65,6 +65,8 @@ export class RotatingFileSink {
 	#activePath: string | undefined;
 	/** Size of the active file including buffered records not yet written. */
 	#activeBytes = 0;
+	/** Last wall-clock external-size sample; see #selectFile. */
+	#lastExternalCheckMs = 0;
 	#closed = false;
 	// Held append fd: one descriptor per active file instead of
 	// open+write+close per line. It is reopened on rotation and closed on
@@ -178,7 +180,22 @@ export class RotatingFileSink {
 
 	#selectFile(day: string): void {
 		const dayChanged = day !== this.#activeDay;
-		if (!dayChanged && this.#activeBytes <= this.#maxBytes) return;
+		if (!dayChanged && this.#activePath) {
+			// fd 1/2 can be redirected onto the active log (terminal-output-guard);
+			// those raw writes bypass write(), so the real file must be trusted over
+			// the counter — but sampled at the batching cadence, not once per record:
+			// high-volume logging must not pay a blocking stat per write.
+			const now = Date.now();
+			if (now - this.#lastExternalCheckMs >= (this.#batch?.intervalMs ?? 1_000)) {
+				this.#lastExternalCheckMs = now;
+				try {
+					this.#activeBytes = Math.max(this.#activeBytes, fs.statSync(this.#activePath).size);
+				} catch {
+					// Active file missing or not yet chosen; keep the counter.
+				}
+			}
+			if (this.#activeBytes <= this.#maxBytes) return;
+		}
 		// The buffered records belong to the current file: write them there, then
 		// close its descriptor BEFORE the next file is registered, because
 		// registration prunes beyond maxFiles — on Windows the pruned
@@ -207,6 +224,9 @@ export class RotatingFileSink {
 		} catch {
 			this.#activeBytes = 0;
 		}
+		// The fresh file's authoritative size was just sampled; start the
+		// external-check window here so following records stay on the counter.
+		this.#lastExternalCheckMs = Date.now();
 	}
 
 	#registerFile(filePath: string): void {
