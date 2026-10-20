@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Instruction reads from `skill://`, `rule://` and `omp://` appear as compact transcript rows; ordinary Markdown file reads retain their rendered previews ([#16516](https://github.com/can1357/oh-my-pi/pull/16516) by [@Komzpa](https://github.com/Komzpa))
+
 ### Fixed
 
 - Fixed Mnemopi memory completions ignoring the memory role's thinking suffix, including one inherited from `tiny` or `smol` when `modelRoles.memory` is unset; each `retry.fallbackChains.memory` entry sends its own level, and `:off` disables reasoning ([#16378](https://github.com/can1357/oh-my-pi/pull/16378) by [@alphastorm](https://github.com/alphastorm))
