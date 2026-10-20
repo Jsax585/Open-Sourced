@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `RpcConnection.requestCancellable()` and `Client.requestPermission(params, { signal })`: a cancelled elicit request is always answered with `-32800` and its handler receives the request's abort signal, so a peer cancelling a dialog can never leave the other side waiting on it ([#15885](https://github.com/can1357/oh-my-pi/pull/15885) by [@marcintustin](https://github.com/marcintustin))
+
 ## [18.12.4] - 2026-10-20
 
 ### Breaking Changes

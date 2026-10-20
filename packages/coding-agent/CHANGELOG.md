@@ -1,6 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added a `_session/steering` ACP extension (advertised as `_meta.steering.supported`) so clients like agent-shell can steer a running turn mid-flight: a steer that lands while a prompt is still dispatching parks and injects once that turn goes live, a steer that arrives while a permission dialog is open supersedes only that dialog, and `queue: "followUp"` targets the follow-up queue ([#15885](https://github.com/can1357/oh-my-pi/pull/15885) by [@marcintustin](https://github.com/marcintustin))
+### Fixed
+
+- Fixed ACP `session/cancel` being silently dropped when no client turn is live: a prompt queued or still dispatching now resolves `cancelled` without ever starting, and an autonomous run keeps being aborted instead of streaming on ([#15885](https://github.com/can1357/oh-my-pi/pull/15885) by [@marcintustin](https://github.com/marcintustin))
+- Fixed malformed `_session/steering` resource fields (a non-string `mimeType`, `description`, or `size`) being accepted instead of rejected with `-32602` ([#15885](https://github.com/can1357/oh-my-pi/pull/15885) by [@marcintustin](https://github.com/marcintustin))
 
 ### Fixed
 
