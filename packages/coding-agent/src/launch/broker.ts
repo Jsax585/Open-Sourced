@@ -44,6 +44,8 @@ import { renderTerminalOutput } from "./terminal-output";
 import { quotePosixArgv } from "../utils/shell-quote";
 
 const DEFAULT_IDLE_GRACE_MS = 3_000;
+/** Upper bound for a restart-in-place hold; a restart that has not resubscribed by then is treated as an exit. */
+const MAX_RESTART_HOLD_MS = 5 * 60_000;
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const MAX_LOG_BYTES = 25 * 1024 * 1024;
 const LOG_READ_BYTES = 2 * 1024 * 1024;
@@ -110,6 +112,8 @@ interface ManagedDaemon {
 	restartTimer?: NodeJS.Timeout;
 	consecutiveFailures: number;
 	completionCapable: boolean;
+	/** Restart-in-place hold: while set, this session-scoped daemon keeps the broker alive. */
+	restartHold?: NodeJS.Timeout;
 	pendingCompletions: DaemonCompletionNotification[];
 	completionSubscriptionId?: string;
 	persistQueue: Promise<void>;
@@ -497,6 +501,7 @@ class DaemonBroker {
 			// callback cannot settle the stale record over the new owner's metadata.
 			if (detached) record.generation++;
 			clearTimeout(record.restartTimer);
+			clearTimeout(record.restartHold);
 			await record.log?.close();
 			await record.persistQueue;
 		}
@@ -600,6 +605,7 @@ class DaemonBroker {
 					this.#pendingCompletions.delete(owner);
 				}
 				for (const owner of activeOwners) {
+					this.#releaseRestartHold(owner);
 					this.#completionSubscriptions.set(owner, request.completionSubscriptionId);
 					await this.#setRecordCompletionCapability(owner, true);
 					const previous = this.#ownerSockets.get(owner);
@@ -677,6 +683,8 @@ class DaemonBroker {
 				return this.#restart(operation.name);
 			case "mode":
 				return this.#mode(operation);
+			case "hold":
+				return this.#hold(operation.owner, operation.graceMs);
 			case "describe": {
 				const record = this.#record(operation.name);
 				await this.#refreshDetached(record);
@@ -1308,6 +1316,37 @@ class DaemonBroker {
 		return { op: "restart", daemon: record.snapshot };
 	}
 
+	/**
+	 * Keep the owner's session-scoped daemons through an in-place restart. Only the broker's idle
+	 * shutdown is deferred (`persist` stays false), so a restart that never returns, a normal exit
+	 * and an explicit stop all behave as before once the hold is released or expires.
+	 */
+	#hold(owner: string, graceMs: number): DaemonRpcResult {
+		const grace = Math.max(0, Math.min(graceMs, MAX_RESTART_HOLD_MS));
+		let held = 0;
+		for (const record of this.#records.values()) {
+			if (record.snapshot.owner !== owner || record.spec.persist || terminalState(record.snapshot.state)) continue;
+			clearTimeout(record.restartHold);
+			const timer = setTimeout(() => {
+				if (record.restartHold !== timer) return;
+				record.restartHold = undefined;
+				this.#scheduleIdleShutdown();
+			}, grace);
+			timer.unref?.();
+			record.restartHold = timer;
+			held++;
+		}
+		return { op: "hold", held };
+	}
+
+	#releaseRestartHold(owner: string): void {
+		for (const record of this.#records.values()) {
+			if (record.snapshot.owner !== owner || record.restartHold === undefined) continue;
+			clearTimeout(record.restartHold);
+			record.restartHold = undefined;
+		}
+	}
+
 	async #mode(operation: Extract<DaemonOperation, { op: "mode" }>): Promise<DaemonRpcResult> {
 		const record = this.#record(operation.name);
 		await this.#refreshDetached(record);
@@ -1545,7 +1584,8 @@ class DaemonBroker {
 			this.#idleTimer = undefined;
 			void (async () => {
 				const livePersistent = [...this.#records.values()].some(
-					record => record.spec.persist && !terminalState(record.snapshot.state),
+					record =>
+						(record.spec.persist || record.restartHold !== undefined) && !terminalState(record.snapshot.state),
 				);
 				if (this.#clients.size > 0 || livePersistent) return;
 				if (await hasLiveDaemonProjectPresence(this.#runtimeDir)) {

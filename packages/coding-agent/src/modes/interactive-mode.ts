@@ -78,6 +78,7 @@ import {
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { pickTableChart } from "../auto-graph/planner";
 import { restartArgv } from "../cli/flag-tables";
+import { holdServicesForRestart } from "../launch/services";
 import type { CollabGuestLink } from "../collab/guest";
 import { CollabController } from "../collab/controller";
 import type { CollabHost } from "../collab/host";
@@ -7343,6 +7344,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	async restart(): Promise<void> {
 		if (this.#isShuttingDown) return;
 		this.#beginClose();
+		// Named services belong to this session id, which the relaunch resumes: keep them (and the
+		// broker) alive across the exec. `shutdown()` does not, so a normal exit still stops them.
+		await holdServicesForRestart(this.sessionManager.getSessionId());
 		try {
 			await this.#teardown();
 		} catch (error) {

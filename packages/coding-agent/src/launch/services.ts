@@ -73,6 +73,36 @@ function track(session: ToolSession, daemon: DaemonSnapshot): void {
 	const services = serviceState(session).owned;
 	if (TERMINAL_STATES[daemon.state]) services.delete(daemon.name);
 	else services.set(daemon.name, { id: daemon.id, startedAt: daemon.startedAt });
+	if (owner) {
+		if (services.size > 0) ownersWithServices.set(owner, session.cwd);
+		else ownersWithServices.delete(owner);
+	}
+}
+
+/** Session ids this process has live named services for, with the project dir whose broker holds them. */
+const ownersWithServices = new Map<string, string>();
+
+/** How long the broker keeps a restarting owner's services (and itself) alive waiting for the resumed session. */
+const RESTART_HOLD_MS = 2 * 60_000;
+
+/**
+ * Called by the in-place `/restart` path before the session is torn down: ask the broker to keep this
+ * session's named services through the exec. Services stay session-scoped, so the resumed session
+ * (same session id) finds them still running, while a normal exit, an explicit stop, or a restart that
+ * never comes back stops them exactly as before. A no-op when this process has no live service.
+ */
+export async function holdServicesForRestart(sessionId: string): Promise<void> {
+	const projectDir = ownersWithServices.get(sessionId);
+	if (projectDir === undefined) return;
+	try {
+		const client = await daemonClientForProject(projectDir);
+		await client.request({ op: "hold", owner: sessionId, graceMs: RESTART_HOLD_MS });
+	} catch (error) {
+		// A legacy broker rejects the unknown op; the restart proceeds as it did before holds existed.
+		logger.warn("Could not hold named services for restart", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 }
 
 function subscribe(session: ToolSession, client: DaemonBrokerClient): void {
@@ -93,6 +123,7 @@ function subscribe(session: ToolSession, client: DaemonBrokerClient): void {
 		unsubscribe({ preservePending: true });
 		clients.delete(client);
 		serviceState(session).owned.clear();
+		ownersWithServices.delete(owner);
 		for (const listener of serviceState(session).listeners) listener();
 	});
 	session.registerSessionChangeCallback?.(() => {
@@ -101,6 +132,7 @@ function subscribe(session: ToolSession, client: DaemonBrokerClient): void {
 		unsubscribe({ preservePending: true });
 		clients.delete(client);
 		serviceState(session).owned.clear();
+		ownersWithServices.delete(owner);
 		for (const listener of serviceState(session).listeners) listener();
 	});
 }
@@ -248,10 +280,7 @@ export async function startService(
 				}
 			: undefined,
 		restart: "no",
-		// Intentional: a named service outlives its owning session's client connection (a restart
-		// whose restoration outlasts the broker idle grace, or the session simply ending). Its
-		// broker stays up until the service exits or is stopped explicitly with `stopService`.
-		persist: true,
+		persist: false,
 		detached: false,
 	};
 	const result = await request(
