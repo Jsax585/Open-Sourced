@@ -2,10 +2,16 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The pinned Subagents list shows how many agents are running and the agent hub key, and previews an agent's assignment at full width instead of the first 40 characters of its prompt template ([#16486](https://github.com/can1357/oh-my-pi/pull/16486) by [@H4vC](https://github.com/H4vC))
+
 ### Fixed
 
+- Fixed GitLab merge request reads rendering `[object Promise]` instead of the description ([#16477](https://github.com/can1357/oh-my-pi/pull/16477) by [@adi-IL](https://github.com/adi-IL))
 - Fixed Mnemopi memory completions ignoring the memory role's thinking suffix, including one inherited from `tiny` or `smol` when `modelRoles.memory` is unset; each `retry.fallbackChains.memory` entry sends its own level, and `:off` disables reasoning ([#16378](https://github.com/can1357/oh-my-pi/pull/16378) by [@alphastorm](https://github.com/alphastorm))
 - Fixed `/move` path completion jumping into a subfolder on Tab: `..`, `.`, and `~` now complete to `../`, `./`, and `~/` before listing their children, a trailing `\` lists a folder on Windows, absolute Windows paths (`C:/…`) are no longer rewritten as relative paths, and the project directory is offered as `./` instead of `/`
+- Fixed `auto` thinking chosen for the DEFAULT role in the `/model` hub reverting to the model's default effort (e.g. `max` on Z.AI `glm-5.3`) on the next launch ([#16370](https://github.com/can1357/oh-my-pi/issues/16370), [#16398](https://github.com/can1357/oh-my-pi/pull/16398) by [@alvadorn](https://github.com/alvadorn))
 - Fixed subagents whose declared model has no working credentials silently running on the parent session's model: that model's own `retry.fallbackChains` key (`provider/id` or `provider/*`) now decides, as it also does for a declared model missing from the catalog (an empty chain refuses the spawn with an error naming the agent and model, a non-empty chain is walked), and any replacement is marked as a fallback in the session and task result ([#16028](https://github.com/can1357/oh-my-pi/pull/16028) by [@sjawhar](https://github.com/sjawhar))
 - Fixed task results not saying which fallback model answered for a subagent: the `<task-result>` now carries a `<model served=… requested=… fallback="true">` line, with the reason when the model was replaced at spawn ([#16028](https://github.com/can1357/oh-my-pi/pull/16028) by [@sjawhar](https://github.com/sjawhar))
 
