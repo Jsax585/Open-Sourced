@@ -159,7 +159,7 @@ function stateFor(manager: SessionManager, overrides: Partial<HindsightConfig> =
 		...scope,
 		config: resolved,
 		session,
-		banksSet: new Set(),
+		banksSet: new Set([scope.bankId]),
 	});
 	state.bindRetentionScope();
 	states.push(state);
@@ -247,6 +247,139 @@ describe("Hindsight retained-source integrity", () => {
 		const synchronized = api.requests.length;
 		await state.synchronizeRetainedBranch();
 		expect(api.requests).toHaveLength(synchronized);
+	});
+
+	it("restores a deleted full-session source when its original leaf is selected again", async () => {
+		const api = transport();
+		const manager = inMemory("/project-a");
+		const state = stateFor(manager);
+		const leaf = turn(manager, "Original retained request", "Original retained answer");
+		await state.forceRetainCurrentSession();
+		const original = api.documents()[0]!;
+
+		manager.resetLeaf();
+		await state.synchronizeRetainedBranch();
+		expect(api.documents()).toHaveLength(0);
+		manager.branch(leaf);
+		await state.synchronizeRetainedBranch();
+
+		expect(api.requests.map(request => request.method)).toEqual(["POST", "DELETE", "POST"]);
+		expect(api.requests[2]!.documentId).toBe(original.item.document_id);
+		expect(api.requests[2]!.item?.update_mode).toBe("replace");
+		expect(api.documents()).toEqual([original]);
+		expect(api.documents()[0]!.item.content).toContain("Original retained request");
+		expect(api.documents()[0]!.item.content).toContain("Original retained answer");
+
+		await state.synchronizeRetainedBranch();
+		expect(api.requests).toHaveLength(3);
+	});
+
+	it("restores a deleted last-turn window with the same source id", async () => {
+		const api = transport();
+		const manager = inMemory("/project-a");
+		const state = stateFor(manager, { retainMode: "last-turn" });
+		const leaf = turn(manager, "Window request", "Window answer");
+		await state.forceRetainCurrentSession();
+		const original = api.documents()[0]!;
+		manager.resetLeaf();
+		await state.synchronizeRetainedBranch();
+		manager.branch(leaf);
+		await state.synchronizeRetainedBranch();
+
+		expect(api.requests.map(request => request.method)).toEqual(["POST", "DELETE", "POST"]);
+		expect(api.requests[2]!.documentId).toBe(original.item.document_id);
+		expect(api.requests[2]!.item?.update_mode).toBe("replace");
+		expect(api.documents()).toEqual([original]);
+		await state.synchronizeRetainedBranch();
+		expect(api.requests).toHaveLength(3);
+	});
+
+	it("does not restore a deleted source automatically while auto-retain is disabled", async () => {
+		const api = transport();
+		const manager = inMemory("/project-a");
+		const state = stateFor(manager);
+		const leaf = turn(manager, "Previously retained request", "Previously retained answer");
+		await state.forceRetainCurrentSession();
+		manager.resetLeaf();
+		await state.synchronizeRetainedBranch();
+		state.config.autoRetain = false;
+		manager.branch(leaf);
+
+		await state.synchronizeRetainedBranch();
+		await state.maybeRetainOnAgentEnd();
+		await state.finishRetentionScope();
+		await state.prepareForCwdMove("/project-b");
+		expect(api.requests.map(request => request.method)).toEqual(["POST", "DELETE"]);
+		expect(api.documents()).toHaveLength(0);
+	});
+
+	it("branch synchronization restores only previously retained content, not new turns", async () => {
+		const api = transport();
+		const manager = inMemory("/project-a");
+		const state = stateFor(manager, { retainEveryNTurns: 1 });
+		const leaf = turn(manager, "Original request", "Original answer");
+		await state.maybeRetainOnAgentEnd();
+		const original = api.documents()[0]!;
+		manager.resetLeaf();
+		await state.synchronizeRetainedBranch();
+		turn(manager, "Genuinely new branch", "Genuinely new answer");
+		await state.synchronizeRetainedBranch();
+		expect(api.requests.map(request => request.method)).toEqual(["POST", "DELETE"]);
+
+		manager.branch(leaf);
+		turn(manager, "Unretained follow-up", "Unretained follow-up answer");
+		await state.synchronizeRetainedBranch();
+		expect(api.requests.map(request => request.method)).toEqual(["POST", "DELETE", "POST"]);
+		expect(api.documents()).toEqual([original]);
+		expect(api.documents()[0]!.item.content).not.toContain("Unretained");
+	});
+
+	it("last-turn rewinds delete later windows without duplicating a surviving selected prefix", async () => {
+		const api = transport();
+		const manager = inMemory("/project-a");
+		const state = stateFor(manager, { retainMode: "last-turn" });
+		turn(manager, "First request", "First answer");
+		const kept = turn(manager, "Second request", "Second answer");
+		await state.maybeRetainOnAgentEnd();
+		const survivor = api.documents()[0]!;
+		turn(manager, "Third request", "Third answer");
+		await state.forceRetainCurrentSession();
+		const laterId = api.requests[1]!.documentId;
+
+		manager.branch(kept);
+		await state.synchronizeRetainedBranch();
+
+		expect(api.requests.map(request => request.method)).toEqual(["POST", "POST", "DELETE"]);
+		expect(api.requests[2]!.documentId).toBe(laterId);
+		expect(api.documents()).toEqual([survivor]);
+		await state.synchronizeRetainedBranch();
+		expect(api.requests).toHaveLength(3);
+	});
+
+	it("last-turn rewinds still replace an invalidated window when a survivor covers only part of the prefix", async () => {
+		const api = transport();
+		const manager = inMemory("/project-a");
+		const state = stateFor(manager, { retainMode: "last-turn" });
+		turn(manager, "First request", "First answer");
+		turn(manager, "Second request", "Second answer");
+		await state.maybeRetainOnAgentEnd();
+		const survivor = api.documents()[0]!;
+		const kept = turn(manager, "Uncovered third request", "Uncovered third answer");
+		turn(manager, "Abandoned fourth request", "Abandoned fourth answer");
+		await state.maybeRetainOnAgentEnd();
+		const laterId = api.requests[1]!.documentId;
+
+		manager.branch(kept);
+		await state.synchronizeRetainedBranch();
+
+		expect(api.requests.map(request => request.method)).toEqual(["POST", "POST", "DELETE", "POST"]);
+		expect(api.requests[2]!.documentId).toBe(laterId);
+		expect(api.get("personal", survivor.item.document_id)).toEqual(survivor);
+		expect(api.documents()).toHaveLength(2);
+		expect(api.requests[3]!.item?.content).toContain("Uncovered third answer");
+		expect(api.requests[3]!.item?.content).not.toContain("Abandoned fourth");
+		await state.synchronizeRetainedBranch();
+		expect(api.requests).toHaveLength(4);
 	});
 
 	it("read-only automatic retention neither uploads nor deletes while explicit enqueue remains available", async () => {

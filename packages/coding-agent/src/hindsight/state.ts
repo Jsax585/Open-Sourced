@@ -355,7 +355,12 @@ export class HindsightSessionState {
 		return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 	}
 
-	async retainSession(messages: HindsightMessage[], target?: RetentionSegment): Promise<string | undefined> {
+	/** Retains a conversation snapshot, reusing a source id when repairing a deleted document. */
+	async retainSession(
+		messages: HindsightMessage[],
+		target?: RetentionSegment,
+		options?: { documentId?: string },
+	): Promise<string | undefined> {
 		const retainedAt = new Date();
 		const sourceTimestamp =
 			(target?.sourceTimestamp ? new Date(target.sourceTimestamp) : this.#sessionSourceTimestamp()) ?? retainedAt;
@@ -385,7 +390,7 @@ export class HindsightSessionState {
 		} else {
 			const windowTurns = this.config.retainEveryNTurns + this.config.retainOverlapTurns;
 			const window = sliceLastTurnsByUserBoundary(messages, windowTurns);
-			documentId = `${target?.documentId ?? this.sessionId}-${crypto.randomUUID()}`;
+			documentId = options?.documentId ?? `${target?.documentId ?? this.sessionId}-${crypto.randomUUID()}`;
 			this.#lastRetainedMessageIndex = 0;
 			this.#cachedTranscript = "";
 			this.#lastRetainedPrefixKey = "";
@@ -484,10 +489,11 @@ export class HindsightSessionState {
 				const messages = extractEntryMessages(entries);
 				const userTurns = messages.reduce((count, message) => count + Number(message.role === "user"), 0);
 				let lastRetainedTurn = 0;
+				let lastRetainedMessageCount = 0;
 				let invalidated = false;
 				const prefixKeys = new Map<number, string>();
 				for (const document of documents.values()) {
-					if (!document.deleted) prefixKeys.set(document.messageCount, "");
+					prefixKeys.set(document.messageCount, "");
 				}
 				let prefixKey = "";
 				for (let i = 0; i < messages.length; i++) {
@@ -495,12 +501,27 @@ export class HindsightSessionState {
 					if (prefixKeys.has(i + 1)) prefixKeys.set(i + 1, prefixKey);
 				}
 				for (const document of documents.values()) {
-					if (document.deleted) continue;
 					const unchanged =
 						document.messageCount <= messages.length &&
 						prefixKeys.get(document.messageCount) === document.prefixKey;
+					if (document.deleted) {
+						if (!unchanged) continue;
+						this.#lastRetainedMessageIndex = 0;
+						this.#cachedTranscript = "";
+						this.#lastRetainedPrefixKey = "";
+						this.#cachedDocumentId = segment.documentId;
+						const restoredId = await this.retainSession(messages.slice(0, document.messageCount), segment, {
+							documentId: document.documentId,
+						});
+						if (!restoredId) continue;
+						this.session.sessionManager.appendCustomEntry(RETENTION_DOCUMENT_TYPE, {
+							...document,
+							deleted: false,
+						} satisfies RetentionDocument);
+					}
 					if (unchanged) {
 						lastRetainedTurn = Math.max(lastRetainedTurn, document.userTurns);
+						lastRetainedMessageCount = Math.max(lastRetainedMessageCount, document.messageCount);
 						continue;
 					}
 					invalidated = true;
@@ -519,7 +540,8 @@ export class HindsightSessionState {
 				const active = index === segments.length - 1;
 				if (active) this.lastRetainedTurn = lastRetainedTurn;
 				const due = active && !invalidationOnly && userTurns - lastRetainedTurn >= this.config.retainEveryNTurns;
-				if (messages.length === 0 || (!invalidated && !due && !(force && (active || documents.size === 0))))
+				const needsRepair = invalidated && lastRetainedMessageCount < messages.length;
+				if (messages.length === 0 || (!needsRepair && !due && !(force && (active || documents.size === 0))))
 					continue;
 				if (this.#cachedDocumentId !== segment.documentId || invalidated || force) {
 					this.#lastRetainedMessageIndex = 0;
