@@ -904,7 +904,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				try {
 					const result = await executeBash(options.command, {
 						cwd: options.commandCwd,
-						env: options.sessionEnv,
+						env: { ...options.sessionEnv, ...messagingEnv.set },
 						// A call that starts in the foreground runs in the session's
 						// persistent shell, like the direct path, so its variables,
 						// functions, and options reach the next call even after it is
@@ -913,7 +913,6 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						sessionKey: options.foreground ? options.sessionId : `${options.sessionId ?? ""}:async:${jobId}`,
 						isSessionCurrent: () => (this.session.getSessionId?.() ?? undefined) === options.sessionId,
 						timeout: options.timeoutMs ?? 0,
-						env: messagingEnv.set,
 						stripEnv: this.session.messagingSession?.messaging ? undefined : messagingEnv.strip,
 						signal: runSignal,
 						gitGuard: cfgBashGitGuard.get(this.session.settings),
@@ -1308,12 +1307,11 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const backendPreflight =
 			bridgeTerminalAvailable || canUseInteractiveBashPty(pty === true, ctx)
 				? await applyDirenvPreflight(command, commandCwd, {
-						callerEnv: sessionEnv,
+						callerEnv: { ...sessionEnv, ...messagingEnv.set },
 						signal,
 						timeoutMs: cfgBashDirenvLoadTimeoutMs.get(this.session.settings),
 						callerTimeoutMs: timeoutMs,
 						direnvSetting: cfgBashDirenv.get(this.session.settings),
-						callerEnv: messagingEnv.set,
 					})
 				: undefined;
 
@@ -1617,11 +1615,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				// command here so the unset prefix is not applied twice.
 				await executeBash(command, {
 					cwd: commandCwd,
-					env: sessionEnv,
+					env: { ...sessionEnv, ...messagingEnv.set },
 					sessionKey: sessionId,
 					isSessionCurrent: () => (this.session.getSessionId?.() ?? undefined) === sessionId,
 					timeout: timeoutMs ?? 0,
-					env: messagingEnv.set,
 					stripEnv,
 					signal,
 					gitGuard: cfgBashGitGuard.get(this.session.settings),
