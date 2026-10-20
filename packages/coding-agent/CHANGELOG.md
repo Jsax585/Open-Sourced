@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added Hare support to the built-in `gdb` DAP adapter: `.ha` files in Hare projects now select `gdb -i dap` for launch and attach debugging
+- Added Hare support to the built-in `gdb` DAP adapter: `.ha` files in Hare projects now select `gdb -i dap` for launch and attach debugging ([#16503](https://github.com/can1357/oh-my-pi/pull/16503) by [@jgarte](https://github.com/jgarte))
 
 ### Fixed
 
