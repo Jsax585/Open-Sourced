@@ -139,6 +139,9 @@ function transport() {
 		recover() {
 			failRetain = false;
 		},
+		loseDocuments() {
+			store.clear();
+		},
 	};
 }
 
@@ -447,6 +450,35 @@ describe("Hindsight retained-source integrity", () => {
 		expect(api.get("personal", manager.getSessionId())?.item.content).toContain("Private read-only reply");
 	});
 
+	it.each(["full-session", "last-turn"] as const)(
+		"explicit enqueue resends an unchanged active %s source after upstream loss",
+		async retainMode => {
+			const api = transport();
+			const manager = inMemory("/project-a");
+			const state = stateFor(manager, { retainMode });
+			turn(manager, "Recoverable requirement", "Recoverable answer");
+			await state.forceRetainCurrentSession();
+			const original = api.documents()[0]!;
+			api.loseDocuments();
+
+			const beforeEnqueue = api.requests.length;
+			await state.forceRetainCurrentSession();
+
+			const resent = api.requests.slice(beforeEnqueue);
+			expect(resent).toHaveLength(1);
+			expect(resent[0]!.method).toBe("POST");
+			expect(resent[0]!.item?.update_mode).toBe("replace");
+			const recovered = api.find("Recoverable answer");
+			expect(recovered.item.content).toBe(original.item.content);
+			if (retainMode === "full-session") {
+				expect(recovered.item.document_id).toBe(original.item.document_id);
+			} else {
+				// Main creates a fresh window id for every explicit last-turn retain.
+				expect(recovered.item.document_id).not.toBe(original.item.document_id);
+			}
+		},
+	);
+
 	it("replaces an abandoned assistant reply at the same user-turn count without waiting for cadence", async () => {
 		const api = transport();
 		const manager = inMemory("/project-a");
@@ -527,6 +559,43 @@ describe("Hindsight retained-source integrity", () => {
 				const synchronized = api.requests.length;
 				await state.synchronizeRetainedBranch();
 				expect(api.requests).toHaveLength(synchronized);
+			},
+		);
+
+		it.each(["full-session", "last-turn"] as const)(
+			"explicit enqueue uploads an unfinished historical %s source after a read-only move",
+			async retainMode => {
+				const api = transport();
+				const manager = inMemory("/project-a");
+				const overrides = scoped({ autoRetain: false, retainMode });
+				const aState = stateFor(manager, overrides);
+				turn(manager, "Retained A requirement", "Retained A answer");
+				await aState.forceRetainCurrentSession();
+				const retainedPrefix = api.find("Retained A answer");
+				turn(manager, "Uncovered A requirement", "Uncovered A answer");
+				const beforeMove = api.requests.length;
+				await aState.prepareForCwdMove("/project-b");
+				await manager.moveTo("/project-b");
+				const bState = stateFor(manager, overrides);
+				turn(manager, "Active B requirement", "Active B answer");
+				expect(api.requests).toHaveLength(beforeMove);
+
+				await bState.forceRetainCurrentSession();
+
+				const historical = api.find("Uncovered A answer");
+				expectOwnedBy(historical, scoping, "project-a");
+				expect(historical.item.content).not.toContain("Active B");
+				if (retainMode === "full-session") {
+					expect(historical.item.document_id).toBe(retainedPrefix.item.document_id);
+				}
+				const active = api.find("Active B answer");
+				expectOwnedBy(active, scoping, "project-b");
+				expect(active.item.content).not.toContain("A answer");
+				const completed = api.requests.length;
+				await bState.forceRetainCurrentSession();
+				const resent = api.requests.slice(completed).filter(request => request.method === "POST");
+				expect(resent).toHaveLength(1);
+				expect(resent[0]!.item?.content).toContain("Active B answer");
 			},
 		);
 

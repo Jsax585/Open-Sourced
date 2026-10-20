@@ -81,6 +81,7 @@ class LoopbackHindsight {
 	readonly sources = new Map<string, RetainedSource>();
 	readonly writes: HindsightWrite[] = [];
 	readonly recalls: string[] = [];
+	readonly retainAuthorizations: Array<string | null> = [];
 	/** Decides each retain's HTTP status; 200 stores the item. */
 	retainStatus: (item: WireMemoryItem) => number | Promise<number> = () => 200;
 	/** Decides whether deleting a conversation source succeeds. */
@@ -134,6 +135,7 @@ class LoopbackHindsight {
 		const rest = parts.slice(4);
 		if (request.method === "PUT" && rest.length === 0) return Response.json({});
 		if (request.method === "POST" && rest.join("/") === "memories") {
+			this.retainAuthorizations.push(request.headers.get("authorization"));
 			const body = (await request.json()) as { items: WireMemoryItem[] };
 			for (const item of body.items) {
 				const documentId = item.document_id ?? "";
@@ -1004,6 +1006,72 @@ describe("AgentSession memory backend lifecycle", () => {
 				returned: only(server.containing(returnAnswer)),
 			};
 		}
+
+		it.each(["source", "target"] as const)(
+			"cross-project resume finishes the source without retaining the target under the source scope (%s)",
+			async symptom => {
+				const server = useHindsight();
+				const dirs = projectDirs();
+				const sessionDir = path.join(tempDir.path(), "sessions");
+				const current = createSession(async () => [], {
+					sessionManager: SessionManager.create(dirs.alpha, sessionDir),
+					responses: [{ content: [alphaAnswer] }],
+				});
+				await current.applyMemoryBackend();
+				const alpha = scopeOf(current);
+				await current.prompt(alphaQuestion);
+				expect(server.writes).toEqual([]);
+				const target = SessionManager.create(dirs.beta, sessionDir);
+				target.appendMessage({ role: "user", content: betaQuestion, timestamp: Date.now() });
+				const answer = current.messages.find(message => message.role === "assistant");
+				if (!answer || answer.role !== "assistant") throw new Error("Expected the source assistant reply");
+				target.appendMessage({ ...answer, content: [{ type: "text", text: betaAnswer }] });
+				await target.flush();
+				const targetFile = target.getSessionFile()!;
+				await target.close();
+
+				expect(
+					await current.switchSession(targetFile, {
+						keepModel: true,
+						onCwdChange: async () => {
+							await rebindMemoryBackendForCwd(current);
+							return true;
+						},
+					}),
+				).toBe(true);
+				if (symptom === "source") {
+					expect(only(server.containing(alphaAnswer))).toMatchObject(alpha);
+				} else {
+					expect(server.containing(betaAnswer)).toEqual([]);
+					await current.getHindsightSessionState()!.forceRetainCurrentSession();
+					expect(only(server.containing(betaAnswer))).toMatchObject(scopeOf(current));
+					expect(scopeOf(current).tags).not.toEqual(alpha.tags);
+				}
+			},
+		);
+
+		it.each(["apiUrl", "apiToken"] as const)(
+			"changing hindsight.%s finishes below-cadence turns through the outgoing account",
+			async setting => {
+				spyOn(cfgHindsightApiToken, "envValue").mockReturnValue(undefined);
+				const server = useHindsight({ "hindsight.apiToken": "account-a-secret" });
+				const other = setting === "apiUrl" ? new LoopbackHindsight() : server;
+				try {
+					const current = createSession(async () => [], { responses: [{ content: [alphaAnswer] }] });
+					await current.applyMemoryBackend();
+					await current.prompt(alphaQuestion);
+					expect(server.writes).toEqual([]);
+					if (setting === "apiUrl") cfgHindsightApiUrl.override(settings, other.url);
+					else cfgHindsightApiToken.override(settings, "account-b-secret");
+					await hindsightBackend.applySettings!(current, [`hindsight.${setting}`]);
+					expect(only(server.containing(alphaAnswer)).content).toContain(alphaQuestion);
+					expect(server.retainAuthorizations).toEqual(["Bearer account-a-secret"]);
+					if (other !== server) expect(other.writes).toEqual([]);
+				} finally {
+					if (other !== server) await other.stop();
+				}
+			},
+		);
 
 		it("moving a Hindsight session finishes the source scope before destination writes", async () => {
 			const server = useHindsight();

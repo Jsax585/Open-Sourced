@@ -11928,6 +11928,9 @@ export class AgentSession implements SettingsScope {
 		await this.abort({ goalReason: "internal" });
 		await this.#sessionBeforeSwitchReconciler?.();
 		await this.getHindsightSessionState()?.flushRetainQueue();
+		// Finish the outgoing ledger before a resume's cwd callback can rebuild
+		// memory against the target manager, just as a move finishes before relocation.
+		if (switchingToDifferentSession) await this.getHindsightSessionState()?.finishRetentionScope();
 
 		await this.#bash.flushPending();
 		// Flush pending writes before switching so restore snapshots reflect committed state.

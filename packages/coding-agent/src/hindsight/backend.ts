@@ -286,27 +286,6 @@ async function installPrimaryState(
 
 	const client = createHindsightClient(config);
 	const scope = computeBankScope(config, session.sessionManager.getCwd());
-
-	// Cleanup any stale state for this session (defensive — prevents leaks
-	// when a session is reused without going through dispose). Flush the
-	// previous state's retain queue BEFORE clearing it, otherwise
-	// `HindsightRetainQueue.#doFlush` sees `session.getHindsightSessionState()
-	// !== state` and drops the batch. Re-read after the await so a concurrent
-	// owner cannot leave the actual current state undisposed.
-	let previous = session.getHindsightSessionState();
-	if (previous) {
-		await previous.flushRetainQueue();
-		if (previous.bankId !== scope.bankId || !Bun.deepEquals(previous.retainTags, scope.retainTags)) {
-			await previous.finishRetentionScope();
-		}
-	}
-	const latest = session.getHindsightSessionState();
-	if (latest && latest !== previous) {
-		previous?.dispose();
-		previous = latest;
-		await previous.flushRetainQueue();
-	}
-
 	const state = new HindsightSessionState({
 		sessionId,
 		client,
@@ -320,6 +299,35 @@ async function installPrimaryState(
 		lastRetainedTurn: 0,
 		hasRecalledForFirstTurn: false,
 	});
+
+	// Cleanup any stale state for this session (defensive — prevents leaks
+	// when a session is reused without going through dispose). Flush the
+	// previous state's retain queue BEFORE clearing it, otherwise
+	// `HindsightRetainQueue.#doFlush` sees `session.getHindsightSessionState()
+	// !== state` and drops the batch. Re-read after the await so a concurrent
+	// owner cannot leave the actual current state undisposed.
+	let previous = session.getHindsightSessionState();
+	if (previous) {
+		await previous.flushRetainQueue();
+		// A resume may already have installed the target ledger before its cwd
+		// rebind. Its source was finished before the swap; never inventory the
+		// destination through the outgoing state's client or scope.
+		if (
+			previous.sessionId === sessionId &&
+			(previous.retentionServiceId !== state.retentionServiceId ||
+				previous.bankId !== scope.bankId ||
+				!Bun.deepEquals(previous.retainTags, scope.retainTags))
+		) {
+			await previous.finishRetentionScope();
+		}
+	}
+	const latest = session.getHindsightSessionState();
+	if (latest && latest !== previous) {
+		previous?.dispose();
+		previous = latest;
+		await previous.flushRetainQueue();
+	}
+
 	state.bindRetentionScope();
 
 	const displaced = session.setHindsightSessionState(state);

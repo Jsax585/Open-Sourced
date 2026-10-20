@@ -277,7 +277,7 @@ export class HindsightSessionState {
 	readonly retainQueue: HindsightRetainQueue;
 	#retentionTransition: Promise<void> = Promise.resolve();
 	#cachedDocumentId?: string;
-	readonly #retentionServiceId: string;
+	readonly retentionServiceId: string;
 	#finishedRetentionScope?: { sessionId: string; leafId: string | null };
 	#finishingRetentionScope?: Promise<void>;
 
@@ -290,7 +290,7 @@ export class HindsightSessionState {
 		this.recallTagsMatch = options.recallTagsMatch;
 		this.config = options.config;
 		// Persist only a non-reversible identity, never the account's credential.
-		this.#retentionServiceId = new Bun.CryptoHasher("sha256")
+		this.retentionServiceId = new Bun.CryptoHasher("sha256")
 			.update(
 				JSON.stringify([
 					options.config.hindsightApiUrl?.replace(/\/+$/, ""),
@@ -446,7 +446,7 @@ export class HindsightSessionState {
 		const current = record?.type === "custom" ? (record.data as RetentionSegment) : undefined;
 		if (
 			current &&
-			current.serviceId === this.#retentionServiceId &&
+			current.serviceId === this.retentionServiceId &&
 			current.bankId === this.bankId &&
 			Bun.deepEquals(current.tags, this.retainTags)
 		)
@@ -455,7 +455,7 @@ export class HindsightSessionState {
 			documentId: current ? `${sessionId}-${crypto.randomUUID()}` : sessionId,
 			sessionId,
 			bankId: this.bankId,
-			serviceId: this.#retentionServiceId,
+			serviceId: this.retentionServiceId,
 			tags: this.retainTags,
 			sourceTimestamp: current ? new Date().toISOString() : this.#sessionSourceTimestamp()?.toISOString(),
 		} satisfies RetentionSegment);
@@ -476,7 +476,7 @@ export class HindsightSessionState {
 		const leafId = manager.getLeafId();
 		if (this.#finishedRetentionScope?.sessionId === sessionId && this.#finishedRetentionScope.leafId === leafId)
 			return;
-		const finishing = this.#retainSelectedSegments(true);
+		const finishing = this.#retainSelectedSegments("finish");
 		this.#finishingRetentionScope = finishing;
 		try {
 			await finishing;
@@ -523,13 +523,13 @@ export class HindsightSessionState {
 		return segments;
 	}
 
-	async #retainSelectedSegments(force = false, invalidationOnly = false): Promise<void> {
+	async #retainSelectedSegments(force?: "finish" | "enqueue", invalidationOnly = false): Promise<void> {
 		const run = this.#retentionTransition.then(async () => {
 			this.bindRetentionScope();
 			const segments = this.#segmentTranscripts();
 			for (const [index, { segment, entries, documents, documentHistory }] of segments.entries()) {
 				// Other accounts' receipts remain live until their owning service is selected.
-				if (segment.serviceId !== this.#retentionServiceId) continue;
+				if (segment.serviceId !== this.retentionServiceId) continue;
 				const messages = extractEntryMessages(entries);
 				const userTurns = messages.reduce((count, message) => count + Number(message.role === "user"), 0);
 				let lastRetainedTurn = 0;
@@ -597,10 +597,12 @@ export class HindsightSessionState {
 				const due = active && !invalidationOnly && userTurns - lastRetainedTurn >= this.config.retainEveryNTurns;
 				const needsRepair = invalidated && lastRetainedMessageCount < messages.length;
 				const unfinished = lastRetainedMessageCount < messages.length;
-				if (
-					messages.length > 0 &&
-					(needsRepair || due || (force && unfinished && (active || documents.size === 0)))
-				) {
+				// Enqueue is also a recovery resend; handoffs only finish uncovered sources.
+				const forced =
+					force === "enqueue"
+						? active || unfinished
+						: force === "finish" && unfinished && (active || documents.size === 0);
+				if (messages.length > 0 && (needsRepair || due || forced)) {
 					if (this.#cachedDocumentId !== segment.documentId || invalidated || force) {
 						this.#lastRetainedMessageIndex = 0;
 						this.#cachedTranscript = "";
@@ -651,7 +653,7 @@ export class HindsightSessionState {
 	async synchronizeRetainedBranch(): Promise<void> {
 		if (this.aliasOf || !this.config.autoRetain) return;
 		try {
-			await this.#retainSelectedSegments(false, true);
+			await this.#retainSelectedSegments(undefined, true);
 		} catch (err) {
 			logger.warn("Hindsight: branch reconciliation failed", {
 				sessionId: this.sessionId,
@@ -676,7 +678,7 @@ export class HindsightSessionState {
 
 	async forceRetainCurrentSession(): Promise<void> {
 		try {
-			await this.#retainSelectedSegments(true);
+			await this.#retainSelectedSegments("enqueue");
 		} catch (err) {
 			logger.warn("Hindsight: forced retain failed", {
 				sessionId: this.sessionId,
