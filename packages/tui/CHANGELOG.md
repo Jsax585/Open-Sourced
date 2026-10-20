@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Pressing `n` on Other now edits the custom answer just like Enter, preserving its text and images ([#16510](https://github.com/can1357/oh-my-pi/pull/16510) by [@Komzpa](https://github.com/Komzpa))
+- Pressing `n` on Other now edits the custom answer like Enter, keeping its text and images ([#16510](https://github.com/can1357/oh-my-pi/pull/16510) by [@Komzpa](https://github.com/Komzpa))
 
 ## [18.12.3] - 2026-10-19
 

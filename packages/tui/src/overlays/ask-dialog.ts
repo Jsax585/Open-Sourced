@@ -450,7 +450,6 @@ function clearNoteUnlessRow(state: QuestionState, rowKey: string): void {
 
 function noteForSubmittedAnswer(question: ExtensionAskDialogQuestion, state: QuestionState): string | undefined {
 	if (state.note === undefined || state.noteRowKey === undefined) return undefined;
-	if (state.noteRowKey === "other") return state.customInput !== undefined ? state.note : undefined;
 	const match = /^option:(\d+)$/.exec(state.noteRowKey);
 	const optionIndex = match?.[1] === undefined ? Number.NaN : Number.parseInt(match[1], 10);
 	const option = Number.isInteger(optionIndex) ? question.options[optionIndex] : undefined;
@@ -1006,7 +1005,10 @@ export class AskDialogComponent implements Component {
 			tone: "accent",
 			title: question?.multi ? `${enterLabel}  enter · Toggle  space` : `${enterLabel}  enter`,
 		});
-		const note = actionButton("Note", "note", { keys: "n", title: "Add a note to the highlighted answer  n" });
+		// On Other, `n` edits the custom answer instead of attaching a note.
+		const note = this.#highlightedRowIsOther()
+			? actionButton("Edit", "note", { keys: "n", title: "Edit the custom answer  n" })
+			: actionButton("Note", "note", { keys: "n", title: "Add a note to the highlighted answer  n" });
 		return actionBar([...lead, null, note, skip, submit]);
 	}
 
@@ -1259,6 +1261,11 @@ export class AskDialogComponent implements Component {
 		return ` · ${expandKeyHint()} ${this.#expanded ? "collapse" : "expand"}`;
 	}
 
+	#highlightedRowIsOther(): boolean {
+		const active = this.#activeQuestionState();
+		return active !== undefined && this.#questionRows(active.question)[active.state.cursorIndex]?.kind === "other";
+	}
+
 	#footerHintText(indicator: string): string {
 		// Hide rides along with cancel: both leave the question view without answering.
 		const hideKey = editorKey("app.ask.hide");
@@ -1276,7 +1283,7 @@ export class AskDialogComponent implements Component {
 		const enterAction = this.#questions.length > 1 ? "next" : "submit";
 		const action = question?.multi
 			? `${formatKeyHint("space")} toggle · ${enter} ${enterAction}`
-			: `${enter} select · ${formatKeyHint("n")} note`;
+			: `${enter} select · ${formatKeyHint("n")} ${this.#highlightedRowIsOther() ? "edit" : "note"}`;
 		const tabs = this.#hasSubmitTab() ? ` · ${formatKeyHints(["tab", "left", "right"])} question` : "";
 		const expand = this.#expandHint();
 		if (this.#questionCanPage && indicator) {
@@ -1447,7 +1454,6 @@ export class AskDialogComponent implements Component {
 				// Submitting an empty value unselects the custom answer.
 				state.customInput = undefined;
 				state.customInputImages = undefined;
-				clearNoteIfRow(state, rowItem.key);
 				return;
 			}
 			state.customInput = input.text;
