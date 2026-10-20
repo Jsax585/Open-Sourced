@@ -430,6 +430,19 @@ describe("explicit model ids fail closed", () => {
 		expect(parseModelPattern("anthropic/claude-haiku-5-5", [shadow]).model).toBeUndefined();
 	});
 
+	test("size-qualified shorthand may skip earlier revision digits", () => {
+		const llama = roleChainModel("venice", "llama-3.3-70b");
+		expect(parseModelPattern("venice/llama-70b", [llama]).model?.id).toBe("llama-3.3-70b");
+		expect(parseModelPattern("venice/llama-3.3-70b", [llama]).model?.id).toBe("llama-3.3-70b");
+		expect(parseModelPattern("venice/llama-4-70b", [llama]).model).toBeUndefined();
+	});
+
+	test("exact raw aggregator id keeps precedence over a missing provider revision", () => {
+		const routed = roleChainModel("openrouter", "anthropic/claude-haiku-5-6");
+		expect(parseModelPattern("anthropic/claude-haiku-5-6", [haiku, routed]).model?.provider).toBe("openrouter");
+		expect(parseModelPattern("anthropic/claude-haiku-5-7", [haiku, routed]).model).toBeUndefined();
+	});
+
 	test("an undated explicit id can extend to a dated snapshot without changing revision tokens", () => {
 		const dated = roleChainModel("anthropic", "claude-haiku-4-5-20251001");
 		expect(parseModelPattern("anthropic/claude-haiku-4-5", [dated]).model?.id).toBe(dated.id);

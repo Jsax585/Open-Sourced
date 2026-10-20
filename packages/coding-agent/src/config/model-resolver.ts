@@ -703,6 +703,20 @@ function isProviderLockedCrossMatch(pattern: string, matchedModel: Model<Api>): 
 }
 
 /**
+ * Split a model id into comparison tokens. A digit run is a revision token
+ * unless a letter follows it directly (`70b`, `8x`): that is a parameter-count
+ * size token, which shorthand selectors may skip over or omit.
+ */
+function tokenizeModelId(id: string): Array<{ text: string; revision: boolean }> {
+	const lower = id.toLowerCase();
+	return Array.from(lower.matchAll(/\d+|[^\d./:@-]+/g), match => {
+		const text = match[0];
+		const next = lower[match.index + text.length];
+		return { text, revision: /^\d+$/.test(text) && !(next !== undefined && /[a-z]/.test(next)) };
+	});
+}
+
+/**
  * Find an exact explicit provider/model match.
  */
 function findExactModelReferenceMatch(modelReference: string, availableModels: Model<Api>[]): Model<Api> | undefined {
@@ -751,7 +765,11 @@ function matchModel(
 	// Exact ID match (case-insensitive) — this must happen before provider-scoped
 	// fuzzy matching so raw IDs that contain slashes (for example OpenRouter model
 	// IDs like "openai/gpt-4o:extended") still resolve as IDs instead of being
-	// misread as a provider-qualified selector. A provider-qualified pattern
+	// misread as a provider-qualified selector. This raw-id precedence is
+	// deliberate even for unbundled revisions: `anthropic/claude-haiku-5-6` resolves
+	// to an aggregator model whose raw id is exactly that string, because such ids
+	// are how aggregators spell upstream models. Only fuzzy matching is
+	// fail-closed. A provider-qualified pattern
 	// whose named provider carries the id stays locked to that provider when its
 	// only exact-id matches live on a different provider (isProviderLockedCrossMatch).
 	const lowerPattern = modelPattern.toLowerCase();
@@ -796,17 +814,18 @@ function matchModel(
 		if (splitUpstreamRouting(modelId) && providerModels.some(supportsUpstreamRouting)) {
 			return undefined;
 		}
-		const requestedTokens = modelId.toLowerCase().match(/\d+|[^\d./:@-]+/g) ?? [];
+		const requestedTokens = tokenizeModelId(modelId);
 		if (requestedTokens.length === 0) return undefined;
 		const scored = providerModels
 			.filter(model => {
-				const candidateTokens = model.id.toLowerCase().match(/\d+|[^\d./:@-]+/g) ?? [];
+				const candidateTokens = tokenizeModelId(model.id);
 				let cursor = 0;
-				for (const requestedToken of requestedTokens) {
-					while (cursor < candidateTokens.length && candidateTokens[cursor] !== requestedToken) {
+				for (const requested of requestedTokens) {
+					while (cursor < candidateTokens.length && candidateTokens[cursor]!.text !== requested.text) {
 						// Named revision digits cannot skip an earlier, different revision:
-						// haiku-5 must not select haiku-4-5. Text shorthand may skip digits.
-						if (/^\d+$/.test(requestedToken) && /^\d+$/.test(candidateTokens[cursor]!)) return false;
+						// haiku-5 must not select haiku-4-5. Text shorthand and size tokens
+						// (70b) may skip digits.
+						if (requested.revision && candidateTokens[cursor]!.revision) return false;
 						cursor++;
 					}
 					if (cursor === candidateTokens.length) return false;
