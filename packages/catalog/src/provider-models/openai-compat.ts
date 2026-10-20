@@ -71,7 +71,7 @@ import {
 } from "../wire/singularityapi";
 import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
 import { getDefaultModelDiscoveryBaseUrl, resolveModelCacheProviderId } from "./cache-provider-id";
-import { getClinePassModelMetadata } from "./cline-pass";
+import { CLINE_PASS_THINKING_OVERRIDES, getClinePassModelMetadata } from "./cline-pass";
 import type { ModelManagerConfig } from "./descriptor-types";
 import { filterModelsDevCatalogRows } from "./models-dev-policies";
 
@@ -2910,6 +2910,23 @@ function buildCuratedClinePassModel(
  * models.dev prices them.
  */
 function buildClinePassSubscriptionModel(
+	id: string,
+	references: ReadonlyMap<string, ModelSpec<"openai-completions">>,
+	liveCatalog?: ClinePassLiveCatalog,
+): ModelSpec<"openai-completions"> {
+	const model = resolveClinePassSubscriptionModel(id, references, liveCatalog);
+	const thinking = CLINE_PASS_THINKING_OVERRIDES[id];
+	if (!thinking) return model;
+	return {
+		...model,
+		reasoning: true,
+		thinking,
+		compat: { ...model.compat, supportsReasoningEffort: true },
+	};
+}
+
+/** Reference/live/fallback enrichment, before the exact-id ladder overlay. */
+function resolveClinePassSubscriptionModel(
 	id: string,
 	references: ReadonlyMap<string, ModelSpec<"openai-completions">>,
 	liveCatalog?: ClinePassLiveCatalog,

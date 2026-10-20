@@ -22,6 +22,12 @@ const LOW_HIGH_MAX: ThinkingConfig = {
 	requiresEffort: false,
 };
 
+// Exact ClinePass reasoning controls; pricing, limits, and modalities still
+// follow normal reference enrichment instead of a frozen metadata copy.
+export const CLINE_PASS_THINKING_OVERRIDES: Readonly<Record<string, ThinkingConfig>> = {
+	"deepseek-v4.1-flash-1017": LOW_HIGH_MAX,
+};
+
 const HIGH_XHIGH: ThinkingConfig = {
 	mode: "effort",
 	efforts: [Effort.High, Effort.XHigh],
@@ -122,22 +128,6 @@ export const CLINE_PASS_MODEL_METADATA: Readonly<Record<string, ClinePassModelMe
 		cost: { input: 0.056, output: 0.112, cacheRead: 0.0112, cacheWrite: 0 },
 		reasoning: true,
 		thinking: HIGH_XHIGH,
-		tier: "subscription",
-	},
-	// The 1017 subscription SKU is a different model from the free-tier
-	// `deepseek-v4.1-flash` entries: DeepSeek publishes the same low/high/max
-	// reasoning ladder for it (no separate xhigh tier), and Cline's live row
-	// ships 393,216 max output tokens. Without an explicit entry the fallback
-	// advertises `supportsReasoningEffort: false`, so the picker loses the
-	// ladder and the wire never carries `reasoning_effort` (issue #16414).
-	"deepseek-v4.1-flash-1017": {
-		name: "DeepSeek V4.1 Flash 1017",
-		contextWindow: 1_048_576,
-		maxTokens: 393_216,
-		input: ["text", "image"],
-		cost: { input: 0.098, output: 0.294, cacheRead: 0.00294, cacheWrite: 0 },
-		reasoning: true,
-		thinking: LOW_HIGH_MAX,
 		tier: "subscription",
 	},
 	"glm-5.2": {

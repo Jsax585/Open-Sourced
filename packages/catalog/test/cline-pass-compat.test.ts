@@ -13,9 +13,9 @@ import {
 	PROVIDER_DESCRIPTORS,
 } from "@oh-my-pi/pi-catalog/provider-models";
 import { createReferenceResolver } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
-import { getClinePassModelMetadata } from "@oh-my-pi/pi-catalog/provider-models/cline-pass";
 import { clinePassModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { FetchImpl, Model, ModelSpec } from "@oh-my-pi/pi-catalog/types";
+import { isRecord } from "@oh-my-pi/pi-utils";
 
 const CLINEPASS_MODELS_DEV_FIXTURE = {
 	"cline-pass": {
@@ -447,13 +447,7 @@ describe("ClinePass catalog", () => {
 		expect(resolveModelPolicy(muse!).compat.supportsReasoningEffort).toBe(true);
 	});
 
-	it("exposes and sends the subscription DeepSeek V4.1 Flash 1017 ladder (issue #16414)", async () => {
-		const metadata = getClinePassModelMetadata("deepseek-v4.1-flash-1017");
-		expect(metadata).toMatchObject({
-			tier: "subscription",
-			thinking: { mode: "effort", efforts: [Effort.Low, Effort.High, Effort.Max], defaultLevel: Effort.High },
-		});
-
+	it("sends the subscription DeepSeek V4.1 Flash 1017 low/high/max ladder unchanged (issue #16414)", async () => {
 		const options = clinePassModelManagerOptions({
 			fetch: async () =>
 				new Response(
@@ -465,28 +459,21 @@ describe("ClinePass catalog", () => {
 		});
 		const models = await options.fetchDynamicModels?.();
 		const spec = models?.find(model => model.id === "deepseek-v4.1-flash-1017");
-		expect(spec).toMatchObject({
-			provider: "cline-pass",
-			maxTokens: 393_216,
-			input: ["text", "image"],
-			thinking: { efforts: [Effort.Low, Effort.High, Effort.Max] },
-		});
+		if (!spec) throw new Error("ClinePass roster is missing the subscription deepseek-v4.1-flash-1017 model");
 
-		const compat = resolveModelPolicy(spec as ModelSpec<"openai-completions">).compat;
-		expect(compat.supportsReasoningEffort).toBe(true);
-		expect(compat.omitReasoningEffort).toBe(false);
-		// DeepSeek's ladder is wire-exact: no synthetic xhigh tier, no alias map.
-		expect(compat.reasoningEffortMap).toEqual({});
+		expect(spec.thinking?.efforts).toEqual([Effort.Low, Effort.High, Effort.Max]);
+		const model = buildModel(spec);
 
-		const model = buildModel(spec as ModelSpec<"openai-completions">) as Model<"openai-completions">;
-		expect(model.thinking?.efforts).toEqual([Effort.Low, Effort.High, Effort.Max]);
 		const wire = await Promise.all(
-			[Effort.Low, Effort.High, Effort.Max].map(async effort => {
-				const body = await captureChatBody(model, effort);
-				return body.reasoning_effort;
-			}),
+			[Effort.Low, Effort.High, Effort.Max].map(
+				async effort => (await captureChatBody(model, { reasoning: effort })).reasoning_effort,
+			),
 		);
-		expect(wire).toEqual(["low", "high", "max"]);
+		expect(wire).toEqual([Effort.Low, Effort.High, Effort.Max]);
+
+		const disabled = await captureChatBody(model, { disableReasoning: true });
+		expect(disabled.reasoning_effort).toBeUndefined();
+		expect(disabled.reasoning).toEqual({ enabled: false });
 	});
 });
 
@@ -509,21 +496,20 @@ function chatSse(): Response {
 
 async function captureChatBody(
 	model: Model<"openai-completions">,
-	reasoning: Effort,
+	options: { reasoning?: Effort; disableReasoning?: boolean },
 ): Promise<Record<string, unknown>> {
-	let captured: Record<string, unknown> | undefined;
+	let captured: unknown;
 	const fetchMock: FetchImpl = async (_input, init) => {
-		captured = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
+		captured = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
 		return chatSse();
 	};
 	const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 0 }] };
-	for await (const event of streamOpenAICompletions(model, context, {
+	const result = await streamOpenAICompletions(model, context, {
 		apiKey: "cline-test",
-		reasoning,
+		...options,
 		fetch: fetchMock,
-	})) {
-		if (event.type === "done" || event.type === "error") break;
-	}
-	if (!captured) throw new Error("Expected a captured chat-completions request body");
+	}).result();
+	expect(result.stopReason).toBe("stop");
+	if (!isRecord(captured)) throw new Error("Expected a JSON object chat-completions request body");
 	return captured;
 }
