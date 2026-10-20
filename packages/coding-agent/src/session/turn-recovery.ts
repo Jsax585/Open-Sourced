@@ -1894,14 +1894,14 @@ export class TurnRecovery {
 	}
 
 	/**
-	 * Live session role for chain lookup: the first role the session has run as
-	 * whose current assignment still IS the active model and that owns a chain.
+	 * Live session role for chain lookup: the first live candidate whose current
+	 * assignment still IS the active model and that owns a chain.
 	 *
 	 * A retry-fallback hop records its `model_change` under the ephemeral
 	 * `fallback` role, so the newest record alone loses the live role after the
-	 * first hop and a model shared by several roles falls to yaml order. Walk the
-	 * branch instead. A chain-less role is skipped: the resolver ignores such a
-	 * hint, so it must not hide a later role that has one.
+	 * first hop and a model shared by several roles falls to yaml order. A
+	 * chain-less role is skipped: the resolver ignores such a hint, so it must
+	 * not hide a later role that has one.
 	 */
 	#liveRetryRoleHint(currentModel: Model | null | undefined): string | undefined {
 		if (!currentModel) return undefined;
@@ -1913,34 +1913,40 @@ export class TurnRecovery {
 	}
 
 	/**
-	 * Roles the session has run as: recorded `model_change` roles newest first,
+	 * The live role candidates: the newest non-ephemeral `model_change` role,
 	 * then the role declared at `session_init` (a subagent's `modelRole`).
 	 *
-	 * A child session's spawn writes a role-less `model_change` (SDK initial
-	 * model) and its `subagent:<id>` pin before `session_init`. The role-less
-	 * entry there is bookkeeping, not a role the session chose, so it is skipped;
-	 * reading it as `default` would outrank the declared role. The explicit pin
-	 * keeps precedence over the declared alias, as before this walk existed.
+	 * Only the newest recorded role counts: an older one was superseded by a
+	 * later switch and must not be revived because it happens to own the model.
+	 * A child session's spawn writes the SDK's role-less initial `model_change`
+	 * before its first `session_init`; that entry is bookkeeping, not a choice,
+	 * so it is skipped. A role-less change after the first `session_init` (e.g.
+	 * `cycleModel()`, a resume override) is a real `default` selection, even
+	 * when a refreshed `session_init` follows it.
 	 */
 	#liveRetryRoleCandidates(): string[] {
 		const sessionManager = this.#host.sessionManager;
-		const changeRoles: string[] = [];
-		let declaredRole: string | undefined;
 		// `getBranchView` is the manager's live memo; fall back to the copying
 		// accessor for hosts that expose only `getBranch`.
 		const branch = sessionManager?.getBranchView?.() ?? sessionManager?.getBranch?.() ?? [];
+		const firstInit = branch.findIndex(entry => entry.type === "session_init");
+		let recordedRole: string | undefined;
+		let declaredRole: string | undefined;
 		for (let index = branch.length - 1; index >= 0; index--) {
 			const entry = branch[index];
 			if (entry.type === "session_init") {
 				declaredRole ??= entry.modelRole;
-			} else if (entry.type === "model_change") {
-				if (entry.role === undefined && declaredRole !== undefined) continue;
-				const role = entry.role ?? "default";
-				if (role !== EPHEMERAL_MODEL_CHANGE_ROLE && !changeRoles.includes(role)) changeRoles.push(role);
+			} else if (entry.type === "model_change" && recordedRole === undefined) {
+				if (entry.role === EPHEMERAL_MODEL_CHANGE_ROLE) continue;
+				if (entry.role === undefined && index < firstInit) continue;
+				recordedRole = entry.role ?? "default";
 			}
+			if (recordedRole !== undefined && declaredRole !== undefined) break;
 		}
-		if (declaredRole && !changeRoles.includes(declaredRole)) changeRoles.push(declaredRole);
-		return changeRoles;
+		const candidates: string[] = [];
+		if (recordedRole) candidates.push(recordedRole);
+		if (declaredRole && declaredRole !== recordedRole) candidates.push(declaredRole);
+		return candidates;
 	}
 
 	/** Whether `role`'s current assignment resolves to the active model. */

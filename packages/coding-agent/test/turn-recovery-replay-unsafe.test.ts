@@ -1226,6 +1226,46 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 			expect(recovery.resolveRetryFallbackRole(selector, model)).toBe("slow");
 		});
 
+		it("keeps a role-less switch made after spawn even when a refreshed `session_init` follows", () => {
+			// `cycleModel()` records a role-less change (`default`); a changed system
+			// prompt then appends a refreshed `session_init` repeating `modelRole`.
+			const branch = [
+				...subagentBranch(selector, "task"),
+				modelChangeEntry("cycle", "hop", selector),
+				initEntry("task", "cycle"),
+				modelChangeEntry("hop-2", "init-task", selector, "fallback"),
+			];
+			const recovery = new TurnRecovery(
+				createHost(model, modelRegistry, {
+					branch,
+					modelRoles: { default: selector, web: selector, task: selector },
+					fallbackChains: { web: [otherSelector], task: [otherSelector], default: [otherSelector] },
+				}),
+			);
+			expect(recovery.resolveRetryFallbackRole(selector, model)).toBe("default");
+		});
+
+		it("does not revive a role superseded by a later switch", () => {
+			// `slow` ran on `model`, then the session switched to `task` on
+			// `other`, then hopped ephemerally back to `model`. `task` no longer
+			// owns the active model, but the stale `slow` must not capture the
+			// chain either; the resolver's `default` preference applies.
+			const branch = [
+				initEntry("task"),
+				modelChangeEntry("slow", "init-task", selector, "slow"),
+				modelChangeEntry("switch", "slow", otherSelector, "task"),
+				modelChangeEntry("hop", "switch", selector, "fallback"),
+			];
+			const recovery = new TurnRecovery(
+				createHost(model, modelRegistry, {
+					branch,
+					modelRoles: { slow: selector, default: selector, task: otherSelector },
+					fallbackChains: { slow: [otherSelector], default: [otherSelector], task: [selector] },
+				}),
+			);
+			expect(recovery.resolveRetryFallbackRole(selector, model)).toBe("default");
+		});
+
 		it("ignores a declared role whose assignment is no longer the active model", () => {
 			const recovery = new TurnRecovery(
 				createHost(model, modelRegistry, {
