@@ -761,4 +761,56 @@ describe("AgentSession python cleanup", () => {
 		expect(kernel.executeCalls).toEqual(["print('blocked')", "print('blocked')"]);
 		expect(kernel.shutdownCalls).toBe(1);
 	});
+
+	it("shuts down the previous session's retained kernel when newSession opens a new session file", async () => {
+		const { tempDir, cwd } = createTempProject();
+		tempDirs.push(tempDir);
+		const previousKernel = new FakeKernel();
+		const nextKernel = new FakeKernel();
+		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
+		vi.spyOn(pythonKernel.PythonKernel, "start")
+			.mockResolvedValueOnce(previousKernel as unknown as PythonKernelInstance)
+			.mockResolvedValueOnce(nextKernel as unknown as PythonKernelInstance);
+		const session = await createSession(tempDir, cwd, {
+			sessionManager: SessionManager.create(cwd, tempDir.join("sessions")),
+		});
+
+		try {
+			await session.executePython("print('previous')");
+			expect(await session.newSession()).toBe(true);
+			await session.executePython("print('next')");
+
+			expect(previousKernel.shutdownCalls).toBe(1);
+			expect(nextKernel.shutdownCalls).toBe(0);
+			expect(nextKernel.executeCalls).toEqual(["print('next')"]);
+		} finally {
+			await session.dispose();
+		}
+		expect(nextKernel.shutdownCalls).toBe(1);
+	});
+
+	it("keeps the retained kernel when a transition stays on the same session file", async () => {
+		const { tempDir, cwd } = createTempProject();
+		tempDirs.push(tempDir);
+		const kernel = new FakeKernel();
+		vi.spyOn(pythonKernel, "checkPythonKernelAvailability").mockResolvedValue({ ok: true });
+		const startSpy = vi
+			.spyOn(pythonKernel.PythonKernel, "start")
+			.mockResolvedValue(kernel as unknown as PythonKernelInstance);
+		const session = await createSession(tempDir, cwd, {
+			sessionManager: SessionManager.create(cwd, tempDir.join("sessions")),
+		});
+
+		try {
+			await session.executePython("x = 1");
+			expect(await session.resetSessionContext()).toBeDefined();
+			await session.executePython("print(x)");
+
+			expect(startSpy).toHaveBeenCalledTimes(1);
+			expect(kernel.shutdownCalls).toBe(0);
+			expect(kernel.executeCalls).toEqual(["x = 1", "print(x)"]);
+		} finally {
+			await session.dispose();
+		}
+	});
 });

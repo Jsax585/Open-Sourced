@@ -1181,13 +1181,18 @@ export class AgentSession implements SettingsScope {
 	#sessionTransitionSettled: Promise<void> | undefined;
 	#resolveSessionTransition: (() => void) | undefined;
 	#sessionTransitionDepth = 0;
+	/** Eval session id when the outermost transition began; kernels keyed by it are released if it changes. */
+	#evalSessionIdBeforeTransition: string | undefined;
 	/** Each using declaration disposes one depth, so nested transitions reuse this token. */
 	readonly #sessionTransitionScope: Disposable = {
 		[Symbol.dispose]: () => {
 			if (--this.#sessionTransitionDepth !== 0) return;
 			const resolve = this.#resolveSessionTransition;
+			const previousEvalSessionId = this.#evalSessionIdBeforeTransition;
 			this.#sessionTransitionSettled = undefined;
 			this.#resolveSessionTransition = undefined;
+			this.#evalSessionIdBeforeTransition = undefined;
+			if (previousEvalSessionId !== undefined) this.#eval.releaseKernelsAfterSessionChange(previousEvalSessionId);
 			resolve?.();
 		},
 	};
@@ -5645,6 +5650,7 @@ export class AgentSession implements SettingsScope {
 			const settled = Promise.withResolvers<void>();
 			this.#sessionTransitionSettled = settled.promise;
 			this.#resolveSessionTransition = settled.resolve;
+			this.#evalSessionIdBeforeTransition = this.#eval.getSessionId();
 		}
 		return this.#sessionTransitionScope;
 	}

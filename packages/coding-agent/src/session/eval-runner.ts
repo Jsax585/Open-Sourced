@@ -36,6 +36,7 @@ export class EvalRunner {
 	#pendingMessages: PythonExecutionMessage[] = [];
 	#activeExecutions = new Set<Promise<unknown>>();
 	#disposing = false;
+	#pendingKernelRelease: Promise<void> | undefined;
 
 	constructor(host: EvalRunnerHost, options: { kernelOwnerId: string }) {
 		this.#host = host;
@@ -166,8 +167,36 @@ export class EvalRunner {
 		this.#disposing = true;
 	}
 
+	/**
+	 * Shuts down retained kernels left behind by a session transition.
+	 *
+	 * Kernels are keyed by {@link getSessionId}. When a transition changes it, every
+	 * kernel this owner retains belongs to a session it can no longer address, so
+	 * keeping them would hold a live process until the whole session is disposed.
+	 */
+	releaseKernelsAfterSessionChange(previousSessionId: string): void {
+		if (this.#disposing || previousSessionId === this.getSessionId()) return;
+		const previousRelease = this.#pendingKernelRelease;
+		const release = Promise.allSettled([
+			disposeKernelSessionsByOwner(this.#kernelOwnerId),
+			disposeVmContextsByOwner(this.#kernelOwnerId),
+		]).then(async results => {
+			await previousRelease;
+			for (const result of results) {
+				if (result.status === "rejected") {
+					logger.warn("Failed to release eval kernels after session change", { error: String(result.reason) });
+				}
+			}
+		});
+		this.#pendingKernelRelease = release;
+		void release.finally(() => {
+			if (this.#pendingKernelRelease === release) this.#pendingKernelRelease = undefined;
+		});
+	}
+
 	/** Waits for active work and disposes every retained eval kernel owned by the session. */
 	async disposeKernels(): Promise<void> {
+		await this.#pendingKernelRelease;
 		const settled = await this.#prepareExecutionsForDispose();
 		if (!settled) {
 			logger.warn("Detaching retained eval-kernel ownership during dispose while eval execution is still active");
