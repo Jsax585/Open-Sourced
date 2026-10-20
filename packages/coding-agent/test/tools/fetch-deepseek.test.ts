@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { AuthStorage, type FetchImpl } from "@oh-my-pi/pi-ai";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgProvidersFetch } from "@oh-my-pi/pi-coding-agent/session/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -576,4 +577,108 @@ describe("DeepSeek through read URL", () => {
 			}
 		},
 	);
+});
+
+describe("DeepSeek provider origin through ReadTool", () => {
+	let tempDir: utils.TempDir;
+	let server: Bun.Server<undefined>;
+	let url: string;
+
+	beforeEach(() => {
+		tempDir = utils.TempDir.createSync("@fetch-deepseek-origin-");
+		server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: request =>
+				new URL(request.url).pathname === "/article"
+					? new Response(HTML, { headers: { "Content-Type": "text/html" } })
+					: new Response("Not found", { status: 404 }),
+		});
+		url = new URL("/article", server.url).href;
+	});
+
+	afterEach(async () => {
+		await server.stop(true);
+		await tempDir.remove();
+	});
+
+	async function createRegistry(baseUrl: string, apiKey?: string): Promise<ModelRegistry> {
+		const modelsPath = `${tempDir.path()}/models.yml`;
+		await Bun.write(
+			modelsPath,
+			Bun.YAML.stringify({ providers: { deepseek: { baseUrl, ...(apiKey ? { apiKey } : {}) } } }),
+		);
+		return new ModelRegistry(await createAuthStorage(), modelsPath);
+	}
+
+	it.each([
+		{ baseUrl: "https://gateway.example/v1", runtime: false, lazy: true },
+		{ baseUrl: "https://api.deepseek.com.attacker.example/v1", runtime: false, lazy: false },
+		{ baseUrl: "https://api.deepseek.com@attacker.example/v1", runtime: false, lazy: false },
+		{ baseUrl: "http://api.deepseek.com/v1", runtime: false, lazy: false },
+		{ baseUrl: "https://api.deepseek.com:8443/v1", runtime: false, lazy: false },
+		{ baseUrl: "not a valid URL", runtime: false, lazy: false },
+		{ baseUrl: "https://gateway.example/v1", runtime: true, lazy: false },
+	])(
+		"rejects $baseUrl (runtime=$runtime, lazy=$lazy) without sending credentials",
+		async ({ baseUrl, runtime, lazy }) => {
+			const registry = await createRegistry(runtime ? "https://api.deepseek.com/v1" : baseUrl, "gateway-only-key");
+			if (runtime) registry.registerProvider("deepseek", { baseUrl, apiKey: "runtime-gateway-key" });
+			const transport = vi.fn(() => Response.json({ content: MARKDOWN }));
+			const session = makeSession(mockFetch(transport));
+			const ensureRegistry = vi.fn(async () => registry);
+			if (lazy) session.ensureModelRegistry = ensureRegistry;
+			else session.modelRegistry = registry;
+
+			const result = await new ReadTool(session).execute("deepseek-origin", { path: url });
+
+			expect(result.details?.method).toBe("native");
+			expect(result.content.find(block => block.type === "text")?.text).toContain("Local fallback article");
+			// DEEPSEEK_API_KEY remains set: rejecting a gateway must not fall back to it either.
+			expect(transport).not.toHaveBeenCalled();
+		},
+	);
+
+	it("accepts normalized official-origin config before environment credentials", async () => {
+		const registry = await createRegistry("https://API.DEEPSEEK.COM:443/v1", "official-config-key");
+		const attemptedKeys: string[] = [];
+		const session = makeSession(
+			mockFetch((input, init) => {
+				expect(String(input)).toBe(API_URL);
+				attemptedKeys.push(new Headers(init?.headers).get("authorization")!);
+				return Response.json({ content: MARKDOWN });
+			}),
+		);
+		session.modelRegistry = registry;
+
+		const result = await new ReadTool(session).execute("deepseek-origin", { path: url });
+
+		expect(result.details?.method).toBe("deepseek");
+		expect(attemptedKeys).toEqual(["Bearer official-config-key"]);
+	});
+
+	it("retains stored credential precedence and rotation after lazy registry initialization", async () => {
+		const registry = await createRegistry("https://api.deepseek.com/v1");
+		await registry.authStorage.credentials.set("deepseek", [
+			{ type: "api_key", key: "first-key", source: "login" },
+			{ type: "api_key", key: "second-key", source: "login" },
+		]);
+		const attemptedKeys: string[] = [];
+		const session = makeSession(
+			mockFetch((input, init) => {
+				expect(String(input)).toBe(API_URL);
+				const key = new Headers(init?.headers).get("authorization")!;
+				attemptedKeys.push(key);
+				return attemptedKeys.length === 1
+					? Response.json({ error: { message: "Invalid API key" } }, { status: 401 })
+					: Response.json({ content: MARKDOWN });
+			}),
+		);
+		session.ensureModelRegistry = async () => registry;
+
+		const result = await new ReadTool(session).execute("deepseek-origin", { path: url });
+
+		expect(result.details?.method).toBe("deepseek");
+		expect(attemptedKeys.toSorted()).toEqual(["Bearer first-key", "Bearer second-key"]);
+	});
 });

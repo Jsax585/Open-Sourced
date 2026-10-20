@@ -57,6 +57,22 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 	};
 
 	let authStorage: AuthStorage | undefined;
+	let authStoragePromise: Promise<AuthStorage> | undefined;
+	const ensureAuthStorage = (): Promise<AuthStorage> =>
+		(authStoragePromise ??= discoverAuthStorage(undefined, { settings }).then(storage => {
+			authStorage = storage;
+			session.authStorage = storage;
+			return storage;
+		}));
+	let modelRegistryPromise: Promise<ModelRegistry> | undefined;
+	session.ensureModelRegistry = () =>
+		(modelRegistryPromise ??= (async () => {
+			// Loading local model configuration installs configured provider keys without
+			// hydrating unrelated credentials or starting remote model discovery.
+			const registry = new ModelRegistry(await ensureAuthStorage(), undefined, { settings });
+			session.modelRegistry = registry;
+			return registry;
+		})());
 	let mcpManager: MCPManager | undefined;
 	let failed = false;
 
@@ -79,14 +95,14 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 		// MCP servers start only when a read reaches an MCP resource — `mcp://`, a scheme with no
 		// registered handler, or a skill:// URL no loaded skill owns — in any list entry.
 		MCPManager.setDeferredInstance(async () => {
-			authStorage ??= await discoverAuthStorage(undefined, { settings });
+			const storage = await ensureAuthStorage();
 			const result = await discoverAndLoadMCPTools(cwd, {
 				enableProjectConfig: cfgMcpEnableProjectConfig.get(settings),
 				filterExa: true,
 				// `omp read` has no Eval prelude, so browser MCP remains available.
 				filterBrowser: false,
 				cacheStorage: settings.getStorage(),
-				authStorage,
+				authStorage: storage,
 			});
 			mcpManager = result.manager;
 			session.mcpManager = mcpManager;
@@ -101,17 +117,10 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 		// resolving anything (issue #11338), and X reads report missing xAI
 		// credentials.
 		const urlTarget = parseReadUrlTarget(cmd.path);
-		// HTML reader backends need saved/configured credentials, but no model registry.
-		if (urlTarget) {
-			authStorage ??= await discoverAuthStorage(undefined, { settings });
-			session.authStorage = authStorage;
-		}
 		if (splitImageQuestionTarget(cmd.path).question || (urlTarget && parseXUrl(urlTarget.path))) {
-			authStorage ??= await discoverAuthStorage(undefined, { settings });
-			const modelRegistry = new ModelRegistry(authStorage);
+			const modelRegistry = await session.ensureModelRegistry();
 			await modelRegistry.hydrateCredentialScopedModelCaches();
 			await loadCliExtensionProviders(modelRegistry, settings, cwd);
-			session.modelRegistry = modelRegistry;
 		}
 
 		const tool = wrapToolWithMetaNotice(new ReadTool(session));
@@ -137,7 +146,13 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 			await mcpManager.disconnectAll();
 			if (MCPManager.instance() === mcpManager) MCPManager.setInstance(undefined);
 		}
-		authStorage?.close();
+		if (authStorage) authStorage.close();
+		// A reader deadline may win while broker discovery is still pending.
+		else
+			void authStoragePromise?.then(
+				storage => storage.close(),
+				() => {},
+			);
 		// Saves unsaved IDA changes and drops the host sockets that would keep the event loop alive.
 		await releaseIdaDatabases();
 		await closeDaemonClients();

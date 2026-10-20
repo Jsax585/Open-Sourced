@@ -5,6 +5,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async/job-manager";
 import type { Rule } from "../capability/rule";
 import type { EffectiveExtensionRoots } from "../capability/types";
+import type { ModelRegistry } from "../config/model-registry";
 import type { EvalPreludeDefinition } from "../eval/preludes";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
@@ -433,7 +434,9 @@ export interface ToolSession {
 	/** Auth storage for passing to subagents (avoids re-discovery) */
 	authStorage?: import("../session/auth-storage").AuthStorage;
 	/** Model registry for passing to subagents (avoids re-discovery) */
-	modelRegistry?: import("../config/model-registry").ModelRegistry;
+	modelRegistry?: ModelRegistry;
+	/** Lazily initialize model configuration and credentials for lightweight CLI sessions. */
+	ensureModelRegistry?: () => Promise<ModelRegistry>;
 	/** Agent output manager for unique agent:// IDs across task invocations */
 	agentOutputManager?: AgentOutputManager;
 	/** Manager of this session's root, shared only with that root's subagents. */

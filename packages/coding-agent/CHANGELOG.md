@@ -8,7 +8,8 @@
 
 ### Fixed
 
-- Fixed standalone `omp read URL` using the local fallback instead of DeepSeek when the API key was saved through `/login deepseek` rather than an environment variable ([#16186](https://github.com/can1357/oh-my-pi/pull/16186) by [@stabey](https://github.com/stabey)).
+- Fixed standalone DeepSeek reads ignoring saved or model-configured keys, including URLs inside read lists; credential-free reads no longer depend on auth-broker availability ([#16186](https://github.com/can1357/oh-my-pi/pull/16186) by [@stabey](https://github.com/stabey)).
+- Prevented DeepSeek Fetch from sending credentials to the official API when the provider is configured for a custom gateway origin; those reads use the normal fallbacks instead ([#16186](https://github.com/can1357/oh-my-pi/pull/16186) by [@stabey](https://github.com/stabey)).
 - Fixed remote HTML readers exceeding the shared render deadline during fallback while preserving local rendering of already-loaded pages ([#16186](https://github.com/can1357/oh-my-pi/pull/16186) by [@stabey](https://github.com/stabey)).
 - Fixed `read` middle-eliding large file pages into an artifact; a page past the output spill threshold now stops at a line boundary with an exact `:N` continuation ([#16277](https://github.com/can1357/oh-my-pi/issues/16277))
 - Fixed an edit after a restart replacing a line that `read` or `grep` had shown cut at the column cap and silently dropping the rest of that line; such edits now ask for a full `:raw` read of the line first, while edits to lines within the cap still apply ([#16171](https://github.com/can1357/oh-my-pi/issues/16171))

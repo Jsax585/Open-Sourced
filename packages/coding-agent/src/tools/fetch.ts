@@ -19,7 +19,7 @@ import { webpExclusionForModel } from "@oh-my-pi/pi-tui/chat/image-loading";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { CONVERTIBLE_EXTENSIONS } from "../utils/markit";
 import { ensureTool } from "../utils/tools-manager";
-import { fetchWithDeepSeek } from "../web/deepseek";
+import { DEEPSEEK_FETCH_ORIGIN, fetchWithDeepSeek } from "../web/deepseek";
 import { decodeBody } from "../web/response-body";
 import { findFirecrawlApiKey, scrapeWithFirecrawl } from "../web/firecrawl";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "../web/parallel";
@@ -1696,7 +1696,6 @@ export async function fetchReadUrl(
 	}
 
 	const storage = session.settings.getStorage();
-	const authStorage = session.authStorage ?? session.modelRegistry?.authStorage;
 	let result = await renderUrl(
 		url,
 		effectiveTimeout,
@@ -1707,7 +1706,25 @@ export async function fetchReadUrl(
 		session.modelRegistry,
 		session.fetch,
 		webpExclusionForModel(session.getActiveModel?.()),
-		authStorage?.keys.resolver("deepseek", { sessionId: session.getSessionId?.() ?? undefined }),
+		async ctx => {
+			ctx.signal?.throwIfAborted();
+			const modelRegistry = session.modelRegistry ?? (await session.ensureModelRegistry?.());
+			ctx.signal?.throwIfAborted();
+			const baseUrl = modelRegistry?.getProviderBaseUrl("deepseek");
+			if (baseUrl !== undefined) {
+				try {
+					// Gateway credentials cannot be sent to DeepSeek's fixed official tools endpoint.
+					if (new URL(baseUrl).origin !== DEEPSEEK_FETCH_ORIGIN) return undefined;
+				} catch {
+					return undefined;
+				}
+			}
+			const authStorage = session.authStorage ?? modelRegistry?.authStorage;
+			// Forward the complete retry context and resolution metadata without unwrapping the bearer.
+			return authStorage
+				? authStorage.keys.resolver("deepseek", { sessionId: session.getSessionId?.() ?? undefined })(ctx)
+				: getEnvApiKey("deepseek");
+		},
 	);
 	if (result.truncated) {
 		// Covers special handlers and every renderUrl branch, whichever response supplied the content.

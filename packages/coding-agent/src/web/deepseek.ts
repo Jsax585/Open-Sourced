@@ -2,7 +2,8 @@ import { type ApiKey, type FetchImpl, getEnvApiKey, withAuth } from "@oh-my-pi/p
 import { fetchWithRetry, readBodyCapped, untilAborted } from "@oh-my-pi/pi-utils";
 import { withHardTimeout } from "./search/providers/utils";
 
-const DEEPSEEK_FETCH_URL = "https://api.deepseek.com/v1/tools/fetch";
+export const DEEPSEEK_FETCH_ORIGIN = "https://api.deepseek.com";
+const DEEPSEEK_FETCH_URL = `${DEEPSEEK_FETCH_ORIGIN}/v1/tools/fetch`;
 /** Longer server waits should yield to the next reader backend. */
 const RETRY_MAX_DELAY_MS = 2_000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
