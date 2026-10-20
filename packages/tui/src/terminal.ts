@@ -2051,12 +2051,12 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	/** Hand APC titles back to tmux once this pane stops speaking TSP. */
-	#endTspTmuxPane(): void {
+	#endTspTmuxPane(restoreMode = true): void {
 		clearTimeout(this.#tspTimeout);
 		this.#tspTimeout = undefined;
 		if (!this.#tspTmuxPaneGated) return;
 		this.#tspTmuxPaneGated = false;
-		setTmuxPaneApcTitles(true, $env);
+		if (restoreMode) setTmuxPaneApcTitles(true, $env);
 	}
 
 	#handleTspMessage(sequence: string): void {
@@ -2182,13 +2182,13 @@ export class ProcessTerminal implements Terminal {
 		for (const key of pending) this.#stdinSequenceHandler?.(key);
 	}
 
-	#disableWin32InputMode(): void {
+	#disableWin32InputMode(resetMode = true): void {
 		if (!this.#win32InputDecoder) return;
 		this.#win32PasteNormalizer?.flush();
 		this.#win32PasteNormalizer = undefined;
 		// Held input still belongs to the user (e.g. Escape before a late kitty reply).
 		this.#releaseWin32PendingSequence();
-		this.#safeWrite("\x1b[?9001l");
+		if (resetMode) this.#safeWrite("\x1b[?9001l");
 		this.#win32InputDecoder = undefined;
 	}
 
@@ -2392,6 +2392,13 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	stop(): void {
+		const owner = getActiveTerminal();
+		const resetModes = owner === null || owner === this;
+		if (!resetModes && owner instanceof ProcessTerminal && this.#stdoutResizeListener) {
+			// The survivor started while our raw mode was already enabled.
+			// Its final stop must restore the state from before either session.
+			owner.#wasRaw = this.#wasRaw;
+		}
 		// Suppress observer/timer callbacks before any teardown can yield or throw.
 		this.#active = false;
 		this.#inputDeferred = false;
@@ -2431,27 +2438,29 @@ export class ProcessTerminal implements Terminal {
 		this.#clearProgressTimer();
 		if (this.#progressActive) {
 			this.#progressActive = false;
-			this.#safeWrite(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
+			if (resetModes) this.#safeWrite(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
 		}
 
 		// Leave paint-time terminal modes even if the process exits between the
 		// begin/end halves of a frame. Safe no-ops on terminals that ignored them.
-		this.#safeWrite("\x1b[?2026l\x1b[?7h");
+		if (resetModes) this.#safeWrite("\x1b[?2026l\x1b[?7h");
 
 		// Restore normal cursor-key (DECCKM) and numeric-keypad mode (terminfo
 		// `rmkx`). Symmetric with the normalize in start(): a TTY-sharing child
 		// can leave the terminal in application-cursor-keys mode, and without
 		// this reset the parent shell inherits SS3 arrows so Up/Down history
 		// navigation stays broken after omp exits (#6374).
-		this.#safeWrite("\x1b[?1l\x1b>");
+		if (resetModes) this.#safeWrite("\x1b[?1l\x1b>");
 
 		// Disable bracketed paste mode
-		this.#safeWrite("\x1b[?2004l");
-		this.#safeWrite("\x1b[?5522l");
+		if (resetModes) {
+			this.#safeWrite("\x1b[?2004l");
+			this.#safeWrite("\x1b[?5522l");
+		}
 
 		// Hand the cursor shape back to the user's terminal configuration; a Vim
 		// Normal-mode block must not outlive the session in their shell.
-		if (this.#cursorShape !== undefined && this.#cursorShape !== "default") {
+		if (resetModes && this.#cursorShape !== undefined && this.#cursorShape !== "default") {
 			this.#safeWrite(`\x1b[${CURSOR_SHAPE_CODES.default} q`);
 		}
 		this.#cursorShape = undefined;
@@ -2459,19 +2468,19 @@ export class ProcessTerminal implements Terminal {
 		// Disable mouse tracking (enabled only by fullscreen overlays; safe
 		// no-ops otherwise). Covers crash paths that reach stop() without the
 		// TUI's own overlay teardown running.
-		this.#safeWrite("\x1b[?1006l\x1b[?1003l\x1b[?1000l");
+		if (resetModes) this.#safeWrite("\x1b[?1006l\x1b[?1003l\x1b[?1000l");
 
 		// Disable Mode 2031 appearance change notifications
-		this.#safeWrite("\x1b[?2031l");
+		if (resetModes) this.#safeWrite("\x1b[?2031l");
 
 		// Restore xterm scroll-to-bottom modes that were set before startup.
 		for (const mode of this.#xtermScrollToBottomRestoreModes) {
-			this.#safeWrite(`\x1b[?${mode}h`);
+			if (resetModes) this.#safeWrite(`\x1b[?${mode}h`);
 		}
 		this.#xtermScrollToBottomRestoreModes.clear();
 
 		if (this.#inBandResizeActive) {
-			this.#safeWrite("\x1b[?2048l");
+			if (resetModes) this.#safeWrite("\x1b[?2048l");
 			this.#inBandResizeActive = false;
 		}
 		if (this.#mode2031DebounceTimer) {
@@ -2492,16 +2501,16 @@ export class ProcessTerminal implements Terminal {
 		this.#osc99PendingId = undefined;
 		this.#osc99ResponseBuffer = "";
 		this.#osc99Capabilities.clear();
-		setOsc99Supported(false);
+		if (resetModes) setOsc99Supported(false);
 		this.#glyphProtocolPhase = "idle";
 		this.#glyphProtocolResult = undefined;
 		this.#glyphProtocolReplyBuffer = "";
 		this.#glyphProtocolCallbacks = [];
 		this.#sixelSupport = undefined;
 		this.#sixelSupportCallbacks = [];
-		setTerminalGlyphProtocol(false);
+		if (resetModes) setTerminalGlyphProtocol(false);
 		this.#tspPending = false;
-		this.#endTspTmuxPane();
+		this.#endTspTmuxPane(resetModes);
 		this.#tspResult = undefined;
 		this.#tspReplyBuffer = "";
 		this.#tspCallbacks = [];
@@ -2517,21 +2526,21 @@ export class ProcessTerminal implements Terminal {
 
 		// Disable Kitty keyboard protocol if not already done by drainInput()
 		if (this.#kittyProtocolActive) {
-			this.#safeWrite("\x1b[<u");
+			if (resetModes) this.#safeWrite("\x1b[<u");
 			this.#kittyProtocolActive = false;
-			setKittyProtocolActive(false);
+			if (resetModes) setKittyProtocolActive(false);
 		}
 		if (this.#modifyOtherKeysTimeout) {
 			clearTimeout(this.#modifyOtherKeysTimeout);
 			this.#modifyOtherKeysTimeout = undefined;
 		}
 		if (this.#modifyOtherKeysActive) {
-			this.#safeWrite("\x1b[>4;0m");
+			if (resetModes) this.#safeWrite("\x1b[>4;0m");
 			this.#modifyOtherKeysActive = false;
 		}
-		this.#disableWin32InputMode();
+		this.#disableWin32InputMode(resetModes);
 
-		this.#restoreWindowsVTInput();
+		if (resetModes) this.#restoreWindowsVTInput();
 		// Clean up StdinBuffer
 		if (this.#stdinBuffer) {
 			this.#stdinBuffer.destroy();
@@ -2568,7 +2577,7 @@ export class ProcessTerminal implements Terminal {
 		// Pause stdin to prevent any buffered input (e.g., Ctrl+D) from being
 		// re-interpreted after raw mode is disabled. This fixes a race condition
 		// where Ctrl+D could close the parent shell over SSH.
-		process.stdin.pause();
+		if (resetModes) process.stdin.pause();
 
 		// Restore raw mode state. On a disconnected terminal (pane recycled, ssh
 		// dropped) the fd is no longer a tty and Bun's node:tty shim throws; there
@@ -2576,7 +2585,7 @@ export class ProcessTerminal implements Terminal {
 		// live terminal the failure still surfaces - swallowing it would silently
 		// leave stdin in raw mode.
 		try {
-			process.stdin.setRawMode?.(this.#wasRaw);
+			if (resetModes) process.stdin.setRawMode?.(this.#wasRaw);
 		} catch (err) {
 			if (!this.#dead) throw err;
 		}

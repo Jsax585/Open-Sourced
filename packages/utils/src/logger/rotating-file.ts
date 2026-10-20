@@ -94,8 +94,9 @@ export class RotatingFileSink {
 	}
 
 	#openFd(filePath: string): void {
+		const fd = openCloexecSync(filePath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND, 0o600);
 		this.#closeFd();
-		this.#fd = openCloexecSync(filePath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND, 0o600);
+		this.#fd = fd;
 		try {
 			this.#onRotate?.(filePath);
 		} catch {
@@ -204,44 +205,38 @@ export class RotatingFileSink {
 			}
 			if (this.#activeBytes <= this.#maxBytes) return;
 		}
-		// The buffered records belong to the current file: write them there, then
-		// close its descriptor BEFORE the next file is registered, because
-		// registration prunes beyond maxFiles — on Windows the pruned
-		// predecessor cannot be deleted while still open, which would leak it.
+		// Flush to the old target, but retain its selection and fd until the
+		// successor opens. A failed timer rotation must retry, not strand raw
+		// writers on an untracked predecessor or prune their only working file.
 		this.flush();
-		this.#closeFd();
-		if (dayChanged) {
-			this.#activeDay = day;
-			this.#activeIndex = 0;
-			this.#setActivePath(day, 0);
+		let index = dayChanged ? 0 : this.#activeIndex;
+		let filePath: string;
+		let bytes: number;
+		const adoptedFiles: string[] = [];
+		for (;;) {
+			const suffix = index === 0 ? "" : `.${index}`;
+			filePath = path.join(this.#directory, `${this.#filenamePrefix}.${day}.${this.#filenameSuffix}.log${suffix}`);
+			try {
+				bytes = fs.statSync(filePath).size;
+				adoptedFiles.push(filePath);
+			} catch {
+				bytes = 0;
+			}
+			if (bytes <= this.#maxBytes) break;
+			index++;
 		}
-		while (this.#activeBytes > this.#maxBytes) {
-			this.#activeIndex++;
-			this.#setActivePath(day, this.#activeIndex);
+		if (index > 0 || (dayChanged && hadPriorSelection)) {
+			this.#openFd(filePath);
 		}
-		if (this.#activePath && (this.#activeIndex > 0 || (dayChanged && hadPriorSelection))) {
-			this.#registerFile(this.#activePath);
-			this.#openFd(this.#activePath);
-		}
-	}
-
-	#setActivePath(day: string, index: number): void {
-		const suffix = index === 0 ? "" : `.${index}`;
-		this.#activePath = path.join(
-			this.#directory,
-			`${this.#filenamePrefix}.${day}.${this.#filenameSuffix}.log${suffix}`,
-		);
-		try {
-			this.#activeBytes = fs.statSync(this.#activePath).size;
-			// A guard or earlier owner may have created this path before the sink.
-			// Adopt it before selection can advance, so retention counts it too.
-			this.#registerFile(this.#activePath);
-		} catch {
-			this.#activeBytes = 0;
-		}
-		// The fresh file's authoritative size was just sampled; start the
-		// external-check window here so following records stay on the counter.
+		this.#activeDay = day;
+		this.#activeIndex = index;
+		this.#activePath = filePath;
+		this.#activeBytes = bytes;
 		this.#lastExternalCheckMs = Date.now();
+		// Opening closed the predecessor and notified external owners before
+		// retention tries to unlink it (required on Windows).
+		for (const adopted of adoptedFiles) this.#registerFile(adopted);
+		if (this.#fd !== undefined) this.#registerFile(filePath);
 	}
 
 	/** Select/open the canonical file before an external writer receives its path. */

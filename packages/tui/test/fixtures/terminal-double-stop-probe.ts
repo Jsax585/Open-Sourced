@@ -23,11 +23,15 @@ b.start(
 	() => {},
 );
 note(`after-start=${isTerminalOutputSuppressed()}`);
+a.write("\x1b]0;STOP_OLDER_BEGIN\x07");
 a.stop();
 note(`after-first-stop=${isTerminalOutputSuppressed()}`);
 // Emergency cleanup already stopped `a`; the owner's later teardown calls
 // stop() again. This must stay a no-op for the shared guard.
 a.stop();
 note(`after-double-stop=${isTerminalOutputSuppressed()}`);
+note(`survivor-raw=${process.stdin.isRaw}`);
+b.write("\x1b]0;STOP_OLDER_END\x07");
 b.stop();
 note(`after-b-stop=${isTerminalOutputSuppressed()}`);
+note(`final-raw=${process.stdin.isRaw}`);

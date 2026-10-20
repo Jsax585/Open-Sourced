@@ -225,6 +225,38 @@ describe("canonical process log targets", () => {
 });
 
 describe("RotatingFileSink batching", () => {
+	test("failed external rotation retries the successor without losing the old target or buffered records", () => {
+		vi.useFakeTimers();
+		const rotations: string[] = [];
+		const listenerSink = new RotatingFileSink({
+			directory: dir,
+			filenamePrefix: "retry",
+			filenameSuffix: "1234",
+			maxBytes: 10_000,
+			maxFiles: 1,
+			batch: { intervalMs: 300, maxBytes: FLUSH_BYTES },
+			onRotate: filePath => rotations.push(filePath),
+		});
+		try {
+			const first = listenerSink.openForExternalWrites();
+			const next = `${first}.1`;
+			fs.mkdirSync(next);
+			listenerSink.write("buffered before failure");
+			fs.appendFileSync(first, "x".repeat(10_001));
+			vi.advanceTimersByTime(300);
+			expect(rotations).toEqual([first]);
+			expect(fs.readFileSync(first, "utf8")).toContain("buffered before failure");
+			fs.rmSync(next, { recursive: true });
+			vi.advanceTimersByTime(300);
+			expect(rotations).toEqual([first, next]);
+			listenerSink.write("after retry", true);
+			expect(fs.readFileSync(next, "utf8")).toBe(`after retry${os.EOL}`);
+			expect(fs.existsSync(first)).toBe(false);
+		} finally {
+			listenerSink.close();
+		}
+	});
+
 	test("external growth is watched without any logger record at all", () => {
 		vi.useFakeTimers();
 		try {

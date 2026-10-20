@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { getLogPath } from "../../src/dirs";
 import * as logger from "../../src/logger";
 import { getLogsDir } from "../../src/dirs";
 import { acquireProcessLogTarget, getProcessLogSink, onProcessLogTargetChanged } from "../../src/logger/process-log";
@@ -117,6 +118,7 @@ switch (scenario) {
 	case "default-file":
 		logger.info("mode-default", { mode: "default" });
 		disableTransports();
+		writeResult({ logPath: getLogPath() });
 		break;
 	case "file-only":
 		logger.setTransports({ console: false, file: primaryDir });

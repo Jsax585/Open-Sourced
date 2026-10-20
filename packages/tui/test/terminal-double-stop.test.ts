@@ -10,14 +10,23 @@ import * as path from "node:path";
 // otherwise unmanaged output corrupts its live frame.
 
 describe.skipIf(process.platform === "win32")("ProcessTerminal double stop", () => {
-	it("keeps the surviving instance's suppression across a repeated stop", async () => {
+	it("preserves the surviving terminal's modes and raw input across a repeated older-owner stop", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "terminal-double-stop-"));
 		const state = path.join(root, "state.txt");
+		const chunks: Buffer[] = [];
+		const env: NodeJS.ProcessEnv = { ...process.env, HOME: root, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" };
+		delete env.PI_TEST_RUNTIME;
+		delete env.BUN_ENV;
+		delete env.NODE_ENV;
 		const child = Bun.spawn(
 			[process.execPath, path.resolve(import.meta.dir, "fixtures/terminal-double-stop-probe.ts"), state],
 			{
-				env: { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
-				terminal: {},
+				env,
+				terminal: {
+					data(_terminal, data) {
+						chunks.push(Buffer.from(data));
+					},
+				},
 				timeout: 10_000,
 			},
 		);
@@ -34,6 +43,17 @@ describe.skipIf(process.platform === "win32")("ProcessTerminal double stop", () 
 			expect(lines["after-first-stop"]).toBe("true");
 			expect(lines["after-double-stop"]).toBe("true");
 			expect(lines["after-b-stop"]).toBe("false");
+			expect(lines["survivor-raw"]).toBe("true");
+			expect(lines["final-raw"]).toBe("false");
+			const stream = Buffer.concat(chunks).toString();
+			const begin = stream.indexOf("\x1b]0;STOP_OLDER_BEGIN\x07");
+			const end = stream.indexOf("\x1b]0;STOP_OLDER_END\x07");
+			expect(begin).toBeGreaterThanOrEqual(0);
+			expect(end).toBeGreaterThan(begin);
+			const olderStop = stream.slice(begin, end);
+			expect(olderStop).not.toContain("\x1b[?2004l");
+			expect(olderStop).not.toContain("\x1b[?1006l");
+			expect(olderStop).not.toContain("\x1b[?2031l");
 		} finally {
 			child.kill();
 			fs.rmSync(root, { recursive: true, force: true });

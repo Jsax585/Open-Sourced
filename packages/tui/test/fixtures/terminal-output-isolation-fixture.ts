@@ -18,7 +18,8 @@
  * ST_* status markers, LIVE_<cols>x<rows> geometry report from the child's own
  * process.stdout).
  */
-import { setTerminalHeadless } from "@oh-my-pi/pi-utils";
+import * as fs from "node:fs";
+import { getLogsDir, setTerminalHeadless } from "@oh-my-pi/pi-utils";
 import { TUI } from "@oh-my-pi/pi-tui";
 import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
 import { installIsolationScenario } from "./terminal-output-isolation-scenario";
@@ -31,6 +32,9 @@ if (!process.stdin.isTTY || !process.stdout.isTTY) {
 if (process.env.OMP_ISOLATION_FALLBACK === "1") {
 	setTerminalHeadless(false);
 }
+
+const logDirectoryFile = process.env.OMP_ISOLATION_LOG_DIRECTORY_FILE;
+if (logDirectoryFile) fs.writeFileSync(logDirectoryFile, getLogsDir());
 
 const tui = new TUI(new ProcessTerminal());
 

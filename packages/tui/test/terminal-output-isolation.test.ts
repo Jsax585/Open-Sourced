@@ -102,7 +102,7 @@ interface FixtureSession {
 	waitFor(marker: string, timeoutMs?: number): Promise<void>;
 	/** Replay the whole PTY stream into a fresh VirtualTerminal and return the viewport text. */
 	snapshotViewport(columns?: number, rows?: number): string;
-	/** Concatenated contents of every omp log file under the child's isolated HOME ("" when none). */
+	/** Concatenated contents of every log in the child's effective isolated log directory. */
 	logContents(): string;
 	/** Raw PTY byte stream accumulated so far. */
 	rawStream(): string;
@@ -138,11 +138,10 @@ function isolatedEnv(home: string, testDir: string, extra: Record<string, string
 
 function launchFixture(options: LaunchOptions = {}): FixtureSession {
 	const { home, testDir } = isolatedDirs();
-	const env = isolatedEnv(
-		home,
-		testDir,
-		options.fallback ? { PI_TEST_RUNTIME: "1", OMP_ISOLATION_FALLBACK: "1" } : {},
-	);
+	const env = isolatedEnv(home, testDir, {
+		...(options.fallback ? { PI_TEST_RUNTIME: "1", OMP_ISOLATION_FALLBACK: "1" } : {}),
+		OMP_ISOLATION_LOG_DIRECTORY_FILE: path.join(testDir, "logs-directory.txt"),
+	});
 
 	const session = new PtySession();
 	let stream = "";
@@ -262,7 +261,7 @@ function launchFixture(options: LaunchOptions = {}): FixtureSession {
 	activeDisposals.push(dispose);
 
 	function logContents(): string {
-		const logsDir = path.join(home, ".omp", "logs");
+		const logsDir = fs.readFileSync(path.join(testDir, "logs-directory.txt"), "utf8");
 		let names: string[] = [];
 		try {
 			names = fs.readdirSync(logsDir).filter(name => name.endsWith(".log"));
