@@ -2,9 +2,9 @@
 
 ## [Unreleased]
 
-### Added
+### Changed
 
-- Instruction reads from `skill://`, `rule://` and `omp://` appear as compact transcript rows; ordinary Markdown file reads retain their rendered previews ([#16516](https://github.com/can1357/oh-my-pi/pull/16516) by [@Komzpa](https://github.com/Komzpa))
+- `skill://`, `rule://` and `omp://` reads now collapse into the compact `Read (N)` group instead of rendering full result cards ([#16516](https://github.com/can1357/oh-my-pi/pull/16516) by [@Komzpa](https://github.com/Komzpa))
 
 ### Fixed
 

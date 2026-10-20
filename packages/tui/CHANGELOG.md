@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Compact read rows now name why a read failed, so a failed `skill://`, `rule://` or file read keeps its diagnostic when previews are off ([#16516](https://github.com/can1357/oh-my-pi/pull/16516) by [@Komzpa](https://github.com/Komzpa))
+
 ## [18.12.3] - 2026-10-19
 
 ### Added
