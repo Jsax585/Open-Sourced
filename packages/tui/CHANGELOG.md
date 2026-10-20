@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added optional runtime HUD/input allocation against rendered sibling rows in normal and resize Composer frames ([#16520](https://github.com/can1357/oh-my-pi/pull/16520) by [@Komzpa](https://github.com/Komzpa))
+
 ## [18.12.3] - 2026-10-19
 
 ### Added
