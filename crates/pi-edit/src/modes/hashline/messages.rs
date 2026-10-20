@@ -456,6 +456,17 @@ pub fn ambiguous_boundary_placement_message(start_line: u32, end_line: u32) -> S
 	)
 }
 
+/// A one-row replacement fails to parse only because its body ends in a
+/// comma the surrounding syntax rejects (the last element of a JSON array).
+pub fn trailing_comma_replacement_message(start_line: u32, end_line: u32) -> String {
+	format!(
+		"`PUT {start_line}{HL_RANGE_SEP}{end_line}:` rejected: the body's last non-blank row ends \
+		 with a comma that does not parse in place (e.g. a trailing comma before a closing `]` or \
+		 `}}`); without that comma this replacement parses. Drop the comma, or include the rows \
+		 that should follow it in the same body."
+	)
+}
+
 /// Exact-text boundary rows were removed because the remaining payload covers
 /// the selected range and the same rows already survive immediately outside it.
 pub fn textual_boundary_echo_warning(start_line: u32, leading: u32, trailing: u32) -> String {
@@ -720,16 +731,6 @@ pub fn write_drift_warning(path: &str) -> String {
 		 (editor/IDE) likely reformatted it on save (e.g. format-on-save, tab/space settings). The \
 		 returned snapshot reflects the actual file; re-read before further edits if the extra \
 		 changes were unexpected."
-	)
-}
-
-/// Section omitted the mandatory snapshot tag. Shared by the apply
-/// (`Patcher.prepare`) and preview/diff paths so both stay in lockstep.
-pub fn missing_snapshot_tag_message(section_path: &str) -> String {
-	format!(
-		"Missing hashline snapshot tag for {section_path}; use \
-		 `{HL_FILE_PREFIX}{section_path}{HL_FILE_HASH_SEP}tag{HL_FILE_SUFFIX}` from your latest \
-		 read/search output. To create a new file, use the write tool."
 	)
 }
 
