@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [18.12.4] - 2026-10-20
+
+### Added
+
+- Added native Inception support with Mercury 3, Mercury 2.5, and Mercury 2, live chat-model discovery, API-key login, reasoning controls, and Mercury 3 launch pricing while its catalog reports none; Mercury 3 waits up to 10 minutes for its first output, since high-effort reasoning streams nothing ([#16439](https://github.com/can1357/oh-my-pi/pull/16439) by [@eggpeat](https://github.com/eggpeat))
+
+### Changed
+
+- Changed Devin model discovery to send legacy Windsurf Enterprise keys unprefixed in one request, dropping the Windsurf-editor retry that returned a smaller model list ([#13677](https://github.com/can1357/oh-my-pi/pull/13677) by [@will-bogusz](https://github.com/will-bogusz))
+
 ### Fixed
 
 - Factory Droid now carries Droid's 3.5 MB inline-image budget (`inline-image-byte-budget`) for its hosted routes, under their 4.5 MB request limit, and the new `request-body-byte-limit` axis (`resolveRequestBodyByteLimit`) records that limit; it applies on Factory's own hosts through pi-ai's `reachesBudgetedHost` ([#16288](https://github.com/can1357/oh-my-pi/pull/16288) by [@will-bogusz](https://github.com/will-bogusz))
