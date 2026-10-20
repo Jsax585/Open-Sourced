@@ -62,7 +62,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "./utils";
-import { tmuxClientRendersSixel, wrapTmuxPassthroughIfNeeded } from "./tmux";
+import { tmuxClientRendersSixel } from "./tmux";
 
 /** Full-attribute reset terminating each rendered content row. */
 export const SEGMENT_RESET = "\x1b[0m";
@@ -2573,11 +2573,12 @@ export class TUI extends Container {
 		this.terminal.write("\x1b[16t");
 		// iTerm2 never answers CSI 16 t. Without a size, rows reserved for an image
 		// and crops of a partly scrolled one assume 9x18 cells and land offset.
-		// Under tmux the query must travel in the DCS passthrough envelope like
-		// the inline images themselves — bare OSC 1337 is swallowed by the
-		// multiplexer before reaching the client terminal.
-		if (TERMINAL.imageProtocol === ImageProtocol.Iterm2)
-			this.terminal.write(wrapTmuxPassthroughIfNeeded("\x1b]1337;ReportCellSize\x1b\\"));
+		// Never query through a multiplexer: tmux forwards the wrapped query but
+		// cannot route the reply back to the sending pane (tmux/tmux#4386,
+		// tmux/tmux#3964), so it leaks into whichever pane has focus when the
+		// client answers. Images keep the 9x18 default under tmux.
+		if (TERMINAL.imageProtocol === ImageProtocol.Iterm2 && !isInsideTerminalMultiplexer())
+			this.terminal.write("\x1b]1337;ReportCellSize\x1b\\");
 	}
 
 	/**
