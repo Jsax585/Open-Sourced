@@ -32,6 +32,7 @@ import type {
 	ClientBridgeTerminalHandle,
 	ClientBridgeTerminalOutput,
 } from "../session/client-bridge";
+import { messagingEnvFor } from "../session/messaging-host";
 import { DEFAULT_MAX_BYTES, enforceInlineByteCap } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
 import { TerminalGraphicsDecoder } from "../utils/terminal-graphics";
@@ -899,10 +900,11 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				};
 				const { path: artifactPath, id: artifactId } = (await this.session.allocateOutputArtifact?.("bash")) ?? {};
 				const wallTimeStart = performance.now();
+				const messagingEnv = messagingEnvFor(this.session.messagingSession);
 				try {
 					const result = await executeBash(options.command, {
 						cwd: options.commandCwd,
-						env: options.sessionEnv,
+						env: { ...options.sessionEnv, ...messagingEnv.set },
 						// A call that starts in the foreground runs in the session's
 						// persistent shell, like the direct path, so its variables,
 						// functions, and options reach the next call even after it is
@@ -911,6 +913,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						sessionKey: options.foreground ? options.sessionId : `${options.sessionId ?? ""}:async:${jobId}`,
 						isSessionCurrent: () => (this.session.getSessionId?.() ?? undefined) === options.sessionId,
 						timeout: options.timeoutMs ?? 0,
+						stripEnv: this.session.messagingSession?.messaging ? undefined : messagingEnv.strip,
 						signal: runSignal,
 						gitGuard: cfgBashGitGuard.get(this.session.settings),
 						// Bound to the job's own signal: the job outlives the call that started it.
@@ -1288,6 +1291,8 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				notices,
 			});
 		}
+		const messagingEnv = messagingEnvFor(this.session.messagingSession);
+		const stripEnv = this.session.messagingSession?.messaging ? undefined : messagingEnv.strip;
 
 		// Fold direnv/devenv env into (command, env) ONCE for the two backends
 		// that bypass `executeBash` — the ACP client terminal and the PTY. The
@@ -1302,7 +1307,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const backendPreflight =
 			bridgeTerminalAvailable || canUseInteractiveBashPty(pty === true, ctx)
 				? await applyDirenvPreflight(command, commandCwd, {
-						callerEnv: sessionEnv,
+						callerEnv: { ...sessionEnv, ...messagingEnv.set },
 						signal,
 						timeoutMs: cfgBashDirenvLoadTimeoutMs.get(this.session.settings),
 						callerTimeoutMs: timeoutMs,
@@ -1376,15 +1381,14 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				// direnv-transformed command (carries any `unset -v` prefix) + direnv
 				// env; falls back to the raw command when direnv is off/absent.
 				const bridgeCommand = backendPreflight?.command ?? command;
-				const bridgeEnv = backendPreflight?.env;
+				const bridgeEnv = { ...backendPreflight?.env, ...messagingEnv.set };
+				for (const key of stripEnv ?? []) delete bridgeEnv[key];
 				const shellSpawn = wrapShellLineForClientTerminal(bridgeCommand, this.session.settings.getShellConfig());
 				const createP = clientBridge.createTerminal({
 					command: shellSpawn.command,
 					args: shellSpawn.args,
 					cwd: commandCwd,
-					env: bridgeEnv
-						? Object.entries(bridgeEnv).map(([name, value]) => ({ name, value: value as string }))
-						: undefined,
+					env: Object.entries(bridgeEnv).map(([name, value]) => ({ name, value })),
 					outputByteLimit: DEFAULT_MAX_BYTES,
 				});
 				const createRaced = await Promise.race([
@@ -1603,6 +1607,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					timeoutMs,
 					signal,
 					env: backendPreflight?.env,
+					stripEnv,
 					artifactPath,
 					artifactId,
 				})
@@ -1610,10 +1615,11 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				// command here so the unset prefix is not applied twice.
 				await executeBash(command, {
 					cwd: commandCwd,
-					env: sessionEnv,
+					env: { ...sessionEnv, ...messagingEnv.set },
 					sessionKey: sessionId,
 					isSessionCurrent: () => (this.session.getSessionId?.() ?? undefined) === sessionId,
 					timeout: timeoutMs ?? 0,
+					stripEnv,
 					signal,
 					gitGuard: cfgBashGitGuard.get(this.session.settings),
 					filesystem: this.#urlFilesystem(signal, approvalTier).shellFilesystem(),
