@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed soft-requirement skips of `wait` calls rendering nothing in `render()`; only interrupt skips are hidden now, so the "waiting for <tool>" status shows ([#16535](https://github.com/can1357/oh-my-pi/pull/16535) by [@Komzpa](https://github.com/Komzpa))
+
 ## [18.12.3] - 2026-10-19
 
 ### Added
