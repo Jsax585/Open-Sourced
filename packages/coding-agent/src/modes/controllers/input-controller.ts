@@ -1943,6 +1943,16 @@ export class InputController {
 			}
 		}
 
+		if (this.#guestRefusesSlash(text)) {
+			this.ctx.showStatus(`${text.split(/\s+/, 1)[0]} is host-only during a collab session`);
+			return;
+		}
+		if (this.ctx.collabGuest?.readOnly && !text.startsWith("/")) {
+			restoreDetachedDraft(this.ctx.editor, text, images, imageLinks);
+			this.ctx.showStatus("This collab link is read-only — prompting is disabled");
+			return;
+		}
+
 		// Compaction first: while compacting, free text gets queued via
 		// `queueCompactionMessage`, and `/skill:*` rides the same queue so a
 		// skill typed during compaction is not lost or short-circuited through
@@ -1986,6 +1996,16 @@ export class InputController {
 		// Bash and python input stay ungated here, as they always were.
 		if (this.ctx.collabGuest && text.startsWith("/")) {
 			this.ctx.showStatus(`${text.split(/\s+/, 1)[0]} is host-only during a collab session`);
+			return;
+		}
+		if (this.ctx.collabGuest) {
+			if (this.ctx.collabGuest.readOnly) {
+				restoreDetachedDraft(this.ctx.editor, text, images, imageLinks);
+				this.ctx.showStatus("This collab link is read-only — prompting is disabled");
+			} else {
+				if (text !== recordedHistoryText) this.ctx.editor.addToHistory(text);
+				this.ctx.collabGuest.sendPrompt(text, images);
+			}
 			return;
 		}
 

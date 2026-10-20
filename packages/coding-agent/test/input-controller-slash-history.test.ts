@@ -621,14 +621,30 @@ describe("input controller — bare slash commands opt-in", () => {
 
 	it("still arms another command during a guided interview, so the exemption stays narrow", async () => {
 		await enable();
-		const { ctx, editor, interview } = makeCtx(false, [{ role: "user", content: "hello" }] as AgentMessage[]);
+		const { ctx, editor, interview, prompt, onInputCallback, addToHistory } = makeCtx(false, [
+			{ role: "user", content: "hello" },
+		] as AgentMessage[]);
 		interview.mockReturnValue(true);
 		ctx.fileSlashCommands.add("alpha");
 		controllerFor(ctx);
 
 		await editor.onSubmit?.("alpha");
 
-		expect(ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining("Press Enter again to run /alpha"));
+		expect(prompt).not.toHaveBeenCalled();
+		expect(onInputCallback).not.toHaveBeenCalled();
+		expect(addToHistory).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("alpha");
+
+		await editor.onSubmit?.(editor.getText());
+
+		expect(prompt).not.toHaveBeenCalled();
+		expect(onInputCallback).toHaveBeenCalledTimes(1);
+		expect(onInputCallback.mock.calls[0]?.[0]).toMatchObject({
+			text: "/alpha",
+			images: undefined,
+			streamingBehavior: "steer",
+		});
+		expect(addToHistory).toHaveBeenCalledWith("/alpha");
 	});
 
 	it.each(["hotkeys", "HotKeys"])("runs builtin %p as its slash command before the first message", async word => {
@@ -665,7 +681,7 @@ describe("input controller — bare slash commands opt-in", () => {
 
 		it("holds the first Enter for confirmation and runs on the second", async () => {
 			await enable();
-			const { ctx, editor, addToHistory, onInputCallback, showStatus } = makeCtx(false, history);
+			const { ctx, editor, addToHistory, onInputCallback } = makeCtx(false, history);
 			controllerFor(ctx);
 
 			await editor.onSubmit?.("hotkeys");
@@ -673,7 +689,6 @@ describe("input controller — bare slash commands opt-in", () => {
 			expect(ctx.handleHotkeysCommand).not.toHaveBeenCalled();
 			expect(onInputCallback).not.toHaveBeenCalled();
 			expect(editor.getText()).toBe("hotkeys");
-			expect(showStatus).toHaveBeenCalledWith(expect.stringContaining("Enter again to run /hotkeys"));
 			// An armed word has not run yet, so it must not be filed: recording it would put a
 			// command the user declined into the recall of every project under `global`. This is the
 			// property the whole bare-word model rests on.

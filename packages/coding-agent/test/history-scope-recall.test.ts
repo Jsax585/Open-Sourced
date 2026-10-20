@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
@@ -125,6 +126,37 @@ describe("scoped prompt recall", () => {
 			context: { sessionId: "11111111-1111-4111-8111-111111111111", cwd: repoA },
 		});
 		expect(recall(restarted)).toBe("ONLY_SESSION_A");
+	});
+
+	it("retries a failed strict editor seed after SQL is repaired without committing its source key", async () => {
+		const dir = tempDir!;
+		const dbPath = dir.join("history.db");
+		const storage = HistoryStorage.open(dbPath);
+		await storage.add("SESSION_ONE", dir.path(), "s1");
+		await storage.add("SESSION_TWO", dir.path(), "s2");
+		const state: { setting: HistoryScopeKind; context: HistoryScopeContext } = {
+			setting: "session",
+			context: { sessionId: "s1", cwd: dir.path() },
+		};
+		const editor = bindEditor(storage, state);
+		expect(recall(editor)).toBe("SESSION_ONE");
+
+		const raw = new Database(dbPath);
+		try {
+			raw.run("ALTER TABLE history RENAME TO unavailable_history");
+			state.context = { sessionId: "s2", cwd: dir.path() };
+			expect(storage.getRecent(10, { kind: "session", value: "s2" })).toEqual([]);
+			expect(() => storage.getRecentOrThrow(10, { kind: "session", value: "s2" })).toThrow();
+			// The old conversation must disappear, but the failed new key must remain retryable.
+			expect(recall(editor)).toBe("");
+
+			raw.run("ALTER TABLE unavailable_history RENAME TO history");
+			expect(recall(editor)).toBe("SESSION_TWO");
+			editor.handleInput("\x1b[A");
+			expect(editor.getText()).toBe("SESSION_TWO");
+		} finally {
+			raw.close();
+		}
 	});
 
 	it("drops a prompt detached by a nested repository without a history write", async () => {

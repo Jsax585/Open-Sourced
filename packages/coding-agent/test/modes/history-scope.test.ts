@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import {
 	historyScopeKey,
@@ -10,6 +10,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/modes/history-scope";
 import type { HistoryScopeKind } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import * as utils from "@oh-my-pi/pi-utils";
 import { initGitFixture } from "../helpers/git";
 
 let tempDir: TempDir | null = null;
@@ -19,6 +20,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+	vi.restoreAllMocks();
 	if (tempDir) {
 		await tempDir.remove().catch(() => {});
 		tempDir = null;
@@ -117,6 +119,27 @@ describe("historyScopeKey", () => {
 		expect(historyScopeKey({ kind: "session", value: "a" })).not.toBe(
 			historyScopeKey({ kind: "session", value: "b" }),
 		);
+	});
+
+	it.skipIf(process.platform !== "linux")("keeps distinct-case folders as separate editor sources", async () => {
+		const dir = tempDir!;
+		const upper = dir.join("Work");
+		const lower = dir.join("work");
+		await fs.mkdir(upper);
+		await fs.mkdir(lower);
+		vi.spyOn(utils, "normalizePathForComparison").mockImplementation(input => path.resolve(input).toLowerCase());
+		for (const kind of ["cwd", "repo"] as const) {
+			expect(historyScopeKey({ kind, value: upper })).not.toBe(historyScopeKey({ kind, value: lower }));
+		}
+	});
+
+	it("does not merge distinct-case sources when paths are missing", () => {
+		const dir = tempDir!;
+		for (const kind of ["cwd", "repo"] as const) {
+			expect(historyScopeKey({ kind, value: dir.join("Missing") })).not.toBe(
+				historyScopeKey({ kind, value: dir.join("missing") }),
+			);
+		}
 	});
 
 	it("treats two spellings of one directory as the same data set", async () => {

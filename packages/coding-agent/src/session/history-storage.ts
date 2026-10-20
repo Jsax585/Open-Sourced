@@ -5,7 +5,7 @@ import {
 	checkpointWal,
 	getHistoryDbPath,
 	logger,
-	normalizePathForComparison,
+	pathIdentityKey,
 	openSqliteDatabaseSync,
 	postmortem,
 	readSalvageableRows,
@@ -315,15 +315,21 @@ export class HistoryStorage {
 		return Promise.resolve();
 	}
 
-	/**
-	 * Returns unique prompts ordered by their most recent submission, restricted to a scope or exact metadata filter.
-	 *
-	 * Throws when the handle is unusable or the statement fails, so a caller that can recover
-	 * does: the editor's history seed retries on the next browse instead of replacing the list
-	 * with an empty one. {@link search} deliberately keeps degrading to no results — its
-	 * `matchingSessionIds` caller ranks a picker and has nothing to retry.
-	 */
+	/** Returns recent unique prompts, degrading to no results when storage is unavailable. */
 	getRecent(limit: number, scope?: HistoryScope | HistoryFilter): HistoryEntry[] {
+		try {
+			return this.getRecentOrThrow(limit, scope);
+		} catch (error) {
+			logger.error("HistoryStorage getRecent failed", { error: String(error) });
+			return [];
+		}
+	}
+
+	/**
+	 * Strict recent read for callers that can retry a failed seed without committing an empty list.
+	 * Accepts the same scopes and legacy exact metadata filters as {@link getRecent}.
+	 */
+	getRecentOrThrow(limit: number, scope?: HistoryScope | HistoryFilter): HistoryEntry[] {
 		const safeLimit = this.#normalizeLimit(limit);
 		if (safeLimit === 0) return [];
 
@@ -653,22 +659,20 @@ ON CONFLICT(prompt) DO UPDATE SET
 	 * or a linked worktree shares only its primary root with the repository, and the same
 	 * directory can be stored under two spellings (a symlinked checkout keeps its symlink
 	 * spelling, since `setProjectDir` resolves lexically). Each read therefore filters the stored
-	 * set, comparing normalized spellings on both sides.
+	 * set, comparing filesystem identity on both sides.
 	 *
 	 * Raw directory rows are cached between database writes. Filtering re-resolves each
 	 * distinct directory so nested repositories and symlink retargets stay visible.
 	 */
 	#scopeDirs(kind: "cwd" | "repo", target?: string): string[] {
 		if (!target) return [];
-		const normalized = normalizePathForComparison(target);
+		const identity = pathIdentityKey(target);
 		const dirs = this.#storedDirs();
-		if (kind === "cwd") return dirs.filter(dir => normalizePathForComparison(dir) === normalized);
-		// A directory is the primary root of a repository or belongs to none, so a target that is
-		// not one — a bare subdirectory, or a linked worktree — can never be matched by a root.
-		if (normalizePathForComparison(primaryRootOrCwd(normalized)) !== normalized) return [];
-		return dirs.filter(
-			dir => normalizePathForComparison(primaryRootOrCwd(normalizePathForComparison(dir))) === normalized,
-		);
+		if (kind === "cwd") return dirs.filter(dir => pathIdentityKey(dir) === identity);
+		// Discovery needs an actual path, never a comparison key or a case-folded spelling.
+		// A bare subdirectory or linked worktree is not itself the primary repository root.
+		if (pathIdentityKey(primaryRootOrCwd(target)) !== identity) return [];
+		return dirs.filter(dir => pathIdentityKey(primaryRootOrCwd(dir)) === identity);
 	}
 
 	#storedDirs(): string[] {

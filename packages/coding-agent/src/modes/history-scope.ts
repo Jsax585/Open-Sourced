@@ -1,4 +1,4 @@
-import { normalizePathForComparison } from "@oh-my-pi/pi-utils";
+import { pathIdentityKey } from "@oh-my-pi/pi-utils";
 import {
 	HISTORY_SCOPE_KINDS,
 	type HistoryEntry,
@@ -44,13 +44,13 @@ export function resolveHistoryScope(kind: HistoryScopeKind, context: HistoryScop
  * changed; it is never parsed, so only distinctness matters. The kind is part of the key:
  * at a repository root, `cwd` and `repo` carry the same value but read different sets.
  *
- * Directory-valued scopes are keyed by their normalized spelling, so the same folder reached
- * through a symlink (or with different Windows casing) does not look like a new data set —
- * which would re-seed the editor and drop recalled drafts for no reason.
+ * Directory-valued scopes use filesystem identity, so aliases do not look like a new data set
+ * while distinct directories on case-sensitive filesystems remain separate. If identity is
+ * unavailable, the case-preserving resolved spelling is used instead.
  */
 export function historyScopeKey(scope: HistoryScope): string {
 	const directoryScoped = scope.kind === "cwd" || scope.kind === "repo";
-	const value = directoryScoped && scope.value ? normalizePathForComparison(scope.value) : (scope.value ?? "");
+	const value = directoryScoped && scope.value ? pathIdentityKey(scope.value) : (scope.value ?? "");
 	return `${scope.kind}\u0000${value}`;
 }
 
@@ -94,7 +94,7 @@ export type ScopedHistoryStorage = {
 export function bindHistoryScope(storage: HistoryStorage, scope: () => HistoryScope): ScopedHistoryStorage {
 	return {
 		add: (prompt, cwd) => storage.add(prompt, cwd),
-		getRecent: limit => storage.getRecent(limit, scope()),
+		getRecent: limit => storage.getRecentOrThrow(limit, scope()),
 	};
 }
 

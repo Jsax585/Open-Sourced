@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { historyScopeRing } from "@oh-my-pi/pi-coding-agent/modes/history-scope";
 import {
@@ -10,6 +10,7 @@ import {
 	type HistoryScope,
 } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import * as utils from "@oh-my-pi/pi-utils";
 import { initGitFixture } from "./helpers/git";
 
 interface Fixtures {
@@ -60,6 +61,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+	vi.restoreAllMocks();
 	HistoryStorage.close();
 	if (tempDir) {
 		await tempDir.remove().catch(() => {});
@@ -180,6 +182,73 @@ describe("HistoryStorage scope filtering", () => {
 		]);
 		expect(promptsOf(storage, { kind: "cwd", value: fixtures.repoASub })).toEqual(["beta run tests"]);
 		expect(promptsOf(storage, { kind: "cwd", value: fixtures.repoB })).toEqual(["delta other project"]);
+	});
+
+	it.skipIf(process.platform !== "linux")(
+		"keeps distinct-case directories separate when Windows comparison spelling folds case",
+		async () => {
+			const dir = tempDir!;
+			const upper = dir.join("Work");
+			const lower = dir.join("work");
+			await fs.mkdir(upper);
+			await fs.mkdir(lower);
+			const storage = HistoryStorage.open(dir.join("history.db"));
+			await storage.add("deploy upper-only", upper, "s1");
+			await storage.add("deploy lower-only", lower, "s2");
+			vi.spyOn(utils, "normalizePathForComparison").mockImplementation(input => path.resolve(input).toLowerCase());
+
+			for (const [target, prompt] of [
+				[upper, "deploy upper-only"],
+				[lower, "deploy lower-only"],
+			]) {
+				const scope: HistoryScope = { kind: "cwd", value: target };
+				expect(promptsOf(storage, scope)).toEqual([prompt]);
+				expect(storage.search("deploy", 100, scope).map(entry => entry.prompt)).toEqual([prompt]);
+				expect(storage.search("ploy", 100, scope).map(entry => entry.prompt)).toEqual([prompt]);
+			}
+		},
+	);
+
+	it.skipIf(process.platform !== "linux")(
+		"discovers case-preserving repository paths, including children and linked worktrees",
+		async () => {
+			const dir = tempDir!;
+			const upper = dir.join("UpperRepo");
+			const lower = dir.join("upperrepo");
+			const child = path.join(upper, "Child");
+			const worktree = dir.join("UpperWorktree");
+			await fs.mkdir(child, { recursive: true });
+			await fs.mkdir(lower);
+			await initGitFixture(upper);
+			await vcs.requireGit(upper).commitCreate("init", { allowEmpty: true });
+			await initGitFixture(lower);
+			await vcs.requireGit(upper).worktreeAdd(worktree, "HEAD", { detach: true, clone: false });
+			const storage = HistoryStorage.open(dir.join("history.db"));
+			await storage.add("deploy root", upper, "s1");
+			await storage.add("deploy child", child, "s1");
+			await storage.add("deploy worktree", worktree, "s1");
+			await storage.add("deploy unrelated case sibling", lower, "s2");
+			vi.spyOn(utils, "normalizePathForComparison").mockImplementation(input => path.resolve(input).toLowerCase());
+
+			const scope: HistoryScope = { kind: "repo", value: upper };
+			const expected = new Set(["deploy root", "deploy child", "deploy worktree"]);
+			expect(new Set(promptsOf(storage, scope))).toEqual(expected);
+			expect(new Set(storage.search("deploy", 100, scope).map(entry => entry.prompt))).toEqual(expected);
+			expect(new Set(storage.search("ploy", 100, scope).map(entry => entry.prompt))).toEqual(expected);
+			expect(promptsOf(storage, { kind: "repo", value: child })).toEqual([]);
+			expect(promptsOf(storage, { kind: "repo", value: worktree })).toEqual([]);
+		},
+	);
+
+	it("keeps missing distinct-case directories separate through the identity fallback", async () => {
+		const dir = tempDir!;
+		const upper = dir.join("Missing");
+		const lower = dir.join("missing");
+		const storage = HistoryStorage.open(dir.join("history.db"));
+		await storage.add("upper missing", upper);
+		await storage.add("lower missing", lower);
+		expect(promptsOf(storage, { kind: "cwd", value: upper })).toEqual(["upper missing"]);
+		expect(promptsOf(storage, { kind: "cwd", value: lower })).toEqual(["lower missing"]);
 	});
 
 	it("shares one repository scope across its root, subdirectories and out-of-tree worktrees", async () => {

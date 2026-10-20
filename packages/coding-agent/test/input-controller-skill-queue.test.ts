@@ -13,6 +13,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import * as skills from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
@@ -257,6 +258,121 @@ describe("InputController skill queue chip metadata", () => {
 		expect(editor.getText()).toBe("");
 	});
 
+	it.each([
+		"/skill:test-skill go",
+		"/skill:missing go",
+		"/not-a-command",
+		"/goal set Mutate the host",
+		"/hotkeys extra",
+	])("refuses guest follow-up %s before compaction enqueue", async text => {
+		const { ctx, editor, prompt, promptCustomMessage } = createStubInputControllerContext({
+			skillCommands,
+			isStreaming: true,
+			isCompacting: true,
+		});
+		const sendPrompt = vi.fn();
+		Object.assign(ctx, { collabGuest: { readOnly: false, sendPrompt } });
+		editor.setText(text);
+
+		await new InputController(ctx).handleFollowUp();
+
+		expect(ctx.compactionQueuedMessages).toEqual([]);
+		expect(editor.addToHistory).not.toHaveBeenCalled();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(promptCustomMessage).not.toHaveBeenCalled();
+		expect(sendPrompt).not.toHaveBeenCalled();
+	});
+
+	it("refuses host-only queue insertion without clearing a newer draft", () => {
+		const { ctx, editor, prompt, promptCustomMessage } = createStubInputControllerContext({
+			skillCommands,
+			isStreaming: true,
+			isCompacting: true,
+		});
+		const sendPrompt = vi.fn();
+		Object.assign(ctx, { collabGuest: { readOnly: false, sendPrompt } });
+		editor.setText("newer draft");
+		const helpers = new UiHelpers(ctx);
+
+		for (const text of ["/skill:test-skill go", "/skill:missing", "/unknown", "/goal set mutate"]) {
+			helpers.queueCompactionMessage(text, "followUp");
+			helpers.queueCompactionMessage(text, "steer", undefined, { preserveDraft: true });
+		}
+
+		expect(ctx.compactionQueuedMessages).toEqual([]);
+		expect(editor.getText()).toBe("newer draft");
+		expect(editor.addToHistory).not.toHaveBeenCalled();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(promptCustomMessage).not.toHaveBeenCalled();
+		expect(sendPrompt).not.toHaveBeenCalled();
+	});
+
+	it("keeps plain guest follow-ups and read-only builtins enqueueable during compaction", async () => {
+		const { ctx, editor } = createStubInputControllerContext({
+			skillCommands,
+			isStreaming: true,
+			isCompacting: true,
+		});
+		Object.assign(ctx, { collabGuest: { readOnly: false, sendPrompt: vi.fn() } });
+		const controller = new InputController(ctx);
+		editor.setText("plain guest prompt");
+		await controller.handleFollowUp();
+		editor.setText("/hotkeys");
+		await controller.handleFollowUp();
+
+		expect(ctx.compactionQueuedMessages).toEqual([
+			{ text: "plain guest prompt", mode: "followUp", images: undefined },
+			{ text: "/hotkeys", mode: "followUp", images: undefined },
+		]);
+		expect(editor.addToHistory.mock.calls.map(call => call[0])).toEqual(["plain guest prompt", "/hotkeys"]);
+	});
+
+	it("forwards plain guest follow-ups to the host when not compacting", async () => {
+		const { ctx, editor, prompt, promptCustomMessage } = createStubInputControllerContext({
+			skillCommands,
+			isStreaming: true,
+		});
+		const sendPrompt = vi.fn();
+		Object.assign(ctx, { collabGuest: { readOnly: false, sendPrompt } });
+		editor.setText("plain guest prompt");
+
+		await new InputController(ctx).handleFollowUp();
+
+		expect(sendPrompt).toHaveBeenCalledWith("plain guest prompt", undefined);
+		expect(prompt).not.toHaveBeenCalled();
+		expect(promptCustomMessage).not.toHaveBeenCalled();
+	});
+
+	it.each([false, true])(
+		"preserves a read-only guest follow-up draft without queueing or recording it (compacting=%s)",
+		async isCompacting => {
+			const { ctx, editor, prompt, promptCustomMessage } = createStubInputControllerContext({
+				skillCommands,
+				isStreaming: true,
+				isCompacting,
+			});
+			const sendPrompt = vi.fn();
+			Object.assign(ctx, { collabGuest: { readOnly: true, sendPrompt } });
+			const image: ImageContent = { type: "image", data: "Z3Vlc3Q=", mimeType: "image/png" };
+			editor.setText("read-only guest draft [Image #1]");
+			editor.pendingImages = [image];
+			editor.pendingImageLinks = ["local://guest.png"];
+			editor.imageLinks = editor.pendingImageLinks;
+
+			await new InputController(ctx).handleFollowUp();
+
+			expect(editor.getText()).toBe("read-only guest draft [Image #1]");
+			expect(editor.pendingImages).toEqual([image]);
+			expect(editor.pendingImageLinks).toEqual(["local://guest.png"]);
+			expect(editor.imageLinks).toEqual(["local://guest.png"]);
+			expect(ctx.compactionQueuedMessages).toEqual([]);
+			expect(editor.addToHistory).not.toHaveBeenCalled();
+			expect(sendPrompt).not.toHaveBeenCalled();
+			expect(prompt).not.toHaveBeenCalled();
+			expect(promptCustomMessage).not.toHaveBeenCalled();
+		},
+	);
+
 	it("idle skill prompt still leaves queueChipText out of persisted details", async () => {
 		const { ctx, editor, promptCustomMessage } = createStubInputControllerContext({
 			skillCommands,
@@ -402,7 +518,15 @@ describe("compaction skill re-invocation", () => {
 		const steer = vi.fn(async (_text: string, _images?: ImageContent[]) => {});
 		const followUp = vi.fn(async (_text: string, _images?: ImageContent[]) => {});
 		const armLoopAutoSubmit = vi.fn();
+		const { editor } = createStubInputControllerContext({ skillCommands, isStreaming: false });
+		const handleHotkeysCommand = vi.fn();
+		const handleGoalModeCommand = vi.fn(async (_args?: string) => {});
 		const ctx = {
+			editor,
+			showStatus: vi.fn(),
+			handleHotkeysCommand,
+			handleGoalModeCommand,
+			fileSlashCommands: new Set<string>(),
 			skillCommands,
 			compactionQueuedMessages: queuedMessages,
 			loopModeEnabled,
@@ -418,9 +542,21 @@ describe("compaction skill re-invocation", () => {
 				steer,
 				followUp,
 				clearQueue: vi.fn(),
+				customCommands: [],
 			},
 		} as unknown as InteractiveModeContext;
-		return { ctx, promptCustomMessage, promptCustomMessageCalled, prompt, steer, followUp, armLoopAutoSubmit };
+		return {
+			ctx,
+			editor,
+			promptCustomMessage,
+			promptCustomMessageCalled,
+			prompt,
+			steer,
+			followUp,
+			armLoopAutoSubmit,
+			handleHotkeysCommand,
+			handleGoalModeCommand,
+		};
 	}
 
 	beforeEach(async () => {
@@ -480,6 +616,182 @@ describe("compaction skill re-invocation", () => {
 		expect(prompt).not.toHaveBeenCalled();
 		expect(steer).not.toHaveBeenCalled();
 		expect(followUp).not.toHaveBeenCalled();
+	});
+
+	it.each([true, false])(
+		"rechecks queued-before-join commands and forwards only plain guest prompts (willRetry=%s)",
+		async willRetry => {
+			const { ctx, editor, promptCustomMessage, prompt, steer, followUp, handleHotkeysCommand } =
+				createCompactionDrainContext([]);
+			const helpers = new UiHelpers(ctx);
+			const image: ImageContent = { type: "image", data: "Z3Vlc3Q=", mimeType: "image/png" };
+			// Enqueue as host, then join: the delivery gate must use the current role.
+			for (const text of ["/skill:test-skill go", "/skill:missing", "/unknown", "/goal set mutate"]) {
+				helpers.queueCompactionMessage(text, "followUp");
+			}
+			helpers.queueCompactionMessage("plain guest prompt", "steer", [image]);
+			helpers.queueCompactionMessage("/hotkeys", "followUp");
+			editor.setText("typed after queueing");
+			const sendPrompt = vi.fn();
+			Object.assign(ctx, { collabGuest: { readOnly: false, sendPrompt } });
+
+			await helpers.flushCompactionQueue({ willRetry });
+
+			expect(ctx.compactionQueuedMessages).toEqual([]);
+			expect(promptCustomMessage).not.toHaveBeenCalled();
+			expect(prompt).not.toHaveBeenCalled();
+			expect(steer).not.toHaveBeenCalled();
+			expect(followUp).not.toHaveBeenCalled();
+			expect(handleHotkeysCommand).toHaveBeenCalledTimes(1);
+			expect(sendPrompt.mock.calls).toEqual([["plain guest prompt", [image]]]);
+			expect(editor.getText()).toBe("typed after queueing");
+			expect(ctx.showError).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(["/skill:missing", "/unknown", "plain guest prompt"])(
+		"routes guest first prompt %s without starting local inference",
+		async text => {
+			const { ctx, promptCustomMessage, prompt, steer, followUp } = createCompactionDrainContext([
+				{ text, mode: "followUp" },
+			]);
+			const sendPrompt = vi.fn();
+			Object.assign(ctx, { collabGuest: { readOnly: false, sendPrompt } });
+
+			await new UiHelpers(ctx).flushCompactionQueue({ willRetry: false });
+
+			expect(sendPrompt.mock.calls).toEqual(text.startsWith("/") ? [] : [[text, undefined]]);
+			expect(promptCustomMessage).not.toHaveBeenCalled();
+			expect(prompt).not.toHaveBeenCalled();
+			expect(steer).not.toHaveBeenCalled();
+			expect(followUp).not.toHaveBeenCalled();
+			expect(ctx.showError).not.toHaveBeenCalled();
+		},
+	);
+
+	it("gates the all-slash drain without losing allowed read-only commands or newer drafts", async () => {
+		const { ctx, editor, promptCustomMessage, prompt, steer, followUp, handleHotkeysCommand, handleGoalModeCommand } =
+			createCompactionDrainContext([]);
+		const helpers = new UiHelpers(ctx);
+		ctx.isKnownSlashCommand = text => helpers.isKnownSlashCommand(text);
+		helpers.queueCompactionMessage("/goal set mutate", "followUp");
+		helpers.queueCompactionMessage("/hotkeys", "followUp");
+		editor.setText("newer draft");
+		const sendPrompt = vi.fn();
+		Object.assign(ctx, { collabGuest: { readOnly: false, sendPrompt } });
+
+		await helpers.flushCompactionQueue({ willRetry: false });
+
+		expect(handleGoalModeCommand).not.toHaveBeenCalled();
+		expect(handleHotkeysCommand).toHaveBeenCalledTimes(1);
+		expect(promptCustomMessage).not.toHaveBeenCalled();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(steer).not.toHaveBeenCalled();
+		expect(followUp).not.toHaveBeenCalled();
+		expect(sendPrompt).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("newer draft");
+		expect(ctx.showError).not.toHaveBeenCalled();
+	});
+
+	it("rechecks the first prompt after a preceding command joins a guest session", async () => {
+		const { ctx, editor, promptCustomMessage, prompt, handleGoalModeCommand } = createCompactionDrainContext([
+			{ text: "/goal set join during dispatch", mode: "steer" },
+			{ text: "/skill:test-skill go", mode: "followUp" },
+		]);
+		const sendPrompt = vi.fn();
+		handleGoalModeCommand.mockImplementation(async () => {
+			await Promise.resolve();
+			Object.assign(ctx, { collabGuest: { readOnly: false, sendPrompt } });
+		});
+		const helpers = new UiHelpers(ctx);
+		ctx.isKnownSlashCommand = text => helpers.isKnownSlashCommand(text);
+		editor.setText("newer draft");
+
+		await helpers.flushCompactionQueue({ willRetry: false });
+
+		expect(handleGoalModeCommand).toHaveBeenCalledTimes(1);
+		expect(promptCustomMessage).not.toHaveBeenCalled();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(sendPrompt).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("newer draft");
+		expect(ctx.showError).not.toHaveBeenCalled();
+	});
+
+	it.each([true, false])("rechecks guest state after loading a queued skill (willRetry=%s)", async willRetry => {
+		const { ctx, editor, promptCustomMessage, prompt, steer, followUp } = createCompactionDrainContext([
+			{ text: "/skill:test-skill go", mode: "followUp" },
+		]);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const originalBuild = skills.buildSkillPromptMessage;
+		vi.spyOn(skills, "buildSkillPromptMessage").mockImplementation(async (skill, input, invocation) => {
+			entered.resolve();
+			await release.promise;
+			return originalBuild(skill, input, invocation);
+		});
+		const helpers = new UiHelpers(ctx);
+		const flushing = helpers.flushCompactionQueue({ willRetry });
+		await entered.promise;
+		const sendPrompt = vi.fn();
+		Object.assign(ctx, { collabGuest: { readOnly: false, sendPrompt } });
+		editor.setText("typed during skill load");
+		release.resolve();
+		await flushing;
+
+		expect(promptCustomMessage).not.toHaveBeenCalled();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(steer).not.toHaveBeenCalled();
+		expect(followUp).not.toHaveBeenCalled();
+		expect(sendPrompt).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("typed during skill load");
+		expect(ctx.showError).not.toHaveBeenCalled();
+	});
+
+	it.each([true, false])(
+		"never starts local inference for a read-only guest prompt (willRetry=%s)",
+		async willRetry => {
+			const { ctx, promptCustomMessage, prompt, steer, followUp } = createCompactionDrainContext([
+				{ text: "plain guest prompt", mode: "followUp" },
+			]);
+			const sendPrompt = vi.fn();
+			Object.assign(ctx, { collabGuest: { readOnly: true, sendPrompt } });
+
+			await new UiHelpers(ctx).flushCompactionQueue({ willRetry });
+
+			expect(sendPrompt).not.toHaveBeenCalled();
+			expect(promptCustomMessage).not.toHaveBeenCalled();
+			expect(prompt).not.toHaveBeenCalled();
+			expect(steer).not.toHaveBeenCalled();
+			expect(followUp).not.toHaveBeenCalled();
+			expect(ctx.showError).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([true, false])("parks refused guest loop bodies during queue drain (willRetry=%s)", async willRetry => {
+		for (const { text, readOnly } of [
+			{ text: "/skill:test-skill go", readOnly: false },
+			{ text: "plain guest prompt", readOnly: true },
+		]) {
+			const { ctx, promptCustomMessage, prompt, steer, followUp } = createCompactionDrainContext(
+				[{ text, mode: "followUp" }],
+				true,
+			);
+			const sendPrompt = vi.fn();
+			const pauseLoop = vi.fn(() => {
+				ctx.loopModeEnabled = false;
+			});
+			Object.assign(ctx, { collabGuest: { readOnly, sendPrompt }, loopPrompt: text, pauseLoop });
+
+			await new UiHelpers(ctx).flushCompactionQueue({ willRetry });
+
+			expect(pauseLoop).toHaveBeenCalledTimes(1);
+			expect(sendPrompt).not.toHaveBeenCalled();
+			expect(promptCustomMessage).not.toHaveBeenCalled();
+			expect(prompt).not.toHaveBeenCalled();
+			expect(steer).not.toHaveBeenCalled();
+			expect(followUp).not.toHaveBeenCalled();
+			expect(ctx.showError).not.toHaveBeenCalled();
+		}
 	});
 
 	it("queues retry-drained skills without appending them to session history", async () => {

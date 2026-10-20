@@ -84,7 +84,7 @@ import {
 	lookupBuiltinSlashCommand,
 } from "../../slash-commands/builtin-registry";
 import { parseSlashCommand } from "../../slash-commands/helpers/parse";
-import { buildSkillCommandPrompt, invokeSkillCommandFromText, isKnownSkillCommand } from "../skill-command";
+import { buildSkillCommandPrompt, isKnownSkillCommand } from "../skill-command";
 import {
 	createAssistantMessageComponent,
 	getAssistantMessageLinkTargets,
@@ -1279,17 +1279,14 @@ export class UiHelpers {
 		images?: ImageContent[],
 		options?: { preserveDraft?: boolean; historyRecorded?: boolean },
 	): void {
+		if (this.ctx.collabGuest && guestRefusesSlashCommand(text)) {
+			this.ctx.showStatus(`${text.split(/\s+/, 1)[0]} is host-only during a collab session`);
+			return;
+		}
 		const queuedImages = images && images.length > 0 ? images : undefined;
 		this.ctx.compactionQueuedMessages.push({ text, mode, images: queuedImages } as CompactionQueuedMessage);
-		// Queuing bypasses the slash block that guards the other recording sites, so the two
-		// filters are repeated here: the secret filter, because `/join <link>` and
-		// `/login <args>` carry a room key or an auth code, and the guest gate, because
-		// `handleFollowUp` reaches here during compaction before its own guest branch —
-		// and `history.db` stores every row in the clear.
-		const historyText =
-			options?.historyRecorded || shouldSkipHistory(text) || (this.ctx.collabGuest && guestRefusesSlashCommand(text))
-				? undefined
-				: text;
+		// Queuing bypasses normal slash recording. Keep room keys and auth codes out of history.
+		const historyText = options?.historyRecorded || shouldSkipHistory(text) ? undefined : text;
 		if (options?.preserveDraft) {
 			if (historyText !== undefined) this.ctx.editor.addToHistory(historyText);
 		} else {
@@ -1310,16 +1307,39 @@ export class UiHelpers {
 		if (!forwarded && this.ctx.loopPrompt === text) this.ctx.pauseLoop();
 	}
 
+	/** Deliver guest prompts remotely and refuse host-only commands without touching newer drafts. */
+	#deliverQueuedMessageToGuest(message: CompactionQueuedMessage): boolean {
+		const guest = this.ctx.collabGuest;
+		if (!guest) return false;
+		if (guestRefusesSlashCommand(message.text)) {
+			this.ctx.showStatus(`${message.text.split(/\s+/, 1)[0]} is host-only during a collab session`);
+			this.#parkLoopOnLocalConsume(message.text, false);
+			return true;
+		}
+		// Allowed read-only builtins still run through the local dispatcher.
+		if (message.text.startsWith("/")) return false;
+		if (guest.readOnly) {
+			this.ctx.showStatus("This collab link is read-only — prompting is disabled");
+			this.#parkLoopOnLocalConsume(message.text, false);
+		} else {
+			guest.sendPrompt(message.text, message.images);
+		}
+		return true;
+	}
+
 	async #deliverQueuedMessage(message: CompactionQueuedMessage): Promise<void> {
+		if (this.#deliverQueuedMessageToGuest(message)) return;
 		const builtin = await executeBuiltinSlashCommand(message.text, {
 			ctx: this.ctx,
 			input: message.images ? { images: message.images } : undefined,
+			draftDetached: true,
 		});
 		if (builtin === true) {
 			this.#parkLoopOnLocalConsume(message.text, false);
 			return;
 		}
 		if (typeof builtin === "string") {
+			if (this.#deliverQueuedMessageToGuest({ ...message, text: builtin })) return;
 			const forwarded = await this.ctx.session.prompt(builtin, {
 				streamingBehavior: message.mode,
 				images: message.images,
@@ -1327,13 +1347,12 @@ export class UiHelpers {
 			this.#parkLoopOnLocalConsume(message.text, forwarded);
 			return;
 		}
-		if (
-			await invokeSkillCommandFromText(this.ctx, message.text, message.mode, {
-				propagateErrors: true,
-				queueOnly: true,
-				images: message.images,
-			})
-		) {
+		if (this.#deliverQueuedMessageToGuest(message)) return;
+		const built = await buildSkillCommandPrompt(this.ctx, message.text, message.mode, message.images);
+		// Reading a skill file can overlap /join. Recheck before dispatching its local message.
+		if (this.#deliverQueuedMessageToGuest(message)) return;
+		if (built) {
+			await this.ctx.session.promptCustomMessage(built.message, { ...built.options, queueOnly: true });
 			return;
 		}
 		if (this.ctx.isKnownSlashCommand(message.text)) {
@@ -1433,16 +1452,20 @@ export class UiHelpers {
 			// are rebuilt as user-attributed custom messages so queued `/skill:` text
 			// is not sent as a literal prompt after compaction.
 			let promptPromise: Promise<unknown>;
-			if (isKnownSkillCommand(this.ctx, firstPrompt.text)) {
+			if (this.ctx.collabGuest) {
+				promptPromise = this.#deliverQueuedMessage(firstPrompt).catch(restoreQueue);
+			} else if (isKnownSkillCommand(this.ctx, firstPrompt.text)) {
 				const built = await buildSkillCommandPrompt(
 					this.ctx,
 					firstPrompt.text,
 					firstPrompt.mode,
 					firstPrompt.images,
 				);
-				promptPromise = built
-					? this.ctx.session.promptCustomMessage(built.message, built.options).catch(restoreQueue)
-					: Promise.resolve();
+				promptPromise = this.#deliverQueuedMessageToGuest(firstPrompt)
+					? Promise.resolve()
+					: built
+						? this.ctx.session.promptCustomMessage(built.message, built.options).catch(restoreQueue)
+						: Promise.resolve();
 			} else {
 				const disposeFirstPrompt = this.ctx.recordLocalSubmission(
 					firstPrompt.text,

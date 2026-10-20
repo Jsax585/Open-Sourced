@@ -155,35 +155,41 @@ afterEach(async () => {
 });
 
 describe("interactive native input ingress", () => {
-	it("Ctrl+Enter guest refusal preserves a newer draft and attachments after an async input hook", async () => {
-		const entered = Promise.withResolvers<void>();
-		const release = Promise.withResolvers<void>();
-		const h = await createHarness(pi => {
-			pi.on("input", async () => {
-				entered.resolve();
-				await release.promise;
+	it.each([false, true])(
+		"Ctrl+Enter guest refusal preserves a newer draft after an async hook (compacting=%s)",
+		async compacting => {
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const h = await createHarness(pi => {
+				pi.on("input", async () => {
+					entered.resolve();
+					await release.promise;
+				});
 			});
-		});
-		h.ctx.collabGuest = {
-			readOnly: false,
-			sendPrompt: vi.fn(),
-		} as unknown as InteractiveModeContext["collabGuest"];
-		const storage = attachHistory(h.editor);
-		h.editor.setText("/unknown");
-		const submitting = h.pressSubmit(FOLLOW_UP);
-		await entered.promise;
-		h.draftWithImage("next draft [Image #1]", newerImage, "local://newer.jpg");
-		release.resolve();
-		await submitting;
+			h.session.isCompacting = compacting;
+			h.ctx.collabGuest = {
+				readOnly: false,
+				sendPrompt: vi.fn(),
+			} as unknown as InteractiveModeContext["collabGuest"];
+			const storage = attachHistory(h.editor);
+			h.editor.setText("/unknown");
+			const submitting = h.pressSubmit(FOLLOW_UP);
+			await entered.promise;
+			h.draftWithImage("next draft [Image #1]", newerImage, "local://newer.jpg");
+			release.resolve();
+			await submitting;
 
-		expect(h.editor.getExpandedText()).toBe("next draft [Image #1]");
-		expect(h.editor.pendingImages).toEqual([newerImage]);
-		expect(h.editor.pendingImageLinks).toEqual(["local://newer.jpg"]);
-		expect(h.editor.imageLinks).toEqual(["local://newer.jpg"]);
-		expect(storage.getRecent(10)).toEqual([]);
-		expect(h.prompt).not.toHaveBeenCalled();
-		expect(h.session.promptCustomMessage).not.toHaveBeenCalled();
-	});
+			expect(h.editor.getExpandedText()).toBe("next draft [Image #1]");
+			expect(h.editor.pendingImages).toEqual([newerImage]);
+			expect(h.editor.pendingImageLinks).toEqual(["local://newer.jpg"]);
+			expect(h.editor.imageLinks).toEqual(["local://newer.jpg"]);
+			expect(storage.getRecent(10)).toEqual([]);
+			expect(h.prompt).not.toHaveBeenCalled();
+			expect(h.session.promptCustomMessage).not.toHaveBeenCalled();
+			expect(h.ctx.compactionQueuedMessages).toEqual([]);
+			expect(h.session.followUp).not.toHaveBeenCalled();
+		},
+	);
 
 	for (const [label, key] of [
 		["Enter", ENTER],
