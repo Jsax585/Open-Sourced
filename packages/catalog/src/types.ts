@@ -1570,6 +1570,7 @@ export interface Model<TApi extends Api = Api> {
 	 * providers retain their transport backend's policy.
 	 */
 	providerType?: string;
+	providerFamily?: "openai" | "anthropic" | "google";
 	baseUrl: string;
 	reasoning: boolean;
 	/**

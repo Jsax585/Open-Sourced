@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed custom gateway models with `providerFamily: google` dropping flex and priority service tiers from OpenAI-compatible requests
+
 ## [18.12.3] - 2026-10-19
 
 ### Added

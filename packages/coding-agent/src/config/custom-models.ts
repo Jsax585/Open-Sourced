@@ -104,6 +104,7 @@ export function buildCustomModelOverlay(
 		compactionModel: modelDef.compactionModel,
 		remoteCompaction: mergeRemoteCompactionConfig(providerRemoteCompaction, modelDef.remoteCompaction),
 		premiumMultiplier: modelDef.premiumMultiplier,
+		providerFamily: modelDef.providerFamily,
 		isOAuth: resolveCustomModelIsOAuth(api, providerAuth),
 	};
 }
@@ -146,6 +147,7 @@ export function finalizeCustomModel(resolvedModel: CustomModelOverlay, options: 
 		compactionModel: resolvedModel.compactionModel,
 		remoteCompaction: resolvedModel.remoteCompaction,
 		premiumMultiplier: resolvedModel.premiumMultiplier,
+		providerFamily: resolvedModel.providerFamily,
 		isOAuth: resolvedModel.isOAuth,
 	} as ModelSpec<Api>);
 	if (resolvedModel.cost) {

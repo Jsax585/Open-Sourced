@@ -7,6 +7,7 @@ import { Effort, type FetchImpl, type Model, type OpenAICompat, type ThinkingCon
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { resolveOpenAIRequestSetup } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
+import { resolveModelServiceTier, type ServiceTierByFamily } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { resolveMaxContextWindow } from "@oh-my-pi/pi-catalog/compat/context-window";
 import { factoryDroidRegistry, resolveFactoryDroidPolicy } from "@oh-my-pi/pi-catalog/compat/factory-droid";
@@ -1363,19 +1364,29 @@ describe("ModelRegistry", () => {
 				headers: { "X-Route": "model" },
 			};
 
-			async function loadRegistry(transport?: "pi-native", modelBaseUrl?: string): Promise<ModelRegistry> {
+			async function loadRegistry(
+				transport?: "pi-native",
+				modelBaseUrl?: string,
+				googleFamily = false,
+			): Promise<ModelRegistry> {
 				const modelsPath = path.join(tempDir, "models.yml");
 				await Bun.write(
 					modelsPath,
 					Bun.YAML.stringify({
 						providers: {
-							openai: {
+							[googleFamily ? "custom-gateway" : "openai"]: {
 								baseUrl: "https://gateway.example",
 								apiKey: "gateway-bearer",
 								api: "openai-completions",
 								...(transport && { transport }),
 								headers: { "X-Route": "provider" },
-								models: [{ ...customModel, ...(modelBaseUrl && { baseUrl: modelBaseUrl }) }],
+								models: [
+									{
+										...customModel,
+										...(googleFamily && { id: "gemini-3-flash", providerFamily: "google" }),
+										...(modelBaseUrl && { baseUrl: modelBaseUrl }),
+									},
+								],
 							},
 						},
 					}),
@@ -1383,7 +1394,12 @@ describe("ModelRegistry", () => {
 				return new ModelRegistry(authStorage, modelsPath);
 			}
 
-			async function requestModel(registry: ModelRegistry, model: Model | undefined, native: boolean) {
+			async function requestModel(
+				registry: ModelRegistry,
+				model: Model | undefined,
+				native: boolean,
+				serviceTier?: ServiceTierByFamily,
+			) {
 				if (!model) throw new Error("custom transport fixture was not loaded");
 				let request: Request | undefined;
 				const fetch: FetchImpl = async (input, init) => {
@@ -1431,12 +1447,27 @@ describe("ModelRegistry", () => {
 				const result = await streamSimple(
 					model,
 					{ messages: [{ role: "user", content: "Reply OK.", timestamp: 0 }] },
-					{ apiKey: await registry.getApiKey(model), fetch },
+					{
+						apiKey: await registry.getApiKey(model),
+						fetch,
+						serviceTier: resolveModelServiceTier(serviceTier, model),
+					},
 				).result();
 				if (!request) throw new Error("custom transport fixture did not make a request");
 				const body = (await request.json()) as Record<string, unknown>;
 				return { request, body, result };
 			}
+
+			test("custom Gemini model configuration forwards its Google tier over OpenAI transport", async () => {
+				const registry = await loadRegistry(undefined, undefined, true);
+				const model = registry.find("custom-gateway", "gemini-3-flash");
+				for (const tier of ["flex", "priority", undefined] as const) {
+					const { body, result } = await requestModel(registry, model, false, { openai: "scale", google: tier });
+					expect(body.model).toBe("gemini-3-flash");
+					expect(body.service_tier).toBe(tier);
+					expect(result.stopReason).toBe("stop");
+				}
+			});
 
 			test("new custom model uses native gateway routing instead of /chat/completions on lazy find", async () => {
 				const registry = await loadRegistry("pi-native");

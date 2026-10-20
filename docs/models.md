@@ -34,6 +34,29 @@ Legacy behavior still present:
 
 ## `models.yml` / `models.yaml` shape
 
+Custom `models` entries accept optional `providerFamily: openai | anthropic | google`.
+This selects the service-tier settings family before provider/API/identity inference;
+it does not change the provider id, model id, API transport, or endpoint. It is not a
+`modelOverrides` option. For example, a custom gateway provider serving Gemini models:
+
+```yaml
+providers:
+  custom-gateway:
+    baseUrl: https://gateway.example/v1
+    api: openai-completions
+    apiKey: CUSTOM_GATEWAY_API_KEY
+    models:
+      - id: gemini-3-flash
+        providerFamily: google
+```
+
+This model uses `tier.google`, offers `/fast`, and forwards `flex` or `priority` as
+`service_tier`. The gateway must support these tiers; forwarding does not prove
+fulfillment or billing. Omitting the field preserves inference. Other annotations
+select settings only: they do not enable unsupported OpenAI tiers or implement
+Anthropic fast-mode transport for arbitrary gateways.
+
+
 ```yaml
 providers:
   <provider-id>:

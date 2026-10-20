@@ -38,6 +38,21 @@ const customOpenAIAliases = [
 ];
 
 describe("serviceTierFamily", () => {
+	it("uses an explicit family before provider and identity inference", () => {
+		expect(serviceTierFamily({ ...customOpenAI, providerFamily: "google" })).toBe("google");
+		const model = {
+			...m("custom-gateway", "openai-completions", "gemini-3-flash"),
+			providerFamily: "google" as const,
+		};
+		expect(resolveModelServiceTier({ openai: "priority", google: "flex" }, model)).toBe("flex");
+		expect(shouldSendServiceTier("flex", model)).toBe(true);
+		expect(shouldSendServiceTier("priority", model)).toBe(true);
+		for (const tier of ["auto", "default", "scale", "ultrafast"] as const) {
+			expect(shouldSendServiceTier(tier, model)).toBe(false);
+		}
+		expect(serviceTierFamily(m("custom-gateway", "openai-completions", "gemini-3-flash"))).toBeUndefined();
+	});
+
 	it("classifies first-party providers by provider/api", () => {
 		expect(serviceTierFamily(openai)).toBe("openai");
 		expect(serviceTierFamily(codex)).toBe("openai");

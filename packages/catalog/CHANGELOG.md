@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added optional `providerFamily` model metadata for explicit service-tier family selection
+
 ## [18.12.3] - 2026-10-19
 
 ### Changed

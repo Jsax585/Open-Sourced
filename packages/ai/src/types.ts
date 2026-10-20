@@ -157,7 +157,8 @@ export type ServiceTierFamily = "openai" | "anthropic" | "google";
  */
 export type ServiceTierByFamily = Partial<Record<ServiceTierFamily, ServiceTier>>;
 
-type ServiceTierModel = Pick<Model, "provider" | "api" | "identity"> & Partial<Pick<Model, "serviceTiers">>;
+type ServiceTierModel = Pick<Model, "provider" | "api" | "identity" | "providerFamily"> &
+	Partial<Pick<Model, "serviceTiers">>;
 // The service-tier matrix below intentionally stays in TypeScript rather than
 // the KDL compat tree: `shouldSendServiceTier` accepts bare provider strings
 // (agent telemetry, google-shared header placement) and the stats parser
@@ -197,6 +198,7 @@ function isOpenAIServiceTierModel(model: ServiceTierModel): boolean {
  * OpenAI's service-tier field (GitHub Copilot).
  */
 export function serviceTierFamily(model: ServiceTierModel): ServiceTierFamily | undefined {
+	if (model.providerFamily) return model.providerFamily;
 	const provider = model.provider;
 	if (provider === "openrouter") {
 		if (model.identity.class === "anthropic") return "anthropic";
@@ -267,7 +269,7 @@ export function shouldSendServiceTier(
 		return serviceTier === "flex" || serviceTier === "scale" || serviceTier === "priority";
 	}
 	if (typeof target !== "string" && target && isOpenAIServiceTierModel(target)) return true;
-	if (provider === "google") {
+	if (provider === "google" || (typeof target !== "string" && target?.providerFamily === "google")) {
 		return serviceTier === "flex" || serviceTier === "priority";
 	}
 	// Vertex realizes only priority (via header); flex has no documented control.

@@ -268,6 +268,7 @@ export interface ModelPatch {
 	compactionModel?: string;
 	remoteCompaction?: RemoteCompactionConfig<Api>;
 	premiumMultiplier?: number;
+	providerFamily?: Model<Api>["providerFamily"];
 }
 
 /**

@@ -116,6 +116,27 @@ describe("/fast targets the current model's service-tier family", () => {
 		expect(session.isFastModeActive()).toBe(true);
 	});
 
+	it("enables Google priority for an explicitly annotated custom Gemini gateway", async () => {
+		const session = await createSessionForModel(
+			buildModel({
+				id: "gemini-3-flash",
+				name: "Gemini Gateway",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 32768,
+				maxTokens: 1024,
+				api: "openai-completions",
+				provider: "custom-gateway",
+				providerFamily: "google",
+				baseUrl: "https://gateway.example/v1",
+			}),
+		);
+		expect(session.setFastMode(true)).toBe(true);
+		expect(session.serviceTierByFamily).toEqual({ google: "priority" });
+		expect(session.isFastModeActive()).toBe(true);
+	});
+
 	it("leaves Fireworks models on the dedicated Fireworks tier control", async () => {
 		const session = await createSessionForModel(
 			buildModel({
