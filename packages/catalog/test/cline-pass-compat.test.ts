@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type { Context } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { toClinePassPublicModelId, toClinePassWireModelId } from "@oh-my-pi/pi-catalog/cline-pass-model-id";
 import { isBareIdReferenceProvider } from "@oh-my-pi/pi-catalog/compat/behavior";
 import { resolveModelPolicy } from "@oh-my-pi/pi-catalog/compat/resolve";
@@ -10,8 +13,9 @@ import {
 	PROVIDER_DESCRIPTORS,
 } from "@oh-my-pi/pi-catalog/provider-models";
 import { createReferenceResolver } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
+import { getClinePassModelMetadata } from "@oh-my-pi/pi-catalog/provider-models/cline-pass";
 import { clinePassModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
-import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
+import type { FetchImpl, Model, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
 const CLINEPASS_MODELS_DEV_FIXTURE = {
 	"cline-pass": {
@@ -442,4 +446,84 @@ describe("ClinePass catalog", () => {
 		expect(muse?.thinking?.efforts).toEqual([Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh]);
 		expect(resolveModelPolicy(muse!).compat.supportsReasoningEffort).toBe(true);
 	});
+
+	it("exposes and sends the subscription DeepSeek V4.1 Flash 1017 ladder (issue #16414)", async () => {
+		const metadata = getClinePassModelMetadata("deepseek-v4.1-flash-1017");
+		expect(metadata).toMatchObject({
+			tier: "subscription",
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.High, Effort.Max], defaultLevel: Effort.High },
+		});
+
+		const options = clinePassModelManagerOptions({
+			fetch: async () =>
+				new Response(
+					JSON.stringify({
+						clinePass: [{ id: "cline-pass/deepseek-v4.1-flash-1017", name: "deepseek-v4.1-flash-1017" }],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				),
+		});
+		const models = await options.fetchDynamicModels?.();
+		const spec = models?.find(model => model.id === "deepseek-v4.1-flash-1017");
+		expect(spec).toMatchObject({
+			provider: "cline-pass",
+			maxTokens: 393_216,
+			input: ["text", "image"],
+			thinking: { efforts: [Effort.Low, Effort.High, Effort.Max] },
+		});
+
+		const compat = resolveModelPolicy(spec as ModelSpec<"openai-completions">).compat;
+		expect(compat.supportsReasoningEffort).toBe(true);
+		expect(compat.omitReasoningEffort).toBe(false);
+		// DeepSeek's ladder is wire-exact: no synthetic xhigh tier, no alias map.
+		expect(compat.reasoningEffortMap).toEqual({});
+
+		const model = buildModel(spec as ModelSpec<"openai-completions">) as Model<"openai-completions">;
+		expect(model.thinking?.efforts).toEqual([Effort.Low, Effort.High, Effort.Max]);
+		const wire = await Promise.all(
+			[Effort.Low, Effort.High, Effort.Max].map(async effort => {
+				const body = await captureChatBody(model, effort);
+				return body.reasoning_effort;
+			}),
+		);
+		expect(wire).toEqual(["low", "high", "max"]);
+	});
 });
+
+function chatSse(): Response {
+	return new Response(
+		`data: ${JSON.stringify({
+			id: "x",
+			object: "chat.completion.chunk",
+			created: 0,
+			choices: [{ index: 0, delta: { content: "ok" }, finish_reason: null }],
+		})}\n\ndata: ${JSON.stringify({
+			id: "x",
+			object: "chat.completion.chunk",
+			created: 0,
+			choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+		})}\n\ndata: [DONE]\n\n`,
+		{ status: 200, headers: { "content-type": "text/event-stream" } },
+	);
+}
+
+async function captureChatBody(
+	model: Model<"openai-completions">,
+	reasoning: Effort,
+): Promise<Record<string, unknown>> {
+	let captured: Record<string, unknown> | undefined;
+	const fetchMock: FetchImpl = async (_input, init) => {
+		captured = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
+		return chatSse();
+	};
+	const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 0 }] };
+	for await (const event of streamOpenAICompletions(model, context, {
+		apiKey: "cline-test",
+		reasoning,
+		fetch: fetchMock,
+	})) {
+		if (event.type === "done" || event.type === "error") break;
+	}
+	if (!captured) throw new Error("Expected a captured chat-completions request body");
+	return captured;
+}

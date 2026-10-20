@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- ClinePass `deepseek-v4.1-flash-1017` now exposes its `low`/`high`/`max` reasoning ladder and sends the selected `reasoning_effort`; previously the model offered only inherit/off/auto and every non-off level was dropped on the wire
+
 ## [18.12.3] - 2026-10-19
 
 ### Changed
