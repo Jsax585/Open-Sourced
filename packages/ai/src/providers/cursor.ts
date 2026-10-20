@@ -5183,7 +5183,7 @@ async function pairSynthesizedExecResult(
 	toolName: string,
 	text: string,
 	isError = true,
-): Promise<void> {
+): Promise<ToolResultMessage> {
 	const synthesized: ToolResultMessage = {
 		role: "toolResult",
 		toolCallId,
@@ -5192,9 +5192,7 @@ async function pairSynthesizedExecResult(
 		isError,
 		timestamp: Date.now(),
 	};
-	const sink = onToolResult ?? state.onToolResult;
-	if (!sink) return;
-	await sink(synthesized);
+	return (await applyToolResultHandler(synthesized, onToolResult ?? state.onToolResult)) ?? synthesized;
 }
 
 /**
@@ -5219,12 +5217,13 @@ async function answerAskQuestion(
 		outcome = await handler({ toolCallId, args, signal });
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		await pairSynthesizedExecResult(state, onToolResult, toolCallId, "ask", message);
-		return askQuestionRejected(message);
+		const recorded = await pairSynthesizedExecResult(state, onToolResult, toolCallId, "ask", message);
+		return askQuestionRejected(toolResultToText(recorded) || message);
 	}
-	await applyToolResultHandler(outcome.toolResult, onToolResult ?? state.onToolResult);
-	if (outcome.toolResult.isError || !outcome.answers) {
-		return askQuestionRejected(toolResultToText(outcome.toolResult) || "Question was not answered");
+	const toolResult =
+		(await applyToolResultHandler(outcome.toolResult, onToolResult ?? state.onToolResult)) ?? outcome.toolResult;
+	if (toolResult.isError || !outcome.answers) {
+		return askQuestionRejected(toolResultToText(toolResult) || "Question was not answered");
 	}
 	return askQuestionSuccess(query.args, optionIds, outcome.answers);
 }

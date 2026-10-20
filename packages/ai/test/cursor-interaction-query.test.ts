@@ -87,7 +87,7 @@ function decodeConnectFrame(frame: Buffer): AgentClientMessage {
 async function dispatchQuery(
 	query: InteractionQuery,
 	execHandlers?: CursorExecHandlers,
-	onToolResult?: (result: ToolResultMessage) => undefined,
+	onToolResult?: (result: ToolResultMessage) => ToolResultMessage | undefined,
 	output: AssistantMessage = cursorAssistantMessage(),
 	signal?: AbortSignal,
 ): Promise<Buffer[]> {
@@ -302,6 +302,40 @@ describe("cursor native AskQuestion bridge", () => {
 		expect(recorded).toMatchObject([{ toolCallId: "tool_ask_1", toolName: "ask", isError: true }]);
 		expect(decodeConnectFrame(frames[0]!).message.value).toMatchObject({
 			id: 34,
+			result: {
+				case: "askQuestionInteractionResponse",
+				value: { result: { result: { case: "rejected", value: { reason: "dialog crashed" } } } },
+			},
+		});
+	});
+
+	it("rejects with the host-rewritten text when ask fails", async () => {
+		const frames = await dispatchQuery(
+			askQuery(35),
+			{ askQuestion: async () => ({ toolResult: askToolResult("token sk-123 rejected", true) }) },
+			result => ({ ...result, content: [{ type: "text", text: "token [redacted] rejected" }] }),
+		);
+		expect(decodeConnectFrame(frames[0]!).message.value).toMatchObject({
+			id: 35,
+			result: {
+				case: "askQuestionInteractionResponse",
+				value: { result: { result: { case: "rejected", value: { reason: "token [redacted] rejected" } } } },
+			},
+		});
+	});
+
+	it("rejects with the host-rewritten text when the handler throws", async () => {
+		const frames = await dispatchQuery(
+			askQuery(36),
+			{
+				askQuestion: async () => {
+					throw new Error("dialog crashed at /secret/path");
+				},
+			},
+			result => ({ ...result, content: [{ type: "text", text: "dialog crashed" }] }),
+		);
+		expect(decodeConnectFrame(frames[0]!).message.value).toMatchObject({
+			id: 36,
 			result: {
 				case: "askQuestionInteractionResponse",
 				value: { result: { result: { case: "rejected", value: { reason: "dialog crashed" } } } },
