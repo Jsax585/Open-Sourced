@@ -6,6 +6,10 @@
 
 - Fixed Mnemopi memory completions ignoring the memory role's thinking suffix, including one inherited from `tiny` or `smol` when `modelRoles.memory` is unset; each `retry.fallbackChains.memory` entry sends its own level, and `:off` disables reasoning ([#16378](https://github.com/can1357/oh-my-pi/pull/16378) by [@alphastorm](https://github.com/alphastorm))
 - Fixed `/move` path completion jumping into a subfolder on Tab: `..`, `.`, and `~` now complete to `../`, `./`, and `~/` before listing their children, a trailing `\` lists a folder on Windows, absolute Windows paths (`C:/…`) are no longer rewritten as relative paths, and the project directory is offered as `./` instead of `/`
+- The hashline `edit` tool rejects malformed operation headers such as `PUT 351*=357` with a parse error naming the line instead of inserting them (and their bodies) verbatim as payload; body rows start with `+`. The rejection is deferred past a half-typed final streaming header, and the echoed row is length-bounded ([#16538](https://github.com/can1357/oh-my-pi/pull/16538) by [@Komzpa](https://github.com/Komzpa))
+- Fixed hashline `edit` rejecting a fresh snapshot tag when the tag reached the snapshot store in non-uppercase form; snapshot lookup and seen-line recording now compare tags case-insensitively ([#16538](https://github.com/can1357/oh-my-pi/pull/16538) by [@Komzpa](https://github.com/Komzpa))
+- Fixed `PUT N*`/`CUT N*` refusing multi-line openers in QML files (such as `Item {` in `qt/tests/*.qml`) as unsupported syntax: QML has no tree-sitter grammar, so its brace blocks are now resolved by brace matching, and `PUT >N*` lands as a sibling after the block ([#16538](https://github.com/can1357/oh-my-pi/pull/16538) by [@Komzpa](https://github.com/Komzpa))
+- Fixed `PUT >N`/`PUT >N*` anchored on a closing line sliding a shallower body past the enclosing closer (for example a `private:` block landing after the class closer, producing invalid C++): inserts anchored on structural closers now stay at the specified gap ([#16538](https://github.com/can1357/oh-my-pi/pull/16538) by [@Komzpa](https://github.com/Komzpa))
 
 ## [18.12.3] - 2026-10-19
 
