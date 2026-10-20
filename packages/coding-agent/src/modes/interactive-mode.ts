@@ -7351,7 +7351,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * exec. On Windows (no exec semantics) or on exec failure, falls back to
 	 * spawning the replacement and lingering only to forward its exit code.
 	 */
-	async restart(): Promise<void> {
+	async restart(options?: { entry?: string[] }): Promise<void> {
 		if (this.#isShuttingDown) return;
 		this.#beginClose();
 		try {
@@ -7361,9 +7361,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
+		const entry = options?.entry ?? resolveCliEntryCmd();
 		const sessionFile = this.sessionManager.isSessionOnDisk() ? this.sessionManager.getSessionFile() : undefined;
 		const cmd = [
-			...resolveCliEntryCmd(),
+			...entry,
 			...restartArgv(process.argv.slice(2), sessionFile ? path.resolve(sessionFile) : undefined),
 		];
 		await postmortem.cleanup();
