@@ -127,6 +127,7 @@ import {
 	cfgAdvisorMaxNotesPerUpdate,
 	cfgAdvisorReviewInterval,
 	cfgAdvisorReviewMode,
+	cfgAdvisorStaleSteerTurns,
 	cfgAdvisorSyncBacklog,
 } from "../advisor/settings";
 import { cfgCompaction, cfgContextPromotionEnabled } from "./context-settings";
@@ -1736,6 +1737,13 @@ export class SessionAdvisors {
 			this.#deliverAdvisorBatch(notes, formatAdvisorBatchContent(notes), this.#continuesFinishedRun(severity));
 			return;
 		}
+		// A live note is gated against the primary boundary its advisor review covered.
+		const noteTurn = turn ?? this.#advisorPrimaryTurnsCompleted;
+		const turnsAgo =
+			this.#advisorPrimaryTurnsCompleted > noteTurn ? this.#advisorPrimaryTurnsCompleted - noteTurn : 0;
+		const freshnessLimit = cfgAdvisorStaleSteerTurns.get(this.#host.settings);
+		const staleSteerTurns = Number.isFinite(freshnessLimit) && freshnessLimit > 0 ? Math.trunc(freshnessLimit) : 0;
+		const staleSteer = staleSteerTurns > 0 && turnsAgo >= staleSteerTurns;
 		const channel = resolveAdvisorDeliveryChannel({
 			severity,
 			continueSeverity: cfgAdvisorContinueSeverity.get(this.#host.settings),
@@ -1749,8 +1757,13 @@ export class SessionAdvisors {
 			terminalAnswerNoQueuedWork,
 			interruptImmuneTurnActive: this.#isAdvisorInterruptImmuneTurnActive(),
 		});
-		if (channel === "aside") {
-			this.#host.yieldQueue.enqueue("advisor", { note, severity, advisor: source });
+		if (channel === "aside" || (channel === "steer" && staleSteer)) {
+			this.#host.yieldQueue.enqueue("advisor", {
+				note,
+				severity,
+				advisor: source,
+				...(staleSteer ? { turnsAgo } : {}),
+			});
 			return;
 		}
 		this.#deliverAdvisorBatch(notes, formatAdvisorBatchContent(notes), channel === "steer");

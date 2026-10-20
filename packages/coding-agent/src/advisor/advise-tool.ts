@@ -48,10 +48,12 @@ export function formatAdvisorBatchContent(notes: readonly AdvisorNote[], opts?: 
 		.map(n => {
 			const severity = n.severity ? ` severity="${n.severity}"` : "";
 			const who = n.advisor ? ` advisor="${escapeXmlAttribute(n.advisor)}"` : "";
-			const age =
-				opts?.currentTurn !== undefined && n.turn !== undefined && opts.currentTurn > n.turn
-					? ` turns_ago="${opts.currentTurn - n.turn}"`
-					: "";
+			const turnsAgo =
+				n.turnsAgo ??
+				(opts?.currentTurn !== undefined && n.turn !== undefined && opts.currentTurn > n.turn
+					? opts.currentTurn - n.turn
+					: undefined);
+			const age = turnsAgo !== undefined && turnsAgo > 0 ? ` turns_ago="${turnsAgo}"` : "";
 			return `<advisory${who}${severity}${age} guidance="${ADVISOR_GUIDANCE}">\n${escapeXmlText(n.note)}\n</advisory>`;
 		})
 		.join("\n");
