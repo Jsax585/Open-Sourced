@@ -8,7 +8,7 @@ use std::{
 use gix::bstr::ByteSlice;
 
 use super::{
-	DivergenceCache, GitRepo,
+	DivergenceCache, FileStamp, GitRepo, LooseStamp, ReplaceStamp,
 	open::{load_index_or_empty, status_with_fresh_index},
 };
 use crate::{
@@ -447,8 +447,9 @@ impl GitRepo {
 	/// Count commits HEAD is ahead of and behind its upstream tracking branch.
 	/// `None` when HEAD is detached/unborn or no upstream is configured; the
 	/// counts are `(0, 0)` when HEAD and upstream point at the same commit.
-	/// Reuses counts while both tips and shallow boundaries are unchanged;
-	/// tracking configuration and refs are resolved afresh on every call.
+	/// Reuses counts while both tips, shallow boundaries, replacement inputs,
+	/// and the graft file are unchanged; tracking configuration is resolved
+	/// afresh on every call.
 	pub fn ahead_behind(&self) -> Result<Option<(u32, u32)>> {
 		let HeadState::Ref { branch: Some(branch), commit: Some(head), .. } = self.head()? else {
 			return Ok(None);
@@ -468,62 +469,134 @@ impl GitRepo {
 			Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
 			Err(err) => return Err(err.into()),
 		};
-		// `git replace`/`--graft` rewrites reachability without moving refs
-		// either, so its refs join the cache key. gix ignores them entirely
-		// (gix 0.85 collects replacements only when `core.useReplaceRefs` is
-		// false — the check is inverted), so their presence forces the
-		// `rev-list` fallback, which honors them like git does.
-		let replacements = self.replace_refs()?;
-		// Toggling `core.useReplaceRefs` changes reachability without changing
-		// the fingerprint, so enablement joins the key while replacements exist.
-		let use_replace_refs = match &replacements {
-			Some(_) => self.config_get("core.usereplacerefs")?,
-			None => None,
+		// `.git/info/grafts` rewrites reachability without moving refs. gix
+		// never reads it, so an effective graft forces the `rev-list` fallback.
+		let grafts = self.graft_file()?;
+		let grafts_active = graft_file_active(grafts.as_deref());
+		// Replacement refs are the same shape of rewrite. Their presence is
+		// decided from file metadata on the hot path; packed-refs contents are
+		// read only when that metadata changes.
+		let replace_stamp = self.replace_stamp()?;
+		let cached = {
+			let cache = self
+				.divergence
+				.lock()
+				.map_err(|err| Error::backend("git ahead/behind cache", err))?;
+			cache.as_ref().and_then(|cached| {
+				(cached.head == head
+					&& cached.upstream == upstream
+					&& cached.shallow == shallow
+					&& cached.replace_stamp == replace_stamp)
+					.then(|| {
+						(
+							cached.replacements.clone(),
+							cached.use_replace_refs.clone(),
+							cached.grafts.clone(),
+							cached.counts,
+						)
+					})
+			})
 		};
+		let (replacements, use_replace_refs) =
+			if let Some((replacements, cached_use, cached_grafts, counts)) = cached {
+				// Enablement only matters when a replacement ref exists; reading it
+				// opens the repository, so the common no-replacement poll skips it.
+				let use_replace_refs = match &replacements {
+					Some(_) => self.config_get("core.usereplacerefs")?,
+					None => None,
+				};
+				if cached_grafts == grafts && cached_use == use_replace_refs {
+					return Ok(Some(counts));
+				}
+				(replacements, use_replace_refs)
+			} else {
+				let replacements = self.load_replace_refs()?;
+				let use_replace_refs = match &replacements {
+					Some(_) => self.config_get("core.usereplacerefs")?,
+					None => None,
+				};
+				(replacements, use_replace_refs)
+			};
 		let mut cache = self
 			.divergence
 			.lock()
 			.map_err(|err| Error::backend("git ahead/behind cache", err))?;
+		// Another caller may have filled the cache while replacements were read.
 		if let Some(cached) = cache.as_ref()
 			&& cached.head == head
 			&& cached.upstream == upstream
 			&& cached.shallow == shallow
-			&& cached.replacements == replacements
+			&& cached.replace_stamp == replace_stamp
+			&& cached.grafts == grafts
 			&& cached.use_replace_refs == use_replace_refs
 		{
 			return Ok(Some(cached.counts));
 		}
-		let counts = self.count_ahead_behind(&head, &upstream, replacements.as_deref())?;
+		let counts =
+			self.count_ahead_behind(&head, &upstream, replacements.as_deref(), grafts_active)?;
 		if let Some(counts) = counts {
 			*cache = Some(DivergenceCache {
 				head,
 				upstream,
 				shallow,
+				replace_stamp,
 				replacements,
 				use_replace_refs,
+				grafts,
 				counts,
 			});
 		}
 		Ok(counts)
 	}
 
-	/// `refs/replace/*` fingerprint as sorted `src=dst` lines — the same pairs
-	/// gix snapshots into the object store at open time. Read fresh on every
-	/// call: replacements change reachability without moving HEAD, the
-	/// upstream ref, or the shallow file.
-	fn replace_refs(&self) -> Result<Option<Vec<u8>>> {
-		// `GIT_REPLACE_REF_BASE` relocates the whole replacement namespace
-		// (it replaces `refs/replace/`, not adds to it); git accepts the base
-		// with or without a trailing slash.
-		let base = std::env::var("GIT_REPLACE_REF_BASE")
-			.ok()
-			.and_then(|v| nonempty(v.as_str()))
-			.map_or_else(
-				|| "refs/replace/".to_owned(),
-				|v| if v.ends_with('/') { v } else { format!("{v}/") },
-			);
+	/// Raw `.git/info/grafts`, shared with linked worktrees via the common dir.
+	/// `None` when the file is absent. Content, not just presence, is part of
+	/// the divergence cache key: editing or deleting the file changes
+	/// reachability while both tips stay put.
+	fn graft_file(&self) -> Result<Option<Vec<u8>>> {
+		match std::fs::read(self.info().common_dir.join("info").join("grafts")) {
+			Ok(bytes) => Ok(Some(bytes)),
+			Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+			Err(err) => Err(err.into()),
+		}
+	}
+
+	/// Metadata of every replacement-ref input, without reading `packed-refs`.
+	fn replace_stamp(&self) -> Result<ReplaceStamp> {
+		let base = replace_ref_base();
 		if self.is_reftable() {
-			// Replace refs live inside the table; only the CLI can see them.
+			// The table has no packed-refs file to stat. The CLI listing is the
+			// stamp, so an unchanged namespace skips the second listing on the
+			// cache hit; a miss lists again while loading the fingerprint.
+			let listed =
+				cli_try(self.root(), &["for-each-ref", "--format=%(refname)=%(objectname)", &base])?;
+			return Ok(ReplaceStamp {
+				base,
+				packed: Vec::new(),
+				loose: vec![match listed {
+					Some(text) => {
+						vec![LooseStamp { name: text, len: 0, modified: std::time::UNIX_EPOCH }]
+					},
+					None => Vec::new(),
+				}],
+			});
+		}
+		let mut packed = Vec::new();
+		let mut loose = Vec::new();
+		for dir in self.ref_store_dirs() {
+			packed.push(file_stamp(&dir.join("packed-refs"))?);
+			loose.push(loose_replace_stamp(&dir.join(&base))?);
+		}
+		Ok(ReplaceStamp { base, packed, loose })
+	}
+
+	/// Sorted `src=dst` lines for the replacement namespace. `None` when it is
+	/// empty. gix ignores these refs (gix 0.85 collects them only when
+	/// `core.useReplaceRefs` is false — the check is inverted), so a `Some`
+	/// result forces the `rev-list` fallback.
+	fn load_replace_refs(&self) -> Result<Option<Vec<u8>>> {
+		let base = replace_ref_base();
+		if self.is_reftable() {
 			return Ok(cli_try(self.root(), &[
 				"for-each-ref",
 				"--format=%(refname)=%(objectname)",
@@ -531,47 +604,64 @@ impl GitRepo {
 			])?
 			.map(String::into_bytes));
 		}
-		let mut names = Vec::new();
-		if let Ok(entries) = std::fs::read_dir(self.info().common_dir.join(&base)) {
-			for entry in entries.flatten() {
-				if entry.file_type().is_ok_and(|t| t.is_file())
-					&& let Ok(name) = entry.file_name().into_string()
-				{
-					names.push(name);
-				}
-			}
-		}
-		for dir in [&self.info().git_dir, &self.info().common_dir] {
+		// Later writes win: packed refs, then loose refs, and within each the
+		// common dir before the worktree git dir. That matches `read_ref`,
+		// which consults the worktree loose store before any packed file.
+		let mut found = BTreeMap::new();
+		let dirs = self.ref_store_dirs();
+		for dir in &dirs {
 			let Ok(content) = std::fs::read_to_string(dir.join("packed-refs")) else {
 				continue;
 			};
-			for line in content
-				.lines()
-				.map(str::trim)
-				.filter(|line| !line.is_empty() && !line.starts_with(['#', '^']))
-			{
-				if let Some((_, name)) = line.split_once(' ')
+			for line in packed_ref_lines(&content) {
+				if let Some((sha, name)) = line.split_once(' ')
 					&& let Some(short) = name.strip_prefix(&base)
 				{
-					names.push(short.to_owned());
+					found.insert(short.to_owned(), sha.to_owned());
 				}
 			}
 		}
-		if names.is_empty() {
-			return Ok(None);
-		}
-		names.sort();
-		names.dedup();
-		let mut lines = Vec::with_capacity(names.len());
-		for name in names {
-			if let Some(target) = self.read_ref(&format!("{base}{name}"))? {
-				lines.push(format!("{name}={target}"));
+		for dir in &dirs {
+			let Ok(entries) = std::fs::read_dir(dir.join(&base)) else {
+				continue;
+			};
+			for entry in entries.flatten() {
+				if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+					continue;
+				}
+				let Ok(name) = entry.file_name().into_string() else {
+					continue;
+				};
+				let Ok(value) = std::fs::read_to_string(entry.path()) else {
+					continue;
+				};
+				let Some(value) = nonempty(value.trim()) else {
+					continue;
+				};
+				found.insert(name, value);
 			}
 		}
-		if lines.is_empty() {
+		if found.is_empty() {
 			return Ok(None);
 		}
+		let lines: Vec<_> = found
+			.into_iter()
+			.map(|(name, target)| format!("{name}={target}"))
+			.collect();
 		Ok(Some(lines.join("\n").into_bytes()))
+	}
+
+	/// Common dir, then the per-worktree git dir when it is a different path.
+	/// An ordinary checkout has `git_dir == common_dir` and is scanned once,
+	/// so `packed-refs` is not read twice on every status poll.
+	fn ref_store_dirs(&self) -> Vec<&Path> {
+		let git_dir = self.info().git_dir.as_path();
+		let common_dir = self.info().common_dir.as_path();
+		if git_dir == common_dir {
+			vec![git_dir]
+		} else {
+			vec![common_dir, git_dir]
+		}
 	}
 
 	fn count_ahead_behind(
@@ -579,15 +669,16 @@ impl GitRepo {
 		head: &str,
 		upstream: &str,
 		replacements: Option<&[u8]>,
+		grafts: bool,
 	) -> Result<Option<(u32, u32)>> {
-		if self.is_reftable() || replacements.is_some() {
+		if self.is_reftable() || replacements.is_some() || grafts {
 			let spec = format!("{head}...{upstream}");
 			let counts = match cli_try(self.root(), &["rev-list", "--left-right", "--count", &spec]) {
 				Ok(counts) => counts,
-				// The replacements fallback needs a git binary; without one the
-				// count is simply unavailable, not a reason to drop the file
-				// status that was already computed.
-				Err(err) if replacements.is_some() && is_git_spawn(&err) => {
+				// The fallback needs a git binary; without one the count is
+				// simply unavailable, not a reason to drop the file status
+				// that was already computed.
+				Err(err) if (replacements.is_some() || grafts) && is_git_spawn(&err) => {
 					return Ok(None);
 				},
 				Err(err) => return Err(err),
@@ -1357,6 +1448,87 @@ impl GitRepo {
 fn nonempty(value: &str) -> Option<String> {
 	(!value.is_empty()).then(|| value.to_owned())
 }
+
+/// `GIT_REPLACE_REF_BASE` relocates the whole replacement namespace (it
+/// replaces `refs/replace/`, not adds to it). A missing trailing slash is
+/// added so `refs/bisect` and `refs/bisect/` both name the `refs/bisect/`
+/// directory git uses for that per-worktree namespace.
+fn replace_ref_base() -> String {
+	std::env::var("GIT_REPLACE_REF_BASE")
+		.ok()
+		.and_then(|value| nonempty(value.as_str()))
+		.map_or_else(
+			|| "refs/replace/".to_owned(),
+			|value| {
+				if value.ends_with('/') {
+					value
+				} else {
+					format!("{value}/")
+				}
+			},
+		)
+}
+
+/// Whether `info/grafts` contains a graft. Comment and blank lines do not;
+/// git leaves reachability unchanged for those, so the gix walk is still
+/// correct and the `rev-list` fallback stays unused.
+fn graft_file_active(bytes: Option<&[u8]>) -> bool {
+	let Some(bytes) = bytes else {
+		return false;
+	};
+	let Ok(text) = std::str::from_utf8(bytes) else {
+		return true;
+	};
+	text.lines().any(|line| {
+		let line = line.trim();
+		!line.is_empty() && !line.starts_with('#')
+	})
+}
+
+fn file_stamp(path: &Path) -> Result<Option<FileStamp>> {
+	match std::fs::metadata(path) {
+		Ok(meta) => Ok(Some(FileStamp {
+			len:      meta.len(),
+			modified: meta.modified().unwrap_or(std::time::UNIX_EPOCH),
+		})),
+		Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+		Err(err) => Err(err.into()),
+	}
+}
+
+fn loose_replace_stamp(dir: &Path) -> Result<Vec<LooseStamp>> {
+	let entries = match std::fs::read_dir(dir) {
+		Ok(entries) => entries,
+		Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+		Err(err) => return Err(err.into()),
+	};
+	let mut stamps = Vec::new();
+	for entry in entries.flatten() {
+		if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+			continue;
+		}
+		let Ok(name) = entry.file_name().into_string() else {
+			continue;
+		};
+		let Ok(meta) = entry.metadata() else {
+			continue;
+		};
+		stamps.push(LooseStamp {
+			name,
+			len: meta.len(),
+			modified: meta.modified().unwrap_or(std::time::UNIX_EPOCH),
+		});
+	}
+	stamps.sort_by(|left, right| left.name.cmp(&right.name));
+	Ok(stamps)
+}
+
+fn packed_ref_lines(content: &str) -> impl Iterator<Item = &str> {
+	content
+		.lines()
+		.map(str::trim)
+		.filter(|line| !line.is_empty() && !line.starts_with(['#', '^']))
+}
 fn valid_ref_path(name: &str) -> bool {
 	!name.is_empty()
 		&& !name.starts_with('/')
@@ -2072,7 +2244,8 @@ mod tests {
 			"1\t0"
 		);
 		assert_eq!(repo.ahead_behind()?, Some((1, 0)));
-		// Changing tracking configuration must be observed even with unchanged HEAD.
+		// Changing tracking configuration must be observed even with unchanged
+		// HEAD.
 		git(root, &["config", "branch.main.merge", "refs/heads/main"])?;
 		assert_eq!(repo.ahead_behind()?, Some((0, 0)));
 		git(root, &["config", "branch.main.merge", "refs/custom/origin/changes/1"])?;
@@ -2213,7 +2386,8 @@ mod tests {
 		// Against `one` feat is (1, 0); against `two` it would be (1, 1).
 		assert_eq!(repo.ahead_behind()?, Some((1, 0)));
 
-		// Same ordering when the merge refs map through a remote's fetch refspecs.
+		// Same ordering when the merge refs map through a remote's fetch
+		// refspecs.
 		git(root, &["remote", "add", "origin", "."])?;
 		git(root, &["fetch", "origin"])?;
 		git(root, &["config", "branch.feat.remote", "origin"])?;
@@ -2348,18 +2522,212 @@ mod tests {
 		assert_eq!(repo.ahead_behind()?, Some((1, 0)));
 		git(root, &["config", "core.useReplaceRefs", "true"])?;
 		assert_eq!(repo.ahead_behind()?, Some((2, 1)));
+		Ok(())
+	}
 
-		// A custom replacement namespace relocates the whole feature: the
-		// default refs/replace/ entry is ignored while the custom one counts.
+	/// `GIT_REPLACE_REF_BASE` is process-global. The probe runs in a re-executed
+	/// child so a parallel test, and an inherited value, cannot observe it.
+	const REPLACE_PROBE_REPO: &str = "PI_VCS_TEST_REPLACE_PROBE_REPO";
+
+	fn divergence_text(root: &Path) -> std::result::Result<String, Box<dyn std::error::Error>> {
+		Ok(git(root, &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])?
+			.trim()
+			.to_owned())
+	}
+
+	fn parse_divergence(text: &str) -> Option<(u32, u32)> {
+		let (ahead, behind) = text.split_once('\t')?;
+		Some((ahead.trim().parse().ok()?, behind.trim().parse().ok()?))
+	}
+
+	fn reexec_replace_probe(test_fn: &str, repo: &Path, base: &str) -> TestResult {
+		let name = format!(
+			"{}::{test_fn}",
+			module_path!()
+				.split_once("::")
+				.ok_or("crate-qualified module path")?
+				.1
+		);
+		let child = Command::new(std::env::current_exe()?)
+			.args(["--exact", &name, "--nocapture", "--test-threads=1"])
+			.env(REPLACE_PROBE_REPO, repo)
+			.env("GIT_REPLACE_REF_BASE", base)
+			.output()?;
+		if child.status.success() {
+			return Ok(());
+		}
+		Err(
+			format!(
+				"{test_fn} probe failed:\n{}{}",
+				String::from_utf8_lossy(&child.stdout),
+				String::from_utf8_lossy(&child.stderr)
+			)
+			.into(),
+		)
+	}
+
+	#[test]
+	fn upstream_divergence_honors_custom_replace_base() -> TestResult {
+		if let Some(root) = std::env::var_os(REPLACE_PROBE_REPO) {
+			let root = PathBuf::from(root);
+			let repo = GitRepo::require(&root)?;
+			// The child inherits the custom base. `refs/custom/<head>` replaces
+			// HEAD with the side commit, so the refs/replace graft must not win.
+			let oracle = divergence_text(&root)?;
+			assert_eq!(oracle, "1\t1");
+			assert_eq!(repo.ahead_behind()?, Some((1, 1)));
+			assert_eq!(repo.ahead_behind()?, Some((1, 1)));
+			return Ok(());
+		}
+
+		let (dir, repo) = repo()?;
+		let root = dir.path();
+		commit(root, "base", "base\n", "base")?;
+		git(root, &["branch", "upstream"])?;
+		commit(root, "a1", "a1\n", "a1")?;
+		git(root, &["config", "branch.main.remote", "."])?;
+		git(root, &["config", "branch.main.merge", "refs/heads/upstream"])?;
+		let tree = git(root, &["write-tree"])?;
+		let side = git(root, &["commit-tree", tree.trim(), "-m", "side"])?;
+		git(root, &["replace", "--graft", "HEAD", side.trim()])?;
 		let head = git(root, &["rev-parse", "HEAD"])?;
 		git(root, &["update-ref", &format!("refs/custom/{}", head.trim()), side.trim()])?;
-		// SAFETY: single-threaded test binary section; no other test reads
-		// this variable, and it is restored before returning.
-		unsafe { std::env::set_var("GIT_REPLACE_REF_BASE", "refs/custom") };
-		assert_eq!(repo.ahead_behind()?, Some((1, 1)));
-		// SAFETY: same as above; restores the process default.
-		unsafe { std::env::remove_var("GIT_REPLACE_REF_BASE") };
+		assert_eq!(divergence_text(root)?, "2\t1");
 		assert_eq!(repo.ahead_behind()?, Some((2, 1)));
+
+		let inherited = std::env::var_os("GIT_REPLACE_REF_BASE");
+		reexec_replace_probe("upstream_divergence_honors_custom_replace_base", root, "refs/custom")?;
+		assert_eq!(std::env::var_os("GIT_REPLACE_REF_BASE"), inherited);
+		// The parent process never adopted the custom base.
+		assert_eq!(repo.ahead_behind()?, Some((2, 1)));
+		Ok(())
+	}
+
+	#[test]
+	fn upstream_divergence_scans_worktree_replace_namespace() -> TestResult {
+		if let Some(root) = std::env::var_os(REPLACE_PROBE_REPO) {
+			let root = PathBuf::from(root);
+			let repo = GitRepo::require(&root)?;
+			// `refs/bisect/<oid>` lives in the worktree git dir. The custom base
+			// makes it the replacement namespace, so the unreplaced (1, 0) is
+			// wrong.
+			let oracle = divergence_text(&root)?;
+			assert_eq!(oracle, "1\t1");
+			assert_eq!(repo.ahead_behind()?, Some((1, 1)));
+			assert_eq!(repo.ahead_behind()?, Some((1, 1)));
+			return Ok(());
+		}
+
+		let (dir, repo) = repo()?;
+		let root = dir.path();
+		commit(root, "base", "base\n", "base")?;
+		git(root, &["branch", "upstream"])?;
+		commit(root, "a1", "a1\n", "a1")?;
+		git(root, &["config", "branch.main.remote", "."])?;
+		git(root, &["config", "branch.main.merge", "refs/heads/upstream"])?;
+		let tree = git(root, &["write-tree"])?;
+		let side = git(root, &["commit-tree", tree.trim(), "-m", "side"])?;
+		let head = git(root, &["rev-parse", "HEAD"])?.trim().to_owned();
+		// `main` is already checked out here, so the linked worktree needs its
+		// own branch. It tracks the same local upstream.
+		git(root, &["branch", "wt-main", "main"])?;
+		git(root, &["config", "branch.wt-main.remote", "."])?;
+		git(root, &["config", "branch.wt-main.merge", "refs/heads/upstream"])?;
+		let wt = root.join("wt");
+		git(root, &["worktree", "add", "--quiet", wt.to_str().unwrap(), "wt-main"])?;
+		let wt_repo = GitRepo::require(&wt)?;
+		let loose = wt_repo.info().git_dir.join(format!("refs/bisect/{head}"));
+		fs::create_dir_all(loose.parent().unwrap())?;
+		fs::write(&loose, format!("{}\n", side.trim()))?;
+		assert!(
+			!repo
+				.info()
+				.common_dir
+				.join(format!("refs/bisect/{head}"))
+				.exists(),
+			"replacement leaked into the common dir"
+		);
+		assert_eq!(divergence_text(root)?, "1\t0");
+		assert_eq!(repo.ahead_behind()?, Some((1, 0)));
+
+		let inherited = std::env::var_os("GIT_REPLACE_REF_BASE");
+		reexec_replace_probe(
+			"upstream_divergence_scans_worktree_replace_namespace",
+			&wt,
+			"refs/bisect",
+		)?;
+		assert_eq!(std::env::var_os("GIT_REPLACE_REF_BASE"), inherited);
+		assert_eq!(repo.ahead_behind()?, Some((1, 0)));
+		Ok(())
+	}
+
+	#[test]
+	fn upstream_divergence_invalidates_when_graft_file_changes() -> TestResult {
+		let (dir, repo) = repo()?;
+		let root = dir.path();
+		commit(root, "base", "base\n", "base")?;
+		git(root, &["branch", "upstream"])?;
+		commit(root, "a1", "a1\n", "a1")?;
+		git(root, &["config", "branch.main.remote", "."])?;
+		git(root, &["config", "branch.main.merge", "refs/heads/upstream"])?;
+		assert_eq!(repo.ahead_behind()?, Some((1, 0)));
+		let synced = divergence_text(root)?;
+		assert_eq!(synced, "1\t0");
+
+		let tree = git(root, &["write-tree"])?;
+		let side = git(root, &["commit-tree", tree.trim(), "-m", "side"])?;
+		let head = git(root, &["rev-parse", "HEAD"])?;
+		let grafts = repo.info().common_dir.join("info").join("grafts");
+		fs::create_dir_all(grafts.parent().unwrap())?;
+		fs::write(&grafts, format!("{} {}\n", head.trim(), side.trim()))?;
+		let grafted = divergence_text(root)?;
+		assert_ne!(grafted, synced);
+		assert_eq!(repo.ahead_behind()?, parse_divergence(&grafted));
+
+		// Rewriting the file, not deleting it, still has to drop the cached walk.
+		fs::write(&grafts, format!("{}\n", head.trim()))?;
+		let rerooted = divergence_text(root)?;
+		assert_ne!(rerooted, grafted);
+		assert_eq!(repo.ahead_behind()?, parse_divergence(&rerooted));
+
+		// Comments do not change reachability. git keeps the ungrafted counts.
+		fs::write(&grafts, "# comment only\n")?;
+		assert_eq!(divergence_text(root)?, synced);
+		assert_eq!(repo.ahead_behind()?, parse_divergence(&synced));
+
+		fs::remove_file(&grafts)?;
+		assert_eq!(divergence_text(root)?, synced);
+		assert_eq!(repo.ahead_behind()?, parse_divergence(&synced));
+		Ok(())
+	}
+
+	#[test]
+	fn upstream_divergence_invalidates_when_packed_replace_refs_change() -> TestResult {
+		let (dir, repo) = repo()?;
+		let root = dir.path();
+		commit(root, "base", "base\n", "base")?;
+		git(root, &["branch", "upstream"])?;
+		commit(root, "a1", "a1\n", "a1")?;
+		git(root, &["config", "branch.main.remote", "."])?;
+		git(root, &["config", "branch.main.merge", "refs/heads/upstream"])?;
+		assert_eq!(repo.ahead_behind()?, Some((1, 0)));
+
+		let tree = git(root, &["write-tree"])?;
+		let side = git(root, &["commit-tree", tree.trim(), "-m", "side"])?;
+		let head = git(root, &["rev-parse", "HEAD"])?.trim().to_owned();
+		let packed = repo.info().common_dir.join("packed-refs");
+		let previous = fs::read_to_string(&packed).unwrap_or_default();
+		fs::write(&packed, format!("{previous}{} refs/replace/{head}\n", side.trim()))?;
+		let replaced = divergence_text(root)?;
+		assert_ne!(replaced, "1\t0");
+		assert_eq!(repo.ahead_behind()?, parse_divergence(&replaced));
+		// The second poll must reuse the parsed packed-refs result, not a stale
+		// pre-pack count.
+		assert_eq!(repo.ahead_behind()?, parse_divergence(&replaced));
+
+		fs::write(&packed, previous)?;
+		assert_eq!(divergence_text(root)?, "1\t0");
+		assert_eq!(repo.ahead_behind()?, Some((1, 0)));
 		Ok(())
 	}
 

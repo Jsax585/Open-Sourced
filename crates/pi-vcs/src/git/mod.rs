@@ -49,9 +49,40 @@ struct DivergenceCache {
 	head:             String,
 	upstream:         String,
 	shallow:          Option<Vec<u8>>,
+	/// Metadata of the packed-refs files and loose replacement refs that
+	/// produced `replacements`. Status polls compare this instead of rereading
+	/// packed-refs contents.
+	replace_stamp:    ReplaceStamp,
 	replacements:     Option<Vec<u8>>,
 	use_replace_refs: Option<String>,
+	/// Raw `.git/info/grafts` bytes, when the file exists. Grafts change
+	/// reachability without moving either tip.
+	grafts:           Option<Vec<u8>>,
 	counts:           (u32, u32),
+}
+
+/// Cheap identity of the replacement-ref inputs. `packed` and `loose` follow
+/// [`GitRepo`]'s ref stores, common dir then the worktree git dir when they
+/// differ, so a linked worktree is not scanned twice when they are the same
+/// path.
+#[derive(Clone, PartialEq, Eq)]
+struct ReplaceStamp {
+	base:   String,
+	packed: Vec<Option<FileStamp>>,
+	loose:  Vec<Vec<LooseStamp>>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct FileStamp {
+	len:      u64,
+	modified: std::time::SystemTime,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct LooseStamp {
+	name:     String,
+	len:      u64,
+	modified: std::time::SystemTime,
 }
 
 impl std::fmt::Debug for GitRepo {

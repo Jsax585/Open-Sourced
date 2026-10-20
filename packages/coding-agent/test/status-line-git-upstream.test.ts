@@ -11,26 +11,69 @@ import { stripVTControlCharacters } from "node:util";
 import { renderSegment } from "@oh-my-pi/pi-tui/status-line/segments";
 import type { SegmentContext } from "@oh-my-pi/pi-tui/status-line/types";
 import { loadTheme } from "@oh-my-pi/pi-tui/theme/loader";
-import { setThemeInstance, type Theme, theme } from "@oh-my-pi/pi-tui/theme";
+import {
+	exchangeTheme,
+	getColorBlindMode,
+	getCurrentThemeName,
+	getNativeThemePaletteKey,
+	getSymbolPresetOverride,
+	getThemeEpoch,
+	type SymbolPreset,
+	type Theme,
+	theme,
+} from "@oh-my-pi/pi-tui/theme";
 
-// Segments render through the process-global theme that every test file in this
-// process shares. Build the presets we need as standalone instances and swap
-// them in with setThemeInstance, then put the exact prior instance back: the
-// module's preset override, theme name, and color-blind state are never touched.
+// Segments render through the process-global theme object. `exchangeTheme`
+// swaps that object only: theme name, auto-detection, symbol-preset override,
+// color-blind mode, and the watcher stay as this file found them.
 let priorTheme: Theme | undefined;
 let unicodeTheme: Theme;
 let asciiTheme: Theme;
+let managerKey = "";
+let themeName: string | undefined;
+let symbolPreset: SymbolPreset | undefined;
+let colorBlind = false;
+let themeEpoch = 0;
 
 beforeAll(async () => {
-	priorTheme = theme;
 	unicodeTheme = await loadTheme("dark", { symbolPresetOverride: "unicode" });
 	asciiTheme = await loadTheme("dark", { symbolPresetOverride: "ascii" });
-	setThemeInstance(unicodeTheme);
+	managerKey = getNativeThemePaletteKey();
+	themeName = getCurrentThemeName();
+	symbolPreset = getSymbolPresetOverride();
+	colorBlind = getColorBlindMode();
+	themeEpoch = getThemeEpoch();
+	priorTheme = typeof theme === "undefined" ? undefined : theme;
+	exchangeTheme(unicodeTheme);
+	expect(managerFingerprint()).toEqual(savedManager());
 });
 
 afterAll(() => {
-	if (priorTheme) setThemeInstance(priorTheme);
+	if (priorTheme) exchangeTheme(priorTheme);
+	expect(managerFingerprint()).toEqual(savedManager());
 });
+
+interface ThemeManagerSnapshot {
+	key: string;
+	name: string | undefined;
+	preset: SymbolPreset | undefined;
+	colorBlind: boolean;
+	epoch: number;
+}
+
+function savedManager(): ThemeManagerSnapshot {
+	return { key: managerKey, name: themeName, preset: symbolPreset, colorBlind, epoch: themeEpoch };
+}
+
+function managerFingerprint(): ThemeManagerSnapshot {
+	return {
+		key: getNativeThemePaletteKey(),
+		name: getCurrentThemeName(),
+		preset: getSymbolPresetOverride(),
+		colorBlind: getColorBlindMode(),
+		epoch: getThemeEpoch(),
+	};
+}
 
 type GitStatus = NonNullable<SegmentContext["git"]["status"]>;
 
@@ -75,15 +118,16 @@ describe("git segment upstream indicators", () => {
 	});
 
 	it("falls back to ASCII arrows under the ascii symbol preset", () => {
-		// The finally restores the suite's preset even when an assertion fails.
+		// The finally restores the suite's theme object even when an assertion fails.
 		try {
-			setThemeInstance(asciiTheme);
+			exchangeTheme(asciiTheme);
 			const text = plain({ staged: 0, unstaged: 0, untracked: 0, ahead: 2, behind: 1 });
 			expect(text).toContain("^2");
 			expect(text).toContain("v1");
 			expect(text).not.toContain("⇡");
+			expect(managerFingerprint()).toEqual(savedManager());
 		} finally {
-			setThemeInstance(unicodeTheme);
+			exchangeTheme(unicodeTheme);
 		}
 	});
 });
