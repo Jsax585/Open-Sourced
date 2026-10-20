@@ -2,8 +2,10 @@
   addDriverRunpath,
   autoPatchelfHook,
   alsa-lib,
+  apple-sdk_27 ? null,
   bun,
   bun2nix,
+  callPackage,
   cmake,
   config,
   cudaPackages_13 ? null,
@@ -20,6 +22,7 @@
   source,
   stdenv,
   stdenvNoCC,
+  swiftToolchain ? callPackage ./swift-toolchain.nix { },
   unzip,
   # onnxruntime-node (downloaded into the agent cache on first use) ships CUDA
   # execution providers that dlopen vendor libraries absent from the NixOS
@@ -37,6 +40,7 @@
 let
   packageJson = lib.importJSON ../packages/coding-agent/package.json;
   rootPackageJson = lib.importJSON ../package.json;
+  withAppleFm = stdenv.hostPlatform.system == "aarch64-darwin";
   platform =
     {
       aarch64-darwin = {
@@ -142,7 +146,8 @@ stdenv.mkDerivation {
   # libgcc_s is resolved from the compiler's lib output during autoPatchelf.
   buildInputs =
     lib.optionals stdenv.hostPlatform.isLinux [ stdenv.cc.cc.lib ]
-    ++ lib.optionals withWaylandScreencast [ pipewire ];
+    ++ lib.optionals withWaylandScreencast [ pipewire ]
+    ++ lib.optional withAppleFm apple-sdk_27;
 
   strictDeps = true;
   # Nix builders cannot reliably hardlink cache files into node_modules
@@ -164,7 +169,18 @@ stdenv.mkDerivation {
     SOURCE_DATE_EPOCH = "1";
   }
   // lib.optionalAttrs (platform ? rustFlags) { RUSTFLAGS = platform.rustFlags; }
-  // lib.optionalAttrs stdenv.hostPlatform.isDarwin { BUN_NO_CODESIGN_MACHO_BINARY = "1"; };
+  // lib.optionalAttrs stdenv.hostPlatform.isDarwin { BUN_NO_CODESIGN_MACHO_BINARY = "1"; }
+  // lib.optionalAttrs withAppleFm { OMP_APPLEFM_SWIFTC = "${swiftToolchain}/bin/swiftc"; };
+
+  # Cargo otherwise succeeds with an empty bridge when detection fails.
+  preBuild = lib.optionalString withAppleFm ''
+    toolchain="$(/bin/sh crates/pi-natives/src/applefm/build-bridge.sh detect)"
+    if [ -z "$toolchain" ]; then
+      echo "OMP requires Swift 6.4+ and the macOS 27 SDK for Foundation Models" >&2
+      exit 1
+    fi
+    echo "Apple Foundation Models toolchain: $toolchain"
+  '';
 
   buildPhase = ''
     runHook preBuild
@@ -323,6 +339,16 @@ stdenv.mkDerivation {
         echo "$addonDeps" >&2
         exit 1
       fi
+    ''}
+    ${lib.optionalString withAppleFm ''
+      # Model/device eligibility is not a build requirement. Missing or
+      # unloadable bridge code is; older macOS may report unsupported_os.
+      HOME="$TMPDIR" bun -e '
+        const native = require("./packages/natives/native/${platform.addon}");
+        const status = JSON.parse(await native.appleFmAvailability());
+        console.log("Apple Foundation Models:", status);
+        if (status.reason === "not_built" || status.reason === "runtime") process.exit(1);
+      '
     ''}
     runHook postInstallCheck
   '';

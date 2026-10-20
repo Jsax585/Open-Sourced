@@ -11,6 +11,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+    # Apple Silicon needs SDK 27 and a linker that understands its stubs.
+    # Keep other platforms and the Bun/Rust toolchains on their existing pins.
+    nixpkgs-apple.url = "github:NixOS/nixpkgs/8edc0c72e3a38faf5434e40d1f19431125fe4b30";
+
     # nixpkgs unstable dropped Intel macOS in 26.11; keep that supported
     # platform on the final stable branch that still receives security fixes.
     nixpkgs-darwin-x64.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
@@ -47,6 +51,7 @@
       nix-bun,
       nixpkgs,
       nixpkgs-darwin-x64,
+      nixpkgs-apple,
       rust-overlay,
       ...
     }:
@@ -86,7 +91,8 @@
       packageFor =
         system:
         let
-          pkgs = pkgsFor system;
+          pkgs =
+            if system == "aarch64-darwin" then nixpkgs-apple.legacyPackages.${system} else pkgsFor system;
           localPkgs = localPackagesFor system;
         in
         pkgs.callPackage ./nix/package.nix (
@@ -94,6 +100,10 @@
             source = self.outPath;
           }
           // localPkgs
+          // pkgs.lib.optionalAttrs (system == "aarch64-darwin") {
+            # rust-overlay propagates its C compiler; pair it with SDK 27 too.
+            rustToolchain = (rust-overlay.lib.mkRustBin { } pkgs).fromRustupToolchainFile ./rust-toolchain.toml;
+          }
         );
     in
     {

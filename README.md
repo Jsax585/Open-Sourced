@@ -632,6 +632,15 @@ bun run gen:nix
 
 The command uses `bun2nix` from `nix develop` when available, otherwise enters the development shell through Nix, then falls back to the pinned `bunx bun2nix@2.1.2`. Do not edit `nix/bun.nix` manually.
 
+On Apple Silicon, `nix build .#omp` supplies Swift 6.4 and the macOS 27 SDK
+to compile the Apple Foundation Models bridge without a host Xcode installation.
+The `nixpkgs-apple` input provides an SDK-compatible stdenv; the Bun and Rust
+versions and the Linux/Intel Mac package sets remain unchanged. The compiler and
+SDK are build-only dependencies. The package check rejects a missing or unloadable
+bridge, but does not require model availability: using Apple Foundation Models
+still requires macOS 27+, an eligible device, and enabled/downloaded Apple
+Intelligence models. Older macOS systems can run OMP without loading the bridge.
+
 For a non-interactive smoke check:
 
 ```sh
