@@ -5,7 +5,7 @@
  * when a woken subagent re-yields, so a parent reads the same shape (status,
  * preview, `agent://` pointer) regardless of which path delivered it.
  */
-import { escapeXmlAttribute, prompt } from "@oh-my-pi/pi-utils";
+import { escapeXmlAttribute, escapeXmlText, prompt } from "@oh-my-pi/pi-utils";
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
 import { AgentRegistry, isResumable } from "../registry/agent-registry";
 import { escapeHarnessTags } from "../session/harness-tags";
@@ -65,8 +65,9 @@ export function formatTaskResultSummary(
 	const resumable = result.aborted && !result.isolated && isResumable(AgentRegistry.global().get(result.id));
 	// A fallback answered for the requested model: name what served, and why
 	// when the session started on it, so the parent never reads a substituted
-	// run as the model it dispatched. The selectors are attribute values (the
-	// template renders unescaped), so a `"` cannot close them early.
+	// run as the model it dispatched. The template renders unescaped, so the
+	// selectors are escaped as attribute values and the reason, which quotes
+	// them, as element text: neither can close the `<model>` line early.
 	const modelFallback =
 		result.resolvedModelIsFallback && result.resolvedModel
 			? {
@@ -78,7 +79,7 @@ export function formatTaskResultSummary(
 					reason:
 						result.resolvedModelFallbackReason === undefined
 							? undefined
-							: escapeHarnessTags(result.resolvedModelFallbackReason),
+							: escapeXmlText(result.resolvedModelFallbackReason),
 				}
 			: undefined;
 	return prompt.render(taskSummaryTemplate, {
