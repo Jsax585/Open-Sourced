@@ -35,17 +35,20 @@ const THEIRS_PREFIX = ">>>>>>>";
  *
  * Only fully-closed blocks (opener + separator + closer all pushed) are
  * collected. A block still open when the lines run out is dropped — the
- * agent will see the open marker and can widen the read. A block whose
- * section lines pass `maxBlockChars` is dropped as soon as it does, so an
- * opener that never closes cannot hold the rest of the file; its opener
- * line goes to `oversized`.
+ * agent will see the open marker and can widen the read. Section lines
+ * kept across all blocks cost at most `maxRetained` (each line's `cost`,
+ * by default its length plus its line break): a block that would pass it
+ * is dropped as soon as it does, its opener line going to `unlisted`, so
+ * neither an opener that never closes nor many large blocks can hold the
+ * rest of the file.
  */
 export class ConflictScanner {
 	readonly blocks: ConflictBlock[] = [];
-	readonly oversized: number[] = [];
+	readonly unlisted: number[] = [];
 	#nextLine: number;
-	#maxBlockChars: number;
-	#blockChars = 0;
+	#maxRetained: number;
+	#retained = 0;
+	#blockCost = 0;
 	#phase: "idle" | "ours" | "base" | "theirs" = "idle";
 	#partial: {
 		startLine: number;
@@ -58,12 +61,12 @@ export class ConflictScanner {
 		theirsLines?: string[];
 	} | null = null;
 
-	constructor(firstLineNumber: number, maxBlockChars = Number.POSITIVE_INFINITY) {
+	constructor(firstLineNumber: number, maxRetained = Number.POSITIVE_INFINITY) {
 		this.#nextLine = firstLineNumber;
-		this.#maxBlockChars = maxBlockChars;
+		this.#maxRetained = maxRetained;
 	}
 
-	push(rawLine: string): void {
+	push(rawLine: string, cost = rawLine.length + 1): void {
 		// Strip a trailing \r so CRLF checkouts match the same markers; stored
 		// section lines are LF-normalized (splice re-applies \r on write).
 		const line = stripTrailingCr(rawLine);
@@ -73,7 +76,7 @@ export class ConflictScanner {
 		if (oursLabel !== null) {
 			this.#partial = { startLine: ln, oursLabel: oursLabel || undefined, oursLines: [] };
 			this.#phase = "ours";
-			this.#blockChars = 0;
+			this.#blockCost = 0;
 			return;
 		}
 
@@ -107,6 +110,7 @@ export class ConflictScanner {
 		const theirsLabel = matchMarker(line, THEIRS_PREFIX);
 		if (theirsLabel !== null) {
 			if (this.#phase === "theirs" && partial.separatorLine !== undefined && partial.theirsLines) {
+				this.#retained += this.#blockCost;
 				this.blocks.push({
 					startLine: partial.startLine,
 					separatorLine: partial.separatorLine,
@@ -124,10 +128,9 @@ export class ConflictScanner {
 			return;
 		}
 
-		// Count the line break too, so a run of empty lines still fills the budget.
-		this.#blockChars += line.length + 1;
-		if (this.#blockChars > this.#maxBlockChars) {
-			this.oversized.push(partial.startLine);
+		this.#blockCost += cost;
+		if (this.#retained + this.#blockCost > this.#maxRetained) {
+			this.unlisted.push(partial.startLine);
 			this.#reset();
 			return;
 		}
@@ -154,7 +157,7 @@ export function scanConflictLines(lines: readonly string[], firstLineNumber: num
 }
 
 const SCAN_FILE_DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
-/** Most a file scan keeps of one line (bytes) or of one block's sections (characters). */
+/** Most a file scan keeps of one line, and of all blocks' section lines together (bytes). */
 const SCAN_FILE_MAX_RETAINED = 10 * 1024 * 1024;
 
 /**
@@ -164,15 +167,16 @@ const SCAN_FILE_MAX_RETAINED = 10 * 1024 * 1024;
  * cheap on pathological files; pass `Infinity` to scan the whole file.
  * Files cut by the cap report `scanTruncated: true`; only complete blocks
  * within the scanned prefix are returned, so trailing partial markers never
- * invent fake blocks. Memory stays bounded whatever the file holds: a block
- * past 10 MiB of sections is dropped and its opener line reported in
- * `oversized`, and only a line's first 10 MiB is kept (enough to match any
- * marker; a longer line overflows its block anyway).
+ * invent fake blocks. Memory stays bounded whatever the file holds: section
+ * lines kept across all blocks stay under 10 MiB of file bytes, and a block
+ * that would pass it is reported by its opener line in `unlisted`. A line is
+ * framed to its first 10 MiB; a cut line costs more than the whole budget,
+ * so its block is always unlisted, never registered with a cut side.
  */
 export async function scanFileForConflicts(
 	absolutePath: string,
 	options: { maxBytes?: number; signal?: AbortSignal } = {},
-): Promise<{ blocks: ConflictBlock[]; oversized: number[]; scanTruncated: boolean }> {
+): Promise<{ blocks: ConflictBlock[]; unlisted: number[]; scanTruncated: boolean }> {
 	const file = Bun.file(absolutePath);
 	const maxBytes = options.maxBytes ?? SCAN_FILE_DEFAULT_MAX_BYTES;
 	const truncated = file.size > maxBytes;
@@ -183,25 +187,25 @@ export async function scanFileForConflicts(
 	for await (const chunk of (truncated ? file.slice(0, maxBytes) : file).stream()) {
 		options.signal?.throwIfAborted();
 		for (const line of sink.appendAndFlushLines(chunk, SCAN_FILE_MAX_RETAINED)) {
-			scanner.push(decoder.decode(line));
+			scanner.push(decoder.decode(line), line.length + 1);
 		}
 	}
 	// A cut read may leave a partial last line; the scanner already tolerates
 	// an unclosed opener, so no extra trimming.
 	const tail = sink.flush();
-	if (tail) scanner.push(decoder.decode(tail));
-	return { blocks: scanner.blocks, oversized: scanner.oversized, scanTruncated: truncated };
+	if (tail) scanner.push(decoder.decode(tail), tail.length + 1);
+	return { blocks: scanner.blocks, unlisted: scanner.unlisted, scanTruncated: truncated };
 }
 
-/** `:conflicts` note naming blocks too large to register. */
-export function formatOversizedNote(oversized: readonly number[]): string {
+/** `:conflicts` note naming blocks the scan's retention budget left out. */
+export function formatUnlistedNote(unlisted: readonly number[]): string {
 	const limit = PREVIEW_LIMITS.COLLAPSED_ITEMS;
-	const shown = oversized
+	const shown = unlisted
 		.slice(0, limit)
 		.map(line => `L${line}`)
 		.join(", ");
-	const more = oversized.length > limit ? ` (+${oversized.length - limit} more)` : "";
-	return `- note: not listed (over ${SCAN_FILE_MAX_RETAINED / (1024 * 1024)} MiB of sections; resolve with a normal \`edit\`): conflicts opened at ${shown}${more}.`;
+	const more = unlisted.length > limit ? ` (+${unlisted.length - limit} more)` : "";
+	return `- note: not listed (the scan keeps at most ${SCAN_FILE_MAX_RETAINED / (1024 * 1024)} MiB of conflict sections per file; resolve these with a normal \`edit\`): conflicts opened at ${shown}${more}.`;
 }
 
 /**
@@ -736,13 +740,13 @@ export function formatConflictWarning(
  */
 export function formatConflictSummary(
 	entries: readonly ConflictEntry[],
-	options: { displayPath: string; oversized?: readonly number[] } = { displayPath: "" },
+	options: { displayPath: string; unlisted?: readonly number[] } = { displayPath: "" },
 ): string {
 	const lines: string[] = [];
 	const total = entries.length;
 	const word = total === 1 ? "conflict" : "conflicts";
 	lines.push(`⚠ ${total} unresolved ${word} in ${options.displayPath || "<file>"}`);
-	if (options.oversized?.length) lines.push(formatOversizedNote(options.oversized));
+	if (options.unlisted?.length) lines.push(formatUnlistedNote(options.unlisted));
 	const oursLabel = pickLabel(entries, e => e.oursLabel);
 	const theirsLabel = pickLabel(entries, e => e.theirsLabel);
 	const baseLabel = pickLabel(entries, e => (e.baseLines !== undefined ? e.baseLabel : undefined));

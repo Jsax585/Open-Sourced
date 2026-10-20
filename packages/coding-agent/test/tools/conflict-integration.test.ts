@@ -328,7 +328,9 @@ describe("read surfaces conflicts as a warning footer", () => {
 
 		const hugeText = getText(await read.execute("read-huge", { path: "huge-block.ts:conflicts" }));
 		expect(hugeText).toContain("1 unresolved conflict in huge-block.ts");
-		expect(hugeText).toContain("over 10 MiB of sections; resolve with a normal `edit`): conflicts opened at L1.");
+		expect(hugeText).toContain(
+			"at most 10 MiB of conflict sections per file; resolve these with a normal `edit`): conflicts opened at L1.",
+		);
 		expect(hugeText).toMatch(/#1\s+L110005-110009/);
 
 		const longText = getText(await read.execute("read-long-line", { path: "long-line.ts:conflicts" }));
@@ -339,6 +341,31 @@ describe("read surfaces conflicts as a warning footer", () => {
 		expect(blankText).toContain("1 unresolved conflict in blank-lines.ts");
 		expect(blankText).toContain("conflicts opened at L1.");
 		expect(blankText).toMatch(/#3\s+L11534341-11534345/);
+	});
+
+	it("`:conflicts` keeps at most 10 MiB of sections across all blocks of a file", async () => {
+		const filler = Array.from({ length: 63_000 }, () => "x".repeat(99));
+		const block = (tag: string, body: string[]) => [`<<<<<<< ${tag}`, ...body, "=======", "theirs", `>>>>>>> ${tag}`];
+		const small = block("small", ["ours"]);
+		// Two 6 MiB blocks: the second would pass the file's 10 MiB budget; the small one after still fits.
+		const twoBig = [...block("a", filler), ...block("b", filler), ...small, ""];
+		await Bun.write(path.join(tempDir, "two-big.ts"), twoBig.join("\n"));
+		// An 11 MB line of 3-byte characters is cut at 10 MiB of bytes; its block is unlisted, not kept cut.
+		const wide = [...block("wide", ["€".repeat(3_700_000)]), ...small, ""];
+		await Bun.write(path.join(tempDir, "wide-line.ts"), wide.join("\n"));
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+
+		const twoBigText = getText(await read.execute("read-two-big", { path: "two-big.ts:conflicts" }));
+		expect(twoBigText).toContain("2 unresolved conflicts in two-big.ts");
+		expect(twoBigText).toContain("conflicts opened at L63005.");
+		expect(twoBigText).toMatch(/#1\s+L1-63004/);
+		expect(twoBigText).toMatch(/#2\s+L126009-126013/);
+
+		const wideText = getText(await read.execute("read-wide-line", { path: "wide-line.ts:conflicts" }));
+		expect(wideText).toContain("1 unresolved conflict in wide-line.ts");
+		expect(wideText).toContain("conflicts opened at L1.");
+		expect(wideText).toMatch(/#3\s+L6-10/);
 	});
 
 	it("window-mode warning shows visible-of-total when window misses some conflicts", async () => {
