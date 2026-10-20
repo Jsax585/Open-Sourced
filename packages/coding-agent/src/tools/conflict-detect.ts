@@ -20,6 +20,7 @@ import type { ConflictBlock, ConflictEntry, ConflictScope } from "@oh-my-pi/pi-t
  */
 
 import type { ToolSession } from "./index";
+import { ConcatSink } from "@oh-my-pi/pi-utils";
 import { PREVIEW_LIMITS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 
@@ -123,7 +124,8 @@ export class ConflictScanner {
 			return;
 		}
 
-		this.#blockChars += line.length;
+		// Count the line break too, so a run of empty lines still fills the budget.
+		this.#blockChars += line.length + 1;
 		if (this.#blockChars > this.#maxBlockChars) {
 			this.oversized.push(partial.startLine);
 			this.#reset();
@@ -152,8 +154,8 @@ export function scanConflictLines(lines: readonly string[], firstLineNumber: num
 }
 
 const SCAN_FILE_DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
-/** Most characters a file scan keeps for one line or one block's sections. */
-const SCAN_FILE_MAX_RETAINED_CHARS = 10 * 1024 * 1024;
+/** Most a file scan keeps of one line (bytes) or of one block's sections (characters). */
+const SCAN_FILE_MAX_RETAINED = 10 * 1024 * 1024;
 
 /**
  * Scan a file for unresolved conflict blocks, streaming it line by line.
@@ -164,52 +166,30 @@ const SCAN_FILE_MAX_RETAINED_CHARS = 10 * 1024 * 1024;
  * within the scanned prefix are returned, so trailing partial markers never
  * invent fake blocks. Memory stays bounded whatever the file holds: a block
  * past 10 MiB of sections is dropped and its opener line reported in
- * `oversized`, and outside a block only a line's first 10 MiB is kept (enough
- * to match any marker).
+ * `oversized`, and only a line's first 10 MiB is kept (enough to match any
+ * marker; a longer line overflows its block anyway).
  */
 export async function scanFileForConflicts(
 	absolutePath: string,
 	options: { maxBytes?: number; signal?: AbortSignal } = {},
 ): Promise<{ blocks: ConflictBlock[]; oversized: number[]; scanTruncated: boolean }> {
-	let remaining = options.maxBytes ?? SCAN_FILE_DEFAULT_MAX_BYTES;
-	const scanner = new ConflictScanner(1, SCAN_FILE_MAX_RETAINED_CHARS);
+	const file = Bun.file(absolutePath);
+	const maxBytes = options.maxBytes ?? SCAN_FILE_DEFAULT_MAX_BYTES;
+	const truncated = file.size > maxBytes;
+	const scanner = new ConflictScanner(1, SCAN_FILE_MAX_RETAINED);
 	const decoder = new TextDecoder("utf-8", { fatal: false });
-	// Text of the current line so far, in parts so a long line is not re-concatenated per chunk.
-	let pending: string[] = [];
-	let pendingChars = 0;
-	const append = (part: string) => {
-		// A longer line overflows the block it belongs to anyway, and no marker needs more.
-		if (pendingChars > SCAN_FILE_MAX_RETAINED_CHARS) return;
-		pending.push(part);
-		pendingChars += part.length;
-	};
-	const flush = () => {
-		scanner.push(pending.join(""));
-		pending = [];
-		pendingChars = 0;
-	};
-	let truncated = false;
-	for await (const chunk of Bun.file(absolutePath).stream()) {
+	// The sink's sync framing, not `readLines`: an async yield per line triples the scan time.
+	const sink = new ConcatSink();
+	for await (const chunk of (truncated ? file.slice(0, maxBytes) : file).stream()) {
 		options.signal?.throwIfAborted();
-		const bytes = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
-		remaining -= bytes.length;
-		const text = decoder.decode(bytes, { stream: true });
-		let start = 0;
-		for (let end = text.indexOf("\n"); end !== -1; end = text.indexOf("\n", start)) {
-			append(text.slice(start, end));
-			flush();
-			start = end + 1;
-		}
-		append(text.slice(start));
-		if (bytes.length < chunk.length) {
-			truncated = true;
-			break;
+		for (const line of sink.appendAndFlushLines(chunk, SCAN_FILE_MAX_RETAINED)) {
+			scanner.push(decoder.decode(line));
 		}
 	}
 	// A cut read may leave a partial last line; the scanner already tolerates
 	// an unclosed opener, so no extra trimming.
-	append(decoder.decode());
-	flush();
+	const tail = sink.flush();
+	if (tail) scanner.push(decoder.decode(tail));
 	return { blocks: scanner.blocks, oversized: scanner.oversized, scanTruncated: truncated };
 }
 
@@ -221,7 +201,7 @@ export function formatOversizedNote(oversized: readonly number[]): string {
 		.map(line => `L${line}`)
 		.join(", ");
 	const more = oversized.length > limit ? ` (+${oversized.length - limit} more)` : "";
-	return `- note: not listed (over ${SCAN_FILE_MAX_RETAINED_CHARS / (1024 * 1024)} MiB of sections; resolve with a normal \`edit\`): conflicts opened at ${shown}${more}.`;
+	return `- note: not listed (over ${SCAN_FILE_MAX_RETAINED / (1024 * 1024)} MiB of sections; resolve with a normal \`edit\`): conflicts opened at ${shown}${more}.`;
 }
 
 /**

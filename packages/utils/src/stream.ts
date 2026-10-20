@@ -158,25 +158,27 @@ export class ConcatSink {
 	}
 
 	/**
-	 * Append a chunk and yield each complete LF-delimited line.
+	 * Append a chunk and yield each complete LF-delimited line, keeping at most
+	 * `maxLineBytes` of each line.
 	 *
 	 * Yielded lines are owned snapshots. Unlike {@link flush}, they remain
 	 * valid after this sink or the input chunk is mutated.
 	 */
-	*appendAndFlushLines(chunk: Uint8Array): Generator<Uint8Array> {
+	*appendAndFlushLines(chunk: Uint8Array, maxLineBytes = Number.POSITIVE_INFINITY): Generator<Uint8Array> {
 		let pos = 0;
 		while (pos < chunk.length) {
 			const nl = chunk.indexOf(LF, pos);
+			const end = nl === -1 ? chunk.length : nl;
+			const kept = chunk.subarray(pos, Math.min(end, pos + Math.max(0, maxLineBytes - this.#length)));
 			if (nl === -1) {
-				this.append(chunk.subarray(pos));
+				this.append(kept);
 				return;
 			}
-			const suffix = chunk.subarray(pos, nl);
 			pos = nl + 1;
 			if (this.isEmpty) {
-				yield new Uint8Array(suffix);
+				yield new Uint8Array(kept);
 			} else {
-				this.append(suffix);
+				this.append(kept);
 				const payload = this.flush();
 				if (payload) {
 					yield new Uint8Array(payload);

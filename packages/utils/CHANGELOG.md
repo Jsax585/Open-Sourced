@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `ConcatSink.appendAndFlushLines()` takes a `maxLineBytes` limit, keeping only the start of longer lines so input without newlines cannot grow the buffer without bound ([#16555](https://github.com/can1357/oh-my-pi/pull/16555) by [@will-bogusz](https://github.com/will-bogusz))
+
 ## [18.12.4] - 2026-10-20
 
 ### Breaking Changes

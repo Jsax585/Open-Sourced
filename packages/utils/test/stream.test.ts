@@ -67,6 +67,17 @@ describe("readLines", () => {
 		const dec = new TextDecoder();
 		expect(lines.map(line => dec.decode(line))).toEqual(["hello", "world"]);
 	});
+
+	it("ConcatSink.appendAndFlushLines keeps only the first maxLineBytes of a line split across chunks", () => {
+		const sink = new ConcatSink();
+		const dec = new TextDecoder();
+		const lines: string[] = [];
+		for (const chunk of ["abc", "defgh\nij", "klmnop\nq", "\nrstuvwxyz"]) {
+			for (const line of sink.appendAndFlushLines(encoder.encode(chunk), 4)) lines.push(dec.decode(line));
+		}
+		lines.push(dec.decode(sink.flush()));
+		expect(lines).toEqual(["abcd", "ijkl", "q", "rstu"]);
+	});
 });
 
 describe("abortableSource (via readLines)", () => {

@@ -320,6 +320,9 @@ describe("read surfaces conflicts as a warning footer", () => {
 		await Bun.write(path.join(tempDir, "huge-block.ts"), huge.join("\n"));
 		// One 12 MiB line with no newline before the block: only its head is kept.
 		await Bun.write(path.join(tempDir, "long-line.ts"), ["y".repeat(12 * 1024 * 1024), ...late, ""].join("\n"));
+		// 11 Mi empty lines: each line's break counts toward the block budget.
+		const blankBlock = `<<<<<<< blank\n${"\n".repeat(11 * 1024 * 1024)}=======\ntheirs\n>>>>>>> blank\n`;
+		await Bun.write(path.join(tempDir, "blank-lines.ts"), `${blankBlock}${late.join("\n")}\n`);
 		const session = createTestSession(tempDir);
 		const read = await getTool(session, "read");
 
@@ -331,6 +334,11 @@ describe("read surfaces conflicts as a warning footer", () => {
 		const longText = getText(await read.execute("read-long-line", { path: "long-line.ts:conflicts" }));
 		expect(longText).toContain("1 unresolved conflict in long-line.ts");
 		expect(longText).toMatch(/#2\s+L2-6/);
+
+		const blankText = getText(await read.execute("read-blank-lines", { path: "blank-lines.ts:conflicts" }));
+		expect(blankText).toContain("1 unresolved conflict in blank-lines.ts");
+		expect(blankText).toContain("conflicts opened at L1.");
+		expect(blankText).toMatch(/#3\s+L11534341-11534345/);
 	});
 
 	it("window-mode warning shows visible-of-total when window misses some conflicts", async () => {
