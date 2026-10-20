@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Instruction reads from `skill://`, `rule://` and `omp://` appear as compact transcript rows; ordinary Markdown file reads retain their rendered previews ([#16516](https://github.com/can1357/oh-my-pi/pull/16516) by [@Komzpa](https://github.com/Komzpa))
+
 ### Fixed
 
 - Fixed auto-QA reports whose tool is a URI (`xd://tui: …`) being filed under the wrong tool name; a one-line report without `: ` after its tool name is now refused with the format hint ([#16278](https://github.com/can1357/oh-my-pi/pull/16278) by [@will-bogusz](https://github.com/will-bogusz))
