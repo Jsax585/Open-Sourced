@@ -33,6 +33,7 @@ interface RetentionSegment {
 	sessionId: string;
 	sourceTimestamp?: string;
 	bankId: string;
+	serviceId: string;
 	tags?: string[];
 }
 
@@ -276,6 +277,7 @@ export class HindsightSessionState {
 	readonly retainQueue: HindsightRetainQueue;
 	#retentionTransition: Promise<void> = Promise.resolve();
 	#cachedDocumentId?: string;
+	readonly #retentionServiceId: string;
 	#finishedRetentionScope?: { sessionId: string; leafId: string | null };
 	#finishingRetentionScope?: Promise<void>;
 
@@ -287,6 +289,15 @@ export class HindsightSessionState {
 		this.recallTags = options.recallTags;
 		this.recallTagsMatch = options.recallTagsMatch;
 		this.config = options.config;
+		// Persist only a non-reversible identity, never the account's credential.
+		this.#retentionServiceId = new Bun.CryptoHasher("sha256")
+			.update(
+				JSON.stringify([
+					options.config.hindsightApiUrl?.replace(/\/+$/, ""),
+					options.config.hindsightApiToken ?? "",
+				]),
+			)
+			.digest("hex");
 		this.session = options.session;
 		this.banksSet = options.banksSet;
 		this.lastRetainedTurn = options.lastRetainedTurn ?? 0;
@@ -433,11 +444,18 @@ export class HindsightSessionState {
 		const entries = manager.getEntries();
 		const record = entries.findLast(entry => entry.type === "custom" && entry.customType === RETENTION_SEGMENT_TYPE);
 		const current = record?.type === "custom" ? (record.data as RetentionSegment) : undefined;
-		if (current && current.bankId === this.bankId && Bun.deepEquals(current.tags, this.retainTags)) return;
+		if (
+			current &&
+			current.serviceId === this.#retentionServiceId &&
+			current.bankId === this.bankId &&
+			Bun.deepEquals(current.tags, this.retainTags)
+		)
+			return;
 		manager.appendCustomEntry(RETENTION_SEGMENT_TYPE, {
 			documentId: current ? `${sessionId}-${crypto.randomUUID()}` : sessionId,
 			sessionId,
 			bankId: this.bankId,
+			serviceId: this.#retentionServiceId,
 			tags: this.retainTags,
 			sourceTimestamp: current ? new Date().toISOString() : this.#sessionSourceTimestamp()?.toISOString(),
 		} satisfies RetentionSegment);
@@ -510,6 +528,8 @@ export class HindsightSessionState {
 			this.bindRetentionScope();
 			const segments = this.#segmentTranscripts();
 			for (const [index, { segment, entries, documents, documentHistory }] of segments.entries()) {
+				// Other accounts' receipts remain live until their owning service is selected.
+				if (segment.serviceId !== this.#retentionServiceId) continue;
 				const messages = extractEntryMessages(entries);
 				const userTurns = messages.reduce((count, message) => count + Number(message.role === "user"), 0);
 				let lastRetainedTurn = 0;

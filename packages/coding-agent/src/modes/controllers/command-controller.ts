@@ -1782,6 +1782,8 @@ export class CommandController {
 			this.ctx.showError(`Move failed: ${err instanceof Error ? err.message : String(err)}`);
 			return false;
 		}
+		// Keep receipts appended by the source retention handoff when rolling back.
+		previousState.entries = this.ctx.sessionManager.getEntries();
 		let applied = false;
 		try {
 			applied = await this.ctx.applyCwdChange(resolvedPath);

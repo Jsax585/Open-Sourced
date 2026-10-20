@@ -28,7 +28,11 @@ import { getProjectAgentDir, getProjectDir, setProjectDir, TempDir } from "@oh-m
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 import { cfgAutolearnEnabled } from "@oh-my-pi/pi-coding-agent/autolearn/settings";
-import { cfgHindsightApiUrl, cfgHindsightMentalModelsEnabled } from "@oh-my-pi/pi-coding-agent/hindsight/settings";
+import {
+	cfgHindsightApiToken,
+	cfgHindsightApiUrl,
+	cfgHindsightMentalModelsEnabled,
+} from "@oh-my-pi/pi-coding-agent/hindsight/settings";
 import { cfgMemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/settings";
 import { cfgMnemopiBank, cfgMnemopiRecallLimit, cfgMnemopiScoping } from "@oh-my-pi/pi-coding-agent/mnemopi/settings";
 
@@ -929,7 +933,11 @@ describe("AgentSession memory backend lifecycle", () => {
 			return { bankId: state.bankId, tags: state.retainTags };
 		}
 
-		async function runHeadless(current: AgentSession, command: string): Promise<string> {
+		async function runHeadless(
+			current: AgentSession,
+			command: string,
+			reloadPlugins: () => Promise<void> = async () => {},
+		): Promise<string> {
 			const output: string[] = [];
 			const originalProjectDir = getProjectDir();
 			try {
@@ -942,7 +950,7 @@ describe("AgentSession memory backend lifecycle", () => {
 						output.push(text);
 					},
 					refreshCommands: () => {},
-					reloadPlugins: async () => {},
+					reloadPlugins,
 				});
 			} finally {
 				setProjectDir(originalProjectDir);
@@ -1081,6 +1089,109 @@ describe("AgentSession memory backend lifecycle", () => {
 				expect(server.writes).toHaveLength(1);
 				expect(server.writes[0]).toMatchObject({ method: "POST", bankId: alpha.bankId, tags: alpha.tags });
 				expect(only(server.containing(alphaAnswer)).content).toContain(alphaQuestion);
+			},
+		);
+
+		it("a failed last-turn cross-scope move preserves its receipt so rewind deletes the accepted source", async () => {
+			const server = useHindsight({ "hindsight.retainMode": "last-turn" });
+			const dirs = projectDirs();
+			const current = createSession(async () => [], {
+				sessionManager: SessionManager.inMemory(dirs.alpha),
+				responses: [{ content: [alphaAnswer] }],
+			});
+			await current.applyMemoryBackend();
+			const alpha = scopeOf(current);
+			await current.prompt(alphaQuestion);
+			const firstUser = branchMessage(current, "user", alphaQuestion);
+
+			const output = await runHeadless(current, `/move ${dirs.beta}`, async () => {
+				if (current.sessionManager.getCwd() === dirs.beta) throw new Error("destination plugin rescope failed");
+			});
+
+			expect(output).toContain("destination plugin rescope failed");
+			expect(current.sessionManager.getCwd()).toBe(dirs.alpha);
+			expect(scopeOf(current)).toEqual(alpha);
+			const accepted = server.writes[0]!;
+			expect(accepted.method).toBe("POST");
+			const source = server.source(alpha.bankId, accepted.documentId)!;
+			expect(source.content).toContain(alphaAnswer);
+			expect(source.documentId).not.toBe(current.sessionId);
+			expect(
+				current.sessionManager
+					.getEntries()
+					.filter(entry => entry.type === "custom" && entry.customType === "hindsight_retention_document"),
+			).toContainEqual(
+				expect.objectContaining({ data: expect.objectContaining({ documentId: source.documentId }) }),
+			);
+
+			expect((await current.navigateTree(firstUser.id, { summarize: false })).cancelled).toBe(false);
+			expect(server.sources.size).toBe(0);
+			expect(server.writes.at(-1)).toEqual({
+				method: "DELETE",
+				bankId: alpha.bankId,
+				documentId: source.documentId,
+			});
+		});
+
+		it.each(["apiUrl", "apiToken"] as const)(
+			"changing hindsight.%s leaves another account's receipt live until its owning account returns",
+			async setting => {
+				// Account switching must not be masked by an ambient HINDSIGHT_API_TOKEN.
+				spyOn(cfgHindsightApiToken, "envValue").mockReturnValue(undefined);
+				const server = useHindsight({
+					"hindsight.retainMode": "last-turn",
+					"hindsight.apiToken": "account-a-secret",
+				});
+				const other = setting === "apiUrl" ? new LoopbackHindsight() : server;
+				try {
+					const current = createSession(async () => [], { responses: [{ content: [alphaAnswer] }] });
+					await current.applyMemoryBackend();
+					await current.prompt(alphaQuestion);
+					await current.getHindsightSessionState()!.forceRetainCurrentSession();
+					const source = only(server.containing(alphaAnswer));
+					const firstUser = branchMessage(current, "user", alphaQuestion);
+					const changeAccount = async (account: "a" | "b") => {
+						if (setting === "apiUrl")
+							cfgHindsightApiUrl.override(settings, account === "a" ? server.url : other.url);
+						else cfgHindsightApiToken.override(settings, `account-${account}-secret`);
+						await hindsightBackend.applySettings!(current, [`hindsight.${setting}`]);
+					};
+					const receipt = () =>
+						current.sessionManager
+							.getEntries()
+							.findLast(
+								entry =>
+									entry.type === "custom" &&
+									entry.customType === "hindsight_retention_document" &&
+									typeof entry.data === "object" &&
+									entry.data !== null &&
+									"documentId" in entry.data &&
+									entry.data.documentId === source.documentId,
+							);
+
+					await changeAccount("b");
+					const writesBeforeRewind = other.writes.length;
+					expect((await current.navigateTree(firstUser.id, { summarize: false })).cancelled).toBe(false);
+					expect(other.writes.slice(writesBeforeRewind)).toEqual([]);
+					expect(server.source(source.bankId, source.documentId)).toEqual(source);
+					expect(receipt()).toMatchObject({ data: { documentId: source.documentId } });
+					expect(receipt()).not.toMatchObject({ data: { deleted: true } });
+					const ledger = JSON.stringify(current.sessionManager.getEntries());
+					expect(ledger).not.toContain("account-a-secret");
+					expect(ledger).not.toContain("account-b-secret");
+
+					await changeAccount("a");
+					await current.getHindsightSessionState()!.synchronizeRetainedBranch();
+					expect(server.source(source.bankId, source.documentId)).toBeUndefined();
+					expect(server.writes.at(-1)).toEqual({
+						method: "DELETE",
+						bankId: source.bankId,
+						documentId: source.documentId,
+					});
+					expect(receipt()).toMatchObject({ data: { deleted: true } });
+				} finally {
+					if (other !== server) await other.stop();
+				}
 			},
 		);
 

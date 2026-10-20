@@ -364,6 +364,7 @@ async function reconcilePrimaryState(session: AgentSession): Promise<boolean> {
 	// Reuse confirmations only while the effective PUT payload is unchanged.
 	const sameBankConfig =
 		current.config.hindsightApiUrl === config.hindsightApiUrl &&
+		current.config.hindsightApiToken === config.hindsightApiToken &&
 		current.config.bankMission.trim() === config.bankMission.trim() &&
 		(current.config.retainMission?.trim() || "") === (config.retainMission?.trim() || "");
 	const state = await installPrimaryState(session, settings, sameBankConfig ? current.banksSet : new Set());
