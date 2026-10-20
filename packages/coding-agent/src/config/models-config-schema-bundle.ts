@@ -244,6 +244,7 @@ export const getModelsConfigSchemaBundle = once(() => {
 		"contextPromotionTarget?": "string",
 		"compactionModel?": "string",
 		"remoteCompaction?": RemoteCompactionSchema,
+		"providerFamily?": '"openai" | "anthropic" | "google"',
 	}).narrow((value, ctx) => {
 		// Enforce id non-empty
 		if (typeof value.id === "string" && value.id.length === 0) {

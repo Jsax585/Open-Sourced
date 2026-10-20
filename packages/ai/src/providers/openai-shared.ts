@@ -4023,13 +4023,16 @@ export function promoteResponsesToolUseStopReason(
 }
 
 /** Initial empty `AssistantMessage` that streaming providers accumulate into. */
-export function createInitialResponsesAssistantMessage(api: Api, provider: string, modelId: string): AssistantMessage {
+export function createInitialResponsesAssistantMessage(
+	model: Pick<Model, "api" | "provider" | "id" | "providerFamily">,
+): AssistantMessage {
 	return {
 		role: "assistant",
 		content: [],
-		api,
-		provider,
-		model: modelId,
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+		providerFamily: model.providerFamily,
 		usage: {
 			input: 0,
 			output: 0,

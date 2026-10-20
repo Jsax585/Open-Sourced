@@ -25,6 +25,9 @@ export type KnownApi =
 	| "apple-foundation-models";
 export type Api = KnownApi | (string & {});
 
+/** Provider families with independently scoped service-tier settings. */
+export type ServiceTierFamily = "openai" | "anthropic" | "google";
+
 /** Catalog kinds used to isolate role-specific runners from session chat models. */
 export const MODEL_KINDS = [
 	"chat",
@@ -1570,6 +1573,11 @@ export interface Model<TApi extends Api = Api> {
 	 * providers retain their transport backend's policy.
 	 */
 	providerType?: string;
+	/**
+	 * Overrides only service-tier family inference. Does not change provider
+	 * identity, API transport, endpoint, or the transport's supported tier controls.
+	 */
+	providerFamily?: ServiceTierFamily;
 	baseUrl: string;
 	reasoning: boolean;
 	/**

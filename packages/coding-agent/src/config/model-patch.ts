@@ -5,7 +5,13 @@ import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { PROVIDER_DESCRIPTORS } from "@oh-my-pi/pi-catalog/provider-models";
 import { openrouterDecisionsBaseUrl } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
-import { apiServesKind, modelKind, type ModelKind, runnerApiKind } from "@oh-my-pi/pi-catalog/types";
+import {
+	apiServesKind,
+	modelKind,
+	type ModelKind,
+	runnerApiKind,
+	type ServiceTierFamily,
+} from "@oh-my-pi/pi-catalog/types";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { createConfigHeaderResolver } from "./resolve-config-value";
 import { SPECIAL_MODEL_MANAGER_PROVIDER_IDS } from "./model-provider-discovery";
@@ -268,6 +274,8 @@ export interface ModelPatch {
 	compactionModel?: string;
 	remoteCompaction?: RemoteCompactionConfig<Api>;
 	premiumMultiplier?: number;
+	/** Overrides only service-tier family inference for custom model definitions. */
+	providerFamily?: ServiceTierFamily;
 }
 
 /**
@@ -311,6 +319,7 @@ export function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: 
 		result.remoteCompaction = mergeRemoteCompactionConfig(base.remoteCompaction, patch.remoteCompaction);
 	}
 	if (patch.premiumMultiplier !== undefined) result.premiumMultiplier = patch.premiumMultiplier;
+	if (patch.providerFamily !== undefined) result.providerFamily = patch.providerFamily;
 	if (patch.cost) {
 		const longContext = patch.cost.longContext ?? base.cost.longContext;
 		result.cost = {

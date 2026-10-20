@@ -6,6 +6,8 @@ import { syncAllSessions } from "@oh-my-pi/omp-stats/aggregator";
 import { closeDb, getRecentRequests } from "@oh-my-pi/omp-stats/db";
 import { getOverallStats } from "@oh-my-pi/omp-stats/rollup";
 import { parseSessionFile } from "@oh-my-pi/omp-stats/parser";
+import { complete, resolveModelServiceTier, type ServiceTierByFamily } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getSessionsDir, getStatsDbPath } from "@oh-my-pi/pi-utils";
 import { installStatsTestIsolation } from "./helpers/temp-agent";
 
@@ -60,6 +62,62 @@ function assistantEntry(opts: {
 }
 
 describe("priority service-tier premium-request backfill", () => {
+	it.each([
+		[{ openai: "priority", google: "flex" }, 0],
+		[{ openai: "priority" }, 0],
+		[{ openai: "flex", google: "priority" }, 1],
+	] satisfies [ServiceTierByFamily, number][])(
+		"replays the annotated family for a same-ID OpenAI model under %j",
+		async (tiers, premiumRequests) => {
+			const model = buildModel({
+				id: "gpt-5.4",
+				name: "Annotated Gateway",
+				api: "openai-completions",
+				provider: "openai",
+				providerFamily: "google",
+				baseUrl: "https://gateway.example/v1",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 32768,
+				maxTokens: 1024,
+			});
+			const tier = resolveModelServiceTier(tiers, model);
+			const message = await complete(
+				model,
+				{ messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+				{
+					apiKey: "test-key",
+					serviceTier: tier,
+					fetch: async (_url, init) => {
+						expect(JSON.parse(String(init?.body)).service_tier).toBe(tier);
+						return new Response(
+							`data: ${JSON.stringify({
+								id: "chatcmpl-test",
+								choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }],
+								usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+							})}\n\ndata: [DONE]\n\n`,
+							{ headers: { "content-type": "text/event-stream" } },
+						);
+					},
+				},
+			);
+			expect(message.stopReason).toBe("stop");
+			const file = await writeSession("--tmp--annotated", "family.jsonl", {
+				lines: [
+					{ type: "service_tier_change", serviceTier: tiers },
+					{ type: "message", id: "annotated", parentId: null, message },
+					assistantEntry({ id: "legacy", parentId: "annotated", provider: "openai" }),
+				],
+			});
+			const result = await parseSessionFile(file);
+			expect(result.stats.map(stat => stat.usage.premiumRequests ?? 0)).toEqual([
+				premiumRequests,
+				tiers.openai === "priority" ? 1 : 0,
+			]);
+		},
+	);
+
 	it("derives premium_requests from service_tier_change entries for providers that honor priority", async () => {
 		await writeSession("--tmp--proj", "01.jsonl", {
 			lines: [

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Premium Reqs counting an annotated gateway's requests against the provider ID's tier instead of its explicit family when replaying newly saved sessions; old sessions retain inferred-family accounting ([#16478](https://github.com/can1357/oh-my-pi/pull/16478) by [@shgew](https://github.com/shgew))
+
 ## [18.12.0] - 2026-10-17
 
 ### Fixed

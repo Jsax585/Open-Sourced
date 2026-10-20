@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { Api, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
+import type { Api, Model, ProviderSessionState, ServiceTierFamily } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -9,6 +9,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { cfgProvidersAnthropicSlowMode } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { withOfficialAnthropicEndpoint } from "./helpers/anthropic-endpoint";
 
@@ -44,7 +45,7 @@ describe("/fast targets the current model's service-tier family", () => {
 		return createSessionForModel(model);
 	}
 
-	async function createSessionForModel(model: Model<Api>): Promise<AgentSession> {
+	async function createSessionForModel(model: Model<Api>, settings = Settings.isolated()): Promise<AgentSession> {
 		const agent = new Agent({
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
 		});
@@ -52,7 +53,7 @@ describe("/fast targets the current model's service-tier family", () => {
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated(),
+			settings,
 			modelRegistry,
 		});
 		session.subscribe(() => {});
@@ -116,25 +117,176 @@ describe("/fast targets the current model's service-tier family", () => {
 		expect(session.isFastModeActive()).toBe(true);
 	});
 
-	it("leaves Fireworks models on the dedicated Fireworks tier control", async () => {
+	it("enables Google priority for an explicitly annotated custom Gemini gateway", async () => {
 		const session = await createSessionForModel(
 			buildModel({
-				id: "gpt-oss-120b",
-				name: "GPT OSS 120B",
-				api: "openai-completions",
-				provider: "fireworks",
-				baseUrl: "https://api.fireworks.ai/inference/v1",
-				reasoning: true,
+				id: "gemini-3-flash",
+				name: "Gemini Gateway",
+				reasoning: false,
 				input: ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: 128_000,
-				maxTokens: 64_000,
+				contextWindow: 32768,
+				maxTokens: 1024,
+				api: "openai-completions",
+				provider: "custom-gateway",
+				providerFamily: "google",
+				baseUrl: "https://gateway.example/v1",
 			}),
 		);
+		expect(session.setFastMode(true)).toBe(true);
+		expect(session.serviceTierByFamily).toEqual({ google: "priority" });
+		expect(session.isFastModeActive()).toBe(true);
+	});
+
+	it("routes /fast to Google priority for an annotated Anthropic provider on the OpenAI transport", async () => {
+		const model = buildModel({
+			id: "gemini-3-flash",
+			name: "Annotated Anthropic Gateway",
+			api: "openai-completions",
+			provider: "anthropic",
+			providerFamily: "google",
+			baseUrl: "https://gateway.example/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 32768,
+			maxTokens: 1024,
+		});
+		const session = await createSessionForModel(model);
+		expect(session.setFastMode(true)).toBe(true);
+		expect(session.serviceTierByFamily).toEqual({ google: "priority" });
+		expect(session.effectiveServiceTier(model)).toBe("priority");
+		expect(session.isFastModeActive()).toBe(true);
+		expect(session.setFastMode(false)).toBe(true);
+		expect(session.serviceTierByFamily).toEqual({});
+	});
+
+	it.each([
+		["google", "google-generative-ai", "gemini-3-flash"],
+		["openai", "google-generative-ai", "gpt-4o"],
+		["openai", "openai-completions", "gateway-model"],
+		["anthropic", "openai-completions", "claude-opus-4-6"],
+		["anthropic", "anthropic-messages", "claude-opus-4-6"],
+	] satisfies [ServiceTierFamily, Api, string][])(
+		"refuses /fast for a custom %s annotation on %s without a tier wire effect",
+		async (providerFamily, api, id) => {
+			const session = await createSessionForModel(
+				buildModel({
+					id,
+					name: "Gateway Model",
+					api,
+					provider: "custom-gateway",
+					providerFamily,
+					baseUrl: "https://gateway.example/v1",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 32768,
+					maxTokens: 1024,
+				}),
+			);
+			expect(session.setFastMode(true)).toBe(false);
+			expect(session.serviceTierByFamily).toEqual({});
+			expect(session.isFastModeActive()).toBe(false);
+			session.setServiceTierFamily(providerFamily, "priority");
+			expect(session.isFastModeActive()).toBe(false);
+		},
+	);
+
+	it.each([
+		["custom-gateway", "google-generative-ai", "google", "gemini-3-flash", false],
+		["custom-gateway", "openai-completions", "google", "gemini-3-flash", true],
+		["anthropic", "openai-completions", "google", "gemini-3-flash", true],
+		["google", "google-generative-ai", undefined, "gemini-3-flash", true],
+		["openai", "openai-responses", undefined, "gpt-5.2", true],
+		["fireworks", "openai-completions", "google", "gpt-oss-120b", false],
+	] satisfies [string, Api, ServiceTierFamily | undefined, string, boolean][])(
+		"only enables /slow when %s on %s annotated %s can send flex (%s)",
+		async (provider, api, providerFamily, id, supported) => {
+			const session = await createSessionForModel(
+				buildModel({
+					id,
+					name: "Slow Mode Model",
+					api,
+					provider,
+					providerFamily,
+					baseUrl: "https://gateway.example/v1",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 32768,
+					maxTokens: 1024,
+				}),
+			);
+			const globalSlowMode = cfgProvidersAnthropicSlowMode.get(session.settings);
+			expect(session.setSlowMode(true)).toBe(supported);
+			expect(session.isSlowModeSupported()).toBe(supported);
+			expect(session.isSlowModeEnabled()).toBe(supported);
+			expect(session.serviceTierByFamily).toEqual(supported ? { [providerFamily ?? provider]: "flex" } : {});
+			expect(session.getSlowModeScope()).toBe(supported ? "session" : undefined);
+			expect(cfgProvidersAnthropicSlowMode.get(session.settings)).toBe(globalSlowMode);
+			expect(session.setSlowMode(false)).toBe(supported);
+			expect(session.isSlowModeEnabled()).toBe(false);
+			expect(session.serviceTierByFamily).toEqual({});
+			expect(cfgProvidersAnthropicSlowMode.get(session.settings)).toBe(globalSlowMode);
+		},
+	);
+
+	it.each([undefined, "openai", "anthropic", "google"] satisfies (ServiceTierFamily | undefined)[])(
+		"leaves Fireworks models annotated %s on the dedicated Fireworks tier control",
+		async providerFamily => {
+			const session = await createSessionForModel(
+				buildModel({
+					id: "gpt-oss-120b",
+					name: "GPT OSS 120B",
+					api: "openai-completions",
+					provider: "fireworks",
+					providerFamily,
+					baseUrl: "https://api.fireworks.ai/inference/v1",
+					reasoning: true,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 128_000,
+					maxTokens: 64_000,
+				}),
+			);
+			expect(session.setFastMode(true)).toBe(false);
+			expect(session.serviceTierByFamily).toEqual({});
+			expect(session.isFastModeEnabled()).toBe(false);
+			expect(session.isFastModeActive()).toBe(false);
+			expect(session.effectiveServiceTier(session.model!)).toBeUndefined();
+			if (providerFamily) {
+				session.setServiceTierFamily(providerFamily, "priority");
+				expect(session.isFastModeEnabled()).toBe(false);
+				expect(session.effectiveServiceTier(session.model!)).toBeUndefined();
+				expect(session.setFastMode(false)).toBe(false);
+				expect(session.serviceTierByFamily).toEqual({ [providerFamily]: "priority" });
+			}
+		},
+	);
+
+	it("keeps dedicated Fireworks priority active for an annotated custom model", async () => {
+		const model = buildModel({
+			id: "gpt-oss-120b",
+			name: "GPT OSS 120B",
+			api: "openai-completions",
+			provider: "fireworks",
+			providerFamily: "google",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 64_000,
+		});
+		const session = await createSessionForModel(model, Settings.isolated({ "providers.fireworksTier": "priority" }));
 		expect(session.setFastMode(true)).toBe(false);
 		expect(session.serviceTierByFamily).toEqual({});
 		expect(session.isFastModeEnabled()).toBe(false);
-		expect(session.isFastModeActive()).toBe(false);
+		expect(session.isFastModeActive()).toBe(true);
+		expect(session.effectiveServiceTier(model)).toBe("priority");
+		expect(session.setFastMode(false)).toBe(false);
+		expect(session.effectiveServiceTier(model)).toBe("priority");
 	});
 
 	it("clears only the current model's family when disabled", async () => {

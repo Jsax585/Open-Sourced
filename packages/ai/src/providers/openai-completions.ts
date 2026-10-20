@@ -806,7 +806,7 @@ const streamOpenAICompletionsOnce = (
 		let firstTokenTime: number | undefined;
 		const policy = resolveOpenAICompatForRequest(model, options, Boolean(context.tools?.length));
 
-		const output: AssistantMessage = createInitialResponsesAssistantMessage(model.api, model.provider, model.id);
+		const output: AssistantMessage = createInitialResponsesAssistantMessage(model);
 		let rawRequestDump: RawHttpRequestDump | undefined;
 		const abortTracker = createAbortSourceTracker(options?.signal);
 		const firstEventTimeoutAbortError = new AIError.StreamTimeoutError(

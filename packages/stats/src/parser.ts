@@ -247,10 +247,13 @@ function extractStats(
 	// fallback for turns recorded before that field existed. Trust any non-zero
 	// value already in `usage.premiumRequests` (Copilot multipliers or the new AI
 	// code path) and only synthesise when the field is missing/zero.
+	// Retain explicit gateway-family overrides; old messages without the field
+	// continue to infer their family from provider/API/model identity.
 	const recorded = rawUsage.premiumRequests ?? 0;
 	const model = {
 		provider: msg.provider,
 		api: msg.api,
+		providerFamily: msg.providerFamily,
 		identity: classifyModel(msg.provider, msg.model, { lenient: true }),
 	};
 	const servedTier = parseServiceTier(msg.serviceTier);
