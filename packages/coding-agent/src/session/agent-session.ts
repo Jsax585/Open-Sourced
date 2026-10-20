@@ -10759,7 +10759,7 @@ export class AgentSession implements SettingsScope {
 	#slowModeTarget(): { kind: "flex"; family: ServiceTierFamily } | { kind: "anthropic" } | undefined {
 		const model = this.model;
 		if (!model) return undefined;
-		if (model.provider === "anthropic") return { kind: "anthropic" };
+		if (model.provider === "anthropic" && model.api === "anthropic-messages") return { kind: "anthropic" };
 		const family = serviceTierFamily(model);
 		return family && shouldSendServiceTier("flex", model) ? { kind: "flex", family } : undefined;
 	}

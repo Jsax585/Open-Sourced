@@ -9,6 +9,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { cfgProvidersAnthropicSlowMode } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { withOfficialAnthropicEndpoint } from "./helpers/anthropic-endpoint";
 
@@ -137,6 +138,29 @@ describe("/fast targets the current model's service-tier family", () => {
 		expect(session.isFastModeActive()).toBe(true);
 	});
 
+	it("routes /fast to Google priority for an annotated Anthropic provider on the OpenAI transport", async () => {
+		const model = buildModel({
+			id: "gemini-3-flash",
+			name: "Annotated Anthropic Gateway",
+			api: "openai-completions",
+			provider: "anthropic",
+			providerFamily: "google",
+			baseUrl: "https://gateway.example/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 32768,
+			maxTokens: 1024,
+		});
+		const session = await createSessionForModel(model);
+		expect(session.setFastMode(true)).toBe(true);
+		expect(session.serviceTierByFamily).toEqual({ google: "priority" });
+		expect(session.effectiveServiceTier(model)).toBe("priority");
+		expect(session.isFastModeActive()).toBe(true);
+		expect(session.setFastMode(false)).toBe(true);
+		expect(session.serviceTierByFamily).toEqual({});
+	});
+
 	it.each([
 		["google", "google-generative-ai", "gemini-3-flash"],
 		["openai", "google-generative-ai", "gpt-4o"],
@@ -172,6 +196,7 @@ describe("/fast targets the current model's service-tier family", () => {
 	it.each([
 		["custom-gateway", "google-generative-ai", "google", "gemini-3-flash", false],
 		["custom-gateway", "openai-completions", "google", "gemini-3-flash", true],
+		["anthropic", "openai-completions", "google", "gemini-3-flash", true],
 		["google", "google-generative-ai", undefined, "gemini-3-flash", true],
 		["openai", "openai-responses", undefined, "gpt-5.2", true],
 		["fireworks", "openai-completions", "google", "gpt-oss-120b", false],
@@ -193,13 +218,17 @@ describe("/fast targets the current model's service-tier family", () => {
 					maxTokens: 1024,
 				}),
 			);
+			const globalSlowMode = cfgProvidersAnthropicSlowMode.get(session.settings);
 			expect(session.setSlowMode(true)).toBe(supported);
 			expect(session.isSlowModeSupported()).toBe(supported);
 			expect(session.isSlowModeEnabled()).toBe(supported);
 			expect(session.serviceTierByFamily).toEqual(supported ? { [providerFamily ?? provider]: "flex" } : {});
+			expect(session.getSlowModeScope()).toBe(supported ? "session" : undefined);
+			expect(cfgProvidersAnthropicSlowMode.get(session.settings)).toBe(globalSlowMode);
 			expect(session.setSlowMode(false)).toBe(supported);
 			expect(session.isSlowModeEnabled()).toBe(false);
 			expect(session.serviceTierByFamily).toEqual({});
+			expect(cfgProvidersAnthropicSlowMode.get(session.settings)).toBe(globalSlowMode);
 		},
 	);
 

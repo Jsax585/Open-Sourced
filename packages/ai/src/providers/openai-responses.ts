@@ -740,7 +740,7 @@ const streamOpenAIResponsesOnce = (
 		const startTime = performance.now();
 		let firstTokenTime: number | undefined;
 
-		const output: AssistantMessage = createInitialResponsesAssistantMessage(model.api, model.provider, model.id);
+		const output: AssistantMessage = createInitialResponsesAssistantMessage(model);
 		let rawRequestDump: RawHttpRequestDump | undefined;
 		let chainState: OpenAIResponsesChainState | undefined;
 		let sentPreviousResponseId: string | undefined;
@@ -1273,7 +1273,7 @@ const streamOpenAIResponsesOnce = (
 						attempt: transientStreamRetryAttempt,
 						error: streamFailure instanceof Error ? streamFailure.message : String(streamFailure),
 					});
-					const retryOutput = createInitialResponsesAssistantMessage(model.api, model.provider, model.id);
+					const retryOutput = createInitialResponsesAssistantMessage(model);
 					output.content.length = 0;
 					output.responseId = undefined;
 					output.upstreamProvider = undefined;

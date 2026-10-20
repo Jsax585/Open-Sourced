@@ -168,7 +168,7 @@ type ServiceTierModel = Pick<Model, "provider" | "api" | "identity" | "providerF
 // The service-tier matrix below intentionally stays in TypeScript rather than
 // the KDL compat tree: `shouldSendServiceTier` accepts bare provider strings
 // (agent telemetry, google-shared header placement) and the stats parser
-// rebuilds slim `{ provider, api, identity }` models from historical session
+// rebuilds slim `{ provider, api, providerFamily, identity }` models from session
 // JSONL — neither path holds a resolved compat record, so a KDL axis would
 // merely duplicate this table as its own fallback. The functions branch on
 // structured `classifyModel` facts, api, and a short provider list, which is
@@ -1304,6 +1304,8 @@ export interface AssistantMessage {
 	api: Api;
 	provider: Provider;
 	model: string;
+	/** Explicit service-tier family of the requested model, retained for session replay. */
+	providerFamily?: Model["providerFamily"];
 	/** Stored credential row that produced this turn; absent for external or unknown keys. */
 	credentialId?: number;
 	contextSnapshot?: ContextSnapshot;

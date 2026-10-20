@@ -3296,6 +3296,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 			api: "openai-codex-responses" as Api,
 			provider: model.provider,
 			model: model.id,
+			providerFamily: model.providerFamily,
 			usage: {
 				input: 0,
 				output: 0,

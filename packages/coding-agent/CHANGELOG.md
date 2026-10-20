@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed `/fast` and Google service-tier settings for custom gateway models declaring `providerFamily: google`, including same-ID replacements; `/fast` and `/slow` now refuse annotations whose transport cannot realize their tier and keep annotated Fireworks models on their dedicated tier control ([#16478](https://github.com/can1357/oh-my-pi/pull/16478) by [@shgew](https://github.com/shgew))
+- Fixed `/fast` and Google service-tier settings for custom gateway models declaring `providerFamily: google`, including same-ID replacements and gateways using the `anthropic` provider ID; `/slow` keeps those gateways on session flex without changing global Claude slow mode, unsupported transports refuse tier toggles, and annotated Fireworks models retain their dedicated tier control ([#16478](https://github.com/can1357/oh-my-pi/pull/16478) by [@shgew](https://github.com/shgew))
 - Fixed Mnemopi memory completions ignoring the memory role's thinking suffix, including one inherited from `tiny` or `smol` when `modelRoles.memory` is unset; each `retry.fallbackChains.memory` entry sends its own level, and `:off` disables reasoning ([#16378](https://github.com/can1357/oh-my-pi/pull/16378) by [@alphastorm](https://github.com/alphastorm))
 - Fixed `/move` path completion jumping into a subfolder on Tab: `..`, `.`, and `~` now complete to `../`, `./`, and `~/` before listing their children, a trailing `\` lists a folder on Windows, absolute Windows paths (`C:/…`) are no longer rewritten as relative paths, and the project directory is offered as `./` instead of `/`
 

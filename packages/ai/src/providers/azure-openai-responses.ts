@@ -90,11 +90,7 @@ const streamAzureOpenAIResponsesOnce = (
 		let firstTokenTime: number | undefined;
 		const deploymentName = resolveDeploymentName(model, options);
 
-		const output: AssistantMessage = createInitialResponsesAssistantMessage(
-			"azure-openai-responses",
-			model.provider,
-			model.id,
-		);
+		const output: AssistantMessage = createInitialResponsesAssistantMessage(model);
 		let rawRequestDump: RawHttpRequestDump | undefined;
 		const abortTracker = createAbortSourceTracker(options?.signal);
 		const firstEventTimeoutAbortError = new AIError.StreamTimeoutError(
