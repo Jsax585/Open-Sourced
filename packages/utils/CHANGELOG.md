@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed frontmatter repair deleting HTML comments from document bodies and plain markdown; it now strips only leading comments ahead of the opening delimiter, so prompt bodies keep their comments ([#16481](https://github.com/can1357/oh-my-pi/pull/16481) by [@adi-IL](https://github.com/adi-IL)).
 - Fixed unmanaged stdout and stderr corrupting interactive displays, with private bounded diagnostics across custom directories, recovery from failed log destinations, transport changes without retired sinks reclaiming output, and disabled structured file logging ([#16159](https://github.com/can1357/oh-my-pi/pull/16159) by [@tommymorgan](https://github.com/tommymorgan)).
 
 ## [18.12.2] - 2026-10-18
