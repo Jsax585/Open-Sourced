@@ -1,11 +1,17 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent, isEnotdir } from "@oh-my-pi/pi-utils";
 import { getConfigDirPaths } from "../config";
 import { type ClaudePluginRoot, getPreloadedPluginRoots } from "../discovery/helpers";
 
-/** Turns raw file content (from `filePath`) into a config, or `null` to skip the file. */
+/**
+ * Turns raw file content (from `filePath`) into a config.
+ * Returning `null` means the file existed but was invalid for this adapter
+ * (reported as `rejected`/`invalid` by {@link readConfigFileResult}). Do not
+ * return `null` for a file that should be ignored quietly — omit that path from
+ * the source list instead.
+ */
 export type ConfigFileAdapter<T> = (content: string, filePath: string) => T | null;
 
 /** Why an existing config file was not applied. Absent files are not rejections. */
@@ -23,19 +29,14 @@ export type ConfigFileReadResult<T> =
 
 /** One entry of a config stack. */
 export interface ConfigFileSource<T> {
-	/** Path this source reads when it is file-backed; omitted for synthetic sources. */
-	readonly path?: string;
 	readResult(): ConfigFileReadResult<T>;
 	/** Convenience: value when present, otherwise `null` (absent or rejected). */
 	read(): T | null;
 }
 
-function sourceFromResult<T>(
-	pathHint: string | undefined,
-	readResult: () => ConfigFileReadResult<T>,
-): ConfigFileSource<T> {
+/** Build a {@link ConfigFileSource} from a `readResult` callback. */
+export function sourceFromResult<T>(readResult: () => ConfigFileReadResult<T>): ConfigFileSource<T> {
 	return {
-		path: pathHint,
 		readResult,
 		read: () => {
 			const result = readResult();
@@ -48,6 +49,7 @@ function sourceFromResult<T>(
  * Read one JSON/YAML config file through `adapt`.
  *
  * - Missing path → `absent` (callers skip quietly).
+ * - Path whose parent is a file (`ENOTDIR`) → `absent` (config cannot exist).
  * - Unreadable path → `rejected` with reason `unreadable`.
  * - Adapter throw or `null` return → `rejected` with reason `invalid`.
  */
@@ -56,7 +58,7 @@ export function readConfigFileResult<T>(filePath: string, adapt: ConfigFileAdapt
 	try {
 		content = fs.readFileSync(filePath, "utf-8");
 	} catch (err) {
-		if (isEnoent(err)) return { kind: "absent" };
+		if (isEnoent(err) || isEnotdir(err)) return { kind: "absent" };
 		const message = err instanceof Error ? err.message : String(err);
 		return {
 			kind: "rejected",
@@ -118,7 +120,7 @@ export function configFileSources<T>(
 	const addDir = (dir: string): void => {
 		for (const filename of filenames) {
 			const filePath = path.join(dir, filename);
-			sources.push(sourceFromResult(filePath, () => readConfigFileResult(filePath, adapt)));
+			sources.push(sourceFromResult(() => readConfigFileResult(filePath, adapt)));
 		}
 	};
 

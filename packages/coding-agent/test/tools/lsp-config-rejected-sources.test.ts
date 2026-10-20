@@ -3,11 +3,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { preloadPluginRoots } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { LspTool } from "@oh-my-pi/pi-coding-agent/lsp";
 import { configCache, formatRejectedConfigSources, loadConfig } from "@oh-my-pi/pi-coding-agent/lsp/config";
 import { readConfigFileResult } from "@oh-my-pi/pi-coding-agent/utils/config-file-sources";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { restoreEnvValue } from "../helpers/settings-test-state";
 
 const lspTestSettings = await Settings.init({ inMemory: true });
 
@@ -63,7 +65,7 @@ describe("LSP rejected config sources (#15528)", () => {
 			if (invalidResult.kind === "rejected") {
 				expect(invalidResult.rejection.path).toBe(invalid);
 				expect(invalidResult.rejection.reason).toBe("invalid");
-				expect(invalidResult.rejection.message.length).toBeGreaterThan(0);
+				expect(invalidResult.rejection.message).toMatch(/JSON Parse error|Unexpected EOF/i);
 			}
 
 			const notObject = path.join(tempDir.path(), "array.json");
@@ -82,26 +84,43 @@ describe("LSP rejected config sources (#15528)", () => {
 		}
 	});
 
-	it.skipIf(process.platform === "win32")("readConfigFileResult reports unreadable files", () => {
-		const tempDir = TempDir.createSync("@omp-cfg-unreadable-");
+	it("readConfigFileResult treats ENOTDIR parents as absent", () => {
+		const tempDir = TempDir.createSync("@omp-cfg-enotdir-");
 		try {
-			const locked = path.join(tempDir.path(), "locked.json");
-			fs.writeFileSync(locked, '{"servers":{}}');
-			fs.chmodSync(locked, 0);
-			try {
-				const result = readConfigFileResult(locked, content => JSON.parse(content) as unknown);
-				expect(result.kind).toBe("rejected");
-				if (result.kind === "rejected") {
-					expect(result.rejection.reason).toBe("unreadable");
-					expect(result.rejection.path).toBe(locked);
-				}
-			} finally {
-				fs.chmodSync(locked, 0o644);
-			}
+			const fileAsDir = path.join(tempDir.path(), "omp-as-file");
+			fs.writeFileSync(fileAsDir, "not-a-directory");
+			const nested = path.join(fileAsDir, "lsp.json");
+			expect(readConfigFileResult(nested, content => JSON.parse(content) as unknown)).toEqual({
+				kind: "absent",
+			});
 		} finally {
 			tempDir.removeSync();
 		}
 	});
+
+	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"readConfigFileResult reports unreadable files",
+		() => {
+			const tempDir = TempDir.createSync("@omp-cfg-unreadable-");
+			try {
+				const locked = path.join(tempDir.path(), "locked.json");
+				fs.writeFileSync(locked, '{"servers":{}}');
+				fs.chmodSync(locked, 0);
+				try {
+					const result = readConfigFileResult(locked, content => JSON.parse(content) as unknown);
+					expect(result.kind).toBe("rejected");
+					if (result.kind === "rejected") {
+						expect(result.rejection.reason).toBe("unreadable");
+						expect(result.rejection.path).toBe(locked);
+					}
+				} finally {
+					fs.chmodSync(locked, 0o644);
+				}
+			} finally {
+				tempDir.removeSync();
+			}
+		},
+	);
 
 	it("loadConfig records malformed .omp/lsp.json and leaves absent paths silent", () => {
 		const tempDir = TempDir.createSync("@omp-lsp-malformed-load-");
@@ -151,6 +170,26 @@ describe("LSP rejected config sources (#15528)", () => {
 		}
 	});
 
+	it("formatRejectedConfigSources shortens home paths and sanitizes messages", () => {
+		const home = lspHomeOverride ?? os.homedir();
+		const absolute = path.join(home, ".omp", "agent", "lsp.json");
+		const lines = formatRejectedConfigSources("/tmp/project", [
+			{
+				path: absolute,
+				reason: "invalid",
+				message: "JSON\tParse\nerror: Unexpected EOF",
+			},
+		]);
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toContain("Rejected config:");
+		expect(lines[0]).toContain("(invalid):");
+		expect(lines[0]).not.toContain(home);
+		expect(lines[0]).toContain("~");
+		expect(lines[0]).not.toContain("\t");
+		expect(lines[0]).not.toContain("\n");
+		expect(lines[0]).toMatch(/JSON\s+Parse\s+error: Unexpected EOF/);
+	});
+
 	it("status names the rejected source path and parse diagnostic", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-malformed-status-");
 		try {
@@ -163,6 +202,7 @@ describe("LSP rejected config sources (#15528)", () => {
 			const output = textResult(await tool.execute("status-rejected", { action: "status" }));
 
 			expect(output).toContain(`Rejected config: ${path.join(".omp", "lsp.json")} (invalid):`);
+			expect(output).toMatch(/JSON Parse error|Unexpected EOF/i);
 		} finally {
 			configCache.delete(tempDir.path());
 			tempDir.removeSync();
@@ -185,6 +225,89 @@ describe("LSP rejected config sources (#15528)", () => {
 		} finally {
 			configCache.delete(tempDir.path());
 			tempDir.removeSync();
+		}
+	});
+
+	it("loadConfig reports a malformed marketplace lspServers file", async () => {
+		const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+		delete process.env.CLAUDE_CONFIG_DIR;
+		delete Bun.env.CLAUDE_CONFIG_DIR;
+		const tempDir = TempDir.createSync("@omp-lsp-marketplace-rejected-");
+		const home = path.join(tempDir.path(), "home");
+		const cwd = path.join(tempDir.path(), "repo");
+		const pluginRoot = path.join(
+			home,
+			".claude",
+			"plugins",
+			"cache",
+			"claude-plugins-official",
+			"broken-lsp",
+			"1.0.0",
+		);
+		const marketplaceRoot = path.dirname(path.dirname(pluginRoot));
+		const registryPath = path.join(home, ".claude", "plugins", "installed_plugins.json");
+		const nestedConfig = path.join(pluginRoot, "lsp.json");
+
+		await fs.promises.mkdir(pluginRoot, { recursive: true });
+		await fs.promises.mkdir(cwd, { recursive: true });
+		await fs.promises.mkdir(path.dirname(registryPath), { recursive: true });
+		await Bun.write(nestedConfig, '{"servers":');
+		await Bun.write(
+			registryPath,
+			`${JSON.stringify(
+				{
+					version: 2,
+					plugins: {
+						"broken-lsp@claude-plugins-official": [
+							{
+								scope: "user",
+								installPath: pluginRoot,
+								version: "1.0.0",
+								installedAt: "2026-05-25T00:00:00.000Z",
+								lastUpdated: "2026-05-25T00:00:00.000Z",
+							},
+						],
+					},
+				},
+				null,
+				2,
+			)}\n`,
+		);
+		await Bun.write(
+			path.join(marketplaceRoot, "marketplace.json"),
+			`${JSON.stringify(
+				{
+					name: "claude-plugins-official",
+					owner: { name: "anthropic" },
+					plugins: [
+						{
+							name: "broken-lsp",
+							version: "1.0.0",
+							source: "./broken-lsp/1.0.0",
+							lspServers: "./lsp.json",
+						},
+					],
+				},
+				null,
+				2,
+			)}\n`,
+		);
+
+		try {
+			await preloadPluginRoots(home, cwd);
+			configCache.delete(cwd);
+			const config = loadConfig(cwd);
+			expect(config.rejectedSources?.some(entry => entry.path === nestedConfig && entry.reason === "invalid")).toBe(
+				true,
+			);
+		} finally {
+			try {
+				await preloadPluginRoots(path.join(tempDir.path(), "empty-home"), cwd);
+			} finally {
+				configCache.delete(cwd);
+				restoreEnvValue("CLAUDE_CONFIG_DIR", originalClaudeConfigDir);
+				tempDir.removeSync();
+			}
 		}
 	});
 });

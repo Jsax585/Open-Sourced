@@ -1,14 +1,17 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { replaceTabs, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { $which, isRecord, logger, pathIsWithin, type WhichOptions } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import type { ClaudePluginRoot } from "../discovery/helpers";
 import {
 	type ConfigFileAdapter,
+	type ConfigFileReadResult,
 	type ConfigFileRejection,
 	type ConfigFileSource,
 	configFileSources,
-	readConfigFile,
+	readConfigFileResult,
+	sourceFromResult,
 } from "../utils/config-file-sources";
 import { BiomeClient } from "./clients/biome-client";
 import { SwiftLintClient } from "./clients/swiftlint-client";
@@ -370,7 +373,7 @@ function selectTypescriptServer(servers: Record<string, ServerConfig>): void {
 	}
 }
 
-function readMarketplaceLspConfig(root: ClaudePluginRoot): NormalizedConfig | null {
+function readMarketplaceLspConfig(root: ClaudePluginRoot): ConfigFileReadResult<NormalizedConfig> {
 	const catalogPaths = [
 		path.resolve(root.path, "..", "..", "marketplace.json"),
 		path.resolve(root.path, "..", "..", ".claude-plugin", "marketplace.json"),
@@ -387,40 +390,36 @@ function readMarketplaceLspConfig(root: ClaudePluginRoot): NormalizedConfig | nu
 				const lspServers = plugin.lspServers;
 				if (typeof lspServers === "string") {
 					const configPath = path.resolve(root.path, lspServers);
-					if (!pathIsWithin(root.path, configPath)) return null;
-					return readConfigFile(configPath, adaptConfig);
+					if (!pathIsWithin(root.path, configPath)) return { kind: "absent" };
+					return readConfigFileResult(configPath, adaptConfig);
 				}
 				if (isRecord(lspServers)) {
-					return normalizeConfig({ servers: lspServers });
+					const value = normalizeConfig({ servers: lspServers });
+					return value ? { kind: "value", value } : { kind: "absent" };
 				}
-				return null;
+				return { kind: "absent" };
 			}
 		} catch {}
 	}
 
-	return null;
+	return { kind: "absent" };
 }
 
 function marketplaceConfigSource(root: ClaudePluginRoot): ConfigFileSource<NormalizedConfig> {
-	const readResult = (): ReturnType<ConfigFileSource<NormalizedConfig>["readResult"]> => {
-		const value = readMarketplaceLspConfig(root);
-		return value ? { kind: "value", value } : { kind: "absent" };
-	};
-	return {
-		readResult,
-		read: () => {
-			const result = readResult();
-			return result.kind === "value" ? result.value : null;
-		},
-	};
+	return sourceFromResult(() => readMarketplaceLspConfig(root));
 }
 
 /** Format rejected config sources for status/reload tool output. */
 export function formatRejectedConfigSources(cwd: string, rejected: ConfigFileRejection[] | undefined): string[] {
 	if (!rejected || rejected.length === 0) return [];
 	return rejected.map(rejection => {
-		const display = pathIsWithin(cwd, rejection.path) ? path.relative(cwd, rejection.path) : rejection.path;
-		return `Rejected config: ${display} (${rejection.reason}): ${rejection.message}`;
+		const relative = pathIsWithin(cwd, rejection.path) ? path.relative(cwd, rejection.path) : rejection.path;
+		const display = truncateToWidth(
+			replaceTabs(path.isAbsolute(relative) ? shortenPath(relative) : relative),
+			TRUNCATE_LENGTHS.CONTENT,
+		);
+		const message = truncateToWidth(replaceTabs(rejection.message.replace(/[\r\n]+/g, " ")), TRUNCATE_LENGTHS.LONG);
+		return `Rejected config: ${display} (${rejection.reason}): ${message}`;
 	});
 }
 
