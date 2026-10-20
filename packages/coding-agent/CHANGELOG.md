@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `oauth.clientName` for MCP servers to change the `client_name` sent during dynamic client registration, for servers that only accept known clients (e.g. Figma)
+- Added `oauth.clientName` for MCP servers to change the `client_name` sent during dynamic client registration, for servers that only accept known clients (e.g. Figma) ([#16473](https://github.com/can1357/oh-my-pi/pull/16473) by [@ravshansbox](https://github.com/ravshansbox))
 
 ### Fixed
 
