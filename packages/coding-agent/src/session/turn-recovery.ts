@@ -2214,12 +2214,6 @@ export class TurnRecovery {
 			refusalWalk?: boolean;
 		},
 	): Promise<boolean> {
-		if (isProviderExhaustionError(failedMessage.errorStatus, failedMessage.errorMessage)) {
-			// Cool the provider that failed, not the active model: /switch may have changed it.
-			coolDownExhaustedProvider(failedMessage.provider, {
-				reason: `${failedMessage.errorStatus ?? ""} ${failedMessage.errorMessage ?? "provider exhausted"}`.trim(),
-			});
-		}
 		const ceiling = this.#host.thinkingLevelCeiling();
 		const latestAssistant = options?.preserveFailedTurn
 			? failedMessage
@@ -2780,6 +2774,19 @@ export class TurnRecovery {
 			siblingAvailabilityWaitMs !== undefined &&
 			effectiveUsageLimitWaitMs !== undefined &&
 			effectiveUsageLimitWaitMs <= retrySettings.maxDelayMs;
+		// A provider-wide cooldown is only warranted once credential rotation has established that no
+		// sibling account can serve the request now or after a short wait. Cool the provider that
+		// failed, not the active model: /switch may have changed it.
+		if (
+			!staleOpenAIResponsesReplayError &&
+			!switchedCredential &&
+			!waitForSiblingCredential &&
+			isProviderExhaustionError(message.errorStatus, message.errorMessage)
+		) {
+			coolDownExhaustedProvider(message.provider, {
+				reason: `${message.errorStatus ?? ""} ${message.errorMessage ?? "provider exhausted"}`.trim(),
+			});
+		}
 		const longUsageLimitFallback =
 			currentModel !== undefined &&
 			resolveModelPolicy(currentModel).catalog.longUsageLimitFallback === true &&
