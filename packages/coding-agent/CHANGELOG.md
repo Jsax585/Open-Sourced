@@ -106,6 +106,8 @@
 - Fixed a patch for a nested repository that failed at the commit step being left applied but uncommitted in your checkout, where the next attempt mistook it for your own work and could leave a conflicting stash: it is now rolled back before the error is reported ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 - Fixed an isolated task's patch files for a nested repository that did not apply still being offered after the agent later undid that work, and a stash-restore warning being treated as a failed apply that kept the agent's temporary files indefinitely ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 - Fixed an isolated task's branch keeping work the agent removed when saving a follow-up's nested patches failed part-way, and the branch you had already been given being deleted by such a failed write ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
+- Fixed an isolated task's unapplied patch being overwritten by a later capture that then failed part-way, so undoing that turn left a patch for work the agent had removed; the patch you were handed is now replaced only once the whole capture is saved ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
+- Fixed the Agent Hub still listing an isolated task's branch after landing it merged and deleted the branch ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 
 ## [18.12.3] - 2026-10-19
 

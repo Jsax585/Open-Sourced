@@ -22,7 +22,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type * as natives from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import isolationErrorTemplate from "../prompts/tools/isolation-error.md" with { type: "text" };
 import isolationSummaryTemplate from "../prompts/tools/isolation-summary.md" with { type: "text" };
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
@@ -317,7 +317,13 @@ function rootPatchPath(artifactsDir: string, agentId: string): string {
 /**
  * Write a captured delta to disk: the root patch, and one file per nested repo
  * named after `nestedPatchPrefix`. Throws when any write fails so nothing
- * captured is ever the only copy.
+ * captured is ever the only copy, and leaves no file of this capture behind.
+ *
+ * The root patch has one name for every capture, so a capture that fails
+ * part-way must not have replaced the patch the caller was already handed:
+ * if the agent then puts its workspace back as handed over, nothing is ever
+ * captured again to repair it. The nested files are named for this capture
+ * alone and are written first; the root patch is published last, atomically.
  */
 async function writeDeltaPatches(
 	delta: DeltaPatchResult,
@@ -326,8 +332,19 @@ async function writeDeltaPatches(
 	nestedPatchPrefix: string,
 ): Promise<IsolationPatchArtifacts> {
 	const patchPath = rootPatchPath(artifactsDir, agentId);
-	await Bun.write(patchPath, delta.rootPatch);
+	// The nested files first: they are named for this capture alone.
 	const nestedPatchPaths = await persistNestedPatches(artifactsDir, nestedPatchPrefix, delta.nestedPatches);
+	// Not matched by the roster scanner, which reads `<id>.patch` and `<id>.nested-*.patch` only.
+	const staging = `${patchPath}.${Snowflake.next()}.tmp`;
+	try {
+		await Bun.write(staging, delta.rootPatch);
+		await fs.rename(staging, patchPath);
+	} catch (error) {
+		await Promise.all(
+			[staging, ...nestedPatchPaths].map(file => fs.rm(file, { force: true }).catch(() => undefined)),
+		);
+		throw error;
+	}
 	return {
 		patchPath,
 		hasRootChanges: delta.rootPatch.trim().length > 0,
@@ -1204,6 +1221,8 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
 			// Clean up the merged branch (keep failed ones for manual resolution)
 			if (changesApplied) {
 				await cleanupTaskBranches(repoRoot, [result.branchName]);
+				// The Agent Hub lists a branch from the registry, not from git: stop naming one that is gone.
+				AgentRegistry.global().clearHistory(result.id, ["branchName"]);
 			}
 			return { summary, changesApplied, hadAnyChanges, mergedBranchForNestedPatches };
 		}

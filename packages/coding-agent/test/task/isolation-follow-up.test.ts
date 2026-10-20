@@ -1063,6 +1063,139 @@ describe("isolated agent follow-up turns", () => {
 		expect(AgentRegistry.global().get(id)?.history?.branchName).toBeUndefined();
 	});
 
+	it("stops listing the first run's task branch once its landing deletes it", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "branch");
+		const id = "FirstRunBranchLanded";
+		const branch = `omp/task/${id}`;
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		expect(AgentRegistry.global().get(id)?.history?.branchName).toBe(branch);
+
+		const landing = await mergeIsolatedChanges({ result: run.first, repoRoot: repo, mergeMode: "branch" });
+		firstRun.resolve(landing.changesApplied);
+
+		expect(landing.changesApplied).toBe(true);
+		expect(await taskBranches(repo)).toBe("");
+		// The Agent Hub row of the idle agent must not name a branch that no longer exists.
+		expect(AgentRegistry.global().get(id)?.history?.branchName).toBeUndefined();
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	it("stops listing a follow-up's task branch once its landing deletes it", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "branch");
+		const id = "FollowUpBranchLanded";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		// Refused, so the branch stays and is listed.
+		firstRun.resolve(false);
+		expect(AgentRegistry.global().get(id)?.history?.branchName).toBe(`omp/task/${id}`);
+
+		await commitIn(iso, "two\n", "review fix");
+		expect(await run.settleFollowUp?.(result(id))).toContain("Merged branch");
+
+		expect(await taskBranches(repo)).toBe("");
+		expect(AgentRegistry.global().get(id)?.history?.branchName).toBeUndefined();
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	it("keeps listing the task branch when its merge conflicts and the branch is kept", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "branch");
+		const id = "FirstRunBranchConflicts";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		// The parent changed the same line, so the merge cannot succeed.
+		await Bun.write(path.join(repo, "a.txt"), "parent\n");
+		await git(repo, ["commit", "-q", "-a", "-m", "parent change"]);
+
+		const landing = await mergeIsolatedChanges({ result: run.first, repoRoot: repo, mergeMode: "branch" });
+		firstRun.resolve(landing.changesApplied);
+
+		expect(landing.changesApplied).toBe(false);
+		// The branch is the only copy of the work, and it is still there to be listed.
+		expect(await taskBranches(repo)).toContain(`omp/task/${id}`);
+		expect(AgentRegistry.global().get(id)?.history?.branchName).toBe(`omp/task/${id}`);
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	/** A patch-mode agent whose first handoff was left unapplied, and the unapplied root patch it advertises. */
+	async function unappliedPatchAgent(id: string) {
+		const { repo, iso } = await createRepoAndIsolation();
+		await addNestedRepo(repo, iso);
+		const { firstRun, followUps } = landingFollowUps(repo, "patch");
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		// Left unapplied: the patch file is the only copy of the work.
+		firstRun.resolve(null);
+		const patchPath = run.first.patchPath ?? "";
+		const handedOver = await Bun.file(patchPath).text();
+		expect(handedOver).toContain("+one");
+		// The next turn changes root and nested work.
+		await commitIn(iso, "two\n", "later fix");
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+		return { iso, run, patchPath, handedOver };
+	}
+
+	it("keeps the patch the caller was handed when a later capture's nested files cannot be written", async () => {
+		const id = "FollowUpPatchKept";
+		const { iso, run, patchPath, handedOver } = await unappliedPatchAgent(id);
+		await fs.mkdir(path.join(run.artifactsDir, `${id}.nested-1.nested-0-sub.patch`));
+
+		expect(await run.settleFollowUp?.(result(id))).toContain("not captured");
+		// A capture that was not accepted must leave the advertised patch as it was.
+		expect(await Bun.file(patchPath).text()).toBe(handedOver);
+
+		// The agent puts everything back as it was handed over. Nothing new is captured,
+		// so nothing would ever repair a file the failed capture had overwritten.
+		await commitIn(iso, "one\n", "undo later fix");
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n0\n");
+		expect(await run.settleFollowUp?.(result(id))).toBe("");
+		expect(await Bun.file(patchPath).text()).toBe(handedOver);
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	it("leaves no files of a capture whose root patch could not be published", async () => {
+		const id = "FollowUpPatchPublishFails";
+		const { run, patchPath, handedOver } = await unappliedPatchAgent(id);
+		vi.spyOn(fs, "rename").mockRejectedValueOnce(new Error("EXDEV"));
+
+		expect(await run.settleFollowUp?.(result(id))).toContain("not captured");
+
+		expect(await Bun.file(patchPath).text()).toBe(handedOver);
+		// Neither the new capture's nested patch nor a half-written root patch may stay behind.
+		const leftovers = (await fs.readdir(run.artifactsDir)).filter(
+			name => name.includes(".nested-1.") || name.endsWith(".tmp"),
+		);
+		expect(leftovers).toEqual([]);
+		await AgentLifecycleManager.global().release(id);
+	});
+
 	it("keeps the handed-over task branch when a nested-only replacement cannot be written", async () => {
 		const id = "FollowUpReplacementWriteFails";
 		const { repo, run } = await refusedBranchWithNested(id);
