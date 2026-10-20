@@ -85,6 +85,31 @@ describe("startup composer terminal session identity", () => {
 		}
 	});
 
+	it("ignores hidden transcripts like the live recent-session selector", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-startup-hidden-session-"));
+		const visible = path.join(root, "visible.jsonl");
+		const hidden = path.join(root, ".hidden.jsonl");
+		for (const [file, id] of [
+			[visible, "visible"],
+			[hidden, "hidden"],
+		] as const) {
+			fs.writeFileSync(
+				file,
+				`${JSON.stringify({ type: "session", id })}\n${JSON.stringify({
+					type: "message",
+					message: { role: "user", content: `${id} work` },
+				})}\n`,
+			);
+		}
+		fs.utimesSync(visible, new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
+		fs.utimesSync(hidden, new Date("2026-01-02T00:00:00Z"), new Date("2026-01-02T00:00:00Z"));
+		try {
+			expect(findMostRecentNonEmptySessionSync(root)).toBe(visible);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("selects the newest nonempty transcript instead of the last cache writer", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-startup-newest-session-"));
 		const agentDir = path.join(root, "agent");

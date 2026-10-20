@@ -111,19 +111,15 @@ function inspectSessionFileSync(sessionFile: string): { created: Date; resumable
 /** Synchronous, dependency-light form of the canonical recent nonempty-session selector. */
 export function findMostRecentNonEmptySessionSync(sessionDir: string): string | undefined {
 	try {
-		const entries = fs
-			.readdirSync(sessionDir, { withFileTypes: true })
-			.filter(entry => entry.isFile() || entry.isSymbolicLink());
-		const primaries = new Set(entries.filter(entry => entry.name.endsWith(".jsonl")).map(entry => entry.name));
+		const primaries = new Set(new Bun.Glob("*.jsonl").scanSync({ cwd: sessionDir, followSymlinks: true }));
 		const recoverableBackups = new Map<string, { file: string; modified: Date }>();
-		for (const entry of entries) {
-			if (!entry.name.endsWith(".bak")) continue;
-			const trimmed = entry.name.slice(0, -".bak".length);
+		for (const backupName of new Bun.Glob("*.bak").scanSync({ cwd: sessionDir, followSymlinks: true })) {
+			const trimmed = backupName.slice(0, -".bak".length);
 			const suffix = trimmed.lastIndexOf(".");
 			if (suffix <= 0) continue;
 			const primaryName = trimmed.slice(0, suffix);
 			if (!primaryName.endsWith(".jsonl") || primaries.has(primaryName)) continue;
-			const file = path.join(sessionDir, entry.name);
+			const file = path.join(sessionDir, backupName);
 			const modified = fs.statSync(file).mtime;
 			const existing = recoverableBackups.get(primaryName);
 			if (!existing || modified.getTime() > existing.modified.getTime()) {
@@ -131,16 +127,14 @@ export function findMostRecentNonEmptySessionSync(sessionDir: string): string | 
 			}
 		}
 		const candidates = [
-			...entries
-				.filter(entry => entry.name.endsWith(".jsonl"))
-				.flatMap(entry => {
-					const file = path.join(sessionDir, entry.name);
-					try {
-						return [{ file, path: file, modified: fs.statSync(file).mtime }];
-					} catch {
-						return [];
-					}
-				}),
+			...[...primaries].flatMap(primaryName => {
+				const file = path.join(sessionDir, primaryName);
+				try {
+					return [{ file, path: file, modified: fs.statSync(file).mtime }];
+				} catch {
+					return [];
+				}
+			}),
 			...[...recoverableBackups].map(([primaryName, backup]) => ({
 				file: backup.file,
 				path: path.join(sessionDir, primaryName),
