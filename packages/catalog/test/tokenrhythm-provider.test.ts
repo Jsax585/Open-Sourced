@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
@@ -71,10 +72,14 @@ describe("TokenRhythm discovery", () => {
 	test("the seed shows without a key and the live roster replaces it", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-tokenrhythm-"));
 		try {
-			// No staticModels: resolution falls back to the committed bundle, so
-			// this fails if the generated catalog lacks the seed row.
+			// Supply the KDL-authored seed so the test targets the rule/descriptor
+			// contract rather than a volatile generated bundle slice.
 			const withoutKey = await resolveProviderModels(
-				{ ...tokenrhythmModelManagerOptions({}), cacheDbPath: path.join(tempDir, "keyless.db") },
+				{
+					...tokenrhythmModelManagerOptions({}),
+					staticModels: seedModels<"openai-completions">("tokenrhythm"),
+					cacheDbPath: path.join(tempDir, "keyless.db"),
+				},
 				"online-if-uncached",
 			);
 			expect(withoutKey.models.map(model => model.id)).toEqual(["deepseek-v4-pro-0813"]);

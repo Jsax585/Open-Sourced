@@ -1413,6 +1413,7 @@ export function tokenrhythmModelManagerOptions(
 	const baseUrl = config?.baseUrl ?? "https://tokenrhythm.studio/v1";
 	return {
 		providerId: "tokenrhythm",
+		cacheProviderId: resolveModelCacheProviderId("tokenrhythm", { apiKey, baseUrl }),
 		dynamicModelsAuthoritative: true,
 		...(apiKey && {
 			fetchDynamicModels: () =>
