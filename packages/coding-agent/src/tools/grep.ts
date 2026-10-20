@@ -1066,7 +1066,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						if (match.column !== undefined) rows[0] = `${rows[0]} [col ${match.column}]`;
 						if (match.truncated) {
 							linesTruncated = true;
-							// The cut window is contiguous, so only the block's first and last rows can be partial.
+							// The cut window is contiguous, so only the block's first and last rows may be partial.
 							(cutLines ??= new Set()).add(match.lineNumber).add(match.lineNumber + rows.length - 1);
 						}
 						for (let row = 0; row < rows.length; row++) {

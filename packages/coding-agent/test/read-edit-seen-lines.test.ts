@@ -121,4 +121,35 @@ describe("grep → edit seen-line guard under default settings", () => {
 			"import os\n\ndef connect(host,\n            port=5432):\n    return (host, port)\n",
 		);
 	});
+
+	it("keeps the cut last row of a cross-line match wider than the column cap unseen", async () => {
+		const session = createSession(cwd);
+		const file = path.join(cwd, "block.txt");
+		// About 850 bytes across 14 lines: past the 512-byte column cap, so grep shows a window ending mid-line.
+		const lines = ["head", ...Array.from({ length: 12 }, (_, i) => `    x${i} = ${"y".repeat(60)}`), "end"];
+		const source = `${lines.join("\n")}\n`;
+		await Bun.write(file, source);
+
+		const grep = textOutput(
+			await new GrepTool(session).execute("grep", { pattern: "head\\n(.*\\n)*end", path: "block.txt" }),
+		);
+		const rows = grep.split("\n").filter(row => /^[ *]\d+:/.test(row));
+		expect(rows[0]).toBe("*1:head [col 1]");
+		const lastRow = rows.at(-1) ?? "";
+		expect(lastRow).toEndWith("...");
+		const cutLine = Number(/\d+/.exec(lastRow)?.[0]);
+		expect(cutLine).toBeGreaterThan(5);
+		expect(cutLine).toBeLessThan(lines.length);
+		const header = grep.split("\n")[0];
+
+		const rejected = await new EditTool(session, "hashline").execute("edit", {
+			input: `${header}\nPUT ${cutLine}.=${cutLine}:\n+    cut = 0\n`,
+		});
+		expect(textOutput(rejected)).toContain("never displayed");
+		expect(await Bun.file(file).text()).toBe(source);
+
+		await new EditTool(session, "hashline").execute("edit", { input: `${header}\nPUT 5.=5:\n+    x3 = 0\n` });
+		lines[4] = "    x3 = 0";
+		expect(await Bun.file(file).text()).toBe(`${lines.join("\n")}\n`);
+	});
 });
