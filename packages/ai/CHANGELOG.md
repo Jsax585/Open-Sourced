@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed the auth gateway logging nothing when a streamed reply ended; each streamed request now logs how it ended (stop reason and duration, plus the upstream error for replies that end early or fail)
+- Fixed the auth gateway logging nothing when a streamed reply ended; each streamed request now logs how it ended (stop reason and duration, plus the upstream error for replies that end early or fail) ([#16560](https://github.com/can1357/oh-my-pi/pull/16560) by [@codyw912](https://github.com/codyw912))
 
 ## [18.12.4] - 2026-10-20
 
