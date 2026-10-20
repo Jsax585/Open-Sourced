@@ -1,11 +1,12 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import * as ai from "@oh-my-pi/pi-ai";
 import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
-import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { createMockModel, type MockResponseSource } from "@oh-my-pi/pi-ai/providers/mock";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -27,7 +28,12 @@ import { getProjectAgentDir, getProjectDir, setProjectDir, TempDir } from "@oh-m
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 import { cfgAutolearnEnabled } from "@oh-my-pi/pi-coding-agent/autolearn/settings";
-import { cfgHindsightApiUrl, cfgHindsightMentalModelsEnabled } from "@oh-my-pi/pi-coding-agent/hindsight/settings";
+import {
+	cfgHindsightApiToken,
+	cfgHindsightApiUrl,
+	cfgHindsightBankId,
+	cfgHindsightMentalModelsEnabled,
+} from "@oh-my-pi/pi-coding-agent/hindsight/settings";
 import { cfgMemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/settings";
 import { cfgMnemopiBank, cfgMnemopiRecallLimit, cfgMnemopiScoping } from "@oh-my-pi/pi-coding-agent/mnemopi/settings";
 
@@ -43,11 +49,138 @@ function createTool(name: string): AgentTool {
 	};
 }
 
+interface RetainedSource {
+	bankId: string;
+	documentId: string;
+	content: string;
+	tags?: string[];
+	metadata?: Record<string, string>;
+}
+
+interface HindsightWrite {
+	method: "POST" | "DELETE";
+	bankId: string;
+	documentId: string;
+	updateMode?: string;
+	tags?: string[];
+}
+
+interface WireMemoryItem {
+	content: string;
+	document_id?: string;
+	tags?: string[];
+	metadata?: Record<string, string>;
+	update_mode?: string;
+}
+
+/**
+ * Loopback Hindsight server holding conversation sources keyed by bank and
+ * document, so assertions read what the server would actually retain.
+ */
+class LoopbackHindsight {
+	readonly sources = new Map<string, RetainedSource>();
+	readonly writes: HindsightWrite[] = [];
+	readonly recalls: string[] = [];
+	readonly retainAuthorizations: Array<string | null> = [];
+	/** Decides each retain's HTTP status; 200 stores the item. */
+	retainStatus: (item: WireMemoryItem) => number | Promise<number> = () => 200;
+	/** Decides whether deleting a conversation source succeeds. */
+	deleteStatus = 200;
+	readonly #listeners = new Set<() => void>();
+	readonly #server = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch: request => this.#handle(request),
+	});
+
+	get url(): string {
+		return this.#server.url.href;
+	}
+
+	source(bankId: string, documentId: string): RetainedSource | undefined {
+		return this.sources.get(`${bankId}\0${documentId}`);
+	}
+
+	containing(text: string): RetainedSource[] {
+		return [...this.sources.values()].filter(source => source.content.includes(text));
+	}
+
+	/** Resolves once `predicate` holds, re-checked on every server-side change. */
+	async until(predicate: () => boolean): Promise<void> {
+		if (predicate()) return;
+		const { promise, resolve } = Promise.withResolvers<void>();
+		const listener = () => {
+			if (predicate()) resolve();
+		};
+		this.#listeners.add(listener);
+		try {
+			await promise;
+		} finally {
+			this.#listeners.delete(listener);
+		}
+	}
+
+	async stop(): Promise<void> {
+		await this.#server.stop(true);
+	}
+
+	#changed(): void {
+		for (const listener of this.#listeners) listener();
+	}
+
+	async #handle(request: Request): Promise<Response> {
+		// /v1/default/banks/{bank}/...
+		const parts = new URL(request.url).pathname.split("/").filter(Boolean).map(decodeURIComponent);
+		const bankId = parts[3] ?? "";
+		const rest = parts.slice(4);
+		if (request.method === "PUT" && rest.length === 0) return Response.json({});
+		if (request.method === "POST" && rest.join("/") === "memories") {
+			this.retainAuthorizations.push(request.headers.get("authorization"));
+			const body = (await request.json()) as { items: WireMemoryItem[] };
+			for (const item of body.items) {
+				const documentId = item.document_id ?? "";
+				this.writes.push({ method: "POST", bankId, documentId, updateMode: item.update_mode, tags: item.tags });
+				this.#changed();
+				const status = await this.retainStatus(item);
+				if (status !== 200) return new Response("unavailable", { status });
+				this.sources.set(`${bankId}\0${documentId}`, {
+					bankId,
+					documentId,
+					content: item.content,
+					tags: item.tags,
+					metadata: item.metadata,
+				});
+				this.#changed();
+			}
+			return Response.json({ success: true, bank_id: bankId, items_count: body.items.length, async: true });
+		}
+		if (request.method === "DELETE" && rest[0] === "documents" && rest[1]) {
+			this.writes.push({ method: "DELETE", bankId, documentId: rest[1] });
+			if (this.deleteStatus !== 200) return new Response("unavailable", { status: this.deleteStatus });
+			this.sources.delete(`${bankId}\0${rest[1]}`);
+			this.#changed();
+			return Response.json({ success: true });
+		}
+		if (request.method === "POST" && rest.join("/") === "memories/recall") {
+			this.recalls.push(bankId);
+			return Response.json({ results: [] });
+		}
+		if (request.method === "GET" && rest.join("/") === "mental-models") return Response.json({ items: [] });
+		return new Response("Unexpected request", { status: 404 });
+	}
+}
+
+function only<T>(items: T[]): T {
+	expect(items).toHaveLength(1);
+	return items[0]!;
+}
+
 describe("AgentSession memory backend lifecycle", () => {
 	let authStorage: AuthStorage;
 	let session: AgentSession | undefined;
 	let settings: Settings;
 	let tempDir: TempDir;
+	let hindsight: LoopbackHindsight | undefined;
 
 	beforeEach(() => {
 		tempDir = TempDir.createSync("@memory-backend-lifecycle-");
@@ -63,6 +196,8 @@ describe("AgentSession memory backend lifecycle", () => {
 	afterEach(async () => {
 		await session?.dispose();
 		session = undefined;
+		await hindsight?.stop();
+		hindsight = undefined;
 		resetMemoryForTests();
 		vi.restoreAllMocks();
 		authStorage.close();
@@ -71,7 +206,10 @@ describe("AgentSession memory backend lifecycle", () => {
 		tempDir.removeSync();
 	});
 
-	function createSession(createMemoryTools: () => Promise<AgentTool[]>): AgentSession {
+	function createSession(
+		createMemoryTools: () => Promise<AgentTool[]>,
+		options: { responses?: MockResponseSource; sessionManager?: SessionManager } = {},
+	): AgentSession {
 		const model = buildModel({
 			id: "mock",
 			name: "mock",
@@ -91,12 +229,13 @@ describe("AgentSession memory backend lifecycle", () => {
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model, systemPrompt: ["initial"], tools: [read] },
-			streamFn: createMockModel({ responses: [{ content: ["ok"] }, { content: ["ok"] }] }).stream,
+			streamFn: createMockModel({ responses: options.responses ?? [{ content: ["ok"] }, { content: ["ok"] }] })
+				.stream,
 		});
 		const toolRegistry = new Map<string, AgentTool>([[read.name, read]]);
 		session = new AgentSession({
 			agent,
-			sessionManager: SessionManager.inMemory(tempDir.path()),
+			sessionManager: options.sessionManager ?? SessionManager.inMemory(tempDir.path()),
 			settings,
 			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml")),
 			memoryAgentDir: tempDir.path(),
@@ -760,5 +899,630 @@ describe("AgentSession memory backend lifecycle", () => {
 		if (coalesced) await settings.reloadForCwd(path.join(tempDir.path(), "destination"));
 
 		await expect(rebindMemoryBackendForCwd(current)).rejects.toThrow("destination memory tools unavailable");
+	});
+
+	describe("Hindsight retained sources at session boundaries", () => {
+		const alphaQuestion = "Which branch does the alpha service deploy from?";
+		const alphaAnswer = "The alpha service deploys from the release-alpha branch every Tuesday.";
+		const betaQuestion = "Which database does the beta service use?";
+		const betaAnswer = "The beta service stores orders in a dedicated Postgres cluster named beta-orders.";
+		const returnQuestion = "What changed in the alpha service after the beta work?";
+		const returnAnswer = "The alpha service now pins its build image to the alpha-builder tag.";
+
+		function useHindsight(overrides: Record<string, unknown> = {}): LoopbackHindsight {
+			const server = new LoopbackHindsight();
+			hindsight = server;
+			settings = Settings.isolated({
+				"compaction.enabled": false,
+				"memory.backend": "hindsight",
+				"hindsight.apiUrl": server.url,
+				"hindsight.scoping": "per-project-tagged",
+				"hindsight.autoRecall": false,
+				"hindsight.mentalModelsEnabled": false,
+				"hindsight.mentalModelAutoSeed": false,
+				"hindsight.retainEveryNTurns": 2,
+				...overrides,
+			});
+			return server;
+		}
+
+		function projectDirs(): { alpha: string; beta: string } {
+			const alpha = path.join(tempDir.path(), "alpha");
+			const beta = path.join(tempDir.path(), "beta");
+			fs.mkdirSync(alpha, { recursive: true });
+			fs.mkdirSync(beta, { recursive: true });
+			return { alpha, beta };
+		}
+
+		function scopeOf(current: AgentSession): { bankId: string; tags: string[] | undefined } {
+			const state = current.getHindsightSessionState();
+			if (!state) throw new Error("Expected an active Hindsight state");
+			return { bankId: state.bankId, tags: state.retainTags };
+		}
+
+		async function runHeadless(
+			current: AgentSession,
+			command: string,
+			reloadPlugins: () => Promise<void> = async () => {},
+		): Promise<string> {
+			const output: string[] = [];
+			const originalProjectDir = getProjectDir();
+			try {
+				await executeAcpBuiltinSlashCommand(command, {
+					session: current,
+					sessionManager: current.sessionManager,
+					settings,
+					cwd: current.sessionManager.getCwd(),
+					output: text => {
+						output.push(text);
+					},
+					refreshCommands: () => {},
+					reloadPlugins,
+				});
+			} finally {
+				setProjectDir(originalProjectDir);
+			}
+			return output.join("\n");
+		}
+
+		function branchMessage(current: AgentSession, role: "user" | "assistant", text: string) {
+			const entry = current.sessionManager
+				.getBranch()
+				.find(
+					candidate =>
+						candidate.type === "message" &&
+						candidate.message.role === role &&
+						JSON.stringify(candidate.message.content).includes(text),
+				);
+			if (!entry) throw new Error(`Expected a ${role} entry containing ${text}`);
+			return entry;
+		}
+
+		function branchUserTurns(current: AgentSession): number {
+			return current.sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "message" && entry.message.role === "user").length;
+		}
+
+		/** Alpha turn, move to beta, beta turn, move back, return-alpha turn, then explicit `/memory enqueue`. */
+		async function writeAcrossProjects(current: AgentSession, dirs: { alpha: string; beta: string }) {
+			const server = hindsight!;
+			await current.applyMemoryBackend();
+			const alpha = scopeOf(current);
+			await current.prompt(alphaQuestion);
+			expect(await runHeadless(current, `/move ${dirs.beta}`)).not.toContain("Move failed");
+			const beta = scopeOf(current);
+			await current.prompt(betaQuestion);
+			expect(await runHeadless(current, `/move ${dirs.alpha}`)).not.toContain("Move failed");
+			expect(scopeOf(current)).toEqual(alpha);
+			await current.prompt(returnQuestion);
+			await runHeadless(current, "/memory enqueue");
+			expect(server.sources.size).toBe(3);
+			return {
+				alpha,
+				beta,
+				initial: only(server.containing(alphaAnswer)),
+				betaSource: only(server.containing(betaAnswer)),
+				returned: only(server.containing(returnAnswer)),
+			};
+		}
+
+		it.each(["source", "target"] as const)(
+			"cross-project resume finishes the source without retaining the target under the source scope (%s)",
+			async symptom => {
+				const server = useHindsight();
+				const dirs = projectDirs();
+				const sessionDir = path.join(tempDir.path(), "sessions");
+				const current = createSession(async () => [], {
+					sessionManager: SessionManager.create(dirs.alpha, sessionDir),
+					responses: [{ content: [alphaAnswer] }],
+				});
+				await current.applyMemoryBackend();
+				const alpha = scopeOf(current);
+				await current.prompt(alphaQuestion);
+				expect(server.writes).toEqual([]);
+				const target = SessionManager.create(dirs.beta, sessionDir);
+				target.appendMessage({ role: "user", content: betaQuestion, timestamp: Date.now() });
+				const answer = current.messages.find(message => message.role === "assistant");
+				if (!answer || answer.role !== "assistant") throw new Error("Expected the source assistant reply");
+				target.appendMessage({ ...answer, content: [{ type: "text", text: betaAnswer }] });
+				await target.flush();
+				const targetFile = target.getSessionFile()!;
+				await target.close();
+
+				expect(
+					await current.switchSession(targetFile, {
+						keepModel: true,
+						onCwdChange: async () => {
+							await rebindMemoryBackendForCwd(current);
+							return true;
+						},
+					}),
+				).toBe(true);
+				if (symptom === "source") {
+					expect(only(server.containing(alphaAnswer))).toMatchObject(alpha);
+				} else {
+					expect(server.containing(betaAnswer)).toEqual([]);
+					await current.getHindsightSessionState()!.forceRetainCurrentSession();
+					expect(only(server.containing(betaAnswer))).toMatchObject(scopeOf(current));
+					expect(scopeOf(current).tags).not.toEqual(alpha.tags);
+				}
+			},
+		);
+
+		it.each(["apiUrl", "apiToken"] as const)(
+			"changing hindsight.%s finishes below-cadence turns through the outgoing account",
+			async setting => {
+				spyOn(cfgHindsightApiToken, "envValue").mockReturnValue(undefined);
+				const server = useHindsight({ "hindsight.apiToken": "account-a-secret" });
+				const other = setting === "apiUrl" ? new LoopbackHindsight() : server;
+				try {
+					const current = createSession(async () => [], { responses: [{ content: [alphaAnswer] }] });
+					await current.applyMemoryBackend();
+					await current.prompt(alphaQuestion);
+					expect(server.writes).toEqual([]);
+					if (setting === "apiUrl") cfgHindsightApiUrl.override(settings, other.url);
+					else cfgHindsightApiToken.override(settings, "account-b-secret");
+					await hindsightBackend.applySettings!(current, [`hindsight.${setting}`]);
+					expect(only(server.containing(alphaAnswer)).content).toContain(alphaQuestion);
+					expect(server.retainAuthorizations).toEqual(["Bearer account-a-secret"]);
+					if (other !== server) expect(other.writes).toEqual([]);
+				} finally {
+					if (other !== server) await other.stop();
+				}
+			},
+		);
+
+		it("moving a Hindsight session finishes the source scope before destination writes", async () => {
+			const server = useHindsight();
+			const dirs = projectDirs();
+			const current = createSession(async () => [], {
+				sessionManager: SessionManager.inMemory(dirs.alpha),
+				responses: [{ content: [alphaAnswer] }, { content: [betaAnswer] }, { content: [returnAnswer] }],
+			});
+			await current.applyMemoryBackend();
+			const alpha = scopeOf(current);
+			await current.prompt(alphaQuestion);
+			// One turn is below the two-turn cadence: nothing is retained yet.
+			expect(server.writes).toEqual([]);
+
+			const release = Promise.withResolvers<void>();
+			server.retainStatus = async () => {
+				await release.promise;
+				return 200;
+			};
+			const moving = runHeadless(current, `/move ${dirs.beta}`);
+			await server.until(() => server.writes.length > 0);
+			// The move waits on the source-scope retain and has not changed cwd or scope yet.
+			expect(current.sessionManager.getCwd()).toBe(dirs.alpha);
+			expect(scopeOf(current)).toEqual(alpha);
+			expect(server.writes).toEqual([
+				{
+					method: "POST",
+					bankId: alpha.bankId,
+					documentId: current.sessionManager.getSessionId(),
+					updateMode: "replace",
+					tags: alpha.tags,
+				},
+			]);
+			release.resolve();
+			expect(await moving).not.toContain("Move failed");
+			expect(current.sessionManager.getCwd()).toBe(dirs.beta);
+			const beta = scopeOf(current);
+			expect(beta.tags).not.toEqual(alpha.tags);
+			server.retainStatus = () => 200;
+
+			await current.prompt(betaQuestion);
+			expect(await runHeadless(current, `/move ${dirs.alpha}`)).not.toContain("Move failed");
+			expect(scopeOf(current)).toEqual(alpha);
+			await current.prompt(returnQuestion);
+			await runHeadless(current, "/memory enqueue");
+
+			expect(server.sources.size).toBe(3);
+			const initial = only(server.containing(alphaAnswer));
+			const betaSource = only(server.containing(betaAnswer));
+			const returned = only(server.containing(returnAnswer));
+			expect(initial).toMatchObject({ bankId: alpha.bankId, tags: alpha.tags });
+			expect(initial.content).toContain(alphaQuestion);
+			expect(betaSource).toMatchObject({ bankId: beta.bankId, tags: beta.tags });
+			expect(betaSource.content).toContain(betaQuestion);
+			expect(betaSource.content).not.toContain(alphaQuestion);
+			expect(returned).toMatchObject({ bankId: alpha.bankId, tags: alpha.tags });
+			expect(returned.content).toContain(returnQuestion);
+			for (const text of [alphaQuestion, alphaAnswer, betaQuestion, betaAnswer]) {
+				expect(returned.content).not.toContain(text);
+			}
+			expect(new Set([initial.documentId, betaSource.documentId, returned.documentId]).size).toBe(3);
+			for (const source of [initial, betaSource, returned]) {
+				expect(source.metadata?.session_id).toBe(current.sessionManager.getSessionId());
+			}
+			// No destination-scope write precedes the first source-scope write.
+			const firstBetaWrite = server.writes.findIndex(write => Bun.deepEquals(write.tags, beta.tags));
+			expect(firstBetaWrite).toBeGreaterThan(0);
+		});
+
+		it.each([false, true])(
+			"a last-turn cross-scope move posts its outgoing window once (redundant retain fails: %s)",
+			async failRedundant => {
+				const server = useHindsight({ "hindsight.retainMode": "last-turn" });
+				const dirs = projectDirs();
+				const current = createSession(async () => [], {
+					sessionManager: SessionManager.inMemory(dirs.alpha),
+					responses: [{ content: [alphaAnswer] }],
+				});
+				await current.applyMemoryBackend();
+				const alpha = scopeOf(current);
+				await current.prompt(alphaQuestion);
+				let retains = 0;
+				server.retainStatus = () => (++retains > 1 && failRedundant ? 503 : 200);
+
+				expect(await runHeadless(current, `/move ${dirs.beta}`)).not.toContain("Move failed");
+
+				expect(current.sessionManager.getCwd()).toBe(dirs.beta);
+				expect(server.writes).toHaveLength(1);
+				expect(server.writes[0]).toMatchObject({ method: "POST", bankId: alpha.bankId, tags: alpha.tags });
+				expect(only(server.containing(alphaAnswer)).content).toContain(alphaQuestion);
+			},
+		);
+
+		it("a last-turn cross-scope move reuses the outgoing cadence receipt", async () => {
+			const server = useHindsight({
+				"hindsight.retainMode": "last-turn",
+				"hindsight.retainEveryNTurns": 1,
+			});
+			const dirs = projectDirs();
+			const current = createSession(async () => [], {
+				sessionManager: SessionManager.inMemory(dirs.alpha),
+				responses: [{ content: [alphaAnswer] }],
+			});
+			await current.applyMemoryBackend();
+			await current.prompt(alphaQuestion);
+			await current.getHindsightSessionState()!.flushRetainQueue();
+			expect(server.writes).toHaveLength(1);
+			const retained = only(server.containing(alphaAnswer));
+
+			expect(await runHeadless(current, `/move ${dirs.beta}`)).not.toContain("Move failed");
+
+			expect(server.writes).toHaveLength(1);
+			expect(only(server.containing(alphaAnswer))).toEqual(retained);
+			expect(current.sessionManager.getCwd()).toBe(dirs.beta);
+		});
+
+		it("retries a failed live bank handoff before the next prompt uses memory", async () => {
+			const server = useHindsight({ "hindsight.autoRecall": true });
+			const current = createSession(async () => [], {
+				responses: [{ content: [alphaAnswer] }, { content: [betaAnswer] }],
+			});
+			await current.applyMemoryBackend();
+			const source = scopeOf(current);
+			await current.prompt(alphaQuestion);
+			server.retainStatus = () => 503;
+			cfgHindsightBankId.override(settings, "destination");
+			await current.settleMemoryBackend();
+			expect(server.writes).toHaveLength(1);
+			expect(server.sources.size).toBe(0);
+			server.recalls.length = 0;
+
+			server.retainStatus = () => 200;
+			await current.prompt(betaQuestion);
+			await hindsightBackend.enqueue?.(tempDir.path(), current.sessionManager.getCwd(), current);
+
+			expect(scopeOf(current).bankId).toBe("destination");
+			expect(server.recalls).toEqual(["destination"]);
+			expect(only(server.containing(alphaAnswer))).toMatchObject({ bankId: source.bankId });
+			const destination = only(server.containing(betaAnswer));
+			expect(destination.bankId).toBe("destination");
+			expect(destination.content).not.toContain(alphaAnswer);
+		});
+
+		it("a failed last-turn cross-scope move preserves its receipt so rewind deletes the accepted source", async () => {
+			const server = useHindsight({ "hindsight.retainMode": "last-turn" });
+			const dirs = projectDirs();
+			const current = createSession(async () => [], {
+				sessionManager: SessionManager.inMemory(dirs.alpha),
+				responses: [{ content: [alphaAnswer] }],
+			});
+			await current.applyMemoryBackend();
+			const alpha = scopeOf(current);
+			await current.prompt(alphaQuestion);
+			const firstUser = branchMessage(current, "user", alphaQuestion);
+
+			const output = await runHeadless(current, `/move ${dirs.beta}`, async () => {
+				if (current.sessionManager.getCwd() === dirs.beta) throw new Error("destination plugin rescope failed");
+			});
+
+			expect(output).toContain("destination plugin rescope failed");
+			expect(current.sessionManager.getCwd()).toBe(dirs.alpha);
+			expect(scopeOf(current)).toEqual(alpha);
+			const accepted = server.writes[0]!;
+			expect(accepted.method).toBe("POST");
+			const source = server.source(alpha.bankId, accepted.documentId)!;
+			expect(source.content).toContain(alphaAnswer);
+			expect(source.documentId).not.toBe(current.sessionId);
+			expect(
+				current.sessionManager
+					.getEntries()
+					.filter(entry => entry.type === "custom" && entry.customType === "hindsight_retention_document"),
+			).toContainEqual(
+				expect.objectContaining({ data: expect.objectContaining({ documentId: source.documentId }) }),
+			);
+
+			expect((await current.navigateTree(firstUser.id, { summarize: false })).cancelled).toBe(false);
+			expect(server.sources.size).toBe(0);
+			expect(server.writes.at(-1)).toEqual({
+				method: "DELETE",
+				bankId: alpha.bankId,
+				documentId: source.documentId,
+			});
+		});
+
+		it.each(["apiUrl", "apiToken"] as const)(
+			"changing hindsight.%s leaves another account's receipt live until its owning account returns",
+			async setting => {
+				// Account switching must not be masked by an ambient HINDSIGHT_API_TOKEN.
+				spyOn(cfgHindsightApiToken, "envValue").mockReturnValue(undefined);
+				const server = useHindsight({
+					"hindsight.retainMode": "last-turn",
+					"hindsight.apiToken": "account-a-secret",
+				});
+				const other = setting === "apiUrl" ? new LoopbackHindsight() : server;
+				try {
+					const current = createSession(async () => [], { responses: [{ content: [alphaAnswer] }] });
+					await current.applyMemoryBackend();
+					await current.prompt(alphaQuestion);
+					await current.getHindsightSessionState()!.forceRetainCurrentSession();
+					const source = only(server.containing(alphaAnswer));
+					const firstUser = branchMessage(current, "user", alphaQuestion);
+					const changeAccount = async (account: "a" | "b") => {
+						if (setting === "apiUrl")
+							cfgHindsightApiUrl.override(settings, account === "a" ? server.url : other.url);
+						else cfgHindsightApiToken.override(settings, `account-${account}-secret`);
+						await hindsightBackend.applySettings!(current, [`hindsight.${setting}`]);
+					};
+					const receipt = () =>
+						current.sessionManager
+							.getEntries()
+							.findLast(
+								entry =>
+									entry.type === "custom" &&
+									entry.customType === "hindsight_retention_document" &&
+									typeof entry.data === "object" &&
+									entry.data !== null &&
+									"documentId" in entry.data &&
+									entry.data.documentId === source.documentId,
+							);
+
+					await changeAccount("b");
+					const writesBeforeRewind = other.writes.length;
+					expect((await current.navigateTree(firstUser.id, { summarize: false })).cancelled).toBe(false);
+					expect(other.writes.slice(writesBeforeRewind)).toEqual([]);
+					expect(server.source(source.bankId, source.documentId)).toEqual(source);
+					expect(receipt()).toMatchObject({ data: { documentId: source.documentId } });
+					expect(receipt()).not.toMatchObject({ data: { deleted: true } });
+					const ledger = JSON.stringify(current.sessionManager.getEntries());
+					expect(ledger).not.toContain("account-a-secret");
+					expect(ledger).not.toContain("account-b-secret");
+
+					await changeAccount("a");
+					await current.getHindsightSessionState()!.synchronizeRetainedBranch();
+					expect(server.source(source.bankId, source.documentId)).toBeUndefined();
+					expect(server.writes.at(-1)).toEqual({
+						method: "DELETE",
+						bankId: source.bankId,
+						documentId: source.documentId,
+					});
+					expect(receipt()).toMatchObject({ data: { deleted: true } });
+				} finally {
+					if (other !== server) await other.stop();
+				}
+			},
+		);
+
+		it("new session drains an in-flight agent-end retain into its originating ledger", async () => {
+			const server = useHindsight({ "hindsight.retainEveryNTurns": 1 });
+			const dirs = projectDirs();
+			const manager = SessionManager.create(dirs.alpha, path.join(tempDir.path(), "sessions"));
+			const current = createSession(async () => [], {
+				sessionManager: manager,
+				responses: [{ content: [alphaAnswer] }],
+			});
+			await current.applyMemoryBackend();
+			const originatingId = manager.getSessionId();
+			const state = current.getHindsightSessionState()!;
+			const release = Promise.withResolvers<number>();
+			server.retainStatus = () => release.promise;
+			await current.prompt(alphaQuestion);
+			await server.until(() => server.writes.length === 1);
+			const originatingFile = manager.getSessionFile()!;
+			const drainStarted = Promise.withResolvers<void>();
+			const flushRetainQueue = state.flushRetainQueue.bind(state);
+			spyOn(state, "flushRetainQueue").mockImplementation(() => {
+				drainStarted.resolve();
+				return flushRetainQueue();
+			});
+			const switching = current.newSession();
+			try {
+				// Release only once the transition drains retention or has incorrectly swapped ledgers.
+				await Promise.race([switching, drainStarted.promise]);
+			} finally {
+				release.resolve(200);
+			}
+			expect(await switching).toBe(true);
+			await state.flushRetainQueue();
+			expect(manager.getSessionId()).not.toBe(originatingId);
+			expect(
+				manager
+					.getEntries()
+					.filter(entry => entry.type === "custom" && entry.customType === "hindsight_retention_document"),
+			).toEqual([]);
+			const originating = await SessionManager.open(originatingFile);
+			try {
+				const receipts = originating
+					.getEntries()
+					.filter(entry => entry.type === "custom" && entry.customType === "hindsight_retention_document");
+				expect(receipts).toHaveLength(1);
+				expect(receipts[0]).toMatchObject({
+					data: { sessionId: originatingId, documentId: server.writes[0]!.documentId },
+				});
+			} finally {
+				await originating.close();
+			}
+		});
+
+		it("a source retention failure leaves a Hindsight move in the source project", async () => {
+			const server = useHindsight();
+			const dirs = projectDirs();
+			const current = createSession(async () => [], {
+				sessionManager: SessionManager.inMemory(dirs.alpha),
+				responses: [{ content: [alphaAnswer] }],
+			});
+			await current.applyMemoryBackend();
+			const alpha = scopeOf(current);
+			const sourceBackend = cfgMemoryBackend.get(settings);
+			await current.prompt(alphaQuestion);
+			server.retainStatus = () => 503;
+
+			expect(await runHeadless(current, `/move ${dirs.beta}`)).toContain("Move failed");
+
+			expect(current.sessionManager.getCwd()).toBe(dirs.alpha);
+			expect(cfgMemoryBackend.get(settings)).toBe(sourceBackend);
+			expect(scopeOf(current)).toEqual(alpha);
+			expect(server.writes.length).toBeGreaterThan(0);
+			for (const write of server.writes) {
+				expect(write).toMatchObject({ method: "POST", bankId: alpha.bankId, tags: alpha.tags });
+			}
+			expect(server.sources.size).toBe(0);
+		});
+
+		it("tree navigation repairs retained sources before returning without another prompt", async () => {
+			const server = useHindsight({ "hindsight.retainEveryNTurns": 1 });
+			const current = createSession(async () => [], {
+				responses: [{ content: [alphaAnswer] }, { content: [betaAnswer] }],
+			});
+			await current.applyMemoryBackend();
+			const scope = scopeOf(current);
+			const documentId = current.sessionManager.getSessionId();
+			await current.prompt(alphaQuestion);
+			await current.prompt(betaQuestion);
+			await server.until(() => server.source(scope.bankId, documentId)?.content.includes(betaAnswer) === true);
+			const firstUser = branchMessage(current, "user", alphaQuestion);
+			const firstAnswer = branchMessage(current, "assistant", alphaAnswer);
+
+			const repairFrom = server.writes.length;
+			expect((await current.navigateTree(firstAnswer.id, { summarize: false })).cancelled).toBe(false);
+			const repaired = server.source(scope.bankId, documentId);
+			expect(repaired?.content).toContain(alphaAnswer);
+			expect(repaired?.content).not.toContain(betaQuestion);
+			expect(repaired?.content).not.toContain(betaAnswer);
+			expect(server.writes.slice(repairFrom)).toEqual([
+				{ method: "POST", bankId: scope.bankId, documentId, updateMode: "replace", tags: scope.tags },
+			]);
+			expect(branchUserTurns(current)).toBe(1);
+
+			const deleteFrom = server.writes.length;
+			expect((await current.navigateTree(firstUser.id, { summarize: false })).cancelled).toBe(false);
+			expect(server.sources.size).toBe(0);
+			expect(server.writes.slice(deleteFrom)).toEqual([{ method: "DELETE", bankId: scope.bankId, documentId }]);
+			expect(branchUserTurns(current)).toBe(0);
+		});
+
+		it.each(["POST", "DELETE"] as const)(
+			"tree navigation stays usable after a Hindsight %s failure and a later sync repairs the source",
+			async method => {
+				const server = useHindsight({ "hindsight.retainEveryNTurns": 1 });
+				const current = createSession(async () => [], {
+					responses: [{ content: [alphaAnswer] }, { content: [betaAnswer] }],
+				});
+				await current.applyMemoryBackend();
+				const scope = scopeOf(current);
+				const documentId = current.sessionManager.getSessionId();
+				await current.prompt(alphaQuestion);
+				await current.prompt(betaQuestion);
+				await server.until(() => server.source(scope.bankId, documentId)?.content.includes(betaAnswer) === true);
+				const target = branchMessage(
+					current,
+					method === "POST" ? "assistant" : "user",
+					method === "POST" ? alphaAnswer : alphaQuestion,
+				);
+				server.retainStatus = () => 503;
+				server.deleteStatus = 503;
+
+				expect((await current.navigateTree(target.id, { summarize: false })).cancelled).toBe(false);
+				expect(branchUserTurns(current)).toBe(method === "POST" ? 1 : 0);
+				expect(server.source(scope.bankId, documentId)?.content).toContain(betaAnswer);
+
+				server.retainStatus = () => 200;
+				server.deleteStatus = 200;
+				await current.getHindsightSessionState()!.synchronizeRetainedBranch();
+				if (method === "POST") {
+					expect(server.source(scope.bankId, documentId)?.content).toContain(alphaAnswer);
+					expect(server.source(scope.bankId, documentId)?.content).not.toContain(betaAnswer);
+				} else {
+					expect(server.sources.size).toBe(0);
+				}
+			},
+		);
+
+		it("reloading a rewritten Hindsight transcript reconciles persisted sources before returning", async () => {
+			const server = useHindsight();
+			const dirs = projectDirs();
+			const agentDir = path.join(tempDir.path(), "agent");
+			const independentQuestion = "Who owns the alpha on-call rotation?";
+			const independentAnswer = "The alpha on-call rotation is owned by the platform reliability group.";
+			const current = createSession(async () => [], {
+				sessionManager: SessionManager.create(
+					dirs.alpha,
+					SessionManager.getDefaultSessionDir(dirs.alpha, agentDir),
+				),
+				responses: [
+					{ content: [alphaAnswer] },
+					{ content: [betaAnswer] },
+					{ content: [returnAnswer] },
+					{ content: [independentAnswer] },
+				],
+			});
+			const { beta, initial, betaSource, returned } = await writeAcrossProjects(current, dirs);
+			const firstAnswer = branchMessage(current, "assistant", alphaAnswer);
+			const sessionFile = current.sessionFile;
+			if (!sessionFile) throw new Error("Expected a persisted session file");
+
+			// Rewrite the persisted leaf outside this session, then reload it from disk.
+			await current.sessionManager.close();
+			const external = await SessionManager.open(sessionFile);
+			external.branchWithSummary(firstAnswer.id, "Returned to the first alpha answer.");
+			await external.close();
+
+			const reloadFrom = server.writes.length;
+			await current.reload();
+			expect([...server.sources.values()]).toEqual([initial]);
+			const reloadWrites = server.writes.slice(reloadFrom);
+			expect(reloadWrites).toHaveLength(2);
+			expect(reloadWrites).toEqual(
+				expect.arrayContaining([
+					{ method: "DELETE", bankId: beta.bankId, documentId: betaSource.documentId },
+					{ method: "DELETE", bankId: returned.bankId, documentId: returned.documentId },
+				]),
+			);
+			expect(branchUserTurns(current)).toBe(1);
+
+			// An independent retained session: switching between the two neither deletes nor relabels either.
+			expect(await current.newSession()).toBe(true);
+			await current.prompt(independentQuestion);
+			await runHeadless(current, "/memory enqueue");
+			const independent = only(server.containing(independentAnswer));
+			expect(independent.metadata?.session_id).toBe(current.sessionManager.getSessionId());
+			expect(independent.content).not.toContain(alphaAnswer);
+			const independentFile = current.sessionFile;
+			if (!independentFile) throw new Error("Expected a persisted independent session file");
+			expect(server.source(initial.bankId, initial.documentId)).toEqual(initial);
+
+			const switchFrom = server.writes.length;
+			expect(await current.switchSession(sessionFile, { keepModel: true })).toBe(true);
+			expect(await current.switchSession(independentFile, { keepModel: true })).toBe(true);
+			expect(server.writes.slice(switchFrom)).toEqual([]);
+			expect(server.sources.size).toBe(2);
+			expect(server.source(initial.bankId, initial.documentId)).toEqual(initial);
+			expect(server.source(independent.bankId, independent.documentId)).toEqual(independent);
+		});
 	});
 });

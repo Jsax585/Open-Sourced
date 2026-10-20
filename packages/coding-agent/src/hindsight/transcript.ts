@@ -33,9 +33,15 @@ export interface ReadonlySessionManagerLike {
  *   retaining them would prime recall on internal monologue.
  */
 export function extractMessages(sessionManager: ReadonlySessionManagerLike): HindsightMessage[] {
+	// Mnemopi's retained-turn cursor indexes the append-only journal, not the selected branch.
+	return extractEntryMessages(sessionManager.getEntries());
+}
+
+/** Extract a selected branch or retention segment without changing journal-based consumers. */
+export function extractEntryMessages(entries: readonly SessionEntry[]): HindsightMessage[] {
 	const messages: HindsightMessage[] = [];
 
-	for (const entry of sessionManager.getEntries()) {
+	for (const entry of entries) {
 		if (entry.type !== "message") continue;
 		const msg = entry.message;
 		const role = msg.role;

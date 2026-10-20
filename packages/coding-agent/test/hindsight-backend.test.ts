@@ -18,6 +18,7 @@ import {
 import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
 import { HindsightRetainQueue, type HindsightSessionState } from "@oh-my-pi/pi-coding-agent/hindsight/state";
 import type { AgentSessionEventListener } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { CustomEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 
 import {
 	cfgHindsightBankId,
@@ -39,14 +40,15 @@ interface FakeSessionDeps {
 function makeFakeSession(deps: FakeSessionDeps) {
 	const listeners = new Set<AgentSessionEventListener>();
 	const entries = deps.entries ?? [];
+	const records: CustomEntry[] = [];
 	let hindsightState: HindsightSessionState | undefined;
 	const session = {
 		sessionId: deps.sessionId,
 		memoryEnabled: true,
 		settings: deps.settings ?? Settings.isolated(),
 		sessionManager: {
-			getEntries: () =>
-				entries.map((e, i) => ({
+			getEntries: () => [
+				...entries.map((e, i) => ({
 					id: `e${i}`,
 					parentId: i === 0 ? null : `e${i - 1}`,
 					timestamp: new Date(0).toISOString(),
@@ -68,10 +70,26 @@ function makeFakeSession(deps: FakeSessionDeps) {
 									timestamp: 0,
 								},
 				})),
+				...records,
+			],
 			getBranch() {
 				return this.getEntries();
 			},
-			appendCustomEntry: () => "",
+			getLeafId(): string | null {
+				return this.getBranch().at(-1)?.id ?? null;
+			},
+			appendCustomEntry(customType: string, data?: unknown) {
+				const id = `custom-${records.length}`;
+				records.push({
+					type: "custom",
+					customType,
+					data,
+					id,
+					parentId: null,
+					timestamp: new Date(0).toISOString(),
+				});
+				return id;
+			},
 			getCwd: () => deps.cwd ?? "/tmp",
 			getSessionFile: () => null,
 			getSessionId: () => deps.sessionId ?? "",
@@ -855,7 +873,10 @@ describe("hindsightBackend live bank routing", () => {
 		await Bun.sleep(0);
 
 		expect(retainSpy).toHaveBeenCalledTimes(1);
-		expect(retainSpy.mock.calls[0][0]).toBe("live-Minigames-proj");
+		// Rebinding finishes existing messages in their original scope; an
+		// unchanged agent_end must not reclassify or resend that history.
+		expect(retainSpy.mock.calls[0][0]).toBe("omp");
+		expect(retainSpy.mock.calls[0][1]).toContain("remember this routing coalesce fact");
 	});
 
 	// Regression for issue #1902 fix #2: mental-model auto-seed used to POST

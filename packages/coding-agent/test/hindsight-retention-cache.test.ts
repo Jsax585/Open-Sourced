@@ -10,6 +10,7 @@ import type { HindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config
 import type { HindsightMessage } from "@oh-my-pi/pi-coding-agent/hindsight/content";
 import { HindsightSessionState } from "@oh-my-pi/pi-coding-agent/hindsight/state";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { CustomEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 
 const makeConfig = (overrides: Partial<HindsightConfig> = {}): HindsightConfig => ({
 	hindsightApiUrl: "http://localhost:8888",
@@ -266,16 +267,27 @@ describe("Hindsight incremental full-session retention cache", () => {
 			{ role: "user", content: "hello first turn" },
 			{ role: "assistant", content: "hi there first response" },
 		];
+		const records: CustomEntry[] = [];
 		const session = {
 			sessionId: "test-session",
 			sessionManager: {
+				getSessionId: () => "test-session",
 				getEntries: () => [
 					{ type: "message", message: { role: "user", content: "hello first turn" } },
 					{
 						type: "message",
 						message: { role: "assistant", content: [{ type: "text", text: "hi there first response" }] },
 					},
+					...records,
 				],
+				getBranch() {
+					return this.getEntries();
+				},
+				appendCustomEntry(customType: string, data?: unknown) {
+					const id = `custom-${records.length}`;
+					records.push({ type: "custom", customType, data, id, parentId: null, timestamp: "" });
+					return id;
+				},
 			},
 		} as object as AgentSession;
 		const banksSet = new Set<string>();

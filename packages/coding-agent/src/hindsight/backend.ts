@@ -24,6 +24,7 @@ import { cfgMemoryBackend } from "../memory-backend/settings";
 
 /** Reload the active session's mental-model cache and prompt. */
 export async function reloadMentalModelsForSession(session: AgentSession): Promise<boolean> {
+	await retryPrimaryStateRebuild(session);
 	const state = session.getHindsightSessionState();
 	if (!state) return false;
 	return await state.reloadMentalModels();
@@ -99,6 +100,7 @@ export const hindsightBackend: MemoryBackend = {
 		promptText: string,
 		signal?: AbortSignal,
 	): Promise<MemoryPromptPreparation | undefined> {
+		await retryPrimaryStateRebuild(session);
 		const state = session.getHindsightSessionState();
 		if (!state) return undefined;
 
@@ -126,6 +128,7 @@ export const hindsightBackend: MemoryBackend = {
 	},
 
 	async enqueue(_agentDir, _cwd, session): Promise<void> {
+		if (session) await retryPrimaryStateRebuild(session);
 		const state = session?.getHindsightSessionState();
 		const primary = state?.aliasOf ? undefined : state;
 		if (!primary) return;
@@ -141,6 +144,7 @@ export const hindsightBackend: MemoryBackend = {
 		const config = loadHindsightConfig(settings);
 		if (!isHindsightConfigured(config)) return undefined;
 
+		if (session) await retryPrimaryStateRebuild(session);
 		const state = session?.getHindsightSessionState();
 		if (!state) return undefined;
 
@@ -162,6 +166,14 @@ interface PrimaryRebuildTask {
 }
 
 const primaryRebuildTasks = new WeakMap<AgentSession, PrimaryRebuildTask>();
+/** Failed handoffs stay pending even after the settings observer consumes the edit. */
+const failedPrimaryStateRebuilds = new WeakSet<AgentSession>();
+
+async function retryPrimaryStateRebuild(session: AgentSession): Promise<void> {
+	if (primaryRebuildTasks.has(session) || failedPrimaryStateRebuilds.has(session)) {
+		await awaitPrimaryStateRebuild(session);
+	}
+}
 
 /**
  * Coalesce and serialize live rebuilds for one session. A cwd reload changes
@@ -186,9 +198,13 @@ function schedulePrimaryStateRebuild(session: AgentSession): PrimaryRebuildTask 
 			while (nextTask.pending) {
 				nextTask.pending = false;
 				try {
-					if (await reconcilePrimaryState(session)) nextTask.error = undefined;
+					if (await reconcilePrimaryState(session)) {
+						nextTask.error = undefined;
+						failedPrimaryStateRebuilds.delete(session);
+					}
 				} catch (err) {
 					nextTask.error = err;
+					failedPrimaryStateRebuilds.add(session);
 					logger.warn("Hindsight: state rebuild failed", { error: String(err) });
 				}
 			}
@@ -270,24 +286,6 @@ async function installPrimaryState(
 
 	const client = createHindsightClient(config);
 	const scope = computeBankScope(config, session.sessionManager.getCwd());
-
-	// Cleanup any stale state for this session (defensive — prevents leaks
-	// when a session is reused without going through dispose). Flush the
-	// previous state's retain queue BEFORE clearing it, otherwise
-	// `HindsightRetainQueue.#doFlush` sees `session.getHindsightSessionState()
-	// !== state` and drops the batch. Re-read after the await so a concurrent
-	// owner cannot leave the actual current state undisposed.
-	let previous = session.getHindsightSessionState();
-	if (previous) {
-		await previous.flushRetainQueue();
-	}
-	const latest = session.getHindsightSessionState();
-	if (latest && latest !== previous) {
-		previous?.dispose();
-		previous = latest;
-		await previous.flushRetainQueue();
-	}
-
 	const state = new HindsightSessionState({
 		sessionId,
 		client,
@@ -301,6 +299,36 @@ async function installPrimaryState(
 		lastRetainedTurn: 0,
 		hasRecalledForFirstTurn: false,
 	});
+
+	// Cleanup any stale state for this session (defensive — prevents leaks
+	// when a session is reused without going through dispose). Flush the
+	// previous state's retain queue BEFORE clearing it, otherwise
+	// `HindsightRetainQueue.#doFlush` sees `session.getHindsightSessionState()
+	// !== state` and drops the batch. Re-read after the await so a concurrent
+	// owner cannot leave the actual current state undisposed.
+	let previous = session.getHindsightSessionState();
+	if (previous) {
+		await previous.flushRetainQueue();
+		// A resume may already have installed the target ledger before its cwd
+		// rebind. Its source was finished before the swap; never inventory the
+		// destination through the outgoing state's client or scope.
+		if (
+			previous.sessionId === sessionId &&
+			(previous.retentionServiceId !== state.retentionServiceId ||
+				previous.bankId !== scope.bankId ||
+				!Bun.deepEquals(previous.retainTags, scope.retainTags))
+		) {
+			await previous.finishRetentionScope();
+		}
+	}
+	const latest = session.getHindsightSessionState();
+	if (latest && latest !== previous) {
+		previous?.dispose();
+		previous = latest;
+		await previous.flushRetainQueue();
+	}
+
+	state.bindRetentionScope();
 
 	const displaced = session.setHindsightSessionState(state);
 	if (displaced && displaced !== previous) {
@@ -360,6 +388,7 @@ async function reconcilePrimaryState(session: AgentSession): Promise<boolean> {
 	// Reuse confirmations only while the effective PUT payload is unchanged.
 	const sameBankConfig =
 		current.config.hindsightApiUrl === config.hindsightApiUrl &&
+		current.config.hindsightApiToken === config.hindsightApiToken &&
 		current.config.bankMission.trim() === config.bankMission.trim() &&
 		(current.config.retainMission?.trim() || "") === (config.retainMission?.trim() || "");
 	const state = await installPrimaryState(session, settings, sameBankConfig ? current.banksSet : new Set());

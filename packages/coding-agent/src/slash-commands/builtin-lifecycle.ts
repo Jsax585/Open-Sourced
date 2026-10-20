@@ -106,6 +106,9 @@ async function relocateHeadlessSession(
 	} catch (err) {
 		return usage(`Move failed: ${errorMessage(err)}`, runtime);
 	}
+	// The retention handoff may have appended receipts before moving. Roll back
+	// workspace metadata, but keep those accepted sources tracked.
+	previousState.entries = runtime.sessionManager.getEntries();
 	try {
 		setProjectDir(resolvedPath);
 	} catch (err) {

@@ -77,7 +77,7 @@ describe("HindsightSessionState mental-model freeze", () => {
 					return () => listeners.delete(fn);
 				},
 				refreshBaseSystemPrompt: async () => {},
-				sessionManager: { getEntries: () => [] },
+				sessionManager: { getBranch: () => [] },
 			} as never,
 			banksSet: new Set(),
 			lastRetainedTurn: 0,
@@ -109,10 +109,10 @@ describe("SessionMemory mental-model boundary reload", () => {
 		const client = { listMentalModels: () => response } as unknown as HindsightApi;
 		const stateSession: {
 			refreshBaseSystemPrompt: (commitIf?: () => boolean) => Promise<void>;
-			sessionManager: { getEntries: () => never[] };
+			sessionManager: { getBranch: () => never[] };
 		} = {
 			refreshBaseSystemPrompt: async () => {},
-			sessionManager: { getEntries: () => [] },
+			sessionManager: { getBranch: () => [] },
 		};
 		const state = new HindsightSessionState({
 			sessionId: "next-session",
@@ -246,12 +246,12 @@ describe("SessionMemory mental-model boundary reload", () => {
 		const published: Array<string | undefined> = [];
 		const stateSession: {
 			refreshBaseSystemPrompt: (commitIf?: () => boolean) => Promise<void>;
-			sessionManager: { getEntries: () => never[] };
+			sessionManager: { getBranch: () => never[] };
 		} = {
 			refreshBaseSystemPrompt: async commitIf => {
 				if (!commitIf || commitIf()) published.push(state.mentalModelsSnippet);
 			},
-			sessionManager: { getEntries: () => [] },
+			sessionManager: { getBranch: () => [] },
 		};
 		const state = new HindsightSessionState({
 			sessionId: "s",

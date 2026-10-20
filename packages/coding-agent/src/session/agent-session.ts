@@ -10292,6 +10292,7 @@ export class AgentSession implements SettingsScope {
 		this.#disconnectFromAgent();
 		let advisorRecordersDetached = false;
 		await this.abort();
+		await this.getHindsightSessionState()?.flushRetainQueue();
 		this.#cancelOwnAsyncJobs();
 		this.#closeAllProviderSessions("new session");
 		await this.#bash.flushPending();
@@ -10404,9 +10405,10 @@ export class AgentSession implements SettingsScope {
 		return setSessionName.call(this.sessionManager, name, source, trigger);
 	}
 
-	/** Write pending bash output and every session entry to the session file, as {@link fork} does before copying it. */
+	/** Drain memory receipts, pending bash output, and session entries before copying the session file. */
 	async flushToDisk(): Promise<void> {
 		await this.#bash.flushPending();
+		await this.getHindsightSessionState()?.flushRetainQueue();
 		await this.sessionManager.flush();
 	}
 
@@ -10563,6 +10565,7 @@ export class AgentSession implements SettingsScope {
 	/** Move the active session and artifacts after enforcing mode transition invariants. */
 	async moveSession(newCwd: string, targetSessionDir?: string): Promise<void> {
 		this.#assertVibeSessionTransitionAllowed("move the session");
+		await this.getHindsightSessionState()?.prepareForCwdMove(newCwd);
 		await this.sessionManager.moveTo(newCwd, targetSessionDir);
 	}
 
@@ -11112,6 +11115,7 @@ export class AgentSession implements SettingsScope {
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 		this.#checkpointState = undefined;
 		this.#pendingRewindReport = undefined;
+		await this.getHindsightSessionState()?.synchronizeRetainedBranch();
 	}
 	/** Plan-mode decision affordances: `ask`, or plan approval via `write xd://propose`. */
 	#isPlanDecisionTool(toolCall: { name: string; arguments?: Record<string, unknown> }): boolean {
@@ -11923,6 +11927,10 @@ export class AgentSession implements SettingsScope {
 		this.#disconnectFromAgent();
 		await this.abort({ goalReason: "internal" });
 		await this.#sessionBeforeSwitchReconciler?.();
+		await this.getHindsightSessionState()?.flushRetainQueue();
+		// Finish the outgoing ledger before a resume's cwd callback can rebuild
+		// memory against the target manager, just as a move finishes before relocation.
+		if (switchingToDifferentSession) await this.getHindsightSessionState()?.finishRetentionScope();
 
 		await this.#bash.flushPending();
 		// Flush pending writes before switching so restore snapshots reflect committed state.
@@ -12152,6 +12160,7 @@ export class AgentSession implements SettingsScope {
 			if (switchingToDifferentSession || didReloadConversationChange) {
 				this.#clearSessionScopedToolState();
 			}
+			await this.getHindsightSessionState()?.synchronizeRetainedBranch();
 			this.#reconnectToAgent();
 			try {
 				await this.#sessionSwitchReconciler?.();
@@ -12370,6 +12379,7 @@ export class AgentSession implements SettingsScope {
 		}
 
 		await this.#bash.flushPending();
+		await this.getHindsightSessionState()?.flushRetainQueue();
 		// Flush pending writes before branching
 		await this.sessionManager.flush();
 		// Last refusal point. Nothing below is rolled back when the transition stops, so an
@@ -12500,6 +12510,7 @@ export class AgentSession implements SettingsScope {
 		this.#queuedMessageDrainBlocked = false;
 		this.#usagePreflightReadyForNextModelCall = false;
 		await this.#bash.flushPending();
+		await this.getHindsightSessionState()?.flushRetainQueue();
 		await this.sessionManager.flush();
 		const bashTransition = this.#bash.beginSessionTransition();
 		this.#cancelOwnAsyncJobs();
@@ -12885,6 +12896,7 @@ export class AgentSession implements SettingsScope {
 		this.#todo.syncFromBranch();
 		this.#modelMentions.syncFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
+		await this.getHindsightSessionState()?.synchronizeRetainedBranch();
 
 		this.#branchSummaryAbortController = undefined;
 
