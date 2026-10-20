@@ -20,7 +20,12 @@ import type {
 	MCPTransport,
 } from "../../mcp/types";
 import { toJsonRpcError } from "../../mcp/types";
-import { createMCPJsonRpcError, MCPTransportError, normalizeMCPTransportError } from "../errors";
+import {
+	createMCPJsonRpcError,
+	MCPTransportError,
+	nonRetryableMCPTransportError,
+	normalizeMCPTransportError,
+} from "../errors";
 import { RequestIdAllocator } from "../request-id";
 import { isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
 import { isThenable } from "../../utils/ipc";
@@ -666,7 +671,7 @@ export class StdioTransport implements MCPTransport {
 							: signalCode
 								? `MCP subprocess was killed by ${signalCode} before responding`
 								: "MCP subprocess closed stdout before responding",
-					retryable: true,
+					retryable: false,
 					code: exitCode ?? signalCode ?? undefined,
 				});
 			}
@@ -754,19 +759,22 @@ export class StdioTransport implements MCPTransport {
 		writeFrame(this.#process.stdin, `${JSON.stringify(response)}\n`);
 	}
 
-	#handleClose(error?: Error): void {
+	#handleClose(error?: MCPTransportError): void {
 		if (!this.#connected) return;
 		this.#connected = false;
 
-		const closeError =
-			error ??
-			new MCPTransportError({
-				transport: "stdio",
-				stage: "receive",
-				failure: "closed",
-				message: "Transport closed",
-				retryable: true,
-			});
+		const closeError = error
+			? nonRetryableMCPTransportError(error)
+			: new MCPTransportError({
+					transport: "stdio",
+					stage: "receive",
+					failure: "closed",
+					message: "Transport closed",
+					retryable: false,
+				});
+		// request() records and writes each frame synchronously; a synchronous
+		// write throw removes its entry, so every remaining request was handed
+		// to the subprocess.
 		for (const [, pending] of this.#pendingRequests) {
 			pending.reject(closeError);
 		}
@@ -861,10 +869,12 @@ export class StdioTransport implements MCPTransport {
 
 		const stdin = this.#process.stdin;
 		const message = `${JSON.stringify(request)}\n`;
+		let dispatched = false;
 		const failFromSend = (error: unknown) => {
 			if (settled) return;
 			cleanup();
-			reject(normalizeMCPTransportError(error, { transport: "stdio", stage: "send" }));
+			const normalized = normalizeMCPTransportError(error, { transport: "stdio", stage: "send" });
+			reject(dispatched ? nonRetryableMCPTransportError(normalized) : normalized);
 		};
 		try {
 			// Never `await` write/flush. Bun's FileSink returns a pending Promise
@@ -877,6 +887,7 @@ export class StdioTransport implements MCPTransport {
 			// into `reject()` while leaving the returned promise free to settle
 			// from the response, timer, abort signal, or read-loop transport-close.
 			const wrote = stdin.write(message);
+			dispatched = true;
 			if (isThenable(wrote)) wrote.then(undefined, failFromSend);
 			const flushed = stdin.flush();
 			if (isThenable(flushed)) flushed.then(undefined, failFromSend);
