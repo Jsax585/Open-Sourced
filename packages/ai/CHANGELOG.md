@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Generic OpenAI Responses streams now recognize structured `codex.keepalive` events as transport activity after real progress, preserving healthy long reasoning gaps without extending the first-progress deadline or accepting unrelated keepalives. Activity-only traffic cannot exceed the greater of the configured idle budget and 300 s without semantic progress ([#16525](https://github.com/can1357/oh-my-pi/pull/16525) by [@Komzpa](https://github.com/Komzpa))
+- Fixed long OpenAI Responses reasoning streams disconnecting with an idle timeout while the server was still sending heartbeats ([#16525](https://github.com/can1357/oh-my-pi/pull/16525) by [@Komzpa](https://github.com/Komzpa))
 
 ## [18.12.3] - 2026-10-19
 
