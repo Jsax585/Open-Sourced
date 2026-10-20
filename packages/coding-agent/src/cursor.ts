@@ -1108,6 +1108,15 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 			return createToolResultMessage(toolCallId, toolName, result, true);
 		}
 
+		if (tool.name === "ask") {
+			return await this.#askSerial.run(async () => {
+				if (call.signal?.aborted) {
+					const result = buildToolErrorResult("Question was cancelled before it was shown");
+					return createToolResultMessage(toolCallId, toolName, result, true);
+				}
+				return await executeTool(this.options, toolName, toolCallId, args, undefined, call.signal);
+			});
+		}
 		const toolResultMessage = await executeTool(this.options, toolName, toolCallId, args);
 		return toolResultMessage;
 	}

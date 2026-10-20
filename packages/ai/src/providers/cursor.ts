@@ -2025,6 +2025,7 @@ export async function handleServerMessage(
 				stream,
 				state,
 				externalToolExecutor,
+				signal,
 			),
 		);
 	} else if (msgCase === "interactionQuery") {
@@ -2457,6 +2458,7 @@ async function handleExecServerMessage(
 	stream: AssistantMessageEventStream,
 	state: BlockState,
 	externalToolExecutor: boolean,
+	signal?: AbortSignal,
 ): Promise<void> {
 	const execCase = execMsg.message.case;
 	log("exec", "dispatch", { execCase, execId: execMsg.execId, hasHandlers: !!execHandlers });
@@ -2803,7 +2805,7 @@ async function handleExecServerMessage(
 		}
 		case "mcpArgs": {
 			const args = execMsg.message.value;
-			const mcpCall = decodeMcpCall(args);
+			const mcpCall: CursorMcpCall = { ...decodeMcpCall(args), signal };
 			// An approval probe, not an invocation: the frame asks whether the
 			// call would be permitted. Running the tool to find out fires a side
 			// effect the user has not been asked about, and fires it again when

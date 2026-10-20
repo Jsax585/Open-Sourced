@@ -1414,6 +1414,8 @@ export interface CursorMcpCall {
 	 * not yet been asked about (and fire it twice once the real call arrives).
 	 */
 	approvalOnly?: boolean;
+	/** The request's abort signal. */
+	signal?: AbortSignal;
 }
 
 /** A native Cursor `AskQuestion` interaction, translated to local `ask` kwargs. */

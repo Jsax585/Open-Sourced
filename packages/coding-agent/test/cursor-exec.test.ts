@@ -2520,6 +2520,103 @@ describe("CursorExecHandlers.askQuestion bridge", () => {
 		expect(events).toEqual(["open first", "close first", "open second", "close second"]);
 	});
 
+	it("queues an MCP ask call behind an open native question", async () => {
+		const events: string[] = [];
+		const { promise: firstAnswered, resolve: answerFirst } = Promise.withResolvers<void>();
+		const ask = {
+			name: "ask",
+			label: "Ask",
+			description: "fake ask dialog",
+			parameters: type({}),
+			async execute(id: string) {
+				events.push(`open ${id}`);
+				if (id === "native") await firstAnswered;
+				events.push(`close ${id}`);
+				return { content: [{ type: "text", text: "User answers: …" }], details: { selectedOptions: [id] } };
+			},
+		} as unknown as Tool;
+		const handlers = new CursorExecHandlers({ cwd: ".", tools: new Map([["ask", ask]]) });
+		const native = handlers.askQuestion({ ...call, toolCallId: "native" });
+		const viaMcp = handlers.mcp({
+			name: "ask",
+			toolName: "ask",
+			toolCallId: "mcp",
+			providerIdentifier: "pi-agent",
+			args: { questions: [] },
+			rawArgs: {},
+		});
+		await Bun.sleep(10);
+		expect(events).toEqual(["open native"]);
+		answerFirst();
+		expect((await viaMcp).isError).toBe(false);
+		await native;
+		expect(events).toEqual(["open native", "close native", "open mcp", "close mcp"]);
+	});
+
+	it("closes an MCP ask dialog when the turn is aborted and moves on to the next question", async () => {
+		const events: string[] = [];
+		const ask = {
+			name: "ask",
+			label: "Ask",
+			description: "fake ask dialog",
+			parameters: type({}),
+			async execute(id: string, _args: unknown, signal?: AbortSignal) {
+				events.push(`open ${id}`);
+				if (id === "mcp") {
+					const { promise, reject } = Promise.withResolvers<never>();
+					signal?.addEventListener("abort", () => reject(new Error("Ask input was cancelled")), { once: true });
+					await promise;
+				}
+				events.push(`close ${id}`);
+				return { content: [{ type: "text", text: "User answers: …" }], details: { selectedOptions: [id] } };
+			},
+		} as unknown as Tool;
+		const handlers = new CursorExecHandlers({ cwd: ".", tools: new Map([["ask", ask]]) });
+		const controller = new AbortController();
+		const viaMcp = handlers.mcp({
+			name: "ask",
+			toolName: "ask",
+			toolCallId: "mcp",
+			providerIdentifier: "pi-agent",
+			args: { questions: [] },
+			rawArgs: {},
+			signal: controller.signal,
+		});
+		const native = handlers.askQuestion({ ...call, toolCallId: "native" });
+		await Bun.sleep(10);
+		expect(events).toEqual(["open mcp"]);
+		controller.abort();
+		expect((await viaMcp).isError).toBe(true);
+		expect((await native).answers).toEqual([{ selectedOptions: ["native"], customInput: undefined }]);
+		expect(events).toEqual(["open mcp", "open native", "close native"]);
+	});
+
+	it("skips a queued MCP ask whose turn was already aborted", async () => {
+		const opened: string[] = [];
+		const ask = {
+			name: "ask",
+			label: "Ask",
+			description: "fake ask dialog",
+			parameters: type({}),
+			async execute(id: string) {
+				opened.push(id);
+				return { content: [{ type: "text", text: "User answers: …" }], details: { selectedOptions: [id] } };
+			},
+		} as unknown as Tool;
+		const handlers = new CursorExecHandlers({ cwd: ".", tools: new Map([["ask", ask]]) });
+		const result = await handlers.mcp({
+			name: "ask",
+			toolName: "ask",
+			toolCallId: "mcp",
+			providerIdentifier: "pi-agent",
+			args: { questions: [] },
+			rawArgs: {},
+			signal: AbortSignal.abort(),
+		});
+		expect(result.isError).toBe(true);
+		expect(opened).toEqual([]);
+	});
+
 	it("closes the dialog when the turn is aborted and moves on to the next question", async () => {
 		const events: string[] = [];
 		const ask = {
