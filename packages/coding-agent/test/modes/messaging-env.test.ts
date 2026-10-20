@@ -128,8 +128,11 @@ describe("session messaging command environments", () => {
 		const create = vi.spyOn(bridge, "createTerminal");
 		await tool(caller(true), bridge).execute("main-env", { command: "true" });
 		await tool(caller(false), bridge).execute("helper-env", { command: "true" });
-		expect(create.mock.calls[0]![0].env).toEqual(Object.entries(ownEnv).map(([name, value]) => ({ name, value })));
-		expect(create.mock.calls[1]![0].env).toEqual([]);
+		// Session identity (PI_SESSION_*) rides along too; only the messaging keys are under test.
+		const messagingEnv = (call: number) =>
+			create.mock.calls[call]![0].env?.filter(({ name }) => name.startsWith("OMP_MESSAGING_"));
+		expect(messagingEnv(0)).toEqual(Object.entries(ownEnv).map(([name, value]) => ({ name, value })));
+		expect(messagingEnv(1)).toEqual([]);
 	});
 
 	it("isolated helpers cannot reuse credentials inherited by either Bun exec or the native C environment", async () => {

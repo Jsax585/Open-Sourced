@@ -160,6 +160,7 @@ test("accepted print turns can send real replies after cutoff and before full bi
 	let target: SessionListing | undefined;
 	let subscriber: ((event: AgentSessionEvent) => void) | undefined;
 	let current: MessagingService | undefined;
+	let receivingIdleChecked = false;
 	const answer = assistant("CLI answer");
 	const session = {
 		disableStopTimeTodoReminders: () => {},
@@ -208,6 +209,9 @@ test("accepted print turns can send real replies after cutoff and before full bi
 			return true;
 		},
 		waitForIdle: async () => {
+			// Print mode waits again after the advisor drain, once messaging is closed.
+			if (receivingIdleChecked) return;
+			receivingIdleChecked = true;
 			expect(current).toBeDefined();
 			expect(accepted.map(item => item.body)).toEqual(["accepted autonomous work"]);
 			expect(await peer.send(target!, "new work after cutoff", { notifyWhenIdle: false })).toEqual({
