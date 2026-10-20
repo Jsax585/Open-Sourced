@@ -80,7 +80,7 @@ import type {
 	UsageReport,
 	UserMessage,
 } from "@oh-my-pi/pi-ai";
-import { type Effort, serviceTierFamily, streamSimple } from "@oh-my-pi/pi-ai";
+import { type Effort, serviceTierFamily, shouldSendServiceTier, streamSimple } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { prewarmModelConnection } from "@oh-my-pi/pi-ai/providers/connection-prewarm";
 import { resetOpenAICodexHistoryAfterCompaction } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
@@ -130,7 +130,7 @@ import {
 	sessionModelDiscoveryProviders,
 } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
-import { buildServiceTierByFamily, isServiceTierForFamily, serviceTierSettingToTier } from "../config/service-tier";
+import { buildServiceTierByFamily, serviceTierSettingToTier } from "../config/service-tier";
 import { combine, type SettingsScope } from "../config/registry";
 import type { Settings } from "../config/settings";
 import { RawSseDebugBuffer } from "@oh-my-pi/pi-tui/apps/debug/raw-sse-buffer";
@@ -10761,7 +10761,7 @@ export class AgentSession implements SettingsScope {
 		if (!model) return undefined;
 		if (model.provider === "anthropic") return { kind: "anthropic" };
 		const family = serviceTierFamily(model);
-		return family && isServiceTierForFamily(family, "flex") ? { kind: "flex", family } : undefined;
+		return family && shouldSendServiceTier("flex", model) ? { kind: "flex", family } : undefined;
 	}
 
 	/** Whether `/slow` applies to the active model (flex tier or Claude low priority). */

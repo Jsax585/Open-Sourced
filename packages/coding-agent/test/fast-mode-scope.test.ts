@@ -169,6 +169,40 @@ describe("/fast targets the current model's service-tier family", () => {
 		},
 	);
 
+	it.each([
+		["custom-gateway", "google-generative-ai", "google", "gemini-3-flash", false],
+		["custom-gateway", "openai-completions", "google", "gemini-3-flash", true],
+		["google", "google-generative-ai", undefined, "gemini-3-flash", true],
+		["openai", "openai-responses", undefined, "gpt-5.2", true],
+		["fireworks", "openai-completions", "google", "gpt-oss-120b", false],
+	] satisfies [string, Api, ServiceTierFamily | undefined, string, boolean][])(
+		"only enables /slow when %s on %s annotated %s can send flex (%s)",
+		async (provider, api, providerFamily, id, supported) => {
+			const session = await createSessionForModel(
+				buildModel({
+					id,
+					name: "Slow Mode Model",
+					api,
+					provider,
+					providerFamily,
+					baseUrl: "https://gateway.example/v1",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 32768,
+					maxTokens: 1024,
+				}),
+			);
+			expect(session.setSlowMode(true)).toBe(supported);
+			expect(session.isSlowModeSupported()).toBe(supported);
+			expect(session.isSlowModeEnabled()).toBe(supported);
+			expect(session.serviceTierByFamily).toEqual(supported ? { [providerFamily ?? provider]: "flex" } : {});
+			expect(session.setSlowMode(false)).toBe(supported);
+			expect(session.isSlowModeEnabled()).toBe(false);
+			expect(session.serviceTierByFamily).toEqual({});
+		},
+	);
+
 	it.each([undefined, "openai", "anthropic", "google"] satisfies (ServiceTierFamily | undefined)[])(
 		"leaves Fireworks models annotated %s on the dedicated Fireworks tier control",
 		async providerFamily => {
