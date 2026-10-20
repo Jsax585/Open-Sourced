@@ -54,6 +54,8 @@ export function getDefaultModelDiscoveryBaseUrl(providerId: string): string | un
 			return "https://opencode.ai/zen/v1";
 		case "vllm":
 			return "http://127.0.0.1:8000/v1";
+		case "tokenrhythm":
+			return "https://tokenrhythm.studio/v1";
 		default:
 			return undefined;
 	}
@@ -140,7 +142,7 @@ export function resolveModelCacheProviderId(providerId: string, options: ModelCa
 			// The roster follows both the account and the endpoint. Discovery
 			// passes the `/v1`-suffixed default while the registry passes the raw
 			// configured value, so strip trailing slashes before hashing.
-			const baseUrl = (options.baseUrl ?? "https://tokenrhythm.studio/v1").trim().replace(/\/+$/, "");
+			const baseUrl = (options.baseUrl ?? getDefaultModelDiscoveryBaseUrl(providerId)!).trim().replace(/\/+$/, "");
 			const scope = `${options.apiKey ?? ""}\u0000${baseUrl}`;
 			return `tokenrhythm:models-v1:${Bun.hash(scope).toString(36)}`;
 		}

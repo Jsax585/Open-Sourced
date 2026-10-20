@@ -1410,7 +1410,7 @@ export function tokenrhythmModelManagerOptions(
 	config?: TokenRhythmModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://tokenrhythm.studio/v1";
+	const baseUrl = config?.baseUrl ?? getDefaultModelDiscoveryBaseUrl("tokenrhythm")!;
 	return {
 		providerId: "tokenrhythm",
 		cacheProviderId: resolveModelCacheProviderId("tokenrhythm", { apiKey, baseUrl }),
