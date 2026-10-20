@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added optional `providerFamily` model metadata for explicit service-tier family selection
+- Added optional `providerFamily` model metadata for explicit service-tier family selection ([#16478](https://github.com/can1357/oh-my-pi/pull/16478) by [@shgew](https://github.com/shgew))
 
 ## [18.12.3] - 2026-10-19
 
