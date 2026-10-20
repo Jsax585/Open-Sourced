@@ -599,6 +599,7 @@ export class HindsightSessionState {
 		if (generation !== this.#mentalModelsLoadGeneration) return;
 		if (!published) this.mentalModelsSnippet = previousSnippet;
 		this.mentalModelsLoadedAt = Date.now();
+		if (published && result.refreshWarning) this.session.emitNotice("warning", result.refreshWarning, "Hindsight");
 	}
 
 	async reloadMentalModels(): Promise<boolean> {
