@@ -21,7 +21,13 @@ import {
 	windows,
 } from "@oh-my-pi/pi-coding-agent/tools/jfind/passages";
 import { readText, ReadTextError } from "@oh-my-pi/pi-coding-agent/tools/jfind/text";
-import { eligibleFile, listFiles, renderTree, resolveSearchRoot } from "@oh-my-pi/pi-coding-agent/tools/jfind/tree";
+import {
+	eligibleFile,
+	INELIGIBLE_GLOBS,
+	listFiles,
+	renderTree,
+	resolveSearchRoot,
+} from "@oh-my-pi/pi-coding-agent/tools/jfind/tree";
 import { resolveSearchResultPath } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
@@ -132,6 +138,36 @@ describe("jfind tree", () => {
 		}
 	});
 
+	it("does not spend the scan budget on files jfind never searches", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jfind-scan-ineligible-"));
+		try {
+			// Ineligible weight: far more entries than the cap and more bytes than the byte cap.
+			for (let i = 0; i < 64; i++) await Bun.write(path.join(dir, `asset-${i}.png`), "x");
+			await Bun.write(path.join(dir, "model.safetensors"), "x".repeat(2 * 1024 * 1024));
+			await Bun.write(path.join(dir, "keep.ts"), "export const needle = true;\n");
+			const entries = await listFiles(
+				{ path: dir, type: "directory" },
+				{
+					includeHidden: false,
+					filesystem: urlFs(dir).shellFilesystem(),
+					maxScanEntries: 8,
+					maxScanBytes: 1024 * 1024,
+				},
+			);
+			expect(entries.map(entry => entry.rel)).toEqual(["keep.ts"]);
+			const index = await grepIndex(dir, ["needle"], {
+				includeHidden: false,
+				filesystem: urlFs(dir).shellFilesystem(),
+				maxScanFiles: 2,
+				maxScanBytes: 1024 * 1024,
+				excludeGlobs: INELIGIBLE_GLOBS,
+			});
+			expect([...index.perFileKw.keys()]).toEqual(["keep.ts"]);
+		} finally {
+			await removeWithRetries(dir);
+		}
+	});
+
 	it("never lists credential material but keeps committed env templates", () => {
 		expect(eligibleFile(".env", 10, true)).toBe(false);
 		expect(eligibleFile("deploy/.env.production", 10, true)).toBe(false);
@@ -212,6 +248,38 @@ describe("jfind lexical index", () => {
 			});
 			expect(index.filesScanned).toBe(2);
 			expect(Object.fromEntries(index.perFileKw)).toEqual({ "long.txt": [2], "short.txt": [1] });
+		} finally {
+			await removeWithRetries(dir);
+		}
+	});
+
+	it("recounts truncated lines inside the scan deadline and the native read window", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jfind-lexical-recount-"));
+		try {
+			for (const name of ["a.txt", "b.txt", "c.txt"]) {
+				await Bun.write(path.join(dir, name), `${"z".repeat(2000)} needle needle\n`);
+			}
+			const grepSpy = spyOn(natives, "grep");
+			try {
+				const index = await grepIndex(dir, ["needle"], {
+					includeHidden: false,
+					filesystem: urlFs(dir).shellFilesystem(),
+					timeoutMs: 60_000,
+				});
+				expect(Object.fromEntries(index.perFileKw)).toEqual({ "a.txt": [2], "b.txt": [2], "c.txt": [2] });
+				const [initial, ...recounts] = grepSpy.mock.calls.map(([options]) => options);
+				expect(recounts).toHaveLength(3);
+				let previous = initial!.timeoutMs!;
+				for (const recount of recounts) {
+					// Each recount receives the time left of the one deadline, never a fresh budget,
+					// and never reopens more than the native read window.
+					expect(recount.timeoutMs!).toBeLessThanOrEqual(previous);
+					expect(recount.maxScanBytes).toBe(4 * 1024 * 1024);
+					previous = recount.timeoutMs!;
+				}
+			} finally {
+				grepSpy.mockRestore();
+			}
 		} finally {
 			await removeWithRetries(dir);
 		}

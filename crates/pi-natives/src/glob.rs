@@ -49,6 +49,10 @@ pub struct GlobOptions<'env> {
 	/// Maximum accumulated regular-file size in bytes to inspect.
 	#[napi(js_name = "maxScanBytes")]
 	pub max_scan_bytes:       Option<u32>,
+	/// Walk-relative glob patterns whose entries never count toward
+	/// `maxScanEntries` / `maxScanBytes` and are omitted from the result.
+	#[napi(js_name = "excludeGlobs")]
+	pub exclude_globs:        Option<Vec<String>>,
 	/// Respect .gitignore files (default: true).
 	pub gitignore:            Option<bool>,
 	/// Enable walker scan caching (default: false).
@@ -88,6 +92,7 @@ struct GlobConfig {
 	max_results:           usize,
 	max_scan_entries:      Option<usize>,
 	max_scan_bytes:        Option<usize>,
+	exclude_globs:         Vec<String>,
 	use_gitignore:         bool,
 	mentions_node_modules: bool,
 	sort_by_mtime:         bool,
@@ -223,6 +228,13 @@ fn run_glob(
 				.glob(walk_glob)
 				.node_modules_unless_mentioned(config.mentions_node_modules),
 		);
+	let base_request = if config.exclude_globs.is_empty() {
+		base_request
+	} else {
+		let exclude = pi_walker::CompiledWalkGlob::new(config.exclude_globs.iter().cloned())
+			.map_err(|err| Error::from_reason(format!("Invalid exclude glob: {err}")))?;
+		base_request.scan_exclude(exclude)
+	};
 	let base_request = match (config.max_scan_entries, config.max_scan_bytes) {
 		(Some(entries), Some(bytes)) => base_request.scan_limits(entries, bytes),
 		(Some(entries), None) => base_request.scan_limits(entries, usize::MAX),
@@ -292,6 +304,7 @@ pub fn glob<'env>(
 		max_results,
 		max_scan_entries,
 		max_scan_bytes,
+		exclude_globs,
 		gitignore,
 		sort_by_mtime,
 		cache,
@@ -319,6 +332,7 @@ pub fn glob<'env>(
 				max_results: max_results.map_or(usize::MAX, |value| value as usize),
 				max_scan_entries: max_scan_entries.map(|value| value as usize),
 				max_scan_bytes: max_scan_bytes.map(|value| value as usize),
+				exclude_globs: exclude_globs.unwrap_or_default(),
 				use_gitignore: gitignore.unwrap_or(true),
 				mentions_node_modules: include_node_modules
 					.unwrap_or_else(|| pattern.contains("node_modules")),
@@ -399,6 +413,7 @@ mod tests {
 				max_results:           usize::MAX,
 				max_scan_entries:      None,
 				max_scan_bytes:        None,
+				exclude_globs:         Vec::new(),
 				use_gitignore:         true,
 				mentions_node_modules: false,
 				sort_by_mtime:         false,
@@ -445,6 +460,7 @@ mod tests {
 					max_results:           100,
 					max_scan_entries:      None,
 					max_scan_bytes:        None,
+					exclude_globs:         Vec::new(),
 					use_gitignore:         true,
 					mentions_node_modules: false,
 					sort_by_mtime:         true,
@@ -490,6 +506,7 @@ mod tests {
 				max_results:           10,
 				max_scan_entries:      Some(32),
 				max_scan_bytes:        Some(1024),
+				exclude_globs:         Vec::new(),
 				use_gitignore:         false,
 				mentions_node_modules: false,
 				sort_by_mtime:         false,
@@ -502,6 +519,52 @@ mod tests {
 			panic!("glob must stop when the scan cap is crossed");
 		};
 		assert!(error.to_string().contains("narrow the search path"), "got: {error}");
+	}
+
+	#[test]
+	fn excluded_entries_do_not_spend_the_scan_budget() {
+		let root = TempDirGuard::new();
+		for index in 0..64 {
+			fs::write(root.path().join(format!("blob{index:02}.bin")), "x").expect("create excluded");
+		}
+		for name in ["a.txt", "b.txt", "c.txt"] {
+			fs::write(root.path().join(name), "x").expect("create candidate");
+		}
+
+		let run = |exclude_globs: Vec<String>| {
+			super::run_glob(
+				super::GlobConfig {
+					filesystem: BlockingFs::native(),
+					root: root.path().to_path_buf(),
+					pattern: "*".to_string(),
+					recursive: true,
+					include_hidden: false,
+					file_type_filter: Some(super::FileType::File),
+					max_results: usize::MAX,
+					max_scan_entries: Some(8),
+					max_scan_bytes: Some(1024),
+					exclude_globs,
+					use_gitignore: false,
+					mentions_node_modules: false,
+					sort_by_mtime: false,
+					cache: true,
+				},
+				None,
+				crate::task::CancelToken::default(),
+			)
+		};
+		let Err(error) = run(Vec::new()) else {
+			panic!("unfiltered scan must cross the entry cap");
+		};
+		assert!(error.to_string().contains("narrow the search path"), "got: {error}");
+		let result = run(vec!["**/*.bin".to_string()]).expect("excluded entries must not count");
+		let mut paths: Vec<_> = result
+			.matches
+			.iter()
+			.map(|entry| entry.path.as_str())
+			.collect();
+		paths.sort_unstable();
+		assert_eq!(paths, ["a.txt", "b.txt", "c.txt"]);
 	}
 
 	#[test]
@@ -529,6 +592,7 @@ mod tests {
 					max_results: usize::MAX,
 					max_scan_entries: None,
 					max_scan_bytes: None,
+					exclude_globs: Vec::new(),
 					use_gitignore: true,
 					mentions_node_modules: false,
 					sort_by_mtime: false,

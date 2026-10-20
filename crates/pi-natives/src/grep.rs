@@ -159,6 +159,10 @@ pub struct GrepOptions<'env> {
 	pub max_scan_files:     Option<u32>,
 	/// Stop before reading candidate files beyond this aggregate byte budget.
 	pub max_scan_bytes:     Option<u32>,
+	/// Walk-relative glob patterns for files that are neither searched nor
+	/// counted toward `maxScanFiles` / `maxScanBytes`.
+	#[napi(js_name = "excludeGlobs")]
+	pub exclude_globs:      Option<Vec<String>>,
 	/// Abort signal for cancelling the operation.
 	pub signal:             Option<Unknown<'env>>,
 	/// Timeout in milliseconds for the operation.
@@ -1065,6 +1069,7 @@ pub(crate) struct GrepConfig {
 	pub(crate) max_count_per_file: Option<u32>,
 	pub(crate) max_scan_files:     Option<u32>,
 	pub(crate) max_scan_bytes:     Option<u32>,
+	pub(crate) exclude_globs:      Option<Vec<String>>,
 	/// Filesystem the search path is resolved, walked, and read through.
 	pub(crate) filesystem:         BlockingFs,
 	/// Receives results while searching instead of the returned `matches`.
@@ -1848,6 +1853,7 @@ fn run_parallel_streaming_grep<M: Matcher + Sync>(
 	skip_node_modules: bool,
 	max_scan_files: Option<u32>,
 	max_scan_bytes: Option<u32>,
+	exclude: Option<&pi_walker::CompiledWalkGlob>,
 	ct: &task::CancelToken,
 ) -> Result<Vec<FileSearchResult>> {
 	let mut request = build_grep_walk_request(
@@ -1874,6 +1880,9 @@ fn run_parallel_streaming_grep<M: Matcher + Sync>(
 				if let Some(filter) = type_filter
 					&& !matches_type_filter_str(&file.relative, filter)
 				{
+					return Ok(pi_walker::ParallelWalkControl::Continue);
+				}
+				if exclude.is_some_and(|exclude| exclude.is_match(&file.relative)) {
 					return Ok(pi_walker::ParallelWalkControl::Continue);
 				}
 				let size = file_size_hint(file.size)
@@ -1933,6 +1942,7 @@ fn run_bounded_grep<M: Matcher + Sync>(
 	skip_node_modules: bool,
 	max_scan_files: Option<u32>,
 	max_scan_bytes: Option<u32>,
+	exclude: Option<&pi_walker::CompiledWalkGlob>,
 	ct: &task::CancelToken,
 ) -> Result<(Vec<FileSearchResult>, u64, u64)> {
 	let request = build_grep_walk_request(
@@ -1960,6 +1970,9 @@ fn run_bounded_grep<M: Matcher + Sync>(
 				if let Some(filter) = type_filter
 					&& !matches_type_filter_str(entry.relative_path, filter)
 				{
+					return Ok(pi_walker::WalkDecision::Include);
+				}
+				if exclude.is_some_and(|exclude| exclude.is_match(entry.relative_path)) {
 					return Ok(pi_walker::WalkDecision::Include);
 				}
 				let size = file_size_hint(entry.size)
@@ -2185,6 +2198,7 @@ fn run_streaming_grep<M: Matcher + Sync>(
 				include_hidden,
 				use_gitignore,
 				skip_node_modules,
+				None,
 				None,
 				None,
 				ct,
@@ -2681,6 +2695,17 @@ fn grep_sync_with_matcher<M: Matcher + Sync>(
 	}
 
 	let mentions_node_modules = glob.is_some_and(|g| g.contains("node_modules"));
+	let exclude = match options
+		.exclude_globs
+		.as_ref()
+		.filter(|globs| !globs.is_empty())
+	{
+		Some(globs) => Some(
+			pi_walker::CompiledWalkGlob::new(globs.iter().cloned())
+				.map_err(|err| Error::from_reason(format!("Invalid exclude glob: {err}")))?,
+		),
+		None => None,
+	};
 	if let Some(sink) = stream {
 		// A streaming caller (`onMatches`) can still ask for a bounded initial
 		// scan (jfind's lexical pass sets both), so the scan-limit budget has to
@@ -2700,6 +2725,7 @@ fn grep_sync_with_matcher<M: Matcher + Sync>(
 			!mentions_node_modules,
 			options.max_scan_files,
 			options.max_scan_bytes,
+			exclude.as_ref(),
 			&ct,
 		)?;
 		return Ok(state.streamed_result());
@@ -2717,6 +2743,7 @@ fn grep_sync_with_matcher<M: Matcher + Sync>(
 			!mentions_node_modules,
 			options.max_scan_files,
 			options.max_scan_bytes,
+			exclude.as_ref(),
 			&ct,
 		)?
 	} else {
@@ -3010,6 +3037,7 @@ pub fn grep<'env>(
 		max_count_per_file,
 		max_scan_files,
 		max_scan_bytes,
+		exclude_globs,
 		timeout_ms,
 		signal,
 		filesystem,
@@ -3038,6 +3066,7 @@ pub fn grep<'env>(
 			max_count_per_file,
 			max_scan_files,
 			max_scan_bytes,
+			exclude_globs,
 			offset,
 			context_before,
 			context_after,
@@ -3146,6 +3175,7 @@ mod tests {
 			max_count_per_file: None,
 			max_scan_files:     None,
 			max_scan_bytes:     None,
+			exclude_globs:      None,
 			filesystem:         BlockingFs::native(),
 			stream:             None,
 		}
@@ -3469,6 +3499,25 @@ mod tests {
 			.err()
 			.expect("scan must stop at file cap");
 		assert!(error.to_string().contains("narrow the search path"), "{error}");
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn excluded_globs_do_not_spend_the_scan_budget() {
+		let root = TempDirGuard::new();
+		for index in 0..32 {
+			write_file(&root.path().join(format!("blob{index:02}.bin")), "needle\n");
+		}
+		for name in ["a.txt", "b.txt", "c.txt"] {
+			write_file(&root.path().join(name), "needle\n");
+		}
+		let mut config = base_grep_config(root.path());
+		config.max_scan_files = Some(3);
+		config.max_count = Some(8192);
+		config.exclude_globs = Some(vec!["**/*.bin".to_string()]);
+		let result = grep_sync(config, None, task::CancelToken::default())
+			.expect("excluded files must not consume the candidate budget");
+		assert_eq!(result.files_with_matches, 3);
 	}
 
 	#[cfg(unix)]
@@ -3886,6 +3935,7 @@ mod tests {
 			max_count_per_file: None,
 			max_scan_files:     None,
 			max_scan_bytes:     None,
+			exclude_globs:      None,
 			filesystem:         super::BlockingFs::native(),
 			stream:             None,
 		};

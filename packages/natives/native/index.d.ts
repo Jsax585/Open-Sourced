@@ -2148,6 +2148,11 @@ export interface GlobOptions {
   maxScanEntries?: number
   /** Maximum accumulated regular-file size in bytes to inspect. */
   maxScanBytes?: number
+  /**
+   * Walk-relative glob patterns whose entries never count toward
+   * `maxScanEntries` / `maxScanBytes` and are omitted from the result.
+   */
+  excludeGlobs?: Array<string>
   /** Respect .gitignore files (default: true). */
   gitignore?: boolean
   /** Enable walker scan caching (default: false). */
@@ -2264,6 +2269,11 @@ export interface GrepOptions {
   maxScanFiles?: number
   /** Stop before reading candidate files beyond this aggregate byte budget. */
   maxScanBytes?: number
+  /**
+   * Walk-relative glob patterns for files that are neither searched nor
+   * counted toward `maxScanFiles` / `maxScanBytes`.
+   */
+  excludeGlobs?: Array<string>
   /** Abort signal for cancelling the operation. */
   signal?: unknown
   /** Timeout in milliseconds for the operation. */

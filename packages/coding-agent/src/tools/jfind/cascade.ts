@@ -22,7 +22,7 @@ import { keywords as deriveKeywords } from "./keywords";
 import { type HeatRange, mergeHeat, type Passage, plainContent, selectWindows, sketch, windows } from "./passages";
 import { nameBatch, passageBatch, passageKey, entryKey, type Request, type SketchCard, sketchBatch } from "./questions";
 import { lines, readText, ReadTextError, takeChars } from "./text";
-import { type FileEntry, listFiles, type SearchRoot } from "./tree";
+import { type FileEntry, INELIGIBLE_GLOBS, listFiles, type SearchRoot } from "./tree";
 
 /** Requests in flight per dispatched phase. */
 const PARALLEL = 16;
@@ -201,6 +201,7 @@ class Cascade {
 			filesystem: native,
 			maxScanFiles: SCAN_MAX_FILES,
 			maxScanBytes: SCAN_MAX_BYTES,
+			excludeGlobs: INELIGIBLE_GLOBS,
 			signal,
 			timeoutMs: Math.max(0, scanDeadline - Date.now()),
 		});

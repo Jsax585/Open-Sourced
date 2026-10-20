@@ -657,6 +657,9 @@ impl Default for WalkOptions {
 	}
 }
 
+/// Smallest raw per-directory listing bound used when a scan exclusion is set.
+const RAW_DIRECTORY_ENTRY_FLOOR: usize = 65_536;
+
 /// High-level traversal request that owns a root and wraps [`WalkOptions`].
 ///
 /// Requests compare equal only when they traverse the same filesystem
@@ -670,6 +673,7 @@ pub struct WalkRequest {
 	filter:           WalkFilter,
 	limit:            Option<usize>,
 	scan_limits:      Option<(usize, usize)>,
+	scan_exclude:     Option<CompiledWalkGlob>,
 	empty_recheck:    EmptyRecheck,
 	visit_order:      VisitOrder,
 	size_hint_policy: SizeHintPolicy,
@@ -684,6 +688,7 @@ impl PartialEq for WalkRequest {
 			&& self.filter == other.filter
 			&& self.limit == other.limit
 			&& self.scan_limits == other.scan_limits
+			&& self.scan_exclude == other.scan_exclude
 			&& self.empty_recheck == other.empty_recheck
 			&& self.visit_order == other.visit_order
 			&& self.size_hint_policy == other.size_hint_policy
@@ -718,6 +723,7 @@ impl WalkRequest {
 			filter: WalkFilter::default(),
 			limit: None,
 			scan_limits: options.scan_limits,
+			scan_exclude: None,
 			empty_recheck: EmptyRecheck::Configured,
 			visit_order,
 			size_hint_policy: SizeHintPolicy::FromDetail,
@@ -858,6 +864,14 @@ impl WalkRequest {
 	pub const fn scan_limits(mut self, max_entries: usize, max_file_bytes: usize) -> Self {
 		self.scan_limits = Some((max_entries, max_file_bytes));
 		self.options.scan_limits = self.scan_limits;
+		self
+	}
+
+	/// Entries matching `exclude` are dropped before [`Self::scan_limits`]
+	/// counts them, so paths the caller will never use cannot spend the budget.
+	/// Only bounded collection consults it.
+	pub fn scan_exclude(mut self, exclude: CompiledWalkGlob) -> Self {
+		self.scan_exclude = Some(exclude);
 		self
 	}
 
@@ -1251,7 +1265,8 @@ impl WalkRequest {
 		if (!options.cache || self.scan_limits.is_some())
 			&& let (Some(rank), Some(limit)) = (rank, limit)
 		{
-			let mut collector = RankedCollectVisitor::new(&self.filter, rank, limit, self.scan_limits);
+			let mut collector = RankedCollectVisitor::new(&self.filter, rank, limit, self.scan_limits)
+				.with_exclude(self.scan_exclude.as_ref());
 			walk_entries_in(&self.filesystem, &self.root, options, &mut collector, || {
 				heartbeat().map_err(|err| err.to_string())
 			})?;
@@ -1261,7 +1276,7 @@ impl WalkRequest {
 			options.cache = false;
 		}
 		let mut scan = if let Some(limits) = self.scan_limits {
-			let mut collector = BoundedCollectVisitor::new(limits);
+			let mut collector = BoundedCollectVisitor::new(limits, self.scan_exclude.clone());
 			walk_entries_in(&self.filesystem, &self.root, options, &mut collector, || {
 				heartbeat().map_err(|err| err.to_string())
 			})?;
@@ -1332,7 +1347,13 @@ impl WalkRequest {
 		if self.filter.max_file_size.is_some() {
 			options.detail = WalkDetail::Full;
 		}
-		options.scan_limits = self.scan_limits;
+		// The directory reader counts raw entries before any exclusion runs, so
+		// with an exclusion set it only bounds its buffered listing; the caller's
+		// budget is enforced on non-excluded entries by the collecting visitor.
+		options.scan_limits = match (self.scan_limits, self.scan_exclude.is_some()) {
+			(Some((entries, bytes)), true) => Some((entries.max(RAW_DIRECTORY_ENTRY_FLOOR), bytes)),
+			(limits, _) => limits,
+		};
 		options
 	}
 
@@ -2444,9 +2465,15 @@ struct RankedCollectVisitor<'a> {
 	filtered:    usize,
 	scan_limits: Option<(usize, usize)>,
 	file_bytes:  usize,
+	exclude:     Option<&'a CompiledWalkGlob>,
 }
 
 impl<'a> RankedCollectVisitor<'a> {
+	const fn with_exclude(mut self, exclude: Option<&'a CompiledWalkGlob>) -> Self {
+		self.exclude = exclude;
+		self
+	}
+
 	const fn new(
 		filter: &'a WalkFilter,
 		rank: WalkRank,
@@ -2462,6 +2489,7 @@ impl<'a> RankedCollectVisitor<'a> {
 			filtered: 0,
 			scan_limits,
 			file_bytes: 0,
+			exclude: None,
 		}
 	}
 
@@ -2486,6 +2514,12 @@ impl EntryVisitor for RankedCollectVisitor<'_> {
 	type Error = String;
 
 	fn visit(&mut self, entry: Entry<'_>) -> std::result::Result<WalkControl, Self::Error> {
+		if self
+			.exclude
+			.is_some_and(|exclude| exclude.is_match(entry.relative))
+		{
+			return Ok(WalkControl::Continue);
+		}
 		let file_bytes = entry.size.unwrap_or(0.0).max(0.0) as usize;
 		check_scan_limits(self.scanned, self.file_bytes, file_bytes, self.scan_limits)?;
 		self.file_bytes = self.file_bytes.saturating_add(file_bytes);
@@ -2528,11 +2562,15 @@ struct BoundedCollectVisitor {
 	max_entries:    usize,
 	max_file_bytes: usize,
 	file_bytes:     usize,
+	exclude:        Option<CompiledWalkGlob>,
 }
 
 impl BoundedCollectVisitor {
-	const fn new((max_entries, max_file_bytes): (usize, usize)) -> Self {
-		Self { entries: Vec::new(), max_entries, max_file_bytes, file_bytes: 0 }
+	const fn new(
+		(max_entries, max_file_bytes): (usize, usize),
+		exclude: Option<CompiledWalkGlob>,
+	) -> Self {
+		Self { entries: Vec::new(), max_entries, max_file_bytes, file_bytes: 0, exclude }
 	}
 }
 
@@ -2540,6 +2578,13 @@ impl EntryVisitor for BoundedCollectVisitor {
 	type Error = String;
 
 	fn visit(&mut self, entry: Entry<'_>) -> std::result::Result<WalkControl, Self::Error> {
+		if self
+			.exclude
+			.as_ref()
+			.is_some_and(|exclude| exclude.is_match(entry.relative))
+		{
+			return Ok(WalkControl::Continue);
+		}
 		let file_bytes = entry.size.unwrap_or(0.0).max(0.0) as usize;
 		check_scan_limits(
 			self.entries.len(),

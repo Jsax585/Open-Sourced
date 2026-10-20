@@ -226,6 +226,20 @@ function secret(name: string): boolean {
 	return hasExt(name.toLowerCase(), SECRET_EXT);
 }
 
+/**
+ * Walk-relative globs for paths {@link eligibleFile} always rejects (denied
+ * directories, lockfiles, credential material, binaries), derived from the same
+ * tables. Handed to the native scans so those entries never spend the scan
+ * budget; deliberately a subset (lowercase extensions, no `.env.*` variants), so
+ * it never hides an eligible file.
+ */
+export const INELIGIBLE_GLOBS: readonly string[] = [
+	...Object.keys(DENY_DIRS).map(dir => `**/${dir}/**`),
+	...Object.keys(DENY_FILES).map(name => `**/${name}`),
+	...Object.keys(SECRET_FILES).map(name => `**/${name}`),
+	...[...SECRET_EXT, ...BINARY_EXT].map(ext => `**/*.${ext}`),
+];
+
 /** Whether a root-relative regular file is searchable. */
 export function eligibleFile(rel: string, size: number, includeHidden: boolean): boolean {
 	if (size <= 0) return false;
@@ -274,6 +288,7 @@ export async function listFiles(root: SearchRoot, options: ListFilesOptions): Pr
 		filesystem: options.filesystem,
 		maxScanEntries: options.maxScanEntries,
 		maxScanBytes: options.maxScanBytes,
+		excludeGlobs: [...INELIGIBLE_GLOBS],
 		signal: options.signal,
 		timeoutMs: options.timeoutMs,
 	});
