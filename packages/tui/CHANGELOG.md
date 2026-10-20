@@ -17,6 +17,7 @@
 
 ### Fixed
 
+- iTerm2 inline images now travel wrapped in the tmux DCS passthrough envelope so they render inside tmux panes, and the iTerm2 image protocol is no longer selected when the tmux pane disallows passthrough ([#16536](https://github.com/can1357/oh-my-pi/pull/16536) by [@woss](https://github.com/woss))
 - Fixed markdown table rows shattering at narrow widths when a wide glyph sat in a one-cell column; the glyph is now clamped to its column instead of re-wrapping the row ([#16479](https://github.com/can1357/oh-my-pi/pull/16479) by [@adi-IL](https://github.com/adi-IL)).
 - Fixed charts in answers drawing as blank bands, on screen and in scrollback, when iTerm2 drew them in a background tab; inline images now carry an explicit height in rows ([#16471](https://github.com/can1357/oh-my-pi/pull/16471) by [@galtamam-cmyk](https://github.com/galtamam-cmyk))
 - Fixed an inline image (such as a table's chart) disappearing in iTerm2 when new output pushed it past the top of the screen; it now moves to scrollback whole ([#16467](https://github.com/can1357/oh-my-pi/pull/16467) by [@galtamam-cmyk](https://github.com/galtamam-cmyk))
