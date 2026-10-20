@@ -4,6 +4,8 @@ import { cursorModelParameters } from "@oh-my-pi/pi-catalog/compat/behavior";
 import { isCursorMaxModeWireId } from "@oh-my-pi/pi-catalog/compat/collapse";
 import { classifyModel, collapseVariantId } from "@oh-my-pi/pi-catalog/compat/taxonomy";
 import type {
+	AskQuestionInteractionQuery,
+	AskQuestionResult,
 	ConversationStep,
 	CursorRule,
 	McpToolDefinition,
@@ -189,6 +191,7 @@ import type {
 	Api,
 	AssistantMessage,
 	Context,
+	CursorAskQuestionResult,
 	CursorExecHandlerResult,
 	CursorExecHandlers,
 	CursorExecPairing,
@@ -263,7 +266,13 @@ import {
 	piTimeout,
 	shellDeadlineSeconds,
 } from "./cursor/exec-modern";
-import { handleInteractionQuery, protoUnknownFields } from "./cursor/interaction-query";
+import {
+	askQuestionRejected,
+	askQuestionSuccess,
+	cursorAskToolArgs,
+	handleInteractionQuery,
+	protoUnknownFields,
+} from "./cursor/interaction-query";
 
 export const CURSOR_API_URL = CURSOR_DEFAULT_BASE_URL;
 export { CURSOR_CLIENT_VERSION };
@@ -1489,6 +1498,7 @@ function streamCursorWithWireMode(
 							requestContextRules,
 							onConversationCheckpoint,
 							options?.externalToolExecutor,
+							options?.signal,
 						).catch(error => {
 							log("error", "handleServerMessage", { error: String(error) });
 						});
@@ -1988,6 +1998,7 @@ export async function handleServerMessage(
 	requestContextRules: CursorRule[] = [],
 	onConversationCheckpoint?: (checkpoint: ConversationStateStructure) => void,
 	externalToolExecutor = false,
+	signal?: AbortSignal,
 ): Promise<void> {
 	const msgCase = msg.message.case;
 
@@ -2022,8 +2033,28 @@ export async function handleServerMessage(
 		// waiting on a reply that never comes; the lazy idle watchdog then
 		// aborts a live stream with "Provider stream stalled while waiting for
 		// the next event" (cursor-grok-4.6-xhigh after a WebFetch/WebSearch
-		// permission prompt).
-		handleInteractionQuery(msg.message.value, runTransport);
+		// permission prompt). A question waits on the user, so it counts as
+		// local work for the idle watchdog.
+		const askQuestion = execHandlers?.askQuestion?.bind(execHandlers);
+		const askReservedLabels = execHandlers?.askQuestionReservedLabels?.bind(execHandlers);
+		await stream.trackLocalWork(
+			handleInteractionQuery(
+				msg.message.value,
+				runTransport,
+				askQuestion &&
+					(query =>
+						answerAskQuestion(
+							query,
+							askQuestion,
+							askReservedLabels,
+							onToolResult,
+							output,
+							stream,
+							state,
+							signal,
+						)),
+			),
+		);
 	} else if (msgCase === "conversationCheckpointUpdate") {
 		handleConversationCheckpointUpdate(msg.message.value, output, onConversationCheckpoint);
 	}
@@ -5162,6 +5193,38 @@ async function pairSynthesizedExecResult(
 	const sink = onToolResult ?? state.onToolResult;
 	if (!sink) return;
 	await sink(synthesized);
+}
+
+/**
+ * Run Cursor's native `AskQuestion` through the host's `ask` dialog and file
+ * it in the transcript as an `ask` call, like any other bridged native tool.
+ */
+async function answerAskQuestion(
+	query: AskQuestionInteractionQuery,
+	handler: NonNullable<CursorExecHandlers["askQuestion"]>,
+	reservedLabels: CursorExecHandlers["askQuestionReservedLabels"],
+	onToolResult: CursorToolResultHandler | undefined,
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	state: BlockState,
+	signal: AbortSignal | undefined,
+): Promise<AskQuestionResult> {
+	const toolCallId = query.toolCallId || crypto.randomUUID();
+	const { args, optionIds } = cursorAskToolArgs(query.args, reservedLabels);
+	synthesizeCursorExecToolCall(output, stream, state, toolCallId, "ask", args);
+	let outcome: CursorAskQuestionResult;
+	try {
+		outcome = await handler({ toolCallId, args, signal });
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		await pairSynthesizedExecResult(state, onToolResult, toolCallId, "ask", message);
+		return askQuestionRejected(message);
+	}
+	await applyToolResultHandler(outcome.toolResult, onToolResult ?? state.onToolResult);
+	if (outcome.toolResult.isError || !outcome.answers) {
+		return askQuestionRejected(toolResultToText(outcome.toolResult) || "Question was not answered");
+	}
+	return askQuestionSuccess(query.args, optionIds, outcome.answers);
 }
 
 /** Exported for tests: drives one Cursor interaction update through the streaming state machine. */

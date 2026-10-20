@@ -1416,6 +1416,26 @@ export interface CursorMcpCall {
 	approvalOnly?: boolean;
 }
 
+/** A native Cursor `AskQuestion` interaction, translated to local `ask` kwargs. */
+export interface CursorAskQuestionCall {
+	toolCallId: string;
+	args: Record<string, unknown>;
+	/** Aborts the question when the request is aborted. */
+	signal?: AbortSignal;
+}
+
+/** One answer to a {@link CursorAskQuestionCall}, by option label. */
+export interface CursorAskAnswer {
+	selectedOptions: string[];
+	customInput?: string;
+}
+
+export interface CursorAskQuestionResult {
+	toolResult: ToolResultMessage;
+	/** Answers in question order; absent when the question was not answered. */
+	answers?: CursorAskAnswer[];
+}
+
 export interface CursorTodoSnapshotItem {
 	content: string;
 	status: "pending" | "in_progress" | "completed" | "abandoned";
@@ -1572,6 +1592,15 @@ export interface CursorExecHandlers {
 		 */
 		downloadPath?: string;
 	}) => Promise<CursorMcpResourceContent | null>;
+	/**
+	 * Answer Cursor's native `AskQuestion` with the local `ask` dialog. Without
+	 * a handler the provider rejects the question; a handler whose session has
+	 * no `ask` tool (subagents, headless) returns an error result, which is
+	 * rejected too.
+	 */
+	askQuestion?: (call: CursorAskQuestionCall) => Promise<CursorAskQuestionResult>;
+	/** Option labels the `ask` dialog keeps for its own rows; Cursor labels that collide are renamed. */
+	askQuestionReservedLabels?: (multi: boolean) => readonly string[];
 	/** Mirror Cursor's server-owned todo list into local session state. */
 	todoSync?: CursorTodoSyncHandler;
 	onToolResult?: CursorToolResultHandler;
