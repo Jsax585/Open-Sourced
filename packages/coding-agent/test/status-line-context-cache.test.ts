@@ -65,9 +65,14 @@ function makeSession(opts: {
 	modelInput?: string[];
 }): Fake {
 	const contextWindow = opts.contextWindow ?? 200_000;
-	const model = opts.modelInput
-		? { id: "test-model", contextWindow, input: opts.modelInput }
-		: { id: "test-model", contextWindow };
+	const model = {
+		id: "test-model",
+		provider: "test-provider",
+		api: "anthropic-messages",
+		contextWindow,
+		input: opts.modelInput ?? ["text"],
+		compat: { supportsServerCompaction: false },
+	};
 	let usage: ContextUsage | undefined = "usage" in opts ? opts.usage : { tokens: 1234, contextWindow, percent: 0.6 };
 	let calls = 0;
 	let revision = 0;
