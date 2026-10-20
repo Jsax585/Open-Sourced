@@ -10,7 +10,7 @@ describe("ProcessTerminal canonical diagnostic lifecycle", () => {
 		["warm", "shares a warm custom structured log"],
 		["rejected", "keeps canonical rotation after a rejected explicit redirect"],
 		["recovery", "rolls back rejected handoffs and recovers from a failed old log destination"],
-		["retired", "keeps a healthy handoff when the retiring sink flushes a repaired successor"],
+		["retired", "preserves buffered records across a blocked-rollover handoff"],
 		["disabled", "bounds raw diagnostics with structured files disabled"],
 	])(
 		"%s: %s, including nested stop and restart",
@@ -23,6 +23,7 @@ describe("ProcessTerminal canonical diagnostic lifecycle", () => {
 					cwd: root,
 					env: {
 						HOME: root,
+						TMPDIR: root,
 						PATH: process.env.PATH ?? "/usr/bin:/bin",
 						TERM: "xterm-256color",
 						PI_TEST_RUNTIME: "1",

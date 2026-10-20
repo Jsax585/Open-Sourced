@@ -246,6 +246,8 @@ describe("RotatingFileSink batching", () => {
 			vi.advanceTimersByTime(300);
 			expect(rotations).toEqual([first]);
 			expect(fs.readFileSync(first, "utf8")).toContain("buffered before failure");
+			listenerSink.write("during blocked rollover", true);
+			expect(fs.readFileSync(first, "utf8")).toContain(`during blocked rollover${os.EOL}`);
 			fs.rmSync(next, { recursive: true });
 			vi.advanceTimersByTime(300);
 			expect(rotations).toEqual([first, next]);

@@ -5,7 +5,7 @@
 ### Fixed
 
 - Fixed unmanaged stdout/stderr and inherited subprocess diagnostics corrupting the Unix viewport; diagnostic routing now follows log configuration from startup through rotation, handoff, and shutdown ([#16159](https://github.com/can1357/oh-my-pi/pull/16159) by [@tommymorgan](https://github.com/tommymorgan)).
-- Fixed stopping an older terminal session disabling paste, mouse, appearance notifications and raw input in the surviving session ([#16159](https://github.com/can1357/oh-my-pi/pull/16159) by [@tommymorgan](https://github.com/tommymorgan)).
+- Fixed stopping overlapping terminal sessions in either order disabling the survivor's modes or input; emergency shutdown now restores every remaining session ([#16159](https://github.com/can1357/oh-my-pi/pull/16159) by [@tommymorgan](https://github.com/tommymorgan)).
 
 ## [18.12.4] - 2026-10-20
 

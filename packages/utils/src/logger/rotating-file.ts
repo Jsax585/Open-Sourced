@@ -226,7 +226,14 @@ export class RotatingFileSink {
 			index++;
 		}
 		if (index > 0 || (dayChanged && hadPriorSelection)) {
-			this.#openFd(filePath);
+			try {
+				this.#openFd(filePath);
+			} catch (err) {
+				// A blocked successor must not reject records while the previous
+				// descriptor still works. Keep its selection so future ticks retry.
+				if (this.#fd === undefined) throw err;
+				return;
+			}
 		}
 		this.#activeDay = day;
 		this.#activeIndex = index;

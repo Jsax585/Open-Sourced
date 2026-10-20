@@ -484,6 +484,11 @@ export function emergencyTerminalRestore(): void {
 				altScreenActive = false;
 			}
 			terminal.stop();
+			let remaining = getActiveTerminal();
+			while (remaining) {
+				remaining.stop();
+				remaining = getActiveTerminal();
+			}
 			restoreTerminalStderr();
 			terminal.showCursor(true);
 		} else if (terminalEverStarted && !isTerminalHeadless()) {
@@ -857,6 +862,8 @@ export interface ProcessTerminalOptions {
  */
 export class ProcessTerminal implements Terminal {
 	#wasRaw = false;
+	/** Previous live owner; stopped owners are unlinked before their resources close. */
+	#previousTerminal: ProcessTerminal | null = null;
 	#inputHandler?: (data: string) => void;
 	#resizeHandler?: () => void;
 	/** True between a `deferInput` start() and enableInput(). */
@@ -1159,6 +1166,8 @@ export class ProcessTerminal implements Terminal {
 
 		// Own stdout: out-of-band writers route through this terminal, and the
 		// emergency restore finds it on crash.
+		const previousTerminal = getActiveTerminal();
+		if (previousTerminal !== this) this.#previousTerminal = previousTerminal;
 		setActiveTerminal(this);
 		// A deferInput start returns before any frame is written, so the lazy
 		// first-write registration would leave redirected-write failures in
@@ -2393,21 +2402,24 @@ export class ProcessTerminal implements Terminal {
 
 	stop(): void {
 		const owner = getActiveTerminal();
-		const resetModes = owner === null || owner === this;
-		if (!resetModes && owner instanceof ProcessTerminal && this.#stdoutResizeListener) {
-			// The survivor started while our raw mode was already enabled.
-			// Its final stop must restore the state from before either session.
-			owner.#wasRaw = this.#wasRaw;
+		if (owner === this) {
+			setActiveTerminal(this.#previousTerminal);
+			if (!this.#previousTerminal) setTerminalBackgroundColor(undefined);
+		} else {
+			// Remove an older owner from the live chain, including its saved raw
+			// baseline, so a later newest-first stop cannot resurrect it.
+			let successor = owner;
+			while (successor && successor.#previousTerminal !== this) successor = successor.#previousTerminal;
+			if (successor) {
+				successor.#previousTerminal = this.#previousTerminal;
+				successor.#wasRaw = this.#wasRaw;
+			}
 		}
+		this.#previousTerminal = null;
+		const resetModes = getActiveTerminal() === null;
 		// Suppress observer/timer callbacks before any teardown can yield or throw.
 		this.#active = false;
 		this.#inputDeferred = false;
-		// Release stdout ownership (out-of-band writers and emergency cleanup)
-		// before headless/teardown exits, without disturbing another owner's RGB.
-		if (getActiveTerminal() === this) {
-			setActiveTerminal(null);
-			setTerminalBackgroundColor(undefined);
-		}
 		if (this.#headless) return;
 
 		// Release fd 1/2 first; the pump has its own duplicate for reset

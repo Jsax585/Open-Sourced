@@ -7,7 +7,8 @@
  */
 import * as fs from "node:fs";
 import { isTerminalOutputSuppressed } from "@oh-my-pi/pi-utils";
-import { ProcessTerminal } from "../../src/terminal";
+import { writeTerminalSequence } from "../../src/active-terminal";
+import { emergencyTerminalRestore, ProcessTerminal } from "../../src/terminal";
 
 const state = process.argv[2];
 const note = (line: string) => fs.appendFileSync(state, `${line}\n`);
@@ -22,16 +23,27 @@ b.start(
 	() => {},
 	() => {},
 );
+if (process.argv[3] === "emergency") {
+	emergencyTerminalRestore();
+	note(`emergency-isolated=${isTerminalOutputSuppressed()}`);
+	note(`emergency-raw=${process.stdin.isRaw}`);
+	fs.writeSync(1, "EMERGENCY_BOTH_RESTORED\n");
+	process.exit(0);
+}
+const newestFirst = process.argv[3] === "newest";
+const stopping = newestFirst ? b : a;
+const survivor = newestFirst ? a : b;
 note(`after-start=${isTerminalOutputSuppressed()}`);
-a.write("\x1b]0;STOP_OLDER_BEGIN\x07");
-a.stop();
+stopping.write("\x1b]0;STOP_OWNER_BEGIN\x07");
+stopping.stop();
 note(`after-first-stop=${isTerminalOutputSuppressed()}`);
-// Emergency cleanup already stopped `a`; the owner's later teardown calls
-// stop() again. This must stay a no-op for the shared guard.
-a.stop();
+// Emergency cleanup followed by the owner's teardown must remain local.
+stopping.stop();
 note(`after-double-stop=${isTerminalOutputSuppressed()}`);
 note(`survivor-raw=${process.stdin.isRaw}`);
-b.write("\x1b]0;STOP_OLDER_END\x07");
-b.stop();
-note(`after-b-stop=${isTerminalOutputSuppressed()}`);
+note(`survivor-paused=${process.stdin.isPaused()}`);
+writeTerminalSequence("\x1b]0;SURVIVING_OWNER_SEQUENCE\x07");
+survivor.write("\x1b]0;STOP_OWNER_END\x07");
+survivor.stop();
+note(`after-final-stop=${isTerminalOutputSuppressed()}`);
 note(`final-raw=${process.stdin.isRaw}`);

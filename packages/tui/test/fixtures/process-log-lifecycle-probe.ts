@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+	getLogsDir,
 	isTerminalOutputSuppressed,
 	logger,
 	setTerminalHeadless,
@@ -13,7 +14,7 @@ import { ProcessTerminal } from "../../src/terminal";
 const root = process.argv[2]!;
 const mode = process.argv[3]!;
 process.umask(0o022);
-const defaultDirectory = path.join(root, ".omp", "logs");
+const defaultDirectory = getLogsDir();
 const customDirectory = path.join(root, "custom");
 let directory = mode === "cold" || mode === "warm" ? customDirectory : defaultDirectory;
 logger.setTransports({ file: mode === "disabled" ? false : mode === "default" ? true : directory });
@@ -61,7 +62,7 @@ try {
 		fs.mkdirSync(`${previous}.1`);
 		fs.writeSync(1, overflow);
 		await Bun.sleep(1_100);
-		assert.throws(() => getProcessLogSink().openForExternalWrites());
+		getProcessLogSink().openForExternalWrites();
 		assert.equal(target(), previous);
 		const rejected = path.join(root, "rejected-replacement");
 		onProcessLogTargetChanged(filePath => {
@@ -77,7 +78,14 @@ try {
 		logger.setTransports({ file: directory });
 		assertDestination(directory);
 		if (mode === "retired") {
-			assert.match(fs.readFileSync(`${previous}.1`, "utf8"), /buffered before healthy handoff/);
+			const previousDirectory = path.dirname(previous);
+			const preserved = fs.readdirSync(previousDirectory).some(name => {
+				const file = path.join(previousDirectory, name);
+				return (
+					fs.statSync(file).isFile() && fs.readFileSync(file, "utf8").includes("buffered before healthy handoff")
+				);
+			});
+			assert.equal(preserved, true, "handoff must preserve the buffered record in the previous destination");
 		}
 	}
 	if (mode === "rejected") {
