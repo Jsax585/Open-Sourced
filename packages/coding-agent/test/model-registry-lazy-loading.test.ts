@@ -139,7 +139,11 @@ describe("ModelRegistry lazy bundled composition", () => {
 			contextWindow: 8192,
 			maxTokens: 1024,
 		};
-		const config = { baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", api: "openai-completions" as const };
+		const config = {
+			baseUrl: "https://fixture.invalid/v1",
+			apiKey: "fixture-key",
+			api: "openai-completions" as const,
+		};
 		registry.registerProvider("ollama", { ...config, models: [model] }, "ext://order-fixture");
 		registry.registerProvider("zz-review-fixture", { ...config, models: [model] }, "ext://order-fixture");
 		const providers = () =>
@@ -156,7 +160,11 @@ describe("ModelRegistry lazy bundled composition", () => {
 		const auth = await AuthStorage.create(":memory:");
 		authStorages.push(auth);
 		const registry = new ModelRegistry(auth, undefined, { ignoreLocalModelConfig: true });
-		const config = { baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", api: "openai-completions" as const };
+		const config = {
+			baseUrl: "https://fixture.invalid/v1",
+			apiKey: "fixture-key",
+			api: "openai-completions" as const,
+		};
 		const withModel = (id: string) => ({
 			...config,
 			models: [
