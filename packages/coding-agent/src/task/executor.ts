@@ -3066,8 +3066,11 @@ function wakeSources(records: AgentMessage[], selfId: string): WakeSource[] {
 		const from = details ? Reflect.get(details, "from") : undefined;
 		if (typeof from !== "string" || from === selfId || sources.some(source => source.from === from)) continue;
 		// Automated wake-turn relays are answers, not wake sources: relaying one
-		// back would ping-pong two idle peers forever.
-		if (details && Reflect.get(details, "wakeRelay") === true) continue;
+		// back would ping-pong two idle peers forever. A broadcast leg is not one
+		// either: it asks no one in particular, so relaying every woken peer's
+		// turn back would flood the broadcaster with "not for me" replies.
+		if (details && (Reflect.get(details, "wakeRelay") === true || Reflect.get(details, "broadcast") === true))
+			continue;
 		const messageId = details ? Reflect.get(details, "id") : undefined;
 		sources.push({ from, messageId: typeof messageId === "string" ? messageId : undefined });
 	}
@@ -4070,13 +4073,21 @@ function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 		}
 		mcpFollower?.bind(revived);
 		trackSubagentSettings(revived, capture);
+		const withoutParentOwnedTools = (toolNames: string[]): string[] =>
+			capture.keepTodo ? toolNames : toolNames.filter(name => name !== "todo");
+		// Strip what the spawn stripped, before extensions start: the rebuilt session enables its defaults again.
+		const revivedToolNames = revived.getEnabledToolNames();
+		const subagentToolNames = withoutParentOwnedTools(revivedToolNames);
+		if (subagentToolNames.length !== revivedToolNames.length) {
+			await revived.setActiveToolsByName(subagentToolNames);
+		}
 		// Re-run the executor's extension wiring on the rebuilt session. Skipping it leaves the
 		// runner pre-init, so a `tool_call` handler touching a runtime action trips the
 		// fail-closed gate and blocks every tool (including `yield`) in the revived agent (issue #8824).
 		await initializeExtensions(revived, {
 			reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
 			reportRuntimeError: err => logger.error("Extension error", { path: err.extensionPath, error: err.error }),
-			filterActiveTools: toolNames => (capture.keepTodo ? toolNames : toolNames.filter(name => name !== "todo")),
+			filterActiveTools: withoutParentOwnedTools,
 		});
 		AgentRegistry.global().syncSessionStatus(id, revived);
 		attachIrcWakeTurnMonitor(revived, capture.wake);
