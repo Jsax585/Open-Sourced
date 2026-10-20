@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed named bash services being killed when their owning session restarts and no client is attached; an explicit stop still ends them ([#16515](https://github.com/can1357/oh-my-pi/pull/16515) by [@Komzpa](https://github.com/Komzpa))
+- Fixed named bash services being killed when their owning session restarts and no client is attached; named services now also outlive a normal session exit, keeping the daemon broker up until the service exits or is stopped explicitly ([#16515](https://github.com/can1357/oh-my-pi/pull/16515) by [@Komzpa](https://github.com/Komzpa))
 - Fixed Mnemopi memory completions ignoring the memory role's thinking suffix, including one inherited from `tiny` or `smol` when `modelRoles.memory` is unset; each `retry.fallbackChains.memory` entry sends its own level, and `:off` disables reasoning ([#16378](https://github.com/can1357/oh-my-pi/pull/16378) by [@alphastorm](https://github.com/alphastorm))
 - Fixed `/move` path completion jumping into a subfolder on Tab: `..`, `.`, and `~` now complete to `../`, `./`, and `~/` before listing their children, a trailing `\` lists a folder on Windows, absolute Windows paths (`C:/…`) are no longer rewritten as relative paths, and the project directory is offered as `./` instead of `/`
 

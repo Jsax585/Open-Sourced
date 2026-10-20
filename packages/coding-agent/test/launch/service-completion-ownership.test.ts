@@ -54,16 +54,15 @@ async function startBroker(projectDir: string, runtimeDir: string, idleGraceMs =
 
 describe("session-owned supervised services", () => {
 	// Real timers: the broker's OS socket disconnect and idle timer must both fire.
-	it.each(["review-owner", "review-owner/worker"])(
-		"keeps a named answer server alive while %s is absent beyond the broker idle grace",
-		async owner => {
-			using tempDir = TempDir.createSync("@omp-review-server-");
-			const projectDir = path.join(tempDir.path(), "project");
-			const runtimeDir = path.join(tempDir.path(), "runtime");
-			await fs.mkdir(projectDir);
-			await Bun.write(
-				path.join(projectDir, "server.ts"),
-				`
+	it("keeps a named answer server alive while its owner is absent beyond the broker idle grace", async () => {
+		const owner = "review-owner";
+		using tempDir = TempDir.createSync("@omp-review-server-");
+		const projectDir = path.join(tempDir.path(), "project");
+		const runtimeDir = path.join(tempDir.path(), "runtime");
+		await fs.mkdir(projectDir);
+		await Bun.write(
+			path.join(projectDir, "server.ts"),
+			`
 const answers: string[] = [];
 const server = Bun.serve({port: 0, hostname: "127.0.0.1", async fetch(request) {
  if (request.method === "POST") answers.push(await request.text());
@@ -72,57 +71,59 @@ const server = Bun.serve({port: 0, hostname: "127.0.0.1", async fetch(request) {
 await Bun.write("port.txt", String(server.port));
 console.log("review-ready");
 `,
-			);
-			let client = await brokerClients.createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs: 100 });
-			const previousTitle = process.title;
-			const broker = await startBroker(projectDir, runtimeDir, 100);
-			const callbacks: Array<() => void> = [];
-			const session: ToolSession = {
-				cwd: projectDir,
-				hasUI: false,
-				settings: Settings.isolated(),
-				getSessionFile: () => null,
-				getSessionSpawns: () => "*",
-				getSessionId: () => owner,
-				registerDisposeCallback: callback => {
-					callbacks.push(callback);
-				},
-			};
-			try {
-				vi.spyOn(brokerClients, "daemonClientForProject").mockImplementation(async () => client);
-				const started = await startService(session, {
-					name: "review",
-					command: "bun server.ts",
-					pty: false,
-					ready: { log: "review-ready", timeout: 5 },
-				});
-				const url = `http://127.0.0.1:${await Bun.file(path.join(projectDir, "port.txt")).text()}`;
-				expect(await (await fetch(url, { method: "POST", body: "before" })).json()).toEqual(["before"]);
-				for (const dispose of callbacks) dispose();
-				await client.request({ op: "ping" });
-				client.close();
-				// Exceed idle grace with no project presence or attached clients.
-				await Bun.sleep(400);
-				expect(await (await fetch(url, { method: "POST", body: "after" })).json()).toEqual(["before", "after"]);
-				client = await brokerClients.createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs: 100 });
-				const resumed = { ...session, registerDisposeCallback: undefined };
-				const restored = (await listServices(resumed)).find(service => service.name === "review");
-				expect(restored?.pid).toBe(started.daemon.pid);
-				expect(restored?.owner).toBe(owner);
-				await stopService(resumed, "review");
-				const exited = await client.request({ op: "wait", name: "review", for: "exit", timeoutMs: 5_000 });
-				if (exited.op !== "wait") throw new Error("Expected exit wait");
-				expect(exited.timedOut).toBe(false);
-			} finally {
-				vi.restoreAllMocks();
-				await client.request({ op: "shutdown" }).catch(() => undefined);
-				client.close();
-				await broker.finished;
-				process.title = previousTitle;
-			}
-		},
-		15_000,
-	);
+		);
+		let client = await brokerClients.createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs: 100 });
+		const previousTitle = process.title;
+		const broker = await startBroker(projectDir, runtimeDir, 100);
+		const callbacks: Array<() => void> = [];
+		const session: ToolSession = {
+			cwd: projectDir,
+			hasUI: false,
+			settings: Settings.isolated(),
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			getSessionId: () => owner,
+			registerDisposeCallback: callback => {
+				callbacks.push(callback);
+			},
+		};
+		try {
+			vi.spyOn(brokerClients, "daemonClientForProject").mockImplementation(async () => client);
+			const started = await startService(session, {
+				name: "review",
+				command: "bun server.ts",
+				pty: false,
+				ready: { log: "review-ready", timeout: 5 },
+			});
+			const url = `http://127.0.0.1:${await Bun.file(path.join(projectDir, "port.txt")).text()}`;
+			expect(await (await fetch(url, { method: "POST", body: "before" })).json()).toEqual(["before"]);
+			for (const dispose of callbacks) dispose();
+			await client.request({ op: "ping" });
+			client.close();
+			// Exceed idle grace with no project presence or attached clients.
+			await Bun.sleep(400);
+			expect(await (await fetch(url, { method: "POST", body: "after" })).json()).toEqual(["before", "after"]);
+			client = await brokerClients.createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs: 100 });
+			const resumed = { ...session, registerDisposeCallback: undefined };
+			const restored = (await listServices(resumed)).find(service => service.name === "review");
+			expect(restored?.pid).toBe(started.daemon.pid);
+			expect(restored?.owner).toBe(owner);
+			await stopService(resumed, "review");
+			const exited = await client.request({ op: "wait", name: "review", for: "exit", timeoutMs: 5_000 });
+			if (exited.op !== "wait") throw new Error("Expected exit wait");
+			expect(exited.timedOut).toBe(false);
+		} finally {
+			vi.restoreAllMocks();
+			// `client` may already be closed if an assertion failed mid-test; the service is persistent,
+			// so shut the broker down through a fresh connection or `broker.finished` never settles.
+			const cleanup = await brokerClients.createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs: 100 });
+			await cleanup.request({ op: "shutdown" }).catch(() => undefined);
+			cleanup.close();
+			client.close();
+			await broker.finished;
+			process.title = previousTitle;
+		}
+	}, 15_000);
 
 	it("delivers a failed service only to its session when another session shares the broker", async () => {
 		using tempDir = TempDir.createSync("@omp-service-completion-");

@@ -248,8 +248,9 @@ export async function startService(
 				}
 			: undefined,
 		restart: "no",
-		// Named services outlive their owning session's client connection, including
-		// a restart whose restoration takes longer than the broker idle grace.
+		// Intentional: a named service outlives its owning session's client connection (a restart
+		// whose restoration outlasts the broker idle grace, or the session simply ending). Its
+		// broker stays up until the service exits or is stopped explicitly with `stopService`.
 		persist: true,
 		detached: false,
 	};
