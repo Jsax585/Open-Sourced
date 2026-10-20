@@ -47,12 +47,12 @@
 - Fixed native compaction token estimates counting opaque encrypted-state bytes as conversation text ([#16904](https://github.com/can1357/oh-my-pi/pull/16904) by [@eggpeat](https://github.com/eggpeat))
 - Fixed split-turn compaction leaving `session.compacting` context out of the turn-prefix summary ([#16707](https://github.com/can1357/oh-my-pi/pull/16707) by [@integrITsolutions](https://github.com/integrITsolutions))
 - Fixed compaction failing as a whole, and discarding the completed summary, when the optional short summary fails or returns no answer; the compaction now completes without a short summary, and cancellation still cancels it ([#16942](https://github.com/can1357/oh-my-pi/pull/16942) by [@Mouriya-Emma](https://github.com/Mouriya-Emma))
+- `Agent.buildSideRequestContext(llmMessages, systemPrompt?, signal?)` now accepts a callback for `systemPrompt`, read after the before-side-request hooks run, and an `AbortSignal` forwarded to those hooks, so a host that refreshes the prompt in a hook is seen by the request even when the caller pins a prompt of its own, and a cancelled side request unwinds instead of waiting on the hook; the request keeps the model that was active when the call started, so a `/model` change while a hook runs cannot swap its history or tools ([#11347](https://github.com/can1357/oh-my-pi/issues/11347), [#16453](https://github.com/can1357/oh-my-pi/pull/16453) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ## [18.12.4] - 2026-10-20
 
 ### Fixed
 
-- `Agent.buildSideRequestContext(llmMessages, systemPrompt?, signal?)` now accepts a callback for `systemPrompt`, read after the before-side-request hooks run, and an `AbortSignal` forwarded to those hooks, so a host that refreshes the prompt in a hook is seen by the request even when the caller pins a prompt of its own, and a cancelled side request unwinds instead of waiting on the hook; the request keeps the model that was active when the call started, so a `/model` change while a hook runs cannot swap its history or tools ([#11347](https://github.com/can1357/oh-my-pi/issues/11347), [#16453](https://github.com/can1357/oh-my-pi/pull/16453) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 - Enabled native compaction for supported Bedrock Claude models ([#16343](https://github.com/can1357/oh-my-pi/pull/16343) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy))
 
 ## [18.12.3] - 2026-10-19
