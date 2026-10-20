@@ -126,6 +126,58 @@ describe("ModelRegistry lazy bundled composition", () => {
 		expect(available()).toEqual([]);
 	});
 
+	test("availability keeps implicit providers last across the full-snapshot transition", async () => {
+		const auth = await AuthStorage.create(":memory:");
+		authStorages.push(auth);
+		const registry = new ModelRegistry(auth, undefined, { ignoreLocalModelConfig: true });
+		const model = {
+			id: "same-name",
+			name: "Same Name",
+			reasoning: false,
+			input: ["text" as const],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 8192,
+			maxTokens: 1024,
+		};
+		const config = { baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", api: "openai-completions" as const };
+		registry.registerProvider("ollama", { ...config, models: [model] }, "ext://order-fixture");
+		registry.registerProvider("zz-review-fixture", { ...config, models: [model] }, "ext://order-fixture");
+		const providers = () =>
+			registry
+				.getAvailableForProviders(new Set(["ollama", "zz-review-fixture"]))
+				.map(candidate => candidate.provider);
+		const lazy = providers();
+		expect(lazy).toEqual(["zz-review-fixture", "ollama"]);
+		registry.getAll();
+		expect(providers()).toEqual(lazy);
+	});
+
+	test("availability cache is invalidated for mixed-case provider ids", async () => {
+		const auth = await AuthStorage.create(":memory:");
+		authStorages.push(auth);
+		const registry = new ModelRegistry(auth, undefined, { ignoreLocalModelConfig: true });
+		const config = { baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", api: "openai-completions" as const };
+		const withModel = (id: string) => ({
+			...config,
+			models: [
+				{
+					id,
+					name: id,
+					reasoning: false,
+					input: ["text" as const],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 8192,
+					maxTokens: 1024,
+				},
+			],
+		});
+		registry.registerProvider("Acme", withModel("first"), "ext://case-fixture");
+		const available = () => registry.getAvailableForProviders(new Set(["acme"])).map(model => model.id);
+		expect(available()).toEqual(["first"]);
+		registry.registerProvider("Acme", withModel("second"), "ext://case-fixture");
+		expect(available()).toEqual(["second"]);
+	});
+
 	test("query order preserves ordering, snapshots, and model identity", async () => {
 		const createRegistry = async (name: string, maskTypeSafeEnvAuth = false): Promise<ModelRegistry> => {
 			const tempDir = TempDir.createSync(`@model-registry-lazy-${name}-`);
