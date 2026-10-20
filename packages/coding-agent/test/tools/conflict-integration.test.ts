@@ -399,6 +399,34 @@ describe("read surfaces conflicts as a warning footer", () => {
 		expect(cutText).toMatch(/#\d+\s+L6-10/);
 	});
 
+	it("`:conflicts` keeps BOMs inside the file as text, dropping only the leading one", async () => {
+		const filePath = path.join(tempDir, "bom.ts");
+		const content = [
+			"\uFEFFhead",
+			"<<<<<<< a",
+			"\uFEFFours",
+			"=======",
+			"theirs",
+			">>>>>>> b",
+			"\uFEFF<<<<<<< not-a-marker",
+			"x",
+			"=======",
+			"y",
+			">>>>>>> not-a-marker",
+			"",
+		].join("\n");
+		await Bun.write(filePath, content);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		const listing = getText(await read.execute("read-bom", { path: "bom.ts:conflicts" }));
+		expect(listing).toContain("1 unresolved conflict in bom.ts");
+		expect(listing).toMatch(/#1\s+L2-6/);
+		await write.execute("write-bom", { path: "conflict://1", content: "@ours" });
+		expect(await Bun.file(filePath).text()).toContain("head\n\uFEFFours\n\uFEFF<<<<<<< not-a-marker\n");
+	});
+
 	it("window-mode warning shows visible-of-total when window misses some conflicts", async () => {
 		const filePath = path.join(tempDir, "wide.ts");
 		await Bun.write(filePath, TWO_BLOCKS);

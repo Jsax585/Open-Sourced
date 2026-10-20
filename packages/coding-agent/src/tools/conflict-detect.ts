@@ -193,12 +193,17 @@ export async function scanFileForConflicts(
 	// A scan of at most 10 MiB already keeps no more than it reads; only a longer one needs the budget.
 	const budget = maxBytes > SCAN_FILE_MAX_RETAINED ? SCAN_FILE_MAX_RETAINED : Number.POSITIVE_INFINITY;
 	const scanner = new ConflictScanner(1, budget);
-	const decoder = new TextDecoder("utf-8", { fatal: false });
+	// Each line decodes on its own: keep BOMs inside the file, as a whole-file
+	// decode does, and drop only the file's leading one below.
+	const decoder = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
 	// The sink's sync framing, not `readLines`: an async yield per line triples the scan time.
 	const sink = new ConcatSink();
+	let leading = true;
 	for await (const chunk of (truncated ? file.slice(0, maxBytes) : file).stream()) {
 		options.signal?.throwIfAborted();
-		for (const line of sink.appendAndFlushLines(chunk, SCAN_FILE_MAX_RETAINED)) {
+		const bom = leading && chunk[0] === 0xef && chunk[1] === 0xbb && chunk[2] === 0xbf;
+		leading = false;
+		for (const line of sink.appendAndFlushLines(bom ? chunk.subarray(3) : chunk, SCAN_FILE_MAX_RETAINED)) {
 			scanner.push(decoder.decode(line), line.length + 1);
 		}
 	}
