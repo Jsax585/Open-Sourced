@@ -4,7 +4,11 @@
 
 ### Added
 
-- Added Hare support to the built-in `gdb` DAP adapter: `.ha` files in Hare projects now select `gdb -i dap` for launch and attach debugging ([#16503](https://github.com/can1357/oh-my-pi/pull/16503) by [@jgarte](https://github.com/jgarte))
+- Added Hare to the built-in `gdb` DAP adapter: launching a `.ha` target now selects `gdb -i dap` ([#16503](https://github.com/can1357/oh-my-pi/pull/16503) by [@jgarte](https://github.com/jgarte))
+
+### Changed
+
+- Launching a source file (e.g. `.c`, `.rs`, `.ha`) that selects a native debugger (`gdb`, `lldb-dap`, `codelldb`) now fails upfront with build guidance instead of surfacing the adapter's `not in executable format` error after spawning the adapter ([#16503](https://github.com/can1357/oh-my-pi/pull/16503) by [@jgarte](https://github.com/jgarte))
 
 ### Fixed
 
