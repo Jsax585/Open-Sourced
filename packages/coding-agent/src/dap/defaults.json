@@ -2,8 +2,8 @@
 	"gdb": {
 		"command": "gdb",
 		"args": ["-i", "dap"],
-		"languages": ["c", "cpp", "rust"],
-		"fileTypes": [".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".rs"],
+		"languages": ["c", "cpp", "rust", "hare"],
+		"fileTypes": [".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".rs", ".ha"],
 		"rootMarkers": ["Makefile", "CMakeLists.txt", "Cargo.toml", "compile_commands.json"],
 		"launchDefaults": {
 			"request": "launch",
