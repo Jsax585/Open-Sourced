@@ -416,6 +416,7 @@ export class Agent {
 	};
 	#tokenizer = new Tokenizer(this.#state.model);
 	#activeRequest?: { model: Model; toolChoice?: ToolChoice; tools?: Context["tools"] };
+	#lastRequestDropsOwnThinking: boolean | undefined;
 	#listeners = new Set<(e: AgentEvent) => void>();
 	#queueListeners = new Set<() => void>();
 	#abortController?: AbortController;
@@ -871,6 +872,16 @@ export class Agent {
 			this.#syncTokenizer(model);
 		}
 		return this.#tokenizer;
+	}
+
+	/**
+	 * Whether the most recent provider request dropped the model's own prior
+	 * thinking ({@link Tokenizer.dropsOwnThinking} for that request). Survives
+	 * the turn end that resets {@link tokenizer}, so the usage the request
+	 * reported can be recorded with the state it was billed in.
+	 */
+	get lastRequestDropsOwnThinking(): boolean | undefined {
+		return this.#lastRequestDropsOwnThinking;
 	}
 
 	/** Count a pending forced-tool prompt without changing the tokenizer kept for subsequent turns. */
@@ -2000,6 +2011,7 @@ export class Agent {
 			syncTokenizerForRequest: request => {
 				this.#activeRequest = request;
 				this.#syncTokenizer(request.model);
+				this.#lastRequestDropsOwnThinking = this.#tokenizer.dropsOwnThinking;
 			},
 			softToolRequirementState: this.#softToolRequirementState,
 			onToolChoiceRejected: () => {
