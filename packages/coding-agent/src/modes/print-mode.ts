@@ -380,12 +380,17 @@ async function runPrintModeCore(
 	stopReceiving();
 	if (receivingEnabled) await session.waitForIdle();
 	await disposeMessaging();
-	if (!receivingEnabled || !dispatched) assistantMsg = session.getLastAssistantMessage();
 
 	// From this point onward a late blocker must be recorded without starting a
 	// primary turn whose response print mode would never emit.
 	session.prepareForHeadlessAdvisorDrain();
 	await session.waitForIdle();
+
+	// Read via the session accessor, not the raw state tail: a classifier
+	// refusal is pruned from active context at settle, and an aborted turn
+	// can trail synthetic tool results — both would hide the terminal
+	// assistant message (and its error) from a last-element read.
+	if (!receivingEnabled || !dispatched) assistantMsg = session.getLastAssistantMessage();
 
 	// The terminal stop reason decides the process exit code in every output
 	// mode: `--mode json` used to report success for the same turn-fatal error
