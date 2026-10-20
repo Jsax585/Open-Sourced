@@ -37,8 +37,11 @@ describe("MCP bridge resource links", () => {
 
 		// A dropped link leaves the model an empty result with nothing to follow up on.
 		expect(text).toContain("file:///project/docs/setup.md");
+		expect(text).toContain("text/markdown");
 		expect(text).toContain("Setup guide");
 		expect(text).toContain("How to install and configure the project");
 		expect(text).toContain("file:///project/docs/api.md");
+		// The bare name is its own line; the URI above already contains "api.md".
+		expect(text.split("\n")).toContain("api.md");
 	});
 });
