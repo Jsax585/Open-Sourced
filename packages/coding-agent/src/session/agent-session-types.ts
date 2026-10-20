@@ -238,6 +238,12 @@ export interface AgentSessionConfig {
 	getEvalPreludes?: () => readonly EvalPreludeDefinition[];
 	/** Tool bridge context used by user-initiated Python cells to project enabled eval preludes. */
 	evalToolSession?: ToolSession;
+	/**
+	 * Paths of the context files the initial system prompt renders; each
+	 * rebuild's {@link rebuildSystemPrompt} result replaces them. On-touch
+	 * loading skips any file listed.
+	 */
+	promptContextFiles?: readonly string[];
 	/** Loaded skills already discovered by the SDK. */
 	skills?: Skill[];
 	/** Frozen routing hints shared with the system prompt and later skillful notices. */
@@ -326,7 +332,11 @@ export interface AgentSessionConfig {
 	rebuildSystemPrompt?: (
 		toolNames: string[],
 		tools: Map<string, AgentTool>,
-	) => Promise<{ systemPrompt: string[]; xdevCatalogNames?: readonly string[] }>;
+	) => Promise<{
+		systemPrompt: string[];
+		xdevCatalogNames?: readonly string[];
+		contextFilePaths?: readonly string[];
+	}>;
 	/** Tools mounted under `xd://`, for `/tools` display. */
 	getXdevToolEntries?: () => Array<{ name: string; summary: string }>;
 	/** `xd://` presentation state backed by the canonical tool map. */

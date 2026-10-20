@@ -16,6 +16,7 @@
 
 ### Added
 
+- `contextFiles.onTouch` (off by default) loads a subdirectory's `AGENTS.md` / `CLAUDE.md` the first time `read`, `write`, `edit` (or `apply_patch`) or `ast_edit` touches a file below it, directly or from an `eval` script, as a developer message after the tool batch. Each file loads once per context window, is capped at 16,384 characters, and loads again after compaction drops it. Subagents inherit the non-`AGENTS.md` files their parent has loaded or read in full. See [Loading nested files on touch](../../docs/context-files.md#loading-nested-files-on-touch) ([#15393](https://github.com/can1357/oh-my-pi/pull/15393) by [@ryan-bert](https://github.com/ryan-bert))
 - Added the **Ask and remember** approval mode (`tools.approvalMode: always-ask-cached`, `--approval-mode always-ask-cached`): it also asks before file reads, and file prompts can remember the folder or the file, for this session or across sessions, through `approval-cache.db` ([#16049](https://github.com/can1357/oh-my-pi/pull/16049) by [@Peribunt](https://github.com/Peribunt))
 - Added `/forget-approvals` to forget every file and folder approval Ask and remember has recorded ([#16049](https://github.com/can1357/oh-my-pi/pull/16049) by [@Peribunt](https://github.com/Peribunt))
 - Extension `ui.approve()` hosts can render the new `prompt.grants` choices and answer `{ grant, always }`; hosts that ignore them keep answering `once`/`session`/`deny` ([#16049](https://github.com/can1357/oh-my-pi/pull/16049) by [@Peribunt](https://github.com/Peribunt))

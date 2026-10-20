@@ -1,0 +1,857 @@
+/**
+ * On-touch loading of nested context files (`contextFiles.onTouch`).
+ *
+ * The system prompt carries the context files of cwd and its ancestors. A
+ * subdirectory's own AGENTS.md (or CLAUDE.md, …) is only listed there by path.
+ * With the setting on, the first successful read/write/edit/ast_edit below
+ * such a directory delivers that file as trusted passive context: a developer
+ * message after the tool batch, never part of the tool result. A file at a
+ * workspace root that the prompt was built without (created since) loads the
+ * same way.
+ *
+ * Dedupe state is the conversation itself: a file is loaded when it is one of
+ * the context files the session's system prompt is built from, or the live
+ * context still holds its `<nested-context path="…">` block in a developer
+ * message (keyed by absolute path, so a cwd change cannot alias it) with the
+ * body the file would be delivered with now, or a full read of it without `@`
+ * imports whose result still shows every line of the file as it is now.
+ * Comparing content means a block-shaped string elsewhere (tool output, a
+ * reminder quoting model text) never stands in for the file, and a file edited
+ * since it was delivered or read loads again, even within the batch that edits
+ * it. Compaction that drops the block re-arms the file without bookkeeping.
+ * Subagents inherit the parent's loaded files, delivered or fully read, through
+ * {@link NestedContextInjector.carried}, which lands them in the child's system
+ * prompt and so in its context files.
+ */
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import {
+	ASIDE_MESSAGE_DISCARD,
+	type AfterToolCallContext,
+	type AgentMessage,
+	type AgentToolContext,
+	type AgentToolResult,
+	type CommittableAsideMessage,
+	createAdditionalContextMessage,
+} from "@oh-my-pi/pi-agent-core";
+import { isRecord, isStrictlyWithinNormalizedRoot, logger, prompt } from "@oh-my-pi/pi-utils";
+import { invalidate as invalidateCapabilityCache } from "../capability";
+import { type ContextFile, contextFileCapability } from "../capability/context-file";
+import type { Settings } from "../config/settings";
+import { loadCapability } from "../discovery";
+import { expandAtImports } from "../discovery/at-imports";
+import nestedContextFileTemplate from "../prompts/system/nested-context-file.md" with { type: "text" };
+import nestedContextTruncatedTemplate from "../prompts/system/nested-context-truncated.md" with { type: "text" };
+import type { ContextFileEntry } from "../tools";
+import { cfgContextFilesOnTouch } from "./context-settings";
+
+/** Tools whose successful results count as touching a directory. */
+const TRIGGER_TOOLS: Record<string, true> = { read: true, write: true, edit: true, ast_edit: true };
+/** Characters of one context file delivered before it is truncated. */
+export const NESTED_CONTEXT_FILE_MAX_CHARS = 16_384;
+/** Directory names whose context files never load on touch, besides hidden ones. */
+const EXCLUDED_SEGMENTS: Record<string, true> = { node_modules: true };
+const NOTICE_SOURCE = "context-files";
+
+/**
+ * One delivered block. The body capture relies on the template's shape: a
+ * single header line and a blank line before the file content.
+ */
+const BLOCK_RE = /<nested-context path="([^"]+)">\n[^\n]*\n\n([\s\S]*?)\n<\/nested-context>/g;
+
+/** Capabilities the injector borrows from its owning session. */
+export interface NestedContextHost {
+	settings: Settings;
+	/** Session cwd; its context files and its ancestors' are already in the system prompt. */
+	cwd(): string;
+	/** Additional workspace roots, whose context files are also in the system prompt. */
+	additionalDirectories(): readonly string[];
+	/**
+	 * Absolute paths of the context files the current system prompt was built
+	 * from, every workspace root's included. Read structurally, never from the
+	 * prompt text, which file bodies can spoof, and never rediscovered, since a
+	 * file created after the build is not in the prompt.
+	 */
+	promptContextFiles(): readonly string[];
+	/** The live window, for calls that run outside the agent loop. */
+	window(): readonly AgentMessage[];
+	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
+}
+
+interface NestedContextFile {
+	/** Absolute path of the context file. */
+	path: string;
+	/** Directory the file governs, at or below a workspace root. */
+	owner: string;
+	/** The file as stored, before `@` imports expand. */
+	raw: string;
+	/** The file with `@` imports expanded. */
+	content: string;
+}
+
+/** One settled call that may touch a nested directory. */
+interface Touch {
+	toolName: string;
+	args: unknown;
+	details: unknown;
+	/** The result content the model sees, which must still show a full read's lines. */
+	content: unknown;
+	/** The batch whose developer message the call's blocks join. */
+	batch: BatchState;
+	messages: readonly AgentMessage[];
+	/** A script's call (eval's `tool.*`): its result stays in the script unless the script prints it. */
+	hidden?: boolean;
+}
+
+/** A claimed block awaiting delivery. */
+interface QueuedBlock {
+	path: string;
+	block: string;
+	/** Path relative to cwd, for the notice. */
+	display: string;
+	/** The directory the file governs. */
+	owner: string;
+	/** Path segments of the owning directory: shallower files are delivered first. */
+	depth: number;
+	/** The file as a whole read shows it, when that is what the block holds: it has no `@` imports. */
+	shown: string | undefined;
+	/** Order of the touch whose discovery rendered the block: a later discovery renders it again. */
+	touch: number;
+}
+
+/**
+ * The tool calls of one assistant message, which settle in any order. Blocks
+ * queue when claimed, so the queue keeps every file after its ancestors, and
+ * the last call to settle hands the whole queue over, so every call has
+ * contributed its claims and full reads first.
+ */
+interface BatchState {
+	key: string;
+	/** For a batch of out-of-loop calls: the newest message before their response, which identifies it. */
+	owner?: AgentMessage;
+	/** Calls registered through `beforeToolCall`, with the tool each dispatches to. */
+	registered: Map<string, string>;
+	/** Calls past `beforeToolCall` whose `afterToolCall` has not run. */
+	outstanding: Set<string>;
+	/** A call has settled, so preflight is over: the next `beforeToolCall` starts another batch. */
+	executing: boolean;
+	/** Files claimed for delivery. */
+	claimed: Set<string>;
+	/** Context files a read of this batch showed whole, with the text it showed. */
+	fullReads: Map<string, string>;
+	/** Files an edit of this batch changed, with the order of the newest such touch. */
+	edits: Map<string, number>;
+	queue: QueuedBlock[];
+}
+
+/**
+ * Key of a batch for out-of-loop calls (Cursor exec). Tool-call ids never
+ * contain a NUL, so it never matches a loop batch's key.
+ */
+const BRIDGED_BATCH_KEY = "\0bridged";
+
+/** A batch's identity: the tool-call ids of its assistant message. */
+function toolCallKey(message: AgentMessage | undefined): string {
+	const ids =
+		message?.role === "assistant" ? message.content.flatMap(part => (part.type === "toolCall" ? [part.id] : [])) : [];
+	return ids.join("\n");
+}
+
+/** Delivers subdirectory context files the first time a tool touches their directory. */
+export class NestedContextInjector {
+	readonly #host: NestedContextHost;
+	#batch: BatchState | undefined;
+	/** Bridged calls between their preflight and postflight: tool name and final arguments. */
+	readonly #bridged = new Map<string, { toolName: string; args: unknown }>();
+	/** Touches so far, in the order they began: orders discoveries that overlap an edit. */
+	#touches = 0;
+
+	constructor(host: NestedContextHost) {
+		this.#host = host;
+	}
+
+	/**
+	 * Registers a loop call that will settle through {@link afterToolCall}. The
+	 * loop runs this for every call that passed validation before any executes.
+	 * `toolName` is the tool the call dispatches to: a custom-format call keeps
+	 * its wire name (`apply_patch` for `edit`) in the message.
+	 */
+	beforeToolCall(assistantMessage: AgentMessage, toolCallId: string, toolName: string): void {
+		if (!cfgContextFilesOnTouch.get(this.#host.settings)) return;
+		let batch = this.#batchFor(assistantMessage);
+		// Some providers rebuild ids from position, so a later run can repeat a
+		// settled batch's key with a different subset of valid calls. Preflight
+		// runs for the whole message before any call executes, so one after a
+		// call settled, or an id registering twice, means a new batch.
+		if (batch.executing || batch.registered.has(toolCallId)) batch = this.#newBatch(batch.key);
+		batch.registered.set(toolCallId, toolName);
+		batch.outstanding.add(toolCallId);
+	}
+
+	/**
+	 * Passive context for a settled tool call: the batch's queued blocks, once no
+	 * other call is outstanding. Returns undefined synchronously when the call
+	 * cannot touch a nested directory and has nothing to hand over, so most calls
+	 * never await.
+	 */
+	afterToolCall(ctx: AfterToolCallContext): Promise<string | undefined> | undefined {
+		if (!cfgContextFilesOnTouch.get(this.#host.settings)) return undefined;
+		const batch = this.#batchFor(ctx.assistantMessage);
+		const id = ctx.toolCall.id;
+		const own = ctx.isError
+			? undefined
+			: this.#touch({
+					toolName: batch.registered.get(id) ?? ctx.toolCall.name,
+					args: ctx.args,
+					details: ctx.result.details,
+					content: ctx.result.content,
+					batch,
+					messages: ctx.context.messages,
+				});
+		if (own) return own.then(() => this.#settle(batch, id));
+		const text = this.#settle(batch, id);
+		return text === undefined ? undefined : Promise.resolve(text);
+	}
+
+	/** Records a call issued outside the agent loop (eval's `tool.*`, Cursor exec) once its arguments are final. */
+	beforeBridgedToolCall(toolCallId: string, toolName: string, args: unknown): void {
+		if (!cfgContextFilesOnTouch.get(this.#host.settings) || TRIGGER_TOOLS[toolName] !== true) return;
+		this.#bridged.set(toolCallId, { toolName, args });
+	}
+
+	/**
+	 * Loads context for a settled bridged call. Inside a running batch (eval's
+	 * `tool.*`) its blocks queue for the loop call that issued it, so they arrive
+	 * as a developer message rather than inside a script's return value. With no
+	 * batch running (Cursor exec), the call's own context sink delivers them. Only
+	 * a bridge that marks its context `bridgedResultShown` puts the call's result
+	 * in front of the model; any other bridge's result is hidden.
+	 */
+	async afterBridgedToolCall(
+		toolCallId: string,
+		result: AgentToolResult,
+		isError: boolean,
+		context?: AgentToolContext,
+	): Promise<void> {
+		const call = this.#bridged.get(toolCallId);
+		this.#bridged.delete(toolCallId);
+		if (!call || isError) return;
+		const messages = this.#host.window();
+		const batch = this.#bridgedBatch(messages);
+		await this.#touch({
+			...call,
+			details: result.details,
+			content: result.content,
+			batch,
+			messages,
+			hidden: context?.bridgedResultShown !== true,
+		});
+		if (batch.outstanding.size > 0 || !context?.addAdditionalContext) return;
+		const text = this.#drain(batch);
+		if (text) context.addAdditionalContext(text);
+	}
+
+	cancelBridgedToolCall(toolCallId: string): void {
+		this.#bridged.delete(toolCallId);
+	}
+
+	/**
+	 * Forgets every batch and bridged call: the conversation they belonged to is
+	 * gone (`/new`, a session switch, tree navigation, a context reset), so blocks
+	 * it queued must not reach the next one.
+	 */
+	reset(): void {
+		this.#batch = undefined;
+		this.#bridged.clear();
+	}
+
+	/**
+	 * Blocks a finished batch never handed over, as a developer message for the
+	 * step boundary after it. A call the loop skipped or aborted (a steered-past
+	 * `wait`) never reaches {@link afterToolCall}, so its batch never settles;
+	 * the boundary poll runs once every call has finished, before the next
+	 * request. A message the loop drops unsent puts its blocks back in the queue.
+	 */
+	takeStranded(): CommittableAsideMessage | null {
+		const batch = this.#batch;
+		if (!batch || batch.queue.length === 0) return null;
+		batch.outstanding.clear();
+		batch.executing = true;
+		const queued = [...batch.queue];
+		const text = this.#drain(batch);
+		if (text === undefined) return null;
+		return {
+			...createAdditionalContextMessage(text),
+			[ASIDE_MESSAGE_DISCARD]: () => {
+				const current = this.#batch;
+				if (!current) return;
+				for (const block of queued) current.claimed.add(block.path);
+				current.queue.unshift(...queued);
+			},
+		};
+	}
+
+	#batchFor(message: AgentMessage | undefined): BatchState {
+		// The loop and the session's message list can hold different copies of the message.
+		const key = toolCallKey(message);
+		return this.#batch?.key === key ? this.#batch : this.#newBatch(key);
+	}
+
+	/**
+	 * The batch a bridged call joins. Eval's `tool.*` runs inside the loop call
+	 * that issued it, so it joins that call's batch while the call is
+	 * outstanding. Cursor exec runs before its response joins the window, so the
+	 * newest assistant message there is the previous response, whose batch has
+	 * handed its blocks over and whose claims a compaction may since have made
+	 * stale. Each response's out-of-loop calls share a batch of their own, owned
+	 * by that previous message object (the window's first message before any
+	 * response): every response follows a different one, even a text-only one
+	 * with no tool-call ids to tell it apart.
+	 */
+	#bridgedBatch(messages: readonly AgentMessage[]): BatchState {
+		const previous = messages.findLast(message => message.role === "assistant");
+		const current = this.#batch;
+		if (current?.key === toolCallKey(previous) && current.outstanding.size > 0) return current;
+		const owner = previous ?? messages[0];
+		if (current?.key === BRIDGED_BATCH_KEY && current.owner === owner) return current;
+		return this.#newBatch(BRIDGED_BATCH_KEY, owner);
+	}
+
+	#newBatch(key: string, owner?: AgentMessage): BatchState {
+		// Blocks a batch could not hand over (a call never settled) move on with their claims.
+		const queue = this.#batch?.queue ?? [];
+		this.#batch = {
+			key,
+			owner,
+			registered: new Map(),
+			outstanding: new Set(),
+			executing: false,
+			claimed: new Set(queue.map(queued => queued.path)),
+			fullReads: new Map(),
+			edits: new Map(),
+			queue,
+		};
+		return this.#batch;
+	}
+
+	#touch(touch: Touch): Promise<void> | undefined {
+		if (TRIGGER_TOOLS[touch.toolName] !== true) return undefined;
+		const { batch } = touch;
+		const order = ++this.#touches;
+		// A whole read of a context file puts it in context: tool results precede
+		// the batch's developer message. Recorded before any await, and checked
+		// again when the queue is handed over, so a parallel call cannot claim the
+		// file first. A script's read reaches the model only if the script prints
+		// it, so it does not count.
+		const shown = touch.toolName === "read" && !touch.hidden ? fullRead(touch.details, touch.content) : undefined;
+		if (shown) batch.fullReads.set(shown.path, shown.text);
+		const cwd = path.resolve(this.#host.cwd());
+		const edited = editedFiles(touch, cwd);
+		// Discovery reads through the capability fs cache, which would still hold
+		// the directory listing and content from before this edit.
+		for (const file of edited) invalidateCapabilityCache(file);
+		const targets = touchedTargets(touch, cwd, edited);
+		if (edited.length > 0) targets.push(...this.#reopen(batch, edited, order));
+		const roots = this.#roots(cwd);
+		// A known file only touches its parent; an unknown target may be a directory itself.
+		const reachable = targets.some(
+			target => rootOf(roots, target.isDirectory === false ? path.dirname(target.path) : target.path) !== undefined,
+		);
+		if (!reachable) return undefined;
+		return this.#load(touch, order, cwd, roots, targets);
+	}
+
+	/**
+	 * Re-opens the batch's queue to an edit, before any await: each queued block
+	 * holds its file as it was when discovered. An edited file loses its block
+	 * and claim, so the edit's own discovery claims it as it is now, or not at
+	 * all once moved or deleted. Every other queued block's directory is probed
+	 * again, since editing a file one imports changes it too; returns those.
+	 */
+	#reopen(batch: BatchState, edited: readonly string[], order: number): TouchedTarget[] {
+		for (const file of edited) {
+			batch.edits.set(file, order);
+			const index = batch.queue.findIndex(queued => queued.path === file);
+			if (index === -1) continue;
+			batch.queue.splice(index, 1);
+			batch.claimed.delete(file);
+		}
+		return batch.queue.map(queued => ({ path: queued.owner, isDirectory: true }));
+	}
+
+	/** Workspace roots: cwd and the additional directories, whose own context files the system prompt was built with. */
+	#roots(cwd: string): string[] {
+		return [cwd, ...this.#host.additionalDirectories().map(dir => path.resolve(dir))];
+	}
+
+	async #load(
+		touch: Touch,
+		order: number,
+		cwd: string,
+		roots: readonly string[],
+		targets: readonly TouchedTarget[],
+	): Promise<void> {
+		let files: NestedContextFile[];
+		let inPrompt: ReadonlySet<string>;
+		try {
+			const directories = (await Promise.all(targets.map(touchedDirectory))).filter(
+				dir => rootOf(roots, dir) !== undefined,
+			);
+			if (directories.length === 0) return;
+			files = await this.#discover(directories, roots);
+			if (files.length === 0) return;
+			inPrompt = new Set(this.#host.promptContextFiles());
+		} catch (error) {
+			logger.warn("Nested context discovery failed", { error: String(error) });
+			return;
+		}
+
+		const { batch } = touch;
+		const window = scanWindow(touch.messages);
+		// Claims and queueing stay synchronous, so the queue is in claim order.
+		for (const file of files) {
+			// A discovery that began before an edit of the file may have read it as it
+			// was, even once moved or deleted; the edit's own discovery decides it.
+			if (inPrompt.has(file.path) || (batch.edits.get(file.path) ?? 0) > order) continue;
+			// A block an earlier discovery queued is rendered again: the file is as of now.
+			const index = batch.queue.findIndex(queued => queued.path === file.path);
+			const queued = index === -1 ? undefined : batch.queue[index];
+			if (batch.claimed.has(file.path) && (queued === undefined || queued.touch > order)) continue;
+			// A raw read shows `@` imports unexpanded, so it only stands in for a file without them.
+			const shown = file.content === file.raw ? readText(file.raw) : undefined;
+			const block = renderBlock(cwd, file);
+			const held =
+				(shown !== undefined &&
+					(window.fullReads.get(file.path) === shown || batch.fullReads.get(file.path) === shown)) ||
+				window.blocks.get(file.path) === blockBody(block);
+			if (queued !== undefined) {
+				if (held) {
+					batch.queue.splice(index, 1);
+					batch.claimed.delete(file.path);
+				} else {
+					batch.queue[index] = { ...queued, block, shown, touch: order };
+				}
+				continue;
+			}
+			if (held) continue;
+			batch.claimed.add(file.path);
+			batch.queue.push({
+				path: file.path,
+				block,
+				display: displayPath(cwd, file.path),
+				owner: file.owner,
+				depth: segmentCount(file.owner),
+				shown,
+				touch: order,
+			});
+		}
+	}
+
+	/** Marks `id` settled; hands over the queue once no call of the batch is outstanding. */
+	#settle(batch: BatchState, id: string): string | undefined {
+		batch.executing = true;
+		batch.outstanding.delete(id);
+		return batch.outstanding.size > 0 ? undefined : this.#drain(batch);
+	}
+
+	/**
+	 * The queued blocks, shallowest first, less files a call of the batch read
+	 * whole after another claimed them. Calls on disjoint branches claim in I/O
+	 * order, so claim order alone can put a deep file ahead of a shallow one. The
+	 * sort is stable: within a directory, files keep capability order.
+	 */
+	#drain(batch: BatchState): string | undefined {
+		const delivered = batch.queue
+			.splice(0)
+			.filter(queued => queued.shown === undefined || batch.fullReads.get(queued.path) !== queued.shown)
+			.sort((a, b) => a.depth - b.depth);
+		if (delivered.length === 0) return undefined;
+		this.#host.emitNotice("info", `Loaded ${delivered.map(queued => queued.display).join(", ")}`, NOTICE_SOURCE);
+		return delivered.map(queued => queued.block).join("\n\n");
+	}
+
+	/**
+	 * Context files governing `directories`, shallowest first, each once.
+	 * Discovery is the context-file capability itself, run from each touched
+	 * directory and every ancestor up to its workspace root, the root included,
+	 * since a file created there after the prompt was built is in no prompt; the
+	 * caller drops the files the prompt has. Each probe contributes only the
+	 * files of its own directory: some providers look nowhere else, so only the
+	 * exact probe sees every candidate. Provider priority, one-file-per-directory
+	 * shadowing and `contextFiles.extra` ordering are then exactly as the system
+	 * prompt has them for that directory.
+	 */
+	async #discover(directories: readonly string[], roots: readonly string[]): Promise<NestedContextFile[]> {
+		// Each probe, with the workspace root it sits at or below.
+		const probes = new Map<string, string>();
+		for (const dir of directories) {
+			const root = rootOf(roots, dir);
+			if (root === undefined) continue;
+			for (let current = dir; isAtOrBelow(root, current); current = path.dirname(current)) {
+				probes.set(current, root);
+			}
+		}
+		let files: Omit<NestedContextFile, "content">[] = [];
+		for (const [owner, root] of probes) {
+			if (isExcludedDirectory(path.relative(root, owner))) continue;
+			const result = await loadCapability<ContextFile>(contextFileCapability.id, { cwd: owner });
+			for (const item of result.items) {
+				// Depth counts levels above the probe; files in its own config folders report -1.
+				if (item.level !== "project" || (item.depth ?? 0) > 0) continue;
+				files.push({ path: item.path, owner, raw: item.content });
+			}
+		}
+		const realRoots = await Promise.all(roots.map(root => fs.realpath(root).catch(() => root)));
+		const allowed = await Promise.all(files.map(file => isProjectContext(file, realRoots)));
+		files = files.filter((_, index) => allowed[index]);
+		// Stable: within a directory, capability order (the winner, then additive extras).
+		files.sort((a, b) => segmentCount(a.owner) - segmentCount(b.owner) || a.owner.localeCompare(b.owner));
+		return Promise.all(files.map(async file => ({ ...file, content: await expandAtImports(file.raw, file.path) })));
+	}
+
+	/**
+	 * Context files the live window holds, as system-prompt context file entries
+	 * for a subagent: delivered blocks with the content as delivered, and full
+	 * reads of a context file with the content discovery loads (the read result
+	 * itself carries line prefixes). Discovery decides which window paths are
+	 * context files, and a block counts only while its body is the one the file
+	 * would be delivered with now, as for touches. Files the parent's system
+	 * prompt has are left to the child's own discovery. Shallowest first and in
+	 * capability order within a directory, as the system prompt keeps them, not
+	 * in the order the window gained them. Each carries a negative depth, levels
+	 * below the root it sits under, so the child's prompt ranks it after every
+	 * file at or above that root. Empty with the setting off.
+	 */
+	async carried(messages: readonly AgentMessage[]): Promise<ContextFileEntry[]> {
+		if (!cfgContextFilesOnTouch.get(this.#host.settings)) return [];
+		const cwd = path.resolve(this.#host.cwd());
+		const roots = this.#roots(cwd);
+		const window = scanWindow(messages);
+		const owners = new Set<string>();
+		for (const filePath of [...window.blocks.keys(), ...window.fullReads.keys()]) {
+			const owner = ownerDirectory(filePath);
+			if (rootOf(roots, owner) !== undefined) owners.add(owner);
+		}
+		if (owners.size === 0) return [];
+		let files: NestedContextFile[];
+		try {
+			files = await this.#discover([...owners], roots);
+		} catch (error) {
+			logger.warn("Nested context discovery failed", { error: String(error) });
+			return [];
+		}
+		const inPrompt = new Set(this.#host.promptContextFiles());
+		const carried: ContextFileEntry[] = [];
+		for (const file of files) {
+			if (inPrompt.has(file.path)) continue;
+			const delivered = window.blocks.get(file.path);
+			let content: string;
+			if (delivered !== undefined && delivered === blockBody(renderBlock(cwd, file))) content = delivered;
+			else if (window.fullReads.has(file.path)) content = capContent(file.content, displayPath(cwd, file.path));
+			else continue;
+			carried.push({ path: file.path, content, depth: nestedDepth(cwd, roots, file.owner) });
+		}
+		return carried;
+	}
+}
+
+/** Whether `dir` is `root` itself or below it; both normalized. */
+function isAtOrBelow(root: string, dir: string): boolean {
+	return dir === root || isStrictlyWithinNormalizedRoot(root, dir);
+}
+
+/**
+ * The deepest workspace root `dir` is at or below, which bounds discovery for
+ * it; undefined when it is under none.
+ */
+function rootOf(roots: readonly string[], dir: string): string | undefined {
+	let deepest: string | undefined;
+	for (const root of roots) {
+		if (isAtOrBelow(root, dir) && (deepest === undefined || isStrictlyWithinNormalizedRoot(deepest, root))) {
+			deepest = root;
+		}
+	}
+	return deepest;
+}
+
+/**
+ * Context-file depth of a file owned by `owner`: levels below cwd as a
+ * negative number (zero at cwd itself), since `ContextFile.depth` counts
+ * levels above it, so a system prompt ranks it after every file it loaded
+ * itself. Owners outside cwd count from the workspace root they sit under, as
+ * that root's own files count from it; one outside every root (the session
+ * moved since) ranks just below cwd.
+ */
+function nestedDepth(cwd: string, roots: readonly string[], owner: string): number {
+	const base = isStrictlyWithinNormalizedRoot(cwd, owner) ? cwd : rootOf(roots, owner);
+	return base === undefined ? -1 : segmentCount(base) - segmentCount(owner);
+}
+
+/** The block delivering `file`, as the session's cwd displays it. */
+function renderBlock(cwd: string, file: NestedContextFile): string {
+	return prompt.render(nestedContextFileTemplate, {
+		path: escapeAttribute(file.path),
+		dir: escapeAttribute(`${displayPath(cwd, file.owner) || "."}/`),
+		content: escapeBlockTags(capContent(file.content, displayPath(cwd, file.path))),
+	});
+}
+
+/** A rendered block's body, as {@link scanWindow} parses it back from the window. */
+function blockBody(block: string): string | undefined {
+	return [...block.matchAll(BLOCK_RE)][0]?.[2];
+}
+/**
+ * A file's own `<nested-context` tags, neutralised: the window is parsed back
+ * from delivered blocks, so a body must not be able to end its block early or
+ * add one of its own.
+ */
+function escapeBlockTags(content: string): string {
+	return content.replace(/<(\/?)nested-context/g, "&lt;$1nested-context");
+}
+
+const ATTRIBUTE_ESCAPES: Record<string, string> = { "&": "&amp;", '"': "&quot;", "\n": "&#10;" };
+const ATTRIBUTE_UNESCAPES: Record<string, string> = { "&amp;": "&", "&quot;": '"', "&#10;": "\n" };
+
+/**
+ * A path made safe for a block's header, reversibly: a quote would end the
+ * `path` attribute and a newline the header line, so the block would never
+ * parse back as delivered.
+ */
+function escapeAttribute(value: string): string {
+	return value.replace(/[&"\n]/g, char => ATTRIBUTE_ESCAPES[char]);
+}
+
+function unescapeAttribute(value: string): string {
+	return value.replace(/&(?:amp|quot|#10);/g, entity => ATTRIBUTE_UNESCAPES[entity]);
+}
+
+/** The per-file cost bound: content past the cap is cut, with a pointer to the rest. */
+function capContent(content: string, display: string): string {
+	if (content.length <= NESTED_CONTEXT_FILE_MAX_CHARS) return content;
+	return prompt.render(nestedContextTruncatedTemplate, {
+		content: content.slice(0, NESTED_CONTEXT_FILE_MAX_CHARS),
+		max: NESTED_CONTEXT_FILE_MAX_CHARS,
+		path: display,
+	});
+}
+
+/**
+ * Context files the live window may already hold, by absolute path: blocks
+ * delivered as developer messages, with their delivered body, and files read
+ * in full, with the text the newest such read showed. A block-shaped string in
+ * tool output is the tool's output, never a delivered file. Other developer
+ * messages can quote model-written text, so a block found here only counts
+ * once its body matches the file's, and a read only while the file is as read.
+ */
+function scanWindow(messages: readonly AgentMessage[]): {
+	blocks: Map<string, string>;
+	fullReads: Map<string, string>;
+} {
+	const blocks = new Map<string, string>();
+	const fullReads = new Map<string, string>();
+	for (const message of messages) {
+		if (message.role === "developer") {
+			for (const match of messageText(message.content).matchAll(BLOCK_RE)) {
+				const blockPath = unescapeAttribute(match[1]);
+				if (path.isAbsolute(blockPath)) blocks.set(blockPath, match[2]);
+			}
+		} else if (message.role === "toolResult" && message.toolName === "read" && !message.isError) {
+			const shown = fullRead(message.details, message.content);
+			if (shown) fullReads.set(shown.path, shown.text);
+		}
+	}
+	return { blocks, fullReads };
+}
+
+function messageText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	let text = "";
+	for (const part of content) {
+		if (isRecord(part) && part.type === "text" && typeof part.text === "string") text += part.text;
+	}
+	return text;
+}
+
+/**
+ * Filesystem path a read result covers: `resolvedPath` when the read resolved
+ * the input, else the path plain-file reads record in `meta.source`. Undefined
+ * for internal URLs (skill://, local://, …) and web reads.
+ */
+function readDetailsPath(details: Record<string, unknown>): string | undefined {
+	const source = isRecord(details.meta) && isRecord(details.meta.source) ? details.meta.source : undefined;
+	if (source && source.type !== "path") return undefined;
+	if (typeof details.resolvedPath === "string") return path.resolve(details.resolvedPath);
+	return typeof source?.value === "string" ? path.resolve(source.value) : undefined;
+}
+
+/**
+ * A read that showed the whole file: its absolute path, and the text it showed
+ * as {@link readText} compares it. Every line from 1 to the end, in order,
+ * with nothing truncated, elided, summarised or cut at a column. A tail or
+ * range read can start at line 1 and still skip the middle, so the displayed
+ * line numbers are the proof. Details outlive their content: pruning blanks a
+ * result in place, and an extension's `tool_result` handler can replace the
+ * content alone, so the visible content must still show each line.
+ */
+function fullRead(details: unknown, content: unknown): { path: string; text: string } | undefined {
+	if (!isRecord(details) || details.isDirectory === true) return undefined;
+	if (details.truncation !== undefined || details.summary !== undefined) return undefined;
+	const meta = isRecord(details.meta) ? details.meta : {};
+	if (meta.truncation !== undefined) return undefined;
+	if (isRecord(meta.limits) && meta.limits.columnTruncated !== undefined) return undefined;
+	const display = details.displayContent;
+	if (typeof details.totalLines !== "number" || !isRecord(display)) return undefined;
+	const lines = display.lineNumbers;
+	if (!Array.isArray(lines) || lines.length !== details.totalLines) return undefined;
+	if (lines.some((line, index) => line !== index + 1)) return undefined;
+	if (typeof display.text !== "string" || !showsInOrder(messageText(content), display.text.split("\n"))) {
+		return undefined;
+	}
+	const readPath = readDetailsPath(details);
+	return readPath === undefined ? undefined : { path: readPath, text: readText(display.text) };
+}
+
+/**
+ * Text as a whole read shows it, so a read compares with the file it read: LF
+ * line ends, no byte-order mark, no final newline. A file edited since the
+ * read no longer compares equal.
+ */
+function readText(text: string): string {
+	return text
+		.replace(/^\uFEFF/, "")
+		.replace(/\r\n/g, "\n")
+		.replace(/\n$/, "");
+}
+
+/** Whether `shown` contains every one of `lines`, in order (a line prefix may precede each). */
+function showsInOrder(shown: string, lines: readonly string[]): boolean {
+	let from = 0;
+	for (const line of lines) {
+		const at = shown.indexOf(line, from);
+		if (at === -1) return false;
+		from = at + line.length;
+	}
+	return true;
+}
+
+/** Absolute paths a write, edit or ast_edit changed, from the tool's own resolved paths where it reports them. */
+function editedFiles(touch: Touch, cwd: string): string[] {
+	const details = isRecord(touch.details) ? touch.details : {};
+	const args = isRecord(touch.args) ? touch.args : {};
+	const files = new Set<string>();
+	const add = (filePath: unknown, base = cwd): void => {
+		if (typeof filePath !== "string" || filePath.length === 0 || filePath.includes("://")) return;
+		files.add(path.resolve(base, filePath));
+	};
+	switch (touch.toolName) {
+		case "write":
+			add(details.resolvedPath ?? args.path);
+			break;
+		case "edit":
+			// A move reports its destination as `path` and its origin as `sourcePath`.
+			add(details.path);
+			add(details.sourcePath);
+			if (Array.isArray(details.perFileResults)) {
+				for (const entry of details.perFileResults) {
+					if (!isRecord(entry)) continue;
+					add(entry.path);
+					add(entry.sourcePath);
+				}
+			}
+			break;
+		case "ast_edit": {
+			const base = typeof details.cwd === "string" ? details.cwd : cwd;
+			if (Array.isArray(details.files)) for (const file of details.files) add(file, base);
+			break;
+		}
+	}
+	return [...files];
+}
+
+/** A path the call touched; `isDirectory` is undefined where only the filesystem can tell. */
+interface TouchedTarget {
+	path: string;
+	isDirectory: boolean | undefined;
+}
+
+/** Paths the call touched: a read's targets, or the files it edited. */
+function touchedTargets(touch: Touch, cwd: string, edited: readonly string[]): TouchedTarget[] {
+	if (touch.toolName !== "read") return edited.map(file => ({ path: file, isDirectory: false }));
+	const details = isRecord(touch.details) ? touch.details : {};
+	const targets: TouchedTarget[] = [];
+	const resolved = readDetailsPath(details);
+	if (resolved) targets.push({ path: resolved, isDirectory: details.isDirectory === true });
+	// A grouped read (`a.ts;b/c.ts`) reports each target only as a link.
+	if (Array.isArray(details.displayReadTargetLinks)) {
+		for (const link of details.displayReadTargetLinks) {
+			if (typeof link !== "string" || link.length === 0 || link.includes("://")) continue;
+			targets.push({ path: path.resolve(cwd, link), isDirectory: undefined });
+		}
+	}
+	return targets;
+}
+
+/** The directory a target touched: itself when it is one, else its parent. */
+async function touchedDirectory(target: TouchedTarget): Promise<string> {
+	const isDirectory =
+		target.isDirectory ??
+		(await fs.stat(target.path).then(
+			stats => stats.isDirectory(),
+			() => false,
+		));
+	return isDirectory ? target.path : path.dirname(target.path);
+}
+
+function segmentCount(dir: string): number {
+	return dir.split(path.sep).length;
+}
+
+/**
+ * The directory a nested context file governs: its own, or for a file in a
+ * config folder (`.github/copilot-instructions.md`) the folder's parent.
+ * Discovery skips hidden directories, so a hidden segment at the end can only
+ * be such a folder.
+ */
+function ownerDirectory(filePath: string): string {
+	let dir = path.dirname(filePath);
+	while (path.basename(dir).startsWith(".") && path.dirname(dir) !== dir) dir = path.dirname(dir);
+	return dir;
+}
+
+/**
+ * Whether a directory, given relative to its workspace root, is a hidden
+ * directory, a dependency tree, or inside one: never project context.
+ */
+function isExcludedDirectory(relative: string): boolean {
+	return relative.split(path.sep).some(segment => segment.startsWith(".") || EXCLUDED_SEGMENTS[segment] === true);
+}
+
+/**
+ * Whether the file a context path resolves to is project context: below a
+ * workspace root, and not in a hidden directory or dependency tree there. A
+ * symlinked directory or file in the repository can point at a third-party
+ * `AGENTS.md` or into `node_modules/`; the link's location does not make its
+ * target project context. A file that cannot be resolved is not loaded.
+ */
+async function isProjectContext(file: { path: string; owner: string }, realRoots: readonly string[]): Promise<boolean> {
+	let real: string;
+	try {
+		real = await fs.realpath(file.path);
+	} catch {
+		return false;
+	}
+	const root = rootOf(realRoots, real);
+	if (root === undefined) return false;
+	// A provider's config folder below the governed directory (`.github/`) is its layout, not a hidden tree.
+	const configFolder = path.relative(file.owner, path.dirname(file.path));
+	let dir = path.dirname(real);
+	if (configFolder !== "" && dir.endsWith(`${path.sep}${configFolder}`)) {
+		dir = dir.slice(0, dir.length - configFolder.length - path.sep.length);
+	}
+	return !isExcludedDirectory(path.relative(root, dir));
+}
+
+function displayPath(cwd: string, target: string): string {
+	return path.relative(cwd, target).split(path.sep).join("/");
+}

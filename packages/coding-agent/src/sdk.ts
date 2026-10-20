@@ -238,6 +238,7 @@ import {
 	buildSystemPrompt as buildSystemPromptInternal,
 	cfgSystemPromptInputs,
 	composeAppendPrompt,
+	keptContextFilePaths,
 	loadProjectContextFiles as loadContextFilesInternal,
 	projectSystemPromptToolMetadata,
 } from "./system-prompt";
@@ -2420,6 +2421,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			agentLifecycle: options.agentRegistry ? undefined : () => AgentLifecycleManager.global(),
 			getSessionSpawns: () => options.spawns ?? "*",
 			getSessionAgents: () => session?.getSessionAgents() ?? [],
+			getNestedContextFiles: async () => (await session?.getNestedContextFiles()) ?? [],
 			advertisedSessionAgents: () => session?.getAdvertisedSessionAgents() ?? [],
 			getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
 			getActiveModelString,
@@ -4125,10 +4127,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (typeof options.systemPrompt !== "function") {
 				return defaultPrompt;
 			}
-			const customPrompt = options.systemPrompt(defaultPrompt.systemPrompt);
-			return {
-				systemPrompt: typeof customPrompt === "string" ? [customPrompt] : customPrompt,
-			};
+			// A copy: a callback that edits the array in place must not edit the
+			// baseline its result is compared against.
+			const customPrompt = options.systemPrompt([...defaultPrompt.systemPrompt]);
+			const systemPrompt = typeof customPrompt === "string" ? [customPrompt] : customPrompt;
+			return { systemPrompt, contextFilePaths: keptContextFilePaths(defaultPrompt, systemPrompt) };
 		};
 
 		const toolNamesFromRegistry = Array.from(toolRegistry.keys());
@@ -4280,7 +4283,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		}
 
 		setSessionActiveToolNames(initialToolNames);
-		const { systemPrompt } = await logger.time(
+		const { systemPrompt, contextFilePaths } = await logger.time(
 			"buildSystemPrompt",
 			rebuildSystemPrompt,
 			initialToolNames,
@@ -4753,6 +4756,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			extensionRunner,
 			getEvalPreludes,
 			evalToolSession: toolSession,
+			promptContextFiles: contextFilePaths,
 			customCommands: customCommandsResult.commands,
 			skills,
 			skillDescriptions,

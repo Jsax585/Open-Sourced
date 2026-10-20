@@ -605,6 +605,11 @@ export interface BuildSystemPromptResult {
 	 * a catalog the prompt already carries (issue #7139).
 	 */
 	xdevCatalogNames?: readonly string[];
+	/**
+	 * Paths of the context files this prompt renders, every workspace root's
+	 * included. Undefined when the prompt renders none of its own (`NULL_PROMPT`).
+	 */
+	contextFilePaths?: readonly string[];
 }
 
 /** Static wrapper; compiled (not rendered) so user-authored Markdown passes through byte-for-byte. */
@@ -1042,5 +1047,22 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		!resolvedCustomPrompt && xdevTools.length > 0 && rendered.includes("xd://")
 			? xdevTools.map(mounted => mounted.name)
 			: undefined;
-	return { systemPrompt, xdevCatalogNames };
+	return { systemPrompt, xdevCatalogNames, contextFilePaths: contextFiles.map(file => file.path) };
+}
+
+/**
+ * The context files of `built` a replacement prompt still renders: those whose
+ * blocks of `built.systemPrompt` all appear verbatim in `systemPrompt`. A
+ * caller that rewrites a block holding context files gives them all up, since
+ * which of the files survived the rewrite cannot be told from the text.
+ */
+export function keptContextFilePaths(
+	built: BuildSystemPromptResult,
+	systemPrompt: readonly string[],
+): readonly string[] | undefined {
+	const kept = systemPrompt.join("\n\n");
+	return built.contextFilePaths?.filter(filePath => {
+		const header = `<file path="${filePath}">`;
+		return built.systemPrompt.every(block => !block.includes(header) || kept.includes(block));
+	});
 }

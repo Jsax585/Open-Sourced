@@ -28,7 +28,7 @@ import { withFileMutationSession } from "../../tools/file-write-fallback";
 import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-input";
 import { applyToolProxy } from "../tool-proxy";
 import type { ExtensionRunner } from "./runner";
-import type { ExtensionAgentIdentity, RegisteredTool, ToolCallEventResult } from "./types";
+import type { ExtensionAgentIdentity, RegisteredTool, ToolCallEventResult, ToolResultEventResult } from "./types";
 
 /**
  * Second `renderCall` argument that satisfies both the omp and the upstream-pi
@@ -497,24 +497,37 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			const postflight = await this.runner.runToolCallPreflightAfter?.(toolCallId, result, context);
 			if (postflight) result = postflight as AgentToolResult<TDetails, TParameters>;
 		}
+		// A non-loop call's postflight sees what the call returns: after
+		// `tool_result` handlers, which can rewrite the content or error state.
+		const settle = async (final: AgentToolResult<TDetails, TParameters>, isError: boolean): Promise<void> => {
+			if (!loopDispatchedToolCall) {
+				await this.runner.runToolCallPreflightSettled?.(toolCallId, final, isError, context);
+			}
+		};
 
 		// Emit tool_result event - extensions can modify the result and error status
 		if (this.runner.hasHandlers("tool_result")) {
-			const resultResult = await this.runner.emitToolResult(
-				{
-					type: "tool_result",
-					toolName: this.tool.name,
-					toolCallId,
-					input: normalizeToolEventInput(
-						this.tool.name,
-						resolveToolEventInput(this.tool, toolEventArgs(effectiveParams, context)),
-					),
-					content: result.content,
-					details: result.details,
-					isError: !!executionError || result.isError === true,
-				},
-				this.#agent,
-			);
+			let resultResult: ToolResultEventResult | undefined;
+			try {
+				resultResult = await this.runner.emitToolResult(
+					{
+						type: "tool_result",
+						toolName: this.tool.name,
+						toolCallId,
+						input: normalizeToolEventInput(
+							this.tool.name,
+							resolveToolEventInput(this.tool, toolEventArgs(effectiveParams, context)),
+						),
+						content: result.content,
+						details: result.details,
+						isError: !!executionError || result.isError === true,
+					},
+					this.#agent,
+				);
+			} catch (err) {
+				cancelPreflight();
+				throw err;
+			}
 
 			// Handler context reports into this call's sink like tool-authored
 			// context: it is delivered even for a failed call (the handler saw
@@ -543,22 +556,26 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				// `coerceToolResult` in agent-loop), so replacement failure content reaches
 				// the model while the call remains an error — the original exception text is
 				// no longer forced through, which previously discarded the replacement.
-				return {
+				const modified: AgentToolResult<TDetails, TParameters> = {
 					content: modifiedContent,
 					details: modifiedDetails,
 					providerMetadata: result.providerMetadata,
 					...(effectiveError ? { isError: true } : {}),
 				};
+				await settle(modified, effectiveError);
+				return modified;
 			}
 		}
 
 		// No extension modification
 		if (executionError) {
+			await settle(result, true);
 			throw executionError;
 		}
 		if (result.isError !== true && pendingAdditionalContext !== undefined) {
 			context?.addAdditionalContext?.(pendingAdditionalContext);
 		}
+		await settle(result, result.isError === true);
 		return result;
 	}
 }

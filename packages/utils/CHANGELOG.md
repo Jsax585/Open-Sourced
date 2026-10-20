@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `isStrictlyWithinNormalizedRoot()` for lexical strict-descendant checks on normalized paths.
+
+### Fixed
+
+- Fixed `pathIsWithin()`, `relativePathWithinRoot()` and `relativePathWithinNormalizedRoot()` treating a child whose name starts with `..` (such as `..draft`) as outside the root.
+
 ## [18.12.2] - 2026-10-18
 
 ### Added
