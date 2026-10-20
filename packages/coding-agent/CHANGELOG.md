@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- With the Hindsight memory backend, `retain` and `learn` can now store a memory with `scope: "global"` so every project recalls it (under `global` or `per-project-tagged` scoping).
+
 ### Fixed
 
 - Fixed Mnemopi memory completions ignoring the memory role's thinking suffix, including one inherited from `tiny` or `smol` when `modelRoles.memory` is unset; each `retry.fallbackChains.memory` entry sends its own level, and `:off` disables reasoning ([#16378](https://github.com/can1357/oh-my-pi/pull/16378) by [@alphastorm](https://github.com/alphastorm))
