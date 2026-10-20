@@ -313,6 +313,26 @@ describe("read surfaces conflicts as a warning footer", () => {
 		expect(straddled).toMatch(/#3\s+L104000-106003/);
 	});
 
+	it("`:conflicts` drops a block over 10 MiB, names it, and keeps scanning", async () => {
+		const filler = Array.from({ length: 110_000 }, () => "x".repeat(99));
+		const late = ["<<<<<<< late", "ours", "=======", "theirs", ">>>>>>> late"];
+		const huge = ["<<<<<<< huge", ...filler, "=======", "theirs", ">>>>>>> huge", ...late, ""];
+		await Bun.write(path.join(tempDir, "huge-block.ts"), huge.join("\n"));
+		// One 12 MiB line with no newline before the block: only its head is kept.
+		await Bun.write(path.join(tempDir, "long-line.ts"), ["y".repeat(12 * 1024 * 1024), ...late, ""].join("\n"));
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+
+		const hugeText = getText(await read.execute("read-huge", { path: "huge-block.ts:conflicts" }));
+		expect(hugeText).toContain("1 unresolved conflict in huge-block.ts");
+		expect(hugeText).toContain("over 10 MiB of sections; resolve with a normal `edit`): conflicts opened at L1.");
+		expect(hugeText).toMatch(/#1\s+L110005-110009/);
+
+		const longText = getText(await read.execute("read-long-line", { path: "long-line.ts:conflicts" }));
+		expect(longText).toContain("1 unresolved conflict in long-line.ts");
+		expect(longText).toMatch(/#2\s+L2-6/);
+	});
+
 	it("window-mode warning shows visible-of-total when window misses some conflicts", async () => {
 		const filePath = path.join(tempDir, "wide.ts");
 		await Bun.write(filePath, TWO_BLOCKS);

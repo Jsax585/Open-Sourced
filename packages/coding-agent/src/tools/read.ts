@@ -77,6 +77,7 @@ import { buildDirectoryTree, type DirectoryTree } from "../workspace-tree";
 import {
 	formatConflictSummary,
 	formatConflictWarning,
+	formatOversizedNote,
 	getConflictHistory,
 	recoverConflictUriPrefix,
 	scanConflictLines,
@@ -2856,9 +2857,11 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		);
 
 		const summary =
-			entries.length === 0
-				? `No unresolved git merge conflicts in ${displayPath}.`
-				: formatConflictSummary(entries, { displayPath });
+			entries.length > 0
+				? formatConflictSummary(entries, { displayPath, oversized: scan.oversized })
+				: scan.oversized.length > 0
+					? `No conflicts to list in ${displayPath}.\n${formatOversizedNote(scan.oversized)}`
+					: `No unresolved git merge conflicts in ${displayPath}.`;
 
 		const details: ReadToolDetails = {
 			resolvedPath: absolutePath,

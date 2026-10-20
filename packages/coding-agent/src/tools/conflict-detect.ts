@@ -20,6 +20,7 @@ import type { ConflictBlock, ConflictEntry, ConflictScope } from "@oh-my-pi/pi-t
  */
 
 import type { ToolSession } from "./index";
+import { PREVIEW_LIMITS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 
 const OURS_PREFIX = "<<<<<<<";
@@ -33,11 +34,17 @@ const THEIRS_PREFIX = ">>>>>>>";
  *
  * Only fully-closed blocks (opener + separator + closer all pushed) are
  * collected. A block still open when the lines run out is dropped — the
- * agent will see the open marker and can widen the read.
+ * agent will see the open marker and can widen the read. A block whose
+ * section lines pass `maxBlockChars` is dropped as soon as it does, so an
+ * opener that never closes cannot hold the rest of the file; its opener
+ * line goes to `oversized`.
  */
 export class ConflictScanner {
 	readonly blocks: ConflictBlock[] = [];
+	readonly oversized: number[] = [];
 	#nextLine: number;
+	#maxBlockChars: number;
+	#blockChars = 0;
 	#phase: "idle" | "ours" | "base" | "theirs" = "idle";
 	#partial: {
 		startLine: number;
@@ -50,8 +57,9 @@ export class ConflictScanner {
 		theirsLines?: string[];
 	} | null = null;
 
-	constructor(firstLineNumber: number) {
+	constructor(firstLineNumber: number, maxBlockChars = Number.POSITIVE_INFINITY) {
 		this.#nextLine = firstLineNumber;
+		this.#maxBlockChars = maxBlockChars;
 	}
 
 	push(rawLine: string): void {
@@ -64,6 +72,7 @@ export class ConflictScanner {
 		if (oursLabel !== null) {
 			this.#partial = { startLine: ln, oursLabel: oursLabel || undefined, oursLines: [] };
 			this.#phase = "ours";
+			this.#blockChars = 0;
 			return;
 		}
 
@@ -114,6 +123,12 @@ export class ConflictScanner {
 			return;
 		}
 
+		this.#blockChars += line.length;
+		if (this.#blockChars > this.#maxBlockChars) {
+			this.oversized.push(partial.startLine);
+			this.#reset();
+			return;
+		}
 		if (this.#phase === "ours") partial.oursLines.push(line);
 		else if (this.#phase === "base" && partial.baseLines) partial.baseLines.push(line);
 		else if (this.#phase === "theirs" && partial.theirsLines) partial.theirsLines.push(line);
@@ -137,6 +152,8 @@ export function scanConflictLines(lines: readonly string[], firstLineNumber: num
 }
 
 const SCAN_FILE_DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
+/** Most characters a file scan keeps for one line or one block's sections. */
+const SCAN_FILE_MAX_RETAINED_CHARS = 10 * 1024 * 1024;
 
 /**
  * Scan a file for unresolved conflict blocks, streaming it line by line.
@@ -145,31 +162,45 @@ const SCAN_FILE_DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
  * cheap on pathological files; pass `Infinity` to scan the whole file.
  * Files cut by the cap report `scanTruncated: true`; only complete blocks
  * within the scanned prefix are returned, so trailing partial markers never
- * invent fake blocks.
+ * invent fake blocks. Memory stays bounded whatever the file holds: a block
+ * past 10 MiB of sections is dropped and its opener line reported in
+ * `oversized`, and outside a block only a line's first 10 MiB is kept (enough
+ * to match any marker).
  */
 export async function scanFileForConflicts(
 	absolutePath: string,
 	options: { maxBytes?: number; signal?: AbortSignal } = {},
-): Promise<{ blocks: ConflictBlock[]; scanTruncated: boolean }> {
+): Promise<{ blocks: ConflictBlock[]; oversized: number[]; scanTruncated: boolean }> {
 	let remaining = options.maxBytes ?? SCAN_FILE_DEFAULT_MAX_BYTES;
-	const scanner = new ConflictScanner(1);
+	const scanner = new ConflictScanner(1, SCAN_FILE_MAX_RETAINED_CHARS);
 	const decoder = new TextDecoder("utf-8", { fatal: false });
-	// Text of the current line so far; parts, so one huge line is not re-concatenated per chunk.
+	// Text of the current line so far, in parts so a long line is not re-concatenated per chunk.
 	let pending: string[] = [];
+	let pendingChars = 0;
+	const append = (part: string) => {
+		// A longer line overflows the block it belongs to anyway, and no marker needs more.
+		if (pendingChars > SCAN_FILE_MAX_RETAINED_CHARS) return;
+		pending.push(part);
+		pendingChars += part.length;
+	};
+	const flush = () => {
+		scanner.push(pending.join(""));
+		pending = [];
+		pendingChars = 0;
+	};
 	let truncated = false;
 	for await (const chunk of Bun.file(absolutePath).stream()) {
 		options.signal?.throwIfAborted();
 		const bytes = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
 		remaining -= bytes.length;
 		const text = decoder.decode(bytes, { stream: true });
-		const lastBreak = text.lastIndexOf("\n");
-		if (lastBreak === -1) {
-			pending.push(text);
-		} else {
-			pending.push(text.slice(0, lastBreak));
-			for (const line of pending.join("").split("\n")) scanner.push(line);
-			pending = [text.slice(lastBreak + 1)];
+		let start = 0;
+		for (let end = text.indexOf("\n"); end !== -1; end = text.indexOf("\n", start)) {
+			append(text.slice(start, end));
+			flush();
+			start = end + 1;
 		}
+		append(text.slice(start));
 		if (bytes.length < chunk.length) {
 			truncated = true;
 			break;
@@ -177,9 +208,20 @@ export async function scanFileForConflicts(
 	}
 	// A cut read may leave a partial last line; the scanner already tolerates
 	// an unclosed opener, so no extra trimming.
-	pending.push(decoder.decode());
-	scanner.push(pending.join(""));
-	return { blocks: scanner.blocks, scanTruncated: truncated };
+	append(decoder.decode());
+	flush();
+	return { blocks: scanner.blocks, oversized: scanner.oversized, scanTruncated: truncated };
+}
+
+/** `:conflicts` note naming blocks too large to register. */
+export function formatOversizedNote(oversized: readonly number[]): string {
+	const limit = PREVIEW_LIMITS.COLLAPSED_ITEMS;
+	const shown = oversized
+		.slice(0, limit)
+		.map(line => `L${line}`)
+		.join(", ");
+	const more = oversized.length > limit ? ` (+${oversized.length - limit} more)` : "";
+	return `- note: not listed (over ${SCAN_FILE_MAX_RETAINED_CHARS / (1024 * 1024)} MiB of sections; resolve with a normal \`edit\`): conflicts opened at ${shown}${more}.`;
 }
 
 /**
@@ -714,12 +756,13 @@ export function formatConflictWarning(
  */
 export function formatConflictSummary(
 	entries: readonly ConflictEntry[],
-	options: { displayPath: string } = { displayPath: "" },
+	options: { displayPath: string; oversized?: readonly number[] } = { displayPath: "" },
 ): string {
 	const lines: string[] = [];
 	const total = entries.length;
 	const word = total === 1 ? "conflict" : "conflicts";
 	lines.push(`⚠ ${total} unresolved ${word} in ${options.displayPath || "<file>"}`);
+	if (options.oversized?.length) lines.push(formatOversizedNote(options.oversized));
 	const oursLabel = pickLabel(entries, e => e.oursLabel);
 	const theirsLabel = pickLabel(entries, e => e.theirsLabel);
 	const baseLabel = pickLabel(entries, e => (e.baseLines !== undefined ? e.baseLabel : undefined));
