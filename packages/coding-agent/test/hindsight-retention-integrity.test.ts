@@ -8,7 +8,6 @@ import { HindsightSessionState } from "@oh-my-pi/pi-coding-agent/hindsight/state
 import { countUserTurns, extractMessages } from "@oh-my-pi/pi-coding-agent/hindsight/transcript";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 import { asGlobalFetch } from "./helpers/fetch-mock";
@@ -137,6 +136,9 @@ function transport() {
 		fail() {
 			failRetain = true;
 		},
+		recover() {
+			failRetain = false;
+		},
 	};
 }
 
@@ -178,38 +180,20 @@ function inMemory(cwd: string): SessionManager {
 }
 
 /**
- * Creates a primary checkout `repo` with a linked worktree `worktree`. The native VCS adapter has no
- * repository-init operation, so only `git init` runs as a subprocess, with user/system configuration
- * isolated through that call's environment; commit and worktree creation use the native adapter.
+ * Write the checkout metadata used by native project discovery, matching git-active-context fixtures.
+ * Scope detection only reads HEAD and gitdir/commondir pointers; no commits or Git process are needed.
  */
 async function createLinkedWorktree(root: string): Promise<{ repo: string; worktree: string }> {
 	const repo = path.join(root, "repo");
 	const worktree = path.join(root, "worktree");
-	const hooks = path.join(root, "hooks");
-	await fs.mkdir(repo);
-	await fs.mkdir(hooks);
-	const env: Record<string, string | undefined> = {
-		...process.env,
-		HOME: root,
-		GIT_CONFIG_GLOBAL: "/dev/null",
-		GIT_CONFIG_SYSTEM: "/dev/null",
-		GIT_CONFIG_NOSYSTEM: "1",
-		GIT_TERMINAL_PROMPT: "0",
-	};
-	delete env.XDG_CONFIG_HOME;
-	const init = Bun.spawn(["git", "init", "-q", repo], { env, stdout: "ignore", stderr: "pipe" });
-	if ((await init.exited) !== 0) throw new Error(`git init failed: ${await new Response(init.stderr).text()}`);
-	const repository = vcs.requireGit(repo);
-	// Repository-local settings outrank any signing or hook configuration in the developer's profile.
-	await repository.configSet("commit.gpgSign", "false");
-	await repository.configSet("core.hooksPath", hooks);
-	await repository.configSet("user.name", "Test");
-	await repository.configSet("user.email", "test@example.invalid");
-	const head = await repository.commitCreate("initial", {
-		allowEmpty: true,
-		author: { name: "Test", email: "test@example.invalid" },
-	});
-	await repository.worktreeAdd(worktree, head, { detach: true, clone: false });
+	const commonDir = path.join(repo, ".git");
+	const gitDir = path.join(commonDir, "worktrees", "worktree");
+	await fs.mkdir(gitDir, { recursive: true });
+	await fs.mkdir(worktree);
+	await Bun.write(path.join(commonDir, "HEAD"), "ref: refs/heads/main\n");
+	await Bun.write(path.join(gitDir, "HEAD"), "ref: refs/heads/feature\n");
+	await Bun.write(path.join(gitDir, "commondir"), `${path.relative(gitDir, commonDir)}\n`);
+	await Bun.write(path.join(worktree, ".git"), `gitdir: ${path.relative(worktree, gitDir)}\n`);
 	return { repo, worktree };
 }
 
@@ -272,6 +256,62 @@ describe("Hindsight retained-source integrity", () => {
 
 		await state.synchronizeRetainedBranch();
 		expect(api.requests).toHaveLength(3);
+	});
+
+	it.each([false, true])(
+		"restores a previously retained longer prefix after shortening it (empty intermediate: %s) without new turns",
+		async emptyIntermediate => {
+			const api = transport();
+			const manager = inMemory("/project-a");
+			const state = stateFor(manager);
+			const shorter = turn(manager, "First retained request", "First retained answer");
+			const longer = turn(manager, "Retained suffix request", "Retained suffix answer");
+			await state.forceRetainCurrentSession();
+			const original = api.documents()[0]!;
+
+			manager.branch(shorter);
+			await state.synchronizeRetainedBranch();
+			expect(api.documents()[0]!.item.content).not.toContain("Retained suffix");
+			if (emptyIntermediate) {
+				manager.resetLeaf();
+				await state.synchronizeRetainedBranch();
+				expect(api.documents()).toHaveLength(0);
+			}
+			manager.branch(longer);
+			turn(manager, "Unretained new request", "Unretained new answer");
+			const beforeRestore = api.requests.length;
+			await state.synchronizeRetainedBranch();
+
+			expect(api.requests.slice(beforeRestore).map(request => request.method)).toEqual(["POST"]);
+			expect(api.documents()).toEqual([original]);
+			expect(api.documents()[0]!.item.content).not.toContain("Unretained");
+			const restored = api.requests.length;
+			await state.synchronizeRetainedBranch();
+			expect(api.requests).toHaveLength(restored);
+		},
+	);
+
+	it("retries a last-turn replacement after its invalidated source was deleted and POST failed", async () => {
+		const api = transport();
+		const manager = inMemory("/project-a");
+		const state = stateFor(manager, { retainMode: "last-turn" });
+		const kept = turn(manager, "Selected request", "Selected answer");
+		turn(manager, "Abandoned request", "Abandoned answer");
+		await state.forceRetainCurrentSession();
+		manager.branch(kept);
+		api.fail();
+		await state.maybeRetainOnAgentEnd();
+		expect(api.documents()).toHaveLength(0);
+		expect(api.requests.map(request => request.method)).toEqual(["POST", "DELETE", "POST"]);
+
+		api.recover();
+		await state.synchronizeRetainedBranch();
+		expect(api.documents()).toHaveLength(1);
+		expect(api.documents()[0]!.item.content).toContain("Selected answer");
+		expect(api.documents()[0]!.item.content).not.toContain("Abandoned");
+		const repaired = api.requests.length;
+		await state.synchronizeRetainedBranch();
+		expect(api.requests).toHaveLength(repaired);
 	});
 
 	it("restores a deleted last-turn window with the same source id", async () => {

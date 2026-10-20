@@ -50,6 +50,7 @@ interface SegmentTranscript {
 	segment: RetentionSegment;
 	entries: SessionEntry[];
 	documents: Map<string, RetentionDocument>;
+	documentHistory: Map<string, RetentionDocument[]>;
 }
 
 interface PendingRetainItem {
@@ -275,6 +276,8 @@ export class HindsightSessionState {
 	readonly retainQueue: HindsightRetainQueue;
 	#retentionTransition: Promise<void> = Promise.resolve();
 	#cachedDocumentId?: string;
+	#finishedRetentionScope?: { sessionId: string; leafId: string | null };
+	#finishingRetentionScope?: Promise<void>;
 
 	constructor(options: HindsightSessionStateOptions) {
 		this.sessionId = options.sessionId;
@@ -317,8 +320,10 @@ export class HindsightSessionState {
 		this.retainQueue.enqueue(content, context);
 	}
 
+	/** Drain tool writes and conversation-source receipts before replacing or releasing the ledger. */
 	async flushRetainQueue(): Promise<void> {
 		await this.retainQueue.flush();
+		await this.#retentionTransition;
 	}
 
 	async recallForContext(query: string, signal?: AbortSignal): Promise<RecallOutcome> {
@@ -444,9 +449,23 @@ export class HindsightSessionState {
 		await this.finishRetentionScope();
 	}
 
+	/** Finish an unchanged outgoing ledger once, including overlapping move/rebuild handoffs. */
 	async finishRetentionScope(): Promise<void> {
 		if (this.aliasOf || !this.config.autoRetain) return;
-		await this.#retainSelectedSegments(true);
+		while (this.#finishingRetentionScope) await this.#finishingRetentionScope;
+		const manager = this.session.sessionManager;
+		const sessionId = manager.getSessionId();
+		const leafId = manager.getLeafId();
+		if (this.#finishedRetentionScope?.sessionId === sessionId && this.#finishedRetentionScope.leafId === leafId)
+			return;
+		const finishing = this.#retainSelectedSegments(true);
+		this.#finishingRetentionScope = finishing;
+		try {
+			await finishing;
+			this.#finishedRetentionScope = { sessionId, leafId: manager.getLeafId() };
+		} finally {
+			this.#finishingRetentionScope = undefined;
+		}
 	}
 
 	#segmentTranscripts(): SegmentTranscript[] {
@@ -465,7 +484,7 @@ export class HindsightSessionState {
 				const segment = { ...source, documentId, sessionId };
 				active = byId.get(documentId);
 				if (!active) {
-					active = { segment, entries: [], documents: new Map() };
+					active = { segment, entries: [], documents: new Map(), documentHistory: new Map() };
 					if (segments.length === 0) active.entries = initialEntries;
 					segments.push(active);
 					byId.set(documentId, active);
@@ -473,7 +492,12 @@ export class HindsightSessionState {
 			} else if (entry.type === "custom" && entry.customType === RETENTION_DOCUMENT_TYPE) {
 				const document = entry.data as RetentionDocument;
 				if (document.sessionId !== sessionId) continue;
-				byId.get(document.segmentId)?.documents.set(document.documentId, document);
+				const transcript = byId.get(document.segmentId);
+				if (!transcript) continue;
+				transcript.documents.set(document.documentId, document);
+				let history = transcript.documentHistory.get(document.documentId);
+				if (!history) transcript.documentHistory.set(document.documentId, (history = []));
+				history.push(document);
 			} else if (entry.type === "message" && branch.has(entry.id)) {
 				(active?.entries ?? initialEntries).push(entry);
 			}
@@ -485,40 +509,54 @@ export class HindsightSessionState {
 		const run = this.#retentionTransition.then(async () => {
 			this.bindRetentionScope();
 			const segments = this.#segmentTranscripts();
-			for (const [index, { segment, entries, documents }] of segments.entries()) {
+			for (const [index, { segment, entries, documents, documentHistory }] of segments.entries()) {
 				const messages = extractEntryMessages(entries);
 				const userTurns = messages.reduce((count, message) => count + Number(message.role === "user"), 0);
 				let lastRetainedTurn = 0;
 				let lastRetainedMessageCount = 0;
 				let invalidated = false;
+				const deletedDocuments: RetentionDocument[] = [];
 				const prefixKeys = new Map<number, string>();
-				for (const document of documents.values()) {
-					prefixKeys.set(document.messageCount, "");
+				for (const history of documentHistory.values()) {
+					for (const document of history) prefixKeys.set(document.messageCount, "");
 				}
 				let prefixKey = "";
 				for (let i = 0; i < messages.length; i++) {
 					prefixKey = extendRetentionPrefixKey(prefixKey, messages, i, i + 1);
 					if (prefixKeys.has(i + 1)) prefixKeys.set(i + 1, prefixKey);
 				}
-				for (const document of documents.values()) {
-					const unchanged =
+				for (let document of documents.values()) {
+					let unchanged =
 						document.messageCount <= messages.length &&
 						prefixKeys.get(document.messageCount) === document.prefixKey;
-					if (document.deleted) {
-						if (!unchanged) continue;
+					// A replacement reuses its source id, but older receipts still describe
+					// previously retained suffixes that navigation is allowed to restore.
+					let restore: RetentionDocument | undefined;
+					for (const previous of documentHistory.get(document.documentId) ?? []) {
+						if (
+							previous.deleted ||
+							previous.messageCount > messages.length ||
+							prefixKeys.get(previous.messageCount) !== previous.prefixKey ||
+							(!document.deleted && unchanged && previous.messageCount <= document.messageCount) ||
+							(restore && previous.messageCount <= restore.messageCount)
+						)
+							continue;
+						restore = previous;
+					}
+					if (restore) {
 						this.#lastRetainedMessageIndex = 0;
 						this.#cachedTranscript = "";
 						this.#lastRetainedPrefixKey = "";
 						this.#cachedDocumentId = segment.documentId;
-						const restoredId = await this.retainSession(messages.slice(0, document.messageCount), segment, {
+						const restoredId = await this.retainSession(messages.slice(0, restore.messageCount), segment, {
 							documentId: document.documentId,
 						});
 						if (!restoredId) continue;
-						this.session.sessionManager.appendCustomEntry(RETENTION_DOCUMENT_TYPE, {
-							...document,
-							deleted: false,
-						} satisfies RetentionDocument);
+						document = { ...restore, deleted: false };
+						this.session.sessionManager.appendCustomEntry(RETENTION_DOCUMENT_TYPE, document);
+						unchanged = true;
 					}
+					if (document.deleted) continue;
 					if (unchanged) {
 						lastRetainedTurn = Math.max(lastRetainedTurn, document.userTurns);
 						lastRetainedMessageCount = Math.max(lastRetainedMessageCount, document.messageCount);
@@ -531,35 +569,40 @@ export class HindsightSessionState {
 						messages.length === 0
 					) {
 						await this.client.deleteDocument(segment.bankId, document.documentId);
-						this.session.sessionManager.appendCustomEntry(RETENTION_DOCUMENT_TYPE, {
-							...document,
-							deleted: true,
-						} satisfies RetentionDocument);
+						deletedDocuments.push(document);
 					}
 				}
 				const active = index === segments.length - 1;
 				if (active) this.lastRetainedTurn = lastRetainedTurn;
 				const due = active && !invalidationOnly && userTurns - lastRetainedTurn >= this.config.retainEveryNTurns;
 				const needsRepair = invalidated && lastRetainedMessageCount < messages.length;
-				if (messages.length === 0 || (!needsRepair && !due && !(force && (active || documents.size === 0))))
-					continue;
-				if (this.#cachedDocumentId !== segment.documentId || invalidated || force) {
-					this.#lastRetainedMessageIndex = 0;
-					this.#cachedTranscript = "";
-					this.#lastRetainedPrefixKey = "";
-					this.#cachedDocumentId = segment.documentId;
+				if (messages.length > 0 && (needsRepair || due || (force && (active || documents.size === 0)))) {
+					if (this.#cachedDocumentId !== segment.documentId || invalidated || force) {
+						this.#lastRetainedMessageIndex = 0;
+						this.#cachedTranscript = "";
+						this.#lastRetainedPrefixKey = "";
+						this.#cachedDocumentId = segment.documentId;
+					}
+					const documentId = await this.retainSession(messages, segment);
+					if (!documentId) continue;
+					this.session.sessionManager.appendCustomEntry(RETENTION_DOCUMENT_TYPE, {
+						segmentId: segment.documentId,
+						sessionId: segment.sessionId,
+						documentId,
+						messageCount: messages.length,
+						prefixKey,
+						userTurns,
+					} satisfies RetentionDocument);
+					if (active) this.lastRetainedTurn = userTurns;
 				}
-				const documentId = await this.retainSession(messages, segment);
-				if (!documentId) continue;
-				this.session.sessionManager.appendCustomEntry(RETENTION_DOCUMENT_TYPE, {
-					segmentId: segment.documentId,
-					sessionId: segment.sessionId,
-					documentId,
-					messageCount: messages.length,
-					prefixKey,
-					userTurns,
-				} satisfies RetentionDocument);
-				if (active) this.lastRetainedTurn = userTurns;
+				// Keep invalid receipts retryable until the replacement has succeeded.
+				// Repeating an already successful DELETE is safe (404 is accepted).
+				for (const document of deletedDocuments) {
+					this.session.sessionManager.appendCustomEntry(RETENTION_DOCUMENT_TYPE, {
+						...document,
+						deleted: true,
+					} satisfies RetentionDocument);
+				}
 			}
 			const active = segments.at(-1)?.segment;
 			if (
@@ -580,9 +623,18 @@ export class HindsightSessionState {
 		await run;
 	}
 
+	/** Repairs tracked sources without letting a remote failure reject a committed local navigation. */
 	async synchronizeRetainedBranch(): Promise<void> {
 		if (this.aliasOf || !this.config.autoRetain) return;
-		await this.#retainSelectedSegments(false, true);
+		try {
+			await this.#retainSelectedSegments(false, true);
+		} catch (err) {
+			logger.warn("Hindsight: branch reconciliation failed", {
+				sessionId: this.sessionId,
+				bankId: this.bankId,
+				error: String(err),
+			});
+		}
 	}
 
 	async maybeRetainOnAgentEnd(): Promise<void> {

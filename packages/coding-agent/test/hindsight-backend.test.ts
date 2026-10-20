@@ -75,6 +75,9 @@ function makeFakeSession(deps: FakeSessionDeps) {
 			getBranch() {
 				return this.getEntries();
 			},
+			getLeafId(): string | null {
+				return this.getBranch().at(-1)?.id ?? null;
+			},
 			appendCustomEntry(customType: string, data?: unknown) {
 				const id = `custom-${records.length}`;
 				records.push({

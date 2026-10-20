@@ -10292,6 +10292,7 @@ export class AgentSession implements SettingsScope {
 		this.#disconnectFromAgent();
 		let advisorRecordersDetached = false;
 		await this.abort();
+		await this.getHindsightSessionState()?.flushRetainQueue();
 		this.#cancelOwnAsyncJobs();
 		this.#closeAllProviderSessions("new session");
 		await this.#bash.flushPending();
@@ -10404,9 +10405,10 @@ export class AgentSession implements SettingsScope {
 		return setSessionName.call(this.sessionManager, name, source, trigger);
 	}
 
-	/** Write pending bash output and every session entry to the session file, as {@link fork} does before copying it. */
+	/** Drain memory receipts, pending bash output, and session entries before copying the session file. */
 	async flushToDisk(): Promise<void> {
 		await this.#bash.flushPending();
+		await this.getHindsightSessionState()?.flushRetainQueue();
 		await this.sessionManager.flush();
 	}
 
@@ -11925,6 +11927,7 @@ export class AgentSession implements SettingsScope {
 		this.#disconnectFromAgent();
 		await this.abort({ goalReason: "internal" });
 		await this.#sessionBeforeSwitchReconciler?.();
+		await this.getHindsightSessionState()?.flushRetainQueue();
 
 		await this.#bash.flushPending();
 		// Flush pending writes before switching so restore snapshots reflect committed state.
@@ -12373,6 +12376,7 @@ export class AgentSession implements SettingsScope {
 		}
 
 		await this.#bash.flushPending();
+		await this.getHindsightSessionState()?.flushRetainQueue();
 		// Flush pending writes before branching
 		await this.sessionManager.flush();
 		// Last refusal point. Nothing below is rolled back when the transition stops, so an
@@ -12503,6 +12507,7 @@ export class AgentSession implements SettingsScope {
 		this.#queuedMessageDrainBlocked = false;
 		this.#usagePreflightReadyForNextModelCall = false;
 		await this.#bash.flushPending();
+		await this.getHindsightSessionState()?.flushRetainQueue();
 		await this.sessionManager.flush();
 		const bashTransition = this.#bash.beginSessionTransition();
 		this.#cancelOwnAsyncJobs();

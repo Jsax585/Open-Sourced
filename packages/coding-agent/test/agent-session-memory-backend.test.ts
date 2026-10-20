@@ -77,6 +77,8 @@ class LoopbackHindsight {
 	readonly writes: HindsightWrite[] = [];
 	/** Decides each retain's HTTP status; 200 stores the item. */
 	retainStatus: (item: WireMemoryItem) => number | Promise<number> = () => 200;
+	/** Decides whether deleting a conversation source succeeds. */
+	deleteStatus = 200;
 	readonly #listeners = new Set<() => void>();
 	readonly #server = Bun.serve({
 		hostname: "127.0.0.1",
@@ -146,6 +148,7 @@ class LoopbackHindsight {
 		}
 		if (request.method === "DELETE" && rest[0] === "documents" && rest[1]) {
 			this.writes.push({ method: "DELETE", bankId, documentId: rest[1] });
+			if (this.deleteStatus !== 200) return new Response("unavailable", { status: this.deleteStatus });
 			this.sources.delete(`${bankId}\0${rest[1]}`);
 			this.#changed();
 			return Response.json({ success: true });
@@ -1057,6 +1060,81 @@ describe("AgentSession memory backend lifecycle", () => {
 			expect(firstBetaWrite).toBeGreaterThan(0);
 		});
 
+		it.each([false, true])(
+			"a last-turn cross-scope move posts its outgoing window once (redundant retain fails: %s)",
+			async failRedundant => {
+				const server = useHindsight({ "hindsight.retainMode": "last-turn" });
+				const dirs = projectDirs();
+				const current = createSession(async () => [], {
+					sessionManager: SessionManager.inMemory(dirs.alpha),
+					responses: [{ content: [alphaAnswer] }],
+				});
+				await current.applyMemoryBackend();
+				const alpha = scopeOf(current);
+				await current.prompt(alphaQuestion);
+				let retains = 0;
+				server.retainStatus = () => (++retains > 1 && failRedundant ? 503 : 200);
+
+				expect(await runHeadless(current, `/move ${dirs.beta}`)).not.toContain("Move failed");
+
+				expect(current.sessionManager.getCwd()).toBe(dirs.beta);
+				expect(server.writes).toHaveLength(1);
+				expect(server.writes[0]).toMatchObject({ method: "POST", bankId: alpha.bankId, tags: alpha.tags });
+				expect(only(server.containing(alphaAnswer)).content).toContain(alphaQuestion);
+			},
+		);
+
+		it("new session drains an in-flight agent-end retain into its originating ledger", async () => {
+			const server = useHindsight({ "hindsight.retainEveryNTurns": 1 });
+			const dirs = projectDirs();
+			const manager = SessionManager.create(dirs.alpha, path.join(tempDir.path(), "sessions"));
+			const current = createSession(async () => [], {
+				sessionManager: manager,
+				responses: [{ content: [alphaAnswer] }],
+			});
+			await current.applyMemoryBackend();
+			const originatingId = manager.getSessionId();
+			const state = current.getHindsightSessionState()!;
+			const release = Promise.withResolvers<number>();
+			server.retainStatus = () => release.promise;
+			await current.prompt(alphaQuestion);
+			await server.until(() => server.writes.length === 1);
+			const originatingFile = manager.getSessionFile()!;
+			const drainStarted = Promise.withResolvers<void>();
+			const flushRetainQueue = state.flushRetainQueue.bind(state);
+			spyOn(state, "flushRetainQueue").mockImplementation(() => {
+				drainStarted.resolve();
+				return flushRetainQueue();
+			});
+			const switching = current.newSession();
+			try {
+				// Release only once the transition drains retention or has incorrectly swapped ledgers.
+				await Promise.race([switching, drainStarted.promise]);
+			} finally {
+				release.resolve(200);
+			}
+			expect(await switching).toBe(true);
+			await state.flushRetainQueue();
+			expect(manager.getSessionId()).not.toBe(originatingId);
+			expect(
+				manager
+					.getEntries()
+					.filter(entry => entry.type === "custom" && entry.customType === "hindsight_retention_document"),
+			).toEqual([]);
+			const originating = await SessionManager.open(originatingFile);
+			try {
+				const receipts = originating
+					.getEntries()
+					.filter(entry => entry.type === "custom" && entry.customType === "hindsight_retention_document");
+				expect(receipts).toHaveLength(1);
+				expect(receipts[0]).toMatchObject({
+					data: { sessionId: originatingId, documentId: server.writes[0]!.documentId },
+				});
+			} finally {
+				await originating.close();
+			}
+		});
+
 		it("a source retention failure leaves a Hindsight move in the source project", async () => {
 			const server = useHindsight();
 			const dirs = projectDirs();
@@ -1113,6 +1191,43 @@ describe("AgentSession memory backend lifecycle", () => {
 			expect(server.writes.slice(deleteFrom)).toEqual([{ method: "DELETE", bankId: scope.bankId, documentId }]);
 			expect(branchUserTurns(current)).toBe(0);
 		});
+
+		it.each(["POST", "DELETE"] as const)(
+			"tree navigation stays usable after a Hindsight %s failure and a later sync repairs the source",
+			async method => {
+				const server = useHindsight({ "hindsight.retainEveryNTurns": 1 });
+				const current = createSession(async () => [], {
+					responses: [{ content: [alphaAnswer] }, { content: [betaAnswer] }],
+				});
+				await current.applyMemoryBackend();
+				const scope = scopeOf(current);
+				const documentId = current.sessionManager.getSessionId();
+				await current.prompt(alphaQuestion);
+				await current.prompt(betaQuestion);
+				await server.until(() => server.source(scope.bankId, documentId)?.content.includes(betaAnswer) === true);
+				const target = branchMessage(
+					current,
+					method === "POST" ? "assistant" : "user",
+					method === "POST" ? alphaAnswer : alphaQuestion,
+				);
+				server.retainStatus = () => 503;
+				server.deleteStatus = 503;
+
+				expect((await current.navigateTree(target.id, { summarize: false })).cancelled).toBe(false);
+				expect(branchUserTurns(current)).toBe(method === "POST" ? 1 : 0);
+				expect(server.source(scope.bankId, documentId)?.content).toContain(betaAnswer);
+
+				server.retainStatus = () => 200;
+				server.deleteStatus = 200;
+				await current.getHindsightSessionState()!.synchronizeRetainedBranch();
+				if (method === "POST") {
+					expect(server.source(scope.bankId, documentId)?.content).toContain(alphaAnswer);
+					expect(server.source(scope.bankId, documentId)?.content).not.toContain(betaAnswer);
+				} else {
+					expect(server.sources.size).toBe(0);
+				}
+			},
+		);
 
 		it("reloading a rewritten Hindsight transcript reconciles persisted sources before returning", async () => {
 			const server = useHindsight();
