@@ -12,6 +12,7 @@ import {
 	MnemopiSessionState,
 	setMnemopiSessionState,
 } from "@oh-my-pi/pi-coding-agent/mnemopi/state";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import { MemoryRecallTool } from "@oh-my-pi/pi-coding-agent/tools/memory-recall";
 import { MemoryRetainTool } from "@oh-my-pi/pi-coding-agent/tools/memory-retain";
@@ -24,7 +25,10 @@ const SESSION_ID = "recall-features-session";
 const states: MnemopiSessionState[] = [];
 const dirs: TempDir[] = [];
 
-function startSession(overrides: Record<string, unknown>): { state: MnemopiSessionState; tools: ToolSession } {
+function startSession(
+	overrides: Record<string, unknown>,
+	sessionManager?: SessionManager,
+): { state: MnemopiSessionState; tools: ToolSession } {
 	const dir = TempDir.createSync("@mnemopi-recall-features-");
 	dirs.push(dir);
 	const settings = Settings.isolated({
@@ -45,7 +49,8 @@ function startSession(overrides: Record<string, unknown>): { state: MnemopiSessi
 				getApiKeyForProvider: async () => undefined,
 				resolver: () => async () => undefined,
 			} as never,
-			sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => dir.path() } as never,
+			sessionManager:
+				sessionManager ?? ({ getEntries: () => [], getBranch: () => [], getCwd: () => dir.path() } as never),
 			emitNotice: () => {},
 			getHindsightSessionState: () => undefined,
 			subscribe: () => () => {},
@@ -117,4 +122,39 @@ describe("mnemopi.enhancedRecall", () => {
 			else expect(cache).toBeUndefined();
 		}
 	});
+});
+
+describe("Mnemopi retention after a rewind", () => {
+	for (const mode of ["automatic", "forced"] as const) {
+		it(`${mode} retention stores new turns 2–4 after retaining turn 4 and rewinding to turn 1`, async () => {
+			const manager = SessionManager.inMemory("/mnemopi-rewind");
+			try {
+				const { state } = startSession({ "mnemopi.retainEveryNTurns": 2 }, manager);
+				const first = manager.appendMessage({ role: "user", content: "Original turn 1", timestamp: 1 });
+				for (let turn = 2; turn <= 4; turn++) {
+					manager.appendMessage({ role: "user", content: `Original turn ${turn}`, timestamp: turn });
+				}
+				await state.forceRetainCurrentSession();
+				expect(state.lastRetainedTurn).toBe(4);
+
+				manager.branch(first);
+				for (let turn = 2; turn <= 4; turn++) {
+					manager.appendMessage({ role: "user", content: `Replacement turn ${turn}`, timestamp: turn + 4 });
+				}
+				if (mode === "automatic") await state.maybeRetainOnAgentEnd([]);
+				else await state.forceRetainCurrentSession();
+
+				const rows = state.memory.beam.db
+					.query<{ content: string }, []>(
+						"SELECT content FROM working_memory WHERE source = 'coding-agent-transcript'",
+					)
+					.all();
+				const retained = rows.map(row => row.content).join("\n");
+				for (let turn = 2; turn <= 4; turn++) expect(retained).toContain(`Replacement turn ${turn}`);
+				expect(state.lastRetainedTurn).toBe(7);
+			} finally {
+				await manager.close();
+			}
+		});
+	}
 });

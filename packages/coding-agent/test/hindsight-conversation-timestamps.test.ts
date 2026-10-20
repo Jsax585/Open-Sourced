@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
 import type { HindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config";
 import { HindsightSessionState } from "@oh-my-pi/pi-coding-agent/hindsight/state";
-import { extractMessages } from "@oh-my-pi/pi-coding-agent/hindsight/transcript";
+import { extractEntryMessages } from "@oh-my-pi/pi-coding-agent/hindsight/transcript";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 
@@ -132,7 +132,7 @@ describe("Hindsight conversation source timestamps", () => {
 	});
 
 	it("keeps user/assistant SessionEntry timestamps and drops thinking/tool entries", () => {
-		const extracted = extractMessages({ getBranch: () => conversationEntries() });
+		const extracted = extractEntryMessages(conversationEntries());
 		expect(extracted).toEqual([
 			{
 				role: "user",
@@ -174,7 +174,7 @@ describe("Hindsight conversation source timestamps", () => {
 			banksSet: new Set(["personal"]),
 		});
 
-		const first = extractMessages({ getBranch: () => entries });
+		const first = extractEntryMessages(entries);
 		await state.retainSession(first);
 		const laterEntries = [
 			...entries,
@@ -190,7 +190,7 @@ describe("Hindsight conversation source timestamps", () => {
 				},
 			} as SessionEntry,
 		];
-		await state.retainSession(extractMessages({ getBranch: () => laterEntries }));
+		await state.retainSession(extractEntryMessages(laterEntries));
 
 		expect(bodies).toHaveLength(2);
 		expectSameInstant(firstItem(bodies[0]).timestamp, SESSION_START);
@@ -228,7 +228,7 @@ describe("Hindsight conversation source timestamps", () => {
 			banksSet: new Set(["personal"]),
 		});
 
-		await state.retainSession(extractMessages({ getBranch: () => entries }));
+		await state.retainSession(extractEntryMessages(entries));
 		expect(bodies).toHaveLength(1);
 		expect(firstItem(bodies[0]).timestamp).not.toBe("not-a-date");
 		expect(Number.isNaN(Date.parse(String(firstItem(bodies[0]).timestamp)))).toBe(false);

@@ -20,7 +20,7 @@ import {
 	resolveSeedsForScope,
 	tryLoadMentalModelsBlock,
 } from "./mental-models";
-import { extractEntryMessages, extractMessages } from "./transcript";
+import { extractEntryMessages } from "./transcript";
 
 const RETAIN_FLUSH_BATCH_SIZE = 16;
 const RETAIN_FLUSH_INTERVAL_MS = 5_000;
@@ -596,7 +596,11 @@ export class HindsightSessionState {
 				if (active) this.lastRetainedTurn = lastRetainedTurn;
 				const due = active && !invalidationOnly && userTurns - lastRetainedTurn >= this.config.retainEveryNTurns;
 				const needsRepair = invalidated && lastRetainedMessageCount < messages.length;
-				if (messages.length > 0 && (needsRepair || due || (force && (active || documents.size === 0)))) {
+				const unfinished = lastRetainedMessageCount < messages.length;
+				if (
+					messages.length > 0 &&
+					(needsRepair || due || (force && unfinished && (active || documents.size === 0)))
+				) {
 					if (this.#cachedDocumentId !== segment.documentId || invalidated || force) {
 						this.#lastRetainedMessageIndex = 0;
 						this.#cachedTranscript = "";
@@ -705,7 +709,7 @@ export class HindsightSessionState {
 			};
 		}
 
-		const history = extractMessages(this.session.sessionManager);
+		const history = extractEntryMessages(this.session.sessionManager.getBranch());
 		const queryMessages = [...history, { role: "user" as const, content: latestPrompt }];
 		const query = composeRecallQuery(latestPrompt, queryMessages, this.config.recallContextTurns);
 		const truncated = truncateRecallQuery(query, latestPrompt, this.config.recallMaxQueryChars);

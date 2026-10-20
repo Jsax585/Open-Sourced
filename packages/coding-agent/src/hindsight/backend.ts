@@ -24,6 +24,7 @@ import { cfgMemoryBackend } from "../memory-backend/settings";
 
 /** Reload the active session's mental-model cache and prompt. */
 export async function reloadMentalModelsForSession(session: AgentSession): Promise<boolean> {
+	await retryPrimaryStateRebuild(session);
 	const state = session.getHindsightSessionState();
 	if (!state) return false;
 	return await state.reloadMentalModels();
@@ -99,6 +100,7 @@ export const hindsightBackend: MemoryBackend = {
 		promptText: string,
 		signal?: AbortSignal,
 	): Promise<MemoryPromptPreparation | undefined> {
+		await retryPrimaryStateRebuild(session);
 		const state = session.getHindsightSessionState();
 		if (!state) return undefined;
 
@@ -126,6 +128,7 @@ export const hindsightBackend: MemoryBackend = {
 	},
 
 	async enqueue(_agentDir, _cwd, session): Promise<void> {
+		if (session) await retryPrimaryStateRebuild(session);
 		const state = session?.getHindsightSessionState();
 		const primary = state?.aliasOf ? undefined : state;
 		if (!primary) return;
@@ -141,6 +144,7 @@ export const hindsightBackend: MemoryBackend = {
 		const config = loadHindsightConfig(settings);
 		if (!isHindsightConfigured(config)) return undefined;
 
+		if (session) await retryPrimaryStateRebuild(session);
 		const state = session?.getHindsightSessionState();
 		if (!state) return undefined;
 
@@ -162,6 +166,14 @@ interface PrimaryRebuildTask {
 }
 
 const primaryRebuildTasks = new WeakMap<AgentSession, PrimaryRebuildTask>();
+/** Failed handoffs stay pending even after the settings observer consumes the edit. */
+const failedPrimaryStateRebuilds = new WeakSet<AgentSession>();
+
+async function retryPrimaryStateRebuild(session: AgentSession): Promise<void> {
+	if (primaryRebuildTasks.has(session) || failedPrimaryStateRebuilds.has(session)) {
+		await awaitPrimaryStateRebuild(session);
+	}
+}
 
 /**
  * Coalesce and serialize live rebuilds for one session. A cwd reload changes
@@ -186,9 +198,13 @@ function schedulePrimaryStateRebuild(session: AgentSession): PrimaryRebuildTask 
 			while (nextTask.pending) {
 				nextTask.pending = false;
 				try {
-					if (await reconcilePrimaryState(session)) nextTask.error = undefined;
+					if (await reconcilePrimaryState(session)) {
+						nextTask.error = undefined;
+						failedPrimaryStateRebuilds.delete(session);
+					}
 				} catch (err) {
 					nextTask.error = err;
+					failedPrimaryStateRebuilds.add(session);
 					logger.warn("Hindsight: state rebuild failed", { error: String(err) });
 				}
 			}

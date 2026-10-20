@@ -5,7 +5,7 @@ import { HindsightApi } from "@oh-my-pi/pi-coding-agent/hindsight/client";
 import { computeBankScope } from "@oh-my-pi/pi-coding-agent/hindsight/bank";
 import type { HindsightConfig, HindsightScoping } from "@oh-my-pi/pi-coding-agent/hindsight/config";
 import { HindsightSessionState } from "@oh-my-pi/pi-coding-agent/hindsight/state";
-import { countUserTurns, extractMessages } from "@oh-my-pi/pi-coding-agent/hindsight/transcript";
+import { extractEntryMessages } from "@oh-my-pi/pi-coding-agent/hindsight/transcript";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -213,8 +213,9 @@ describe("Hindsight retained-source integrity", () => {
 		expect(api.requests).toHaveLength(beforeUnchanged);
 
 		manager.branch(kept);
-		expect(countUserTurns(manager)).toBe(1);
-		expect(extractMessages(manager).some(message => message.content.includes("Abandon"))).toBe(false);
+		const selected = extractEntryMessages(manager.getBranch());
+		expect(selected.filter(message => message.role === "user")).toHaveLength(1);
+		expect(selected.some(message => message.content.includes("Abandon"))).toBe(false);
 
 		const beforeSync = api.requests.length;
 		await state.synchronizeRetainedBranch();
@@ -456,7 +457,7 @@ describe("Hindsight retained-source integrity", () => {
 
 		manager.branch(user);
 		manager.appendMessage(createAssistantMessage("Selected replacement reply"));
-		expect(countUserTurns(manager)).toBe(1);
+		expect(extractEntryMessages(manager.getBranch()).filter(message => message.role === "user")).toHaveLength(1);
 		await state.maybeRetainOnAgentEnd();
 
 		expect(api.documents()).toHaveLength(1);
@@ -521,7 +522,7 @@ describe("Hindsight retained-source integrity", () => {
 				);
 				for (const deletion of deletions) expect(deletion.bankId).toBe(owner.bankId);
 				expect(api.documents()).toHaveLength(0);
-				expect(countUserTurns(manager)).toBe(0);
+				expect(extractEntryMessages(manager.getBranch())).toHaveLength(0);
 
 				const synchronized = api.requests.length;
 				await state.synchronizeRetainedBranch();

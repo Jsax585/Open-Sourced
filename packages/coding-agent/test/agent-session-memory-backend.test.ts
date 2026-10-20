@@ -31,6 +31,7 @@ import { cfgAutolearnEnabled } from "@oh-my-pi/pi-coding-agent/autolearn/setting
 import {
 	cfgHindsightApiToken,
 	cfgHindsightApiUrl,
+	cfgHindsightBankId,
 	cfgHindsightMentalModelsEnabled,
 } from "@oh-my-pi/pi-coding-agent/hindsight/settings";
 import { cfgMemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/settings";
@@ -79,6 +80,7 @@ interface WireMemoryItem {
 class LoopbackHindsight {
 	readonly sources = new Map<string, RetainedSource>();
 	readonly writes: HindsightWrite[] = [];
+	readonly recalls: string[] = [];
 	/** Decides each retain's HTTP status; 200 stores the item. */
 	retainStatus: (item: WireMemoryItem) => number | Promise<number> = () => 200;
 	/** Decides whether deleting a conversation source succeeds. */
@@ -157,7 +159,10 @@ class LoopbackHindsight {
 			this.#changed();
 			return Response.json({ success: true });
 		}
-		if (request.method === "POST" && rest.join("/") === "memories/recall") return Response.json({ results: [] });
+		if (request.method === "POST" && rest.join("/") === "memories/recall") {
+			this.recalls.push(bankId);
+			return Response.json({ results: [] });
+		}
 		if (request.method === "GET" && rest.join("/") === "mental-models") return Response.json({ items: [] });
 		return new Response("Unexpected request", { status: 404 });
 	}
@@ -1091,6 +1096,56 @@ describe("AgentSession memory backend lifecycle", () => {
 				expect(only(server.containing(alphaAnswer)).content).toContain(alphaQuestion);
 			},
 		);
+
+		it("a last-turn cross-scope move reuses the outgoing cadence receipt", async () => {
+			const server = useHindsight({
+				"hindsight.retainMode": "last-turn",
+				"hindsight.retainEveryNTurns": 1,
+			});
+			const dirs = projectDirs();
+			const current = createSession(async () => [], {
+				sessionManager: SessionManager.inMemory(dirs.alpha),
+				responses: [{ content: [alphaAnswer] }],
+			});
+			await current.applyMemoryBackend();
+			await current.prompt(alphaQuestion);
+			await current.getHindsightSessionState()!.flushRetainQueue();
+			expect(server.writes).toHaveLength(1);
+			const retained = only(server.containing(alphaAnswer));
+
+			expect(await runHeadless(current, `/move ${dirs.beta}`)).not.toContain("Move failed");
+
+			expect(server.writes).toHaveLength(1);
+			expect(only(server.containing(alphaAnswer))).toEqual(retained);
+			expect(current.sessionManager.getCwd()).toBe(dirs.beta);
+		});
+
+		it("retries a failed live bank handoff before the next prompt uses memory", async () => {
+			const server = useHindsight({ "hindsight.autoRecall": true });
+			const current = createSession(async () => [], {
+				responses: [{ content: [alphaAnswer] }, { content: [betaAnswer] }],
+			});
+			await current.applyMemoryBackend();
+			const source = scopeOf(current);
+			await current.prompt(alphaQuestion);
+			server.retainStatus = () => 503;
+			cfgHindsightBankId.override(settings, "destination");
+			await current.settleMemoryBackend();
+			expect(server.writes).toHaveLength(1);
+			expect(server.sources.size).toBe(0);
+			server.recalls.length = 0;
+
+			server.retainStatus = () => 200;
+			await current.prompt(betaQuestion);
+			await hindsightBackend.enqueue?.(tempDir.path(), current.sessionManager.getCwd(), current);
+
+			expect(scopeOf(current).bankId).toBe("destination");
+			expect(server.recalls).toEqual(["destination"]);
+			expect(only(server.containing(alphaAnswer))).toMatchObject({ bankId: source.bankId });
+			const destination = only(server.containing(betaAnswer));
+			expect(destination.bankId).toBe("destination");
+			expect(destination.content).not.toContain(alphaAnswer);
+		});
 
 		it("a failed last-turn cross-scope move preserves its receipt so rewind deletes the accepted source", async () => {
 			const server = useHindsight({ "hindsight.retainMode": "last-turn" });
