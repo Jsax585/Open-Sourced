@@ -6,6 +6,7 @@
 
 - Fixed Mnemopi memory completions ignoring the memory role's thinking suffix, including one inherited from `tiny` or `smol` when `modelRoles.memory` is unset; each `retry.fallbackChains.memory` entry sends its own level, and `:off` disables reasoning ([#16378](https://github.com/can1357/oh-my-pi/pull/16378) by [@alphastorm](https://github.com/alphastorm))
 - Fixed `/move` path completion jumping into a subfolder on Tab: `..`, `.`, and `~` now complete to `../`, `./`, and `~/` before listing their children, a trailing `\` lists a folder on Windows, absolute Windows paths (`C:/…`) are no longer rewritten as relative paths, and the project directory is offered as `./` instead of `/`
+- Read-only agents can reply to lead and peer messages through active `write` (`agent://<id>` messages and `agent://all` broadcasts), with their own ID and peer roster in the prompt. Upstream device dispatch, cancellation, and session-local scratch permissions remain available; filesystem writes outside that scratch and `edit` remain blocked. Restricted (`restrictToolNames`) sessions receive no synthetic write, and a runtime full `write` grant lifts the restriction ([#16524](https://github.com/can1357/oh-my-pi/pull/16524) by [@Komzpa](https://github.com/Komzpa))
 
 ## [18.12.3] - 2026-10-19
 
