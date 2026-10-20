@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Per-turn tool-output pruning now walks only the entries kept by the latest compaction (plus the earlier calls kept results refer to) instead of the whole branch ([#16517](https://github.com/can1357/oh-my-pi/pull/16517) by [@Komzpa](https://github.com/Komzpa))
+
 ### Fixed
 
+- Fixed long-session resume retaining discarded history in memory: opening a compacted session now indexes the journal and reads only the active context, while history, tree navigation, exports, and persisted edits still work. Public session records remain directly cloneable; producers announce historical edits with `updateEntry()` before persistence ([#16517](https://github.com/can1357/oh-my-pi/pull/16517) by [@Komzpa](https://github.com/Komzpa))
 - Fixed subagents spawning at a caller-supplied `effort` (e.g. `hi` → `max`) while `task.enableEffort` is off; the field is now ignored and the agent's configured thinking level (including `:auto`) applies ([#16402](https://github.com/can1357/oh-my-pi/issues/16402))
 - Fixed `omp update --check` failing against JFrog Artifactory registries that add empty `dist-tags` to a tagged manifest; the update check now uses the registry's curated latest version ([#16375](https://github.com/can1357/oh-my-pi/issues/16375))
 - Fixed `<path>:conflicts` on a file past the 10 MiB scan cap reporting no conflicts with no hint: it now names the line the scan stopped at and the ranged `read` that registers the blocks after it ([#16269](https://github.com/can1357/oh-my-pi/pull/16269))
