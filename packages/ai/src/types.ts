@@ -201,9 +201,11 @@ function isOpenAIServiceTierModel(model: ServiceTierModel): boolean {
  * anthropic family even though its provider is `amazon-bedrock`/`google-vertex`.
  * Custom OpenAI-compatible relays that serve OpenAI model ids are OpenAI family
  * too unless the provider owns a separate tier control (Fireworks) or rejects
- * OpenAI's service-tier field (GitHub Copilot).
+ * OpenAI's service-tier field (GitHub Copilot). Fireworks' dedicated control
+ * takes precedence even over an explicit providerFamily annotation.
  */
 export function serviceTierFamily(model: ServiceTierModel): ServiceTierFamily | undefined {
+	if (model.provider === "fireworks") return undefined;
 	if (model.providerFamily) return model.providerFamily;
 	const provider = model.provider;
 	if (provider === "openrouter") {
