@@ -6,10 +6,7 @@
 
 - Fixed subagents spawning at a caller-supplied `effort` (e.g. `hi` → `max`) while `task.enableEffort` is off; the field is now ignored and the agent's configured thinking level (including `:auto`) applies ([#16402](https://github.com/can1357/oh-my-pi/issues/16402))
 - Fixed `omp update --check` failing against JFrog Artifactory registries that add empty `dist-tags` to a tagged manifest; the update check now uses the registry's curated latest version ([#16375](https://github.com/can1357/oh-my-pi/issues/16375))
-
-### Fixed
-
-- `read <path>:conflicts` now lists and registers every conflict in files over 10 MiB; it stopped at the first 10 MiB and said a file whose conflicts all lay past that point had none
+- `read <path>:conflicts` now lists and registers every conflict in files over 10 MiB; it stopped at the first 10 MiB and said a file whose conflicts all lay past that point had none ([#16555](https://github.com/can1357/oh-my-pi/pull/16555) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.12.4] - 2026-10-20
 
