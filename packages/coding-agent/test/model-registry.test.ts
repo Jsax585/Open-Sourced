@@ -1364,11 +1364,15 @@ describe("ModelRegistry", () => {
 				headers: { "X-Route": "model" },
 			};
 
-			async function loadRegistry(
-				transport?: "pi-native",
-				modelBaseUrl?: string,
+			async function loadRegistry({
+				transport,
+				modelBaseUrl,
 				googleFamily = false,
-			): Promise<ModelRegistry> {
+			}: {
+				transport?: "pi-native";
+				modelBaseUrl?: string;
+				googleFamily?: boolean;
+			} = {}): Promise<ModelRegistry> {
 				const modelsPath = path.join(tempDir, "models.yml");
 				await Bun.write(
 					modelsPath,
@@ -1459,7 +1463,7 @@ describe("ModelRegistry", () => {
 			}
 
 			test("custom Gemini model configuration forwards its Google tier over OpenAI transport", async () => {
-				const registry = await loadRegistry(undefined, undefined, true);
+				const registry = await loadRegistry({ googleFamily: true });
 				const model = registry.find("custom-gateway", "gemini-3-flash");
 				for (const tier of ["flex", "priority", undefined] as const) {
 					const { body, result } = await requestModel(registry, model, false, { openai: "scale", google: tier });
@@ -1469,8 +1473,36 @@ describe("ModelRegistry", () => {
 				}
 			});
 
+			test("same-ID custom replacement preserves the configured service-tier family", async () => {
+				await Bun.write(
+					modelsJsonPath,
+					JSON.stringify({
+						providers: {
+							openai: {
+								baseUrl: "https://gateway.example/v1",
+								apiKey: "gateway-bearer",
+								api: "openai-completions",
+								models: [{ ...customModel, id: "gpt-4o", providerFamily: "google" }],
+							},
+						},
+					}),
+				);
+				expect(catalogModels.getBundledModel("openai", "gpt-4o")).toBeDefined();
+				const registry = new ModelRegistry(authStorage, modelsJsonPath);
+				const model = registry.find("openai", "gpt-4o");
+				if (!model) throw new Error("Expected same-ID custom model openai/gpt-4o");
+				expect(model.providerFamily).toBe("google");
+				expect(resolveModelServiceTier({ openai: "scale", google: "flex" }, model)).toBe("flex");
+				const { body, result } = await requestModel(registry, model, false, {
+					openai: "scale",
+					google: "flex",
+				});
+				expect(body.service_tier).toBe("flex");
+				expect(result.stopReason).toBe("stop");
+			});
+
 			test("new custom model uses native gateway routing instead of /chat/completions on lazy find", async () => {
-				const registry = await loadRegistry("pi-native");
+				const registry = await loadRegistry({ transport: "pi-native" });
 				const { request, body, result } = await requestModel(
 					registry,
 					registry.find("openai", customModel.id),
@@ -1499,7 +1531,7 @@ describe("ModelRegistry", () => {
 						provider === "openai" ? [bundledModel] : originalGetBundledModels(provider),
 					),
 				);
-				const registry = await loadRegistry("pi-native", "https://model.example/v1");
+				const registry = await loadRegistry({ transport: "pi-native", modelBaseUrl: "https://model.example/v1" });
 				// A fresh full snapshot must not reuse a model already composed by find().
 				const model = registry.getAll().find(model => model.provider === "openai" && model.id === customModel.id);
 				const { request, body, result } = await requestModel(registry, model, true);
@@ -1513,7 +1545,7 @@ describe("ModelRegistry", () => {
 			});
 
 			test("without provider transport, custom model keeps /chat/completions at its explicit model baseUrl", async () => {
-				const registry = await loadRegistry(undefined, "https://model.example/v1");
+				const registry = await loadRegistry({ modelBaseUrl: "https://model.example/v1" });
 				const { request, body, result } = await requestModel(
 					registry,
 					registry.find("openai", customModel.id),

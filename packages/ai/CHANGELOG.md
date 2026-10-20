@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed custom gateway models with `providerFamily: google` dropping flex and priority service tiers from OpenAI-compatible requests ([#16478](https://github.com/can1357/oh-my-pi/pull/16478) by [@shgew](https://github.com/shgew))
+- Fixed custom gateway models with `providerFamily: google` dropping flex and priority service tiers from OpenAI-compatible requests, without reporting unsupported native transports as priority-capable ([#16478](https://github.com/can1357/oh-my-pi/pull/16478) by [@shgew](https://github.com/shgew))
 
 ## [18.12.3] - 2026-10-19
 

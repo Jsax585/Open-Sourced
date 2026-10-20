@@ -809,10 +809,9 @@ export class ModelControls {
 	/**
 	 * `/fast on|off` targets the family of the currently selected model: it sets
 	 * (or clears) that family's `priority` tier. `off` also clears `ultrafast`.
-	 * Returns `false` when the model has no service-tier family, or when it is an
-	 * OpenAI-family model that cannot take `priority` (a Codex model whose
-	 * discovered tier list omits it), so callers can report that fast mode is
-	 * unavailable instead of claiming success.
+	 * Returns `false` when the model has no service-tier family, or when an
+	 * OpenAI-family or explicitly annotated model cannot realize `priority`,
+	 * so callers can report unavailability instead of claiming success.
 	 */
 	setFastMode(enabled: boolean): boolean {
 		const model = this.#model;
@@ -830,7 +829,10 @@ export class ModelControls {
 			if (tier === "priority" || tier === "ultrafast") this.setServiceTierFamily(family, undefined);
 			return true;
 		}
-		if (family === "openai" && !shouldSendServiceTier("priority", model)) {
+		if (
+			(family === "openai" || model.providerFamily !== undefined) &&
+			!realizesPriorityServiceTier("priority", model)
+		) {
 			this.#host.emitNotice(
 				"info",
 				"The current model does not offer the priority (Fast) service tier.",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { Api } from "@oh-my-pi/pi-ai/types";
+import type { Api, ServiceTierFamily } from "@oh-my-pi/pi-ai/types";
 import {
 	coerceServiceTierByFamily,
 	getPremiumServiceTierRequests,
@@ -128,6 +128,50 @@ describe("shouldSendServiceTier", () => {
 		expect(shouldSendServiceTier("priority", "fireworks")).toBe(true);
 		expect(shouldSendServiceTier("flex", "fireworks")).toBe(false);
 		expect(shouldSendServiceTier("priority", "anthropic")).toBe(false);
+	});
+
+	it.each([
+		["openai-completions", true, true],
+		["openai-responses", true, true],
+		["openai-codex-responses", true, true],
+		["azure-openai-responses", true, true],
+		["openrouter", true, true],
+		["google-generative-ai", false, false],
+		["google-vertex", true, false],
+		["anthropic-messages", false, false],
+		["bedrock-converse-stream", false, false],
+		["google-gemini-cli", false, false],
+		["ollama-chat", false, false],
+		["cursor-agent", false, false],
+		["factory-droid-agent", false, false],
+		["gitlab-duo-agent", false, false],
+		["devin-agent", false, false],
+		["apple-foundation-models", false, false],
+		["custom-api", false, false],
+	] as const)(
+		"limits annotated custom %s models to tiers their transport forwards",
+		(api, googlePriority, googleFlex) => {
+			for (const providerFamily of ["google", "openai", "anthropic"] satisfies ServiceTierFamily[]) {
+				const model = { ...m("custom-gateway", api, "gateway-model"), providerFamily };
+				const priority = api === "google-vertex" || (providerFamily === "google" && googlePriority);
+				expect(shouldSendServiceTier("priority", model)).toBe(priority);
+				expect(realizesPriorityServiceTier("priority", model)).toBe(priority);
+				expect(shouldSendServiceTier("flex", model)).toBe(providerFamily === "google" && googleFlex);
+			}
+		},
+	);
+
+	it("does not let first-party ids or annotations realize tiers on an unrelated transport", () => {
+		for (const providerFamily of ["google", "openai", "anthropic"] satisfies ServiceTierFamily[]) {
+			const model = { ...m("openai", "google-generative-ai", "gpt-4o"), providerFamily };
+			expect(shouldSendServiceTier("priority", model)).toBe(false);
+			expect(realizesPriorityServiceTier("priority", model)).toBe(false);
+			const wrongAnthropicTransport = {
+				...m("anthropic", "openai-completions", "claude-opus-4-6"),
+				providerFamily,
+			};
+			expect(realizesPriorityServiceTier("priority", wrongAnthropicTransport)).toBe(providerFamily === "google");
+		}
 	});
 
 	it("sends ultrafast to OpenAI, and to Codex only when discovery advertises it", () => {

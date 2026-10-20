@@ -52,9 +52,12 @@ providers:
 
 This model uses `tier.google`, offers `/fast`, and forwards `flex` or `priority` as
 `service_tier`. The gateway must support these tiers; forwarding does not prove
-fulfillment or billing. Omitting the field preserves inference. Other annotations
-select settings only: they do not enable unsupported OpenAI tiers or implement
-Anthropic fast-mode transport for arbitrary gateways.
+fulfillment or billing. Omitting the field preserves inference. Annotations never
+add transport support: a custom `google-generative-ai` gateway still omits the tier,
+while `google-vertex` forwards only `priority` in its existing request header.
+The `openai` and `anthropic` annotations select settings only; they do not enable
+unsupported OpenAI tiers or implement Anthropic fast-mode transport for arbitrary
+gateways. `/fast` refuses annotated models whose transport cannot realize priority.
 
 
 ```yaml

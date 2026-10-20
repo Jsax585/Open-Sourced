@@ -35,7 +35,16 @@ import type {
 	WriteResult,
 } from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
-import type { Api, FetchImpl, KnownApi, Model, Provider, ThinkingBudgets, Usage } from "@oh-my-pi/pi-catalog/types";
+import type {
+	Api,
+	FetchImpl,
+	KnownApi,
+	Model,
+	Provider,
+	ServiceTierFamily,
+	ThinkingBudgets,
+	Usage,
+} from "@oh-my-pi/pi-catalog/types";
 import type { ApiKey } from "./auth-retry";
 import type { OAuthRequestIdentity } from "./auth/types";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
@@ -146,9 +155,6 @@ export type CacheRetention = "none" | "short" | "long";
  */
 export type ServiceTier = "auto" | "default" | "flex" | "scale" | "priority" | "ultrafast";
 
-/** Provider families that expose an independent service-tier knob. */
-export type ServiceTierFamily = "openai" | "anthropic" | "google";
-
 /**
  * Per-family service-tier selection. A request consults only the entry for the
  * family its model belongs to (see {@link resolveModelServiceTier}), so a user
@@ -231,10 +237,14 @@ export function resolveModelServiceTier(
  * request field. `auto` is never forwarded — it is OpenAI's implicit default, so
  * omitting `service_tier` is identical to requesting `auto`, and the Codex
  * (ChatGPT OAuth) endpoint rejects an explicit `auto` outright. OpenAI /
- * OpenAI-Codex accept every other {@link ServiceTier}; Google (Gemini API +
- * Vertex) and OpenRouter accept `flex`/`priority`; Fireworks Serverless
- * realizes only its Priority serving path. Anthropic is absent because it
- * realizes `priority` via `speed: "fast"`.
+ * OpenAI-Codex accept every other {@link ServiceTier}; direct Gemini accepts
+ * `flex`/`priority`, Vertex only `priority`, and OpenRouter `flex`/`scale`/`priority`.
+ * Fireworks Serverless realizes only its Priority serving path. Anthropic is
+ * absent because it realizes `priority` via `speed: "fast"`.
+ *
+ * Model targets must also use a transport that forwards the tier. An explicit
+ * Google family enables `flex`/`priority` on OpenAI-wire APIs only; it does not
+ * enable the direct Gemini body field on a custom provider.
  *
  * Codex-backend models (`openai-codex-responses`): `ultrafast` is sent only
  * when the model's discovered `service_tiers` lists it. `priority`/`scale`
@@ -251,6 +261,22 @@ export function shouldSendServiceTier(
 ): boolean {
 	if (!serviceTier || serviceTier === "auto") return false;
 	const provider = typeof target === "string" ? target : target?.provider;
+	if (typeof target !== "string" && target) {
+		// Native transports own their wire placement independently of family
+		// inference: Vertex emits a priority header for any provider, while the
+		// Gemini body field is restricted to the direct Google provider.
+		if (target.api === "google-vertex") return serviceTier === "priority";
+		if (target.api === "google-generative-ai") {
+			return provider === "google" && (serviceTier === "flex" || serviceTier === "priority");
+		}
+		if (
+			!isOpenAIServiceTierApi(target.api) &&
+			target.api !== "azure-openai-responses" &&
+			target.api !== "openrouter"
+		) {
+			return false;
+		}
+	}
 	if (
 		typeof target !== "string" &&
 		target?.api === "openai-codex-responses" &&
@@ -291,8 +317,9 @@ export function realizesPriorityServiceTier(
 	model: ServiceTierModel,
 ): boolean {
 	if (serviceTier !== "priority") return false;
-	if (model.provider === "anthropic") return true;
+	if (model.provider === "anthropic" && model.api === "anthropic-messages") return true;
 	if (model.provider === "openrouter") {
+		if (!shouldSendServiceTier(serviceTier, model)) return false;
 		const family = serviceTierFamily(model);
 		return family === "openai" || family === "google";
 	}

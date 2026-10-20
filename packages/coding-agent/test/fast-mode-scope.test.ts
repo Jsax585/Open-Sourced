@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { Api, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
+import type { Api, Model, ProviderSessionState, ServiceTierFamily } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -136,6 +136,38 @@ describe("/fast targets the current model's service-tier family", () => {
 		expect(session.serviceTierByFamily).toEqual({ google: "priority" });
 		expect(session.isFastModeActive()).toBe(true);
 	});
+
+	it.each([
+		["google", "google-generative-ai", "gemini-3-flash"],
+		["openai", "google-generative-ai", "gpt-4o"],
+		["openai", "openai-completions", "gateway-model"],
+		["anthropic", "openai-completions", "claude-opus-4-6"],
+		["anthropic", "anthropic-messages", "claude-opus-4-6"],
+	] satisfies [ServiceTierFamily, Api, string][])(
+		"refuses /fast for a custom %s annotation on %s without a tier wire effect",
+		async (providerFamily, api, id) => {
+			const session = await createSessionForModel(
+				buildModel({
+					id,
+					name: "Gateway Model",
+					api,
+					provider: "custom-gateway",
+					providerFamily,
+					baseUrl: "https://gateway.example/v1",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 32768,
+					maxTokens: 1024,
+				}),
+			);
+			expect(session.setFastMode(true)).toBe(false);
+			expect(session.serviceTierByFamily).toEqual({});
+			expect(session.isFastModeActive()).toBe(false);
+			session.setServiceTierFamily(providerFamily, "priority");
+			expect(session.isFastModeActive()).toBe(false);
+		},
+	);
 
 	it("leaves Fireworks models on the dedicated Fireworks tier control", async () => {
 		const session = await createSessionForModel(
