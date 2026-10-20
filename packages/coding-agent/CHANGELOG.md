@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `task.standardContextOnly` (off by default) to keep task/eval/workpool subagents on standard context tiers while the main session can use extended context; workers and their descendants retain the policy across follow-ups and revival (by [@Mike-Zhuang](https://github.com/Mike-Zhuang))
+
 ### Fixed
 
 - Fixed Mnemopi memory completions ignoring the memory role's thinking suffix, including one inherited from `tiny` or `smol` when `modelRoles.memory` is unset; each `retry.fallbackChains.memory` entry sends its own level, and `:off` disables reasoning ([#16378](https://github.com/can1357/oh-my-pi/pull/16378) by [@alphastorm](https://github.com/alphastorm))
