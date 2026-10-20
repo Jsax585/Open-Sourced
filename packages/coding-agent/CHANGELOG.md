@@ -10,6 +10,9 @@
 - Idle compaction no longer runs on logged-in OpenAI Codex accounts, whose prompt cache never expires; compacting while idle only threw away a warm cache
 
 ## [18.12.5] - 2026-10-21
+- Fixed `session/request_cancel` over ACP silently dropping a stop in three windows: a prompt queued (or still dispatching) behind the running turn now resolves `cancelled` without ever starting, a cancel landing on a settled turn with an autonomous run still streaming aborts that run with the same interrupt bound, and queued prompts can no longer stream after the client believes it stopped the session ([#15885](https://github.com/can1357/oh-my-pi/pull/15885))
+- Fixed agents opening your own Chrome through the relay (with `browser.relay` on) when they asked the `browser` tool for Chromium with `app.tern: false`; the tool now points them to `app.relay: false` ([#16294](https://github.com/can1357/oh-my-pi/pull/16294) by [@will-bogusz](https://github.com/will-bogusz))
+### Changed
 
 ### Added
 
