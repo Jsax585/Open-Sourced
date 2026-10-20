@@ -28,19 +28,18 @@ const SEPARATOR = "=======";
 const THEIRS_PREFIX = ">>>>>>>";
 
 /**
- * Scan an already-collected array of file lines for completed conflict
- * blocks. `firstLineNumber` is the 1-indexed line number of `lines[0]`
- * (so a windowed read starting at line 200 passes `firstLineNumber: 200`).
+ * Incremental conflict scanner: `push` file lines in order, starting at
+ * line `firstLineNumber` (1-indexed); `blocks` collects each completed block.
  *
- * Only fully-closed blocks (opener + separator + closer all present in
- * the window) are returned. A block whose closer is past the window's
- * tail is dropped — the agent will see the open marker and can widen
- * the read.
+ * Only fully-closed blocks (opener + separator + closer all pushed) are
+ * collected. A block still open when the lines run out is dropped — the
+ * agent will see the open marker and can widen the read.
  */
-export function scanConflictLines(lines: readonly string[], firstLineNumber: number): ConflictBlock[] {
-	const blocks: ConflictBlock[] = [];
-	let phase: "idle" | "ours" | "base" | "theirs" = "idle";
-	let partial: {
+export class ConflictScanner {
+	readonly blocks: ConflictBlock[] = [];
+	#nextLine: number;
+	#phase: "idle" | "ours" | "base" | "theirs" = "idle";
+	#partial: {
 		startLine: number;
 		oursLabel?: string;
 		oursLines: string[];
@@ -51,51 +50,54 @@ export function scanConflictLines(lines: readonly string[], firstLineNumber: num
 		theirsLines?: string[];
 	} | null = null;
 
-	for (let i = 0; i < lines.length; i++) {
+	constructor(firstLineNumber: number) {
+		this.#nextLine = firstLineNumber;
+	}
+
+	push(rawLine: string): void {
 		// Strip a trailing \r so CRLF checkouts match the same markers; stored
 		// section lines are LF-normalized (splice re-applies \r on write).
-		const line = stripTrailingCr(lines[i]);
-		const ln = firstLineNumber + i;
+		const line = stripTrailingCr(rawLine);
+		const ln = this.#nextLine++;
 
 		const oursLabel = matchMarker(line, OURS_PREFIX);
 		if (oursLabel !== null) {
-			partial = { startLine: ln, oursLabel: oursLabel || undefined, oursLines: [] };
-			phase = "ours";
-			continue;
+			this.#partial = { startLine: ln, oursLabel: oursLabel || undefined, oursLines: [] };
+			this.#phase = "ours";
+			return;
 		}
 
-		if (phase === "idle" || partial === null) continue;
+		const partial = this.#partial;
+		if (this.#phase === "idle" || partial === null) return;
 
 		const baseLabel = matchMarker(line, BASE_PREFIX);
 		if (baseLabel !== null) {
-			if (phase !== "ours") {
-				partial = null;
-				phase = "idle";
-				continue;
+			if (this.#phase !== "ours") {
+				this.#reset();
+				return;
 			}
 			partial.baseLine = ln;
 			partial.baseLabel = baseLabel || undefined;
 			partial.baseLines = [];
-			phase = "base";
-			continue;
+			this.#phase = "base";
+			return;
 		}
 
 		if (line === SEPARATOR) {
-			if (phase === "ours" || phase === "base") {
+			if (this.#phase === "ours" || this.#phase === "base") {
 				partial.separatorLine = ln;
 				partial.theirsLines = [];
-				phase = "theirs";
+				this.#phase = "theirs";
 			} else {
-				partial = null;
-				phase = "idle";
+				this.#reset();
 			}
-			continue;
+			return;
 		}
 
 		const theirsLabel = matchMarker(line, THEIRS_PREFIX);
 		if (theirsLabel !== null) {
-			if (phase === "theirs" && partial.separatorLine !== undefined && partial.theirsLines) {
-				blocks.push({
+			if (this.#phase === "theirs" && partial.separatorLine !== undefined && partial.theirsLines) {
+				this.blocks.push({
 					startLine: partial.startLine,
 					separatorLine: partial.separatorLine,
 					endLine: ln,
@@ -108,43 +110,76 @@ export function scanConflictLines(lines: readonly string[], firstLineNumber: num
 					theirsLines: partial.theirsLines,
 				});
 			}
-			partial = null;
-			phase = "idle";
-			continue;
+			this.#reset();
+			return;
 		}
 
-		if (phase === "ours") partial.oursLines.push(line);
-		else if (phase === "base" && partial.baseLines) partial.baseLines.push(line);
-		else if (phase === "theirs" && partial.theirsLines) partial.theirsLines.push(line);
+		if (this.#phase === "ours") partial.oursLines.push(line);
+		else if (this.#phase === "base" && partial.baseLines) partial.baseLines.push(line);
+		else if (this.#phase === "theirs" && partial.theirsLines) partial.theirsLines.push(line);
 	}
 
-	return blocks;
+	#reset(): void {
+		this.#partial = null;
+		this.#phase = "idle";
+	}
+}
+
+/**
+ * Scan an already-collected array of file lines for completed conflict
+ * blocks. `firstLineNumber` is the 1-indexed line number of `lines[0]`
+ * (so a windowed read starting at line 200 passes `firstLineNumber: 200`).
+ */
+export function scanConflictLines(lines: readonly string[], firstLineNumber: number): ConflictBlock[] {
+	const scanner = new ConflictScanner(firstLineNumber);
+	for (const line of lines) scanner.push(line);
+	return scanner.blocks;
 }
 
 const SCAN_FILE_DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 
 /**
- * Scan a whole file for unresolved conflict blocks.
+ * Scan a file for unresolved conflict blocks, streaming it line by line.
  *
- * Reads at most `maxBytes` (default 10 MB) so this stays cheap on
- * pathological files. Files truncated by the cap report
- * `scanTruncated: true`; only complete blocks within the scanned prefix
- * are returned, so trailing partial markers never invent fake blocks.
+ * Reads at most `maxBytes` (default 10 MiB) so the per-read count stays
+ * cheap on pathological files; pass `Infinity` to scan the whole file.
+ * Files cut by the cap report `scanTruncated: true`; only complete blocks
+ * within the scanned prefix are returned, so trailing partial markers never
+ * invent fake blocks.
  */
 export async function scanFileForConflicts(
 	absolutePath: string,
-	options: { maxBytes?: number } = {},
+	options: { maxBytes?: number; signal?: AbortSignal } = {},
 ): Promise<{ blocks: ConflictBlock[]; scanTruncated: boolean }> {
-	const maxBytes = options.maxBytes ?? SCAN_FILE_DEFAULT_MAX_BYTES;
-	const file = Bun.file(absolutePath);
-	const size = file.size;
-	const truncated = size > maxBytes;
-	const bytes = truncated ? new Uint8Array(await file.slice(0, maxBytes).arrayBuffer()) : await file.bytes();
-	const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-	// `split("\n")` over a truncated read may leave a partial last line; the
-	// scanner already tolerates an unclosed opener, so no extra trimming.
-	const lines = text.split("\n");
-	return { blocks: scanConflictLines(lines, 1), scanTruncated: truncated };
+	let remaining = options.maxBytes ?? SCAN_FILE_DEFAULT_MAX_BYTES;
+	const scanner = new ConflictScanner(1);
+	const decoder = new TextDecoder("utf-8", { fatal: false });
+	// Text of the current line so far; parts, so one huge line is not re-concatenated per chunk.
+	let pending: string[] = [];
+	let truncated = false;
+	for await (const chunk of Bun.file(absolutePath).stream()) {
+		options.signal?.throwIfAborted();
+		const bytes = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+		remaining -= bytes.length;
+		const text = decoder.decode(bytes, { stream: true });
+		const lastBreak = text.lastIndexOf("\n");
+		if (lastBreak === -1) {
+			pending.push(text);
+		} else {
+			pending.push(text.slice(0, lastBreak));
+			for (const line of pending.join("").split("\n")) scanner.push(line);
+			pending = [text.slice(lastBreak + 1)];
+		}
+		if (bytes.length < chunk.length) {
+			truncated = true;
+			break;
+		}
+	}
+	// A cut read may leave a partial last line; the scanner already tolerates
+	// an unclosed opener, so no extra trimming.
+	pending.push(decoder.decode());
+	scanner.push(pending.join(""));
+	return { blocks: scanner.blocks, scanTruncated: truncated };
 }
 
 /**
@@ -679,15 +714,12 @@ export function formatConflictWarning(
  */
 export function formatConflictSummary(
 	entries: readonly ConflictEntry[],
-	options: { displayPath: string; scanTruncated?: boolean } = { displayPath: "" },
+	options: { displayPath: string } = { displayPath: "" },
 ): string {
 	const lines: string[] = [];
 	const total = entries.length;
 	const word = total === 1 ? "conflict" : "conflicts";
 	lines.push(`⚠ ${total} unresolved ${word} in ${options.displayPath || "<file>"}`);
-	if (options.scanTruncated) {
-		lines.push("- note: file scan hit the byte cap; additional conflicts may exist beyond the scanned prefix.");
-	}
 	const oursLabel = pickLabel(entries, e => e.oursLabel);
 	const theirsLabel = pickLabel(entries, e => e.theirsLabel);
 	const baseLabel = pickLabel(entries, e => (e.baseLines !== undefined ? e.baseLabel : undefined));

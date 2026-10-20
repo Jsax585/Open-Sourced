@@ -282,6 +282,37 @@ describe("read surfaces conflicts as a warning footer", () => {
 		expect(text).toContain("No unresolved git merge conflicts");
 	});
 
+	it("`:conflicts` registers blocks past the 10 MiB per-read scan cap", async () => {
+		// 100-byte lines: 10 MiB ends inside line 104858.
+		const filler = (n: number) => Array.from({ length: n }, () => "x".repeat(99));
+		const block = (tag: string) => [`<<<<<<< ${tag}`, "ours", "=======", "theirs", `>>>>>>> ${tag}`];
+		await Bun.write(path.join(tempDir, "after-cap.ts"), [...filler(110_000), ...block("late"), ""].join("\n"));
+		// A block closed before 10 MiB, then one opened at line 104000 that closes past it.
+		const straddle = [
+			...block("early"),
+			...filler(103_994),
+			"<<<<<<< straddle",
+			...filler(2_000),
+			"=======",
+			"theirs",
+			">>>>>>> straddle",
+			"",
+		];
+		await Bun.write(path.join(tempDir, "straddle.ts"), straddle.join("\n"));
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+
+		const afterCap = getText(await read.execute("read-after-cap", { path: "after-cap.ts:conflicts" }));
+		expect(afterCap).toContain("1 unresolved conflict in after-cap.ts");
+		expect(afterCap).toMatch(/#1\s+L110001-110005/);
+		const late = getText(await read.execute("read-late", { path: "conflict://1/theirs" }));
+		expect(late).toContain("theirs");
+
+		const straddled = getText(await read.execute("read-straddle", { path: "straddle.ts:conflicts" }));
+		expect(straddled).toContain("2 unresolved conflicts in straddle.ts");
+		expect(straddled).toMatch(/#3\s+L104000-106003/);
+	});
+
 	it("window-mode warning shows visible-of-total when window misses some conflicts", async () => {
 		const filePath = path.join(tempDir, "wide.ts");
 		await Bun.write(filePath, TWO_BLOCKS);

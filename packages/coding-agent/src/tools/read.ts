@@ -2842,7 +2842,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		signal: AbortSignal | undefined,
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		throwIfAborted(signal);
-		const scan = await scanFileForConflicts(absolutePath);
+		// No byte cap: blocks past it would stay unregistered, and the `conflict://<N>`
+		// not-found error sends the agent here to register them.
+		const scan = await scanFileForConflicts(absolutePath, { maxBytes: Number.POSITIVE_INFINITY, signal });
 		const displayPath = formatPathRelativeToCwd(absolutePath, this.session.cwd);
 		const history = getConflictHistory(this.session);
 		const entries = scan.blocks.map(block =>
@@ -2856,7 +2858,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const summary =
 			entries.length === 0
 				? `No unresolved git merge conflicts in ${displayPath}.`
-				: formatConflictSummary(entries, { displayPath, scanTruncated: scan.scanTruncated });
+				: formatConflictSummary(entries, { displayPath });
 
 		const details: ReadToolDetails = {
 			resolvedPath: absolutePath,
