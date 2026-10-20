@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed every keypress in a long session rescanning the whole retained transcript: `TranscriptContainer` now tracks writes to the child array it owns and skips retained-history reconciliation on stable renders, and still reconciles when the children array is replaced from outside ([#16542](https://github.com/can1357/oh-my-pi/pull/16542) by [@Komzpa](https://github.com/Komzpa))
+
 ## [18.12.4] - 2026-10-20
 
 ### Added

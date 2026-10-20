@@ -446,6 +446,37 @@ describe("TranscriptContainer row split", () => {
 });
 
 describe("TranscriptContainer", () => {
+	it("does not re-read the live children on stable renders", () => {
+		const transcript = new TranscriptContainer();
+		for (let index = 0; index < 300; index++) transcript.addChild(new Block([`live ${index}`], false));
+		transcript.renderViewport(80, 10, frame);
+		let childIndexReads = 0;
+		const children = transcript.children;
+		for (let index = 0; index < children.length; index++) {
+			const child = children[index]!;
+			Object.defineProperty(children, index, {
+				configurable: true,
+				enumerable: true,
+				get: () => {
+					childIndexReads++;
+					return child;
+				},
+			});
+		}
+		for (let render = 0; render < 5; render++) transcript.renderViewport(80, 10, frame);
+		expect(childIndexReads).toBeLessThan(10);
+	});
+
+	it("still picks up an in-place write to the children array", () => {
+		const transcript = new TranscriptContainer();
+		for (let index = 0; index < 20; index++) transcript.addChild(new Block([`live ${index}`], false));
+		transcript.renderViewport(80, 40, frame);
+		transcript.children[5] = new Block(["swapped"], false);
+		const rows = transcript.renderViewport(80, 40, frame);
+		expect(rows).toContain("swapped");
+		expect(rows).not.toContain("live 5");
+	});
+
 	it("preserves retirement while externally reordered and replaced live children settle", () => {
 		const transcript = new TranscriptContainer();
 		const archived = new Block(["archived"], true);
