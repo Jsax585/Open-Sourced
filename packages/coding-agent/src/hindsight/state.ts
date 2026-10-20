@@ -2,7 +2,8 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { findPersistedRecall, persistRecall } from "../memory-backend/recall-entry";
 import type { MemoryPromptPreparation } from "../memory-backend/types";
 import type { AgentSession } from "../session/agent-session";
-import { type BankScope, ensureBankExists } from "./bank";
+import type { SessionEntry } from "../session/session-entries";
+import { type BankScope, computeBankScope, ensureBankExists } from "./bank";
 import type { HindsightApi, MemoryItemInput } from "./client";
 import type { HindsightConfig } from "./config";
 import {
@@ -19,11 +20,37 @@ import {
 	resolveSeedsForScope,
 	tryLoadMentalModelsBlock,
 } from "./mental-models";
-import { countUserTurns, extractMessages } from "./transcript";
+import { extractEntryMessages, extractMessages } from "./transcript";
 
 const RETAIN_FLUSH_BATCH_SIZE = 16;
 const RETAIN_FLUSH_INTERVAL_MS = 5_000;
 const MENTAL_MODEL_LOAD_TIMED_OUT = Symbol("mental-model-load-timed-out");
+const RETENTION_SEGMENT_TYPE = "hindsight_retention_segment";
+const RETENTION_DOCUMENT_TYPE = "hindsight_retention_document";
+
+interface RetentionSegment {
+	documentId: string;
+	sessionId: string;
+	sourceTimestamp?: string;
+	bankId: string;
+	tags?: string[];
+}
+
+interface RetentionDocument {
+	segmentId: string;
+	sessionId: string;
+	documentId: string;
+	messageCount: number;
+	prefixKey: string;
+	userTurns: number;
+	deleted?: boolean;
+}
+
+interface SegmentTranscript {
+	segment: RetentionSegment;
+	entries: SessionEntry[];
+	documents: Map<string, RetentionDocument>;
+}
 
 interface PendingRetainItem {
 	content: string;
@@ -246,6 +273,8 @@ export class HindsightSessionState {
 	/** Alias states delegate persistence config to a primary parent state. */
 	aliasOf?: HindsightSessionState;
 	readonly retainQueue: HindsightRetainQueue;
+	#retentionTransition: Promise<void> = Promise.resolve();
+	#cachedDocumentId?: string;
 
 	constructor(options: HindsightSessionStateOptions) {
 		this.sessionId = options.sessionId;
@@ -326,9 +355,10 @@ export class HindsightSessionState {
 		return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 	}
 
-	async retainSession(messages: HindsightMessage[]): Promise<void> {
+	async retainSession(messages: HindsightMessage[], target?: RetentionSegment): Promise<string | undefined> {
 		const retainedAt = new Date();
-		const sourceTimestamp = this.#sessionSourceTimestamp() ?? retainedAt;
+		const sourceTimestamp =
+			(target?.sourceTimestamp ? new Date(target.sourceTimestamp) : this.#sessionSourceTimestamp()) ?? retainedAt;
 		const retainFullWindow = this.config.retainMode === "full-session";
 		let documentId: string;
 		let transcript: string;
@@ -337,7 +367,7 @@ export class HindsightSessionState {
 		let hashedThrough = 0;
 
 		if (retainFullWindow) {
-			documentId = this.sessionId;
+			documentId = target?.documentId ?? this.sessionId;
 			const boundary = this.#lastRetainedMessageIndex;
 			if (boundary <= messages.length) prefixKey = extendRetentionPrefixKey("", messages, 0, boundary);
 			if (boundary > messages.length || prefixKey !== this.#lastRetainedPrefixKey) {
@@ -354,22 +384,27 @@ export class HindsightSessionState {
 			transcript = nextCachedTranscript;
 		} else {
 			const windowTurns = this.config.retainEveryNTurns + this.config.retainOverlapTurns;
-			const target = sliceLastTurnsByUserBoundary(messages, windowTurns);
-			documentId = `${this.sessionId}-${retainedAt.getTime()}`;
+			const window = sliceLastTurnsByUserBoundary(messages, windowTurns);
+			documentId = `${target?.documentId ?? this.sessionId}-${crypto.randomUUID()}`;
 			this.#lastRetainedMessageIndex = 0;
 			this.#cachedTranscript = "";
 			this.#lastRetainedPrefixKey = "";
-			const { transcript: windowTranscript } = prepareRetentionTranscript(target, true, { includeTimestamps: true });
+			const { transcript: windowTranscript } = prepareRetentionTranscript(window, true, { includeTimestamps: true });
 			if (!windowTranscript) return;
 			transcript = windowTranscript;
 		}
 
-		await ensureBankExists(this.client, this.bankId, this.config, this.banksSet);
-		await this.client.retain(this.bankId, transcript, {
+		const bankId = target?.bankId ?? this.bankId;
+		await ensureBankExists(this.client, bankId, this.config, this.banksSet);
+		await this.client.retain(bankId, transcript, {
 			documentId,
 			context: this.config.retainContext,
-			metadata: { session_id: this.sessionId },
-			tags: this.retainTags,
+			metadata: {
+				session_id: target?.sessionId ?? this.sessionId,
+				segment_id: target?.documentId ?? this.sessionId,
+			},
+			tags: target ? target.tags : this.retainTags,
+			updateMode: "replace",
 			timestamp: sourceTimestamp,
 			async: true,
 		});
@@ -379,27 +414,159 @@ export class HindsightSessionState {
 			this.#lastRetainedPrefixKey = extendRetentionPrefixKey(prefixKey, messages, hashedThrough, messages.length);
 			this.#lastRetainedMessageIndex = messages.length;
 		}
+		return documentId;
+	}
+
+	bindRetentionScope(): void {
+		const manager = this.session.sessionManager;
+		const sessionId = manager.getSessionId();
+		const entries = manager.getEntries();
+		const record = entries.findLast(entry => entry.type === "custom" && entry.customType === RETENTION_SEGMENT_TYPE);
+		const current = record?.type === "custom" ? (record.data as RetentionSegment) : undefined;
+		if (current && current.bankId === this.bankId && Bun.deepEquals(current.tags, this.retainTags)) return;
+		manager.appendCustomEntry(RETENTION_SEGMENT_TYPE, {
+			documentId: current ? `${sessionId}-${crypto.randomUUID()}` : sessionId,
+			sessionId,
+			bankId: this.bankId,
+			tags: this.retainTags,
+			sourceTimestamp: current ? new Date().toISOString() : this.#sessionSourceTimestamp()?.toISOString(),
+		} satisfies RetentionSegment);
+	}
+
+	async prepareForCwdMove(newCwd: string): Promise<void> {
+		const next = computeBankScope(this.config, newCwd);
+		if (next.bankId === this.bankId && Bun.deepEquals(next.retainTags, this.retainTags)) return;
+		await this.finishRetentionScope();
+	}
+
+	async finishRetentionScope(): Promise<void> {
+		if (this.aliasOf || !this.config.autoRetain) return;
+		await this.#retainSelectedSegments(true);
+	}
+
+	#segmentTranscripts(): SegmentTranscript[] {
+		const manager = this.session.sessionManager;
+		const sessionId = manager.getSessionId();
+		const entries = manager.getEntries();
+		const segments: SegmentTranscript[] = [];
+		const byId = new Map<string, SegmentTranscript>();
+		const branch = new Set(manager.getBranch().map(entry => entry.id));
+		let active: SegmentTranscript | undefined;
+		const initialEntries: SessionEntry[] = [];
+		for (const entry of entries) {
+			if (entry.type === "custom" && entry.customType === RETENTION_SEGMENT_TYPE) {
+				const source = entry.data as RetentionSegment;
+				const documentId = source.sessionId === sessionId ? source.documentId : `${sessionId}-${source.documentId}`;
+				const segment = { ...source, documentId, sessionId };
+				active = byId.get(documentId);
+				if (!active) {
+					active = { segment, entries: [], documents: new Map() };
+					if (segments.length === 0) active.entries = initialEntries;
+					segments.push(active);
+					byId.set(documentId, active);
+				}
+			} else if (entry.type === "custom" && entry.customType === RETENTION_DOCUMENT_TYPE) {
+				const document = entry.data as RetentionDocument;
+				if (document.sessionId !== sessionId) continue;
+				byId.get(document.segmentId)?.documents.set(document.documentId, document);
+			} else if (entry.type === "message" && branch.has(entry.id)) {
+				(active?.entries ?? initialEntries).push(entry);
+			}
+		}
+		return segments;
+	}
+
+	async #retainSelectedSegments(force = false, invalidationOnly = false): Promise<void> {
+		const run = this.#retentionTransition.then(async () => {
+			this.bindRetentionScope();
+			const segments = this.#segmentTranscripts();
+			for (const [index, { segment, entries, documents }] of segments.entries()) {
+				const messages = extractEntryMessages(entries);
+				const userTurns = messages.reduce((count, message) => count + Number(message.role === "user"), 0);
+				let lastRetainedTurn = 0;
+				let invalidated = false;
+				const prefixKeys = new Map<number, string>();
+				for (const document of documents.values()) {
+					if (!document.deleted) prefixKeys.set(document.messageCount, "");
+				}
+				let prefixKey = "";
+				for (let i = 0; i < messages.length; i++) {
+					prefixKey = extendRetentionPrefixKey(prefixKey, messages, i, i + 1);
+					if (prefixKeys.has(i + 1)) prefixKeys.set(i + 1, prefixKey);
+				}
+				for (const document of documents.values()) {
+					if (document.deleted) continue;
+					const unchanged =
+						document.messageCount <= messages.length &&
+						prefixKeys.get(document.messageCount) === document.prefixKey;
+					if (unchanged) {
+						lastRetainedTurn = Math.max(lastRetainedTurn, document.userTurns);
+						continue;
+					}
+					invalidated = true;
+					if (
+						this.config.retainMode !== "full-session" ||
+						document.documentId !== segment.documentId ||
+						messages.length === 0
+					) {
+						await this.client.deleteDocument(segment.bankId, document.documentId);
+						this.session.sessionManager.appendCustomEntry(RETENTION_DOCUMENT_TYPE, {
+							...document,
+							deleted: true,
+						} satisfies RetentionDocument);
+					}
+				}
+				const active = index === segments.length - 1;
+				if (active) this.lastRetainedTurn = lastRetainedTurn;
+				const due = active && !invalidationOnly && userTurns - lastRetainedTurn >= this.config.retainEveryNTurns;
+				if (messages.length === 0 || (!invalidated && !due && !(force && (active || documents.size === 0))))
+					continue;
+				if (this.#cachedDocumentId !== segment.documentId || invalidated || force) {
+					this.#lastRetainedMessageIndex = 0;
+					this.#cachedTranscript = "";
+					this.#lastRetainedPrefixKey = "";
+					this.#cachedDocumentId = segment.documentId;
+				}
+				const documentId = await this.retainSession(messages, segment);
+				if (!documentId) continue;
+				this.session.sessionManager.appendCustomEntry(RETENTION_DOCUMENT_TYPE, {
+					segmentId: segment.documentId,
+					sessionId: segment.sessionId,
+					documentId,
+					messageCount: messages.length,
+					prefixKey,
+					userTurns,
+				} satisfies RetentionDocument);
+				if (active) this.lastRetainedTurn = userTurns;
+			}
+			const active = segments.at(-1)?.segment;
+			if (
+				active &&
+				!this.session.sessionManager
+					.getBranch()
+					.some(
+						entry =>
+							entry.type === "custom" &&
+							entry.customType === RETENTION_SEGMENT_TYPE &&
+							(entry.data as RetentionSegment).documentId === active.documentId,
+					)
+			) {
+				this.session.sessionManager.appendCustomEntry(RETENTION_SEGMENT_TYPE, active);
+			}
+		});
+		this.#retentionTransition = run.catch(() => {});
+		await run;
+	}
+
+	async synchronizeRetainedBranch(): Promise<void> {
+		if (this.aliasOf || !this.config.autoRetain) return;
+		await this.#retainSelectedSegments(false, true);
 	}
 
 	async maybeRetainOnAgentEnd(): Promise<void> {
 		if (!this.config.autoRetain) return;
-		// Cheap gate first: most agent_end events are not retain turns, so skip text extraction.
-		const userTurns = countUserTurns(this.session.sessionManager);
-		if (userTurns - this.lastRetainedTurn < this.config.retainEveryNTurns) return;
-		const messages = extractMessages(this.session.sessionManager);
-		if (messages.length === 0) return;
-
 		try {
-			await this.retainSession(messages);
-			this.lastRetainedTurn = userTurns;
-			if (this.config.debug) {
-				logger.debug("Hindsight: auto-retain succeeded", {
-					sessionId: this.sessionId,
-					bankId: this.bankId,
-					userTurns,
-					messages: messages.length,
-				});
-			}
+			await this.#retainSelectedSegments();
 		} catch (err) {
 			logger.warn("Hindsight: auto-retain failed", {
 				sessionId: this.sessionId,
@@ -410,19 +577,8 @@ export class HindsightSessionState {
 	}
 
 	async forceRetainCurrentSession(): Promise<void> {
-		const messages = extractMessages(this.session.sessionManager);
-		if (messages.length === 0) return;
-		// Forced retains are user-initiated rebuilds (`/memory enqueue`): drop the
-		// incremental cache so the full transcript is reformatted and resent even
-		// when no new messages arrived since the last auto-retain — otherwise a
-		// rebuild could never recover an upstream document that was deleted or a
-		// previous async retain that never materialized.
-		this.#lastRetainedMessageIndex = 0;
-		this.#cachedTranscript = "";
-		this.#lastRetainedPrefixKey = "";
 		try {
-			await this.retainSession(messages);
-			this.lastRetainedTurn = messages.filter(m => m.role === "user").length;
+			await this.#retainSelectedSegments(true);
 		} catch (err) {
 			logger.warn("Hindsight: forced retain failed", {
 				sessionId: this.sessionId,

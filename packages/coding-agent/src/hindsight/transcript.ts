@@ -15,7 +15,7 @@ import type { SessionEntry } from "../session/session-entries";
 import { type HindsightMessage, hasSubstantiveContent } from "./content";
 
 export interface ReadonlySessionManagerLike {
-	getEntries(): SessionEntry[];
+	getBranch(): SessionEntry[];
 }
 
 /**
@@ -33,9 +33,13 @@ export interface ReadonlySessionManagerLike {
  *   retaining them would prime recall on internal monologue.
  */
 export function extractMessages(sessionManager: ReadonlySessionManagerLike): HindsightMessage[] {
+	return extractEntryMessages(sessionManager.getBranch());
+}
+
+export function extractEntryMessages(entries: readonly SessionEntry[]): HindsightMessage[] {
 	const messages: HindsightMessage[] = [];
 
-	for (const entry of sessionManager.getEntries()) {
+	for (const entry of entries) {
 		if (entry.type !== "message") continue;
 		const msg = entry.message;
 		const role = msg.role;
@@ -56,7 +60,7 @@ export function extractMessages(sessionManager: ReadonlySessionManagerLike): Hin
  */
 export function countUserTurns(sessionManager: ReadonlySessionManagerLike): number {
 	let count = 0;
-	for (const entry of sessionManager.getEntries()) {
+	for (const entry of sessionManager.getBranch()) {
 		if (entry.type !== "message" || entry.message.role !== "user") continue;
 		if (hasSubstantiveContent(extractUserText(entry.message))) count++;
 	}

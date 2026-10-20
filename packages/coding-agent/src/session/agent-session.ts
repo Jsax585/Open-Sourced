@@ -10563,6 +10563,7 @@ export class AgentSession implements SettingsScope {
 	/** Move the active session and artifacts after enforcing mode transition invariants. */
 	async moveSession(newCwd: string, targetSessionDir?: string): Promise<void> {
 		this.#assertVibeSessionTransitionAllowed("move the session");
+		await this.getHindsightSessionState()?.prepareForCwdMove(newCwd);
 		await this.sessionManager.moveTo(newCwd, targetSessionDir);
 	}
 
@@ -11112,6 +11113,7 @@ export class AgentSession implements SettingsScope {
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 		this.#checkpointState = undefined;
 		this.#pendingRewindReport = undefined;
+		await this.getHindsightSessionState()?.synchronizeRetainedBranch();
 	}
 	/** Plan-mode decision affordances: `ask`, or plan approval via `write xd://propose`. */
 	#isPlanDecisionTool(toolCall: { name: string; arguments?: Record<string, unknown> }): boolean {
@@ -12152,6 +12154,7 @@ export class AgentSession implements SettingsScope {
 			if (switchingToDifferentSession || didReloadConversationChange) {
 				this.#clearSessionScopedToolState();
 			}
+			await this.getHindsightSessionState()?.synchronizeRetainedBranch();
 			this.#reconnectToAgent();
 			try {
 				await this.#sessionSwitchReconciler?.();
@@ -12885,6 +12888,7 @@ export class AgentSession implements SettingsScope {
 		this.#todo.syncFromBranch();
 		this.#modelMentions.syncFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
+		await this.getHindsightSessionState()?.synchronizeRetainedBranch();
 
 		this.#branchSummaryAbortController = undefined;
 

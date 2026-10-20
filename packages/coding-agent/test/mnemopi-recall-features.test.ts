@@ -45,7 +45,7 @@ function startSession(overrides: Record<string, unknown>): { state: MnemopiSessi
 				getApiKeyForProvider: async () => undefined,
 				resolver: () => async () => undefined,
 			} as never,
-			sessionManager: { getEntries: () => [], getCwd: () => dir.path() } as never,
+			sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => dir.path() } as never,
 			emitNotice: () => {},
 			getHindsightSessionState: () => undefined,
 			subscribe: () => () => {},

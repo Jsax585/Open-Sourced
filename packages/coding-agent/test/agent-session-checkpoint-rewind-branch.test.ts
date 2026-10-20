@@ -115,6 +115,8 @@ async function createHarness(
 	options?: {
 		onAgentEnd?: (willContinue: boolean | undefined) => void;
 		resolveFallbackTool?: (name: string) => AgentTool | undefined;
+		/** Loopback Hindsight URL: runs the session with the Hindsight memory backend retaining to it. */
+		hindsightUrl?: string;
 	},
 ): Promise<Harness & { mock: MockModel }> {
 	const tempDir = TempDir.createSync("@pi-checkpoint-rewind-branch-");
@@ -129,6 +131,16 @@ async function createHarness(
 		"todo.enabled": false,
 		"todo.eager": "default",
 		"todo.reminders": false,
+		...(options?.hindsightUrl
+			? {
+					"memory.backend": "hindsight",
+					"hindsight.apiUrl": options.hindsightUrl,
+					"hindsight.autoRecall": false,
+					"hindsight.mentalModelsEnabled": false,
+					"hindsight.mentalModelAutoSeed": false,
+					"hindsight.retainEveryNTurns": 10,
+				}
+			: {}),
 	});
 	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
 	const toolRegistry = new Map(tools.map(tool => [tool.name, tool]));
@@ -168,9 +180,13 @@ async function createHarness(
 		modelRegistry,
 		toolRegistry,
 		extensionRunner,
+		memoryAgentDir: tempDir.path(),
+		memoryTaskDepth: 0,
+		createMemoryTools: async () => [],
 	});
 	const harness = { session, authStorage, tempDir, extraSessions: [] };
 	activeHarnesses.push(harness);
+	if (options?.hindsightUrl) await session.applyMemoryBackend();
 	return { ...harness, mock };
 }
 
@@ -1021,5 +1037,92 @@ describe("AgentSession checkpoint rewind branch context", () => {
 				report: "post-resume findings",
 			}),
 		).resolves.toMatchObject({ details: { report: "post-resume findings", rewound: true } });
+	});
+
+	it("checkpoint rewind removes retained exploration before the post-rewind model call", async () => {
+		const keptNote = "KEPT-NOTE: the migration lives in the billing service.";
+		const exploration = "EXPLORATION-DRAFT: the billing service might use the legacy ledger.";
+		const retained = new Map<string, string>();
+		const requests: string[] = [];
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				const parts = new URL(request.url).pathname.split("/").filter(Boolean).map(decodeURIComponent);
+				if (request.method === "PUT") return Response.json({});
+				if (request.method === "POST" && parts.at(-1) === "memories") {
+					const body = (await request.json()) as {
+						items: Array<{ content: string; document_id: string; update_mode?: string }>;
+					};
+					for (const item of body.items) {
+						retained.set(item.document_id, item.content);
+						requests.push(`POST ${item.update_mode}`);
+					}
+					return Response.json({ success: true });
+				}
+				if (request.method === "DELETE" && parts.at(-2) === "documents") {
+					retained.delete(parts.at(-1)!);
+					requests.push("DELETE");
+					return Response.json({ success: true });
+				}
+				return new Response("Unexpected request", { status: 404 });
+			},
+		});
+		try {
+			let explorationWasRetained = false;
+			let atPostRewindCall: string[] | undefined;
+			const retainNow: AgentTool = {
+				name: "retain_now",
+				label: "Retain now",
+				description: "Retain the conversation so far, like /memory enqueue",
+				parameters: type({}),
+				async execute() {
+					await current!.getHindsightSessionState()!.forceRetainCurrentSession();
+					explorationWasRetained = [...retained.values()].some(content => content.includes(exploration));
+					return { content: [{ type: "text" as const, text: "retained" }] };
+				},
+			};
+			const harness = await createHarness(
+				[
+					{
+						content: [
+							keptNote,
+							{ type: "toolCall", id: "call_checkpoint", name: "checkpoint", arguments: { goal: "inspect" } },
+						],
+						stopReason: "toolUse",
+					},
+					{
+						content: [exploration, { type: "toolCall", id: "call_retain", name: "retain_now", arguments: {} }],
+						stopReason: "toolUse",
+					},
+					{
+						content: [
+							{ type: "toolCall", id: "call_rewind", name: "rewind", arguments: { report: "inspection done" } },
+						],
+						stopReason: "toolUse",
+					},
+					() => {
+						// The post-rewind provider call may only start after retained sources were repaired.
+						atPostRewindCall = [...retained.values()];
+						return { content: ["DONE"], stopReason: "stop" };
+					},
+				],
+				[checkpointTool as AgentTool, rewindTool as AgentTool, retainNow],
+				{ hindsightUrl: server.url.href },
+			);
+			const current = harness.session;
+
+			await harness.session.prompt("investigate the billing service");
+
+			expect(explorationWasRetained).toBe(true);
+			expect(atPostRewindCall).toHaveLength(1);
+			expect(atPostRewindCall![0]).toContain(keptNote);
+			expect(atPostRewindCall![0]).toContain("investigate the billing service");
+			expect(atPostRewindCall![0]).not.toContain(exploration);
+			// Forced retain, then the rewind repair replaced the same source; nothing further ran.
+			expect(requests).toEqual(["POST replace", "POST replace"]);
+		} finally {
+			await server.stop(true);
+		}
 	});
 });

@@ -280,6 +280,9 @@ async function installPrimaryState(
 	let previous = session.getHindsightSessionState();
 	if (previous) {
 		await previous.flushRetainQueue();
+		if (previous.bankId !== scope.bankId || !Bun.deepEquals(previous.retainTags, scope.retainTags)) {
+			await previous.finishRetentionScope();
+		}
 	}
 	const latest = session.getHindsightSessionState();
 	if (latest && latest !== previous) {
@@ -301,6 +304,7 @@ async function installPrimaryState(
 		lastRetainedTurn: 0,
 		hasRecalledForFirstTurn: false,
 	});
+	state.bindRetentionScope();
 
 	const displaced = session.setHindsightSessionState(state);
 	if (displaced && displaced !== previous) {

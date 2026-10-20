@@ -18,7 +18,7 @@ describe("countUserTurns", () => {
 			timestamp: new Date(0).toISOString(),
 			message,
 		};
-		const session = { getEntries: () => [entry] };
+		const session = { getBranch: () => [entry] };
 
 		const before = countUserTurns(session);
 		expect(before).toBe(extractMessages(session).filter(m => m.role === "user").length);
