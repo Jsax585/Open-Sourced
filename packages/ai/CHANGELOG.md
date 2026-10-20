@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the auth gateway logging nothing when a streamed reply ended; each streamed request now logs how it ended (stop reason and duration, plus the upstream error for replies that end early or fail)
+
 ## [18.12.4] - 2026-10-20
 
 ### Added
