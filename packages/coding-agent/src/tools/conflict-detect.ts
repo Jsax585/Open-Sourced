@@ -29,22 +29,27 @@ const BASE_PREFIX = "|||||||";
 const SEPARATOR = "=======";
 const THEIRS_PREFIX = ">>>>>>>";
 
+/** Budget charged per block beyond its lines: its entry, ids and listing line. */
+const BLOCK_COST = 1024;
+
 /**
  * Incremental conflict scanner: `push` file lines in order, starting at
  * line `firstLineNumber` (1-indexed); `blocks` collects each completed block.
  *
  * Only fully-closed blocks (opener + separator + closer all pushed) are
  * collected. A block still open when the lines run out is dropped — the
- * agent will see the open marker and can widen the read. Section lines
- * kept across all blocks cost at most `maxRetained` (each line's `cost`,
- * by default its length plus its line break): a block that would pass it
- * is dropped as soon as it does, its opener line going to `unlisted`, so
- * neither an opener that never closes nor many large blocks can hold the
- * rest of the file.
+ * agent will see the open marker and can widen the read. Blocks kept cost
+ * at most `maxRetained` together: each line of a block, markers included,
+ * costs its `cost` (by default its length plus its line break) and each
+ * block {@link BLOCK_COST} more. A block that would pass the budget is
+ * dropped as soon as it does and counted in `unlistedCount` (the first
+ * few opener lines kept in `unlisted`), so neither an opener that never
+ * closes nor many blocks can hold the rest of the file.
  */
 export class ConflictScanner {
 	readonly blocks: ConflictBlock[] = [];
 	readonly unlisted: number[] = [];
+	unlistedCount = 0;
 	#nextLine: number;
 	#maxRetained: number;
 	#retained = 0;
@@ -76,12 +81,22 @@ export class ConflictScanner {
 		if (oursLabel !== null) {
 			this.#partial = { startLine: ln, oursLabel: oursLabel || undefined, oursLines: [] };
 			this.#phase = "ours";
-			this.#blockCost = 0;
-			return;
+			this.#blockCost = BLOCK_COST;
 		}
 
 		const partial = this.#partial;
 		if (this.#phase === "idle" || partial === null) return;
+
+		// Charged before any marker is recorded: a line cut by the framing limit
+		// costs more than the whole budget, so a cut label never reaches a block.
+		this.#blockCost += cost;
+		if (this.#retained + this.#blockCost > this.#maxRetained) {
+			if (this.unlisted.length < PREVIEW_LIMITS.COLLAPSED_ITEMS) this.unlisted.push(partial.startLine);
+			this.unlistedCount++;
+			this.#reset();
+			return;
+		}
+		if (oursLabel !== null) return;
 
 		const baseLabel = matchMarker(line, BASE_PREFIX);
 		if (baseLabel !== null) {
@@ -128,12 +143,6 @@ export class ConflictScanner {
 			return;
 		}
 
-		this.#blockCost += cost;
-		if (this.#retained + this.#blockCost > this.#maxRetained) {
-			this.unlisted.push(partial.startLine);
-			this.#reset();
-			return;
-		}
 		if (this.#phase === "ours") partial.oursLines.push(line);
 		else if (this.#phase === "base" && partial.baseLines) partial.baseLines.push(line);
 		else if (this.#phase === "theirs" && partial.theirsLines) partial.theirsLines.push(line);
@@ -157,7 +166,7 @@ export function scanConflictLines(lines: readonly string[], firstLineNumber: num
 }
 
 const SCAN_FILE_DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
-/** Most a file scan keeps of one line, and of all blocks' section lines together (bytes). */
+/** Most a file scan keeps of one line, and of all blocks together (bytes). */
 const SCAN_FILE_MAX_RETAINED = 10 * 1024 * 1024;
 
 /**
@@ -167,20 +176,23 @@ const SCAN_FILE_MAX_RETAINED = 10 * 1024 * 1024;
  * cheap on pathological files; pass `Infinity` to scan the whole file.
  * Files cut by the cap report `scanTruncated: true`; only complete blocks
  * within the scanned prefix are returned, so trailing partial markers never
- * invent fake blocks. Memory stays bounded whatever the file holds: section
- * lines kept across all blocks stay under 10 MiB of file bytes, and a block
- * that would pass it is reported by its opener line in `unlisted`. A line is
+ * invent fake blocks. A scan past 10 MiB keeps its memory bounded whatever
+ * the file holds: blocks kept stay under a 10 MiB budget of file bytes plus
+ * a fixed cost per block, and the blocks left out are counted in
+ * `unlistedCount`, the first few by opener line in `unlisted`. A line is
  * framed to its first 10 MiB; a cut line costs more than the whole budget,
- * so its block is always unlisted, never registered with a cut side.
+ * so its block is always left out, never registered with a cut side or label.
  */
 export async function scanFileForConflicts(
 	absolutePath: string,
 	options: { maxBytes?: number; signal?: AbortSignal } = {},
-): Promise<{ blocks: ConflictBlock[]; unlisted: number[]; scanTruncated: boolean }> {
+): Promise<{ blocks: ConflictBlock[]; unlisted: number[]; unlistedCount: number; scanTruncated: boolean }> {
 	const file = Bun.file(absolutePath);
 	const maxBytes = options.maxBytes ?? SCAN_FILE_DEFAULT_MAX_BYTES;
 	const truncated = file.size > maxBytes;
-	const scanner = new ConflictScanner(1, SCAN_FILE_MAX_RETAINED);
+	// A scan of at most 10 MiB already keeps no more than it reads; only a longer one needs the budget.
+	const budget = maxBytes > SCAN_FILE_MAX_RETAINED ? SCAN_FILE_MAX_RETAINED : Number.POSITIVE_INFINITY;
+	const scanner = new ConflictScanner(1, budget);
 	const decoder = new TextDecoder("utf-8", { fatal: false });
 	// The sink's sync framing, not `readLines`: an async yield per line triples the scan time.
 	const sink = new ConcatSink();
@@ -194,17 +206,18 @@ export async function scanFileForConflicts(
 	// an unclosed opener, so no extra trimming.
 	const tail = sink.flush();
 	if (tail) scanner.push(decoder.decode(tail), tail.length + 1);
-	return { blocks: scanner.blocks, unlisted: scanner.unlisted, scanTruncated: truncated };
+	return {
+		blocks: scanner.blocks,
+		unlisted: scanner.unlisted,
+		unlistedCount: scanner.unlistedCount,
+		scanTruncated: truncated,
+	};
 }
 
-/** `:conflicts` note naming blocks the scan's retention budget left out. */
-export function formatUnlistedNote(unlisted: readonly number[]): string {
-	const limit = PREVIEW_LIMITS.COLLAPSED_ITEMS;
-	const shown = unlisted
-		.slice(0, limit)
-		.map(line => `L${line}`)
-		.join(", ");
-	const more = unlisted.length > limit ? ` (+${unlisted.length - limit} more)` : "";
+/** `:conflicts` note naming blocks the scan's budget left out: the first opener lines and how many more. */
+export function formatUnlistedNote(unlisted: readonly number[], count: number): string {
+	const shown = unlisted.map(line => `L${line}`).join(", ");
+	const more = count > unlisted.length ? ` (+${count - unlisted.length} more)` : "";
 	return `- note: not listed (the scan keeps at most ${SCAN_FILE_MAX_RETAINED / (1024 * 1024)} MiB of conflict sections per file; resolve these with a normal \`edit\`): conflicts opened at ${shown}${more}.`;
 }
 
@@ -740,13 +753,13 @@ export function formatConflictWarning(
  */
 export function formatConflictSummary(
 	entries: readonly ConflictEntry[],
-	options: { displayPath: string; unlisted?: readonly number[] } = { displayPath: "" },
+	options: { displayPath: string; unlistedNote?: string } = { displayPath: "" },
 ): string {
 	const lines: string[] = [];
 	const total = entries.length;
 	const word = total === 1 ? "conflict" : "conflicts";
 	lines.push(`⚠ ${total} unresolved ${word} in ${options.displayPath || "<file>"}`);
-	if (options.unlisted?.length) lines.push(formatUnlistedNote(options.unlisted));
+	if (options.unlistedNote) lines.push(options.unlistedNote);
 	const oursLabel = pickLabel(entries, e => e.oursLabel);
 	const theirsLabel = pickLabel(entries, e => e.theirsLabel);
 	const baseLabel = pickLabel(entries, e => (e.baseLines !== undefined ? e.baseLabel : undefined));

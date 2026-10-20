@@ -2855,12 +2855,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				...block,
 			}),
 		);
+		const unlistedNote = scan.unlistedCount > 0 ? formatUnlistedNote(scan.unlisted, scan.unlistedCount) : undefined;
 
 		const summary =
 			entries.length > 0
-				? formatConflictSummary(entries, { displayPath, unlisted: scan.unlisted })
-				: scan.unlisted.length > 0
-					? `No conflicts to list in ${displayPath}.\n${formatUnlistedNote(scan.unlisted)}`
+				? formatConflictSummary(entries, { displayPath, unlistedNote })
+				: unlistedNote
+					? `No conflicts to list in ${displayPath}.\n${unlistedNote}`
 					: `No unresolved git merge conflicts in ${displayPath}.`;
 
 		const details: ReadToolDetails = {

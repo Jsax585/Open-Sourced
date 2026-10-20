@@ -368,6 +368,37 @@ describe("read surfaces conflicts as a warning footer", () => {
 		expect(wideText).toMatch(/#3\s+L6-10/);
 	});
 
+	it("`:conflicts` charges every block and its markers against the budget", async () => {
+		// 11,000 empty blocks: each costs its markers plus a fixed per-block charge, so not all fit.
+		const empty = Array.from({ length: 11_000 }, () => "<<<<<<< e\n=======\n>>>>>>> e").join("\n");
+		await Bun.write(path.join(tempDir, "many-empty.ts"), `${empty}\n`);
+		// An opener whose label runs past 10 MiB is cut by the framing; its block is unlisted, not kept with a cut label.
+		const small = ["<<<<<<< small", "ours", "=======", "theirs", ">>>>>>> small"];
+		const cutLabel = [
+			`<<<<<<< ${"x".repeat(11 * 1024 * 1024)}`,
+			"ours",
+			"=======",
+			"theirs",
+			">>>>>>> l",
+			...small,
+			"",
+		];
+		await Bun.write(path.join(tempDir, "cut-label.ts"), cutLabel.join("\n"));
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+
+		const manyText = getText(await read.execute("read-many-empty", { path: "many-empty.ts:conflicts" }));
+		const listed = Number(manyText.match(/⚠ (\d+) unresolved conflicts/)?.[1]);
+		const more = Number(manyText.match(/conflicts opened at (?:L\d+, ){7}L\d+ \(\+(\d+) more\)/)?.[1]);
+		expect(listed).toBeLessThan(11_000);
+		expect(listed + 8 + more).toBe(11_000);
+
+		const cutText = getText(await read.execute("read-cut-label", { path: "cut-label.ts:conflicts" }));
+		expect(cutText).toContain("1 unresolved conflict in cut-label.ts");
+		expect(cutText).toContain("conflicts opened at L1.");
+		expect(cutText).toMatch(/#\d+\s+L6-10/);
+	});
+
 	it("window-mode warning shows visible-of-total when window misses some conflicts", async () => {
 		const filePath = path.join(tempDir, "wide.ts");
 		await Bun.write(filePath, TWO_BLOCKS);
