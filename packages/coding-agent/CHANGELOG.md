@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Fixed Hindsight startup warnings disappearing when collaboration auto-starts before the local UI is ready ([#16475](https://github.com/can1357/oh-my-pi/pull/16475) by [@shgew](https://github.com/shgew))
 - Fixed `/memory mm refresh <id>` reloading cached guidance before the refresh completes; failed, cancelled, and timed-out refreshes preserve the cache, failed reloads warn that previous guidance remains, and Escape cancels the wait ([#16475](https://github.com/can1357/oh-my-pi/pull/16475) by [@shgew](https://github.com/shgew))
 - Fixed bank-wide `/memory mm refresh` skipping cron-managed mental models while continuing to leave manual-only models untouched, with at most four refreshes in progress at once ([#16475](https://github.com/can1357/oh-my-pi/pull/16475) by [@shgew](https://github.com/shgew))
 - Fixed Mnemopi memory completions ignoring the memory role's thinking suffix, including one inherited from `tiny` or `smol` when `modelRoles.memory` is unset; each `retry.fallbackChains.memory` entry sends its own level, and `:off` disables reasoning ([#16378](https://github.com/can1357/oh-my-pi/pull/16378) by [@alphastorm](https://github.com/alphastorm))
