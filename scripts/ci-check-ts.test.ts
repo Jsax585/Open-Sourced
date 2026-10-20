@@ -1,13 +1,13 @@
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { collectCheckJobs, runCheckJobs } from "./ci-check-ts";
 
 const tempDirs: string[] = [];
 
 async function fixtureDir(): Promise<string> {
-	const dir = await mkdtemp(path.join(os.tmpdir(), "omp-ci-check-"));
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ci-check-"));
 	tempDirs.push(dir);
 	return dir;
 }
@@ -15,7 +15,7 @@ async function fixtureDir(): Promise<string> {
 test("runs fast failure, slow failure and pass jobs, and retains attributed diagnostics", async () => {
 	const dir = await fixtureDir();
 	const started = path.join(dir, "started");
-	await mkdir(started);
+	await fs.mkdir(started);
 	const jobs = [
 		{
 			name: "tool lint (oxlint)",
@@ -64,10 +64,10 @@ test("runs fast failure, slow failure and pass jobs, and retains attributed diag
 test("a failing linter does not prevent collected package type checks from running", async () => {
 	const dir = await fixtureDir();
 	const started = path.join(dir, "started");
-	await mkdir(path.join(dir, "packages", "first"), { recursive: true });
-	await mkdir(path.join(dir, "packages", "second"), { recursive: true });
-	await mkdir(started);
-	await writeFile(
+	await fs.mkdir(path.join(dir, "packages", "first"), { recursive: true });
+	await fs.mkdir(path.join(dir, "packages", "second"), { recursive: true });
+	await fs.mkdir(started);
+	await Bun.write(
 		path.join(dir, "package.json"),
 		JSON.stringify({
 			scripts: {
@@ -77,7 +77,7 @@ test("a failing linter does not prevent collected package type checks from runni
 		}),
 	);
 	for (const name of ["first", "second"]) {
-		await writeFile(
+		await Bun.write(
 			path.join(dir, "packages", name, "package.json"),
 			JSON.stringify({
 				name,
@@ -126,7 +126,6 @@ test("keeps the production pool bounded to seven", async () => {
 	let maximum = 0;
 
 	const exitCode = await runCheckJobs(jobs, {
-		concurrency: 7,
 		emit: () => {},
 		spawn: (command, options) => {
 			active += 1;
@@ -146,18 +145,18 @@ test("keeps the production pool bounded to seven", async () => {
 
 test("collects all package type checks independently from the tool checks", async () => {
 	const dir = await fixtureDir();
-	await mkdir(path.join(dir, "packages", "first"), { recursive: true });
-	await mkdir(path.join(dir, "packages", "second"), { recursive: true });
-	await mkdir(path.join(dir, "packages", "no-types"), { recursive: true });
-	await writeFile(
+	await fs.mkdir(path.join(dir, "packages", "first"), { recursive: true });
+	await fs.mkdir(path.join(dir, "packages", "second"), { recursive: true });
+	await fs.mkdir(path.join(dir, "packages", "no-types"), { recursive: true });
+	await Bun.write(
 		path.join(dir, "packages", "first", "package.json"),
 		JSON.stringify({ name: "first", scripts: { "check:types": "tsgo" } }),
 	);
-	await writeFile(
+	await Bun.write(
 		path.join(dir, "packages", "second", "package.json"),
 		JSON.stringify({ name: "second", scripts: { "check:types": "tsgo" } }),
 	);
-	await writeFile(
+	await Bun.write(
 		path.join(dir, "packages", "no-types", "package.json"),
 		JSON.stringify({ name: "no-types", scripts: { lint: "oxlint" } }),
 	);
@@ -175,20 +174,14 @@ test("collects all package type checks independently from the tool checks", asyn
 });
 test("records a process-start error as a failure and still prints the summary", async () => {
 	const dir = await fixtureDir();
+	const missing = path.join(dir, "definitely-not-an-executable");
 	const jobs = [
-		{ name: "broken launcher", command: ["bun", "-e", "process.exit(0)"], cwd: dir },
+		{ name: "broken launcher", command: [missing], cwd: dir },
 		{ name: "passing neighboring check", command: ["bun", "-e", "process.exit(0)"], cwd: dir },
 	];
 	const lines: string[] = [];
 
-	const exitCode = await runCheckJobs(jobs, {
-		concurrency: 2,
-		emit: line => lines.push(line),
-		spawn: (command, options) => {
-			if (jobs[0]?.command === command) throw new Error("spawn ENOENT");
-			return Bun.spawn(command, options);
-		},
-	});
+	const exitCode = await runCheckJobs(jobs, { concurrency: 2, emit: line => lines.push(line) });
 	const report = lines.join("\n");
 
 	expect(exitCode).toBe(1);
@@ -198,6 +191,26 @@ test("records a process-start error as a failure and still prints the summary", 
 	expect(report).toContain("1/2 checks passed; 1 failed");
 });
 
-test("cleans up fixture directories", async () => {
-	await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
+test("keeps warnings from passing checks and prints a copy-pasteable rerun command", async () => {
+	const parent = await fixtureDir();
+	const dir = path.join(parent, "path with space");
+	await fs.mkdir(dir);
+	const lines: string[] = [];
+
+	const exitCode = await runCheckJobs(
+		[
+			{ name: "warns", command: ["bun", "-e", "console.error('warning: kept'); "], cwd: dir },
+			{ name: "fails", command: ["bun", "-e", "process.exit(4)"], cwd: dir },
+		],
+		{ concurrency: 2, emit: line => lines.push(line) },
+	);
+	const report = lines.join("\n");
+
+	expect(exitCode).toBe(1);
+	expect(report).toContain("warning: kept");
+	expect(report).toContain(`$ (cd '${dir}' && bun -e 'process.exit(4)')`);
+});
+
+afterAll(async () => {
+	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });

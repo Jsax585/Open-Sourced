@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 const repoRoot = path.join(import.meta.dir, "..");
@@ -23,6 +22,10 @@ type CheckSpawn = (
 	options: { cwd: string; stdout: "pipe"; stderr: "pipe" },
 ) => Bun.Subprocess<"ignore", "pipe", "pipe">;
 
+function shellQuote(word: string): string {
+	return /^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
+}
+
 export async function collectCheckJobs(root = repoRoot): Promise<CheckJob[]> {
 	const jobs: CheckJob[] = [
 		{
@@ -41,7 +44,7 @@ export async function collectCheckJobs(root = repoRoot): Promise<CheckJob[]> {
 
 	for (const packageFile of packageFiles) {
 		const packageRoot = path.dirname(path.join(root, packageFile));
-		const packageJson = JSON.parse(await fs.readFile(path.join(root, packageFile), "utf8")) as {
+		const packageJson = (await Bun.file(path.join(root, packageFile)).json()) as {
 			name?: string;
 			scripts?: Record<string, string>;
 		};
@@ -110,11 +113,13 @@ export async function runCheckJobs(
 	for (const result of results) {
 		if (result.exitCode === 0) {
 			emit(`✓ ${result.name} (${result.seconds.toFixed(1)}s)`);
+			// Passing checks can still print warnings; keep them in the log.
+			if (result.output) emit(result.output);
 		}
 	}
 	for (const failure of failures) {
 		emit(`\n✗ ${failure.name} (exit ${failure.exitCode})`);
-		emit(`$ (cd ${failure.cwd} && ${failure.command.join(" ")})`);
+		emit(`$ (cd ${shellQuote(failure.cwd)} && ${failure.command.map(shellQuote).join(" ")})`);
 		if (failure.output) emit(failure.output);
 	}
 	emit(
