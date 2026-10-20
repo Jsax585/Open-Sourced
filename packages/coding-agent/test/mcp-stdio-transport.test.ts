@@ -737,29 +737,35 @@ describe("StdioTransport request failure diagnostics", () => {
 		expect(error.message).toContain("exited with code 23");
 	});
 
-	it.skipIf(process.platform === "win32")("reports the subprocess signal when it is killed before responding", async () => {
-		transport = new StdioTransport({
-			type: "stdio",
-			command: "bun",
-			args: ["-e", "process.stdin.once('data', () => process.kill(process.pid, 'SIGKILL')); process.stdin.resume()"],
-			timeout: 1_000,
-		});
-		await transport.connect();
-		const error = await transport.request("tools/list").then(
-			() => undefined,
-			reason => reason,
-		);
-		if (!(error instanceof MCPTransportError)) throw error;
+	it.skipIf(process.platform === "win32")(
+		"reports the subprocess signal when it is killed before responding",
+		async () => {
+			transport = new StdioTransport({
+				type: "stdio",
+				command: "bun",
+				args: [
+					"-e",
+					"process.stdin.once('data', () => process.kill(process.pid, 'SIGKILL')); process.stdin.resume()",
+				],
+				timeout: 1_000,
+			});
+			await transport.connect();
+			const error = await transport.request("tools/list").then(
+				() => undefined,
+				reason => reason,
+			);
+			if (!(error instanceof MCPTransportError)) throw error;
 
-		expect(error).toMatchObject({
-			transport: "stdio",
-			stage: "receive",
-			failure: "eof",
-			retryable: false,
-			code: "SIGKILL",
-		});
-		expect(error.message).toContain("killed by SIGKILL");
-	});
+			expect(error).toMatchObject({
+				transport: "stdio",
+				stage: "receive",
+				failure: "eof",
+				retryable: false,
+				code: "SIGKILL",
+			});
+			expect(error.message).toContain("killed by SIGKILL");
+		},
+	);
 
 	it("reports malformed subprocess JSON at the decode stage", async () => {
 		transport = new StdioTransport({
