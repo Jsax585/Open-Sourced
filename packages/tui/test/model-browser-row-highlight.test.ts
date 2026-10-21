@@ -4,10 +4,11 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
 	ModelBrowser,
 	type ModelBrowserItem,
+	type ModelBrowserOptions,
 	type ModelBrowserSource,
 	buildBrowserItems,
 } from "../src/overlays/model-browser";
-import { initTheme, theme } from "../src/theme";
+import { initTheme, theme, type ThemeColor } from "../src/theme";
 
 beforeAll(async () => {
 	await initTheme(false);
@@ -51,12 +52,12 @@ function source(): ModelBrowserSource {
 }
 
 /** Foreground SGR prefix `theme.fg` emits for `color`. */
-function colorPrefix(color: Parameters<typeof theme.fg>[0]): string {
+function colorPrefix(color: ThemeColor): string {
 	return theme.fg(color, "\u0000").split("\u0000")[0]!;
 }
 
 /** Styled run payloads (text between the foreground SGR and its reset) in `line`. */
-function runTexts(line: string, color: Parameters<typeof theme.fg>[0]): string[] {
+function runTexts(line: string, color: ThemeColor): string[] {
 	const prefix = colorPrefix(color);
 	return line
 		.split(prefix)
@@ -64,7 +65,7 @@ function runTexts(line: string, color: Parameters<typeof theme.fg>[0]): string[]
 		.map(part => part.slice(0, part.indexOf("\x1b[39m")));
 }
 
-function countRuns(line: string, color: Parameters<typeof theme.fg>[0]): number {
+function countRuns(line: string, color: ThemeColor): number {
 	return line.split(colorPrefix(color)).length - 1;
 }
 
@@ -75,10 +76,7 @@ function rowFor(lines: readonly string[], id: string): string {
 	return row;
 }
 
-function renderBrowser(
-	items: ModelBrowserItem[],
-	options: ConstructorParameters<typeof ModelBrowser>[1] = {},
-): string[] {
+function renderBrowser(items: ModelBrowserItem[], options: ModelBrowserOptions = {}): string[] {
 	const browser = new ModelBrowser(source(), options);
 	browser.setItems(items);
 	return browser.render(120);
