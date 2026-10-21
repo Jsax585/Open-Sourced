@@ -80,6 +80,8 @@ import { journalJudgmentUsage } from "../judgment";
 import { classifyUnexpectedStop, isUnexpectedStopCandidate } from "./unexpected-stop-classifier";
 
 import {
+	cfgClaudeResets,
+	cfgCodexResets,
 	cfgFeaturesUnexpectedStopDetection,
 	cfgModelLoopGuardEnabled,
 	cfgRetry,
@@ -1970,24 +1972,53 @@ export class TurnRecovery {
 				currentModel.provider === "anthropic" || currentModel.provider === "openai-codex"
 					? currentModel.provider
 					: undefined;
-			const selectedReset =
-				selectedAccount?.fundingTier !== undefined &&
-				selectedAccount.fundingTier !== "allowance" &&
-				(selectedAccount.savedResets ?? 0) > 0
-					? selectedAccount
-					: !health.accounts.some(account => account.fundingTier === "allowance")
-						? health.accounts.find(account => (account.savedResets ?? 0) > 0)
-						: undefined;
-			if (
-				resetProvider &&
-				selectedReset &&
-				(await this.#host.redeemSavedReset({
-					provider: resetProvider,
-					credentialId: selectedReset.credentialId,
-					signal,
-				}))
-			) {
-				return false;
+			if (resetProvider && selectedAccount?.fundingTier !== "allowance") {
+				const authStorage = this.#host.modelRegistry.authStorage;
+				const keep = Math.max(
+					0,
+					Math.trunc(
+						(resetProvider === "anthropic" ? cfgClaudeResets : cfgCodexResets).get(this.#host.settings)
+							.keepCredits,
+					),
+				);
+				const summaries = authStorage.oauth.accounts(resetProvider, sessionId);
+				const summariesByCredentialId = new Map(
+					summaries.map(summary => [summary.credentialId, summary] as const),
+				);
+				const priorityFor = (credentialId: number): number => {
+					const summary = summariesByCredentialId.get(credentialId);
+					const priority = summary && authStorage.oauth.policy(resetProvider, summary)?.priority;
+					return typeof priority === "number" && Number.isFinite(priority) ? priority : 0;
+				};
+				const rankedAccounts = health.accounts.toSorted((left, right) => {
+					const leftSummary = summariesByCredentialId.get(left.credentialId);
+					const rightSummary = summariesByCredentialId.get(right.credentialId);
+					if (!leftSummary) return rightSummary ? 1 : 0;
+					if (!rightSummary) return -1;
+					return (
+						priorityFor(right.credentialId) - priorityFor(left.credentialId) ||
+						leftSummary.position - rightSummary.position
+					);
+				});
+				for (const account of rankedAccounts) {
+					if (account.fundingTier === "allowance") break;
+					if (
+						(account.savedResets ?? 0) - keep < 1 ||
+						!authStorage.sessions.permits(resetProvider, sessionId, account.credentialId)
+					) {
+						continue;
+					}
+					if (
+						await this.#host.redeemSavedReset({
+							provider: resetProvider,
+							credentialId: account.credentialId,
+							signal,
+						})
+					) {
+						return false;
+					}
+					if (signal.aborted || !modelsAreEqual(this.#host.model(), currentModel)) return false;
+				}
 			}
 			if (signal.aborted || !modelsAreEqual(this.#host.model(), currentModel)) return false;
 		}

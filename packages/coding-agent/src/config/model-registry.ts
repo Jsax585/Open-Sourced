@@ -7,7 +7,7 @@ import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oaut
 import { setCodexAttestationProvider } from "@oh-my-pi/pi-ai/providers/openai-codex-attestation";
 import { getProviderDefinition } from "@oh-my-pi/pi-ai/registry";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/env-api-key";
-import { OAuthRefreshUnavailableError } from "@oh-my-pi/pi-ai/error";
+import { ExtraUsageWithheldError, OAuthRefreshUnavailableError } from "@oh-my-pi/pi-ai/error";
 import type {
 	Api,
 	Context,
@@ -3300,8 +3300,8 @@ export class ModelRegistry {
 
 	/**
 	 * Resolve a provider's credential or the no-auth sentinel, for availability
-	 * checks. A transient OAuth refresh failure resolves `undefined` (like
-	 * `authStorage.keys.get`); request paths use
+	 * checks. A transient OAuth refresh failure or paid-usage floor hold resolves
+	 * `undefined` (like `authStorage.keys.get`); request paths use
 	 * {@link getApiKeyWithCredentialForProvider}, which surfaces it.
 	 *
 	 * `options.forceRefresh` re-mints the session-sticky OAuth token even when
@@ -3316,7 +3316,7 @@ export class ModelRegistry {
 		try {
 			return (await this.getApiKeyWithCredentialForProvider(provider, sessionId, options))?.apiKey;
 		} catch (error) {
-			if (error instanceof OAuthRefreshUnavailableError) return undefined;
+			if (error instanceof OAuthRefreshUnavailableError || error instanceof ExtraUsageWithheldError) return undefined;
 			throw error;
 		}
 	}
