@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { ApiKey, ResetCreditAccountStatus, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/registry/oauth/types";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
@@ -335,7 +336,6 @@ async function createTieredHarness(options: TieredHarnessOptions) {
 	};
 	const createSession = () => {
 		const mock = createMockModel();
-		const session!: AgentSession;
 		const agent = new Agent({
 			getApiKey: model =>
 				modelRegistry.resolver(model, {
@@ -383,7 +383,7 @@ async function createTieredHarness(options: TieredHarnessOptions) {
 			},
 		});
 		const sessionManager = SessionManager.inMemory();
-		session = new AgentSession({
+		const session = new AgentSession({
 			agent,
 			sessionManager,
 			settings: settingsForSession(),
@@ -654,4 +654,62 @@ describe("AgentSession tiered same-provider boundary cases", () => {
 			await harness.dispose();
 		}
 	});
+	it("FP5 permits terminal paid usage below the floor when enabled", async () => {
+		const harness = await createTieredHarness({
+			withFallbackChain: false,
+			extraUsageBelowFloor: true,
+			usageAwareFallback: false,
+			accounts: {
+				a: { allowanceUsedPct: 100, paid: { limit: PAID_LIMIT, used: 8 } },
+				b: { allowanceUsedPct: 100, paid: null },
+				c: { allowanceUsedPct: 100, paid: null },
+			},
+		});
+		try {
+			await harness.prompt(1);
+
+			expect(harness.requests).toEqual([{ selector: harness.primarySelector, bearer: "a" }]);
+			expect(harness.charges).toEqual([
+				{
+					accountId: "a",
+					kind: "paid",
+					allowanceWasAvailable: false,
+					usableResetWasAvailable: false,
+					remainingBefore: 2,
+				},
+			]);
+		} finally {
+			await harness.dispose();
+		}
+	});
+
+	it("FP6 reports terminal paid usage held at the floor as a usage-limit error", async () => {
+		const harness = await createTieredHarness({
+			withFallbackChain: false,
+			usageAwareFallback: false,
+			accounts: {
+				a: { allowanceUsedPct: 100, paid: { limit: PAID_LIMIT, used: 8 } },
+				b: { allowanceUsedPct: 100, paid: null },
+				c: { allowanceUsedPct: 100, paid: null },
+			},
+		});
+		try {
+			await harness.prompt(1);
+
+			expect(harness.requests).toEqual([]);
+			expect(harness.charges).toEqual([]);
+			const errors = harness.session.agent.state.messages.filter(
+				message => message.role === "assistant" && message.stopReason === "error",
+			);
+			expect(errors).toHaveLength(1);
+			const [error] = errors;
+			if (!error || error.role !== "assistant" || error.stopReason !== "error") {
+				throw new Error("Expected one terminal error message");
+			}
+			expect(AIError.isExtraUsageWithheldMessage(error)).toBe(true);
+		} finally {
+			await harness.dispose();
+		}
+	});
+
 });

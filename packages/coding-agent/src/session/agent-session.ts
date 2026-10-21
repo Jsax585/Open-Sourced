@@ -8438,9 +8438,19 @@ export class AgentSession implements SettingsScope {
 				);
 			}
 
-			// Validate API key
-			const apiKey = await this.#modelRegistry.getApiKey(this.model, this.sessionId);
-			if (!apiKey) {
+			// Validate API key. A paid-usage floor hold is a usage limit, not a missing
+			// credential: dispatch, so the request resolver raises it and the retry layer
+			// walks retry.fallbackChains (or a terminal model applies retry.extraUsageBelowFloor).
+			let hasCredential: boolean;
+			try {
+				hasCredential = Boolean(
+					await this.#modelRegistry.getApiKey(this.model, this.sessionId, { rejectWithheld: true }),
+				);
+			} catch (error) {
+				if (!(error instanceof AIError.ExtraUsageWithheldError)) throw error;
+				hasCredential = true;
+			}
+			if (!hasCredential) {
 				throw new Error(
 					`No API key found for ${this.model.provider}.\n\n` +
 						`Use /login, set an API key environment variable, or create ${getAgentDbPath()}`,
