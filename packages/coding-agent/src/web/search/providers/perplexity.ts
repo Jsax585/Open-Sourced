@@ -133,20 +133,28 @@ interface PerplexitySearchApiResponse {
 async function callPerplexitySearchApi(
 	apiKey: string,
 	filters: PerplexityNativeFilters,
+	parsed: StructuredQuery,
 	params: PerplexitySearchParams,
 ): Promise<SearchResponse> {
-	const maxResults = clampNumResults(
-		params.num_search_results ?? params.num_results,
-		DEFAULT_SEARCH_RESULTS,
-		MAX_SEARCH_RESULTS,
+	const maxResults = Math.trunc(
+		clampNumResults(params.num_search_results ?? params.num_results, DEFAULT_SEARCH_RESULTS, MAX_SEARCH_RESULTS),
 	);
+	// The native filter takes either an allow-list or a deny-list, not both.
+	// When the query has both, keep the allow-list and let the central
+	// post-filter enforce the exclusions.
+	const domainFilter =
+		parsed.sites.length > 0
+			? [...new Set(parsed.sites.map(siteHost))].slice(0, 20)
+			: parsed.excludedSites.length > 0
+				? [...new Set(parsed.excludedSites.map(site => `-${siteHost(site)}`))].slice(0, 20)
+				: undefined;
 	const body: Record<string, unknown> = {
 		query: filters.query,
 		max_results: maxResults,
 		search_type: "fast",
 		search_context_size: "medium",
 	};
-	if (filters.domainFilter) body.search_domain_filter = filters.domainFilter;
+	if (domainFilter) body.search_domain_filter = domainFilter;
 	if (filters.afterDate) body.search_after_date_filter = filters.afterDate;
 	if (filters.beforeDate) body.search_before_date_filter = filters.beforeDate;
 	if (filters.languageFilter) body.search_language_filter = filters.languageFilter;
@@ -1035,7 +1043,7 @@ export async function searchPerplexity(params: PerplexitySearchParams): Promise<
 			try {
 				const result = auth.useResponses
 					? await callPerplexityApi(auth, request, params.fetch, params.signal, params.timeoutMs)
-					: await callPerplexitySearchApi(auth.apiKey, filters, params);
+					: await callPerplexitySearchApi(auth.apiKey, filters, parsed, params);
 				result.authMode = "api_key";
 				return applySourceLimit(result, params.num_results);
 			} catch (error) {

@@ -111,6 +111,29 @@ describe("Perplexity API-key request shape", () => {
 		expect(body?.max_results).toBe(5);
 	});
 
+	it("truncates fractional result counts before sending max_results", async () => {
+		let body: Record<string, unknown> | undefined;
+		await searchPerplexity({
+			query: "quic vs tcp",
+			authStorage: apiKeyAuthStorage,
+			num_search_results: 5.7,
+			fetch: mockSearchApi(b => (body = b)),
+		});
+
+		expect(body?.max_results).toBe(5);
+	});
+
+	it("sends a deny-only domain list when the query has no allow list", async () => {
+		let body: Record<string, unknown> | undefined;
+		await searchPerplexity({
+			query: "rust -site:reddit.com",
+			authStorage: apiKeyAuthStorage,
+			fetch: mockSearchApi(b => (body = b)),
+		});
+
+		expect(body?.search_domain_filter).toEqual(["-reddit.com"]);
+	});
+
 	it("maps site:/-site:/after: directives onto native filters and strips them from the query", async () => {
 		let body: Record<string, unknown> | undefined;
 		const fetchMock = mockSearchApi(b => (body = b));
@@ -121,7 +144,7 @@ describe("Perplexity API-key request shape", () => {
 			fetch: fetchMock,
 		});
 
-		expect(body?.search_domain_filter).toEqual(["docs.rs", "-reddit.com"]);
+		expect(body?.search_domain_filter).toEqual(["docs.rs"]);
 		expect(body?.search_after_date_filter).toBe("6/1/2024");
 		expect(body?.query).toBe("rust");
 	});
