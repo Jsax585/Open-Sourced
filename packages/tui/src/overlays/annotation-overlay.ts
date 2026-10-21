@@ -357,6 +357,11 @@ export class AnnotationOverlay implements Focusable {
 		this.#finished = true;
 	}
 
+	getFocusedTextEditor(): Editor | null {
+		if (this.#finished || !this.#annotating) return null;
+		return this.#editor;
+	}
+
 	getAnnotations(): CodeReviewAnnotation[] {
 		return this.#annotations.map(entry => ({ ...entry.annotation }));
 	}

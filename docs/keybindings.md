@@ -65,6 +65,8 @@ app.stt.toggle: Ctrl+Shift+S
 
 While speech-to-text is enabled, non-printable keys and chords assigned to `app.stt.pushToTalk` are reserved: a tap is swallowed instead of running its normal editing or application action. A plain printable key tap still types normally. Text-assistance transformations from initial taps are preserved; only unchanged literal repeat text is removed when a hold is recognized. Each configured alternative is independent; alternating between alternatives does not combine them into one hold. Hold detection requires a terminal that delivers key auto-repeat.
 
+Bind `app.stt.toggle` to a chord to dictate into the focused text editor, including the composer, `ask` Other/note prompts, the extension editor, and Editor-based overlays. Recording continues across dialog changes; the transcript goes to the field focused when recording stops, or to the composer draft with a status message if no text field has focus. `stt.submitTrigger` applies to the receiving field; `never` leaves the text for review. `app.stt.pushToTalk` works only in the composer and the `/btw` follow-up.
+
 ### Click to dictate in Tern
 
 With `stt.enabled` on, the native composer shows a microphone beside Send. Click it to start recording without holding a key. While the speech model loads, the button shows **Starting…**; click it again to cancel. Once it changes to **Recording · Stop**, click it to stop, then wait for **Transcribing…** to finish.

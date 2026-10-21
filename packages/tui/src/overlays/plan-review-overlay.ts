@@ -322,6 +322,7 @@ export class PlanReviewOverlay implements Component {
 	#annotationTarget: BodyRowAnchor | { sectionIndex: number; row: null; context: null } | undefined;
 	#editingAnnotation: AnnotationSelection | undefined;
 	#annotationChooser: AnnotationChooser | undefined;
+	#disposed = false;
 
 	/** Bumped on every section/annotation change (all of them funnel through {@link #recomputeFeedback}). */
 	#annotationRev = 0;
@@ -376,6 +377,15 @@ export class PlanReviewOverlay implements Component {
 
 	invalidate(): void {
 		for (const section of this.#sections) section.md.invalidate();
+	}
+
+	dispose(): void {
+		this.#disposed = true;
+	}
+
+	getFocusedTextEditor(): Editor | null {
+		if (this.#disposed || !this.#annotating) return null;
+		return this.#editor;
 	}
 
 	/** Swap the displayed plan (e.g. after an external-editor round-trip) and

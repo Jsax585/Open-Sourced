@@ -290,6 +290,7 @@ export class InputController {
 	#globalEditorActionsListenerInstalled = false;
 	#expandToolsListenerInstalled = false;
 	#inlineMouseListenerInstalled = false;
+	#sttToggleListenerInstalled = false;
 
 	/** Click-candidate id the hover band currently tracks; repaint only on change. */
 	#lastHoverClickId: string | undefined;
@@ -468,6 +469,14 @@ export class InputController {
 			// Defers to fullscreen overlays, which own mouse handling on the
 			// alternate screen.
 			this.ctx.ui.addInputListener(data => this.#handleInlineMouse(data));
+		}
+		if (!this.#sttToggleListenerInstalled) {
+			this.#sttToggleListenerInstalled = true;
+			this.ctx.ui.addInputListener(data => {
+				if (!this.ctx.keybindings.matches(data, "app.stt.toggle")) return undefined;
+				void this.ctx.handleSTTToggle();
+				return { consume: true };
+			});
 		}
 		this.ctx.editor.onEscape = () => {
 			// `/mcp test` advertises Esc until each owner's post-settlement grace expires.
@@ -697,9 +706,6 @@ export class InputController {
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.message.followUp")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleFollowUp());
-		}
-		for (const key of this.ctx.keybindings.getKeys("app.stt.toggle")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleSTTToggle());
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.live.toggle")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleLiveCommand());

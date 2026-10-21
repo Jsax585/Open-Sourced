@@ -358,6 +358,16 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		return formatVisionMarker("image", this.#images.length, dims);
 	}
 
+	getFocusedTextEditor(): Editor | null {
+		if (this.#disposed) return null;
+		return this.#editor;
+	}
+
+	submitFocusedTextEditor(): void {
+		if (this.#disposed) return;
+		this.#submitCurrentText();
+	}
+
 	/** Reserve ordered clipboard delivery. Completion accepts nonempty text once, or releases on undefined. */
 	beginPaste(): (text: string | undefined) => boolean {
 		if (this.#disposed) return () => false;
