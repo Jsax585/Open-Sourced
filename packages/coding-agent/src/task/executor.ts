@@ -3103,6 +3103,37 @@ function wakeSources(records: AgentMessage[], selfId: string): WakeSource[] {
 }
 
 /**
+ * Tell the owner what became of a turn's changes when the delivery meant to
+ * carry the notice closed while they landed: the owner cancelled the wake
+ * job, or its job manager began disposing. A cancelled job delivers nothing
+ * and a disposing manager refuses results, so without this the owner would
+ * never hear that its checkout changed. A send that fails is logged with
+ * its body, so the notice is not lost with the session.
+ */
+async function tellOwner(args: { id: string; ownerId: string; body: string; reason: string }): Promise<void> {
+	let failure: string | undefined;
+	try {
+		const receipt = await IrcBus.global().send({
+			from: args.id,
+			to: args.ownerId,
+			body: args.body,
+			wakeRelay: true,
+		});
+		if (receipt.outcome === "failed") failure = receipt.error;
+	} catch (error) {
+		failure = error instanceof Error ? error.message : String(error);
+	}
+	if (failure === undefined) return;
+	logger.warn("Could not tell the owner what a settled turn changed", {
+		id: args.id,
+		ownerId: args.ownerId,
+		reason: args.reason,
+		error: failure,
+		body: args.body,
+	});
+}
+
+/**
  * Hand a woken subagent's turn output to whoever woke it, when the subagent
  * did not answer them itself. A re-`yield` delivers the `<task-result>`
  * envelope (the artifact was just rewritten, so it carries the `agent://`
@@ -3536,6 +3567,11 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 						});
 					}
 				}
+				// The owner can cancel the wake job while the hook lands the changes.
+				// A cancelled job delivers nothing and the relay below skips the job's
+				// owner, so the notice is the owner's only word that its checkout
+				// changed. Read here: nothing awaits between this and the job's outcome.
+				const cancelledWhileSettling = notice.trim() !== "" && jobCancel.signal.aborted;
 				if (messageResult && !wakeJob && ownerId && session.asyncJobManager && result) {
 					const text = `${formatTaskResultSummary(result, { totalDurationMs: result.durationMs })}${notice}`;
 					try {
@@ -3545,6 +3581,11 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 							id,
 							error: error instanceof Error ? error.message : String(error),
 						});
+						// The owner's manager began disposing while the changes landed, so
+						// it refused the result. The notice still has to reach the owner.
+						if (notice.trim() !== "") {
+							await tellOwner({ id, ownerId, body: text, reason: "its job manager refused the result" });
+						}
 					}
 				}
 				// Once registered, the wake job carries this turn's outcome to the
@@ -3580,6 +3621,14 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				// wake turn must still tell whoever woke it, or a `send await:true`
 				// waiter mistakes a dead peer for a healthy-but-silent one.
 				try {
+					if (cancelledWhileSettling && ownerId) {
+						await tellOwner({
+							id,
+							ownerId,
+							body: `Wake turn of ${id} was cancelled while its changes were landing.${notice}`,
+							reason: "the wake job was cancelled while the turn settled",
+						});
+					}
 					await relayWakeTurnOutput({
 						id,
 						records,

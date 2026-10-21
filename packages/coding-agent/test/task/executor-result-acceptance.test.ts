@@ -943,6 +943,7 @@ describe("runSubprocess result acceptance", () => {
 
 		it("settles a turn the owner woke and appends the notice to the owner's job", async () => {
 			const { manager, harness, observer, settle, parent } = setUp();
+			const send = vi.spyOn(IrcBus.global(), "send");
 			try {
 				const finish = observer([ircRecord("Parent", "fix the mask path too")]);
 				const waiting = new WaitTool(parent).execute("parent-wait", {});
@@ -954,6 +955,8 @@ describe("runSubprocess result acceptance", () => {
 				expect(job?.status).toBe("completed");
 				expect(job?.resultText).toContain("mask path fixed too");
 				expect(job?.resultText?.endsWith(NOTICE)).toBe(true);
+				// The job carried the notice, so the owner is not messaged a second time.
+				expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ to: "Parent" }));
 			} finally {
 				await manager.dispose({ timeoutMs: 1000 });
 			}
@@ -976,6 +979,7 @@ describe("runSubprocess result acceptance", () => {
 				artifactsDir: tempDir.path(),
 			});
 			harness.session.sessionManager.getArtifactsDir = () => tempDir.path();
+			const send = vi.spyOn(IrcBus.global(), "send");
 			try {
 				const finish = observer([userRecord("fix it")]);
 				harness.emitAssistantText("fixed");
@@ -983,6 +987,8 @@ describe("runSubprocess result acceptance", () => {
 
 				expect(settle).toHaveBeenCalledTimes(1);
 				expect(manager.getJob(AGENT_ID)?.resultText?.endsWith(NOTICE)).toBe(true);
+				// The live manager delivered the result, so the owner is not messaged a second time.
+				expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ to: "Parent" }));
 			} finally {
 				await manager.dispose({ timeoutMs: 1000 });
 				tempDir.removeSync();
@@ -1022,6 +1028,69 @@ describe("runSubprocess result acceptance", () => {
 				expect(manager.getJob(AGENT_ID)?.status).toBe("cancelled");
 			} finally {
 				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("tells the owner what landed when it cancels the wake job while the turn settles", async () => {
+			const settling = Promise.withResolvers<void>();
+			const proceed = Promise.withResolvers<void>();
+			const { manager, harness, observer, settle } = setUp(async () => {
+				settling.resolve();
+				await proceed.promise;
+				return NOTICE;
+			});
+			try {
+				const told = IrcBus.global().wait("Parent", { from: AGENT_ID }, 1000);
+				const finish = observer([ircRecord("Parent", "fix the mask path too")]);
+				harness.emitAssistantText("mask path fixed too");
+				const finished = finish?.(undefined);
+				await settling.promise;
+				// The owner gives up the turn while its changes are landing.
+				expect(manager.cancel(AGENT_ID, { ownerId: "Parent" })).toBe(true);
+				proceed.resolve();
+				await finished;
+
+				expect(settle).toHaveBeenCalledTimes(1);
+				expect(manager.getJob(AGENT_ID)?.status).toBe("cancelled");
+				// A cancelled job delivers nothing, so this is the owner's only word that its checkout changed.
+				expect((await told)?.body?.endsWith(NOTICE)).toBe(true);
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("tells the owner of an operator-prompted turn what landed when its job manager disposes while the turn settles", async () => {
+			const tempDir = TempDir.createSync("@omp-user-prompted-dispose-during-settle-");
+			const settling = Promise.withResolvers<void>();
+			const proceed = Promise.withResolvers<void>();
+			const { manager, harness, observer, settle } = setUp(
+				async () => {
+					settling.resolve();
+					await proceed.promise;
+					return NOTICE;
+				},
+				{ structured: false, artifactsDir: tempDir.path() },
+			);
+			harness.session.sessionManager.getArtifactsDir = () => tempDir.path();
+			try {
+				const told = IrcBus.global().wait("Parent", { from: AGENT_ID }, 1000);
+				const finish = observer([userRecord("fix it")]);
+				harness.emitAssistantText("fixed");
+				const finished = finish?.(undefined);
+				await settling.promise;
+				// The owner starts shutting down while the changes are landing.
+				const disposing = manager.dispose({ timeoutMs: 1000 });
+				proceed.resolve();
+				await finished;
+				await disposing;
+
+				expect(settle).toHaveBeenCalledTimes(1);
+				// The manager refuses the result, so the owner hears of it directly.
+				const message = await told;
+				expect(message?.body).toContain("fixed");
+				expect(message?.body?.endsWith(NOTICE)).toBe(true);
+			} finally {
+				tempDir.removeSync();
 			}
 		});
 
