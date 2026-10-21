@@ -668,7 +668,7 @@ describe("cursor usage provider", () => {
 			});
 		});
 
-		it("fetches personal usage and profile email with a WorkOS cookie", async () => {
+		it("fetches personal usage with a WorkOS cookie and the profile email with a bearer token", async () => {
 			const accessToken = createCursorAccessToken("auth0|user_123");
 			const authUsagePayload = {
 				"gpt-4": {
@@ -712,15 +712,18 @@ describe("cursor usage provider", () => {
 					expect(headers.get("Authorization")).toBe(`Bearer ${accessToken}`);
 					return Response.json(authUsagePayload);
 				}
-				expect(["https://cursor.com/api/usage-summary", "https://cursor.com/api/auth/me"]).toContain(url);
+				if (url === "https://api2.cursor.sh/aiserver.v1.DashboardService/GetMe") {
+					expect(init?.method).toBe("POST");
+					expect(headers.get("Authorization")).toBe(`Bearer ${accessToken}`);
+					expect(headers.has("Cookie")).toBe(false);
+					return Response.json({ email: "person@example.com", authId: "auth0|user_123" });
+				}
+				expect(url).toBe("https://cursor.com/api/usage-summary");
 				expect(headers.get("Accept")).toBe("application/json");
 				expect(headers.get("Cookie")).toBe(
 					`WorkosCursorSessionToken=${encodeURIComponent(`user_123::${accessToken}`)}`,
 				);
 				expect(headers.has("Authorization")).toBe(false);
-				if (url === "https://cursor.com/api/auth/me") {
-					return Response.json({ email: "person@example.com", sub: "user_123" });
-				}
 				return Response.json(usageSummaryPayload);
 			}) as unknown as typeof fetch;
 
@@ -741,7 +744,7 @@ describe("cursor usage provider", () => {
 			expect(seenUrls).toEqual([
 				"https://api2.cursor.sh/auth/usage",
 				"https://cursor.com/api/usage-summary",
-				"https://cursor.com/api/auth/me",
+				"https://api2.cursor.sh/aiserver.v1.DashboardService/GetMe",
 			]);
 			expect(report?.metadata).toEqual({
 				email: "person@example.com",
@@ -793,7 +796,7 @@ describe("cursor usage provider", () => {
 						},
 					});
 				}
-				return Response.json({ email: "other@example.com", sub: "different_user" });
+				return Response.json({ email: "other@example.com", authId: "auth0|different_user" });
 			}) as unknown as typeof fetch;
 
 			const report = await cursorUsageProvider.fetchUsage(
@@ -844,7 +847,7 @@ describe("cursor usage provider", () => {
 			expect(seenUrls).toEqual([
 				"https://api2.cursor.sh/auth/usage",
 				"https://cursor.com/api/usage-summary",
-				"https://cursor.com/api/auth/me",
+				"https://api2.cursor.sh/aiserver.v1.DashboardService/GetMe",
 			]);
 			expect(report?.limits.map(limit => limit.id)).toEqual(["cursor:requests:gpt-4"]);
 			expect(report?.raw).toEqual(authUsagePayload);
