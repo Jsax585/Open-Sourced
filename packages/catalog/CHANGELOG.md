@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- ClinePass `deepseek-v4.1-flash-1017` now exposes `low`/`high`/`max` and sends the selected `reasoning_effort` without freezing reference-derived prices or limits; previously the exact subscription model had no explicit effort ladder ([#16417](https://github.com/can1357/oh-my-pi/pull/16417) by [@jhste102lab](https://github.com/jhste102lab))
+
 ## [18.12.5] - 2026-10-21
 
 ### Fixed

@@ -22,6 +22,12 @@ const LOW_HIGH_MAX: ThinkingConfig = {
 	requiresEffort: false,
 };
 
+// Exact ClinePass reasoning controls; pricing, limits, and modalities still
+// follow normal reference enrichment instead of a frozen metadata copy.
+export const CLINE_PASS_THINKING_OVERRIDES: Readonly<Record<string, ThinkingConfig>> = {
+	"deepseek-v4.1-flash-1017": LOW_HIGH_MAX,
+};
+
 const HIGH_XHIGH: ThinkingConfig = {
 	mode: "effort",
 	efforts: [Effort.High, Effort.XHigh],
