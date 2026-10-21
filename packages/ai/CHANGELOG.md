@@ -13,6 +13,7 @@
 - Fixed auth-gateway requests failing when a client requests an unsupported thinking effort; the gateway now uses the nearest supported tier ([#16671](https://github.com/can1357/oh-my-pi/pull/16671) by [@codyw912](https://github.com/codyw912))
 - Fixed Anthropic tools whose parameters are a root `anyOf`/`oneOf`/`allOf` of objects being sent as an empty closed object that only accepts `{}`; variant properties now fold into the root `input_schema` ([#16630](https://github.com/can1357/oh-my-pi/issues/16630))
 - Fixed Cursor logins made with GitHub or Google never getting an account email (and every usage poll logging `Cursor profile request failed: 404`): the email now comes from Cursor's `DashboardService/GetMe` profile instead of cursor.com `/api/auth/me`, which only resolves WorkOS user ids. Several Cursor accounts can now be told apart, deduplicated, and selected by account policy
+- Fixed Cursor usage on the X Subscription (`unified_*` memberships) reporting the weekly Grok/Composer pool as spare third-party ("Other Models") budget and dating it to the monthly billing cycle: the pool is now metered as Cursor Models with its weekly reset from `DashboardService/GetPlanInfo`, and third-party models are metered by prepaid credit, so an account without credit is no longer picked for Claude, GPT, or Gemini while a sibling account has credit, and an exhausted Grok pool blocks the account only until its weekly reset
 
 ## [18.12.5] - 2026-10-21
 

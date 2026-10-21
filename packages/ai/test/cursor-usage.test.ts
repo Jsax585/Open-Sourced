@@ -526,6 +526,106 @@ describe("cursor usage provider", () => {
 				await fs.rm(tempDir, { recursive: true, force: true });
 			}
 		});
+
+		const xSubscriptionReport = (
+			poolPercentUsed: number,
+			onDemand: Record<string, unknown>,
+			weeklyResetsAt?: number,
+		): UsageReport => {
+			const report = parseCursorIndividualUsage(
+				{
+					billingCycleEnd: new Date(Date.now() + 20 * 24 * 60 * 60 * 1000).toISOString(),
+					membershipType: "unified_ultra",
+					individualUsage: {
+						plan: {
+							enabled: true,
+							used: Math.round(55_395 * (poolPercentUsed / 100)),
+							limit: 55_395,
+							autoPercentUsed: 0,
+							apiPercentUsed: 0,
+							totalPercentUsed: poolPercentUsed,
+						},
+						onDemand,
+					},
+				},
+				Date.now(),
+				weeklyResetsAt,
+			);
+			if (!report) throw new Error("expected Cursor usage report");
+			return report;
+		};
+
+		it("on the X Subscription meters Grok, Composer and Auto by the weekly pool and third-party models by prepaid credit", () => {
+			const weeklyResetsAt = Date.now() + 3 * 24 * 60 * 60 * 1000;
+			const report = xSubscriptionReport(40, { enabled: false, used: 0, limit: 0, remaining: 0 }, weeklyResetsAt);
+			const scopeLimits = defaultRankingStrategy("cursor")?.scopeLimits;
+			if (!scopeLimits) throw new Error("expected Cursor ranking strategy");
+
+			for (const modelId of ["grok-4.7", "composer-2.5", "default"]) {
+				const limits = scopeLimits(report, { modelId });
+				expect(limits.map(limit => limit.id)).toEqual(["cursor:usd:individual-auto"]);
+				expect(limits[0]?.amount).toMatchObject({ limit: 553.95, usedFraction: 0.4 });
+				expect(limits[0]?.window?.resetsAt).toBe(weeklyResetsAt);
+				expect(isUsageLimitReached(limits)).toBe(false);
+			}
+			// `apiPercentUsed: 0` is not spare third-party capacity: without prepaid credit Cursor refuses them.
+			const claudeLimits = scopeLimits(report, { modelId: "claude-opus-5-5" });
+			expect(claudeLimits.map(limit => limit.id)).toEqual(["cursor:usd:individual-api"]);
+			expect(claudeLimits[0]?.window).toEqual({ id: "prepaid", label: "Prepaid credit" });
+			expect(isUsageLimitReached(claudeLimits)).toBe(true);
+
+			// Uncapped on-demand (`enabled: true, limit: null`) with no spend yet is not exhausted.
+			const uncappedReport = xSubscriptionReport(40, { enabled: true, limit: null }, weeklyResetsAt);
+			expect(isUsageLimitReached(scopeLimits(uncappedReport, { modelId: "claude-opus-5-5" }))).toBe(false);
+		});
+
+		it("on the X Subscription sends third-party models to the account with prepaid credit", async () => {
+			const reports: Record<string, UsageReport> = {
+				"acct-no-credit": xSubscriptionReport(10, { enabled: false, used: 0, limit: 0, remaining: 0 }),
+				"acct-credit": xSubscriptionReport(90, { enabled: true, used: 500, limit: 5000, remaining: 4500 }),
+			};
+			const usageProvider: UsageProvider = {
+				id: "cursor",
+				async fetchUsage(params) {
+					return reports[params.credential.accountId ?? ""] ?? null;
+				},
+			};
+			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-cursor-x-subscription-"));
+			const store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
+			const storage = new AuthStorage(store, {
+				usageProviderResolver: provider => (provider === "cursor" ? usageProvider : undefined),
+			});
+			vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (_provider, credentials) => {
+				const credential = credentials.cursor;
+				return credential ? { apiKey: `api-${credential.accountId}`, newCredentials: credential } : null;
+			});
+			try {
+				const expires = Date.now() + 60 * 60 * 1000;
+				await storage.credentials.set("cursor", [
+					{ type: "oauth", access: "access-a", refresh: "refresh-a", expires, accountId: "acct-no-credit" },
+					{ type: "oauth", access: "access-b", refresh: "refresh-b", expires, accountId: "acct-credit" },
+				]);
+
+				expect(await storage.keys.get("cursor", "session-claude", { modelId: "claude-opus-5-5" })).toBe(
+					"api-acct-credit",
+				);
+				// Grok follows the emptier weekly pool, not the credit balance.
+				expect(await storage.keys.get("cursor", "session-grok", { modelId: "grok-4.7" })).toBe(
+					"api-acct-no-credit",
+				);
+				// Prepaid credit has no calendar reset: the `pool:api` block on `acct-no-credit`
+				// is the short default backoff (~60 s), not pinned until `billingCycleEnd` (20 days).
+				const blocks = store.listCredentialBlocks([1, 2]);
+				expect(blocks).toHaveLength(1);
+				expect(blocks[0]?.blockScope).toBe("pool:api");
+				expect(blocks[0]?.blockedUntilMs).toBeLessThanOrEqual(Date.now() + 65_000);
+			} finally {
+				vi.restoreAllMocks();
+				storage.close();
+				store.close();
+				await fs.rm(tempDir, { recursive: true, force: true });
+			}
+		});
 	});
 
 	describe("default registration", () => {
@@ -776,6 +876,39 @@ describe("cursor usage provider", () => {
 				authUsage: authUsagePayload,
 				usageSummary: usageSummaryPayload,
 			});
+		});
+
+		it("dates an X Subscription's Cursor-models pool by its weekly reset", async () => {
+			const accessToken = createCursorAccessToken("github|1245379");
+			const weeklyResetsAt = Date.now() + 2 * 24 * 60 * 60 * 1000;
+			const mockFetch = (async (input: string | URL, init?: RequestInit): Promise<Response> => {
+				const url = typeof input === "string" ? input : input.toString();
+				if (url === "https://api2.cursor.sh/auth/usage") return Response.json({});
+				if (url === "https://cursor.com/api/usage-summary") {
+					return Response.json({
+						billingCycleEnd: new Date(Date.now() + 20 * 24 * 60 * 60 * 1000).toISOString(),
+						membershipType: "unified_ultra",
+						individualUsage: {
+							plan: { enabled: true, used: 0, limit: 55_395, totalPercentUsed: 0 },
+							onDemand: { enabled: false, used: 0, limit: 0, remaining: 0 },
+						},
+					});
+				}
+				if (url === "https://api2.cursor.sh/aiserver.v1.DashboardService/GetPlanInfo") {
+					expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${accessToken}`);
+					return Response.json({ planInfo: { planName: "Ultra", includedUsageResetsAt: String(weeklyResetsAt) } });
+				}
+				return Response.json({ authId: "github|1245379", email: "person@example.com" });
+			}) as unknown as typeof fetch;
+
+			const report = await cursorUsageProvider.fetchUsage(
+				{ provider: "cursor", credential: { type: "oauth", accessToken } },
+				{ fetch: mockFetch },
+			);
+
+			const pool = report?.limits.find(limit => limit.id === "cursor:usd:individual-auto");
+			expect(pool?.window).toMatchObject({ id: "weekly", resetsAt: weeklyResetsAt });
+			expect(report?.metadata).toEqual({ email: "person@example.com" });
 		});
 
 		it("ignores a profile email returned for a different subject", async () => {
