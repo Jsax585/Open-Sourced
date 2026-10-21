@@ -1,9 +1,12 @@
+import type { OAuthAccess } from "@oh-my-pi/pi-ai";
 import type { Api, Model } from "@oh-my-pi/pi-ai/types";
+import { authProviders } from "@oh-my-pi/pi-catalog/compat/auth";
+import { DEFAULT_OPENAI_COMPATIBLE_DISCOVERY_TIMEOUT_MS } from "@oh-my-pi/pi-catalog/discovery/openai-compatible";
 import type { ModelResolutionSource } from "@oh-my-pi/pi-catalog/model-manager";
 import {
 	MODELS_DEV_CATALOG_PROVIDER_IDS,
-	type OpenAICodexAccount,
 	PROVIDER_DESCRIPTORS,
+	resolveLiteLLMDiscoveryTimeoutMs,
 } from "@oh-my-pi/pi-catalog/provider-models";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
 
@@ -28,10 +31,13 @@ for (const providerId of [
 
 export const STARTUP_MODEL_CACHE_PROVIDER_IDS: readonly string[] = Object.keys(STARTUP_MODEL_CACHE_PROVIDER_IDS_RECORD);
 
-// Sentinels for local-only OAuth tokens — declared inline to avoid loading
-// provider modules at startup. Must match the llama-cpp, lm-studio, and vllm
-// auth rules in packages/catalog/src/compat/rules/auth/.
-const LOCAL_PROVIDER_PLACEHOLDERS = new Set<string>(["llama-cpp-local", "lm-studio-local", "vllm-local"]);
+// Keyless-mode markers: each api-key login's KDL `empty-fallback` (e.g.
+// `lm-studio-local`), stored on an empty paste and never sent as a bearer.
+const LOCAL_PROVIDER_PLACEHOLDERS = new Set<string>(
+	authProviders().flatMap(entry =>
+		entry.login?.kind === "api-key" && entry.login.emptyFallback ? [entry.login.emptyFallback] : [],
+	),
+);
 
 /**
  * Hard bound for extension-provided fetchDynamicModels to prevent indefinite hangs
@@ -40,19 +46,14 @@ const LOCAL_PROVIDER_PLACEHOLDERS = new Set<string>(["llama-cpp-local", "lm-stud
  */
 export const RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS = 15_000;
 
-/** Slack so a built-in manager can still run `/v1/models` after its own walk deadline. */
-const BUILT_IN_DISCOVERY_FALLBACK_MARGIN_MS = 5_000;
+/** Slack for mapping, cache persistence, and model-manager work around the network stages. */
+const BUILT_IN_DISCOVERY_OVERHEAD_MS = 5_000;
 
-/**
- * Outer race budget for a built-in manager whose probe accepts
- * `discoveryTimeoutMs`. Never shrinks below {@link RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS};
- * grows so a configured deadline is not silently capped by the 15 s race.
- */
-export function resolveBuiltInDiscoveryBudgetMs(configuredTimeoutMs: number | undefined): number {
-	if (configuredTimeoutMs === undefined || !Number.isFinite(configuredTimeoutMs) || configuredTimeoutMs <= 0) {
-		return RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS;
-	}
-	return Math.max(RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS, configuredTimeoutMs + BUILT_IN_DISCOVERY_FALLBACK_MARGIN_MS);
+/** Keep the outer race above every sequential LiteLLM stage, including the default deadline. */
+export function resolveBuiltInDiscoveryBudgetMs(providerId: string, configuredTimeoutMs: number | undefined): number {
+	if (providerId !== "litellm") return RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS;
+	const timeoutMs = resolveLiteLLMDiscoveryTimeoutMs(configuredTimeoutMs);
+	return DEFAULT_OPENAI_COMPATIBLE_DISCOVERY_TIMEOUT_MS + 2 * timeoutMs + BUILT_IN_DISCOVERY_OVERHEAD_MS;
 }
 // Built-in discovery preflight mirror of the catalog model-manager's private
 // cache timings (model-manager.ts: DEFAULT_CACHE_TTL_MS / NON_AUTHORITATIVE_RETRY_MS).
@@ -91,6 +92,8 @@ export async function withModelDiscoveryTimeout<T>(timeoutMs: number, run: () =>
 export interface BuiltInDiscoveryResult {
 	models: Model<Api>[];
 	authoritativeProviders: Set<string>;
+	/** Providers whose successful endpoint refresh replaces their prior dynamic discovery slice. */
+	replaceRuntimeProviders: Set<string>;
 }
 
 export type ProviderDiscoveryStatus = "idle" | "ok" | "empty" | "cached" | "unavailable" | "unauthenticated";
@@ -144,7 +147,7 @@ export function extractGoogleOAuthProjectId(value: string | undefined): string |
 }
 
 export function getOAuthCredentialsForProvider(authStorage: AuthStorage, provider: string): OAuthCredential[] {
-	const providerEntry = authStorage.getAll()[provider];
+	const providerEntry = authStorage.credentials.all()[provider];
 	if (!providerEntry) {
 		return [];
 	}
@@ -153,32 +156,41 @@ export function getOAuthCredentialsForProvider(authStorage: AuthStorage, provide
 }
 
 /**
- * Resolve every configured Codex OAuth account for catalog discovery, refreshing
- * each credential exactly once. Codex `/models` is account-scoped, so discovery
- * must fetch per account and union the results; resolving a single access token
- * (as before) hid models available only through a sibling account (#6265).
+ * Resolve every stored OAuth account of an account-scoped discovery provider
+ * (Codex `/models`, Antigravity `fetchAvailableModels`), refreshing each
+ * credential exactly once. Discovery must fetch per account and union the
+ * results; resolving a single access token hid models available only through
+ * a sibling account (#6265, #14924).
+ *
+ * `resolvedAccessToken` is the token the discovery preflight resolved; it is
+ * appended when it belongs to no stored account (runtime or env credential).
  *
  * Returns `null` when any stored account fails to resolve (e.g. a transient
- * refresh failure): the Codex manager is authoritative, so unioning only the
+ * refresh failure): both managers are authoritative, so unioning only the
  * accounts that resolved would cache a partial catalog and hide the failed
  * account's models for the cache TTL. Aborting keeps the previous/bundled
  * catalog instead.
  */
-export async function resolveCodexDiscoveryAccounts(
+export async function resolveOAuthDiscoveryAccounts(
 	authStorage: AuthStorage,
+	provider: string,
 	resolvedAccessToken: string,
-): Promise<OpenAICodexAccount[] | null> {
-	const accesses = await authStorage.getOAuthAccesses("openai-codex");
-	const accounts: OpenAICodexAccount[] = [];
+): Promise<OAuthAccess[] | null> {
+	const accesses = await authStorage.oauth.accessAll(provider);
+	const accounts: OAuthAccess[] = [];
 	for (const access of accesses) {
 		if (!access.ok) return null;
-		accounts.push({ accessToken: access.accessToken, accountId: access.accountId });
+		accounts.push(access);
 	}
 	if (!accounts.some(account => account.accessToken === resolvedAccessToken)) {
-		const matchingCredential = getOAuthCredentialsForProvider(authStorage, "openai-codex").find(
+		const matchingCredential = getOAuthCredentialsForProvider(authStorage, provider).find(
 			credential => credential.access === resolvedAccessToken,
 		);
-		accounts.push({ accessToken: resolvedAccessToken, accountId: matchingCredential?.accountId });
+		accounts.push({
+			accessToken: resolvedAccessToken,
+			accountId: matchingCredential?.accountId,
+			email: matchingCredential?.email,
+		});
 	}
 	return accounts;
 }
