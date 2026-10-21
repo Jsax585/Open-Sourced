@@ -2200,21 +2200,14 @@ export function ensureGraphCommonJsRequireRegistered(): void {
 
 ensureGraphCommonJsRequireRegistered();
 
-/**
- * Process-wide load counts per entry realpath, behind {@link nextLegacyPiLoadTag}.
- * Kept on `globalThis` for the reason {@link ensureGraphCommonJsRequireRegistered}
- * is: a second instance of this module must continue the host's counts, or it
- * would reissue a tag the host already used and get the host's evaluated graph.
- */
-const LOAD_COUNTS_GLOBAL = "__ompLegacyPiLoadCounts";
-
-function legacyPiLoadCounts(): Map<string, number> {
-	let counts = Reflect.get(globalThis, LOAD_COUNTS_GLOBAL) as Map<string, number> | undefined;
-	if (!counts) {
-		counts = new Map();
-		Reflect.set(globalThis, LOAD_COUNTS_GLOBAL, counts);
-	}
-	return counts;
+declare global {
+	/**
+	 * Process-wide load counts per entry realpath, behind {@link nextLegacyPiLoadTag}.
+	 * Kept on `globalThis` for the reason {@link ensureGraphCommonJsRequireRegistered}
+	 * is: a second instance of this module must continue the host's counts, or it
+	 * would reissue a tag the host already used and get the host's evaluated graph.
+	 */
+	var __ompLegacyPiLoadCounts: Map<string, number> | undefined;
 }
 
 /**
@@ -2228,7 +2221,7 @@ function legacyPiLoadCounts(): Map<string, number> {
  * instead of storing another copy of every rewritten module on each launch.
  */
 function nextLegacyPiLoadTag(entryRealPath: string): string {
-	const counts = legacyPiLoadCounts();
+	const counts = (globalThis.__ompLegacyPiLoadCounts ??= new Map<string, number>());
 	const count = (counts.get(entryRealPath) ?? 0) + 1;
 	counts.set(entryRealPath, count);
 	// The fixed-width hash keeps the tag digits-only (the graph hooks match
