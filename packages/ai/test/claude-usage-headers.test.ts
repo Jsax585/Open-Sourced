@@ -787,6 +787,83 @@ describe("claude extra usage", () => {
 	});
 });
 
+describe("claude paid-usage ranking state", () => {
+	function extraUsageFor(report: UsageReport | null, modelId = "claude-opus-4-8") {
+		if (!report) throw new Error("expected a Claude usage report");
+		return claudeRankingStrategy.extraUsage?.(report, { modelId });
+	}
+
+	it("reads uncapped live spend as available paid usage", async () => {
+		const report = await fetchClaudeUsageReport({
+			spend: {
+				enabled: true,
+				used: money(40_288),
+				limit: null,
+			},
+		});
+
+		expect(extraUsageFor(report)).toEqual({
+			enabled: true,
+			exhausted: false,
+			unit: "usd",
+			used: 402.88,
+			uncapped: true,
+		});
+	});
+
+	it("reads capped live spend with its remaining paid usage", async () => {
+		const report = await fetchClaudeUsageReport({
+			spend: {
+				enabled: true,
+				used: money(19_074),
+				limit: money(20_000),
+			},
+		});
+
+		const extraUsage = extraUsageFor(report);
+		expect(extraUsage).toMatchObject({
+			enabled: true,
+			exhausted: false,
+			unit: "usd",
+			used: 190.74,
+			uncapped: false,
+		});
+		expect(extraUsage?.remaining).toBeCloseTo(9.26, 10);
+	});
+
+	it("withholds paid usage when the current spend gate is disabled", async () => {
+		const report = await fetchClaudeUsageReport({
+			spend: {
+				enabled: false,
+				used: money(40_288),
+				limit: null,
+			},
+		});
+
+		expect(extraUsageFor(report)).toBeUndefined();
+	});
+
+	it("withholds paid usage behind an exhausted Fable hard block", async () => {
+		const report = await fetchClaudeUsageReport({
+			limits: [
+				{
+					kind: "weekly_scoped",
+					percent: 100,
+					resets_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+					scope: { model: { display_name: "Fable" } },
+				},
+			],
+			spend: {
+				enabled: true,
+				used: money(40_288),
+				limit: null,
+			},
+		});
+
+		expect(extraUsageFor(report, "claude-fable-5")).toBeUndefined();
+	});
+});
+
 describe("claude ranking strategy", () => {
 	function usageLimit(args: {
 		id: string;

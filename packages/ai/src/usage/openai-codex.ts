@@ -81,6 +81,12 @@ interface ParsedAdditionalUsage {
 	secondary?: ParsedUsageWindow;
 }
 
+interface ParsedCodexCredits {
+	unlimited: boolean;
+	exhausted: boolean;
+	balance?: number;
+}
+
 interface ParsedUsage {
 	planType?: string;
 	allowed?: boolean;
@@ -95,6 +101,7 @@ interface ParsedUsage {
 	 * exhausted until the weekly reset while `/responses` keeps accepting it.
 	 */
 	creditOverage: boolean;
+	credits?: ParsedCodexCredits;
 	raw: CodexUsagePayload;
 }
 
@@ -212,6 +219,18 @@ function parseAdditionalRateLimit(payload: unknown): ParsedAdditionalUsage | nul
 	return { limitName, meteredFeature, allowed, limitReached, primary, secondary };
 }
 
+function parseCodexCredits(payload: Record<string, unknown>): ParsedCodexCredits | undefined {
+	const credits = isRecord(payload.credits) ? payload.credits : undefined;
+	if (!credits || (credits.has_credits !== true && credits.unlimited !== true)) return undefined;
+	const balance = toNumber(credits.balance);
+	const spendControl = isRecord(payload.spend_control) ? payload.spend_control : undefined;
+	return {
+		unlimited: credits.unlimited === true,
+		exhausted: credits.overage_limit_reached === true || spendControl?.reached === true,
+		...(balance !== undefined && Number.isFinite(balance) ? { balance } : {}),
+	};
+}
+
 /**
  * True when paid credits can still fund plan-window overage. Codex CLI never
  * gates on `/wham/usage`, so once the plan allowance is spent it keeps working
@@ -242,7 +261,8 @@ function parseUsagePayload(payload: unknown): ParsedUsage | null {
 	const additional = additionalRaw
 		.map(parseAdditionalRateLimit)
 		.filter((value): value is ParsedAdditionalUsage => value !== null);
-	if (!rateLimit && additional.length === 0) return null;
+	const credits = parseCodexCredits(payload);
+	if (!rateLimit && additional.length === 0 && credits === undefined) return null;
 	const planLimitReached = rateLimit ? toBoolean(rateLimit.limit_reached) : undefined;
 	const parsed: ParsedUsage = {
 		planType,
@@ -253,13 +273,15 @@ function parseUsagePayload(payload: unknown): ParsedUsage | null {
 		additional,
 		creditOverage: hasPlanCreditOverage(payload, planLimitReached),
 		raw: payload as CodexUsagePayload,
+		credits,
 	};
 	if (
 		!parsed.primary &&
 		!parsed.secondary &&
 		parsed.allowed === undefined &&
 		parsed.limitReached === undefined &&
-		parsed.additional.length === 0
+		parsed.additional.length === 0 &&
+		parsed.credits === undefined
 	) {
 		return null;
 	}
@@ -388,6 +410,22 @@ function buildUsageLimit(args: {
 			usedFraction: amount.usedFraction,
 			explicitlyAllowed: isCodexRequestAllowed(args),
 		}),
+	};
+}
+
+function buildCreditUsageLimit(credits: ParsedCodexCredits): UsageLimit {
+	return {
+		id: "openai-codex:credits",
+		label: "Codex Credits",
+		scope: {
+			provider: "openai-codex",
+			windowId: "credits",
+		},
+		amount: {
+			...(credits.balance !== undefined ? { remaining: credits.balance } : {}),
+			unit: "credits",
+		},
+		...(credits.exhausted ? { status: "exhausted" } : {}),
 	};
 }
 function additionalLimitSlug(args: { limitName?: string; meteredFeature?: string }): string {
@@ -564,6 +602,7 @@ export const openaiCodexUsageProvider: UsageProvider = {
 
 		const creditOverage = parsed?.creditOverage === true;
 		const limits: UsageLimit[] = [];
+		const credits = parsed?.credits;
 		const meterStates: Record<string, { allowed?: boolean; limitReached?: boolean }> = {
 			chat: buildPlanMeterState(parsed?.allowed, parsed?.limitReached, creditOverage),
 		};
@@ -595,6 +634,7 @@ export const openaiCodexUsageProvider: UsageProvider = {
 				}),
 			);
 		}
+		if (credits) limits.push(buildCreditUsageLimit(credits));
 		for (const extra of parsed?.additional ?? []) {
 			const slug = additionalLimitSlug({ limitName: extra.limitName, meteredFeature: extra.meteredFeature });
 			const displayName = additionalDisplayName(slug, extra.limitName);
@@ -671,6 +711,8 @@ export const openaiCodexUsageProvider: UsageProvider = {
 			metadata: {
 				planType,
 				...buildPlanMeterState(parsed?.allowed, parsed?.limitReached, creditOverage),
+				creditOverage,
+				creditsUnlimited: credits?.unlimited === true,
 				email,
 				accountId,
 				meterStates,
@@ -782,6 +824,19 @@ export const codexRankingStrategy: CredentialRankingStrategy = {
 	},
 	scopeLimits(report, context) {
 		return scopeCodexLimitsForRequest(report, isCodexSparkRequest(context));
+	},
+	extraUsage(report, context) {
+		if (isCodexSparkRequest(context)) return undefined;
+		const credits = report.limits.find(limit => limit.id === "openai-codex:credits");
+		if (!credits || credits.amount.unit !== "credits") return undefined;
+		const remaining = credits.amount.remaining;
+		return {
+			enabled: true,
+			exhausted: credits.status === "exhausted",
+			unit: "credits",
+			...(typeof remaining === "number" && Number.isFinite(remaining) ? { remaining } : {}),
+			uncapped: report.metadata?.creditsUnlimited === true,
+		};
 	},
 	// A `usage_limit_reached` from a Spark request means the Spark meter is
 	// spent, not the chat windows, so the two back off under separate scopes;

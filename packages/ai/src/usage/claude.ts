@@ -5,6 +5,7 @@ import * as AIError from "../error";
 import {
 	type CredentialRankingContext,
 	type CredentialRankingStrategy,
+	type ExtraUsageState,
 	resolveUsedFraction,
 	type UsageAmount,
 	type UsageCredential,
@@ -861,6 +862,38 @@ function scopeClaudeLimitsForModelHardBlock(
 	});
 }
 
+function isClaudeLimitExhausted(limit: UsageLimit): boolean {
+	if (limit.status === "exhausted") return true;
+	const usedFraction = resolveUsedFraction(limit);
+	if (typeof usedFraction === "number" && Number.isFinite(usedFraction) && usedFraction >= 1) return true;
+	const remaining = limit.amount.remaining;
+	return typeof remaining === "number" && Number.isFinite(remaining) && remaining <= 0;
+}
+
+function claudeExtraUsage(
+	report: UsageReport,
+	context: CredentialRankingContext | undefined,
+): ExtraUsageState | undefined {
+	const tierHardBlocked = scopeClaudeLimitsForModelHardBlock(report, context).some(
+		limit => (limit.scope.tier === "fable" || limit.scope.tier === "mythos") && isClaudeLimitExhausted(limit),
+	);
+	if (tierHardBlocked) return undefined;
+
+	const limit = report.limits.find(entry => entry.id === "anthropic:extra");
+	if (!limit || limit.amount.unit !== "usd") return undefined;
+	const used = limit.amount.used;
+	const remaining = limit.amount.remaining;
+	const capped = typeof limit.amount.limit === "number" && Number.isFinite(limit.amount.limit);
+	return {
+		enabled: true,
+		exhausted: isClaudeLimitExhausted(limit),
+		unit: "usd",
+		...(typeof used === "number" && Number.isFinite(used) ? { used } : {}),
+		...(typeof remaining === "number" && Number.isFinite(remaining) ? { remaining } : {}),
+		uncapped: !capped,
+	};
+}
+
 function rankingUsedFraction(limit: UsageLimit): number {
 	const fraction = resolveUsedFraction(limit);
 	if (typeof fraction !== "number" || !Number.isFinite(fraction)) return 0.5;
@@ -927,6 +960,9 @@ export const claudeRankingStrategy: CredentialRankingStrategy = {
 	// Fable/Mythos weekly cap inside the reserve margin should move the turn to
 	// a healthy candidate rather than serve until 100%.
 	scopeLimitsForReserve: scopeClaudeLimitsForModel,
+	extraUsage(report, context) {
+		return claudeExtraUsage(report, context);
+	},
 	/**
 	 * Fable/Mythos usage-limit errors map to tier-local weekly counters. Scope
 	 * reactive backoff blocks for those tiers, mirroring the per-counter
@@ -944,8 +980,9 @@ export const claudeRankingStrategy: CredentialRankingStrategy = {
 	 * weekly row plus the shared umbrella windows — so a healthy report lifts
 	 * the block while a spent shared 5-hour wall keeps it.
 	 *
-	 * Legacy and shared quota errors also leave account-wide blocks. Only a
-	 * complete report with every reported quota healthy can heal that scope.
+	 * Legacy and shared quota errors also leave account-wide blocks. A complete
+	 * healthy report clears them. A fresh endpoint report can also clear a spent
+	 * shared allowance when paid usage is available and no tier wall remains.
 	 */
 	healableBlockScopes(report) {
 		const sharedLimits = report.limits.filter(limit => limit.scope.shared === true);
@@ -962,12 +999,21 @@ export const claudeRankingStrategy: CredentialRankingStrategy = {
 			const tier = limit.scope.tier;
 			if (tier === "fable" || tier === "mythos") tiers.add(tier);
 		}
+		const extraUsage = claudeExtraUsage(report, undefined);
+		const canHealGlobalBlockWithPaidUsage =
+			report.metadata?.source !== "ratelimit-headers" &&
+			!report.limits.some(limit => limit.scope.tier !== undefined && isClaudeLimitExhausted(limit)) &&
+			extraUsage?.enabled === true &&
+			!extraUsage.exhausted;
+		const globalScope = canHealGlobalBlockWithPaidUsage
+			? { blockScope: "", limits: [], healthy: true }
+			: {
+					blockScope: "",
+					limits: report.limits.filter(limit => limit.scope.shared === true || limit.scope.tier !== undefined),
+					healthy: report.metadata?.source === "ratelimit-headers" ? false : undefined,
+				};
 		return [
-			{
-				blockScope: "",
-				limits: report.limits.filter(limit => limit.scope.shared === true || limit.scope.tier !== undefined),
-				healthy: report.metadata?.source === "ratelimit-headers" ? false : undefined,
-			},
+			globalScope,
 			...[...tiers].map(tier => ({
 				blockScope: `tier:${tier}`,
 				limits: [...sharedLimits, ...report.limits.filter(limit => limit.scope.tier === tier)],
