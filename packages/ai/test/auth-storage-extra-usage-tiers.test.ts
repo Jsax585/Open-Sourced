@@ -7,6 +7,7 @@ import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Api, Context, Model } from "@oh-my-pi/pi-ai/types";
 import type { UsageLimit, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai/usage";
 import { parseClaudeUsagePayload } from "@oh-my-pi/pi-ai/usage/claude";
+import { openaiCodexUsageProvider } from "@oh-my-pi/pi-ai/usage/openai-codex";
 
 const ANTHROPIC = "anthropic" as const;
 const CODEX = "openai-codex" as const;
@@ -160,6 +161,95 @@ async function createCodexStorage(floor: number): Promise<AuthStorage> {
 	return storage;
 }
 
+type CodexParserLedgerEntry = {
+	balance?: number;
+	resetAt: number;
+};
+
+function codexCreditPayload(entry: CodexParserLedgerEntry): Record<string, unknown> {
+	return {
+		plan_type: "pro",
+		rate_limit: {
+			allowed: false,
+			limit_reached: true,
+			primary_window: {
+				used_percent: 100,
+				limit_window_seconds: WEEK_MS / 1000,
+				reset_at: Math.floor(entry.resetAt / 1000),
+			},
+			secondary_window: null,
+		},
+		additional_rate_limits: [],
+		credits:
+			entry.balance === undefined
+				? { has_credits: false, unlimited: false, overage_limit_reached: false, balance: "0" }
+				: {
+						has_credits: true,
+						unlimited: false,
+						overage_limit_reached: false,
+						balance: String(entry.balance),
+					},
+		spend_control: { reached: false },
+	};
+}
+
+function parserBackedCodexUsageProvider(
+	ledger: Map<string, CodexParserLedgerEntry>,
+	fetches?: Map<string, number>,
+	failingAccounts?: ReadonlySet<string>,
+): UsageProvider {
+	return {
+		id: CODEX,
+		async fetchUsage(params, context) {
+			const accountId = params.credential.accountId;
+			if (accountId === undefined) return null;
+			const entry = ledger.get(accountId);
+			if (!entry) return null;
+			fetches?.set(accountId, (fetches.get(accountId) ?? 0) + 1);
+			if (failingAccounts?.has(accountId)) throw new Error(`usage unavailable for ${accountId}`);
+			return openaiCodexUsageProvider.fetchUsage(params, {
+				...context,
+				fetch: async input => {
+					const url =
+						typeof input === "string"
+							? input
+							: input instanceof URL
+								? input.toString()
+								: input.url;
+					return url.includes("/wham/usage")
+						? new Response(JSON.stringify(codexCreditPayload(entry)), {
+								status: 200,
+								headers: { "content-type": "application/json" },
+							})
+						: new Response(null, { status: 404 });
+				},
+			});
+		},
+	};
+}
+
+async function createParserBackedCodexStorage(args: {
+	ledger: Map<string, CodexParserLedgerEntry>;
+	accountIds: readonly string[];
+	policies: AuthAccountPolicies;
+	fetches?: Map<string, number>;
+	failingAccounts?: ReadonlySet<string>;
+}): Promise<AuthStorage> {
+	const storage = new AuthStorage(await SqliteAuthCredentialStore.open(":memory:"), {
+		usageProviderResolver: provider =>
+			provider === CODEX
+				? parserBackedCodexUsageProvider(args.ledger, args.fetches, args.failingAccounts)
+				: undefined,
+		accountPolicies: args.policies,
+	});
+	storages.push(storage);
+	await storage.credentials.set(
+		CODEX,
+		args.accountIds.map(accountId => ({ type: "oauth" as const, ...oauthCredential(accountId) })),
+	);
+	return storage;
+}
+
 beforeEach(() => {
 	vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (provider, credentials) => {
 		const credential = credentials[provider] as OAuthCredentials | undefined;
@@ -297,6 +387,241 @@ describe("AuthStorage paid extra-usage tiers", () => {
 	it("uses Codex credits only while their configured floor remains", async () => {
 		await expectExtraUsageWithheld(await createCodexStorage(200), CODEX);
 		await expect((await createCodexStorage(50)).keys.get(CODEX, "codex-floor")).resolves.toBe("bearer-codex");
+	});
+
+	it("A1 withholds an AUTH-blocked Codex balance below its configured floor before the last-resort pass", async () => {
+		const now = Date.parse("2030-01-01T00:00:00.000Z");
+		vi.spyOn(Date, "now").mockReturnValue(now);
+		const resetAt = now + WEEK_MS;
+		const auth = await createParserBackedCodexStorage({
+			ledger: new Map([
+				["a", { balance: 120, resetAt }],
+				["b", { resetAt }],
+			]),
+			accountIds: ["a", "b"],
+			policies: [
+				{ provider: CODEX, account: { accountId: "a" }, priority: 3, extraUsageFloor: 200 },
+				{ provider: CODEX, account: { accountId: "b" }, priority: 1 },
+			],
+		});
+		const a = auth.oauth.accounts(CODEX).find(account => account.accountId === "a");
+		if (!a) throw new Error("Expected account a");
+		auth.blocks.upsert({
+			credentialId: a.credentialId,
+			providerKey: "openai-codex:oauth",
+			blockScope: "auth",
+			blockedUntilMs: now + 5 * 60_000,
+		});
+
+		let failure: unknown;
+		try {
+			await auth.keys.getWithCredential(CODEX, "a1");
+		} catch (error) {
+			failure = error;
+		}
+		expect(failure).toBeInstanceOf(AIError.ExtraUsageWithheldError);
+		expect((failure as AIError.ExtraUsageWithheldError).retryAt).toBe(resetAt);
+	});
+
+	it("A2 uses a retained cached Codex report to withhold a blocked floor account without another provider call", async () => {
+		const now = Date.parse("2030-01-02T00:00:00.000Z");
+		vi.spyOn(Date, "now").mockReturnValue(now);
+		const resetAt = now + WEEK_MS;
+		const fetches = new Map<string, number>();
+		const failingAccounts = new Set<string>();
+		const auth = await createParserBackedCodexStorage({
+			ledger: new Map([
+				["a", { balance: 120, resetAt }],
+				["b", { resetAt }],
+			]),
+			accountIds: ["a", "b"],
+			policies: [
+				{ provider: CODEX, account: { accountId: "a" }, priority: 3, extraUsageFloor: 200 },
+				{ provider: CODEX, account: { accountId: "b" }, priority: 1 },
+			],
+			fetches,
+			failingAccounts,
+		});
+		await auth.usage.reports();
+		expect(fetches.get("a")).toBe(1);
+		failingAccounts.add("a");
+		const a = auth.oauth.accounts(CODEX).find(account => account.accountId === "a");
+		if (!a) throw new Error("Expected account a");
+		auth.blocks.upsert({
+			credentialId: a.credentialId,
+			providerKey: "openai-codex:oauth",
+			blockScope: "auth",
+			blockedUntilMs: now + 5 * 60_000,
+		});
+
+		await expectExtraUsageWithheld(auth, CODEX);
+		expect(fetches.get("a")).toBe(1);
+	});
+
+	it("A3 still admits blocked paid capacity inside its floor and explicit past-floor use", async () => {
+		const now = Date.parse("2030-01-03T00:00:00.000Z");
+		vi.spyOn(Date, "now").mockReturnValue(now);
+		const resetAt = now + WEEK_MS;
+		const withinFloor = await createParserBackedCodexStorage({
+			ledger: new Map([
+				["a", { balance: 500, resetAt }],
+				["b", { resetAt }],
+			]),
+			accountIds: ["a", "b"],
+			policies: [
+				{ provider: CODEX, account: { accountId: "a" }, priority: 3, extraUsageFloor: 200 },
+				{ provider: CODEX, account: { accountId: "b" }, priority: 1 },
+			],
+		});
+		const withinFloorA = withinFloor.oauth.accounts(CODEX).find(account => account.accountId === "a");
+		if (!withinFloorA) throw new Error("Expected account a");
+		withinFloor.blocks.upsert({
+			credentialId: withinFloorA.credentialId,
+			providerKey: "openai-codex:oauth",
+			blockScope: "auth",
+			blockedUntilMs: now + 5 * 60_000,
+		});
+		expect(await withinFloor.keys.get(CODEX, "a3-within")).toBe("bearer-a");
+
+		const pastFloor = await createParserBackedCodexStorage({
+			ledger: new Map([
+				["a", { balance: 120, resetAt }],
+				["b", { resetAt }],
+			]),
+			accountIds: ["a", "b"],
+			policies: [
+				{ provider: CODEX, account: { accountId: "a" }, priority: 3, extraUsageFloor: 200 },
+				{ provider: CODEX, account: { accountId: "b" }, priority: 1 },
+			],
+		});
+		const pastFloorA = pastFloor.oauth.accounts(CODEX).find(account => account.accountId === "a");
+		if (!pastFloorA) throw new Error("Expected account a");
+		pastFloor.blocks.upsert({
+			credentialId: pastFloorA.credentialId,
+			providerKey: "openai-codex:oauth",
+			blockScope: "auth",
+			blockedUntilMs: now + 5 * 60_000,
+		});
+		expect(await pastFloor.keys.get(CODEX, "a3-past", { extraUsage: "past-floor" })).toBe("bearer-a");
+	});
+
+	it("A7 chooses a renewed high-priority account over a paid sibling when its old floor report has expired", async () => {
+		const now = Date.parse("2030-01-04T00:00:00.000Z");
+		vi.spyOn(Date, "now").mockReturnValue(now);
+		const expiredReset = new Date(now - 60_000).toISOString();
+		const stale = parseClaudeUsagePayload(
+			{
+				five_hour: { utilization: 100, resets_at: expiredReset },
+				seven_day: { utilization: 100, resets_at: expiredReset },
+				spend: { enabled: true, used: money(95), limit: money(100) },
+			},
+			{ accountId: "a" },
+			undefined,
+			now - 10 * 60_000,
+		);
+		const paid = parseClaudeUsagePayload(
+			{
+				five_hour: { utilization: 100, resets_at: new Date(now + WEEK_MS).toISOString() },
+				seven_day: { utilization: 100, resets_at: new Date(now + WEEK_MS).toISOString() },
+				spend: { enabled: true, used: money(10), limit: null },
+			},
+			{ accountId: "c" },
+			undefined,
+			now,
+		);
+		if (!stale || !paid) throw new Error("Expected usage reports");
+		const reports = new Map([
+			["a", stale],
+			["c", paid],
+		]);
+		const auth = new AuthStorage(await SqliteAuthCredentialStore.open(":memory:"), {
+			usageProviderResolver: provider =>
+				provider === ANTHROPIC
+					? { id: ANTHROPIC, fetchUsage: async params => reports.get(params.credential.accountId ?? "") ?? null }
+					: undefined,
+			accountPolicies: [
+				{ provider: ANTHROPIC, account: { accountId: "a" }, priority: 3, extraUsageFloor: 10 },
+				{ provider: ANTHROPIC, account: { accountId: "c" }, priority: 1 },
+			],
+		});
+		storages.push(auth);
+		await auth.credentials.set(ANTHROPIC, [
+			{ type: "oauth", ...oauthCredential("a") },
+			{ type: "oauth", ...oauthCredential("c") },
+		]);
+		expect(await claudeBearer(auth, "a7")).toBe("bearer-a");
+	});
+
+	it("A8 chooses a renewed high-priority account even when its stale report has no paid row", async () => {
+		const now = Date.parse("2030-01-05T00:00:00.000Z");
+		vi.spyOn(Date, "now").mockReturnValue(now);
+		const expiredReset = new Date(now - 60_000).toISOString();
+		const stale = parseClaudeUsagePayload(
+			{
+				five_hour: { utilization: 100, resets_at: expiredReset },
+				seven_day: { utilization: 100, resets_at: expiredReset },
+			},
+			{ accountId: "a" },
+			undefined,
+			now - 10 * 60_000,
+		);
+		const paid = parseClaudeUsagePayload(
+			{
+				five_hour: { utilization: 100, resets_at: new Date(now + WEEK_MS).toISOString() },
+				seven_day: { utilization: 100, resets_at: new Date(now + WEEK_MS).toISOString() },
+				spend: { enabled: true, used: money(10), limit: null },
+			},
+			{ accountId: "c" },
+			undefined,
+			now,
+		);
+		if (!stale || !paid) throw new Error("Expected usage reports");
+		const reports = new Map([
+			["a", stale],
+			["c", paid],
+		]);
+		const auth = new AuthStorage(await SqliteAuthCredentialStore.open(":memory:"), {
+			usageProviderResolver: provider =>
+				provider === ANTHROPIC
+					? { id: ANTHROPIC, fetchUsage: async params => reports.get(params.credential.accountId ?? "") ?? null }
+					: undefined,
+			accountPolicies: [
+				{ provider: ANTHROPIC, account: { accountId: "a" }, priority: 3 },
+				{ provider: ANTHROPIC, account: { accountId: "c" }, priority: 1 },
+			],
+		});
+		storages.push(auth);
+		await auth.credentials.set(ANTHROPIC, [
+			{ type: "oauth", ...oauthCredential("a") },
+			{ type: "oauth", ...oauthCredential("c") },
+		]);
+		expect(await claudeBearer(auth, "a8")).toBe("bearer-a");
+	});
+
+	it("A10 does not add provider probes when no account has a paid floor or budget", async () => {
+		let fetches = 0;
+		const auth = new AuthStorage(await SqliteAuthCredentialStore.open(":memory:"), {
+			usageProviderResolver: provider =>
+				provider === ANTHROPIC
+					? {
+							id: ANTHROPIC,
+							async fetchUsage(params) {
+								fetches += 1;
+								return parseClaudeUsagePayload(
+									claudePayload({ allowanceUsedPct: 100 }),
+									{ accountId: params.credential.accountId },
+								);
+							},
+						}
+					: undefined,
+		});
+		storages.push(auth);
+		await auth.credentials.set(ANTHROPIC, [
+			{ type: "oauth", ...oauthCredential("a") },
+			{ type: "oauth", ...oauthCredential("b") },
+		]);
+		await auth.keys.get(ANTHROPIC, "a10");
+		expect(fetches).toBe(2);
 	});
 
 	it("surfaces a resolver floor rejection as an unwrapped usage-limit stream error", async () => {

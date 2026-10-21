@@ -36,6 +36,7 @@ import type { UsageRequestDescriptor } from "./usage-cache";
 import {
 	assessFunding,
 	classifyExtraUsage,
+	currentUsageLimits,
 	isUsageLimitExhausted,
 	reserveUsageLimits,
 	usageReportMetadataValue,
@@ -220,6 +221,8 @@ export class CredentialHealth implements HealthApi {
 				if (planGate) {
 					planEligibilityByCredential.set(entry.id, planGate(report));
 				}
+				const savedResets = report?.resetCredits?.redeemableCount ?? report?.resetCredits?.availableCount;
+
 
 				if (this.#deps.blocks.supportsHealing(provider)) {
 					blockedUntil = this.#deps.blocks.blockedUntil(provider, providerKey, index, blockScopes);
@@ -230,6 +233,7 @@ export class CredentialHealth implements HealthApi {
 						credentialType,
 						state: "depleted",
 						resetsAt: blockedUntil,
+						...(savedResets === undefined ? {} : { savedResets }),
 					};
 				}
 				if (!report) return { credentialId: entry.id, credentialType, state: "unknown" };
@@ -249,7 +253,6 @@ export class CredentialHealth implements HealthApi {
 					policy,
 					extraUsageBlockedUntil,
 				});
-				const savedResets = report.resetCredits?.redeemableCount ?? report.resetCredits?.availableCount;
 				const account = {
 					credentialId: entry.id,
 					credentialType,
@@ -260,10 +263,7 @@ export class CredentialHealth implements HealthApi {
 				const limits = reserveUsageLimits(strategy, report, rankingContext);
 				if (limits.length === 0) return { ...account, state: "unknown" };
 
-				const currentLimits = limits.filter(limit => {
-					const resetsAt = limit.window?.resetsAt;
-					return resetsAt === undefined || resetsAt > nowMs || report.fetchedAt >= resetsAt;
-				});
+				const currentLimits = currentUsageLimits(limits, report.fetchedAt, nowMs);
 				if (currentLimits.length === 0) {
 					return { ...account, state: "unknown" };
 				}

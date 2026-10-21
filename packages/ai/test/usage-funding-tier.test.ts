@@ -1,6 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import type { AuthAccountPolicy, ExtraUsageAllowance, UsageFundingTier } from "../src/auth/types";
-import { assessFunding, fundingTierAllowed, fundingTierRank, type FundingAssessment } from "../src/auth/usage-report";
+import {
+	assessFunding,
+	currentUsageLimits,
+	fundingTierAllowed,
+	fundingTierRank,
+	type FundingAssessment,
+} from "../src/auth/usage-report";
 import type { CredentialRankingStrategy, ExtraUsageState, UsageLimit, UsageReport } from "../src/usage";
 import { ExtraUsageWithheldError, isExtraUsageWithheldMessage, isUsageLimit } from "../src/error";
 
@@ -162,6 +168,61 @@ describe("funding tier helpers", () => {
 		expect(fundingTierAllowed("extra-past-floor", toFloor)).toBe(false);
 		expect(fundingTierAllowed("extra-past-floor", "past-floor")).toBe(true);
 		expect(fundingTierAllowed("spent", toFloor)).toBe(true);
+	});
+});
+
+describe("current funding windows", () => {
+	it("A4 derives a Codex allowance reset from a credit-funded warning window", () => {
+		const report = usageReport(1);
+		report.limits[0] = { ...report.limits[0], status: "warning" };
+
+		expect(
+			assessFunding({
+				report,
+				strategy: strategy(extraState({ unit: "credits", used: undefined, remaining: 120 })),
+				context: {},
+				nowMs: NOW,
+				policy: { extraUsageFloor: 200 },
+			}),
+		).toEqual({
+			tier: "extra-past-floor",
+			extra: "past-floor",
+			allowanceResetsAt: RESET_AT,
+		});
+	});
+
+	it("A6 ignores expired windows fetched before their reset but keeps fresh post-reset reports conservative", () => {
+		const expiredResetAt = NOW - 60_000;
+		const stale = usageReport(1);
+		stale.fetchedAt = NOW - 10 * 60_000;
+		stale.limits[0] = {
+			...stale.limits[0],
+			window: { id: "plan", label: "Plan allowance", resetsAt: expiredResetAt },
+		};
+		const paidAtFloor = strategy(extraState({ remaining: 5 }));
+
+		expect(currentUsageLimits(stale.limits, stale.fetchedAt, NOW)).toEqual([]);
+		expect(
+			assessFunding({
+				report: stale,
+				strategy: paidAtFloor,
+				context: {},
+				nowMs: NOW,
+				policy: { extraUsageFloor: 10 },
+			}),
+		).toEqual({ tier: "allowance", extra: "unavailable" });
+
+		const refreshed = { ...stale, fetchedAt: NOW };
+		expect(currentUsageLimits(refreshed.limits, refreshed.fetchedAt, NOW)).toEqual(refreshed.limits);
+		expect(
+			assessFunding({
+				report: refreshed,
+				strategy: paidAtFloor,
+				context: {},
+				nowMs: NOW,
+				policy: { extraUsageFloor: 10 },
+			}),
+		).toMatchObject({ tier: "extra-past-floor", extra: "past-floor" });
 	});
 });
 
