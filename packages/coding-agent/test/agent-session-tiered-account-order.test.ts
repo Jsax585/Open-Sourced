@@ -255,8 +255,8 @@ async function createTieredHarness(options: TieredHarnessOptions) {
 	authStorage.keys.setRuntime("openai", "fallback-key");
 
 	const accountFor = (accountId: AccountId) => {
-		const account = authStorage
-			.oauth.accounts(ANTHROPIC)
+		const account = authStorage.oauth
+			.accounts(ANTHROPIC)
 			.find(candidate => candidate.accountId === `${TEST_ACCOUNT_PREFIX}-${accountId}`);
 		if (!account) throw new Error(`Expected ${accountId} in the OAuth pool`);
 		return account;
@@ -282,11 +282,7 @@ async function createTieredHarness(options: TieredHarnessOptions) {
 	});
 	vi.spyOn(authStorage.resets, "redeem").mockImplementation(async request => {
 		const accountId = ACCOUNT_IDS.find(account => accountFor(account).credentialId === request.target.credentialId);
-		if (
-			!accountId ||
-			request.target.creditId !== `cedar-${accountId}` ||
-			!ledger[accountId].resetAvailable
-		) {
+		if (!accountId || request.target.creditId !== `cedar-${accountId}` || !ledger[accountId].resetAvailable) {
 			return { ok: false, code: "no_credit", provider: ANTHROPIC };
 		}
 		const account = accountFor(accountId);
@@ -365,8 +361,7 @@ async function createTieredHarness(options: TieredHarnessOptions) {
 						charges.push({ accountId, kind: "allowance", allowanceWasAvailable, usableResetWasAvailable });
 						entry.allowanceUsedPct = Math.min(100, entry.allowanceUsedPct + 50);
 					} else {
-						const remainingBefore =
-							entry.paidLimit === undefined ? undefined : entry.paidLimit - entry.paidUsed;
+						const remainingBefore = entry.paidLimit === undefined ? undefined : entry.paidLimit - entry.paidUsed;
 						charges.push({
 							accountId,
 							kind: "paid",
@@ -430,8 +425,8 @@ async function createTieredHarness(options: TieredHarnessOptions) {
 			});
 		},
 		hasBlock(accountId, scope) {
-			return authStorage
-				.blocks.list([accountFor(accountId).credentialId])
+			return authStorage.blocks
+				.list([accountFor(accountId).credentialId])
 				.some(block => block.blockScope === scope && block.blockedUntilMs > Date.now());
 		},
 		async dispose() {
@@ -540,9 +535,7 @@ describe("AgentSession tiered same-provider account order", () => {
 
 function expectPaidChargesToRespectFunding(harness: TieredHarness) {
 	const paidCharges = harness.charges.filter(charge => charge.kind === "paid");
-	expect(
-		paidCharges.every(charge => !charge.allowanceWasAvailable && !charge.usableResetWasAvailable),
-	).toBe(true);
+	expect(paidCharges.every(charge => !charge.allowanceWasAvailable && !charge.usableResetWasAvailable)).toBe(true);
 	expect(
 		paidCharges.every(charge => charge.remainingBefore === undefined || charge.remainingBefore > PAID_FLOOR),
 	).toBe(true);
@@ -643,7 +636,9 @@ describe("AgentSession tiered same-provider boundary cases", () => {
 			expectPaidChargesToRespectFunding(harness);
 			expect(harness.requests.at(-1)).toEqual({ selector: harness.fallbackSelector, bearer: "fallback-key" });
 			expect(
-				harness.charges.filter(charge => charge.kind === "paid").map(charge => [charge.accountId, charge.remainingBefore]),
+				harness.charges
+					.filter(charge => charge.kind === "paid")
+					.map(charge => [charge.accountId, charge.remainingBefore]),
 			).toEqual([
 				["b", 10],
 				["b", 6],
@@ -711,5 +706,4 @@ describe("AgentSession tiered same-provider boundary cases", () => {
 			await harness.dispose();
 		}
 	});
-
 });

@@ -3329,7 +3329,8 @@ export class ModelRegistry {
 		try {
 			return (await this.getApiKeyWithCredentialForProvider(provider, sessionId, options))?.apiKey;
 		} catch (error) {
-			if (error instanceof OAuthRefreshUnavailableError || error instanceof ExtraUsageWithheldError) return undefined;
+			if (error instanceof OAuthRefreshUnavailableError || error instanceof ExtraUsageWithheldError)
+				return undefined;
 			throw error;
 		}
 	}
