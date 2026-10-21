@@ -4,6 +4,7 @@ import * as AIError from "@oh-my-pi/pi-ai/error";
 import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/registry/oauth/types";
 import { parseClaudeUsagePayload } from "@oh-my-pi/pi-ai/usage/claude";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 
@@ -63,8 +64,18 @@ describe("ModelRegistry extra-usage availability probes", () => {
 		});
 		await authStorage.credentials.set(PROVIDER, [{ type: "oauth", ...credential() }]);
 		const registry = new ModelRegistry(authStorage, undefined, { ignoreLocalModelConfig: true });
+		const model = getBundledModel(PROVIDER, MODEL_ID);
+		if (!model) throw new Error("Expected bundled probe model");
 
 		try {
+			await expect(registry.getApiKey(model, "probe")).resolves.toBeUndefined();
+			await expect(registry.getApiKey(model, "probe", { rejectWithheld: true })).rejects.toBeInstanceOf(
+				AIError.ExtraUsageWithheldError,
+			);
+			vi.spyOn(authStorage.keys, "getWithCredential").mockRejectedValueOnce(
+				new AIError.OAuthRefreshUnavailableError(PROVIDER, new Error("ECONNRESET")),
+			);
+			await expect(registry.getApiKey(model, "probe", { rejectWithheld: true })).resolves.toBeUndefined();
 			await expect(
 				registry.getApiKeyForProvider(PROVIDER, "availability-probe", { modelId: MODEL_ID }),
 			).resolves.toBeUndefined();

@@ -3263,11 +3263,15 @@ export class ModelRegistry {
 		);
 	}
 
-	/** Resolve a model's request credential or the no-auth sentinel. */
+	/**
+	 * Resolve a model's request credential or the no-auth sentinel. With
+	 * `rejectWithheld`, a paid-usage floor hold reaches request paths instead
+	 * of resolving as an unavailable credential.
+	 */
 	async getApiKey(
 		model: Model<Api>,
 		sessionId?: string,
-		options?: Pick<AuthApiKeyOptions, "extraUsage" | "signal">,
+		options?: Pick<AuthApiKeyOptions, "extraUsage" | "signal"> & { rejectWithheld?: boolean },
 	): Promise<string | undefined> {
 		// A disabled provider gets no credential, so no request reaches it however
 		// its model was obtained.
@@ -3275,13 +3279,22 @@ export class ModelRegistry {
 		if (this.#isKeylessProvider(model.provider)) {
 			return kNoAuth;
 		}
-		return this.authStorage.keys.get(model.provider, sessionId, {
+		const keyOptions = {
 			baseUrl: model.baseUrl,
 			modelId: model.id,
 			extraUsage: options?.extraUsage,
 			accountIds: model.accountAccess && Object.keys(model.accountAccess),
 			signal: options?.signal,
-		});
+		};
+		if (!options?.rejectWithheld) {
+			return this.authStorage.keys.get(model.provider, sessionId, keyOptions);
+		}
+		try {
+			return (await this.authStorage.keys.getWithCredential(model.provider, sessionId, keyOptions))?.apiKey;
+		} catch (error) {
+			if (error instanceof OAuthRefreshUnavailableError) return undefined;
+			throw error;
+		}
 	}
 
 	/** Resolve request authentication through the historical Pi extension facade. */
