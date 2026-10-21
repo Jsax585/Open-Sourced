@@ -10,6 +10,7 @@
 
 - Added `nextBuildPriceChange(cost, now)` to identify when a model's dated pricing card may change, allowing callers to safely reuse earlier builds until that time.
 - Added the `selector-revision-suffix` catalog axis for Google Vertex, so `google-vertex/claude-opus-4-8` resolves exactly to `claude-opus-4-8@default`.
+- Models now declare whether they hear audio: Gemini on Google's own transports and every OpenRouter model whose listing takes audio input ([#16611](https://github.com/can1357/oh-my-pi/pull/16611) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Changed
 
@@ -107,10 +108,6 @@
 ### Changed
 
 - Updated the bundled Yolo-Auto catalog to its current models, `qwen3.8-27b` (now the default), `yolo`, `yolo-small`, and `yolo-128k`, and removed the retired `deepseek-flash-v4` and `qwen3.8-flash`
-
-### Added
-
-- Models now declare whether they hear audio: Gemini on Google's own transports and every OpenRouter model whose listing takes audio input
 
 ## [18.12.5] - 2026-10-21
 

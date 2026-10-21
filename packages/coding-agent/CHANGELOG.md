@@ -18,6 +18,7 @@
 - Extensions and RPC clients can start live voice sessions using their own WebRTC peer, including phone-browser clients, through ctx.startLive({ sdpOffer }) or live_connect.
 - Extensions can customize assistant-text rendering and rerender individual replies through the opt-in extensionRenderers.assistantText setting, and can register interactive link schemes with extension callbacks and renderer fallbacks.
 - /debug reports now include session-logs.txt containing all log records written by the reporting session and its subagents for the current day.
+- `read` returns a timestamped transcript of audio files and of a video's soundtrack (`clip.mp4:transcript`) when you're logged in to a model that hears audio, such as Gemini through a Google login or an audio model on OpenRouter; its times are video frame selectors. Without one, an audio read shows its duration and codec instead of refusing it as binary ([#16611](https://github.com/can1357/oh-my-pi/pull/16611) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Changed
 
@@ -429,10 +430,6 @@
 - Fixed releasing or reaping a browser tab returning while Chromium still listed the page; the close now waits until Chromium reports the tab destroyed ([#16680](https://github.com/can1357/oh-my-pi/pull/16680) by [@H4vC](https://github.com/H4vC))
 - Fixed the advisor prompt forbidding all repeated advice, including real escalations: advisors may now re-raise a prior nit or concern as a blocker once new evidence makes it one ([#13887](https://github.com/can1357/oh-my-pi/issues/13887), [#16484](https://github.com/can1357/oh-my-pi/pull/16484) by [@pjh890321](https://github.com/pjh890321))
 - Fixed Esc no longer interrupting in the TUI after a second MCP OAuth login replaced an unfinished first one ([#16046](https://github.com/can1357/oh-my-pi/pull/16046) by [@marcintustin](https://github.com/marcintustin))
-
-### Added
-
-- `read` returns a timestamped transcript of audio files and of a video's soundtrack (`clip.mp4:transcript`) when you're logged in to a model that hears audio, such as Gemini through a Google login or an audio model on OpenRouter; its times are video frame selectors. Without one, an audio read shows its duration and codec instead of refusing it as binary
 
 ## [18.12.5] - 2026-10-21
 
