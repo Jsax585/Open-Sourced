@@ -2347,6 +2347,8 @@ export function convertMessages(
 	context: Context,
 	compat: ResolvedOpenAICompat,
 ): ChatCompletionMessageParam[] {
+	const isReflectionProvider =
+		model.provider === "reflection" || (model.baseUrl ?? "").includes("reflection.ai");
 	const params: ChatCompletionMessageParam[] = [];
 
 	const maxNormalizedToolCallIdLength = compat.requiresMistralToolIds
@@ -2657,7 +2659,10 @@ export function convertMessages(
 			// DeepSeek-compatible reasoning models require reasoning_content on all
 			// assistant turns. Providers that allow placeholders only need it on
 			// tool-call turns.
-			const needsReasoningOnAllTurns = compat.requiresReasoningContentForAllAssistantTurns;
+			const needsReasoningOnAllTurns =
+				compat.requiresReasoningContentForAllAssistantTurns ||
+				compat.replayReasoningContent === true ||
+				isReflectionProvider;
 			const needsReasoningField = needsReasoningOnAllTurns || toolCalls.length > 0;
 			let hasReasoningField =
 				assistantMsg.reasoning_content !== undefined ||
@@ -2696,12 +2701,18 @@ export function convertMessages(
 			if (
 				needsReasoningField &&
 				!hasReasoningField &&
-				compat.requiresReasoningContentForToolCalls &&
+				(compat.requiresReasoningContentForToolCalls ||
+					compat.replayReasoningContent ||
+					isReflectionProvider) &&
 				!compat.allowsSyntheticReasoningContentForToolCalls
 			) {
 				const reasoningField = compat.reasoningContentField ?? "reasoning_content";
 				assistantMsg[reasoningField] = compat.syntheticReasoningContentFallback ?? "";
 				hasReasoningField = true;
+			}
+			// Reflection/Beam: always ensure reasoning_content is present on assistant turns.
+			if (isReflectionProvider && assistantMsg.reasoning_content === undefined && assistantMsg.reasoning === undefined && assistantMsg.reasoning_text === undefined) {
+				assistantMsg.reasoning_content = "";
 			}
 			// Tier 3: For providers that accept synthetic placeholders (Kimi, OpenRouter).
 			if (toolCalls.length > 0 && canUseSyntheticReasoningContent && !hasReasoningField) {
@@ -2760,8 +2771,23 @@ export function convertMessages(
 			if (!hasContent && assistantMsg.tool_calls && compat.requiresAssistantContentForToolCalls) {
 				assistantMsg.content = ".";
 			}
-			if (!hasContent && !assistantMsg.tool_calls && !hasReasoningField) {
+			if (!hasContent && !assistantMsg.tool_calls && !hasReasoningField && assistantMsg.reasoning_content === undefined && assistantMsg.reasoning === undefined && assistantMsg.reasoning_text === undefined) {
 				continue;
+			}
+			if (isReflectionProvider) {
+				// Reflection/Beam requires non-empty reasoning_content on every assistant turn.
+				// Extract <thinking>...</thinking> from content if present.
+				let rc = assistantMsg.reasoning_content;
+				if (typeof rc !== "string" || rc.trim().length === 0) {
+					const contentStr = typeof assistantMsg.content === "string" ? assistantMsg.content : "";
+					const m = contentStr.match(/<thinking>([\s\S]*?)<\/thinking>/);
+					if (m && m[1].trim().length > 0) {
+						rc = m[1].trim();
+						} else {
+						rc = " ";
+						}
+					assistantMsg.reasoning_content = rc;
+					}
 			}
 			params.push(assistantMsg);
 		} else if (msg.role === "toolResult") {
