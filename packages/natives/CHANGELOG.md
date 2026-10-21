@@ -5,6 +5,7 @@
 ### Added
 
 - Added ahead/behind upstream commit counts to `VcsStatusSummary` (`statusSummary`), resolved through the remote's fetch refspecs and cached per HEAD/upstream pair; absent for jj workspaces and branches without an upstream ([#11049](https://github.com/can1357/oh-my-pi/pull/11049) by [@anzhen-tech](https://github.com/anzhen-tech)).
+
 ## [18.12.5] - 2026-10-21
 
 ### Fixed
@@ -34,7 +35,6 @@
 
 ### Added
 
-- Added `parseCodeStatus` to check code syntax and its resolved language without generating a summary ([#15904](https://github.com/can1357/oh-my-pi/pull/15904) by [@iliaal](https://github.com/iliaal)).
 - Added a `hiddenContent` option to `htmlToMarkdown`: `"drop"` (default) omits hidden content, `"reachable"` keeps content the page can reveal such as collapsed sections and inactive tab panels, and `"all"` also keeps `<template>` and `<noscript>` content; other values throw ([#16246](https://github.com/can1357/oh-my-pi/issues/16246))
 - Added `normalizePtyDimensions(cols, rows)` to size screen emulators with the same effective dimensions as native PTY sessions ([#16192](https://github.com/can1357/oh-my-pi/pull/16192) by [@C-W-Z](https://github.com/C-W-Z))
 - Added `LineMatcher`, a native multi-pattern line matcher: `matchLines` returns a batch's matches column-wise as typed arrays (line, pattern, and the UTF-16 span of each named group in `groupNames()` order)

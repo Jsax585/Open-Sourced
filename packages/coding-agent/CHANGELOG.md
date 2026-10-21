@@ -5,6 +5,7 @@
 ### Added
 
 - Added git upstream divergence counts (⇡ ahead / ⇣ behind) to the status line git segment, toggleable via `statusLine.segmentOptions.git.showAheadBehind` ([#11049](https://github.com/can1357/oh-my-pi/pull/11049) by [@anzhen-tech](https://github.com/anzhen-tech)).
+
 ## [18.12.5] - 2026-10-21
 
 ### Added
