@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
-import { findFreeCdpPort, relayTargets } from "@oh-my-pi/pi-coding-agent/tools/browser/attach";
+import { findFreeCdpPort, pageTargets } from "@oh-my-pi/pi-coding-agent/tools/browser/attach";
 import {
 	DISCARDED_TABS_PROTOCOL_VERSION,
 	type TabSnapshot,
@@ -136,16 +136,69 @@ describe("browser targets in Tern", () => {
 });
 
 describe("browser targets elsewhere", () => {
-	it("explains that targets exist only inside Tern or with the relay", async () => {
+	it("explains that targets exist only inside Tern, with the relay, or on a CDP endpoint", async () => {
 		for (const key of ENV_KEYS) delete process.env[key];
 		const failure = await invoke(session(), { action: "targets", timeout: 5 }).catch((error: unknown) => error);
 		expect(String(failure)).toContain("targets exist only inside a Tern pane");
 		expect(String(failure)).toContain("app.relay: true or the browser.relay setting");
+		expect(String(failure)).toContain("app.cdp_url");
+	});
+
+	it("refuses a browser omp would launch from app.path", async () => {
+		for (const key of ENV_KEYS) delete process.env[key];
+		const failure = await invoke(session(), {
+			action: "targets",
+			timeout: 5,
+			app: { path: "/opt/example/chrome" },
+		}).catch((error: unknown) => error);
+		expect(String(failure)).toContain("No pages to adopt here (the browser would be spawned:");
 	});
 });
 
-describe("relayTargets", () => {
-	it("keeps live, non-internal pages with their URL as the target", () => {
+describe("browser targets on a CDP endpoint", () => {
+	it("lists each page the endpoint's /json reports with its CDP id, skipping internal ones", async () => {
+		for (const key of ENV_KEYS) delete process.env[key];
+		using server = Bun.serve({
+			port: 0,
+			fetch: request =>
+				new URL(request.url).pathname === "/json"
+					? Response.json([
+							{ id: "A1", type: "page", url: "https://mail.example/", title: "Mail" },
+							{ id: "B2", type: "page", url: "about:blank", title: "" },
+							{ id: "B3", type: "page", url: "about:blank", title: "" },
+							{ id: "C3", type: "page", url: "devtools://devtools/bundled/inspector.html", title: "DevTools" },
+							{ id: "D4", type: "service_worker", url: "https://mail.example/sw.js", title: "sw" },
+						])
+					: new Response("not found", { status: 404 }),
+		});
+		const { text, value } = await invoke(session(), {
+			action: "targets",
+			timeout: 5,
+			app: { cdp_url: `http://127.0.0.1:${server.port}/` },
+		});
+		expect(value).toStrictEqual([
+			{ target: "https://mail.example/", id: "A1", title: "Mail", url: "https://mail.example/" },
+			{ target: "about:blank", id: "B2", title: "", url: "about:blank" },
+			{ target: "about:blank", id: "B3", title: "", url: "about:blank" },
+		]);
+		expect(text).toBe(
+			'Pages of the app.cdp_url browser (adopt one with app.target set to its URL or a title substring):\n- "Mail" https://mail.example/ (id A1)\n- "" about:blank (id B2)\n- "" about:blank (id B3)',
+		);
+	});
+
+	it("surfaces an endpoint that does not list its pages", async () => {
+		for (const key of ENV_KEYS) delete process.env[key];
+		using server = Bun.serve({ port: 0, fetch: () => new Response("nope", { status: 500 }) });
+		const cdpUrl = `http://127.0.0.1:${server.port}`;
+		const failure = await invoke(session(), { action: "targets", timeout: 5, app: { cdp_url: cdpUrl } }).catch(
+			(error: unknown) => error,
+		);
+		expect(String(failure)).toContain(`Browser CDP endpoint at ${cdpUrl} did not list its pages`);
+	});
+});
+
+describe("pageTargets", () => {
+	it("keeps live, non-internal pages with their URL as the target and their CDP id", () => {
 		const entries = [
 			{ id: "a", type: "page", url: "https://mail.example/", title: "Mail", active: "true", discarded: "false" },
 			{ id: "b", type: "page", url: "https://docs.example/", title: "Docs", active: "false", discarded: "false" },
@@ -153,11 +206,13 @@ describe("relayTargets", () => {
 			{ id: "d", type: "page", url: "devtools://devtools/bundled/inspector.html", title: "DevTools" },
 			{ id: "e", type: "service_worker", url: "https://mail.example/sw.js", title: "sw" },
 			{ id: "f", type: "page", title: "no url" },
+			{ type: "page", url: "https://noid.example/", title: "No id" },
 			"garbage",
 		];
-		expect(relayTargets(entries)).toEqual([
-			{ target: "https://mail.example/", title: "Mail", url: "https://mail.example/", shown: true },
-			{ target: "https://docs.example/", title: "Docs", url: "https://docs.example/", shown: false },
+		expect(pageTargets(entries)).toStrictEqual([
+			{ target: "https://mail.example/", id: "a", title: "Mail", url: "https://mail.example/", shown: true },
+			{ target: "https://docs.example/", id: "b", title: "Docs", url: "https://docs.example/", shown: false },
+			{ target: "https://noid.example/", title: "No id", url: "https://noid.example/" },
 		]);
 	});
 });
@@ -215,12 +270,15 @@ describe("browser targets with the relay", () => {
 		]);
 		const tool = session({ "browser.relayUrl": `http://127.0.0.1:${port}` });
 		const { text, value } = await invoke(tool, { action: "targets", timeout: 10, app: { relay: true } });
+		const ids = Array.isArray(value) ? value.map(entry => (isRecord(entry) ? entry.id : undefined)) : [];
+		expect(ids).toHaveLength(2);
+		expect(new Set(ids).size).toBe(2);
 		expect(value).toEqual([
-			{ target: "https://mail.example/", title: "Mail", url: "https://mail.example/", shown: true },
-			{ target: "https://docs.example/", title: "Docs", url: "https://docs.example/", shown: false },
+			{ target: "https://mail.example/", id: ids[0], title: "Mail", url: "https://mail.example/", shown: true },
+			{ target: "https://docs.example/", id: ids[1], title: "Docs", url: "https://docs.example/", shown: false },
 		]);
 		expect(text).toBe(
-			'Chrome pages via the relay (adopt one with app.target set to its URL or a title substring):\n- "Mail" https://mail.example/ (active)\n- "Docs" https://docs.example/',
+			`Chrome pages via the relay (adopt one with app.target set to its URL or a title substring):\n- "Mail" https://mail.example/ (id ${ids[0]}, active)\n- "Docs" https://docs.example/ (id ${ids[1]})`,
 		);
 	}, 20_000);
 });
