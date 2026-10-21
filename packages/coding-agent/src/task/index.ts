@@ -1401,7 +1401,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				isolated: spawnParams.isolated === true,
 				isolationFailed,
 				ircEnabled,
-				resumable: !isolationFailed && isResumable(ref),
+				resumable: !isolationFailed && isResumable(ref, { isolated: spawnParams.isolated === true }),
 				transcriptAvailable: aborted ? await hasResolvableTranscript(agentId) : true,
 			})}`;
 		};

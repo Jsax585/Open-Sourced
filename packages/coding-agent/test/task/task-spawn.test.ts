@@ -312,6 +312,67 @@ describe("task spawn routing", () => {
 		});
 	}
 
+	/** Run a task whose agent was stopped, with the registry as `status` leaves it, and return what the parent is told. */
+	async function stoppedTaskDelivery(options: { isolated: boolean; status: "idle" | "aborted" }): Promise<string> {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [{ ...taskAgent, model: ["anthropic/claude-sonnet-4"] }],
+			projectAgentsDir: null,
+		});
+		// What the lifecycle leaves behind: an idle adopted agent, or the tombstone an explicit kill writes.
+		const settle = (id: string): SingleResult => {
+			AgentRegistry.global().register({
+				id,
+				displayName: id,
+				kind: "sub",
+				session: null,
+				sessionFile: `/tmp/${id}.jsonl`,
+				status: options.status,
+			});
+			return makeResult(id, { exitCode: 1, aborted: true, abortReason: "killed from the Agent Hub" });
+		};
+		if (options.isolated) {
+			vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot: "/repo-root" });
+			vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts => ({
+				...settle(opts.agentId),
+				isolated: true,
+			}));
+		} else {
+			vi.spyOn(executorModule, "runSubprocess").mockImplementation(async opts => settle(opts.id ?? "?"));
+		}
+		const manager = createManager();
+		const settings = options.isolated ? { "task.isolation.enabled": true, "task.isolation.apply": false } : {};
+		const tool = await TaskTool.create(createSession({ manager, settings }));
+		const result = await tool.execute("tc-stopped", {
+			agent: "task",
+			name: "Stopped",
+			task: "Do the thing.",
+			...(options.isolated ? { isolated: true } : {}),
+		} as TaskParams);
+		const job = manager.getJob(result.details?.async?.jobId ?? "");
+		await job!.promise.catch(() => undefined);
+		return `${job!.resultText ?? ""}${job!.errorText ?? ""}`;
+	}
+
+	it("does not offer to resume an isolated agent that was explicitly killed", async () => {
+		// The kill released its workspace and persisted revival refuses isolated agents, so messaging fails.
+		const delivered = await stoppedTaskDelivery({ isolated: true, status: "aborted" });
+		expect(delivered).toContain("Stopped was aborted");
+		expect(delivered).not.toContain("write agent://Stopped");
+		expect(delivered).not.toContain("still resumable");
+	});
+
+	it("still offers to resume an isolated agent that stopped and stayed adopted", async () => {
+		const delivered = await stoppedTaskDelivery({ isolated: true, status: "idle" });
+		expect(delivered).toContain("Stopped was stopped but is still resumable");
+		expect(delivered).toContain("write agent://Stopped");
+	});
+
+	it("still offers to resume a killed agent that was not isolated", async () => {
+		const delivered = await stoppedTaskDelivery({ isolated: false, status: "aborted" });
+		expect(delivered).toContain("Stopped was stopped but is still resumable");
+		expect(delivered).toContain("write agent://Stopped");
+	});
+
 	for (const { label, liveAdvisor, settledAdvisor, expectedAdvisor } of [
 		{
 			label: "retains an attached advisor through teardown",

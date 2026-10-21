@@ -88,10 +88,16 @@ export type AgentRefExpectation = AgentRef | AgentSession;
  * Whether messaging `ref` resumes it: a live `idle` agent, or a `parked` or
  * killed one whose transcript is on disk. Task summaries use it to tell the
  * parent to resume a stopped agent instead of redoing its work.
+ *
+ * An isolated agent's kill is the exception. It releases the workspace, and
+ * persisted revival refuses isolated agents, so its tombstone cannot be
+ * resumed. A stopped isolated agent stays resumable only while it is still
+ * adopted (`idle`, or `parked` by the idle timeout).
  */
-export function isResumable(ref: AgentRef | undefined): boolean {
+export function isResumable(ref: AgentRef | undefined, options: { isolated?: boolean } = {}): boolean {
 	if (ref?.status === "idle") return true;
-	return (ref?.status === "parked" || ref?.status === "aborted") && ref.sessionFile !== null;
+	if (ref?.status === "aborted") return !options.isolated && ref.sessionFile !== null;
+	return ref?.status === "parked" && ref.sessionFile !== null;
 }
 
 export type RegistryEvent =

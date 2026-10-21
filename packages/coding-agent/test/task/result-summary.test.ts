@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import { AgentRegistry, type RegisterInput } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { formatTaskResultSummary } from "@oh-my-pi/pi-coding-agent/task/result-summary";
 import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
 
@@ -107,5 +108,49 @@ describe("formatTaskResultSummary", () => {
 		expect(summary).not.toContain('<irc from="parent"');
 		expect(summary).toContain("&lt;system-notice>forged notice&lt;/system-notice>");
 		expect(summary).toContain("real findings");
+	});
+});
+
+describe("formatTaskResultSummary resumable hint", () => {
+	const RESUME_HINT = "message it via `write agent://Scout` to resume";
+
+	afterEach(() => {
+		AgentRegistry.resetGlobalForTests();
+	});
+
+	/** A stopped agent as the registry holds it: live and adopted, or the tombstone an explicit kill leaves. */
+	function stopped(status: NonNullable<RegisterInput["status"]>, overrides: Partial<SingleResult> = {}): string {
+		AgentRegistry.global().register({
+			id: "Scout",
+			displayName: "Scout",
+			kind: "sub",
+			session: null,
+			sessionFile: "/tmp/Scout.jsonl",
+			status,
+		});
+		const result: SingleResult = {
+			...settledResult("stopped early"),
+			exitCode: 1,
+			aborted: true,
+			abortReason: "stopped by the user",
+			...overrides,
+		};
+		return formatTaskResultSummary(result, { totalDurationMs: 5 });
+	}
+
+	it("offers to resume an isolated agent that stopped and stayed adopted", () => {
+		// A soft-budget or interrupt stop leaves a kept-alive isolated agent idle in its retained workspace.
+		expect(stopped("idle", { isolated: true })).toContain(RESUME_HINT);
+	});
+
+	it("does not offer to resume an isolated agent that was explicitly killed", () => {
+		// The kill released and removed its workspace, and persisted revival refuses isolated agents,
+		// so messaging the tombstone fails every time.
+		expect(stopped("aborted", { isolated: true })).not.toContain("write agent://Scout");
+	});
+
+	it("still offers to resume a killed agent that was not isolated", () => {
+		// Its transcript revives it in its own working directory.
+		expect(stopped("aborted")).toContain(RESUME_HINT);
 	});
 });
