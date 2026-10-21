@@ -76,6 +76,8 @@ export type IsolationSummaryKind =
 export interface IsolationSummaryContext {
 	kind: IsolationSummaryKind;
 	branchName?: string;
+	/** The task branch of work the agent removed could not be deleted, and still exists. */
+	branchKept?: boolean;
 	/** Root patch path, only when it holds changes. */
 	rootPatchPath?: string;
 	nestedCount?: number;
@@ -496,6 +498,9 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	// branch they refused to merge. A superseded follow-up must restore this,
 	// not delete it: the branch is the only copy of that work.
 	let publishedBranchTip: string | undefined;
+	// The task branch holds work the agent removed and could not be deleted: git refuses while it is
+	// checked out in another worktree. It stays named for the Agent Hub, and release tries again.
+	let strandedBranch = false;
 	// What the caller was handed and has not landed: the files written for it,
 	// and whether any of it holds work. A later turn that undoes all of it must
 	// withdraw it. Otherwise the recovery artifacts keep offering work the
@@ -646,19 +651,44 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	 * Point the task branch back at `restoreTip`, the tip the caller already
 	 * has, or delete it when no tip was ever handed over. Used when a capture
 	 * is superseded after it wrote the branch, and when the agent undoes
-	 * everything the branch held.
+	 * everything the branch held. True when the branch is now as asked: the VCS
+	 * wrapper returns false, rather than throwing, when it refuses to delete one.
 	 */
-	const resetTaskBranch = async (branchName: string, restoreTip: string | undefined): Promise<void> => {
+	const resetTaskBranch = async (branchName: string, restoreTip: string | undefined): Promise<boolean> => {
 		try {
 			const repo = vcs.requireGit(opts.context.repoRoot);
-			if (restoreTip) await repo.createBranch(branchName, restoreTip, true);
-			else if (await repo.refExists(`refs/heads/${branchName}`)) await repo.deleteBranch(branchName, true);
+			if (restoreTip) {
+				await repo.createBranch(branchName, restoreTip, true);
+				return true;
+			}
+			const ref = `refs/heads/${branchName}`;
+			if (!(await repo.refExists(ref))) return true;
+			if (await repo.deleteBranch(branchName, true)) return true;
+			// Refused, or gone since the check above.
+			if (!(await repo.refExists(ref))) return true;
+			logger.warn("Could not delete the task branch", { branch: branchName });
+			return false;
 		} catch (error) {
 			logger.warn("Could not reset the task branch", {
 				branch: branchName,
 				error: error instanceof Error ? error.message : String(error),
 			});
+			return false;
 		}
+	};
+	/**
+	 * Delete the task branch of work the agent removed and stop listing it. A
+	 * branch git refuses to delete stays listed, since it exists, and is retried.
+	 */
+	const removeTaskBranch = async (): Promise<boolean> => {
+		if (!(await resetTaskBranch(`omp/task/${opts.agentId}`, undefined))) {
+			strandedBranch = true;
+			return false;
+		}
+		strandedBranch = false;
+		publishedBranchTip = undefined;
+		AgentRegistry.global().clearHistory(opts.agentId, ["branchName"]);
+		return true;
 	};
 	/**
 	 * Delete the task branch this runner published and stop listing it. A
@@ -667,26 +697,19 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	 * branch was published.
 	 */
 	const dropPublishedBranch = async (): Promise<void> => {
-		if (publishedBranchTip === undefined) return;
-		await resetTaskBranch(`omp/task/${opts.agentId}`, undefined);
-		publishedBranchTip = undefined;
-		AgentRegistry.global().clearHistory(opts.agentId, ["branchName"]);
+		if (publishedBranchTip === undefined && !strandedBranch) return;
+		await removeTaskBranch();
 	};
 	/** Remove what the caller was handed and did not land, after the agent undid all of it. */
 	const withdrawUnlanded = async (): Promise<void> => {
 		await Promise.all([...unlandedFiles, ...undeletable].map(file => fs.rm(file, { force: true })));
 		undeletable.clear();
-		// What the Agent Hub lists: stop naming files and a branch that are gone.
-		const stale: (keyof AgentHistorySummary)[] = ["patchPath", "nestedPatchPaths"];
-		if (opts.mergeMode === "branch") {
-			// A landing deletes the task branch, so the branch that exists now is
-			// the unlanded one. Restoring a landed tip would recreate a branch of
-			// work the caller already has.
-			await resetTaskBranch(`omp/task/${opts.agentId}`, undefined);
-			publishedBranchTip = undefined;
-			stale.push("branchName");
-		}
-		AgentRegistry.global().clearHistory(opts.agentId, stale);
+		// A landing deletes the task branch, so the branch that exists now is the
+		// unlanded one. Restoring a landed tip would recreate a branch of work the
+		// caller already has.
+		if (opts.mergeMode === "branch") await removeTaskBranch();
+		// What the Agent Hub lists: stop naming files that are gone.
+		AgentRegistry.global().clearHistory(opts.agentId, ["patchPath", "nestedPatchPaths"]);
 		unlandedFiles.clear();
 		unlandedWork = false;
 		retryRefused = false;
@@ -785,6 +808,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		// That branch holds root changes the agent removed. Dropped only now: a
 		// failed write above must leave what the caller was handed as it was.
 		if (!branch.branchName) await dropPublishedBranch();
+		// A branch written now replaces the stranded one.
+		else strandedBranch = false;
 		await replaceUnlanded(nestedPatchPaths, true);
 		handedOff = branch.state;
 		publishedBranchTip = branch.headSha;
@@ -824,7 +849,13 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			});
 		}
 		if (handoff === "unchanged") return "";
-		if (handoff === "withdrawn") return renderIsolationSummary({ kind: "handoff-withdrawn" });
+		if (handoff === "withdrawn") {
+			return renderIsolationSummary({
+				kind: "handoff-withdrawn",
+				branchKept: strandedBranch,
+				branchName: `omp/task/${opts.agentId}`,
+			});
+		}
 		// Its work rides along in the next capture, like a failed turn's.
 		if (handoff === "superseded") return renderIsolationSummary({ kind: "capture-superseded" });
 		const captured = rememberAgentArtifacts({ ...turn, ...handoff.artifacts });
@@ -864,6 +895,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				await settlePending();
 				// The last chance to remove a patch file of work the agent removed. It never throws.
 				await removeStale(undeletable);
+				// A branch of work the agent removed that git would not delete before: try again.
+				if (strandedBranch) await removeTaskBranch();
 				let delta: DeltaPatchResult;
 				try {
 					const current = await captureDeltaPatch(handle.mergedDir, taskBaseline);

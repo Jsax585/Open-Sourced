@@ -1098,6 +1098,100 @@ describe("isolated agent follow-up turns", () => {
 		expect(AgentRegistry.global().get(id)?.history?.branchName).toBeUndefined();
 	});
 
+	/** Check `branch` out in a second worktree, as someone reviewing a handed-over branch would. */
+	async function checkOutElsewhere(repo: string, branch: string): Promise<{ free: () => Promise<void> }> {
+		const dir = path.join(await tempDir("omp-follow-up-elsewhere-"), "wt");
+		await git(repo, ["worktree", "add", dir, branch]);
+		return { free: () => git(repo, ["worktree", "remove", "--force", dir]).then(() => undefined) };
+	}
+
+	describe("when the task branch is checked out in another worktree", () => {
+		it("keeps it listed, and says so, when the agent undoes the work it held", async () => {
+			const id = "FollowUpBranchCheckedOutUndone";
+			const { repo, iso } = await createRepoAndIsolation();
+			const { firstRun, followUps } = landingFollowUps(repo, "branch");
+			const run = await runKeptAlive({
+				id,
+				repo,
+				iso,
+				mergeMode: "branch",
+				followUps,
+				firstRun: () => commitIn(iso, "one\n", "first run"),
+			});
+			firstRun.resolve(false);
+			const branch = `omp/task/${id}`;
+			const elsewhere = await checkOutElsewhere(repo, branch);
+
+			await commitIn(iso, "zero\n", "undo");
+			const notice = await run.settleFollowUp?.(result(id));
+
+			// Git refuses to delete a checked-out branch. It is still there, still listed, and the
+			// notice does not tell the caller there is nothing left.
+			expect(await taskBranches(repo)).toContain(branch);
+			expect(AgentRegistry.global().get(id)?.history?.branchName).toBe(branch);
+			expect(notice).toContain("could not be deleted");
+			expect(notice).not.toContain("Nothing is left to apply");
+
+			// Releasing the agent retries it once the branch is free. Nothing else would delete it:
+			// release finds the workspace unchanged since the agent undid the work.
+			await elsewhere.free();
+			await AgentLifecycleManager.global().release(id);
+			expect(await taskBranches(repo)).toBe("");
+		});
+
+		it("keeps it listed when a later turn drops all its root work but keeps nested work", async () => {
+			const id = "FollowUpBranchCheckedOutDropped";
+			const { repo, run } = await refusedBranchWithNested(id);
+			const branch = `omp/task/${id}`;
+			const elsewhere = await checkOutElsewhere(repo, branch);
+
+			await run.settleFollowUp?.(result(id));
+
+			expect(await taskBranches(repo)).toContain(branch);
+			expect(AgentRegistry.global().get(id)?.history?.branchName).toBe(branch);
+
+			await elsewhere.free();
+			await AgentLifecycleManager.global().release(id);
+			expect(await taskBranches(repo)).toBe("");
+		});
+
+		it("does not delete the branch of new work that replaced it", async () => {
+			const id = "FollowUpBranchCheckedOutReplaced";
+			const { repo, iso } = await createRepoAndIsolation();
+			const { firstRun, followUps } = landingFollowUps(repo, "branch");
+			const run = await runKeptAlive({
+				id,
+				repo,
+				iso,
+				mergeMode: "branch",
+				// The caller refuses what is handed over, so a branch stays as the only copy of the work.
+				followUps: { ...followUps, land: async () => ({ summary: "Refused", landed: false }) },
+				firstRun: () => commitIn(iso, "one\n", "first run"),
+			});
+			firstRun.resolve(false);
+			const branch = `omp/task/${id}`;
+			const elsewhere = await checkOutElsewhere(repo, branch);
+			await commitIn(iso, "zero\n", "undo");
+			await run.settleFollowUp?.(result(id));
+			expect(AgentRegistry.global().get(id)?.history?.branchName).toBe(branch);
+
+			// Git will not replace a branch that is checked out elsewhere either, so the next
+			// turn can only hand over new work once the other worktree is gone.
+			await elsewhere.free();
+			await commitIn(iso, "two\n", "new work");
+			const notice = await run.settleFollowUp?.(result(id));
+			expect(notice).toContain("Refused");
+			const handedOver = await git(repo, ["rev-parse", branch]);
+			expect(await git(repo, ["log", "--format=%s", "-1", branch])).toBe("new work");
+
+			// That branch is work the caller has not landed. Release must not treat it as the
+			// stranded one it replaced.
+			await AgentLifecycleManager.global().release(id);
+			expect(await taskBranches(repo)).toContain(branch);
+			expect(await git(repo, ["rev-parse", branch])).toBe(handedOver);
+		});
+	});
+
 	it("hands a nested patch over again in branch mode when an unchanged turn follows a landing that could not apply it", async () => {
 		const { repo, iso } = await createRepoAndIsolation();
 		await addNestedRepo(repo, iso);
