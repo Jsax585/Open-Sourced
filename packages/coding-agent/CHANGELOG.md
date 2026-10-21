@@ -41,6 +41,8 @@
 - Fixed an isolated task's patch for a nested repository that did not apply being left unretried when your next message changed nothing: it is now handed over again, so clearing what blocked it lets it land ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 - Fixed cancelling an isolated task's turn while its changes were landing leaving you with no word that your checkout changed: you are now told what landed ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 - Fixed a message you typed straight to an isolated task landing its changes with no word to you when the session that owns the task began shutting down while they landed: the session is now told directly ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
+- Fixed an isolated task's follow-up that failed while being committed leaving the task branch at a partial capture: the branch you were handed is restored, or removed if you were handed none, so the agent then undoing that turn no longer drops work you had been handed ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
+- Fixed an isolated task's superseded patch file that could not be deleted being forgotten and offered again after a restart: its removal is now retried on the next capture, when the agent undoes its work, and when it is released ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 
 ## [18.12.4] - 2026-10-20
 

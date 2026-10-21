@@ -7,6 +7,7 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import {
+	type BuildCommitMessage,
 	type IsolationFollowUps,
 	mergeIsolatedChanges,
 	runIsolatedSubprocess,
@@ -127,6 +128,8 @@ async function runKeptAlive(opts: {
 	 */
 	afterRun?: (turnStarted: (() => void) | undefined, release: (() => Promise<void>) | undefined) => Promise<void>;
 	onReleaseArtifacts?: () => void;
+	/** Builds the commit-message callback the runner hands to the branch commit. */
+	buildCommitMessage?: BuildCommitMessage;
 	/** When set, release actually removes the isolation instead of the default no-op. */
 	deleteIsolationOnCleanup?: boolean;
 	onCleanupStarted?: () => void;
@@ -189,6 +192,7 @@ async function runKeptAlive(opts: {
 		artifactsDir,
 		followUps: opts.followUps,
 		buildFailureResult: error => ({ ...result(opts.id), exitCode: 1, error: String(error) }),
+		buildCommitMessage: opts.buildCommitMessage,
 		onReleaseArtifacts: opts.onReleaseArtifacts,
 	});
 	return { first, settleFollowUp, artifactsDir };
@@ -1246,6 +1250,140 @@ describe("isolated agent follow-up turns", () => {
 		expect(await taskBranches(repo)).toContain(`omp/task/${id}`);
 		expect(AgentRegistry.global().get(id)?.history?.branchName).toBe(`omp/task/${id}`);
 		await AgentLifecycleManager.global().release(id);
+	});
+
+	/** A commit-message callback that fails, as a model outage would, after the agent's commits were fetched. */
+	const failingCommitMessage: BuildCommitMessage = () => async () => {
+		throw new Error("commit message model unavailable");
+	};
+
+	it("restores the handed-over task branch when committing a follow-up fails after the branch moved", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "branch");
+		const id = "FollowUpCommitFailsRestores";
+		const branch = `omp/task/${id}`;
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps,
+			buildCommitMessage: failingCommitMessage,
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		// Left unapplied: the branch is what the caller has been handed.
+		firstRun.resolve(null);
+		const handedOverTip = await git(repo, ["rev-parse", branch]);
+
+		// The next turn commits and leaves an uncommitted edit. Fetching its commits moves the
+		// branch; summarising the leftover then fails.
+		await commitIn(iso, "two\n", "later fix");
+		await Bun.write(path.join(iso, "a.txt"), "three\n");
+		expect(await run.settleFollowUp?.(result(id))).toContain("not captured");
+		// The caller was handed none of it, so the branch is as it was told.
+		expect(await git(repo, ["rev-parse", branch])).toBe(handedOverTip);
+
+		// The agent then undoes that turn: its state is the one already handed over, so the
+		// capture takes the unchanged path and would never rewrite a branch left moved.
+		await commitIn(iso, "one\n", "undo later fix");
+		expect(await run.settleFollowUp?.(result(id))).toBe("");
+		expect(await git(repo, ["rev-parse", branch])).toBe(handedOverTip);
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	it("leaves no task branch when committing a follow-up fails and nothing was handed over", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		const { firstRun, followUps } = landingFollowUps(repo, "branch");
+		const id = "FollowUpCommitFailsNothingHandedOver";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps,
+			buildCommitMessage: failingCommitMessage,
+			firstRun: async () => {},
+		});
+		firstRun.resolve(true);
+		expect(await taskBranches(repo)).toBe("");
+
+		await commitIn(iso, "one\n", "first change");
+		await Bun.write(path.join(iso, "a.txt"), "two\n");
+		expect(await run.settleFollowUp?.(result(id))).toContain("not captured");
+		// Fetching the agent's commit created the branch; nothing was handed over, so it must not stay.
+		expect(await taskBranches(repo)).toBe("");
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	/**
+	 * A patch-mode run whose second unapplied follow-up leaves the first one's nested patch file
+	 * superseded but undeletable: a directory stands at its path, so `rm` rejects.
+	 */
+	async function supersededNestedPatchStuck(id: string) {
+		const { repo, iso } = await createRepoAndIsolation();
+		await addNestedRepo(repo, iso);
+		const firstRun = Promise.withResolvers<boolean | null>();
+		const handedOver: SingleResult[] = [];
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps: {
+				firstRunLanded: firstRun.promise,
+				land: async captured => {
+					handedOver.push(captured);
+					return { summary: "left unapplied", landed: null };
+				},
+			},
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		firstRun.resolve(true);
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+		await run.settleFollowUp?.(result(id));
+		const stale = handedOver[0]?.nestedPatchPaths?.[0] ?? "";
+		expect(stale).not.toBe("");
+		await fs.rm(stale);
+		await fs.mkdir(stale);
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n2\n");
+		// The replacement is accepted: only the old file could not be removed.
+		expect(await run.settleFollowUp?.(result(id))).toBe("left unapplied");
+		expect(handedOver[1]?.nestedPatchPaths?.[0]).not.toBe(stale);
+		return { iso, run, stale };
+	}
+
+	/** Whatever held the stale file lets go: its path is an ordinary file again. */
+	async function releaseObstruction(stale: string): Promise<void> {
+		await fs.rm(stale, { recursive: true });
+		await Bun.write(stale, "stale patch\n");
+	}
+
+	it("retries removing a superseded nested patch file that could not be deleted when the next capture replaces it", async () => {
+		const id = "StaleRetriedOnReplace";
+		const { iso, run, stale } = await supersededNestedPatchStuck(id);
+		await releaseObstruction(stale);
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n3\n");
+		await run.settleFollowUp?.(result(id));
+		expect(await Bun.file(stale).exists()).toBe(false);
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	it("removes a superseded nested patch file that could not be deleted when the agent later undoes everything", async () => {
+		const id = "StaleRetriedOnWithdraw";
+		const { iso, run, stale } = await supersededNestedPatchStuck(id);
+		await releaseObstruction(stale);
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n0\n");
+		expect(await run.settleFollowUp?.(result(id))).toContain("undid");
+		expect(await Bun.file(stale).exists()).toBe(false);
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	it("removes a superseded nested patch file that could not be deleted when the agent is released", async () => {
+		const id = "StaleRetriedOnRelease";
+		const { stale } = await supersededNestedPatchStuck(id);
+		await releaseObstruction(stale);
+		await AgentLifecycleManager.global().release(id);
+		expect(await Bun.file(stale).exists()).toBe(false);
 	});
 
 	it("restores the task branch when writing a follow-up's nested patches fails", async () => {

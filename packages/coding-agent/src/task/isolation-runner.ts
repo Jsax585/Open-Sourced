@@ -509,6 +509,30 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	/** A nested-repo patch file this runner wrote. The roster scanner only accepts the `<id>.nested-` prefix. */
 	const isNestedPatchFile = (file: string): boolean => path.basename(file).startsWith(`${opts.agentId}.nested-`);
 	/**
+	 * Patch files of work the agent removed whose deletion failed. They are retried
+	 * whenever a capture replaces or withdraws a handoff, and when the agent is
+	 * released, and are never forgotten: the roster scanner offers any file still
+	 * in the artifacts directory after a restart.
+	 */
+	const undeletable = new Set<string>();
+	const removeStale = async (files: Iterable<string>): Promise<void> => {
+		const list = [...new Set(files)];
+		const outcomes = await Promise.allSettled(list.map(file => fs.rm(file, { force: true })));
+		for (const [index, outcome] of outcomes.entries()) {
+			const file = list[index];
+			if (file === undefined) continue;
+			if (outcome.status === "fulfilled") {
+				undeletable.delete(file);
+				continue;
+			}
+			undeletable.add(file);
+			logger.warn("Could not remove a patch file of work the agent removed", {
+				file,
+				error: outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason),
+			});
+		}
+	};
+	/**
 	 * Record the files of a capture that replaces the unlanded handoff before it.
 	 * A capture is cumulative since the last landing, so a file of the earlier
 	 * handoff that this one did not write describes work the agent has since
@@ -517,7 +541,9 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	const replaceUnlanded = async (files: readonly string[], hasWork: boolean): Promise<void> => {
 		const keep = new Set(files);
 		const stale = [...unlandedFiles].filter(file => !keep.has(file));
-		await Promise.all(stale.map(file => fs.rm(file, { force: true }).catch(() => undefined)));
+		// A path this capture rewrote is live again, not stale. Earlier failures are retried here too.
+		for (const file of keep) undeletable.delete(file);
+		await removeStale([...stale, ...undeletable]);
 		for (const file of stale) unlandedFiles.delete(file);
 		trackUnlanded(files, hasWork);
 	};
@@ -648,7 +674,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	};
 	/** Remove what the caller was handed and did not land, after the agent undid all of it. */
 	const withdrawUnlanded = async (): Promise<void> => {
-		await Promise.all([...unlandedFiles].map(file => fs.rm(file, { force: true })));
+		await Promise.all([...unlandedFiles, ...undeletable].map(file => fs.rm(file, { force: true })));
+		undeletable.clear();
 		// What the Agent Hub lists: stop naming files and a branch that are gone.
 		const stale: (keyof AgentHistorySummary)[] = ["patchPath", "nestedPatchPaths"];
 		if (opts.mergeMode === "branch") {
@@ -705,18 +732,29 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		}
 		// With nothing landed yet the branch carries the agent's own commits,
 		// like the first run's; `commitToBranch` reads the workspace itself.
-		const branch = landed
-			? await commitDeltaToBranch(
-					isolationDir,
-					baseline,
-					opts.agentId,
-					landed.tip ?? baseline.root.headCommit,
-					delta,
-					landed.state.head,
-					opts.description,
-					commitMessage,
-				)
-			: await commitToBranch(isolationDir, baseline, opts.agentId, opts.description, commitMessage);
+		let branch: CommitToBranchResult | null;
+		try {
+			branch = landed
+				? await commitDeltaToBranch(
+						isolationDir,
+						baseline,
+						opts.agentId,
+						landed.tip ?? baseline.root.headCommit,
+						delta,
+						landed.state.head,
+						opts.description,
+						commitMessage,
+					)
+				: await commitToBranch(isolationDir, baseline, opts.agentId, opts.description, commitMessage);
+		} catch (error) {
+			// `commitToBranch` force-moves the task branch to the agent's HEAD before it
+			// captures and commits what is left, and each of those steps can fail. Nothing
+			// was handed over, so the state and tip the caller knows are unchanged. Left
+			// moved, a later turn that undoes this one takes the unchanged path and the
+			// branch keeps a partial capture in place of the work the caller was handed.
+			await resetTaskBranch(`omp/task/${opts.agentId}`, publishedBranchTip);
+			throw error;
+		}
 		// `commitToBranch` found nothing in its own read: hand nothing over and look again next turn.
 		if (!branch) return "unchanged";
 		// `commitToBranch` read the workspace again; a branch built from that read
@@ -824,6 +862,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			}
 			try {
 				await settlePending();
+				// The last chance to remove a patch file of work the agent removed. It never throws.
+				await removeStale(undeletable);
 				let delta: DeltaPatchResult;
 				try {
 					const current = await captureDeltaPatch(handle.mergedDir, taskBaseline);
