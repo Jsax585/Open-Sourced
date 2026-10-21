@@ -7,6 +7,7 @@
 ### Fixed
 
 - Fixed Moonshot `kimi-k3` pricing cache writes at $0; usage cost now includes cache writes at Moonshot's $3/M 5-minute rate ([#16508](https://github.com/can1357/oh-my-pi/issues/16508))
+- LiteLLM rich discovery now honors a deployment's `model_info.reasoning_effort_levels` and explicit `supports_reasoning` verdict instead of always taking the bundled catalog ladder; declared ladders are intersected across management endpoints, a declared `none` state is preserved, and disjoint declarations publish no ladder ([#11353](https://github.com/can1357/oh-my-pi/issues/11353))
 
 ## [18.12.4] - 2026-10-20
 
