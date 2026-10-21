@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- With the Hindsight memory backend, `retain` and `learn` can now store a memory with `scope: "global"` so every project recalls it (under `global` or `per-project-tagged` scoping) ([#15030](https://github.com/can1357/oh-my-pi/pull/15030) by [@kithawk](https://github.com/kithawk)).
+
 ### Fixed
 
 - Fixed subagents spawning at a caller-supplied `effort` (e.g. `hi` → `max`) while `task.enableEffort` is off; the field is now ignored and the agent's configured thinking level (including `:auto`) applies ([#16402](https://github.com/can1357/oh-my-pi/issues/16402))
