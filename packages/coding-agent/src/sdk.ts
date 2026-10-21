@@ -3117,7 +3117,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				if (
 					((modelFallbackEnabled && (hasUsageFallbackCandidate || usageFallbackTriggered)) ||
 						usageReservePolicy === "fail-closed") &&
-					(cfgRetryUsageAwareFallback.get(settings) || tieredAccountOrder)
+					cfgRetryUsageAwareFallback.get(settings)
 				) {
 					let usageHealth: ModelUsageHealth | undefined;
 					try {
