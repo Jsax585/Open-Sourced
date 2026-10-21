@@ -1026,10 +1026,7 @@ export class CredentialSelector {
 		};
 
 		const allowance = options?.extraUsage ?? "to-floor";
-		const admits = (
-			pass: { enforceAccounts: boolean },
-			candidate: OAuthCandidate,
-		): boolean => {
+		const admits = (pass: { enforceAccounts: boolean }, candidate: OAuthCandidate): boolean => {
 			if (preflightFailures.has(candidate)) return false;
 			const candidateAccountKey = oauthAccountKey(candidate.selection.credential);
 			return (
@@ -1229,7 +1226,9 @@ export class CredentialSelector {
 				}
 				const servesThroughPaidUsage = funding?.tier === "extra" || funding?.tier === "extra-past-floor";
 				const scopedLimits =
-					usage === null ? undefined : currentUsageLimits(scopedUsageLimits(strategy, usage, rankingContext), usage.fetchedAt, nowMs);
+					usage === null
+						? undefined
+						: currentUsageLimits(scopedUsageLimits(strategy, usage, rankingContext), usage.fetchedAt, nowMs);
 				if (!servesThroughPaidUsage && scopedLimits && isUsageLimitReached(scopedLimits)) {
 					const resetAtMs = usageResetAtMs(scopedLimits, nowMs);
 					this.#deps.blocks.mark(

@@ -216,9 +216,8 @@ describe("AuthStorage paid usage blocks", () => {
 		});
 
 		expect(
-			storage.blocks
-				.list([account.credentialId])
-				.find(block => block.blockScope === EXTRA_USAGE_BLOCK_SCOPE)?.blockedUntilMs,
+			storage.blocks.list([account.credentialId]).find(block => block.blockScope === EXTRA_USAGE_BLOCK_SCOPE)
+				?.blockedUntilMs,
 		).toBe(resetAt);
 	});
 });

@@ -210,12 +210,7 @@ function parserBackedCodexUsageProvider(
 			return openaiCodexUsageProvider.fetchUsage(params, {
 				...context,
 				fetch: async input => {
-					const url =
-						typeof input === "string"
-							? input
-							: input instanceof URL
-								? input.toString()
-								: input.url;
+					const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 					return url.includes("/wham/usage")
 						? new Response(JSON.stringify(codexCreditPayload(entry)), {
 								status: 200,
@@ -607,10 +602,9 @@ describe("AuthStorage paid extra-usage tiers", () => {
 							id: ANTHROPIC,
 							async fetchUsage(params) {
 								fetches += 1;
-								return parseClaudeUsagePayload(
-									claudePayload({ allowanceUsedPct: 100 }),
-									{ accountId: params.credential.accountId },
-								);
+								return parseClaudeUsagePayload(claudePayload({ allowanceUsedPct: 100 }), {
+									accountId: params.credential.accountId,
+								});
 							},
 						}
 					: undefined,
