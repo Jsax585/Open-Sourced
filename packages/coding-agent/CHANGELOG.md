@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `task.agentMaxEffort`, a map of agent name to the highest reasoning effort that agent may run at, on any model or provider. It lowers the effective effort of task spawns (caller `effort`, agent `thinking-level`, model-pattern suffix) and of cold-revived agents; `task.maxEffort` still applies and the lower of the two wins. The map is empty by default ([#16665](https://github.com/can1357/oh-my-pi/pull/16665) by [@Komzpa](https://github.com/Komzpa))
+
 ### Fixed
 
 - Fixed the advisor prompt forbidding all repeated advice, including real escalations: advisors may now re-raise a prior nit or concern as a blocker once new evidence makes it one ([#13887](https://github.com/can1357/oh-my-pi/issues/13887), [#16484](https://github.com/can1357/oh-my-pi/pull/16484) by [@pjh890321](https://github.com/pjh890321))

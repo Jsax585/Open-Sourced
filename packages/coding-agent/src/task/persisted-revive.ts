@@ -28,6 +28,8 @@ import {
 	createMCPProxyTools,
 	createSubagentSettings,
 	followMCPTools,
+	readAgentMaxEffort,
+	resolveAgentEffortCeiling,
 	subagentRetryFallbackRole,
 } from "./executor";
 import { isCompletionProbeEnabled } from "./completion-probe";
@@ -234,6 +236,12 @@ export function createPersistedSubagentReviverFactory(
 					modelRegistry: ctx.modelRegistry,
 					...(persistedModelPattern ? { modelPattern: persistedModelPattern } : {}),
 					modelPatternAuthFallback: restoredSeance ? undefined : init.resolvedModel,
+					// The spawn-time `task.agentMaxEffort` ceiling is not persisted; recompute it from the agent name.
+					thinkingLevelCeiling: resolveAgentEffortCeiling(
+						init.agent ?? "",
+						undefined,
+						readAgentMaxEffort(ctx.settings),
+					),
 					settings: subagentSettings,
 					sessionManager: reopened,
 					agentId: ref.id,
