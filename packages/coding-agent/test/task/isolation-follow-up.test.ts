@@ -24,15 +24,46 @@ afterEach(async () => {
 	await Promise.all(tempDirs.splice(0).map(dir => removeWithRetries(dir)));
 });
 
+/** Long enough for a loaded machine, short enough that a hung git fails the test instead of the whole run. */
+const GIT_TIMEOUT_MS = 30_000;
+
+/**
+ * Fixture git, run the way the suite's other hardened helpers do: without the
+ * user's or the system's configuration (signing, `core.hooksPath`, templates),
+ * which would otherwise decide whether a fixture commit runs a hook or waits
+ * for a signer, non-interactive, and killed if it hangs. The `vcs` wrapper
+ * cannot create a repository or fast-forward one, which these fixtures need.
+ */
 async function git(cwd: string, args: string[]): Promise<string> {
-	const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe", windowsHide: true });
-	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(proc.stdout).text(),
-		new Response(proc.stderr).text(),
-		proc.exited,
-	]);
-	if (exitCode !== 0) throw new Error(stderr.trim() || `git ${args.join(" ")} exited ${exitCode}`);
-	return stdout.trim();
+	const proc = Bun.spawn(["git", ...args], {
+		cwd,
+		env: {
+			...process.env,
+			HOME: cwd,
+			GIT_CONFIG_GLOBAL: "/dev/null",
+			GIT_CONFIG_SYSTEM: "/dev/null",
+			GIT_TERMINAL_PROMPT: "0",
+			GIT_EDITOR: "true",
+		},
+		stdout: "pipe",
+		stderr: "pipe",
+		windowsHide: true,
+		timeout: GIT_TIMEOUT_MS,
+		killSignal: "SIGKILL",
+	});
+	// Readers start now so a large output cannot fill the pipe and stall git, but
+	// only git's own exit is awaited first: a hook or signer it started can hold
+	// the pipes open after git is killed.
+	const stdout = new Response(proc.stdout).text();
+	const stderr = new Response(proc.stderr).text();
+	const exitCode = await proc.exited;
+	if (proc.signalCode) {
+		stdout.catch(() => undefined);
+		stderr.catch(() => undefined);
+		throw new Error(`git ${args.join(" ")} was killed by ${proc.signalCode}; it ran past ${GIT_TIMEOUT_MS}ms`);
+	}
+	if (exitCode !== 0) throw new Error((await stderr).trim() || `git ${args.join(" ")} exited ${exitCode}`);
+	return (await stdout).trim();
 }
 
 async function tempDir(prefix: string): Promise<string> {
