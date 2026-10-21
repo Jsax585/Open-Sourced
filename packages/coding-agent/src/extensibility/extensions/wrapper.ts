@@ -130,6 +130,7 @@ export class RegisteredToolAdapter implements AgentTool<any, any, any> {
 			onUpdate,
 			this.runner.createContext(undefined, {
 				toolName: this.registeredTool.definition.name,
+				toolCallId,
 				context,
 				signal,
 				onUpdate,

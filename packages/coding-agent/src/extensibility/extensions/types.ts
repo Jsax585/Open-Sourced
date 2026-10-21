@@ -899,6 +899,13 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	loadMode?: ToolLoadMode;
 	/** If true, tool may stage deferred changes that require explicit resolve/discard. */
 	deferrable?: boolean;
+	/**
+	 * Scheduling mode when several calls share one turn, as on built-in tools: `"shared"` (default)
+	 * runs alongside other shared calls, `"exclusive"` runs alone, a function decides per call from
+	 * the raw arguments. A tool that re-registers a built-in should forward the built-in's mode
+	 * (available from `getAllTools()`), or its calls lose the built-in's serialization.
+	 */
+	concurrency?: "shared" | "exclusive" | ((args: Partial<Static<TParams>>) => "shared" | "exclusive");
 	/** Whether this tool can read `skill://` instruction content. */
 	readsSkillUris?: boolean;
 	/** Tool approval tier. Defaults to `"exec"` when omitted.
@@ -991,6 +998,8 @@ export interface ToolInfo {
 	parameters: TSchema;
 	promptGuidelines?: string[];
 	sourceInfo: SourceInfo;
+	/** The tool's scheduling mode, when it declares one (see {@link ToolDefinition.concurrency}). */
+	concurrency?: "shared" | "exclusive" | ((args: Record<string, unknown>) => "shared" | "exclusive");
 }
 
 // ============================================================================

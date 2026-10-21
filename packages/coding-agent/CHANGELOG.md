@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `concurrency` to extension `ToolDefinition` and to the `ToolInfo` entries returned by `getAllTools()`, so a tool that re-registers a built-in can keep the built-in's scheduling mode
+
+### Changed
+
+- `ctx.invokeTool` runs the native built-in under the wrapper call's own tool call id instead of a synthetic `invoke-*` id
+
 ### Fixed
 
 - Fixed the advisor prompt forbidding all repeated advice, including real escalations: advisors may now re-raise a prior nit or concern as a blocker once new evidence makes it one ([#13887](https://github.com/can1357/oh-my-pi/issues/13887), [#16484](https://github.com/can1357/oh-my-pi/pull/16484) by [@pjh890321](https://github.com/pjh890321))

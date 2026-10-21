@@ -675,8 +675,11 @@ ctx.invokeTool?<TDetails>(
 It runs the **native** built-in of the same name as your tool (delegation is same-tool only, so it
 cannot reach an arbitrary target or escalate past the approval already granted for this call) and
 returns its result, including the native tool's own side effects and internal bookkeeping.
-By default it inherits the outer call's abort signal, progress callback, and tool/provider
-metadata; explicit `signal` / `onUpdate` options override those channels. It is
+By default it inherits the outer call's id, abort signal, progress callback, and tool/provider
+metadata; explicit `signal` / `onUpdate` options override those channels. Keeping the id makes the
+native call the same logical call, so per-call state the built-in keys by id (artifacts, background
+job ids) lines up with the outer call. Declare the built-in's `concurrency` on your tool too (read it
+from `getAllTools()`), or a wrapped `write`/`edit` loses its exclusive scheduling. It is
 present only when a native built-in of that name exists — `ctx.invokeTool` is `undefined` for a
 net-new tool that shadows no built-in. The native call is not re-gated, since it is the same tool you
 are already approved as, and delegation depth is guarded against accidental self-recursion.
