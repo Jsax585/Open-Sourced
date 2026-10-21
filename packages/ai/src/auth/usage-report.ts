@@ -8,6 +8,15 @@ import type {
 	UsageReport,
 } from "../usage";
 
+import type { AuthAccountPolicy, ExtraUsageAllowance, UsageFundingTier } from "./types";
+
+/** Funding standing for one account after plan allowance and paid capacity are evaluated. */
+export interface FundingAssessment {
+	tier: UsageFundingTier;
+	extra: "available" | "past-floor" | "unavailable";
+	allowanceResetsAt?: number;
+}
+
 /** Read a string identity field from report metadata. */
 export function usageReportMetadataValue(report: UsageReport, key: string): string | undefined {
 	const metadata = report.metadata;
@@ -190,6 +199,77 @@ export function usageResetAtMs(limits: UsageLimit[], nowMs: number): number | un
 	}
 	if (candidates.length === 0) return undefined;
 	return Math.max(...candidates);
+}
+
+/**
+ * Assess whether an account remains on its plan allowance or may serve through
+ * provider-reported paid extra usage.
+ */
+export function assessFunding(args: {
+	strategy?: CredentialRankingStrategy;
+	report: UsageReport | null;
+	context: CredentialRankingContext;
+	nowMs: number;
+	policy?: Pick<AuthAccountPolicy, "extraUsageFloor" | "extraUsageBudget">;
+	extraUsageBlockedUntil?: number;
+}): FundingAssessment | undefined {
+	const { report, strategy, context, nowMs } = args;
+	if (report === null) return undefined;
+
+	const hard = strategy ? scopedUsageLimits(strategy, report, context) : report.limits;
+	const remaining = remainingUsageFraction(strategy, report, context, nowMs);
+	if (remaining !== 0 && !isUsageLimitReached(hard)) {
+		return { tier: "allowance", extra: "unavailable" };
+	}
+
+	const extraUsage = strategy?.extraUsage?.(report, context);
+	let extra: FundingAssessment["extra"];
+	if (
+		extraUsage === undefined ||
+		!extraUsage.enabled ||
+		extraUsage.exhausted ||
+		(args.extraUsageBlockedUntil !== undefined && args.extraUsageBlockedUntil > nowMs) ||
+		(!extraUsage.uncapped && extraUsage.remaining !== undefined && extraUsage.remaining <= 0)
+	) {
+		extra = "unavailable";
+	} else if (
+		(args.policy?.extraUsageFloor !== undefined &&
+			args.policy.extraUsageFloor > 0 &&
+			!extraUsage.uncapped &&
+			(extraUsage.remaining === undefined || extraUsage.remaining <= args.policy.extraUsageFloor)) ||
+		(args.policy?.extraUsageBudget !== undefined &&
+			(extraUsage.used === undefined || extraUsage.used >= args.policy.extraUsageBudget))
+	) {
+		extra = "past-floor";
+	} else {
+		extra = "available";
+	}
+
+	return {
+		tier: extra === "available" ? "extra" : extra === "past-floor" ? "extra-past-floor" : "spent",
+		extra,
+		allowanceResetsAt: usageResetAtMs(hard, nowMs),
+	};
+}
+
+/** Sort order for account funding tiers, from plan allowance through spent capacity. */
+export function fundingTierRank(tier: UsageFundingTier | undefined): number {
+	switch (tier) {
+		case "extra":
+			return 1;
+		case "extra-past-floor":
+			return 2;
+		case "spent":
+			return 3;
+		case "allowance":
+		case undefined:
+			return 0;
+	}
+}
+
+/** Whether a funding tier may serve under the caller's paid-usage allowance. */
+export function fundingTierAllowed(tier: UsageFundingTier | undefined, allowance: ExtraUsageAllowance): boolean {
+	return tier !== "extra-past-floor" || allowance === "past-floor";
 }
 
 /** Read a finite reset deadline from a usage window. */
