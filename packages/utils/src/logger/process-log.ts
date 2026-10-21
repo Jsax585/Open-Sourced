@@ -217,7 +217,11 @@ export function configureProcessLog(file: boolean | string | undefined): void {
 	const directory = effectiveDirectory(file);
 	if (activeSink && activeDirectory === directory) {
 		if (!file) {
-			activeSink.flush();
+			try {
+				activeSink.flush();
+			} catch {
+				// Disabling a broken sink must still release its transport and descriptor.
+			}
 			if (externalOwners === 0) activeSink.stopWatchingExternalWrites(true);
 		}
 		configuredFile = file;

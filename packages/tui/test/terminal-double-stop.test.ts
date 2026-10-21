@@ -10,7 +10,16 @@ import * as path from "node:path";
 // otherwise unmanaged output corrupts its live frame.
 
 describe.skipIf(process.platform === "win32")("ProcessTerminal double stop", () => {
-	for (const order of ["older", "newest", "emergency", "deferred", "kitty"] as const) {
+	for (const order of [
+		"older",
+		"newest",
+		"emergency",
+		"deferred",
+		"older-deferred",
+		"kitty",
+		"modify",
+		"kitty-private",
+	] as const) {
 		it(
 			order === "emergency"
 				? "restores every overlapping owner during emergency shutdown"
@@ -27,6 +36,9 @@ describe.skipIf(process.platform === "win32")("ProcessTerminal double stop", () 
 				delete env.PI_TEST_RUNTIME;
 				delete env.BUN_ENV;
 				delete env.NODE_ENV;
+				delete env.SSH_CONNECTION;
+				delete env.SSH_CLIENT;
+				delete env.SSH_TTY;
 				const child = Bun.spawn(
 					[
 						process.execPath,
@@ -63,13 +75,24 @@ describe.skipIf(process.platform === "win32")("ProcessTerminal double stop", () 
 					expect(lines["after-first-stop"]).toBe("true");
 					expect(lines["after-double-stop"]).toBe("true");
 					expect(lines["after-final-stop"]).toBe("false");
-					const deferred = order === "deferred" || order === "kitty";
+					const deferred =
+						order === "deferred" ||
+						order === "older-deferred" ||
+						order === "kitty" ||
+						order === "modify" ||
+						order === "kitty-private";
 					expect(lines["survivor-raw"]).toBe(deferred ? "false" : "true");
 					expect(lines["final-raw"]).toBe("false");
 					expect(lines["survivor-paused"]).toBe(deferred ? "true" : "false");
-					if (deferred) expect(lines["enabled-raw"]).toBe("true");
+					if (deferred && order !== "modify") expect(lines["enabled-raw"]).toBe("true");
 					const stream = Buffer.concat(chunks).toString();
-					if (order === "kitty") {
+					if (order === "modify") {
+						expect(lines["newest-enhancement"]).toBe(JSON.stringify("\x1b[>4;2m"));
+						const gracefulStop = stream.slice(0, stream.indexOf("MODIFY_OWNERS_STOPPED"));
+						expect(gracefulStop.match(/\x1b\[>4;2m/g)?.length).toBe(1);
+						expect(gracefulStop.match(/\x1b\[>4;0m/g)?.length).toBe(1);
+					}
+					if (order === "kitty" || order === "kitty-private") {
 						expect(lines["newest-kitty"]).toBe("true");
 						const stopped = stream.indexOf("KITTY_OWNERS_STOPPED");
 						expect(stopped).toBeGreaterThan(0);

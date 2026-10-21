@@ -1,3 +1,4 @@
+import { spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getLogPath } from "../../src/dirs";
@@ -23,6 +24,37 @@ function writeResult(value: unknown): void {
 }
 
 switch (scenario) {
+	case "disable-write-failure": {
+		logger.setTransports({ console: false, file: true });
+		const lease = acquireProcessLogTarget();
+		lease.release();
+		logger.info("pending-before-disable");
+		let failedFd: number | undefined;
+		const write = spyOn(fs, "writeSync").mockImplementation(fd => {
+			failedFd = fd;
+			throw Object.assign(new Error("storage full"), { code: "ENOSPC" });
+		});
+		let disableError: string | undefined;
+		try {
+			logger.setTransports({ file: false });
+		} catch (error) {
+			disableError = String(error);
+		} finally {
+			write.mockRestore();
+		}
+		let descriptorClosed = false;
+		if (failedFd !== undefined) {
+			try {
+				fs.fstatSync(failedFd);
+			} catch (error) {
+				descriptorClosed = (error as NodeJS.ErrnoException).code === "EBADF";
+			}
+		}
+		logger.warn("must-stay-disabled");
+		logger.flush();
+		writeResult({ disableError: disableError ?? null, descriptorClosed, writeAttempted: failedFd !== undefined });
+		break;
+	}
 	case "matrix": {
 		logger.setTransports({ console: false, file: primaryDir });
 		logger.error("level-error", { ordinal: 1 });

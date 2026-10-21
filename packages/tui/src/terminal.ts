@@ -2426,16 +2426,15 @@ export class ProcessTerminal implements Terminal {
 		this.#previousTerminal = null;
 		const survivor = getActiveTerminal();
 		const resetModes = survivor === null;
-		const resetInput = resetModes || (owner === this && survivor !== null && survivor.#inputDeferred);
+		const resetInput = resetModes || (survivor !== null && survivor.#inputDeferred);
 		// Suppress observer/timer callbacks before any teardown can yield or throw.
 		this.#active = false;
 		this.#inputDeferred = false;
 		if (this.#headless) return;
 
-		// Release fd 1/2 first; the pump has its own duplicate for reset
-		// sequences. destroy() does not close the stream's descriptor, so close
-		// the duplicate this terminal owns instead of leaking it across
-		// stop/start cycles.
+		// The pump has its own duplicate for reset sequences. destroy() does
+		// not close the stream's descriptor, so close the duplicate this
+		// terminal owns instead of leaking it across stop/start cycles.
 		const outputStream = this.#outputStream;
 		const streamFd = this.#outputStreamFd;
 		this.#outputStream = undefined;
@@ -2450,12 +2449,6 @@ export class ProcessTerminal implements Terminal {
 				}
 			}
 		}
-		// Release only an acquisition this instance still holds: a repeated
-		// stop (emergency cleanup plus owner teardown) must not decrement the
-		// count a surviving instance still relies on.
-		const heldOutputFd = this.#outputFd;
-		this.#outputFd = null;
-		if (heldOutputFd !== null) restoreTerminalOutput();
 
 		this.#clearProgressTimer();
 		if (this.#progressActive) {
@@ -2561,6 +2554,7 @@ export class ProcessTerminal implements Terminal {
 		}
 		if (this.#modifyOtherKeysActive) {
 			if (resetModes) this.#safeWrite("\x1b[>4;0m");
+			else survivor.#modifyOtherKeysActive = true;
 			this.#modifyOtherKeysActive = false;
 		}
 		this.#disableWin32InputMode(resetModes);
@@ -2598,6 +2592,12 @@ export class ProcessTerminal implements Terminal {
 			this.#outputPump.stop(1000);
 			this.#outputPump = undefined;
 		}
+		// Release only an acquisition this instance still holds: a repeated
+		// stop (emergency cleanup plus owner teardown) must not decrement the
+		// count a surviving instance still relies on.
+		const heldOutputFd = this.#outputFd;
+		this.#outputFd = null;
+		if (heldOutputFd !== null) restoreTerminalOutput();
 
 		// Pause stdin to prevent any buffered input (e.g., Ctrl+D) from being
 		// re-interpreted after raw mode is disabled. This fixes a race condition

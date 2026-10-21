@@ -244,6 +244,16 @@ describe("central logger file level and batching", () => {
 });
 
 describe("central logger transport lifecycle", () => {
+	test("disables a broken default sink despite a pending flush failure and releases its descriptor", async () => {
+		const result = await runScenario("disable-write-failure");
+		const payload = await Bun.file(result.resultPath).json();
+		expect(payload.writeAttempted).toBe(true);
+		expect(payload.disableError).toBeNull();
+		expect(payload.descriptorClosed).toBe(true);
+		const log = await readSingleLog(path.join(result.primaryDir, ".omp", "logs"));
+		expect(log.text).not.toContain("must-stay-disabled");
+	});
+
 	test("defaults to file-only without touching stdout or stderr", async () => {
 		const result = await runScenario("default-file");
 		expect(result.stdout).toBe("");
