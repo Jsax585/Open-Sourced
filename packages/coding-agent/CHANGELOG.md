@@ -34,6 +34,7 @@
 - Fixed an isolated task's superseded patch file that could not be deleted being forgotten and offered again after a restart: its removal is now retried on the next capture, when the agent undoes its work, and when it is released ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 - Fixed the result of an isolated task you killed from the Agent Hub telling you to message it to resume, which always failed because the kill had already released its workspace; it is now reported as aborted, and an isolated agent that merely stopped can still be resumed ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 - Fixed the result of a message you typed to a structured subagent being dropped, and an isolated one's changes being left unlanded until it was released, when the session's background job slots were full: the result is now delivered to the session and the changes land ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
+- Fixed a message that reached a subagent in the instant after its first result was accepted starting a turn that nothing tracked: the turn's result was not reported, and for an isolated task its half-finished edits could be landed under the first result; such a turn is now tracked like any other follow-up ([#16196](https://github.com/can1357/oh-my-pi/pull/16196) by [@LoneExile](https://github.com/LoneExile))
 
 ## [18.12.5] - 2026-10-21
 
