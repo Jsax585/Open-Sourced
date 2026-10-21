@@ -293,6 +293,25 @@ describe("planClaudeResetRedemptions: blocked recovery", () => {
 			reason: "outside-account-pool",
 		});
 	});
+	it("restores only the target's exhausted allowance-spent window", () => {
+		const target = status();
+		const sibling = status({ credentialId: 12, email: "sibling@example.com", orgId: "org-b", active: false });
+		const plan = planClaudeResetRedemptions(
+			input({
+				trigger: "allowance-spent",
+				targetCredentialId: 11,
+				reports: [report(), report({ email: "sibling@example.com", orgId: "org-b" })],
+				statuses: [target, sibling],
+			}),
+		);
+
+		expect(plan.actions).toEqual([
+			expect.objectContaining({
+				reason: "blocked-account",
+				target: expect.objectContaining({ credentialId: 11 }),
+			}),
+		]);
+	});
 });
 
 describe("planClaudeResetRedemptions: expiry salvage", () => {

@@ -352,6 +352,7 @@ import {
 	cfgProvidersCacheWarming,
 	cfgProvidersKimiApiFormat,
 	cfgRetryFallbackChains,
+	cfgRetryAccountOrder,
 	cfgRetryModelFallback,
 	cfgRetryUsageAwareFallback,
 	cfgRetryUsageReservePct,
@@ -2268,7 +2269,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 
 	let agent: Agent;
 	const effectiveGetApiKey =
-		options.getApiKey ?? (requestModel => modelRegistry.resolver(requestModel, agent.sessionId));
+		options.getApiKey ??
+		(requestModel =>
+			modelRegistry.resolver(requestModel, {
+				sessionId: agent.sessionId,
+				...(hasSession ? session.apiKeyResolverOptions(requestModel) : {}),
+			}));
 	let session!: AgentSession;
 	let hasSession = false;
 	let hasRegistered = false;
@@ -3107,10 +3113,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				}
 				const usageReservePolicy = cfgRetryUsageReservePolicy.get(settings);
 				const modelFallbackEnabled = cfgRetryModelFallback.get(settings);
+				const tieredAccountOrder = cfgRetryAccountOrder.get(settings) === "tiered";
 				if (
 					((modelFallbackEnabled && (hasUsageFallbackCandidate || usageFallbackTriggered)) ||
 						usageReservePolicy === "fail-closed") &&
-					cfgRetryUsageAwareFallback.get(settings)
+					(cfgRetryUsageAwareFallback.get(settings) || tieredAccountOrder)
 				) {
 					let usageHealth: ModelUsageHealth | undefined;
 					try {
@@ -3118,6 +3125,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							modelId: primary.model.id,
 							baseUrl: primary.model.baseUrl,
 							reserveFraction: cfgRetryUsageReservePct.get(settings) / 100,
+							extraUsage: tieredAccountOrder ? "to-floor" : undefined,
 						});
 					} catch (error) {
 						logger.debug("Usage-aware model preflight failed open", {

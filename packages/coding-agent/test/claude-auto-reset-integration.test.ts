@@ -6,6 +6,7 @@ import type {
 	SessionRestrictionLease,
 	UsageReport,
 } from "@oh-my-pi/pi-ai";
+import { resolvedApiKeyBearer } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import * as envApiKey from "@oh-my-pi/pi-ai/env-api-key";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
@@ -27,7 +28,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { __resetDirsFromEnvForTests, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { mockSchedulerWaitWithClock } from "./helpers/mock-scheduler-clock";
 
-import { cfgClaudeResetsAutoRedeem } from "@oh-my-pi/pi-coding-agent/session/settings";
+import { cfgClaudeResetsAutoRedeem, cfgRetryAccountOrder } from "@oh-my-pi/pi-coding-agent/session/settings";
 
 const ACCOUNT_ID = "claude-account";
 const EMAIL = "claude@example.com";
@@ -415,6 +416,97 @@ describe("Claude saved-reset trigger integration", () => {
 					),
 			);
 		expect(recovered).toBe(true);
+	});
+
+	it("redeems the active reset before resolver rotation and observes the account cooldown", async () => {
+		const { session, targets, listCalls } = buildSession({
+			report: claudeReport(1),
+			status: claudeStatus(true),
+			autoRedeem: "yes",
+		});
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected bundled anthropic model");
+		cfgRetryAccountOrder.set(session.settings, "tiered");
+		vi.spyOn(authStorage.health, "model").mockResolvedValue({
+			state: "healthy",
+			accounts: [
+				{
+					credentialId: CREDENTIAL_ID,
+					credentialType: "oauth",
+					selected: true,
+					state: "healthy",
+					fundingTier: "extra",
+					savedResets: 1,
+				},
+			],
+		});
+		const rotate = vi.spyOn(authStorage.limits, "rotate").mockResolvedValue({ switched: false });
+		const options = session.apiKeyResolverOptions(model);
+		if (!options.beforeRotate) throw new Error("Expected tiered reset hook");
+		const resolver = modelRegistry.resolver(model, { sessionId: session.sessionId, ...options });
+		const initial = await resolver({ lastChance: false, error: undefined });
+		const retried = await resolver({
+			lastChance: true,
+			error: new Error(CLAUDE_USAGE_LIMIT_ERROR),
+			previousKey: resolvedApiKeyBearer(initial),
+		});
+
+		expect(resolvedApiKeyBearer(retried)).toBe(resolvedApiKeyBearer(initial));
+		expect(targets).toEqual([
+			expect.objectContaining({ provider: "anthropic", credentialId: CREDENTIAL_ID, creditId: "cedar-grant-1" }),
+		]);
+		expect(rotate).not.toHaveBeenCalled();
+		expect(listCalls()).toBe(1);
+		expect(await options.beforeRotate(new Error(CLAUDE_USAGE_LIMIT_ERROR))).toBe(false);
+		expect(listCalls()).toBe(1);
+	});
+
+	it("redeems a targeted saved reset before a tiered model call", async () => {
+		const { session, targets, modelCalls } = buildSession({
+			report: claudeReport(1),
+			status: claudeStatus(true),
+			autoRedeem: "yes",
+		});
+		cfgRetryAccountOrder.set(session.settings, "tiered");
+		vi.spyOn(authStorage.health, "model").mockResolvedValue({
+			state: "healthy",
+			accounts: [
+				{
+					credentialId: CREDENTIAL_ID,
+					credentialType: "oauth",
+					selected: true,
+					state: "healthy",
+					fundingTier: "extra",
+					savedResets: 1,
+				},
+			],
+		});
+
+		await session.prompt("redeem before the request");
+		await session.waitForIdle();
+
+		expect(targets).toEqual([
+			expect.objectContaining({ provider: "anthropic", credentialId: CREDENTIAL_ID, creditId: "cedar-grant-1" }),
+		]);
+		expect(modelCalls()).toBe(1);
+	});
+
+	it("does not list saved resets before a usage-order model call", async () => {
+		const { session, targets, listCalls, modelCalls } = buildSession({
+			report: claudeReport(1),
+			status: claudeStatus(true),
+			autoRedeem: "yes",
+		});
+		vi.spyOn(authStorage.health, "model").mockImplementation(async () => {
+			throw new Error("usage ordering must not preflight reset health");
+		});
+
+		await session.prompt("skip tiered reset preflight");
+		await session.waitForIdle();
+
+		expect(targets).toEqual([]);
+		expect(listCalls()).toBe(0);
+		expect(modelCalls()).toBe(1);
 	});
 
 	it("continues the task using live reset evidence when broker usage polling is unavailable", async () => {

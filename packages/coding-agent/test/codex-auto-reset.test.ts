@@ -569,6 +569,28 @@ describe("planCodexResetRedemptions: blocked-account", () => {
 		expect(planCodexResetRedemptions(input([foreign])).actions).toEqual([]);
 		expect(planCodexResetRedemptions(input(null)).actions).toEqual([]);
 	});
+	it("restores only the target's exhausted allowance-spent window", () => {
+		const target = report({ weeklyUsed: 1, limitReached: false });
+		const sibling = report({
+			accountId: "acct-sib",
+			credentialId: CREDENTIAL_ID_BY_ACCOUNT["acct-sib"],
+			weeklyUsed: 1,
+			limitReached: false,
+		});
+
+		const allowanceSpent = planCodexResetRedemptions(
+			input([target, sibling], { trigger: "allowance-spent", targetCredentialId: CREDENTIAL_ID }),
+		);
+		expect(allowanceSpent.actions).toEqual([
+			expect.objectContaining({
+				reason: "blocked-account",
+				target: expect.objectContaining({ credentialId: CREDENTIAL_ID }),
+			}),
+		]);
+
+		const blocked = planCodexResetRedemptions(input([target, sibling], { trigger: "blocked" }));
+		expect(blocked.actions).toEqual([]);
+	});
 });
 
 describe("planCodexResetRedemptions: expiring-credit", () => {
