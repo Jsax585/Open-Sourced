@@ -13,6 +13,7 @@ import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
 import { createSessionDefaults } from "../helpers/session-defaults";
 
 /**
@@ -29,7 +30,7 @@ type TurnObserver = (records: CustomMessage[]) => ((error?: unknown) => void | P
 interface MockSession {
 	session: AgentSession;
 	/** Wake the agent as an IRC peer message would; true when an observer was installed to see it. */
-	wake: () => Promise<boolean>;
+	wake: (from?: string) => Promise<boolean>;
 	/** Hooks a test can set to interleave work with the session's own lifecycle. */
 	hooks: { onAbort?: () => Promise<void> };
 }
@@ -78,13 +79,13 @@ function createMockSession(): MockSession {
 		for (const listener of [...listeners]) listener(event);
 	};
 
-	const wake = async (): Promise<boolean> => {
+	const wake = async (from = "Peer"): Promise<boolean> => {
 		const record: CustomMessage = {
 			role: "custom",
 			customType: "irc:incoming",
 			content: "ping",
 			display: true,
-			details: { id: "m1", from: "Peer", message: "ping" },
+			details: { id: "m1", from, message: "ping" },
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
@@ -156,7 +157,7 @@ describe("runSubprocess wake observer", () => {
 		tempDir[Symbol.dispose]();
 	});
 
-	function setUp(id: string) {
+	function setUp(id: string, ref: { parentId?: string } = {}) {
 		const mock = createMockSession();
 		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue({
 			session: mock.session,
@@ -168,11 +169,13 @@ describe("runSubprocess wake observer", () => {
 			id,
 			displayName: id,
 			kind: "sub",
+			parentId: ref.parentId,
 			session: mock.session,
 			sessionFile: null,
 			status: "running",
 		});
 		const turnsStarted: number[] = [];
+		const settled: SingleResult[] = [];
 		const options = {
 			cwd: "/tmp",
 			agent,
@@ -186,8 +189,12 @@ describe("runSubprocess wake observer", () => {
 			onFollowUpTurnStarted: () => {
 				turnsStarted.push(turnsStarted.length + 1);
 			},
+			onFollowUpTurnSettled: async (turn: SingleResult) => {
+				settled.push(turn);
+				return "";
+			},
 		};
-		return { mock, options, turnsStarted };
+		return { mock, options, turnsStarted, settled };
 	}
 
 	/** Wake the agent from inside the registry's idle notification, the earliest a peer can see it. */
@@ -261,5 +268,31 @@ describe("runSubprocess wake observer", () => {
 		// The turn was observed, and the finalizer's later install did not count it again.
 		expect(observedDuringAbort).toBe(true);
 		expect(turnsStarted).toEqual([1]);
+	});
+
+	it("marks the result of an isolated agent's follow-up turn as isolated", async () => {
+		const id = "IsolatedFollowUp";
+		const { mock, options, settled } = setUp(id, { parentId: "Parent" });
+
+		const first = await runSubprocess({ ...options, worktree: tempDir.path() });
+		expect(first.exitCode).toBe(0);
+		expect(await mock.wake("Parent")).toBe(true);
+
+		// The kill that ends such a turn leaves an `aborted` tombstone, and a result
+		// that does not say it was isolated is told it can be resumed.
+		expect(settled).toHaveLength(1);
+		expect(settled[0]?.isolated).toBe(true);
+	});
+
+	it("leaves the result of a plain agent's follow-up turn unmarked", async () => {
+		const id = "PlainFollowUp";
+		const { mock, options, settled } = setUp(id, { parentId: "Parent" });
+
+		const first = await runSubprocess(options);
+		expect(first.exitCode).toBe(0);
+		expect(await mock.wake("Parent")).toBe(true);
+
+		expect(settled).toHaveLength(1);
+		expect(settled[0]?.isolated).toBeUndefined();
 	});
 });

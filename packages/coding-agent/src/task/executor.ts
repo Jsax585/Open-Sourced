@@ -2822,6 +2822,12 @@ interface FinalizeRunArgs {
 	 */
 	followUpTurn?: boolean;
 	publishMessageResult?: boolean;
+	/**
+	 * The agent runs in an isolated workspace. Its follow-up results say so, as its
+	 * first result does: a result that does not is told an agent killed in this turn
+	 * can be resumed, though the kill released its workspace.
+	 */
+	isolated?: boolean;
 	sessionFile?: string;
 	startTime: number;
 }
@@ -3040,6 +3046,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 		outputPath,
 		extractedToolData: progress.extractedToolData,
 		retryFailure: progress.retryFailure,
+		...(args.isolated ? { isolated: true } : {}),
 		outputMeta,
 	};
 }
@@ -3075,6 +3082,8 @@ export interface IrcWakeTurnMonitorOptions {
 	onTurnSettled?: (result: SingleResult, superseded: () => boolean) => Promise<string>;
 	/** See {@link ExecutorOptions.onFollowUpTurnStarted}. */
 	onTurnStarted?: () => void;
+	/** The agent runs in an isolated workspace; see {@link FinalizeRunArgs.isolated}. */
+	isolated?: boolean;
 }
 
 /** Sender + message id of one `irc:incoming` record that woke a turn. */
@@ -3523,6 +3532,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					parentToolCallId: options.parentToolCallId,
 					detached: true,
 					followUpTurn: true,
+					isolated: options.isolated,
 					publishMessageResult: ownerWoken || ownerPrompted || userPrompted,
 					// A cancelled wake job must not replace the accepted result.
 					signal: jobCancel.signal,
@@ -4507,6 +4517,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		artifactsDir: options.artifactsDir,
 		onTurnSettled: options.onFollowUpTurnSettled,
 		onTurnStarted: options.onFollowUpTurnStarted,
+		isolated: worktree !== undefined,
 	};
 
 	const runSubagent = async (): Promise<{
