@@ -32,7 +32,7 @@
 - Fixed compaction failing as a whole, and discarding the completed summary, when the optional short summary fails or returns no answer; the compaction now completes without a short summary, and cancellation still cancels it ([#16942](https://github.com/can1357/oh-my-pi/pull/16942) by [@Mouriya-Emma](https://github.com/Mouriya-Emma))
 ### Added
 
-- Added `AgentOptions.onHistoryReplaced`, notified after the live transcript or the steering/follow-up queues are replaced wholesale, so per-request caches can drop snapshots pinned to the discarded history ([#15225](https://github.com/can1357/oh-my-pi/pull/15225) by [@yuzu-octopus](https://github.com/yuzu-octopus))
+- Added `AgentOptions.onHistoryChanged`, notified after the live transcript or the steering/follow-up queues are replaced wholesale or the transcript grows or shrinks, so per-request caches can drop snapshots pinned to the previous history ([#15225](https://github.com/can1357/oh-my-pi/pull/15225) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ## [18.12.4] - 2026-10-20
 
