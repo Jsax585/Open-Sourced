@@ -25,10 +25,28 @@ const HOUR_MS = 60 * 60_000;
 const WEEK_MS = 7 * 24 * HOUR_MS;
 const TEST_ACCOUNT_PREFIX = "tiered-s7";
 
-type AccountId = "a" | "b" | "c";
+const ACCOUNT_IDS = ["a", "b", "c"] as const;
+type AccountId = (typeof ACCOUNT_IDS)[number];
+
+type AccountSetup = {
+	allowanceUsedPct?: number;
+	paid?: { limit: number; used: number } | null;
+	resetAvailable?: boolean;
+	priority?: number;
+};
+
+type TieredHarnessOptions = {
+	withFallbackChain: boolean;
+	extraUsageBelowFloor?: boolean;
+	usageAwareFallback?: boolean;
+	withSavedReset?: boolean;
+	accounts?: Partial<Record<AccountId, AccountSetup>>;
+	storageOrder?: readonly AccountId[];
+};
 
 type LedgerEntry = {
 	allowanceUsedPct: number;
+	paidLimit?: number;
 	paidUsed: number;
 	resetAvailable: boolean;
 };
@@ -42,7 +60,14 @@ type Charge = {
 	accountId: AccountId;
 	kind: "allowance" | "paid";
 	allowanceWasAvailable: boolean;
+	usableResetWasAvailable: boolean;
 	remainingBefore?: number;
+};
+
+type TieredPeer = {
+	session: AgentSession;
+	prompt(count: number): Promise<void>;
+	resolvePrimary(): Promise<string | undefined>;
 };
 
 type TieredHarness = {
@@ -56,6 +81,9 @@ type TieredHarness = {
 	events: string[];
 	redemptions: string[];
 	prompt(count: number): Promise<void>;
+	peer(): TieredPeer;
+	preblock(accountId: AccountId, scope: string, until: number): void;
+	hasBlock(accountId: AccountId, scope: string): boolean;
 	dispose(): Promise<void>;
 };
 
@@ -84,13 +112,17 @@ function oauthCredential(accountId: AccountId): OAuthCredentials {
 
 function claudePayload(entry: LedgerEntry): Record<string, unknown> {
 	const resetsAt = new Date(Date.now() + 2 * HOUR_MS).toISOString();
-	return {
+	const payload = {
 		five_hour: { utilization: 0, resets_at: resetsAt },
 		seven_day: { utilization: entry.allowanceUsedPct, resets_at: resetsAt },
+	};
+	if (entry.paidLimit === undefined) return payload;
+	return {
+		...payload,
 		spend: {
 			enabled: true,
 			used: money(entry.paidUsed),
-			limit: money(PAID_LIMIT),
+			limit: money(entry.paidLimit),
 		},
 	};
 }
@@ -129,22 +161,48 @@ function chargedBearers(harness: TieredHarness): string[] {
 		.map(request => request.bearer);
 }
 
-async function createTieredHarness(options: {
-	withFallbackChain: boolean;
-	extraUsageBelowFloor?: boolean;
-	withSavedReset?: boolean;
-}): Promise<TieredHarness> {
+async function createTieredHarness(options: TieredHarnessOptions) {
 	const primaryModel = getBundledModel(ANTHROPIC, PRIMARY_MODEL_ID);
 	const fallbackModel = getBundledModel("openai", FALLBACK_MODEL_ID);
 	if (!primaryModel || !fallbackModel) throw new Error("Expected bundled Anthropic and OpenAI test models");
 
 	const primarySelector = `${primaryModel.provider}/${primaryModel.id}`;
 	const fallbackSelector = `${fallbackModel.provider}/${fallbackModel.id}`;
-	const ledger: Record<AccountId, LedgerEntry> = {
-		a: { allowanceUsedPct: 0, paidUsed: 0, resetAvailable: options.withSavedReset === true },
-		b: { allowanceUsedPct: 0, paidUsed: 0, resetAvailable: false },
-		c: { allowanceUsedPct: 0, paidUsed: 0, resetAvailable: false },
-	};
+	const defaults = {
+		a: {
+			allowanceUsedPct: 0,
+			paid: { limit: PAID_LIMIT, used: 0 },
+			resetAvailable: options.withSavedReset === true,
+			priority: 3,
+		},
+		b: { allowanceUsedPct: 0, paid: { limit: PAID_LIMIT, used: 0 }, resetAvailable: false, priority: 2 },
+		c: { allowanceUsedPct: 0, paid: { limit: PAID_LIMIT, used: 0 }, resetAvailable: false, priority: 1 },
+	} satisfies Record<AccountId, Required<AccountSetup>>;
+	const configured = {} as Record<AccountId, Required<AccountSetup>>;
+	for (const accountId of ACCOUNT_IDS) {
+		const override = options.accounts?.[accountId];
+		const fallback = defaults[accountId];
+		configured[accountId] = {
+			allowanceUsedPct: override?.allowanceUsedPct ?? fallback.allowanceUsedPct,
+			paid: override?.paid === null ? null : (override?.paid ?? fallback.paid),
+			resetAvailable: override?.resetAvailable ?? fallback.resetAvailable,
+			priority: override?.priority ?? fallback.priority,
+		};
+	}
+	const storageOrder = options.storageOrder ?? ACCOUNT_IDS;
+	if (storageOrder.length !== ACCOUNT_IDS.length || new Set(storageOrder).size !== ACCOUNT_IDS.length) {
+		throw new Error("Expected storage order to contain every tiered account exactly once");
+	}
+	const ledger = {} as Record<AccountId, LedgerEntry>;
+	for (const accountId of ACCOUNT_IDS) {
+		const account = configured[accountId];
+		ledger[accountId] = {
+			allowanceUsedPct: account.allowanceUsedPct,
+			paidLimit: account.paid?.limit,
+			paidUsed: account.paid?.used ?? 0,
+			resetAvailable: account.resetAvailable,
+		};
+	}
 	const reportFor = (accountId: AccountId): UsageReport => {
 		const entry = ledger[accountId];
 		if (!entry) throw new Error(`Expected ledger entry for ${accountId}`);
@@ -165,26 +223,12 @@ async function createTieredHarness(options: {
 	};
 	const authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")), {
 		usageProviderResolver: provider => (provider === ANTHROPIC ? usageProvider : undefined),
-		accountPolicies: [
-			{
-				provider: ANTHROPIC,
-				account: { accountId: `${TEST_ACCOUNT_PREFIX}-a` },
-				priority: 3,
-				extraUsageFloor: PAID_FLOOR,
-			},
-			{
-				provider: ANTHROPIC,
-				account: { accountId: `${TEST_ACCOUNT_PREFIX}-b` },
-				priority: 2,
-				extraUsageFloor: PAID_FLOOR,
-			},
-			{
-				provider: ANTHROPIC,
-				account: { accountId: `${TEST_ACCOUNT_PREFIX}-c` },
-				priority: 1,
-				extraUsageFloor: PAID_FLOOR,
-			},
-		],
+		accountPolicies: ACCOUNT_IDS.map(accountId => ({
+			provider: ANTHROPIC,
+			account: { accountId: `${TEST_ACCOUNT_PREFIX}-${accountId}` },
+			priority: configured[accountId].priority,
+			extraUsageFloor: PAID_FLOOR,
+		})),
 	});
 	const requests: RequestTrace[] = [];
 	const charges: Charge[] = [];
@@ -202,120 +246,171 @@ async function createTieredHarness(options: {
 	await authStorage.credentials.reload();
 	await authStorage.credentials.set(
 		ANTHROPIC,
-		[oauthCredential("a"), oauthCredential("b"), oauthCredential("c")].map(credential => ({
+		storageOrder.map(accountId => ({
 			type: "oauth" as const,
-			...credential,
+			...oauthCredential(accountId),
 		})),
 	);
 	authStorage.keys.setRuntime("openai", "fallback-key");
 
-	const accounts = authStorage.oauth.accounts(ANTHROPIC);
-	const resetAccount = accounts.find(candidate => candidate.accountId === `${TEST_ACCOUNT_PREFIX}-a`);
-	if (!resetAccount) throw new Error("Expected reset account in the OAuth pool");
+	const accountFor = (accountId: AccountId) => {
+		const account = authStorage
+			.oauth.accounts(ANTHROPIC)
+			.find(candidate => candidate.accountId === `${TEST_ACCOUNT_PREFIX}-${accountId}`);
+		if (!account) throw new Error(`Expected ${accountId} in the OAuth pool`);
+		return account;
+	};
 	vi.spyOn(authStorage.resets, "list").mockImplementation(async request => {
-		if (request?.provider !== ANTHROPIC || !ledger.a.resetAvailable) return [];
-		return [
-			{
-				provider: ANTHROPIC,
-				credentialId: resetAccount.credentialId,
-				report: reportFor("a"),
-				accountId: `${TEST_ACCOUNT_PREFIX}-a`,
-				email: `${TEST_ACCOUNT_PREFIX}-a@example.test`,
-				orgId: `${TEST_ACCOUNT_PREFIX}-org-a`,
-				active: true,
-				...resetInventory("a"),
-			} satisfies ResetCreditAccountStatus,
-		];
+		if (request?.provider !== ANTHROPIC) return [];
+		return ACCOUNT_IDS.flatMap(accountId => {
+			if (!ledger[accountId].resetAvailable) return [];
+			const account = accountFor(accountId);
+			return [
+				{
+					provider: ANTHROPIC,
+					credentialId: account.credentialId,
+					report: reportFor(accountId),
+					accountId: `${TEST_ACCOUNT_PREFIX}-${accountId}`,
+					email: `${TEST_ACCOUNT_PREFIX}-${accountId}@example.test`,
+					orgId: `${TEST_ACCOUNT_PREFIX}-org-${accountId}`,
+					active: true,
+					...resetInventory(accountId),
+				} satisfies ResetCreditAccountStatus,
+			];
+		});
 	});
 	vi.spyOn(authStorage.resets, "redeem").mockImplementation(async request => {
+		const accountId = ACCOUNT_IDS.find(account => accountFor(account).credentialId === request.target.credentialId);
 		if (
-			request.target.credentialId !== resetAccount.credentialId ||
-			request.target.creditId !== "cedar-a" ||
-			!ledger.a.resetAvailable
+			!accountId ||
+			request.target.creditId !== `cedar-${accountId}` ||
+			!ledger[accountId].resetAvailable
 		) {
 			return { ok: false, code: "no_credit", provider: ANTHROPIC };
 		}
-		const entry = ledger.a;
+		const account = accountFor(accountId);
+		const entry = ledger[accountId];
 		entry.allowanceUsedPct = 0;
 		entry.resetAvailable = false;
-		redemptions.push("a");
-		events.push("redeem:a");
+		redemptions.push(accountId);
+		events.push(`redeem:${accountId}`);
 		await authStorage.usage.invalidate(ANTHROPIC);
+		for (const block of authStorage.blocks.list([account.credentialId])) {
+			authStorage.blocks.delete(block.credentialId, block.providerKey, block.blockScope);
+		}
 		return {
 			ok: true,
 			code: "reset",
 			provider: ANTHROPIC,
-			accountId: `${TEST_ACCOUNT_PREFIX}-a`,
-			email: `${TEST_ACCOUNT_PREFIX}-a@example.test`,
-			orgId: `${TEST_ACCOUNT_PREFIX}-org-a`,
-			creditId: "cedar-a",
+			accountId: `${TEST_ACCOUNT_PREFIX}-${accountId}`,
+			email: `${TEST_ACCOUNT_PREFIX}-${accountId}@example.test`,
+			orgId: `${TEST_ACCOUNT_PREFIX}-org-${accountId}`,
+			creditId: `cedar-${accountId}`,
 			cleared: ["anthropic:7d"],
 		};
 	});
 
 	const modelRegistry = new ModelRegistry(authStorage, undefined, { ignoreLocalModelConfig: true });
-	const mock = createMockModel();
-	const agent = new Agent({
-		getApiKey: model =>
-			modelRegistry.resolver(model, {
-				sessionId: agent.sessionId,
-				...session.apiKeyResolverOptions(model),
-			}),
-		initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
-		streamFn: async (model, context, streamOptions) => {
-			const selector = `${model.provider}/${model.id}`;
-			const bearer = resolveInitialApiKey(streamOptions?.apiKey);
-			requests.push({ selector, bearer });
-			events.push(`request:${bearer}`);
-			if (selector === primarySelector) {
-				const accountId = accountIdFromBearer(bearer);
-				if (!accountId) throw new Error(`Expected an OAuth bearer, got ${bearer}`);
-				const entry = ledger[accountId];
-				if (!entry) throw new Error(`Expected ledger entry for ${accountId}`);
-				const allowanceWasAvailable = Object.values(ledger).some(candidate => candidate.allowanceUsedPct < 100);
-				if (entry.allowanceUsedPct < 100) {
-					charges.push({ accountId, kind: "allowance", allowanceWasAvailable });
-					entry.allowanceUsedPct = Math.min(100, entry.allowanceUsedPct + 50);
-				} else {
-					const remainingBefore = PAID_LIMIT - entry.paidUsed;
-					charges.push({ accountId, kind: "paid", allowanceWasAvailable, remainingBefore });
-					entry.paidUsed += PAID_CHARGE;
-				}
-				await authStorage.usage.invalidate(ANTHROPIC);
-			}
-			mock.push({ content: [`ok:${selector}`], stopReason: "stop" });
-			return mock.stream(model, context, streamOptions);
-		},
-	});
-	const settings = Settings.isolated({
-		"compaction.enabled": false,
-		"retry.accountOrder": "tiered",
-		"retry.usageAwareFallback": true,
-		"retry.fallbackOn": "usage-limit",
-		"retry.fallbackChains": options.withFallbackChain ? { [primarySelector]: [fallbackSelector] } : {},
-		"retry.extraUsageBelowFloor": options.extraUsageBelowFloor === true,
-		"retry.baseDelayMs": 1,
-		"retry.maxDelayMs": 100,
-		"retry.maxRetries": 1,
-		"claudeResets.autoRedeem": "yes",
-		"claudeResets.keepCredits": 0,
-		"claudeResets.minBlockedMinutes": 60,
-	});
-	settings.setModelRole("default", primarySelector);
-	const sessionManager = SessionManager.inMemory();
 	const resetCoordinator = createCodexAutoRedeemCoordinator();
 	const tempDir = TempDir.createSync("@pi-tiered-account-order-");
 	resetCoordinator.resetLockPath = `${tempDir.path()}/auth.db`;
-	const session = new AgentSession({
-		agent,
-		sessionManager,
-		settings,
-		modelRegistry,
-		codexResetCoordinator: resetCoordinator,
-	});
+	const sessions: AgentSession[] = [];
+	const settingsForSession = () => {
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.accountOrder": "tiered",
+			"retry.usageAwareFallback": options.usageAwareFallback ?? true,
+			"retry.fallbackOn": "usage-limit",
+			"retry.fallbackChains": options.withFallbackChain ? { [primarySelector]: [fallbackSelector] } : {},
+			"retry.extraUsageBelowFloor": options.extraUsageBelowFloor === true,
+			"retry.baseDelayMs": 1,
+			"retry.maxDelayMs": 100,
+			"retry.maxRetries": 1,
+			"claudeResets.autoRedeem": "yes",
+			"claudeResets.keepCredits": 0,
+			"claudeResets.minBlockedMinutes": 60,
+		});
+		settings.setModelRole("default", primarySelector);
+		return settings;
+	};
+	const createSession = () => {
+		const mock = createMockModel();
+		let session!: AgentSession;
+		const agent = new Agent({
+			getApiKey: model =>
+				modelRegistry.resolver(model, {
+					sessionId: agent.sessionId,
+					...session.apiKeyResolverOptions(model),
+				}),
+			initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: async (model, context, streamOptions) => {
+				const selector = `${model.provider}/${model.id}`;
+				let bearer: string;
+				try {
+					bearer = resolveInitialApiKey(streamOptions?.apiKey);
+				} catch (error) {
+					mock.push({ throw: error instanceof Error ? error : String(error) });
+					return mock.stream(model, context, streamOptions);
+				}
+				requests.push({ selector, bearer });
+				events.push(`request:${bearer}`);
+				if (selector === primarySelector) {
+					const accountId = accountIdFromBearer(bearer);
+					if (!accountId) throw new Error(`Expected an OAuth bearer, got ${bearer}`);
+					const entry = ledger[accountId];
+					if (!entry) throw new Error(`Expected ledger entry for ${accountId}`);
+					const allowanceWasAvailable = Object.values(ledger).some(candidate => candidate.allowanceUsedPct < 100);
+					const usableResetWasAvailable = Object.values(ledger).some(candidate => candidate.resetAvailable);
+					if (entry.allowanceUsedPct < 100) {
+						charges.push({ accountId, kind: "allowance", allowanceWasAvailable, usableResetWasAvailable });
+						entry.allowanceUsedPct = Math.min(100, entry.allowanceUsedPct + 50);
+					} else {
+						const remainingBefore =
+							entry.paidLimit === undefined ? undefined : entry.paidLimit - entry.paidUsed;
+						charges.push({
+							accountId,
+							kind: "paid",
+							allowanceWasAvailable,
+							usableResetWasAvailable,
+							remainingBefore,
+						});
+						entry.paidUsed += PAID_CHARGE;
+					}
+					await authStorage.usage.invalidate(ANTHROPIC);
+				}
+				mock.push({ content: [`ok:${selector}`], stopReason: "stop" });
+				return mock.stream(model, context, streamOptions);
+			},
+		});
+		const sessionManager = SessionManager.inMemory();
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: settingsForSession(),
+			modelRegistry,
+			codexResetCoordinator: resetCoordinator,
+		});
+		sessions.push(session);
+		return {
+			session,
+			async prompt(count: number) {
+				for (let index = 0; index < count; index++) {
+					await session.prompt(`Tiered account order request ${index + 1}`);
+					await session.waitForIdle();
+				}
+			},
+			async resolvePrimary() {
+				return authStorage.keys.get(ANTHROPIC, session.sessionId, {
+					modelId: primaryModel.id,
+					extraUsage: session.apiKeyResolverOptions(primaryModel).extraUsage,
+				});
+			},
+		} satisfies TieredPeer;
+	};
+	const primary = createSession();
 
 	return {
-		session,
+		session: primary.session,
 		authStorage,
 		primarySelector,
 		fallbackSelector,
@@ -324,18 +419,27 @@ async function createTieredHarness(options: {
 		charges,
 		events,
 		redemptions,
-		async prompt(count) {
-			for (let index = 0; index < count; index++) {
-				await session.prompt(`Tiered account order request ${index + 1}`);
-				await session.waitForIdle();
-			}
+		prompt: primary.prompt,
+		peer: createSession,
+		preblock(accountId, scope, until) {
+			authStorage.blocks.upsert({
+				credentialId: accountFor(accountId).credentialId,
+				providerKey: `${ANTHROPIC}:oauth`,
+				blockScope: scope,
+				blockedUntilMs: until,
+			});
+		},
+		hasBlock(accountId, scope) {
+			return authStorage
+				.blocks.list([accountFor(accountId).credentialId])
+				.some(block => block.blockScope === scope && block.blockedUntilMs > Date.now());
 		},
 		async dispose() {
-			await session.dispose();
+			for (const session of sessions.reverse()) await session.dispose();
 			authStorage.close();
 			tempDir.removeSync();
 		},
-	};
+	} satisfies TieredHarness;
 }
 
 afterEach(() => {
@@ -430,6 +534,113 @@ describe("AgentSession tiered same-provider account order", () => {
 			).toBe(true);
 		} finally {
 			await withSuccessor.dispose();
+		}
+	});
+});
+
+function expectPaidChargesToRespectFunding(harness: TieredHarness) {
+	const paidCharges = harness.charges.filter(charge => charge.kind === "paid");
+	expect(
+		paidCharges.every(charge => !charge.allowanceWasAvailable && !charge.usableResetWasAvailable),
+	).toBe(true);
+	expect(
+		paidCharges.every(charge => charge.remainingBefore === undefined || charge.remainingBefore > PAID_FLOOR),
+	).toBe(true);
+}
+
+describe("AgentSession tiered same-provider boundary cases", () => {
+	it("FP1 redeems a reset from a pre-blocked account before paid fallback", async () => {
+		const harness = await createTieredHarness({
+			withFallbackChain: true,
+			accounts: {
+				a: { allowanceUsedPct: 100, paid: null, resetAvailable: true },
+				b: { allowanceUsedPct: 100, paid: null },
+				c: { allowanceUsedPct: 100, paid: { limit: PAID_LIMIT, used: 0 } },
+			},
+		});
+		try {
+			const peer = harness.peer();
+			await peer.resolvePrimary();
+			expect(harness.hasBlock("a", "")).toBe(true);
+			expect(harness.hasBlock("b", "")).toBe(true);
+
+			await harness.prompt(3);
+
+			expect(harness.events.slice(0, 4)).toEqual(["redeem:a", "request:a", "request:a", "request:c"]);
+			expect(harness.redemptions).toEqual(["a"]);
+			expectPaidChargesToRespectFunding(harness);
+		} finally {
+			await harness.dispose();
+		}
+	});
+
+	it("FP2 follows priority rather than credential storage order when choosing a reset", async () => {
+		const harness = await createTieredHarness({
+			withFallbackChain: true,
+			storageOrder: ["c", "a", "b"],
+			accounts: {
+				a: { allowanceUsedPct: 100, resetAvailable: true },
+				b: { allowanceUsedPct: 100 },
+				c: { allowanceUsedPct: 100, resetAvailable: true },
+			},
+		});
+		try {
+			await harness.prompt(1);
+
+			expect(harness.redemptions).toEqual(["a"]);
+			expect(chargedBearers(harness)).toEqual(["a"]);
+			expectPaidChargesToRespectFunding(harness);
+		} finally {
+			await harness.dispose();
+		}
+	});
+
+	it("FP3 blocks AUTH-preblocked paid usage below its floor before model fallback", async () => {
+		const harness = await createTieredHarness({
+			withFallbackChain: true,
+			usageAwareFallback: false,
+			accounts: {
+				a: { allowanceUsedPct: 100, paid: { limit: PAID_LIMIT, used: 8 } },
+				b: { allowanceUsedPct: 100, paid: null },
+				c: { allowanceUsedPct: 100, paid: null },
+			},
+		});
+		try {
+			harness.preblock("a", "auth", Date.now() + 2 * HOUR_MS);
+
+			await harness.prompt(1);
+
+			expect(harness.requests).toEqual([{ selector: harness.fallbackSelector, bearer: "fallback-key" }]);
+			expect(harness.charges).toEqual([]);
+		} finally {
+			await harness.dispose();
+		}
+	});
+
+	it("FP4 makes a joining session share the reset path before spending another account", async () => {
+		const harness = await createTieredHarness({
+			withFallbackChain: true,
+			accounts: {
+				a: { paid: null, resetAvailable: true },
+			},
+		});
+		try {
+			await harness.prompt(2);
+			const peer = harness.peer();
+			await peer.resolvePrimary();
+			harness.authStorage.sessions.release(ANTHROPIC, peer.session.sessionId);
+			expect(harness.hasBlock("a", "")).toBe(true);
+
+			for (let index = 0; index < 7; index++) {
+				await (index % 2 === 0 ? harness : peer).prompt(1);
+			}
+
+			expect(chargedBearers(harness)).toEqual(["a", "a", "a", "a", "b", "b", "c", "c"]);
+			expect(harness.redemptions).toEqual(["a"]);
+			expect(harness.events.indexOf("redeem:a")).toBeLessThan(harness.events.indexOf("request:b"));
+			expectPaidChargesToRespectFunding(harness);
+		} finally {
+			await harness.dispose();
 		}
 	});
 });
