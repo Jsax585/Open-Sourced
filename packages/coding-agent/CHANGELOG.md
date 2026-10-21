@@ -6,7 +6,8 @@
 
 - Added the `_session/steering` ACP extension (advertised as `_meta.steering.supported`), so clients such as agent-shell can steer a running turn; a steer sent while a permission dialog is open cancels that dialog, and `_meta.steering.queue: "followUp"` queues a follow-up instead ([#15885](https://github.com/can1357/oh-my-pi/pull/15885) by [@marcintustin](https://github.com/marcintustin))
 - `/mcp reauth <name>` now works over ACP, RPC, and print mode (`omp -p '/mcp reauth <name>'`): it opens the browser, prints the authorization URL, reconnects the server in the running session, and print mode exits 1 when reauthorization fails ([#16046](https://github.com/can1357/oh-my-pi/pull/16046) by [@marcintustin](https://github.com/marcintustin))
-- `/usage` and `omp usage` now show each account's paid extra usage. `omp usage --json` adds `paidUsage`, and paid rows no longer affect plan remaining, reserve state, or capacity.
+- Added opt-in `retry.accountOrder: "usage" | "tiered"`: tiered mode uses plan allowance before paid extra usage, redeems a saved reset before moving to a sibling, and admits below-floor paid usage only when `retry.extraUsageBelowFloor` is on and no retry fallback successor exists ([#16704](https://github.com/can1357/oh-my-pi/pull/16704) by [@jwaldrip](https://github.com/jwaldrip)).
+- `/usage` and `omp usage` now show each account's paid extra usage. `omp usage --json` adds `paidUsage`, and paid rows no longer affect plan remaining, reserve state, or capacity ([#16704](https://github.com/can1357/oh-my-pi/pull/16704) by [@jwaldrip](https://github.com/jwaldrip)).
 
 ### Changed
 

@@ -4,7 +4,7 @@
 
 ### Added
 
-- Usage dashboard cards summarize paid extra usage, and the Details view lists it for each account.
+- Usage dashboard cards summarize paid extra usage, and the Details view lists it for each account ([#16704](https://github.com/can1357/oh-my-pi/pull/16704) by [@jwaldrip](https://github.com/jwaldrip)).
 
 ### Changed
 
