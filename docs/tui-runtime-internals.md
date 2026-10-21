@@ -23,6 +23,9 @@ before the previous sink is retired. Recovery uses the last successfully opened
 target, so a failed rollover cannot block switching to a healthy directory.
 Only the active sink publishes rotation targets; retiring sinks still flush
 buffered records without moving guards back to an old destination.
+Guard handoffs participate in the rotation transaction: a rejected open or
+descriptor redirect restores guards to the predecessor, leaves that file
+selected for incoming records, and retries on a later sampling tick.
 New log files are created with owner-only read/write permissions; existing file
 permissions are preserved.
 
@@ -38,6 +41,11 @@ direct private-descriptor writer is the fallback. Geometry uses another owned
 TTY duplicate and SIGWINCH, so fd 1 redirection cannot freeze terminal sizing.
 `active-terminal.ts` remains the terminal singleton owner. Stop, handoff, and
 emergency cleanup restore fd 1/2 and stream methods; restart reacquires them.
+Overlapping owners form a live chain. Restoring a deferred-input owner pauses
+stdin and restores its prior raw-mode baseline until `enableInput()` resumes it.
+Kitty keyboard frames unwind in stack order: a stopped older owner's frames
+transfer to its direct successor, and stopping the current owner pops its
+outstanding frames without removing a surviving owner's frame.
 Unix isolation failure aborts startup rather than exposing an unprotected TUI.
 Windows retains its existing console path.
 

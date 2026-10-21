@@ -34,6 +34,7 @@ export interface RotatingFileOptions {
 	 * Consumers that hold their own descriptor on the active log (the macOS
 	 * stderr guard dup2s it onto fd 2) use this to follow the sink instead of
 	 * staying pinned to a file the sink later prunes.
+	 * Throwing rejects the replacement: retain the working target and retry later.
 	 */
 	readonly onRotate?: (filePath: string) => void;
 }
@@ -95,13 +96,14 @@ export class RotatingFileSink {
 
 	#openFd(filePath: string): void {
 		const fd = openCloexecSync(filePath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND, 0o600);
-		this.#closeFd();
-		this.#fd = fd;
 		try {
 			this.#onRotate?.(filePath);
-		} catch {
-			// A rotation observer must never break logging.
+		} catch (error) {
+			fs.closeSync(fd);
+			throw error;
 		}
+		this.#closeFd();
+		this.#fd = fd;
 	}
 
 	#closeFd(): void {

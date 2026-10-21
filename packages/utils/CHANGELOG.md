@@ -6,7 +6,7 @@
 
 - Fixed unmanaged stdout and stderr corrupting interactive displays, with private bounded diagnostics across custom directories, recovery from failed log destinations, transport changes without retired sinks reclaiming output, and disabled structured file logging ([#16159](https://github.com/can1357/oh-my-pi/pull/16159) by [@tommymorgan](https://github.com/tommymorgan)).
 
-- Failed log rotations now keep accepting records in the previous target and retry once the destination recovers ([#16159](https://github.com/can1357/oh-my-pi/pull/16159) by [@tommymorgan](https://github.com/tommymorgan)).
+- Failed log rotations and guard handoffs now keep raw and structured records in the previous target and retry once the destination recovers ([#16159](https://github.com/can1357/oh-my-pi/pull/16159) by [@tommymorgan](https://github.com/tommymorgan)).
 
 ## [18.12.4] - 2026-10-20
 

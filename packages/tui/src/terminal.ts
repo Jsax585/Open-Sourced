@@ -871,6 +871,8 @@ export class ProcessTerminal implements Terminal {
 	#isLoopStalled?: () => boolean;
 	#stdoutResizeListener?: () => void;
 	#kittyProtocolActive = false;
+	/** Frames this owner must unwind, including frames inherited from stopped older owners. */
+	#kittyFrames = 0;
 	// Kitty flags omp pushed on its own stack frame; meaningful only while kitty is active.
 	#kittyFlags = 0;
 	#modifyOtherKeysActive = false;
@@ -1730,6 +1732,7 @@ export class ProcessTerminal implements Terminal {
 					this.#kittyFlags = 5;
 				}
 				this.#safeWrite(`\x1b[>${this.#kittyFlags}u`);
+				this.#kittyFrames++;
 				return;
 			}
 
@@ -2361,7 +2364,10 @@ export class ProcessTerminal implements Terminal {
 		if (this.#kittyProtocolActive) {
 			// Disable Kitty keyboard protocol first so any late key releases
 			// do not generate new Kitty escape sequences.
-			this.#safeWrite("\x1b[<u");
+			while (this.#kittyFrames > 0) {
+				this.#safeWrite("\x1b[<u");
+				this.#kittyFrames--;
+			}
 			this.#kittyProtocolActive = false;
 			setKittyProtocolActive(false);
 		}
@@ -2413,10 +2419,14 @@ export class ProcessTerminal implements Terminal {
 			if (successor) {
 				successor.#previousTerminal = this.#previousTerminal;
 				successor.#wasRaw = this.#wasRaw;
+				successor.#kittyFrames += this.#kittyFrames;
+				this.#kittyFrames = 0;
 			}
 		}
 		this.#previousTerminal = null;
-		const resetModes = getActiveTerminal() === null;
+		const survivor = getActiveTerminal();
+		const resetModes = survivor === null;
+		const resetInput = resetModes || (owner === this && survivor !== null && survivor.#inputDeferred);
 		// Suppress observer/timer callbacks before any teardown can yield or throw.
 		this.#active = false;
 		this.#inputDeferred = false;
@@ -2536,12 +2546,15 @@ export class ProcessTerminal implements Terminal {
 		this.#reportedColumns = undefined;
 		this.#reportedRows = undefined;
 
-		// Disable Kitty keyboard protocol if not already done by drainInput()
-		if (this.#kittyProtocolActive) {
-			if (resetModes) this.#safeWrite("\x1b[<u");
-			this.#kittyProtocolActive = false;
-			if (resetModes) setKittyProtocolActive(false);
+		// Older frames stay below a survivor's frame until that owner can pop them in order.
+		if (owner === this || resetModes) {
+			while (this.#kittyFrames > 0) {
+				this.#safeWrite("\x1b[<u");
+				this.#kittyFrames--;
+			}
+			setKittyProtocolActive(survivor !== null && survivor.#kittyProtocolActive);
 		}
+		this.#kittyProtocolActive = false;
 		if (this.#modifyOtherKeysTimeout) {
 			clearTimeout(this.#modifyOtherKeysTimeout);
 			this.#modifyOtherKeysTimeout = undefined;
@@ -2589,7 +2602,7 @@ export class ProcessTerminal implements Terminal {
 		// Pause stdin to prevent any buffered input (e.g., Ctrl+D) from being
 		// re-interpreted after raw mode is disabled. This fixes a race condition
 		// where Ctrl+D could close the parent shell over SSH.
-		if (resetModes) process.stdin.pause();
+		if (resetInput) process.stdin.pause();
 
 		// Restore raw mode state. On a disconnected terminal (pane recycled, ssh
 		// dropped) the fd is no longer a tty and Bun's node:tty shim throws; there
@@ -2597,7 +2610,7 @@ export class ProcessTerminal implements Terminal {
 		// live terminal the failure still surfaces - swallowing it would silently
 		// leave stdin in raw mode.
 		try {
-			if (resetModes) process.stdin.setRawMode?.(this.#wasRaw);
+			if (resetInput) process.stdin.setRawMode?.(this.#wasRaw);
 		} catch (err) {
 			if (!this.#dead) throw err;
 		}

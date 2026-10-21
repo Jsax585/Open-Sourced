@@ -151,17 +151,27 @@ let externalOwners = 0;
 const targetListeners = new Set<(filePath: string) => void>();
 
 function notifyTargetChanged(filePath: string): void {
-	activeTargetPath = filePath;
-	for (const listener of targetListeners) {
-		try {
-			listener(filePath);
-		} catch {
-			// Diagnostic observers cannot interrupt rotation or other owners.
+	const previousPath = activeTargetPath;
+	try {
+		for (const listener of targetListeners) listener(filePath);
+	} catch (error) {
+		// A later participant can fail after earlier guards moved. Roll every
+		// guard back before the sink closes the rejected successor.
+		if (previousPath) {
+			for (const listener of targetListeners) {
+				try {
+					listener(previousPath);
+				} catch {
+					// Keep the original failure; a later rotation will retry.
+				}
+			}
 		}
+		throw error;
 	}
+	activeTargetPath = filePath;
 }
 
-/** Observe canonical rotations without taking ownership of the target. */
+/** Join canonical handoffs; throwing rejects a replacement and rolls back participants. */
 export function onProcessLogTargetChanged(listener: (filePath: string) => void): void {
 	targetListeners.add(listener);
 }
@@ -214,7 +224,6 @@ export function configureProcessLog(file: boolean | string | undefined): void {
 		return;
 	}
 	const previous = activeSink;
-	const previousPath = externalOwners > 0 ? activeTargetPath : undefined;
 	let replacement: RotatingFileSink | undefined;
 	let replacementPath: string | undefined;
 	if (externalOwners > 0 || (previous && file)) {
@@ -222,12 +231,10 @@ export function configureProcessLog(file: boolean | string | undefined): void {
 		try {
 			if (externalOwners > 0) {
 				replacementPath = replacement.openForExternalWrites();
-				for (const listener of targetListeners) listener(replacementPath);
+				notifyTargetChanged(replacementPath);
 			}
 		} catch (error) {
-			// Earlier listeners may already have moved. Restore all lease holders
-			// before releasing the replacement, while retaining the original config.
-			if (previousPath) notifyTargetChanged(previousPath);
+			// The handoff has already restored participants to the previous target.
 			replacement.close();
 			throw error;
 		}

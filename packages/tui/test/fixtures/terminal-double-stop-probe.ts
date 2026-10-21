@@ -13,16 +13,24 @@ import { emergencyTerminalRestore, ProcessTerminal } from "../../src/terminal";
 const state = process.argv[2];
 const note = (line: string) => fs.appendFileSync(state, `${line}\n`);
 
+const kitty = process.argv[3] === "kitty";
+const deferred = process.argv[3] === "deferred" || kitty;
 const a = new ProcessTerminal({ conpty: false });
 a.start(
 	() => {},
 	() => {},
+	undefined,
+	{ deferInput: deferred },
 );
 const b = new ProcessTerminal({ conpty: false });
 b.start(
 	() => {},
 	() => {},
 );
+if (kitty) {
+	process.stdin.emit("data", "\x1b[?0u");
+	note(`newest-kitty=${b.kittyProtocolActive}`);
+}
 if (process.argv[3] === "emergency") {
 	emergencyTerminalRestore();
 	note(`emergency-isolated=${isTerminalOutputSuppressed()}`);
@@ -30,7 +38,7 @@ if (process.argv[3] === "emergency") {
 	fs.writeSync(1, "EMERGENCY_BOTH_RESTORED\n");
 	process.exit(0);
 }
-const newestFirst = process.argv[3] === "newest";
+const newestFirst = process.argv[3] === "newest" || deferred;
 const stopping = newestFirst ? b : a;
 const survivor = newestFirst ? a : b;
 note(`after-start=${isTerminalOutputSuppressed()}`);
@@ -44,6 +52,12 @@ note(`survivor-raw=${process.stdin.isRaw}`);
 note(`survivor-paused=${process.stdin.isPaused()}`);
 writeTerminalSequence("\x1b]0;SURVIVING_OWNER_SEQUENCE\x07");
 survivor.write("\x1b]0;STOP_OWNER_END\x07");
+if (deferred) {
+	survivor.enableInput();
+	note(`enabled-raw=${process.stdin.isRaw}`);
+	if (kitty) process.stdin.emit("data", "\x1b[?0u");
+}
 survivor.stop();
 note(`after-final-stop=${isTerminalOutputSuppressed()}`);
 note(`final-raw=${process.stdin.isRaw}`);
+if (kitty) fs.writeSync(1, "KITTY_OWNERS_STOPPED\n");

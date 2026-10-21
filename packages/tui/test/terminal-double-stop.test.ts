@@ -10,11 +10,15 @@ import * as path from "node:path";
 // otherwise unmanaged output corrupts its live frame.
 
 describe.skipIf(process.platform === "win32")("ProcessTerminal double stop", () => {
-	for (const order of ["older", "newest", "emergency"] as const) {
+	for (const order of ["older", "newest", "emergency", "deferred", "kitty"] as const) {
 		it(
 			order === "emergency"
 				? "restores every overlapping owner during emergency shutdown"
-				: `preserves the survivor's modes, input and ordered control output when the ${order} owner stops twice`,
+				: order === "kitty"
+					? "balances negotiated Kitty frames when a deferred owner survives and later enables input"
+					: order === "deferred"
+						? "restores cooked input to a deferred survivor and its final shell after enabling input"
+						: `preserves the survivor's modes, input and ordered control output when the ${order} owner stops twice`,
 			async () => {
 				const root = fs.mkdtempSync(path.join(os.tmpdir(), "terminal-double-stop-"));
 				const state = path.join(root, "state.txt");
@@ -59,10 +63,20 @@ describe.skipIf(process.platform === "win32")("ProcessTerminal double stop", () 
 					expect(lines["after-first-stop"]).toBe("true");
 					expect(lines["after-double-stop"]).toBe("true");
 					expect(lines["after-final-stop"]).toBe("false");
-					expect(lines["survivor-raw"]).toBe("true");
+					const deferred = order === "deferred" || order === "kitty";
+					expect(lines["survivor-raw"]).toBe(deferred ? "false" : "true");
 					expect(lines["final-raw"]).toBe("false");
-					expect(lines["survivor-paused"]).toBe("false");
+					expect(lines["survivor-paused"]).toBe(deferred ? "true" : "false");
+					if (deferred) expect(lines["enabled-raw"]).toBe("true");
 					const stream = Buffer.concat(chunks).toString();
+					if (order === "kitty") {
+						expect(lines["newest-kitty"]).toBe("true");
+						const stopped = stream.indexOf("KITTY_OWNERS_STOPPED");
+						expect(stopped).toBeGreaterThan(0);
+						const gracefulStop = stream.slice(0, stopped);
+						expect(gracefulStop.match(/\x1b\[>5u/g)?.length).toBe(2);
+						expect(gracefulStop.match(/\x1b\[<u/g)?.length).toBe(2);
+					}
 					const begin = stream.indexOf("\x1b]0;STOP_OWNER_BEGIN\x07");
 					const end = stream.indexOf("\x1b]0;STOP_OWNER_END\x07");
 					expect(begin).toBeGreaterThanOrEqual(0);

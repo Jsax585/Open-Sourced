@@ -1,3 +1,4 @@
+import { spyOn } from "bun:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -56,6 +57,41 @@ try {
 		{ deferInput: true },
 	);
 	assertDestination(directory);
+	if (mode === "guard-retry") {
+		const previous = target();
+		const successor = `${previous}.1`;
+		const openSync = fs.openSync;
+		let rejected = false;
+		const guardOpen = spyOn(fs, "openSync").mockImplementation((file, flags, permissions) => {
+			if (file === successor && flags === "a") {
+				rejected = true;
+				throw new Error("guard handoff temporarily unavailable");
+			}
+			return openSync(file, flags, permissions);
+		});
+		try {
+			fs.writeSync(1, overflow);
+			await Bun.sleep(1_100);
+			assert.equal(rejected, true, "the sink opens successfully before the guard open fails");
+			assert.equal(target(), previous);
+			assert.equal(
+				getProcessLogSink().openForExternalWrites(),
+				previous,
+				"failed handoff must retain canonical selection",
+			);
+			fs.writeSync(1, "raw during rejected guard handoff\n");
+			logger.info("structured during rejected guard handoff");
+			logger.flush();
+			assert.match(fs.readFileSync(previous, "utf8"), /raw during rejected guard handoff/);
+			assert.match(fs.readFileSync(previous, "utf8"), /structured during rejected guard handoff/);
+		} finally {
+			guardOpen.mockRestore();
+		}
+		getProcessLogSink().checkExternalGrowth();
+		assert.equal(target(), successor, "a recovered guard handoff must retry without a structured record");
+		fs.writeSync(1, "raw after recovered guard handoff\n");
+		assert.match(fs.readFileSync(successor, "utf8"), /raw after recovered guard handoff/);
+	}
 	if (mode === "recovery" || mode === "retired") {
 		const previous = target();
 		// A directory at the successor path makes the real rollover open fail.

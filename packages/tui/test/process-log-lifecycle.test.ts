@@ -11,6 +11,7 @@ describe("ProcessTerminal canonical diagnostic lifecycle", () => {
 		["rejected", "keeps canonical rotation after a rejected explicit redirect"],
 		["recovery", "rolls back rejected handoffs and recovers from a failed old log destination"],
 		["retired", "preserves buffered records across a blocked-rollover handoff"],
+		["guard-retry", "keeps raw and structured writers together across a failed guard handoff and retries rotation"],
 		["disabled", "bounds raw diagnostics with structured files disabled"],
 	])(
 		"%s: %s, including nested stop and restart",
