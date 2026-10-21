@@ -766,6 +766,80 @@ describe("resolveSpawnArgs", () => {
 		expect(borrowed).toEqual([`--user-data-dir=${path.resolve("/home/me/.config/chrome")}`]);
 	});
 });
+describe("pickElectronTarget connected CDP path", () => {
+	let cdp: Bun.Server<undefined>;
+	let cdpUrl: string;
+	let entries: Array<{ id: string; type: string; title: string; url: string }>;
+
+	beforeEach(() => {
+		entries = [
+			{ id: "HUNG", type: "page", title: "Blocked", url: "https://example.com/hung" },
+			{ id: "HEALTHY", type: "page", title: "Ready page", url: "https://example.com/healthy" },
+		];
+		cdp = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(req) {
+				return new URL(req.url).pathname === "/json"
+					? Response.json(entries)
+					: new Response("Not found", { status: 404 });
+			},
+		});
+		cdpUrl = `http://127.0.0.1:${cdp.port}`;
+	});
+
+	afterEach(async () => {
+		await cdp.stop(true);
+	});
+
+	it("adopts a healthy URL or title match without waiting for an unrelated hung tab", async () => {
+		const healthy = fakePage({ url: entries[1]!.url, title: "Healthy" });
+		const hung = makeTarget("HUNG");
+		vi.spyOn(hung.target, "page").mockImplementation(() => Promise.withResolvers<Page | null>().promise);
+		const ready = makeTarget("HEALTHY", healthy);
+		const browser = makeBrowser([hung.target, ready.target]);
+		for (const matcher of ["healthy", "Ready page"]) {
+			expect(await pickElectronTarget(browser, { cdpUrl, matcher })).toBe(healthy);
+		}
+	});
+
+	it("prefers a responsive visible tab when another CDP tab hangs", async () => {
+		const healthy = fakePage({ url: entries[1]!.url, title: "Healthy", visible: true });
+		const hung = makeTarget("HUNG");
+		vi.spyOn(hung.target, "page").mockImplementation(() => Promise.withResolvers<Page | null>().promise);
+		const browser = makeBrowser([hung.target, makeTarget("HEALTHY", healthy).target]);
+		expect(await pickElectronTarget(browser, { cdpUrl, preferVisible: true })).toBe(healthy);
+	});
+
+	it("does not borrow a background tab when the foreground tab may be unreadable", async () => {
+		const healthy = fakePage({ url: entries[1]!.url, title: "Healthy", visible: false });
+		const browser = makeBrowser([makeTarget("HUNG").target, makeTarget("HEALTHY", healthy).target]);
+		const error = await rejectionOf(pickElectronTarget(browser, { cdpUrl, preferVisible: true }));
+		expect((error as Error).message).toContain("https://example.com/hung");
+	});
+
+	it("names the selected unreadable tab by URL", async () => {
+		const browser = makeBrowser([makeTarget("HUNG").target]);
+		const error = await rejectionOf(pickElectronTarget(browser, { cdpUrl, matcher: "hung" }));
+		expect((error as Error).message).toContain("https://example.com/hung");
+	});
+
+	it("prefers an exact target id over an earlier URL containing it, and lists ids when nothing matches", async () => {
+		entries = [
+			{ id: "REF", type: "page", title: "Referrer", url: "https://example.com/?from=tab-b" },
+			{ id: "TAB-B", type: "page", title: "Target", url: "https://example.com/b" },
+		];
+		const target = fakePage({ url: entries[1]!.url, title: "Target" });
+		const browser = makeBrowser([
+			makeTarget("REF", fakePage({ url: entries[0]!.url, title: "Referrer" })).target,
+			makeTarget("TAB-B", target).target,
+		]);
+		expect(await pickElectronTarget(browser, { cdpUrl, matcher: "TAB-B" })).toBe(target);
+		const error = await rejectionOf(pickElectronTarget(browser, { cdpUrl, matcher: "missing" }));
+		expect((error as Error).message).toContain("- TAB-B  Target  https://example.com/b");
+	});
+});
+
 describe("pickElectronTarget relay path", () => {
 	let relay: Bun.Server<undefined>;
 	let relayJson: string;
