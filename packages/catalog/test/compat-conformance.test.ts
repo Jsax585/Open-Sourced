@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { providerEntries, seedModels } from "../src/compat/providers";
 import rules from "../src/compat/rules.json";
 import models from "../src/models.json";
 
@@ -93,6 +94,20 @@ describe("compat rules conformance", () => {
 		for (const [provider, source] of collectReferencedProviders()) {
 			if (!known.has(provider) && !RUNTIME_ONLY_PROVIDERS.has(provider)) {
 				offenders.push(`${provider} (${source})`);
+			}
+		}
+		expect(offenders).toEqual([]);
+	});
+
+	test('every bundle="always" seed row is in models.json', () => {
+		// A regeneration from a stale snapshot silently drops seed rows (web/deepseek
+		// vanished this way), and runtime selectors resolve only bundled rows.
+		const bundled: Record<string, Record<string, unknown>> = models;
+		const offenders: string[] = [];
+		for (const [provider, entry] of Object.entries(providerEntries())) {
+			if (entry.seed?.bundle !== "always") continue;
+			for (const seed of seedModels(provider)) {
+				if (!bundled[provider]?.[seed.id]) offenders.push(`${provider}/${seed.id}`);
 			}
 		}
 		expect(offenders).toEqual([]);
