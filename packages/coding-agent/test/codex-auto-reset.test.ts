@@ -591,6 +591,58 @@ describe("planCodexResetRedemptions: blocked-account", () => {
 		const blocked = planCodexResetRedemptions(input([target, sibling], { trigger: "blocked" }));
 		expect(blocked.actions).toEqual([]);
 	});
+	it("keeps a blocked target isolated from sibling restores and expiry salvage", () => {
+		const target = report({
+			weeklyResetInMs: 40 * 60_000,
+			creditExpiries: [20 * DAY],
+		});
+		const sibling = report({
+			accountId: "acct-a",
+			email: "sibling@example.com",
+			credentialId: CREDENTIAL_ID_BY_ACCOUNT["acct-a"],
+			creditExpiries: [20 * DAY],
+		});
+		const expiring = report({
+			accountId: "acct-b",
+			email: "expiring@example.com",
+			credentialId: CREDENTIAL_ID_BY_ACCOUNT["acct-b"],
+			weeklyUsed: 0.4,
+			limitReached: false,
+			creditExpiries: [2 * HOUR],
+		});
+
+		const plan = planCodexResetRedemptions(
+			input([target, sibling, expiring], { targetCredentialId: CREDENTIAL_ID }),
+		);
+
+		expect(plan.actions).toEqual([]);
+	});
+
+	it("returns only an eligible blocked target before expiry salvage", () => {
+		const target = report({ creditExpiries: [20 * DAY] });
+		const sibling = report({
+			accountId: "acct-a",
+			email: "sibling@example.com",
+			credentialId: CREDENTIAL_ID_BY_ACCOUNT["acct-a"],
+			creditExpiries: [20 * DAY],
+		});
+		const expiring = report({
+			accountId: "acct-b",
+			email: "expiring@example.com",
+			credentialId: CREDENTIAL_ID_BY_ACCOUNT["acct-b"],
+			weeklyUsed: 0.4,
+			limitReached: false,
+			creditExpiries: [2 * HOUR],
+		});
+
+		const plan = planCodexResetRedemptions(
+			input([target, sibling, expiring], { targetCredentialId: CREDENTIAL_ID }),
+		);
+
+		expect(plan.actions).toMatchObject([{ reason: "blocked-account", target: { credentialId: CREDENTIAL_ID } }]);
+		expect(plan.actions).toHaveLength(1);
+	});
+
 });
 
 describe("planCodexResetRedemptions: expiring-credit", () => {

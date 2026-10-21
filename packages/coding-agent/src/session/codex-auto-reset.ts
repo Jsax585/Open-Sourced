@@ -176,7 +176,7 @@ export interface CodexResetPlanInput {
 	};
 	/** Active account (marks the preferred restore candidate); may be undefined. */
 	identity: OAuthAccountIdentity | undefined;
-	/** `allowance-spent`: restrict restoration to this exact credential. */
+	/** Restrict restoration to this exact credential and stop before expiry salvage. */
 	targetCredentialId?: number;
 	/** `blocked-account`: whether a stored credential may serve the blocked session; absent allows every account. */
 	permitsCredential?: (credentialId: number) => boolean;
@@ -436,7 +436,7 @@ export function planCodexResetRedemptions(input: CodexResetPlanInput): CodexRese
 		for (const snapshot of snapshots) {
 			const rule = "blocked-account" as const;
 			const skip = (reason: CodexResetSkipReason) => skipped.push({ accountKey: snapshot.accountKey, rule, reason });
-			if (input.trigger === "allowance-spent" && snapshot.target.credentialId !== input.targetCredentialId) {
+			if (input.targetCredentialId !== undefined && snapshot.target.credentialId !== input.targetCredentialId) {
 				continue;
 			}
 			// Restoring an account the session may not use cannot unblock it.
@@ -562,7 +562,7 @@ export function planCodexResetRedemptions(input: CodexResetPlanInput): CodexRese
 			};
 		}
 	}
-	if (input.trigger === "allowance-spent") {
+	if (input.targetCredentialId !== undefined) {
 		return { actions: restore ? [restore] : [], skipped };
 	}
 
