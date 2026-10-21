@@ -4,11 +4,11 @@
 
 ### Breaking Changes
 
-- The `perplexity` web-search provider now calls Perplexity's Search API (`POST https://api.perplexity.ai/search`) with `search_type: "fast"` and requires `PERPLEXITY_API_KEY` or a stored non-OAuth `perplexity` API key; the Sonar chat-completions/Responses transports, the OpenRouter substitution, the cookie/OAuth/anonymous consumer fallback, and the `PERPLEXITY_COOKIES`, `PI_PERPLEXITY_RESPONSES`, `PI_PERPLEXITY_MODEL`, and `PI_PERPLEXITY_API_MODEL` environment variables are removed ([#12690](https://github.com/can1357/oh-my-pi/issues/12690))
+- The `perplexity` web-search provider now calls Perplexity's Search API (`POST https://api.perplexity.ai/search`) with `search_type: "fast"` and requires `PERPLEXITY_API_KEY` or a stored non-OAuth `perplexity` API key; the Sonar chat-completions/Responses transports, the OpenRouter substitution, the cookie/OAuth/anonymous consumer fallback, and the `PERPLEXITY_COOKIES`, `PI_PERPLEXITY_RESPONSES`, `PI_PERPLEXITY_MODEL`, and `PI_PERPLEXITY_API_MODEL` environment variables are removed ([#12690](https://github.com/can1357/oh-my-pi/issues/12690), [#16666](https://github.com/can1357/oh-my-pi/pull/16666) by [@tomdacu](https://github.com/tomdacu))
 
 ### Changed
 
-- `web_search` with Perplexity now returns ranked sources from Fast Search ($1 per 1,000 requests) instead of a synthesized Sonar answer; query directives map to native domain/date/language/recency filters, `max_results` comes from `num_search_results ?? limit` (default `10`, max `20`), and `max_tokens`/`temperature` are no longer forwarded ([#12690](https://github.com/can1357/oh-my-pi/issues/12690))
+- `web_search` with Perplexity now returns ranked sources from Fast Search ($1 per 1,000 requests) instead of a synthesized Sonar answer; query directives map to native domain/date/language/recency filters, `max_results` comes from `num_search_results ?? limit` (default `10`, max `20`), and `max_tokens`/`temperature` are no longer forwarded ([#12690](https://github.com/can1357/oh-my-pi/issues/12690), [#16666](https://github.com/can1357/oh-my-pi/pull/16666) by [@tomdacu](https://github.com/tomdacu))
 - Idle compaction no longer runs on logged-in OpenAI Codex accounts, whose prompt cache never expires; compacting while idle only threw away a warm cache
 
 ### Fixed
