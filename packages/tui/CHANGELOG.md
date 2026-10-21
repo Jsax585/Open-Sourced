@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Model picker info columns (intelligence, speed, context, cost) now follow the selected row's highlight color instead of staying dim ([#16638](https://github.com/can1357/oh-my-pi/pull/16638) by [@MFelida](https://github.com/MFelida))
+
 ## [18.12.4] - 2026-10-20
 
 ### Added
