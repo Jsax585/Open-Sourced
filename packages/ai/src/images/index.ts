@@ -2,6 +2,7 @@ import { type Api, IMAGE_GENERATION_APIS, type ImageGenerationApi, type Model } 
 import * as AIError from "../error";
 import { generateAntigravityImage } from "./google-antigravity";
 import { generateGoogleImage } from "./google-generative-ai";
+import { generateMinimaxImage } from "./minimax";
 import { generateOpenAIImage } from "./openai-images";
 import { generateHostedImage } from "./openai-hosted";
 import { generateOpenRouterImage } from "./openrouter-images";
@@ -9,6 +10,7 @@ import type { ImageGenerationOptions, ImageGenerationRequest, ImageGenerationRes
 
 export * from "./google-antigravity";
 export * from "./google-generative-ai";
+export * from "./minimax";
 export * from "./openai-hosted";
 export * from "./openai-images";
 export * from "./openrouter-images";
@@ -32,6 +34,8 @@ export async function generateImage(
 			return generateOpenAIImage(model, request, options);
 		case "openrouter-images":
 			return generateOpenRouterImage(model, request, options);
+		case "minimax-images":
+			return generateMinimaxImage(model, request, options);
 		case "google-generative-ai":
 			return generateGoogleImage(model, request, options);
 		case "google-gemini-cli":
