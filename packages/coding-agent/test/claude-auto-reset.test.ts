@@ -396,7 +396,6 @@ describe("planClaudeResetRedemptions: blocked recovery", () => {
 		expect(plan.actions).toMatchObject([{ reason: "blocked-account", target: { credentialId: 11 } }]);
 		expect(plan.actions).toHaveLength(1);
 	});
-
 });
 
 describe("planClaudeResetRedemptions: expiry salvage", () => {

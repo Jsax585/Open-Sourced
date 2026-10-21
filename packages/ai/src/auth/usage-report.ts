@@ -212,11 +212,7 @@ export function usageResetAtMs(limits: UsageLimit[], nowMs: number): number | un
 }
 
 /** Remove usage windows whose reset invalidates a report fetched before it. */
-export function currentUsageLimits(
-	limits: readonly UsageLimit[],
-	fetchedAt: number,
-	nowMs: number,
-): UsageLimit[] {
+export function currentUsageLimits(limits: readonly UsageLimit[], fetchedAt: number, nowMs: number): UsageLimit[] {
 	return limits.filter(limit => {
 		const resetsAt = limit.window?.resetsAt;
 		return resetsAt === undefined || resetsAt > nowMs || fetchedAt >= resetsAt;

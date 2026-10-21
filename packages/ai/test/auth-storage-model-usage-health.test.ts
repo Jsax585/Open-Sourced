@@ -617,9 +617,7 @@ describe("AuthStorage tiered paid usage health", () => {
 		if (!a) throw new Error("Expected account a");
 
 		expect(await storage.keys.get("anthropic", "a9", { modelId: "claude-sonnet-4-5" })).toBe("access-b");
-		expect(
-			storage.blocks.list([a.credentialId]).some(block => block.credentialId === a.credentialId),
-		).toBe(true);
+		expect(storage.blocks.list([a.credentialId]).some(block => block.credentialId === a.credentialId)).toBe(true);
 
 		const health = await storage.health.model("anthropic", {
 			modelId: "claude-sonnet-4-5",
@@ -643,10 +641,9 @@ describe("AuthStorage tiered paid usage health", () => {
 							id: "anthropic",
 							async fetchUsage(params) {
 								fetches += 1;
-								const parsed = parseClaudeUsagePayload(
-									tieredClaudePayload({ planUsed: 20 }),
-									{ accountId: params.credential.accountId },
-								);
+								const parsed = parseClaudeUsagePayload(tieredClaudePayload({ planUsed: 20 }), {
+									accountId: params.credential.accountId,
+								});
 								if (!parsed) throw new Error("Expected usage report");
 								return parsed;
 							},

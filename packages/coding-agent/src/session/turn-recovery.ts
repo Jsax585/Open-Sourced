@@ -1986,9 +1986,7 @@ export class TurnRecovery {
 					),
 				);
 				const summaries = authStorage.oauth.accounts(resetProvider, sessionId);
-				const summariesByCredentialId = new Map(
-					summaries.map(summary => [summary.credentialId, summary] as const),
-				);
+				const summariesByCredentialId = new Map(summaries.map(summary => [summary.credentialId, summary] as const));
 				const priorityFor = (credentialId: number): number => {
 					const summary = summariesByCredentialId.get(credentialId);
 					const priority = summary && authStorage.oauth.policy(resetProvider, summary)?.priority;

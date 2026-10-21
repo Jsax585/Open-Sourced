@@ -223,7 +223,6 @@ export class CredentialHealth implements HealthApi {
 				}
 				const savedResets = report?.resetCredits?.redeemableCount ?? report?.resetCredits?.availableCount;
 
-
 				if (this.#deps.blocks.supportsHealing(provider)) {
 					blockedUntil = this.#deps.blocks.blockedUntil(provider, providerKey, index, blockScopes);
 				}

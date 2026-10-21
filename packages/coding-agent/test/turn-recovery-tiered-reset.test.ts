@@ -53,20 +53,19 @@ async function createTieredRecovery(options: {
 }) {
 	const authStorage = await AuthStorage.create(":memory:", {
 		usageProviderResolver: () => undefined,
-		accountPolicies: ([
-			["a", 3],
-			["b", 2],
-			["c", 1],
-		] as const).map(([account, priority]) => ({
+		accountPolicies: (
+			[
+				["a", 3],
+				["b", 2],
+				["c", 1],
+			] as const
+		).map(([account, priority]) => ({
 			provider: PROVIDER,
 			account: { accountId: identity(account) },
 			priority,
 		})),
 	});
-	await authStorage.credentials.set(
-		PROVIDER,
-		(options.storageOrder ?? ["a", "b", "c"]).map(credential),
-	);
+	await authStorage.credentials.set(PROVIDER, (options.storageOrder ?? ["a", "b", "c"]).map(credential));
 
 	const summaries = authStorage.oauth.accounts(PROVIDER);
 	const accountByCredentialId = new Map(

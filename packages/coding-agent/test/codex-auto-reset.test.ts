@@ -611,9 +611,7 @@ describe("planCodexResetRedemptions: blocked-account", () => {
 			creditExpiries: [2 * HOUR],
 		});
 
-		const plan = planCodexResetRedemptions(
-			input([target, sibling, expiring], { targetCredentialId: CREDENTIAL_ID }),
-		);
+		const plan = planCodexResetRedemptions(input([target, sibling, expiring], { targetCredentialId: CREDENTIAL_ID }));
 
 		expect(plan.actions).toEqual([]);
 	});
@@ -635,14 +633,11 @@ describe("planCodexResetRedemptions: blocked-account", () => {
 			creditExpiries: [2 * HOUR],
 		});
 
-		const plan = planCodexResetRedemptions(
-			input([target, sibling, expiring], { targetCredentialId: CREDENTIAL_ID }),
-		);
+		const plan = planCodexResetRedemptions(input([target, sibling, expiring], { targetCredentialId: CREDENTIAL_ID }));
 
 		expect(plan.actions).toMatchObject([{ reason: "blocked-account", target: { credentialId: CREDENTIAL_ID } }]);
 		expect(plan.actions).toHaveLength(1);
 	});
-
 });
 
 describe("planCodexResetRedemptions: expiring-credit", () => {
