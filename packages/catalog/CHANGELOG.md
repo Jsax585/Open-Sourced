@@ -48,6 +48,7 @@
 ### Fixed
 
 - Gemma 4 models on Google AI Studio (`google/gemma-4-31b-it`, `google/gemma-4-26b-a4b-it`, …) no longer fail every request with `Thinking budget is not supported for this model`; thinking is now toggled with `thinkingLevel` (on = `high`, off = `minimal`) ([#16350](https://github.com/can1357/oh-my-pi/issues/16350))
+- Added Reflection as a loginable provider (OpenAI-compatible at https://api.reflection.ai/openai/v1, model Beam-1.0-501B-A23B), usable via `/login`
 
 ## [18.12.2] - 2026-10-18
 

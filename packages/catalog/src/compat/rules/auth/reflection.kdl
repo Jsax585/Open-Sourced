@@ -1,0 +1,10 @@
+auth "reflection" {
+	name "Reflection"
+	env "REFLECTION_API_KEY"
+	login "api-key" {
+		auth-url "https://reflection.ai/"
+		instructions "Copy your API key from the Reflection dashboard"
+		prompt "Paste your Reflection API key" placeholder="REFLECTION_API_KEY"
+		validate "chat-completions" label="Reflection" base-url="https://api.reflection.ai/openai/v1" model="Beam-1.0-501B-A23B"
+	}
+}

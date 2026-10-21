@@ -1,0 +1,10 @@
+// Provider-wire compat for "reflection".
+
+provider "reflection" {
+	models "*" {
+		reasoning-content-field "reasoning_content"
+		requires-reasoning-content-for-all-assistant-turns #true
+		requires-reasoning-content-for-tool-calls #true
+		allows-synthetic-reasoning-content-for-tool-calls #false
+	}
+}
