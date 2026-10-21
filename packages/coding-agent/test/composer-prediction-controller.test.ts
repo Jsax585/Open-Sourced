@@ -77,6 +77,7 @@ function assistantMessage(stopReason: StopReason, timestamp: number): AgentMessa
 
 function harness(options: HarnessOptions = {}) {
 	const turns: PendingTurn[] = [];
+	const listeners = new Set<(event: { type: string }) => void>();
 	const sessionManager = SessionManager.inMemory();
 	const firstLeafId = sessionManager.appendMessage(userMessage("fix the bug", 1));
 	const messages: AgentMessage[] = [userMessage("fix the bug", 1)];
@@ -94,6 +95,10 @@ function harness(options: HarnessOptions = {}) {
 			const { promise, resolve } = Promise.withResolvers<EphemeralTurnResult>();
 			turns.push({ options: turnOptions, resolve, promise });
 			return promise;
+		},
+		subscribe(listener: (event: { type: string }) => void): () => void {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
 		},
 	};
 	let renders = 0;
@@ -133,6 +138,16 @@ function harness(options: HarnessOptions = {}) {
 		advance: (content: string) => {
 			sessionManager.appendMessage(userMessage(content, 2));
 			messages.push(userMessage(content, 2));
+		},
+		/** Show a focused subagent's conversation (as the focus controller does), or the main one again. */
+		viewSubagent: (focused: boolean) => {
+			const mutable = ctx as unknown as { viewSession: unknown; focusedAgentId: string | undefined };
+			mutable.viewSession = focused ? { messages: [] } : session;
+			mutable.focusedAgentId = focused ? "0-Explore" : undefined;
+		},
+		/** An event on the main session itself, delivered whichever conversation is on screen. */
+		emit: (type: string) => {
+			for (const listener of listeners) listener({ type });
 		},
 	};
 }
@@ -278,7 +293,7 @@ describe("ComposerPredictionController", () => {
 	});
 
 	it("reuses a hidden prediction past journal bookkeeping but predicts again after a compaction", async () => {
-		const { controller, turns, reply, sessionManager, firstLeafId } = harness({ lastTurn: "stop" });
+		const { controller, turns, reply, sessionManager, firstLeafId, advance } = harness({ lastTurn: "stop" });
 		controller.request();
 		await reply(0, "now run the tests");
 
@@ -289,13 +304,19 @@ describe("ComposerPredictionController", () => {
 		expect(controller.text).toBe("now run the tests");
 		expect(turns).toHaveLength(1);
 
-		// Compaction cancels the prediction and rewrites the history; the tail message survives.
-		controller.cancel();
+		// Compaction rewrites the history while the tail message object survives: the shown
+		// prediction is invalidated immediately, and catch-up requests a fresh one.
 		sessionManager.appendCompaction("summary", undefined, firstLeafId, 1000);
+		expect(controller.text).toBeUndefined();
 		controller.catchUp();
 
 		expect(turns).toHaveLength(2);
 		expect(controller.text).toBeUndefined();
+
+		// Switching to a history that cannot follow up still aborts the in-flight request.
+		advance("new topic");
+		controller.catchUp();
+		expect(turns[1]!.options.signal!.aborted).toBe(true);
 	});
 
 	it("does not re-request on catch-up after the model declined to predict", async () => {
@@ -307,6 +328,55 @@ describe("ComposerPredictionController", () => {
 
 		expect(controller.text).toBeUndefined();
 		expect(turns).toHaveLength(1);
+	});
+
+	it("keeps the main session's prediction across a subagent visit, whether it finishes during or after it", async () => {
+		for (const finishWhileAway of [true, false]) {
+			const { controller, turns, reply, viewSubagent } = harness({ lastTurn: "stop" });
+			controller.request();
+			const signal = turns[0]!.options.signal!;
+
+			// Focusing the subagent hides the view; its own turn start cancels on the subagent's behalf.
+			controller.hide();
+			viewSubagent(true);
+			controller.cancel();
+			if (finishWhileAway) await reply(0, "now run the tests");
+			expect(controller.text).toBeUndefined();
+
+			viewSubagent(false);
+			controller.hide();
+			controller.catchUp();
+			if (!finishWhileAway) await reply(0, "now run the tests");
+
+			expect(signal.aborted).toBe(false);
+			expect(turns).toHaveLength(1);
+			expect(controller.text).toBe("now run the tests");
+		}
+	});
+
+	it("stops a prediction kept across a subagent visit once its own session starts a turn or compaction", () => {
+		for (const type of ["agent_start", "auto_compaction_start"]) {
+			const { controller, turns, viewSubagent, emit } = harness({ lastTurn: "stop" });
+			controller.request();
+			controller.hide();
+			viewSubagent(true);
+			emit("message_update");
+			expect(turns[0]!.options.signal!.aborted).toBe(false);
+
+			emit(type);
+			expect(turns[0]!.options.signal!.aborted).toBe(true);
+		}
+	});
+
+	it("dispose stops a prediction kept for the main session while a subagent is on screen", () => {
+		const { controller, turns, viewSubagent } = harness({ lastTurn: "stop" });
+		controller.request();
+		viewSubagent(true);
+		controller.cancel();
+		expect(turns[0]!.options.signal!.aborted).toBe(false);
+
+		controller.dispose();
+		expect(turns[0]!.options.signal!.aborted).toBe(true);
 	});
 });
 

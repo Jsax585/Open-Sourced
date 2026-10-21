@@ -164,14 +164,18 @@ export class ComposerPredictionController {
 	 * has a prediction, or one on the way, is not requested again.
 	 */
 	catchUp(): void {
+		const pending = this.#pending;
+		if (pending && !this.#isCurrent(pending.source)) {
+			pending.abort.abort();
+			this.#pending = undefined;
+		}
 		const settings = this.#ctx.settings;
 		if (!cfgComposerPredictions.get(settings) || !cfgComposerPredictionsOnResume.get(settings)) return;
 		const last = this.#ctx.viewSession.messages.at(-1);
 		if (last?.role !== "assistant" || !FOLLOWS_UP[last.stopReason]) return;
-		const pending = this.#pending;
-		if (pending && this.#isCurrent(pending.source) && this.#isUnchanged(pending.source)) return;
+		if (this.#pending) return;
 		const settled = this.#settled;
-		if (settled && this.#isCurrent(settled.source) && this.#isUnchanged(settled.source)) {
+		if (settled && this.#isCurrent(settled.source)) {
 			if (!this.#hidden) return;
 			this.#hidden = false;
 			if (settled.text) this.#ctx.ui.requestRender();
@@ -180,19 +184,42 @@ export class ComposerPredictionController {
 		this.request();
 	}
 
-	/** Abort an in-flight prediction and hide the shown one. */
+	/**
+	 * Abort the in-flight prediction for the conversation on screen and hide the shown one. Turn
+	 * starts and resets in another conversation (a focused subagent's) leave the main session's
+	 * request running: its result is kept for {@link catchUp}.
+	 */
 	cancel(): void {
-		this.#pending?.abort.abort();
-		this.#pending = undefined;
+		if (this.#pending?.source.session === this.#ctx.viewSession) {
+			this.#pending.abort.abort();
+			this.#pending = undefined;
+		}
+		this.hide();
+	}
+
+	/** Hide the shown prediction while the view moves to another conversation; nothing is aborted. */
+	hide(): void {
 		if (this.#hidden) return;
 		this.#hidden = true;
 		if (this.#settled?.text) this.#ctx.ui.requestRender();
+	}
+
+	/** Abort any in-flight prediction, whichever conversation is on screen. */
+	dispose(): void {
+		this.#pending?.abort.abort();
+		this.#pending = undefined;
+		this.hide();
 	}
 
 	async #run(pending: { abort: AbortController; source: PredictionSource }): Promise<void> {
 		const { abort, source } = pending;
 		const deadlineMs =
 			this.#deadlineMs ?? composerPredictionDeadlineMs(cfgComposerPredictionTimeoutSeconds.get(this.#ctx.settings));
+		// The view can be on a subagent, whose events never reach this session's cancel(): a turn or
+		// compaction starting in the prediction's own session makes it obsolete, so stop paying for it.
+		const unsubscribe = source.session.subscribe(event => {
+			if (event.type === "agent_start" || event.type === "auto_compaction_start") abort.abort();
+		});
 		try {
 			const { replyText, assistantMessage } = await source.session.runEphemeralTurn({
 				promptText: prompt.render(composerPredictionPrompt, { skip: SKIP_REPLY }),
@@ -202,14 +229,16 @@ export class ComposerPredictionController {
 			});
 			// Paid for even when the reply arrives too late to show.
 			this.#recordUsage(source, assistantMessage);
-			if (this.#pending !== pending || !this.#isCurrent(source)) return;
+			if (this.#pending !== pending || !this.#isAtPoint(source)) return;
 			const text = parseComposerPrediction(replyText);
 			this.#settled = { text, source };
-			this.#hidden = false;
-			if (text) this.#ctx.ui.requestRender();
+			// Finished while a subagent was on screen: kept hidden until catch-up shows it.
+			this.#hidden = this.#ctx.viewSession !== source.session;
+			if (text && !this.#hidden) this.#ctx.ui.requestRender();
 		} catch (error) {
 			if (!abort.signal.aborted) logger.debug("Composer prediction failed", { error: String(error) });
 		} finally {
+			unsubscribe();
 			if (this.#pending === pending) this.#pending = undefined;
 		}
 	}
@@ -233,16 +262,18 @@ export class ComposerPredictionController {
 	}
 
 	#isCurrent(source: PredictionSource): boolean {
-		if (this.#ctx.viewSession !== source.session) return false;
+		return this.#ctx.viewSession === source.session && this.#isAtPoint(source);
+	}
+
+	/** Whether the prediction's own conversation still ends where it was made, whichever is on screen. */
+	#isAtPoint(source: PredictionSource): boolean {
+		if (!this.#isUnchanged(source)) return false;
 		const last = source.session.messages.at(-1);
 		if (last === source.lastMessage) return true;
 		// Reloading the open session (`/resume` of itself) rebuilds every message object; the point
 		// is still current when the journal leaf is the same and the tail kept its role and timestamp.
 		return (
-			this.#isUnchanged(source) &&
-			last !== undefined &&
-			last.role === source.lastMessage?.role &&
-			last.timestamp === source.lastMessage.timestamp
+			last !== undefined && last.role === source.lastMessage?.role && last.timestamp === source.lastMessage.timestamp
 		);
 	}
 
