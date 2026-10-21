@@ -4,7 +4,8 @@
 
 ### Added
 
-- Added `authStorage.usage.paidUsage(reports)`, which reports each account's provider-reported paid extra usage: spend cap or credit balance, floor, budget, automatic spending headroom, provider refusal, and figure age. `ExtraUsageState` now includes `capacity` and `limitId`, and records `enabled: false` when the provider reports paid usage off.
+- Added paid-aware OAuth credential selection: plan allowance is used before paid extra usage, and per-account paid floors and budgets hold accounts at configured limits ([#16704](https://github.com/can1357/oh-my-pi/pull/16704) by [@jwaldrip](https://github.com/jwaldrip)).
+- Added `authStorage.usage.paidUsage(reports)`, which reports each account's provider-reported paid extra usage: spend cap or credit balance, floor, budget, automatic spending headroom, provider refusal, and figure age. `ExtraUsageState` now includes `capacity` and `limitId`, and records `enabled: false` when the provider reports paid usage off ([#16704](https://github.com/can1357/oh-my-pi/pull/16704) by [@jwaldrip](https://github.com/jwaldrip)).
 
 ## [18.12.5] - 2026-10-21
 
