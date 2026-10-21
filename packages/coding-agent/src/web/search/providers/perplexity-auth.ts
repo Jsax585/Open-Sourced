@@ -1,14 +1,18 @@
 import type { AuthStorage, OAuthAccess } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
 
-export const PERPLEXITY_CHAT_BASE_URL = "https://api.perplexity.ai";
-export const PERPLEXITY_RESPONSES_BASE_URL = "https://api.perplexity.ai/v1";
 export const OAUTH_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 
+/**
+ * Credential a Perplexity request can authenticate with.
+ *
+ * The Search API (`api.perplexity.ai/search`) is bearer-keyed, so `api_key` is
+ * the only search credential; `oauth` remains for `omp token perplexity`, which
+ * prints the consumer subscription token.
+ */
 export interface ApiConfig {
 	type: "api_key";
 	apiKey: string;
-	useResponses: boolean;
 }
 
 export type PerplexityAuth =
@@ -16,13 +20,6 @@ export type PerplexityAuth =
 	| {
 			type: "oauth";
 			access: OAuthAccess;
-	  }
-	| {
-			type: "cookies";
-			cookies: string;
-	  }
-	| {
-			type: "anonymous";
 	  };
 
 export interface PerplexityAuthOptions {
@@ -30,26 +27,28 @@ export interface PerplexityAuthOptions {
 	forceRefresh?: boolean;
 }
 
-/**
- * Resolve the direct Perplexity API-key endpoint. OpenRouter keys are never
- * borrowed: OpenRouter-hosted Perplexity runs only through an explicit
- * `openrouter/perplexity/…` selector.
- */
-async function getApiConfig(
+/** Resolve the direct `api.perplexity.ai` API key, if one is configured. */
+export async function getApiKeyConfig(
 	authStorage: AuthStorage,
 	sessionId: string | undefined,
 	options?: PerplexityAuthOptions,
 ): Promise<ApiConfig | undefined> {
-	// A Perplexity OAuth session and a real API key are mutually exclusive here:
-	// when the active credential origin is OAuth, `getApiKey("perplexity")`
-	// returns the OAuth session JWT (OAuth wins in AuthStorage.keys.get), not an
-	// api.perplexity.ai key. Emitting it as a direct api-key config makes the
-	// search loop send the session token as a Bearer to the direct API endpoint,
-	// which rejects it with 401 and masks the real (transport) failure — see #5315.
-	// Skip the direct config in that case; the OAuth ask-endpoint method covers it.
-	if (authStorage.keys.source("perplexity")?.kind === "oauth") return undefined;
+	// A Perplexity OAuth session and a real API key are mutually exclusive in
+	// `keys.get`: when the active credential origin is OAuth it returns the
+	// session JWT (OAuth wins in AuthStorage.keys.get), not an
+	// `api.perplexity.ai` key. Emitting it as an api-key config would make
+	// callers send the session token as a Bearer to the Search API, which
+	// rejects it with 401 and masks the real (transport) failure — see #5315.
+	// An explicit `PERPLEXITY_API_KEY` is still what the user asked for, so it
+	// must win over a stored session instead of being shadowed by it.
+	const source = authStorage.keys.source("perplexity");
+	if (source?.kind === "oauth") {
+		const envKey = $env.PERPLEXITY_API_KEY?.trim();
+		return envKey ? { type: "api_key", apiKey: envKey } : undefined;
+	}
+
 	const apiKey = await authStorage.keys.get("perplexity", sessionId, options);
-	return apiKey ? { type: "api_key", apiKey, useResponses: $env.PI_PERPLEXITY_RESPONSES === "1" } : undefined;
+	return apiKey ? { type: "api_key", apiKey } : undefined;
 }
 
 /**
@@ -71,7 +70,7 @@ export function jwtExpiryMs(token: string): number | undefined {
 	}
 }
 
-/** Collect all available auth methods to try in priority order */
+/** Collect credentials printable for `perplexity`, in priority order. */
 export async function getAvailableAuthMethods(
 	authStorage: AuthStorage,
 	sessionId: string | undefined,
@@ -79,13 +78,7 @@ export async function getAvailableAuthMethods(
 ): Promise<PerplexityAuth[]> {
 	const methods: PerplexityAuth[] = [];
 
-	// 1. Cookies take precedence over OAuth as noted in comments/docs
-	const cookies = $env.PERPLEXITY_COOKIES?.trim();
-	if (cookies) {
-		methods.push({ type: "cookies", cookies });
-	}
-
-	// 2. Perplexity OAuth (session bearer)
+	// 1. Perplexity OAuth (session bearer)
 	try {
 		const access = await authStorage.oauth.access("perplexity", sessionId, options);
 		const token = access?.accessToken;
@@ -99,14 +92,9 @@ export async function getAvailableAuthMethods(
 		// ignored
 	}
 
-	// 3. Direct API key
-	const apiConfig = await getApiConfig(authStorage, sessionId, options);
+	// 2. Direct API key
+	const apiConfig = await getApiKeyConfig(authStorage, sessionId, options);
 	if (apiConfig) methods.push(apiConfig);
-
-	// 4. Fallback to Perplexity free (anonymous)
-	if (methods.length === 0) {
-		methods.push({ type: "anonymous" });
-	}
 
 	return methods;
 }

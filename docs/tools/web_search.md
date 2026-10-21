@@ -31,7 +31,7 @@
   - `packages/coding-agent/src/web/search/providers/kimi.ts` — Kimi search adapter.
   - `packages/coding-agent/src/web/search/providers/mojeek.ts` — Mojeek browser-backed scraper (independent index).
   - `packages/coding-agent/src/web/search/providers/parallel.ts` — Parallel provider wrapper.
-  - `packages/coding-agent/src/web/search/providers/perplexity.ts` — Perplexity API / OAuth adapter.
+  - `packages/coding-agent/src/web/search/providers/perplexity.ts` — Perplexity Search API adapter.
   - `packages/coding-agent/src/web/search/providers/public.ts` — Public Web aggregate over all credential-free engines.
   - `packages/coding-agent/src/web/search/providers/searxng.ts` — self-hosted SearXNG adapter.
   - `packages/coding-agent/src/web/search/providers/startpage.ts` — Startpage (Google-proxied) form-flow scraper.
@@ -52,9 +52,9 @@
 | `query` | `string` | Yes | Raw query. The parser recognizes `site:`/`-site:`, `after:`/`before:`, `inurl:`, `intitle:`, `intext:`, `filetype:`, `lang:`/`language:`, quoted phrases, exclusions, `OR`, and directive aliases. Providers map these to native filters or supported syntax; body/language directives are not central source filters. |
 | `recency` | `"day" \| "week" \| "month" \| "year"` | No | Relative time filter. Implemented by Brave, DeepSeek, Perplexity, Parallel, Tavily, SearXNG, Kagi, TinyFish, Firecrawl, DuckDuckGo, Startpage, Google, and Mojeek. Public Web forwards it to its engines; other adapters ignore it. |
 | `limit` | `number` | No | Max results to return. Usually becomes the provider request's result-count parameter when `num_search_results` is absent. TinyFish uses it for paginated fetches before slicing. xAI uses the collapsed value only as a local cap on parsed sources/citations, defaulting to `10` and max `30`. |
-| `max_tokens` | `number` | No | Token cap passed through by Anthropic, Gemini, OpenAI Responses, xAI, and Perplexity API-key mode. Ignored by the other providers. |
-| `temperature` | `number` | No | Passed through only by Anthropic models that support sampling parameters, Gemini, xAI, and Perplexity API-key mode. Ignored or omitted by the other provider/model paths. |
-| `num_search_results` | `number` | No | Provider-native search breadth or local result cap, usually taking precedence over `limit`. Perplexity API and OpenRouter use it upstream; Anthropic, Gemini, Codex, OpenAI Responses, and xAI cap parsed sources locally. TinyFish sends a per-page count and paginates. See adapter limits below. |
+| `max_tokens` | `number` | No | Token cap passed through by Anthropic, Gemini, OpenAI Responses, and xAI. Ignored by the other providers. |
+| `temperature` | `number` | No | Passed through only by Anthropic models that support sampling parameters, Gemini, and xAI. Ignored or omitted by the other provider/model paths. |
+| `num_search_results` | `number` | No | Provider-native search breadth or local result cap, usually taking precedence over `limit`. Perplexity Search API and OpenRouter use it upstream; Anthropic, Gemini, Codex, OpenAI Responses, and xAI cap parsed sources locally. TinyFish sends a per-page count and paginates. See adapter limits below. |
 
 The schema does not impose integer, positivity, or range constraints on numeric fields; provider adapters apply their own caps. The built-in tool is read-approved, strict-schema, and discoverable.
 ## Outputs
@@ -113,7 +113,7 @@ Each provider search transport receives a hard timeout from `providers.webSearch
   - Provider choice is the `web` model role. A candidate is a catalog model: `web/<engine>` for a search engine (for example `web/brave`, `web/duckduckgo`), or a chat model whose catalog entry declares a `webSearch` grounding (for example `anthropic/claude-haiku-4-5`, bundled `openai/gpt-6-luna`, or `openai/gpt-5.6-luna`), in which case that model runs the grounded search.
   - **Primary**: `modelRoles.web`. If it is set, its first selector pattern that matches an available model becomes the first candidate and is explicit. If it is unset, the role resolves through the built-in `web` priority list.
   - **Fallbacks**: `retry.fallbackChains.web`. If it is set (even as an empty list), exactly those selectors follow the primary and are explicit. If it is unset, every entry of the built-in `web` priority list that matches an available model follows as a non-explicit candidate. Duplicate models are dropped, and a model listed by any explicit selector stays explicit.
-  - **Explicit vs automatic**: explicit candidates use `isExplicitlyAvailable()`, so Perplexity and Public Web can run their unauthenticated paths when you select them. Parallel, Exa, and Firecrawl run their keyless paths in either mode. Automatic candidates use `isAvailable()` and are skipped when their credentials are missing.
+  - **Explicit vs automatic**: explicit candidates use `isExplicitlyAvailable()`, so Public Web can run its unauthenticated path when you select it. Parallel, Exa, and Firecrawl run their keyless paths in either mode. Automatic candidates use `isAvailable()` and are skipped when their credentials are missing.
   - **Per-request selector**: `SearchQueryParams.model` (`omp q --model web/duckduckgo "…"`) replaces the whole chain with that single explicit candidate.
   - **xAI credential order**: xAI-grounded candidates are reordered among their own slots by provider priority, so an `xai-oauth` login runs before an `xai` API key wherever both appear (unless `modelProviderOrder` says otherwise); other candidates keep their positions.
   - **X-only queries**: without a per-request selector, a query whose `site:` values are all X hosts or that names `from:<handle>` authors moves the chain's xAI-grounded candidates to the front; a chain without one gets `xaiModelChain()`'s default xAI model prepended as an automatic candidate. Only xAI's `x_search` reaches X posts. The rest of the chain still follows. The tool description names these X operators only when an xAI-grounded model has credentials (`xSearchAvailable()`). That check runs once per process, at the first description read with a model registry, so the description and prompt cache stay stable; an xAI login or logout takes effect in the description after a restart (routing itself follows credentials live).
@@ -122,16 +122,10 @@ Each provider search transport receives a hard timeout from `providers.webSearch
 - **Provider timeout**: `providers.webSearchTimeoutSeconds` supplies the hard ceiling for each provider's search transport before the automatic chain advances. It defaults to `60`; invalid non-positive values fall back to that default and values above `300` are capped, while provider-specific upstream or aggregate limits may still be shorter.
 - **Provider adapters**
   - **Perplexity** — `packages/coding-agent/src/web/search/providers/perplexity.ts`
-    - Availability: tries cookies, stored OAuth, then direct API credentials. Anonymous search is admitted only when no credential method resolves and the candidate is explicit; failed authenticated methods do not append an anonymous attempt. Automatic admission requires direct Perplexity auth. OpenRouter keys are never borrowed; select an `openrouter/perplexity/…` model for OpenRouter grounding.
-    - Browser SSO: run `/login perplexity` (or select Perplexity in the setup wizard), then press Enter or enter `sso`. Complete sign-in in the dedicated browser window, choosing **Single sign-on (SSO)** for your organization. omp captures and validates the session automatically; no extension, DevTools, cookie copying, or logout from your normal browser is needed.
-    - Browser login requires a graphical session on the machine running omp. It uses an isolated Chromium profile and incognito context, preserves sandbox and TLS checks, runs outside Chromium's automation mode (Google sign-in rejects automation-controlled browsers), and closes the browser when login finishes, is cancelled, or reaches the five-minute timeout. Microsoft Edge cannot launch outside automation mode, so when Edge is the resolved browser (including via `PUPPETEER_EXECUTABLE_PATH`) sign-in uses omp's Chrome for Testing download instead. Press Escape in omp to cancel. Profile cleanup uses the existing retry-and-warn behavior if the operating system keeps files locked.
-    - The saved session uses the existing Perplexity subscription, including an Enterprise seat; browser SSO does not switch to separately billed API credentials. Sign in again if Perplexity expires or revokes the session. Enter `email` to use the existing email-code and authenticator-code flow instead.
-    - Legacy `ai.perplexity.mac` sessions may still be borrowed before the login prompt. Start omp with `PI_AUTH_NO_BORROW=1` to skip borrowing. Newer Mac app sessions in the restricted Keychain are not borrowed.
-    - SDK hosts can provide `OAuthController.onBrowserSession` to return the first non-empty cookie value matching `request.cookieNames`, checked in preference order. The callback returns the value privately; pi-ai validates it without importing browser automation. Hosts without that callback retain the email-code flow. RPC login does not launch a browser.
-    - OAuth/cookie/anonymous mode: POSTs to `https://www.perplexity.ai/rest/sse/perplexity_ask`, consumes SSE, merges partial events, extracts answer and source URLs, sets `authMode: "oauth"` (`"anonymous"` for the unauthenticated fallback).
-    - API-key mode: streams `https://api.perplexity.ai/chat/completions` with model default `sonar-pro` (`PI_PERPLEXITY_API_MODEL` can override it), `search_mode: "web"`, search breadth, and token/sampling controls. Native domain/date/language filters are derived from the query; absolute dates take precedence over recency.
-    - `num_search_results` controls upstream API breadth only in API-key mode. `limit` is preserved separately as `num_results` and slices returned `sources` after parsing in both auth modes.
-    - Output may include `answer`, `sources`, `citations`, `usage`, `model`, `requestId`, `authMode`.
+    - Availability: `PERPLEXITY_API_KEY` or a stored `perplexity` API key whose origin is not OAuth. Without one the provider is unavailable, including explicit selection, so the chain advances to the next configured provider. `/login perplexity` captures a consumer subscription session, not an `api.perplexity.ai` key, and is therefore refused.
+    - Querying: `POST https://api.perplexity.ai/search` with `search_type: "fast"` (Photon Fast Search, $1/1k requests), `search_context_size: "medium"`, and `max_results` from `num_search_results ?? limit` (default `10`, max `20`). Query directives map to native filters: `search_domain_filter`, `search_after_date_filter`/`search_before_date_filter`, `search_language_filter`, and `search_recency_filter` (omitted when absolute bounds are present).
+    - `max_tokens` and `temperature` are not forwarded: the Search API has no chat-completion sampling controls, and `search_context_size` cannot be combined with an explicit token budget.
+    - Output: ranked `sources` from `results[]`, `requestId`, `authMode: "api_key"`. There is no synthesized `answer`.
   - **Gemini** — `packages/coding-agent/src/web/search/providers/gemini.ts`
     - Availability: OAuth credentials in `agent.db` for `google-gemini-cli` / `google-antigravity`, or a Google Developer API key.
     - Querying: SSE `streamGenerateContent` with Google Search grounding at the selected model's endpoint. Cloud Code Assist auth uses `withOAuthAccess`; developer API auth uses the model-registry resolver. HTTP retries use up to four attempts with exponential/server-provided delays capped at five minutes, bounded by the transport signal.
@@ -271,7 +265,7 @@ Each provider search transport receives a hard timeout from `providers.webSearch
 ## Side Effects
 - Network
   - Calls one or more external search providers over HTTPS until one succeeds or all fail.
-  - Provider-specific transports include JSON POST (including OpenAI Responses), JSON GET, SSE streaming (Perplexity OAuth/API, Gemini, Codex), and JSON-RPC over HTTP (Z.AI).
+  - Provider-specific transports include JSON POST (including OpenAI Responses), JSON GET, SSE streaming (Gemini, Codex), and JSON-RPC over HTTP (Z.AI).
 - Subprocesses / native bindings
   - Most HTTP/API adapters spawn nothing. Google, Ecosia, and Mojeek first try a plain fetch, but failed, non-2xx, or challenged production responses can acquire the project-shared broker-owned headless Chromium. Hosts without a CLI worker entry (such as an embedded SDK host) instead launch process-local Chromium.
   - This fallback can start a Chromium process and create its browser-profile lifecycle. On first browser use it can also download Chromium into the omp Puppeteer cache unless a system Chromium or `PUPPETEER_EXECUTABLE_PATH` is available. The search adapter itself uses no native binding.
@@ -300,7 +294,7 @@ Each provider search transport receives a hard timeout from `providers.webSearch
 - SearXNG result count: default `10`, max `20` (`packages/coding-agent/src/web/search/providers/searxng.ts`).
 - OpenAI API local sources/citations cap: `num_search_results` before `limit`, default `10`, max `100`; the count is not sent upstream (`packages/coding-agent/src/web/search/providers/openai.ts`).
 - xAI local sources/citations cap: `num_search_results` before `limit`, omitted/invalid/zero => default `10`, max `30`; the count is not sent upstream (`packages/coding-agent/src/web/search/providers/xai.ts`).
-- Perplexity API-key mode defaults: `max_tokens = 8192`, `temperature = 0.2`, `num_search_results = 20` (`packages/coding-agent/src/web/search/providers/perplexity.ts`).
+- Perplexity Search API result count: default `10`, max `20`; fixed `search_type: "fast"` and `search_context_size: "medium"` (`packages/coding-agent/src/web/search/providers/perplexity.ts`).
 - Anthropic defaults: `DEFAULT_MAX_TOKENS = 4096` when the provider omits `max_tokens` (`packages/coding-agent/src/web/search/providers/anthropic.ts`).
 - Gemini HTTP retries: up to `3` retries, exponential base delay `1000` ms, each retry delay capped at `5 * 60 * 1000` ms; the transport abort signal bounds attempts and delays.
 
@@ -308,10 +302,10 @@ Each provider search transport receives a hard timeout from `providers.webSearch
 - Tool-level no-candidate case returns a normal tool result with `Error: No web search model configured.` (or `No web search model matches selector "<model>".`); it does not throw.
 - Tool-level all-failed case also returns a normal tool result with `Error: ...`; the message is either the single normalized provider error or a semicolon-separated summary of all failed providers.
 - Provider adapters usually throw `SearchProviderError(provider, message, status)` for HTTP or protocol failures.
-- Availability is provider-specific: most credentialed adapters inspect AuthStorage, while keyless engines and explicitly selected Perplexity/Public Web have separate admission rules.
+- Availability is provider-specific: most credentialed adapters inspect AuthStorage, while keyless engines and explicitly selected Public Web have separate admission rules.
 - Per-provider notable failures:
   - Anthropic: missing credentials throw a plain `Error`; a `404` is remapped to a special final message by `formatSearchProviderFailure()`.
-  - Perplexity: no admitted auth method raises `SearchProviderError("perplexity", ..., 401)`; ask-stream `error_code` events also become provider errors.
+  - Perplexity: a missing Search API key raises `SearchProviderError("perplexity", ..., 401)`; HTTP failures are classified by the shared provider error helper.
   - Gemini: auth refresh and HTTP retries are internal; exhausted failures surface through the shared provider failure handling.
   - Codex and Gemini both fail if the HTTP response has no body after a `200`.
   - Z.AI treats malformed SSE/JSON-RPC payloads as provider errors and retries only argument-shape failures across request variants.
@@ -320,7 +314,7 @@ Each provider search transport receives a hard timeout from `providers.webSearch
 ## Notes
 - The model-facing schema does not expose a provider or model; CLI/internal callers can pin one through `SearchQueryParams.model`.
 - `executeSearch()` loads provider modules lazily as the chain reaches them. Provider instances are cached per id (`packages/coding-agent/src/web/search/provider.ts`), and asking for labels via `getSearchProviderLabel()` does not trigger imports.
-- Most providers treat `limit` and `num_search_results` as the same number because adapters pass `params.numSearchResults ?? params.limit`. Perplexity preserves both concepts. TinyFish uses the collapsed value as a local cap, serializes `num_results` per page, and paginates when more results are needed. xAI uses it only to cap parsed sources/citations (`10` default, `30` max).
+- Most providers treat `limit` and `num_search_results` as the same number because adapters pass `params.numSearchResults ?? params.limit`. TinyFish uses the collapsed value as a local cap, serializes `num_results` per page, and paginates when more results are needed. xAI uses it only to cap parsed sources/citations (`10` default, `30` max).
 - `recency` has native or engine-query mappings in Brave, DeepSeek, Perplexity, Parallel, Tavily, SearXNG, Kagi, TinyFish, Firecrawl, DuckDuckGo, Startpage, Google, and Mojeek. xAI retains absolute query dates as hints but ignores the separate recency field; Ecosia ignores it. Public Web forwards the request to its engines.
 - `SEARCH_PROVIDER_LABELS` in `packages/tui/src/tools/web-search-types.ts` is the id→label registry for every search implementation (engines and groundings); provider ids, `SearchResponse`, and the transcript renderer all derive from it. Selection itself lives only in the `web` model role.
 - The credential-free scrapers close the auto chain: Startpage and DuckDuckGo precede the browser-backed Ecosia, Google, and Mojeek paths; `public` is listed last and never auto-selected.

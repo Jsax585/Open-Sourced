@@ -8,7 +8,6 @@ import { getSearchProvider } from "@oh-my-pi/pi-coding-agent/web/search/provider
 import { createInMemoryAuthStorage } from "../../helpers/agent-session-setup";
 
 const originalPerplexityApiKey = process.env.PERPLEXITY_API_KEY;
-const originalPerplexityCookies = process.env.PERPLEXITY_COOKIES;
 const storages = new Set<AuthStorage>();
 
 function restoreEnv(key: string, value: string | undefined): void {
@@ -29,7 +28,6 @@ afterEach(() => {
 	for (const authStorage of storages) authStorage.close();
 	storages.clear();
 	restoreEnv("PERPLEXITY_API_KEY", originalPerplexityApiKey);
-	restoreEnv("PERPLEXITY_COOKIES", originalPerplexityCookies);
 });
 
 describe("web model role resolution", () => {
@@ -88,26 +86,26 @@ describe("web model role resolution", () => {
 
 describe("web model candidate availability", () => {
 	it("skips anonymous explicit-only engines in the default chain", async () => {
-		delete process.env.PERPLEXITY_API_KEY;
-		delete process.env.PERPLEXITY_COOKIES;
 		const { authStorage, pool } = createRuntime();
-		const model = pool.find(candidate => candidate.provider === "web" && candidate.id === "perplexity");
-		if (!model) throw new Error("Bundled Perplexity search model missing");
+		const model = pool.find(candidate => candidate.provider === "web" && candidate.id === "public");
+		if (!model) throw new Error("Bundled Public Web search model missing");
 		const provider = await getSearchProvider(model.id);
 
 		expect(await provider.isAvailable(authStorage, model)).toBe(false);
 		expect(await provider.isExplicitlyAvailable(authStorage, model)).toBe(true);
 	});
 
-	it("admits a configured anonymous engine through explicit availability", async () => {
+	it("keeps a configured Perplexity candidate unavailable until its API key resolves", async () => {
 		delete process.env.PERPLEXITY_API_KEY;
-		delete process.env.PERPLEXITY_COOKIES;
 		const { authStorage, pool, settings } = createRuntime({ modelRoles: { web: "web/perplexity" } });
 		const [candidate] = resolveRoleChain("web", settings, pool);
 		if (!candidate) throw new Error("Configured Perplexity candidate missing");
 		const provider = await getSearchProvider(candidate.model.id);
 
 		expect(candidate.explicit).toBe(true);
+		expect(await provider.isExplicitlyAvailable(authStorage, candidate.model)).toBe(false);
+
+		process.env.PERPLEXITY_API_KEY = "pplx-test-key";
 		expect(await provider.isExplicitlyAvailable(authStorage, candidate.model)).toBe(true);
 	});
 });
