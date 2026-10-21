@@ -1,6 +1,7 @@
 import { beforeAll, expect, test } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import {
 	ModelBrowser,
 	type ModelBrowserItem,
@@ -17,8 +18,8 @@ beforeAll(async () => {
 /** Rendered rows before the list window: search row + blank. */
 const LIST_ROW_START = 2;
 
-function model(provider: string, id: string, extra: Partial<Model> = {}): Model {
-	return buildModel({
+function model(provider: string, id: string, extra: Partial<ModelSpec> = {}): Model {
+	const spec: ModelSpec = {
 		id,
 		name: id,
 		api: "openai-completions",
@@ -30,7 +31,8 @@ function model(provider: string, id: string, extra: Partial<Model> = {}): Model 
 		contextWindow: 200_000,
 		maxTokens: 8192,
 		...extra,
-	} as Parameters<typeof buildModel>[0]);
+	};
+	return buildModel(spec);
 }
 
 function source(): ModelBrowserSource {
