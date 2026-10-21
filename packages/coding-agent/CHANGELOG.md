@@ -36,6 +36,7 @@
 - Sessions with computer use enabled receive the desktop guide before the first computer call.
 - The Tern interface now presents warnings, errors, update notices, file reads, and completed background work consistently with chat messages.
 - Muted live voice sessions remain visibly muted while the voice model starts work.
+- `bash` output that prints file lines with their numbers (`grep -n`, `rg -n`, `cat -n`, `nl`) now ends with those files' edit tags, so `edit` can change the printed lines without a `read` first ([#16576](https://github.com/can1357/oh-my-pi/pull/16576) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
 
@@ -435,10 +436,6 @@
 ### Added
 
 - `providers.cacheRetention: long` now keeps OpenAI GPT-5.6+ prompt caches for 12 hours (Responses API; cache writes cost 2.5× input instead of 1.25×)
-
-### Changed
-
-- `bash` output that prints file lines with their numbers (`grep -n`, `rg -n`, `cat -n`, `nl`) now ends with those files' edit tags, so `edit` can change the printed lines without a `read` first ([#16576](https://github.com/can1357/oh-my-pi/pull/16576) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
 
