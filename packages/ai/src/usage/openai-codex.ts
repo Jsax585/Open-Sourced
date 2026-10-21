@@ -231,6 +231,11 @@ function parseCodexCredits(payload: Record<string, unknown>): ParsedCodexCredits
 	};
 }
 
+function codexCreditsEnabled(payload: unknown): boolean | undefined {
+	if (!isRecord(payload) || !isRecord(payload.credits)) return undefined;
+	return payload.credits.has_credits === true || payload.credits.unlimited === true;
+}
+
 /**
  * True when paid credits can still fund plan-window overage. Codex CLI never
  * gates on `/wham/usage`, so once the plan allowance is spent it keeps working
@@ -703,6 +708,7 @@ export const openaiCodexUsageProvider: UsageProvider = {
 			}
 		}
 		const daybreak = await daybreakAccess;
+		const creditsEnabled = codexCreditsEnabled(payload);
 		const report: UsageReport = {
 			provider: "openai-codex",
 			fetchedAt: nowMs,
@@ -713,6 +719,8 @@ export const openaiCodexUsageProvider: UsageProvider = {
 				...buildPlanMeterState(parsed?.allowed, parsed?.limitReached, creditOverage),
 				creditOverage,
 				creditsUnlimited: credits?.unlimited === true,
+				...(creditsEnabled === undefined ? {} : { creditsEnabled }),
+				payloadFetchedAt: nowMs,
 				email,
 				accountId,
 				meterStates,
@@ -828,7 +836,17 @@ export const codexRankingStrategy: CredentialRankingStrategy = {
 	extraUsage(report, context) {
 		if (isCodexSparkRequest(context)) return undefined;
 		const credits = report.limits.find(limit => limit.id === "openai-codex:credits");
-		if (!credits || credits.amount.unit !== "credits") return undefined;
+		if (!credits || credits.amount.unit !== "credits") {
+			return report.metadata?.creditsEnabled === false
+				? {
+						enabled: false,
+						exhausted: false,
+						unit: "credits",
+						uncapped: false,
+						capacity: "balance",
+					}
+				: undefined;
+		}
 		const remaining = credits.amount.remaining;
 		return {
 			enabled: true,
@@ -836,6 +854,8 @@ export const codexRankingStrategy: CredentialRankingStrategy = {
 			unit: "credits",
 			...(typeof remaining === "number" && Number.isFinite(remaining) ? { remaining } : {}),
 			uncapped: report.metadata?.creditsUnlimited === true,
+			capacity: "balance",
+			limitId: credits.id,
 		};
 	},
 	// A `usage_limit_reached` from a Spark request means the Spark meter is

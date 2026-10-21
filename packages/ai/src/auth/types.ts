@@ -60,6 +60,41 @@ export type UsageFundingTier = "allowance" | "extra" | "extra-past-floor" | "spe
 /** Whether selection may spend paid usage that is below a configured floor or budget. */
 export type ExtraUsageAllowance = "to-floor" | "past-floor";
 
+/** Why paid usage cannot serve automatically at the configured limit. */
+export type PaidUsageStop =
+	| "disabled"
+	| "cap-reached"
+	| "refused"
+	| "floor"
+	| "floor-unreported"
+	| "budget"
+	| "budget-unreported";
+
+/** Provider-reported paid capacity and the account-policy result selection would use. */
+export interface PaidUsageView {
+	limitId?: string;
+	unit: "usd" | "credits";
+	capacity: "spend-cap" | "balance";
+	/** Selection's result once plan allowance is spent, stopping paid usage at the floor by default. */
+	state: "available" | "past-floor" | "unavailable";
+	/** First applicable reason in paid-usage rule order when the state is not available. */
+	stop?: PaidUsageStop;
+	used?: number;
+	cap?: number;
+	remaining?: number;
+	uncapped: boolean;
+	floor?: number;
+	floorIgnored: boolean;
+	budget?: number;
+	budgetLeft?: number;
+	headroom?: number;
+	boundBy?: "floor" | "budget" | "provider";
+	unbounded: boolean;
+	blockedUntil?: number;
+	asOf?: number;
+	stale: boolean;
+}
+
 /** Priority and reserve policy for a provider account. */
 export interface AuthAccountPolicy {
 	readonly provider: string;
@@ -1242,6 +1277,12 @@ export interface UsageApi {
 		baseUrlResolver?: (provider: Provider) => string | undefined;
 		signal?: AbortSignal;
 	}): Promise<UsageReport[] | null>;
+	/**
+	 * Paid extra-usage data per input report, attributed through the same
+	 * credential policy and exact paid-usage block selection reads. This never
+	 * fetches provider data and preserves the input order.
+	 */
+	paidUsage(reports: readonly UsageReport[], options?: { nowMs?: number }): (PaidUsageView | undefined)[];
 	/** Ingest provider usage limits from response headers. */
 	ingestHeaders(
 		provider: Provider,

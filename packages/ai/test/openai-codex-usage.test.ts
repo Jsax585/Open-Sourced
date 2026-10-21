@@ -183,6 +183,8 @@ describe("openai-codex usage parser", () => {
 			limitReached: false,
 			creditOverage: true,
 			creditsUnlimited: false,
+			creditsEnabled: true,
+			payloadFetchedAt: expect.any(Number),
 		});
 		expect(report ? codexRankingStrategy.extraUsage?.(report, { modelId: "gpt-5.3-codex" }) : undefined).toEqual({
 			enabled: true,
@@ -190,6 +192,8 @@ describe("openai-codex usage parser", () => {
 			unit: "credits",
 			remaining: 489.25,
 			uncapped: false,
+			capacity: "balance",
+			limitId: "openai-codex:credits",
 		});
 		expect(
 			report ? codexRankingStrategy.extraUsage?.(report, { modelId: "gpt-5.3-codex-spark" }) : undefined,
@@ -226,6 +230,16 @@ describe("openai-codex usage parser", () => {
 			expect(creditLimit).toBeUndefined();
 		}
 		expect(report?.metadata).toMatchObject({ allowed: false, limitReached: true });
+		if (_name === "no credit balance") {
+			expect(report?.metadata).toMatchObject({ creditsEnabled: false, payloadFetchedAt: expect.any(Number) });
+			expect(report ? codexRankingStrategy.extraUsage?.(report, { modelId: "gpt-5.3-codex" }) : undefined).toEqual({
+				enabled: false,
+				exhausted: false,
+				unit: "credits",
+				uncapped: false,
+				capacity: "balance",
+			});
+		}
 	});
 
 	it("surfaces unlimited credits as uncapped paid usage", async () => {
@@ -247,12 +261,14 @@ describe("openai-codex usage parser", () => {
 		);
 
 		expect(report?.limits.find(limit => limit.id === "openai-codex:credits")?.amount).toEqual({ unit: "credits" });
-		expect(report?.metadata).toMatchObject({ creditsUnlimited: true });
+		expect(report?.metadata).toMatchObject({ creditsUnlimited: true, creditsEnabled: true });
 		expect(report ? codexRankingStrategy.extraUsage?.(report, { modelId: "gpt-5.3-codex" }) : undefined).toEqual({
 			enabled: true,
 			exhausted: false,
 			unit: "credits",
 			uncapped: true,
+			capacity: "balance",
+			limitId: "openai-codex:credits",
 		});
 	});
 
