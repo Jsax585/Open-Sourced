@@ -19,12 +19,17 @@ import {
 import { normalizeToLF } from "../edit/normalize";
 import type { FileMentionMessage } from "../session/messages";
 import {
+	type ByteTruncationResult,
 	DEFAULT_MAX_BYTES,
 	formatHeadTruncationNotice,
 	truncateHead,
 	truncateHeadBytes,
 } from "@oh-my-pi/pi-tui/tools/streaming-output";
-import { resolveReadPath } from "../tools/path-utils";
+import { resolveReadPath, splitPathAndSelPreferringLiteral } from "../tools/path-utils";
+import { type ParsedSelector, parseSel, resolveTailSelector } from "../tools/read-selector";
+import { type LineRange, parseLineRanges } from "@oh-my-pi/pi-tui/tools/line-ranges";
+import { splitPathAndSel } from "@oh-my-pi/pi-tui/tools/read";
+import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { formatDimensionNote, resizeImage } from "./image-resize";
 import { VideoError, buildVideoContactSheetPng, formatVideoDetails, probeVideo, videoMimeForPath } from "./video";
 import { createVideoPreviewImage, isVideoPath } from "@oh-my-pi/pi-tui/prompt/video";
@@ -34,6 +39,7 @@ const FILE_MENTION_REGEX = /@(?:"([^"]+)"|'([^']+)'|([^\s@]+))/g;
 const LEADING_PUNCTUATION_REGEX = /^[`"'([{<]+/;
 const TRAILING_PUNCTUATION_REGEX = /[)\]}>.,;:!?"'`]+$/;
 const MENTION_BOUNDARY_REGEX = /[\s([{<"'`]/;
+const QUOTED_SELECTOR_TAIL_RE = /^:([^\s]+)/;
 const DEFAULT_DIR_LIMIT = 500;
 
 // Avoid OOM when users @mention very large files. Above these limits we skip
@@ -71,34 +77,165 @@ async function resolveMentionPath(
 	}
 }
 
-function buildTextOutput(textContent: string): { output: string; lineCount: number } {
+/** A mention selector that picks lines: ranges, a `-N` tail, or a list mixing both. */
+type LineSelector = Extract<ParsedSelector, { kind: "lines" | "tail" }>;
+
+interface ResolvedMentionPath {
+	displayPath: string;
+	filePath: string;
+	/** Line selection of the mention; `undefined` when the whole file is injected. */
+	selector: LineSelector | undefined;
+}
+
+/**
+ * Parse a mention selector with the read tool's grammar. A bare `N` is that one
+ * line (`@a.ts:15`) rather than the read tool's "from N to EOF"; `15-` keeps the
+ * explicit open-ended form. Returns `undefined` for an absent selector, or
+ * `null` for malformed bounds (`:0`, `:3-1`, `:2+0`, `:-0`) and display-only
+ * selectors (`raw`, `conflicts`, `img`, alone or combined) so the caller drops
+ * the mention like any other unresolved reference — a mistyped range degrades
+ * to prose instead of the read tool's `ToolError` aborting prompt submission.
+ */
+function parseMentionSelector(sel: string | undefined): LineSelector | undefined | null {
+	if (!sel) return undefined;
+	try {
+		const ranges = parseLineRanges(sel, "single");
+		const parsed: ParsedSelector = ranges ? { kind: "lines", ranges } : parseSel(sel);
+		return (parsed.kind === "lines" || parsed.kind === "tail") && !parsed.raw ? parsed : null;
+	} catch (error) {
+		if (error instanceof ToolError) return null;
+		throw error;
+	}
+}
+
+async function resolveMention(filePath: string, cwd: string): Promise<ResolvedMentionPath | null> {
+	const split = await splitPathAndSelPreferringLiteral(filePath, cwd);
+	const resolved = await resolveMentionPath(split.path, cwd);
+	if (!resolved) return null;
+	const selector = parseMentionSelector(split.sel);
+	if (selector === null) return null;
+	return { displayPath: filePath, filePath: resolved.resolvedPath, selector };
+}
+
+interface SelectedText {
+	/** Selected rows rendered as `N${separator}line`. */
+	text: string;
+	/** Original 1-indexed line numbers actually retained, ascending. */
+	lineNumbers: number[];
+	/** Total line count of the source file. */
+	totalLines: number;
+}
+
+function formatSelectedLines(lines: readonly string[], lineNumbers: readonly number[], separator: string): string {
+	return lineNumbers.map(number => `${number}${separator}${lines[number - 1] ?? ""}`).join("\n");
+}
+
+/**
+ * Render the lines covered by `ranges`, numbered with their original
+ * 1-indexed positions. Hashline mode passes ":" (the anchor format the edit
+ * patcher expects under a `[path#tag]` header); plain mode keeps "|" so the
+ * separator never collides with a content colon.
+ */
+function selectTextRanges(lines: readonly string[], ranges: readonly LineRange[], separator: string): SelectedText {
+	const lineNumbers = ranges.flatMap(range => {
+		if (range.startLine > lines.length) return [];
+		const endLine = Math.min(range.endLine ?? lines.length, lines.length);
+		return Array.from({ length: endLine - range.startLine + 1 }, (_, i) => range.startLine + i);
+	});
+	return {
+		text: formatSelectedLines(lines, lineNumbers, separator),
+		lineNumbers,
+		totalLines: lines.length,
+	};
+}
+
+/** Hashline mode renders `N:line` rows (the edit-patcher anchor grammar under a `[path#tag]` header); plain mode keeps `N|line`. */
+function mentionSeparator(snapshotStore: EditStore | undefined): string {
+	return snapshotStore ? ":" : "|";
+}
+
+/** Build the partial-selection view for a mention, or `null` for whole-file. */
+function selectMentionLines(
+	normalized: string,
+	selector: LineSelector | undefined,
+	snapshotStore: EditStore | undefined,
+): SelectedText | null {
+	if (!selector) return null;
+	const lines = splitAddressableFileLines(normalized);
+	// A tail selector pins to absolute lines now that the line count is known.
+	const pinned = resolveTailSelector(selector, lines.length);
+	if (pinned.kind !== "lines") return null;
+	return selectTextRanges(lines, pinned.ranges, mentionSeparator(snapshotStore));
+}
+
+function wholeFileDisplayText(normalized: string, snapshotStore: EditStore | undefined): string {
+	return snapshotStore ? splitAddressableFileLines(normalized).join("\n") : normalized;
+}
+
+function buildMentionTextOutput(
+	normalized: string,
+	selection: SelectedText | null,
+	snapshotStore: EditStore | undefined,
+): { output: string; lineCount: number } {
+	if (selection) {
+		const textOutput = buildTextOutput(selection.text, {
+			startLine: selection.lineNumbers[0] ?? 1,
+			totalFileLines: selection.totalLines,
+		});
+		return { output: textOutput.output, lineCount: selection.lineNumbers.length };
+	}
+	const textOutput = buildTextOutput(wholeFileDisplayText(normalized, snapshotStore));
+	return { output: textOutput.output, lineCount: textOutput.lineCount };
+}
+
+function hashlineBody(output: string, selection: SelectedText | null): string {
+	return selection ? output : formatNumberedLines(output);
+}
+
+function withMentionSnapshot(
+	snapshotStore: EditStore | undefined,
+	absolutePath: string,
+	resolved: ResolvedMentionPath,
+	normalized: string,
+	selection: SelectedText | null,
+	output: string,
+): string {
+	if (!snapshotStore) return output;
+	const tag = snapshotStore.recordSnapshot(absolutePath, normalized);
+	// Partial views must record exactly the lines displayed so the patcher's
+	// unseen-line guard rejects edits anchored to hidden lines.
+	if (selection) snapshotStore.recordSeenLinesFromBody(absolutePath, tag, output);
+	return `${formatHashlineHeader(resolved.filePath, tag)}\n${hashlineBody(output, selection)}`;
+}
+
+function formatOversizedFirstLine(startLine: number, firstLineBytes: number, snippet: ByteTruncationResult): string {
+	const prefix = `[Line ${startLine} is ${formatBytes(firstLineBytes)}, exceeds ${formatBytes(
+		DEFAULT_MAX_BYTES,
+	)} limit.`;
+	if (snippet.text.length === 0) return `${prefix} Unable to display a valid UTF-8 snippet.]`;
+	return `${snippet.text}\n\n${prefix} Showing first ${formatBytes(snippet.bytes)} of the line.]`;
+}
+
+function buildTextOutput(
+	textContent: string,
+	options?: { startLine?: number; totalFileLines?: number },
+): { output: string; lineCount: number } {
 	const allLines = textContent.split("\n");
-	const totalFileLines = allLines.length;
+	const totalFileLines = options?.totalFileLines ?? allLines.length;
+	const startLine = options?.startLine ?? 1;
 	const truncation = truncateHead(textContent);
 
 	if (truncation.firstLineExceedsLimit) {
 		const firstLine = allLines[0] ?? "";
-		const firstLineBytes = Buffer.byteLength(firstLine, "utf-8");
 		const snippet = truncateHeadBytes(firstLine, DEFAULT_MAX_BYTES);
-		let outputText = snippet.text;
-
-		if (outputText.length > 0) {
-			outputText += `\n\n[Line 1 is ${formatBytes(firstLineBytes)}, exceeds ${formatBytes(
-				DEFAULT_MAX_BYTES,
-			)} limit. Showing first ${formatBytes(snippet.bytes)} of the line.]`;
-		} else {
-			outputText = `[Line 1 is ${formatBytes(firstLineBytes)}, exceeds ${formatBytes(
-				DEFAULT_MAX_BYTES,
-			)} limit. Unable to display a valid UTF-8 snippet.]`;
-		}
-
-		return { output: outputText, lineCount: totalFileLines };
+		const output = formatOversizedFirstLine(startLine, Buffer.byteLength(firstLine, "utf-8"), snippet);
+		return { output, lineCount: totalFileLines };
 	}
 
 	let outputText = truncation.content;
 
 	if (truncation.truncated) {
-		outputText += formatHeadTruncationNotice(truncation, { startLine: 1, totalFileLines });
+		outputText += formatHeadTruncationNotice(truncation, { startLine, totalFileLines });
 	}
 
 	return { output: outputText, lineCount: totalFileLines };
@@ -166,23 +303,32 @@ async function buildDirectoryListing(absolutePath: string): Promise<{ output: st
 
 /** Extract all @filepath mentions from text */
 export function extractFileMentions(text: string): string[] {
-	const matches = [...text.matchAll(FILE_MENTION_REGEX)];
-	const mentions: string[] = [];
-
-	for (const match of matches) {
-		const index = match.index ?? 0;
-		if (!isMentionBoundary(text, index)) continue;
-
-		const rawPath = match[1] ?? match[2] ?? match[3];
-		if (!rawPath) continue;
-
-		const cleaned = match[1] !== undefined || match[2] !== undefined ? rawPath.trim() : sanitizeMentionPath(rawPath);
-		if (!cleaned) continue;
-
-		mentions.push(cleaned);
-	}
-
+	const mentions = [...text.matchAll(FILE_MENTION_REGEX)].flatMap(match => {
+		if (!isMentionBoundary(text, match.index ?? 0)) return [];
+		return [cleanMentionCapture(match, text)].filter((cleaned): cleaned is string => cleaned !== null);
+	});
 	return [...new Set(mentions)];
+}
+
+/**
+ * Resolve one mention capture to a path (selector included), or `null` when
+ * the capture is not a usable mention.
+ */
+function cleanMentionCapture(match: RegExpMatchArray, text: string): string | null {
+	const rawPath = match[1] ?? match[2] ?? match[3];
+	if (!rawPath) return null;
+	if (match[1] === undefined && match[2] === undefined) return sanitizeMentionPath(rawPath);
+	const cleaned = rawPath.trim();
+	if (!cleaned) return null;
+	// The regex stops a quoted mention at its closing quote, so a typed
+	// selector (`@"My Folder/app.ts":10-20`) lands outside the capture;
+	// recover an immediately-following well-formed tail or the range is lost.
+	const tail = QUOTED_SELECTOR_TAIL_RE.exec(text.slice((match.index ?? 0) + match[0].length));
+	const sel = tail?.[1].replace(TRAILING_PUNCTUATION_REGEX, "");
+	if (!sel) return cleaned;
+	const withSel = `${cleaned}:${sel}`;
+	// A tail counts as a selector only when the read tool's own splitter peels exactly it off the path.
+	return splitPathAndSel(withSel).sel === sel ? withSel : cleaned;
 }
 
 /**
@@ -201,16 +347,19 @@ export async function generateFileMentionMessages(
 	const files: FileMentionMessage["files"] = [];
 
 	for (const filePath of filePaths) {
-		const resolved = await resolveMentionPath(filePath, cwd);
+		const resolved = await resolveMention(filePath, cwd);
 		if (!resolved) {
 			continue;
 		}
-		const { resolvedPath, absolutePath } = resolved;
+		const absolutePath = resolveReadPath(resolved.filePath, cwd);
 		try {
 			const stat = await Bun.file(absolutePath).stat();
+			// Range/tail selectors on a directory are a no-op: listings have
+			// no line semantics to select from.
+			if (stat.isDirectory() && resolved.selector) continue;
 			if (stat.isDirectory()) {
 				const { output, lineCount } = await buildDirectoryListing(absolutePath);
-				files.push({ path: resolvedPath, content: output, lineCount });
+				files.push({ path: resolved.displayPath, content: output, lineCount });
 				continue;
 			}
 
@@ -219,7 +368,7 @@ export async function generateFileMentionMessages(
 			if (mimeType) {
 				if (stat.size > MAX_AUTO_READ_IMAGE_BYTES) {
 					files.push({
-						path: resolvedPath,
+						path: resolved.displayPath,
 						content: `(skipped auto-read: too large, ${formatBytes(stat.size)})`,
 						byteSize: stat.size,
 						skippedReason: "tooLarge",
@@ -249,7 +398,7 @@ export async function generateFileMentionMessages(
 					}
 				}
 
-				files.push({ path: resolvedPath, content: dimensionNote ?? "", image });
+				files.push({ path: resolved.displayPath, content: dimensionNote ?? "", image });
 				continue;
 			}
 
@@ -268,16 +417,21 @@ export async function generateFileMentionMessages(
 							// Keep the extracted sheet when resize fails.
 						}
 					}
-					const details = formatVideoDetails(resolvedPath, meta, stat.size, videoMimeForPath(absolutePath));
+					const details = formatVideoDetails(
+						resolved.displayPath,
+						meta,
+						stat.size,
+						videoMimeForPath(absolutePath),
+					);
 					files.push({
-						path: resolvedPath,
+						path: resolved.displayPath,
 						content: `${details}\nPreview grid: ${sheet.thumbs} frames (${sheet.cols}x${sheet.rows})${dimensionNote ? `\n${dimensionNote}` : ""}`,
 						image: createVideoPreviewImage(image, absolutePath),
 					});
 				} catch (error) {
 					const reason = error instanceof VideoError ? error.message : "video preview failed";
 					files.push({
-						path: resolvedPath,
+						path: resolved.displayPath,
 						content: `(skipped auto-read: ${reason})`,
 						byteSize: stat.size,
 						skippedReason: "binary",
@@ -288,7 +442,7 @@ export async function generateFileMentionMessages(
 
 			if (stat.size > MAX_AUTO_READ_TEXT_BYTES) {
 				files.push({
-					path: resolvedPath,
+					path: resolved.displayPath,
 					content: `(skipped auto-read: too large, ${formatBytes(stat.size)})`,
 					byteSize: stat.size,
 					skippedReason: "tooLarge",
@@ -297,7 +451,7 @@ export async function generateFileMentionMessages(
 			}
 			if (await isProbablyBinary(absolutePath)) {
 				files.push({
-					path: resolvedPath,
+					path: resolved.displayPath,
 					content: `(skipped auto-read: binary file, ${formatBytes(stat.size)})`,
 					byteSize: stat.size,
 					skippedReason: "binary",
@@ -308,15 +462,18 @@ export async function generateFileMentionMessages(
 			const content = await Bun.file(absolutePath).text();
 			const snapshotStore = options?.useHashLines ? options.snapshotStore : undefined;
 			const normalized = snapshotStore ? normalizeToLF(content) : content;
-			const displayText = snapshotStore ? splitAddressableFileLines(normalized).join("\n") : normalized;
-			const textOutput = buildTextOutput(displayText);
-			let { output } = textOutput;
-			const { lineCount } = textOutput;
-			if (snapshotStore) {
-				const tag = snapshotStore.recordSnapshot(absolutePath, normalized);
-				output = `${formatHashlineHeader(resolvedPath, tag)}\n${formatNumberedLines(output)}`;
-			}
-			files.push({ path: resolvedPath, content: output, lineCount });
+			const selection = selectMentionLines(normalized, resolved.selector, snapshotStore);
+			if (selection && selection.lineNumbers.length === 0) continue;
+			const { output: selectedOutput, lineCount } = buildMentionTextOutput(normalized, selection, snapshotStore);
+			const output = withMentionSnapshot(
+				snapshotStore,
+				absolutePath,
+				resolved,
+				normalized,
+				selection,
+				selectedOutput,
+			);
+			files.push({ path: resolved.displayPath, content: output, lineCount });
 		} catch {
 			// File doesn't exist or isn't readable - skip silently
 		}

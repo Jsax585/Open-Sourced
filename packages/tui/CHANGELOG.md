@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `@` file completions now preserve a typed line-selector suffix (`@path:1-10`, `@path:-60`) when accepting a stale suggestion, while trailing filename characters no longer override the selected completion ([#10623](https://github.com/can1357/oh-my-pi/pull/10623) by [@kml93](https://github.com/kml93)).
+
 ### Fixed
 
 - Fixed the `/agents` and `/models` hubs in Tern squeezing the left sidebar as long lines (such as a streaming new-agent draft) widen the body pane
