@@ -3536,10 +3536,15 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					error: caught instanceof Error ? caught.message : String(caught),
 				});
 			} finally {
-				// A focused-user result can complete without a registered wake job;
-				// enqueue its delivery without reserving an execution slot.
+				// A turn the operator typed, or the owner's steer prompted, has no IRC
+				// waker to relay it. When no wake job could be registered (the owner's
+				// job slots are full), its answer is delivered without reserving an
+				// execution slot: an unstructured agent's final message, or a
+				// structured agent's yield.
 				const messageResult =
-					(userPrompted || ownerPrompted) && options.structured === false && result?.outputPath !== undefined;
+					(userPrompted || ownerPrompted) &&
+					result !== undefined &&
+					(options.structured === false ? result.outputPath !== undefined : yielded);
 				// What became of the turn's changes is part of its outcome, so it is
 				// settled before anyone is told the turn ended, and only for a turn
 				// whose outcome reaches the owner: a change to the owner's checkout
@@ -3574,8 +3579,13 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				const cancelledWhileSettling = notice.trim() !== "" && jobCancel.signal.aborted;
 				if (messageResult && !wakeJob && ownerId && session.asyncJobManager && result) {
 					const text = `${formatTaskResultSummary(result, { totalDurationMs: result.durationMs })}${notice}`;
+					const structured = result.structuredOutput;
 					try {
-						session.asyncJobManager.publishCompleted("task", id, { text }, { id, agentId: id, ownerId });
+						session.asyncJobManager.publishCompleted("task", id, structured ? { text, structured } : { text }, {
+							id,
+							agentId: id,
+							ownerId,
+						});
 					} catch (error) {
 						logger.warn("User-resumed subagent result delivery failed", {
 							id,

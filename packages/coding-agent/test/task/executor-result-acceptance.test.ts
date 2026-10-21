@@ -878,7 +878,7 @@ describe("runSubprocess result acceptance", () => {
 		/** A kept-alive subagent owned by `Parent`, a registered peer, and a settle hook that reports {@link NOTICE}. */
 		function setUp(
 			onSettled: (superseded: () => boolean) => Promise<string> = async () => NOTICE,
-			monitorOptions: { structured?: boolean; artifactsDir?: string } = {},
+			monitorOptions: { structured?: boolean; artifactsDir?: string; outputSchema?: unknown } = {},
 		) {
 			const manager = new AsyncJobManager({});
 			const harness = createHarness({ asyncJobManager: manager });
@@ -1014,6 +1014,75 @@ describe("runSubprocess result acceptance", () => {
 			} finally {
 				tempDir.removeSync();
 			}
+		});
+
+		/** An operator-prompted structured agent whose owner collects what its yields deliver. */
+		function structuredOperatorTurn() {
+			const setup = setUp(undefined, {
+				outputSchema: { type: "object", properties: { report: { type: "string" } }, required: ["report"] },
+			});
+			const delivered: string[] = [];
+			setup.manager.registerDeliverySink("Parent", (_jobId, text) => {
+				delivered.push(text);
+			});
+			return { ...setup, delivered };
+		}
+
+		it("settles an operator-prompted structured yield and delivers it when the owner's job slots are full", async () => {
+			const { manager, harness, observer, settle, delivered } = structuredOperatorTurn();
+			// No slot for the wake job: the yield is the only word of this turn the owner can get.
+			vi.spyOn(manager, "register").mockImplementation(() => {
+				throw new Error("running-job limit reached");
+			});
+			try {
+				const finish = observer([userRecord("fix it")]);
+				harness.emitTerminalYield({ report: "fixed" });
+				await finish?.(undefined);
+				await manager.drainDeliveries({ timeoutMs: 1000 });
+
+				expect(settle).toHaveBeenCalledTimes(1);
+				expect(delivered).toHaveLength(1);
+				expect(delivered[0]).toContain("fixed");
+				expect(delivered[0]?.endsWith(NOTICE)).toBe(true);
+				// The yield's structured payload travels with the text, as it does through a wake job.
+				expect(manager.getJob(AGENT_ID)?.structured).toMatchObject({ data: { report: "fixed" } });
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("delivers an operator-prompted structured yield once, through the wake job, when a slot is free", async () => {
+			const { manager, harness, observer, settle, delivered } = structuredOperatorTurn();
+			try {
+				const finish = observer([userRecord("fix it")]);
+				harness.emitTerminalYield({ report: "fixed" });
+				await finish?.(undefined);
+				await manager.waitForAll();
+				await manager.drainDeliveries({ timeoutMs: 1000 });
+
+				expect(settle).toHaveBeenCalledTimes(1);
+				// The wake job carried the yield, so the slot-free fallback must not publish it again.
+				expect(delivered).toHaveLength(1);
+				expect(delivered[0]).toContain("fixed");
+				expect(delivered[0]?.endsWith(NOTICE)).toBe(true);
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("does not land an operator-prompted structured yield when the owner's job manager can no longer take it", async () => {
+			const { manager, harness, observer, settle, delivered } = structuredOperatorTurn();
+			vi.spyOn(manager, "register").mockImplementation(() => {
+				throw new Error("running-job limit reached");
+			});
+			const finish = observer([userRecord("fix it")]);
+			harness.emitTerminalYield({ report: "fixed" });
+			// The owner is shutting down while the turn finishes: a delivery would be refused.
+			await manager.dispose({ timeoutMs: 1000 });
+			await finish?.(undefined);
+
+			expect(settle).not.toHaveBeenCalled();
+			expect(delivered).toEqual([]);
 		});
 
 		it("does not land a turn whose owner cancelled the wake job before settlement", async () => {
