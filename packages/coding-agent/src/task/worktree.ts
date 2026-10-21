@@ -588,6 +588,15 @@ export async function applyNestedPatches(
 			const applied: string[] = [];
 			try {
 				for (const { patch } of repoPatches) {
+					// A patch the checkout already holds, applied and committed by hand, is landed. Git
+					// rejects it, and retrying it would keep every later delta of this repository
+					// cumulative with that edit. Same rule as a root patch: it must reverse cleanly and
+					// not apply forward, so one that only matches somewhere else by fuzz is applied.
+					const [alreadyApplied, forwardApplies] = await Promise.all([
+						repository.canApplyPatch(patch, { reverse: true }).catch(() => false),
+						repository.canApplyPatch(patch, {}).catch(() => false),
+					]);
+					if (alreadyApplied && !forwardApplies) continue;
 					await repository.applyPatch(patch, {});
 					applied.push(patch);
 				}

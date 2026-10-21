@@ -1246,6 +1246,55 @@ describe("applyNestedPatches", () => {
 		expect(unappliedOf(failure)).toEqual(["second-fails", "second-last"]);
 	});
 
+	describe("when the user already applied the patch", () => {
+		const commitCount = (): Promise<string> => runGit(nestedDir, ["rev-list", "--count", "HEAD"]);
+		const applyByHand = async (): Promise<void> => {
+			// A failed landing keeps the patch file, and applying it yourself is the way to recover.
+			await fs.writeFile(path.join(nestedDir, "file.txt"), "v2\n");
+			await runGit(nestedDir, ["commit", "-q", "-am", "applied by hand"]);
+		};
+
+		it("treats it as landed instead of failing on it again", async () => {
+			await applyByHand();
+			const before = await commitCount();
+
+			// Git rejects a patch whose changes are already in the checkout. Retrying it forever would
+			// also keep every later delta of this repository cumulative with the edit.
+			const warnings = await applyNestedPatches(parentRepo, [{ relativePath: nestedRel, patch: applies }]);
+
+			expect(warnings).toEqual([]);
+			expect(await fs.readFile(path.join(nestedDir, "file.txt"), "utf8")).toBe("v2\n");
+			// Nothing was left to commit, and the user's own commit stands.
+			expect(await commitCount()).toBe(before);
+			expect(await runGit(nestedDir, ["status", "--porcelain=v1"])).toBe("");
+		});
+
+		it("still applies the repositories after it", async () => {
+			await applyByHand();
+			await initNestedRepo(path.join(parentRepo, "after"));
+
+			await applyNestedPatches(parentRepo, [
+				{ relativePath: nestedRel, patch: applies },
+				{ relativePath: "after", patch: applies },
+			]);
+
+			expect(await fs.readFile(path.join(parentRepo, "after", "file.txt"), "utf8")).toBe("v2\n");
+		});
+
+		it("applies a patch that applies in both directions, since that cannot show the edit is already there", async () => {
+			// The file repeats a line, so adding one more `x` applies forward and its reverse applies too.
+			// The same call as for a root patch: an edit repeated by mistake shows in the history, and one
+			// dropped as already applied would not.
+			await fs.writeFile(path.join(nestedDir, "file.txt"), "x\nx\n");
+			await runGit(nestedDir, ["commit", "-q", "-am", "repeating lines"]);
+			const patch = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1,2 @@\n x\n+x\n";
+
+			await applyNestedPatches(parentRepo, [{ relativePath: nestedRel, patch }]);
+
+			expect(await fs.readFile(path.join(nestedDir, "file.txt"), "utf8")).toBe("x\nx\nx\n");
+		});
+	});
+
 	describe("when a failure comes after a patch applied", () => {
 		const failCommitMessage = async (): Promise<string | null> => {
 			throw new Error("commit message backend down");
@@ -1267,11 +1316,14 @@ describe("applyNestedPatches", () => {
 		});
 
 		it("rolls back every patch applied so far when a later patch of the same repository fails", async () => {
-			// The second patch no longer matches once the first has applied.
+			// The second patch matches neither the checkout nor the first patch's result. It is not the
+			// first patch again: a repeat of a patch that just applied is one the checkout already holds.
+			const failsBothWays =
+				"diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-missing\n+absent\n";
 			await expect(
 				applyNestedPatches(parentRepo, [
 					{ relativePath: nestedRel, patch: applies },
-					{ relativePath: nestedRel, patch: applies },
+					{ relativePath: nestedRel, patch: failsBothWays },
 				]),
 			).rejects.toBeInstanceOf(Error);
 
