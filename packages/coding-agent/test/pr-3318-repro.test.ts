@@ -39,9 +39,7 @@ describe("PR 3318 repro", () => {
 			],
 			metadata: { email: "", accountId: "", projectId: "" },
 		};
-		const text = await buildUsageReportText(
-			usageRuntime([report], [], ["test-provider/coding-plan-model"]),
-		);
+		const text = await buildUsageReportText(usageRuntime([report], [], ["test-provider/coding-plan-model"]));
 
 		expect(text).toContain("scoped-account: 1.00 requests used");
 		expect(text).not.toContain("account 1: 1.00 requests used");

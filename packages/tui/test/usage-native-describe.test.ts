@@ -149,7 +149,10 @@ describe("UsageDashboardComponent.describe", () => {
 			const overview = component.describe(cx);
 			const paidMeta = findAll(
 				overview,
-				node => node.k === "text" && node.p?.role === "omp.usage.provider.meta" && plain(node).includes("paid $4.00 left"),
+				node =>
+					node.k === "text" &&
+					node.p?.role === "omp.usage.provider.meta" &&
+					plain(node).includes("paid $4.00 left"),
 			)[0];
 			expect(paidMeta?.p).toEqual(
 				expect.objectContaining({
@@ -163,9 +166,11 @@ describe("UsageDashboardComponent.describe", () => {
 			const facts = findAll(detail, node => node.k === "kv" && node.p?.role === "omp.usage.facts");
 			expect(JSON.stringify(facts)).toContain("Paid · paid@test");
 			expect(JSON.stringify(facts)).toContain("$4.00 left of $50.00 cap");
-			expect(findAll(detail, node => node.k === "text").map(plain).join("\n")).toContain(
-				"Paid figures are provider-reported and refresh about every 5 minutes",
-			);
+			expect(
+				findAll(detail, node => node.k === "text")
+					.map(plain)
+					.join("\n"),
+			).toContain("Paid figures are provider-reported and refresh about every 5 minutes");
 			const table = findAll(detail, node => node.k === "table" && node.p?.role === "omp.usage.limits")[0];
 			expect(JSON.stringify(table)).toContain("Claude 5h");
 			expect(JSON.stringify(table)).not.toContain("Claude Extra Usage");

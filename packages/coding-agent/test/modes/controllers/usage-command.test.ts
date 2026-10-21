@@ -347,9 +347,7 @@ describe("renderUsageReports content", () => {
 			stale: false,
 		};
 
-		const output = stripVTControlCharacters(
-			renderUsageReports([report], theme, now, 120, undefined, [], [], [paid]),
-		);
+		const output = stripVTControlCharacters(renderUsageReports([report], theme, now, 120, undefined, [], [], [paid]));
 
 		expect(output).toContain("Claude 5 Hour");
 		expect(output).toContain("Paid usage");

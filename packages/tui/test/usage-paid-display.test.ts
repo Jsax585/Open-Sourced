@@ -6,6 +6,7 @@ import {
 	formatPaidUsageSummary,
 	paidUsageLineText,
 	summarizePaidUsage,
+	wrapPaidUsageSummary,
 } from "@oh-my-pi/pi-tui/overlays/usage-display";
 
 const NOW = 1_800_000_000_000;
@@ -19,6 +20,7 @@ type PaidCase = {
 };
 
 function paidView(overrides: Partial<PaidUsageView> = {}): PaidUsageView {
+	const asOf = Object.hasOwn(overrides, "asOf") ? overrides.asOf : NOW;
 	return {
 		...overrides,
 		unit: overrides.unit ?? "usd",
@@ -28,6 +30,7 @@ function paidView(overrides: Partial<PaidUsageView> = {}): PaidUsageView {
 		floorIgnored: overrides.floorIgnored ?? false,
 		unbounded: overrides.unbounded ?? false,
 		stale: overrides.stale ?? false,
+		asOf,
 	};
 }
 
@@ -151,7 +154,13 @@ describe("paid usage display", () => {
 		},
 		{
 			name: "empty credit balance",
-			view: paidView({ unit: "credits", capacity: "balance", remaining: 0, state: "unavailable", stop: "cap-reached" }),
+			view: paidView({
+				unit: "credits",
+				capacity: "balance",
+				remaining: 0,
+				state: "unavailable",
+				stop: "cap-reached",
+			}),
 			text: "0 credits left",
 			tone: "error",
 		},
@@ -214,7 +223,7 @@ describe("paid usage display", () => {
 		},
 		{
 			name: "unknown paid figure age",
-			view: paidView({ cap: 200, remaining: 9.26 }),
+			view: paidView({ cap: 200, remaining: 9.26, asOf: undefined }),
 			text: "$9.26 left of $200.00 cap · age unknown",
 			tone: "success",
 			ageTone: "dim",
@@ -247,12 +256,16 @@ describe("paid usage display", () => {
 		]);
 		expect(anthropic).toEqual({
 			parts: ["$90.00 left", "1 uncapped", "1 held", "1 refused", "1 at cap", "1 off", "1 not reported"],
-			hasAmount: true,
 			tone: "success",
 		});
 		expect(formatPaidUsageSummary(anthropic!)).toBe(
 			"paid $90.00 left · 1 uncapped · 1 held · 1 refused · 1 at cap · 1 off · 1 not reported",
 		);
+		expect(wrapPaidUsageSummary(anthropic!, 36)).toEqual([
+			"paid $90.00 left · 1 uncapped",
+			"     1 held · 1 refused · 1 at cap",
+			"     1 off · 1 not reported",
+		]);
 
 		const codex = summarizePaidUsage([
 			paidView({ unit: "credits", capacity: "balance", headroom: 289.25, boundBy: "floor" }),
@@ -263,7 +276,6 @@ describe("paid usage display", () => {
 		]);
 		expect(codex).toEqual({
 			parts: ["289.25 credits left", "1 unlimited", "1 held", "1 empty", "1 no credits"],
-			hasAmount: true,
 			tone: "success",
 		});
 		expect(formatPaidUsageSummary(codex!)).toBe(
@@ -286,7 +298,8 @@ describe("paid usage display", () => {
 			expect(text).not.toContain("will stop");
 		}
 		for (const { view } of cases) {
-			if (view?.capacity === "spend-cap") expect(paidUsageLineText(formatPaidUsageLine(view, NOW))).not.toContain("balance");
+			if (view?.capacity === "spend-cap")
+				expect(paidUsageLineText(formatPaidUsageLine(view, NOW))).not.toContain("balance");
 		}
 	});
 });

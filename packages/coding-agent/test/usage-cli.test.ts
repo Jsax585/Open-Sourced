@@ -664,7 +664,9 @@ describe("formatUsageBreakdown", () => {
 		);
 
 		expect(text).toContain("Claude Extra Usage");
-		expect(text).toContain("$4.00 left of $50.00 cap · floor $3.00 · budget $50.00, $4.00 left → $1.00 usable before floor");
+		expect(text).toContain(
+			"$4.00 left of $50.00 cap · floor $3.00 · budget $50.00, $4.00 left → $1.00 usable before floor",
+		);
 		expect(text).toContain(
 			"policy: priority 11 · reserve 0% (override) · paid floor $3.00 · paid budget $50.00 · eligible · 80.0% left",
 		);
@@ -1749,9 +1751,11 @@ describe("omp usage paid JSON", () => {
 		vi.spyOn(sdkModule, "discoverAuthStorage").mockResolvedValue(authStorage);
 		vi.spyOn(authStorage.credentials, "revalidate").mockResolvedValue();
 		vi.spyOn(authStorage.usage, "reports").mockResolvedValue(reports);
-		const paidUsage = vi.spyOn(authStorage.usage, "paidUsage").mockImplementation(current =>
-			current.map(report => (report.provider === "anthropic" ? anthropicPaid : undefined)),
-		);
+		const paidUsage = vi
+			.spyOn(authStorage.usage, "paidUsage")
+			.mockImplementation(current =>
+				current.map(report => (report.provider === "anthropic" ? anthropicPaid : undefined)),
+			);
 		vi.spyOn(authStorage, "close").mockImplementation(() => {});
 		let stdout = "";
 		vi.spyOn(process.stdout, "write").mockImplementation(chunk => {

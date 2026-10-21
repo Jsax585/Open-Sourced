@@ -291,28 +291,33 @@ describe("buildProviderCards", () => {
 		expect(withoutViews.find(card => card.provider === "anthropic")?.windows.map(window => window.label)).toContain(
 			"Claude Extra Usage",
 		);
-		expect(withoutViews.find(card => card.provider === "openai-codex")?.windows.map(window => window.label)).toContain(
-			"Codex Credits",
-		);
+		expect(
+			withoutViews.find(card => card.provider === "openai-codex")?.windows.map(window => window.label),
+		).toContain("Codex Credits");
 		expect(withoutViews.every(card => card.paid === undefined)).toBe(true);
 
-		const cards = buildProviderCards(reports, now, [], [
-			paidView({
-				limitId: "anthropic:claude:extra",
-				cap: 50,
-				remaining: 4,
-				headroom: 4,
-				boundBy: "provider",
-			}),
-			paidView({
-				unit: "credits",
-				capacity: "balance",
-				limitId: "openai-codex:codex:credits",
-				remaining: 9,
-				headroom: 9,
-				boundBy: "provider",
-			}),
-		]);
+		const cards = buildProviderCards(
+			reports,
+			now,
+			[],
+			[
+				paidView({
+					limitId: "anthropic:claude:extra",
+					cap: 50,
+					remaining: 4,
+					headroom: 4,
+					boundBy: "provider",
+				}),
+				paidView({
+					unit: "credits",
+					capacity: "balance",
+					limitId: "openai-codex:codex:credits",
+					remaining: 9,
+					headroom: 9,
+					boundBy: "provider",
+				}),
+			],
+		);
 		const anthropic = cards.find(card => card.provider === "anthropic");
 		const codex = cards.find(card => card.provider === "openai-codex");
 		expect(anthropic?.windows.map(window => window.label)).toEqual(["Claude 5 Hour"]);
