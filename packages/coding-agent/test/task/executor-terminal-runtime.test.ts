@@ -30,7 +30,7 @@ function createMockSession(abort: () => Promise<void>): {
 			return () => {};
 		},
 		prompt: async () => {
-			await new Promise(resolve => setTimeout(resolve, 300));
+			await Bun.sleep(300);
 			return true;
 		},
 		getLastAssistantMessage: () => undefined,

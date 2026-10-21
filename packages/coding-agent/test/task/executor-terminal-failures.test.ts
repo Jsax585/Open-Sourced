@@ -279,6 +279,32 @@ describe("terminal task failure classification", () => {
 		expect(result.structuredOutput?.data).toEqual({ ok: true });
 	});
 
+	it("fails a hard budget stop for unstructured output", () => {
+		const result = finalize({
+			structured: false,
+			yieldItems: undefined,
+			rawOutput: "partial wrap-up",
+			terminalContext: {
+				terminalYieldAccepted: false,
+				yieldInvalidatedByAsync: false,
+				abortKind: "budget",
+				budgetStopRequested: true,
+				budgetLimitExceeded: true,
+			},
+		});
+		expect(result.exitCode).not.toBe(0);
+	});
+
+	it("fails unstructured execution with empty output", () => {
+		const result = finalize({
+			structured: false,
+			yieldItems: undefined,
+			rawOutput: "",
+			outputSchema: undefined,
+		});
+		expect(result.exitCode).not.toBe(0);
+	});
+
 	it("exercises unstructured no-schema execution with raw output", () => {
 		const result = finalize({
 			structured: false,

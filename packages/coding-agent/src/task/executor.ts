@@ -667,6 +667,8 @@ export interface FinalizeSubprocessOutputArgs {
 		terminalYieldAccepted: boolean;
 		yieldInvalidatedByAsync: boolean;
 		abortKind?: AbortReason;
+		budgetStopRequested?: boolean;
+		budgetLimitExceeded?: boolean;
 	};
 }
 
@@ -872,8 +874,21 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 	if (!abortedViaYield) {
 		const context = args.terminalContext;
 		const committedSuccessfulYield = context.terminalYieldAccepted && !context.yieldInvalidatedByAsync;
+		// A soft budget stop deliberately drives one tool-less wrap-up for an unstructured run.
+		// A clean, non-empty final message is a delivered result, not a hard budget failure.
+		const softBudgetMessageResult =
+			args.structured === false &&
+			context.budgetStopRequested === true &&
+			context.budgetLimitExceeded !== true &&
+			!doneAborted &&
+			!signalAborted &&
+			initialExitCode === 0 &&
+			exitCode === 0 &&
+			!hasYield &&
+			rawOutput.trim().length > 0;
 		const terminalFailure =
 			!committedSuccessfulYield &&
+			!softBudgetMessageResult &&
 			(initialExitCode !== 0 || doneAborted || signalAborted || context.abortKind !== undefined);
 		if (terminalFailure && exitCode === 0) {
 			exitCode = 1;
@@ -1294,6 +1309,8 @@ interface SubagentRunMonitor {
 	runtimeLimitExceeded(): boolean;
 	/** True once the soft-budget stop fired: the free-running turn was aborted and the run is being driven to a forced final yield. */
 	budgetStopRequested(): boolean;
+	/** True when the budget grace was exhausted and a hard budget abort was requested. */
+	budgetLimitExceeded(): boolean;
 	/** Resolves when the budget-stop session abort has settled (immediately when no stop fired). */
 	waitForBudgetStop(): Promise<void>;
 	/**
@@ -2325,6 +2342,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 			budgetLimitExceeded ||
 			budgetStopRequested,
 		budgetStopRequested: () => budgetStopRequested,
+		budgetLimitExceeded: () => budgetLimitExceeded,
 		waitForBudgetStop: () => budgetStopAbortPromise ?? Promise.resolve(),
 		yieldInvalidatedByAsync: () => yieldInvalidatedByAsync,
 		yieldTurnStopRequested: () => yieldTurnStopRequested,
@@ -2864,6 +2882,8 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 				terminalYieldAccepted: monitor.yieldCalled(),
 				yieldInvalidatedByAsync: monitor.yieldInvalidatedByAsync(),
 				abortKind: monitor.abortKind(),
+				budgetStopRequested: monitor.budgetStopRequested(),
+				budgetLimitExceeded: monitor.budgetLimitExceeded(),
 			},
 		});
 	} finally {
