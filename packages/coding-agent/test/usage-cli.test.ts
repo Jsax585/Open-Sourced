@@ -570,7 +570,7 @@ describe("formatUsageBreakdown", () => {
 		expect(text).not.toContain("policy:");
 	});
 
-	it("shows an explicit priority, reserve override and reclaim line with the observed eligibility reason", () => {
+	it("shows an explicit priority, reserve override, reclaim line, and paid safeguards with the observed eligibility reason", () => {
 		const report = makeReport("openai-codex", "protected@example.test", [
 			makeLimit({
 				id: "5h",
@@ -590,6 +590,8 @@ describe("formatUsageBreakdown", () => {
 							priority: 100,
 							reservePct: 50,
 							reclaimAbovePct: 70,
+							extraUsageFloor: 15,
+							extraUsageBudget: 125,
 						}
 					: undefined,
 		};
@@ -599,7 +601,7 @@ describe("formatUsageBreakdown", () => {
 		);
 
 		expect(text).toContain(
-			"policy: priority 100 · reserve 50% (override) · reclaim above 70% · eligible · 80.0% left",
+			"policy: priority 100 · reserve 50% (override) · reclaim above 70% · paid floor 15 · paid budget 125 · eligible · 80.0% left",
 		);
 	});
 
