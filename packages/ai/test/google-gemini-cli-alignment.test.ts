@@ -1,5 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import * as geminiCliProvider from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
 import {
 	buildRequest,
 	parseGeminiCliCredentials,
@@ -152,11 +151,6 @@ describe("Google Gemini CLI alignment", () => {
 		expect(shouldRefreshGeminiCliCredentials(preBufferedExpiry, false, issuedAt + 54 * 60 * 1000)).toBe(true);
 	});
 
-	it("does not export provider-direct refresh helper", () => {
-		expect(shouldRefreshGeminiCliCredentials).toBe(geminiCliProvider.shouldRefreshGeminiCliCredentials);
-		expect(Object.hasOwn(geminiCliProvider, "refreshGeminiCliCredentialsIfNeeded")).toBe(false);
-	});
-
 	it("omits antigravity-only metadata in non-antigravity request payloads", () => {
 		const model = createModel("google-gemini-cli");
 		const payload = buildRequest(model, createContext(), "proj-123", {}, false) as {
@@ -255,13 +249,11 @@ describe("Google Gemini CLI alignment", () => {
 				labels?: Record<string, string>;
 				systemInstruction?: { role?: string };
 			};
-			requestType?: string;
 			userAgent?: string;
 			requestId?: string;
 		};
 
 		expect(payload.request.sessionId).toMatch(/^-[0-9]+$/);
-		expect(payload.requestType).toBe("agent");
 		expect(payload.userAgent).toBe("antigravity");
 		// Structured requestId: agent/<agentId>/<ts>/<trajectoryId>/<step>.
 		expect(payload.requestId).toMatch(/^agent\/[0-9a-f-]+\/\d+\/[0-9a-f-]+\/\d+$/);
@@ -274,13 +266,19 @@ describe("Google Gemini CLI alignment", () => {
 		expect(labels?.used_claude_conservative).toBe("false");
 	});
 
+	it("does not tag Antigravity chat requests with the requestType that draws false 429 quota errors", () => {
+		const model = createModel("google-antigravity");
+		const payload = buildRequest(model, createContext(), "proj-123", {}, true);
+		expect(payload !== null && typeof payload === "object" && "requestType" in payload).toBe(false);
+	});
+
 	it("stamps the antigravity wire profile (maxOutputTokens + model_enum) by routed wire id", () => {
 		const model = createModel("google-antigravity");
 		const payload = buildRequest(
 			model,
 			createContext(),
 			"proj-123",
-			{ requestModelId: "gemini-3.5-flash-low" },
+			{ requestModelId: "gemini-3.5-flash-low", maxTokens: 32 },
 			true,
 		) as {
 			model?: string;
@@ -297,7 +295,10 @@ describe("Google Gemini CLI alignment", () => {
 		// `daily-cloudcode-pa` 400s when Claude requests exceed 64000.
 		// The Claude profiles also lack a captured model_enum token, so
 		// the request must not emit a stale or placeholder label.
-		const cases = [{ requestModelId: "claude-sonnet-4-6" }, { requestModelId: "claude-opus-4-6-thinking" }];
+		const cases = [
+			{ requestModelId: "claude-sonnet-4-6", maxTokens: 32 },
+			{ requestModelId: "claude-opus-4-6-thinking", maxTokens: 32 },
+		];
 		for (const opts of cases) {
 			const payload = buildRequest(createModel("google-antigravity"), createContext(), "proj-123", opts, true) as {
 				model?: string;

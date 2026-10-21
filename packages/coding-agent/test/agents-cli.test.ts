@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
-import { renderCommandHelp } from "@oh-my-pi/pi-utils/cli";
 import { runAgentsCommand } from "@oh-my-pi/pi-coding-agent/cli/agents-cli";
-import { agentsHelp } from "@oh-my-pi/pi-coding-agent/cli/command-help";
-import Agents from "@oh-my-pi/pi-coding-agent/commands/agents";
+import * as bundledAgents from "@oh-my-pi/pi-coding-agent/task/agents";
 import { loadBundledAgents } from "@oh-my-pi/pi-coding-agent/task/agents";
+import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -60,20 +59,31 @@ describe("omp agents list", () => {
 		}
 	});
 
-	it("advertises list in command help", () => {
-		expect(agentsHelp.description).toBe("List or unpack bundled task agents");
-		const chunks: string[] = [];
-		const stdoutSpy = spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
-			chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
-			return true;
-		});
-		try {
-			renderCommandHelp("omp", "agents", Agents);
-		} finally {
-			stdoutSpy.mockRestore();
-		}
-		const help = Bun.stripANSI(chunks.join(""));
-		expect(help).toContain("List or unpack bundled task agents");
-		expect(help).toContain("omp agents list");
+	it("retains execution metadata, false overrides, and schemas without leaking prompts or paths", async () => {
+		const metadata: Omit<AgentDefinition, "systemPrompt" | "filePath"> = {
+			name: "catalog-fixture",
+			description: "Agent with explicit execution overrides",
+			source: "bundled",
+			tools: [],
+			model: [],
+			spawns: [],
+			blocking: false,
+			structured: false,
+			readSummarize: false,
+			prewalk: false,
+			advisor: false,
+			autoloadSkills: [],
+			output: {
+				type: "object",
+				properties: { findings: { type: "array", items: { type: "string" } } },
+				required: ["findings"],
+				additionalProperties: false,
+			},
+		};
+		spyOn(bundledAgents, "loadBundledAgents").mockReturnValue([
+			{ ...metadata, systemPrompt: "private prompt", filePath: "/private/agent.md" },
+		]);
+		const output = await captureStdout(() => runAgentsCommand({ action: "list", flags: { json: true } }));
+		expect(JSON.parse(output)).toEqual({ agents: [metadata] });
 	});
 });

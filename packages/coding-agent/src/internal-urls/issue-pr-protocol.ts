@@ -20,21 +20,20 @@
  * - `issue://owner/repo?state=closed&limit=20` — list options pass through to
  *   `gh`.
  */
-import type { Settings } from "../config/settings";
-import { AgentRegistry } from "../registry/agent-registry";
+import issueDoc from "../prompts/internal-urls/issue.md" with { type: "text" };
 import {
 	formatRepoRef,
 	getOrFetchIssue,
 	getOrFetchPr,
 	getOrFetchPrDiff,
 	githubIssueJsonWithStateReasonFallback,
-	type PrDiffFile,
 	parsePositiveDecimalInt,
 	resolveDefaultRepoMemoized,
 } from "../tools/gh";
 import { type CacheStatus, formatFreshnessNote } from "../tools/github-cache";
 import { github } from "../utils/github";
-import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext } from "./types";
+import { renderDiffFamilyResource, resolveCwd, splitInternalUrlSegments } from "./forge-diff";
+import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, SchemeSpec } from "./types";
 
 type Scheme = "issue" | "pr";
 
@@ -107,25 +106,7 @@ function parseListOptions(url: InternalUrl, scheme: Scheme, repo: string | undef
 
 function parseUrl(url: InternalUrl, scheme: Scheme): Parsed {
 	let host = url.rawHost || url.hostname;
-	const rawPath = url.rawPathname ?? url.pathname;
-	// Strip a single leading slash so we can detect empty internal segments
-	// (e.g. `pr://owner//77` → pathname `//77` → stripped `/77` → ["", "77"]).
-	const stripped = rawPath.startsWith("/") ? rawPath.slice(1) : rawPath;
-	let parts: string[] = [];
-	if (stripped !== "") {
-		for (const seg of stripped.split("/")) {
-			let decoded: string;
-			try {
-				decoded = decodeURIComponent(seg);
-			} catch {
-				throw new Error(`Invalid ${scheme}:// URL: empty or unsafe path segment`);
-			}
-			if (decoded === "" || decoded === "." || decoded === "..") {
-				throw new Error(`Invalid ${scheme}:// URL: empty or unsafe path segment`);
-			}
-			parts.push(seg);
-		}
-	}
+	let parts = splitInternalUrlSegments(url, scheme);
 
 	// Detect a leading `<host>/` prefix. A dotted first segment can only be a
 	// host, because GitHub owner names are alphanumeric-plus-hyphen, so dotted
@@ -231,34 +212,6 @@ function parseUrl(url: InternalUrl, scheme: Scheme): Parsed {
 		throw new Error(`Invalid pr:// diff sub-path '${sub}'. Use 'all' or a 1-indexed file number.`);
 	}
 	return { kind: "pr-diff", repo, number: num, mode: "slice", index: idx };
-}
-
-/**
- * Resolve the working directory the protocol should use.
- *
- * Order:
- * 1. Caller-supplied `context.cwd` (the session that initiated `read`).
- * 2. First registered session via `AgentRegistry` (single-session fallback).
- * 3. `process.cwd()` (last resort).
- *
- * The earlier-fallback drives `gh repo view` and any `gh issue list` /
- * `gh pr list` for short-form URLs, so getting this right is what keeps
- * reads of `issue://N` from picking the wrong repo across concurrent sessions.
- */
-function resolveCwd(context: ResolveContext | undefined): string {
-	if (context?.cwd) return context.cwd;
-	for (const ref of AgentRegistry.global().list()) {
-		const cwd = ref.session?.sessionManager?.getCwd();
-		if (cwd) return cwd;
-	}
-	return process.cwd();
-}
-
-function settingsFromContext(context: ResolveContext | undefined): Settings | undefined {
-	const raw = context?.settings;
-	if (!raw || typeof raw !== "object") return undefined;
-	if (typeof (raw as { get?: unknown }).get !== "function") return undefined;
-	return raw as Settings;
 }
 
 async function resolveListRepo(
@@ -417,12 +370,6 @@ function buildSingleResource({
 	};
 }
 
-function formatFileLine(idx: number, file: PrDiffFile, repo: string, prNumber: number): string {
-	const stats = file.changeType === "binary" ? "(binary)" : `+${file.additions} -${file.deletions}`;
-	const rename = file.oldPath ? `  (renamed from ${file.oldPath})` : "";
-	return `${idx}. ${file.path}  ${stats}  [${file.changeType}]${rename}\n   pr://${repo}/${prNumber}/diff/${idx}`;
-}
-
 async function fetchAndRenderPrDiff(
 	url: InternalUrl,
 	parsed: ParsedPrDiff,
@@ -445,65 +392,13 @@ async function fetchAndRenderPrDiff(
 		repo,
 		number: parsed.number,
 		signal: context?.signal,
-		settings: settingsFromContext(context),
+		settings: context?.settings,
 	});
-	const files = lookup.payload.files;
-	const freshness = formatFreshnessNote(lookup.status, lookup.fetchedAt);
-
-	if (parsed.mode === "all") {
-		const content = lookup.payload.unified;
-		return {
-			url: url.href,
-			content,
-			contentType: "text/plain",
-			size: Buffer.byteLength(content, "utf-8"),
-			notes: [
-				freshness,
-				`Full diff for pr://${repo}/${parsed.number} (${files.length} file${files.length === 1 ? "" : "s"})`,
-			],
-		};
-	}
-
-	if (parsed.mode === "slice") {
-		const index = parsed.index ?? 0;
-		if (index < 1 || index > files.length) {
-			throw new Error(
-				`pr://${repo}/${parsed.number}/diff/${index} is out of range; PR has ${files.length} file${files.length === 1 ? "" : "s"}. Use pr://${repo}/${parsed.number}/diff to list available indices.`,
-			);
-		}
-		const file = files[index - 1];
-		if (!file) {
-			throw new Error(`pr://${repo}/${parsed.number}/diff/${index} resolved to a missing slice (parser bug).`);
-		}
-		const content = lookup.payload.unified.slice(file.startOffset, file.endOffset);
-		return {
-			url: url.href,
-			content,
-			contentType: "text/plain",
-			size: Buffer.byteLength(content, "utf-8"),
-			notes: [
-				freshness,
-				`Showing file ${index}/${files.length}: ${file.path}`,
-				`Read all: pr://${repo}/${parsed.number}/diff/all`,
-			],
-		};
-	}
-
-	// mode === "list"
-	const header = `# Pull Request Diff: ${repo}#${parsed.number} (${files.length} file${files.length === 1 ? "" : "s"})`;
-	const body =
-		files.length === 0
-			? "_No file changes._"
-			: files.map((f, i) => formatFileLine(i + 1, f, repo, parsed.number)).join("\n\n");
-	const footer = `\n\n---\nRead all: \`pr://${repo}/${parsed.number}/diff/all\`. Each file is also available as \`pr://${repo}/${parsed.number}/diff/<i>\`.`;
-	const content = `${header}\n\n${body}${footer}`;
-	return {
-		url: url.href,
-		content,
-		contentType: "text/markdown",
-		size: Buffer.byteLength(content, "utf-8"),
-		notes: [freshness, `File listing for pr://${repo}/${parsed.number}`],
-	};
+	return renderDiffFamilyResource(url, parsed.mode, parsed.index, lookup, {
+		baseUrl: `pr://${repo}/${parsed.number}`,
+		heading: `Pull Request Diff: ${repo}#${parsed.number}`,
+		noun: "PR",
+	});
 }
 
 /**
@@ -511,7 +406,12 @@ async function fetchAndRenderPrDiff(
  */
 export class IssueProtocolHandler implements ProtocolHandler {
 	readonly scheme = "issue";
-	readonly immutable = true;
+	readonly spec: SchemeSpec = { backing: "remote", selectors: "lines", immutable: true };
+
+	/** Advertised when `gh` is on PATH; the entry documents `pr://` too. */
+	promptDoc(): string | undefined {
+		return github.available() ? issueDoc.trim() : undefined;
+	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
 		if (context?.signal?.aborted) {
@@ -538,7 +438,7 @@ export class IssueProtocolHandler implements ProtocolHandler {
 				issue: String(parsed.number),
 				includeComments: parsed.comments,
 				signal: context?.signal,
-				settings: settingsFromContext(context),
+				settings: context?.settings,
 			});
 			return buildSingleResource({
 				url,
@@ -560,7 +460,7 @@ export class IssueProtocolHandler implements ProtocolHandler {
  */
 export class PrProtocolHandler implements ProtocolHandler {
 	readonly scheme = "pr";
-	readonly immutable = true;
+	readonly spec: SchemeSpec = { backing: "remote", selectors: "lines", immutable: true };
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
 		if (context?.signal?.aborted) {
@@ -602,7 +502,7 @@ export class PrProtocolHandler implements ProtocolHandler {
 				number: parsed.number,
 				includeComments: parsed.comments,
 				signal: context?.signal,
-				settings: settingsFromContext(context),
+				settings: context?.settings,
 			});
 			return buildSingleResource({
 				url,
