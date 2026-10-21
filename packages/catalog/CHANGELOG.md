@@ -7,6 +7,10 @@
 - Added Scaleway Generative APIs as a built-in provider with 13 serverless chat models (glm-5.3 default), API-key login, and live model discovery ([#16687](https://github.com/can1357/oh-my-pi/pull/16687) by [@reda-maizate](https://github.com/reda-maizate))
 - Added the `prompt-cache-persistent` catalog axis (`isPromptCachePersistent`) for providers whose own endpoint never expires prompt caches; logged-in OpenAI Codex declares it
 
+### Changed
+
+- Updated the bundled Yolo-Auto catalog to its current models, `qwen3.8-27b` (now the default), `yolo`, `yolo-small`, and `yolo-128k`, and removed the retired `deepseek-flash-v4` and `qwen3.8-flash`
+
 ## [18.12.5] - 2026-10-21
 
 ### Fixed
