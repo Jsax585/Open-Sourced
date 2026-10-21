@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Fixed DEC 2048 in-band resize report fragments typing their `48;rows;cols;hPx;wPx` body into the composer: a report can be split after the CSI introducer, bundled with the next report's introducer, or arrive without its `t` terminator
 - Fixed the `/agents` and `/models` hubs in Tern squeezing the left sidebar as long lines (such as a streaming new-agent draft) widen the body pane
 
 ## [18.12.4] - 2026-10-20
