@@ -31,6 +31,7 @@ import {
 	getTab,
 	listTabs,
 	releaseAllTabs,
+	releaseTabsForOwner,
 	releaseIdleTabsForOwner,
 	releaseTab,
 	runInTab,
@@ -139,7 +140,7 @@ const browserSchema = type({
 	"args?": type("unknown[]").describe("arguments passed to a serialized function"),
 	"chain?": tabCallStepSchema.array(),
 	"timeout?": type("number").describe("timeout in seconds"),
-	"all?": type("boolean").describe("release every managed tab"),
+	"all?": type("boolean").describe("release every managed tab owned by this session (or all tabs if unowned)"),
 	"kill?": type("boolean").describe("also kill spawned-app browsers"),
 	"persist?": type("boolean").describe("keep tab live across turn settle and idle close"),
 });
@@ -336,7 +337,7 @@ async function invokeBrowser(
 			case "open":
 				return await openBrowser(session, name, parsed, details, timeoutMs, context.signal);
 			case "close":
-				return await closeBrowser(name, parsed, details, timeoutMs, context.signal);
+				return await closeBrowser(session, name, parsed, details, timeoutMs, context.signal);
 			case "tabs":
 				details.value = listTabs();
 				return toolResult(details).done();
@@ -605,6 +606,7 @@ async function listTargets(
 }
 
 async function closeBrowser(
+	session: ToolSession,
 	name: string,
 	params: BrowserParams,
 	details: BrowserPreludeDetails,
@@ -613,7 +615,10 @@ async function closeBrowser(
 ): Promise<AgentToolResult<unknown>> {
 	const kill = !!params.kill;
 	if (params.all) {
-		const count = await untilAborted(signal, () => releaseAllTabs({ kill, timeoutMs }));
+		const ownerId = session.getSessionId?.() ?? undefined;
+		const count = await untilAborted(signal, () =>
+			ownerId ? releaseTabsForOwner(ownerId, { kill, timeoutMs }) : releaseAllTabs({ kill, timeoutMs }),
+		);
 		const text = `Released ${count} managed tab${count === 1 ? "" : "s"}`;
 		return toolResult(details).text(text).done();
 	}

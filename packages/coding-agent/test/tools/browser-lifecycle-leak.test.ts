@@ -27,6 +27,20 @@ import {
 	releaseTabsForOwner,
 } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
 import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
+import { createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+
+function makeSession(settings = Settings.isolated({ "browser.enabled": true }), sessionId?: string): ToolSession {
+	return {
+		cwd: "/tmp",
+		hasUI: true,
+		getSessionFile: () => null,
+		getSessionSpawns: () => "*",
+		getSessionId: sessionId ? () => sessionId : undefined,
+		settings,
+	};
+}
 
 function makeKind(socketSuffix: string): CmuxKind {
 	return { kind: "cmux", socketPath: `/tmp/omp-test-${socketSuffix}.sock`, surface: `surface-${socketSuffix}` };
@@ -172,6 +186,95 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 		const releasedA = await releaseTabsForOwner("session-A", { kill: false });
 		expect(releasedA).toBe(1);
 		expect(getTabsMapForTest().has("reuse-tab")).toBe(false);
+	});
+
+	it("browser.close({ all: true }) in a subagent releases only the subagent's tabs (#15975)", async () => {
+		spyOn(CmuxSocketClient.prototype, "connect").mockResolvedValue(undefined);
+		spyOn(CmuxSocketClient.prototype, "close").mockImplementation(() => undefined);
+		let openCount = 0;
+		spyOn(CmuxSocketClient.prototype, "request").mockImplementation(
+			async (method: string): Promise<Record<string, unknown>> => {
+				if (method === "browser.open_split") {
+					openCount++;
+					return { surface_id: `surface-${openCount}`, url: "about:blank" };
+				}
+				return {};
+			},
+		);
+
+		const kind = makeKind("subagent-close-all");
+		const browser = await acquireBrowser(kind, { cwd: "/tmp" });
+
+		await acquireTab("parent-tab", browser, {
+			timeoutMs: 1_000,
+			ownerSessionId: "session-parent",
+			persist: true,
+		});
+		await acquireTab("subagent-tab", browser, {
+			timeoutMs: 1_000,
+			ownerSessionId: "session-subagent",
+		});
+
+		expect(getTabsMapForTest().size).toBe(2);
+
+		const subagentSession = makeSession(Settings.isolated(), "session-subagent");
+		const subagentPrelude = createBrowserPrelude(subagentSession);
+		const result = await subagentPrelude.invoke(
+			{ action: "close", all: true },
+			{
+				session: subagentSession,
+				toolCallId: "test-subagent-close",
+			},
+		);
+
+		expect(result.content).toEqual([{ type: "text", text: "Released 1 managed tab" }]);
+		expect(getTabsMapForTest().has("subagent-tab")).toBe(false);
+		expect(getTabsMapForTest().has("parent-tab")).toBe(true);
+
+		await releaseTabsForOwner("session-parent", { kill: false });
+		expect(getTabsMapForTest().size).toBe(0);
+	});
+
+	it("browser.close({ all: true }) without a session ID falls back to releasing all tabs", async () => {
+		spyOn(CmuxSocketClient.prototype, "connect").mockResolvedValue(undefined);
+		spyOn(CmuxSocketClient.prototype, "close").mockImplementation(() => undefined);
+		let openCount = 0;
+		spyOn(CmuxSocketClient.prototype, "request").mockImplementation(
+			async (method: string): Promise<Record<string, unknown>> => {
+				if (method === "browser.open_split") {
+					openCount++;
+					return { surface_id: `surface-${openCount}`, url: "about:blank" };
+				}
+				return {};
+			},
+		);
+
+		const kind = makeKind("unowned-close-all");
+		const browser = await acquireBrowser(kind, { cwd: "/tmp" });
+
+		await acquireTab("tab-1", browser, {
+			timeoutMs: 1_000,
+			ownerSessionId: "session-1",
+		});
+		await acquireTab("tab-2", browser, {
+			timeoutMs: 1_000,
+			ownerSessionId: "session-2",
+		});
+
+		expect(getTabsMapForTest().size).toBe(2);
+
+		const unownedSession = makeSession();
+		const unownedPrelude = createBrowserPrelude(unownedSession);
+		const result = await unownedPrelude.invoke(
+			{ action: "close", all: true },
+			{
+				session: unownedSession,
+				toolCallId: "test-unowned-close",
+			},
+		);
+
+		expect(result.content).toEqual([{ type: "text", text: "Released 2 managed tabs" }]);
+		expect(getTabsMapForTest().size).toBe(0);
 	});
 });
 
