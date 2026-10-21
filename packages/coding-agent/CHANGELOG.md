@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added opt-in current-session prompt history (`composer.historyScope: session`), including prompts from before resume or restart; all-session recall remains the default
+- Added opt-in current-session prompt history (`composer.historyScope: session`), including prompts from before resume or restart; all-session recall remains the default ([#16606](https://github.com/can1357/oh-my-pi/pull/16606) by [@tommymorgan](https://github.com/tommymorgan))
 
 ## [18.12.5] - 2026-10-21
 
