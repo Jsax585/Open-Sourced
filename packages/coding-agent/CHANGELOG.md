@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added opt-in current-session prompt history (`composer.historyScope: session`), including prompts from before resume or restart; all-session recall remains the default
+
 ## [18.12.5] - 2026-10-21
 
 ### Added
