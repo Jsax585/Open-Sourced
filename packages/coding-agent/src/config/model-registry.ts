@@ -3267,7 +3267,7 @@ export class ModelRegistry {
 	async getApiKey(
 		model: Model<Api>,
 		sessionId?: string,
-		options?: { signal?: AbortSignal },
+		options?: Pick<AuthApiKeyOptions, "extraUsage" | "signal">,
 	): Promise<string | undefined> {
 		// A disabled provider gets no credential, so no request reaches it however
 		// its model was obtained.
@@ -3278,6 +3278,7 @@ export class ModelRegistry {
 		return this.authStorage.keys.get(model.provider, sessionId, {
 			baseUrl: model.baseUrl,
 			modelId: model.id,
+			extraUsage: options?.extraUsage,
 			accountIds: model.accountAccess && Object.keys(model.accountAccess),
 			signal: options?.signal,
 		});
@@ -3341,6 +3342,7 @@ export class ModelRegistry {
 		return this.authStorage.keys.getWithCredential(provider, sessionId, {
 			baseUrl: options?.baseUrl,
 			modelId: options?.modelId,
+			extraUsage: options?.extraUsage,
 			accountIds: accountAccess && Object.keys(accountAccess),
 			forceRefresh: options?.forceRefresh,
 			refreshReason: options?.refreshReason,
@@ -3356,7 +3358,7 @@ export class ModelRegistry {
 	 * `resolveApiKeyOnce(resolver)`.
 	 */
 	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver;
-	resolver(model: ApiKeyResolverModel, sessionId?: string): ApiKeyResolver;
+	resolver(model: ApiKeyResolverModel, sessionIdOrOptions?: string | ApiKeyResolverOptions): ApiKeyResolver;
 	resolver(target: string | ApiKeyResolverModel, optionsOrSessionId?: ApiKeyResolverOptions | string): ApiKeyResolver {
 		const options = typeof optionsOrSessionId === "string" ? { sessionId: optionsOrSessionId } : optionsOrSessionId;
 		if (typeof target === "string") {
