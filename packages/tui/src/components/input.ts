@@ -106,6 +106,13 @@ export class Input implements Component, Focusable {
 		return this.#cursor;
 	}
 
+	getText(): string {
+		return this.#value;
+	}
+
+	getExpandedText(): string {
+		return this.#value;
+	}
 	/** Return bounded input content and cursor state for debug inspection. */
 	debugState(): Record<string, unknown> {
 		return {
@@ -340,6 +347,11 @@ export class Input implements Component, Focusable {
 			this.#value = resolved.text;
 		}
 		this.#cursor = resolved.cursor;
+	}
+
+	/** Insert `text` at cursor as an undoable edit. */
+	insertText(text: string): void {
+		this.#handlePaste(text);
 	}
 
 	/** Programmatically trigger submission (e.g. for voice submit). */
@@ -622,7 +634,7 @@ export class Input implements Component, Focusable {
 		// At end of text the cursor sits on trailing padding, sized to fit a (possibly wide) cursor override.
 		const atEnd = this.#cursor >= this.#value.length;
 		const override =
-			atEnd && this.cursorOverride !== undefined
+			this.cursorOverride !== undefined
 				? { text: this.cursorOverride, width: visibleWidth(this.cursorOverride) }
 				: undefined;
 		const displayValue = atEnd ? visibleValue + " ".repeat(override?.width ?? 1) : visibleValue;
