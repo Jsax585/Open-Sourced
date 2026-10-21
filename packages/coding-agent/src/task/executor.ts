@@ -131,6 +131,7 @@ import {
 } from "@oh-my-pi/pi-tui/tools/task";
 import { yieldSectionShapes } from "./yield-assembly";
 import { assembleYieldResult } from "@oh-my-pi/pi-tui/tools/task-yield-assembly";
+import { isErrorEnvelope, isTerminalFailure } from "./execution-safety";
 import {
 	cfgTaskPrewalk,
 	cfgTaskAgentPrewalk,
@@ -867,6 +868,24 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		}
 	}
 
+	// A committed success yield may survive internal termination; a real nonzero exit or an error
+	// envelope may not. A terminal abort with no committed result still fails closed.
+	const lastYieldStatus = hasYield ? yieldItems[yieldItems.length - 1]?.status : undefined;
+	const committedSuccessfulYield =
+		lastYieldStatus === "success" && (structuredOutput === undefined || structuredOutput.status === "valid");
+	const terminalFailure =
+		isTerminalFailure({ doneAborted, signalAborted, exitCode, hasCommittedSuccess: committedSuccessfulYield }) ||
+		(structuredOutput?.status === "valid" && isErrorEnvelope(structuredOutput.data));
+	if (terminalFailure) {
+		exitCode = exitCode === 0 ? 1 : exitCode;
+		if (includeStructuredOutput && structuredOutput?.status === "valid") {
+			structuredOutput = {
+				...structuredOutput,
+				status: "invalid",
+				error: stderr || "terminal failure",
+			};
+		}
+	}
 	return { rawOutput, exitCode, stderr, abortedViaYield, hasYield, structuredOutput };
 }
 
