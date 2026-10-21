@@ -1,8 +1,8 @@
 # Changelog
 
 ## [Unreleased]
-### Added
 
+### Added
 - Added `ImageContent.source` (`kitty` or `sixel`), naming the terminal graphics protocol an image decoded from subprocess output came from ([#15327](https://github.com/can1357/oh-my-pi/pull/15327) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 
