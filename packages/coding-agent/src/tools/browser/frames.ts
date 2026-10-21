@@ -7,12 +7,26 @@ import type { ElementHandle, ElementScreenshotOptions, Frame, Page } from "puppe
 import { formatScreenshot, resizeImage } from "../../utils/image-resize";
 import { throwIfAborted } from "../tool-errors";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import { type AriaSnapshotOptions, buildAriaSnapshotScript } from "./aria/aria-snapshot";
+import {
+	type AriaSnapshotOptions,
+	type AriaSnapshotPayload,
+	buildAriaSnapshotPayloadScript,
+} from "./aria/aria-snapshot";
 import { clickElement, fillViaHandle, focusTextEntryTarget, pressKey } from "./interactions";
 import { readPageViewport } from "./launch";
 import { RunOutput } from "./run-output";
 import { whileDrawing } from "./screenshot";
+import {
+	type AriaSnapshotBaseline,
+	type AriaSnapshotDiffResult,
+	ariaSnapshotBaselineKey,
+	diffAriaSnapshot,
+	postProcessAriaSnapshot,
+} from "./snapshot-plus";
 import type { ScreenshotResult, SessionSnapshot } from "./tab-protocol";
+
+const frameAriaBaselines = Symbol("frame.ariaSnapshot.baselines");
+type SnapshotFrame = Frame & { [frameAriaBaselines]?: Map<string, AriaSnapshotBaseline> };
 
 /** JSON-safe metadata for one document frame. */
 export interface BrowserFrameInfo {
@@ -66,8 +80,8 @@ export interface BrowserFrameApi {
 	count(selector: string): Promise<number>;
 	/** Report whether a matching element is visible. */
 	isVisible(selector: string): Promise<boolean>;
-	/** Capture a Playwright-format ARIA snapshot inside this frame. */
-	ariaSnapshot(selector?: string, options?: AriaSnapshotOptions): Promise<string>;
+	/** Capture an ARIA snapshot inside this frame; `diff` returns a revisioned result. */
+	ariaSnapshot(selector?: string, options?: AriaSnapshotOptions): Promise<string | AriaSnapshotDiffResult>;
 	/** Evaluate a function or expression in this frame. */
 	evaluate<R, TArgs extends unknown[]>(fn: string | ((...args: TArgs) => R | Promise<R>), ...args: TArgs): Promise<R>;
 	/** Wait for a selector and report whether it appeared. */
@@ -345,9 +359,14 @@ export function createFrameApi(frame: Frame, hooks: FrameApiHooks): BrowserFrame
 			}),
 		ariaSnapshot: (selector, options) =>
 			hooks.op("frame.ariaSnapshot()", hooks.quickOpMs, async signal => {
-				return (await untilAborted(signal, () =>
-					frame.evaluate(buildAriaSnapshotScript(selector, options)),
-				)) as string;
+				const payload = (await untilAborted(signal, () =>
+					frame.evaluate(buildAriaSnapshotPayloadScript(selector, options)),
+				)) as AriaSnapshotPayload;
+				const snapshot = postProcessAriaSnapshot(payload.snapshot, options, payload.hrefs);
+				if (!options?.diff) return snapshot;
+				const snapshotFrame: SnapshotFrame = frame;
+				const baselines = (snapshotFrame[frameAriaBaselines] ??= new Map());
+				return diffAriaSnapshot(baselines, ariaSnapshotBaselineKey(selector, options), frame.url(), snapshot);
 			}),
 		evaluate: ((fn: string | ((...args: unknown[]) => unknown), ...args: unknown[]) =>
 			hooks.op("frame.evaluate()", Number.POSITIVE_INFINITY, signal =>

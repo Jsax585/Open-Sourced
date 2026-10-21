@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed browser `frame.ariaSnapshot()` honoring `interactive`, `compact`, `urls`, and `diff` like tab snapshots ([#16622](https://github.com/can1357/oh-my-pi/issues/16622))
+
 ## [18.12.5] - 2026-10-21
 
 ### Added

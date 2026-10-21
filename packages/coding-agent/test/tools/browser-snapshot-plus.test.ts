@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { disposeAllVmContexts } from "@oh-my-pi/pi-coding-agent/eval/js/context-manager";
-import { buildAriaSnapshotScript, createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
+import { buildAriaSnapshotPayloadScript, createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
 import { releaseAllTabs } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import { chromiumAvailable } from "./chromium-probe";
@@ -138,6 +138,62 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser snapshot and readable parity", () 
 		}
 	}, 60_000);
 
+	test("filters frame snapshots like tab snapshots", async () => {
+		const invoke = createHost();
+		const name = `snapshot-frame-${crypto.randomUUID()}`;
+		const html = `<button>Outside</button><iframe id="f" srcdoc='<h1>Frame title</h1><p>Frame paragraph</p><button>Inside</button>'></iframe>`;
+		await invoke({ action: "open", name, url: `data:text/html,${encodeURIComponent(html)}` });
+		try {
+			const snapshot = valueFrom<string>(
+				await invoke({
+					action: "run",
+					name,
+					code: 'return await (await tab.frame("#f")).ariaSnapshot(undefined, { interactive: true });',
+				}),
+			);
+			expect(snapshot).toContain('button "Inside"');
+			expect(snapshot).not.toContain("Frame title");
+			expect(snapshot).not.toContain("Frame paragraph");
+			expect(snapshot).not.toContain("Outside");
+		} finally {
+			await invoke({ action: "close", name, kill: true }).catch(() => undefined);
+		}
+	}, 60_000);
+
+	test("revisions frame snapshots independently across reacquired handles", async () => {
+		const invoke = createHost();
+		const name = `snapshot-frame-diff-${crypto.randomUUID()}`;
+		const content = `${Array.from({ length: 24 }, (_, index) => `<p>Frame content ${index}.</p>`).join("")}<button>Run cell</button>`;
+		const html = `<iframe id="first" srcdoc='${content}'></iframe><iframe id="second" srcdoc='${content}'></iframe>`;
+		await invoke({ action: "open", name, url: `data:text/html,${encodeURIComponent(html)}` });
+		try {
+			const snapshot = async (frame: string) =>
+				valueFrom<{ status: string; revision: number; snapshot?: string; delta?: string }>(
+					await invoke({
+						action: "run",
+						name,
+						code: `return await (await tab.frame(${JSON.stringify(frame)})).ariaSnapshot(undefined, { diff: true });`,
+					}),
+				);
+			const first = await snapshot("#first");
+			expect(first).toMatchObject({ status: "full", revision: 1 });
+			expect(first.snapshot).toContain("Frame content 0.");
+			expect(await snapshot("#first")).toMatchObject({ status: "unchanged", revision: 1 });
+			expect(await snapshot("#second")).toMatchObject({ status: "full", revision: 1 });
+			await invoke({
+				action: "run",
+				name,
+				code: 'await (await tab.frame("#first")).evaluate(() => { document.querySelector("button").textContent = "Run all cells"; });',
+			});
+			const changed = await snapshot("#first");
+			expect(changed).toMatchObject({ status: "delta", revision: 2, baseRevision: 1 });
+			expect(changed.delta).toContain("Run all cells");
+			expect(await snapshot("#second")).toMatchObject({ status: "unchanged", revision: 1 });
+		} finally {
+			await invoke({ action: "close", name, kill: true }).catch(() => undefined);
+		}
+	}, 60_000);
+
 	test("masks password field values in ARIA snapshots like observe() does", async () => {
 		const invoke = createHost();
 		const name = `snapshot-password-${crypto.randomUUID()}`;
@@ -247,14 +303,14 @@ await tab.evaluate((s, p, l) => {
 					action: "run",
 					name,
 					code: `return await tab.evaluate((script, s, p, l) => {
-	const snapshot = (0, eval)(script);
+	const snapshot = (0, eval)(script).snapshot;
 	const value = id => document.getElementById(id).value;
 	const kept = value("pw") === s && value("tracked") === s + "-tracked" && value("pinned") === p && value("longer") === l
 		&& value("sealed") === s + "-sealed" && value("adopted") === s + "-adopted"
 		&& Object.getOwnPropertyDescriptor(document.getElementById("tracked"), "value")?.get === window.trackerGet
 		&& !Object.getOwnPropertyDescriptor(document.getElementById("adopted"), "value");
 	return { snapshot, kept, crossRealm: !(window.adoptedInput instanceof HTMLInputElement) };
-}, ${JSON.stringify(buildAriaSnapshotScript(undefined))}, ${JSON.stringify(secret)}, ${JSON.stringify(pinnedValue)}, ${JSON.stringify(longerValue)});`,
+}, ${JSON.stringify(buildAriaSnapshotPayloadScript(undefined))}, ${JSON.stringify(secret)}, ${JSON.stringify(pinnedValue)}, ${JSON.stringify(longerValue)});`,
 				}),
 			);
 			expect(pageWorld.snapshot).not.toContain(secret);
