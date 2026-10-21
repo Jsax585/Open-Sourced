@@ -361,6 +361,9 @@ export class SshProtocolHandler implements ProtocolHandler {
 	async write(url: InternalUrl, content: string, context?: WriteContext): Promise<void> {
 		const target = await resolveTarget(url, context?.cwd);
 		const remotePath = remotePathFromUrl(url);
-		await writeRemoteFile(target, remotePath, new TextEncoder().encode(content), { signal: context?.signal });
+		await writeRemoteFile(target, remotePath, new TextEncoder().encode(content), {
+			signal: context?.signal,
+			...(context?.requireRegularFile ? { requireRegularFile: true } : {}),
+		});
 	}
 }

@@ -734,11 +734,10 @@ export class EditTool implements AgentTool<TInput> {
 			if (request.op !== "update" || request.content === undefined) {
 				throw new ToolError("Remote edits support updating existing files only", { path: request.path });
 			}
-			await InternalUrlRouter.instance().write(
-				request.path,
-				request.content,
-				sessionResolveContext(this.session, { signal }),
-			);
+			await InternalUrlRouter.instance().write(request.path, request.content, {
+				...sessionResolveContext(this.session, { signal }),
+				requireRegularFile: true,
+			});
 			this.session.bumpFileMutationVersion?.(request.path);
 			// SSH itself has no local LSP work, but it can finish a batch that
 			// queued formatting/diagnostics for earlier local writes.
