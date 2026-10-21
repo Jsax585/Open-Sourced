@@ -1,23 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-### Fixed
-
-- Fixed `write` handing back a tag whose edits applied at any line number: the written lines are now numbered in the write result, so the model anchors on the line numbers it just saw, and an anchor the write did not display is rejected like an unread line ([#15666](https://github.com/can1357/oh-my-pi/issues/15666), [#16455](https://github.com/can1357/oh-my-pi/pull/16455) by [@yuzu-octopus](https://github.com/yuzu-octopus))
-
-## [18.12.5] - 2026-10-21
-
-### Added
-
-- `providers.cacheRetention: long` now keeps OpenAI GPT-5.6+ prompt caches for 12 hours (Responses API; cache writes cost 2.5× input instead of 1.25×)
-
-### Fixed
-
-## [18.12.5] - 2026-10-21
-
-### Added
-
-- `providers.cacheRetention: long` now keeps OpenAI GPT-5.6+ prompt caches for 12 hours (Responses API; cache writes cost 2.5× input instead of 1.25×)
 
 ### Added
 
@@ -56,6 +39,10 @@
 - Fixed the `eval` tool telling sessions with only the Python runtime to call `tool.<name>(args)` without `await`, which returns a coroutine and never runs the tool ([#16578](https://github.com/can1357/oh-my-pi/pull/16578) by [@will-bogusz](https://github.com/will-bogusz))
 - Task subagents on models that opt into shared prompt caching now share one cache key with their same-type siblings, even when the parent runs another model or the child switches models later; `/compact` and auto-compaction use that key against the model the compaction request actually sends, and keep the session's own id when no key applies ([#16988](https://github.com/can1357/oh-my-pi/pull/16988) by [@rafalopilowski1](https://github.com/rafalopilowski1))
 
+
+### Fixed
+
+- Fixed `write` handing back a tag whose edits applied at any line number: the written lines are now numbered in the write result, so the model anchors on the line numbers it just saw, and an anchor the write did not display is rejected like an unread line ([#15666](https://github.com/can1357/oh-my-pi/issues/15666), [#16455](https://github.com/can1357/oh-my-pi/pull/16455) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 ## [18.12.6] - 2026-10-21
 
 ### Added
