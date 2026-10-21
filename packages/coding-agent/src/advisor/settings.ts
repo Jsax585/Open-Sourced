@@ -66,17 +66,17 @@ export const cfgAdvisorStaleSteerTurns = register({
 	id: "advisor.staleSteerTurns",
 	protocolDefault: ["rpc", "acp"],
 	type: "number",
-	default: 2,
+	default: 0,
 	ui: {
 		tab: "model",
 		group: "Advisor",
 		label: "Advisor Stale Steer Turns",
 		description:
-			"Route interrupting notes as non-interrupting asides when their covered primary turn is this many or more turns old. Set to 0 to disable the freshness gate.",
+			"Route interrupting notes as non-interrupting asides when their covered primary turn is this many or more turns old. 0 (default) disables the freshness gate.",
 		options: [
-			{ value: "0", label: "0 turns", description: "Disabled." },
+			{ value: "0", label: "0 turns", description: "Disabled. Default." },
 			{ value: "1", label: "1 turn" },
-			{ value: "2", label: "2 turns", description: "Default." },
+			{ value: "2", label: "2 turns" },
 			{ value: "3", label: "3 turns" },
 			{ value: "5", label: "5 turns" },
 		],

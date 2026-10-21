@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `advisor.staleSteerTurns` (default `0`, off): when set to N, an interrupting advisor note whose review covered a primary turn at least N turns old is delivered as a non-interrupting, age-marked aside instead of steering the live turn ([#16626](https://github.com/can1357/oh-my-pi/pull/16626) by [@srobroek](https://github.com/srobroek))
+
 ## [18.12.5] - 2026-10-21
 
 ### Added
@@ -21,7 +25,6 @@
 ### Added
 
 - `bash` tool commands now see `PI_SESSION_ID` and `PI_SESSION_FILE`, so a script can find the running session's ID and transcript path ([#16442](https://github.com/can1357/oh-my-pi/pull/16442) by [@johnrichardrinehart](https://github.com/johnrichardrinehart) and [@will-bogusz](https://github.com/will-bogusz))
-- Added `advisor.staleSteerTurns` (default `2`) so live interrupting notes against old turns become non-interrupting, age-marked asides; `0` disables the freshness gate.
 - Added GitLab merge request support to `/review` and `/annotate code-review`: pass an MR URL, pick one mentioned in the conversation, or choose "Review a specific PR/MR" in a GitLab checkout to list open MRs (requires `glab`); large MRs link per-file diffs through the new `mr://<host>/<group>/<project>/<iid>/diff` URLs ([#16361](https://github.com/can1357/oh-my-pi/pull/16361) by [@Shadorain](https://github.com/Shadorain))
 - Added MCP tool progress: `tools/call` requests ask the server for `notifications/progress` when the progress can be shown, and updates appear in the running tool card and as an in-place `mcp_progress` status line in Eval cells, including after auto-backgrounding; request deadlines and Eval timeouts are unchanged ([#16431](https://github.com/can1357/oh-my-pi/pull/16431) by [@alphastorm](https://github.com/alphastorm))
 - Added image attachments to single and batch eval `judge()`/`judge_batch()` calls (local paths or embedded images); image judgments skip candidates without image support and fail explicitly instead of dropping images ([#15471](https://github.com/can1357/oh-my-pi/pull/15471) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy))
