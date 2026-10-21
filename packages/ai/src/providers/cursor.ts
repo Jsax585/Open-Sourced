@@ -1090,6 +1090,12 @@ function streamCursorWithWireMode(
 		// transport fails, and the error path finalizes the synthesized call just
 		// like the success path does.
 		const inFlightDispatches = new Set<Promise<void>>();
+		// Handlers that wait on the user (questions) would otherwise hold the
+		// failure path's drain until answered, and the answer has nowhere to go.
+		const transportFailed = new AbortController();
+		const dispatchSignal = options?.signal
+			? AbortSignal.any([options.signal, transportFailed.signal])
+			: transportFailed.signal;
 		// A dispatch can spawn another (a handler that decodes a nested frame), so
 		// re-check rather than awaiting one snapshot. Each dispatch already
 		// swallows its own rejection, so this only waits.
@@ -1498,7 +1504,7 @@ function streamCursorWithWireMode(
 							requestContextRules,
 							onConversationCheckpoint,
 							options?.externalToolExecutor,
-							options?.signal,
+							dispatchSignal,
 						).catch(error => {
 							log("error", "handleServerMessage", { error: String(error) });
 						});
@@ -1630,6 +1636,7 @@ function streamCursorWithWireMode(
 			});
 			stream.end();
 		} catch (caughtError) {
+			transportFailed.abort(caughtError);
 			let error = caughtError;
 			const h2Unavailable = transportMode === "http2" && isHttp2Unavailable(error);
 			if (

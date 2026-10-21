@@ -6,6 +6,10 @@ import type { Context, CursorToolResultHandler, Model, ToolResultMessage } from 
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
 	AgentServerMessageSchema,
+	AskQuestionArgs_OptionSchema,
+	AskQuestionArgs_QuestionSchema,
+	AskQuestionArgsSchema,
+	AskQuestionInteractionQuerySchema,
 	ConversationStateStructureSchema,
 	ExecServerMessageSchema,
 	CustomErrorDetailsSchema,
@@ -13,6 +17,7 @@ import {
 	ErrorDetailsSchema,
 	GetBlobArgsSchema,
 	HeartbeatUpdateSchema,
+	InteractionQuerySchema,
 	InteractionUpdateSchema,
 	KvServerMessageSchema,
 	McpArgsSchema,
@@ -51,6 +56,7 @@ type Scenario =
 	| { kind: "exec-in-final-chunk"; responseFinished: PromiseWithResolvers<void> }
 	| { kind: "exec-then-transport-error"; responseFinished: PromiseWithResolvers<void> }
 	| { kind: "exec-then-hang" }
+	| { kind: "question-then-transport-error" }
 	| { kind: "todo-start-then-death" };
 
 let server: http2.Http2Server | undefined;
@@ -216,6 +222,34 @@ function execRequestFrame(): Buffer {
 	return frameConnectMessage(toBinary(AgentServerMessageSchema, message));
 }
 
+/** A native `AskQuestion` the user has not answered yet. */
+function askQuestionFrame(): Buffer {
+	const message = create(AgentServerMessageSchema, {
+		message: {
+			case: "interactionQuery",
+			value: create(InteractionQuerySchema, {
+				id: 7,
+				query: {
+					case: "askQuestionInteractionQuery",
+					value: create(AskQuestionInteractionQuerySchema, {
+						toolCallId: "call-ask",
+						args: create(AskQuestionArgsSchema, {
+							questions: [
+								create(AskQuestionArgs_QuestionSchema, {
+									id: "db",
+									prompt: "Database?",
+									options: [create(AskQuestionArgs_OptionSchema, { id: "pg", label: "Postgres" })],
+								}),
+							],
+						}),
+					}),
+				},
+			}),
+		},
+	});
+	return frameConnectMessage(toBinary(AgentServerMessageSchema, message));
+}
+
 /**
  * Exec request + `turnEnded` in one chunk: the clean-completion race. Without a
  * barrier before `done`, the Agent drains its Cursor result buffer first and
@@ -330,6 +364,14 @@ async function startServer(): Promise<string> {
 			// not ending.
 			stream.write(
 				Buffer.concat([execRequestFrame(), connectEndErrorFrame("unavailable", "mid-exec transport failure")]),
+			);
+			stream.end();
+			return;
+		}
+
+		if (scenario.kind === "question-then-transport-error") {
+			stream.write(
+				Buffer.concat([askQuestionFrame(), connectEndErrorFrame("unavailable", "transport died mid-question")]),
 			);
 			stream.end();
 			return;
@@ -900,6 +942,46 @@ describe("Cursor terminal lifecycle after turnEnded", () => {
 		expect(eventTypes).not.toContain("done");
 		expect(result.errorMessage).toContain("mid-exec transport failure");
 		expect(paired).toEqual(["call-final"]);
+	});
+
+	it("cancels an open question when the transport fails", async () => {
+		// A question waits on the user, and the failure path drains every
+		// in-flight handler before surfacing the error; without cancellation the
+		// dialog stays open and the dead turn never reports its error.
+		scenario = { kind: "question-then-transport-error" };
+		const baseUrl = await startServer();
+		let questionSignal: AbortSignal | undefined;
+		const stream = streamCursor(makeModel(baseUrl), context, {
+			apiKey: "test-token",
+			execHandlers: {
+				async askQuestion(call) {
+					questionSignal = call.signal;
+					const { promise, resolve } = Promise.withResolvers<void>();
+					call.signal?.addEventListener("abort", () => resolve(), { once: true });
+					await promise;
+					return {
+						toolResult: {
+							role: "toolResult",
+							toolCallId: call.toolCallId,
+							toolName: "ask",
+							content: [{ type: "text", text: "Question was cancelled" }],
+							isError: true,
+							timestamp: 1,
+						},
+					};
+				},
+			},
+		});
+
+		const eventTypes: string[] = [];
+		for await (const event of stream) {
+			eventTypes.push(event.type);
+		}
+		const result = await stream.result();
+
+		expect(questionSignal?.aborted).toBe(true);
+		expect(eventTypes.at(-1)).toBe("error");
+		expect(result.errorMessage).toContain("transport died mid-question");
 	});
 
 	it("does not hold the abort hostage to a hung exec handler", async () => {
