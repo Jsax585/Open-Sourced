@@ -78,6 +78,7 @@ When no `WATCHDOG.yml` roster is present, the default advisor uses these setting
 - `advisor.reviewInterval` — review every Nth eligible update (default `1`). Skipped updates are captured as the primary saw them and sent with the next scheduled review.
 - `advisor.maxNotesPerUpdate` — maximum non-blocker advice notes accepted per advisor update (default `4`, range 1–32). Blockers are exempt.
 - `advisor.syncBacklog` — catch-up policy (default `off`); numeric thresholds are bounded, while `strict` waits without a wall-clock cap.
+- `advisor.staleSteerTurns` — live-only freshness gate: interrupting notes at least N primary turns older than their covered turn become non-interrupting asides with a `turns_ago` marker. Default `0` disables the gate; set a positive threshold to opt in. Terminal-boundary flush behavior is unchanged.
 
 Edits to these settings apply to the running advisor at its next primary boundary without rebuilding it.
 
@@ -179,6 +180,8 @@ Session/client constraints can preserve a note whose normal delivery path is ste
 So the advisor can steer and resume a run the agent ended on its own **while it is running or yielded mid-work and the current mode/client permits steering**. When steering is blocked instead, the note is either preserved as a card (the terminal-answer, plan-mode, and deferred-ACP cases above) or, for a concern while the agent is running or yielded mid-work, downgraded to a non-interrupting aside during the `advisor.immuneTurns` cooldown; either way it waits for the next turn boundary or resume rather than waking the agent.
 
 `advisor.immuneTurns` limits concern interruption frequency independently of review cadence. After the advisor successfully delivers a `concern` or `blocker` through the steering channel, later concerns are routed as non-interrupting asides until the configured number of primary turns has completed. Tool-loop continuations count toward that cooldown even for an `agent-end` reviewer. The default is `3`. Blockers are exempt from this cooldown, but still obey preservation constraints such as deliberate interrupts and plan mode. `nit` notes are unchanged.
+
+`advisor.staleSteerTurns` gates live routing only: an interrupting note becomes a non-interrupting aside once its covered primary turn is at least this many turns old, and carries a `turns_ago` marker. The default is `0` (disabled); set a positive threshold to opt in. Terminal-boundary buffering and merged flushes are unchanged.
 
 While an advisor update reviews work still in progress, `AdviseTool` defers `nit` and `concern` calls until a final boundary; only a `blocker` may interrupt partial work. Deferred notes pass the emission guard before reservation. A higher-severity note may displace a pending lower-severity note from the same review, but cannot displace notes from earlier reviews or retract routed advice. A final boundary flushes pending notes even when cadence skips a new review, without resetting the current review's budget.
 

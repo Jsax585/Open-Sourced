@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `advisor.staleSteerTurns` (default `0`, off): when set to N, an interrupting advisor note whose review covered a primary turn at least N turns old is delivered as a non-interrupting, age-marked aside instead of steering the live turn ([#16626](https://github.com/can1357/oh-my-pi/pull/16626) by [@srobroek](https://github.com/srobroek))
+
 ## [18.12.5] - 2026-10-21
 
 ### Added

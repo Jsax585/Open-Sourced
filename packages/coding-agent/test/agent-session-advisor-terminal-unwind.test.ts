@@ -193,8 +193,9 @@ it.each([
 			"compaction.enabled": false,
 			"retry.enabled": false,
 			"advisor.syncBacklog": "off",
-			...(immuneTurns === 0 ? { "advisor.immuneTurns": 0 } : {}),
 			...(continueSeverity ? { "advisor.continueSeverity": continueSeverity } : {}),
+			"advisor.staleSteerTurns": 1,
+			...(immuneTurns === 0 ? { "advisor.immuneTurns": 0 } : {}),
 		});
 		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
 		const session = new AgentSession({
