@@ -1,22 +1,21 @@
 /** Terminal outcome safety helpers for task subagent finalization. */
 export type TerminalInput = {
+	/** Exit code before yield/success normalization. */
+	initialExitCode: number;
 	doneAborted: boolean;
 	signalAborted: boolean;
-	exitCode: number;
-	/** A success yield committed the result before internal termination. */
-	hasCommittedSuccess?: boolean;
+	/** A terminal success yield committed the result before internal termination. */
+	hasCommittedSuccess: boolean;
+	/** The finalizer has no error text for this termination. */
+	stderrEmpty: boolean;
 };
 
-export function isErrorEnvelope(data: unknown): boolean {
-	if (data === null || typeof data !== "object") return false;
-	const d = data as Record<string, unknown>;
-	if (d.aborted === true || d.cancelled === true || d.canceled === true) return true;
-	if (d.success === false) return true;
-	return "error" in d && d.error !== null && d.error !== "" && d.error !== false;
-}
-
 export function isTerminalFailure(input: TerminalInput): boolean {
-	if (input.exitCode !== 0) return true;
-	if (input.hasCommittedSuccess === true) return false;
+	if (input.initialExitCode !== 0) {
+		// A completed yield may be followed by expected internal abort cleanup with an empty stderr;
+		// preserve that established success path. A genuine failure without a committed result fails.
+		return !(input.hasCommittedSuccess && input.stderrEmpty);
+	}
+	if (input.hasCommittedSuccess) return false;
 	return input.doneAborted === true || input.signalAborted === true;
 }

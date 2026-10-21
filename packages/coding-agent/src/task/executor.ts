@@ -131,7 +131,7 @@ import {
 } from "@oh-my-pi/pi-tui/tools/task";
 import { yieldSectionShapes } from "./yield-assembly";
 import { assembleYieldResult } from "@oh-my-pi/pi-tui/tools/task-yield-assembly";
-import { isErrorEnvelope, isTerminalFailure } from "./execution-safety";
+import { isTerminalFailure } from "./execution-safety";
 import {
 	cfgTaskPrewalk,
 	cfgTaskAgentPrewalk,
@@ -715,6 +715,7 @@ function buildSchemaViolationOutcome(
 
 export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): FinalizeSubprocessOutputResult {
 	let { rawOutput, exitCode, stderr } = args;
+	const initialExitCode = exitCode;
 	const { yieldItems, doneAborted, signalAborted, outputSchema, lastAssistantText } = args;
 	const mode = args.outputSchemaMode ?? "permissive";
 	const source = args.outputSchemaSource ?? (outputSchema === undefined ? "none" : "session");
@@ -722,10 +723,10 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 	let structuredOutput: StructuredSubagentOutput | undefined;
 	let abortedViaYield = false;
 	const hasYield = Array.isArray(yieldItems) && yieldItems.length > 0;
+	const lastYield = hasYield ? yieldItems[yieldItems.length - 1] : undefined;
 	const hadFailureBeforeYield = exitCode !== 0 && stderr.trim().length > 0;
 
 	if (hasYield) {
-		const lastYield = yieldItems[yieldItems.length - 1];
 		if (lastYield?.status === "aborted") {
 			abortedViaYield = true;
 			exitCode = 0;
@@ -868,22 +869,40 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		}
 	}
 
-	// A committed success yield may survive internal termination; a real nonzero exit or an error
-	// envelope may not. A terminal abort with no committed result still fails closed.
-	const lastYieldStatus = hasYield ? yieldItems[yieldItems.length - 1]?.status : undefined;
-	const committedSuccessfulYield =
-		lastYieldStatus === "success" && (structuredOutput === undefined || structuredOutput.status === "valid");
-	const terminalFailure =
-		isTerminalFailure({ doneAborted, signalAborted, exitCode, hasCommittedSuccess: committedSuccessfulYield }) ||
-		(structuredOutput?.status === "valid" && isErrorEnvelope(structuredOutput.data));
-	if (terminalFailure) {
-		exitCode = exitCode === 0 ? 1 : exitCode;
-		if (includeStructuredOutput && structuredOutput?.status === "valid") {
-			structuredOutput = {
-				...structuredOutput,
-				status: "invalid",
-				error: stderr || "terminal failure",
-			};
+	// A committed terminal success may survive expected internal termination; a genuine nonzero
+	// process exit may not. A cancellation without a committed terminal yield still fails closed.
+	// Incremental yields are sections, not a committed terminal result (complete workpool batches
+	// are terminal). Error-like field names in payload data are not failure signals; YieldTool
+	// distinguishes explicit failure through `status: "aborted"` (kept above as abortedViaYield).
+	if (!abortedViaYield) {
+		let terminalYield: YieldItem | undefined;
+		for (let index = yieldItems ? yieldItems.length - 1 : -1; index >= 0; index--) {
+			const item = yieldItems?.[index];
+			if (!item) continue;
+			const incremental = Array.isArray(item.type) && item.type.length > 0;
+			if (!incremental || item.complete === true) {
+				terminalYield = item;
+				break;
+			}
+		}
+		const committedSuccessfulYield =
+			terminalYield?.status === "success" && (structuredOutput === undefined || structuredOutput.status === "valid");
+		const terminalFailure = isTerminalFailure({
+			initialExitCode,
+			doneAborted,
+			signalAborted,
+			hasCommittedSuccess: committedSuccessfulYield,
+			stderrEmpty: stderr.trim().length === 0,
+		});
+		if (terminalFailure) {
+			exitCode = exitCode === 0 ? 1 : exitCode;
+			if (includeStructuredOutput && structuredOutput?.status === "valid") {
+				structuredOutput = {
+					...structuredOutput,
+					status: "invalid",
+					error: stderr || "terminal failure",
+				};
+			}
 		}
 	}
 	return { rawOutput, exitCode, stderr, abortedViaYield, hasYield, structuredOutput };
