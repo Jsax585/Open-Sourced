@@ -73,7 +73,7 @@ export interface ClaudeResetPlanInput {
 	 * any spend, or the usage reports' inventory to find salvage candidates.
 	 */
 	statuses: readonly ResetCreditAccountStatus[];
-	/** `allowance-spent`: restrict restoration to this exact credential. */
+	/** Restrict restoration to this exact credential and stop before expiry salvage. */
 	targetCredentialId?: number;
 	/** Blocked recovery: whether a stored credential may serve the blocked session; absent allows every account. */
 	permitsCredential?: (credentialId: number) => boolean;
@@ -396,7 +396,7 @@ export function planClaudeResetRedemptions(input: ClaudeResetPlanInput): ClaudeR
 		for (const snapshot of snapshots) {
 			const skip = (reason: ClaudeResetSkipReason) =>
 				skipped.push({ accountKey: snapshot.accountKey, rule: "blocked-account", reason });
-			if (input.trigger === "allowance-spent" && snapshot.target.credentialId !== input.targetCredentialId) {
+			if (input.targetCredentialId !== undefined && snapshot.target.credentialId !== input.targetCredentialId) {
 				continue;
 			}
 			// Restoring an account the session may not use cannot unblock it.
@@ -512,7 +512,7 @@ export function planClaudeResetRedemptions(input: ClaudeResetPlanInput): ClaudeR
 			};
 		}
 	}
-	if (input.trigger === "allowance-spent") {
+	if (input.targetCredentialId !== undefined) {
 		return { actions: restore ? [restore] : [], skipped };
 	}
 
