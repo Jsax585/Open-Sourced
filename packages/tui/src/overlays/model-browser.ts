@@ -1560,11 +1560,15 @@ export class ModelBrowser implements Component {
 		let left = `${prefix}${providerPrefix}${name}${currentMark}${overLimit}`;
 
 		// Metric columns collapse when empty or when the row needs room for its name.
+		// The selected row's info follows the name's highlight color so the metrics
+		// read as belonging to the model the cursor sits on.
+		const metricColor: ThemeColor = selected ? (item.labelColor ?? "accent") : "dim";
 		const cols: string[] = [];
-		if (intelligenceWidth > 0) cols.push(theme.fg("dim", padLeftVisible(metrics.intelligence, intelligenceWidth)));
-		if (perfWidth > 0) cols.push(theme.fg("dim", padLeftVisible(perfCell, perfWidth)));
-		if (ctxWidth > 0) cols.push(theme.fg("dim", padLeftVisible(metrics.ctx, ctxWidth)));
-		if (costWidth > 0) cols.push(theme.fg("dim", padLeftVisible(metrics.cost, costWidth)));
+		if (intelligenceWidth > 0)
+			cols.push(theme.fg(metricColor, padLeftVisible(metrics.intelligence, intelligenceWidth)));
+		if (perfWidth > 0) cols.push(theme.fg(metricColor, padLeftVisible(perfCell, perfWidth)));
+		if (ctxWidth > 0) cols.push(theme.fg(metricColor, padLeftVisible(metrics.ctx, ctxWidth)));
+		if (costWidth > 0) cols.push(theme.fg(metricColor, padLeftVisible(metrics.cost, costWidth)));
 		const metaWidth = metaColumnsWidth([intelligenceWidth, perfWidth, ctxWidth, costWidth]);
 		const available = Math.max(1, width - metaWidth - (cols.length > 0 ? 1 : 0));
 		left = truncateToWidth(left, available);
