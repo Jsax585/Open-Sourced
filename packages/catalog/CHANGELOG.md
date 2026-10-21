@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `web/deepseek` failing with "No web search model matches" since 18.12.2; the DeepSeek Search API engine is selectable again via `--model web/deepseek` and the `web` role ([#16609](https://github.com/can1357/oh-my-pi/pull/16609) by [@jhste102lab](https://github.com/jhste102lab))
+
 ## [18.12.5] - 2026-10-21
 
 ### Fixed
