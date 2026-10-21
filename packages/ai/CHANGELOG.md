@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `authStorage.usage.paidUsage(reports)`, which reports each account's provider-reported paid extra usage: spend cap or credit balance, floor, budget, automatic spending headroom, provider refusal, and figure age. `ExtraUsageState` now includes `capacity` and `limitId`, and records `enabled: false` when the provider reports paid usage off.
+
 ## [18.12.5] - 2026-10-21
 
 ### Added
