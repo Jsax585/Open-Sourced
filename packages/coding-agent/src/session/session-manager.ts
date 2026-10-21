@@ -1016,12 +1016,14 @@ export class SessionManager {
 
 	private constructor(cwd: string, sessionDir: string, persist: boolean, storage: SessionStorage) {
 		this.#cwd = cwd;
-		this.#sessionDir = sessionDir;
+		// Absolute, so session files (and `PI_SESSION_FILE` in bash and eval) stay
+		// valid after a command changes directory: `--session-dir` may be relative.
+		this.#sessionDir = sessionDir ? path.resolve(sessionDir) : sessionDir;
 		this.#persist = persist;
 		this.#storage = storage;
 		this.#blobs = new BlobStore(getBlobsDir());
 
-		if (persist && sessionDir) this.#storage.ensureDirSync(sessionDir);
+		if (persist && sessionDir) this.#storage.ensureDirSync(this.#sessionDir);
 	}
 
 	#rememberBreadcrumb(cwd: string, sessionFile: string, fresh = false): void {
@@ -2096,7 +2098,8 @@ export class SessionManager {
 		if (batch?.collecting) batch.entryIds.add(entry.id);
 		if (batch && !batch.collecting) {
 			batch.externalLeafChanged = true;
-			batch.externalLeafId = entry.id;
+			// An off-branch entry replays to the leaf it captured, not to itself.
+			batch.externalLeafId = sessionEntryLeafId(entry);
 		}
 		this.#appendToSessionFile(entry);
 		if (batch) batch.deferredNotifications.push(entry);
@@ -2115,8 +2118,8 @@ export class SessionManager {
 		const retained = this.#entries.filter(entry => !batch.entryIds.has(entry.id));
 		for (const entry of retained) {
 			entry.parentId = retainedAncestor(entry.parentId);
-			// A late-usage marker captured a staged leaf; keep it pointing at a surviving entry.
-			if (entry.type === "model_usage" && typeof entry.activeLeafId === "string") {
+			// An off-branch entry captured a staged leaf; keep it pointing at a surviving entry.
+			if (typeof entry.activeLeafId === "string") {
 				entry.activeLeafId = retainedAncestor(entry.activeLeafId);
 			}
 		}
@@ -2173,6 +2176,7 @@ export class SessionManager {
 		this.#artifactManager = new ArtifactManager(
 			sessionFile.slice(0, -JSONL_SUFFIX_LENGTH),
 			pendingCopy?.sessionFile === sessionFile ? pendingCopy.done : undefined,
+			this.getSeanceSourceArtifactsDir() ?? undefined,
 		);
 		this.#artifactManagerSessionFile = sessionFile;
 		return this.#artifactManager;
@@ -3180,6 +3184,11 @@ export class SessionManager {
 		return artifactsDirectoryFor(this.#sessionFile);
 	}
 
+	/** Source artifacts a seance fork reads in place; null for ordinary sessions. */
+	getSeanceSourceArtifactsDir(): string | null {
+		return artifactsDirectoryFor(this.#header?.seanceSource);
+	}
+
 	adoptArtifactManager(manager: ArtifactManager): void {
 		this.#adoptedArtifactManager = manager;
 	}
@@ -3416,6 +3425,11 @@ export class SessionManager {
 	/**
 	 * Append to a non-active branch without changing the current leaf.
 	 * Used by work that retains ownership of a branch across tree navigation.
+	 *
+	 * The entry records the active leaf it interrupted (`activeLeafId`) so a
+	 * reload replays the same leaf instead of adopting this off-branch tail.
+	 * Pass `preserveActiveLeaf: false` when the caller selects the new entry as
+	 * the leaf instead (a re-answered `ask`).
 	 */
 	appendMessageToBranch(
 		message:
@@ -3426,6 +3440,7 @@ export class SessionManager {
 			| PythonExecutionMessage
 			| FileMentionMessage,
 		parentId: string | null,
+		options?: { preserveActiveLeaf?: boolean },
 	): string {
 		if (parentId !== null && !this.#index.has(parentId)) throw new Error(`Entry ${parentId} not found`);
 		const activeLeafId = this.#index.leafId();
@@ -3436,12 +3451,13 @@ export class SessionManager {
 			timestamp: nowIso(),
 			runtime: currentRuntimeIdentity(),
 			message,
+			...(options?.preserveActiveLeaf === false ? {} : { activeLeafId }),
 		};
-		// The leaf is restored below, so the entry never joins the active branch;
-		// keep it out of any branch view already handed out.
+		// The entry never joins the active branch; keep it out of any branch view
+		// already handed out. Recording `activeLeafId` leaves the index's leaf on
+		// the active branch, as the in-memory contract requires.
 		this.#index.detachBranchView();
 		this.#recordEntry(entry);
-		this.#index.setLeaf(activeLeafId);
 		return entry.id;
 	}
 
@@ -3894,15 +3910,12 @@ export class SessionManager {
 		if (branchPath.length === 0) throw new Error(`Entry ${leafId} not found`);
 
 		// Drop label entries from the path; recreate them fresh from the resolved map.
-		// Every kept entry lies on the forked path, so a late-usage leaf marker no longer applies.
+		// Every kept entry lies on the forked path, so a late-usage or off-branch leaf
+		// marker no longer applies.
 		const entriesToKeep: SessionEntry[] = [];
 		for (const entry of branchPath) {
 			if (entry.type === "label") continue;
-			entriesToKeep.push(
-				entry.type === "model_usage" && entry.activeLeafId !== undefined
-					? { ...entry, activeLeafId: undefined }
-					: entry,
-			);
+			entriesToKeep.push(entry.activeLeafId === undefined ? entry : { ...entry, activeLeafId: undefined });
 		}
 		const keptIds = new Set(entriesToKeep.map(entry => entry.id));
 		const labelsToCarry: Array<{ targetId: string; label: string }> = [];
@@ -4025,6 +4038,12 @@ export class SessionManager {
 	 * auto-named `<timestamp>_<id>.jsonl` in `sessionDir`). Artifacts are copied
 	 * recursively by default; nested agents that deliberately share their parent's
 	 * artifact root may disable this with `copyArtifacts: false`.
+	 *
+	 * `seance` creates a read-only consult fork instead: artifacts stay in the
+	 * source (the header's `seanceSource` points lookups at them), inherited
+	 * workspace roots are dropped, and the source's `session_init` contracts
+	 * become inert `source_session_init` custom entries so revival never
+	 * mistakes them for the fork's own.
 	 */
 	static async forkFrom(
 		sourcePath: string,
@@ -4037,6 +4056,7 @@ export class SessionManager {
 			sessionFile?: string;
 			resetInheritedCost?: boolean;
 			repairInterruptedTail?: boolean;
+			seance?: boolean;
 		},
 	): Promise<SessionManager> {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
@@ -4069,9 +4089,15 @@ export class SessionManager {
 		);
 		manager.#header.title = sourceHeader?.title;
 		manager.#header.titleSource = sourceHeader?.titleSource;
-		manager.#additionalDirectories = (sourceHeader?.additionalDirectories ?? []).filter(d => d !== path.resolve(cwd));
+		manager.#additionalDirectories = options?.seance
+			? []
+			: (sourceHeader?.additionalDirectories ?? []).filter(d => d !== path.resolve(cwd));
 		manager.#header.additionalDirectories =
 			manager.#additionalDirectories.length > 0 ? manager.#additionalDirectories : undefined;
+		if (options?.seance) {
+			manager.#header.seanceSource = path.resolve(sourcePath);
+			SessionManager.#neutralizeSessionInits(history);
+		}
 		manager.#sessionName = manager.#header.title;
 		manager.#titleSource = manager.#header.titleSource;
 		manager.#titleUpdatedAt = nowIso();
@@ -4085,10 +4111,27 @@ export class SessionManager {
 		}
 		manager.#forceFileCreation = true;
 		await manager.#rewriteAtomically();
-		if (options?.copyArtifacts !== false) {
+		if (!options?.seance && options?.copyArtifacts !== false) {
 			await copySessionArtifacts(sourcePath, manager.#sessionFile!);
 		}
 		return manager;
+	}
+
+	/** Replace inherited `session_init` entries, in place, with inert custom entries keeping the same tree position. */
+	static #neutralizeSessionInits(history: SessionEntry[]): void {
+		for (let index = 0; index < history.length; index++) {
+			const entry = history[index]!;
+			if (entry.type !== "session_init") continue;
+			const neutralized: CustomEntry = {
+				type: "custom",
+				customType: "source_session_init",
+				id: entry.id,
+				parentId: entry.parentId,
+				timestamp: entry.timestamp,
+				data: entry,
+			};
+			history[index] = neutralized;
+		}
 	}
 
 	/**
@@ -4251,6 +4294,7 @@ export class SessionManager {
 	): Promise<{
 		cwd: string;
 		init: PersistedSessionInit | null;
+		seanceSource?: string;
 	} | null> {
 		let header: SessionHeader | undefined;
 		const initEntries: FileEntry[] = [];
@@ -4269,7 +4313,11 @@ export class SessionManager {
 		}
 		// A missing, empty, or invalid file has no usable session.
 		if (!header) return null;
-		return { cwd: header.cwd ?? getProjectDir(), init: extractSessionInit(initEntries) };
+		return {
+			cwd: header.cwd ?? getProjectDir(),
+			init: extractSessionInit(initEntries),
+			seanceSource: header.seanceSource,
+		};
 	}
 	/** Continue the most recent session, or create a new one if none exists. */
 	static async continueRecent(

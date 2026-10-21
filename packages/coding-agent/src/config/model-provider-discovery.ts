@@ -1,5 +1,6 @@
 import type { OAuthAccess } from "@oh-my-pi/pi-ai";
 import type { Api, Model } from "@oh-my-pi/pi-ai/types";
+import { authProviders } from "@oh-my-pi/pi-catalog/compat/auth";
 import type { ModelResolutionSource } from "@oh-my-pi/pi-catalog/model-manager";
 import { MODELS_DEV_CATALOG_PROVIDER_IDS, PROVIDER_DESCRIPTORS } from "@oh-my-pi/pi-catalog/provider-models";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
@@ -25,15 +26,14 @@ for (const providerId of [
 
 export const STARTUP_MODEL_CACHE_PROVIDER_IDS: readonly string[] = Object.keys(STARTUP_MODEL_CACHE_PROVIDER_IDS_RECORD);
 
-// Sentinels for local-only OAuth tokens — declared inline to avoid loading
-// provider modules at startup. Must match the llama-cpp, lm-studio, vllm and
-// openzoo auth rules in packages/catalog/src/compat/rules/auth/.
-const LOCAL_PROVIDER_PLACEHOLDERS = new Set<string>([
-	"llama-cpp-local",
-	"lm-studio-local",
-	"vllm-local",
-	"openzoo-local",
-]);
+// Keyless-mode markers: each api-key login's KDL `empty-fallback` (e.g.
+// `lm-studio-local`), stored on an empty paste and never sent as a bearer.
+// OpenZoo's `openzoo-local` comes from rules/auth/openzoo.kdl the same way.
+const LOCAL_PROVIDER_PLACEHOLDERS = new Set<string>(
+	authProviders().flatMap(entry =>
+		entry.login?.kind === "api-key" && entry.login.emptyFallback ? [entry.login.emptyFallback] : [],
+	),
+);
 
 /**
  * Hard bound for extension-provided fetchDynamicModels to prevent indefinite hangs
