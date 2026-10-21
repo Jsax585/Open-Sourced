@@ -671,6 +671,13 @@ interface FinalizeSubprocessOutputArgs {
 	lastAssistantText?: string;
 	/** `false` = no `yield` tool: `rawOutput` is the final assistant message, returned verbatim. Default `true`. */
 	structured?: boolean;
+	/** Current run-monitor terminal state; production finalization always supplies this. */
+	terminalContext?: {
+		terminalYieldAccepted: boolean;
+		finalYieldForced: boolean;
+		yieldInvalidatedByAsync: boolean;
+		abortKind?: AbortReason;
+	};
 }
 
 interface FinalizeSubprocessOutputResult {
@@ -876,23 +883,38 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 	// distinguishes explicit failure through `status: "aborted"` (kept above as abortedViaYield).
 	if (!abortedViaYield) {
 		let terminalYield: YieldItem | undefined;
-		for (let index = yieldItems ? yieldItems.length - 1 : -1; index >= 0; index--) {
-			const item = yieldItems?.[index];
-			if (!item) continue;
-			const incremental = Array.isArray(item.type) && item.type.length > 0;
-			if (!incremental || item.complete === true) {
-				terminalYield = item;
-				break;
+		if (args.terminalContext === undefined) {
+			// Standalone/source tests: preserve the historical terminal-scan fallback.
+			for (let index = yieldItems ? yieldItems.length - 1 : -1; index >= 0; index--) {
+				const item = yieldItems?.[index];
+				if (!item) continue;
+				const incremental = Array.isArray(item.type) && item.type.length > 0;
+				if (!incremental || item.complete === true) {
+					terminalYield = item;
+					break;
+				}
 			}
 		}
-		const committedSuccessfulYield =
-			terminalYield?.status === "success" && (structuredOutput === undefined || structuredOutput.status === "valid");
+		const context = args.terminalContext;
+		const committedSuccessfulYield = context
+			? context.terminalYieldAccepted &&
+				!context.yieldInvalidatedByAsync &&
+				(structuredOutput === undefined || structuredOutput.status === "valid")
+			: terminalYield?.status === "success" &&
+				(structuredOutput === undefined || structuredOutput.status === "valid");
+		const expectedInternalTermination = context
+			? (context.abortKind === "terminate" || context.abortKind === "budget") && context.terminalYieldAccepted
+			: doneAborted === true;
+		const externalTermination = context
+			? context.abortKind === "signal" || context.abortKind === "timeout" || context.abortKind === "shutdown"
+			: signalAborted === true;
 		const terminalFailure = isTerminalFailure({
 			initialExitCode,
 			doneAborted,
 			signalAborted,
 			hasCommittedSuccess: committedSuccessfulYield,
-			stderrEmpty: stderr.trim().length === 0,
+			expectedInternalTermination,
+			externalTermination,
 		});
 		if (terminalFailure) {
 			exitCode = exitCode === 0 ? 1 : exitCode;
@@ -1307,6 +1329,7 @@ interface SubagentRunMonitor {
 	 * satisfy the pin forever without ending the run.
 	 */
 	markFinalYieldForced(forced: boolean): void;
+	finalYieldForced(): boolean;
 	/** Epoch ms when the run's terminal `yield` was recorded; undefined while none is latched. */
 	yieldAcceptedAt(): number | undefined;
 	runtimeLimitExceeded(): boolean;
@@ -2333,6 +2356,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		markFinalYieldForced: (forced: boolean) => {
 			finalYieldForced = forced;
 		},
+		finalYieldForced: () => finalYieldForced,
 		yieldAcceptedAt: () => yieldAcceptedAt,
 		runtimeLimitExceeded: () => runtimeLimitExceeded,
 		terminalError: () => terminalError,
@@ -2878,6 +2902,12 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 			outputSchemaSource: args.outputSchemaSource,
 			lastAssistantText: monitor.lastReportTurnText(),
 			structured,
+			terminalContext: {
+				terminalYieldAccepted: monitor.yieldCalled(),
+				finalYieldForced: monitor.finalYieldForced(),
+				yieldInvalidatedByAsync: monitor.yieldInvalidatedByAsync(),
+				abortKind: monitor.abortKind(),
+			},
 		});
 	} finally {
 		popLoopPhase();

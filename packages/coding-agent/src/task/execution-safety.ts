@@ -4,18 +4,18 @@ export type TerminalInput = {
 	initialExitCode: number;
 	doneAborted: boolean;
 	signalAborted: boolean;
-	/** A terminal success yield committed the result before internal termination. */
+	/** A current terminal success yield committed the result. */
 	hasCommittedSuccess: boolean;
-	/** The finalizer has no error text for this termination. */
-	stderrEmpty: boolean;
+	/** Run-monitor evidence that termination was an expected internal stop. */
+	expectedInternalTermination: boolean;
+	/** Run-monitor evidence of an external cancellation/timeout/shutdown. */
+	externalTermination: boolean;
 };
 
 export function isTerminalFailure(input: TerminalInput): boolean {
 	if (input.initialExitCode !== 0) {
-		// A completed yield may be followed by expected internal abort cleanup with an empty stderr;
-		// preserve that established success path. A genuine failure without a committed result fails.
-		return !(input.hasCommittedSuccess && input.stderrEmpty);
+		return !(input.hasCommittedSuccess && input.expectedInternalTermination);
 	}
-	if (input.hasCommittedSuccess) return false;
+	if (input.hasCommittedSuccess) return input.externalTermination;
 	return input.doneAborted === true || input.signalAborted === true;
 }
