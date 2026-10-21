@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed configured discovery models whose request headers come from models.yml (`modelOverrides.<id>.headers` or provider-level `headers`) disappearing from the catalog after their model cache row was written: the cache readers now rebuild those headers from the same local configuration that attached them instead of dropping the rows, so `--continue`/`--resume` restore the saved model instead of failing with `Could not restore model <provider/id>`
+- Fixed `--continue`/`--resume` failing with `Could not restore model <provider/id>` for configured discovery models whose request headers are set in models.yml; they now stay restorable across restarts ([#15683](https://github.com/can1357/oh-my-pi/pull/15683) by [@comicchang](https://github.com/comicchang))
+
 ## [18.12.5] - 2026-10-21
 
 ### Added
