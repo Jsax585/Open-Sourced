@@ -29,6 +29,8 @@ function extraState(overrides: Partial<ExtraUsageState> = {}): ExtraUsageState {
 		used: 5,
 		remaining: 50,
 		uncapped: false,
+		capacity: "spend-cap",
+		limitId: "extra",
 		...overrides,
 	};
 }

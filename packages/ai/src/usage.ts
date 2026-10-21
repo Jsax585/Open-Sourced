@@ -161,6 +161,10 @@ export interface ExtraUsageState {
 	used?: number;
 	remaining?: number;
 	uncapped: boolean;
+	/** Whether `remaining` measures spend-cap headroom or a prepaid balance. */
+	capacity: "spend-cap" | "balance";
+	/** Usage-limit identifier carrying these figures; absent when paid usage is disabled. */
+	limitId?: string;
 }
 
 /**

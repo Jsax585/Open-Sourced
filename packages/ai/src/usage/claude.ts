@@ -512,6 +512,14 @@ function buildClaudeExtraUsageLimit(payload: ClaudeUsageResponse): UsageLimit | 
 	};
 }
 
+function claudeExtraUsageEnabled(payload: ClaudeUsageResponse): boolean | undefined {
+	if (isRecord(payload.spend)) return typeof payload.spend.enabled === "boolean" ? payload.spend.enabled : undefined;
+	if (isRecord(payload.extra_usage)) {
+		return typeof payload.extra_usage.is_enabled === "boolean" ? payload.extra_usage.is_enabled : undefined;
+	}
+	return undefined;
+}
+
 function buildUsageLimit(args: {
 	id: string;
 	label: string;
@@ -659,7 +667,8 @@ async function fetchClaudeUsage(params: UsageFetchParams, ctx: UsageFetchContext
 		if (!result.endpointAbsent) break;
 	}
 	if (!payload || baseUrl === undefined) return null;
-	const report = parseClaudeUsagePayload(payload, credential, `${baseUrl}/usage`);
+	const payloadFetchedAt = Date.now();
+	const report = parseClaudeUsagePayload(payload, credential, `${baseUrl}/usage`, payloadFetchedAt);
 	const resetCreditList =
 		parseClaudeResetCreditsFromUsagePayload(payload, credential.orgId, baseUrl) ??
 		(await listClaudeResetCredits({
@@ -677,11 +686,17 @@ async function fetchClaudeUsage(params: UsageFetchParams, ctx: UsageFetchContext
 			resetCreditList.nextCreditId !== undefined ||
 			resetCreditList.credits.length > 0);
 	if (!report && !hasResetInventory) return null;
+	const extraUsageEnabled = report === null ? claudeExtraUsageEnabled(payload) : undefined;
 	const result: UsageReport = report ?? {
 		provider: "anthropic",
-		fetchedAt: Date.now(),
+		fetchedAt: payloadFetchedAt,
 		limits: [],
-		metadata: { endpoint: `${baseUrl}/usage`, ...extractUsageIdentity(payload) },
+		metadata: {
+			endpoint: `${baseUrl}/usage`,
+			...extractUsageIdentity(payload),
+			payloadFetchedAt,
+			...(extraUsageEnabled === undefined ? {} : { extraUsageEnabled }),
+		},
 		raw: payload,
 	};
 	let accountId = result.metadata?.accountId ?? credential.accountId;
@@ -776,6 +791,7 @@ export function parseClaudeUsagePayload(
 	const payloadIdentity = extractUsageIdentity(payload);
 	const accountId = payloadIdentity.accountId ?? identity.accountId;
 	const email = payloadIdentity.email ?? identity.email;
+	const extraUsageEnabled = claudeExtraUsageEnabled(payload);
 	return {
 		provider: "anthropic",
 		fetchedAt,
@@ -785,6 +801,8 @@ export function parseClaudeUsagePayload(
 			...(accountId ? { accountId } : {}),
 			...(email ? { email } : {}),
 			...(identity.orgId ? { orgId: identity.orgId } : {}),
+			payloadFetchedAt: fetchedAt,
+			...(extraUsageEnabled === undefined ? {} : { extraUsageEnabled }),
 		},
 		raw: payload,
 	};
@@ -880,7 +898,17 @@ function claudeExtraUsage(
 	if (tierHardBlocked) return undefined;
 
 	const limit = report.limits.find(entry => entry.id === "anthropic:extra");
-	if (!limit || limit.amount.unit !== "usd") return undefined;
+	if (!limit || limit.amount.unit !== "usd") {
+		return report.metadata?.extraUsageEnabled === false
+			? {
+					enabled: false,
+					exhausted: false,
+					unit: "usd",
+					uncapped: false,
+					capacity: "spend-cap",
+				}
+			: undefined;
+	}
 	const used = limit.amount.used;
 	const remaining = limit.amount.remaining;
 	const capped = typeof limit.amount.limit === "number" && Number.isFinite(limit.amount.limit);
@@ -891,6 +919,8 @@ function claudeExtraUsage(
 		...(typeof used === "number" && Number.isFinite(used) ? { used } : {}),
 		...(typeof remaining === "number" && Number.isFinite(remaining) ? { remaining } : {}),
 		uncapped: !capped,
+		capacity: "spend-cap",
+		limitId: limit.id,
 	};
 }
 

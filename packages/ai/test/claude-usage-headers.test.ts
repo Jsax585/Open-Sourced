@@ -808,6 +808,8 @@ describe("claude paid-usage ranking state", () => {
 			unit: "usd",
 			used: 402.88,
 			uncapped: true,
+			capacity: "spend-cap",
+			limitId: "anthropic:extra",
 		});
 	});
 
@@ -827,11 +829,13 @@ describe("claude paid-usage ranking state", () => {
 			unit: "usd",
 			used: 190.74,
 			uncapped: false,
+			capacity: "spend-cap",
+			limitId: "anthropic:extra",
 		});
 		expect(extraUsage?.remaining).toBeCloseTo(9.26, 10);
-	});
 
-	it("withholds paid usage when the current spend gate is disabled", async () => {
+	});
+	it("reports disabled paid usage separately from missing paid fields", async () => {
 		const report = await fetchClaudeUsageReport({
 			spend: {
 				enabled: false,
@@ -840,7 +844,14 @@ describe("claude paid-usage ranking state", () => {
 			},
 		});
 
-		expect(extraUsageFor(report)).toBeUndefined();
+		expect(extraUsageFor(report)).toEqual({
+			enabled: false,
+			exhausted: false,
+			unit: "usd",
+			uncapped: false,
+			capacity: "spend-cap",
+		});
+		expect(report?.metadata).toMatchObject({ extraUsageEnabled: false, payloadFetchedAt: expect.any(Number) });
 	});
 
 	it("withholds paid usage behind an exhausted Fable hard block", async () => {
