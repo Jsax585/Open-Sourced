@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed the advisor prompt forbidding all repeated advice, including real escalations: advisors may now re-raise a prior nit or concern as a blocker once new evidence makes it one ([#13887](https://github.com/can1357/oh-my-pi/issues/13887), [#16484](https://github.com/can1357/oh-my-pi/pull/16484) by [@pjh890321](https://github.com/pjh890321))
+- Fixed MCP stdio request failures on unexpected stdout EOF hiding the subprocess exit status: the transport now waits briefly for `exited` to settle and reports the exit code or signal instead of always claiming "closed stdout" ([#16482](https://github.com/can1357/oh-my-pi/pull/16482) by [@adi-IL](https://github.com/adi-IL)).
 
 ## [18.12.5] - 2026-10-21
 
@@ -61,7 +62,6 @@
 - Fixed Mnemopi memory completions ignoring the memory role's thinking suffix, including one inherited from `tiny` or `smol` when `modelRoles.memory` is unset; each `retry.fallbackChains.memory` entry sends its own level, and `:off` disables reasoning ([#16378](https://github.com/can1357/oh-my-pi/pull/16378) by [@alphastorm](https://github.com/alphastorm))
 - Fixed MCP tools running a call twice when the server connection dropped mid-request: a stdio request already written to the server, or an HTTP or legacy SSE request whose connection reset or closed after it was sent, now fails as non-retryable with a diagnostic saying it may have run, instead of being replayed after a reconnect; requests that never left OMP, including refused connections, still reconnect and retry once ([#16429](https://github.com/can1357/oh-my-pi/pull/16429) by [@alphastorm](https://github.com/alphastorm))
 - Fixed `/move` path completion jumping into a subfolder on Tab: `..`, `.`, and `~` now complete to `../`, `./`, and `~/` before listing their children, a trailing `\` lists a folder on Windows, absolute Windows paths (`C:/…`) are no longer rewritten as relative paths, and the project directory is offered as `./` instead of `/`
-- Fixed MCP stdio request failures on unexpected stdout EOF hiding the subprocess exit status: the transport now waits briefly for `exited` to settle and reports the exit code or signal instead of always claiming "closed stdout" ([#16482](https://github.com/can1357/oh-my-pi/pull/16482) by [@adi-IL](https://github.com/adi-IL)).
 - Fixed `edit` blaming boundary indentation when a one-row replacement only fails because its body ends with a trailing comma (e.g. the last element of a JSON array); the error now names the comma ([#16423](https://github.com/can1357/oh-my-pi/pull/16423) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed a timed-out browser selector action dropping its match count without a word when omp could not count the matches; the error now says why ([#16389](https://github.com/can1357/oh-my-pi/pull/16389) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed every session in a project without `.vscode/mcp.json` logging a "[VS Code] Failed to read …/.vscode/mcp.json" warning; a missing file is now skipped silently, while an unreadable or unparsable one still warns ([#16434](https://github.com/can1357/oh-my-pi/pull/16434) by [@will-bogusz](https://github.com/will-bogusz))
