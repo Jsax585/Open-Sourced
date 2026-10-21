@@ -1582,7 +1582,7 @@ export class ModelBrowser implements Component {
 			line = `${prefix}${theme.fg("dim", Bun.stripANSI(line).slice(plainPrefix.length))}`;
 		}
 		// The bg band is reserved for the mouse: it marks hover, nothing else.
-		// Keyboard selection is the cursor glyph + accent name.
+		// Keyboard selection is the cursor glyph plus the name and its metric columns.
 		if (hovered) {
 			line = theme.bg("selectedBg", line);
 		}
