@@ -32,10 +32,13 @@ for (const [key, value] of Object.entries(process.env)) {
 env.HOME = home;
 env.USERPROFILE = home;
 
-const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "usage-paid-preview", "preview.ts"), ...process.argv.slice(2)], {
-	env,
-	stdio: ["inherit", "inherit", "inherit"],
-});
+const child = Bun.spawn(
+	[process.execPath, path.join(import.meta.dir, "usage-paid-preview", "preview.ts"), ...process.argv.slice(2)],
+	{
+		env,
+		stdio: ["inherit", "inherit", "inherit"],
+	},
+);
 // The child owns the terminal; Ctrl+C reaches it directly.
 process.on("SIGINT", () => {});
 const code = await child.exited;

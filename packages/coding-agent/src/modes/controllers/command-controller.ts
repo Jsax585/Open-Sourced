@@ -2287,7 +2287,10 @@ export function renderProviderSection(details: ProviderDetails, uiTheme: Pick<Th
 	return `${lines.join("\n")}\n`;
 }
 
-function resolveProviderUsageTotal(reports: UsageReport[], paidByReport: ReadonlyMap<UsageReport, PaidUsageView>): number {
+function resolveProviderUsageTotal(
+	reports: UsageReport[],
+	paidByReport: ReadonlyMap<UsageReport, PaidUsageView>,
+): number {
 	return reports
 		.flatMap(report => planUsageLimits(report, paidByReport.get(report)))
 		.map(limit => resolveUsedFraction(limit) ?? 0)

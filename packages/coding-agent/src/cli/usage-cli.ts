@@ -333,7 +333,8 @@ function formatPaidUsageRow(
 	nowMs: number,
 ): string {
 	const padded = title.padEnd(labelWidth);
-	if (!view) return `      ${chalk.dim("○")} ${padded}  ${chalk.dim("·".repeat(BAR_WIDTH))}  ${chalk.dim("not reported")}`;
+	if (!view)
+		return `      ${chalk.dim("○")} ${padded}  ${chalk.dim("·".repeat(BAR_WIDTH))}  ${chalk.dim("not reported")}`;
 	const line = formatPaidUsageLine(view, nowMs);
 	const color = PAID_TONE_COLOR[line.tone];
 	const age = line.age ? `${chalk.dim(" · ")}${PAID_TONE_COLOR[line.age.tone](line.age.text)}` : "";
@@ -734,7 +735,8 @@ function formatPolicyLine(
 	const reservePct = Math.max(0, Math.min(100, configuredReservePct ?? options.globalReservePct));
 	const reclaimLabel = policy?.reclaimAbovePct === undefined ? "" : ` · reclaim above ${policy.reclaimAbovePct}%`;
 	const paidAmount = (value: number): string => (paid ? formatPaidUsageAmount(value, paid.unit) : `${value}`);
-	const floorLabel = policy?.extraUsageFloor === undefined ? "" : ` · paid floor ${paidAmount(policy.extraUsageFloor)}`;
+	const floorLabel =
+		policy?.extraUsageFloor === undefined ? "" : ` · paid floor ${paidAmount(policy.extraUsageFloor)}`;
 	const budgetLabel =
 		policy?.extraUsageBudget === undefined ? "" : ` · paid budget ${paidAmount(policy.extraUsageBudget)}`;
 	const reserveLabel = `${reservePct}% ${inherited ? "(global)" : "(override)"}${reclaimLabel}${floorLabel}${budgetLabel}`;
