@@ -181,6 +181,7 @@ import {
 	AUTOPILOT_STATE_CUSTOM_TYPE,
 	autopilotStateFromEntries,
 	type AutopilotDecisionRecord,
+	type PersistedAutopilotState,
 	type AutopilotStrategy,
 } from "../autopilot/state";
 import { GoalRuntime } from "../goals/runtime";
@@ -964,6 +965,7 @@ export class AgentSession implements SettingsScope {
 	#goalModeState: GoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
 	#autopilotRuntime!: AutopilotRuntime;
+	#autopilotAbortController = new AbortController();
 	readonly #advisors: SessionAdvisors;
 	/** Resolves once the resume-time advisor spend backfill settles. */
 	#advisorCostRestore: Promise<void> = Promise.resolve();
@@ -2418,7 +2420,8 @@ export class AgentSession implements SettingsScope {
 			agentKind: () => this.#agentKind,
 			strategy: () => autopilotStrategy(cfgAutopilotStrategy.get(this.settings)),
 			modelReady: () => this.model !== undefined && this.#modelRegistry.hasConfiguredAuth(this.model),
-			maxCycles: () => cfgAutopilotMaxCycles.get(this.settings),
+			maxCycles: () => this.getAutopilotMaxCycles() ?? cfgAutopilotMaxCycles.get(this.settings),
+			abortSignal: () => this.#autopilotAbortController.signal,
 			responderContext: () => this.#autopilotResponderContext(),
 			runResponder: async (promptText, signal) => {
 				const model = this.model;
@@ -4997,7 +5000,7 @@ export class AgentSession implements SettingsScope {
 				!this.isCompacting &&
 				!this.isGeneratingHandoff &&
 				msg.stopReason !== "error" &&
-				(await this.#autopilotRuntime.onTurnEnd(activeMessages));
+				(await this.#autopilotRuntime.onTurnEnd(settledMessages));
 			await emitAgentEndNotification(
 				sessionStopWillContinue || autopilotWillContinue ? { willContinue: true } : undefined,
 			);
@@ -5965,6 +5968,7 @@ export class AgentSession implements SettingsScope {
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
+		this.#autopilotAbortController.abort();
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.#modelDiscoveryAbortController.abort();
 		this.#queuedMessageDrainBlocked = false;
@@ -7305,34 +7309,56 @@ export class AgentSession implements SettingsScope {
 		return autopilotStateFromEntries(this.sessionManager.getEntries())?.prompt;
 	}
 
+	/** Per-session cycle cap; undefined falls back to `autopilot.maxCycles`. */
+	getAutopilotMaxCycles(): number | undefined {
+		return autopilotStateFromEntries(this.sessionManager.getEntries())?.maxCycles;
+	}
+
+	#autopilotState(): PersistedAutopilotState {
+		return autopilotStateFromEntries(this.sessionManager.getEntries()) ?? {};
+	}
+
+	#appendAutopilotState(state: PersistedAutopilotState): void {
+		this.sessionManager.appendCustomEntry(AUTOPILOT_STATE_CUSTOM_TYPE, {
+			enabled: state.enabled ?? this.isAutopilotEnabled(),
+			...(state.prompt ? { prompt: state.prompt } : {}),
+			...(state.maxCycles !== undefined ? { maxCycles: state.maxCycles } : {}),
+		});
+	}
+
 	/**
 	 * Toggle autopilot and persist it for resume. A new user prompt re-arms the
 	 * cycle budget. `prompt` (when provided) replaces the directive; omitted keeps it.
 	 */
 	setAutopilotEnabled(enabled: boolean, prompt?: string): void {
-		const current = this.getAutopilotPrompt();
+		const state = this.#autopilotState();
+		const current = state.prompt;
 		const nextPrompt = prompt === undefined ? current : prompt.trim() || undefined;
-		if (this.isAutopilotEnabled() === enabled && nextPrompt === current) return;
-		this.sessionManager.appendCustomEntry(AUTOPILOT_STATE_CUSTOM_TYPE, {
-			enabled,
-			...(nextPrompt ? { prompt: nextPrompt } : {}),
-		});
-		this.#autopilotRuntime.resetCycleBudget();
-	}
-
-	/** Re-arm the per-prompt cycle budget and guards (after changing autopilot.maxCycles). */
-	resetAutopilotCycleBudget(): void {
+		if ((state.enabled ?? this.isAutopilotEnabled()) === enabled && nextPrompt === current) return;
+		this.#appendAutopilotState({ ...state, enabled, prompt: nextPrompt });
 		this.#autopilotRuntime.resetCycleBudget();
 	}
 
 	/** Set or clear the persisted directive without changing the toggle. */
 	setAutopilotPrompt(prompt: string | undefined): void {
+		const state = this.#autopilotState();
 		const normalized = prompt?.trim() || undefined;
-		if (this.getAutopilotPrompt() === normalized) return;
-		this.sessionManager.appendCustomEntry(AUTOPILOT_STATE_CUSTOM_TYPE, {
-			enabled: this.isAutopilotEnabled(),
-			...(normalized ? { prompt: normalized } : {}),
+		if (state.prompt === normalized) return;
+		this.#appendAutopilotState({ ...state, enabled: state.enabled ?? this.isAutopilotEnabled(), prompt: normalized });
+		this.#autopilotRuntime.resetCycleBudget();
+	}
+
+	/** Set or clear this session's cycle cap (undefined falls back to the setting). */
+	setAutopilotMaxCycles(maxCycles: number | undefined): void {
+		const state = this.#autopilotState();
+		const normalized = maxCycles === undefined ? undefined : Math.max(0, Math.floor(maxCycles));
+		if (state.maxCycles === normalized) return;
+		this.#appendAutopilotState({
+			...state,
+			enabled: state.enabled ?? this.isAutopilotEnabled(),
+			maxCycles: normalized,
 		});
+		this.#autopilotRuntime.resetCycleBudget();
 	}
 
 	/** Structured task/goal/todo context for the responder prompt. */
@@ -7926,8 +7952,15 @@ export class AgentSession implements SettingsScope {
 	 * aborted once no run started); pass `throwOnDrop: true` to reject with
 	 * {@link PromptDroppedError} instead.
 	 */
-	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
+	/** Fresh abort scope for a user prompt; cancels a responder left by the previous one. */
+	#rearmAutopilot(): void {
+		this.#autopilotAbortController.abort();
+		if (!this.#isDisposed) this.#autopilotAbortController = new AbortController();
 		this.#autopilotRuntime.resetCycleBudget();
+	}
+
+	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
+		this.#rearmAutopilot();
 		return this.#admitSubmission(() => this.#prompt(text, options));
 	}
 
@@ -10019,7 +10052,7 @@ export class AgentSession implements SettingsScope {
 		content: string | (TextContent | ImageContent)[],
 		options?: SendUserMessageOptions,
 	): Promise<void> {
-		this.#autopilotRuntime.resetCycleBudget();
+		this.#rearmAutopilot();
 		// Normalize content to text string + optional images
 		let text: string;
 		let images: ImageContent[] | undefined;
@@ -10817,6 +10850,9 @@ export class AgentSession implements SettingsScope {
 		const userInterrupt = options?.reason === USER_INTERRUPT_LABEL;
 		this.#pendingAbortErrorId = userInterrupt ? AIError.create(AIError.Flag.UserInterrupt) : undefined;
 		if (userInterrupt) this.#advisors.autoResumeSuppressed = true;
+		// Cancel an in-flight autopilot responder; the next prompt installs a fresh scope.
+		this.#autopilotAbortController.abort();
+		if (!this.#isDisposed) this.#autopilotAbortController = new AbortController();
 		// Pull advisor concerns out of the steer/follow-up queues before any await so
 		// the post-abort stranded-message drain can't auto-resume the run on them.
 		// They are re-recorded as visible advice once the agent settles (below).

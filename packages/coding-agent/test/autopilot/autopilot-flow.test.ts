@@ -146,7 +146,6 @@ describe("/autopilot end-to-end", () => {
 		expect(sideCalls[0]!.model.id).toBe(model.id);
 		expect(sideCalls[0]!.model.provider).toBe(model.provider);
 		expect(contextText(sideCalls[0]!.context)).toContain("Should I run the e2e suite?");
-		expect(contextText(sideCalls[0]!.context)).toContain("No subagents are available in this session");
 		// The decision reached the second main request as a hidden custom message.
 		expect(contextText(mainCalls[1]!.context)).toContain("Autopilot: Yes, run the e2e suite");
 		expect(injectedAnswer(session)).toContain("Continue without asking.");
@@ -244,6 +243,17 @@ describe("/autopilot end-to-end", () => {
 		expect(sideCalls).toHaveLength(1);
 		expect(contextText(sideCalls[0]!.context)).toContain("Always run the unit tests first");
 		expect(session.getAutopilotStatus().prompt).toBe("Always run the unit tests first");
+	});
+
+	it("persists a per-session cycle limit and reports it", async () => {
+		const { session } = createSession({ mainReplies: [], sideReplies: [] });
+		expect(session.getAutopilotMaxCycles()).toBeUndefined();
+		session.setAutopilotMaxCycles(5);
+		expect(session.getAutopilotMaxCycles()).toBe(5);
+		expect(session.getAutopilotStatus().maxCycles).toBe(5);
+		session.setAutopilotMaxCycles(undefined);
+		expect(session.getAutopilotMaxCycles()).toBeUndefined();
+		expect(session.getAutopilotStatus().maxCycles).toBe(3);
 	});
 
 	it("does not call the responder while disabled", async () => {

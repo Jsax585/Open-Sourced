@@ -47,6 +47,8 @@ export interface AutopilotDecisionRecord extends AutopilotDecisionDetails {
 export interface PersistedAutopilotState {
 	enabled?: boolean;
 	prompt?: string;
+	/** Per-session cycle cap; undefined falls back to `autopilot.maxCycles`. */
+	maxCycles?: number;
 }
 
 /**
@@ -66,6 +68,9 @@ export function autopilotStateFromEntries(entries: readonly SessionEntry[]): Per
 		if ("prompt" in data && typeof data.prompt === "string") {
 			const prompt = data.prompt.trim();
 			if (prompt.length > 0) state.prompt = prompt;
+		}
+		if ("maxCycles" in data && typeof data.maxCycles === "number" && Number.isFinite(data.maxCycles)) {
+			state.maxCycles = Math.max(0, Math.floor(data.maxCycles));
 		}
 		return state;
 	}

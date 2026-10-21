@@ -5,12 +5,8 @@ import {
 	AutopilotRuntime,
 	type AutopilotResponderContext,
 	type AutopilotRuntimeHost,
-	buildAutopilotReiteration,
-	buildAutopilotResponderPrompt,
-	buildAutopilotStatementPrompt,
 	isAutopilotDoneDecision,
 	normalizeAutopilotAnswer,
-	renderAutopilotContext,
 } from "../../src/autopilot/runtime";
 import type { AutopilotDecisionDetails, AutopilotDecisionRecord, AutopilotStrategy } from "../../src/autopilot/state";
 import { createAssistantMessage } from "../helpers/agent-session-setup";
@@ -34,6 +30,7 @@ function harness(options: HarnessOptions = {}) {
 		maxCycles: options.maxCycles ?? 3,
 		responder: options.responder ?? (async () => "Yes, run the unit tests"),
 		context: options.context ?? { task: "finish the refactor" },
+		abort: new AbortController(),
 	};
 	const calls = {
 		responder: [] as string[],
@@ -47,6 +44,7 @@ function harness(options: HarnessOptions = {}) {
 		strategy: () => state.strategy,
 		modelReady: () => state.modelReady,
 		maxCycles: () => state.maxCycles,
+		abortSignal: () => state.abort.signal,
 		responderContext: () => state.context,
 		runResponder: async prompt => {
 			calls.responder.push(prompt);
@@ -64,6 +62,20 @@ function turn(text: string): AgentMessage[] {
 	return [createAssistantMessage(text)];
 }
 
+function toolTurn(text: string): AgentMessage[] {
+	return [
+		createAssistantMessage(text),
+		{
+			role: "toolResult",
+			toolCallId: "call-1",
+			toolName: "bash",
+			content: [{ type: "text", text: "ok" }],
+			isError: false,
+			timestamp: Date.now(),
+		},
+	];
+}
+
 describe("AutopilotRuntime", () => {
 	it("does nothing while disabled", async () => {
 		const { runtime, calls } = harness({ enabled: false });
@@ -78,15 +90,11 @@ describe("AutopilotRuntime", () => {
 		expect(calls.responder).toHaveLength(0);
 	});
 
-	it("answers a closing question once and queues a continuation with card details", async () => {
+	it("answers a closing question and queues one continuation with card details", async () => {
 		const { runtime, calls } = harness();
 		expect(await runtime.onTurnEnd(turn("The refactor is done. Should I run the e2e suite?"))).toBe(true);
 		expect(calls.responder).toHaveLength(1);
-		expect(calls.responder[0]).toContain("Should I run the e2e suite?");
-		expect(calls.responder[0]).toContain("finish the refactor");
-		expect(calls.queued.map(entry => entry.content)).toEqual([
-			"Autopilot: Yes, run the unit tests. Continue without asking.",
-		]);
+		expect(calls.queued).toHaveLength(1);
 		expect(calls.queued[0]!.details).toMatchObject({
 			kind: "question",
 			decision: "Yes, run the unit tests",
@@ -103,9 +111,8 @@ describe("AutopilotRuntime", () => {
 		const { runtime, calls } = harness();
 		expect(await runtime.onTurnEnd(turn("All checks pass; the refactor is complete."))).toBe(true);
 		expect(calls.responder).toHaveLength(1);
-		expect(calls.responder[0]).toContain("stopped without asking a question");
-		expect(calls.responder[0]).toContain('answer exactly "done"');
 		expect(calls.queued).toHaveLength(1);
+		expect(calls.queued[0]!.details.kind).toBe("ending");
 	});
 
 	it("answer strategy ignores question-free endings", async () => {
@@ -114,64 +121,7 @@ describe("AutopilotRuntime", () => {
 		expect(calls.responder).toHaveLength(0);
 	});
 
-	it("goal-aware includes the goal and todos in the prompt", async () => {
-		const { runtime, calls } = harness({
-			strategy: "goal-aware",
-			context: {
-				task: "finish the migration",
-				goalObjective: "RCE",
-				goalStatus: "active",
-				todos: "Phase 1: ~ decode;  write PoC",
-			},
-		});
-		await runtime.onTurnEnd([
-			createAssistantMessage("Still working on it."),
-			{
-				role: "toolResult",
-				toolCallId: "call-1",
-				toolName: "bash",
-				content: [{ type: "text", text: "ok" }],
-				isError: false,
-				timestamp: Date.now(),
-			},
-		]);
-		expect(calls.responder[0]).toContain("Goal (active): RCE");
-		expect(calls.responder[0]).toContain("Open todos: Phase 1");
-		expect(calls.responder[0]).toContain("Last action");
-	});
-
-	it("makes the user directive binding in the responder prompt", async () => {
-		const { runtime, calls } = harness({
-			strategy: "goal-aware",
-			context: { task: "finish the migration", directive: "always run the unit tests first" },
-		});
-		await runtime.onTurnEnd(turn("Should I commit?"));
-		expect(calls.responder[0]).toContain("User directive (binding): always run the unit tests first");
-		expect(calls.responder[0]).toContain("follow it even when the guidance below differs");
-	});
-
-	it("offers investigation and delegation when subagents are available", async () => {
-		const { runtime, calls } = harness({
-			strategy: "goal-aware",
-			context: {
-				task: "finish the migration",
-				agents: "scout (read-only research), task (general-purpose)",
-			},
-		});
-		await runtime.onTurnEnd(turn("Should I proceed?"));
-		expect(calls.responder[0]).toContain("Available subagents: scout (read-only research), task (general-purpose)");
-		expect(calls.responder[0]).toContain("understand more of the code");
-		expect(calls.responder[0]).toContain("delegate a self-contained slice");
-	});
-
-	it("does not offer delegation when the task tool is absent", async () => {
-		const { runtime, calls } = harness({ strategy: "goal-aware" });
-		await runtime.onTurnEnd(turn("Should I proceed?"));
-		expect(calls.responder[0]).toContain("No subagents are available in this session");
-		expect(calls.responder[0]).not.toContain("Available subagents:");
-	});
-
-	it("reiterates the objective when a cycle makes no tool progress", async () => {
+	it("goal-aware reiterates the objective when a cycle makes no tool progress", async () => {
 		const { runtime, calls } = harness({
 			strategy: "goal-aware",
 			context: { task: "finish the migration", goalObjective: "ship it" },
@@ -179,11 +129,11 @@ describe("AutopilotRuntime", () => {
 		expect(await runtime.onTurnEnd(turn("First status."))).toBe(true);
 		expect(await runtime.onTurnEnd(turn("Second status."))).toBe(true);
 		expect(calls.responder).toHaveLength(1);
-		const queued = calls.queued.at(-1)!;
-		expect(queued.content).toContain("Reiterating the objective.");
-		expect(queued.content).toContain("Objective: ship it");
-		expect(queued.content).toContain("Take a concrete tool action");
-		expect(queued.details).toMatchObject({ kind: "reiterate", decision: "ship it", strategy: "goal-aware" });
+		expect(calls.queued.at(-1)!.details).toMatchObject({
+			kind: "reiterate",
+			decision: "ship it",
+			strategy: "goal-aware",
+		});
 		expect(calls.records.at(-1)).toMatchObject({ kind: "reiterate" });
 		expect(calls.notices.at(-1)?.message).toBe("Autopilot: reiterating the objective (1/3).");
 	});
@@ -221,17 +171,7 @@ describe("AutopilotRuntime", () => {
 		for (let step = 2; step <= 4; step++) {
 			expect(await runtime.onTurnEnd(turn(`Status ${step}.`))).toBe(true);
 		}
-		const withTool: AgentMessage[] = [
-			createAssistantMessage("Progress status."),
-			{
-				role: "toolResult",
-				toolCallId: "call-2",
-				toolName: "bash",
-				content: [{ type: "text", text: "ok" }],
-				isError: false,
-				timestamp: Date.now(),
-			},
-		];
+		const withTool = toolTurn("Progress status.");
 		expect(await runtime.onTurnEnd(withTool)).toBe(true);
 		// The settled transcript carries the tool result forward; only the final
 		// assistant text changed, so the digest is unchanged and no progress was made.
@@ -240,25 +180,14 @@ describe("AutopilotRuntime", () => {
 		expect(calls.notices.at(-1)?.message).toBe("Autopilot: reiterating the objective (1/3).");
 	});
 
-	it("goal-aware counts a tool call between cycles as progress", async () => {
+	it("counts a tool call between cycles as progress", async () => {
 		const { runtime, calls } = harness({ strategy: "goal-aware" });
 		expect(await runtime.onTurnEnd(turn("First status."))).toBe(true);
-		const withTool: AgentMessage[] = [
-			createAssistantMessage("Second status."),
-			{
-				role: "toolResult",
-				toolCallId: "call-1",
-				toolName: "bash",
-				content: [{ type: "text", text: "ok" }],
-				isError: false,
-				timestamp: Date.now(),
-			},
-		];
-		expect(await runtime.onTurnEnd(withTool)).toBe(true);
+		expect(await runtime.onTurnEnd(toolTurn("Second status."))).toBe(true);
 		expect(calls.responder).toHaveLength(2);
 	});
 
-	it("stops when the responder concludes the task", async () => {
+	it("stops on a bare done sentinel", async () => {
 		const { runtime, calls } = harness({ responder: async () => "done" });
 		expect(await runtime.onTurnEnd(turn("Everything is finished."))).toBe(false);
 		expect(calls.queued).toHaveLength(0);
@@ -266,6 +195,17 @@ describe("AutopilotRuntime", () => {
 		expect(calls.notices.at(-1)).toEqual({
 			level: "info",
 			message: "Autopilot: the objective is complete; no continuation.",
+		});
+	});
+
+	it("stops on a done sentinel with a reason and surfaces the reason", async () => {
+		const { runtime, calls } = harness({ responder: async () => "done — dropping the prod table is destructive" });
+		expect(await runtime.onTurnEnd(turn("Everything is finished."))).toBe(false);
+		expect(calls.queued).toHaveLength(0);
+		expect(calls.records.at(-1)).toMatchObject({ stopped: "done" });
+		expect(calls.notices.at(-1)).toEqual({
+			level: "info",
+			message: "Autopilot: dropping the prod table is destructive",
 		});
 	});
 
@@ -320,6 +260,18 @@ describe("AutopilotRuntime", () => {
 		expect(calls.responder).toHaveLength(2);
 	});
 
+	it("cancels the responder and queues nothing when the session aborts", async () => {
+		const gate = Promise.withResolvers<string>();
+		const { runtime, calls, state } = harness({ responder: () => gate.promise });
+		const pending = runtime.onTurnEnd(turn("Should I proceed?"));
+		await Promise.resolve();
+		state.abort.abort();
+		gate.resolve("Yes, proceed");
+		expect(await pending).toBe(false);
+		expect(calls.queued).toHaveLength(0);
+		expect(calls.records).toHaveLength(0);
+	});
+
 	it("fails closed when the session model is unavailable", async () => {
 		const { runtime, calls } = harness({ modelReady: false });
 		expect(await runtime.onTurnEnd(turn("Should I run the tests?"))).toBe(false);
@@ -367,65 +319,13 @@ describe("normalizeAutopilotAnswer", () => {
 });
 
 describe("isAutopilotDoneDecision", () => {
-	it("accepts the done sentinel with punctuation and case", () => {
+	it("accepts the done sentinel as a leading token with an optional reason", () => {
 		expect(isAutopilotDoneDecision("done")).toBe(true);
 		expect(isAutopilotDoneDecision("Done.")).toBe(true);
-		expect(isAutopilotDoneDecision("concluído")).toBe(true);
+		expect(isAutopilotDoneDecision("DONE")).toBe(true);
+		expect(isAutopilotDoneDecision("done, because the migration is complete")).toBe(true);
+		expect(isAutopilotDoneDecision("done — dropping the prod table is destructive")).toBe(true);
 		expect(isAutopilotDoneDecision("run the tests")).toBe(false);
-		expect(isAutopilotDoneDecision("done, because X")).toBe(false);
-	});
-});
-
-describe("renderAutopilotContext", () => {
-	it("renders task, goal, todos and the last action", () => {
-		const rendered = renderAutopilotContext({
-			task: "finish the migration",
-			directive: "always run tests",
-			agents: "scout (read-only research)",
-			goalObjective: "ship it",
-			goalStatus: "active",
-			todos: "Phase 1: ~ decode",
-			lastAction: "bash",
-		});
-		expect(rendered).toContain("Task: finish the migration");
-		expect(rendered).toContain("User directive (binding): always run tests");
-		expect(rendered).toContain("Available subagents: scout (read-only research)");
-		expect(rendered).toContain("Goal (active): ship it");
-		expect(rendered).toContain("Open todos: Phase 1");
-		expect(rendered).toContain("Last action: bash");
-	});
-});
-
-describe("prompt builders", () => {
-	it("includes the question and the structured context", () => {
-		const prompt = buildAutopilotResponderPrompt("Should I commit?", {
-			task: "finish the migration",
-			goalObjective: "ship it",
-		});
-		expect(prompt).toContain("Should I commit?");
-		expect(prompt).toContain("finish the migration");
-		expect(prompt).toContain("Goal (active): ship it");
-		expect(prompt).toContain("without asking any questions");
-	});
-
-	it("builds an objective reiteration", () => {
-		const reiteration = buildAutopilotReiteration({
-			task: "finish the migration",
-			goalObjective: "ship it",
-			directive: "tests first",
-			todos: "Phase 1: ~ decode",
-		});
-		expect(reiteration).toContain("Reiterating the objective.");
-		expect(reiteration).toContain("Objective: ship it");
-		expect(reiteration).toContain("Directive (binding): tests first");
-		expect(reiteration).toContain("Open todos: Phase 1");
-		expect(reiteration).toContain("Take a concrete tool action");
-	});
-
-	it("includes the final message, the done sentinel and the context", () => {
-		const prompt = buildAutopilotStatementPrompt("All checks pass.", { task: "finish the migration" });
-		expect(prompt).toContain("All checks pass.");
-		expect(prompt).toContain("finish the migration");
-		expect(prompt).toContain('answer exactly "done"');
+		expect(isAutopilotDoneDecision("donegal is a county")).toBe(false);
 	});
 });

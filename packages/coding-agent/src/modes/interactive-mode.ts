@@ -6442,19 +6442,19 @@ export class InteractiveMode implements InteractiveModeContext {
 			return false;
 		}
 		if (command.action === "max") {
+			const sessionMax = this.session.getAutopilotMaxCycles();
 			if (command.maxCycles === undefined) {
-				const current = cfgAutopilotMaxCycles.get(this.session.settings);
-				this.showStatus(
-					current === 0 ? "Autopilot cycle limit: unlimited (0)." : `Autopilot cycle limit: ${current}.`,
-				);
+				const effective = sessionMax ?? cfgAutopilotMaxCycles.get(this.session.settings);
+				const label = effective === 0 ? "unlimited (0)" : String(effective);
+				const scope = sessionMax === undefined ? "default" : "this session";
+				this.showStatus(`Autopilot cycle limit: ${label} (${scope}).`);
 				return false;
 			}
-			cfgAutopilotMaxCycles.set(this.session.settings, command.maxCycles);
-			this.session.resetAutopilotCycleBudget();
+			this.session.setAutopilotMaxCycles(command.maxCycles);
 			this.showStatus(
 				command.maxCycles === 0
-					? "Autopilot cycle limit: unlimited (0)."
-					: `Autopilot cycle limit: ${command.maxCycles}.`,
+					? "Autopilot cycle limit (this session): unlimited (0)."
+					: `Autopilot cycle limit (this session): ${command.maxCycles}.`,
 			);
 			return false;
 		}

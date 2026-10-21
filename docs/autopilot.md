@@ -75,9 +75,10 @@ third reiteration, the next no-progress cycle stops with `no-progress`.
 
 `maxCycles` is a separate bound on responder/reiteration cycles per user
 prompt. It defaults to `0` (unlimited); set a positive value to cap runaway
-runs. The setting is global (`autopilot.maxCycles` in `config.yml`), so
-`/autopilot max` changes it for every session and re-arms the current prompt's
-budget.
+runs. `/autopilot max` stores a **per-session** value in the session journal
+(so it survives resume) and re-arms the current prompt's budget; clearing it
+with `/autopilot max` after a session override again falls back to the global
+`autopilot.maxCycles` setting (`/settings`).
 
 ## Observability
 

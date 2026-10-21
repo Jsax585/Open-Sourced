@@ -1,6 +1,11 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, prompt } from "@oh-my-pi/pi-utils";
+import autopilotContinuationPrompt from "../prompts/autopilot/continuation.md" with { type: "text" };
+import autopilotContextPrompt from "../prompts/autopilot/context.md" with { type: "text" };
+import autopilotReiterationPrompt from "../prompts/autopilot/reiteration.md" with { type: "text" };
+import autopilotResponderPrompt from "../prompts/autopilot/responder.md" with { type: "text" };
+import autopilotStatementPrompt from "../prompts/autopilot/statement.md" with { type: "text" };
 import { goalContinuationActivity } from "../goals/state";
 import { assistantText, closingQuestion, normalizeQuestion } from "../session/closing-question";
 import type {
@@ -57,6 +62,8 @@ export interface AutopilotRuntimeHost {
 	maxCycles(): number;
 	/** Structured task/goal/todo context for the responder prompt. */
 	responderContext(): AutopilotResponderContext;
+	/** Session-owned signal aborted by `abort()`/dispose; cancels an in-flight responder. */
+	abortSignal(): AbortSignal;
 	/** One no-tools turn on the session's effective model. */
 	runResponder(promptText: string, signal: AbortSignal): Promise<AutopilotResponderReply>;
 	/** Queue the hidden answer as the next main-agent turn, with card details. */
@@ -218,13 +225,18 @@ export class AutopilotRuntime {
 			lastAction: lastToolActivity(messages),
 		};
 
+		const abortSignal = this.#host.abortSignal();
+		if (abortSignal.aborted) return false;
 		this.#responding = true;
 		const startedAt = Date.now();
 		try {
 			const promptText = question
 				? buildAutopilotResponderPrompt(question.question, context)
 				: buildAutopilotStatementPrompt(finalText, context);
-			const reply = await this.#host.runResponder(promptText, AbortSignal.timeout(AUTOPILOT_RESPONDER_TIMEOUT_MS));
+			const signal = AbortSignal.any([AbortSignal.timeout(AUTOPILOT_RESPONDER_TIMEOUT_MS), abortSignal]);
+			const reply = await this.#host.runResponder(promptText, signal);
+			// A user abort while the responder ran must not start a hidden turn.
+			if (abortSignal.aborted) return false;
 			const latencyMs = Date.now() - startedAt;
 			const decision = normalizeAutopilotAnswer(reply.text);
 			if (!decision) {
@@ -246,7 +258,11 @@ export class AutopilotRuntime {
 				};
 				this.#lastDetails = details;
 				this.#host.recordDecision({ ...details, at: Date.now() });
-				this.#host.emitNotice("info", "Autopilot: the objective is complete; no continuation.");
+				const reason = decision.replace(/^done\b[\s.!:;,\u2013\u2014-]*/i, "").trim();
+				this.#host.emitNotice(
+					"info",
+					reason ? `Autopilot: ${reason}` : "Autopilot: the objective is complete; no continuation.",
+				);
 				return false;
 			}
 			this.#cycles++;
@@ -262,11 +278,12 @@ export class AutopilotRuntime {
 			};
 			this.#lastDetails = details;
 			const sentence = /[.!?…]$/.test(decision) ? decision : `${decision}.`;
-			this.#host.queueContinuation(`Autopilot: ${sentence} Continue without asking.`, details);
+			this.#host.queueContinuation(prompt.render(autopilotContinuationPrompt, { sentence }).trim(), details);
 			this.#host.recordDecision({ ...details, at: Date.now() });
 			this.#host.emitNotice("info", `Autopilot: ${decision}`);
 			return true;
 		} catch (error) {
+			if (abortSignal.aborted) return false;
 			logger.warn("autopilot responder failed", {
 				error: error instanceof Error ? error.message : String(error),
 			});
@@ -321,36 +338,19 @@ function lastToolActivity(messages: readonly AgentMessage[]): string | undefined
 
 /** Render the structured context for a responder prompt. */
 export function renderAutopilotContext(context: AutopilotResponderContext): string {
-	const lines: string[] = [];
-	if (context.task) lines.push(`Task: ${context.task}`);
-	if (context.directive) lines.push(`User directive (binding): ${context.directive}`);
-	if (context.agents) lines.push(`Available subagents: ${context.agents}`);
-	if (context.goalObjective) lines.push(`Goal (${context.goalStatus ?? "active"}): ${context.goalObjective}`);
-	if (context.todos) lines.push(`Open todos: ${context.todos}`);
-	if (context.lastAction) lines.push(`Last action: ${context.lastAction}`);
-	return lines.join("\n");
+	return prompt.render(autopilotContextPrompt, { ...context }).trim();
 }
 
 /** The responder contract for a closing question: one actionable decision. */
 export function buildAutopilotResponderPrompt(question: string, context: AutopilotResponderContext): string {
-	const renderedContext = renderAutopilotContext(context);
-	return [
-		"You are the autopilot. The main agent asked:",
-		question,
-		"",
-		renderedContext ? `Context:\n${renderedContext}` : "",
-		"",
-		context.directive ? "The user directive above is binding: follow it even when the guidance below differs." : "",
-		"Answer with one actionable decision in a single sentence, without asking any questions.",
-		"The decision may instruct the agent to understand more of the code first (read the relevant modules or delegate a read-only scout to map them) or to delegate a self-contained slice to a subagent.",
-		context.agents
-			? "Prefer understanding over guessing, and delegation for independent or specialist slices; name the subagent from Available subagents."
-			: "No subagents are available in this session; prefer direct investigation or action.",
-		"Prefer the conservative option that keeps the current task moving.",
-		'If the question requires a destructive or out-of-scope action, answer "no" and say why.',
-	]
-		.filter(part => part.length > 0)
-		.join("\n");
+	return prompt
+		.render(autopilotResponderPrompt, {
+			question,
+			context: renderAutopilotContext(context),
+			directive: context.directive,
+			agents: context.agents,
+		})
+		.trim();
 }
 
 /**
@@ -359,55 +359,32 @@ export function buildAutopilotResponderPrompt(question: string, context: Autopil
  * answer `done` when nothing further is warranted.
  */
 export function buildAutopilotStatementPrompt(finalText: string, context: AutopilotResponderContext): string {
-	const renderedContext = renderAutopilotContext(context);
-	return [
-		"You are the autopilot. The main agent stopped without asking a question. Its final message:",
-		finalText,
-		"",
-		renderedContext ? `Context:\n${renderedContext}` : "",
-		"",
-		context.directive ? "The user directive above is binding: follow it even when the guidance below differs." : "",
-		"Decide the next concrete action that keeps the objective moving, in a single sentence, without asking any questions.",
-		"Consider whether the next step needs understanding more code (read the relevant modules, or delegate a read-only scout to map entry points and call sites) or a subagent for a self-contained or specialist slice.",
-		context.agents
-			? "Prefer understanding over guessing, and delegation for independent or specialist slices; name the subagent from Available subagents."
-			: "No subagents are available in this session; prefer direct investigation or action.",
-		'If the task is complete or no further action is warranted, answer exactly "done".',
-		"Prefer the conservative option that keeps the current task moving.",
-		'If the next action would be destructive or out of scope, answer "done" and say why.',
-	]
-		.filter(part => part.length > 0)
-		.join("\n");
+	return prompt
+		.render(autopilotStatementPrompt, {
+			finalText,
+			context: renderAutopilotContext(context),
+			directive: context.directive,
+			agents: context.agents,
+		})
+		.trim();
 }
 
 /** Continuation that restates the objective after a cycle without tool activity. */
 export function buildAutopilotReiteration(context: AutopilotResponderContext): string {
-	const objective = context.goalObjective ?? context.task;
-	return [
-		"Autopilot: no tool activity since the previous cycle. Reiterating the objective.",
-		objective ? `Objective: ${objective}` : "",
-		context.directive ? `Directive (binding): ${context.directive}` : "",
-		context.todos ? `Open todos: ${context.todos}` : "",
-		'Do not ask a question or restate the plan. Take a concrete tool action toward the objective now; if it is blocked or out of scope, answer exactly "done" and say why.',
-	]
-		.filter(part => part.length > 0)
-		.join("\n");
+	return prompt
+		.render(autopilotReiterationPrompt, {
+			objective: context.goalObjective ?? context.task,
+			directive: context.directive,
+			todos: context.todos,
+		})
+		.trim();
 }
 
 /** Replies that terminate the run instead of proposing another action. */
 export function isAutopilotDoneDecision(decision: string): boolean {
-	const normalized = decision
-		.replace(/[.!…\s]+$/g, "")
-		.trim()
-		.toLowerCase();
-	return (
-		normalized === "done" ||
-		normalized === "complete" ||
-		normalized === "completed" ||
-		normalized === "finished" ||
-		normalized === "concluido" ||
-		normalized === "concluído"
-	);
+	// The prompts ask for `done` followed by an optional reason, so this is a
+	// leading-token match ("done — dropping the prod table is destructive").
+	return /^done\b/i.test(decision.trim().replace(/^[>*\-\s]+/, ""));
 }
 
 /**
