@@ -22,6 +22,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import {
 	attachIrcWakeTurnMonitor,
+	type IrcWakeTurnMonitorOptions,
 	runSubagentFollowUpTurn,
 	runSubprocess,
 } from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -857,5 +858,437 @@ describe("runSubprocess result acceptance", () => {
 		});
 		expect(body).not.toContain("Running the tests.");
 		expect(body).toContain("produced no output");
+	});
+
+	describe("follow-up turn settle hook", () => {
+		const NOTICE = "\n\nMerged branch: omp/task/accepted-result";
+
+		function ircRecord(from: string, message: string): AgentMessage {
+			return {
+				role: "custom",
+				customType: "irc:incoming",
+				content: message,
+				display: false,
+				details: { id: `msg-${from}`, from, message },
+				attribution: "agent",
+				timestamp: Date.now(),
+			} as unknown as AgentMessage;
+		}
+
+		/** A kept-alive subagent owned by `Parent`, a registered peer, and a settle hook that reports {@link NOTICE}. */
+		function setUp(
+			onSettled: (superseded: () => boolean) => Promise<string> = async () => NOTICE,
+			monitorOptions: { structured?: boolean; artifactsDir?: string; outputSchema?: unknown } = {},
+		) {
+			const manager = new AsyncJobManager({});
+			const harness = createHarness({ asyncJobManager: manager });
+			const registry = AgentRegistry.global();
+			for (const id of ["Parent", "Peer"]) {
+				registry.register({
+					id,
+					displayName: id,
+					kind: "main",
+					session: createHarness().session,
+					status: "running",
+				});
+			}
+			registry.register({
+				id: AGENT_ID,
+				displayName: AGENT_ID,
+				kind: "sub",
+				parentId: "Parent",
+				session: harness.session,
+				status: "idle",
+			});
+			const settle = vi.fn((_result: unknown, superseded: () => boolean) => onSettled(superseded));
+			const started = vi.fn();
+			const monitor: IrcWakeTurnMonitorOptions = {
+				id: AGENT_ID,
+				agent: baseAgent,
+				onTurnSettled: settle,
+				onTurnStarted: started,
+				...monitorOptions,
+			};
+			attachIrcWakeTurnMonitor(harness.session, monitor);
+			const observer = harness.wakeObserver();
+			if (!observer) throw new Error("wake-turn observer was not registered");
+			const parent = {
+				cwd: "/tmp",
+				settings: Settings.isolated({ "launch.enabled": false }),
+				agentRegistry: registry,
+				asyncJobManager: manager,
+				getAgentId: () => "Parent",
+			} as unknown as ToolSession;
+			return { manager, harness, observer, settle, started, parent, monitor };
+		}
+
+		it("does not settle a turn whose outcome only reaches a peer", async () => {
+			const { manager, harness, observer, settle } = setUp();
+			try {
+				const relayed = IrcBus.global().wait("Peer", { from: AGENT_ID }, 1000);
+				const finish = observer([ircRecord("Peer", "is line 42 fine?")]);
+				harness.emitAssistantText("line 42 is fine");
+				await finish?.(undefined);
+
+				// The owner hears nothing of this turn, so its checkout must not change.
+				expect(settle).not.toHaveBeenCalled();
+				expect(manager.getRunningJobs({ ownerId: "Parent" })).toEqual([]);
+				const relay = await relayed;
+				expect(relay?.body).toContain("line 42 is fine");
+				expect(relay?.body).not.toContain("Merged branch");
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("settles a turn the owner woke and appends the notice to the owner's job", async () => {
+			const { manager, harness, observer, settle, parent } = setUp();
+			const send = vi.spyOn(IrcBus.global(), "send");
+			try {
+				const finish = observer([ircRecord("Parent", "fix the mask path too")]);
+				const waiting = new WaitTool(parent).execute("parent-wait", {});
+				harness.emitAssistantText("mask path fixed too");
+				await finish?.(undefined);
+
+				expect(settle).toHaveBeenCalledTimes(1);
+				const job = (await waiting).details?.jobs?.[0];
+				expect(job?.status).toBe("completed");
+				expect(job?.resultText).toContain("mask path fixed too");
+				expect(job?.resultText?.endsWith(NOTICE)).toBe(true);
+				// The job carried the notice, so the owner is not messaged a second time.
+				expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ to: "Parent" }));
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		/** A turn the operator typed to the agent directly, as the Agent Hub focus does. */
+		function userRecord(message: string): AgentMessage {
+			return {
+				role: "user",
+				content: [{ type: "text", text: message }],
+				attribution: "user",
+				timestamp: Date.now(),
+			} as unknown as AgentMessage;
+		}
+
+		it("settles an operator-prompted turn and delivers the notice while the owner's job manager is live", async () => {
+			const tempDir = TempDir.createSync("@omp-user-prompted-settle-");
+			const { manager, harness, observer, settle } = setUp(undefined, {
+				structured: false,
+				artifactsDir: tempDir.path(),
+			});
+			harness.session.sessionManager.getArtifactsDir = () => tempDir.path();
+			const send = vi.spyOn(IrcBus.global(), "send");
+			try {
+				const finish = observer([userRecord("fix it")]);
+				harness.emitAssistantText("fixed");
+				await finish?.(undefined);
+
+				expect(settle).toHaveBeenCalledTimes(1);
+				expect(manager.getJob(AGENT_ID)?.resultText?.endsWith(NOTICE)).toBe(true);
+				// The live manager delivered the result, so the owner is not messaged a second time.
+				expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ to: "Parent" }));
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+				tempDir.removeSync();
+			}
+		});
+
+		it("does not land an operator-prompted turn when the owner's job manager can no longer take the result", async () => {
+			const tempDir = TempDir.createSync("@omp-user-prompted-disposed-");
+			const { manager, harness, observer, settle } = setUp(undefined, {
+				structured: false,
+				artifactsDir: tempDir.path(),
+			});
+			harness.session.sessionManager.getArtifactsDir = () => tempDir.path();
+			try {
+				const finish = observer([userRecord("fix it")]);
+				harness.emitAssistantText("fixed");
+				// The owner is shutting down while the turn finishes: publishCompleted would throw.
+				await manager.dispose({ timeoutMs: 1000 });
+				await finish?.(undefined);
+
+				// Landing now would change the checkout with no way to tell the owner.
+				expect(settle).not.toHaveBeenCalled();
+			} finally {
+				tempDir.removeSync();
+			}
+		});
+
+		/** An operator-prompted structured agent whose owner collects what its yields deliver. */
+		function structuredOperatorTurn() {
+			const setup = setUp(undefined, {
+				outputSchema: { type: "object", properties: { report: { type: "string" } }, required: ["report"] },
+			});
+			const delivered: string[] = [];
+			setup.manager.registerDeliverySink("Parent", (_jobId, text) => {
+				delivered.push(text);
+			});
+			return { ...setup, delivered };
+		}
+
+		it("settles an operator-prompted structured yield and delivers it when the owner's job slots are full", async () => {
+			const { manager, harness, observer, settle, delivered } = structuredOperatorTurn();
+			// No slot for the wake job: the yield is the only word of this turn the owner can get.
+			vi.spyOn(manager, "register").mockImplementation(() => {
+				throw new Error("running-job limit reached");
+			});
+			try {
+				const finish = observer([userRecord("fix it")]);
+				harness.emitTerminalYield({ report: "fixed" });
+				await finish?.(undefined);
+				await manager.drainDeliveries({ timeoutMs: 1000 });
+
+				expect(settle).toHaveBeenCalledTimes(1);
+				expect(delivered).toHaveLength(1);
+				expect(delivered[0]).toContain("fixed");
+				expect(delivered[0]?.endsWith(NOTICE)).toBe(true);
+				// The yield's structured payload travels with the text, as it does through a wake job.
+				expect(manager.getJob(AGENT_ID)?.structured).toMatchObject({ data: { report: "fixed" } });
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("delivers an operator-prompted structured yield once, through the wake job, when a slot is free", async () => {
+			const { manager, harness, observer, settle, delivered } = structuredOperatorTurn();
+			try {
+				const finish = observer([userRecord("fix it")]);
+				harness.emitTerminalYield({ report: "fixed" });
+				await finish?.(undefined);
+				await manager.waitForAll();
+				await manager.drainDeliveries({ timeoutMs: 1000 });
+
+				expect(settle).toHaveBeenCalledTimes(1);
+				// The wake job carried the yield, so the slot-free fallback must not publish it again.
+				expect(delivered).toHaveLength(1);
+				expect(delivered[0]).toContain("fixed");
+				expect(delivered[0]?.endsWith(NOTICE)).toBe(true);
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("does not land an operator-prompted structured yield when the owner's job manager can no longer take it", async () => {
+			const { manager, harness, observer, settle, delivered } = structuredOperatorTurn();
+			vi.spyOn(manager, "register").mockImplementation(() => {
+				throw new Error("running-job limit reached");
+			});
+			const finish = observer([userRecord("fix it")]);
+			harness.emitTerminalYield({ report: "fixed" });
+			// The owner is shutting down while the turn finishes: a delivery would be refused.
+			await manager.dispose({ timeoutMs: 1000 });
+			await finish?.(undefined);
+
+			expect(settle).not.toHaveBeenCalled();
+			expect(delivered).toEqual([]);
+		});
+
+		it("does not land a turn whose owner cancelled the wake job before settlement", async () => {
+			const { manager, harness, observer, settle } = setUp();
+			try {
+				const finish = observer([ircRecord("Parent", "fix the mask path too")]);
+				harness.emitAssistantText("mask path fixed too");
+				expect(manager.cancel(AGENT_ID, { ownerId: "Parent" })).toBe(true);
+				await finish?.(undefined);
+
+				expect(settle).not.toHaveBeenCalled();
+				expect(manager.getJob(AGENT_ID)?.status).toBe("cancelled");
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("tells the owner what landed when it cancels the wake job while the turn settles", async () => {
+			const settling = Promise.withResolvers<void>();
+			const proceed = Promise.withResolvers<void>();
+			const { manager, harness, observer, settle } = setUp(async () => {
+				settling.resolve();
+				await proceed.promise;
+				return NOTICE;
+			});
+			try {
+				const told = IrcBus.global().wait("Parent", { from: AGENT_ID }, 1000);
+				const finish = observer([ircRecord("Parent", "fix the mask path too")]);
+				harness.emitAssistantText("mask path fixed too");
+				const finished = finish?.(undefined);
+				await settling.promise;
+				// The owner gives up the turn while its changes are landing.
+				expect(manager.cancel(AGENT_ID, { ownerId: "Parent" })).toBe(true);
+				proceed.resolve();
+				await finished;
+
+				expect(settle).toHaveBeenCalledTimes(1);
+				expect(manager.getJob(AGENT_ID)?.status).toBe("cancelled");
+				// A cancelled job delivers nothing, so this is the owner's only word that its checkout changed.
+				expect((await told)?.body?.endsWith(NOTICE)).toBe(true);
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("tells the owner of an operator-prompted turn what landed when its job manager disposes while the turn settles", async () => {
+			const tempDir = TempDir.createSync("@omp-user-prompted-dispose-during-settle-");
+			const settling = Promise.withResolvers<void>();
+			const proceed = Promise.withResolvers<void>();
+			const { manager, harness, observer, settle } = setUp(
+				async () => {
+					settling.resolve();
+					await proceed.promise;
+					return NOTICE;
+				},
+				{ structured: false, artifactsDir: tempDir.path() },
+			);
+			harness.session.sessionManager.getArtifactsDir = () => tempDir.path();
+			try {
+				const told = IrcBus.global().wait("Parent", { from: AGENT_ID }, 1000);
+				const finish = observer([userRecord("fix it")]);
+				harness.emitAssistantText("fixed");
+				const finished = finish?.(undefined);
+				await settling.promise;
+				// The owner starts shutting down while the changes are landing.
+				const disposing = manager.dispose({ timeoutMs: 1000 });
+				proceed.resolve();
+				await finished;
+				await disposing;
+
+				expect(settle).toHaveBeenCalledTimes(1);
+				// The manager refuses the result, so the owner hears of it directly.
+				const message = await told;
+				expect(message?.body).toContain("fixed");
+				expect(message?.body?.endsWith(NOTICE)).toBe(true);
+			} finally {
+				tempDir.removeSync();
+			}
+		});
+
+		it("settles an owner-woken turn and relays the notice when the owner's job cannot be registered", async () => {
+			const { manager, harness, observer, settle } = setUp();
+			vi.spyOn(manager, "register").mockImplementation(() => {
+				throw new Error("running-job limit reached");
+			});
+			try {
+				const relayed = IrcBus.global().wait("Parent", { from: AGENT_ID }, 1000);
+				const finish = observer([ircRecord("Parent", "fix the mask path too")]);
+				harness.emitAssistantText("mask path fixed too");
+				await finish?.(undefined);
+
+				// The relay is the owner's only word of this turn, so it carries the notice.
+				expect(settle).toHaveBeenCalledTimes(1);
+				const relay = await relayed;
+				expect(relay?.body).toContain("mask path fixed too");
+				expect(relay?.body?.endsWith(NOTICE)).toBe(true);
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("still tells a peer the agent already answered what became of the turn's changes", async () => {
+			const { manager, harness, observer, settle, parent } = setUp();
+			try {
+				const bus = IrcBus.global();
+				const finish = observer([ircRecord("Parent", "fix it"), ircRecord("Peer", "ping me when done")]);
+				const waiting = new WaitTool(parent).execute("parent-wait", {});
+				// The agent answers the peer itself during the turn.
+				const answered = bus.wait("Peer", { from: AGENT_ID }, 1000);
+				expect((await bus.send({ from: AGENT_ID, to: "Peer", body: "done" })).outcome).not.toBe("failed");
+				expect((await answered)?.body).toBe("done");
+				const relayed = bus.wait("Peer", { from: AGENT_ID }, 1000);
+				harness.emitAssistantText("fixed");
+				await finish?.(undefined);
+
+				expect(settle).toHaveBeenCalledTimes(1);
+				// Only the notice: repeating the answer would duplicate the agent's own message.
+				expect((await relayed)?.body).toBe(NOTICE.trim());
+				expect((await waiting).details?.jobs?.[0]?.resultText?.endsWith(NOTICE)).toBe(true);
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("tells the settle hook once the agent's next turn has started", async () => {
+			const checks: Array<() => boolean> = [];
+			const settling = Promise.withResolvers<void>();
+			const proceed = Promise.withResolvers<void>();
+			const { manager, harness, observer } = setUp(async superseded => {
+				checks.push(superseded);
+				settling.resolve();
+				await proceed.promise;
+				return NOTICE;
+			});
+			try {
+				const finish = observer([ircRecord("Parent", "fix it")]);
+				harness.emitAssistantText("fixed");
+				const finished = finish?.(undefined);
+				await settling.promise;
+				expect(checks[0]?.()).toBe(false);
+				// The session lets the next turn begin while the last one's observation finishes.
+				const next = observer([ircRecord("Peer", "one more thing")]);
+				expect(checks[0]?.()).toBe(true);
+				proceed.resolve();
+				await finished;
+				harness.emitAssistantText("done");
+				await next?.(undefined);
+				expect(checks).toHaveLength(1);
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("tells the settle hook about a turn the warm-revived session starts", async () => {
+			const checks: Array<() => boolean> = [];
+			const settling = Promise.withResolvers<void>();
+			const proceed = Promise.withResolvers<void>();
+			const { manager, harness, observer, monitor } = setUp(async superseded => {
+				checks.push(superseded);
+				settling.resolve();
+				await proceed.promise;
+				return NOTICE;
+			});
+			try {
+				const finish = observer([ircRecord("Parent", "fix it")]);
+				harness.emitAssistantText("fixed");
+				const finished = finish?.(undefined);
+				await settling.promise;
+				expect(checks[0]?.()).toBe(false);
+
+				// The idle TTL parked the agent while its last turn was still settling, and
+				// a peer message revived it. The warm reviver attaches a new monitor with
+				// the same options object, on a new session.
+				const revived = createHarness({ asyncJobManager: manager });
+				attachIrcWakeTurnMonitor(revived.session, monitor);
+				const revivedObserver = revived.wakeObserver();
+				if (!revivedObserver) throw new Error("revived wake-turn observer was not registered");
+				const next = revivedObserver([ircRecord("Peer", "one more thing")]);
+
+				// The old turn's capture would read the workspace the new turn is editing.
+				expect(checks[0]?.()).toBe(true);
+				proceed.resolve();
+				await finished;
+				revived.emitAssistantText("done");
+				await next?.(undefined);
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
+
+		it("reports each turn as it starts, including one only a peer hears of", async () => {
+			const { manager, harness, observer, started } = setUp();
+			try {
+				// Any turn may edit the workspace, so the owner of the run is told before it does.
+				const peerTurn = observer([ircRecord("Peer", "is line 42 fine?")]);
+				expect(started).toHaveBeenCalledTimes(1);
+				harness.emitAssistantText("line 42 is fine");
+				await peerTurn?.(undefined);
+				const ownerTurn = observer([ircRecord("Parent", "fix it")]);
+				expect(started).toHaveBeenCalledTimes(2);
+				harness.emitAssistantText("fixed");
+				await ownerTurn?.(undefined);
+				expect(started).toHaveBeenCalledTimes(2);
+			} finally {
+				await manager.dispose({ timeoutMs: 1000 });
+			}
+		});
 	});
 });

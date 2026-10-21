@@ -27,6 +27,7 @@ import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" wit
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import isolationRecoveryHintTemplate from "../prompts/tools/isolation-recovery-hint.md" with { type: "text" };
 import salvagedChildHintTemplate from "../prompts/tools/salvaged-child-hint.md" with { type: "text" };
+import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import type { TaskEffort } from "@oh-my-pi/pi-tui/thinking";
 import type { ToolSession } from "../tools";
@@ -38,6 +39,7 @@ import { type ExecutorOptions, runSubprocess, type SubagentToolResult } from "./
 import {
 	applyEligibleNestedPatches,
 	type IsolationContext,
+	type IsolationFollowUps,
 	makeIsolationCommitMessage,
 	mergeIsolatedChanges,
 	persistNestedPatches,
@@ -536,6 +538,12 @@ interface ArtifactLease {
 	artifactsDir: string;
 	temporary: boolean;
 	unregister: (() => void) | undefined;
+	/**
+	 * Settles when the agent's lifecycle ends (`onRelease`). A kept-alive agent
+	 * is revived from its transcript in this directory after it is parked, so a
+	 * temporary directory is not removed before then.
+	 */
+	released: PromiseWithResolvers<void>;
 }
 
 async function leaseArtifacts(
@@ -546,14 +554,26 @@ async function leaseArtifacts(
 	if (sessionFile) {
 		const artifactsDir = sessionFile.slice(0, -6);
 		await fs.mkdir(artifactsDir, { recursive: true });
-		return { sessionFile, artifactsDir, temporary: false, unregister: undefined };
+		return {
+			sessionFile,
+			artifactsDir,
+			temporary: false,
+			unregister: undefined,
+			released: Promise.withResolvers<void>(),
+		};
 	}
 	const artifactsDir = path.join(
 		os.tmpdir(),
 		`${invocationKind === "eval" ? "omp-eval-agent" : "omp-task"}-${Snowflake.next()}`,
 	);
 	await fs.mkdir(artifactsDir, { recursive: true });
-	return { sessionFile: null, artifactsDir, temporary: true, unregister: registerArtifactsDir(artifactsDir) };
+	return {
+		sessionFile: null,
+		artifactsDir,
+		temporary: true,
+		unregister: registerArtifactsDir(artifactsDir),
+		released: Promise.withResolvers<void>(),
+	};
 }
 
 /**
@@ -669,13 +689,14 @@ function buildExecutorOptions(
 		parentArtifactManager: preparedSession ? undefined : (session.getArtifactManager?.() ?? undefined),
 		parentHindsightSessionState: session.getHindsightSessionState?.(),
 		parentMnemopiSessionState: session.getMnemopiSessionState?.(),
-		onRelease:
-			preparedSession !== undefined && lease.temporary
-				? async () => {
-						await fs.rm(lease.artifactsDir, { recursive: true, force: true });
-						lease.unregister?.();
-					}
-				: undefined,
+		onRelease: lease.temporary
+			? async () => {
+					lease.released.resolve();
+					if (preparedSession === undefined) return;
+					await fs.rm(lease.artifactsDir, { recursive: true, force: true });
+					lease.unregister?.();
+				}
+			: undefined,
 		parentTelemetry: session.getTelemetry?.(),
 		parentAgentId: session.getAgentId?.() ?? MAIN_AGENT_ID,
 		parentPromptCacheKey: session.getPromptCacheKey?.(),
@@ -752,6 +773,44 @@ async function isolationRecoveryHint(result: SingleResult, artifactsDir: string)
 		branchName: result.branchName,
 	});
 	return hint ? ` ${hint}` : "";
+}
+
+/**
+ * Merge an isolated run's captured changes into the parent repo, then apply
+ * its nested-repo patches. `unappliedNested` names the repositories whose
+ * patch did not apply: their patch files are then the only copy of that work,
+ * so they must survive cleanup, and the runner keeps them out of what counts
+ * as landed. It is empty when every patch applied, even if restoring a user's
+ * stashed work warned: the summary then carries a notification, but nothing
+ * is left to recover.
+ */
+async function landCapturedChanges(
+	result: SingleResult,
+	repoRoot: string,
+	mergeMode: "patch" | "branch",
+	session: ToolSession,
+): Promise<{ summary: string; changesApplied: boolean | null; unappliedNested: readonly string[] }> {
+	const outcome = await mergeIsolatedChanges({ result, repoRoot, mergeMode });
+	if (outcome.changesApplied === false) {
+		return { summary: outcome.summary, changesApplied: false, unappliedNested: [] };
+	}
+	let unappliedNested: readonly string[] = [];
+	const nestedPatchSummary = await applyEligibleNestedPatches({
+		result,
+		repoRoot,
+		mergeMode,
+		changesApplied: outcome.changesApplied,
+		mergedBranchForNestedPatches: outcome.mergedBranchForNestedPatches,
+		commitMessage: makeIsolationCommitMessage(session)(),
+		onUnapplied: relativePaths => {
+			unappliedNested = relativePaths;
+		},
+	});
+	return {
+		summary: outcome.summary + nestedPatchSummary,
+		changesApplied: outcome.changesApplied,
+		unappliedNested,
+	};
 }
 
 /**
@@ -836,6 +895,21 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 	// failure must carry the exit status and artifact the child produced.
 	let settled: SingleResult | undefined;
 	let retainSalvagedArtifact = false;
+	/** Set once the agent's id is reserved; the cleanup below waits for that agent's release. */
+	let agentId: string | undefined;
+	/** Set when an isolated agent's release leaves its remaining work in the artifacts directory. */
+	let releaseLeftArtifacts = false;
+	/**
+	 * Set synchronously when the lifecycle adopts the agent. `release()` deletes
+	 * that adoption before `onRelease` writes, so cleanup cannot trust `has()`.
+	 */
+	let adoptedForRelease = false;
+	// Follow-up turns of an isolated agent wait on this before their capture, so
+	// they never race the first run's landing below.
+	const firstRunLanding = Promise.withResolvers<boolean | null>();
+	// Nested repositories the first run's landing could not apply. Set before
+	// `firstRunLanding` settles, which is when the runner reads it.
+	let firstRunUnappliedNested: readonly string[] = [];
 	const onSubprocessResult =
 		request.invocationKind === "eval"
 			? (result: SingleResult) => request.session.recordEvalSubagentUsage?.(result.usage?.output ?? 0)
@@ -845,8 +919,12 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			...request.identity,
 			label: request.identity?.label ?? (request.invocationKind === "eval" ? "EvalAgent" : undefined),
 		});
+		agentId = id;
 		if (policy.preparedSession === undefined) await refreshSkillsForAutoload(request.session, policy.agent);
 		const baseOptions = buildExecutorOptions(request, policy, lease, id);
+		baseOptions.onAdopted = () => {
+			adoptedForRelease = true;
+		};
 		baseOptions.onCleanupDeferred = completion => {
 			deferredCleanup = completion;
 		};
@@ -880,6 +958,26 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 				result = await runSubprocess(baseOptions);
 				onSubprocessResult?.(result);
 			} else {
+				const repoRoot = isolationContext.repoRoot;
+				const followUps: IsolationFollowUps = {
+					firstRunLanded: firstRunLanding.promise,
+					firstRunUnappliedNested: () => firstRunUnappliedNested,
+					land: async captured => {
+						if (!policy.applyChanges) {
+							return { summary: describeCapturedChanges(captured), landed: null };
+						}
+						const landing = await landCapturedChanges(captured, repoRoot, policy.mergeMode, request.session);
+						// Nested patch files are the only recovery copy when apply fails
+						// after the root lands. Release cannot see that failure. A later
+						// turn does not clear this: it may not re-apply the same patches.
+						if (landing.unappliedNested.length > 0) releaseLeftArtifacts = true;
+						return {
+							summary: landing.summary,
+							landed: landing.changesApplied,
+							unappliedNested: landing.unappliedNested,
+						};
+					},
+				};
 				result = await runIsolatedSubprocess({
 					baseOptions,
 					context: isolationContext,
@@ -891,6 +989,10 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 					buildCommitMessage: makeIsolationCommitMessage(request.session),
 					buildFailureResult: buildFailureResult(request, policy, id, Date.now()),
 					onSubprocessResult,
+					followUps,
+					onReleaseArtifacts: () => {
+						releaseLeftArtifacts = true;
+					},
 				});
 			}
 		} finally {
@@ -904,7 +1006,11 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			(result.exitCode !== 0 || result.error !== undefined || result.aborted === true) &&
 			(result.patchPath !== undefined || result.branchName !== undefined || (result.nestedPatches?.length ?? 0) > 0);
 
-		if (
+		if (policy.isIsolated && isolationContext && result.isolationCaptureSuperseded) {
+			// Another turn of the agent overlapped the capture: nothing was handed
+			// over, and the changes go with that turn's capture (apply or not).
+			mergeSummary = renderIsolationSummary({ kind: "capture-superseded" });
+		} else if (
 			policy.isIsolated &&
 			isolationContext &&
 			policy.applyChanges &&
@@ -912,27 +1018,17 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			!result.error &&
 			!result.aborted
 		) {
-			const outcome = await mergeIsolatedChanges({
+			const landing = await landCapturedChanges(
 				result,
-				repoRoot: isolationContext.repoRoot,
-				mergeMode: policy.mergeMode,
-			});
-			mergeSummary = outcome.summary;
-			changesApplied = outcome.changesApplied;
-			if (outcome.changesApplied !== false) {
-				const nestedPatchSummary = await applyEligibleNestedPatches({
-					result,
-					repoRoot: isolationContext.repoRoot,
-					mergeMode: policy.mergeMode,
-					changesApplied: outcome.changesApplied,
-					mergedBranchForNestedPatches: outcome.mergedBranchForNestedPatches,
-					commitMessage: makeIsolationCommitMessage(request.session)(),
-				});
-				mergeSummary += nestedPatchSummary;
-				requiresRecoveryArtifacts ||=
-					nestedPatchSummary.includes("<system-notification>") && (result.nestedPatches?.length ?? 0) > 0;
-			}
-		} else if (policy.isIsolated && isolationContext && result.exitCode === 0 && result.error && !result.aborted) {
+				isolationContext.repoRoot,
+				policy.mergeMode,
+				request.session,
+			);
+			mergeSummary = landing.summary;
+			changesApplied = landing.changesApplied;
+			firstRunUnappliedNested = landing.unappliedNested;
+			requiresRecoveryArtifacts ||= landing.unappliedNested.length > 0;
+		} else if (policy.isIsolated && isolationContext && result.isolationCaptureFailed && result.error) {
 			// The agent finished but the runner could not capture, persist, or
 			// commit its changes. `result.error` names the recovery route (retained
 			// workspace, rescued branch); it is the parent's only way to find it.
@@ -967,6 +1063,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			{ cause: error, result: settled },
 		);
 	} finally {
+		firstRunLanding.resolve(changesApplied);
 		const shouldRetainArtifacts =
 			request.detached === true ||
 			retainSalvagedArtifact ||
@@ -974,13 +1071,21 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 				(completedSuccessfully || hasValidStructuredOutput)) ||
 			(policy.isIsolated && (!policy.applyChanges || changesApplied === false || requiresRecoveryArtifacts));
 		const shouldCleanup = lease.temporary && !shouldRetainArtifacts;
+		const keptAlive = (): boolean => agentId !== undefined && AgentLifecycleManager.global().has(agentId);
 		const cleanupArtifacts = async (): Promise<void> => {
+			// A kept-alive agent is revived from its transcript here once it is
+			// parked, so the directory goes only after the agent is released, and
+			// stays when that release left the agent's remaining work in it.
+			// Adoption is gone as soon as release() starts, before onRelease writes,
+			// so the latch — not a live has() check — is what keeps cleanup waiting.
+			if (adoptedForRelease || keptAlive()) await lease.released.promise;
+			if (releaseLeftArtifacts) return;
 			await fs.rm(lease.artifactsDir, { recursive: true, force: true });
 			lease.unregister?.();
 		};
 		if (shouldCleanup) {
-			if (deferredCleanup) {
-				trackLateCleanup(deferredCleanup.then(cleanupArtifacts), {
+			if (deferredCleanup || keptAlive() || adoptedForRelease) {
+				trackLateCleanup((deferredCleanup ?? Promise.resolve()).then(cleanupArtifacts), {
 					resource: "artifacts",
 					artifactsDir: lease.artifactsDir,
 				});

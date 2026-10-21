@@ -599,8 +599,29 @@ export interface ExecutorOptions {
 	keepAlive?: boolean;
 	/** Internal ownership handoff for cleanup that outlives the visible Task result. */
 	onCleanupDeferred?: (completion: Promise<void>) => void;
+	/**
+	 * Called synchronously once a kept-alive agent is adopted, before
+	 * {@link finalizeSubagentLifecycle} returns. `release()` deletes that
+	 * adoption before its first await, so a later `has()` check cannot tell
+	 * cleanup to wait for `onRelease`.
+	 */
+	onAdopted?: () => void;
 	/** Releases resources retained for a kept-alive agent when its lifecycle ends. */
 	onRelease?: () => Promise<void>;
+	/**
+	 * Runs after each follow-up turn of a kept-alive agent (an IRC wake or a
+	 * user prompt) is finalized, before anyone is told the turn's outcome; the
+	 * returned text is appended to what they are told. The session may start
+	 * the agent's next turn while this runs; `superseded()` says whether it has.
+	 */
+	onFollowUpTurnSettled?: (result: SingleResult, superseded: () => boolean) => Promise<string>;
+	/**
+	 * Called as each turn of a kept-alive agent after its run starts (an IRC
+	 * wake or a user prompt), before it can touch the workspace. The agent is
+	 * idle and wakeable before `runSubprocess` returns, so a turn can start
+	 * while the caller is still handling the run's result.
+	 */
+	onFollowUpTurnStarted?: () => void;
 	/** Internal cleanup grace override for deterministic lifecycle tests. */
 	cleanupGraceMs?: number;
 }
@@ -2801,6 +2822,12 @@ interface FinalizeRunArgs {
 	 */
 	followUpTurn?: boolean;
 	publishMessageResult?: boolean;
+	/**
+	 * The agent runs in an isolated workspace. Its follow-up results say so, as its
+	 * first result does: a result that does not is told an agent killed in this turn
+	 * can be resumed, though the kill released its workspace.
+	 */
+	isolated?: boolean;
 	sessionFile?: string;
 	startTime: number;
 }
@@ -3019,6 +3046,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 		outputPath,
 		extractedToolData: progress.extractedToolData,
 		retryFailure: progress.retryFailure,
+		...(args.isolated ? { isolated: true } : {}),
 		outputMeta,
 	};
 }
@@ -3050,6 +3078,12 @@ export interface IrcWakeTurnMonitorOptions {
 	outputSchemaMode?: StructuredSubagentSchemaMode;
 	outputSchemaSource?: StructuredSubagentSchemaSource;
 	artifactsDir?: string;
+	/** See {@link ExecutorOptions.onFollowUpTurnSettled}. */
+	onTurnSettled?: (result: SingleResult, superseded: () => boolean) => Promise<string>;
+	/** See {@link ExecutorOptions.onFollowUpTurnStarted}. */
+	onTurnStarted?: () => void;
+	/** The agent runs in an isolated workspace; see {@link FinalizeRunArgs.isolated}. */
+	isolated?: boolean;
 }
 
 /** Sender + message id of one `irc:incoming` record that woke a turn. */
@@ -3078,6 +3112,37 @@ function wakeSources(records: AgentMessage[], selfId: string): WakeSource[] {
 }
 
 /**
+ * Tell the owner what became of a turn's changes when the delivery meant to
+ * carry the notice closed while they landed: the owner cancelled the wake
+ * job, or its job manager began disposing. A cancelled job delivers nothing
+ * and a disposing manager refuses results, so without this the owner would
+ * never hear that its checkout changed. A send that fails is logged with
+ * its body, so the notice is not lost with the session.
+ */
+async function tellOwner(args: { id: string; ownerId: string; body: string; reason: string }): Promise<void> {
+	let failure: string | undefined;
+	try {
+		const receipt = await IrcBus.global().send({
+			from: args.id,
+			to: args.ownerId,
+			body: args.body,
+			wakeRelay: true,
+		});
+		if (receipt.outcome === "failed") failure = receipt.error;
+	} catch (error) {
+		failure = error instanceof Error ? error.message : String(error);
+	}
+	if (failure === undefined) return;
+	logger.warn("Could not tell the owner what a settled turn changed", {
+		id: args.id,
+		ownerId: args.ownerId,
+		reason: args.reason,
+		error: failure,
+		body: args.body,
+	});
+}
+
+/**
  * Hand a woken subagent's turn output to whoever woke it, when the subagent
  * did not answer them itself. A re-`yield` delivers the `<task-result>`
  * envelope (the artifact was just rewritten, so it carries the `agent://`
@@ -3103,6 +3168,8 @@ async function relayWakeTurnOutput(args: {
 	finalizeError: unknown;
 	/** Waker already receiving this turn's outcome as an async job delivery. */
 	jobOwnerId: string | undefined;
+	/** Appended to every relay: what became of the turn's changes (see {@link IrcWakeTurnMonitorOptions.onTurnSettled}). */
+	notice: string;
 }): Promise<void> {
 	const bus = IrcBus.global();
 	const sources = wakeSources(args.records, args.id);
@@ -3117,8 +3184,12 @@ async function relayWakeTurnOutput(args: {
 		// "pinged you 'on it'", and suppressing the failure notice on a mere ping
 		// strands the waker exactly as before — one message later. So the failure
 		// lane always notifies, flavoured to acknowledge the earlier message.
-		if (alreadyMessaged && !failed) continue;
-		const body = buildWakeRelayBody({ ...args, alreadyMessaged });
+		// The agent's own message may already have answered, but not said
+		// where its changes went; the notice still has to reach the waker.
+		const body =
+			alreadyMessaged && !failed
+				? args.notice.trim()
+				: `${buildWakeRelayBody({ ...args, alreadyMessaged })}${args.notice}`;
 		if (!body) continue;
 		const receipt = await bus.send({
 			from: args.id,
@@ -3212,6 +3283,26 @@ function extractIrcRecordText(content: string | ReadonlyArray<{ type: string; te
 }
 
 /**
+ * Turn counters shared by every monitor attached with the same options object.
+ * A warm revival attaches a new monitor on the revived session with the options
+ * of the original spawn. The idle TTL can park the agent while a turn is still
+ * inside `onTurnSettled`, so a counter local to one monitor would start again
+ * at zero and the settling turn would never see a turn the revived session
+ * starts. The options object is the one thing both monitors share, and it lives
+ * exactly as long as the agent's revival state does.
+ */
+const wakeTurnCounters = new WeakMap<IrcWakeTurnMonitorOptions, { started: number }>();
+
+function sharedWakeTurnCounter(options: IrcWakeTurnMonitorOptions): { started: number } {
+	let counter = wakeTurnCounters.get(options);
+	if (!counter) {
+		counter = { started: 0 };
+		wakeTurnCounters.set(options, counter);
+	}
+	return counter;
+}
+
+/**
  * Bracket a kept-alive subagent's undriven turns — autonomous IRC wakes and
  * user prompts from focused-session steering — with a task run monitor so
  * RPC/collab subscribers see the same `subagent_lifecycle` /
@@ -3232,7 +3323,13 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 	const { id, agent } = options;
 	const index = options.index ?? 0;
 	const maxRuntimeMs = options.maxRuntimeMs ?? 0;
+	// Counts turns started under these options. The session releases a turn
+	// before its observation finishes, so the next turn can begin during
+	// `onTurnSettled`. See {@link wakeTurnCounters}: a revived session shares it.
+	const counter = sharedWakeTurnCounter(options);
 	session.setIrcWakeTurnObserver(records => {
+		const turn = ++counter.started;
+		options.onTurnStarted?.();
 		// Autonomous IRC wake turns reuse the session's YieldTool just like
 		// runSubagentFollowUpTurn; clear the prior run's incremental-section flag
 		// and retry counters so this wake turn's guards see only its own state.
@@ -3435,6 +3532,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					parentToolCallId: options.parentToolCallId,
 					detached: true,
 					followUpTurn: true,
+					isolated: options.isolated,
 					publishMessageResult: ownerWoken || ownerPrompted || userPrompted,
 					// A cancelled wake job must not replace the accepted result.
 					signal: jobCancel.signal,
@@ -3448,19 +3546,66 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					error: caught instanceof Error ? caught.message : String(caught),
 				});
 			} finally {
-				// A focused-user result can complete without a registered wake job;
-				// enqueue its delivery without reserving an execution slot.
+				// A turn the operator typed, or the owner's steer prompted, has no IRC
+				// waker to relay it. When no wake job could be registered (the owner's
+				// job slots are full), its answer is delivered without reserving an
+				// execution slot: an unstructured agent's final message, or a
+				// structured agent's yield.
 				const messageResult =
-					(userPrompted || ownerPrompted) && options.structured === false && result?.outputPath !== undefined;
-				if (messageResult && !wakeJob && ownerId && session.asyncJobManager && result) {
-					const text = formatTaskResultSummary(result, { totalDurationMs: result.durationMs });
+					(userPrompted || ownerPrompted) &&
+					result !== undefined &&
+					(options.structured === false ? result.outputPath !== undefined : yielded);
+				// What became of the turn's changes is part of its outcome, so it is
+				// settled before anyone is told the turn ended, and only for a turn
+				// whose outcome reaches the owner: a change to the owner's checkout
+				// must not land behind its back. The owner hears it through its wake
+				// job, through the relay below when it woke the agent but no job
+				// could be registered, or through a user-prompted result's delivery.
+				// A cancelled wake job is not a delivery: the owner already gave up
+				// the turn, so its checkout must not change behind that decision.
+				// A user-prompted result is delivered through the owner's job
+				// manager, so settlement needs one that can still take it. A manager
+				// that is disposing refuses the delivery, and the changes would
+				// then land with no way to tell the owner.
+				const manager = session.asyncJobManager;
+				const ownerCanHear = !!ownerId && manager !== undefined && !manager.disposed;
+				const ownerTold =
+					!jobCancel.signal.aborted && (wakeJob !== undefined || ownerWoken || (messageResult && ownerCanHear));
+				let notice = "";
+				if (result && options.onTurnSettled && ownerTold) {
 					try {
-						session.asyncJobManager.publishCompleted("task", id, { text }, { id, agentId: id, ownerId });
+						notice = await options.onTurnSettled(result, () => counter.started !== turn);
+					} catch (error) {
+						logger.warn("Follow-up turn settle hook failed", {
+							id,
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
+				}
+				// The owner can cancel the wake job while the hook lands the changes.
+				// A cancelled job delivers nothing and the relay below skips the job's
+				// owner, so the notice is the owner's only word that its checkout
+				// changed. Read here: nothing awaits between this and the job's outcome.
+				const cancelledWhileSettling = notice.trim() !== "" && jobCancel.signal.aborted;
+				if (messageResult && !wakeJob && ownerId && session.asyncJobManager && result) {
+					const text = `${formatTaskResultSummary(result, { totalDurationMs: result.durationMs })}${notice}`;
+					const structured = result.structuredOutput;
+					try {
+						session.asyncJobManager.publishCompleted("task", id, structured ? { text, structured } : { text }, {
+							id,
+							agentId: id,
+							ownerId,
+						});
 					} catch (error) {
 						logger.warn("User-resumed subagent result delivery failed", {
 							id,
 							error: error instanceof Error ? error.message : String(error),
 						});
+						// The owner's manager began disposing while the changes landed, so
+						// it refused the result. The notice still has to reach the owner.
+						if (notice.trim() !== "") {
+							await tellOwner({ id, ownerId, body: text, reason: "its job manager refused the result" });
+						}
 					}
 				}
 				// Once registered, the wake job carries this turn's outcome to the
@@ -3468,7 +3613,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				// superseded it, or, for a turn that never yielded, the answer a
 				// relay would have carried.
 				if (wakeJob && (yielded || messageResult) && result) {
-					const text = formatTaskResultSummary(result, { totalDurationMs: result.durationMs });
+					const text = `${formatTaskResultSummary(result, { totalDurationMs: result.durationMs })}${notice}`;
 					const structured = result.structuredOutput;
 					if (result.aborted || result.exitCode !== 0 || result.error !== undefined) {
 						wakeJob.outcome.reject(new AsyncJobError(text, structured));
@@ -3480,7 +3625,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					wakeJob.outcome.reject(new Error(`Wake turn of ${id} failed to finalize: ${message}`));
 				} else if (wakeJob) {
 					const outcome = { error: errorForPeer, aborted, finalizeError };
-					const text = buildWakeRelayBody({
+					const text = `${buildWakeRelayBody({
 						...outcome,
 						id,
 						yielded,
@@ -3488,7 +3633,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 						turnText,
 						abortReason,
 						alreadyMessaged: IrcBus.global().sentSince(id, wakeJob.ownerId, turnStartTime),
-					});
+					})}${notice}`;
 					if (wakeTurnFailed(outcome)) wakeJob.outcome.reject(new Error(text));
 					else wakeJob.outcome.resolve({ text });
 				}
@@ -3496,6 +3641,14 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				// wake turn must still tell whoever woke it, or a `send await:true`
 				// waiter mistakes a dead peer for a healthy-but-silent one.
 				try {
+					if (cancelledWhileSettling && ownerId) {
+						await tellOwner({
+							id,
+							ownerId,
+							body: `Wake turn of ${id} was cancelled while its changes were landing.${notice}`,
+							reason: "the wake job was cancelled while the turn settled",
+						});
+					}
 					await relayWakeTurnOutput({
 						id,
 						records,
@@ -3508,6 +3661,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 						abortReason,
 						finalizeError,
 						jobOwnerId: wakeJob?.ownerId,
+						notice,
 					});
 				} catch (relayError) {
 					logger.warn("IRC wake-turn relay threw", {
@@ -3542,6 +3696,12 @@ export async function finalizeSubagentLifecycle(args: {
 	reviveSession: AgentReviver | null;
 	cleanupDeadlineAt?: number;
 	onCleanupDeferred?: (completion: Promise<void>) => void;
+	/**
+	 * Called synchronously once a kept-alive agent is adopted, before this
+	 * function returns. See {@link ExecutorOptions.onAdopted}.
+	 */
+	onAdopted?: () => void;
+	/** Releases resources retained for a kept-alive agent when its lifecycle ends. */
 	onRelease?: () => Promise<void>;
 }): Promise<void> {
 	const registry = AgentRegistry.global();
@@ -3646,6 +3806,9 @@ export async function finalizeSubagentLifecycle(args: {
 		},
 		ref,
 	);
+	// Synchronous: release() deletes this adoption before it awaits, so the
+	// caller must already know the agent was adopted by the time adopt() returns.
+	args.onAdopted?.();
 }
 
 /** Options for {@link runSubagentFollowUpTurn}. */
@@ -4352,6 +4515,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		outputSchemaMode: options.outputSchemaMode,
 		outputSchemaSource: options.outputSchemaSource,
 		artifactsDir: options.artifactsDir,
+		onTurnSettled: options.onFollowUpTurnSettled,
+		onTurnStarted: options.onFollowUpTurnStarted,
+		isolated: worktree !== undefined,
 	};
 
 	const runSubagent = async (): Promise<{
@@ -4926,6 +5092,13 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// stamp the lifecycle and terminalize a ref the run-state mirror left
 			// `running` before the (possibly slow) cleanup below.
 			if (resultDelivered(outcome, monitor, structured)) {
+				// The ref reads idle below, and a peer message can wake the agent the
+				// instant it does. A turn that starts with no observer is never counted
+				// for an isolated first capture, never settled, and never delivered, so
+				// the observer goes in first. Installing it is idempotent: the finalizer
+				// installs it again for runs that were not accepted. A one-shot run is
+				// never woken.
+				if (options.keepAlive !== false) attachIrcWakeTurnMonitor(session, wakeOptions);
 				AgentRegistry.global().markResultAccepted(id, session, monitor.yieldAcceptedAt());
 			}
 			exitCode = outcome.exitCode;
@@ -5024,6 +5197,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					reviveSession,
 					cleanupDeadlineAt,
 					onRelease: options.onRelease,
+					onAdopted: options.onAdopted,
 					onCleanupDeferred: completion => {
 						deferredSessionShutdown = completion;
 						deferCleanup(completion);

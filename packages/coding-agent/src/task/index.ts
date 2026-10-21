@@ -1387,20 +1387,21 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		// A queued job launches (or adopts) its run when it starts; until then
 		// its widget has no tool tap to read.
 		let spawnRun: SpawnRun | undefined = run;
-		const buildFollowUpHint = async (aborted: boolean): Promise<string> => {
-			// Isolated runs are parked without a reviver once the run ends
-			// (`finalizeSubagentLifecycle`), so "message it" would point the
-			// caller at a follow-up path that no longer exists. The template says
-			// nothing about the worktree itself: the runner keeps it when captured
-			// changes could not be written, and names that path in the result.
-			const isolated = spawnParams.isolated === true;
+		const buildFollowUpHint = async (aborted: boolean, isolationFailed: boolean): Promise<string> => {
+			// An isolated agent's follow-up turns land like its first run, unless
+			// the runner failed to capture or land that run: it may have retained
+			// the workspace elsewhere or left the work on a rescue branch, so
+			// "message it" would send the agent to work nobody will collect. A
+			// follow-up lands only when its turn ends, after any message the agent
+			// sends mid-turn, so the hint says which delivery to wait for.
 			const ref = aborted ? AgentRegistry.global().get(agentId) : undefined;
 			return `\n\n${prompt.render(taskFollowUpTemplate, {
 				agentId,
 				aborted,
-				isolated,
+				isolated: spawnParams.isolated === true,
+				isolationFailed,
 				ircEnabled,
-				resumable: !isolated && isResumable(ref),
+				resumable: !isolationFailed && isResumable(ref, { isolated: spawnParams.isolated === true }),
 				transcriptAvailable: aborted ? await hasResolvableTranscript(agentId) : true,
 			})}`;
 		};
@@ -1538,7 +1539,15 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						? `Background task ${agentId} failed.`
 						: `Background task ${agentId} complete.`;
 					await reportProgress(statusText, buildDetails() as unknown as Record<string, unknown>);
-					const deliveryText = `${finalText}${await buildFollowUpHint(singleResult?.aborted === true)}`;
+					const isolationFailed =
+						spawnParams.isolated === true &&
+						(singleResult === undefined || singleResult.isolationCaptureFailed === true);
+					// Like the thrown path below: a run that failed before registering
+					// (isolation setup, for one) has no agent to message or transcript.
+					const hint = AgentRegistry.global().get(agentId)
+						? await buildFollowUpHint(singleResult?.aborted === true, isolationFailed)
+						: "";
+					const deliveryText = `${finalText}${hint}`;
 					const structured = singleResult?.structuredOutput;
 					if (resultFailed) {
 						// Mark the job itself failed; the failed agent stays interrogable.
@@ -1555,7 +1564,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					const statusText = `Background task ${agentId} failed.`;
 					await reportProgress(statusText, buildDetails() as unknown as Record<string, unknown>);
 					const message = error instanceof Error ? error.message : String(error);
-					const hint = AgentRegistry.global().get(agentId) ? await buildFollowUpHint(false) : "";
+					const hint = AgentRegistry.global().get(agentId)
+						? await buildFollowUpHint(false, spawnParams.isolated === true)
+						: "";
 					throw new TaskJobError(`${message}${hint}`);
 				}
 			},

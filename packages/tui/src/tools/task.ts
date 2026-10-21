@@ -2493,12 +2493,22 @@ export interface SingleResult {
 	usage?: Usage;
 	/** Output path for the task result */
 	outputPath?: string;
-	/**
-	 * Ran inside an isolation worktree. Such agents are parked without a
-	 * reviver once the worktree is torn down, so they are never resumable or
-	 * messageable after the run — summaries must not suggest otherwise.
-	 */
+	/** Ran inside an isolation worktree. */
 	isolated?: boolean;
+	/**
+	 * Set by the isolation runner when the agent finished but its changes could
+	 * not be captured, persisted, or committed; `error` names where the work was
+	 * kept (a retained workspace, a rescued branch). Summaries must then point
+	 * at that recovery route instead of offering follow-ups.
+	 */
+	isolationCaptureFailed?: boolean;
+	/**
+	 * Set by the isolation runner when the agent started another turn before
+	 * this run's changes were captured, so a capture could hold part of that
+	 * turn. Nothing is handed over: the changes go with the capture of the
+	 * agent's next turn whose result reaches the parent, or with its release.
+	 */
+	isolationCaptureSuperseded?: boolean;
 	/** Patch path for isolated worktree output */
 	patchPath?: string;
 	/**

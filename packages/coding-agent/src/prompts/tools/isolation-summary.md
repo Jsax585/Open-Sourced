@@ -79,3 +79,13 @@ Nested repository patches (not applied):
 {{#list nestedPatchPaths prefix="- "}}{{this}}{{/list}}
 {{/if}}
 {{/when}}
+{{#when kind "==" "follow-up-pending"}}
+<system-notification>Isolation: this turn's changes were not captured: {{error}}
+They stay in the isolated workspace until the agent is released, which writes root-repository changes to {{rootPatchPath}} and nested-repository changes to patch files beside it{{#if branchName}}, and commits root-repository changes to branch {{branchName}}{{/if}}.</system-notification>
+{{/when}}
+{{#when kind "==" "capture-superseded"}}
+<system-notification>Isolation: these changes were not captured: the agent started another turn before the capture finished. They are captured with its next turn whose result reaches you, or when it is released.</system-notification>
+{{/when}}
+{{#when kind "==" "handoff-withdrawn"}}
+<system-notification>Isolation: the agent undid the changes it had handed over that were not applied, so what was captured for them ({{#if branchKept}}patch files{{else}}patch files, task branch{{/if}}) was removed.{{#if branchKept}} The task branch {{branchName}} could not be deleted because it is checked out in another worktree. It still holds work the agent removed, so do not merge it; it is deleted when the agent is released, once it is free.{{else}} Nothing is left to apply.{{/if}}</system-notification>
+{{/when}}

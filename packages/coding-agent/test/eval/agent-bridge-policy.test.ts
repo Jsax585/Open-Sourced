@@ -1300,6 +1300,7 @@ describe("runEvalAgent isolation", () => {
 			singleResult(opts.baseOptions, {
 				output: "ran",
 				patchPath: `/artifacts/${opts.agentId}.patch`,
+				isolationCaptureFailed: true,
 				error: "Merge failed: remote: garbage at end of loose object '4de7bad'",
 			}),
 		);

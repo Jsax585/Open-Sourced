@@ -1214,6 +1214,7 @@ describe("structured subagent primitive", () => {
 			branchName: "omp/task/Worker",
 			branchBaseSha: "base",
 			nestedPatches: [{ relativePath: "inner", patch: "diff --git a/b.txt b/b.txt\n" }],
+			isolationCaptureFailed: true,
 			error: "Nested patch capture failed: ENOSPC. Isolation workspace retained at /wt/abc.",
 		}));
 
@@ -1223,6 +1224,398 @@ describe("structured subagent primitive", () => {
 
 		expect(settled.mergeSummary).toContain("omp/task/Worker");
 		await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+	});
+
+	it("reports a first run whose capture a later turn overlapped instead of landing it", async () => {
+		mockDiscovery();
+		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot: "/tmp" } as never);
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async () => ({
+			...result(),
+			isolated: true,
+			isolationCaptureSuperseded: true,
+		}));
+		const merge = vi.spyOn(isolationRunner, "mergeIsolatedChanges");
+
+		const settled = await runStructuredSubagent(
+			request({ session: session({ isolationEnabled: true }), isolation: { requested: true } }),
+		);
+
+		expect(merge).not.toHaveBeenCalled();
+		expect(settled.mergeSummary).toContain("the agent started another turn before the capture finished");
+		await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+	});
+
+	/**
+	 * Stand in for a kept-alive run: write the transcript where the executor
+	 * does, then hand the agent to the lifecycle with `onRelease`. Returns the
+	 * transcript path; the agent is registered under the id the task tool gave.
+	 */
+	async function keptAliveRun(
+		options: { id?: string; artifactsDir?: string; onAdopted?: () => void },
+		onRelease: (() => Promise<void>) | undefined,
+	): Promise<string> {
+		const id = options.id;
+		if (!id) throw new Error("the task tool reserves an agent id before running it");
+		const transcript = path.join(options.artifactsDir ?? "", `${id}.jsonl`);
+		await Bun.write(transcript, "{}\n");
+		const agentSession = {
+			prepareForHeadlessAdvisorDrain: () => {},
+			waitForAdvisorCatchup: async () => true,
+			dispose: async () => {},
+		} as never;
+		AgentRegistry.global().register({
+			id,
+			displayName: id,
+			kind: "sub",
+			session: agentSession,
+			sessionFile: transcript,
+			status: "running",
+		});
+		await executorModule.finalizeSubagentLifecycle({
+			id,
+			session: agentSession,
+			aborted: false,
+			keepAlive: true,
+			isolated: false,
+			agentIdleTtlMs: 0,
+			reviveSession: async () => agentSession,
+			onRelease,
+			onAdopted: options.onAdopted,
+		});
+		return transcript;
+	}
+
+	/** Whether `dir` is gone within a short wait: cleanup after a release runs on its own. */
+	async function removedSoon(dir: string): Promise<boolean> {
+		for (let attempt = 0; attempt < 100; attempt++) {
+			if (
+				!(await fs.stat(dir).then(
+					() => true,
+					() => false,
+				))
+			)
+				return true;
+			await Bun.sleep(5);
+		}
+		return false;
+	}
+
+	for (const background of [false, true]) {
+		it(`keeps a kept-alive agent's temporary transcript until it is released (${background ? "background" : "blocking"})`, async () => {
+			mockDiscovery();
+			let transcript = "";
+			let agent = "";
+			vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+				agent = options.id ?? "";
+				transcript = await keptAliveRun(options, options.onRelease);
+				return result();
+			});
+			let jobCleanup: (() => Promise<void>) | undefined;
+			try {
+				await runStructuredSubagent(
+					request({
+						keepAlive: true,
+						...(background
+							? { detached: true, onArtifactsRetained: cleanup => void (jobCleanup = cleanup) }
+							: {}),
+					}),
+				);
+				// A background job lets go of the directory once its result is delivered.
+				const jobLetGo = jobCleanup?.();
+				// Long enough for a cleanup that does not wait for the release to have run.
+				await Bun.sleep(50);
+				// Parked agents are revived from this file.
+				expect(await Bun.file(transcript).exists()).toBe(true);
+
+				await AgentLifecycleManager.global().release(agent);
+				await jobLetGo;
+				expect(await removedSoon(path.dirname(transcript))).toBe(true);
+			} finally {
+				await AgentLifecycleManager.global().release(agent);
+				AgentRegistry.resetGlobalForTests();
+			}
+		});
+	}
+
+	it("keeps the folder when an isolated agent's release leaves its remaining work there", async () => {
+		mockDiscovery();
+		let transcript = "";
+		let agent = "";
+		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot: "/tmp" } as never);
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts => {
+			agent = opts.agentId;
+			transcript = await keptAliveRun({ id: opts.agentId, artifactsDir: opts.artifactsDir }, async () => {
+				// As the runner's release does with work that never landed.
+				await Bun.write(path.join(opts.artifactsDir, `${opts.agentId}.patch`), "leftover\n");
+				opts.onReleaseArtifacts?.();
+				await opts.baseOptions.onRelease?.();
+			});
+			return { ...result(), isolated: true };
+		});
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "Merged branch: omp/task/Worker",
+			changesApplied: true,
+			hadAnyChanges: true,
+			mergedBranchForNestedPatches: true,
+		} as never);
+		vi.spyOn(isolationRunner, "applyEligibleNestedPatches").mockResolvedValue("");
+		try {
+			const settled = await runStructuredSubagent(
+				request({ keepAlive: true, session: session({ isolationEnabled: true }), isolation: { requested: true } }),
+			);
+			expect(await Bun.file(transcript).exists()).toBe(true);
+
+			await AgentLifecycleManager.global().release(agent);
+			// Long enough for a cleanup scheduled by the release to have run.
+			await Bun.sleep(50);
+			expect(await Bun.file(path.join(settled.artifactsDir, `${agent}.patch`)).text()).toBe("leftover\n");
+			await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+		} finally {
+			AgentRegistry.resetGlobalForTests();
+		}
+	});
+
+	it("keeps nested patch files when a follow-up lands the root but nested apply fails", async () => {
+		mockDiscovery();
+		let agent = "";
+		let nestedPatch = "";
+		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot: "/tmp" } as never);
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "Applied patches: yes",
+			changesApplied: true,
+			hadAnyChanges: true,
+			mergedBranchForNestedPatches: true,
+		} as never);
+		vi.spyOn(isolationRunner, "applyEligibleNestedPatches").mockImplementation(async opts => {
+			if ((opts.result.nestedPatches?.length ?? 0) === 0) return "";
+			// A real failure: the producer names the repository that did not apply.
+			opts.onUnapplied?.(["sub"]);
+			return "\n\n<system-notification>Some nested repository patches failed to apply.</system-notification>";
+		});
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts => {
+			agent = opts.agentId;
+			nestedPatch = path.join(opts.artifactsDir, `${opts.agentId}.nested-1-sub.patch`);
+			await Bun.write(nestedPatch, "diff\n");
+			await keptAliveRun({ id: opts.agentId, artifactsDir: opts.artifactsDir }, async () => {
+				// Unchanged workspace: release does not call onReleaseArtifacts.
+				await opts.baseOptions.onRelease?.();
+			});
+			await opts.followUps?.land({
+				...result(),
+				id: opts.agentId,
+				nestedPatches: [{ relativePath: "sub", patch: "diff\n" }],
+				nestedPatchPaths: [nestedPatch],
+			});
+			return { ...result(), isolated: true };
+		});
+		try {
+			const settled = await runStructuredSubagent(
+				request({ keepAlive: true, session: session({ isolationEnabled: true }), isolation: { requested: true } }),
+			);
+			await AgentLifecycleManager.global().release(agent);
+			await Bun.sleep(50);
+			expect(await Bun.file(nestedPatch).text()).toBe("diff\n");
+			expect(artifactsDirsFromRegistry()).toContain(settled.artifactsDir);
+			await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+		} finally {
+			await AgentLifecycleManager.global()
+				.release(agent)
+				.catch(() => {});
+			AgentRegistry.resetGlobalForTests();
+		}
+	});
+
+	it("does not keep the agent's files after release when a follow-up's nested apply only warned", async () => {
+		mockDiscovery();
+		let agent = "";
+		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot: "/tmp" } as never);
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "Applied patches: yes",
+			changesApplied: true,
+			hadAnyChanges: true,
+			mergedBranchForNestedPatches: true,
+		} as never);
+		// Every patch applied and committed; restoring the user's stashed work warned. The producer
+		// reports no unapplied repository, so the patch files are not the only copy of anything.
+		vi.spyOn(isolationRunner, "applyEligibleNestedPatches").mockResolvedValue(
+			"\n\n<system-notification>Pre-existing dirty state could not be auto-restored.</system-notification>",
+		);
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts => {
+			agent = opts.agentId;
+			await keptAliveRun({ id: opts.agentId, artifactsDir: opts.artifactsDir }, async () => {
+				await opts.baseOptions.onRelease?.();
+			});
+			await opts.followUps?.land({
+				...result(),
+				id: opts.agentId,
+				nestedPatches: [{ relativePath: "sub", patch: "diff\n" }],
+			});
+			return { ...result(), isolated: true };
+		});
+		try {
+			const settled = await runStructuredSubagent(
+				request({ keepAlive: true, session: session({ isolationEnabled: true }), isolation: { requested: true } }),
+			);
+			await AgentLifecycleManager.global().release(agent);
+			expect(await removedSoon(settled.artifactsDir)).toBe(true);
+		} finally {
+			await AgentLifecycleManager.global()
+				.release(agent)
+				.catch(() => {});
+			AgentRegistry.resetGlobalForTests();
+		}
+	});
+
+	it("does not delete artifacts while a release that already dropped adoption is still writing", async () => {
+		mockDiscovery();
+		const started = Promise.withResolvers<void>();
+		const hold = Promise.withResolvers<void>();
+		let agent = "";
+		let patch = "";
+		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot: "/tmp" } as never);
+		vi.spyOn(isolationRunner, "applyEligibleNestedPatches").mockResolvedValue("");
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "Applied patches: yes",
+			changesApplied: true,
+			hadAnyChanges: true,
+			mergedBranchForNestedPatches: true,
+		} as never);
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts => {
+			agent = opts.agentId;
+			patch = path.join(opts.artifactsDir, `${opts.agentId}.patch`);
+			await keptAliveRun(
+				{
+					id: opts.agentId,
+					artifactsDir: opts.artifactsDir,
+					onAdopted: opts.baseOptions.onAdopted,
+				},
+				async () => {
+					started.resolve();
+					await hold.promise;
+					await Bun.write(patch, "leftover\n");
+					opts.onReleaseArtifacts?.();
+					await opts.baseOptions.onRelease?.();
+				},
+			);
+			// Drop adoption before this function returns, while release is still
+			// writing. A latch checked only after the return already sees the
+			// agent gone and cannot tell cleanup to wait.
+			const releasing = AgentLifecycleManager.global().release(agent);
+			releasing.catch(() => {});
+			await started.promise;
+			return { ...result(), isolated: true };
+		});
+		try {
+			const settled = await runStructuredSubagent(
+				request({ keepAlive: true, session: session({ isolationEnabled: true }), isolation: { requested: true } }),
+			);
+			expect(artifactsDirsFromRegistry()).toContain(settled.artifactsDir);
+			hold.resolve();
+			await Bun.sleep(50);
+			expect(await Bun.file(patch).text()).toBe("leftover\n");
+			expect(artifactsDirsFromRegistry()).toContain(settled.artifactsDir);
+			await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+		} finally {
+			hold.resolve();
+			AgentRegistry.resetGlobalForTests();
+		}
+	});
+
+	/** Make the nested apply fail for repository `sub`, the way the real one reports it. */
+	function mockNestedApplyFailingFor(relativePath: string): void {
+		mockDiscovery();
+		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot: "/tmp" } as never);
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "Applied patches: yes",
+			changesApplied: true,
+			hadAnyChanges: true,
+			mergedBranchForNestedPatches: true,
+		} as never);
+		vi.spyOn(isolationRunner, "applyEligibleNestedPatches").mockImplementation(async opts => {
+			opts.onUnapplied?.([relativePath]);
+			return "\n\n<system-notification>nested failed</system-notification>";
+		});
+	}
+
+	it("tells the runner which nested repositories the first run's landing could not apply", async () => {
+		mockNestedApplyFailingFor("sub");
+		let followUps: { firstRunUnappliedNested?: () => readonly string[] } | undefined;
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts => {
+			followUps = opts.followUps;
+			return { ...result(), isolated: true, nestedPatches: [{ relativePath: "sub", patch: "diff\n" }] };
+		});
+		try {
+			const settled = await runStructuredSubagent(
+				request({ keepAlive: true, session: session({ isolationEnabled: true }), isolation: { requested: true } }),
+			);
+			// Read after the landing settled, as the runner does when it folds the handoff.
+			expect(followUps?.firstRunUnappliedNested?.()).toEqual(["sub"]);
+			await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+		} finally {
+			AgentRegistry.resetGlobalForTests();
+		}
+	});
+
+	it("tells the runner which nested repositories a follow-up landing could not apply", async () => {
+		mockNestedApplyFailingFor("sub");
+		let landed: { unappliedNested?: readonly string[] } | undefined;
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts => {
+			landed = await opts.followUps?.land({
+				...result(),
+				id: opts.agentId,
+				nestedPatches: [{ relativePath: "sub", patch: "diff\n" }],
+			});
+			return { ...result(), isolated: true };
+		});
+		try {
+			const settled = await runStructuredSubagent(
+				request({ keepAlive: true, session: session({ isolationEnabled: true }), isolation: { requested: true } }),
+			);
+			expect(landed?.unappliedNested).toEqual(["sub"]);
+			await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+		} finally {
+			AgentRegistry.resetGlobalForTests();
+		}
+	});
+
+	it("keeps the folder when the first run's nested apply fails", async () => {
+		mockNestedApplyFailingFor("sub");
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockResolvedValue({
+			...result(),
+			isolated: true,
+			nestedPatches: [{ relativePath: "sub", patch: "diff\n" }],
+		});
+		try {
+			const settled = await runStructuredSubagent(
+				request({ session: session({ isolationEnabled: true }), isolation: { requested: true } }),
+			);
+			// The patch files are the only copy of the nested work that did not apply.
+			await expect(fs.stat(settled.artifactsDir)).resolves.toBeDefined();
+			await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+		} finally {
+			AgentRegistry.resetGlobalForTests();
+		}
+	});
+
+	it("does not keep the folder when the first run's nested apply only warned", async () => {
+		mockNestedApplyFailingFor("sub");
+		// Every patch applied and committed; restoring the user's stashed work warned. Nothing is unapplied.
+		vi.spyOn(isolationRunner, "applyEligibleNestedPatches").mockResolvedValue(
+			"\n\n<system-notification>Pre-existing dirty state could not be auto-restored.</system-notification>",
+		);
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockResolvedValue({
+			...result(),
+			isolated: true,
+			nestedPatches: [{ relativePath: "sub", patch: "diff\n" }],
+		});
+		try {
+			const settled = await runStructuredSubagent(
+				request({ session: session({ isolationEnabled: true }), isolation: { requested: true } }),
+			);
+			expect(await removedSoon(settled.artifactsDir)).toBe(true);
+		} finally {
+			AgentRegistry.resetGlobalForTests();
+		}
 	});
 
 	it("defaults task isolation to auto-apply and lets config retain artifacts", async () => {

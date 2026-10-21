@@ -56,12 +56,18 @@ async function commitsAcrossRelease(id: string, runEndPatch: string, releasePatc
 	});
 	vi.spyOn(worktreeModule, "captureIsolationBaseline").mockResolvedValue(baseline);
 	vi.spyOn(worktreeModule, "cleanupIsolation").mockResolvedValue();
-	vi.spyOn(worktreeModule, "captureDeltaPatch").mockResolvedValue({ rootPatch: releasePatch, nestedPatches: [] });
+	// The mocked trees stand for the workspace content each capture saw.
+	vi.spyOn(worktreeModule, "captureDeltaPatch").mockResolvedValue({
+		rootPatch: releasePatch,
+		nestedPatches: [],
+		state: { head: "base", root: { baseTree: "base", tree: releasePatch }, nested: {} },
+	});
 	const commitSpy = vi.spyOn(worktreeModule, "commitToBranch").mockResolvedValue({
 		branchName: `omp/task/${id}`,
 		baseSha: "base",
 		rootPatch: runEndPatch,
 		nestedPatches: [],
+		state: { head: "base", root: { baseTree: "base", tree: runEndPatch }, nested: {} },
 	});
 	const session = {
 		prepareForHeadlessAdvisorDrain: () => {},
