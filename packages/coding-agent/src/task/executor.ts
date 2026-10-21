@@ -918,13 +918,15 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		});
 		if (terminalFailure) {
 			exitCode = exitCode === 0 ? 1 : exitCode;
-			if (includeStructuredOutput && structuredOutput?.status === "valid") {
-				structuredOutput = {
-					...structuredOutput,
-					status: "invalid",
-					error: stderr || "terminal failure",
-				};
-			}
+		}
+		// A final non-zero exit can never carry valid structured-result metadata, even when the
+		// committed-yield/internal-termination path intentionally preserves the exit code.
+		if (exitCode !== 0 && includeStructuredOutput && structuredOutput?.status === "valid") {
+			structuredOutput = {
+				...structuredOutput,
+				status: "invalid",
+				error: stderr || "terminal failure",
+			};
 		}
 	}
 	return { rawOutput, exitCode, stderr, abortedViaYield, hasYield, structuredOutput };

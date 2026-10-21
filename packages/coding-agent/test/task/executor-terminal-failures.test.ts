@@ -57,6 +57,22 @@ describe("terminal task failure classification", () => {
 		expect(result.structuredOutput?.status).toBe("valid");
 	});
 
+	it("invalidates valid structured metadata on a final nonzero exit while preserving data", () => {
+		const result = finalize({
+			exitCode: 1,
+			stderr: "child crashed",
+			terminalContext: {
+				terminalYieldAccepted: true,
+				finalYieldForced: false,
+				yieldInvalidatedByAsync: false,
+				abortKind: "terminate",
+			},
+		});
+		expect(result.exitCode).not.toBe(0);
+		expect(result.structuredOutput?.status).not.toBe("valid");
+		expect(result.structuredOutput?.data).toEqual({ ok: true });
+	});
+
 	it("preserves a genuine nonzero exit with stderr", () => {
 		const result = finalize({ exitCode: 1, stderr: "child crashed" });
 		expect(result.exitCode).not.toBe(0);
