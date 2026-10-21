@@ -335,7 +335,7 @@ async function createTieredHarness(options: TieredHarnessOptions) {
 	};
 	const createSession = () => {
 		const mock = createMockModel();
-		let session!: AgentSession;
+		const session!: AgentSession;
 		const agent = new Agent({
 			getApiKey: model =>
 				modelRegistry.resolver(model, {
@@ -622,6 +622,8 @@ describe("AgentSession tiered same-provider boundary cases", () => {
 			withFallbackChain: true,
 			accounts: {
 				a: { paid: null, resetAvailable: true },
+				b: { allowanceUsedPct: 100 },
+				c: { allowanceUsedPct: 100 },
 			},
 		});
 		try {
@@ -639,6 +641,15 @@ describe("AgentSession tiered same-provider boundary cases", () => {
 			expect(harness.redemptions).toEqual(["a"]);
 			expect(harness.events.indexOf("redeem:a")).toBeLessThan(harness.events.indexOf("request:b"));
 			expectPaidChargesToRespectFunding(harness);
+			expect(harness.requests.at(-1)).toEqual({ selector: harness.fallbackSelector, bearer: "fallback-key" });
+			expect(
+				harness.charges.filter(charge => charge.kind === "paid").map(charge => [charge.accountId, charge.remainingBefore]),
+			).toEqual([
+				["b", 10],
+				["b", 6],
+				["c", 10],
+				["c", 6],
+			]);
 		} finally {
 			await harness.dispose();
 		}
