@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.12.6] - 2026-10-21
+
 ### Added
 
 - Added Scaleway Generative APIs as a built-in provider with 13 serverless chat models (glm-5.3 default), API-key login, and live model discovery ([#16687](https://github.com/can1357/oh-my-pi/pull/16687) by [@reda-maizate](https://github.com/reda-maizate))
