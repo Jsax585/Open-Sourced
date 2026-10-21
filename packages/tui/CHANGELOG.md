@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- Fixed DEC 2048 in-band resize report fragments typing their `48;rows;cols;hPx;wPx` body into the composer: a report can be split after the CSI introducer, bundled with the next report's introducer, or arrive without its `t` terminator
+- Fixed DEC 2048 in-band resize reports typing `48;rows;cols;…` into the composer on iTerm2 ([#16695](https://github.com/can1357/oh-my-pi/pull/16695) by [@demon-i386](https://github.com/demon-i386))
 - Fixed the `/agents` and `/models` hubs in Tern squeezing the left sidebar as long lines (such as a streaming new-agent draft) widen the body pane
 
 ## [18.12.4] - 2026-10-20

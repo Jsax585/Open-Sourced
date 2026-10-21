@@ -45,6 +45,19 @@ const TERMINAL_PROGRESS_CLEAR_SEQUENCE = "\x1b]9;4;0;\x07";
 const WINDOWS_TERMINAL_OSC11_POLL_MS = 30_000;
 /** How long a relayed ESC record waits for the rest of its sequence before acting as Escape (matches StdinBuffer). */
 const WIN32_RELAYED_ESCAPE_TIMEOUT_MS = 75;
+/**
+ * How long a flushed CSI introducer waits for its body before it is released
+ * to the input handler as a key. Without a bound, a stray `\x1b[` (Alt+[ on a
+ * legacy encoder, or Esc followed by `[`) would fuse with a keystroke made
+ * arbitrarily later and rewrite it.
+ */
+const CSI_INTRODUCER_GRACE_MS = 150;
+/**
+ * How long a report body applied without its `t` waits for that delayed
+ * terminator. Inside the window a lone `t` is treated as the terminator;
+ * after it, `t` is a real keystroke again.
+ */
+const INBAND_TERMINATOR_GRACE_MS = 300;
 
 /**
  * Terminal → program TSP messages through a Windows ConPTY: its input parser
@@ -971,6 +984,8 @@ export class ProcessTerminal implements Terminal {
 	 * the composer (see the prepend in the stdin sequence handler).
 	 */
 	#csiIntroducerBuffer = "";
+	/** Release timer for a held introducer whose body never arrives. */
+	#csiIntroducerTimer?: Timer;
 	/**
 	 * Timestamp of a DEC 2048 report body applied without its `t` terminator.
 	 * iTerm2 writes the body and the terminator in separate chunks; a `t`
@@ -1417,7 +1432,7 @@ export class ProcessTerminal implements Terminal {
 				// of their own and would otherwise be appended to that fragment.
 				this.#privateCsiResponseBuffer = "";
 				this.#inBandResizeBuffer = "";
-				this.#csiIntroducerBuffer = "";
+				this.#clearCsiIntroducer();
 				this.#osc11ResponseBuffer = "";
 				this.#osc99ResponseBuffer = "";
 				this.#glyphProtocolReplyBuffer = "";
@@ -1438,7 +1453,7 @@ export class ProcessTerminal implements Terminal {
 			if (sequence === "t" && this.#pendingInBandTerminatorAt !== 0 && !this.#inBandResizeBuffer) {
 				const elapsed = Date.now() - this.#pendingInBandTerminatorAt;
 				this.#pendingInBandTerminatorAt = 0;
-				if (elapsed < 300) return;
+				if (elapsed < INBAND_TERMINATOR_GRACE_MS) return;
 			}
 			// A pty read can bundle a CSI with the next escape sequence
 			// (`\x1b[48;…2912\x1b[`): the reassemblers below take one sequence per
@@ -1462,7 +1477,7 @@ export class ProcessTerminal implements Terminal {
 			// input handler for a genuine key (`\x1b[A`). A fresh ESC-led event
 			// interrupts the held head — it is a sequence of its own.
 			if (this.#csiIntroducerBuffer) {
-				this.#csiIntroducerBuffer = "";
+				this.#clearCsiIntroducer();
 				if (!sequence.startsWith("\x1b")) sequence = `\x1b[${sequence}`;
 			}
 			if (sequence === "\x1b[" && this.#inBandResizeActive) {
@@ -1477,10 +1492,13 @@ export class ProcessTerminal implements Terminal {
 						this.#handleInBandResizeReport(heldBody[1]!, heldBody[2]!, heldBody[3]!, heldBody[4]!);
 					}
 				}
-				if (!this.#privateCsiResponseBuffer) {
-					this.#csiIntroducerBuffer = sequence;
-					return;
-				}
+				// A new ESC interrupts any private-CSI partial the same way, so
+				// holding unconditionally cannot lose a reply and keeps a report
+				// body from leaking behind the pending partial.
+				this.#privateCsiResponseBuffer = "";
+				this.#csiIntroducerBuffer = sequence;
+				this.#armCsiIntroducerRelease();
+				return;
 			}
 			// Fast path for plain-text bytes: every escape-probe regex below
 			// anchors on `^\x1b…`, so a byte that is not ESC can never match. A
@@ -1607,6 +1625,8 @@ export class ProcessTerminal implements Terminal {
 			// handler so the renderer reflows.
 			const resizeMatch = sequence.match(inBandResizePattern);
 			if (resizeMatch) {
+				// The explicit terminator arrived; a later lone `t` is a keystroke.
+				this.#pendingInBandTerminatorAt = 0;
 				this.#handleInBandResizeReport(resizeMatch[1]!, resizeMatch[2]!, resizeMatch[3]!, resizeMatch[4]!);
 				return;
 			}
@@ -2311,6 +2331,26 @@ export class ProcessTerminal implements Terminal {
 		this.#safeWrite(`\x1b[?${mode}l`);
 	}
 
+	/** Arm the release of a held CSI introducer that no body follows. */
+	#armCsiIntroducerRelease(): void {
+		clearTimeout(this.#csiIntroducerTimer);
+		this.#csiIntroducerTimer = setTimeout(() => {
+			this.#csiIntroducerTimer = undefined;
+			const held = this.#csiIntroducerBuffer;
+			this.#csiIntroducerBuffer = "";
+			if (held && this.#active && this.#inputHandler) this.#inputHandler(held);
+		}, CSI_INTRODUCER_GRACE_MS);
+	}
+
+	/** Drop a held introducer (and its release timer) without delivering it. */
+	#clearCsiIntroducer(): void {
+		if (this.#csiIntroducerTimer) {
+			clearTimeout(this.#csiIntroducerTimer);
+			this.#csiIntroducerTimer = undefined;
+		}
+		this.#csiIntroducerBuffer = "";
+	}
+
 	/**
 	 * Enable DEC 2048 in-band resize notifications. The terminal emits an initial
 	 * report immediately, seeding reported geometry and cell dimensions.
@@ -2414,7 +2454,7 @@ export class ProcessTerminal implements Terminal {
 			this.#inputHandler = previousHandler;
 			// A report head captured while no handler could claim its body is
 			// stale once the TTY is handed back.
-			this.#csiIntroducerBuffer = "";
+			this.#clearCsiIntroducer();
 			this.#pendingInBandTerminatorAt = 0;
 		}
 	}
@@ -2515,7 +2555,7 @@ export class ProcessTerminal implements Terminal {
 		this.#tspCallbacks = [];
 		this.#privateCsiResponseBuffer = "";
 		this.#inBandResizeBuffer = "";
-		this.#csiIntroducerBuffer = "";
+		this.#clearCsiIntroducer();
 		this.#pendingInBandTerminatorAt = 0;
 		this.#da1SentinelOwners.length = 0;
 		this.#privateModeCallbacks = [];
