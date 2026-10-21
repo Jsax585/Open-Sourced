@@ -131,7 +131,6 @@ import {
 } from "@oh-my-pi/pi-tui/tools/task";
 import { yieldSectionShapes } from "./yield-assembly";
 import { assembleYieldResult } from "@oh-my-pi/pi-tui/tools/task-yield-assembly";
-import { isTerminalFailure } from "./execution-safety";
 import {
 	cfgTaskPrewalk,
 	cfgTaskAgentPrewalk,
@@ -658,7 +657,7 @@ function resolveFallbackCompletion(rawOutput: string, outputSchema: unknown): { 
 	return { data: candidate };
 }
 
-interface FinalizeSubprocessOutputArgs {
+export interface FinalizeSubprocessOutputArgs {
 	rawOutput: string;
 	exitCode: number;
 	stderr: string;
@@ -671,10 +670,9 @@ interface FinalizeSubprocessOutputArgs {
 	lastAssistantText?: string;
 	/** `false` = no `yield` tool: `rawOutput` is the final assistant message, returned verbatim. Default `true`. */
 	structured?: boolean;
-	/** Current run-monitor terminal state; production finalization always supplies this. */
-	terminalContext?: {
+	/** Current run-monitor terminal state. */
+	terminalContext: {
 		terminalYieldAccepted: boolean;
-		finalYieldForced: boolean;
 		yieldInvalidatedByAsync: boolean;
 		abortKind?: AbortReason;
 	};
@@ -876,51 +874,19 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		}
 	}
 
-	// A committed terminal success may survive expected internal termination; a genuine nonzero
-	// process exit may not. A cancellation without a committed terminal yield still fails closed.
-	// Incremental yields are sections, not a committed terminal result (complete workpool batches
-	// are terminal). Error-like field names in payload data are not failure signals; YieldTool
-	// distinguishes explicit failure through `status: "aborted"` (kept above as abortedViaYield).
+	// A committed terminal success wins over late external cancellation. Any other terminal
+	// condition (no committed result, nonzero exit, abort/signal, or an abort cause) fails closed.
+	// A final nonzero exit additionally invalidates valid structured metadata, preserving data.
 	if (!abortedViaYield) {
-		let terminalYield: YieldItem | undefined;
-		if (args.terminalContext === undefined) {
-			// Standalone/source tests: preserve the historical terminal-scan fallback.
-			for (let index = yieldItems ? yieldItems.length - 1 : -1; index >= 0; index--) {
-				const item = yieldItems?.[index];
-				if (!item) continue;
-				const incremental = Array.isArray(item.type) && item.type.length > 0;
-				if (!incremental || item.complete === true) {
-					terminalYield = item;
-					break;
-				}
-			}
-		}
 		const context = args.terminalContext;
-		const committedSuccessfulYield = context
-			? context.terminalYieldAccepted &&
-				!context.yieldInvalidatedByAsync &&
-				(structuredOutput === undefined || structuredOutput.status === "valid")
-			: terminalYield?.status === "success" &&
-				(structuredOutput === undefined || structuredOutput.status === "valid");
-		const expectedInternalTermination = context
-			? (context.abortKind === "terminate" || context.abortKind === "budget") && context.terminalYieldAccepted
-			: doneAborted === true;
-		const externalTermination = context
-			? context.abortKind === "signal" || context.abortKind === "timeout" || context.abortKind === "shutdown"
-			: signalAborted === true;
-		const terminalFailure = isTerminalFailure({
-			initialExitCode,
-			doneAborted,
-			signalAborted,
-			hasCommittedSuccess: committedSuccessfulYield,
-			expectedInternalTermination,
-			externalTermination,
-		});
-		if (terminalFailure) {
-			exitCode = exitCode === 0 ? 1 : exitCode;
+		const committedSuccessfulYield = context.terminalYieldAccepted && !context.yieldInvalidatedByAsync;
+		const terminalFailure =
+			!committedSuccessfulYield &&
+			(initialExitCode !== 0 || doneAborted || signalAborted || context.abortKind !== undefined);
+		if (terminalFailure && exitCode === 0) {
+			exitCode = 1;
+			if (!stderr) stderr = "Subagent terminated before committing a result";
 		}
-		// A final non-zero exit can never carry valid structured-result metadata, even when the
-		// committed-yield/internal-termination path intentionally preserves the exit code.
 		if (exitCode !== 0 && includeStructuredOutput && structuredOutput?.status === "valid") {
 			structuredOutput = {
 				...structuredOutput,
@@ -1331,7 +1297,6 @@ interface SubagentRunMonitor {
 	 * satisfy the pin forever without ending the run.
 	 */
 	markFinalYieldForced(forced: boolean): void;
-	finalYieldForced(): boolean;
 	/** Epoch ms when the run's terminal `yield` was recorded; undefined while none is latched. */
 	yieldAcceptedAt(): number | undefined;
 	runtimeLimitExceeded(): boolean;
@@ -2358,7 +2323,6 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		markFinalYieldForced: (forced: boolean) => {
 			finalYieldForced = forced;
 		},
-		finalYieldForced: () => finalYieldForced,
 		yieldAcceptedAt: () => yieldAcceptedAt,
 		runtimeLimitExceeded: () => runtimeLimitExceeded,
 		terminalError: () => terminalError,
@@ -2906,7 +2870,6 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 			structured,
 			terminalContext: {
 				terminalYieldAccepted: monitor.yieldCalled(),
-				finalYieldForced: monitor.finalYieldForced(),
 				yieldInvalidatedByAsync: monitor.yieldInvalidatedByAsync(),
 				abortKind: monitor.abortKind(),
 			},
@@ -3022,8 +2985,15 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	// to the caller via `progress.extractedToolData`, but the exit status must
 	// reflect the timeout so on-call doesn't mistake a stuck run for success.
 	const runtimeLimitExceeded = monitor.runtimeLimitExceeded();
-	if (runtimeLimitExceeded && exitCode === 0) {
-		exitCode = 1;
+	if (runtimeLimitExceeded) {
+		if (exitCode === 0) exitCode = 1;
+		if (finalized.structuredOutput?.status === "valid") {
+			finalized.structuredOutput = {
+				...finalized.structuredOutput,
+				status: "invalid",
+				error: stderr || "Subagent exceeded its runtime limit",
+			};
+		}
 	}
 	const wasAborted =
 		runtimeLimitExceeded || Boolean(done.aborted) || abortedViaYield || (!hasYield && Boolean(signal?.aborted));
