@@ -561,11 +561,14 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		pending = undefined;
 		if (!settled) return;
 		const outcome = await settled.landing;
-		retryRefused = outcome === false;
+		const unapplied = outcome === true ? settled.unapplied() : [];
+		// A landing that could not apply a nested patch is refused for that
+		// repository, so the next capture hands it over again even if the agent
+		// changed nothing: clearing what blocked it lets it land.
+		retryRefused = outcome === false || unapplied.length > 0;
 		preserveUnlanded = outcome === null;
 		if (outcome !== true) return;
 		preserveUnlanded = false;
-		const unapplied = settled.unapplied();
 		// A landing that could not apply a nested patch leaves that patch file the
 		// only copy of the work. It stays tracked as unlanded: a later turn that
 		// undoes the work must withdraw it, or the registry and the release

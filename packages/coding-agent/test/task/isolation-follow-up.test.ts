@@ -1063,6 +1063,42 @@ describe("isolated agent follow-up turns", () => {
 		expect(AgentRegistry.global().get(id)?.history?.branchName).toBeUndefined();
 	});
 
+	it("hands a nested patch over again in branch mode when an unchanged turn follows a landing that could not apply it", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		await addNestedRepo(repo, iso);
+		const firstRun = Promise.withResolvers<boolean | null>();
+		const handedOver: SingleResult[] = [];
+		const id = "FollowUpNestedRetriedBranch";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "branch",
+			followUps: {
+				firstRunLanded: firstRun.promise,
+				land: async captured => {
+					handedOver.push(captured);
+					return { summary: "landed", landed: true, unappliedNested: handedOver.length === 1 ? ["sub"] : [] };
+				},
+			},
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		firstRun.resolve(true);
+
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+		await run.settleFollowUp?.(result(id));
+		expect(handedOver).toHaveLength(1);
+
+		expect(await run.settleFollowUp?.(result(id))).toBe("landed");
+		expect(handedOver).toHaveLength(2);
+		const again = handedOver[1]?.nestedPatches?.[0]?.patch ?? "";
+		expect(again).toContain("-n0");
+		expect(again).toContain("+n1");
+		// Only nested work is handed over: the retry writes no root branch.
+		expect(handedOver[1]?.branchName).toBeUndefined();
+		await AgentLifecycleManager.global().release(id);
+	});
+
 	it("stops listing the first run's task branch once its landing deletes it", async () => {
 		const { repo, iso } = await createRepoAndIsolation();
 		const { firstRun, followUps } = landingFollowUps(repo, "branch");
@@ -1474,6 +1510,81 @@ describe("isolated agent follow-up turns", () => {
 		const first = handedOver[0]?.nestedPatches?.[0]?.patch ?? "";
 		expect(first).toContain("-n0");
 		expect(first).toContain("+n2");
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	it("hands a nested patch over again when an unchanged turn follows a landing that could not apply it", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		await addNestedRepo(repo, iso);
+		const firstRun = Promise.withResolvers<boolean | null>();
+		const handedOver: SingleResult[] = [];
+		const id = "FollowUpNestedRetried";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps: {
+				firstRunLanded: firstRun.promise,
+				// The root lands every turn. Only the first handoff of `sub` does not
+				// apply, as when a conflict clears before the retry.
+				land: async captured => {
+					handedOver.push(captured);
+					return { summary: "landed", landed: true, unappliedNested: handedOver.length === 1 ? ["sub"] : [] };
+				},
+			},
+			firstRun: () => commitIn(iso, "one\n", "first run"),
+		});
+		firstRun.resolve(true);
+
+		await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+		await run.settleFollowUp?.(result(id));
+		expect(handedOver).toHaveLength(1);
+
+		// The conflict is cleared and the agent is asked to retry. It edits nothing.
+		expect(await run.settleFollowUp?.(result(id))).toBe("landed");
+		expect(handedOver).toHaveLength(2);
+		const again = handedOver[1]?.nestedPatches?.[0]?.patch ?? "";
+		expect(again).toContain("-n0");
+		expect(again).toContain("+n1");
+
+		// It landed, so a further unchanged turn has nothing to hand over.
+		expect(await run.settleFollowUp?.(result(id))).toBe("");
+		expect(handedOver).toHaveLength(2);
+		await AgentLifecycleManager.global().release(id);
+	});
+
+	it("hands the first run's nested patch over again when the next turn changes nothing", async () => {
+		const { repo, iso } = await createRepoAndIsolation();
+		await addNestedRepo(repo, iso);
+		const firstRun = Promise.withResolvers<boolean | null>();
+		const handedOver: SingleResult[] = [];
+		const id = "FirstRunNestedRetried";
+		const run = await runKeptAlive({
+			id,
+			repo,
+			iso,
+			mergeMode: "patch",
+			followUps: {
+				firstRunLanded: firstRun.promise,
+				firstRunUnappliedNested: () => ["sub"],
+				land: async captured => {
+					handedOver.push(captured);
+					return { summary: "landed", landed: true, unappliedNested: [] };
+				},
+			},
+			firstRun: async () => {
+				await commitIn(iso, "one\n", "first run");
+				await Bun.write(path.join(iso, "sub", "n.txt"), "n1\n");
+			},
+		});
+		firstRun.resolve(true);
+
+		expect(await run.settleFollowUp?.(result(id))).toBe("landed");
+		expect(handedOver).toHaveLength(1);
+		const patch = handedOver[0]?.nestedPatches?.[0]?.patch ?? "";
+		expect(patch).toContain("-n0");
+		expect(patch).toContain("+n1");
 		await AgentLifecycleManager.global().release(id);
 	});
 
