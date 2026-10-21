@@ -55,6 +55,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     description = "Build-only Swift compiler for OMP's Apple Foundation Models bridge";
     homepage = "https://www.swift.org/install/macos/";
     license = lib.licenses.asl20;
+    sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
     platforms = lib.platforms.darwin;
   };
 })

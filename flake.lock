@@ -136,7 +136,7 @@
       "original": {
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "8edc0c72e3a38faf5434e40d1f19431125fe4b30",
+        "ref": "nixpkgs-unstable",
         "type": "github"
       }
     },

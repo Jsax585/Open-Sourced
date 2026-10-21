@@ -36,11 +36,13 @@
   # ~750 MB (gstreamer, ffmpeg, systemd, ...). Official npm/Bazel addons ship
   # without it, so default to the lean build; opt in via `.override`.
   withWaylandScreencast ? false,
+  # Downstream callers can opt out of the Swift/SDK dependency. The official
+  # Apple Silicon package must include the bridge by default.
+  withAppleFm ? stdenv.hostPlatform.system == "aarch64-darwin",
 }:
 let
   packageJson = lib.importJSON ../packages/coding-agent/package.json;
   rootPackageJson = lib.importJSON ../package.json;
-  withAppleFm = stdenv.hostPlatform.system == "aarch64-darwin";
   platform =
     {
       aarch64-darwin = {
@@ -347,7 +349,18 @@ stdenv.mkDerivation {
         const native = require("./packages/natives/native/${platform.addon}");
         const status = JSON.parse(await native.appleFmAvailability());
         console.log("Apple Foundation Models:", status);
-        if (status.reason === "not_built" || status.reason === "runtime") process.exit(1);
+        const eligibilityReasons = [
+          "unsupported_os",
+          "device_not_eligible",
+          "apple_intelligence_not_enabled",
+          "model_not_ready",
+          "unavailable",
+        ];
+        if (
+          status?.type !== "availability" ||
+          !(status.available === true ||
+            (status.available === false && eligibilityReasons.includes(status.reason)))
+        ) process.exit(1);
       '
     ''}
     runHook postInstallCheck

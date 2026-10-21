@@ -12,8 +12,9 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # Apple Silicon needs SDK 27 and a linker that understands its stubs.
-    # Keep other platforms and the Bun/Rust toolchains on their existing pins.
-    nixpkgs-apple.url = "github:NixOS/nixpkgs/8edc0c72e3a38faf5434e40d1f19431125fe4b30";
+    # Keep Linux on its existing pin. Drop this input when the main nixpkgs
+    # and nix-bun pins can be advanced together to an SDK 27-capable set.
+    nixpkgs-apple.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
     # nixpkgs unstable dropped Intel macOS in 26.11; keep that supported
     # platform on the final stable branch that still receives security fixes.
@@ -72,38 +73,29 @@
         (if system == "x86_64-darwin" then bun2nix-darwin-x64 else bun2nix).packages.${system}.bun2nix;
 
       rustToolchainFor =
-        system:
-        (rust-overlay.lib.mkRustBin { } (pkgsFor system)).fromRustupToolchainFile ./rust-toolchain.toml;
+        pkgs: (rust-overlay.lib.mkRustBin { } pkgs).fromRustupToolchainFile ./rust-toolchain.toml;
 
-      localPackagesFor =
-        system:
-        let
-          pkgs = pkgsFor system;
-        in
-        {
-          bun = pkgs.callPackage (nix-bun.outPath + "/package.nix") {
-            sourcesFile = nix-bun.outPath + "/versions/1.4.2.json";
-          };
-          bun2nix = bun2nixFor system;
-          rustToolchain = rustToolchainFor system;
+      localPackagesFor = system: pkgs: {
+        bun = (pkgsFor system).callPackage (nix-bun.outPath + "/package.nix") {
+          sourcesFile = nix-bun.outPath + "/versions/1.4.2.json";
         };
+        bun2nix = bun2nixFor system;
+        # rust-overlay propagates its C compiler, so use the caller's SDK-compatible set.
+        rustToolchain = rustToolchainFor pkgs;
+      };
 
       packageFor =
         system:
         let
           pkgs =
             if system == "aarch64-darwin" then nixpkgs-apple.legacyPackages.${system} else pkgsFor system;
-          localPkgs = localPackagesFor system;
+          localPkgs = localPackagesFor system pkgs;
         in
         pkgs.callPackage ./nix/package.nix (
           {
             source = self.outPath;
           }
           // localPkgs
-          // pkgs.lib.optionalAttrs (system == "aarch64-darwin") {
-            # rust-overlay propagates its C compiler; pair it with SDK 27 too.
-            rustToolchain = (rust-overlay.lib.mkRustBin { } pkgs).fromRustupToolchainFile ./rust-toolchain.toml;
-          }
         );
     in
     {
@@ -131,7 +123,7 @@
         system:
         let
           pkgs = pkgsFor system;
-          localPackages = localPackagesFor system;
+          localPackages = localPackagesFor system pkgs;
         in
         {
           default = import ./nix/dev-shell.nix ({ inherit pkgs; } // localPackages);
