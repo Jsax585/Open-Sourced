@@ -401,6 +401,26 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "autopilot",
+		icon: "agents",
+		description:
+			"Toggle autopilot (answer the agent's trailing questions and continue the turn). An optional directive is binding for every automatic decision.",
+		subcommands: [
+			{ name: "on", description: "Enable autopilot, optionally with a binding directive" },
+			{ name: "off", description: "Disable autopilot (keeps the directive)" },
+			{ name: "status", description: "Show autopilot state, strategy, cycles and directive" },
+			{ name: "prompt", description: "Show, set or clear the binding directive (prompt <text> | prompt clear)" },
+			{ name: "max", description: "Show or set the cycle limit (max <n> | max unlimited)" },
+		],
+		inlineHint: "[on [directive]|off|status|prompt [directive|clear]|max [n|unlimited]]",
+		allowArgs: true,
+		getTuiAutocompleteDescription: runtime => (runtime.ctx.autopilotEnabled ? "Autopilot: on" : "Autopilot: off"),
+		handleTui: async (command, runtime) => {
+			await runtime.ctx.handleAutopilotCommand(command.args || undefined);
+			clearSubmittedText(runtime);
+		},
+	},
+	{
 		name: "guided-goal",
 		icon: "compass",
 		description: "Have the agent interview you in chat, then set up goal mode",

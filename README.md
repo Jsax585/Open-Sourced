@@ -328,6 +328,7 @@ They trigger only in prose, not inside code spans, fenced code blocks, XML/HTML 
 
 Slash commands shift how a whole session runs:
 
+- `/autopilot` — enable the [autopilot director](docs/autopilot.md): a no-tools responder answers trailing questions and resolves question-free endings, continuing the turn with an optional binding directive, goal/todo awareness and a persisted decision journal.
 - `/vibe` — enter [Vibe mode](docs/vibe-mode.md): act as a director driving persistent `fast`/`good` worker sessions with a `read`-only toolset.
 - `/fresh` — reset the provider stream state (stale prompt cache, wedged stream) without changing the local transcript. See [Session operations](docs/session-operations-export-share-fork-resume.md#fresh).
 
