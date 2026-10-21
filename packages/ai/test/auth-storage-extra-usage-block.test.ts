@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
 import { claudeRankingStrategy, parseClaudeUsagePayload } from "@oh-my-pi/pi-ai/usage/claude";
+import { openaiCodexUsageProvider } from "@oh-my-pi/pi-ai/usage/openai-codex";
 import { EXTRA_USAGE_BLOCK_SCOPE } from "../src/auth/blocks";
 
 interface TieredUsageAccount {
@@ -149,5 +150,75 @@ describe("AuthStorage paid usage blocks", () => {
 		expect(
 			storage.blocks.list([account.credentialId]).some(block => block.blockScope === EXTRA_USAGE_BLOCK_SCOPE),
 		).toBe(false);
+	});
+	it("A5 extends a credit-funded Codex paid-refusal block to the allowance reset without a retry hint", async () => {
+		const now = Date.parse("2030-01-03T00:00:00.000Z");
+		vi.spyOn(Date, "now").mockReturnValue(now);
+		const resetAt = now + 7 * 24 * 60 * 60_000;
+		const payload = {
+			plan_type: "pro",
+			rate_limit: {
+				allowed: false,
+				limit_reached: true,
+				primary_window: {
+					used_percent: 100,
+					limit_window_seconds: 7 * 24 * 60 * 60,
+					reset_at: Math.floor(resetAt / 1000),
+				},
+				secondary_window: null,
+			},
+			additional_rate_limits: [],
+			credits: { has_credits: true, unlimited: false, overage_limit_reached: false, balance: "120" },
+			spend_control: { reached: false },
+		};
+		const storage = new AuthStorage(await SqliteAuthCredentialStore.open(":memory:"), {
+			usageProviderResolver: provider =>
+				provider === "openai-codex"
+					? {
+							id: "openai-codex",
+							fetchUsage: async (params, context) =>
+								openaiCodexUsageProvider.fetchUsage(params, {
+									...context,
+									fetch: async input => {
+										const url =
+											typeof input === "string"
+												? input
+												: input instanceof URL
+													? input.toString()
+													: input.url;
+										return url.includes("/wham/usage")
+											? new Response(JSON.stringify(payload), {
+													status: 200,
+													headers: { "content-type": "application/json" },
+												})
+											: new Response(null, { status: 404 });
+									},
+								}),
+						}
+					: undefined,
+		});
+		storages.push(storage);
+		await storage.credentials.set("openai-codex", [
+			{
+				type: "oauth",
+				access: "access-codex",
+				refresh: "refresh-codex",
+				expires: now + 60 * 60_000,
+				accountId: "codex",
+			},
+		]);
+		const account = storage.oauth.accounts("openai-codex")[0];
+		if (!account) throw new Error("Expected Codex OAuth account");
+
+		await storage.limits.markReached("openai-codex", "a5", {
+			credentialId: account.credentialId,
+			modelId: "gpt-5.3-codex",
+		});
+
+		expect(
+			storage.blocks
+				.list([account.credentialId])
+				.find(block => block.blockScope === EXTRA_USAGE_BLOCK_SCOPE)?.blockedUntilMs,
+		).toBe(resetAt);
 	});
 });

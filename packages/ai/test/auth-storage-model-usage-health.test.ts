@@ -604,6 +604,89 @@ describe("AuthStorage tiered paid usage health", () => {
 		});
 		expect(withPaidUsage.accounts[0]?.remainingFraction).toBeCloseTo(0.03);
 	});
+	it("A9 retains a fetched blocked account's saved reset without exposing funding state", async () => {
+		const storage = await createTieredStorage([
+			{
+				accountId: "a",
+				payload: tieredClaudePayload({ planUsed: 100 }),
+				resetCredits: { availableCount: 1, redeemableCount: 1 },
+			},
+			{ accountId: "b", payload: tieredClaudePayload({ planUsed: 20 }) },
+		]);
+		const a = storage.oauth.accounts("anthropic").find(account => account.accountId === "a");
+		if (!a) throw new Error("Expected account a");
+
+		expect(await storage.keys.get("anthropic", "a9", { modelId: "claude-sonnet-4-5" })).toBe("access-b");
+		expect(
+			storage.blocks.list([a.credentialId]).some(block => block.credentialId === a.credentialId),
+		).toBe(true);
+
+		const health = await storage.health.model("anthropic", {
+			modelId: "claude-sonnet-4-5",
+			reserveFraction: 0.05,
+		});
+		const aHealth = health.accounts.find(account => account.credentialId === a.credentialId);
+		expect(health.state).toBe("healthy");
+		expect(aHealth).toMatchObject({ state: "depleted", savedResets: 1 });
+		expect(aHealth?.resetsAt).toEqual(expect.any(Number));
+		expect(aHealth && "fundingTier" in aHealth).toBe(false);
+	});
+
+	it("A10 does not fetch usage for an AUTH-blocked health account", async () => {
+		let fetches = 0;
+		const store = await SqliteAuthCredentialStore.open(":memory:");
+		const storage = new AuthStorage(store, {
+			rankingStrategyResolver: provider => (provider === "anthropic" ? claudeRankingStrategy : undefined),
+			usageProviderResolver: provider =>
+				provider === "anthropic"
+					? {
+							id: "anthropic",
+							async fetchUsage(params) {
+								fetches += 1;
+								const parsed = parseClaudeUsagePayload(
+									tieredClaudePayload({ planUsed: 20 }),
+									{ accountId: params.credential.accountId },
+								);
+								if (!parsed) throw new Error("Expected usage report");
+								return parsed;
+							},
+						}
+					: undefined,
+		});
+		await storage.credentials.set("anthropic", [
+			{
+				type: "oauth",
+				access: "access-auth",
+				refresh: "refresh-auth",
+				expires: Date.now() + 60 * 60_000,
+				accountId: "auth",
+			},
+		]);
+		storages.push(storage);
+		const account = storage.oauth.accounts("anthropic")[0];
+		if (!account) throw new Error("Expected account");
+		const blockedUntilMs = Date.now() + 60_000;
+		storage.blocks.upsert({
+			credentialId: account.credentialId,
+			providerKey: "anthropic:oauth",
+			blockScope: "auth",
+			blockedUntilMs,
+		});
+
+		const health = await storage.health.model("anthropic", {
+			modelId: "claude-sonnet-4-5",
+			reserveFraction: 0.05,
+		});
+		expect(fetches).toBe(0);
+		expect(health.accounts).toEqual([
+			{
+				credentialId: account.credentialId,
+				credentialType: "oauth",
+				state: "depleted",
+				resetsAt: blockedUntilMs,
+			},
+		]);
+	});
 });
 
 function sqliteCorruptError(): Error & { code: string } {

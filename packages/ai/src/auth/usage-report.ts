@@ -211,6 +211,41 @@ export function usageResetAtMs(limits: UsageLimit[], nowMs: number): number | un
 	return Math.max(...candidates);
 }
 
+/** Remove usage windows whose reset invalidates a report fetched before it. */
+export function currentUsageLimits(
+	limits: readonly UsageLimit[],
+	fetchedAt: number,
+	nowMs: number,
+): UsageLimit[] {
+	return limits.filter(limit => {
+		const resetsAt = limit.window?.resetsAt;
+		return resetsAt === undefined || resetsAt > nowMs || fetchedAt >= resetsAt;
+	});
+}
+
+function allowanceLimitIsExhausted(limit: UsageLimit): boolean {
+	return isUsageLimitExhausted(limit) || (resolveUsedFraction(limit) ?? 0) >= 1;
+}
+
+function allowanceResetAtMs(limits: readonly UsageLimit[], nowMs: number): number | undefined {
+	let latest: number | undefined;
+	for (const limit of limits) {
+		if (!allowanceLimitIsExhausted(limit)) continue;
+		const resetsAt = windowResetAt(limit.window);
+		if (resetsAt !== undefined && resetsAt > nowMs && (latest === undefined || resetsAt > latest)) {
+			latest = resetsAt;
+		}
+	}
+	return latest;
+}
+
+function remainingUsageFractionForLimits(limits: readonly UsageLimit[]): number | undefined {
+	const usedFractions = limits
+		.map(resolveUsedFraction)
+		.filter((fraction): fraction is number => fraction !== undefined);
+	return usedFractions.length === 0 ? undefined : Math.max(0, 1 - Math.max(...usedFractions));
+}
+
 /** Paid-usage standing before mapping it to a funding tier or display view. */
 export interface ExtraUsageClassification {
 	extra: FundingAssessment["extra"];
@@ -270,8 +305,12 @@ export function assessFunding(args: {
 	const { report, strategy, context, nowMs } = args;
 	if (report === null) return undefined;
 
-	const hard = strategy ? scopedUsageLimits(strategy, report, context) : report.limits;
-	const remaining = remainingUsageFraction(strategy, report, context, nowMs);
+	const hard = currentUsageLimits(
+		strategy ? scopedUsageLimits(strategy, report, context) : report.limits,
+		report.fetchedAt,
+		nowMs,
+	);
+	const remaining = remainingUsageFractionForLimits(hard);
 	if (remaining !== 0 && !isUsageLimitReached(hard)) {
 		return { tier: "allowance", extra: "unavailable" };
 	}
@@ -286,7 +325,7 @@ export function assessFunding(args: {
 	return {
 		tier: extra === "available" ? "extra" : extra === "past-floor" ? "extra-past-floor" : "spent",
 		extra,
-		allowanceResetsAt: usageResetAtMs(hard, nowMs),
+		allowanceResetsAt: allowanceResetAtMs(hard, nowMs),
 	};
 }
 
@@ -433,14 +472,9 @@ export function remainingUsageFraction(
 	nowMs: number,
 ): number | undefined {
 	if (!report) return undefined;
-	const usedFractions = reserveUsageLimits(strategy, report, rankingContext)
-		.filter(limit => {
-			const resetsAt = limit.window?.resetsAt;
-			return resetsAt === undefined || resetsAt > nowMs || report.fetchedAt >= resetsAt;
-		})
-		.map(resolveUsedFraction)
-		.filter((fraction): fraction is number => fraction !== undefined);
-	return usedFractions.length === 0 ? undefined : Math.max(0, 1 - Math.max(...usedFractions));
+	return remainingUsageFractionForLimits(
+		currentUsageLimits(reserveUsageLimits(strategy, report, rankingContext), report.fetchedAt, nowMs),
+	);
 }
 
 /**

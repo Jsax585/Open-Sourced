@@ -41,6 +41,7 @@ import {
 import type { UsageService } from "./usage";
 import {
 	assessFunding,
+	currentUsageLimits,
 	fundingTierAllowed,
 	fundingTierRank,
 	isUsageLimitReached,
@@ -494,7 +495,10 @@ export class CredentialSelector {
 			const { selection, usage, usageChecked } = result;
 			let { blockedUntil } = result;
 			let blocked = blockedUntil !== undefined;
-			const scopedLimits = usage && strategy ? scopedUsageLimits(strategy, usage, args.rankingContext) : undefined;
+			const scopedLimits =
+				usage && strategy
+					? currentUsageLimits(scopedUsageLimits(strategy, usage, args.rankingContext), usage.fetchedAt, nowMs)
+					: undefined;
 			const policy = this.#deps.policies.forCredential(args.provider, selection.credential);
 			const funding = this.#assessFunding(
 				args.provider,
@@ -1021,13 +1025,58 @@ export class CredentialSelector {
 			}
 		};
 
+		const allowance = options?.extraUsage ?? "to-floor";
+		const admits = (
+			pass: { enforceAccounts: boolean },
+			candidate: OAuthCandidate,
+		): boolean => {
+			if (preflightFailures.has(candidate)) return false;
+			const candidateAccountKey = oauthAccountKey(candidate.selection.credential);
+			return (
+				!pass.enforceAccounts ||
+				(candidateAccountKey !== undefined && accountIds?.has(candidateAccountKey) === true)
+			);
+		};
+
 		for (const pass of passes) {
+			if (
+				pass.allowBlocked &&
+				!extraUsageWithheld &&
+				allowance === "to-floor" &&
+				strategy !== undefined &&
+				hasExtraUsagePolicy
+			) {
+				for (const candidate of lastResortCandidates) {
+					if (!admits(pass, candidate)) continue;
+					const policy = this.#deps.policies.forCredential(provider, candidate.selection.credential);
+					if (policy?.extraUsageFloor === undefined && policy?.extraUsageBudget === undefined) continue;
+					let report =
+						(candidate.usageChecked ? candidate.usage : null) ??
+						this.#deps.usage.cachedReport(provider, candidate.selection.credential, options?.baseUrl);
+					if (report === null) {
+						report = await this.#deps.usage.report(provider, candidate.selection.credential, {
+							...options,
+							timeoutMs: this.#deps.usage.requestTimeoutMs,
+						});
+					}
+					if (pass.enforcePlanRequirement && planGate?.(report) !== true) continue;
+					const funding = this.#assessFunding(
+						provider,
+						providerKey,
+						candidate.selection,
+						strategy,
+						report,
+						rankingContext,
+						Date.now(),
+					);
+					if (!fundingTierAllowed(funding?.tier, allowance)) {
+						recordExtraUsageWithheld(funding?.allowanceResetsAt);
+					}
+				}
+			}
 			if (extraUsageWithheld && pass.allowBlocked) break;
 			for (const candidate of pass.allowBlocked ? lastResortCandidates : candidates) {
-				if (preflightFailures.has(candidate)) continue;
-				const candidateAccountKey = oauthAccountKey(candidate.selection.credential);
-				if (pass.enforceAccounts && (candidateAccountKey === undefined || !accountIds?.has(candidateAccountKey)))
-					continue;
+				if (!admits(pass, candidate)) continue;
 				const resolved = await this.tryOAuth(provider, candidate.selection, providerKey, sessionId, options, {
 					checkUsage,
 					allowBlocked: pass.allowBlocked,
@@ -1164,6 +1213,7 @@ export class CredentialSelector {
 				return undefined;
 			}
 			if (checkUsage && !allowBlocked && strategy && rankingContext) {
+				const nowMs = Date.now();
 				const funding = this.#assessFunding(
 					provider,
 					providerKey,
@@ -1171,21 +1221,22 @@ export class CredentialSelector {
 					strategy,
 					usage,
 					rankingContext,
-					Date.now(),
+					nowMs,
 				);
 				if (!fundingTierAllowed(funding?.tier, options?.extraUsage ?? "to-floor")) {
 					onExtraUsageWithheld?.(funding?.allowanceResetsAt);
 					return undefined;
 				}
 				const servesThroughPaidUsage = funding?.tier === "extra" || funding?.tier === "extra-past-floor";
-				const scopedLimits = usage ? scopedUsageLimits(strategy, usage, rankingContext) : undefined;
+				const scopedLimits =
+					usage === null ? undefined : currentUsageLimits(scopedUsageLimits(strategy, usage, rankingContext), usage.fetchedAt, nowMs);
 				if (!servesThroughPaidUsage && scopedLimits && isUsageLimitReached(scopedLimits)) {
-					const resetAtMs = usageResetAtMs(scopedLimits, Date.now());
+					const resetAtMs = usageResetAtMs(scopedLimits, nowMs);
 					this.#deps.blocks.mark(
 						provider,
 						providerKey,
 						selection.index,
-						resetAtMs ?? Date.now() + DEFAULT_BLOCK_MS,
+						resetAtMs ?? nowMs + DEFAULT_BLOCK_MS,
 						blockScope,
 						resetAtMs !== undefined,
 					);
@@ -1247,6 +1298,7 @@ export class CredentialSelector {
 					return undefined;
 				}
 				if (checkUsage && !allowBlocked && strategy && rankingContext) {
+					const nowMs = Date.now();
 					const funding = this.#assessFunding(
 						provider,
 						providerKey,
@@ -1254,21 +1306,24 @@ export class CredentialSelector {
 						strategy,
 						usage,
 						rankingContext,
-						Date.now(),
+						nowMs,
 					);
 					if (!fundingTierAllowed(funding?.tier, options?.extraUsage ?? "to-floor")) {
 						onExtraUsageWithheld?.(funding?.allowanceResetsAt);
 						return undefined;
 					}
 					const servesThroughPaidUsage = funding?.tier === "extra" || funding?.tier === "extra-past-floor";
-					const scopedLimits = usage ? scopedUsageLimits(strategy, usage, rankingContext) : undefined;
+					const scopedLimits =
+						usage === null
+							? undefined
+							: currentUsageLimits(scopedUsageLimits(strategy, usage, rankingContext), usage.fetchedAt, nowMs);
 					if (!servesThroughPaidUsage && scopedLimits && isUsageLimitReached(scopedLimits)) {
-						const resetAtMs = usageResetAtMs(scopedLimits, Date.now());
+						const resetAtMs = usageResetAtMs(scopedLimits, nowMs);
 						this.#deps.blocks.mark(
 							provider,
 							providerKey,
 							selection.index,
-							resetAtMs ?? Date.now() + DEFAULT_BLOCK_MS,
+							resetAtMs ?? nowMs + DEFAULT_BLOCK_MS,
 							blockScope,
 							resetAtMs !== undefined,
 						);

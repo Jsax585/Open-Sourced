@@ -264,6 +264,7 @@ export class RateLimits implements LimitsApi {
 		// authoritative window still counts as provider timing.
 		let reportResetAtMs: number | undefined;
 		let paidUsageRejected = false;
+		let allowanceResetsAt: number | undefined;
 		if (target && routing.strategy) {
 			const report = await raceSignal(
 				this.#deps.usage.report(provider, target.credential, options),
@@ -291,6 +292,7 @@ export class RateLimits implements LimitsApi {
 					extraUsageBlockedUntil,
 				});
 				paidUsageRejected = funding?.tier === "extra" || funding?.tier === "extra-past-floor";
+				allowanceResetsAt = funding?.allowanceResetsAt;
 
 				const scopedLimits = scopedUsageLimits(routing.strategy, report, routing.rankingContext);
 				if (isUsageLimitReached(scopedLimits)) {
@@ -310,6 +312,11 @@ export class RateLimits implements LimitsApi {
 				}
 			}
 		}
+		if (paidUsageRejected && allowanceResetsAt !== undefined && allowanceResetsAt > blockedUntil) {
+			blockedUntil = allowanceResetsAt;
+			providerTimed = true;
+		}
+
 		options?.signal?.throwIfAborted();
 
 		// Usage lookup may refresh, disable, or remove a row. Re-resolve its

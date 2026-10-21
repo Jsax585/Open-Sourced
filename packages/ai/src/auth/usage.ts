@@ -744,6 +744,14 @@ export class UsageService implements UsageApi {
 		return requests;
 	}
 
+	/** Return a cached OAuth report without calling a provider or broker. */
+	cachedReport(provider: Provider, credential: AuthCredential, baseUrl?: string): UsageReport | null {
+		if (credential.type !== "oauth") return null;
+		const cacheKey = this.#deps.cache.reportKey(oauthUsageRequest(provider, credential, baseUrl));
+		const cached = this.#deps.cache.get<UsageReport | null>(cacheKey);
+		return cached && cached.expiresAt > Date.now() ? cached.value : this.#deps.cache.lastGood(cacheKey);
+	}
+
 	/** Fetch the best available report for one stored credential. */
 	async report(
 		provider: Provider,
