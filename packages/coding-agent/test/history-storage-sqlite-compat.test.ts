@@ -250,9 +250,13 @@ it("recalls and searches only text prompts when a row decodes as a BLOB", async 
 	expect(fs.readdirSync(tempDir.path()).filter(name => name.includes(".corrupt-"))).toEqual([]);
 });
 
-it.each([false, true])(
-	"salvages readable prompts, titles, recaps, and session ownership (legacy membership: %s)",
-	async legacyMembership => {
+it.each([
+	[false, false],
+	[true, false],
+	[true, true],
+])(
+	"salvages readable prompts, titles, recaps, and known ownership (legacy membership: %s, damaged provenance: %s)",
+	async (legacyMembership, damagedProvenance) => {
 		tempDir = TempDir.createSync("@omp-history-storage-salvage-");
 		const dbPath = tempDir.join("history.db");
 		HistoryStorage.open(dbPath);
@@ -275,6 +279,10 @@ INSERT INTO session_recaps (session_id, cwd, recap, created_at) VALUES ('session
 		})();
 		insert.finalize();
 		seed.run("UPDATE history SET use_count = 5 WHERE id = 1");
+		if (damagedProvenance) {
+			seed.run("UPDATE history SET cwd = x'01' WHERE id = 1");
+			seed.run("UPDATE history SET session_id = x'02' WHERE id = 2");
+		}
 		if (legacyMembership) {
 			seed.run("DROP TABLE history_sessions");
 			seed.run("DROP TABLE history_session_imports");
@@ -323,8 +331,13 @@ INSERT INTO session_recaps (session_id, cwd, recap, created_at) VALUES ('session
 		expect(storage.search("prompt 0001", 10).map(entry => entry.prompt)).toEqual([prompt(1)]);
 		const sessionA = storage.getRecent(1000, { sessionId: "session-a" });
 		if (legacyMembership) {
-			expect(sessionA.map(entry => entry.prompt)).toEqual(expected);
-			expect(sessionA.at(-1)).toMatchObject({ prompt: prompt(1), useCount: 5 });
+			expect(sessionA.map(entry => entry.prompt)).toEqual(
+				expected.filter(text => !damagedProvenance || (text !== prompt(1) && text !== prompt(2))),
+			);
+			expect(sessionA.at(-1)).toMatchObject({
+				prompt: prompt(damagedProvenance ? 3 : 1),
+				useCount: damagedProvenance ? 1 : 5,
+			});
 		} else {
 			expect(sessionA.map(entry => entry.prompt)).toEqual(["/skill:original raw arguments", "alpha", prompt(1)]);
 			expect(sessionA[0]).toMatchObject({ cwd: "/a", useCount: 4, created_at: LEGACY_TIMESTAMP });
@@ -341,6 +354,22 @@ INSERT INTO session_recaps (session_id, cwd, recap, created_at) VALUES ('session
 			sessionId: "session-a",
 			useCount: 5,
 		});
+		if (damagedProvenance) {
+			expect(storage.search("prompt 0001", 10)[0]).toMatchObject({
+				prompt: prompt(1),
+				cwd: undefined,
+				sessionId: "session-a",
+				created_at: 1_700_000_001,
+				useCount: 5,
+			});
+			expect(storage.search("prompt 0002", 10)[0]).toMatchObject({
+				prompt: prompt(2),
+				cwd: "/project",
+				sessionId: undefined,
+				created_at: 1_700_000_002,
+				useCount: 1,
+			});
+		}
 		await storage.add("after recovery", "/project", "session-b");
 		expect(storage.getRecent(1)[0]).toMatchObject({ prompt: "after recovery", id: 201 });
 		HistoryStorage.close();

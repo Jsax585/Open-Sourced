@@ -44,14 +44,26 @@ type HistoryRow = {
 	use_count: number;
 };
 
-/** Reject foreign rows decoded from cross-linked SQLite pages before copying. */
-function isReadableHistoryRow(row: Record<keyof HistoryRow, unknown>): row is HistoryRow {
+type RecoverableHistoryRow = Omit<HistoryRow, "cwd" | "session_id"> & {
+	cwd: unknown;
+	session_id: unknown;
+};
+
+/** Readable prompt content survives even when its optional provenance is damaged. */
+function isRecoverableHistoryRow(row: Record<keyof HistoryRow, unknown>): row is RecoverableHistoryRow {
 	return (
 		Number.isSafeInteger(row.id) &&
 		typeof row.prompt === "string" &&
 		row.prompt.trim() !== "" &&
 		Number.isSafeInteger(row.created_at) &&
-		Number.isSafeInteger(row.use_count) &&
+		Number.isSafeInteger(row.use_count)
+	);
+}
+
+/** Reject damaged provenance before recovering conversation ownership. */
+function isReadableHistoryRow(row: Record<keyof HistoryRow, unknown>): row is HistoryRow {
+	return (
+		isRecoverableHistoryRow(row) &&
 		(row.cwd === null || typeof row.cwd === "string") &&
 		(row.session_id === null || typeof row.session_id === "string")
 	);
@@ -581,7 +593,7 @@ UPDATE history_sessions SET journal_order = ?4
 				source,
 				"history",
 				"id, prompt, created_at, cwd, session_id, use_count",
-			).filter(isReadableHistoryRow);
+			).filter(isRecoverableHistoryRow);
 			const sessionColumns = source.query<{ name: string }, []>("PRAGMA table_info(history_sessions)").all();
 			const orderSelection = sessionColumns.some(column => column.name === "journal_order")
 				? "journal_order"
@@ -592,7 +604,7 @@ UPDATE history_sessions SET journal_order = ?4
 						"history_sessions",
 						`id, prompt, created_at, cwd, session_id, use_count, ${orderSelection}`,
 					).filter((row): row is HistoryRow & { journal_order: unknown } => isReadableHistoryRow(row))
-				: prompts.map(row => ({ ...row, journal_order: 0 }));
+				: prompts.filter(isReadableHistoryRow).map(row => ({ ...row, journal_order: 0 }));
 			let sequence: number | undefined;
 			try {
 				sequence = source
@@ -612,7 +624,14 @@ ON CONFLICT(prompt) DO UPDATE SET
 	session_id = iif(excluded.created_at > history.created_at, excluded.session_id, history.session_id)
 				`);
 				for (const row of prompts) {
-					insert.run(row.id, row.prompt, row.created_at, row.cwd, row.session_id, row.use_count);
+					insert.run(
+						row.id,
+						row.prompt,
+						row.created_at,
+						typeof row.cwd === "string" ? row.cwd : null,
+						typeof row.session_id === "string" ? row.session_id : null,
+						row.use_count,
+					);
 				}
 				using insertSession = target.prepare(`
 INSERT INTO history_sessions (id, session_id, prompt, created_at, cwd, use_count, journal_order)
