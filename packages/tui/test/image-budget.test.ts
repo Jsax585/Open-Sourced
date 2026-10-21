@@ -685,6 +685,81 @@ describe("Image budget integration", () => {
 		expect(olderLines.join("")).not.toContain("\x1b_G");
 		expect(newerLines.at(-1) ?? "").toContain("\x1b_G");
 	});
+
+	it("demotes the oldest transcript images when the viewport measures blocks newest-first (#16660)", () => {
+		const budget = new ImageBudget(2, () => {});
+		const transcript = new TranscriptContainer();
+		// A text block at the frontier: the retirement peek renders it before
+		// walking the live tail newest-first.
+		transcript.addChild(new Text("prompt", 0, 0));
+		for (const name of ["oldest", "middle", "newest"]) {
+			transcript.addChild(
+				new Image(
+					BASE64_ONE_PIXEL_PNG,
+					"image/png",
+					{ fallbackColor: t => t },
+					{ maxWidthCells: 4, maxHeightCells: 2, budget, imageKey: name, filename: `${name}.png` },
+				),
+			);
+		}
+
+		let viewport: readonly string[] = [];
+		let passes = 0;
+		do {
+			passes++;
+			budget.beginPass();
+			const frame = { now: passes, tick: passes };
+			transcript.beginFrame(frame);
+			transcript.peekFinalizedBatch(80, 50);
+			viewport = transcript.renderViewport(80, 50, frame);
+		} while (budget.endPass() && passes < 5);
+
+		const text = viewport.join("\n");
+		expect(text).toContain("[Image: oldest.png");
+		expect(text).not.toContain("[Image: middle.png");
+		expect(text).not.toContain("[Image: newest.png");
+		expect(viewport.filter(row => row.includes("\x1b_G")).length).toBe(2);
+
+		// Constrained viewport (total > capacity): the allocated pass already
+		// walks oldest-first, so each image block renders at most twice per pass
+		// (measurement + allocated render) rather than three times.
+		const constrainedBudget = new ImageBudget(1, () => {});
+		const constrained = new TranscriptContainer();
+		let firstRenders = 0;
+		let secondRenders = 0;
+		const first = new Image(
+			BASE64_ONE_PIXEL_PNG,
+			"image/png",
+			{ fallbackColor: t => t },
+			{ maxWidthCells: 4, maxHeightCells: 2, budget: constrainedBudget, imageKey: "first", filename: "first.png" },
+		);
+		const second = new Image(
+			BASE64_ONE_PIXEL_PNG,
+			"image/png",
+			{ fallbackColor: t => t },
+			{ maxWidthCells: 4, maxHeightCells: 2, budget: constrainedBudget, imageKey: "second", filename: "second.png" },
+		);
+		const origFirst = first.render.bind(first);
+		const origSecond = second.render.bind(second);
+		first.render = width => {
+			firstRenders++;
+			return origFirst(width);
+		};
+		second.render = width => {
+			secondRenders++;
+			return origSecond(width);
+		};
+		constrained.addChild(first);
+		constrained.addChild(second);
+
+		constrainedBudget.beginPass();
+		const frame = { now: 1, tick: 1 };
+		constrained.beginFrame(frame);
+		constrained.renderViewport(80, 3, frame);
+		constrainedBudget.endPass();
+		expect(firstRenders).toBe(2);
+		expect(secondRenders).toBe(2);
+	});
 });
 
 describe("Image budget + Unicode placeholders", () => {
