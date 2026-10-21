@@ -124,7 +124,9 @@ function accountIdFromBearer(bearer: string): AccountId | undefined {
 }
 
 function chargedBearers(harness: TieredHarness): string[] {
-	return harness.requests.filter(request => request.selector === harness.primarySelector).map(request => request.bearer);
+	return harness.requests
+		.filter(request => request.selector === harness.primarySelector)
+		.map(request => request.bearer);
 }
 
 async function createTieredHarness(options: {
@@ -164,9 +166,24 @@ async function createTieredHarness(options: {
 	const authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")), {
 		usageProviderResolver: provider => (provider === ANTHROPIC ? usageProvider : undefined),
 		accountPolicies: [
-			{ provider: ANTHROPIC, account: { accountId: `${TEST_ACCOUNT_PREFIX}-a` }, priority: 3, extraUsageFloor: PAID_FLOOR },
-			{ provider: ANTHROPIC, account: { accountId: `${TEST_ACCOUNT_PREFIX}-b` }, priority: 2, extraUsageFloor: PAID_FLOOR },
-			{ provider: ANTHROPIC, account: { accountId: `${TEST_ACCOUNT_PREFIX}-c` }, priority: 1, extraUsageFloor: PAID_FLOOR },
+			{
+				provider: ANTHROPIC,
+				account: { accountId: `${TEST_ACCOUNT_PREFIX}-a` },
+				priority: 3,
+				extraUsageFloor: PAID_FLOOR,
+			},
+			{
+				provider: ANTHROPIC,
+				account: { accountId: `${TEST_ACCOUNT_PREFIX}-b` },
+				priority: 2,
+				extraUsageFloor: PAID_FLOOR,
+			},
+			{
+				provider: ANTHROPIC,
+				account: { accountId: `${TEST_ACCOUNT_PREFIX}-c` },
+				priority: 1,
+				extraUsageFloor: PAID_FLOOR,
+			},
 		],
 	});
 	const requests: RequestTrace[] = [];
@@ -183,10 +200,13 @@ async function createTieredHarness(options: {
 	});
 
 	await authStorage.credentials.reload();
-	await authStorage.credentials.set(ANTHROPIC, [oauthCredential("a"), oauthCredential("b"), oauthCredential("c")].map(credential => ({
-		type: "oauth" as const,
-		...credential,
-	})));
+	await authStorage.credentials.set(
+		ANTHROPIC,
+		[oauthCredential("a"), oauthCredential("b"), oauthCredential("c")].map(credential => ({
+			type: "oauth" as const,
+			...credential,
+		})),
+	);
 	authStorage.keys.setRuntime("openai", "fallback-key");
 
 	const accounts = authStorage.oauth.accounts(ANTHROPIC);
@@ -286,7 +306,13 @@ async function createTieredHarness(options: {
 	const resetCoordinator = createCodexAutoRedeemCoordinator();
 	const tempDir = TempDir.createSync("@pi-tiered-account-order-");
 	resetCoordinator.resetLockPath = `${tempDir.path()}/auth.db`;
-	const session = new AgentSession({ agent, sessionManager, settings, modelRegistry, codexResetCoordinator: resetCoordinator });
+	const session = new AgentSession({
+		agent,
+		sessionManager,
+		settings,
+		modelRegistry,
+		codexResetCoordinator: resetCoordinator,
+	});
 
 	return {
 		session,
@@ -337,8 +363,9 @@ describe("AgentSession tiered same-provider account order", () => {
 				{ selector: harness.primarySelector, bearer: "c" },
 				{ selector: harness.fallbackSelector, bearer: "fallback-key" },
 			]);
-			const paidCharges = harness.charges.filter((charge): charge is Charge & { kind: "paid"; remainingBefore: number } =>
-				charge.kind === "paid" && charge.remainingBefore !== undefined,
+			const paidCharges = harness.charges.filter(
+				(charge): charge is Charge & { kind: "paid"; remainingBefore: number } =>
+					charge.kind === "paid" && charge.remainingBefore !== undefined,
 			);
 			expect(paidCharges.map(charge => [charge.accountId, charge.remainingBefore])).toEqual([
 				["a", 10],
@@ -348,7 +375,9 @@ describe("AgentSession tiered same-provider account order", () => {
 				["c", 10],
 				["c", 6],
 			]);
-			expect(paidCharges.every(charge => !charge.allowanceWasAvailable && charge.remainingBefore > PAID_FLOOR)).toBe(true);
+			expect(paidCharges.every(charge => !charge.allowanceWasAvailable && charge.remainingBefore > PAID_FLOOR)).toBe(
+				true,
+			);
 			expect(Object.values(harness.ledger).map(entry => PAID_LIMIT - entry.paidUsed)).toEqual([2, 2, 2]);
 		} finally {
 			await harness.dispose();
@@ -394,7 +423,11 @@ describe("AgentSession tiered same-provider account order", () => {
 				selector: withSuccessor.fallbackSelector,
 				bearer: "fallback-key",
 			});
-			expect(withSuccessor.charges.filter(charge => charge.kind === "paid").every(charge => charge.remainingBefore! > PAID_FLOOR)).toBe(true);
+			expect(
+				withSuccessor.charges
+					.filter(charge => charge.kind === "paid")
+					.every(charge => charge.remainingBefore! > PAID_FLOOR),
+			).toBe(true);
 		} finally {
 			await withSuccessor.dispose();
 		}
