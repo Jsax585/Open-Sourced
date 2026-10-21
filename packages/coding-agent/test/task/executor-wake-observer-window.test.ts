@@ -30,12 +30,15 @@ interface MockSession {
 	session: AgentSession;
 	/** Wake the agent as an IRC peer message would; true when an observer was installed to see it. */
 	wake: () => Promise<boolean>;
+	/** Hooks a test can set to interleave work with the session's own lifecycle. */
+	hooks: { onAbort?: () => Promise<void> };
 }
 
 function yieldTurn(
 	emit: (event: AgentSessionEvent) => void,
 	pushMessage: (message: unknown) => void,
 	toolCallId: string,
+	report = "findings",
 ) {
 	const message = {
 		role: "assistant" as const,
@@ -44,7 +47,7 @@ function yieldTurn(
 				type: "toolCall" as const,
 				id: toolCallId,
 				name: "yield",
-				arguments: { data: { report: "findings" } },
+				arguments: { data: { report } },
 			},
 		],
 		stopReason: "toolUse" as const,
@@ -57,13 +60,14 @@ function yieldTurn(
 		toolName: "yield",
 		result: {
 			content: [{ type: "text", text: "Result submitted." }],
-			details: { status: "success", data: { report: "findings" } },
+			details: { status: "success", data: { report } },
 		},
 		isError: false,
 	} as AgentSessionEvent);
 }
 
 function createMockSession(): MockSession {
+	const hooks: MockSession["hooks"] = {};
 	const listeners: Array<(event: AgentSessionEvent) => void> = [];
 	const messages: unknown[] = [];
 	let observer: TurnObserver | undefined;
@@ -86,7 +90,7 @@ function createMockSession(): MockSession {
 		};
 		const finish = observer?.([record]);
 		emit({ type: "agent_start" } as AgentSessionEvent);
-		yieldTurn(emit, message => messages.push(message), "tool-woken-yield");
+		yieldTurn(emit, message => messages.push(message), "tool-woken-yield", "woken");
 		emit({ type: "agent_end", messages: [] } as unknown as AgentSessionEvent);
 		await finish?.();
 		return observer !== undefined;
@@ -120,10 +124,12 @@ function createMockSession(): MockSession {
 		},
 		trackIrcReply: () => {},
 		isParentIrcSteer: () => false,
-		abort: async () => {},
+		abort: async () => {
+			await hooks.onAbort?.();
+		},
 		dispose: async () => {},
 	};
-	return { session: session as AgentSession, wake };
+	return { session: session as AgentSession, wake, hooks };
 }
 
 const agent: AgentDefinition = {
@@ -235,5 +241,25 @@ describe("runSubprocess wake observer", () => {
 		// (not racing) proves the idle notification really fired and saw no observer.
 		expect(await woken).toBe(false);
 		expect(turnsStarted).toEqual([]);
+	});
+
+	it("counts once a turn that starts while the run's terminate abort is still settling", async () => {
+		const id = "WokenDuringAbort";
+		const { mock, options, turnsStarted } = setUp(id);
+		let observedDuringAbort: boolean | undefined;
+		// A terminal yield ends the run with an abort that nobody awaits until cleanup.
+		// A peer message that lands as it settles starts a turn on a result that was
+		// already accepted, before the finalizer installs the observer a second time.
+		mock.hooks.onAbort = async () => {
+			await Bun.sleep(5);
+			observedDuringAbort = await mock.wake();
+		};
+
+		const result = await runSubprocess(options);
+
+		expect(result.exitCode).toBe(0);
+		// The turn was observed, and the finalizer's later install did not count it again.
+		expect(observedDuringAbort).toBe(true);
+		expect(turnsStarted).toEqual([1]);
 	});
 });
