@@ -6,6 +6,7 @@
  */
 import * as fsSync from "node:fs";
 import * as os from "node:os";
+import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core/utils/yield";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
@@ -95,6 +96,7 @@ import { invokeSkillCommandFromText, isKnownSkillCommand } from "./modes/skill-c
 import {
 	applyStartupComposerPreferences,
 	type ComposerLease,
+	chooseInStartupComposer,
 	stopPendingStartupComposer,
 	takeStartupComposerLease,
 } from "./modes/startup-composer";
@@ -857,25 +859,40 @@ async function promptMoveSession(session: SessionInfo): Promise<SessionPromptRes
 const TRUST_PROMPT_MAX_SOURCES = 10;
 
 async function promptTrustProject(projectRoot: string, sources: ProjectCodeSource[]): Promise<boolean> {
-	const lines = sources
-		.slice(0, TRUST_PROMPT_MAX_SOURCES)
-		.map(source => `  ${source.kind}: ${shortenPath(source.path)}`);
+	const width = Math.max(...sources.map(source => source.kind.length));
+	const displayPath = (sourcePath: string) => {
+		const relative = path.relative(projectRoot, sourcePath);
+		return relative.startsWith("..") || path.isAbsolute(relative) ? shortenPath(sourcePath) : relative;
+	};
+	const lines = [
+		`${chalk.yellow("⚠")} ${chalk.bold("Trust this project?")}`,
+		chalk.dim(shortenPath(projectRoot)),
+		"",
+		"It can run code on your machine as soon as it loads:",
+		...sources
+			.slice(0, TRUST_PROMPT_MAX_SOURCES)
+			.map(source => `  ${source.kind.padEnd(width)}  ${chalk.dim(displayPath(source.path))}`),
+	];
 	if (sources.length > TRUST_PROMPT_MAX_SOURCES)
-		lines.push(`  ...and ${sources.length - TRUST_PROMPT_MAX_SOURCES} more`);
-	// The prepaint composer owns the screen and stdin; readline needs both.
-	stopPendingStartupComposer();
-	process.stdout.write("\x1b[2J\x1b[H");
-	process.stdout.write(`${chalk.yellow("This project can run code on your machine:")}\n${lines.join("\n")}\n`);
+		lines.push(chalk.dim(`  ...and ${sources.length - TRUST_PROMPT_MAX_SOURCES} more`));
+	lines.push("", chalk.dim("Only trust projects you know. Your choice is saved for this project."));
 	pauseStartupWatchdog();
-	const createInterface = await loadReadlineInterface();
-	const rl = createInterface({ input: process.stdin, output: process.stdout });
 	try {
-		const answer = (await rl.question(`Trust ${shortenPath(projectRoot)}? Only trust projects you know. [y/N] `))
-			.trim()
-			.toLowerCase();
-		return answer === "y" || answer === "yes";
+		const choice = chooseInStartupComposer(lines, [
+			{ value: "trust", label: "Trust and continue" },
+			{ value: "skip", label: "Continue without project code" },
+		]);
+		if (choice) return (await choice) === "trust";
+		// No prepaint composer (quiet start): a plain prompt on the bare terminal.
+		const createInterface = await loadReadlineInterface();
+		const rl = createInterface({ input: process.stdin, output: process.stdout });
+		try {
+			const answer = (await rl.question(`${lines.join("\n")}\nTrust and continue? [y/N] `)).trim().toLowerCase();
+			return answer === "y" || answer === "yes";
+		} finally {
+			rl.close();
+		}
 	} finally {
-		rl.close();
 		resumeStartupWatchdog();
 	}
 }
