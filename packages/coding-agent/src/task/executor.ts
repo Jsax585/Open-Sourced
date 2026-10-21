@@ -5081,6 +5081,13 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// stamp the lifecycle and terminalize a ref the run-state mirror left
 			// `running` before the (possibly slow) cleanup below.
 			if (resultDelivered(outcome, monitor, structured)) {
+				// The ref reads idle below, and a peer message can wake the agent the
+				// instant it does. A turn that starts with no observer is never counted
+				// for an isolated first capture, never settled, and never delivered, so
+				// the observer goes in first. Installing it is idempotent: the finalizer
+				// installs it again for runs that were not accepted. A one-shot run is
+				// never woken.
+				if (options.keepAlive !== false) attachIrcWakeTurnMonitor(session, wakeOptions);
 				AgentRegistry.global().markResultAccepted(id, session, monitor.yieldAcceptedAt());
 			}
 			exitCode = outcome.exitCode;
