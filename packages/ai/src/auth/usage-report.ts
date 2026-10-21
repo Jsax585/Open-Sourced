@@ -1,14 +1,24 @@
 import { authPolicyFor } from "@oh-my-pi/pi-catalog/compat/auth";
+import type { Provider } from "../types";
 import { resolveUsedFraction } from "../usage";
 import type {
 	CredentialRankingContext,
 	CredentialRankingStrategy,
+	ExtraUsageState,
 	UsageLimit,
 	UsageLogger,
 	UsageReport,
 } from "../usage";
 
-import type { AuthAccountPolicy, ExtraUsageAllowance, UsageFundingTier } from "./types";
+import { USAGE_REPORT_TTL_MS } from "./sqlite-credential-store";
+import type {
+	AuthAccountPolicy,
+	ExtraUsageAllowance,
+	OAuthCredential,
+	PaidUsageStop,
+	PaidUsageView,
+	UsageFundingTier,
+} from "./types";
 
 /** Funding standing for one account after plan allowance and paid capacity are evaluated. */
 export interface FundingAssessment {
@@ -201,6 +211,50 @@ export function usageResetAtMs(limits: UsageLimit[], nowMs: number): number | un
 	return Math.max(...candidates);
 }
 
+/** Paid-usage standing before mapping it to a funding tier or display view. */
+export interface ExtraUsageClassification {
+	extra: FundingAssessment["extra"];
+	stop?: PaidUsageStop;
+}
+
+/**
+ * Classify provider-reported paid usage against the exact policy and paid-usage
+ * block selection applies after plan allowance is spent.
+ */
+export function classifyExtraUsage(args: {
+	extraUsage: ExtraUsageState | undefined;
+	policy?: Pick<AuthAccountPolicy, "extraUsageFloor" | "extraUsageBudget">;
+	extraUsageBlockedUntil?: number;
+	nowMs: number;
+}): ExtraUsageClassification {
+	const { extraUsage, policy, extraUsageBlockedUntil, nowMs } = args;
+	if (extraUsage === undefined) return { extra: "unavailable" };
+	if (!extraUsage.enabled) return { extra: "unavailable", stop: "disabled" };
+	if (extraUsage.exhausted) return { extra: "unavailable", stop: "cap-reached" };
+	if (extraUsageBlockedUntil !== undefined && extraUsageBlockedUntil > nowMs) {
+		return { extra: "unavailable", stop: "refused" };
+	}
+	if (!extraUsage.uncapped && extraUsage.remaining !== undefined && extraUsage.remaining <= 0) {
+		return { extra: "unavailable", stop: "cap-reached" };
+	}
+	if (
+		policy?.extraUsageFloor !== undefined &&
+		policy.extraUsageFloor > 0 &&
+		!extraUsage.uncapped &&
+		(extraUsage.remaining === undefined || extraUsage.remaining <= policy.extraUsageFloor)
+	) {
+		return {
+			extra: "past-floor",
+			stop: extraUsage.remaining === undefined ? "floor-unreported" : "floor",
+		};
+	}
+	if (policy?.extraUsageBudget !== undefined) {
+		if (extraUsage.used === undefined) return { extra: "past-floor", stop: "budget-unreported" };
+		if (extraUsage.used >= policy.extraUsageBudget) return { extra: "past-floor", stop: "budget" };
+	}
+	return { extra: "available" };
+}
+
 /**
  * Assess whether an account remains on its plan allowance or may serve through
  * provider-reported paid extra usage.
@@ -222,33 +276,97 @@ export function assessFunding(args: {
 		return { tier: "allowance", extra: "unavailable" };
 	}
 
-	const extraUsage = strategy?.extraUsage?.(report, context);
-	let extra: FundingAssessment["extra"];
-	if (
-		extraUsage === undefined ||
-		!extraUsage.enabled ||
-		extraUsage.exhausted ||
-		(args.extraUsageBlockedUntil !== undefined && args.extraUsageBlockedUntil > nowMs) ||
-		(!extraUsage.uncapped && extraUsage.remaining !== undefined && extraUsage.remaining <= 0)
-	) {
-		extra = "unavailable";
-	} else if (
-		(args.policy?.extraUsageFloor !== undefined &&
-			args.policy.extraUsageFloor > 0 &&
-			!extraUsage.uncapped &&
-			(extraUsage.remaining === undefined || extraUsage.remaining <= args.policy.extraUsageFloor)) ||
-		(args.policy?.extraUsageBudget !== undefined &&
-			(extraUsage.used === undefined || extraUsage.used >= args.policy.extraUsageBudget))
-	) {
-		extra = "past-floor";
-	} else {
-		extra = "available";
-	}
+	const extra = classifyExtraUsage({
+		extraUsage: strategy?.extraUsage?.(report, context),
+		policy: args.policy,
+		extraUsageBlockedUntil: args.extraUsageBlockedUntil,
+		nowMs,
+	}).extra;
 
 	return {
 		tier: extra === "available" ? "extra" : extra === "past-floor" ? "extra-past-floor" : "spent",
 		extra,
 		allowanceResetsAt: usageResetAtMs(hard, nowMs),
+	};
+}
+
+/** Describe paid usage even while plan allowance remains, using selection's exact policy rules. */
+export function describePaidUsage(args: {
+	strategy?: CredentialRankingStrategy;
+	report: UsageReport;
+	policy?: Pick<AuthAccountPolicy, "extraUsageFloor" | "extraUsageBudget">;
+	extraUsageBlockedUntil?: number;
+	nowMs: number;
+}): PaidUsageView | undefined {
+	const { strategy, report, policy, extraUsageBlockedUntil, nowMs } = args;
+	const extraUsage = strategy?.extraUsage?.(report, {});
+	if (extraUsage === undefined) return undefined;
+
+	const classification = classifyExtraUsage({ extraUsage, policy, extraUsageBlockedUntil, nowMs });
+	const floor = policy?.extraUsageFloor;
+	const budget = policy?.extraUsageBudget;
+	const floorApplies = floor !== undefined && floor > 0 && !extraUsage.uncapped;
+	const floorIgnored = floor !== undefined && floor > 0 && extraUsage.uncapped;
+	const used = extraUsage.used;
+	const remaining = extraUsage.remaining;
+	const budgetLeft = budget !== undefined && used !== undefined ? Math.max(0, budget - used) : undefined;
+	const paidLimit =
+		extraUsage.limitId === undefined ? undefined : report.limits.find(limit => limit.id === extraUsage.limitId);
+	const cap =
+		extraUsage.capacity === "spend-cap" &&
+		!extraUsage.uncapped &&
+		typeof paidLimit?.amount.limit === "number" &&
+		Number.isFinite(paidLimit.amount.limit)
+			? paidLimit.amount.limit
+			: undefined;
+
+	let headroom: number | undefined = classification.extra === "available" ? undefined : 0;
+	let boundBy: PaidUsageView["boundBy"];
+	if (classification.extra === "available") {
+		if (floorApplies && remaining !== undefined) {
+			headroom = Math.max(0, remaining - floor);
+			boundBy = "floor";
+		} else if (!extraUsage.uncapped && remaining !== undefined) {
+			headroom = remaining;
+			boundBy = "provider";
+		}
+		if (budgetLeft !== undefined && (headroom === undefined || budgetLeft < headroom)) {
+			headroom = budgetLeft;
+			boundBy = "budget";
+		}
+	}
+
+	const metadata = report.metadata;
+	const payloadFetchedAt = metadata?.payloadFetchedAt;
+	const asOf =
+		typeof payloadFetchedAt === "number" && Number.isFinite(payloadFetchedAt)
+			? payloadFetchedAt
+			: metadata?.headersUpdatedAt === undefined && Number.isFinite(report.fetchedAt)
+				? report.fetchedAt
+				: undefined;
+
+	return {
+		...(extraUsage.limitId === undefined ? {} : { limitId: extraUsage.limitId }),
+		unit: extraUsage.unit,
+		capacity: extraUsage.capacity,
+		state: classification.extra,
+		...(classification.stop === undefined ? {} : { stop: classification.stop }),
+		...(used === undefined ? {} : { used }),
+		...(cap === undefined ? {} : { cap }),
+		...(remaining === undefined ? {} : { remaining }),
+		uncapped: extraUsage.uncapped,
+		...(floor === undefined ? {} : { floor }),
+		floorIgnored,
+		...(budget === undefined ? {} : { budget }),
+		...(budgetLeft === undefined ? {} : { budgetLeft }),
+		...(headroom === undefined ? {} : { headroom }),
+		...(boundBy === undefined ? {} : { boundBy }),
+		unbounded: classification.extra === "available" && extraUsage.uncapped && budget === undefined,
+		...(classification.stop === "refused" && extraUsageBlockedUntil !== undefined
+			? { blockedUntil: extraUsageBlockedUntil }
+			: {}),
+		...(asOf === undefined ? {} : { asOf }),
+		stale: asOf !== undefined && nowMs - asOf > USAGE_REPORT_TTL_MS * 1.25,
 	};
 }
 
@@ -346,4 +464,131 @@ export function windowRequiredDrain(limit: UsageLimit | undefined, nowMs: number
 	// not produce an unbounded urgency score.
 	const remainingHours = Math.max(remainingMs, 60_000) / (60 * 60 * 1000);
 	return headroom / remainingHours;
+}
+
+/**
+ * Match an aggregate report to one OAuth credential by its account identity.
+ * A provider's lone identity-free report can stand in for a lone credential.
+ */
+export function matchUsageReport(
+	reports: readonly UsageReport[],
+	provider: Provider,
+	credential: OAuthCredential,
+): UsageReport | null {
+	const all = reports.filter(report => report.provider === provider);
+	if (all.length === 0) return null;
+	// Org precedence, decisive on EITHER side: an org-scoped credential may
+	// only take its own org's report, and an org-less (legacy) credential may
+	// only take org-less reports — the shared email/account would otherwise
+	// hand one subscription the OTHER subscription's pool (e.g. mark healthy
+	// Max exhausted via Team's report, or rank a legacy row on a sibling's
+	// numbers).
+	const orgId = credential.orgId?.trim().toLowerCase();
+	const accountId = credential.accountId?.trim().toLowerCase();
+	const email = credential.email?.trim().toLowerCase();
+	const projectId = credential.projectId?.trim().toLowerCase();
+	if (orgId) {
+		const sameOrg: UsageReport[] = [];
+		let sawReportOrg = false;
+		for (const report of all) {
+			const metaOrg = readMetadataString((report.metadata ?? {}) as Record<string, unknown>, "orgId");
+			if (metaOrg) {
+				sawReportOrg = true;
+				if (metaOrg.toLowerCase() === orgId) sameOrg.push(report);
+			}
+		}
+		// Org-attributed reports exist: the shared org is a GATE, not a match.
+		// Two Team members share the org id while drawing on per-user pools,
+		// so the credential's own base identity must still line up inside the
+		// same-org subset — a lone sibling report is NOT ours. An org-only
+		// credential (no base identifiers) takes the lone same-org report and
+		// treats several as ambiguous. None in our org → "no usage data"
+		// rather than mis-attributing another org's pool.
+		if (sawReportOrg) {
+			if (accountId || email || projectId) {
+				for (const report of sameOrg) {
+					if (reportMatchesIdentity(report, accountId, email, projectId)) return report;
+				}
+				return null;
+			}
+			return sameOrg.length === 1 ? sameOrg[0]! : null;
+		}
+		// No surviving report carries an org at all: presence mismatch is a
+		// non-match too — the sole org-less report may be a legacy sibling
+		// row's pool, and handing it to a scoped credential would rank/block
+		// on the wrong quota. "No usage data" degrades gracefully instead.
+		return null;
+	}
+	const candidates = all.filter(
+		report => !readMetadataString((report.metadata ?? {}) as Record<string, unknown>, "orgId"),
+	);
+	if (candidates.length === 0) return null;
+	// The sole report stands in for a credential it shares no identity field
+	// with; otherwise identity decides, because a report naming another email,
+	// account or project is a sibling's pool whose fetch succeeded where this
+	// credential's failed.
+	if (
+		all.length === 1 &&
+		candidates.length === 1 &&
+		!reportHasComparableIdentity(candidates[0], accountId, email, projectId)
+	) {
+		return candidates[0];
+	}
+	for (const report of candidates) {
+		if (reportMatchesIdentity(report, accountId, email, projectId)) return report;
+	}
+	return null;
+}
+
+export function reportMatchesIdentity(
+	report: UsageReport,
+	accountId: string | undefined,
+	email: string | undefined,
+	projectId: string | undefined,
+): boolean {
+	const metadata = (report.metadata ?? {}) as Record<string, unknown>;
+	const metaEmail = readMetadataString(metadata, "email")?.toLowerCase();
+	// Email identifies the member within shared Team workspace account/org ids.
+	// When both sides provide it, a mismatch is decisive.
+	if (email && metaEmail) return metaEmail === email;
+	if (accountId) {
+		const metaAccount = readMetadataString(metadata, "accountId") ?? readMetadataString(metadata, "account_id");
+		if (metaAccount && metaAccount.toLowerCase() === accountId) return true;
+		for (const limit of report.limits) {
+			if (limit.scope.accountId?.trim().toLowerCase() === accountId) return true;
+		}
+	}
+	if (projectId) {
+		const metaProject = readMetadataString(metadata, "projectId") ?? readMetadataString(metadata, "project_id");
+		if (metaProject && metaProject.toLowerCase() === projectId) return true;
+		for (const limit of report.limits) {
+			if (limit.scope.projectId?.trim().toLowerCase() === projectId) return true;
+		}
+	}
+	return false;
+}
+
+/** Whether the report names an email, account or project the caller can compare against. */
+export function reportHasComparableIdentity(
+	report: UsageReport,
+	accountId: string | undefined,
+	email: string | undefined,
+	projectId: string | undefined,
+): boolean {
+	const metadata = report.metadata ?? {};
+	if (email && readMetadataString(metadata, "email")) return true;
+	if (accountId) {
+		if (readMetadataString(metadata, "accountId") ?? readMetadataString(metadata, "account_id")) return true;
+		if (report.limits.some(limit => limit.scope.accountId?.trim())) return true;
+	}
+	if (projectId) {
+		if (readMetadataString(metadata, "projectId") ?? readMetadataString(metadata, "project_id")) return true;
+		if (report.limits.some(limit => limit.scope.projectId?.trim())) return true;
+	}
+	return false;
+}
+
+export function readMetadataString(metadata: Record<string, unknown>, key: string): string | undefined {
+	const value = metadata[key];
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }

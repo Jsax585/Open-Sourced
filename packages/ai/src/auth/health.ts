@@ -33,7 +33,13 @@ import type { UsageService } from "./usage";
 import { REMOTE_REFRESH_SENTINEL } from "./types";
 import { oauthUsageRequest, usageCacheIdentity, usageRequest } from "./usage-cache";
 import type { UsageRequestDescriptor } from "./usage-cache";
-import { assessFunding, isUsageLimitExhausted, reserveUsageLimits, usageReportMetadataValue } from "./usage-report";
+import {
+	assessFunding,
+	classifyExtraUsage,
+	isUsageLimitExhausted,
+	reserveUsageLimits,
+	usageReportMetadataValue,
+} from "./usage-report";
 
 /** Dependencies for model pool health and stored credential probes. */
 export interface CredentialHealthDeps {
@@ -62,27 +68,13 @@ function paidExtraUsageTier(
 	extraUsageBlockedUntil: number | undefined,
 	nowMs: number,
 ): "extra" | "extra-past-floor" | undefined {
-	const extraUsage = strategy?.extraUsage?.(report, context);
-	if (
-		extraUsage === undefined ||
-		!extraUsage.enabled ||
-		extraUsage.exhausted ||
-		(extraUsageBlockedUntil !== undefined && extraUsageBlockedUntil > nowMs) ||
-		(!extraUsage.uncapped && extraUsage.remaining !== undefined && extraUsage.remaining <= 0)
-	) {
-		return undefined;
-	}
-	if (
-		(policy?.extraUsageFloor !== undefined &&
-			policy.extraUsageFloor > 0 &&
-			!extraUsage.uncapped &&
-			(extraUsage.remaining === undefined || extraUsage.remaining <= policy.extraUsageFloor)) ||
-		(policy?.extraUsageBudget !== undefined &&
-			(extraUsage.used === undefined || extraUsage.used >= policy.extraUsageBudget))
-	) {
-		return "extra-past-floor";
-	}
-	return "extra";
+	const extra = classifyExtraUsage({
+		extraUsage: strategy?.extraUsage?.(report, context),
+		policy,
+		extraUsageBlockedUntil,
+		nowMs,
+	}).extra;
+	return extra === "available" ? "extra" : extra === "past-floor" ? "extra-past-floor" : undefined;
 }
 
 function paidExtraUsageAllowed(
