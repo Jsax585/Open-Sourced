@@ -5,6 +5,11 @@
 ### Added
 
 - Added git upstream divergence counts (⇡ ahead / ⇣ behind) to the status line git segment, toggleable via `statusLine.segmentOptions.git.showAheadBehind` ([#11049](https://github.com/can1357/oh-my-pi/pull/11049) by [@anzhen-tech](https://github.com/anzhen-tech)).
+## [18.12.5] - 2026-10-21
+
+### Added
+
+- `providers.cacheRetention: long` now keeps OpenAI GPT-5.6+ prompt caches for 12 hours (Responses API; cache writes cost 2.5× input instead of 1.25×)
 
 ### Fixed
 
