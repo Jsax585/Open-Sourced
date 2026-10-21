@@ -106,6 +106,8 @@ import type {
 import type { Skill } from "../extensibility/skills";
 import type { FileSlashCommand } from "../extensibility/slash-commands";
 import { loadSlashCommands } from "../extensibility/slash-commands";
+import { parseAutopilotCommand } from "../autopilot/command";
+import { cfgAutopilotMaxCycles } from "../autopilot/settings";
 import type { GoalModeState } from "../goals/state";
 import { rebindMemoryBackendForCwd } from "../hindsight/backend";
 import { copyLocalArtifacts, resolveLocalRoot } from "../internal-urls";
@@ -1326,6 +1328,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	goalModeEnabled = false;
 	goalModePaused = false;
 	vibeModeEnabled = false;
+	autopilotEnabled = false;
 	planModePlanFilePath: string | undefined = undefined;
 	loopModeEnabled = false;
 	loopModePaused = false;
@@ -4721,6 +4724,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
+	#updateAutopilotModeStatus(): void {
+		this.statusLine.setAutopilotModeStatus(this.autopilotEnabled ? { enabled: true } : undefined);
+		this.ui.requestRender();
+	}
+
 	/**
 	 * Anchored HUD of in-flight subagents, mirroring the Todos block above the
 	 * editor. Driven entirely by observer-registry change events, so rows appear
@@ -5042,6 +5050,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Reconcile mode state from session entries on resume/switch. */
 	async #reconcileModeFromSession(options?: { preserveActiveGoal?: boolean }): Promise<void> {
+		this.autopilotEnabled = this.session.isAutopilotEnabled();
+		this.#updateAutopilotModeStatus();
 		const vibeScopeAlreadySuspended = this.#vibeScopeSuspendedForSwitch;
 		this.#vibeScopeSuspendedForSwitch = false;
 		this.#guidedGoalInterviewActive = false;
@@ -6400,6 +6410,84 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#resetGoalContinuationSuppression();
 		this.#scheduleGoalContinuation();
 		this.showStatus(nextBudget === undefined ? "Goal budget cleared." : `Goal budget set to ${nextBudget}.`);
+	}
+
+	/**
+	 * Toggle/report autopilot and manage its binding directive. The mode lives in
+	 * the session (persisted there); `prompt` survives toggling.
+	 */
+	async handleAutopilotCommand(args?: string): Promise<boolean> {
+		const command = parseAutopilotCommand(args);
+		if (command.action === "invalid") {
+			this.showWarning(command.reason);
+			return false;
+		}
+		if (command.action === "status") {
+			if (!this.autopilotEnabled) {
+				this.showStatus("Autopilot: off");
+				return false;
+			}
+			const status = this.session.getAutopilotStatus();
+			const cap = status.maxCycles === 0 ? "unlimited" : String(status.maxCycles);
+			const last = status.last;
+			const detail = last
+				? ` · last: ${last.kind} → ${last.decision || "—"}${
+						last.stopped ? ` (${last.stopped})` : last.model ? ` (${last.model})` : ""
+					}`
+				: "";
+			const directive = status.prompt
+				? ` · directive: ${status.prompt.length > 120 ? `${status.prompt.slice(0, 120)}…` : status.prompt}`
+				: "";
+			this.showStatus(`Autopilot: on · ${status.strategy} · cycles ${status.cycles}/${cap}${directive}${detail}`);
+			return false;
+		}
+		if (command.action === "max") {
+			if (command.maxCycles === undefined) {
+				const current = cfgAutopilotMaxCycles.get(this.session.settings);
+				this.showStatus(
+					current === 0 ? "Autopilot cycle limit: unlimited (0)." : `Autopilot cycle limit: ${current}.`,
+				);
+				return false;
+			}
+			cfgAutopilotMaxCycles.set(this.session.settings, command.maxCycles);
+			this.session.resetAutopilotCycleBudget();
+			this.showStatus(
+				command.maxCycles === 0
+					? "Autopilot cycle limit: unlimited (0)."
+					: `Autopilot cycle limit: ${command.maxCycles}.`,
+			);
+			return false;
+		}
+		if (command.action === "prompt") {
+			if (command.clear) {
+				this.session.setAutopilotPrompt(undefined);
+				this.showStatus("Autopilot directive cleared.");
+				return false;
+			}
+			if (command.prompt === undefined) {
+				const prompt = this.session.getAutopilotPrompt();
+				this.showStatus(prompt ? `Autopilot directive: ${prompt}` : "No autopilot directive set.");
+				return false;
+			}
+			this.session.setAutopilotPrompt(command.prompt);
+			this.showStatus(`Autopilot directive set: ${command.prompt}`);
+			return false;
+		}
+		const next = command.action === "on" ? true : command.action === "off" ? false : !this.autopilotEnabled;
+		this.session.setAutopilotEnabled(next, command.action === "on" ? command.prompt : undefined);
+		this.autopilotEnabled = next;
+		this.#updateAutopilotModeStatus();
+		if (!next) {
+			this.showStatus("Autopilot off.");
+			return false;
+		}
+		const prompt = this.session.getAutopilotPrompt();
+		this.showStatus(
+			prompt
+				? `Autopilot on with directive: ${prompt}`
+				: "Autopilot on: trailing questions will be answered automatically.",
+		);
+		return false;
 	}
 
 	async handleGoalModeCommand(

@@ -12,6 +12,11 @@ import { InternalUrlRouter } from "../../internal-urls";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
 import { settings } from "../../config/settings";
 import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
+import {
+	AUTOPILOT_ANSWER_MESSAGE_TYPE,
+	type AutopilotCardDetails,
+	createAutopilotMessageCard,
+} from "@oh-my-pi/pi-tui/chat/autopilot-message";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
 import { createBackgroundTanDispatchBlock } from "@oh-my-pi/pi-tui/chat/background-tan-message";
@@ -347,6 +352,12 @@ export class UiHelpers {
 						const card = buildIrcMessageCard(message, () => this.ctx.toolOutputExpanded);
 						this.ctx.chatContainer.addChild(card);
 						return [card];
+					}
+					if (message.customType === AUTOPILOT_ANSWER_MESSAGE_TYPE) {
+						const details = (message as CustomMessage<AutopilotCardDetails>).details;
+						const card = createAutopilotMessageCard(details, () => this.ctx.toolOutputExpanded, theme);
+						this.ctx.chatContainer.addChild(card);
+						break;
 					}
 					if (message.customType === "advisor") {
 						const details = (message as CustomMessage<AdvisorMessageDetails>).details;

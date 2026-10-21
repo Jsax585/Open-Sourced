@@ -168,6 +168,21 @@ import { SkillDescriptionCatalog } from "../extensibility/skill-descriptions";
 import type { Skill, SkillWarning } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand, loadSlashCommands } from "../extensibility/slash-commands";
 import { normalizeToolEventInput, resolveToolEventInput } from "../extensibility/tool-event-input";
+import { AutopilotRuntime, type AutopilotResponderContext } from "../autopilot/runtime";
+import {
+	autopilotStrategy,
+	cfgAutopilotEnabled,
+	cfgAutopilotMaxCycles,
+	cfgAutopilotStrategy,
+} from "../autopilot/settings";
+import {
+	AUTOPILOT_ANSWER_CUSTOM_TYPE,
+	AUTOPILOT_DECISION_CUSTOM_TYPE,
+	AUTOPILOT_STATE_CUSTOM_TYPE,
+	autopilotStateFromEntries,
+	type AutopilotDecisionRecord,
+	type AutopilotStrategy,
+} from "../autopilot/state";
 import { GoalRuntime } from "../goals/runtime";
 import type { GoalModeState, GoalTokenUsage } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
@@ -176,6 +191,7 @@ import { type ChainJudge, hasNativeJudge, journalJudgmentUsage, resolveJudge, sh
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import type { JobWidgetEntry } from "@oh-my-pi/pi-tui/tools/job-widget";
 import type { DaemonCompletionNotification } from "../launch/protocol";
+import { loadBundledAgents } from "../task/agents";
 import { MEMORY_RECALL_CHANGES_MESSAGE_TYPE } from "../memory-backend/recall-entry";
 import { shutdownMnemopiEmbedClient } from "../mnemopi/embed-client";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../mnemopi/state";
@@ -947,6 +963,7 @@ export class AgentSession implements SettingsScope {
 	#vibeModeState: VibeModeState | undefined;
 	#goalModeState: GoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
+	#autopilotRuntime!: AutopilotRuntime;
 	readonly #advisors: SessionAdvisors;
 	/** Resolves once the resume-time advisor spend backfill settles. */
 	#advisorCostRestore: Promise<void> = Promise.resolve();
@@ -2395,6 +2412,62 @@ export class AgentSession implements SettingsScope {
 					{ deliverAs: message.deliverAs },
 				);
 			},
+		});
+		this.#autopilotRuntime = new AutopilotRuntime({
+			isEnabled: () => this.isAutopilotEnabled(),
+			agentKind: () => this.#agentKind,
+			strategy: () => autopilotStrategy(cfgAutopilotStrategy.get(this.settings)),
+			modelReady: () => this.model !== undefined && this.#modelRegistry.hasConfiguredAuth(this.model),
+			maxCycles: () => cfgAutopilotMaxCycles.get(this.settings),
+			responderContext: () => this.#autopilotResponderContext(),
+			runResponder: async (promptText, signal) => {
+				const model = this.model;
+				const { replyText, assistantMessage } = await this.runEphemeralTurn({
+					promptText,
+					tools: false,
+					replyMaxBytes: Number.POSITIVE_INFINITY,
+					signal,
+				});
+				return {
+					text: replyText,
+					model: model ? `${model.provider}/${model.id}` : undefined,
+					inputTokens: assistantMessage.usage?.input,
+					outputTokens: assistantMessage.usage?.output,
+				};
+			},
+			queueContinuation: (content, details) => {
+				// Queue first: the answer is persisted when the hidden turn is delivered.
+				// display:true renders the compact decision card; the content is the
+				// model-facing continuation and the details feed the card/replay.
+				this.#queueHiddenNextTurnMessage(
+					{
+						role: "custom",
+						customType: AUTOPILOT_ANSWER_CUSTOM_TYPE,
+						content,
+						display: true,
+						details,
+						attribution: "agent",
+						timestamp: Date.now(),
+					},
+					false,
+				);
+				// The agent_end dispatch runs before the agent's run promise settles, so
+				// start the hidden turn only once the loop is idle; otherwise the prompt
+				// would race AgentBusyError and the answer would stay queued.
+				this.#schedulePostPromptTask(async () => {
+					await this.agent.waitForIdle();
+					if (this.#isDisposed || this.#abortInProgress) return;
+					try {
+						await this.#promptQueuedHiddenNextTurnMessages();
+					} catch (error) {
+						logger.warn("autopilot continuation did not start", {
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
+				});
+			},
+			recordDecision: record => this.sessionManager.appendCustomEntry(AUTOPILOT_DECISION_CUSTOM_TYPE, record),
+			emitNotice: (level, message) => this.emitNotice(level, message, "autopilot"),
 		});
 		this.#cancelExitRecorder = postmortem.register(`agent-session:${this.sessionManager.getSessionId()}`, reason => {
 			this.#recordSessionExit(reason);
@@ -4911,7 +4984,23 @@ export class AgentSession implements SettingsScope {
 				return;
 			}
 			const sessionStopWillContinue = await this.#emitSessionStopEvent(activeMessages, msg);
-			await emitAgentEndNotification(sessionStopWillContinue ? { willContinue: true } : undefined);
+			// Autopilot answers a closing question by queueing one hidden next-turn
+			// message for THIS settle. Settling with willContinue:true keeps the turn
+			// non-terminal, so the goal controllers (TUI/RPC) skip their own
+			// continuation for this cycle instead of racing a second turn.
+			const autopilotWillContinue =
+				!sessionStopWillContinue &&
+				!this.#isDisposed &&
+				!this.#abortInProgress &&
+				// Compaction/handoff rewrite the context; evaluate the next settle
+				// instead of answering against a transcript that is being replaced.
+				!this.isCompacting &&
+				!this.isGeneratingHandoff &&
+				msg.stopReason !== "error" &&
+				(await this.#autopilotRuntime.onTurnEnd(activeMessages));
+			await emitAgentEndNotification(
+				sessionStopWillContinue || autopilotWillContinue ? { willContinue: true } : undefined,
+			);
 		}
 	};
 
@@ -7204,6 +7293,125 @@ export class AgentSession implements SettingsScope {
 		this.#goalModeState = state;
 	}
 
+	/** Per-session autopilot toggle, restored from the journal or the config default. */
+	isAutopilotEnabled(): boolean {
+		return (
+			autopilotStateFromEntries(this.sessionManager.getEntries())?.enabled ?? cfgAutopilotEnabled.get(this.settings)
+		);
+	}
+
+	/** Optional user directive that every autopilot decision must follow. */
+	getAutopilotPrompt(): string | undefined {
+		return autopilotStateFromEntries(this.sessionManager.getEntries())?.prompt;
+	}
+
+	/**
+	 * Toggle autopilot and persist it for resume. A new user prompt re-arms the
+	 * cycle budget. `prompt` (when provided) replaces the directive; omitted keeps it.
+	 */
+	setAutopilotEnabled(enabled: boolean, prompt?: string): void {
+		const current = this.getAutopilotPrompt();
+		const nextPrompt = prompt === undefined ? current : prompt.trim() || undefined;
+		if (this.isAutopilotEnabled() === enabled && nextPrompt === current) return;
+		this.sessionManager.appendCustomEntry(AUTOPILOT_STATE_CUSTOM_TYPE, {
+			enabled,
+			...(nextPrompt ? { prompt: nextPrompt } : {}),
+		});
+		this.#autopilotRuntime.resetCycleBudget();
+	}
+
+	/** Re-arm the per-prompt cycle budget and guards (after changing autopilot.maxCycles). */
+	resetAutopilotCycleBudget(): void {
+		this.#autopilotRuntime.resetCycleBudget();
+	}
+
+	/** Set or clear the persisted directive without changing the toggle. */
+	setAutopilotPrompt(prompt: string | undefined): void {
+		const normalized = prompt?.trim() || undefined;
+		if (this.getAutopilotPrompt() === normalized) return;
+		this.sessionManager.appendCustomEntry(AUTOPILOT_STATE_CUSTOM_TYPE, {
+			enabled: this.isAutopilotEnabled(),
+			...(normalized ? { prompt: normalized } : {}),
+		});
+	}
+
+	/** Structured task/goal/todo context for the responder prompt. */
+	#autopilotResponderContext(): AutopilotResponderContext {
+		let task = "";
+		const messages = this.agent.state.messages;
+		for (let index = messages.length - 1; index >= 0; index--) {
+			const message = messages[index]!;
+			if (message.role !== "user") continue;
+			task =
+				typeof message.content === "string"
+					? message.content
+					: message.content
+							.filter((part): part is TextContent => part.type === "text")
+							.map(part => part.text)
+							.join(" ");
+			break;
+		}
+		const goal = this.#goalModeState?.goal;
+		const openTodos: string[] = [];
+		for (const phase of this.getTodoPhases()) {
+			const tasks = phase.tasks
+				.filter(item => item.status !== "completed" && item.status !== "abandoned")
+				.slice(0, 6)
+				.map(
+					item => `${item.status === "in_progress" ? "~" : item.status === "blocked" ? "!" : " "} ${item.content}`,
+				);
+			if (tasks.length === 0) continue;
+			openTodos.push(`${phase.name}: ${tasks.join("; ")}`);
+			if (openTodos.length >= 4) break;
+		}
+		return {
+			task: task.replace(/\s+/g, " ").trim().slice(0, 2000),
+			directive: this.getAutopilotPrompt(),
+			agents: this.#autopilotAgentSummary(),
+			goalObjective: goal?.objective.slice(0, 1000),
+			goalStatus: goal?.status,
+			todos: openTodos.join(" | ").slice(0, 1200) || undefined,
+		};
+	}
+
+	/** Compact list of spawnable subagents, or undefined when the task tool is absent. */
+	#autopilotAgentSummary(): string | undefined {
+		if (!this.agent.state.tools.some(tool => tool.name === "task")) return undefined;
+		const disabled = new Set(cfgTaskDisabledAgents.get(this.settings));
+		const seen = new Set<string>();
+		const rendered: string[] = [];
+		for (const agent of [...loadBundledAgents(), ...this.getSessionAgents()]) {
+			if (seen.has(agent.name) || disabled.has(agent.name)) continue;
+			seen.add(agent.name);
+			const description = agent.description.replace(/\s+/g, " ").trim();
+			rendered.push(`${agent.name} (${description.length > 100 ? `${description.slice(0, 100)}…` : description})`);
+		}
+		return rendered.join(", ").slice(0, 800) || undefined;
+	}
+
+	/** Autopilot observability: strategy, current-prompt cycles and the last journaled decision. */
+	getAutopilotStatus(): {
+		enabled: boolean;
+		prompt?: string;
+		strategy: AutopilotStrategy;
+		cycles: number;
+		maxCycles: number;
+		last?: AutopilotDecisionRecord;
+	} {
+		const snapshot = this.#autopilotRuntime.snapshot();
+		const entries = this.sessionManager.getEntries();
+		let last: AutopilotDecisionRecord | undefined;
+		for (let index = entries.length - 1; index >= 0; index--) {
+			const entry = entries[index]!;
+			if (entry.type !== "custom" || entry.customType !== AUTOPILOT_DECISION_CUSTOM_TYPE) continue;
+			if (typeof entry.data === "object" && entry.data !== null) {
+				last = entry.data as AutopilotDecisionRecord;
+			}
+			break;
+		}
+		return { enabled: this.isAutopilotEnabled(), prompt: this.getAutopilotPrompt(), ...snapshot, last };
+	}
+
 	getVibeModeState(): VibeModeState | undefined {
 		return this.#vibeModeState;
 	}
@@ -7719,6 +7927,7 @@ export class AgentSession implements SettingsScope {
 	 * {@link PromptDroppedError} instead.
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
+		this.#autopilotRuntime.resetCycleBudget();
 		return this.#admitSubmission(() => this.#prompt(text, options));
 	}
 
@@ -9810,6 +10019,7 @@ export class AgentSession implements SettingsScope {
 		content: string | (TextContent | ImageContent)[],
 		options?: SendUserMessageOptions,
 	): Promise<void> {
+		this.#autopilotRuntime.resetCycleBudget();
 		// Normalize content to text string + optional images
 		let text: string;
 		let images: ImageContent[] | undefined;

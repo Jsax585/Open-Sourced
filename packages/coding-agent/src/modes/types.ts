@@ -218,6 +218,7 @@ export interface InteractiveModeContext {
 	vibeModeEnabled: boolean;
 	goalModeEnabled: boolean;
 	goalModePaused: boolean;
+	autopilotEnabled: boolean;
 	loopModeEnabled: boolean;
 	loopModePaused: boolean;
 	loopPrompt?: string;
@@ -607,6 +608,7 @@ export interface InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean>;
 	handleGoalModeCommand(rest?: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean>;
+	handleAutopilotCommand(args?: string): Promise<boolean>;
 	handleGuidedGoalCommand(rest?: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean>;
 	/** True while `/guided-goal` is interviewing the user and no goal record exists yet. */
 	isGuidedGoalInterviewActive(): boolean;

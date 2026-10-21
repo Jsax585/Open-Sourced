@@ -46,6 +46,11 @@ import {
 	splitAssistantMessageToolTimeline,
 } from "./transcript-render-helpers";
 import { createAdvisorMessageCard } from "./advisor-message";
+import {
+	AUTOPILOT_ANSWER_MESSAGE_TYPE,
+	type AutopilotCardDetails,
+	createAutopilotMessageCard,
+} from "./autopilot-message";
 import { AssistantMessageComponent } from "./assistant-message";
 import { createBackgroundTanDispatchBlock } from "./background-tan-message";
 import { BashExecutionComponent } from "./bash-execution";
@@ -600,6 +605,14 @@ export class ChatTranscriptBuilder {
 			message.customType === "irc:workpool"
 		) {
 			this.container.addChild(buildIrcMessageCard(message, () => this.#expanded));
+			return;
+		}
+		if (message.customType === AUTOPILOT_ANSWER_MESSAGE_TYPE) {
+			const details = (message as CustomMessage<AutopilotCardDetails>).details;
+			const card = createAutopilotMessageCard(details, () => this.#expanded, theme);
+			// Tracked so a transcript-wide toggle also clears a per-card native toggle.
+			this.#trackExpandable(card);
+			this.container.addChild(card);
 			return;
 		}
 		if (message.customType === "advisor") {
