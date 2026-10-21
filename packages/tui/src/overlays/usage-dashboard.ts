@@ -33,6 +33,7 @@ import {
 	summarizePaidUsage,
 	summarizeUsageResetCredits,
 	type UsageResetSummary,
+	wrapPaidUsageSummary,
 } from "./usage-display";
 import { colorToAnsi } from "../theme/color";
 import { ensureThemeSync, theme } from "../theme/theme";
@@ -857,7 +858,9 @@ export class UsageDashboardComponent implements Component {
 
 		if (card.paid) {
 			const summary = card.paid.summary;
-			lines.push(`  ${theme.fg(summary.tone, formatPaidUsageSummary(summary, Math.max(1, width - 2)))}`);
+			for (const line of wrapPaidUsageSummary(summary, Math.max(1, width - 2))) {
+				lines.push(`  ${theme.fg(summary.tone, line)}`);
+			}
 		}
 
 		for (const account of card.unavailableAccounts) {
@@ -1466,7 +1469,7 @@ export class UsageDashboardComponent implements Component {
 			who.push(
 				text([span(formatPaidUsageSummary(entry.paid.summary), entry.paid.summary.tone)], {
 					role: "omp.usage.provider.meta",
-					truncate: "end",
+					wrap: "word",
 					title,
 				}),
 			);

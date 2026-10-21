@@ -51,14 +51,24 @@ interface CodexAccount {
 }
 
 const CLAUDE: readonly ClaudeAccount[] = [
-	{ alias: "A1", plan: { fiveHour: 20, sevenDay: 64 }, spend: { used: 190.74, cap: 200 }, policy: { extraUsageFloor: 10 } },
+	{
+		alias: "A1",
+		plan: { fiveHour: 20, sevenDay: 64 },
+		spend: { used: 190.74, cap: 200 },
+		policy: { extraUsageFloor: 10 },
+	},
 	{
 		alias: "A2",
 		plan: { fiveHour: 35, sevenDay: 48 },
 		spend: { used: 150, cap: 200 },
 		policy: { extraUsageFloor: 10, extraUsageBudget: 400 },
 	},
-	{ alias: "A3", plan: { fiveHour: 10, sevenDay: 81 }, spend: { used: 350, cap: null }, policy: { extraUsageBudget: 400 } },
+	{
+		alias: "A3",
+		plan: { fiveHour: 10, sevenDay: 81 },
+		spend: { used: 350, cap: null },
+		policy: { extraUsageBudget: 400 },
+	},
 	{ alias: "A4", plan: { fiveHour: 55, sevenDay: 72 }, spend: { used: 119.85, cap: null } },
 	{ alias: "A5", plan: { fiveHour: 100, sevenDay: 90 }, spend: { used: 100, cap: 200 }, refusedForMs: 3 * HOUR },
 	{ alias: "A6", plan: { fiveHour: 5, sevenDay: 30 }, spend: { enabled: false }, policy: { extraUsageFloor: 10 } },
@@ -81,7 +91,11 @@ const CODEX: readonly CodexAccount[] = [
 		credits: { has_credits: true, unlimited: false },
 		policy: { extraUsageFloor: 50 },
 	},
-	{ alias: "C5", plan: { primary: 70, secondary: 95 }, credits: { has_credits: true, unlimited: false, balance: "0" } },
+	{
+		alias: "C5",
+		plan: { primary: 70, secondary: 95 },
+		credits: { has_credits: true, unlimited: false, balance: "0" },
+	},
 ];
 
 const email = (alias: string): string => `${alias.toLowerCase()}@example.test`;
@@ -119,7 +133,11 @@ function codexPayload(account: CodexAccount): Record<string, unknown> {
 		rate_limit: {
 			allowed: !limitReached,
 			limit_reached: limitReached,
-			primary_window: { used_percent: account.plan.primary, limit_window_seconds: 18_000, reset_after_seconds: 7_200 },
+			primary_window: {
+				used_percent: account.plan.primary,
+				limit_window_seconds: 18_000,
+				reset_after_seconds: 7_200,
+			},
 			secondary_window: {
 				used_percent: account.plan.secondary,
 				limit_window_seconds: 604_800,
@@ -175,7 +193,9 @@ async function createStorage(): Promise<AuthStorage> {
 			account.policy ? [{ provider: "anthropic", account: { email: email(account.alias) }, ...account.policy }] : [],
 		),
 		...CODEX.flatMap(account =>
-			account.policy ? [{ provider: "openai-codex", account: { email: email(account.alias) }, ...account.policy }] : [],
+			account.policy
+				? [{ provider: "openai-codex", account: { email: email(account.alias) }, ...account.policy }]
+				: [],
 		),
 	];
 	const storage = new AuthStorage(await SqliteAuthCredentialStore.open(":memory:"), {
@@ -287,7 +307,17 @@ function applySgr(state: SgrState, params: string): void {
 	const codes = params === "" ? [0] : params.split(/[;:]/).map(Number);
 	for (let index = 0; index < codes.length; index++) {
 		const code = codes[index]!;
-		if (code === 0) Object.assign(state, { fg: undefined, bg: undefined, bold: false, dim: false, italic: false, underline: false, inverse: false, strike: false });
+		if (code === 0)
+			Object.assign(state, {
+				fg: undefined,
+				bg: undefined,
+				bold: false,
+				dim: false,
+				italic: false,
+				underline: false,
+				inverse: false,
+				strike: false,
+			});
 		else if (code === 1) state.bold = true;
 		else if (code === 2) state.dim = true;
 		else if (code === 3) state.italic = true;
@@ -414,7 +444,8 @@ const { values } = parseArgs({
 	},
 });
 const width = Number(values.width ?? 100);
-if (!Number.isInteger(width) || width < 24) throw new Error(`--width must be an integer of at least 24, got ${values.width}`);
+if (!Number.isInteger(width) || width < 24)
+	throw new Error(`--width must be an integer of at least 24, got ${values.width}`);
 if (values.frame !== undefined && values.frame !== "overview" && values.frame !== "detail") {
 	throw new Error(`--frame must be overview or detail, got ${values.frame}`);
 }

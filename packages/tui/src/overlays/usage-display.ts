@@ -196,7 +196,9 @@ function paidUsageSettings(view: PaidUsageView): string[] {
 	const settings: string[] = [];
 	if (view.floor !== undefined) {
 		settings.push(
-			view.floorIgnored ? `floor ${amount(view.floor)} not applied (no cap reported)` : `floor ${amount(view.floor)}`,
+			view.floorIgnored
+				? `floor ${amount(view.floor)} not applied (no cap reported)`
+				: `floor ${amount(view.floor)}`,
 		);
 	}
 	if (view.budget !== undefined) {
@@ -290,9 +292,8 @@ export function formatPaidUsageCaveat(heldServeLast: boolean): string {
 
 /** One provider's paid extra usage, for its usage card. */
 export interface PaidUsageSummary {
-	/** Parts in display order; when `hasAmount`, the first is what omp may still spend. */
+	/** Parts in display order: what omp may still spend (when anything is), then the account counts. */
 	parts: string[];
-	hasAmount: boolean;
 	tone: PaidUsageTone;
 }
 
@@ -340,20 +341,43 @@ export function summarizePaidUsage(views: readonly (PaidUsageView | undefined)[]
 	];
 	const tone: PaidUsageTone =
 		funded > 0 || unbounded > 0 ? "success" : held > 0 ? "warning" : refused > 0 || atCap > 0 ? "error" : "dim";
-	return { parts, hasAmount: funded > 0, tone };
+	return { parts, tone };
+}
+
+/** The lead every summary starts with; continuation lines indent to its width. */
+const PAID_SUMMARY_LEAD = "paid ";
+
+/** `paid $90.00 left · 1 uncapped · 1 held` on one line. */
+export function formatPaidUsageSummary(summary: PaidUsageSummary): string {
+	return `${PAID_SUMMARY_LEAD}${summary.parts.join(" · ")}`;
 }
 
 /**
- * `paid $90.00 left · 1 uncapped · 1 held`, fitted to `maxWidth`: trailing
- * counts drop first and the amount never does; whatever still overflows is
- * truncated.
+ * The summary wrapped to `width`, breaking only between parts so no amount or
+ * count is split or dropped. Continuation lines indent under the first part:
+ *
+ *     paid $90.00 left · 1 uncapped · 1 held
+ *          1 refused · 1 at cap · 1 off
+ *
+ * Only a single part wider than the whole line is truncated.
  */
-export function formatPaidUsageSummary(summary: PaidUsageSummary, maxWidth = Number.POSITIVE_INFINITY): string {
-	const render = (count: number): string => `paid ${summary.parts.slice(0, count).join(" · ")}`;
-	let count = summary.parts.length;
-	while (count > 1 && visibleWidth(render(count)) > maxWidth) count--;
-	const text = render(count);
-	return Number.isFinite(maxWidth) ? truncateToWidth(text, Math.max(0, maxWidth), Ellipsis.Unicode) : text;
+export function wrapPaidUsageSummary(summary: PaidUsageSummary, width: number): string[] {
+	const indent = " ".repeat(PAID_SUMMARY_LEAD.length);
+	const lines: string[] = [];
+	let line = "";
+	for (const part of summary.parts) {
+		const joined = line ? `${line} · ${part}` : `${PAID_SUMMARY_LEAD}${part}`;
+		if (!line || visibleWidth(joined) <= width) {
+			line = joined;
+			continue;
+		}
+		lines.push(line);
+		line = `${indent}${part}`;
+	}
+	if (line) lines.push(line);
+	return lines.map(text =>
+		visibleWidth(text) > width ? truncateToWidth(text, Math.max(0, width), Ellipsis.Unicode) : text,
+	);
 }
 
 /**
