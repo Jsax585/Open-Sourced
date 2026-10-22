@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a dim `N earlier messages not shown · /tree to browse` row above transcripts that are redrawn from only their recent messages ([#14988](https://github.com/can1357/oh-my-pi/pull/14988) by [@azain47](https://github.com/azain47)).
+- Added `pi.showProfile` to `StatusLineSegmentOptions`: `false` keeps the `pi` segment's bare glyph under a named profile, in the rendered bar and in `describe` ([#16063](https://github.com/can1357/oh-my-pi/pull/16063) by [@shgew](https://github.com/shgew))
 ## [18.12.6] - 2026-10-21
 
 ### Changed
