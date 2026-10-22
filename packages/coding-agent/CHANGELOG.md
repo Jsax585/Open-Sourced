@@ -5,6 +5,7 @@
 ### Added
 
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
+- Added `startup.announceXdevMounts` (default `true`) to hide visible `xd://` mount and unmount notices independently of the startup splash and MCP connection status, without suppressing tool discovery or hidden model inventory updates ([#16634](https://github.com/can1357/oh-my-pi/issues/16634))
 
 ## [18.12.6] - 2026-10-21
 
