@@ -2220,7 +2220,7 @@ export interface TaskItem {
 	agent?: string;
 	/** Historical source session selected by the bundled consult agent. */
 	sourceSession?: string;
-	/** Bundled seance: override for the source session's saved model. Any other agent: one exact per-call model, gated by `task.perCallModel`. */
+	/** One exact per-call model, gated by `task.perCallModel`; host selection uses a separate trusted channel. */
 	model?: string | string[];
 	/** The work; required by the schema. */
 	task?: string;

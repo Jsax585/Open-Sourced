@@ -91,7 +91,7 @@ describe("task schema (single-spawn)", () => {
 });
 
 describe("task schema seance fields", () => {
-	it("accepts source and model selectors in every flat/batch isolation mode", () => {
+	it("accepts a source and one model selector in every flat/batch isolation mode", () => {
 		for (const batchEnabled of [false, true]) {
 			for (const isolationEnabled of [false, true]) {
 				const schema = getTaskSchema({
@@ -100,9 +100,7 @@ describe("task schema seance fields", () => {
 					evalToolsEnabled: false,
 					seanceFields: seanceTaskSchemaFields,
 				});
-				const modelSelector = batchEnabled
-					? ["anthropic/claude-sonnet-4-6", "anthropic/claude-sonnet-4-5"]
-					: "anthropic/claude-sonnet-4-5";
+				const modelSelector = "anthropic/claude-sonnet-4-5";
 				const item = {
 					agent: "seance",
 					task: "Read historical context.",
@@ -139,7 +137,7 @@ describe("task schema seance fields", () => {
 				const schema = getTaskSchema({ batchEnabled, isolationEnabled });
 				const wireSchema = JSON.stringify(schema.toJsonSchema());
 				expect(wireSchema).not.toContain('"sourceSession"');
-				// Only the per-call `model` remains: one string, never the seance selector list.
+				// Only the exact per-call `model` remains.
 				expect(wireSchema).toContain('"model":{"type":"string"}');
 			}
 		}

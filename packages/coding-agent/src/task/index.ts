@@ -19,6 +19,7 @@ import { taskSubprocessRenderer } from "@oh-my-pi/pi-tui/tools/subprocess";
 import path from "node:path";
 import type {
 	AgentTool,
+	AgentToolContext,
 	AgentToolResult,
 	AgentToolUpdateCallback,
 	ToolSpeculationPolicy,
@@ -84,6 +85,31 @@ import {
 	cfgTaskStructured,
 	perCallModelEnabled,
 } from "./settings";
+
+const TASK_HOST_MODEL = Symbol("taskHostModel");
+
+type HostTaskContext = AgentToolContext & {
+	[TASK_HOST_MODEL]?: { toolCallId: string; model: string | string[] };
+};
+
+type HostTaskParams = TaskParams & { [TASK_HOST_MODEL]?: string | string[] };
+
+/** Execute a host-selected task model through a channel unavailable to serialized tool arguments. */
+export function executeTaskFromHost(
+	tool: AgentTool,
+	toolCallId: string,
+	params: TaskParams,
+	context: AgentToolContext,
+	signal?: AbortSignal,
+	onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
+): Promise<AgentToolResult<TaskToolDetails>> {
+	if ((tool as AgentTool & { [TASK_HOST_MODEL]?: boolean })[TASK_HOST_MODEL] !== true) {
+		throw new Error("The registered task tool does not support host model selection.");
+	}
+	const { model, ...taskParams } = params;
+	const hostContext: HostTaskContext = { ...context, [TASK_HOST_MODEL]: { toolCallId, model: model ?? [] } };
+	return tool.execute(toolCallId, taskParams, signal, onUpdate, hostContext);
+}
 
 function renderSubagentUserPrompt(assignment: string): string {
 	return prompt.render(subagentUserPromptTemplate, {
@@ -281,7 +307,7 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string 
 			const label = `Task ${i + 1}${item.name ? ` (\`${item.name}\`)` : ""}`;
 			const effortError = validateEffort(item.effort, label);
 			if (effortError) return effortError;
-			const modelError = validateModel(item, label);
+			const modelError = invalidModelSelectorReason(item.model, label);
 			if (modelError) return modelError;
 		}
 		const seen = new Map<string, string>();
@@ -305,21 +331,17 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string 
 			? "Missing `tasks`. Provide a `tasks` array (one subagent per item) with a shared `context`."
 			: "Missing `task`. Provide complete, self-contained instructions for the agent.";
 	}
-	return validateEffort(params.effort, "The call") ?? validateModel(params, "The call");
+	return validateEffort(params.effort, "The call") ?? invalidModelSelectorReason(params.model, "The call");
 }
 
-/**
- * A `model` on a call naming `seance` is checked at preflight, once the name resolves:
- * the bundled seance takes it as its source-session override, a shadowing agent as a per-call model.
- */
-function validateModel(item: TaskItem | TaskParams, label: string): string | undefined {
-	return item.agent === SEANCE_AGENT_NAME ? undefined : invalidModelSelectorReason(item.model, label);
-}
-
-function spawnModelFields(params: TaskParams): Pick<StructuredSubagentRequest, "perCallModel" | "seanceModel"> {
+function spawnModelFields(
+	params: TaskParams,
+): Pick<StructuredSubagentRequest, "model" | "perCallModel" | "seanceModel"> {
+	const hostModel = (params as HostTaskParams)[TASK_HOST_MODEL];
+	if (hostModel !== undefined) return { model: hostModel };
 	if (params.model === undefined) return {};
 	if (params.agent === SEANCE_AGENT_NAME) return { seanceModel: params.model };
-	// `validateModel` rejected anything but one string before dispatch.
+	// Validation rejected anything but one string before dispatch.
 	return typeof params.model === "string" ? { perCallModel: params.model } : {};
 }
 
@@ -356,6 +378,8 @@ function resolveSpawnItems(params: TaskParams): TaskItem[] {
  */
 function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string): TaskParams {
 	const spawn: TaskParams = { agent: item.agent?.trim() || defaultAgent };
+	const hostModel = (params as HostTaskParams)[TASK_HOST_MODEL];
+	if (hostModel !== undefined) (spawn as HostTaskParams)[TASK_HOST_MODEL] = hostModel;
 	if (item.name !== undefined) spawn.name = item.name;
 	if (item.task !== undefined) spawn.task = item.task;
 	if (item.solutionSpace !== undefined) spawn.solutionSpace = item.solutionSpace;
@@ -662,6 +686,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	readonly summary = "Spawn subagents to complete delegated tasks";
 	readonly strict = false;
 	readonly loadMode = "essential";
+	readonly [TASK_HOST_MODEL] = true;
 	// Arktype validates model calls against the active wire schema, but the flat
 	// single-spawn schema carries `"+": "delete"`: a batch `{ context, tasks[] }`
 	// payload has those keys stripped, then fails on the now-missing `task` with
@@ -967,11 +992,21 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		rawParams: unknown,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
+		context?: AgentToolContext,
 	): Promise<AgentToolResult<TaskToolDetails>> {
+		const hostSelection = (context as HostTaskContext | undefined)?.[TASK_HOST_MODEL];
+		const hostModel = hostSelection?.toolCallId === toolCallId ? hostSelection.model : undefined;
 		const launchSession = this.#launchSessions.get(toolCallId);
 		this.#launchSessions.delete(toolCallId);
 		try {
-			return await this.#dispatch(toolCallId, rawParams, launchSession, signal, onUpdate);
+			return await this.#dispatch(
+				toolCallId,
+				rawParams,
+				hostModel === undefined ? launchSession : undefined,
+				signal,
+				onUpdate,
+				hostModel,
+			);
 		} finally {
 			// No-op once dispatch adopted; otherwise nothing launched early may outlive the call.
 			launchSession?.discard("task call settled without adopting speculative launches");
@@ -984,6 +1019,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		launchSession: TaskLaunchSession | undefined,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
+		hostModel?: string | string[],
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		// Schema defaults fill `agent` for model calls, but internal callers
 		// and stale transcripts can bypass arktype. `spawnParamsFor` resolves each
@@ -995,6 +1031,10 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			return createTaskModeError(plan);
 		}
 		const { params, items: spawnItems, spawns: normalizedSpawnParams } = plan;
+		if (hostModel !== undefined) {
+			(params as HostTaskParams)[TASK_HOST_MODEL] = hostModel;
+			for (const spawn of normalizedSpawnParams) (spawn as HostTaskParams)[TASK_HOST_MODEL] = hostModel;
+		}
 		const evalToolNames = spawnItems.flatMap(item => item.tools ?? []);
 		if (evalToolNames.length > 0) {
 			if (this.session.getPlanModeState?.()?.enabled === true) {

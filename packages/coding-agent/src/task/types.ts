@@ -138,7 +138,7 @@ function taskAgentSchemaRule(defaultAgent: string): string {
 
 type SeanceTaskSchemaFields = {
 	"sourceSession?"?: FluentType<string>;
-	"model?"?: FluentType<string | string[]>;
+	"model?"?: FluentType<string>;
 };
 
 function createTaskSchema(options: {
@@ -157,7 +157,7 @@ function createTaskSchema(options: {
 		: {};
 	const toolsField = options.evalToolsEnabled ? { "tools?": "string[]" } : {};
 	// `model` is always declared so a rejected per-call model fails preflight
-	// instead of being deleted by `"+": "delete"`; seance widens it to a list.
+	// instead of being deleted by `"+": "delete"`.
 	const seanceFields = { "model?": "string", ...options.seanceFields };
 	if (options.batchEnabled) {
 		if (options.isolationEnabled) {

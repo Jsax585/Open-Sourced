@@ -228,7 +228,7 @@ For task dispatch, model precedence is:
 3. the agent frontmatter's prioritized `model` list
 4. the parent's active model, then its configured/default model fallback
 
-Role aliases in steps 2 and 3 are expanded through `modelRoles`. Host callers (SDK `runStructuredSubagent({ model })`, `omp cleanse --model`) supply an ungated model ahead of the settings override; the bundled seance agent's `model` overrides its source session's saved model as before.
+Role aliases in steps 2 and 3 are expanded through `modelRoles`. Host callers (SDK `runStructuredSubagent({ model })`, `omp cleanse --model`, and host `/seance` with its pickers) supply an ungated model ahead of the settings override. A model-facing `model` naming the bundled seance agent is not ungated; it is a per-call model (see below).
 
 ### Per-call `model`
 
@@ -250,7 +250,9 @@ The model must be one the operator already routes to:
 
 Globs in those values grant every chat model they match; any other value grants the one model it resolves to. Catalog membership, credentials, built-in role defaults and saved transcripts grant nothing. `task.perCallModelAllow`, when set, is a list of exact `provider/model-id` entries that narrows the result: the model must be granted and listed.
 
-A `model` for an agent with a `task.agentModelOverrides` entry fails preflight with a conflict error, so the operator's override is never silently replaced. Per-call `model` is not supported for the bundled seance agent, whose own `model` overrides its source session's saved model as before. A project or user agent that shadows the `seance` name is an ordinary agent: its `model` is a per-call `model`, held to every rule here.
+An ordinary agent's `model` fails preflight with a conflict error if it has a `task.agentModelOverrides` entry, so the operator's override is never silently replaced. The bundled seance agent's model-facing `model` is a per-call model held to the same gate, exact-selector and approval rules: it is refused unless `task.perCallModel` allows it. Without `model`, its saved source-session selectors are tried in order and unapproved ones are skipped; if none is approved, stop and report the error rather than substituting another model. As before, the bundled seance uses its saved source model or explicit selection instead of `task.agentModelOverrides.seance`. A project or user agent that shadows the `seance` name is an ordinary agent: its `model` is a per-call `model`, held to every rule here.
+
+The saved-selector approval check applies even with `task.perCallModel: off` or `eval`; those modes disable explicit task `model` values, not approved saved models. Model-facing seance workers, including the saved-model path, retain the same running-worker grant checks and no-fallback guarantees described below. Host `/seance` workers remain ungated.
 
 A per-call worker never switches its main-loop model: retry fallback, context promotion and prewalk are off for it, and a requested model that is unavailable or has no working credentials fails the call rather than running on the parent's model. Every main-loop request is checked against the grants read from current settings, so an extension replacement or a settings change cannot move it to an unapproved model. A cold registry at preflight is checked again before the child session is created. Cold revival re-applies the check and grants the agent's frontmatter only while that agent is still discovered. Changing `task.perCallModel` affects new calls only. Side requests the session makes for its own maintenance (compaction summaries via `compactionModel` or the compaction fallback, and advisor calls) use their own configured models and are not covered by this check.
 
