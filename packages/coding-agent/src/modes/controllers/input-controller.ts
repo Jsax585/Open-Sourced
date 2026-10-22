@@ -926,17 +926,18 @@ export class InputController {
 		return compacted.text.trim();
 	}
 
-	#dropSubmittedPending(images: ImageContent[] | undefined, links: (string | undefined)[] | undefined): void {
+	#dropSubmittedPending(images: ImageContent[] | undefined, linkCount: number): void {
 		if (!images?.length) return;
-		const pending = this.ctx.editor.pendingImages;
+		const editor = this.ctx.editor;
 		// Drop the snapshot only while it is still the live prefix: attachments
-		// added while the handler was pending stay in place.
-		if (!images.every((image, index) => pending[index] === image)) return;
-		pending.splice(0, images.length);
-		const linkCount = Math.min(links?.length ?? 0, this.ctx.editor.pendingImageLinks.length);
-		this.ctx.editor.pendingImageLinks.splice(0, linkCount);
-		this.ctx.editor.imageLinks =
-			this.ctx.editor.pendingImageLinks.length > 0 ? this.ctx.editor.pendingImageLinks : undefined;
+		// added while the handler was pending stay in place, renumbered from #1.
+		if (!images.every((image, index) => editor.pendingImages[index] === image)) return;
+		const newerDraft = editor.getExpandedText();
+		editor.pendingImages.splice(0, images.length);
+		editor.pendingImageLinks.splice(0, linkCount);
+		editor.imageLinks = editor.pendingImageLinks.length > 0 ? editor.pendingImageLinks : undefined;
+		const renumbered = shiftImageMarkers(newerDraft, -images.length);
+		if (renumbered !== newerDraft) editor.setCollapsedText(renumbered);
 	}
 
 	async #runInputHandlers(
@@ -1025,7 +1026,7 @@ export class InputController {
 					// before this callback ran, so anything in it now is a newer draft;
 					// only the submitted attachments are dropped, and only while they
 					// are still the live prefix.
-					this.#dropSubmittedPending(inputImages, inputImageLinks);
+					this.#dropSubmittedPending(inputImages, inputImageLinks?.length ?? 0);
 					return;
 				}
 				({ text, images: inputImages, imageLinks: inputImageLinks } = input);
@@ -1038,16 +1039,7 @@ export class InputController {
 				submittedMode === "goal" ||
 				submittedMode === "guided-goal" ||
 				submittedMode === "tan";
-			if (
-				draftDetached &&
-				submittedImages?.length &&
-				submittedImages.every((image, index) => this.ctx.editor.pendingImages[index] === image)
-			) {
-				this.ctx.editor.pendingImages.splice(0, submittedImages.length);
-				this.ctx.editor.pendingImageLinks.splice(0, submittedImages.length);
-				this.ctx.editor.imageLinks =
-					this.ctx.editor.pendingImageLinks.length > 0 ? this.ctx.editor.pendingImageLinks : undefined;
-			}
+			if (draftDetached) this.#dropSubmittedPending(submittedImages, submittedImages?.length ?? 0);
 
 			if (!text && !hasInputImages) return;
 

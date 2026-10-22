@@ -544,6 +544,35 @@ describe("interactive native input ingress", () => {
 		expect(h.editor.pendingImageLinks).toEqual(["local://original.png"]);
 	});
 
+	it("Enter /tan renumbers an image pasted while its input hook runs", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const h = await createHarness(pi => {
+			pi.on("input", async () => {
+				entered.resolve();
+				await release.promise;
+			});
+		});
+		Object.assign(h.session, { customCommands: [], promptTemplates: [] });
+		h.ctx.handleTanCommand = vi.fn(async () => true);
+		h.draftWithImage("/tan fix this block [Image #1]");
+		const submitting = h.pressSubmit(ENTER);
+		await entered.promise;
+		// The submitted image is still pending while the hook runs, so this paste is #2.
+		h.editor.pendingImages.push(newerImage);
+		h.editor.pendingImageLinks.push("local://newer.jpg");
+		h.editor.setText("newer [Image #2]");
+		release.resolve();
+		await submitting;
+
+		expect(h.editor.getExpandedText()).toBe("newer [Image #1]");
+		expect(h.editor.pendingImages).toEqual([newerImage]);
+
+		await h.pressSubmit(ENTER);
+
+		expect(h.prompt).toHaveBeenCalledWith("newer [Image #1]", { streamingBehavior: "steer", images: [newerImage] });
+	});
+
 	it.each(["/clear", "/export"])(
 		"Ctrl+Enter preserves newer drafts across delayed %s builtin dispatch",
 		async command => {
