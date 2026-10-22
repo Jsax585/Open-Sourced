@@ -175,4 +175,41 @@ describe("grep → edit seen-line guard under default settings", () => {
 		expect(textOutput(rejected)).toContain("never displayed");
 		expect(await Bun.file(file).text()).toBe(source);
 	});
+
+	it("keeps rows the output byte cap drops unseen", async () => {
+		const session = createSession(cwd);
+		const file = path.join(cwd, "pairs.txt");
+		// 200 two-line matches of about 380 bytes each, kept apart by a `--` line so native grep reports
+		// them separately: past the 50 KiB output cap, so grep drops the tail.
+		const lines = Array.from({ length: 200 }, (_, i) => [
+			`a${i} = ${"x".repeat(180)}`,
+			`  b${i} = ${"y".repeat(180)}`,
+			"--",
+		]).flat();
+		const source = `${lines.join("\n")}\n`;
+		await Bun.write(file, source);
+
+		const grep = textOutput(
+			await new GrepTool(session).execute("grep", { pattern: "a\\d+ = x+\\n  b\\d+", path: "pairs.txt" }),
+		);
+		const rows = grep.split("\n").filter(row => /^[ *]\d+:/.test(row));
+		const lastShown = Number(/\d+/.exec(rows.at(-1) ?? "")?.[0]);
+		expect(lastShown).toBeGreaterThan(2);
+		expect(lastShown).toBeLessThanOrEqual(lines.length - 3);
+		const header = grep.split("\n")[0];
+
+		// Each match is a first row, a continuation row and a `--` context row, so the three lines
+		// after the last shown row cover every kind of row the cap drops.
+		for (const line of [lastShown + 1, lastShown + 2, lastShown + 3]) {
+			const rejected = await new EditTool(session, "hashline").execute("edit", {
+				input: `${header}\nPUT ${line}.=${line}:\n+cut\n`,
+			});
+			expect(textOutput(rejected)).toContain("never displayed");
+		}
+		expect(await Bun.file(file).text()).toBe(source);
+
+		await new EditTool(session, "hashline").execute("edit", { input: `${header}\nPUT 2.=2:\n+  b0 = 0\n` });
+		lines[1] = "  b0 = 0";
+		expect(await Bun.file(file).text()).toBe(`${lines.join("\n")}\n`);
+	});
 });

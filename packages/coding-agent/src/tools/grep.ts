@@ -13,7 +13,7 @@ import {
 	openArchive,
 	parseArchivePathCandidates,
 } from "@oh-my-pi/pi-utils/ar";
-import { getEditStore, recordFullySeenRows } from "../edit/store";
+import { getEditStore, NO_FULL_LINE, recordFullySeenRows } from "../edit/store";
 import { sessionResolveContext } from "../internal-urls/context";
 import { InternalUrlRouter } from "../internal-urls/router";
 import { InternalUrlFilesystem } from "../internal-urls/url-filesystem";
@@ -1047,6 +1047,14 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						if (tag) hashContexts.set(editable[index].relativePath, { tag, path: editable[index].snapshotPath });
 					}
 				}
+				// Rows count as seen only once the byte cap below has kept them.
+				const seenSections: Array<{
+					relativePath: string;
+					path: string;
+					tag: string;
+					rows: string[];
+					cutLines: Set<number> | undefined;
+				}> = [];
 				const renderMatchesForFile = (relativePath: string): FileMatchSection => {
 					const modelOut: string[] = [];
 					const displayOut: string[] = [];
@@ -1109,13 +1117,13 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
 					}
 					if (hashContext?.tag) {
-						recordFullySeenRows(
-							getEditStore(this.session),
-							hashContext.path,
-							hashContext.tag,
-							modelOut.join("\n"),
+						seenSections.push({
+							relativePath,
+							path: hashContext.path,
+							tag: hashContext.tag,
+							rows: modelOut,
 							cutLines,
-						);
+						});
 					}
 					return { model: modelOut, display: displayOut, tag: hashContext?.tag };
 				};
@@ -1145,13 +1153,14 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					.filter(relativePath => fileMatchCounts.get(relativePath) === perFileMatchCap);
 				let suffix = trailer(cappedCandidates);
 				let truncation: TruncationResult;
+				let keptLines: number;
 				for (;;) {
 					const reserved = Buffer.byteLength(suffix);
 					truncation = truncateHead(rawOutput, {
 						maxLines: Number.MAX_SAFE_INTEGER,
 						maxBytes: DEFAULT_MAX_BYTES - reserved,
 					});
-					const keptLines = truncation.truncated ? (truncation.outputLines ?? 0) : outputLines.length;
+					keptLines = truncation.truncated ? (truncation.outputLines ?? 0) : outputLines.length;
 					const shownCapped = isMultiScope
 						? cappedCandidates.filter(
 								relativePath => (matchOutput.modelEnds.get(relativePath) ?? Infinity) <= keptLines,
@@ -1160,6 +1169,22 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					suffix = trailer(shownCapped);
 					// Fewer files named can still mean longer names; re-cut until the notice fits its room.
 					if (Buffer.byteLength(suffix) <= reserved) break;
+				}
+				// The byte cap keeps whole lines from the top: record only the rows of each file it kept.
+				const editStore = getEditStore(this.session);
+				for (const section of seenSections) {
+					const end = matchOutput.modelEnds.get(section.relativePath);
+					if (end === undefined) continue;
+					const firstRow = end - section.rows.length;
+					// Dropped with its header: this output never showed the tag.
+					if (keptLines < firstRow) continue;
+					const keptRows = section.rows.slice(0, keptLines - firstRow);
+					if (keptRows.length === 0) {
+						// Only the header survived: it shows the tag, so record provenance that anchors no line.
+						editStore.recordSeenLines(section.path, section.tag, [NO_FULL_LINE]);
+					} else {
+						recordFullySeenRows(editStore, section.path, section.tag, keptRows.join("\n"), section.cutLines);
+					}
 				}
 				const output = truncation.content + suffix;
 				const displayText = displayLines.join("\n");
