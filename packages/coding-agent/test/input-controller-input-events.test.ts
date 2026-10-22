@@ -509,6 +509,7 @@ describe("interactive native input ingress", () => {
 		const handleTanCommand = vi.fn(async (_work: string, _images?: ImageContent[]) => {
 			entered.resolve();
 			await release.promise;
+			return true;
 		});
 		h.ctx.handleTanCommand = handleTanCommand;
 		h.draftWithImage("/tan fix this block [Image #1]");
@@ -528,6 +529,19 @@ describe("interactive native input ingress", () => {
 		await h.pressSubmit(ENTER);
 
 		expect(h.prompt).toHaveBeenCalledWith("newer [Image #1]", { streamingBehavior: "steer", images: [newerImage] });
+	});
+
+	it("Enter /tan that does not dispatch gives its draft back", async () => {
+		const h = await createHarness(() => {});
+		Object.assign(h.session, { customCommands: [], promptTemplates: [] });
+		h.ctx.handleTanCommand = vi.fn(async () => false);
+		h.draftWithImage("/tan fix this block [Image #1]");
+
+		await h.pressSubmit(ENTER);
+
+		expect(h.editor.getExpandedText()).toBe("/tan fix this block [Image #1]");
+		expect(h.editor.pendingImages).toEqual([originalImage]);
+		expect(h.editor.pendingImageLinks).toEqual(["local://original.png"]);
 	});
 
 	it.each(["/clear", "/export"])(

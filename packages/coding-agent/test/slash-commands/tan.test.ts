@@ -4,16 +4,16 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 
 function createRuntime() {
-	const handleTanCommand = vi.fn(async () => {});
-	const setText = vi.fn();
+	const handleTanCommand = vi.fn(async (_work: string, _images?: ImageContent[]) => true);
+	const clearDraft = vi.fn();
 	const addToHistory = vi.fn();
 	return {
 		handleTanCommand,
-		setText,
+		clearDraft,
 		addToHistory,
 		runtime: {
 			ctx: {
-				editor: { setText, addToHistory } as unknown as InteractiveModeContext["editor"],
+				editor: { clearDraft, addToHistory } as unknown as InteractiveModeContext["editor"],
 				handleTanCommand,
 			} as unknown as InteractiveModeContext,
 		},
@@ -27,7 +27,7 @@ describe("/tan slash command", () => {
 		const handled = await executeBuiltinSlashCommand("/tan add a changelog note", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.setText).toHaveBeenCalledWith("");
+		expect(harness.clearDraft).toHaveBeenCalled();
 		expect(harness.handleTanCommand).toHaveBeenCalledWith("add a changelog note", undefined);
 	});
 
@@ -61,7 +61,7 @@ describe("/tan slash command", () => {
 		const handled = await executeBuiltinSlashCommand("/tan   ", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.setText).toHaveBeenCalledWith("");
+		expect(harness.clearDraft).toHaveBeenCalled();
 		expect(harness.handleTanCommand).toHaveBeenCalledWith("", undefined);
 	});
 });

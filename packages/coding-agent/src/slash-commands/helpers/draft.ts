@@ -1,7 +1,7 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { shiftImageMarkers } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import type { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
-import type { TuiSlashCommandRuntime } from "../types";
+import type { ParsedSlashCommand, TuiSlashCommandRuntime } from "../types";
 
 /** Clear only text still owned by this submission, never a newer detached draft. */
 export function clearSubmittedText(runtime: TuiSlashCommandRuntime): void {
@@ -27,4 +27,52 @@ export function restoreDetachedDraft(
 		editor.imageLinks = editor.pendingImageLinks;
 	}
 	editor.setCollapsedText([restoredText, currentText].filter(part => part.trim()).join("\n\n"));
+}
+
+/**
+ * Run a command that takes its whole draft, images included. A draft it does not
+ * submit comes back to the editor; on the Enter and Ctrl+Enter paths the caller
+ * already took the draft out of the editor and restores it when `run` throws.
+ */
+export async function runWithDetachedDraft(
+	command: ParsedSlashCommand,
+	runtime: TuiSlashCommandRuntime,
+	run: () => Promise<boolean>,
+): Promise<void> {
+	const { editor } = runtime.ctx;
+	if (!runtime.draftDetached) editor.clearDraft();
+	try {
+		const submitted = await run();
+		const hasAttachments = (runtime.input?.images?.length ?? 0) > 0 || (runtime.input?.imageLinks?.length ?? 0) > 0;
+		if (!submitted && hasAttachments) {
+			if (runtime.draftDetached) {
+				// Newer typing may already sit in the editor: merge the submission
+				// back beside it so each draft's image markers keep their images.
+				restoreDetachedDraft(editor, command.text, runtime.input?.images, runtime.input?.imageLinks);
+				return;
+			}
+			editor.pendingImages = [...(runtime.input?.images ?? []), ...editor.pendingImages];
+			editor.pendingImageLinks = [
+				...(runtime.input?.imageLinks ?? runtime.input?.images?.map(() => undefined) ?? []),
+				...editor.pendingImageLinks,
+			];
+			editor.imageLinks = editor.pendingImageLinks.length > 0 ? editor.pendingImageLinks : undefined;
+		}
+	} catch (error) {
+		if (runtime.draftDetached) {
+			// The caller already took this draft out of the editor before
+			// dispatch (Ctrl+Enter's `handleFollowUp`, or `onSubmit` for these
+			// commands); it owns restoring the submission and reporting the
+			// error so a submission that failed after newer text was typed
+			// merges with it once, instead of being silently dropped here.
+			throw error;
+		}
+		if (!editor.getText() && editor.pendingImages.length === 0) {
+			editor.setText(command.text);
+			editor.pendingImages = runtime.input?.images ? [...runtime.input.images] : [];
+			editor.pendingImageLinks = runtime.input?.imageLinks ? [...runtime.input.imageLinks] : [];
+			editor.imageLinks = editor.pendingImageLinks.length > 0 ? editor.pendingImageLinks : undefined;
+		}
+		runtime.ctx.showError(error instanceof Error ? error.message : String(error));
+	}
 }

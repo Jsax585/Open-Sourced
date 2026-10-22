@@ -199,7 +199,7 @@ describe("TanCommandController", () => {
 		const forkSpy = vi.spyOn(SessionManager, "forkFrom").mockResolvedValue(harness.cloneManager);
 		const controller = new TanCommandController(harness.ctx);
 
-		await controller.start("   ");
+		expect(await controller.start("   ")).toBe(false);
 
 		expect(forkSpy).not.toHaveBeenCalled();
 		expect(harness.ctx.showStatus).toHaveBeenCalledWith("Usage: /tan <work>");
@@ -229,7 +229,7 @@ describe("TanCommandController", () => {
 		const forkSpy = vi.spyOn(SessionManager, "forkFrom").mockResolvedValue(harness.cloneManager);
 		const controller = new TanCommandController(harness.ctx);
 
-		await controller.start("write the release note");
+		expect(await controller.start("write the release note")).toBe(true);
 
 		expect(forkSpy).toHaveBeenCalledWith(
 			harness.parentFile,
@@ -652,13 +652,35 @@ describe("TanCommandController", () => {
 		expect(stub.compactionListener).toBeUndefined();
 	});
 
-	it("sends the images attached to /tan with the request and restores them after compaction", async () => {
+	it("sends /tan images with the request and replays the admitted request after compaction", async () => {
 		const harness = createContext();
 		vi.spyOn(SessionManager, "forkFrom").mockResolvedValue(harness.cloneManager);
-		const screenshot: ImageContent = { type: "image", data: "c2NyZWVuc2hvdA==", mimeType: "image/png" };
+		const screenshot: ImageContent = { type: "image", data: "cmF3", mimeType: "image/png" };
+		const sourceNotice = {
+			role: "custom",
+			customType: "image-attachment",
+			content: "Source path: `/tmp/shot.png`",
+			display: false,
+			attribution: "user",
+			timestamp: 1,
+		} as AgentMessage;
+		const request: AgentMessage = {
+			role: "user",
+			content: [
+				{ type: "text", text: "fix the block in this screenshot" },
+				{ type: "image", data: "bm9ybWFsaXplZA==", mimeType: "image/webp" },
+			],
+			attribution: "user",
+			timestamp: 1,
+		};
 		const stub = createCloneStub({
 			prompt: async () => {
+				// The session admits the request with its normalized image and hidden
+				// source notice, then compaction summarizes all of it away.
 				stub.compactionListener?.({ type: "agent_start" });
+				stub.messages.push(sourceNotice, request);
+				stub.compactionListener?.({ type: "auto_compaction_start" });
+				stub.messages.length = 0;
 				stub.compactionListener?.({ type: "auto_compaction_end", result: {}, aborted: false });
 			},
 		});
@@ -676,12 +698,11 @@ describe("TanCommandController", () => {
 			attribution: "user",
 			images: [screenshot],
 		});
-		expect(stub.appendMessage.mock.calls.at(-1)?.[0]).toEqual(
-			expect.objectContaining({
-				role: "user",
-				content: [{ type: "text", text: "fix the block in this screenshot" }, screenshot],
-			}),
-		);
+		expect(stub.appendMessage.mock.calls.slice(1).map(([message]) => message)).toEqual([
+			expect.objectContaining({ role: "developer" }),
+			{ ...sourceNotice, timestamp: expect.any(Number) },
+			{ ...request, timestamp: expect.any(Number) },
+		]);
 	});
 
 	it("does not duplicate the request when compaction runs before the initial dispatch", async () => {
