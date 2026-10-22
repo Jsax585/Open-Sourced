@@ -11,7 +11,7 @@ import { buildAutolearnScribePrompt, resolveAutolearnScribeModel } from "@oh-my-
 import { readManagedSkills } from "@oh-my-pi/pi-coding-agent/autolearn/managed-skills";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { fitPassSnapshotToContext } from "@oh-my-pi/pi-coding-agent/sdk";
+import { convertMessagesForWireModel, fitPassSnapshotToContext } from "@oh-my-pi/pi-coding-agent/sdk";
 import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils/dirs";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
@@ -182,5 +182,47 @@ describe("fitPassSnapshotToContext", () => {
 		const snapshot = fitPassSnapshotToContext(messages, model("claude-haiku-4-5"));
 		expect(snapshot.messages).toEqual(messages);
 		expect(snapshot.omittedNote).toBeUndefined();
+	});
+});
+
+describe("convertMessagesForWireModel", () => {
+	const PNG = "iVBORw0KGgoAAAANSUhEUg==";
+
+	function imageMessage(): AgentMessage {
+		return {
+			role: "user",
+			content: [
+				{ type: "text", text: "what is this?" },
+				{ type: "image", data: PNG, mimeType: "image/png" },
+			],
+			timestamp: 1,
+		};
+	}
+
+	it("drops images for a text-only wire model", () => {
+		const converted = convertMessagesForWireModel([imageMessage()], model("claude-haiku-4-5"), false);
+		expect(JSON.stringify(converted)).not.toContain(PNG);
+		expect(JSON.stringify(converted)).toContain("does not support image input");
+	});
+
+	it("keeps images for a wire model that sends them", () => {
+		const vision = buildModel({
+			id: "claude-sonnet-4-5-vision",
+			name: "vision",
+			api: "anthropic-messages",
+			provider: "anthropic",
+			baseUrl: "https://api.anthropic.com",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200_000,
+			maxTokens: 8_192,
+		});
+		expect(JSON.stringify(convertMessagesForWireModel([imageMessage()], vision, false))).toContain(PNG);
+	});
+
+	it("drops images when the user blocked them, whatever the model", () => {
+		const converted = convertMessagesForWireModel([imageMessage()], model("claude-haiku-4-5"), true);
+		expect(JSON.stringify(converted)).toContain("Image reading is disabled.");
 	});
 });

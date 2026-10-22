@@ -3,8 +3,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
+import type { Api, Model, ModelSpec } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -116,5 +119,80 @@ describe("AgentSession auto-learn pass across dispose", () => {
 		expect(await live.runAutolearnCapture(async () => true)).toBe(false);
 		gate.resolve();
 		expect(await first).toBe(true);
+	});
+});
+
+describe("SDK dispose wrapper", () => {
+	let tempDir: string;
+	let session: AgentSession | undefined;
+
+	beforeEach(async () => {
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-autolearn-wrapper-"));
+	});
+
+	afterEach(async () => {
+		await session?.dispose();
+		session = undefined;
+		await removeWithRetries(tempDir);
+	});
+
+	/** A production session: `createAgentSession` replaces `dispose` with its own wrapper. */
+	async function createWrappedSession(): Promise<AgentSession> {
+		const authStorage = await AuthStorage.create(":memory:");
+		authStorage.keys.setRuntime("managed-primary", "test-key");
+		const built = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.inMemory(tempDir),
+			authStorage,
+			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.yml")),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			model: buildModel({
+				id: "wrapper-model",
+				name: "Wrapper Model",
+				api: "anthropic-messages",
+				provider: "managed-primary",
+				baseUrl: "http://127.0.0.1:8080/v1",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 4096,
+				maxTokens: 1024,
+			} as ModelSpec<Api>) as Model<Api>,
+			disableExtensionDiscovery: true,
+			skills: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+		});
+		session = built.session;
+		return built.session;
+	}
+
+	it("forwards a one-shot settle wait past its early beginDispose", async () => {
+		const live = await createWrappedSession();
+		const gate = Promise.withResolvers<void>();
+		let aborted = false;
+		const run = live.runAutolearnCapture(
+			async signal => {
+				if (signal.aborted) aborted = true;
+				else signal.addEventListener("abort", () => (aborted = true));
+				await gate.promise;
+				return true;
+			},
+			{ settle: true },
+		);
+
+		// The wrapper calls beginDispose() itself before it awaits the lifecycle
+		// teardown, so the settle intent has to ride the options into that call.
+		const disposing = live.dispose({ awaitAutolearnSettle: true });
+		await new Promise(resolve => setTimeout(resolve, 25));
+		expect(aborted).toBe(false);
+
+		gate.resolve();
+		await disposing;
+		expect(await run).toBe(true);
 	});
 });

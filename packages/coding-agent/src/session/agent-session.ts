@@ -5919,9 +5919,11 @@ export class AgentSession implements SettingsScope {
 	 *
 	 * Wrappers that await other teardown before delegating to `dispose()` MUST
 	 * call this before their first await — otherwise work started in that async
-	 * gap slips past the disposal guards.
+	 * gap slips past the disposal guards, so such a wrapper must pass the dispose
+	 * options it holds: the settle intent is latched here, before the abort hook.
 	 */
-	beginDispose(): void {
+	beginDispose(options: Pick<AgentSessionDisposeOptions, "awaitAutolearnSettle"> = {}): void {
+		this.#awaitAutolearnSettle = options.awaitAutolearnSettle === true;
 		this.#isDisposed = true;
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.#modelDiscoveryAbortController.abort();
@@ -6089,9 +6091,7 @@ export class AgentSession implements SettingsScope {
 	}
 
 	async #doDispose(options: AgentSessionDisposeOptions = {}): Promise<void> {
-		// Set before beginDispose() so its abort hook can see it.
-		this.#awaitAutolearnSettle = options.awaitAutolearnSettle === true;
-		this.beginDispose();
+		this.beginDispose(options);
 		// Stop cache warming before the drain windows below: an armed tick firing
 		// mid-dispose would issue a paid warm request and persist usage into the
 		// closing session writer.

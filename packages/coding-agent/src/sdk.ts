@@ -187,6 +187,7 @@ import {
 } from "./secrets";
 import {
 	AgentSession,
+	type AgentSessionDisposeOptions,
 	type InitialRetryFallbackState,
 	MCP_DISCOVERY_TURN_WAIT_MS,
 	type PlanYolo,
@@ -1651,6 +1652,30 @@ export interface AutoLearnCaptureRunnerOptions {
 }
 
 /**
+ * Convert an agent transcript for one wire model, dropping image blocks that
+ * model would reject: the user blocked images (`images.blockImages`), or the
+ * model's wire sends none — a text-only model 400s on historical image blocks
+ * (#5400), and routes that strip images would normalize and publish them for
+ * nothing.
+ *
+ * The model is a parameter, not read from the live agent, because a private
+ * pass runs against its own model: the auto-learn scribe may be text-only while
+ * the primary session sees images.
+ */
+export function convertMessagesForWireModel(
+	messages: AgentMessage[],
+	wireModel: Model | undefined,
+	blockImages: boolean,
+): Message[] {
+	const converted = convertToLlm(messages);
+	if (blockImages) return replaceLlmImagesWithText(converted, "Image reading is disabled.");
+	if (wireModel && !sendsImageInputOnWire(wireModel)) {
+		return replaceLlmImagesWithText(converted, "[image omitted: the active model does not support image input]");
+	}
+	return converted;
+}
+
+/**
  * Reserve for the parts of a pass request the transcript does not cover: the
  * system prompt, the tool schemas, and the reply. Scribes run without the
  * session's overflow-compaction loop, so a snapshot that busts the model's
@@ -1716,6 +1741,12 @@ export function createAutoLearnCaptureRunner(
 	options: AutoLearnCaptureRunnerOptions,
 ): (content: string, signal?: AbortSignal) => Promise<boolean> {
 	return async (content, signal) => {
+		// Freeze the transcript before any await. The pass describes the session as
+		// it settled; a turn the user starts while the model resolves or the skill
+		// inventory is read must not be ingested here — the new turn gets its own
+		// stop, and this pass cannot be re-run to take it back.
+		const sourceMessages = [...options.sourceAgent.state.messages];
+		const sourceSystemPrompt = [...options.sourceAgent.state.systemPrompt];
 		const captureTools = options.captureTools();
 		if (captureTools.length === 0 || signal?.aborted) return false;
 		const selection = options.selection ? await options.selection() : undefined;
@@ -1728,7 +1759,7 @@ export function createAutoLearnCaptureRunner(
 		const stripInheritedReasoning =
 			captureModel.api === "openai-responses" ||
 			(captureModel.api === "openrouter" && $env.PI_OPENROUTER_RESPONSES !== "0");
-		const captureMessages = options.sourceAgent.state.messages.map((message): AgentMessage => {
+		const captureMessages = sourceMessages.map((message): AgentMessage => {
 			if (message.role === "assistant") {
 				let content = message.content;
 				if (
@@ -1754,12 +1785,13 @@ export function createAutoLearnCaptureRunner(
 			return message;
 		});
 		const snapshot = fitPassSnapshotToContext(captureMessages, captureModel);
-		const systemPrompt = [...options.sourceAgent.state.systemPrompt];
+		const systemPrompt = sourceSystemPrompt;
 		if (systemPromptAppend) systemPrompt.push(systemPromptAppend);
 		if (snapshot.omittedNote) systemPrompt.push(snapshot.omittedNote);
 		// A role that names its own level owns it: the primary turn's effort is no
-		// business of a pass the user configured separately. `:off` on the role
-		// disables reasoning instead of inheriting the primary's effort.
+		// business of a pass the user configured separately. An explicit role level
+		// also decides reasoning by itself — a primary session running `:off` must
+		// not keep reasoning disabled for a scribe whose role asked for `:low`.
 		const roleLevel = concreteThinkingLevel(selection?.thinkingLevel);
 		const captureAgent = options.createAgent({
 			initialState: {
@@ -1769,7 +1801,8 @@ export function createAutoLearnCaptureRunner(
 					captureModel,
 					toReasoningEffort(roleLevel) ?? options.sourceAgent.state.thinkingLevel,
 				),
-				disableReasoning: shouldDisableReasoning(roleLevel) || options.sourceAgent.state.disableReasoning,
+				disableReasoning:
+					roleLevel === undefined ? options.sourceAgent.state.disableReasoning : shouldDisableReasoning(roleLevel),
 				tools: captureTools,
 				messages: snapshot.messages,
 			},
@@ -4429,25 +4462,17 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// whose blocks would otherwise be normalized and published for nothing.
 		// Read both dynamically so a `/model` switch or setting change takes
 		// effect on the next turn.
-		const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
-			const converted = convertToLlm(messages);
-			if (cfgImagesBlockImages.get(settings)) {
-				return replaceLlmImagesWithText(converted, "Image reading is disabled.");
-			}
-			const activeModel = agent?.state.model ?? model;
-			if (activeModel && !sendsImageInputOnWire(activeModel)) {
-				return replaceLlmImagesWithText(
-					converted,
-					"[image omitted: the active model does not support image input]",
-				);
-			}
-			return converted;
-		};
+		const convertToLlmWithBlockImages = (messages: AgentMessage[], wireModel?: Model): Message[] =>
+			convertMessagesForWireModel(
+				messages,
+				wireModel ?? agent?.state.model ?? model,
+				cfgImagesBlockImages.get(settings),
+			);
 
 		// Final convertToLlm: live provider replay drops API-level refusal errors,
 		// then applies secret obfuscation to the remaining outbound context.
-		const convertToLlmFinal = (messages: AgentMessage[]): Message[] => {
-			const converted = filterProviderReplayMessages(convertToLlmWithBlockImages(messages));
+		const convertToLlmFinal = (messages: AgentMessage[], wireModel?: Model): Message[] => {
+			const converted = filterProviderReplayMessages(convertToLlmWithBlockImages(messages, wireModel));
 			if (!obfuscator?.hasSecrets()) return converted;
 			return obfuscateMessages(obfuscator, converted);
 		};
@@ -5290,12 +5315,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		{
 			const originalDispose = session.dispose.bind(session);
 			let tinyClientReleased = false;
-			session.dispose = async () => {
+			session.dispose = async (disposeOptions?: AgentSessionDisposeOptions) => {
 				try {
 					// Reject new session work (eval starts) the moment disposal
 					// begins — the lifecycle await below opens an async gap before
-					// AgentSession.dispose() would otherwise set its guards.
-					session.beginDispose();
+					// AgentSession.dispose() would otherwise set its guards. The
+					// options must ride both calls: the settle intent has to be
+					// latched before this early beginDispose() aborts the pass.
+					session.beginDispose(disposeOptions);
 					if (agentKind === "main") {
 						// Top-level teardown owns the global agent lifecycle: park timers,
 						// adopted subagent sessions, revivers. Tear it down while shared
@@ -5314,7 +5341,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						await vibeRegistry.suspendScope(vibeRegistry.ownerScope(vibeParentSession), scopedAsyncJobManager);
 						await AgentLifecycleManager.global().dispose();
 					}
-					await originalDispose();
+					await originalDispose(disposeOptions);
 				} finally {
 					// The tiny-model client is a process singleton shared by every session.
 					// Only the session that owns process state drops its connections, once:
@@ -5481,7 +5508,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					...captureOptions,
 					cwd: sessionManager.getCwd(),
 					cwdResolver: () => sessionManager.getCwd(),
-					convertToLlm: convertToLlmFinal,
+					// Convert against the pass model, not the live primary one: the
+					// scribe may be text-only while the primary sees images, and its
+					// provider would reject the snapshotted image blocks.
+					convertToLlm: messages => convertToLlmFinal(messages, captureModel),
 					transformContext: async messages => wrapSteeringForModel(messages),
 					transformProviderContext: async (context, transformModel) => {
 						let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;

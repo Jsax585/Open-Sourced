@@ -4,6 +4,7 @@ import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-cor
 import type { AssistantMessage, FetchImpl, Model, ProviderSessionState, Usage } from "@oh-my-pi/pi-ai";
 import { streamGoogle } from "@oh-my-pi/pi-ai/providers/google";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import type { ResponseInput, ResponseOutputItem } from "@oh-my-pi/pi-ai/providers/openai-responses-wire";
 import { createOpenAIResponsesHistoryPayload } from "@oh-my-pi/pi-ai/utils";
@@ -629,6 +630,91 @@ describe("isolated auto-learn capture", () => {
 			expect(sourceAgent.state.messages).toEqual(original);
 		});
 	}
+
+	it("freezes the source transcript before resolving the pass model", async () => {
+		const model = googleInteractionsModel();
+		const sourceAgent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["Primary system prompt"],
+				tools: [],
+				messages: [{ role: "user", content: "settled turn", timestamp: 1 }],
+			},
+		});
+		const release = Promise.withResolvers<void>();
+		let capturedMessages: AgentMessage[] | undefined;
+		let capturedSystemPrompt: string[] | undefined;
+		const runCapture = createAutoLearnCaptureRunner({
+			sourceAgent,
+			captureTools: () => [captureTool("manage_skill", "Manage skills")],
+			selection: async () => {
+				await release.promise;
+				return { model };
+			},
+			createAgent: options => {
+				capturedMessages = options.initialState?.messages;
+				capturedSystemPrompt = options.initialState?.systemPrompt;
+				return new Agent({
+					...options,
+					convertToLlm,
+					streamFn: createMockModel({ handler: () => ({ content: ["Captured."] }) }).stream,
+				});
+			},
+		});
+
+		const pass = runCapture("Automated scribe prompt");
+		// The user starts the next turn while the pass is still setting up.
+		sourceAgent.state.messages.push({ role: "user", content: "next turn", timestamp: 2 });
+		sourceAgent.state.systemPrompt.push("late system block");
+		release.resolve();
+		await pass;
+
+		// The pass reads the session as it settled; the new turn gets its own stop.
+		expect(JSON.stringify(capturedMessages)).toContain("settled turn");
+		expect(JSON.stringify(capturedMessages)).not.toContain("next turn");
+		expect(capturedSystemPrompt).toEqual(["Primary system prompt"]);
+	});
+
+	it("lets the role's own thinking level decide reasoning for the pass", async () => {
+		const model = googleInteractionsModel();
+		const captureInitialState = (selection: { model: Model; thinkingLevel?: ThinkingLevel } | undefined) => {
+			const sourceAgent = new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["Primary system prompt"],
+					tools: [],
+					messages: [{ role: "user", content: "settled turn", timestamp: 1 }],
+					// The primary session runs with reasoning disabled.
+					disableReasoning: true,
+				},
+			});
+			let captured: { thinkingLevel?: ThinkingLevel; disableReasoning?: boolean } | undefined;
+			const runCapture = createAutoLearnCaptureRunner({
+				sourceAgent,
+				captureTools: () => [captureTool("manage_skill", "Manage skills")],
+				selection: () => selection,
+				createAgent: options => {
+					captured = options.initialState;
+					return new Agent({
+						...options,
+						convertToLlm,
+						streamFn: createMockModel({ handler: () => ({ content: ["Captured."] }) }).stream,
+					});
+				},
+			});
+			return { runCapture, captured: () => captured };
+		};
+
+		const withLevel = captureInitialState({ model, thinkingLevel: ThinkingLevel.Low });
+		await withLevel.runCapture("Automated scribe prompt");
+		expect(withLevel.captured()?.thinkingLevel).toBe(ThinkingLevel.Low);
+		// A role that asked for an effort outranks the primary session's `:off`.
+		expect(withLevel.captured()?.disableReasoning).toBe(false);
+
+		const withoutLevel = captureInitialState({ model });
+		await withoutLevel.runCapture("Automated scribe prompt");
+		expect(withoutLevel.captured()?.disableReasoning).toBe(true);
+	});
 
 	it("uses constrained tools and sends full Google context without the primary anchor", async () => {
 		const model = googleInteractionsModel();
