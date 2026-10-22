@@ -125,6 +125,13 @@ connection. Successful idle connections can be reused; failure or cancellation
 retires the connection. `ProviderSessionState.releaseSession` and `close` own
 teardown. Without provider session state, the connection closes after the request.
 
+Copilot upgrade negotiation uses the shared HTTP identity classifier and credential-scoped
+cache before any `response.create`. To expose rejected HTTP upgrade responses, it enables
+the transport's inspection capability backed by Bun's built-in Node-WS interface; other
+providers retain the DOM interface. The lease keeps the rejected response body alive
+until classification finishes, and closes it on cancellation or release. An alternate
+identity attempt therefore precedes generation rather than replaying a request.
+
 Standard WebSocket requests replay full history and never consult or update the
 HTTP `previous_response_id` baseline. Reconnection therefore requires no native
 chain reconstruction. The provider rejects injected response anchors and background

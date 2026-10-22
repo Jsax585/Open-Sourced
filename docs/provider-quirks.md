@@ -942,6 +942,11 @@ Provider-specific overrides in `packages/catalog/src/compat/rules/providers/gith
 - Provider defaults: `supportsStrictMode=true`, `disableStrictTools=true`, `supportsContextManagement=false`.
 
 - **Copilot wire identity**: `packages/catalog/src/wire/github-copilot.ts` uses `User-Agent: copilot/1.0.82`, matching `Editor-Version`, `Copilot-Integration-Id: copilot-developer-cli`, `Copilot-Harness-Id: copilot-sdk`, and Copilot API version `2026-08-01`. Chat defaults to `copilot-chat`, allows a `COPILOT_INTEGRATION_ID` pin, and can retry once with the CLI integration on policy denial. Discovery keeps the CLI identity; GitHub REST requests do not receive the Copilot API-version header.
+- **Responses WS identity negotiation**: Standard Responses WebSocket upgrades share the HTTP
+  identity-denial gate and credential-scoped success cache. Only HTTP 403 or HTTP 400 with
+  `model_not_supported` permits one alternate identity before generation. A cached CLI identity
+  can switch back to Chat on policy change; explicit identity pins and unrelated errors do not
+  negotiate. A rejected alternate clears stale cached identity, without HTTP fallback.
 - **Dynamic Copilot Headers & Initiator**: `buildCopilotDynamicHeaders` (`packages/ai/src/providers/github-copilot-headers.ts`) injects per-request headers `X-Initiator` (`"user"` vs `"agent"` inferred from message history via `inferCopilotInitiator` or overridden via `getCopilotInitiatorOverride`), `Openai-Intent: conversation-edits`, and `Copilot-Vision-Request: true` when `hasCopilotVisionInput` detects image payloads in user or tool result blocks.
 - **Base URL & Endpoint Resolution**: `resolveGitHubCopilotBaseUrl` (`packages/ai/src/providers/github-copilot-headers.ts`) and `parseGitHubCopilotApiKey` (`packages/catalog/src/wire/github-copilot.ts`) parse custom `enterpriseUrl` and `apiEndpoint` properties embedded in API keys or credentials, defaulting to `https://api.githubcopilot.com` (`PERSONAL_GITHUB_COPILOT_BASE_URL`).
 - **OpenAI & Responses Compat Flags**:

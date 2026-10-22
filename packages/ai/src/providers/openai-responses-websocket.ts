@@ -1,13 +1,26 @@
+import type { IncomingMessage } from "node:http";
+import { Readable } from "node:stream";
 import type { ServerSentEvent } from "@oh-my-pi/pi-utils";
 import { AbortError } from "../error/abort";
 import { getProxyForUrl } from "../utils/proxy";
 import { notifyRawSseEvent } from "../utils/sse-debug";
-import { extractWebSocketHandshakeHeaders, toWebSocketUrl } from "../utils/websocket";
+import { extractWebSocketHandshakeHeaders, toWebSocketHeaders, toWebSocketUrl } from "../utils/websocket";
 import type { ResponseStreamEvent } from "./openai-responses-wire";
 
 const IDLE_REUSE_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 30_000;
 const MESSAGE_QUEUE_CAPACITY = 4096;
+
+interface UpgradeInspectableWebSocket extends Bun.WebSocket {
+	once(event: "upgrade", listener: (response: IncomingMessage) => void): this;
+	once(event: "unexpected-response", listener: (request: unknown, response: IncomingMessage) => void): this;
+}
+
+export class OpenAIResponsesWebSocketUpgradeError extends Error {
+	constructor(readonly response: Response) {
+		super(`OpenAI responses WebSocket upgrade rejected (HTTP ${response.status})`);
+	}
+}
 
 /** One response.create at a time. A failed/cancelled request always retires its socket. */
 export class OpenAIResponsesWebSocketConnection {
@@ -15,6 +28,7 @@ export class OpenAIResponsesWebSocketConnection {
 	#url: string;
 	#provider: string;
 	#socket?: Bun.WebSocket;
+	#handshakeResponse?: IncomingMessage;
 	#queue: Array<ResponseStreamEvent | Error> = [];
 	#wake?: () => void;
 	#rejectConnect?: (reason: Error) => void;
@@ -25,7 +39,12 @@ export class OpenAIResponsesWebSocketConnection {
 	#lastResponseId?: string;
 	handshakeHeaders?: Headers;
 
-	constructor(url: string, headers: Record<string, string>, provider: string) {
+	constructor(
+		url: string,
+		headers: Record<string, string>,
+		provider: string,
+		readonly captureUpgradeResponse = false,
+	) {
 		this.#url = toWebSocketUrl(url);
 		this.headers = headers;
 		this.#provider = provider;
@@ -43,16 +62,53 @@ export class OpenAIResponsesWebSocketConnection {
 		this.#removeAbort = () => signal.removeEventListener("abort", onAbort);
 		if (this.#socket?.readyState === WebSocket.OPEN && !this.#failure) return;
 		if (this.#failure) throw this.#failure;
-		const socket = new (WebSocket as unknown as new (url: string, opts: Bun.WebSocketOptions) => Bun.WebSocket)(
-			this.#url,
-			{ headers: this.headers, proxy: getProxyForUrl(this.#provider, new URL(this.#url)) },
-		);
+		const socketOptions: Bun.WebSocketOptions = {
+			headers: this.headers,
+			proxy: getProxyForUrl(this.#provider, new URL(this.#url)),
+		};
+		let socket: Bun.WebSocket;
+		if (this.captureUpgradeResponse) {
+			// Bun's built-in Node-WS interface exposes rejected upgrade responses;
+			// the DOM interface only reports "Expected 101 status code".
+			const InspectableSocket = require("ws") as new (
+				url: string,
+				options: Bun.WebSocketOptions,
+			) => UpgradeInspectableWebSocket;
+			const inspectableSocket = new InspectableSocket(this.#url, socketOptions);
+			inspectableSocket.once("upgrade", response => {
+				this.handshakeHeaders = toWebSocketHeaders(response.headers);
+			});
+			inspectableSocket.once("unexpected-response", (_request, response) => {
+				if (this.#failure) {
+					response.destroy();
+					return;
+				}
+				this.#handshakeResponse = response;
+				try {
+					const rejected = new Response(Readable.toWeb(response) as ReadableStream<Uint8Array>, {
+						status: response.statusCode!,
+						headers: toWebSocketHeaders(response.headers),
+					});
+					// The lease owns this response until release; keep its body alive
+					// while the provider classifies a pre-request rejection.
+					this.#rejectConnect?.(new OpenAIResponsesWebSocketUpgradeError(rejected));
+				} catch (error) {
+					this.close(error instanceof Error ? error : new Error(String(error)));
+				}
+			});
+			socket = inspectableSocket;
+		} else {
+			socket = new (WebSocket as unknown as new (url: string, opts: Bun.WebSocketOptions) => Bun.WebSocket)(
+				this.#url,
+				socketOptions,
+			);
+		}
 		const { promise, resolve, reject } = Promise.withResolvers<void>();
 		this.#rejectConnect = reject;
 		this.#socket = socket;
 		socket.binaryType = "nodebuffer";
 		socket.onopen = event => {
-			this.handshakeHeaders = extractWebSocketHandshakeHeaders(socket, event);
+			this.handshakeHeaders = extractWebSocketHandshakeHeaders(socket, event) ?? this.handshakeHeaders;
 			this.#rejectConnect = undefined;
 			resolve();
 		};
@@ -152,6 +208,8 @@ export class OpenAIResponsesWebSocketConnection {
 	close(error = new Error("OpenAI responses WebSocket released")): void {
 		if (this.#failure) return;
 		this.#failure = error;
+		this.#handshakeResponse?.destroy();
+		this.#handshakeResponse = undefined;
 		this.#rejectConnect?.(error);
 		// Preserve already-received frames, including a terminal event before an eager close.
 		this.#queue.push(error);
@@ -187,6 +245,7 @@ export class OpenAIResponsesWebSocketPool {
 		provider: string;
 		modelId: string;
 		sessionId?: string;
+		captureUpgradeResponse?: boolean;
 	}): OpenAIResponsesWebSocketLease {
 		const key = args.sessionId ? `${args.url}\u0000${args.modelId}\u0000${args.sessionId}` : undefined;
 		let entry = key ? this.#sessions.get(key) : undefined;
@@ -198,7 +257,11 @@ export class OpenAIResponsesWebSocketPool {
 			const sameHeaders =
 				headerNames.length === Object.keys(previousHeaders).length &&
 				headerNames.every(name => args.headers[name] === previousHeaders[name]);
-			if (!entry.connection.reusable || !sameHeaders) {
+			if (
+				!entry.connection.reusable ||
+				!sameHeaders ||
+				entry.connection.captureUpgradeResponse !== (args.captureUpgradeResponse ?? false)
+			) {
 				entry.connection.close();
 				this.#sessions.delete(key!);
 				entry = undefined;
@@ -207,7 +270,12 @@ export class OpenAIResponsesWebSocketPool {
 		if (!entry || entry.busy) {
 			entry = {
 				sessionId: args.sessionId,
-				connection: new OpenAIResponsesWebSocketConnection(args.url, args.headers, args.provider),
+				connection: new OpenAIResponsesWebSocketConnection(
+					args.url,
+					args.headers,
+					args.provider,
+					args.captureUpgradeResponse,
+				),
 				busy: false,
 			};
 			if (retained) this.#sessions.set(key!, entry);

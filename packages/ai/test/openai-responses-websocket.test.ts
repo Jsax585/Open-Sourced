@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { ServerWebSocket } from "bun";
 import {
+	clearCopilotIntegrationCache,
+	getCachedCopilotIntegrationId,
+	getCopilotIntegrationCacheKey,
+	rememberCopilotWorkingIntegrationId,
+} from "@oh-my-pi/pi-ai/providers/github-copilot-headers";
+import { COPILOT_CAPI_IDENTITY_HEADERS, COPILOT_CHAT_INTEGRATION_ID } from "@oh-my-pi/pi-catalog/wire/github-copilot";
+import {
 	streamOpenAIResponses,
 	openAIResponsesReplaysNativeHistory,
 	type OpenAIResponsesOptions,
@@ -45,7 +52,16 @@ function send(socket: ServerWebSocket<{ id: number }>, events: Record<string, un
 
 function endpoint(
 	behavior?: (socket: ServerWebSocket<{ id: number }>, body: Record<string, unknown>, index: number) => void,
+	setup?: { provider?: "github-copilot"; rejectUpgrade?: (request: Request) => Response | undefined },
 ) {
+	if (setup?.provider === "github-copilot") {
+		const previous = Bun.env.COPILOT_INTEGRATION_ID;
+		delete Bun.env.COPILOT_INTEGRATION_ID;
+		resources.push(async () => {
+			if (previous === undefined) delete Bun.env.COPILOT_INTEGRATION_ID;
+			else Bun.env.COPILOT_INTEGRATION_ID = previous;
+		});
+	}
 	const requests: Array<{ connection: number; body: Record<string, unknown> }> = [];
 	const upgrades: Array<{ path: string; headers: Headers }> = [];
 	const httpRequests: Array<Record<string, unknown>> = [];
@@ -60,6 +76,8 @@ function endpoint(
 		async fetch(request, server) {
 			if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
 				upgrades.push({ path: new URL(request.url).pathname, headers: request.headers });
+				const rejection = setup?.rejectUpgrade?.(request);
+				if (rejection) return rejection;
 				if (server.upgrade(request, { data: { id: ++opened } })) return undefined;
 				return new Response("Upgrade failed", { status: 400 });
 			}
@@ -91,7 +109,9 @@ function endpoint(
 		},
 	});
 	const model: Model<"openai-responses"> = {
-		...(getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">),
+		...((setup?.provider === "github-copilot"
+			? getBundledModel("github-copilot", "gpt-5.4")
+			: getBundledModel("openai", "gpt-5-mini")) as Model<"openai-responses">),
 		baseUrl: `http://127.0.0.1:${server.port}/v1`,
 	};
 	const context: Context = { messages: [{ role: "user", content: "Hello", timestamp: 1 }] };
@@ -105,6 +125,10 @@ function endpoint(
 	resources.push(async () => {
 		for (const state of providerSessionState.values()) state.close();
 		await server.stop(true);
+		if (setup?.provider === "github-copilot") {
+			const cacheKey = getCopilotIntegrationCacheKey("test-key", model.baseUrl);
+			if (cacheKey) clearCopilotIntegrationCache(cacheKey);
+		}
 	});
 	return {
 		model,
@@ -126,6 +150,130 @@ function endpoint(
 
 // These tests exercise the public provider stream against real Bun HTTP/WS endpoints.
 describe("standard OpenAI Responses WebSocket opt-in", () => {
+	for (const status of [400, 403]) {
+		it(`negotiates a Copilot ${status} identity denial before generation and reuses the learned connection`, async () => {
+			const cliId = COPILOT_CAPI_IDENTITY_HEADERS["Copilot-Integration-Id"];
+			let allowed: string = cliId;
+			const fixture = endpoint(undefined, {
+				provider: "github-copilot",
+				rejectUpgrade: request =>
+					request.headers.get("Copilot-Integration-Id") === allowed
+						? undefined
+						: Response.json({ error: { code: "model_not_supported" } }, { status }),
+			});
+			const options = { ...fixture.options, preferWebsockets: true };
+			const key = getCopilotIntegrationCacheKey("test-key", fixture.model.baseUrl);
+			for (const turn of [1, 2]) {
+				const result = await streamOpenAIResponses(fixture.model, fixture.context, options).result();
+				expect(result.stopReason).toBe("stop");
+				expect(result.content).toMatchObject([{ type: "text", text: "WS" }]);
+				expect(fixture.requests).toHaveLength(turn);
+				expect(fixture.upgrades).toHaveLength(2);
+			}
+			expect(getCachedCopilotIntegrationId(key)).toBe(cliId);
+			expect(fixture.upgrades.map(upgrade => upgrade.headers.get("Copilot-Integration-Id"))).toEqual([
+				COPILOT_CHAT_INTEGRATION_ID,
+				cliId,
+			]);
+			for (const state of fixture.providerSessionState.values()) state.releaseSession?.("main");
+			allowed = COPILOT_CHAT_INTEGRATION_ID;
+			const afterPolicyChange = await streamOpenAIResponses(fixture.model, fixture.context, options).result();
+			expect(afterPolicyChange.stopReason).toBe("stop");
+			expect(fixture.requests).toHaveLength(3);
+			expect(fixture.upgrades.map(upgrade => upgrade.headers.get("Copilot-Integration-Id"))).toEqual([
+				COPILOT_CHAT_INTEGRATION_ID,
+				cliId,
+				cliId,
+				COPILOT_CHAT_INTEGRATION_ID,
+			]);
+			expect(getCachedCopilotIntegrationId(key)).toBe(COPILOT_CHAT_INTEGRATION_ID);
+			expect(fixture.httpRequests).toHaveLength(0);
+		});
+	}
+
+	for (const scenario of [
+		{ name: "pinned identity", status: 403, code: "model_not_supported", pinned: true },
+		{ name: "unrelated 400", status: 400, code: "invalid_parameter", pinned: false },
+		{ name: "authentication failure", status: 401, code: "unauthorized", pinned: false },
+		{ name: "server failure", status: 503, code: "unavailable", pinned: false },
+	]) {
+		it(`does not retry a Copilot upgrade on ${scenario.name}`, async () => {
+			const fixture = endpoint(undefined, {
+				provider: "github-copilot",
+				rejectUpgrade: () => Response.json({ error: { code: scenario.code } }, { status: scenario.status }),
+			});
+			const result = await streamOpenAIResponses(fixture.model, fixture.context, {
+				...fixture.options,
+				preferWebsockets: true,
+				headers: scenario.pinned ? { "Copilot-Integration-Id": COPILOT_CHAT_INTEGRATION_ID } : undefined,
+			}).result();
+			expect(result.stopReason).toBe("error");
+			expect(fixture.upgrades).toHaveLength(1);
+			expect(fixture.requests).toHaveLength(0);
+			expect(fixture.httpRequests).toHaveLength(0);
+			expect(
+				getCachedCopilotIntegrationId(getCopilotIntegrationCacheKey("test-key", fixture.model.baseUrl)),
+			).toBeUndefined();
+		});
+	}
+
+	it("stops after one rejected alternate Copilot upgrade and clears its stale cached identity", async () => {
+		const fixture = endpoint(undefined, {
+			provider: "github-copilot",
+			rejectUpgrade: () => new Response("Denied", { status: 403 }),
+		});
+		const key = getCopilotIntegrationCacheKey("test-key", fixture.model.baseUrl);
+		const cliId = COPILOT_CAPI_IDENTITY_HEADERS["Copilot-Integration-Id"];
+		rememberCopilotWorkingIntegrationId(key, cliId);
+		const result = await streamOpenAIResponses(fixture.model, fixture.context, {
+			...fixture.options,
+			preferWebsockets: true,
+		}).result();
+		expect(result.stopReason).toBe("error");
+		expect(fixture.upgrades.map(upgrade => upgrade.headers.get("Copilot-Integration-Id"))).toEqual([
+			cliId,
+			COPILOT_CHAT_INTEGRATION_ID,
+		]);
+		expect(fixture.requests).toHaveLength(0);
+		expect(fixture.httpRequests).toHaveLength(0);
+		expect(getCachedCopilotIntegrationId(key)).toBeUndefined();
+	});
+
+	it("cancels an incomplete Copilot upgrade body without trying another identity", async () => {
+		const received = Promise.withResolvers<void>();
+		const cancelled = Promise.withResolvers<void>();
+		const fixture = endpoint(undefined, {
+			provider: "github-copilot",
+			rejectUpgrade: () => {
+				received.resolve();
+				return new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.enqueue(new TextEncoder().encode('{"error":'));
+						},
+						cancel() {
+							cancelled.resolve();
+						},
+					}),
+					{ status: 400 },
+				);
+			},
+		});
+		const controller = new AbortController();
+		const result = streamOpenAIResponses(fixture.model, fixture.context, {
+			...fixture.options,
+			preferWebsockets: true,
+			signal: controller.signal,
+		}).result();
+		await received.promise;
+		controller.abort();
+		expect((await result).stopReason).toBe("aborted");
+		await cancelled.promise;
+		expect(fixture.upgrades).toHaveLength(1);
+		expect(fixture.requests).toHaveLength(0);
+		expect(fixture.httpRequests).toHaveLength(0);
+	});
+
 	it("uses HTTP/SSE when unconfigured", async () => {
 		const fixture = endpoint();
 		const result = await streamOpenAIResponses(fixture.model, fixture.context, fixture.options).result();

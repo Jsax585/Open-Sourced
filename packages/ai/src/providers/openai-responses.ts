@@ -73,7 +73,13 @@ import {
 	rememberOpenAIReasoningEffortFallback,
 	resolveOpenAIReasoningEffortFallback,
 } from "./openai-reasoning-fallback";
-import { resolveCopilotRequestIdentity, wrapFetchForCopilotFallback } from "./github-copilot-headers";
+import {
+	clearCopilotIntegrationCache,
+	rememberCopilotWorkingIntegrationId,
+	resolveCopilotFallbackIdentity,
+	resolveCopilotRequestIdentity,
+	wrapFetchForCopilotFallback,
+} from "./github-copilot-headers";
 import type {
 	Tool as OpenAITool,
 	ReasoningEffort,
@@ -82,7 +88,11 @@ import type {
 	ResponseInputContent,
 	ResponseStreamEvent,
 } from "./openai-responses-wire";
-import { type OpenAIResponsesWebSocketLease, OpenAIResponsesWebSocketPool } from "./openai-responses-websocket";
+import {
+	type OpenAIResponsesWebSocketLease,
+	OpenAIResponsesWebSocketPool,
+	OpenAIResponsesWebSocketUpgradeError,
+} from "./openai-responses-websocket";
 import {
 	applyCommonResponsesSamplingParams,
 	applyOpenAIExtraBody,
@@ -880,13 +890,17 @@ const streamOpenAIResponsesOnce = (
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			const requestUrl = `${resolvedBaseUrl}/responses`;
-			if (preferWebsockets) {
-				webSocketLease = (providerSessionState?.webSockets ?? new OpenAIResponsesWebSocketPool()).acquire({
+			const webSocketPool = preferWebsockets
+				? (providerSessionState?.webSockets ?? new OpenAIResponsesWebSocketPool())
+				: undefined;
+			if (webSocketPool) {
+				webSocketLease = webSocketPool.acquire({
 					url: requestUrl,
 					headers,
 					provider: model.provider,
 					modelId: model.id,
 					sessionId: providerSessionState ? routingSessionId : undefined,
+					captureUpgradeResponse: model.provider === "github-copilot",
 				});
 			}
 			const applyPayloadReplacement = async (requestParams: OpenAIResponsesSamplingParams) => {
@@ -933,8 +947,47 @@ const streamOpenAIResponsesOnce = (
 						if ("background" in requestParams && requestParams.background === true) {
 							throw new Error("OpenAI responses WebSocket requests do not support background: true");
 						}
-						const connection = webSocketLease.connection;
-						await connection.open(requestSignal);
+						let connection = webSocketLease.connection;
+						try {
+							await connection.open(requestSignal);
+						} catch (error) {
+							if (
+								model.provider !== "github-copilot" ||
+								!(error instanceof OpenAIResponsesWebSocketUpgradeError) ||
+								requestSignal.aborted
+							)
+								throw error;
+							const alternate = await resolveCopilotFallbackIdentity(
+								error.response,
+								new Headers(headers).get("Copilot-Integration-Id"),
+								resolveCopilotRequestIdentity(options?.headers),
+								copilotCacheKey ? (copilotCacheSnapshot ?? undefined) : undefined,
+							);
+							if (!alternate) throw error;
+							const retryHeaders = { ...headers };
+							for (const name in retryHeaders) {
+								if (name.toLowerCase() === "copilot-integration-id") retryHeaders[name] = alternate;
+							}
+							webSocketLease.release();
+							webSocketLease = webSocketPool!.acquire({
+								url: requestUrl,
+								headers: retryHeaders,
+								provider: model.provider,
+								modelId: model.id,
+								sessionId: providerSessionState ? routingSessionId : undefined,
+								captureUpgradeResponse: true,
+							});
+							connection = webSocketLease.connection;
+							try {
+								await connection.open(requestSignal);
+							} catch (retryError) {
+								if (copilotCacheKey && retryError instanceof OpenAIResponsesWebSocketUpgradeError) {
+									clearCopilotIntegrationCache(copilotCacheKey);
+								}
+								throw retryError;
+							}
+							rememberCopilotWorkingIntegrationId(copilotCacheKey, alternate);
+						}
 						clearTimeout(requestTimeout);
 						if (options?.onResponse) {
 							await options.onResponse(
