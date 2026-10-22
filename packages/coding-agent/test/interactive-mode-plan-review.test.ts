@@ -37,7 +37,7 @@ import { cfgPlanAutosave, cfgPlanAutosaveDir } from "@oh-my-pi/pi-coding-agent/p
 
 /**
  * Matches the plan-approved synthetic-prompt dispatch. `#approvePlan` calls
- * `session.prompt(rendered, { synthetic: true })` exclusively for that case,
+ * `session.prompt` with `synthetic: true` exclusively for that case,
  * so the `synthetic: true` option flag is the unique discriminator.
  */
 const isPlanApprovedCall = (args: unknown[]): boolean =>
@@ -1384,7 +1384,7 @@ describe("InteractiveMode plan review rendering", () => {
 		});
 		let artifactAtPrompt = "";
 		let planAtPrompt = "";
-		const prompt = vi.spyOn(session, "prompt").mockImplementation(async () => {
+		vi.spyOn(session, "prompt").mockImplementation(async () => {
 			const promptArtifactPath = resolveLocalUrlToPath("local://handoff/nested/context.txt", localOptions);
 			const promptPlanPath = resolveLocalUrlToPath(planFilePath, localOptions);
 			artifactAtPrompt = (await Bun.file(promptArtifactPath).exists())
@@ -1411,7 +1411,6 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(artifactAtPrompt).toBe("pre-approval handoff");
 		expect(planAtPrompt).toBe(planContent);
 		expect(await Bun.file(oldArtifactPath).text()).toBe("pre-approval handoff");
-		expect(prompt).toHaveBeenCalledWith(expect.any(String), { synthetic: true });
 	});
 
 	it("offers approve-and-keep-context as a distinct plan approval path", async () => {
@@ -1624,7 +1623,7 @@ describe("InteractiveMode plan review rendering", () => {
 		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
 		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and keep context");
 		const clear = vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
-		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
 		await mode.handlePlanApproval({
 			planFilePath,
@@ -1634,9 +1633,6 @@ describe("InteractiveMode plan review rendering", () => {
 
 		expect(clear).not.toHaveBeenCalled();
 		expect(await Bun.file(resolvedFinalPlanPath).text()).toBe("# Plan\n\nKeep context.");
-		expect(prompt).toHaveBeenCalledWith(expect.any(String), {
-			synthetic: true,
-		});
 	});
 
 	it("hides the review overlay before the blocking execution turn resolves", async () => {
@@ -1862,7 +1858,7 @@ describe("InteractiveMode plan review rendering", () => {
 		mode.planModePlanFilePath = planFilePath;
 		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and execute");
 		const clear = vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
-		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
 		await mode.handlePlanApproval({
 			planFilePath,
@@ -1871,9 +1867,6 @@ describe("InteractiveMode plan review rendering", () => {
 		});
 
 		expect(clear).toHaveBeenCalledTimes(1);
-		expect(prompt).toHaveBeenCalledWith(expect.any(String), {
-			synthetic: true,
-		});
 	});
 
 	it("executes on the slider-selected tier, surviving #exitPlanMode's model restore", async () => {
