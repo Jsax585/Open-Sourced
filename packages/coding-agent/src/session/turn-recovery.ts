@@ -95,6 +95,7 @@ import {
 	cfgRetryUsageReservePct,
 	cfgRetryUsageReservePolicy,
 } from "./settings";
+import { combineSignals } from "@oh-my-pi/pi-utils/ptree";
 
 const THINKING_LOOP_REDIRECT_TYPE = "thinking-loop-redirect";
 const UNEXPECTED_STOP_MAX_RETRIES = 3;
@@ -343,6 +344,20 @@ type RetryPolicyOptions = {
 	preserveFailedTurn?: boolean;
 };
 
+type UnexpectedStopOptions = {
+	/** Settle a pending fallback verdict before direct queue continuations, without scheduling recovery. */
+	beforeContinuation?: boolean;
+	signal?: AbortSignal;
+};
+
+type UnexpectedStopVerdict = {
+	persistenceKey: string;
+	promptGeneration: number;
+	text: string;
+	request: string | undefined;
+	classification: boolean | undefined;
+};
+
 type UsageLimitOutcome = {
 	switchedCredential: boolean;
 	retryAfterMs: number;
@@ -380,6 +395,7 @@ export class TurnRecovery {
 	#settledAssistantResponses = new WeakSet<AssistantMessage>();
 	#emptyStopRetryCount = 0;
 	#unexpectedStopRetryCount = 0;
+	#unexpectedStopVerdict: UnexpectedStopVerdict | undefined;
 	#malformedFunctionCallRetryCount = 0;
 	#streamStallContinueCount = 0;
 	#acceptTerminalEmptyStopForPrompt = false;
@@ -522,6 +538,7 @@ export class TurnRecovery {
 	resetForNewPrompt(): void {
 		this.#emptyStopRetryCount = 0;
 		this.#unexpectedStopRetryCount = 0;
+		this.#unexpectedStopVerdict = undefined;
 		this.#malformedFunctionCallRetryCount = 0;
 		this.#streamStallContinueCount = 0;
 		this.#acceptTerminalEmptyStopForPrompt = false;
@@ -646,8 +663,8 @@ export class TurnRecovery {
 	}
 
 	/** Classifies suspicious terminal stops and schedules bounded recovery. */
-	handleUnexpectedAssistantStop(message: AssistantMessage): Promise<boolean> {
-		return this.#handleUnexpectedAssistantStop(message);
+	handleUnexpectedAssistantStop(message: AssistantMessage, options?: UnexpectedStopOptions): Promise<boolean> {
+		return this.#handleUnexpectedAssistantStop(message, options);
 	}
 
 	/**
@@ -1243,8 +1260,15 @@ export class TurnRecovery {
 			maxRetries: EMPTY_STOP_MAX_RETRIES,
 		});
 	}
-	async #handleUnexpectedAssistantStop(assistantMessage: AssistantMessage): Promise<boolean> {
+	async #handleUnexpectedAssistantStop(
+		assistantMessage: AssistantMessage,
+		options?: UnexpectedStopOptions,
+	): Promise<boolean> {
+		const beforeContinuation = options?.beforeContinuation ?? false;
+		const cachedVerdict = this.#unexpectedStopVerdict;
+		if (!beforeContinuation) this.#unexpectedStopVerdict = undefined;
 		const fallback = this.#activeRetryFallback;
+		if (beforeContinuation && !fallback?.awaitingUnexpectedStop) return false;
 		const fallbackGeneration = this.#retryFallbackGeneration;
 		const promptGeneration = this.#host.promptGeneration();
 		const mode = cfgFeaturesUnexpectedStopDetection.get(this.#host.settings);
@@ -1263,36 +1287,44 @@ export class TurnRecovery {
 			.filter((content): content is TextContent => content.type === "text")
 			.map(content => content.text)
 			.join("\n");
+		const hasText = hasNonWhitespace(text);
+		if (beforeContinuation && (mode !== "smart" || !hasText)) return false;
+		const sessionSignal = combineSignals(options?.signal, this.#host.unexpectedStopAbortSignal?.());
+		if (sessionSignal?.aborted) return false;
+		const request = mode === "smart" && hasText ? this.#latestOperatorRequest() : undefined;
+		const persistenceKey =
+			mode === "smart" && hasText && (beforeContinuation || cachedVerdict)
+				? sessionMessagePersistenceKey(assistantMessage)
+				: undefined;
+		let classification: boolean | undefined;
 
 		// A thinking-only terminal turn has no visible assistant message, so both
 		// mechanical and smart modes retry it directly, whether or not the provider
 		// exposed its reasoning text. Only a turn with visible text is gated on the
 		// mode and the judge. Tool-call turns never reach this path:
 		// isUnexpectedStopCandidate excludes them, including forced tools.
-		if (hasNonWhitespace(text)) {
-			if (mode === "mechanical") {
-				this.#unexpectedStopRetryCount = 0;
-				this.#acceptUnexpectedStopCompletion(fallback, fallbackGeneration, promptGeneration);
-				return false;
-			}
-			// This turn answers a stop nudge, which demands the next tool call or
-			// the final answer. Visible text without a tool call is that final
-			// answer; judging it again only chains no-op "nothing more to add" turns.
-			if (this.#unexpectedStopRetryCount > 0) {
-				this.#unexpectedStopRetryCount = 0;
-				this.#acceptUnexpectedStopCompletion(fallback, fallbackGeneration, promptGeneration);
-				return false;
-			}
+		if (!hasText) {
+			classification = true;
+		} else if (mode === "mechanical" || this.#unexpectedStopRetryCount > 0) {
+			// Visible text replying to a stop nudge is final; judging it again
+			// only chains no-op "nothing more to add" turns.
+			classification = false;
+		} else if (
+			cachedVerdict?.promptGeneration === promptGeneration &&
+			cachedVerdict.persistenceKey === persistenceKey &&
+			cachedVerdict.text === text &&
+			cachedVerdict.request === request
+		) {
+			classification = cachedVerdict.classification;
+		} else {
 			const controller = new AbortController();
 			const timeout = setTimeout(() => controller.abort(), this.#unexpectedStopJudgeTimeoutMs);
 			// Esc/session teardown must interrupt the extended judge wait: link the
 			// live session abort so abort() drains agent_end maintenance instead of
 			// blocking on a verdict the user no longer wants.
-			const sessionSignal = this.#host.unexpectedStopAbortSignal?.();
 			const onSessionAbort = (): void => controller.abort();
 			sessionSignal?.addEventListener("abort", onSessionAbort, { once: true });
-			const stop = { message: text, request: this.#latestOperatorRequest() };
-			let classification: boolean | undefined;
+			const stop = { message: text, request };
 			try {
 				classification = await classifyUnexpectedStop(stop, {
 					settings: this.#host.settings,
@@ -1308,17 +1340,30 @@ export class TurnRecovery {
 				clearTimeout(timeout);
 				sessionSignal?.removeEventListener("abort", onSessionAbort);
 			}
-
-			// The classifier maps aborts to undefined (no-retry); a session abort
-			// during the wait must also skip the retry counter and the nudge.
-			if (classification !== true || sessionSignal?.aborted === true) {
-				this.#unexpectedStopRetryCount = 0;
-				if (!sessionSignal?.aborted) {
-					this.#acceptUnexpectedStopCompletion(fallback, fallbackGeneration, promptGeneration);
-				}
-				return false;
-			}
 		}
+
+		// The turn-end original and agent-end snapshot share a persistence key.
+		// Keep the judge's exact question too: same-millisecond responses can
+		// collide on metadata while answering different requests.
+		if (
+			beforeContinuation &&
+			persistenceKey &&
+			this.#host.promptGeneration() === promptGeneration &&
+			!sessionSignal?.aborted
+		) {
+			this.#unexpectedStopVerdict = { persistenceKey, promptGeneration, text, request, classification };
+		}
+
+		// The classifier maps aborts to undefined (no-retry); a session abort
+		// during the wait must also skip the retry counter and the nudge.
+		if (classification !== true || sessionSignal?.aborted === true) {
+			this.#unexpectedStopRetryCount = 0;
+			if (!sessionSignal?.aborted) {
+				this.#acceptUnexpectedStopCompletion(fallback, fallbackGeneration, promptGeneration);
+			}
+			return false;
+		}
+		if (beforeContinuation) return true;
 
 		this.#unexpectedStopRetryCount++;
 		if (this.#unexpectedStopRetryCount > UNEXPECTED_STOP_MAX_RETRIES) {

@@ -2132,6 +2132,10 @@ export class AgentSession implements SettingsScope {
 				// not part of that ownership boundary.
 				await this.#waitForAssistantResponseSettlement(response);
 				if (signal?.aborted) return;
+				// Steering and follow-ups can dispatch before agent_end maintenance.
+				// Settle eligibility now, but leave recovery scheduling to agent_end.
+				await this.#recovery.handleUnexpectedAssistantStop(response, { beforeContinuation: true, signal });
+				if (signal?.aborted) return;
 				await this.#recovery.maybeRestoreRetryFallbackPrimary({ afterSuccessOnly: true });
 			}
 			await this.#prewalk.advanceAtTurnEnd(messages, context);

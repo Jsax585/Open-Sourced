@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
-import { Agent, type AgentTool, type StreamFn } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage, type AgentTool, type StreamFn } from "@oh-my-pi/pi-agent-core";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -235,6 +235,71 @@ describe("AgentSession refusal fallback response settlement", () => {
 		expect(requestedModels.at(-1)).toBe(primary);
 	});
 
+	it.each([
+		["restores the primary before a queued steer", "steer", false],
+		["restores the primary before a queued follow-up", "follow-up", false],
+		["continues incomplete queued work on the fallback without an extra retry", "follow-up", true],
+	] as const)("%s", async (_name, queue, unexpected) => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const fallbackModel = getBundledModel("anthropic", "claude-opus-4-1")!;
+		const primary = `${primaryModel.provider}/${primaryModel.id}`;
+		const fallback = `${fallbackModel.provider}/${fallbackModel.id}`;
+		const requestedModels: string[] = [];
+		vi.spyOn(unexpectedStopClassifier, "classifyUnexpectedStop")
+			.mockResolvedValue(false)
+			.mockResolvedValueOnce(unexpected);
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.maxRetries": 0,
+			"retry.fallbackChains": { [primary]: [fallback] },
+			"retry.refusalFallbackRevertPolicy": "after-success",
+			"features.unexpectedStopDetection": "smart",
+		});
+		const stream = streamResponses(
+			[
+				{ stopReason: "error", stopDetails: { type: "refusal" }, errorMessage: "Classifier declined" },
+				{ content: [unexpected ? "I will finish the request next." : "The original request is complete"] },
+				{ content: ["Completed the queued request"] },
+			],
+			requestedModels,
+		);
+		const queuedText = "Handle the queued request";
+		let queued = false;
+		let delivered = false;
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (model, context, options) => {
+				if (!queued && model.id === fallbackModel.id) {
+					queued = true;
+					const message: AgentMessage = {
+						role: "user",
+						content: [{ type: "text", text: queuedText }],
+						timestamp: Date.now(),
+					};
+					if (queue === "steer") agent.steer(message);
+					else agent.followUp(message);
+				}
+				delivered ||= context.messages.some(
+					message =>
+						message.role === "user" &&
+						(typeof message.content === "string"
+							? message.content === queuedText
+							: message.content.some(content => content.type === "text" && content.text === queuedText)),
+				);
+				return stream(model, context, options);
+			},
+		});
+		session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+
+		await session.prompt("Handle the original request");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([primary, fallback, unexpected ? fallback : primary]);
+		expect(delivered).toBe(true);
+		expect(session.model?.id).toBe(primaryModel.id);
+	});
+
 	it("waits for a complete-stop verdict before restoring the primary", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const fallbackModel = getBundledModel("anthropic", "claude-opus-4-1")!;
@@ -243,8 +308,9 @@ describe("AgentSession refusal fallback response settlement", () => {
 		const requestedModels: string[] = [];
 		const judging = Promise.withResolvers<void>();
 		const releaseVerdict = Promise.withResolvers<void>();
-		vi.spyOn(unexpectedStopClassifier, "classifyUnexpectedStop")
-			.mockResolvedValue(false)
+		const classifyStop = vi
+			.spyOn(unexpectedStopClassifier, "classifyUnexpectedStop")
+			.mockResolvedValue(true)
 			.mockImplementationOnce(async () => {
 				judging.resolve();
 				await releaseVerdict.promise;
@@ -280,6 +346,8 @@ describe("AgentSession refusal fallback response settlement", () => {
 			await prompt;
 			await session.waitForIdle();
 			expect(session.model?.id).toBe(primaryModel.id);
+			expect(requestedModels).toEqual([primary, fallback]);
+			classifyStop.mockResolvedValue(false);
 			await session.prompt("Continue");
 			await session.waitForIdle();
 			expect(requestedModels).toEqual([primary, fallback, primary]);
