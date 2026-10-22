@@ -30,6 +30,9 @@ describe("MCP bridge resource links", () => {
 					title: "Setup guide",
 					description: "How to install and configure the project",
 					mimeType: "text/markdown",
+					// Spec ResourceLink fields; `bun check` rejects this literal if MCPResourceLinkContent lacks them.
+					size: 2048,
+					annotations: { audience: ["assistant"], priority: 0.8, lastModified: "2026-10-01T00:00:00Z" },
 				},
 				{ type: "resource_link", uri: "file:///project/docs/api.md", name: "api.md" },
 			],

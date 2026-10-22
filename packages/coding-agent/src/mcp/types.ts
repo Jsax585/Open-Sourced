@@ -1,4 +1,5 @@
 import type {
+	MCPAnnotations,
 	MCPContent,
 	MCPImageContent,
 	MCPProgress,
@@ -378,13 +379,6 @@ export interface MCPToolWithServer {
 // =============================================================================
 // MCP Resource Types
 // =============================================================================
-
-/** Annotations for resources, templates, and content blocks */
-export interface MCPAnnotations {
-	audience?: ("user" | "assistant")[];
-	priority?: number;
-	lastModified?: string;
-}
 
 /** A concrete resource exposed by an MCP server */
 export interface MCPResource {

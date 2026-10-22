@@ -387,6 +387,13 @@ export interface MCPResourceContent {
 	};
 }
 
+/** Annotations for resources, templates, and content blocks */
+export interface MCPAnnotations {
+	audience?: ("user" | "assistant")[];
+	priority?: number;
+	lastModified?: string;
+}
+
 /** Link to a server resource returned by an MCP tool; the client fetches it separately. */
 export interface MCPResourceLinkContent {
 	type: "resource_link";
@@ -395,6 +402,8 @@ export interface MCPResourceLinkContent {
 	title?: string;
 	description?: string;
 	mimeType?: string;
+	size?: number;
+	annotations?: MCPAnnotations;
 }
 
 /** Supported MCP result content blocks retained in display metadata. */

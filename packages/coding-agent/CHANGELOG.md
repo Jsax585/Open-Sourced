@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Moved the `MCPAnnotations` type to `@oh-my-pi/pi-tui/tools/mcp`, where MCP resource links share it; import it from there or from `@oh-my-pi/pi-coding-agent/mcp` instead of `@oh-my-pi/pi-coding-agent/mcp/types` ([#16561](https://github.com/can1357/oh-my-pi/pull/16561) by [@mottopanikeiku](https://github.com/mottopanikeiku))
+
 ### Fixed
 
 - Fixed subagents spawning at a caller-supplied `effort` (e.g. `hi` → `max`) while `task.enableEffort` is off; the field is now ignored and the agent's configured thinking level (including `:auto`) applies ([#16402](https://github.com/can1357/oh-my-pi/issues/16402))
