@@ -420,7 +420,7 @@ export interface SessionMaintenanceHost {
 	extensionRunner: ExtensionRunner | undefined;
 	sideStreamFn: StreamFn;
 	providerSessionState: Map<string, ProviderSessionState>;
-	/** Live transport hint for the requested model; global opt-in applies only to Codex. */
+	/** Live transport hint for the requested model, using its API's independent WebSocket policy. */
 	preferWebsockets(model: Model): boolean | undefined;
 	model(): Model | undefined;
 	thinkingLevel(): ThinkingLevel | undefined;

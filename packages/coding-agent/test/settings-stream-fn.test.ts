@@ -89,19 +89,30 @@ function replayedReasoningContext(producer: Model): Context {
 }
 
 describe("createSettingsAwareStreamFn", () => {
-	it("keeps global WebSocket opt-in Codex-only and applies explicit HTTP opt-out to Responses routes", () => {
+	it("resolves independent transport settings with model overrides above the Responses default", () => {
 		const openrouterModel = { api: "openrouter" } as Model;
 		const unrelatedModel = { api: "anthropic-messages" } as Model;
-		for (const setting of ["auto", "on", "off"] as const) {
-			const settings = Settings.isolated({ "providers.openaiWebsockets": setting });
-			expect(resolveOpenAIWebsocketPreference(settings, stubCodexModel)).toBe(
-				setting === "on" ? true : setting === "off" ? false : undefined,
-			);
-			for (const model of [stubResponsesModel, openrouterModel]) {
-				expect(resolveOpenAIWebsocketPreference(settings, model)).toBe(setting === "off" ? false : undefined);
+		expect(resolveOpenAIWebsocketPreference(Settings.isolated(), stubResponsesModel)).toBe(false);
+		for (const codexSetting of ["auto", "on", "off"] as const) {
+			for (const responsesSetting of [false, true]) {
+				const settings = Settings.isolated({
+					"providers.openaiWebsockets": codexSetting,
+					"providers.openaiResponsesWebsockets": responsesSetting,
+				});
+				expect(resolveOpenAIWebsocketPreference(settings, stubCodexModel)).toBe(
+					codexSetting === "on" ? true : codexSetting === "off" ? false : undefined,
+				);
+				for (const model of [stubResponsesModel, openrouterModel]) {
+					expect(resolveOpenAIWebsocketPreference(settings, model)).toBe(responsesSetting);
+					for (const preferWebsockets of [false, true]) {
+						expect(resolveOpenAIWebsocketPreference(settings, { ...model, preferWebsockets })).toBe(
+							preferWebsockets,
+						);
+					}
+				}
+				expect(resolveOpenAIWebsocketPreference(settings, unrelatedModel)).toBeUndefined();
+				expect(resolveOpenAIWebsocketPreference(settings, undefined)).toBeUndefined();
 			}
-			expect(resolveOpenAIWebsocketPreference(settings, unrelatedModel)).toBeUndefined();
-			expect(resolveOpenAIWebsocketPreference(settings, undefined)).toBeUndefined();
 		}
 	});
 

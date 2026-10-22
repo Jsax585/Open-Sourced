@@ -114,13 +114,24 @@ An unscoped OpenRouter `baseUrl` names the `/api/v1` chat root, so OpenRouter De
 models use its `/api/alpha` sibling on the same host, e.g. a `.../api/v1` relay serves judges at
 `.../api/alpha/decisions`.
 
-`preferWebsockets` (on a model or `modelOverrides` entry) explicitly enables WebSocket
-transport for `openai-responses`, and controls the existing Codex transport preference.
-Standard Responses uses HTTP/SSE when omitted or `false`; it never probes WebSocket
-automatically. Keep `api: openai-responses` and the existing API root: the client upgrades
-the same `/responses` endpoint, without adding `/codex`.
+Standard Responses uses HTTP/SSE by default and never probes WebSocket automatically.
+To enable WebSocket for all standard Responses models, set this in `config.yml`:
 
-For example, enable WebSocket for one discovered or built-in model:
+```yaml
+providers:
+  openaiResponsesWebsockets: true
+```
+
+The independent Codex setting is `providers.openaiWebsockets: auto|on|off`; it does
+not affect standard Responses. `PI_CODEX_WEBSOCKET` also remains Codex-only.
+
+For standard Responses, precedence is SDK request `preferWebsockets` → model
+`preferWebsockets` → `providers.openaiResponsesWebsockets` (default `false`).
+Both `true` and `false` are explicit overrides. The SDK without coding-agent
+settings defaults to HTTP/SSE unless the request or model opts in.
+
+Use `preferWebsockets` on a model or `modelOverrides` entry in `models.yml` to
+override the global default for that model. For example:
 
 ```yaml
 providers:
@@ -130,16 +141,12 @@ providers:
         preferWebsockets: true
 ```
 
-Existing provider `baseUrl`, authentication and discovery settings remain unchanged.
-Custom `models` entries accept the same boolean directly. The endpoint must support
-Responses WebSocket `response.create` events; HTTP Responses compatibility alone is
-not sufficient.
-
-An explicit SDK request `preferWebsockets: false` overrides a model opt-in. The session
-setting `providers.openaiWebsockets: on` enables Codex only, not standard Responses;
-`off` supplies an HTTP override for both, unless the SDK caller explicitly overrides it.
-Its `auto` value leaves the request override unset: an unconfigured standard model
-still uses HTTP/SSE. `PI_CODEX_WEBSOCKET` remains Codex-only.
+Set the model value to `false` to keep one model on HTTP/SSE while the global
+switch is enabled. Keep `api: openai-responses` and the existing provider API root:
+the client upgrades the same `/responses` endpoint without adding `/codex`.
+Authentication and discovery settings remain unchanged. Custom `models` entries
+accept the same boolean directly. The endpoint must support Responses WebSocket
+`response.create` events; HTTP Responses compatibility alone is not sufficient.
 
 Standard Responses WebSocket requests replay the full conversation on each turn.
 They do not use `previous_response_id` chaining, even when HTTP stateful Responses
@@ -776,6 +783,7 @@ Related settings:
 - `modelProviderOrder` (provider precedence when equivalent concrete choices share an id)
 - `providers.kimiApiFormat` (`auto|openai|anthropic`; `auto` follows server-declared model metadata)
 - `providers.openaiWebsockets` (`auto|off|on` websocket preference for OpenAI Codex transport)
+- `providers.openaiResponsesWebsockets` (boolean, default `false`; default transport for standard Responses, overridden by model/request preferences)
 - `providers.openaiLiveSteering` (deliver mid-response user messages into GPT-6 responses over the Codex WebSocket)
 
 `modelRoles` stores model selectors such as `provider/modelId`; `enabledModels` and CLI `--models`

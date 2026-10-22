@@ -3003,7 +3003,7 @@ export class AgentSession implements SettingsScope {
 		return this.#providerSessionState;
 	}
 
-	/** Live transport hint for the active model; global WebSocket opt-in applies only to Codex. */
+	/** Live transport hint for the active model, using its API's independent WebSocket policy. */
 	get preferWebsockets(): boolean | undefined {
 		return resolveOpenAIWebsocketPreference(this.settings, this.model);
 	}

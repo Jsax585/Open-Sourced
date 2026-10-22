@@ -1103,12 +1103,24 @@ export const cfgProvidersOpenaiWebsockets = register({
 		tab: "providers",
 		group: "Protocol",
 		label: "OpenAI WebSockets",
-		description: "Codex WebSocket policy; standard Responses requires per-model opt-in, and off forces HTTP for both",
+		description: "WebSocket policy for OpenAI Codex models only",
 		options: [
-			{ value: "auto", label: "Auto", description: "Use model defaults; standard Responses defaults to HTTP/SSE" },
-			{ value: "off", label: "Off", description: "Disable WebSockets for Codex and standard Responses" },
+			{ value: "auto", label: "Auto", description: "Use Codex model defaults" },
+			{ value: "off", label: "Off", description: "Disable WebSockets for OpenAI Codex models" },
 			{ value: "on", label: "On", description: "Force websockets for OpenAI Codex models" },
 		],
+	},
+});
+
+export const cfgProvidersOpenaiResponsesWebsockets = register({
+	id: "providers.openaiResponsesWebsockets",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "providers",
+		group: "Protocol",
+		label: "OpenAI Responses WebSockets",
+		description: "Use WebSockets for standard Responses; explicit model and request preferences take precedence",
 	},
 });
 

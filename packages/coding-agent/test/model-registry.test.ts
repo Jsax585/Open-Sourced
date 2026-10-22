@@ -749,14 +749,14 @@ describe("ModelRegistry", () => {
 				for (const model of [defaultModel, httpModel, websocketModel]) {
 					let requests = 0;
 					const preference = resolveOpenAIWebsocketPreference(isolatedSettings, model);
-					expect(preference).toBe(setting === "off" ? false : undefined);
+					expect(preference).toBe(model.preferWebsockets ?? false);
 					const result = await streamSimple(
 						model,
 						{ messages: [{ role: "user", content: "hi", timestamp: 0 }] },
 						{
 							apiKey: "test-key",
 							// The explicit request opt-out must beat the model's opt-in.
-							preferWebsockets: model === websocketModel && setting !== "off" ? false : preference,
+							preferWebsockets: model === websocketModel ? false : preference,
 							fetch: (async (_url, init) => {
 								requests++;
 								expect(init?.method).toBe("POST");

@@ -28,6 +28,7 @@ import {
 	cfgProvidersMaxInFlightRequests,
 	cfgProvidersMuseCodeStoreResponses,
 	cfgProvidersOpenaiLiveSteering,
+	cfgProvidersOpenaiResponsesWebsockets,
 	cfgProvidersOpenaiWebsockets,
 	cfgProvidersOpenrouterVariant,
 	cfgProvidersStreamFirstEventTimeoutSeconds,
@@ -37,15 +38,16 @@ import {
 	validateProviderMaxInFlightRequests,
 } from "./settings";
 
-/** Apply the Codex transport setting without implicitly opting other providers into WebSockets. */
+/** Resolve independent Codex and standard Responses policies for the requested model. */
 export function resolveOpenAIWebsocketPreference(settings: Settings, model: Model | undefined): boolean | undefined {
-	const setting = cfgProvidersOpenaiWebsockets.get(settings);
 	if (model?.api === "openai-codex-responses") {
+		const setting = cfgProvidersOpenaiWebsockets.get(settings);
 		return setting === "on" ? true : setting === "off" ? false : undefined;
 	}
-	// An explicit global opt-out still forces HTTP, but opt-in belongs to the
-	// standard Responses model or request, including OpenRouter Responses routing.
-	return setting === "off" && (model?.api === "openai-responses" || model?.api === "openrouter") ? false : undefined;
+	if (model?.api === "openai-responses" || model?.api === "openrouter") {
+		return model.preferWebsockets ?? cfgProvidersOpenaiResponsesWebsockets.get(settings);
+	}
+	return undefined;
 }
 
 function timeoutSecondsToMs(value: number): number | undefined {

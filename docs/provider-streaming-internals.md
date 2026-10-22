@@ -133,9 +133,11 @@ WebSocket errors. This boundary avoids hidden replay after uncertain execution;
 Codex recovery policy remains independent.
 
 The coding-agent resolves the session transport hint against the actual request
-model, including advisor and side requests. Global `on` is Codex-only; global `off`
-can supply an HTTP override for standard Responses. An explicit SDK preference
-takes precedence over that hint.
+model, including advisor and side requests. Codex uses `providers.openaiWebsockets`
+independently. Standard Responses uses the model preference before
+`providers.openaiResponsesWebsockets` (default `false`), including OpenRouter
+Responses dispatch. An explicit SDK request preference takes precedence over
+that hint.
 
 ## Google Generative AI (`google-generative-ai`)
 

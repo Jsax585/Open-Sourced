@@ -469,7 +469,7 @@ export interface SessionAdvisorsHost {
 	yieldQueue: YieldQueue;
 	obfuscator(): SecretObfuscator | undefined;
 	providerSessionState: Map<string, ProviderSessionState>;
-	/** Live transport hint for the requested model; global opt-in applies only to Codex. */
+	/** Live transport hint for the requested model, using its API's independent WebSocket policy. */
 	preferWebsockets(model: Model): boolean | undefined;
 	onPayload: SimpleStreamOptions["onPayload"] | undefined;
 	onResponse: SimpleStreamOptions["onResponse"] | undefined;
@@ -1403,7 +1403,7 @@ export class SessionAdvisors {
 			});
 			const baseAdvisorStreamFn = this.#advisorStreamFn ?? streamSimple;
 			const advisorStreamFn: StreamFn = (requestModel, context, streamOptions) => {
-				// Read per request so a mid-session `providers.openaiWebsockets` change reaches advisors.
+				// Read per request so transport setting changes reach existing advisors.
 				const options = {
 					...streamOptions,
 					preferWebsockets: streamOptions?.preferWebsockets ?? this.#host.preferWebsockets(requestModel),
