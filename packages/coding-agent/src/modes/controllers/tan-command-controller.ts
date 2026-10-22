@@ -234,11 +234,9 @@ export class TanCommandController {
 						// `compaction.keepRecentTokens`, or a prior re-injection still
 						// live) must not be duplicated onto the tail, which would present
 						// the same assignment again and risk restarting completed work.
-						// The restored request is the one the clone admitted, captured when
-						// compaction starts: normalized images with their hidden companions
-						// (source path, vision description), never the raw input. It is found
-						// by its admitted text, which a prompt template may have expanded
-						// from the `/tan` work: the turn's first user message carries it.
+						// The restore replays the request as the clone admitted it (normalized
+						// images, hidden companions), matched by the text of the turn's first
+						// user message: a prompt template may have expanded the `/tan` work.
 						let requestDispatched = false;
 						let requestText: string | undefined;
 						let admittedRequest: AgentMessage[] | undefined;

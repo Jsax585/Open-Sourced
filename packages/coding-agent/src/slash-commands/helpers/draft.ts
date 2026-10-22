@@ -30,11 +30,9 @@ export function restoreDetachedDraft(
 }
 
 /**
- * Run a command that takes its whole draft, images included. A draft it does not
- * submit comes back to the editor; on the Enter and Ctrl+Enter paths the caller
- * already took the draft out of the editor and restores it when `run` throws.
- * Mode toggles get back only the attachments of an unsent draft; with
- * `restoreText`, a command that starts nothing gets its text back too.
+ * Run a command that takes its whole draft, images included. An unsent draft gets
+ * its attachments back, and with `restoreText` its text too; a `run` that throws on
+ * a detached draft is left to the caller, which already took the draft out.
  */
 export async function runWithDetachedDraft(
 	command: ParsedSlashCommand,

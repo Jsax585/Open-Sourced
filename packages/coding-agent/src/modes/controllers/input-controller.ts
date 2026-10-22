@@ -926,7 +926,7 @@ export class InputController {
 		return compacted.text.trim();
 	}
 
-	#dropSubmittedPending(images: ImageContent[] | undefined, linkCount: number): void {
+	#dropSubmittedPending(images: ImageContent[] | undefined): void {
 		if (!images?.length) return;
 		const editor = this.ctx.editor;
 		// Drop the snapshot only while it is still the live prefix: attachments
@@ -934,7 +934,7 @@ export class InputController {
 		if (!images.every((image, index) => editor.pendingImages[index] === image)) return;
 		const newerDraft = editor.getExpandedText();
 		editor.pendingImages.splice(0, images.length);
-		editor.pendingImageLinks.splice(0, linkCount);
+		editor.pendingImageLinks.splice(0, images.length);
 		editor.imageLinks = editor.pendingImageLinks.length > 0 ? editor.pendingImageLinks : undefined;
 		const renumbered = shiftImageMarkers(newerDraft, -images.length);
 		if (renumbered !== newerDraft) editor.setCollapsedText(renumbered);
@@ -1026,7 +1026,7 @@ export class InputController {
 					// before this callback ran, so anything in it now is a newer draft;
 					// only the submitted attachments are dropped, and only while they
 					// are still the live prefix.
-					this.#dropSubmittedPending(inputImages, inputImageLinks?.length ?? 0);
+					this.#dropSubmittedPending(inputImages);
 					return;
 				}
 				({ text, images: inputImages, imageLinks: inputImageLinks } = input);
@@ -1040,7 +1040,7 @@ export class InputController {
 				submittedMode === "guided-goal" ||
 				submittedMode === "tan" ||
 				submittedMode === "btw";
-			if (draftDetached) this.#dropSubmittedPending(submittedImages, submittedImages?.length ?? 0);
+			if (draftDetached) this.#dropSubmittedPending(submittedImages);
 
 			if (!text && !hasInputImages) return;
 

@@ -403,7 +403,6 @@ export class BtwHistoryPanel implements Component, Focusable {
 		return this.#composer?.input.capturesInput(data) ?? false;
 	}
 
-	/** Only an open follow-up composer takes pasted images. */
 	get acceptsImages(): boolean {
 		return this.#composer !== undefined;
 	}
