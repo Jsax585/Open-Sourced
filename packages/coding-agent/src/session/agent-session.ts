@@ -584,6 +584,14 @@ const AGENT_START_POLICY_MAX_ATTEMPTS = 3;
 export const MCP_DISCOVERY_TURN_WAIT_MS = 1500;
 /** Vision descriptions gate admission; stay under the RPC clients' 30 s request timeout. */
 const IMAGE_DESCRIPTION_ADMISSION_TIMEOUT_MS = 20_000;
+/**
+ * Dispose budgets for an in-flight auto-learn pass. A mid-turn capture is cancelled
+ * during teardown, so its drain only has to observe the abort; a session-settle pass
+ * makes a real model request, so teardown waits for it under a bounded budget that a
+ * one-shot `omp -p` run still pays only when the opt-in scribe is on.
+ */
+const AUTOLEARN_CAPTURE_DRAIN_TIMEOUT_MS = 3_000;
+const AUTOLEARN_SETTLE_DRAIN_TIMEOUT_MS = 60_000;
 /** Marks work running inside the deferred extension load so it never waits on itself. */
 const deferredExtensionLoadScope = new AsyncLocalStorage<true>();
 
@@ -1041,6 +1049,10 @@ export class AgentSession implements SettingsScope {
 	#inheritedProviderPromptCacheKey: string | undefined;
 	#autolearnCaptureAbortController: AbortController | undefined;
 	#autolearnCaptureTask: Promise<void> | undefined;
+	/** The in-flight pass is a session-settle pass, which dispose lets finish. */
+	#autolearnCaptureSettling = false;
+	/** This dispose waits for a settle pass instead of aborting it (one-shot runs). */
+	#awaitAutolearnSettle = false;
 	#isDisposed = false;
 	#modelDiscoveryAbortController = new AbortController();
 	/** Process-wide by default (double-spend safety across sessions); injectable for tests. */
@@ -5820,19 +5832,35 @@ export class AgentSession implements SettingsScope {
 		}
 	}
 
-	/** Run one abortable auto-learn capture outside the primary agent loop. */
-	async runAutolearnCapture(capture: (signal: AbortSignal) => Promise<void>): Promise<void> {
-		if (this.#autolearnCaptureTask || this.#isDisposed) return;
+	/**
+	 * Run one abortable auto-learn pass outside the primary agent loop.
+	 *
+	 * Resolves whether the pass started: `false` means the caller's stop was not
+	 * spent (no model, no tool, already disposed, another pass in flight), so the
+	 * caller can hand it to its fallback pass.
+	 *
+	 * `settle` marks a session-settle pass — the session's last work rather than a
+	 * mid-turn aside. Dispose keeps it alive and gives it a request-sized drain
+	 * budget instead of aborting it on the way out.
+	 */
+	async runAutolearnCapture(
+		capture: (signal: AbortSignal) => Promise<boolean>,
+		options?: { settle?: boolean },
+	): Promise<boolean> {
+		if (this.#autolearnCaptureTask || this.#isDisposed) return false;
 		const controller = new AbortController();
 		this.#autolearnCaptureAbortController = controller;
+		this.#autolearnCaptureSettling = options?.settle === true;
+		let ran = false;
 		const task = (async () => {
 			try {
-				await capture(controller.signal);
+				ran = await capture(controller.signal);
 			} catch (error) {
 				if (!controller.signal.aborted) throw error;
 			} finally {
 				if (this.#autolearnCaptureAbortController === controller) {
 					this.#autolearnCaptureAbortController = undefined;
+					this.#autolearnCaptureSettling = false;
 				}
 			}
 		})();
@@ -5842,19 +5870,33 @@ export class AgentSession implements SettingsScope {
 		} finally {
 			if (this.#autolearnCaptureTask === task) this.#autolearnCaptureTask = undefined;
 		}
+		return ran;
 	}
 
 	#abortAutolearnCapture(): void {
+		// A one-shot run's dispose outlives its settle pass on purpose: aborting the
+		// pass the moment `omp -p`/JSON prints its answer is what made those modes
+		// exit without ever scribing. Every other caller — a user interrupt, a
+		// session switch, interactive quit — still cancels it.
+		if (this.#autolearnCaptureSettling && this.#awaitAutolearnSettle) return;
 		this.#autolearnCaptureAbortController?.abort();
 	}
 
 	async #drainAutolearnCapture(): Promise<void> {
 		const task = this.#autolearnCaptureTask;
 		if (!task) return;
+		const settling = this.#autolearnCaptureSettling && this.#awaitAutolearnSettle;
 		try {
-			await withTimeout(task, 3_000, "Timed out draining auto-learn capture during dispose");
+			await withTimeout(
+				task,
+				settling ? AUTOLEARN_SETTLE_DRAIN_TIMEOUT_MS : AUTOLEARN_CAPTURE_DRAIN_TIMEOUT_MS,
+				"Timed out draining auto-learn capture during dispose",
+			);
 		} catch (error) {
 			logger.warn("Auto-learn capture did not settle during dispose", { error: String(error) });
+			// Out of budget: stop the pass rather than let it write into a session
+			// that is already closed.
+			this.#autolearnCaptureAbortController?.abort();
 		}
 	}
 
@@ -5877,9 +5919,11 @@ export class AgentSession implements SettingsScope {
 	 *
 	 * Wrappers that await other teardown before delegating to `dispose()` MUST
 	 * call this before their first await — otherwise work started in that async
-	 * gap slips past the disposal guards.
+	 * gap slips past the disposal guards, so such a wrapper must pass the dispose
+	 * options it holds: the settle intent is latched here, before the abort hook.
 	 */
-	beginDispose(): void {
+	beginDispose(options: Pick<AgentSessionDisposeOptions, "awaitAutolearnSettle"> = {}): void {
+		this.#awaitAutolearnSettle = options.awaitAutolearnSettle === true;
 		this.#isDisposed = true;
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.#modelDiscoveryAbortController.abort();
@@ -6047,7 +6091,7 @@ export class AgentSession implements SettingsScope {
 	}
 
 	async #doDispose(options: AgentSessionDisposeOptions = {}): Promise<void> {
-		this.beginDispose();
+		this.beginDispose(options);
 		// Stop cache warming before the drain windows below: an armed tick firing
 		// mid-dispose would issue a paid warm request and persist usage into the
 		// closing session writer.

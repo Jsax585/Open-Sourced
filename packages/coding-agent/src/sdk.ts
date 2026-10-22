@@ -11,6 +11,7 @@ import {
 	resolveTelemetry,
 	type StreamFn,
 	type ThinkingLevel,
+	Tokenizer,
 } from "@oh-my-pi/pi-agent-core";
 import type {
 	Context,
@@ -34,6 +35,7 @@ import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-mes
 import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { resolveCatalogPolicy } from "@oh-my-pi/pi-catalog/compat/catalog-policy";
 import { FALLBACK_DIALECT, preferredDialect } from "@oh-my-pi/pi-catalog/identity";
+import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { $env } from "@oh-my-pi/pi-utils/env";
 import { getAgentDir, getModelDbPath, getProjectDir } from "@oh-my-pi/pi-utils/dirs";
@@ -52,6 +54,11 @@ import {
 } from "./advisor";
 import { AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
+import {
+	type AutoLearnScribeSelection,
+	buildAutolearnScribePrompt,
+	resolveAutolearnScribeModel,
+} from "./autolearn/scribe";
 import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability, reset as resetCapabilities } from "./capability";
 import {
@@ -180,6 +187,7 @@ import {
 } from "./secrets";
 import {
 	AgentSession,
+	type AgentSessionDisposeOptions,
 	type InitialRetryFallbackState,
 	MCP_DISCOVERY_TURN_WAIT_MS,
 	type PlanYolo,
@@ -1627,28 +1635,131 @@ export interface AutoLearnCaptureRunnerOptions {
 	sourceAgent: Agent;
 	/** Resolves the capture tools per run, so live `autolearn.enabled` / backend changes apply. */
 	captureTools: () => AgentTool[];
+	/**
+	 * Resolves the pass model — and the thinking level of the role that named it —
+	 * per run. The source agent's model and level apply when omitted.
+	 */
+	selection?: () => AutoLearnScribeSelection | undefined | Promise<AutoLearnScribeSelection | undefined>;
+	/**
+	 * Extra system-prompt block for this pass, appended after the source prompt.
+	 * Resolved per run: the scribe quotes the current managed-skill bodies.
+	 */
+	systemPromptAppend?: () => string | Promise<string>;
 	createAgent: (options: AgentOptions) => Agent;
 	onPayload?: SimpleStreamOptions["onPayload"];
 	onResponse?: SimpleStreamOptions["onResponse"];
 	createSessionId?: () => string;
 }
 
+/**
+ * Convert an agent transcript for one wire model, dropping image blocks that
+ * model would reject: the user blocked images (`images.blockImages`), or the
+ * model's wire sends none — a text-only model 400s on historical image blocks
+ * (#5400), and routes that strip images would normalize and publish them for
+ * nothing.
+ *
+ * The model is a parameter, not read from the live agent, because a private
+ * pass runs against its own model: the auto-learn scribe may be text-only while
+ * the primary session sees images.
+ */
+export function convertMessagesForWireModel(
+	messages: AgentMessage[],
+	wireModel: Model | undefined,
+	blockImages: boolean,
+): Message[] {
+	const converted = convertToLlm(messages);
+	if (blockImages) return replaceLlmImagesWithText(converted, "Image reading is disabled.");
+	if (wireModel && !sendsImageInputOnWire(wireModel)) {
+		return replaceLlmImagesWithText(converted, "[image omitted: the active model does not support image input]");
+	}
+	return converted;
+}
+
+/**
+ * Reserve for the parts of a pass request the transcript does not cover: the
+ * system prompt, the tool schemas, and the reply. Scribes run without the
+ * session's overflow-compaction loop, so a snapshot that busts the model's
+ * window does not compact — the provider rejects the request and the stop
+ * learns nothing.
+ */
+const PASS_CONTEXT_RESERVE_TOKENS = 8_192;
+
+/**
+ * Fit a transcript snapshot into `model`'s context window by keeping the newest
+ * turns that fit and reporting how many were dropped.
+ *
+ * The cut lands on a user message so the kept history never opens with a tool
+ * result whose call was dropped. The omission note belongs in the system
+ * prompt, not the message list: a synthetic user message would sit unpaired
+ * against the kept user turn, and some providers reject two user messages in a
+ * row.
+ */
+export function fitPassSnapshotToContext(
+	messages: readonly AgentMessage[],
+	model: Model,
+): { messages: AgentMessage[]; omittedNote?: string } {
+	// A model whose window or output cap the catalog does not know cannot be
+	// fitted here: send the transcript whole and let the provider's own limit
+	// report it, rather than guessing a budget.
+	const contextWindow = model.contextWindow;
+	const maxTokens = model.maxTokens;
+	if (contextWindow === null || maxTokens === null || messages.length === 0) return { messages: [...messages] };
+	const budget = contextWindow - Math.max(PASS_CONTEXT_RESERVE_TOKENS, maxTokens);
+	if (!(budget > 0)) return { messages: [...messages] };
+	const tokenizer = new Tokenizer(model);
+	// One pass from the end gives every candidate cut its suffix cost; picking the
+	// earliest user boundary that still fits keeps as much history as allowed.
+	const suffixTokens: number[] = Array.from({ length: messages.length + 1 }, () => 0);
+	for (let i = messages.length - 1; i >= 0; i--) {
+		suffixTokens[i] = suffixTokens[i + 1] + tokenizer.countMessage(messages[i]);
+	}
+	if (suffixTokens[0] <= budget) return { messages: [...messages] };
+	let start = -1;
+	let lastUserStart = -1;
+	for (let i = 0; i < messages.length; i++) {
+		if (messages[i].role !== "user") continue;
+		lastUserStart = i;
+		if (suffixTokens[i] <= budget) {
+			start = i;
+			break;
+		}
+	}
+	// Nothing fits: the newest turn alone busts the window. Keep it whole — a
+	// trimmed fragment would be an invalid or misleading history — and let the
+	// provider's own limit report it.
+	if (start < 0) start = lastUserStart;
+	if (start <= 0) return { messages: [...messages] };
+	const omitted = start;
+	return {
+		messages: messages.slice(start),
+		omittedNote: `## Transcript window\n\nThis session ran longer than your context window: the ${omitted} messages before the retained turn were dropped from the snapshot above. Judge only what you can read, and prefer enhancing an existing skill over guessing at procedures from the truncated session.`,
+	};
+}
+
 /** Build a private capture runner over a detached message snapshot and provider session. */
 export function createAutoLearnCaptureRunner(
 	options: AutoLearnCaptureRunnerOptions,
-): (content: string, signal?: AbortSignal) => Promise<void> {
+): (content: string, signal?: AbortSignal) => Promise<boolean> {
 	return async (content, signal) => {
+		// Freeze the transcript before any await. The pass describes the session as
+		// it settled; a turn the user starts while the model resolves or the skill
+		// inventory is read must not be ingested here — the new turn gets its own
+		// stop, and this pass cannot be re-run to take it back.
+		const sourceMessages = [...options.sourceAgent.state.messages];
+		const sourceSystemPrompt = [...options.sourceAgent.state.systemPrompt];
 		const captureTools = options.captureTools();
-		if (captureTools.length === 0 || signal?.aborted) return;
-		const captureModel = options.sourceAgent.state.model;
-		if (!captureModel) return;
+		if (captureTools.length === 0 || signal?.aborted) return false;
+		const selection = options.selection ? await options.selection() : undefined;
+		const captureModel = selection?.model ?? options.sourceAgent.state.model;
+		if (!captureModel || signal?.aborted) return false;
+		const systemPromptAppend = options.systemPromptAppend ? (await options.systemPromptAppend()).trim() : undefined;
 
 		const captureSessionId = options.createSessionId?.() ?? Bun.randomUUIDv7();
 		const captureProviderSessionState = new Map<string, ProviderSessionState>();
 		const stripInheritedReasoning =
 			captureModel.api === "openai-responses" ||
 			(captureModel.api === "openrouter" && $env.PI_OPENROUTER_RESPONSES !== "0");
-		const captureMessages = options.sourceAgent.state.messages.map((message): AgentMessage => {
+		const captureMessages = sourceMessages.map((message): AgentMessage => {
 			if (message.role === "assistant") {
 				let content = message.content;
 				if (
@@ -1673,14 +1784,27 @@ export function createAutoLearnCaptureRunner(
 			}
 			return message;
 		});
+		const snapshot = fitPassSnapshotToContext(captureMessages, captureModel);
+		const systemPrompt = sourceSystemPrompt;
+		if (systemPromptAppend) systemPrompt.push(systemPromptAppend);
+		if (snapshot.omittedNote) systemPrompt.push(snapshot.omittedNote);
+		// A role that names its own level owns it: the primary turn's effort is no
+		// business of a pass the user configured separately. An explicit role level
+		// also decides reasoning by itself — a primary session running `:off` must
+		// not keep reasoning disabled for a scribe whose role asked for `:low`.
+		const roleLevel = concreteThinkingLevel(selection?.thinkingLevel);
 		const captureAgent = options.createAgent({
 			initialState: {
-				systemPrompt: [...options.sourceAgent.state.systemPrompt],
+				systemPrompt,
 				model: captureModel,
-				thinkingLevel: options.sourceAgent.state.thinkingLevel,
-				disableReasoning: options.sourceAgent.state.disableReasoning,
+				thinkingLevel: clampThinkingLevelForModel(
+					captureModel,
+					toReasoningEffort(roleLevel) ?? options.sourceAgent.state.thinkingLevel,
+				),
+				disableReasoning:
+					roleLevel === undefined ? options.sourceAgent.state.disableReasoning : shouldDisableReasoning(roleLevel),
 				tools: captureTools,
-				messages: captureMessages,
+				messages: snapshot.messages,
 			},
 			sessionId: captureSessionId,
 			promptCacheKey: captureSessionId,
@@ -1703,11 +1827,15 @@ export function createAutoLearnCaptureRunner(
 		try {
 			if (signal?.aborted) {
 				abortCapture();
-				return;
+				return false;
 			}
 			await captureAgent.prompt(captureMessage);
+			// The request was paid for: an abort mid-flight does not un-spend it, and
+			// reporting that as "did not run" would hand the stop to a second pass.
+			return true;
 		} catch (error) {
 			if (!signal?.aborted) throw error;
+			return true;
 		} finally {
 			signal?.removeEventListener("abort", abortCapture);
 			for (const [providerKey, state] of captureProviderSessionState) {
@@ -4334,25 +4462,17 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// whose blocks would otherwise be normalized and published for nothing.
 		// Read both dynamically so a `/model` switch or setting change takes
 		// effect on the next turn.
-		const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
-			const converted = convertToLlm(messages);
-			if (cfgImagesBlockImages.get(settings)) {
-				return replaceLlmImagesWithText(converted, "Image reading is disabled.");
-			}
-			const activeModel = agent?.state.model ?? model;
-			if (activeModel && !sendsImageInputOnWire(activeModel)) {
-				return replaceLlmImagesWithText(
-					converted,
-					"[image omitted: the active model does not support image input]",
-				);
-			}
-			return converted;
-		};
+		const convertToLlmWithBlockImages = (messages: AgentMessage[], wireModel?: Model): Message[] =>
+			convertMessagesForWireModel(
+				messages,
+				wireModel ?? agent?.state.model ?? model,
+				cfgImagesBlockImages.get(settings),
+			);
 
 		// Final convertToLlm: live provider replay drops API-level refusal errors,
 		// then applies secret obfuscation to the remaining outbound context.
-		const convertToLlmFinal = (messages: AgentMessage[]): Message[] => {
-			const converted = filterProviderReplayMessages(convertToLlmWithBlockImages(messages));
+		const convertToLlmFinal = (messages: AgentMessage[], wireModel?: Model): Message[] => {
+			const converted = filterProviderReplayMessages(convertToLlmWithBlockImages(messages, wireModel));
 			if (!obfuscator?.hasSecrets()) return converted;
 			return obfuscateMessages(obfuscator, converted);
 		};
@@ -5195,12 +5315,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		{
 			const originalDispose = session.dispose.bind(session);
 			let tinyClientReleased = false;
-			session.dispose = async () => {
+			session.dispose = async (disposeOptions?: AgentSessionDisposeOptions) => {
 				try {
 					// Reject new session work (eval starts) the moment disposal
 					// begins — the lifecycle await below opens an async gap before
-					// AgentSession.dispose() would otherwise set its guards.
-					session.beginDispose();
+					// AgentSession.dispose() would otherwise set its guards. The
+					// options must ride both calls: the settle intent has to be
+					// latched before this early beginDispose() aborts the pass.
+					session.beginDispose(disposeOptions);
 					if (agentKind === "main") {
 						// Top-level teardown owns the global agent lifecycle: park timers,
 						// adopted subagent sessions, revivers. Tear it down while shared
@@ -5219,7 +5341,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						await vibeRegistry.suspendScope(vibeRegistry.ownerScope(vibeParentSession), scopedAsyncJobManager);
 						await AgentLifecycleManager.global().dispose();
 					}
-					await originalDispose();
+					await originalDispose(disposeOptions);
 				} finally {
 					// The tiny-model client is a process singleton shared by every session.
 					// Only the session that owns process state drops its connections, once:
@@ -5369,7 +5491,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			});
 		};
 
-		const runAutoLearnCapture = createAutoLearnCaptureRunner({
+		const autoLearnRunnerOptions = {
 			sourceAgent: agent,
 			captureTools: () =>
 				(["manage_skill", "learn"] as const)
@@ -5386,7 +5508,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					...captureOptions,
 					cwd: sessionManager.getCwd(),
 					cwdResolver: () => sessionManager.getCwd(),
-					convertToLlm: convertToLlmFinal,
+					// Convert against the pass model, not the live primary one: the
+					// scribe may be text-only while the primary sees images, and its
+					// provider would reject the snapshotted image blocks.
+					convertToLlm: messages => convertToLlmFinal(messages, captureModel),
 					transformContext: async messages => wrapSteeringForModel(messages),
 					transformProviderContext: async (context, transformModel) => {
 						let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
@@ -5434,6 +5559,17 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						: undefined,
 				});
 			},
+		} satisfies Omit<AutoLearnCaptureRunnerOptions, "selection" | "systemPromptAppend">;
+
+		const runAutoLearnCapture = createAutoLearnCaptureRunner(autoLearnRunnerOptions);
+		// The scribe shares the capture plumbing but chooses its own model and
+		// carries its own standing instructions. Both resolve per run, so a session
+		// that never has a scribe model simply never scribes, and the prompt always
+		// quotes the managed skills as they stand when the pass starts.
+		const runAutoLearnScribe = createAutoLearnCaptureRunner({
+			...autoLearnRunnerOptions,
+			selection: () => resolveAutolearnScribeModel(settings, modelRegistry),
+			systemPromptAppend: () => buildAutolearnScribePrompt(agentDir),
 		});
 
 		// Auto-learn can immediately trigger a private capture after the first real
@@ -5460,6 +5596,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					session,
 					settings,
 					capture: content => session.runAutolearnCapture(signal => runAutoLearnCapture(content, signal)),
+					// A settle pass is the session's last work, not a mid-turn aside:
+					// dispose lets it finish under a bounded budget instead of aborting it
+					// the moment a one-shot run prints its answer.
+					scribe: content =>
+						session.runAutolearnCapture(signal => runAutoLearnScribe(content, signal), { settle: true }),
 				});
 			}
 		}

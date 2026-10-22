@@ -6,6 +6,7 @@
 
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 - llama.cpp auto-discovery now also finds local servers on llama-server's new default port 9931 when nothing answers on 8080 ([#16675](https://github.com/can1357/oh-my-pi/pull/16675) by [@bartbroere](https://github.com/bartbroere))
+- Auto-Learn can run a small-model scribe when a session settles: with `autolearn.scribe` on, a private pass (`autolearn.model`, unset = the `smol` role) re-reads the finished session and mints or enhances managed skills for its reusable procedures, quoting the existing skill bodies so enhancing one cannot erase its procedure; a settle the scribe cannot start hands its stop back to the capture nudge, and one-shot (`-p`/JSON) runs give the pass a shutdown budget instead of aborting it, while the standing guidance and the capture nudge gained a concrete trigger list (user correction, tool-verified claim, non-obvious behaviour, recurring procedure) ([#15460](https://github.com/can1357/oh-my-pi/pull/15460) by [@iacore](https://github.com/iacore))
 
 ### Fixed
 
