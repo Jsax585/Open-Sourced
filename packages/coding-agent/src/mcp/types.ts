@@ -1,6 +1,7 @@
 import type {
 	MCPAnnotations,
 	MCPContent,
+	MCPIcon,
 	MCPImageContent,
 	MCPProgress,
 	MCPResourceContent,
@@ -180,14 +181,6 @@ export interface MCPConfigFile {
  * is refused even for a caller whose consent is already stored.
  */
 export const MCP_PROTOCOL_VERSION = "2025-11-25";
-
-/** Optionally-sized icon for MCP UI metadata (implementation, tools, resources). */
-export interface MCPIcon {
-	src: string;
-	mimeType?: string;
-	sizes?: string[];
-	theme?: "light" | "dark";
-}
 
 /** MCP implementation info (`InitializeRequest.params.clientInfo` / `InitializeResult.serverInfo`). */
 export interface MCPImplementation {

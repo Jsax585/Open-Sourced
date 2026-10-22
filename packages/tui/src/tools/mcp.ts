@@ -394,6 +394,14 @@ export interface MCPAnnotations {
 	lastModified?: string;
 }
 
+/** Optionally-sized icon for MCP UI metadata (implementation, tools, resources). */
+export interface MCPIcon {
+	src: string;
+	mimeType?: string;
+	sizes?: string[];
+	theme?: "light" | "dark";
+}
+
 /** Link to a server resource returned by an MCP tool; the client fetches it separately. */
 export interface MCPResourceLinkContent {
 	type: "resource_link";
@@ -404,6 +412,8 @@ export interface MCPResourceLinkContent {
 	mimeType?: string;
 	size?: number;
 	annotations?: MCPAnnotations;
+	icons?: MCPIcon[];
+	_meta?: Record<string, unknown>;
 }
 
 /** Supported MCP result content blocks retained in display metadata. */

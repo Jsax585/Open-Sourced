@@ -33,6 +33,10 @@ describe("MCP bridge resource links", () => {
 					// Spec ResourceLink fields; `bun check` rejects this literal if MCPResourceLinkContent lacks them.
 					size: 2048,
 					annotations: { audience: ["assistant"], priority: 0.8, lastModified: "2026-10-01T00:00:00Z" },
+					icons: [
+						{ src: "https://docs.example/icon.png", mimeType: "image/png", sizes: ["48x48"], theme: "dark" },
+					],
+					_meta: { "example.com/revision": 7 },
 				},
 				{ type: "resource_link", uri: "file:///project/docs/api.md", name: "api.md" },
 			],

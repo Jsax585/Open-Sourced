@@ -9,9 +9,7 @@
 
 ### Changed
 
-### Changed
-
-- Moved the `MCPAnnotations` type to `@oh-my-pi/pi-tui/tools/mcp`, where MCP resource links share it; import it from there or from `@oh-my-pi/pi-coding-agent/mcp` instead of `@oh-my-pi/pi-coding-agent/mcp/types` ([#16561](https://github.com/can1357/oh-my-pi/pull/16561) by [@mottopanikeiku](https://github.com/mottopanikeiku))
+- Moved the `MCPAnnotations` and `MCPIcon` types to `@oh-my-pi/pi-tui/tools/mcp`, where MCP resource links share them; import them from there or from `@oh-my-pi/pi-coding-agent/mcp` instead of `@oh-my-pi/pi-coding-agent/mcp/types` ([#16561](https://github.com/can1357/oh-my-pi/pull/16561) by [@mottopanikeiku](https://github.com/mottopanikeiku))
 
 ### Fixed
 
