@@ -93,6 +93,7 @@ import {
 	loadSessionFile,
 	normalizeAssistantUsage,
 	parseSessionContent,
+	sessionResumeLoadLimit,
 	readSessionHeaderId,
 	resolveBlobRefsInEntries,
 	resolveBlobRefsInEntriesSync,
@@ -2339,7 +2340,11 @@ export class SessionManager {
 		this.#sessionClaim = undefined;
 
 		const resolvedSessionFile = path.resolve(sessionFile);
-		const loaded = loadedSession ?? (await loadSessionFile(resolvedSessionFile, this.#storage));
+		const loaded =
+			loadedSession ??
+			(await loadSessionFile(resolvedSessionFile, this.#storage, {
+				maxBytes: sessionResumeLoadLimit(),
+			}));
 		const sourceSize =
 			loaded.sourceSize !== undefined
 				? loaded.sourceSize
@@ -4210,7 +4215,11 @@ export class SessionManager {
 		storage: SessionStorage = new FileSessionStorage(),
 		options?: { initialCwd?: string; parentSession?: string; suppressBreadcrumb?: boolean; throwIfMissing?: boolean },
 	): Promise<SessionManager> {
-		const probed = await loadSessionFile(filePath, storage, { throwIfMissing: options?.throwIfMissing });
+		const loadOptions = {
+			throwIfMissing: options?.throwIfMissing,
+			maxBytes: sessionResumeLoadLimit(),
+		};
+		const probed = await loadSessionFile(filePath, storage, loadOptions);
 		const header = probed.entries.find(entry => entry.type === "session") as SessionHeader | undefined;
 		// Resume into the session's recorded cwd only when it is verifiably
 		// accessible. A deleted or permission-blocked (macOS TCC denial) project
@@ -4233,9 +4242,7 @@ export class SessionManager {
 		// transcript deleted, truncated, or replaced mid-probe then fails
 		// closed here (ENOENT / holds-no-entries, without minting) instead of
 		// reviving stale history. Other callers keep the single probe read.
-		const loaded = options?.throwIfMissing
-			? await loadSessionFile(filePath, storage, { throwIfMissing: true })
-			: probed;
+		const loaded = options?.throwIfMissing ? await loadSessionFile(filePath, storage, loadOptions) : probed;
 		await manager.#setSessionFile(filePath, loaded, {
 			throwIfMissing: options?.throwIfMissing,
 			newSession: { parentSession: options?.parentSession },

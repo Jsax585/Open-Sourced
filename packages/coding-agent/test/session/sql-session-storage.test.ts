@@ -6,7 +6,8 @@
  * statements built at construction.
  */
 
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
+import { loadSessionFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { serializeTitleSlot } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
 import { SqlSessionStorage, type SqlSessionStorageClient } from "@oh-my-pi/pi-coding-agent/session/sql-session-storage";
 import { SQL } from "bun";
@@ -18,6 +19,52 @@ async function createSqlite(): Promise<{ client: InstanceType<typeof SQL>; stora
 }
 
 describe("SqlSessionStorage (SQLite backend)", () => {
+	it("refuses a peer-grown transcript through a bounded read despite a stale index", async () => {
+		const { client, storage: writer } = await createSqlite();
+		const path = "/sessions/p/grown.jsonl";
+		const header = `${JSON.stringify({ type: "session", id: "s1", version: 1, timestamp: "t", cwd: "/c" })}\n`;
+		await writer.writeText(path, header);
+		const reader = await SqlSessionStorage.create({ client });
+		const maxBytes = reader.statSync(path).size;
+		const appended = `${JSON.stringify({ type: "message", id: "m1", text: "界" })}\n`;
+		const journal = writer.openWriter(path);
+		await journal.append(appended);
+		const fullRead = spyOn(reader, "readText");
+		const slices = spyOn(reader, "readTextSlices");
+		try {
+			await expect(loadSessionFile(path, reader, { maxBytes })).rejects.toThrow(/exceeding.*load limit/);
+			expect(fullRead).not.toHaveBeenCalled();
+			expect(slices).toHaveBeenCalledWith(path, maxBytes + 1, 0);
+			expect(await writer.readText(path)).toBe(header + appended);
+			const exactSize = Buffer.byteLength(header + appended, "utf8");
+			const loaded = await loadSessionFile(path, reader, { maxBytes: exactSize });
+			expect(loaded.entries.map(entry => entry.id)).toEqual(["s1", "m1"]);
+			expect(loaded.sourceSize).toBe(exactSize);
+		} finally {
+			fullRead.mockRestore();
+			slices.mockRestore();
+			await client.end();
+		}
+	});
+
+	it("loads a peer-shrunk transcript despite a stale oversized index", async () => {
+		const { client, storage: writer } = await createSqlite();
+		const path = "/sessions/p/shrunk.jsonl";
+		const header = `${JSON.stringify({ type: "session", id: "s1", version: 1, timestamp: "t", cwd: "/c" })}\n`;
+		await writer.writeText(path, `${header}${JSON.stringify({ type: "message", id: "m1", text: "old message" })}\n`);
+		const reader = await SqlSessionStorage.create({ client });
+		try {
+			await writer.writeText(path, header);
+			const maxBytes = Buffer.byteLength(header);
+			expect(reader.statSync(path).size).toBeGreaterThan(maxBytes);
+			const loaded = await loadSessionFile(path, reader, { maxBytes });
+			expect(loaded.entries.map(entry => entry.id)).toEqual(["s1"]);
+			expect(loaded.sourceSize).toBe(maxBytes);
+		} finally {
+			await client.end();
+		}
+	});
+
 	it("indexes writeText metadata and reads content asynchronously", async () => {
 		const { client, storage } = await createSqlite();
 		await storage.writeText("/sessions/p/a.jsonl", "line1\nline2\n");
@@ -444,6 +491,51 @@ function capturingClient(adapter: "postgres" | "mysql"): {
 }
 
 describe("SqlSessionStorage (dialect-specific SQL)", () => {
+	it("loads PostgreSQL transcripts with a load limit above the SQL integer range", async () => {
+		const { client } = capturingClient("postgres");
+		const storage = await SqlSessionStorage.create({ client });
+		const path = "/s/large-limit.jsonl";
+		const content = `${JSON.stringify({ type: "session", id: "s1" })}\n`;
+		await storage.writeText(path, content);
+		const bytes = new TextEncoder().encode(content);
+		const query = spyOn(client, "unsafe").mockImplementation(async (_sql, values) => {
+			const prefix = Number(values?.[0]);
+			const suffix = Number(values?.[1]);
+			// PostgreSQL's bytea substring arguments use signed 32-bit integers.
+			if (prefix > 0x7fffffff || suffix > 0x7fffffff) throw new Error("integer out of range");
+			return [{ head: bytes.subarray(0, prefix), tail: suffix > 0 ? bytes.subarray(-suffix) : new Uint8Array() }];
+		});
+		try {
+			const loaded = await loadSessionFile(path, storage, { maxBytes: 4294967296 });
+			expect(loaded.entries.map(entry => entry.id)).toEqual(["s1"]);
+			expect(loaded.sourceSize).toBe(bytes.byteLength);
+			expect(await storage.readTextSlices(path, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)).toEqual([
+				content,
+				content,
+			]);
+		} finally {
+			query.mockRestore();
+		}
+	});
+
+	it("refuses a BOM-prefixed oversized PostgreSQL byte window before parsing", async () => {
+		const { client } = capturingClient("postgres");
+		const storage = await SqlSessionStorage.create({ client });
+		const path = "/s/bom.jsonl";
+		const header = `${JSON.stringify({ type: "session", id: "s1" })}\n`;
+		const content = `\uFEFF${header}${" ".repeat(100)}`;
+		await storage.writeText(path, content);
+		const maxBytes = Buffer.byteLength(header) + 3;
+		const query = spyOn(client, "unsafe").mockResolvedValue([
+			{ head: new TextEncoder().encode(content).subarray(0, maxBytes + 1), tail: new Uint8Array() },
+		]);
+		try {
+			await expect(loadSessionFile(path, storage, { maxBytes })).rejects.toThrow(/exceeding.*load limit/);
+		} finally {
+			query.mockRestore();
+		}
+	});
+
 	it("PostgreSQL uses numbered placeholders and `||` concat", async () => {
 		const { client, queries } = capturingClient("postgres");
 		const storage = await SqlSessionStorage.create({ client });
