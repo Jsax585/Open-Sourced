@@ -2,15 +2,19 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { findPersistedRecall, persistRecall } from "../memory-backend/recall-entry";
 import type { MemoryPromptPreparation } from "../memory-backend/types";
 import type { AgentSession } from "../session/agent-session";
+import type { SessionEntry } from "../session/session-entries";
 import { type BankScope, ensureBankExists } from "./bank";
-import type { HindsightApi, MemoryItemInput } from "./client";
+import { HINDSIGHT_TIMESTAMP_UNSET, hindsightEventTimestamp, type HindsightApi, type MemoryItemInput } from "./client";
 import type { HindsightConfig } from "./config";
 import {
 	composeRecallQuery,
 	formatMemories,
+	hasSubstantiveContent,
 	type HindsightMessage,
+	HINDSIGHT_UI_RECEIPT_ROLE,
 	prepareRetentionTranscript,
 	sliceLastTurnsByUserBoundary,
+	stripMemoryTags,
 	truncateRecallQuery,
 } from "./content";
 import {
@@ -202,6 +206,255 @@ function extendRetentionPrefixKey(key: string, messages: HindsightMessage[], fro
 	return key;
 }
 
+/**
+ * Journal checkpoint for opt-in per-message retain. Latest entry on the active
+ * branch wins. Not an external store: same custom-entry path as memory recall.
+ */
+export const HINDSIGHT_RETAIN_CHECKPOINT_TYPE = "hindsight_retain";
+
+const UI_RECEIPT_ROLE = HINDSIGHT_UI_RECEIPT_ROLE;
+
+interface RetainCutoverMarker {
+	version: 1;
+	kind: "cutover";
+	scope: string;
+	cutover: string[];
+}
+
+interface RetainAcceptedDelta {
+	version: 1;
+	kind: "accepted";
+	scope: string;
+	accepted: string[];
+}
+
+interface RetainCheckpointStore {
+	getBranch?: () => SessionEntry[];
+	getEntries?: () => SessionEntry[];
+	appendCustomEntry?: (customType: string, data?: unknown) => string;
+}
+
+interface PerMessageRetainItem {
+	item: MemoryItemInput;
+	identities: string[];
+}
+
+interface FrozenRetain {
+	epoch: number;
+	userTurns: number;
+	sessionId: string;
+	bankId: string;
+	retainTags?: string[];
+	retainContext: string;
+	scope: string;
+	store: RetainCheckpointStore;
+	sourceTimestamp: Date;
+	cutover: string[];
+	accepted: string[];
+	cutoverPersisted: boolean;
+	pendingCutover: string[];
+}
+
+/** Ledger identity: endpoint, account, bank, retain tags, and scoping. Not bank id alone. */
+export function hindsightRetainScope(input: {
+	apiUrl: string | null;
+	apiToken: string | null;
+	bankId: string;
+	retainTags?: readonly string[];
+	scoping: string;
+}): string {
+	return JSON.stringify([
+		"hindsight-retain",
+		input.apiUrl,
+		Bun.hash(input.apiToken ?? "").toString(16),
+		input.bankId,
+		input.retainTags ?? [],
+		input.scoping,
+	]);
+}
+
+/** Stable retain identity. Receipts use entry id plus question id; other turns use entry id. */
+function hindsightRetainIdentity(message: HindsightMessage): string | undefined {
+	const entryId = message.entryId?.trim();
+	if (!entryId) return undefined;
+	if (message.role === UI_RECEIPT_ROLE) {
+		const questionId = message.questionId?.trim();
+		if (!questionId) return undefined;
+		return `receipt:${entryId}:${questionId}`;
+	}
+	return `entry:${entryId}`;
+}
+
+/** Document id for a user or assistant journal entry. Stable across resume; not the session id. */
+function hindsightMessageDocumentId(sessionId: string, entryId: string): string {
+	return `omp-msg:${sessionId}:${entryId}`;
+}
+
+/** Document id for one qualified ask receipt. Same entry id can carry several question ids. */
+function hindsightReceiptDocumentId(sessionId: string, entryId: string, questionId: string): string {
+	return `omp-receipt:${sessionId}:${entryId}:${questionId}`;
+}
+
+function substantiveSource(content: string): string | undefined {
+	const stripped = stripMemoryTags(content).trim();
+	return hasSubstantiveContent(stripped) ? stripped : undefined;
+}
+
+function checkpointEntries(store: RetainCheckpointStore | undefined): SessionEntry[] {
+	if (!store) return [];
+	if (typeof store.getBranch === "function") return store.getBranch();
+	if (typeof store.getEntries === "function") return store.getEntries();
+	return [];
+}
+
+function stringList(value: unknown): string[] | undefined {
+	if (!Array.isArray(value) || !value.every(item => typeof item === "string")) return undefined;
+	return value;
+}
+
+function readCheckpointRecord(data: unknown): RetainCutoverMarker | RetainAcceptedDelta | undefined {
+	if (!data || typeof data !== "object") return undefined;
+	const record = data as Record<string, unknown>;
+	if (record.version !== 1 || typeof record.scope !== "string" || typeof record.kind !== "string") return undefined;
+	if (record.kind === "cutover") {
+		const cutover = stringList(record.cutover);
+		if (!cutover) return undefined;
+		return { version: 1, kind: "cutover", scope: record.scope, cutover };
+	}
+	if (record.kind === "accepted") {
+		const accepted = stringList(record.accepted);
+		if (!accepted) return undefined;
+		return { version: 1, kind: "accepted", scope: record.scope, accepted };
+	}
+	return undefined;
+}
+
+/** Cutover marker plus accepted deltas for this scope, stopping at a reset boundary. */
+function readRetainLedger(
+	store: RetainCheckpointStore | undefined,
+	scope: string,
+): { cutover: string[]; accepted: string[] } | undefined {
+	const entries = checkpointEntries(store);
+	const accepted: string[] = [];
+	let cutover: string[] | undefined;
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index];
+		if (!entry) continue;
+		if (entry.type === "reset_boundary") break;
+		if (entry.type !== "custom" || entry.customType !== HINDSIGHT_RETAIN_CHECKPOINT_TYPE) continue;
+		const record = readCheckpointRecord(entry.data);
+		if (!record || record.scope !== scope) continue;
+		if (record.kind === "accepted") accepted.push(...record.accepted);
+		else if (cutover === undefined) cutover = record.cutover;
+	}
+	if (!cutover) return undefined;
+	return { cutover, accepted };
+}
+
+function writeRetainRecord(
+	store: RetainCheckpointStore | undefined,
+	data: RetainCutoverMarker | RetainAcceptedDelta,
+): boolean {
+	if (!store || typeof store.appendCustomEntry !== "function") return false;
+	try {
+		store.appendCustomEntry(HINDSIGHT_RETAIN_CHECKPOINT_TYPE, data);
+		return true;
+	} catch (error) {
+		logger.warn("Hindsight: retain checkpoint write failed", { error: String(error) });
+		return false;
+	}
+}
+
+function branchReader(store: RetainCheckpointStore | undefined): { getEntries(): SessionEntry[] } | undefined {
+	if (!store) return undefined;
+	if (typeof store.getBranch === "function") {
+		const readBranch = store.getBranch.bind(store);
+		return { getEntries: () => readBranch() };
+	}
+	if (typeof store.getEntries === "function") {
+		const readEntries = store.getEntries.bind(store);
+		return { getEntries: () => readEntries() };
+	}
+	return undefined;
+}
+
+function formatSourcePart(source: HindsightMessage): string | undefined {
+	const text = substantiveSource(source.content);
+	if (!text) return undefined;
+	const lines = [`[role: ${source.role}]`];
+	const timestamp = source.timestamp?.trim();
+	if (timestamp && hindsightEventTimestamp(timestamp) !== HINDSIGHT_TIMESTAMP_UNSET) {
+		lines.push(`[timestamp: ${timestamp}]`);
+	}
+	if (source.role === UI_RECEIPT_ROLE) {
+		if (source.toolCallId) lines.push(`[toolCallId: ${source.toolCallId}]`);
+		if (source.questionId) lines.push(`[questionId: ${source.questionId}]`);
+	}
+	lines.push(text, `[${source.role}:end]`);
+	return lines.join("\n");
+}
+
+function documentIdFor(sessionId: string, source: HindsightMessage, entryId: string): string | undefined {
+	if (source.role === UI_RECEIPT_ROLE) {
+		const questionId = source.questionId?.trim();
+		if (!questionId) return undefined;
+		return hindsightReceiptDocumentId(sessionId, entryId, questionId);
+	}
+	return hindsightMessageDocumentId(sessionId, entryId);
+}
+
+function buildPerMessageItems(
+	messages: readonly HindsightMessage[],
+	sessionId: string,
+	retainContext: string,
+	tags: string[] | undefined,
+	covered: ReadonlySet<string>,
+): { items: PerMessageRetainItem[]; skippedUnidentified: boolean } {
+	const items: PerMessageRetainItem[] = [];
+	let skippedUnidentified = false;
+	for (const source of messages) {
+		if (!source) continue;
+		const text = formatSourcePart(source);
+		if (!text) continue;
+		const identity = hindsightRetainIdentity(source);
+		const entryId = source.entryId?.trim();
+		if (!identity || !entryId) {
+			if (source.role === "user" || source.role === "assistant" || source.role === UI_RECEIPT_ROLE) {
+				skippedUnidentified = true;
+			}
+			continue;
+		}
+		if (covered.has(identity)) continue;
+		const documentId = documentIdFor(sessionId, source, entryId);
+		if (!documentId) {
+			skippedUnidentified = true;
+			continue;
+		}
+		const metadata: Record<string, string> = {
+			session_id: sessionId,
+			entry_id: entryId,
+			retain_mode: "per-message",
+			source: "omp-transcript",
+		};
+		if (source.role === UI_RECEIPT_ROLE && source.questionId?.trim()) {
+			metadata.question_id = source.questionId.trim();
+		}
+		if (source.toolCallId?.trim()) metadata.tool_call_id = source.toolCallId.trim();
+		items.push({
+			identities: [identity],
+			item: {
+				content: text,
+				timestamp: hindsightEventTimestamp(source.timestamp),
+				context: retainContext,
+				metadata,
+				documentId,
+				tags,
+			},
+		});
+	}
+	return { items, skippedUnidentified };
+}
+
 /** Per-session Hindsight runtime state owned by its AgentSession. */
 export class HindsightSessionState {
 	/** Session id used for retain-queue metadata. */
@@ -246,6 +499,18 @@ export class HindsightSessionState {
 	/** Alias states delegate persistence config to a primary parent state. */
 	aliasOf?: HindsightSessionState;
 	readonly retainQueue: HindsightRetainQueue;
+	#automaticRetains = new Set<Promise<void>>();
+	#automaticRetainSealed = false;
+	#retainChain: Promise<void> = Promise.resolve();
+	#retainEpoch = 0;
+	/** Cutover ids frozen until the marker is durable. Not covered until then. */
+	#pendingCutover: string[] | undefined;
+	/** Identities present when per-message mode was first adopted. Not backfilled. */
+	#perMessageCutover = new Set<string>();
+	/** Identities whose retain POST was accepted. Failures stay out so resume retries them. */
+	#perMessageAccepted = new Set<string>();
+	#perMessageCheckpointReady = false;
+	#loggedMissingIdentity = false;
 
 	constructor(options: HindsightSessionStateOptions) {
 		this.sessionId = options.sessionId;
@@ -264,10 +529,14 @@ export class HindsightSessionState {
 		this.hasRecalledForFirstTurn = options.hasRecalledForFirstTurn ?? false;
 		this.aliasOf = options.aliasOf;
 		this.retainQueue = new HindsightRetainQueue(this);
+		this.#adoptPerMessageCheckpoint();
 	}
 
 	setSessionId(sessionId: string): void {
-		if (this.sessionId !== sessionId) this.#recallGeneration++;
+		if (this.sessionId !== sessionId) {
+			this.#recallGeneration++;
+			this.#retainEpoch++;
+		}
 		this.sessionId = sessionId;
 		this.#lastRetainedMessageIndex = 0;
 		this.#cachedTranscript = "";
@@ -276,12 +545,14 @@ export class HindsightSessionState {
 
 	resetConversationTracking(): void {
 		this.#recallGeneration++;
+		this.#retainEpoch++;
 		this.lastRetainedTurn = 0;
 		this.hasRecalledForFirstTurn = false;
 		this.lastRecallSnippet = undefined;
 		this.#lastRetainedMessageIndex = 0;
 		this.#cachedTranscript = "";
 		this.#lastRetainedPrefixKey = "";
+		this.#reloadPerMessageCheckpoint();
 	}
 
 	enqueueRetain(content: string, context?: string): void {
@@ -326,10 +597,219 @@ export class HindsightSessionState {
 		return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 	}
 
-	async retainSession(messages: HindsightMessage[]): Promise<void> {
+	#checkpointStore(): RetainCheckpointStore | undefined {
+		return this.session.sessionManager as RetainCheckpointStore | undefined;
+	}
+
+	#retainScope(): string {
+		return hindsightRetainScope({
+			apiUrl: this.config.hindsightApiUrl,
+			apiToken: this.config.hindsightApiToken,
+			bankId: this.bankId,
+			retainTags: this.retainTags,
+			scoping: this.config.scoping,
+		});
+	}
+
+	#scanBranchIdentities(store: RetainCheckpointStore | undefined): string[] {
+		const reader = branchReader(store);
+		if (!reader) return [];
+		try {
+			const identities: string[] = [];
+			for (const message of extractMessages(reader)) {
+				const identity = hindsightRetainIdentity(message);
+				if (identity) identities.push(identity);
+			}
+			return identities;
+		} catch (error) {
+			logger.warn("Hindsight: per-message cutover scan failed", {
+				sessionId: this.sessionId,
+				bankId: this.bankId,
+				error: String(error),
+			});
+			return [];
+		}
+	}
+
+	/** Load a durable ledger, or freeze a pending cutover that is not covered until saved. */
+	#adoptPerMessageCheckpoint(): void {
+		if (this.config.retainMode !== "per-message" || this.aliasOf) return;
+		const store = this.#checkpointStore();
+		const existing = readRetainLedger(store, this.#retainScope());
+		if (existing) {
+			this.#perMessageCutover = new Set(existing.cutover);
+			this.#perMessageAccepted = new Set(existing.accepted);
+			this.#pendingCutover = undefined;
+			this.#perMessageCheckpointReady = true;
+			return;
+		}
+		this.#pendingCutover ??= this.#scanBranchIdentities(store);
+		this.#perMessageCutover = new Set();
+		this.#perMessageAccepted = new Set();
+		this.#perMessageCheckpointReady = false;
+		if (this.#persistPendingCutover(store, this.#retainScope())) return;
+		logger.warn("Hindsight: per-message cutover checkpoint was not persisted", {
+			sessionId: this.sessionId,
+			bankId: this.bankId,
+		});
+		this.#notifyRetainFailure("per-message cutover checkpoint was not saved; retention is paused until it saves");
+	}
+
+	#reloadPerMessageCheckpoint(): void {
+		if (this.config.retainMode !== "per-message" || this.aliasOf) return;
+		this.#perMessageCutover = new Set();
+		this.#perMessageAccepted = new Set();
+		this.#pendingCutover = undefined;
+		this.#perMessageCheckpointReady = false;
+		this.#adoptPerMessageCheckpoint();
+	}
+
+	#persistPendingCutover(store: RetainCheckpointStore | undefined, scope: string): boolean {
+		if (this.#perMessageCheckpointReady) return true;
+		const cutover = this.#pendingCutover ?? [];
+		if (!writeRetainRecord(store, { version: 1, kind: "cutover", scope, cutover })) return false;
+		this.#perMessageCutover = new Set(cutover);
+		this.#pendingCutover = undefined;
+		this.#perMessageCheckpointReady = true;
+		return true;
+	}
+
+	#notifyRetainFailure(errorText: string): void {
+		const notify = this.session.emitNotice;
+		if (typeof notify !== "function") return;
+		notify.call(this.session, "warning", `Memory retention failed: ${errorText}`, "Hindsight");
+	}
+
+	#freezeRetain(userTurns: number, store: RetainCheckpointStore): FrozenRetain {
+		return {
+			epoch: this.#retainEpoch,
+			userTurns,
+			sessionId: this.sessionId,
+			bankId: this.bankId,
+			retainTags: this.retainTags,
+			retainContext: this.config.retainContext,
+			scope: this.#retainScope(),
+			store,
+			sourceTimestamp: this.#sessionSourceTimestamp() ?? new Date(),
+			cutover: [...this.#perMessageCutover],
+			accepted: [...this.#perMessageAccepted],
+			cutoverPersisted: this.#perMessageCheckpointReady,
+			pendingCutover: [...(this.#pendingCutover ?? this.#perMessageCutover)],
+		};
+	}
+
+	#startAutomaticRetain(): void {
+		if (this.#automaticRetainSealed || this.aliasOf || !this.config.autoRetain) return;
+		const store = this.#checkpointStore();
+		const reader = branchReader(store);
+		if (!reader || !store) return;
+		const userTurns = countUserTurns(reader);
+		if (userTurns - this.lastRetainedTurn < this.config.retainEveryNTurns) return;
+		const messages = extractMessages(reader);
+		if (messages.length === 0) return;
+		const frozen = this.#freezeRetain(userTurns, store);
+		const run = this.#retainChain.then(() => this.#finishFrozenRetain(messages, frozen));
+		const tracked = run.finally(() => {
+			this.#automaticRetains.delete(tracked);
+		});
+		this.#retainChain = tracked.then(
+			() => undefined,
+			() => undefined,
+		);
+		this.#automaticRetains.add(tracked);
+	}
+
+	async #finishFrozenRetain(messages: HindsightMessage[], frozen: FrozenRetain): Promise<void> {
+		try {
+			await this.retainSession(messages, frozen);
+			if (this.#retainEpoch === frozen.epoch) this.lastRetainedTurn = frozen.userTurns;
+		} catch (err) {
+			const errorText = err instanceof Error ? err.message : String(err);
+			logger.warn("Hindsight: auto-retain failed", {
+				sessionId: frozen.sessionId,
+				bankId: frozen.bankId,
+				error: errorText,
+			});
+			this.#notifyRetainFailure(errorText);
+		}
+	}
+
+	async #retainPerMessage(messages: HindsightMessage[], frozen?: FrozenRetain): Promise<void> {
+		const store = frozen?.store ?? this.#checkpointStore();
+		const scope = frozen?.scope ?? this.#retainScope();
+		const sessionId = frozen?.sessionId ?? this.sessionId;
+		const bankId = frozen?.bankId ?? this.bankId;
+		const live = !frozen || frozen.epoch === this.#retainEpoch;
+		let cutover = frozen ? [...frozen.cutover] : [...this.#perMessageCutover];
+		const accepted = frozen ? [...frozen.accepted] : [...this.#perMessageAccepted];
+		if (!(frozen ? frozen.cutoverPersisted : this.#perMessageCheckpointReady)) {
+			const pending = frozen?.pendingCutover ?? this.#pendingCutover ?? cutover;
+			if (!writeRetainRecord(store, { version: 1, kind: "cutover", scope, cutover: pending })) {
+				const errorText = "per-message cutover checkpoint was not saved";
+				this.#notifyRetainFailure(errorText);
+				throw new Error(`Hindsight ${errorText}`);
+			}
+			cutover = pending;
+			if (live) {
+				this.#perMessageCutover = new Set(pending);
+				this.#pendingCutover = undefined;
+				this.#perMessageCheckpointReady = true;
+			}
+		}
+		const covered = new Set<string>([...cutover, ...accepted]);
+		const { items, skippedUnidentified } = buildPerMessageItems(
+			messages,
+			sessionId,
+			frozen?.retainContext ?? this.config.retainContext,
+			frozen?.retainTags ?? this.retainTags,
+			covered,
+		);
+		if (skippedUnidentified && !this.#loggedMissingIdentity) {
+			this.#loggedMissingIdentity = true;
+			logger.warn("Hindsight: per-message retain skipped a message with no stable journal identity", {
+				sessionId,
+				bankId,
+			});
+		}
+		if (items.length === 0) {
+			if (skippedUnidentified) {
+				throw new Error("Hindsight per-message retain skipped a message with no stable journal identity");
+			}
+			return;
+		}
+		await ensureBankExists(this.client, bankId, this.config, this.banksSet);
+		await this.client.retainBatch(
+			bankId,
+			items.map(entry => entry.item),
+			{ async: true },
+		);
+		const fresh = items.flatMap(entry => entry.identities).filter(identity => !covered.has(identity));
+		if (fresh.length > 0 && !writeRetainRecord(store, { version: 1, kind: "accepted", scope, accepted: fresh })) {
+			const errorText = "accepted per-message retain was not checkpointed";
+			this.#notifyRetainFailure(errorText);
+			throw new Error(`Hindsight ${errorText}`);
+		}
+		if (live) {
+			for (const identity of fresh) this.#perMessageAccepted.add(identity);
+		}
+		if (skippedUnidentified) {
+			throw new Error("Hindsight per-message retain skipped a message with no stable journal identity");
+		}
+	}
+
+	async retainSession(messages: HindsightMessage[], frozen?: FrozenRetain): Promise<void> {
+		if (this.config.retainMode === "per-message") {
+			await this.#retainPerMessage(messages, frozen);
+			return;
+		}
+		const sessionId = frozen?.sessionId ?? this.sessionId;
+		const bankId = frozen?.bankId ?? this.bankId;
+		const retainTags = frozen?.retainTags ?? this.retainTags;
+		const retainContext = frozen?.retainContext ?? this.config.retainContext;
 		const retainedAt = new Date();
-		const sourceTimestamp = this.#sessionSourceTimestamp() ?? retainedAt;
+		const sourceTimestamp = frozen?.sourceTimestamp ?? this.#sessionSourceTimestamp() ?? retainedAt;
 		const retainFullWindow = this.config.retainMode === "full-session";
+		const commitCache = !frozen || frozen.epoch === this.#retainEpoch;
 		let documentId: string;
 		let transcript: string;
 		let nextCachedTranscript: string | undefined;
@@ -337,7 +817,7 @@ export class HindsightSessionState {
 		let hashedThrough = 0;
 
 		if (retainFullWindow) {
-			documentId = this.sessionId;
+			documentId = sessionId;
 			const boundary = this.#lastRetainedMessageIndex;
 			if (boundary <= messages.length) prefixKey = extendRetentionPrefixKey("", messages, 0, boundary);
 			if (boundary > messages.length || prefixKey !== this.#lastRetainedPrefixKey) {
@@ -355,7 +835,7 @@ export class HindsightSessionState {
 		} else {
 			const windowTurns = this.config.retainEveryNTurns + this.config.retainOverlapTurns;
 			const target = sliceLastTurnsByUserBoundary(messages, windowTurns);
-			documentId = `${this.sessionId}-${retainedAt.getTime()}`;
+			documentId = `${sessionId}-${(frozen?.sourceTimestamp ?? retainedAt).getTime()}`;
 			this.#lastRetainedMessageIndex = 0;
 			this.#cachedTranscript = "";
 			this.#lastRetainedPrefixKey = "";
@@ -364,34 +844,35 @@ export class HindsightSessionState {
 			transcript = windowTranscript;
 		}
 
-		await ensureBankExists(this.client, this.bankId, this.config, this.banksSet);
-		await this.client.retain(this.bankId, transcript, {
+		await ensureBankExists(this.client, bankId, this.config, this.banksSet);
+		await this.client.retain(bankId, transcript, {
 			documentId,
-			context: this.config.retainContext,
-			metadata: { session_id: this.sessionId },
-			tags: this.retainTags,
+			context: retainContext,
+			metadata: { session_id: sessionId },
+			tags: retainTags,
 			timestamp: sourceTimestamp,
 			async: true,
 		});
-		if (nextCachedTranscript !== undefined) {
+		if (nextCachedTranscript !== undefined && commitCache) {
 			this.#cachedTranscript = nextCachedTranscript;
-			// prefixKey hashes [0, hashedThrough) of this same snapshot; extend it instead of rehashing from 0.
 			this.#lastRetainedPrefixKey = extendRetentionPrefixKey(prefixKey, messages, hashedThrough, messages.length);
 			this.#lastRetainedMessageIndex = messages.length;
 		}
 	}
 
 	async maybeRetainOnAgentEnd(): Promise<void> {
-		if (!this.config.autoRetain) return;
-		// Cheap gate first: most agent_end events are not retain turns, so skip text extraction.
-		const userTurns = countUserTurns(this.session.sessionManager);
+		if (!this.config.autoRetain || this.aliasOf) return;
+		const store = this.#checkpointStore();
+		const reader = branchReader(store);
+		if (!reader) return;
+		const userTurns = countUserTurns(reader);
 		if (userTurns - this.lastRetainedTurn < this.config.retainEveryNTurns) return;
-		const messages = extractMessages(this.session.sessionManager);
-		if (messages.length === 0) return;
-
+		const messages = extractMessages(reader);
+		if (messages.length === 0 || !store) return;
+		const frozen = this.#freezeRetain(userTurns, store);
 		try {
-			await this.retainSession(messages);
-			this.lastRetainedTurn = userTurns;
+			await this.retainSession(messages, frozen);
+			if (this.#retainEpoch === frozen.epoch) this.lastRetainedTurn = userTurns;
 			if (this.config.debug) {
 				logger.debug("Hindsight: auto-retain succeeded", {
 					sessionId: this.sessionId,
@@ -401,25 +882,30 @@ export class HindsightSessionState {
 				});
 			}
 		} catch (err) {
+			const errorText = err instanceof Error ? err.message : String(err);
 			logger.warn("Hindsight: auto-retain failed", {
 				sessionId: this.sessionId,
 				bankId: this.bankId,
-				error: String(err),
+				error: errorText,
 			});
+			this.#notifyRetainFailure(errorText);
 		}
 	}
 
 	async forceRetainCurrentSession(): Promise<void> {
-		const messages = extractMessages(this.session.sessionManager);
+		const reader = branchReader(this.#checkpointStore());
+		const messages = reader ? extractMessages(reader) : [];
 		if (messages.length === 0) return;
 		// Forced retains are user-initiated rebuilds (`/memory enqueue`): drop the
 		// incremental cache so the full transcript is reformatted and resent even
 		// when no new messages arrived since the last auto-retain — otherwise a
 		// rebuild could never recover an upstream document that was deleted or a
-		// previous async retain that never materialized.
+		// previous async retain that never materialized. Per-message rebuilds
+		// resend post-cutover identities only; the one-time cutover is not cleared.
 		this.#lastRetainedMessageIndex = 0;
 		this.#cachedTranscript = "";
 		this.#lastRetainedPrefixKey = "";
+		if (this.config.retainMode === "per-message") this.#perMessageAccepted.clear();
 		try {
 			await this.retainSession(messages);
 			this.lastRetainedTurn = messages.filter(m => m.role === "user").length;
@@ -614,7 +1100,7 @@ export class HindsightSessionState {
 		this.unsubscribe?.();
 		this.unsubscribe = this.session.subscribe(event => {
 			if (event.type === "agent_end") {
-				void this.maybeRetainOnAgentEnd();
+				this.#startAutomaticRetain();
 				// Drain any queued tool-initiated retain calls now that the turn
 				// is settled. The queue is also debounced/size-bounded, but
 				// flushing here keeps the bank fresh between turns.
@@ -630,7 +1116,25 @@ export class HindsightSessionState {
 		});
 	}
 
+	/** Wait for retains that have already started. Does not seal or start a new retain. */
+	async awaitPendingAutomaticRetain(): Promise<void> {
+		while (this.#automaticRetains.size > 0) {
+			await Promise.allSettled(this.#automaticRetains);
+		}
+	}
+
+	/**
+	 * Seal and wait for automatic retains that have already started. Does not
+	 * start a retain for turns still under the cadence. Waits for API acceptance
+	 * (`async: true`), not server-side extraction.
+	 */
+	async drainAutomaticRetain(): Promise<void> {
+		this.#automaticRetainSealed = true;
+		await this.awaitPendingAutomaticRetain();
+	}
+
 	dispose(): void {
+		this.#automaticRetainSealed = true;
 		this.#recallGeneration++;
 		this.#mentalModelsLoadGeneration++;
 		this.unsubscribe?.();

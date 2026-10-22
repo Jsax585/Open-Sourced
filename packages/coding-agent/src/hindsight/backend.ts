@@ -59,9 +59,9 @@ export const hindsightBackend: MemoryBackend = {
 					aliasOf: parent,
 				}),
 			);
-			// Aliases don't run auto-recall/auto-retain, so any pending retain
-			// queue belongs to the previous alias and is safe to drop after a
-			// best-effort flush (`flushRetainQueue` is no-op when empty).
+			// Wait for a retain that already started, then the tool queue, before
+			// dropping this state. Do not start a new retain.
+			await previous?.drainAutomaticRetain();
 			await previous?.flushRetainQueue();
 			previous?.dispose();
 			return;
@@ -116,7 +116,10 @@ export const hindsightBackend: MemoryBackend = {
 		// UI / `deleteBank` directly. Drain pending tool-initiated retains first
 		// so we don't lose them.
 		const state = session?.getHindsightSessionState();
-		if (state) await state.flushRetainQueue();
+		if (state) {
+			await state.drainAutomaticRetain();
+			await state.flushRetainQueue();
+		}
 		const previous = session?.setHindsightSessionState(undefined);
 		previous?.dispose();
 		logger.warn(
@@ -129,6 +132,7 @@ export const hindsightBackend: MemoryBackend = {
 		const state = session?.getHindsightSessionState();
 		const primary = state?.aliasOf ? undefined : state;
 		if (!primary) return;
+		await primary.awaitPendingAutomaticRetain();
 		await primary.flushRetainQueue();
 		await primary.forceRetainCurrentSession();
 	},
@@ -279,12 +283,14 @@ async function installPrimaryState(
 	// owner cannot leave the actual current state undisposed.
 	let previous = session.getHindsightSessionState();
 	if (previous) {
+		await previous.drainAutomaticRetain();
 		await previous.flushRetainQueue();
 	}
 	const latest = session.getHindsightSessionState();
 	if (latest && latest !== previous) {
 		previous?.dispose();
 		previous = latest;
+		await previous.drainAutomaticRetain();
 		await previous.flushRetainQueue();
 	}
 
@@ -304,6 +310,7 @@ async function installPrimaryState(
 
 	const displaced = session.setHindsightSessionState(state);
 	if (displaced && displaced !== previous) {
+		await displaced.drainAutomaticRetain();
 		await displaced.flushRetainQueue();
 		displaced.dispose();
 	}

@@ -131,22 +131,23 @@ describe("Hindsight conversation source timestamps", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("keeps user/assistant SessionEntry timestamps and drops thinking/tool entries", () => {
+	it("keeps user/assistant source text, timestamps, and journal ids, and drops thinking/tool entries", () => {
 		const extracted = extractMessages({ getEntries: () => conversationEntries() });
-		expect(extracted).toEqual([
-			{
-				role: "user",
-				content: "i stopped doing that yesterday",
-				timestamp: USER_TS,
-			},
-			{
-				role: "assistant",
-				content: "got it, that was sunday then",
-				timestamp: ASSISTANT_TS,
-			},
-		]);
-		expect(extracted.some(m => m.content.includes("internal monologue"))).toBe(false);
-		expect(extracted.some(m => m.content.includes("secret tool output"))).toBe(false);
+		expect(extracted.map(message => message.role)).toEqual(["user", "assistant"]);
+		expect(extracted[0]).toMatchObject({
+			role: "user",
+			content: "i stopped doing that yesterday",
+			timestamp: USER_TS,
+			entryId: "u1",
+		});
+		expect(extracted[1]).toMatchObject({
+			role: "assistant",
+			content: "got it, that was sunday then",
+			timestamp: ASSISTANT_TS,
+			entryId: "a1",
+		});
+		expect(extracted.some(message => message.content.includes("internal monologue"))).toBe(false);
+		expect(extracted.some(message => message.content.includes("secret tool output"))).toBe(false);
 	});
 
 	it("uses the session start timestamp on every retain of the same conversation", async () => {

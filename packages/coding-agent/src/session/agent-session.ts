@@ -6106,6 +6106,7 @@ export class AgentSession implements SettingsScope {
 			this.#disconnectOwnedMcp(),
 			advisorRecorderClosed,
 			hindsightState?.flushRetainQueue() ?? Promise.resolve(),
+			hindsightState?.drainAutomaticRetain() ?? Promise.resolve(),
 			this.#disposeMnemopi(mnemopiState, options.mnemopiConsolidateTimeoutMs),
 			sharpshooterFlushed,
 		]);

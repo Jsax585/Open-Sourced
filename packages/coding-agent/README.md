@@ -28,7 +28,7 @@ The agent supports three mutually-exclusive memory backends, selected via the `m
 3. Optional environment overrides (env wins over settings):
    - `HINDSIGHT_API_URL`, `HINDSIGHT_API_TOKEN` — connection
    - `HINDSIGHT_BANK_ID`, `HINDSIGHT_DYNAMIC_BANK_ID`, `HINDSIGHT_AGENT_NAME` — bank addressing
-   - `HINDSIGHT_AUTO_RECALL`, `HINDSIGHT_AUTO_RETAIN`, `HINDSIGHT_RETAIN_MODE` — lifecycle
+   - `HINDSIGHT_AUTO_RECALL`, `HINDSIGHT_AUTO_RETAIN`, `HINDSIGHT_RETAIN_MODE` — lifecycle. `HINDSIGHT_RETAIN_MODE` is `full-session` (default), `last-turn`, or opt-in `per-message`. `per-message` is off unless set; it does not rewrite existing documents.
    - `HINDSIGHT_RECALL_BUDGET`, `HINDSIGHT_RECALL_MAX_TOKENS` — recall sizing
    - `HINDSIGHT_BANK_MISSION`, `HINDSIGHT_DEBUG`
 

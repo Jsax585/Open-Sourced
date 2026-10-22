@@ -163,6 +163,7 @@ describe("AgentSession concurrent disposal", () => {
 			order.push("hindsight:end");
 		});
 		vi.spyOn(hindsight, "dispose").mockImplementation(() => {});
+		vi.spyOn(hindsight, "drainAutomaticRetain").mockResolvedValue();
 		current.setHindsightSessionState(hindsight);
 
 		const mnemopi: MnemopiSessionState = Object.create(MnemopiSessionState.prototype);
@@ -201,6 +202,30 @@ describe("AgentSession concurrent disposal", () => {
 		expect(closeAt).toBeGreaterThan(order.indexOf("async:end"));
 		expect(closeAt).toBeGreaterThan(order.indexOf("hindsight:end"));
 		expect(closeAt).toBeGreaterThan(order.indexOf("mnemopi:end"));
+	});
+
+	it("waits for an already-started automatic retain before closing the session", async () => {
+		const current = createSession();
+		const retainGate = Promise.withResolvers<void>();
+		let closed = false;
+		const hindsight: HindsightSessionState = Object.create(HindsightSessionState.prototype);
+		vi.spyOn(hindsight, "flushRetainQueue").mockResolvedValue();
+		vi.spyOn(hindsight, "drainAutomaticRetain").mockImplementation(async () => {
+			await retainGate.promise;
+		});
+		vi.spyOn(hindsight, "dispose").mockImplementation(() => {});
+		current.setHindsightSessionState(hindsight);
+		vi.spyOn(current.sessionManager, "close").mockImplementation(async () => {
+			closed = true;
+		});
+
+		const dispose = current.dispose();
+		await flushMicrotasks();
+		expect(closed).toBe(false);
+		retainGate.resolve();
+		await dispose;
+		session = undefined;
+		expect(closed).toBe(true);
 	});
 
 	it("bounds post-prompt work that ignores abort", async () => {

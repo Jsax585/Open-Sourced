@@ -89,6 +89,11 @@ export interface ListDocumentsResponse {
 /** Mirrors the shape accepted by `POST /v1/default/banks/{bank_id}/memories`. */
 export interface MemoryItemInput {
 	content: string;
+	/**
+	 * Event time. Omitted or null defaults to now on the server. ISO 8601 uses that
+	 * instant. The literal `"unset"` stores no event date — required for a missing
+	 * or invalid source time. Do not omit a missing date.
+	 */
 	timestamp?: Date | string;
 	context?: string;
 	metadata?: Record<string, string>;
@@ -102,6 +107,10 @@ export interface MemoryItemInput {
 }
 
 export interface RetainOptions extends HindsightRequestOptions {
+	/**
+	 * Event time. Omitted defaults to now. Pass {@link HINDSIGHT_TIMESTAMP_UNSET}
+	 * when the source date is missing or invalid.
+	 */
 	timestamp?: Date | string;
 	context?: string;
 	metadata?: Record<string, string>;
@@ -666,6 +675,24 @@ function buildQueryString(query: Record<string, unknown>): string {
 		}
 	}
 	return params.toString();
+}
+
+/**
+ * Server sentinel: store the item with no event date. Omitting `timestamp` defaults
+ * to ingestion time, which mis-dates historical and unknown turns.
+ */
+export const HINDSIGHT_TIMESTAMP_UNSET = "unset";
+
+/**
+ * Wire timestamp for one source entry. A parseable source string is passed through
+ * so the instant is the journal's, not now and not the session header. Missing or
+ * invalid dates are `"unset"`, never omitted.
+ */
+export function hindsightEventTimestamp(raw: string | undefined): string {
+	if (typeof raw !== "string") return HINDSIGHT_TIMESTAMP_UNSET;
+	const trimmed = raw.trim();
+	if (!trimmed || Number.isNaN(Date.parse(trimmed))) return HINDSIGHT_TIMESTAMP_UNSET;
+	return trimmed;
 }
 
 function pruneUndefined(obj: Record<string, unknown>): Record<string, unknown> {

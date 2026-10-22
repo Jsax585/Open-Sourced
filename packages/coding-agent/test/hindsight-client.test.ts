@@ -57,6 +57,16 @@ describe("HindsightApi timestamp serialization", () => {
 
 		expect(firstTimestamp(bodies[0] ?? "{}")).toBe("2026-06-12T19:17:00+08:00");
 	});
+
+	it("sends the unset sentinel instead of omitting a missing event date", async () => {
+		const bodies = captureRequestBodies();
+		const client = new HindsightApi({ baseUrl: "http://hindsight.local" });
+
+		await client.retain("omp", "undated reference", { timestamp: "unset" });
+
+		const body = JSON.parse(bodies[0] ?? "{}") as { items?: { timestamp?: string }[] };
+		expect(body.items?.[0]?.timestamp).toBe("unset");
+	});
 });
 
 /** Fake mental-model list endpoint paging like Hindsight's server (limit default 100, max 1000). */

@@ -111,7 +111,8 @@ Mnemopi:
   - `hindsight.retainEveryNTurns = 3`
   - `hindsight.retainOverlapTurns = 2`
   - `hindsight.retainContext = "omp"`
-  - `hindsight.retainMode = "full-session"`
+  - `hindsight.retainMode = "full-session"` by default. `last-turn` is unchanged. Opt-in `per-message` sends one API item per journal entry (`omp-msg:<sessionId>:<entryId>`, or `omp-receipt:<sessionId>:<entryId>:<questionId>` for a UI receipt) with that entry's timestamp or the literal `unset`. It does not backfill history present at first adoption, and it does not delete old documents. Print and RPC dispose wait for an already-started retain POST (`async: true`), not for server extraction.
+  - `per-message` preserves each entry's source text without copying earlier turns into a differently dated item. Context-dependent replies such as "yes" can therefore need the linked session journal to interpret; this mode is not a guarantee of better extraction. Source timestamps describe when an entry was recorded, not when a decision became valid. Its cutover and accepted-submission checkpoints are custom entries in the existing journal, scoped to the endpoint, account, bank and tags; no separate memory store is created.
 - Mnemopi retain settings:
   - `mnemopi.autoRetain = true`
   - `mnemopi.retainEveryNTurns = 4`
@@ -128,7 +129,7 @@ Mnemopi:
 ## Notes
 - Hindsight storage is server-side. `hindsightBackend.clear(...)` drains the local queue, clears local cache/state, and warns that upstream deletion must happen in Hindsight UI or `deleteBank`.
 - Mnemopi storage is local SQLite. `mnemopiBackend.clear(...)` removes the database files for every active scoped bank and then rehydrates the backend when the session remains active.
-- Hindsight auto-retain uses the same bank but a different path than this tool: `retainSession(...)` extracts plain user/assistant transcript, strips `<memories>` / `<mental_models>` blocks, and calls single-item `retain(...)`.
+- Hindsight auto-retain uses the same bank but a different path than this tool: `retainSession(...)` extracts plain user/assistant transcript plus qualified UI receipts, strips `<memories>` / `<mental_models>` blocks, and calls single-item `retain(...)` in `full-session` and `last-turn`. Opt-in `per-message` calls `retainBatch(...)` with `async: true`.
 - Mnemopi auto-retain stores prepared transcripts with `source: "coding-agent-transcript"`, `importance: 0.65`, `veracity: "unknown"`, and `memoryType: "episode"`.
 - Hindsight mental-model bootstrap lives in the shared backend: `HindsightSessionState.runMentalModelLoad(...)` optionally resolves seeds, creates missing models, then caches a rendered `<mental_models>` block for prompt injection.
 - Built-in Hindsight seeds are `user-preferences`, `project-conventions`, and `project-decisions`. `projectTagged: true` seeds inherit the active scope's retain tags; untagged seeds read the whole bank.

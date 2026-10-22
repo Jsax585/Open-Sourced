@@ -50,7 +50,7 @@ export interface HindsightConfig {
 	autoRecall: boolean;
 	autoRetain: boolean;
 
-	retainMode: "full-session" | "last-turn";
+	retainMode: "full-session" | "last-turn" | "per-message";
 	retainEveryNTurns: number;
 	retainOverlapTurns: number;
 	retainContext: string;

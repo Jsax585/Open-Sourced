@@ -137,13 +137,14 @@ export const cfgHindsightRetainMode = register({
 	id: "hindsight.retainMode",
 	env: "HINDSIGHT_RETAIN_MODE",
 	type: "enum",
-	values: ["full-session", "last-turn"] as const,
+	values: ["full-session", "last-turn", "per-message"] as const,
 	default: "full-session",
 	ui: {
 		tab: "memory",
 		group: "Hindsight",
 		label: "Hindsight Retain Mode",
-		description: "full-session = upsert one document per session, last-turn = chunked",
+		description:
+			"full-session = upsert one document per session, last-turn = chunked, per-message = one turn segment per journal identity",
 		options: [
 			{
 				value: "full-session",
@@ -151,6 +152,12 @@ export const cfgHindsightRetainMode = register({
 				description: "Upsert one document per session (recommended)",
 			},
 			{ value: "last-turn", label: "Last turn", description: "Chunked retention sliced by turn boundaries" },
+			{
+				value: "per-message",
+				label: "Per message",
+				description:
+					"Opt-in. One turn segment per journal identity, with that entry's real timestamp or unset. Off by default; does not rewrite old documents.",
+			},
 		],
 		condition: "hindsightActive",
 	},

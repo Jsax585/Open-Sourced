@@ -9,11 +9,65 @@
  *   - retention transcript framing
  */
 
+/** Role for a native ask picker receipt. A UI participant response, not a typed turn and not assistant prose. */
+export const HINDSIGHT_UI_RECEIPT_ROLE = "ui-receipt";
+
+export type HindsightAskReceiptKind = "selection" | "custom" | "selection-and-custom" | "none";
+
+/**
+ * Assistant-offered description of a selected label. Not participant-authored.
+ * A receipt does not by itself establish identity or implementation.
+ */
+export interface HindsightAskReceiptScope {
+	label: string;
+	description: string;
+}
+
+/**
+ * Why an ask UI receipt was accepted. Present only on receipts.
+ * A match is not identity proof: `authorUI` means the primary session's ask picker, not a named person.
+ */
+export interface HindsightAskReceiptConditions {
+	kind: HindsightAskReceiptKind;
+	/** Offered labels the picker recorded, in picker order. Empty for custom-only or explicit none. */
+	selected: string[];
+	/** Picker recorded custom text, which is not a predefined selection. */
+	custom: boolean;
+	/** Offered question allowed more than one predefined selection. */
+	multi: boolean;
+	/** Index of the question in the matched ask call. */
+	questionIndex: number;
+	/** Kept labels were offered by the matched call. */
+	matchedOffered: true;
+	notError: true;
+	notTimeout: true;
+	notCancelled: true;
+	notMalformed: true;
+	/** Journal is a primary session, not a child `session_init` transcript. */
+	primary: true;
+	/** Response came from the ask picker, not a typed chat turn. */
+	authorUI: true;
+	/** Assistant-offered recommendation label, when the call named a valid recommended index. */
+	recommendation?: string;
+	/** Offered labels the picker did not select, in offered order. */
+	unselected: string[];
+	/** Assistant-offered descriptions of selected labels, in selection order. */
+	selectedScope: HindsightAskReceiptScope[];
+}
+
 export interface HindsightMessage {
 	role: string;
 	content: string;
 	/** Original SessionEntry.timestamp; omitted when the source had none. */
 	timestamp?: string;
+	/** Session entry that produced this record. Optional so existing callers stay valid. */
+	entryId?: string;
+	/** Ask tool call this UI receipt answers. */
+	toolCallId?: string;
+	/** Offered question id this UI receipt answers. */
+	questionId?: string;
+	/** Acceptance record for a UI receipt. Absent on ordinary turns. */
+	conditions?: HindsightAskReceiptConditions;
 }
 
 export interface RecallResultLike {

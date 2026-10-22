@@ -228,6 +228,8 @@ export class SessionMemory {
 
 	/** Resets transcript-scoped memory counters and removes a promoted prompt. */
 	async resetContextForNewTranscript(): Promise<void> {
+		const hindsight = this.#host.getHindsightSessionState();
+		if (hindsight && !hindsight.aliasOf) await hindsight.awaitPendingAutomaticRetain?.();
 		const hadPromotedMemoryPrompt = this.#baseSystemPromptBeforeMemoryPromotion !== undefined;
 		const resetHindsight = this.#resetHindsightConversationTrackingIfHindsight();
 		const resetMnemopi = this.#resetMnemopiConversationTrackingIfMnemopi();
@@ -269,6 +271,7 @@ export class SessionMemory {
 		const hindsight = this.#host.getHindsightSessionState();
 		if (hindsight) {
 			try {
+				await hindsight.drainAutomaticRetain();
 				await hindsight.flushRetainQueue();
 			} catch (error) {
 				logger.warn("Memory lifecycle: Hindsight flush failed", { error: String(error) });
