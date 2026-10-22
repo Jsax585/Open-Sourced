@@ -72,6 +72,7 @@ async function createContext() {
 		"app.thinking.toggle": ["ctrl+t"],
 		"app.history.search": ["ctrl+r"],
 		"app.editor.external": ["ctrl+g"],
+		"app.editor.replyQuoted": ["ctrl+shift+g", "alt+e"],
 		"app.model.selectTemporary": ["ctrl+y"],
 		"app.model.select": ["alt+m"],
 		"app.retry": ["alt+r"],
@@ -119,6 +120,7 @@ async function createContext() {
 		abort,
 		retry,
 		prewarmModelConnection: vi.fn(),
+		getLastAssistantText: vi.fn(() => "the last reply"),
 	};
 	const updatePendingMessagesDisplay = vi.fn();
 	const handleBtwBranchKey = vi.fn(async () => true);
@@ -1014,6 +1016,8 @@ describe("InputController global editor actions", () => {
 	const CTRL_G = "\x07";
 	const CTRL_SHIFT_O = "\x1b[111;6u";
 	const ALT_L = "\x1bl";
+	const CTRL_SHIFT_G = "\x1b[103;6u";
+	const ALT_E = "\x1be";
 
 	beforeAll(async () => {
 		await initTheme(false);
@@ -1114,6 +1118,39 @@ describe("InputController global editor actions", () => {
 
 		expect(dispatchInput(listeners, CTRL_G)).toBeUndefined();
 		expect(openExternalEditor).not.toHaveBeenCalled();
+	});
+
+	it("routes Ctrl+Shift+G and Alt+E to quoted-reply external editing", async () => {
+		const context = await createContext();
+		const controller = new context.InputController(context.ctx);
+		const openExternalEditorQuotedReply = vi.spyOn(controller, "openExternalEditorQuotedReply").mockResolvedValue();
+		controller.setupKeyHandlers();
+		const listeners = registeredInputListeners(context.spies.addInputListener);
+
+		expect(dispatchInput(listeners, CTRL_SHIFT_G)).toEqual({ consume: true });
+		expect(openExternalEditorQuotedReply).toHaveBeenCalledTimes(1);
+		expect(dispatchInput(listeners, ALT_E)).toEqual({ consume: true });
+		expect(openExternalEditorQuotedReply).toHaveBeenCalledTimes(2);
+	});
+
+	it("defers quoted-reply editing while a HookEditorComponent has focus", async () => {
+		const context = await createContext();
+		const controller = new context.InputController(context.ctx);
+		const openExternalEditorQuotedReply = vi.spyOn(controller, "openExternalEditorQuotedReply").mockResolvedValue();
+		controller.setupKeyHandlers();
+		const hookEditor = new HookEditorComponent(
+			context.ctx.ui,
+			"Edit",
+			undefined,
+			() => {},
+			() => {},
+		);
+		context.setFocused(hookEditor);
+		const listeners = registeredInputListeners(context.spies.addInputListener);
+
+		expect(dispatchInput(listeners, CTRL_SHIFT_G)).toBeUndefined();
+		expect(dispatchInput(listeners, ALT_E)).toBeUndefined();
+		expect(openExternalEditorQuotedReply).not.toHaveBeenCalled();
 	});
 
 	it("defers the tree selector's Ctrl+Shift+O filter binding", async () => {

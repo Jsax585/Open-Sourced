@@ -40,6 +40,7 @@ interface AppKeybindings {
 	"app.ask.hide": true;
 	"app.approval.approve": true;
 	"app.editor.external": true;
+	"app.editor.replyQuoted": true;
 	"app.message.followUp": true;
 	"app.retry": true;
 	"app.message.dequeue": true;
@@ -153,6 +154,10 @@ export const KEYBINDINGS = {
 	"app.editor.external": {
 		defaultKeys: "ctrl+g",
 		description: "Open external editor",
+	},
+	"app.editor.replyQuoted": {
+		defaultKeys: ["ctrl+shift+g", "alt+e"],
+		description: "Open external editor with the last reply quoted",
 	},
 	"app.message.followUp": {
 		// Ctrl+Enter is preserved for terminals that deliver it (Kitty/iTerm2/WezTerm/Ghostty),
