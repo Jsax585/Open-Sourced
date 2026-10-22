@@ -191,7 +191,9 @@ describe("managed-skills discovery", () => {
 	});
 
 	it("surfaces a managed skill whose frontmatter name is non-ASCII", async () => {
-		const dir = path.join(managedDir, "hanzi-holder");
+		// The directory must be the canonical name: write/delete resolve
+		// `managed-skills/<name>` and never the path the scan found.
+		const dir = path.join(managedDir, "般若理趣分");
 		await fs.mkdir(dir, { recursive: true });
 		await fs.writeFile(
 			path.join(dir, "SKILL.md"),
@@ -201,6 +203,17 @@ describe("managed-skills discovery", () => {
 		const hanzi = skills.find(s => s.name === "般若理趣分");
 		expect(hanzi).toBeDefined();
 		expect(hanzi?.source).toBe("omp-managed:user");
+	});
+
+	it("skips a managed skill whose directory is not its name", async () => {
+		const dir = path.join(managedDir, "hanzi-holder");
+		await fs.mkdir(dir, { recursive: true });
+		await fs.writeFile(
+			path.join(dir, "SKILL.md"),
+			["---", "name: 般若理趣分", "description: 講法。", "---", "", "# 般若理趣分"].join("\n"),
+		);
+		const { skills } = await loadSkills({ cwd: tempCwd });
+		expect(skills.some(s => s.name === "般若理趣分")).toBe(false);
 	});
 
 	it("surfaces a managed skill whose name carries a combining mark", async () => {

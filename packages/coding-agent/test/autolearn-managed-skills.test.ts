@@ -62,6 +62,14 @@ describe("managed-skills primitives", () => {
 			expect(sanitizeSkillName("  CAFÉ ")).toBe("caf\u00e9");
 		});
 
+		it("rejects a name too long for one filesystem path component", () => {
+			// U+10300 is one code point and four UTF-8 bytes: 64 of them fit the
+			// pattern but are 256 bytes, over the 255-byte NAME_MAX on ext4.
+			const wide = "\u{10300}".repeat(64);
+			expect(() => sanitizeSkillName(wide)).toThrow(/255 UTF-8 bytes/);
+			expect(sanitizeSkillName("\u{10300}".repeat(63))).toBe("\u{10300}".repeat(63));
+		});
+
 		it("still rejects names that could escape the root or break the prompt", () => {
 			expect(() => sanitizeSkillName("..")).toThrow();
 			expect(() => sanitizeSkillName("a\\b")).toThrow();
@@ -108,6 +116,14 @@ describe("managed-skills primitives", () => {
 			await writeManagedSkill({ action: "create", name: "กิ", description: "d", body: "# กิ" });
 			const { frontmatter } = parseFrontmatter(await Bun.file(skillFile("กิ")).text(), { source: "test" });
 			expect(frontmatter.name).toBe("กิ");
+		});
+
+		it("creates the longest accepted name without ENAMETOOLONG", async () => {
+			const name = "\u{10300}".repeat(63); // 252 UTF-8 bytes
+			await writeManagedSkill({ action: "create", name, description: "d", body: "b" });
+			expect(await Bun.file(skillFile(name)).exists()).toBe(true);
+			await deleteManagedSkill(name);
+			expect(await fs.readdir(getManagedSkillsDir())).toEqual([]);
 		});
 
 		it("stores one directory per name across Unicode normalization forms", async () => {

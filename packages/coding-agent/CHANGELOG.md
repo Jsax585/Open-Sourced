@@ -9,7 +9,7 @@
 
 ### Changed
 
-- Managed skill names may now use letters, digits, and combining marks of any script rather than ASCII letters and digits only: `manage_skill` and `learn` accept a name such as `般若理趣分` or `กิ`, and managed-skill discovery keeps such a skill instead of dropping it from the catalog. Names are lowercased and NFC-normalized before they become a directory, so `é` and `e` + U+0301 name one skill, and discovery skips a hand-placed name that normalization would rewrite (`Demo`, a decomposed spelling) instead of exposing it next to its canonical twin; `/`, `\`, whitespace, a leading dot, and the prompt-listing metacharacters `<`, `>`, and backtick stay rejected ([#15251](https://github.com/can1357/oh-my-pi/pull/15251) by [@iacore](https://github.com/iacore))
+- Managed skill names may now use letters, digits, and combining marks of any script rather than ASCII letters and digits only: `manage_skill` and `learn` accept a name such as `般若理趣分` or `กิ`, and managed-skill discovery keeps such a skill instead of dropping it from the catalog. Names are lowercased and NFC-normalized before they become a directory, so `é` and `e` + U+0301 name one skill, and discovery skips a hand-placed name that normalization would rewrite (`Demo`, a decomposed spelling) or that sits in a differently named directory, instead of exposing it next to its canonical twin; a name is also capped at 255 UTF-8 bytes so it fits one filesystem path component; `/`, `\`, whitespace, a leading dot, and the prompt-listing metacharacters `<`, `>`, and backtick stay rejected ([#15251](https://github.com/can1357/oh-my-pi/pull/15251) by [@iacore](https://github.com/iacore))
 
 ### Fixed
 
