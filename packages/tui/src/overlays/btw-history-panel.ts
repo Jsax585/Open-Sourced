@@ -19,6 +19,8 @@ import {
 	getBtwTurns,
 } from "./btw-history";
 import { compactImageMarkers, formatVisionMarker } from "../prompt/composer-attachments";
+import { extractImagePastePathsFromText } from "../prompt/custom-editor";
+import { BracketedPasteHandler } from "../bracketed-paste";
 import { getMarkdownTheme, type ThemeColor, theme } from "../theme/theme";
 import {
 	matchesSelectCancel,
@@ -53,6 +55,10 @@ interface BtwHistoryPanelOptions {
 		signal: AbortSignal,
 		images?: ImageContent[],
 	) => Promise<boolean>;
+	/** Read a clipboard image into the follow-up (an empty paste, as terminals send for one). */
+	onPasteImage?: () => Promise<unknown>;
+	/** Attach an image file whose path was pasted or dropped into the follow-up. */
+	onPasteImagePath?: (path: string) => Promise<void>;
 	/** Configured push-to-talk keys for a follow-up composer. */
 	spaceHoldKeys?: readonly KeyId[];
 	spaceHold?: (input: Input) => SpaceHoldHandler;
@@ -135,6 +141,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 	#listHeight = 1;
 	#focused = false;
 	#composer: FollowUpComposer | undefined;
+	readonly #pasteHandler = new BracketedPasteHandler();
 	#followUpPending = false;
 	#followLatest = false;
 	#turns: RenderedTurn[] = [];
@@ -405,8 +412,25 @@ export class BtwHistoryPanel implements Component, Focusable {
 		this.#composer.input.pasteText(text);
 		this.#options.requestRender();
 	}
+
+	/** A pasted image path or an empty (clipboard image) paste attaches an image; other text is typed. */
+	#paste(content: string): void {
+		const imagePaths = extractImagePastePathsFromText(content);
+		if (content.length === 0 && this.#options.onPasteImage) void this.#options.onPasteImage();
+		else if (imagePaths && this.#options.onPasteImagePath) {
+			for (const path of imagePaths) void this.#options.onPasteImagePath(path);
+		} else this.pasteText(content);
+	}
+
 	handleInput(data: string): void {
 		if (this.#composer) {
+			const paste = this.#pasteHandler.process(data);
+			if (paste.handled) {
+				if (paste.pasteContent !== undefined) this.#paste(paste.pasteContent);
+				if (paste.remaining.length > 0) this.handleInput(paste.remaining);
+				this.#options.requestRender();
+				return;
+			}
 			// The input owns every key it handles, including panel shortcuts and
 			// pasted text; the line keys it ignores still scroll the answer above.
 			if (!this.#composer.input.handleInput(data)) this.#scrollDetail(data);

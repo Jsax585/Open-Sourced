@@ -327,6 +327,31 @@ describe("BtwHistoryPanel native events", () => {
 		);
 	});
 
+	it("hands a follow-up's pasted image path and empty paste to the host, and types other pastes", () => {
+		const onPasteImage = vi.fn(async () => true);
+		const onPasteImagePath = vi.fn(async (_path: string) => {});
+		const history = new BtwHistoryPanel({
+			records: [record("a", "first question")],
+			onClose: () => {},
+			onCopy: () => {},
+			onCancel: () => {},
+			canFollowUp: () => true,
+			onFollowUp: async () => true,
+			onPasteImage,
+			onPasteImagePath,
+			requestRender: () => {},
+			getHeight: () => 30,
+		});
+		history.handleInput("f");
+		history.handleInput("\x1b[200~/tmp/shot.png\x1b[201~");
+		history.handleInput("\x1b[200~\x1b[201~");
+		history.handleInput("\x1b[200~plain words\x1b[201~");
+		expect(onPasteImagePath).toHaveBeenCalledWith("/tmp/shot.png");
+		expect(onPasteImage).toHaveBeenCalledTimes(1);
+		const input = findNode(history.describe(), node => node.key === "composer")?.c?.[0];
+		expect(input instanceof Input ? input.getValue() : undefined).toBe("plain words");
+	});
+
 	it("stops a running answer from its footer button and sizes the sheet to what it lists", () => {
 		const onCancel = vi.fn();
 		const running: BtwHistoryRecord = { ...record("a", "still going"), status: "running" };
