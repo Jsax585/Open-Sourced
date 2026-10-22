@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { getProviderDefinition } from "@oh-my-pi/pi-ai/registry";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
-import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
+import { getEnvApiKey } from "@oh-my-pi/pi-ai/env-api-key";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { isCatalogDescriptor, resolveModelCacheProviderId } from "@oh-my-pi/pi-catalog/provider-models";
 import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "@oh-my-pi/pi-catalog/provider-models/descriptors";
 import { lithosAiModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
-import type { FetchImpl, ModelSpec } from "@oh-my-pi/pi-catalog/types";
+import type { FetchImpl, Model, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import { LITHOSAI_API_BASE_URL, normalizeLithosAiBaseUrl } from "@oh-my-pi/pi-catalog/wire/lithosai";
 
 const originalKey = Bun.env.LITHOSAI_API_KEY;
@@ -51,21 +51,35 @@ function lithosModelsFetch(): { calls: string[]; authorizations: (string | null)
 	return { calls, authorizations, fetch };
 }
 
-/** A roster row as discovery yields it: `id` and nothing else. */
-function lithosSpec(id: string): ModelSpec<"openai-completions"> {
-	return {
-		id,
-		name: id,
-		api: "openai-completions",
-		provider: "lithosai",
-		baseUrl: LITHOSAI_API_BASE_URL,
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: null,
-		maxTokens: null,
-	};
+/** The live roster as `lithosAiModelManagerOptions` discovers it. */
+async function discoveredLithosSpecs(): Promise<readonly ModelSpec<"openai-completions">[]> {
+	const { fetch } = lithosModelsFetch();
+	const specs = await lithosAiModelManagerOptions({ apiKey: "lith_sk_test", fetch }).fetchDynamicModels?.();
+	if (!specs) throw new Error("LithosAI discovery returned no models");
+	return specs;
 }
+
+/**
+ * The built models the picker would show: those same discovered specs put
+ * through `buildModel`, never a hand-written spec that mirrors today's
+ * discovery defaults.
+ */
+async function discoveredLithosModels(): Promise<Map<string, Model<"openai-completions">>> {
+	return new Map((await discoveredLithosSpecs()).map(spec => [spec.id, buildModel(spec)]));
+}
+
+/**
+ * One id per family and per tier suffix shape: base, the `-ultra` variant that
+ * names its own family, and the `-ultra-chat` variant that folds onto a
+ * `-chat`-less sibling. The policy below is identical for all 13 roster ids,
+ * so these four carry it.
+ */
+const REPRESENTATIVE_LITHOS_ID = [
+	"deepseek-ai/DeepSeek-V4.1-Flash",
+	"deepseek-ai/DeepSeek-V4.1-Flash-ultra-chat",
+	"zai-org/GLM-5.3",
+	"moonshotai/Kimi-K3-ultra",
+] as const satisfies readonly (typeof LITHOSAI_ROSTER)[number][];
 
 describe("LithosAI provider support", () => {
 	test("discovers the roster with the stored key", async () => {
@@ -87,7 +101,36 @@ describe("LithosAI provider support", () => {
 		expect(lithosAiModelManagerOptions({}).fetchDynamicModels).toBeUndefined();
 	});
 
-	test("keeps roster rows on the deployment wire shape", () => {
+	test("seeds every discovered row with nothing but an id", async () => {
+		// `GET /v1/models` publishes bare `{id, object, created, owned_by}` rows,
+		// so anything else on a discovered spec — capabilities, limits, tariffs —
+		// would be invented by discovery rather than published by the endpoint.
+		// The reviewed rules are the only source those fields may come from, and
+		// they are asserted below on the built models.
+		const specs = await discoveredLithosSpecs();
+		expect(specs).toHaveLength(LITHOSAI_ROSTER.length);
+		for (const spec of specs) {
+			expect({
+				id: spec.id,
+				name: spec.name,
+				reasoning: spec.reasoning,
+				input: spec.input,
+				cost: spec.cost,
+				contextWindow: spec.contextWindow,
+				maxTokens: spec.maxTokens,
+			}).toEqual({
+				id: spec.id,
+				name: spec.id,
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: null,
+				maxTokens: null,
+			});
+		}
+	});
+
+	test("keeps discovered roster rows on the deployment wire shape", async () => {
 		// The endpoint publishes no capability flags per row — only ids — so the
 		// reviewed rules repair the discovery defaults: every roster id is a
 		// DeepSeek V4.1 Flash, GLM-5.3 or Kimi K3 deployment whose endpoint
@@ -95,42 +138,37 @@ describe("LithosAI provider support", () => {
 		// (measured live 2026-10-04). The request shape is provider-wide and
 		// overrides the openai-completions default (`max_completion_tokens`).
 		// Cost and context window are rule-owned and asserted separately.
-		for (const id of LITHOSAI_ROSTER) {
-			const model = buildModel(lithosSpec(id));
-			expect(model.reasoning).toBe(true);
-			expect(model.thinking).toMatchObject({ mode: "effort", efforts: ["low", "high", "max"] });
-			expect(model.compat.reasoningDisableMode).toBe("none-effort");
-			// The endpoint reads images on every roster row, so discovery's
-			// text-only seed must not survive into the built model.
-			expect(model.input).toEqual(["text", "image"]);
-			// The endpoint's own ceiling is the context window, not DeepSeek's
-			// published 384K output cap.
-			expect(model.maxTokens).toBe(1048576);
-			expect(model.compat.maxTokensField).toBe("max_tokens");
-			expect(model.compat.reasoningContentField).toBe("reasoning_content");
-			expect(model.compat.supportsDeveloperRole).toBe(true);
-			expect(model.compat.supportsStore).toBe(false);
-		}
-	});
-
-	test("advertises the effort ladder and its off switch on every tier id", () => {
+		//
 		// The roster splits each family into base/-fast/-ultra/-chat ids, and the
 		// taxonomy folds `-chat` into a `chat`-less sibling while `-ultra` names
 		// its own family — neither inherits the DeepSeek class ladder. A rule
-		// has to match the ids themselves, so this pins that the tier suffix
-		// shape does not fall back to the generic `minimal..xhigh` default and
-		// that `none` reaches the wire as `reasoning_effort: "none"` rather than
-		// being folded into the ladder as a tier.
-		for (const id of LITHOSAI_ROSTER) {
-			const model = buildModel(lithosSpec(id));
-			expect(model.thinking?.efforts).toEqual(["low", "high", "max"]);
-			expect(model.thinking?.efforts).not.toContain("minimal");
-			expect(model.thinking?.efforts).not.toContain("xhigh");
-			expect(model.thinking?.efforts).not.toContain("none");
+		// matches the ids themselves, so this pins that the tier suffix shape
+		// does not fall back to the generic `minimal..xhigh` default and that
+		// `none` stays a disable mode rather than becoming a ladder tier.
+		const models = await discoveredLithosModels();
+		for (const id of REPRESENTATIVE_LITHOS_ID) {
+			const model = models.get(id);
+			expect(model).toBeDefined();
+			expect(model?.reasoning).toBe(true);
+			expect(model?.thinking).toMatchObject({ mode: "effort", efforts: ["low", "high", "max"] });
+			expect(model?.thinking?.efforts).not.toContain("minimal");
+			expect(model?.thinking?.efforts).not.toContain("xhigh");
+			expect(model?.thinking?.efforts).not.toContain("none");
+			expect(model?.compat.reasoningDisableMode).toBe("none-effort");
+			// The endpoint reads images on every roster row, so discovery's
+			// text-only seed must not survive into the built model.
+			expect(model?.input).toEqual(["text", "image"]);
+			// The endpoint's own ceiling is the context window, not DeepSeek's
+			// published 384K output cap.
+			expect(model?.maxTokens).toBe(1048576);
+			expect(model?.compat.maxTokensField).toBe("max_tokens");
+			expect(model?.compat.reasoningContentField).toBe("reasoning_content");
+			expect(model?.compat.supportsDeveloperRole).toBe(true);
+			expect(model?.compat.supportsStore).toBe(false);
 		}
 	});
 
-	test("prices every roster row from the console tariff table", () => {
+	test("prices every discovered roster row from the console tariff table", async () => {
 		// A discovered row arrives with zeroed cost (the endpoint publishes
 		// none), so without the KDL rules every lithosai model bills at $0.
 		// These are the console's live discounted rates per million tokens;
@@ -150,11 +188,13 @@ describe("LithosAI provider support", () => {
 			"moonshotai/Kimi-K3-ultra": [5.6, 0.56, 28],
 			"moonshotai/Kimi-K3-ultra-chat": [5.6, 0.56, 28],
 		};
+		const models = await discoveredLithosModels();
+		expect([...models.keys()].sort()).toEqual([...LITHOSAI_ROSTER].sort());
 		for (const id of LITHOSAI_ROSTER) {
 			const [input, cacheRead, output] = EXPECTED[id];
-			const model = buildModel(lithosSpec(id));
-			expect(model.cost).toMatchObject({ input, output, cacheRead, cacheWrite: 0 });
-			expect(model.contextWindow).toBe(1048576);
+			const model = models.get(id);
+			expect(model?.cost).toMatchObject({ input, output, cacheRead, cacheWrite: 0 });
+			expect(model?.contextWindow).toBe(1048576);
 		}
 	});
 

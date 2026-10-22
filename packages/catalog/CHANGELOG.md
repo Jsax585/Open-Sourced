@@ -5,6 +5,7 @@
 ### Added
 
 - Added `resolveAnthropicApiVersion()`: Anthropic model discovery sends API version 2026-10-21 to the official API when `PI_ANTHROPIC_API_VERSION=2026-10-21` is set ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
+- Added the `lithosai` provider for LithosAI's hosted inference engine, with per-tier pricing, image input, and `low`/`high`/`max` reasoning effort on every discovered roster model ([#14206](https://github.com/can1357/oh-my-pi/pull/14206) by [@iacore](https://github.com/iacore))
 
 ### Changed
 
@@ -353,12 +354,9 @@
 - Fixed Google Antigravity listing models the signed-in account cannot use, such as Claude Opus 5.5 and Sonnet 5.5 on plans without them, which failed every request with `404 Requested entity was not found`. After a successful model refresh and on subsequent restarts, only models in the account's own Antigravity model list are offered ([#14328](https://github.com/can1357/oh-my-pi/issues/14328)).
 
 ## [18.6.0] - 2026-10-03
-- Added the `lithosai` provider for LithosAI's hosted inference engine (`https://api.lithosai.cloud/v1`). The organization-scoped `/v1/models` roster is discovered at runtime and keyed on both the credential and the endpoint, so no rows are frozen into the catalog ([#14206](https://github.com/can1357/oh-my-pi/pull/14206) by [@iacore](https://github.com/iacore))
-- Added LithosAI per-tier pricing and context windows for all 13 roster models. Discovery publishes no tariffs, so rows previously reported a zeroed cost; the rates now come from the vendor's console ([#14206](https://github.com/can1357/oh-my-pi/pull/14206) by [@iacore](https://github.com/iacore))
 
 ### Fixed
 
-- LithosAI roster rows no longer report as non-reasoning: every tier id now advertises DeepSeek's `low`/`high`/`max` effort ladder with `none` as the documented off state, and the endpoint's image input and output ceiling are declared instead of left at the discovery defaults ([#14206](https://github.com/can1357/oh-my-pi/pull/14206) by [@iacore](https://github.com/iacore))
 - Fixed DeepSeek V4 model IDs and the V4.1 Flash alias lacking version information in model identity and dashboards ([#14194](https://github.com/can1357/oh-my-pi/issues/14194)).
 - Fixed Antigravity models such as Claude Opus 5.5 and Sonnet 5.5 disappearing after `omp models refresh`. When the update check failed, omp reported an outdated Antigravity client version (2.8.0), so the server left the newer models out of the list. The fallback version is now 2.19.1.
 - DSML tool calls from DeepSeek models are now parsed on every host. This includes local servers (llama.cpp, LM Studio, vLLM), custom providers from `models.yml`, and gateways that weren't on the old list of supported hosts. Before, a complete `<｜DSML｜tool_calls>` envelope from these hosts showed up as plain text and the tool never ran ([#14202](https://github.com/can1357/oh-my-pi/pull/14202) by [@H4vC](https://github.com/H4vC)).
