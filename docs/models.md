@@ -126,27 +126,38 @@ The independent Codex setting is `providers.openaiWebsockets: auto|on|off`; it d
 not affect standard Responses. `PI_CODEX_WEBSOCKET` also remains Codex-only.
 
 For standard Responses, precedence is SDK request `preferWebsockets` → model
-`preferWebsockets` → `providers.openaiResponsesWebsockets` (default `false`).
-Both `true` and `false` are explicit overrides. The SDK without coding-agent
-settings defaults to HTTP/SSE unless the request or model opts in.
+`preferWebsockets` → provider `preferWebsockets` → `providers.openaiResponsesWebsockets`
+(default `false`). Both `true` and `false` are explicit overrides. The SDK without
+coding-agent settings uses the preference on its resolved model, or HTTP/SSE when
+none is set.
 
-Use `preferWebsockets` on a model or `modelOverrides` entry in `models.yml` to
-override the global default for that model. For example:
+For mixed providers, leave the global setting off and configure provider defaults
+in `models.yml`. Models inherit their provider's default unless explicitly overridden:
 
 ```yaml
 providers:
-  openai:
+  ws-capable-gateway:
+    preferWebsockets: true
     modelOverrides:
-      gpt-6-astra:
-        preferWebsockets: true
+      http-only-model:
+        preferWebsockets: false
+  http-only-gateway:
+    preferWebsockets: false
 ```
 
-Set the model value to `false` to keep one model on HTTP/SSE while the global
-switch is enabled. Keep `api: openai-responses` and the existing provider API root:
+Merge these fields into the existing provider entries. Provider IDs are not limited
+to `openai`: the setting applies to the standard Responses protocol across compatible
+providers and gateways. Provider defaults cover bundled, custom and newly discovered
+models. Model overrides belong under the corresponding provider's `modelOverrides`;
+custom `models` entries accept the same boolean directly. Model `true` can opt in
+under provider `false`, just as model `false` can opt out under provider `true`.
+
+`preferWebsockets` retains the existing model/SDK field name at provider scope rather
+than introducing a synonymous transport flag. For standard Responses, `true` selects
+WebSocket: it does not probe support or promise fallback. The endpoint must support
+Responses WebSocket `response.create`; HTTP Responses compatibility alone is not enough.
+Keep `api: openai-responses`, the existing API root, authentication and discovery:
 the client upgrades the same `/responses` endpoint without adding `/codex`.
-Authentication and discovery settings remain unchanged. Custom `models` entries
-accept the same boolean directly. The endpoint must support Responses WebSocket
-`response.create` events; HTTP Responses compatibility alone is not sufficient.
 
 Standard Responses WebSocket requests replay the full conversation on each turn.
 They do not use `previous_response_id` chaining, even when HTTP stateful Responses

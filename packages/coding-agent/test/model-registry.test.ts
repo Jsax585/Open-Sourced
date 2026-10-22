@@ -690,6 +690,112 @@ describe("ModelRegistry", () => {
 	});
 
 	describe("provider compat overrides", () => {
+		test("provider WebSocket defaults cover bundled and custom models while model preferences win", () => {
+			writeRawModelsJson({
+				openai: { preferWebsockets: true, modelOverrides: { "gpt-5-mini": { preferWebsockets: false } } },
+				"ws-provider": {
+					api: "openai-responses",
+					apiKey: "test-key",
+					baseUrl: "https://ws.example.com/v1",
+					preferWebsockets: true,
+					models: [{ id: "inherited" }, { id: "explicit-http", preferWebsockets: false }],
+				},
+				"http-provider": {
+					api: "openai-responses",
+					apiKey: "test-key",
+					baseUrl: "https://http.example.com/v1",
+					preferWebsockets: false,
+					models: [{ id: "inherited" }, { id: "explicit-ws", preferWebsockets: true }],
+				},
+			});
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const cases = [
+				["openai", "gpt-5-mini", false],
+				["openai", "gpt-5.4", true],
+				["ws-provider", "inherited", true],
+				["ws-provider", "explicit-http", false],
+				["http-provider", "inherited", false],
+				["http-provider", "explicit-ws", true],
+			] as const;
+			for (const [provider, id, expected] of cases) {
+				expect(registry.find(provider, id)?.preferWebsockets).toBe(expected);
+			}
+			const published = registry.getAll();
+			for (const [provider, id, expected] of cases) {
+				const model = published.find(model => model.provider === provider && model.id === id);
+				expect(model?.preferWebsockets).toBe(expected);
+				if (!model) throw new Error("Expected configured model");
+				for (const globalDefault of [false, true]) {
+					const settings = Settings.isolated({ "providers.openaiResponsesWebsockets": globalDefault });
+					expect(resolveOpenAIWebsocketPreference(settings, model)).toBe(expected);
+				}
+			}
+		});
+
+		test("discovered models inherit changed provider WebSocket defaults without persisting them into cache", async () => {
+			const config = {
+				api: "openai-responses",
+				baseUrl: "https://discovery.example.com/v1",
+				apiKey: "TEST_KEY",
+				authHeader: true,
+				discovery: { type: "openai-models-list" },
+				modelOverrides: {
+					"explicit-http": { preferWebsockets: false },
+					"explicit-ws": { preferWebsockets: true },
+				},
+			};
+			const fetch = mockOpenAiCompatibleModels("https://discovery.example.com/v1/models", [
+				"discovered",
+				"explicit-http",
+				"explicit-ws",
+			]);
+			writeRawModelsJson({ "discovery-provider": { ...config, preferWebsockets: true } });
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch });
+			for (const preferWebsockets of [true, false, undefined]) {
+				writeRawModelsJson({ "discovery-provider": { ...config, preferWebsockets } });
+				await registry.refresh("offline");
+				// Config edits invalidate discovery caches by mtime; refresh the
+				// provider before checking the newly cached catalog on restart.
+				await registry.refreshProvider("discovery-provider", "online");
+				// Both an existing full snapshot and a fresh lazy registry must read
+				// the current default, not the default used when discovery was cached.
+				const reopened = new ModelRegistry(authStorage, modelsJsonPath, { fetch });
+				for (const current of [registry, reopened]) {
+					const discovered = current.find("discovery-provider", "discovered");
+					expect(discovered).toMatchObject({ id: "discovered", api: "openai-responses" });
+					expect(discovered?.preferWebsockets).toBe(preferWebsockets);
+					expect(current.find("discovery-provider", "explicit-http")?.preferWebsockets).toBe(false);
+					expect(current.find("discovery-provider", "explicit-ws")?.preferWebsockets).toBe(true);
+				}
+			}
+		});
+
+		test("runtime provider WebSocket defaults update lazy and materialized models without overriding model choices", () => {
+			for (const materialized of [false, true]) {
+				const registry = new ModelRegistry(authStorage, modelsJsonPath);
+				const base = registry.find("openai", "gpt-5-mini");
+				if (!base) throw new Error("Expected bundled Responses model");
+				if (materialized) registry.getAll();
+				registry.registerProvider("runtime-ws", {
+					api: "openai-responses",
+					baseUrl: "https://runtime.example.com/v1",
+					apiKey: "test-key",
+					preferWebsockets: true,
+					models: [
+						{ ...base, id: "inherited", contextWindow: 32000, maxTokens: 1024, preferWebsockets: undefined },
+						{ ...base, id: "explicit-http", contextWindow: 32000, maxTokens: 1024, preferWebsockets: false },
+					],
+				});
+				expect(registry.find("runtime-ws", "inherited")?.preferWebsockets).toBe(true);
+				expect(registry.find("runtime-ws", "explicit-http")?.preferWebsockets).toBe(false);
+				registry.registerProvider("runtime-ws", { preferWebsockets: false });
+				expect(registry.find("runtime-ws", "inherited")?.preferWebsockets).toBe(false);
+				expect(registry.find("runtime-ws", "explicit-http")?.preferWebsockets).toBe(false);
+				registry.unregisterProvider("runtime-ws");
+				expect(registry.find("runtime-ws", "inherited")).toBeUndefined();
+			}
+		});
+
 		test("models.yml preserves standard Responses WebSocket preferences and explicit HTTP overrides", async () => {
 			const modelsPath = path.join(tempDir, "models.yml");
 			await Bun.write(

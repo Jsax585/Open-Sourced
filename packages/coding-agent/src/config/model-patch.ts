@@ -23,6 +23,8 @@ export interface ProviderOverride {
 	compat?: ModelSpec<Api>["compat"];
 	remoteCompaction?: RemoteCompactionConfig<Api>;
 	transport?: Model<Api>["transport"];
+	/** Default WebSocket preference for models without an explicit preference. */
+	preferWebsockets?: boolean;
 	guardrailIdentifier?: Model<Api>["guardrailIdentifier"];
 	guardrailVersion?: Model<Api>["guardrailVersion"];
 	guardrailTrace?: Model<Api>["guardrailTrace"];

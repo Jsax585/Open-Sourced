@@ -134,7 +134,13 @@ Codex recovery policy remains independent.
 
 The coding-agent resolves the session transport hint against the actual request
 model, including advisor and side requests. Codex uses `providers.openaiWebsockets`
-independently. Standard Responses uses the model preference before
+independently. The registry's final model projection fills an unset model preference
+from the provider's `preferWebsockets` default, after model overrides and before
+publication. It never writes that inherited value into base/discovery caches, so
+changing or removing a provider default cannot turn an old default into an explicit
+model preference. YAML configuration and extension provider registrations use the
+same projection, including lazy lookups, full snapshots, discovery and refresh.
+Standard Responses then uses the resolved model preference before
 `providers.openaiResponsesWebsockets` (default `false`), including OpenRouter
 Responses dispatch. An explicit SDK request preference takes precedence over
 that hint.
