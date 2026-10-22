@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `omp stats --follow --no-open` to keep session statistics ingesting without opening the dashboard ([#7558](https://github.com/can1357/oh-my-pi/issues/7558)).
+- Added `omp stats --follow --no-open` to keep session statistics ingesting without opening the dashboard ([#16729](https://github.com/can1357/oh-my-pi/pull/16729) by [@heshuoshuo0512](https://github.com/heshuoshuo0512)).
 
 ## [18.12.0] - 2026-10-17
 
