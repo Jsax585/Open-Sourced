@@ -279,6 +279,73 @@ describe("terminal task failure classification", () => {
 		expect(result.structuredOutput?.data).toEqual({ ok: true });
 	});
 
+	it("allows only an expected soft-budget unstructured result", () => {
+		const result = finalize({
+			structured: false,
+			yieldItems: undefined,
+			rawOutput: "partial wrap-up",
+			terminalContext: {
+				terminalYieldAccepted: false,
+				yieldInvalidatedByAsync: false,
+				abortKind: "budget",
+				budgetStopRequested: true,
+				budgetLimitExceeded: false,
+			},
+		});
+		expect(result.exitCode).toBe(0);
+	});
+
+	for (const abortKind of ["shutdown", "signal", "timeout", "terminate"] as const) {
+		it(`fails unstructured output for unrelated ${abortKind} termination`, () => {
+			const result = finalize({
+				structured: false,
+				yieldItems: undefined,
+				rawOutput: "partial wrap-up",
+				terminalContext: {
+					terminalYieldAccepted: false,
+					yieldInvalidatedByAsync: false,
+					abortKind,
+					budgetStopRequested: true,
+					budgetLimitExceeded: false,
+				},
+			});
+			expect(result.exitCode).not.toBe(0);
+		});
+	}
+
+	it("does not exempt an async-invalidated unstructured result", () => {
+		const result = finalize({
+			structured: false,
+			yieldItems: undefined,
+			rawOutput: "stale wrap-up",
+			terminalContext: {
+				terminalYieldAccepted: false,
+				yieldInvalidatedByAsync: true,
+				abortKind: "budget",
+				budgetStopRequested: true,
+				budgetLimitExceeded: false,
+			},
+		});
+		expect(result.exitCode).not.toBe(0);
+	});
+
+	it("does not exempt a nonzero unstructured execution", () => {
+		const result = finalize({
+			structured: false,
+			yieldItems: undefined,
+			rawOutput: "partial wrap-up",
+			exitCode: 1,
+			terminalContext: {
+				terminalYieldAccepted: false,
+				yieldInvalidatedByAsync: false,
+				abortKind: "budget",
+				budgetStopRequested: true,
+				budgetLimitExceeded: false,
+			},
+		});
+		expect(result.exitCode).not.toBe(0);
+	});
+
 	it("fails a hard budget stop for unstructured output", () => {
 		const result = finalize({
 			structured: false,

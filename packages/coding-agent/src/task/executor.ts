@@ -878,8 +878,10 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		// A clean, non-empty final message is a delivered result, not a hard budget failure.
 		const softBudgetMessageResult =
 			args.structured === false &&
+			context.abortKind === "budget" &&
 			context.budgetStopRequested === true &&
 			context.budgetLimitExceeded !== true &&
+			!context.yieldInvalidatedByAsync &&
 			!doneAborted &&
 			!signalAborted &&
 			initialExitCode === 0 &&
