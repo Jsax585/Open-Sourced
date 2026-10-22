@@ -91,8 +91,22 @@ function patternApproves(pattern: string, target: string, chat: Model<Api>[], se
 }
 
 /**
+ * Whether an allowlist pattern admits `target`. The allowlist only narrows, so
+ * a provider-qualified glob (`openai/*`) matches the full `provider/id`, never
+ * another provider's model whose bare id happens to match (`openrouter/openai/gpt-5`).
+ */
+function allowPatternAdmits(pattern: string, target: string, chat: Model<Api>[], settings: Settings): boolean {
+	const base = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS).base;
+	const literal = chat.some(candidate => identity(candidate) === base || identity(candidate) === pattern);
+	if (!literal && base.includes("/") && /[*?[]/.test(base)) {
+		return new Bun.Glob(base.toLowerCase()).match(target.toLowerCase());
+	}
+	return patternApproves(pattern, target, chat, settings);
+}
+
+/**
  * Whether `task.perCallModelAllow` admits `target`. An exact or glob entry
- * matches like a grant; a `@role` entry matches what its configured value grants.
+ * matches the model directly; a `@role` entry matches what its configured value grants.
  */
 function allowlistAdmits(target: string, chat: Model<Api>[], settings: Settings): boolean {
 	const allow = cfgTaskPerCallModelAllow.get(settings);
@@ -100,10 +114,10 @@ function allowlistAdmits(target: string, chat: Model<Api>[], settings: Settings)
 	return allow.some(entry => {
 		const selector = entry.trim();
 		const role = resolveExplicitModelRole(selector, settings);
-		if (role === undefined) return selector.length > 0 && patternApproves(selector, target, chat, settings);
+		if (role === undefined) return selector.length > 0 && allowPatternAdmits(selector, target, chat, settings);
 		if (isKindRole(role)) return false;
 		return grantablePatterns(settings.getModelRole(role), settings).some(pattern =>
-			patternApproves(pattern, target, chat, settings),
+			allowPatternAdmits(pattern, target, chat, settings),
 		);
 	});
 }

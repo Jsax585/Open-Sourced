@@ -1449,6 +1449,7 @@ describe("per-call model preflight", () => {
 				getActiveModelString: () => "mock/parent",
 				modelRegistry: {
 					getAvailable: (kind?: string) => (!warm ? [] : kind === "chat" ? [target] : [target, painter]),
+					awaitBackgroundRefresh: async () => {},
 				},
 			},
 		);
@@ -1592,6 +1593,34 @@ describe("per-call model preflight", () => {
 			},
 		);
 		const policy = await resolveEffectiveSubagentPolicy(request({ session: coldSession, perCallModel: "@review" }));
+		expect(policy.modelOverride).toEqual(["mock/target"]);
+	});
+
+	it.each([
+		["a configured role", "@review"],
+		["a later list candidate", ["mock/missing", "mock/target"]],
+	] as const)("waits for a partly loaded registry before resolving %s", async (_name, perCallModel) => {
+		mockDiscovery();
+		// Built-in models are already listed while the role's provider is still loading.
+		const builtIn = createMockModel({ provider: "builtin", id: "other" });
+		let loaded = false;
+		const partialSession = Object.assign(
+			perCallSession({ "task.perCallModel": "on", modelRoles: { review: "mock/target" } }),
+			{
+				modelRegistry: {
+					getAvailable: () => (loaded ? [builtIn, target] : [builtIn]),
+					awaitBackgroundRefresh: async () => {
+						loaded = true;
+					},
+				},
+			},
+		);
+		const policy = await resolveEffectiveSubagentPolicy(
+			request({
+				session: partialSession,
+				perCallModel: typeof perCallModel === "string" ? perCallModel : [...perCallModel],
+			}),
+		);
 		expect(policy.modelOverride).toEqual(["mock/target"]);
 	});
 

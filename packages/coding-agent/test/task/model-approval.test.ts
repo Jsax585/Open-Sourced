@@ -156,4 +156,22 @@ describe("per-call model grants", () => {
 		const grants = { settings: Settings.isolated({ "task.perCallModelAllow": ["mock/other"] }), agentName: "worker" };
 		expect(() => assertPerCallModelApproved(target, grants, registry)).toThrow(/task\.perCallModelAllow/);
 	});
+
+	it.each([
+		["a provider glob", ["openai/*"]],
+		["a provider glob with a level", ["openai/*:high"]],
+		["a role whose value is a provider glob", ["@scope"]],
+	])("keeps %s in the allowlist on that provider", (_name, allow) => {
+		const direct = createMockModel({ provider: "openai", id: "gpt-5" });
+		const routed = createMockModel({ provider: "openrouter", id: "openai/gpt-5" });
+		const providers = { getAvailable: () => [direct, routed] } as Parameters<typeof isPerCallModelApproved>[2];
+		const settings = Settings.isolated({
+			modelRoles: { review: "openrouter/openai/gpt-5", fast: "openai/gpt-5", scope: "openai/*" },
+			"task.perCallModelAllow": allow,
+		});
+		const grants = { settings, agentName: "worker" };
+		// Granted by `review`, but its bare id `openai/gpt-5` must not satisfy an `openai/*` entry.
+		expect(isPerCallModelApproved(routed, grants, providers)).toBe(false);
+		expect(isPerCallModelApproved(direct, grants, providers)).toBe(true);
+	});
 });

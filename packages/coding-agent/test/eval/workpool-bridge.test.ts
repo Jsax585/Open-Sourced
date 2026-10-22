@@ -102,7 +102,7 @@ describe("workpool model validation", () => {
 		vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [agent], projectAgentsDir: null });
 		const session = Object.assign(
 			makeSession({ "task.perCallModel": "eval", modelRoles: { review: "mock/mock-model" } }),
-			{ modelRegistry: { getAvailable: () => [approved, unapproved] } },
+			{ modelRegistry: { getAvailable: () => [approved, unapproved], awaitBackgroundRefresh: async () => {} } },
 		);
 		await expect(
 			runEvalWorkpool({ op: "create", name: "denied", agent: "scout", model: "mock/unapproved" }, { session }),

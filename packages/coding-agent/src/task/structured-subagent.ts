@@ -343,13 +343,16 @@ function assertDepthAndSpawnAllowed(request: StructuredSubagentRequest, agentNam
 const EXACT_MODEL_SELECTOR = /^[^\s/@,*?[\]{}]+\/[^\s,*?{}]+$/;
 const ROLE_MODEL_SELECTOR = /^@[^\s/@,*?[\]{}:]+(?::[^\s/@,*?[\]{}:]+)?$/;
 
+/** Whether `model` has the per-call shape, one string or a string array; {@link invalidModelSelectorReason} checks the selectors. */
+export function isPerCallModelShape(model: unknown): model is string | string[] {
+	return typeof model === "string" || (Array.isArray(model) && model.every(entry => typeof entry === "string"));
+}
+
 /** Per-call `model` candidates in caller order: one selector, or a non-empty array of them. */
 function perCallModelCandidates(model: unknown): string[] | undefined {
+	if (!isPerCallModelShape(model)) return undefined;
 	if (typeof model === "string") return [model.trim()];
-	if (Array.isArray(model) && model.length > 0 && model.every(entry => typeof entry === "string")) {
-		return model.map(entry => entry.trim());
-	}
-	return undefined;
+	return model.length > 0 ? model.map(entry => entry.trim()) : undefined;
 }
 
 /**
@@ -436,8 +439,10 @@ async function preflightPerCallModel(
 		roles[index] ? resolveConfiguredModelPatterns(candidate, settings) : [candidate],
 	);
 	if (!modelRegistry) return { grants, patterns: unresolved, role };
-	// Role values may need the catalog to become exact; exact candidates are checked again in the executor.
-	if (modelRegistry.getAvailable().length === 0 && roles.some(Boolean)) await modelRegistry.awaitBackgroundRefresh();
+	// Finish an in-flight catalog refresh first, even when some models are already loaded: a provider
+	// still loading would otherwise make a configured role look unavailable or a candidate be skipped.
+	await modelRegistry.awaitBackgroundRefresh();
+	// A registry that is still empty is checked again in the executor once models are loaded.
 	if (modelRegistry.getAvailable().length === 0) return { grants, patterns: unresolved, role };
 	const chat = modelRegistry.getAvailable("chat");
 	const chatRegistry = { getAvailable: () => chat };

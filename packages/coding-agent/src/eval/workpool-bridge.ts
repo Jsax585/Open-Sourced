@@ -1,6 +1,10 @@
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
 import { createEvalCustomTools, describeEvalTools } from "../task/eval-tools";
-import { invalidModelSelectorReason, resolveEffectiveSubagentPolicy } from "../task/structured-subagent";
+import {
+	invalidModelSelectorReason,
+	isPerCallModelShape,
+	resolveEffectiveSubagentPolicy,
+} from "../task/structured-subagent";
 import { type WorkPoolPeekResult, type WorkPoolStatus, WorkPoolRegistry } from "../task/workpool";
 import type { ToolSession } from "../tools";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
@@ -75,7 +79,7 @@ export async function runEvalWorkpool(args: unknown, options: EvalWorkpoolBridge
 		const tools = optionalTools(record);
 		const modelProblem = invalidModelSelectorReason(record.model, "workpool()");
 		if (modelProblem) throw new ToolError(modelProblem);
-		const model = record.model as string | string[] | undefined;
+		const model = isPerCallModelShape(record.model) ? record.model : undefined;
 		if (tools?.length && options.session.getPlanModeState?.()?.enabled === true) {
 			throw new ToolError("Eval-defined tools are unavailable in plan mode.");
 		}

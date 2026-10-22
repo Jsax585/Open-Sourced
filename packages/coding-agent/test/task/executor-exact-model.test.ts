@@ -68,7 +68,7 @@ describe("per-call exact selection after background discovery", () => {
 				getSessionSpawns: () => "*",
 				getSessionAgents: () => [],
 			} as unknown as ToolSession;
-			const execution = await runStructuredSubagent({
+			const execution = runStructuredSubagent({
 				session,
 				invocationKind: "task",
 				assignment: "Answer the question.",
@@ -79,8 +79,9 @@ describe("per-call exact selection after background discovery", () => {
 				keepAlive: false,
 			});
 			if (exact) {
-				expect(execution.result.exitCode).toBe(0);
-				expect(execution.result.output).toBe("Exact answer.");
+				const { result } = await execution;
+				expect(result.exitCode).toBe(0);
+				expect(result.output).toBe("Exact answer.");
 				expect(model.calls).toHaveLength(1);
 				// The worker never switches models and every request stays held to the grants.
 				const options = created.mock.calls[0]?.[0];
@@ -88,9 +89,10 @@ describe("per-call exact selection after background discovery", () => {
 				expect(options?.prewalk).toBeUndefined();
 				expect(() => options?.assertDispatchModel?.(createMockModel({ id: "other" }))).toThrow(/not approved/);
 			} else {
+				// Preflight waits for the discovery that loads the catalog, then refuses the near-miss id
+				// instead of matching it fuzzily.
+				await expect(execution).rejects.toThrow(/No available model matches/);
 				expect(model.calls).toHaveLength(0);
-				expect(execution.result.exitCode).not.toBe(0);
-				expect(`${execution.result.error ?? ""}${execution.result.stderr}`).toMatch(/exact model|unavailable/);
 			}
 		} finally {
 			await AgentRegistry.global().get(agentId)?.session?.dispose();
