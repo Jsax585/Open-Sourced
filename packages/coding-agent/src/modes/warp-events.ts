@@ -187,7 +187,7 @@ export function createWarpEventBridgeExtension(): ExtensionFactory {
 				// Plan approval starts work without a visible user prompt.
 				if (!running) {
 					running = true;
-					emitter?.emit({ event: "prompt_submit", query: activePrompt ?? "" });
+					emitter?.emit({ event: "prompt_submit", query: activePrompt });
 				}
 				return;
 			}

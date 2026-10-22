@@ -36,16 +36,22 @@ import { formatNumber, TempDir } from "@oh-my-pi/pi-utils";
 import { cfgPlanAutosave, cfgPlanAutosaveDir } from "@oh-my-pi/pi-coding-agent/plan-mode/settings";
 
 /**
- * Matches the plan-approved synthetic-prompt dispatch. `#approvePlan` calls
- * `session.prompt` with `synthetic: true` exclusively for that case,
- * so the `synthetic: true` option flag is the unique discriminator.
+ * Matches the plan-approved synthetic-prompt dispatch. `#approvePlan` is the
+ * only caller that passes `approvedPlanExecution: true`, so requiring it pins
+ * the marker the Warp bridge relies on across every dispatch path.
  */
-const isPlanApprovedCall = (args: unknown[]): boolean =>
-	args.length >= 2 &&
-	typeof args[0] === "string" &&
-	typeof args[1] === "object" &&
-	args[1] !== null &&
-	(args[1] as { synthetic?: boolean }).synthetic === true;
+const isPlanApprovedCall = (args: unknown[]): boolean => {
+	const options = args[1];
+	return (
+		typeof args[0] === "string" &&
+		typeof options === "object" &&
+		options !== null &&
+		"synthetic" in options &&
+		options.synthetic === true &&
+		"approvedPlanExecution" in options &&
+		options.approvedPlanExecution === true
+	);
+};
 
 function usageWithInput(input: number): Usage {
 	return {
