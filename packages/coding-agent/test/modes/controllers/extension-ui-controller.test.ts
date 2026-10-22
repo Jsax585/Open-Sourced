@@ -9,6 +9,8 @@ import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import { ExtensionUiController } from "../../../src/modes/controllers/extension-ui-controller";
 import { InputController } from "../../../src/modes/controllers/input-controller";
+import { cfgPasteImagePathAttachment } from "../../../src/modes/settings";
+import { Settings } from "../../../src/config/settings";
 import { getEditorTheme, getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "../../../src/modes/types";
 
@@ -42,6 +44,7 @@ function makeHarness() {
 		isHidden: vi.fn(() => false),
 	};
 	const showOverlay = vi.fn(() => fakeHandle);
+	const handleImagePathPaste = vi.fn(async (_path: string) => {});
 	let uiContext: ExtensionUIContext | undefined;
 	// A real agent-core queue: approvals track and reorder its steering messages.
 	const agent = new Agent();
@@ -73,6 +76,9 @@ function makeHarness() {
 		addAutocompleteProvider,
 		syncComposerShape: vi.fn(),
 		showStatus: vi.fn(),
+		settings: Settings.isolated(),
+		handleImagePaste: vi.fn(async () => false),
+		handleImagePathPaste,
 	} as unknown as InteractiveModeContext;
 
 	const controller = new ExtensionUiController(ctx);
@@ -87,6 +93,9 @@ function makeHarness() {
 		showOverlay,
 		fakeHandle,
 		controller,
+		ctx,
+		settings: ctx.settings,
+		handleImagePathPaste,
 		inputController: (readText: () => Promise<string>) =>
 			new InputController(ctx, { readImage: async () => null, readText }),
 		agent,
@@ -155,6 +164,37 @@ describe("ExtensionUiController Ask dialog input", () => {
 		});
 		expect(harness.editor.getText()).toBe("");
 		expect(harness.getFocused()).toBe(harness.editor);
+	});
+
+	it("keeps a bracketed image path in an image-capable ask prompt as text when paste.imagePathAttachment is off", async () => {
+		const harness = makeHarness();
+		cfgPasteImagePathAttachment.override(harness.settings, false);
+		const pending = harness.controller.showAskDialog(questions, { acceptImages: true });
+		harness.handleInput("\x1b[B");
+		harness.handleInput("\r");
+		harness.handleInput("\x1b[200~/tmp/shot.png\x1b[201~");
+		await Promise.resolve();
+		expect(harness.handleImagePathPaste).not.toHaveBeenCalled();
+		harness.handleInput("\r");
+		await Promise.resolve();
+		harness.handleInput("\r");
+
+		expect(await pending).toMatchObject({
+			kind: "submit",
+			results: [{ id: "answer", customInput: "/tmp/shot.png" }],
+		});
+	});
+
+	it("routes a bracketed image path from an image-capable ask prompt to the composer under the default", async () => {
+		const harness = makeHarness();
+		const pending = harness.controller.showAskDialog(questions, { acceptImages: true });
+		harness.handleInput("\x1b[B");
+		harness.handleInput("\r");
+		harness.handleInput("\x1b[200~/tmp/shot.png\x1b[201~");
+		await Promise.resolve();
+
+		expect(harness.handleImagePathPaste).toHaveBeenCalledWith("/tmp/shot.png");
+		void pending;
 	});
 
 	it("does not expose the Ask dialog before a custom answer is applied", async () => {

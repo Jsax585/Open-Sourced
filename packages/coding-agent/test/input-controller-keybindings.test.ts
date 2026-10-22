@@ -6,8 +6,10 @@ import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
+import { cfgPasteImagePathAttachment } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { SpaceHoldGesture } from "@oh-my-pi/pi-tui/space-hold";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { getEditorTheme, initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { type KeyId, matchesKey } from "@oh-my-pi/pi-tui";
@@ -28,6 +30,7 @@ type FakeEditor = {
 	onSelectModelTemporary?: () => void;
 	onSelectModel?: () => void;
 	onPasteImage?: () => Promise<boolean>;
+	onPasteImagePath?: (path: string) => void | Promise<void>;
 	onCopyPrompt?: () => void;
 	onRetry?: () => void;
 	onChange?: (text: string) => void;
@@ -298,6 +301,10 @@ async function createContext() {
 // 1x1 PNG.
 const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jD3sAAAAASUVORK5CYII=";
 
+const BRACKETED_PASTE_START = "\x1b[200~";
+const BRACKETED_PASTE_END = "\x1b[201~";
+const bracketed = (text: string) => `${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}`;
+
 /** Replay a kitty OSC 5522 enhanced paste that offers text and PNG and delivers `png` bytes. */
 function dispatchEnhancedImagePaste(listeners: InputListener[], png: Uint8Array): void {
 	const packet = (metadata: string, payload?: string) =>
@@ -339,6 +346,45 @@ describe("InputController keybinding setup", () => {
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(1, { temporaryOnly: true });
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(2);
 		expect(spies.resetDisplayAfterAppearanceRefresh).toHaveBeenCalledTimes(1);
+	});
+
+	it("routes a bracketed-pasted image path by the live paste.imagePathAttachment value", async () => {
+		await initTheme(false);
+		const settingsState = beginSettingsTest();
+		try {
+			const harness = await createContext();
+			const editor = new CustomEditor(getEditorTheme());
+			harness.ctx.editor = editor as unknown as InteractiveModeContext["editor"];
+			harness.setFocused(editor);
+			const controller = new InputController(harness.ctx);
+			const attach = vi.spyOn(controller, "handleImagePathPaste").mockResolvedValue(undefined);
+
+			// Off at setup: the hook stays unset, so the editor's own text paste runs.
+			cfgPasteImagePathAttachment.override(harness.ctx.settings, false);
+			controller.setupKeyHandlers();
+			editor.handleInput(bracketed("/tmp/shot.png"));
+			expect(editor.getText()).toBe("/tmp/shot.png");
+			expect(attach).not.toHaveBeenCalled();
+
+			// Turned on from `/settings` mid-session: no second setup pass, the
+			// listener re-points the existing editor at the attachment route.
+			editor.setText("");
+			cfgPasteImagePathAttachment.override(harness.ctx.settings, true);
+			await Bun.sleep(0); // the listener coalesces per microtask
+			editor.handleInput(bracketed("/tmp/shot.png"));
+			expect(editor.getText()).toBe("");
+			expect(attach).toHaveBeenCalledWith("/tmp/shot.png");
+
+			// And back off: the handler is cleared again.
+			attach.mockClear();
+			cfgPasteImagePathAttachment.override(harness.ctx.settings, false);
+			await Bun.sleep(0);
+			editor.handleInput(bracketed("/tmp/shot.png"));
+			expect(editor.getText()).toBe("/tmp/shot.png");
+			expect(attach).not.toHaveBeenCalled();
+		} finally {
+			restoreSettingsTestState(settingsState);
+		}
 	});
 
 	it("enters Python mode only once whitespace follows a typed sigil", async () => {

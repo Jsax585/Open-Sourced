@@ -47,6 +47,7 @@ import { setExtensionTerminalTitle, setSessionTerminalTitle } from "../../utils/
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { launchTerminal } from "../../subprocess/terminal-launch";
 import { approvalAnswerForChoice, approvalChoiceLabels, approvalOnceLabel } from "../../tools/approval";
+import { cfgPasteImagePathAttachment } from "../settings";
 
 const MAX_WIDGET_LINES = 10;
 
@@ -879,7 +880,11 @@ export class ExtensionUiController {
 					acceptImages: true,
 					images: prefill?.images,
 					onPasteImage: () => this.ctx.handleImagePaste(),
-					onPasteImagePath: path => this.ctx.handleImagePathPaste(path),
+					// Same opt-out as the composer: with `paste.imagePathAttachment` off,
+					// the hook stays unset so the prompt editor pastes the path as text.
+					...(cfgPasteImagePathAttachment.get(this.ctx.settings)
+						? { onPasteImagePath: (path: string) => this.ctx.handleImagePathPaste(path) }
+						: {}),
 				});
 				return promise;
 			};
