@@ -12,7 +12,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { isSettingsInitialized, resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 
@@ -21,7 +21,7 @@ const ONE_PX_PNG = Buffer.from(
 	"base64",
 );
 
-function createCtx() {
+function createCtx(settings: Settings) {
 	const pasteText = vi.fn();
 	const insertAtom = vi.fn();
 	const requestRender = vi.fn();
@@ -29,6 +29,7 @@ function createCtx() {
 	const pendingImages: ImageContent[] = [];
 	const pendingImageLinks: (string | undefined)[] = [];
 	const ctx = {
+		settings,
 		editor: {
 			pasteText,
 			insertAtom,
@@ -62,12 +63,11 @@ describe("paste.imagePathAttachment", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("pastes a clipboard image-file path as text while the setting is off", async () => {
-		await Settings.init({
-			inMemory: true,
-			overrides: { "images.autoResize": false, "paste.imagePathAttachment": false },
-		});
-		const { ctx, spies } = createCtx();
+	it("pastes a clipboard image-file path as text under a session override while the global default attaches", async () => {
+		await Settings.init({ inMemory: true, overrides: { "images.autoResize": false } });
+		const { ctx, spies } = createCtx(
+			Settings.isolated({ "images.autoResize": false, "paste.imagePathAttachment": false }),
+		);
 		const controller = new InputController(ctx, {
 			readImage: async () => null,
 			readText: async () => imgPath,
@@ -81,9 +81,46 @@ describe("paste.imagePathAttachment", () => {
 		expect(spies.pendingImages).toHaveLength(0);
 	});
 
+	it("pastes as text from the session settings instance without a global Settings.init()", async () => {
+		expect(isSettingsInitialized()).toBe(false);
+		const { ctx, spies } = createCtx(Settings.isolated({ "paste.imagePathAttachment": false }));
+		const controller = new InputController(ctx, {
+			readImage: async () => null,
+			readText: async () => imgPath,
+			readMacFileUrls: async () => [],
+		});
+
+		const result = await controller.handleImagePaste();
+
+		expect(result).toBe(true);
+		expect(spies.pasteText).toHaveBeenCalledWith(imgPath);
+		expect(spies.pendingImages).toHaveLength(0);
+	});
+
+	it("attaches a clipboard image-file path under a session override while the global default is off", async () => {
+		await Settings.init({
+			inMemory: true,
+			overrides: { "images.autoResize": false, "paste.imagePathAttachment": false },
+		});
+		const { ctx, spies } = createCtx(
+			Settings.isolated({ "images.autoResize": false, "paste.imagePathAttachment": true }),
+		);
+		const controller = new InputController(ctx, {
+			readImage: async () => null,
+			readText: async () => imgPath,
+			readMacFileUrls: async () => [],
+		});
+
+		const result = await controller.handleImagePaste();
+
+		expect(result).toBe(true);
+		expect(spies.pasteText).not.toHaveBeenCalled();
+		expect(spies.pendingImages).toHaveLength(1);
+	});
+
 	it("attaches the clipboard image-file path under the default setting", async () => {
 		await Settings.init({ inMemory: true, overrides: { "images.autoResize": false } });
-		const { ctx, spies } = createCtx();
+		const { ctx, spies } = createCtx(Settings.isolated({ "images.autoResize": false }));
 		const controller = new InputController(ctx, {
 			readImage: async () => null,
 			readText: async () => imgPath,

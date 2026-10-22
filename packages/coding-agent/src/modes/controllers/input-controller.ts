@@ -291,6 +291,7 @@ export class InputController {
 	#globalEditorActionsListenerInstalled = false;
 	#expandToolsListenerInstalled = false;
 	#inlineMouseListenerInstalled = false;
+	#imagePathPasteListenerInstalled = false;
 
 	/** Click-candidate id the hover band currently tracks; repaint only on change. */
 	#lastHoverClickId: string | undefined;
@@ -328,6 +329,17 @@ export class InputController {
 
 	#abortStreamingTurn(): void {
 		void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
+	}
+
+	/**
+	 * Point the editor's bracketed-paste image-path hook at the *current* value of
+	 * `paste.imagePathAttachment`. The editor only falls back to the ordinary text
+	 * paste when the hook is absent, so the gate has to live in the hook's presence:
+	 * unset ⇒ a pasted path stays literal text.
+	 */
+	#syncImagePathPasteHandler(): void {
+		const enabled = cfgPasteImagePathAttachment.get(this.ctx.settings);
+		this.ctx.editor.onPasteImagePath = enabled ? path => this.handleImagePathPaste(path) : undefined;
 	}
 
 	setupKeyHandlers(): void {
@@ -660,12 +672,12 @@ export class InputController {
 			this.ctx.keybindings.getKeys("app.clipboard.pasteImage"),
 		);
 		this.ctx.editor.onPasteImage = () => this.handleImagePaste();
-		// Only a real image-file path routed through the editor's bracketed-paste
-		// handler is gated: with the setting off, `onPasteImagePath` stays unset so
-		// the editor pastes the path as text. The clipboard-image chord
-		// (`onPasteImage` above) is unaffected — it is an explicit "paste image".
-		if (isSettingsInitialized() && cfgPasteImagePathAttachment.get(settings)) {
-			this.ctx.editor.onPasteImagePath = path => this.handleImagePathPaste(path);
+		this.#syncImagePathPasteHandler();
+		if (!this.#imagePathPasteListenerInstalled) {
+			this.#imagePathPasteListenerInstalled = true;
+			// `/settings` applies through listeners, not another setup pass: re-sync
+			// the current editor whenever the toggle moves.
+			cfgPasteImagePathAttachment.listen(this.ctx.settings, () => this.#syncImagePathPasteHandler());
 		}
 		this.ctx.editor.setActionKeys(
 			"app.clipboard.pasteTextRaw",
@@ -2467,8 +2479,7 @@ export class InputController {
 			// plain text rather than as a `public.file-url` (most macOS
 			// terminals do this for image clipboards). Gated by
 			// `paste.imagePathAttachment`.
-			const attachPastedPath =
-				!textOnlyPrompt && isSettingsInitialized() && cfgPasteImagePathAttachment.get(settings);
+			const attachPastedPath = !textOnlyPrompt && cfgPasteImagePathAttachment.get(this.ctx.settings);
 			const imagePath = attachPastedPath ? extractImagePathFromText(text) : null;
 			if (imagePath) {
 				await this.#pasteImagePath(imagePath, sink);

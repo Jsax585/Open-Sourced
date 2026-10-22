@@ -4,10 +4,12 @@ import { ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overlays/approval-dial
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
+import { cfgPasteImagePathAttachment } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { SpaceHoldGesture } from "@oh-my-pi/pi-tui/space-hold";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { getEditorTheme, initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { type KeyId, matchesKey } from "@oh-my-pi/pi-tui";
@@ -299,6 +301,12 @@ async function createContext() {
 // 1x1 PNG.
 const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jD3sAAAAASUVORK5CYII=";
 
+const BRACKETED_PASTE_START = "\x1b[200~";
+const BRACKETED_PASTE_END = "\x1b[201~";
+const bracketed = (text: string) => `${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}`;
+/** Settings listeners coalesce per microtask; let a toggle settle before pasting. */
+const flushMicrotasks = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+
 /** Replay a kitty OSC 5522 enhanced paste that offers text and PNG and delivers `png` bytes. */
 function dispatchEnhancedImagePaste(listeners: InputListener[], png: Uint8Array): void {
 	const packet = (metadata: string, payload?: string) =>
@@ -342,19 +350,40 @@ describe("InputController keybinding setup", () => {
 		expect(spies.resetDisplayAfterAppearanceRefresh).toHaveBeenCalledTimes(1);
 	});
 
-	it("installs the image-path paste handler only when paste.imagePathAttachment is on", async () => {
+	it("routes a bracketed-pasted image path by the live paste.imagePathAttachment value", async () => {
+		await initTheme(false);
 		const settingsState = beginSettingsTest();
 		try {
-			await Settings.init({ inMemory: true, overrides: { "paste.imagePathAttachment": false } });
-			const off = await createContext();
-			new off.InputController(off.ctx).setupKeyHandlers();
-			expect(off.editor.onPasteImagePath).toBeUndefined();
+			const harness = await createContext();
+			const editor = new CustomEditor(getEditorTheme());
+			harness.ctx.editor = editor as unknown as InteractiveModeContext["editor"];
+			harness.setFocused(editor);
+			const controller = new InputController(harness.ctx);
+			const attach = vi.spyOn(controller, "handleImagePathPaste").mockResolvedValue(undefined);
 
-			resetSettingsForTest();
-			await Settings.init({ inMemory: true, overrides: { "paste.imagePathAttachment": true } });
-			const on = await createContext();
-			new on.InputController(on.ctx).setupKeyHandlers();
-			expect(typeof on.editor.onPasteImagePath).toBe("function");
+			// Off at setup: the hook stays unset, so the editor's own text paste runs.
+			cfgPasteImagePathAttachment.override(harness.ctx.settings, false);
+			controller.setupKeyHandlers();
+			editor.handleInput(bracketed("/tmp/shot.png"));
+			expect(editor.getText()).toBe("/tmp/shot.png");
+			expect(attach).not.toHaveBeenCalled();
+
+			// Turned on from `/settings` mid-session: no second setup pass, the
+			// listener re-points the existing editor at the attachment route.
+			editor.setText("");
+			cfgPasteImagePathAttachment.override(harness.ctx.settings, true);
+			await flushMicrotasks();
+			editor.handleInput(bracketed("/tmp/shot.png"));
+			expect(editor.getText()).toBe("");
+			expect(attach).toHaveBeenCalledWith("/tmp/shot.png");
+
+			// And back off: the handler is cleared again.
+			attach.mockClear();
+			cfgPasteImagePathAttachment.override(harness.ctx.settings, false);
+			await flushMicrotasks();
+			editor.handleInput(bracketed("/tmp/shot.png"));
+			expect(editor.getText()).toBe("/tmp/shot.png");
+			expect(attach).not.toHaveBeenCalled();
 		} finally {
 			restoreSettingsTestState(settingsState);
 		}
