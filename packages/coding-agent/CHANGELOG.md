@@ -4,6 +4,7 @@
 
 ### Added
 
+- `omp agents list` now prints the bundled task agents (name + description, or `--json` catalog), including execution metadata while omitting system prompts and internal file paths. ([#11394](https://github.com/can1357/oh-my-pi/pull/11394) by [@PeterPonyu](https://github.com/PeterPonyu)).
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 
 ## [18.12.6] - 2026-10-21
