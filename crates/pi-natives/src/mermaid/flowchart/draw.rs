@@ -331,7 +331,7 @@ pub fn draw_arrow(graph: &AsciiGraph, edge: &AsciiEdge) -> [Layer; 6] {
 	let (path_canvas, lines_drawn, line_dirs) =
 		draw_path(graph, &edge.path, &drawing_path, edge.style);
 	let source_shape = graph.nodes.get(edge.from).map_or_default(|node| node.shape);
-	let box_start_canvas = draw_box_start(graph, &edge.path, source_shape);
+	let box_start_canvas = draw_box_start(graph, &edge.path, &drawing_path, source_shape);
 	let arrow_end_canvas = if edge.has_arrow_end {
 		match (lines_drawn.last(), line_dirs.last()) {
 			(Some(line), Some(&dir)) => draw_arrow_head(graph, line, dir),
@@ -384,52 +384,83 @@ const fn reverse_direction(dir: Dir) -> Dir {
 	}
 }
 
+/// Drawing coordinates of an edge's path: [`line_to_drawing`], except that a
+/// parallel edge sharing a port with another edge moves its stem segment beside
+/// that edge's stem, so the two lines, tee and arrowhead stay apart. The end
+/// stem moves when another edge leaves the port it enters; the start stem of a
+/// repeated edge moves when another edge already uses the port it leaves.
 fn edge_drawing_path(graph: &AsciiGraph, edge: &AsciiEdge) -> Vec<DrawingCoord> {
 	let mut coords = line_to_drawing(graph, &edge.path);
 	let n = edge.path.len();
-	let is_parallel = edge.from != edge.to
-		&& graph
-			.edges
-			.iter()
-			.filter(|other| {
-				(other.from, other.to) == (edge.from, edge.to)
-					|| (other.from, other.to) == (edge.to, edge.from)
-			})
-			.count()
-			> 1;
-	if n >= 3 && is_parallel {
-		let has_outgoing_on_end_port = graph.edges.iter().any(|other| {
-			!other.path.is_empty() && other.from == edge.to && other.start_dir == edge.end_dir
+	let twins = graph
+		.edges
+		.iter()
+		.filter(|other| edge.joins_same_pair(other))
+		.count();
+	if n < 3 || edge.from == edge.to || twins < 2 {
+		return coords;
+	}
+	let mut others = graph
+		.edges
+		.iter()
+		.filter(|other| !std::ptr::eq(*other, edge) && !other.path.is_empty());
+	if others
+		.clone()
+		.any(|other| other.from == edge.to && other.start_dir == edge.end_dir)
+	{
+		shift_stem(graph, &mut coords, &edge.path, [n - 1, n - 2, n - 3], edge.end_dir);
+	}
+	let is_repeat = graph
+		.edges
+		.iter()
+		.position(|other| std::ptr::eq(other, edge))
+		.is_some_and(|id| {
+			graph.edges[..id]
+				.iter()
+				.any(|other| edge.joins_same_pair(other))
 		});
-		if has_outgoing_on_end_port {
-			let approach = edge.path[n - 3];
-			let corner = edge.path[n - 2];
-			let end = edge.path[n - 1];
-			if matches!(edge.end_dir, Dir::Down | Dir::Up)
-				&& corner.x == end.x
-				&& approach.y == corner.y
-			{
-				let step = graph
-					.column_width
-					.get(&end.x)
-					.copied()
-					.unwrap_or(3)
-					.div_euclid(2)
-					.clamp(1, 2);
-				let dx = (approach.x - end.x).signum() * step;
-				coords[n - 2].x += dx;
-				coords[n - 1].x += dx;
-			} else if matches!(edge.end_dir, Dir::Left | Dir::Right)
-				&& corner.y == end.y
-				&& approach.x == corner.x
-			{
-				let dy = (approach.y - end.y).signum();
-				coords[n - 2].y += dy;
-				coords[n - 1].y += dy;
-			}
-		}
+	if is_repeat
+		&& others.any(|other| {
+			(other.from == edge.from && other.start_dir == edge.start_dir)
+				|| (other.to == edge.from && other.end_dir == edge.start_dir)
+		}) {
+		shift_stem(graph, &mut coords, &edge.path, [0, 1, 2], edge.start_dir);
 	}
 	coords
+}
+
+/// Move the stem segment `port`→`corner` of `path` sideways, toward `beyond`
+/// (the point after the corner) so it never crosses the stem it leaves: half a
+/// border column (at most 2 cells) for top and bottom ports, one row for side
+/// ports.
+fn shift_stem(
+	graph: &AsciiGraph,
+	coords: &mut [DrawingCoord],
+	path: &[GridCoord],
+	[port, corner, beyond]: [usize; 3],
+	side: Dir,
+) {
+	let (p, c, b) = (path[port], path[corner], path[beyond]);
+	match side {
+		Dir::Up | Dir::Down if p.x == c.x && c.y == b.y => {
+			let step = graph
+				.column_width
+				.get(&p.x)
+				.copied()
+				.unwrap_or(3)
+				.div_euclid(2)
+				.clamp(1, 2);
+			let dx = (b.x - c.x).signum() * step;
+			coords[port].x += dx;
+			coords[corner].x += dx;
+		},
+		Dir::Left | Dir::Right if p.y == c.y && c.x == b.x => {
+			let dy = (b.y - c.y).signum();
+			coords[port].y += dy;
+			coords[corner].y += dy;
+		},
+		_ => {},
+	}
 }
 
 fn draw_path(
@@ -474,17 +505,24 @@ fn draw_path(
 
 /// Mark where an edge leaves its source box with a tee on the border. The
 /// path's first cell is the box's border cell, so the tee goes exactly there
-/// even when the first segment is too short to draw any line cell.
-fn draw_box_start(graph: &AsciiGraph, path: &[GridCoord], source_shape: NodeShape) -> Layer {
+/// (moved with the stem, see [`edge_drawing_path`]) even when the first
+/// segment is too short to draw any line cell.
+fn draw_box_start(
+	graph: &AsciiGraph,
+	path: &[GridCoord],
+	drawing_path: &[DrawingCoord],
+	source_shape: NodeShape,
+) -> Layer {
 	let mut canvas = Layer::over(&graph.canvas);
 	if graph.config.use_ascii || matches!(source_shape, NodeShape::StateStart | NodeShape::StateEnd)
 	{
 		return canvas;
 	}
-	let Some((&first, &second)) = path.first().zip(path.get(1)) else {
+	let (Some((&first, &second)), Some(&from)) =
+		(path.first().zip(path.get(1)), drawing_path.first())
+	else {
 		return canvas;
 	};
-	let from = grid_to_drawing_coord(graph, first);
 	let tee = match determine_direction(first, second) {
 		Dir::Up => '┴',
 		Dir::Down => '┬',
@@ -562,11 +600,7 @@ const fn corner_char(previous: Dir, next: Dir, use_ascii: bool) -> char {
 	}
 }
 
-fn draw_corners(
-	graph: &AsciiGraph,
-	path: &[GridCoord],
-	drawing_path: &[DrawingCoord],
-) -> Layer {
+fn draw_corners(graph: &AsciiGraph, path: &[GridCoord], drawing_path: &[DrawingCoord]) -> Layer {
 	let mut canvas = Layer::over(&graph.canvas);
 	for (index, points) in path.windows(3).enumerate() {
 		let drawing = drawing_path[index + 1];
@@ -581,11 +615,7 @@ fn draw_corners(
 	canvas
 }
 
-fn draw_arrow_label(
-	graph: &AsciiGraph,
-	edge: &AsciiEdge,
-	drawing_path: &[DrawingCoord],
-) -> Layer {
+fn draw_arrow_label(graph: &AsciiGraph, edge: &AsciiEdge, drawing_path: &[DrawingCoord]) -> Layer {
 	let mut canvas = Layer::over(&graph.canvas);
 	if edge.text.is_empty() {
 		return canvas;
