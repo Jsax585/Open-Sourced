@@ -52,6 +52,7 @@ import { theme } from "../theme/theme";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
 import {
 	buildBrowserItems,
+	isResolvedAssignment,
 	MODEL_PICKER_COLUMNS,
 	ModelBrowser,
 	type ModelBrowserItem,
@@ -1227,9 +1228,13 @@ export class ModelHubComponent implements Component {
 		this.#openRoleStrip(item);
 	}
 
+	/** The role's persisted value in `scope`, before any catalog resolution. */
+	#scopedRoleValue(role: string, scope: ModelRoleSelectionScope): string | undefined {
+		return scope === "project" ? this.#settings.getProjectModelRole(role) : this.#settings.getGlobalModelRole(role);
+	}
+
 	#roleForScope(role: string, scope: ModelRoleSelectionScope): ResolvedModelRoleValue {
-		const roleValue =
-			scope === "project" ? this.#settings.getProjectModelRole(role) : this.#settings.getGlobalModelRole(role);
+		const roleValue = this.#scopedRoleValue(role, scope);
 		const allModels =
 			this.#scopedModels.length > 0
 				? scopedRolePool(
@@ -1287,7 +1292,7 @@ export class ModelHubComponent implements Component {
 		let level: ConfiguredThinkingLevel = ThinkingLevel.Inherit;
 		if (this.#settings.modelRoleStorage === "project" && scope !== undefined) {
 			level = this.#thinkingLevelForScope(role, scope);
-		} else if (current && !current.autoSelected) {
+		} else if (isResolvedAssignment(current) && !current.autoSelected) {
 			level = current.thinkingLevel;
 		}
 		const supported = this.#thinkingOptionsFor(item.model);
@@ -1344,7 +1349,11 @@ export class ModelHubComponent implements Component {
 		const source =
 			this.#settings.modelRoleStorage === "project" ? this.#settings.getModelRoleSource(role) : "default";
 		const scope = source === "project" || source === "global" ? source : undefined;
-		const model = scope ? this.#roleForScope(role, scope).model : assignment.model;
+		const model = scope
+			? this.#roleForScope(role, scope).model
+			: isResolvedAssignment(assignment)
+				? assignment.model
+				: undefined;
 		if (!model || this.#thinkingOptionsFor(model).length === 0) return undefined;
 		return {
 			item: { provider: model.provider, id: model.id, model, selector: `${model.provider}/${model.id}` },
@@ -1364,9 +1373,16 @@ export class ModelHubComponent implements Component {
 			for (const scope of scopes) {
 				const scopedModel = scopedStorage
 					? this.#roleForScope(role, scope).model
-					: assignment && !assignment.autoSelected
+					: isResolvedAssignment(assignment) && !assignment.autoSelected
 						? assignment.model
 						: undefined;
+				// A role already configured with a model the catalog does not list is
+				// not free: an `assign` chip would replace that persisted selector
+				// with the highlighted model. Clear it from the Roles view instead.
+				const unresolvedHere = scopedStorage
+					? this.#scopedRoleValue(role, scope) !== undefined && scopedModel === undefined
+					: assignment !== undefined && !isResolvedAssignment(assignment);
+				if (unresolvedHere) continue;
 				const assignedHere =
 					!!scopedModel && scopedModel.provider === item.model.provider && scopedModel.id === item.model.id;
 				const roleLabel = (info.tag ?? info.name ?? role).toLowerCase();
@@ -1423,7 +1439,9 @@ export class ModelHubComponent implements Component {
 			committedLevel ??
 			(this.#settings.modelRoleStorage === "project" && scope !== undefined
 				? this.#thinkingLevelForScope(role, scope)
-				: (this.#roles[role]?.thinkingLevel ?? ThinkingLevel.Inherit));
+				: isResolvedAssignment(this.#roles[role])
+					? this.#roles[role].thinkingLevel
+					: ThinkingLevel.Inherit);
 		const chips = this.#thinkingChips(options);
 		const preselect = options.indexOf(current);
 		this.#strip = {
@@ -1666,7 +1684,7 @@ export class ModelHubComponent implements Component {
 		this.#setCandidateItems(this.#availableItems);
 		this.#browser.setQuery("");
 		const current = this.#roles[role];
-		if (current) {
+		if (isResolvedAssignment(current)) {
 			this.#browser.selectSelector(`${current.model.provider}/${current.model.id}`);
 		}
 	}
@@ -1822,7 +1840,10 @@ export class ModelHubComponent implements Component {
 	/** The model a Roles row resolves to (assigned role or resolvable fallback), whose compaction point `k` edits. */
 	#roleRowModel(): Model | undefined {
 		const row = this.#rolesRows[this.#roleIndex];
-		if (row?.kind === "role") return this.#roles[row.role]?.model;
+		if (row?.kind === "role") {
+			const assignment = this.#roles[row.role];
+			return isResolvedAssignment(assignment) ? assignment.model : undefined;
+		}
 		if (row?.kind === "fallback") return this.#resolveFallbackEntry(row.role, row.chainIndex)?.item.model;
 		return undefined;
 	}
@@ -2650,7 +2671,7 @@ export class ModelHubComponent implements Component {
 			let tagStyled: string;
 			let value: string;
 			let levelStyled = "";
-			if (assignment && !assignment.autoSelected) {
+			if (isResolvedAssignment(assignment) && !assignment.autoSelected) {
 				dot = theme.fg(info.color ?? "muted", theme.status.enabled);
 				tagStyled = theme.fg(info.color ?? "muted", tag);
 				value = `${theme.fg("dim", `${assignment.model.provider}/`)}${selected ? theme.fg("accent", assignment.model.id) : assignment.model.id}`;
@@ -2659,10 +2680,17 @@ export class ModelHubComponent implements Component {
 				if (assignment.thinkingLevel !== ThinkingLevel.Inherit) {
 					levelStyled = theme.fg("dim", glyph ? `${glyph} ${label}` : label);
 				}
-			} else if (assignment) {
+			} else if (isResolvedAssignment(assignment)) {
 				dot = theme.fg("dim", theme.status.shadowed);
 				tagStyled = theme.fg("dim", tag);
 				value = theme.fg("dim", `auto → ${assignment.model.provider}/${assignment.model.id}`);
+			} else if (assignment) {
+				// Configured, but its model is not in the catalog right now. Show
+				// the persisted selector so the row never reads as cleared.
+				dot = theme.fg(info.color ?? "muted", theme.status.enabled);
+				tagStyled = theme.fg(info.color ?? "muted", tag);
+				value = theme.fg("muted", assignment.selector);
+				levelStyled = theme.fg("dim", "unavailable");
 			} else {
 				dot = theme.fg("dim", theme.status.shadowed);
 				tagStyled = theme.fg("dim", tag);
@@ -3181,7 +3209,7 @@ export class ModelHubComponent implements Component {
 		let label: TspSpan[];
 		let detail: TspSpan[];
 		const value: TspSpan[] = [];
-		if (assignment && !assignment.autoSelected) {
+		if (isResolvedAssignment(assignment) && !assignment.autoSelected) {
 			const color = info.color ?? "muted";
 			label = [span(`${theme.status.enabled} `, color), span(tag, color)];
 			detail = [span(`${assignment.model.provider}/`, "dim"), span(assignment.model.id)];
@@ -3190,11 +3218,19 @@ export class ModelHubComponent implements Component {
 				const levelLabel = getConfiguredThinkingLevelMetadata(assignment.thinkingLevel).label;
 				value.push(span(glyph ? `${glyph} ${levelLabel}` : levelLabel, "dim"));
 			}
+		} else if (isResolvedAssignment(assignment)) {
+			label = [span(`${theme.status.shadowed} `, "dim"), span(tag, "dim")];
+			detail = [span(`auto → ${assignment.model.provider}/${assignment.model.id}`, "dim")];
+		} else if (assignment) {
+			// Configured, but its model is not in the catalog right now: the row
+			// stays "set" with the persisted selector, plus an availability note.
+			const color = info.color ?? "muted";
+			label = [span(`${theme.status.enabled} `, color), span(tag, color)];
+			detail = [span(assignment.selector, "muted")];
+			value.push(span("unavailable", "dim"));
 		} else {
 			label = [span(`${theme.status.shadowed} `, "dim"), span(tag, "dim")];
-			detail = assignment
-				? [span(`auto → ${assignment.model.provider}/${assignment.model.id}`, "dim")]
-				: [span("—", "dim")];
+			detail = [span("—", "dim")];
 		}
 		// Quick-cycle membership badge (`⟳ 2` = second stop of the ctrl+p cycle).
 		const cycleIndex = cycleOrder.indexOf(role);
@@ -3686,7 +3722,7 @@ export class ModelHubComponent implements Component {
 				const level =
 					chip.action === "thinking"
 						? chip.thinkingLevel
-						: chip.action === "unassign" && assigned && !assigned.autoSelected
+						: chip.action === "unassign" && isResolvedAssignment(assigned)
 							? assigned.thinkingLevel
 							: undefined;
 				const dot = level !== undefined ? thinkingDotToken(level) : undefined;
@@ -3732,12 +3768,15 @@ export class ModelHubComponent implements Component {
 			const tag = info.tag ?? info.name ?? row.role;
 			const assignment = this.#roles[row.role];
 			const facts: Record<string, string> = {};
-			if (assignment) {
+			if (isResolvedAssignment(assignment)) {
 				const selector = `${assignment.model.provider}/${assignment.model.id}`;
 				facts.model = assignment.autoSelected ? `auto → ${selector}` : selector;
 				if (assignment.thinkingLevel !== ThinkingLevel.Inherit) {
 					facts.thinking = getConfiguredThinkingLevelMetadata(assignment.thinkingLevel).label;
 				}
+			} else if (assignment) {
+				facts.model = assignment.selector;
+				facts.thinking = "unavailable";
 			} else {
 				facts.model = "—";
 			}
@@ -3819,7 +3858,7 @@ export class ModelHubComponent implements Component {
 			case "role": {
 				const info = this.#settings.getRoleInfo(row.role);
 				const assignment = this.#roles[row.role];
-				if (assignment) {
+				if (isResolvedAssignment(assignment)) {
 					children.push(...this.#browser.modelPreview(modelItem(assignment.model), "full", this.#currentSelector));
 					children.push(
 						node("kv", {
@@ -3832,6 +3871,15 @@ export class ModelHubComponent implements Component {
 								{ k: [span("Source", "muted")], v: assignment.autoSelected ? "auto-selected" : "configured" },
 							],
 						}),
+					);
+				} else if (assignment) {
+					children.push(
+						text(info.name, { role: "omp.picker.title" }),
+						text([span(`Configured as ${assignment.selector}.`, "mono")], { wrap: "word" }),
+						text(
+							[span("That model is not in the catalog right now (its provider has not listed it).", "muted")],
+							{ wrap: "word" },
+						),
 					);
 				} else {
 					children.push(

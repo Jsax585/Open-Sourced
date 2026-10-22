@@ -6,6 +6,7 @@ import type { DescribeContext, NativeChild, NativeNode } from "../src/native/nod
 import { ModelHubComponent, type ModelHubRegistry, type ModelHubSource } from "../src/overlays/model-hub";
 import { ModelPickerComponent } from "../src/overlays/model-picker";
 import { initTheme } from "../src/theme";
+import { replaceTabs } from "../src/utils";
 import type { TUI } from "../src/tui";
 
 const withPicker: DescribeContext = {
@@ -185,6 +186,31 @@ test("Factory Droid rows carry the base credit rate and a credit-only model is n
 	expect(row("claude-opus-5")?.facts?.price).toBe("$3·15 2×");
 	expect(row("preview-credit-model")?.facts?.price).toBe("0.5×");
 	expect(row("preview-credit-model")?.badges ?? []).not.toContainEqual({ text: "free", tone: "success" });
+});
+
+/** A click on the sidebar's Roles entry. */
+const CLICK_ROLES = { type: "select", key: "scopes", item: "roles" } as const;
+
+test("the roles picker reports a configured role whose model is gone as unavailable", () => {
+	// `demo` drops out of the catalogue: its persisted role keeps the selector.
+	const models = MODELS.filter(entry => entry.provider !== "demo");
+	const hub = new ModelHubComponent(
+		ui,
+		source({ default: "demo/absent\tmodel" }, []),
+		registry(models),
+		models.map(entry => ({ model: entry })),
+		{ onAssign: () => {}, onUnassign: () => {}, onCancel: () => {} },
+	);
+	hubs.push(hub);
+	hub.handleNativeEvent(CLICK_ROLES);
+	const root = hub.describe(withPicker);
+	const row = props(root).items?.find(entry => entry.label === "default");
+	// The row keeps the persisted selector and spells the availability out,
+	// rather than reading as an unassigned role.
+	expect(row?.facts).toEqual({ model: replaceTabs("demo/absent\tmodel"), thinking: "unavailable" });
+	const preview = JSON.stringify(root.c ?? []);
+	expect(preview).toContain(`Configured as ${replaceTabs("demo/absent\tmodel")}.`);
+	expect(preview).not.toContain("\\t");
 });
 
 test("typing changes the order, hits, counts and head total but never the catalogue", () => {
