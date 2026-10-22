@@ -88,7 +88,7 @@ function createContext(): {
 } {
 	let editorText = "";
 	const abort = vi.fn();
-	const viewAbort = vi.fn();
+	const viewAbort = vi.fn(async () => {});
 	const abortBash = vi.fn();
 	const abortEval = vi.fn();
 	const abortHandoff = vi.fn();
@@ -625,6 +625,9 @@ describe("InputController escape behavior", () => {
 	it("returns an idle focused subagent view to main on Esc", () => {
 		const { ctx, editor, spies } = createContext();
 		Object.defineProperty(ctx, "focusedAgentId", { value: "Worker", configurable: true });
+		// Only the main session streams (a `task` fan-out is running): the viewed
+		// agent has no turn to interrupt, so Esc keeps the old exit behavior.
+		mutableSessionState(ctx).isStreaming = true;
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
@@ -633,6 +636,33 @@ describe("InputController escape behavior", () => {
 		expect(ctx.unfocusSession).toHaveBeenCalledTimes(1);
 		expect(spies.viewAbort).not.toHaveBeenCalled();
 		expect(spies.abort).not.toHaveBeenCalled();
+	});
+
+	it("refreshes the queued-message display once the focused abort settles", async () => {
+		const { ctx, editor, spies } = createContext();
+		Object.defineProperty(ctx, "focusedAgentId", { value: "Worker", configurable: true });
+		const viewSession = abortViewSession(ctx);
+		viewSession.isStreaming = true;
+		let release = () => {};
+		const aborting = new Promise<void>(resolve => {
+			release = resolve;
+		});
+		viewSession.abort = vi.fn(() => aborting);
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.();
+
+		expect(viewSession.abort).toHaveBeenCalledTimes(1);
+		// abort() requeues live steering only after the turn settles, so reading
+		// the queue before then would repaint the pre-abort pending list.
+		expect(spies.updatePendingMessagesDisplay).not.toHaveBeenCalled();
+
+		release();
+		await aborting;
+
+		expect(spies.updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
+		expect(spies.requestRender).toHaveBeenCalled();
 	});
 
 	it("returns focused subagent view to main on Esc without aborting its active maintenance (#2819)", () => {

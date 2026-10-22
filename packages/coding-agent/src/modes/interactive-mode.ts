@@ -290,7 +290,7 @@ import { LiveCommandController } from "./controllers/live-command-controller";
 import { MCPCommandController } from "./controllers/mcp-command-controller";
 import { OmfgController } from "./controllers/omfg-controller";
 import { SelectorController } from "./controllers/selector-controller";
-import { SessionFocusController } from "./controllers/session-focus-controller";
+import { isTurnInterruptible, SessionFocusController } from "./controllers/session-focus-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { TanCommandController } from "./controllers/tan-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
@@ -4015,6 +4015,7 @@ export class InteractiveMode implements InteractiveModeContext {
 						: dictation
 					: undefined,
 			viewing: this.#viewingLineage(),
+			viewInterruptible: isTurnInterruptible(this.viewSession),
 			title: this.sessionManager.getSessionName(),
 		};
 	}

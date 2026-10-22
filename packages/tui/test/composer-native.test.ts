@@ -159,27 +159,30 @@ describe("native composer", () => {
 		expect(focused).toEqual(["AckAudit", "Main"]);
 	});
 
-	it("advertises the ←← gesture, not the interrupt key, as the exit from a running agent", () => {
+	it("advertises the ←← gesture, not the interrupt key, as the exit from an interruptible agent", () => {
 		let running = false;
+		let viewInterruptible = false;
 		const editor = new CustomEditor(getEditorTheme());
-		editor.composerState = () => ({ running, viewing: ["Scout"] });
-
-		// Idle: Esc on an empty draft really does return to main, so it stays a keycap.
-		const idle = byRole(editor.describe(cx), "omp.composer.exit")!;
-		expect(
-			nodes(idle)
+		editor.composerState = () => ({ running, viewing: ["Scout"], viewInterruptible });
+		const exitKeys = () =>
+			nodes(byRole(editor.describe(cx), "omp.composer.exit")!)
 				.filter(n => n.k === "kbd")
-				.map(n => n.p),
-		).toEqual([{ keys: ["escape"] }]);
+				.map(n => n.p);
 
-		// Running: the interrupt key stops the turn, so it must not double as exit.
+		// Idle viewed turn: Esc on an empty draft really does return to main, so it stays a keycap,
+		// even while the main session streams behind a `task` fan-out (the bar's Stop follows that).
 		running = true;
-		const busy = byRole(editor.describe(cx), "omp.composer.exit")!;
-		expect(
-			nodes(busy)
-				.filter(n => n.k === "kbd")
-				.map(n => n.p),
-		).toEqual([{ keys: ["left"] }, { keys: ["left"] }]);
+		expect(exitKeys()).toEqual([{ keys: ["escape"] }]);
+
+		// Interruptible viewed turn: the interrupt key stops it, so it must not double as exit.
+		viewInterruptible = true;
+		expect(exitKeys()).toEqual([{ keys: ["left"] }, { keys: ["left"] }]);
+
+		// Focused maintenance (compaction, handoff, retry) is not interruptible, and the main
+		// session's Stop flag says nothing about the viewed agent.
+		viewInterruptible = false;
+		running = false;
+		expect(exitKeys()).toEqual([{ keys: ["escape"] }]);
 	});
 
 	it("memoizes send readiness separately from editability during bootstrap", () => {

@@ -45,7 +45,7 @@ import { AgentRegistry } from "../../registry/agent-registry";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { PINNED_HUD_TOGGLE_ID } from "@oh-my-pi/pi-tui/prompt/composer";
-import { pickRecentFocusableAgentId } from "./session-focus-controller";
+import { isTurnInterruptible, pickRecentFocusableAgentId } from "./session-focus-controller";
 import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
 import { parseSlashCommand, parseSubcommand } from "../../slash-commands/helpers/parse";
@@ -338,11 +338,13 @@ export class InputController {
 	 */
 	#abortFocusedTurn(): boolean {
 		const target = this.ctx.viewSession;
-		if (target.isCompacting || target.isGeneratingHandoff || target.isRetrying) return false;
-		if (!target.isStreaming) return false;
-		void target.abort({ reason: USER_INTERRUPT_LABEL });
-		this.ctx.updatePendingMessagesDisplay();
-		this.ctx.ui.requestRender();
+		if (!isTurnInterruptible(target)) return false;
+		// The abort requeues live steering only once the turn has settled, so
+		// refresh the pending list from its completion, not before it.
+		void target.abort({ reason: USER_INTERRUPT_LABEL }).then(() => {
+			this.ctx.updatePendingMessagesDisplay();
+			this.ctx.ui.requestRender();
+		});
 		return true;
 	}
 

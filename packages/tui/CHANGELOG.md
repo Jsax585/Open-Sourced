@@ -532,7 +532,7 @@
 - Fixed hold-Space push-to-talk stopping the instant recording began (showing "No speech detected.") when opening the microphone briefly froze the UI ([#14463](https://github.com/can1357/oh-my-pi/pull/14463) by [@pgkt04](https://github.com/pgkt04))
 ### Changed
 
-- The composer's focused-agent header shows the interrupt key as the way back to main only while the viewed agent is idle; while it runs the exit crumb shows the double-←← gesture, since the interrupt key stops the turn ([#14419](https://github.com/can1357/oh-my-pi/pull/14419) by [@iacore](https://github.com/iacore)).
+- The composer's focused-agent header shows the interrupt key as the way back to main only while the viewed agent's turn can be interrupted; while it runs the exit crumb shows the double-←← gesture, since the interrupt key stops the turn ([#14419](https://github.com/can1357/oh-my-pi/pull/14419) by [@iacore](https://github.com/iacore)).
 
 ## [18.6.1] - 2026-10-04
 
