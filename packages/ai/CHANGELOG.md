@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- Fixed Cursor reporting tools as unavailable before external clients execute them, and losing tool schemas and results between calls (by [@gustavosmendes](https://github.com/gustavosmendes))
+- Fixed Cursor reporting tools as unavailable before external clients execute them, and losing tool schemas and results between calls ([#16719](https://github.com/can1357/oh-my-pi/pull/16719) by [@gustavosmendes](https://github.com/gustavosmendes))
 
 ## [18.12.5] - 2026-10-21
 
