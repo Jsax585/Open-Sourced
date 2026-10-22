@@ -1050,6 +1050,7 @@ describe("captureIsolationBaseline", () => {
 		const copies = path.join(repo, "apps/web/.verify");
 		const linked = path.join(copies, "linked");
 		const sameOrigin = path.join(copies, "same-origin");
+		const sameOriginUnrelated = path.join(copies, "same-origin-unrelated");
 		const different = path.join(copies, "different");
 		const unknown = path.join(copies, "unknown");
 		await fs.mkdir(copies, { recursive: true });
@@ -1060,6 +1061,7 @@ describe("captureIsolationBaseline", () => {
 		await fs.writeFile(path.join(sameOrigin, "clone-marker.txt"), "same origin clone\n");
 
 		for (const [nested, content] of [
+			[sameOriginUnrelated, "same origin, unrelated history\n"],
 			[different, "different project\n"],
 			[unknown, "unknown identity\n"],
 		] as const) {
@@ -1071,6 +1073,7 @@ describe("captureIsolationBaseline", () => {
 			await runGit(nested, ["add", "nested.txt"]);
 			await runGit(nested, ["commit", "-q", "-m", "nested"]);
 		}
+		await runGit(sameOriginUnrelated, ["remote", "add", "origin", repo]);
 		await runGit(different, ["remote", "add", "origin", "https://example.invalid/different.git"]);
 
 		const plan = await prepareIsolationCopyPlan(repo);
@@ -1085,6 +1088,7 @@ describe("captureIsolationBaseline", () => {
 		const copiedBaseline = await captureIsolationBaseline(copiedSource, repo, undefined, plan);
 		expect(copiedBaseline.nested.map(nested => nested.relativePath).sort()).toEqual([
 			path.join("apps", "web", ".verify", "different"),
+			path.join("apps", "web", ".verify", "same-origin-unrelated"),
 			path.join("apps", "web", ".verify", "unknown"),
 		]);
 
@@ -1109,6 +1113,9 @@ describe("captureIsolationBaseline", () => {
 					expect(
 						await fs.readFile(path.join(handle.mergedDir, "apps/web/.verify/different/nested.txt"), "utf8"),
 					).toBe("different project\n");
+					expect(
+						await fs.readFile(path.join(handle.mergedDir, "apps/web/.verify/same-origin-unrelated/nested.txt"), "utf8"),
+					).toBe("same origin, unrelated history\n");
 					expect(await fs.readFile(path.join(handle.mergedDir, "apps/web/.verify/unknown/nested.txt"), "utf8")).toBe(
 						"unknown identity\n",
 					);
@@ -1121,6 +1128,7 @@ describe("captureIsolationBaseline", () => {
 					);
 					expect(baseline.nested.map(nested => nested.relativePath).sort()).toEqual([
 						path.join("apps", "web", ".verify", "different"),
+						path.join("apps", "web", ".verify", "same-origin-unrelated"),
 						path.join("apps", "web", ".verify", "unknown"),
 					]);
 				} finally {
