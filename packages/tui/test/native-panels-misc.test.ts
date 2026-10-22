@@ -352,6 +352,37 @@ describe("BtwHistoryPanel native events", () => {
 		expect(input instanceof Input ? input.getValue() : undefined).toBe("plain words");
 	});
 
+	it("holds Enter until a follow-up's pasted image loads, and drops a submit whose image failed", () => {
+		const onFollowUp = vi.fn(async () => true);
+		const history = new BtwHistoryPanel({
+			records: [record("a", "first question")],
+			onClose: () => {},
+			onCopy: () => {},
+			onCancel: () => {},
+			canFollowUp: () => true,
+			onFollowUp,
+			requestRender: () => {},
+			getHeight: () => 30,
+		});
+		const image: ImageContent = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" };
+		history.handleInput("f");
+		history.pasteText("what is this ");
+		const failed = history.beginPaste();
+		history.handleInput("\r");
+		failed(undefined);
+		expect(onFollowUp).not.toHaveBeenCalled();
+		const loading = history.beginPaste();
+		history.handleInput("\r");
+		expect(onFollowUp).not.toHaveBeenCalled();
+		loading(history.attachImage(image));
+		expect(onFollowUp).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "a" }),
+			"what is this [Image #1]",
+			expect.any(AbortSignal),
+			[image],
+		);
+	});
+
 	it("stops a running answer from its footer button and sizes the sheet to what it lists", () => {
 		const onCancel = vi.fn();
 		const running: BtwHistoryRecord = { ...record("a", "still going"), status: "running" };

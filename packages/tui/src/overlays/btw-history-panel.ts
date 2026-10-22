@@ -78,6 +78,9 @@ interface FollowUpComposer {
 	abortController: AbortController;
 	/** Images pasted into this follow-up, numbered by their `[Image #N]` markers. */
 	images: ImageContent[];
+	/** Image pastes still loading, in paste order; Enter waits for them. */
+	pendingPastes: { settled: boolean; text: string | undefined }[];
+	submitQueued: boolean;
 	notice?: string;
 }
 
@@ -326,6 +329,8 @@ export class BtwHistoryPanel implements Component, Focusable {
 			input,
 			abortController: new AbortController(),
 			images: [],
+			pendingPastes: [],
+			submitQueued: false,
 		};
 		input.onEscape = () => {
 			composer.abortController.abort();
@@ -343,6 +348,10 @@ export class BtwHistoryPanel implements Component, Focusable {
 
 	async #submitFollowUp(composer: FollowUpComposer, value: string): Promise<void> {
 		if (this.#followUpPending || this.#composer !== composer) return;
+		if (composer.pendingPastes.length > 0) {
+			composer.submitQueued = true;
+			return;
+		}
 		let question = value.trim();
 		if (!question) {
 			composer.notice = "Enter a follow-up question.";
@@ -406,10 +415,40 @@ export class BtwHistoryPanel implements Component, Focusable {
 		return formatVisionMarker("image", this.#composer.images.length, dims);
 	}
 
-	/** Enhanced clipboard pastes belong only to the active composer. */
+	/** Reserve ordered delivery for an image paste. Completion delivers its marker once, or releases on undefined. */
+	beginPaste(): (text: string | undefined) => boolean {
+		const composer = this.#composer;
+		if (!composer) return () => false;
+		const pending: { settled: boolean; text: string | undefined } = { settled: false, text: undefined };
+		composer.pendingPastes.push(pending);
+		return text => {
+			if (this.#composer !== composer || pending.settled) return false;
+			pending.settled = true;
+			pending.text = text;
+			// A failed read releases the wait, but must not send the follow-up without its image.
+			if (!text) composer.submitQueued = false;
+			let delivered = 0;
+			for (const paste of composer.pendingPastes) {
+				if (!paste.settled) break;
+				if (paste.text) composer.input.pasteText(paste.text);
+				delivered++;
+			}
+			composer.pendingPastes.splice(0, delivered);
+			if (composer.pendingPastes.length === 0 && composer.submitQueued) {
+				composer.submitQueued = false;
+				void this.#submitFollowUp(composer, composer.input.getValue());
+			}
+			this.#options.requestRender();
+			return !!text;
+		};
+	}
+
+	/** Enhanced clipboard pastes belong only to the active composer, behind any image still loading. */
 	pasteText(text: string): void {
-		if (!this.#composer) return;
-		this.#composer.input.pasteText(text);
+		const composer = this.#composer;
+		if (!composer) return;
+		if (composer.pendingPastes.length > 0) this.beginPaste()(text);
+		else composer.input.pasteText(text);
 		this.#options.requestRender();
 	}
 

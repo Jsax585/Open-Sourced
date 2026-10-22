@@ -574,6 +574,7 @@ export interface InteractiveModeContext {
 		assistantMessage: AssistantMessage,
 		leafId: string,
 		sessionId: string,
+		images?: ImageContent[],
 	): Promise<void>;
 	handleOmfgCommand(complaint: string): Promise<void>;
 	hasActiveOmfg(): boolean;

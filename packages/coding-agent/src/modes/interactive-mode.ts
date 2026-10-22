@@ -8627,9 +8627,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		assistantMessage: AssistantMessage,
 		leafId: string,
 		sessionId: string,
+		images?: ImageContent[],
 	): Promise<void> {
 		try {
-			const result = await this.session.branchFromBtw(question, assistantMessage, leafId, sessionId);
+			const result = await this.session.branchFromBtw(question, assistantMessage, leafId, sessionId, images);
 			if (result.cancelled) {
 				this.showStatus("/btw branch cancelled", { dim: true });
 				return;

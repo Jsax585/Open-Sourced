@@ -7653,13 +7653,20 @@ export class AgentSession implements SettingsScope {
 	 * let abort() cancel it. Either way the image stays saved and the notice says the
 	 * description is unavailable.
 	 */
-	async #buildImageDescriptionNotice(normalizedImages: ImageContent[]): Promise<CustomMessage | undefined> {
+	async #buildImageDescriptionNotice(
+		normalizedImages: ImageContent[],
+		signal?: AbortSignal,
+	): Promise<CustomMessage | undefined> {
 		const controller = new AbortController();
 		this.#imageDescriptionAbortControllers.add(controller);
 		try {
 			return await this.#providerBoundary.buildImageDescriptionNotice(
 				normalizedImages,
-				AbortSignal.any([controller.signal, AbortSignal.timeout(IMAGE_DESCRIPTION_ADMISSION_TIMEOUT_MS)]),
+				AbortSignal.any([
+					controller.signal,
+					AbortSignal.timeout(IMAGE_DESCRIPTION_ADMISSION_TIMEOUT_MS),
+					...(signal ? [signal] : []),
+				]),
 			);
 		} finally {
 			this.#imageDescriptionAbortControllers.delete(controller);
@@ -12094,9 +12101,18 @@ export class AgentSession implements SettingsScope {
 			);
 		}
 		const promptImages = await this.#normalizeImagesForModel(args.promptImages);
+		// A text-only model gets a vision-model description of the images, as a prompt does.
+		const imageDescriptionNotice = promptImages?.length
+			? await this.#buildImageDescriptionNotice(promptImages, args.signal)
+			: undefined;
 		assertEphemeralTurnReady();
 		const cacheSessionId = this.sessionId;
-		const snapshot = this.#buildEphemeralSnapshot(args.promptText, args.history, promptImages);
+		const snapshot = this.#buildEphemeralSnapshot(
+			args.promptText,
+			args.history,
+			promptImages,
+			imageDescriptionNotice,
+		);
 		const llmMessages = await this.convertMessagesToLlm(snapshot, args.signal);
 		assertEphemeralTurnReady();
 		const sideContext = await this.agent.buildSideRequestContext(llmMessages);
@@ -12239,7 +12255,12 @@ export class AgentSession implements SettingsScope {
 	 * the partial response in context, then appends detached side-channel history
 	 * and the current prompt after the no-tools reminder.
 	 */
-	#buildEphemeralSnapshot(promptText: string, history?: readonly Message[], images?: ImageContent[]): AgentMessage[] {
+	#buildEphemeralSnapshot(
+		promptText: string,
+		history?: readonly Message[],
+		images?: ImageContent[],
+		imageDescriptionNotice?: CustomMessage,
+	): AgentMessage[] {
 		const messages = [...this.messages];
 		const streaming = this.agent.state.streamMessage;
 		if (streaming && streaming.role === "assistant" && Array.isArray(streaming.content)) {
@@ -12280,6 +12301,7 @@ export class AgentSession implements SettingsScope {
 			// Detach before the conversion pipeline can await or mutate caller-owned messages.
 			messages.push(...structuredClone(history));
 		}
+		if (imageDescriptionNotice) messages.push(imageDescriptionNotice);
 		messages.push({
 			role: "user",
 			content: [{ type: "text", text: promptText }, ...(images ?? [])],
@@ -12904,6 +12926,7 @@ export class AgentSession implements SettingsScope {
 		assistantMessage: AssistantMessage,
 		leafId: string,
 		sessionId: string,
+		images?: ImageContent[],
 	): Promise<{ cancelled: boolean; sessionFile: string | undefined }> {
 		using _transition = this.#beginSessionTransition();
 		const previousSessionFile = this.sessionFile;
@@ -12978,7 +13001,7 @@ export class AgentSession implements SettingsScope {
 			this.#rehydrateCheckpointRewindState();
 			this.sessionManager.appendMessage({
 				role: "user",
-				content: [{ type: "text", text: question }],
+				content: [{ type: "text", text: question }, ...(images ?? [])],
 				attribution: "user",
 				timestamp: Date.now(),
 			});

@@ -502,7 +502,7 @@ describe("BtwController", () => {
 		await branchPromise;
 	});
 
-	it("branches the sanitized reply text while preserving non-text assistant content", async () => {
+	it("branches the sanitized reply text and the question's images while preserving non-text assistant content", async () => {
 		const assistantMessage: AssistantMessage = {
 			...createAssistantMessage("raw repeated repeated repeated"),
 			content: [
@@ -521,7 +521,8 @@ describe("BtwController", () => {
 		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
 		const controller = new BtwController(ctx);
 
-		await controller.start("Question?");
+		const screenshot: ImageContent = { type: "image", data: "c2NyZWVuc2hvdA==", mimeType: "image/png" };
+		await controller.start("Question?", [screenshot]);
 		await drainBtwRequest();
 
 		expect(await controller.handleBranch()).toBe(true);
@@ -536,6 +537,7 @@ describe("BtwController", () => {
 			},
 			"leaf-1",
 			"session-1",
+			[screenshot],
 		);
 	});
 	it("copies the sanitized visible reply text after a complete non-empty reply", async () => {
@@ -652,6 +654,7 @@ describe("BtwController", () => {
 			},
 			"leaf-1",
 			"session-1",
+			undefined,
 		);
 	});
 

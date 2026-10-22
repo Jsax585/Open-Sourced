@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockHandler } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { loadAdvisorTranscriptCosts } from "@oh-my-pi/pi-coding-agent/advisor/transcript-recorder";
@@ -151,6 +151,26 @@ describe("AgentSession.branchFromBtw", () => {
 		expect(promoted?.role).toBe("assistant");
 		if (promoted?.role !== "assistant") throw new Error("Expected promoted assistant message");
 		expectSanitizedBtwAssistant(promoted);
+	});
+
+	it("keeps the images of the /btw question in the branch", async () => {
+		const activeSession = await createSession();
+		activeSession.sessionManager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
+		await activeSession.sessionManager.flush();
+		const screenshot: ImageContent = { type: "image", data: "c2NyZWVuc2hvdA==", mimeType: "image/png" };
+
+		await activeSession.branchFromBtw(
+			"what is wrong here? [Image #1]",
+			createBtwAssistant(),
+			requiredLeafId(activeSession),
+			activeSession.sessionManager.getSessionId(),
+			[screenshot],
+		);
+
+		expect(activeSession.messages.at(-2)).toMatchObject({
+			role: "user",
+			content: [{ type: "text", text: "what is wrong here? [Image #1]" }, screenshot],
+		});
 	});
 	it("does not record a late advisor turn into a /btw branch", async () => {
 		const activeSession = await createSession();

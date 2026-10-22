@@ -36,6 +36,7 @@ import {
 import { RegisteredToolAdapter } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/wrapper";
 import { initializeExtensions } from "@oh-my-pi/pi-coding-agent/modes/runtime-init";
 import * as memoryBackend from "@oh-my-pi/pi-coding-agent/memory-backend";
+import * as imageVisionFallback from "@oh-my-pi/pi-coding-agent/utils/image-vision-fallback";
 import { MEMORY_RECALL_CHANGES_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/memory-backend/recall-entry";
 import type { MemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/types";
 import { type MnemopiSessionState, setMnemopiSessionState } from "@oh-my-pi/pi-coding-agent/mnemopi/state";
@@ -1204,7 +1205,13 @@ describe("AgentSession message pipeline", () => {
 		expect(session.sessionManager.getEntries()).toEqual(journalSnapshot);
 	});
 
-	it("sends prompt images in the ephemeral turn's user message", async () => {
+	it.each([
+		["sends the image to a vision model", ["text", "image"]],
+		["describes the image for a text-only model", ["text"]],
+	] as const)("ephemeral prompt images: %s", async (_label, input) => {
+		const describe = vi
+			.spyOn(imageVisionFallback, "describeAttachedImagesForTextModel")
+			.mockResolvedValue([{ type: "text", text: "A red square." }]);
 		const model = buildModel({
 			id: "side-stream-model",
 			name: "Side Stream Model",
@@ -1212,7 +1219,7 @@ describe("AgentSession message pipeline", () => {
 			provider: "test-provider",
 			baseUrl: "",
 			reasoning: false,
-			input: ["text", "image"],
+			input: [...input],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 4096,
 			maxTokens: 1024,
@@ -1239,7 +1246,10 @@ describe("AgentSession message pipeline", () => {
 
 		await session.runEphemeralTurn({ promptText: "What colour is this?", promptImages: [screenshot] });
 
+		const request = JSON.stringify(contexts[0]?.messages);
 		expect(contexts[0]?.messages.at(-1)?.content).toContainEqual(expect.objectContaining({ type: "image" }));
+		expect(request.includes("A red square.")).toBe(input.length === 1);
+		expect(describe).toHaveBeenCalledTimes(input.length === 1 ? 1 : 0);
 		expect(agent.state.messages).toEqual([]);
 	});
 
