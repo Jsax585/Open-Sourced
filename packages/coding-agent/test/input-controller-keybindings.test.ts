@@ -304,8 +304,6 @@ const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
 const bracketed = (text: string) => `${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}`;
-/** Settings listeners coalesce per microtask; let a toggle settle before pasting. */
-const flushMicrotasks = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 
 /** Replay a kitty OSC 5522 enhanced paste that offers text and PNG and delivers `png` bytes. */
 function dispatchEnhancedImagePaste(listeners: InputListener[], png: Uint8Array): void {
@@ -372,7 +370,7 @@ describe("InputController keybinding setup", () => {
 			// listener re-points the existing editor at the attachment route.
 			editor.setText("");
 			cfgPasteImagePathAttachment.override(harness.ctx.settings, true);
-			await flushMicrotasks();
+			await Bun.sleep(0); // the listener coalesces per microtask
 			editor.handleInput(bracketed("/tmp/shot.png"));
 			expect(editor.getText()).toBe("");
 			expect(attach).toHaveBeenCalledWith("/tmp/shot.png");
@@ -380,7 +378,7 @@ describe("InputController keybinding setup", () => {
 			// And back off: the handler is cleared again.
 			attach.mockClear();
 			cfgPasteImagePathAttachment.override(harness.ctx.settings, false);
-			await flushMicrotasks();
+			await Bun.sleep(0);
 			editor.handleInput(bracketed("/tmp/shot.png"));
 			expect(editor.getText()).toBe("/tmp/shot.png");
 			expect(attach).not.toHaveBeenCalled();
