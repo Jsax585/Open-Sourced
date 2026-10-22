@@ -2,6 +2,7 @@ import { type NestedRepoPatch } from "@oh-my-pi/pi-tui/tools/task";
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
+import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { VcsCommitAuthor, VcsGitRepo } from "@oh-my-pi/pi-natives";
 import * as natives from "@oh-my-pi/pi-natives";
@@ -119,7 +120,7 @@ async function canonicalOrigin(remote: string, repoRoot: string): Promise<string
 		}
 		if (url.hostname) {
 			const remotePath = url.pathname.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
-			return remotePath ? `remote:${url.hostname.toLowerCase()}/${remotePath}` : undefined;
+			return remotePath ? `remote:${url.host.toLowerCase()}/${remotePath}` : undefined;
 		}
 	} catch {
 		// A local path or scp-style Git URL is not a WHATWG URL.
@@ -174,15 +175,6 @@ async function isOuterIgnored(repoRoot: string, relativePath: string): Promise<b
 	}
 }
 
-async function hasGitEntry(dir: string): Promise<boolean> {
-	try {
-		await fs.lstat(path.join(dir, ".git"));
-		return true;
-	} catch {
-		// An unreadable entry cannot establish a safe exclusion.
-		return false;
-	}
-}
 
 /**
  * Build one conservative exclusion plan for both materialization and baseline
@@ -238,7 +230,14 @@ export async function prepareIsolationCopyPlan(repoRoot: string): Promise<readon
 			const relativePath = normalizedRelativePath(sourceRoot, full);
 			if (!relativePath) continue;
 			if (normalizedSubmodules.some(submodule => isSameOrDescendant(relativePath, submodule))) continue;
-			if (await hasGitEntry(full)) {
+			let nestedRepository: boolean;
+			try {
+				nestedRepository = await hasGitEntry(full);
+			} catch {
+				// Unknown metadata preserves this subtree without inspecting it.
+				continue;
+			}
+			if (nestedRepository) {
 				if (await shouldExclude(full, relativePath)) excluded.push(relativePath);
 				// A nested checkout owns its own subtree. Preserve it or omit it
 				// as one unit, never inspect its runtime files through the outer
