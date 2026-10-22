@@ -334,12 +334,17 @@ export class KeyCascade implements KeysApi {
 		const envKey = this.#envApiKey(provider);
 		if (envKey) return envKey;
 
-		const apiKeySelection = this.#deps.selector.selectByType(
-			provider,
-			"api_key",
-			undefined,
-			credential => !this.isKeylessFallback(provider, credential),
-		);
+		// A real stored key beats a keyless marker (a broker bearer must win over
+		// a stored `openzoo-local`). When the marker is the only stored key,
+		// still return it: peek is how callers read the placeholder back, while
+		// source/describe keep treating it as unauthenticated.
+		const apiKeySelection =
+			this.#deps.selector.selectByType(
+				provider,
+				"api_key",
+				undefined,
+				credential => !this.isKeylessFallback(provider, credential),
+			) ?? this.#deps.selector.selectByType(provider, "api_key");
 		if (apiKeySelection) {
 			return this.#deps.overrides.resolve(apiKeySelection.credential.key);
 		}
