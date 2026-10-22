@@ -131,6 +131,9 @@ For standard Responses, precedence is SDK request `preferWebsockets` → model
 coding-agent settings uses the preference on its resolved model, or HTTP/SSE when
 none is set.
 
+`omp bench` uses the same model/provider/global preferences for standard Responses,
+without enabling WS implicitly. Its Codex WebSocket preference is unchanged.
+
 For mixed providers, leave the global setting off and configure provider defaults
 in `models.yml`. Models inherit their provider's default unless explicitly overridden:
 
