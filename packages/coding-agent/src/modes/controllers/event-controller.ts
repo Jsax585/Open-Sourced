@@ -2722,7 +2722,6 @@ export class EventController {
 		await this.ctx.reloadTodos();
 	}
 
-
 	sendErrorNotification(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
 		// A running async job or queued delivery will wake the session again, so
 		// its current agent_end is a scheduling pause rather than a user-visible
