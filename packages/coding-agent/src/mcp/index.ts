@@ -27,12 +27,5 @@ export * from "./transports/http";
 export * from "./transports/stdio";
 // Types
 export * from "./types";
-
-export type {
-	MCPToolDetails,
-	MCPTextContent,
-	MCPImageContent,
-	MCPResourceContent,
-	MCPResourceLinkContent,
-	MCPContent,
-} from "@oh-my-pi/pi-tui/tools/mcp";
+// Shared MCP content and result types
+export type * from "@oh-my-pi/pi-tui/tools/mcp";
