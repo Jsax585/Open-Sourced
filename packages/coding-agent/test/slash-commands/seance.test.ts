@@ -552,4 +552,66 @@ describe("/seance host model selection", () => {
 			fixture.authStorage.close();
 		}
 	});
+
+	it("shows the /seance --model selection to tool_call handlers and runs their revision", async () => {
+		using tempDir = TempDir.createSync("@omp-seance-command-tool-call-");
+		const fixture = await hostSeanceFixture(tempDir.path(), { "tools.approvalMode": "yolo" });
+		const runner = new ExtensionRunner(
+			[],
+			new ExtensionRuntime(),
+			tempDir.path(),
+			fixture.ctx.sessionManager,
+			fixture.modelRegistry,
+			undefined,
+			Settings.isolated({ "tools.approvalMode": "yolo" }),
+		);
+		const seen: unknown[] = [];
+		const revised = `${fixture.modelSelector}:low`;
+		vi.spyOn(runner, "hasHandlers").mockImplementation(event => event === "tool_call");
+		vi.spyOn(runner, "emitToolCall").mockImplementation(async event => {
+			const input = event.input as Record<string, unknown>;
+			seen.push(input.model);
+			return { input: { ...input, model: revised } };
+		});
+		fixture.ctx.session.agent.state.tools = [new ExtensionToolWrapper(fixture.tool as unknown as AgentTool, runner)];
+		try {
+			await runSeanceCommand(fixture.ctx, `${fixture.sourceFile} --model ${fixture.modelSelector}`);
+			await fixture.completed;
+			// The handler saw the host selection, and the revision it returned is what ran.
+			expect(seen).toEqual([fixture.modelSelector]);
+			expect(fixture.ctx.showError).not.toHaveBeenCalled();
+			expect(fixture.run).toHaveBeenCalledTimes(1);
+			expect(fixture.run.mock.calls[0]?.[0].modelOverride).toEqual([revised]);
+		} finally {
+			fixture.authStorage.close();
+		}
+	});
+
+	it("lets a tool_call handler block a /seance --model selection", async () => {
+		using tempDir = TempDir.createSync("@omp-seance-command-tool-call-block-");
+		const fixture = await hostSeanceFixture(tempDir.path(), { "tools.approvalMode": "yolo" });
+		const runner = new ExtensionRunner(
+			[],
+			new ExtensionRuntime(),
+			tempDir.path(),
+			fixture.ctx.sessionManager,
+			fixture.modelRegistry,
+			undefined,
+			Settings.isolated({ "tools.approvalMode": "yolo" }),
+		);
+		vi.spyOn(runner, "hasHandlers").mockImplementation(event => event === "tool_call");
+		vi.spyOn(runner, "emitToolCall").mockImplementation(async event => {
+			const input = event.input as Record<string, unknown>;
+			return input.model === fixture.modelSelector ? { block: true, reason: "model not allowed" } : undefined;
+		});
+		fixture.ctx.session.agent.state.tools = [new ExtensionToolWrapper(fixture.tool as unknown as AgentTool, runner)];
+		try {
+			await runSeanceCommand(fixture.ctx, `${fixture.sourceFile} --model ${fixture.modelSelector}`);
+			await fixture.completed;
+			expect(fixture.ctx.showError).toHaveBeenCalledWith(expect.stringContaining("model not allowed"));
+			expect(fixture.run).not.toHaveBeenCalled();
+		} finally {
+			fixture.authStorage.close();
+		}
+	});
 });

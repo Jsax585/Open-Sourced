@@ -89,12 +89,18 @@ import {
 const TASK_HOST_MODEL = Symbol("taskHostModel");
 
 type HostTaskContext = AgentToolContext & {
-	[TASK_HOST_MODEL]?: { toolCallId: string; model: string | string[] };
+	/** The tool call id the host vouches for; its `model` is a host selection, not a model-facing one. */
+	[TASK_HOST_MODEL]?: string;
 };
 
 type HostTaskParams = TaskParams & { [TASK_HOST_MODEL]?: string | string[] };
 
-/** Execute a host-selected task model through a channel unavailable to serialized tool arguments. */
+/**
+ * Execute a host-selected task model through a channel unavailable to serialized tool arguments.
+ * `params.model` stays in the invocation, so extension approval and `tool_call` handlers see
+ * (and may revise) the selection; only the trust marker rides on the context. Omit `model` to
+ * use the bundled seance's saved source model.
+ */
 export function executeTaskFromHost(
 	tool: AgentTool,
 	toolCallId: string,
@@ -106,9 +112,8 @@ export function executeTaskFromHost(
 	if ((tool as AgentTool & { [TASK_HOST_MODEL]?: boolean })[TASK_HOST_MODEL] !== true) {
 		throw new Error("The registered task tool does not support host model selection.");
 	}
-	const { model, ...taskParams } = params;
-	const hostContext: HostTaskContext = { ...context, [TASK_HOST_MODEL]: { toolCallId, model: model ?? [] } };
-	return tool.execute(toolCallId, taskParams, signal, onUpdate, hostContext);
+	const hostContext: HostTaskContext = { ...context, [TASK_HOST_MODEL]: toolCallId };
+	return tool.execute(toolCallId, params, signal, onUpdate, hostContext);
 }
 
 function renderSubagentUserPrompt(assignment: string): string {
@@ -994,8 +999,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<TaskToolDetails>> {
-		const hostSelection = (context as HostTaskContext | undefined)?.[TASK_HOST_MODEL];
-		const hostModel = hostSelection?.toolCallId === toolCallId ? hostSelection.model : undefined;
+		const hostCall = (context as HostTaskContext | undefined)?.[TASK_HOST_MODEL] === toolCallId;
+		// Read the host selection from the params this call runs with, after any extension revision.
+		const hostModel = hostCall ? ((rawParams as TaskParams | undefined)?.model ?? []) : undefined;
 		const launchSession = this.#launchSessions.get(toolCallId);
 		this.#launchSessions.delete(toolCallId);
 		try {
