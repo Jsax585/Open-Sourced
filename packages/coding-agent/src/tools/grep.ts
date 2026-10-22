@@ -797,6 +797,9 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					}
 					throw err;
 				}
+				// A cross-line match is kept by its first line alone, so it carries its file's
+				// ranges to the renderer, which hides the continuation rows they exclude.
+				const rangesByMatch = new Map<GrepMatch, LineRange[]>();
 				if (rangesByAbsPath.size > 0) {
 					const filteredMatches: GrepMatch[] = [];
 					for (const match of result.matches) {
@@ -813,11 +816,13 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						// otherwise leak content the caller explicitly excluded.
 						const trimBefore = match.contextBefore?.filter(c => isLineInRanges(c.lineNumber, ranges));
 						const trimAfter = match.contextAfter?.filter(c => isLineInRanges(c.lineNumber, ranges));
-						filteredMatches.push({
+						const kept: GrepMatch = {
 							...match,
 							contextBefore: trimBefore && trimBefore.length > 0 ? trimBefore : undefined,
 							contextAfter: trimAfter && trimAfter.length > 0 ? trimAfter : undefined,
-						});
+						};
+						filteredMatches.push(kept);
+						rangesByMatch.set(kept, ranges);
 					}
 					result = {
 						matches: filteredMatches,
@@ -1069,8 +1074,12 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 							// The cut window is contiguous, so only the block's first and last rows may be partial.
 							(cutLines ??= new Set()).add(match.lineNumber).add(match.lineNumber + rows.length - 1);
 						}
+						const ranges = rangesByMatch.get(match);
 						for (let row = 0; row < rows.length; row++) {
-							pushLine(match.lineNumber + row, rows[row], row === 0);
+							const lineNumber = match.lineNumber + row;
+							// Like context lines, rows outside the selected ranges are neither shown nor recorded as seen.
+							if (ranges && !isLineInRanges(lineNumber, ranges)) continue;
+							pushLine(lineNumber, rows[row], row === 0);
 						}
 						if (match.contextAfter) {
 							for (const ctx of match.contextAfter) {

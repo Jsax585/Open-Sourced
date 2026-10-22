@@ -152,4 +152,27 @@ describe("grep → edit seen-line guard under default settings", () => {
 		lines[4] = "    x3 = 0";
 		expect(await Bun.file(file).text()).toBe(`${lines.join("\n")}\n`);
 	});
+
+	it("keeps continuation rows outside the selected line range hidden and unseen", async () => {
+		const session = createSession(cwd);
+		const file = path.join(cwd, "conf.py");
+		const source = "import os\n\ndef connect(host,\n            port):\n    return (host, port)\n";
+		await Bun.write(file, source);
+
+		// The match starts on line 3 but continues onto line 4, which the selector excludes.
+		const grep = textOutput(
+			await new GrepTool(session).execute("grep", {
+				pattern: "def connect\\(host,\\n\\s+port\\)",
+				path: "conf.py:3-3",
+			}),
+		);
+		expect(grep).toContain("*3:def connect(host,");
+		expect(grep).not.toContain("port):");
+
+		const rejected = await new EditTool(session, "hashline").execute("edit", {
+			input: `${grep.split("\n")[0]}\nPUT 4.=4:\n+            port=5432):\n`,
+		});
+		expect(textOutput(rejected)).toContain("never displayed");
+		expect(await Bun.file(file).text()).toBe(source);
+	});
 });
