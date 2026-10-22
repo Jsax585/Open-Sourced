@@ -20,7 +20,7 @@
 |---|---|---:|---|
 | `action` | `"create" \| "update" \| "delete"` | Yes | Managed-skill mutation. |
 | `name` | `string` | Yes | Managed skill name; trimmed and lowercased before path resolution, then validated against `[a-z0-9][a-z0-9-]{0,63}`. |
-| `scope` | `"project" \| "global"` | No | Managed store. `global` (default) is loaded in every session. `project` is loaded only for sessions in the current project: the repository root of the session cwd (a linked worktree is its own root), else the cwd. `update` and `delete` act only on the named scope. |
+| `scope` | `"project" \| "global"` | No | Managed store. `global` (default) is loaded in every session. `project` is loaded only for sessions in the current project: the primary checkout of the session cwd's repository (linked worktrees share it), else the cwd. `create` without `scope` is global; `update`/`delete` without `scope` target the visible copy: the project store when it holds the skill, else global. An explicit scope acts only on that store. |
 | `description` | `string` | Create/update | One-line description used for skill discovery. |
 | `body` | `string` | Create/update | Markdown body for `SKILL.md`; do not include frontmatter. |
 

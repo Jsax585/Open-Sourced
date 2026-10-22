@@ -100,7 +100,7 @@ Current registered skill providers:
 7. `opencode` (priority 55)
 8. `github` (priority 30) — `.github/skills/<name>/SKILL.md` (GitHub Agent Skills layout, project-only)
 9. `omp-managed` (priority 5) — auto-learn skills, registered in `src/discovery/builtin.ts` and discovered unconditionally (only writing/nudging is gated by `autolearn.enabled`); always defers to a same-named authored skill. Two stores:
-   - project (`omp-managed:project`): `~/.omp/agent/project-managed-skills/<project-key>/<name>/SKILL.md`, loaded only for sessions in that project. The project is the repository root of the session cwd (a linked worktree is its own root), else the cwd; `<project-key>` is a readable path tail plus a SHA-256 prefix of the canonical root. The store lives under the agent dir, never in the repository.
+   - project (`omp-managed:project`): `~/.omp/agent/project-managed-skills/<project-key>/<name>/SKILL.md`, loaded only for sessions in that project. The project is the primary checkout of the session cwd's repository (linked worktrees share it), else the cwd; `<project-key>` is a readable path tail plus a SHA-256 prefix of the canonical root. The store lives under the agent dir, never in the repository.
    - global (`omp-managed:user`): `~/.omp/agent/managed-skills/<name>/SKILL.md`, loaded in every session.
 
 Capability dedup key is skill name; the first item with a given name wins in the deduped `items` view. `loadSkills()` resolves same-name collisions itself (see "Collision and duplicate handling").

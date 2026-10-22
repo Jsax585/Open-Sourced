@@ -1,7 +1,12 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { managedSkillLocation, sanitizeSkillName, writeManagedSkill } from "../autolearn/managed-skills";
+import {
+	managedSkillLocation,
+	resolveManagedSkillScope,
+	sanitizeSkillName,
+	writeManagedSkill,
+} from "../autolearn/managed-skills";
 import { isNameClaimedByAuthoredSkill } from "../extensibility/skills";
 import { isHindsightConfigured, loadHindsightConfig } from "../hindsight/config";
 import { localBackend } from "../memory-backend/local-backend";
@@ -16,7 +21,7 @@ const learnSkillSchema = type({
 	action: "'create' | 'update'",
 	name: type("string").describe("kebab-case skill name"),
 	"scope?": type("'project' | 'global'").describe(
-		"where the skill lives; default global (every session); project = only sessions in this repository",
+		"where the skill lives: global (every session) or project (only this repository); omitted: create → global, update/delete → the visible copy",
 	),
 	description: type("string").describe("one-line description of when to use the skill"),
 	body: type("string").describe("the SKILL.md body in markdown (no frontmatter)"),
@@ -162,7 +167,8 @@ export class LearnTool implements AgentTool<LearnSchema> {
 					details: { skill: null, shadowed: true },
 				};
 			}
-			const { scope = "global", ...skill } = params.skill;
+			const { scope: requestedScope, ...skill } = params.skill;
+			const scope = await resolveManagedSkillScope(skill.action, skill.name, requestedScope, this.session.cwd);
 			try {
 				await writeManagedSkill(skill, managedSkillLocation(scope, this.session.cwd));
 			} catch (err) {

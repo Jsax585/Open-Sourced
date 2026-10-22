@@ -4,7 +4,7 @@ Use: repeatable procedures worth codifying — setup sequence, debugging recipe,
 User-authored skills separate; tool NEVER edits them.
 
 `scope`: `global` (default) → every session; `project` → only sessions in this repository. Repo-specific procedure → `project`.
-`update`/`delete` act only on the given `scope`; pass the scope the skill was created in.
+`update`/`delete` without `scope` → the copy this session sees (project if present, else global); explicit `scope` → that store only.
 
 - `action: "create"` — fails if skill exists.
 - `action: "update"` — overwrites body; fails if skill absent.

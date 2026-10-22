@@ -23,7 +23,7 @@
 | `memory` | `string` | Yes | Durable, self-contained lesson to remember: what, when, and why. The schema has no minimum length; backend-specific sanitization/storage determines whether an empty value succeeds. |
 | `context` | `string` | No | Source context for the lesson. |
 | `scope` | `"project" \| "global"` | No | `global` stores the lesson in the Mnemopi bank every project recalls. In the schema and tool description only when `memory.backend = "mnemopi"` and `mnemopi.scoping` is `global` or `per-project-tagged`; omitted means `project`. |
-| `skill` | `{ action: "create" \| "update"; name: string; scope?: "project" \| "global"; description: string; body: string }` | No | Managed skill to create or enhance after the lesson succeeds. `body` is Markdown without frontmatter. `skill.scope` picks the managed store (see `manage_skill`); omitted means `global`. It is independent of the memory `scope`. |
+| `skill` | `{ action: "create" \| "update"; name: string; scope?: "project" \| "global"; description: string; body: string }` | No | Managed skill to create or enhance after the lesson succeeds. `body` is Markdown without frontmatter. `skill.scope` picks the managed store (see `manage_skill`); omitted means `global` for `create` and the visible copy (project if present, else global) for `update`. It is independent of the memory `scope`. |
 
 ## Outputs
 - Lesson only:

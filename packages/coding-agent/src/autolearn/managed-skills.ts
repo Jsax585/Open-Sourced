@@ -40,6 +40,29 @@ export function managedSkillLocation(scope: ManagedSkillScope | undefined, cwd: 
 	return scope === "project" ? { scope, cwd } : GLOBAL_MANAGED_SKILLS;
 }
 
+/**
+ * Scope a mutation targets. An explicit scope wins; `create` defaults to
+ * global. An unscoped `update`/`delete` targets the copy discovery shows: the
+ * project store when it holds the skill (it shadows a same-named global one),
+ * else global. Skill listings omit scope, so this keeps an edit from landing
+ * on a hidden global copy.
+ */
+export async function resolveManagedSkillScope(
+	action: "create" | "update" | "delete",
+	name: string,
+	scope: ManagedSkillScope | undefined,
+	cwd: string,
+): Promise<ManagedSkillScope> {
+	if (scope) return scope;
+	if (action === "create" || !isValidManagedSkillName(name.trim().toLowerCase())) return "global";
+	const projectSkill = path.join(getProjectManagedSkillsDir(cwd), name.trim().toLowerCase());
+	const stat = await fs.lstat(projectSkill).catch(err => {
+		if (isEnoent(err)) return null;
+		throw err;
+	});
+	return stat ? "project" : "global";
+}
+
 /** Resolve the isolated global managed-skills directory (`~/.omp/agent/managed-skills`). */
 export function getManagedSkillsDir(agentDir: string = getAgentDir()): string {
 	return path.join(agentDir, "managed-skills");
@@ -51,14 +74,15 @@ export function getProjectManagedSkillsBaseDir(agentDir: string = getAgentDir())
 }
 
 /**
- * Canonical directory that identifies the project of `cwd`: the repository
- * root (a linked worktree is its own root), else `cwd` itself. Same rule as
- * the other omp-owned per-project stores (security, autoresearch), and the
- * same reach as authored `<repo>/.omp/skills`, which every subdirectory sees.
+ * Canonical directory that identifies the project of `cwd`: the primary
+ * checkout of its repository (linked worktrees share it), else `cwd` itself.
+ * Same key as the Hindsight project bank, so a `learn` lesson and its paired
+ * skill land in the same project, and skills learned in omp's ephemeral
+ * session/task worktrees still load in the primary checkout and later worktrees.
  */
 export function resolveManagedSkillsProjectRoot(cwd: string): string {
 	const resolved = path.resolve(cwd);
-	return resolveEquivalentPath(vcs.repo(resolved)?.root() ?? resolved);
+	return resolveEquivalentPath(vcs.repo(resolved)?.primaryRoot() ?? resolved);
 }
 
 /** Project store for `cwd` (`~/.omp/agent/project-managed-skills/<project-key>`). */

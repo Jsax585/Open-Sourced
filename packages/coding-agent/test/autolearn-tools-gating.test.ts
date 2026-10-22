@@ -203,10 +203,31 @@ describe("manage_skill execute", () => {
 		});
 		expect(await Bun.file(path.join(getProjectManagedSkillsDir(cwd), "local", "SKILL.md")).exists()).toBe(true);
 		expect(await Bun.file(path.join(getManagedSkillsDir(), "local", "SKILL.md")).exists()).toBe(false);
-		// Omitted scope means global, so the project copy is not found there.
-		await expect(projectTool.execute("p2", { action: "delete", name: "local" })).rejects.toThrow(
+		// Explicit scope acts only on that store.
+		await expect(projectTool.execute("p2", { action: "delete", name: "local", scope: "global" })).rejects.toThrow(
 			/does not exist in the global scope/,
 		);
+	});
+
+	it("unscoped update/delete target the visible project copy, never a hidden global twin", async () => {
+		const cwd = path.join(tempHome, "work");
+		await fs.mkdir(cwd, { recursive: true });
+		const t = ManageSkillTool.createIf(makeSession({ "autolearn.enabled": true }, { cwd }))!;
+		const globalFile = path.join(getManagedSkillsDir(), "dup", "SKILL.md");
+		const projectFile = path.join(getProjectManagedSkillsDir(cwd), "dup", "SKILL.md");
+		await t.execute("g", { action: "create", name: "dup", description: "Global.", body: "# global" });
+		await t.execute("p", { action: "create", name: "dup", scope: "project", description: "Proj.", body: "# p" });
+
+		await t.execute("u", { action: "update", name: "dup", description: "Proj v2.", body: "# edited" });
+		expect(await Bun.file(projectFile).text()).toContain("# edited");
+		expect(await Bun.file(globalFile).text()).not.toContain("# edited");
+
+		await t.execute("d", { action: "delete", name: "dup" });
+		expect(await Bun.file(projectFile).exists()).toBe(false);
+		expect(await Bun.file(globalFile).exists()).toBe(true);
+		// With no project copy left, an unscoped update reaches the global skill.
+		await t.execute("u2", { action: "update", name: "dup", description: "Global v2.", body: "# global2" });
+		expect(await Bun.file(globalFile).text()).toContain("# global2");
 	});
 });
 

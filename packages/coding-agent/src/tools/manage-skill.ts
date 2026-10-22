@@ -5,6 +5,7 @@ import { getAgentDir } from "@oh-my-pi/pi-utils";
 import {
 	deleteManagedSkill,
 	managedSkillLocation,
+	resolveManagedSkillScope,
 	sanitizeSkillName,
 	writeManagedSkill,
 } from "../autolearn/managed-skills";
@@ -18,7 +19,7 @@ const manageSkillSchema = type({
 	action: "'create' | 'update' | 'delete'",
 	name: type("string").describe("kebab-case skill name"),
 	"scope?": type("'project' | 'global'").describe(
-		"where the skill lives; default global (every session); project = only sessions in this repository",
+		"where the skill lives: global (every session) or project (only this repository); omitted: create → global, update/delete → the visible copy",
 	),
 	"description?": type("string").describe(
 		"one-line description of when to use the skill (required for create/update)",
@@ -59,7 +60,7 @@ export class ManageSkillTool implements AgentTool<typeof manageSkillSchema> {
 	}
 
 	async execute(_id: string, params: ManageSkillParams): Promise<AgentToolResult> {
-		const scope = params.scope ?? "global";
+		const scope = await resolveManagedSkillScope(params.action, params.name, params.scope, this.session.cwd);
 		const location = managedSkillLocation(scope, this.session.cwd);
 		if (params.action === "delete") {
 			await deleteManagedSkill(params.name, location);

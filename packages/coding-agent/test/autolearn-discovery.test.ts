@@ -241,18 +241,19 @@ describe("managed-skills discovery", () => {
 		expect(withAuthored.map(s => [s.description, s.source])).toEqual([["Authored dup.", "native:project"]]);
 	});
 
-	it("treats a linked worktree as its own project", async () => {
+	it("shares a project-managed skill between a repository's primary checkout and its linked worktrees", async () => {
 		const primary = path.join(tempHome, "primary");
 		const worktree = path.join(tempHome, "linked");
 		await initRepo(primary);
 		await $`git -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m init`.cwd(primary).quiet();
 		await $`git worktree add -q ${worktree}`.cwd(primary).quiet();
+		// Learned in an (ephemeral) linked worktree, the skill must still reach the primary checkout.
 		await writeManagedSkill(
-			{ action: "create", name: "primary-only", description: "Primary checkout.", body: "# p" },
-			{ scope: "project", cwd: primary },
+			{ action: "create", name: "shared-skill", description: "Learned in a worktree.", body: "# s" },
+			{ scope: "project", cwd: worktree },
 		);
 
-		expect((await loadSkills({ cwd: primary })).skills.some(s => s.name === "primary-only")).toBe(true);
-		expect((await loadSkills({ cwd: worktree })).skills.some(s => s.name === "primary-only")).toBe(false);
+		expect((await loadSkills({ cwd: primary })).skills.some(s => s.name === "shared-skill")).toBe(true);
+		expect((await loadSkills({ cwd: worktree })).skills.some(s => s.name === "shared-skill")).toBe(true);
 	});
 });

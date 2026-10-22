@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `encodeProjectStateKey()` to encode a project root into one collision-resistant, filesystem-safe directory name for omp-owned per-project state ([#16772](https://github.com/can1357/oh-my-pi/pull/16772) by [@enieuwy](https://github.com/enieuwy))
+
 ## [18.12.4] - 2026-10-20
 
 ### Breaking Changes
