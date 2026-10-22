@@ -44,18 +44,34 @@ describe("long-context pricing tier", () => {
 		);
 	});
 
-	it("prices subscription Codex SKUs with the same tier for cost attribution", () => {
+	it("keeps Codex Sol tier rates and its exclusive threshold aligned with standard pricing", () => {
 		const codexSol = getBundledModel("openai-codex", "gpt-5.6-sol");
-		const codexTier = codexSol.cost.longContext;
-		if (!codexTier) throw new Error("openai-codex gpt-5.6-sol lost its long-context tier");
+		const standard = codexSol.cost;
+		const tier = standard.longContext;
+		if (!tier) throw new Error("openai-codex gpt-5.6-sol lost its long-context tier");
+
+		expect(tier.inputThreshold).toBe(272_000);
+		expect(tier.input).toBe(standard.input * 2);
+		expect(tier.output).toBe(standard.output * 1.5);
+		expect(tier.cacheRead).toBe(standard.cacheRead * 2);
+		expect(tier.cacheWrite).toBe(standard.cacheWrite * 2);
+
+		const atThreshold = usage({
+			input: tier.inputThreshold,
+			output: 1_000_000,
+			cacheRead: 0,
+			cacheWrite: 0,
+		});
+		calculateCost(codexSol, atThreshold);
+		expect(atThreshold.cost.output).toBeCloseTo(standard.output, 10);
+
 		const overThreshold = usage({
-			input: codexTier.inputThreshold + 28_000,
-			output: 1_000,
+			input: tier.inputThreshold + 1,
+			output: 1_000_000,
 			cacheRead: 0,
 			cacheWrite: 0,
 		});
 		calculateCost(codexSol, overThreshold);
-		expect(overThreshold.cost.input).toBeCloseTo((codexTier.input / 1e6) * overThreshold.input, 10);
-		expect(overThreshold.cost.output).toBeCloseTo((codexTier.output / 1e6) * 1_000, 10);
+		expect(overThreshold.cost.output).toBeCloseTo(tier.output, 10);
 	});
 });

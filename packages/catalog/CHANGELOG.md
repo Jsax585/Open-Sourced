@@ -6,6 +6,10 @@
 
 - Added `resolveAnthropicApiVersion()`: Anthropic model discovery sends API version 2026-10-21 to the official API when `PI_ANTHROPIC_API_VERSION=2026-10-21` is set ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 
+### Fixed
+
+- Corrected the GPT-5.6 Sol long-context pricing tier for OpenAI Codex to $8/M input, $0.80/M cached input, $30/M output, and $10/M cache writes.
+
 ## [18.12.6] - 2026-10-21
 
 ### Added
