@@ -1385,14 +1385,19 @@ export class CommandController {
 		await this.#runNewSessionFlow({ drop: true }, "Session deleted");
 	}
 
-	async handleForkCommand(placement?: "pane" | "window"): Promise<void> {
+	async handleForkCommand(placement?: "pane" | "window", name?: string): Promise<void> {
 		if (placement !== undefined) {
+			if (name !== undefined) {
+				this.ctx.showError("Use /fork --name <title> to create a named fork in this terminal.");
+				return;
+			}
 			await this.#handleForkTerminalCommand(placement);
 			return;
 		}
 
-		// A Tern pane fork leaves this session untouched, so it may run mid-turn.
-		if (await this.#forkIntoTernPane()) return;
+		// Named forks explicitly stay here; Tern's fork protocol cannot pass a session title.
+		// A bare Tern pane fork leaves this session untouched, so it may run mid-turn.
+		if (name === undefined && (await this.#forkIntoTernPane())) return;
 
 		// An in-place fork moves this process onto the new file; a running turn
 		// would finish there and leave the original transcript cut mid-turn.
@@ -1417,9 +1422,23 @@ export class CommandController {
 			this.ctx.showError("Fork failed (session not persisted or cancelled)");
 			return;
 		}
-
 		this.ctx.statusLine.invalidate();
 		this.ctx.ui.requestRender();
+
+		if (name !== undefined) {
+			try {
+				if (!(await this.ctx.sessionManager.setSessionName(name, "user"))) {
+					this.ctx.showError("Session forked, but the new name could not be applied.");
+					return;
+				}
+			} catch (error) {
+				logger.error("Failed to name the forked session", { error });
+				this.ctx.showError(
+					`Session forked, but its new name could not be saved: ${error instanceof Error ? error.message : String(error)}`,
+				);
+				return;
+			}
+		}
 
 		this.ctx.present([
 			new Spacer(1),

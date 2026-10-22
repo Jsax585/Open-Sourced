@@ -30,6 +30,7 @@ This document describes operator-visible behavior for session export, sharing, c
 | `/clear`                                | Interactive slash command    | Yes (clears live/model conversation context)  | Retains identity/file/history; a lazy session still follows the normal persistence gate    | Appends `reset_boundary`                                                            |
 | `/delete`                               | Interactive slash command    | Yes (starts an empty conversation)            | Attempts to delete the current persisted session and artifacts, then switches to a new one | None                                                                                |
 | `/fork`                                 | Interactive slash command    | Yes (active session identity changes)         | Creates new session file and switches current session to it (persistent mode only)         | Copies artifact directory to new session namespace when present                     |
+| `/fork --name <title>`                  | Interactive slash command    | Yes (active session identity changes)         | Creates and switches to a new session file, then saves the supplied title as user-chosen   | Preserves the source transcript and title; copies artifacts as for bare `/fork`      |
 | `/fork pane`, `/fork window`, `/fork tab` | Interactive slash command  | No (parent session retained)                   | Opens a child OMP process from the flushed current transcript in a multiplexer pane/group (tmux window, Zellij/Herdr/Orca tab, or CMUX workspace) | Child receives a separate forked session                                            |
 | `--fork <id\|path>`                     | CLI startup                  | Yes after session creation                    | Creates a new session fork from the selected source into current cwd/session dir           | Copies source artifacts recursively by default                                      |
 | `/seance [id\|path] [--model sel]`      | Interactive slash command    | No (active session and model unchanged)       | Forks the source transcript into a read-only consultant subagent under the current session  | None; the consultant reads the source's artifacts in place                          |
@@ -289,19 +290,25 @@ window, Zellij/Herdr/Orca tab, or CMUX workspace). The child starts from the cur
 persisted transcript, while the parent session stays active and continues
 running.
 
-Typing `/fork ` shows `[pane|window|tab]` as dim inline text, and Enter still
-runs the bare in-place fork. Typing a prefix (`/fork w`) opens the suggestions
-with the rest of the selected argument as dim inline text; Tab accepts it.
+Use `/fork --name "Investigation branch"` to fork and name the new session in
+one step. Quote titles containing spaces. This form always stays in the current
+terminal, including in Tern, and cannot be combined with `pane`, `window`, or
+`tab`. Bare `/fork` retains its existing terminal behavior.
+
+Typing `/fork ` shows the available arguments as dim inline text, and Enter
+still runs the bare in-place fork. Typing a prefix (`/fork w`) opens the
+suggestions with the rest of the selected argument as dim inline text; Tab
+accepts it.
 
 Placement commands autodetect tmux, Zellij, Herdr, CMUX, or Orca from the terminal;
-`/fork auto` is not a subcommand (valid arguments are `pane`, `window`, and
-`tab`). `window` maps to a tmux window, a Zellij/Herdr/Orca tab, or a CMUX workspace.
+`/fork auto` is not a subcommand. The placement arguments are `pane`, `window`,
+and `tab`; `window` maps to a tmux window, a Zellij/Herdr/Orca tab, or a CMUX workspace.
 Plain terminals, `screen`, and `wmux` cannot host this fork placement and receive
 an explicit error; use bare `/fork` there instead.
 
 ### Preconditions and immediate guards
 
-- Bare `/fork` is rejected with a warning while the agent is streaming.
+- In-place forks, with or without `--name`, are rejected with a warning while the agent is streaming.
 - A placement fork during streaming asks before launching. The child can omit
   the partial response, and confirming does not stop the parent response.
 - Forking is rejected while vibe mode is active.
@@ -310,8 +317,7 @@ an explicit error; use bare `/fork` there instead.
   sessions.
 - A CLI `--api-key` override cannot be safely passed through a multiplexer command;
   placement forks refuse it rather than exposing the key.
-- UI status/loading indicators are cleared only for the original bare `/fork`
-  flow.
+- UI status/loading indicators are cleared only for the in-place fork flow.
 
 ### Terminal placement flow
 
@@ -343,7 +349,7 @@ visible tab.
 
 ### Session-level flow
 
-The original bare `/fork` uses `AgentSession.fork()`:
+In-place `/fork`, with or without `--name`, uses `AgentSession.fork()`:
 
 1. Emits `session_before_switch` with `reason: "fork"` (cancellable).
 2. Flushes pending bash/session writes and drains/detaches advisor recorders.
@@ -363,6 +369,16 @@ The original bare `/fork` uses `AgentSession.fork()`:
   - `parentSession` set to previous session id
   - `providerPromptCacheKey` set to the previous header's inherited key, or the previous session id when none was pinned
 - Keeps all non-header entries unchanged in the new file.
+
+After a successful `--name` fork, the UI calls `SessionManager.setSessionName()`
+on the new session with source `"user"`. The title survives reopening and is
+not replaced by automatic naming. No additional model request is made. The
+supplied title is normalized with the same rules `setSessionName()` applies
+before the fork starts; a title that normalizes to empty (for example only
+control characters) is rejected with an error and no fork is created. Without
+`--name`, the fork retains its inherited title. If forking is cancelled or
+fails, the source title is untouched. If saving the title fails after the fork,
+the new session remains active and the UI reports that the name was not saved.
 
 ### Non-persistent behavior
 
