@@ -452,8 +452,11 @@ class TabState {
 	groupId: number;
 	/** Whether `chrome.debugger` is currently attached to this tab. */
 	attached = false;
-	/** Set when attach failed or the user cancelled the debugger bar; cleared on navigation. */
-	banned = false;
+	/**
+	 * Why Chrome refused omp this tab (its attach error, or the user cancelling the debugger bar); while set the
+	 * tab is not adoptable. Cleared on navigation.
+	 */
+	refusal: string | undefined;
 	/** Whether targets for this tab were announced to discovering connections. */
 	announced = false;
 	attaching: Promise<boolean> | null = null;
@@ -3320,7 +3323,8 @@ export class RelayBridge {
 					return;
 				}
 				if (!(await this.#ensureAttached(currentTab))) {
-					this.#replyError(conn, msg, `Cannot attach to tab ${currentTab.tabId} (${currentTab.url})`);
+					const reason = currentTab.refusal ? `: ${currentTab.refusal}` : "";
+					this.#replyError(conn, msg, `Cannot attach to tab ${currentTab.tabKey} (${currentTab.url})${reason}`);
 					return;
 				}
 				const sessionId = this.#mintSession(conn, parsed.kind, currentTab, "explicit");
@@ -3376,6 +3380,15 @@ export class RelayBridge {
 				// Creating a tab is an explicit act of driving it.
 				const createdKey = tabKeyOf(inst.code, result.tab.tabId);
 				this.#claimTab(conn, createdKey);
+				// Puppeteer waits for the new page's auto-attach. Answer once it settled: a tab Chrome refuses (an
+				// extension debugger policy refuses every tab) would otherwise hold the open for its whole timeout.
+				const created = this.#tabs.get(createdKey);
+				if (conn.autoAttach && created && !(await this.#ensureAttached(created)) && created.refusal) {
+					const refusal = created.refusal;
+					await this.#closeTab(createdKey, created.tabId, inst).catch(() => undefined);
+					this.#replyError(conn, msg, `Chrome refused to attach to the new tab: ${refusal}`);
+					return;
+				}
 				this.#reply(conn, msg, { targetId: pageTargetIdFromKey(createdKey) });
 				return;
 			}
@@ -3656,7 +3669,7 @@ export class RelayBridge {
 		// another extension's frame (a password manager's inline menu) starts loading in the tab: that tab
 		// stays adoptable and is announced again at once; an attach Chrome refuses still bans it (#ensureAttached).
 		const cancelledByUser = reason === "canceled_by_user";
-		if (cancelledByUser) tab.banned = true;
+		if (cancelledByUser) tab.refusal = "the user cancelled Chrome's debugging bar";
 		// A user cancel releases the tab's omp-group membership; any other detach keeps it.
 		this.#syncTabGrouping(tab);
 		// Relay-private event, ahead of the sessions' detach: a client driving the tab learns that Chrome
@@ -3694,7 +3707,7 @@ export class RelayBridge {
 			tab = new TabState(instanceId, inst.code, snap.tabId, snap);
 			this.#tabs.set(key, tab);
 		} else {
-			if (tab.url !== snap.url) tab.banned = false;
+			if (tab.url !== snap.url) tab.refusal = undefined;
 			// The user dragging a tab out of the omp group is an opt-out; the
 			// relay never fights the user over grouping.
 			if (!opts.silent && tab.grouped && tab.ompGroupId !== undefined && snap.groupId !== tab.ompGroupId) {
@@ -3812,7 +3825,7 @@ export class RelayBridge {
 				tab.forceFreshRootBeforeReplay = false;
 				tab.restorePending = false;
 				tab.refreshDetachInFlight = false;
-				tab.banned = true;
+				tab.refusal = err instanceof Error && err.message ? err.message : "Chrome refused recovery detach";
 				this.#retractTab(tab);
 				this.#detachIfUnheld(tab.tabKey, true);
 				return;
@@ -3828,12 +3841,10 @@ export class RelayBridge {
 					// holder on "Unknown session id". Leave the sessions for that
 					// hello's reconciliation to restore.
 					//
-					// #ensureAttached only exempts ExtensionReplacedError from banning,
-					// so an ordinary "relay extension disconnected" leaves tab.banned
-					// set. Clear that transient ban before returning: otherwise the
+					// Clear any transient refusal before returning: otherwise the
 					// replacement hello's re-attach of the same-URL tab is refused and
 					// the preserved sessions are ultimately retracted anyway.
-					tab.banned = false;
+					tab.refusal = undefined;
 					return;
 				}
 				// Reattachment failed (DevTools or another debugger claimed the tab
@@ -3845,7 +3856,7 @@ export class RelayBridge {
 				// The forced detach committed but this reattach failed terminally, so
 				// the recovery authorization is spent. Clear refreshDetachInFlight too:
 				// leaving it set would let a later genuine user detach (after a
-				// navigation clears tab.banned and a fresh client attaches) be
+				// navigation clears tab.refusal and a fresh client attaches) be
 				// misclassified by #onHello as this stale relay-initiated refresh and
 				// reattached against the user's intent.
 				tab.refreshDetachInFlight = false;
@@ -3895,14 +3906,14 @@ export class RelayBridge {
 				tab.recoveryStartFrameLoaderIds = undefined;
 			}
 			// The user can cancel the debugger attachment while the final replay RPC
-			// is in flight: #onTabDetached then bans the tab and retracts its
+			// is in flight: #onTabDetached then records a refusal and retracts its
 			// sessions, but this continuation's resolved RPC would otherwise mint
 			// fresh auto-attach sessions for a now-detached tab. Those sessions look
 			// usable but every forwarded command fails, and they keep the tab
 			// recorded as held. Revalidate against the live state before emitting.
 			if (
 				this.#tabs.get(tab.tabKey) !== tab ||
-				tab.banned ||
+				Boolean(tab.refusal) ||
 				!tab.attached ||
 				this.#instances.get(tab.instanceId)?.socket !== ext
 			) {
@@ -4673,9 +4684,9 @@ export class RelayBridge {
 		if (!hasAutoAttach) return;
 		void this.#ensureAttached(tab, { retryAfterDiscard: true }).then(ok => {
 			if (!ok) {
-				// A refused attach banned the tab until its URL changes. Withdraw the announcement too, or the URL change
+				// A refused attach bars the tab until its URL changes. Withdraw the announcement too, or the URL change
 				// finds the tab already announced and neither announces nor attaches it again.
-				if (tab.banned && tab.announced && this.#tabs.get(tab.tabKey) === tab) this.#retractTab(tab);
+				if (tab.refusal && tab.announced && this.#tabs.get(tab.tabKey) === tab) this.#retractTab(tab);
 				return;
 			}
 			if (tab.discarded || !this.#eligible(tab) || this.#tabs.get(tab.tabKey) !== tab) {
@@ -5050,7 +5061,7 @@ export class RelayBridge {
 		if (tab.attached) return true;
 		if (!this.#eligible(tab)) return false;
 		const inst = this.#instances.get(tab.instanceId);
-		if (tab.banned || !inst?.socket) return false;
+		if (!inst?.socket) return false;
 		if (tab.attaching) {
 			if (tab.attachCancelled && opts.retryAfterDiscard) tab.retryAttachAfterDiscard = true;
 			return await tab.attaching;
@@ -5066,21 +5077,18 @@ export class RelayBridge {
 				return !tab.discarded;
 			})
 			.catch(err => {
-				this.#log("attach failed", {
-					tabKey: tab.tabKey,
-					url: tab.url,
-					error: err instanceof Error ? err.message : String(err),
-				});
+				const error = err instanceof Error ? err.message : String(err);
+				this.#log("attach failed", { tabKey: tab.tabKey, url: tab.url, error });
 				// A user detach clears `tab.attaching`, and a later navigation may
 				// start a replacement attach before this RPC settles. Only the attempt
-				// that still owns the slot may turn a terminal failure into a ban; an
+				// that still owns the slot may turn a terminal failure into a refusal; an
 				// older rejection must not poison the newer attachment.
 				if (
 					tab.attaching === attempt &&
 					generation === tab.attachGeneration &&
 					!isExtensionTransportInterrupted(err)
 				) {
-					tab.banned = true;
+					tab.refusal = error || "Chrome refused the attach";
 				}
 				return false;
 			})
@@ -5104,7 +5112,7 @@ export class RelayBridge {
 	}
 
 	#eligible(tab: TabState): boolean {
-		if (tab.banned) return false;
+		if (tab.refusal) return false;
 		const instance = this.#instances.get(tab.instanceId);
 		if (!instance?.socket || instance.info?.discardedTabsProtocol !== DISCARDED_TABS_PROTOCOL_VERSION) return false;
 		if (!tab.url) return true;
