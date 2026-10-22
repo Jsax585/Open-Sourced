@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { SegmentContext } from "../src/status-line/segments";
-import { renderSegment } from "../src/status-line/segments";
+import { describeSegment, renderSegment } from "../src/status-line/segments";
 import { initTheme, theme } from "../src/theme";
 import { getWindowsShortPath } from "@oh-my-pi/pi-natives/path";
 import {
@@ -445,5 +445,89 @@ describe("status line path segment in a linked worktree", () => {
 		expect(label.length).toBeLessThanOrEqual(10);
 		expect(label.startsWith("…")).toBe(true);
 		expect(label.endsWith("feature")).toBe(true);
+	});
+});
+
+describe("status line path segment basenameOnly", () => {
+	it("renders only the leaf directory and drops the parent path", () => {
+		const { home, projectsRoot } = createFakeHome();
+		const nested = path.join(projectsRoot, "team-dir", "project-leaf", "nested");
+		try {
+			fs.mkdirSync(nested, { recursive: true });
+			setProjectDir(nested);
+
+			const ctx = createPathContext();
+			ctx.options.path = { abbreviate: true, maxLength: 120, stripWorkPrefix: true, basenameOnly: true };
+			const label = Bun.stripANSI(renderSegment("path", ctx).content);
+
+			expect(label.endsWith(" nested")).toBe(true);
+			expect(label).not.toContain("team-dir");
+			expect(label).not.toContain("project-leaf");
+			expect(label).not.toContain("Projects");
+		} finally {
+			setProjectDir(originalProjectDir);
+			removeSyncWithRetries(home);
+		}
+	});
+
+	it("still caps an over-long directory name at maxLength", () => {
+		const { home, projectsRoot } = createFakeHome();
+		const leaf = "a-directory-name-longer-than-the-cap";
+		const dir = path.join(projectsRoot, leaf);
+		try {
+			fs.mkdirSync(dir, { recursive: true });
+			setProjectDir(dir);
+
+			const ctx = createPathContext();
+			ctx.options.path = { abbreviate: true, maxLength: 12, stripWorkPrefix: true, basenameOnly: true };
+			const label = Bun.stripANSI(renderSegment("path", ctx).content).trim();
+
+			// The icon prefixes the text, so assert on the clamped tail itself.
+			expect(label).toContain("…");
+			expect(label.endsWith(leaf.slice(-11))).toBe(true);
+			expect(label).not.toContain(leaf);
+		} finally {
+			setProjectDir(originalProjectDir);
+			removeSyncWithRetries(home);
+		}
+	});
+
+	it("describes only the leaf span in the native description", () => {
+		const { home, projectsRoot } = createFakeHome();
+		const nested = path.join(projectsRoot, "team-dir", "project-leaf");
+		try {
+			fs.mkdirSync(nested, { recursive: true });
+			setProjectDir(nested);
+
+			const ctx = createPathContext();
+			ctx.options.path = { abbreviate: true, maxLength: 120, stripWorkPrefix: true, basenameOnly: true };
+			const view = describeSegment("path", ctx);
+
+			// One strong leaf span, no dim parent prefix.
+			expect(view?.spans.map(part => part.t)).toEqual(["project-leaf"]);
+			expect(view?.spans.some(part => part.s?.includes("dim"))).toBe(false);
+		} finally {
+			setProjectDir(originalProjectDir);
+			removeSyncWithRetries(home);
+		}
+	});
+
+	it("keeps the shortened path when basenameOnly is off", () => {
+		const { home, projectsRoot } = createFakeHome();
+		const nested = path.join(projectsRoot, "team-dir", "project-leaf");
+		try {
+			fs.mkdirSync(nested, { recursive: true });
+			setProjectDir(nested);
+
+			const ctx = createPathContext();
+			ctx.options.path = { abbreviate: true, maxLength: 120, stripWorkPrefix: true };
+			const label = Bun.stripANSI(renderSegment("path", ctx).content);
+
+			expect(label).toContain("team-dir");
+			expect(label).toContain("project-leaf");
+		} finally {
+			setProjectDir(originalProjectDir);
+			removeSyncWithRetries(home);
+		}
 	});
 });

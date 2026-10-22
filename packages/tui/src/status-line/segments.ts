@@ -10,6 +10,7 @@ import {
 	getProjectDir,
 	normalizePathForComparison,
 	relativePathWithinNormalizedRoot,
+	sanitizeText,
 } from "@oh-my-pi/pi-utils";
 import { type SymbolKey, type Theme, type ThemeColor, theme } from "../theme";
 import { shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "../render/render-utils";
@@ -291,6 +292,19 @@ function modelDisplayName(ctx: SegmentContext): string {
 }
 
 /**
+ * Provider id to prefix the model name with, or undefined when the user did not
+ * opt in (`segmentOptions.model.showProvider`) or the model carries no provider.
+ */
+function modelProviderPrefix(ctx: SegmentContext): string | undefined {
+	if (ctx.options.model?.showProvider !== true) return undefined;
+	const provider = ctx.session.state.model?.provider;
+	if (!provider) return undefined;
+	// Provider ids come from config and the model catalog, not from this module:
+	// keep control characters out of the status line.
+	return sanitizeText(provider) || undefined;
+}
+
+/**
  * The thinking-effort word (`high`, `off`; `auto` until auto thinking resolves
  * a level), or undefined when the model has no thinking. Drives the native
  * model segment and the composer's effort chip.
@@ -374,7 +388,20 @@ const modelSegment: StatusLineSegment = {
 
 		// `statusLineModel` is aliased to `accent` in many themes, so the badge
 		// uses status colors to stay visibly distinct from the model name color.
-		let content = accentFg(ctx, "statusLineModel", withIcon(modelIcon, modelName));
+		// With `showProvider` the icon, dimmed `provider/`, and the model name are
+		// three sibling spans: nesting them would let the dim reset leak into the
+		// model colour.
+		const provider = modelProviderPrefix(ctx);
+		let content: string;
+		if (provider) {
+			const iconText = modelIcon ? `${modelIcon} ` : "";
+			content =
+				accentFg(ctx, "statusLineModel", iconText) +
+				theme.fg("dim", `${provider}/`) +
+				accentFg(ctx, "statusLineModel", modelName);
+		} else {
+			content = accentFg(ctx, "statusLineModel", withIcon(modelIcon, modelName));
+		}
 		// Per-advisor detail lives in `/advisor status`.
 		const advisor = modelAdvisorBadge(ctx);
 		if (advisor) content += theme.fg(advisor.color, ` ${advisor.icon}`);
@@ -392,7 +419,10 @@ const modelSegment: StatusLineSegment = {
 		// Name, then the thinking level as a word in its level colour after a
 		// quiet separator; the terminal draws the model icon.
 		const token = accentToken(ctx, "statusLineModel");
-		const spans: TspSpan[] = [span(modelDisplayName(ctx), token)];
+		const provider = modelProviderPrefix(ctx);
+		const spans: TspSpan[] = provider
+			? [span(`${provider}/`, "dim"), span(modelDisplayName(ctx), token)]
+			: [span(modelDisplayName(ctx), token)];
 		const advisor = modelAdvisorBadge(ctx);
 		if (advisor) spans.push(span(` ${advisor.icon}`, advisor.color));
 		if (ctx.session.isFastModeActive() && theme.icon.fast) spans.push(span(` ${theme.icon.fast}`, token));
@@ -596,10 +626,14 @@ const pathSegment: StatusLineSegment = {
 		const { scratch, displayPath } = getProjectDirDisplay(projectDir);
 		let pwd = stripPrefix ? displayPath : projectDir;
 		const repoSuffix = ctx.activeRepo ? ` ↳ ${ctx.activeRepo.relativeRepoRoot}` : "";
-		if (opts.abbreviate !== false) {
+		if (opts.basenameOnly === true) {
+			// Only the leaf: there is no parent path left to shorten or abbreviate.
+			pwd = path.basename(pwd) || pwd;
+		} else if (opts.abbreviate !== false) {
 			pwd = shortenPath(pwd);
 		}
 
+		// `maxLength` still applies to a single directory name, which can be long.
 		pwd = clampPathLength(pwd, opts.maxLength ?? 40);
 
 		const showScratchIcon = scratch && stripPrefix;
@@ -620,7 +654,11 @@ const pathSegment: StatusLineSegment = {
 		const projectDir = ctx.activeRepo?.cwd ?? getProjectDir();
 		const { scratch, displayPath } = getProjectDirDisplay(projectDir);
 		let pwd = stripPrefix ? displayPath : projectDir;
-		if (opts.abbreviate !== false) pwd = shortenPath(pwd);
+		if (opts.basenameOnly === true) {
+			pwd = path.basename(pwd) || pwd;
+		} else if (opts.abbreviate !== false) {
+			pwd = shortenPath(pwd);
+		}
 		// `maxLength` is the user's configured cap; width fitting is the terminal's.
 		if (opts.maxLength !== undefined) pwd = clampPathLength(pwd, opts.maxLength);
 		const spans = pathSpans(pwd);

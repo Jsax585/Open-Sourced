@@ -4,6 +4,7 @@
 
 ### Added
 
+- The status line can render only the working directory's last segment (`statusLine.segmentOptions.path.basenameOnly`) and prefix the model name with the active provider (`statusLine.segmentOptions.model.showProvider`, e.g. `opencode-go/DeepSeek V4.1 Flash`). Both are opt-in and off by default ([#16757](https://github.com/can1357/oh-my-pi/pull/16757) by [@rennzhang](https://github.com/rennzhang))
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 
 ## [18.12.6] - 2026-10-21
