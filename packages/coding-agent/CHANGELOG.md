@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `scope: "project"` to `manage_skill` and `learn` skill payloads: auto-learn can save a managed skill that loads only in the current repository, stored under `~/.omp/agent/project-managed-skills` and never in the repository itself ([#4067](https://github.com/can1357/oh-my-pi/issues/4067))
+- Added `scope: "project"` to `manage_skill` and `learn` skill payloads: auto-learn can save a managed skill that loads only in the current repository, stored under `~/.omp/agent/project-managed-skills` and never in the repository itself ([#16772](https://github.com/can1357/oh-my-pi/pull/16772) by [@enieuwy](https://github.com/enieuwy))
 
 ## [18.12.5] - 2026-10-21
 
