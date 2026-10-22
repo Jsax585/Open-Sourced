@@ -1,22 +1,24 @@
 /**
  * The async background jobs of a session as {@link JobsSheet}: the dismissable
- * sheet native `/jobs` and the native jobs pill open. A master–detail split
- * shows status, command, process facts and live output. The separate fullscreen
- * terminal Background Jobs page reuses the source contracts below.
+ * sheet the native jobs pill and `/jobs` open. A master–detail split lists
+ * every job of the session's agent and its subagents as a tree (see
+ * {@link buildJobTree}) beside the selected one's status, command, facts
+ * (cwd, live pids, exit code, artifact) and live output.
  */
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Component } from "../tui";
-import { formatKeyHint } from "../app-keybindings";
-import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
 import { matchesKey } from "../keys";
-import { replaceTabs, truncateToWidth } from "../utils";
-import { shortenPath } from "../render/render-utils";
+import { replaceTabs, truncateToWidth, wrapTextWithAnsi } from "../utils";
 import { collapseCommand } from "../apps/ps-data";
+import { PREVIEW_LIMITS, shortenEmbeddedPaths } from "../render/render-utils";
 import { ansi, code, col, compact, item, node, row, span, stableKey, text } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton, selectList } from "../native/overlay";
+import { theme } from "../theme/theme";
+import { buildJobTree, type JobTreeAgent, type JobTreeRow, jobTreeGuide } from "./job-tree";
+import { describeJobWidget, type JobWidgetView, renderJobWidgetLines } from "../tools/job-widget";
 
 /** One async job as the session snapshots it. */
 export interface JobsPanelJob {
@@ -26,14 +28,20 @@ export interface JobsPanelJob {
 	readonly label: string;
 	readonly startTime: number;
 	readonly endTime?: number;
+	/** Registry id of the agent that owns the job. */
+	readonly ownerId?: string;
 	/** Registry id of the subagent a task job runs. */
 	readonly agentId?: string;
 }
 
-/** Running and recently settled jobs. */
+/** Running and recently settled jobs of an agent and its subagents. */
 export interface JobsPanelSnapshot {
 	readonly running: readonly JobsPanelJob[];
 	readonly recent: readonly JobsPanelJob[];
+	/** The agent the sheet is for: its jobs sit at the top level, and only they can be cancelled. */
+	readonly rootId?: string;
+	/** Subagents owning listed jobs, with the ancestors linking them to the root. */
+	readonly agents?: readonly JobTreeAgent[];
 }
 
 /** What the sheet shows about the selected job beyond its row. */
@@ -48,6 +56,8 @@ export interface JobsPanelDetail {
 	readonly output?: string;
 	/** Artifact holding the full output when `output` is cut. */
 	readonly artifactId?: string;
+	/** The job's live widget (frozen once it settles), drawn above the output. */
+	readonly widget?: JobWidgetView;
 }
 
 /** The session behind a {@link JobsSheet}. */
@@ -56,31 +66,15 @@ export interface JobsSheetSource {
 	load(): JobsPanelSnapshot;
 	/** The selected job's detail; runs once per frame, undefined once the job is gone. */
 	inspect(id: string): JobsPanelDetail | undefined;
-	/** Cancel a running job. */
-	cancel(id: string): void;
+	/**
+	 * Cancel a running job. Omitted by a read-only sheet (a focused subagent
+	 * view, which only watches that agent): it lists the jobs and offers no way
+	 * to stop them.
+	 */
+	cancel?(id: string): void;
 	/** Dismiss the sheet. */
 	close(): void;
-	/**
-	 * Raw terminal rows, read once per frame. The fallback body ceiling follows
-	 * {@link JOBS_SHEET_HEIGHT_PERCENT}, shared with the host overlay.
-	 * Optional: without it the terminal's own row count is used.
-	 */
-	rows?(): number;
 }
-
-/**
- * Repaint cadence (ms) shared by the jobs surfaces: the native jobs pill and
- * the terminal Background jobs page both poll the session at this interval,
- * since a job's output and pids change with no push notification.
- */
-export const JOBS_REFRESH_MS = 250;
-
-/**
- * Fraction of the terminal height the {@link JobsSheet} plain body may fill,
- * in percent: the same 90% `maxHeight` the sheet's centred overlay opens with,
- * so the compositor never clips its newest output line.
- */
-export const JOBS_SHEET_HEIGHT_PERCENT = 90;
 
 /** A job's status as the sheet names it. */
 const STATUS_LABEL: Record<JobsPanelJob["status"], string> = {
@@ -109,15 +103,20 @@ const STATUS_GLYPH: Record<JobsPanelJob["status"], TspSpan> = {
 /** The list row's icon per job type (Tern icon names); other types read as a generic job. */
 const TYPE_ICON: Record<string, string> = { bash: "bash", task: "agent" };
 
+/** Output tail rows the terminal fallback shows under the selected job. */
+const FALLBACK_TAIL_LINES = 8;
+
 /**
  * The jobs pill's sheet: a centred `lg` glass sheet titled Background jobs.
- * A master–detail split (it stacks in a narrow pane): the selectable job list,
- * grouped Running / Recent, beside the selected job's detail — a status pill
- * with live elapsed and Cancel job, its command or task, facts (agent, cwd,
- * live pids, exit code, artifact) and a tail-following output pane. With no
- * jobs it shows an empty state. It re-reads the session every frame, so the
- * caller re-renders it on a timer while it is open. ↑/↓ select, X cancels the
- * selected running job, Esc or Close dismisses; nothing enters the transcript.
+ * A master–detail split (it stacks in a narrow pane): the selectable job tree
+ * beside the selected job's detail — a status pill with live elapsed and
+ * Cancel job, its command or task, facts (agent, cwd, live pids, exit code,
+ * artifact) and a tail-following output pane. With no jobs it shows an empty
+ * state. It re-reads the session every frame, so the caller re-renders it on
+ * a timer while it is open. ↑/↓ select, X cancels the selected running job,
+ * Esc or Close dismisses; nothing enters the transcript. A source without
+ * `cancel` renders read-only, and a subagent's job never offers Cancel: only
+ * the root's own jobs can be stopped here.
  */
 export class JobsSheet implements Component {
 	readonly nativeOverlay = {
@@ -129,26 +128,32 @@ export class JobsSheet implements Component {
 	readonly #source: JobsSheetSource;
 	#selectedId: string | undefined;
 	#native: { key: string; output: string | undefined; node: NativeNode } | undefined;
-	/** Fallback output tail, reused while the selected job, its output and the tail height are unchanged. */
-	#tail: { id: string; output: string; count: number; lines: readonly string[] } | undefined;
+	/** Fallback output tail, reused while the selected job's output is unchanged. */
+	#tail: { id: string; output: string; lines: readonly string[] } | undefined;
 
 	constructor(source: JobsSheetSource) {
 		this.#source = source;
 	}
 
 	describe(_cx: DescribeContext): NativeNode {
-		const { jobs, selected } = this.#current();
+		const { rows, jobs, selected, cancellable } = this.#current();
 		const detail = selected && this.#source.inspect(selected.id);
 		const now = Date.now();
 		// Elapsed nodes tick on their own; list values and the output pane redraw
-		// when a job starts, settles or leaves, its process changes, its output
-		// grows, or (while one runs) once a second.
+		// when a job starts, settles, leaves or moves in the tree, its process
+		// changes, its output grows, or (while one runs) once a second.
 		const key = [
-			jobs.map(job => `${job.id}:${job.status}`).join(","),
+			rows
+				.map(
+					entry =>
+						`${jobTreeGuide(entry, theme)}${entry.kind === "job" ? `${entry.job.id}:${entry.job.status}` : entry.agent.id}`,
+				)
+				.join(","),
 			selected?.id,
 			detail?.pids.join(" "),
 			detail?.exitCode,
 			detail?.artifactId,
+			detail?.widget ? `${detail.widget.updatedAt}:${detail.widget.state}` : "",
 			jobs.some(job => job.status === "running") ? Math.floor(now / 1000) : "",
 		].join("|");
 		const output = detail?.output;
@@ -160,8 +165,8 @@ export class JobsSheet implements Component {
 						"row",
 						{ role: "omp.jobs.split" },
 						[
-							node("col", { role: "omp.jobs.master" }, [describeJobList(jobs, selected, now)], "master"),
-							describeDetail(selected, detail, now),
+							node("col", { role: "omp.jobs.master" }, [describeJobList(rows, selected, now)], "master"),
+							describeDetail(selected, detail, now, cancellable),
 						],
 						"split",
 					),
@@ -172,87 +177,59 @@ export class JobsSheet implements Component {
 		return described;
 	}
 
-	/**
-	 * Rows for a terminal without the native surface: the header, the job list
-	 * (id first, so it survives a cut label) windowed around the selection, the
-	 * selected job's command and facts, its output tail (oldest first, newest
-	 * last) and the key legend. The whole array is bounded to the rows a
-	 * centred `maxHeight: "90%"` overlay could draw, so the compositor never
-	 * clips the newest output; that line is reserved a row ahead of the
-	 * command, the facts and the older output.
-	 */
+	/** Rows for a terminal without the native surface: the job tree, then the selected job's facts and output tail. */
 	render(width: number): readonly string[] {
-		const { jobs, selected } = this.#current();
+		const { rows, jobs, selected } = this.#current();
 		const now = Date.now();
-		const detail = selected && this.#source.inspect(selected.id);
-		const command = detail?.command;
-		const facts = compact([
-			detail?.cwd && `cwd ${shortenPath(detail.cwd)}`,
-			detail?.pids.length ? `pid ${detail.pids.join(", ")}` : undefined,
-			detail?.exitCode !== undefined && `exit ${detail.exitCode}`,
-			detail?.artifactId && `artifact://${detail.artifactId}`,
-		]);
-		const height = this.#heightBudget();
-		const legend =
-			height >= 3
-				? [
-						` ${editorKeys("tui.select.up", "tui.select.down")} select`,
-						`${formatKeyHint("x")} cancel`,
-						`${editorKey("tui.select.cancel")} close`,
-					].join(" · ")
-				: undefined;
 		const running = jobs.filter(job => job.status === "running").length;
-		const lines = [plainRow(` Background jobs · ${running} running`, width)];
-		// Room for content under the header (and the legend): the selected row is
-		// guaranteed its line, then content rows are reserved in priority order —
-		// the newest output line, the full command, the facts — with older output
-		// taking the remainder. The block renders command, facts, then the tail
-		// oldest first, so the newest line sits last above the legend.
-		const content = height - lines.length - (legend ? 1 : 0);
-		let listHeight = 0;
-		let commandHeight = 0;
-		let factsHeight = 0;
-		let outputHeight = 0;
-		if (jobs.length > 0 && content > 0) {
-			listHeight = Math.min(jobs.length, Math.max(1, Math.ceil(content / 2)));
-			let left = content - listHeight;
-			if (detail?.output && left > 0) {
-				outputHeight = 1;
-				left--;
+		const lines = [truncateToWidth(` Background jobs · ${running} running`, width)];
+		if (jobs.length === 0) lines.push(" No background jobs");
+		for (const entry of rows) {
+			const guide = jobTreeGuide(entry, theme);
+			if (entry.kind === "agent") {
+				lines.push(truncateToWidth(`  ${guide}${entry.agent.id}`, width));
+				continue;
 			}
-			if (command && left > 0) {
-				commandHeight = 1;
-				left--;
-			}
-			if (facts.length > 0 && left > 0) {
-				factsHeight = 1;
-				left--;
-			}
-			outputHeight += left;
+			const { job } = entry;
+			const cursor = job === selected ? ">" : " ";
+			const age = formatDuration(jobAge(job, now));
+			const agent = entry.agent && entry.agent.id !== job.label ? `${entry.agent.id}: ` : "";
+			lines.push(
+				truncateToWidth(
+					`${cursor} ${guide}${job.status}  ${job.type} ${age}  ${agent}${collapseCommand(job.label)}`,
+					width,
+				),
+			);
 		}
-		if (jobs.length === 0) {
-			if (content > 0) lines.push(plainRow(" No background jobs", width));
-		} else if (listHeight > 0 && selected) {
-			const index = jobs.indexOf(selected);
-			const start = Math.max(0, Math.min(index - Math.floor((listHeight - 1) / 2), jobs.length - listHeight));
-			for (const job of jobs.slice(start, start + listHeight)) {
-				const age = formatDuration(jobAge(job, now));
-				lines.push(
-					plainRow(
-						`${job === selected ? ">" : " "} ${job.id} ${job.status} ${job.type} ${age} ${collapseCommand(job.label)}`,
-						width,
-					),
+		const detail = selected && this.#source.inspect(selected.id);
+		if (detail) {
+			// Rows show the cut label; the selected job's command wraps here,
+			// bounded so a long script never pushes the facts and output off the sheet.
+			if (detail.command) {
+				const commandRows = wrapTextWithAnsi(
+					shortenEmbeddedPaths(replaceTabs(sanitizeText(detail.command))),
+					Math.max(1, width - 3),
 				);
+				for (const line of commandRows.slice(0, PREVIEW_LIMITS.EXPANDED_LINES)) lines.push(`   ${line}`);
+				const hidden = commandRows.length - PREVIEW_LIMITS.EXPANDED_LINES;
+				if (hidden > 0) lines.push(truncateToWidth(`   … ${hidden} more command lines`, width));
+			}
+			const facts = compact([
+				detail.cwd && `cwd ${detail.cwd}`,
+				detail.pids.length > 0 && `pid ${detail.pids.join(", ")}`,
+				detail.exitCode !== undefined && `exit ${detail.exitCode}`,
+				detail.artifactId && `artifact://${detail.artifactId}`,
+			]);
+			if (facts.length > 0) lines.push(truncateToWidth(`   ${facts.join(" · ")}`, width));
+			if (detail.widget) {
+				for (const line of renderJobWidgetLines(detail.widget, Math.max(0, width - 3), theme)) {
+					lines.push(`   ${line}`);
+				}
+			}
+			for (const line of this.#tailLines(selected.id, detail.output ?? "")) {
+				if (line) lines.push(truncateToWidth(`   ${line}`, width));
 			}
 		}
-		if (commandHeight > 0 && command) lines.push(plainRow(`   $ ${command}`, width));
-		if (factsHeight > 0) lines.push(plainRow(`   ${facts.join(" · ")}`, width));
-		if (outputHeight > 0 && selected) {
-			for (const line of this.#tailLines(selected.id, detail?.output ?? "", outputHeight)) {
-				lines.push(plainRow(`   ${line}`, width));
-			}
-		}
-		if (legend) lines.push(plainRow(legend, width));
 		return lines;
 	}
 
@@ -274,32 +251,31 @@ export class JobsSheet implements Component {
 		else if (event.type === "action" && event.act === "cancel") this.#cancelSelected();
 	}
 
-	/** Every job, running first, and the selected one (the first when the selection left). */
-	#current(): { jobs: readonly JobsPanelJob[]; selected: JobsPanelJob | undefined } {
-		const { running, recent } = this.#source.load();
-		const jobs = [...running, ...recent];
+	/**
+	 * The job tree, its jobs in tree order, the selected one (the first when
+	 * the selection left) and whether the sheet can stop it: a job the root
+	 * owns, with a source that cancels.
+	 */
+	#current(): {
+		rows: readonly JobTreeRow<JobsPanelJob>[];
+		jobs: readonly JobsPanelJob[];
+		selected: JobsPanelJob | undefined;
+		cancellable: boolean;
+	} {
+		const { running, recent, rootId, agents } = this.#source.load();
+		const rows = buildJobTree([...running, ...recent], agents ?? [], rootId);
+		const jobs = rows.flatMap(entry => (entry.kind === "job" ? [entry.job] : []));
 		const selected = jobs.find(job => job.id === this.#selectedId) ?? jobs[0];
 		this.#selectedId = selected?.id;
-		return { jobs, selected };
+		const owned = selected?.ownerId === undefined || selected.ownerId === rootId;
+		return { rows, jobs, selected, cancellable: this.#source.cancel !== undefined && owned };
 	}
 
-	/**
-	 * Terminal rows the plain body may fill: the front 90% of the terminal the
-	 * caller's centred `maxHeight: "90%"` overlay draws, so the compositor never
-	 * clips the newest output. A host that reports no rows falls back to the
-	 * terminal's own count, and to 40 when even that is unknown, so the body is
-	 * always bounded.
-	 */
-	#heightBudget(): number {
-		const rows = this.#source.rows?.() || process.stdout.rows || 40;
-		return Math.max(1, Math.floor((rows * JOBS_SHEET_HEIGHT_PERCENT) / 100));
-	}
-
-	#tailLines(id: string, output: string, count: number): readonly string[] {
+	#tailLines(id: string, output: string): readonly string[] {
 		const cached = this.#tail;
-		if (cached?.id === id && cached.output === output && cached.count === count) return cached.lines;
-		const lines = tailLines(output, count);
-		this.#tail = { id, output, count, lines };
+		if (cached?.id === id && cached.output === output) return cached.lines;
+		const lines = tailLines(output, FALLBACK_TAIL_LINES);
+		this.#tail = { id, output, lines };
 		return lines;
 	}
 
@@ -311,8 +287,8 @@ export class JobsSheet implements Component {
 	}
 
 	#cancelSelected(): void {
-		const { selected } = this.#current();
-		if (selected?.status === "running") this.#source.cancel(selected.id);
+		const { selected, cancellable } = this.#current();
+		if (cancellable && selected?.status === "running") this.#source.cancel?.(selected.id);
 	}
 }
 
@@ -339,40 +315,42 @@ function tailLines(text: string, count: number): string[] {
 }
 
 /**
- * One plain terminal row: tabs expanded, terminal controls and line breaks
- * stripped (the job fields and captured output are untrusted) and the result
- * bounded to `width`, so no row can wrap, repaint or overflow its overlay.
+ * The master list: the job tree, connectors leading each label. A subagent
+ * without a listed task job heads its jobs as a quiet label (a plain text
+ * child: no row behavior, so ↑/↓ and clicks pass it by).
  */
-function plainRow(text: string, width: number): string {
-	return truncateToWidth(replaceTabs(sanitizeText(text)).replace(/[\r\n]+/g, " "), width);
+function describeJobList(rows: readonly JobTreeRow<JobsPanelJob>[], selected: JobsPanelJob, nowMs: number): NativeNode {
+	const children: NativeChild[] = rows.map(entry => {
+		const guide = jobTreeGuide(entry, theme);
+		if (entry.kind === "job") return describeJobItem(entry.job, entry.agent?.id, guide, nowMs);
+		return node(
+			"text",
+			{
+				role: "omp.jobs.group",
+				spans: compact([guide !== "" && span(guide, "mono dim"), span(entry.agent.id)]),
+				wrap: "none",
+			},
+			undefined,
+			`agent-${stableKey(entry.agent.id)}`,
+		);
+	});
+	return selectList("jobs", children, { selected: selected.id, max: { lines: 12 } });
 }
 
 /**
- * The master list: Running, then Recent, each under a quiet group label (a
- * plain text child: no row behavior, so ↑/↓ and clicks pass it by).
+ * One list row: the type icon tinted by status, the tree connector, the
+ * subagent a task job runs, the one-line label (a process job's command in
+ * mono, a task's work in prose) and how long it ran.
  */
-function describeJobList(jobs: readonly JobsPanelJob[], selected: JobsPanelJob, nowMs: number): NativeNode {
-	const rows: NativeChild[] = [];
-	for (const [label, group] of [
-		["Running", jobs.filter(job => job.status === "running")],
-		["Recent", jobs.filter(job => job.status !== "running")],
-	] as const) {
-		if (group.length === 0) continue;
-		rows.push(node("text", { role: "omp.jobs.group", text: label, wrap: "none" }, undefined, `group-${label}`));
-		for (const job of group) rows.push(describeJobItem(job, nowMs));
-	}
-	return selectList("jobs", rows, { selected: selected.id, max: { lines: 12 } });
-}
-
-/**
- * One list row: the type icon tinted by status, the one-line label (a process
- * job's command in mono, a task's work in prose) and how long it ran.
- */
-function describeJobItem(job: JobsPanelJob, nowMs: number): NativeNode {
+function describeJobItem(job: JobsPanelJob, agentName: string | undefined, guide: string, nowMs: number): NativeNode {
 	const status = STATUS_LABEL[job.status];
 	const age = formatDuration(jobAge(job, nowMs));
 	return item(job.id, {
-		label: [job.type === "task" ? span(job.label) : span(collapseCommand(job.label), "mono")],
+		label: compact([
+			guide !== "" && span(guide, "mono dim"),
+			agentName !== undefined && agentName !== job.label && span(`${agentName} `, "strong"),
+			job.type === "task" ? span(job.label) : span(collapseCommand(job.label), "mono"),
+		]),
 		value: [span(age, "mono")],
 		icon: TYPE_ICON[job.type] ?? "job",
 		tone: STATUS_TONE[job.status],
@@ -409,10 +387,16 @@ function describeEmpty(): NativeNode {
 }
 
 /**
- * The selected job: a status line (pill, live elapsed, type · id, Cancel job),
- * its task or full command, facts and the output pane (or its empty state).
+ * The selected job: a status line (pill, live elapsed, type · id, Cancel job
+ * when `cancellable`), its task or full command, facts and the output pane (or
+ * its empty state).
  */
-function describeDetail(job: JobsPanelJob, detail: JobsPanelDetail | undefined, nowMs: number): NativeNode {
+function describeDetail(
+	job: JobsPanelJob,
+	detail: JobsPanelDetail | undefined,
+	nowMs: number,
+	cancellable: boolean,
+): NativeNode {
 	const settled = job.status !== "running";
 	const exit = detail?.exitCode;
 	const age = Math.round(jobAge(job, nowMs));
@@ -420,7 +404,7 @@ function describeDetail(job: JobsPanelJob, detail: JobsPanelDetail | undefined, 
 	const pids = detail?.pids ?? [];
 	const facts = compact([
 		job.agentId ? { k: "Agent", v: [span(job.agentId, "mono")] } : undefined,
-		detail?.cwd ? { k: "Directory", v: [span(shortenPath(detail.cwd), "path")] } : undefined,
+		detail?.cwd ? { k: "Directory", v: [span(detail.cwd, "path")] } : undefined,
 		pids.length > 0 && { k: pids.length > 1 ? "PIDs" : "PID", v: [span(pids.join(", "), "num")] },
 		exit !== undefined && { k: "Exit code", v: [span(String(exit), exit === 0 ? "success" : "error")] },
 		detail?.artifactId ? { k: "Full output", v: [span(`artifact://${detail.artifactId}`, "mono")] } : undefined,
@@ -442,7 +426,7 @@ function describeDetail(job: JobsPanelJob, detail: JobsPanelDetail | undefined, 
 				}),
 				text([span(`${job.type} · ${job.id}`, "mono")], { role: "omp.jobs.id", wrap: "none", truncate: "end" }),
 				node("spacer", { grow: 1 }),
-				!settled && actionButton("Cancel job", "cancel", { keys: "x", tone: "error" }),
+				cancellable && !settled && actionButton("Cancel job", "cancel", { keys: "x", tone: "error" }),
 			]),
 			{ role: "omp.jobs.status", gap: "sm", align: "center" },
 		),
@@ -450,6 +434,7 @@ function describeDetail(job: JobsPanelJob, detail: JobsPanelDetail | undefined, 
 			? code(command, { lang: "bash", wrap: true, preview: { lines: 4 }, role: "omp.jobs.command" })
 			: text(job.label, { role: "omp.jobs.title", wrap: "word" }),
 		facts.length > 0 && node("kv", { items: facts, role: "omp.jobs.facts" }),
+		detail?.widget && node("col", { role: "omp.jobs.widget" }, [describeJobWidget(detail.widget)], "widget"),
 		node(
 			"col",
 			{ role: "omp.jobs.out", gap: "sm" },

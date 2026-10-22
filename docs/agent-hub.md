@@ -52,11 +52,11 @@ Metrics depend on the progress or persisted usage data available for that agent.
 | `1` / `2`                   | Switch between Agents and Activity sections.                               |
 | `Tab`                       | Toggle the inspector on narrow terminals.                                    |
 | `PageUp` / `PageDown`       | Scroll an open inspector.                                                    |
-| `r`                         | Revive the selected parked agent.                                            |
+| `r`                         | Revive the selected parked or killed agent.                                  |
 | `x`                         | Abort a running turn if necessary, then kill and release the selected agent. |
 | `Esc`                       | Clear an active filter first, then close the narrow inspector or the Hub.    |
 
-Only `parked` agents can be revived. `x` is immediate; use it only when you intend to discard that agent instance.
+`parked` and killed (`aborted`) agents can be revived: the transcript is on disk, so a killed agent comes back as a fresh instance with its full history. `x` is immediate; it stops the agent until something revives or messages it.
 
 ## Activity log
 
@@ -70,15 +70,16 @@ Press `2` for the combined activity log; `1` returns to the roster. The log incl
 
 ## Read and steer a subagent
 
-For a normal local subagent, `Enter` or click focuses the main TUI on that agent's session and closes the Hub. Focusing a parked agent revives it. The transcript, status line, and editor then belong to that subagent:
+For a normal local subagent, `Enter` or click focuses the main TUI on that agent's session and closes the Hub. Focusing a parked or killed agent revives it. The transcript, status line, and editor then belong to that subagent:
 
 1. Read its live transcript and tool activity.
 2. Type a message and press `Enter` to steer a running turn or prompt an idle agent.
-3. Press `Esc` with an empty editor, or double-tap `←`, to return to the main session.
+3. Change its model or thinking level with `Alt+P`, `/switch`, `Ctrl+P`, `Shift+Tab`, or `/effort`. These switches are session-only and leave the main session alone. `/model` and `Alt+M` open the same session-only picker, because role assignments configure the main session.
+4. Press `Esc` with an empty editor, or double-tap `←`, to return to the main session.
 
 Steering uses the normal prompt path, so the message and response are written to the subagent's persisted session history. While a subagent is focused, `Esc` returns to the main session; it does not interrupt the subagent.
 
-Contexts without a local focusable session use the Hub's full-screen transcript viewer instead. This includes collab guests, advisor rows, and aborted agents; advisor and aborted transcripts are read-only. The viewer incrementally tails the file-backed transcript and provides an input line only when the selected agent can be messaged. Sending there has the same semantics: revive if parked, steer if running, and prompt if idle.
+Contexts without a local focusable session use the Hub's full-screen transcript viewer instead. This includes collab guests and advisor rows; advisor transcripts are read-only. The viewer incrementally tails the file-backed transcript and provides an input line only when the selected agent can be messaged. Sending there has the same semantics: revive if parked or killed, steer if running, and prompt if idle.
 
 ## Pinned jump list and click to focus
 
@@ -94,7 +95,7 @@ Only rows currently in the live viewport are clickable — retired transcript ro
 
 ## Persisted agents and advisors
 
-Opening the Hub for a persisted session scans that session's artifact tree. Historical subagent JSONL files become parked rows; a killed agent's tombstone keeps it aborted. Nested subagents retain their parent/child lineage. Output and patch artifacts are attached to the corresponding inspector row.
+Opening the Hub for a persisted session scans that session's artifact tree. Historical subagent JSONL files become parked rows; a killed agent's tombstone keeps it aborted until it is revived, which removes the tombstone. Nested subagents retain their parent/child lineage. Output and patch artifacts are attached to the corresponding inspector row.
 
 Advisor transcript files (`__advisor*.jsonl`) appear as `advisor`-kind rows under their owning session. They are observability records, not peers:
 
@@ -111,32 +112,12 @@ Agent Hub is the human-facing live session view. Adjacent commands and internal 
 
 `/agents` is a separate agent-definition/settings hub, not the live roster. It manages discovered agents, enable/disable state, model overrides, prewalk, and advisor selection.
 
-- `/jobs` opens the dedicated fullscreen Background jobs page on an ordinary terminal; native terminals keep the centred live `JobsSheet` (see [Background jobs page](#background-jobs-page)).
+- `/jobs` prints a snapshot of running and recently settled asynchronous tool jobs. It does not replace the per-agent transcript or control view. `/jobs kill <id>|all` cancels running jobs from the command line.
 - `history://<id>` gives the coding agent a concise transcript for a live/parked subagent or a retained on-disk transcript.
 - `agent://<id>` resolves a subagent's saved final output artifact; it is not the live transcript. Before that artifact exists, a registered agent resolves to its status, the `yield` payloads it has submitted so far, and its latest assistant text.
-- `write agent://<id>` steers or follows up with a normal subagent; `agent://all` broadcasts to visible live peers. Messaging a parked subagent revives it. `read history://` lists registered agents and retained on-disk transcripts, refreshing the caller root's persisted roster first, the same as `history://<id>` lookups.
+- `write agent://<id>` steers or follows up with a normal subagent; `agent://all` broadcasts to visible live peers. Messaging a parked or killed subagent revives it. `read history://` lists registered agents and retained on-disk transcripts, refreshing the caller root's persisted roster first, the same as `history://<id>` lookups.
 - `read proc://` lists background jobs and project services; `read proc://<id>` inspects status/output without consuming delivery.
 
 Advisor rows are intentionally excluded from the agent-facing peer roster, `history://` index, and `agent://` messaging workflows.
-
-### Background jobs page
-
-`/jobs` opens the dedicated fullscreen Background jobs page on an ordinary terminal. It borrows Agent Hub's layout primitives — a roster, a split detail pane, and a scroll view — but is separate from Agent Hub and its agent roster: it lists only the session's asynchronous tool jobs and shows only their captured output, which stays read-only. There is no chat, stdin, or revive. On a wide terminal the roster and the selected job's live output sit side by side; on a narrow one the roster fills the page until `Tab` or `Enter` opens the output.
-
-The roster lists bash jobs only by default; `a` widens it to every job type (tasks, evals) and narrows it back, and the title's running count covers only the listed jobs, so it follows the filter. Every newly opened page starts bash-only again, and the filter lives on this page alone: task and eval jobs stay in the backend job registry, and this page filter leaves the existing statusline counter, native `JobsSheet`, `/jobs full` and `/jobs kill` behavior unchanged. With no bash jobs while task or eval jobs exist, the roster says how many are hidden and points at `a:all`.
-
-| Input              | Action                                                                                                              |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `↑` / `↓`, `j` / `k` | Select a job, or scroll the open output.                                                                            |
-| `Tab`, `Enter`     | Open or close the selected job's output: the full-body log on a wide terminal, the detail pane on a narrow one.      |
-| `PgUp` / `PgDn`    | Page the output. Scrolling away from the tail freezes the displayed snapshot, so rolling captures cannot shift it. |
-| `End`, `Space`     | `End` follows the newest output; `Space` toggles following. Returning to the tail also resumes following. |
-| `a`                | Toggle the roster between bash jobs (the default) and every job type.                                              |
-| `x`                | Cancel the selected running job. Only running jobs can be cancelled.                                               |
-| `Esc`              | Back from the open output to the roster, then close the page.                                                      |
-
-The page repaints on a timer while it is open, so a running job's output and pids stay live. It never replaces the per-agent transcript or control view, and closing it stops nothing. Native terminals keep the centred live `JobsSheet` instead. `/jobs full` prints a static snapshot of running and recently settled asynchronous tool jobs with untruncated commands; `/jobs kill <id>|all` cancels running jobs from the command line.
-
-Switching to a job with no output clears the previous job's output viewport. Its first captured output follows its own tail; `Space` can freeze even an empty capture until following resumes.
 
 See also [Task Agent Discovery and Selection](./task-agent-discovery.md), [Collaboration](./collab.md), and [Advisor, WATCHDOG.md, and WATCHDOG.yml](./advisor-watchdog.md).
