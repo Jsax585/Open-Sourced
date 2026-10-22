@@ -771,7 +771,6 @@ export class SelectorController {
 			getAll: () => models,
 			refreshIfStale: async () => false,
 		};
-		const { ModelPickerComponent } = loadModelOverlayComponents();
 		const current = this.ctx.session.model;
 		this.#showModelPickerOverlay(
 			done =>
