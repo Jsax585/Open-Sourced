@@ -109,6 +109,12 @@ interface SkillTarget {
 	 * gone, so only these earn a re-discovery retry.
 	 */
 	skillRoot: boolean;
+	/**
+	 * The snapshot's instruction file for the skill. A directory lookup stats
+	 * {@link targetPath}, which can outlive a moved `SKILL.md`; checking this
+	 * file proves the snapshot still describes a skill.
+	 */
+	instructionFile: string;
 }
 
 /**
@@ -163,11 +169,12 @@ async function skillTargetPath(
 	// Agent Plugin skills (§4.1): every target, including the bare instruction
 	// file and base directory, must canonically resolve within the plugin root.
 	// Symlinks may target other files inside the same package.
-	if (!skill.containRoot) return { targetPath: resolvedPath, skillRoot };
+	const instructionFile = skill.filePath;
+	if (!skill.containRoot) return { targetPath: resolvedPath, skillRoot, instructionFile };
 	const escape = `skill:// path resolves outside the plugin root: ${url.href}`;
 	const contained = await resolveContainedPath(skill.containRoot, resolvedPath);
 	if (contained.status === "outside") throw new UrlContainmentError(escape);
-	if (contained.status === "ok") return { targetPath: contained.realPath, skillRoot };
+	if (contained.status === "ok") return { targetPath: contained.realPath, skillRoot, instructionFile };
 	if (create) {
 		try {
 			await ensureCreatableWithinRoot(resolvedPath, skill.containRoot, "skill", url.href);
@@ -176,7 +183,7 @@ async function skillTargetPath(
 			throw error instanceof UrlContainmentError ? new UrlContainmentError(escape) : error;
 		}
 	}
-	return { targetPath: resolvedPath, skillRoot };
+	return { targetPath: resolvedPath, skillRoot, instructionFile };
 }
 
 /**
@@ -285,13 +292,24 @@ export class SkillProtocolHandler implements ProtocolHandler {
 
 	/** Locate `url` against one skill snapshot; a miss on the skill itself throws to trigger the retry. */
 	async #locateAgainst(url: InternalUrl, skills: readonly Skill[], options?: LocateOptions): Promise<string | null> {
-		const { targetPath, skillRoot } = await skillTargetPath(
+		const { targetPath, skillRoot, instructionFile } = await skillTargetPath(
 			url,
 			skills,
 			options?.directory === true,
 			options?.create === true,
 		);
 		if (options?.create) return targetPath;
+		if (skillRoot && options?.directory === true) {
+			// A base directory outlives a moved `SKILL.md`: statting it alone would
+			// keep serving a directory the snapshot no longer describes. Missing
+			// instruction file means the skill moved, so the lookup must retry.
+			try {
+				await fs.stat(instructionFile);
+			} catch (error) {
+				if (!isEnoent(error)) throw error;
+				throw missingSkillFile(true, instructionFile);
+			}
+		}
 		try {
 			await fs.stat(targetPath);
 			return targetPath;

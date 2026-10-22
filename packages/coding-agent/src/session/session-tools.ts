@@ -14,7 +14,7 @@ import { CustomToolAdapter } from "../extensibility/custom-tools/wrapper";
 import type { ExtensionRunner, SourceInfo, ToolInfo } from "../extensibility/extensions";
 import { type EvalPreludeDefinition, evalPreludeSummary } from "../eval/preludes";
 import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
-import { loadSkills, type Skill, type SkillWarning, setActiveSkills } from "../extensibility/skills";
+import { getActiveSkills, loadSkills, type Skill, type SkillWarning, setActiveSkills } from "../extensibility/skills";
 import { type LocalProtocolOptions } from "../internal-urls";
 import { stripXdUrlPrefix, XD_URL_PREFIX } from "@oh-my-pi/pi-tui/tools/xd-url";
 import { deduplicateMCPToolsByName, resolveMCPToolAlias } from "../mcp/tool-bridge";
@@ -1928,7 +1928,7 @@ export class SessionTools {
 	/** Rediscovers reloadable skills and refreshes prompt metadata. */
 	async refreshSkills(): Promise<void> {
 		if (this.#skillsReloadable) {
-			await this.reloadSkills();
+			await this.#reloadSkillsAfterPending();
 		} else {
 			resetCapabilities();
 		}
@@ -1948,17 +1948,46 @@ export class SessionTools {
 	 */
 	async reloadSkills(): Promise<readonly Skill[]> {
 		if (!this.#skillsReloadable) return this.#skills;
-		const pending = this.#skillsReload ?? this.#discoverSkills();
-		this.#skillsReload = pending;
-		try {
-			return await pending;
-		} finally {
-			if (this.#skillsReload === pending) this.#skillsReload = undefined;
+		return await (this.#skillsReload ?? this.#startDiscovery());
+	}
+
+	/**
+	 * Re-discovers skills from disk for an explicit refresh — a tool that mutated
+	 * skill files, or a settings change — so the caller never adopts a pass that
+	 * started before its own change: any in-flight just-in-time pass is awaited
+	 * first (its result may predate the mutation), then discovery runs again.
+	 * Only the passes started here are shared with concurrent misses.
+	 */
+	async #reloadSkillsAfterPending(): Promise<readonly Skill[]> {
+		const inFlight = this.#skillsReload;
+		if (inFlight) {
+			try {
+				await inFlight;
+			} catch {
+				// A failed miss-path pass is its caller's error; this refresh retries.
+			}
 		}
+		return await this.#startDiscovery();
+	}
+
+	/** Start a discovery pass and publish it as the one concurrent misses await. */
+	#startDiscovery(): Promise<readonly Skill[]> {
+		const pending = this.#discoverSkills();
+		const tracked = pending.finally(() => {
+			if (this.#skillsReload === tracked) this.#skillsReload = undefined;
+		});
+		this.#skillsReload = tracked;
+		return tracked;
 	}
 
 	/** One discovery pass over the session's skill roots; see {@link reloadSkills}. */
 	async #discoverSkills(): Promise<readonly Skill[]> {
+		// Only the session that owns the process-wide snapshot may republish it: a
+		// newer top-level session (SDK/ACP host) installs its own snapshot at
+		// start-up, and an older session's refresh must not swap the URI
+		// completions and authored-skill collision checks of the active session
+		// back to its own skills.
+		const publishesActiveSkills = this.#host.agentKind() === "main" && getActiveSkills() === this.#skills;
 		resetCapabilities();
 		const skillsSettings = cfgSkills.get(this.#host.settings);
 		const discovered = await loadSkills({
@@ -1971,9 +2000,7 @@ export class SessionTools {
 		this.#skillWarnings = discovered.warnings;
 		this.#skillsSettings = skillsSettings;
 
-		if (this.#host.agentKind() === "main") {
-			setActiveSkills(this.#skills);
-		}
+		if (publishesActiveSkills) setActiveSkills(this.#skills);
 		return this.#skills;
 	}
 

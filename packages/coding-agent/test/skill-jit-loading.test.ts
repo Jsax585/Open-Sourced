@@ -15,7 +15,12 @@ import {
 	cfgSkillsEnablePiProject,
 	cfgSkillsEnablePiUser,
 } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
-import { resetActiveSkillsForTests, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import {
+	getActiveSkills,
+	resetActiveSkillsForTests,
+	setActiveSkills,
+	type Skill,
+} from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls/parse";
 import { SkillProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/skill-protocol";
 import type { ResolveContext } from "@oh-my-pi/pi-coding-agent/internal-urls/types";
@@ -26,13 +31,20 @@ function makeSkillMd(name: string, dir: string) {
 	return `---\nname: ${name}\ndescription: ${name} skill.\n---\n\n# ${name} from ${dir}\n`;
 }
 
-/** Host stub: a `main` session whose only interesting capability is skill discovery. */
-function hostFor(cwd: string, settings: Settings): SessionToolsHost {
+/**
+ * Host stub: a `main` session whose only interesting capability is skill
+ * discovery. `onDiscover` runs once per discovery pass — `effectiveExtensionRoots`
+ * is read exactly once inside it, so it counts passes without mocking modules.
+ */
+function hostFor(cwd: string, settings: Settings, onDiscover: () => void = () => {}): SessionToolsHost {
 	return {
 		agent: new Agent(),
 		sessionManager: SessionManager.inMemory(cwd),
 		settings,
-		effectiveExtensionRoots: () => ({}) as never,
+		effectiveExtensionRoots: () => {
+			onDiscover();
+			return {} as never;
+		},
 		modelRegistry: {} as never,
 		extensionRunner: () => undefined,
 		clientBridge: () => undefined,
@@ -94,10 +106,14 @@ describe("skill:// just-in-time discovery", () => {
 			flag.set(settings, false);
 		}
 		cfgSkillsCustomDirectories.set(settings, [root]);
-		const tools = new SessionTools(hostFor(root, settings), {
-			baseSystemPrompt: [],
-			rebuildSystemPrompt: async toolNames => ({ systemPrompt: [toolNames.join(",")] }),
-		});
+		let discoveries = 0;
+		const tools = new SessionTools(
+			hostFor(root, settings, () => discoveries++),
+			{
+				baseSystemPrompt: [],
+				rebuildSystemPrompt: async toolNames => ({ systemPrompt: [toolNames.join(",")] }),
+			},
+		);
 		const initial = await tools.reloadSkills();
 		const context = (): ResolveContext => ({
 			cwd: root,
@@ -105,7 +121,7 @@ describe("skill:// just-in-time discovery", () => {
 			skills: tools.skills,
 			reloadSkills: () => tools.reloadSkills(),
 		});
-		return { tools, initial, context };
+		return { tools, initial, context, discoveries: () => discoveries };
 	}
 
 	afterEach(async () => {
@@ -305,11 +321,84 @@ describe("skill:// just-in-time discovery", () => {
 		await writeSkill(root, "single-flight-skill");
 		const session = await sessionFor(root);
 		await writeSkill(root, "second-skill");
+		const before = session.discoveries();
 
 		const [first, second] = await Promise.all([session.tools.reloadSkills(), session.tools.reloadSkills()]);
-		// One snapshot, not one per racing caller: the discovery rewrites shared
-		// session state, so the last finisher must not overwrite the newest.
-		expect(first).toBe(second);
-		expect(first.map(s => s.name)).toEqual(expect.arrayContaining(["second-skill", "single-flight-skill"]));
+
+		// The discovery rewrites shared session state, so racing callers must not
+		// each run one: exactly one pass, and both see its result.
+		expect(session.discoveries() - before).toBe(1);
+		for (const skills of [first, second]) {
+			expect(skills.map(s => s.name)).toEqual(expect.arrayContaining(["second-skill", "single-flight-skill"]));
+		}
+	});
+
+	it("runs a fresh discovery for an explicit refresh that starts during a miss", async () => {
+		const root = await tempRoot();
+		await writeSkill(root, "refresh-skill");
+		const session = await sessionFor(root);
+		const before = session.discoveries();
+
+		// A miss starts a pass; an explicit refresh (post-mutation, settings) must
+		// not adopt it — it may have scanned before the caller's change.
+		const miss = session.tools.reloadSkills();
+		const refresh = session.tools.refreshSkills();
+		await Promise.all([miss, refresh]);
+
+		expect(session.discoveries() - before).toBe(2);
+	});
+
+	it("does not treat a moved skill directory as its stale base directory", async () => {
+		const root = await tempRoot();
+		const staleDir = path.join(root, "stale-dir");
+		await fs.mkdir(staleDir, { recursive: true });
+		const movedDir = path.join(root, "moved-dir");
+		await fs.mkdir(movedDir, { recursive: true });
+		const movedPath = path.join(movedDir, "SKILL.md");
+		await Bun.write(movedPath, makeSkillMd("directory-skill", root));
+
+		const stale: Skill[] = [
+			{
+				name: "directory-skill",
+				description: "directory-skill skill.",
+				filePath: path.join(staleDir, "SKILL.md"),
+				baseDir: staleDir,
+				source: "custom",
+			},
+		];
+		const fresh: Skill[] = [{ ...stale[0]!, filePath: movedPath, baseDir: movedDir }];
+		const context: ResolveContext = {
+			cwd: root,
+			skills: stale,
+			reloadSkills: async () => await Promise.resolve(fresh),
+		};
+
+		// The stale directory still exists, so only the instruction file proves the
+		// snapshot moved — otherwise bash/eval keep exposing the old directory.
+		const located = await handler.locate(parseInternalUrl("skill://directory-skill"), context, {
+			directory: true,
+		});
+		expect(located).toBe(movedDir);
+	});
+
+	it("keeps an older session's JIT reload out of the active snapshot", async () => {
+		const rootA = await tempRoot();
+		const rootB = await tempRoot();
+		await writeSkill(rootA, "shared-skill");
+		await writeSkill(rootB, "shared-skill");
+		const sessionA = await sessionFor(rootA);
+		const sessionB = await sessionFor(rootB);
+		// Start-up publication order: A installed its snapshot, then newer B did.
+		setActiveSkills(sessionA.tools.skills);
+		setActiveSkills(sessionB.tools.skills);
+
+		await writeSkill(rootA, "only-in-a");
+		const resource = await handler.resolve(parseInternalUrl("skill://only-in-a"), sessionA.context());
+		expect(resource.content).toContain(`from ${rootA}`);
+
+		// A's refresh is caller-bound; the process-wide snapshot stays B's, so
+		// contextless consumers keep answering for the active session.
+		expect(getActiveSkills()).toBe(sessionB.tools.skills);
+		expect((await handler.complete()).some(entry => entry.value === "only-in-a")).toBe(false);
 	});
 });
