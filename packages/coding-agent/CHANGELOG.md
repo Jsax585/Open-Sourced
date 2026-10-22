@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `context.stopAtRepoRoot` to clamp standalone `AGENTS.md` / `CLAUDE.md` discovery at the git repository root instead of walking through enclosing workspace directories up to `$HOME`. The default remains the walk-to-home behavior ([#11395](https://github.com/can1357/oh-my-pi/pull/11395) by [@PeterPonyu](https://github.com/PeterPonyu)).
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 
 ## [18.12.6] - 2026-10-21
