@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { runConfigCommand } from "@oh-my-pi/pi-coding-agent/cli/config-cli";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
+import * as composerCache from "@oh-my-pi/pi-tui/prompt/composer-cache";
 import { getConfigRootDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
 let testAgentDir: TempDir | undefined;
@@ -53,6 +54,18 @@ afterEach(async () => {
 });
 
 describe("config CLI schema coverage", () => {
+	it("refreshes cached auto-resume source snapshots after every config write", async () => {
+		const writeGlobalAutoResume = vi.fn();
+		vi.spyOn(composerCache, "sharedComposerCache").mockReturnValue({ writeGlobalAutoResume } as never);
+		vi.spyOn(console, "log").mockImplementation(() => {});
+
+		await runConfigCommand({ action: "set", key: "compaction.enabled", value: "true", flags: { json: true } });
+		await runConfigCommand({ action: "reset", key: "compaction.enabled", flags: { json: true } });
+
+		expect(writeGlobalAutoResume).toHaveBeenCalledTimes(2);
+		expect(writeGlobalAutoResume.mock.calls[0]?.[1]).toEqual(writeGlobalAutoResume.mock.calls[1]?.[1]);
+	});
+
 	it("renders record settings as JSON and with record type in text output", async () => {
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 

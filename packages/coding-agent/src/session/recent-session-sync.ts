@@ -1,0 +1,166 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import {
+	extractFirstDisplayMessageFromPrefix,
+	extractSessionHeaderFromPrefix,
+	isSessionResumabilityEmpty,
+	SESSION_RESUMABILITY_PREFIX_BYTES,
+} from "./session-resumability";
+
+interface SessionRecency {
+	readonly path: string;
+	readonly modified: Date;
+	readonly created: Date;
+}
+
+/** Newest-first ordering shared by live resume selection and synchronous prepaint. */
+export function compareSessionRecency(a: SessionRecency, b: SessionRecency): number {
+	return (
+		b.modified.getTime() - a.modified.getTime() ||
+		b.created.getTime() - a.created.getTime() ||
+		b.path.localeCompare(a.path)
+	);
+}
+
+function inspectSessionFileSync(sessionFile: string): { created: Date; resumable: boolean } {
+	let file: number | undefined;
+	let created = new Date(0);
+	let hasResumableContent = false;
+	try {
+		file = fs.openSync(sessionFile, "r");
+		const prefixBuffer = Buffer.allocUnsafe(SESSION_RESUMABILITY_PREFIX_BYTES);
+		const prefixBytes = fs.readSync(file, prefixBuffer, 0, prefixBuffer.length, 0);
+		const prefix = prefixBuffer.subarray(0, prefixBytes).toString("utf8");
+		const header = extractSessionHeaderFromPrefix(prefix);
+		if (!header) return { created, resumable: false };
+		if (header.timestamp) {
+			const timestamp = new Date(header.timestamp);
+			if (Number.isFinite(timestamp.getTime())) created = timestamp;
+		}
+		const hasPrefixDisplayMessage = extractFirstDisplayMessageFromPrefix(prefix) !== undefined;
+		const buffer = Buffer.allocUnsafe(64 * 1024);
+		const decoder = new TextDecoder();
+		let pending = "";
+		let lineStartByte = 0;
+		const inspect = (line: string, fullyWithinPrefix: boolean): boolean => {
+			let entry: unknown;
+			try {
+				entry = JSON.parse(line);
+			} catch {
+				return false;
+			}
+			if (!entry || typeof entry !== "object") return false;
+			const record = entry as {
+				type?: unknown;
+				title?: unknown;
+				shortSummary?: unknown;
+				message?: { role?: unknown; content?: unknown };
+			};
+			if (hasPrefixDisplayMessage) hasResumableContent = true;
+			if (
+				fullyWithinPrefix &&
+				!isSessionResumabilityEmpty({
+					assistantTurns: 0,
+					title:
+						typeof record.title === "string"
+							? record.title
+							: record.type === "compaction" && typeof record.shortSummary === "string"
+								? record.shortSummary
+								: undefined,
+				})
+			) {
+				hasResumableContent = true;
+				return true;
+			}
+			if (record.type !== "message" || !record.message) return hasResumableContent;
+			hasResumableContent ||= !isSessionResumabilityEmpty({
+				assistantTurns: record.message.role === "assistant" ? 1 : 0,
+				firstMessage: hasPrefixDisplayMessage ? "display message" : undefined,
+			});
+			return hasResumableContent;
+		};
+
+		for (;;) {
+			const bytes = fs.readSync(file, buffer, 0, buffer.length, null);
+			if (bytes === 0) break;
+			pending += decoder.decode(buffer.subarray(0, bytes), { stream: true });
+			let newline = pending.indexOf("\n");
+			while (newline >= 0) {
+				const rawLine = pending.slice(0, newline);
+				const lineEndByte = lineStartByte + Buffer.byteLength(rawLine);
+				if (inspect(rawLine.trim(), lineEndByte <= SESSION_RESUMABILITY_PREFIX_BYTES)) {
+					return { created, resumable: true };
+				}
+				lineStartByte += Buffer.byteLength(`${rawLine}\n`);
+				pending = pending.slice(newline + 1);
+				newline = pending.indexOf("\n");
+			}
+		}
+		pending += decoder.decode();
+		if (pending.trim().length > 0) {
+			inspect(pending.trim(), lineStartByte + Buffer.byteLength(pending) <= SESSION_RESUMABILITY_PREFIX_BYTES);
+		}
+		return { created, resumable: hasResumableContent };
+	} catch {
+		return { created, resumable: false };
+	} finally {
+		if (file !== undefined) fs.closeSync(file);
+	}
+}
+
+/** Synchronous, dependency-light form of the canonical recent nonempty-session selector. */
+export function findMostRecentNonEmptySessionSync(sessionDir: string): string | undefined {
+	try {
+		const primaries = new Set(new Bun.Glob("*.jsonl").scanSync({ cwd: sessionDir, followSymlinks: true }));
+		const recoverableBackups = new Map<string, { file: string; modified: Date }>();
+		for (const backupName of new Bun.Glob("*.bak").scanSync({ cwd: sessionDir, followSymlinks: true })) {
+			const trimmed = backupName.slice(0, -".bak".length);
+			const suffix = trimmed.lastIndexOf(".");
+			if (suffix <= 0) continue;
+			const primaryName = trimmed.slice(0, suffix);
+			if (!primaryName.endsWith(".jsonl") || primaries.has(primaryName)) continue;
+			const file = path.join(sessionDir, backupName);
+			const modified = fs.statSync(file).mtime;
+			const existing = recoverableBackups.get(primaryName);
+			if (!existing || modified.getTime() > existing.modified.getTime()) {
+				recoverableBackups.set(primaryName, { file, modified });
+			}
+		}
+		const candidates = [
+			...[...primaries].flatMap(primaryName => {
+				const file = path.join(sessionDir, primaryName);
+				try {
+					return [{ file, path: file, modified: fs.statSync(file).mtime }];
+				} catch {
+					return [];
+				}
+			}),
+			...[...recoverableBackups].map(([primaryName, backup]) => ({
+				file: backup.file,
+				path: path.join(sessionDir, primaryName),
+				modified: backup.modified,
+			})),
+		].sort((a, b) => b.modified.getTime() - a.modified.getTime());
+		for (let start = 0; start < candidates.length;) {
+			const modified = candidates[start]!.modified.getTime();
+			let end = start + 1;
+			while (end < candidates.length && candidates[end]!.modified.getTime() === modified) end++;
+			const resumable = candidates.slice(start, end).flatMap(candidate => {
+				const inspected = inspectSessionFileSync(candidate.file);
+				if (!inspected.resumable) return [];
+				return [
+					{
+						path: candidate.path,
+						modified: candidate.modified,
+						created: inspected.created,
+					},
+				];
+			});
+			if (resumable.length > 0) return resumable.sort(compareSessionRecency)[0]!.path;
+			start = end;
+		}
+		return undefined;
+	} catch {
+		return undefined;
+	}
+}
