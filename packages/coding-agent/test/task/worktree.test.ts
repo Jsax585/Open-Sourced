@@ -1126,21 +1126,22 @@ describe("captureIsolationBaseline", () => {
 						await fs.readFile(path.join(handle.mergedDir, "apps/web/.verify/different/nested.txt"), "utf8"),
 					).toBe("different project\n");
 					expect(
-						await fs.readFile(path.join(handle.mergedDir, "apps/web/.verify/same-origin-unrelated/nested.txt"), "utf8"),
+						await fs.readFile(
+							path.join(handle.mergedDir, "apps/web/.verify/same-origin-unrelated/nested.txt"),
+							"utf8",
+						),
 					).toBe("same origin, unrelated history\n");
 					expect(
-						await fs.readFile(path.join(handle.mergedDir, "apps/web/.verify/same-path-different-port/port-marker.txt"), "utf8"),
+						await fs.readFile(
+							path.join(handle.mergedDir, "apps/web/.verify/same-path-different-port/port-marker.txt"),
+							"utf8",
+						),
 					).toBe("different SSH port\n");
-					expect(await fs.readFile(path.join(handle.mergedDir, "apps/web/.verify/unknown/nested.txt"), "utf8")).toBe(
-						"unknown identity\n",
-					);
+					expect(
+						await fs.readFile(path.join(handle.mergedDir, "apps/web/.verify/unknown/nested.txt"), "utf8"),
+					).toBe("unknown identity\n");
 
-					const baseline = await captureIsolationBaseline(
-						handle.mergedDir,
-						repo,
-						undefined,
-						handle.excludedPaths,
-					);
+					const baseline = await captureIsolationBaseline(handle.mergedDir, repo, undefined, handle.excludedPaths);
 					expect(baseline.nested.map(nested => nested.relativePath).sort()).toEqual([
 						path.join("apps", "web", ".verify", "different"),
 						path.join("apps", "web", ".verify", "same-origin-unrelated"),

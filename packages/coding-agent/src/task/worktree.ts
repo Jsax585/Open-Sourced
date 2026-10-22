@@ -23,16 +23,6 @@ const TASK_ISOLATION_MOUNT_DIR = "m";
 const GIT_NETWORK_TIMEOUT_MS = 30 * 60 * 1000;
 type IsoBackendKind = natives.IsoBackendKind;
 
-type IsoStartWithExclusions = (
-	kind: IsoBackendKind | undefined | null,
-	lower: string,
-	merged: string,
-	excludePaths?: readonly string[] | null,
-) => Promise<void>;
-
-// `packages/natives/native/index.d.ts` is generated from the napi export.
-// Keep this narrow cast until the native build regenerates the declaration.
-const isoStartWithExclusions = natives.isoStart as unknown as IsoStartWithExclusions;
 async function diffTreeOrEmpty(repo: VcsGitRepo, base: string, head: string): Promise<string> {
 	try {
 		return await repo.diffTree(base, head, true);
@@ -136,10 +126,7 @@ async function canonicalOrigin(remote: string, repoRoot: string): Promise<string
 	return `literal:${value}`;
 }
 
-async function sharesVerifiedOriginAndAncestry(
-	source: VcsGitRepo,
-	candidate: VcsGitRepo,
-): Promise<boolean> {
+async function sharesVerifiedOriginAndAncestry(source: VcsGitRepo, candidate: VcsGitRepo): Promise<boolean> {
 	try {
 		const [sourceOrigin, candidateOrigin, sourceHead, candidateHead] = await Promise.all([
 			source.remoteUrl("origin"),
@@ -175,7 +162,6 @@ async function isOuterIgnored(repoRoot: string, relativePath: string): Promise<b
 	}
 }
 
-
 /**
  * Build one conservative exclusion plan for both materialization and baseline
  * discovery. A nested checkout is omitted only when the outer repository
@@ -186,10 +172,7 @@ export async function prepareIsolationCopyPlan(repoRoot: string): Promise<readon
 	const source = vcs.requireGit(repoRoot);
 	const sourceRoot = await canonicalPath(source.info().repoRoot);
 	const sourceCommonDir = await realCommonDir(sourceRoot);
-	const [trackedPaths, submodulePaths] = await Promise.all([
-		source.lsFiles(false, false),
-		source.submodulePaths(),
-	]);
+	const [trackedPaths, submodulePaths] = await Promise.all([source.lsFiles(false, false), source.submodulePaths()]);
 	const normalizedSubmodules = submodulePaths.map(submodule => submodule.replaceAll("\\", "/"));
 	const excluded: string[] = [];
 
@@ -848,7 +831,7 @@ export async function ensureIsolation(
 		await fs.mkdir(baseDir, { recursive: true });
 		await writeIsolationOwner(baseDir, id);
 		try {
-			await isoStartWithExclusions(candidate, repoRoot, mergedDir, excludedPaths);
+			await natives.isoStart(candidate, repoRoot, mergedDir, [...excludedPaths]);
 			// Sever the isolation's git metadata from the source checkout. Copy
 			// backends duplicate `repoRoot`'s `.git` verbatim — a linked-worktree
 			// pointer file (or the rcopy `git worktree add` registration) leaves
