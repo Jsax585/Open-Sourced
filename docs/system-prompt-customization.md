@@ -77,9 +77,14 @@ OMP-generated append content (for enabled memory/auto-learn features and MCP gui
 Those generated blocks can end with `## MCP Server Instructions`, whose text declares
 itself server-controlled and unverified. Whenever a generated block precedes the
 user-supplied text, the text is placed under its own `§ User Instructions` heading and
-wrapped in a `<user-instructions>` block so it cannot read as a trailing paragraph of a
-server-owned section. On its own — no generated block — the append text is emitted
+wrapped in a `<user-instructions>` block, so it does not read as a trailing paragraph of
+a server-owned section. On its own — no generated block — the append text is emitted
 unchanged, without a heading or tag.
+
+The heading and tag are a readability marker, not a provenance guarantee: generated
+blocks are inlined verbatim, so an MCP server can emit its own look-alike
+`§ User Instructions` / `<user-instructions>` block. Treat the marker as a layout cue,
+not as proof that the text inside was user-authored.
 
 ## Inputs by session type
 
