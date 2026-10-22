@@ -121,13 +121,19 @@ describe("Settings entry-level writes", () => {
 
 		cfgRetryFallbackChains.setEntry(settings, "openai/gpt-5.4", undefined);
 		await settings.flush();
-		expect(await testFixture.readConfig()).toEqual({ temperature: 0.3, retry: { fallbackChains: { slow: ["user/slow"] } } });
+		expect(await testFixture.readConfig()).toEqual({
+			temperature: 0.3,
+			retry: { fallbackChains: { slow: ["user/slow"] } },
+		});
 		expect(cfgRetryFallbackChains.get(settings)).toEqual({ slow: ["user/slow"] });
 	});
 
 	it("saves a whole-record write made while a save of one of its entries waits for the config lock", async () => {
 		const testFixture = fixtureForTest();
-		const settings = await testFixture.load({ retry: { fallbackChains: { slow: ["old/slow"], smol: ["old/smol"] } } }, {});
+		const settings = await testFixture.load(
+			{ retry: { fallbackChains: { slow: ["old/slow"], smol: ["old/smol"] } } },
+			{},
+		);
 		cfgRetryFallbackChains.setEntry(settings, "slow", ["intermediate/slow"]);
 
 		const lock = await acquireFileLock(testFixture.configPath);
@@ -162,7 +168,10 @@ describe("Settings entry-level writes", () => {
 		"merges an entry write and a later whole-record write with an external edit of $edited",
 		async ({ external, saved }) => {
 			const testFixture = fixtureForTest();
-			const settings = await testFixture.load({ retry: { fallbackChains: { slow: ["old/slow"], smol: ["old/smol"] } } }, {});
+			const settings = await testFixture.load(
+				{ retry: { fallbackChains: { slow: ["old/slow"], smol: ["old/smol"] } } },
+				{},
+			);
 
 			cfgRetryFallbackChains.setEntry(settings, "slow", ["intermediate/slow"]);
 			cfgRetryFallbackChains.set(settings, { slow: ["final/slow"], smol: ["final/smol"] });
