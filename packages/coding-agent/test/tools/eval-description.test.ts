@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import * as path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Tool as AiTool } from "@oh-my-pi/pi-ai";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
@@ -9,6 +10,7 @@ import { disposeAllKernelSessions, executePython } from "@oh-my-pi/pi-coding-age
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { EvalTool, getEvalDocTopics, getEvalToolDescription } from "@oh-my-pi/pi-coding-agent/tools/eval";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
 import { cfgEvalPy } from "@oh-my-pi/pi-coding-agent/eval/settings";
 import { cfgTaskMaxRecursionDepth } from "@oh-my-pi/pi-coding-agent/task/settings";
@@ -208,9 +210,20 @@ describe("eval tool dynamic schema", () => {
 
 // The description tells the model which prelude helpers need `await` by prefixing their
 // signatures. A wrong marker makes the model print a pending Promise (missing `await` in JS)
-// or await a plain value, so every documented marker must match what the runtime installs.
+// or await a plain value, so every documented marker must match whether calling that helper
+// returns an awaitable. Each helper is called with side-effect-free arguments inside a temp dir.
 describe("eval tool description await markers", () => {
-	const TOOL_CALL = "tool.<name>";
+	let tempDir: TempDir;
+
+	beforeAll(async () => {
+		tempDir = TempDir.createSync("@eval-description-await-");
+		await Bun.write(path.join(tempDir.path(), "in.txt"), "probe\n");
+		await Bun.write(path.join(tempDir.path(), "probe.md"), "probe\n");
+	});
+
+	afterAll(() => {
+		tempDir.removeSync();
+	});
 
 	/** Helper name → whether its documented signature is prefixed with `await`. */
 	function documentedAwaits(description: string, lang: "py" | "js"): Map<string, boolean> {
@@ -228,7 +241,7 @@ describe("eval tool description await markers", () => {
 		let runtime: JsRuntime;
 
 		beforeAll(() => {
-			runtime = new JsRuntime({ initialCwd: process.cwd(), sessionId: "eval-description-await-js" });
+			runtime = new JsRuntime({ initialCwd: tempDir.path(), sessionId: "eval-description-await-js" });
 		});
 
 		afterAll(() => {
@@ -239,19 +252,36 @@ describe("eval tool description await markers", () => {
 			["JS only", { py: false, js: true }],
 			["Python and JS", { py: true, js: true }],
 		] as const) {
-			it(`marks exactly the async JS helpers with await (${mode})`, async () => {
+			it(`marks exactly the JS helpers that return awaitables with await (${mode})`, async () => {
 				const documented = documentedAwaits(getEvalToolDescription(options), "js");
-				const names = [...documented.keys()].filter(name => name !== TOOL_CALL);
-				const actual = JSON.parse(
-					(await runtime.run(
-						`JSON.stringify({
-							...Object.fromEntries(${JSON.stringify(names)}.map(name => [name, globalThis[name].constructor.name === "AsyncFunction"])),
-							${JSON.stringify(TOOL_CALL)}: (() => { const p = tool.read({ path: "x" }); p?.catch?.(() => {}); return p instanceof Promise; })(),
-						})`,
-						undefined,
-						hooks,
-					)) as string,
-				);
+				const cell = `
+					const dir = ${JSON.stringify(tempDir.path())};
+					const probes = {
+						print: () => print(),
+						log: () => log("probe"),
+						phase: () => phase("probe"),
+						env: () => env("HOME"),
+						read: () => read(dir + "/in.txt"),
+						write: () => write(dir + "/out.txt", "probe"),
+						output: () => output("probe"),
+						wait: () => wait([]),
+						"tool.<name>": () => tool.read({ path: dir + "/in.txt" }),
+					};
+					const probe = name => {
+						if (!(name in probes)) return "no probe for " + name;
+						let value;
+						try {
+							value = probes[name]();
+						} catch (error) {
+							return "threw " + error;
+						}
+						const awaitable = (typeof value === "object" || typeof value === "function") && typeof value?.then === "function";
+						if (awaitable) Promise.resolve(value).catch(() => {});
+						return awaitable;
+					};
+					JSON.stringify(Object.fromEntries(${JSON.stringify([...documented.keys()])}.map(name => [name, probe(name)])));
+				`;
+				const actual = JSON.parse((await runtime.run(cell, undefined, hooks)) as string);
 				expect(actual).toEqual(Object.fromEntries(documented));
 			});
 		}
@@ -266,19 +296,48 @@ describe("eval tool description await markers", () => {
 			["Python only", { py: true, js: false }],
 			["Python and JS", { py: true, js: true }],
 		] as const) {
-			it(`marks exactly the async Python helpers with await (${mode})`, async () => {
+			it(`marks exactly the Python helpers that return awaitables with await (${mode})`, async () => {
 				const documented = documentedAwaits(getEvalToolDescription(options), "py");
-				const names = [...documented.keys()].filter(name => name !== TOOL_CALL);
 				const code = [
-					"import inspect, json",
-					`res = {n: inspect.iscoroutinefunction(eval(n)) for n in ${JSON.stringify(names)}}`,
-					`res[${JSON.stringify(TOOL_CALL)}] = inspect.iscoroutinefunction(type(tool.read).__call__)`,
+					"import inspect, json, os",
+					`dir = ${JSON.stringify(tempDir.path())}`,
+					"probes = {",
+					'    "print": lambda: print(end=""),',
+					'    "log": lambda: log("probe"),',
+					'    "phase": lambda: phase("probe"),',
+					'    "env": lambda: env("HOME"),',
+					'    "read": lambda: read(os.path.join(dir, "in.txt")),',
+					'    "write": lambda: write(os.path.join(dir, "out.txt"), "probe"),',
+					'    "output": lambda: output("probe"),',
+					'    "wait": lambda: wait([]),',
+					'    "tool.<name>": lambda: tool.read({"path": os.path.join(dir, "in.txt")}),',
+					"}",
+					"def probe(name):",
+					"    if name not in probes:",
+					'        return f"no probe for {name}"',
+					"    try:",
+					"        value = probes[name]()",
+					"    except Exception as error:",
+					'        return f"raised {type(error).__name__}: {error}"',
+					"    if inspect.iscoroutine(value):",
+					"        value.close()",
+					"        return True",
+					"    return inspect.isawaitable(value)",
+					'saved_artifacts_dir = os.environ.get("PI_ARTIFACTS_DIR")',
+					'os.environ["PI_ARTIFACTS_DIR"] = dir',
+					"try:",
+					`    res = {name: probe(name) for name in ${JSON.stringify([...documented.keys()])}}`,
+					"finally:",
+					"    if saved_artifacts_dir is None:",
+					'        os.environ.pop("PI_ARTIFACTS_DIR", None)',
+					"    else:",
+					'        os.environ["PI_ARTIFACTS_DIR"] = saved_artifacts_dir',
 					"print(json.dumps(res))",
 				].join("\n");
 				const result = await executePython(code, {
 					sessionId: "eval-description-await-py",
 					toolSession: makeSession({}),
-					cwd: process.cwd(),
+					cwd: tempDir.path(),
 				});
 				expect(result.exitCode).toBe(0);
 				expect(JSON.parse(result.output.trim())).toEqual(Object.fromEntries(documented));
