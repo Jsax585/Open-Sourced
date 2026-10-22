@@ -1,9 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Tool as AiTool } from "@oh-my-pi/pi-ai";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { JsRuntime, type RuntimeHooks } from "@oh-my-pi/pi-coding-agent/eval/js/shared/runtime";
 import type { EvalPreludeDefinition } from "@oh-my-pi/pi-coding-agent/eval/preludes";
+import { disposeAllKernelSessions, executePython } from "@oh-my-pi/pi-coding-agent/eval/py/executor";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { EvalTool, getEvalDocTopics, getEvalToolDescription } from "@oh-my-pi/pi-coding-agent/tools/eval";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
@@ -115,17 +117,6 @@ describe("eval tool description", () => {
 		expect(pyOnly.helpers).not.toContain("await budget.total()");
 	});
 
-	it("tells every runtime to await session tool calls", () => {
-		// Python's `tool.<name>()` returns a coroutine, so an un-awaited call never runs the tool.
-		for (const runtimes of [
-			{ py: true, js: false },
-			{ py: false, js: true },
-			{ py: true, js: true },
-		]) {
-			expect(getEvalToolDescription(runtimes)).toContain("await tool.<name>(args)");
-		}
-	});
-
 	it("inlines every topic when the session cannot read xd:// URLs", () => {
 		const linked = new EvalTool(makeSession({})).description;
 		const inlined = new EvalTool(makeSession({ readActive: false })).description;
@@ -212,5 +203,86 @@ describe("eval tool dynamic schema", () => {
 		expect(tool.examples.some(example => "call" in example && example.call.language === "py")).toBe(false);
 		cfgEvalPy.set(session.settings, true);
 		expect(wireCellFields(tool).languages).toEqual(["js", "py"]);
+	});
+});
+
+// The description tells the model which prelude helpers need `await` by prefixing their
+// signatures. A wrong marker makes the model print a pending Promise (missing `await` in JS)
+// or await a plain value, so every documented marker must match what the runtime installs.
+describe("eval tool description await markers", () => {
+	const TOOL_CALL = "tool.<name>";
+
+	/** Helper name → whether its documented signature is prefixed with `await`. */
+	function documentedAwaits(description: string, lang: "py" | "js"): Map<string, boolean> {
+		const block = description.match(new RegExp("```" + lang + "\\n([\\s\\S]*?)\\n```"))?.[1];
+		if (block === undefined) throw new Error(`no \`\`\`${lang} block in eval description`);
+		const awaits = new Map<string, boolean>();
+		for (const match of block.matchAll(/(await\s+)?(tool\.<name>|[A-Za-z_]\w*)\(/g)) {
+			awaits.set(match[2], match[1] !== undefined);
+		}
+		return awaits;
+	}
+
+	describe("JS", () => {
+		const hooks: RuntimeHooks = { onText: () => {}, onDisplay: () => {}, callTool: async () => undefined };
+		let runtime: JsRuntime;
+
+		beforeAll(() => {
+			runtime = new JsRuntime({ initialCwd: process.cwd(), sessionId: "eval-description-await-js" });
+		});
+
+		afterAll(() => {
+			runtime.dispose();
+		});
+
+		for (const [mode, options] of [
+			["JS only", { py: false, js: true }],
+			["Python and JS", { py: true, js: true }],
+		] as const) {
+			it(`marks exactly the async JS helpers with await (${mode})`, async () => {
+				const documented = documentedAwaits(getEvalToolDescription(options), "js");
+				const names = [...documented.keys()].filter(name => name !== TOOL_CALL);
+				const actual = JSON.parse(
+					(await runtime.run(
+						`JSON.stringify({
+							...Object.fromEntries(${JSON.stringify(names)}.map(name => [name, globalThis[name].constructor.name === "AsyncFunction"])),
+							${JSON.stringify(TOOL_CALL)}: (() => { const p = tool.read({ path: "x" }); p?.catch?.(() => {}); return p instanceof Promise; })(),
+						})`,
+						undefined,
+						hooks,
+					)) as string,
+				);
+				expect(actual).toEqual(Object.fromEntries(documented));
+			});
+		}
+	});
+
+	describe("Python", () => {
+		afterAll(async () => {
+			await disposeAllKernelSessions();
+		});
+
+		for (const [mode, options] of [
+			["Python only", { py: true, js: false }],
+			["Python and JS", { py: true, js: true }],
+		] as const) {
+			it(`marks exactly the async Python helpers with await (${mode})`, async () => {
+				const documented = documentedAwaits(getEvalToolDescription(options), "py");
+				const names = [...documented.keys()].filter(name => name !== TOOL_CALL);
+				const code = [
+					"import inspect, json",
+					`res = {n: inspect.iscoroutinefunction(eval(n)) for n in ${JSON.stringify(names)}}`,
+					`res[${JSON.stringify(TOOL_CALL)}] = inspect.iscoroutinefunction(type(tool.read).__call__)`,
+					"print(json.dumps(res))",
+				].join("\n");
+				const result = await executePython(code, {
+					sessionId: "eval-description-await-py",
+					toolSession: makeSession({}),
+					cwd: process.cwd(),
+				});
+				expect(result.exitCode).toBe(0);
+				expect(JSON.parse(result.output.trim())).toEqual(Object.fromEntries(documented));
+			});
+		}
 	});
 });

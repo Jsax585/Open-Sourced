@@ -6,13 +6,27 @@ On error, retry only the failed step; earlier steps may have taken effect.
 Printing an image{{#if py}} or figure{{/if}} attaches it.
 
 <prelude>
-{{#ifAll py js}}Python helpers: sync, kwargs; JS helpers: async, ONE trailing options object.{{else}}{{#if py}}Sync; kwargs.{{/if}}{{#if js}}Async; ONE trailing options object.{{/if}}{{/ifAll}}
+`await` marks async helpers; the rest are sync.
+{{#if py}}
+Python (kwargs):
+```py
+print(value, ...)  log(message)  phase(title)  env(key?, value?)
+read(path, offset?, limit?)  write(path, content)  output(*ids, format?, query?, offset?, limit?)
+wait(handles, timeout?=None, raise_errors?=True)
+await tool.<name>(args)
 ```
-print(value, ...)  log(message)  phase(title)
-read(path, offset?, limit?)  write(path, content)  env(key?, value?)  output(*ids, format?, query?, offset?, limit?)
-await tool.<name>(args) — session tool; `args` is its parameter object
-wait(handles, timeout?=None, raise_errors?=True) — agent/completion barrier, ordered results{{#if js}}; JS: wait(handles, { timeout, raiseErrors }){{/if}}; `raise_errors=False` retains failures.
+{{/if}}
+{{#if js}}
+JS (positional args or ONE trailing options object):
+```js
+print(value, ...)  log(message)  phase(title)  env(key?, value?)
+await read(path, offset?, limit?)  await write(path, content)  await output(...ids, { format?, query?, offset?, limit? })
+await wait(handles, { timeout?, raiseErrors? })
+await tool.<name>(args)
 ```
+{{/if}}
+- `wait(handles, …)`: agent/completion barrier, ordered results; {{#ifAll py js}}`raise_errors=False` / `raiseErrors: false`{{else}}{{#if py}}`raise_errors=False`{{else}}`raiseErrors: false`{{/if}}{{/ifAll}} retains failures.
+- `tool.<name>(args)`: session tool; `args` is its parameter object.
 </prelude>
 
 {{#if inlineTopics}}
