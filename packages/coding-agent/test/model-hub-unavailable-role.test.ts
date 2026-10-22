@@ -59,8 +59,14 @@ function createHarness(initial: Model[], roleDefault: string): Harness {
 		authStorage: { keys: { source: () => undefined } },
 	} as unknown as ModelRegistry;
 	const ui = { requestRender: () => {}, terminal: { rows: 40 } } as unknown as TUI;
-	const onAssign = vi.fn(() => true);
-	const onUnassign = vi.fn();
+	// Persist like the real callback: a strip that overwrites the role must show
+	// up as a changed stored value, not just as a call the test could ignore.
+	const onAssign = vi.fn((...args: unknown[]) => {
+		const [, role, , selector] = args as [unknown, string, unknown, string];
+		settings.setModelRole(role, selector);
+		return true;
+	});
+	const onUnassign = vi.fn((...args: unknown[]) => settings.setModelRole(args[0] as string, undefined));
 	const hub = new ModelHubComponent(ui, createModelBrowserSource(settings), registry, [], {
 		onAssign,
 		onUnassign,
@@ -100,12 +106,14 @@ describe("model hub role strip", () => {
 		harness.setPool([other]);
 		expect(harness.settings.getModelRole("default")).toBe("lithosai/deepseek-ai/DeepSeek-V4.1-Flash-fast");
 
-		// Open the role strip on the surviving model and walk every chip,
-		// pressing Enter on any whose label names the `default` role.
+		// Focus the list, open the role strip on the surviving model, then press
+		// Enter on the chips: the unavailable role must not be among them.
 		harness.hub.handleInput("\r");
 		harness.hub.handleInput("\r");
-
-		expect(harness.onUnassign).not.toHaveBeenCalledWith("default");
+		harness.hub.handleInput("\r");
+		expect(harness.onAssign).toHaveBeenCalled();
+		const assignedRoles = harness.onAssign.mock.calls.map(call => call[1]);
+		expect(assignedRoles).not.toContain("default");
 		expect(harness.settings.getModelRole("default")).toBe("lithosai/deepseek-ai/DeepSeek-V4.1-Flash-fast");
 	});
 
@@ -119,7 +127,25 @@ describe("model hub role strip", () => {
 		const text = harness.hub.render(200).map(stripVTControlCharacters).join("\n");
 		const defaultRow = text.split("\n").find(line => line.includes("DEFAULT"));
 		expect(defaultRow).toBeDefined();
-		// "—" is the hub's rendering of "no role configured": that is the lie.
+		// The persisted selector and the availability note are the contract; the
+		// em dash is the hub's rendering of "no role configured".
+		expect(defaultRow).toContain("lithosai/deepseek-ai/DeepSeek-V4.1-Flash-fast");
+		expect(defaultRow).toContain("unavailable");
 		expect(defaultRow).not.toContain("—");
+	});
+
+	test("a hand-edited selector cannot distort the roles row", () => {
+		const other = makeModel("openai", "gpt-5");
+		const harness = createHarness([other], "test/bad\tselector");
+
+		harness.hub.handleInput("\x1b[A");
+		const text = harness.hub.render(200).map(stripVTControlCharacters).join("\n");
+		const defaultRow = text.split("\n").find(line => line.includes("DEFAULT"));
+		expect(defaultRow).toBeDefined();
+		// `truncateToWidth()` leaves short strings alone, so a literal tab would
+		// reach the terminal and throw every column after it off.
+		expect(defaultRow).not.toContain("\t");
+		expect(defaultRow).toMatch(/test\/bad +selector/);
+		expect(defaultRow).toContain("unavailable");
 	});
 });

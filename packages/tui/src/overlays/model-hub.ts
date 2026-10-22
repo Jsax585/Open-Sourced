@@ -1228,9 +1228,13 @@ export class ModelHubComponent implements Component {
 		this.#openRoleStrip(item);
 	}
 
+	/** The role's persisted value in `scope`, before any catalog resolution. */
+	#scopedRoleValue(role: string, scope: ModelRoleSelectionScope): string | undefined {
+		return scope === "project" ? this.#settings.getProjectModelRole(role) : this.#settings.getGlobalModelRole(role);
+	}
+
 	#roleForScope(role: string, scope: ModelRoleSelectionScope): ResolvedModelRoleValue {
-		const roleValue =
-			scope === "project" ? this.#settings.getProjectModelRole(role) : this.#settings.getGlobalModelRole(role);
+		const roleValue = this.#scopedRoleValue(role, scope);
 		const allModels =
 			this.#scopedModels.length > 0
 				? scopedRolePool(
@@ -1372,6 +1376,13 @@ export class ModelHubComponent implements Component {
 					: isResolvedAssignment(assignment) && !assignment.autoSelected
 						? assignment.model
 						: undefined;
+				// A role already configured with a model the catalog does not list is
+				// not free: an `assign` chip would replace that persisted selector
+				// with the highlighted model. Clear it from the Roles view instead.
+				const unresolvedHere = scopedStorage
+					? this.#scopedRoleValue(role, scope) !== undefined && scopedModel === undefined
+					: assignment !== undefined && !isResolvedAssignment(assignment);
+				if (unresolvedHere) continue;
 				const assignedHere =
 					!!scopedModel && scopedModel.provider === item.model.provider && scopedModel.id === item.model.id;
 				const roleLabel = (info.tag ?? info.name ?? role).toLowerCase();
@@ -1829,7 +1840,10 @@ export class ModelHubComponent implements Component {
 	/** The model a Roles row resolves to (assigned role or resolvable fallback), whose compaction point `k` edits. */
 	#roleRowModel(): Model | undefined {
 		const row = this.#rolesRows[this.#roleIndex];
-		if (row?.kind === "role") return this.#roles[row.role]?.model;
+		if (row?.kind === "role") {
+			const assignment = this.#roles[row.role];
+			return isResolvedAssignment(assignment) ? assignment.model : undefined;
+		}
 		if (row?.kind === "fallback") return this.#resolveFallbackEntry(row.role, row.chainIndex)?.item.model;
 		return undefined;
 	}

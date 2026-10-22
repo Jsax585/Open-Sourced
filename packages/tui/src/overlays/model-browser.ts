@@ -202,7 +202,10 @@ export interface RoleAssignment {
  * and overwrite it on the next pick.
  */
 export interface UnresolvedRoleAssignment {
-	/** The persisted selector, exactly as configured. */
+	/**
+	 * The persisted selector, trimmed and with tabs expanded — hand-edited or
+	 * pasted config must not distort a row, a picker cell or a preview.
+	 */
 	selector: string;
 	autoSelected: false;
 }
@@ -287,7 +290,7 @@ export function resolveRoleAssignments(
 		// `eligible` returns a fresh array; the resolver takes a mutable pool.
 		const catalogMatch = settings.resolveRoleValue(roleValue, [...allModels]);
 		if (catalogMatch.model) continue;
-		roles[role] = { selector: roleValue.trim(), autoSelected: false };
+		roles[role] = { selector: replaceTabs(roleValue.trim()), autoSelected: false };
 	}
 
 	if (autoCandidates.length > 0) {
