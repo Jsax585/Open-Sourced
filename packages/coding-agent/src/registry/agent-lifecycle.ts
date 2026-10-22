@@ -47,6 +47,17 @@ async function persistAgentTombstone(sessionFile: string): Promise<void> {
 	}
 }
 
+/**
+ * True while the session still has work of its own. Registry status alone is
+ * not proof of quiescence: a follow-up prompt typed in the focused view drives
+ * the session directly and leaves the ref `idle`, so parking on status alone
+ * would dispose a running turn.
+ */
+function isSessionBusy(session: AgentSession | null | undefined): boolean {
+	if (!session) return false;
+	return session.isStreaming || session.hasPendingAsyncWork();
+}
+
 /** Drop the kill marker of a reopened agent so later persisted scans list it as parked, not killed. */
 async function removeAgentTombstone(id: string, sessionFile: string): Promise<void> {
 	try {
@@ -705,6 +716,16 @@ export class AgentLifecycleManager {
 		clearTimeout(adopted.timer);
 		const timer = setTimeout(() => {
 			adopted.timer = undefined;
+			// The view may have re-attached, or the adoption may have been replaced.
+			if (this.#held.has(id) || this.#adopted.get(id) !== adopted) return;
+			// The registry says `idle` but the session can still be working: a
+			// follow-up prompt from the focused view never flips the status to
+			// `running`. Parking then disposes a live turn, so re-check the session
+			// itself and try again after another TTL.
+			if (isSessionBusy(adopted.ref.session)) {
+				this.#armTimer(id, adopted);
+				return;
+			}
 			void this.park(id);
 		}, adopted.idleTtlMs);
 		timer.unref?.();

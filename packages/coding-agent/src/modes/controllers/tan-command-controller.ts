@@ -153,7 +153,7 @@ export class TanCommandController {
 					// so the clone follows MCP reloads for its whole run.
 					const mcpFollower = mcpManager ? followMCPTools(mcpManager) : undefined;
 					try {
-try {
+						try {
 							const created = await sdk.createAgentSession({
 								cwd,
 								sessionManager: cloneManager,
@@ -197,6 +197,14 @@ try {
 							throw error;
 						}
 						mcpFollower?.bind(clone);
+						// The fork inherits the parent's todo list via session entries;
+						// its reminders would drag the tan back onto the parent's task.
+						// Clear runtime state and persist an empty edit so reloads agree.
+						// Do this before focusing: attaching the view reloads the viewed
+						// session's todos, and a later clear would leave the parent's
+						// tasks on screen for the whole tangent.
+						clone.setTodoPhases([]);
+						cloneManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases: [] });
 						// Switch the view to the tangent's live session so the user
 						// watches it work; focusing after it parks is impossible
 						// (parking drops the in-memory transcript). Best-effort: a
@@ -217,11 +225,6 @@ try {
 							void clone?.abort();
 						};
 						signal.addEventListener("abort", abortClone, { once: true });
-						// The fork inherits the parent's todo list via session entries;
-						// its reminders would drag the tan back onto the parent's task.
-						// Clear runtime state and persist an empty edit so reloads agree.
-						clone.setTodoPhases([]);
-						cloneManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases: [] });
 						const injectContextSwitch = () => {
 							clone?.agent.appendMessage({
 								role: "developer",

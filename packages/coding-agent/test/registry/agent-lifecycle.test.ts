@@ -10,18 +10,28 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 interface SessionStub {
 	session: AgentSession;
 	disposeCalls: () => number;
+	/** Mark the session as mid-turn (a follow-up prompt from the focused view). */
+	setStreaming: (streaming: boolean) => void;
 }
 
-/** Minimal session: the lifecycle manager only ever calls dispose() on it. */
+/** Minimal session: the lifecycle manager reads its busy state and calls dispose() on it. */
 function makeSessionStub(dispose?: () => Promise<void>): SessionStub {
 	let calls = 0;
 	const stub = {
+		isStreaming: false,
+		hasPendingAsyncWork: () => false,
 		dispose: async () => {
 			calls++;
 			await dispose?.();
 		},
 	};
-	return { session: stub as unknown as AgentSession, disposeCalls: () => calls };
+	return {
+		session: stub as unknown as AgentSession,
+		disposeCalls: () => calls,
+		setStreaming: (streaming: boolean) => {
+			stub.isStreaming = streaming;
+		},
+	};
 }
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -198,6 +208,33 @@ describe("AgentLifecycleManager", () => {
 		vi.advanceTimersByTime(TTL);
 		await flushAsync();
 		expect(registry.get("5-Sub")?.status).toBe("parked");
+		expect(stub.disposeCalls()).toBe(1);
+	});
+
+	it("does not park a viewed agent whose follow-up turn is still running after unfocus", async () => {
+		vi.useFakeTimers();
+		const stub = makeSessionStub();
+		registerIdleSub("6-Sub", stub.session);
+		// The user is reading a finished tangent: the view holds it, then a
+		// follow-up prompt drives the session directly — the ref stays `idle`
+		// while the turn streams.
+		lifecycle.hold("6-Sub");
+		lifecycle.adopt("6-Sub", { idleTtlMs: TTL });
+		stub.setStreaming(true);
+		lifecycle.unhold("6-Sub");
+
+		// Several TTLs of a long turn: the session must stay live throughout.
+		vi.advanceTimersByTime(TTL * 10);
+		await flushAsync();
+		expect(registry.get("6-Sub")?.status).toBe("idle");
+		expect(registry.get("6-Sub")?.session).toBe(stub.session);
+		expect(stub.disposeCalls()).toBe(0);
+
+		// Once the follow-up settles, the next TTL parks it as usual.
+		stub.setStreaming(false);
+		vi.advanceTimersByTime(TTL);
+		await flushAsync();
+		expect(registry.get("6-Sub")?.status).toBe("parked");
 		expect(stub.disposeCalls()).toBe(1);
 	});
 
