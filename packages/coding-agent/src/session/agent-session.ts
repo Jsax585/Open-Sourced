@@ -468,7 +468,7 @@ import { resolveOpenAIWebsocketPreference } from "./settings-stream-fn";
 import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
 import { planTurnPersistence, sameMessageContent, sessionMessagePersistenceKey } from "./turn-persistence";
-import { TurnRecovery, type TurnRecoveryHost } from "./turn-recovery";
+import { priorityOrderedSavedResetAccounts, TurnRecovery, type TurnRecoveryHost } from "./turn-recovery";
 import { YieldQueue } from "./yield-queue";
 
 export * from "./agent-session-events";
@@ -14156,52 +14156,83 @@ export class AgentSession implements SettingsScope {
 			// Claude's live reset listing includes the same response's quota
 			// windows; a second broker usage poll adds no evidence and can 429.
 			const statuses = await this.listResetCredits(options.signal ?? AbortSignal.timeout(10_000), provider);
-			const plan =
-				provider === "anthropic"
-					? this.#planClaudeResets(
-							options.trigger,
-							reports,
-							statuses,
-							coordinator,
-							options.activeBlockUnblockAtMs,
-							options.targetCredentialId,
-						)
-					: this.#planCodexResets(
-							options.trigger,
-							overlayLiveResetCredits(reports, statuses, { synthesizeActive: true, nowMs: Date.now() }),
-							identity,
-							coordinator,
-							options.activeBlockUnblockAtMs,
-							options.targetCredentialId,
-						);
-			const poolLimited = plan.skipped.some(skip => skip.reason === "outside-account-pool");
-			if (plan.actions.length === 0) {
-				const adoptedId = await this.#adoptRecentReset(statuses, coordinator, options.targetCredentialId);
-				if (adoptedId !== undefined) return { restored: true, restoredCredentialIds: [adoptedId] };
-				if (plannerAccountKey) {
-					coordinator.lastAttemptAtByAccount.set(plannerAccountKey, Date.now());
-				}
-				let retryAfterMs: number | undefined;
-				if (provider === "anthropic" && cfg.autoRedeem === "yes") {
-					for (const status of statuses) {
-						if (options.targetCredentialId !== undefined && status.credentialId !== options.targetCredentialId) {
-							continue;
-						}
-						if (!status.error || status.retryAfterMs === undefined || !Number.isFinite(status.retryAfterMs)) {
-							continue;
-						}
-						const delay = Math.max(0, status.retryAfterMs);
-						retryAfterMs = retryAfterMs === undefined ? delay : Math.min(retryAfterMs, delay);
+			const effectiveReports =
+				provider === "openai-codex"
+					? overlayLiveResetCredits(reports, statuses, { synthesizeActive: true, nowMs: Date.now() })
+					: reports;
+			const orderedTieredBlockedBackstop =
+				cfgRetryAccountOrder.get(this.settings) === "tiered" &&
+				options.trigger === "blocked" &&
+				options.targetCredentialId === undefined;
+			const activeCredentialId = accounts.find(account => account.active)?.credentialId;
+			const recoverTarget = async (targetCredentialId: number | undefined): Promise<ResetRecoveryResult> => {
+				const activeBlockUnblockAtMs =
+					!orderedTieredBlockedBackstop || targetCredentialId === activeCredentialId
+						? options.activeBlockUnblockAtMs
+						: undefined;
+				const plan =
+					provider === "anthropic"
+						? this.#planClaudeResets(
+								options.trigger,
+								effectiveReports,
+								statuses,
+								coordinator,
+								activeBlockUnblockAtMs,
+								targetCredentialId,
+							)
+						: this.#planCodexResets(
+								options.trigger,
+								effectiveReports,
+								identity,
+								coordinator,
+								activeBlockUnblockAtMs,
+								targetCredentialId,
+							);
+				const poolLimited = plan.skipped.some(skip => skip.reason === "outside-account-pool");
+				if (plan.actions.length === 0) {
+					const adoptedId = await this.#adoptRecentReset(statuses, coordinator, targetCredentialId);
+					if (adoptedId !== undefined) return { restored: true, restoredCredentialIds: [adoptedId] };
+					if (targetCredentialId === options.targetCredentialId && plannerAccountKey) {
+						coordinator.lastAttemptAtByAccount.set(plannerAccountKey, Date.now());
 					}
+					let retryAfterMs: number | undefined;
+					if (provider === "anthropic" && cfg.autoRedeem === "yes") {
+						for (const status of statuses) {
+							if (targetCredentialId !== undefined && status.credentialId !== targetCredentialId) {
+								continue;
+							}
+							if (!status.error || status.retryAfterMs === undefined || !Number.isFinite(status.retryAfterMs)) {
+								continue;
+							}
+							const delay = Math.max(0, status.retryAfterMs);
+							retryAfterMs = retryAfterMs === undefined ? delay : Math.min(retryAfterMs, delay);
+						}
+					}
+					return { restored: false, retryAfterMs, poolLimited };
 				}
-				return { restored: false, retryAfterMs, poolLimited };
-			}
-			const executed = await this.#redeemConsentedResets(provider, cfg.autoRedeem, plan.actions, coordinator);
-			return {
-				restored: executed.restoredCredentialIds.length > 0,
-				restoredCredentialIds: executed.restoredCredentialIds,
-				poolLimited: poolLimited || executed.poolLimited,
+				const executed = await this.#redeemConsentedResets(provider, cfg.autoRedeem, plan.actions, coordinator);
+				const restoredCredentialIds =
+					targetCredentialId === undefined
+						? executed.restoredCredentialIds
+						: executed.restoredCredentialIds.filter(id => id === targetCredentialId);
+				return {
+					restored: restoredCredentialIds.length > 0,
+					restoredCredentialIds,
+					poolLimited: poolLimited || executed.poolLimited,
+				};
 			};
+			if (!orderedTieredBlockedBackstop) return recoverTarget(options.targetCredentialId);
+
+			let poolLimited = false;
+			for (const account of priorityOrderedSavedResetAccounts(authStorage, provider, this.sessionId)) {
+				if (!authStorage.sessions.permits(provider, this.sessionId, account.credentialId)) continue;
+				const result = await recoverTarget(account.credentialId);
+				poolLimited ||= result.poolLimited === true;
+				if (result.restored || result.retryAfterMs !== undefined) {
+					return { ...result, poolLimited };
+				}
+			}
+			return { restored: false, poolLimited };
 		})()
 			.catch((error): ResetRecoveryResult => {
 				logger.warn("auto-reset pass failed", {

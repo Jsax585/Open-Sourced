@@ -46,6 +46,7 @@ import {
 } from "@oh-my-pi/pi-tui/thinking";
 import type { EditMode } from "@oh-my-pi/pi-tui/tools/edit";
 import type { AgentSessionEvent } from "./agent-session-events";
+import type { AuthStorage, OAuthAccountSummary } from "./auth-storage";
 import type { ResetRecoveryResult } from "./codex-auto-reset";
 import type {
 	InitialRetryFallbackState,
@@ -130,6 +131,22 @@ const GENERIC_ABORT_MESSAGES: Record<string, true> = {
 	"The operation was aborted": true,
 	"The operation was aborted.": true,
 };
+
+export function priorityOrderedSavedResetAccounts(
+	authStorage: AuthStorage,
+	provider: string,
+	sessionId: string | undefined,
+): OAuthAccountSummary[] {
+	return authStorage.oauth.accounts(provider, sessionId).toSorted((left, right) => {
+		const leftPolicyPriority = authStorage.oauth.policy(provider, left)?.priority;
+		const rightPolicyPriority = authStorage.oauth.policy(provider, right)?.priority;
+		const leftPriority =
+			typeof leftPolicyPriority === "number" && Number.isFinite(leftPolicyPriority) ? leftPolicyPriority : 0;
+		const rightPriority =
+			typeof rightPolicyPriority === "number" && Number.isFinite(rightPolicyPriority) ? rightPolicyPriority : 0;
+		return rightPriority - leftPriority || left.position - right.position;
+	});
+}
 
 function hasNonWhitespace(value: string): boolean {
 	return NON_WHITESPACE_RE.test(value);
@@ -1985,23 +2002,18 @@ export class TurnRecovery {
 							.keepCredits,
 					),
 				);
-				const summaries = authStorage.oauth.accounts(resetProvider, sessionId);
-				const summariesByCredentialId = new Map(summaries.map(summary => [summary.credentialId, summary] as const));
-				const priorityFor = (credentialId: number): number => {
-					const summary = summariesByCredentialId.get(credentialId);
-					const priority = summary && authStorage.oauth.policy(resetProvider, summary)?.priority;
-					return typeof priority === "number" && Number.isFinite(priority) ? priority : 0;
-				};
-				const rankedAccounts = health.accounts.toSorted((left, right) => {
-					const leftSummary = summariesByCredentialId.get(left.credentialId);
-					const rightSummary = summariesByCredentialId.get(right.credentialId);
-					if (!leftSummary) return rightSummary ? 1 : 0;
-					if (!rightSummary) return -1;
-					return (
-						priorityFor(right.credentialId) - priorityFor(left.credentialId) ||
-						leftSummary.position - rightSummary.position
-					);
-				});
+				const summaries = priorityOrderedSavedResetAccounts(authStorage, resetProvider, sessionId);
+				const remainingHealthAccountsByCredentialId = new Map(
+					health.accounts.map(account => [account.credentialId, account] as const),
+				);
+				const rankedAccounts: typeof health.accounts = [];
+				for (const summary of summaries) {
+					const account = remainingHealthAccountsByCredentialId.get(summary.credentialId);
+					if (!account) continue;
+					remainingHealthAccountsByCredentialId.delete(summary.credentialId);
+					rankedAccounts.push(account);
+				}
+				rankedAccounts.push(...remainingHealthAccountsByCredentialId.values());
 				for (const account of rankedAccounts) {
 					if (account.fundingTier === "allowance") break;
 					if (
