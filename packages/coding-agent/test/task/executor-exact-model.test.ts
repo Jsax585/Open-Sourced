@@ -177,4 +177,77 @@ describe("per-call exact selection after background discovery", () => {
 			await fs.rm(cwd, { recursive: true, force: true });
 		}
 	});
+
+	it("walks the candidates for working credentials and never falls back", async () => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-executor-candidates-"));
+		const authStorage = await AuthStorage.create(":memory:");
+		const sourceId = "executor-candidates";
+		const agentId = "Candidates";
+		try {
+			// Only the mock provider has credentials, so the first candidate cannot run.
+			authStorage.keys.setRuntime("mock", "test-key");
+			registerMockApi(sourceId);
+			const locked = createMockModel({ provider: "nokey", id: "locked" });
+			const open = createMockModel({ id: "open", handler: () => ({ content: ["Open answer."] }) });
+			const backup = createMockModel({ id: "backup" });
+			const models = [locked, open, backup];
+			const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+			const find = modelRegistry.find.bind(modelRegistry);
+			vi.spyOn(modelRegistry, "find").mockImplementation(
+				(provider, id) =>
+					models.find(model => model.provider === provider && model.id === id) ?? find(provider, id),
+			);
+			vi.spyOn(modelRegistry, "getAvailable").mockImplementation(() => models);
+			const created = vi.spyOn(sdk, "createAgentSession");
+			vi.spyOn(discovery, "discoverAgents").mockResolvedValue({
+				agents: [{ name: "worker", description: "test", systemPrompt: "test", source: "bundled", tools: ["read"] }],
+				projectAgentsDir: null,
+			});
+			const settings = Settings.isolated({
+				"task.maxRecursionDepth": 2,
+				"task.perCallModel": "on",
+				"task.isolation.enabled": false,
+				"compaction.enabled": false,
+				modelRoles: { review: "mock/open", locked: "nokey/locked" },
+				"retry.fallbackChains": { review: ["mock/backup"] },
+			});
+			const session = {
+				cwd,
+				hasUI: false,
+				settings,
+				authStorage,
+				modelRegistry,
+				restrictToolNames: true,
+				enableMCP: false,
+				enableLsp: false,
+				enableIrc: false,
+				getSessionFile: () => null,
+				getSessionSpawns: () => "*",
+				getSessionAgents: () => [],
+			} as unknown as ToolSession;
+			const execution = await runStructuredSubagent({
+				session,
+				invocationKind: "task",
+				assignment: "Answer the question.",
+				agent: "worker",
+				perCallModel: ["nokey/locked", "@review"],
+				structured: false,
+				identity: { id: agentId },
+				keepAlive: false,
+			});
+			expect(execution.result.exitCode).toBe(0);
+			expect(execution.result.output).toBe("Open answer.");
+			expect(locked.calls).toHaveLength(0);
+			// The role's retry chain is not a grant: the worker still never switches models.
+			const options = created.mock.calls[0]?.[0];
+			expect(options?.disableModelFallback).toBe(true);
+			expect(() => options?.assertDispatchModel?.(backup)).toThrow(/not approved/);
+		} finally {
+			await AgentRegistry.global().get(agentId)?.session?.dispose();
+			AgentRegistry.global().unregister(agentId);
+			unregisterCustomApis(sourceId);
+			authStorage.close();
+			await fs.rm(cwd, { recursive: true, force: true });
+		}
+	});
 });

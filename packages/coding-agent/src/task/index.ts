@@ -319,8 +319,8 @@ function validateModel(item: TaskItem | TaskParams, label: string): string | und
 function spawnModelFields(params: TaskParams): Pick<StructuredSubagentRequest, "perCallModel" | "seanceModel"> {
 	if (params.model === undefined) return {};
 	if (params.agent === SEANCE_AGENT_NAME) return { seanceModel: params.model };
-	// `validateModel` rejected anything but one string before dispatch.
-	return typeof params.model === "string" ? { perCallModel: params.model } : {};
+	// `validateModel` rejected anything but one selector or a list of them before dispatch.
+	return { perCallModel: params.model };
 }
 
 /**
@@ -742,6 +742,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			structured: this.#isStructured(),
 			defaultAgent: this.#defaultAgent(),
 			seanceFields: this.#seanceSchemaFields(),
+			perCallModel: perCallModelEnabled(this.session.settings, "task"),
 		});
 	}
 

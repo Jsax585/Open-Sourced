@@ -118,8 +118,8 @@ describe("workpool model validation", () => {
 		{ model: [], reason: /invalid `model` value/ },
 		{ model: ["p/valid", ""], reason: /invalid `model` value/ },
 		{ model: [42], reason: /invalid `model` value/ },
-		{ model: "@smol", reason: /invalid `model` value/ },
-		{ model: ["p/valid"], reason: /invalid `model` value/ },
+		{ model: "@smol", reason: /has no modelRoles entry/ },
+		{ model: ["p/valid", "p/*"], reason: /invalid `model` value/ },
 	]) {
 		it(`rejects invalid selection ${JSON.stringify(model)} before registering a pool`, async () => {
 			vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [SCOUT], projectAgentsDir: null });
@@ -131,7 +131,11 @@ describe("workpool model validation", () => {
 		});
 	}
 
-	it.each(["on", "eval"])("hands the pool selector to workers under %s", async perCallModel => {
+	it.each([
+		["on", "p/small"],
+		["eval", "p/small"],
+		["on", ["@smol", "p/small"]],
+	] as const)("hands the pool selector to workers under %s", async (perCallModel, model) => {
 		vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [SCOUT], projectAgentsDir: null });
 		const requested = Promise.withResolvers<unknown>();
 		vi.spyOn(structured, "runStructuredSubagent").mockImplementation(async request => {
@@ -139,7 +143,6 @@ describe("workpool model validation", () => {
 			throw new Error("stop after dispatch");
 		});
 		const session = makeSession({ "task.perCallModel": perCallModel, modelRoles: { smol: "p/small" } });
-		const model = "p/small";
 		await runEvalWorkpool({ op: "create", name: "picked", agent: "scout", model }, { session });
 		await runEvalWorkpool({ op: "push", name: "picked", items: ["one"] }, { session });
 		expect(await requested.promise).toEqual(model);

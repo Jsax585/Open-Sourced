@@ -84,6 +84,26 @@ const rows: Row[] = [
 	},
 	{ name: "allowlist alone grants nothing", settings: { "task.perCallModelAllow": ["mock/target"] }, approved: false },
 	{
+		name: "allowlist role entry admits what the role grants",
+		settings: { modelRoles: { review: "mock/target", smol: "mock/other" }, "task.perCallModelAllow": ["@review"] },
+		approved: true,
+	},
+	{
+		name: "allowlist role entry excludes another role's model",
+		settings: { modelRoles: { review: "mock/other", smol: "mock/target" }, "task.perCallModelAllow": ["@review"] },
+		approved: false,
+	},
+	{
+		name: "allowlist entry for an unconfigured role admits nothing",
+		settings: { modelRoles: { review: "mock/target" }, "task.perCallModelAllow": ["@smol"] },
+		approved: false,
+	},
+	{
+		name: "allowlist glob entry",
+		settings: { modelRoles: { review: "mock/target" }, "task.perCallModelAllow": ["mock/t*"] },
+		approved: true,
+	},
+	{
 		name: "brackets in a literal id are not a glob",
 		settings: { modelRoles: { review: "mock/glm[1m]" } },
 		model: bracketed,

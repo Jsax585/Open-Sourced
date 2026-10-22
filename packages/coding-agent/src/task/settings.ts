@@ -302,7 +302,7 @@ export const cfgTaskPerCallModel = register({
 		group: "Subagents",
 		label: "Per-Call Model",
 		description:
-			"Whether a subagent call may pick its model with one exact provider/model-id[:level] selector. Only models the configuration already routes to are accepted.",
+			"Whether a subagent call may pick its model with an exact provider/model-id[:level], a configured @role[:level], or an ordered list of them. Only models the configuration already routes to are accepted.",
 		options: [
 			{ value: "off", label: "Off", description: "Reject `model` on task items and eval agent()/workpool()" },
 			{ value: "eval", label: "Eval only", description: "Accept `model` in eval agent() and workpool() only" },
@@ -327,7 +327,7 @@ export const cfgTaskPerCallModelAllow = register({
 		label: "Per-Call Model Allowlist",
 		editor: "json",
 		description:
-			'Exact provider/model-id entries, e.g. ["anthropic/claude-sonnet-4-5"]. When set, a per-call model must also be listed here. Empty: every model the configuration grants.',
+			'Exact provider/model-id entries, configured @role entries or globs, e.g. ["anthropic/claude-sonnet-4-5", "@review", "openai/*"]. When set, a per-call model must also match an entry here; the list only narrows what the configuration grants. Empty: every model the configuration grants.',
 	},
 });
 

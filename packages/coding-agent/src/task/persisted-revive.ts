@@ -219,9 +219,11 @@ export function createPersistedSubagentReviverFactory(
 			const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(ctx.settings));
 			const oauthAccountPools =
 				init.agent && Object.hasOwn(agentAccountPools, init.agent) ? agentAccountPools[init.agent] : undefined;
+			// A per-call worker revives on the model it resolved to, never by re-resolving a requested
+			// role whose value may have changed since; the dispatch check still applies current grants.
 			const persistedModelPattern = restoredSeance
 				? restoredSeance.modelPattern
-				: init.modelRole && init.modelRole !== "default"
+				: !init.perCallModel && init.modelRole && init.modelRole !== "default"
 					? [formatModelRoleAlias(init.modelRole), ...(init.resolvedModel ? [init.resolvedModel] : [])]
 					: init.resolvedModel;
 			// Older session files persisted the synthetic xd:// write transport in the

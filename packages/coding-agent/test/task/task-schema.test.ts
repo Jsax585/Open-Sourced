@@ -253,4 +253,13 @@ describe("task spawn validation", () => {
 		expect(await description("eval")).not.toContain("`model`: one exact");
 		expect(await description("on")).toContain("`model`: one exact");
 	});
+
+	it("declares `model` as a candidate list only while task.perCallModel accepts task calls", () => {
+		const params = { agent: "scout", task: "Map.", solutionSpace: "focused", model: ["@review", "p/m"] };
+		const fixed = getTaskSchema({ isolationEnabled: false, batchEnabled: false });
+		const perCall = getTaskSchema({ isolationEnabled: false, batchEnabled: false, perCallModel: true });
+		expect(fixed(params) instanceof type.errors).toBe(true);
+		expect(perCall(params) instanceof type.errors).toBe(false);
+		expect(JSON.stringify(perCall.toJsonSchema())).toContain('"model":{"anyOf"');
+	});
 });

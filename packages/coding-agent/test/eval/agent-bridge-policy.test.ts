@@ -1578,12 +1578,12 @@ describe("agent exact model selection", () => {
 		await Promise.all([...jobManagers].map(manager => manager.dispose()));
 		jobManagers.clear();
 	});
-	it("rejects a model array before dispatching an agent", async () => {
+	it("rejects a model array with a glob entry before dispatching an agent", async () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 		await expect(
 			runEvalAgentAndWait(
-				{ prompt: "work", agent: "reviewer", model: ["p/preferred:high", "p/alternative"] },
+				{ prompt: "work", agent: "reviewer", model: ["p/preferred:high", "p/*"] },
 				{ session: makeSession() },
 			),
 		).rejects.toThrow(/invalid/);

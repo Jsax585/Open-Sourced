@@ -75,7 +75,7 @@ export async function runEvalWorkpool(args: unknown, options: EvalWorkpoolBridge
 		const tools = optionalTools(record);
 		const modelProblem = invalidModelSelectorReason(record.model, "workpool()");
 		if (modelProblem) throw new ToolError(modelProblem);
-		const model = typeof record.model === "string" ? record.model : undefined;
+		const model = record.model as string | string[] | undefined;
 		if (tools?.length && options.session.getPlanModeState?.()?.enabled === true) {
 			throw new ToolError("Eval-defined tools are unavailable in plan mode.");
 		}
