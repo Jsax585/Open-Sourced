@@ -82,6 +82,7 @@ import type {
 	ResponseInputContent,
 	ResponseStreamEvent,
 } from "./openai-responses-wire";
+import { type OpenAIResponsesWebSocketLease, OpenAIResponsesWebSocketPool } from "./openai-responses-websocket";
 import {
 	applyCommonResponsesSamplingParams,
 	applyOpenAIExtraBody,
@@ -120,6 +121,13 @@ import {
 
 // OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends StreamOptions {
+	/**
+	 * Opt in to WebSocket response.create on the standard /responses endpoint.
+	 * Defaults to model.preferWebsockets, then false; explicit false always wins.
+	 * WebSocket requests replay full history: statefulResponses chaining is HTTP-only.
+	 * Transport failures surface without an automatic HTTP fallback or request replay.
+	 */
+	preferWebsockets?: boolean;
 	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
 	serviceTier?: ServiceTier;
@@ -129,8 +137,9 @@ export interface OpenAIResponsesOptions extends StreamOptions {
 	maxTokensExplicit?: boolean;
 	disableReasoning?: boolean;
 	/**
-	 * Stateful turns: chain via `previous_response_id` + delta input instead of
-	 * replaying the full transcript. Forces `store: true` (the platform only
+	 * HTTP/SSE stateful turns: chain via `previous_response_id` + delta input
+	 * instead of replaying the full transcript. Ignored for WebSockets, which
+	 * always replay full history. Forces `store: true` (the platform only
 	 * resolves stored responses). Precedence: this option, then
 	 * `PI_OPENAI_STATEFUL`, then `compat.statefulResponses`, then ON against the
 	 * official OpenAI API and OFF elsewhere. Requires `sessionId` +
@@ -409,6 +418,7 @@ interface OpenAIResponsesProviderSessionState
 	chains: Map<string, OpenAIResponsesChainState>;
 	/** `configuration_update` effort baselines, keyed by baseUrl/model/session. */
 	effortControls: Map<string, OpenAIEffortControlState<ResponsesStableEffort>>;
+	webSockets: OpenAIResponsesWebSocketPool;
 }
 
 /** Wire efforts a `configuration_update` can carry: every real tier, never `none`/null. */
@@ -465,6 +475,7 @@ function createOpenAIResponsesProviderSessionState(
 		closeCount: 0,
 		chains: new Map(),
 		effortControls: new Map(),
+		webSockets: new OpenAIResponsesWebSocketPool(),
 		releaseSession: sessionId => {
 			const normalizedSessionId = normalizeOpenAIPromptCacheKey(sessionId);
 			if (!normalizedSessionId) return;
@@ -472,12 +483,14 @@ function createOpenAIResponsesProviderSessionState(
 				if (chain.sessionId === normalizedSessionId) state.chains.delete(key);
 			}
 			releaseOpenAIEffortControlSession(state.effortControls, normalizedSessionId);
+			state.webSockets.releaseSession(normalizedSessionId);
 		},
 		close: () => {
 			state.nativeHistoryReplayWarmed = false;
 			state.closeCount++;
 			state.chains.clear();
 			state.effortControls.clear();
+			state.webSockets.releaseSession();
 			clearOpenAIStrictToolsState(state);
 			clearOpenAIReasoningEffortFallbackState(state);
 		},
@@ -745,6 +758,7 @@ const streamOpenAIResponsesOnce = (
 		let chainState: OpenAIResponsesChainState | undefined;
 		let sentPreviousResponseId: string | undefined;
 		let lastSubmittedRequestWasFullReplay: boolean | undefined;
+		let webSocketLease: OpenAIResponsesWebSocketLease | undefined;
 		const abortTracker = createAbortSourceTracker(options?.signal);
 		const firstEventTimeoutAbortError = new AIError.StreamTimeoutError(OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE);
 		const { requestAbortController, requestSignal } = abortTracker;
@@ -788,13 +802,19 @@ const streamOpenAIResponsesOnce = (
 				});
 			const premiumRequestsTotal = copilotPremiumRequests;
 			const providerSessionState = getOpenAIResponsesProviderSessionState(model, options?.providerSessionState);
+			const preferWebsockets = options?.preferWebsockets ?? model.preferWebsockets ?? false;
 			const closeCountAtStart = providerSessionState?.closeCount;
 			const strictToolsScope = getOpenAIStrictToolsScope(model, baseUrl);
 			const promptCacheBreakpointPolicy =
 				resolveCacheRetention(options?.cacheRetention) !== "none" && options?.promptCache?.mode === "explicit"
 					? (options.promptCache.breakpoint ?? "latest-stable-message")
 					: undefined;
-			if (isOpenAIResponsesStatefulEnabled(options, model) && routingSessionId && providerSessionState) {
+			if (
+				!preferWebsockets &&
+				isOpenAIResponsesStatefulEnabled(options, model) &&
+				routingSessionId &&
+				providerSessionState
+			) {
 				chainState = getOpenAIResponsesChainState(providerSessionState, model, baseUrl, routingSessionId);
 				if (chainState.canAppend && chainState.lastPromptCacheBreakpointPolicy !== promptCacheBreakpointPolicy) {
 					resetOpenAIResponsesChainState(chainState);
@@ -850,6 +870,15 @@ const streamOpenAIResponsesOnce = (
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			const requestUrl = `${resolvedBaseUrl}/responses`;
+			if (preferWebsockets) {
+				webSocketLease = (providerSessionState?.webSockets ?? new OpenAIResponsesWebSocketPool()).acquire({
+					url: requestUrl,
+					headers,
+					provider: model.provider,
+					modelId: model.id,
+					sessionId: providerSessionState ? routingSessionId : undefined,
+				});
+			}
 			const applyPayloadReplacement = async (requestParams: OpenAIResponsesSamplingParams) => {
 				const replacementPayload = await options?.onPayload?.(requestParams, model);
 				const payload =
@@ -885,6 +914,30 @@ const streamOpenAIResponsesOnce = (
 					);
 				}
 				try {
+					if (webSocketLease) {
+						if (requestParams.previous_response_id != null) {
+							throw new Error(
+								"OpenAI responses WebSocket requests replay full history; previous_response_id is not supported",
+							);
+						}
+						if ("background" in requestParams && requestParams.background === true) {
+							throw new Error("OpenAI responses WebSocket requests do not support background: true");
+						}
+						const connection = webSocketLease.connection;
+						await connection.open(requestSignal);
+						clearTimeout(requestTimeout);
+						if (options?.onResponse) {
+							await options.onResponse(
+								{
+									status: 101,
+									headers: Object.fromEntries(connection.handshakeHeaders ?? []),
+									metadata: { transport: "websocket" },
+								},
+								model,
+							);
+						}
+						return connection.events(requestParams, rawSseObserver);
+					}
 					const headersWithTimeout = { ...headers };
 					if (requestTimeoutMs !== undefined) {
 						headersWithTimeout["X-Stainless-Timeout"] = Math.floor(requestTimeoutMs / 1000).toString();
@@ -1149,6 +1202,7 @@ const streamOpenAIResponsesOnce = (
 					// poll gives up, leaving all existing behavior unchanged.
 					const resumeId = output.responseId;
 					if (
+						!webSocketLease &&
 						resumeId !== undefined &&
 						canResumeOpenAIResponsesResultAfterDrop({
 							responseId: resumeId,
@@ -1256,6 +1310,7 @@ const streamOpenAIResponsesOnce = (
 						}
 					}
 					const canRetry =
+						!webSocketLease &&
 						!sawReplayUnsafeOutput &&
 						!requestSignal.aborted &&
 						!abortTracker.wasCallerAbort() &&
@@ -1384,6 +1439,8 @@ const streamOpenAIResponsesOnce = (
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
+		} finally {
+			webSocketLease?.release();
 		}
 	})();
 

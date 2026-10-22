@@ -2042,7 +2042,7 @@ export interface ProviderModelConfig {
 	contextWindow: number;
 	/** Maximum output tokens. */
 	maxTokens: number;
-	/** Whether Codex requests should prefer WebSocket transport. */
+	/** Prefer WebSocket transport for standard or Codex Responses; standard Responses defaults to HTTP. */
 	preferWebsockets?: boolean;
 	/** Custom headers for this model. */
 	headers?: Record<string, string>;

@@ -3804,7 +3804,7 @@ export interface ProviderConfigInput {
 		contextWindow: number;
 		maxTokens: number;
 		promptCache?: Model<Api>["promptCache"];
-		/** Whether Codex requests should prefer WebSocket transport. */
+		/** Prefer WebSocket transport for standard or Codex Responses; standard Responses defaults to HTTP. */
 		preferWebsockets?: boolean;
 		headers?: Record<string, string>;
 		compat?: ModelSpec<Api>["compat"];

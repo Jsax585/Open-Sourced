@@ -25,6 +25,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 import { cfgCompactionModelThresholds, cfgExtendedContext } from "@oh-my-pi/pi-coding-agent/session/context-settings";
+import { resolveOpenAIWebsocketPreference } from "@oh-my-pi/pi-coding-agent/session/settings-stream-fn";
 
 describe("ModelRegistry", () => {
 	let tempDir: string;
@@ -689,6 +690,87 @@ describe("ModelRegistry", () => {
 	});
 
 	describe("provider compat overrides", () => {
+		test("models.yml preserves standard Responses WebSocket preferences and explicit HTTP overrides", async () => {
+			const modelsPath = path.join(tempDir, "models.yml");
+			await Bun.write(
+				modelsPath,
+				`providers:
+  responses-proxy:
+    api: openai-responses
+    baseUrl: https://proxy.example.com/v1
+    apiKey: test-key
+    models:
+      - id: websocket-model
+      - id: http-model
+        preferWebsockets: true
+      - id: default-model
+    modelOverrides:
+      websocket-model:
+        preferWebsockets: true
+      http-model:
+        preferWebsockets: false
+`,
+			);
+			const registry = new ModelRegistry(authStorage, modelsPath);
+			const websocketModel = registry.find("responses-proxy", "websocket-model");
+			const httpModel = registry.find("responses-proxy", "http-model");
+			const defaultModel = registry.find("responses-proxy", "default-model");
+			expect(websocketModel?.api).toBe("openai-responses");
+			expect(websocketModel?.preferWebsockets).toBe(true);
+			expect(httpModel?.preferWebsockets).toBe(false);
+			expect(defaultModel?.preferWebsockets).toBeUndefined();
+			if (!websocketModel || !httpModel || !defaultModel) throw new Error("Expected configured Responses models");
+
+			const message = {
+				id: "msg_http",
+				type: "message",
+				status: "completed",
+				role: "assistant",
+				content: [{ type: "output_text", text: "ok", annotations: [] }],
+			};
+			const sse = [
+				{ type: "response.output_item.added", output_index: 0, item: { ...message, content: [] } },
+				{ type: "response.output_text.delta", output_index: 0, content_index: 0, delta: "ok" },
+				{ type: "response.output_item.done", output_index: 0, item: message },
+				{
+					type: "response.completed",
+					response: {
+						id: "resp_http",
+						status: "completed",
+						output: [message],
+						usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+					},
+				},
+			]
+				.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+				.join("");
+			for (const setting of ["auto", "on", "off"] as const) {
+				const isolatedSettings = Settings.isolated({ "providers.openaiWebsockets": setting });
+				for (const model of [defaultModel, httpModel, websocketModel]) {
+					let requests = 0;
+					const preference = resolveOpenAIWebsocketPreference(isolatedSettings, model);
+					expect(preference).toBe(setting === "off" ? false : undefined);
+					const result = await streamSimple(
+						model,
+						{ messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+						{
+							apiKey: "test-key",
+							// The explicit request opt-out must beat the model's opt-in.
+							preferWebsockets: model === websocketModel && setting !== "off" ? false : preference,
+							fetch: (async (_url, init) => {
+								requests++;
+								expect(init?.method).toBe("POST");
+								return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+							}) as FetchImpl,
+						},
+					).result();
+					expect(result.stopReason).toBe("stop");
+					expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "ok" }));
+					expect(requests).toBe(1);
+				}
+			}
+		});
+
 		test("models.yml can opt a Responses provider in while opting one model out of stored chaining", async () => {
 			const modelsPath = path.join(tempDir, "models.yml");
 			await Bun.write(
@@ -1664,17 +1746,22 @@ describe("ModelRegistry", () => {
 					modelOverrides: {
 						"gpt-5.4": {
 							contextWindow: 512000,
+							preferWebsockets: true,
 						},
+						"gpt-5.5": { preferWebsockets: false },
 					},
 				},
 			});
-			const fetchMock = mockOpenAiCompatibleModels("https://my-proxy.example.com/v1/models", ["gpt-5.4"]);
+			const fetchMock = mockOpenAiCompatibleModels("https://my-proxy.example.com/v1/models", ["gpt-5.4", "gpt-5.5"]);
 			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
 			expect(registry.find("openai", "gpt-5.4")?.contextWindow).toBe(512000);
+			expect(registry.find("openai", "gpt-5.4")?.preferWebsockets).toBe(true);
 
 			await registry.refreshProvider("openai", "online");
 
 			expect(registry.find("openai", "gpt-5.4")?.contextWindow).toBe(512000);
+			expect(registry.find("openai", "gpt-5.4")?.preferWebsockets).toBe(true);
+			expect(registry.find("openai", "gpt-5.5")?.preferWebsockets).toBe(false);
 		});
 
 		test("newly discovered ids inherit provider fields, not another model's custom fields", async () => {

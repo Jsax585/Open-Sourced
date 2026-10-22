@@ -37,10 +37,15 @@ import {
 	validateProviderMaxInFlightRequests,
 } from "./settings";
 
-/** Map `providers.openaiWebsockets` to the provider `preferWebsockets` hint (`auto` → model default). */
-export function resolveOpenAIWebsocketPreference(settings: Settings): boolean | undefined {
+/** Apply the Codex transport setting without implicitly opting other providers into WebSockets. */
+export function resolveOpenAIWebsocketPreference(settings: Settings, model: Model | undefined): boolean | undefined {
 	const setting = cfgProvidersOpenaiWebsockets.get(settings);
-	return setting === "on" ? true : setting === "off" ? false : undefined;
+	if (model?.api === "openai-codex-responses") {
+		return setting === "on" ? true : setting === "off" ? false : undefined;
+	}
+	// An explicit global opt-out still forces HTTP, but opt-in belongs to the
+	// standard Responses model or request, including OpenRouter Responses routing.
+	return setting === "off" && (model?.api === "openai-responses" || model?.api === "openrouter") ? false : undefined;
 }
 
 function timeoutSecondsToMs(value: number): number | undefined {

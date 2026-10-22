@@ -17,7 +17,10 @@ import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream"
 import { bindEffects } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgProvidersMuseCodeStoreResponses } from "@oh-my-pi/pi-coding-agent/session/settings";
-import { createSettingsAwareStreamFn } from "@oh-my-pi/pi-coding-agent/session/settings-stream-fn";
+import {
+	createSettingsAwareStreamFn,
+	resolveOpenAIWebsocketPreference,
+} from "@oh-my-pi/pi-coding-agent/session/settings-stream-fn";
 
 function captureBase(): { fn: StreamFn; calls: Array<{ options?: SimpleStreamOptions }> } {
 	const calls: Array<{ options?: SimpleStreamOptions }> = [];
@@ -86,6 +89,22 @@ function replayedReasoningContext(producer: Model): Context {
 }
 
 describe("createSettingsAwareStreamFn", () => {
+	it("keeps global WebSocket opt-in Codex-only and applies explicit HTTP opt-out to Responses routes", () => {
+		const openrouterModel = { api: "openrouter" } as Model;
+		const unrelatedModel = { api: "anthropic-messages" } as Model;
+		for (const setting of ["auto", "on", "off"] as const) {
+			const settings = Settings.isolated({ "providers.openaiWebsockets": setting });
+			expect(resolveOpenAIWebsocketPreference(settings, stubCodexModel)).toBe(
+				setting === "on" ? true : setting === "off" ? false : undefined,
+			);
+			for (const model of [stubResponsesModel, openrouterModel]) {
+				expect(resolveOpenAIWebsocketPreference(settings, model)).toBe(setting === "off" ? false : undefined);
+			}
+			expect(resolveOpenAIWebsocketPreference(settings, unrelatedModel)).toBeUndefined();
+			expect(resolveOpenAIWebsocketPreference(settings, undefined)).toBeUndefined();
+		}
+	});
+
 	it("applies provider settings to the forwarded options when caller omits them", () => {
 		const settings = Settings.isolated({
 			"providers.openrouterVariant": "floor",
