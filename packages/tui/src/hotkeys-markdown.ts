@@ -139,6 +139,10 @@ function hotkeyGroups(bindings: HotkeysMarkdownBindings): HotkeyGroup[] {
 				{ keys: [act("app.approval.approve")], action: "Approve a pending tool call" },
 				{ keys: [act("app.thinking.toggle")], action: "Toggle thinking block visibility" },
 				{ keys: [act("app.editor.external")], action: "Edit message in external editor" },
+				{
+					keys: [act("app.editor.replyQuoted")],
+					action: "Edit message in external editor, quoting the last reply",
+				},
 				{ keys: [act("app.retry")], action: "Retry last failed assistant turn" },
 				{ keys: [act("app.clipboard.pasteImage")], action: "Paste image or text from clipboard" },
 				{

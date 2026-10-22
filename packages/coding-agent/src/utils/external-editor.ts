@@ -24,6 +24,21 @@ export function getEditorCommand(): string | undefined {
 	return undefined;
 }
 
+/**
+ * Builds the external-editor prefill for a quoted reply: the last assistant reply
+ * quoted email-style (`> ` per line), followed by a blank-line separator and
+ * the current draft (if any). Empty lines in the quoted text are rendered as a
+ * bare `>` (no trailing space) to avoid trailing whitespace.
+ */
+export function buildQuotedReplyPrefill(draft: string, lastReply: string): string {
+	const quoted = lastReply
+		.split("\n")
+		.map(line => (line.length === 0 ? ">" : `> ${line}`))
+		.join("\n");
+	if (draft.length === 0) return `${quoted}\n\n`;
+	return `${quoted}\n\n${draft}`;
+}
+
 export interface OpenInEditorOptions {
 	/** File extension for the temp file (default: ".md"). */
 	extension?: string;

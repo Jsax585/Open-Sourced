@@ -62,7 +62,7 @@ import {
 } from "../../utils/clipboard";
 import { commandUsage, hintUsage } from "../../utils/usage-counter";
 import { EnhancedPasteController } from "../../utils/enhanced-paste";
-import { getEditorCommand, openInEditor } from "../../utils/external-editor";
+import { buildQuotedReplyPrefill, getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { resendProgramStatus } from "../../utils/run-status";
 import { loadImageInput } from "../../utils/image-loading";
 import { materializeImageChipLinks } from "../utils/ui-helpers";
@@ -405,6 +405,19 @@ export class InputController {
 						return undefined;
 					}
 					void this.openExternalEditor();
+					return { consume: true };
+				}
+				if (this.ctx.keybindings.matches(data, "app.editor.replyQuoted")) {
+					if (this.ctx.ui.hasOverlay()) return undefined;
+					const focused = this.ctx.ui.getFocused();
+					if (
+						focused instanceof HookEditorComponent ||
+						focused === this.ctx.hookSelector ||
+						focused === this.ctx.hookInput
+					) {
+						return undefined;
+					}
+					void this.openExternalEditorQuotedReply();
 					return { consume: true };
 				}
 				if (this.ctx.keybindings.matches(data, "app.tools.toggleVisibility")) {
@@ -2814,10 +2827,30 @@ export class InputController {
 		}
 
 		const currentText = this.ctx.editor.getExpandedText?.() ?? this.ctx.editor.getText();
+		await this.#runExternalEditor(editorCmd, currentText);
+	}
 
+	async openExternalEditorQuotedReply(): Promise<void> {
+		const editorCmd = getEditorCommand();
+		if (!editorCmd) {
+			this.ctx.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
+			return;
+		}
+
+		const lastReply = this.ctx.session.getLastAssistantText();
+		if (!lastReply) {
+			this.ctx.showWarning("No assistant reply to quote yet.");
+			return;
+		}
+
+		const currentText = this.ctx.editor.getExpandedText?.() ?? this.ctx.editor.getText();
+		await this.#runExternalEditor(editorCmd, buildQuotedReplyPrefill(currentText, lastReply));
+	}
+
+	async #runExternalEditor(editorCmd: string, content: string): Promise<void> {
 		try {
 			this.ctx.ui.stop();
-			const result = await openInEditor(editorCmd, currentText, { extension: ".omp.md" });
+			const result = await openInEditor(editorCmd, content, { extension: ".omp.md" });
 			if (result !== null) {
 				this.ctx.editor.setText(result);
 			}

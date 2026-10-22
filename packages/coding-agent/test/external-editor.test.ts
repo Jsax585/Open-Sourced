@@ -2,7 +2,26 @@ import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { getEditorCommand, openInEditor, resolveEditorSpawnCommand } from "../src/utils/external-editor";
+import {
+	buildQuotedReplyPrefill,
+	getEditorCommand,
+	openInEditor,
+	resolveEditorSpawnCommand,
+} from "../src/utils/external-editor";
+
+describe("buildQuotedReplyPrefill", () => {
+	it("quotes a multiline reply with an unquoted trailing blank line when draft is empty", () => {
+		expect(buildQuotedReplyPrefill("", "first line\nsecond line")).toBe("> first line\n> second line\n\n");
+	});
+
+	it("places the draft after the quoted reply", () => {
+		expect(buildQuotedReplyPrefill("draft", "reply")).toBe("> reply\n\ndraft");
+	});
+
+	it("renders blank quoted lines as bare markers without trailing whitespace", () => {
+		expect(buildQuotedReplyPrefill("", "first\n\nthird")).toBe("> first\n>\n> third\n\n");
+	});
+});
 
 interface MutableProcess {
 	platform: NodeJS.Platform;
