@@ -363,9 +363,13 @@ describe("createSettingsAwareStreamFn", () => {
 			base,
 		);
 		elsewhere(copilot, context, { apiKey: "k", providerSessionState: new Map() });
+		// A connection-bound WS request rebuilds on every socket, regardless
+		// of another request warming the shared provider state while it waits.
+		queued(copilot, context, { apiKey: "k", providerSessionState: new Map(), preferWebsockets: true });
 
 		expect(calls[0]?.options?.maxTokens).toBeLessThan(9_000);
 		expect(calls[1]?.options?.maxTokens).toBeUndefined();
+		expect(calls[2]?.options?.maxTokens).toBeUndefined();
 	});
 
 	describe("providers.anthropic.serverSideFallback (opt-in)", () => {

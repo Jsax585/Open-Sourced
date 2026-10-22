@@ -4136,7 +4136,11 @@ export class SessionMaintenance {
 		// model's natively replayed reasoning, and a cold session drops its own.
 		const providerExcludedTokens = activeExcludedMessage ? this.#tokenizer.countMessage(activeExcludedMessage) : 0;
 		const tokenizerOptions = {
-			nativeHistoryReplay: openAIResponsesReplaysNativeHistory(model, this.#host.providerSessionState),
+			nativeHistoryReplay: openAIResponsesReplaysNativeHistory(
+				model,
+				this.#host.providerSessionState,
+				this.#host.preferWebsockets(model),
+			),
 		};
 		const tokenizer = this.#tokenizer.countsAlike(model, tokenizerOptions)
 			? this.#tokenizer

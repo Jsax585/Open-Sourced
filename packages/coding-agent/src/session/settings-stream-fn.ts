@@ -143,13 +143,13 @@ export function createSettingsAwareStreamFn(
 		const maxInFlightRequests = validateProviderMaxInFlightRequests(
 			streamOptions?.maxInFlightRequests ?? cfgProvidersMaxInFlightRequests.get(settings),
 		);
-		// A cold Responses session rebuilds turns without their encrypted reasoning.
-		// A request that may wait for a provider slot is built when it gets one,
-		// after a concurrent response may have warmed the session, so it is
-		// fitted as replaying.
-		const nativeHistoryReplay =
-			Object.hasOwn(maxInFlightRequests, model.provider) ||
-			openAIResponsesReplaysNativeHistory(model, streamOptions?.providerSessionState);
+		// A queued HTTP request may be built after another response warms its
+		// session. Connection-bound WS always rebuilds, even after waiting.
+		const nativeHistoryReplay = openAIResponsesReplaysNativeHistory(
+			model,
+			Object.hasOwn(maxInFlightRequests, model.provider) ? undefined : streamOptions?.providerSessionState,
+			streamOptions?.preferWebsockets,
+		);
 		const tokenizerKey = `${model.provider}\0${model.api}\0${model.id}\0${nativeHistoryReplay}`;
 		let tokenizer = tokenizers.get(tokenizerKey);
 		if (!tokenizer) {

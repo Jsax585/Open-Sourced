@@ -165,6 +165,12 @@ is enabled; an injected `previous_response_id` or `background: true` is rejected
 Connection and protocol failures surface as errors rather than silently switching
 to HTTP/SSE. Codex chaining, steering and fallback behavior are unchanged.
 
+For endpoints marked `connectionBoundNativeHistory` (such as GitHub Copilot),
+standard WS rebuilds prior turns from their message content instead of replaying
+item IDs or encrypted reasoning tied to another connection. This also applies
+when a pooled connection is reused, because concurrent results can originate from
+different sockets.
+
 `omitMaxOutputTokens` omits the model-derived output cap.
 
 ### Bedrock request options

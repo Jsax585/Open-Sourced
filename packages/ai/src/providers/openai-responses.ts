@@ -517,19 +517,25 @@ function getOpenAIResponsesProviderSessionState(
  * is cold, rebuilding turns from message content, from the first request on a
  * connection-bound host (`compat.connectionBoundNativeHistory`, GitHub Copilot)
  * and after `close()` on any host, until a response succeeds. Without session
- * state every request replays.
+ * state HTTP requests replay. WebSocket requests on connection-bound hosts always
+ * rebuild history: full-replay contexts may combine results from different sockets.
  */
 export function openAIResponsesReplaysNativeHistory(
-	model: Pick<Model, "api" | "provider" | "compat"> | null | undefined,
+	model: Pick<Model, "api" | "provider" | "compat" | "preferWebsockets"> | null | undefined,
 	providerSessionState: Map<string, ProviderSessionState> | undefined,
+	preferWebsockets?: boolean,
 ): boolean {
-	if (model?.api !== "openai-responses" || !providerSessionState) return true;
+	if (model?.api !== "openai-responses") return true;
+	const compat = model.compat;
+	const connectionBoundNativeHistory =
+		compat && "connectionBoundNativeHistory" in compat && compat.connectionBoundNativeHistory;
+	if (connectionBoundNativeHistory && (preferWebsockets ?? model.preferWebsockets ?? false)) return false;
+	if (!providerSessionState) return true;
 	const state = providerSessionState.get(`${OPENAI_RESPONSES_PROVIDER_SESSION_STATE_PREFIX}${model.provider}`) as
 		| OpenAIResponsesProviderSessionState
 		| undefined;
 	if (state) return state.nativeHistoryReplayWarmed;
-	const compat = model.compat;
-	return !(compat && "connectionBoundNativeHistory" in compat && compat.connectionBoundNativeHistory);
+	return !connectionBoundNativeHistory;
 }
 
 /** Host per-provider storage defaults; see {@link configureProviderStoreResponses}. */
@@ -803,6 +809,10 @@ const streamOpenAIResponsesOnce = (
 			const premiumRequestsTotal = copilotPremiumRequests;
 			const providerSessionState = getOpenAIResponsesProviderSessionState(model, options?.providerSessionState);
 			const preferWebsockets = options?.preferWebsockets ?? model.preferWebsockets ?? false;
+			if (providerSessionState && preferWebsockets && model.compat.connectionBoundNativeHistory) {
+				// A WS exchange cannot establish ownership for a later HTTP replay.
+				providerSessionState.nativeHistoryReplayWarmed = false;
+			}
 			const closeCountAtStart = providerSessionState?.closeCount;
 			const strictToolsScope = getOpenAIStrictToolsScope(model, baseUrl);
 			const promptCacheBreakpointPolicy =
@@ -1362,7 +1372,9 @@ const streamOpenAIResponsesOnce = (
 			);
 			if (replayableResponseItems) {
 				if (providerSessionState && providerSessionState.closeCount === closeCountAtStart) {
-					providerSessionState.nativeHistoryReplayWarmed = true;
+					providerSessionState.nativeHistoryReplayWarmed = !(
+						webSocketLease && model.compat.connectionBoundNativeHistory
+					);
 				}
 				if (chainState) {
 					chainState.lastParams = cloneJsonTree(
@@ -1665,7 +1677,9 @@ export function buildParams(
 		omitReasoningEffort: options?.omitReasoningEffort,
 	});
 	const strictResponsesPairing = policy.tools.strictResponsesPairing;
-	const shouldReplayNativeHistory = providerSessionState?.nativeHistoryReplayWarmed ?? true;
+	const shouldReplayNativeHistory =
+		!(model.compat.connectionBoundNativeHistory && (options?.preferWebsockets ?? model.preferWebsockets ?? false)) &&
+		(providerSessionState?.nativeHistoryReplayWarmed ?? true);
 	// Filtering native reasoning must not be undone by reconstruction when the
 	// target also rejects synthetic items (Muse on OpenRouter). Unfiltered targets
 	// retain required text/placeholder replay, including DeepSeek's #10690 fallback.

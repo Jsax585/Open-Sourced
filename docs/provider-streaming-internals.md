@@ -132,6 +132,14 @@ execution, and bypasses HTTP transient-stream retry and stored-result recovery o
 WebSocket errors. This boundary avoids hidden replay after uncertain execution;
 Codex recovery policy remains independent.
 
+On `connectionBoundNativeHistory` hosts, standard WS always rebuilds history from
+message content rather than replaying connection-owned item IDs or encrypted
+reasoning. Checking only whether a socket is warm would not cover contexts that
+include results from concurrent ephemeral sockets. WS exchanges invalidate the
+HTTP native-history warm baseline rather than warming it. The replay predicate
+accepts the request's transport preference so token/output-cap estimates use the
+same rule, including requests waiting for a provider concurrency slot.
+
 The coding-agent resolves the session transport hint against the actual request
 model, including advisor and side requests. Codex uses `providers.openaiWebsockets`
 independently. The registry's final model projection fills an unset model preference
