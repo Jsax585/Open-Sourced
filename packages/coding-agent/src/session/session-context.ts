@@ -25,6 +25,7 @@ import {
 	resolveSessionLeafId,
 	type SessionEntry,
 	type SessionMessageEntry,
+	setPersistedSessionEntryId,
 } from "./session-entries";
 
 // #4470 crash artifacts had legacy frames (no shape metadata) with 17 frames,
@@ -405,6 +406,7 @@ export function buildSessionContext(
 			) {
 				return;
 			}
+			setPersistedSessionEntryId(entry.message, entry.id);
 			pushMessage(entry.message);
 		} else if (entry.type === "custom_message") {
 			if (
@@ -414,9 +416,14 @@ export function buildSessionContext(
 				return;
 			}
 			const message = customMessageEntryMessage(entry);
-			if (message) pushMessage(message);
+			if (message) {
+				setPersistedSessionEntryId(message, entry.id);
+				pushMessage(message);
+			}
 		} else if (entry.type === "branch_summary" && entry.summary) {
-			pushMessage(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp));
+			const message = createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp);
+			setPersistedSessionEntryId(message, entry.id);
+			pushMessage(message);
 		}
 	};
 
@@ -539,6 +546,7 @@ export function buildSessionContext(
 				historyRewriteAt,
 			},
 		);
+		setPersistedSessionEntryId(compactionSummaryMsg, compaction.id);
 		// Agent context (non-transcript): summary first so the LLM sees the
 		// compacted context before recent messages.
 		if (!options?.transcript) {

@@ -441,7 +441,12 @@ import {
 	type SessionDumpLiveState,
 } from "./session-dump-format";
 import { collectSubSessions, type SubSession } from "./sub-sessions";
-import type { BranchSummaryEntry, NewSessionOptions } from "./session-entries";
+import {
+	getPersistedSessionEntryId,
+	setPersistedSessionEntryId,
+	type BranchSummaryEntry,
+	type NewSessionOptions,
+} from "./session-entries";
 import { SessionHandoff, type SessionHandoffHost } from "./session-handoff";
 import {
 	COMPACTION_CHECK_NONE,
@@ -741,9 +746,6 @@ interface TitleInput {
 	/** A title request ran for it; an interrupt clears this so its next reply tries again. */
 	tried: boolean;
 }
-
-const kPersistedSessionEntryId = Symbol("persistedSessionEntryId");
-type PersistedAssistantMessage = AssistantMessage & { [kPersistedSessionEntryId]?: string };
 
 const INTERRUPTED_THINKING_MIN_CHARS = 60;
 const SESSION_CWD_CHANGE_REJECTED = Symbol("sessionCwdChangeRejected");
@@ -1995,7 +1997,7 @@ export class AgentSession implements SettingsScope {
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 			waitForSessionMessagePersistence: message => this.#waitForSessionMessagePersistence(message),
 			appendSessionMessage: message => this.#appendSessionMessage(message),
-			persistedAssistantEntryId: message => (message as PersistedAssistantMessage)[kPersistedSessionEntryId],
+			persistedAssistantEntryId: message => getPersistedSessionEntryId(message),
 			sessionMessageAlreadyPersisted: message => this.#sessionMessageAlreadyPersisted(message),
 			setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 			resolveActiveEditMode: () => this.#tools.resolveActiveEditMode(),
@@ -2468,7 +2470,7 @@ export class AgentSession implements SettingsScope {
 			configs: config.advisorConfigs,
 			configWarnings: config.advisorConfigWarnings,
 			streamFn: config.advisorStreamFn,
-			transformProviderContext: config.transformProviderContext,
+			transformProviderContext: config.advisorTransformProviderContext ?? config.transformProviderContext,
 		});
 
 		const maintenanceHost: SessionMaintenanceHost = {
@@ -3861,9 +3863,7 @@ export class AgentSession implements SettingsScope {
 		// A digest entry carries no persistence key, so the memo stays valid across it.
 		if (message.role === "assistant") this.#tools.recordReplyPrompt(message);
 		const entryId = this.sessionManager.appendMessage(message);
-		if (message.role === "assistant") {
-			(message as PersistedAssistantMessage)[kPersistedSessionEntryId] = entryId;
-		}
+		setPersistedSessionEntryId(message, entryId);
 		const key = sessionMessagePersistenceKey(message);
 		if (wasFresh && cache && key) {
 			cache.keys.add(key);
@@ -3882,6 +3882,7 @@ export class AgentSession implements SettingsScope {
 		) {
 			return;
 		}
+		if (getPersistedSessionEntryId(message) !== undefined) return;
 		if (this.#sessionMessageAlreadyPersisted(message)) return;
 		if (message.role === "assistant") {
 			const assistantMsg = message as AssistantMessage;
@@ -3979,7 +3980,7 @@ export class AgentSession implements SettingsScope {
 			// One-run instructions must not return from persisted history: prewalk
 			// nudges are consumed once, and Vibe context is rebuilt only while active.
 			if (!isPrewalkPlanNudge(message) && message.customType !== VIBE_MODE_CONTEXT_MESSAGE_TYPE) {
-				this.sessionManager.appendCustomMessageEntry(
+				const entryId = this.sessionManager.appendCustomMessageEntry(
 					message.customType,
 					message.content,
 					message.display,
@@ -3990,6 +3991,7 @@ export class AgentSession implements SettingsScope {
 					// provider preparation / hook time from the prompt→yield anchor.
 					message.timestamp,
 				);
+				setPersistedSessionEntryId(message, entryId);
 			}
 			if (message.role === "custom" && message.customType === "ttsr-injection") {
 				this.#ttsr.markInjectedFromDetails(message.details);
@@ -8602,6 +8604,9 @@ export class AgentSession implements SettingsScope {
 			// (issue #1246) still clear it for re-injection on the next turn.
 			if (planReferenceMessage) {
 				this.#planReferenceSent = true;
+			}
+			for (const m of messages) {
+				this.#persistSessionMessageIfMissing(m);
 			}
 			try {
 				const run = this.#recovery.promptAgentWithIdleRetry(messages, agentPromptOptions, () => {

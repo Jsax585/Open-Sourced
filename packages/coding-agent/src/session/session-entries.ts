@@ -15,6 +15,27 @@ import type { RuntimeIdentity } from "./runtime-identity";
 
 export const CURRENT_SESSION_VERSION = 3;
 
+export const kPersistedSessionEntryId = Symbol("persistedSessionEntryId");
+
+export type WithPersistedSessionEntryId<T = unknown> = T & { [kPersistedSessionEntryId]?: string };
+
+export function getPersistedSessionEntryId(message: unknown): string | undefined {
+	if (!message || (typeof message !== "object" && typeof message !== "function")) return undefined;
+	return (message as { [kPersistedSessionEntryId]?: string })[kPersistedSessionEntryId];
+}
+
+export function setPersistedSessionEntryId<T extends object>(message: T, entryId: string): T {
+	(message as { [kPersistedSessionEntryId]?: string })[kPersistedSessionEntryId] = entryId;
+	return message;
+}
+
+export function copyPersistedSessionEntryId(target: object, source: unknown): void {
+	const entryId = getPersistedSessionEntryId(source);
+	if (entryId !== undefined) {
+		setPersistedSessionEntryId(target, entryId);
+	}
+}
+
 export const SESSION_TITLE_SLOT_BYTES = 256;
 
 export const SESSION_TITLE_SLOT_ENTRY_TYPE = "title";
