@@ -30,6 +30,7 @@ import { formatModelStringWithRouting, resolveModelOverride } from "../config/mo
 
 import type { Settings } from "../config/settings";
 import type { RetryErrorUpdate } from "../extensibility/shared-events";
+import { isEvalStateContext } from "../eval/state";
 import emptyStopRetryTemplate from "../prompts/system/empty-stop-retry.md" with { type: "text" };
 import malformedFunctionCallRetryTemplate from "../prompts/system/malformed-function-call-retry.md" with { type: "text" };
 import streamStallContinueTemplate from "../prompts/system/stream-stall-continue.md" with { type: "text" };
@@ -129,8 +130,19 @@ function hasNonWhitespace(value: string): boolean {
 	return NON_WHITESPACE_RE.test(value);
 }
 
+/**
+ * End of the conversation in `messages`, before trailing eval runtime snapshots.
+ * A session appends one at startup — right after the turn resume recovery closed
+ * — and on display-context rebuilds, so it trails a failed turn without ending it.
+ */
+function conversationEnd(messages: readonly AgentMessage[]): number {
+	let end = messages.length;
+	while (end > 0 && isEvalStateContext(messages[end - 1])) end--;
+	return end;
+}
+
 function syntheticToolResultTailStart(messages: readonly AgentMessage[]): number {
-	let index = messages.length;
+	let index = conversationEnd(messages);
 	while (index > 0 && isSyntheticToolResultMessage(messages[index - 1])) {
 		index--;
 	}
@@ -149,7 +161,7 @@ function abortedToolCallTail(messages: readonly AgentMessage[]): boolean {
 	const turnEnd = retryableAssistantTurnEnd(messages);
 	if (turnEnd === undefined) return false;
 	// Synthetic tool results only ever trail a turn that emitted tool calls.
-	if (turnEnd < messages.length) return true;
+	if (isSyntheticToolResultMessage(messages[turnEnd])) return true;
 	const beforeTurn = messages[turnEnd - 2];
 	return beforeTurn?.role === "toolResult" && beforeTurn.isError === true;
 }
@@ -169,7 +181,7 @@ function abortedToolCallTail(messages: readonly AgentMessage[]): boolean {
  * truncated, so those are re-generated via a fresh model call instead.
  */
 function toolReplayStart(messages: readonly AgentMessage[]): number | undefined {
-	let end = messages.length;
+	let end = conversationEnd(messages);
 	const tail = messages[end - 1];
 	if (tail?.role === "assistant") {
 		if (tail.stopReason !== "aborted" && tail.stopReason !== "error") return undefined;
@@ -667,7 +679,9 @@ export class TurnRecovery {
 	 * reminder to pick up where the text stopped, and continue. Honors
 	 * `retry.enabled`; bounded per prompt, past the cap the error surfaces as before.
 	 * A socket close counts here but not for tool turns: without tool calls there
-	 * is no executed side effect whose resumption policy it could change.
+	 * is no executed side effect whose resumption policy it could change. So does a
+	 * Codex native-lane steer rejection: the server dropped the response over our
+	 * own `response.steer`, and the rejected steer drains as ordinary input next.
 	 */
 	handleCommittedTextStreamStall(message: AssistantMessage): boolean {
 		const id = this.#classifyRetryMessage(message);
@@ -676,7 +690,7 @@ export class TurnRecovery {
 			AIError.retriable(id) &&
 			!this.#host.streamingEditAbortTriggered() &&
 			isUnexpectedSocketCloseMessage(message.errorMessage ?? "");
-		if (!socketClosed && !this.#isMidStreamTransportFailure(message, id)) {
+		if (!socketClosed && !AIError.isCodexSteerRejection(message) && !this.#isMidStreamTransportFailure(message, id)) {
 			this.#streamStallContinueCount = 0;
 			return false;
 		}
@@ -805,9 +819,15 @@ export class TurnRecovery {
 		return (await recorded).switchedCredential;
 	}
 
-	/** Prompts after transient overlap with a prior agent run. */
-	promptAgentWithIdleRetry(messages: AgentMessage[], options?: { toolChoice?: ToolChoice }): Promise<void> {
-		return this.#promptAgentWithIdleRetry(messages, options);
+	/** Prompts after transient overlap with a prior agent run. `onClaimed` fires synchronously
+	 *  right after a successful `agent.prompt` claim (before the run is awaited), letting the
+	 *  caller mark the exact moment its own run went live. */
+	promptAgentWithIdleRetry(
+		messages: AgentMessage[],
+		options?: { toolChoice?: ToolChoice },
+		onClaimed?: () => void,
+	): Promise<void> {
+		return this.#promptAgentWithIdleRetry(messages, options, onClaimed);
 	}
 
 	/** Parses provider retry and rate-limit reset hints into a delay. */
@@ -1879,10 +1899,14 @@ export class TurnRecovery {
 		return current && current !== pinned ? [pinned, current] : [pinned];
 	}
 
-	/** Live session role for chain lookup, provided its assignment still matches the active model. */
+	/**
+	 * Live session role for chain lookup, provided its assignment still matches the active model.
+	 * Temporary switches record the `fallback` role; skipping them keeps the assigned role (e.g. a
+	 * subagent's own, possibly empty, chain) once the session is back on that role's model.
+	 */
 	#liveRetryRoleHint(currentModel: Model | null | undefined): string | undefined {
-		const role = this.#host.sessionManager?.getLastModelChangeRole?.();
-		if (!role || role === EPHEMERAL_MODEL_CHANGE_ROLE || !currentModel) return undefined;
+		const role = this.#host.sessionManager?.getLastModelChangeRole?.({ skipEphemeral: true });
+		if (!role || !currentModel) return undefined;
 		const configured = this.#host.settings.getModelRole(role);
 		if (!configured) return undefined;
 		const resolved = resolveModelOverride([configured], this.#host.modelRegistry, this.#host.settings);
@@ -3093,11 +3117,31 @@ export class TurnRecovery {
 		this.resolveRetry();
 	}
 
-	async #promptAgentWithIdleRetry(messages: AgentMessage[], options?: { toolChoice?: ToolChoice }): Promise<void> {
+	async #promptAgentWithIdleRetry(
+		messages: AgentMessage[],
+		options?: { toolChoice?: ToolChoice },
+		onClaimed?: () => void,
+	): Promise<void> {
 		const deadline = Date.now() + 30_000;
 		for (;;) {
+			// A claim whose synchronous prefix throws (busy agent, missing
+			// model) returns an already-rejected promise. Probe for that
+			// before firing `onClaimed`: a busy-retry parked behind an
+			// autonomous run must not report that run's streaming as ours
+			// going live. The rejection handler rethrows, so the error
+			// still surfaces at the await below.
+			let claimFailed = false;
 			try {
-				await this.#host.agent.prompt(messages, options);
+				const claim = this.#host.agent.prompt(messages, options).then(undefined, error => {
+					claimFailed = true;
+					throw error;
+				});
+				// One microtask turn: an already-rejected promise's reaction
+				// job is queued ahead of this await's continuation, so
+				// `claimFailed` is settled by the time we resume.
+				await Promise.resolve();
+				if (!claimFailed) onClaimed?.();
+				await claim;
 				return;
 			} catch (err) {
 				if (!(err instanceof AgentBusyError)) {
@@ -3148,7 +3192,7 @@ export class TurnRecovery {
 		if (abortedToolCallTail(active)) return true;
 		// A trailing assistant message is authoritative for a live session: a
 		// settled successful turn leaves nothing to retry.
-		if (active.at(-1)?.role === "assistant") return false;
+		if (active[conversationEnd(active) - 1]?.role === "assistant") return false;
 		// A restored session omits the failed turn (and its synthetic results)
 		// from provider context, so — mirroring retry() — the persisted display
 		// transcript decides whether a retryable tool-call tail exists.
@@ -3192,8 +3236,12 @@ export class TurnRecovery {
 				await this.#stripForToolReplay(messages, replayStart);
 			} else {
 				// Remove the failed/aborted assistant message plus its synthetic tool
-				// results (same as auto-retry does before re-attempting).
-				this.#host.agent.replaceMessages(messages.slice(0, activeTurnEnd - 1));
+				// results (same as auto-retry does before re-attempting), keeping the
+				// trailing eval snapshot the continuation is sent with.
+				this.#host.agent.replaceMessages([
+					...messages.slice(0, activeTurnEnd - 1),
+					...messages.slice(conversationEnd(messages)),
+				]);
 			}
 		} else {
 			// A restored session already dropped the failed assistant turn (and its
@@ -3219,10 +3267,11 @@ export class TurnRecovery {
 	 * Strip the failed tool batch (and any aborted boundary) for a tool replay:
 	 * reparent the persisted leaf onto the anchor assistant entry — so the
 	 * dropped results cannot resurface on reload or pair duplicate toolCallIds
-	 * on replay — then cut the active context to the same point.
+	 * on replay — then cut the active context to the same point. Trailing eval
+	 * snapshots go too: none may sit between the calls and their re-run results.
 	 */
 	async #stripForToolReplay(messages: readonly AgentMessage[], replayStart: number): Promise<void> {
-		const tail = messages[messages.length - 1];
+		const tail = messages[conversationEnd(messages) - 1];
 		if (tail?.role === "assistant") {
 			try {
 				await this.#host.waitForSessionMessagePersistence(tail);
