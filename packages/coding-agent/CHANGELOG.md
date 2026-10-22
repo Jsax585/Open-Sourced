@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed `wait` and `proc://<id>/kill` reporting a settled job as "not auto-delivered; recovered by this snapshot" when the call itself handed the result over, when the snapshot superseded the job's queued completion push, or when the result was genuinely late; the delivery line now says which of the three it is ([#16052](https://github.com/can1357/oh-my-pi/issues/16052), [#16134](https://github.com/can1357/oh-my-pi/pull/16134) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ### Breaking Changes
 
@@ -78,10 +81,6 @@
 - Added in-place updates of the browser relay's Chrome extension after an omp upgrade: an older extension loaded from `~/.omp/browser-relay/extension` is rewritten and reloads itself once no omp session is using the relay ([#15105](https://github.com/can1357/oh-my-pi/pull/15105) by [@will-bogusz](https://github.com/will-bogusz))
 - Added a note to relay `browser.open` results when the Chrome extension was installed by an older omp, naming `omp browser-relay install` and a reload ([#15105](https://github.com/can1357/oh-my-pi/pull/15105) by [@will-bogusz](https://github.com/will-bogusz))
 
-
-### Fixed
-
-- Fixed `wait` and `proc://<id>/kill` reporting a settled job as "not auto-delivered; recovered by this snapshot" when the call itself handed the result over, when the snapshot superseded the job's queued completion push, or when the result was genuinely late; the delivery line now says which of the three it is ([#16052](https://github.com/can1357/oh-my-pi/issues/16052), [#16134](https://github.com/can1357/oh-my-pi/pull/16134) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 ## [18.12.6] - 2026-10-21
 
 ### Added
