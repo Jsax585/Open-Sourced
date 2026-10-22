@@ -159,6 +159,32 @@ describe("native composer", () => {
 		expect(focused).toEqual(["AckAudit", "Main"]);
 	});
 
+	it("advertises the ←← gesture, not the interrupt key, as the exit from an interruptible agent", () => {
+		let running = false;
+		let viewInterruptible = false;
+		const editor = new CustomEditor(getEditorTheme());
+		editor.composerState = () => ({ running, viewing: ["Scout"], viewInterruptible });
+		const exitKeys = () =>
+			nodes(byRole(editor.describe(cx), "omp.composer.exit")!)
+				.filter(n => n.k === "kbd")
+				.map(n => n.p);
+
+		// Idle viewed turn: Esc on an empty draft really does return to main, so it stays a keycap,
+		// even while the main session streams behind a `task` fan-out (the bar's Stop follows that).
+		running = true;
+		expect(exitKeys()).toEqual([{ keys: ["escape"] }]);
+
+		// Interruptible viewed turn: the interrupt key stops it, so it must not double as exit.
+		viewInterruptible = true;
+		expect(exitKeys()).toEqual([{ keys: ["left"] }, { keys: ["left"] }]);
+
+		// Focused maintenance (compaction, handoff, retry) is not interruptible, and the main
+		// session's Stop flag says nothing about the viewed agent.
+		viewInterruptible = false;
+		running = false;
+		expect(exitKeys()).toEqual([{ keys: ["escape"] }]);
+	});
+
 	it("memoizes send readiness separately from editability during bootstrap", () => {
 		const editor = composer({ running: false });
 		editor.disableSubmit = true;

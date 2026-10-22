@@ -29,6 +29,23 @@ export function pickRecentFocusableAgentId(refs: readonly AgentRef[], currentId?
 	return ordered[(currentIndex + 1) % ordered.length]?.id;
 }
 
+/** The session state the focused-view interrupt rule reads. */
+export type InterruptibleTurnSession = Pick<
+	AgentSession,
+	"isStreaming" | "isCompacting" | "isGeneratingHandoff" | "isRetrying"
+>;
+
+/**
+ * Whether Esc (or a Stop click) interrupts `session`'s live turn in place —
+ * the rule the focused-view key handler and the composer's viewing header
+ * both follow. Focused maintenance (compaction, handoff, retry) stays
+ * uncancellable (#2819), so when this is false the interrupt falls through to
+ * clearing the draft and then returning to the main session.
+ */
+export function isTurnInterruptible(session: InterruptibleTurnSession): boolean {
+	return session.isStreaming && !session.isCompacting && !session.isGeneratingHandoff && !session.isRetrying;
+}
+
 /**
  * SessionFocusController - Weak retargeting primitive between the rendering/
  * input layer and the AgentSession it displays.
@@ -106,7 +123,7 @@ export class SessionFocusController {
 		if (request !== this.#focusRequestSeq) return;
 		if (attached && this.#focusedAgentId === id && this.#attachedSession === session) {
 			this.ctx.showStatus(
-				`Viewing agent ${id} — ${appKey(this.ctx.keybindings, "app.interrupt")} returns to main, ${formatDoubleTap("left")} hops to parent`,
+				`Viewing agent ${id} — ${appKey(this.ctx.keybindings, "app.interrupt")} stops its run, ${formatDoubleTap("left")} returns to main`,
 			);
 		}
 	}

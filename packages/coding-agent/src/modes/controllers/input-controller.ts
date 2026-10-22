@@ -45,7 +45,7 @@ import { AgentRegistry } from "../../registry/agent-registry";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { PINNED_HUD_TOGGLE_ID } from "@oh-my-pi/pi-tui/prompt/composer";
-import { pickRecentFocusableAgentId } from "./session-focus-controller";
+import { isTurnInterruptible, pickRecentFocusableAgentId } from "./session-focus-controller";
 import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
 import { parseSlashCommand, parseSubcommand } from "../../slash-commands/helpers/parse";
@@ -329,6 +329,25 @@ export class InputController {
 		void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 	}
 
+	/**
+	 * Esc while viewing a subagent: interrupt its in-flight turn in place rather
+	 * than dropping the view. Focused maintenance — compaction, handoff, retry —
+	 * stays uncancellable (#2819), so this reports `false` and the caller falls
+	 * through to clearing the draft or returning to main. Returns whether a turn
+	 * was interrupted.
+	 */
+	#abortFocusedTurn(): boolean {
+		const target = this.ctx.viewSession;
+		if (!isTurnInterruptible(target)) return false;
+		// The abort requeues live steering only once the turn has settled, so
+		// refresh the pending list from its completion, not before it.
+		void target.abort({ reason: USER_INTERRUPT_LABEL }).then(() => {
+			this.ctx.updatePendingMessagesDisplay();
+			this.ctx.ui.requestRender();
+		});
+		return true;
+	}
+
 	setupKeyHandlers(): void {
 		this.#draftText ??= this.ctx.editor.getText();
 		this.ctx.editor.setActionKeys("app.interrupt", this.ctx.keybindings.getKeys("app.interrupt"));
@@ -492,13 +511,14 @@ export class InputController {
 			// → /compact → auto end → manual finally), leaving Esc wired to a
 			// stale no-op closure until restart.
 			//
-			// While a subagent is focused, Esc honors the advertised view action
-			// ("Esc returns to main") instead of cancelling maintenance —
+			// While a subagent is focused, Esc never cancels its maintenance —
 			// accidentally killing a focused subagent's compaction on the way out
 			// was #2819. The auto-maintenance loaders relabel their hint to match
 			// (see EventController). Main-session maintenance still owns Esc and
 			// stays cancellable from the main view (focused submit gates /compact
-			// and handoff, so manual maintenance is main-only anyway).
+			// and handoff, so manual maintenance is main-only anyway). A live
+			// streaming *turn* is interrupted instead — see the focused branch
+			// below.
 			if (this.ctx.hasActiveBtw() && this.ctx.handleBtwEscape()) {
 				return;
 			}
@@ -551,9 +571,13 @@ export class InputController {
 				return;
 			}
 			if (this.ctx.focusedAgentId) {
-				// Esc never interrupts the focused agent's turn: clear typed text,
-				// else return the view to the main session. Interrupt via empty
-				// steer-flush submit if needed.
+				// Esc interrupts the focused agent's live turn, matching the main
+				// view, instead of dropping the view. Focused maintenance stays
+				// non-cancellable (#2819). With nothing to interrupt, clear typed
+				// text, else return the view to the main session.
+				if (this.#abortFocusedTurn()) {
+					return;
+				}
 				if (this.ctx.editor.getText().trim()) {
 					this.ctx.editor.setText("");
 					this.ctx.ui.requestRender();

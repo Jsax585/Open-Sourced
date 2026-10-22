@@ -16,7 +16,7 @@ import type { AppKeybinding } from "../app-keybindings";
 import { formatTooltipKey } from "../key-hint-format";
 import { MAIN_AGENT_ID } from "../overlays/agent-hub-types";
 import { compact, keyed, node, row, span } from "../native/describe";
-import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
+import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import type { ComposerFacts, ComposerFactsSource } from "../status-line/types";
 import { allowsModelMentions, allowsSkillTokens, SKILL_TOKEN_RE } from "./skill-tokens";
 import { expandModelMentionTags, MODEL_MENTION_RE, modelMentionToken } from "./model-mention-syntax";
@@ -69,6 +69,14 @@ export interface ComposerNativeState {
 	readonly dictation?: "idle" | "starting" | "recording" | "transcribing";
 	/** The viewed subagent's lineage, outermost first and the viewed agent last; undefined on the main session. */
 	readonly viewing?: readonly string[];
+	/**
+	 * The viewed agent's turn can be interrupted in place, so the interrupt key
+	 * stops it instead of returning to main; the viewing header's exit crumb
+	 * advertises the ←← gesture then. Deliberately not `running`: that flag
+	 * follows the main session's send/Stop control, while this one matches what
+	 * the interrupt handler itself checks.
+	 */
+	readonly viewInterruptible?: boolean;
 	/** The session's title, quoted in italics as the TSP placeholder; undefined until it has one. */
 	readonly title?: string;
 }
@@ -1127,6 +1135,7 @@ export class CustomEditor extends Editor {
 			modelKey,
 			interruptKey,
 			state.viewing?.join("\u0001"),
+			state.viewInterruptible,
 			effortGlyph,
 			state.thinkingInModel,
 		].join("\0");
@@ -1188,12 +1197,13 @@ export class CustomEditor extends Editor {
 	};
 
 	/**
-	 * The viewing header (`omp.composer.focus`) while a subagent is focused:
-	 * an eye, the agent's ancestors as `omp.composer.crumb` links, the agent
-	 * itself (`omp.composer.agent`), then the way back to the main session
-	 * (`omp.composer.exit`, the interrupt key's keycap: Esc on an empty draft).
+	 * The "Viewing" header over the draft: a crumb per ancestor (each a view
+	 * target), the viewed agent itself (`omp.composer.agent`), then the way back
+	 * to the main session (`omp.composer.exit`). While the viewed agent's turn
+	 * can be interrupted the interrupt key stops it, so that crumb drops the
+	 * keycap (the bar's Stop control owns it) and the ←← gesture is the way out.
 	 */
-	#describeViewing(viewing: readonly string[], interruptKey: KeyId): NativeNode | undefined {
+	#describeViewing(viewing: readonly string[], interruptKey: KeyId, interruptible: boolean): NativeNode | undefined {
 		const agent = viewing.at(-1);
 		if (agent === undefined) return undefined;
 		const back = formatTooltipKey(interruptKey);
@@ -1211,6 +1221,10 @@ export class CustomEditor extends Editor {
 				`crumb:${id}`,
 			),
 		);
+		const exitChildren: NativeChild[] = interruptible
+			? [node("kbd", { keys: ["left"] }, undefined, "key"), node("kbd", { keys: ["left"] }, undefined, "key2")]
+			: [node("kbd", { keys: [interruptKey] }, undefined, "key")];
+		exitChildren.push(node("text", { text: "main", wrap: "none" }, undefined, "label"));
 		return keyed(
 			row(
 				[
@@ -1224,13 +1238,10 @@ export class CustomEditor extends Editor {
 							role: "omp.composer.exit",
 							gap: "xs",
 							align: "center",
-							title: `Back to the main session  ${back}`,
+							title: interruptible ? "Back to the main session" : `Back to the main session  ${back}`,
 							actions: { click: `${FOCUS_ACTION}${MAIN_AGENT_ID}` },
 						},
-						[
-							node("kbd", { keys: [interruptKey] }, undefined, "key"),
-							node("text", { text: "main", wrap: "none" }, undefined, "label"),
-						],
+						exitChildren,
 						"exit",
 					),
 				],
@@ -1255,7 +1266,8 @@ export class CustomEditor extends Editor {
 		effortGlyph: boolean,
 	): ComposerControls {
 		const shell = state.shell;
-		const focus = state.viewing && this.#describeViewing(state.viewing, interruptKey);
+		const focus =
+			state.viewing && this.#describeViewing(state.viewing, interruptKey, state.viewInterruptible === true);
 		const thinking = state.thinking;
 		const thinkingHint = thinkingKey ? `  ${formatTooltipKey(thinkingKey)}` : "";
 		// The level collapses into the model chip's icon; its own tooltip and click stay.
