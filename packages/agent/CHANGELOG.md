@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a pending soft tool requirement skipping every other tool call, including harmless reads the model needs to satisfy it: read-tier calls (and the `todo` view operation) now run as a detour without escalating the required tool, while writes and shell execution are still skipped; a tool can opt out with `softRequirementDetour: false` ([#16663](https://github.com/can1357/oh-my-pi/pull/16663) by [@Komzpa](https://github.com/Komzpa))
+
 ## [18.12.4] - 2026-10-20
 
 ### Fixed
