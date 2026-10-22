@@ -351,7 +351,9 @@ export class RateLimits implements LimitsApi {
 			return false;
 		}
 
-		this.#deps.affinity.clear(provider, sessionId);
+		if (this.#deps.affinity.get(provider, sessionId)?.strict !== true) {
+			this.#deps.affinity.clear(provider, sessionId);
+		}
 		this.#deps.blocks.mark(
 			provider,
 			providerTypeKey(provider, matched.type),

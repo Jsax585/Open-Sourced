@@ -4,6 +4,10 @@ provider "opencode-go" {
 	default-model "kimi-k2.7-code"
 	env "OPENCODE_API_KEY"
 	dynamic-models-authoritative #true
+	// Replaces the provider check that disabled forced tool choice on Responses.
+	on-api "openai-responses" {
+		supports-forced-tool-choice #false
+	}
 
 	// The Flash lanes accept images despite their IDs lacking a vision suffix;
 	// verified against the gateway (unguessable pixel-rendered text read back
@@ -107,6 +111,13 @@ provider "opencode-go" {
 		revision ">=3.7 <3.9" {
 			thinking-efforts "minimal" "low" "medium" "high" 
 			thinking-mode "effort"
+		}
+	}
+	// Step 5 Preview uses low/medium/high on this gateway (#14987).
+	class "stepfun" {
+		family "step" {
+			thinking-mode "effort"
+			thinking-efforts "low" "medium" "high"
 		}
 	}
 	// LongCat exposes a reasoning toggle, not selectable effort tiers.

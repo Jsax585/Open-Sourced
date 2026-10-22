@@ -736,7 +736,12 @@ describe("MarketplaceManager", () => {
 			await manager.addMarketplace(FIXTURE_DIR);
 			await manager.installPlugin("hello-plugin", "test-marketplace");
 
-			const roots = await listOmpExtensionRoots({ cwd: tmpHome, home: tmpHome, repoRoot: null });
+			const roots = await listOmpExtensionRoots({
+				cwd: tmpHome,
+				home: tmpHome,
+				repoRoot: null,
+				extensionRoots: { explicit: [], configured: [], configuredLevel: "user", mode: "merge" },
+			});
 			expect(roots.map(root => root.name)).toEqual([]);
 		} finally {
 			fs.rmSync(tmpHome, { recursive: true, force: true });
@@ -1373,6 +1378,23 @@ describe("MarketplaceManager", () => {
 
 			const results = await ctx.manager.upgradeAllPlugins();
 			expect(results).toEqual([]);
+		});
+
+		it("reaps abandoned clone checkouts but leaves active clones and marketplace caches intact", async () => {
+			const cacheDir = path.join(ctx.tmpDir, "cache", "marketplaces");
+			const abandoned = path.join(cacheDir, `.tmp-clone-${Date.now() - 31 * 60 * 1000}`);
+			const active = path.join(cacheDir, `.tmp-clone-${Date.now()}-inflight`);
+			const marketplace = path.join(cacheDir, "test-marketplace");
+			for (const dir of [abandoned, active, marketplace]) {
+				fs.mkdirSync(dir, { recursive: true });
+				fs.writeFileSync(path.join(dir, "catalog"), "preserve if active");
+			}
+
+			await ctx.manager.refreshStaleMarketplaces();
+
+			expect(fs.existsSync(abandoned)).toBe(false);
+			expect(fs.readFileSync(path.join(active, "catalog"), "utf8")).toBe("preserve if active");
+			expect(fs.readFileSync(path.join(marketplace, "catalog"), "utf8")).toBe("preserve if active");
 		});
 
 		it("refreshStaleMarketplaces skips fresh marketplaces", async () => {

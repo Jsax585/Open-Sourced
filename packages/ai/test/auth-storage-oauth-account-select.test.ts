@@ -147,6 +147,28 @@ describe("AuthStorage OAuth account selection", () => {
 		expect(storage.oauth.identity(PROVIDER, "strict-child")?.email).toBe("b@example.com");
 	});
 
+	test("authentication invalidation preserves a strict pin instead of retrying another credential", async () => {
+		const storage = authStorage;
+		const credentialStore = store;
+		if (!storage || !credentialStore) throw new Error("test setup failed");
+		await storage.credentials.set(PROVIDER, [
+			oauthCredential("a"),
+			oauthCredential("b"),
+			{ type: "api_key", key: "static-key" },
+		]);
+		const target = storage.oauth.accounts(PROVIDER)[0]!;
+		const sessionId = "strict-invalidated";
+		expect(storage.sessions.pin(PROVIDER, sessionId, target.credentialId, { strict: true })).toBe(true);
+
+		expect(await storage.limits.invalidateMatching(PROVIDER, "access-a", { sessionId })).toBe(true);
+		expect(storage.sessions.mode(PROVIDER, sessionId)).toBe("strict");
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBeUndefined();
+		const restored = new AuthStorage(credentialStore);
+		await restored.credentials.reload();
+		expect(restored.sessions.mode(PROVIDER, sessionId)).toBe("strict");
+		expect(await restored.keys.get(PROVIDER, sessionId)).toBeUndefined();
+	});
+
 	test("persists strict upgrades and downgrades on the same explicit row immediately", async () => {
 		const storage = authStorage;
 		const credentialStore = store;
