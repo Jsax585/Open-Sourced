@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added an opt-in session-tree extension with `/ts` to browse and resume forked sessions by lineage ([#16191](https://github.com/can1357/oh-my-pi/pull/16191) by [@heshuoshuo0512](https://github.com/heshuoshuo0512))
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 
 ## [18.12.6] - 2026-10-21

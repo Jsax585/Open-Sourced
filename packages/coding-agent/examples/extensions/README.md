@@ -43,6 +43,20 @@ cp permission-gate.ts ~/.omp/agent/extensions/
 | `status-line.ts`   | Shows turn progress in footer via `ctx.ui.setStatus()` with themed colors      |
 | `thinking-note.ts` | Adds display-only supplemental UI below assistant thinking blocks              |
 | `snake.ts`         | Snake game with custom UI, keyboard handling, and session persistence          |
+| `session-tree.ts`  | Browse and resume forked sessions by lineage with `/ts [query]`                |
+
+#### Session lineage tree
+
+Load `examples/extensions/session-tree.ts` with `--extension`, then run `/ts` or `/ts <query>` in an interactive session. This opt-in example navigates relationships between session files; the built-in `/tree` continues to navigate entries within one session.
+
+- Starts with the current project's forked sessions and their available ancestors. `Tab` loads all projects on demand; unrelated standalone sessions remain in `/resume`.
+- `/` searches titles, first messages, session IDs, and project paths while keeping matching sessions' ancestors. `Enter` finishes editing the query; `Esc` clears it.
+- Outside search editing, arrows and page keys move, `Enter` resumes the selected session, and `Esc` closes without switching.
+- `Space` shares pins with `/resume`; `s` cycles activity, size, and turn-count sorting within each group of siblings.
+- `c`, `i`, `p`, and `y` copy the title, ID, path, or all three.
+
+Parents outside the current scope are marked as out of scope; missing or ambiguous parents are marked unavailable. Children stay visible and session logs are not rewritten. The view uses the existing picker metadata APIs; it adds no polling or model calls.
+
 
 ### Git Integration
 
