@@ -11,16 +11,7 @@ import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } f
 
 // Editing one fallback chain or one agent must persist only that entry: every entry another layer
 // (a `--config` overlay) supplies stays out of config.yml.
-interface FixtureTraceIdentity {
-	readonly id: number;
-	readonly rootPath?: string;
-	readonly agentDir?: string;
-	readonly cwd?: string;
-	readonly overlayPath?: string;
-	readonly configPath?: string;
-}
-
-interface SettingsFixture extends FixtureTraceIdentity {
+interface SettingsFixture {
 	readonly tempDir: TempDir;
 	readonly rootPath: string;
 	readonly agentDir: string;
@@ -28,60 +19,16 @@ interface SettingsFixture extends FixtureTraceIdentity {
 	readonly overlayPath: string;
 	readonly configPath: string;
 	load(config: RawSettings, overlay: RawSettings): Promise<Settings>;
-	readConfig(marker?: string): Promise<RawSettings>;
-}
-
-const lifecycleTraceEnabled = Bun.env.OMP_TEST_LIFECYCLE_TRACE === "1";
-
-function lifecycleTrace(
-	marker: string,
-	phase: "start" | "end",
-	fixture: FixtureTraceIdentity | undefined,
-	durationMs?: number,
-): void {
-	if (!lifecycleTraceEnabled) return;
-	const paths =
-		fixture?.rootPath === undefined
-			? ""
-			: ` root=${JSON.stringify(fixture.rootPath)} agentDir=${JSON.stringify(fixture.agentDir)} cwd=${JSON.stringify(fixture.cwd)} overlayPath=${JSON.stringify(fixture.overlayPath)} configPath=${JSON.stringify(fixture.configPath)}`;
-	const duration = durationMs === undefined ? "" : ` duration_ms=${durationMs.toFixed(1)}`;
-	process.stderr.write(
-		`[settings-entry-writes] pid=${process.pid} fixture=${fixture?.id ?? "none"} marker=${marker}:${phase}${duration}${paths}\n`,
-	);
-}
-
-function traceSync<T>(marker: string, fixture: FixtureTraceIdentity | undefined, operation: () => T): T {
-	const startedAt = performance.now();
-	lifecycleTrace(marker, "start", fixture);
-	try {
-		return operation();
-	} finally {
-		lifecycleTrace(marker, "end", fixture, performance.now() - startedAt);
-	}
-}
-
-async function traceAsync<T>(
-	marker: string,
-	fixture: FixtureTraceIdentity | undefined,
-	operation: () => Promise<T>,
-): Promise<T> {
-	const startedAt = performance.now();
-	lifecycleTrace(marker, "start", fixture);
-	try {
-		return await operation();
-	} finally {
-		lifecycleTrace(marker, "end", fixture, performance.now() - startedAt);
-	}
+	readConfig(): Promise<RawSettings>;
 }
 
 describe("Settings entry-level writes", () => {
 	let state: SettingsTestState | undefined;
 	let fixture: SettingsFixture | undefined;
-	let nextFixtureId = 0;
 	const ownedRoots = new Set<TempDir>();
 
 	beforeEach(() => {
-		state = traceSync("settings-snapshot-reset", undefined, beginSettingsTest);
+		state = beginSettingsTest();
 		fixture = createFixture();
 	});
 
@@ -91,16 +38,16 @@ describe("Settings entry-level writes", () => {
 		const closingState = state;
 		state = undefined;
 		try {
-			traceSync("state-restore", closingFixture, () => restoreSettingsTestState(closingState));
+			restoreSettingsTestState(closingState);
 		} finally {
 			try {
-				traceSync("agent-storage-close", closingFixture, () => AgentStorage.close());
+				AgentStorage.close();
 			} finally {
 				try {
-					traceSync("bun-gc", closingFixture, () => Bun.gc(true));
+					Bun.gc(true);
 				} finally {
 					if (closingFixture !== undefined && ownedRoots.delete(closingFixture.tempDir)) {
-						traceSync("fixture-sync-removal", closingFixture, () => closingFixture.tempDir.removeSync());
+						closingFixture.tempDir.removeSync();
 					}
 				}
 			}
@@ -113,9 +60,6 @@ describe("Settings entry-level writes", () => {
 	}
 
 	function createFixture(): SettingsFixture {
-		const identity = { id: ++nextFixtureId };
-		const tempCreateStartedAt = performance.now();
-		lifecycleTrace("temp-create", "start", identity);
 		const tempDir = TempDir.createSync("@pi-settings-entries-");
 		ownedRoots.add(tempDir);
 		const rootPath = tempDir.path();
@@ -123,26 +67,23 @@ describe("Settings entry-level writes", () => {
 		const cwd = tempDir.join("project");
 		const overlayPath = tempDir.join("overlay.yml");
 		const configPath = path.join(agentDir, "config.yml");
-		const traceFixture = { ...identity, rootPath, agentDir, cwd, overlayPath, configPath };
-		lifecycleTrace("temp-create", "end", traceFixture, performance.now() - tempCreateStartedAt);
-		traceSync("fixture-mkdir", traceFixture, () => {
-			for (const dir of [agentDir, cwd]) fs.mkdirSync(dir, { recursive: true });
-		});
+		for (const dir of [agentDir, cwd]) fs.mkdirSync(dir, { recursive: true });
 
 		return {
-			...traceFixture,
 			tempDir,
+			rootPath,
+			agentDir,
+			cwd,
+			overlayPath,
+			configPath,
 			async load(config: RawSettings, overlay: RawSettings): Promise<Settings> {
-				await traceAsync("fixture-writes", traceFixture, async () => {
-					await Bun.write(configPath, YAML.stringify(config));
-					await Bun.write(overlayPath, YAML.stringify(overlay));
-				});
-				return traceAsync("settings-load-isolated", traceFixture, () =>
-					Settings.loadIsolated({ agentDir, cwd, configFiles: [overlayPath] }),
-				);
+				await Bun.write(configPath, YAML.stringify(config));
+				await Bun.write(overlayPath, YAML.stringify(overlay));
+				return await Settings.loadIsolated({ agentDir, cwd, configFiles: [overlayPath] });
 			},
-			readConfig: async (marker = "settings-readback"): Promise<RawSettings> =>
-				traceAsync(marker, traceFixture, async () => YAML.parse(await Bun.file(configPath).text()) as RawSettings),
+			async readConfig(): Promise<RawSettings> {
+				return YAML.parse(await Bun.file(configPath).text()) as RawSettings;
+			},
 		};
 	}
 
@@ -151,9 +92,9 @@ describe("Settings entry-level writes", () => {
 		const settings = await testFixture.load({}, { retry: { fallbackChains: { smol: ["overlay/cheap"] } } });
 
 		cfgRetryFallbackChains.setEntry(settings, "slow", ["user/slow-fallback"]);
-		await traceAsync("first-case-flush", testFixture, () => settings.flush());
+		await settings.flush();
 
-		expect(await testFixture.readConfig("first-case-readback")).toEqual({
+		expect(await testFixture.readConfig()).toEqual({
 			retry: { fallbackChains: { slow: ["user/slow-fallback"] } },
 		});
 		expect(cfgRetryFallbackChains.get(settings)).toEqual({
