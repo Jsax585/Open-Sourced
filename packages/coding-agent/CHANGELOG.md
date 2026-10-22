@@ -6,6 +6,10 @@
 
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 
+### Fixed
+
+- Fixed macOS session GC compression copying APFS clones instead of creating compressed copies by passing `--noclone` to `ditto --hfsCompression`.
+
 ## [18.12.6] - 2026-10-21
 
 ### Added
