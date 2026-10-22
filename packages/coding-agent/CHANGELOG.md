@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed `lsp diagnostics` reporting a file as clean when no language server judged it; an unjudged file is now reported as a failure instead of `OK`, and a file with findings from one server but no report from another shows an `unavailable` marker next to the diagnostic count and names the servers that published no verdict in its summary, whether the report arrives right away or after the edit has returned; the tool output now names the file that was left unchecked, for a multi-file edit as well as for a batched write ([#15408](https://github.com/can1357/oh-my-pi/issues/15408), [#16463](https://github.com/can1357/oh-my-pi/pull/16463) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ### Breaking Changes
 
@@ -78,10 +81,6 @@
 - Added in-place updates of the browser relay's Chrome extension after an omp upgrade: an older extension loaded from `~/.omp/browser-relay/extension` is rewritten and reloads itself once no omp session is using the relay ([#15105](https://github.com/can1357/oh-my-pi/pull/15105) by [@will-bogusz](https://github.com/will-bogusz))
 - Added a note to relay `browser.open` results when the Chrome extension was installed by an older omp, naming `omp browser-relay install` and a reload ([#15105](https://github.com/can1357/oh-my-pi/pull/15105) by [@will-bogusz](https://github.com/will-bogusz))
 
-
-### Fixed
-
-- Fixed `lsp diagnostics` reporting a file as clean when no language server judged it; an unjudged file is now reported as a failure instead of `OK`, and a file with findings from one server but no report from another shows an `unavailable` marker next to the diagnostic count and names the servers that published no verdict in its summary, whether the report arrives right away or after the edit has returned; the tool output now names the file that was left unchecked, for a multi-file edit as well as for a batched write ([#15408](https://github.com/can1357/oh-my-pi/issues/15408), [#16463](https://github.com/can1357/oh-my-pi/pull/16463) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 ## [18.12.6] - 2026-10-21
 
 ### Added
