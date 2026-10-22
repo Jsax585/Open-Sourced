@@ -122,6 +122,32 @@ type RpcFrame = Record<string, unknown>;
 async function withRpcServer<T>(
 	run: (send: (frame: object) => void, next: () => Promise<RpcFrame>, sendRaw: (line: string) => void) => Promise<T>,
 ): Promise<T> {
+	await using fixture = await TempDir.create("@rpc-compatible-primitives-");
+	const cwd = fixture.path();
+	const home = fixture.path();
+	const agentDir = fixture.join("agent");
+	const env: Record<string, string | undefined> = {
+		PATH: process.env.PATH,
+		TMPDIR: process.env.TMPDIR,
+		TMP: process.env.TMP,
+		TEMP: process.env.TEMP,
+		SystemRoot: process.env.SystemRoot,
+		WINDIR: process.env.WINDIR,
+		HOME: home,
+		USERPROFILE: home,
+		OMP_PROFILE: "",
+		PI_PROFILE: "",
+		PI_CODING_AGENT_DIR: agentDir,
+		PI_CONFIG_DIR: ".omp",
+		XDG_CACHE_HOME: fixture.join("xdg-cache"),
+		XDG_CONFIG_HOME: fixture.join("xdg-config"),
+		XDG_DATA_HOME: fixture.join("xdg-data"),
+		XDG_STATE_HOME: fixture.join("xdg-state"),
+		PI_TEST_RUNTIME: "1",
+		PI_NO_TITLE: "1",
+		NO_COLOR: "1",
+		AWS_EC2_METADATA_DISABLED: "true",
+	};
 	const child = Bun.spawn(
 		[
 			"bun",
@@ -130,6 +156,7 @@ async function withRpcServer<T>(
 			"rpc",
 			"--no-extensions",
 			"--no-skills",
+			"--no-rules",
 			"--no-tools",
 			"--no-session",
 			"--provider",
@@ -138,8 +165,8 @@ async function withRpcServer<T>(
 			"claude-sonnet-4-5",
 		],
 		{
-			cwd: path.join(import.meta.dir, ".."),
-			env: { ...Bun.env, PI_NO_TITLE: "1" } as unknown as Record<string, string | undefined>,
+			cwd,
+			env,
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
