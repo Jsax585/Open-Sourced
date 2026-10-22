@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `statusLine.segmentOptions.usage` with `showLabel`, `showPercent`, and `showReset` toggles, a `compact` option that renders quota windows as `5h24%4h47m` instead of `5h 24% (4h 47m)`, and `showResetCredits: false` to hide the saved-reset badge ([#14304](https://github.com/can1357/oh-my-pi/pull/14304) by [@iddqdld](https://github.com/iddqdld)).
 - Added `modelEnds` to `GroupedFileSection`: per file, the model-line index just past its last line, so a caller cutting the output can tell which files it shows whole ([#16594](https://github.com/can1357/oh-my-pi/pull/16594) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
