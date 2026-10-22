@@ -8,6 +8,10 @@
 - Added opt-in `retry.accountOrder: "usage" | "tiered"`: tiered mode uses plan allowance before paid extra usage, redeems a saved reset before moving to a sibling, and admits below-floor paid usage only when `retry.extraUsageBelowFloor` is on and no retry fallback successor exists ([#16704](https://github.com/can1357/oh-my-pi/pull/16704) by [@jwaldrip](https://github.com/jwaldrip)).
 - `/usage` and `omp usage` now show each account's paid extra usage. `omp usage --json` adds `paidUsage`, and paid rows no longer affect plan remaining, reserve state, or capacity ([#16704](https://github.com/can1357/oh-my-pi/pull/16704) by [@jwaldrip](https://github.com/jwaldrip)).
 
+### Fixed
+
+- Fixed macOS session GC compression copying APFS clones instead of creating compressed copies by passing `--noclone` to `ditto --hfsCompression`.
+
 ## [18.12.6] - 2026-10-21
 
 ### Added
