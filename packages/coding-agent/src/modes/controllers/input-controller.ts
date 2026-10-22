@@ -1038,7 +1038,8 @@ export class InputController {
 				submittedMode === "vibe" ||
 				submittedMode === "goal" ||
 				submittedMode === "guided-goal" ||
-				submittedMode === "tan";
+				submittedMode === "tan" ||
+				submittedMode === "btw";
 			if (draftDetached) this.#dropSubmittedPending(submittedImages, submittedImages?.length ?? 0);
 
 			if (!text && !hasInputImages) return;
@@ -1448,7 +1449,8 @@ export class InputController {
 				// without a way to cancel them, /usage reports account-wide limits, and
 				// /model, /switch, /effort change the focused agent's model and thinking.
 				this.#recordSlashCommandUsage(text);
-				if ((await executeBuiltinSlashCommand(text, { ctx: this.ctx })) === true) {
+				const input = images ? { images, imageLinks } : undefined;
+				if ((await executeBuiltinSlashCommand(text, { ctx: this.ctx, input })) === true) {
 					if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
 					return;
 				}

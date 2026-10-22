@@ -501,35 +501,44 @@ describe("interactive native input ingress", () => {
 		expect(h.prompt).not.toHaveBeenCalled();
 	});
 
-	it("Enter /tan takes its images out of the composer, so the next draft cannot send them", async () => {
-		const entered = Promise.withResolvers<void>();
-		const release = Promise.withResolvers<void>();
-		const h = await createHarness(() => {});
-		Object.assign(h.session, { customCommands: [], promptTemplates: [] });
-		const handleTanCommand = vi.fn(async (_work: string, _images?: ImageContent[]) => {
-			entered.resolve();
-			await release.promise;
-			return true;
-		});
-		h.ctx.handleTanCommand = handleTanCommand;
-		h.draftWithImage("/tan fix this block [Image #1]");
-		const submitting = h.pressSubmit(ENTER);
-		await entered.promise;
-		// Pasted while /tan dispatches: the composer holds only this image, so it is #1.
-		h.editor.pendingImages.push(newerImage);
-		h.editor.pendingImageLinks.push("local://newer.jpg");
-		h.editor.setText("newer [Image #1]");
-		release.resolve();
-		await submitting;
+	it.each([
+		["tan", "handleTanCommand"],
+		["btw", "handleBtwCommand"],
+	] as const)(
+		"Enter /%s takes its images out of the composer, so the next draft cannot send them",
+		async (command, handler) => {
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const h = await createHarness(() => {});
+			Object.assign(h.session, { customCommands: [], promptTemplates: [] });
+			const handle = vi.fn(async (_text: string, _images?: ImageContent[]) => {
+				entered.resolve();
+				await release.promise;
+				return true;
+			});
+			h.ctx[handler] = handle;
+			h.draftWithImage(`/${command} fix this block [Image #1]`);
+			const submitting = h.pressSubmit(ENTER);
+			await entered.promise;
+			// Pasted while the command dispatches: the composer holds only this image, so it is #1.
+			h.editor.pendingImages.push(newerImage);
+			h.editor.pendingImageLinks.push("local://newer.jpg");
+			h.editor.setText("newer [Image #1]");
+			release.resolve();
+			await submitting;
 
-		expect(handleTanCommand).toHaveBeenCalledWith("fix this block [Image #1]", [originalImage]);
-		expect(h.editor.pendingImages).toEqual([newerImage]);
-		expect(h.editor.pendingImageLinks).toEqual(["local://newer.jpg"]);
+			expect(handle).toHaveBeenCalledWith("fix this block [Image #1]", [originalImage]);
+			expect(h.editor.pendingImages).toEqual([newerImage]);
+			expect(h.editor.pendingImageLinks).toEqual(["local://newer.jpg"]);
 
-		await h.pressSubmit(ENTER);
+			await h.pressSubmit(ENTER);
 
-		expect(h.prompt).toHaveBeenCalledWith("newer [Image #1]", { streamingBehavior: "steer", images: [newerImage] });
-	});
+			expect(h.prompt).toHaveBeenCalledWith("newer [Image #1]", {
+				streamingBehavior: "steer",
+				images: [newerImage],
+			});
+		},
+	);
 
 	it("Enter /tan that does not dispatch gives its draft back", async () => {
 		const h = await createHarness(() => {});

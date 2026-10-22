@@ -2,7 +2,7 @@
  * Headless `/btw` turn lifecycle shared by the TUI controller and RPC mode:
  * record bookkeeping for a new topic or follow-up, and the ephemeral model turn.
  */
-import type { AssistantMessage, Message } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, Message } from "@oh-my-pi/pi-ai";
 import { prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import btwUserPrompt from "../prompts/system/btw-user.md" with { type: "text" };
 import type { AgentSession } from "./agent-session";
@@ -48,6 +48,8 @@ export function runBtwTurn(
 	session: Pick<AgentSession, "model" | "runEphemeralTurn">,
 	args: {
 		question: string;
+		/** Images attached to this question; earlier turns replay as text. */
+		images?: ImageContent[];
 		history?: readonly BtwHistoryTurn[];
 		conversationKey: string;
 		onTextDelta: (delta: string) => void;
@@ -87,6 +89,7 @@ export function runBtwTurn(
 	}
 	return session.runEphemeralTurn({
 		promptText: prompt.render(btwUserPrompt, { question: args.question }),
+		promptImages: args.images,
 		history,
 		conversationKey: args.conversationKey,
 		// /btw answers are read in full and saved to history: keep the

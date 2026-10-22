@@ -1,3 +1,4 @@
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	type Component,
 	type Focusable,
@@ -17,6 +18,7 @@ import {
 	getBtwLatestTurn,
 	getBtwTurns,
 } from "./btw-history";
+import { compactImageMarkers, formatVisionMarker } from "../prompt/composer-attachments";
 import { getMarkdownTheme, type ThemeColor, theme } from "../theme/theme";
 import {
 	matchesSelectCancel,
@@ -45,7 +47,12 @@ interface BtwHistoryPanelOptions {
 	onCopy: (record: BtwHistoryRecord) => void;
 	onCancel: (record: BtwHistoryRecord) => void;
 	canFollowUp?: (record: BtwHistoryRecord) => boolean;
-	onFollowUp?: (record: BtwHistoryRecord, question: string, signal: AbortSignal) => Promise<boolean>;
+	onFollowUp?: (
+		record: BtwHistoryRecord,
+		question: string,
+		signal: AbortSignal,
+		images?: ImageContent[],
+	) => Promise<boolean>;
 	/** Configured push-to-talk keys for a follow-up composer. */
 	spaceHoldKeys?: readonly KeyId[];
 	spaceHold?: (input: Input) => SpaceHoldHandler;
@@ -63,6 +70,8 @@ interface FollowUpComposer {
 	recordId: string;
 	input: Input;
 	abortController: AbortController;
+	/** Images pasted into this follow-up, numbered by their `[Image #N]` markers. */
+	images: ImageContent[];
 	notice?: string;
 }
 
@@ -305,7 +314,12 @@ export class BtwHistoryPanel implements Component, Focusable {
 		input.placeholder = "Ask about this answer…";
 		if (this.#options.spaceHoldKeys !== undefined) input.spaceHold.keys = this.#options.spaceHoldKeys;
 		input.spaceHold.handler = this.#options.spaceHold?.(input);
-		const composer: FollowUpComposer = { recordId: record.id, input, abortController: new AbortController() };
+		const composer: FollowUpComposer = {
+			recordId: record.id,
+			input,
+			abortController: new AbortController(),
+			images: [],
+		};
 		input.onEscape = () => {
 			composer.abortController.abort();
 			this.#composer = undefined;
@@ -322,7 +336,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 
 	async #submitFollowUp(composer: FollowUpComposer, value: string): Promise<void> {
 		if (this.#followUpPending || this.#composer !== composer) return;
-		const question = value.trim();
+		let question = value.trim();
 		if (!question) {
 			composer.notice = "Enter a follow-up question.";
 			return;
@@ -335,8 +349,20 @@ export class BtwHistoryPanel implements Component, Focusable {
 		this.#followUpPending = true;
 		composer.notice = "Starting follow-up…";
 		this.#options.requestRender();
+		let images: ImageContent[] | undefined;
+		if (composer.images.length > 0) {
+			// Path pastes attach as they finish loading; submit numbers images in text order.
+			const compacted = compactImageMarkers(question, composer.images.length, { byAppearance: true });
+			images = compacted ? compacted.keep.map(index => composer.images[index]!) : composer.images;
+			if (compacted) question = compacted.text.trim();
+		}
 		try {
-			const accepted = await this.#options.onFollowUp!(record, question, composer.abortController.signal);
+			const accepted = await this.#options.onFollowUp!(
+				record,
+				question,
+				composer.abortController.signal,
+				images?.length ? images : undefined,
+			);
 			if (this.#composer !== composer) return;
 			if (accepted) {
 				this.#composer = undefined;
@@ -359,6 +385,18 @@ export class BtwHistoryPanel implements Component, Focusable {
 	/** Only an active follow-up composer can claim its configured push-to-talk keys. */
 	capturesInput(data: string): boolean {
 		return this.#composer?.input.capturesInput(data) ?? false;
+	}
+
+	/** Only an open follow-up composer takes pasted images. */
+	get acceptsImages(): boolean {
+		return this.#composer !== undefined;
+	}
+
+	/** Attach an image to the follow-up; returns its `[Image #N, WxH]` marker to paste. */
+	attachImage(image: ImageContent, dims?: { width: number; height: number }): string | undefined {
+		if (!this.#composer) return undefined;
+		this.#composer.images.push(image);
+		return formatVisionMarker("image", this.#composer.images.length, dims);
 	}
 
 	/** Enhanced clipboard pastes belong only to the active composer. */

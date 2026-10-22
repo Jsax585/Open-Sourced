@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { KeybindingsManager } from "../src/app-keybindings";
 import { MoveOverlay, type MoveOverlayResult } from "../src/overlays/move-overlay";
 import { AnnotationOverlay } from "../src/overlays/annotation-overlay";
@@ -290,7 +291,40 @@ describe("BtwHistoryPanel native events", () => {
 		history.handleInput("hy?");
 		click("send");
 		await sent.promise;
-		expect(onFollowUp).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }), "why?", expect.any(AbortSignal));
+		expect(onFollowUp).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "a" }),
+			"why?",
+			expect.any(AbortSignal),
+			undefined,
+		);
+	});
+
+	it("sends images pasted into a follow-up, dropping one whose marker left the draft", () => {
+		const onFollowUp = vi.fn(async () => true);
+		const history = new BtwHistoryPanel({
+			records: [record("a", "first question")],
+			onClose: () => {},
+			onCopy: () => {},
+			onCancel: () => {},
+			canFollowUp: () => true,
+			onFollowUp,
+			requestRender: () => {},
+			getHeight: () => 30,
+		});
+		const first: ImageContent = { type: "image", data: "Zmlyc3Q=", mimeType: "image/png" };
+		const second: ImageContent = { type: "image", data: "c2Vjb25k", mimeType: "image/png" };
+		expect(history.acceptsImages).toBe(false);
+		history.handleInput("f");
+		expect(history.acceptsImages).toBe(true);
+		history.pasteText(`what is this ${history.attachImage(first)}`);
+		history.attachImage(second);
+		history.handleInput("\r");
+		expect(onFollowUp).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "a" }),
+			"what is this [Image #1]",
+			expect.any(AbortSignal),
+			[first],
+		);
 	});
 
 	it("stops a running answer from its footer button and sizes the sheet to what it lists", () => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
-import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -39,6 +39,7 @@ function createAssistantMessage(text: string): AssistantMessage {
 
 interface RunEphemeralTurnArgs {
 	promptText: string;
+	promptImages?: ImageContent[];
 	onTextDelta?: (delta: string) => void;
 	signal?: AbortSignal;
 }
@@ -222,6 +223,22 @@ describe("BtwController", () => {
 		expect(runEphemeralTurn).not.toHaveBeenCalled();
 		expect(ctx.ui.showOverlay).toHaveBeenCalledTimes(1);
 		expect(controller.hasActiveRequest()).toBe(false);
+		await controller.dispose();
+	});
+
+	it("sends the images attached to /btw with its side turn", async () => {
+		const runEphemeralTurn = vi.fn(async (_args: RunEphemeralTurnArgs) => ({
+			replyText: "Red",
+			assistantMessage: createAssistantMessage("Red"),
+		}));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const controller = new BtwController(ctx);
+		const screenshot: ImageContent = { type: "image", data: "c2NyZWVuc2hvdA==", mimeType: "image/png" };
+
+		expect(await controller.start("What colour is this? [Image #1]", [screenshot])).toBe(true);
+		await drainBtwRequest();
+
+		expect(runEphemeralTurn.mock.calls[0]?.[0]?.promptImages).toEqual([screenshot]);
 		await controller.dispose();
 	});
 
